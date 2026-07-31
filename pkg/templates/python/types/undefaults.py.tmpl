@@ -1,0 +1,36 @@
+{{- /* Python undefaults template */ -}}
+# ---- Undefaults ----
+{{- range .Defaults}}
+
+def {{.FuncName}}_undefaults(msg: {{.QualifiedType}}) -> None:
+    """Resets {{.TypeName}} fields that match defaults back to zero for minimal persistence."""
+    if msg is None:
+        return
+{{- range .Fields}}
+{{- if eq .AnnKey "default_string"}}
+    if msg.{{.PyFieldName}} == {{.ConstantName}}:
+        msg.{{.PyFieldName}} = ""
+{{- else if eq .AnnKey "default_int"}}
+    if msg.{{.PyFieldName}} == {{.ConstantName}}:
+        msg.{{.PyFieldName}} = 0
+{{- else if eq .AnnKey "default_float"}}
+    if msg.{{.PyFieldName}} == {{.ConstantName}}:
+        msg.{{.PyFieldName}} = 0.0
+{{- else if eq .AnnKey "default_bool"}}
+    if msg.{{.PyFieldName}} == {{.ConstantName}}:
+        msg.{{.PyFieldName}} = False
+{{- else if eq .AnnKey "default_host"}}
+    if msg.{{.PyFieldName}} and msg.{{.PyFieldName}}.host == "{{.HostHost}}" and msg.{{.PyFieldName}}.port == {{.HostPort}}:
+        msg.{{.PyFieldName}} = None
+{{- end}}
+{{- end}}
+{{- range .SubMsgCalls}}
+{{- if .HasDefaults}}
+    if msg.HasField("{{.HasFieldName}}"):
+        {{.FuncName}}_undefaults(msg.{{.PyFieldName}})
+{{- end}}
+{{- end}}
+{{- if and (eq (len .Fields) 0) (eq (len .SubMsgCalls) 0)}}
+    pass
+{{- end}}
+{{- end}}

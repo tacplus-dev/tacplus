@@ -1,0 +1,38 @@
+{{- /* Rust enum test template */ -}}
+#[test]
+fn test_{{.LowerEnumName}}_valid_values() {
+let values = {{.EnumName}}::valid_values();
+assert_eq!(values.len(), {{.ValidCount}});
+}
+#[test]
+fn test_{{.LowerEnumName}}_from_str_valid() {
+{{- range .ValidValues}}
+assert!({{$.EnumName}}::from_str("{{.FriendlyName}}").is_ok());
+assert_eq!({{$.EnumName}}::from_str("{{.FriendlyName}}").unwrap(), {{$.EnumName}}::{{.VariantName}});
+{{- end}}
+}
+#[test]
+fn test_{{.LowerEnumName}}_from_str_invalid() {
+assert!({{.EnumName}}::from_str("invalid").is_err());
+}
+#[test]
+fn test_{{.LowerEnumName}}_display() {
+{{- range .ValidValues}}
+assert_eq!(format!("{}", {{$.EnumName}}::{{.VariantName}}), "{{.DisplayName}}");
+{{- end}}
+}
+#[test]
+fn test_{{.LowerEnumName}}_parse_multiple() {
+assert!({{.EnumName}}::parse_multiple("").is_ok());
+{{- if .FirstFriendlyName}}
+assert_eq!({{.EnumName}}::parse_multiple("{{.FirstFriendlyName}}").unwrap().len(), 1);
+{{- end}}
+}
+#[test]
+fn test_{{.LowerEnumName}}_round_trip() {
+{{- if .FirstVariantName}}
+let val = {{.EnumName}}::{{.FirstVariantName}};
+let s = format!("{}", val);
+assert_eq!({{.EnumName}}::from_str(&s).unwrap(), val);
+{{- end}}
+}

@@ -1,0 +1,504 @@
+{{.Header}}
+
+package {{.FullPackage}};
+
+import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.google.protobuf.Message;
+import com.google.protobuf.util.JsonFormat;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.net.http.WebSocket;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
+{{.TypesImport}}
+
+/**
+ * {{.ClientName}} provides typed W2S clients for {{.ServiceName}}.
+ *
+ * Unary RPCs use HTTP/JSON, server-streaming RPCs use SSE, and
+ * client-streaming/bidirectional RPCs use WebSocket frames.
+ */
+public class {{.ClientName}} {
+
+    private final HttpClient httpClient;
+    private final String baseUrl;
+    private final Supplier<String> tokenProvider;
+    private final Duration connectTimeout;
+    private final JsonFormat.Printer jsonPrinter;
+    private final JsonFormat.Parser jsonParser;
+    private final Gson gson;
+
+    public {{.ClientName}}(HttpClient httpClient, String baseUrl, Supplier<String> tokenProvider) {
+        this(httpClient, baseUrl, tokenProvider, Duration.ofSeconds(30));
+    }
+
+    public {{.ClientName}}(HttpClient httpClient, String baseUrl, Supplier<String> tokenProvider, Duration connectTimeout) {
+        this.httpClient = httpClient;
+        this.baseUrl = trimBaseUrl(baseUrl);
+        this.tokenProvider = tokenProvider;
+        this.connectTimeout = connectTimeout == null ? Duration.ofSeconds(30) : connectTimeout;
+        this.jsonPrinter = JsonFormat.printer().omittingInsignificantWhitespace();
+        this.jsonParser = JsonFormat.parser().ignoringUnknownFields();
+        this.gson = new Gson();
+    }
+
+    public {{.ClientName}} withConnectTimeout(Duration timeout) {
+        return new {{.ClientName}}(httpClient, baseUrl, tokenProvider, timeout);
+    }
+
+    private static String trimBaseUrl(String value) {
+        if (value == null || value.isBlank()) {
+            throw new ProtoException(ProtoException.INVALID_ARGUMENT, "W2S baseUrl is required");
+        }
+        return value.replaceAll("/+$", "");
+    }
+
+    private String authHeader(boolean authRequired) {
+        if (!authRequired) {
+            return null;
+        }
+        if (tokenProvider == null) {
+            throw new ProtoException(ProtoException.UNAUTHENTICATED, "W2S route requires a token provider");
+        }
+        try {
+            String token = tokenProvider.get();
+            if (token == null || token.isBlank()) {
+                throw new ProtoException(ProtoException.UNAUTHENTICATED, "W2S token provider returned an empty token");
+            }
+            return token.startsWith("Bearer ") ? token : "Bearer " + token;
+        } catch (ProtoException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new ProtoException(ProtoException.UNAUTHENTICATED, "W2S token provider failed: " + e.getMessage(), e);
+        }
+    }
+
+    private String httpUrl(String path) {
+        return baseUrl + path;
+    }
+
+    private String websocketUrl(String path) {
+        String url = httpUrl(path);
+        if (url.startsWith("https://")) {
+            return "wss://" + url.substring("https://".length());
+        }
+        if (url.startsWith("http://")) {
+            return "ws://" + url.substring("http://".length());
+        }
+        if (url.startsWith("ws://") || url.startsWith("wss://")) {
+            return url;
+        }
+        throw new ProtoException(ProtoException.INVALID_ARGUMENT,
+            "W2S baseUrl must start with http://, https://, ws://, or wss://: " + baseUrl);
+    }
+
+    private JsonElement messageToJsonElement(Message request) {
+        try {
+            if (request == null) {
+                return new JsonObject();
+            }
+            return JsonParser.parseString(jsonPrinter.print(request));
+        } catch (Exception e) {
+            throw new ProtoException(ProtoException.INVALID_ARGUMENT, "failed to serialize W2S request: " + e.getMessage(), e);
+        }
+    }
+
+    private HttpResponse<String> sendJsonRequest(String method, String path, Message request, boolean authRequired) {
+        try {
+            JsonElement body = messageToJsonElement(request);
+            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(httpUrl(path)))
+                .timeout(connectTimeout)
+                .header("Content-Type", "application/json");
+
+            String auth = authHeader(authRequired);
+            if (auth != null) {
+                reqBuilder.header("Authorization", auth);
+            }
+
+            if ("GET".equals(method)) {
+                reqBuilder.GET();
+            } else {
+                reqBuilder.method(method, HttpRequest.BodyPublishers.ofString(gson.toJson(body), StandardCharsets.UTF_8));
+            }
+
+            return httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        } catch (ProtoException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ProtoException(ProtoException.UNAVAILABLE, "W2S request failed: " + e.getMessage(), e);
+        }
+    }
+
+    private JsonElement responseJson(HttpResponse<String> response) {
+        String text = response.body() == null || response.body().isBlank() ? "{}" : response.body();
+        JsonElement value;
+        try {
+            value = JsonParser.parseString(text);
+        } catch (Exception e) {
+            throw new ProtoException(ProtoException.INTERNAL, "failed to decode W2S JSON response: " + e.getMessage(), e);
+        }
+        if (response.statusCode() >= 400) {
+            throw httpStatusToProtoException(response.statusCode(), value);
+        }
+        ProtoException jsonErr = jsonErrorToProtoException(value);
+        if (jsonErr != null) {
+            throw jsonErr;
+        }
+        return value;
+    }
+
+    private JsonElement unwrapResult(JsonElement value) {
+        ProtoException err = jsonErrorToProtoException(value);
+        if (err != null) {
+            throw err;
+        }
+        if (value != null && value.isJsonObject()) {
+            JsonObject obj = value.getAsJsonObject();
+            if (obj.has("type") && obj.has("message") && "message".equals(obj.get("type").getAsString())) {
+                return obj.get("message");
+            }
+            if (obj.has("result")) {
+                return obj.get("result");
+            }
+        }
+        return value == null ? new JsonObject() : value;
+    }
+
+    private <T extends Message> T parseMessage(JsonElement payload, Class<T> responseClass, Consumer<T> validator) {
+        try {
+            Message.Builder builder = (Message.Builder) responseClass.getMethod("newBuilder").invoke(null);
+            jsonParser.merge(gson.toJson(payload == null ? new JsonObject() : payload), builder);
+            T result = responseClass.cast(builder.build());
+            if (validator != null) {
+                validator.accept(result);
+            }
+            return result;
+        } catch (Exception e) {
+            throw new ProtoException(ProtoException.INTERNAL, "failed to decode W2S response body: " + e.getMessage(), e);
+        }
+    }
+
+    private <T extends Message> T doJson(String method, String path, Message request, Class<T> responseClass, boolean authRequired, Consumer<T> responseValidator) {
+        HttpResponse<String> response = sendJsonRequest(method, path, request, authRequired);
+        return parseMessage(unwrapResult(responseJson(response)), responseClass, responseValidator);
+    }
+
+    private void doJsonUnit(String method, String path, Message request, boolean authRequired) {
+        responseJson(sendJsonRequest(method, path, request, authRequired));
+    }
+
+    private <T extends Message> Iterator<T> streamSse(String method, String path, Message request, Class<T> responseClass, boolean authRequired, Consumer<T> responseValidator) {
+        try {
+            JsonElement body = messageToJsonElement(request);
+            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(httpUrl(path)))
+                .timeout(connectTimeout)
+                .header("Accept", "text/event-stream")
+                .header("Content-Type", "application/json");
+
+            String auth = authHeader(authRequired);
+            if (auth != null) {
+                reqBuilder.header("Authorization", auth);
+            }
+
+            if ("GET".equals(method)) {
+                reqBuilder.GET();
+            } else {
+                reqBuilder.method(method, HttpRequest.BodyPublishers.ofString(gson.toJson(body), StandardCharsets.UTF_8));
+            }
+
+            HttpResponse<java.io.InputStream> response = httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() >= 400) {
+                String text = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
+                JsonElement value = text.isBlank() ? new JsonObject() : JsonParser.parseString(text);
+                throw httpStatusToProtoException(response.statusCode(), value);
+            }
+
+            BufferedReader reader = new BufferedReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8));
+            return new Iterator<T>() {
+                private T next;
+                private boolean done;
+
+                @Override
+                public boolean hasNext() {
+                    if (next != null) return true;
+                    if (done) return false;
+                    try {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            String trimmed = line.trim();
+                            if (trimmed.isEmpty() || trimmed.startsWith(":") || trimmed.startsWith("event:")) {
+                                continue;
+                            }
+                            if (trimmed.startsWith("data:")) {
+                                trimmed = trimmed.substring("data:".length()).trim();
+                            }
+                            JsonElement value = JsonParser.parseString(trimmed);
+                            next = parseMessage(unwrapResult(value), responseClass, responseValidator);
+                            return true;
+                        }
+                        done = true;
+                        reader.close();
+                        return false;
+                    } catch (RuntimeException e) {
+                        done = true;
+                        throw e;
+                    } catch (Exception e) {
+                        done = true;
+                        throw new ProtoException(ProtoException.UNAVAILABLE, "W2S SSE read failed: " + e.getMessage(), e);
+                    }
+                }
+
+                @Override
+                public T next() {
+                    if (!hasNext()) throw new NoSuchElementException();
+                    T result = next;
+                    next = null;
+                    return result;
+                }
+            };
+        } catch (ProtoException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ProtoException(ProtoException.UNAVAILABLE, "W2S SSE open failed: " + e.getMessage(), e);
+        }
+    }
+
+    private WebSocket connectWebSocket(String path, TextQueueListener listener) {
+        try {
+            return httpClient.newWebSocketBuilder()
+                .connectTimeout(connectTimeout)
+                .buildAsync(URI.create(websocketUrl(path)), listener)
+                .join();
+        } catch (RuntimeException e) {
+            throw new ProtoException(ProtoException.UNAVAILABLE, "W2S WebSocket connect failed: " + e.getMessage(), e);
+        }
+    }
+
+    private void sendFrame(WebSocket ws, JsonObject frame) {
+        try {
+            ws.sendText(gson.toJson(frame), true)
+                .orTimeout(connectTimeout.toMillis(), TimeUnit.MILLISECONDS)
+                .join();
+        } catch (RuntimeException e) {
+            throw new ProtoException(ProtoException.UNAVAILABLE, "W2S WebSocket send failed: " + e.getMessage(), e);
+        }
+    }
+
+    private void addAuth(JsonObject frame, boolean authRequired) {
+        String auth = authHeader(authRequired);
+        if (auth != null) {
+            frame.addProperty("authorization", auth);
+        }
+    }
+
+    private void sendStartFrame(WebSocket ws, boolean authRequired) {
+        JsonObject frame = new JsonObject();
+        frame.addProperty("type", "start");
+        addAuth(frame, authRequired);
+        sendFrame(ws, frame);
+    }
+
+    private void sendMessageFrame(WebSocket ws, Message message, boolean authRequired) {
+        JsonObject frame = new JsonObject();
+        frame.addProperty("type", "message");
+        frame.add("message", messageToJsonElement(message));
+        addAuth(frame, authRequired);
+        sendFrame(ws, frame);
+    }
+
+    private void sendCompleteFrame(WebSocket ws, boolean authRequired) {
+        JsonObject frame = new JsonObject();
+        frame.addProperty("type", "complete");
+        addAuth(frame, authRequired);
+        sendFrame(ws, frame);
+    }
+
+    private <Req extends Message, T extends Message> T clientStream(String path, Iterable<Req> requests, Class<T> responseClass, boolean authRequired, Consumer<Req> requestValidator, Consumer<T> responseValidator) {
+        TextQueueListener listener = new TextQueueListener();
+        WebSocket ws = connectWebSocket(path, listener);
+        try {
+            sendStartFrame(ws, authRequired);
+            for (Req request : requests) {
+                if (requestValidator != null) {
+                    requestValidator.accept(request);
+                }
+                sendMessageFrame(ws, request, authRequired);
+            }
+            sendCompleteFrame(ws, authRequired);
+            String text = listener.nextText(connectTimeout);
+            if (text == null) {
+                throw new ProtoException(ProtoException.UNAVAILABLE, "W2S stream closed before response");
+            }
+            return decodeWsText(text, responseClass, responseValidator);
+        } finally {
+            closeWebSocket(ws);
+        }
+    }
+
+    private <Req extends Message> void clientStreamUnit(String path, Iterable<Req> requests, boolean authRequired, Consumer<Req> requestValidator) {
+        TextQueueListener listener = new TextQueueListener();
+        WebSocket ws = connectWebSocket(path, listener);
+        try {
+            sendStartFrame(ws, authRequired);
+            for (Req request : requests) {
+                if (requestValidator != null) {
+                    requestValidator.accept(request);
+                }
+                sendMessageFrame(ws, request, authRequired);
+            }
+            sendCompleteFrame(ws, authRequired);
+            String text = listener.nextText(connectTimeout);
+            if (text != null) {
+                unwrapResult(JsonParser.parseString(text));
+            }
+        } finally {
+            closeWebSocket(ws);
+        }
+    }
+
+    private <T extends Message> T decodeWsText(String text, Class<T> responseClass, Consumer<T> responseValidator) {
+        try {
+            JsonElement value = JsonParser.parseString(text == null || text.isBlank() ? "{}" : text);
+            return parseMessage(unwrapResult(value), responseClass, responseValidator);
+        } catch (ProtoException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ProtoException(ProtoException.INTERNAL, "failed to decode W2S WebSocket JSON: " + e.getMessage(), e);
+        }
+    }
+
+    private void closeWebSocket(WebSocket ws) {
+        try {
+            ws.sendClose(WebSocket.NORMAL_CLOSURE, "closed").join();
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private void sleepBeforeReconnect() {
+        if (Thread.currentThread().isInterrupted()) {
+            return;
+        }
+        try {
+            Thread.sleep(5000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private ProtoException jsonErrorToProtoException(JsonElement value) {
+        if (value == null || !value.isJsonObject() || !value.getAsJsonObject().has("error")) {
+            return null;
+        }
+        JsonElement error = value.getAsJsonObject().get("error");
+        String message = error.isJsonPrimitive() ? error.getAsString() : gson.toJson(error);
+        return new ProtoException(ProtoException.UNKNOWN, message);
+    }
+
+    private ProtoException httpStatusToProtoException(int status, JsonElement value) {
+        ProtoException jsonErr = jsonErrorToProtoException(value);
+        String message = jsonErr != null ? jsonErr.getMessage() : "W2S HTTP status " + status;
+        int code;
+        switch (status) {
+            case 400: code = ProtoException.INVALID_ARGUMENT; break;
+            case 401: code = ProtoException.UNAUTHENTICATED; break;
+            case 403: code = ProtoException.PERMISSION_DENIED; break;
+            case 404: code = ProtoException.NOT_FOUND; break;
+            case 409: code = ProtoException.ALREADY_EXISTS; break;
+            case 429: code = ProtoException.RESOURCE_EXHAUSTED; break;
+            case 501: code = ProtoException.UNIMPLEMENTED; break;
+            case 503: code = ProtoException.UNAVAILABLE; break;
+            case 504: code = ProtoException.DEADLINE_EXCEEDED; break;
+            default: code = ProtoException.UNKNOWN; break;
+        }
+        return new ProtoException(code, message);
+    }
+
+    private static final class QueuedWsMessage {
+        final Message message;
+        final CompletableFuture<Void> ack;
+
+        QueuedWsMessage(Message message, CompletableFuture<Void> ack) {
+            this.message = message;
+            this.ack = ack;
+        }
+    }
+
+    private static final class TextQueueListener implements WebSocket.Listener {
+        private final LinkedBlockingQueue<String> messages = new LinkedBlockingQueue<>();
+        private final AtomicBoolean closed = new AtomicBoolean(false);
+        private final StringBuilder partial = new StringBuilder();
+        private volatile Throwable error;
+
+        @Override
+        public void onOpen(WebSocket webSocket) {
+            webSocket.request(1);
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
+            partial.append(data);
+            if (last) {
+                messages.offer(partial.toString());
+                partial.setLength(0);
+            }
+            webSocket.request(1);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
+            closed.set(true);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public void onError(WebSocket webSocket, Throwable error) {
+            this.error = error;
+            closed.set(true);
+        }
+
+        String nextText(Duration timeout) {
+            try {
+                String text = messages.poll(timeout.toMillis(), TimeUnit.MILLISECONDS);
+                if (text != null) return text;
+                if (error != null) {
+                    throw new ProtoException(ProtoException.UNAVAILABLE, "W2S WebSocket receive failed: " + error.getMessage(), error);
+                }
+                if (closed.get()) return null;
+                throw new ProtoException(ProtoException.DEADLINE_EXCEEDED, "W2S WebSocket receive timed out");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new ProtoException(ProtoException.CANCELLED, "W2S WebSocket receive interrupted", e);
+            }
+        }
+
+        String pollText() {
+            return messages.poll();
+        }
+
+        boolean isClosed() {
+            return closed.get() && messages.isEmpty();
+        }
+    }
+
+{{.Methods}}
+{{.ExtraTypes}}
+}

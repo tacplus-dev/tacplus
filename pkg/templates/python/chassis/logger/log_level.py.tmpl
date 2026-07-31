@@ -1,0 +1,107 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+Utility functions for working with log levels.
+
+This module provides conversion utilities between protobuf Level enums
+and Python logging levels, as well as parsing from strings.
+"""
+
+import logging
+from typing import Optional
+
+
+class LogLevel:
+    """
+    Utility class for working with log levels.
+
+    This class provides conversion utilities between protobuf Level enums
+    and Python logging levels, as well as parsing from strings.
+    """
+
+    @staticmethod
+    def parse(value: Optional[str]):
+        """
+        Parses a string to a protobuf Level enum.
+
+        Args:
+            value: The string to parse (case-insensitive)
+
+        Returns:
+            The corresponding Level enum value
+
+        Raises:
+            ValueError: If the string is not a valid level
+        """
+        from {{.PythonPackageBase}}.types.sys.logger import logger_pb2
+
+        if not value:
+            return logger_pb2.LEVEL_UNDEFINED
+
+        normalized = value.upper().strip()
+
+        if normalized == "TRACE":
+            return logger_pb2.LEVEL_TRACE
+        elif normalized == "DEBUG":
+            return logger_pb2.LEVEL_DEBUG
+        elif normalized == "INFO":
+            return logger_pb2.LEVEL_INFO
+        elif normalized in ("WARN", "WARNING"):
+            return logger_pb2.LEVEL_WARN
+        elif normalized == "ERROR":
+            return logger_pb2.LEVEL_ERROR
+        else:
+            raise ValueError(f"Invalid log level: {value}")
+
+    @staticmethod
+    def to_python_level(level_enum) -> int:
+        """
+        Converts a protobuf Level to a Python logging level.
+
+        Args:
+            level_enum: The protobuf level enum value
+
+        Returns:
+            The corresponding Python logging level constant
+        """
+        from {{.PythonPackageBase}}.types.sys.logger import logger_pb2
+
+        if level_enum == logger_pb2.LEVEL_TRACE:
+            # Python doesn't have TRACE, use DEBUG-5
+            return logging.DEBUG - 5
+        elif level_enum == logger_pb2.LEVEL_DEBUG:
+            return logging.DEBUG
+        elif level_enum == logger_pb2.LEVEL_INFO:
+            return logging.INFO
+        elif level_enum == logger_pb2.LEVEL_WARN:
+            return logging.WARNING
+        elif level_enum == logger_pb2.LEVEL_ERROR:
+            return logging.ERROR
+        else:
+            return logging.INFO
+
+    @staticmethod
+    def to_string(level_enum) -> str:
+        """
+        Converts a protobuf Level to a lowercase string representation.
+
+        Args:
+            level_enum: The protobuf level enum value
+
+        Returns:
+            The string representation (e.g., "debug", "info", "warn")
+        """
+        from {{.PythonPackageBase}}.types.sys.logger import logger_pb2
+
+        if level_enum == logger_pb2.LEVEL_TRACE:
+            return "trace"
+        elif level_enum == logger_pb2.LEVEL_DEBUG:
+            return "debug"
+        elif level_enum == logger_pb2.LEVEL_INFO:
+            return "info"
+        elif level_enum == logger_pb2.LEVEL_WARN:
+            return "warn"
+        elif level_enum == logger_pb2.LEVEL_ERROR:
+            return "error"
+        else:
+            return ""

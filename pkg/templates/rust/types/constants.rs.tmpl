@@ -1,0 +1,7 @@
+{{- /* Rust constants template */ -}}
+{{- range .FileConstants}}
+pub const {{.Name}}: {{.RustType}} = {{.RustValue}};
+{{- end}}
+{{- range .FieldDefaults}}
+pub const {{.Name}}: {{.RustType}} = {{.RustValue}};
+{{- end}}

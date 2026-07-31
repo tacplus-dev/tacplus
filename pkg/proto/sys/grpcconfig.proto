@@ -1,0 +1,263 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// ============================================================================
+// DO NOT MODIFY THIS FILE
+// ============================================================================
+// This file defines the unified service configuration combining cluster client
+// connectivity and RPC server settings, along with the ClusterService
+// contract and GrpcServerService health endpoints.
+// Changes to these definitions will break the compiler's code generation
+// and service scaffolding for all languages.
+// ============================================================================
+
+syntax = "proto3";
+
+package grpcconfig;
+
+import "sys/host.proto";
+import "sys/jwk.proto";
+import "sys/key.proto";
+import "sys/logger.proto";
+import "sys/spec.proto";
+import "sys/x509.proto";
+import "sys/trace.proto";
+import "sys/diskstore.proto";
+
+// Environment variable name for bootstrap config file path.
+option (spec.string_const) = { name: "BOOTSTRAP_CONFIG_ENV", value: "BOOTSTRAP_CONFIG" };
+
+// ============================================================================
+// Unified Service Configuration
+// ============================================================================
+
+// Config is the single configuration type for all services.
+//
+// Bootstrap fields (endpoints, instance_id, private_key, trusted_cas) are loaded
+// from YAML at boot and used to connect to the cluster.
+//
+// Runtime fields (ping_interval_ms, rebalance_interval_ms, listen_address,
+// max_request_size, request_timeout_seconds, logger, shutdown_timeout_seconds)
+// are delivered by the cluster via ServiceConfigState and can change at any time.
+//
+// TLS certificates are obtained automatically by the servicemanager via X509Mint
+// after token exchange — they are not part of the config.
+message Config {
+
+  // ============================================================================
+  // Bootstrap (loaded from file, used to connect to cluster)
+  // ============================================================================
+
+  // Cluster endpoints. Set in bootstrap file; can be updated at runtime
+  // via ServiceConfigState to add/remove endpoints dynamically.
+  repeated host.Host endpoints = 1 [(spec.assert_max_size) = 32];
+
+  // instance_id uniquely identifies this running instance/replica.
+  // Used for leader elections on boundaries with (spec.leader) = true.
+  // If empty, a random ID is generated at client creation time.
+  string instance_id = 2 [(spec.assert_max_size) = 128];
+
+  // private_key is used to mint throwaway bootstrap JWTs for the
+  // token exchange flow. The kid is in private_key.id;
+  // identity (subject/audience) comes from the delegate looked up
+  // by TokenExchanger using the matching kid.
+  // If absent, cloud-native authentication is attempted.
+  key.Key private_key = 3;
+
+  // ============================================================================
+  // Cluster Client — Connection Tuning
+  // ============================================================================
+
+  // ping_interval_ms controls how often each endpoint is pinged for latency measurement.
+  // Default: 5000 (5 seconds)
+  int32 ping_interval_ms = 4 [(spec.default_int) = 5000];
+
+  // rebalance_interval_ms controls how often the active connection is re-evaluated
+  // based on latency. Default: 10000 (10 seconds)
+  int32 rebalance_interval_ms = 5 [(spec.default_int) = 10000];
+
+  // ============================================================================
+  // RPC Server — Network
+  // ============================================================================
+
+  // listen_address is the bind address for the gRPC server. Default port 8443.
+  host.Host listen_address = 6 [(spec.assert_required) = true, (spec.default_host) = {host: "0.0.0.0", port: 8443}];
+
+  // ============================================================================
+  // RPC Server — Request Limits
+  // ============================================================================
+
+  // max_request_size is the maximum request size in bytes.
+  // Must be greater than 0. Default: 10MB (10485760 bytes)
+  int64 max_request_size = 7 [(spec.assert_gt) = 0, (spec.default_int) = 10485760];
+
+  // request_timeout_seconds is the timeout for client requests.
+  // Must be positive. Default: 30 seconds.
+  int64 request_timeout_seconds = 8 [(spec.assert_duration) = DURATION_TYPE_POSITIVE, (spec.default_int) = 30];
+
+  // ============================================================================
+  // Observability
+  // ============================================================================
+
+  // logger configures the logger for the service.
+  // Controls log format (JSON/console), level, output paths, and more.
+  logger.LoggerConfig logger = 9;
+
+  // shutdown_timeout_seconds is the maximum time (in seconds) to wait for graceful
+  // shutdown after SIGTERM before forcing immediate shutdown.
+  // Must be positive. Default: 30 seconds.
+  int64 shutdown_timeout_seconds = 10 [(spec.assert_duration) = DURATION_TYPE_POSITIVE, (spec.default_int) = 30];
+
+  // ============================================================================
+  // RPC Server — Resource Limits
+  // ============================================================================
+
+  // max_concurrent_streams limits the number of concurrent gRPC streams per connection.
+  // Prevents resource exhaustion from clients opening unlimited streams.
+  // Default: 100. Set to 0 to use the gRPC library default (unlimited).
+  int32 max_concurrent_streams = 13 [(spec.default_int) = 100];
+
+  // max_send_msg_size is the maximum response message size in bytes.
+  // Prevents the server from sending responses that could OOM clients.
+  // Default: 16MB (16777216 bytes). Set to 0 to use the gRPC library default.
+  int64 max_send_msg_size = 14 [(spec.default_int) = 16777216];
+
+  // keepalive_min_time_seconds is the minimum interval clients must wait between
+  // keepalive pings. Clients pinging more frequently are disconnected.
+  // Default: 30 seconds. Set to 0 to disable enforcement.
+  int64 keepalive_min_time_seconds = 15 [(spec.default_int) = 30];
+
+  // ============================================================================
+  // Bootstrap — TLS Trust
+  // ============================================================================
+
+  // trusted_cas is the explicit list of CA certificates trusted for SPIFFE TLS
+  // verification when connecting to cluster endpoints. It must not be empty.
+  repeated x509.X509Cert trusted_cas = 11 [(spec.assert_max_size) = 32];
+
+  // ============================================================================
+  // Bootstrap — SPIFFE Identity
+  // ============================================================================
+
+  // spiffe_trust_domain is the SPIFFE URI authority: a globally unique instance
+  // name for this autonomous-system instance (need not be a DNS domain).
+  // It must not contain '/', a scheme, query, or fragment, and carries no path.
+  // Service identity is built by the generated sys/spiffe helper as:
+  //   spiffe://<spiffe_trust_domain>/system/<location_path...>/services/<service_label>
+  // If empty, SPIFFE IDs are not set on health reports or X509 URI SANs.
+  string spiffe_trust_domain = 16 [(spec.assert_max_size) = 256];
+
+  // location_path is this service instance's topology path under /system —
+  // opaque, tag-delimited, slash-separated segments, arity not fixed
+  // (e.g. "aws/123456789012/us-east-1a/cluster-7/team-a"). Segments follow the
+  // SPIFFE segment grammar and must not be reserved tags. Supplied by the
+  // operator/deployment from runtime config (where the service runs); it is
+  // not a token claim. May be empty (no topology tiers).
+  string location_path = 17 [(spec.assert_max_size) = 512];
+
+  // disk_persistence is an init-time/bootstrap setting that enables
+  // ServiceManager-owned redo-log lifecycle for generated service_store stores.
+  // When present at ServiceManager creation, the generated ServiceManager opens
+  // the per-store redo logs, exposes those handles to service code, and owns
+  // scheduled compaction/roll. It is not hot-reloaded; when absent, typed
+  // diskstore helpers remain available but no managed roll loop is started.
+  diskstore.DiskPersistenceConfig disk_persistence = 18;
+
+  // ============================================================================
+  // Data Entitlement — Egress Anonymize Secret
+  // ============================================================================
+
+  // anonymize_hmac_key is the per-deployment data-entitlement ANONYMIZE secret:
+  // the keyed-HMAC key the generated service wrapper supplies to Sanitize<T> so
+  // a value pseudonymizes to the same surrogate at any depth, across services
+  // and restarts. Required only by services whose records carry
+  // ANONYMIZE-capable (spec.redact) fields — the generated pseudonymize
+  // primitives fail loud on an empty key.
+  bytes anonymize_hmac_key = 19 [(spec.assert_max_size) = 256];
+
+}
+
+// ============================================================================
+// Cluster Service — Cluster Messages
+// ============================================================================
+
+// LogMessage is a log entry sent from the cluster to the service for logging.
+message LogMessage {
+  // level is the severity level for this log message.
+  logger.Level level = 1 [(spec.assert_enum_defined) = true];
+
+  // message is the log message text.
+  string message = 2 [(spec.assert_required) = true, (spec.assert_max_size) = 4096];
+}
+
+// MemberStatus represents the lifecycle state of a cluster member.
+enum MemberStatus {
+  MEMBER_STATUS_UNKNOWN = 0;
+  MEMBER_STATUS_STARTING = 1;
+  MEMBER_STATUS_READY = 2;
+  MEMBER_STATUS_DRAINING = 3;
+  MEMBER_STATUS_SHUTTING_DOWN = 4;
+  MEMBER_STATUS_UNREACHABLE = 5;
+}
+
+// ClusterMember describes a single member (pod/node) within a cluster.
+message ClusterMember {
+  // endpoint is the host:port address of this member.
+  host.Host endpoint = 1;
+  MemberStatus status = 2 [(spec.assert_enum_defined) = true];
+  int32 priority = 3;
+}
+
+// ClusterInfo describes a single Kubernetes cluster and its members.
+message ClusterInfo {
+  string org_id = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 128];
+  string region = 2 [(spec.assert_required) = true, (spec.assert_max_size) = 64];
+  string zone = 3 [(spec.assert_max_size) = 64];
+  string cluster_name = 4 [(spec.assert_required) = true, (spec.assert_max_size) = 128];
+  repeated ClusterMember members = 5 [(spec.assert_max_size) = 64];
+}
+
+// ClusterState is a snapshot of the full multi-region, multi-cluster topology.
+message ClusterState {
+  repeated ClusterInfo clusters = 1 [(spec.assert_max_size) = 32];
+}
+
+// PingResponse is returned by Ping to confirm the member is reachable.
+message PingResponse {
+  MemberStatus status = 1;
+}
+
+// ============================================================================
+// Services
+// ============================================================================
+
+// ClusterService provides service-to-service communication between
+// cluster members and clients (services).
+service ClusterService {
+  // Log opens a server-streaming channel for the cluster to push log messages.
+  rpc Log(trace.TraceRequest) returns (stream LogMessage);
+
+  // Ping verifies that a member is reachable and returns its identity.
+  rpc Ping(trace.TraceRequest) returns (PingResponse);
+
+  // Subscribe streams cluster state updates across all clusters and regions.
+  rpc Subscribe(trace.TraceRequest) returns (stream ClusterState);
+
+  // WatchJwks streams the current JWKS (JSON Web Key Set) used for token verification.
+  // The server sends an updated Jwks message whenever the key set changes.
+  rpc WatchJwks(trace.TraceRequest) returns (stream jwk.Jwks);
+}
+
+// ============================================================================
+// ServiceConfigState — shared runtime config for all gRPC services
+// ============================================================================
+
+// ServiceConfigState delivers runtime configuration (OPA policy, TLS, logging)
+// to all RPC services. The cluster writes the config; services subscribe
+// via OnChange to receive updates.
+message ServiceConfigState {
+  option (spec.service_state) = {name: "ServiceConfigState"};
+
+  Config config = 1 [
+    (spec.persistence) = true
+  ];
+}

@@ -1,0 +1,25 @@
+{{.Header}}
+
+/** Describes a state boundary. */
+export interface BoundaryInfo {
+    service: string;
+    stateRoot: string;
+    boundary: string;
+    persistence: boolean;
+    collection: boolean;
+    typeFqn: string;
+    isConfig: boolean;
+    graphType: string;
+    rpcs: string[];
+}
+
+/** Returns all state boundaries across all services. */
+export function boundaries(): BoundaryInfo[] {
+    return [
+{{- range $c := .Clients}}
+{{- range $c.Boundaries}}
+        { service: "{{$c.Group}}/{{$c.PackageName}}", stateRoot: "{{.StateRoot}}", boundary: "{{.Boundary}}", persistence: {{.Persistence}}, collection: {{.Collection}}, typeFqn: "{{.TypeFQN}}", isConfig: {{.IsConfig}}, graphType: "{{.GraphType}}", rpcs: [{{range .Rpcs}}"{{.}}", {{end}}] },
+{{- end}}
+{{- end}}
+    ];
+}

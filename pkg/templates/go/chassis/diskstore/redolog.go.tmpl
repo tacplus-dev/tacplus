@@ -1,0 +1,347 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package diskstore
+
+// UC2 — append-only redo log (WAL) with periodic compaction.
+//
+// One redo log per (namespace, store), laid out by path.go as
+// <base>/<ns-dirs>/<store>.log. Because each log is homogeneous (one ns, one
+// store), records carry only the row key, an optional deleted tombstone,
+// optional caller-set metadata, and the payload (the type as JSON). The
+// namespace and store are implied by the file path.
+//
+// Records are NDJSON (one JSON envelope per line — safe to newline-frame since
+// JSON escapes embedded newlines). Compaction ("roll") rewrites the log as the
+// current deduped state plus writes that arrived during the snapshot, then
+// atomically swaps it in (the final rename is the commit point).
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sync"
+)
+
+// Record is one redo-log record (the JSON envelope), NDJSON-framed.
+type Record struct {
+	// Key is the collection_index value identifying the row within the store.
+	Key string `json:"key"`
+	// Deleted is true if this records a deletion of Key (payload omitted).
+	Deleted bool `json:"deleted,omitempty"`
+	// Metadata is optional, caller-set metadata. Never required or
+	// auto-populated.
+	Metadata *string `json:"metadata,omitempty"`
+	// Payload is the type serialized as JSON (absent for deletions). Embedded as
+	// a nested JSON value: the generated ToJSON output stored verbatim; FromJSON
+	// consumes it on restore.
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+// Inserter is the consumer hook for restore. Receives each deduped record; the
+// implementation decides whether the row is actually applied or is a duplicate
+// — idempotency is owned by the consumer (the underlying store).
+type Inserter interface {
+	Insert(rec *Record) error
+}
+
+// InserterFunc adapts a function to the Inserter interface.
+type InserterFunc func(rec *Record) error
+
+// Insert calls the underlying function.
+func (f InserterFunc) Insert(rec *Record) error { return f(rec) }
+
+// RedoLog is an append-only redo log for one (namespace, store), with
+// compaction.
+type RedoLog struct {
+	active       string
+	archiveCount uint32
+	archiveCodec Codec
+
+	mu     sync.Mutex
+	writer *os.File
+}
+
+// OpenRedoLog opens (creating if absent) the redo log for (ns, store) under
+// base. Concurrency: single-writer, single-process, local filesystem only.
+// Concurrent writers, multiple owning processes, or network/shared filesystems
+// are unsupported and can corrupt the archive chain.
+func OpenRedoLog(base, ns, store string, archiveCount uint32, archiveCodec Codec) (*RedoLog, error) {
+	active := StorePath(base, ns, store, ".log")
+	if dir := filepath.Dir(active); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, wrapIOError(err)
+		}
+	}
+	w, err := os.OpenFile(active, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, wrapIOError(err)
+	}
+	return &RedoLog{
+		active:       active,
+		archiveCount: archiveCount,
+		archiveCodec: archiveCodec,
+		writer:       w,
+	}, nil
+}
+
+// ActivePath returns the active log file path.
+func (l *RedoLog) ActivePath() string {
+	return l.active
+}
+
+// Close closes the underlying writer.
+func (l *RedoLog) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.writer == nil {
+		return nil
+	}
+	err := l.writer.Close()
+	l.writer = nil
+	if err != nil {
+		return wrapIOError(err)
+	}
+	return nil
+}
+
+// Append appends one record, NDJSON-framed and fsync'd (durability is the
+// point).
+func (l *RedoLog) Append(rec *Record) error {
+	line, err := json.Marshal(rec)
+	if err != nil {
+		return ErrCodec(err.Error())
+	}
+	line = append(line, '\n')
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, err := l.writer.Write(line); err != nil {
+		return wrapIOError(err)
+	}
+	if err := l.writer.Sync(); err != nil {
+		return wrapIOError(err)
+	}
+	return nil
+}
+
+// Roll compacts the log: redirect appends to a temp log, build a fresh baseline
+// from the caller-supplied current state (snapshot), fold in the temp log under
+// a brief write-block, then atomically swap the new file in and archive the old
+// one (compressed at rest). The final rename is the commit point.
+func (l *RedoLog) Roll(snapshot []*Record) error {
+	tempPath := sibling(l.active, ".temp")
+	building := sibling(l.active, ".building")
+
+	// 1. Redirect appends to the temp log (no write-block during snapshot).
+	l.mu.Lock()
+	tempWriter, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		l.mu.Unlock()
+		return wrapIOError(err)
+	}
+	if l.writer != nil {
+		_ = l.writer.Close()
+	}
+	l.writer = tempWriter
+	l.mu.Unlock()
+
+	// 2. Build the new baseline from the snapshot (build-then-rename: the
+	//    presence of building means it is complete + durable).
+	var buf bytes.Buffer
+	for _, rec := range snapshot {
+		b, err := json.Marshal(rec)
+		if err != nil {
+			return ErrCodec(err.Error())
+		}
+		buf.Write(b)
+		buf.WriteByte('\n')
+	}
+	staged, err := writeTemp(building, buf.Bytes(), 0)
+	if err != nil {
+		return err
+	}
+	if err := promote(staged, building); err != nil {
+		return err
+	}
+
+	// 3. Block appends; fold the temp log into the new baseline; swap.
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.writer != nil {
+		if err := l.writer.Sync(); err != nil {
+			return wrapIOError(err)
+		}
+	}
+	tempBytes, err := os.ReadFile(tempPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			tempBytes = nil
+		} else {
+			return wrapIOError(err)
+		}
+	}
+	if len(tempBytes) > 0 {
+		f, err := os.OpenFile(building, os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return wrapIOError(err)
+		}
+		if _, err := f.Write(tempBytes); err != nil {
+			f.Close()
+			return wrapIOError(err)
+		}
+		if err := f.Sync(); err != nil {
+			f.Close()
+			return wrapIOError(err)
+		}
+		if err := f.Close(); err != nil {
+			return wrapIOError(err)
+		}
+	}
+	// Archive the old active (compressed at rest), then promote.
+	if err := rotateArchives(l.active, l.archiveCount); err != nil {
+		return err
+	}
+	if l.archiveCount > 0 && l.archiveCodec != CodecNone {
+		if err := compressInPlace(sibling(l.active, ".bak.1"), l.archiveCodec); err != nil {
+			return err
+		}
+	}
+	if l.writer != nil {
+		_ = l.writer.Close()
+	}
+	if err := promote(building, l.active); err != nil {
+		return err
+	}
+	// Resume appends on the (new) active log.
+	w, err := os.OpenFile(l.active, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return wrapIOError(err)
+	}
+	l.writer = w
+	_ = os.Remove(tempPath)
+	return nil
+}
+
+// Restore reads + dedups the active log and replays each record through
+// inserter. It returns the number of records applied. It recovers a leftover
+// temp log (crash mid-roll) by folding it after the active log (latest wins).
+func (l *RedoLog) Restore(inserter Inserter) (int, error) {
+	building := sibling(l.active, ".building")
+	if fileExists(building) {
+		l.mu.Lock()
+		if l.writer != nil {
+			_ = l.writer.Close()
+			l.writer = nil
+		}
+		if err := promote(building, l.active); err != nil {
+			l.mu.Unlock()
+			return 0, err
+		}
+		w, err := os.OpenFile(l.active, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			l.mu.Unlock()
+			return 0, wrapIOError(err)
+		}
+		l.writer = w
+		l.mu.Unlock()
+	}
+
+	recs, err := DedupFile(l.active)
+	if err != nil {
+		return 0, err
+	}
+	tempPath := sibling(l.active, ".temp")
+	if fileExists(tempPath) {
+		extra, err := DedupFile(tempPath)
+		if err != nil {
+			return 0, err
+		}
+		byKey := make(map[string]*Record)
+		for _, r := range recs {
+			byKey[r.Key] = r
+		}
+		for _, r := range extra {
+			byKey[r.Key] = r
+		}
+		recs = recs[:0]
+		for _, r := range byKey {
+			recs = append(recs, r)
+		}
+	}
+	n := 0
+	for _, r := range recs {
+		if err := inserter.Insert(r); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
+// DedupFile reads a (possibly compressed) NDJSON log file and dedups to
+// latest-per-key. It returns an empty slice if the file is absent.
+func DedupFile(path string) ([]*Record, error) {
+	bytesData, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, wrapIOError(err)
+	}
+	raw, err := DecompressAuto(bytesData)
+	if err != nil {
+		return nil, err
+	}
+	return DedupBytes(raw)
+}
+
+// DedupBytes dedups NDJSON bytes to latest-per-key. Later lines win.
+func DedupBytes(data []byte) ([]*Record, error) {
+	byKey := make(map[string]*Record)
+	var order []string
+	lines := bytes.Split(data, []byte{'\n'})
+	for i, line := range lines {
+		if len(line) == 0 {
+			continue
+		}
+		var rec Record
+		if err := json.Unmarshal(line, &rec); err != nil {
+			return nil, ErrCodec(fmt.Sprintf("redo log line %d: %s", i+1, err))
+		}
+		if rec.Key == "" {
+			return nil, ErrInvalidData(fmt.Sprintf("redo log line %d: missing key", i+1))
+		}
+		if _, seen := byKey[rec.Key]; !seen {
+			order = append(order, rec.Key)
+		}
+		r := rec
+		byKey[rec.Key] = &r
+	}
+	out := make([]*Record, 0, len(byKey))
+	for _, k := range order {
+		out = append(out, byKey[k])
+	}
+	return out, nil
+}
+
+func compressInPlace(path string, codec Codec) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return wrapIOError(err)
+	}
+	packed, err := Compress(raw, codec)
+	if err != nil {
+		return err
+	}
+	tmp, err := writeTemp(path, packed, 0)
+	if err != nil {
+		return err
+	}
+	return promote(tmp, path)
+}

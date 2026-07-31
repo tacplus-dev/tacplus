@@ -1,0 +1,13 @@
+[package]
+name = "c2d"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1", features = ["net", "rt", "macros", "sync"] }
+tonic = { version = "0.14", features = ["tls-ring"] }
+tower = "0.5"
+hyper = "1"
+hyper-util = { version = "0.1", features = ["tokio"] }
+tracing = "0.1"
+tokio-stream = { version = "0.1", features = ["net"] }

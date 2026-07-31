@@ -1,0 +1,22 @@
+// ============================================================
+// Constants
+// ============================================================
+const (
+{{- range .Constants}}
+{{.GoName}}{{if .Type}} {{.Type}}{{end}} = {{.Value}}
+{{- end}}
+{{- range .FieldDefaults}}
+{{.Name}} {{.Type}} = {{.Value}}
+{{- end}}
+)
+{{range .Defaults}}
+// ============================================================
+// TypeDefaults: {{.MsgName}}
+// ============================================================
+// {{.MsgName}}Defaults applies field-level default values to zero-valued fields.
+func {{.MsgName}}Defaults(v *{{.MsgName}}) {
+{{- range .Assignments}}
+{{.}}
+{{- end}}
+}
+{{end}}

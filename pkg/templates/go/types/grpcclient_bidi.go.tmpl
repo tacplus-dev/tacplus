@@ -1,0 +1,266 @@
+// {{.MethodName}} opens a managed bidirectional stream to {{.ServiceName}}.{{.MethodName}}.
+//
+// Returns a handle for sending messages. Responses are delivered via the
+// onMessage callback. The stream reconnects automatically on transient
+// failures with exponential backoff (initial {{.MinBackoff}}, max {{.MaxBackoff}}).
+// The onConnect callback is invoked on each (re)connect so the application
+// can send initialization messages.
+//
+// Design rationale: watches (server-streaming) use callbacks for the receive
+// side because they are receive-only. Bidi streams need both send and receive.
+// Callbacks work for the receive side (consistent with the watch pattern). A
+// send channel is needed for the send side because bidi introduces a
+// direction that watches don't have.
+//
+// The returned handle is safe for concurrent use. Calling handle.Close()
+// stops the lifecycle goroutine and closes the underlying stream.
+func (c *{{.ClientName}}) {{.MethodName}}(
+	ctx context.Context,
+	onConnect func(send func(*{{.GoInput}}) error),
+	onMessage func(*{{.GoOutput}}),
+) *{{.HandleType}} {
+	h := &{{.HandleType}}{
+		userCh:        make(chan *{{.GoInput}}, 32),
+		doneCh:        make(chan struct{}),
+		validate:      {{if .ValidateInput}}{{.ValidateInput}}{{else}}nil{{end}},
+	}
+	hCtx, hCancel := context.WithCancel(ctx)
+	h.cancel = hCancel
+
+	go c.{{.LoopFnName}}(hCtx, h, onConnect, onMessage)
+	return h
+}
+
+// {{.LoopFnName}} runs the connect/reconnect lifecycle for a
+// {{.MethodName}} bidi stream. It exits when the handle's context is
+// cancelled (via Close) or the parent context is cancelled.
+func (c *{{.ClientName}}) {{.LoopFnName}}(
+	ctx context.Context,
+	h *{{.HandleType}},
+	onConnect func(send func(*{{.GoInput}}) error),
+	onMessage func(*{{.GoOutput}}),
+) {
+	defer close(h.doneCh)
+
+	const minBackoff = {{.MinBackoff}}
+	const maxBackoff = {{.MaxBackoff}}
+	backoff := minBackoff
+
+	var connects, sent, received, errs uint64
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		zap.L().Info("{{.MethodName}}: connecting",
+			zap.String("service", "{{.ServiceName}}"),
+			zap.Uint64("connects", connects))
+
+		err := c.{{.RunFnName}}(ctx, h, onConnect, onMessage, &connects, &sent, &received, &errs)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			errs++
+			zap.L().Warn("{{.MethodName}}: stream error, reconnecting",
+				zap.String("service", "{{.ServiceName}}"),
+				zap.Error(err),
+				zap.Duration("backoff", backoff),
+				zap.Uint64("errors", errs))
+		} else {
+			zap.L().Info("{{.MethodName}}: stream ended, reconnecting",
+				zap.String("service", "{{.ServiceName}}"),
+				zap.Duration("backoff", backoff))
+		}
+
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return
+		}
+		if err != nil {
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+		} else {
+			// Clean EOF — reset backoff.
+			backoff = minBackoff
+		}
+	}
+}
+
+// {{.RunFnName}} opens a single instance of the {{.MethodName}} bidi
+// stream and pumps messages until the stream ends or errors. Returns nil
+// on clean EOF, error on failure (caller reconnects).
+func (c *{{.ClientName}}) {{.RunFnName}}(
+	ctx context.Context,
+	h *{{.HandleType}},
+	onConnect func(send func(*{{.GoInput}}) error),
+	onMessage func(*{{.GoOutput}}),
+	connects, sent, received, errs *uint64,
+) error {
+	// Per-call context: cancelling on exit sends RST_STREAM so the server
+	// observes a clean cancel rather than a half-open stream.
+	callCtx, callCancel := context.WithCancel(ctx)
+	defer callCancel()
+
+{{- if .AuthRequired}}
+	// Inject auth token.
+	if c.tokenProvider == nil {
+		return fmt.Errorf("auth token provider is required")
+	}
+	token, err := c.tokenProvider()
+	if err != nil {
+		return fmt.Errorf("auth token: %w", err)
+	}
+	if token == "" {
+		return fmt.Errorf("auth token is empty")
+	}
+	callCtx = metadata.AppendToOutgoingContext(callCtx, "authorization", "Bearer "+token)
+{{- end}}
+
+	stream, err := c.client.{{.MethodName}}(callCtx)
+	if err != nil {
+		return fmt.Errorf("open stream: %w", err)
+	}
+	*connects++
+
+	// send closure used by onConnect callback and the outbound pump.
+	send := func(msg *{{.GoInput}}) error {
+		if err := h.validateMessage(msg); err != nil {
+			return err
+		}
+		if err := stream.Send(msg); err != nil {
+			return err
+		}
+		*sent++
+		return nil
+	}
+
+	// onConnect fires on every (re)connect so callers can re-send init state.
+	if onConnect != nil {
+		onConnect(send)
+	}
+
+	// Receive loop in a goroutine; signals via recvErrCh.
+	recvErrCh := make(chan error, 1)
+	go func() {
+		for {
+			msg, err := stream.Recv()
+			if err != nil {
+				recvErrCh <- err
+				return
+			}
+{{- if .ValidateOutput}}
+			if err := {{.ValidateOutput}}(msg); err != nil {
+				recvErrCh <- fmt.Errorf("response validation failed: %w", err)
+				return
+			}
+{{- end}}
+			*received++
+			if onMessage != nil {
+				onMessage(msg)
+			}
+		}
+	}()
+
+	// Outbound pump: drain user channel into stream until the stream dies or
+	// the handle is closed.
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-recvErrCh:
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return fmt.Errorf("recv: %w", err)
+		case msg, ok := <-h.userCh:
+			if !ok {
+				// Handle closed.
+				_ = stream.CloseSend()
+				// Wait for recv to drain.
+				select {
+				case <-recvErrCh:
+				case <-ctx.Done():
+				}
+				return nil
+			}
+			if err := send(msg); err != nil {
+				*errs++
+				return fmt.Errorf("send: %w", err)
+			}
+		}
+	}
+}
+
+// {{.HandleType}} is the handle for the managed {{.MethodName}}
+// bidirectional stream. Use Send to push messages; the stream reconnects
+// automatically on transient failure. Call Close to tear down.
+type {{.HandleType}} struct {
+	mu            sync.Mutex
+	closed        bool
+	userCh        chan *{{.GoInput}}
+	doneCh        chan struct{}
+	cancel        context.CancelFunc
+	validate      func(*{{.GoInput}}) error
+}
+
+func (h *{{.HandleType}}) validateMessage(msg *{{.GoInput}}) error {
+	if h.validate != nil {
+		if err := h.validate(msg); err != nil {
+			return fmt.Errorf("validation failed: %w", err)
+		}
+	}
+	return nil
+}
+
+// Send queues a message to be sent on the bidi stream. Messages are
+// buffered while the stream is reconnecting. Returns an error if the
+// handle has been closed.
+//
+// NOTE: buffered messages are NOT re-sent across reconnects — the onConnect
+// callback is the place to re-establish state after a reconnect.
+func (h *{{.HandleType}}) Send(msg *{{.GoInput}}) error {
+	if err := h.validateMessage(msg); err != nil {
+		return err
+	}
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return fmt.Errorf("{{.MethodName}} bidi handle closed")
+	}
+	h.mu.Unlock()
+	select {
+	case h.userCh <- msg:
+		return nil
+	default:
+		return fmt.Errorf("{{.MethodName}} bidi send buffer full")
+	}
+}
+
+// Close tears down the bidi stream and stops the reconnect loop.
+// Safe to call multiple times. Blocks until the lifecycle goroutine exits.
+func (h *{{.HandleType}}) Close() {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		<-h.doneCh
+		return
+	}
+	h.closed = true
+	close(h.userCh)
+	h.mu.Unlock()
+	if h.cancel != nil {
+		h.cancel()
+	}
+	<-h.doneCh
+}
+
+// Done returns a channel closed when the lifecycle goroutine has exited
+// (i.e. after Close, or after the parent context was cancelled).
+func (h *{{.HandleType}}) Done() <-chan struct{} { return h.doneCh }

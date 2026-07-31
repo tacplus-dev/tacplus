@@ -1,0 +1,61 @@
+{{.Header}}
+package sm
+
+import (
+	"net/http"
+	"strings"
+
+	w2s "{{.ModuleBasePath}}/w2sm/internal/grpc_over_rest"
+)
+
+// ServiceManager provides typed W2S clients for web-to-service communication.
+type ServiceManager struct {
+	client     *http.Client
+	baseURL    string
+	w2sClients *w2s.W2SClients
+}
+
+// New creates a W2S ServiceManager from an HTTP gateway base URL.
+func New(baseURL string, tokenProviderFor w2s.TokenProviderFor) *ServiceManager {
+	return WithClient(http.DefaultClient, baseURL, tokenProviderFor)
+}
+
+// WithClient creates a W2S ServiceManager using a caller-supplied HTTP client.
+func WithClient(client *http.Client, baseURL string, tokenProviderFor w2s.TokenProviderFor) *ServiceManager {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+	return &ServiceManager{
+		client:     client,
+		baseURL:    baseURL,
+		w2sClients: w2s.NewW2SClients(client, baseURL, tokenProviderFor),
+	}
+}
+
+// WithTokenProvider creates a W2S ServiceManager with one token provider shared by all targets.
+func WithTokenProvider(baseURL string, tokenProvider w2s.TokenProvider) *ServiceManager {
+	return New(baseURL, func(string) w2s.TokenProvider {
+		return tokenProvider
+	})
+}
+
+// Client returns the underlying HTTP client.
+func (sm *ServiceManager) Client() *http.Client {
+	return sm.client
+}
+
+// BaseURL returns the gateway base URL.
+func (sm *ServiceManager) BaseURL() string {
+	return sm.baseURL
+}
+
+// W2SClients returns the typed W2S client wrappers.
+func (sm *ServiceManager) W2SClients() *w2s.W2SClients {
+	return sm.w2sClients
+}
+
+// GrpcClients is an alias for consumers that switch between C2S and W2S managers.
+func (sm *ServiceManager) GrpcClients() *w2s.W2SClients {
+	return sm.w2sClients
+}

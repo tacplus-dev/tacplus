@@ -1,0 +1,202 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// CODE GENERATED - DO NOT EDIT
+// Generated runtime support for Kubernetes-style tag sets and selectors.
+
+import type { TagSelector, TagSelectorRequirement, TagSet } from '../../types/sys/tags/tags_pb.js';
+
+const OP_IN = 1;
+const OP_NOT_IN = 2;
+const OP_EXISTS = 3;
+const OP_DOES_NOT_EXIST = 4;
+
+const TAG_NAME = /^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$/;
+const DNS_SEGMENT = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+
+export function containsAll(have: Partial<TagSet> | null | undefined, want: Partial<TagSet> | null | undefined): boolean {
+  return containsAllMap(have?.tags, want?.tags);
+}
+
+export function containsAllMap(
+  have: Record<string, string> | undefined | null,
+  want: Record<string, string> | undefined | null,
+): boolean {
+  if (!want || Object.keys(want).length === 0) {
+    return true;
+  }
+  if (!have) {
+    return false;
+  }
+  for (const [key, value] of Object.entries(want)) {
+    if (have[key] !== value) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function matches(selector: Partial<TagSelector> | null | undefined, tags: Partial<TagSet> | null | undefined): boolean {
+  return matchesMap(selector, tags?.tags);
+}
+
+export function matchesMap(
+  selector: Partial<TagSelector> | null | undefined,
+  tags: Record<string, string> | undefined | null,
+): boolean {
+  if (!selector) {
+    return true;
+  }
+  if (!containsAllMap(tags, selector.matchTags)) {
+    return false;
+  }
+  for (const req of selector.matchExpressions ?? []) {
+    if (!matchRequirement(req, tags)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function validateTagSet(tagSet: Partial<TagSet> | null | undefined): void {
+  if (!tagSet) {
+    throw new Error('tag set is null');
+  }
+  for (const [key, value] of Object.entries(tagSet.tags ?? {})) {
+    validateKey(key);
+    try {
+      validateValue(value);
+    } catch (err) {
+      throw new Error(`tag ${JSON.stringify(key)}: ${(err as Error).message}`);
+    }
+  }
+}
+
+export function validateSelector(selector: Partial<TagSelector> | null | undefined): void {
+  if (!selector) {
+    throw new Error('tag selector is null');
+  }
+  for (const [key, value] of Object.entries(selector.matchTags ?? {})) {
+    validateKey(key);
+    try {
+      validateValue(value);
+    } catch (err) {
+      throw new Error(`match_tags[${JSON.stringify(key)}]: ${(err as Error).message}`);
+    }
+  }
+  for (const [i, req] of (selector.matchExpressions ?? []).entries()) {
+    validateKey(req.key ?? '');
+    const values = req.values ?? [];
+    switch (req.operator) {
+      case OP_IN:
+      case OP_NOT_IN:
+        if (values.length === 0) {
+          throw new Error(`match_expressions[${i}]: operator ${req.operator} requires at least one value`);
+        }
+        for (const [j, value] of values.entries()) {
+          try {
+            validateValue(value);
+          } catch (err) {
+            throw new Error(`match_expressions[${i}].values[${j}]: ${(err as Error).message}`);
+          }
+        }
+        break;
+      case OP_EXISTS:
+      case OP_DOES_NOT_EXIST:
+        if (values.length !== 0) {
+          throw new Error(`match_expressions[${i}]: operator ${req.operator} requires no values`);
+        }
+        break;
+      default:
+        throw new Error(`match_expressions[${i}]: invalid operator ${req.operator}`);
+    }
+  }
+}
+
+export function validateKey(key: string): void {
+  if (key === '') {
+    throw new Error('tag key is empty');
+  }
+  let name = key;
+  if (key.includes('/')) {
+    const parts = key.split('/');
+    if (parts.length !== 2) {
+      throw new Error(`tag key ${JSON.stringify(key)} must contain at most one '/'`);
+    }
+    validatePrefix(parts[0], key);
+    name = parts[1];
+  }
+  try {
+    validateName(name, false);
+  } catch (err) {
+    throw new Error(`tag key ${JSON.stringify(key)} has invalid name: ${(err as Error).message}`);
+  }
+}
+
+export function validateValue(value: string): void {
+  if (value === '') {
+    return;
+  }
+  try {
+    validateName(value, true);
+  } catch (err) {
+    throw new Error(`tag value ${JSON.stringify(value)} is invalid: ${(err as Error).message}`);
+  }
+}
+
+function matchRequirement(
+  req: Partial<TagSelectorRequirement>,
+  tags: Record<string, string> | undefined | null,
+): boolean {
+  const value = tags?.[req.key ?? ''];
+  const exists = value !== undefined;
+  const values = req.values ?? [];
+  switch (req.operator) {
+    case OP_IN:
+      return exists && values.includes(value);
+    case OP_NOT_IN:
+      return !exists || !values.includes(value);
+    case OP_EXISTS:
+      return exists;
+    case OP_DOES_NOT_EXIST:
+      return !exists;
+    default:
+      return false;
+  }
+}
+
+function validatePrefix(prefix: string, key: string): void {
+  if (prefix === '') {
+    throw new Error(`tag key ${JSON.stringify(key)} has empty prefix`);
+  }
+  if (prefix.length > 253) {
+    throw new Error(`tag key ${JSON.stringify(key)} prefix exceeds 253 characters`);
+  }
+  for (const segment of prefix.split('.')) {
+    if (segment === '') {
+      throw new Error(`tag key ${JSON.stringify(key)} has empty DNS segment`);
+    }
+    if (segment.length > 63) {
+      throw new Error(`tag key ${JSON.stringify(key)} DNS segment exceeds 63 characters`);
+    }
+    if (!DNS_SEGMENT.test(segment)) {
+      throw new Error(
+        `tag key ${JSON.stringify(key)} DNS segment must contain lowercase alphanumerics or '-' and start/end alphanumeric`,
+      );
+    }
+  }
+}
+
+function validateName(name: string, isValue: boolean): void {
+  if (name === '') {
+    if (isValue) {
+      return;
+    }
+    throw new Error('empty name');
+  }
+  if (name.length > 63) {
+    throw new Error('exceeds 63 characters');
+  }
+  if (!TAG_NAME.test(name)) {
+    throw new Error("must contain alphanumerics, '-', '_' or '.' and start/end alphanumeric");
+  }
+}

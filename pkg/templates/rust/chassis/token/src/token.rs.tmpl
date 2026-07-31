@@ -1,0 +1,954 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// JWT (JSON Web Token) functionality for creating and managing tokens.
+//
+// This module provides JWT token creation, signing, and verification with:
+// - Method-chaining API for building tokens
+// - Immutability enforcement after signing
+// - Support for RSA, ECDSA, and EdDSA signing algorithms
+// - Standard JWT claims (iss, sub, aud, exp, iat, jti)
+// - Custom payload fields
+//
+//! # Token Lifecycle
+//!
+//! 1. Create a new Token
+//! 2. Set claims and header fields (mutable)
+//! 3. Sign the token with a private key (becomes immutable)
+//! 4. Verify the token with a JWK
+
+use key::base64_utils;
+use key::error::{AuthError, Result};
+use key::keys;
+use jwk::jwk;
+use {{.CrateBasePathUnderscore}}_types::sys::token::JwtPayloadType;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+
+/// JWT header structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Header {
+    /// Algorithm (e.g., "RS384", "ES256", "EdDSA")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alg: Option<String>,
+
+    /// Key ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+
+    /// Token type (usually "JWT")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub typ: Option<String>,
+}
+
+/// JWT payload structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Payload {
+    /// Issuer
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iss: Option<String>,
+
+    /// Subject (RFC 7519 user-unique ID — email in tests, <iss>:<sub> for IDP users).
+    /// NOT the SPIFFE URI; see `namespace`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub: Option<String>,
+
+    /// Namespace — canonical authorization-tree position (e.g. "/io/example/team-a").
+    /// Drives the level-or-below rule. SPIFFE URIs are projections of namespace + sub_type + sub.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+
+    /// Audience
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aud: Option<String>,
+
+    /// Expiration time (Unix timestamp)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exp: Option<i64>,
+
+    /// Issued at time (Unix timestamp)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iat: Option<i64>,
+
+    /// JWT ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jti: Option<String>,
+
+    /// Custom fields (flatten to include at top level)
+    #[serde(flatten)]
+    pub custom: Map<String, Value>,
+}
+
+/// JWT Token wrapper providing convenient methods for token manipulation
+///
+/// # Immutability
+///
+/// Once a token is signed (has a signature), it becomes immutable.
+/// Any attempt to modify an immutable token will return an error.
+///
+/// # Example
+///
+/// ```ignore
+/// use token::Token;
+/// use key::keys;
+///
+/// let key = keys::generate_ed25519_key()?;
+/// let mut token = Token::new();
+/// token.set_issuer("my-service")?;
+/// token.set_expiration(chrono::Utc::now().timestamp() + 3600)?;
+/// token.sign(&key)?;
+/// ```
+pub struct Token {
+    header: Header,
+    payload: Payload,
+    signature: Option<String>,
+    base64: Option<String>,
+    immutable: bool,
+}
+
+impl Token {
+    /// Creates a new empty Token
+    pub fn new() -> Self {
+        Self {
+            header: Header {
+                alg: None,
+                kid: None,
+                typ: Some("JWT".to_string()),
+            },
+            payload: Payload {
+                iss: None,
+                sub: None,
+                namespace: None,
+                aud: None,
+                exp: None,
+                iat: None,
+                jti: None,
+                custom: Map::new(),
+            },
+            signature: None,
+            base64: None,
+            immutable: false,
+        }
+    }
+
+    /// Parses a base64-encoded JWT string
+    ///
+    /// The JWT must be in the format: header.payload.signature
+    /// Parsed tokens with signatures are marked as immutable.
+    pub fn parse(base64_str: &str) -> Result<Self> {
+        let parts: Vec<&str> = base64_str.split('.').collect();
+        if parts.len() != 3 {
+            return Err(AuthError::missing_invalid_data(
+                "invalid JWT format: expected 3 parts separated by '.'",
+            ));
+        }
+
+        // Decode header
+        let header_bytes = base64_utils::decode_base64(parts[0])?;
+        let header: Header = serde_json::from_slice(&header_bytes)?;
+
+        // Decode payload
+        let payload_bytes = base64_utils::decode_base64(parts[1])?;
+        let payload: Payload = serde_json::from_slice(&payload_bytes)?;
+
+        // Validate issuer
+        if payload.iss.is_none() {
+            return Err(AuthError::missing_invalid_data("missing issuer (iss) claim"));
+        }
+
+        let signature = if parts[2].is_empty() {
+            None
+        } else {
+            Some(parts[2].to_string())
+        };
+
+        let immutable = signature.is_some();
+
+        Ok(Self {
+            header,
+            payload,
+            signature,
+            base64: Some(base64_str.to_string()),
+            immutable,
+        })
+    }
+
+    /// Checks if the token is mutable, returns an error if immutable
+    fn check_mutable(&self) -> Result<()> {
+        if self.immutable {
+            return Err(AuthError::missing_invalid_data(
+                "cannot modify immutable token: token has been signed",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Marks the token as immutable (called after signing)
+    fn mark_immutable(&mut self) {
+        self.immutable = true;
+    }
+
+    // Header methods
+
+    /// Sets the Key ID (kid) in the JWT header
+    pub fn set_kid(&mut self, kid: impl Into<String>) -> Result<&mut Self> {
+        self.check_mutable()?;
+        self.header.kid = Some(kid.into());
+        Ok(self)
+    }
+
+    /// Gets the Key ID (kid) from the JWT header
+    pub fn kid(&self) -> Option<&str> {
+        self.header.kid.as_deref()
+    }
+
+    /// Sets the signing algorithm (alg) in the JWT header
+    pub fn set_alg(&mut self, alg: impl Into<String>) -> Result<&mut Self> {
+        self.check_mutable()?;
+        self.header.alg = Some(alg.into());
+        Ok(self)
+    }
+
+    /// Gets the signing algorithm (alg) from the JWT header
+    pub fn alg(&self) -> Option<&str> {
+        self.header.alg.as_deref()
+    }
+
+    /// Sets the token type (typ) in the JWT header
+    pub fn set_typ(&mut self, typ: impl Into<String>) -> Result<&mut Self> {
+        self.check_mutable()?;
+        self.header.typ = Some(typ.into());
+        Ok(self)
+    }
+
+    /// Gets the token type (typ) from the JWT header
+    pub fn typ(&self) -> Option<&str> {
+        self.header.typ.as_deref()
+    }
+
+    // Payload methods
+
+    /// Sets the issuer (iss) claim
+    pub fn set_issuer(&mut self, issuer: impl Into<String>) -> Result<&mut Self> {
+        self.check_mutable()?;
+        self.payload.iss = Some(issuer.into());
+        Ok(self)
+    }
+
+    /// Gets the issuer (iss) claim
+    pub fn issuer(&self) -> Option<&str> {
+        self.payload.iss.as_deref()
+    }
+
+    /// Sets the subject (sub) claim
+    pub fn set_subject(&mut self, subject: impl Into<String>) -> Result<&mut Self> {
+        self.check_mutable()?;
+        self.payload.sub = Some(subject.into());
+        Ok(self)
+    }
+
+    /// Gets the subject (sub) claim
+    pub fn subject(&self) -> Option<&str> {
+        self.payload.sub.as_deref()
+    }
+
+    /// Sets the namespace claim (canonical authorization-tree position, e.g. "/io/example/team-a")
+    pub fn set_namespace(&mut self, namespace: impl Into<String>) -> Result<&mut Self> {
+        self.check_mutable()?;
+        self.payload.namespace = Some(namespace.into());
+        Ok(self)
+    }
+
+    /// Gets the namespace claim
+    pub fn namespace(&self) -> Option<&str> {
+        self.payload.namespace.as_deref()
+    }
+
+    /// Returns the normalized namespace claim — the authorization-tree path
+    /// used for level-or-below checks. It fails closed: a missing or malformed
+    /// namespace is an error, never silently mapped to root or empty.
+    pub fn namespace_path(&self) -> Result<String> {
+        let ns = self.namespace().unwrap_or("");
+        if ns.is_empty() {
+            return Err(AuthError::unauthorized("token has no namespace claim"));
+        }
+        spiffe::normalize_namespace(ns)
+            .map_err(|e| AuthError::unauthorized(format!("token namespace claim is malformed: {}", e)))
+    }
+
+    /// Materializes the token's namespace authorization scope as a SPIFFE ID.
+    /// This is the SCOPE, not the subject — use `subject_spiffe_id` for the
+    /// acting principal.
+    pub fn namespace_spiffe_id(&self, trust_domain: &str) -> Result<String> {
+        let ns = self.namespace_path()?;
+        spiffe::namespace_spiffe_id(trust_domain, &ns)
+            .map_err(|e| AuthError::unauthorized(e.to_string()))
+    }
+
+    /// Returns the location-agnostic service identity used for S2S
+    /// auth_services matching: the bare service label, plus any
+    /// `/workloads/<child>` suffix (e.g. `mcp` or `mcp/workloads/agent-42`).
+    /// Only service and workload tokens have a service path. A full SPIFFE URI
+    /// in the claim (durable-key form) is parsed and reduced to the same shape.
+    pub fn service_path(&self) -> Result<String> {
+        let sub_type = self.sub_type().unwrap_or("");
+        if sub_type != "service" && sub_type != "workload" {
+            return Err(AuthError::unauthorized(format!(
+                "token sub_type \"{}\" has no service path",
+                sub_type
+            )));
+        }
+        let mut sub = self.subject().unwrap_or("");
+        if sub.is_empty() && sub_type == "service" {
+            sub = self.service_name().unwrap_or("");
+        }
+        if sub.is_empty() {
+            return Err(AuthError::unauthorized(
+                "service token has no sub or service_name claim",
+            ));
+        }
+        match spiffe::service_path_from_spiffe(sub) {
+            Ok(path) => return Ok(path),
+            Err(e) if sub.contains("://") => {
+                return Err(AuthError::unauthorized(format!(
+                    "token subject is not a valid service identity: {}",
+                    e
+                )));
+            }
+            Err(_) => {}
+        }
+        Ok(sub.to_string())
+    }
+
+    /// Computes the acting principal's SPIFFE ID from the structured claims
+    /// (sub_type, sub, namespace, service_name). The SPIFFE ID is a
+    /// computation, not a wire claim. For service/workload tokens the result
+    /// is the LOCATION-AGNOSTIC identity (no /system location tiers): the full
+    /// location-bearing SVID is built by the service's own manager from
+    /// runtime config, never reconstructed from a peer token.
+    pub fn subject_spiffe_id(&self, trust_domain: &str) -> Result<String> {
+        match self.sub_type().unwrap_or("") {
+            "service" | "workload" => {
+                let service_path = self.service_path()?;
+                let sep = format!("/{}/", spiffe::WORKLOADS_SEGMENT);
+                let parts: Vec<&str> = service_path.split(sep.as_str()).collect();
+                let mut id = spiffe::service_spiffe_id(trust_domain, "", parts[0])
+                    .map_err(|e| AuthError::unauthorized(e.to_string()))?;
+                for child in &parts[1..] {
+                    id = spiffe::workload_spiffe_id(&id, child)
+                        .map_err(|e| AuthError::unauthorized(e.to_string()))?;
+                }
+                Ok(id)
+            }
+            "user" => {
+                let ns = self.namespace_path()?;
+                spiffe::user_spiffe_id(trust_domain, &ns, self.subject().unwrap_or(""))
+                    .map_err(|e| AuthError::unauthorized(e.to_string()))
+            }
+            "client" => {
+                let ns = self.namespace_path()?;
+                spiffe::client_spiffe_id(trust_domain, &ns, self.subject().unwrap_or(""))
+                    .map_err(|e| AuthError::unauthorized(e.to_string()))
+            }
+            other => Err(AuthError::unauthorized(format!(
+                "cannot derive subject identity for sub_type \"{}\"",
+                other
+            ))),
+        }
+    }
+
+    /// Builds a durable resource identity owned inside the token's namespace:
+    /// `spiffe://<td><namespace>/data/<kind>/<id>`.
+    pub fn resource_owner_spiffe_id(&self, trust_domain: &str, kind: &str, id: &str) -> Result<String> {
+        let ns = self.namespace_path()?;
+        spiffe::resource_spiffe_id(trust_domain, &ns, kind, id)
+            .map_err(|e| AuthError::unauthorized(e.to_string()))
+    }
+
+    /// Sets the audience (aud) claim
+    pub fn set_audience(&mut self, audience: impl Into<String>) -> Result<&mut Self> {
+        self.check_mutable()?;
+        self.payload.aud = Some(audience.into());
+        Ok(self)
+    }
+
+    /// Gets the audience (aud) claim
+    pub fn audience(&self) -> Option<&str> {
+        self.payload.aud.as_deref()
+    }
+
+    /// Sets the expiration time (exp) claim (Unix timestamp)
+    pub fn set_expiration(&mut self, exp: i64) -> Result<&mut Self> {
+        self.check_mutable()?;
+        self.payload.exp = Some(exp);
+        Ok(self)
+    }
+
+    /// Gets the expiration time (exp) claim
+    pub fn expiration(&self) -> Option<i64> {
+        self.payload.exp
+    }
+
+    /// Sets the issued at (iat) claim (Unix timestamp)
+    pub fn set_issued_at(&mut self, iat: i64) -> Result<&mut Self> {
+        self.check_mutable()?;
+        self.payload.iat = Some(iat);
+        Ok(self)
+    }
+
+    /// Gets the issued at (iat) claim
+    pub fn issued_at(&self) -> Option<i64> {
+        self.payload.iat
+    }
+
+    /// Sets the JWT ID (jti) claim
+    pub fn set_jti(&mut self, jti: impl Into<String>) -> Result<&mut Self> {
+        self.check_mutable()?;
+        self.payload.jti = Some(jti.into());
+        Ok(self)
+    }
+
+    /// Gets the JWT ID (jti) claim
+    pub fn jti(&self) -> Option<&str> {
+        self.payload.jti.as_deref()
+    }
+
+    // ========================================
+    // Platform Claim Methods
+    // ========================================
+
+    /// Claim key constants.
+    pub const CLAIM_TOKEN_USE: &'static str = "token_use";
+    pub const CLAIM_SUB_TYPE: &'static str = "sub_type";
+    pub const CLAIM_PRINCIPAL: &'static str = "principal";
+    pub const CLAIM_AZP: &'static str = "azp";
+    pub const CLAIM_PROFILES: &'static str = "profiles";
+    pub const CLAIM_ENTITLEMENTS: &'static str = "entitlements";
+    pub const CLAIM_SERVICE_NAME: &'static str = "service_name";
+    pub const CLAIM_INSTANCE_ID: &'static str = "instance_id";
+
+    /// Gets the token_use claim.
+    pub fn token_use(&self) -> Option<&str> {
+        self.payload.custom.get(Self::CLAIM_TOKEN_USE).and_then(|v| v.as_str())
+    }
+
+    /// Sets the token_use claim.
+    pub fn set_token_use(&mut self, token_use: impl Into<String>) -> Result<&mut Self> {
+        self.set_custom_field(Self::CLAIM_TOKEN_USE, Value::String(token_use.into()))
+    }
+
+    /// Gets the sub_type claim.
+    pub fn sub_type(&self) -> Option<&str> {
+        self.payload.custom.get(Self::CLAIM_SUB_TYPE).and_then(|v| v.as_str())
+    }
+
+    /// Sets the sub_type claim.
+    pub fn set_sub_type(&mut self, sub_type: impl Into<String>) -> Result<&mut Self> {
+        self.set_custom_field(Self::CLAIM_SUB_TYPE, Value::String(sub_type.into()))
+    }
+
+    /// Gets the principal claim.
+    pub fn principal(&self) -> Option<&str> {
+        self.payload.custom.get(Self::CLAIM_PRINCIPAL).and_then(|v| v.as_str())
+    }
+
+    /// Sets the principal claim.
+    pub fn set_principal(&mut self, principal: impl Into<String>) -> Result<&mut Self> {
+        self.set_custom_field(Self::CLAIM_PRINCIPAL, Value::String(principal.into()))
+    }
+
+    /// Gets the azp (authorized party) claim.
+    pub fn azp(&self) -> Option<&str> {
+        self.payload.custom.get(Self::CLAIM_AZP).and_then(|v| v.as_str())
+    }
+
+    /// Sets the azp (authorized party) claim.
+    pub fn set_azp(&mut self, azp: impl Into<String>) -> Result<&mut Self> {
+        self.set_custom_field(Self::CLAIM_AZP, Value::String(azp.into()))
+    }
+
+    /// Gets the service_name claim.
+    pub fn service_name(&self) -> Option<&str> {
+        self.payload.custom.get(Self::CLAIM_SERVICE_NAME).and_then(|v| v.as_str())
+    }
+
+    /// Sets the service_name claim.
+    pub fn set_service_name(&mut self, name: impl Into<String>) -> Result<&mut Self> {
+        self.set_custom_field(Self::CLAIM_SERVICE_NAME, Value::String(name.into()))
+    }
+
+    /// Gets the instance_id claim.
+    pub fn instance_id(&self) -> Option<&str> {
+        self.payload.custom.get(Self::CLAIM_INSTANCE_ID).and_then(|v| v.as_str())
+    }
+
+    /// Sets the instance_id claim.
+    pub fn set_instance_id(&mut self, id: impl Into<String>) -> Result<&mut Self> {
+        self.set_custom_field(Self::CLAIM_INSTANCE_ID, Value::String(id.into()))
+    }
+
+    /// Returns profiles as a Vec (comma-delimited in payload).
+    pub fn profiles(&self) -> Vec<String> {
+        self.list_field(Self::CLAIM_PROFILES)
+    }
+
+    /// Sets profiles as a comma-delimited string.
+    pub fn set_profiles(&mut self, profiles: &[impl AsRef<str>]) -> Result<&mut Self> {
+        self.set_list_field(Self::CLAIM_PROFILES, profiles)
+    }
+
+    /// Returns entitlements as a Vec (comma-delimited in payload).
+    pub fn entitlements(&self) -> Vec<String> {
+        self.list_field(Self::CLAIM_ENTITLEMENTS)
+    }
+
+    /// Sets entitlements as a comma-delimited string.
+    pub fn set_entitlements(&mut self, entitlements: &[impl AsRef<str>]) -> Result<&mut Self> {
+        self.set_list_field(Self::CLAIM_ENTITLEMENTS, entitlements)
+    }
+
+    /// Returns the service_entitlements claim as a typed JSON value (object, not string).
+    /// Returns None if the claim is absent.
+    pub fn service_entitlements(&self) -> Option<&serde_json::Value> {
+        let key = JwtPayloadType::ServiceEntitlements.to_string();
+        self.payload.custom.get(&key)
+    }
+
+    /// Sets the service_entitlements claim from a serde_json::Value (must be an object).
+    /// The value is stored as-is and serialized as a JSON object in the JWT (not a string).
+    pub fn set_service_entitlements(&mut self, value: serde_json::Value) -> Result<&mut Self> {
+        let key = JwtPayloadType::ServiceEntitlements.to_string();
+        self.set_custom_field(key, value)
+    }
+
+    /// Sets the service_entitlements claim by parsing a JSON string into an object.
+    /// Stores as a JSON object so it is embedded correctly in the JWT payload.
+    pub fn set_service_entitlements_json(&mut self, json_str: &str) -> Result<&mut Self> {
+        let value: serde_json::Value = serde_json::from_str(json_str)
+            .map_err(|e| key::error::AuthError::missing_invalid_data(format!("invalid service_entitlements JSON: {e}")))?;
+        self.set_service_entitlements(value)
+    }
+
+    /// Sets a payload field as a comma-delimited string from a slice.
+    pub fn set_list_field(&mut self, key: &str, values: &[impl AsRef<str>]) -> Result<&mut Self> {
+        let joined: String = values.iter().map(|s| s.as_ref()).collect::<Vec<_>>().join(",");
+        self.set_custom_field(key, Value::String(joined))
+    }
+
+    /// Reads a payload field and splits into a Vec. Returns empty Vec if missing.
+    pub fn list_field(&self, key: &str) -> Vec<String> {
+        match self.payload.custom.get(key).and_then(|v| v.as_str()) {
+            Some(raw) if !raw.is_empty() => {
+                raw.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Sets a custom field in the token payload
+    pub fn set_custom_field(&mut self, key: impl Into<String>, value: Value) -> Result<&mut Self> {
+        self.check_mutable()?;
+        self.payload.custom.insert(key.into(), value);
+        Ok(self)
+    }
+
+    /// Gets a custom field from the token payload
+    pub fn custom_field(&self, key: &str) -> Option<&Value> {
+        self.payload.custom.get(key)
+    }
+
+    /// Returns every claim in the payload as a flat map.
+    ///
+    /// Includes the standard typed claims (iss, sub, aud, exp, iat, jti,
+    /// namespace — when set) alongside all custom claims (platform claims like
+    /// token_use/azp/entitlements AND any verbatim or origin_-prefixed IdP
+    /// claims). The contents mirror the other-language token sys' get_claims.
+    ///
+    /// Callers that need to recover the original IdP claim set — e.g. mint
+    /// re-running the OPA entitlement evaluation on a refresh token, where the
+    /// policy may have changed since the token was issued — read this and apply
+    /// their own skip/origin filtering.
+    pub fn claims(&self) -> Map<String, Value> {
+        match serde_json::to_value(&self.payload) {
+            Ok(Value::Object(map)) => map,
+            _ => self.payload.custom.clone(),
+        }
+    }
+
+    /// Returns the base64-encoded JWT string
+    ///
+    /// Returns None if the token hasn't been signed yet.
+    pub fn base64(&self) -> Option<&str> {
+        self.base64.as_deref()
+    }
+
+    /// Returns the signature
+    pub fn signature(&self) -> Option<&str> {
+        self.signature.as_deref()
+    }
+
+    /// Returns whether the token is immutable (signed)
+    pub fn is_immutable(&self) -> bool {
+        self.immutable
+    }
+
+    /// Returns the duration until the token expires
+    pub fn expires_in(&self) -> Option<chrono::Duration> {
+        self.payload.exp.map(|exp| {
+            let exp_time = DateTime::from_timestamp(exp, 0).unwrap_or_else(|| Utc::now());
+            exp_time.signed_duration_since(Utc::now())
+        })
+    }
+
+    /// Cryptographically signs the token using the provided private key
+    ///
+    /// This method:
+    /// 1. Sets the token's algorithm, key ID, and type headers
+    /// 2. Creates a digital signature over the header and payload
+    /// 3. Marks the token as immutable
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Token is missing expiration time
+    /// - Signing operation fails
+    /// - Algorithm is not supported
+    pub fn sign(&mut self, key: &keys::ImmutableKey) -> Result<()> {
+        // Verify that token has a valid expiration time (must be > 0)
+        if self.payload.exp.is_none() || self.payload.exp.unwrap() <= 0 {
+            return Err(AuthError::missing_invalid_data("token is missing expiration"));
+        }
+
+        self.set_kid(key.id().to_string())?;
+        self.set_alg(key.alg().to_string())?;
+        self.set_typ("JWT")?;
+
+        // Encode header and payload
+        let header_json = serde_json::to_vec(&self.header)?;
+        let payload_json = serde_json::to_vec(&self.payload)?;
+
+        let header_b64 = base64_utils::encode_base64_url(&header_json);
+        let payload_b64 = base64_utils::encode_base64_url(&payload_json);
+
+        let signing_input = format!("{}.{}", header_b64, payload_b64);
+
+        // Sign the data
+        let signature_bytes = key.sign(signing_input.as_bytes())?;
+        let signature_b64 = base64_utils::encode_base64_url(&signature_bytes);
+
+        self.signature = Some(signature_b64.clone());
+        self.base64 = Some(format!("{}.{}", signing_input, signature_b64));
+        self.mark_immutable();
+
+        Ok(())
+    }
+
+    /// Verifies the token's signature and claims using the provided JWK
+    ///
+    /// This method performs comprehensive token validation:
+    /// - Signature verification using the JWK's public key
+    /// - Expiration time validation
+    /// - Required claim presence (issuer, key ID)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Token is missing required claims (iss, kid, exp, signature)
+    /// - Token has expired
+    /// - Signature is invalid
+    pub fn verify(&self, jwk: &jwk::ImmutableJwk) -> Result<()> {
+        // Check required claims
+        if self.payload.iss.is_none() {
+            return Err(AuthError::missing_invalid_data(
+                "token missing issuer (iss) claim",
+            ));
+        }
+
+        if self.header.kid.is_none() {
+            return Err(AuthError::missing_invalid_data(
+                "token missing key ID (kid) in header",
+            ));
+        }
+
+        let alg = self
+            .alg()
+            .ok_or_else(|| AuthError::missing_invalid_data(
+                "token missing signing algorithm (alg) in header",
+            ))?;
+        if alg != jwk.alg() {
+            return Err(AuthError::unauthorized(format!(
+                "token alg {} does not match JWK alg {}",
+                alg,
+                jwk.alg()
+            )));
+        }
+
+        if self.signature.is_none() {
+            return Err(AuthError::missing_invalid_data("token missing signature"));
+        }
+
+        // Check expiration and not-before with the same 60s clock-skew
+        // tolerance used by the other generated token libraries.
+        const CLOCK_SKEW_SECONDS: i64 = 60;
+        let now = Utc::now().timestamp();
+        if let Some(exp) = self.payload.exp {
+            if now >= exp + CLOCK_SKEW_SECONDS {
+                return Err(AuthError::expired());
+            }
+        } else {
+            return Err(AuthError::missing_invalid_data(
+                "token missing expiration (exp) claim",
+            ));
+        }
+
+        if let Some(nbf) = self.payload.custom.get("nbf").and_then(|v| match v {
+            Value::Number(n) => n.as_i64(),
+            Value::String(s) => s.parse::<i64>().ok(),
+            _ => None,
+        }) {
+            if now < nbf - CLOCK_SKEW_SECONDS {
+                return Err(AuthError::missing_invalid_data("token not yet valid"));
+            }
+        }
+
+        // Get the signing input (header.payload)
+        let base64_str = self
+            .base64
+            .as_ref()
+            .ok_or_else(|| AuthError::missing_invalid_data("token missing base64 encoding"))?;
+
+        let last_dot = base64_str
+            .rfind('.')
+            .ok_or_else(|| AuthError::missing_invalid_data("invalid JWT format"))?;
+
+        let signing_input = &base64_str[..last_dot];
+        let signature_b64 = &base64_str[last_dot + 1..];
+
+        // Decode signature
+        let signature_bytes = base64_utils::decode_base64(signature_b64)?;
+
+        // Verify signature based on key type
+        use signature::Verifier;
+
+        match jwk.public_key() {
+            keys::PublicKey::Rsa(rsa_key) => {
+                use rsa::signature::Verifier as RsaVerifier;
+                use rsa::pkcs1v15::VerifyingKey;
+                use sha2::{Sha384, Sha512};
+
+                match jwk.alg() {
+                    "RS384" => {
+                        let verifier = VerifyingKey::<Sha384>::new(rsa_key.clone());
+                        let sig = rsa::pkcs1v15::Signature::try_from(signature_bytes.as_slice())
+                            .map_err(|e| AuthError::unauthorized(format!("invalid signature format: {}", e)))?;
+                        verifier
+                            .verify(signing_input.as_bytes(), &sig)
+                            .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
+                    }
+                    "RS512" => {
+                        let verifier = VerifyingKey::<Sha512>::new(rsa_key.clone());
+                        let sig = rsa::pkcs1v15::Signature::try_from(signature_bytes.as_slice())
+                            .map_err(|e| AuthError::unauthorized(format!("invalid signature format: {}", e)))?;
+                        verifier
+                            .verify(signing_input.as_bytes(), &sig)
+                            .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
+                    }
+                    _ => return Err(AuthError::unsupported_algorithm(jwk.alg().to_string())),
+                }
+            }
+            keys::PublicKey::EcP256(ec_key) => {
+                use p256::ecdsa::Signature;
+
+                let signature = Signature::from_slice(&signature_bytes)
+                    .map_err(|e| AuthError::ecdsa(e.to_string()))?;
+
+                ec_key
+                    .verify(signing_input.as_bytes(), &signature)
+                    .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
+            }
+            keys::PublicKey::EcP384(ec_key) => {
+                use p384::ecdsa::Signature;
+
+                let signature = Signature::from_slice(&signature_bytes)
+                    .map_err(|e| AuthError::ecdsa(e.to_string()))?;
+
+                ec_key
+                    .verify(signing_input.as_bytes(), &signature)
+                    .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
+            }
+            keys::PublicKey::Ed25519(ed_key) => {
+                use ed25519_dalek::Signature;
+
+                let signature = Signature::from_slice(&signature_bytes)
+                    .map_err(|e| AuthError::ed25519(e.to_string()))?;
+
+                ed_key
+                    .verify(signing_input.as_bytes(), &signature)
+                    .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for Token {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use key::keys;
+
+    #[test]
+    fn test_token_sign_and_verify() {
+        let key = keys::generate_ed25519_key().unwrap();
+
+        let mut token = Token::new();
+        token.set_issuer("test-issuer").unwrap();
+        token.set_subject("test-subject").unwrap();
+        token.set_expiration(Utc::now().timestamp() + 3600).unwrap();
+
+        token.sign(&key).unwrap();
+
+        assert!(token.is_immutable());
+        assert!(token.base64().is_some());
+
+        // Parse the token
+        let parsed = Token::parse(token.base64().unwrap()).unwrap();
+        assert_eq!(parsed.issuer(), Some("test-issuer"));
+        assert_eq!(parsed.subject(), Some("test-subject"));
+    }
+
+    #[test]
+    fn test_immutable_error() {
+        let key = keys::generate_ed25519_key().unwrap();
+
+        let mut token = Token::new();
+        token.set_issuer("test").unwrap();
+        token.set_expiration(Utc::now().timestamp() + 3600).unwrap();
+
+        token.sign(&key).unwrap();
+
+        // This should return an error, not panic
+        let result = token.set_issuer("new-issuer");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_namespace_path_fails_closed() {
+        let token = Token::new();
+        assert!(token.namespace_path().is_err(), "missing namespace must error");
+
+        let mut token = Token::new();
+        token.set_namespace("not a valid ?#namespace").unwrap();
+        assert!(token.namespace_path().is_err(), "malformed namespace must error");
+
+        let mut token = Token::new();
+        token.set_namespace("/tenants/acme/workspaces/dev").unwrap();
+        assert_eq!(token.namespace_path().unwrap(), "/tenants/acme/workspaces/dev");
+    }
+
+    #[test]
+    fn test_namespace_spiffe_id() {
+        let mut token = Token::new();
+        token.set_namespace("/tenants/acme/workspaces/dev").unwrap();
+        assert_eq!(
+            token.namespace_spiffe_id("example.com").unwrap(),
+            "spiffe://example.com/tenants/acme/workspaces/dev"
+        );
+    }
+
+    #[test]
+    fn test_service_path() {
+        // Plain sub: returned as-is.
+        let mut token = Token::new();
+        token.set_sub_type("service").unwrap();
+        token.set_subject("mcp").unwrap();
+        assert_eq!(token.service_path().unwrap(), "mcp");
+
+        // Service tokens fall back to service_name when sub is unset.
+        let mut token = Token::new();
+        token.set_sub_type("service").unwrap();
+        token.set_service_name("oauth").unwrap();
+        assert_eq!(token.service_path().unwrap(), "oauth");
+
+        // Durable-key form: a full SPIFFE URI reduces to the
+        // LOCATION-AGNOSTIC service path.
+        let mut token = Token::new();
+        token.set_sub_type("workload").unwrap();
+        token
+            .set_subject("spiffe://example.com/system/aws/az1/cluster1/services/mcp/workloads/agent-42")
+            .unwrap();
+        assert_eq!(token.service_path().unwrap(), "mcp/workloads/agent-42");
+
+        // Non-service sub_types have no service path.
+        let mut token = Token::new();
+        token.set_sub_type("user").unwrap();
+        token.set_subject("jody").unwrap();
+        assert!(token.service_path().is_err());
+
+        // Empty sub and service_name fails closed.
+        let mut token = Token::new();
+        token.set_sub_type("service").unwrap();
+        assert!(token.service_path().is_err());
+    }
+
+    #[test]
+    fn test_subject_spiffe_id() {
+        // Service: location-agnostic identity (no /system location tiers).
+        let mut token = Token::new();
+        token.set_sub_type("service").unwrap();
+        token.set_subject("mcp").unwrap();
+        assert_eq!(
+            token.subject_spiffe_id("example.com").unwrap(),
+            "spiffe://example.com/system/services/mcp"
+        );
+
+        // Workload child appended via the canonical helper.
+        let mut token = Token::new();
+        token.set_sub_type("workload").unwrap();
+        token.set_subject("mcp/workloads/agent-42").unwrap();
+        assert_eq!(
+            token.subject_spiffe_id("example.com").unwrap(),
+            "spiffe://example.com/system/services/mcp/workloads/agent-42"
+        );
+
+        // User: namespaced leaf.
+        let mut token = Token::new();
+        token.set_sub_type("user").unwrap();
+        token.set_subject("jody").unwrap();
+        token.set_namespace("/tenants/acme/workspaces/dev").unwrap();
+        assert_eq!(
+            token.subject_spiffe_id("example.com").unwrap(),
+            "spiffe://example.com/tenants/acme/workspaces/dev/users/jody"
+        );
+
+        // Unknown sub_type fails closed.
+        let mut token = Token::new();
+        token.set_sub_type("other").unwrap();
+        assert!(token.subject_spiffe_id("example.com").is_err());
+    }
+
+    #[test]
+    fn test_resource_owner_spiffe_id() {
+        let mut token = Token::new();
+        token.set_namespace("/tenants/acme/workspaces/dev").unwrap();
+        assert_eq!(
+            token
+                .resource_owner_spiffe_id("example.com", "gitlab-event", "evt-1")
+                .unwrap(),
+            "spiffe://example.com/tenants/acme/workspaces/dev/data/gitlab-event/evt-1"
+        );
+        assert!(token
+            .resource_owner_spiffe_id("example.com", "gitlab/event", "evt-1")
+            .is_err());
+    }
+}

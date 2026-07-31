@@ -1,0 +1,36 @@
+{{- /* Rust types crate Cargo.toml template */ -}}
+[package]
+name = "{{.CrateName}}-types"
+version = "1.0.0"
+edition = "2021"
+description = "Generated Protocol Buffer types"
+
+[lib]
+path = "mod.rs"
+
+[dependencies]
+prost = { workspace = true }
+prost-types = { workspace = true }
+prost-wkt-types = { workspace = true }
+pbjson = { workspace = true }
+pbjson-types = { workspace = true }
+bytes = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+toml = { workspace = true }
+regex = { workspace = true }
+base64 = { workspace = true }
+# Back the generated (spec.redact) egress-release seam: tacplus_pseudonymize is a
+# keyed HMAC-SHA256, hex-encoded. Emitted only for record types with redact fields.
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+{{- if .HasServiceWrappers}}
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+{{- end}}
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(kani)'] }
+unused_comparisons = "allow"

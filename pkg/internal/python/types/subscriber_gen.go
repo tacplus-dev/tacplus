@@ -1,0 +1,204 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package types
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"text/template"
+
+	"go.uber.org/zap"
+
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/boundaries"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/eventbus"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
+)
+
+// pySubscriberTemplateData holds the data passed to subscriber.py.tmpl.
+type pySubscriberTemplateData struct {
+	SourcePackage   string // e.g. "aegis"
+	SourceStateRoot string // e.g. "AegisState"
+	SourceField     string // e.g. "event_stream"
+	FieldPascal     string // e.g. "EventStream"
+	TypeName        string // e.g. "TopologyEvent"
+	TypeImportFrom  string // e.g. "svc_tacplus.types.vservices.claude_sensor"
+	TypePbModule    string // e.g. "claude_sensor_pb2"
+	// EnvelopeName is the generated Subscribe-record wrapper message
+	// (ToPascalCase(SourceStateRoot)+FieldPascal+"SubscribeRecord"), co-generated
+	// with the payload event in the source module. field 1 = EventBusRecordMeta
+	// meta, field 2 = payload. Decoding it (rather than the bare payload) recovers
+	// offset/timestamp/key for the handler (PC-C-5).
+	EnvelopeName    string // e.g. "AegisStateEventStreamSubscribeRecord"
+	GrpcService     string // e.g. "eventbus.EventBusTypedService"
+	GrpcMethod      string // e.g. "SubscribeAegisAegisStateEventStream"
+}
+
+type pySubscriptionEventInfo struct {
+	TypeName       string
+	TypeImportFrom string
+	TypePbModule   string
+}
+
+func resolvePySubscriptionEvent(config *tactype.Config, protoDir string, sub tactype.SubscriptionEntry) pySubscriptionEventInfo {
+	typeName := sub.SourceTypeFqn
+	typePkg := sub.SourcePackage
+	if idx := strings.LastIndex(typeName, "."); idx >= 0 {
+		typePkg = typeName[:idx]
+		typeName = typeName[idx+1:]
+	}
+	if typeName == "" {
+		typeName = "Event"
+	}
+
+	typeRelPath := ""
+	if protoDir != "" {
+		if p, err := parser.NewDescriptorParser(protoDir); err == nil {
+			for relPath, fd := range p.GetAllFiles() {
+				if fd.Package == typePkg {
+					typeRelPath = relPath
+					break
+				}
+			}
+		}
+	}
+
+	typeParentDir := sub.SourceProtoDir
+	typeProtoName := pyModuleName(typePkg)
+	typePackageDir := typeProtoName
+	if typeRelPath != "" {
+		typeParentDir = filepath.Dir(typeRelPath)
+		if typeParentDir == "." {
+			typeParentDir = ""
+		}
+		typeProtoName = pyModuleName(strings.TrimSuffix(filepath.Base(typeRelPath), ".proto"))
+		typePackageDir = pyProtoPackageDirName(typePkg, typeRelPath)
+	}
+	typeImportFrom := config.PythonPackageBase + ".types." + pyJoinDotted(pyDottedPath(typeParentDir), typePackageDir)
+	return pySubscriptionEventInfo{
+		TypeName:       typeName,
+		TypeImportFrom: typeImportFrom,
+		TypePbModule:   typeProtoName + "_pb2",
+	}
+}
+
+// collectPySubscriptions scans actor-owned protos for legacy subscribe and
+// explicit event_watch annotations, plus store-derived watches, and returns
+// them as tactype.SubscriptionEntry.
+func collectPySubscriptions(config *tactype.Config, protoDir string) ([]tactype.SubscriptionEntry, error) {
+	if protoDir == "" {
+		protoDir = config.FlatProtoDir
+	}
+	if protoDir == "" {
+		return nil, nil
+	}
+	p, err := parser.NewDescriptorParser(protoDir)
+	if err != nil {
+		return nil, fmt.Errorf("create descriptor parser for subscription detection: %w", err)
+	}
+
+	seen := make(map[string]bool)
+	var protoFiles []string
+	for _, state := range config.States {
+		if !seen[state.ProtoFile] {
+			seen[state.ProtoFile] = true
+			protoFiles = append(protoFiles, state.ProtoFile)
+		}
+	}
+	for _, grpc := range config.GrpcServers {
+		if !seen[grpc.ProtoFile] {
+			seen[grpc.ProtoFile] = true
+			protoFiles = append(protoFiles, grpc.ProtoFile)
+		}
+	}
+
+	subs, err := boundaries.CollectActorSubscriptions(p, protoDir, protoFiles, config.SelfPackage)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]tactype.SubscriptionEntry, 0, len(subs))
+	for _, sd := range subs {
+		res := boundaries.ResolveSubscriptionSource(p, protoDir, sd)
+		result = append(result, tactype.SubscriptionEntry{
+			SourcePackage:   sd.SourcePackage,
+			SourceStateRoot: sd.SourceStateRoot,
+			SourceField:     sd.SourceField,
+			SourceTypeFqn:   res.TypeFqn,
+			SourceProtoDir:  res.ProtoDir,
+		})
+		if sd.Origin == "store_derived" {
+			zap.L().Info("Auto-derived store subscription",
+				zap.String("source", sd.Source),
+				zap.String("type", res.TypeFqn))
+		}
+	}
+	return result, nil
+}
+
+// generatePySubscribers generates per-topic subscriber modules for event-bus subscriptions.
+func generatePySubscribers(config *tactype.Config, protoDir string) error {
+	tmplContent, err := loadTemplate("subscriber.py.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to load subscriber template: %w", err)
+	}
+
+	tmpl, err := template.New("subscriber").Parse(tmplContent)
+	if err != nil {
+		return fmt.Errorf("failed to parse subscriber template: %w", err)
+	}
+
+	subscribeDir := filepath.Join(config.OutputDir, config.GetSmPrefix(), "subscribe")
+	if err := os.MkdirAll(subscribeDir, 0755); err != nil {
+		return fmt.Errorf("failed to create subscribe dir: %w", err)
+	}
+
+	// Write __init__.py that re-exports all subscriber modules.
+	var initBuf bytes.Buffer
+	initBuf.WriteString("# Copyright (c) 2026 Second Star Cavalier LLC\n")
+	initBuf.WriteString("# Generated by tacplus\n#\n# CODE GENERATED - DO NOT EDIT\n\n")
+
+	for _, sub := range config.Subscriptions {
+		event := resolvePySubscriptionEvent(config, protoDir, sub)
+
+		fieldPascal := strutil.ToPascalCase(sub.SourceField)
+		rpcStem := eventbus.RPCStemForTopicParts(sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)
+		modName := strutil.ToSnakeCase(rpcStem)
+
+		data := pySubscriberTemplateData{
+			SourcePackage:   sub.SourcePackage,
+			SourceStateRoot: sub.SourceStateRoot,
+			SourceField:     sub.SourceField,
+			FieldPascal:     fieldPascal,
+			TypeName:        event.TypeName,
+			TypeImportFrom:  event.TypeImportFrom,
+			TypePbModule:    event.TypePbModule,
+			EnvelopeName:    strutil.ToPascalCase(sub.SourceStateRoot) + fieldPascal + "SubscribeRecord",
+			GrpcService:     eventbus.TypedServiceFullName(sub.TargetService),
+			GrpcMethod:      "Subscribe" + rpcStem,
+		}
+
+		var buf bytes.Buffer
+		if err := tmpl.Execute(&buf, data); err != nil {
+			return fmt.Errorf("failed to execute subscriber template for %s: %w", sub.SourceField, err)
+		}
+
+		outputPath := filepath.Join(subscribeDir, modName+".py")
+		if err := os.WriteFile(outputPath, buf.Bytes(), 0644); err != nil {
+			return fmt.Errorf("failed to write subscriber module %s: %w", modName, err)
+		}
+
+		initBuf.WriteString(fmt.Sprintf("from .%s import Subscriber as %sSubscriber  # noqa: F401\n", modName, fieldPascal))
+		zap.L().Info("Generated Python event-bus subscriber", zap.String("module", modName))
+	}
+
+	initPath := filepath.Join(subscribeDir, "__init__.py")
+	if err := os.WriteFile(initPath, initBuf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write subscribe __init__.py: %w", err)
+	}
+
+	return nil
+}

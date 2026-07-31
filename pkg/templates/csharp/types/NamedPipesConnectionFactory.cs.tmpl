@@ -1,0 +1,46 @@
+using System;
+using System.IO.Pipes;
+using System.Net.Http;
+
+namespace {{.PackageName}};
+
+internal static class NamedPipesConnectionFactory
+{
+    private const string WindowsPipePrefix = @"\\.\pipe\";
+
+    public static SocketsHttpHandler Create(string pipeName)
+    {
+        if (string.IsNullOrWhiteSpace(pipeName))
+        {
+            throw new ArgumentException("Named pipe target must not be empty.", nameof(pipeName));
+        }
+
+        var normalizedPipeName = NormalizePipeName(pipeName);
+        return new SocketsHttpHandler
+        {
+            ConnectCallback = async (_, cancellationToken) =>
+            {
+                var stream = new NamedPipeClientStream(
+                    ".",
+                    normalizedPipeName,
+                    PipeDirection.InOut,
+                    PipeOptions.Asynchronous);
+                try
+                {
+                    await stream.ConnectAsync(cancellationToken).ConfigureAwait(false);
+                    return stream;
+                }
+                catch
+                {
+                    stream.Dispose();
+                    throw;
+                }
+            }
+        };
+    }
+
+    private static string NormalizePipeName(string pipeName) =>
+        pipeName.StartsWith(WindowsPipePrefix, StringComparison.OrdinalIgnoreCase)
+            ? pipeName[WindowsPipePrefix.Length..]
+            : pipeName;
+}

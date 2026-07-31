@@ -1,0 +1,33 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+Constants used for logger configuration.
+
+This module defines environment variable names and default values
+used throughout the logger library.
+"""
+
+# Prefix for environment variables
+_KIND_PREPEND = ""
+
+
+class Constants:
+    """
+    Constants used for logger configuration.
+    """
+
+    # Environment variable name for configuring the log level.
+    # Set this to one of: trace, debug, info, warn, error.
+    #
+    # Example: export LogLevel=debug
+    LOG_LEVEL_ENV_VAR = f"{_KIND_PREPEND}LogLevel"
+
+    # Environment variable name for configuring the log format.
+    # Set this to one of: json, console.
+    #
+    # Example: export LogFormat=console
+    LOG_FORMAT_ENV_VAR = f"{_KIND_PREPEND}LogFormat"
+
+    # Default time format used for formatting log timestamps.
+    # Format: "yyyy-MM-dd HH:mm:ss" (YYYY-MM-DD HH:MM:SS)
+    DEFAULT_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"

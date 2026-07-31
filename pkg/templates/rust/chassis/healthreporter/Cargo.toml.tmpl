@@ -1,0 +1,10 @@
+[package]
+name = "healthreporter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+{{.CrateBasePath}}-types = { path = "../../types" }
+tokio = { version = "1", features = ["time", "sync"] }
+tonic = "0.14"
+tracing = "0.1"

@@ -1,0 +1,441 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+Authorizer performs token-based authorization for gRPC service requests.
+
+Token signatures are verified against JWKs published by TokenExchanger.
+User tokens carry a service_entitlements claim with compressed grant tokens.
+S2S service tokens are authorized via auth_services RE2 patterns.
+
+Architecture:
+    JwkCache  — watches JWK verifying keys, provides key lookup
+    Authorizer — composes JwkCache with a service name for standard auth policy
+"""
+
+import asyncio
+import json
+import logging
+import re
+import threading
+from typing import Any, Dict, List, Optional
+
+from ..token import TokenWrapper
+from ..jwk import ImmutableJwk
+from .spiffe import is_at_or_below
+from {{.PythonPackageBase}}.grants import normalize as normalize_grants
+from {{.PythonPackageBase}}.types.sys.errors.exceptions import permission_denied, unauthenticated
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# JwkCache
+# ============================================================================
+
+class JwkCache:
+    """
+    Cache of JWK verifying keys populated by watching JwkVerifyingKeysView.
+
+    Provides key lookup by kid for token signature verification. Can be used
+    directly for custom auth policies.
+
+    The watch is an asyncio coroutine over the (grpc.aio) channel: the owner
+    (the generated ServiceManager) schedules ``watch()`` as a task at startup
+    and cancels it at shutdown. Lookup (``get`` / ``has_keys``) stays
+    thread-safe and synchronous for authorizer callers.
+    """
+
+    def __init__(self, jwk_channel=None):
+        self._jwks: Dict[str, ImmutableJwk] = {}
+        self._lock = threading.Lock()
+        self._channel = jwk_channel
+        self._watching = False
+
+    def get(self, kid: str) -> Optional[ImmutableJwk]:
+        """Looks up a JWK by key ID."""
+        with self._lock:
+            return self._jwks.get(kid)
+
+    def has_keys(self) -> bool:
+        """Returns whether any keys have been loaded."""
+        with self._lock:
+            return len(self._jwks) > 0
+
+    def close(self) -> None:
+        self._watching = False
+
+    async def watch(self) -> None:
+        """Watches JwkVerifyingKeysView over the configured grpc.aio channel,
+        replacing the cached key set on each delivery.
+
+        Runs until cancelled or close()d. Reconnects with capped exponential
+        backoff on stream errors AND on clean stream end (a healthy stream
+        resets the backoff once keys are delivered).
+        """
+        if self._channel is None:
+            return
+
+        from {{.PythonPackageBase}}.types.sys.jwkview import jwkview_pb2_grpc
+        from {{.PythonPackageBase}}.types.sys.trace import trace_pb2
+
+        self._watching = True
+        min_backoff = 1.0
+        max_backoff = 30.0
+        backoff = min_backoff
+
+        stub = jwkview_pb2_grpc.JwkVerifyingKeysViewServiceStub(self._channel)
+        while self._watching:
+            try:
+                async for resp in stub.Watch(trace_pb2.TraceRequest()):
+                    if not self._watching:
+                        return
+                    new_keys: Dict[str, ImmutableJwk] = {}
+                    for kid, jwk_proto in resp.entries.items():
+                        try:
+                            immutable = ImmutableJwk(jwk_proto)
+                            new_keys[kid] = immutable
+                        except Exception as e:
+                            logger.warning("Skipping invalid JWK: kid=%s, error=%s", kid, e)
+                    with self._lock:
+                        self._jwks = new_keys
+                    backoff = min_backoff  # healthy stream — reset backoff
+                    logger.info("JWK view updated: %d keys", len(new_keys))
+                if not self._watching:
+                    return
+                logger.warning("JWK view watch stream ended, reconnecting in %.1fs", backoff)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                if not self._watching:
+                    return
+                logger.warning("JWK view watch error, reconnecting in %.1fs: %s", backoff, e)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+
+
+# ============================================================================
+# Authorizer
+# ============================================================================
+
+class Authorizer:
+    """
+    Token-based authorizer for service requests.
+
+    Composes a JwkCache with the service name to provide standard S2S and C2S
+    authorization. For custom auth policies, use jwk_cache directly.
+    """
+
+    _SERVICE_NAME = "{{.ServiceLabel}}"
+
+    def __init__(self, jwk_channel=None):
+        """
+        Creates an Authorizer.
+
+        SPIFFE identities are self-describing (the trust domain is the URI
+        authority), so no deployment prefix is configured: service-path
+        extraction and namespace checks go through the generated token wrapper
+        and sys/spiffe helpers.
+
+        Args:
+            jwk_channel: Optional gRPC channel for JWK subscription
+        """
+        self._jwk_cache = JwkCache(jwk_channel)
+        self._method_auth_patterns: Dict[str, List[re.Pattern]] = {}
+        self._method_target_namespace_field: Dict[str, str] = {}
+
+        logger.info(
+            "Token-based authorization initialized: service=%s, jwk_watch=%s",
+            self._SERVICE_NAME,
+            jwk_channel is not None,
+        )
+
+    def set_method_auth(self, method_name: str, patterns: List[str]) -> None:
+        """
+        Registers allowed caller patterns for a method. Patterns are RE2 regexes
+        matched against the location-agnostic service path from
+        TokenWrapper.service_path(). "*" is shorthand for "match any caller".
+        """
+        if not patterns:
+            return
+        compiled = []
+        for p in patterns:
+            if p == "*":
+                compiled.append(re.compile(".*"))
+            else:
+                compiled.append(re.compile(p))
+        self._method_auth_patterns[method_name] = compiled
+
+    def set_method_target_namespace_field(self, method_name: str, field_name: str) -> None:
+        """
+        Registers the request field name carrying the target namespace path
+        for a method. When set, authorize() enforces the level-or-below rule:
+        the caller's namespace claim must equal or be a strict path-segment
+        ancestor of the value of field_name on the request.
+        """
+        if not field_name:
+            return
+        self._method_target_namespace_field[method_name] = field_name
+
+    def _check_target_namespace(self, method_name: str, caller_namespace: str, request: Any) -> None:
+        """
+        Enforces the level-or-below rule for methods annotated with target_namespace_field.
+        The request field named by the annotation must contain a namespace-path string at
+        or below the caller's namespace.
+        """
+        field_name = self._method_target_namespace_field.get(method_name)
+        if not field_name:
+            return
+        if request is None:
+            raise permission_denied(
+                f'target_namespace_field configured but request is None for "{method_name}"'
+            )
+        if not hasattr(request, field_name):
+            raise permission_denied(
+                f'target_namespace_field "{field_name}" not found on request for "{method_name}"'
+            )
+        target = getattr(request, field_name)
+        if not isinstance(target, str):
+            raise permission_denied(
+                f'target_namespace_field "{field_name}" is not a string for "{method_name}"'
+            )
+        if not target:
+            raise permission_denied(f'target namespace field "{field_name}" is empty')
+        if not is_at_or_below(caller_namespace, target):
+            raise permission_denied(
+                f'caller namespace "{caller_namespace}" is not at-or-above target "{target}"'
+            )
+
+    @property
+    def jwk_cache(self) -> JwkCache:
+        """Returns the JWK cache for direct key access."""
+        return self._jwk_cache
+
+    def authorize(self, metadata: Dict[str, str], full_method: str, request: Any = None) -> None:
+        """
+        Authorizes a request by verifying token signature, audience, and
+        service_entitlements claim.
+
+        Args:
+            metadata: Request metadata/headers
+            full_method: The full gRPC method name
+            request: The request message (required for methods with target_namespace_field)
+
+        Raises:
+            ProtoError: If authorization is denied
+        """
+        auth_header = metadata.get("authorization", "")
+        if not auth_header:
+            raise unauthenticated("missing authorization header")
+
+        token_str = auth_header
+        if token_str.lower().startswith("bearer "):
+            token_str = token_str[7:]
+
+        # Parse and verify token
+        try:
+            tw = TokenWrapper.parse(token_str)
+        except Exception as e:
+            raise unauthenticated(f"invalid token: {e}")
+
+        kid = tw.get_kid()
+        if not kid:
+            raise unauthenticated("token missing key ID (kid)")
+
+        jwk = self._jwk_cache.get(kid)
+
+        if jwk is None:
+            raise unauthenticated(f"unknown signing key: {kid}")
+
+        try:
+            tw.verify(jwk)
+        except Exception as e:
+            raise unauthenticated(f"token verification failed: {e}")
+
+        # Reject refresh tokens — they should only be exchanged at the Mint endpoint.
+        token_use = tw.get_token_use()
+        if token_use == "refresh":
+            raise unauthenticated("refresh tokens cannot be used for API access")
+        # A refresh token carrying typ:refresh but no token_use claim must not slip
+        # past authorize — authenticate already blocks this shape (SEC-3).
+        if not token_use:
+            typ = tw.get_custom_field("typ")
+            if typ == "refresh":
+                raise unauthenticated("refresh tokens cannot be used for API access")
+
+        # Reject bootstrap, locality, and external tokens. External tokens are minted
+        # by the token authority for upstream services and must never be accepted internally.
+        if token_use in ("bootstrap", "locality", "external"):
+            raise unauthenticated(f"{token_use} tokens cannot be used for API access")
+
+        # Check aud matches service name
+        aud = tw.get_audience()
+        if aud != self._SERVICE_NAME:
+            raise permission_denied(
+                f'token audience "{aud}" does not match service "{self._SERVICE_NAME}"'
+            )
+
+        # S2S path: service/workload tokens carry structured identity claims
+        # (sub_type, sub, service_name). Authorization is receiver-side via
+        # auth_services RE2 patterns on the LOCATION-AGNOSTIC service path from
+        # TokenWrapper.service_path() — the same service matches identically
+        # across clouds/accounts/AZs/clusters; raw sub/namespace are never
+        # matched directly.
+        sub_type = tw.get_sub_type()
+        if sub_type in ("service", "workload"):
+            method_name = _extract_method_name(full_method)
+            service_path = tw.service_path()
+
+            allowed = self._method_auth_patterns.get(method_name)
+            if allowed is None:
+                raise permission_denied(
+                    f'no auth_services policy configured for service caller "{service_path}" on "{method_name}"'
+                )
+            matched = any(p.fullmatch(service_path) for p in allowed)
+            if not matched:
+                raise permission_denied(
+                    f'service "{service_path}" not authorized for "{method_name}"'
+                )
+
+            # Level-or-below check (applies to S2S when target_namespace_field is set).
+            self._check_target_namespace(method_name, tw.get_namespace(), request)
+            return
+
+        # C2S path: user tokens carry service_entitlements.
+        method_name = _extract_method_name(full_method)
+
+        te = tw.get_service_entitlements()
+        if te is None:
+            raise permission_denied("token missing service_entitlements claim")
+
+        if not service_entitlements_grant_rpc(te, self._SERVICE_NAME, full_method):
+            raise permission_denied(
+                f'method "{method_name}" not in service_entitlements for service "{self._SERVICE_NAME}"'
+            )
+
+        # Level-or-below check: caller's namespace must be at or above the target namespace
+        # named by the method's target_namespace_field annotation.
+        self._check_target_namespace(method_name, tw.get_namespace() or "", request)
+
+    def authenticate(self, metadata: Dict[str, str], target_namespace: str | None = None) -> None:
+        """
+        Authenticates a request by verifying token signature and audience only.
+        Does NOT check entitlements. Used for auth_any_user services.
+
+        Args:
+            metadata: Request metadata/headers
+
+        Raises:
+            ProtoError: If authentication fails
+        """
+        auth_header = metadata.get("authorization", "")
+        if not auth_header:
+            raise unauthenticated("missing authorization header")
+
+        token_str = auth_header
+        if token_str.lower().startswith("bearer "):
+            token_str = token_str[7:]
+
+        try:
+            tw = TokenWrapper.parse(token_str)
+        except Exception as e:
+            raise unauthenticated(f"invalid token: {e}")
+
+        kid = tw.get_kid()
+        if not kid:
+            raise unauthenticated("token missing key ID (kid)")
+
+        jwk = self._jwk_cache.get(kid)
+
+        if jwk is None:
+            raise unauthenticated(f"unknown signing key: {kid}")
+
+        try:
+            tw.verify(jwk)
+        except Exception as e:
+            raise unauthenticated(f"token verification failed: {e}")
+
+        # Reject refresh tokens — they should only be exchanged at the Mint endpoint.
+        auth_token_use = tw.get_token_use()
+        if auth_token_use == "refresh":
+            raise unauthenticated("refresh tokens cannot be used for API access")
+        if not auth_token_use:
+            typ = tw.get_custom_field("typ")
+            if typ == "refresh":
+                raise unauthenticated("refresh tokens cannot be used for API access")
+
+        if auth_token_use in ("bootstrap", "locality", "external"):
+            raise unauthenticated(f"{auth_token_use} tokens cannot be used for API access")
+
+        aud = tw.get_audience()
+        if aud != self._SERVICE_NAME:
+            raise permission_denied(
+                f'token audience "{aud}" does not match service "{self._SERVICE_NAME}"'
+            )
+
+        if target_namespace is not None:
+            target = target_namespace or "/"
+            caller_namespace = tw.get_namespace() or ""
+            if not is_at_or_below(caller_namespace, target):
+                raise permission_denied(
+                    f'caller namespace "{caller_namespace}" is not at-or-above target "{target}"'
+                )
+
+        # auth_any_user: token is valid and correctly scoped — allow.
+
+    def close(self) -> None:
+        """Closes the authorizer. Safe to call multiple times."""
+        self._jwk_cache.close()
+
+
+def service_entitlements_grant_rpc(te: Any, service_name: str, full_method: str) -> bool:
+    """
+    Checks whether a service_entitlements object grants access to the given RPC method.
+
+    Grant tokens are normalized through the generated grants helper.
+    """
+    if not isinstance(te, dict):
+        return False
+
+    required = method_grant_token(service_name, full_method)
+    raw = []
+    for grant in te.get("grants", []):
+        if isinstance(grant, dict):
+            token = grant.get("token")
+            if isinstance(token, str):
+                raw.append(token)
+        elif isinstance(grant, str):
+            raw.append(grant)
+
+    for token in normalize_grants(raw):
+        if token == required:
+            return True
+
+    return False
+
+
+def method_grant_token(fallback_service: str, full_method: str) -> str:
+    service_fqn = ""
+    method = full_method
+    if "/" in full_method:
+        service_fqn, method = full_method.rsplit("/", 1)
+        service_fqn = service_fqn.lstrip("/").rsplit("/", 1)[-1]
+    package = fallback_service
+    service = fallback_service
+    if service_fqn:
+        service = service_fqn
+        if "." in service_fqn:
+            package, service = service_fqn.rsplit(".", 1)
+    return f"{grant_token_part(package)}_{grant_token_part(service)}_{grant_token_part(method)}"
+
+
+def grant_token_part(value: str) -> str:
+    value = value.replace("-", "_").replace(".", "_").replace("/", "_")
+    value = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", value)
+    value = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
+    return value.upper()
+
+
+def _extract_method_name(full_method: str) -> str:
+    """Returns the unqualified method name from a fully qualified gRPC method."""
+    i = full_method.rfind("/")
+    return full_method[i + 1:] if i >= 0 else full_method

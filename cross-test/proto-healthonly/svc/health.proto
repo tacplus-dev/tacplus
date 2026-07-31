@@ -1,0 +1,35 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// Health-only cross-test fixture: a service with state but no gRPC services.
+// HasTlsGrpc=false, HasC2DGrpc=false → exercises the health-only server branch
+// in pkg/templates/rust/types/service_manager.rs.tmpl.
+//
+// Design: the service_state annotation with auto_tls ensures HasAutoTls=true,
+// which declares tls_server_certified_key in the ServiceManager struct.
+// Without auto_tls, the health-only branch would reference a field that is not
+// declared (compile error). The state also triggers service_manager generation
+// (len(config.States) > 0 is the gate when there are no gRPC services).
+
+syntax = "proto3";
+
+package healthonly;
+
+import "sys/spec.proto";
+
+// PingState is the sole state root. There are intentionally no gRPC service
+// declarations (no spec.service_s2s, no spec.service_c2d), so:
+//   HasTlsGrpc   = false
+//   HasC2DGrpc   = false
+//   HasAutoTls   = true  (via auto_tls below)
+//   HasStates    = true
+// The generated service_manager.rs lands in the health-only else-branch and
+// starts a TLS listener that serves only the standard gRPC health check.
+message PingState {
+  option (spec.service_state) = {
+    name:     "PingState",
+    tag:      "state-store",
+    auto_tls: TLS_KEY_TYPE_ED25519
+  };
+
+  // ping is a simple marker field used by the handler under test.
+  string ping = 1;
+}

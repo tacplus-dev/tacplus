@@ -1,0 +1,136 @@
+{
+  "_comment": "Canonical SPIFFE identity test corpus (plan: archive/SPIFFE_IDENTITY_NORMALIZATION_PLAN.md, Validation And Test Vectors). Single source of truth: every generated language's sys/spiffe test asserts THIS corpus, so identity construction/parse/comparison is byte-identical across Go, Rust, Python, TypeScript, and Java. The Go reference test (pkg/templates/go/sys/spiffe/spiffe_test.go.tmpl) is the executable mirror of this file.",
+  "scheme_version": "v1",
+  "construction": {
+    "service": {
+      "trust_domain": "example.com",
+      "location": "aws/us-east-1a/cluster-7/team-a",
+      "service": "mcp",
+      "expect": "spiffe://example.com/system/aws/us-east-1a/cluster-7/team-a/services/mcp"
+    },
+    "workload": {
+      "parent": "spiffe://example.com/system/aws/us-east-1a/cluster-7/team-a/services/mcp",
+      "child": "agent-42",
+      "expect": "spiffe://example.com/system/aws/us-east-1a/cluster-7/team-a/services/mcp/workloads/agent-42"
+    },
+    "tenant": {
+      "trust_domain": "example.com",
+      "tenant": "acme",
+      "expect": "spiffe://example.com/tenants/acme"
+    },
+    "workspace": {
+      "trust_domain": "example.com",
+      "tenant": "acme",
+      "workspace": ["dev"],
+      "expect": "spiffe://example.com/tenants/acme/workspaces/dev"
+    },
+    "namespace": {
+      "trust_domain": "example.com",
+      "namespace": "/tenants/acme/workspaces/dev",
+      "expect": "spiffe://example.com/tenants/acme/workspaces/dev"
+    },
+    "user": {
+      "trust_domain": "example.com",
+      "namespace": "/tenants/acme/workspaces/dev",
+      "stable_user": "jody",
+      "expect": "spiffe://example.com/tenants/acme/workspaces/dev/users/jody"
+    },
+    "resource": {
+      "trust_domain": "example.com",
+      "namespace": "/tenants/acme/workspaces/dev",
+      "kind": "gitlab-event",
+      "id": "evt-1",
+      "expect": "spiffe://example.com/tenants/acme/workspaces/dev/data/gitlab-event/evt-1"
+    }
+  },
+  "parse": [
+    {
+      "input": "spiffe://example.com/system/aws/us-east-1a/cluster-7/team-a/services/mcp",
+      "trust_domain": "example.com",
+      "subject_kind": "service",
+      "location_path": "aws/us-east-1a/cluster-7/team-a",
+      "subject_path": "mcp"
+    },
+    {
+      "input": "spiffe://example.com/system/aws/us-east-1a/cluster-7/team-a/services/mcp/workloads/agent-42",
+      "subject_kind": "workload",
+      "subject_path": "mcp/workloads/agent-42"
+    },
+    {
+      "input": "spiffe://example.com/tenants/acme/workspaces/dev/users/jody",
+      "subject_kind": "user",
+      "namespace": "/tenants/acme/workspaces/dev",
+      "subject_path": "jody"
+    },
+    {
+      "input": "spiffe://example.com/tenants/acme/workspaces/dev/data/gitlab-event/evt-1",
+      "subject_kind": "resource",
+      "resource_kind": "gitlab-event",
+      "resource_id": "evt-1"
+    }
+  ],
+  "round_trip": [
+    "spiffe://example.com/system/aws/us-east-1a/cluster-7/team-a/services/mcp",
+    "spiffe://example.com/system/aws/us-east-1a/cluster-7/team-a/services/mcp/workloads/agent-42",
+    "spiffe://example.com/tenants/acme/workspaces/dev",
+    "spiffe://example.com/tenants/acme/workspaces/dev/users/jody",
+    "spiffe://example.com/tenants/acme/workspaces/dev/data/gitlab-event/evt-1"
+  ],
+  "comparison": {
+    "is_at_or_below": [
+      { "caller": "/tenants/acme", "target": "/tenants/acme/workspaces/dev", "expect": true },
+      { "caller": "/tenants/acme", "target": "/tenants/acme2/workspaces/dev", "expect": false }
+    ],
+    "same_trust_domain": [
+      { "a": "spiffe://example.com/tenants/a", "b": "spiffe://example.com/tenants/b", "expect": true },
+      { "a": "spiffe://example.com/tenants/a", "b": "spiffe://other.io/tenants/b", "expect": false }
+    ],
+    "service_path_location_agnostic": [
+      { "input": "spiffe://example.com/system/aws/acct1/az1/cluster1/services/mcp", "expect": "mcp" },
+      { "input": "spiffe://example.com/system/gcp/acct2/az9/cluster9/services/mcp", "expect": "mcp" }
+    ]
+  },
+  "normalization": {
+    "trust_domain": [
+      { "input": " example.com ", "expect": "example.com" }
+    ],
+    "namespace": [
+      { "input": " tenants/acme/ ", "expect": "/tenants/acme" }
+    ]
+  },
+  "invalid_parse": [
+    "",
+    "spiffe://",
+    "spiffe://example.com//system",
+    "spiffe://example.com/../system",
+    "spiffe://example.com/system?x=1",
+    "spiffe://example.com/system#frag",
+    "spiffe://example.com\\system"
+  ],
+  "invalid_construct": [
+    { "fn": "normalize_trust_domain", "args": ["example.com/x"] },
+    { "fn": "resource_spiffe_id", "args": ["example.com", "/tenants/acme", "gitlab-event", "../evt-1"] },
+    { "fn": "resource_spiffe_id", "args": ["example.com", "/tenants/acme", "gitlab-event", "evt%2F1"] },
+    { "fn": "resource_spiffe_id", "args": ["example.com", "/tenants/acme", "gitlab/event", "evt-1"] },
+    { "fn": "credential_spiffe_id", "args": ["example.com", "/tenants/acme", "cred-pair", "cred:pair"] },
+    { "fn": "credential_spiffe_id", "args": ["example.com", "/tenants/acme", "cred-pair", "cred/pair"] },
+    { "fn": "user_spiffe_id", "args": ["example.com", "/tenants/acme", "issuer/user"] },
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/tenants/acme/data"] },
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/tenants/system"] }
+  ],
+  "valid_construct": [
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/system/aws/acct1"], "expect": "spiffe://example.com/system/aws/acct1" }
+  ],
+  "opaque_segment": {
+    "spec": "base32_lower_nopad(SHA256(utf8(kind) || 0x1F || utf8(NFC(value)))[:20]); 32 chars [a-z2-7]; kind domain-separates",
+    "length": 32,
+    "vectors": [
+      { "kind": "user", "value": "issuer/user", "expect": "ewh3mwz66l7d3yilnuiqygw43gdjtg6i" },
+      { "kind": "tenant", "value": "acme", "expect": "2cw26xgiswhtrtrdsgkrfrgqrf6vjffe" },
+      { "_comment": "same value as tenant/acme - kind domain-separation must yield a different segment",
+        "kind": "resource", "value": "acme", "expect": "ngrhnkrudusp3j3okosy2a4wigdklnjv" },
+      { "_comment": "NFD input (e + COMBINING ACUTE, expressed as an escape so the file stays ASCII) - implementations must NFC-normalize before hashing",
+        "kind": "user", "value": "iss/rene\u0301", "expect": "qs4rzt5hfv7lvnb6ytkb2hpbltlfp33h" }
+    ]
+  }
+}

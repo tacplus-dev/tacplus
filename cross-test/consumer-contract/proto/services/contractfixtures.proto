@@ -1,0 +1,155 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+syntax = "proto3";
+
+package contractfixtures;
+
+import "sys/healthreport.proto";
+import "sys/spec.proto";
+import "sys/tokenrequest.proto";
+import "sys/x509.proto";
+
+option (spec.service) = {name: "contractfixtures"};
+option (spec.vservice) = {
+  name: "contractfixtures"
+  id: 30
+};
+
+message FixtureEvent {
+  // A projection is an offshoot of a record, so FixtureEvent must be a record.
+  // A record implies an event and must declare its producer surface (s2s here).
+  option (spec.record) = {
+    key: "event_id"
+    owner: "spiffe_id"
+    s2s: {auth_services: ["*"]}
+  };
+  option (spec.graph_projection) = {
+    name: "FixtureEventNode"
+    xid: "event_id"
+    field: {
+      source: "event_id"
+      index: "exact"
+      upsert: true
+    }
+    field: {
+      source: "tenant_namespace"
+      index: "exact"
+    }
+  };
+  // A timeseries offshoot of the same record — exercises the timeseries projection
+  // + TimeseriesGroupCounts + TimeseriesQuery (key-returning) generators. The record
+  // key (event_id) is auto-injected by tacplus for federation/hydration.
+  option (spec.timeseries_projection) = {
+    name: "FixtureEventRecord"
+    dedup: {strategy: DEDUP_LATEST_BY_VERSION version_field: "timestamp_ms" key_fields: "timestamp_ms"}
+    retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
+    field: {source: "timestamp_ms" order_key: 1 partition_key: true}
+    field: {source: "tenant_namespace" cardinality_hint: CARDINALITY_LOW}
+  };
+
+  string event_id = 1 [(spec.assert_required) = true];
+  // Queryable record fields — exercise the RecordMap typed <T>Filter (EQ + RANGE),
+  // Refine, Watch, and the oneof watch envelope.
+  string tenant_namespace = 2 [
+    (spec.assert_required) = true,
+    (spec.query_field) = {op: QUERY_OP_EQ}
+  ];
+  // Egress data entitlement (spec.redact) — exercises the Sanitize<T> codegen for
+  // the full-service store languages (go/rust/java; the transform is COMPILED as
+  // part of the generated helpers). Client-only targets (python/typescript) are
+  // exempt and emit no transform. DROP zeroes the field; PSEUDONYMIZE replaces it
+  // with a keyed HMAC token; both set the injected <field>_redacted indicator.
+  string payload = 3 [(spec.redact) = {mode: REDACT_MODE_DROP}];
+  string spiffe_id = 4 [(spec.identity_spiffe_subject) = true];
+  int64 timestamp_ms = 5 [(spec.query_field) = {op: QUERY_OP_RANGE}];
+  // assert_email makes anonymization FORMAT-PRESERVING: the surrogate is a valid
+  // synthetic email, not a pseud: token.
+  string contact_email = 6 [(spec.assert_email) = true, (spec.redact) = {mode: REDACT_MODE_PSEUDONYMIZE}];
+  // Caller-decided (may-*) field: the entitlement's EntitlementLevel selects
+  // PASS/ANONYMIZE/REDACT at egress. Exercises the FixtureEventEntitlement.notes
+  // level end-to-end.
+  string notes = 7 [(spec.redact) = {mode: REDACT_MODE_MAY_REDACT}];
+  // Message-typed field: exercises FIELD-BY-FIELD recursion. The entitlement's
+  // contact_sub (a FixtureContactEntitlement) redacts inside FixtureContact while
+  // leaving its other fields intact.
+  FixtureContact contact = 8;
+  // Repeated message field: exercises ELEMENT-WISE recursion — one
+  // more_contacts_sub entitlement is applied to every element of the list.
+  // (Repeated fields must declare a max element count.)
+  repeated FixtureContact more_contacts = 9 [(spec.assert_max_size) = 16];
+}
+
+// A nested sub-message reached through FixtureEvent.contact — proves recursive
+// data entitlement redacts a sub-message field (phone) while preserving its
+// siblings (label). Not a record; redaction is valid on any returned message.
+message FixtureContact {
+  string phone = 1 [(spec.redact) = {mode: REDACT_MODE_MAY_REDACT}];
+  string label = 2;
+}
+
+message FixtureState {
+  option (spec.service_state) = {
+    name: "FixtureState"
+    tag: "contractfixtures"
+    export: true
+  };
+  option (spec.service_event) = {};
+  option (spec.subscribe) = {
+    source: "contractfixtures.FixtureState.events"
+  };
+
+  repeated FixtureEvent events = 1 [
+    (spec.topic) = true
+  ];
+}
+
+message FixtureStoreEntry {
+  option (spec.service_store) = {tag: "contractfixtures"};
+
+  string entry_id = 1 [
+    (spec.assert_required) = true,
+    (spec.store_key) = true
+  ];
+  string value = 2;
+}
+
+message FixtureHealth {
+  option (spec.service_health) = {};
+
+  healthreport.ServiceInstanceHealth base = 1;
+  int64 observed_events = 2;
+}
+
+message FixtureActor {
+  option (spec.event_publish) = {
+    topic_ref: "contractfixtures.FixtureState.events"
+    method_s2s: {auth_services: ["*"]}
+  };
+  option (spec.event_watch) = {
+    topic_ref: "contractfixtures.FixtureState.events"
+    method_s2s: {auth_services: ["*"]}
+  };
+  // Auth-less publish binding to the synthesized record topic: the surface is
+  // inherited from FixtureEvent's declared producer surface (s2s). Exercises the
+  // event/record -> event_publish auth-fold.
+  option (spec.event_publish) = {
+    topic_ref: "contractfixtures.FixtureEventBus.stream"
+  };
+}
+
+service FixtureTokenMint {
+  option (spec.service_s2s) = {auth_services: ["*"]};
+  option (spec.token_minter) = {};
+
+  rpc TokenMint(tokenrequest.TokenMintRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.method_s2s) = {auth_disabled: true};
+  }
+
+  rpc MintServiceToken(tokenrequest.MintServiceTokenRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.method_s2s) = {auth_disabled: true};
+  }
+
+  rpc X509Mint(tokenrequest.X509MintRequest) returns (x509.X509CertChain) {
+    option (spec.method_s2s) = {auth_disabled: true};
+  }
+}

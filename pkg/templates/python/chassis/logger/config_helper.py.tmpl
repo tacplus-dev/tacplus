@@ -1,0 +1,109 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+Helper functions for working with LoggerConfig protobuf messages.
+
+This module provides utilities for loading configuration from
+environment variables and converting to environment variable maps.
+"""
+
+import os
+from typing import Dict
+
+from .constants import Constants
+from .log_format import LogFormat
+from .log_level import LogLevel
+
+
+class LoggerConfigHelper:
+    """
+    Helper class for working with LoggerConfig protobuf messages.
+
+    This class provides utilities for loading configuration from
+    environment variables and converting to environment variable maps.
+    """
+
+    @staticmethod
+    def load_from_env(builder) -> None:
+        """
+        Loads logger configuration from environment variables into the provided LoggerConfig builder.
+
+        Environment variables read:
+        - LogLevel: Log level (trace, debug, info, warn, error)
+        - LogFormat: Log format (json, console)
+
+        This method does not check if fields are already set, so it will overwrite
+        existing values if the environment variables are present.
+
+        Args:
+            builder: LoggerConfig builder object to populate
+
+        Raises:
+            ValueError: If any environment variable has an invalid value
+        """
+        # Load Level
+        level_value = os.environ.get(Constants.LOG_LEVEL_ENV_VAR)
+        if level_value:
+            try:
+                level = LogLevel.parse(level_value)
+                builder.level = level
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid value for env var {Constants.LOG_LEVEL_ENV_VAR}="
+                    f"{level_value}: {e}"
+                ) from e
+
+        # Load Format
+        format_value = os.environ.get(Constants.LOG_FORMAT_ENV_VAR)
+        if format_value:
+            try:
+                format_enum = LogFormat.parse(format_value)
+                builder.format = format_enum
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid value for env var {Constants.LOG_FORMAT_ENV_VAR}="
+                    f"{format_value}: {e}"
+                ) from e
+
+    @staticmethod
+    def new_builder_from_env():
+        """
+        Creates a LoggerConfig builder with values loaded from environment variables.
+
+        Returns:
+            A new LoggerConfig builder with environment values
+
+        Raises:
+            ValueError: If any environment variable has an invalid value
+        """
+        from {{.PythonPackageBase}}.types.sys.logger import logger_pb2
+
+        config = logger_pb2.LoggerConfig()
+        LoggerConfigHelper.load_from_env(config)
+        return config
+
+    @staticmethod
+    def to_env_vars(config) -> Dict[str, str]:
+        """
+        Returns a dict of environment variable names to their values based on the LoggerConfig.
+
+        This is useful for passing logger configuration to child processes or for debugging.
+        Only non-default values are included in the returned dict.
+
+        Args:
+            config: The LoggerConfig protobuf message to convert
+
+        Returns:
+            A dict of environment variable names to values
+        """
+        from {{.PythonPackageBase}}.types.sys.logger import logger_pb2
+
+        env_vars = {}
+
+        if config.format != logger_pb2.FORMAT_UNDEFINED:
+            env_vars[Constants.LOG_FORMAT_ENV_VAR] = LogFormat.to_string(config.format)
+
+        if config.level != logger_pb2.LEVEL_UNDEFINED:
+            env_vars[Constants.LOG_LEVEL_ENV_VAR] = LogLevel.to_string(config.level)
+
+        return env_vars

@@ -1,0 +1,259 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Enum types and conversion functions
+
+use crate::error::{LoggerError, Result};
+use {{.CrateBasePathUnderscore}}_types::sys::logger as proto;
+
+/// LogLevel represents the severity level for log messages
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    /// Disabled - no logging
+    Disabled,
+    /// Trace - most verbose level
+    Trace,
+    /// Debug - debugging information
+    Debug,
+    /// Info - informational messages
+    Info,
+    /// Warn - warning messages
+    Warn,
+    /// Error - error messages
+    Error,
+}
+
+impl Default for LogLevel {
+    fn default() -> Self {
+        LogLevel::Disabled
+    }
+}
+
+impl LogLevel {
+    /// Parse a string into a LogLevel
+    ///
+    /// Accepts case-insensitive strings: "trace", "debug", "info", "warn", "error"
+    /// An empty string returns LogLevel::Disabled
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.to_lowercase().trim() {
+            "" => Ok(LogLevel::Disabled),
+            "trace" => Ok(LogLevel::Trace),
+            "debug" => Ok(LogLevel::Debug),
+            "info" => Ok(LogLevel::Info),
+            "warn" => Ok(LogLevel::Warn),
+            "error" => Ok(LogLevel::Error),
+            _ => Err(LoggerError::invalid_log_level(s)),
+        }
+    }
+
+    /// Convert LogLevel to string
+    pub fn to_string(&self) -> &'static str {
+        match self {
+            LogLevel::Disabled => "",
+            LogLevel::Trace => "trace",
+            LogLevel::Debug => "debug",
+            LogLevel::Info => "info",
+            LogLevel::Warn => "warn",
+            LogLevel::Error => "error",
+        }
+    }
+
+    /// Get all valid LogLevel values
+    pub fn values() -> Vec<LogLevel> {
+        vec![
+            LogLevel::Trace,
+            LogLevel::Debug,
+            LogLevel::Info,
+            LogLevel::Warn,
+            LogLevel::Error,
+        ]
+    }
+
+    /// Get all valid LogLevel values as strings
+    pub fn string_values() -> Vec<&'static str> {
+        vec!["trace", "debug", "info", "warn", "error"]
+    }
+}
+
+/// LogFormat represents the output format for log messages
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogFormat {
+    /// Undefined - default format
+    Undefined,
+    /// JSON - structured logging
+    Json,
+    /// Console - human-readable output
+    Console,
+}
+
+impl Default for LogFormat {
+    fn default() -> Self {
+        LogFormat::Undefined
+    }
+}
+
+impl LogFormat {
+    /// Parse a string into a LogFormat
+    ///
+    /// Accepts case-insensitive strings and shorthands:
+    /// - "json", "js" -> LogFormat::Json
+    /// - "console", "con" -> LogFormat::Console
+    /// - "" -> LogFormat::Undefined
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.to_lowercase().trim() {
+            "" => Ok(LogFormat::Undefined),
+            "json" | "js" => Ok(LogFormat::Json),
+            "console" | "con" => Ok(LogFormat::Console),
+            _ => Err(LoggerError::invalid_log_format(s)),
+        }
+    }
+
+    /// Convert LogFormat to string
+    pub fn to_string(&self) -> &'static str {
+        match self {
+            LogFormat::Undefined => "",
+            LogFormat::Json => "json",
+            LogFormat::Console => "console",
+        }
+    }
+
+    /// Get all valid LogFormat values
+    pub fn values() -> Vec<LogFormat> {
+        vec![LogFormat::Json, LogFormat::Console]
+    }
+
+    /// Get all valid LogFormat values as strings
+    pub fn string_values() -> Vec<&'static str> {
+        vec!["json", "console"]
+    }
+}
+
+/// Convert proto Level to LogLevel
+impl From<proto::Level> for LogLevel {
+    fn from(level: proto::Level) -> Self {
+        match level {
+            proto::Level::Undefined => LogLevel::Disabled,
+            proto::Level::Trace => LogLevel::Trace,
+            proto::Level::Debug => LogLevel::Debug,
+            proto::Level::Info => LogLevel::Info,
+            proto::Level::Warn => LogLevel::Warn,
+            proto::Level::Error => LogLevel::Error,
+        }
+    }
+}
+
+/// Convert LogLevel to proto Level
+impl From<LogLevel> for proto::Level {
+    fn from(level: LogLevel) -> Self {
+        match level {
+            LogLevel::Disabled => proto::Level::Undefined,
+            LogLevel::Trace => proto::Level::Trace,
+            LogLevel::Debug => proto::Level::Debug,
+            LogLevel::Info => proto::Level::Info,
+            LogLevel::Warn => proto::Level::Warn,
+            LogLevel::Error => proto::Level::Error,
+        }
+    }
+}
+
+/// Convert proto Format to LogFormat
+impl From<proto::Format> for LogFormat {
+    fn from(format: proto::Format) -> Self {
+        match format {
+            proto::Format::Undefined => LogFormat::Undefined,
+            proto::Format::Json => LogFormat::Json,
+            proto::Format::Console => LogFormat::Console,
+        }
+    }
+}
+
+/// Convert LogFormat to proto Format
+impl From<LogFormat> for proto::Format {
+    fn from(format: LogFormat) -> Self {
+        match format {
+            LogFormat::Undefined => proto::Format::Undefined,
+            LogFormat::Json => proto::Format::Json,
+            LogFormat::Console => proto::Format::Console,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log_level_parse() {
+        assert_eq!(LogLevel::parse("").unwrap(), LogLevel::Disabled);
+        assert_eq!(LogLevel::parse("trace").unwrap(), LogLevel::Trace);
+        assert_eq!(LogLevel::parse("TRACE").unwrap(), LogLevel::Trace);
+        assert_eq!(LogLevel::parse("TrAcE").unwrap(), LogLevel::Trace);
+        assert_eq!(LogLevel::parse("debug").unwrap(), LogLevel::Debug);
+        assert_eq!(LogLevel::parse("DEBUG").unwrap(), LogLevel::Debug);
+        assert_eq!(LogLevel::parse("info").unwrap(), LogLevel::Info);
+        assert_eq!(LogLevel::parse("warn").unwrap(), LogLevel::Warn);
+        assert_eq!(LogLevel::parse("error").unwrap(), LogLevel::Error);
+        assert!(LogLevel::parse("invalid").is_err());
+    }
+
+    #[test]
+    fn test_log_level_to_string() {
+        assert_eq!(LogLevel::Disabled.to_string(), "");
+        assert_eq!(LogLevel::Trace.to_string(), "trace");
+        assert_eq!(LogLevel::Debug.to_string(), "debug");
+        assert_eq!(LogLevel::Info.to_string(), "info");
+        assert_eq!(LogLevel::Warn.to_string(), "warn");
+        assert_eq!(LogLevel::Error.to_string(), "error");
+    }
+
+    #[test]
+    fn test_log_level_values() {
+        let values = LogLevel::values();
+        assert_eq!(values.len(), 5);
+        assert_eq!(values[0], LogLevel::Trace);
+        assert_eq!(values[1], LogLevel::Debug);
+        assert_eq!(values[2], LogLevel::Info);
+        assert_eq!(values[3], LogLevel::Warn);
+        assert_eq!(values[4], LogLevel::Error);
+    }
+
+    #[test]
+    fn test_log_level_string_values() {
+        let values = LogLevel::string_values();
+        assert_eq!(values, vec!["trace", "debug", "info", "warn", "error"]);
+    }
+
+    #[test]
+    fn test_log_format_parse() {
+        assert_eq!(LogFormat::parse("").unwrap(), LogFormat::Undefined);
+        assert_eq!(LogFormat::parse("json").unwrap(), LogFormat::Json);
+        assert_eq!(LogFormat::parse("JSON").unwrap(), LogFormat::Json);
+        assert_eq!(LogFormat::parse("js").unwrap(), LogFormat::Json);
+        assert_eq!(LogFormat::parse("JS").unwrap(), LogFormat::Json);
+        assert_eq!(LogFormat::parse("console").unwrap(), LogFormat::Console);
+        assert_eq!(LogFormat::parse("CONSOLE").unwrap(), LogFormat::Console);
+        assert_eq!(LogFormat::parse("con").unwrap(), LogFormat::Console);
+        assert_eq!(LogFormat::parse("CON").unwrap(), LogFormat::Console);
+        assert!(LogFormat::parse("invalid").is_err());
+    }
+
+    #[test]
+    fn test_log_format_to_string() {
+        assert_eq!(LogFormat::Undefined.to_string(), "");
+        assert_eq!(LogFormat::Json.to_string(), "json");
+        assert_eq!(LogFormat::Console.to_string(), "console");
+    }
+
+    #[test]
+    fn test_log_format_values() {
+        let values = LogFormat::values();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0], LogFormat::Json);
+        assert_eq!(values[1], LogFormat::Console);
+    }
+
+    #[test]
+    fn test_log_format_string_values() {
+        let values = LogFormat::string_values();
+        assert_eq!(values, vec!["json", "console"]);
+    }
+}

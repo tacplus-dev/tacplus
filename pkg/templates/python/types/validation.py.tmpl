@@ -1,0 +1,249 @@
+{{- /* Python validation template */ -}}
+# ---- Validation ----
+EMAIL_PATTERN = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+FQDN_PATTERN = re.compile(r'^localhost$|^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$')
+BASE64_PATTERN = re.compile(r'^[A-Za-z0-9+/]*={0,2}$')
+SEMVER_PATTERN = re.compile(r'^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$')
+{{- range .Messages}}
+
+def validate_{{.FuncName}}(msg: {{.TypeName}}, _depth: int = 0) -> None:
+    """Validates all fields in {{.TypeName}} according to their annotations.
+
+    Args:
+        msg: The message to validate
+
+    Raises:
+        ValueError: If validation fails
+    """
+    if msg is None:
+        return
+    if _depth > 24:
+        raise invalid_argument("message nesting exceeds max depth of 24")
+{{- if not .HasValidations}}
+    # No validations defined
+    pass
+{{- else}}
+{{- range .Validations}}
+{{.Code}}
+{{- end}}
+{{- end}}
+
+{{- end}}
+{{- range .ConvenienceFunctions}}
+
+def validate_{{.FuncPrefix}}_from_bytes(data: bytes) -> None:
+    """Validates {{.TypeName}} from bytes (auto-detects JSON/binary format).
+
+    Args:
+        data: Bytes to parse and validate
+
+    Raises:
+        ValueError: If data cannot be parsed or validation fails
+    """
+    msg = {{.FuncPrefix}}_from_bytes(data)
+    validate_{{.FuncPrefix}}(msg)
+def validate_{{.FuncPrefix}}_from_file(filename: str) -> None:
+    """Validates {{.TypeName}} from file (auto-detects format).
+
+    Supports JSON, YAML, TOML, and binary protobuf formats.
+    Format detection based on file extension:
+    - .json: JSON format
+    - .yaml/.yml: YAML format
+    - .toml: TOML format
+    - .pb/.bin: Binary protobuf
+    - others: Auto-detect from content
+
+    Args:
+        filename: Path to file
+
+    Raises:
+        FileNotFoundError: If file doesn't exist
+        ValueError: If file cannot be parsed or validation fails
+    """
+    _, ext = os.path.splitext(filename)
+    ext = ext.lower()
+
+    if ext == '.json':
+        msg = {{.FuncPrefix}}_load_json(filename)
+    elif ext in ('.yaml', '.yml'):
+        msg = {{.FuncPrefix}}_load_yaml(filename)
+    elif ext == '.toml':
+        msg = {{.FuncPrefix}}_load_toml(filename)
+    elif ext in ('.pb', '.bin'):
+        with open(filename, 'rb') as f:
+            data = f.read()
+        msg = {{.FuncPrefix}}_from_binary(data)
+    else:
+        # Auto-detect from content
+        with open(filename, 'rb') as f:
+            data = f.read()
+        msg = {{.FuncPrefix}}_from_bytes(data)
+
+    validate_{{.FuncPrefix}}(msg)
+{{- end}}
+
+def _validate_email(email: str, field_name: str) -> None:
+    """Validates email address format."""
+    if not EMAIL_PATTERN.match(email):
+        raise invalid_argument(f"field {field_name}: invalid email address: {email}")
+def _validate_fqdn(fqdn: str, field_name: str) -> None:
+    """Validates fully qualified domain name."""
+    if not FQDN_PATTERN.match(fqdn):
+        raise invalid_argument(f"field {field_name}: invalid FQDN: {fqdn}")
+def _validate_host(host: str, field_name: str) -> None:
+    """Validates IP address (IPv4/IPv6) or FQDN."""
+    import ipaddress as _ipaddress
+    try:
+        _ipaddress.ip_address(host)
+        return
+    except ValueError:
+        pass
+    if not FQDN_PATTERN.match(host):
+        raise invalid_argument(f"field {field_name}: must be a valid IP address or FQDN, got: {host}")
+def _validate_base64(s: str, field_name: str) -> None:
+    """Validates base64 encoding."""
+    if not BASE64_PATTERN.match(s) or len(s) % 4 != 0:
+        raise invalid_argument(f"field {field_name}: invalid base64 string: {s}")
+    try:
+        base64.b64decode(s, validate=True)
+    except Exception:
+        raise invalid_argument(f"field {field_name}: invalid base64 string: {s}")
+def _validate_listen_addr(addr: str, field_name: str) -> None:
+    """Validates listen address (host:port format)."""
+    if ':' not in addr:
+        raise invalid_argument(f"field {field_name}: listen address must be in host:port format, got: {addr}")
+
+    parts = addr.rsplit(':', 1)
+    if len(parts) != 2:
+        raise invalid_argument(f"field {field_name}: invalid listen address format: {addr}")
+
+    try:
+        port = int(parts[1])
+        if port < 0 or port > 65535:
+            raise invalid_argument(f"field {field_name}: invalid port in listen address: {addr}")
+    except ValueError:
+        raise invalid_argument(f"field {field_name}: invalid port in listen address: {addr}")
+def parse_listen_addr(addr: str) -> tuple[str, int]:
+    """Parses a 'host:port' string into its host and port components.
+
+    Handles IPv6 addresses in bracket notation (e.g. '[::1]:8080').
+
+    Args:
+        addr: The address string in host:port format.
+
+    Returns:
+        A tuple of (host, port).
+
+    Raises:
+        ValueError: If the address is not in valid host:port format.
+    """
+    if addr.startswith('['):
+        bracket_end = addr.find(']')
+        if bracket_end < 0:
+            raise ValueError(f"invalid IPv6 host:port format: {addr}")
+        host = addr[1:bracket_end]
+        if bracket_end + 1 >= len(addr) or addr[bracket_end + 1] != ':':
+            raise ValueError(f"invalid host:port format: {addr}")
+        port_str = addr[bracket_end + 2:]
+    else:
+        last_colon = addr.rfind(':')
+        if last_colon < 0:
+            raise ValueError(f"invalid host:port format: {addr}")
+        host = addr[:last_colon]
+        port_str = addr[last_colon + 1:]
+
+    try:
+        port = int(port_str)
+    except ValueError:
+        raise ValueError(f"invalid port in address: {addr}")
+
+    if port < 0 or port > 65535:
+        raise ValueError(f"port out of range (0-65535): {port}")
+
+    return host, port
+
+def _validate_cidr(cidr: str, ip_type: str, field_name: str) -> None:
+    """Validates CIDR notation."""
+    try:
+        network = ipaddress.ip_network(cidr, strict=False)
+
+        if ip_type == 'IP_ADDR_TYPE_NET_V4':
+            if not isinstance(network, ipaddress.IPv4Network):
+                raise invalid_argument(f"field {field_name}: expected IPv4 network, got: {cidr}")
+            if network.prefixlen > 32:
+                raise invalid_argument(f"field {field_name}: IPv4 prefix length must be 0-32, got: {network.prefixlen}")
+        elif ip_type == 'IP_ADDR_TYPE_NET_V6':
+            if not isinstance(network, ipaddress.IPv6Network):
+                raise invalid_argument(f"field {field_name}: expected IPv6 network, got: {cidr}")
+            if network.prefixlen > 128:
+                raise invalid_argument(f"field {field_name}: IPv6 prefix length must be 0-128, got: {network.prefixlen}")
+        elif ip_type == 'IP_ADDR_TYPE_NET_ANY':
+            if isinstance(network, ipaddress.IPv4Network) and network.prefixlen > 32:
+                raise invalid_argument(f"field {field_name}: IPv4 prefix length must be 0-32, got: {network.prefixlen}")
+            elif isinstance(network, ipaddress.IPv6Network) and network.prefixlen > 128:
+                raise invalid_argument(f"field {field_name}: IPv6 prefix length must be 0-128, got: {network.prefixlen}")
+    except ValueError as e:
+        raise invalid_argument(f"field {field_name}: invalid CIDR notation: {cidr}: {e}")
+def _validate_semver(version: str, field_name: str) -> None:
+    """Validates semantic version format."""
+    if not SEMVER_PATTERN.match(version):
+        raise invalid_argument(f"field {field_name}: invalid semantic version: {version}")
+def _validate_sql(sql: str, permit: str, field_name: str) -> None:
+    """Syntactic SQL sanity check and statement-type gate. NOT an injection defense:
+    it rejects a few obvious tokens and checks the leading keyword only. Callers must
+    still use parameterized queries; never interpolate a validated string as if safe."""
+    if ";" in sql:
+        raise invalid_argument(f"field {field_name}: SQL contains disallowed token: semicolon")
+    if "--" in sql:
+        raise invalid_argument(f"field {field_name}: SQL contains disallowed token: line comment (--)")
+    if "/*" in sql:
+        raise invalid_argument(f"field {field_name}: SQL contains disallowed token: block comment (/*)")
+    if "\\" in sql:
+        raise invalid_argument(f"field {field_name}: SQL contains disallowed token: backslash escape")
+    normalized = sql.strip().upper()
+    if permit == "SQL_PERMIT_SELECT":
+        if not normalized.startswith("SELECT") and not normalized.startswith("WITH"):
+            raise invalid_argument(f"field {field_name}: only SELECT statements permitted")
+    elif permit == "SQL_PERMIT_DML":
+        if not any(normalized.startswith(k) for k in ("SELECT", "INSERT", "UPDATE", "DELETE", "WITH")):
+            raise invalid_argument(f"field {field_name}: only DML statements permitted")
+    elif permit == "SQL_PERMIT_DDL":
+        if not any(normalized.startswith(k) for k in ("CREATE", "ALTER", "DROP", "TRUNCATE")):
+            raise invalid_argument(f"field {field_name}: only DDL statements permitted")
+def _validate_url(raw: str, scheme: str, field_name: str) -> None:
+    """Validates URL structure and scheme."""
+    from urllib.parse import urlparse as _urlparse
+    parsed = _urlparse(raw)
+    if not parsed.scheme or not parsed.hostname:
+        raise invalid_argument(f"field {field_name}: URL must include a scheme and host: {raw}")
+    if scheme == "URL_SCHEME_HTTP" and parsed.scheme != "http":
+        raise invalid_argument(f"field {field_name}: URL must use http:// scheme, got: {parsed.scheme}://")
+    if scheme == "URL_SCHEME_HTTPS" and parsed.scheme != "https":
+        raise invalid_argument(f"field {field_name}: URL must use https:// scheme, got: {parsed.scheme}://")
+    if scheme == "URL_SCHEME_HTTP_OR_HTTPS" and parsed.scheme not in ("http", "https"):
+        raise invalid_argument(f"field {field_name}: URL must use http:// or https:// scheme, got: {parsed.scheme}://")
+def _validate_file_path(path: str, path_type: str, field_name: str) -> None:
+    """Validates file path shape without checking filesystem existence."""
+    if not path.strip():
+        raise invalid_argument(f"field {field_name}: path cannot be empty")
+    is_windows_abs = len(path) >= 3 and path[1] == ":" and path[2] in ("\\", "/")
+    is_abs = os.path.isabs(path) or is_windows_abs
+    if path_type == "PATH_ABSOLUTE" and not is_abs:
+        raise invalid_argument(f"field {field_name}: path must be absolute, got: {path}")
+    if path_type == "PATH_RELATIVE" and is_abs:
+        raise invalid_argument(f"field {field_name}: path must be relative, got: {path}")
+def _validate_enc_type(pem: str, enc_type: str, field_name: str) -> None:
+    """Validates PEM block category for key/certificate annotations."""
+    if "-----BEGIN" not in pem or "-----END" not in pem:
+        raise invalid_argument(f"field {field_name}: value must be in PEM format")
+    is_certificate = "-----BEGIN CERTIFICATE-----" in pem
+    is_private = "PRIVATE KEY-----" in pem
+    is_public = "PUBLIC KEY-----" in pem
+    if enc_type.startswith("ENC_TYPE_X509_CERT") and not is_certificate:
+        raise invalid_argument(f"field {field_name}: value must be an X.509 certificate PEM")
+    if enc_type.startswith("ENC_TYPE_KEY_PRIVATE") and not is_private:
+        raise invalid_argument(f"field {field_name}: value must be a private key PEM")
+    if enc_type.startswith("ENC_TYPE_KEY_PUBLIC") and not is_public:
+        raise invalid_argument(f"field {field_name}: value must be a public key PEM")
+    if enc_type.startswith("ENC_TYPE_KEY_ANY") and not (is_private or is_public):
+        raise invalid_argument(f"field {field_name}: value must be a key PEM")

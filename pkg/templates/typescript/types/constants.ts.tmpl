@@ -1,0 +1,29 @@
+// ============================================================
+// Constants
+// ============================================================
+{{- range .Constants}}
+{{- if .TsType}}
+export const {{.Name}}: {{.TsType}} = {{.TsValue}};
+{{- else}}
+export const {{.Name}} = {{.TsValue}};
+{{- end}}
+{{- end}}
+{{- if and (gt (len .Constants) 0) (gt (len .FieldDefaults) 0)}}
+{{end}}
+{{- range .FieldDefaults}}
+export const {{.Name}}: {{.TsType}} = {{.TsValue}};
+{{- end}}
+
+{{- range .Defaults}}
+
+// ============================================================
+// Type Defaults
+// ============================================================
+/** * Applies default values to {{.MsgName}} fields that are at their zero value. */
+export function {{.FuncName}}(m: {{.MsgName}}): void {
+if (!m) { return; }
+{{- range .Assignments}}
+{{.}}
+{{- end}}
+}
+{{- end}}

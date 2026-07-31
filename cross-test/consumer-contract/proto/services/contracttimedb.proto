@@ -1,0 +1,31 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+syntax = "proto3";
+
+package contracttimedb;
+
+import "sys/spec.proto";
+
+// The timeseries store (timedb) for the contract fixture set. Declaring
+// timeseries_store makes tacplus append two generated services to this proto:
+// TimeseriesGroupCounts (typed grouped-count analytics) and TimeseriesQuery
+// (per-timeseries_type paged query returning SOURCE RECORD KEYS for
+// federation/hydration). Both reference TimeRange, defined here by the store's
+// own proto. The cross-test compiles both generated surfaces in every language.
+option (spec.service) = {name: "contracttimedb"};
+option (spec.timeseries_store) = {};
+
+// TimeRange is the timeseries query window; the generated group-count and key
+// query requests reference it.
+message TimeRange {
+  int64 from_ms = 1;
+  int64 to_ms = 2;
+}
+
+message TimedbPing {}
+
+service ContractTimedb {
+  option (spec.service_s2s) = {auth_services: ["*"]};
+
+  rpc Ping(TimedbPing) returns (TimedbPing);
+}

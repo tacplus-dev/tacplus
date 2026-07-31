@@ -1,0 +1,217 @@
+{{.Header}}#[allow(unused_imports)]
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+#[allow(unused_imports)]
+use tracing;
+#[allow(unused_imports)]
+use servicemanager;
+#[allow(unused_imports)]
+use collection;
+#[allow(unused_imports)]
+use futures::StreamExt;
+{{.AccountingImports}}
+// Import generated proto types from types module
+#[allow(unused_imports)]
+use crate::types::{{.TypesCratePath}}::*;
+{{.ServiceImports}}
+{{.CrossPackageImports}}
+/// {{.WrapperName}} implements the gRPC service by proxying to an external cluster
+#[derive(Debug, Clone)]
+pub struct {{.WrapperName}} {
+{{.ClientFields}}}
+
+impl {{.WrapperName}} {
+    /// Creates a new {{.WrapperName}}
+    pub fn new() -> Self {
+        Self {
+{{.ClientFieldsInit}}        }
+    }
+
+    /// Initialize sets up the cluster gRPC clients
+    pub fn initialize(&mut self, state_channel: tonic::transport::Channel) {
+{{.ClientInitialization}}    }
+}
+
+{{.TraitImpls}}
+
+{{.HandlerTrait}}
+
+/// Authorizer trait for authorization checks on gRPC methods.
+#[tonic::async_trait]
+pub trait Authorizer: Send + Sync + 'static {
+    async fn authorize(&self, full_method: &str, authorization: Option<&str>) -> Result<(), tonic::Status>;
+    /// Enforces the level-or-below rule: the caller's namespace (from `authorization`)
+    /// must equal or be a path-segment ancestor of `target_namespace`. Used by methods
+    /// annotated with `target_namespace_field` for tenant-scoped operations.
+    async fn check_at_or_below(&self, authorization: Option<&str>, target_namespace: &str) -> Result<(), tonic::Status>;
+}
+
+/// ValidationWrapper wraps a {{.ServiceName}}Handler with authorization and validation.
+/// It implements the gRPC server interface with mandatory validation.
+#[derive(Clone)]
+#[allow(dead_code)]
+pub struct ValidationWrapper {
+    handler: Arc<dyn {{.ServiceName}}Handler>,
+    authorizer: Arc<tokio::sync::RwLock<Option<Arc<dyn Authorizer>>>>,
+{{.WatchFields}}
+{{- if .HasAccounting}}
+    emitter: Arc<tokio::sync::RwLock<Option<Arc<am::Emitter>>>>,
+{{- end}}
+    instance_id: Arc<tokio::sync::RwLock<String>>,
+    trace_publish: Arc<tokio::sync::RwLock<Option<Arc<dyn Fn(crate::types::sys::trace::TraceEvent) + Send + Sync>>>>,
+    anonymize_hmac_key: Arc<tokio::sync::RwLock<Vec<u8>>>,
+}
+
+impl ValidationWrapper {
+    /// Creates a new wrapper that wraps the given handler implementation.
+    pub fn new(handler: Arc<dyn {{.ServiceName}}Handler>) -> Self {
+        Self {
+            handler,
+            authorizer: Arc::new(tokio::sync::RwLock::new(None)),
+{{.WatchFieldsInit}}
+{{- if .HasAccounting}}
+            emitter: Arc::new(tokio::sync::RwLock::new(None)),
+{{- end}}
+            instance_id: Arc::new(tokio::sync::RwLock::new(String::new())),
+            trace_publish: Arc::new(tokio::sync::RwLock::new(None)),
+            anonymize_hmac_key: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+        }
+    }
+
+    /// Sets the authorization function.
+    pub async fn set_authorize_func(&self, auth: Option<Arc<dyn Authorizer>>) {
+        let mut guard = self.authorizer.write().await;
+        *guard = auth;
+    }
+
+    /// Sets the authentication function for services that use auth_any_user.
+    /// Uses the same authorizer slot; auth_any_user RPC bodies call
+    /// `check_at_or_below` with their fixed namespace target.
+    pub async fn set_authenticate_func(&self, auth: Option<Arc<dyn Authorizer>>) {
+        self.set_authorize_func(auth).await;
+    }
+
+    /// Returns whether an authorizer is wired. ServiceManager asserts this is
+    /// true for every mandatory-auth wrapper at startup (fail-fast): a None
+    /// authorizer is a build/wiring bug, not a runtime condition.
+    pub async fn has_authorizer(&self) -> bool {
+        self.authorizer.read().await.is_some()
+    }
+
+    /// Sets the instance ID used for trace rounds.
+    pub async fn set_instance_id(&self, instance_id: String) {
+        *self.instance_id.write().await = instance_id;
+    }
+
+    /// Sets the per-deployment data-entitlement ANONYMIZE secret the wrapper
+    /// supplies to the generated sanitize transforms on record egress.
+    #[allow(dead_code)]
+    pub async fn set_anonymize_hmac_key(&self, key: Vec<u8>) {
+        *self.anonymize_hmac_key.write().await = key;
+    }
+
+    /// The service name, baked in at code generation time.
+    const SERVICE_NAME: &'static str = "{{.ServiceLabel}}";
+
+    /// Creates a new TraceRound with this wrapper's identity.
+    #[allow(dead_code)]
+    async fn trace_round(&self) -> crate::types::sys::trace::TraceRound {
+        let iid = self.instance_id.read().await;
+        crate::types::sys::trace::TraceRound {
+            service: Self::SERVICE_NAME.to_string(),
+            instance_id: iid.clone(),
+            timestamp_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64,
+        }
+    }
+
+    /// Sets the callback for publishing trace events to the trace topic.
+    pub async fn set_trace_publisher(&self, f: Arc<dyn Fn(crate::types::sys::trace::TraceEvent) + Send + Sync>) {
+        *self.trace_publish.write().await = Some(f);
+    }
+
+    /// Publishes a trace event if a publisher is configured.
+    #[allow(dead_code)]
+    async fn publish_trace(&self, event: crate::types::sys::trace::TraceEvent) {
+        let guard = self.trace_publish.read().await;
+        if let Some(ref f) = *guard {
+            f(event);
+        }
+    }
+{{- if .HasAccounting}}
+
+    /// Sets the accounting emitter for this service wrapper.
+    pub async fn set_emitter(&self, emitter: Option<Arc<am::Emitter>>) {
+        let mut guard = self.emitter.write().await;
+        *guard = emitter;
+    }
+{{- end}}
+
+    /// Check authorization. No-op if authorizer is None.
+    #[allow(dead_code)]
+    async fn authorize_method<T>(&self, full_method: &str, req: &tonic::Request<T>) -> Result<(), tonic::Status> {
+        // Fail-closed: auth_disabled methods skip this call (by annotation), so a
+        // None authorizer here means a token-auth method was left unwired. Reject.
+        let auth = self.authorizer.read().await;
+        match *auth {
+            Some(ref a) => {
+                let authorization = req.metadata()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok());
+                a.authorize(full_method, authorization).await
+            }
+            None => Err(tonic::Status::unauthenticated(format!(
+                "authorizer not wired for {} (build/SM bug) — auth is mandatory and cannot be disabled", full_method))),
+        }
+    }
+
+    /// Enforce level-or-below: the caller's namespace must equal or be an ancestor
+    /// of `target_namespace`. Fail-closed: a None authorizer rejects. Used by methods
+    /// with `target_namespace_field` annotation.
+    #[allow(dead_code)]
+    async fn enforce_at_or_below<T>(&self, req: &tonic::Request<T>, target_namespace: &str) -> Result<(), tonic::Status> {
+        let auth = self.authorizer.read().await;
+        match *auth {
+            Some(ref a) => {
+                let authorization = req.metadata()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok());
+                a.check_at_or_below(authorization, target_namespace).await
+            }
+            None => Err(tonic::Status::unauthenticated(
+                "authorizer not wired (build/SM bug) — auth is mandatory and cannot be disabled")),
+        }
+    }
+
+    /// Enforce level-or-below using an already-extracted authorization header.
+    /// Used by client-streaming/bidi request adapters where each message carries
+    /// the target namespace but the stream metadata is fixed at open.
+    #[allow(dead_code)]
+    async fn enforce_at_or_below_authorization(&self, authorization: Option<&str>, target_namespace: &str) -> Result<(), tonic::Status> {
+        let auth = self.authorizer.read().await;
+        match *auth {
+            Some(ref a) => a.check_at_or_below(authorization, target_namespace).await,
+            None => Err(tonic::Status::unauthenticated(
+                "authorizer not wired (build/SM bug) — auth is mandatory and cannot be disabled")),
+        }
+    }
+
+    /// Registers the gRPC service with the tonic server
+    pub fn register_services(
+        &self,
+        mut server: tonic::transport::Server,
+    ) -> tonic::transport::server::Router {
+        server.add_service({{.TonicServiceName}}Server::new(self.clone()))
+    }
+}
+
+// gRPC method implementations with validation for ValidationWrapper
+#[tonic::async_trait]
+impl {{.TonicServiceName}} for ValidationWrapper {
+{{.GRPCWrappers}}}
+{{- if .RegisterMethodAuth}}
+
+{{.RegisterMethodAuth}}
+{{- end}}

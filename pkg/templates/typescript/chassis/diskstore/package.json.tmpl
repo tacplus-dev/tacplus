@@ -1,0 +1,33 @@
+{
+  "name": "{{.TsPackagePrefix}}chassis-diskstore",
+  "version": "1.0.0",
+  "description": "Typed disk persistence: atomic snapshots (UC1) and a redo-log WAL with compaction (UC2)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "disk",
+    "persistence",
+    "wal",
+    "snapshot",
+    "protobuf",
+    "typescript"
+  ],
+  "author": "Second Star Cavalier LLC",
+  "license": "PROPRIETARY",
+  "dependencies": {
+    "compressjs": "^1.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.16",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

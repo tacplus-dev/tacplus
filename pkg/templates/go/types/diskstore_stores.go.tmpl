@@ -1,0 +1,110 @@
+{{.Header}}
+
+// Per-service_store typed disk-persistence helpers.
+// UC1 = atomic snapshot (Save/Load); UC2 = redo log (Open/Record/Decode).
+// Serialization goes through the generated ToJSON/FromJSON; validation
+// (always on) runs on read.
+
+package diskstores
+
+import (
+{{- if .AnyRedo}}
+	"encoding/json"
+	"fmt"
+{{- end}}
+
+	diskstore "{{.DiskStoreLibPath}}"
+{{- range .Imports}}
+	{{.Alias}} "{{.Path}}"
+{{- end}}
+)
+{{range .Stores}}
+// Save{{.TypeName}} atomically saves the latest {{.StoreName}} snapshot (UC1).
+func Save{{.TypeName}}(base, ns string, msg *{{.GoType}}, opts diskstore.SnapshotOpts) error {
+	b, err := {{.ToJSON}}(msg)
+	if err != nil {
+		return diskstore.ErrCodec(err.Error())
+	}
+	path := diskstore.StorePath(base, ns, "{{.StoreName}}", ".snapshot")
+	return diskstore.WriteSnapshot(path, b, opts)
+}
+
+// Load{{.TypeName}} loads + validates the {{.StoreName}} snapshot (UC1).
+// The bool is false when the snapshot is absent.
+func Load{{.TypeName}}(base, ns string) (*{{.GoType}}, bool, error) {
+	path := diskstore.StorePath(base, ns, "{{.StoreName}}", ".snapshot")
+	b, ok, err := diskstore.ReadSnapshot(path)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	msg, err := {{.FromJSON}}(b)
+	if err != nil {
+		return nil, false, diskstore.ErrCodec(err.Error())
+	}
+	if err := {{.Validate}}(msg); err != nil {
+		return nil, false, diskstore.ErrValidationFailed(err.Error())
+	}
+	return msg, true, nil
+}
+{{if not .SnapshotOnly}}
+// Open{{.TypeName}}Log opens the {{.StoreName}} redo log for the namespace (UC2).
+func Open{{.TypeName}}Log(base, ns string, archiveCount uint32, codec diskstore.Codec) (*diskstore.RedoLog, error) {
+	return diskstore.OpenRedoLog(base, ns, "{{.StoreName}}", archiveCount, codec)
+}
+
+// Record{{.TypeName}} builds a redo record for a {{.StoreName}} upsert (UC2).
+func Record{{.TypeName}}(msg *{{.GoType}}) (*diskstore.Record, error) {
+	b, err := {{.ToJSON}}(msg)
+	if err != nil {
+		return nil, diskstore.ErrCodec(err.Error())
+	}
+	return &diskstore.Record{
+		Key:     fmt.Sprintf("%v", msg.{{.KeyField}}),
+		Deleted: false,
+		Payload: json.RawMessage(b),
+	}, nil
+}
+
+// Delete{{.TypeName}}Record builds a redo tombstone for a {{.StoreName}} key (UC2).
+func Delete{{.TypeName}}Record(key string) *diskstore.Record {
+	return &diskstore.Record{Key: key, Deleted: true}
+}
+
+// Snapshot{{.TypeName}} builds a deduped redo-log baseline from the current store items.
+func Snapshot{{.TypeName}}(items []*{{.GoType}}) ([]*diskstore.Record, error) {
+	records := make([]*diskstore.Record, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		rec, err := Record{{.TypeName}}(item)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, rec)
+	}
+	return records, nil
+}
+
+// Decode{{.TypeName}} decodes + validates a {{.StoreName}} redo record (UC2).
+// The bool is false for tombstones (deleted records).
+func Decode{{.TypeName}}(rec *diskstore.Record) (*{{.GoType}}, bool, error) {
+	if rec.Deleted {
+		return nil, false, nil
+	}
+	if len(rec.Payload) == 0 {
+		return nil, false, diskstore.ErrInvalidData("record missing payload")
+	}
+	msg, err := {{.FromJSON}}([]byte(rec.Payload))
+	if err != nil {
+		return nil, false, diskstore.ErrCodec(err.Error())
+	}
+	if err := {{.Validate}}(msg); err != nil {
+		return nil, false, diskstore.ErrValidationFailed(err.Error())
+	}
+	return msg, true, nil
+}
+{{end}}{{end}}

@@ -1,0 +1,92 @@
+{{.Header}}
+
+// Per-service_store typed disk-persistence helpers.
+// UC1 = atomic snapshot (save/load); UC2 = redo log (open/record/decode).
+// Serialization goes through the generated to_json/from_json; validation
+// (always on) runs on read.
+
+use std::path::Path;
+{{range .Stores}}
+/// Atomically save the latest {{.StoreName}} snapshot (UC1).
+pub fn save_{{.StoreName}}(
+    base: &Path,
+    ns: &str,
+    msg: &{{.TypePath}},
+    opts: &diskstore::SnapshotOpts,
+) -> diskstore::Result<()> {
+    let bytes = {{.ToJsonPath}}(msg).map_err(|e| diskstore::DiskStoreError::codec(e))?;
+    let path = diskstore::store_path(base, ns, "{{.StoreName}}", ".snapshot");
+    diskstore::write_snapshot(&path, &bytes, opts)
+}
+
+/// Load + validate the {{.StoreName}} snapshot (UC1). None if absent.
+pub fn load_{{.StoreName}}(base: &Path, ns: &str) -> diskstore::Result<Option<{{.TypePath}}>> {
+    let path = diskstore::store_path(base, ns, "{{.StoreName}}", ".snapshot");
+    match diskstore::read_snapshot(&path)? {
+        Some(bytes) => {
+            let msg = {{.FromJsonPath}}(&bytes).map_err(|e| diskstore::DiskStoreError::codec(e))?;
+            msg.validate().map_err(|e| diskstore::DiskStoreError::validation_failed(e))?;
+            Ok(Some(msg))
+        }
+        None => Ok(None),
+    }
+}
+{{if not .SnapshotOnly}}
+/// Open the {{.StoreName}} redo log for the given namespace (UC2).
+pub fn open_{{.StoreName}}_log(
+    base: &Path,
+    ns: &str,
+    archive_count: u32,
+    codec: diskstore::Codec,
+) -> diskstore::Result<diskstore::RedoLog> {
+    diskstore::RedoLog::open(base, ns, "{{.StoreName}}", archive_count, codec)
+}
+
+/// Build a redo record for a {{.StoreName}} upsert (UC2).
+pub fn record_{{.StoreName}}(msg: &{{.TypePath}}) -> diskstore::Result<diskstore::Record> {
+    let bytes = {{.ToJsonPath}}(msg).map_err(|e| diskstore::DiskStoreError::codec(e))?;
+    let payload: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| diskstore::DiskStoreError::codec(e.to_string()))?;
+    Ok(diskstore::Record {
+        key: msg.{{.KeyField}}.clone(),
+        deleted: false,
+        metadata: None,
+        payload: Some(payload),
+    })
+}
+
+/// Build a redo tombstone for a {{.StoreName}} key (UC2).
+pub fn delete_{{.StoreName}}_record(key: String) -> diskstore::Record {
+    diskstore::Record {
+        key,
+        deleted: true,
+        metadata: None,
+        payload: None,
+    }
+}
+
+/// Build a deduped redo-log baseline from the current store items.
+pub fn snapshot_{{.StoreName}}(items: &[{{.TypePath}}]) -> diskstore::Result<Vec<diskstore::Record>> {
+    let mut records = Vec::with_capacity(items.len());
+    for item in items {
+        records.push(record_{{.StoreName}}(item)?);
+    }
+    Ok(records)
+}
+
+/// Decode + validate a {{.StoreName}} redo record (UC2). None for tombstones.
+pub fn decode_{{.StoreName}}(rec: &diskstore::Record) -> diskstore::Result<Option<{{.TypePath}}>> {
+    if rec.deleted {
+        return Ok(None);
+    }
+    let payload = rec
+        .payload
+        .as_ref()
+        .ok_or_else(|| diskstore::DiskStoreError::invalid_data("record missing payload"))?;
+    let bytes =
+        serde_json::to_vec(payload).map_err(|e| diskstore::DiskStoreError::codec(e.to_string()))?;
+    let msg = {{.FromJsonPath}}(&bytes).map_err(|e| diskstore::DiskStoreError::codec(e))?;
+    msg.validate().map_err(|e| diskstore::DiskStoreError::validation_failed(e))?;
+    Ok(Some(msg))
+}
+{{end}}{{end}}

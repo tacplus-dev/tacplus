@@ -1,0 +1,566 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package {{.ChassisBase}}.grpcserver;
+
+import {{.ChassisBase}}.jwk.ImmutableJwk;
+import {{.ChassisBase}}.token.TokenWrapper;
+import {{.PackageBase}}.grants.Grants;
+import {{.TypesBase}}.sys.errors.ProtoException;
+import {{.TypesBase}}.sys.jwk.JwkOuterClass;
+import {{.TypesBase}}.sys.jwkview.JwkVerifyingKeysViewServiceGrpc;
+import {{.TypesBase}}.sys.jwkview.Jwkview;
+import {{.TypesBase}}.generated.entitlements.Entitlements;
+
+import com.google.protobuf.Descriptors;
+import {{.TypesBase}}.sys.trace.Trace;
+import io.grpc.ManagedChannel;
+import io.grpc.stub.StreamObserver;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
+
+import io.grpc.Context;
+import io.grpc.Contexts;
+import io.grpc.Metadata;
+import io.grpc.ServerCall;
+import io.grpc.ServerCallHandler;
+import io.grpc.ServerInterceptor;
+
+// ============================================================================
+// JwkCache
+// ============================================================================
+
+/**
+ * Cache of JWK verifying keys populated by watching the JwkVerifyingKeysViewService.
+ *
+ * <p>Provides key lookup by kid for token signature verification. Can be used
+ * directly for custom auth policies (e.g. gateway proxy).
+ */
+class JwkCache {
+    private static final Logger logger = LoggerFactory.getLogger(JwkCache.class);
+
+    private final ConcurrentHashMap<String, ImmutableJwk> entries = new ConcurrentHashMap<>();
+
+    /** Looks up a JWK by key ID. */
+    public ImmutableJwk get(String kid) {
+        return entries.get(kid);
+    }
+
+    /** Returns whether any keys have been loaded. */
+    public boolean hasKeys() {
+        return !entries.isEmpty();
+    }
+
+    /**
+     * Replaces the cached key set. Invoked by the configured {@link Authorizer.JwkSource}
+     * on every update (this is the {@link Authorizer.JwkSink}).
+     */
+    void apply(Map<String, JwkOuterClass.Jwk> entriesMap) {
+        ConcurrentHashMap<String, ImmutableJwk> newKeys = new ConcurrentHashMap<>();
+        for (Map.Entry<String, JwkOuterClass.Jwk> entry : entriesMap.entrySet()) {
+            try {
+                newKeys.put(entry.getKey(), ImmutableJwk.from(entry.getValue()));
+            } catch (Exception e) {
+                logger.warn("Skipping invalid JWK: kid={}, error={}", entry.getKey(), e.getMessage());
+            }
+        }
+        entries.clear();
+        entries.putAll(newKeys);
+        logger.info("JWK view updated: {} keys", newKeys.size());
+    }
+}
+
+// ============================================================================
+// JwkSource — the ONE injectable: where verifying keys come from.
+// ============================================================================
+
+/**
+ * RemoteJwkSource watches JwkVerifyingKeysViewService over a gRPC
+ * channel. This is the default for every consumer service; the generated
+ * ServiceManager wires it automatically from the state-store ServiceConnection.
+ *
+ * <p>The key authority can instead supply a local Authorizer.JwkSource backed
+ * by its in-process key state.
+ */
+class RemoteJwkSource implements Authorizer.JwkSource {
+    private static final Logger logger = LoggerFactory.getLogger(RemoteJwkSource.class);
+    private final ManagedChannel channel;
+    private volatile boolean active = false;
+
+    RemoteJwkSource(ManagedChannel channel) {
+        this.channel = java.util.Objects.requireNonNull(channel, "channel must not be null");
+    }
+
+    @Override
+    public void start(Authorizer.JwkSink sink) {
+        active = true;
+        watch(JwkVerifyingKeysViewServiceGrpc.newStub(channel), sink);
+    }
+
+    @Override
+    public void stop() {
+        active = false;
+    }
+
+    private void watch(JwkVerifyingKeysViewServiceGrpc.JwkVerifyingKeysViewServiceStub stub,
+            Authorizer.JwkSink sink) {
+        stub.watch(Trace.TraceRequest.getDefaultInstance(), new StreamObserver<Jwkview.JwkViewResponse>() {
+            @Override
+            public void onNext(Jwkview.JwkViewResponse resp) {
+                sink.update(resp.getEntriesMap());
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                if (active) {
+                    logger.warn("JWK view watch error, reconnecting: {}", t.getMessage());
+                    watch(stub, sink);
+                }
+            }
+
+            @Override
+            public void onCompleted() {
+                if (active) {
+                    logger.info("JWK view watch completed, reconnecting");
+                    watch(stub, sink);
+                }
+            }
+        });
+    }
+}
+
+// ============================================================================
+// Authorizer
+// ============================================================================
+
+/**
+ * Authorizer performs token-based authorization for gRPC service requests.
+ *
+ * <p>User tokens carry a service_entitlements claim with compressed grant tokens.
+ * S2S service tokens are authorized via auth_services RE2 patterns.
+ * For custom auth policies, use {@link #getJwkCache()} directly.
+ */
+public class Authorizer {
+    private static final Logger logger = LoggerFactory.getLogger(Authorizer.class);
+
+    /** Context key carrying the Authorization header value from the gRPC interceptor. */
+    public static final Context.Key<String> AUTH_HEADER_CTX_KEY =
+            Context.key("authorization-header");
+
+    private static final Metadata.Key<String> AUTH_METADATA_KEY =
+            Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
+
+    /**
+     * Returns a ServerInterceptor that extracts the Authorization header and
+     * stores it in AUTH_HEADER_CTX_KEY for downstream use by authorize().
+     */
+    public static ServerInterceptor interceptor() {
+        return new ServerInterceptor() {
+            @Override
+            public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
+                    ServerCall<ReqT, RespT> call,
+                    Metadata headers,
+                    ServerCallHandler<ReqT, RespT> next) {
+                String authHeader = headers.get(AUTH_METADATA_KEY);
+                Context ctx = Context.current().withValue(AUTH_HEADER_CTX_KEY, authHeader);
+                return Contexts.interceptCall(ctx, call, headers, next);
+            }
+        };
+    }
+
+    /**
+     * Returns a ServerInterceptor that verifies token signature and audience
+     * on every incoming call. Used to wrap additionalServices() so that
+     * hand-registered gRPC services get mandatory auth without needing to
+     * call authorize() in their handler code. Fail-closed: missing or
+     * invalid tokens are rejected; only tokens with the correct service
+     * audience are allowed through.
+     */
+    public ServerInterceptor enforcingInterceptor() {
+        return new ServerInterceptor() {
+            @Override
+            public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
+                    ServerCall<ReqT, RespT> call,
+                    Metadata headers,
+                    ServerCallHandler<ReqT, RespT> next) {
+                String authHeader = headers.get(AUTH_METADATA_KEY);
+                try {
+                    authenticateWithToken(authHeader);
+                } catch (ProtoException e) {
+                    io.grpc.Status status = io.grpc.Status.fromCodeValue(e.getCode())
+                            .withDescription(e.getMessage());
+                    call.close(status, new Metadata());
+                    return new ServerCall.Listener<>() {};
+                }
+                Context ctx = Context.current().withValue(AUTH_HEADER_CTX_KEY, authHeader);
+                return Contexts.interceptCall(ctx, call, headers, next);
+            }
+        };
+    }
+
+    /** Receives JWK map updates from a {@link JwkSource}. */
+    @FunctionalInterface
+    public interface JwkSink {
+        void update(Map<String, JwkOuterClass.Jwk> entries);
+    }
+
+    /**
+     * The sole runtime-injected auth dependency: the source of verifying keys.
+     * Implementations push the current key set to the sink (and on every rotation).
+     * tacplus provides {@code RemoteJwkSource} (watch over a channel) as the
+     * default; the key authority can supply a local implementation.
+     */
+    public interface JwkSource {
+        /** Begin feeding keys to the sink. Called once at Authorizer construction. */
+        void start(JwkSink sink);
+        /** Stop feeding. */
+        default void stop() {}
+    }
+
+    /** Builds the default {@link JwkSource}: watch the JWK view over a channel. */
+    public static JwkSource remoteSource(ManagedChannel channel) {
+        return new RemoteJwkSource(channel);
+    }
+
+    // Package-private so the same-package AuthorizerBehaviorTest can mint tokens
+    // with the audience the verify path actually checks.
+    static final String SERVICE_NAME = "{{.ServiceLabel}}";
+    private final JwkCache jwkCache;
+    private final JwkSource jwkSource;
+    private final ConcurrentHashMap<String, List<Pattern>> methodAuthPatterns = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, String> methodTargetNamespaceField = new ConcurrentHashMap<>();
+
+    /**
+     * Creates an Authorizer that verifies tokens via the given key source.
+     * Auth is mandatory: {@code source} must not be null.
+     *
+     * <p>SPIFFE identities are self-describing (the trust domain is the URI
+     * authority), so no deployment prefix is configured: service-path extraction
+     * and namespace checks go through the generated token wrapper and
+     * sys/spiffe helpers.
+     *
+     * @param source the verifying-key source (REMOTE for consumers, LOCAL for the authority)
+     */
+    public Authorizer(JwkSource source) {
+        this.jwkCache = new JwkCache();
+        this.jwkSource = java.util.Objects.requireNonNull(source,
+                "JwkSource is required — auth is mandatory and cannot be disabled");
+        this.jwkSource.start(jwkCache::apply);
+        logger.info("Token-based authorization initialized: service={}", SERVICE_NAME);
+    }
+
+    /**
+     * Creates an Authorizer with an explicit empty key source (verifies nothing —
+     * for tests only). This is an explicit, visible no-key source, never a silent bypass.
+     */
+    public static Authorizer create() {
+        logger.info("Token-based authorization enabled (test mode: empty key source)");
+        return new Authorizer(sink -> { });
+    }
+
+    /**
+     * Registers allowed caller patterns for a method. Patterns are RE2 regexes
+     * matched against the LOCATION-AGNOSTIC service path from
+     * {@code TokenWrapper.servicePath()}. "*" is shorthand for "match any caller".
+     */
+    public void setMethodAuth(String methodName, List<String> patterns) {
+        if (patterns == null || patterns.isEmpty()) return;
+        List<Pattern> compiled = new ArrayList<>();
+        for (String p : patterns) {
+            if ("*".equals(p)) {
+                compiled.add(Pattern.compile(".*"));
+            } else {
+                compiled.add(Pattern.compile(p));
+            }
+        }
+        methodAuthPatterns.put(methodName, compiled);
+    }
+
+    /**
+     * Registers the request field name carrying the target namespace path for a method.
+     * When set, authorize() enforces the level-or-below rule: caller's namespace claim must
+     * equal or be a strict path-segment ancestor of the value of fieldName on the request.
+     */
+    public void setMethodTargetNamespaceField(String methodName, String fieldName) {
+        if (fieldName == null || fieldName.isEmpty()) return;
+        methodTargetNamespaceField.put(methodName, fieldName);
+    }
+
+    /**
+     * Enforces the level-or-below rule for methods annotated with target_namespace_field.
+     * The request field named by the annotation must contain a namespace-path string at or
+     * below the caller's namespace.
+     */
+    private void checkTargetNamespace(String methodName, String callerNamespace, Object request) throws ProtoException {
+        String fieldName = methodTargetNamespaceField.get(methodName);
+        if (fieldName == null || fieldName.isEmpty()) return;
+        if (!(request instanceof com.google.protobuf.MessageOrBuilder)) {
+            throw ProtoException.newErrPermissionDenied(null,
+                    "target_namespace_field configured but request is not a proto message for \"" + methodName + "\"");
+        }
+        com.google.protobuf.MessageOrBuilder msg = (com.google.protobuf.MessageOrBuilder) request;
+        Descriptors.FieldDescriptor fd = msg.getDescriptorForType().findFieldByName(fieldName);
+        if (fd == null) {
+            throw ProtoException.newErrPermissionDenied(null,
+                    "target_namespace_field \"" + fieldName + "\" not found on request for \"" + methodName + "\"");
+        }
+        if (fd.getType() != Descriptors.FieldDescriptor.Type.STRING) {
+            throw ProtoException.newErrPermissionDenied(null,
+                    "target_namespace_field \"" + fieldName + "\" is not a string field for \"" + methodName + "\"");
+        }
+        String target = (String) msg.getField(fd);
+        if (target == null || target.isEmpty()) {
+            throw ProtoException.newErrPermissionDenied(null,
+                    "target namespace field \"" + fieldName + "\" is empty");
+        }
+        if (!Spiffe.isAtOrBelow(callerNamespace, target)) {
+            throw ProtoException.newErrPermissionDenied(null,
+                    "caller namespace \"" + callerNamespace + "\" is not at-or-above target \"" + target + "\"");
+        }
+    }
+
+    /** Returns the JWK cache for direct key access. */
+    public JwkCache getJwkCache() {
+        return jwkCache;
+    }
+
+    /**
+     * Authorizes a request using the auth header from gRPC Context.
+     * Requires the Authorizer.interceptor() to be installed on the gRPC server.
+     */
+    public void authorize(String fullMethod, Object request) throws ProtoException {
+        // Always enforce: authorizeWithToken throws on a null/empty header. A missing
+        // token must be rejected, never silently allowed. Methods that legitimately
+        // need no token are auth_disabled by annotation and never call this.
+        authorizeWithToken(AUTH_HEADER_CTX_KEY.get(), fullMethod, request);
+    }
+
+    /**
+     * Authorizes a request using the authorization header value (back-compat — no request body).
+     * Use {@link #authorizeWithToken(String, String, Object)} for level-or-below enforcement.
+     */
+    public void authorizeWithToken(String authHeader, String fullMethod) throws ProtoException {
+        authorizeWithToken(authHeader, fullMethod, null);
+    }
+
+    /**
+     * Authorizes a request using the authorization header value.
+     *
+     * @param authHeader the raw Authorization header value (e.g. "Bearer eyJ...")
+     * @param fullMethod the full gRPC method name
+     * @throws ProtoException if authorization fails
+     */
+    public void authorizeWithToken(String authHeader, String fullMethod, Object request) throws ProtoException {
+        TokenWrapper tw = verifyBearer(authHeader);
+
+        // S2S path: service/workload tokens carry structured identity claims
+        // (sub_type, sub, service_name). Authorization is receiver-side via
+        // auth_services RE2 patterns on the LOCATION-AGNOSTIC service path from
+        // tw.servicePath() — the same service matches identically across
+        // clouds/accounts/AZs/clusters; raw sub/namespace are never matched directly.
+        String subType = tw.getSubType();
+        if ("service".equals(subType) || "workload".equals(subType)) {
+            String methodName = extractMethodName(fullMethod);
+            String servicePath;
+            try {
+                servicePath = tw.servicePath();
+            } catch (Exception e) {
+                throw ProtoException.newErrUnauthorized(null, e.getMessage());
+            }
+
+            List<Pattern> allowed = methodAuthPatterns.get(methodName);
+            if (allowed == null) {
+                throw ProtoException.newErrPermissionDenied(null,
+                        "no auth_services policy configured for service caller \"" + servicePath + "\" on \"" + methodName + "\"");
+            }
+            boolean matched = false;
+            for (Pattern p : allowed) {
+                if (p.matcher(servicePath).matches()) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                throw ProtoException.newErrPermissionDenied(null,
+                        "service \"" + servicePath + "\" not authorized for \"" + methodName + "\"");
+            }
+
+            // Level-or-below check (applies to S2S when target_namespace_field is set).
+            checkTargetNamespace(methodName, tw.getNamespace(), request);
+            return;
+        }
+
+        // C2S path: user tokens carry service_entitlements.
+        String methodName = extractMethodName(fullMethod);
+
+        Entitlements.TokenEntitlements te = tw.getServiceEntitlements();
+        if (te == null) {
+            throw ProtoException.newErrPermissionDenied(null, "token missing service_entitlements claim");
+        }
+        if (!serviceEntitlementsGrantRPC(te, SERVICE_NAME, fullMethod)) {
+            throw ProtoException.newErrPermissionDenied(null,
+                    "method \"" + methodName + "\" not in service_entitlements for service \"" + SERVICE_NAME + "\"");
+        }
+
+        // Level-or-below check: caller's namespace must be at or above the target namespace
+        // named by the method's target_namespace_field annotation.
+        checkTargetNamespace(methodName, tw.getNamespace(), request);
+    }
+
+    /**
+     * Authenticates a request by verifying token signature and audience only.
+     * Does NOT check entitlements. Used for auth_any_user services.
+     *
+     * @param authHeader the raw Authorization header value (e.g. "Bearer eyJ...")
+     * @throws ProtoException if authentication fails
+     */
+    public void authenticateWithToken(String authHeader) throws ProtoException {
+        verifyBearer(authHeader);
+        // auth_any_user: token is valid and correctly scoped — allow.
+    }
+
+    /**
+     * Authenticates a request and enforces the universal namespace rule against
+     * a fixed target namespace. Empty targetNamespace defaults to root ("/").
+     */
+    public void authenticateAtOrBelowWithToken(String authHeader, String targetNamespace) throws ProtoException {
+        TokenWrapper tw = verifyBearer(authHeader);
+        String target = (targetNamespace == null || targetNamespace.isEmpty()) ? "/" : targetNamespace;
+        if (!Spiffe.isAtOrBelow(tw.getNamespace(), target)) {
+            throw ProtoException.newErrPermissionDenied(null,
+                    "caller namespace \"" + tw.getNamespace() + "\" is not at-or-above target \"" + target + "\"");
+        }
+    }
+
+    private TokenWrapper verifyBearer(String authHeader) throws ProtoException {
+        if (authHeader == null || authHeader.isEmpty()) {
+            throw ProtoException.newErrUnauthorized(null,"missing authorization header");
+        }
+
+        String tokenStr = authHeader;
+        if (tokenStr.regionMatches(true, 0, "bearer ", 0, 7)) {
+            tokenStr = tokenStr.substring(7);
+        }
+
+        TokenWrapper tw;
+        try {
+            tw = TokenWrapper.parse(tokenStr);
+        } catch (Exception e) {
+            throw ProtoException.newErrUnauthorized(null,"invalid token: " + e.getMessage());
+        }
+
+        String kid = tw.getKid();
+        if (kid == null || kid.isEmpty()) {
+            throw ProtoException.newErrUnauthorized(null, "token missing key ID (kid)");
+        }
+
+        ImmutableJwk jwk = jwkCache.get(kid);
+        if (jwk == null) {
+            throw ProtoException.newErrUnauthorized(null, "unknown signing key: " + kid);
+        }
+
+        try {
+            tw.verify(jwk);
+        } catch (Exception e) {
+            throw ProtoException.newErrUnauthorized(null,"token verification failed: " + e.getMessage());
+        }
+
+        rejectApiTokenClass(tw);
+
+        String aud = tw.getAudience();
+        if (!SERVICE_NAME.equals(aud)) {
+            throw ProtoException.newErrPermissionDenied(null,
+                    "token audience \"" + aud + "\" does not match service \"" + SERVICE_NAME + "\"");
+        }
+
+        return tw;
+    }
+
+    private static void rejectApiTokenClass(TokenWrapper tw) throws ProtoException {
+        // Reject refresh tokens — they should only be exchanged at the Mint endpoint.
+        String tokenUse = tw.getTokenUse();
+        if ("refresh".equals(tokenUse) || (tokenUse.isEmpty() && "refresh".equals(tw.getCustomField("typ")))) {
+            throw ProtoException.newErrUnauthorized(null, "refresh tokens cannot be used for API access");
+        }
+
+        // Reject bootstrap, locality, and external tokens. External tokens are minted
+        // by the token authority for upstream services and must never be accepted internally.
+        if ("bootstrap".equals(tokenUse) || "locality".equals(tokenUse) || "external".equals(tokenUse)) {
+            throw ProtoException.newErrUnauthorized(null, tokenUse + " tokens cannot be used for API access");
+        }
+    }
+
+    /**
+     * Checks whether a TokenEntitlements message grants access to the given RPC method
+     * on the given service. Grant tokens are normalized through the generated Grants helper.
+     */
+    public static boolean serviceEntitlementsGrantRPC(Entitlements.TokenEntitlements te, String serviceName, String fullMethod) {
+        String required = methodGrantToken(serviceName, fullMethod);
+        List<String> raw = new ArrayList<>();
+        for (String grant : te.getGrantsList()) {
+            raw.add(grant);
+        }
+        List<String> unknownGrants = Grants.unknownTokens(raw);
+        if (!unknownGrants.isEmpty()) {
+            logger.warn(
+                    "dropping unknown service_entitlements grant(s); token grants remain fail-closed service={} required_grant={} unknown_grants={}",
+                    serviceName, required, unknownGrants);
+        }
+        for (String token : Grants.normalize(raw)) {
+            if (token.equals(required)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static String methodGrantToken(String fallbackService, String fullMethod) {
+        String serviceFqn = "";
+        String method = fullMethod;
+        int slash = fullMethod.lastIndexOf('/');
+        if (slash >= 0) {
+            serviceFqn = fullMethod.substring(0, slash);
+            if (serviceFqn.startsWith("/")) {
+                serviceFqn = serviceFqn.substring(1);
+            }
+            int serviceSlash = serviceFqn.lastIndexOf('/');
+            if (serviceSlash >= 0) {
+                serviceFqn = serviceFqn.substring(serviceSlash + 1);
+            }
+            method = fullMethod.substring(slash + 1);
+        }
+        String pkg = fallbackService;
+        String service = fallbackService;
+        if (!serviceFqn.isEmpty()) {
+            service = serviceFqn;
+            int dot = serviceFqn.lastIndexOf('.');
+            if (dot >= 0) {
+                pkg = serviceFqn.substring(0, dot);
+                service = serviceFqn.substring(dot + 1);
+            }
+        }
+        return grantTokenPart(pkg) + "_" + grantTokenPart(service) + "_" + grantTokenPart(method);
+    }
+
+    static String grantTokenPart(String value) {
+        String s = value.replace('-', '_').replace('.', '_').replace('/', '_');
+        s = s.replaceAll("([A-Z]+)([A-Z][a-z])", "$1_$2");
+        s = s.replaceAll("([a-z0-9])([A-Z])", "$1_$2");
+        return s.toUpperCase(Locale.ROOT);
+    }
+
+    public void close() {
+        jwkSource.stop();
+    }
+
+    private static String extractMethodName(String fullMethod) {
+        int i = fullMethod.lastIndexOf('/');
+        return i >= 0 ? fullMethod.substring(i + 1) : fullMethod;
+    }
+}

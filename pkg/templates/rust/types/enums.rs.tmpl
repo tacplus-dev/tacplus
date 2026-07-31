@@ -1,0 +1,86 @@
+{{- /* Rust enum helpers template */ -}}
+impl FromStr for {{.EnumName}} {
+type Err = String;
+fn from_str(s: &str) -> Result<Self, Self::Err> {
+let normalized = s.to_lowercase().replace('_', "-");
+match normalized.as_str() {
+{{- range .ValidValues}}
+{{quote .LowerName}} => Ok({{$.EnumName}}::{{.VariantName}}),
+{{- if .HasJsonAlias}}
+{{quote .JsonAlias}} => Ok({{$.EnumName}}::{{.VariantName}}),
+{{- end}}
+{{- end}}
+_ => Err(format!("Invalid {}: {}, valid values are: {}",
+stringify!({{.EnumName}}), s, Self::valid_values().join(", ")))
+}
+}
+}
+impl fmt::Display for {{.EnumName}} {
+fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+let s = match self {
+{{- range .ValidValues}}
+{{$.EnumName}}::{{.VariantName}} => {{quote .DisplayName}},
+{{- end}}
+{{- if .HasSentinels}}
+_ => "undefined",
+{{- end}}
+};
+write!(f, "{}", s)
+}
+}
+impl {{.EnumName}} {
+/// Returns all valid enum values as strings
+pub fn valid_values() -> Vec<&'static str> {
+vec![
+{{- range .ValidValues}}
+{{quote .LowerName}},
+{{- end}}
+]
+}
+/// Parses comma-separated string into Vec of enum values
+pub fn parse_multiple(s: &str) -> Result<Vec<Self>, String> {
+s.split(',')
+.map(|part| part.trim())
+.filter(|part| !part.is_empty())
+.map(|part| Self::from_str(part))
+.collect()
+}
+/// Parses a string liberally, accepting:
+/// - Integer values (as string)
+/// - Enum names in any case (with _ or - separators)
+/// - Canonical proto names (e.g., "LEVEL_DEBUG")
+/// Returns default variant for empty or unrecognized input.
+pub fn parse_liberal(s: &str) -> Self {
+if s.is_empty() {
+return Self::default();
+}
+if let Ok(num) = s.parse::<i32>() {
+return Self::try_from(num).unwrap_or_default();
+}
+if let Some(v) = Self::from_str_name(s) {
+return v;
+}
+Self::from_str(s).unwrap_or_default()
+}
+/// Parses a string to the i32 representation used by prost.
+/// Accepts enum names, proto names, and integer values.
+pub fn parse_i32(s: &str) -> Result<i32, String> {
+if s.is_empty() {
+return Ok(0);
+}
+if let Ok(num) = s.parse::<i32>() {
+return Ok(num);
+}
+if let Some(v) = Self::from_str_name(s) {
+return Ok(v as i32);
+}
+Self::from_str(s).map(|v| v as i32)
+}
+/// Converts an i32 prost enum value to its string representation.
+pub fn to_string_value(v: i32) -> String {
+match Self::try_from(v) {
+Ok(e) => format!("{}", e),
+Err(_) => format!("{}", v),
+}
+}
+}

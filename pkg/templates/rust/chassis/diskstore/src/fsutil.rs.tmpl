@@ -1,0 +1,137 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Atomic file write + numbered archive rotation, shared by the snapshot (UC1)
+//! and the redo-log roll (UC2).
+//!
+//! Atomicity model: build a fresh sibling temp file, fsync it, then `rename`
+//! it over the target. `rename(2)` is atomic on a POSIX filesystem, so the
+//! target is never observed half-written.
+
+use crate::error::{DiskStoreError, Result};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+/// Write `data` to a fresh sibling temp file (fsync'd, mode applied) and return
+/// its path. The temp is in the same directory as `path` so the later
+/// `promote` rename stays on one filesystem (and is therefore atomic).
+pub fn write_temp(path: &Path, data: &[u8], mode: u32) -> Result<PathBuf> {
+    let dir = path.parent().ok_or_else(|| {
+        DiskStoreError::invalid_data(format!("path has no parent: {}", path.display()))
+    })?;
+    fs::create_dir_all(dir)?;
+    let tmp = sibling(path, &format!(".tmp.{}", std::process::id()));
+    {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+        #[cfg(unix)]
+        if mode != 0 {
+            f.set_permissions(fs::Permissions::from_mode(mode))?;
+        }
+    }
+    let _ = mode; // silence unused on non-unix
+    Ok(tmp)
+}
+
+/// Atomically move `tmp` onto `path` (the commit point), then fsync the parent
+/// directory so the rename is durable.
+pub fn promote(tmp: &Path, path: &Path) -> Result<()> {
+    fs::rename(tmp, path)?;
+    if let Some(dir) = path.parent() {
+        sync_dir(dir);
+    }
+    Ok(())
+}
+
+/// Convenience: [`write_temp`] + [`promote`] for callers that don't archive.
+pub fn atomic_write(path: &Path, data: &[u8], mode: u32) -> Result<()> {
+    let tmp = write_temp(path, data, mode)?;
+    promote(&tmp, path)
+}
+
+/// Rotate numbered archives, then move the current `path` to `<path>.bak.1`,
+/// retaining `count` archives. `count == 0` simply removes `path`.
+///
+/// Leaves `path` absent on return; the caller is expected to immediately
+/// `promote` a freshly written temp into `path`.
+/// Rotates the numbered archives, then LINKS the current path to
+/// `<path>.bak.1` (retaining `count` archives) — path itself stays in place,
+/// so the caller's atomic rename-over of a fresh temp is the only mutation of
+/// the active file. The active snapshot is therefore NEVER absent: the old
+/// rotate-then-promote order left a crash window in which path was gone and
+/// recovery silently started fresh (PC-L-5). Falls back to a copy on
+/// filesystems without hard links. `count == 0` keeps no archives.
+pub fn archive_active(path: &Path, count: u32) -> Result<()> {
+    if count == 0 {
+        return Ok(());
+    }
+    let _ = fs::remove_file(archive_name(path, count));
+    for k in (1..count).rev() {
+        let from = archive_name(path, k);
+        if from.exists() {
+            fs::rename(&from, archive_name(path, k + 1))?;
+        }
+    }
+    if path.exists() {
+        let bak = archive_name(path, 1);
+        let _ = fs::remove_file(&bak);
+        if fs::hard_link(path, &bak).is_err() {
+            // Filesystem without hard links: copy instead (window still closed).
+            fs::copy(path, &bak)?;
+        }
+    }
+    if let Some(dir) = path.parent() {
+        sync_dir(dir);
+    }
+    Ok(())
+}
+
+pub fn rotate_archives(path: &Path, count: u32) -> Result<()> {
+    let dir = path.parent().map(|p| p.to_path_buf());
+    if count == 0 {
+        let _ = fs::remove_file(path);
+        if let Some(dir) = dir.as_deref() {
+            sync_dir(dir);
+        }
+        return Ok(());
+    }
+    // Drop the oldest, then shift each archive up by one.
+    let _ = fs::remove_file(archive_name(path, count));
+    for k in (1..count).rev() {
+        let from = archive_name(path, k);
+        if from.exists() {
+            fs::rename(&from, archive_name(path, k + 1))?;
+        }
+    }
+    if path.exists() {
+        fs::rename(path, archive_name(path, 1))?;
+    }
+    if let Some(dir) = dir.as_deref() {
+        sync_dir(dir);
+    }
+    Ok(())
+}
+
+pub(crate) fn archive_name(path: &Path, n: u32) -> PathBuf {
+    sibling(path, &format!(".bak.{}", n))
+}
+
+fn sibling(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+#[cfg(unix)]
+fn sync_dir(dir: &Path) {
+    if let Ok(d) = fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) {}

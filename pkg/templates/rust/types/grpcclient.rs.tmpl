@@ -1,0 +1,115 @@
+{{.Header}}
+
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::{sleep, timeout};
+use servicemanager::ChannelProvider;
+{{.ServiceImports}}
+{{.CrossPackageImports}}
+
+/// A token provider returns a bearer token string for authenticated gRPC calls.
+/// Methods that require authentication require a token provider and include an
+/// `Authorization: Bearer {token}` header.
+pub type TokenProvider = Arc<
+    dyn Fn() -> Pin<Box<dyn Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// {{.ClientName}} provides a typed gRPC client for {{.ServiceName}}.
+///
+/// Wraps a ChannelProvider that resolves the active connection for the target
+/// service on each call.
+#[allow(dead_code)]
+pub struct {{.ClientName}} {
+    channel_provider: ChannelProvider,
+    token_provider: Option<TokenProvider>,
+    timeout: Duration,
+    max_retries: usize,
+    retry_backoff: Duration,
+}
+
+impl {{.ClientName}} {
+    /// Creates a new typed gRPC client for {{.ServiceName}}.
+    /// The channel_provider resolves the target service's active endpoint on each call.
+    /// Authenticated methods require token_provider to return a non-empty Bearer token.
+    pub fn new(channel_provider: ChannelProvider, token_provider: Option<TokenProvider>) -> Self {
+        Self {
+            channel_provider,
+            token_provider,
+            timeout: Duration::from_secs(30),
+            max_retries: 2,
+            retry_backoff: Duration::from_millis(100),
+        }
+    }
+
+    /// Returns a copy of this client with a custom per-call outbound timeout.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Returns a copy of this client with bounded retry/backoff for retry-safe
+    /// unary reads. Mutating or semantically ambiguous unary RPCs still make
+    /// one attempt.
+    pub fn with_retry(mut self, max_retries: usize, retry_backoff: Duration) -> Self {
+        self.max_retries = max_retries;
+        self.retry_backoff = retry_backoff;
+        self
+    }
+
+    fn apply_outbound_timeout<T>(&self, req: &mut tonic::Request<T>) {
+        if !self.timeout.is_zero() {
+            req.set_timeout(self.timeout);
+        }
+    }
+
+    fn should_retry_outbound(status: &tonic::Status) -> bool {
+        matches!(
+            status.code(),
+            tonic::Code::Unavailable | tonic::Code::ResourceExhausted | tonic::Code::DeadlineExceeded
+        )
+    }
+
+    fn outbound_backoff(&self, attempt: usize) -> Duration {
+        let mut backoff = if self.retry_backoff.is_zero() {
+            Duration::from_millis(100)
+        } else {
+            self.retry_backoff
+        };
+        for _ in 0..attempt {
+            backoff = std::cmp::min(backoff * 2, Duration::from_secs(2));
+        }
+        backoff
+    }
+
+    async fn unary_with_retry<T, F, Fut>(&self, retry_safe: bool, mut op: F) -> Result<T, tonic::Status>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, tonic::Status>>,
+    {
+        let max_retries = if retry_safe { self.max_retries } else { 0 };
+        for attempt in 0..=max_retries {
+            let result = if self.timeout.is_zero() {
+                op().await
+            } else {
+                timeout(self.timeout, op())
+                    .await
+                    .map_err(|_| tonic::Status::deadline_exceeded("outbound unary call timed out"))?
+            };
+            match result {
+                Ok(value) => return Ok(value),
+                Err(status) if attempt < max_retries && Self::should_retry_outbound(&status) => {
+                    sleep(self.outbound_backoff(attempt)).await;
+                }
+                Err(status) => return Err(status),
+            }
+        }
+        Err(tonic::Status::unknown("unreachable retry state"))
+    }
+
+{{.Methods}}
+}
+{{.ExtraTypes}}

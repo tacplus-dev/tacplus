@@ -1,0 +1,553 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+/**
+ * Authorizer performs token-based authorization for gRPC service requests.
+ *
+ * Token signatures are verified against JWKs published by TokenExchanger.
+ * User tokens carry a service_entitlements claim with compressed grant tokens.
+ * S2S service tokens are authorized via auth_services RE2 patterns.
+ */
+
+import { TokenWrapper } from '../token/index.js';
+import { ImmutableJwk } from '../jwk/index.js';
+import {
+  parseSpiffeId,
+  isAtOrBelow as namespaceIsAtOrBelow,
+} from '../spiffe/index.js';
+import type { ParsedSpiffeId } from '../spiffe/index.js';
+import * as grpc from '@grpc/grpc-js';
+import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
+import { TraceRequestSchema } from '../../types/sys/trace/index.js';
+import { JwkViewResponseSchema } from '../../types/sys/jwkview/index.js';
+import { normalize as normalizeGrants } from '../../grants/grants.js';
+
+export class AuthError extends Error {
+  readonly code: number;
+
+  constructor(code: number, message: string) {
+    super(message);
+    this.name = 'AuthError';
+    this.code = code;
+  }
+
+  static unauthenticated(message: string): AuthError {
+    return new AuthError(grpc.status.UNAUTHENTICATED, message);
+  }
+
+  static permissionDenied(message: string): AuthError {
+    return new AuthError(grpc.status.PERMISSION_DENIED, message);
+  }
+}
+
+// ============================================================================
+// JwkCache
+// ============================================================================
+
+/** Cache of JWK verifying keys populated by watching the JwkVerifyingKeysViewService. */
+export class JwkCache {
+  private entries: Map<string, ImmutableJwk> = new Map();
+  private watching = false;
+  private currentStream: grpc.ClientReadableStream<any> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
+  private readonly maxReconnectBackoffMs = 30000;
+
+  /** Looks up a JWK by key ID. */
+  get(kid: string): ImmutableJwk | undefined {
+    return this.entries.get(kid);
+  }
+
+  /** Returns whether any keys have been loaded. */
+  hasKeys(): boolean {
+    return this.entries.size > 0;
+  }
+
+  /** Returns the number of cached keys. */
+  get keyCount(): number {
+    return this.entries.size;
+  }
+
+  /** Starts watching JWK view updates from the given client. */
+  startWatch(client: any): void {
+    if (this.watching) {
+      return;
+    }
+    this.watching = true;
+    this._watchJwkView(client);
+  }
+
+  /** Stops watching. */
+  stopWatch(): void {
+    this.watching = false;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.currentStream?.cancel();
+    this.currentStream = null;
+  }
+
+  private reconnectDelayMs(): number {
+    const capped = Math.max(0, Math.min(this.reconnectAttempt, 5));
+    const base = Math.min(this.maxReconnectBackoffMs, 1000 * (2 ** capped));
+    this.reconnectAttempt += 1;
+    const jitter = Math.floor(Math.random() * Math.max(1, base / 5));
+    return Math.min(this.maxReconnectBackoffMs, base + jitter);
+  }
+
+  private scheduleReconnect(client: any, reason: string, err?: any): void {
+    if (!this.watching || this.reconnectTimer !== null) {
+      return;
+    }
+    const delay = this.reconnectDelayMs();
+    if (err) {
+      console.warn(`JWK watch ${reason}, reconnecting in ${delay}ms:`, err);
+    } else {
+      console.warn(`JWK watch ${reason}, reconnecting in ${delay}ms`);
+    }
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.watching) {
+        this._watchJwkView(client);
+      }
+    }, delay);
+  }
+
+  private _watchJwkView(client: any): void {
+    try {
+      this.currentStream?.cancel();
+      const request = create(TraceRequestSchema, {});
+      const stream = client.makeServerStreamRequest(
+        '/jwkview.JwkVerifyingKeysViewService/Watch',
+        (msg: any) => Buffer.from(toBinary(TraceRequestSchema, msg)),
+        (buf: Buffer) => fromBinary(JwkViewResponseSchema, new Uint8Array(buf)),
+        request,
+      ) as grpc.ClientReadableStream<any>;
+      this.currentStream = stream;
+      stream.on('data', async (resp: any) => {
+        this.reconnectAttempt = 0;
+        const newEntries = new Map<string, ImmutableJwk>();
+        const entries = resp.entries || {};
+        for (const [kid, jwkProto] of Object.entries(entries)) {
+          try {
+            const immJwk = await ImmutableJwk.create(jwkProto as any);
+            newEntries.set(kid, immJwk);
+          } catch (e) {
+            console.warn('Skipping invalid JWK kid=' + kid + ':', e);
+          }
+        }
+        this.entries = newEntries;
+      });
+      stream.on('error', (err: any) => {
+        if (this.currentStream === stream) {
+          this.currentStream = null;
+        }
+        this.scheduleReconnect(client, 'stream error', err);
+      });
+      stream.on('end', () => {
+        if (this.currentStream === stream) {
+          this.currentStream = null;
+        }
+        this.scheduleReconnect(client, 'stream ended');
+      });
+    } catch (err) {
+      if (this.currentStream !== null) {
+        this.currentStream = null;
+      }
+      this.scheduleReconnect(client, 'failed to start', err);
+    }
+  }
+}
+
+// ============================================================================
+// Authorizer
+// ============================================================================
+
+export class Authorizer {
+  private static readonly SERVICE_NAME = "{{.ServiceLabel}}";
+  private _jwkCache: JwkCache;
+  private _methodAuthPatterns: Map<string, RegExp[]>;
+  private _methodTargetNamespaceFields: Map<string, string>;
+
+  /**
+   * Creates an Authorizer that verifies tokens via JWK view.
+   *
+   * SPIFFE identities are self-describing (the trust domain is the URI
+   * authority), so no deployment prefix is configured: service-path extraction
+   * and namespace checks go through the generated token wrapper and
+   * sys/spiffe helpers.
+   *
+   * @param jwkClient optional gRPC client connected to the JWK view service
+   */
+  constructor(jwkClient?: any) {
+    this._jwkCache = new JwkCache();
+    this._methodAuthPatterns = new Map();
+    this._methodTargetNamespaceFields = new Map();
+
+    if (jwkClient) {
+      this._jwkCache.startWatch(jwkClient);
+    }
+  }
+
+  /** Returns the JWK cache for direct key access. */
+  jwkCache(): JwkCache {
+    return this._jwkCache;
+  }
+
+  /** Registers allowed caller patterns for a method. "*" matches any service caller. */
+  setMethodAuth(methodName: string, patterns: string[]): void {
+    if (patterns.length === 0) return;
+    this._methodAuthPatterns.set(
+      methodName,
+      patterns.map((p) => new RegExp(p === '*' ? '.*' : `^${p}$`)),
+    );
+  }
+
+  /** Registers the request field carrying the target namespace for a method. */
+  setMethodTargetNamespaceField(methodName: string, fieldName: string): void {
+    if (!fieldName) return;
+    this._methodTargetNamespaceFields.set(methodName, fieldName);
+  }
+
+  private checkTargetNamespace(methodName: string, callerNamespace: string, request?: unknown): void {
+    const fieldName = this._methodTargetNamespaceFields.get(methodName);
+    if (!fieldName) return;
+    if (request === null || typeof request !== 'object') {
+      throw AuthError.permissionDenied(`target_namespace_field configured but request is not an object for "${methodName}"`);
+    }
+    const target = readStringField(request as Record<string, unknown>, fieldName);
+    if (target === undefined) {
+      throw AuthError.permissionDenied(`target_namespace_field "${fieldName}" not found on request for "${methodName}"`);
+    }
+    if (typeof target !== 'string') {
+      throw AuthError.permissionDenied(`target_namespace_field "${fieldName}" is not a string field for "${methodName}"`);
+    }
+    if (target === '') {
+      throw AuthError.permissionDenied(`target namespace field "${fieldName}" is empty`);
+    }
+    if (!isAtOrBelow(callerNamespace, target)) {
+      throw AuthError.permissionDenied(`caller namespace "${callerNamespace}" is not at-or-above target "${target}"`);
+    }
+  }
+
+  /**
+   * Authorizes a request by verifying the token signature, audience, and
+   * service_entitlements claim.
+   */
+  async authorize(metadata: Record<string, string>, fullMethod: string, request?: unknown): Promise<void> {
+    const authHeader = metadata['authorization'] || '';
+    if (!authHeader) {
+      throw AuthError.unauthenticated('missing authorization header');
+    }
+
+    let tokenStr = authHeader;
+    if (tokenStr.toLowerCase().startsWith('bearer ')) {
+      tokenStr = tokenStr.substring(7);
+    }
+
+    // Parse and verify token
+    let tw: TokenWrapper;
+    try {
+      tw = TokenWrapper.parse(tokenStr);
+    } catch (err) {
+      throw AuthError.unauthenticated(`invalid token: ${errorMessage(err)}`);
+    }
+
+    const kid = tw.getKid();
+    if (!kid) {
+      throw AuthError.unauthenticated('token missing key ID (kid)');
+    }
+
+    const jwk = this._jwkCache.get(kid);
+    if (!jwk) {
+      throw AuthError.unauthenticated('unknown signing key: ' + kid);
+    }
+
+    try {
+      await tw.verify(jwk);
+    } catch (err) {
+      throw AuthError.unauthenticated(`token verification failed: ${errorMessage(err)}`);
+    }
+
+    // Reject refresh tokens — they should only be exchanged at the Mint endpoint.
+    const tokenUse = tw.getTokenUse();
+    if (tokenUse === 'refresh') {
+      throw AuthError.unauthenticated('refresh tokens cannot be used for API access');
+    }
+    // A refresh token carrying typ:refresh but no token_use claim must not slip
+    // past authorize — authenticate already blocks this shape (SEC-3).
+    if (!tokenUse) {
+      const typ = tw.getCustomField('typ');
+      if (typ === 'refresh') {
+        throw AuthError.unauthenticated('refresh tokens cannot be used for API access');
+      }
+    }
+
+    // Reject bootstrap, locality, and external tokens. External tokens are minted
+    // by the token authority for upstream services and must never be accepted internally.
+    if (tokenUse === 'bootstrap' || tokenUse === 'locality' || tokenUse === 'external') {
+      throw AuthError.unauthenticated(`${tokenUse} tokens cannot be used for API access`);
+    }
+
+    // Check aud matches service name
+    const aud = tw.getAudience();
+    if (aud !== Authorizer.SERVICE_NAME) {
+      throw AuthError.permissionDenied(`token audience "${aud}" does not match service "${Authorizer.SERVICE_NAME}"`);
+    }
+
+    // S2S path: service/workload tokens carry structured identity claims
+    // (sub_type, sub, service_name). Authorization is receiver-side via
+    // auth_services RE2 patterns on the LOCATION-AGNOSTIC service path from
+    // tw.servicePath() — the same service matches identically across
+    // clouds/accounts/AZs/clusters; raw sub/namespace are never matched directly.
+    const subType = tw.getSubType();
+    if (subType === 'service' || subType === 'workload') {
+      const methodName = extractMethodName(fullMethod);
+      let servicePath: string;
+      try {
+        servicePath = tw.servicePath();
+      } catch (err) {
+        throw AuthError.unauthenticated(errorMessage(err));
+      }
+      const allowed = this._methodAuthPatterns.get(methodName);
+      if (!allowed) {
+        throw AuthError.permissionDenied(`no auth_services policy configured for service caller "${servicePath}" on "${methodName}"`);
+      }
+      if (!allowed.some((p) => p.test(servicePath))) {
+        throw AuthError.permissionDenied(`service "${servicePath}" not authorized for "${methodName}"`);
+      }
+      // Level-or-below check (applies to S2S too when target_namespace_field is set).
+      this.checkTargetNamespace(methodName, tw.getNamespace(), request);
+      return;
+    }
+
+    // C2S path: user tokens carry service_entitlements.
+    const methodName = extractMethodName(fullMethod);
+    const te = tw.getServiceEntitlements();
+    if (!te) {
+      throw AuthError.permissionDenied('token missing service_entitlements claim');
+    }
+
+    if (serviceEntitlementsGrantRPC(te, Authorizer.SERVICE_NAME, fullMethod)) {
+      this.checkTargetNamespace(methodName, tw.getNamespace(), request);
+      return;
+    }
+    throw AuthError.permissionDenied(
+      `method "${methodName}" not in service_entitlements for service "${Authorizer.SERVICE_NAME}"`
+    );
+  }
+
+  /**
+   * Authenticates a request by verifying token signature and audience only.
+   * Does NOT check entitlements. Used for auth_any_user services.
+   */
+  async authenticate(metadata: Record<string, string>, targetNamespace?: string): Promise<void> {
+    const authHeader = metadata['authorization'] || '';
+    if (!authHeader) {
+      throw AuthError.unauthenticated('missing authorization header');
+    }
+
+    let tokenStr = authHeader;
+    if (tokenStr.toLowerCase().startsWith('bearer ')) {
+      tokenStr = tokenStr.substring(7);
+    }
+
+    let tw: TokenWrapper;
+    try {
+      tw = TokenWrapper.parse(tokenStr);
+    } catch (err) {
+      throw AuthError.unauthenticated(`invalid token: ${errorMessage(err)}`);
+    }
+
+    const kid = tw.getKid();
+    if (!kid) {
+      throw AuthError.unauthenticated('token missing key ID (kid)');
+    }
+
+    const jwk = this._jwkCache.get(kid);
+    if (!jwk) {
+      throw AuthError.unauthenticated('unknown signing key: ' + kid);
+    }
+
+    try {
+      await tw.verify(jwk);
+    } catch (err) {
+      throw AuthError.unauthenticated(`token verification failed: ${errorMessage(err)}`);
+    }
+
+    // Reject refresh tokens — they should only be exchanged at the Mint endpoint.
+    const authTokenUse = tw.getTokenUse();
+    if (authTokenUse === 'refresh') {
+      throw AuthError.unauthenticated('refresh tokens cannot be used for API access');
+    }
+    if (!authTokenUse) {
+      const typ = tw.getCustomField('typ');
+      if (typ === 'refresh') {
+        throw AuthError.unauthenticated('refresh tokens cannot be used for API access');
+      }
+    }
+
+    if (authTokenUse === 'bootstrap' || authTokenUse === 'locality' || authTokenUse === 'external') {
+      throw AuthError.unauthenticated(`${authTokenUse} tokens cannot be used for API access`);
+    }
+
+    const aud = tw.getAudience();
+    if (aud !== Authorizer.SERVICE_NAME) {
+      throw AuthError.permissionDenied(`token audience "${aud}" does not match service "${Authorizer.SERVICE_NAME}"`);
+    }
+
+    if (targetNamespace !== undefined) {
+      const target = targetNamespace === '' ? '/' : targetNamespace;
+      if (!isAtOrBelow(tw.getNamespace(), target)) {
+        throw AuthError.permissionDenied(`caller namespace "${tw.getNamespace()}" is not at-or-above target "${target}"`);
+      }
+    }
+
+    // auth_any_user: token is valid and correctly scoped — allow.
+  }
+
+  close(): void {
+    this._jwkCache.stopWatch();
+  }
+}
+
+/**
+ * Checks whether a service_entitlements JSON object grants access to the given
+ * RPC method on the given service. Grant tokens are normalized through the
+ * generated grants helper.
+ */
+export function serviceEntitlementsGrantRPC(te: any, serviceName: string, fullMethod: string): boolean {
+  const required = methodGrantToken(serviceName, fullMethod);
+  const grants = te?.grants;
+  if (!Array.isArray(grants)) {
+    return false;
+  }
+  const raw: string[] = [];
+  for (const grant of grants) {
+    if (typeof grant === 'string') {
+      raw.push(grant);
+    } else if (grant !== null && typeof grant === 'object' && typeof grant.token === 'string') {
+      raw.push(grant.token);
+    }
+  }
+  return normalizeGrants(raw).includes(required);
+}
+
+export function methodGrantToken(fallbackService: string, fullMethod: string): string {
+  let serviceFqn = '';
+  let method = fullMethod;
+  const slash = fullMethod.lastIndexOf('/');
+  if (slash >= 0) {
+    serviceFqn = fullMethod.substring(0, slash).replace(/^\/+/, '');
+    const serviceSlash = serviceFqn.lastIndexOf('/');
+    if (serviceSlash >= 0) {
+      serviceFqn = serviceFqn.substring(serviceSlash + 1);
+    }
+    method = fullMethod.substring(slash + 1);
+  }
+  let pkg = fallbackService;
+  let service = fallbackService;
+  if (serviceFqn !== '') {
+    service = serviceFqn;
+    const dot = serviceFqn.lastIndexOf('.');
+    if (dot >= 0) {
+      pkg = serviceFqn.substring(0, dot);
+      service = serviceFqn.substring(dot + 1);
+    }
+  }
+  return `${grantTokenPart(pkg)}_${grantTokenPart(service)}_${grantTokenPart(method)}`;
+}
+
+function grantTokenPart(value: string): string {
+  return value
+    .replace(/[-./]/g, '_')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toUpperCase();
+}
+
+function readStringField(request: Record<string, unknown>, protoFieldName: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(request, protoFieldName)) {
+    return request[protoFieldName];
+  }
+  const camelName = snakeToLowerCamel(protoFieldName);
+  if (Object.prototype.hasOwnProperty.call(request, camelName)) {
+    return request[camelName];
+  }
+  return undefined;
+}
+
+function snakeToLowerCamel(name: string): string {
+  return name.replace(/_([a-zA-Z0-9])/g, (_match, ch: string) => ch.toUpperCase());
+}
+
+/**
+ * isAtOrBelow reports whether target is the same as caller or a strict
+ * path-segment descendant. Inputs are namespace paths (e.g. "/tenants/acme") or
+ * full SPIFFE URIs (e.g. "spiffe://example.com/tenants/acme"); two URIs must
+ * share a trust domain, and a URI never matches a bare path.
+ *
+ * This is the NAMESPACE (authorization-scope) relation, delegated to the
+ * canonical generated sys/spiffe helper; it is distinct from the identity-path
+ * relation (spiffe.isSpiffeAtOrBelow) and the two must not be cross-applied.
+ * The match is path-segment-aware: "/tenants/foo" is NOT at-or-below
+ * "/tenants/foob". Malformed URIs fail closed (return false).
+ */
+function isAtOrBelow(caller: string, target: string): boolean {
+  if (!caller || !target) return false;
+  let c: ParsedSpiffeId | undefined;
+  let t: ParsedSpiffeId | undefined;
+  try {
+    c = parseSpiffeId(caller);
+    t = parseSpiffeId(target);
+  } catch {
+    c = undefined;
+    t = undefined;
+  }
+  const callerLooksUri = caller.includes('://');
+  const targetLooksUri = target.includes('://');
+  if (callerLooksUri || targetLooksUri) {
+    if (!c || !t) {
+      return false;
+    }
+    if (c.trustDomain !== t.trustDomain) {
+      return false;
+    }
+    return namespaceIsAtOrBelow(c.namespace, t.namespace);
+  }
+  return namespaceIsAtOrBelow(caller, target);
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Parses a claim value into a list of strings. Handles JSON arrays,
+ * JSON-encoded array strings, and comma-delimited strings.
+ */
+export function parseStringList(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.filter((v): v is string => typeof v === 'string');
+  }
+  if (typeof raw === 'string' && raw.length > 0) {
+    // Try JSON array first, then comma-delimited.
+    if (raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((v): v is string => typeof v === 'string');
+        }
+      } catch {
+        // fall through to comma-delimited
+      }
+    }
+    return raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+  }
+  return [];
+}
+
+function extractMethodName(fullMethod: string): string {
+  const i = fullMethod.lastIndexOf('/');
+  return i >= 0 ? fullMethod.substring(i + 1) : fullMethod;
+}

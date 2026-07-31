@@ -1,0 +1,60 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package diskstore
+
+// SM-managed roll scheduler: deterministic per-node staggered compaction.
+//
+// Each node derives its roll time deterministically from its stable identity
+// (hash(node_id) % interval), so replicas stagger across the interval and the
+// schedule survives restarts without persisting anything — avoiding a
+// thundering-herd of simultaneous snapshots. The interval comes from the
+// service-supplied DiskPersistenceConfig (config-at-init).
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+)
+
+// RollOffset returns the deterministic per-node roll offset within interval
+// (FNV-1a of nodeID). It is stable across restarts and well-distributed so
+// replicas don't collide.
+func RollOffset(nodeID string, interval time.Duration) time.Duration {
+	secs := uint64(interval / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	var h uint64 = 0xcbf29ce484222325
+	for _, b := range []byte(nodeID) {
+		h ^= uint64(b)
+		h *= 0x00000100000001b3
+	}
+	return time.Duration(h%secs) * time.Second
+}
+
+// RunRollScheduler runs the periodic roll loop for a redo log. snapshot returns
+// the current deduped state to write as the new baseline at each roll. The first
+// roll is delayed by the node's deterministic offset; thereafter it rolls once
+// per interval. It runs until ctx is cancelled; roll failures are logged and
+// retried on the next interval.
+func RunRollScheduler(ctx context.Context, log *RedoLog, interval time.Duration, nodeID string, snapshot func() []*Record) error {
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-time.After(RollOffset(nodeID, interval)):
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if err := log.Roll(snapshot()); err != nil {
+				fmt.Fprintf(os.Stderr, "diskstore roll failed for %s: %v\n", nodeID, err)
+			}
+		}
+	}
+}

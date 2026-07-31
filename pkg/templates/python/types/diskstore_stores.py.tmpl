@@ -1,0 +1,85 @@
+{{.Header}}
+# Per-service_store typed disk-persistence helpers.
+# UC1 = atomic snapshot (save/load); UC2 = redo log (open/record/decode).
+# Serialization goes through the generated to_json/from_json; validation
+# (always on) runs on read.
+
+from typing import Optional
+
+from {{.PythonPackageBase}}.sys import diskstore
+{{range .Stores}}
+from {{$.PythonPackageBase}}.types.{{.HelperModule}}.helpers import (
+    {{.SnakeName}}_to_json as _{{.SnakeName}}_to_json,
+    {{.SnakeName}}_from_json as _{{.SnakeName}}_from_json,
+    validate_{{.SnakeName}} as _validate_{{.SnakeName}},
+)
+from {{$.PythonPackageBase}}.types.{{.HelperModule}}.{{.PbModule}}_pb2 import {{.TypeName}} as _{{.TypeName}}
+{{end}}
+import json
+
+{{range .Stores}}
+def save_{{.SnakeName}}(base: str, ns: str, msg: "_{{.TypeName}}", opts: "diskstore.SnapshotOpts") -> None:
+    """Atomically save the latest {{.SnakeName}} snapshot (UC1)."""
+    bytes_ = _{{.SnakeName}}_to_json(msg)
+    path = diskstore.store_path(base, ns, "{{.SnakeName}}", ".snapshot")
+    diskstore.write_snapshot(path, bytes_, opts)
+
+
+def load_{{.SnakeName}}(base: str, ns: str) -> "Optional[_{{.TypeName}}]":
+    """Load + validate the {{.SnakeName}} snapshot (UC1). None if absent."""
+    path = diskstore.store_path(base, ns, "{{.SnakeName}}", ".snapshot")
+    bytes_ = diskstore.read_snapshot(path)
+    if bytes_ is None:
+        return None
+    try:
+        msg = _{{.SnakeName}}_from_json(bytes_)
+    except Exception as e:
+        raise diskstore.DiskStoreError.codec(str(e))
+    try:
+        _validate_{{.SnakeName}}(msg)
+    except Exception as e:
+        raise diskstore.DiskStoreError.validation_failed(str(e))
+    return msg
+
+{{if not .SnapshotOnly}}
+def open_{{.SnakeName}}_log(base: str, ns: str, archive_count: int, codec: "diskstore.Codec") -> "diskstore.RedoLog":
+    """Open the {{.SnakeName}} redo log for the given namespace (UC2)."""
+    return diskstore.RedoLog.open(base, ns, "{{.SnakeName}}", archive_count, codec)
+
+
+def record_{{.SnakeName}}(msg: "_{{.TypeName}}") -> "diskstore.Record":
+    """Build a redo record for a {{.SnakeName}} upsert (UC2)."""
+    bytes_ = _{{.SnakeName}}_to_json(msg)
+    try:
+        payload = json.loads(bytes_.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as e:
+        raise diskstore.DiskStoreError.codec(str(e))
+    return diskstore.Record(
+        key=str(msg.{{.KeyField}}),
+        deleted=False,
+        metadata=None,
+        payload=payload,
+    )
+
+
+def decode_{{.SnakeName}}(rec: "diskstore.Record") -> "Optional[_{{.TypeName}}]":
+    """Decode + validate a {{.SnakeName}} redo record (UC2). None for tombstones."""
+    if rec.deleted:
+        return None
+    if rec.payload is None:
+        raise diskstore.DiskStoreError.invalid_data("record missing payload")
+    try:
+        bytes_ = json.dumps(rec.payload).encode("utf-8")
+    except (TypeError, ValueError) as e:
+        raise diskstore.DiskStoreError.codec(str(e))
+    try:
+        msg = _{{.SnakeName}}_from_json(bytes_)
+    except Exception as e:
+        raise diskstore.DiskStoreError.codec(str(e))
+    try:
+        _validate_{{.SnakeName}}(msg)
+    except Exception as e:
+        raise diskstore.DiskStoreError.validation_failed(str(e))
+    return msg
+{{end}}
+{{end}}

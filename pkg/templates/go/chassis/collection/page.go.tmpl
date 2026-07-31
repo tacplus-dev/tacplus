@@ -1,0 +1,181 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// CODE GENERATED - DO NOT EDIT
+// Generated runtime support for PAGE collection methods (keyset pagination).
+// See docs/API.md (PAGE seam) and archive/RPC_PATTERNS_AND_VERBS_PLAN.md §4.
+//
+// PAGE is a unary RPC: the client drives a resumable window with an opaque
+// page_token. The generated wrapper owns the token codec and the page_size
+// bounds; the handler is a keyset producer that returns a Page and the cursor
+// for the next window. The token is an opaque, versioned base64url value over
+// the method's order_by key — identical on every language backend so a token
+// minted by one client decodes on any other.
+package collection
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// ErrBadPageToken is the INVALID_ARGUMENT status the wrapper returns when a
+// page_token does not decode (corrupt, truncated, or from an incompatible token
+// version). The wrapper never silently resets to the first page on a bad token —
+// that would skip rows and read as success, hiding a client bug or tamper.
+var ErrBadPageToken = status.Error(codes.InvalidArgument, "page_token is malformed or from an incompatible version")
+
+// pageTokenVersion is the on-the-wire token schema version. Bump only on a
+// breaking change to the encoded shape; DecodePageToken rejects other versions
+// via ErrBadPageToken so a stale token never silently mis-decodes.
+const pageTokenVersion = 1
+
+// Cursor is the keyset position of a page boundary: the order_by key components
+// of the last row in a page, as strings (the handler parses them back to typed
+// values — it owns the column types). A nil *Cursor means "from the beginning".
+// The component order matches the method's order_by annotation.
+type Cursor struct {
+	Keys []string
+}
+
+// PageParams is what the wrapper hands the handler for one PAGE call: the
+// effective row limit (already defaulted and clamped to the trust-tier ceiling)
+// and the decoded After cursor (nil on the first page).
+type PageParams struct {
+	Limit int
+	After *Cursor
+}
+
+// Page is what a PAGE handler returns: the window of items, the cursor to resume
+// after (nil when this is the last page), and an optional Total. Total is -1
+// when the handler does not compute a count — the wrapper then leaves
+// total_count at 0 and callers must treat it as unknown, not "empty".
+type Page[T any] struct {
+	Items     []T
+	NextAfter *Cursor
+	Total     int64
+}
+
+// pageTokenEnvelope is the JSON shape inside the base64url token. Field names
+// are kept short and fixed so the encoding is byte-identical across languages.
+type pageTokenEnvelope struct {
+	V int      `json:"v"`
+	K []string `json:"k"`
+}
+
+// EncodePageToken serializes a cursor into the opaque next_page_token. A nil
+// cursor (last page) encodes to the empty string, which the auto-pager treats
+// as the stop signal.
+func EncodePageToken(c *Cursor) (string, error) {
+	if c == nil {
+		return "", nil
+	}
+	keys := c.Keys
+	if keys == nil {
+		keys = []string{}
+	}
+	// SetEscapeHTML(false) so the encoding matches the TS/Python/Rust backends,
+	// which do not escape <, >, & — the token must be byte-identical across
+	// languages for a polyglot client fleet and the interop harness.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(pageTokenEnvelope{V: pageTokenVersion, K: keys}); err != nil {
+		return "", err
+	}
+	raw := bytes.TrimRight(buf.Bytes(), "\n") // Encode appends a trailing newline
+	// encoding/json unconditionally escapes U+2028/U+2029 (a legacy JavaScript
+	// eval safety measure); the other four language backends emit them raw.
+	// Replace the escapes with the raw characters so the token stays
+	// byte-identical across languages (DecodePageToken accepts both forms).
+	raw = unescapeLineSeparators(raw)
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+// unescapeLineSeparators rewrites the 6-byte JSON escape sequences for
+// U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR) to the raw UTF-8
+// characters. It walks escape sequences so a literal backslash in a key
+// (JSON-encoded as two backslashes) is never misread as the start of a
+// U+202x escape: a backslash-escaped backslash followed by the text u2028
+// means literal text and must be left untouched.
+var (
+	escapedLineSep = []byte("\\u2028")
+	escapedParaSep = []byte("\\u2029")
+	rawLineSep     = []byte(string(rune(0x2028)))
+	rawParaSep     = []byte(string(rune(0x2029)))
+)
+
+func unescapeLineSeparators(raw []byte) []byte {
+	if !bytes.Contains(raw, escapedLineSep) && !bytes.Contains(raw, escapedParaSep) {
+		return raw
+	}
+	out := make([]byte, 0, len(raw))
+	for i := 0; i < len(raw); {
+		if raw[i] == '\\' && i+1 < len(raw) {
+			if raw[i+1] == '\\' {
+				// Escaped backslash -- copy both so the next byte is not
+				// mistaken for an escape introducer.
+				out = append(out, raw[i], raw[i+1])
+				i += 2
+				continue
+			}
+			if i+6 <= len(raw) {
+				if bytes.Equal(raw[i:i+6], escapedLineSep) {
+					out = append(out, rawLineSep...)
+					i += 6
+					continue
+				}
+				if bytes.Equal(raw[i:i+6], escapedParaSep) {
+					out = append(out, rawParaSep...)
+					i += 6
+					continue
+				}
+			}
+		}
+		out = append(out, raw[i])
+		i++
+	}
+	return out
+}
+
+// DecodePageToken parses a page_token back into a cursor. The empty string
+// decodes to a nil cursor (first page). Any other malformed or wrong-version
+// input returns ErrBadPageToken.
+func DecodePageToken(token string) (*Cursor, error) {
+	if token == "" {
+		return nil, nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return nil, ErrBadPageToken
+	}
+	var env pageTokenEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, ErrBadPageToken
+	}
+	if env.V != pageTokenVersion {
+		return nil, ErrBadPageToken
+	}
+	return &Cursor{Keys: env.K}, nil
+}
+
+// EffectivePageSize resolves the requested page_size against the method's
+// generated default and the trust-tier maximum: a non-positive request takes the
+// default; the result is clamped to [1, max]. This is the runtime row bound that
+// SNAPSHOT lacks — every page is capped at the caller's trust ceiling regardless
+// of what page_size it asks for.
+func EffectivePageSize(requested, defaultSize, max int) int {
+	n := requested
+	if n <= 0 {
+		n = defaultSize
+	}
+	if n <= 0 {
+		n = 1
+	}
+	if max > 0 && n > max {
+		n = max
+	}
+	return n
+}

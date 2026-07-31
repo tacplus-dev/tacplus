@@ -1,0 +1,306 @@
+{{- /* Rust validation helpers template */ -}}
+{{- if .NeedsEmail}}
+/// Validates email address format
+fn validate_email(email: &str) -> Result<(), String> {
+let email_regex = Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap();
+if !email_regex.is_match(email) {
+return Err(format!("invalid email address: {}", email));
+}
+Ok(())
+}
+{{- end}}
+{{- if .NeedsUrl}}
+/// Validates URL structure and scheme.
+fn validate_url(raw: &str, scheme: &str) -> Result<(), String> {
+let (actual_scheme, rest) = raw
+.split_once("://")
+.ok_or_else(|| format!("URL must include a scheme and host: {}", raw))?;
+let host_end = rest
+.find(|c| c == '/' || c == '?' || c == '#')
+.unwrap_or(rest.len());
+let host = &rest[..host_end];
+if host.is_empty() {
+return Err(format!("URL must include a host: {}", raw));
+}
+match scheme {
+"URL_SCHEME_HTTP" if actual_scheme != "http" => {
+return Err(format!("URL must use http:// scheme, got: {}://", actual_scheme));
+}
+"URL_SCHEME_HTTPS" if actual_scheme != "https" => {
+return Err(format!("URL must use https:// scheme, got: {}://", actual_scheme));
+}
+"URL_SCHEME_HTTP_OR_HTTPS" if actual_scheme != "http" && actual_scheme != "https" => {
+return Err(format!("URL must use http:// or https:// scheme, got: {}://", actual_scheme));
+}
+_ => {}
+}
+Ok(())
+}
+{{- end}}
+{{- if .NeedsFilePath}}
+/// Validates file path shape without checking filesystem existence.
+fn validate_file_path(path: &str, path_type: &str) -> Result<(), String> {
+if path.trim().is_empty() {
+return Err("path cannot be empty".to_string());
+}
+let bytes = path.as_bytes();
+let is_windows_abs = bytes.len() >= 3
+&& bytes[1] == b':'
+&& (bytes[2] == b'\\' || bytes[2] == b'/');
+let is_abs = path.starts_with('/') || is_windows_abs;
+match path_type {
+"PATH_ABSOLUTE" if !is_abs => return Err(format!("path must be absolute, got: {}", path)),
+"PATH_RELATIVE" if is_abs => return Err(format!("path must be relative, got: {}", path)),
+_ => {}
+}
+Ok(())
+}
+{{- end}}
+{{- if .NeedsEncType}}
+fn decode_base64_candidate(s: &str) -> Result<Vec<u8>, String> {
+if let Ok(bytes) = general_purpose::URL_SAFE_NO_PAD.decode(s) {
+return Ok(bytes);
+}
+if let Ok(bytes) = general_purpose::STANDARD_NO_PAD.decode(s) {
+return Ok(bytes);
+}
+if let Ok(bytes) = general_purpose::URL_SAFE.decode(s) {
+return Ok(bytes);
+}
+if let Ok(bytes) = general_purpose::STANDARD.decode(s) {
+return Ok(bytes);
+}
+let mut padded = s.to_string();
+let remainder = padded.len() % 4;
+if remainder != 0 {
+padded.extend(std::iter::repeat('=').take(4 - remainder));
+if let Ok(bytes) = general_purpose::URL_SAFE.decode(&padded) {
+return Ok(bytes);
+}
+if let Ok(bytes) = general_purpose::STANDARD.decode(&padded) {
+return Ok(bytes);
+}
+}
+Err("failed to decode base64 string".to_string())
+}
+
+fn pem_candidate(value: &str) -> Result<String, String> {
+if value.contains("-----BEGIN") && value.contains("-----END") {
+return Ok(value.to_string());
+}
+let decoded = decode_base64_candidate(value)?;
+String::from_utf8(decoded).map_err(|_| "decoded base64 is not UTF-8 PEM".to_string())
+}
+
+/// Validates PEM block category for key/certificate annotations.
+fn validate_enc_type(value: &str, enc_type: &str) -> Result<(), String> {
+let pem = pem_candidate(value)?;
+if !pem.contains("-----BEGIN") || !pem.contains("-----END") {
+return Err("value must be in PEM format".to_string());
+}
+let is_certificate = pem.contains("-----BEGIN CERTIFICATE-----");
+let is_private = pem.contains("PRIVATE KEY-----");
+let is_public = pem.contains("PUBLIC KEY-----");
+if enc_type.starts_with("ENC_TYPE_X509_CERT") && !is_certificate {
+return Err("value must be an X.509 certificate PEM".to_string());
+}
+if enc_type.starts_with("ENC_TYPE_KEY_PRIVATE") && !is_private {
+return Err("value must be a private key PEM".to_string());
+}
+if enc_type.starts_with("ENC_TYPE_KEY_PUBLIC") && !is_public {
+return Err("value must be a public key PEM".to_string());
+}
+if enc_type.starts_with("ENC_TYPE_KEY_ANY") && !is_private && !is_public {
+return Err("value must be a key PEM".to_string());
+}
+Ok(())
+}
+{{- end}}
+{{- if .NeedsFqdn}}
+/// Validates fully qualified domain name
+fn validate_fqdn(fqdn: &str) -> Result<(), String> {
+let fqdn_regex = Regex::new(r"^localhost$|^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$").unwrap();
+if !fqdn_regex.is_match(fqdn) {
+return Err(format!("invalid FQDN: {}", fqdn));
+}
+Ok(())
+}
+{{- end}}
+{{- if .NeedsHost}}
+/// Validates IP address (IPv4/IPv6) or FQDN
+fn validate_host(host: &str) -> Result<(), String> {
+if host.parse::<std::net::IpAddr>().is_ok() {
+return Ok(());
+}
+validate_fqdn(host).map_err(|_| format!("must be a valid IP address or FQDN, got: {}", host))
+}
+{{- end}}
+{{- if .NeedsBase64}}
+{{- if not .NeedsEncType}}
+fn decode_base64_candidate(s: &str) -> Result<Vec<u8>, String> {
+if let Ok(bytes) = general_purpose::URL_SAFE_NO_PAD.decode(s) {
+return Ok(bytes);
+}
+if let Ok(bytes) = general_purpose::STANDARD_NO_PAD.decode(s) {
+return Ok(bytes);
+}
+if let Ok(bytes) = general_purpose::URL_SAFE.decode(s) {
+return Ok(bytes);
+}
+if let Ok(bytes) = general_purpose::STANDARD.decode(s) {
+return Ok(bytes);
+}
+let mut padded = s.to_string();
+let remainder = padded.len() % 4;
+if remainder != 0 {
+padded.extend(std::iter::repeat('=').take(4 - remainder));
+if let Ok(bytes) = general_purpose::URL_SAFE.decode(&padded) {
+return Ok(bytes);
+}
+if let Ok(bytes) = general_purpose::STANDARD.decode(&padded) {
+return Ok(bytes);
+}
+}
+Err("failed to decode base64 string".to_string())
+}
+
+{{- end}}
+/// Validates base64 encoding
+fn validate_base64(s: &str) -> Result<(), String> {
+decode_base64_candidate(s).map_err(|_| format!("invalid base64 string: {}", s))?;
+Ok(())
+}
+{{- end}}
+{{- if .NeedsListenAddr}}
+/// Validates listen address (host:port format)
+fn validate_listen_addr(addr: &str) -> Result<(), String> {
+if !addr.contains(':') {
+return Err(format!("listen address must be in host:port format, got: {}", addr));
+}
+let parts: Vec<&str> = addr.rsplitn(2, ':').collect();
+if parts.len() != 2 {
+return Err(format!("invalid listen address format: {}", addr));
+}
+// Validate port (u16 is always valid 0-65535, no need to check upper bound)
+if parts[0].parse::<u16>().is_err() {
+return Err(format!("invalid port in listen address: {}", addr));
+}
+Ok(())
+}
+
+/// Parses a "host:port" string into its host and port components.
+/// Handles IPv6 addresses in bracket notation (e.g. "[::1]:8080").
+pub fn parse_listen_addr(addr: &str) -> Result<(&str, u16), String> {
+if let Some(rest) = addr.strip_prefix('[') {
+// IPv6: [::1]:8080
+let bracket_end = rest.find(']')
+.ok_or_else(|| format!("invalid IPv6 host:port format: {}", addr))?;
+let host = &rest[..bracket_end];
+let after = &rest[bracket_end + 1..];
+if !after.starts_with(':') {
+return Err(format!("invalid host:port format: {}", addr));
+}
+let port = after[1..].parse::<u16>()
+.map_err(|_| format!("invalid port in address: {}", addr))?;
+Ok((host, port))
+} else {
+let last_colon = addr.rfind(':')
+.ok_or_else(|| format!("invalid host:port format: {}", addr))?;
+let host = &addr[..last_colon];
+let port = addr[last_colon + 1..].parse::<u16>()
+.map_err(|_| format!("invalid port in address: {}", addr))?;
+Ok((host, port))
+}
+}
+{{- end}}
+{{- if .NeedsCidr}}
+/// Validates CIDR notation
+fn validate_cidr(cidr: &str, ip_type: &str) -> Result<(), String> {
+let parts: Vec<&str> = cidr.split('/').collect();
+if parts.len() != 2 {
+return Err(format!("invalid CIDR notation: {}", cidr));
+}
+
+let ip = parts[0].parse::<IpAddr>()
+.map_err(|_| format!("invalid IP address in CIDR: {}", cidr))?;
+
+let prefix_len = parts[1].parse::<u8>()
+.map_err(|_| format!("invalid prefix length in CIDR: {}", cidr))?;
+
+match (ip, ip_type) {
+(IpAddr::V4(_), "IP_ADDR_TYPE_NET_V4") => {
+if prefix_len > 32 {
+return Err(format!("IPv4 prefix length must be 0-32, got: {}", prefix_len));
+}
+}
+(IpAddr::V6(_), "IP_ADDR_TYPE_NET_V6") => {
+if prefix_len > 128 {
+return Err(format!("IPv6 prefix length must be 0-128, got: {}", prefix_len));
+}
+}
+(IpAddr::V4(_), _) if ip_type == "IP_ADDR_TYPE_NET_ANY" => {
+if prefix_len > 32 {
+return Err(format!("IPv4 prefix length must be 0-32, got: {}", prefix_len));
+}
+}
+(IpAddr::V6(_), _) if ip_type == "IP_ADDR_TYPE_NET_ANY" => {
+if prefix_len > 128 {
+return Err(format!("IPv6 prefix length must be 0-128, got: {}", prefix_len));
+}
+}
+_ => return Err(format!("IP type mismatch in CIDR: {}", cidr)),
+}
+
+Ok(())
+}
+{{- end}}
+{{- if .NeedsSemver}}
+/// Validates semantic version format
+fn validate_semver(version: &str) -> Result<(), String> {
+let semver_regex = Regex::new(r"^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$").unwrap();
+if !semver_regex.is_match(version) {
+return Err(format!("invalid semantic version: {}", version));
+}
+Ok(())
+}
+{{- end}}
+{{- if .NeedsSql}}
+/// Syntactic SQL sanity check and statement-type gate. NOT an injection defense: it
+/// rejects a few obvious tokens and checks the leading keyword only. Callers must still
+/// use parameterized queries; never interpolate a validated string as if it were safe.
+fn validate_sql(sql: &str, permit: &str) -> Result<(), String> {
+if sql.contains(';') {
+return Err("SQL contains disallowed token: semicolon".to_string());
+}
+if sql.contains("--") {
+return Err("SQL contains disallowed token: line comment (--)".to_string());
+}
+if sql.contains("/*") {
+return Err("SQL contains disallowed token: block comment (/*)".to_string());
+}
+if sql.contains('\\') {
+return Err("SQL contains disallowed token: backslash escape".to_string());
+}
+let normalized = sql.trim().to_uppercase();
+match permit {
+"SQL_PERMIT_SELECT" => {
+if !normalized.starts_with("SELECT") && !normalized.starts_with("WITH") {
+return Err("only SELECT statements permitted".to_string());
+}
+}
+"SQL_PERMIT_DML" => {
+if !["SELECT", "INSERT", "UPDATE", "DELETE", "WITH"].iter().any(|k| normalized.starts_with(k)) {
+return Err("only DML statements permitted".to_string());
+}
+}
+"SQL_PERMIT_DDL" => {
+if !["CREATE", "ALTER", "DROP", "TRUNCATE"].iter().any(|k| normalized.starts_with(k)) {
+return Err("only DDL statements permitted".to_string());
+}
+}
+"SQL_PERMIT_ANY" => {}
+_ => {}
+}
+Ok(())
+}
+{{- end}}

@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package {{.ChassisBase}}.grpcserver;
+
+/**
+ * SPIFFE-URI authorization helpers.
+ *
+ * <p>The universal authorization rule for tenant-scoped operations: a bearer token
+ * may act on its own SPIFFE level or any path-segment descendant, never above and
+ * never sideways. Cross-namespace access is mediated by token exchange (future),
+ * not by relaxing this rule.
+ *
+ * <p>This class takes namespace paths (e.g. {@code /tenants/acme}) or full SPIFFE
+ * URIs (e.g. {@code spiffe://example.com/tenants/acme}); two URIs must share a
+ * trust domain, and a URI never matches a bare path.
+ */
+public final class Spiffe {
+    private Spiffe() {}
+
+    /**
+     * Returns {@code true} iff {@code target} equals {@code caller} or is a strict
+     * path-segment descendant.
+     *
+     * <p>This is the NAMESPACE (authorization-scope) relation, delegated to the
+     * canonical generated sys/spiffe helper; it is distinct from the
+     * identity-path relation ({@code Spiffe.isSpiffeAtOrBelow} in sys/spiffe)
+     * and the two must not be cross-applied. The match is path-segment-aware:
+     * {@code /tenants/foo} is NOT at-or-below {@code /tenants/foob}. Malformed
+     * URIs fail closed (return {@code false}).
+     */
+    public static boolean isAtOrBelow(String caller, String target) {
+        if (caller == null || caller.isEmpty()
+                || target == null || target.isEmpty()) {
+            return false;
+        }
+        {{.ChassisBase}}.spiffe.Spiffe.ParsedSpiffeId c = null;
+        {{.ChassisBase}}.spiffe.Spiffe.ParsedSpiffeId t = null;
+        try {
+            c = {{.ChassisBase}}.spiffe.Spiffe.parseSpiffeId(caller);
+            t = {{.ChassisBase}}.spiffe.Spiffe.parseSpiffeId(target);
+        } catch (IllegalArgumentException e) {
+            // Handled below: URI-like values must parse; bare namespaces may continue.
+        }
+        boolean callerLooksUri = caller.contains("://");
+        boolean targetLooksUri = target.contains("://");
+        if (callerLooksUri || targetLooksUri) {
+            if (c == null || t == null) {
+                return false;
+            }
+            if (!c.trustDomain.equals(t.trustDomain)) {
+                return false;
+            }
+            return {{.ChassisBase}}.spiffe.Spiffe.isAtOrBelow(c.namespace, t.namespace);
+        }
+        return {{.ChassisBase}}.spiffe.Spiffe.isAtOrBelow(caller, target);
+    }
+}

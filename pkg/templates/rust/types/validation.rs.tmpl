@@ -1,0 +1,23 @@
+{{- /* Rust validation template */ -}}
+impl {{.TypeName}} {
+/// Validates all fields in {{.TypeName}} according to their annotations.
+/// Returns Ok(()) if all validations pass, or Err with a descriptive message.
+pub fn validate(&self) -> Result<(), String> {
+self.validate_with_depth(0)
+}
+
+/// Validates all fields while carrying nested-message depth across recursive checks.
+pub fn validate_with_depth(&self, depth: usize) -> Result<(), String> {
+if depth > 24 {
+return Err("message nesting exceeds max depth of 24".to_string());
+}
+{{- if not .HasValidations}}
+// No validations defined
+Ok(())
+{{- else}}
+{{- range .ValidationCode}}
+{{.}}
+{{- end}}
+Ok(())
+{{- end}}
+}}

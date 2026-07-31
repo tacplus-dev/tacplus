@@ -1,0 +1,265 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+UC2 — append-only redo log (WAL) with periodic compaction.
+
+One redo log per ``(namespace, store)``, laid out by :mod:`.path` as
+``<base>/<ns-dirs>/<store>.log``. Because each log is homogeneous (one ns, one
+store), records carry only the row ``key``, an optional ``deleted`` tombstone,
+optional caller-set ``metadata``, and the ``payload`` (the type as JSON). The
+namespace and store are implied by the file path.
+
+Records are NDJSON (one JSON envelope per line — safe to newline-frame since
+JSON escapes embedded newlines). Compaction ("roll") rewrites the log as the
+current deduped state plus writes that arrived during the snapshot, then
+atomically swaps it in (the final rename is the commit point).
+"""
+
+import json
+import os
+import threading
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+from .compress import Codec, compress, decompress_auto
+from .error import DiskStoreError
+from .fsutil import promote, rotate_archives, write_temp
+from .path import store_path
+
+
+@dataclass
+class Record:
+    """One redo-log record (the JSON envelope), NDJSON-framed.
+
+    Attributes:
+        key: The ``collection_index`` value identifying the row within the store.
+        deleted: True if this records a deletion of ``key`` (payload omitted).
+        metadata: Optional, caller-set metadata. Never required or auto-populated.
+        payload: The type serialized as JSON, embedded as a nested JSON value
+            (the generated ``to_json`` output parsed in; ``from_json`` consumes
+            it on restore). Absent for deletions.
+    """
+
+    key: str
+    deleted: bool = False
+    metadata: Optional[str] = None
+    payload: Optional[Any] = None
+
+    def to_json_obj(self) -> Dict[str, Any]:
+        """Serialize to a plain dict, omitting absent optional fields (mirrors
+        the Rust ``skip_serializing_if`` behavior)."""
+        obj: Dict[str, Any] = {"key": self.key}
+        if self.deleted:
+            obj["deleted"] = True
+        if self.metadata is not None:
+            obj["metadata"] = self.metadata
+        if self.payload is not None:
+            obj["payload"] = self.payload
+        return obj
+
+    @staticmethod
+    def from_json_obj(obj: Dict[str, Any]) -> "Record":
+        return Record(
+            key=obj["key"],
+            deleted=bool(obj.get("deleted", False)),
+            metadata=obj.get("metadata"),
+            payload=obj.get("payload"),
+        )
+
+
+class Inserter:
+    """Consumer hook for restore. Receives each deduped record; the
+    implementation decides whether the row is actually applied or is a duplicate
+    — idempotency is owned by the consumer (the underlying store)."""
+
+    def insert(self, rec: Record) -> None:  # pragma: no cover - interface
+        raise NotImplementedError
+
+
+class RedoLog:
+    """An append-only redo log for one ``(namespace, store)``, with compaction."""
+
+    def __init__(self, active: str, archive_count: int, archive_codec: Codec):
+        self._active = active
+        self._archive_count = archive_count
+        self._archive_codec = archive_codec
+        self._lock = threading.Lock()
+        # Current append target (the active log, or the temp log during a roll).
+        self._writer = open(active, "ab")
+
+    @staticmethod
+    def open(base: str, ns: str, store: str, archive_count: int, archive_codec: Codec) -> "RedoLog":
+        """Open (creating if absent) the redo log for ``(ns, store)`` under ``base``.
+
+        Concurrency: single-writer, single-process, local filesystem only.
+        Concurrent writers, multiple owning processes, or network/shared filesystems
+        are unsupported and can corrupt the archive chain.
+        """
+        active = store_path(base, ns, store, ".log")
+        try:
+            parent = os.path.dirname(active)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+        except OSError as e:
+            raise DiskStoreError.from_os_error(e)
+        return RedoLog(active, archive_count, archive_codec)
+
+    def active_path(self) -> str:
+        """The active log file path."""
+        return self._active
+
+    def close(self) -> None:
+        with self._lock:
+            try:
+                self._writer.close()
+            except OSError:
+                pass
+
+    def append(self, rec: Record) -> None:
+        """Append one record, NDJSON-framed and fsync'd (durability is the point)."""
+        try:
+            line = json.dumps(rec.to_json_obj(), separators=(",", ":")).encode("utf-8") + b"\n"
+        except (TypeError, ValueError) as e:
+            raise DiskStoreError.codec(str(e))
+        with self._lock:
+            try:
+                self._writer.write(line)
+                self._writer.flush()
+                os.fsync(self._writer.fileno())
+            except OSError as e:
+                raise DiskStoreError.from_os_error(e)
+
+    def roll(self, snapshot: List[Record]) -> None:
+        """Compact: redirect appends to a temp log, build a fresh baseline from
+        the caller-supplied current state (``snapshot``), fold in the temp log
+        under a brief write-block, then atomically swap the new file in and
+        archive the old one (compressed at rest). The final rename is the
+        commit point."""
+        temp_path = self._active + ".temp"
+        building = self._active + ".building"
+
+        # 1. Redirect appends to the temp log (no write-block during snapshot).
+        with self._lock:
+            try:
+                self._writer.close()
+                self._writer = open(temp_path, "ab")
+            except OSError as e:
+                raise DiskStoreError.from_os_error(e)
+
+        # 2. Build the new baseline from the snapshot (build-then-rename: the
+        #    presence of `building` means it is complete + durable).
+        try:
+            buf = bytearray()
+            for rec in snapshot:
+                buf += json.dumps(rec.to_json_obj(), separators=(",", ":")).encode("utf-8")
+                buf += b"\n"
+        except (TypeError, ValueError) as e:
+            raise DiskStoreError.codec(str(e))
+        staged = write_temp(building, bytes(buf), 0)
+        promote(staged, building)
+
+        # 3. Block appends; fold the temp log into the new baseline; swap.
+        with self._lock:
+            try:
+                self._writer.flush()
+                os.fsync(self._writer.fileno())
+            except OSError as e:
+                raise DiskStoreError.from_os_error(e)
+            try:
+                with open(temp_path, "rb") as f:
+                    temp_bytes = f.read()
+            except FileNotFoundError:
+                temp_bytes = b""
+            except OSError as e:
+                raise DiskStoreError.from_os_error(e)
+            try:
+                with open(building, "ab") as f:
+                    f.write(temp_bytes)
+                    f.flush()
+                    os.fsync(f.fileno())
+                # Archive the old active (compressed at rest), then promote.
+                rotate_archives(self._active, self._archive_count)
+                if self._archive_count > 0 and self._archive_codec != Codec.NONE:
+                    _compress_in_place(self._active + ".bak.1", self._archive_codec)
+                promote(building, self._active)
+                # Resume appends on the (new) active log.
+                self._writer.close()
+                self._writer = open(self._active, "ab")
+                try:
+                    os.remove(temp_path)
+                except FileNotFoundError:
+                    pass
+            except OSError as e:
+                raise DiskStoreError.from_os_error(e)
+
+    def restore(self, inserter: Inserter) -> int:
+        """Read + dedup the active log and replay each record through
+        ``inserter``. Returns the number of records applied. Recovers a leftover
+        temp log (crash mid-roll) by folding it after the active log (latest
+        wins)."""
+        building = self._active + ".building"
+        if os.path.exists(building):
+            with self._lock:
+                try:
+                    self._writer.close()
+                except OSError:
+                    pass
+                promote(building, self._active)
+                self._writer = open(self._active, "ab")
+
+        recs = dedup_file(self._active)
+        temp_path = self._active + ".temp"
+        if os.path.exists(temp_path):
+            extra = dedup_file(temp_path)
+            by_key: Dict[str, Record] = {}
+            for r in recs:
+                by_key[r.key] = r
+            for r in extra:
+                by_key[r.key] = r
+            recs = list(by_key.values())
+        n = 0
+        for r in recs:
+            inserter.insert(r)
+            n += 1
+        return n
+
+
+def dedup_file(path: str) -> List[Record]:
+    """Read a (possibly compressed) NDJSON log file and dedup to latest-per-key.
+    Returns an empty list if the file is absent."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except FileNotFoundError:
+        return []
+    except OSError as e:
+        raise DiskStoreError.from_os_error(e)
+    return dedup_bytes(decompress_auto(raw))
+
+
+def dedup_bytes(data: bytes) -> List[Record]:
+    """Dedup NDJSON bytes to latest-per-key. Later lines win."""
+    by_key: Dict[str, Record] = {}
+    for i, line in enumerate(data.split(b"\n")):
+        if not line:
+            continue
+        try:
+            obj = json.loads(line.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as e:
+            raise DiskStoreError.codec(f"redo log line {i + 1}: {e}")
+        rec = Record.from_json_obj(obj)
+        by_key[rec.key] = rec
+    return list(by_key.values())
+
+
+def _compress_in_place(path: str, codec: Codec) -> None:
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        raise DiskStoreError.from_os_error(e)
+    packed = compress(raw, codec)
+    tmp = write_temp(path, packed, 0)
+    promote(tmp, path)

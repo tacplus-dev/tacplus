@@ -1,0 +1,135 @@
+import Foundation
+import SwiftProtobuf
+
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+
+/// A caller-supplied token provider. When set on a `W2SClient`, its return value
+/// is sent as an `Authorization: Bearer <token>` HTTP header on every request that
+/// requires auth. Mirrors the token-provider seam of the Go/TypeScript W2S clients:
+/// tacplus builds no client_im for Swift — the client only exposes this hook.
+public typealias W2STokenProvider = @Sendable () async throws -> String
+
+/// Errors surfaced by the W2S (gRPC-over-REST) client.
+public enum W2SClientError: Error {
+    /// A method required auth but no token provider was configured.
+    case missingTokenProvider
+    /// The token provider returned an empty token.
+    case emptyToken
+    /// The gateway returned a non-2xx HTTP status.
+    case httpStatus(code: Int, body: String)
+    /// The gateway response could not be decoded.
+    case decode(String)
+}
+
+/// W2SClient issues gRPC-over-REST calls against a gateway base URL.
+///
+/// Request messages are marshalled to protobuf-JSON and POSTed to the gateway's
+/// REST route for each method; the protobuf-JSON response body is decoded back
+/// into the response message. When a token provider is configured, an
+/// `Authorization: Bearer <token>` header is attached to calls that require auth.
+public struct W2SClient: Sendable {
+    public let baseURL: String
+    public let tokenProvider: W2STokenProvider?
+    private let session: URLSession
+    private let requestTimeout: TimeInterval
+
+    /// Creates a W2S client targeting a gateway base URL.
+    /// - Parameters:
+    ///   - baseURL: gateway base URL (trailing slashes are trimmed).
+    ///   - tokenProvider: optional token provider. When non-nil, calls that require
+    ///     auth carry an `Authorization: Bearer <token>` header.
+    ///   - session: URLSession used for requests (defaults to `.shared`).
+    ///   - requestTimeout: per-request deadline in seconds so a unary W2S call
+    ///     cannot hang indefinitely. Defaults to 30s, matching the go/rust/java
+    ///     clients.
+    public init(
+        baseURL: String,
+        tokenProvider: W2STokenProvider? = nil,
+        session: URLSession = .shared,
+        requestTimeout: TimeInterval = 30
+    ) {
+        var trimmed = baseURL
+        while trimmed.hasSuffix("/") {
+            trimmed.removeLast()
+        }
+        self.baseURL = trimmed
+        self.tokenProvider = tokenProvider
+        self.session = session
+        self.requestTimeout = requestTimeout
+    }
+
+    private func authorizationHeader(required: Bool) async throws -> String? {
+        guard required else {
+            return nil
+        }
+        guard let tokenProvider = self.tokenProvider else {
+            throw W2SClientError.missingTokenProvider
+        }
+        let token = try await tokenProvider()
+        if token.isEmpty {
+            throw W2SClientError.emptyToken
+        }
+        return "Bearer \(token)"
+    }
+
+    /// Invokes a unary W2S method: marshals `request` to protobuf-JSON, POSTs it to
+    /// `baseURL + path`, and decodes the protobuf-JSON response into `Response`.
+    public func invoke<Request: SwiftProtobuf.Message, Response: SwiftProtobuf.Message>(
+        method: String,
+        path: String,
+        authRequired: Bool,
+        request: Request
+    ) async throws -> Response {
+        guard let url = URL(string: self.baseURL + path) else {
+            throw W2SClientError.decode("invalid W2S URL: \(self.baseURL + path)")
+        }
+        var httpRequest = URLRequest(url: url)
+        httpRequest.httpMethod = method
+        httpRequest.timeoutInterval = self.requestTimeout
+        httpRequest.setValue("application/json", forHTTPHeaderField: "content-type")
+        if method != "GET" {
+            httpRequest.httpBody = try request.jsonUTF8Data()
+        }
+        if let authorization = try await self.authorizationHeader(required: authRequired) {
+            httpRequest.setValue(authorization, forHTTPHeaderField: "authorization")
+        }
+
+        let (data, response) = try await self.session.data(for: httpRequest)
+        if let httpResponse = response as? HTTPURLResponse,
+           httpResponse.statusCode < 200 || httpResponse.statusCode >= 300 {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw W2SClientError.httpStatus(code: httpResponse.statusCode, body: body)
+        }
+
+        do {
+            return try Response(jsonUTF8Data: data)
+        } catch {
+            throw W2SClientError.decode("\(error)")
+        }
+    }
+}
+{{range $service := .Services}}
+
+/// Typed W2S client for {{$service.ServiceName}}.
+public struct {{$service.ClientTypeName}}: Sendable {
+    public let client: W2SClient
+
+    public init(client: W2SClient) {
+        self.client = client
+    }
+{{range .Methods}}
+
+    /// Calls {{$service.PackageName}}.{{.MethodName}} via W2S HTTP/JSON.
+    public func {{.SwiftMethodName}}(_ request: {{.InputType}}) async throws -> {{.OutputType}} {
+        try await self.client.invoke(
+            method: "{{.HTTPMethod}}",
+            path: "{{.HTTPPath}}",
+            authRequired: {{.AuthRequired}},
+            request: request
+        )
+    }
+{{end}}
+}
+{{end}}

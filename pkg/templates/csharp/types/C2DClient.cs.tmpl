@@ -1,0 +1,42 @@
+using System;
+using Grpc.Net.Client;
+
+namespace {{.PackageName}};
+
+/// <summary>
+/// Client-to-daemon (C2D) gRPC entry point: dials the local daemon over a
+/// Windows named pipe, then exposes a typed client per C2D service.
+///
+/// This is the Windows named-pipe client implementation. It deliberately has
+/// no unix-domain-socket transport: the unix-socket clients are a separate
+/// implementation in the full-language targets, not a fallback here.
+/// </summary>
+public sealed class C2DClient : IDisposable
+{
+    /// <summary>The named pipe this client dials.</summary>
+    public string PipeName { get; }
+
+    private readonly GrpcChannel _channel;
+
+    /// <summary>
+    /// Creates a C2D client dialing <paramref name="pipeName"/>, or the default
+    /// daemon pipe when null.
+    /// </summary>
+    public C2DClient(string? pipeName = null)
+    {
+        PipeName = pipeName ?? DefaultNamedPipeName();
+
+        _channel = GrpcChannel.ForAddress(
+            "http://localhost",
+            new GrpcChannelOptions { HttpHandler = NamedPipesConnectionFactory.Create(PipeName) });
+    }
+
+    /// <summary>The default daemon named pipe name.</summary>
+    public static string DefaultNamedPipeName() => "{{.DaemonDirectory}}-daemon";
+{{range .Services}}
+    /// <summary>Typed gRPC client for the {{.ClientType}} service.</summary>
+    public {{.ClientType}} {{.MethodName}}() => new {{.ClientType}}(_channel);
+{{end}}
+    /// <summary>Disposes the underlying gRPC channel.</summary>
+    public void Dispose() => _channel.Dispose();
+}

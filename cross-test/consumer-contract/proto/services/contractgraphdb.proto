@@ -1,0 +1,22 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+syntax = "proto3";
+
+package contractgraphdb;
+
+import "sys/spec.proto";
+
+// The graph store (graphdb) for the contract fixture set. Declaring graph_store
+// marks this proto as a graph data store whose graph projections are extracted
+// from EventBus (the per-field graph_* index info on the projected types), so the
+// cross-test exercises that annotation in every language.
+option (spec.service) = {name: "contractgraphdb"};
+option (spec.graph_store) = {};
+
+message GraphdbPing {}
+
+service ContractGraphdb {
+  option (spec.service_s2s) = {auth_services: ["*"]};
+
+  rpc Ping(GraphdbPing) returns (GraphdbPing);
+}

@@ -1,0 +1,11 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// This file is intentionally empty.
+// EntitlementProfileViewService has been removed.
+// Entitlements are now embedded directly in tokens as service_entitlements,
+// resolved by OPA at token exchange time. Services no longer need to
+// subscribe to a view service for profile resolution.
+
+syntax = "proto3";
+
+package entitlementview;

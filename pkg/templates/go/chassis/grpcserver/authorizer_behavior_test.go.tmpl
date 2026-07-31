@@ -1,0 +1,282 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// CODE GENERATED - DO NOT EDIT
+
+// Behavioral tests for the REAL generated Authorizer (PC-W-1): they mint real
+// JWTs, sign them with a generated Ed25519 key, seed the matching JWK, and drive
+// Authorize/AuthenticateAtOrBelow over the actual verify path — signature,
+// audience, expiry, unknown-kid, tamper, S2S auth_services, C2S entitlements
+// presence, and the namespace level-or-below rule. No fake auth funcs.
+
+package grpcserver
+
+import (
+	"context"
+	"crypto/ed25519"
+	libBase64 "encoding/base64"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc/metadata"
+
+	wrapperJwk "{{.ModuleBasePath}}/chassis/jwk"
+	keylib "{{.ModuleBasePath}}/chassis/key"
+	keypb "{{.ModuleBasePath}}/types/sys/key"
+	tokenlib "{{.ModuleBasePath}}/chassis/token"
+	jwkpb "{{.ModuleBasePath}}/types/sys/jwk"
+)
+
+func newTestKey(t *testing.T) *keylib.ImmutableKey {
+	t.Helper()
+	protoKey, err := keylib.NewEd25519Key()
+	if err != nil {
+		t.Fatalf("NewEd25519Key: %v", err)
+	}
+	key, err := keylib.NewImmutableKey(protoKey)
+	if err != nil {
+		t.Fatalf("NewImmutableKey: %v", err)
+	}
+	return key
+}
+
+// jwkForKey builds the verifying JWK (OKP/Ed25519) for a signing key, keyed by
+// the key's id (the kid Sign stamps into the token header).
+func jwkForKey(t *testing.T, key *keylib.ImmutableKey) *wrapperJwk.ImmutableJwk {
+	t.Helper()
+	pub, ok := key.PublicKey().(ed25519.PublicKey)
+	if !ok {
+		t.Fatalf("expected ed25519 public key, got %T", key.PublicKey())
+	}
+	jwk, err := wrapperJwk.NewImmutableJwk(&jwkpb.Jwk{
+		Kid: key.Proto().Id,
+		Kty: keypb.KeyType_KEY_TYPE_OKP,
+		Crv: "Ed25519",
+		X:   libBase64.RawURLEncoding.EncodeToString(pub),
+	})
+	if err != nil {
+		t.Fatalf("NewImmutableJwk: %v", err)
+	}
+	return jwk
+}
+
+// signedToken mints a token with the shared valid claims (issuer, audience,
+// future expiry), applies the caller's customizations, and signs it with key.
+func signedToken(t *testing.T, key *keylib.ImmutableKey, customize func(*tokenlib.TokenWrapper)) string {
+	t.Helper()
+	tok := tokenlib.NewImmutableToken(nil).
+		SetIssuer("test-issuer").
+		SetAudience(serviceName).
+		SetExpiration(time.Now().Add(time.Hour).Unix())
+	customize(tok)
+	if err := tok.Sign(key); err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	return tok.GetBase64()
+}
+
+func bearerCtx(token string) context.Context {
+	md := metadata.Pairs("authorization", "Bearer "+token)
+	return metadata.NewIncomingContext(context.Background(), md)
+}
+
+// authorizerWithKeys builds an Authorizer (no live JWK-view conn) seeded with the
+// given verifying keys.
+func authorizerWithKeys(t *testing.T, jwks ...*wrapperJwk.ImmutableJwk) *authorizer {
+	t.Helper()
+	a, err := NewAuthorizer(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("NewAuthorizer: %v", err)
+	}
+	a.JwkCache().Load(jwks)
+	return a
+}
+
+const testMethod = "/demo.DemoService/DoThing"
+
+func serviceToken(caller string) func(*tokenlib.TokenWrapper) {
+	return func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("service").SetSubject(caller)
+	}
+}
+
+// A valid, correctly-signed service token whose caller matches the method's
+// auth_services pattern is authorized.
+func TestAuthorizerAcceptsValidServiceToken(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth("DoThing", []string{"caller-svc"})
+
+	tok := signedToken(t, key, serviceToken("caller-svc"))
+	if err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
+		t.Fatalf("valid service token must be authorized, got: %v", err)
+	}
+}
+
+// A service caller that does not match the method's auth_services pattern is
+// denied.
+func TestAuthorizerRejectsServiceNotInAuthServices(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth("DoThing", []string{"allowed-svc"})
+
+	tok := signedToken(t, key, serviceToken("other-svc"))
+	if err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
+		t.Fatal("service not in auth_services must be denied")
+	}
+}
+
+// An expired token is rejected even with a valid signature.
+func TestAuthorizerRejectsExpiredToken(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth("DoThing", []string{"caller-svc"})
+
+	tok := tokenlib.NewImmutableToken(nil).
+		SetIssuer("test-issuer").
+		SetAudience(serviceName).
+		SetExpiration(time.Now().Add(-time.Hour).Unix()).
+		SetSubType("service").
+		SetSubject("caller-svc")
+	if err := tok.Sign(key); err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if err := a.Authorize(bearerCtx(tok.GetBase64()), testMethod, nil); err == nil {
+		t.Fatal("expired token must be rejected")
+	}
+}
+
+// A token whose audience does not match this service is rejected.
+func TestAuthorizerRejectsWrongAudience(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth("DoThing", []string{"caller-svc"})
+
+	tok := tokenlib.NewImmutableToken(nil).
+		SetIssuer("test-issuer").
+		SetAudience(serviceName + "-not-me").
+		SetExpiration(time.Now().Add(time.Hour).Unix()).
+		SetSubType("service").
+		SetSubject("caller-svc")
+	if err := tok.Sign(key); err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if err := a.Authorize(bearerCtx(tok.GetBase64()), testMethod, nil); err == nil {
+		t.Fatal("wrong audience must be rejected")
+	}
+}
+
+// A token signed by a key whose kid is not in the cache is rejected (no verifying
+// key).
+func TestAuthorizerRejectsUnknownKid(t *testing.T) {
+	key := newTestKey(t)
+	// Seed a DIFFERENT key so the token's kid is unknown.
+	a := authorizerWithKeys(t, jwkForKey(t, newTestKey(t)))
+	a.SetMethodAuth("DoThing", []string{"caller-svc"})
+
+	tok := signedToken(t, key, serviceToken("caller-svc"))
+	if err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
+		t.Fatal("token with an unknown signing key must be rejected")
+	}
+}
+
+// A token whose seeded JWK belongs to a different key (signature will not verify)
+// is rejected — the CA-only/blind-trust hole. The forged JWK reuses the real
+// key's kid but carries a different public key.
+func TestAuthorizerRejectsTamperedSignature(t *testing.T) {
+	realKey := newTestKey(t)
+	wrongKey := newTestKey(t)
+
+	// Build a JWK under the REAL kid but with the WRONG public key.
+	wrongPub := wrongKey.PublicKey().(ed25519.PublicKey)
+	forged, err := wrapperJwk.NewImmutableJwk(&jwkpb.Jwk{
+		Kid: realKey.Proto().Id,
+		Kty: keypb.KeyType_KEY_TYPE_OKP,
+		Crv: "Ed25519",
+		X:   libBase64.RawURLEncoding.EncodeToString(wrongPub),
+	})
+	if err != nil {
+		t.Fatalf("NewImmutableJwk: %v", err)
+	}
+	a := authorizerWithKeys(t, forged)
+	a.SetMethodAuth("DoThing", []string{"caller-svc"})
+
+	tok := signedToken(t, realKey, serviceToken("caller-svc"))
+	if err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
+		t.Fatal("token verified against a mismatched public key must be rejected")
+	}
+}
+
+// A user (C2S) token with no service_entitlements claim is denied — entitlements
+// are fail-closed.
+func TestAuthorizerRejectsUserTokenMissingEntitlements(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+
+	tok := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("user").SetSubject("someone@example.com")
+	})
+	if err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
+		t.Fatal("user token missing service_entitlements must be denied")
+	}
+}
+
+// AuthenticateAtOrBelow enforces the universal namespace rule: the caller's
+// namespace must be at or above the target.
+func TestAuthenticateAtOrBelowNamespaceRule(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+
+	// Caller in "/a" is at-or-above the target "/a/b" -> allowed.
+	above := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("service").SetSubject("caller-svc").SetNamespace("/a")
+	})
+	if err := a.AuthenticateAtOrBelow(bearerCtx(above), "/a/b"); err != nil {
+		t.Fatalf("caller at-or-above target must be allowed, got: %v", err)
+	}
+
+	// Caller in "/a/b" is BELOW the target "/a" -> denied.
+	below := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("service").SetSubject("caller-svc").SetNamespace("/a/b")
+	})
+	if err := a.AuthenticateAtOrBelow(bearerCtx(below), "/a"); err == nil {
+		t.Fatal("caller below the target namespace must be denied")
+	}
+}
+
+// Authenticate (used by EnforcingUnaryInterceptor / AuthEnforcingRegistrar)
+// rejects wrong-audience tokens — the specific gap that allowed kernel-audience
+// tokens on the eventbus TypedService publish path.
+func TestAuthenticateRejectsWrongAudience(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+
+	wrongAud := func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("service").SetSubject("caller-svc")
+		tok.SetAudience("kernel")
+	}
+	tok := signedToken(t, key, wrongAud)
+	if err := a.Authenticate(bearerCtx(tok)); err == nil {
+		t.Fatal("wrong-audience token must be rejected by Authenticate")
+	}
+}
+
+// Authenticate accepts a correctly-scoped token.
+func TestAuthenticateAcceptsCorrectAudience(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+
+	tok := signedToken(t, key, serviceToken("caller-svc"))
+	if err := a.Authenticate(bearerCtx(tok)); err != nil {
+		t.Fatalf("correct-audience token must pass Authenticate, got: %v", err)
+	}
+}
+
+// Authenticate rejects a missing/empty auth header.
+func TestAuthenticateRejectsMissingToken(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+
+	ctx := context.Background()
+	if err := a.Authenticate(ctx); err == nil {
+		t.Fatal("missing token must be rejected by Authenticate")
+	}
+}

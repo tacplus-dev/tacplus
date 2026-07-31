@@ -1,0 +1,66 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+/**
+ * Multi-tenant nested on-disk layout.
+ *
+ * Layout: `<base>/<tenant>/<project>/<store>.<suffix>`
+ *
+ * A namespace (`ns`) is **ROOT / Tenant / Project** — always rooted at `/`,
+ * with `a-z0-9` segments (e.g. `/`, `/drpepper`, `/drpepper/default`). Each
+ * segment becomes a real directory, so:
+ *   - the **root** ns `/` -> `<base>/_root/`,
+ *   - a **tenant** ns `/drpepper` -> `<base>/drpepper/`,
+ *   - a **project** ns `/drpepper/default` -> `<base>/drpepper/default/`.
+ *
+ * Tenants are never mingled, and deletion is a directory removal that cascades
+ * naturally: `deleteNamespace` on `/drpepper` removes all of that tenant's
+ * projects; on `/drpepper/default` removes just that project; on `/` removes
+ * only root's own data (tenants are siblings, not children, of `_root`).
+ */
+import fs from 'fs';
+import path from 'path';
+import { DiskStoreError } from './error.js';
+
+/** The default tenant: the root namespace. */
+export const ROOT_TENANT = '/';
+/** Directory segment used for the root namespace `/`. */
+export const ROOT_SEG = '_root';
+
+/**
+ * Split a namespace into directory segments. Root (or empty) -> `[_root]`;
+ * otherwise the non-empty `/`-separated components (`a-z0-9`).
+ */
+export function nsSegments(ns: string): string[] {
+  const parts = ns.split('/').filter((s) => s.length > 0);
+  if (parts.length === 0) {
+    return [ROOT_SEG];
+  }
+  return parts;
+}
+
+/** The directory holding a namespace's store files: `<base>/<seg...>`. */
+export function nsDir(base: string, ns: string): string {
+  return path.join(base, ...nsSegments(ns));
+}
+
+/** Full path for a store file: `<base>/<ns-dirs>/<store><suffix>`. */
+export function storePath(base: string, ns: string, store: string, suffix: string): string {
+  return path.join(nsDir(base, ns), `${store}${suffix}`);
+}
+
+/**
+ * Remove a namespace's data — its directory, cascading to children. For a
+ * tenant ns (`/drpepper`) this removes all of its projects; for a project ns
+ * (`/drpepper/default`) just that project. Idempotent (missing dir is ok).
+ */
+export function deleteNamespace(base: string, ns: string): void {
+  try {
+    fs.rmSync(nsDir(base, ns), { recursive: true, force: true });
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err && err.code === 'ENOENT') {
+      return;
+    }
+    throw DiskStoreError.fromUnknown(e);
+  }
+}

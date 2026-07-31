@@ -1,0 +1,255 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+#
+# CODE GENERATED - DO NOT EDIT
+# Generated runtime support for WATCH collection methods.
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import base64 as _base64
+import json as _json
+import threading
+import time
+from typing import Callable, Generic, Iterable, Iterator, TypeVar
+
+import grpc
+
+
+Item = TypeVar("Item")
+Change = TypeVar("Change")
+
+
+class WatchRelistError(Exception):
+    grpc_code = grpc.StatusCode.OUT_OF_RANGE
+
+
+class WatchIdleTimeoutError(Exception):
+    grpc_code = grpc.StatusCode.DEADLINE_EXCEEDED
+
+
+@dataclass
+class WatchSource(Generic[Item, Change]):
+    scope: str
+    snapshot: Iterable[Item]
+    revision: int
+    changes: Callable[[], Iterable[Change]]
+
+
+class _Ring(Generic[Change]):
+    def __init__(self, depth: int, idle_secs: int):
+        self._depth = max(1, depth)
+        self._idle_secs = max(0, idle_secs)
+        self._buf: list[tuple[int, Change]] = []
+        self._closed = False
+        self._cond = threading.Condition()
+
+    def publish(self, revision: int, change: Change) -> None:
+        with self._cond:
+            if self._closed:
+                return
+            if len(self._buf) == self._depth:
+                self._buf.pop(0)
+            self._buf.append((revision, change))
+            self._cond.notify_all()
+
+    def close(self) -> None:
+        with self._cond:
+            self._closed = True
+            self._cond.notify_all()
+
+    def resume(self, from_revision: int, release: Callable[[], None]) -> Iterator[Change]:
+        next_revision = from_revision + 1
+        last_activity = time.monotonic()
+        try:
+            while True:
+                with self._cond:
+                    while True:
+                        oldest = self._buf[0][0] if self._buf else 0
+                        if next_revision > 1 and oldest > 0 and next_revision < oldest:
+                            raise WatchRelistError(
+                                "watch resume revision is older than the replay ring; relist required"
+                            )
+                        batch = [(rev, change) for rev, change in self._buf if rev >= next_revision]
+                        closed = self._closed
+                        if batch or closed:
+                            break
+                        if self._idle_secs > 0:
+                            remaining = self._idle_secs - (time.monotonic() - last_activity)
+                            if remaining <= 0:
+                                raise WatchIdleTimeoutError("watch stream idle timeout exceeded")
+                            self._cond.wait(timeout=remaining)
+                        else:
+                            self._cond.wait()
+                for rev, change in batch:
+                    next_revision = rev + 1
+                    yield change
+                    last_activity = time.monotonic()
+                if closed:
+                    return
+        finally:
+            release()
+
+
+class WatchHub(Generic[Change]):
+    def __init__(self, depth: int, idle_secs: int = 0):
+        self._depth = max(1, depth)
+        self._idle_secs = max(0, idle_secs)
+        self._rings: dict[str, _Ring[Change]] = {}
+        self._drains: set[str] = set()
+        self._refs: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def _ring(self, scope: str) -> tuple[str, _Ring[Change], bool]:
+        scope = scope or "/"
+        with self._lock:
+            ring = self._rings.get(scope)
+            if ring is None:
+                ring = _Ring(self._depth, self._idle_secs)
+                self._rings[scope] = ring
+            self._refs[scope] = self._refs.get(scope, 0) + 1
+            first = scope not in self._drains
+            if first:
+                self._drains.add(scope)
+            return scope, ring, first
+
+    def _release(self, scope: str, ring: _Ring[Change]) -> None:
+        with self._lock:
+            refs = self._refs.get(scope, 0) - 1
+            if refs > 0:
+                self._refs[scope] = refs
+                return
+            self._refs.pop(scope, None)
+            self._drains.discard(scope)
+            if self._rings.get(scope) is ring:
+                self._rings.pop(scope, None)
+                ring.close()
+
+    def watch(
+        self,
+        scope: str,
+        from_revision: int,
+        changes: Callable[[], Iterable[Change]],
+        revision_of: Callable[[Change], int],
+    ) -> Iterator[Change]:
+        scope, ring, first = self._ring(scope)
+        if first:
+            def drain() -> None:
+                change_iter = iter(changes())
+                try:
+                    for change in change_iter:
+                        ring.publish(revision_of(change), change)
+                finally:
+                    close = getattr(change_iter, "close", None)
+                    if close is not None:
+                        close()
+                    ring.close()
+
+            threading.Thread(target=drain, daemon=True).start()
+        return ring.resume(from_revision, lambda: self._release(scope, ring))
+
+
+# --- PAGE (keyset pagination) runtime ----------------------------------------
+#
+# PAGE is a unary RPC: the client drives a resumable window with an opaque
+# page_token. The generated wrapper owns the token codec and the page_size
+# bound; the handler is a keyset producer returning a Page. The token format is
+# identical across every language backend -- base64url(no pad) of
+# {"v":1,"k":[...strings...]} -- so a token minted by one client decodes on any
+# other. Keep this in lockstep with the Go/TS/Rust/Java runtimes.
+
+_PAGE_TOKEN_VERSION = 1
+
+
+class BadPageToken(Exception):
+    """INVALID_ARGUMENT raised when a page_token does not decode. The wrapper
+    never silently resets to the first page on a bad token -- that would skip
+    rows and read as success."""
+
+    grpc_code = grpc.StatusCode.INVALID_ARGUMENT
+
+
+@dataclass
+class Cursor:
+    """Keyset position of a page boundary: the order_by key components of the
+    last row in a page, as strings (the handler parses them back to typed
+    values). ``None`` means "from the beginning"."""
+
+    keys: list[str]
+
+
+@dataclass
+class PageParams:
+    """What the wrapper hands the handler for one PAGE call: the effective row
+    limit (already defaulted and clamped to the trust ceiling) and the decoded
+    ``after`` cursor (None on the first page)."""
+
+    limit: int
+    after: "Cursor | None"
+
+
+@dataclass
+class Page(Generic[Item]):
+    """What a PAGE handler returns: the window of items, the cursor to resume
+    after (None when this is the last page), and an optional total (-1 when the
+    handler did not compute a count -- callers must treat it as unknown)."""
+
+    items: list[Item]
+    next_after: "Cursor | None"
+    total: int = -1
+
+
+def encode_page_token(cursor: "Cursor | None") -> str:
+    """Serialize a cursor into the opaque next_page_token. A None cursor (last
+    page) encodes to the empty string, the auto-pager's stop signal."""
+    if cursor is None:
+        return ""
+    # ensure_ascii=False + compact separators so the encoding matches the
+    # Go/TS/Rust backends (raw UTF-8, no HTML/unicode escaping) -- the token must
+    # be byte-identical across languages for a polyglot fleet and the interop harness.
+    raw = _json.dumps({"v": _PAGE_TOKEN_VERSION, "k": list(cursor.keys)}, separators=(",", ":"), ensure_ascii=False)
+    return _base64.urlsafe_b64encode(raw.encode("utf-8")).rstrip(b"=").decode("ascii")
+
+
+# The strict base64url alphabet (RFC 4648 section 5, no padding). Tokens are
+# emitted unpadded; '=' (or any other character) must be rejected before decode
+# so a tampered token fails identically across the Go/Rust/Python backends.
+_PAGE_TOKEN_ALPHABET = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+)
+
+
+def decode_page_token(token: str) -> "Cursor | None":
+    """Parse a page_token back into a cursor. The empty string decodes to None
+    (first page). Any malformed or wrong-version input raises BadPageToken."""
+    if token == "":
+        return None
+    # Strict no-padding base64url, matching Go/Rust: reject '=' and any other
+    # character outside the base64url alphabet instead of silently re-padding.
+    # A canonical unpadded base64url string also never has length % 4 == 1
+    # (binascii would reject it anyway; checked explicitly for parity with the
+    # TS/Go decoders).
+    if not all(c in _PAGE_TOKEN_ALPHABET for c in token) or len(token) % 4 == 1:
+        raise BadPageToken()
+    try:
+        padding = "=" * (-len(token) % 4)
+        raw = _base64.urlsafe_b64decode(token + padding)
+        env = _json.loads(raw)
+    except Exception as exc:  # noqa: BLE001 - any decode failure is a bad token
+        raise BadPageToken() from exc
+    if not isinstance(env, dict) or env.get("v") != _PAGE_TOKEN_VERSION or not isinstance(env.get("k"), list):
+        raise BadPageToken()
+    return Cursor(keys=[str(k) for k in env["k"]])
+
+
+def effective_page_size(requested: int, default_size: int, maximum: int) -> int:
+    """Resolve the requested page_size against the method's default and the
+    trust-tier maximum: a non-positive request takes the default; the result is
+    clamped to [1, maximum]."""
+    n = requested
+    if n <= 0:
+        n = default_size
+    if n <= 0:
+        n = 1
+    if maximum > 0 and n > maximum:
+        n = maximum
+    return n

@@ -1,0 +1,48 @@
+package {{.ChassisBase}}.serviceconnection;
+
+import {{.TypesBase}}.sys.x509.X509;
+import java.util.ArrayList;
+import java.util.List;
+
+// Pins NEW-18 / NEW-21: service-mesh channels are fail-CLOSED and fail-FAST.
+// channelFactory refuses an empty/absent trust domain at CONSTRUCTION time (not
+// inside the per-connect lambda, where it would be caught as a transient endpoint
+// error and retried with backoff for minutes). A real trust domain builds a
+// factory. There is no CA-only fallback.
+public class ServiceConnectionTest {
+    private static int failures = 0;
+
+    private static void mustThrow(String name, Runnable r) {
+        try {
+            r.run();
+            System.err.println("FAIL: " + name + " did not throw (fail-open)");
+            failures++;
+        } catch (ServiceConnection.MissingTrustDomainException e) {
+            // Expected: a TYPED exception. The generated ServiceManager classifies an
+            // empty trust domain as a permanent (non-retryable) init error by TYPE
+            // (instanceof), so fail-fast SM startup depends on this exact type — not a
+            // message substring (NEW-21). A bare IllegalArgumentException would not be
+            // caught here and would fail the test, pinning the type contract.
+        }
+    }
+
+    public static void main(String[] args) {
+        List<X509.X509Cert> cas = new ArrayList<>();
+
+        mustThrow("empty trust domain", () -> ServiceConnection.channelFactory(cas, ""));
+        mustThrow("null trust domain", () -> ServiceConnection.channelFactory(cas, null));
+
+        // A real trust domain builds a factory without throwing at construction.
+        ServiceConnection.ChannelFactory f = ServiceConnection.channelFactory(cas, "example.com");
+        if (f == null) {
+            System.err.println("FAIL: channelFactory returned null for a valid trust domain");
+            failures++;
+        }
+
+        if (failures > 0) {
+            System.err.println(failures + " ServiceConnection check(s) FAILED");
+            System.exit(1);
+        }
+        System.out.println("ServiceConnectionTest: all checks passed");
+    }
+}

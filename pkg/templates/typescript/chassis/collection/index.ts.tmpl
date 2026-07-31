@@ -1,0 +1,312 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// CODE GENERATED - DO NOT EDIT
+// Generated runtime support for WATCH collection methods.
+
+export class WatchRelistError extends Error {
+    code = 11;
+
+    constructor() {
+        super('watch resume revision is older than the replay ring; relist required');
+        this.name = 'WatchRelistError';
+    }
+}
+
+export class WatchIdleTimeoutError extends Error {
+    code = 4;
+
+    constructor() {
+        super('watch stream idle timeout exceeded');
+        this.name = 'WatchIdleTimeoutError';
+    }
+}
+
+export interface WatchSource<Item, Change> {
+    scope: string;
+    snapshot: AsyncIterable<Item> | Iterable<Item>;
+    revision: number | bigint;
+    changes: () => AsyncIterable<Change> | Iterable<Change>;
+}
+
+type Entry<Change> = { revision: number; change: Change };
+
+async function* toAsync<T>(src: AsyncIterable<T> | Iterable<T>): AsyncIterable<T> {
+    if ((src as AsyncIterable<T>)[Symbol.asyncIterator]) {
+        for await (const item of src as AsyncIterable<T>) {
+            yield item;
+        }
+        return;
+    }
+    for (const item of src as Iterable<T>) {
+        yield item;
+    }
+}
+
+class Ring<Change> {
+    private readonly cap: number;
+    private readonly idleMs: number;
+    private readonly buf: Entry<Change>[] = [];
+    private closed = false;
+    private waiters: Array<() => void> = [];
+
+    constructor(depth: number, idleSecs: number) {
+        this.cap = Math.max(1, depth);
+        this.idleMs = Number.isFinite(idleSecs) && idleSecs > 0 ? idleSecs * 1000 : 0;
+    }
+
+    publish(revision: number, change: Change): void {
+        if (this.closed) {
+            return;
+        }
+        if (this.buf.length === this.cap) {
+            this.buf.shift();
+        }
+        this.buf.push({ revision, change });
+        this.notify();
+    }
+
+    close(): void {
+        this.closed = true;
+        this.notify();
+    }
+
+    async *resume(fromRevision: number, release: () => void): AsyncIterable<Change> {
+        let nextRevision = fromRevision + 1;
+        let lastActivity = Date.now();
+        try {
+            for (;;) {
+                const oldest = this.buf.length > 0 ? this.buf[0].revision : 0;
+                if (nextRevision > 1 && oldest > 0 && nextRevision < oldest) {
+                    throw new WatchRelistError();
+                }
+                const batch = this.buf.filter((entry) => entry.revision >= nextRevision);
+                for (const entry of batch) {
+                    nextRevision = entry.revision + 1;
+                    yield entry.change;
+                    lastActivity = Date.now();
+                }
+                if (this.closed) {
+                    return;
+                }
+                if (this.idleMs > 0) {
+                    const remaining = this.idleMs - (Date.now() - lastActivity);
+                    if (remaining <= 0 || await this.wait(remaining)) {
+                        throw new WatchIdleTimeoutError();
+                    }
+                } else {
+                    await this.wait(0);
+                }
+            }
+        } finally {
+            release();
+        }
+    }
+
+    private wait(timeoutMs: number): Promise<boolean> {
+        return new Promise((resolve) => {
+            let active = true;
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const waiter = () => {
+                if (!active) {
+                    return;
+                }
+                active = false;
+                if (timer) {
+                    clearTimeout(timer);
+                }
+                resolve(false);
+            };
+            this.waiters.push(waiter);
+            if (timeoutMs > 0) {
+                timer = setTimeout(() => {
+                    if (!active) {
+                        return;
+                    }
+                    active = false;
+                    this.waiters = this.waiters.filter((w) => w !== waiter);
+                    resolve(true);
+                }, timeoutMs);
+            }
+        });
+    }
+
+    private notify(): void {
+        const waiters = this.waiters;
+        this.waiters = [];
+        for (const waiter of waiters) {
+            waiter();
+        }
+    }
+}
+
+export class WatchHub<Change> {
+    private readonly depth: number;
+    private readonly idleSecs: number;
+    private readonly rings = new Map<string, Ring<Change>>();
+    private readonly drains = new Set<string>();
+    private readonly refs = new Map<string, number>();
+
+    constructor(depth: number, idleSecs: number = 0) {
+        this.depth = Math.max(1, depth);
+        this.idleSecs = Math.max(0, Number(idleSecs) || 0);
+    }
+
+    watch(
+        scope: string,
+        fromRevision: number | bigint,
+        changes: () => AsyncIterable<Change> | Iterable<Change>,
+        revisionOf: (change: Change) => number | bigint,
+    ): AsyncIterable<Change> {
+        const key = scope || '/';
+        let ring = this.rings.get(key);
+        if (ring === undefined) {
+            ring = new Ring<Change>(this.depth, this.idleSecs);
+            this.rings.set(key, ring);
+        }
+        this.refs.set(key, (this.refs.get(key) ?? 0) + 1);
+        if (!this.drains.has(key)) {
+            this.drains.add(key);
+            (async () => {
+                try {
+                    for await (const change of toAsync(changes())) {
+                        ring!.publish(Number(revisionOf(change)), change);
+                    }
+                } finally {
+                    ring!.close();
+                }
+            })();
+        }
+        return ring.resume(Number(fromRevision), () => this.release(key, ring!));
+    }
+
+    private release(scope: string, ring: Ring<Change>): void {
+        const refs = (this.refs.get(scope) ?? 0) - 1;
+        if (refs > 0) {
+            this.refs.set(scope, refs);
+            return;
+        }
+        this.refs.delete(scope);
+        this.drains.delete(scope);
+        if (this.rings.get(scope) === ring) {
+            this.rings.delete(scope);
+            ring.close();
+        }
+    }
+}
+
+// --- PAGE (keyset pagination) runtime ----------------------------------------
+//
+// PAGE is a unary RPC: the client drives a resumable window with an opaque
+// page_token. The generated wrapper owns the token codec and the page_size
+// bound; the handler is a keyset producer returning a Page. The token format is
+// identical across every language backend — base64url(no pad) of
+// {"v":1,"k":[...strings...]} — so a token minted by one client decodes on any
+// other. Keep this in lockstep with the Go/Rust/Python/Java runtimes.
+
+const PAGE_TOKEN_VERSION = 1;
+
+// BadPageTokenError is the INVALID_ARGUMENT (code 3) error the wrapper raises
+// when a page_token does not decode. The wrapper never silently resets to the
+// first page on a bad token — that would skip rows and read as success.
+export class BadPageTokenError extends Error {
+    code = 3;
+
+    constructor() {
+        super('page_token is malformed or from an incompatible version');
+        this.name = 'BadPageTokenError';
+    }
+}
+
+// Cursor is the keyset position of a page boundary: the order_by key components
+// of the last row in a page, as strings (the handler parses them back to typed
+// values — it owns the column types). A null cursor means "from the beginning".
+export interface Cursor {
+    keys: string[];
+}
+
+// PageParams is what the wrapper hands the handler for one PAGE call: the
+// effective row limit (already defaulted and clamped to the trust ceiling) and
+// the decoded after cursor (null on the first page).
+export interface PageParams {
+    limit: number;
+    after: Cursor | null;
+}
+
+// Page is what a PAGE handler returns: the window of items, the cursor to resume
+// after (null when this is the last page), and an optional total. A total of -1
+// means the handler did not compute a count — callers must treat it as unknown.
+export interface Page<Item> {
+    items: Item[];
+    nextAfter: Cursor | null;
+    total: number;
+}
+
+// encodePageToken serializes a cursor into the opaque next_page_token. A null
+// cursor (last page) encodes to the empty string, the auto-pager's stop signal.
+export function encodePageToken(c: Cursor | null): string {
+    if (c === null) {
+        return '';
+    }
+    const raw = JSON.stringify({ v: PAGE_TOKEN_VERSION, k: c.keys ?? [] });
+    return Buffer.from(raw, 'utf8').toString('base64url');
+}
+
+// Strict unpadded base64url alphabet (RFC 4648 §5). Buffer.from(token,
+// 'base64url') is lenient — it accepts '=' padding, whitespace, and other
+// stray characters that the Go/Rust decoders reject — so tokens are validated
+// against this alphabet before decoding to keep INVALID_ARGUMENT behavior
+// identical across languages.
+const BASE64URL_STRICT = /^[A-Za-z0-9_-]+$/;
+
+// decodePageToken parses a page_token back into a cursor. The empty string
+// decodes to null (first page). Any malformed or wrong-version input throws
+// BadPageTokenError.
+export function decodePageToken(token: string): Cursor | null {
+    if (token === '') {
+        return null;
+    }
+    // A canonical unpadded base64url string never has length % 4 === 1.
+    if (!BASE64URL_STRICT.test(token) || token.length % 4 === 1) {
+        throw new BadPageTokenError();
+    }
+    let raw: string;
+    try {
+        const decoded = Buffer.from(token, 'base64url');
+        // Round-trip length check: the lenient decoder silently drops input it
+        // cannot decode instead of throwing.
+        if (decoded.length !== Math.floor((token.length * 3) / 4)) {
+            throw new Error('truncated base64url payload');
+        }
+        raw = decoded.toString('utf8');
+    } catch {
+        throw new BadPageTokenError();
+    }
+    let env: { v?: unknown; k?: unknown };
+    try {
+        env = JSON.parse(raw);
+    } catch {
+        throw new BadPageTokenError();
+    }
+    if (env.v !== PAGE_TOKEN_VERSION || !Array.isArray(env.k)) {
+        throw new BadPageTokenError();
+    }
+    return { keys: (env.k as unknown[]).map((x) => String(x)) };
+}
+
+// effectivePageSize resolves the requested page_size against the method's
+// generated default and the trust-tier maximum: a non-positive request takes the
+// default; the result is clamped to [1, max]. Every page is capped at the
+// caller's trust ceiling regardless of what page_size it asks for.
+export function effectivePageSize(requested: number, defaultSize: number, max: number): number {
+    let n = requested;
+    if (n <= 0) {
+        n = defaultSize;
+    }
+    if (n <= 0) {
+        n = 1;
+    }
+    if (max > 0 && n > max) {
+        n = max;
+    }
+    return n;
+}

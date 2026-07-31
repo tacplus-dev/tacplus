@@ -1,0 +1,21 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+HTTP client library with retry logic and protobuf-based configuration.
+
+This library provides:
+- ProtoError: Exception with gRPC error code (from types.sys.errors.exceptions)
+- TypedClient: HTTP client with retry logic, TLS support, and type-safe operations
+- Adapter: Bridge between TypedClient and generated client code
+"""
+
+from {{.PythonPackageBase}}.types.sys.errors.exceptions import ProtoError, from_http_status
+from .typed_client import TypedClient
+from .adapter import Adapter
+
+__all__ = [
+    'ProtoError',
+    'from_http_status',
+    'TypedClient',
+    'Adapter',
+]

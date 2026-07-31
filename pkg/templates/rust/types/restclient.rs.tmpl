@@ -1,0 +1,114 @@
+{{.Header}}
+
+use reqwest::Client;
+use serde::de::DeserializeOwned;
+#[allow(unused_imports)]
+use serde::Serialize;
+{{- if .HasStreaming}}
+use futures::stream::{self, Stream, StreamExt};
+use tokio::io::AsyncBufReadExt;
+use tokio_util::io::StreamReader;
+{{- end}}
+{{.ServiceImports}}
+
+/// {{.ClientName}} provides a typed REST client for {{.ServiceName}}.
+///
+/// Wraps a reqwest::Client and provides typed methods for each RPC
+/// using convention-based REST paths (POST /api/{package}/v1/{service}/{method}).
+#[allow(dead_code)]
+pub struct {{.ClientName}} {
+    client: Client,
+    base_url: String,
+}
+
+impl {{.ClientName}} {
+    /// Creates a new typed REST client for {{.ServiceName}}.
+    pub fn new(client: Client, base_url: String) -> Self {
+        Self { client, base_url }
+    }
+
+    #[allow(dead_code)]
+    async fn do_json<Resp: DeserializeOwned>(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<String>,
+    ) -> Result<Resp, Box<dyn std::error::Error>> {
+        let url = format!("{}{}", self.base_url, path);
+        let req = match method {
+            "POST" => {
+                let mut r = self.client.post(&url);
+                if let Some(b) = body {
+                    r = r.header("content-type", "application/json").body(b);
+                }
+                r
+            }
+            "GET" => self.client.get(&url),
+            _ => self.client.request(reqwest::Method::from_bytes(method.as_bytes())?, &url),
+        };
+
+        let resp = req.send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await?;
+            return Err(format!("REST call {} {} returned {}: {}", method, path, status, text).into());
+        }
+
+        let text = resp.text().await?;
+        let result: Resp = serde_json::from_str(&text)?;
+        Ok(result)
+    }
+
+{{- if .HasStreaming}}
+
+    async fn stream_ndjson<Resp: DeserializeOwned + 'static>(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<String>,
+    ) -> Result<impl Stream<Item = Result<Resp, Box<dyn std::error::Error>>>, Box<dyn std::error::Error>> {
+        let url = format!("{}{}", self.base_url, path);
+        let req = match method {
+            "POST" => {
+                let mut r = self.client.post(&url);
+                if let Some(b) = body {
+                    r = r.header("content-type", "application/json").body(b);
+                }
+                r.header("accept", "application/x-ndjson")
+            }
+            _ => self.client.get(&url).header("accept", "application/x-ndjson"),
+        };
+
+        let resp = req.send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await?;
+            return Err(format!("REST stream {} {} returned {}: {}", method, path, status, text).into());
+        }
+
+        let byte_stream = resp.bytes_stream().map(|r| r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
+        let reader = StreamReader::new(byte_stream);
+        let lines = tokio::io::BufReader::new(reader).lines();
+
+        Ok(stream::unfold(lines, |mut lines| async move {
+            loop {
+                match lines.next_line().await {
+                    Ok(Some(line)) => {
+                        let trimmed = line.trim().to_string();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        let result: Result<Resp, Box<dyn std::error::Error>> =
+                            serde_json::from_str(&trimmed).map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
+                        return Some((result, lines));
+                    }
+                    Ok(None) => return None,
+                    Err(e) => return Some((Err(Box::new(e) as Box<dyn std::error::Error>), lines)),
+                }
+            }
+        }))
+    }
+{{- end}}
+
+{{.Methods}}
+}

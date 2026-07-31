@@ -1,0 +1,380 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// Database configuration library
+
+syntax = "proto3";
+
+package database;
+
+import "sys/spec.proto";
+
+option (spec.string_const) = {name: "DEFAULT_DB_HOST" value: "localhost"};
+option (spec.string_const) = {name: "DEFAULT_DB_DRIVER" value: "postgres"};
+option (spec.int_const) = {name: "DEFAULT_PORT" value: 5432};
+option (spec.int_const) = {name: "DEFAULT_MAX_CONNECTIONS" value: 100};
+option (spec.int_const) = {name: "DEFAULT_MIN_CONNECTIONS" value: 10};
+option (spec.float_const) = {name: "DEFAULT_TIMEOUT_SECONDS" value: 30.0};
+option (spec.bool_const) = {name: "DEFAULT_SSL_ENABLED" value: true};
+
+// Database driver type
+enum DriverType {
+  DRIVER_TYPE_UNDEFINED = 0;
+  DRIVER_TYPE_POSTGRES = 1 [(spec.json_return_value) = "postgres"];
+  DRIVER_TYPE_MYSQL = 2 [(spec.json_return_value) = "mysql"];
+  DRIVER_TYPE_SQLITE = 3 [(spec.json_return_value) = "sqlite"];
+  DRIVER_TYPE_MONGODB = 4 [(spec.json_return_value) = "mongodb"];
+  DRIVER_TYPE_REDIS = 5 [(spec.json_return_value) = "redis"];
+  DRIVER_TYPE_CASSANDRA = 6 [(spec.json_return_value) = "cassandra"];
+}
+
+// SSL mode
+enum SSLMode {
+  SSL_MODE_UNDEFINED = 0;
+  SSL_MODE_DISABLE = 1 [(spec.json_return_value) = "disable"];
+  SSL_MODE_REQUIRE = 2 [(spec.json_return_value) = "require"];
+  SSL_MODE_VERIFY_CA = 3 [(spec.json_return_value) = "verify-ca"];
+  SSL_MODE_VERIFY_FULL = 4 [(spec.json_return_value) = "verify-full"];
+}
+
+// Isolation level
+enum IsolationLevel {
+  ISOLATION_LEVEL_UNDEFINED = 0;
+  ISOLATION_LEVEL_READ_UNCOMMITTED = 1 [(spec.json_return_value) = "read_uncommitted"];
+  ISOLATION_LEVEL_READ_COMMITTED = 2 [(spec.json_return_value) = "read_committed"];
+  ISOLATION_LEVEL_REPEATABLE_READ = 3 [(spec.json_return_value) = "repeatable_read"];
+  ISOLATION_LEVEL_SERIALIZABLE = 4 [(spec.json_return_value) = "serializable"];
+}
+
+// Log level
+enum LogLevel {
+  LOG_LEVEL_UNDEFINED = 0;
+  LOG_LEVEL_DEBUG = 1 [(spec.json_return_value) = "debug"];
+  LOG_LEVEL_INFO = 2 [(spec.json_return_value) = "info"];
+  LOG_LEVEL_WARN = 3 [(spec.json_return_value) = "warn"];
+  LOG_LEVEL_ERROR = 4 [(spec.json_return_value) = "error"];
+}
+
+// Database configuration
+message DatabaseConfig {
+  // Driver type
+  DriverType driver = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_enum_defined) = true
+  ];
+
+  // Host address (IP or hostname)
+  string host = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_fqdn) = true
+  ];
+
+  // Port number
+  uint32 port = 3 [
+    (spec.assert_required) = true,
+    (spec.assert_net_port) = true
+  ];
+
+  // Database name
+  string database = 4 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 1,
+    (spec.assert_max_size) = 63
+  ];
+
+  // Username
+  string username = 5 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 1,
+    (spec.assert_max_size) = 63
+  ];
+
+  // Password (required)
+  string password = 6 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 256
+  ];
+
+  // SSL configuration
+  SSLConfig ssl_config = 7;
+
+  // Connection pool settings
+  PoolConfig pool_config = 8;
+
+  // Timeouts
+  TimeoutConfig timeout_config = 9;
+
+  // Additional connection parameters
+  map<string, string> connection_params = 10 [(spec.assert_max_size) = 100];
+
+  // Schema name (optional)
+  string schema = 11 [(spec.assert_max_size) = 63];
+
+  // Enable query logging
+  bool enable_query_log = 12;
+
+  // Log level
+  LogLevel log_level = 13 [(spec.assert_enum_defined) = true];
+
+  // Default isolation level
+  IsolationLevel isolation_level = 14 [(spec.assert_enum_defined) = true];
+
+  // Application name
+  string application_name = 15 [(spec.assert_max_size) = 64];
+}
+
+// SSL configuration
+message SSLConfig {
+  // SSL mode
+  SSLMode mode = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_enum_defined) = true
+  ];
+
+  // Certificate authority certificate
+  string ca_cert = 2 [
+    (spec.assert_enc_type) = ENC_TYPE_X509_CERT_ANY,
+    (spec.required_if_true) = "require_client_cert"
+  ];
+
+  // Client certificate
+  string client_cert = 3 [
+    (spec.assert_enc_type) = ENC_TYPE_X509_CERT_ANY,
+    (spec.required_if_true) = "require_client_cert"
+  ];
+
+  // Client private key
+  string client_key = 4 [
+    (spec.assert_enc_type) = ENC_TYPE_KEY_PRIVATE_RSA,
+    (spec.required_if_true) = "require_client_cert"
+  ];
+
+  // Require client certificate
+  bool require_client_cert = 5;
+
+  // Server name for SNI
+  string server_name = 6 [(spec.assert_fqdn) = true];
+
+  // Skip verification (dangerous!)
+  bool skip_verify = 7;
+}
+
+// Connection pool configuration
+message PoolConfig {
+  // Maximum number of open connections
+  int32 max_open_conns = 1 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 1000
+  }];
+
+  // Maximum number of idle connections
+  int32 max_idle_conns = 2 [(spec.assert_numeric) = {
+    ge: 0,
+    le: 500
+  }];
+
+  // Maximum connection lifetime in seconds
+  int64 conn_max_lifetime_sec = 3 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 60,
+    (spec.assert_duration_max) = 86400
+  ];
+
+  // Maximum connection idle time in seconds
+  int64 conn_max_idle_time_sec = 4 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 30,
+    (spec.assert_duration_max) = 3600
+  ];
+
+  // Enable connection health checks
+  bool enable_health_check = 5;
+
+  // Health check interval in seconds
+  int64 health_check_interval_sec = 6 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 10,
+    (spec.assert_duration_max) = 300
+  ];
+}
+
+// Timeout configuration
+message TimeoutConfig {
+  // Connection timeout in milliseconds
+  int64 connect_timeout_ms = 1 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 100,
+    (spec.assert_duration_max) = 60000
+  ];
+
+  // Query timeout in milliseconds
+  int64 query_timeout_ms = 2 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 100,
+    (spec.assert_duration_max) = 300000
+  ];
+
+  // Read timeout in milliseconds
+  int64 read_timeout_ms = 3 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 100,
+    (spec.assert_duration_max) = 300000
+  ];
+
+  // Write timeout in milliseconds
+  int64 write_timeout_ms = 4 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 100,
+    (spec.assert_duration_max) = 300000
+  ];
+}
+
+// Query result
+message QueryResult {
+  // Number of rows affected
+  int64 rows_affected = 1 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Last insert ID
+  int64 last_insert_id = 2;
+
+  // Execution time in milliseconds
+  int64 execution_time_ms = 3 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Error message (if any)
+  string error = 4;
+
+  // Query that was executed
+  string query = 5;
+}
+
+// Migration info
+message MigrationInfo {
+  // Migration version
+  string version = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_semver) = true
+  ];
+
+  // Migration name
+  string name = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_max_size) = 200
+  ];
+
+  // Description
+  string description = 3 [(spec.assert_max_size) = 1000];
+
+  // Applied timestamp
+  int64 applied_at = 4 [(spec.assert_ge) = 1704067200];
+
+  // Execution time in milliseconds
+  int64 execution_time_ms = 5 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Was successful
+  bool success = 6;
+
+  // Checksum of migration file
+  string checksum = 7 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 64,
+    (spec.assert_max_size) = 64
+  ];
+}
+
+// Backup configuration
+message BackupConfig {
+  // Backup directory (absolute path)
+  string backup_dir = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_file_path) = PATH_ABSOLUTE
+  ];
+
+  // Backup schedule (cron expression)
+  string schedule = 2 [(spec.assert_required) = true];
+
+  // Retention days
+  int32 retention_days = 3 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 3650
+  }];
+
+  // Compression enabled
+  bool compress = 4;
+
+  // Encryption enabled
+  bool encrypt = 5;
+
+  // Encryption key (base64 encoded)
+  string encryption_key = 6 [
+    (spec.assert_base64) = true,
+    (spec.required_if_true) = "encrypt"
+  ];
+
+  // Include schema
+  bool include_schema = 7;
+
+  // Include data
+  bool include_data = 8;
+
+  // Tables to exclude
+  repeated string exclude_tables = 9 [(spec.assert_max_size) = 100];
+}
+
+// Replica configuration
+message ReplicaConfig {
+  // Replica host
+  string host = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_fqdn) = true
+  ];
+
+  // Replica port
+  uint32 port = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_net_port) = true
+  ];
+
+  // Replica weight (for load balancing)
+  int32 weight = 3 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 100
+  }];
+
+  // Replication lag tolerance in milliseconds
+  int64 max_lag_ms = 4 [(spec.assert_numeric) = {
+    ge: 0,
+    le: 10000
+  }];
+
+  // Is read-only
+  bool read_only = 5;
+
+  // Health check URL
+  string health_check_url = 6 [(spec.assert_url) = URL_SCHEME_HTTP_OR_HTTPS];
+}
+
+// Sharding configuration
+message ShardingConfig {
+  // Shard key field
+  string shard_key = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 1
+  ];
+
+  // Number of shards
+  int32 shard_count = 2 [(spec.assert_numeric) = {
+    ge: 2,
+    le: 1024
+  }];
+
+  // Shard map (shard ID to database config)
+  map<string, DatabaseConfig> shards = 3 [(spec.assert_max_size) = 10000];
+
+  // Routing algorithm
+  string routing_algorithm = 4 [(spec.assert_required) = true];
+}

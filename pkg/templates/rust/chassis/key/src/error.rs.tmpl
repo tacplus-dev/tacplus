@@ -1,0 +1,115 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// Authentication wrappers error types
+
+use std::fmt;
+
+/// Result type for auth operations
+pub type Result<T> = std::result::Result<T, AuthError>;
+
+/// Authentication and cryptographic operation errors
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuthError {
+    /// gRPC-compatible error code
+    pub code: i32,
+    /// Human-readable error message
+    pub message: String,
+}
+
+impl AuthError {
+    /// Creates a new error with the given code and message
+    pub fn new(code: i32, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// Creates a new MissingInvalidData error (code 3: INVALID_ARGUMENT)
+    pub fn missing_invalid_data(msg: impl Into<String>) -> Self {
+        Self::new(3, msg)
+    }
+
+    /// Creates a new General error (code 13: INTERNAL)
+    pub fn general(msg: impl Into<String>) -> Self {
+        Self::new(13, msg)
+    }
+
+    /// Creates a new Unauthorized error (code 16: UNAUTHENTICATED)
+    pub fn unauthorized(msg: impl Into<String>) -> Self {
+        Self::new(16, msg)
+    }
+
+    /// Creates a new Expired error (code 4: DEADLINE_EXCEEDED)
+    pub fn expired() -> Self {
+        Self::new(4, "Token expired")
+    }
+
+    /// Creates a new RSA error (code 13: INTERNAL)
+    pub fn rsa(msg: impl Into<String>) -> Self {
+        Self::new(13, format!("RSA error: {}", msg.into()))
+    }
+
+    /// Creates a new Ed25519 error (code 13: INTERNAL)
+    pub fn ed25519(msg: impl Into<String>) -> Self {
+        Self::new(13, format!("Ed25519 error: {}", msg.into()))
+    }
+
+    /// Creates a new ECDSA error (code 13: INTERNAL)
+    pub fn ecdsa(msg: impl Into<String>) -> Self {
+        Self::new(13, format!("ECDSA error: {}", msg.into()))
+    }
+
+    /// Creates a new X.509 error (code 13: INTERNAL)
+    pub fn x509(msg: impl Into<String>) -> Self {
+        Self::new(13, format!("X.509 error: {}", msg.into()))
+    }
+
+    /// Creates a new PEM parse error (code 3: INVALID_ARGUMENT)
+    pub fn pem_parse(msg: impl Into<String>) -> Self {
+        Self::new(3, format!("PEM parse error: {}", msg.into()))
+    }
+
+    /// Creates a new unsupported algorithm error (code 12: UNIMPLEMENTED)
+    pub fn unsupported_algorithm(msg: impl Into<String>) -> Self {
+        Self::new(12, format!("Unsupported algorithm: {}", msg.into()))
+    }
+
+    /// Creates a new unsupported key type error (code 12: UNIMPLEMENTED)
+    pub fn unsupported_key_type(msg: impl Into<String>) -> Self {
+        Self::new(12, format!("Unsupported key type: {}", msg.into()))
+    }
+
+    /// Gets the error code
+    pub fn code(&self) -> i32 {
+        self.code
+    }
+
+    /// Gets the error message
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+// Implement Display for nice error messages
+impl fmt::Display for AuthError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+// Implement std::error::Error trait
+impl std::error::Error for AuthError {}
+
+// Conversions from external error types
+impl From<base64::DecodeError> for AuthError {
+    fn from(e: base64::DecodeError) -> Self {
+        Self::new(3, format!("Base64 decode error: {}", e))
+    }
+}
+
+impl From<serde_json::Error> for AuthError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::new(3, format!("JSON error: {}", e))
+    }
+}

@@ -1,0 +1,61 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// Trace v2: event-based tracing with EventBus-issued trace_id.
+//
+// A non-empty trace_id on any message activates tracing. Each service publishes
+// a TraceEvent to the trace topic as it processes the message. EventBus routes
+// events to the client stream that owns the trace_id.
+//
+// noop (field 201) is an opt-in flag: when true, the handler is skipped and a
+// default response is returned. When false (default), the handler runs normally.
+
+syntax = "proto3";
+
+package trace;
+
+import "sys/spec.proto";
+import "generated/accounting_method.proto";
+
+// TraceRound identifies a single service hop in a traced request.
+message TraceRound {
+  string service = 1 [(spec.assert_max_size) = 128];
+  string instance_id = 2 [(spec.assert_max_size) = 64];
+  int64 timestamp_ms = 3;
+}
+
+// TraceRequest replaces google.protobuf.Empty on the gRPC wire for RPCs with
+// empty input types. This ensures every RPC can be traced, even read-only
+// endpoints that take no parameters. The handler interface stays arg-free —
+// TraceRequest has no user-meaningful fields.
+message TraceRequest {
+  string trace_id = 200 [(spec.assert_max_size) = 64];
+  bool noop = 201;
+}
+
+// TraceEvent is published per-hop to the trace topic when a traced message
+// passes through a service. EventBus matches these to active WatchTrace streams
+// by trace_id. Ordering is determined by timestamp_ms in TraceRound.
+// TraceEventKind classifies the trace event within the request lifecycle.
+// External events are emitted by the gateway (edge); internal events are
+// emitted by backend services.
+enum TraceEventKind {
+  TRACE_EVENT_KIND_UNSPECIFIED = 0;
+  TRACE_EVENT_KIND_EXTERNAL_REQUEST = 1;   // gateway received the client request
+  TRACE_EVENT_KIND_EXTERNAL_RESPONSE = 2;  // gateway is returning the response to the client
+  TRACE_EVENT_KIND_INTERNAL_REQUEST = 3;   // backend service received the forwarded request
+  TRACE_EVENT_KIND_INTERNAL_RESPONSE = 4;  // backend service finished processing
+}
+
+message TraceEvent {
+  string trace_id = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 64];
+  TraceRound round = 2 [(spec.assert_required) = true];
+  // rpc identifies the specific service and method being traced using the
+  // generated AccountingMethod enum type. Exactly one field is set to the
+  // corresponding RPC enum value; all others default to 0.
+  accounting_method.AccountingMethod rpc = 5;
+  // kind classifies where in the request lifecycle this event was emitted.
+  TraceEventKind kind = 6;
+  // error is set on response events when the request failed (auth rejection,
+  // backend unavailable, handler error, etc.). Empty on success.
+  string error = 7 [(spec.assert_max_size) = 512];
+}

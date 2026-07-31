@@ -1,0 +1,10 @@
+[package]
+name = "tags"
+version = "0.1.0"
+edition = "2021"
+description = "Kubernetes-style tag set and selector helpers"
+
+[dependencies]
+{{.CrateBasePath}}-types = { path = "../../types" }
+regex = { workspace = true }
+once_cell = { workspace = true }

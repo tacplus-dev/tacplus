@@ -1,0 +1,31 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// Package entitlement defines the runtime data-entitlement lattice shared by every
+// generated <T>Entitlement message. A <T>Entitlement mirrors a record's eligible
+// fields and carries, per caller-decided (MAY_*) field, the level the generated
+// wrapper computed from the caller's token data grants at egress. The caller passes
+// no redaction knobs: the entitlement is an identity property stamped into the
+// token at mint (OPA), mapped onto <T>Entitlement by the generated builder, and
+// applied by the generated Sanitize<T> transform.
+syntax = "proto3";
+
+package entitlement;
+
+// EntitlementLevel is the data-entitlement decision for one MAY_* field. The rule
+// is FAIL-CLOSED: absent an explicit decision (UNSPECIFIED = 0, the proto3
+// default), the field gets its MOST-PROTECTIVE level — MAY_REDACT defaults to
+// REDACT, MAY_ANONYMIZE defaults to ANONYMIZE. A grant in the caller's token
+// loosens a field toward RAW; it can never loosen below a hard floor
+// (DROP/PSEUDONYMIZE fields are caller-independent and always applied).
+enum EntitlementLevel {
+  // No decision recorded — the field gets its most-protective default.
+  ENTITLEMENT_LEVEL_UNSPECIFIED = 0;
+  // Replace with a keyed HMAC surrogate. Valid only on string/bytes fields; on any
+  // other field the generated transform clamps ANONYMIZE up to REDACT.
+  ENTITLEMENT_LEVEL_ANONYMIZE = 1;
+  // Clear the field to its zero value (a message field clears the whole subtree).
+  ENTITLEMENT_LEVEL_REDACT = 2;
+  // Egress the field raw — the explicit loosening grant ("this caller is
+  // permitted to see the value"). Only ever set from a matching token data grant.
+  ENTITLEMENT_LEVEL_RAW = 3;
+}

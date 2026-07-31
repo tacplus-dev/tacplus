@@ -1,0 +1,395 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Programmatic Logger configuration
+
+use crate::constants::{LOG_FORMAT_ENV_VAR, LOG_LEVEL_ENV_VAR};
+use crate::enums::{LogFormat, LogLevel};
+use crate::error::{LoggerError, Result};
+use crate::state::{is_installed, mark_installed, set_log_level_trace};
+use std::collections::HashMap;
+use std::env;
+use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::EnvFilter;
+
+/// Logger represents a programmatic logger configuration.
+///
+/// # Fields
+///
+/// * `format` - Output format (JSON or console)
+/// * `level` - Minimum log level to output
+/// * `development` - Enable development mode features
+/// * `pretty_print` - Enable pretty-printed JSON output
+///
+/// # Internal fields
+///
+/// * `log_string` - Buffer for delayed log messages
+/// * `installed` - Tracks whether the logger has been installed
+#[derive(Debug, Clone)]
+pub struct Logger {
+    pub format: LogFormat,
+    pub level: LogLevel,
+    pub development: bool,
+    pub pretty_print: bool,
+    log_string: Vec<String>,
+    installed: bool,
+}
+
+impl Default for Logger {
+    fn default() -> Self {
+        Logger {
+            format: LogFormat::Undefined,
+            level: LogLevel::Disabled,
+            development: false,
+            pretty_print: false,
+            log_string: Vec::new(),
+            installed: false,
+        }
+    }
+}
+
+impl Logger {
+    /// Create a new Logger with default settings
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a new Logger with specific settings
+    pub fn with_settings(format: LogFormat, level: LogLevel, development: bool, pretty_print: bool) -> Self {
+        Logger {
+            format,
+            level,
+            development,
+            pretty_print,
+            log_string: Vec::new(),
+            installed: false,
+        }
+    }
+
+    /// Returns true if this Logger is equal to another Logger.
+    ///
+    /// Only compares the configuration fields: format, level, and development.
+    /// Internal state fields (log_string, installed) are ignored.
+    pub fn equals(&self, other: &Logger) -> bool {
+        self.format == other.format
+            && self.level == other.level
+            && self.development == other.development
+    }
+
+    /// Buffer a log message to be output after the logger is installed.
+    ///
+    /// This is useful for logging events that occur during logger configuration,
+    /// before the logger is fully set up and ready to use.
+    ///
+    /// Messages are stored internally and will be output as a debug log when install() is called.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use logger::Logger;
+    ///
+    /// let mut logger = Logger::default();
+    /// logger.log_delay("Starting configuration".to_string());
+    /// logger.log_delay("Loading from environment".to_string());
+    /// logger.install().expect("Failed to install");
+    /// // Outputs: delayed log->["Starting configuration", "Loading from environment"]
+    /// ```
+    pub fn log_delay(&mut self, s: String) {
+        self.log_string.push(s);
+    }
+
+    /// Load configuration values from environment variables into the Logger struct.
+    ///
+    /// Environment variables read:
+    /// * `LogLevel` - Sets the level field (trace, debug, info, warn, error)
+    /// * `LogFormat` - Sets the format field (json, console)
+    ///
+    /// This function does not check if fields are already set, so it will overwrite
+    /// existing values if the environment variables are present.
+    ///
+    /// Returns an error if any environment variable has an invalid value.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use logger::Logger;
+    ///
+    /// let mut logger = Logger::default();
+    /// logger.load_from_env().expect("Failed to load logger config");
+    /// ```
+    pub fn load_from_env(&mut self) -> Result<()> {
+        // Load format
+        if let Ok(v) = env::var(LOG_FORMAT_ENV_VAR) {
+            if !v.is_empty() {
+                let format = LogFormat::parse(&v).map_err(|e| {
+                    LoggerError::invalid_env_var(
+                        LOG_FORMAT_ENV_VAR.to_string(),
+                        v.clone(),
+                        e.to_string(),
+                    )
+                })?;
+                self.format = format;
+                self.log_delay(format!(
+                    "logger.Logger.format={} (env var {})",
+                    v, LOG_FORMAT_ENV_VAR
+                ));
+            }
+        }
+
+        // Load level
+        if let Ok(v) = env::var(LOG_LEVEL_ENV_VAR) {
+            if !v.is_empty() {
+                let level = LogLevel::parse(&v).map_err(|e| {
+                    LoggerError::invalid_env_var(
+                        LOG_LEVEL_ENV_VAR.to_string(),
+                        v.clone(),
+                        e.to_string(),
+                    )
+                })?;
+                self.level = level;
+                self.log_delay(format!(
+                    "logger.Logger.level={} (env var {})",
+                    v, LOG_LEVEL_ENV_VAR
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Returns a map of environment variable names to their values based on the Logger's current configuration.
+    ///
+    /// This is useful for passing logger configuration to child processes or for debugging.
+    ///
+    /// Only non-default values are included in the returned map.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use logger::{Logger, LogFormat, LogLevel};
+    ///
+    /// let logger = Logger {
+    ///     format: LogFormat::Json,
+    ///     level: LogLevel::Debug,
+    ///     ..Default::default()
+    /// };
+    /// let env_vars = logger.env_vars();
+    /// // env_vars = {"LogFormat": "json", "LogLevel": "debug"}
+    /// ```
+    pub fn env_vars(&self) -> HashMap<String, String> {
+        let mut m = HashMap::new();
+
+        if self.format != LogFormat::Undefined {
+            m.insert(
+                LOG_FORMAT_ENV_VAR.to_string(),
+                self.format.to_string().to_string(),
+            );
+        }
+
+        if self.level != LogLevel::Disabled {
+            m.insert(
+                LOG_LEVEL_ENV_VAR.to_string(),
+                self.level.to_string().to_string(),
+            );
+        }
+
+        m
+    }
+
+    /// Convert LogLevel to tracing::Level
+    fn tracing_level(&self) -> tracing::Level {
+        match self.level {
+            LogLevel::Trace => {
+                set_log_level_trace(true);
+                tracing::Level::TRACE
+            }
+            LogLevel::Debug => tracing::Level::DEBUG,
+            LogLevel::Info => tracing::Level::INFO,
+            LogLevel::Warn => tracing::Level::WARN,
+            LogLevel::Error => tracing::Level::ERROR,
+            LogLevel::Disabled => tracing::Level::INFO,
+        }
+    }
+
+    /// Install configures and installs the logger as the global tracing subscriber instance.
+    ///
+    /// This method should be called once during application initialization, typically in main().
+    ///
+    /// # Behavior
+    ///
+    /// * Returns immediately if Level is LogLevel::Disabled (no-op)
+    /// * Returns immediately if the logger is already installed (idempotent)
+    /// * Configures tracing with the logger's Format, Level, Development, and PrettyPrint settings
+    /// * Replaces the global tracing subscriber with the newly configured instance
+    /// * Outputs delayed log messages that were buffered before installation
+    ///
+    /// The logger will output to stderr by default.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use logger::{Logger, LogFormat, LogLevel};
+    ///
+    /// let mut logger = Logger {
+    ///     format: LogFormat::Json,
+    ///     level: LogLevel::Info,
+    ///     development: false,
+    ///     ..Default::default()
+    /// };
+    /// logger.install().expect("Failed to install logger");
+    /// tracing::info!("Logger installed successfully");
+    /// ```
+    pub fn install(&mut self) -> Result<()> {
+        // Return early if disabled
+        if self.level == LogLevel::Disabled {
+            return Ok(());
+        }
+
+        // Return early if already installed
+        if self.installed || is_installed() {
+            return Ok(());
+        }
+
+        self.installed = true;
+        mark_installed();
+
+        let level = self.tracing_level();
+
+        // Create env filter
+        let env_filter = EnvFilter::from_default_env()
+            .add_directive(level.into());
+
+        // Configure based on format
+        match self.format {
+            LogFormat::Console | LogFormat::Undefined if self.development => {
+                // Console format (development)
+                let fmt_layer = tracing_subscriber::fmt::layer()
+                    .with_target(true)
+                    .with_thread_ids(false)
+                    .with_thread_names(false)
+                    .with_file(true)
+                    .with_line_number(true)
+                    .with_span_events(FmtSpan::NONE);
+
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(fmt_layer)
+                    .try_init()
+                    .map_err(|e| LoggerError::initialization_error(e.to_string()))?;
+            }
+            LogFormat::Json => {
+                // JSON format
+                let fmt_layer = tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_target(true)
+                    .with_current_span(false)
+                    .with_span_list(false)
+                    .with_file(true)
+                    .with_line_number(true);
+
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(fmt_layer)
+                    .try_init()
+                    .map_err(|e| LoggerError::initialization_error(e.to_string()))?;
+            }
+            _ => {
+                // Default: JSON format
+                let fmt_layer = tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_target(true)
+                    .with_current_span(false)
+                    .with_span_list(false)
+                    .with_file(true)
+                    .with_line_number(true);
+
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(fmt_layer)
+                    .try_init()
+                    .map_err(|e| LoggerError::initialization_error(e.to_string()))?;
+            }
+        }
+
+        // Output delayed logs
+        if !self.log_string.is_empty() {
+            tracing::debug!("delayed log->{:?}", self.log_string);
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_logger_default() {
+        let logger = Logger::default();
+        assert_eq!(logger.format, LogFormat::Undefined);
+        assert_eq!(logger.level, LogLevel::Disabled);
+        assert!(!logger.development);
+        assert!(!logger.pretty_print);
+        assert!(logger.log_string.is_empty());
+        assert!(!logger.installed);
+    }
+
+    #[test]
+    fn test_logger_new() {
+        let logger = Logger::new();
+        assert_eq!(logger.format, LogFormat::Undefined);
+        assert_eq!(logger.level, LogLevel::Disabled);
+    }
+
+    #[test]
+    fn test_logger_equals() {
+        let logger1 = Logger::with_settings(LogFormat::Json, LogLevel::Info, true, false);
+        let logger2 = Logger::with_settings(LogFormat::Json, LogLevel::Info, true, false);
+        let logger3 = Logger::with_settings(LogFormat::Console, LogLevel::Info, true, false);
+
+        assert!(logger1.equals(&logger2));
+        assert!(!logger1.equals(&logger3));
+    }
+
+    #[test]
+    fn test_logger_log_delay() {
+        let mut logger = Logger::default();
+        logger.log_delay("message 1".to_string());
+        logger.log_delay("message 2".to_string());
+        logger.log_delay("message 3".to_string());
+
+        assert_eq!(logger.log_string.len(), 3);
+        assert_eq!(logger.log_string[0], "message 1");
+        assert_eq!(logger.log_string[1], "message 2");
+        assert_eq!(logger.log_string[2], "message 3");
+    }
+
+    #[test]
+    fn test_logger_env_vars() {
+        let logger = Logger::with_settings(LogFormat::Json, LogLevel::Debug, false, false);
+
+        let env_vars = logger.env_vars();
+        assert_eq!(env_vars.len(), 2);
+        assert_eq!(env_vars.get(LOG_FORMAT_ENV_VAR), Some(&"json".to_string()));
+        assert_eq!(env_vars.get(LOG_LEVEL_ENV_VAR), Some(&"debug".to_string()));
+    }
+
+    #[test]
+    fn test_logger_env_vars_undefined() {
+        let logger = Logger::with_settings(LogFormat::Undefined, LogLevel::Disabled, false, false);
+
+        let env_vars = logger.env_vars();
+        assert_eq!(env_vars.len(), 0);
+    }
+
+    #[test]
+    fn test_logger_env_vars_partial() {
+        let logger = Logger::with_settings(LogFormat::Json, LogLevel::Disabled, false, false);
+
+        let env_vars = logger.env_vars();
+        assert_eq!(env_vars.len(), 1);
+        assert_eq!(env_vars.get(LOG_FORMAT_ENV_VAR), Some(&"json".to_string()));
+    }
+}

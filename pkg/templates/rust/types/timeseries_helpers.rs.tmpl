@@ -1,0 +1,42 @@
+{{- /* Timeseries typed persistence helpers — generated from (spec.timeseries_type) annotations */ -}}
+{{- /* Store-neutral: each message gets a Row struct / from_proto / timeseries_columns */ -}}
+
+/// {{.TypeName}}Row is a flattened row struct for timeseries batch insertion.
+/// Field order matches [`{{.SnakeTypeName}}_timeseries_columns`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct {{.TypeName}}Row {
+{{- range .Fields}}
+    #[serde(rename = "{{.ColumnName}}")]
+    pub {{.RustFieldName}}: {{.RustType}},
+{{- end}}
+}
+
+impl {{.TypeName}}Row {
+    /// Converts a proto message to a timeseries row.
+    pub fn from_proto(msg: &{{.TypeName}}) -> Self {
+        Self {
+{{- range .Fields}}
+{{- if .IsEnum}}
+            {{.RustFieldName}}: {{.EnumType}}::try_from(msg.{{.RustFieldName}}).map(|e| e.as_str_name().to_string()).unwrap_or_default(),
+{{- else if eq .ProtoType "Timestamp"}}
+            {{.RustFieldName}}: msg.{{.RustFieldName}}.as_ref().map(|ts| ts.seconds * 1000 + (ts.nanos as i64) / 1_000_000).unwrap_or(0),
+{{- else if .IsMessage}}
+            {{.RustFieldName}}: msg.{{.RustFieldName}}.as_ref().map(|m| serde_json::to_string(m).unwrap_or_default()).unwrap_or_default(),
+{{- else if eq .RustType "String"}}
+            {{.RustFieldName}}: msg.{{.RustFieldName}}.clone(),
+{{- else}}
+            {{.RustFieldName}}: msg.{{.RustFieldName}},
+{{- end}}
+{{- end}}
+        }
+    }
+}
+
+/// Returns the ordered column names for the {{.SnakeTypeName}} timeseries table.
+pub fn {{.SnakeTypeName}}_timeseries_columns() -> &'static [&'static str] {
+    &[
+{{- range .Fields}}
+        "{{.ColumnName}}",
+{{- end}}
+    ]
+}

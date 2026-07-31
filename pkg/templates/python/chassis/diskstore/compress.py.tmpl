@@ -1,0 +1,66 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+At-rest compression for rolled/archived files and snapshot baselines.
+The live redo-log append tail is never compressed (cheap line appends).
+
+On read we auto-detect the codec by magic bytes, so a file's compression
+can change between writes without tracking it out-of-band.
+
+Unlike some other backends, Python's stdlib ships BOTH gzip AND bz2, so this
+backend supports the full NONE / GZ / BZ matrix on both write and read.
+"""
+
+import bz2
+import gzip
+from enum import IntEnum
+
+from .error import DiskStoreError
+
+
+class Codec(IntEnum):
+    """Compression algorithm. Values match the proto ``Compression`` enum."""
+
+    NONE = 0
+    GZ = 1
+    BZ = 2
+
+    @staticmethod
+    def from_proto_i32(v: int) -> "Codec":
+        """Maps the proto ``Compression`` enum (i32): 1 = GZ, 2 = BZ, else NONE."""
+        if v == 1:
+            return Codec.GZ
+        if v == 2:
+            return Codec.BZ
+        return Codec.NONE
+
+
+GZ_MAGIC = b"\x1f\x8b"
+BZ_MAGIC = b"BZh"
+
+
+def compress(data: bytes, codec: Codec) -> bytes:
+    """Compress ``data`` with ``codec``. ``Codec.NONE`` returns bytes unchanged."""
+    try:
+        if codec == Codec.NONE:
+            return bytes(data)
+        if codec == Codec.GZ:
+            return gzip.compress(data)
+        if codec == Codec.BZ:
+            return bz2.compress(data)
+    except OSError as e:
+        raise DiskStoreError.from_os_error(e)
+    raise DiskStoreError.invalid_data(f"unknown codec: {codec}")
+
+
+def decompress_auto(data: bytes) -> bytes:
+    """Decompress ``data``, auto-detecting the codec by magic bytes. Bytes with
+    no recognized magic are returned unchanged (treated as uncompressed)."""
+    try:
+        if data[: len(GZ_MAGIC)] == GZ_MAGIC:
+            return gzip.decompress(data)
+        if data[: len(BZ_MAGIC)] == BZ_MAGIC:
+            return bz2.decompress(data)
+        return bytes(data)
+    except OSError as e:
+        raise DiskStoreError.from_os_error(e)

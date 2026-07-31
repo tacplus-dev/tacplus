@@ -1,0 +1,310 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// User management types with diverse validation annotations
+
+syntax = "proto3";
+
+package user;
+
+import "sys/spec.proto";
+
+option (spec.string_const) = {name: "USER_DEFAULT_ROLE" value: "viewer"};
+option (spec.string_const) = {name: "USER_ADMIN_ROLE" value: "admin"};
+option (spec.int_const) = {name: "MIN_PASSWORD_LENGTH" value: 12};
+option (spec.int_const) = {name: "MAX_LOGIN_ATTEMPTS" value: 5};
+option (spec.float_const) = {name: "SESSION_TIMEOUT_HOURS" value: 24.0};
+option (spec.bool_const) = {name: "REQUIRE_MFA" value: true};
+
+// User account status
+enum AccountStatus {
+  ACCOUNT_STATUS_UNDEFINED = 0;
+  ACCOUNT_STATUS_PENDING = 1 [(spec.json_return_value) = "pending"];
+  ACCOUNT_STATUS_ACTIVE = 2 [(spec.json_return_value) = "active"];
+  ACCOUNT_STATUS_SUSPENDED = 3 [(spec.json_return_value) = "suspended"];
+  ACCOUNT_STATUS_LOCKED = 4 [(spec.json_return_value) = "locked"];
+  ACCOUNT_STATUS_DELETED = 5 [(spec.json_return_value) = "deleted"];
+}
+
+// Authentication method
+enum AuthMethod {
+  AUTH_METHOD_UNDEFINED = 0;
+  AUTH_METHOD_PASSWORD = 1 [(spec.json_return_value) = "password"];
+  AUTH_METHOD_OAUTH = 2 [(spec.json_return_value) = "oauth"];
+  AUTH_METHOD_SAML = 3 [(spec.json_return_value) = "saml"];
+  AUTH_METHOD_LDAP = 4 [(spec.json_return_value) = "ldap"];
+  AUTH_METHOD_CERTIFICATE = 5 [(spec.json_return_value) = "certificate"];
+}
+
+// User role
+enum UserRole {
+  USER_ROLE_UNDEFINED = 0;
+  USER_ROLE_VIEWER = 1 [(spec.json_return_value) = "viewer"];
+  USER_ROLE_EDITOR = 2 [(spec.json_return_value) = "editor"];
+  USER_ROLE_ADMIN = 3 [(spec.json_return_value) = "admin"];
+  USER_ROLE_SUPER_ADMIN = 4 [(spec.json_return_value) = "super_admin"];
+}
+
+// User profile with comprehensive field validations
+message UserProfile {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 27 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Required string with length constraints
+  string user_id = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 3,
+    (spec.assert_max_size) = 50
+  ];
+
+  // Email validation
+  string email = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_email) = true
+  ];
+
+  // Username with length constraints
+  string username = 3 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 4,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Full name
+  string full_name = 4 [
+    (spec.assert_min_size) = 1,
+    (spec.assert_max_size) = 100
+  ];
+
+  // Account status - must be defined
+  AccountStatus status = 5 [(spec.assert_enum_defined) = true];
+
+  // User role - required
+  UserRole role = 6 [
+    (spec.assert_required) = true,
+    (spec.assert_enum_defined) = true
+  ];
+
+  // Multiple authentication methods supported
+  repeated AuthMethod auth_methods = 7 [(spec.assert_max_size) = 100];
+
+  // Phone number (optional)
+  string phone_number = 8 [
+    (spec.assert_min_size) = 10,
+    (spec.assert_max_size) = 20
+  ];
+
+  // Profile picture URL
+  string avatar_url = 9 [(spec.assert_url) = URL_SCHEME_HTTPS];
+
+  // Department FQDN
+  string department_domain = 10 [(spec.assert_fqdn) = true];
+
+  // Numeric constraints - age
+  int32 age = 11 [(spec.assert_numeric) = {
+    ge: 18,
+    le: 120
+  }];
+
+  // Login attempts counter
+  int32 failed_login_attempts = 12 [(spec.assert_numeric) = {
+    ge: 0,
+    le: 10
+  }];
+
+  // Account creation timestamp (Unix seconds)
+  int64 created_at = 13 [
+    (spec.assert_required) = true,
+    (spec.assert_ge) = 1704067200,  // 2024-01-01
+    (spec.assert_le) = 8045740800   // 2225-01-01
+  ];
+
+  // Last login timestamp
+  int64 last_login = 14 [
+    (spec.assert_ge) = 1704067200,
+    (spec.assert_le) = 8045740800
+  ];
+
+  // Session timeout in seconds
+  int64 session_timeout = 15 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 300,      // 5 minutes
+    (spec.assert_duration_max) = 604800    // 7 days
+  ];
+
+  // Account balance (decimal)
+  double account_balance = 16 [(spec.assert_float) = {
+    ge: 0.0,
+    epsilon: 0.001
+  }];
+
+  // Credit score
+  float credit_score = 17 [(spec.assert_float) = {
+    ge: 300.0,
+    le: 850.0
+  }];
+
+  // MFA enabled flag
+  bool mfa_enabled = 18;
+
+  // Email verified flag
+  bool email_verified = 19;
+
+  // Public key for authentication (PEM encoded)
+  string public_key = 20 [(spec.assert_enc_type) = ENC_TYPE_KEY_PUBLIC_RSA];
+
+  // Optional certificate for mTLS
+  string certificate = 21 [(spec.assert_enc_type) = ENC_TYPE_X509_CERT_ANY];
+
+  // IP whitelist
+  repeated string allowed_ips = 22 [(spec.assert_ipaddr_type) = IP_ADDR_TYPE_IP_ANY, (spec.assert_max_size) = 100];
+
+  // Metadata as key-value pairs
+  map<string, string> metadata = 23 [(spec.assert_max_size) = 100];
+
+  // Tags/labels
+  repeated string tags = 24 [(spec.assert_max_size) = 100];
+
+  // API key (base64 encoded)
+  string api_key = 25 [
+    (spec.assert_base64) = true,
+    (spec.assert_min_size) = 32
+  ];
+
+  // User preferences
+  UserPreferences preferences = 26;
+}
+
+// User preferences
+message UserPreferences {
+  // Preferred language code
+  string language = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 2,
+    (spec.assert_max_size) = 5
+  ];
+
+  // Timezone
+  string timezone = 2 [(spec.assert_required) = true];
+
+  // Notifications enabled
+  bool notifications_enabled = 3;
+
+  // Theme preference
+  string theme = 4;
+
+  // Custom settings
+  map<string, string> custom_settings = 5 [(spec.assert_max_size) = 100];
+}
+
+// Password change request
+message PasswordChangeRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 5 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // User ID
+  string user_id = 1 [(spec.assert_required) = true];
+
+  // Old password (required)
+  string old_password = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 12
+  ];
+
+  // New password (required)
+  string new_password = 3 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 12,
+    (spec.assert_max_size) = 128
+  ];
+
+  // Password confirmation
+  string confirm_password = 4 [(spec.assert_required) = true];
+}
+
+// Session information
+message UserSession {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 9 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Session ID
+  string session_id = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 32
+  ];
+
+  // User ID
+  string user_id = 2 [(spec.assert_required) = true];
+
+  // Session start time
+  int64 started_at = 3 [(spec.assert_required) = true];
+
+  // Expiration time
+  int64 expires_at = 4 [(spec.assert_required) = true];
+
+  // Client IP address
+  string client_ip = 5 [(spec.assert_ipaddr_type) = IP_ADDR_TYPE_IP_ANY];
+
+  // User agent
+  string user_agent = 6;
+
+  // Active flag
+  bool is_active = 7;
+
+  // Last activity timestamp
+  int64 last_activity = 8;
+}
+
+// Address information
+message Address {
+  // Street address
+  string street = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_max_size) = 200
+  ];
+
+  // City
+  string city = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_max_size) = 100
+  ];
+
+  // State/Province
+  string state = 3 [(spec.assert_max_size) = 100];
+
+  // Postal code
+  string postal_code = 4 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 3,
+    (spec.assert_max_size) = 20
+  ];
+
+  // Country code (ISO 3166-1 alpha-2)
+  string country = 5 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 2,
+    (spec.assert_max_size) = 2
+  ];
+
+  // Latitude
+  double latitude = 6 [(spec.assert_float) = {
+    ge: -90.0,
+    le: 90.0
+  }];
+
+  // Longitude
+  double longitude = 7 [(spec.assert_float) = {
+    ge: -180.0,
+    le: 180.0
+  }];
+}

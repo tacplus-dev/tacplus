@@ -1,0 +1,463 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! TypedClient - the main HTTP client with retry logic.
+//!
+//! This module provides the TypedClient struct that wraps reqwest::Client
+//! and provides type-safe methods with retry logic for GET, POST, and mutations.
+
+use crate::error::{status_code_to_error, ClientError, Result};
+use crate::retry::RetryConfig;
+
+const MAX_RESPONSE_BODY_BYTES: usize = 100 * 1024 * 1024; // 100 MB
+use {{.CrateBasePathUnderscore}}_types::sys::httpclient::HttpClientConfig as ProtoHttpClientConfig;
+use reqwest::Method;
+
+/// TypedClient wraps the base HTTP client and provides type-safe methods with retry logic.
+/// Each method accepts full URLs, allowing the client to be reused for any endpoint.
+#[derive(Clone)]
+pub struct TypedClient {
+    client: reqwest::Client,
+    retry_config: RetryConfig,
+}
+
+impl TypedClient {
+    /// Create a new TypedClient from the provided HttpClientConfig.
+    /// If config is None, a default configuration is used.
+    pub fn new(config: Option<&ProtoHttpClientConfig>) -> Result<Self> {
+        let client = crate::config::build_client(config)?;
+        let retry_config = crate::config::get_retry_config(config);
+
+        Ok(Self {
+            client,
+            retry_config,
+        })
+    }
+
+    /// Returns a reference to the underlying reqwest::Client
+    pub fn http_client(&self) -> &reqwest::Client {
+        &self.client
+    }
+
+    /// Returns a reference to the retry configuration
+    pub fn retry_config(&self) -> &RetryConfig {
+        &self.retry_config
+    }
+
+    /// Perform a GET request with retry logic and deserialize using from_bytes.
+    ///
+    /// # Arguments
+    /// * `url` - The URL to request
+    /// * `from_bytes` - Function to deserialize response bytes into type T
+    ///
+    /// # Returns
+    /// The deserialized response or an error
+    pub async fn do_get<T, F>(&self, url: &str, from_bytes: F) -> Result<T>
+    where
+        F: Fn(&[u8]) -> Result<T>,
+    {
+        self.do_get_with_retry(url, from_bytes, &self.retry_config)
+            .await
+    }
+
+    /// Perform a GET request with custom retry config
+    async fn do_get_with_retry<T, F>(
+        &self,
+        url: &str,
+        from_bytes: F,
+        retry_config: &RetryConfig,
+    ) -> Result<T>
+    where
+        F: Fn(&[u8]) -> Result<T>,
+    {
+        let max_attempts = max_attempts_for_method("GET", retry_config);
+        let mut last_error = None;
+
+        for attempt in 0..max_attempts {
+            if attempt > 0 {
+                let backoff = retry_config.calculate_backoff(attempt - 1);
+                log::debug!(
+                    "retrying GET {}, attempt {}/{} after {:?}",
+                    url,
+                    attempt + 1,
+                    max_attempts,
+                    backoff
+                );
+                tokio::time::sleep(backoff).await;
+            }
+
+            log::debug!("GET {} (attempt {}/{})", url, attempt + 1, max_attempts);
+
+            match self.client.get(url).send().await {
+                Ok(response) => {
+                    let status = response.status();
+                    let status_code = status.as_u16();
+
+                    match response.bytes().await {
+                        Ok(body) => {
+                            if body.len() > MAX_RESPONSE_BODY_BYTES {
+                                return Err(ClientError::general(format!(
+                                    "response body exceeds maximum allowed size of {} bytes",
+                                    MAX_RESPONSE_BODY_BYTES
+                                )));
+                            }
+
+                            if log::log_enabled!(log::Level::Trace) {
+                                log::debug!(
+                                    "GET {} -> {}, body={}",
+                                    url,
+                                    status_code,
+                                    String::from_utf8_lossy(&body)
+                                );
+                            } else {
+                                log::debug!("GET {} -> {}", url, status_code);
+                            }
+
+                            if status_code >= 400 {
+                                let should_retry = retry_config.is_retryable_status(status_code);
+                                let error =
+                                    status_code_to_error(status_code, status.canonical_reason().unwrap_or(""));
+
+                                if should_retry && attempt < max_attempts - 1 {
+                                    last_error = Some(error);
+                                    continue;
+                                }
+                                return Err(error);
+                            }
+
+                            // Success - deserialize and return
+                            return from_bytes(&body).map_err(|e| {
+                                ClientError::deserialization_failed(format!(
+                                    "Failed to deserialize response: {}",
+                                    e
+                                ))
+                            });
+                        }
+                        Err(e) => {
+                            last_error = Some(ClientError::general(format!(
+                                "Failed to read response: {}",
+                                e
+                            )));
+                            continue;
+                        }
+                    }
+                }
+                Err(e) => {
+                    last_error = Some(ClientError::request_failed(format!("{}", e)));
+                    // Network errors are retried only when max_attempts permits it.
+                    if attempt < max_attempts - 1 {
+                        continue;
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| ClientError::general("Request failed")))
+    }
+
+    /// Perform one POST request and deserialize the response.
+    ///
+    /// # Arguments
+    /// * `url` - The URL to request
+    /// * `data_bytes` - Pre-serialized request body bytes (from TypeToJSON)
+    /// * `from_bytes` - Function to deserialize response bytes into type T
+    ///
+    /// # Returns
+    /// The deserialized response or an error
+    pub async fn do_post_with_response<T, F>(
+        &self,
+        url: &str,
+        data_bytes: &[u8],
+        from_bytes: F,
+    ) -> Result<T>
+    where
+        F: Fn(&[u8]) -> Result<T>,
+    {
+        self.do_post_with_response_and_retry(url, data_bytes, from_bytes, &self.retry_config)
+            .await
+    }
+
+    /// Perform POST with the shared retry signature. POST is not retried by default.
+    async fn do_post_with_response_and_retry<T, F>(
+        &self,
+        url: &str,
+        data_bytes: &[u8],
+        from_bytes: F,
+        retry_config: &RetryConfig,
+    ) -> Result<T>
+    where
+        F: Fn(&[u8]) -> Result<T>,
+    {
+        let max_attempts = max_attempts_for_method("POST", retry_config);
+        let mut last_error = None;
+
+        for attempt in 0..max_attempts {
+            if attempt > 0 {
+                let backoff = retry_config.calculate_backoff(attempt - 1);
+                log::debug!(
+                    "additional POST attempt {}, attempt {}/{} after {:?}",
+                    url,
+                    attempt + 1,
+                    max_attempts,
+                    backoff
+                );
+                tokio::time::sleep(backoff).await;
+            }
+
+            if log::log_enabled!(log::Level::Trace) {
+                log::debug!(
+                    "POST {} (attempt {}/{}), body={}",
+                    url,
+                    attempt + 1,
+                    max_attempts,
+                    String::from_utf8_lossy(data_bytes)
+                );
+            } else {
+                log::debug!("POST {} (attempt {}/{})", url, attempt + 1, max_attempts);
+            }
+
+            match self
+                .client
+                .post(url)
+                .header("Content-Type", "application/json")
+                .body(data_bytes.to_vec())
+                .send()
+                .await
+            {
+                Ok(response) => {
+                    let status = response.status();
+                    let status_code = status.as_u16();
+
+                    match response.bytes().await {
+                        Ok(body) => {
+                            if body.len() > MAX_RESPONSE_BODY_BYTES {
+                                return Err(ClientError::general(format!(
+                                    "response body exceeds maximum allowed size of {} bytes",
+                                    MAX_RESPONSE_BODY_BYTES
+                                )));
+                            }
+
+                            if log::log_enabled!(log::Level::Trace) {
+                                log::debug!(
+                                    "POST {} -> {}, body={}",
+                                    url,
+                                    status_code,
+                                    String::from_utf8_lossy(&body)
+                                );
+                            } else {
+                                log::debug!("POST {} -> {}", url, status_code);
+                            }
+
+                            if status_code >= 400 {
+                                let should_retry = retry_config.is_retryable_status(status_code);
+                                let error =
+                                    status_code_to_error(status_code, status.canonical_reason().unwrap_or(""));
+
+                                if should_retry && attempt < max_attempts - 1 {
+                                    last_error = Some(error);
+                                    continue;
+                                }
+                                return Err(error);
+                            }
+
+                            // Success - deserialize and return
+                            return from_bytes(&body).map_err(|e| {
+                                ClientError::deserialization_failed(format!(
+                                    "Failed to deserialize response: {}",
+                                    e
+                                ))
+                            });
+                        }
+                        Err(e) => {
+                            last_error = Some(ClientError::general(format!(
+                                "Failed to read response: {}",
+                                e
+                            )));
+                            continue;
+                        }
+                    }
+                }
+                Err(e) => {
+                    last_error = Some(ClientError::request_failed(format!("{}", e)));
+                    // Network errors are retried only when max_attempts permits it.
+                    if attempt < max_attempts - 1 {
+                        continue;
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| ClientError::general("Request failed")))
+    }
+
+    /// Perform one PUT/PATCH/DELETE request.
+    ///
+    /// # Arguments
+    /// * `method` - HTTP method (PUT, PATCH, DELETE)
+    /// * `url` - The URL to request
+    /// * `data_bytes` - Pre-serialized request body bytes (from TypeToJSON), can be None
+    ///
+    /// # Returns
+    /// Ok(()) on success, or an error
+    pub async fn do_mutation(
+        &self,
+        method: &str,
+        url: &str,
+        data_bytes: Option<&[u8]>,
+    ) -> Result<()> {
+        self.do_mutation_with_retry(method, url, data_bytes, &self.retry_config)
+            .await
+    }
+
+    /// Perform mutation with the shared retry signature. Mutations are not retried by default.
+    async fn do_mutation_with_retry(
+        &self,
+        method: &str,
+        url: &str,
+        data_bytes: Option<&[u8]>,
+        retry_config: &RetryConfig,
+    ) -> Result<()> {
+        let max_attempts = max_attempts_for_method(method, retry_config);
+        let mut last_error = None;
+
+        let http_method = Method::from_bytes(method.as_bytes())
+            .map_err(|e| ClientError::request_creation(format!("Invalid method: {}", e)))?;
+
+        for attempt in 0..max_attempts {
+            if attempt > 0 {
+                let backoff = retry_config.calculate_backoff(attempt - 1);
+                log::debug!(
+                    "retrying {} {}, attempt {}/{} after {:?}",
+                    method,
+                    url,
+                    attempt + 1,
+                    max_attempts,
+                    backoff
+                );
+                tokio::time::sleep(backoff).await;
+            }
+
+            if log::log_enabled!(log::Level::Trace) && data_bytes.is_some() {
+                log::debug!(
+                    "{} {} (attempt {}/{}), body={}",
+                    method,
+                    url,
+                    attempt + 1,
+                    max_attempts,
+                    String::from_utf8_lossy(data_bytes.unwrap())
+                );
+            } else {
+                log::debug!(
+                    "{} {} (attempt {}/{})",
+                    method,
+                    url,
+                    attempt + 1,
+                    max_attempts
+                );
+            }
+
+            let mut request = self.client.request(http_method.clone(), url);
+
+            if let Some(bytes) = data_bytes {
+                request = request
+                    .header("Content-Type", "application/json")
+                    .body(bytes.to_vec());
+            }
+
+            match request.send().await {
+                Ok(response) => {
+                    let status = response.status();
+                    let status_code = status.as_u16();
+
+                    match response.bytes().await {
+                        Ok(body) => {
+                            if body.len() > MAX_RESPONSE_BODY_BYTES {
+                                return Err(ClientError::general(format!(
+                                    "response body exceeds maximum allowed size of {} bytes",
+                                    MAX_RESPONSE_BODY_BYTES
+                                )));
+                            }
+
+                            if log::log_enabled!(log::Level::Trace) && !body.is_empty() {
+                                log::debug!(
+                                    "{} {} -> {}, body={}",
+                                    method,
+                                    url,
+                                    status_code,
+                                    String::from_utf8_lossy(&body)
+                                );
+                            } else {
+                                log::debug!("{} {} -> {}", method, url, status_code);
+                            }
+
+                            if status_code >= 400 {
+                                let should_retry = retry_config.is_retryable_status(status_code);
+                                let error =
+                                    status_code_to_error(status_code, status.canonical_reason().unwrap_or(""));
+
+                                if should_retry && attempt < max_attempts - 1 {
+                                    last_error = Some(error);
+                                    continue;
+                                }
+                                return Err(error);
+                            }
+
+                            // Success
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            last_error = Some(ClientError::general(format!(
+                                "Failed to read response: {}",
+                                e
+                            )));
+                            continue;
+                        }
+                    }
+                }
+                Err(e) => {
+                    last_error = Some(ClientError::request_failed(format!("{}", e)));
+                    // Network errors are retried only when max_attempts permits it.
+                    if attempt < max_attempts - 1 {
+                        continue;
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| ClientError::general("Request failed")))
+    }
+}
+
+fn max_attempts_for_method(method: &str, retry_config: &RetryConfig) -> u32 {
+    match method.to_ascii_uppercase().as_str() {
+        "GET" | "HEAD" | "OPTIONS" => retry_config.max_attempts(),
+        _ => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_new_client_default() {
+        let result = TypedClient::new(None);
+        assert!(result.is_ok());
+
+        let client = result.unwrap();
+        assert_eq!(client.retry_config().max_retries, 3);
+    }
+
+    #[tokio::test]
+    async fn test_new_client_with_config() {
+        let config = ProtoHttpClientConfig {
+            timeout_seconds: 30,
+            ..Default::default()
+        };
+
+        let result = TypedClient::new(Some(&config));
+        assert!(result.is_ok());
+
+        let client = result.unwrap();
+        assert_eq!(client.retry_config().max_retries, 3);
+    }
+}

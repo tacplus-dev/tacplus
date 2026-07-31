@@ -1,0 +1,148 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package llmdesc
+
+import (
+	"encoding/json"
+	"sort"
+	"strings"
+
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
+)
+
+// RegistryTypeInfo holds pre-computed data for a single message type
+// exposed through the always-on top-level registry.
+type RegistryTypeInfo struct {
+	Package         string
+	TypeName        string
+	FQN             string
+	TypeDir         string
+	SchemaJSON      string
+	Descriptor      TypeDescriptor
+	GraphType       string // graph type name from (spec.graph_type)
+	GraphXidField   string // xid field from (spec.graph_type).xid_field
+	GraphTypeSource string // source event FQN from (spec.graph_type).source
+	// EventDB
+	RecordKey   string // event key field from (spec.record).key
+	RecordOwner string // owner field from (spec.record).owner
+	// Projections
+	GraphProjections      []model.GraphProjectionEntry      // from (spec.graph_projection)
+	TimeseriesProjections []model.TimeseriesProjectionEntry // from (spec.timeseries_projection)
+	// Legacy timeseries_type (hand-written projection types). Store-neutral:
+	// retention/dedup are semantic intent, not backend DDL.
+	TimeseriesType        bool                        // true if message has (spec.timeseries_type)
+	TimeseriesTableName   string                      // table name (or snake_case of message name)
+	TimeseriesTableSource string                      // source event FQN
+	TimeseriesRetention   *model.RetentionPolicyEntry // store-neutral retention (nil = indefinite)
+	TimeseriesDedup       *model.DedupPolicyEntry     // store-neutral dedup policy (nil = none)
+	// Durable service_store metadata
+	ServiceStore     bool
+	ServiceStoreName string
+	ServiceStoreTag  string
+}
+
+// CollectRegistryTypes scans allFiles for all message types and returns their
+// pre-built descriptors sorted deterministically.
+func CollectRegistryTypes(allFiles []model.ProtoFile) []RegistryTypeInfo {
+	msgIndex := BuildMessageIndex(allFiles)
+	enumIndex := BuildEnumIndex(allFiles)
+
+	seen := make(map[string]bool)
+	var types []RegistryTypeInfo
+
+	for _, pf := range allFiles {
+		for _, msg := range pf.Messages {
+			fqn := pf.Package + "." + msg.Name
+			if seen[fqn] {
+				continue
+			}
+			seen[fqn] = true
+
+			desc := BuildTypeDescriptor(msg, pf.Package, msgIndex, enumIndex, make(map[string]bool))
+			jsonBytes, err := json.MarshalIndent(desc, "", "  ")
+			if err != nil {
+				continue
+			}
+
+			typeDir := "services"
+			relNorm := strings.ReplaceAll(pf.RelPath, "\\", "/")
+			if strings.HasPrefix(relNorm, "sys/") {
+				typeDir = "sys"
+			}
+
+			rti := RegistryTypeInfo{
+				Package:    pf.Package,
+				TypeName:   msg.Name,
+				FQN:        fqn,
+				TypeDir:    typeDir,
+				SchemaJSON: string(jsonBytes),
+				Descriptor: desc,
+			}
+
+			// Extract graph annotations from message-level annotations.
+			if msg.Annotations != nil {
+				if ann, ok := msg.Annotations["graph_type"]; ok && ann.StringValue != "" {
+					rti.GraphType = ann.StringValue
+				}
+				if ann, ok := msg.Annotations["graph_xid_field"]; ok && ann.StringValue != "" {
+					rti.GraphXidField = ann.StringValue
+				}
+				if ann, ok := msg.Annotations["graph_type_source"]; ok && ann.StringValue != "" {
+					rti.GraphTypeSource = ann.StringValue
+				}
+				// EventDB annotations. A record's key is its declared (spec.record).key
+				// or model.DefaultRecordKeyField — the ONE canonical default shared with
+				// the RecordMap query plane and projection generators. The registry emits
+				// the resolved key, never an empty string, so consumers never have to
+				// hardcode the generator-internal default.
+				if ann, ok := msg.Annotations["record"]; ok && ann.BoolValue {
+					rti.RecordKey = model.DefaultRecordKeyField
+					if k, ok := msg.Annotations["record_key"]; ok && k.StringValue != "" {
+						rti.RecordKey = k.StringValue
+					}
+				}
+				if ann, ok := msg.Annotations["record_owner"]; ok && ann.StringValue != "" {
+					rti.RecordOwner = ann.StringValue
+				}
+				// Projection annotations
+				if ann, ok := msg.Annotations["graph_projection"]; ok {
+					rti.GraphProjections = ann.GraphProjectionEntries
+				}
+				if ann, ok := msg.Annotations["timeseries_projection"]; ok {
+					rti.TimeseriesProjections = ann.TimeseriesProjectionEntries
+				}
+				// Timeseries table annotations (store-neutral)
+				if _, ok := msg.Annotations["timeseries_type"]; ok {
+					rti.TimeseriesType = true
+					if ann, ok := msg.Annotations["timeseries_table_name"]; ok && ann.StringValue != "" {
+						rti.TimeseriesTableName = ann.StringValue
+					}
+					if ann, ok := msg.Annotations["timeseries_table_source"]; ok && ann.StringValue != "" {
+						rti.TimeseriesTableSource = ann.StringValue
+					}
+					if ann, ok := msg.Annotations["timeseries_retention"]; ok && ann.TimeseriesRetention != nil {
+						rti.TimeseriesRetention = ann.TimeseriesRetention
+					}
+					if ann, ok := msg.Annotations["timeseries_dedup"]; ok && ann.TimeseriesDedup != nil {
+						rti.TimeseriesDedup = ann.TimeseriesDedup
+					}
+				}
+				if ann, ok := msg.Annotations["service_store"]; ok {
+					rti.ServiceStore = true
+					rti.ServiceStoreName = ann.StringValue
+				}
+				if ann, ok := msg.Annotations["service_store_tag"]; ok && ann.StringValue != "" {
+					rti.ServiceStoreTag = ann.StringValue
+				}
+			}
+
+			types = append(types, rti)
+		}
+	}
+
+	sort.Slice(types, func(i, j int) bool {
+		return types[i].FQN < types[j].FQN
+	})
+
+	return types
+}

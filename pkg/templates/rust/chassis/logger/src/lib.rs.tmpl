@@ -1,0 +1,108 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Logger library for Rust applications
+//!
+//! This package provides utilities for configuring and managing structured logging in Rust applications.
+//!
+//! This package offers two approaches to logger configuration:
+//!   1. Programmatic Logger struct
+//!   2. Proto-based LoggerConfig
+//!
+//! Both approaches ultimately configure and install a global tracing subscriber instance.
+//!
+//! # Key Features
+//!
+//!   - Multiple output formats (JSON for production, Console for development)
+//!   - Configurable log levels (Trace, Debug, Info, Warn, Error)
+//!   - Environment variable-based configuration
+//!   - Development and production modes
+//!   - Pretty-printing option for JSON logs
+//!   - Delayed logging for messages before logger initialization
+//!   - Trace level optimization checks
+//!
+//! # Basic Usage - Logger
+//!
+//! Using the Logger struct:
+//!
+//! ```no_run
+//! use logger::{Logger, LogFormat, LogLevel};
+//!
+//! let mut logger = Logger {
+//!     format: LogFormat::Json,
+//!     level: LogLevel::Info,
+//!     development: false,
+//!     ..Default::default()
+//! };
+//! logger.install().expect("Failed to install logger");
+//! tracing::info!("Application started");
+//! ```
+//!
+//! Loading from environment variables:
+//!
+//! ```no_run
+//! use logger::Logger;
+//!
+//! let mut logger = Logger::default();
+//! logger.load_from_env().expect("Failed to load logger config");
+//! logger.install().expect("Failed to install logger");
+//! ```
+//!
+//! # Basic Usage - Proto Logger
+//!
+//! Using the proto-based LoggerConfig:
+//!
+//! ```no_run
+//! use logger::install_from_config;
+//! use types::sys::logger::types::{LoggerConfig, Format, Level};
+//!
+//! let config = LoggerConfig {
+//!     format: Format::Json.into(),
+//!     level: Level::Info.into(),
+//!     development: false,
+//!     output_paths: vec!["stdout".to_string()],
+//!     ..Default::default()
+//! };
+//! install_from_config(&config).expect("Failed to install logger");
+//! ```
+//!
+//! # Environment Variables
+//!
+//! The package reads configuration from the following environment variables:
+//!   - LogLevel: Log level (trace, debug, info, warn, error)
+//!   - LogFormat: Log format (json, console)
+//!
+//! Example:
+//!
+//! ```bash
+//! export LogLevel=debug
+//! export LogFormat=console
+//! ```
+//!
+//! # Log Levels
+//!
+//! Log levels in order of increasing severity:
+//!   - Trace: Most verbose, detailed debugging
+//!   - Debug: Debugging information
+//!   - Info: Informational messages about normal operations
+//!   - Warn: Warning messages about potentially problematic situations
+//!   - Error: Error messages about failures and problems
+
+pub mod constants;
+pub mod enums;
+pub mod logger;
+pub mod state;
+pub mod config;
+pub mod error;
+
+// Re-export main types
+pub use constants::{LOG_LEVEL_ENV_VAR, LOG_FORMAT_ENV_VAR, DEFAULT_TIME_FORMAT};
+pub use enums::{LogLevel, LogFormat};
+pub use logger::Logger;
+pub use state::is_log_level_trace;
+pub use config::{
+    load_from_env,
+    install_from_config,
+    level_to_tracing_level,
+    format_to_encoding,
+};
+pub use error::LoggerError;

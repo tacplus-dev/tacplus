@@ -1,0 +1,111 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package proto
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+)
+
+func TestEnsureEventBusSupportProtoWritesCanonicalMessages(t *testing.T) {
+	dir := t.TempDir()
+
+	relPath, err := EnsureEventBusSupportProto(dir, EventBusSupportProtoOptions{
+		GoPackage: "example.com/project/types/generated/eventbus_support",
+	})
+	if err != nil {
+		t.Fatalf("EnsureEventBusSupportProto: %v", err)
+	}
+	if relPath != EventBusSupportProtoPath {
+		t.Fatalf("relPath = %q, want %q", relPath, EventBusSupportProtoPath)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(EventBusSupportProtoPath)))
+	if err != nil {
+		t.Fatalf("read support proto: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		`package eventbus_support;`,
+		`option go_package = "example.com/project/types/generated/eventbus_support";`,
+		`message RecordMeta { bytes key = 1; string topic = 2; int32 partition = 3; int64 offset = 4; google.protobuf.Timestamp timestamp = 5; }`,
+		`message SubscribeRequest {`,
+		`int64 offset = 1;`,
+		`bool latest = 3;`,
+		`bool earliest = 4;`,
+		`string consumer_group = 5;`,
+		`message PublishResponse { bool success = 1; string error = 2; int64 offset = 3; }`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("support proto missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestEventBusSupportProtoIsInfra(t *testing.T) {
+	if !IsEventBusSupportProto(EventBusSupportProtoPath) {
+		t.Fatalf("%s must be recognized as EventBus support proto", EventBusSupportProtoPath)
+	}
+	if !IsInfraProto(EventBusSupportProtoPath) {
+		t.Fatalf("%s must be treated as infrastructure", EventBusSupportProtoPath)
+	}
+	if !IsInfraProtoFile(EventBusSupportProtoPath, &parser.FileDescriptor{Package: "eventbus_support"}) {
+		t.Fatalf("support-only %s must be treated as infrastructure", EventBusSupportProtoPath)
+	}
+}
+
+func TestAuthoredEventBusProtoIsNotInfraFile(t *testing.T) {
+	fd := &parser.FileDescriptor{
+		Package:  "eventbus",
+		Services: []parser.ServiceDescriptor{{Name: "Admin"}},
+		Messages: []parser.MessageDescriptor{{
+			Name: "EventbusState",
+			Annotations: map[string]model.AnnotationValue{
+				"service_state": {Type: model.AnnotationTypeString, StringValue: "EventbusState"},
+			},
+		}},
+	}
+
+	if IsInfraProtoFile(EventBusSupportProtoPath, fd) {
+		t.Fatalf("authored %s with services/state must not be treated as infrastructure", EventBusSupportProtoPath)
+	}
+}
+
+func TestNeedsEventBusSupportProtoDetectsTopics(t *testing.T) {
+	dir := t.TempDir()
+	if err := CopySysProtos(dir); err != nil {
+		t.Fatalf("CopySysProtos: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "services"), 0755); err != nil {
+		t.Fatalf("mkdir services: %v", err)
+	}
+	protoText := `syntax = "proto3";
+
+package demo;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "demo"};
+
+message DemoEvent {
+  string id = 1;
+}
+
+message DemoState {
+  option (spec.service_event) = {tag: "eventbus" export: true};
+
+  repeated DemoEvent events = 1 [(spec.topic) = true];
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "services", "demo.proto"), []byte(protoText), 0644); err != nil {
+		t.Fatalf("write demo proto: %v", err)
+	}
+	if !NeedsEventBusSupportProto(dir) {
+		t.Fatal("NeedsEventBusSupportProto returned false for an EventBus topic")
+	}
+}

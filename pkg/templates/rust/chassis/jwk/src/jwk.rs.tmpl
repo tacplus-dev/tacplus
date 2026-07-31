@@ -1,0 +1,436 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// JSON Web Key (JWK) management and operations.
+//
+// This module provides parsing, validation, and usage of JWK format keys
+// as defined in RFC 7517. Supports RSA, ECDSA, and EdDSA key types.
+//
+// # Features
+//
+//! - JWK parsing and validation
+//! - Conversion to native cryptographic types
+//! - JWT signing method integration
+//! - Support for RSA, EC (P-256, P-384, P-521), and Ed25519 keys
+
+use key::error::{AuthError, Result};
+use key::keys::{KeyType, PublicKey};
+use key::base64_utils;
+use ed25519_dalek::VerifyingKey;
+use p256::ecdsa::VerifyingKey as P256VerifyingKey;
+use p384::ecdsa::VerifyingKey as P384VerifyingKey;
+use rsa::RsaPublicKey;
+use serde::{Deserialize, Serialize};
+
+/// JSON Web Key (JWK) representation
+///
+/// This structure follows RFC 7517 and includes fields for
+/// different key types (RSA, EC, OKP).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Jwk {
+    /// Key type: "RSA", "EC", or "OKP"
+    pub kty: String,
+
+    /// Algorithm: "RS384", "RS512", "ES256", "ES384", "ES512", "EdDSA", etc.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alg: Option<String>,
+
+    /// Key ID
+    pub kid: String,
+
+    /// Public key use: "sig" (signature) or "enc" (encryption)
+    #[serde(skip_serializing_if = "Option::is_none", rename = "use")]
+    pub key_use: Option<String>,
+
+    // RSA-specific fields
+    /// RSA modulus (base64url-encoded)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n: Option<String>,
+
+    /// RSA public exponent (base64url-encoded)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub e: Option<String>,
+
+    // EC-specific fields
+    /// Elliptic curve: "P-256", "P-384", "P-521"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crv: Option<String>,
+
+    /// EC/OKP X coordinate or public key (base64url-encoded)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<String>,
+
+    /// EC Y coordinate (base64url-encoded)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<String>,
+
+    // Timestamps
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exp: Option<i64>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created: Option<i64>,
+}
+
+/// Immutable JWK wrapper with pre-parsed cryptographic primitives
+///
+/// This type is thread-safe and designed for efficient reuse.
+/// It validates the JWK data during construction and provides
+/// access to the parsed public key.
+pub struct ImmutableJwk {
+    jwk: Jwk,
+    kty: KeyType,
+    public_key: PublicKey,
+}
+
+impl ImmutableJwk {
+    /// Creates a new ImmutableJwk from a JWK structure
+    ///
+    /// Validates all required fields and parses the key material
+    /// into native cryptographic types.
+    pub fn new(jwk: Jwk) -> Result<Self> {
+        if jwk.kid.is_empty() {
+            return Err(AuthError::missing_invalid_data("missing jwk.kid"));
+        }
+
+        // Parse based on key type
+        match jwk.kty.as_str() {
+            "RSA" => Self::parse_rsa(jwk),
+            "EC" => Self::parse_ec(jwk),
+            "OKP" => Self::parse_okp(jwk),
+            _ => Err(AuthError::unsupported_key_type(jwk.kty.clone())),
+        }
+    }
+
+    /// Parses an RSA JWK
+    fn parse_rsa(jwk: Jwk) -> Result<Self> {
+        let n = jwk
+            .n
+            .as_ref()
+            .ok_or_else(|| AuthError::missing_invalid_data("missing RSA modulus (n)"))?;
+        let e = jwk
+            .e
+            .as_ref()
+            .ok_or_else(|| AuthError::missing_invalid_data("missing RSA exponent (e)"))?;
+
+        let n_bytes = base64_utils::decode_base64(n)?;
+        let e_bytes = base64_utils::decode_base64(e)?;
+
+        let n_big = rsa::BigUint::from_bytes_be(&n_bytes);
+        let e_u32 = rsa::BigUint::from_bytes_be(&e_bytes)
+            .try_into()
+            .map_err(|_| AuthError::missing_invalid_data("RSA exponent too large"))?;
+
+        let public_key = RsaPublicKey::new(n_big, e_u32)
+            .map_err(|e| AuthError::rsa(e.to_string()))?;
+
+        use rsa::traits::PublicKeyParts;
+        let key_bytes = (public_key.n().bits() + 7) / 8;
+        let alg = match key_bytes {
+            0..=255 => {
+                return Err(AuthError::missing_invalid_data(format!(
+                    "unsupported RSA key size: {} bytes",
+                    key_bytes
+                )))
+            }
+            256..=511 => "RS384",
+            _ => "RS512",
+        };
+
+        Ok(Self {
+            jwk: Jwk {
+                alg: Some(alg.to_string()),
+                ..jwk
+            },
+            kty: KeyType::Rsa,
+            public_key: PublicKey::Rsa(public_key),
+        })
+    }
+
+    /// Parses an EC JWK
+    fn parse_ec(jwk: Jwk) -> Result<Self> {
+        let crv = jwk
+            .crv
+            .as_ref()
+            .ok_or_else(|| AuthError::missing_invalid_data("missing EC curve (crv)"))?;
+        let x = jwk
+            .x
+            .as_ref()
+            .ok_or_else(|| AuthError::missing_invalid_data("missing EC x coordinate"))?;
+        let y = jwk
+            .y
+            .as_ref()
+            .ok_or_else(|| AuthError::missing_invalid_data("missing EC y coordinate"))?;
+
+        let x_bytes = base64_utils::decode_base64(x)?;
+        let y_bytes = base64_utils::decode_base64(y)?;
+
+        match Self::normalize_curve_name(crv).as_str() {
+            "ES256" | "P-256" => {
+                use p256::EncodedPoint;
+
+                // Construct uncompressed point (0x04 || x || y)
+                let mut point_bytes = Vec::with_capacity(1 + x_bytes.len() + y_bytes.len());
+                point_bytes.push(0x04); // Uncompressed point tag
+                point_bytes.extend_from_slice(&x_bytes);
+                point_bytes.extend_from_slice(&y_bytes);
+
+                let point = EncodedPoint::from_bytes(&point_bytes)
+                    .map_err(|_| AuthError::ecdsa("invalid P-256 point".to_string()))?;
+
+                let verifying_key = P256VerifyingKey::from_encoded_point(&point)
+                    .map_err(|e| AuthError::ecdsa(format!("invalid P-256 key: {}", e)))?;
+
+                Ok(Self {
+                    jwk: Jwk {
+                        alg: Some("ES256".to_string()),
+                        ..jwk
+                    },
+                    kty: KeyType::Ec,
+                    public_key: PublicKey::EcP256(verifying_key),
+                })
+            }
+            "ES384" | "P-384" => {
+                use p384::EncodedPoint;
+
+                let mut point_bytes = Vec::with_capacity(1 + x_bytes.len() + y_bytes.len());
+                point_bytes.push(0x04);
+                point_bytes.extend_from_slice(&x_bytes);
+                point_bytes.extend_from_slice(&y_bytes);
+
+                let point = EncodedPoint::from_bytes(&point_bytes)
+                    .map_err(|_| AuthError::ecdsa("invalid P-384 point".to_string()))?;
+
+                let verifying_key = P384VerifyingKey::from_encoded_point(&point)
+                    .map_err(|e| AuthError::ecdsa(format!("invalid P-384 key: {}", e)))?;
+
+                Ok(Self {
+                    jwk: Jwk {
+                        alg: Some("ES384".to_string()),
+                        ..jwk
+                    },
+                    kty: KeyType::Ec,
+                    public_key: PublicKey::EcP384(verifying_key),
+                })
+            }
+            "ES512" | "P-521" => {
+                // P-521 not currently supported by our dependencies
+                Err(AuthError::unsupported_algorithm(
+                    "ES512/P-521 not yet supported".to_string(),
+                ))
+            }
+            _ => Err(AuthError::unsupported_algorithm(format!(
+                "unsupported curve: {}",
+                crv
+            ))),
+        }
+    }
+
+    /// Parses an OKP (Ed25519) JWK
+    fn parse_okp(jwk: Jwk) -> Result<Self> {
+        let crv = jwk
+            .crv
+            .as_ref()
+            .ok_or_else(|| AuthError::missing_invalid_data("missing OKP curve (crv)"))?;
+
+        if crv != "Ed25519" {
+            return Err(AuthError::unsupported_algorithm(format!(
+                "unsupported OKP curve: {} (only Ed25519 supported)",
+                crv
+            )));
+        }
+
+        let x = jwk
+            .x
+            .as_ref()
+            .ok_or_else(|| AuthError::missing_invalid_data("missing OKP x coordinate"))?;
+
+        let x_bytes = base64_utils::decode_base64(x)?;
+
+        if x_bytes.len() != 32 {
+            return Err(AuthError::missing_invalid_data(format!(
+                "invalid Ed25519 key size: {} (expected 32 bytes)",
+                x_bytes.len()
+            )));
+        }
+
+        let key_bytes: [u8; 32] = x_bytes
+            .try_into()
+            .map_err(|_| AuthError::ed25519("invalid key length".to_string()))?;
+
+        let verifying_key = VerifyingKey::from_bytes(&key_bytes)
+            .map_err(|e| AuthError::ed25519(e.to_string()))?;
+
+        Ok(Self {
+            jwk: Jwk {
+                alg: Some("EdDSA".to_string()),
+                ..jwk
+            },
+            kty: KeyType::Okp,
+            public_key: PublicKey::Ed25519(verifying_key),
+        })
+    }
+
+    /// Normalizes curve names (e.g., "P-256" to "ES256")
+    fn normalize_curve_name(curve: &str) -> String {
+        match curve {
+            "P-256" => "ES256".to_string(),
+            "P-384" => "ES384".to_string(),
+            "P-521" => "ES512".to_string(),
+            other => other.to_string(),
+        }
+    }
+
+    /// Returns the key type
+    pub fn kty(&self) -> KeyType {
+        self.kty
+    }
+
+    /// Returns the algorithm identifier
+    pub fn alg(&self) -> &str {
+        self.jwk.alg.as_deref().unwrap_or("")
+    }
+
+    /// Returns the key ID
+    pub fn kid(&self) -> &str {
+        &self.jwk.kid
+    }
+
+    /// Returns a reference to the parsed public key
+    pub fn public_key(&self) -> &PublicKey {
+        &self.public_key
+    }
+
+    /// Returns a reference to the underlying JWK
+    pub fn jwk(&self) -> &Jwk {
+        &self.jwk
+    }
+}
+
+/// Converts a native key to JWK format
+pub fn key_to_jwk(key: &key::keys::ImmutablePublicKey) -> Result<Jwk> {
+    let kid = key.id().to_string();
+    let alg = key.alg().to_string();
+
+    match key.public_key() {
+        PublicKey::Rsa(rsa_key) => {
+            use rsa::traits::PublicKeyParts;
+
+            let n = base64_utils::encode_base64_url(&rsa_key.n().to_bytes_be());
+            let e = base64_utils::encode_base64_url(&rsa_key.e().to_bytes_be());
+
+            Ok(Jwk {
+                kty: "RSA".to_string(),
+                alg: Some(alg),
+                kid,
+                key_use: Some("sig".to_string()),
+                n: Some(n),
+                e: Some(e),
+                crv: None,
+                x: None,
+                y: None,
+                exp: None,
+                created: None,
+            })
+        }
+        PublicKey::EcP256(ec_key) => {
+            let point = ec_key.to_encoded_point(false);
+            let x = base64_utils::encode_base64_url(point.x().ok_or_else(|| {
+                AuthError::ecdsa("missing x coordinate".to_string())
+            })?);
+            let y = base64_utils::encode_base64_url(point.y().ok_or_else(|| {
+                AuthError::ecdsa("missing y coordinate".to_string())
+            })?);
+
+            Ok(Jwk {
+                kty: "EC".to_string(),
+                alg: Some(alg),
+                kid,
+                key_use: Some("sig".to_string()),
+                n: None,
+                e: None,
+                crv: Some("P-256".to_string()),
+                x: Some(x),
+                y: Some(y),
+                exp: None,
+                created: None,
+            })
+        }
+        PublicKey::EcP384(ec_key) => {
+            let point = ec_key.to_encoded_point(false);
+            let x = base64_utils::encode_base64_url(point.x().ok_or_else(|| {
+                AuthError::ecdsa("missing x coordinate".to_string())
+            })?);
+            let y = base64_utils::encode_base64_url(point.y().ok_or_else(|| {
+                AuthError::ecdsa("missing y coordinate".to_string())
+            })?);
+
+            Ok(Jwk {
+                kty: "EC".to_string(),
+                alg: Some(alg),
+                kid,
+                key_use: Some("sig".to_string()),
+                n: None,
+                e: None,
+                crv: Some("P-384".to_string()),
+                x: Some(x),
+                y: Some(y),
+                exp: None,
+                created: None,
+            })
+        }
+        PublicKey::Ed25519(ed_key) => {
+            let x = base64_utils::encode_base64_url(ed_key.as_bytes());
+
+            Ok(Jwk {
+                kty: "OKP".to_string(),
+                alg: Some(alg),
+                kid,
+                key_use: Some("sig".to_string()),
+                n: None,
+                e: None,
+                crv: Some("Ed25519".to_string()),
+                x: Some(x),
+                y: None,
+                exp: None,
+                created: None,
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use key::keys;
+
+    #[test]
+    fn test_ed25519_jwk_parsing() {
+        let key = keys::generate_ed25519_key().unwrap();
+
+        // Convert the private key's public key to JWK
+        match key.public_key() {
+            keys::PublicKey::Ed25519(ed_key) => {
+                let x = base64_utils::encode_base64_url(ed_key.as_bytes());
+
+                let jwk = Jwk {
+                    kty: "OKP".to_string(),
+                    alg: Some("EdDSA".to_string()),
+                    kid: key.id().to_string(),
+                    key_use: Some("sig".to_string()),
+                    n: None,
+                    e: None,
+                    crv: Some("Ed25519".to_string()),
+                    x: Some(x),
+                    y: None,
+                    exp: None,
+                    created: None,
+                };
+
+                let immutable_jwk = ImmutableJwk::new(jwk).unwrap();
+                assert_eq!(immutable_jwk.alg(), "EdDSA");
+                assert_eq!(immutable_jwk.kty(), KeyType::Okp);
+            }
+            _ => panic!("Expected Ed25519 key"),
+        }
+    }
+}

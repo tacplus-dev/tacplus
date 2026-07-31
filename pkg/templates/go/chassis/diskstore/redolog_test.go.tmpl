@@ -1,0 +1,193 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package diskstore
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func rec(key string, v int64) *Record {
+	payload, _ := json.Marshal(map[string]int64{"v": v})
+	return &Record{Key: key, Payload: json.RawMessage(payload)}
+}
+
+func recordsBytes(t *testing.T, recs ...*Record) []byte {
+	t.Helper()
+	var out []byte
+	for _, rec := range recs {
+		line, err := json.Marshal(rec)
+		if err != nil {
+			t.Fatalf("marshal record: %v", err)
+		}
+		out = append(out, line...)
+		out = append(out, '\n')
+	}
+	return out
+}
+
+func requireRecordValue(t *testing.T, recs []*Record, key string, want int64) {
+	t.Helper()
+	for _, rec := range recs {
+		if rec.Key != key {
+			continue
+		}
+		var payload map[string]int64
+		if err := json.Unmarshal(rec.Payload, &payload); err != nil {
+			t.Fatalf("payload for %s: %v", key, err)
+		}
+		if got := payload["v"]; got != want {
+			t.Fatalf("expected %s v=%d, got %d", key, want, got)
+		}
+		return
+	}
+	t.Fatalf("record %s not found in %+v", key, recs)
+}
+
+func TestAppendDedupLatest(t *testing.T) {
+	dir := t.TempDir()
+	log, err := OpenRedoLog(dir, "/drpepper/default", "verifying_keys", 3, CodecNone)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer log.Close()
+
+	for _, r := range []*Record{rec("a", 1), rec("b", 1), rec("a", 2)} {
+		if err := log.Append(r); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+
+	recs, err := DedupFile(log.ActivePath())
+	if err != nil {
+		t.Fatalf("dedup: %v", err)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("expected 2 deduped records, got %d", len(recs))
+	}
+	var found bool
+	for _, r := range recs {
+		if r.Key == "a" {
+			found = true
+			var m map[string]int64
+			if err := json.Unmarshal(r.Payload, &m); err != nil {
+				t.Fatalf("payload: %v", err)
+			}
+			if m["v"] != 2 {
+				t.Fatalf("expected latest v=2, got %d", m["v"])
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("key a not found")
+	}
+	if !fileExists(filepath.Join(dir, "drpepper", "default", "verifying_keys.log")) {
+		t.Fatalf("log should be laid out under nested ns dirs")
+	}
+}
+
+type collectInserter struct {
+	recs []*Record
+}
+
+func (c *collectInserter) Insert(r *Record) error {
+	c.recs = append(c.recs, r)
+	return nil
+}
+
+func TestRollCompactsAndResumes(t *testing.T) {
+	dir := t.TempDir()
+	log, err := OpenRedoLog(dir, "/drpepper", "verifying_keys", 2, CodecGz)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer log.Close()
+
+	if err := log.Append(rec("a", 1)); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := log.Append(rec("a", 2)); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	snap, err := DedupFile(log.ActivePath())
+	if err != nil {
+		t.Fatalf("dedup: %v", err)
+	}
+	if err := log.Roll(snap); err != nil {
+		t.Fatalf("roll: %v", err)
+	}
+	if err := log.Append(rec("b", 9)); err != nil {
+		t.Fatalf("append after roll: %v", err)
+	}
+
+	c := &collectInserter{}
+	if _, err := log.Restore(c); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if len(c.recs) != 2 {
+		t.Fatalf("expected 2 restored records, got %d", len(c.recs))
+	}
+	if !fileExists(filepath.Join(dir, "drpepper", "verifying_keys.log.bak.1")) {
+		t.Fatalf("archive .bak.1 should exist after roll")
+	}
+}
+
+func TestRestoreRecoversBuildingSnapshotAndTempTail(t *testing.T) {
+	dir := t.TempDir()
+	log, err := OpenRedoLog(dir, "/drpepper", "verifying_keys", 0, CodecNone)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer log.Close()
+
+	active := log.ActivePath()
+	building := sibling(active, ".building")
+	temp := sibling(active, ".temp")
+	if err := atomicWrite(building, recordsBytes(t, rec("a", 1), rec("b", 1)), 0); err != nil {
+		t.Fatalf("write building: %v", err)
+	}
+	if err := atomicWrite(temp, recordsBytes(t, rec("b", 2), rec("c", 3)), 0); err != nil {
+		t.Fatalf("write temp: %v", err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatalf("close before crash simulation: %v", err)
+	}
+	if err := os.Remove(active); err != nil {
+		t.Fatalf("remove active: %v", err)
+	}
+
+	c := &collectInserter{}
+	if _, err := log.Restore(c); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if len(c.recs) != 3 {
+		t.Fatalf("expected 3 restored records, got %d", len(c.recs))
+	}
+	requireRecordValue(t, c.recs, "a", 1)
+	requireRecordValue(t, c.recs, "b", 2)
+	requireRecordValue(t, c.recs, "c", 3)
+	if !fileExists(active) {
+		t.Fatalf("restore should promote building snapshot to active")
+	}
+	if fileExists(building) {
+		t.Fatalf("building snapshot should be consumed by restore")
+	}
+	if err := log.Append(rec("d", 4)); err != nil {
+		t.Fatalf("append after recovery: %v", err)
+	}
+}
+
+func TestDedupBytesReportsLineNumber(t *testing.T) {
+	bad := []byte("{\"key\":\"a\"}\nnot-json\n")
+	_, err := DedupBytes(bad)
+	if err == nil {
+		t.Fatalf("expected error on malformed line")
+	}
+	if want := "line 2"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("error %q should mention %q", err.Error(), want)
+	}
+}

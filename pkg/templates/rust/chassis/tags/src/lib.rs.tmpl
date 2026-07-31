@@ -1,0 +1,182 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// CODE GENERATED - DO NOT EDIT
+// Generated runtime support for Kubernetes-style tag sets and selectors.
+
+use once_cell::sync::Lazy;
+use regex::Regex;
+use std::collections::HashMap;
+
+use {{.CrateBasePathUnderscore}}_types::sys::tags::tags::{
+    TagSelector, TagSelectorRequirement, TagSet,
+};
+
+const OP_IN: i32 = 1;
+const OP_NOT_IN: i32 = 2;
+const OP_EXISTS: i32 = 3;
+const OP_DOES_NOT_EXIST: i32 = 4;
+
+static TAG_NAME: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$").unwrap());
+static DNS_SEGMENT: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$").unwrap());
+
+pub fn contains_all(have: Option<&TagSet>, want: Option<&TagSet>) -> bool {
+    contains_all_map(have.map(|s| &s.tags), want.map(|s| &s.tags))
+}
+
+pub fn contains_all_map(
+    have: Option<&HashMap<String, String>>,
+    want: Option<&HashMap<String, String>>,
+) -> bool {
+    let Some(want) = want else {
+        return true;
+    };
+    if want.is_empty() {
+        return true;
+    }
+    let Some(have) = have else {
+        return false;
+    };
+    want.iter().all(|(key, value)| have.get(key) == Some(value))
+}
+
+pub fn matches(selector: Option<&TagSelector>, tags: Option<&TagSet>) -> bool {
+    matches_map(selector, tags.map(|s| &s.tags))
+}
+
+pub fn matches_map(selector: Option<&TagSelector>, tags: Option<&HashMap<String, String>>) -> bool {
+    let Some(selector) = selector else {
+        return true;
+    };
+    if !contains_all_map(tags, Some(&selector.match_tags)) {
+        return false;
+    }
+    selector
+        .match_expressions
+        .iter()
+        .all(|req| match_requirement(req, tags))
+}
+
+pub fn validate_tag_set(set: &TagSet) -> Result<(), String> {
+    for (key, value) in &set.tags {
+        validate_key(key)?;
+        validate_value(value).map_err(|e| format!("tag {key:?}: {e}"))?;
+    }
+    Ok(())
+}
+
+pub fn validate_selector(selector: &TagSelector) -> Result<(), String> {
+    for (key, value) in &selector.match_tags {
+        validate_key(key)?;
+        validate_value(value).map_err(|e| format!("match_tags[{key:?}]: {e}"))?;
+    }
+    for (i, req) in selector.match_expressions.iter().enumerate() {
+        validate_key(&req.key).map_err(|e| format!("match_expressions[{i}]: {e}"))?;
+        match req.operator {
+            OP_IN | OP_NOT_IN => {
+                if req.values.is_empty() {
+                    return Err(format!(
+                        "match_expressions[{i}]: operator {} requires at least one value",
+                        req.operator
+                    ));
+                }
+                for (j, value) in req.values.iter().enumerate() {
+                    validate_value(value)
+                        .map_err(|e| format!("match_expressions[{i}].values[{j}]: {e}"))?;
+                }
+            }
+            OP_EXISTS | OP_DOES_NOT_EXIST => {
+                if !req.values.is_empty() {
+                    return Err(format!(
+                        "match_expressions[{i}]: operator {} requires no values",
+                        req.operator
+                    ));
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "match_expressions[{i}]: invalid operator {}",
+                    req.operator
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_key(key: &str) -> Result<(), String> {
+    if key.is_empty() {
+        return Err("tag key is empty".to_string());
+    }
+    let mut name = key;
+    if key.contains('/') {
+        let parts = key.split('/').collect::<Vec<_>>();
+        if parts.len() != 2 {
+            return Err(format!("tag key {key:?} must contain at most one '/'"));
+        }
+        validate_prefix(parts[0], key)?;
+        name = parts[1];
+    }
+    validate_name(name, false).map_err(|e| format!("tag key {key:?} has invalid name: {e}"))
+}
+
+pub fn validate_value(value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Ok(());
+    }
+    validate_name(value, true).map_err(|e| format!("tag value {value:?} is invalid: {e}"))
+}
+
+fn match_requirement(req: &TagSelectorRequirement, tags: Option<&HashMap<String, String>>) -> bool {
+    let value = tags.and_then(|m| m.get(&req.key));
+    match req.operator {
+        OP_IN => value.is_some_and(|v| req.values.iter().any(|candidate| candidate == v)),
+        OP_NOT_IN => match value {
+            Some(v) => !req.values.iter().any(|candidate| candidate == v),
+            None => true,
+        },
+        OP_EXISTS => value.is_some(),
+        OP_DOES_NOT_EXIST => value.is_none(),
+        _ => false,
+    }
+}
+
+fn validate_prefix(prefix: &str, key: &str) -> Result<(), String> {
+    if prefix.is_empty() {
+        return Err(format!("tag key {key:?} has empty prefix"));
+    }
+    if prefix.len() > 253 {
+        return Err(format!("tag key {key:?} prefix exceeds 253 characters"));
+    }
+    for segment in prefix.split('.') {
+        if segment.is_empty() {
+            return Err(format!("tag key {key:?} has empty DNS segment"));
+        }
+        if segment.len() > 63 {
+            return Err(format!("tag key {key:?} DNS segment exceeds 63 characters"));
+        }
+        if !DNS_SEGMENT.is_match(segment) {
+            return Err(format!(
+                "tag key {key:?} DNS segment must contain lowercase alphanumerics or '-' and start/end alphanumeric"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_name(name: &str, is_value: bool) -> Result<(), String> {
+    if name.is_empty() {
+        if is_value {
+            return Ok(());
+        }
+        return Err("empty name".to_string());
+    }
+    if name.len() > 63 {
+        return Err("exceeds 63 characters".to_string());
+    }
+    if !TAG_NAME.is_match(name) {
+        return Err("must contain alphanumerics, '-', '_' or '.' and start/end alphanumeric".to_string());
+    }
+    Ok(())
+}

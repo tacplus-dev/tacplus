@@ -1,0 +1,68 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+/**
+ * SM-managed roll scheduler: deterministic per-node staggered compaction.
+ *
+ * Each node derives its roll time **deterministically from its stable identity**
+ * (`hash(nodeId) % interval`), so replicas stagger across the interval and the
+ * schedule survives restarts without persisting anything — avoiding a
+ * thundering-herd of simultaneous snapshots. The interval comes from the
+ * service-supplied DiskPersistenceConfig (config-at-init).
+ */
+import { DiskStoreError } from './error.js';
+import { Record, RedoLog } from './redolog.js';
+
+/**
+ * Deterministic per-node roll offset within `intervalSecs` (FNV-1a of `nodeId`).
+ * Stable across restarts; well-distributed so replicas don't collide. Returns
+ * an offset in seconds.
+ */
+export function rollOffsetSecs(nodeId: string, intervalSecs: number): number {
+  const secs = BigInt(Math.max(1, Math.trunc(intervalSecs)));
+  let h = 0xcbf29ce484222325n;
+  const mask = (1n << 64n) - 1n;
+  const prime = 0x100000001b3n;
+  for (const b of Buffer.from(nodeId, 'utf8')) {
+    h ^= BigInt(b);
+    h = (h * prime) & mask;
+  }
+  return Number(h % secs);
+}
+
+/** Sleep for `ms` milliseconds. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Run the periodic roll loop for a redo log. `snapshot` returns the current
+ * deduped state to write as the new baseline at each roll. The first roll is
+ * delayed by the node's deterministic offset; thereafter it rolls once per
+ * `intervalSecs`. Runs until cancelled via `signal`; roll failures are logged
+ * and retried on the next interval.
+ */
+export async function runRollScheduler(
+  log: RedoLog,
+  intervalSecs: number,
+  nodeId: string,
+  snapshot: () => Record[],
+  signal?: AbortSignal,
+): Promise<void> {
+  if (intervalSecs <= 0) {
+    throw DiskStoreError.invalidData('roll interval must be positive');
+  }
+  const intervalMs = intervalSecs * 1000;
+  await sleep(rollOffsetSecs(nodeId, intervalSecs) * 1000);
+  while (!signal?.aborted) {
+    await sleep(intervalMs);
+    if (signal?.aborted) {
+      return;
+    }
+    try {
+      const snap = snapshot();
+      log.roll(snap);
+    } catch (e) {
+      console.error(`diskstore roll failed for ${nodeId}; retrying on next interval:`, e);
+    }
+  }
+}

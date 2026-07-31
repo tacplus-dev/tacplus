@@ -1,0 +1,403 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// Caching library configuration
+
+syntax = "proto3";
+
+package cache;
+
+import "sys/spec.proto";
+
+option (spec.string_const) = {name: "DEFAULT_CACHE_TYPE" value: "redis"};
+option (spec.string_const) = {name: "DEFAULT_HOST" value: "localhost"};
+option (spec.int_const) = {name: "DEFAULT_REDIS_PORT" value: 6379};
+option (spec.int_const) = {name: "DEFAULT_MEMCACHED_PORT" value: 11211};
+option (spec.int_const) = {name: "DEFAULT_TTL_SECONDS" value: 3600};
+option (spec.float_const) = {name: "DEFAULT_EVICTION_THRESHOLD" value: 0.90};
+option (spec.bool_const) = {name: "DEFAULT_COMPRESSION_ENABLED" value: true};
+
+// Cache backend type
+enum CacheType {
+  CACHE_TYPE_UNDEFINED = 0;
+  CACHE_TYPE_REDIS = 1 [(spec.json_return_value) = "redis"];
+  CACHE_TYPE_MEMCACHED = 2 [(spec.json_return_value) = "memcached"];
+  CACHE_TYPE_IN_MEMORY = 3 [(spec.json_return_value) = "in_memory"];
+  CACHE_TYPE_DISTRIBUTED = 4 [(spec.json_return_value) = "distributed"];
+}
+
+// Eviction policy
+enum EvictionPolicy {
+  EVICTION_POLICY_UNDEFINED = 0;
+  EVICTION_POLICY_LRU = 1 [(spec.json_return_value) = "lru"];
+  EVICTION_POLICY_LFU = 2 [(spec.json_return_value) = "lfu"];
+  EVICTION_POLICY_FIFO = 3 [(spec.json_return_value) = "fifo"];
+  EVICTION_POLICY_RANDOM = 4 [(spec.json_return_value) = "random"];
+  EVICTION_POLICY_TTL = 5 [(spec.json_return_value) = "ttl"];
+}
+
+// Serialization format
+enum SerializationFormat {
+  SERIALIZATION_FORMAT_UNDEFINED = 0;
+  SERIALIZATION_FORMAT_JSON = 1 [(spec.json_return_value) = "json"];
+  SERIALIZATION_FORMAT_PROTOBUF = 2 [(spec.json_return_value) = "protobuf"];
+  SERIALIZATION_FORMAT_MSGPACK = 3 [(spec.json_return_value) = "msgpack"];
+  SERIALIZATION_FORMAT_PICKLE = 4 [(spec.json_return_value) = "pickle"];
+}
+
+// Compression algorithm
+enum CompressionAlgorithm {
+  COMPRESSION_ALGORITHM_UNDEFINED = 0;
+  COMPRESSION_ALGORITHM_NONE = 1 [(spec.json_return_value) = "none"];
+  COMPRESSION_ALGORITHM_GZIP = 2 [(spec.json_return_value) = "gzip"];
+  COMPRESSION_ALGORITHM_ZSTD = 3 [(spec.json_return_value) = "zstd"];
+  COMPRESSION_ALGORITHM_LZ4 = 4 [(spec.json_return_value) = "lz4"];
+}
+
+// Cache configuration
+message CacheConfig {
+  // Cache type
+  CacheType cache_type = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_enum_defined) = true
+  ];
+
+  // Connection settings
+  ConnectionConfig connection = 2;
+
+  // Default TTL in seconds
+  int64 default_ttl_sec = 3 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 1,
+    (spec.assert_duration_max) = 31536000  // 1 year
+  ];
+
+  // Maximum cache size in bytes
+  uint64 max_size_bytes = 4 [(spec.assert_numeric) = {
+    gt: 0
+  }];
+
+  // Eviction policy
+  EvictionPolicy eviction_policy = 5 [(spec.assert_enum_defined) = true];
+
+  // Eviction threshold (0.0-1.0)
+  float eviction_threshold = 6 [(spec.assert_float) = {
+    gt: 0.0,
+    le: 1.0
+  }];
+
+  // Serialization format
+  SerializationFormat serialization = 7 [(spec.assert_enum_defined) = true];
+
+  // Compression settings
+  CompressionConfig compression = 8;
+
+  // Namespace/prefix for keys
+  string namespace = 9 [(spec.assert_max_size) = 100];
+
+  // Enable monitoring
+  bool enable_monitoring = 10;
+
+  // Enable statistics collection
+  bool enable_stats = 11;
+
+  // Stats flush interval in seconds
+  int64 stats_flush_interval_sec = 12 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 10,
+    (spec.assert_duration_max) = 3600
+  ];
+}
+
+// Connection configuration
+message ConnectionConfig {
+  // Server addresses
+  repeated string servers = 1 [
+    (spec.assert_listen_addr) = true,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Username (for Redis ACL)
+  string username = 2 [(spec.assert_max_size) = 100];
+
+  // Password
+  string password = 3 [
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 256
+  ];
+
+  // Database number (Redis)
+  int32 database = 4 [(spec.assert_numeric) = {
+    ge: 0,
+    le: 15
+  }];
+
+  // Connection pool size
+  int32 pool_size = 5 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 1000
+  }];
+
+  // Minimum idle connections
+  int32 min_idle_conns = 6 [(spec.assert_numeric) = {
+    ge: 0,
+    le: 100
+  }];
+
+  // Maximum connection lifetime in seconds
+  int64 max_conn_lifetime_sec = 7 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 60,
+    (spec.assert_duration_max) = 86400
+  ];
+
+  // Connection timeout in milliseconds
+  int64 connect_timeout_ms = 8 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 100,
+    (spec.assert_duration_max) = 30000
+  ];
+
+  // Read timeout in milliseconds
+  int64 read_timeout_ms = 9 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 100,
+    (spec.assert_duration_max) = 30000
+  ];
+
+  // Write timeout in milliseconds
+  int64 write_timeout_ms = 10 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 100,
+    (spec.assert_duration_max) = 30000
+  ];
+
+  // Enable TLS
+  bool enable_tls = 11;
+
+  // TLS certificate (PEM)
+  string tls_cert = 12 [
+    (spec.assert_enc_type) = ENC_TYPE_X509_CERT_ANY,
+    (spec.required_if_true) = "enable_tls"
+  ];
+
+  // TLS key (PEM)
+  string tls_key = 13 [
+    (spec.assert_enc_type) = ENC_TYPE_KEY_PRIVATE_RSA,
+    (spec.required_if_true) = "enable_tls"
+  ];
+
+  // Skip TLS verification
+  bool skip_tls_verify = 14;
+
+  // Retry configuration
+  RetryConfig retry = 15;
+}
+
+// Retry configuration
+message RetryConfig {
+  // Maximum retry attempts
+  int32 max_attempts = 1 [(spec.assert_numeric) = {
+    ge: 0,
+    le: 10
+  }];
+
+  // Initial retry delay in milliseconds
+  int64 initial_delay_ms = 2 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 10,
+    (spec.assert_duration_max) = 10000
+  ];
+
+  // Maximum retry delay in milliseconds
+  int64 max_delay_ms = 3 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 100,
+    (spec.assert_duration_max) = 60000
+  ];
+
+  // Backoff multiplier
+  float backoff_multiplier = 4 [(spec.assert_float) = {
+    ge: 1.0,
+    le: 10.0
+  }];
+
+  // Enable jitter
+  bool enable_jitter = 5;
+}
+
+// Compression configuration
+message CompressionConfig {
+  // Compression algorithm
+  CompressionAlgorithm algorithm = 1 [(spec.assert_enum_defined) = true];
+
+  // Minimum size in bytes to compress
+  int32 min_size_bytes = 2 [(spec.assert_numeric) = {
+    ge: 0,
+    le: 1048576  // 1MB
+  }];
+
+  // Compression level (1-9, algorithm specific)
+  int32 level = 3 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 9
+  }];
+}
+
+// Cache entry
+message CacheEntry {
+  // Key
+  string key = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 1,
+    (spec.assert_max_size) = 512
+  ];
+
+  // Value (serialized)
+  bytes value = 2 [(spec.assert_required) = true];
+
+  // TTL in seconds (0 = no expiration)
+  int64 ttl_sec = 3 [(spec.assert_duration) = DURATION_TYPE_NON_NEGATIVE];
+
+  // Created timestamp
+  int64 created_at = 4 [(spec.assert_required) = true];
+
+  // Last accessed timestamp
+  int64 accessed_at = 5;
+
+  // Access count
+  uint64 access_count = 6;
+
+  // Size in bytes
+  uint64 size_bytes = 7 [(spec.assert_numeric) = {
+    gt: 0
+  }];
+
+  // Is compressed
+  bool compressed = 8;
+
+  // Tags for categorization
+  repeated string tags = 9 [(spec.assert_max_size) = 100];
+
+  // Metadata
+  map<string, string> metadata = 10 [(spec.assert_max_size) = 100];
+}
+
+// Cache statistics
+message CacheStats {
+  // Total keys
+  uint64 total_keys = 1;
+
+  // Total memory used in bytes
+  uint64 memory_used_bytes = 2;
+
+  // Hit count
+  uint64 hits = 3;
+
+  // Miss count
+  uint64 misses = 4;
+
+  // Hit rate (0.0-1.0)
+  float hit_rate = 5 [(spec.assert_float) = {
+    ge: 0.0,
+    le: 1.0
+  }];
+
+  // Eviction count
+  uint64 evictions = 6;
+
+  // Expiration count
+  uint64 expirations = 7;
+
+  // Average TTL in seconds
+  float avg_ttl_sec = 8 [(spec.assert_float) = {
+    ge: 0.0
+  }];
+
+  // Average value size in bytes
+  float avg_size_bytes = 9 [(spec.assert_float) = {
+    ge: 0.0
+  }];
+
+  // Uptime in seconds
+  int64 uptime_sec = 10 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Operations per second
+  float ops_per_sec = 11 [(spec.assert_float) = {
+    ge: 0.0
+  }];
+}
+
+// Cache operation
+message CacheOperation {
+  // Operation type
+  OperationType operation = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_enum_defined) = true
+  ];
+
+  // Key
+  string key = 2 [(spec.assert_required) = true];
+
+  // Value (for set operations)
+  bytes value = 3;
+
+  // TTL (for set operations)
+  int64 ttl_sec = 4;
+
+  // Timestamp
+  int64 timestamp = 5 [(spec.assert_required) = true];
+
+  // Execution time in microseconds
+  int64 duration_us = 6 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Was successful
+  bool success = 7;
+
+  // Error message (if any)
+  string error = 8;
+}
+
+// Operation type
+enum OperationType {
+  OPERATION_TYPE_UNDEFINED = 0;
+  OPERATION_TYPE_GET = 1 [(spec.json_return_value) = "get"];
+  OPERATION_TYPE_SET = 2 [(spec.json_return_value) = "set"];
+  OPERATION_TYPE_DELETE = 3 [(spec.json_return_value) = "delete"];
+  OPERATION_TYPE_EXISTS = 4 [(spec.json_return_value) = "exists"];
+  OPERATION_TYPE_EXPIRE = 5 [(spec.json_return_value) = "expire"];
+  OPERATION_TYPE_INCREMENT = 6 [(spec.json_return_value) = "increment"];
+  OPERATION_TYPE_DECREMENT = 7 [(spec.json_return_value) = "decrement"];
+}
+
+// Cluster configuration
+message ClusterConfig {
+  // Cluster mode enabled
+  bool enabled = 1;
+
+  // Cluster nodes
+  repeated string nodes = 2 [(spec.assert_listen_addr) = true, (spec.assert_max_size) = 100];
+
+  // Number of replicas per master
+  int32 replicas = 3 [(spec.assert_numeric) = {
+    ge: 0,
+    le: 5
+  }];
+
+  // Read from replicas
+  bool read_from_replicas = 4;
+
+  // Max redirects
+  int32 max_redirects = 5 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 10
+  }];
+
+  // Route by latency
+  bool route_by_latency = 6;
+
+  // Route randomly
+  bool route_randomly = 7;
+}

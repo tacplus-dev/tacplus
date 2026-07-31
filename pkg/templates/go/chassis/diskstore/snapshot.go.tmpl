@@ -1,0 +1,96 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package diskstore
+
+// UC1 — atomic typed snapshot (whole object).
+//
+// These functions operate on raw bytes. The per-type generated code produces
+// the bytes via the generated ToJSON helper on write, and parses them via
+// FromJSON + Validate on read — keeping serialization consistent with the rest
+// of tacplus and validation always-on.
+
+import (
+	"errors"
+	"io/fs"
+	"os"
+)
+
+// SnapshotOpts holds options for a snapshot write.
+type SnapshotOpts struct {
+	// Codec is the at-rest compression for the snapshot file.
+	Codec Codec
+	// Mode is the Unix file mode for the data file (e.g. 0o600). 0 leaves the
+	// default.
+	Mode os.FileMode
+	// ArchiveCount is the number of rotated archives to retain.
+	ArchiveCount uint32
+}
+
+// DefaultSnapshotOpts returns the default snapshot options (no compression,
+// mode 0o600, keep 3 archives).
+func DefaultSnapshotOpts() SnapshotOpts {
+	return SnapshotOpts{Codec: CodecNone, Mode: 0o600, ArchiveCount: 3}
+}
+
+// WriteSnapshot writes a whole-object snapshot atomically.
+//
+// Order is chosen so the active file is NEVER absent (PC-L-5):
+//  1. compress the payload,
+//  2. write it to a fresh fsync'd temp (active still intact),
+//  3. LINK the previous active to <path>.bak.1 (keep ArchiveCount; the active
+//     path stays in place),
+//  4. atomically rename the temp over path (the only mutation of the active
+//     file — a crash at any point leaves either the old or the new snapshot).
+func WriteSnapshot(path string, data []byte, opts SnapshotOpts) error {
+	payload, err := Compress(data, opts.Codec)
+	if err != nil {
+		return err
+	}
+	tmp, err := writeTemp(path, payload, opts.Mode)
+	if err != nil {
+		return err
+	}
+	if err := archiveActive(path, opts.ArchiveCount); err != nil {
+		return err
+	}
+	return promote(tmp, path)
+}
+
+// ReadSnapshot reads a snapshot, auto-decompressing. The bool is false when the
+// file is absent. The caller deserializes + validates the returned bytes
+// (FromJSON + Validate).
+func ReadSnapshot(path string) ([]byte, bool, error) {
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			// The active file should never be absent (WriteSnapshot only ever
+			// replaces it atomically), but if it is — disk incident, manual
+			// deletion, legacy crash window — recover the previous state from
+			// .bak.1 rather than silently starting fresh (PC-L-5 read leg).
+			bak, bakErr := os.ReadFile(archiveName(path, 1))
+			if bakErr != nil {
+				// Only a MISSING archive degrades to fresh-start; any other read
+				// failure on a present archive (permissions, I/O) errors loudly
+				// like corruption does (NEW-38).
+				if errors.Is(bakErr, fs.ErrNotExist) {
+					return nil, false, nil
+				}
+				return nil, false, wrapIOError(bakErr)
+			}
+			// A present-but-corrupt archive on the recovery path errors LOUDLY —
+			// silently dropping the last committed baseline would mask corruption
+			// on the exact path this recovery exists for (NEW-37).
+			out, decErr := DecompressAuto(bak)
+			if decErr != nil {
+				return nil, false, decErr
+			}
+			return out, true, nil
+		}
+		return nil, false, wrapIOError(err)
+	}
+	out, err := DecompressAuto(bytes)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}

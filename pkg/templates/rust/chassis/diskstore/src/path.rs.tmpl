@@ -1,0 +1,93 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Multi-tenant nested on-disk layout.
+//!
+//! Layout: `<base>/<tenant>/<project>/<store>.<suffix>`
+//!
+//! A namespace (`ns`) is **ROOT / Tenant / Project** — always rooted at `/`,
+//! with `a-z0-9` segments (e.g. `/`, `/drpepper`, `/drpepper/default`). Each
+//! segment becomes a real directory, so:
+//!   - the **root** ns `/` → `<base>/_root/`,
+//!   - a **tenant** ns `/drpepper` → `<base>/drpepper/`,
+//!   - a **project** ns `/drpepper/default` → `<base>/drpepper/default/`.
+//!
+//! Tenants are never mingled, and deletion is a directory removal that cascades
+//! naturally: [`delete_namespace`] on `/drpepper` removes all of that tenant's
+//! projects; on `/drpepper/default` removes just that project; on `/` removes
+//! only root's own data (tenants are siblings, not children, of `_root`).
+
+use crate::error::Result;
+use std::path::{Path, PathBuf};
+
+/// The default tenant: the root namespace.
+pub const ROOT_TENANT: &str = "/";
+/// Directory segment used for the root namespace `/`.
+pub const ROOT_SEG: &str = "_root";
+
+/// Split a namespace into directory segments. Root (or empty) → `[_root]`;
+/// otherwise the non-empty `/`-separated components (`a-z0-9`).
+pub fn ns_segments(ns: &str) -> Vec<String> {
+    let parts: Vec<&str> = ns.split('/').filter(|s| !s.is_empty()).collect();
+    if parts.is_empty() {
+        vec![ROOT_SEG.to_string()]
+    } else {
+        parts.into_iter().map(|s| s.to_string()).collect()
+    }
+}
+
+/// The directory holding a namespace's store files: `<base>/<seg...>`.
+pub fn ns_dir(base: &Path, ns: &str) -> PathBuf {
+    let mut p = base.to_path_buf();
+    for seg in ns_segments(ns) {
+        p.push(seg);
+    }
+    p
+}
+
+/// Full path for a store file: `<base>/<ns-dirs>/<store><suffix>`.
+pub fn store_path(base: &Path, ns: &str, store: &str, suffix: &str) -> PathBuf {
+    ns_dir(base, ns).join(format!("{}{}", store, suffix))
+}
+
+/// Remove a namespace's data — its directory, cascading to children. For a
+/// tenant ns (`/drpepper`) this removes all of its projects; for a project ns
+/// (`/drpepper/default`) just that project. Idempotent (missing dir is ok).
+pub fn delete_namespace(base: &Path, ns: &str) -> Result<()> {
+    match std::fs::remove_dir_all(ns_dir(base, ns)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_maps_to_root_seg() {
+        assert_eq!(ns_segments(""), vec!["_root".to_string()]);
+        assert_eq!(ns_segments("/"), vec!["_root".to_string()]);
+    }
+
+    #[test]
+    fn tenant_and_project_segments() {
+        assert_eq!(ns_segments("/drpepper"), vec!["drpepper".to_string()]);
+        assert_eq!(
+            ns_segments("/drpepper/default"),
+            vec!["drpepper".to_string(), "default".to_string()]
+        );
+    }
+
+    #[test]
+    fn store_path_layout() {
+        assert_eq!(
+            store_path(Path::new("/data"), "/drpepper/default", "verifying_keys", ".log"),
+            Path::new("/data/drpepper/default/verifying_keys.log")
+        );
+        assert_eq!(
+            store_path(Path::new("/data"), "/", "verifying_keys", ".log"),
+            Path::new("/data/_root/verifying_keys.log")
+        );
+    }
+}

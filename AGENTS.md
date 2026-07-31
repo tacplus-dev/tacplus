@@ -1,0 +1,1 @@
+Read docs/THEORY.md for an overview of what tacplus is. Read docs/USER.md if working with tacplus to build services (proto annotations, tacplus.yaml, generated output, implementer rules). Read docs/DEVELOPMENT.md if working on the tacplus compiler itself (architecture, internals, checklists, quality rules).

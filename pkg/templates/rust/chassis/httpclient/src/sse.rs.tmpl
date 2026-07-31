@@ -1,0 +1,59 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! SSE (Server-Sent Events) line accumulator.
+//!
+//! HTTP chunked responses don't guarantee that chunk boundaries align with line
+//! boundaries. A single SSE line might be split across two chunks, or one chunk
+//! might contain multiple lines. This module provides a buffer that reassembles
+//! complete lines from arbitrary byte chunks.
+
+/// Accumulates byte chunks and yields complete lines.
+///
+/// # Example
+///
+/// ```rust
+/// use httpclient::sse::LineAccumulator;
+///
+/// let mut lines = LineAccumulator::new();
+/// lines.push(b"event: mess");
+/// assert!(lines.next_line().is_none()); // incomplete
+/// lines.push(b"age_start\ndata: {}\n");
+/// assert_eq!(lines.next_line(), Some("event: message_start".to_string()));
+/// assert_eq!(lines.next_line(), Some("data: {}".to_string()));
+/// assert!(lines.next_line().is_none());
+/// ```
+pub struct LineAccumulator {
+    buf: String,
+}
+
+impl LineAccumulator {
+    /// Creates a new empty accumulator.
+    pub fn new() -> Self {
+        Self {
+            buf: String::new(),
+        }
+    }
+
+    /// Appends a byte chunk to the internal buffer.
+    pub fn push(&mut self, bytes: &[u8]) {
+        self.buf.push_str(&String::from_utf8_lossy(bytes));
+    }
+
+    /// Returns the next complete line, or None if no complete line is available.
+    /// Strips trailing \r for Windows-style line endings.
+    pub fn next_line(&mut self) -> Option<String> {
+        if let Some(pos) = self.buf.find('\n') {
+            let line = self.buf[..pos].trim_end_matches('\r').to_string();
+            self.buf = self.buf[pos + 1..].to_string();
+            Some(line)
+        } else {
+            None
+        }
+    }
+}
+
+impl Default for LineAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}

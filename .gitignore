@@ -1,0 +1,166 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+tacplus
+tacplus-*
+tacplus/
+launcher/launcher
+dist/
+bin/
+helper
+
+# Test binary, built with `go test -c`
+*.test
+
+# Compiled integration test binaries
+integration-test/go/test/integration-test
+integration-test/go/test/integrationtest
+
+# Output of the go coverage tool
+*.out
+coverage/
+*.coverprofile
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Dependency directories
+vendor/
+node_modules/
+
+# JavaScript/TypeScript
+package-lock.json
+dist/
+*.js.map
+*.tsbuildinfo
+
+# Java
+target/
+*.class
+*.jar
+dependency-reduced-pom.xml
+
+# Rust
+**/rust/**/target/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+
+# Go build cache
+.cache/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+
+# Temporary files
+tmp/
+temp/
+todo/
+*.tmp
+
+# Build artifacts
+*.tar.gz
+*.zip
+
+# Internal Protocol Buffer descriptor output is generated under ignored target/.
+
+# Test output
+test-output/
+*.out
+
+# CI/CD artifacts (local)
+.gitlab-ci-local/
+
+# Docker
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# JetBrains IDEs
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# Debug files
+debug
+debug.test
+__debug_bin
+
+# Air (live reload for Go)
+tmp/
+
+# Java IDE files
+.classpath
+.project
+.settings/
+
+# Claude Code
+.claude/
+
+# macOS SDK for cross-compilation (uploaded to GitLab package registry)
+cross-toolchain/
+
+# Built soundness matrix binary (source lives in cmd/soundness/)
+/soundness

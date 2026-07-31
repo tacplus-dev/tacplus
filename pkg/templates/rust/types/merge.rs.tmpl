@@ -1,0 +1,76 @@
+{{- /* Rust merge template */ -}}
+/// Fills zero-valued fields in dst from src. dst takes precedence.
+pub fn {{.FnName}}_merge({{if and (not .Fields) (not .OneofGroups)}}_dst{{else}}dst{{end}}: &mut {{.TypeName}}, {{if and (not .Fields) (not .OneofGroups)}}_src{{else}}src{{end}}: &{{.TypeName}}) {
+{{- range .Fields}}
+{{- if .IsOptional}}
+{{- if eq .Kind "string"}}
+if dst.{{.FieldName}}.as_ref().map_or(true, |v| v.is_empty()) && src.{{.FieldName}}.is_some() { dst.{{.FieldName}} = src.{{.FieldName}}.clone(); }
+{{- else if eq .Kind "int"}}
+if dst.{{.FieldName}}.is_none() || dst.{{.FieldName}} == Some(0) { dst.{{.FieldName}} = src.{{.FieldName}}; }
+{{- else if eq .Kind "float"}}
+if dst.{{.FieldName}}.is_none() || dst.{{.FieldName}} == Some(0.0) { dst.{{.FieldName}} = src.{{.FieldName}}; }
+{{- else if eq .Kind "bool"}}
+if dst.{{.FieldName}}.is_none() || dst.{{.FieldName}} == Some(false) { dst.{{.FieldName}} = src.{{.FieldName}}; }
+{{- else if eq .Kind "enum"}}
+if dst.{{.FieldName}}.is_none() || dst.{{.FieldName}} == Some(0) { dst.{{.FieldName}} = src.{{.FieldName}}; }
+{{- else if eq .Kind "bytes"}}
+if dst.{{.FieldName}}.as_ref().map_or(true, |v| v.is_empty()) && src.{{.FieldName}}.is_some() { dst.{{.FieldName}} = src.{{.FieldName}}.clone(); }
+{{- else if eq .Kind "message"}}
+{{- if .SamePkg}}
+match (&mut dst.{{.FieldName}}, &src.{{.FieldName}}) {
+(None, Some(s)) => { dst.{{.FieldName}} = Some(s.clone()); }
+(Some(d), Some(s)) => { {{.MergeFn}}_merge(d, s); }
+_ => {}
+}
+{{- else}}
+if dst.{{.FieldName}}.is_none() && src.{{.FieldName}}.is_some() { dst.{{.FieldName}} = src.{{.FieldName}}.clone(); }
+{{- end}}
+{{- end}}
+{{- else}}
+{{- if eq .Kind "string"}}
+if dst.{{.FieldName}}.is_empty() { dst.{{.FieldName}} = src.{{.FieldName}}.clone(); }
+{{- else if eq .Kind "int"}}
+if dst.{{.FieldName}} == 0 { dst.{{.FieldName}} = src.{{.FieldName}}; }
+{{- else if eq .Kind "float"}}
+if dst.{{.FieldName}} == 0.0 { dst.{{.FieldName}} = src.{{.FieldName}}; }
+{{- else if eq .Kind "bool"}}
+if !dst.{{.FieldName}} { dst.{{.FieldName}} = src.{{.FieldName}}; }
+{{- else if eq .Kind "enum"}}
+if dst.{{.FieldName}} == 0 { dst.{{.FieldName}} = src.{{.FieldName}}; }
+{{- else if eq .Kind "bytes"}}
+if dst.{{.FieldName}}.is_empty() { dst.{{.FieldName}} = src.{{.FieldName}}.clone(); }
+{{- else if eq .Kind "message"}}
+{{- if .SamePkg}}
+match (&mut dst.{{.FieldName}}, &src.{{.FieldName}}) {
+(None, Some(s)) => { dst.{{.FieldName}} = Some(s.clone()); }
+(Some(d), Some(s)) => { {{.MergeFn}}_merge(d, s); }
+_ => {}
+}
+{{- else}}
+if dst.{{.FieldName}}.is_none() && src.{{.FieldName}}.is_some() { dst.{{.FieldName}} = src.{{.FieldName}}.clone(); }
+{{- end}}
+{{- else if eq .Kind "repeated"}}
+if dst.{{.FieldName}}.is_empty() { dst.{{.FieldName}} = src.{{.FieldName}}.clone(); }
+{{- else if eq .Kind "map"}}
+{{- if .MapValueSamePkg}}
+if dst.{{.FieldName}}.is_empty() {
+    dst.{{.FieldName}} = src.{{.FieldName}}.clone();
+} else {
+    for (k, src_val) in &src.{{.FieldName}} {
+        if let Some(dst_val) = dst.{{.FieldName}}.get_mut(k) {
+            {{.MapValueMergeFn}}_merge(dst_val, src_val);
+        } else {
+            dst.{{.FieldName}}.insert(k.clone(), src_val.clone());
+        }
+    }
+}
+{{- else}}
+if dst.{{.FieldName}}.is_empty() { dst.{{.FieldName}} = src.{{.FieldName}}.clone(); }
+{{- end}}
+{{- end}}
+{{- end}}
+{{- end}}
+{{- range .OneofGroups}}
+if dst.{{.FieldName}}.is_none() { dst.{{.FieldName}} = src.{{.FieldName}}.clone(); }
+{{- end}}
+}

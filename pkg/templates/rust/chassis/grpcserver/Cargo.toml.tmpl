@@ -1,0 +1,37 @@
+[package]
+name = "grpcserver"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { version = "0.1", features = ["full"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio-util = "0.7"
+tokio-stream = { version = "0.1", features = ["net"] }
+futures = "0.3"
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+
+# Auth dependencies
+base64 = "0.22"
+regex = "1"
+token = { path = "../token" }
+jwk = { path = "../jwk" }
+spiffe = { path = "../spiffe" }
+servicemanager = { path = "../servicemanager" }
+{{.CrateBasePath}}-types = { path = "../../types" }
+
+[dev-dependencies]
+# Authorizer behavioral tests mint real Ed25519 JWTs (PC-W-1).
+key = { path = "../key" }

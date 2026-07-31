@@ -1,0 +1,63 @@
+# Cross-Test Gates
+
+The active cross-test gates generate current tacplus output into ignored
+`target/` directories. Generated language output is not committed here.
+
+## Commands
+
+```bash
+just -f cross-test/justfile
+just -f cross-test/justfile current-generation
+just consumer-build
+just -f cross-test/justfile runtime-smoke
+just consumer-smoke
+just consumer-smoke-go
+just consumer-smoke-java
+just consumer-smoke-python
+just consumer-smoke-rust
+just consumer-smoke-typescript
+```
+
+`current-generation` runs `cross-test/proto` through Go, Java, and Rust
+generation, asserts that the output uses the current `sys/spec.proto` model
+rather than the old committed `special` fixture layout, and compiles each
+generated output with that language's normal local tooling.
+
+`consumer-build` is the stronger public API gate for public surface shape. It
+generates a focused consumer-contract fixture into a temporary work directory,
+validates client surface selection, compiles generated outputs where supported,
+and compiles handwritten downstream consumers.
+
+`runtime-smoke` is the cross-language runtime gate: a go fixture server built
+from the generated go servers (canonical consumer-contract fixture) hosts C2S
+gRPC and hand-written W2S HTTP/SSE/WebSocket endpoints on localhost, and the
+python/typescript generated CLIENTS exercise them over the wire — auth gating,
+validation codes, watch/list streams, the PAGE auto-pager, W2S upload/chat
+WebSocket framing, the fail-closed unwired-auth wrapper, and the audit
+accounting/trace seams (observed via the fixture's `/fixture/stats` endpoint).
+It runs in the `runtime-smoke-mr` CI job and the nightly matrix; it lives
+outside `consumer-contract` because it needs go build + python + node
+runtimes concurrently.
+
+`consumer-smoke` runs the focused runtime consumer smokes. Go currently covers:
+the generated C2S client calling `PublicRead` through a `bufconn` gRPC server
+and generated server wrapper; the generated W2S client calling the same method
+through local HTTP/JSON; one W2S `Watch` SSE event; W2S `Upload` WebSocket
+`start`/`message`/`complete` frames; one bidirectional `Chat` WebSocket message
+in each direction; and generated C2D `LocalRead`/`LocalWatch` clients against
+a local Unix-socket daemon. Python and TypeScript are client-only targets, so
+their smoke coverage should stay limited to supported client surfaces and
+service-side rejection behavior.
+Java currently runs the generated `both` consumer main after `javac`, proving
+runtime classpath compatibility and exercising a local W2S bidirectional
+WebSocket smoke with `start`/`message`/`complete` frames, bearer auth, wrapped
+message decoding, and auth-required fail-closed behavior.
+Rust currently runs the generated `both` consumer binary after `cargo check`,
+including a local W2S bidirectional WebSocket smoke that sends from
+`on_connect`, verifies bearer auth on outbound frames, decodes a wrapped
+message response, sends `complete` with `finish()`, and verifies auth-required
+W2S calls fail without a token provider.
+
+The old broad runtime matrix was removed because it depended on committed
+generated outputs from a pre-parity layout. Rebuilding wire-level runtime tests
+should start from generated scratch output, not checked-in generated trees.

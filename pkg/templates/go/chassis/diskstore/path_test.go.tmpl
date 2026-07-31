@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package diskstore
+
+import (
+	"path/filepath"
+	"reflect"
+	"testing"
+)
+
+func TestRootMapsToRootSeg(t *testing.T) {
+	if !reflect.DeepEqual(NsSegments(""), []string{"_root"}) {
+		t.Fatalf("empty ns should map to [_root]")
+	}
+	if !reflect.DeepEqual(NsSegments("/"), []string{"_root"}) {
+		t.Fatalf("root ns should map to [_root]")
+	}
+}
+
+func TestTenantAndProjectSegments(t *testing.T) {
+	if !reflect.DeepEqual(NsSegments("/drpepper"), []string{"drpepper"}) {
+		t.Fatalf("tenant ns segments wrong")
+	}
+	if !reflect.DeepEqual(NsSegments("/drpepper/default"), []string{"drpepper", "default"}) {
+		t.Fatalf("project ns segments wrong")
+	}
+}
+
+func TestStorePathLayout(t *testing.T) {
+	got := StorePath("/data", "/drpepper/default", "verifying_keys", ".log")
+	want := filepath.FromSlash("/data/drpepper/default/verifying_keys.log")
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	gotRoot := StorePath("/data", "/", "verifying_keys", ".log")
+	wantRoot := filepath.FromSlash("/data/_root/verifying_keys.log")
+	if gotRoot != wantRoot {
+		t.Fatalf("got %q want %q", gotRoot, wantRoot)
+	}
+}

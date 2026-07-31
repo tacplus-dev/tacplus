@@ -1,0 +1,181 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+/**
+ * Atomic file write + numbered archive rotation, shared by the snapshot (UC1)
+ * and the redo-log roll (UC2).
+ *
+ * Atomicity model: build a fresh sibling temp file, fsync it, then `rename`
+ * it over the target. `rename(2)` is atomic on a POSIX filesystem, so the
+ * target is never observed half-written.
+ */
+import fs from 'fs';
+import path from 'path';
+import { DiskStoreError } from './error.js';
+
+/**
+ * Write `data` to a fresh sibling temp file (fsync'd, mode applied) and return
+ * its path. The temp is in the same directory as `target` so the later
+ * `promote` rename stays on one filesystem (and is therefore atomic).
+ *
+ * `mode` is a Unix file mode (e.g. 0o600); `0` leaves the default.
+ */
+export function writeTemp(target: string, data: Buffer, mode: number): string {
+  const dir = path.dirname(target);
+  if (!dir) {
+    throw DiskStoreError.invalidData(`path has no parent: ${target}`);
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${target}.tmp.${process.pid}`;
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(tmp, 'w', mode !== 0 ? mode : 0o666);
+    fs.writeSync(fd, data);
+    fs.fsyncSync(fd);
+    if (mode !== 0) {
+      fs.fchmodSync(fd, mode);
+    }
+  } catch (e) {
+    throw DiskStoreError.fromUnknown(e);
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // ignore close error
+      }
+    }
+  }
+  return tmp;
+}
+
+/**
+ * Atomically move `tmp` onto `target` (the commit point), then fsync the parent
+ * directory so the rename is durable.
+ */
+export function promote(tmp: string, target: string): void {
+  try {
+    fs.renameSync(tmp, target);
+  } catch (e) {
+    throw DiskStoreError.fromUnknown(e);
+  }
+  syncDir(path.dirname(target));
+}
+
+/** Convenience: writeTemp + promote for callers that don't archive. */
+export function atomicWrite(target: string, data: Buffer, mode: number): void {
+  const tmp = writeTemp(target, data, mode);
+  promote(tmp, target);
+}
+
+/**
+ * Rotate numbered archives, then move the current `target` to `<target>.bak.1`,
+ * retaining `count` archives. `count === 0` simply removes `target`.
+ *
+ * Leaves `target` absent on return; the caller is expected to immediately
+ * `promote` a freshly written temp into `target`.
+ */
+/**
+ * Rotates the numbered archives, then LINKS the current target to
+ * `<target>.bak.1` (retaining `count` archives) — target stays in place, so
+ * the caller's atomic rename-over of a fresh temp is the only mutation of the
+ * active file. The active snapshot is therefore NEVER absent: the old
+ * rotate-then-promote order left a crash window in which target was gone and
+ * recovery silently started fresh (PC-L-5). Falls back to a copy on
+ * filesystems without hard links. `count === 0` keeps no archives.
+ */
+export function archiveActive(target: string, count: number): void {
+  if (count === 0) {
+    return;
+  }
+  removeIfExists(archiveName(target, count));
+  for (let k = count - 1; k >= 1; k--) {
+    const from = archiveName(target, k);
+    if (fs.existsSync(from)) {
+      try {
+        fs.renameSync(from, archiveName(target, k + 1));
+      } catch (e) {
+        throw DiskStoreError.fromUnknown(e);
+      }
+    }
+  }
+  if (fs.existsSync(target)) {
+    const bak = archiveName(target, 1);
+    removeIfExists(bak);
+    try {
+      fs.linkSync(target, bak);
+    } catch {
+      // Filesystem without hard links: copy instead (window still closed).
+      try {
+        fs.copyFileSync(target, bak);
+      } catch (e) {
+        throw DiskStoreError.fromUnknown(e);
+      }
+    }
+  }
+  syncDir(path.dirname(target));
+}
+
+export function rotateArchives(target: string, count: number): void {
+  const dir = path.dirname(target);
+  if (count === 0) {
+    removeIfExists(target);
+    syncDir(dir);
+    return;
+  }
+  // Drop the oldest, then shift each archive up by one.
+  removeIfExists(archiveName(target, count));
+  for (let k = count - 1; k >= 1; k--) {
+    const from = archiveName(target, k);
+    if (fs.existsSync(from)) {
+      try {
+        fs.renameSync(from, archiveName(target, k + 1));
+      } catch (e) {
+        throw DiskStoreError.fromUnknown(e);
+      }
+    }
+  }
+  if (fs.existsSync(target)) {
+    try {
+      fs.renameSync(target, archiveName(target, 1));
+    } catch (e) {
+      throw DiskStoreError.fromUnknown(e);
+    }
+  }
+  syncDir(dir);
+}
+
+/** The archive sibling path `<target>.bak.<n>`. */
+export function archiveName(target: string, n: number): string {
+  return `${target}.bak.${n}`;
+}
+
+/** A sibling path `<target><suffix>`. */
+export function sibling(target: string, suffix: string): string {
+  return `${target}${suffix}`;
+}
+
+function removeIfExists(p: string): void {
+  try {
+    fs.rmSync(p, { force: true });
+  } catch {
+    // ignore
+  }
+}
+
+function syncDir(dir: string): void {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(dir, 'r');
+    fs.fsyncSync(fd);
+  } catch {
+    // Directory fsync is best-effort (not all platforms allow opening a dir).
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // ignore
+      }
+    }
+  }
+}

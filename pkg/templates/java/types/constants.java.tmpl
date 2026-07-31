@@ -1,0 +1,9 @@
+{{.Header}}
+package {{.PackagePath}};
+{{- if .NeedsDuration}}
+import java.time.Duration;
+{{- end}}
+public final class Constants {
+private Constants() {} // Prevent instantiation
+{{.ConstantsBody}}
+}

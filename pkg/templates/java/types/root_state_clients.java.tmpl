@@ -1,0 +1,38 @@
+{{.Header}}
+package {{.Package}};
+
+import io.grpc.CallCredentials;
+import io.grpc.Channel;
+
+/**
+ * Root aggregator for all state client wrappers.
+ * Delegates to per-group StateClients.
+ */
+public class StateClients implements AutoCloseable {
+{{- range .Groups}}
+    private final {{.FQN}} {{.FieldName}} = new {{.FQN}}();
+{{- end}}
+
+    /**
+     * Wires every state client group to the shared state-store channel.
+     */
+    public void setChannel(Channel channel, CallCredentials credentials) {
+{{- range .Groups}}
+        this.{{.FieldName}}.setChannel(channel, credentials);
+{{- end}}
+    }
+
+    @Override
+    public void close() {
+{{- range .Groups}}
+        this.{{.FieldName}}.close();
+{{- end}}
+    }
+{{range .Groups}}
+    /**
+     * Returns the {{.Name}} group's state clients.
+     */
+    public {{.FQN}} {{.FieldName}}() {
+        return this.{{.FieldName}};
+    }
+{{end}}}

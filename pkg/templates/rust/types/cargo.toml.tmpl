@@ -1,0 +1,69 @@
+{{- /* Rust workspace Cargo.toml template */ -}}
+{{- if not .SkipWorkspace}}
+[workspace]
+members = [
+{{- range .Members}}
+"{{.}}",
+{{- end}}
+]
+resolver = "2"
+
+[workspace.dependencies]
+{{.DepsToml}}
+{{- end}}
+[package]
+name = "{{.CrateName}}"
+version = "1.0.0"
+edition = "2021"
+description = "Generated Protocol Buffer types and service infrastructure"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+{{.CrateName}}-types = { path = "types" }
+{{- if or .HasServiceWrappers .HasGrpcClients .HasW2SClients}}
+prost = { workspace = true }
+tonic = { workspace = true }
+futures = { workspace = true }
+tokio-stream = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+tokio-util = { workspace = true }
+tonic-prost = { workspace = true }
+tracing = { workspace = true }
+{{- if .HasW2SClients}}
+tokio-tungstenite = { workspace = true }
+{{- end}}
+{{- end}}
+{{- if or .HasServiceWrappers .HasGrpcClients}}
+axum = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+regex = { workspace = true }
+{{- range .LibCrates}}
+{{.Name}} = { path = "chassis/{{.Name}}" }
+{{- end}}
+{{- end}}
+tonic-health = { workspace = true }
+rustls = { workspace = true }
+{{- if or .HasAutoTls .HasSmb}}
+rustls-pemfile = { workspace = true }
+{{- if .HasAutoTls}}
+tokio-rustls = { workspace = true }
+{{- end}}
+{{- if eq .AutoTlsKeyType "ecdsa"}}
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+{{- else}}
+ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8"] }
+{{- end}}
+rand = "0.8"
+x509-cert = { workspace = true }
+{{- end}}
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(kani)'] }
+unused_imports = "allow"
+unused_comparisons = "allow"

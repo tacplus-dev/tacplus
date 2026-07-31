@@ -1,0 +1,310 @@
+{{.Header}}
+import * as grpc from '@grpc/grpc-js';
+{{- if .HasHandler}}
+import { create, toBinary, fromBinary } from '@bufbuild/protobuf';
+{{- if .HasGoogleEmpty}}
+import { type Empty, EmptySchema } from '@bufbuild/protobuf/wkt';
+{{- end}}
+{{- end}}
+import * as types from '{{.TypesImport}}';
+{{- if .HasHandler}}
+import * as traceTypes from '{{.TraceImport}}';
+{{- end}}
+{{- if .HasAccounting}}
+import * as accounting from '{{.AccountingImport}}';
+import * as accountingTypes from '{{.AccountingMethodImport}}';
+{{- end}}
+import { type WatchSource, WatchHub, type PageParams, type Page, decodePageToken, encodePageToken, effectivePageSize } from '{{.CollectionImport}}';
+{{.CrossPackageImports}}
+{{- if .HasHandler}}
+
+{{.HandlerInterface}}
+{{- end}}
+
+/**
+ * {{.WrapperName}} wraps {{.ServiceName}} with authorization and validation.
+ */
+export class {{.WrapperName}} {
+{{- if .HasHandler}}
+    private handler: {{.ServiceName}}Handler;
+{{- else}}
+    private handler: any;
+{{- end}}
+{{.WatchFields}}
+    private authorizeFunc: ((fullMethod: string, metadata: Record<string, string>, req: unknown) => void | Promise<void>) | null;
+    private authenticateFunc: ((metadata: Record<string, string>, targetNamespace?: string) => void | Promise<void>) | null;
+{{- if .HasAccounting}}
+    private emitter: any | null;
+{{- end}}
+    private instanceId: string;
+{{- if .HasHandler}}
+    private tracePublisher: ((event: traceTypes.TraceEvent) => void) | null;
+{{- end}}
+
+{{- if .HasHandler}}
+    constructor(handler: {{.ServiceName}}Handler) {
+{{- else}}
+    constructor(handler: any) {
+{{- end}}
+        this.handler = handler;
+        this.authorizeFunc = null;
+        this.authenticateFunc = null;
+{{- if .HasAccounting}}
+        this.emitter = null;
+{{- end}}
+        this.instanceId = '';
+{{- if .HasHandler}}
+        this.tracePublisher = null;
+{{- end}}
+    }
+
+    /** Sets the instance ID used for trace rounds. */
+    setInstanceId(instanceId: string): void {
+        this.instanceId = instanceId;
+    }
+
+    /** Sets the authorization function. */
+    setAuthorizeFunc(f: ((fullMethod: string, metadata: Record<string, string>, req: unknown) => void | Promise<void>) | null): void {
+        this.authorizeFunc = f;
+    }
+
+    /** Sets the authentication function (auth_any_user: token-only verification). */
+    setAuthenticateFunc(f: ((metadata: Record<string, string>, targetNamespace?: string) => void | Promise<void>) | null): void {
+        this.authenticateFunc = f;
+    }
+
+    /** Returns whether both generated auth callbacks are wired. */
+    hasAuthorizer(): boolean {
+        return this.authorizeFunc !== null && this.authenticateFunc !== null;
+    }
+
+{{- if .HasAccounting}}
+
+    /** Sets the accounting emitter for this service wrapper. */
+    setEmitter(emitter: any | null): void {
+        this.emitter = emitter;
+    }
+{{- end}}
+
+{{- if .HasHandler}}
+
+    /** Sets the callback for publishing trace events to EventBus. */
+    setTracePublisher(publisher: ((event: traceTypes.TraceEvent) => void) | null): void {
+        this.tracePublisher = publisher;
+    }
+{{- end}}
+
+    /** Registers per-method auth metadata with the Authorizer. */
+    registerMethodAuth(authorizer: {
+        setMethodAuth(methodName: string, patterns: string[]): void;
+        setMethodTargetNamespaceField(methodName: string, fieldName: string): void;
+    }): void {
+{{.RegisterMethodAuth}}
+    }
+
+    private metadataToRecord(metadata: grpc.Metadata): Record<string, string> {
+        const out: Record<string, string> = {};
+        const map = metadata.getMap();
+        for (const [key, value] of Object.entries(map)) {
+            out[key] = Buffer.isBuffer(value) ? value.toString() : String(value);
+        }
+        return out;
+    }
+
+{{- if .HasAccounting}}
+
+    private requestIdFromMetadata(metadata: grpc.Metadata): string {
+        const map = this.metadataToRecord(metadata);
+        return map['x-request-id'] ?? map['request-id'] ?? '';
+    }
+
+    private emitAccounting(
+        method: accountingTypes.AccountingMethod,
+        startMs: number,
+        err: unknown,
+        metadata: grpc.Metadata,
+    ): void {
+        if (this.emitter === null) return;
+        const durationMs = BigInt(Math.max(0, Date.now() - startMs));
+        const requestId = this.requestIdFromMetadata(metadata);
+        if (err == null) {
+            this.emitter.rpcCompleted(method, durationMs, {}, requestId);
+            return;
+        }
+        const code = accounting.grpcCodeFromError(err);
+        const errorContext = accounting.errorContextFromError(err, accounting.shouldCaptureStack(code));
+        const message = err instanceof Error ? err.message : String(err);
+        this.emitter.rpcError(method, code, message, durationMs, errorContext, {}, requestId);
+    }
+{{- end}}
+
+    /** Check authorization. Fail-closed: a missing authorize func rejects.
+     * auth_disabled methods skip this call (by annotation), so reaching here with
+     * no func means a token-auth method was left unwired — never allow it. */
+    private async authorize(fullMethod: string, metadata: grpc.Metadata, req: unknown): Promise<void> {
+        if (this.authorizeFunc === null) {
+            throw new Error(`authorizer not configured for ${fullMethod} — auth is mandatory and cannot be disabled`);
+        }
+        await this.authorizeFunc(fullMethod, this.metadataToRecord(metadata), req);
+    }
+
+    /** Check authentication only (auth_any_user). Fail-closed: a missing func rejects. */
+    private async authenticate(metadata: grpc.Metadata, targetNamespace?: string): Promise<void> {
+        if (this.authenticateFunc === null) {
+            throw new Error('authenticator not configured — auth is mandatory and cannot be disabled');
+        }
+        await this.authenticateFunc(this.metadataToRecord(metadata), targetNamespace);
+    }
+
+{{- if .HasHandler}}
+
+    private traceIdFromRequest(req: any): string {
+        const value = req?.traceId ?? req?.trace_id ?? '';
+        return typeof value === 'string' ? value : '';
+    }
+
+    private noopFromRequest(req: any): boolean {
+        return Boolean(req?.noop);
+    }
+
+    private traceRound(): traceTypes.TraceRound {
+        return create(traceTypes.TraceRoundSchema, {
+            service: '{{.ServiceLabel}}',
+            instanceId: this.instanceId,
+            timestampMs: BigInt(Date.now()),
+        });
+    }
+
+    private publishTrace(traceId: string, kind: number, error = '', method?: unknown): void {
+        if (!this.tracePublisher || traceId === '') return;
+        const event: any = {
+            traceId,
+            round: this.traceRound(),
+            kind: kind as any,
+            error,
+        };
+        if (method !== undefined && method !== null) {
+            event.rpc = method;
+        }
+        this.tracePublisher(create(traceTypes.TraceEventSchema, event));
+    }
+
+    private async *toAsyncIterable<T>(src: AsyncIterable<T> | Iterable<T>): AsyncIterable<T> {
+        if ((src as AsyncIterable<T>)[Symbol.asyncIterator]) {
+            for await (const item of src as AsyncIterable<T>) {
+                yield item;
+            }
+            return;
+        }
+        for (const item of src as Iterable<T>) {
+            yield item;
+        }
+    }
+
+    /** Convert an error to a gRPC ServiceError. */
+    private toGrpcError(err: any): any {
+        const code = typeof err.code === 'number' ? err.code : grpc.status.INTERNAL;
+        return {
+            code,
+            message: err.message || 'internal error',
+            name: err.name || 'Error',
+            details: err.details || '',
+        };
+    }
+
+    private toGrpcErrorWithCode(err: any, code: number): any {
+        return {
+            code,
+            message: err?.message || 'internal error',
+            name: err?.name || 'Error',
+            details: err?.details || '',
+        };
+    }
+
+    private validateResponse(validate: ((msg: any) => void) | null, msg: any): void {
+        if (validate === null) return;
+        try {
+            validate(msg);
+        } catch (err: any) {
+            throw this.toGrpcErrorWithCode(err, grpc.status.INTERNAL);
+        }
+    }
+
+    private wrapWritableForResponseValidation(stream: any, validate: ((msg: any) => void) | null): any {
+        if (validate === null) return stream;
+        const originalWrite = stream.write.bind(stream);
+        stream.write = (msg: any, ...args: any[]) => {
+            try {
+                validate(msg);
+            } catch (err: any) {
+                stream.emit('error', this.toGrpcErrorWithCode(err, grpc.status.INTERNAL));
+                return false;
+            }
+            return originalWrite(msg, ...args);
+        };
+        return stream;
+    }
+
+    private wrapReadableForRequestValidation(
+        stream: any,
+        validate: ((msg: any) => void) | null,
+        authorize?: ((msg: any) => Promise<void>),
+    ): any {
+        if (validate === null && authorize === undefined) return stream;
+        const wrapListener = (listener: (msg: any) => void) => {
+            return (msg: any) => {
+                stream.pause?.();
+                (async () => {
+                    try {
+                        if (authorize !== undefined) {
+                            await authorize(msg);
+                        }
+                        if (validate !== null) {
+                            validate(msg);
+                        }
+                        listener(msg);
+                    } catch (err: any) {
+                        stream.emit('error', this.toGrpcError(err));
+                    } finally {
+                        stream.resume?.();
+                    }
+                })();
+            };
+        };
+        return new Proxy(stream, {
+            get(target, prop, receiver) {
+                const value = Reflect.get(target, prop, receiver);
+                if (
+                    (prop === 'on' || prop === 'addListener' || prop === 'once' || prop === 'prependListener') &&
+                    typeof value === 'function'
+                ) {
+                    return (event: string, listener: any) => {
+                        const nextListener = event === 'data' && typeof listener === 'function'
+                            ? wrapListener(listener)
+                            : listener;
+                        return value.call(target, event, nextListener);
+                    };
+                }
+                return typeof value === 'function' ? value.bind(target) : value;
+            },
+        });
+    }
+
+    /** Register gRPC services with the server. */
+    registerServices(grpcServer: grpc.Server): void {
+        const serviceDefinition: grpc.ServiceDefinition = {
+{{.ServiceDefinition}}
+        };
+
+        grpcServer.addService(serviceDefinition, {
+{{.GRPCMethods}}
+        });
+    }
+{{- else}}
+
+    /** Register gRPC services with the server. */
+    registerServices(grpcServer: any): void {
+        // No methods to register
+    }
+{{- end}}
+}

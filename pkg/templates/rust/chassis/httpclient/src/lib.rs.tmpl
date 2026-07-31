@@ -1,0 +1,82 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! HTTP Client Library with Retry Logic
+//!
+//! This library provides a typed HTTP client with retry logic, TLS/mTLS support,
+//! and integration with proto types.
+//!
+//! # Architecture
+//!
+//! The package provides three main components:
+//!
+//! 1. **TypedClient** - A wrapper around reqwest::Client with configured TLS, timeouts, and connection pooling
+//! 2. **Static helper functions** - Generic functions for GET plus single-attempt POST and mutations
+//! 3. **RetryConfig** - Configuration for jittered exponential backoff retry behavior
+//!
+//! # Features
+//!
+//! - **Retry Logic**: Automatic retry with jittered exponential backoff for failed requests
+//! - **TLS/mTLS Support**: Configure custom root CAs and client certificates
+//! - **Connection Pooling**: Configure connection pool settings
+//! - **Typed Errors**: Returns proto error types
+//! - **Debug/Trace Logging**: Detailed logging at debug and trace levels
+//!
+//! # Retry Logic
+//!
+//! Read-like HTTP operations support automatic retry with jittered exponential backoff:
+//! - GET/HEAD/OPTIONS may retry network errors
+//! - HTTP status codes can be configured as retryable (default: 429, 500, 502, 503, 504)
+//! - Backoff starts at 100ms and doubles each retry (configurable)
+//! - Maximum backoff is capped at 5 seconds (configurable)
+//! - Default maximum retries is 3 (configurable)
+//! - POST/PUT/PATCH/DELETE are single-attempt by default to avoid duplicate side effects
+//!
+//! # Debug and Trace Logging
+//!
+//! The library provides two levels of logging:
+//!
+//! **Debug Level** (always logged at debug):
+//! - Request method, URL, attempt number, and status code
+//!
+//! **Trace Level** (only when trace logging is enabled):
+//! - Request body (for POST/PUT/PATCH/DELETE)
+//! - Response body
+//!
+//! # Example Usage
+//!
+//! ```rust
+//! use httpclient::{TypedClient, ClientError};
+//! use {{.CrateBasePathUnderscore}}_types::sys::httpclient::HttpClientConfig;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), ClientError> {
+//!     // Create client with default retry config
+//!     let config = HttpClientConfig {
+//!         timeout_seconds: 30,
+//!         max_idle_conns: 100,
+//!         ..Default::default()
+//!     };
+//!
+//!     let client = TypedClient::new(Some(&config))?;
+//!
+//!     // Use the client for requests
+//!     // (Generated code will call do_get, do_post_with_response, do_mutation)
+//!
+//!     Ok(())
+//! }
+//! ```
+
+pub mod adapter;
+pub mod client;
+pub mod config;
+pub mod error;
+pub mod retry;
+pub mod sse;
+
+// Re-export main types
+pub use client::TypedClient;
+pub use error::{ClientError, Result};
+pub use retry::RetryConfig;
+
+// Re-export adapter functions for generated code
+pub use adapter::{do_get, do_mutation, do_post_with_response};

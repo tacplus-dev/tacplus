@@ -1,0 +1,192 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Retry configuration and logic with jittered exponential backoff.
+//!
+//! This module provides retry behavior for HTTP requests, including
+//! configurable backoff timing and retryable status codes.
+
+use {{.CrateBasePathUnderscore}}_types::sys::httpclient::RetryConfig as ProtoRetryConfig;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// Retry configuration wrapping proto config
+#[derive(Debug, Clone)]
+pub struct RetryConfig {
+    /// Maximum number of retry attempts (after initial request)
+    pub max_retries: u32,
+    /// Initial backoff duration
+    pub initial_backoff: Duration,
+    /// Maximum backoff duration
+    pub max_backoff: Duration,
+    /// Backoff multiplier for jittered exponential backoff
+    pub backoff_multiplier: f64,
+    /// HTTP status codes that should trigger a retry
+    pub retryable_status_codes: Vec<u16>,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            initial_backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_millis(5000),
+            backoff_multiplier: 2.0,
+            retryable_status_codes: vec![429, 500, 502, 503, 504],
+        }
+    }
+}
+
+impl From<&ProtoRetryConfig> for RetryConfig {
+    fn from(proto: &ProtoRetryConfig) -> Self {
+        let retryable_codes = if proto.retryable_status_codes.is_empty() {
+            vec![429, 500, 502, 503, 504]
+        } else {
+            proto
+                .retryable_status_codes
+                .iter()
+                .map(|&code| code as u16)
+                .collect()
+        };
+
+        Self {
+            max_retries: proto.max_retries as u32,
+            initial_backoff: Duration::from_millis(proto.initial_backoff_ms as u64),
+            max_backoff: Duration::from_millis(proto.max_backoff_ms as u64),
+            backoff_multiplier: proto.backoff_multiplier,
+            retryable_status_codes: retryable_codes,
+        }
+    }
+}
+
+impl RetryConfig {
+    /// Calculate capped exponential backoff with equal jitter.
+    pub fn calculate_backoff(&self, attempt: u32) -> Duration {
+        let backoff_ms = (self.initial_backoff.as_millis() as f64)
+            * self.backoff_multiplier.powi(attempt as i32);
+        let backoff_ms = backoff_ms.min(self.max_backoff.as_millis() as f64);
+        let capped_ms = backoff_ms as u64;
+        if capped_ms <= 1 {
+            return Duration::from_millis(capped_ms);
+        }
+        let half = capped_ms / 2;
+        let jitter_range = capped_ms - half;
+        let jitter = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() as u64 % (jitter_range + 1))
+            .unwrap_or(0);
+        Duration::from_millis(half + jitter)
+    }
+
+    /// Check if a status code is retryable
+    pub fn is_retryable_status(&self, status_code: u16) -> bool {
+        self.retryable_status_codes.contains(&status_code)
+    }
+
+    /// Get maximum number of attempts (initial + retries)
+    pub fn max_attempts(&self) -> u32 {
+        1 + self.max_retries
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_retry_config() {
+        let config = RetryConfig::default();
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.initial_backoff, Duration::from_millis(100));
+        assert_eq!(config.max_backoff, Duration::from_millis(5000));
+        assert_eq!(config.backoff_multiplier, 2.0);
+        assert_eq!(
+            config.retryable_status_codes,
+            vec![429, 500, 502, 503, 504]
+        );
+    }
+
+    #[test]
+    fn test_calculate_backoff() {
+        let config = RetryConfig {
+            max_retries: 5,
+            initial_backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_millis(5000),
+            backoff_multiplier: 2.0,
+            retryable_status_codes: vec![503],
+        };
+
+        assert_backoff_between(config.calculate_backoff(0), 50, 100); // 100 * 2^0
+        assert_backoff_between(config.calculate_backoff(1), 100, 200); // 100 * 2^1
+        assert_backoff_between(config.calculate_backoff(2), 200, 400); // 100 * 2^2
+        assert_backoff_between(config.calculate_backoff(3), 400, 800); // 100 * 2^3
+        assert_backoff_between(config.calculate_backoff(4), 800, 1600); // 100 * 2^4
+        assert_backoff_between(config.calculate_backoff(5), 1600, 3200); // 100 * 2^5
+        assert_backoff_between(config.calculate_backoff(6), 2500, 5000); // capped at max
+        assert_backoff_between(config.calculate_backoff(7), 2500, 5000); // capped at max
+    }
+
+    fn assert_backoff_between(actual: Duration, min_ms: u128, max_ms: u128) {
+        let actual_ms = actual.as_millis();
+        assert!(
+            actual_ms >= min_ms && actual_ms <= max_ms,
+            "expected backoff {}ms to be between {}ms and {}ms",
+            actual_ms,
+            min_ms,
+            max_ms
+        );
+    }
+
+    #[test]
+    fn test_is_retryable_status() {
+        let config = RetryConfig::default();
+        assert!(config.is_retryable_status(429));
+        assert!(config.is_retryable_status(500));
+        assert!(config.is_retryable_status(503));
+        assert!(!config.is_retryable_status(404));
+        assert!(!config.is_retryable_status(200));
+    }
+
+    #[test]
+    fn test_max_attempts() {
+        let config = RetryConfig {
+            max_retries: 3,
+            ..Default::default()
+        };
+        assert_eq!(config.max_attempts(), 4); // 1 initial + 3 retries
+    }
+
+    #[test]
+    fn test_from_proto_config() {
+        let proto = ProtoRetryConfig {
+            max_retries: 5,
+            initial_backoff_ms: 200,
+            max_backoff_ms: 10000,
+            backoff_multiplier: 3.0,
+            retryable_status_codes: vec![429, 503],
+        };
+
+        let config = RetryConfig::from(&proto);
+        assert_eq!(config.max_retries, 5);
+        assert_eq!(config.initial_backoff, Duration::from_millis(200));
+        assert_eq!(config.max_backoff, Duration::from_millis(10000));
+        assert_eq!(config.backoff_multiplier, 3.0);
+        assert_eq!(config.retryable_status_codes, vec![429, 503]);
+    }
+
+    #[test]
+    fn test_from_proto_config_empty_codes() {
+        let proto = ProtoRetryConfig {
+            max_retries: 3,
+            initial_backoff_ms: 100,
+            max_backoff_ms: 5000,
+            backoff_multiplier: 2.0,
+            retryable_status_codes: vec![],
+        };
+
+        let config = RetryConfig::from(&proto);
+        // Should use defaults when empty
+        assert_eq!(
+            config.retryable_status_codes,
+            vec![429, 500, 502, 503, 504]
+        );
+    }
+}

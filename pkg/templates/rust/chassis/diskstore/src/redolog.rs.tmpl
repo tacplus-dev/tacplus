@@ -1,0 +1,335 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! UC2 — append-only redo log (WAL) with periodic compaction.
+//!
+//! One redo log per `(namespace, store)`, laid out by [`crate::path`] as
+//! `<base>/<ns-dirs>/<store>.log`. Because each log is homogeneous (one ns, one
+//! store), records carry only the row `key`, an optional `deleted` tombstone,
+//! optional caller-set `metadata`, and the `payload` (the type as JSON). The
+//! namespace and store are implied by the file path.
+//!
+//! Records are NDJSON (one JSON envelope per line — safe to newline-frame since
+//! JSON escapes embedded newlines). Compaction ("roll") rewrites the log as the
+//! current deduped state plus writes that arrived during the snapshot, then
+//! atomically swaps it in (the final rename is the commit point).
+
+use crate::compress::{compress, decompress_auto, Codec};
+use crate::error::{DiskStoreError, Result};
+use crate::fsutil::{promote, rotate_archives, write_temp};
+use crate::path::store_path;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+/// One redo-log record (the JSON envelope), NDJSON-framed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Record {
+    /// The `collection_index` value identifying the row within the store.
+    pub key: String,
+    /// True if this records a deletion of `key` (payload omitted).
+    #[serde(default)]
+    pub deleted: bool,
+    /// Optional, caller-set metadata. Never required or auto-populated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<String>,
+    /// The type serialized as JSON (absent for deletions). Embedded as a nested
+    /// JSON value: the generated `ToJSON` output parsed in; `FromJSON` consumes
+    /// it on restore.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Value>,
+}
+
+/// Consumer hook for restore. Receives each deduped record; the implementation
+/// decides whether the row is actually applied or is a duplicate — idempotency
+/// is owned by the consumer (the underlying store).
+pub trait Inserter {
+    fn insert(&mut self, rec: &Record) -> Result<()>;
+}
+
+/// An append-only redo log for one `(namespace, store)`, with compaction.
+pub struct RedoLog {
+    active: PathBuf,
+    archive_count: u32,
+    archive_codec: Codec,
+    inner: Mutex<Inner>,
+}
+
+struct Inner {
+    /// Current append target (the active log, or the temp log during a roll).
+    writer: Option<File>,
+}
+
+impl RedoLog {
+    /// Open (creating if absent) the redo log for `(ns, store)` under `base`.
+    ///
+    /// Concurrency: single-writer, single-process, local filesystem only.
+    /// Concurrent writers, multiple owning processes, or network/shared filesystems
+    /// are unsupported and can corrupt the archive chain.
+    pub fn open(
+        base: &Path,
+        ns: &str,
+        store: &str,
+        archive_count: u32,
+        archive_codec: Codec,
+    ) -> Result<Self> {
+        let active = store_path(base, ns, store, ".log");
+        if let Some(dir) = active.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let writer = OpenOptions::new().create(true).append(true).open(&active)?;
+        Ok(Self {
+            active,
+            archive_count,
+            archive_codec,
+            inner: Mutex::new(Inner { writer: Some(writer) }),
+        })
+    }
+
+    /// The active log file path.
+    pub fn active_path(&self) -> &Path {
+        &self.active
+    }
+
+    /// Append one record, NDJSON-framed and fsync'd (durability is the point).
+    pub fn append(&self, rec: &Record) -> Result<()> {
+        let mut line = serde_json::to_vec(rec)?;
+        line.push(b'\n');
+        let mut g = self.inner.lock().expect("redolog lock poisoned");
+        let writer = g
+            .writer
+            .as_mut()
+            .ok_or_else(|| DiskStoreError::general("redo log writer is closed"))?;
+        writer.write_all(&line)?;
+        writer.sync_all()?;
+        Ok(())
+    }
+
+    /// Compact: redirect appends to a temp log, build a fresh baseline from the
+    /// caller-supplied current state (`snapshot`), fold in the temp log under a
+    /// brief write-block, then atomically swap the new file in and archive the
+    /// old one (compressed at rest). The final rename is the commit point.
+    pub fn roll(&self, snapshot: &[Record]) -> Result<()> {
+        let temp_path = sibling(&self.active, ".temp");
+        let building = sibling(&self.active, ".building");
+
+        // 1. Redirect appends to the temp log (no write-block during snapshot).
+        {
+            let mut g = self.inner.lock().expect("redolog lock poisoned");
+            g.writer = Some(OpenOptions::new().create(true).append(true).open(&temp_path)?);
+        }
+
+        // 2. Build the new baseline from the snapshot (build-then-rename: the
+        //    presence of `building` means it is complete + durable).
+        let mut buf = Vec::new();
+        for rec in snapshot {
+            serde_json::to_writer(&mut buf, rec)?;
+            buf.push(b'\n');
+        }
+        let staged = write_temp(&building, &buf, 0)?;
+        promote(&staged, &building)?;
+
+        // 3. Block appends; fold the temp log into the new baseline; swap.
+        {
+            let mut g = self.inner.lock().expect("redolog lock poisoned");
+            g.writer
+                .as_ref()
+                .ok_or_else(|| DiskStoreError::general("redo log writer is closed"))?
+                .sync_all()?;
+            let temp_bytes = match std::fs::read(&temp_path) {
+                Ok(b) => b,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => return Err(e.into()),
+            };
+            {
+                let mut f = OpenOptions::new().append(true).open(&building)?;
+                f.write_all(&temp_bytes)?;
+                f.sync_all()?;
+            }
+            // Archive the old active (compressed at rest), then promote.
+            rotate_archives(&self.active, self.archive_count)?;
+            if self.archive_count > 0 && self.archive_codec != Codec::None {
+                compress_in_place(&sibling(&self.active, ".bak.1"), self.archive_codec)?;
+            }
+            promote(&building, &self.active)?;
+            // Resume appends on the (new) active log.
+            g.writer = Some(OpenOptions::new().create(true).append(true).open(&self.active)?);
+            let _ = std::fs::remove_file(&temp_path);
+        }
+        Ok(())
+    }
+
+    /// Read + dedup the active log and replay each record through `inserter`.
+    /// Returns the number of records applied. Recovers a leftover temp log
+    /// (crash mid-roll) by folding it after the active log (latest wins).
+    pub fn restore(&self, inserter: &mut dyn Inserter) -> Result<usize> {
+        let building = sibling(&self.active, ".building");
+        if building.exists() {
+            let mut g = self.inner.lock().expect("redolog lock poisoned");
+            g.writer = None;
+            promote(&building, &self.active)?;
+            g.writer = Some(OpenOptions::new().create(true).append(true).open(&self.active)?);
+        }
+
+        let mut recs = dedup_file(&self.active)?;
+        let temp_path = sibling(&self.active, ".temp");
+        if temp_path.exists() {
+            let extra = dedup_file(&temp_path)?;
+            let mut by_key: HashMap<String, Record> = HashMap::new();
+            for r in recs.into_iter().chain(extra.into_iter()) {
+                by_key.insert(r.key.clone(), r);
+            }
+            recs = by_key.into_values().collect();
+        }
+        let mut n = 0;
+        for r in &recs {
+            inserter.insert(r)?;
+            n += 1;
+        }
+        Ok(n)
+    }
+}
+
+/// Read a (possibly compressed) NDJSON log file and dedup to latest-per-key.
+/// Returns an empty vec if the file is absent.
+pub fn dedup_file(path: &Path) -> Result<Vec<Record>> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    dedup_bytes(&decompress_auto(&bytes)?)
+}
+
+/// Dedup NDJSON bytes to latest-per-key. Later lines win.
+pub fn dedup_bytes(bytes: &[u8]) -> Result<Vec<Record>> {
+    let mut by_key: HashMap<String, Record> = HashMap::new();
+    for (i, line) in bytes.split(|b| *b == b'\n').enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        let rec: Record = serde_json::from_slice(line)
+            .map_err(|e| DiskStoreError::codec(format!("redo log line {}: {}", i + 1, e)))?;
+        by_key.insert(rec.key.clone(), rec);
+    }
+    Ok(by_key.into_values().collect())
+}
+
+fn compress_in_place(path: &Path, codec: Codec) -> Result<()> {
+    let raw = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    let packed = compress(&raw, codec)?;
+    let tmp = write_temp(path, &packed, 0)?;
+    promote(&tmp, path)
+}
+
+fn sibling(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn rec(key: &str, v: i64) -> Record {
+        Record {
+            key: key.into(),
+            deleted: false,
+            metadata: None,
+            payload: Some(serde_json::json!({ "v": v })),
+        }
+    }
+
+    fn records_bytes(records: &[Record]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for rec in records {
+            serde_json::to_writer(&mut out, rec).unwrap();
+            out.push(b'\n');
+        }
+        out
+    }
+
+    fn require_record_value(records: &[Record], key: &str, want: i64) {
+        let rec = records
+            .iter()
+            .find(|rec| rec.key == key)
+            .unwrap_or_else(|| panic!("record {key} not found in {records:?}"));
+        assert_eq!(rec.payload.as_ref().unwrap()["v"], want);
+    }
+
+    struct Collect(Vec<Record>);
+    impl Inserter for Collect {
+        fn insert(&mut self, r: &Record) -> Result<()> {
+            self.0.push(r.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn append_dedup_latest() {
+        let dir = tempdir().unwrap();
+        let log = RedoLog::open(dir.path(), "/drpepper/default", "verifying_keys", 3, Codec::None).unwrap();
+        log.append(&rec("a", 1)).unwrap();
+        log.append(&rec("b", 1)).unwrap();
+        log.append(&rec("a", 2)).unwrap();
+
+        let recs = dedup_file(log.active_path()).unwrap();
+        assert_eq!(recs.len(), 2);
+        let a = recs.iter().find(|r| r.key == "a").unwrap();
+        assert_eq!(a.payload.as_ref().unwrap()["v"], 2);
+        // laid out under the nested ns dirs
+        assert!(dir.path().join("drpepper/default/verifying_keys.log").exists());
+    }
+
+    #[test]
+    fn roll_compacts_and_resumes() {
+        let dir = tempdir().unwrap();
+        let log = RedoLog::open(dir.path(), "/drpepper", "verifying_keys", 2, Codec::Gz).unwrap();
+        log.append(&rec("a", 1)).unwrap();
+        log.append(&rec("a", 2)).unwrap();
+
+        let snap = dedup_file(log.active_path()).unwrap();
+        log.roll(&snap).unwrap();
+        log.append(&rec("b", 9)).unwrap();
+
+        let mut c = Collect(Vec::new());
+        log.restore(&mut c).unwrap();
+        assert_eq!(c.0.len(), 2);
+        assert!(dir.path().join("drpepper/verifying_keys.log.bak.1").exists());
+    }
+
+    #[test]
+    fn restore_recovers_building_snapshot_and_temp_tail() {
+        let dir = tempdir().unwrap();
+        let log = RedoLog::open(dir.path(), "/drpepper", "verifying_keys", 0, Codec::None).unwrap();
+        let active = log.active_path().to_path_buf();
+        let building = sibling(&active, ".building");
+        let temp = sibling(&active, ".temp");
+
+        std::fs::write(&building, records_bytes(&[rec("a", 1), rec("b", 1)])).unwrap();
+        std::fs::write(&temp, records_bytes(&[rec("b", 2), rec("c", 3)])).unwrap();
+        {
+            let mut guard = log.inner.lock().expect("redolog lock poisoned");
+            guard.writer = None;
+        }
+        std::fs::remove_file(&active).unwrap();
+
+        let mut c = Collect(Vec::new());
+        log.restore(&mut c).unwrap();
+        assert_eq!(c.0.len(), 3);
+        require_record_value(&c.0, "a", 1);
+        require_record_value(&c.0, "b", 2);
+        require_record_value(&c.0, "c", 3);
+        assert!(active.exists(), "restore should promote building snapshot to active");
+        assert!(!building.exists(), "building snapshot should be consumed by restore");
+        log.append(&rec("d", 4)).unwrap();
+    }
+}

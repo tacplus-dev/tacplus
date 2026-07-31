@@ -1,0 +1,853 @@
+{{.Header}}
+package {{.Package}};
+
+{{- $hasWatches := or .Singletons .Collections .StateImports}}
+{{- $hasTrace := or $hasWatches .Topics}}
+{{- if or .Collections .Views .Singletons .StateImports}}
+import java.util.ArrayList;
+import java.util.List;
+{{- end}}
+{{- if or .Collections .Views $hasWatches}}
+import java.util.Map;
+import java.util.LinkedHashMap;
+{{- end}}
+{{- if .Singletons}}
+import java.util.function.Consumer;
+{{- end}}
+{{- if $hasWatches}}
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Logger;
+{{- end}}
+import io.grpc.CallCredentials;
+import io.grpc.Channel;
+{{- if $hasWatches}}
+import io.grpc.stub.ClientCallStreamObserver;
+import io.grpc.stub.ClientResponseObserver;
+{{- end}}
+import {{.GrpcServiceFQN}};
+{{- if $hasTrace}}
+import {{.TraceFQN}};
+{{- end}}
+{{range .Imports}}
+import {{.}};
+{{- end}}
+
+/**
+ * Typed client-side state client for {{.StateRootName}}.
+ *
+ * <p>Caches state boundaries and provides a {@link #proto()} method that
+ * reconstructs the full {{.StateRootName}} proto message.</p>
+ */
+public class StateClient implements AutoCloseable {
+{{- if $hasWatches}}
+    private static final Logger LOG = Logger.getLogger(StateClient.class.getName());
+    private static final long MAX_WATCH_BACKOFF_MILLIS = 30000L;
+
+{{- end}}
+    private final Object cacheLock = new Object();
+    private {{.StateServiceName}}Grpc.{{.StateServiceName}}BlockingStub stateStub;
+{{- if $hasWatches}}
+    private {{.StateServiceName}}Grpc.{{.StateServiceName}}Stub stateAsyncStub;
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final AtomicBoolean watchesStarted = new AtomicBoolean(false);
+    private final ScheduledExecutorService watchExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "{{.StateRootName}}-state-watch-retry");
+        t.setDaemon(true);
+        return t;
+    });
+    private final List<ClientCallStreamObserver<?>> activeWatchCalls = new ArrayList<>();
+    private final Object watchStatusLock = new Object();
+    private final Map<String, WatchStatus> watchStatuses = new LinkedHashMap<>();
+    private volatile WatchStatusListener watchStatusListener;
+{{- end}}
+{{- range .Singletons}}
+    private {{.JavaType}} {{.FieldName}};
+    private final {{$.StateRootName}}{{.FieldPascal}}Accessor {{.FieldName}}Accessor = new {{$.StateRootName}}{{.FieldPascal}}Accessor(this);
+    private final List<{{.FieldPascal}}Subscriber> {{.FieldName}}Subscribers = new ArrayList<>();
+{{- end}}
+{{- range .Collections}}
+    private final Map<String, {{.JavaType}}> {{.FieldName}} = new LinkedHashMap<>();
+    private final List<{{.FieldPascal}}Subscriber> {{.FieldName}}Subscribers = new ArrayList<>();
+{{- end}}
+{{- range .StateImports}}
+    private {{.JavaType}} {{.FieldName}};
+{{- end}}
+
+    /**
+     * Wires the gRPC channel and credentials for RPC methods and background Watch streams.
+     * Called by the runtime after ServiceManager initialization.
+     */
+    public void setChannel(Channel channel, CallCredentials credentials) {
+        this.stateStub = {{.StateServiceName}}Grpc.newBlockingStub(channel);
+{{- if $hasWatches}}
+        this.stateAsyncStub = {{.StateServiceName}}Grpc.newStub(channel);
+{{- end}}
+        if (credentials != null) {
+            this.stateStub = this.stateStub.withCallCredentials(credentials);
+{{- if $hasWatches}}
+            this.stateAsyncStub = this.stateAsyncStub.withCallCredentials(credentials);
+{{- end}}
+        }
+{{- if $hasWatches}}
+        this.closed.set(false);
+        startWatches();
+{{- end}}
+    }
+
+    /**
+     * Returns the raw blocking stub for direct RPC calls not covered by typed wrappers.
+     */
+    public {{.StateServiceName}}Grpc.{{.StateServiceName}}BlockingStub stateStub() {
+        return this.stateStub;
+    }
+
+    /**
+     * Assembles the full {{.StateRootName}} from all cached boundaries.
+     */
+    public {{.OuterClassName}}.{{.StateRootName}} proto() {
+        {{.OuterClassName}}.{{.StateRootName}}.Builder builder = {{.OuterClassName}}.{{.StateRootName}}.newBuilder();
+        synchronized (cacheLock) {
+{{- range .Singletons}}
+            if (this.{{.FieldName}} != null) {
+                builder.set{{.FieldPascal}}(this.{{.FieldName}});
+            }
+{{- end}}
+{{- range .Collections}}
+            builder.addAll{{.FieldPascal}}(new ArrayList<>(this.{{.FieldName}}.values()));
+{{- end}}
+{{- range .StateImports}}
+            if (this.{{.FieldName}} != null) {
+                builder.set{{.FieldPascal}}(this.{{.FieldName}});
+            }
+{{- end}}
+        }
+        return builder.build();
+    }
+
+    @Override
+    public void close() {
+{{- if $hasWatches}}
+        if (closed.compareAndSet(false, true)) {
+            cancelActiveWatchCalls();
+            watchExecutor.shutdownNow();
+        }
+{{- end}}
+    }
+{{- if $hasWatches}}
+
+    /**
+     * Receives state Watch lifecycle changes. Use this to feed application health
+     * checks or alerting when a state cache is retrying and may be stale.
+     */
+    public interface WatchStatusListener {
+        void onWatchStatus(WatchStatus status);
+    }
+
+    /**
+     * Immutable snapshot of a single Watch stream lifecycle.
+     */
+    public static final class WatchStatus {
+        private final String watchName;
+        private final boolean received;
+        private final boolean retrying;
+        private final int nextAttempt;
+        private final String reason;
+        private final Throwable error;
+        private final long updatedAtMillis;
+
+        private WatchStatus(
+                String watchName,
+                boolean received,
+                boolean retrying,
+                int nextAttempt,
+                String reason,
+                Throwable error) {
+            this.watchName = watchName;
+            this.received = received;
+            this.retrying = retrying;
+            this.nextAttempt = nextAttempt;
+            this.reason = reason;
+            this.error = error;
+            this.updatedAtMillis = System.currentTimeMillis();
+        }
+
+        public String watchName() { return watchName; }
+        public boolean hasReceived() { return received; }
+        public boolean isRetrying() { return retrying; }
+        public boolean isHealthy() { return !retrying; }
+        public int nextAttempt() { return nextAttempt; }
+        public String reason() { return reason; }
+        public Throwable error() { return error; }
+        public long updatedAtMillis() { return updatedAtMillis; }
+    }
+
+    public void setWatchStatusListener(WatchStatusListener listener) {
+        this.watchStatusListener = listener;
+    }
+
+    public Map<String, WatchStatus> watchStatuses() {
+        synchronized (watchStatusLock) {
+            return new LinkedHashMap<>(watchStatuses);
+        }
+    }
+
+    public boolean watchesHealthy() {
+        synchronized (watchStatusLock) {
+            for (WatchStatus status : watchStatuses.values()) {
+                if (status.isRetrying()) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private void recordWatchHealthy(String watchName, boolean received) {
+        setWatchStatus(new WatchStatus(watchName, received, false, 0, "", null));
+    }
+
+    private void recordWatchRetrying(String watchName, boolean received, int nextAttempt, String reason, Throwable error) {
+        setWatchStatus(new WatchStatus(watchName, received, true, nextAttempt, reason, error));
+    }
+
+    private void setWatchStatus(WatchStatus status) {
+        synchronized (watchStatusLock) {
+            watchStatuses.put(status.watchName(), status);
+        }
+        WatchStatusListener listener = watchStatusListener;
+        if (listener != null) {
+            try {
+                listener.onWatchStatus(status);
+            } catch (RuntimeException e) {
+                LOG.warning(status.watchName() + " watch status listener failed: " + e.getMessage());
+            }
+        }
+    }
+
+    private void ensureAsyncStub() {
+        if (stateAsyncStub == null) {
+            throw new IllegalStateException("stateAsyncStub not initialized - call setChannel() first");
+        }
+    }
+
+    private void startWatches() {
+        if (!watchesStarted.compareAndSet(false, true)) {
+            return;
+        }
+{{- range .Singletons}}
+        startWatch{{.FieldPascal}}(0);
+{{- end}}
+{{- range .Collections}}
+        startWatch{{.FieldPascal}}(0);
+{{- end}}
+{{- range .StateImports}}
+        startWatch{{.FieldPascal}}(0);
+{{- end}}
+    }
+
+    private long watchRetryDelayMillis(int attempt) {
+        int capped = Math.max(0, Math.min(attempt, 5));
+        long delay = 1000L << capped;
+        if (delay > MAX_WATCH_BACKOFF_MILLIS) {
+            delay = MAX_WATCH_BACKOFF_MILLIS;
+        }
+        long jitter = delay / 5;
+        if (jitter > 0) {
+            delay = Math.min(MAX_WATCH_BACKOFF_MILLIS, delay + ThreadLocalRandom.current().nextLong(jitter + 1));
+        }
+        return delay;
+    }
+
+    private void scheduleWatchRestart(String watchName, int attempt, Runnable startFn) {
+        if (closed.get()) {
+            return;
+        }
+        long delay = watchRetryDelayMillis(attempt);
+        try {
+            watchExecutor.schedule(() -> {
+                if (!closed.get()) {
+                    startFn.run();
+                }
+            }, delay, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException e) {
+            if (!closed.get()) {
+                LOG.warning(watchName + " retry rejected: " + e.getMessage());
+            }
+        }
+    }
+
+    private void registerWatchCall(ClientCallStreamObserver<?> call) {
+        synchronized (activeWatchCalls) {
+            if (closed.get()) {
+                call.cancel("state client closed", null);
+                return;
+            }
+            activeWatchCalls.add(call);
+        }
+    }
+
+    private void removeWatchCall(ClientCallStreamObserver<?> call) {
+        if (call == null) {
+            return;
+        }
+        synchronized (activeWatchCalls) {
+            activeWatchCalls.remove(call);
+        }
+    }
+
+    private void cancelActiveWatchCalls() {
+        List<ClientCallStreamObserver<?>> calls;
+        synchronized (activeWatchCalls) {
+            calls = new ArrayList<>(activeWatchCalls);
+            activeWatchCalls.clear();
+        }
+        for (ClientCallStreamObserver<?> call : calls) {
+            try {
+                call.cancel("state client closed", null);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+{{- end}}
+{{- if .Singletons}}
+
+    // ==================== Singleton Subscriber Interfaces ====================
+{{range .Singletons}}
+    /**
+     * Subscriber interface for {{.TypeName}} singleton boundary changes.
+     */
+    public interface {{.FieldPascal}}Subscriber {
+        void on{{.FieldPascal}}Change({{.JavaType}} value);
+    }
+{{end}}
+    // ==================== Singleton Accessors ====================
+{{range .Singletons}}
+    /**
+     * Returns a child accessor for the {{.TypeName}} boundary.
+     */
+    public {{$.StateRootName}}{{.FieldPascal}}Accessor {{.FieldName}}() {
+        return this.{{.FieldName}}Accessor;
+    }
+
+    /**
+     * Returns the cached {{.TypeName}}, or null if not set.
+     */
+    public {{.JavaType}} get{{.FieldPascal}}() {
+        synchronized (cacheLock) {
+            return this.{{.FieldName}};
+        }
+    }
+
+{{if not $.ReadOnly}}
+    /**
+     * Stores the {{.TypeName}}.
+     */
+    public void set{{.FieldPascal}}({{.JavaType}} value) {
+        apply{{.FieldPascal}}Update(value);
+    }
+{{end}}
+    /**
+     * Registers a subscriber for {{.TypeName}} Watch updates.
+     */
+    public void subscribe{{.FieldPascal}}({{.FieldPascal}}Subscriber subscriber) {
+        synchronized (cacheLock) {
+            this.{{.FieldName}}Subscribers.add(subscriber);
+        }
+    }
+
+    private void apply{{.FieldPascal}}Update({{.JavaType}} value) {
+        List<{{.FieldPascal}}Subscriber> subscribers;
+        synchronized (cacheLock) {
+            this.{{.FieldName}} = value;
+            subscribers = new ArrayList<>(this.{{.FieldName}}Subscribers);
+        }
+        this.{{.FieldName}}Accessor.notifyChange(value);
+        for ({{.FieldPascal}}Subscriber sub : subscribers) {
+            try {
+                sub.on{{.FieldPascal}}Change(value);
+            } catch (Exception e) {
+                LOG.warning("{{.FieldPascal}} subscriber failed: " + e.getMessage());
+            }
+        }
+    }
+{{end}}
+{{- end}}
+{{- if .Collections}}
+
+    // ==================== Collection Subscriber Interfaces ====================
+{{range .Collections}}
+    /**
+     * Subscriber interface for {{.TypeName}} collection boundary changes.
+     */
+    public interface {{.FieldPascal}}Subscriber {
+        void on{{.FieldPascal}}Change(Map<String, {{.JavaType}}> entries);
+    }
+{{end}}
+    // ==================== Collection Accessors ====================
+{{range .Collections}}
+    /**
+     * Returns all cached {{.TypeName}} items.
+     */
+    public List<{{.JavaType}}> get{{.FieldPascal}}() {
+        synchronized (cacheLock) {
+            return new ArrayList<>(this.{{.FieldName}}.values());
+        }
+    }
+
+    /**
+     * Returns the cached {{.TypeName}} entries as a map (key to value).
+     */
+    public Map<String, {{.JavaType}}> get{{.FieldPascal}}Map() {
+        synchronized (cacheLock) {
+            return new LinkedHashMap<>(this.{{.FieldName}});
+        }
+    }
+
+    /**
+     * One-shot GetAll RPC: fetches all {{.TypeName}} entries from the state service.
+     * Requires setChannel() to have been called.
+     */
+    public Map<String, {{.JavaType}}> fetchAll{{.FieldPascal}}() {
+        if (stateStub == null) {
+            throw new IllegalStateException("stateStub not initialized - call setChannel() first");
+        }
+        {{$.OuterClassName}}.{{.FieldPascal}}GetAllRequest req =
+                {{$.OuterClassName}}.{{.FieldPascal}}GetAllRequest.getDefaultInstance();
+        {{$.OuterClassName}}.{{.FieldPascal}}EntriesResponse resp = stateStub.getAll{{.FieldPascal}}(req);
+        return resp.getEntriesMap();
+    }
+
+{{if not $.ReadOnly}}
+    /**
+     * Upserts items by their indexed key.
+     */
+    public void add{{.FieldPascal}}({{.JavaType}}... items) {
+        synchronized (cacheLock) {
+            for ({{.JavaType}} item : items) {
+{{- if .KeyFieldPascal}}
+                this.{{.FieldName}}.put(String.valueOf(item.get{{.KeyFieldPascal}}()), item);
+{{- else}}
+                this.{{.FieldName}}.put(String.valueOf(this.{{.FieldName}}.size()), item);
+{{- end}}
+            }
+        }
+    }
+
+    /**
+     * Replaces the entire {{.FieldPascal}} cache with the given entries and notifies subscribers.
+     */
+    public void replaceAll{{.FieldPascal}}(Map<String, {{.JavaType}}> entries) {
+        replaceAll{{.FieldPascal}}FromWatch(entries);
+    }
+
+    /**
+     * Put RPC: upserts a {{.TypeName}} by key in the state service.
+     * Requires setChannel() to have been called.
+     */
+    public void put{{.FieldPascal}}(String key, {{.JavaType}} value) {
+        if (stateStub == null) {
+            throw new IllegalStateException("stateStub not initialized - call setChannel() first");
+        }
+        {{$.OuterClassName}}.{{.FieldPascal}}PutRequest req =
+                {{$.OuterClassName}}.{{.FieldPascal}}PutRequest.newBuilder()
+                        .setKey(key)
+                        .setValue(value)
+                        .build();
+        stateStub.put{{.FieldPascal}}(req);
+    }
+
+    /**
+     * Delete RPC: removes a {{.TypeName}} by key from the state service.
+     * Requires setChannel() to have been called.
+     */
+    public void delete{{.FieldPascal}}(String key) {
+        if (stateStub == null) {
+            throw new IllegalStateException("stateStub not initialized - call setChannel() first");
+        }
+        {{$.OuterClassName}}.{{.FieldPascal}}GetRequest req =
+                {{$.OuterClassName}}.{{.FieldPascal}}GetRequest.newBuilder()
+                        .setKey(key)
+                        .build();
+        stateStub.delete{{.FieldPascal}}(req);
+    }
+{{end}}
+    /**
+     * Registers a subscriber for {{.TypeName}} collection Watch updates.
+     */
+    public void subscribe{{.FieldPascal}}({{.FieldPascal}}Subscriber subscriber) {
+        synchronized (cacheLock) {
+            this.{{.FieldName}}Subscribers.add(subscriber);
+        }
+    }
+
+    private void replaceAll{{.FieldPascal}}FromWatch(Map<String, {{.JavaType}}> entries) {
+        Map<String, {{.JavaType}}> snapshot;
+        List<{{.FieldPascal}}Subscriber> subscribers;
+        synchronized (cacheLock) {
+            this.{{.FieldName}}.clear();
+            this.{{.FieldName}}.putAll(entries);
+            snapshot = new LinkedHashMap<>(this.{{.FieldName}});
+            subscribers = new ArrayList<>(this.{{.FieldName}}Subscribers);
+        }
+        for ({{.FieldPascal}}Subscriber sub : subscribers) {
+            try {
+                sub.on{{.FieldPascal}}Change(snapshot);
+            } catch (Exception e) {
+                LOG.warning("{{.FieldPascal}} subscriber failed: " + e.getMessage());
+            }
+        }
+    }
+{{end}}
+{{- end}}
+{{- if .Topics}}
+
+    // ==================== Topics ====================
+{{range .Topics}}
+{{if not $.ReadOnly}}
+    /**
+     * Publishes a {{.TypeName}} message to the {{.FieldPascal}} topic.
+     */
+    public {{$.OuterClassName}}.TopicPublishReceipt publishTo{{.FieldPascal}}({{.JavaType}} value) {
+        if (stateStub == null) {
+            throw new IllegalStateException("stateStub not initialized - call setChannel() first");
+        }
+        return stateStub.publishTo{{.FieldPascal}}(value);
+    }
+{{end}}
+    /**
+     * Opens a blocking server-streaming subscription to {{.FieldPascal}} records,
+     * including EventBus metadata and payload.
+     */
+    public java.util.Iterator<{{.SubscribeRecordType}}> subscribeTo{{.FieldPascal}}Records() {
+        if (stateStub == null) {
+            throw new IllegalStateException("stateStub not initialized - call setChannel() first");
+        }
+        return stateStub.subscribeTo{{.FieldPascal}}(Trace.TraceRequest.getDefaultInstance());
+    }
+    /**
+     * Opens a blocking server-streaming subscription to the {{.FieldPascal}} topic.
+     */
+    public java.util.Iterator<{{.JavaType}}> subscribeTo{{.FieldPascal}}() {
+        final java.util.Iterator<{{.SubscribeRecordType}}> records = subscribeTo{{.FieldPascal}}Records();
+        return new java.util.Iterator<{{.JavaType}}>() {
+            @Override
+            public boolean hasNext() {
+                return records.hasNext();
+            }
+
+            @Override
+            public {{.JavaType}} next() {
+                return records.next().getPayload();
+            }
+        };
+    }
+{{end}}
+{{- end}}
+{{- if .Views}}
+
+    // ==================== View Accessors (read-only unions) ====================
+{{range $v := .Views}}
+    /**
+     * Returns all {{$v.TypeName}} items from the {{$v.FieldPascal}} view (merged from source collections).
+     */
+    public List<{{$v.JavaType}}> get{{$v.FieldPascal}}() {
+        Map<String, {{$v.JavaType}}> merged = new LinkedHashMap<>();
+{{- range $v.ViewSources}}
+        for ({{$v.JavaType}} item : get{{.}}()) {
+{{- if $v.KeyFieldPascal}}
+            merged.put(String.valueOf(item.get{{$v.KeyFieldPascal}}()), item);
+{{- else}}
+            merged.put(String.valueOf(merged.size()), item);
+{{- end}}
+        }
+{{- end}}
+        return new ArrayList<>(merged.values());
+    }
+
+    /**
+     * Looks up a {{$v.TypeName}} by key across all source collections in the {{$v.FieldPascal}} view.
+     */
+    public {{$v.JavaType}} get{{$v.FieldPascal}}ByKey(String key) {
+{{- range $v.ViewSources}}
+        for ({{$v.JavaType}} item : get{{.}}()) {
+{{- if $v.KeyFieldPascal}}
+            if (key.equals(String.valueOf(item.get{{$v.KeyFieldPascal}}()))) {
+                return item;
+            }
+{{- end}}
+        }
+{{- end}}
+        return null;
+    }
+{{end}}
+{{- end}}
+{{- if .StateImports}}
+
+    // ==================== State Import Accessors ====================
+{{range .StateImports}}
+    /**
+     * Returns the imported {{.TypeName}} (read-only).
+     */
+    public {{.JavaType}} get{{.FieldPascal}}() {
+        synchronized (cacheLock) {
+            return this.{{.FieldName}};
+        }
+    }
+{{end}}
+{{- end}}
+{{- if $hasWatches}}
+
+    // ==================== Watch Streams ====================
+{{range .Singletons}}
+    private void startWatch{{.FieldPascal}}(int attempt) {
+        if (closed.get()) {
+            return;
+        }
+        ensureAsyncStub();
+        recordWatchHealthy("Watch{{.FieldPascal}}", false);
+        AtomicBoolean received = new AtomicBoolean(false);
+        AtomicReference<ClientCallStreamObserver<Trace.TraceRequest>> callRef = new AtomicReference<>();
+        try {
+            stateAsyncStub.watch{{.FieldPascal}}(
+                    Trace.TraceRequest.getDefaultInstance(),
+                    new ClientResponseObserver<Trace.TraceRequest, {{.JavaType}}>() {
+                        @Override
+                        public void beforeStart(ClientCallStreamObserver<Trace.TraceRequest> requestStream) {
+                            callRef.set(requestStream);
+                            registerWatchCall(requestStream);
+                        }
+
+                        @Override
+                        public void onNext({{.JavaType}} value) {
+                            received.set(true);
+                            recordWatchHealthy("Watch{{.FieldPascal}}", true);
+                            apply{{.FieldPascal}}Update(value);
+                        }
+
+                        @Override
+                        public void onError(Throwable t) {
+                            removeWatchCall(callRef.get());
+                            if (closed.get()) {
+                                return;
+                            }
+                            int nextAttempt = received.get() ? 0 : attempt + 1;
+                            recordWatchRetrying("Watch{{.FieldPascal}}", received.get(), nextAttempt, t.getMessage(), t);
+                            LOG.warning("Watch{{.FieldPascal}} stream failed; retrying: " + t.getMessage());
+                            scheduleWatchRestart("Watch{{.FieldPascal}}", nextAttempt, () -> startWatch{{.FieldPascal}}(nextAttempt));
+                        }
+
+                        @Override
+                        public void onCompleted() {
+                            removeWatchCall(callRef.get());
+                            if (closed.get()) {
+                                return;
+                            }
+                            int nextAttempt = received.get() ? 0 : attempt + 1;
+                            recordWatchRetrying("Watch{{.FieldPascal}}", received.get(), nextAttempt, "stream completed", null);
+                            LOG.warning("Watch{{.FieldPascal}} stream completed; reconnecting");
+                            scheduleWatchRestart("Watch{{.FieldPascal}}", nextAttempt, () -> startWatch{{.FieldPascal}}(nextAttempt));
+                        }
+                    });
+        } catch (RuntimeException e) {
+            int nextAttempt = attempt + 1;
+            recordWatchRetrying("Watch{{.FieldPascal}}", false, nextAttempt, e.getMessage(), e);
+            LOG.warning("Watch{{.FieldPascal}} failed to start; retrying: " + e.getMessage());
+            scheduleWatchRestart("Watch{{.FieldPascal}}", nextAttempt, () -> startWatch{{.FieldPascal}}(nextAttempt));
+        }
+    }
+{{end}}
+{{range .Collections}}
+    private void startWatch{{.FieldPascal}}(int attempt) {
+        if (closed.get()) {
+            return;
+        }
+        ensureAsyncStub();
+        recordWatchHealthy("Watch{{.FieldPascal}}", false);
+        AtomicBoolean received = new AtomicBoolean(false);
+        AtomicReference<ClientCallStreamObserver<Trace.TraceRequest>> callRef = new AtomicReference<>();
+        try {
+            stateAsyncStub.watch{{.FieldPascal}}(
+                    Trace.TraceRequest.getDefaultInstance(),
+                    new ClientResponseObserver<Trace.TraceRequest, {{$.OuterClassName}}.{{.FieldPascal}}EntriesResponse>() {
+                        @Override
+                        public void beforeStart(ClientCallStreamObserver<Trace.TraceRequest> requestStream) {
+                            callRef.set(requestStream);
+                            registerWatchCall(requestStream);
+                        }
+
+                        @Override
+                        public void onNext({{$.OuterClassName}}.{{.FieldPascal}}EntriesResponse value) {
+                            received.set(true);
+                            recordWatchHealthy("Watch{{.FieldPascal}}", true);
+                            replaceAll{{.FieldPascal}}FromWatch(value.getEntriesMap());
+                        }
+
+                        @Override
+                        public void onError(Throwable t) {
+                            removeWatchCall(callRef.get());
+                            if (closed.get()) {
+                                return;
+                            }
+                            int nextAttempt = received.get() ? 0 : attempt + 1;
+                            recordWatchRetrying("Watch{{.FieldPascal}}", received.get(), nextAttempt, t.getMessage(), t);
+                            LOG.warning("Watch{{.FieldPascal}} stream failed; retrying: " + t.getMessage());
+                            scheduleWatchRestart("Watch{{.FieldPascal}}", nextAttempt, () -> startWatch{{.FieldPascal}}(nextAttempt));
+                        }
+
+                        @Override
+                        public void onCompleted() {
+                            removeWatchCall(callRef.get());
+                            if (closed.get()) {
+                                return;
+                            }
+                            int nextAttempt = received.get() ? 0 : attempt + 1;
+                            recordWatchRetrying("Watch{{.FieldPascal}}", received.get(), nextAttempt, "stream completed", null);
+                            LOG.warning("Watch{{.FieldPascal}} stream completed; reconnecting");
+                            scheduleWatchRestart("Watch{{.FieldPascal}}", nextAttempt, () -> startWatch{{.FieldPascal}}(nextAttempt));
+                        }
+                    });
+        } catch (RuntimeException e) {
+            int nextAttempt = attempt + 1;
+            recordWatchRetrying("Watch{{.FieldPascal}}", false, nextAttempt, e.getMessage(), e);
+            LOG.warning("Watch{{.FieldPascal}} failed to start; retrying: " + e.getMessage());
+            scheduleWatchRestart("Watch{{.FieldPascal}}", nextAttempt, () -> startWatch{{.FieldPascal}}(nextAttempt));
+        }
+    }
+{{end}}
+{{range .StateImports}}
+    private void startWatch{{.FieldPascal}}(int attempt) {
+        if (closed.get()) {
+            return;
+        }
+        ensureAsyncStub();
+        recordWatchHealthy("Watch{{.FieldPascal}}", false);
+        AtomicBoolean received = new AtomicBoolean(false);
+        AtomicReference<ClientCallStreamObserver<Trace.TraceRequest>> callRef = new AtomicReference<>();
+        try {
+            stateAsyncStub.watch{{.FieldPascal}}(
+                    Trace.TraceRequest.getDefaultInstance(),
+                    new ClientResponseObserver<Trace.TraceRequest, {{.JavaType}}>() {
+                        @Override
+                        public void beforeStart(ClientCallStreamObserver<Trace.TraceRequest> requestStream) {
+                            callRef.set(requestStream);
+                            registerWatchCall(requestStream);
+                        }
+
+                        @Override
+                        public void onNext({{.JavaType}} value) {
+                            received.set(true);
+                            recordWatchHealthy("Watch{{.FieldPascal}}", true);
+                            synchronized (cacheLock) {
+                                StateClient.this.{{.FieldName}} = value;
+                            }
+                        }
+
+                        @Override
+                        public void onError(Throwable t) {
+                            removeWatchCall(callRef.get());
+                            if (closed.get()) {
+                                return;
+                            }
+                            int nextAttempt = received.get() ? 0 : attempt + 1;
+                            recordWatchRetrying("Watch{{.FieldPascal}}", received.get(), nextAttempt, t.getMessage(), t);
+                            LOG.warning("Watch{{.FieldPascal}} state-import stream failed; retrying: " + t.getMessage());
+                            scheduleWatchRestart("Watch{{.FieldPascal}}", nextAttempt, () -> startWatch{{.FieldPascal}}(nextAttempt));
+                        }
+
+                        @Override
+                        public void onCompleted() {
+                            removeWatchCall(callRef.get());
+                            if (closed.get()) {
+                                return;
+                            }
+                            int nextAttempt = received.get() ? 0 : attempt + 1;
+                            recordWatchRetrying("Watch{{.FieldPascal}}", received.get(), nextAttempt, "stream completed", null);
+                            LOG.warning("Watch{{.FieldPascal}} state-import stream completed; reconnecting");
+                            scheduleWatchRestart("Watch{{.FieldPascal}}", nextAttempt, () -> startWatch{{.FieldPascal}}(nextAttempt));
+                        }
+                    });
+        } catch (RuntimeException e) {
+            int nextAttempt = attempt + 1;
+            recordWatchRetrying("Watch{{.FieldPascal}}", false, nextAttempt, e.getMessage(), e);
+            LOG.warning("Watch{{.FieldPascal}} state-import failed to start; retrying: " + e.getMessage());
+            scheduleWatchRestart("Watch{{.FieldPascal}}", nextAttempt, () -> startWatch{{.FieldPascal}}(nextAttempt));
+        }
+    }
+{{end}}
+{{- end}}
+{{- if .Singletons}}
+
+    // ==================== Child Accessor Types ====================
+{{range .Singletons}}
+    /**
+     * Typed access to the {{.TypeName}} boundary.
+     */
+    public static class {{$.StateRootName}}{{.FieldPascal}}Accessor {
+        private final StateClient parent;
+        private final List<Consumer<{{.JavaType}}>> callbacks = new ArrayList<>();
+
+        public {{$.StateRootName}}{{.FieldPascal}}Accessor(StateClient parent) {
+            this.parent = parent;
+        }
+
+        /**
+         * Registers a callback that fires when the {{.TypeName}} is updated.
+         */
+        public void onChange(Consumer<{{.JavaType}}> cb) {
+            synchronized (callbacks) {
+                callbacks.add(cb);
+            }
+        }
+
+        void notifyChange({{.JavaType}} value) {
+            List<Consumer<{{.JavaType}}>> snapshot;
+            synchronized (callbacks) {
+                snapshot = new ArrayList<>(callbacks);
+            }
+            for (Consumer<{{.JavaType}}> cb : snapshot) {
+                try {
+                    cb.accept(value);
+                } catch (Exception e) {
+                    StateClient.LOG.warning("{{.FieldPascal}} callback failed: " + e.getMessage());
+                }
+            }
+        }
+
+        /**
+         * Returns the {{.TypeName}} proto.
+         */
+        public {{.JavaType}} proto() {
+            return get();
+        }
+
+        /**
+         * Returns the cached {{.TypeName}}.
+         */
+        public {{.JavaType}} get() {
+            return parent.get{{.FieldPascal}}();
+        }
+
+        /**
+         * Registers a subscriber for Watch updates on this singleton.
+         */
+        public void subscribe({{.FieldPascal}}Subscriber subscriber) {
+            parent.subscribe{{.FieldPascal}}(subscriber);
+        }
+
+{{if not $.ReadOnly}}
+        /**
+         * Stores the {{.TypeName}}.
+         */
+        public void set({{.JavaType}} value) {
+            parent.set{{.FieldPascal}}(value);
+        }
+{{end}}    }
+{{end}}
+{{- end}}
+}

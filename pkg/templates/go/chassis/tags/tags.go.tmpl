@@ -1,0 +1,229 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// CODE GENERATED - DO NOT EDIT
+// Generated runtime support for Kubernetes-style tag sets and selectors.
+package tags
+
+import (
+	"fmt"
+	"regexp"
+	"strings"
+
+	tagspb "{{.ModuleBasePath}}/types/sys/tags"
+)
+
+var (
+	tagNameRE     = regexp.MustCompile(`^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$`)
+	dnsSegmentRE  = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	errNilTagSet  = fmt.Errorf("tag set is nil")
+	errNilSelector = fmt.Errorf("tag selector is nil")
+)
+
+// ContainsAll returns true when every wanted tag is present with the same value
+// in have. Extra tags in have do not affect the result.
+func ContainsAll(have, want *tagspb.TagSet) bool {
+	return ContainsAllMap(tagsMap(have), tagsMap(want))
+}
+
+// ContainsAllMap is the map form of ContainsAll.
+func ContainsAllMap(have, want map[string]string) bool {
+	for key, value := range want {
+		if have == nil {
+			return false
+		}
+		if got, ok := have[key]; !ok || got != value {
+			return false
+		}
+	}
+	return true
+}
+
+// Matches returns true when tags satisfies selector. Matches assumes selector
+// has already been validated; call ValidateSelector to fail loudly on malformed
+// operators or value cardinality.
+func Matches(selector *tagspb.TagSelector, tags *tagspb.TagSet) bool {
+	return MatchesMap(selector, tagsMap(tags))
+}
+
+// MatchesMap is the map form of Matches.
+func MatchesMap(selector *tagspb.TagSelector, tags map[string]string) bool {
+	if selector == nil {
+		return true
+	}
+	if !ContainsAllMap(tags, selector.GetMatchTags()) {
+		return false
+	}
+	for _, req := range selector.GetMatchExpressions() {
+		if !matchRequirement(req, tags) {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidateTagSet validates Kubernetes-style tag key/value syntax.
+func ValidateTagSet(set *tagspb.TagSet) error {
+	if set == nil {
+		return errNilTagSet
+	}
+	for key, value := range set.GetTags() {
+		if err := ValidateKey(key); err != nil {
+			return err
+		}
+		if err := ValidateValue(value); err != nil {
+			return fmt.Errorf("tag %q: %w", key, err)
+		}
+	}
+	return nil
+}
+
+// ValidateSelector validates key/value syntax and selector operator/value
+// cardinality. Matching helpers intentionally do not call this implicitly.
+func ValidateSelector(selector *tagspb.TagSelector) error {
+	if selector == nil {
+		return errNilSelector
+	}
+	for key, value := range selector.GetMatchTags() {
+		if err := ValidateKey(key); err != nil {
+			return err
+		}
+		if err := ValidateValue(value); err != nil {
+			return fmt.Errorf("match_tags[%q]: %w", key, err)
+		}
+	}
+	for i, req := range selector.GetMatchExpressions() {
+		if req == nil {
+			return fmt.Errorf("match_expressions[%d] is nil", i)
+		}
+		if err := ValidateKey(req.GetKey()); err != nil {
+			return fmt.Errorf("match_expressions[%d]: %w", i, err)
+		}
+		switch req.GetOperator() {
+		case tagspb.TagSelectorOperator_TAG_SELECTOR_OPERATOR_IN,
+			tagspb.TagSelectorOperator_TAG_SELECTOR_OPERATOR_NOT_IN:
+			if len(req.GetValues()) == 0 {
+				return fmt.Errorf("match_expressions[%d]: %s requires at least one value", i, req.GetOperator())
+			}
+			for j, value := range req.GetValues() {
+				if err := ValidateValue(value); err != nil {
+					return fmt.Errorf("match_expressions[%d].values[%d]: %w", i, j, err)
+				}
+			}
+		case tagspb.TagSelectorOperator_TAG_SELECTOR_OPERATOR_EXISTS,
+			tagspb.TagSelectorOperator_TAG_SELECTOR_OPERATOR_DOES_NOT_EXIST:
+			if len(req.GetValues()) != 0 {
+				return fmt.Errorf("match_expressions[%d]: %s requires no values", i, req.GetOperator())
+			}
+		default:
+			return fmt.Errorf("match_expressions[%d]: invalid operator %s", i, req.GetOperator())
+		}
+	}
+	return nil
+}
+
+// ValidateKey validates a Kubernetes label-style key: optional DNS-subdomain
+// prefix plus "/" and a required 1-63 character name segment.
+func ValidateKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("tag key is empty")
+	}
+	name := key
+	if strings.Contains(key, "/") {
+		parts := strings.Split(key, "/")
+		if len(parts) != 2 {
+			return fmt.Errorf("tag key %q must contain at most one '/'", key)
+		}
+		prefix := parts[0]
+		name = parts[1]
+		if err := validatePrefix(prefix); err != nil {
+			return fmt.Errorf("tag key %q has invalid prefix: %w", key, err)
+		}
+	}
+	if err := validateName(name, false); err != nil {
+		return fmt.Errorf("tag key %q has invalid name: %w", key, err)
+	}
+	return nil
+}
+
+// ValidateValue validates a Kubernetes label-style value. Empty is allowed.
+func ValidateValue(value string) error {
+	if value == "" {
+		return nil
+	}
+	if err := validateName(value, true); err != nil {
+		return fmt.Errorf("tag value %q is invalid: %w", value, err)
+	}
+	return nil
+}
+
+func tagsMap(set *tagspb.TagSet) map[string]string {
+	if set == nil {
+		return nil
+	}
+	return set.GetTags()
+}
+
+func matchRequirement(req *tagspb.TagSelectorRequirement, tags map[string]string) bool {
+	if req == nil {
+		return false
+	}
+	value, exists := tags[req.GetKey()]
+	switch req.GetOperator() {
+	case tagspb.TagSelectorOperator_TAG_SELECTOR_OPERATOR_IN:
+		return exists && contains(req.GetValues(), value)
+	case tagspb.TagSelectorOperator_TAG_SELECTOR_OPERATOR_NOT_IN:
+		return !exists || !contains(req.GetValues(), value)
+	case tagspb.TagSelectorOperator_TAG_SELECTOR_OPERATOR_EXISTS:
+		return exists
+	case tagspb.TagSelectorOperator_TAG_SELECTOR_OPERATOR_DOES_NOT_EXIST:
+		return !exists
+	default:
+		return false
+	}
+}
+
+func contains(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
+func validatePrefix(prefix string) error {
+	if prefix == "" {
+		return fmt.Errorf("empty prefix")
+	}
+	if len(prefix) > 253 {
+		return fmt.Errorf("prefix exceeds 253 characters")
+	}
+	for _, segment := range strings.Split(prefix, ".") {
+		if segment == "" {
+			return fmt.Errorf("empty DNS segment")
+		}
+		if len(segment) > 63 {
+			return fmt.Errorf("DNS segment %q exceeds 63 characters", segment)
+		}
+		if !dnsSegmentRE.MatchString(segment) {
+			return fmt.Errorf("DNS segment %q must contain lowercase alphanumerics or '-' and start/end alphanumeric", segment)
+		}
+	}
+	return nil
+}
+
+func validateName(name string, isValue bool) error {
+	if name == "" {
+		if isValue {
+			return nil
+		}
+		return fmt.Errorf("empty name")
+	}
+	if len(name) > 63 {
+		return fmt.Errorf("exceeds 63 characters")
+	}
+	if !tagNameRE.MatchString(name) {
+		return fmt.Errorf("must contain alphanumerics, '-', '_' or '.' and start/end alphanumeric")
+	}
+	return nil
+}

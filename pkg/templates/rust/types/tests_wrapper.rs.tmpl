@@ -1,0 +1,10 @@
+{{- /* Rust test module wrapper template */ -}}
+#[cfg(test)]
+mod tests {
+use super::*;
+{{- if .HasEnumTests}}
+use std::str::FromStr;
+{{- end}}
+
+{{.TestContent}}
+}

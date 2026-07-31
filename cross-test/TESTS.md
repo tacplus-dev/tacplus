@@ -1,0 +1,306 @@
+# Cross-Test Suite
+
+The cross-test suite has these gates (see `.gitlab-ci.yml` and
+`cross-test/nightly-matrix.sh` for exactly where each runs):
+
+- `cmd/soundness` (`go run ./cmd/soundness -root .`): source-level parity —
+  derive the canonical `assert_*` constraint set from `sys/spec.proto`, report
+  constraint-handler parity across supported target surfaces, and fail if any
+  required handler is missing. Runs in the `test-mr` CI job alongside
+  `go test ./...`.
+- `consumer-contract` (`cross-test/consumer-contract/run.sh`): generate the
+  focused consumer-contract fixture, validate `tacplus.yaml` client-surface
+  selection, compile generated outputs where supported, run the focused runtime
+  checks, and compile handwritten downstream consumers. Runs per-language in the
+  `consumer-*-contract-mr` CI jobs and in the nightly matrix.
+- `current-generation` (`cross-test/current-generation/run.sh`): generate and
+  compile the migrated broad service fixture in Go, Java, and Rust into ignored
+  `target/` output. Runs in the nightly matrix.
+- `smb` (`cross-test/smb/run.sh`) and `cert-stream`
+  (`cross-test/cert-stream/run.sh`): service-mesh-boundary and certificate-stream
+  runtime gates for Go, Java, and Rust. Run in the nightly matrix.
+- `runtime-smoke` (`cross-test/runtime-smoke/run.sh`): cross-language runtime
+  smoke — a go fixture server built from the generated go servers hosts the
+  contract on localhost (C2S gRPC + hand-written W2S HTTP/SSE/WebSocket
+  endpoints) and the python/typescript generated CLIENTS exercise it over the
+  wire. Runs per-consumer in the `runtime-smoke-mr` CI job and in the nightly
+  matrix.
+- `consumer-smoke` (`cross-test/consumer-smoke/run.sh`): a local/manual smoke
+  target defined in `cross-test/justfile`. It is NOT invoked by CI or the nightly
+  matrix — the runtime checks that run in CI live in `consumer-contract` above.
+
+Generated outputs are disposable build artifacts. They must not be committed
+under `cross-test/`.
+
+## Soundness Matrix
+
+```bash
+go run ./cmd/soundness -root .
+```
+
+This source-level check reports constraint coverage across full-service targets
+and supported client-only surfaces. It proves that a required constraint handler
+is referenced in each relevant emitter; it does not replace generated runtime
+tests for the handler semantics.
+
+## Current Generation
+
+```bash
+just -f cross-test/justfile current-generation
+just -f cross-test/justfile current-generation-go
+just -f cross-test/justfile current-generation-java
+just -f cross-test/justfile current-generation-rust
+```
+
+This gate uses `cross-test/proto`, which covers the larger 80-type fixture and
+the Inventory and Analytics service shapes. It asserts that generated output
+contains the current `sys/spec.proto` model and no legacy checked-in
+`special` fixture outputs. It then compiles the generated output with Go
+`go test`, Java Maven, and Rust `cargo check`, with warning/error output
+treated as a failure. Python and TypeScript are full-client targets; their
+positive client-surface (C2D/C2S/W2S/REST) and service-side rejection coverage
+lives in `consumer-build`.
+
+The generated Go diskstore library tests include redo-log crash recovery for a
+leftover `.building` snapshot plus `.temp` tail. The Rust diskstore template
+contains the same test and should be exercised with `cargo test -p diskstore`
+when runtime-testing generated Rust library crates.
+
+Generated Go SAML library tests sign a local response, verify it with expected
+issuer/audience/recipient/request context, and assert that non-`Success` status
+and multiple-assertion responses are rejected at runtime.
+Generated Rust SAML library tests cover the same status and multiple-assertion
+runtime rejection paths and should be exercised with `cargo test -p saml` when
+runtime-testing generated Rust library crates.
+The `current-generation` gate now also runs the generated Java SAML runtime
+probe. It creates a local EC P-256 key and self-signed cert fixture, feeds them
+through the generated key/x509 wrappers, signs and verifies a generated SAML
+response, then asserts non-`Success` status and multiple-assertion responses
+fail; it also asserts an assertion missing `NotOnOrAfter` is not time-valid.
+
+## Consumer Contract
+
+```bash
+just consumer-build
+just -f cross-test/justfile consumer-build
+```
+
+The consumer contract fixture lives under `cross-test/consumer-contract/proto`.
+It covers:
+
+- one S2S service with unary, server-streaming, client-streaming, and
+  bidirectional RPCs
+- one C2S service with entitled-user auth, auth-disabled, auth-any-user, and
+  target-namespace method options
+- collection-declared C2S server streams for a bounded SNAPSHOT read
+  (`ListEvents`) and explicit WATCH read (`Watch`) using
+  `ContractWatchRequest` and `ContractWatchEvent`
+- one C2D service
+- one file-level C2S and W2S client dependency set
+
+The gate exercises full-service surface-selection cases for Go, Java, and Rust,
+full-client surface cases for Python and TypeScript, and C2D-only-plus-rejection
+cases for Swift-lite:
+
+- C2S enabled, W2S disabled, C2D disabled
+- W2S enabled, C2S disabled, C2D disabled
+- C2S and W2S enabled together
+- C2D enabled
+- all client surfaces disabled
+
+For full-service outputs, the gate asserts expected `c2sm`, `w2sm`, and
+`c2dm` entry points are present or absent. Full-client targets (Python,
+TypeScript) assert their client package shape and rejection of service-side
+surfaces; lite targets (Swift, C#) assert their C2D package shape and rejection
+of C2S/W2S/S2S and service-side surfaces. The gate also rejects stale generated
+symbols such as
+`GrpcS2SClients.java`, `S2SClients`, or `crypto.JsonWebKey`.
+
+For S2SM output, the gate also asserts generated mixed-auth wiring for the
+contract fixture: method-auth registration, target-namespace metadata for
+`Read`, mandatory authorizer/authenticator callback wiring, and fail-fast
+startup checks where the language exposes them. This catches parity gaps where a
+service compiles but would skip per-method auth metadata at runtime.
+
+Generated outputs are compiled with normal local package tooling where that
+target has positive generated output: Go via `go test`, Java via Maven, Rust via
+`cargo check`, Python via `compileall`, TypeScript via `npm run build`, and
+Swift-lite via `swift build`.
+
+The gate also builds handwritten downstream consumers outside the generated
+tree. Full-service consumers touch public type helpers, validation helpers,
+C2S managers, W2S managers, C2D managers, and server wrapper surfaces. Client-only
+consumers touch only their supported client packages and rejection behavior.
+
+## Runtime Smoke
+
+```bash
+just -f cross-test/justfile runtime-smoke
+just -f cross-test/justfile runtime-smoke-python
+just -f cross-test/justfile runtime-smoke-typescript
+```
+
+The cross-language runtime gate. A go fixture server
+(`cross-test/runtime-smoke/fixture/main.go`, built against the go generation of
+the canonical consumer-contract fixture) hosts on localhost:
+
+- the generated `ContractApi` gRPC wrapper with authorize/authenticate funcs
+  wired (bearer-token check, namespace authorization),
+- a second, deliberately UNWIRED `ContractApi` wrapper (no auth funcs) so
+  clients prove the mandatory-auth fail-closed rejection over the wire,
+- the generated `ContractAuditApi` wrapper with a recording accounting
+  `Emitter` and trace publisher,
+- hand-written W2S HTTP/JSON, SSE, and WebSocket endpoints (tacplus emits no
+  W2S server runtime; the endpoints implement the wire protocol asserted by the
+  consumer-contract go w2sm client tests), and
+- `GET /fixture/stats`, exposing handler call counts, wire-protocol violations,
+  and the recorded accounting/trace events.
+
+The python and typescript consumers (`cross-test/runtime-smoke/consumers/`)
+generate full-client models from the gate's mirror proto and drive the fixture
+over the wire: the C2S battery (token-provider gating, PERMISSION_DENIED /
+INVALID_ARGUMENT / INTERNAL codes, watch snapshot+done framing, ListEvents,
+the PAGE auto-pager), the W2S battery (JSON unary, SSE streams, WebSocket
+upload and chat framing with bearer-auth frames), the unwired fail-closed
+check, and the audit accounting/trace battery (every gRPC method kind, success
+and failure each, asserted through `/fixture/stats`).
+
+This recovers the runtime-smoke intent of the pre-PAR-3 python/typescript
+`both` consumer bodies (see consumer-contract git history), which hosted
+python/TS s2sm servers in-process and died with the full-client taxonomy. The
+old consumers' WatchHub client-lib contract (resume/relist/idle-timeout) is
+intentionally NOT ported: full-client builds emit no server-side collection
+runtime; that contract is covered by the consumer-contract go tests. Each
+consumer language runs against a fresh fixture instance so stats are isolated.
+
+## Consumer Smoke
+
+```bash
+just consumer-smoke
+just -f cross-test/justfile consumer-smoke
+just consumer-smoke-go
+just consumer-smoke-java
+just consumer-smoke-python
+just consumer-smoke-rust
+just consumer-smoke-typescript
+```
+
+The active service-runtime smoke paths are Go, Java, and Rust. Python and
+TypeScript smoke coverage is limited to their supported client surfaces (they
+emit no service runtime).
+
+Go generates the consumer-contract `both` and `c2d` cases and runs these local
+runtime checks:
+
+- C2S auth: start an in-process gRPC server with the generated server wrapper,
+  prove protected `Read` fails before send without a token provider or with a
+  failing token provider, succeeds with auth, and denies a namespace-mismatched
+  request before reaching the handler.
+- C2S: start an in-process gRPC server with the generated server wrapper and
+  call the auth-disabled `PublicRead` method through the generated C2S service
+  manager, including with a failing token provider; also prove auth-any-user
+  `Watch` requires authentication, reaches the handler with auth, and rejects
+  invalid requests before the handler.
+- W2S: start a local HTTP/JSON handler, call the same auth-disabled method
+  through the generated W2S service manager, and prove the token provider is
+  not called for that method; also prove protected W2S `Read` fails closed
+  without a token provider before the fake server sees a request.
+- W2S server streaming: start a local SSE handler, call `Watch`, verify the
+  bearer token/header shape, read one generated `ContractWatchEvent` envelope,
+  and observe stream EOF.
+- W2S client streaming: start a local WebSocket handler, call `Upload`, verify
+  `start`/`message`/`complete` frames and bearer auth, then receive a generated
+  `ContractResponse`.
+- W2S bidirectional streaming: start a local WebSocket handler, call `Chat`,
+  verify `start` and `message` frames with bearer auth, then receive a
+  generated `ContractEvent`.
+- C2D: start a local Unix-socket gRPC daemon, dial it with the generated C2D
+  service manager, call `LocalRead`, and read one `LocalWatch` event.
+- S2S audit wrapper: start a generated `ContractAuditApi` wrapper, exercise
+  unary, server-streaming, client-streaming, and bidirectional methods through
+  generated gRPC clients on success and failure, then assert typed accounting
+  `rpc_completed`/`rpc_error` events for every method and typed unary trace
+  request/response events on success and handler error.
+
+Python generates the consumer-contract `both` case and runs local runtime
+checks: start a local gRPC server with the generated server wrapper, prove
+protected `Read` fails before send without a token provider or with a failing
+token provider, succeeds with auth, and denies a namespace-mismatched request
+before the handler; prove auth-any-user `Watch` requires authentication and
+validates requests; call the auth-disabled `PublicRead` method through the
+generated C2S service manager, including with a failing token provider; call
+generated W2S HTTP/JSON `PublicRead`; read one W2S SSE `Watch` event; send W2S
+WebSocket `Upload` frames; and exercise bidirectional WebSocket `Chat`, including
+send-from-on-connect behavior; and prove protected W2S `Read` fails closed
+without a token provider before the local HTTP handler sees a request. It also
+proves an unwired mandatory-auth wrapper fails closed before the protected
+handler is called. It starts a generated `ContractAuditApi` wrapper and asserts
+success/error typed accounting across unary, server-streaming, client-streaming,
+and bidirectional methods plus typed unary trace request/response events on
+success and handler error.
+
+Java generates the consumer-contract `both` case, compiles the handwritten
+consumer, and runs `consumer.Consumer` on the generated runtime classpath. This
+catches protobuf/gRPC runtime dependency drift that compile-only checks miss,
+and now starts an in-process generated C2S server to prove protected `Read`
+missing-token/failing-token/success/namespace-denial behavior and auth-any-user
+`Watch` fail-closed/authenticated behavior. It also proves mandatory-auth
+wrappers reject a null `Authorizer` at construction. It runs a local W2S bidirectional
+WebSocket smoke that verifies outbound frame shape/auth, wrapped `message`
+response decoding, `complete` on close, and auth-required fail-closed behavior
+without a token provider.
+It also starts a generated `ContractAuditApi` wrapper and asserts success/error
+typed accounting across unary, server-streaming, client-streaming, and
+bidirectional methods plus typed unary trace request/response events on success
+and handler error.
+
+Rust generates the consumer-contract `both` case, runs `cargo check`, and then
+runs the handwritten consumer binary. This catches generated manager and wrapper
+surfaces that compile but cannot be constructed inside a Tokio runtime, and it
+now proves protected C2S `Read`
+missing-token/failing-token/success/namespace-denial behavior and auth-any-user
+`Watch` no-token/success/invalid-request behavior.
+It also runs a local W2S bidirectional WebSocket smoke that sends from
+`on_connect`, verifies bearer auth on outbound frames, decodes a wrapped
+`message` response, sends `complete` with `finish()`, and proves auth-required
+W2S calls fail without a token provider or with a failing token provider.
+It also starts a generated `ContractAuditApi` wrapper and asserts success/error
+typed accounting across unary, server-streaming, client-streaming, and
+bidirectional methods plus typed unary trace request/response events on success
+and handler error.
+
+TypeScript generates the consumer-contract `both` case, imports the compiled
+`dist` package in Node, proves protected C2S `Read`
+missing-token/failing-token/success/namespace-denial behavior, proves
+auth-any-user `Watch` no-token/success/invalid-request behavior, imports the generated
+`sys/grpcserver` package surface, and runs a fake W2S transport through
+generated HTTP/JSON `PublicRead`, SSE `Watch`, WebSocket `Upload`, and
+bidirectional WebSocket `Chat` clients, including protected W2S `Read` failures
+with no token provider or a failing token provider before JSON transport send.
+It also proves an unwired mandatory-auth wrapper fails before the protected
+handler is called. It starts a generated `ContractAuditApi` wrapper and asserts
+success/error typed accounting across unary, server-streaming, client-streaming,
+and bidirectional methods plus typed unary trace request/response events on
+success and handler error.
+
+Validation stays enabled on request and response paths where generated wrappers
+provide validation.
+
+The consumer-contract runtime smoke also exercises the collection-annotated
+`ListEvents` method at the stable proto surface across the full-service
+languages: missing-token fail-before-send, successful server-streaming delivery,
+invalid request rejection, and invalid stream response rejection. This also
+exercises the explicit `Watch` request/envelope shape and rejects invalid nested
+watch payloads. The generated runtime smoke also covers WATCH resume, relist,
+idle-timeout, teardown, and replay-depth behavior across the full runtime
+languages.
+
+Additional smoke paths should be added in this layer rather than reviving
+committed generated output trees.
+
+## Retired Runtime Harness
+
+The former broad serialization and wire-level runtime matrix was removed
+because it imported committed generated outputs from a pre-parity layout. A new
+wire-level runtime suite should generate into scratch output first and then
+compile or run handwritten tests against those current package roots.

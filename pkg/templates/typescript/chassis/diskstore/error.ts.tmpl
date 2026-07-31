@@ -1,0 +1,63 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+/**
+ * Error type for the disk store, with gRPC-compatible error codes
+ * (mirrors the httpclient error shape).
+ */
+export class DiskStoreError extends Error {
+  /** gRPC-compatible error code. */
+  readonly code: number;
+
+  constructor(code: number, message: string) {
+    super(message);
+    this.name = 'DiskStoreError';
+    this.code = code;
+    // Restore prototype chain (TS targets older runtimes).
+    Object.setPrototypeOf(this, DiskStoreError.prototype);
+  }
+
+  /** I/O failure (code 13: INTERNAL). */
+  static io(msg: string): DiskStoreError {
+    return new DiskStoreError(13, `disk I/O failed: ${msg}`);
+  }
+
+  /** General error (code 13: INTERNAL). */
+  static general(msg: string): DiskStoreError {
+    return new DiskStoreError(13, msg);
+  }
+
+  /** Not found (code 5: NOT_FOUND). */
+  static notFound(msg: string): DiskStoreError {
+    return new DiskStoreError(5, `not found: ${msg}`);
+  }
+
+  /** Invalid data / argument (code 3: INVALID_ARGUMENT). */
+  static invalidData(msg: string): DiskStoreError {
+    return new DiskStoreError(3, `invalid data: ${msg}`);
+  }
+
+  /** Type validation failed on read (code 3: INVALID_ARGUMENT). */
+  static validationFailed(msg: string): DiskStoreError {
+    return new DiskStoreError(3, `validation failed: ${msg}`);
+  }
+
+  /** Serialize/deserialize failure (code 13: INTERNAL). */
+  static codec(msg: string): DiskStoreError {
+    return new DiskStoreError(13, `codec error: ${msg}`);
+  }
+
+  /**
+   * Maps a thrown value into a DiskStoreError. NotFound filesystem errors
+   * (ENOENT) become NOT_FOUND; everything else is an I/O error.
+   */
+  static fromUnknown(e: unknown): DiskStoreError {
+    if (e instanceof DiskStoreError) {
+      return e;
+    }
+    const err = e as NodeJS.ErrnoException;
+    if (err && err.code === 'ENOENT') {
+      return DiskStoreError.notFound(String(err.message ?? err));
+    }
+    return DiskStoreError.io(String((err && err.message) ?? e));
+  }
+}

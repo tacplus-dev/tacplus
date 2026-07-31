@@ -1,0 +1,119 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// CODE GENERATED - DO NOT EDIT
+
+package x509
+
+import (
+	stdx509 "crypto/x509"
+	"crypto/x509/pkix"
+	"net/url"
+	"testing"
+
+	wrapperSpiffe "{{.ModuleBasePath}}/chassis/spiffe"
+)
+
+// Pins OF-12 + SEC-1: peer-identity verification must validate the canonical
+// service SPIFFE ID via sys/spiffe (not ad-hoc 2-segment splitting) and NEVER
+// accept CN/DNS — there is no fallback, and a missing trust domain fails closed.
+
+func mustSpiffeURI(t *testing.T, td, loc, svc string) *url.URL {
+	t.Helper()
+	id, err := wrapperSpiffe.ServiceSpiffeID(td, loc, svc)
+	if err != nil {
+		t.Fatalf("ServiceSpiffeID(%q,%q,%q): %v", td, loc, svc, err)
+	}
+	u, err := url.Parse(id)
+	if err != nil {
+		t.Fatalf("parse %q: %v", id, err)
+	}
+	return u
+}
+
+func TestVerifyPeerServiceIdentitySpiffe(t *testing.T) {
+	const td = "example.com"
+	const loc = "aws/us-east-1a"
+	certFor := func(svc string) *stdx509.Certificate {
+		return &stdx509.Certificate{URIs: []*url.URL{mustSpiffeURI(t, td, loc, svc)}}
+	}
+
+	// Canonical SAN with the correct trust domain + service label is accepted.
+	if err := verifyPeerServiceIdentity(certFor("mcp"), "mcp", td); err != nil {
+		t.Errorf("canonical SAN should be accepted: %v", err)
+	}
+	// Wrong service label is rejected.
+	if err := verifyPeerServiceIdentity(certFor("mcp"), "other", td); err == nil {
+		t.Error("wrong service label must be rejected")
+	}
+	// Wrong trust domain is rejected.
+	if err := verifyPeerServiceIdentity(certFor("mcp"), "mcp", "other.example"); err == nil {
+		t.Error("wrong trust domain must be rejected")
+	}
+	// A malformed configured trust domain fails loudly (no silent accept).
+	if err := verifyPeerServiceIdentity(certFor("mcp"), "mcp", "bad/td"); err == nil {
+		t.Error("malformed trust domain must fail loudly")
+	}
+	// CN matching the service must NOT satisfy SPIFFE pinning when a trust
+	// domain is configured — this is exactly the OF-12 dead-pinning bug.
+	cnOnly := &stdx509.Certificate{Subject: pkix.Name{CommonName: "mcp"}}
+	if err := verifyPeerServiceIdentity(cnOnly, "mcp", td); err == nil {
+		t.Error("CN must not satisfy SPIFFE pinning when a trust domain is configured")
+	}
+}
+
+func TestVerifyPeerServiceIdentityFailsClosedWithoutTrustDomain(t *testing.T) {
+	// No trust domain configured -> fail-closed. There is NO CN/DNS fallback.
+	cn := &stdx509.Certificate{Subject: pkix.Name{CommonName: "mcp"}}
+	if err := verifyPeerServiceIdentity(cn, "mcp", ""); err == nil {
+		t.Error("CN must not satisfy identity when no trust domain is configured")
+	}
+	dns := &stdx509.Certificate{DNSNames: []string{"mcp"}}
+	if err := verifyPeerServiceIdentity(dns, "mcp", ""); err == nil {
+		t.Error("DNS must not satisfy identity when no trust domain is configured")
+	}
+	if err := verifyPeerServiceIdentity(&stdx509.Certificate{}, "mcp", ""); err == nil {
+		t.Error("empty cert must be rejected")
+	}
+}
+
+func TestVerifyPeerInTrustDomain(t *testing.T) {
+	const td = "example.com"
+	const loc = "aws/us-east-1a"
+	certFor := func(svc string) *stdx509.Certificate {
+		return &stdx509.Certificate{URIs: []*url.URL{mustSpiffeURI(t, td, loc, svc)}}
+	}
+
+	// Any canonical service SPIFFE SAN in the trust domain is accepted — this is
+	// a trust-domain-level pin (the specific service is not pinned), matching
+	// rust's SpiffeServerCertVerifier(trust_domain).
+	if err := VerifyPeerInTrustDomain(certFor("mcp"), td); err != nil {
+		t.Errorf("canonical SAN in trust domain should be accepted: %v", err)
+	}
+	if err := VerifyPeerInTrustDomain(certFor("other"), td); err != nil {
+		t.Errorf("any service in the trust domain should be accepted: %v", err)
+	}
+	// The token authority (kernel) presents a canonical service SPIFFE ID with
+	// NO location segment: spiffe://<td>/system/services/kernel. The bootstrap
+	// trust-domain pin (service_im) must accept exactly this shape (SEC-1 / H1).
+	noLoc := &stdx509.Certificate{URIs: []*url.URL{mustSpiffeURI(t, td, "", "kernel")}}
+	if err := VerifyPeerInTrustDomain(noLoc, td); err != nil {
+		t.Errorf("no-location authority service SPIFFE ID must be accepted: %v", err)
+	}
+	// A cert from a different trust domain is rejected.
+	otherTD := &stdx509.Certificate{URIs: []*url.URL{mustSpiffeURI(t, "other.example", loc, "mcp")}}
+	if err := VerifyPeerInTrustDomain(otherTD, td); err == nil {
+		t.Error("cert from a different trust domain must be rejected")
+	}
+	// A chain-valid but non-SPIFFE cert (CN/DNS only) is rejected — the CA-only
+	// trust hole this pin closes.
+	cnOnly := &stdx509.Certificate{Subject: pkix.Name{CommonName: "mcp"}, DNSNames: []string{"mcp"}}
+	if err := VerifyPeerInTrustDomain(cnOnly, td); err == nil {
+		t.Error("non-SPIFFE cert must be rejected (CA-only trust closed)")
+	}
+	// Empty/malformed trust domain fails loudly (fail-closed) — no fallback.
+	if err := VerifyPeerInTrustDomain(certFor("mcp"), ""); err == nil {
+		t.Error("empty trust domain must fail-closed")
+	}
+	if err := VerifyPeerInTrustDomain(certFor("mcp"), "bad/td"); err == nil {
+		t.Error("malformed trust domain must fail loudly")
+	}
+}

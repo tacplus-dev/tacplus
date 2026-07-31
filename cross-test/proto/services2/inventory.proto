@@ -1,0 +1,720 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// Inventory management service with comprehensive RPC examples
+
+syntax = "proto3";
+
+package inventory;
+
+import "sys/spec.proto";
+import "sys/errors.proto";
+import "common2/product.proto";
+import "common2/user.proto";
+
+option (spec.generate_user_api) = true;
+option (spec.string_const) = {name: "SERVICE_VERSION" value: "1.0.0"};
+option (spec.int_const) = {name: "MAX_BATCH_SIZE" value: 100};
+
+// Inventory service with all RPC patterns
+service InventoryService {
+  option (spec.service_s2s) = {auth_services: ["*"], tag: "InventoryService"};
+
+  // Unary RPC - Get product by SKU
+  rpc GetProduct(GetProductRequest) returns (GetProductResponse);
+
+  // Unary RPC - Create new product
+  rpc CreateProduct(CreateProductRequest) returns (CreateProductResponse);
+
+  // Unary RPC - Update product
+  rpc UpdateProduct(UpdateProductRequest) returns (UpdateProductResponse);
+
+  // Unary RPC - Delete product
+  rpc DeleteProduct(DeleteProductRequest) returns (DeleteProductResponse);
+
+  // Unary RPC - Search products
+  rpc SearchProducts(SearchProductsRequest) returns (SearchProductsResponse);
+
+  // Server streaming RPC - List all products
+  rpc ListProducts(ListProductsRequest) returns (stream product.Product);
+
+  // Server streaming RPC - Monitor inventory changes
+  rpc MonitorInventory(MonitorInventoryRequest) returns (stream InventoryEvent);
+
+  // Client streaming RPC - Batch import products
+  rpc ImportProducts(stream product.Product) returns (ImportProductsResponse);
+
+  // Client streaming RPC - Batch update stock
+  rpc BatchUpdateStock(stream StockUpdate) returns (BatchUpdateStockResponse);
+
+  // Bidirectional streaming RPC - Real-time inventory sync
+  rpc SyncInventory(stream InventoryDelta) returns (stream InventoryDelta);
+
+  // Bidirectional streaming RPC - Interactive stock adjustment
+  rpc AdjustStock(stream StockAdjustmentRequest) returns (stream StockAdjustmentResponse);
+
+  // Unary RPC - Get inventory statistics
+  rpc GetInventoryStats(GetInventoryStatsRequest) returns (GetInventoryStatsResponse);
+
+  // Unary RPC - Generate inventory report
+  rpc GenerateReport(GenerateReportRequest) returns (GenerateReportResponse);
+}
+
+// Get product request
+message GetProductRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 3 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Product SKU
+  string sku = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 5
+  ];
+
+  // Include deleted products
+  bool include_deleted = 2;
+}
+
+// Get product response
+message GetProductResponse {
+  // Product details
+  product.Product product = 1;
+
+  // Inventory locations
+  repeated product.InventoryLocation locations = 2 [(spec.assert_max_size) = 100];
+
+  // Recent activity
+  repeated InventoryEvent recent_events = 3 [(spec.assert_max_size) = 100];
+}
+
+// Create product request
+message CreateProductRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 5 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Product to create
+  product.Product product = 1 [(spec.assert_required) = true];
+
+  // Initial stock quantity
+  int32 initial_stock = 2 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Warehouse code
+  string warehouse_code = 3 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 2
+  ];
+
+  // Created by user
+  string created_by = 4 [(spec.assert_required) = true];
+}
+
+// Create product response
+message CreateProductResponse {
+  // Created product
+  product.Product product = 1;
+
+  // Success flag
+  bool success = 2;
+
+  // Error message
+  string error = 3;
+
+  // Structured error details
+  errors.Error structured_error = 4;
+}
+
+// Update product request
+message UpdateProductRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 5 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Product SKU
+  string sku = 1 [(spec.assert_required) = true];
+
+  // Updated product details
+  product.Product product = 2 [(spec.assert_required) = true];
+
+  // Update mask (fields to update)
+  repeated string update_mask = 3 [(spec.assert_max_size) = 100];
+
+  // Updated by user
+  string updated_by = 4 [(spec.assert_required) = true];
+}
+
+// Update product response
+message UpdateProductResponse {
+  // Updated product
+  product.Product product = 1;
+
+  // Success flag
+  bool success = 2;
+
+  // Error message
+  string error = 3;
+}
+
+// Delete product request
+message DeleteProductRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 5 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Product SKU
+  string sku = 1 [(spec.assert_required) = true];
+
+  // Hard delete (vs soft delete)
+  bool hard_delete = 2;
+
+  // Deleted by user
+  string deleted_by = 3 [(spec.assert_required) = true];
+
+  // Reason for deletion
+  string reason = 4 [(spec.assert_max_size) = 500];
+}
+
+// Delete product response
+message DeleteProductResponse {
+  // Success flag
+  bool success = 1;
+
+  // Error message
+  string error = 2;
+
+  // Deleted timestamp
+  int64 deleted_at = 3;
+}
+
+// Search products request
+message SearchProductsRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 7 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Search query
+  string query = 1 [(spec.assert_max_size) = 500];
+
+  // Search filters
+  product.ProductSearchFilter filters = 2;
+
+  // Page number (1-indexed)
+  int32 page = 3 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 10000
+  }];
+
+  // Page size
+  int32 page_size = 4 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 1000
+  }];
+
+  // Sort field
+  string sort_by = 5;
+
+  // Sort ascending
+  bool sort_asc = 6;
+}
+
+// Search products response
+message SearchProductsResponse {
+  // Matching products
+  repeated product.Product products = 1 [(spec.assert_max_size) = 1000];
+
+  // Total count
+  int64 total_count = 2 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Current page
+  int32 page = 3;
+
+  // Page size
+  int32 page_size = 4;
+
+  // Has more pages
+  bool has_more = 5;
+}
+
+// List products request
+message ListProductsRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 5 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Category filter
+  repeated product.ProductCategory categories = 1 [(spec.assert_max_size) = 100];
+
+  // Warehouse filter
+  repeated string warehouse_codes = 2 [(spec.assert_max_size) = 100];
+
+  // Only available products
+  bool available_only = 3;
+
+  // Batch size for streaming
+  int32 batch_size = 4 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 100
+  }];
+}
+
+// Monitor inventory request
+message MonitorInventoryRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 5 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // SKUs to monitor (empty = all)
+  repeated string skus = 1 [(spec.assert_max_size) = 100];
+
+  // Warehouse codes to monitor (empty = all)
+  repeated string warehouse_codes = 2 [(spec.assert_max_size) = 100];
+
+  // Event types to monitor
+  repeated EventType event_types = 3 [(spec.assert_max_size) = 100];
+
+  // Start from timestamp
+  int64 start_from = 4;
+}
+
+// Inventory event types
+enum EventType {
+  EVENT_TYPE_UNDEFINED = 0;
+  EVENT_TYPE_STOCK_IN = 1 [(spec.json_return_value) = "stock_in"];
+  EVENT_TYPE_STOCK_OUT = 2 [(spec.json_return_value) = "stock_out"];
+  EVENT_TYPE_TRANSFER = 3 [(spec.json_return_value) = "transfer"];
+  EVENT_TYPE_ADJUSTMENT = 4 [(spec.json_return_value) = "adjustment"];
+  EVENT_TYPE_DAMAGED = 5 [(spec.json_return_value) = "damaged"];
+  EVENT_TYPE_RECOUNT = 6 [(spec.json_return_value) = "recount"];
+}
+
+// Inventory event
+message InventoryEvent {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 13 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Event ID
+  string event_id = 1 [(spec.assert_required) = true];
+
+  // Event type
+  EventType event_type = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_enum_defined) = true
+  ];
+
+  // Product SKU
+  string sku = 3 [(spec.assert_required) = true];
+
+  // Warehouse code
+  string warehouse_code = 4 [(spec.assert_required) = true];
+
+  // Quantity changed
+  int32 quantity = 5;
+
+  // Previous stock level
+  int32 previous_stock = 6;
+
+  // New stock level
+  int32 new_stock = 7;
+
+  // Performed by user
+  string performed_by = 8 [(spec.assert_required) = true];
+
+  // Event timestamp
+  int64 timestamp = 9 [(spec.assert_required) = true];
+
+  // Notes/reason
+  string notes = 10 [(spec.assert_max_size) = 1000];
+
+  // Related order ID
+  string order_id = 11;
+
+  // Location details
+  product.InventoryLocation location = 12;
+}
+
+// Import products response
+message ImportProductsResponse {
+  // Number of products imported
+  int32 imported_count = 1 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Number of products failed
+  int32 failed_count = 2 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Import duration in milliseconds
+  int64 duration_ms = 3 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Failed SKUs
+  repeated string failed_skus = 4 [(spec.assert_max_size) = 100];
+
+  // Error messages
+  map<string, string> errors = 5 [(spec.assert_max_size) = 100];
+}
+
+// Stock update
+message StockUpdate {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 6 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Product SKU
+  string sku = 1 [(spec.assert_required) = true];
+
+  // Warehouse code
+  string warehouse_code = 2 [(spec.assert_required) = true];
+
+  // New quantity
+  int32 quantity = 3 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Update reason
+  string reason = 4 [(spec.assert_max_size) = 500];
+
+  // Updated by user
+  string updated_by = 5 [(spec.assert_required) = true];
+}
+
+// Batch update stock response
+message BatchUpdateStockResponse {
+  // Number of updates processed
+  int32 processed_count = 1 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Number of updates failed
+  int32 failed_count = 2 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Processing duration in milliseconds
+  int64 duration_ms = 3 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Failed updates
+  map<string, string> failures = 4 [(spec.assert_max_size) = 100];
+}
+
+// Inventory delta (for sync)
+message InventoryDelta {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 9 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Delta ID
+  string delta_id = 1 [(spec.assert_required) = true];
+
+  // Product SKU
+  string sku = 2 [(spec.assert_required) = true];
+
+  // Warehouse code
+  string warehouse_code = 3 [(spec.assert_required) = true];
+
+  // Quantity change (positive or negative)
+  int32 quantity_delta = 4;
+
+  // Timestamp
+  int64 timestamp = 5 [(spec.assert_required) = true];
+
+  // Sequence number (for ordering)
+  int64 sequence = 6 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Source system
+  string source = 7 [(spec.assert_required) = true];
+
+  // Checksum for verification
+  string checksum = 8;
+}
+
+// Stock adjustment request
+message StockAdjustmentRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 8 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Request ID
+  string request_id = 1 [(spec.assert_required) = true];
+
+  // Product SKU
+  string sku = 2 [(spec.assert_required) = true];
+
+  // Warehouse code
+  string warehouse_code = 3 [(spec.assert_required) = true];
+
+  // Adjustment type
+  AdjustmentType adjustment_type = 4 [
+    (spec.assert_required) = true,
+    (spec.assert_enum_defined) = true
+  ];
+
+  // Quantity to adjust
+  int32 quantity = 5;
+
+  // Reason
+  string reason = 6 [(spec.assert_max_size) = 500];
+
+  // Requested by user
+  string requested_by = 7 [(spec.assert_required) = true];
+}
+
+// Adjustment type
+enum AdjustmentType {
+  ADJUSTMENT_TYPE_UNDEFINED = 0;
+  ADJUSTMENT_TYPE_ADD = 1 [(spec.json_return_value) = "add"];
+  ADJUSTMENT_TYPE_REMOVE = 2 [(spec.json_return_value) = "remove"];
+  ADJUSTMENT_TYPE_SET = 3 [(spec.json_return_value) = "set"];
+  ADJUSTMENT_TYPE_TRANSFER = 4 [(spec.json_return_value) = "transfer"];
+}
+
+// Stock adjustment response
+message StockAdjustmentResponse {
+  // Request ID
+  string request_id = 1 [(spec.assert_required) = true];
+
+  // Success flag
+  bool success = 2;
+
+  // Error message
+  string error = 3;
+
+  // Previous stock level
+  int32 previous_stock = 4;
+
+  // New stock level
+  int32 new_stock = 5;
+
+  // Event ID created
+  string event_id = 6;
+
+  // Timestamp
+  int64 timestamp = 7 [(spec.assert_required) = true];
+}
+
+// Get inventory stats request
+message GetInventoryStatsRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 5 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Date range start
+  int64 start_date = 1 [(spec.assert_required) = true];
+
+  // Date range end
+  int64 end_date = 2 [(spec.assert_required) = true];
+
+  // Warehouse codes filter
+  repeated string warehouse_codes = 3 [(spec.assert_max_size) = 100];
+
+  // Category filter
+  repeated product.ProductCategory categories = 4 [(spec.assert_max_size) = 100];
+}
+
+// Get inventory stats response
+message GetInventoryStatsResponse {
+  // Total products
+  int64 total_products = 1 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Total stock units
+  int64 total_stock_units = 2 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Total inventory value in cents
+  int64 total_value_cents = 3 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Out of stock count
+  int32 out_of_stock_count = 4 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Low stock count
+  int32 low_stock_count = 5 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Average stock level
+  float avg_stock_level = 6 [(spec.assert_float) = {
+    ge: 0.0
+  }];
+
+  // Stock turnover rate
+  float turnover_rate = 7 [(spec.assert_float) = {
+    ge: 0.0
+  }];
+
+  // Categories breakdown
+  map<string, CategoryStats> category_stats = 8 [(spec.assert_max_size) = 100];
+
+  // Warehouse breakdown
+  map<string, WarehouseStats> warehouse_stats = 9 [(spec.assert_max_size) = 100];
+}
+
+// Category statistics
+message CategoryStats {
+  // Category name
+  string category = 1;
+
+  // Product count
+  int32 product_count = 2 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Total units
+  int64 total_units = 3 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Total value in cents
+  int64 total_value_cents = 4 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+}
+
+// Warehouse statistics
+message WarehouseStats {
+  // Warehouse code
+  string warehouse_code = 1;
+
+  // Product count
+  int32 product_count = 2 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Total units
+  int64 total_units = 3 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Utilization percentage
+  float utilization_percent = 4 [(spec.assert_float) = {
+    ge: 0.0,
+    le: 100.0
+  }];
+}
+
+// Generate report request
+message GenerateReportRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 7 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Report type
+  ReportType report_type = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_enum_defined) = true
+  ];
+
+  // Date range start
+  int64 start_date = 2 [(spec.assert_required) = true];
+
+  // Date range end
+  int64 end_date = 3 [(spec.assert_required) = true];
+
+  // Filters
+  map<string, string> filters = 4 [(spec.assert_max_size) = 100];
+
+  // Output format
+  ReportFormat format = 5 [(spec.assert_enum_defined) = true];
+
+  // Requested by user
+  string requested_by = 6 [(spec.assert_required) = true];
+}
+
+// Report type
+enum ReportType {
+  REPORT_TYPE_UNDEFINED = 0;
+  REPORT_TYPE_INVENTORY_SNAPSHOT = 1 [(spec.json_return_value) = "inventory_snapshot"];
+  REPORT_TYPE_STOCK_MOVEMENT = 2 [(spec.json_return_value) = "stock_movement"];
+  REPORT_TYPE_LOW_STOCK = 3 [(spec.json_return_value) = "low_stock"];
+  REPORT_TYPE_VALUATION = 4 [(spec.json_return_value) = "valuation"];
+  REPORT_TYPE_TURNOVER = 5 [(spec.json_return_value) = "turnover"];
+}
+
+// Report format
+enum ReportFormat {
+  REPORT_FORMAT_UNDEFINED = 0;
+  REPORT_FORMAT_PDF = 1 [(spec.json_return_value) = "pdf"];
+  REPORT_FORMAT_CSV = 2 [(spec.json_return_value) = "csv"];
+  REPORT_FORMAT_EXCEL = 3 [(spec.json_return_value) = "excel"];
+  REPORT_FORMAT_JSON = 4 [(spec.json_return_value) = "json"];
+}
+
+// Generate report response
+message GenerateReportResponse {
+  // Report ID
+  string report_id = 1 [(spec.assert_required) = true];
+
+  // Download URL
+  string download_url = 2 [(spec.assert_url) = URL_SCHEME_HTTPS];
+
+  // Report size in bytes
+  int64 size_bytes = 3 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Generation duration in milliseconds
+  int64 duration_ms = 4 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Generated timestamp
+  int64 generated_at = 5 [(spec.assert_required) = true];
+
+  // Expires at timestamp
+  int64 expires_at = 6 [(spec.assert_required) = true];
+}

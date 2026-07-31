@@ -1,0 +1,535 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+TypedClient wraps the HTTP client and provides type-safe methods with retry logic.
+"""
+
+import base64
+import logging
+import os
+import random
+import ssl
+import time
+from typing import Callable, Optional, TypeVar, List
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+from {{.PythonPackageBase}}.types.sys.errors.exceptions import ProtoError, from_http_status, internal
+
+# Type variable for generic response types
+T = TypeVar('T')
+
+logger = logging.getLogger(__name__)
+
+MAX_RESPONSE_BODY_BYTES = 100 * 1024 * 1024  # 100 MB
+
+
+class TypedClient:
+    """
+    TypedClient wraps the HTTP client and provides type-safe methods with retry logic.
+    Each method accepts full URLs, allowing the client to be reused for any endpoint.
+
+    This class serves as the static library infrastructure for compiler-generated
+    typed HTTP client methods.
+    """
+
+    def __init__(self, config=None):
+        """
+        Creates a new typed HTTP client from the provided HttpClientConfig.
+        If config is None, a default configuration is used.
+
+        Args:
+            config: HttpClientConfig protobuf message or None for defaults
+
+        Raises:
+            RuntimeError: If TLS configuration fails
+        """
+        if config is None:
+            # Use default configuration
+            from {{.PythonPackageBase}}.types.sys.httpclient import httpclient_pb2
+            config = httpclient_pb2.HttpClientConfig()
+
+        self._retry_config = (
+            config.retry_config if config.HasField('retry_config')
+            else self._default_retry_config()
+        )
+        self._timeout = config.timeout_seconds if config.timeout_seconds > 0 else 30
+        self._temp_files: List[str] = []
+
+        # Create session with retry logic
+        self._session = requests.Session()
+
+        # Configure TLS
+        try:
+            self._configure_tls(config)
+        except Exception as e:
+            raise RuntimeError(f"Failed to configure HTTP client: {e}") from e
+
+    def close(self) -> None:
+        """Clean up temporary certificate files and close the session."""
+        for path in self._temp_files:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        self._temp_files.clear()
+        self._session.close()
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
+
+    def __del__(self):
+        """Destructor to clean up temp files if close() was not called."""
+        for path in getattr(self, '_temp_files', []):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _default_retry_config():
+        """Returns a default retry configuration."""
+        from {{.PythonPackageBase}}.types.sys.httpclient import httpclient_pb2
+        return httpclient_pb2.RetryConfig(
+            max_retries=3,
+            initial_backoff_ms=100,
+            max_backoff_ms=5000,
+            backoff_multiplier=2.0,
+            retryable_status_codes=[429, 500, 502, 503, 504]
+        )
+
+    def get_session(self) -> requests.Session:
+        """Returns the underlying requests session."""
+        return self._session
+
+    def get_retry_config(self):
+        """Returns the retry configuration for this client."""
+        return self._retry_config
+
+    def do_get(self, url: str, from_bytes: Callable[[bytes], T]) -> T:
+        """
+        Performs a GET request with retry logic and deserializes using the provided function.
+
+        Args:
+            url: The URL to request
+            from_bytes: Function to deserialize response bytes
+
+        Returns:
+            The deserialized response
+
+        Raises:
+            ProtoError: If the request fails
+        """
+        max_attempts = self._max_attempts_for_method("GET")
+
+        last_error = None
+
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                # Calculate backoff and wait
+                backoff_ms = self._calculate_backoff_ms(attempt - 1)
+                logger.debug(
+                    f"Retrying GET {url}, attempt {attempt + 1}/{max_attempts} "
+                    f"after {backoff_ms}ms"
+                )
+                time.sleep(backoff_ms / 1000.0)
+
+            try:
+                logger.debug(f"GET {url} (attempt {attempt + 1}/{max_attempts})")
+
+                response = self._session.get(url, timeout=self._timeout)
+
+                if len(response.content) > MAX_RESPONSE_BODY_BYTES:
+                    raise RuntimeError(
+                        f"response body exceeds maximum allowed size of {MAX_RESPONSE_BODY_BYTES} bytes"
+                    )
+
+                if logger.isEnabledFor(logging.DEBUG):
+                    if logger.isEnabledFor(logging.TRACE):
+                        logger.debug(
+                            f"GET {url} -> {response.status_code}, "
+                            f"body={response.content.decode('utf-8', errors='replace')}"
+                        )
+                    else:
+                        logger.debug(f"GET {url} -> {response.status_code}")
+
+                # Check for error status codes
+                if response.status_code >= 400:
+                    should_retry = self._is_retryable_status(response.status_code)
+                    last_error = self._status_code_to_exception(response.status_code)
+
+                    if should_retry and attempt < max_attempts - 1:
+                        continue
+                    raise last_error
+
+                # Success - deserialize and return
+                return from_bytes(response.content)
+
+            except ProtoError:
+                raise
+            except Exception as e:
+                # Network errors are retried only when max_attempts permits it.
+                last_error = internal(f"Request failed: {e}")
+                if attempt >= max_attempts - 1:
+                    raise last_error
+
+        if last_error:
+            raise last_error
+        raise internal("Request failed with unknown error")
+
+    def do_post_with_response(
+        self,
+        url: str,
+        data_bytes: bytes,
+        from_bytes: Callable[[bytes], T]
+    ) -> T:
+        """
+        Performs one POST request and deserializes the response.
+
+        Args:
+            url: The URL to request
+            data_bytes: Pre-serialized request body bytes
+            from_bytes: Function to deserialize response bytes
+
+        Returns:
+            The deserialized response
+
+        Raises:
+            ProtoError: If the request fails
+        """
+        max_attempts = self._max_attempts_for_method("POST")
+
+        last_error = None
+
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                backoff_ms = self._calculate_backoff_ms(attempt - 1)
+                logger.debug(
+                    f"Retrying POST {url}, attempt {attempt + 1}/{max_attempts} "
+                    f"after {backoff_ms}ms"
+                )
+                time.sleep(backoff_ms / 1000.0)
+
+            try:
+                if logger.isEnabledFor(logging.TRACE):
+                    logger.debug(
+                        f"POST {url} (attempt {attempt + 1}/{max_attempts}), "
+                        f"body={data_bytes.decode('utf-8', errors='replace')}"
+                    )
+                else:
+                    logger.debug(f"POST {url} (attempt {attempt + 1}/{max_attempts})")
+
+                response = self._session.post(
+                    url,
+                    data=data_bytes,
+                    headers={'Content-Type': 'application/json'},
+                    timeout=self._timeout
+                )
+
+                if len(response.content) > MAX_RESPONSE_BODY_BYTES:
+                    raise RuntimeError(
+                        f"response body exceeds maximum allowed size of {MAX_RESPONSE_BODY_BYTES} bytes"
+                    )
+
+                if logger.isEnabledFor(logging.TRACE):
+                    logger.debug(
+                        f"POST {url} -> {response.status_code}, "
+                        f"body={response.content.decode('utf-8', errors='replace')}"
+                    )
+                else:
+                    logger.debug(f"POST {url} -> {response.status_code}")
+
+                # Check for error status codes
+                if response.status_code >= 400:
+                    should_retry = self._is_retryable_status(response.status_code)
+                    last_error = self._status_code_to_exception(response.status_code)
+
+                    if should_retry and attempt < max_attempts - 1:
+                        continue
+                    raise last_error
+
+                # Success - deserialize and return
+                return from_bytes(response.content)
+
+            except ProtoError:
+                raise
+            except Exception as e:
+                last_error = internal(f"Request failed: {e}")
+                if attempt >= max_attempts - 1:
+                    raise last_error
+
+        if last_error:
+            raise last_error
+        raise internal("Request failed with unknown error")
+
+    def do_mutation(
+        self,
+        method: str,
+        url: str,
+        data_bytes: Optional[bytes] = None
+    ) -> None:
+        """
+        Performs one PUT/PATCH/DELETE request with typed data, returns no body.
+
+        Args:
+            method: HTTP method (PUT, PATCH, DELETE)
+            url: The URL to request
+            data_bytes: Pre-serialized request body bytes, can be None
+
+        Raises:
+            ProtoError: If the request fails
+        """
+        max_attempts = self._max_attempts_for_method(method)
+
+        last_error = None
+
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                backoff_ms = self._calculate_backoff_ms(attempt - 1)
+                logger.debug(
+                    f"Retrying {method} {url}, attempt {attempt + 1}/{max_attempts} "
+                    f"after {backoff_ms}ms"
+                )
+                time.sleep(backoff_ms / 1000.0)
+
+            try:
+                headers = {}
+                if data_bytes:
+                    headers['Content-Type'] = 'application/json'
+                    if logger.isEnabledFor(logging.TRACE):
+                        logger.debug(
+                            f"{method} {url} (attempt {attempt + 1}/{max_attempts}), "
+                            f"body={data_bytes.decode('utf-8', errors='replace')}"
+                        )
+                    else:
+                        logger.debug(
+                            f"{method} {url} (attempt {attempt + 1}/{max_attempts})"
+                        )
+                else:
+                    logger.debug(
+                        f"{method} {url} (attempt {attempt + 1}/{max_attempts})"
+                    )
+
+                response = self._session.request(
+                    method,
+                    url,
+                    data=data_bytes,
+                    headers=headers,
+                    timeout=self._timeout
+                )
+
+                if len(response.content) > MAX_RESPONSE_BODY_BYTES:
+                    raise RuntimeError(
+                        f"response body exceeds maximum allowed size of {MAX_RESPONSE_BODY_BYTES} bytes"
+                    )
+
+                if logger.isEnabledFor(logging.TRACE) and response.content:
+                    logger.debug(
+                        f"{method} {url} -> {response.status_code}, "
+                        f"body={response.content.decode('utf-8', errors='replace')}"
+                    )
+                else:
+                    logger.debug(f"{method} {url} -> {response.status_code}")
+
+                # Check for error status codes
+                if response.status_code >= 400:
+                    should_retry = self._is_retryable_status(response.status_code)
+                    last_error = self._status_code_to_exception(response.status_code)
+
+                    if should_retry and attempt < max_attempts - 1:
+                        continue
+                    raise last_error
+
+                # Success
+                return
+
+            except ProtoError:
+                raise
+            except Exception as e:
+                last_error = internal(f"Request failed: {e}")
+                if attempt >= max_attempts - 1:
+                    raise last_error
+
+        if last_error:
+            raise last_error
+
+    def _is_retryable_status(self, status_code: int) -> bool:
+        """Checks if a status code is in the retryable list."""
+        if not self._retry_config or not self._retry_config.retryable_status_codes:
+            # Default retryable codes
+            return status_code in [429, 500, 502, 503, 504]
+
+        return status_code in self._retry_config.retryable_status_codes
+
+    def _max_attempts_for_method(self, method: str) -> int:
+        """Enables automatic retry only for read-like HTTP methods."""
+        if not self._retry_config or self._retry_config.max_retries <= 0:
+            return 1
+        if method.upper() in {"GET", "HEAD", "OPTIONS"}:
+            return self._retry_config.max_retries + 1
+        return 1
+
+    def _calculate_backoff_ms(self, attempt: int) -> int:
+        """Calculates capped exponential backoff with equal jitter."""
+        if not self._retry_config:
+            return 0
+
+        backoff_ms = int(
+            self._retry_config.initial_backoff_ms *
+            (self._retry_config.backoff_multiplier ** attempt)
+        )
+
+        if backoff_ms > self._retry_config.max_backoff_ms:
+            backoff_ms = self._retry_config.max_backoff_ms
+
+        if backoff_ms > 1:
+            half = backoff_ms / 2
+            backoff_ms = int(half + random.uniform(0, half))
+
+        return backoff_ms
+
+    @staticmethod
+    def _status_code_to_exception(status_code: int) -> ProtoError:
+        """Converts an HTTP status code to an appropriate ProtoError."""
+        status_text = TypedClient._get_status_text(status_code)
+        message = f"HTTP {status_code}: {status_text}"
+        return from_http_status(status_code, message)
+
+    @staticmethod
+    def _get_status_text(status_code: int) -> str:
+        """Gets status text for common HTTP status codes."""
+        status_texts = {
+            400: "Bad Request",
+            401: "Unauthorized",
+            403: "Forbidden",
+            404: "Not Found",
+            429: "Too Many Requests",
+            500: "Internal Server Error",
+            502: "Bad Gateway",
+            503: "Service Unavailable",
+            504: "Gateway Timeout",
+        }
+        return status_texts.get(status_code, "Unknown")
+
+    def _configure_tls(self, config) -> None:
+        """
+        Configures TLS settings based on the configuration.
+
+        Args:
+            config: HttpClientConfig protobuf message
+
+        Raises:
+            Exception: If TLS configuration fails
+        """
+        errors = []
+
+        logger.info("HTTP client TLS verification enabled")
+
+        # Configure client certificate for mTLS
+        if config.HasField('client_cert'):
+            logger.debug("config.client_cert is present; mTLS is enabled")
+            try:
+                cert_path, key_path = self._configure_client_certificate(
+                    config.client_cert
+                )
+                self._session.cert = (cert_path, key_path)
+            except Exception as e:
+                errors.append(f"Failed to load client certificate: {e}")
+        else:
+            logger.debug("config.client_cert is not present; mTLS is not enabled")
+
+        # Configure root certificates
+        if config.root_certs:
+            logger.debug(f"config.root_certs has {len(config.root_certs)} cert(s)")
+            try:
+                ca_bundle_path = self._configure_root_certificates(config.root_certs)
+                self._session.verify = ca_bundle_path
+            except Exception as e:
+                errors.append(f"Failed to load root certificates: {e}")
+        else:
+            logger.debug("config.root_certs has no certs; using system default CAs")
+
+        if errors:
+            raise RuntimeError("Failed to configure TLS: " + "; ".join(errors))
+
+    def _configure_client_certificate(self, cert_pair) -> tuple:
+        """
+        Configures client certificate for mTLS.
+
+        Args:
+            cert_pair: client certificate/key protobuf message
+
+        Returns:
+            Tuple of (cert_path, key_path) for temporary files
+
+        Raises:
+            Exception: If certificate configuration fails
+        """
+        import tempfile
+
+        # Decode base64-encoded cert and key
+        cert_bytes = base64.b64decode(cert_pair.cert.base64)
+        key_bytes = base64.b64decode(cert_pair.key.base64)
+
+        # Write to temporary files (requests requires file paths)
+        cert_fd, cert_path = tempfile.mkstemp(suffix='.crt', text=True)
+        key_fd, key_path = tempfile.mkstemp(suffix='.key', text=True)
+
+        try:
+            os.write(cert_fd, cert_bytes)
+            os.write(key_fd, key_bytes)
+        finally:
+            os.close(cert_fd)
+            os.close(key_fd)
+
+        self._temp_files.append(cert_path)
+        self._temp_files.append(key_path)
+
+        return cert_path, key_path
+
+    def _configure_root_certificates(self, root_certs: List) -> str:
+        """
+        Configures root certificates for server verification.
+
+        Args:
+            root_certs: List of X509Cert protobuf messages
+
+        Returns:
+            Path to CA bundle file
+
+        Raises:
+            Exception: If certificate configuration fails
+        """
+        import tempfile
+        import certifi
+
+        # Start with system certificates
+        ca_bundle = certifi.where()
+        with open(ca_bundle, 'rb') as f:
+            system_certs = f.read()
+
+        # Create temporary CA bundle with system + custom certs
+        fd, ca_bundle_path = tempfile.mkstemp(suffix='.pem', text=True)
+
+        try:
+            # Write system certs
+            os.write(fd, system_certs)
+
+            # Append custom root certs
+            for cert in root_certs:
+                cert_bytes = base64.b64decode(cert.base64)
+                os.write(fd, b'\n')
+                os.write(fd, cert_bytes)
+        finally:
+            os.close(fd)
+
+        self._temp_files.append(ca_bundle_path)
+
+        return ca_bundle_path

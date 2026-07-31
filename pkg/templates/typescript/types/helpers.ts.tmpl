@@ -1,0 +1,27 @@
+{{.Header}}
+// Source: {{.RelPath}}
+{{.Imports}}
+{{- if .EnumHelpers}}
+{{.EnumHelpers}}
+{{- end}}
+{{- if .Constants}}
+{{.Constants}}
+{{- end}}
+{{- if .Serialization}}
+{{.Serialization}}
+{{- end}}
+{{- if .FromMap}}
+{{.FromMap}}
+{{- end}}
+{{- if .Defaults}}
+{{.Defaults}}
+{{- end}}
+{{- if .Merge}}
+{{.Merge}}
+{{- end}}
+{{- if .EnvVar}}
+{{.EnvVar}}
+{{- end}}
+{{- if .LlmDescriptor}}
+{{.LlmDescriptor}}
+{{- end}}

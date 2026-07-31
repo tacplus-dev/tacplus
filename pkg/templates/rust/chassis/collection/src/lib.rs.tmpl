@@ -1,0 +1,603 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// CODE GENERATED - DO NOT EDIT
+// Generated runtime support for WATCH collection methods.
+
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use tokio::sync::{mpsc, Mutex, Notify};
+use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
+
+pub type WatchStream<T> = Pin<Box<dyn Stream<Item = Result<T, tonic::Status>> + Send>>;
+
+pub struct WatchSource<Item, Change> {
+    pub scope: String,
+    pub snapshot: WatchStream<Item>,
+    pub revision: i64,
+    pub changes: Box<dyn FnOnce() -> WatchStream<Change> + Send>,
+}
+
+#[derive(Clone)]
+struct Entry<C> {
+    revision: i64,
+    change: C,
+}
+
+struct RingState<C> {
+    buf: Vec<Entry<C>>,
+    closed: bool,
+}
+
+struct Ring<C> {
+    cap: usize,
+    idle_timeout: Option<std::time::Duration>,
+    state: Mutex<RingState<C>>,
+    notify: Notify,
+}
+
+impl<C: Clone + Send + Sync + 'static> Ring<C> {
+    fn new(depth: usize, idle_secs: usize) -> Self {
+        Self {
+            cap: depth.max(1),
+            idle_timeout: if idle_secs > 0 {
+                Some(std::time::Duration::from_secs(idle_secs as u64))
+            } else {
+                None
+            },
+            state: Mutex::new(RingState { buf: Vec::new(), closed: false }),
+            notify: Notify::new(),
+        }
+    }
+
+    async fn publish(&self, revision: i64, change: C) {
+        let mut state = self.state.lock().await;
+        if state.closed {
+            return;
+        }
+        if state.buf.len() == self.cap {
+            state.buf.remove(0);
+        }
+        state.buf.push(Entry { revision, change });
+        drop(state);
+        self.notify.notify_waiters();
+    }
+
+    async fn close(&self) {
+        let mut state = self.state.lock().await;
+        state.closed = true;
+        drop(state);
+        self.notify.notify_waiters();
+    }
+
+    async fn is_closed(&self) -> bool {
+        self.state.lock().await.closed
+    }
+
+    fn resume<F, Fut>(self: Arc<Self>, from_revision: i64, on_done: F) -> WatchStream<C>
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let (tx, rx) = mpsc::channel(32);
+        tokio::spawn(async move {
+            let mut next_revision = from_revision + 1;
+            let mut last_activity = tokio::time::Instant::now();
+            async {
+                loop {
+                    let notified = self.notify.notified();
+                    tokio::pin!(notified);
+                    notified.as_mut().enable();
+                    let (batch, closed, relist) = {
+                        let state = self.state.lock().await;
+                        let oldest = state.buf.first().map(|e| e.revision).unwrap_or(0);
+                        let relist = next_revision > 1 && oldest > 0 && next_revision < oldest;
+                        let batch = state
+                            .buf
+                            .iter()
+                            .filter(|e| e.revision >= next_revision)
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        (batch, state.closed, relist)
+                    };
+                    if relist {
+                        let _ = tx
+                            .send(Err(tonic::Status::out_of_range(
+                                "watch resume revision is older than the replay ring; relist required",
+                            )))
+                            .await;
+                        return;
+                    }
+                    for entry in batch {
+                        next_revision = entry.revision + 1;
+                        if tx.send(Ok(entry.change)).await.is_err() {
+                            return;
+                        }
+                        last_activity = tokio::time::Instant::now();
+                    }
+                    if closed {
+                        return;
+                    }
+                    if let Some(idle_timeout) = self.idle_timeout {
+                        let elapsed = last_activity.elapsed();
+                        if elapsed >= idle_timeout {
+                            let _ = tx
+                                .send(Err(tonic::Status::deadline_exceeded(
+                                    "watch stream idle timeout exceeded",
+                                )))
+                                .await;
+                            return;
+                        }
+                        if tokio::time::timeout(idle_timeout - elapsed, notified).await.is_err() {
+                            let _ = tx
+                                .send(Err(tonic::Status::deadline_exceeded(
+                                    "watch stream idle timeout exceeded",
+                                )))
+                                .await;
+                            return;
+                        }
+                    } else {
+                        notified.await;
+                    }
+                }
+            }
+            .await;
+            on_done().await;
+        });
+        Box::pin(ReceiverStream::new(rx))
+    }
+}
+
+#[derive(Clone)]
+pub struct WatchHub<C> {
+    depth: usize,
+    idle_secs: usize,
+    state: Arc<Mutex<HubState<C>>>,
+}
+
+struct HubState<C> {
+    rings: HashMap<String, Arc<Ring<C>>>,
+    drains: HashSet<String>,
+    refs: HashMap<String, usize>,
+}
+
+impl<C: Clone + Send + Sync + 'static> WatchHub<C> {
+    pub fn new(depth: usize, idle_secs: usize) -> Self {
+        Self {
+            depth: depth.max(1),
+            idle_secs,
+            state: Arc::new(Mutex::new(HubState {
+                rings: HashMap::new(),
+                drains: HashSet::new(),
+                refs: HashMap::new(),
+            })),
+        }
+    }
+
+    pub async fn watch<F, R>(
+        &self,
+        scope: String,
+        from_revision: i64,
+        changes: F,
+        revision_of: R,
+    ) -> WatchStream<C>
+    where
+        F: FnOnce() -> WatchStream<C> + Send + 'static,
+        R: Fn(&C) -> i64 + Send + Sync + 'static,
+    {
+        let scope = if scope.is_empty() { "/".to_string() } else { scope };
+        let (ring, first) = {
+            let mut state = self.state.lock().await;
+            let ring = state
+                .rings
+                .entry(scope.clone())
+                .or_insert_with(|| Arc::new(Ring::new(self.depth, self.idle_secs)))
+                .clone();
+            *state.refs.entry(scope.clone()).or_insert(0) += 1;
+            let first = state.drains.insert(scope.clone());
+            (ring, first)
+        };
+        if first {
+            let drain_ring = ring.clone();
+            tokio::spawn(async move {
+                let mut changes = changes();
+                while let Some(item) = changes.next().await {
+                    match item {
+                        Ok(change) => {
+                            if drain_ring.is_closed().await {
+                                return;
+                            }
+                            let revision = revision_of(&change);
+                            drain_ring.publish(revision, change).await;
+                        }
+                        Err(_) => {
+                            drain_ring.close().await;
+                            return;
+                        }
+                    }
+                }
+                drain_ring.close().await;
+            });
+        }
+        let hub = self.clone();
+        let release_scope = scope.clone();
+        let release_ring = ring.clone();
+        ring.resume(from_revision, move || async move {
+            hub.release(release_scope, release_ring).await;
+        })
+    }
+
+    async fn release(&self, scope: String, ring: Arc<Ring<C>>) {
+        let should_close = {
+            let mut state = self.state.lock().await;
+            match state.refs.get_mut(&scope) {
+                Some(count) if *count > 1 => {
+                    *count -= 1;
+                    false
+                }
+                _ => {
+                    state.refs.remove(&scope);
+                    state.drains.remove(&scope);
+                    if state
+                        .rings
+                        .get(&scope)
+                        .map(|current| Arc::ptr_eq(current, &ring))
+                        .unwrap_or(false)
+                    {
+                        state.rings.remove(&scope);
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
+        };
+        if should_close {
+            ring.close().await;
+        }
+    }
+}
+
+// --- PAGE (keyset pagination) runtime ----------------------------------------
+//
+// PAGE is a unary RPC: the client drives a resumable window with an opaque
+// page_token. The generated wrapper owns the token codec and the page_size
+// bound; the handler is a keyset producer returning a Page. The token format is
+// identical across every language backend -- base64url(no pad) of
+// {"v":1,"k":[...strings...]}, raw compact UTF-8 -- so a token minted by one
+// client decodes on any other. Kept in lockstep with the Go/TS/Python runtimes
+// and dependency-free (no serde/base64 crates) so the lib's deps stay minimal.
+
+const PAGE_TOKEN_VERSION: i64 = 1;
+
+/// Keyset position of a page boundary: the order_by key components of the last
+/// row in a page, as strings (the handler parses them back to typed values).
+/// `None` (a missing cursor) means "from the beginning".
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Cursor {
+    pub keys: Vec<String>,
+}
+
+/// What the wrapper hands the handler for one PAGE call: the effective row limit
+/// (already defaulted and clamped to the trust ceiling) and the decoded `after`
+/// cursor (None on the first page).
+#[derive(Clone, Debug)]
+pub struct PageParams {
+    pub limit: i64,
+    pub after: Option<Cursor>,
+}
+
+/// What a PAGE handler returns: the window of items, the cursor to resume after
+/// (None when this is the last page), and an optional total (-1 when the handler
+/// did not compute a count -- callers must treat it as unknown).
+#[derive(Clone, Debug)]
+pub struct Page<Item> {
+    pub items: Vec<Item>,
+    pub next_after: Option<Cursor>,
+    pub total: i64,
+}
+
+impl<Item> Default for Page<Item> {
+    fn default() -> Self {
+        Page { items: Vec::new(), next_after: None, total: -1 }
+    }
+}
+
+/// Resolve the requested page_size against the method's default and the
+/// trust-tier maximum: a non-positive request takes the default; the result is
+/// clamped to [1, max].
+pub fn effective_page_size(requested: i64, default_size: i64, max: i64) -> i64 {
+    let mut n = requested;
+    if n <= 0 {
+        n = default_size;
+    }
+    if n <= 0 {
+        n = 1;
+    }
+    if max > 0 && n > max {
+        n = max;
+    }
+    n
+}
+
+const B64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+fn b64url_encode(input: &[u8]) -> String {
+    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(B64URL[((n >> 18) & 0x3f) as usize] as char);
+        out.push(B64URL[((n >> 12) & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(B64URL[((n >> 6) & 0x3f) as usize] as char);
+        }
+        if chunk.len() > 2 {
+            out.push(B64URL[(n & 0x3f) as usize] as char);
+        }
+    }
+    out
+}
+
+fn b64url_decode(input: &str) -> Option<Vec<u8>> {
+    let val = |c: u8| -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a' + 26) as u32),
+            b'0'..=b'9' => Some((c - b'0' + 52) as u32),
+            b'-' => Some(62),
+            b'_' => Some(63),
+            _ => None,
+        }
+    };
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3 + 3);
+    for chunk in bytes.chunks(4) {
+        if chunk.len() == 1 {
+            return None;
+        }
+        let mut n = 0u32;
+        for &c in chunk {
+            n = (n << 6) | val(c)?;
+        }
+        // Left-justify the accumulated bits for the number of input chars.
+        n <<= 6 * (4 - chunk.len());
+        out.push(((n >> 16) & 0xff) as u8);
+        if chunk.len() >= 3 {
+            out.push(((n >> 8) & 0xff) as u8);
+        }
+        if chunk.len() >= 4 {
+            out.push((n & 0xff) as u8);
+        }
+    }
+    Some(out)
+}
+
+fn json_escape(s: &str, out: &mut String) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// Serialize a cursor into the opaque next_page_token. `None` (last page)
+/// encodes to the empty string, the auto-pager's stop signal.
+pub fn encode_page_token(cursor: Option<&Cursor>) -> String {
+    let cursor = match cursor {
+        Some(c) => c,
+        None => return String::new(),
+    };
+    let mut json = String::new();
+    json.push_str("{\"v\":");
+    json.push_str(&PAGE_TOKEN_VERSION.to_string());
+    json.push_str(",\"k\":[");
+    for (i, k) in cursor.keys.iter().enumerate() {
+        if i > 0 {
+            json.push(',');
+        }
+        json_escape(k, &mut json);
+    }
+    json.push_str("]}");
+    b64url_encode(json.as_bytes())
+}
+
+/// Parse a page_token back into a cursor. The empty string decodes to `None`
+/// (first page). Any malformed or wrong-version input returns INVALID_ARGUMENT
+/// -- the wrapper never silently resets to the first page on a bad token.
+pub fn decode_page_token(token: &str) -> Result<Option<Cursor>, tonic::Status> {
+    if token.is_empty() {
+        return Ok(None);
+    }
+    let bad = || tonic::Status::invalid_argument("page_token is malformed or from an incompatible version");
+    let raw = b64url_decode(token).ok_or_else(bad)?;
+    let text = std::str::from_utf8(&raw).map_err(|_| bad())?;
+    let (version, keys) = parse_token_envelope(text).ok_or_else(bad)?;
+    if version != PAGE_TOKEN_VERSION {
+        return Err(bad());
+    }
+    Ok(Some(Cursor { keys }))
+}
+
+/// Strict parser for exactly our envelope shape: {"v":<int>,"k":[<string>,...]}.
+/// Returns None on anything unexpected (the caller maps that to INVALID_ARGUMENT).
+/// We only ever decode tokens our own encoder produced, so a strict parser is
+/// sufficient and tamper-safe.
+fn parse_token_envelope(s: &str) -> Option<(i64, Vec<String>)> {
+    let b = s.as_bytes();
+    let mut i = 0usize;
+    let skip_ws = |b: &[u8], i: &mut usize| while *i < b.len() && (b[*i] == b' ' || b[*i] == b'\t' || b[*i] == b'\n' || b[*i] == b'\r') { *i += 1; };
+    let expect = |b: &[u8], i: &mut usize, c: u8| -> Option<()> { if *i < b.len() && b[*i] == c { *i += 1; Some(()) } else { None } };
+
+    skip_ws(b, &mut i);
+    expect(b, &mut i, b'{')?;
+    let mut version: Option<i64> = None;
+    let mut keys: Option<Vec<String>> = None;
+    loop {
+        skip_ws(b, &mut i);
+        let key = parse_json_string(b, &mut i)?;
+        skip_ws(b, &mut i);
+        expect(b, &mut i, b':')?;
+        skip_ws(b, &mut i);
+        match key.as_str() {
+            "v" => {
+                let start = i;
+                if i < b.len() && (b[i] == b'-') { i += 1; }
+                while i < b.len() && b[i].is_ascii_digit() { i += 1; }
+                if i == start { return None; }
+                version = Some(s[start..i].parse::<i64>().ok()?);
+            }
+            "k" => {
+                expect(b, &mut i, b'[')?;
+                let mut arr = Vec::new();
+                skip_ws(b, &mut i);
+                if i < b.len() && b[i] == b']' {
+                    i += 1;
+                } else {
+                    loop {
+                        skip_ws(b, &mut i);
+                        arr.push(parse_json_string(b, &mut i)?);
+                        skip_ws(b, &mut i);
+                        if i < b.len() && b[i] == b',' { i += 1; continue; }
+                        expect(b, &mut i, b']')?;
+                        break;
+                    }
+                }
+                keys = Some(arr);
+            }
+            _ => return None,
+        }
+        skip_ws(b, &mut i);
+        if i < b.len() && b[i] == b',' { i += 1; continue; }
+        expect(b, &mut i, b'}')?;
+        break;
+    }
+    skip_ws(b, &mut i);
+    if i != b.len() {
+        return None;
+    }
+    Some((version?, keys.unwrap_or_default()))
+}
+
+fn parse_json_string(b: &[u8], i: &mut usize) -> Option<String> {
+    if *i >= b.len() || b[*i] != b'"' {
+        return None;
+    }
+    *i += 1;
+    let mut out = String::new();
+    while *i < b.len() {
+        let c = b[*i];
+        *i += 1;
+        match c {
+            b'"' => return Some(out),
+            b'\\' => {
+                if *i >= b.len() {
+                    return None;
+                }
+                let e = b[*i];
+                *i += 1;
+                match e {
+                    b'"' => out.push('"'),
+                    b'\\' => out.push('\\'),
+                    b'/' => out.push('/'),
+                    b'n' => out.push('\n'),
+                    b'r' => out.push('\r'),
+                    b't' => out.push('\t'),
+                    b'b' => out.push('\u{0008}'),
+                    b'f' => out.push('\u{000c}'),
+                    b'u' => {
+                        if *i + 4 > b.len() {
+                            return None;
+                        }
+                        let hex = std::str::from_utf8(&b[*i..*i + 4]).ok()?;
+                        let code = u32::from_str_radix(hex, 16).ok()?;
+                        *i += 4;
+                        out.push(char::from_u32(code)?);
+                    }
+                    _ => return None,
+                }
+            }
+            _ => {
+                // Raw UTF-8 byte(s); collect this and any continuation bytes.
+                let start = *i - 1;
+                while *i < b.len() && (b[*i] & 0xc0) == 0x80 {
+                    *i += 1;
+                }
+                out.push_str(std::str::from_utf8(&b[start..*i]).ok()?);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod page_tests {
+    use super::*;
+
+    #[test]
+    fn token_roundtrip() {
+        let c = Cursor { keys: vec!["abc".into(), "123".into()] };
+        let t = encode_page_token(Some(&c));
+        assert_eq!(t, "eyJ2IjoxLCJrIjpbImFiYyIsIjEyMyJdfQ");
+        assert_eq!(decode_page_token(&t).unwrap(), Some(c));
+    }
+
+    #[test]
+    fn empty_token_is_first_page() {
+        assert_eq!(encode_page_token(None), "");
+        assert_eq!(decode_page_token("").unwrap(), None);
+    }
+
+    #[test]
+    fn bad_token_is_invalid_argument() {
+        assert!(decode_page_token("!!!not-base64!!!").is_err());
+        assert!(decode_page_token("YWJj").is_err()); // valid b64 "abc" but not our envelope
+    }
+
+    #[test]
+    fn special_chars_roundtrip() {
+        let c = Cursor { keys: vec!["a\"b\\c".into(), "<x>&é".into(), "line\nbreak".into()] };
+        let t = encode_page_token(Some(&c));
+        assert_eq!(decode_page_token(&t).unwrap(), Some(c));
+    }
+
+    // Cross-language byte-identity (PC-C-2): this exact vector is pinned in the
+    // go page_behavior_test and the java CollectionRuntimeTest. It carries the
+    // parity hazards in one token: JSON string escapes, raw (unescaped-HTML)
+    // < > & and é, and a raw U+2028 LINE SEPARATOR.
+    #[test]
+    fn unicode_token_byte_identity() {
+        let c = Cursor { keys: vec!["a\"b\\c".into(), "<x>&é".into(), "line\u{2028}sep".into()] };
+        let t = encode_page_token(Some(&c));
+        assert_eq!(t, "eyJ2IjoxLCJrIjpbImFcImJcXGMiLCI8eD4mw6kiLCJsaW5l4oCoc2VwIl19");
+        assert_eq!(decode_page_token(&t).unwrap(), Some(c));
+    }
+
+    // A key containing the LITERAL text `\u2028` must survive byte-identically
+    // (pins the escaped-backslash walk in the go codec).
+    #[test]
+    fn escaped_backslash_text_byte_identity() {
+        let c = Cursor { keys: vec!["\\u2028".into()] };
+        let t = encode_page_token(Some(&c));
+        assert_eq!(t, "eyJ2IjoxLCJrIjpbIlxcdTIwMjgiXX0");
+        assert_eq!(decode_page_token(&t).unwrap(), Some(c));
+    }
+
+    #[test]
+    fn effective_page_size_clamps() {
+        assert_eq!(effective_page_size(0, 50, 10000), 50);
+        assert_eq!(effective_page_size(999999, 50, 100), 100);
+        assert_eq!(effective_page_size(20, 50, 10000), 20);
+    }
+}

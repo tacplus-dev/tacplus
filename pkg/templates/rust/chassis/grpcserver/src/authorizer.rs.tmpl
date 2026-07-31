@@ -1,0 +1,905 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Authorizer — token-based request authorization
+//!
+//! Verifies JWT signatures against JWKs published by TokenExchanger.
+//! User tokens carry a service_entitlements claim with compressed grant tokens.
+//! S2S service tokens are authorized via auth_services RE2 patterns.
+//!
+//! ## Architecture
+//!
+//! - **JwkCache** — watches JWK verifying keys, provides key lookup
+//! - **Authorizer** — composes JwkCache with a service name for standard S2S/C2S auth policy
+
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, RwLock};
+
+use {{.CrateBasePathUnderscore}}_types::grants::{
+    normalize as normalize_grants, unknown_tokens as unknown_grant_tokens,
+};
+use {{.CrateBasePathUnderscore}}_types::sys::jwk::jwk::Jwk as ProtoJwk;
+use {{.CrateBasePathUnderscore}}_types::sys::jwkview::jwkview::jwk_verifying_keys_view_service_client::JwkVerifyingKeysViewServiceClient;
+
+/// A token provider returns a bearer token string for S2S authentication.
+pub type TokenProvider = Arc<
+    dyn Fn() -> Pin<Box<dyn Future<Output = std::result::Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Errors from Authorizer operations
+#[derive(Debug, Clone)]
+pub struct AuthorizerError {
+    pub code: i32,
+    pub message: String,
+}
+
+impl AuthorizerError {
+    pub fn new(code: i32, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub fn permission_denied(msg: impl Into<String>) -> Self {
+        Self::new(7, msg)
+    }
+
+    pub fn unauthenticated(msg: impl Into<String>) -> Self {
+        Self::new(16, msg)
+    }
+}
+
+impl std::fmt::Display for AuthorizerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for AuthorizerError {}
+
+pub type Result<T> = std::result::Result<T, AuthorizerError>;
+
+// ============================================================================
+// JwkCache
+// ============================================================================
+
+/// Cache of JWK verifying keys populated by watching JwkVerifyingKeysView.
+///
+/// Provides key lookup by kid for token signature verification. Used by both
+/// the Authorizer (standard auth) and custom auth policies (e.g. gateway proxy).
+pub struct JwkCache {
+    jwks: Arc<RwLock<HashMap<String, Arc<jwk::ImmutableJwk>>>>,
+    /// Raw proto JWKs — kept in sync with `jwks` for JWKS endpoint delegation.
+    raw_jwks: Arc<RwLock<Vec<ProtoJwk>>>,
+}
+
+impl JwkCache {
+    /// Creates a new JwkCache and starts a background watch on JwkVerifyingKeysView.
+    pub fn new(
+        channel: tonic::transport::Channel,
+        token_provider: Option<TokenProvider>,
+    ) -> Self {
+        let jwks: Arc<RwLock<HashMap<String, Arc<jwk::ImmutableJwk>>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        let raw_jwks: Arc<RwLock<Vec<ProtoJwk>>> =
+            Arc::new(RwLock::new(Vec::new()));
+
+        {
+            let jwks = jwks.clone();
+            let raw_jwks = raw_jwks.clone();
+            tokio::spawn(async move {
+                watch_jwks(channel, jwks, raw_jwks, token_provider).await;
+            });
+        }
+
+        Self { jwks, raw_jwks }
+    }
+
+    /// Creates a JwkCache pre-seeded with fixed verifying keys and NO
+    /// background watch — for behavioral tests and offline verification
+    /// against a static key set (the Rust twin of Go's `JwkCache().Load`).
+    /// Raw proto JWKs (JWKS endpoint delegation) stay empty.
+    pub fn seeded(seed: Vec<jwk::ImmutableJwk>) -> Self {
+        let mut map: HashMap<String, Arc<jwk::ImmutableJwk>> = HashMap::new();
+        for j in seed {
+            map.insert(j.kid().to_string(), Arc::new(j));
+        }
+        Self {
+            jwks: Arc::new(RwLock::new(map)),
+            raw_jwks: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    /// Looks up a JWK by key ID.
+    pub fn get(&self, kid: &str) -> Option<Arc<jwk::ImmutableJwk>> {
+        let keys = self.jwks.read().unwrap();
+        keys.get(kid).cloned()
+    }
+
+    /// Returns whether any keys have been loaded.
+    pub fn has_keys(&self) -> bool {
+        let keys = self.jwks.read().unwrap();
+        !keys.is_empty()
+    }
+
+    /// Returns the raw proto JWKs (for JWKS/OIDC endpoints).
+    pub fn jwk_protos(&self) -> Vec<ProtoJwk> {
+        self.raw_jwks.read().unwrap().clone()
+    }
+}
+
+// ============================================================================
+// Authorizer
+// ============================================================================
+
+/// Token-based authorizer for gRPC service requests.
+///
+/// Composes a JwkCache with a service name to provide standard S2S and C2S
+/// authorization. Verifies JWT signatures, checks audience matches the service
+/// name, and authorizes via the service_entitlements claim sub-message.
+///
+/// For custom auth policies (e.g. gateway proxy where aud != service_name),
+/// use `jwk_cache()` directly.
+pub struct Authorizer {
+    jwk_cache: Arc<JwkCache>,
+    method_auth_patterns: RwLock<HashMap<String, Vec<regex::Regex>>>,
+}
+
+/// The service identity baked in at code generation time.
+const SERVICE_NAME: &str = "{{.ServiceLabel}}";
+
+impl Authorizer {
+    /// Creates a new Authorizer and starts a background JWK watch stream.
+    ///
+    /// `channel` is used to subscribe to JwkVerifyingKeysView.
+    /// `token_provider` supplies bearer tokens for authenticated watch streams.
+    ///
+    /// SPIFFE identities are self-describing (the trust domain is the URI
+    /// authority), so no deployment prefix is configured: service-path
+    /// extraction and namespace checks go through the generated token wrapper
+    /// and the spiffe lib helpers.
+    pub fn new(
+        channel: tonic::transport::Channel,
+        token_provider: Option<TokenProvider>,
+    ) -> Self {
+        let jwk_cache = Arc::new(JwkCache::new(channel, token_provider));
+
+        Self {
+            jwk_cache,
+            method_auth_patterns: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Creates an Authorizer over a pre-seeded JwkCache with no background
+    /// watch — for behavioral tests and offline verification.
+    pub fn with_seeded_jwks(seed: Vec<jwk::ImmutableJwk>) -> Self {
+        Self {
+            jwk_cache: Arc::new(JwkCache::seeded(seed)),
+            method_auth_patterns: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Registers allowed caller patterns for a method. Patterns are RE2 regexes
+    /// matched against the LOCATION-AGNOSTIC service path from
+    /// `Token::service_path()` (e.g. `mcp` or `mcp/workloads/agent-42`).
+    /// "*" is shorthand for "match any caller".
+    pub fn set_method_auth(&self, method_name: &str, patterns: &[&str]) {
+        if patterns.is_empty() {
+            return;
+        }
+        let compiled: Vec<regex::Regex> = patterns
+            .iter()
+            .map(|p| {
+                if *p == "*" {
+                    regex::Regex::new(".*").unwrap()
+                } else {
+                    regex::Regex::new(&format!("^{}$", p)).unwrap()
+                }
+            })
+            .collect();
+        self.method_auth_patterns
+            .write()
+            .unwrap()
+            .insert(method_name.to_string(), compiled);
+    }
+
+    /// Enforces the level-or-below rule against a pre-extracted target namespace.
+    ///
+    /// The Rust generator emits a call to this method in each generated service
+    /// wrapper for methods annotated with `target_namespace_field`, with the request
+    /// field value passed in directly (no runtime reflection).
+    pub fn check_at_or_below(&self, caller_namespace: &str, target_namespace: &str) -> Result<()> {
+        if target_namespace.is_empty() {
+            return Err(AuthorizerError::permission_denied(
+                "target namespace field is empty",
+            ));
+        }
+        if !crate::spiffe::is_at_or_below(caller_namespace, target_namespace) {
+            return Err(AuthorizerError::permission_denied(format!(
+                "caller namespace \"{}\" is not at-or-above target \"{}\"",
+                caller_namespace, target_namespace
+            )));
+        }
+        Ok(())
+    }
+
+    /// Parses the bearer token from `authorization`, fully verifies it via
+    /// `verify_bearer` (signature, expiry, token class, audience), extracts the
+    /// caller's namespace claim, and enforces level-or-below against
+    /// `target_namespace`. This is the convenience entry point used by
+    /// generated service wrappers — the namespace claim is only trusted
+    /// because the token's signature has been verified first.
+    pub fn check_caller_at_or_below(&self, authorization: Option<&str>, target_namespace: &str) -> Result<()> {
+        let tw = self.verify_bearer(authorization)?;
+        let caller_namespace = tw.namespace().unwrap_or("");
+        if caller_namespace.is_empty() {
+            return Err(AuthorizerError::permission_denied("token has empty namespace claim"));
+        }
+        self.check_at_or_below(caller_namespace, target_namespace)
+    }
+
+    /// Returns the JWK cache for direct key access.
+    pub fn jwk_cache(&self) -> &Arc<JwkCache> {
+        &self.jwk_cache
+    }
+
+    /// Returns whether the authorizer has any keys loaded.
+    pub fn has_keys(&self) -> bool {
+        self.jwk_cache.has_keys()
+    }
+
+    /// Returns the raw proto JWKs for SM's jwk_cache() delegation.
+    pub fn jwk_protos(&self) -> Vec<ProtoJwk> {
+        self.jwk_cache.jwk_protos()
+    }
+
+    /// Parses the bearer token from an authorization header value and fully
+    /// verifies it before returning it:
+    /// - signature against a cached JWK looked up by kid (which also rejects
+    ///   unsigned or alg-stripped tokens — no key, no entry),
+    /// - expiry/nbf (inside `Token::verify`),
+    /// - token_use class (refresh/bootstrap/locality/external are rejected),
+    /// - audience matches this service.
+    ///
+    /// Every authorization entry point MUST pass through this gate before
+    /// trusting any claim — `Token::parse` alone only base64-decodes.
+    fn verify_bearer(&self, authorization: Option<&str>) -> Result<token::Token> {
+        let auth_header = authorization.unwrap_or("");
+        if auth_header.is_empty() {
+            return Err(AuthorizerError::unauthenticated("missing authorization header"));
+        }
+
+        let token_str = if auth_header.len() > 7
+            && auth_header[..7].eq_ignore_ascii_case("bearer ")
+        {
+            &auth_header[7..]
+        } else {
+            auth_header
+        };
+
+        // Parse token
+        let tw = token::Token::parse(token_str)
+            .map_err(|e| AuthorizerError::unauthenticated(format!("invalid token: {}", e)))?;
+
+        // Get kid and verify signature
+        let kid = tw
+            .kid()
+            .ok_or_else(|| AuthorizerError::unauthenticated("token missing key ID (kid)"))?
+            .to_string();
+
+        let jwk = self.jwk_cache.get(&kid);
+
+        if let Some(ref key) = jwk {
+            tw.verify(key)
+                .map_err(|e| AuthorizerError::unauthenticated(format!("token verification failed: {}", e)))?;
+        } else {
+            return Err(AuthorizerError::unauthenticated(format!(
+                "unknown signing key: {}",
+                kid
+            )));
+        }
+
+        // Reject refresh tokens — they should only be exchanged at the Mint endpoint.
+        let token_use = tw.token_use().unwrap_or("");
+        let is_refresh = token_use == "refresh"
+            || (token_use.is_empty()
+                && tw.custom_field("typ")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v == "refresh")
+                    .unwrap_or(false));
+        if is_refresh {
+            return Err(AuthorizerError::unauthenticated(
+                "refresh tokens cannot be used for API access",
+            ));
+        }
+
+        // Reject bootstrap, locality, and external tokens. External tokens are minted
+        // by the token authority for upstream services and must never be accepted internally.
+        if token_use == "bootstrap" || token_use == "locality" || token_use == "external" {
+            return Err(AuthorizerError::unauthenticated(format!(
+                "{} tokens cannot be used for API access",
+                token_use
+            )));
+        }
+
+        // Check aud matches service name
+        let aud = tw.audience().unwrap_or("");
+        if aud != SERVICE_NAME {
+            return Err(AuthorizerError::permission_denied(format!(
+                "token audience \"{}\" does not match service \"{}\"",
+                aud, SERVICE_NAME
+            )));
+        }
+
+        Ok(tw)
+    }
+
+    /// Authorizes a gRPC request by verifying token signature, audience, and
+    /// service_entitlements claim.
+    pub async fn authorize_grpc(
+        &self,
+        full_method: &str,
+        method: &str,
+        authorization: Option<&str>,
+        _metadata: &HashMap<String, String>,
+    ) -> Result<()> {
+        let tw = self.verify_bearer(authorization)?;
+
+        // S2S path: service/workload tokens carry structured identity claims
+        // (sub_type, sub, service_name). Authorization is receiver-side via
+        // auth_services RE2 patterns on the LOCATION-AGNOSTIC service path from
+        // Token::service_path() — the same service matches identically across
+        // clouds/accounts/AZs/clusters; raw sub/namespace are never matched directly.
+        let sub_type = tw.sub_type().unwrap_or("");
+        if sub_type == "service" || sub_type == "workload" {
+            let service_path = tw.service_path().map_err(|e| {
+                AuthorizerError::unauthenticated(format!("{}", e))
+            })?;
+            let patterns = self.method_auth_patterns.read().unwrap();
+            let allowed = patterns.get(method).ok_or_else(|| {
+                AuthorizerError::permission_denied(format!(
+                    "no auth_services policy configured for service caller \"{}\" on \"{}\"",
+                    service_path, method
+                ))
+            })?;
+            let matched = allowed.iter().any(|p| p.is_match(&service_path));
+            if !matched {
+                return Err(AuthorizerError::permission_denied(format!(
+                    "service \"{}\" not authorized for \"{}\"",
+                    service_path, method
+                )));
+            }
+            // Level-or-below checks for methods annotated with
+            // target_namespace_field are enforced by the generated service
+            // wrappers via check_at_or_below (applies to S2S too), unchanged.
+            return Ok(());
+        }
+
+        // C2S path: user tokens carry service_entitlements.
+        let te = tw.service_entitlements().ok_or_else(|| {
+            AuthorizerError::permission_denied("token missing service_entitlements claim")
+        })?;
+        self.authorize_by_service_entitlements(te, full_method, method)
+    }
+
+    /// Checks whether the token's service_entitlements value grants access to the
+    /// requested RPC method. Grant tokens are normalized through the generated grants helper.
+    fn authorize_by_service_entitlements(
+        &self,
+        te: &serde_json::Value,
+        full_method: &str,
+        method: &str,
+    ) -> Result<()> {
+        let required = method_grant_token(SERVICE_NAME, full_method, method);
+        let mut raw: Vec<String> = Vec::new();
+        if let Some(grants) = te.get("grants").and_then(|v| v.as_array()) {
+            for grant in grants {
+                if let Some(token) = grant.as_str() {
+                    raw.push(token.to_string());
+                } else if let Some(token) = grant.get("token").and_then(|v| v.as_str()) {
+                    raw.push(token.to_string());
+                }
+            }
+        }
+
+        let unknown_grants = unknown_grant_tokens(&raw);
+        if !unknown_grants.is_empty() {
+            tracing::warn!(
+                ?unknown_grants,
+                service = SERVICE_NAME,
+                required_grant = %required,
+                "dropping unknown service_entitlements grant(s); token grants remain fail-closed"
+            );
+        }
+
+        if normalize_grants(&raw).into_iter().any(|token| token == required) {
+            return Ok(());
+        }
+
+        Err(AuthorizerError::permission_denied(format!(
+            "method \"{}\" not in service_entitlements for service \"{}\"",
+            method, SERVICE_NAME
+        )))
+    }
+
+    /// Authenticates a gRPC request by verifying token signature, audience, and
+    /// expiry — but does NOT check entitlements.
+    /// Used for auth_any_user services where any valid, correctly-scoped token
+    /// is sufficient.
+    pub async fn authenticate_grpc(
+        &self,
+        authorization: Option<&str>,
+    ) -> Result<()> {
+        // auth_any_user: token is valid and correctly scoped — allow.
+        self.verify_bearer(authorization).map(|_| ())
+    }
+
+    /// Authorizes an HTTP request.
+    pub async fn authorize_http(
+        &self,
+        _method: &str,
+        path: &str,
+        authorization: Option<&str>,
+        _headers: &HashMap<String, String>,
+        _query_params: &HashMap<String, String>,
+    ) -> Result<()> {
+        // Extract method name from path for entitlements check
+        let method = path.rsplit('/').next().unwrap_or(path);
+        self.authorize_grpc(path, method, authorization, &HashMap::new())
+            .await
+    }
+
+    /// Synchronous token authentication: verifies signature, audience, expiry,
+    /// and token-use class. Does NOT check entitlements — suitable for enforcing
+    /// auth on routes that lack generated per-method entitlement wiring (i.e.
+    /// handler-provided additional_services). Fail-closed: missing, invalid, or
+    /// wrong-audience tokens are rejected.
+    pub fn authenticate(&self, authorization: Option<&str>) -> Result<()> {
+        self.verify_bearer(authorization).map(|_| ())
+    }
+
+    /// Cleans up resources. Safe to call multiple times.
+    pub async fn close(&self) {
+        // JWK watch cleanup handled by drop
+    }
+}
+
+// ============================================================================
+// Auth-enforcing tower layer for additional (hand-registered) services
+// ============================================================================
+//
+// Wraps every request through the tonic server with a mandatory token check
+// (signature + audience), failing closed on missing/invalid/wrong-audience
+// tokens. Health check paths are exempt (unauthenticated by design).
+//
+// Applied by the ServiceManager to protect handler-provided additional_services
+// routes that lack generated per-method auth wrappers. Generated services get a
+// redundant (harmless) second check — their own wrappers are the authoritative
+// gate, and this layer adds defence-in-depth.
+
+/// Tower layer that enforces token authentication on every request.
+#[derive(Clone)]
+pub struct AuthEnforcingLayer {
+    authorizer: Arc<Authorizer>,
+}
+
+impl AuthEnforcingLayer {
+    pub fn new(authorizer: Arc<Authorizer>) -> Self {
+        Self { authorizer }
+    }
+}
+
+impl<S> tower::Layer<S> for AuthEnforcingLayer {
+    type Service = AuthEnforcingService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        AuthEnforcingService {
+            inner,
+            authorizer: self.authorizer.clone(),
+        }
+    }
+}
+
+/// Tower service that checks token auth before forwarding to the inner service.
+/// Health check paths (`/grpc.health.v1.Health/`) are exempt.
+#[derive(Clone)]
+pub struct AuthEnforcingService<S> {
+    inner: S,
+    authorizer: Arc<Authorizer>,
+}
+
+impl<S, ReqBody, ResBody> tower::Service<hyper::http::Request<ReqBody>> for AuthEnforcingService<S>
+where
+    S: tower::Service<hyper::http::Request<ReqBody>, Response = hyper::http::Response<ResBody>>
+        + Clone
+        + Send
+        + 'static,
+    S::Future: Send + 'static,
+    S::Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send,
+    ReqBody: Send + 'static,
+    ResBody: Default + Send + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn std::future::Future<Output = std::result::Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::result::Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: hyper::http::Request<ReqBody>) -> Self::Future {
+        // Health check is unauthenticated by design (standard grpc.health.v1).
+        if req.uri().path().starts_with("/grpc.health.v1.Health/") {
+            let fut = self.inner.call(req);
+            return Box::pin(fut);
+        }
+
+        // Extract authorization header and verify token.
+        let auth_value = req
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        match self.authorizer.authenticate(auth_value.as_deref()) {
+            Ok(()) => {
+                let fut = self.inner.call(req);
+                Box::pin(fut)
+            }
+            Err(e) => {
+                // Build a gRPC error response directly. The status code and
+                // message are conveyed via grpc-status / grpc-message headers;
+                // the body is empty (standard gRPC error framing).
+                let grpc_code = if e.code == 16 { 16 } else { 7 }; // UNAUTHENTICATED : PERMISSION_DENIED
+                let mut response = hyper::http::Response::new(ResBody::default());
+                response.headers_mut().insert(
+                    "grpc-status",
+                    hyper::http::HeaderValue::from(grpc_code),
+                );
+                if let Ok(msg) = hyper::http::HeaderValue::from_str(&e.message) {
+                    response.headers_mut().insert("grpc-message", msg);
+                }
+                response.headers_mut().insert(
+                    "content-type",
+                    hyper::http::HeaderValue::from_static("application/grpc"),
+                );
+                Box::pin(async move {
+                    Ok(response)
+                })
+            }
+        }
+    }
+}
+
+fn method_grant_token(fallback_service: &str, full_method: &str, fallback_method: &str) -> String {
+    let (service_fqn, method) = match full_method.rsplit_once('/') {
+        Some((service, method)) => (service.trim_start_matches('/'), method),
+        None => ("", fallback_method),
+    };
+    let service_fqn = service_fqn.rsplit('/').next().unwrap_or(service_fqn);
+    let (package, service) = if service_fqn.is_empty() {
+        (fallback_service, fallback_service)
+    } else if let Some((package, service)) = service_fqn.rsplit_once('.') {
+        (package, service)
+    } else {
+        (fallback_service, service_fqn)
+    };
+    format!("{}_{}_{}", grant_token_part(package), grant_token_part(service), grant_token_part(method))
+}
+
+fn grant_token_part(value: &str) -> String {
+    let normalized = value.replace(['-', '.', '/'], "_");
+    let chars: Vec<char> = normalized.chars().collect();
+    let mut out = String::new();
+    for (i, ch) in chars.iter().enumerate() {
+        if i > 0 && ch.is_ascii_uppercase() {
+            let prev = chars[i - 1];
+            let next_lower = chars.get(i + 1).map(|c| c.is_ascii_lowercase()).unwrap_or(false);
+            if prev.is_ascii_lowercase()
+                || prev.is_ascii_digit()
+                || (prev.is_ascii_uppercase() && next_lower)
+            {
+                out.push('_');
+            }
+        }
+        out.push(ch.to_ascii_uppercase());
+    }
+    out
+}
+
+/// Creates a tonic::Request with an authorization header if a token provider is set.
+async fn authorized_request<T>(msg: T, token_provider: &Option<TokenProvider>) -> std::result::Result<tonic::Request<T>, String> {
+    let mut req = tonic::Request::new(msg);
+    if let Some(ref tp) = token_provider {
+        let token = tp().await
+            .map_err(|e| format!("token provider failed for JWK watch: {}", e))?;
+        let val = format!("Bearer {}", token).parse()
+            .map_err(|e| format!("invalid token metadata for JWK watch: {}", e))?;
+        req.metadata_mut().insert("authorization", val);
+    }
+    Ok(req)
+}
+
+/// Watches the JwkVerifyingKeysViewService for JWK updates. Reconnects on errors.
+async fn watch_jwks(
+    channel: tonic::transport::Channel,
+    jwks: Arc<RwLock<HashMap<String, Arc<jwk::ImmutableJwk>>>>,
+    raw_jwks: Arc<RwLock<Vec<ProtoJwk>>>,
+    token_provider: Option<TokenProvider>,
+) {
+    use servicemanager::auth::proto_jwk_to_lib;
+    loop {
+        let mut client = JwkVerifyingKeysViewServiceClient::new(channel.clone());
+        let req = match authorized_request(Default::default(), &token_provider).await {
+            Ok(req) => req,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to prepare authenticated JwkVerifyingKeysView watch request");
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+        match client.watch(req).await {
+            Ok(response) => {
+                let mut stream = response.into_inner();
+                loop {
+                    use tokio_stream::StreamExt;
+                    match stream.next().await {
+                        Some(Ok(resp)) => {
+                            let mut new_keys = HashMap::new();
+                            let mut new_raw = Vec::new();
+                            for (kid, proto) in &resp.entries {
+                                let lib_jwk = proto_jwk_to_lib(proto);
+                                match jwk::ImmutableJwk::new(lib_jwk) {
+                                    Ok(immutable) => {
+                                        new_keys.insert(kid.clone(), Arc::new(immutable));
+                                        new_raw.push(proto.clone());
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(kid = %kid, error = %e, "skipping invalid JWK from view");
+                                    }
+                                }
+                            }
+                            tracing::info!(count = new_keys.len(), "JWK view updated");
+                            *jwks.write().unwrap() = new_keys;
+                            *raw_jwks.write().unwrap() = new_raw;
+                        }
+                        Some(Err(e)) => {
+                            tracing::warn!(error = %e, "JwkVerifyingKeysView watch stream error");
+                            break;
+                        }
+                        None => {
+                            tracing::warn!("JwkVerifyingKeysView watch stream ended");
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to watch JwkVerifyingKeysView");
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+}
+
+// ============================================================================
+// Behavioral tests for the REAL Authorizer (PC-W-1, Rust leg — mirrors
+// go/chassis/grpcserver/authorizer_behavior_test.go.tmpl): mint real Ed25519
+// JWTs, seed the matching JWK, and drive authorize_grpc /
+// check_caller_at_or_below over the actual verify path — signature, audience,
+// expiry, unknown-kid, tamper, S2S auth_services, C2S entitlements presence,
+// and the namespace level-or-below rule. No fake auth funcs. Gate-run via
+// `cargo test -p grpcserver` in the cross-test suites.
+// ============================================================================
+#[cfg(test)]
+mod authorizer_behavior_tests {
+    use super::*;
+    use key::keys;
+
+    const TEST_METHOD: &str = "/demo.DemoService/DoThing";
+    const METHOD: &str = "DoThing";
+
+    fn new_test_key() -> keys::ImmutableKey {
+        keys::generate_ed25519_key().expect("generate ed25519 key")
+    }
+
+    // jwk_for_key builds the verifying JWK (OKP/Ed25519) for a signing key,
+    // keyed by the key's id (the kid sign() stamps into the token header).
+    fn jwk_for_key(key: &keys::ImmutableKey) -> jwk::ImmutableJwk {
+        jwk_for_key_with_kid(key, key.id())
+    }
+
+    // jwk_for_key_with_kid is the forgery-capable variant: it publishes key's
+    // PUBLIC key under an arbitrary kid (the tamper test registers the wrong
+    // public key under the real kid).
+    fn jwk_for_key_with_kid(key: &keys::ImmutableKey, kid: &str) -> jwk::ImmutableJwk {
+        let x = match key.public_key() {
+            keys::PublicKey::Ed25519(ed) => {
+                use base64::Engine;
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(ed.as_bytes())
+            }
+            _ => panic!("expected ed25519 public key"),
+        };
+        jwk::ImmutableJwk::new(jwk::jwk::Jwk {
+            kty: "OKP".to_string(),
+            alg: Some("EdDSA".to_string()),
+            kid: kid.to_string(),
+            key_use: Some("sig".to_string()),
+            n: None,
+            e: None,
+            crv: Some("Ed25519".to_string()),
+            x: Some(x),
+            y: None,
+            exp: None,
+            created: None,
+        })
+        .expect("build jwk")
+    }
+
+    fn now_plus(secs: i64) -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_secs() as i64
+            + secs
+    }
+
+    // signed_token mints a token with the given exp/audience, applies the
+    // customization, and signs it with key. Returns the bearer header value.
+    fn signed_token(
+        key: &keys::ImmutableKey,
+        exp: i64,
+        audience: &str,
+        customize: impl FnOnce(&mut token::Token),
+    ) -> String {
+        let mut tok = token::Token::new();
+        tok.set_issuer("test-issuer").expect("issuer");
+        tok.set_audience(audience).expect("audience");
+        tok.set_expiration(exp).expect("expiration");
+        customize(&mut tok);
+        tok.sign(key).expect("sign");
+        format!("Bearer {}", tok.base64().expect("signed token has base64"))
+    }
+
+    fn service_token(key: &keys::ImmutableKey, caller: &str) -> String {
+        signed_token(key, now_plus(3600), SERVICE_NAME, |tok| {
+            tok.set_sub_type("service").expect("sub_type");
+            tok.set_subject(caller).expect("subject");
+        })
+    }
+
+    fn empty_md() -> HashMap<String, String> {
+        HashMap::new()
+    }
+
+    // A valid, correctly-signed service token whose caller matches the
+    // method's auth_services pattern is authorized.
+    #[tokio::test]
+    async fn accepts_valid_service_token() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        a.set_method_auth(METHOD, &["caller-svc"]);
+        let tok = service_token(&key, "caller-svc");
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+            .await
+            .expect("valid service token must be authorized");
+    }
+
+    // A service caller that does not match auth_services is denied.
+    #[tokio::test]
+    async fn rejects_service_not_in_auth_services() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        a.set_method_auth(METHOD, &["allowed-svc"]);
+        let tok = service_token(&key, "other-svc");
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+            .await
+            .expect_err("service not in auth_services must be denied");
+    }
+
+    // An expired token is rejected even with a valid signature.
+    #[tokio::test]
+    async fn rejects_expired_token() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        a.set_method_auth(METHOD, &["caller-svc"]);
+        let tok = signed_token(&key, now_plus(-3600), SERVICE_NAME, |tok| {
+            tok.set_sub_type("service").expect("sub_type");
+            tok.set_subject("caller-svc").expect("subject");
+        });
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+            .await
+            .expect_err("expired token must be rejected");
+    }
+
+    // A token whose audience does not match this service is rejected.
+    #[tokio::test]
+    async fn rejects_wrong_audience() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        a.set_method_auth(METHOD, &["caller-svc"]);
+        let tok = signed_token(&key, now_plus(3600), &format!("{}-not-me", SERVICE_NAME), |tok| {
+            tok.set_sub_type("service").expect("sub_type");
+            tok.set_subject("caller-svc").expect("subject");
+        });
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+            .await
+            .expect_err("wrong audience must be rejected");
+    }
+
+    // A token signed by a key whose kid is not in the cache is rejected.
+    #[tokio::test]
+    async fn rejects_unknown_kid() {
+        let key = new_test_key();
+        // Seed a DIFFERENT key so the token's kid is unknown.
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&new_test_key())]);
+        a.set_method_auth(METHOD, &["caller-svc"]);
+        let tok = service_token(&key, "caller-svc");
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+            .await
+            .expect_err("token with an unknown signing key must be rejected");
+    }
+
+    // A JWK under the REAL kid but with the WRONG public key must not verify —
+    // the CA-only/blind-trust hole.
+    #[tokio::test]
+    async fn rejects_tampered_signature() {
+        let real_key = new_test_key();
+        let wrong_key = new_test_key();
+        let forged = jwk_for_key_with_kid(&wrong_key, real_key.id());
+        let a = Authorizer::with_seeded_jwks(vec![forged]);
+        a.set_method_auth(METHOD, &["caller-svc"]);
+        let tok = service_token(&real_key, "caller-svc");
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+            .await
+            .expect_err("token verified against a mismatched public key must be rejected");
+    }
+
+    // A user (C2S) token with no service_entitlements claim is denied —
+    // entitlements are fail-closed.
+    #[tokio::test]
+    async fn rejects_user_token_missing_entitlements() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        let tok = signed_token(&key, now_plus(3600), SERVICE_NAME, |tok| {
+            tok.set_sub_type("user").expect("sub_type");
+            tok.set_subject("someone@example.com").expect("subject");
+        });
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+            .await
+            .expect_err("user token missing service_entitlements must be denied");
+    }
+
+    // check_caller_at_or_below enforces the universal namespace rule: the
+    // caller's namespace must be at or above the target.
+    #[tokio::test]
+    async fn namespace_level_or_below_rule() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+
+        // Caller in "/a" is at-or-above the target "/a/b" -> allowed.
+        let above = signed_token(&key, now_plus(3600), SERVICE_NAME, |tok| {
+            tok.set_sub_type("service").expect("sub_type");
+            tok.set_subject("caller-svc").expect("subject");
+            tok.set_namespace("/a").expect("namespace");
+        });
+        a.check_caller_at_or_below(Some(&above), "/a/b")
+            .expect("caller at-or-above target must be allowed");
+
+        // Caller in "/a/b" is BELOW the target "/a" -> denied.
+        let below = signed_token(&key, now_plus(3600), SERVICE_NAME, |tok| {
+            tok.set_sub_type("service").expect("sub_type");
+            tok.set_subject("caller-svc").expect("subject");
+            tok.set_namespace("/a/b").expect("namespace");
+        });
+        a.check_caller_at_or_below(Some(&below), "/a")
+            .expect_err("caller below the target namespace must be denied");
+    }
+}

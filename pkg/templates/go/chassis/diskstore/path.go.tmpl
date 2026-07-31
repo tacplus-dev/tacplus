@@ -1,0 +1,75 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package diskstore
+
+// Multi-tenant nested on-disk layout.
+//
+// Layout: <base>/<tenant>/<project>/<store>.<suffix>
+//
+// A namespace (ns) is ROOT / Tenant / Project — always rooted at "/", with
+// a-z0-9 segments (e.g. "/", "/drpepper", "/drpepper/default"). Each segment
+// becomes a real directory, so:
+//   - the root ns "/" -> <base>/_root/,
+//   - a tenant ns "/drpepper" -> <base>/drpepper/,
+//   - a project ns "/drpepper/default" -> <base>/drpepper/default/.
+//
+// Tenants are never mingled, and deletion is a directory removal that cascades
+// naturally: DeleteNamespace on "/drpepper" removes all of that tenant's
+// projects; on "/drpepper/default" removes just that project; on "/" removes
+// only root's own data (tenants are siblings, not children, of _root).
+
+import (
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// RootTenant is the default tenant: the root namespace.
+const RootTenant = "/"
+
+// RootSeg is the directory segment used for the root namespace "/".
+const RootSeg = "_root"
+
+// NsSegments splits a namespace into directory segments. Root (or empty) ->
+// [_root]; otherwise the non-empty "/"-separated components (a-z0-9).
+func NsSegments(ns string) []string {
+	var parts []string
+	for _, s := range strings.Split(ns, "/") {
+		if s != "" {
+			parts = append(parts, s)
+		}
+	}
+	if len(parts) == 0 {
+		return []string{RootSeg}
+	}
+	return parts
+}
+
+// NsDir returns the directory holding a namespace's store files: <base>/<seg...>.
+func NsDir(base, ns string) string {
+	p := base
+	for _, seg := range NsSegments(ns) {
+		p = filepath.Join(p, seg)
+	}
+	return p
+}
+
+// StorePath returns the full path for a store file:
+// <base>/<ns-dirs>/<store><suffix>.
+func StorePath(base, ns, store, suffix string) string {
+	return filepath.Join(NsDir(base, ns), store+suffix)
+}
+
+// DeleteNamespace removes a namespace's data — its directory, cascading to
+// children. For a tenant ns ("/drpepper") this removes all of its projects; for
+// a project ns ("/drpepper/default") just that project. Idempotent (a missing
+// dir is ok).
+func DeleteNamespace(base, ns string) error {
+	err := os.RemoveAll(NsDir(base, ns))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return wrapIOError(err)
+	}
+	return nil
+}

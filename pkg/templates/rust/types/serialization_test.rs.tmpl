@@ -1,0 +1,63 @@
+{{- /* Rust serialization test template */ -}}
+#[test]
+fn test_{{.SnakeName}}_to_json() {
+let msg = {{.TypeName}}::default();
+let result = {{.SnakeName}}_to_json(&msg);
+assert!(result.is_ok(), "Failed to serialize to JSON: {:?}", result.err());
+}
+#[test]
+fn test_{{.SnakeName}}_to_json_pretty() {
+let msg = {{.TypeName}}::default();
+let result = {{.SnakeName}}_to_json_pretty(&msg);
+assert!(result.is_ok(), "Failed to serialize to pretty JSON: {:?}", result.err());
+}
+#[test]
+fn test_{{.SnakeName}}_to_binary() {
+let msg = {{.TypeName}}::default();
+let result = {{.SnakeName}}_to_binary(&msg);
+assert!(result.is_ok(), "Failed to serialize to binary: {:?}", result.err());
+}
+#[test]
+fn test_{{.SnakeName}}_from_json() {
+let msg = {{.TypeName}}::default();
+let json_bytes = {{.SnakeName}}_to_json(&msg).unwrap();
+let result = {{.SnakeName}}_from_json(&json_bytes);
+assert!(result.is_ok(), "Failed to deserialize from JSON: {:?}", result.err());
+}
+#[test]
+fn test_{{.SnakeName}}_from_binary() {
+let msg = {{.TypeName}}::default();
+let binary_bytes = {{.SnakeName}}_to_binary(&msg).unwrap();
+let result = {{.SnakeName}}_from_binary(&binary_bytes);
+assert!(result.is_ok(), "Failed to deserialize from binary: {:?}", result.err());
+}
+#[test]
+fn test_{{.SnakeName}}_from_bytes_json() {
+let msg = {{.TypeName}}::default();
+let json_bytes = {{.SnakeName}}_to_json(&msg).unwrap();
+let result = {{.SnakeName}}_from_bytes(&json_bytes);
+assert!(result.is_ok(), "Failed to auto-detect and parse JSON: {:?}", result.err());
+}
+#[test]
+fn test_{{.SnakeName}}_from_bytes_binary() {
+let msg = {{.TypeName}}::default();
+let binary_bytes = {{.SnakeName}}_to_binary(&msg).unwrap();
+let result = {{.SnakeName}}_from_bytes(&binary_bytes);
+assert!(result.is_ok(), "Failed to auto-detect and parse binary: {:?}", result.err());
+}
+#[test]
+fn test_{{.SnakeName}}_roundtrip_json() {
+let msg = {{.TypeName}}::default();
+let json_bytes = {{.SnakeName}}_to_json(&msg).unwrap();
+let decoded = {{.SnakeName}}_from_json(&json_bytes).unwrap();
+let json_bytes2 = {{.SnakeName}}_to_json(&decoded).unwrap();
+assert_eq!(json_bytes, json_bytes2, "JSON round-trip failed");
+}
+#[test]
+fn test_{{.SnakeName}}_roundtrip_binary() {
+let msg = {{.TypeName}}::default();
+let binary_bytes = {{.SnakeName}}_to_binary(&msg).unwrap();
+let decoded = {{.SnakeName}}_from_binary(&binary_bytes).unwrap();
+let binary_bytes2 = {{.SnakeName}}_to_binary(&decoded).unwrap();
+assert_eq!(binary_bytes, binary_bytes2, "Binary round-trip failed");
+}

@@ -1,0 +1,383 @@
+{{.Header}}
+package {{.FullPackage}};
+
+import io.grpc.stub.StreamObserver;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+{{if .TypesImport}}
+{{.TypesImport}}{{end}}
+import {{.ServiceManagerImport}}.Caller;
+import {{.ServiceManagerImport}}.Auth;
+{{- if .AccountingImports}}
+{{.AccountingImports}}
+{{- end}}
+{{.TraceTypesImport}}
+
+/**
+ * {{.ServerClassName}} wraps a {{.ServiceName}}Handler with authorization and optional validation.
+ *
+ * Generated from: {{.ProtoFile}}
+ */
+public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}ImplBase {
+
+{{.HandlerInterface}}
+
+    /** Authorizer interface for authorization checks. */
+    @FunctionalInterface
+    public interface Authorizer {
+        void authorize(String fullMethod, Object request) throws ProtoException;
+    }
+
+    /** Authenticator interface for token-only verification (auth_any_user). */
+    @FunctionalInterface
+    public interface Authenticator {
+        void authenticate(String targetNamespace) throws ProtoException;
+    }
+
+    private static final Logger logger = LoggerFactory.getLogger({{.ServerClassName}}.class);
+
+    private final {{.ServiceName}}Handler handler;
+{{.WatchFields}}
+{{- if .RequiresAuth}}
+    private final {{.AuthorizerFQN}} authorizer;
+{{- end}}
+    private volatile Authenticator authenticator;
+{{- if .HasAccounting}}
+    private volatile AccountingManager.Emitter emitter;
+{{- end}}
+    private static final String SERVICE_NAME = "{{.ServiceLabel}}";
+    private volatile String instanceId = "";
+    private volatile byte[] anonymizeHmacKey = new byte[0];
+
+    /**
+     * Creates a wrapper.
+{{- if .RequiresAuth}}
+     * The Authorizer is mandatory: security is generated, fail-closed, and cannot
+     * be disabled. A null authorizer throws at construction.
+{{- else}}
+     * This service is auth_disabled / c2d by proto annotation — no authorizer.
+{{- end}}
+     */
+    public {{.ServerClassName}}({{.ServiceName}}Handler handler{{if .RequiresAuth}}, {{.AuthorizerFQN}} authorizer{{end}}) {
+        this.handler = handler;
+{{- if .RequiresAuth}}
+        this.authorizer = java.util.Objects.requireNonNull(authorizer,
+                "authorizer is required — security is mandatory and cannot be disabled");
+{{- end}}
+    }
+
+    /**
+     * Sets the authentication function (auth_any_user: token-only verification).
+     */
+    @SuppressWarnings("unchecked")
+    public void setAuthenticateFunc(Object authenticator) {
+        this.authenticator = (Authenticator) authenticator;
+    }
+
+    /** Sets the instance ID used for trace rounds. */
+    public void setInstanceId(String instanceId) {
+        this.instanceId = instanceId;
+    }
+
+    /**
+     * Sets the per-deployment data-entitlement ANONYMIZE secret the wrapper
+     * supplies to the generated sanitize transforms on record egress.
+     */
+    public void setAnonymizeHmacKey(byte[] key) {
+        this.anonymizeHmacKey = key == null ? new byte[0] : key;
+    }
+
+    /** Creates a new TraceRound with this wrapper's identity. */
+    private Trace.TraceRound traceRound() {
+        return Trace.TraceRound.newBuilder()
+                .setService(SERVICE_NAME)
+                .setInstanceId(instanceId)
+                .setTimestampMs(System.currentTimeMillis())
+                .build();
+    }
+
+    /** Functional interface for publishing trace events. */
+    @FunctionalInterface
+    public interface TracePublisher {
+        void publish(Trace.TraceEvent event);
+    }
+
+    private volatile TracePublisher tracePublisher;
+
+    /** Sets the callback for publishing trace events to the trace topic. */
+    public void setTracePublisher(TracePublisher publisher) {
+        this.tracePublisher = publisher;
+    }
+
+    /** Publishes a trace event if a publisher is configured. */
+    private void publishTrace(Trace.TraceEvent event) {
+        TracePublisher pub = this.tracePublisher;
+        if (pub != null) {
+            pub.publish(event);
+        }
+    }
+{{- if .HasAccounting}}
+
+    /** Sets the accounting emitter for this service wrapper. */
+    public void setEmitter(AccountingManager.Emitter emitter) {
+        this.emitter = emitter;
+    }
+
+    private void emitRpcCompleted(AccountingMethod accountingMethod, long startTime, String requestId) {
+        AccountingManager.Emitter em = this.emitter;
+        if (em == null) {
+            return;
+        }
+        long durationMs = System.currentTimeMillis() - startTime;
+        em.rpcCompleted(accountingMethod, durationMs, new java.util.HashMap<>(), requestId);
+    }
+
+    private void emitRpcError(AccountingMethod accountingMethod, Throwable t, long startTime, String requestId) {
+        AccountingManager.Emitter em = this.emitter;
+        if (em == null) {
+            return;
+        }
+        long durationMs = System.currentTimeMillis() - startTime;
+        io.grpc.Status.Code code = AccountingManager.grpcCodeFromError(t);
+        em.rpcError(accountingMethod, code.value(), t.getMessage(), durationMs,
+                AccountingManager.errorContextFromError(t, AccountingManager.shouldCaptureStack(code)),
+                new java.util.HashMap<>(), requestId);
+    }
+
+    private <T> StreamObserver<T> accountingResponseObserver(
+            StreamObserver<T> delegate,
+            AccountingMethod accountingMethod,
+            long startTime,
+            String requestId,
+            java.util.concurrent.atomic.AtomicBoolean accounted) {
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        return new StreamObserver<T>() {
+            @Override
+            public void onNext(T value) {
+                delegate.onNext(value);
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                if (closed.compareAndSet(false, true)) {
+                    if (accounted.compareAndSet(false, true)) {
+                        emitRpcError(accountingMethod, t, startTime, requestId);
+                    }
+                    delegate.onError(t);
+                }
+            }
+
+            @Override
+            public void onCompleted() {
+                if (closed.compareAndSet(false, true)) {
+                    if (accounted.compareAndSet(false, true)) {
+                        emitRpcCompleted(accountingMethod, startTime, requestId);
+                    }
+                    delegate.onCompleted();
+                }
+            }
+        };
+    }
+
+    private <T> StreamObserver<T> accountingRequestObserver(
+            StreamObserver<T> delegate,
+            AccountingMethod accountingMethod,
+            long startTime,
+            String requestId,
+            java.util.concurrent.atomic.AtomicBoolean accounted) {
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        return new StreamObserver<T>() {
+            @Override
+            public void onNext(T value) {
+                if (closed.get()) {
+                    return;
+                }
+                try {
+                    delegate.onNext(value);
+                } catch (Throwable t) {
+                    if (accounted.compareAndSet(false, true)) {
+                        emitRpcError(accountingMethod, t, startTime, requestId);
+                    }
+                    throw t;
+                }
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                if (closed.compareAndSet(false, true)) {
+                    if (accounted.compareAndSet(false, true)) {
+                        emitRpcError(accountingMethod, t, startTime, requestId);
+                    }
+                    delegate.onError(t);
+                }
+            }
+
+            @Override
+            public void onCompleted() {
+                if (!closed.get()) {
+                    delegate.onCompleted();
+                }
+            }
+        };
+    }
+{{- end}}
+
+{{- if .RequiresAuth}}
+    /** Check authorization. Always enforced — the authorizer is mandatory. */
+    private void checkAuth(String fullMethod, Object request) throws ProtoException {
+        authorizer.authorize(fullMethod, request);
+    }
+{{- else}}
+    /** No authorization — this service is auth_disabled / c2d by proto annotation. */
+    private void checkAuth(String fullMethod, Object request) throws ProtoException {
+    }
+{{- end}}
+
+    /** Check authentication at the root namespace. Fail-closed if not wired. */
+    private void checkAuthenticate() throws ProtoException {
+        checkAuthenticate("/");
+    }
+
+    /** Check authentication and enforce a fixed namespace target. */
+    private void checkAuthenticate(String targetNamespace) throws ProtoException {
+        Authenticator auth = this.authenticator;
+        if (auth == null) {
+            throw ProtoException.newErrUnauthorized(null,
+                    "authenticator not configured — auth is mandatory and cannot be disabled");
+        }
+        auth.authenticate(targetNamespace);
+    }
+
+    /**
+     * Converts any Throwable to a gRPC StatusRuntimeException using ProtoException codes.
+     */
+    private static io.grpc.StatusRuntimeException toGrpcError(Throwable t) {
+        if (t instanceof io.grpc.StatusRuntimeException) {
+            return (io.grpc.StatusRuntimeException) t;
+        }
+        if (t instanceof ProtoException) {
+            ProtoException pe = (ProtoException) t;
+            return io.grpc.Status.fromCodeValue(pe.getCode())
+                    .withDescription(pe.getMessage())
+                    .withCause(pe)
+                    .asRuntimeException();
+        }
+        return io.grpc.Status.INTERNAL
+                .withDescription(t.getMessage())
+                .withCause(t)
+                .asRuntimeException();
+    }
+
+    @FunctionalInterface
+    private interface MessageValidator<T> {
+        void validate(T value) throws ProtoException;
+    }
+
+    private static ProtoException responseValidationError(Throwable t) {
+        String message = t.getMessage() == null ? "response validation failed" : "response validation failed: " + t.getMessage();
+        return new ProtoException(ProtoException.INTERNAL, message, t);
+    }
+
+    private static <T> StreamObserver<T> noopRequestObserver() {
+        return new StreamObserver<T>() {
+            @Override public void onNext(T value) {}
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+    }
+
+    private static <T> StreamObserver<T> validatingRequestObserver(
+            StreamObserver<T> delegate,
+            MessageValidator<T> validator,
+            StreamObserver<?> responseObserver) {
+        if (validator == null) {
+            return delegate;
+        }
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        return new StreamObserver<T>() {
+            @Override
+            public void onNext(T value) {
+                if (closed.get()) {
+                    return;
+                }
+                try {
+                    validator.validate(value);
+                    delegate.onNext(value);
+                } catch (Throwable t) {
+                    if (closed.compareAndSet(false, true)) {
+                        responseObserver.onError(toGrpcError(t));
+                    }
+                }
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                if (closed.compareAndSet(false, true)) {
+                    delegate.onError(t);
+                }
+            }
+
+            @Override
+            public void onCompleted() {
+                if (!closed.get()) {
+                    delegate.onCompleted();
+                }
+            }
+        };
+    }
+
+    private static <T> StreamObserver<T> validatingResponseObserver(
+            StreamObserver<T> delegate,
+            MessageValidator<T> validator) {
+        if (validator == null) {
+            return delegate;
+        }
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        return new StreamObserver<T>() {
+            @Override
+            public void onNext(T value) {
+                if (closed.get()) {
+                    return;
+                }
+                try {
+                    validator.validate(value);
+                    delegate.onNext(value);
+                } catch (Throwable t) {
+                    if (closed.compareAndSet(false, true)) {
+                        delegate.onError(toGrpcError(responseValidationError(t)));
+                    }
+                }
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                if (closed.compareAndSet(false, true)) {
+                    delegate.onError(t);
+                }
+            }
+
+            @Override
+            public void onCompleted() {
+                if (!closed.get()) {
+                    delegate.onCompleted();
+                }
+            }
+        };
+    }
+
+    // ==================== gRPC Methods with Validation ====================
+
+{{.GRPCMethods}}
+    // ==================== gRPC Service Registration ====================
+
+    /**
+     * Registers the gRPC service with the server.
+     */
+    public void registerServices(io.grpc.ServerBuilder<?> grpcServerBuilder) {
+        grpcServerBuilder.addService(this);
+    }
+{{- if .RegisterMethodAuth}}
+
+{{.RegisterMethodAuth}}
+{{- end}}
+}

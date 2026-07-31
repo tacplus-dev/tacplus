@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Constants for logger configuration
+
+/// Prefix for environment variable names
+pub const KIND_PREPEND: &str = "";
+
+/// Environment variable name for configuring the log level.
+/// Set this to one of: trace, debug, info, warn, error.
+/// Example: export LogLevel=debug
+pub const LOG_LEVEL_ENV_VAR: &str = "LogLevel";
+
+/// Environment variable name for configuring the log format.
+/// Set this to one of: json, console.
+/// Example: export LogFormat=console
+pub const LOG_FORMAT_ENV_VAR: &str = "LogFormat";
+
+/// Default time format used for formatting log timestamps.
+/// Format: "YYYY-MM-DD HH:MM:SS"
+pub const DEFAULT_TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";

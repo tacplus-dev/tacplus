@@ -1,0 +1,23 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+syntax = "proto3";
+
+package eventbus;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "eventbus"};
+
+// Minimal EventBus broker for the contract fixture set. Synthesized record/event
+// topics carry the broker tag "eventbus" (see tacplus
+// pkg/internal/common/parser/synthesize_eventbus.go); BuildTopicRegistry requires
+// a loaded gRPC service with that identity. This mirrors the real
+// sys/eventbus.proto broker (package "eventbus") so the cross-test exercises
+// the synthesized record→topic path the fleet uses.
+message EventBusPing {}
+
+service EventBusBroker {
+  option (spec.service_s2s) = {auth_services: ["*"]};
+
+  rpc Ping(EventBusPing) returns (EventBusPing);
+}

@@ -1,0 +1,62 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+Error type for the disk store, with gRPC-compatible error codes
+(mirrors the httpclient ProtoError shape).
+"""
+
+
+class DiskStoreError(Exception):
+    """Disk-store error with a gRPC-compatible code and a human-readable message.
+
+    Attributes:
+        code: gRPC-compatible error code (int).
+        message: Human-readable error message.
+    """
+
+    def __init__(self, code: int, message: str):
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+    # --- Constructors mirroring the Rust DiskStoreError helpers ---
+
+    @classmethod
+    def io(cls, msg: str) -> "DiskStoreError":
+        """I/O failure (code 13: INTERNAL)."""
+        return cls(13, f"disk I/O failed: {msg}")
+
+    @classmethod
+    def general(cls, msg: str) -> "DiskStoreError":
+        """General error (code 13: INTERNAL)."""
+        return cls(13, str(msg))
+
+    @classmethod
+    def not_found(cls, msg: str) -> "DiskStoreError":
+        """Not found (code 5: NOT_FOUND)."""
+        return cls(5, f"not found: {msg}")
+
+    @classmethod
+    def invalid_data(cls, msg: str) -> "DiskStoreError":
+        """Invalid data / argument (code 3: INVALID_ARGUMENT)."""
+        return cls(3, f"invalid data: {msg}")
+
+    @classmethod
+    def validation_failed(cls, msg: str) -> "DiskStoreError":
+        """Type validation failed on read (code 3: INVALID_ARGUMENT)."""
+        return cls(3, f"validation failed: {msg}")
+
+    @classmethod
+    def codec(cls, msg: str) -> "DiskStoreError":
+        """Serialize/deserialize failure (code 13: INTERNAL)."""
+        return cls(13, f"codec error: {msg}")
+
+    @classmethod
+    def from_os_error(cls, e: OSError) -> "DiskStoreError":
+        """Maps an OSError to a DiskStoreError (NotFound → not_found, else io)."""
+        if isinstance(e, FileNotFoundError):
+            return cls.not_found(str(e))
+        return cls.io(str(e))
+
+    def __str__(self) -> str:
+        return self.message

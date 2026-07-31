@@ -1,0 +1,26 @@
+{{.Header}}
+
+package {{.Package}};
+
+import java.net.http.HttpClient;
+
+/**
+ * RestClients aggregates all typed REST client groups.
+ */
+public class RestClients {
+
+{{- range .Groups}}
+    private final {{.GroupPackage}}.RestClients {{.Name}};
+{{- end}}
+
+    public RestClients(HttpClient httpClient, String baseUrl) {
+{{- range .Groups}}
+        this.{{.Name}} = new {{.GroupPackage}}.RestClients(httpClient, baseUrl);
+{{- end}}
+    }
+{{range .Groups}}
+    public {{.GroupPackage}}.RestClients {{.MethodName}}() {
+        return this.{{.Name}};
+    }
+{{end}}
+}

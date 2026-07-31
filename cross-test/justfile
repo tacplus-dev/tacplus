@@ -1,0 +1,88 @@
+# Active cross-test gates for tacplus-generated code.
+#
+# Generated outputs must be written to ignored target/ directories, not
+# committed under cross-test language trees.
+
+set dotenv-load := false
+
+root := justfile_directory()
+
+default: current-generation consumer-build
+
+current-generation:
+    bash {{root}}/current-generation/run.sh
+
+current-generation-go:
+    bash {{root}}/current-generation/run.sh --language go
+
+current-generation-java:
+    bash {{root}}/current-generation/run.sh --language java
+
+current-generation-rust:
+    bash {{root}}/current-generation/run.sh --language rust
+
+determinism:
+    bash {{root}}/determinism/run.sh
+
+determinism-go:
+    bash {{root}}/determinism/run.sh --language go
+
+determinism-rust:
+    bash {{root}}/determinism/run.sh --language rust
+
+determinism-python:
+    bash {{root}}/determinism/run.sh --language python
+
+determinism-typescript:
+    bash {{root}}/determinism/run.sh --language typescript
+
+determinism-java:
+    bash {{root}}/determinism/run.sh --language java
+
+consumer-build:
+    bash {{root}}/consumer-contract/run.sh
+
+consumer-build-go:
+    bash {{root}}/consumer-contract/run.sh --language go
+
+consumer-build-java:
+    bash {{root}}/consumer-contract/run.sh --language java
+
+consumer-build-python:
+    bash {{root}}/consumer-contract/run.sh --language python
+
+consumer-build-rust:
+    bash {{root}}/consumer-contract/run.sh --language rust
+
+consumer-build-typescript:
+    bash {{root}}/consumer-contract/run.sh --language typescript
+
+consumer-build-swift:
+    bash {{root}}/consumer-contract/run.sh --language swift
+
+runtime-smoke:
+    bash {{root}}/runtime-smoke/run.sh
+
+runtime-smoke-python:
+    bash {{root}}/runtime-smoke/run.sh --consumer python
+
+runtime-smoke-typescript:
+    bash {{root}}/runtime-smoke/run.sh --consumer typescript
+
+consumer-smoke:
+    bash {{root}}/consumer-smoke/run.sh
+
+consumer-smoke-go:
+    bash {{root}}/consumer-smoke/run.sh --language go
+
+consumer-smoke-java:
+    bash {{root}}/consumer-smoke/run.sh --language java
+
+consumer-smoke-python:
+    bash {{root}}/consumer-smoke/run.sh --language python
+
+consumer-smoke-rust:
+    bash {{root}}/consumer-smoke/run.sh --language rust
+
+consumer-smoke-typescript:
+    bash {{root}}/consumer-smoke/run.sh --language typescript

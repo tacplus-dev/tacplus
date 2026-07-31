@@ -1,0 +1,75 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// CODE GENERATED - DO NOT EDIT
+
+package {{.ChassisBase}}.collection;
+
+import java.util.List;
+
+// Behavioral self-test for the PAGE token codec (PC-C-2): the token must be
+// BYTE-IDENTICAL across the go/rust/java server backends — a token minted by
+// one backend decodes on any other. The golden vectors below are pinned
+// verbatim in the go page_behavior_test and the rust collection page_tests.
+// Run as a plain main-method self-test by the cross-test gates (like
+// ServiceConnectionTest / AuthorizerBehaviorTest).
+public class CollectionRuntimeTest {
+    private static int failures = 0;
+
+    // Cross-language golden vectors.
+    private static final String VECTOR_SIMPLE = "eyJ2IjoxLCJrIjpbImFiYyIsIjEyMyJdfQ";
+    private static final String VECTOR_UNICODE = "eyJ2IjoxLCJrIjpbImFcImJcXGMiLCI8eD4mw6kiLCJsaW5l4oCoc2VwIl19";
+    private static final String VECTOR_BACKSLASH = "eyJ2IjoxLCJrIjpbIlxcdTIwMjgiXX0";
+
+    private static void check(boolean ok, String message) {
+        if (!ok) {
+            System.err.println("FAIL: " + message);
+            failures++;
+        }
+    }
+
+    private static void pinAndRoundtrip(String name, List<String> keys, String vector) {
+        String token = CollectionRuntime.encodePageToken(new CollectionRuntime.Cursor(keys));
+        check(vector.equals(token), name + " token drifted from the cross-language vector: " + token);
+        CollectionRuntime.Cursor back = CollectionRuntime.decodePageToken(token);
+        check(back != null && keys.equals(back.keys), name + " roundtrip mismatch: " + (back == null ? null : back.keys));
+    }
+
+    public static void main(String[] args) {
+        pinAndRoundtrip("simple", List.of("abc", "123"), VECTOR_SIMPLE);
+        // JSON string escapes, raw (unescaped-HTML) < > & and é, and a raw
+        // U+2028 LINE SEPARATOR — the parity hazards in one token.
+        pinAndRoundtrip("unicode", List.of("a\"b\\c", "<x>&é", "line sep"), VECTOR_UNICODE);
+        // A key containing the LITERAL text backslash-u-2-0-2-8 must survive
+        // byte-identically (pins the go codec's escaped-backslash walk).
+        pinAndRoundtrip("escaped-backslash", List.of("\\u2028"), VECTOR_BACKSLASH);
+
+        // Empty token decodes to null (first page).
+        check(CollectionRuntime.decodePageToken("") == null, "empty token must decode to null cursor");
+
+        // Malformed tokens throw INVALID_ARGUMENT — never a silent reset to page 1.
+        for (String bad : new String[] {
+            "!!!not-base64!!!",
+            "YWJj",                         // valid b64 "abc" but not our envelope
+            "eyJ2IjoyLCJrIjpbImFiYyJdfQ",   // wrong version
+            "eyJ2IjoxLCJrIjpbImFiYyJdfQ==", // padded base64 is not our alphabet
+        }) {
+            try {
+                CollectionRuntime.decodePageToken(bad);
+                check(false, "malformed token must be rejected: " + bad);
+            } catch (io.grpc.StatusRuntimeException expected) {
+                check(expected.getStatus().getCode() == io.grpc.Status.Code.INVALID_ARGUMENT,
+                    "malformed token must map to INVALID_ARGUMENT, got " + expected.getStatus());
+            }
+        }
+
+        // Trust-tier page-size clamp.
+        check(CollectionRuntime.effectivePageSize(0, 50, 10000) == 50, "unset requested must default");
+        check(CollectionRuntime.effectivePageSize(999999, 50, 100) == 100, "oversized requested must clamp");
+        check(CollectionRuntime.effectivePageSize(20, 50, 10000) == 20, "in-range requested must pass through");
+
+        if (failures > 0) {
+            System.err.println(failures + " CollectionRuntime check(s) FAILED");
+            System.exit(1);
+        }
+        System.out.println("CollectionRuntimeTest: all checks passed");
+    }
+}

@@ -1,0 +1,97 @@
+{{.Header}}
+
+// Per-service_store typed disk-persistence helpers (TypeScript).
+// UC1 = atomic snapshot (save/load); UC2 = redo log (open/record/decode).
+// Serialization goes through protobuf-es toJson/fromJson; validation
+// (always on) runs on read.
+
+import { toJson, fromJson } from '@bufbuild/protobuf';
+import * as diskstore from '{{.DiskstoreImport}}';
+{{range .Imports}}import * as {{.Alias}} from '{{.ImportPath}}';
+{{end}}
+{{range .Stores}}
+/** Atomically save the latest {{.StoreName}} snapshot (UC1). */
+export function save{{.StorePascal}}(
+  base: string,
+  ns: string,
+  msg: {{.TypeRef}},
+  opts: diskstore.SnapshotOpts,
+): void {
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(JSON.stringify(toJson({{.SchemaRef}}, msg)), 'utf8');
+  } catch (e) {
+    throw diskstore.DiskStoreError.codec(String(e));
+  }
+  const path = diskstore.storePath(base, ns, '{{.StoreName}}', '.snapshot');
+  diskstore.writeSnapshot(path, bytes, opts);
+}
+
+/** Load + validate the {{.StoreName}} snapshot (UC1). null if absent. */
+export function load{{.StorePascal}}(base: string, ns: string): {{.TypeRef}} | null {
+  const path = diskstore.storePath(base, ns, '{{.StoreName}}', '.snapshot');
+  const bytes = diskstore.readSnapshot(path);
+  if (bytes === null) {
+    return null;
+  }
+  let msg: {{.TypeRef}};
+  try {
+    msg = fromJson({{.SchemaRef}}, JSON.parse(bytes.toString('utf8')) as any);
+  } catch (e) {
+    throw diskstore.DiskStoreError.codec(String(e));
+  }
+  try {
+    {{.ValidateRef}}(msg);
+  } catch (e) {
+    throw diskstore.DiskStoreError.validationFailed(String(e));
+  }
+  return msg;
+}
+{{if not .SnapshotOnly}}
+/** Open the {{.StoreName}} redo log for the given namespace (UC2). */
+export function open{{.StorePascal}}Log(
+  base: string,
+  ns: string,
+  archiveCount: number,
+  codec: diskstore.Codec,
+): diskstore.RedoLog {
+  return diskstore.RedoLog.open(base, ns, '{{.StoreName}}', archiveCount, codec);
+}
+
+/** Build a redo record for a {{.StoreName}} upsert (UC2). */
+export function record{{.StorePascal}}(msg: {{.TypeRef}}): diskstore.Record {
+  let payload: unknown;
+  try {
+    payload = toJson({{.SchemaRef}}, msg);
+  } catch (e) {
+    throw diskstore.DiskStoreError.codec(String(e));
+  }
+  return {
+    key: String(msg.{{.KeyField}}),
+    deleted: false,
+    payload,
+  };
+}
+
+/** Decode + validate a {{.StoreName}} redo record (UC2). null for tombstones. */
+export function decode{{.StorePascal}}(rec: diskstore.Record): {{.TypeRef}} | null {
+  if (rec.deleted) {
+    return null;
+  }
+  if (rec.payload === undefined || rec.payload === null) {
+    throw diskstore.DiskStoreError.invalidData('record missing payload');
+  }
+  let msg: {{.TypeRef}};
+  try {
+    msg = fromJson({{.SchemaRef}}, rec.payload as any);
+  } catch (e) {
+    throw diskstore.DiskStoreError.codec(String(e));
+  }
+  try {
+    {{.ValidateRef}}(msg);
+  } catch (e) {
+    throw diskstore.DiskStoreError.validationFailed(String(e));
+  }
+  return msg;
+}
+{{end}}{{end}}

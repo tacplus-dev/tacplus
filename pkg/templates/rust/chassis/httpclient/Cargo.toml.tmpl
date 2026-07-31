@@ -1,0 +1,42 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+[package]
+name = "httpclient"
+version = "1.0.0"
+edition = "2021"
+authors = ["Second Star Cavalier LLC"]
+description = "Typed HTTP client with retry logic, TLS/mTLS support, and proto error handling"
+license = "Proprietary"
+
+[dependencies]
+# HTTP client
+reqwest = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Retry/backoff
+backoff = { version = "0.4", features = ["tokio"] }
+
+# Base64 encoding for certificates
+base64 = { workspace = true }
+
+# Logging
+log = { workspace = true }
+
+# Proto types - assuming they're in the workspace
+{{.CrateBasePath}}-types = { path = "../../types" }
+
+# TLS certificates
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+webpki-roots = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+env_logger = { workspace = true }
+wiremock = "0.6"

@@ -1,0 +1,1889 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// ============================================================================
+// DO NOT MODIFY THIS FILE
+// ============================================================================
+// This file defines custom protobuf options used by the tacplus compiler.
+// Modifying this file will break code generation for all languages.
+// Changes here require regenerating the compiler's internal descriptor code
+// and may break existing proto definitions that use these options.
+// ============================================================================
+
+syntax = "proto3";
+
+package spec;
+
+import "google/protobuf/descriptor.proto";
+
+// File-level string constants.
+// StringConst defines a named string constant that can be used in file-level options.
+message StringConst {
+  // Name is the identifier for the constant
+  string name = 1;
+  // Value is the string value of the constant
+  string value = 2;
+}
+
+// File-level int constants.
+// IntConst defines a named integer constant that can be used in file-level options.
+message IntConst {
+  // Name is the identifier for the constant
+  string name = 1;
+  // Value is the integer value of the constant
+  int64 value = 2;
+}
+
+// File-level float constants.
+// FloatConst defines a named floating-point constant that can be used in file-level options.
+message FloatConst {
+  // Name is the identifier for the constant
+  string name = 1;
+  // Value is the floating-point value of the constant
+  double value = 2;
+}
+
+// File-level bool constants.
+// BoolConst defines a named boolean constant that can be used in file-level options.
+message BoolConst {
+  // Name is the identifier for the constant
+  string name = 1;
+  // Value is the boolean value of the constant
+  bool value = 2;
+}
+
+// DefaultHost provides default values for host.Host fields.
+// Mirrors host.Host structure to avoid circular import with host.proto.
+message DefaultHost {
+  string host = 1;
+  int32 port = 2;
+}
+
+extend google.protobuf.FileOptions {
+  // StringConst defines string constants at the file level
+  repeated StringConst string_const = 50001;
+  // IntConst defines integer constants at the file level
+  repeated IntConst int_const = 50002;
+  // FloatConst defines floating-point constants at the file level
+  repeated FloatConst float_const = 50003;
+  // BoolConst defines boolean constants at the file level
+  repeated BoolConst bool_const = 50004;
+  // GenerateUserApi marks this proto file for user API code generation
+  // When true, tacplus will generate service wrappers, HTTP clients, and example implementations
+  bool generate_user_api = 50010;
+
+  // service declares the owning service identity for this proto file.
+  // This is the source of truth for the generated service schema injected into sys/tacplus.proto.
+  ServiceAnnotation service = 50011;
+
+  // state_imports is a legacy file-level mirror for field-level state_import roots.
+  // Prefer field-level state_import; if this option is present, it must exactly
+  // mirror the imported "package.StateName" roots derived from those fields.
+  repeated StateImport state_imports = 50012;
+
+  // opa_import declares dependencies on OPA eval definitions.
+  // Each entry references a "package.InputMessageName" that must have spec.opa_eval.
+  // tacplus generates typed client methods on the importing service's SM.
+  repeated OpaImport opa_import = 50013;
+
+  // graph_store marks this service as a graph data store. The store receives
+  // its projection data by subscribing to the EventBus topics that carry its
+  // projection sources (no mutation service is generated).
+  // Example: option (spec.graph_store) = {};
+  GraphStoreAnnotation graph_store = 50014;
+
+  // timeseries_store marks this service as a timeseries data store. The store
+  // receives its projection data by subscribing to the EventBus topics that
+  // carry its projection sources (no mutation service is generated).
+  // Example: option (spec.timeseries_store) = {};
+  TimeseriesStoreAnnotation timeseries_store = 50015;
+  // 50016, 50017 retired (graph_import/timeseries_import — push-mutation imports removed).
+
+  // grpc_s2s_client declares service-to-service gRPC client dependencies.
+  // tacplus generates typed gRPC client wrappers for each referenced service.
+  // Example: option (spec.grpc_s2s_client) = {service: "identity.Mint"};
+  repeated GrpcS2SClient grpc_s2s_client = 50018;
+
+  // grpc_c2s_client declares client-facing service dependencies for this service.
+  // tacplus.yaml selects whether those dependencies emit C2S, W2S, or both.
+  // Example: option (spec.grpc_c2s_client) = {service: "gateway.TokenMint"};
+  repeated GrpcC2SClient grpc_c2s_client = 50019;
+
+  // grpc_w2s_client declares browser/web client-facing service dependencies.
+  // tacplus.yaml selects whether those dependencies emit C2S, W2S, or both.
+  // Example: option (spec.grpc_w2s_client) = {service: "dashboard.Dashboard"};
+  repeated GrpcW2SClient grpc_w2s_client = 50020;
+
+  // all_grpc_s2s_clients declares that this service/client needs gRPC client
+  // wrappers for ALL gRPC services in the proto source. Intended for tooling
+  // (e.g. a CLI) that must be able to call every service.
+  // Example: option (spec.all_grpc_s2s_clients) = true;
+  bool all_grpc_s2s_clients = 50021;
+
+  // vservice declares a virtual service identity for this proto file.
+  // Virtual services are not physical processes — their RPCs are hosted by a
+  // physical service (identified by the service_event tag). vservice identity
+  // enables entitlement-based C2S authorization: aud targets the physical host
+  // while entitlements are checked against the vservice name.
+  // Example: option (spec.vservice) = {id: 30, name: "claudesensor"};
+  VServiceAnnotation vservice = 50022;
+
+  // record_store marks this service as the full-record store (stratum). Tiering
+  // (hot/cold) is internal to the service. tacplus auto-derives EventBus
+  // subscriptions for the record types it stores (currently spec.record).
+  // Example: option (spec.record_store) = {};
+  RecordStoreAnnotation record_store = 50023;
+  // 50024 retired (cold_store — tiering is internal to the store service).
+}
+
+// Enum value JSON serialization
+extend google.protobuf.EnumValueOptions {
+  // JsonReturnValue specifies the JSON representation for an enum value
+  string json_return_value = 50005;
+}
+
+// IpAddrTypes defines validation types for IP addresses, masks, and networks.
+// Used in field options to enforce IP address format validation.
+enum IpAddrTypes {
+	// IP_ADDR_TYPE_UNSPECIFIED represents an unspecified IP address type
+	IP_ADDR_TYPE_UNSPECIFIED = 0;
+	// IP_ADDR_TYPE_IP_V4 validates IPv4 addresses (e.g., 1.1.1.1)
+	IP_ADDR_TYPE_IP_V4 = 1;
+	// IP_ADDR_TYPE_IP_V6 validates IPv6 addresses (e.g., 2001:0db8:85a3:0000:0000:8a2e:0370:7334)
+	IP_ADDR_TYPE_IP_V6 = 2;
+	// IP_ADDR_TYPE_IP_ANY validates either IPv4 or IPv6 addresses
+	IP_ADDR_TYPE_IP_ANY = 3;
+	// IP_ADDR_TYPE_MASK_V4 validates IPv4 subnet masks (e.g., 0-32)
+	IP_ADDR_TYPE_MASK_V4 = 4;
+	// IP_ADDR_TYPE_MASK_V6 validates IPv6 subnet masks (e.g., 0-128)
+	IP_ADDR_TYPE_MASK_V6 = 5;
+	// IP_ADDR_TYPE_MASK_ANY validates either IPv4 or IPv6 subnet masks
+	IP_ADDR_TYPE_MASK_ANY = 6;
+	// IP_ADDR_TYPE_NET_V4 validates IPv4 CIDR networks (e.g., 1.1.1.1/32)
+	IP_ADDR_TYPE_NET_V4 = 7;
+	// IP_ADDR_TYPE_NET_V6 validates IPv6 CIDR networks (e.g., 2001:0db8:85a3::8a2e:0370:7334/128)
+	IP_ADDR_TYPE_NET_V6 = 8;
+	// IP_ADDR_TYPE_NET_ANY validates either IPv4 or IPv6 CIDR networks
+	IP_ADDR_TYPE_NET_ANY = 9;
+}
+
+// EncType defines validation types for cryptographic keys and certificates.
+// Used in field options to enforce key format and algorithm validation.
+enum EncType {
+  // ENC_TYPE_KEY_UNDEFINED represents an unspecified encryption key type
+  ENC_TYPE_KEY_UNDEFINED = 0;
+  // ENC_TYPE_KEY_PRIVATE_RSA validates private RSA keys in PEM format
+  ENC_TYPE_KEY_PRIVATE_RSA = 1;
+  // ENC_TYPE_KEY_PUBLIC_RSA validates public RSA keys in PEM format
+  ENC_TYPE_KEY_PUBLIC_RSA = 2;
+  // ENC_TYPE_KEY_ANY_RSA validates either private or public RSA keys
+  ENC_TYPE_KEY_ANY_RSA = 3;
+  // ENC_TYPE_KEY_PRIVATE_EC validates private Elliptic Curve keys in PEM format
+  ENC_TYPE_KEY_PRIVATE_EC = 4;
+  // ENC_TYPE_KEY_PUBLIC_EC validates public Elliptic Curve keys in PEM format
+  ENC_TYPE_KEY_PUBLIC_EC = 5;
+  // ENC_TYPE_KEY_ANY_EC validates either private or public EC keys
+  ENC_TYPE_KEY_ANY_EC = 6;
+  // ENC_TYPE_KEY_PRIVATE_ED25519 validates private Ed25519 keys in PEM format
+  ENC_TYPE_KEY_PRIVATE_ED25519 = 7;
+  // ENC_TYPE_KEY_PUBLIC_ED25519 validates public Ed25519 keys in PEM format
+  ENC_TYPE_KEY_PUBLIC_ED25519 = 8;
+  // ENC_TYPE_KEY_ANY_ED25519 validates either private or public Ed25519 keys
+  ENC_TYPE_KEY_ANY_ED25519 = 9;
+  // ENC_TYPE_KEY_PRIVATE_ANY validates private keys of any algorithm (RSA, EC, Ed25519)
+  ENC_TYPE_KEY_PRIVATE_ANY = 10;
+  // ENC_TYPE_KEY_PUBLIC_ANY validates public keys of any algorithm
+  ENC_TYPE_KEY_PUBLIC_ANY = 11;
+  // ENC_TYPE_KEY_ANY validates any key (private or public) of any algorithm
+  ENC_TYPE_KEY_ANY = 12;
+  // ENC_TYPE_X509_CERT_RSA validates X.509 certificates with RSA public keys
+  ENC_TYPE_X509_CERT_RSA = 13;
+  // ENC_TYPE_X509_CERT_EC validates X.509 certificates with EC public keys
+  ENC_TYPE_X509_CERT_EC = 14;
+  // ENC_TYPE_X509_CERT_ED25519 validates X.509 certificates with Ed25519 public keys
+  ENC_TYPE_X509_CERT_ED25519 = 15;
+  // ENC_TYPE_X509_CERT_ANY validates X.509 certificates with any key algorithm
+  ENC_TYPE_X509_CERT_ANY = 16;
+}
+
+enum UrlScheme {
+  URL_SCHEME_UNSPECIFIED = 0;
+  URL_SCHEME_HTTP = 1;          // Allow only http://
+  URL_SCHEME_HTTPS = 2;         // Allow only https://
+  URL_SCHEME_HTTP_OR_HTTPS = 3; // Allow both http:// and https://
+}
+
+// SqlPermit defines validation types for SQL statement fields.
+// Used in field options to enforce a syntactic sanity check plus a statement-type restriction.
+// This is NOT an injection defense: the validator only rejects a handful of obvious tokens
+// (semicolons, -- and /* comments, backslash escapes) and checks the leading keyword. A
+// syntactically valid statement can still carry an injection payload (e.g. a UNION or a
+// subquery in a permitted SELECT), and the check does not cover all comment syntaxes (e.g.
+// '#' line comments). Callers MUST use parameterized queries and MUST NOT interpolate a validated
+// string into a query as though it were safe.
+enum SqlPermit {
+  // SQL_PERMIT_UNSPECIFIED represents an unspecified SQL permit type
+  SQL_PERMIT_UNSPECIFIED = 0;
+  // SQL_PERMIT_SELECT allows only SELECT statements (including WITH ... SELECT CTEs)
+  SQL_PERMIT_SELECT = 1;
+  // SQL_PERMIT_DML allows SELECT, INSERT, UPDATE, DELETE statements
+  SQL_PERMIT_DML = 2;
+  // SQL_PERMIT_DDL allows CREATE, ALTER, DROP, TRUNCATE statements
+  SQL_PERMIT_DDL = 3;
+  // SQL_PERMIT_ANY applies only the syntactic sanity check, with no statement-type restriction
+  SQL_PERMIT_ANY = 4;
+}
+
+enum DurationType {
+  DURATION_TYPE_UNSPECIFIED = 0;
+  DURATION_TYPE_POSITIVE = 1;      // > 0
+  DURATION_TYPE_NON_NEGATIVE = 2;  // >= 0
+}
+
+enum PathType {
+  PATH_UNSPECIFIED = 0;
+  PATH_ABSOLUTE = 1;   // Absolute file path
+  PATH_RELATIVE = 2;   // Relative file path
+  PATH_ANY = 3;        // Either absolute or relative
+  PATH_DIR = 4;        // Directory path (must exist and be a directory)
+}
+
+// Azp enumerates the authorized-party / attestation contexts a kernel-minted
+// token may record (SPIFFE plan D4). It is the proto-defined source of truth for
+// the `azp` claim — generated code carries no hardcoded azp list. `azp` is the
+// attestation path, NOT part of the subject identity, and kernel sets it from
+// trusted context (never copied from untrusted request claims).
+enum Azp {
+  AZP_UNSPECIFIED = 0;
+  // kernel: minted by kernel from trusted internal context (service/bootstrap).
+  AZP_KERNEL = 1;
+  // oauth: user attested via an OAuth broker; kernel maps the broker's
+  // authenticated S2S identity to this value at MintUserToken.
+  AZP_OAUTH = 2;
+  // saml: user attested via a SAML broker; mapped by kernel as for oauth.
+  AZP_SAML = 3;
+  // cloud-auth: reserved for the future cloud-auth attestation broker. No
+  // runtime mints this except tests until that broker exists (D4).
+  AZP_CLOUD_AUTH = 4;
+}
+
+// TypeKind classifies protobuf field kinds for generated registry metadata.
+enum TypeKind {
+  TYPE_KIND_UNSPECIFIED = 0;
+  TYPE_KIND_STRING = 1;
+  TYPE_KIND_BOOL = 2;
+  TYPE_KIND_BYTES = 3;
+  TYPE_KIND_INT32 = 4;
+  TYPE_KIND_INT64 = 5;
+  TYPE_KIND_UINT32 = 6;
+  TYPE_KIND_UINT64 = 7;
+  TYPE_KIND_SINT32 = 8;
+  TYPE_KIND_SINT64 = 9;
+  TYPE_KIND_FIXED32 = 10;
+  TYPE_KIND_FIXED64 = 11;
+  TYPE_KIND_SFIXED32 = 12;
+  TYPE_KIND_SFIXED64 = 13;
+  TYPE_KIND_FLOAT = 14;
+  TYPE_KIND_DOUBLE = 15;
+  TYPE_KIND_ENUM = 16;
+  TYPE_KIND_MESSAGE = 17;
+  TYPE_KIND_MAP = 18;
+}
+
+// NumericConstraint defines constraints for integer fields (int32, int64, uint32, uint64)
+// This message supports complex validation scenarios beyond simple comparisons
+message NumericConstraint {
+  // gt: field must be greater than this value
+  optional int64 gt = 1;
+
+  // ge: field must be greater than or equal to this value
+  optional int64 ge = 2;
+
+  // lt: field must be less than this value
+  optional int64 lt = 3;
+
+  // le: field must be less than or equal to this value
+  optional int64 le = 4;
+
+  // eq: field must equal this value
+  optional int64 eq = 5;
+
+  // ne: field must not equal this value
+  optional int64 ne = 6;
+
+  // in: field must be one of these values
+  repeated int64 in = 7;
+
+  // not_in: field must not be one of these values
+  repeated int64 not_in = 8;
+
+  // multiple_of: field must be divisible by this value (field % multiple_of == 0)
+  optional int64 multiple_of = 9;
+}
+
+// FloatConstraint defines constraints for floating-point fields (float, double)
+message FloatConstraint {
+  // gt: field must be greater than this value
+  optional double gt = 1;
+
+  // ge: field must be greater than or equal to this value
+  optional double ge = 2;
+
+  // lt: field must be less than this value
+  optional double lt = 3;
+
+  // le: field must be less than or equal to this value
+  optional double le = 4;
+
+  // epsilon: tolerance for floating-point equality comparisons (default: 1e-9)
+  // Used when comparing floats to avoid precision issues
+  optional double epsilon = 5;
+
+  // in: field must be one of these values (within epsilon)
+  repeated double in = 6;
+
+  // not_in: field must not be one of these values (within epsilon)
+  repeated double not_in = 7;
+}
+
+// ParamMapConfig configures automatic generation of FromMap methods
+// This generates a method that converts a map[string]string to the message type,
+// where the map keys correspond to enum values with json_return_value annotations
+message ParamMapConfig {
+  // The enum type to use for parameter keys (e.g., "TokenParamKey")
+  // The enum must have json_return_value annotations on its values
+  string key_enum = 1;
+
+  // Whether to return an error on unknown keys (default: false, ignore unknown)
+  bool strict = 2;
+
+  // Whether to return an error if required fields are missing (default: true)
+  bool validate_required = 3;
+}
+
+extend google.protobuf.MessageOptions {
+  // Generate a FromMap method that converts map[string]string to this message type
+  // Example: TokenRequestParams with key_enum="TokenParamKey" generates:
+  //   func TokenRequestParamsFromMap(params map[string]string) (*TokenRequestParams, error)
+  ParamMapConfig generate_from_map = 60028;
+
+  // service_state marks a message as a state root.
+  // Example: option (spec.service_state) = {name: "BaseballState", tag: "state-store"};
+  StateAnnotation service_state = 60035;
+
+  // 60036 was (spec.state_consistency) (ConsistencyModel) — removed; boundaries are
+  // convergent. Do not reuse 60036.
+
+  // state_eviction_policy specifies the default eviction policy for all boundaries
+  // in a state root message. Individual fields can override with (spec.eviction_policy).
+  // Default: EVICTION_POLICY_NONE.
+  EvictionPolicy state_eviction_policy = 60038;
+
+  // state_sync_backup_count specifies the default sync backup count for all boundaries.
+  // Individual fields can override with (spec.sync_backup_count). Default: 1.
+  int32 state_sync_backup_count = 60039;
+
+  // state_async_backup_count specifies the default async backup count for all boundaries.
+  // Individual fields can override with (spec.async_backup_count). Default: 0.
+  int32 state_async_backup_count = 60040;
+
+  // 60041 was (spec.state_perms) (RO/RW/WORM access grants) — removed; state access
+  // is export/import only, not governed by a per-service permission axis. Do not reuse 60041.
+
+  // grpc_config marks this message as a gRPC service's configuration.
+  // tacplus generates a generated.Services message and per-service config state boundaries.
+  GrpcConfigAnnotation grpc_config = 60042;
+
+  // disable_auth_message marks a service_state message as not requiring authentication.
+  // RPCs on this state service skip token validation entirely.
+  // Use for state roots that must be reachable before callers have tokens
+  // (e.g., TokenExchangerState, TrustedCaState).
+  // Example: option (spec.disable_auth_message) = true;
+  bool disable_auth_message = 60044;
+
+  // subscribe declares event-bus topic subscriptions for this state service.
+  // Only valid on messages with option (spec.service_state).
+  // Each entry references a topic field on another service's state root.
+  // Example:
+  //   option (spec.subscribe) = {source: "claudesensor.AgenticCodeEventBus.event_stream"};
+  repeated SubscriptionAnnotation subscribe = 60045;
+
+  // graph_type marks this message as a graph type for schema generation.
+  // Used by subscribe-gen to generate graph-store projections and mutation handlers.
+  // Messages with this annotation become graph types with indexed predicates.
+  // Nested messages WITHOUT this annotation are serialized as JSON string predicates
+  // when referenced from a graph type — see D2 in the design doc.
+  // Example:
+  //   option (spec.graph_type) = {name: "Entity", xid_field: "id"};
+  GraphTypeAnnotation graph_type = 60046;
+
+  // record marks this message as a stored record (an event held in full by the
+  // record_store, stratum) and makes it projectable. key = unique id field,
+  // owner = ownership/identity field. A record implies event.
+  // Example:
+  //   option (spec.record) = {key: "event_id", owner: "spiffe_id"};
+  RecordAnnotation record = 60065;
+
+  // event marks this message as an EventBus event: a topic + publish RPC are
+  // generated for it. The producer surface is DECLARED — at least one of c2s
+  // (external clients, via gateway) or s2s (internal services). An internal-only
+  // event is s2s and is NOT exposed externally. spec.record implies spec.event.
+  // Example:
+  //   option (spec.event) = {s2s: {}};            // internal-only
+  //   option (spec.event) = {c2s: {auth_any_user: true}, s2s: {}};
+  EventAnnotation event = 60079;
+
+  // graph_projection declares a graph node type derived from this event.
+  // tacplus generates the node message, projection_source mappings, and
+  // graph annotations. Repeated — one per graph type to extract.
+  // Example:
+  //   option (spec.graph_projection) = {
+  //     name: "Session"
+  //     xid: "session_id"
+  //     field: {source: "session_id"  index: "exact"  upsert: true}
+  //     field: {source: "email"       index: "exact"}
+  //   };
+  repeated GraphProjection graph_projection = 60066;
+
+  // timeseries_projection declares a timeseries table type derived from
+  // this event. tacplus generates the record message, column annotations,
+  // and projection_source mappings. Common context fields (all non-oneof
+  // fields used in the projection) are included automatically. The shape is
+  // store-neutral — retention/dedup/cardinality_hint are semantic intent, and
+  // a downstream materializer renders the concrete engine/TTL/merge behavior.
+  // Repeated — one per oneof variant / table.
+  // Example:
+  //   option (spec.timeseries_projection) = {
+  //     name: "SessionRecord"
+  //     when: "session"
+  //     retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
+  //     field: {source: "session.model"  cardinality_hint: CARDINALITY_LOW}
+  //   };
+  repeated TimeseriesProjection timeseries_projection = 60067;
+
+  // service_event declares that this state root's topic publish RPCs should be
+  // exposed through the API gateway. tacplus propagates this to the generated
+  // state service as spec.service_c2s and spec.event_tag options.
+  ServiceEventAnnotation service_event = 60060;
+
+  // timeseries_type opts a message into timeseries table generation.
+  // tacplus generates store-neutral conversion helpers and a gRPC service;
+  // a downstream materializer renders the concrete backend schema.
+  TimeseriesTypeAnnotation timeseries_type = 60061;
+
+  // service_store marks a message as a durable key-value store.
+  // tacplus generates a gRPC service with Put/Get/Delete/List RPCs.
+  // The backing store implementation can map these RPCs to replicated storage.
+  // Example:
+  //   message CredPair {
+  //     option (spec.service_store) = {tag: "state-store"};
+  //     string client_id = 1 [(spec.store_key) = true];
+  //     string client_secret = 2;
+  //   }
+  ServiceStoreAnnotation service_store = 60062;
+
+  // opa_eval marks a message as an OPA policy evaluation input.
+  // tacplus generates a typed S2S RPC on opa for each annotated message.
+  // The entry_point identifies the OPA policy path; the result identifies
+  // the output message in the same proto file.
+  OpaEvalAnnotation opa_eval = 60063;
+
+  // service_health declares a typed health message for a service.
+  // The message MUST embed healthreport.ServiceInstanceHealth as field 1.
+  // The state store keeps the full typed message per service, keyed by
+  // instance_id and extracts .base into the generic health view for gateway.
+  // One service_health message per service package.
+  ServiceHealthAnnotation service_health = 60064;
+
+  // per_service_config marks a message whose fields are per-service configuration
+  // slices. Each field name must match a known service package name. tacplus
+  // automatically subscribes each named service to a read-only view of its own
+  // slice from the grpc_config service that owns this message type.
+  //
+  // Example:
+  //   message TenantConfig {
+  //     option (spec.per_service_config) = true;
+  //     OAuthTenantConfig     oauth    = 1;  // delivered to "oauth" service
+  //     IdentityTenantConfig  identity = 2;  // delivered to "identity" service
+  //     OpaTenantConfig       opa      = 3;  // delivered to "opa" service
+  //   }
+  bool per_service_config = 60068;
+
+  // data_entitlement: message(type)-level default data-entitlement transform for
+  // the eligible fields of this message. A field-level (spec.redact) overrides it.
+  // Only meaningful for fields that are themselves annotation-eligible (e.g.
+  // anonymize requires string/bytes). Mirrors how a message-level default is
+  // overridden per field; does NOT cascade into nested messages (each message
+  // carries its own default).
+  RedactOption data_entitlement = 60069;
+
+  // config_slice marks a message as one per-service configuration slice with an
+  // explicit owner and scope.
+  // Example: option (spec.config_slice) = {scope: CONFIG_SLICE_SCOPE_TENANT, service_name: "identity"};
+  ConfigSliceAnnotation config_slice = 60075;
+  // Field numbers 60069-60072 retired: the legacy tenant_config_slice/
+  // tenant_config_service/project_config_slice/project_config_service aliases
+  // were removed in favor of config_slice. Do not reuse these numbers.
+
+  // event_publish declares that this actor publishes an EventBus topic. The
+  // topic_ref must be a tacplus-validated TopicRef:
+  // "<proto-package>.<topic-message>.<topic-field>".
+  //
+  // Because this derives a normal RPC, the annotation carries the normal tacplus
+  // method auth shape for the derived RPC. Set exactly one of method_s2s or
+  // method_c2s unless the surrounding actor context provides an unambiguous
+  // default.
+  repeated EventPublishAnnotation event_publish = 60073;
+
+  // event_watch declares that this actor watches an EventBus topic. The
+  // topic_ref must be a tacplus-validated TopicRef:
+  // "<proto-package>.<topic-message>.<topic-field>".
+  //
+  // Because this derives a normal RPC, the annotation carries the normal tacplus
+  // method auth shape for the derived RPC. Set exactly one of method_s2s or
+  // method_c2s unless the surrounding actor context provides an unambiguous
+  // default.
+  repeated EventWatchAnnotation event_watch = 60074;
+}
+
+// SubscriptionAnnotation declares that this state service subscribes to
+// an event-bus topic from another service's state root.
+message SubscriptionAnnotation {
+  // source is the fully-qualified topic reference: "package.StateRoot.field_name"
+  // e.g., "claudesensor.AgenticCodeEventBus.event_stream"
+  string source = 1;
+}
+
+// EventPublishAnnotation declares that an actor publishes an EventBus topic.
+// topic_ref is canonical identity; auth policy is the standard tacplus method
+// auth shape carried through to the derived publish RPC.
+message EventPublishAnnotation {
+  string topic_ref = 1;
+  MethodS2SAnnotation method_s2s = 2;
+  MethodC2SAnnotation method_c2s = 3;
+}
+
+// EventWatchAnnotation declares that an actor watches an EventBus topic.
+// topic_ref is canonical identity; auth policy is the standard tacplus method
+// auth shape carried through to the derived watch RPC.
+message EventWatchAnnotation {
+  string topic_ref = 1;
+  MethodS2SAnnotation method_s2s = 2;
+  MethodC2SAnnotation method_c2s = 3;
+}
+
+// GraphTypeAnnotation marks a proto message as a graph type for schema generation.
+// Used to generate mutation handlers and graph store projections.
+//
+// Design decisions (D1, D2, D3 from the graph schema plan):
+//
+// D1: Annotations go on SOURCE messages (e.g. GraphEntity in aegis.proto),
+// not on the consumer. The source messages are the authority on the data model.
+// This follows the same pattern as service_state, topic, and subscribe —
+// the annotation lives where the structure is defined.
+//
+// D2: Nested messages WITHOUT graph_type are serialized as JSON string
+// predicates. Graph storage is for traversal (structural fields), not
+// analytical queries on metadata. JSON storage avoids ~50 null predicates
+// per entity, prevents schema churn, and allows incremental promotion.
+//
+// D3: xid_field controls the mutation strategy. When set, subscribe-gen
+// generates a conditional upsert by external id (xid) — query by xid,
+// then update-or-insert. When empty, subscribe-gen generates JSON insert (append-only).
+message GraphTypeAnnotation {
+  // name is the graph type name (e.g. "Entity", "Edge").
+  string name = 1;
+  // xid_field is the proto field used as the external ID for upserts.
+  // When set, subscribe-gen generates upsert mutations keyed on this field.
+  // When empty, subscribe-gen generates insert-only JSON mutations.
+  string xid_field = 2;
+  // source is the fully-qualified event message this graph type is extracted from.
+  // When set, subscribe-gen generates field extraction code that maps fields
+  // from the source event to this graph type using (spec.projection_source) annotations.
+  // Example: "sensor.SensorEvent"
+  string source = 3;
+}
+
+// RecordAnnotation marks a message as a stored record: an event held in full by
+// the record_store (stratum) and projectable to graph/timeseries stores. A record
+// IS an event (it flows through eventbus); every record declares a key field
+// (unique identifier) and an owner field (ownership/identity).
+message RecordAnnotation {
+  // key is the proto field name used as the unique record identifier.
+  string key = 1;
+  // owner is the proto field name that identifies the record's owner (e.g. spiffe_id).
+  string owner = 2;
+  // c2s, when present, exposes the record's publish RPC to external clients (via
+  // gateway). A record IS an event; this declares its producer surface the same
+  // way spec.event does. See EventAnnotation.
+  MethodC2SAnnotation c2s = 3;
+  // s2s, when present, exposes the record's publish RPC to internal services.
+  MethodS2SAnnotation s2s = 4;
+}
+
+// EventAnnotation marks a message as an EventBus event: tacplus generates a topic
+// and a publish RPC for it. The producer surface is declared (not defaulted):
+// set c2s to expose the publish RPC to external clients (via gateway), s2s to
+// expose it to internal services. At least one must be present; an internal-only
+// event sets only s2s and is never exposed externally. spec.record implies
+// spec.event (a record is an event that is also stored + projectable).
+message EventAnnotation {
+  // c2s, when present, exposes the publish RPC to external clients (via gateway).
+  MethodC2SAnnotation c2s = 1;
+  // s2s, when present, exposes the publish RPC to internal services.
+  MethodS2SAnnotation s2s = 2;
+}
+
+// GraphProjection declares a graph node type extracted from an event message.
+// tacplus generates the node message with graph annotations, projection_source
+// mappings, and conditional extraction logic for oneof fields.
+message GraphProjection {
+  // name is the graph type name (e.g. "Session", "Agent", "ToolUse").
+  string name = 1;
+  // xid is the source field path used as the external ID for upserts.
+  // Dot notation accesses oneof payloads (e.g. "tool_use.tool_use_id").
+  string xid = 2;
+  // field is the list of fields to include in the generated graph node.
+  repeated GraphProjectionField field = 3;
+}
+
+// GraphProjectionField maps a source event field to a graph node predicate.
+message GraphProjectionField {
+  // source is the field path on the source event (e.g. "email", "tool_use.tool_name").
+  string source = 1;
+  // as renames the field in the generated node (defaults to last segment of source).
+  string as = 2;
+  // index is the graph index type: "exact", "hash", "int", "float", etc.
+  string index = 3;
+  // edge names the target graph type when this field is a uid edge (e.g. "Session").
+  string edge = 4;
+  // include stores the field as JSON blob (GRAPH_MODE_INCLUDE) instead of a predicate.
+  bool include = 5;
+  // upsert marks this field as the upsert key (must match the projection's xid).
+  bool upsert = 6;
+}
+
+// CardinalityHint is a store-neutral hint about how many distinct values a
+// column holds. A downstream materializer may use it to pick an encoding, but
+// tacplus emits no concrete codec — the hint is pure semantic intent.
+enum CardinalityHint {
+  CARDINALITY_UNSPECIFIED = 0;
+  CARDINALITY_LOW = 1;   // few distinct values; was low_cardinality=true
+  CARDINALITY_HIGH = 2;  // many distinct values
+}
+
+// RetentionPolicy is a store-neutral statement of how long rows are retained.
+// A downstream materializer renders this into an engine-specific TTL/eviction
+// rule; tacplus carries only the semantic intent (which field, how long).
+message RetentionPolicy {
+  string timestamp_field = 1;   // row field the retention age is measured from
+  int64 duration_seconds = 2;   // retain this long after timestamp_field; 0 = indefinite
+}
+
+// DedupStrategy is a store-neutral statement of how duplicate rows are resolved.
+enum DedupStrategy {
+  DEDUP_NONE = 0;               // append-only; keep all rows
+  DEDUP_LATEST_BY_VERSION = 1;  // keep latest row per key by version_field
+}
+
+// DedupPolicy is a store-neutral statement of row identity and duplicate
+// resolution. A downstream materializer maps this onto an engine's merge/dedup
+// mechanism; tacplus carries only the semantic intent.
+message DedupPolicy {
+  DedupStrategy strategy = 1;
+  repeated string key_fields = 2;  // logical row identity
+  string version_field = 3;        // selects winning row under DEDUP_LATEST_BY_VERSION
+}
+
+// TimeseriesProjection declares a timeseries table type extracted from an event.
+// tacplus generates the record message with timeseries_column annotations and
+// projection_source mappings. Common context fields from the source event are
+// included automatically — only payload-specific fields need listing. The shape
+// is store-neutral: retention and dedup are declared as semantic intent, and a
+// downstream materializer renders the concrete engine/TTL/merge behavior.
+message TimeseriesProjection {
+  // name is the table/record type name (e.g. "SessionRecord").
+  string name = 1;
+  reserved 2, 3;
+  reserved "engine", "ttl";
+  // when is the oneof variant name that triggers this record (e.g. "session").
+  // Only events carrying this payload variant produce a row.
+  string when = 4;
+  // field lists payload-specific fields beyond the common context.
+  repeated TimeseriesProjectionField field = 5;
+  // retention is the store-neutral row retention policy (unset = indefinite).
+  RetentionPolicy retention = 6;
+  // dedup is the store-neutral duplicate-resolution policy.
+  DedupPolicy dedup = 7;
+}
+
+// TimeseriesProjectionField maps a source event field to a timeseries column.
+message TimeseriesProjectionField {
+  // source is the field path on the source event (e.g. "session.model").
+  string source = 1;
+  // as renames the column in the generated record (defaults to last segment of source).
+  string as = 2;
+  // order_key is the column's position in the store-neutral sort-key role
+  // (0 = not a sort key). A materializer maps this to the engine's sort order.
+  int32 order_key = 3;
+  // partition_key marks this column as part of the store-neutral partition role.
+  bool partition_key = 4;
+  reserved 5;
+  reserved "low_cardinality";
+  // cardinality_hint is a store-neutral hint about the column's distinct-value count.
+  CardinalityHint cardinality_hint = 6;
+}
+
+// GraphMode controls how a field is persisted in graph storage.
+// UNSPECIFIED means the field is omitted (not stored).
+// Annotations are opt-in: fields without (spec.graph) are not persisted.
+enum GraphMode {
+  // Field is not stored in graph storage.
+  GRAPH_MODE_UNSPECIFIED = 0;
+
+  // Field is stored as a JSON blob. Not queryable, but preserved
+  // for round-trip fidelity. Suitable for maps, collections, and nested data
+  // that doesn't need graph traversal or filtering.
+  GRAPH_MODE_INCLUDE = 1;
+
+  // Field becomes a graph predicate with an index. Scalar fields map to
+  // typed predicates (string, int, float, bool, datetime). Message fields
+  // become uid edges — the target message must also have (spec.graph)
+  // annotations and exactly one upsert field.
+  // NOT valid on repeated fields or maps — use INCLUDE for collections.
+  GRAPH_MODE_PREDICATE = 2;
+}
+
+// GraphFieldOption configures how a single proto field maps to graph storage.
+// Applied via (spec.graph) on individual fields. Only fields with this
+// annotation are persisted; all others are omitted by default.
+//
+// Example usage:
+//   string id = 1 [(spec.graph) = {mode: PREDICATE, index: "exact", upsert: true}];
+//   string email = 2 [(spec.graph) = {mode: PREDICATE, index: "exact"}];
+//   NetworkInfo network = 3 [(spec.graph) = {mode: PREDICATE, reverse: true}];
+//   map<string, string> labels = 4 [(spec.graph) = {mode: INCLUDE}];
+//   int32 internal_counter = 5; // no annotation — omitted from graph storage
+message GraphFieldOption {
+  // mode controls whether this field is a graph predicate, included as JSON,
+  // or omitted entirely (UNSPECIFIED / absent).
+  GraphMode mode = 1;
+
+  // index is required when mode is PREDICATE and the field is a scalar type.
+  // Ignored for uid edges (message fields) and INCLUDE mode.
+  // Values depend on the graph store type:
+  //   string:   "exact", "hash", "term", "fulltext", "trigram"
+  //   int/uint: "int"
+  //   float:    "float"
+  //   bool:     "bool"
+  //   datetime: "hour", "day", "month", "year"
+  string index = 2;
+
+  // upsert marks this field as the identity predicate for upsert mutations.
+  // Exactly one field per message must be marked upsert: true when the message
+  // is the target of a uid edge from another message.
+  // Only valid with mode: PREDICATE.
+  bool upsert = 3;
+
+  // reverse marks a uid edge predicate as reverse-traversable, enabling
+  // traversal from child to parent (e.g., given a NetworkInfo node, find all
+  // ServiceInstances that reference it).
+  // Only valid with mode: PREDICATE on message-type fields.
+  bool reverse = 4;
+}
+
+// ============================================================================
+// Timeseries Projection Annotations
+// ============================================================================
+
+// TimeseriesTypeAnnotation opts a message into timeseries table generation.
+// tacplus generates store-neutral conversion helpers and a gRPC service from
+// messages annotated with this option. Each annotated message produces one
+// timeseries table type. Retention and dedup are declared as semantic intent;
+// a downstream materializer renders the concrete engine/TTL/merge behavior.
+//
+// Example:
+//   message SensorTimeseries {
+//     option (spec.timeseries_type) = {
+//       source: "sensor.SensorEvent",
+//       retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
+//     };
+//     ...
+//   }
+message TimeseriesTypeAnnotation {
+  // Table name. Default: snake_case of message name.
+  string name = 1;
+  reserved 2, 3;
+  reserved "engine", "ttl";
+  // Source event FQN for field extraction.
+  // When set, every field in this message must have (spec.projection_source) to map
+  // from the source event to this projection.
+  // Example: "sensor.SensorEvent"
+  string source = 4;
+  // retention is the store-neutral row retention policy (unset = indefinite).
+  RetentionPolicy retention = 5;
+  // dedup is the store-neutral duplicate-resolution policy.
+  DedupPolicy dedup = 6;
+}
+
+// TimeseriesFieldOption configures how a single proto field maps to a timeseries
+// column. Applied via (spec.timeseries_column) on individual fields. Any field
+// with this annotation becomes a column; fields without it are omitted. Column
+// roles are store-neutral: order_key/partition_key name logical roles and
+// cardinality_hint states distinct-value intent — a downstream materializer maps
+// them onto the concrete engine's sort/partition/encoding mechanisms.
+//
+// Example:
+//   string session_id = 1 [(spec.timeseries_column) = {order_key: 1}];
+//   int64 timestamp_ms = 2 [(spec.timeseries_column) = {order_key: 2, partition_key: true}];
+//   string event_type = 3 [(spec.timeseries_column) = {cardinality_hint: CARDINALITY_LOW}];
+//   int64 duration_ms = 4 [(spec.timeseries_column) = {}];
+message TimeseriesFieldOption {
+  reserved 1, 2, 5, 6;
+  reserved "type", "codec", "default_expr", "low_cardinality";
+  // Position in the store-neutral sort-key role (1-indexed). 0 = not a sort key.
+  int32 order_key = 3;
+  // Part of the store-neutral partition role.
+  bool partition_key = 4;
+  // Store-neutral hint about the column's distinct-value count.
+  CardinalityHint cardinality_hint = 7;
+}
+
+// ServiceS2SAnnotation declares a service-to-service gRPC service.
+// Only authenticated service identities can call these RPCs.
+// Auth overrides (auth_disabled) are method-level only — use spec.method_s2s
+// on individual RPCs to disable auth for corner cases like bootstrap.
+message ServiceS2SAnnotation {
+  // auth_services: service identities allowed to call (service-level default).
+  // ["*"] = any service. Named entries restrict to those identities.
+  // Can be overridden per-method via spec.method_s2s.
+  repeated string auth_services = 1;
+
+  // tag is the routing label for the physical service that hosts this S2S
+  // interface. Used for vservice routing tables where the interface is defined
+  // in a vservice proto but hosted by a physical service (e.g. "stratum").
+  string tag = 3;
+}
+
+// ServiceC2SAnnotation declares a client-to-service gRPC service.
+// Exposed through the gateway to end users.
+// Auth overrides (auth_disabled, auth_any_user) are method-level only —
+// use spec.method_c2s on individual RPCs to override the default policy.
+// Default policy: entitled users (gateway enforces entitlements).
+message ServiceC2SAnnotation {
+  // auth_entitled_users: users with matching entitlements can call.
+  // This is the default C2S policy; set explicitly when entitlement
+  // checks are required for all RPCs in this service.
+  bool auth_entitled_users = 3;
+
+}
+
+// ServiceC2DAnnotation declares a client-to-daemon gRPC service.
+// Served over local IPC between CLI processes and a daemon.
+// No auth required — filesystem permissions are the security boundary.
+message ServiceC2DAnnotation {
+  // All c2d services are unauthenticated and localhost-only.
+  //
+  // socket_path is the Unix domain socket the daemon binds and clients dial.
+  // Required — there is no default. A shared default path would collide between
+  // daemons on the same host, so every c2d service declares its own path.
+  string socket_path = 1;
+}
+
+// IdentitySpiffeResource declares that a string field holds a resource SPIFFE ID
+// that tacplus must be able to CONSTRUCT from sibling fields (SPIFFE plan D5),
+// via resource_spiffe_id(trust_domain, <namespace_field>, kind, <id_field>).
+// Generation FAILS when the referenced sibling fields are absent, so a resource
+// owner identity can never be hand-formatted or left underspecified.
+//
+//   string owner_spiffe = 2 [(spec.identity_spiffe_resource) = {
+//     namespace_field: "tenant_namespace";
+//     kind: "gitlab-event";
+//     id_field: "event_id";
+//   }];
+message IdentitySpiffeResource {
+  // namespace_field is the sibling field holding the namespace path.
+  string namespace_field = 1;
+  // kind is the resource kind segment (a constant, validated as a single segment).
+  string kind = 2;
+  // id_field is the sibling field holding the resource id.
+  string id_field = 3;
+}
+
+// TokenMinterAnnotation marks a service as the cluster's token minter, declared
+// EXPLICITLY rather than inferred from RPC signatures. The bootstrap token
+// exchanger (service_im / client_im codegen) targets the service carrying this
+// annotation, resolving its fully-qualified package.Service. Exactly one
+// authoritative minter should be annotated.
+message TokenMinterAnnotation {
+  // proxy marks the client-reachable C2S front (e.g. gateway.Mint) that proxies
+  // to the authoritative S2S minter. Clients with no S2S identity mint through
+  // this proxy; services with an S2S identity call the authoritative minter
+  // (proxy = false) directly.
+  bool proxy = 1;
+}
+
+// SmbRoot selects which trust root backs an SMB service's member certificates.
+enum SmbRoot {
+  // SMB_ROOT_ISOLATED uses a self-signed per-SMB CA, scoped only to this SMB.
+  SMB_ROOT_ISOLATED = 0;
+  // SMB_ROOT_CLUSTER signs the per-SMB intermediate under the cluster CA.
+  SMB_ROOT_CLUSTER = 1;
+}
+
+// SmbAnnotation marks a Service Mesh Blackbox service and selects its trust root.
+// The default root is SMB_ROOT_ISOLATED.
+message SmbAnnotation {
+  SmbRoot root = 1;
+}
+
+// SmbAuthorityAnnotation marks the consumer service that issues per-SMB CAs and
+// member certs for spec.smb services (SPIFFE plan D7), declared
+// EXPLICITLY rather than inferred. tacplus resolves the fully-qualified
+// package.Service carrying this annotation as the SMB cert authority and fails
+// generation if any spec.smb service exists with no authority declared. tacplus
+// generates the authority contract and the SMB service's client seam; the
+// designated consumer service implements the server side (CA keypair custody,
+// member-cert signing, rotation). Exactly one authority should be annotated.
+message SmbAuthorityAnnotation {
+}
+
+// MethodS2SAnnotation overrides service-level defaults for a single S2S RPC.
+// Only valid on methods within a service_s2s service.
+message MethodS2SAnnotation {
+  // auth_services overrides the service-level default for this method.
+  repeated string auth_services = 1;
+
+  // auth_disabled: this RPC handles its own authentication internally.
+  // The caller interceptor skips this RPC entirely. Used for bootstrap
+  // bootstrap token-minting RPCs where callers authenticate via
+  // credentials in the request body (cred pair JWT), not via bearer token.
+  bool auth_disabled = 2;
+}
+
+// MethodC2SAnnotation overrides service-level defaults for a single C2S RPC.
+// Only valid on methods within a service_c2s service.
+message MethodC2SAnnotation {
+  // auth_disabled: no token required for this RPC.
+  // Used for public endpoints like OIDC discovery and JWKS.
+  bool auth_disabled = 1;
+
+  // auth_any_user: any authenticated user can call this RPC
+  // (no entitlement check). Used for user-facing endpoints where
+  // any valid token is sufficient (e.g., token exchange, event streams).
+  bool auth_any_user = 2;
+
+  // target_namespace_field names the request field whose string value carries
+  // the target namespace path (e.g. "/io/example/tenant"). When set, the C2S
+  // authorizer enforces the level-or-below rule: the caller's namespace (from
+  // the bearer token's `namespace` claim) must equal the target namespace or
+  // be a strict path-segment ancestor of it. The field must exist on the
+  // request message and be of type string.
+  //
+  // Use the proto field name (snake_case as declared), e.g. "tenant_namespace".
+  // Leave unset for RPCs whose target is implicit (e.g. List* methods that
+  // scope the response to the caller's subtree at the handler).
+  string target_namespace_field = 5;
+}
+
+// CollectionMode declares how a multi-result read behaves. See docs/API.md.
+// A read returning more than one result must declare exactly one mode; an
+// unbounded SNAPSHOT is a contradiction (if it is unbounded, it is a WATCH).
+enum CollectionMode {
+  COLLECTION_MODE_UNSPECIFIED = 0;
+  // SNAPSHOT: a finite point-in-time set that terminates. Requires max_items.
+  // tacplus derives the delivery tier (inline / accumulated-stream / cursor)
+  // from max_items and the response's max element size.
+  COLLECTION_MODE_SNAPSHOT = 1;
+  // WATCH: an open-ended, change-driven stream (snapshot-then-deltas). Forbids
+  // max_items; uses a bounded replay ring (replay_depth) for resume.
+  COLLECTION_MODE_WATCH = 2;
+  // PAGE: a client-driven, resumable, windowed GET (unary). The caller pages
+  // through a finite set with an opaque keyset page_token over order_by; each
+  // page is bounded by page_size (capped at the trust-tier ceiling). Forbids
+  // max_items/replay_depth. See archive/RPC_PATTERNS_AND_VERBS_PLAN.md §4.
+  COLLECTION_MODE_PAGE = 3;
+}
+
+// MethodCollection marks an RPC as a collection-returning read and declares its
+// shape. The author declares intent plus a bound; tacplus derives transport,
+// tiering, flow control, and lifecycle. See docs/API.md for the full model.
+message MethodCollection {
+  // mode is required: SNAPSHOT (finite) or WATCH (open-ended).
+  CollectionMode mode = 1;
+
+  // order_by names the response fields that define a stable total order.
+  // Required for both modes (pagination cursors and the snapshot/delta boundary
+  // are only coherent over a stable order). tacplus appends a unique tiebreaker
+  // if these are not already total.
+  repeated string order_by = 2;
+
+  // max_items is the required, positive, finite item cap for SNAPSHOT reads.
+  // It is the routing key: tacplus computes max_items * max_item_bytes to pick
+  // the delivery tier. Forbidden on WATCH. Zero/unset on SNAPSHOT is an error.
+  uint32 max_items = 3;
+
+  // replay_depth is the WATCH replay-ring depth (count of retained changes).
+  // Optional; defaults to a platform constant. Forbidden on SNAPSHOT.
+  uint32 replay_depth = 4;
+
+  // default_page_size is the PAGE per-page window used when the request omits
+  // page_size. Required positive on PAGE; must be <= the trust-tier ceiling.
+  // Forbidden on SNAPSHOT/WATCH. PAGE only.
+  uint32 default_page_size = 5;
+}
+
+// ServiceEventAnnotation declares that a state service's topic/queue RPCs
+// are accessible to other services (S2S only, like service_state).
+message ServiceEventAnnotation {
+  // tag is the routing label for service resolution (e.g. "eventbus").
+  string tag = 1;
+  // export makes this event topic available for RO import by other services.
+  bool export = 3;
+}
+
+// ConditionalRequirement defines a conditional requirement for a field.
+// The field is required when a sibling field equals a specific value.
+message ConditionalRequirement {
+  // field is the sibling field name (snake_case) to check
+  string field = 1;
+  // value is the enum value name or string to compare against
+  string value = 2;
+}
+
+extend google.protobuf.FieldOptions {
+  // Validates that a field has a value
+  // For scalar/string fields: must not be empty/zero value
+  // For repeated fields: must have at least one element
+  bool assert_required = 60001;
+  IpAddrTypes assert_ipaddr_type = 60002;
+  EncType assert_enc_type = 60003;
+  bool assert_net_port = 60004;
+
+  // URL/URI validation
+  UrlScheme assert_url = 60005;
+
+  // Email validation
+  bool assert_email = 60006;
+
+  // FQDN validation
+  bool assert_fqdn = 60007;
+
+  // Duration/Timeout validation
+  DurationType assert_duration = 60008;
+  int64 assert_duration_min = 60009;
+  int64 assert_duration_max = 60010;
+
+  // Listen address validation (host:port format)
+  bool assert_listen_addr = 60015;
+
+  // Base64 validation
+  bool assert_base64 = 60016;
+
+  // was assert_min_length (60017) / assert_max_length (60018) — do not reuse.
+  // Superseded by assert_min_size (60052) / assert_max_size (60039), which enforce
+  // the same length bound on string/bytes fields (and count on repeated/map).
+
+  // Enum non-zero validation (ensures enum is not 0/_UNDEFINED value)
+  bool assert_enum_defined = 60019;
+
+  // File path validation
+  PathType assert_file_path = 60020;
+
+  // Simple numeric comparisons (for most common cases)
+  // These work with int32, int64, uint32, uint64 fields
+  int64 assert_gt = 60021;  // greater than
+  int64 assert_ge = 60022;  // greater than or equal
+  int64 assert_lt = 60023;  // less than
+  int64 assert_le = 60024;  // less than or equal
+
+  // Complex numeric constraints (for advanced validation scenarios)
+  NumericConstraint assert_numeric = 60025;
+
+  // Floating-point constraints (for float and double fields)
+  FloatConstraint assert_float = 60026;
+
+  // Semantic version validation
+  // Validates that a string follows semantic versioning format (e.g., "1.0.0", "v2.3.1")
+  // Supports optional 'v' prefix and follows semver.org specification
+  bool assert_semver = 60028;
+
+  // Parameter key mapping for FromMap generation
+  // Explicitly maps this field to a specific enum value for parameter parsing
+  // Example: [(consts.param_key) = "TOKEN_PARAM_KEY_CLIENT_ID"]
+  string param_key = 60029;
+
+  // Conditional requirement: this field is required when another field equals false
+  // Specifies the name of a boolean field that, when false, makes this field required
+  // Example: [(consts.required_if_false) = "disable_tls"] means this field is required when disable_tls is false
+  string required_if_false = 60030;
+
+  // Conditional requirement: this field is required when another field equals true
+  // Specifies the name of a boolean field that, when true, makes this field required
+  // Example: [(consts.required_if_true) = "enable_cors"] means this field is required when enable_cors is true
+  string required_if_true = 60031;
+
+  // Host validation (IP address OR FQDN)
+  // Validates that a string is either a valid IP address (IPv4/IPv6) or a valid FQDN.
+  // This is an OR check — the value must satisfy at least one of the two formats.
+  // Use this for fields that accept a network host identifier.
+  bool assert_host = 60032;
+
+  // Field-level default value annotations.
+  // Attaches a default constant directly to a field. The code generators will
+  // emit a constant named DEFAULT_{FIELD_NAME_UPPER_SNAKE} in the constants output.
+  // Example: int32 partition_count = 5 [(spec.default_int) = 271];
+  //   -> generates: DEFAULT_PARTITION_COUNT = 271
+  string default_string = 60033;
+  int64  default_int    = 60034;
+  double default_float  = 60035;
+  bool   default_bool   = 60036;
+  // was default_double — do not reuse 60049 (removed; use default_float for
+  // all floating-point defaults, the parser always mapped it to default_float).
+
+  // key provides a string identifier for mapping on Config fields.
+  // Links a grpcserver.Config or statedb.Config field to its target service/state.
+  // Example: statedb.Config state = 2 [(spec.key) = "BaseballState"];
+  string key = 60037;
+
+  // Conditional requirement: this field is required when another field equals a specific value.
+  // Works with enum or string sibling fields.
+  // Example: [(spec.required_if_eq) = {field: "action", value: "ACTION_PERMIT"}]
+  ConditionalRequirement required_if_eq = 60038;
+
+  // assert_max_size enforces a maximum length/count on string, bytes, repeated, and map fields.
+  // For string/bytes: maximum byte length. Default 32,768 bytes (32 KB) when not set.
+  // For repeated/map: maximum element count. Runtime default 1,024 elements when not set;
+  // user protos are still linted to require explicit bounds unless exempt.
+  // Use this to override the default for fields that need more or less capacity.
+  uint32 assert_max_size = 60039;
+
+  // assert_min_size enforces a minimum length/count on string, bytes, repeated, and map fields.
+  // For string/bytes: minimum byte length. For repeated/map: minimum element count.
+  uint32 assert_min_size = 60052;
+
+  // SQL statement validation: a syntactic sanity check, NOT an injection defense.
+  // Checks that a string looks like a single statement of the permitted type: it rejects a
+  // few obvious tokens (semicolons, -- and /* comments, backslash escapes) and verifies the
+  // leading keyword. It does NOT make an interpolated string injection-safe -- a permitted
+  // SELECT can still carry a UNION/subquery payload, and other comment syntaxes (e.g. a
+  // '#' line comment) are not rejected. Callers MUST use parameterized queries.
+  // Example: string query = 1 [(spec.assert_sql) = SQL_PERMIT_SELECT];
+  SqlPermit assert_sql = 60046;
+
+  // References a file-level constant (int_const, string_const, float_const, bool_const)
+  // as the default value for this field. The Defaults function will use the named constant
+  // directly, so multiple fields can share the same default without duplicating values.
+  // Example: int32 tcp_port = 5 [(spec.default_const) = "DEFAULT_PORT"];
+  string default_const = 60047;
+
+  // Default value for host.Host fields. Generates a Defaults() initialization
+  // and a DEFAULT_{FIELD}_PORT constant.
+  // Mirrors host.Host structure to avoid circular import with host.proto.
+  DefaultHost default_host = 60048;
+
+  // Statedb field indexing: marks a field for state-store index creation
+  bool indexed = 50010;
+
+  // Statedb index type hint for indexed fields
+  string index_type = 50011;  // "HASH", "SORTED", "BITMAP"
+
+  // 50012 was (spec.consistency) (ConsistencyModel) — removed; every message-typed
+  // boundary is convergent (stored independently, lockless LWW/append-only). Do not reuse 50012.
+
+  // Statedb private: field can never be accessed by other services (owner RW only)
+  bool private = 50013;
+
+  // state_import declares that this field's value comes from another service's
+  // exported state. This is the canonical source for read-only cross-service
+  // state imports; the imported root is derived from "package.StateName.field".
+  // The projection currently supports singular message fields.
+  // Example: [(spec.state_import) = "football.FootballState.roster"];
+  string state_import = 50014;
+
+  // queue marks a state root field as a FIFO queue.
+  // One consumer receives each item. Operations: offer, poll, peek, size.
+  // Example: TaskItem task_queue = 3 [(spec.queue) = true];
+  bool queue = 50015;
+
+  // priority_queue marks a state root field as a priority queue.
+  // Value is the name of the field used for priority ordering (e.g., "severity").
+  // Items consumed in priority order (highest first).
+  // Example: AlertItem alert_queue = 4 [(spec.priority_queue) = "severity"];
+  string priority_queue = 50016;
+
+  // topic marks a state root field as a pub/sub topic.
+  // Every subscriber receives every message. Operations: publish, subscribe.
+  // Example: EventData event_stream = 5 [(spec.topic) = true];
+  bool topic = 50017;
+
+  // leader marks a queue, topic, or priority_queue field as requiring leader election.
+  // When set, the generated code automatically manages election, lease renewal, and
+  // watch streams. Write operations (Offer/Publish) are gated on leader status.
+  // The hand-written code must implement a leader handler callback.
+  // Example: TaskItem task_queue = 3 [(spec.queue) = true, (spec.leader) = true];
+  bool leader = 50018;
+
+  // Statedb storage: number of synchronous backups for this boundary.
+  // Synchronous backups block writes until complete, providing stronger durability.
+  // Range: 0-6. Default: 1.
+  // Example: TeamRoster roster = 1 [(spec.sync_backup_count) = 2];
+  int32 sync_backup_count = 50020;
+
+  // Statedb storage: number of asynchronous backups for this boundary.
+  // Asynchronous backups do not block writes, providing better throughput
+  // at the cost of potential data loss during node failure. Range: 0-6. Default: 0.
+  int32 async_backup_count = 50021;
+
+  // Statedb eviction: which entries to evict when max_size is reached.
+  // Default: EVICTION_POLICY_NONE (no eviction).
+  // Example: SessionData sessions = 2 [(spec.eviction_policy) = EVICTION_POLICY_LRU];
+  EvictionPolicy eviction_policy = 50022;
+
+  // Statedb eviction: maximum number of entries (or heap metric) before eviction begins.
+  // Default: 0 (no limit).
+  int32 eviction_max_size = 50023;
+
+  // Statedb eviction: what the eviction_max_size limit refers to.
+  // Default: MAX_SIZE_POLICY_ENTRY_COUNT.
+  MaxSizePolicy eviction_max_size_policy = 50024;
+
+  // Statedb eviction: time-to-live for entries in seconds.
+  // Entries older than this are automatically evicted.
+  // Default: 0 (no TTL, entries live forever).
+  int64 eviction_ttl_seconds = 50025;
+
+  // Statedb eviction: maximum idle time for entries in seconds.
+  // Entries not accessed within this period are automatically evicted.
+  // Default: 0 (no idle expiration).
+  int64 eviction_max_idle_seconds = 50026;
+
+  // epoch_expiration marks an int64 field as a Unix epoch expiration timestamp (seconds).
+  // Collections only: 0 = no expiration; > 0 must be future and within 1 year.
+  // TTL = epoch - now at write time; the state store auto-removes the entry on expiry.
+  // Placement validation: a scalar state-root field carrying this annotation is
+  // REJECTED at generation time. CARVE-OUT (accepted-and-ignored, not validated):
+  // an int64 inside a message used only as a SINGLETON boundary — detecting that
+  // needs whole-graph collection-usage analysis and would false-reject item types
+  // shared between collection and singleton uses (e.g. jwk.proto JWK.exp).
+  bool epoch_expiration = 50027;
+
+  // persistence marks a graph boundary (singleton, collection, map) for durable storage.
+  // When true, the cluster persists this boundary's data across restarts.
+  // Can only be set on message-typed boundary fields.
+  // Cannot be set on queues, topics, or priority queues.
+  bool persistence = 50028;
+
+  // 50030 was (spec.boundary_perms) (per-boundary RO/RW/WORM override) — removed with
+  // the state_perms permission axis. Do not reuse 50030.
+
+  // refresh_on_miss names the message type used as the lookup request
+  // for cache-miss-triggered refresh. When set, tacplus generates a
+  // Lookup{FieldName} RPC on the state service.
+  // The implementation checks the boundary for a match, refreshes from
+  // the external source on miss, and returns the updated boundary value.
+  // Only valid on message-typed boundary fields.
+  // Cannot combine with queue/topic/priority_queue.
+  string refresh_on_miss = 50031;
+
+  // command marks this field as a command RPC on the state service.
+  // The field type is the request message; the response is always google.protobuf.Empty.
+  // Commands are mutations. Use boundary_callers to restrict which services can
+  // invoke the command cross-namespace.
+  bool command = 50032;
+
+  // view_sources marks a field as a read-only view over multiple collection boundaries.
+  // Each entry is the field name of a source collection within the same service_state.
+  // The view unions all source collections into a single read-only boundary.
+  //
+  // Generated RPCs: Get, GetAll, Watch, KeySet, Size, ContainsKey (read-only subset).
+  // No mutator RPCs (Put, Set, Delete, Remove, Clear) are generated.
+  //
+  // The indexed field (kid, node_id, etc.) must be unique across all source collections.
+  // Writes to a source collection that would violate cross-source uniqueness are rejected.
+  //
+  // Requirements:
+  //   - The field must be repeated.
+  //   - All source fields must be collections of the same message type.
+  //   - At least two source fields must be specified.
+  //   - The field is a view (not stored): it aggregates the source collections.
+  //
+  // Example:
+  //   repeated ManagedJwk config_keys = 1;
+  //   repeated ManagedJwk dynamic_keys = 2;
+  //   repeated ManagedJwk all_keys = 3 [
+  //     (spec.view_sources) = "config_keys",
+  //     (spec.view_sources) = "dynamic_keys"
+  //   ];
+  repeated string view_sources = 50033;
+
+  // boundary_callers lists services allowed to call this boundary cross-namespace.
+  // Applies to queue (offer), topic (publish), and command (exec) boundaries.
+  // Example: TaskItem task_queue = 3 [(spec.queue) = true, (spec.boundary_callers) = "woodstock"];
+  repeated string boundary_callers = 50036;
+
+  // view_member registers this collection as a contributing source to one or
+  // more named cross-boundary views. All collections sharing a view_member
+  // value are aggregated by the cluster into that read-only view service. A
+  // collection may belong to multiple views (e.g. an internal-signing-key
+  // collection that feeds both "JwkVerifyingKeysView" for internal verifiers
+  // and "PublicJwksView" for the gateway's public JWKS).
+  //
+  // Each value must match a view service defined in the embedded protos
+  // (e.g., "JwkVerifyingKeysView" from sys/jwkview.proto).
+  //
+  // Requirements:
+  //   - The field must be a repeated (collection) boundary.
+  //   - All members of the same view must have the same message type.
+  //   - The message type must have an (spec.indexed) field for entry keying.
+  repeated string view_member = 50035;
+
+  // instance_keyed: server extracts instance_id from the caller's token
+  // and uses "service_id@instance_id" as the entry key. The publisher
+  // sees a singleton Set API (no key param). Consumers see a collection.
+  bool instance_keyed = 50034;
+
+  // store_key marks a field as the entry key for a service_store message.
+  // Exactly one field per service_store message must have this annotation.
+  // The field type must be string. The key is used as the entry key.
+  bool store_key = 50037;
+
+  // quorum_write marks a state field as requiring write quorum.
+  // Writes are acked only after replication to 2+ nodes.
+  // On a single-node cluster, writes succeed immediately (no quorum possible).
+  // Only valid on fields within a service_state or service_store message.
+  bool quorum_write = 50038;
+
+  // collected_health marks a state boundary for Sentinel health collection.
+  // Sentinel discovers instances via ServiceHealthState, calls a generated
+  // GetXxx RPC on the source service, and writes results to state.
+  // Singular fields → query ONE node. Repeated fields → query ALL nodes.
+  // Per-node (repeated) entries are keyed by instance_id and auto-evicted
+  // when Sentinel stops updating them (use eviction_ttl_seconds).
+  bool collected_health = 50039;
+
+  // graph_index specifies graph index directive(s) for this field.
+  // Used to generate graph store projections with proper indexes.
+  // Comma-separated for multiple: "exact", "term,fulltext", "trigram".
+  // Empty string or absent = predicate is stored but not indexed (not queryable via func()).
+  // Only meaningful on fields within a message annotated with (spec.graph_type).
+  // Example: string id = 1 [(spec.graph_index) = "exact"];
+  string graph_index = 60050;
+
+  // projection_source maps a projection field to its source path on the event message.
+  // Used on fields within messages annotated with (spec.graph_type) or
+  // (spec.timeseries_type) that have a source set. Uses dot notation for
+  // nested/oneof field access.
+  // Examples:
+  //   "agent_id"              — top-level field on the source event
+  //   "tool_use.tool_name"    — field inside a oneof/nested payload
+  //   "tool_use.duration_ms"  — nested int64 field
+  string projection_source = 60063;
+
+  // projection_record_key marks the projection field that carries the SOURCE
+  // RECORD's key. tacplus auto-injects this field (or marks the existing one) on
+  // every graph/timeseries projection so the projection query can return record
+  // keys — stratum federates into a projection, gets record keys, and hydrates the
+  // full records from the record_store. Exactly one field per projection carries it.
+  bool projection_record_key = 60081;
+
+  // graph_edge declares this field as a uid edge to another graph type.
+  // The value is the target graph type name (as declared in graph_type.name).
+  // At schema generation: predicate becomes a reverse-traversable uid edge instead of scalar.
+  // At mutation time: the string xid value is resolved to the target node's
+  // uid via eq(xid, ...) and a uid edge is created.
+  // Only meaningful on string fields within a (spec.graph_type) message.
+  // The field name becomes the edge predicate; projection_source provides the
+  // target's xid from the source event.
+  // Example: string session = 2 [(spec.graph_edge) = "Session"];
+  string graph_edge = 60064;
+
+  // assert_invariant declares a formal invariant for this field.
+  // The expression is a boolean predicate in the target language's syntax.
+  // For Rust: used as kani::assume() in proof harnesses and debug_assert! in validate().
+  // For Java: emitted as //@ invariant ... (JML).
+  // Use for cross-field relationships that can't be expressed as single-field constraints.
+  // Example: string token = 1 [(spec.assert_invariant) = "self.ttl > 0 && self.ttl <= 86400"];
+  string assert_invariant = 60053;
+
+  // ── Store Annotations ─────────────────────────────────────────────────────
+  // These field-level annotations mark fields for service-specific store
+  // projections.
+
+  // cache marks this field for projection into the hot cache.
+  // When true, this field is included in the cache entry.
+  // Example: string display_name = 3 [(spec.cache) = true];
+  bool cache = 60054;
+
+  // timeseries marks this field for projection into the timeseries store.
+  // When true, this field is included in the timeseries materialized view.
+  // Example: int64 first_seen_ms = 5 [(spec.timeseries) = true];
+  bool timeseries = 60055;
+
+  // archive marks this field for projection into cold storage.
+  // When true, this field is included in the cold-storage schema.
+  // Example: bytes raw_payload = 20 [(spec.archive) = true];
+  bool archive = 60056;
+
+  // 60057 retired (spec.sql — a raw named SQL query embedded in the contract).
+  // Removed as a store-coupling boundary violation: tacplus is store-neutral and
+  // must not carry backend query syntax. It was never consumed by any generator.
+  // Store services own their own query surfaces (see the RecordMap query plane).
+  // (Distinct from spec.assert_sql, which is a store-neutral syntactic SQL sanity check
+  // on user-provided strings -- not an injection defense -- and is retained.)
+
+  // JSON key override: specifies the output key used in JSON serialization.
+  // The generated JSON helpers use this instead of the proto field name.
+  // Use when the proto field was renamed to avoid language keyword conflicts
+  // but the JSON wire format must remain unchanged.
+  // Example: int64 reset_at = 4 [(spec.json_key) = "reset"];
+  string json_key = 60061;
+
+  // JSON aliases: additional keys accepted during JSON deserialization.
+  // Used alongside json_key and the proto field name for flexible input parsing.
+  // Example: string callback_url = 5 [(spec.json_aliases) = "callbackUrl"];
+  repeated string json_aliases = 60062;
+
+  // ── Graph Persistence Annotations ───────────────────────────────────────────
+  // Controls how individual fields are persisted in the graph store. Fields
+  // without this annotation are omitted entirely — graph storage is opt-in.
+  // See GraphFieldOption and GraphMode for detailed documentation.
+  //
+  // Example:
+  //   string id = 1 [(spec.graph) = {mode: PREDICATE, index: "exact", upsert: true}];
+  //   string name = 2 [(spec.graph) = {mode: PREDICATE, index: "term"}];
+  //   NetworkInfo net = 3 [(spec.graph) = {mode: PREDICATE, reverse: true}];
+  //   map<string, string> tags = 4 [(spec.graph) = {mode: INCLUDE}];
+  GraphFieldOption graph = 60065;
+
+  // ── Timeseries Projection Annotations ────────────────────────────────────────
+  // Controls how individual fields map to timeseries columns. Fields without
+  // this annotation are omitted — timeseries projection is opt-in.
+  // See TimeseriesFieldOption for detailed documentation.
+  //
+  // Example:
+  //   string session_id = 1 [(spec.timeseries_column) = {order_key: 1}];
+  //   int64 timestamp_ms = 2 [(spec.timeseries_column) = {order_key: 2, partition_key: true}];
+  //   string event_type = 3 [(spec.timeseries_column) = {cardinality_hint: CARDINALITY_LOW}];
+  TimeseriesFieldOption timeseries_column = 60066;
+
+  // ----- SPIFFE identity annotations (plan D5) -----
+  // These give tacplus enough information to VALIDATE and CONSTRUCT SPIFFE
+  // identities from declared proto fields. They do not replace
+  // method_c2s.target_namespace_field; they classify identity-bearing fields so
+  // generated code routes them through sys/spiffe instead of hand-formatting.
+
+  // identity_namespace: this string field holds an authorization-tree namespace
+  // path; generated code normalizes it via normalize_namespace before use.
+  bool identity_namespace = 60075;
+
+  // identity_subject: this string field holds a stable principal subject id
+  // (the `sub`), not a full SPIFFE URI.
+  bool identity_subject = 60076;
+
+  // identity_spiffe_subject: this string field holds a full SUBJECT SPIFFE ID,
+  // constructed/validated via sys/spiffe (durable subject key, e.g. workload).
+  bool identity_spiffe_subject = 60077;
+
+  // identity_spiffe_resource: this string field holds a RESOURCE SPIFFE ID that
+  // tacplus constructs from sibling fields; see IdentitySpiffeResource.
+  IdentitySpiffeResource identity_spiffe_resource = 60078;
+
+  // query_field: marks this record field as a typed filter criterion for the
+  // generated RecordMap query plane (Open<T>Query / Refine<T>). tacplus emits a typed
+  // <T>Filter message from the queryable fields. EQ → `optional <type> <name>`;
+  // RANGE → `optional <type> <name>_from` + `optional <type> <name>_to` (ordered
+  // fields, e.g. int64 timestamp_ms). The store transforms the filter into its
+  // query; tacplus knows only the shape, never the query→SQL transform.
+  QueryFieldOption query_field = 60080;
+
+  // redact: marks this record field as REDACTABLE AT EGRESS. Records are stored
+  // raw; the record store applies the field's mode when the caller's entitlements
+  // do not reveal it (at Sample/Pull only — never baked into stored state). tacplus
+  // generates a typed Sanitize<T>(record, <T>Entitlement, hmacKey) transform; the
+  // store computes the entitlement (mechanism in tacplus, policy in service).
+  RedactOption redact = 60082;
+}
+
+// QueryOp is the match kind for a (spec.query_field) record filter criterion.
+enum QueryOp {
+  QUERY_OP_UNSPECIFIED = 0; // treated as EQ
+  QUERY_OP_EQ = 1;          // equality: optional <type> <name>
+  QUERY_OP_RANGE = 2;       // inclusive range: optional <type> <name>_from/_to
+}
+
+// QueryFieldOption configures a record field as a RecordMap query filter criterion.
+message QueryFieldOption {
+  QueryOp op = 1;
+}
+
+// RedactMode selects the data-entitlement transform for a field on its way out
+// of a service (egress-only, e.g. Sample/Pull). It expresses the four states of
+// the data-entitlement lattice across two transform kinds (redact, anonymize)
+// and two floors (hard "is-*", eligible "may-*"). Effective level per field is
+// max(annotation floor, runtime entitlement) under pass-through < anonymize <
+// redact — the runtime entitlement can only ratchet tighter, never loosen below
+// the floor. The two "is-*" modes are the original unconditional behavior.
+enum RedactMode {
+  REDACT_MODE_UNSPECIFIED = 0;   // invalid — presence of the annotation implies a real mode
+  REDACT_MODE_DROP = 1;          // HARD FLOOR redact: always cleared to zero        (is-redacted)
+  REDACT_MODE_PSEUDONYMIZE = 2;  // HARD FLOOR anonymize: always keyed-HMAC pseudonym (is-anonymized)
+  REDACT_MODE_MAY_REDACT = 3;    // ELIGIBLE redact: runtime entitlement decides      (may-be-redacted)
+  REDACT_MODE_MAY_ANONYMIZE = 4; // ELIGIBLE anonymize: runtime entitlement decides   (may-be-anonymized)
+}
+
+// RedactOption configures a field (or, at message level via (spec.data_entitlement),
+// a whole message default) with a data-entitlement mode.
+message RedactOption {
+  RedactMode mode = 1;
+}
+
+// ============================================================================
+// Statedb Boundary Configuration
+// ============================================================================
+
+// ConsistencyModel was removed: the state backend supports only convergent
+// (lockless, last-writer-wins / append-only) replication, so every message-typed
+// boundary is stored independently and convergent. Boundary-ness is determined by
+// the field being a message type — no consistency annotation is needed or accepted.
+//   - Boundary name = "service_name+field_name+...n" (path through the state tree).
+//   - Non-repeated boundaries are singletons: a single value, no entry key.
+//   - Repeated boundaries require an (spec.indexed) field as the entry key
+//     (validated at build time).
+
+// EvictionPolicy determines which entries to evict when max_size is reached.
+// Used as a field-level annotation on boundary fields and as a message-level
+// default on state root messages.
+enum EvictionPolicy {
+  // EVICTION_POLICY_NONE disables eviction (default). Entries are never evicted by policy.
+  EVICTION_POLICY_NONE = 0;
+
+  // EVICTION_POLICY_LRU evicts least recently used entries.
+  EVICTION_POLICY_LRU = 1;
+
+  // EVICTION_POLICY_LFU evicts least frequently used entries.
+  EVICTION_POLICY_LFU = 2;
+
+  // EVICTION_POLICY_RANDOM evicts entries randomly.
+  EVICTION_POLICY_RANDOM = 3;
+}
+
+// MaxSizePolicy determines what the eviction_max_size limit refers to.
+enum MaxSizePolicy {
+  // MAX_SIZE_POLICY_ENTRY_COUNT limits by total number of entries (default).
+  MAX_SIZE_POLICY_ENTRY_COUNT = 0;
+
+  // MAX_SIZE_POLICY_USED_HEAP_SIZE limits by heap memory used in bytes.
+  MAX_SIZE_POLICY_USED_HEAP_SIZE = 1;
+
+  // MAX_SIZE_POLICY_USED_HEAP_PERCENTAGE limits by percentage of heap memory used.
+  MAX_SIZE_POLICY_USED_HEAP_PERCENTAGE = 2;
+
+  // MAX_SIZE_POLICY_FREE_HEAP_PERCENTAGE evicts when free heap drops below percentage.
+  MAX_SIZE_POLICY_FREE_HEAP_PERCENTAGE = 3;
+}
+
+// ============================================================================
+// Service Deployment Configuration
+// ============================================================================
+
+// StatePermsMode was removed: state access is export/import only and is not
+// governed by an RO/RW/WORM/CALL permission axis. Cross-namespace call gating on
+// queue/topic/command boundaries is declared with (spec.boundary_callers).
+
+// TlsKeyType specifies the key algorithm for auto-TLS certificate management.
+enum TlsKeyType {
+  // TLS_KEY_TYPE_NONE disables auto-TLS (default).
+  TLS_KEY_TYPE_NONE = 0;
+  // TLS_KEY_TYPE_ED25519 uses Ed25519 (OKP) keys.
+  TLS_KEY_TYPE_ED25519 = 1;
+  // TLS_KEY_TYPE_ECDSA uses ECDSA P-256 keys.
+  TLS_KEY_TYPE_ECDSA = 2;
+}
+
+// StateAnnotation marks a message as a state root and references its backing store.
+message StateAnnotation {
+  // name is the state root name (e.g. "ClusterState", "AegisState").
+  string name = 1;
+  // tag is the routing label for the backing store (e.g. "state-store", "eventbus").
+  string tag = 3;
+  // auto_tls enables automatic TLS certificate lifecycle management.
+  // When set, tacplus generates a bidi stream subscription to the certificate
+  // authority service and a new_tls_cert Handler method for cert delivery.
+  // The service generates keypairs locally; the certificate authority signs and
+  // delivers certs, triggering renewal at half-life.
+  TlsKeyType auto_tls = 4;
+  // export makes this state root available for RO import by other services.
+  // Without export, the state is private to the owning service.
+  bool export = 5;
+}
+
+// ServiceStoreAnnotation marks a message as a durable key-value store.
+// Unlike service_state (convergent, fan-out, Watch), service_store is:
+//   - Write-with-quorum (writes acked only after replication to 2+ nodes)
+//   - Read-on-demand (no Watch streams, no client-side caching)
+//   - No boundary decomposition (the message IS the value)
+// The store_key field annotation marks which field is the entry key.
+// Access is via delegate pattern: services authenticate clients, then
+// write through the backing service. External clients never write directly.
+message ServiceStoreAnnotation {
+  // tag is the routing label for the backing store (e.g. "state-store").
+  string tag = 1;
+}
+
+// GraphStoreAnnotation marks a service proto as a graph data store.
+// The store receives its projection data by auto-subscribing to the EventBus
+// topics that carry its projection sources; no mutation service is generated.
+message GraphStoreAnnotation {}
+
+// TimeseriesStoreAnnotation marks a service proto as a timeseries data store.
+// The store receives its projection data by auto-subscribing to the EventBus
+// topics that carry its projection sources; no mutation service is generated.
+message TimeseriesStoreAnnotation {}
+
+// RecordStoreAnnotation marks a service proto as the full-record store (stratum).
+// Services with this annotation auto-subscribe to EventBus topics that publish
+// the record types they store (currently spec.record). Hot/cold tiering is
+// internal to the service.
+message RecordStoreAnnotation {}
+
+// ServiceHealthAnnotation declares a typed health message for a service.
+// The annotated message MUST embed healthreport.ServiceInstanceHealth as field 1
+// ("base"). The state store extracts .base for the generic health view and stores the
+// full typed message per service (keyed by instance_id).
+// Each node reports its own perspective of cluster health — Sentinel monitors
+// consistency across perspectives and raises alarms on divergence.
+message ServiceHealthAnnotation {}
+
+// VServiceAnnotation declares a virtual service identity for a proto file.
+// Virtual services have their RPCs hosted by a physical service (e.g., eventbus)
+// but are authorized separately. The id is a stable field number for TokenEntitlements
+// (use range 30+ to avoid collision with physical service IDs).
+message VServiceAnnotation {
+  // name is the canonical vservice name used as the entitlement key (e.g., "claudesensor").
+  string name = 1;
+  // id is the stable field number in TokenEntitlements for this vservice.
+  int32 id = 2;
+}
+
+// ServiceAnnotation declares the owning service identity for a proto file.
+message ServiceAnnotation {
+  // name is the canonical service name (e.g. "identity", "gateway").
+  string name = 1;
+  // store declares this service as a backing store.
+  // Other services reference it via StateAnnotation.tag.
+  bool store = 3;
+  // gateway declares this service as a gateway (reverse proxy).
+  // Changes TLS source to GatewayTlsState (public cert) instead of X509Mint (internal CA).
+  // The generated run() watches GatewayTlsState for cert hot-reload instead of running
+  // a TLS renewal loop.
+  bool gateway = 4;
+  // rest_dispatch generates REST→gRPC dispatch code for all C2S RPCs visible
+  // to this service. The service acts as a reverse proxy, translating HTTP/JSON
+  // requests into typed gRPC calls. Used by gateway and the CLI.
+  bool rest_dispatch = 5;
+}
+
+// GrpcConfigAnnotation marks a message as a gRPC service's configuration.
+// tacplus uses these to auto-generate a generated.Services message that aggregates all
+// gRPC configs, plus per-service config state boundaries.
+message GrpcConfigAnnotation {
+  // service_name is the gRPC service name.
+  string service_name = 1;
+}
+
+// ConfigSliceScope identifies the aggregate config message that receives a
+// per-service config slice.
+enum ConfigSliceScope {
+  CONFIG_SLICE_SCOPE_UNSPECIFIED = 0;
+  CONFIG_SLICE_SCOPE_TENANT = 1;
+  CONFIG_SLICE_SCOPE_PROJECT = 2;
+}
+
+// ConfigSliceAnnotation declares one per-service config slice and its owner.
+message ConfigSliceAnnotation {
+  ConfigSliceScope scope = 1;
+  string service_name = 2;
+}
+
+// StateImport is the legacy file-level mirror for field-level state_import
+// declarations. The target state must have export=true on its service_state.
+message StateImport {
+  // source is "package.StateName" (e.g. "identity.Identity", "aegis.AegisState").
+  string source = 1;
+}
+
+// OpaEvalAnnotation marks a message as an OPA policy evaluation input.
+// tacplus generates a typed RPC on the opa service for each annotated message.
+// The input message defines the evaluation parameters; the result message defines
+// the typed output. Both must be in the same proto file.
+// Example:
+//   message EntitlementEvalInput {
+//     option (spec.opa_eval) = {
+//       entry_point: "data.entitlements.profiles"
+//       result: "EntitlementEvalResult"
+//     };
+//     string email = 1;
+//     repeated string claims = 2;
+//   }
+message OpaEvalAnnotation {
+  // entry_point is the OPA policy path (e.g. "data.entitlements.profiles").
+  string entry_point = 1;
+  // result is the name of the result message in the same proto file.
+  string result = 2;
+}
+
+// OpaImport declares a dependency on an OPA eval definition.
+// Used as a file-level option so each proto package can declare which OPA
+// evaluations it needs. tacplus generates a typed OpaEval client targeting
+// the named physical service.
+// Example:
+//   option (spec.opa_import) = {source: "userentitlements.EntitlementEvalInput", service: "opa"};
+message OpaImport {
+  // source is "package.InputMessageName" (e.g. "userentitlements.EntitlementEvalInput").
+  string source = 1;
+  // service is the physical service that implements the OpaEval virtual service.
+  // Required. Build fails if the target does not import sys/opalib.proto.
+  string service = 2;
+}
+
+// GrpcS2SClient declares a service-to-service gRPC client dependency.
+// Used as a file-level option to declare which S2S gRPC services this service calls.
+// Proto package names are globally unique, so no file path is needed.
+// tacplus resolves the package name to its proto file at build time.
+// Example: option (spec.grpc_s2s_client) = {service: "identity.Mint"};
+message GrpcS2SClient {
+  // service is "package.ServiceName" (e.g. "identity.Mint").
+  string service = 1;
+}
+
+// GrpcC2SClient declares a client-facing service dependency.
+// Used as a file-level option to declare which services this package calls.
+// tacplus.yaml selects whether that dependency emits C2S, W2S, or both.
+// Example: option (spec.grpc_c2s_client) = {service: "gateway.TokenMint"};
+message GrpcC2SClient {
+  // service is "package.ServiceName" (e.g. "gateway.TokenMint").
+  string service = 1;
+}
+
+// GrpcW2SClient declares a client-facing service dependency.
+// Used as a file-level option to declare which services this package calls.
+// tacplus.yaml selects whether that dependency emits C2S, W2S, or both.
+// Example: option (spec.grpc_w2s_client) = {service: "dashboard.Dashboard"};
+message GrpcW2SClient {
+  // service is "package.ServiceName" (e.g. "dashboard.Dashboard").
+  string service = 1;
+}
+
+// RestMethod enumerates additional HTTP methods for REST exposure.
+// POST is always implicit on every convention REST route and does not
+// appear in this enum. These values are used with spec.rest_method to
+// declare additional HTTP methods for an RPC.
+enum RestMethod {
+  REST_METHOD_UNSPECIFIED = 0;
+  REST_METHOD_GET = 1;
+  REST_METHOD_PATCH = 2;
+  REST_METHOD_PUT = 3;
+  REST_METHOD_DELETE = 4;
+}
+
+// RestMethods is a wrapper for repeated RestMethod, used in method options.
+message RestMethods {
+  repeated RestMethod methods = 1;
+}
+
+extend google.protobuf.ServiceOptions {
+  // event_tag is the routing label for gateway-exposed event services.
+  // Set by tacplus on generated state services that have spec.service_event.
+  // The gateway uses this as the service_id for backend resolution.
+  string event_tag = 70012;
+
+  // service_s2s declares a service-to-service gRPC service.
+  // Only authenticated service identities can call these RPCs.
+  // Example: option (spec.service_s2s) = {auth_services: ["gateway"]};
+  ServiceS2SAnnotation service_s2s = 70013;
+
+  // service_c2s declares a client-to-service gRPC service.
+  // Exposed through the gateway to end users.
+  // Example: option (spec.service_c2s) = {auth_entitled_users: true};
+  ServiceC2SAnnotation service_c2s = 70014;
+
+  // service_c2d declares a client-to-daemon gRPC service.
+  // Served over local IPC between CLI processes and a daemon.
+  // No auth — filesystem permissions are the security boundary.
+  // Example: option (spec.service_c2d) = {socket_path: "/run/mydaemon.sock"};
+  ServiceC2DAnnotation service_c2d = 70015;
+
+  // token_minter explicitly marks the cluster's token mint service so the
+  // bootstrap exchanger codegen targets it by fully-qualified name instead of
+  // scanning for mint RPC signatures.
+  // Example: option (spec.token_minter) = {};            // authoritative S2S minter
+  //          option (spec.token_minter) = {proxy: true}; // gateway C2S front
+  TokenMinterAnnotation token_minter = 70016;
+
+  // smb (Service Mesh Blackbox) marks a service whose OWN INSTANCES communicate
+  // over a black-box peer protocol within a
+  // single cluster (SPIFFE plan D7). Each instance obtains a per-SMB CA + its
+  // own member cert from the SMB CA authority (the consumer service designated
+  // by spec.smb_authority). By default that per-SMB CA is isolated from the
+  // cluster root; bootstrap-constrained members may request a cluster-rooted
+  // per-SMB intermediate with root: SMB_ROOT_CLUSTER.
+  // Example: option (spec.smb) = {};
+  //          option (spec.smb) = {root: SMB_ROOT_CLUSTER};
+  SmbAnnotation smb = 70020;
+
+  // smb_authority marks the consumer service that issues isolated per-SMB CAs and
+  // member certs for spec.smb services — declared EXPLICITLY (like token_minter),
+  // not inferred. tacplus targets the service carrying this annotation as the SMB
+  // cert authority and fails generation if spec.smb services exist with no
+  // authority declared. tacplus does not implement the authority; the designated
+  // consumer service does. Exactly one authority should be annotated.
+  // Example: option (spec.smb_authority) = {};
+  SmbAuthorityAnnotation smb_authority = 70021;
+}
+
+extend google.protobuf.MethodOptions {
+  // rest_method declares additional HTTP methods for this RPC's REST endpoint.
+  // POST is always implicit on every convention REST route.
+  // Example: option (spec.rest_method) = {methods: [REST_METHOD_GET]};
+  RestMethods rest_method = 80009;
+
+  // rest_path adds an additional alias REST route for this method.
+  // The path is relative to REST_ROOT_PATH (defined in gateway.proto).
+  // The convention path ({ROOT_PATH}/{package}/{MethodName}) is always
+  // present; rest_path creates a second route with the same HTTP methods.
+  // Example: option (spec.rest_path) = ".well-known/openid-configuration";
+  //          → adds route at /api/v1/.well-known/openid-configuration
+  string rest_path = 80008;
+
+  // proof_requires declares a precondition on an RPC method.
+  // In Rust, emitted as #[kani::requires(...)].
+  // In Java, emitted as //@ requires ... (JML).
+  // Example: option (spec.proof_requires) = "!request.client_id.is_empty()";
+  string proof_requires = 80010;
+
+  // proof_ensures declares a postcondition on an RPC method.
+  // In Rust, emitted as #[kani::ensures(...)].
+  // In Java, emitted as //@ ensures ... (JML).
+  // Example: option (spec.proof_ensures) = "response.token.len() > 0";
+  string proof_ensures = 80011;
+
+  // method_s2s overrides service-level defaults for a single S2S RPC.
+  // Only valid on methods within a service_s2s service.
+  // Example: option (spec.method_s2s) = {auth_services: ["sentinel", "gateway"]};
+  // Example: option (spec.method_s2s) = {auth_disabled: true};
+  MethodS2SAnnotation method_s2s = 80012;
+
+  // method_c2s overrides service-level defaults for a single C2S RPC.
+  // Only valid on methods within a service_c2s service.
+  // Example: option (spec.method_c2s) = {auth_disabled: true};
+  // Example: option (spec.method_c2s) = {auth_any_user: true};
+  MethodC2SAnnotation method_c2s = 80013;
+
+  // method_collection marks a collection-returning read and declares its shape.
+  // Example: option (spec.method_collection) = {mode: COLLECTION_MODE_SNAPSHOT, max_items: 1000, order_by: ["created_at"]};
+  // Example: option (spec.method_collection) = {mode: COLLECTION_MODE_WATCH, order_by: ["id"]};
+  MethodCollection method_collection = 80014;
+
+}
+
+// Collection query types are in sys/query.proto.

@@ -1,0 +1,30 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// Package opalib defines the OpaPolicy message for embedding Open Policy Agent
+// authorization policies. Policies are stored as a filesystem.Directory tree
+// of .rego files. Used by services that evaluate or store OPA policy bundles.
+
+syntax = "proto3";
+
+package opalib;
+
+import "sys/spec.proto";
+import "sys/filesystem.proto";
+
+// OpaPolicy defines an OPA policy bundle for authorization evaluation.
+// The bundle is a filesystem.Directory tree containing .rego policy files.
+message OpaPolicy {
+
+  // entry_point specifies the main package/decision point for policy evaluation.
+  string entry_point = 1 [(spec.assert_min_size) = 1, (spec.assert_max_size) = 256];
+
+  // bundle is the directory tree containing .rego policy files.
+  filesystem.Directory bundle = 2;
+
+  // created is the Unix epoch timestamp (seconds) when the policy was created.
+  int64 created = 3 [(spec.assert_ge) = 1735689600, (spec.assert_le) = 8045740800];
+
+  // version is an optional version string for this policy (e.g., "1.0.0").
+  string version = 4 [(spec.assert_semver) = true, (spec.assert_max_size) = 64];
+
+}

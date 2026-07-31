@@ -1,0 +1,244 @@
+{{- /* Rust serialization helpers template */ -}}
+{{- if .NeedsNormalization}}
+/// Normalizes enum string values to i32 in a JSON Value tree for {{.TypeName}}.
+/// Converts canonical proto enum names (e.g., "LEVEL_DEBUG") and friendly
+/// names to their i32 representation before serde deserialization.
+pub fn normalize_{{.SnakeName}}_enums(v: &mut serde_json::Value) {
+if let Some(obj) = v.as_object_mut() {
+{{- range .EnumFields}}
+{{- if .IsRepeated}}
+{ let key = if obj.contains_key("{{.CamelName}}") { "{{.CamelName}}" } else { "{{.FieldName}}" };
+if let Some(arr) = obj.get_mut(key).and_then(|v| v.as_array_mut()) {
+for item in arr.iter_mut() {
+if let Some(s) = item.as_str() {
+if let Ok(i) = {{.EnumTypeName}}::parse_i32(s) {
+*item = serde_json::Value::Number(serde_json::Number::from(i));
+}
+}
+}
+} }
+{{- else}}
+{ let key = if obj.contains_key("{{.CamelName}}") { "{{.CamelName}}" } else { "{{.FieldName}}" };
+if let Some(val) = obj.get_mut(key) {
+if let Some(s) = val.as_str() {
+if let Ok(i) = {{.EnumTypeName}}::parse_i32(s) {
+*val = serde_json::Value::Number(serde_json::Number::from(i));
+}
+}
+} }
+{{- end}}
+{{- end}}
+{{- range .MessageFields}}
+{{- if .IsRepeated}}
+{ let key = if obj.contains_key("{{.CamelName}}") { "{{.CamelName}}" } else { "{{.FieldName}}" };
+if let Some(arr) = obj.get_mut(key).and_then(|v| v.as_array_mut()) {
+for item in arr.iter_mut() {
+{{- if .CratePath}}
+{{.CratePath}}::{{.NormalizeFn}}(item);
+{{- else}}
+{{.NormalizeFn}}(item);
+{{- end}}
+}
+} }
+{{- else}}
+{ let key = if obj.contains_key("{{.CamelName}}") { "{{.CamelName}}" } else { "{{.FieldName}}" };
+if let Some(val) = obj.get_mut(key) {
+{{- if .CratePath}}
+{{.CratePath}}::{{.NormalizeFn}}(val);
+{{- else}}
+{{.NormalizeFn}}(val);
+{{- end}}
+} }
+{{- end}}
+{{- end}}
+}
+}
+{{- end}}
+{{- if .NeedsNormalization}}
+/// Converts i32 enum values to their string representations in a JSON Value tree for {{.TypeName}}.
+/// Reverse of normalize_{{.SnakeName}}_enums — converts integer enum values to API-friendly
+/// string names (using json_return_value when set, e.g., 1 → "user" for Role).
+pub fn stringify_{{.SnakeName}}_enums(v: &mut serde_json::Value) {
+if let Some(obj) = v.as_object_mut() {
+{{- range .EnumFields}}
+{{- if .IsRepeated}}
+{ let key = if obj.contains_key("{{.CamelName}}") { "{{.CamelName}}" } else { "{{.FieldName}}" };
+if let Some(arr) = obj.get_mut(key).and_then(|v| v.as_array_mut()) {
+for item in arr.iter_mut() {
+if let Some(n) = item.as_i64() {
+*item = serde_json::Value::String({{.EnumTypeName}}::to_string_value(n as i32));
+}
+}
+} }
+{{- else}}
+{ let key = if obj.contains_key("{{.CamelName}}") { "{{.CamelName}}" } else { "{{.FieldName}}" };
+if let Some(val) = obj.get_mut(key) {
+if let Some(n) = val.as_i64() {
+*val = serde_json::Value::String({{.EnumTypeName}}::to_string_value(n as i32));
+}
+} }
+{{- end}}
+{{- end}}
+{{- range .MessageFields}}
+{{- if .IsRepeated}}
+{ let key = if obj.contains_key("{{.CamelName}}") { "{{.CamelName}}" } else { "{{.FieldName}}" };
+if let Some(arr) = obj.get_mut(key).and_then(|v| v.as_array_mut()) {
+for item in arr.iter_mut() {
+{{- if .CratePath}}
+{{.CratePath}}::{{.StringifyFn}}(item);
+{{- else}}
+{{.StringifyFn}}(item);
+{{- end}}
+}
+} }
+{{- else}}
+{ let key = if obj.contains_key("{{.CamelName}}") { "{{.CamelName}}" } else { "{{.FieldName}}" };
+if let Some(val) = obj.get_mut(key) {
+{{- if .CratePath}}
+{{.CratePath}}::{{.StringifyFn}}(val);
+{{- else}}
+{{.StringifyFn}}(val);
+{{- end}}
+} }
+{{- end}}
+{{- end}}
+}
+}
+{{- end}}
+/// Converts {{.TypeName}} to JSON bytes.
+/// Uses serde_json for serialization.
+pub fn {{.SnakeName}}_to_json(msg: &{{.TypeName}}) -> Result<Vec<u8>, String> {
+serde_json::to_vec(msg)
+.map_err(|e| format!("Failed to serialize to JSON: {}", e))
+}
+/// Converts {{.TypeName}} to pretty-printed JSON bytes.
+pub fn {{.SnakeName}}_to_json_pretty(msg: &{{.TypeName}}) -> Result<Vec<u8>, String> {
+serde_json::to_vec_pretty(msg)
+.map_err(|e| format!("Failed to serialize to JSON: {}", e))
+}
+/// Converts {{.TypeName}} to JSON bytes with string enum values (for REST APIs).
+/// Uses stringify_*_enums to convert i32 enum fields to their API-friendly string representations.
+pub fn {{.SnakeName}}_to_api_json(msg: &{{.TypeName}}) -> Result<Vec<u8>, String> {
+{{- if .NeedsNormalization}}
+let json_bytes = {{.SnakeName}}_to_json(msg)?;
+let mut v: serde_json::Value = serde_json::from_slice(&json_bytes)
+.map_err(|e| format!("Failed to parse JSON for stringify: {}", e))?;
+stringify_{{.SnakeName}}_enums(&mut v);
+serde_json::to_vec(&v)
+.map_err(|e| format!("Failed to serialize API JSON: {}", e))
+{{- else}}
+{{.SnakeName}}_to_json(msg)
+{{- end}}
+}
+/// Converts {{.TypeName}} to pretty-printed JSON bytes with string enum values (for REST APIs).
+pub fn {{.SnakeName}}_to_api_json_pretty(msg: &{{.TypeName}}) -> Result<Vec<u8>, String> {
+{{- if .NeedsNormalization}}
+let json_bytes = {{.SnakeName}}_to_json(msg)?;
+let mut v: serde_json::Value = serde_json::from_slice(&json_bytes)
+.map_err(|e| format!("Failed to parse JSON for stringify: {}", e))?;
+stringify_{{.SnakeName}}_enums(&mut v);
+serde_json::to_vec_pretty(&v)
+.map_err(|e| format!("Failed to serialize API JSON: {}", e))
+{{- else}}
+{{.SnakeName}}_to_json_pretty(msg)
+{{- end}}
+}
+/// Converts {{.TypeName}} to binary protobuf bytes.
+pub fn {{.SnakeName}}_to_binary(msg: &{{.TypeName}}) -> Result<Vec<u8>, String> {
+let mut buf = Vec::new();
+msg.encode(&mut buf)
+.map_err(|e| format!("Failed to encode protobuf: {}", e))?;
+Ok(buf)
+}
+/// Converts {{.TypeName}} to YAML bytes.
+/// Converts to JSON first, then to YAML for proper protobuf handling.
+pub fn {{.SnakeName}}_to_yaml(msg: &{{.TypeName}}) -> Result<Vec<u8>, String> {
+let json_data = {{.SnakeName}}_to_json(msg)?;
+let v: serde_json::Value = serde_json::from_slice(&json_data)
+.map_err(|e| format!("Failed to convert to YAML: {}", e))?;
+serde_yaml::to_string(&v)
+.map(|s| s.into_bytes())
+.map_err(|e| format!("Failed to serialize to YAML: {}", e))
+}
+/// Converts {{.TypeName}} to TOML bytes.
+/// Converts to JSON first, then to TOML for proper protobuf handling.
+pub fn {{.SnakeName}}_to_toml(msg: &{{.TypeName}}) -> Result<Vec<u8>, String> {
+let json_data = {{.SnakeName}}_to_json(msg)?;
+let obj: toml::Value = serde_json::from_slice(&json_data)
+.map_err(|e| format!("Failed to convert to TOML: {}", e))?;
+toml::to_string(&obj)
+.map(|s| s.into_bytes())
+.map_err(|e| format!("Failed to serialize to TOML: {}", e))
+}
+/// Creates {{.TypeName}} from TOML bytes.
+pub fn {{.SnakeName}}_from_toml(data: &[u8]) -> Result<{{.TypeName}}, String> {
+let s = std::str::from_utf8(data)
+.map_err(|e| format!("Invalid UTF-8 in TOML: {}", e))?;
+let toml_val: toml::Value = toml::from_str(s)
+.map_err(|e| format!("Failed to parse TOML: {}", e))?;
+let json_data = serde_json::to_vec(&toml_val)
+.map_err(|e| format!("Failed to convert TOML to JSON: {}", e))?;
+{{.SnakeName}}_from_json(&json_data)
+}
+/// Creates {{.TypeName}} from bytes, auto-detecting the format.
+/// Supports JSON, YAML, TOML, and binary protobuf formats.
+/// Tries JSON first (if starts with '{'), then TOML, then YAML, then binary.
+/// Empty bytes are treated as binary protobuf (default message).
+pub fn {{.SnakeName}}_from_bytes(data: &[u8]) -> Result<{{.TypeName}}, String> {
+// Empty data is valid for protobuf (represents default message)
+if data.is_empty() {
+return Ok({{.TypeName}}::default());
+}
+// Trim leading whitespace to check format
+let trimmed = data.iter().skip_while(|&&b| b.is_ascii_whitespace()).copied().collect::<Vec<_>>();
+if trimmed.is_empty() {
+// Only whitespace - treat as default message
+return Ok({{.TypeName}}::default());
+}
+// Try JSON first (starts with '{' or '[')
+if trimmed[0] == b'{' || trimmed[0] == b'[' {
+if let Ok(msg) = {{.SnakeName}}_from_json(data) {
+return Ok(msg);
+}
+}
+// Try TOML (before YAML since YAML is more permissive)
+if let Ok(msg) = {{.SnakeName}}_from_toml(data) {
+return Ok(msg);
+}
+// Try YAML
+if let Ok(msg) = {{.SnakeName}}_from_yaml(data) {
+return Ok(msg);
+}
+// Try binary protobuf
+{{.TypeName}}::decode(data)
+.map_err(|e| format!("Failed to parse: unsupported format or invalid data: {}", e))
+}
+/// Creates {{.TypeName}} from JSON bytes.
+pub fn {{.SnakeName}}_from_json(data: &[u8]) -> Result<{{.TypeName}}, String> {
+{{- if .NeedsNormalization}}
+let mut v: serde_json::Value = serde_json::from_slice(data)
+.map_err(|e| format!("Failed to parse JSON: {}", e))?;
+normalize_{{.SnakeName}}_enums(&mut v);
+serde_json::from_value(v)
+.map_err(|e| format!("Failed to deserialize: {}", e))
+{{- else}}
+serde_json::from_slice(data)
+.map_err(|e| format!("Failed to parse JSON: {}", e))
+{{- end}}
+}
+/// Creates {{.TypeName}} from YAML bytes.
+pub fn {{.SnakeName}}_from_yaml(data: &[u8]) -> Result<{{.TypeName}}, String> {
+let mut v: serde_json::Value = serde_yaml::from_slice(data)
+.map_err(|e| format!("Failed to parse YAML: {}", e))?;
+normalize_yaml_numbers(&mut v);
+{{- if .NeedsNormalization}}
+normalize_{{.SnakeName}}_enums(&mut v);
+{{- end}}
+serde_json::from_value(v)
+.map_err(|e| format!("Failed to deserialize: {}", e))
+}
+/// Creates {{.TypeName}} from binary protobuf bytes.
+pub fn {{.SnakeName}}_from_binary(data: &[u8]) -> Result<{{.TypeName}}, String> {
+{{.TypeName}}::decode(data)
+.map_err(|e| format!("Failed to decode protobuf: {}", e))
+}

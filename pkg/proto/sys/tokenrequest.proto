@@ -1,0 +1,134 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+syntax = "proto3";
+
+package tokenrequest;
+
+import "sys/cloudidentity.proto";
+import "sys/key.proto";
+import "sys/spec.proto";
+import "sys/token.proto";
+import "sys/x509.proto";
+import "google/protobuf/struct.proto";
+
+option java_outer_classname = "Tokenrequest";
+
+// TokenMintRequest is a compatibility request shape for token mint services.
+message TokenMintRequest {
+  string input_token = 1;
+  cloudidentity.CloudIdentityProof cloud_proof = 2;
+  string continuity_token = 3;
+  string aud = 4;
+  int64 exp = 5;
+  token.TokenPurpose token_purpose = 6;
+  string subject = 7;
+  google.protobuf.Struct claims = 8;
+  bool offline_access = 9;
+  string locality_token = 10;
+  string project = 11;
+  repeated string service_auds = 12 [(spec.assert_max_size) = 1024];
+  string trace_id = 200;
+  bool noop = 201;
+}
+
+// MintServiceTokenRequest is the input for service-token minting.
+//
+// Credential proof: exactly one of input_token, cloud_proof, or
+// kubernetes_token authenticates the caller. The kernel groups these into a
+// oneof (credential_proof) and routes on the discriminator; clients may set a
+// single flat field — proto3 oneof membership is a property of the parsing
+// descriptor, so a flat field at the same tag/wire type is decoded into the
+// matching oneof case and remains wire-compatible.
+message MintServiceTokenRequest {
+  string input_token = 1;
+  cloudidentity.CloudIdentityProof cloud_proof = 2;
+  string continuity_token = 3;
+  string aud = 4;
+  int64 exp = 5;
+  token.TokenPurpose token_purpose = 6;
+  string locality_token = 7;
+  // kubernetes_token is a projected Kubernetes service-account JWT carrying the
+  // configured kernel workload audience ("kernel"; it must NOT
+  // be the "kmaker" audience). The kernel maps the verified
+  // (namespace, service account) to a Delegate. Tag 8 matches the kernel's
+  // credential_proof oneof so a flat field here is wire-compatible.
+  string kubernetes_token = 8;
+  string trace_id = 200;
+  bool noop = 201;
+}
+
+// MintUserTokenRequest is the input for user-token minting.
+message MintUserTokenRequest {
+  string subject = 1;
+  google.protobuf.Struct claims = 2;
+  int64 exp = 3;
+  bool offline_access = 4;
+  string trace_id = 200;
+  bool noop = 201;
+}
+
+// MintClientTokenRequest is the input for external-client token minting.
+message MintClientTokenRequest {
+  string input_token = 1;
+  int64 exp = 2;
+  token.TokenPurpose token_purpose = 3;
+  string trace_id = 200;
+  bool noop = 201;
+}
+
+// TokenMintResponse is the generic token mint response shape.
+message TokenMintResponse {
+  token.Token access_token = 1;
+  token.Token refresh_token = 2;
+  repeated token.Token service_tokens = 3 [(spec.assert_max_size) = 1024];
+  string trace_id = 200;
+  bool noop = 201;
+}
+
+// X509MintRequest is the input for certificate minting.
+message X509MintRequest {
+  string aud = 1;
+  x509.X509CertRequest cert_request = 2;
+  string input_token = 3;
+  string trace_id = 200;
+  bool noop = 201;
+}
+
+// ExternalTokenMintRequest is the input for proxy-mediated token minting.
+message ExternalTokenMintRequest {
+  string user_token = 1;
+  string metadata = 2;
+  // requested_signing_key_type selects the kernel signing key family for the
+  // external JWT. Empty/undefined preserves the default internal family:
+  // OKP / Ed25519 / EdDSA. Use EC for vendors that require P-256 / ES256.
+  key.KeyType requested_signing_key_type = 3;
+  string trace_id = 200;
+  bool noop = 201;
+}
+
+// ExternalTokenMintResponse is the response for MintExternalToken (proxy egress).
+message ExternalTokenMintResponse {
+  // token is the minted external JWT. Populated when auth_type = TOKEN_TYPE_JWT.
+  token.Token token = 1;
+  // dst_url is the destination URL to forward to (empty = provider default).
+  string dst_url = 2 [(spec.assert_max_size) = 2048];
+  // auth_type indicates the credential format (JWT vs SAML).
+  token.TokenType auth_type = 3;
+  // saml_assertion is the SAML assertion when auth_type = TOKEN_TYPE_SAML.
+  string saml_assertion = 4 [(spec.assert_max_size) = 65536];
+}
+
+// WorkloadMintRequest mints a child workload identity. The child's SPIFFE ID is
+// the caller's spiffe_id + "/" + workload_name.
+message WorkloadMintRequest {
+  string workload_name = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 128];
+  // terminal marks the child as unable to mint further children.
+  bool terminal = 3;
+  // exp is the desired expiry for the bootstrap token (0 = kernel default).
+  int64 exp = 4 [(spec.assert_ge) = 0];
+}
+
+// WorkloadMintResponse carries the short-lived bootstrap token for a new child.
+message WorkloadMintResponse {
+  token.Token bootstrap_token = 1;
+}

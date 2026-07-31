@@ -1,0 +1,22 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+syntax = "proto3";
+
+package contractstratum;
+
+import "sys/spec.proto";
+
+// The full-record store (stratum) for the contract fixture set. Declaring
+// record_store makes tacplus append the RecordMap query plane (Open/Refine/
+// Count/Sample/Pull/Watch/Close over every spec.record in the fleet) to this
+// proto, so the cross-test compiles that generated surface in every language.
+option (spec.service) = {name: "contractstratum"};
+option (spec.record_store) = {};
+
+message StratumPing {}
+
+service ContractStratum {
+  option (spec.service_s2s) = {auth_services: ["*"]};
+
+  rpc Ping(StratumPing) returns (StratumPing);
+}

@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// ============================================================================
+// Credential-pair primitives, one per caller class.
+//
+// A cred_pair is a public/private keypair: the holder (tenant/CI/service/client)
+// keeps the private key and signs a short-lived proof; the cluster stores only
+// the public key and verifies the proof, then mints a platform token.
+//
+// There is one cred_pair type per caller class, differing only in the
+// authorization payload they confer:
+//   - S2SCredPair → service bootstrap.         Authz = authorized_services.
+//   - (C2S uses the existing common `credentials.CredPair{Entitlements grants}`
+//      — kept as-is; deeper C2S-cred_pair support lands later with CloudAuth.)
+//
+// These live in the tacplus lib because they span more than one service/client:
+// a token authority mints/verifies them, callers hold them, and tenant_config
+// carries them. Service-local concerns stay in the implementing service's
+// own proto/codegen.
+// ============================================================================
+
+syntax = "proto3";
+
+package credpair;
+
+import "sys/spec.proto";
+import "sys/jwk.proto";
+import "google/protobuf/timestamp.proto";
+
+// S2SCredPair authenticates a service bootstrapping its identity (S2S). It
+// confers the set of services the bootstrapped token may act as / call,
+// formalizing service bootstrap delegate cred_pairs.
+message S2SCredPair {
+  string id = 1 [(spec.assert_required) = true, (spec.assert_min_size) = 1];
+  jwk.Jwk public_key = 2 [(spec.assert_required) = true];  // JWK, verified via ImmutableJwk
+  repeated string authorized_services = 3 [(spec.assert_max_size) = 64];
+  google.protobuf.Timestamp expires_at = 4;  // zero = no expiry
+  string description = 5 [(spec.assert_max_size) = 256];
+}

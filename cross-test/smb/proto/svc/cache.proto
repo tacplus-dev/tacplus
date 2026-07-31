@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// SMB fixture: a Service Mesh Blackbox service (SPIFFE plan D7). Its own
+// instances talk over a black-box peer protocol, so it opts in
+// with (spec.smb) and obtains a per-SMB CA + member cert from the designated
+// authority. Dir (svc) differs from package (mysmb) by convention.
+
+syntax = "proto3";
+
+package mysmb;
+
+import "sys/spec.proto";
+
+message Ping { string m = 1; }
+
+message CacheState {
+  option (spec.service_state) = {name: "CacheState", tag: "state-store", export: true};
+  string marker = 1;
+}
+
+service CacheService {
+  option (spec.service_s2s) = {auth_services: ["*"], tag: "CacheService"};
+  option (spec.smb) = {};
+  rpc Get(Ping) returns (Ping) {
+    option (spec.method_s2s) = {auth_services: ["*"]};
+  }
+}
+
+service KernelCacheService {
+  option (spec.service_s2s) = {auth_services: ["*"], tag: "KernelCacheService"};
+  option (spec.smb) = {root: SMB_ROOT_CLUSTER};
+  rpc Get(Ping) returns (Ping) {
+    option (spec.method_s2s) = {auth_services: ["*"]};
+  }
+}

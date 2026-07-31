@@ -1,0 +1,99 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! At-rest compression for rolled/archived files and snapshot baselines.
+//! The live redo-log append tail is never compressed (cheap line appends).
+//!
+//! On read we auto-detect the codec by magic bytes, so a file's compression
+//! can change between writes without tracking it out-of-band.
+
+use crate::error::{DiskStoreError, Result};
+use std::io::{Read, Write};
+
+/// Compression algorithm. Maps from the proto `Compression` enum's i32 value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Codec {
+    None,
+    Gz,
+    Bz,
+}
+
+impl Codec {
+    /// Maps the proto `Compression` enum (i32): 1 = GZ, 2 = BZ, else NONE.
+    pub fn from_proto_i32(v: i32) -> Codec {
+        match v {
+            1 => Codec::Gz,
+            2 => Codec::Bz,
+            _ => Codec::None,
+        }
+    }
+}
+
+const GZ_MAGIC: [u8; 2] = [0x1f, 0x8b];
+const BZ_MAGIC: [u8; 3] = [b'B', b'Z', b'h'];
+
+/// Compress `data` with `codec`. `Codec::None` returns the bytes unchanged.
+pub fn compress(data: &[u8], codec: Codec) -> Result<Vec<u8>> {
+    match codec {
+        Codec::None => Ok(data.to_vec()),
+        Codec::Gz => {
+            use flate2::write::GzEncoder;
+            use flate2::Compression;
+            let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+            enc.write_all(data).map_err(DiskStoreError::from)?;
+            enc.finish().map_err(DiskStoreError::from)
+        }
+        Codec::Bz => {
+            use bzip2::write::BzEncoder;
+            use bzip2::Compression;
+            let mut enc = BzEncoder::new(Vec::new(), Compression::default());
+            enc.write_all(data).map_err(DiskStoreError::from)?;
+            enc.finish().map_err(DiskStoreError::from)
+        }
+    }
+}
+
+/// Decompress `data`, auto-detecting the codec by magic bytes. Bytes with no
+/// recognized magic are returned unchanged (treated as uncompressed).
+pub fn decompress_auto(data: &[u8]) -> Result<Vec<u8>> {
+    if data.starts_with(&GZ_MAGIC) {
+        use flate2::read::GzDecoder;
+        let mut out = Vec::new();
+        GzDecoder::new(data).read_to_end(&mut out).map_err(DiskStoreError::from)?;
+        Ok(out)
+    } else if data.starts_with(&BZ_MAGIC) {
+        use bzip2::read::BzDecoder;
+        let mut out = Vec::new();
+        BzDecoder::new(data).read_to_end(&mut out).map_err(DiskStoreError::from)?;
+        Ok(out)
+    } else {
+        Ok(data.to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip_none() {
+        let data = b"hello world";
+        let c = compress(data, Codec::None).unwrap();
+        assert_eq!(decompress_auto(&c).unwrap(), data);
+    }
+
+    #[test]
+    fn roundtrip_gz() {
+        let data = b"hello world, hello world, hello world";
+        let c = compress(data, Codec::Gz).unwrap();
+        assert!(c.starts_with(&GZ_MAGIC));
+        assert_eq!(decompress_auto(&c).unwrap(), data);
+    }
+
+    #[test]
+    fn roundtrip_bz() {
+        let data = b"hello world, hello world, hello world";
+        let c = compress(data, Codec::Bz).unwrap();
+        assert!(c.starts_with(&BZ_MAGIC));
+        assert_eq!(decompress_auto(&c).unwrap(), data);
+    }
+}

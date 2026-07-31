@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+/**
+ * Typed disk persistence.
+ *
+ * The disk analog of the typed HTTP client: read/write a proto **type** to
+ * disk with validation, instead of hand-rolling file I/O + ad-hoc parsing.
+ *
+ * Two modes share one substrate (atomic file ops, archive rotation, at-rest
+ * compression):
+ *
+ * 1. **UC1 — atomic typed snapshot** (snapshot): persist one whole typed
+ *    message. Write builds a fresh file and renames it over the original, so
+ *    there is never an inconsistent state; the displaced active is archived.
+ * 2. **UC2 — redo log** (redolog): an append-only WAL of typed mutations
+ *    (NDJSON), deduped to latest-per-key, periodically compacted via
+ *    snapshot+roll with build-then-rename crash recovery.
+ *
+ * Serialization is **always** via the generated JSON helpers (JSON + newline
+ * framing); validation on read is **always on** (we own the data we write, so
+ * invalid-on-read is a bug).
+ */
+
+export { DiskStoreError } from './error.js';
+export { Codec, codecFromProto, compress, decompressAuto } from './compress.js';
+export { atomicWrite, promote, rotateArchives, writeTemp, archiveName, sibling } from './fsutil.js';
+export { ROOT_TENANT, ROOT_SEG, nsSegments, nsDir, storePath, deleteNamespace } from './path.js';
+export {
+  readSnapshot,
+  writeSnapshot,
+  defaultSnapshotOpts,
+} from './snapshot.js';
+export type { SnapshotOpts } from './snapshot.js';
+export {
+  RedoLog,
+  dedupBytes,
+  dedupFile,
+} from './redolog.js';
+export type { Inserter, Record } from './redolog.js';
+export { rollOffsetSecs, runRollScheduler } from './schedule.js';

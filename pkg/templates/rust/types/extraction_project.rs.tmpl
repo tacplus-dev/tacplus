@@ -1,0 +1,20 @@
+{{- /* Projection group — groups all projections from a single source event type */ -}}
+{{- /* Generated from (spec.graph_type).source and (spec.timeseries_type).source annotations */ -}}
+
+/// Holds all projection types extracted from a single [`{{.SourceType}}`].
+/// Fields are `None` when the event doesn't contain the required payload.
+#[derive(Debug, Clone, Default)]
+pub struct {{.SourceType}}Projections {
+{{- range .Projections}}
+    pub {{.SnakeName}}: Option<{{.TypeName}}>,
+{{- end}}
+}
+
+/// Extracts all projection types from a [`{{.SourceType}}`].
+pub fn {{.SnakeSource}}_to_projections(event: &{{.SourceQualifier}}{{.SourceType}}) -> {{.SourceType}}Projections {
+    {{.SourceType}}Projections {
+{{- range .Projections}}
+        {{.SnakeName}}: extract_{{.SnakeName}}_from_{{$.SnakeSource}}(event),
+{{- end}}
+    }
+}

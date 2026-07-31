@@ -1,0 +1,44 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+SPIFFE-URI authorization helpers.
+
+The universal authorization rule for tenant-scoped operations: a bearer token
+may act on its own SPIFFE level or any path-segment descendant, never above
+and never sideways. Cross-namespace access is mediated by token exchange
+(future), not by relaxing this rule.
+
+This module takes namespace paths (e.g. "/tenants/acme") or full SPIFFE URIs
+(e.g. "spiffe://example.com/tenants/acme"); two URIs must share a trust
+domain, and a URI never matches a bare path.
+"""
+
+from .. import spiffe as wrapper_spiffe
+
+
+def is_at_or_below(caller: str, target: str) -> bool:
+    """Return True iff target equals caller or is a strict path-segment descendant.
+
+    This is the NAMESPACE (authorization-scope) relation, delegated to the
+    canonical generated sys/spiffe helper; it is distinct from the
+    identity-path relation (spiffe.is_spiffe_at_or_below) and the two must not
+    be cross-applied. Path-segment-aware: "/tenants/foo" is NOT at-or-below
+    "/tenants/foob". Malformed URIs fail closed (return False).
+    """
+    if not caller or not target:
+        return False
+    try:
+        c = wrapper_spiffe.parse_spiffe_id(caller)
+        t = wrapper_spiffe.parse_spiffe_id(target)
+    except ValueError:
+        c = None
+        t = None
+    caller_looks_uri = "://" in caller
+    target_looks_uri = "://" in target
+    if caller_looks_uri or target_looks_uri:
+        if c is None or t is None:
+            return False
+        if c.trust_domain != t.trust_domain:
+            return False
+        return wrapper_spiffe.is_at_or_below(c.namespace, t.namespace)
+    return wrapper_spiffe.is_at_or_below(caller, target)

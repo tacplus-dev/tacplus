@@ -1,0 +1,11 @@
+{{.Header}}
+package {{.PackagePath}};
+{{.Imports}}
+/**
+* Helpers provides all static utility methods for this proto package:
+* enum parsing, constants, serialization, validation, map conversion, and type defaults.
+*/
+public final class Helpers {
+private Helpers() {} // Prevent instantiation
+{{.Body}}
+}

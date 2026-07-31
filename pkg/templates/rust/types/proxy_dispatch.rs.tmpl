@@ -1,0 +1,127 @@
+<< .Header >>
+
+//! Proxy dispatch — decode and validate gRPC request bodies by path.
+//!
+//! Generated from proto annotations. Used by gateway's proxy_grpc layer
+//! to deserialize each message frame into its typed form, run validation,
+//! and optionally convert response bytes to JSON for REST translation.
+
+#[allow(unused_imports)]
+use prost::Message;
+
+#[allow(unused_imports)]
+use crate::types::generated::accounting_method::accounting_method::AccountingMethod;
+#[allow(unused_imports)]
+use crate::types::generated::services::services as services_pb;
+
+/// Return the typed accounting RPC for a gRPC path when this gateway has a
+/// generated accounting enum entry for it.
+#[allow(unused_variables)]
+pub fn trace_rpc_for_path(grpc_path: &str) -> Option<AccountingMethod> {
+    match grpc_path {
+<<- range .Arms >>
+<<- if .AccountingMethod >>
+        "<< .GrpcPath >>" => Some(<< .AccountingMethod >>),
+<<- end >>
+<<- end >>
+        _ => None,
+    }
+}
+
+/// Decode a proto request body and validate it for the given gRPC path.
+///
+/// Returns Ok(()) if the message decodes and passes validation.
+/// Returns Err(tonic::Status) with INVALID_ARGUMENT if decode or validation fails.
+/// Unknown paths return Ok(()) — the backend service handles validation for
+/// routes not in the compile-time table.
+#[allow(unused_variables)]
+pub fn validate_request(grpc_path: &str, proto_bytes: &[u8]) -> Result<(), tonic::Status> {
+    match grpc_path {
+<<- range .Arms >>
+        "<< .GrpcPath >>" => {
+<<- if .IsEmptyInput >>
+            Ok(())
+<<- else >>
+            let msg = << .FromBinaryPath >>(proto_bytes)
+                .map_err(|e| tonic::Status::invalid_argument(format!("decode: {}", e)))?;
+            msg.validate()
+                .map_err(|e| tonic::Status::invalid_argument(format!("validation: {}", e)))?;
+            Ok(())
+<<- end >>
+        }
+<<- end >>
+        _ => Ok(()),
+    }
+}
+
+/// Decode a proto request body and extract its annotated target namespace.
+///
+/// Methods annotated with `target_namespace_field` return the field value so
+/// the gateway can enforce the level-or-below rule before forwarding. Methods
+/// without the annotation return `Ok(None)`.
+#[allow(unused_variables)]
+pub fn request_target_namespace(
+    grpc_path: &str,
+    proto_bytes: &[u8],
+) -> Result<Option<String>, tonic::Status> {
+    match grpc_path {
+<<- range .Arms >>
+<<- if .TargetNamespaceField >>
+        "<< .GrpcPath >>" => {
+            let msg = << .FromBinaryPath >>(proto_bytes)
+                .map_err(|e| tonic::Status::invalid_argument(format!("decode: {}", e)))?;
+            Ok(Some(msg.<< .TargetNamespaceField >>.clone()))
+        }
+<<- end >>
+<<- end >>
+        _ => Ok(None),
+    }
+}
+
+/// Decode a proto response body and convert it to JSON for REST translation.
+///
+/// Returns Ok(json_string) on success, Err(description) on failure.
+/// Unknown paths return an error.
+#[allow(unused_variables)]
+pub fn response_to_json(grpc_path: &str, proto_bytes: &[u8]) -> Result<String, String> {
+    match grpc_path {
+<<- range .Arms >>
+<<- if .IsEmptyOutput >>
+        "<< .GrpcPath >>" => Ok("{}".to_string()),
+<<- else >>
+        "<< .GrpcPath >>" => {
+            let msg = << .ResponseFromBinaryPath >>(proto_bytes)?;
+            msg.validate().map_err(|e| format!("validation: {}", e))?;
+            let bytes = << .ResponseToJsonPath >>(&msg)?;
+            Ok(String::from_utf8(bytes).unwrap_or_default())
+        }
+<<- end >>
+<<- end >>
+        _ => Err(format!("unknown gRPC path: {}", grpc_path)),
+    }
+}
+
+/// Convert a JSON request body to serialized proto bytes for the given gRPC path.
+///
+/// Used by rest_translation to convert REST JSON requests into proto bytes
+/// before framing as gRPC and delegating to proxy_grpc.
+/// Returns Ok(proto_bytes) on success, Err(description) on failure.
+/// Unknown paths return an error.
+#[allow(unused_variables)]
+pub fn request_json_to_proto(grpc_path: &str, json_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    match grpc_path {
+<<- range .Arms >>
+<<- if .IsEmptyInput >>
+        "<< .GrpcPath >>" => Ok(Vec::new()),
+<<- else >>
+        "<< .GrpcPath >>" => {
+            let msg = << .FromJsonPath >>(json_bytes)?;
+            let mut buf = Vec::with_capacity(msg.encoded_len());
+            msg.encode(&mut buf).map_err(|e| format!("encode: {}", e))?;
+            Ok(buf)
+        }
+<<- end >>
+<<- end >>
+        _ => Err(format!("unknown gRPC path: {}", grpc_path)),
+    }
+}

@@ -1,0 +1,848 @@
+{{.Header}}
+// State client wrapper for {{.StateRootName}}.
+{{- $hasWatches := or .Singletons .Collections .StateImports -}}
+
+{{- if or .Collections .Views $hasWatches}}
+use std::collections::HashMap;
+{{- end}}
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+    RwLock,
+};
+
+#[allow(unused_imports)]
+use crate::types::{{.TypesCratePath}}::*; // Import types from types module
+use crate::types::{{.TypesCratePath}}::{{.PackageName}}::{{.StateServiceModule}}::{{.StateServiceClientType}};
+{{.CrossPackageImports}}
+use tokio_stream::StreamExt;
+use tonic::transport::Channel;
+
+{{- if $hasWatches}}
+#[derive(Clone, Debug)]
+pub struct WatchStatus {
+    pub watch_name: String,
+    pub received: bool,
+    pub retrying: bool,
+    pub next_attempt: u32,
+    pub reason: String,
+    pub error: Option<String>,
+    pub updated_at_millis: u128,
+}
+
+impl WatchStatus {
+    pub fn healthy(&self) -> bool {
+        !self.retrying
+    }
+}
+
+pub type WatchStatusListener = Arc<dyn Fn(WatchStatus) + Send + Sync>;
+
+{{- end}}
+// ==================== Subscriber Traits ====================
+{{range .Singletons}}
+/// Subscriber trait for the {{.TypeName}} singleton boundary.
+/// Implement this trait to receive notifications when the cached value changes.
+pub trait {{.FieldPascal}}Subscriber: Send + Sync + 'static {
+    fn on_{{.FieldName}}_change(&self, value: &{{.TypeName}});
+}
+{{end}}
+{{range .Collections}}
+/// Subscriber trait for the {{.TypeName}} collection boundary.
+/// Implement this trait to receive notifications when the collection changes.
+pub trait {{.FieldPascal}}Subscriber: Send + Sync + 'static {
+    fn on_{{.FieldName}}_change(&self, entries: &HashMap<String, {{.TypeName}}>);
+}
+{{end}}
+
+/// A token provider returns a bearer token string for S2S authentication.
+pub type TokenProvider = Arc<
+    dyn Fn() -> Pin<Box<dyn Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Inner cache state for {{.StateRootName}}Client.
+#[allow(dead_code)]
+struct {{.StateRootName}}ClientState {
+{{- range .InlineFields}}
+    {{.FieldName}}_cache: Option<{{.CratePath}}>,
+{{- end}}
+{{- range .Singletons}}
+    {{.FieldName}}_cache: Option<{{.TypeName}}>,
+    {{.FieldName}}_callbacks: Vec<Arc<dyn Fn(&{{.TypeName}}) + Send + Sync>>,
+    {{.FieldName}}_subscribers: Vec<Arc<dyn {{.FieldPascal}}Subscriber>>,
+{{- end}}
+{{- range .Collections}}
+    {{.FieldName}}_cache: HashMap<String, {{.TypeName}}>,
+    {{.FieldName}}_callbacks: Vec<Arc<dyn Fn(&HashMap<String, {{.TypeName}}>) + Send + Sync>>,
+    {{.FieldName}}_subscribers: Vec<Arc<dyn {{.FieldPascal}}Subscriber>>,
+{{- end}}
+{{- range .StateImports}}
+    {{.FieldName}}_cache: Option<{{.CratePath}}>,
+{{- end}}
+}
+
+/// Inner shared state for {{.StateRootName}}Client.
+#[allow(dead_code)]
+struct {{.StateRootName}}ClientInner {
+    state: RwLock<{{.StateRootName}}ClientState>,
+    channel: Channel,
+    stub: tokio::sync::Mutex<{{.StateServiceClientType}}<Channel>>,
+    token_provider: Option<TokenProvider>,
+    closed: AtomicBool,
+    close_notify: tokio::sync::Notify,
+{{- if $hasWatches}}
+    watch_statuses: RwLock<HashMap<String, WatchStatus>>,
+    watch_status_listener: RwLock<Option<WatchStatusListener>>,
+{{- end}}
+}
+
+/// {{.StateRootName}}Client provides typed client-side state management.
+/// It opens per-boundary Watch streams for real-time state updates,
+/// provides typed singleton and collection accessors, and supports
+/// change callbacks.
+#[derive(Clone)]
+#[allow(dead_code)]
+pub struct {{.StateRootName}}Client {
+    inner: Arc<{{.StateRootName}}ClientInner>,
+}
+
+impl {{.StateRootName}}Client {
+    /// Creates a new client connected to the state service via the given channel.
+    /// Spawns background Watch streams for all cached boundaries.
+    pub async fn new(channel: Channel, token_provider: Option<TokenProvider>) -> Result<Self, Box<dyn std::error::Error>> {
+        let stub = {{.StateServiceClientType}}::new(channel.clone());
+        let inner = Arc::new({{.StateRootName}}ClientInner {
+            state: RwLock::new({{.StateRootName}}ClientState {
+{{- range .InlineFields}}
+                {{.FieldName}}_cache: None,
+{{- end}}
+{{- range .Singletons}}
+                {{.FieldName}}_cache: None,
+                {{.FieldName}}_callbacks: Vec::new(),
+                {{.FieldName}}_subscribers: Vec::new(),
+{{- end}}
+{{- range .Collections}}
+                {{.FieldName}}_cache: HashMap::new(),
+                {{.FieldName}}_callbacks: Vec::new(),
+                {{.FieldName}}_subscribers: Vec::new(),
+{{- end}}
+{{- range .StateImports}}
+                {{.FieldName}}_cache: None,
+{{- end}}
+            }),
+            channel,
+            stub: tokio::sync::Mutex::new(stub),
+            token_provider,
+            closed: AtomicBool::new(false),
+            close_notify: tokio::sync::Notify::new(),
+{{- if $hasWatches}}
+            watch_statuses: RwLock::new(HashMap::new()),
+            watch_status_listener: RwLock::new(None),
+{{- end}}
+        });
+
+        // Spawn per-boundary Watch stream receivers.
+{{- range .Singletons}}
+        {
+            let inner = inner.clone();
+            tokio::spawn(async move {
+                inner.watch_{{.FieldName}}_loop().await;
+            });
+        }
+{{- end}}
+{{- range .Collections}}
+        {
+            let inner = inner.clone();
+            tokio::spawn(async move {
+                inner.watch_{{.FieldName}}_loop().await;
+            });
+        }
+{{- end}}
+{{- range .StateImports}}
+        {
+            let inner = inner.clone();
+            tokio::spawn(async move {
+                inner.watch_{{.FieldName}}_loop().await;
+            });
+        }
+{{- end}}
+
+        Ok(Self { inner })
+    }
+
+    /// Stops all background Watch loops owned by this client.
+    pub fn close(&self) {
+        self.inner.close();
+    }
+
+{{- if $hasWatches}}
+    pub fn set_watch_status_listener(&self, listener: Option<WatchStatusListener>) {
+        *self.inner.watch_status_listener.write().unwrap() = listener;
+    }
+
+    pub fn watch_statuses(&self) -> HashMap<String, WatchStatus> {
+        self.inner.watch_statuses.read().unwrap().clone()
+    }
+
+    pub fn watches_healthy(&self) -> bool {
+        self.inner
+            .watch_statuses
+            .read()
+            .unwrap()
+            .values()
+            .all(WatchStatus::healthy)
+    }
+{{- end}}
+
+    /// Assembles the full {{.StateRootName}} from all cached boundaries.
+    #[allow(unused_variables)]
+    pub fn proto(&self) -> {{.StateRootName}} {
+        let state = self.inner.state.read().unwrap();
+        {{.StateRootName}} {
+{{- range .InlineFields}}
+            {{.FieldName}}: state.{{.FieldName}}_cache.clone(),
+{{- end}}
+{{- range .Singletons}}
+            {{.FieldName}}: state.{{.FieldName}}_cache.clone(),
+{{- end}}
+{{- range .Collections}}
+            {{.FieldName}}: state.{{.FieldName}}_cache.values().cloned().collect(),
+{{- end}}
+{{- range .StateImports}}
+            {{.FieldName}}: state.{{.FieldName}}_cache.clone(),
+{{- end}}
+            ..Default::default()
+        }
+    }
+
+    // ==================== Singleton Accessors ====================
+{{range .Singletons}}
+    /// Returns a child accessor for the {{.TypeName}} boundary.
+    pub fn {{.FieldName}}(&self) -> {{$.StateRootName}}{{.FieldPascal}}Accessor {
+        {{$.StateRootName}}{{.FieldPascal}}Accessor { inner: self.inner.clone() }
+    }
+
+    /// Returns a clone of the cached {{.TypeName}}.
+    pub fn get_{{.FieldName}}(&self) -> Option<{{.TypeName}}> {
+        self.inner.state.read().unwrap().{{.FieldName}}_cache.clone()
+    }
+
+    /// Registers a callback that fires when {{.TypeName}} is updated via Watch.
+    pub fn on_{{.FieldName}}_change(&self, cb: Arc<dyn Fn(&{{.TypeName}}) + Send + Sync>) {
+        self.inner.state.write().unwrap().{{.FieldName}}_callbacks.push(cb);
+    }
+
+    /// Registers a subscriber that is notified when {{.TypeName}} is updated via Watch.
+    pub fn subscribe_{{.FieldName}}(&self, subscriber: Arc<dyn {{.FieldPascal}}Subscriber>) {
+        self.inner.state.write().unwrap().{{.FieldName}}_subscribers.push(subscriber);
+    }
+{{if not $.ReadOnly}}
+    /// Stores the {{.TypeName}} in the local cache and fires callbacks.
+    pub fn set_{{.FieldName}}(&self, value: {{.TypeName}}) {
+        let callbacks = {
+            let mut state = self.inner.state.write().unwrap();
+            state.{{.FieldName}}_cache = Some(value.clone());
+            state.{{.FieldName}}_callbacks.iter().cloned().collect::<Vec<_>>()
+        };
+        for cb in callbacks {
+            cb(&value);
+        }
+    }
+{{end}}{{end}}
+    // ==================== Collection Accessors ====================
+{{range .Collections}}
+    /// Returns clones of all cached {{.TypeName}} items.
+    pub fn get_{{.FieldName}}(&self) -> Vec<{{.TypeName}}> {
+        self.inner.state.read().unwrap().{{.FieldName}}_cache.values().cloned().collect()
+    }
+
+    /// Returns a clone of the cached {{.TypeName}} map.
+    pub fn get_{{.FieldName}}_map(&self) -> HashMap<String, {{.TypeName}}> {
+        self.inner.state.read().unwrap().{{.FieldName}}_cache.clone()
+    }
+
+    /// Registers a callback that fires when the {{.TypeName}} collection is updated via Watch.
+    pub fn on_{{.FieldName}}_change(&self, cb: Arc<dyn Fn(&HashMap<String, {{.TypeName}}>) + Send + Sync>) {
+        self.inner.state.write().unwrap().{{.FieldName}}_callbacks.push(cb);
+    }
+
+    /// Registers a subscriber that is notified when the {{.TypeName}} collection is updated via Watch.
+    pub fn subscribe_{{.FieldName}}(&self, subscriber: Arc<dyn {{.FieldPascal}}Subscriber>) {
+        self.inner.state.write().unwrap().{{.FieldName}}_subscribers.push(subscriber);
+    }
+{{if not $.ReadOnly}}
+    /// Upserts items by their indexed key.
+    pub fn add_{{.FieldName}}(&self, items: Vec<{{.TypeName}}>) {
+        let mut state = self.inner.state.write().unwrap();
+        for item in items {
+{{- if .KeyFieldName}}
+            state.{{.FieldName}}_cache.insert(item.{{.KeyFieldName}}.to_string(), item);
+{{- else}}
+            let key = state.{{.FieldName}}_cache.len().to_string();
+            state.{{.FieldName}}_cache.insert(key, item);
+{{- end}}
+        }
+    }
+{{end}}
+    /// Fetches all entries from the {{.FieldName}} collection via GetAll RPC.
+    pub async fn fetch_all_{{.FieldName}}(&self) -> Result<HashMap<String, {{.TypeName}}>, tonic::Status> {
+        self.inner.fetch_all_{{.FieldName}}().await
+    }
+{{if not $.ReadOnly}}
+    /// Puts a single entry into the {{.FieldName}} collection via Put RPC.
+    pub async fn put_{{.FieldName}}(&self, key: String, value: {{.TypeName}}) -> Result<(), tonic::Status> {
+        self.inner.put_{{.FieldName}}(key, value).await
+    }
+
+    /// Deletes a single entry from the {{.FieldName}} collection via Delete RPC.
+    pub async fn delete_{{.FieldName}}(&self, key: String) -> Result<(), tonic::Status> {
+        self.inner.delete_{{.FieldName}}(key).await
+    }
+{{end}}{{end}}
+    // ==================== View Accessors (read-only unions) ====================
+{{range $v := .Views}}
+    /// Returns all {{$v.TypeName}} items from the {{$v.FieldPascal}} view (merged from source collections).
+    pub fn get_{{$v.FieldName}}(&self) -> Vec<{{$v.TypeName}}> {
+        let mut merged: HashMap<String, {{$v.TypeName}}> = HashMap::new();
+{{- range $v.ViewSources}}
+        for item in self.get_{{.}}() {
+{{- if $v.KeyFieldName}}
+            merged.insert(item.{{$v.KeyFieldName}}.to_string(), item);
+{{- else}}
+            merged.insert(merged.len().to_string(), item);
+{{- end}}
+        }
+{{- end}}
+        merged.into_values().collect()
+    }
+
+    /// Looks up a {{$v.TypeName}} by key across all source collections in the {{$v.FieldPascal}} view.
+    pub fn get_{{$v.FieldName}}_by_key(&self, key: &str) -> Option<{{$v.TypeName}}> {
+{{- range $v.ViewSources}}
+        for item in self.get_{{.}}() {
+{{- if $v.KeyFieldName}}
+            if item.{{$v.KeyFieldName}} == key {
+                return Some(item);
+            }
+{{- end}}
+        }
+{{- end}}
+        None
+    }
+{{end}}
+    // ==================== State Import Accessors ====================
+{{range .StateImports}}
+    /// Returns a clone of the imported {{.TypeName}} (read-only).
+    pub fn get_{{.FieldName}}(&self) -> Option<{{.CratePath}}> {
+        self.inner.state.read().unwrap().{{.FieldName}}_cache.clone()
+    }
+{{end}}
+    // ==================== Inline Field Accessors ====================
+{{range .InlineFields}}
+    /// Returns a clone of the inline {{.TypeName}}.
+    pub fn get_{{.FieldName}}(&self) -> Option<{{.CratePath}}> {
+        self.inner.state.read().unwrap().{{.FieldName}}_cache.clone()
+    }
+
+    /// Stores the inline {{.TypeName}}.
+    pub fn set_{{.FieldName}}(&self, value: {{.CratePath}}) {
+        self.inner.state.write().unwrap().{{.FieldName}}_cache = Some(value);
+    }
+{{end}}
+}
+
+impl {{.StateRootName}}ClientInner {
+    fn close(&self) {
+        if !self.closed.swap(true, Ordering::SeqCst) {
+            self.close_notify.notify_waiters();
+        }
+    }
+
+    #[allow(dead_code)]
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+
+{{- if $hasWatches}}
+    fn record_watch_healthy(&self, watch_name: &str, received: bool) {
+        self.set_watch_status(WatchStatus {
+            watch_name: watch_name.to_string(),
+            received,
+            retrying: false,
+            next_attempt: 0,
+            reason: String::new(),
+            error: None,
+            updated_at_millis: Self::now_millis(),
+        });
+    }
+
+    fn record_watch_retrying(
+        &self,
+        watch_name: &str,
+        received: bool,
+        next_attempt: u32,
+        reason: impl Into<String>,
+        error: Option<String>,
+    ) {
+        self.set_watch_status(WatchStatus {
+            watch_name: watch_name.to_string(),
+            received,
+            retrying: true,
+            next_attempt,
+            reason: reason.into(),
+            error,
+            updated_at_millis: Self::now_millis(),
+        });
+    }
+
+    fn set_watch_status(&self, status: WatchStatus) {
+        self.watch_statuses
+            .write()
+            .unwrap()
+            .insert(status.watch_name.clone(), status.clone());
+        if let Some(listener) = self.watch_status_listener.read().unwrap().clone() {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| listener(status)));
+        }
+    }
+
+    fn now_millis() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    }
+{{- end}}
+}
+
+// ==================== Watch Stream Receivers & RPC Helpers ====================
+{{if or .Singletons .Collections .StateImports}}
+impl {{.StateRootName}}ClientInner {
+    /// Creates a tonic::Request with an authorization header if a token provider is set.
+    async fn authorized_request<T>(&self, msg: T) -> Result<tonic::Request<T>, tonic::Status> {
+        let mut req = tonic::Request::new(msg);
+        if let Some(ref tp) = self.token_provider {
+            let token = tp()
+                .await
+                .map_err(|e| tonic::Status::unauthenticated(format!("token provider failed: {e}")))?;
+            let val = format!("Bearer {}", token)
+                .parse()
+                .map_err(|e| tonic::Status::unauthenticated(format!("invalid authorization metadata: {e}")))?;
+            req.metadata_mut().insert("authorization", val);
+        }
+        Ok(req)
+    }
+
+    fn watch_retry_delay(attempt: u32) -> std::time::Duration {
+        let capped = attempt.min(5);
+        let secs = (1u64 << capped).min(30);
+        let jitter_span_ms = (secs * 200).max(1);
+        let jitter_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| (d.subsec_nanos() as u64) % jitter_span_ms)
+            .unwrap_or(0);
+        std::time::Duration::from_secs(secs) + std::time::Duration::from_millis(jitter_ms)
+    }
+
+    async fn sleep_before_watch_retry(&self, attempt: u32) -> bool {
+        if self.is_closed() {
+            return false;
+        }
+        tokio::select! {
+            _ = self.close_notify.notified() => false,
+            _ = tokio::time::sleep(Self::watch_retry_delay(attempt)) => !self.is_closed(),
+        }
+    }
+
+{{- range .Singletons}}
+    /// Watch loop for {{.TypeName}} — reconnects on stream errors.
+    async fn watch_{{.FieldName}}_loop(&self) {
+        let mut attempt = 0u32;
+        loop {
+            if self.is_closed() {
+                return;
+            }
+            let made_progress = match self.start_{{.FieldName}}_watch().await {
+                Ok(made_progress) => {
+                    if self.is_closed() {
+                        return;
+                    }
+                    let next_attempt = if made_progress { 0 } else { attempt.saturating_add(1) };
+                    self.record_watch_retrying("Watch{{.FieldPascal}}", made_progress, next_attempt, "stream ended", None);
+                    tracing::warn!("{{$.StateRootName}}.{{.FieldName}} watch stream ended, reconnecting");
+                    made_progress
+                }
+                Err(e) => {
+                    if self.is_closed() {
+                        return;
+                    }
+                    let reason = e.to_string();
+                    self.record_watch_retrying("Watch{{.FieldPascal}}", false, attempt.saturating_add(1), reason.clone(), Some(reason));
+                    tracing::error!(error = %e, "{{$.StateRootName}}.{{.FieldName}} watch failed, retrying");
+                    false
+                }
+            };
+            if made_progress {
+                attempt = 0;
+            } else {
+                attempt = attempt.saturating_add(1);
+            }
+            if !self.sleep_before_watch_retry(attempt).await {
+                return;
+            }
+        }
+    }
+
+    async fn start_{{.FieldName}}_watch(&self) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        let close = self.close_notify.notified();
+        tokio::pin!(close);
+        if self.is_closed() {
+            return Ok(false);
+        }
+        let req = tokio::select! {
+            _ = &mut close => return Ok(false),
+            req = self.authorized_request(Default::default()) => req?,
+        };
+        if self.is_closed() {
+            return Ok(false);
+        }
+        let mut stub = tokio::select! {
+            _ = &mut close => return Ok(false),
+            stub = self.stub.lock() => stub,
+        };
+        if self.is_closed() {
+            return Ok(false);
+        }
+        let response = tokio::select! {
+            _ = &mut close => return Ok(false),
+            response = stub.watch_{{.FieldName}}(req) => response?,
+        };
+        let mut stream = response.into_inner();
+        let mut received = false;
+        self.record_watch_healthy("Watch{{.FieldPascal}}", false);
+        tracing::info!("{{$.StateRootName}}.{{.FieldName}} watch stream started");
+
+        loop {
+            if self.is_closed() {
+                return Ok(received);
+            }
+            let Some(msg) = (tokio::select! {
+                _ = self.close_notify.notified() => return Ok(received),
+                msg = stream.next() => msg,
+            }) else {
+                return Ok(received);
+            };
+            match msg {
+                Ok(value) => {
+                    received = true;
+                    self.record_watch_healthy("Watch{{.FieldPascal}}", true);
+                    let (callbacks, subscribers) = {
+                        let mut state = self.state.write().unwrap();
+                        state.{{.FieldName}}_cache = Some(value.clone());
+                        (
+                            state.{{.FieldName}}_callbacks.iter().cloned().collect::<Vec<_>>(),
+                            state.{{.FieldName}}_subscribers.iter().cloned().collect::<Vec<_>>(),
+                        )
+                    };
+                    for cb in callbacks {
+                        cb(&value);
+                    }
+                    for sub in subscribers {
+                        sub.on_{{.FieldName}}_change(&value);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "{{$.StateRootName}}.{{.FieldName}} watch stream error");
+                    return Err(e.into());
+                }
+            }
+        }
+    }
+{{- end}}
+
+{{- range .Collections}}
+    /// Watch loop for {{.TypeName}} collection — reconnects on stream errors.
+    async fn watch_{{.FieldName}}_loop(&self) {
+        let mut attempt = 0u32;
+        loop {
+            if self.is_closed() {
+                return;
+            }
+            let made_progress = match self.start_{{.FieldName}}_watch().await {
+                Ok(made_progress) => {
+                    if self.is_closed() {
+                        return;
+                    }
+                    let next_attempt = if made_progress { 0 } else { attempt.saturating_add(1) };
+                    self.record_watch_retrying("Watch{{.FieldPascal}}", made_progress, next_attempt, "stream ended", None);
+                    tracing::warn!("{{$.StateRootName}}.{{.FieldName}} watch stream ended, reconnecting");
+                    made_progress
+                }
+                Err(e) => {
+                    if self.is_closed() {
+                        return;
+                    }
+                    let reason = e.to_string();
+                    self.record_watch_retrying("Watch{{.FieldPascal}}", false, attempt.saturating_add(1), reason.clone(), Some(reason));
+                    tracing::error!(error = %e, "{{$.StateRootName}}.{{.FieldName}} watch failed, retrying");
+                    false
+                }
+            };
+            if made_progress {
+                attempt = 0;
+            } else {
+                attempt = attempt.saturating_add(1);
+            }
+            if !self.sleep_before_watch_retry(attempt).await {
+                return;
+            }
+        }
+    }
+
+    async fn start_{{.FieldName}}_watch(&self) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        let close = self.close_notify.notified();
+        tokio::pin!(close);
+        if self.is_closed() {
+            return Ok(false);
+        }
+        let req = tokio::select! {
+            _ = &mut close => return Ok(false),
+            req = self.authorized_request(Default::default()) => req?,
+        };
+        if self.is_closed() {
+            return Ok(false);
+        }
+        let mut stub = tokio::select! {
+            _ = &mut close => return Ok(false),
+            stub = self.stub.lock() => stub,
+        };
+        if self.is_closed() {
+            return Ok(false);
+        }
+        let response = tokio::select! {
+            _ = &mut close => return Ok(false),
+            response = stub.watch_{{.FieldName}}(req) => response?,
+        };
+        let mut stream = response.into_inner();
+        let mut received = false;
+        self.record_watch_healthy("Watch{{.FieldPascal}}", false);
+        tracing::info!("{{$.StateRootName}}.{{.FieldName}} watch stream started");
+
+        loop {
+            if self.is_closed() {
+                return Ok(received);
+            }
+            let Some(msg) = (tokio::select! {
+                _ = self.close_notify.notified() => return Ok(received),
+                msg = stream.next() => msg,
+            }) else {
+                return Ok(received);
+            };
+            match msg {
+                Ok(resp) => {
+                    received = true;
+                    self.record_watch_healthy("Watch{{.FieldPascal}}", true);
+                    let (callbacks, subscribers, snapshot) = {
+                        let mut state = self.state.write().unwrap();
+                        state.{{.FieldName}}_cache.clear();
+                        for (k, v) in resp.entries {
+                            state.{{.FieldName}}_cache.insert(k, v);
+                        }
+                        let snapshot = state.{{.FieldName}}_cache.clone();
+                        (
+                            state.{{.FieldName}}_callbacks.iter().cloned().collect::<Vec<_>>(),
+                            state.{{.FieldName}}_subscribers.iter().cloned().collect::<Vec<_>>(),
+                            snapshot,
+                        )
+                    };
+                    for cb in callbacks {
+                        cb(&snapshot);
+                    }
+                    for sub in subscribers {
+                        sub.on_{{.FieldName}}_change(&snapshot);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "{{$.StateRootName}}.{{.FieldName}} watch stream error");
+                    return Err(e.into());
+                }
+            }
+        }
+    }
+
+    /// Fetches all entries from the {{.FieldName}} collection via GetAll RPC.
+    pub async fn fetch_all_{{.FieldName}}(&self) -> Result<HashMap<String, {{.TypeName}}>, tonic::Status> {
+        let req = self.authorized_request({{.FieldPascal}}GetAllRequest { ..Default::default() }).await?;
+        let mut stub = {{$.StateServiceClientType}}::new(self.channel.clone());
+        let response = stub.get_all_{{.FieldName}}(req).await?;
+        Ok(response.into_inner().entries)
+    }
+{{if not $.ReadOnly}}
+    /// Puts a single entry into the {{.FieldName}} collection via Put RPC.
+    pub async fn put_{{.FieldName}}(&self, key: String, value: {{.TypeName}}) -> Result<(), tonic::Status> {
+        let req = self.authorized_request({{.FieldPascal}}PutRequest { key, value: Some(value), lock_counter: 0, ..Default::default() }).await?;
+        let mut stub = {{$.StateServiceClientType}}::new(self.channel.clone());
+        stub.put_{{.FieldName}}(req).await?;
+        Ok(())
+    }
+
+    /// Deletes a single entry from the {{.FieldName}} collection via Delete RPC.
+    pub async fn delete_{{.FieldName}}(&self, key: String) -> Result<(), tonic::Status> {
+        let req = self.authorized_request({{.FieldPascal}}GetRequest { key, ..Default::default() }).await?;
+        let mut stub = {{$.StateServiceClientType}}::new(self.channel.clone());
+        stub.delete_{{.FieldName}}(req).await?;
+        Ok(())
+    }
+{{end}}
+{{- end}}
+
+{{- range .StateImports}}
+    /// Watch loop for imported {{.TypeName}} state — reconnects on stream errors.
+    async fn watch_{{.FieldName}}_loop(&self) {
+        let mut attempt = 0u32;
+        loop {
+            if self.is_closed() {
+                return;
+            }
+            let made_progress = match self.start_{{.FieldName}}_watch().await {
+                Ok(made_progress) => {
+                    if self.is_closed() {
+                        return;
+                    }
+                    let next_attempt = if made_progress { 0 } else { attempt.saturating_add(1) };
+                    self.record_watch_retrying("Watch{{.FieldPascal}}", made_progress, next_attempt, "stream ended", None);
+                    tracing::warn!("{{$.StateRootName}}.{{.FieldName}} state-import watch stream ended, reconnecting");
+                    made_progress
+                }
+                Err(e) => {
+                    if self.is_closed() {
+                        return;
+                    }
+                    let reason = e.to_string();
+                    self.record_watch_retrying("Watch{{.FieldPascal}}", false, attempt.saturating_add(1), reason.clone(), Some(reason));
+                    tracing::error!(error = %e, "{{$.StateRootName}}.{{.FieldName}} state-import watch failed, retrying");
+                    false
+                }
+            };
+            if made_progress {
+                attempt = 0;
+            } else {
+                attempt = attempt.saturating_add(1);
+            }
+            if !self.sleep_before_watch_retry(attempt).await {
+                return;
+            }
+        }
+    }
+
+    async fn start_{{.FieldName}}_watch(&self) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        let close = self.close_notify.notified();
+        tokio::pin!(close);
+        if self.is_closed() {
+            return Ok(false);
+        }
+        let req = tokio::select! {
+            _ = &mut close => return Ok(false),
+            req = self.authorized_request(Default::default()) => req?,
+        };
+        if self.is_closed() {
+            return Ok(false);
+        }
+        let mut stub = tokio::select! {
+            _ = &mut close => return Ok(false),
+            stub = self.stub.lock() => stub,
+        };
+        if self.is_closed() {
+            return Ok(false);
+        }
+        let response = tokio::select! {
+            _ = &mut close => return Ok(false),
+            response = stub.watch_{{.FieldName}}(req) => response?,
+        };
+        let mut stream = response.into_inner();
+        let mut received = false;
+        self.record_watch_healthy("Watch{{.FieldPascal}}", false);
+        tracing::info!("{{$.StateRootName}}.{{.FieldName}} state-import watch stream started");
+
+        loop {
+            if self.is_closed() {
+                return Ok(received);
+            }
+            let Some(msg) = (tokio::select! {
+                _ = self.close_notify.notified() => return Ok(received),
+                msg = stream.next() => msg,
+            }) else {
+                return Ok(received);
+            };
+            match msg {
+                Ok(value) => {
+                    received = true;
+                    self.record_watch_healthy("Watch{{.FieldPascal}}", true);
+                    let mut state = self.state.write().unwrap();
+                    state.{{.FieldName}}_cache = Some(value);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "{{$.StateRootName}}.{{.FieldName}} state-import watch stream error");
+                    return Err(e.into());
+                }
+            }
+        }
+    }
+{{- end}}
+}
+{{end}}
+// ==================== Child Accessor Types ====================
+{{range .Singletons}}
+/// {{$.StateRootName}}{{.FieldPascal}}Accessor provides typed access to the {{.TypeName}} boundary.
+pub struct {{$.StateRootName}}{{.FieldPascal}}Accessor {
+    inner: Arc<{{$.StateRootName}}ClientInner>,
+}
+
+impl {{$.StateRootName}}{{.FieldPascal}}Accessor {
+    /// Returns the reconstructed {{.TypeName}} proto from cache.
+    pub fn proto(&self) -> Option<{{.TypeName}}> {
+        self.get()
+    }
+
+    /// Returns a clone of the cached {{.TypeName}}.
+    pub fn get(&self) -> Option<{{.TypeName}}> {
+        self.inner.state.read().unwrap().{{.FieldName}}_cache.clone()
+    }
+
+    /// Fetches the authoritative {{.TypeName}} from the state service (Get RPC).
+    pub async fn fetch(&self) -> Result<{{.TypeName}}, tonic::Status> {
+        let req = self.inner.authorized_request(Default::default()).await?;
+        let mut stub = {{$.StateServiceClientType}}::new(self.inner.channel.clone());
+        let response = stub.get_{{.FieldName}}(req).await?;
+        let value = response.into_inner();
+        // Update the local cache with the fetched value.
+        {
+            let mut state = self.inner.state.write().unwrap();
+            state.{{.FieldName}}_cache = Some(value.clone());
+        }
+        Ok(value)
+    }
+
+    /// Registers a callback that fires when {{.TypeName}} is updated via Watch.
+    pub fn on_change(&self, cb: Arc<dyn Fn(&{{.TypeName}}) + Send + Sync>) {
+        self.inner.state.write().unwrap().{{.FieldName}}_callbacks.push(cb);
+    }
+
+    /// Registers a subscriber that is notified when {{.TypeName}} is updated via Watch.
+    pub fn subscribe(&self, subscriber: Arc<dyn {{.FieldPascal}}Subscriber>) {
+        self.inner.state.write().unwrap().{{.FieldName}}_subscribers.push(subscriber);
+    }
+{{if not $.ReadOnly}}
+    /// Updates the {{.TypeName}} via the state service (Set RPC).
+    pub async fn set(&self, value: {{.TypeName}}) -> Result<{{.TypeName}}, tonic::Status> {
+        let req = self.inner.authorized_request(value).await?;
+        let mut stub = {{$.StateServiceClientType}}::new(self.inner.channel.clone());
+        let response = stub.set_{{.FieldName}}(req).await?;
+        Ok(response.into_inner())
+    }
+{{end}}
+}
+{{end}}

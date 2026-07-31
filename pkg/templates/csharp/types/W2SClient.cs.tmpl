@@ -1,0 +1,148 @@
+using System;
+using System.Net.Http;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using Google.Protobuf;
+
+namespace {{.PackageName}};
+
+/// <summary>
+/// Errors surfaced by the W2S (gRPC-over-REST) client.
+/// </summary>
+public sealed class W2SClientException : Exception
+{
+    /// <summary>The HTTP status code, when the failure was a non-2xx response.</summary>
+    public int? StatusCode { get; }
+
+    public W2SClientException(string message, int? statusCode = null, Exception? inner = null)
+        : base(message, inner)
+    {
+        StatusCode = statusCode;
+    }
+}
+
+/// <summary>
+/// W2SClient issues gRPC-over-REST calls against a gateway base URL.
+///
+/// Request messages are marshalled to protobuf-JSON and POSTed to the gateway's
+/// REST route for each method; the protobuf-JSON response body is decoded back
+/// into the response message. When a token provider is configured, an
+/// <c>Authorization: Bearer &lt;token&gt;</c> header is attached to calls that
+/// require auth. Mirrors the token-provider seam of the Go/Swift/TS W2S clients:
+/// tacplus builds no client_im for C#, the client only exposes this hook.
+/// </summary>
+public sealed class W2SClient
+{
+    /// <summary>Gateway base URL (trailing slashes are trimmed).</summary>
+    public string BaseUrl { get; }
+
+    private readonly HttpClient _httpClient;
+    private readonly Func<CancellationToken, Task<string>>? _tokenProvider;
+
+    /// <summary>
+    /// Creates a W2S client targeting a gateway base URL.
+    /// </summary>
+    /// <param name="baseUrl">Gateway base URL (trailing slashes are trimmed).</param>
+    /// <param name="tokenProvider">
+    /// Optional token provider. When non-null, calls that require auth carry an
+    /// <c>Authorization: Bearer &lt;token&gt;</c> header.
+    /// </param>
+    /// <param name="httpClient">
+    /// HttpClient used for requests. When omitted, a fresh one is created with a
+    /// 30-second request timeout so a unary W2S call cannot hang indefinitely
+    /// (matching the go/rust/java clients). A caller-supplied HttpClient keeps its
+    /// own configured timeout.
+    /// </param>
+    public W2SClient(
+        string baseUrl,
+        Func<CancellationToken, Task<string>>? tokenProvider = null,
+        HttpClient? httpClient = null)
+    {
+        BaseUrl = baseUrl.TrimEnd('/');
+        _tokenProvider = tokenProvider;
+        _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+    }
+
+    /// <summary>
+    /// Invokes a unary W2S method: marshals <paramref name="request"/> to
+    /// protobuf-JSON, sends it to <c>BaseUrl + path</c>, and decodes the
+    /// protobuf-JSON response into <typeparamref name="TResponse"/>.
+    /// </summary>
+    public async Task<TResponse> InvokeAsync<TResponse>(
+        string method,
+        string path,
+        bool authRequired,
+        IMessage request,
+        CancellationToken cancellationToken = default)
+        where TResponse : IMessage<TResponse>, new()
+    {
+        var url = BaseUrl + path;
+        using var httpRequest = new HttpRequestMessage(new HttpMethod(method), url);
+        if (!string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
+        {
+            var json = JsonFormatter.Default.Format(request);
+            httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        }
+
+        if (authRequired)
+        {
+            if (_tokenProvider == null)
+            {
+                throw new W2SClientException(
+                    $"W2S method {method} {path} requires auth but no token provider was configured");
+            }
+            var token = await _tokenProvider(cancellationToken).ConfigureAwait(false);
+            if (string.IsNullOrEmpty(token))
+            {
+                throw new W2SClientException($"W2S token provider returned an empty token for {method} {path}");
+            }
+            httpRequest.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+        }
+
+        using var response = await _httpClient
+            .SendAsync(httpRequest, cancellationToken)
+            .ConfigureAwait(false);
+        var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new W2SClientException(
+                $"W2S call {method} {path} failed: {(int)response.StatusCode} {body}",
+                (int)response.StatusCode);
+        }
+
+        try
+        {
+            return JsonParser.Default.Parse<TResponse>(body);
+        }
+        catch (Exception ex)
+        {
+            throw new W2SClientException($"W2S response decode failed for {method} {path}: {ex.Message}", null, ex);
+        }
+    }
+}
+{{range $service := .Services}}
+
+/// <summary>Typed W2S client for {{$service.ServiceName}}.</summary>
+public sealed class {{$service.ClientTypeName}}
+{
+    private readonly W2SClient _client;
+
+    public {{$service.ClientTypeName}}(W2SClient client)
+    {
+        _client = client;
+    }
+{{range .Methods}}
+    /// <summary>Calls {{$service.PackageName}}.{{.MethodName}} via W2S HTTP/JSON.</summary>
+    public Task<{{.OutputType}}> {{.MethodName}}Async(
+        {{.InputType}} request,
+        System.Threading.CancellationToken cancellationToken = default) =>
+        _client.InvokeAsync<{{.OutputType}}>(
+            "{{.HTTPMethod}}",
+            "{{.HTTPPath}}",
+            {{.AuthRequired}},
+            request,
+            cancellationToken);
+{{end}}
+}
+{{end}}

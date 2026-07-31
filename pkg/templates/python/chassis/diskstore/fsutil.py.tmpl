@@ -1,0 +1,134 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+Atomic file write + numbered archive rotation, shared by the snapshot (UC1)
+and the redo-log roll (UC2).
+
+Atomicity model: build a fresh sibling temp file, fsync it, then ``os.replace``
+it over the target. ``os.replace`` is an atomic rename on a POSIX filesystem,
+so the target is never observed half-written.
+"""
+
+import os
+import shutil
+
+from .error import DiskStoreError
+
+
+def write_temp(path: str, data: bytes, mode: int) -> str:
+    """Write ``data`` to a fresh sibling temp file (fsync'd, mode applied) and
+    return its path. The temp is in the same directory as ``path`` so the later
+    :func:`promote` rename stays on one filesystem (and is therefore atomic)."""
+    parent = os.path.dirname(path)
+    if not parent:
+        raise DiskStoreError.invalid_data(f"path has no parent: {path}")
+    try:
+        os.makedirs(parent, exist_ok=True)
+        tmp = path + f".tmp.{os.getpid()}"
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+            if mode != 0:
+                os.chmod(tmp, mode)
+        return tmp
+    except OSError as e:
+        raise DiskStoreError.from_os_error(e)
+
+
+def promote(tmp: str, path: str) -> None:
+    """Atomically move ``tmp`` onto ``path`` (the commit point), then fsync the
+    parent directory so the rename is durable."""
+    try:
+        os.replace(tmp, path)
+        parent = os.path.dirname(path)
+        if parent:
+            _sync_dir(parent)
+    except OSError as e:
+        raise DiskStoreError.from_os_error(e)
+
+
+def atomic_write(path: str, data: bytes, mode: int) -> None:
+    """Convenience: :func:`write_temp` + :func:`promote` for callers that don't
+    archive."""
+    tmp = write_temp(path, data, mode)
+    promote(tmp, path)
+
+
+def archive_active(path: str, count: int) -> None:
+    """Rotate the numbered archives, then LINK the current ``path`` to
+    ``<path>.bak.1`` (retaining ``count`` archives) — ``path`` stays in place,
+    so the caller's atomic rename-over of a fresh temp is the only mutation of
+    the active file. The active snapshot is therefore NEVER absent: the old
+    rotate-then-promote order left a crash window in which ``path`` was gone
+    and recovery silently started fresh (PC-L-5). Falls back to a copy on
+    filesystems without hard links. ``count == 0`` keeps no archives."""
+    if count == 0:
+        return
+    _remove_if_exists(_archive_name(path, count))
+    for k in range(count - 1, 0, -1):
+        src = _archive_name(path, k)
+        if os.path.exists(src):
+            os.replace(src, _archive_name(path, k + 1))
+    if os.path.exists(path):
+        bak = _archive_name(path, 1)
+        _remove_if_exists(bak)
+        try:
+            os.link(path, bak)
+        except OSError:
+            # Filesystem without hard links: copy instead (window still closed).
+            shutil.copy2(path, bak)
+    parent = os.path.dirname(path)
+    if parent:
+        _sync_dir(parent)
+
+
+def rotate_archives(path: str, count: int) -> None:
+    """Rotate numbered archives, then move the current ``path`` to ``<path>.bak.1``,
+    retaining ``count`` archives. ``count == 0`` simply removes ``path``.
+
+    Leaves ``path`` absent on return. Correct for the redo log (a fresh empty
+    log follows a snapshot); snapshots use :func:`archive_active` so the active
+    file is never absent."""
+    try:
+        parent = os.path.dirname(path)
+        if count == 0:
+            _remove_if_exists(path)
+            if parent:
+                _sync_dir(parent)
+            return
+        # Drop the oldest, then shift each archive up by one.
+        _remove_if_exists(_archive_name(path, count))
+        for k in range(count - 1, 0, -1):
+            src = _archive_name(path, k)
+            if os.path.exists(src):
+                os.replace(src, _archive_name(path, k + 1))
+        if os.path.exists(path):
+            os.replace(path, _archive_name(path, 1))
+        if parent:
+            _sync_dir(parent)
+    except OSError as e:
+        raise DiskStoreError.from_os_error(e)
+
+
+def _archive_name(path: str, n: int) -> str:
+    return f"{path}.bak.{n}"
+
+
+def _remove_if_exists(path: str) -> None:
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+
+
+def _sync_dir(directory: str) -> None:
+    try:
+        fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        # Best-effort; directory fsync is not supported everywhere.
+        pass

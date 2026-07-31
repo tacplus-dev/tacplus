@@ -1,0 +1,49 @@
+{{- /* Python enum helpers template */ -}}
+# ---- Enum Helpers ----
+{{- range .Enums}}
+
+{{.EnumName}} = {{$.PackageName}}_pb2.{{.EnumName}}
+
+class {{.HelperName}}:
+    """Helper class for parsing and converting {{.EnumName}} enum values."""
+
+    @staticmethod
+    def valid_values() -> List[str]:
+        """Returns list of all valid enum value names."""
+        return [
+{{- range .ValidValues}}
+            "{{.NormalizedValue}}",
+{{- end}}
+        ]
+
+    @staticmethod
+    def parse(s: str) -> int:
+        """Parses string to enum value."""
+        if not s:
+            raise invalid_argument(f"Empty string cannot be parsed as {{.EnumName}}")
+        normalized = s.lower().replace('_', '-')
+        mapping = {
+{{- range .ValidValues}}
+            "{{.NormalizedKey}}": {{$.PackageName}}_pb2.{{.ProtoName}},
+{{- end}}
+        }
+        if normalized not in mapping:
+            raise invalid_argument(f"Invalid {{.EnumName}}: {s}, valid values are: {', '.join({{.HelperName}}.valid_values())}")
+        return mapping[normalized]
+
+    @staticmethod
+    def to_string(value: int) -> str:
+        """Converts enum value to string representation."""
+        mapping = {
+{{- range .ValidValues}}
+            {{$.PackageName}}_pb2.{{.ProtoName}}: "{{.NormalizedValue}}",
+{{- end}}
+        }
+        return mapping.get(value, "undefined")
+
+    @staticmethod
+    def parse_multiple(s: str) -> List[int]:
+        """Parses comma-separated string to list of enum values."""
+        parts = [p.strip() for p in s.split(',') if p.strip()]
+        return [{{.HelperName}}.parse(p) for p in parts]
+{{- end}}

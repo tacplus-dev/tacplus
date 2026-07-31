@@ -1,0 +1,462 @@
+{{- $hasWatches := or .Singletons .Collections .StateImports -}}
+{{.Header}}
+"""State client wrapper for {{.StateRootName}}."""
+
+from __future__ import annotations
+
+{{- if $hasWatches}}
+import asyncio
+{{- end}}
+import copy
+{{- if $hasWatches}}
+import inspect
+import logging
+import random
+{{- end}}
+from abc import ABC, abstractmethod
+{{- if $hasWatches}}
+from dataclasses import dataclass
+import time
+{{- end}}
+from typing import Any, Awaitable, Callable, Optional
+
+from {{.PbImportFrom}} import {{.PackageName}}_pb2 as pb
+{{- if $hasWatches}}
+from {{.PbImportFrom}} import {{.PackageName}}_pb2_grpc as pb_grpc
+from {{.TraceImportFrom}} import trace_pb2
+
+logger = logging.getLogger(__name__)
+{{- end}}
+
+{{- if $hasWatches}}
+
+@dataclass(frozen=True)
+class WatchStatus:
+    """Snapshot of a generated state Watch stream lifecycle."""
+
+    watch_name: str
+    received: bool
+    retrying: bool
+    next_attempt: int
+    reason: str
+    error: Optional[BaseException]
+    updated_at: float
+
+    @property
+    def healthy(self) -> bool:
+        return not self.retrying
+{{- end}}
+
+
+# ==================== Subscriber Abstract Classes ====================
+{{range .Singletons}}
+
+class {{.FieldPascal}}Subscriber(ABC):
+    """Subscriber interface for the {{.TypeName}} singleton boundary."""
+
+    @abstractmethod
+    def on_{{.FieldName}}_change(self, value: pb.{{.TypeName}}) -> None: ...
+{{end}}
+{{range .Collections}}
+
+class {{.FieldPascal}}Subscriber(ABC):
+    """Subscriber interface for the {{.TypeName}} collection boundary."""
+
+    @abstractmethod
+    def on_{{.FieldName}}_change(self, entries: dict[str, pb.{{.TypeName}}]) -> None: ...
+{{end}}
+
+
+class {{.StateRootName}}Client:
+    """Typed client-side state client for {{.StateRootName}}.
+
+    Caches state boundaries and provides a proto() method that
+    reconstructs the full {{.StateRootName}} proto message.
+    """
+
+    def __init__(self) -> None:
+{{- range .Singletons}}
+        self._{{.FieldName}}: Optional[pb.{{.TypeName}}] = None
+{{- end}}
+{{- range .Collections}}
+        self._{{.FieldName}}: dict[str, pb.{{.TypeName}}] = {}
+        self._{{.FieldName}}_callbacks: list[Callable[[dict[str, pb.{{.TypeName}}]], None]] = []
+        self._{{.FieldName}}_subscribers: list[{{.FieldPascal}}Subscriber] = []
+{{- end}}
+{{- range .StateImports}}
+        self._{{.FieldName}}: Optional[pb.{{.TypeName}}] = None
+{{- end}}
+{{- range .Singletons}}
+        self._{{.FieldName}}_accessor = {{$.StateRootName}}{{.FieldPascal}}Accessor(self)
+{{- end}}
+{{- if $hasWatches}}
+        self._stub = None
+        self._token_provider: Optional[Callable[[], Awaitable[str] | str]] = None
+        self._watch_tasks: list[asyncio.Task[None]] = []
+        self._watch_statuses: dict[str, WatchStatus] = {}
+        self._watch_status_listener: Optional[Callable[[WatchStatus], None]] = None
+        self._closed = False
+{{- end}}
+{{- if and (not .Singletons) (not .Collections) (not .StateImports)}}
+        pass
+{{- end}}
+
+    def set_channel(self, channel: Any, token_provider: Optional[Callable[[], Awaitable[str] | str]] = None) -> None:
+        """Wires this state client to the shared state service channel."""
+{{- if $hasWatches}}
+        if channel is None:
+            raise RuntimeError("{{.StateRootName}}Client requires an active channel")
+        self._stub = pb_grpc.{{.StateServiceName}}Stub(channel)
+        self._token_provider = token_provider
+        self._closed = False
+        self._start_watches()
+{{- else}}
+        _ = channel
+        _ = token_provider
+{{- end}}
+
+    async def close(self) -> None:
+        """Stops background state watch tasks."""
+{{- if $hasWatches}}
+        self._closed = True
+        tasks = self._watch_tasks
+        self._watch_tasks = []
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+{{- else}}
+        return None
+{{- end}}
+
+{{- if $hasWatches}}
+    def set_watch_status_listener(self, listener: Optional[Callable[[WatchStatus], None]]) -> None:
+        self._watch_status_listener = listener
+
+    def watch_statuses(self) -> dict[str, WatchStatus]:
+        return dict(self._watch_statuses)
+
+    def watches_healthy(self) -> bool:
+        return all(status.healthy for status in self._watch_statuses.values())
+
+    def _record_watch_healthy(self, watch_name: str, received: bool) -> None:
+        self._set_watch_status(WatchStatus(watch_name, received, False, 0, "", None, time.time()))
+
+    def _record_watch_retrying(
+        self,
+        watch_name: str,
+        received: bool,
+        next_attempt: int,
+        reason: str,
+        error: Optional[BaseException],
+    ) -> None:
+        self._set_watch_status(WatchStatus(watch_name, received, True, next_attempt, reason, error, time.time()))
+
+    def _set_watch_status(self, status: WatchStatus) -> None:
+        self._watch_statuses[status.watch_name] = status
+        if self._watch_status_listener is not None:
+            try:
+                self._watch_status_listener(status)
+            except Exception:
+                logger.exception("%s watch status listener failed", status.watch_name)
+
+    def _start_watches(self) -> None:
+        for task in self._watch_tasks:
+            task.cancel()
+        self._watch_tasks = [
+{{- range .Singletons}}
+            asyncio.create_task(self._watch_{{.FieldName}}()),
+{{- end}}
+{{- range .Collections}}
+            asyncio.create_task(self._watch_{{.FieldName}}()),
+{{- end}}
+{{- range .StateImports}}
+            asyncio.create_task(self._watch_{{.FieldName}}()),
+{{- end}}
+        ]
+
+    def _ensure_stub(self):
+        if self._stub is None:
+            raise RuntimeError("{{.StateRootName}}Client channel is not configured")
+        return self._stub
+
+    async def _metadata(self):
+        if self._token_provider is None:
+            return None
+        token = self._token_provider()
+        if inspect.isawaitable(token):
+            token = await token
+        if not token:
+            raise RuntimeError("token provider returned an empty token")
+        return [("authorization", f"Bearer {token}")]
+
+    async def _sleep_before_watch_retry(self, attempt: int) -> None:
+        delay = min(2 ** min(attempt, 5), 30)
+        delay += random.uniform(0, min(delay * 0.2, 1.0))
+        await asyncio.sleep(delay)
+
+{{- range .Singletons}}
+    async def _watch_{{.FieldName}}(self) -> None:
+        attempt = 0
+        while not self._closed:
+            received = False
+            try:
+                stream = self._ensure_stub().Watch{{.FieldPascal}}(
+                    trace_pb2.TraceRequest(),
+                    metadata=await self._metadata(),
+                )
+                self._record_watch_healthy("Watch{{.FieldPascal}}", False)
+                async for value in stream:
+                    if self._closed:
+                        return
+                    received = True
+                    attempt = 0
+                    self._record_watch_healthy("Watch{{.FieldPascal}}", True)
+                    self._{{.FieldName}} = copy.deepcopy(value)
+                    self._{{.FieldName}}_accessor._notify_change(value)
+                if self._closed:
+                    return
+                attempt = 0 if received else attempt + 1
+                self._record_watch_retrying("Watch{{.FieldPascal}}", received, attempt, "stream completed", None)
+                logger.warning("{{$.StateRootName}}.{{.FieldPascal}} watch completed; reconnecting")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                if self._closed:
+                    return
+                attempt = 0 if received else attempt + 1
+                self._record_watch_retrying("Watch{{.FieldPascal}}", received, attempt, str(e), e)
+                logger.warning("{{$.StateRootName}}.{{.FieldPascal}} watch failed; reconnecting: %s", e)
+            await self._sleep_before_watch_retry(attempt)
+
+{{- end}}
+{{- range .Collections}}
+    async def _watch_{{.FieldName}}(self) -> None:
+        attempt = 0
+        while not self._closed:
+            received = False
+            try:
+                stream = self._ensure_stub().Watch{{.FieldPascal}}(
+                    trace_pb2.TraceRequest(),
+                    metadata=await self._metadata(),
+                )
+                self._record_watch_healthy("Watch{{.FieldPascal}}", False)
+                async for value in stream:
+                    if self._closed:
+                        return
+                    received = True
+                    attempt = 0
+                    self._record_watch_healthy("Watch{{.FieldPascal}}", True)
+                    self._{{.FieldName}} = {
+                        str(k): copy.deepcopy(v)
+                        for k, v in value.entries.items()
+                    }
+                    self._notify_{{.FieldName}}_change()
+                if self._closed:
+                    return
+                attempt = 0 if received else attempt + 1
+                self._record_watch_retrying("Watch{{.FieldPascal}}", received, attempt, "stream completed", None)
+                logger.warning("{{$.StateRootName}}.{{.FieldPascal}} watch completed; reconnecting")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                if self._closed:
+                    return
+                attempt = 0 if received else attempt + 1
+                self._record_watch_retrying("Watch{{.FieldPascal}}", received, attempt, str(e), e)
+                logger.warning("{{$.StateRootName}}.{{.FieldPascal}} watch failed; reconnecting: %s", e)
+            await self._sleep_before_watch_retry(attempt)
+
+{{- end}}
+{{- range .StateImports}}
+    async def _watch_{{.FieldName}}(self) -> None:
+        attempt = 0
+        while not self._closed:
+            received = False
+            try:
+                stream = self._ensure_stub().Watch{{.FieldPascal}}(
+                    trace_pb2.TraceRequest(),
+                    metadata=await self._metadata(),
+                )
+                self._record_watch_healthy("Watch{{.FieldPascal}}", False)
+                async for value in stream:
+                    if self._closed:
+                        return
+                    received = True
+                    attempt = 0
+                    self._record_watch_healthy("Watch{{.FieldPascal}}", True)
+                    self._{{.FieldName}} = copy.deepcopy(value)
+                if self._closed:
+                    return
+                attempt = 0 if received else attempt + 1
+                self._record_watch_retrying("Watch{{.FieldPascal}}", received, attempt, "stream completed", None)
+                logger.warning("{{$.StateRootName}}.{{.FieldPascal}} watch completed; reconnecting")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                if self._closed:
+                    return
+                attempt = 0 if received else attempt + 1
+                self._record_watch_retrying("Watch{{.FieldPascal}}", received, attempt, str(e), e)
+                logger.warning("{{$.StateRootName}}.{{.FieldPascal}} watch failed; reconnecting: %s", e)
+            await self._sleep_before_watch_retry(attempt)
+
+{{- end}}
+{{- end}}
+
+    def proto(self) -> pb.{{.StateRootName}}:
+        """Assembles the full {{.StateRootName}} from all cached boundaries."""
+        state = pb.{{.StateRootName}}()
+{{- range .Singletons}}
+        if self._{{.FieldName}} is not None:
+            state.{{.FieldName}}.CopyFrom(self._{{.FieldName}})
+{{- end}}
+{{- range .Collections}}
+        for v in self._{{.FieldName}}.values():
+            state.{{.FieldName}}.append(copy.deepcopy(v))
+{{- end}}
+{{- range .StateImports}}
+        if self._{{.FieldName}} is not None:
+            state.{{.FieldName}}.CopyFrom(self._{{.FieldName}})
+{{- end}}
+        return state
+
+    # ==================== Singleton Accessors ====================
+{{range .Singletons}}
+    def {{.FieldName}}(self) -> {{$.StateRootName}}{{.FieldPascal}}Accessor:
+        """Returns a child accessor for the {{.TypeName}} boundary."""
+        return self._{{.FieldName}}_accessor
+
+    def get_{{.FieldName}}(self) -> Optional[pb.{{.TypeName}}]:
+        """Returns a defensive copy of the cached {{.TypeName}}."""
+        if self._{{.FieldName}} is None:
+            return None
+        return copy.deepcopy(self._{{.FieldName}})
+
+    async def fetch_{{.FieldName}}(self) -> pb.{{.TypeName}}:
+        """Fetches the authoritative {{.TypeName}} from the state service."""
+        value = await self._ensure_stub().Get{{.FieldPascal}}(
+            trace_pb2.TraceRequest(),
+            metadata=await self._metadata(),
+        )
+        self._{{.FieldName}} = copy.deepcopy(value)
+        return copy.deepcopy(value)
+{{if not $.ReadOnly}}
+    def set_{{.FieldName}}(self, value: pb.{{.TypeName}}) -> None:
+        """Stores the {{.TypeName}}."""
+        self._{{.FieldName}} = value
+        self._{{.FieldName}}_accessor._notify_change(value)
+{{end}}{{end}}
+    # ==================== Collection Accessors ====================
+{{range .Collections}}
+    def get_{{.FieldName}}(self) -> list[pb.{{.TypeName}}]:
+        """Returns defensive copies of all cached {{.TypeName}} items."""
+        return [copy.deepcopy(v) for v in self._{{.FieldName}}.values()]
+
+    def get_{{.FieldName}}_map(self) -> dict[str, pb.{{.TypeName}}]:
+        """Returns a defensive copy of the cached {{.TypeName}} map."""
+        return {k: copy.deepcopy(v) for k, v in self._{{.FieldName}}.items()}
+
+    def on_{{.FieldName}}_change(self, cb: Callable[[dict[str, pb.{{.TypeName}}]], None]) -> None:
+        """Registers a callback that fires when the {{.TypeName}} collection is updated."""
+        self._{{.FieldName}}_callbacks.append(cb)
+
+    def subscribe_{{.FieldName}}(self, subscriber: {{.FieldPascal}}Subscriber) -> None:
+        """Registers a subscriber that is notified when the {{.TypeName}} collection is updated."""
+        self._{{.FieldName}}_subscribers.append(subscriber)
+
+    def _notify_{{.FieldName}}_change(self) -> None:
+        """Notifies all registered callbacks and subscribers of collection changes."""
+        snapshot = self.get_{{.FieldName}}_map()
+        for cb in self._{{.FieldName}}_callbacks:
+            cb(snapshot)
+        for sub in self._{{.FieldName}}_subscribers:
+            sub.on_{{.FieldName}}_change(snapshot)
+{{if not $.ReadOnly}}
+    def add_{{.FieldName}}(self, *items: pb.{{.TypeName}}) -> None:
+        """Upserts items by their indexed key."""
+        for item in items:
+{{- if .KeyFieldName}}
+            self._{{.FieldName}}[getattr(item, "{{.KeyFieldName}}")] = item
+{{- else}}
+            self._{{.FieldName}}[str(len(self._{{.FieldName}}))] = item
+{{- end}}
+        self._notify_{{.FieldName}}_change()
+{{end}}{{end}}
+    # ==================== View Accessors (read-only unions) ====================
+{{range $v := .Views}}
+    def get_{{$v.FieldName}}(self) -> list[pb.{{$v.TypeName}}]:
+        """Returns all {{$v.TypeName}} items from the {{$v.FieldPascal}} view (merged from source collections)."""
+        merged: dict[str, pb.{{$v.TypeName}}] = {}
+{{- range $v.ViewSources}}
+        for item in self.get_{{snakeCase .}}():
+{{- if $v.KeyFieldName}}
+            merged[str(getattr(item, "{{$v.KeyFieldName}}"))] = item
+{{- else}}
+            merged[str(len(merged))] = item
+{{- end}}
+{{- end}}
+        return list(merged.values())
+
+    def get_{{$v.FieldName}}_by_key(self, key: str) -> Optional[pb.{{$v.TypeName}}]:
+        """Looks up a {{$v.TypeName}} by key across all source collections in the {{$v.FieldPascal}} view."""
+{{- range $v.ViewSources}}
+        for item in self.get_{{snakeCase .}}():
+{{- if $v.KeyFieldName}}
+            if key == str(getattr(item, "{{$v.KeyFieldName}}")):
+                return item
+{{- end}}
+{{- end}}
+        return None
+{{end}}
+    # ==================== State Import Accessors ====================
+{{range .StateImports}}
+    def get_{{.FieldName}}(self) -> Optional[pb.{{.TypeName}}]:
+        """Returns a defensive copy of the imported {{.TypeName}} (read-only)."""
+        if self._{{.FieldName}} is None:
+            return None
+        return copy.deepcopy(self._{{.FieldName}})
+{{end}}
+
+# ==================== Child Accessor Types ====================
+{{range .Singletons}}
+
+class {{$.StateRootName}}{{.FieldPascal}}Accessor:
+    """Typed access to the {{.TypeName}} boundary."""
+
+    def __init__(self, parent: {{$.StateRootName}}Client) -> None:
+        self._parent = parent
+        self._callbacks: list[Callable[[pb.{{.TypeName}}], None]] = []
+        self._subscribers: list[{{.FieldPascal}}Subscriber] = []
+
+    def on_change(self, cb: Callable[[pb.{{.TypeName}}], None]) -> None:
+        """Registers a callback that fires when the {{.TypeName}} is updated."""
+        self._callbacks.append(cb)
+
+    def subscribe(self, subscriber: {{.FieldPascal}}Subscriber) -> None:
+        """Registers a subscriber that is notified when the {{.TypeName}} is updated via Watch."""
+        self._subscribers.append(subscriber)
+
+    def _notify_change(self, value: pb.{{.TypeName}}) -> None:
+        """Notifies all registered callbacks and subscribers with a defensive copy."""
+        for cb in self._callbacks:
+            cb(copy.deepcopy(value))
+        for sub in self._subscribers:
+            sub.on_{{.FieldName}}_change(copy.deepcopy(value))
+
+    def proto(self) -> Optional[pb.{{.TypeName}}]:
+        """Returns the reconstructed {{.TypeName}} proto."""
+        return self.get()
+
+    def get(self) -> Optional[pb.{{.TypeName}}]:
+        """Returns a defensive copy of the cached {{.TypeName}}."""
+        return self._parent.get_{{.FieldName}}()
+
+    async def fetch(self) -> pb.{{.TypeName}}:
+        """Fetches the authoritative {{.TypeName}} from the state service."""
+        return await self._parent.fetch_{{.FieldName}}()
+{{if not $.ReadOnly}}
+    def set(self, value: pb.{{.TypeName}}) -> None:
+        """Stores the {{.TypeName}}."""
+        self._parent.set_{{.FieldName}}(value)
+{{end}}{{end}}

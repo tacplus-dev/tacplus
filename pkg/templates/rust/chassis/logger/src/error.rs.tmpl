@@ -1,0 +1,72 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Error types for the logger library
+
+use std::fmt;
+
+/// Result type alias for logger operations
+pub type Result<T> = std::result::Result<T, LoggerError>;
+
+/// Errors that can occur during logger operations
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoggerError {
+    /// gRPC-compatible error code
+    pub code: i32,
+    /// Human-readable error message
+    pub message: String,
+}
+
+impl LoggerError {
+    /// Creates a new error with the given code and message
+    pub fn new(code: i32, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// Invalid log level string (code 3: INVALID_ARGUMENT)
+    pub fn invalid_log_level(msg: impl Into<String>) -> Self {
+        Self::new(3, format!("Invalid log level: {}", msg.into()))
+    }
+
+    /// Invalid log format string (code 3: INVALID_ARGUMENT)
+    pub fn invalid_log_format(msg: impl Into<String>) -> Self {
+        Self::new(3, format!("Invalid log format: {}", msg.into()))
+    }
+
+    /// Environment variable error (code 3: INVALID_ARGUMENT)
+    pub fn invalid_env_var(name: impl Into<String>, value: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::new(3, format!("Environment variable {}={} is invalid: {}", name.into(), value.into(), reason.into()))
+    }
+
+    /// Logger initialization error (code 13: INTERNAL)
+    pub fn initialization_error(msg: impl Into<String>) -> Self {
+        Self::new(13, format!("Failed to initialize logger: {}", msg.into()))
+    }
+
+    /// Tracing subscriber error (code 13: INTERNAL)
+    pub fn tracing_error(msg: impl Into<String>) -> Self {
+        Self::new(13, format!("Tracing subscriber error: {}", msg.into()))
+    }
+
+    /// Gets the error code
+    pub fn code(&self) -> i32 {
+        self.code
+    }
+
+    /// Gets the error message
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+// Implement Display for nice error messages
+impl fmt::Display for LoggerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+// Implement std::error::Error trait
+impl std::error::Error for LoggerError {}

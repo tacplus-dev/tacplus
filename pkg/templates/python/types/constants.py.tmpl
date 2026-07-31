@@ -1,0 +1,12 @@
+{{- /* Python constants template */ -}}
+# ---- Constants ----
+{{- range .Constants}}
+{{- if .Type}}
+{{.Name}}: {{.Type}} = {{.Value}}
+{{- else}}
+{{.Name}} = {{.Value}}
+{{- end}}
+{{- end}}
+{{- range .FieldDefaults}}
+{{.Name}}: {{.Type}} = {{.Value}}
+{{- end}}

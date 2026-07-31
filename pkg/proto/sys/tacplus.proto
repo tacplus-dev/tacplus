@@ -1,0 +1,761 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+syntax = "proto3";
+
+package tacplus;
+
+import "sys/spec.proto";
+
+// ============================================================================
+// Dependencies Configuration Schema
+// ============================================================================
+// These messages define the schema for dependencies.yaml.
+// The YAML file remains the source of truth; these messages provide
+// a formal definition of its structure.
+
+// LanguageDependencies holds the dependency configuration for a single language.
+message LanguageDependencies {
+  // dependencies maps package identifiers to version strings.
+  // Keys are language-specific: Go module paths, Maven groupId:artifactId,
+  // npm package names, PyPI package names, or Rust crate names.
+  map<string, string> dependencies = 1;
+}
+
+// DependenciesRegistry holds package registry configuration.
+message DependenciesRegistry {
+  // gitlab_project_id is the GitLab project ID for the package registry.
+  string gitlab_project_id = 1;
+
+  // interfaces maps language names to their interfaces package identifier.
+  // Keys: "go", "java", "typescript", "python", "rust"
+  map<string, string> interfaces = 2;
+
+  // imports maps language names to their import base package.
+  // Currently only "java" is used (Maven groupId differs from Java import package).
+  map<string, string> imports = 3;
+}
+
+// DependenciesConfig is the top-level schema for dependencies.yaml.
+message DependenciesConfig {
+  // registry holds package registry configuration.
+  DependenciesRegistry registry = 1;
+
+  // tools maps tool names to minimum version strings.
+  // Example: {"go": "1.23", "java": "17", "node": ">=18.0.0"}
+  map<string, string> tools = 2;
+
+  // lang holds per-language dependency configurations.
+  // Keys: "go", "java", "typescript", "python", "rust"
+  map<string, LanguageDependencies> lang = 3;
+}
+
+// ServiceName is the base enum used by BoundaryInfo and RpcInfo fields.
+// The full project-specific ServiceName enum (with all service entries) is
+// generated into generated/services.proto (package services) by tacplus.
+enum ServiceName {
+  SERVICE_NAME_UNSPECIFIED = 0;
+  SERVICE_NAME_ANY = 99;
+}
+
+// RpcCategory classifies an RPC by its verb convention.
+enum RpcCategory {
+  RPC_CATEGORY_UNSPECIFIED = 0;
+  RPC_CATEGORY_ACCESSOR = 1;
+  RPC_CATEGORY_MUTATOR = 2;
+  RPC_CATEGORY_EXECUTOR = 3;
+}
+
+
+// BoundaryInfo describes a state boundary in a tacplus build.
+// This is language-neutral metadata exposed by generated registry code.
+message BoundaryInfo {
+  // Owning service, as the project-specific ServiceName enum. Like
+  // RpcInfo.service, this is a placeholder POPULATED DOWNSTREAM once the full
+  // ServiceName enum is generated into generated/services.proto — it is
+  // SERVICE_NAME_UNSPECIFIED in the base registry tacplus emits (the base enum has
+  // only UNSPECIFIED/ANY). For the owning-service identifier tacplus actually
+  // emits, use `tag` (field 15), the service_state routing tag.
+  ServiceName service = 1;
+
+  // State root message name, e.g. "ClusterState".
+  string state_root = 2;
+
+  // Boundary field name, e.g. "ClusterInfo".
+  string boundary = 3;
+
+  reserved 4; // was consistency (spec.ConsistencyModel) — removed; boundaries are convergent
+
+  // True when the boundary is persisted.
+  bool persistence = 5;
+
+  // True when the boundary is a collection (repeated field).
+  bool collection = 7;
+
+  // Fully qualified type name of the boundary message.
+  string type_fqn = 8;
+
+  // Cross-namespace callers allowed on this boundary field.
+  repeated string boundary_callers = 9;
+
+  reserved 10; // was boundary_perms (StatePermEntry) — removed with the state_perms axis
+  reserved 12; // was state_perms (StatePermEntry) — removed with the state_perms axis
+
+  // RPCs that operate on this boundary (derived from naming convention).
+  repeated string rpcs = 13;
+
+  // True when this boundary is a configuration boundary (ConfigState pattern).
+  bool is_config = 14;
+
+  // Routing tag from service_state annotation (e.g., "state-store", "eventbus").
+  string tag = 15;
+
+  // Graph type of this boundary: "singleton", "collection", "topic",
+  // "queue", "priority_queue", "command", "view", "state_import", "private".
+  string graph_type = 16;
+
+  // auto_tls_key_type is the key algorithm when auto_tls is enabled ("ed25519" or "ecdsa").
+  // Empty means auto_tls is disabled.
+  string auto_tls_key_type = 17;
+
+  // True when this boundary is marked for Sentinel health collection.
+  bool collected_health = 18;
+
+  // TODO: Field-level config exposure control. Not all config fields should be
+  // user-facing. For example, an OAUTH provider URL may be user-configurable
+  // but token expiration time should not be. Needs a (spec.user_configurable)
+  // or similar annotation on individual config fields, and a corresponding
+  // field in FieldInfo to indicate visibility to end users vs admin-only.
+}
+
+// SubscriptionInfo describes an event-bus topic subscription declared
+// via (spec.subscribe) on a service_state message.
+message SubscriptionInfo {
+  // source is the original annotation value, e.g. "aegis.AegisState.event_stream".
+  string source = 1;
+
+  // source_package is the proto package of the source state root, e.g. "aegis".
+  string source_package = 2;
+
+  // source_state_root is the state root message name, e.g. "AegisState".
+  string source_state_root = 3;
+
+  // source_field is the topic field name, e.g. "event_stream".
+  string source_field = 4;
+
+  // source_type_fqn is the fully-qualified proto type of the topic message,
+  // e.g. "aegis.TopologyEvent".
+  string source_type_fqn = 5;
+}
+
+// EventPublishInfo describes an event_publish binding declared by an actor.
+message EventPublishInfo {
+  string actor_package = 1;
+  string actor_message = 2;
+  string topic_ref = 3;
+  string event_type_fqn = 4;
+  string broker_tag = 5;
+  string rpc_stem = 6;
+  string auth_model = 7;
+  repeated string auth_services = 8;
+  bool auth_disabled = 9;
+  bool auth_any_user = 10;
+  string target_namespace_field = 11;
+}
+
+// EventWatchInfo describes an event_watch binding declared by an actor.
+message EventWatchInfo {
+  string actor_package = 1;
+  string actor_message = 2;
+  string topic_ref = 3;
+  string event_type_fqn = 4;
+  string broker_tag = 5;
+  string rpc_stem = 6;
+  string auth_model = 7;
+  repeated string auth_services = 8;
+  bool auth_disabled = 9;
+  bool auth_any_user = 10;
+  string target_namespace_field = 11;
+}
+
+// EnumValueInfo describes a single enum value in type metadata.
+message EnumValueInfo {
+  string name = 1;
+  int32 number = 2;
+  string description = 3;
+}
+
+// FieldConstraintInfo describes one machine-readable validation constraint.
+message FieldConstraintInfo {
+  // rule is the source annotation or derived rule name, e.g. assert_max_size.
+  string rule = 1;
+
+  // target identifies what the rule constrains: field, element, key, or value.
+  string target = 2;
+
+  // value_kind is bool, int, float, string, enum, int_list, or float_list.
+  string value_kind = 3;
+
+  optional bool bool_value = 4;
+  optional int64 int_value = 5;
+  optional double float_value = 6;
+  string string_value = 7;
+  string enum_value = 8;
+  repeated int64 int_values = 9;
+  repeated double float_values = 10;
+
+  // operator carries comparisons such as gt, ge, lt, le, eq, ne, in, not_in,
+  // or multiple_of for compound numeric annotations.
+  string operator = 11;
+
+  // defaulted is true for compiler-provided default bounds.
+  bool defaulted = 12;
+
+  // unit is bytes, elements, entries, or another rule-specific unit.
+  string unit = 13;
+
+  // source is annotation or default_bound.
+  string source = 14;
+}
+
+// FieldInfo describes a field in type metadata.
+message FieldInfo {
+  string name = 1;
+  spec.TypeKind type = 2;
+  string description = 3;
+  bool required = 4;
+  bool repeated = 5;
+  string default_json = 6;
+  repeated string constraints = 7;
+  TypeInfo message = 8;
+  repeated EnumValueInfo enum_values = 9;
+  string map_key_type = 10;
+  string map_value_type = 11;
+  // graph index directives from (spec.graph_index), e.g. "exact", "int", "term,fulltext".
+  string graph_index = 12;
+  // projection source path from (spec.projection_source), e.g. "agent_id" or "tool_use.tool_name".
+  // Maps a projection field to a field path on the source event message.
+  string projection_source = 13;
+  // graph edge target type from (spec.graph_edge), e.g. "Session", "Agent".
+  // When set, this field is a uid edge to the named graph type instead of a scalar predicate.
+  string graph_edge = 14;
+
+  // Graph persistence mode from (spec.graph).mode: "INCLUDE" or "PREDICATE".
+  string graph_mode = 15;
+  // Graph index hint from (spec.graph).index, e.g. "exact", "int", "term".
+  string graph_field_index = 16;
+  // True when this field is the upsert identity predicate from (spec.graph).upsert.
+  bool graph_upsert = 17;
+  // True when this uid edge predicate is reverse-traversable from (spec.graph).reverse.
+  bool graph_reverse = 18;
+
+  reserved 19, 20, 23, 24;
+  reserved "timeseries_type", "timeseries_codec", "timeseries_default_expr", "timeseries_low_cardinality";
+  // Position in the store-neutral sort-key role from (spec.timeseries_column).order_key
+  // (1-indexed, 0 = not a sort key).
+  int32 timeseries_order_key = 21;
+  // True when this column is part of the store-neutral partition role from
+  // (spec.timeseries_column).partition_key.
+  bool timeseries_partition_key = 22;
+  // True when this field is a member of a protobuf oneof group.
+  bool oneof = 25;
+  // Name of the protobuf oneof group when oneof is true.
+  string oneof_name = 26;
+  // True when this field is the key field for a service_store message.
+  bool store_key = 27;
+  // True when writes involving this field require quorum acknowledgement.
+  bool quorum_write = 28;
+  // Machine-readable constraints derived from proto annotations and defaults.
+  repeated FieldConstraintInfo constraint_infos = 29;
+  // Store-neutral distinct-value hint from (spec.timeseries_column).cardinality_hint.
+  // (Field 25, the spec's suggested number, is already taken by `oneof`.)
+  spec.CardinalityHint timeseries_cardinality_hint = 30;
+  // data-entitlement mode for this field, from (spec.redact) or inherited from the
+  // message-level (spec.data_entitlement) default: DROP / PSEUDONYMIZE /
+  // MAY_REDACT / MAY_ANONYMIZE. UNSPECIFIED = not annotated (never transformed).
+  // This field's wire number is the field id reported in the sanitize
+  // redacted-id set and checked by the data-entitlement drift guard.
+  spec.RedactMode data_entitlement_mode = 31;
+}
+
+// TypeInfo describes a protobuf message type in the generated registry.
+message TypeInfo {
+  string fqn = 1;
+  string name = 2;
+  string package = 3;
+  string description = 4;
+  string schema_json = 5;
+  repeated FieldInfo fields = 6;
+  // graph type name from (spec.graph_type), e.g. "Entity", "Edge".
+  string graph_type = 7;
+  // Field used for upsert xid from (spec.graph_type).xid_field, e.g. "id".
+  // When set, the projection is an upsert keyed by xid; when empty, an append insert.
+  string graph_xid_field = 8;
+
+  // graph_type_source from (spec.graph_type).source. The fully-qualified event
+  // message this graph type is extracted from, e.g. "sensor.SensorEvent".
+  string graph_type_source = 11;
+
+  reserved 12;
+  reserved "graph_schema";
+  reserved 13;
+  reserved "timeseries_schema";
+  // Timeseries table name from (spec.timeseries_type).name or snake_case of message name.
+  string timeseries_table_name = 14;
+  // Source event FQN from (spec.timeseries_type).source.
+  string timeseries_table_source = 15;
+
+  // record_key from (spec.record).key. Event unique identifier field.
+  string record_key = 16;
+  // record_owner from (spec.record).owner. Event owner/identity field.
+  string record_owner = 17;
+  // graph_projections from (spec.graph_projection). Graph node types to generate.
+  repeated GraphProjectionInfo graph_projections = 18;
+  // timeseries_projections from (spec.timeseries_projection). Tables to generate.
+  repeated TimeseriesProjectionInfo timeseries_projections = 19;
+
+  // True when this message is annotated as a durable service_store value.
+  bool service_store = 20;
+  // Durable service_store name. Defaults to the protobuf message name.
+  string service_store_name = 21;
+  // Hosting service tag from (spec.service_store).tag.
+  string service_store_tag = 22;
+
+  // Store-neutral retention policy for a standalone (spec.timeseries_type) table,
+  // from its .retention. Unset = indefinite. (Source-derived projections carry
+  // their own retention on TimeseriesProjectionInfo instead.)
+  RetentionPolicyInfo timeseries_retention = 23;
+  // Store-neutral dedup policy for a standalone (spec.timeseries_type) table, from
+  // its .dedup. Unset = append-only (no dedup) — the standalone-table default.
+  DedupPolicyInfo timeseries_dedup = 24;
+
+  // Message-level data-entitlement default from (spec.data_entitlement): the
+  // default transform applied to this message's eligible fields, overridden per
+  // field by (spec.redact). UNSPECIFIED = no message-level default.
+  spec.RedactMode data_entitlement_default = 25;
+}
+
+// GraphProjectionFieldInfo describes a single field in a graph projection.
+message GraphProjectionFieldInfo {
+  string source = 1;
+  string as = 2;
+  string index = 3;
+  string edge = 4;
+  bool include = 5;
+  bool upsert = 6;
+}
+
+// GraphProjectionInfo describes a graph node type extracted from an event.
+message GraphProjectionInfo {
+  string name = 1;
+  string xid = 2;
+  repeated GraphProjectionFieldInfo field = 3;
+}
+
+// TimeseriesProjectionFieldInfo describes a single field in a timeseries projection.
+message TimeseriesProjectionFieldInfo {
+  string source = 1;
+  string as = 2;
+  int32 order_key = 3;
+  bool partition_key = 4;
+  reserved 5;
+  reserved "low_cardinality";
+  spec.CardinalityHint cardinality_hint = 6;
+}
+
+// RetentionPolicyInfo is the registry mirror of spec.RetentionPolicy — the
+// store-neutral row retention policy. A downstream materializer renders this
+// into an engine-specific TTL/eviction rule.
+message RetentionPolicyInfo {
+  string timestamp_field = 1;   // row field the retention age is measured from
+  int64 duration_seconds = 2;   // retain this long after timestamp_field; 0 = indefinite
+}
+
+// DedupPolicyInfo is the registry mirror of spec.DedupPolicy — the store-neutral
+// row identity + duplicate-resolution policy. A downstream materializer maps this
+// onto an engine's merge/dedup mechanism.
+message DedupPolicyInfo {
+  spec.DedupStrategy strategy = 1;
+  repeated string key_fields = 2;  // logical row identity
+  string version_field = 3;        // winning-row selector under DEDUP_LATEST_BY_VERSION
+}
+
+// TimeseriesProjectionInfo describes a timeseries table extracted from an event.
+// Store-neutral: retention/dedup are semantic intent, not backend DDL.
+message TimeseriesProjectionInfo {
+  string name = 1;
+  reserved 2, 3;
+  reserved "engine", "ttl";
+  string when = 4;
+  repeated TimeseriesProjectionFieldInfo field = 5;
+  RetentionPolicyInfo retention = 6;
+  DedupPolicyInfo dedup = 7;
+}
+
+// RpcSurfaceInfo describes one transport/auth surface for an RPC.
+message RpcSurfaceInfo {
+  // surface_kind is "s2s", "c2s", "c2d", or "w2s".
+  string surface_kind = 1;
+
+  // transport is "grpc", "grpc_over_rest", or "unix".
+  string transport = 2;
+
+  // auth_model is the auth model enforced on this surface.
+  string auth_model = 3;
+
+  bool auth_disabled = 4;
+  repeated string auth_services = 5;
+  bool auth_entitled_users = 6;
+  bool auth_any_user = 7;
+  string target_namespace_field = 8;
+  string subject_namespace_source = 9;
+  string target_namespace_source = 10;
+  string target_namespace = 11;
+  string grpc_path = 12;
+  string http_path = 13;
+  repeated string http_methods = 14;
+  string http_alias_path = 15;
+}
+
+// RpcInfo describes a protobuf RPC in the generated registry.
+message RpcInfo {
+  // Owning service as the project-specific ServiceName enum — a placeholder
+  // populated downstream (SERVICE_NAME_UNSPECIFIED in the base registry); use
+  // service_name (field 2) for the name tacplus emits.
+  ServiceName service = 1;
+  string service_name = 2;
+  string rpc = 3;
+  string input_type = 4;
+  string output_type = 5;
+  bool client_streaming = 6;
+  bool server_streaming = 7;
+  string description = 8;
+  RpcCategory category = 12;
+
+  // Full gRPC method path, e.g. "/policy.PolicyService/GetApiCatalog".
+  string grpc_path = 13;
+
+  // HTTP REST convention path, e.g. "/api/v1/identity/IdentityService/ListProviders".
+  // Always present for gateway-exposed RPCs: {REST_ROOT_PATH}/{package}/{Service}/{MethodName}.
+  // The service segment mirrors the gRPC + entitlement-grant identity so routes
+  // stay collision-free when a package hosts multiple services sharing a method.
+  string http_path = 15;
+
+  // HTTP methods for REST access. POST is always present for convention routes.
+  // Additional methods come from spec.rest_method (e.g. ["POST", "GET"]).
+  repeated string http_methods = 17;
+
+  // HTTP alias path from spec.rest_path, relative to REST_ROOT_PATH.
+  // When present, creates an additional route (e.g. "/api/v1/.well-known/openid-configuration").
+  // Same http_methods apply to the alias.
+  string http_alias_path = 18;
+
+  // Auth policy — inherited from service-level annotation.
+  bool auth_disabled = 20;
+  repeated string auth_services = 21;
+  bool auth_entitled_users = 22;
+  bool auth_any_user = 23;
+
+  // auth_model: "s2s" (service-to-service), "c2s" (client-to-service),
+  // or "c2d" (client-to-daemon local IPC).
+  string auth_model = 24;
+
+  // method_collection (collection-returning read) — see docs/API.md.
+  // collection_mode is "SNAPSHOT" | "WATCH" | "PAGE"; empty when the RPC is not
+  // a collection read. The remaining fields are the declared bounds.
+  string collection_mode = 25;
+  uint32 collection_max_items = 26;          // SNAPSHOT item cap (0 on WATCH/PAGE)
+  repeated string collection_order_by = 27;  // stable total-order fields
+  uint32 collection_replay_depth = 28;       // WATCH ring depth (0 = platform default)
+  // PAGE keyset default page size when the request omits a limit (0 on
+  // SNAPSHOT/WATCH). The wrapper bounds an explicit limit to collection_max_items.
+  uint32 collection_default_page_size = 29;
+
+  // Governed RPC classification derived from the method name and streaming /
+  // collection shape. Empty when the method does not yet classify cleanly.
+  string rpc_verb = 30;                  // canonical verb token, e.g. "List"
+  string rpc_noun = 31;                  // noun suffix after the canonical verb
+  string method_pattern = 32;            // GET | LIST | WATCH | CREATE | UPDATE | DELETE | ACTION | CLIENT_STREAM | BIDI
+  string access_kind = 33;               // READ | WRITE
+  string verb_class = 34;                // core | action | agent
+  repeated string entitlement_scopes = 35; // grant scopes that admit this method, broad to narrow
+  string retry_policy = 36;              // READ_ONLY | WATCH_RECONNECT | IDEMPOTENCY_REQUIRED | NO_GENERATED_AUTO_RETRY
+  string capability_scope = 37;          // primary package capability bucket: READ | WRITE | WATCH | PAGE | AGENT
+  string verb_definition = 38;           // governed dictionary definition for rpc_verb
+  string verb_boundary = 39;             // "not this other verb" governance boundary
+  string audit_meaning = 40;             // operator/security meaning of the call
+  repeated string rejected_verbs = 41;   // non-canonical verbs that fold to rpc_verb and are rejected
+  repeated string allowed_patterns = 42; // patterns this canonical verb may resolve to
+  string handler_shape = 43;             // UNARY | SERVER_STREAM | CLIENT_STREAM | BIDI
+
+  // Namespace authorization metadata. These fields expose the same level-or-below
+  // decision inputs that generated authorizers enforce at runtime.
+  string target_namespace_field = 44;    // request string field for namespace extraction, or the authored fixed namespace literal on auth_any_user methods
+  string subject_namespace_source = 45;  // "" | "token.namespace"
+  string target_namespace_source = 46;   // "" | "request.field" | "literal"
+  string target_namespace = 47;          // fixed namespace literal after normalization ("" unless target_namespace_source == "literal")
+
+  // verb_status is "classified", "unclassified", or "exempt".
+  string verb_status = 48;
+  // folded_to_verb is the canonical verb for a rejected leading synonym, when known.
+  string folded_to_verb = 49;
+
+  // surfaces lists every generated transport/auth surface for this RPC. This
+  // includes derived W2S gRPC-over-REST exposure when a C2S RPC has REST route
+  // metadata.
+  repeated RpcSurfaceInfo surfaces = 50;
+}
+
+// EnumInfo describes a top-level protobuf enum definition.
+message EnumInfo {
+  string name = 1;
+  string package = 2;
+  string description = 3;
+  repeated EnumValueInfo values = 4;
+}
+
+// ServiceInfo describes a gRPC service as a first-class object.
+message ServiceInfo {
+  // Service name, e.g. "PolicyService".
+  string name = 1;
+
+  // Human-readable description from proto comments.
+  string description = 2;
+
+  // Proto package this service belongs to.
+  string package = 3;
+
+  // Full gRPC service path, e.g. "policy.PolicyService".
+  string grpc_service = 4;
+
+  // RPCs defined on this service.
+  repeated RpcInfo rpcs = 5;
+
+  // Boundary names owned by this service's state root.
+  repeated string boundaries = 6;
+
+  // was dependencies (repeated string) = 7 — do not reuse. Its only producer (the
+  // state_perms-derived dependency list) was removed with the permission axis;
+  // declared grpc client edges now live in client_dependencies (field 17).
+  reserved 7;
+  reserved "dependencies";
+
+  // event_tag is the routing label for gateway-exposed event services.
+  string event_tag = 8;
+
+  // smb marks a Service Mesh Blackbox service: its own instances talk over a
+  // black-box peer protocol within a single cluster (SPIFFE
+  // plan D7). Consumers read this from the registry, not proto text, to drive
+  // the per-SMB CA + member-cert wiring.
+  bool smb = 9;
+
+  // smb_authority marks the consumer service designated to issue per-SMB CAs +
+  // member certs for smb services (SPIFFE plan D7). Read from the registry so an
+  // SMB service / its tooling can resolve which service to obtain its CA + cert
+  // from. tacplus does not implement the authority.
+  bool smb_authority = 10;
+
+  // smb_root is present when smb is true and records the trust profile selected
+  // by spec.smb. SMB_ROOT_ISOLATED is the default; SMB_ROOT_CLUSTER requests a
+  // per-SMB intermediate rooted in the cluster CA.
+  optional spec.SmbRoot smb_root = 11;
+
+  // host_tag is the service_s2s tag for hosted vservice RPC surfaces.
+  string host_tag = 12;
+}
+
+// VServiceInfo describes a file-level virtual service identity.
+message VServiceInfo {
+  // Virtual service identity name from spec.vservice.name.
+  string name = 1;
+
+  // Stable field id from spec.vservice.id.
+  int32 id = 2;
+
+  // Proto package that declares this vservice.
+  string package = 3;
+}
+
+// ClientDependencyInfo describes a file-level declared gRPC client dependency.
+message ClientDependencyInfo {
+  // source_package is the proto package that declares the dependency.
+  string source_package = 1;
+
+  // surface_kind is "s2s", "c2s", or "w2s".
+  string surface_kind = 2;
+
+  // service is the declared target service ref, usually "package.ServiceName".
+  string service = 3;
+
+  // target_package is parsed from service when service is package-qualified.
+  string target_package = 4;
+
+  // target_service is parsed from service when service is package-qualified.
+  string target_service = 5;
+
+  // wildcard is true for spec.all_grpc_s2s_clients.
+  bool wildcard = 6;
+}
+
+// EntitlementGrantInfo describes one generated entitlement grant token.
+// Exact grants name a package + service + RPC. Wildcard grants name a package
+// plus a capability scope and expand to the exact grant tokens they cover.
+message EntitlementGrantInfo {
+  // token is the stable flattened grant token, e.g. PACKAGE_SERVICE_RPC,
+  // PACKAGE_ANY, or PACKAGE_READ_ANY.
+  string token = 1;
+
+  // package is the proto package/capability namespace this grant belongs to.
+  string package = 2;
+
+  // service_name is set for exact grants.
+  string service_name = 3;
+
+  // rpc is set for exact grants.
+  string rpc = 4;
+
+  // capability_scope is set for wildcard grants: ANY, READ, WRITE, WATCH,
+  // PAGE, AGENT, or another generated capability scope.
+  string capability_scope = 5;
+
+  // expands_to lists exact grant tokens implied by a wildcard grant.
+  // Exact grants leave this empty.
+  repeated string expands_to = 6;
+}
+
+// BuildInfo contains version and build metadata for the registry.
+message BuildInfo {
+  // tacplus version that generated this registry.
+  string tacplus_version = 1;
+
+  // Timestamp when the registry was generated (RFC 3339).
+  string build_timestamp = 2;
+
+  // Git SHA of the source proto directory, if available.
+  string source_git_sha = 3;
+}
+
+// VerificationHarness describes a single proof harness for a message.
+message VerificationHarness {
+  // message_fqn is the fully qualified proto message name.
+  string message_fqn = 1;
+
+  // harness_name is the tool-specific harness identifier
+  // (e.g. "verify_token_validate" for Kani).
+  string harness_name = 2;
+
+  // assumptions are the preconditions assumed before verification.
+  repeated string assumptions = 3;
+
+  // contracts are the postconditions being verified.
+  repeated string contracts = 4;
+
+  // status is the verification result: "verified", "failed", "error", "skipped".
+  string status = 5;
+
+  // detail contains tool output on failure/error (empty on success).
+  string detail = 6;
+}
+
+// VerificationReport summarizes formal verification results for a build.
+message VerificationReport {
+  // tool is the verifier name: "kani", "jbmc", "openjml".
+  string tool = 1;
+
+  // tool_version is the version string reported by the tool.
+  string tool_version = 2;
+
+  // language is "rust", "go", or "java".
+  string language = 3;
+
+  // harnesses are the individual proof results.
+  repeated VerificationHarness harnesses = 4;
+
+  // passed is the count of verified harnesses.
+  int32 passed = 5;
+
+  // failed is the count of failed harnesses.
+  int32 failed = 6;
+
+  // total is the total harness count.
+  int32 total = 7;
+
+  // duration_ms is wall-clock time for the full verification run.
+  int64 duration_ms = 8;
+}
+
+// PackageNode is a node in the hierarchical registry tree.
+// The root node represents the tacplus build; children are proto packages
+// (sys/, services/, common/, utils/). Each node carries its own types,
+// RPCs, and boundaries and recursively contains sub-packages.
+message PackageNode {
+  // name is the short package name (e.g. "identity", "spec", "sys").
+  string name = 1;
+
+  // full_path is the slash-separated path from the root (e.g. "services/identity").
+  string full_path = 2;
+
+  // children are sub-packages contained in this node.
+  repeated PackageNode children = 3;
+
+  // types are the message type descriptors defined in this package.
+  repeated TypeInfo types = 4;
+
+  // rpcs are the RPC descriptors defined in this package.
+  repeated RpcInfo rpcs = 5;
+
+  // boundaries are the state boundaries owned by this package's service.
+  repeated BoundaryInfo boundaries = 6;
+
+  // docs is a map of documentation file name → content.
+  // Populated on the root node only; contains embedded project documentation.
+  map<string, string> docs = 7;
+
+  // schema describes the structure of this document for self-reference.
+  // Populated on the root node only; points readers to the type definitions
+  // under sys/tacplus that define PackageNode, TypeInfo, FieldInfo, RpcInfo,
+  // BoundaryInfo, and EnumValueInfo.
+  string schema = 8;
+
+  // enums are the top-level enum definitions in this package.
+  repeated EnumInfo enums = 9;
+
+  // services are first-class service descriptors (populated on leaf nodes with RPCs).
+  repeated ServiceInfo services = 10;
+
+  // build contains version and build metadata. Populated on the root node only.
+  BuildInfo build = 11;
+
+  // subscriptions are event-bus topic subscriptions declared on state roots
+  // in this package (from spec.subscribe annotations).
+  repeated SubscriptionInfo subscriptions = 12;
+
+  // constants are file-level named constants (string, int, float, bool)
+  // defined via spec.string_const, spec.int_const, etc.
+  // Key is the constant name, value is the constant value as a string.
+  map<string, string> constants = 13;
+
+  // entitlement_grants is a root-level generated grant catalog for
+  // entitlement-checked C2S RPCs. Exact grants are package+service+RPC tokens;
+  // wildcard grants expand to exact grants.
+  repeated EntitlementGrantInfo entitlement_grants = 14;
+
+  // proto_packages are the declared protobuf package names represented by this
+  // leaf node. Present on leaf nodes so consumers do not infer package identity
+  // from registry directory names.
+  repeated string proto_packages = 15;
+
+  // vservices are virtual service identities declared by proto files in this
+  // leaf node.
+  repeated VServiceInfo vservices = 16;
+
+  // client_dependencies are file-level declared grpc_*_client dependency edges
+  // with their selected surface kind.
+  repeated ClientDependencyInfo client_dependencies = 17;
+
+  // event_publishes are validated event_publish bindings declared in this leaf.
+  repeated EventPublishInfo event_publishes = 18;
+
+  // event_watches are validated event_watch bindings declared in this leaf.
+  repeated EventWatchInfo event_watches = 19;
+
+}

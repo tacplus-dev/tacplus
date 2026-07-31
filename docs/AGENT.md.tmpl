@@ -1,0 +1,143 @@
+# tacplus Registry
+
+This file is embedded in `registry.json` and describes how to navigate it.
+
+## Overview
+
+This registry describes a tacplus-generated service mesh with:
+- **{{.TypeCount}}** message types across **{{.PackageCount}}** packages
+- **{{.RpcCount}}** RPCs across **{{.ServiceCount}}** gRPC services
+- **{{.BoundaryCount}}** state boundaries
+
+## Structure
+
+The registry is a recursive `PackageNode` tree. Each node has:
+- `name` — short package name
+- `full_path` — slash-separated path from root
+- `children` — sub-packages
+- `proto_packages` — declared protobuf package names represented by a leaf node
+- `vservices` — virtual service identities declared by proto files in a leaf node
+- `client_dependencies` — declared `grpc_*_client` edges with `surface_kind`
+- `types` — message type descriptors (`TypeInfo`)
+- `rpcs` — RPC descriptors (`RpcInfo`)
+- `boundaries` — state boundary descriptors (`BoundaryInfo`)
+
+Navigate by traversing `children` to reach any package. Directory paths are navigation
+labels; use `proto_packages`, `TypeInfo.package`, and `ServiceInfo.package` for
+declared protobuf identity.
+
+## Self-Description
+
+The `$schema` field points to `registry.schema.json` (JSON Schema format).
+The type definitions under `sys/tacplus` describe this document's own structure:
+`PackageNode`, `TypeInfo`, `FieldInfo`, `RpcInfo`, `BoundaryInfo`, `EnumValueInfo`.
+
+## Generated Field Reference
+
+This field list is generated from `pkg/proto/sys/tacplus.proto`.
+{{range .RegistryTypes}}
+### {{.Name}}
+{{range .Fields}}- `{{.Name}}` — {{.Type}}
+{{end}}
+{{end}}
+
+## Field Metadata
+
+`FieldInfo` includes protobuf oneof grouping:
+- `oneof` — true when the field is a member of a protobuf oneof group
+- `oneof_name` — the declared oneof group name
+
+`FieldInfo.constraint_infos` contains machine-readable validation constraints
+derived from proto annotations and compiler default bounds. Prefer
+`constraint_infos` over parsing the legacy prose strings in `constraints`.
+
+Durable `service_store` messages are surfaced in metadata:
+- `TypeInfo.service_store` / `service_store_name` / `service_store_tag`
+- `FieldInfo.store_key` — the key field for a service_store value
+- `FieldInfo.quorum_write` — field writes require quorum acknowledgement
+
+## VService Metadata
+
+`PackageNode.vservices` lists file-level `(spec.vservice)` identities with
+`name`, `id`, and declaring `package`. Hosted vservice RPC surfaces expose their
+hosting tag on `ServiceInfo.host_tag`.
+
+## Client Dependencies
+
+`PackageNode.client_dependencies` lists file-level `grpc_s2s_client`,
+`grpc_c2s_client`, `grpc_w2s_client`, and `all_grpc_s2s_clients` declarations.
+Each edge includes `source_package`, `surface_kind`, `service`,
+`target_package`, `target_service`, and `wildcard`.
+
+## Event Topology
+
+`PackageNode.event_publishes` and `PackageNode.event_watches` list validated
+actor bindings from `(spec.event_publish)` and `(spec.event_watch)`. Each entry
+includes the actor package/message, canonical `topic_ref`, resolved
+`event_type_fqn`, broker tag, RPC stem, and derived auth shape.
+
+## RPC Surfaces
+
+`RpcInfo.auth_model` is the primary annotated service model (`s2s`, `c2s`, or
+`c2d`). `RpcInfo.surfaces` lists every generated transport/auth surface for an
+RPC. Use it when you need additive exposure such as W2S gRPC-over-REST:
+`surface_kind` / `auth_model` may be `w2s`, `transport` is `grpc_over_rest`,
+and the row carries the W2S HTTP route plus namespace/auth metadata.
+
+## RPC Classification
+
+Every RPC may carry classifier metadata derived from the governed verb registry:
+- `auth_model` — primary annotated service model: `s2s`, `c2s`, or `c2d`
+- `verb_status` — `classified`, `unclassified`, or `exempt`
+- `rpc_verb` / `rpc_noun` — the canonical `Verb<Noun>` split when classification succeeds
+- `method_pattern` — the static shape (`GET`, `LIST`, `WATCH`, `CREATE`, `UPDATE`,
+  `DELETE`, `ACTION`, `CLIENT_STREAM`, or `BIDI`)
+- `access_kind` — `READ` or `WRITE`
+- `verb_class` — `core`, `action`, or `agent`
+- `entitlement_scopes` — grant scopes that admit the method, ordered broad to narrow
+- `retry_policy` — semantic retry/idempotency posture
+- `capability_scope` — primary package capability bucket for capability-any expansion
+- `verb_definition`, `verb_boundary`, `audit_meaning` — governed dictionary metadata
+- `rejected_verbs` — non-canonical verbs that fold to the canonical verb and are rejected
+- `folded_to_verb` — canonical verb for a rejected leading synonym, when known
+- `allowed_patterns` — patterns this canonical verb may resolve to
+- `handler_shape` — `UNARY`, `SERVER_STREAM`, `CLIENT_STREAM`, or `BIDI`
+
+The legacy `category` field is also present for older policy code:
+- **ACCESSOR** — read/observe operations (Get, Watch, Query, KeySet, Size, ContainsKey, List, Peek, Subscribe)
+- **MUTATOR** — write/modify operations (Set, Put, Delete, Remove, Clear, Publish, Offer, Reload)
+- **EXECUTOR** — action/command operations (Assist, Authenticate, Authorize, Evaluate, Exchange, etc.)
+
+Per-service aggregate enum values (`ALL_ACCESSORS`, `ALL_MUTATORS`, `ALL_EXECUTORS`) are available for security policy rules.
+
+## Security Metadata
+
+Each `BoundaryInfo` carries:
+- `boundary_callers` — which services can call this boundary cross-namespace
+
+Each `RpcInfo` carries:
+- `auth_disabled` — whether authentication is bypassed
+- `auth_services` — S2S caller service allowlist when applicable
+- `auth_entitled_users` — C2S entitlement-checked user access
+- `auth_any_user` — C2S authenticated-user access without entitlement checks
+- `auth_model` — primary annotated service model (`s2s`, `c2s`, or `c2d`)
+- `target_namespace_field`, `subject_namespace_source`,
+  `target_namespace_source`, `target_namespace` — namespace authorization inputs
+- `surfaces` — per-transport auth metadata, including derived W2S rows
+- `category` — legacy accessor/mutator/executor classification
+- `rpc_verb`, `rpc_noun`, `method_pattern`, `access_kind`, `verb_class`,
+  `entitlement_scopes`, `retry_policy`, `capability_scope`, `verb_definition`,
+  `verb_boundary`, `audit_meaning`, `rejected_verbs`, `allowed_patterns`,
+  `handler_shape` — governed verb/pattern metadata when classification succeeds
+
+## Services
+
+{{range .Services}}- **{{.}}**
+{{end}}
+## Packages
+
+{{range .Packages}}- `{{.}}`
+{{end}}
+## Documentation
+
+Additional documentation is available in the `docs` map at the root of this registry.

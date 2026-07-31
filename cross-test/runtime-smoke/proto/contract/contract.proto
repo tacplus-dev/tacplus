@@ -1,0 +1,144 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+syntax = "proto3";
+
+package contractclient;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "contractclient"};
+// Declared client dependencies: full-client targets (python/typescript) emit
+// C2S/W2S clients only for declared deps. The own-package ContractApi below is
+// the contract of the remote service these clients CALL (PAR-3 taxonomy) — the
+// go fixture server hosts the real implementation from the canonical
+// consumer-contract proto, whose ContractApi shape this file mirrors exactly.
+// Wire compatibility between the two generations is by mirroring: same proto
+// package, same message fields, same method surface and auth options.
+option (spec.grpc_c2s_client) = {service: "contractclient.ContractApi"};
+option (spec.grpc_w2s_client) = {service: "contractclient.ContractApi"};
+
+enum ContractMode {
+  CONTRACT_MODE_UNSPECIFIED = 0;
+  CONTRACT_MODE_READ = 1 [(spec.json_return_value) = "read"];
+  CONTRACT_MODE_WRITE = 2 [(spec.json_return_value) = "write"];
+}
+
+message ContractRequest {
+  string tenant_namespace = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 1
+  ];
+  string item_id = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 3
+  ];
+  ContractMode mode = 3 [(spec.assert_enum_defined) = true];
+  repeated string tags = 4 [(spec.assert_max_size) = 8];
+  map<string, string> metadata = 5 [(spec.assert_max_size) = 8];
+}
+
+message ContractResponse {
+  string result_id = 1 [(spec.assert_required) = true];
+  bool accepted = 2;
+}
+
+message ContractEvent {
+  string event_id = 1 [(spec.assert_required) = true];
+  string tenant_namespace = 2 [(spec.assert_required) = true];
+  string payload = 3;
+}
+
+enum ContractChangeType {
+  CONTRACT_CHANGE_TYPE_UNSPECIFIED = 0;
+  CONTRACT_CHANGE_TYPE_ADD = 1;
+  CONTRACT_CHANGE_TYPE_MODIFY = 2;
+  CONTRACT_CHANGE_TYPE_DELETE = 3;
+}
+
+message ContractWatchRequest {
+  string tenant_namespace = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 1
+  ];
+  string item_id = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 3
+  ];
+  ContractMode mode = 3 [(spec.assert_enum_defined) = true];
+  int64 from_revision = 4;
+}
+
+message ContractWatchChange {
+  ContractChangeType type = 1 [(spec.assert_enum_defined) = true];
+  ContractEvent item = 2;
+  int64 revision = 3;
+}
+
+message ContractWatchEvent {
+  oneof event {
+    ContractEvent snapshot_item = 1;
+    int64 snapshot_done = 2;
+    ContractWatchChange delta = 3;
+  }
+}
+
+message ContractPageRequest {
+  string tenant_namespace = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 1
+  ];
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ContractPageResponse {
+  repeated ContractEvent items = 1 [(spec.assert_max_size) = 10000];
+  string next_page_token = 2;
+  int64 total_count = 3;
+}
+
+// Mirrors the canonical full-contract ContractApi (consumer-contract fixture)
+// method-for-method and option-for-option so the client wire behavior matches
+// the go fixture server generated from that fixture.
+service ContractApi {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  rpc GetContract(ContractRequest) returns (ContractResponse) {
+    option (spec.method_c2s) = {target_namespace_field: "tenant_namespace"};
+    option (spec.rest_method) = {methods: [REST_METHOD_GET]};
+  }
+
+  rpc GetPublicContract(ContractRequest) returns (ContractResponse) {
+    option (spec.method_c2s) = {auth_disabled: true};
+    option (spec.rest_path) = "contract/public-read";
+  }
+
+  rpc ListEvents(ContractRequest) returns (stream ContractEvent) {
+    option (spec.method_c2s) = {auth_any_user: true};
+    option (spec.method_collection) = {
+      mode: COLLECTION_MODE_SNAPSHOT
+      order_by: "event_id"
+      max_items: 1000
+    };
+  }
+
+  rpc Watch(ContractWatchRequest) returns (stream ContractWatchEvent) {
+    option (spec.method_c2s) = {auth_any_user: true};
+    option (spec.method_collection) = {
+      mode: COLLECTION_MODE_WATCH
+      order_by: "event_id"
+    };
+  }
+
+  rpc ListEventsPaged(ContractPageRequest) returns (ContractPageResponse) {
+    option (spec.method_c2s) = {auth_any_user: true};
+    option (spec.method_collection) = {
+      mode: COLLECTION_MODE_PAGE
+      order_by: "event_id"
+      default_page_size: 50
+    };
+  }
+
+  rpc SendEvents(stream ContractEvent) returns (ContractResponse);
+  rpc AssistEvents(stream ContractEvent) returns (stream ContractEvent);
+}

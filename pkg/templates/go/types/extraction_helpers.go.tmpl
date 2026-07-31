@@ -1,0 +1,48 @@
+{{- /* Extraction helpers — generated from (spec.graph_type).source and (spec.timeseries_type).source annotations */ -}}
+{{- /* For each projection message with a source, generates Extract<Projection>From<Source>() */ -}}
+
+// Extract{{.ProjectionType}}From{{.SourceType}} extracts a {{.ProjectionType}} from a {{.SourceType}}.
+{{- if .IsConditional}}
+// Returns nil when the event doesn't contain a {{.OneofVariantSnake}} payload.
+{{- end}}
+func Extract{{.ProjectionType}}From{{.SourceType}}(event *{{.SourceQualifier}}{{.SourceType}}) *{{.ProjectionType}} {
+	if event == nil {
+		return nil
+	}
+{{- if .IsConditional}}
+	payload := event.Get{{.OneofVariantPascal}}()
+	if payload == nil {
+		return nil
+	}
+	return &{{.ProjectionType}}{
+{{- range .Fields}}
+		{{.GoFieldName}}: {{.ValueExpr}},
+{{- end}}
+	}
+{{- else if .HasOneofGroups}}
+	msg := &{{.ProjectionType}}{
+{{- range .TopLevelFields}}
+		{{.GoFieldName}}: {{.ValueExpr}},
+{{- end}}
+	}
+	matched := false
+{{- range .OneofGroups}}
+	if {{.VarName}} := event.Get{{.VariantPascal}}(); {{.VarName}} != nil {
+{{- range .Fields}}
+		msg.{{.GoFieldName}} = {{.ValueExpr}}
+{{- end}}
+		matched = true
+	}
+{{- end}}
+	if !matched {
+		return nil
+	}
+	return msg
+{{- else}}
+	return &{{.ProjectionType}}{
+{{- range .Fields}}
+		{{.GoFieldName}}: {{.ValueExpr}},
+{{- end}}
+	}
+{{- end}}
+}

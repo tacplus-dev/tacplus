@@ -1,0 +1,31 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+[package]
+name = "diskstore"
+version = "1.0.0"
+edition = "2021"
+authors = ["Second Star Cavalier LLC"]
+description = "Typed disk persistence: atomic snapshots (UC1) and a redo-log WAL with compaction (UC2)"
+license = "Proprietary"
+
+[dependencies]
+# Serialization (records are JSON; generated ToJSON/FromJSON produce/consume it)
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Logging
+log = { workspace = true }
+
+# Async runtime (SM-managed roll runs on a tokio task)
+tokio = { workspace = true }
+
+# At-rest compression (rolled/archived files + snapshots)
+flate2 = "1"
+bzip2 = "0.4"
+
+# Generated proto types (DiskPersistenceConfig, Compression)
+{{.CrateBasePath}}-types = { path = "../../types" }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true }

@@ -1,0 +1,26 @@
+{{.Header}}
+
+/// Describes a state boundary.
+#[derive(Debug, Clone)]
+pub struct BoundaryInfo {
+    pub service: &'static str,
+    pub state_root: &'static str,
+    pub boundary: &'static str,
+    pub persistence: bool,
+    pub collection: bool,
+    pub type_fqn: &'static str,
+    pub is_config: bool,
+    pub graph_type: &'static str,
+    pub rpcs: &'static [&'static str],
+}
+
+/// Returns all state boundaries across all services.
+pub fn boundaries() -> Vec<BoundaryInfo> {
+    vec![
+{{- range $c := .Clients}}
+{{- range $c.Boundaries}}
+        BoundaryInfo { service: "{{$c.Group}}/{{$c.PackageName}}", state_root: "{{.StateRoot}}", boundary: "{{.Boundary}}", persistence: {{.Persistence}}, collection: {{.Collection}}, type_fqn: "{{.TypeFQN}}", is_config: {{.IsConfig}}, graph_type: "{{.GraphType}}", rpcs: &[{{range .Rpcs}}"{{.}}", {{end}}] },
+{{- end}}
+{{- end}}
+    ]
+}

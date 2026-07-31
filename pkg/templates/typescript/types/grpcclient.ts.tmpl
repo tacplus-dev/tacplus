@@ -1,0 +1,112 @@
+{{.Header}}
+
+import * as grpc from '@grpc/grpc-js';
+import { toBinary, fromBinary } from '@bufbuild/protobuf';
+{{- if .HasGoogleEmpty}}
+import { type Empty, EmptySchema } from '@bufbuild/protobuf/wkt';
+{{- end}}
+import * as types from '{{.TypesImport}}';
+import { type ChannelProvider } from '{{.ServiceManagerImport}}';
+{{.CrossPackageImports}}
+
+/**
+ * {{.ClientName}} provides a typed gRPC client for {{.ServiceName}}.
+ *
+ * Wraps a ChannelProvider that resolves the active connection for the target
+ * service on each call. Methods that require authentication require a
+ * tokenProvider and include an Authorization: Bearer header.
+ */
+export class {{.ClientName}} {
+    private channelProvider: ChannelProvider;
+    private tokenProvider?: () => Promise<string>;
+    private timeoutMs = 30_000;
+    private maxRetries = 2;
+    private retryBackoffMs = 100;
+
+    constructor(channelProvider: ChannelProvider, tokenProvider?: () => Promise<string>) {
+        this.channelProvider = channelProvider;
+        this.tokenProvider = tokenProvider;
+    }
+
+    /** Returns the active gRPC client from the ChannelProvider. */
+    private get client(): grpc.Client {
+        return this.channelProvider.channel();
+    }
+
+    withTimeout(timeoutMs: number): this {
+        this.timeoutMs = timeoutMs;
+        return this;
+    }
+
+    withRetry(maxRetries: number, initialBackoffMs: number): this {
+        this.maxRetries = Math.max(0, maxRetries);
+        this.retryBackoffMs = initialBackoffMs > 0 ? initialBackoffMs : 100;
+        return this;
+    }
+
+    private callOptions(): grpc.CallOptions {
+        if (this.timeoutMs <= 0) return {};
+        return { deadline: new Date(Date.now() + this.timeoutMs) };
+    }
+
+    private shouldRetryOutbound(err: any): boolean {
+        return err?.code === grpc.status.UNAVAILABLE
+            || err?.code === grpc.status.RESOURCE_EXHAUSTED
+            || err?.code === grpc.status.DEADLINE_EXCEEDED;
+    }
+
+    private outboundBackoff(attempt: number): number {
+        let backoff = this.retryBackoffMs || 100;
+        for (let i = 0; i < attempt; i++) {
+            backoff = Math.min(backoff * 2, 2_000);
+        }
+        return backoff;
+    }
+
+    private async metadata(authRequired: boolean): Promise<grpc.Metadata> {
+        const metadata = new grpc.Metadata();
+        if (!authRequired) return metadata;
+        if (!this.tokenProvider) {
+            const err = new Error('auth token provider is required') as Error & { code?: number };
+            err.code = grpc.status.UNAUTHENTICATED;
+            throw err;
+        }
+        let token: string;
+        try {
+            token = await this.tokenProvider();
+        } catch (cause) {
+            const err = new Error(`auth token: ${cause instanceof Error ? cause.message : String(cause)}`) as Error & { code?: number };
+            err.code = grpc.status.UNAUTHENTICATED;
+            throw err;
+        }
+        if (!token) {
+            const err = new Error('auth token is empty') as Error & { code?: number };
+            err.code = grpc.status.UNAUTHENTICATED;
+            throw err;
+        }
+        metadata.add('authorization', `Bearer ${token}`);
+        return metadata;
+    }
+
+    private async unaryWithRetry<T>(
+        authRequired: boolean,
+        retrySafe: boolean,
+        invoke: (metadata: grpc.Metadata, options: grpc.CallOptions) => Promise<T>,
+    ): Promise<T> {
+        const maxRetries = retrySafe ? this.maxRetries : 0;
+        for (let attempt = 0; ; attempt++) {
+            const metadata = await this.metadata(authRequired);
+            try {
+                return await invoke(metadata, this.callOptions());
+            } catch (err: any) {
+                if (attempt >= maxRetries || !this.shouldRetryOutbound(err)) {
+                    throw err;
+                }
+                await new Promise((resolve) => setTimeout(resolve, this.outboundBackoff(attempt)));
+            }
+        }
+    }
+
+{{.Methods}}
+}
+{{.ExtraTypes}}

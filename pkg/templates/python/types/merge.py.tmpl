@@ -1,0 +1,67 @@
+{{- /* Python merge template */ -}}
+# ---- Merge ----
+{{- range .Messages}}
+
+def {{.FuncName}}(dst: {{.QualifiedType}}, src: {{.QualifiedType}}) -> None:
+    """Fills zero-valued fields in dst from src. dst takes precedence."""
+{{- range .Fields}}
+{{- if eq .Kind "string"}}
+    if dst.{{.FieldName}} == "":
+        dst.{{.FieldName}} = src.{{.FieldName}}
+{{- else if eq .Kind "int"}}
+    if dst.{{.FieldName}} == 0:
+        dst.{{.FieldName}} = src.{{.FieldName}}
+{{- else if eq .Kind "float"}}
+    if dst.{{.FieldName}} == 0.0:
+        dst.{{.FieldName}} = src.{{.FieldName}}
+{{- else if eq .Kind "bool"}}
+    if not dst.{{.FieldName}}:
+        dst.{{.FieldName}} = src.{{.FieldName}}
+{{- else if eq .Kind "enum"}}
+    if dst.{{.FieldName}} == 0:
+        dst.{{.FieldName}} = src.{{.FieldName}}
+{{- else if eq .Kind "bytes"}}
+    if len(dst.{{.FieldName}}) == 0:
+        dst.{{.FieldName}} = src.{{.FieldName}}
+{{- else if eq .Kind "message"}}
+{{- if .SamePkg}}
+    if not dst.HasField("{{.ProtoFieldName}}") and src.HasField("{{.ProtoFieldName}}"):
+        dst.{{.FieldName}}.CopyFrom(src.{{.FieldName}})
+    elif dst.HasField("{{.ProtoFieldName}}") and src.HasField("{{.ProtoFieldName}}"):
+        {{.MergeFn}}(dst.{{.FieldName}}, src.{{.FieldName}})
+{{- else}}
+    if not dst.HasField("{{.ProtoFieldName}}") and src.HasField("{{.ProtoFieldName}}"):
+        dst.{{.FieldName}}.CopyFrom(src.{{.FieldName}})
+{{- end}}
+{{- else if eq .Kind "repeated"}}
+    if len(dst.{{.FieldName}}) == 0:
+        dst.{{.FieldName}}.extend(src.{{.FieldName}})
+{{- else if eq .Kind "map"}}
+{{- if .MapValueSamePkg}}
+    if len(dst.{{.FieldName}}) == 0:
+        dst.{{.FieldName}}.update(src.{{.FieldName}})
+    else:
+        for k, src_val in src.{{.FieldName}}.items():
+            if k in dst.{{.FieldName}}:
+                {{.MapValueMergeFn}}(dst.{{.FieldName}}[k], src_val)
+            else:
+                dst.{{.FieldName}}[k].CopyFrom(src_val)
+{{- else}}
+    if len(dst.{{.FieldName}}) == 0:
+        dst.{{.FieldName}}.update(src.{{.FieldName}})
+{{- end}}
+{{- end}}
+{{- end}}
+{{- range .OneofGroups}}
+    if dst.WhichOneof("{{.OneofName}}") is None and src.WhichOneof("{{.OneofName}}") is not None:
+        field_name = src.WhichOneof("{{.OneofName}}")
+        src_field = getattr(src, field_name)
+        if hasattr(src_field, 'CopyFrom'):
+            getattr(dst, field_name).CopyFrom(src_field)
+        else:
+            setattr(dst, field_name, src_field)
+{{- end}}
+{{- if and (eq (len .Fields) 0) (eq (len .OneofGroups) 0)}}
+    pass
+{{- end}}
+{{- end}}

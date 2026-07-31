@@ -1,0 +1,50 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// Mirrors the canonical consumer-contract audit fixture so the python and
+// typescript generated types are wire-compatible with the go fixture server's
+// ContractAuditApi (which is generated from that fixture). The audit service
+// exists to drive the go server's accounting + trace seams over the wire; the
+// consumers observe the results via the fixture's /fixture/stats endpoint.
+
+syntax = "proto3";
+
+package contractclient;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "contractclient"};
+
+message AuditRequest {
+  string item_id = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 3
+  ];
+}
+
+message AuditResponse {
+  string result_id = 1 [(spec.assert_required) = true];
+}
+
+message AuditEvent {
+  string event_id = 1 [(spec.assert_required) = true];
+}
+
+service ContractAuditApi {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  rpc ExecuteAudit(AuditRequest) returns (AuditResponse) {
+    option (spec.method_c2s) = {auth_disabled: true};
+  }
+
+  rpc GenerateAuditEvents(AuditRequest) returns (stream AuditEvent) {
+    option (spec.method_c2s) = {auth_disabled: true};
+  }
+
+  rpc SendAuditEvents(stream AuditEvent) returns (AuditResponse) {
+    option (spec.method_c2s) = {auth_disabled: true};
+  }
+
+  rpc AssistAuditEvents(stream AuditEvent) returns (stream AuditEvent) {
+    option (spec.method_c2s) = {auth_disabled: true};
+  }
+}

@@ -1,0 +1,60 @@
+{{.Header}}
+
+package {{.Package}};
+
+import java.net.http.HttpClient;
+import java.util.function.Function;
+import java.util.function.Supplier;
+
+/**
+ * W2SClients aggregates typed W2S clients by target service.
+ */
+public class W2SClients {
+
+    /** Target service ID constants (from proto annotations). */
+{{- range .Targets}}
+    public static final String TARGET_{{.ConstName}} = "{{.ServiceID}}";
+{{- end}}
+
+{{- range .Targets}}
+    private final {{.ClassName}} {{.FieldName}};
+{{- end}}
+
+    public W2SClients(HttpClient httpClient, String baseUrl, Function<String, Supplier<String>> tokenProviderFor) {
+{{- range .Targets}}
+        this.{{.FieldName}} = new {{.ClassName}}(httpClient, baseUrl,
+            tokenProviderFor == null ? null : tokenProviderFor.apply("{{.ServiceID}}"));
+{{- end}}
+    }
+
+{{- range .Targets}}
+    public {{.ClassName}} {{.MethodName}}() {
+        return this.{{.FieldName}};
+    }
+
+{{- end}}
+{{- range .Targets}}
+    /**
+     * Typed W2S clients for the "{{.ServiceID}}" service.
+     */
+    public static class {{.ClassName}} {
+{{- range .Clients}}
+        private final {{.TypeRef}} {{.FieldName}};
+{{- end}}
+
+        public {{.ClassName}}(HttpClient httpClient, String baseUrl, Supplier<String> tokenProvider) {
+{{- range .Clients}}
+            this.{{.FieldName}} = new {{.TypeRef}}(httpClient, baseUrl, tokenProvider);
+{{- end}}
+        }
+
+{{- range .Clients}}
+        public {{.TypeRef}} {{.MethodName}}() {
+            return this.{{.FieldName}};
+        }
+
+{{- end}}
+    }
+
+{{- end}}
+}

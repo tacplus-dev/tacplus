@@ -1,0 +1,561 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package grpcserver
+
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+
+	protoerrors "{{.ModuleBasePath}}/types/sys/errors"
+	jwkviewpb "{{.ModuleBasePath}}/types/sys/jwkview"
+	entitlementspb "{{.ModuleBasePath}}/types/generated/entitlements"
+	granthelper "{{.ModuleBasePath}}/grants"
+	wrapperJwk "{{.ModuleBasePath}}/chassis/jwk"
+	tokenlib "{{.ModuleBasePath}}/chassis/token"
+	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	trace_pb "{{.ModuleBasePath}}/types/sys/trace"
+)
+
+// Authorizer performs authentication and authorization for service requests.
+// Token signatures are verified against JWKs published by TokenExchanger.
+// Authorization is deterministic: a valid token with matching aud grants access.
+type Authorizer interface {
+	Authorize(ctx context.Context, fullMethod string, req any) error
+	// Authenticate verifies token signature, audience, and expiry without
+	// checking entitlements. Used for auth_any_user services.
+	Authenticate(ctx context.Context) error
+	// AuthenticateAtOrBelow verifies token authenticity and requires the token
+	// namespace to be at-or-above targetNamespace. Empty targetNamespace defaults
+	// to the root namespace "/".
+	AuthenticateAtOrBelow(ctx context.Context, targetNamespace string) error
+	// SetMethodAuth registers explicit service-caller patterns for a method.
+	SetMethodAuth(methodName string, patterns []string)
+	// SetMethodTargetNamespaceField registers level-or-below target namespace checks.
+	SetMethodTargetNamespaceField(methodName, fieldName string)
+	// JwkCache returns the underlying JWK cache for direct key access.
+	JwkCache() *JwkCache
+	// EnforcingUnaryInterceptor returns a unary interceptor that verifies
+	// token signature and audience on every call. Used to wrap additional
+	// services so they get mandatory auth. Fail-closed: missing or invalid
+	// tokens are rejected.
+	EnforcingUnaryInterceptor() grpc.UnaryServerInterceptor
+	// EnforcingStreamInterceptor returns a stream interceptor that verifies
+	// token signature and audience on every call.
+	EnforcingStreamInterceptor() grpc.StreamServerInterceptor
+}
+
+// ============================================================================
+// JwkCache
+// ============================================================================
+
+// JwkCache is a thread-safe cache of kid -> ImmutableJwk, populated by watching
+// the JwkVerifyingKeysViewService. Can be used directly for custom auth policies.
+type JwkCache struct {
+	mu      sync.RWMutex
+	entries map[string]*wrapperJwk.ImmutableJwk
+}
+
+// Get looks up a JWK by key ID.
+func (m *JwkCache) Get(kid string) *wrapperJwk.ImmutableJwk {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.entries[kid]
+}
+
+// HasKeys returns whether any keys have been loaded.
+func (m *JwkCache) HasKeys() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.entries) > 0
+}
+
+// Load populates the cache from a set of JWKs, keyed by their kid. Intended for
+// custom auth policies (and behavioral tests) that seed verifying keys directly
+// rather than through the JwkVerifyingKeysViewService subscription.
+func (m *JwkCache) Load(jwks []*wrapperJwk.ImmutableJwk) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, j := range jwks {
+		if j != nil {
+			m.entries[j.GetKid()] = j
+		}
+	}
+}
+
+func (m *JwkCache) watchView(ctx context.Context, client jwkviewpb.JwkVerifyingKeysViewServiceClient) {
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
+	for {
+		stream, err := client.Watch(ctx, &trace_pb.TraceRequest{})
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			zap.L().Error("Failed to watch JwkVerifyingKeysView", zap.Error(err), zap.Duration("retry_in", backoff))
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return
+			}
+			if backoff < maxBackoff {
+				backoff *= 2
+			}
+			continue
+		}
+		backoff = time.Second // reset on successful connection
+
+		for {
+			resp, err := stream.Recv()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				zap.L().Warn("JwkVerifyingKeysView watch stream ended", zap.Error(err))
+				break
+			}
+
+			newEntries := make(map[string]*wrapperJwk.ImmutableJwk, len(resp.Entries))
+			for kid, proto := range resp.Entries {
+				immutable, err := wrapperJwk.NewImmutableJwk(proto)
+				if err != nil {
+					zap.L().Warn("Skipping invalid JWK from view",
+						zap.String("kid", kid),
+						zap.Error(err))
+					continue
+				}
+				newEntries[kid] = immutable
+			}
+
+			m.mu.Lock()
+			m.entries = newEntries
+			m.mu.Unlock()
+
+			zap.L().Info("JWK view updated", zap.Int("count", len(newEntries)))
+		}
+	}
+}
+
+// ============================================================================
+// authorizer (implements Authorizer)
+// ============================================================================
+
+// serviceName is the service identity baked in at code generation time.
+const serviceName = "{{.ServiceLabel}}"
+
+// authorizer implements the Authorizer interface using token signature verification.
+// User tokens carry a service_entitlements claim with normalized exact RPC grant tokens;
+// S2S service tokens are authorized via auth_services RE2 patterns.
+type authorizer struct {
+	jwkCache                   *JwkCache
+	methodAuthPatterns         map[string][]*regexp.Regexp
+	methodTargetNamespaceField map[string]string
+	logger                     *zap.Logger
+}
+
+// NewAuthorizer creates an Authorizer that verifies token signatures via JWK view.
+// The conn parameter must be non-nil for JWK subscription.
+// SPIFFE identities are self-describing (the trust domain is the URI authority),
+// so no deployment prefix is configured: service-path extraction and namespace
+// checks go through the generated token wrapper and sys/spiffe helpers.
+func NewAuthorizer(ctx context.Context, conn grpc.ClientConnInterface) (*authorizer, error) {
+	jwkCache := &JwkCache{entries: make(map[string]*wrapperJwk.ImmutableJwk)}
+	if conn != nil {
+		viewClient := jwkviewpb.NewJwkVerifyingKeysViewServiceClient(conn)
+		go jwkCache.watchView(ctx, viewClient)
+	}
+
+	zap.L().Info("Token-based authorization initialized",
+		zap.Bool("token_verification", conn != nil),
+		zap.String("service_name", serviceName))
+
+	return &authorizer{
+		jwkCache:                   jwkCache,
+		methodAuthPatterns:         make(map[string][]*regexp.Regexp),
+		methodTargetNamespaceField: make(map[string]string),
+		logger:                     zap.L().Named("authorizer"),
+	}, nil
+}
+
+// SetMethodTargetNamespaceField registers the request field name that carries the
+// target namespace path for a method. When set, Authorize enforces the
+// level-or-below rule: caller's namespace claim must equal or be a strict
+// path-segment ancestor of the value of fieldName on the request.
+func (a *authorizer) SetMethodTargetNamespaceField(methodName, fieldName string) {
+	if fieldName == "" {
+		return
+	}
+	a.methodTargetNamespaceField[methodName] = fieldName
+}
+
+// SetMethodAuth registers allowed caller patterns for a method. Patterns are RE2 regexes
+// matched against the service path (SPIFFE URI minus the deployment prefix).
+// "*" is shorthand for "match any caller".
+func (a *authorizer) SetMethodAuth(methodName string, patterns []string) {
+	if len(patterns) == 0 {
+		return
+	}
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, p := range patterns {
+		if p == "*" {
+			compiled = append(compiled, regexp.MustCompile(".*"))
+		} else {
+			compiled = append(compiled, regexp.MustCompile("^"+p+"$"))
+		}
+	}
+	a.methodAuthPatterns[methodName] = compiled
+}
+
+// JwkCache returns the underlying JWK cache for direct key access.
+func (a *authorizer) JwkCache() *JwkCache {
+	return a.jwkCache
+}
+
+// Authorize checks if the request is authorized by verifying the token signature,
+// audience, and service_entitlements claim.
+func (a *authorizer) Authorize(ctx context.Context, fullMethod string, req any) error {
+	tw, err := a.verifyBearer(ctx)
+	if err != nil {
+		zap.L().Debug("Token verification failed",
+			zap.String("method", fullMethod),
+			zap.Error(err))
+		return err
+	}
+
+	// S2S path: service/workload tokens carry structured identity claims
+	// (sub_type, sub, service_name). Authorization is receiver-side via
+	// auth_services RE2 patterns on the LOCATION-AGNOSTIC service path from
+	// token.ServicePath() — the same service matches identically across
+	// clouds/accounts/AZs/clusters; raw sub/namespace are never matched directly.
+	if subType := tw.GetSubType(); subType == "service" || subType == "workload" {
+		methodName := extractMethodName(fullMethod)
+		servicePath, err := tw.ServicePath()
+		if err != nil {
+			return err
+		}
+
+		allowed, ok := a.methodAuthPatterns[methodName]
+		if !ok {
+			return protoerrors.NewErrPermissionDenied(nil,
+				"no auth_services policy configured for service caller %q on %q", servicePath, methodName)
+		}
+		matched := false
+		for _, p := range allowed {
+			if p.MatchString(servicePath) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return protoerrors.NewErrPermissionDenied(nil,
+				"service %q not authorized for %q", servicePath, methodName)
+		}
+
+		// Level-or-below check (applies to S2S too when target_namespace_field is set).
+		if err := a.checkTargetNamespace(methodName, tw.GetNamespace(), req); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// C2S path: user tokens carry service_entitlements with exact RPC grants.
+	methodName := extractMethodName(fullMethod)
+
+	te := tw.GetServiceEntitlements()
+	if te == nil {
+		a.logger.Warn("token missing service_entitlements claim",
+			zap.String("method", fullMethod),
+			zap.String("sub", tw.GetSubject()),
+			zap.String("aud", tw.GetAudience()))
+		return protoerrors.NewErrPermissionDenied(nil, "token missing service_entitlements claim")
+	}
+	if err := a.authorizeByServiceEntitlements(te, fullMethod); err != nil {
+		return err
+	}
+
+	// Level-or-below check: caller's namespace must be at or above the target namespace
+	// named by the method's target_namespace_field annotation.
+	if err := a.checkTargetNamespace(methodName, tw.GetNamespace(), req); err != nil {
+		return err
+	}
+	return nil
+}
+
+// checkTargetNamespace enforces the level-or-below rule for methods annotated
+// with target_namespace_field. The request field named by the annotation must
+// contain a namespace-path string at or below the caller's namespace.
+func (a *authorizer) checkTargetNamespace(methodName, callerNamespace string, req any) error {
+	fieldName, ok := a.methodTargetNamespaceField[methodName]
+	if !ok || fieldName == "" {
+		return nil
+	}
+	pm, ok := req.(interface{ ProtoReflect() protoreflect.Message })
+	if !ok {
+		return protoerrors.NewErrGeneral(nil,
+			"target_namespace_field configured but request is not a proto message for %q", methodName)
+	}
+	msg := pm.ProtoReflect()
+	fd := msg.Descriptor().Fields().ByName(protoreflect.Name(fieldName))
+	if fd == nil {
+		return protoerrors.NewErrGeneral(nil,
+			"target_namespace_field %q not found on request for %q", fieldName, methodName)
+	}
+	if fd.Kind() != protoreflect.StringKind {
+		return protoerrors.NewErrGeneral(nil,
+			"target_namespace_field %q is not a string field for %q", fieldName, methodName)
+	}
+	target := msg.Get(fd).String()
+	if target == "" {
+		return protoerrors.NewErrPermissionDenied(nil,
+			"target namespace field %q is empty", fieldName)
+	}
+	if !IsAtOrBelow(callerNamespace, target) {
+		return protoerrors.NewErrPermissionDenied(nil,
+			"caller namespace %q is not at-or-above target %q", callerNamespace, target)
+	}
+	return nil
+}
+
+// authorizeByServiceEntitlements checks whether the token's service_entitlements
+// grant access to the requested RPC method.
+func (a *authorizer) authorizeByServiceEntitlements(te *entitlementspb.TokenEntitlements, fullMethod string) error {
+	required := methodGrantToken(fullMethod)
+	raw := make([]string, 0, len(te.GetGrants()))
+	for _, grant := range te.GetGrants() {
+		raw = append(raw, grant)
+	}
+	if unknown := granthelper.UnknownTokens(raw); len(unknown) > 0 {
+		a.logger.Warn("dropping unknown service_entitlements grant(s); token grants remain fail-closed",
+			zap.Strings("unknown_grants", unknown),
+			zap.String("service", serviceName),
+			zap.String("required_grant", required))
+	}
+	for _, token := range granthelper.Normalize(raw) {
+		if token == required {
+			return nil
+		}
+	}
+
+	return protoerrors.NewErrPermissionDenied(nil,
+		"grant %q not in service_entitlements for service %q", required, serviceName)
+}
+
+func methodGrantToken(fullMethod string) string {
+	serviceFQN := ""
+	method := fullMethod
+	if slash := strings.LastIndex(fullMethod, "/"); slash >= 0 {
+		serviceFQN = strings.TrimPrefix(fullMethod[:slash], "/")
+		if serviceSlash := strings.LastIndex(serviceFQN, "/"); serviceSlash >= 0 {
+			serviceFQN = serviceFQN[serviceSlash+1:]
+		}
+		method = fullMethod[slash+1:]
+	}
+	pkg := serviceName
+	service := serviceName
+	if serviceFQN != "" {
+		service = serviceFQN
+		if dot := strings.LastIndex(serviceFQN, "."); dot >= 0 {
+			pkg = serviceFQN[:dot]
+			service = serviceFQN[dot+1:]
+		}
+	}
+	return grantTokenPart(pkg) + "_" + grantTokenPart(service) + "_" + grantTokenPart(method)
+}
+
+func grantTokenPart(s string) string {
+	s = strings.NewReplacer("-", "_", ".", "_", "/", "_").Replace(s)
+	runes := []rune(s)
+	var b strings.Builder
+	for i, r := range runes {
+		if i > 0 && unicode.IsUpper(r) {
+			prev := runes[i-1]
+			if unicode.IsLower(prev) || unicode.IsDigit(prev) ||
+				(unicode.IsUpper(prev) && i+1 < len(runes) && unicode.IsLower(runes[i+1])) {
+				b.WriteRune('_')
+			}
+		}
+		b.WriteRune(unicode.ToUpper(r))
+	}
+	return b.String()
+}
+
+func rejectAPITokenClass(tw *tokenlib.TokenWrapper) error {
+	// Reject refresh tokens — they should only be exchanged at the Mint endpoint.
+	tokenUse := tw.GetTokenUse()
+	if tokenUse == "refresh" || (tokenUse == "" && tw.GetCustomField("typ") == "refresh") {
+		return protoerrors.NewErrUnauthorized(nil, "refresh tokens cannot be used for API access")
+	}
+
+	// Reject bootstrap, locality, and external tokens. External tokens are minted
+	// by the token authority for upstream services and must never be accepted internally.
+	if tokenUse == "bootstrap" || tokenUse == "locality" || tokenUse == "external" {
+		return protoerrors.NewErrUnauthorized(nil, "%s tokens cannot be used for API access", tokenUse)
+	}
+	return nil
+}
+
+func (a *authorizer) verifyBearer(ctx context.Context) (*tokenlib.TokenWrapper, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return nil, protoerrors.NewErrUnauthorized(nil, "missing authorization header")
+	}
+
+	authValues := md.Get("authorization")
+	if len(authValues) == 0 || authValues[0] == "" {
+		return nil, protoerrors.NewErrUnauthorized(nil, "missing authorization header")
+	}
+
+	tokenStr := authValues[0]
+	if strings.HasPrefix(strings.ToLower(tokenStr), "bearer ") {
+		tokenStr = tokenStr[7:]
+	}
+
+	tw, err := a.verifyToken(tokenStr)
+	if err != nil {
+		return nil, protoerrors.NewErrUnauthorized(err, "token verification failed")
+	}
+
+	if err := rejectAPITokenClass(tw); err != nil {
+		return nil, err
+	}
+
+	if tw.GetAudience() != serviceName {
+		return nil, protoerrors.NewErrPermissionDenied(nil,
+			"token audience %q does not match service %q", tw.GetAudience(), serviceName)
+	}
+	return tw, nil
+}
+
+// Authenticate verifies token signature, audience, and expiry without
+// checking entitlements. Used for auth_any_user services.
+func (a *authorizer) Authenticate(ctx context.Context) error {
+	_, err := a.verifyBearer(ctx)
+	// Token is valid (signature + aud). Allow for both S2S and C2S tokens.
+	// S2S tokens (sub set): authorized by valid token with correct audience.
+	// C2S tokens (auth_any_user): valid user token, no entitlement check needed.
+	return err
+}
+
+// AuthenticateAtOrBelow verifies token authenticity and enforces the universal
+// namespace rule against a fixed target namespace.
+func (a *authorizer) AuthenticateAtOrBelow(ctx context.Context, targetNamespace string) error {
+	tw, err := a.verifyBearer(ctx)
+	if err != nil {
+		return err
+	}
+	if targetNamespace == "" {
+		targetNamespace = "/"
+	}
+	if !IsAtOrBelow(tw.GetNamespace(), targetNamespace) {
+		return protoerrors.NewErrPermissionDenied(nil,
+			"caller namespace %q is not at-or-above target %q", tw.GetNamespace(), targetNamespace)
+	}
+	return nil
+}
+
+// EnforcingUnaryInterceptor returns a unary interceptor that verifies token
+// signature and audience on every call. Fail-closed: missing, invalid, or
+// wrong-audience tokens are rejected before the handler runs.
+func (a *authorizer) EnforcingUnaryInterceptor() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if err := a.Authenticate(ctx); err != nil {
+			return nil, err
+		}
+		return handler(ctx, req)
+	}
+}
+
+// EnforcingStreamInterceptor returns a stream interceptor that verifies token
+// signature and audience on every call.
+func (a *authorizer) EnforcingStreamInterceptor() grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if err := a.Authenticate(ss.Context()); err != nil {
+			return err
+		}
+		return handler(srv, ss)
+	}
+}
+
+// AuthEnforcingRegistrar wraps a grpc.ServiceRegistrar so that every service
+// registered through it gets mandatory token authentication (signature +
+// audience). This is used to protect additionalServices: the handler's
+// RegisterAdditionalServices receives this wrapper instead of the raw server,
+// and every unary/stream handler call verifies the bearer token before
+// reaching the handler code. Fail-closed: missing or invalid tokens are
+// rejected.
+func AuthEnforcingRegistrar(inner grpc.ServiceRegistrar, auth Authorizer) grpc.ServiceRegistrar {
+	return &authEnforcingRegistrar{inner: inner, auth: auth}
+}
+
+type authEnforcingRegistrar struct {
+	inner grpc.ServiceRegistrar
+	auth  Authorizer
+}
+
+func (r *authEnforcingRegistrar) RegisterService(desc *grpc.ServiceDesc, impl any) {
+	wrapped := *desc
+	wrapped.Methods = make([]grpc.MethodDesc, len(desc.Methods))
+	for i, m := range desc.Methods {
+		orig := m.Handler
+		wrapped.Methods[i] = grpc.MethodDesc{
+			MethodName: m.MethodName,
+			Handler: func(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+				if err := r.auth.Authenticate(ctx); err != nil {
+					return nil, err
+				}
+				return orig(srv, ctx, dec, interceptor)
+			},
+		}
+	}
+	wrapped.Streams = make([]grpc.StreamDesc, len(desc.Streams))
+	for i, s := range desc.Streams {
+		orig := s.Handler
+		wrapped.Streams[i] = grpc.StreamDesc{
+			StreamName:    s.StreamName,
+			Handler: func(srv any, stream grpc.ServerStream) error {
+				if err := r.auth.Authenticate(stream.Context()); err != nil {
+					return err
+				}
+				return orig(srv, stream)
+			},
+			ServerStreams: s.ServerStreams,
+			ClientStreams: s.ClientStreams,
+		}
+	}
+	r.inner.RegisterService(&wrapped, impl)
+}
+
+// verifyToken parses and verifies a JWT token string against the JWK view.
+func (a *authorizer) verifyToken(tokenStr string) (*tokenlib.TokenWrapper, error) {
+	tw, err := tokenlib.ParseToken(tokenStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse token: %w", err)
+	}
+
+	kid := tw.GetKid()
+	if kid == "" {
+		return nil, fmt.Errorf("token missing key ID (kid) in header")
+	}
+
+	jwk := a.jwkCache.Get(kid)
+	if jwk == nil {
+		return nil, fmt.Errorf("unknown signing key: %s", kid)
+	}
+
+	return tw, tw.Verify(jwk)
+}
+
+// extractMethodName returns the unqualified method name from a fully qualified gRPC method.
+func extractMethodName(fullMethod string) string {
+	if i := strings.LastIndex(fullMethod, "/"); i >= 0 {
+		return fullMethod[i+1:]
+	}
+	return fullMethod
+}

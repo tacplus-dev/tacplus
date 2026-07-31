@@ -1,0 +1,238 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// ============================================================================
+// DO NOT MODIFY THIS FILE
+// ============================================================================
+// This file defines JWT token structures and token-related types used for
+// authentication and authorization across all services.
+// Modifying these definitions will break token generation, validation, and
+// parsing in all components that handle authentication.
+// ============================================================================
+
+syntax = "proto3";
+
+package token;
+
+import "sys/spec.proto";
+
+// JwtHeaderType represents standard JWT header field names
+enum JwtHeaderType {
+  JWT_HEADER_TYPE_UNDEFINED = 0;
+  JWT_HEADER_TYPE_KID = 1 [(spec.json_return_value) = "kid"];  // kid - Key ID
+  JWT_HEADER_TYPE_ALG = 2 [(spec.json_return_value) = "alg"];  // alg - Algorithm
+  JWT_HEADER_TYPE_TYP = 3 [(spec.json_return_value) = "typ"];  // typ - Type
+}
+
+// JwtPayloadType represents standard JWT payload (claims) field names
+enum JwtPayloadType {
+  JWT_PAYLOAD_TYPE_UNDEFINED = 0;
+  JWT_PAYLOAD_TYPE_ISS = 1 [(spec.json_return_value) = "iss"];  // iss - Issuer
+  JWT_PAYLOAD_TYPE_SUB = 2 [(spec.json_return_value) = "sub"];  // sub - Stable principal id (or relative path) for the selected sub_type; never a full SPIFFE URI. Services: the service label. Workloads: "<service-path>/workloads/<name>". Users: the stable IDP subject (or its opaque_segment). Clients: the stable client id.
+  JWT_PAYLOAD_TYPE_AUD = 3 [(spec.json_return_value) = "aud"];  // aud - Audience
+  JWT_PAYLOAD_TYPE_EXP = 4 [(spec.json_return_value) = "exp"];  // exp - Expiration Time
+  JWT_PAYLOAD_TYPE_IAT = 5 [(spec.json_return_value) = "iat"];  // iat - Issued At
+  JWT_PAYLOAD_TYPE_JTI = 6 [(spec.json_return_value) = "jti"];  // jti - JWT ID
+  JWT_PAYLOAD_TYPE_ORIGIN_ISS = 7 [(spec.json_return_value) = "origin_iss"];  // origin_iss - Original Issuer
+  JWT_PAYLOAD_TYPE_IDP = 8 [(spec.json_return_value) = "idp"];  // idp - Identity Provider
+  JWT_PAYLOAD_TYPE_VER = 9 [(spec.json_return_value) = "ver"];  // ver - Version
+  JWT_PAYLOAD_TYPE_INSTANCE_ID = 10 [(spec.json_return_value) = "instance_id"];  // instance_id - Instance ID
+  JWT_PAYLOAD_TYPE_TOKEN_USE = 11 [(spec.json_return_value) = "token_use"];  // token_use - Token purpose (refresh/access/service)
+  JWT_PAYLOAD_TYPE_SUB_TYPE = 12 [(spec.json_return_value) = "sub_type"];  // sub_type - Principal kind: service | workload | user | client | external (the prior "pipeline" kind maps to client and is removed)
+  JWT_PAYLOAD_TYPE_PRINCIPAL = 13 [(spec.json_return_value) = "principal"];  // principal - Caller identity
+  JWT_PAYLOAD_TYPE_AZP = 14 [(spec.json_return_value) = "azp"];  // azp - Authorized-party / attestation context (spec.Azp enum: kernel | oauth | saml | cloud-auth). Set by kernel from trusted context, never copied from request claims; NOT part of subject identity
+  JWT_PAYLOAD_TYPE_PROFILES = 15 [(spec.json_return_value) = "profiles"];  // profiles - Entitlement profiles (comma-delimited)
+  JWT_PAYLOAD_TYPE_ENTITLEMENTS = 16 [(spec.json_return_value) = "entitlements"];  // entitlements - Entitlements (comma-delimited)
+  JWT_PAYLOAD_TYPE_NBF = 17 [(spec.json_return_value) = "nbf"];  // nbf - Not Before
+  JWT_PAYLOAD_TYPE_SERVICE_NAME = 18 [(spec.json_return_value) = "service_name"];  // service_name - Caller identity
+
+  // --- Namespace (authorization scope) ---
+  // `namespace` is the caller's authorization-tree scope, e.g. "/" (root),
+  // "/system/...", "/tenants/acme", or "/tenants/acme/workspaces/dev". It is
+  // an authorization fact, NOT the subject identity. The subject SPIFFE ID is
+  // a COMPUTATION over the structured claims (sub_type, sub, namespace,
+  // service_name) performed by the generated sys/spiffe helper
+  // (token.subject_spiffe_id); it is never carried as a wire claim. The
+  // universal level-or-below rule (target_namespace_field) compares namespace
+  // paths directly via the path-segment-aware is_at_or_below relation.
+  JWT_PAYLOAD_TYPE_NAMESPACE = 19 [(spec.json_return_value) = "namespace"];  // namespace - Caller's authorization scope (path in the global namespace tree)
+  JWT_PAYLOAD_TYPE_TERMINAL = 21 [(spec.json_return_value) = "terminal"];  // terminal - If "true", token cannot mint child workloads
+  JWT_PAYLOAD_TYPE_LOCALITY = 22 [(spec.json_return_value) = "locality"];  // locality - Parent's current locality token for attestation
+  JWT_PAYLOAD_TYPE_PARENT_SUB = 23 [(spec.json_return_value) = "parent_sub"];  // parent_sub - Immediate parent's structured subject (sub-shaped, e.g. "<service-path>"; never a full SPIFFE URI) for workload lineage
+  JWT_PAYLOAD_TYPE_SERVICE_ENTITLEMENTS = 24 [(spec.json_return_value) = "service_entitlements"];  // service_entitlements - Expanded per-service RPC entitlements (JSON)
+  JWT_PAYLOAD_TYPE_EXTERNAL = 25 [(spec.json_return_value) = "external"];  // external - Marks token as externally-minted (token_use = external); rejected by internal service auth
+  JWT_PAYLOAD_TYPE_PARENT_JTI = 26 [(spec.json_return_value) = "parent_jti"];  // parent_jti - jti of the token this was minted from (OT/RT→AT→ST lineage chain)
+  JWT_PAYLOAD_TYPE_CAPABILITY = 27 [(spec.json_return_value) = "capability"];  // capability - P2S access level ("RO"|"RW"); RW satisfies RO. Set on client (formerly "pipeline") P2S tokens.
+}
+
+// GrantType represents OAuth 2.0 grant types
+enum GrantType {
+  GRANT_TYPE_UNDEFINED = 0;
+  GRANT_TYPE_AUTHORIZATION_CODE = 1 [(spec.json_return_value) = "authorization_code"];
+  GRANT_TYPE_IMPLICIT = 2 [(spec.json_return_value) = "implicit"];
+  GRANT_TYPE_PASSWORD = 3 [(spec.json_return_value) = "password"];
+  GRANT_TYPE_REFRESH_TOKEN = 4 [(spec.json_return_value) = "refresh_token"];
+  GRANT_TYPE_RETRIEVE_STORED = 5 [(spec.json_return_value) = "retrieve_stored"];
+}
+
+// Token represents a JWT (JSON Web Token) with header, payload, and signature components.
+// The token can be in either parsed form (header/payload maps) or encoded form
+// (JWT compact serialization).
+message Token {
+  // Header contains the JWT header claims (e.g., alg, typ, kid)
+  map<string, string> header = 1 [(spec.assert_max_size) = 16];
+  // JWT payload claims stored as string values. Numeric claims (exp, iat, nbf)
+  // are stored as decimal string representations (e.g., "1742403600").
+  map<string, string> payload = 2 [(spec.assert_max_size) = 256];
+  // Signature is the base64url-encoded signature
+  string signature = 3 [(spec.assert_base64) = true];
+  // Base64 contains the complete JWT compact serialization
+  // (header.payload.signature). Each segment is base64url-encoded, but the
+  // dotted compact string is not itself a single base64 value.
+  string base64 = 4;
+}
+
+// Exchange represents an OAuth 2.0 token exchange response from the token endpoint.
+// It contains the access token, token type, expiration, and optional ID token.
+// In case of errors, the error and error_description fields are populated.
+message Exchange {
+  // Error contains the OAuth 2.0 error code (e.g., "invalid_request", "invalid_grant")
+  string error = 1 [(spec.assert_max_size) = 128];
+  // ErrorDescription provides a human-readable description of the error
+  string error_description = 2 [(spec.assert_max_size) = 4096];
+  // AccessToken is the OAuth 2.0 access token issued by the authorization server
+  string access_token = 3 [(spec.assert_max_size) = 16384];
+  // TokenType is the type of token issued (typically "Bearer")
+  string token_type = 4 [(spec.assert_max_size) = 32];
+  // ExpiresIn is the lifetime in seconds of the access token
+  int32 expires_in = 5 [(spec.assert_gt) = 0];
+  // Scope is the scope of the access token as a space-separated list
+  string scope = 6 [(spec.assert_max_size) = 4096];
+  // IdToken is the OpenID Connect ID Token (JWT) if requested with openid scope
+  string id_token = 7 [(spec.assert_max_size) = 16384];
+}
+
+// TokenPurpose distinguishes the purpose of a token in minting requests.
+enum TokenPurpose {
+  TOKEN_PURPOSE_UNSPECIFIED = 0;
+  // Refresh token — long-lived, used to obtain new access tokens.
+  TOKEN_PURPOSE_REFRESH = 1;
+  // Access token — short-lived, carries entitlements for a specific service.
+  TOKEN_PURPOSE_ACCESS = 2;
+  // Service token — access token scoped to a specific target service (aud).
+  TOKEN_PURPOSE_SERVICE = 3;
+  // Bootstrap token — very short-lived, used to bootstrap a child workload.
+  // Parent mints this via WorkloadMint and passes it to the child process.
+  // Child exchanges it with the token authority for a real access + refresh pair.
+  TOKEN_PURPOSE_BOOTSTRAP = 4;
+  // Locality token — rotated by parent, shared with all children.
+  // Children present this on refresh to prove they can still reach their parent.
+  TOKEN_PURPOSE_LOCALITY = 5;
+}
+
+// TokenUse claim values — identifies the purpose of a token in the token_use claim.
+enum TokenUse {
+  TOKEN_USE_UNSPECIFIED = 0;
+  TOKEN_USE_REFRESH = 1 [(spec.json_return_value) = "refresh"];
+  TOKEN_USE_ACCESS = 2 [(spec.json_return_value) = "access"];
+  TOKEN_USE_SERVICE = 3 [(spec.json_return_value) = "service"];
+  TOKEN_USE_BOOTSTRAP = 4 [(spec.json_return_value) = "bootstrap"];
+  TOKEN_USE_LOCALITY = 5 [(spec.json_return_value) = "locality"];
+  // TOKEN_USE_EXTERNAL marks a token minted by the token authority for use with an external upstream service.
+  // Internal service auth middleware rejects any token carrying this token_use value,
+  // preventing a compromised proxy from replaying an externally-minted credential
+  // against platform-internal services.
+  TOKEN_USE_EXTERNAL = 6 [(spec.json_return_value) = "external"];
+  // TOKEN_USE_OFFLINE is the long-lived, identity-only Offline Token (OT) held
+  // by the client daemon on disk. Carries no entitlements (its long TTL would
+  // make an embedded entitlement snapshot lie). Used as input to mint AT, and to
+  // self-renew via TokenMint(input=OT, no aud).
+  TOKEN_USE_OFFLINE = 7 [(spec.json_return_value) = "offline"];
+}
+
+// SubType claim values — identifies what the token subject represents.
+enum SubType {
+  SUB_TYPE_UNSPECIFIED = 0;
+  SUB_TYPE_USER = 1 [(spec.json_return_value) = "user"];
+  SUB_TYPE_SERVICE = 2 [(spec.json_return_value) = "service"];
+  SUB_TYPE_PIPELINE = 3 [(spec.json_return_value) = "pipeline"];  // P2S: pipeline/CI caller (cred_pair-minted, carries capability)
+}
+
+// TokenType represents the type of authentication token
+enum TokenType {
+  // TokenTypeUndefined represents an unspecified token type
+  TOKEN_TYPE_UNDEFINED = 0;
+  // TokenTypeJwt represents a JWT token
+  TOKEN_TYPE_JWT = 1;
+  // TokenTypeSaml represents a SAML token
+  TOKEN_TYPE_SAML = 2;
+  // TokenTypeSsh represents an SSH token
+  TOKEN_TYPE_SSH = 3;
+}
+
+// TokenParamKey represents URL parameter keys for token requests
+enum TokenParamKey {
+  TOKEN_PARAM_KEY_UNDEFINED = 0;
+  TOKEN_PARAM_KEY_STATE = 1 [(spec.json_return_value) = "state"];
+  TOKEN_PARAM_KEY_CLIENT_ID = 2 [(spec.json_return_value) = "client_id"];
+  TOKEN_PARAM_KEY_TIMEOUT = 3 [(spec.json_return_value) = "timeout"];
+  TOKEN_PARAM_KEY_REDIRECT_URI = 4 [(spec.json_return_value) = "redirect_uri"];
+  TOKEN_PARAM_KEY_VERIFIER = 5 [(spec.json_return_value) = "verifier"];
+  TOKEN_PARAM_KEY_GRANT_TYPE = 6 [(spec.json_return_value) = "grant_type"];
+  TOKEN_PARAM_KEY_AUD = 7 [(spec.json_return_value) = "aud"];
+  TOKEN_PARAM_KEY_EXP = 8 [(spec.json_return_value) = "exp"];
+  TOKEN_PARAM_KEY_INCLUDE_CLAIMS = 9 [(spec.json_return_value) = "include_claims"];
+  TOKEN_PARAM_KEY_EXCLUDE_CLAIMS = 10 [(spec.json_return_value) = "exclude_claims"];
+  TOKEN_PARAM_KEY_CODE = 11 [(spec.json_return_value) = "code"];
+  TOKEN_PARAM_KEY_STORE_CODE = 12 [(spec.json_return_value) = "store_code"];
+  TOKEN_PARAM_KEY_ID_TOKEN_HINT = 13 [(spec.json_return_value) = "id_token_hint"];
+  TOKEN_PARAM_KEY_POST_LOGOUT_REDIRECT_URI = 14 [(spec.json_return_value) = "post_logout_redirect_uri"];
+  TOKEN_PARAM_KEY_GET_TOKEN = 15 [(spec.json_return_value) = "get_token"];
+}
+
+// TokenRequestParams contains parameters for token requests.
+// These map to URL parameters used in token endpoint requests.
+//
+// The generate_from_map option instructs the compiler to generate a FromMap method
+// that converts a map[string]string (URL parameters) to this message type.
+// - key_enum: Specifies which enum to use for validating parameter keys (TokenParamKey)
+// - strict: If true, unknown keys return an error; if false, unknown keys are ignored
+// - validate_required: If true, validates that required fields are present
+// See spec/utils.proto for complete ParamMapConfig documentation.
+message TokenRequestParams {
+  option (spec.generate_from_map) = {
+    key_enum: "TokenParamKey"
+    strict: false
+    validate_required: false
+  };
+
+  // ClientId is the OAuth client identifier
+  optional string client_id = 1 [
+    (spec.assert_min_size) = 1,
+    (spec.param_key) = "TOKEN_PARAM_KEY_CLIENT_ID"
+  ];
+  // RequestedClientId is the requested client identifier for token exchange
+  optional string requested_client_id = 2;
+  // Aud is the intended audience for the token
+  optional string aud = 3 [(spec.param_key) = "TOKEN_PARAM_KEY_AUD"];
+  // Exp is the expiration time (Unix timestamp in seconds) - using double for JavaScript compatibility
+  optional double exp = 4 [
+    (spec.assert_float) = {gt: 0.0},
+    (spec.param_key) = "TOKEN_PARAM_KEY_EXP"
+  ];
+  // IncludeClaims is the list of claims to include in the token
+  repeated string include_claims = 5 [(spec.param_key) = "TOKEN_PARAM_KEY_INCLUDE_CLAIMS", (spec.assert_max_size) = 64];
+  // ExcludeClaims is the list of claims to exclude from the token
+  repeated string exclude_claims = 6 [(spec.param_key) = "TOKEN_PARAM_KEY_EXCLUDE_CLAIMS", (spec.assert_max_size) = 64];
+  // StoreCode is the code for storing/retrieving tokens
+  optional string store_code = 7 [(spec.param_key) = "TOKEN_PARAM_KEY_STORE_CODE"];
+  // Code is the OAuth authorization code
+  optional string code = 8 [(spec.param_key) = "TOKEN_PARAM_KEY_CODE"];
+  // State is the OAuth state parameter for CSRF protection
+  optional string state = 9 [(spec.param_key) = "TOKEN_PARAM_KEY_STATE"];
+  // RedirectUri is the OAuth redirect URI
+  optional string redirect_uri = 10 [(spec.param_key) = "TOKEN_PARAM_KEY_REDIRECT_URI"];
+  // Verifier is the PKCE code verifier
+  optional string verifier = 11 [(spec.param_key) = "TOKEN_PARAM_KEY_VERIFIER"];
+  // GrantType is the OAuth grant type
+  optional GrantType grant_type = 12 [(spec.param_key) = "TOKEN_PARAM_KEY_GRANT_TYPE"];
+}

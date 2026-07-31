@@ -1,0 +1,149 @@
+{{.Header}}
+
+package {{.FullPackage}};
+
+import io.grpc.Channel;
+{{- if .HasAuth}}
+import io.grpc.Metadata;
+{{- end}}
+import io.grpc.StatusRuntimeException;
+{{- if .HasAuth}}
+import io.grpc.stub.MetadataUtils;
+{{- end}}
+{{- if .HasStreaming}}
+import io.grpc.stub.StreamObserver;
+{{- end}}
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
+{{.TypesImport}}
+
+/**
+ * {{.ClientName}} provides a typed gRPC client for {{.ServiceName}}.
+ * It wraps a gRPC channel and provides typed methods for each RPC
+ * with optional request/response validation and error mapping.
+ * Methods that require authentication require tokenProvider and include an
+ * Authorization: Bearer header.
+ */
+public class {{.ClientName}} {
+
+{{- if .HasAuth}}
+    private static final Metadata.Key<String> AUTH_KEY =
+        Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
+
+{{- end}}
+    private final Channel channel;
+{{- if .HasUnary}}
+    private final {{.ServiceName}}Grpc.{{.ServiceName}}BlockingStub blockingStub;
+{{- end}}
+{{- if .HasStreaming}}
+    private final {{.ServiceName}}Grpc.{{.ServiceName}}Stub asyncStub;
+{{- end}}
+    private final Supplier<String> tokenProvider;
+    private final long timeoutMs;
+    private final int maxRetries;
+    private final long retryBackoffMs;
+
+    public {{.ClientName}}(Channel channel, Supplier<String> tokenProvider) {
+        this(channel, tokenProvider, 30_000L, 2, 100L);
+    }
+
+    private {{.ClientName}}(Channel channel, Supplier<String> tokenProvider,
+            long timeoutMs, int maxRetries, long retryBackoffMs) {
+        this.channel = channel;
+{{- if .HasUnary}}
+        this.blockingStub = {{.ServiceName}}Grpc.newBlockingStub(channel);
+{{- end}}
+{{- if .HasStreaming}}
+        this.asyncStub = {{.ServiceName}}Grpc.newStub(channel);
+{{- end}}
+        this.tokenProvider = tokenProvider;
+        this.timeoutMs = timeoutMs;
+        this.maxRetries = Math.max(0, maxRetries);
+        this.retryBackoffMs = retryBackoffMs > 0 ? retryBackoffMs : 100L;
+    }
+
+    public {{.ClientName}} withTimeout(long timeout, TimeUnit unit) {
+        return new {{.ClientName}}(
+            channel,
+            tokenProvider,
+            timeout <= 0 ? 0L : unit.toMillis(timeout),
+            maxRetries,
+            retryBackoffMs);
+    }
+
+    public {{.ClientName}} withRetry(int maxRetries, long initialBackoff, TimeUnit unit) {
+        return new {{.ClientName}}(
+            channel,
+            tokenProvider,
+            timeoutMs,
+            maxRetries,
+            initialBackoff <= 0 ? 100L : unit.toMillis(initialBackoff));
+    }
+
+{{- if .HasUnary}}
+    private {{.ServiceName}}Grpc.{{.ServiceName}}BlockingStub blockingStubWithDeadline() {
+        if (timeoutMs <= 0) {
+            return blockingStub;
+        }
+        return blockingStub.withDeadlineAfter(timeoutMs, TimeUnit.MILLISECONDS);
+    }
+{{- end}}
+
+{{- if .HasStreaming}}
+    private {{.ServiceName}}Grpc.{{.ServiceName}}Stub asyncStubWithDeadline() {
+        if (timeoutMs <= 0) {
+            return asyncStub;
+        }
+        return asyncStub.withDeadlineAfter(timeoutMs, TimeUnit.MILLISECONDS);
+    }
+{{- end}}
+
+    private boolean shouldRetryOutbound(StatusRuntimeException e) {
+        return switch (e.getStatus().getCode()) {
+            case UNAVAILABLE, RESOURCE_EXHAUSTED, DEADLINE_EXCEEDED -> true;
+            default -> false;
+        };
+    }
+
+    private long outboundBackoffMs(int attempt) {
+        long backoff = retryBackoffMs;
+        for (int i = 0; i < attempt; i++) {
+            backoff = Math.min(backoff * 2, 2_000L);
+        }
+        return backoff;
+    }
+
+    private <T> T unaryWithRetry(boolean retrySafe, Supplier<T> op) {
+        for (int attempt = 0; ; attempt++) {
+            try {
+                return op.get();
+            } catch (StatusRuntimeException e) {
+                if (!retrySafe || attempt >= maxRetries || !shouldRetryOutbound(e)) {
+                    throw e;
+                }
+                try {
+                    Thread.sleep(outboundBackoffMs(attempt));
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
+        }
+    }
+
+    private void unaryWithRetryVoid(boolean retrySafe, Runnable op) {
+        unaryWithRetry(retrySafe, () -> {
+            op.run();
+            return Boolean.TRUE;
+        });
+    }
+{{- if .HasCursor}}
+
+    /** A lazy server-stream cursor (Tier-3). close() cancels the call; use with try-with-resources. */
+    public interface CloseableIterator<T> extends java.util.Iterator<T>, AutoCloseable {
+        @Override void close();
+    }
+{{- end}}
+
+{{.Methods}}
+}

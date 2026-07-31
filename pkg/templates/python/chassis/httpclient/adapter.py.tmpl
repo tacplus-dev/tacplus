@@ -1,0 +1,96 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+Adapter implements the HTTPClient interface by wrapping a TypedClient.
+"""
+
+from typing import Callable, TypeVar
+
+from .typed_client import TypedClient
+from {{.PythonPackageBase}}.types.sys.errors.exceptions import ProtoError
+
+T = TypeVar('T')
+
+
+class Adapter:
+    """
+    Adapter implements the HTTPClient interface by wrapping a TypedClient.
+    This adapter bridges the generic interface pattern used by generated code
+    with the concrete TypedClient implementation, preventing circular dependencies.
+
+    Type parameter T represents the proto message type being operated on.
+
+    Note: This class is designed to implement the generated HTTPClient[T] interface
+    from the generated HTTP client protocol.
+    Once that interface is generated, add "implements HTTPClient[T]" to the class signature.
+    """
+
+    def __init__(self, client: TypedClient):
+        """
+        Creates a new adapter that wraps the given TypedClient.
+
+        Example usage:
+            from {{.PythonPackageBase}}.types.sys.httpclient import httpclient_pb2
+
+            config = httpclient_pb2.HttpClientConfig(timeout_seconds=30)
+            base_client = TypedClient(config)
+            adapter = Adapter(base_client)
+            # Pass adapter to generated client constructor
+
+        Args:
+            client: A configured TypedClient with retry logic and TLS settings
+        """
+        self._client = client
+
+    def do_get(self, url: str, from_bytes: Callable[[bytes], T]) -> T:
+        """
+        Performs a GET request with retry logic and deserializes the response.
+
+        Args:
+            url: Full URL for the GET request
+            from_bytes: Function to deserialize response bytes into type T
+
+        Returns:
+            The deserialized response
+
+        Raises:
+            ProtoError: If the request fails
+        """
+        return self._client.do_get(url, from_bytes)
+
+    def do_post_with_response(
+        self,
+        url: str,
+        data_bytes: bytes,
+        from_bytes: Callable[[bytes], T]
+    ) -> T:
+        """
+        Performs one POST request and deserializes the response.
+
+        Args:
+            url: Full URL for the POST request
+            data_bytes: Pre-serialized request body bytes (from TypeToJSON)
+            from_bytes: Function to deserialize response bytes into type T
+
+        Returns:
+            The deserialized response
+
+        Raises:
+            ProtoError: If the request fails
+        """
+        return self._client.do_post_with_response(url, data_bytes, from_bytes)
+
+    def do_mutation(self, method: str, url: str, data_bytes: bytes = None) -> None:
+        """
+        Performs one PUT/PATCH/DELETE request.
+
+        Args:
+            method: HTTP method (PUT, PATCH, DELETE)
+            url: Full URL for the request
+            data_bytes: Pre-serialized request body bytes (from TypeToJSON),
+                       can be None for DELETE
+
+        Raises:
+            ProtoError: If the request fails
+        """
+        self._client.do_mutation(method, url, data_bytes)

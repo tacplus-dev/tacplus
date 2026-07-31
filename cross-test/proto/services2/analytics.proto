@@ -1,0 +1,730 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// Analytics service with streaming and complex types
+
+syntax = "proto3";
+
+package analytics;
+
+import "sys/spec.proto";
+
+option (spec.generate_user_api) = true;
+option (spec.string_const) = {name: "SERVICE_NAME" value: "analytics"};
+option (spec.string_const) = {name: "API_VERSION" value: "v2"};
+option (spec.int_const) = {name: "MAX_TIMESERIES_POINTS" value: 10000};
+option (spec.int_const) = {name: "MAX_DIMENSIONS" value: 50};
+option (spec.float_const) = {name: "CONFIDENCE_THRESHOLD" value: 0.95};
+option (spec.bool_const) = {name: "ENABLE_REALTIME" value: true};
+
+// Analytics service
+service AnalyticsService {
+  option (spec.service_s2s) = {auth_services: ["*"], tag: "AnalyticsService"};
+
+  // Unary - Query aggregated metrics
+  rpc QueryMetrics(MetricsQuery) returns (MetricsResponse);
+
+  // Unary - Get dashboard data
+  rpc GetDashboard(DashboardRequest) returns (DashboardResponse);
+
+  // Server streaming - Stream time series data
+  rpc StreamTimeSeries(TimeSeriesRequest) returns (stream TimeSeriesPoint);
+
+  // Server streaming - Monitor events in real-time
+  rpc MonitorEvents(EventMonitorRequest) returns (stream AnalyticsEvent);
+
+  // Client streaming - Ingest events
+  rpc IngestEvents(stream AnalyticsEvent) returns (IngestResponse);
+
+  // Bidirectional streaming - Interactive query session
+  rpc InteractiveQuery(stream QueryRequest) returns (stream QueryResponse);
+
+  // Unary - Run cohort analysis
+  rpc RunCohortAnalysis(CohortAnalysisRequest) returns (CohortAnalysisResponse);
+
+  // Unary - Calculate funnel metrics
+  rpc CalculateFunnel(FunnelRequest) returns (FunnelResponse);
+}
+
+// Metric aggregation type
+enum AggregationType {
+  AGGREGATION_TYPE_UNDEFINED = 0;
+  AGGREGATION_TYPE_SUM = 1 [(spec.json_return_value) = "sum"];
+  AGGREGATION_TYPE_AVG = 2 [(spec.json_return_value) = "avg"];
+  AGGREGATION_TYPE_MIN = 3 [(spec.json_return_value) = "min"];
+  AGGREGATION_TYPE_MAX = 4 [(spec.json_return_value) = "max"];
+  AGGREGATION_TYPE_COUNT = 5 [(spec.json_return_value) = "count"];
+  AGGREGATION_TYPE_MEDIAN = 6 [(spec.json_return_value) = "median"];
+  AGGREGATION_TYPE_P95 = 7 [(spec.json_return_value) = "p95"];
+  AGGREGATION_TYPE_P99 = 8 [(spec.json_return_value) = "p99"];
+}
+
+// Time granularity
+enum TimeGranularity {
+  TIME_GRANULARITY_UNDEFINED = 0;
+  TIME_GRANULARITY_SECOND = 1 [(spec.json_return_value) = "second"];
+  TIME_GRANULARITY_MINUTE = 2 [(spec.json_return_value) = "minute"];
+  TIME_GRANULARITY_HOUR = 3 [(spec.json_return_value) = "hour"];
+  TIME_GRANULARITY_DAY = 4 [(spec.json_return_value) = "day"];
+  TIME_GRANULARITY_WEEK = 5 [(spec.json_return_value) = "week"];
+  TIME_GRANULARITY_MONTH = 6 [(spec.json_return_value) = "month"];
+  TIME_GRANULARITY_YEAR = 7 [(spec.json_return_value) = "year"];
+}
+
+// Event severity
+enum EventSeverity {
+  EVENT_SEVERITY_UNDEFINED = 0;
+  EVENT_SEVERITY_DEBUG = 1 [(spec.json_return_value) = "debug"];
+  EVENT_SEVERITY_INFO = 2 [(spec.json_return_value) = "info"];
+  EVENT_SEVERITY_WARNING = 3 [(spec.json_return_value) = "warning"];
+  EVENT_SEVERITY_ERROR = 4 [(spec.json_return_value) = "error"];
+  EVENT_SEVERITY_CRITICAL = 5 [(spec.json_return_value) = "critical"];
+}
+
+// Metrics query request
+message MetricsQuery {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 10 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Metric names to query
+  repeated string metrics = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 100];
+
+  // Time range start
+  int64 start_time = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_ge) = 1704067200
+  ];
+
+  // Time range end
+  int64 end_time = 3 [
+    (spec.assert_required) = true,
+    (spec.assert_ge) = 1704067200
+  ];
+
+  // Time granularity
+  TimeGranularity granularity = 4 [(spec.assert_enum_defined) = true];
+
+  // Aggregation type
+  AggregationType aggregation = 5 [(spec.assert_enum_defined) = true];
+
+  // Filters (key-value pairs)
+  map<string, string> filters = 6 [(spec.assert_max_size) = 100];
+
+  // Group by dimensions
+  repeated string group_by = 7 [(spec.assert_max_size) = 100];
+
+  // Limit results
+  int32 limit = 8 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 10000
+  }];
+
+  // Requested by user
+  string requested_by = 9 [(spec.assert_required) = true];
+}
+
+// Metrics response
+message MetricsResponse {
+  // Query ID
+  string query_id = 1 [(spec.assert_required) = true];
+
+  // Result sets (one per metric)
+  repeated MetricResult results = 2 [(spec.assert_max_size) = 1000];
+
+  // Query execution time in milliseconds
+  int64 execution_time_ms = 3 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Total data points
+  int64 total_points = 4 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Cache hit
+  bool cache_hit = 5;
+}
+
+// Metric result
+message MetricResult {
+  // Metric name
+  string metric = 1 [(spec.assert_required) = true];
+
+  // Data points
+  repeated DataPoint points = 2 [(spec.assert_max_size) = 10000];
+
+  // Aggregated value
+  double aggregated_value = 3;
+
+  // Metadata
+  map<string, string> metadata = 4 [(spec.assert_max_size) = 100];
+}
+
+// Data point
+message DataPoint {
+  // Timestamp
+  int64 timestamp = 1 [(spec.assert_required) = true];
+
+  // Value
+  double value = 2;
+
+  // Dimensions
+  map<string, string> dimensions = 3 [(spec.assert_max_size) = 100];
+
+  // Confidence score (0.0-1.0)
+  float confidence = 4 [(spec.assert_float) = {
+    ge: 0.0,
+    le: 1.0
+  }];
+}
+
+// Dashboard request
+message DashboardRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 6 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Dashboard ID
+  string dashboard_id = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 3
+  ];
+
+  // Time range start
+  int64 start_time = 2 [(spec.assert_required) = true];
+
+  // Time range end
+  int64 end_time = 3 [(spec.assert_required) = true];
+
+  // Refresh data
+  bool refresh = 4;
+
+  // User ID
+  string user_id = 5 [(spec.assert_required) = true];
+}
+
+// Dashboard response
+message DashboardResponse {
+  // Dashboard ID
+  string dashboard_id = 1;
+
+  // Dashboard name
+  string name = 2;
+
+  // Widgets
+  repeated Widget widgets = 3 [(spec.assert_max_size) = 50];
+
+  // Last updated
+  int64 last_updated = 4;
+
+  // Total data points
+  int64 total_data_points = 5 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+}
+
+// Widget
+message Widget {
+  // Widget ID
+  string widget_id = 1 [(spec.assert_required) = true];
+
+  // Widget type
+  WidgetType type = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_enum_defined) = true
+  ];
+
+  // Title
+  string title = 3 [(spec.assert_max_size) = 200];
+
+  // Description
+  string description = 4 [(spec.assert_max_size) = 1000];
+
+  // Query
+  MetricsQuery query = 5;
+
+  // Data
+  repeated DataPoint data = 6 [(spec.assert_max_size) = 10000];
+
+  // Configuration
+  map<string, string> config = 7 [(spec.assert_max_size) = 100];
+
+  // Position
+  Position position = 8;
+}
+
+// Widget type
+enum WidgetType {
+  WIDGET_TYPE_UNDEFINED = 0;
+  WIDGET_TYPE_LINE_CHART = 1 [(spec.json_return_value) = "line_chart"];
+  WIDGET_TYPE_BAR_CHART = 2 [(spec.json_return_value) = "bar_chart"];
+  WIDGET_TYPE_PIE_CHART = 3 [(spec.json_return_value) = "pie_chart"];
+  WIDGET_TYPE_TABLE = 4 [(spec.json_return_value) = "table"];
+  WIDGET_TYPE_NUMBER = 5 [(spec.json_return_value) = "number"];
+  WIDGET_TYPE_HEATMAP = 6 [(spec.json_return_value) = "heatmap"];
+}
+
+// Widget position
+message Position {
+  // X coordinate
+  int32 x = 1 [(spec.assert_numeric) = {
+    ge: 0,
+    le: 100
+  }];
+
+  // Y coordinate
+  int32 y = 2 [(spec.assert_numeric) = {
+    ge: 0,
+    le: 100
+  }];
+
+  // Width
+  int32 width = 3 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 100
+  }];
+
+  // Height
+  int32 height = 4 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 100
+  }];
+}
+
+// Time series request
+message TimeSeriesRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 7 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Metric name
+  string metric = 1 [(spec.assert_required) = true];
+
+  // Start time
+  int64 start_time = 2 [(spec.assert_required) = true];
+
+  // End time (optional, streams indefinitely if not set)
+  int64 end_time = 3;
+
+  // Granularity
+  TimeGranularity granularity = 4 [(spec.assert_enum_defined) = true];
+
+  // Filters
+  map<string, string> filters = 5 [(spec.assert_max_size) = 100];
+
+  // Stream interval in seconds
+  int64 stream_interval_sec = 6 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 1,
+    (spec.assert_duration_max) = 3600
+  ];
+}
+
+// Time series point
+message TimeSeriesPoint {
+  // Metric name
+  string metric = 1 [(spec.assert_required) = true];
+
+  // Timestamp
+  int64 timestamp = 2 [(spec.assert_required) = true];
+
+  // Value
+  double value = 3;
+
+  // Dimensions
+  map<string, string> dimensions = 4 [(spec.assert_max_size) = 100];
+
+  // Is anomaly
+  bool is_anomaly = 5;
+
+  // Anomaly score (0.0-1.0)
+  float anomaly_score = 6 [(spec.assert_float) = {
+    ge: 0.0,
+    le: 1.0
+  }];
+}
+
+// Event monitor request
+message EventMonitorRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 6 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Event types to monitor
+  repeated string event_types = 1 [(spec.assert_max_size) = 100];
+
+  // Minimum severity
+  EventSeverity min_severity = 2 [(spec.assert_enum_defined) = true];
+
+  // Filters
+  map<string, string> filters = 3 [(spec.assert_max_size) = 100];
+
+  // User ID filter
+  repeated string user_ids = 4 [(spec.assert_max_size) = 100];
+
+  // Start from timestamp
+  int64 start_from = 5;
+}
+
+// Analytics event
+message AnalyticsEvent {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 13 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Event ID
+  string event_id = 1 [(spec.assert_required) = true];
+
+  // Event type
+  string event_type = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 3,
+    (spec.assert_max_size) = 100
+  ];
+
+  // Timestamp
+  int64 timestamp = 3 [(spec.assert_required) = true];
+
+  // User ID
+  string user_id = 4;
+
+  // Session ID
+  string session_id = 5;
+
+  // Severity
+  EventSeverity severity = 6 [(spec.assert_enum_defined) = true];
+
+  // Properties
+  map<string, string> properties = 7 [(spec.assert_max_size) = 100];
+
+  // Numeric values
+  map<string, double> values = 8 [(spec.assert_max_size) = 100];
+
+  // Source
+  string source = 9 [(spec.assert_max_size) = 100];
+
+  // Tags
+  repeated string tags = 10 [(spec.assert_max_size) = 100];
+
+  // User agent
+  string user_agent = 11 [(spec.assert_max_size) = 500];
+
+  // IP address
+  string ip_address = 12 [(spec.assert_ipaddr_type) = IP_ADDR_TYPE_IP_ANY];
+}
+
+// Ingest response
+message IngestResponse {
+  // Number of events ingested
+  int64 ingested_count = 1 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Number of events failed
+  int64 failed_count = 2 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Ingestion duration in milliseconds
+  int64 duration_ms = 3 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Failed event IDs
+  repeated string failed_event_ids = 4 [(spec.assert_max_size) = 100];
+
+  // Errors
+  map<string, string> errors = 5 [(spec.assert_max_size) = 100];
+}
+
+// Query request (for interactive session)
+message QueryRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 6 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Request ID
+  string request_id = 1 [(spec.assert_required) = true];
+
+  // SQL or query language
+  string query = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_max_size) = 10000
+  ];
+
+  // Query parameters
+  map<string, string> parameters = 3 [(spec.assert_max_size) = 100];
+
+  // Limit
+  int32 limit = 4 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 10000
+  }];
+
+  // Timeout in seconds
+  int64 timeout_sec = 5 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 1,
+    (spec.assert_duration_max) = 600
+  ];
+}
+
+// Query response
+message QueryResponse {
+  // Request ID
+  string request_id = 1 [(spec.assert_required) = true];
+
+  // Success flag
+  bool success = 2;
+
+  // Error message
+  string error = 3;
+
+  // Result rows
+  repeated ResultRow rows = 4 [(spec.assert_max_size) = 1000];
+
+  // Column names
+  repeated string columns = 5 [(spec.assert_max_size) = 100];
+
+  // Total rows
+  int64 total_rows = 6 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Execution time in milliseconds
+  int64 execution_time_ms = 7 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Has more rows
+  bool has_more = 8;
+}
+
+// Result row
+message ResultRow {
+  // Column values
+  repeated string values = 1 [(spec.assert_max_size) = 100];
+
+  // Typed values
+  map<string, TypedValue> typed_values = 2 [(spec.assert_max_size) = 100];
+}
+
+// Typed value
+message TypedValue {
+  // Value type
+  ValueType type = 1 [(spec.assert_enum_defined) = true];
+
+  // String value
+  string string_value = 2;
+
+  // Integer value
+  int64 int_value = 3;
+
+  // Float value
+  double float_value = 4;
+
+  // Boolean value
+  bool bool_value = 5;
+
+  // Null flag
+  bool is_null = 6;
+}
+
+// Value type
+enum ValueType {
+  VALUE_TYPE_UNDEFINED = 0;
+  VALUE_TYPE_STRING = 1 [(spec.json_return_value) = "string"];
+  VALUE_TYPE_INT = 2 [(spec.json_return_value) = "int"];
+  VALUE_TYPE_FLOAT = 3 [(spec.json_return_value) = "float"];
+  VALUE_TYPE_BOOL = 4 [(spec.json_return_value) = "bool"];
+  VALUE_TYPE_NULL = 5 [(spec.json_return_value) = "null"];
+}
+
+// Cohort analysis request
+message CohortAnalysisRequest {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 8 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Cohort definition
+  string cohort_event = 1 [(spec.assert_required) = true];
+
+  // Return events to track
+  repeated string return_events = 2 [(spec.assert_max_size) = 100];
+
+  // Time range start
+  int64 start_time = 3 [(spec.assert_required) = true];
+
+  // Time range end
+  int64 end_time = 4 [(spec.assert_required) = true];
+
+  // Cohort granularity
+  TimeGranularity granularity = 5 [(spec.assert_enum_defined) = true];
+
+  // Filters
+  map<string, string> filters = 6 [(spec.assert_max_size) = 100];
+
+  // Number of periods to track
+  int32 num_periods = 7 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 52
+  }];
+}
+
+// Cohort analysis response
+message CohortAnalysisResponse {
+  // Cohorts
+  repeated Cohort cohorts = 1 [(spec.assert_max_size) = 50];
+
+  // Total users analyzed
+  int64 total_users = 2 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Analysis duration in milliseconds
+  int64 duration_ms = 3 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+}
+
+// Cohort
+message Cohort {
+  // Cohort name/label
+  string name = 1 [(spec.assert_required) = true];
+
+  // Cohort period start
+  int64 period_start = 2 [(spec.assert_required) = true];
+
+  // Initial size
+  int64 initial_size = 3 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Retention by period
+  repeated RetentionPeriod retention = 4 [(spec.assert_max_size) = 100];
+}
+
+// Retention period
+message RetentionPeriod {
+  // Period number (0 = initial)
+  int32 period = 1 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Users retained
+  int64 users = 2 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Retention rate (0.0-1.0)
+  float rate = 3 [(spec.assert_float) = {
+    ge: 0.0,
+    le: 1.0
+  }];
+}
+
+// Funnel request
+message FunnelRequest {
+  // Funnel steps (ordered)
+  repeated FunnelStep steps = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 50];
+
+  // Time range start
+  int64 start_time = 2 [(spec.assert_required) = true];
+
+  // Time range end
+  int64 end_time = 3 [(spec.assert_required) = true];
+
+  // Filters
+  map<string, string> filters = 4 [(spec.assert_max_size) = 100];
+
+  // Step time window in seconds
+  int64 step_window_sec = 5 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.assert_duration_min) = 60,
+    (spec.assert_duration_max) = 86400
+  ];
+}
+
+// Funnel step
+message FunnelStep {
+  // Step name
+  string name = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_max_size) = 100
+  ];
+
+  // Event type
+  string event_type = 2 [(spec.assert_required) = true];
+
+  // Filters for this step
+  map<string, string> filters = 3 [(spec.assert_max_size) = 100];
+}
+
+// Funnel response
+message FunnelResponse {
+  // Funnel steps with results
+  repeated FunnelStepResult steps = 1 [(spec.assert_max_size) = 50];
+
+  // Total users entered funnel
+  int64 total_users = 2 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Overall conversion rate (0.0-1.0)
+  float conversion_rate = 3 [(spec.assert_float) = {
+    ge: 0.0,
+    le: 1.0
+  }];
+
+  // Average time to convert in seconds
+  int64 avg_time_to_convert_sec = 4 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+}
+
+// Funnel step result
+message FunnelStepResult {
+  // Step name
+  string name = 1 [(spec.assert_required) = true];
+
+  // Users at this step
+  int64 users = 2 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Conversion rate from previous step (0.0-1.0)
+  float conversion_rate = 3 [(spec.assert_float) = {
+    ge: 0.0,
+    le: 1.0
+  }];
+
+  // Drop off count
+  int64 drop_off = 4 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Average time from previous step in seconds
+  int64 avg_time_from_previous_sec = 5 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+}

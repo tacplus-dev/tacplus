@@ -1,0 +1,52 @@
+{{- /* Rust type undefaults template */ -}}
+/// Resets {{.TypeName}} fields that match defaults back to zero for minimal persistence.
+pub fn {{.FnName}}_undefaults({{if and (not .Defaults) (not .SubMsgCalls)}}_msg{{else}}msg{{end}}: &mut {{.TypeName}}) {
+{{- range .Defaults}}
+{{- if .IsOptional}}
+{{- if eq .Kind "string"}}
+if msg.{{.FieldName}}.as_ref().map_or(false, |v| v == {{.ConstName}}) {
+msg.{{.FieldName}} = None;
+}
+{{- else if eq .Kind "int"}}
+if msg.{{.FieldName}} == Some({{.ConstName}}{{if .NeedsCast}} as {{.CastType}}{{end}}) {
+msg.{{.FieldName}} = None;
+}
+{{- else if eq .Kind "float"}}
+if msg.{{.FieldName}} == Some({{.ConstName}}{{if .NeedsCast}} as {{.CastType}}{{end}}) {
+msg.{{.FieldName}} = None;
+}
+{{- else if eq .Kind "bool"}}
+if msg.{{.FieldName}} == Some({{.ConstName}}) {
+msg.{{.FieldName}} = None;
+}
+{{- else if eq .Kind "host"}}
+if let Some(ref h) = msg.{{.FieldName}} { if h.host == "{{.HostHost}}" && h.port == {{.HostPort}} { msg.{{.FieldName}} = None; } }
+{{- end}}
+{{- else}}
+{{- if eq .Kind "string"}}
+if msg.{{.FieldName}} == {{.ConstName}} {
+msg.{{.FieldName}} = String::new();
+}
+{{- else if eq .Kind "int"}}
+if msg.{{.FieldName}} == {{.ConstName}}{{if .NeedsCast}} as {{.CastType}}{{end}} {
+msg.{{.FieldName}} = 0;
+}
+{{- else if eq .Kind "float"}}
+if msg.{{.FieldName}} == {{.ConstName}}{{if .NeedsCast}} as {{.CastType}}{{end}} {
+msg.{{.FieldName}} = 0.0;
+}
+{{- else if eq .Kind "bool"}}
+if msg.{{.FieldName}} == {{.ConstName}} {
+msg.{{.FieldName}} = false;
+}
+{{- else if eq .Kind "host"}}
+if let Some(ref h) = msg.{{.FieldName}} { if h.host == "{{.HostHost}}" && h.port == {{.HostPort}} { msg.{{.FieldName}} = None; } }
+{{- end}}
+{{- end}}
+{{- end}}
+{{- range .SubMsgCalls}}
+{{- if .HasDefaults}}
+if let Some(ref mut v) = msg.{{.FieldName}} { {{.FuncName}}_undefaults(v); }
+{{- end}}
+{{- end}}
+}

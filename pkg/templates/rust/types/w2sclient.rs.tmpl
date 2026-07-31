@@ -1,0 +1,419 @@
+{{.Header}}
+
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
+
+use futures::{stream, Sink, SinkExt, Stream, StreamExt};
+use reqwest::Client;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+use tokio::io::AsyncBufReadExt;
+use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::{Error as WsError, Message};
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_util::io::StreamReader;
+{{.ServiceImports}}
+
+#[allow(dead_code)]
+type W2SWebSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// A token provider returns a bearer token string for W2S authentication.
+/// W2S streaming clients call this before every outbound message so long-lived
+/// channels never send with a stale token.
+pub type TokenProvider = Arc<
+    dyn Fn() -> Pin<Box<dyn Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send>>
+        + Send
+        + Sync,
+>;
+
+#[allow(dead_code)]
+enum DecodedWsMessage<T> {
+    Message(T),
+    Continue,
+    Closed,
+}
+
+#[allow(dead_code)]
+struct W2SQueuedMessage {
+    body: Value,
+    authorization: Option<String>,
+    ack: tokio::sync::oneshot::Sender<Result<(), tonic::Status>>,
+    complete: bool,
+}
+
+/// {{.ClientName}} provides typed W2S clients for {{.ServiceName}}.
+///
+/// Unary RPCs use HTTP/JSON, server-streaming RPCs use SSE, and
+/// client-streaming/bidirectional RPCs use WebSocket frames.
+#[allow(dead_code)]
+#[derive(Clone)]
+pub struct {{.ClientName}} {
+    client: Client,
+    base_url: String,
+    token_provider: Option<TokenProvider>,
+    connect_timeout: Duration,
+}
+
+#[allow(dead_code)]
+impl {{.ClientName}} {
+    /// Creates a new typed W2S client for {{.ServiceName}}.
+    pub fn new(client: Client, base_url: String, token_provider: Option<TokenProvider>) -> Self {
+        Self {
+            client,
+            base_url: base_url.trim_end_matches('/').to_string(),
+            token_provider,
+            connect_timeout: Duration::from_secs(30),
+        }
+    }
+
+    /// Overrides the default W2S connect/request timeout.
+    pub fn with_connect_timeout(mut self, connect_timeout: Duration) -> Self {
+        self.connect_timeout = connect_timeout;
+        self
+    }
+
+    async fn auth_header(&self, auth_required: bool) -> Result<Option<String>, tonic::Status> {
+        if !auth_required {
+            return Ok(None);
+        }
+        let Some(tp) = &self.token_provider else {
+            return Err(tonic::Status::unauthenticated("W2S route requires a token provider"));
+        };
+        match timeout(self.connect_timeout, (tp)()).await {
+            Ok(Ok(token)) => Ok(Some(format!("Bearer {}", token))),
+            Ok(Err(e)) => Err(tonic::Status::unauthenticated(format!("auth token: {e}"))),
+            Err(_) => Err(tonic::Status::deadline_exceeded("auth token timed out")),
+        }
+    }
+
+    fn http_url(&self, path: &str) -> String {
+        format!("{}{}", self.base_url, path)
+    }
+
+    fn websocket_url(&self, path: &str) -> Result<String, tonic::Status> {
+        let url = self.http_url(path);
+        if let Some(rest) = url.strip_prefix("https://") {
+            Ok(format!("wss://{}", rest))
+        } else if let Some(rest) = url.strip_prefix("http://") {
+            Ok(format!("ws://{}", rest))
+        } else if url.starts_with("ws://") || url.starts_with("wss://") {
+            Ok(url)
+        } else {
+            Err(tonic::Status::invalid_argument(format!(
+                "W2S base_url must start with http://, https://, ws://, or wss://: {}",
+                self.base_url
+            )))
+        }
+    }
+
+    async fn send_json_request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Value,
+        auth_required: bool,
+    ) -> Result<reqwest::Response, tonic::Status> {
+        let url = self.http_url(path);
+        let mut request = match method {
+            "GET" => self.client.get(&url),
+            "POST" => self.client.post(&url).json(&body),
+            other => {
+                let method = reqwest::Method::from_bytes(other.as_bytes())
+                    .map_err(|e| tonic::Status::invalid_argument(format!("invalid HTTP method {other}: {e}")))?;
+                self.client.request(method, &url).json(&body)
+            }
+        };
+        if let Some(auth) = self.auth_header(auth_required).await? {
+            request = request.header("authorization", auth);
+        }
+        timeout(self.connect_timeout, request.send())
+            .await
+            .map_err(|_| tonic::Status::deadline_exceeded(format!("W2S request timed out: {method} {path}")))?
+            .map_err(|e| tonic::Status::unavailable(format!("W2S request failed: {e}")))
+    }
+
+    async fn response_json(response: reqwest::Response) -> Result<Value, tonic::Status> {
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .map_err(|e| tonic::Status::unavailable(format!("failed to read W2S response: {e}")))?;
+        let value = if text.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str::<Value>(&text)
+                .map_err(|e| tonic::Status::internal(format!("failed to decode W2S JSON response: {e}")))?
+        };
+        if !status.is_success() {
+            return Err(http_status_to_tonic(status, value));
+        }
+        if let Some(status) = json_error_to_status(&value) {
+            return Err(status);
+        }
+        Ok(value)
+    }
+
+    async fn do_json_value<Resp: DeserializeOwned>(
+        &self,
+        method: &str,
+        path: &str,
+        body: Value,
+        auth_required: bool,
+    ) -> Result<tonic::Response<Resp>, tonic::Status> {
+        let response = self.send_json_request(method, path, body, auth_required).await?;
+        let value = Self::response_json(response).await?;
+        let payload = value.get("result").unwrap_or(&value).clone();
+        let result = serde_json::from_value::<Resp>(payload)
+            .map_err(|e| tonic::Status::internal(format!("failed to decode W2S response body: {e}")))?;
+        Ok(tonic::Response::new(result))
+    }
+
+    async fn do_json_unit(
+        &self,
+        method: &str,
+        path: &str,
+        body: Value,
+        auth_required: bool,
+    ) -> Result<tonic::Response<()>, tonic::Status> {
+        let response = self.send_json_request(method, path, body, auth_required).await?;
+        let _ = Self::response_json(response).await?;
+        Ok(tonic::Response::new(()))
+    }
+
+    async fn stream_sse<Resp, V>(
+        &self,
+        method: &str,
+        path: &str,
+        body: Value,
+        auth_required: bool,
+        validate: V,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Resp, tonic::Status>> + Send>>, tonic::Status>
+    where
+        Resp: DeserializeOwned + Send + 'static,
+        V: Fn(&Resp) -> Result<(), tonic::Status> + Copy + Send + Sync + 'static,
+    {
+        let url = self.http_url(path);
+        let mut request = match method {
+            "GET" => self.client.get(&url),
+            _ => self.client.post(&url).json(&body),
+        }
+        .header("accept", "text/event-stream");
+        if let Some(auth) = self.auth_header(auth_required).await? {
+            request = request.header("authorization", auth);
+        }
+
+        let response = timeout(self.connect_timeout, request.send())
+            .await
+            .map_err(|_| tonic::Status::deadline_exceeded(format!("W2S SSE open timed out: {path}")))?
+            .map_err(|e| tonic::Status::unavailable(format!("W2S SSE open failed: {e}")))?;
+        let status = response.status();
+        if !status.is_success() {
+            let value = Self::response_json(response).await.unwrap_or_else(|_| serde_json::json!({}));
+            return Err(http_status_to_tonic(status, value));
+        }
+
+        let byte_stream = response
+            .bytes_stream()
+            .map(|r| r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
+        let reader = StreamReader::new(byte_stream);
+        let lines = tokio::io::BufReader::new(reader).lines();
+        let s = stream::unfold(lines, move |mut lines| async move {
+            loop {
+                match lines.next_line().await {
+                    Ok(Some(line)) => {
+                        let mut trimmed = line.trim().to_string();
+                        if trimmed.is_empty() || trimmed.starts_with(':') || trimmed.starts_with("event:") {
+                            continue;
+                        }
+                        if let Some(rest) = trimmed.strip_prefix("data:") {
+                            trimmed = rest.trim_start().to_string();
+                        }
+                        let value = match serde_json::from_str::<Value>(&trimmed) {
+                            Ok(value) => value,
+                            Err(e) => return Some((Err(tonic::Status::internal(format!("failed to decode W2S SSE JSON: {e}"))), lines)),
+                        };
+                        if let Some(status) = json_error_to_status(&value) {
+                            return Some((Err(status), lines));
+                        }
+                        let payload = value.get("result").unwrap_or(&value).clone();
+                        let decoded = serde_json::from_value::<Resp>(payload)
+                            .map_err(|e| tonic::Status::internal(format!("failed to decode W2S SSE body: {e}")))
+                            .and_then(|msg| {
+                                validate(&msg)?;
+                                Ok(msg)
+                            });
+                        return Some((decoded, lines));
+                    }
+                    Ok(None) => return None,
+                    Err(e) => return Some((Err(tonic::Status::unavailable(format!("W2S SSE read failed: {e}"))), lines)),
+                }
+            }
+        });
+        Ok(Box::pin(s))
+    }
+
+    async fn connect_websocket(&self, path: &str) -> Result<W2SWebSocket, tonic::Status> {
+        let url = self.websocket_url(path)?;
+        let (ws, _) = timeout(self.connect_timeout, connect_async(url.as_str()))
+            .await
+            .map_err(|_| tonic::Status::deadline_exceeded(format!("W2S WebSocket connect timed out: {path}")))?
+            .map_err(|e| tonic::Status::unavailable(format!("W2S WebSocket connect failed: {e}")))?;
+        Ok(ws)
+    }
+
+    async fn send_ws_value<S>(&self, sink: &mut S, value: Value) -> Result<(), tonic::Status>
+    where
+        S: Sink<Message, Error = WsError> + Unpin,
+    {
+        sink.send(Message::text(value.to_string()))
+            .await
+            .map_err(|e| tonic::Status::unavailable(format!("W2S WebSocket send failed: {e}")))
+    }
+
+    async fn send_start_frame<S>(&self, sink: &mut S, auth_required: bool) -> Result<(), tonic::Status>
+    where
+        S: Sink<Message, Error = WsError> + Unpin,
+    {
+        let mut frame = serde_json::json!({ "type": "start" });
+        if let Some(auth) = self.auth_header(auth_required).await? {
+            frame["authorization"] = Value::String(auth);
+        }
+        self.send_ws_value(sink, frame).await
+    }
+
+    async fn send_message_frame<S>(&self, sink: &mut S, body: Value, auth_required: bool) -> Result<(), tonic::Status>
+    where
+        S: Sink<Message, Error = WsError> + Unpin,
+    {
+        let authorization = self.auth_header(auth_required).await?;
+        self.send_message_frame_with_auth(sink, body, authorization).await
+    }
+
+    async fn send_message_frame_with_auth<S>(
+        &self,
+        sink: &mut S,
+        body: Value,
+        authorization: Option<String>,
+    ) -> Result<(), tonic::Status>
+    where
+        S: Sink<Message, Error = WsError> + Unpin,
+    {
+        let mut frame = serde_json::json!({
+            "type": "message",
+            "message": body,
+        });
+        if let Some(auth) = authorization {
+            frame["authorization"] = Value::String(auth);
+        }
+        self.send_ws_value(sink, frame).await
+    }
+
+    async fn send_complete_frame<S>(&self, sink: &mut S) -> Result<(), tonic::Status>
+    where
+        S: Sink<Message, Error = WsError> + Unpin,
+    {
+        self.send_ws_value(sink, serde_json::json!({ "type": "complete" })).await
+    }
+
+    fn decode_ws_text<Resp: DeserializeOwned>(&self, text: &str) -> Result<Resp, tonic::Status> {
+        let value = serde_json::from_str::<Value>(text)
+            .map_err(|e| tonic::Status::internal(format!("failed to decode W2S WebSocket JSON: {e}")))?;
+        if let Some(status) = json_error_to_status(&value) {
+            return Err(status);
+        }
+        let payload = if value.get("type").and_then(Value::as_str) == Some("message") {
+            value.get("message").unwrap_or(&Value::Null).clone()
+        } else {
+            value.get("result").unwrap_or(&value).clone()
+        };
+        serde_json::from_value::<Resp>(payload)
+            .map_err(|e| tonic::Status::internal(format!("failed to decode W2S WebSocket body: {e}")))
+    }
+
+    async fn decode_ws_message<Resp: DeserializeOwned>(
+        &self,
+        msg: Option<Result<Message, WsError>>,
+    ) -> Result<DecodedWsMessage<Resp>, tonic::Status> {
+        match msg {
+            Some(Ok(Message::Text(text))) => Ok(DecodedWsMessage::Message(self.decode_ws_text(text.as_str())?)),
+            Some(Ok(Message::Close(_))) | None => Ok(DecodedWsMessage::Closed),
+            Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => Ok(DecodedWsMessage::Continue),
+            Some(Ok(Message::Binary(_))) => Err(tonic::Status::internal("binary W2S WebSocket responses are not supported")),
+            Some(Ok(Message::Frame(_))) => Ok(DecodedWsMessage::Continue),
+            Some(Err(e)) => Err(tonic::Status::unavailable(format!("W2S WebSocket receive failed: {e}"))),
+        }
+    }
+
+    async fn recv_ws_json<Resp: DeserializeOwned, R>(
+        &self,
+        read: &mut R,
+    ) -> Result<Option<Resp>, tonic::Status>
+    where
+        R: Stream<Item = Result<Message, WsError>> + Unpin,
+    {
+        loop {
+            match self.decode_ws_message(read.next().await).await? {
+                DecodedWsMessage::Message(resp) => return Ok(Some(resp)),
+                DecodedWsMessage::Continue => continue,
+                DecodedWsMessage::Closed => return Ok(None),
+            }
+        }
+    }
+
+    async fn recv_ws_unit<R>(&self, read: &mut R) -> Result<tonic::Response<()>, tonic::Status>
+    where
+        R: Stream<Item = Result<Message, WsError>> + Unpin,
+    {
+        while let Some(msg) = read.next().await {
+            match msg {
+                Ok(Message::Text(text)) => {
+                    let value = serde_json::from_str::<Value>(text.as_str())
+                        .map_err(|e| tonic::Status::internal(format!("failed to decode W2S WebSocket JSON: {e}")))?;
+                    if let Some(status) = json_error_to_status(&value) {
+                        return Err(status);
+                    }
+                    return Ok(tonic::Response::new(()));
+                }
+                Ok(Message::Close(_)) => return Err(tonic::Status::unavailable("W2S stream closed before response")),
+                Ok(Message::Ping(_)) | Ok(Message::Pong(_)) | Ok(Message::Frame(_)) => continue,
+                Ok(Message::Binary(_)) => return Err(tonic::Status::internal("binary W2S WebSocket responses are not supported")),
+                Err(e) => return Err(tonic::Status::unavailable(format!("W2S WebSocket receive failed: {e}"))),
+            }
+        }
+        Err(tonic::Status::unavailable("W2S stream closed before response"))
+    }
+
+{{.Methods}}
+}
+
+fn json_error_to_status(value: &Value) -> Option<tonic::Status> {
+    value
+        .get("error")
+        .and_then(|v| v.as_str())
+        .map(|msg| tonic::Status::unknown(msg.to_string()))
+}
+
+fn http_status_to_tonic(status: reqwest::StatusCode, value: Value) -> tonic::Status {
+    let message = value
+        .get("error")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("W2S HTTP status {}", status));
+    let code = match status.as_u16() {
+        400 => tonic::Code::InvalidArgument,
+        401 => tonic::Code::Unauthenticated,
+        403 => tonic::Code::PermissionDenied,
+        404 => tonic::Code::NotFound,
+        409 => tonic::Code::AlreadyExists,
+        429 => tonic::Code::ResourceExhausted,
+        501 => tonic::Code::Unimplemented,
+        503 => tonic::Code::Unavailable,
+        504 => tonic::Code::DeadlineExceeded,
+        _ => tonic::Code::Unknown,
+    };
+    tonic::Status::new(code, message)
+}
+
+{{.ExtraTypes}}

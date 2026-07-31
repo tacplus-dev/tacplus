@@ -1,0 +1,78 @@
+{{.Header}}
+package grpc_over_rest
+
+import (
+	"context"
+	"net/http"
+
+{{- range .Imports}}
+	{{.Alias}} "{{.Path}}"
+{{- end}}
+)
+
+// TokenProvider returns a bearer token string for W2S authentication.
+type TokenProvider func(context.Context) (string, error)
+
+// TokenProviderFor returns an audience-scoped TokenProvider for a target service ID.
+type TokenProviderFor func(targetServiceID string) TokenProvider
+
+{{- range .Targets}}
+
+// {{.StructName}} aggregates typed W2S clients for the "{{.Target}}" service.
+type {{.StructName}} struct {
+{{- range .Services}}
+	{{.FieldName}} *{{.ImportAlias}}.{{.ClientName}}
+{{- end}}
+}
+
+// New{{.StructName}} constructs typed W2S clients for the "{{.Target}}" service.
+func New{{.StructName}}(client *http.Client, baseURL string, tokenProvider TokenProvider) *{{.StructName}} {
+	return &{{.StructName}}{
+{{- range .Services}}
+		{{.FieldName}}: {{.ImportAlias}}.New{{.ClientName}}(client, baseURL, tokenProvider),
+{{- end}}
+	}
+}
+
+{{- range .Services}}
+
+// {{.AccessorName}} returns the {{.ClientName}} wrapper.
+func (g *{{.ParentStructName}}) {{.AccessorName}}() *{{.ImportAlias}}.{{.ClientName}} {
+	return g.{{.FieldName}}
+}
+{{- end}}
+{{- end}}
+
+// Target service ID constants from proto annotations.
+const (
+{{- range .Targets}}
+	{{.ConstName}} = "{{.Target}}"
+{{- end}}
+)
+
+// W2SClients exposes W2S clients by target service ID.
+type W2SClients struct {
+{{- range .Targets}}
+	{{.FieldName}} *{{.StructName}}
+{{- end}}
+}
+
+// NewW2SClients constructs the W2S client hierarchy.
+func NewW2SClients(client *http.Client, baseURL string, tokenProviderFor TokenProviderFor) *W2SClients {
+	if tokenProviderFor == nil {
+		tokenProviderFor = func(string) TokenProvider { return nil }
+	}
+	return &W2SClients{
+{{- range .Targets}}
+		{{.FieldName}}: New{{.StructName}}(client, baseURL, tokenProviderFor("{{.Target}}")),
+{{- end}}
+	}
+}
+
+{{- range .Targets}}
+
+// {{.AccessorName}} returns W2S clients for the "{{.Target}}" service.
+func (g *W2SClients) {{.AccessorName}}() *{{.StructName}} {
+	return g.{{.FieldName}}
+}
+{{- end}}

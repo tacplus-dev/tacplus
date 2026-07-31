@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+# lint-patterns — AI-assisted static analysis for anti-patterns.
+#
+# Phase 1: regex scan finds candidate violations across source files.
+# Phase 2: claude (non-interactive) analyzes each repo's findings with
+#           full code context to classify them as real violations, false
+#           positives, or blocked on tacplus.
+#
+# Usage: lint-patterns <dir> [--model <model>] [--skip-analysis]
+#
+#   If <dir> is a repo, it is scanned directly.
+#   Otherwise, subdirectories are searched recursively for repos.
+#
+# Output:
+#   Console — progress and summary
+#   lint-patterns-report.md — written to the current working directory
+#
+# Exit codes:
+#   0 — clean
+#   1 — errors found
+#   2 — usage error
+#
+set -euo pipefail
+
+die() { echo "ERROR: $*" >&2; exit 2; }
+
+# ─── Args ─────────────────────────────────────────────────────────────────────
+
+MODEL="sonnet"
+SKIP_ANALYSIS=false
+ROOT=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model) MODEL="$2"; shift 2 ;;
+    --skip-analysis) SKIP_ANALYSIS=true; shift ;;
+    --help|-h) echo "usage: lint-patterns <dir> [--model <model>] [--skip-analysis]"; exit 0 ;;
+    -*) die "unknown option: $1" ;;
+    *) ROOT="$1"; shift ;;
+  esac
+done
+
+[[ -n "$ROOT" ]] || die "usage: lint-patterns <dir> [--model <model>] [--skip-analysis]"
+[[ -d "$ROOT" ]] || die "not a directory: $ROOT"
+
+REPORT="lint-patterns-report.md"
+TMPDIR_LINT="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_LINT"' EXIT
+
+TOTAL_REPOS=0
+TOTAL_CLEAN=0
+REPO_NAMES=()
+REPO_DIRS=()
+
+# ─── Pattern definitions (read from docs/DEVELOPMENT.md) ─────────────────────
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PATTERNS_FILE="$SCRIPT_DIR/../docs/DEVELOPMENT.md"
+[[ -f "$PATTERNS_FILE" ]] || die "patterns file not found: $PATTERNS_FILE"
+PATTERNS_DOC="$(cat "$PATTERNS_FILE")"
+
+# ─── Regex scan (Phase 1) ────────────────────────────────────────────────────
+
+collect_candidates() {
+  local dir="$1" outfile="$2"
+  local src_dirs=()
+  [[ -d "$dir/src" ]] && src_dirs+=("$dir/src/")
+  [[ -d "$dir/server/src" ]] && src_dirs+=("$dir/server/src/")
+  [[ ${#src_dirs[@]} -eq 0 ]] && return
+
+  local patterns=(
+    '"identity"|"oauth"|"sentinel"|"eventbus"|"stratum"|"argus"|"anthropic"|"timedb"|"graphdb"|no-string-service-lookup'
+    'MintClient::new\(|ClusterServiceClient::new\(|::new\(channel|no-raw-grpc'
+    'format!\("Bearer \{|no-manual-auth-header'
+    'is_identity|IsIdentity|== "identity"|identity_special|identity_only|no-service-special-case'
+    'connect_lazy\(\)|no-connect-lazy'
+    'resolve_service_token\("|get_token_for\("|aud.*=.*"[a-z]|no-string-audience'
+    'MeshChannel|ServiceMesh|mesh_channel|service_mesh|no-mesh-channel'
+    '\.grpc_clients\(\)|no-grpc-clients-accessor'
+  )
+
+  # Run each rule's pattern and tag the output with the rule name.
+  for entry in "${patterns[@]}"; do
+    # Split on last | to get rule name
+    local rule="${entry##*|}"
+    local pattern="${entry%|*}"
+
+    grep -rn --include='*.rs' --include='*.go' --include='*.java' --include='*.ts' \
+      -E "$pattern" "${src_dirs[@]}" 2>/dev/null | \
+      grep -v '/target/' | grep -v '/node_modules/' | grep -v '/generated/' | \
+      while IFS= read -r line; do
+        echo "${rule}|${line}"
+      done >> "$outfile" || true
+  done
+}
+
+# Extract code context around a finding (±5 lines).
+extract_context() {
+  local file="$1" line="$2"
+  local start=$((line - 5))
+  (( start < 1 )) && start=1
+  local end=$((line + 5))
+  sed -n "${start},${end}p" "$file" | cat -n | awk -v offset=$((start - 1)) '{
+    num = $1 + offset
+    $1 = ""
+    if (num == '$line') printf ">>> %4d %s\n", num, $0
+    else printf "    %4d %s\n", num, $0
+  }'
+}
+
+# Build the analysis prompt for a repo's findings.
+build_prompt() {
+  local repo_name="$1" candidates_file="$2" repo_dir="$3"
+
+  echo "Analyze these candidate anti-pattern violations found in the '${repo_name}' service."
+  echo "For each finding, classify it as one of:"
+  echo ""
+  echo "- **VIOLATION** — real anti-pattern that should be fixed"
+  echo "- **FALSE_POSITIVE** — the regex matched but this is not actually a violation (explain why)"
+  echo "- **BLOCKED** — real anti-pattern but cannot be fixed yet because tacplus does not generate the required code"
+  echo "- **RATIONALE_NEEDED** — legitimate usage that needs a RATIONALE comment explaining why"
+  echo ""
+  echo "Output a markdown table with columns: Location, Rule, Classification, Explanation"
+  echo "Then a brief summary of what actions (if any) should be taken for this repo."
+  echo ""
+  echo "---"
+  echo ""
+  echo "### Findings with code context"
+  echo ""
+
+  local prev_file=""
+  while IFS='|' read -r rule file_line_match; do
+    # Parse file:line:match from the grep output
+    local file line
+    file="$(echo "$file_line_match" | cut -d: -f1)"
+    line="$(echo "$file_line_match" | cut -d: -f2)"
+    local rel="${file#$repo_dir/}"
+
+    echo "#### \`${rel}:${line}\` — rule: \`${rule}\`"
+    echo ""
+    echo '```'
+    extract_context "$file" "$line"
+    echo '```'
+    echo ""
+  done < "$candidates_file"
+}
+
+# ─── Repo detection ──────────────────────────────────────────────────────────
+
+is_repo() {
+  local dir="$1"
+  [[ -f "$dir/Cargo.toml" ]] || [[ -f "$dir/go.mod" ]] || \
+  [[ -f "$dir/package.json" ]] || [[ -f "$dir/pom.xml" ]] || \
+  [[ -d "$dir/src" ]] || [[ -d "$dir/server/src" ]]
+}
+
+# ─── Walk and collect ─────────────────────────────────────────────────────────
+
+walk() {
+  local dir="$1"
+  if is_repo "$dir"; then
+    local name="${dir#$ROOT/}"
+    [[ "$dir" == "$ROOT" ]] && name="$(basename "$dir")"
+    TOTAL_REPOS=$((TOTAL_REPOS + 1))
+
+    local candidates="$TMPDIR_LINT/${name//\//_}.candidates"
+    > "$candidates"
+
+    echo -n "  scanning ${name}..."
+    collect_candidates "$dir" "$candidates"
+
+    local count
+    count="$(wc -l < "$candidates" | tr -d ' ')"
+    if (( count == 0 )); then
+      echo " clean"
+      TOTAL_CLEAN=$((TOTAL_CLEAN + 1))
+    else
+      echo " ${count} candidates"
+    fi
+
+    REPO_NAMES+=("$name")
+    REPO_DIRS+=("$dir")
+    return
+  fi
+
+  local child
+  for child in "$dir"/*/; do
+    [[ -d "$child" ]] || continue
+    walk "${child%/}"
+  done
+}
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+echo "Phase 1: Regex scan"
+echo ""
+walk "$ROOT"
+
+if (( TOTAL_REPOS == 0 )); then
+  die "no repositories found under $ROOT"
+fi
+
+echo ""
+echo "Found ${TOTAL_REPOS} repos, ${TOTAL_CLEAN} clean"
+echo ""
+
+# Initialize report.
+{
+  echo "# Lint Patterns Report"
+  echo ""
+  echo "Generated: $(date '+%Y-%m-%d %H:%M:%S')"
+  echo "Scanned: \`${ROOT}\`"
+  echo ""
+  echo "---"
+  echo ""
+} > "$REPORT"
+
+# Phase 2: Claude analysis per repo.
+REPOS_WITH_FINDINGS=0
+
+for i in "${!REPO_NAMES[@]}"; do
+  name="${REPO_NAMES[$i]}"
+  dir="${REPO_DIRS[$i]}"
+  candidates="$TMPDIR_LINT/${name//\//_}.candidates"
+
+  count="$(wc -l < "$candidates" | tr -d ' ')"
+
+  if (( count == 0 )); then
+    {
+      echo "## ${name}"
+      echo ""
+      echo "Clean."
+      echo ""
+      echo "---"
+      echo ""
+    } >> "$REPORT"
+    continue
+  fi
+
+  REPOS_WITH_FINDINGS=$((REPOS_WITH_FINDINGS + 1))
+
+  if [[ "$SKIP_ANALYSIS" == "true" ]]; then
+    echo "  ${name}: ${count} candidates (analysis skipped)"
+    {
+      echo "## ${name}"
+      echo ""
+      echo "${count} candidates found (analysis skipped)."
+      echo ""
+      # Raw findings table
+      echo "| Location | Rule |"
+      echo "|----------|------|"
+      while IFS='|' read -r rule file_line_match; do
+        local file line rel
+        file="$(echo "$file_line_match" | cut -d: -f1)"
+        line="$(echo "$file_line_match" | cut -d: -f2)"
+        rel="${file#$dir/}"
+        echo "| \`${rel}:${line}\` | \`${rule}\` |"
+      done < "$candidates"
+      echo ""
+      echo "---"
+      echo ""
+    } >> "$REPORT"
+    continue
+  fi
+
+  echo -n "Phase 2: Analyzing ${name} (${count} candidates)..."
+
+  # Build the prompt with code context.
+  prompt_file="$TMPDIR_LINT/${name//\//_}.prompt"
+  build_prompt "$name" "$candidates" "$dir" > "$prompt_file"
+
+  # Run claude non-interactive.
+  analysis="$(claude -p \
+    --model "$MODEL" \
+    --tools "" \
+    --system-prompt "$PATTERNS_DOC" \
+    < "$prompt_file" 2>/dev/null)" || {
+    echo " failed (claude error)"
+    analysis="*Analysis failed — claude returned an error.*"
+  }
+
+  echo " done"
+
+  {
+    echo "## ${name}"
+    echo ""
+    echo "$analysis"
+    echo ""
+    echo "---"
+    echo ""
+  } >> "$REPORT"
+done
+
+# Summary.
+{
+  echo "## Summary"
+  echo ""
+  echo "| Metric | Count |"
+  echo "|--------|------:|"
+  echo "| Repos scanned | ${TOTAL_REPOS} |"
+  echo "| Clean | ${TOTAL_CLEAN} |"
+  echo "| Repos with candidates | ${REPOS_WITH_FINDINGS} |"
+} >> "$REPORT"
+
+echo ""
+echo "════════════════════════════════════════════════════════════════════════"
+echo "  ${TOTAL_REPOS} repos scanned, ${TOTAL_CLEAN} clean, ${REPOS_WITH_FINDINGS} analyzed"
+echo "════════════════════════════════════════════════════════════════════════"
+echo ""
+echo "Report written to $(pwd)/${REPORT}"

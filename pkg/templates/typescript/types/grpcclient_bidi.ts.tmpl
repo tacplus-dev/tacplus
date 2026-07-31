@@ -1,0 +1,157 @@
+    /**
+     * {{.MethodName}} opens a managed bidirectional stream to {{.ServiceName}}.{{.MethodName}}.
+     *
+     * Returns a handle for sending messages. Responses are delivered via
+     * the onMessage callback. The stream reconnects automatically on
+     * transient failures with exponential backoff (1s initial, 30s max).
+     * An onConnect callback is invoked on each (re)connect so the
+     * application can send initialization messages.
+     *
+     * Design rationale: watches (server-streaming) use callbacks for the
+     * receive side because they are receive-only. Bidi streams need both
+     * send and receive. Callbacks work for the receive side (consistent
+     * with the watch pattern). The returned handle exposes send() for the
+     * send side, with messages buffered while a reconnect is in flight.
+     */
+    {{.MethodLower}}(
+        onConnect: (send: (msg: {{.InputType}}) => Promise<void>) => void | Promise<void>,
+        onMessage: (msg: {{.OutputType}}) => void,
+    ): {{.HandleType}} {
+        const handle = new {{.HandleType}}();
+{{- if .AuthRequired}}
+        const tokenProvider = this.tokenProvider;
+{{- end}}
+        const channelProvider = this.channelProvider;
+
+        (async () => {
+            const INITIAL_BACKOFF_MS = 1000;
+            const MAX_BACKOFF_MS = 30000;
+            let backoff = INITIAL_BACKOFF_MS;
+            let connects = 0;
+            let sent = 0;
+            let received = 0;
+            let errors = 0;
+
+            while (!handle.isClosed()) {
+                console.info('{{.MethodName}}: connecting');
+
+                const metadata = new grpc.Metadata();
+{{- if .AuthRequired}}
+                if (!tokenProvider) {
+                    errors++;
+                    console.error(`{{.MethodName}}: auth token provider is required (errors=${errors}), retrying in ${backoff}ms`);
+                    await bidiSleep(backoff, handle);
+                    backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
+                    continue;
+                }
+                try {
+                    const token = await tokenProvider();
+                    if (!token) {
+                        throw new Error('auth token is empty');
+                    }
+                    metadata.add('authorization', `Bearer ${token}`);
+                } catch (err) {
+                    errors++;
+                    console.error(`{{.MethodName}}: auth failed (errors=${errors}), retrying in ${backoff}ms`, err);
+                    await bidiSleep(backoff, handle);
+                    backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
+                    continue;
+                }
+{{- end}}
+
+                let stream: grpc.ClientDuplexStream<{{.InputType}}, {{.OutputType}}>;
+                try {
+                    const client = channelProvider.channel();
+                    stream = client.makeBidiStreamRequest<{{.InputType}}, {{.OutputType}}>(
+                        '{{.FullPath}}',
+                        {{.Serialize}},
+                        {{.Deserialize}},
+                        metadata,
+                    );
+                } catch (err) {
+                    errors++;
+                    console.error(`{{.MethodName}}: stream open failed (errors=${errors}), retrying in ${backoff}ms`, err);
+                    await bidiSleep(backoff, handle);
+                    backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
+                    continue;
+                }
+
+                connects++;
+                console.info(`{{.MethodName}}: stream opened (connects=${connects})`);
+                // Successful open resets backoff for the next reconnect.
+                backoff = INITIAL_BACKOFF_MS;
+
+                // Bind handle to this stream — flushes any buffered messages
+                // and routes future send() calls to this stream.
+                const sendFn = async (msg: {{.InputType}}): Promise<void> => {
+{{.RequestValidation}}{{- if .AuthRequired}}
+                    if (!tokenProvider) {
+                        throw new Error('auth token provider is required');
+                    }
+                    const freshToken = await tokenProvider();
+                    if (!freshToken) {
+                        throw new Error('auth token is empty');
+                    }
+{{- end}}
+                    try {
+                        if (!stream.write(msg)) {
+                            await new Promise<void>((resolve) => stream.once('drain', resolve));
+                        }
+                        sent++;
+                    } catch (err) {
+                        console.warn('{{.MethodName}}: write failed', err);
+                        throw err;
+                    }
+                };
+                handle._attach(sendFn);
+
+                try {
+                    await onConnect((m) => sendFn(m));
+                } catch (err) {
+                    console.error('{{.MethodName}}: onConnect threw', err);
+                }
+
+                // Wait for the stream to error or end.
+                const streamClosed = new Promise<'error' | 'end'>((resolve) => {
+                    stream.on('data', (msg: {{.OutputType}}) => {
+                        received++;
+{{.ResponseValidation}}
+                        try {
+                            onMessage(msg);
+                        } catch (err) {
+                            console.error('{{.MethodName}}: onMessage threw', err);
+                        }
+                    });
+                    stream.on('error', (err: Error) => {
+                        errors++;
+                        console.warn(`{{.MethodName}}: stream error (sent=${sent}, received=${received}, errors=${errors})`, err);
+                        resolve('error');
+                    });
+                    stream.on('end', () => {
+                        console.info('{{.MethodName}}: stream ended');
+                        resolve('end');
+                    });
+                });
+
+                // If handle is closed while stream is live, cancel the stream.
+                handle._setCancel(() => {
+                    try { stream.cancel(); } catch { /* no-op */ }
+                });
+
+                await streamClosed;
+                handle._detach();
+
+                if (handle.isClosed()) {
+                    return;
+                }
+
+                console.warn(`{{.MethodName}}: disconnected (connects=${connects}, sent=${sent}, received=${received}, errors=${errors}), reconnecting in ${backoff}ms`);
+                await bidiSleep(backoff, handle);
+                backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
+            }
+        })().catch((err) => {
+            console.error('{{.MethodName}}: lifecycle loop crashed', err);
+        });
+
+        return handle;
+    }

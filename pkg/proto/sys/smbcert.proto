@@ -1,0 +1,131 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// ============================================================================
+// SMB cert authority contract (SPIFFE plan D7).
+// ============================================================================
+// Defines the bidi stream by which an instance of a Service Mesh Blackbox
+// service (spec.smb) obtains its ISOLATED per-SMB CA trust anchor + a signed
+// member cert from the SMB CA authority. The authority is the consumer service
+// annotated spec.smb_authority — tacplus generates this contract and the SMB
+// service's client seam; it does NOT implement the authority.
+//
+// This is a SEPARATE authority from tlscert.TlsCertService: that one signs
+// leaves under the true-root chain for ordinary server-auth TLS; this one signs
+// under a self-signed, per-SMB isolated root used only among one SMB service's
+// own instances (peer instances), within a single cluster. The true ROOT
+// CA must never enter this exchange or black-box config.
+//
+// Key custody (D7) — two distinct keys, do not conflate:
+//   - The per-SMB CA SIGNING key lives in the authority's own state (the typed,
+//     replicated state plane) and is shared across the AUTHORITY's instances by
+//     state replication. It is the authority's internal concern; its private key
+//     is NEVER delivered over this contract — only the CA certificate is.
+//   - Each consumer (SMB-service) instance generates its OWN member keypair and
+//     sends a CSR (public key only). The member PRIVATE key never crosses the
+//     wire. The authority signs the public key under the per-SMB CA and returns
+//     the member cert chain.
+//
+// Rotation (D7): the per-SMB root CA is STABLE — it is not rotated. Only the
+// per-instance member certs roll; at half-life the authority sends Renew and the
+// instance submits a fresh CSR. Because the root is stable, every delivery
+// carries the same single CA trust anchor.
+//
+// Flow:
+//   1. Instance sends Init (identifies its SMB service + instance) + Csr (its
+//      locally-generated public key)
+//   2. Authority signs a member cert under the per-SMB CA, returns Delivery with
+//      the member chain + the per-SMB CA trust anchor
+//   3. At member-cert half-life, the authority sends Renew
+//   4. Instance generates a new keypair, sends Csr
+//   5. Authority signs, returns Delivery
+//   6. Repeat from 3
+// ============================================================================
+
+syntax = "proto3";
+
+package smbcert;
+
+import "sys/spec.proto";
+import "sys/x509.proto";
+import "sys/key.proto";
+
+// SmbCertService issues isolated per-SMB CA trust anchors + signed member certs
+// to the instances of spec.smb services. The consumer service annotated
+// spec.smb_authority implements the server side; SMB service instances open the
+// stream via the generated seam.
+service SmbCertService {
+  // ManageSmbCert: bidi cert lifecycle for one SMB service instance. Any
+  // authenticated service may open a stream — the SecurityInterceptor validates
+  // the bearer token before the handler runs, and the handler matches the
+  // token's location-agnostic service path (token.service_path(), derived from
+  // sub_type/sub — never a raw SPIFFE URI claim) to the smb_service named in the
+  // first Init message.
+  rpc ManageSmbCert(stream SmbCertClientMsg) returns (stream SmbCertServerMsg) {
+    option (spec.method_s2s) = {auth_services: ["*"]};
+  }
+}
+
+// SmbCertClientMsg is sent by the SMB service instance on the bidi stream.
+message SmbCertClientMsg {
+  oneof msg {
+    // init identifies the SMB service + instance (first message).
+    SmbCertInit init = 1;
+    // csr provides the instance's public key for the authority to certify.
+    SmbCertCsr csr = 2;
+  }
+}
+
+// SmbCertInit identifies an SMB service instance opening a cert stream.
+message SmbCertInit {
+  // smb_service is the canonical SMB service name (from registry) whose per-SMB
+  // CA this instance belongs to.
+  string smb_service = 1 [(spec.assert_required) = true, (spec.assert_min_size) = 1];
+  // instance_id uniquely identifies this instance within the SMB service.
+  string instance_id = 2 [(spec.assert_required) = true, (spec.assert_min_size) = 1];
+}
+
+// SmbCertCsr provides the instance's public key for the authority to sign into a
+// member cert. The instance generated the keypair locally; the corresponding
+// private key stays on the instance and is never sent upstream.
+message SmbCertCsr {
+  // public_key is the member keypair's public key (Ed25519 or ECDSA P-256).
+  key.PublicKey public_key = 1 [(spec.assert_required) = true];
+}
+
+// SmbCertServerMsg is sent by the SMB CA authority on the bidi stream.
+message SmbCertServerMsg {
+  oneof msg {
+    // cert delivers the signed member cert chain + the per-SMB CA trust anchor.
+    SmbCertDelivery cert = 1;
+    // renew signals the instance to generate a new keypair and send a Csr
+    // (member-cert half-life). The per-SMB CA is stable and does not roll.
+    SmbCertRenew renew = 2;
+    // error signals a terminal error.
+    string error = 3;
+  }
+}
+
+// SmbCertDelivery carries the instance's signed member cert and the isolated
+// per-SMB trust anchor it must use for its peers.
+//
+// INVARIANT (soundness): ca is the per-SMB CA certificate ONLY — never the
+// true/global ROOT CA — and no private key (neither the CA's nor any other) ever
+// appears here. member_chain carries no private key; the instance holds its own
+// member private key locally and never transmits it.
+message SmbCertDelivery {
+  // member_chain is the instance's signed member cert (leaf) under the per-SMB
+  // CA. No private key — the instance generated and holds its keypair locally.
+  x509.X509CertChain member_chain = 1 [(spec.assert_required) = true];
+  // ca is the stable per-SMB CA certificate — the single trust anchor the
+  // instance uses to verify peers. Certificate only; no private key. NEVER the
+  // true ROOT CA.
+  x509.X509Cert ca = 2 [(spec.assert_required) = true];
+}
+
+// SmbCertRenew signals that the instance should generate a new keypair and send
+// a Csr. The authority sends this at member-cert half-life. The per-SMB CA is
+// stable, so renewal re-signs the member cert under the same CA.
+message SmbCertRenew {
+  // reason is a human-readable reason (e.g. "half-life reached").
+  string reason = 1;
+}

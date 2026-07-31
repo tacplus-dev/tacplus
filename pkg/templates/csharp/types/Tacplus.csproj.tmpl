@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>{{.PackageName}}</RootNamespace>
+    <AssemblyName>{{.PackageName}}</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="{{.ProtobufVersion}}" />
+    <PackageReference Include="Grpc.Net.Client" Version="{{.GrpcNetClientVersion}}" />
+    <PackageReference Include="Grpc.Core.Api" Version="{{.GrpcCoreApiVersion}}" />
+    <PackageReference Include="Grpc.Tools" Version="{{.GrpcToolsVersion}}" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Protos/**/*.proto" GrpcServices="None" ProtoRoot="Protos" />
+{{- range .ClientProtoFiles }}
+    <Protobuf Update="Protos/{{.}}" GrpcServices="Client" />
+{{- end }}
+  </ItemGroup>
+
+</Project>

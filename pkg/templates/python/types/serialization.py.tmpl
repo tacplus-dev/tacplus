@@ -1,0 +1,362 @@
+{{- /* Python serialization template */ -}}
+# ---- Serialization ----
+{{- range .Messages}}
+
+def {{.FuncPrefix}}_to_json(msg: {{.QualifiedType}}) -> bytes:
+    """Converts {{.TypeName}} to JSON bytes.
+
+    Uses google.protobuf.json_format for serialization.
+
+    Args:
+        msg: The message to serialize
+
+    Returns:
+        JSON bytes representation
+
+    Raises:
+        ValueError: If msg is None
+    """
+    if msg is None:
+        raise invalid_argument("{{.TypeName}} is None")
+    json_str = json_format.MessageToJson(msg)
+    return json_str.encode('utf-8')
+
+def {{.FuncPrefix}}_to_json_pretty(msg: {{.QualifiedType}}) -> bytes:
+    """Converts {{.TypeName}} to pretty-printed JSON bytes.
+
+    Args:
+        msg: The message to serialize
+
+    Returns:
+        Pretty JSON bytes representation
+
+    Raises:
+        ValueError: If msg is None
+    """
+    if msg is None:
+        raise invalid_argument("{{.TypeName}} is None")
+    json_str = json_format.MessageToJson(msg, indent=2)
+    return json_str.encode('utf-8')
+
+def {{.FuncPrefix}}_to_binary(msg: {{.QualifiedType}}) -> bytes:
+    """Converts {{.TypeName}} to binary protobuf bytes.
+
+    Args:
+        msg: The message to serialize
+
+    Returns:
+        Binary protobuf representation
+
+    Raises:
+        ValueError: If msg is None
+    """
+    if msg is None:
+        raise invalid_argument("{{.TypeName}} is None")
+    return msg.SerializeToString()
+
+def {{.FuncPrefix}}_from_bytes(data: bytes) -> {{.QualifiedType}}:
+    """Creates {{.TypeName}} from bytes, auto-detecting the format.
+
+    Supports JSON and binary protobuf formats.
+    Tries JSON first (if starts with '{'), then binary.
+
+    Args:
+        data: The bytes to deserialize
+
+    Returns:
+        Parsed message
+
+    Raises:
+        ValueError: If data is None, empty, or cannot be parsed
+    """
+    if data is None or len(data) == 0:
+        raise invalid_argument("data is None or empty")
+
+    # Trim leading whitespace to check format
+    trimmed = data.lstrip()
+    if len(trimmed) == 0:
+        raise invalid_argument("empty data after trimming")
+
+    # Try JSON first (starts with '{' or '[')
+    if trimmed[0:1] in (b'{', b'['):
+        try:
+            msg = {{.QualifiedType}}()
+            json_format.Parse(data.decode('utf-8'), msg)
+            return msg
+        except Exception:
+            # Fall through to try binary
+            pass
+
+    # Try binary protobuf
+    try:
+        msg = {{.QualifiedType}}()
+        msg.ParseFromString(data)
+        return msg
+    except DecodeError as e:
+        raise invalid_argument(f"Failed to parse {{.TypeName}}: unsupported format or invalid data: {e}")
+
+def {{.FuncPrefix}}_from_json(data: Union[str, bytes]) -> {{.QualifiedType}}:
+    """Creates {{.TypeName}} from JSON string or bytes.
+
+    Args:
+        data: The JSON string or bytes to parse
+
+    Returns:
+        Parsed message
+
+    Raises:
+        ValueError: If data is None, empty, or cannot be parsed
+    """
+    if data is None or len(data) == 0:
+        raise invalid_argument("data is None or empty")
+
+    if isinstance(data, bytes):
+        data = data.decode('utf-8')
+
+    msg = {{.QualifiedType}}()
+    json_format.Parse(data, msg)
+    return msg
+
+def {{.FuncPrefix}}_from_binary(data: bytes) -> {{.QualifiedType}}:
+    """Creates {{.TypeName}} from binary protobuf bytes.
+
+    Args:
+        data: The bytes to parse
+
+    Returns:
+        Parsed message
+
+    Raises:
+        ValueError: If data is None, empty, or cannot be parsed
+        DecodeError: If protobuf decoding fails
+    """
+    if data is None or len(data) == 0:
+        raise invalid_argument("data is None or empty")
+
+    msg = {{.QualifiedType}}()
+    msg.ParseFromString(data)
+    return msg
+
+def {{.FuncPrefix}}_to_yaml(msg: {{.QualifiedType}}) -> bytes:
+    """Converts {{.TypeName}} to YAML bytes.
+
+    Requires: pip install PyYAML
+
+    Args:
+        msg: The message to serialize
+
+    Returns:
+        YAML bytes representation
+
+    Raises:
+        ValueError: If msg is None
+        ImportError: If PyYAML is not installed
+    """
+    if not HAS_YAML:
+        raise ImportError("PyYAML is required for YAML support. Install with: pip install PyYAML")
+    if msg is None:
+        raise invalid_argument("{{.TypeName}} is None")
+    # Convert to dict via JSON
+    json_str = json_format.MessageToJson(msg)
+    import json
+    data = json.loads(json_str)
+    yaml_str = yaml.dump(data, default_flow_style=False)
+    return yaml_str.encode('utf-8')
+
+def {{.FuncPrefix}}_from_yaml(data: Union[str, bytes]) -> {{.QualifiedType}}:
+    """Creates {{.TypeName}} from YAML string or bytes.
+
+    Requires: pip install PyYAML
+
+    Args:
+        data: The YAML string or bytes to parse
+
+    Returns:
+        Parsed message
+
+    Raises:
+        ValueError: If data is None, empty, or cannot be parsed
+        ImportError: If PyYAML is not installed
+    """
+    if not HAS_YAML:
+        raise ImportError("PyYAML is required for YAML support. Install with: pip install PyYAML")
+    if data is None or len(data) == 0:
+        raise invalid_argument("data is None or empty")
+
+    if isinstance(data, bytes):
+        data = data.decode('utf-8')
+
+    # Parse YAML to dict, then convert to JSON and parse
+    yaml_data = yaml.safe_load(data)
+    import json
+    json_str = json.dumps(yaml_data)
+    msg = {{.QualifiedType}}()
+    json_format.Parse(json_str, msg)
+    return msg
+
+def {{.FuncPrefix}}_to_toml(msg: {{.QualifiedType}}) -> bytes:
+    """Converts {{.TypeName}} to TOML bytes.
+
+    Requires: pip install tomli-w (Python <3.11) or tomli (for reading)
+
+    Args:
+        msg: The message to serialize
+
+    Returns:
+        TOML bytes representation
+
+    Raises:
+        ValueError: If msg is None
+        ImportError: If tomli-w is not installed
+    """
+    if not HAS_TOML:
+        raise ImportError("tomli-w is required for TOML support. Install with: pip install tomli tomli-w")
+    if msg is None:
+        raise invalid_argument("{{.TypeName}} is None")
+    # Convert to dict via JSON
+    json_str = json_format.MessageToJson(msg)
+    import json
+    data = json.loads(json_str)
+    toml_bytes = tomli_w.dumps(data).encode('utf-8')
+    return toml_bytes
+
+def {{.FuncPrefix}}_from_toml(data: Union[str, bytes]) -> {{.QualifiedType}}:
+    """Creates {{.TypeName}} from TOML string or bytes.
+
+    Requires: pip install tomli (or use Python 3.11+ tomllib)
+
+    Args:
+        data: The TOML string or bytes to parse
+
+    Returns:
+        Parsed message
+
+    Raises:
+        ValueError: If data is None, empty, or cannot be parsed
+        ImportError: If tomli is not installed
+    """
+    if not HAS_TOML:
+        raise ImportError("tomli is required for TOML support. Install with: pip install tomli tomli-w")
+    if data is None or len(data) == 0:
+        raise invalid_argument("data is None or empty")
+
+    if isinstance(data, str):
+        data = data.encode('utf-8')
+
+    # Parse TOML to dict, then convert to JSON and parse
+    toml_data = tomllib.loads(data.decode('utf-8'))
+    import json
+    json_str = json.dumps(toml_data)
+    msg = {{.QualifiedType}}()
+    json_format.Parse(json_str, msg)
+    return msg
+
+def {{.FuncPrefix}}_load_json(filename: str) -> {{.QualifiedType}}:
+    """Loads {{.TypeName}} from JSON file.
+
+    Args:
+        filename: Path to JSON file
+
+    Returns:
+        Parsed message
+
+    Raises:
+        FileNotFoundError: If file doesn't exist
+        ValueError: If file cannot be parsed
+    """
+    with open(filename, 'rb') as f:
+        data = f.read()
+    return {{.FuncPrefix}}_from_json(data)
+
+def {{.FuncPrefix}}_save_json(msg: {{.QualifiedType}}, filename: str, pretty: bool = True) -> None:
+    """Saves {{.TypeName}} to JSON file.
+
+    Args:
+        msg: Message to save
+        filename: Path to JSON file
+        pretty: If True, use pretty printing
+
+    Raises:
+        ValueError: If msg is None
+    """
+    if pretty:
+        data = {{.FuncPrefix}}_to_json_pretty(msg)
+    else:
+        data = {{.FuncPrefix}}_to_json(msg)
+    with open(filename, 'wb') as f:
+        f.write(data)
+
+def {{.FuncPrefix}}_load_yaml(filename: str) -> {{.QualifiedType}}:
+    """Loads {{.TypeName}} from YAML file.
+
+    Requires: pip install PyYAML
+
+    Args:
+        filename: Path to YAML file
+
+    Returns:
+        Parsed message
+
+    Raises:
+        FileNotFoundError: If file doesn't exist
+        ValueError: If file cannot be parsed
+        ImportError: If PyYAML is not installed
+    """
+    with open(filename, 'rb') as f:
+        data = f.read()
+    return {{.FuncPrefix}}_from_yaml(data)
+
+def {{.FuncPrefix}}_save_yaml(msg: {{.QualifiedType}}, filename: str) -> None:
+    """Saves {{.TypeName}} to YAML file.
+
+    Requires: pip install PyYAML
+
+    Args:
+        msg: Message to save
+        filename: Path to YAML file
+
+    Raises:
+        ValueError: If msg is None
+        ImportError: If PyYAML is not installed
+    """
+    data = {{.FuncPrefix}}_to_yaml(msg)
+    with open(filename, 'wb') as f:
+        f.write(data)
+
+def {{.FuncPrefix}}_load_toml(filename: str) -> {{.QualifiedType}}:
+    """Loads {{.TypeName}} from TOML file.
+
+    Requires: pip install tomli (or use Python 3.11+ tomllib)
+
+    Args:
+        filename: Path to TOML file
+
+    Returns:
+        Parsed message
+
+    Raises:
+        FileNotFoundError: If file doesn't exist
+        ValueError: If file cannot be parsed
+        ImportError: If tomli is not installed
+    """
+    with open(filename, 'rb') as f:
+        data = f.read()
+    return {{.FuncPrefix}}_from_toml(data)
+
+def {{.FuncPrefix}}_save_toml(msg: {{.QualifiedType}}, filename: str) -> None:
+    """Saves {{.TypeName}} to TOML file.
+
+    Requires: pip install tomli-w
+
+    Args:
+        msg: Message to save
+        filename: Path to TOML file
+
+    Raises:
+        ValueError: If msg is None
+        ImportError: If tomli-w is not installed
+    """
+    data = {{.FuncPrefix}}_to_toml(msg)
+    with open(filename, 'wb') as f:
+        f.write(data)
+{{- end}}

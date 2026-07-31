@@ -1,0 +1,806 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! GrpcServer - A Rust library for building gRPC + REST services
+//!
+//! This library provides a framework for creating services that expose gRPC
+//! and REST endpoints with protocol multiplexing, health checks, CORS support,
+//! and graceful shutdown.
+//!
+//! ## Features
+//!
+//! - TLS gRPC server (tonic) with REST/HTTP endpoints multiplexed through ALPN
+//! - Health check endpoint at `/health`
+//! - CORS middleware for REST endpoints
+//! - Graceful shutdown on SIGINT/SIGTERM
+//! - Integrated rule-based authorization via Authorizer
+//! - Server lifecycle management
+//!
+//! ## Architecture
+//!
+//! The GrpcServer manages a TLS listener for protobuf-based RPC and HTTP
+//! endpoints. It refuses to start without certificate material.
+//!
+//! Both servers are managed by a single shutdown coordinator that ensures
+//! graceful termination when a shutdown signal is received.
+
+pub mod authorizer;
+pub use authorizer::JwkCache;
+
+pub mod spiffe;
+pub use spiffe::is_at_or_below;
+
+use axum::{
+    response::{IntoResponse, Json},
+    Extension,
+    Router as AxumRouter,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tonic::transport::Server;
+use tonic::transport::server::Router as TonicRouter;
+use tracing::{info, warn, error};
+
+/// Error type for gRPC server operations
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
+
+/// Result type for gRPC server operations
+pub type Result<T> = std::result::Result<T, Error>;
+
+// Re-export commonly used types
+pub use tonic;
+pub use axum;
+pub use tower;
+
+// ============================================================================
+// Configuration
+// ============================================================================
+
+/// Configuration for GrpcServer
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrpcServerConfig {
+    /// Network binding address - used as base if protocol ports not specified
+    #[serde(default = "default_listen_address")]
+    pub listen_address: String,
+
+    /// TLS configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls: Option<TLSConfig>,
+
+    /// gRPC protocol configuration
+    #[serde(default)]
+    pub grpc: ProtocolConfig,
+
+    /// REST API configuration
+    #[serde(default)]
+    pub rest: ProtocolConfig,
+
+    /// API prefix for all API endpoints
+    #[serde(default)]
+    pub api_prefix: String,
+
+    /// Enable CORS for REST endpoints
+    #[serde(default)]
+    pub enable_cors: bool,
+
+    /// CORS allowed origins
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
+
+    /// Maximum request size in bytes
+    #[serde(default = "default_max_request_size")]
+    pub max_request_size: i64,
+
+    /// Request timeout in seconds
+    #[serde(default = "default_request_timeout_seconds")]
+    pub request_timeout_seconds: i64,
+
+    /// Enable metrics endpoint
+    #[serde(default)]
+    pub enable_metrics: bool,
+
+    /// Enable OpenTelemetry tracing
+    #[serde(default)]
+    pub enable_tracing: bool,
+
+    /// Logger configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logger: Option<LoggerConfig>,
+
+    /// Authorization rules
+    #[serde(default)]
+    pub auth_rules: Vec<serde_json::Value>,
+
+    /// Static file serving configuration
+    #[serde(default)]
+    pub static_file_paths: HashMap<String, String>,
+
+    /// Graceful shutdown timeout in seconds
+    #[serde(default = "default_shutdown_timeout")]
+    pub shutdown_timeout_secs: u64,
+}
+
+/// TLS/SSL configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TLSConfig {
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_cert: Option<X509CertPair>,
+    #[serde(default)]
+    pub alpn_protocols: Vec<ALPNProtocol>,
+}
+
+impl Default for TLSConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            tls_cert: None,
+            alpn_protocols: vec![ALPNProtocol::H2, ALPNProtocol::Http11],
+        }
+    }
+}
+
+/// X.509 certificate pair
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct X509CertPair {
+    pub cert_pem: String,
+    pub key_pem: String,
+}
+
+/// ALPN protocol identifiers
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ALPNProtocol {
+    #[serde(rename = "ALPN_PROTOCOL_H2")]
+    H2,
+    #[serde(rename = "ALPN_PROTOCOL_HTTP_1_1")]
+    Http11,
+}
+
+impl ALPNProtocol {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ALPNProtocol::H2 => "h2",
+            ALPNProtocol::Http11 => "http/1.1",
+        }
+    }
+}
+
+/// Protocol configuration (gRPC, REST)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtocolConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub port: u16,
+}
+
+impl Default for ProtocolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            port: 0,
+        }
+    }
+}
+
+/// Logger configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggerConfig {
+    #[serde(default = "default_log_level")]
+    pub level: String,
+    #[serde(default = "default_log_encoding")]
+    pub encoding: String,
+    #[serde(default = "default_output_paths")]
+    pub output_paths: Vec<String>,
+    #[serde(default = "default_error_output_paths")]
+    pub error_output_paths: Vec<String>,
+}
+
+// Default value functions
+fn default_listen_address() -> String {
+    ":8443".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_max_request_size() -> i64 {
+    10 * 1024 * 1024
+}
+
+fn default_request_timeout_seconds() -> i64 {
+    30
+}
+
+fn default_shutdown_timeout() -> u64 {
+    30
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
+}
+
+fn default_log_encoding() -> String {
+    "console".to_string()
+}
+
+fn default_output_paths() -> Vec<String> {
+    vec!["stdout".to_string()]
+}
+
+fn default_error_output_paths() -> Vec<String> {
+    vec!["stderr".to_string()]
+}
+
+impl Default for GrpcServerConfig {
+    fn default() -> Self {
+        Self {
+            listen_address: default_listen_address(),
+            tls: Some(TLSConfig::default()),
+            grpc: ProtocolConfig::default(),
+            rest: ProtocolConfig::default(),
+            api_prefix: String::new(),
+            enable_cors: false,
+            cors_origins: Vec::new(),
+            max_request_size: default_max_request_size(),
+            request_timeout_seconds: default_request_timeout_seconds(),
+            enable_metrics: false,
+            enable_tracing: false,
+            logger: None,
+            auth_rules: Vec::new(),
+            static_file_paths: HashMap::new(),
+            shutdown_timeout_secs: default_shutdown_timeout(),
+        }
+    }
+}
+
+impl GrpcServerConfig {
+    /// Load configuration from a YAML file
+    pub fn from_yaml_file(path: impl Into<PathBuf>) -> Result<Self> {
+        let contents = std::fs::read_to_string(path.into())?;
+        Self::from_yaml_str(&contents)
+    }
+
+    /// Load configuration from a YAML string
+    pub fn from_yaml_str(yaml: &str) -> Result<Self> {
+        Ok(serde_yaml::from_str(yaml)?)
+    }
+
+    /// Load configuration from a JSON string
+    pub fn from_json_str(json: &str) -> Result<Self> {
+        Ok(serde_json::from_str(json)?)
+    }
+
+    /// Parse listen address into host and port
+    pub fn parse_listen_addr(&self) -> Result<SocketAddr> {
+        let addr = if self.listen_address.starts_with(':') {
+            format!("0.0.0.0{}", self.listen_address)
+        } else {
+            self.listen_address.clone()
+        };
+        addr.parse()
+            .map_err(|e| format!("invalid listen address '{}': {}", self.listen_address, e).into())
+    }
+
+    /// Get gRPC port with defaults
+    pub fn get_grpc_port(&self) -> Result<u16> {
+        if self.grpc.port != 0 {
+            return Ok(self.grpc.port);
+        }
+        Ok(self.parse_listen_addr()?.port())
+    }
+
+    /// Get REST/HTTP port with defaults
+    pub fn get_rest_port(&self) -> Result<u16> {
+        if self.rest.port != 0 {
+            return Ok(self.rest.port);
+        }
+        Ok(self.parse_listen_addr()?.port())
+    }
+
+    /// Validate configuration
+    pub fn validate(&self) -> Result<()> {
+        let tls_config = self.tls.as_ref()
+            .ok_or("TLS configuration is required")?;
+        if !tls_config.enabled {
+            return Err("TLS cannot be disabled for generated gRPC/REST servers".into());
+        }
+        if tls_config.tls_cert.is_none() {
+            return Err("TLS certificate pair is required".into());
+        }
+
+        let grpc_port = self.get_grpc_port()?;
+        let rest_port = self.get_rest_port()?;
+
+        if self.grpc.enabled && self.rest.enabled && grpc_port != rest_port {
+            return Err(format!(
+                "gRPC and REST must use the same TLS port for ALPN multiplexing (got gRPC={}, REST={})",
+                grpc_port, rest_port
+            ).into());
+        }
+
+        Ok(())
+    }
+}
+
+// ============================================================================
+// CORS
+// ============================================================================
+
+/// Create CORS middleware layer from configuration
+pub fn create_cors_layer(config: &GrpcServerConfig) -> tower_http::cors::CorsLayer {
+    use hyper::http::{header, Method, HeaderValue};
+    use tower_http::cors::{Any, CorsLayer};
+
+    let mut cors = CorsLayer::new()
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+            Method::PATCH,
+        ])
+        .allow_headers([
+            header::ORIGIN,
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+        ]);
+
+    if !config.cors_origins.is_empty() {
+        let origins: Vec<_> = config.cors_origins
+            .iter()
+            .filter_map(|origin| origin.parse::<HeaderValue>().ok())
+            .collect();
+
+        if !origins.is_empty() {
+            cors = cors.allow_origin(origins);
+        } else {
+            tracing::warn!(
+                "Failed to parse CORS origins, falling back to allow any: {:?}",
+                config.cors_origins
+            );
+            cors = cors.allow_origin(Any);
+        }
+    } else {
+        cors = cors.allow_origin(Any);
+    }
+
+    cors
+}
+
+// ============================================================================
+// Health Check
+// ============================================================================
+
+/// Query parameters for health check endpoint
+#[derive(Debug, Deserialize)]
+pub struct HealthQuery {
+    #[serde(default)]
+    pub details: bool,
+}
+
+/// Health check response
+#[derive(Debug, Serialize)]
+pub struct HealthCheckResponse {
+    pub status: String,
+    pub timestamp: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_status: Option<ServerStatus>,
+}
+
+/// Detailed server status information
+#[derive(Debug, Serialize, Clone)]
+pub struct ServerStatus {
+    pub tls_enabled: bool,
+    pub grpc_enabled: bool,
+    pub rest_enabled: bool,
+    pub start_time: i64,
+    pub uptime_seconds: i64,
+    pub protocols_on_same_port: bool,
+    pub grpc_port: u16,
+    pub rest_port: u16,
+}
+
+/// Health checker that maintains server state
+#[derive(Clone)]
+pub struct HealthChecker {
+    start_time: SystemTime,
+    config: Arc<GrpcServerConfig>,
+}
+
+impl HealthChecker {
+    pub fn new(config: Arc<GrpcServerConfig>) -> Self {
+        Self {
+            start_time: SystemTime::now(),
+            config,
+        }
+    }
+
+    pub fn get_server_status(&self) -> ServerStatus {
+        let tls_enabled = self.config.tls.as_ref().map(|t| t.enabled).unwrap_or(false);
+        let grpc_port = if self.config.grpc.enabled {
+            self.config.get_grpc_port().unwrap_or(0)
+        } else {
+            0
+        };
+        let rest_port = if self.config.rest.enabled {
+            self.config.get_rest_port().unwrap_or(0)
+        } else {
+            0
+        };
+
+        let start_timestamp = self.start_time
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let uptime = SystemTime::now()
+            .duration_since(self.start_time)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        ServerStatus {
+            tls_enabled,
+            grpc_enabled: self.config.grpc.enabled,
+            rest_enabled: self.config.rest.enabled,
+            start_time: start_timestamp,
+            uptime_seconds: uptime,
+            protocols_on_same_port: tls_enabled,
+            grpc_port,
+            rest_port,
+        }
+    }
+
+    pub async fn handle_health_check(
+        axum::extract::Query(query): axum::extract::Query<HealthQuery>,
+        Extension(checker): Extension<Arc<HealthChecker>>,
+    ) -> impl IntoResponse {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let server_status = if query.details {
+            Some(checker.get_server_status())
+        } else {
+            None
+        };
+
+        let response = HealthCheckResponse {
+            status: "ok".to_string(),
+            timestamp,
+            server_status,
+        };
+
+        Json(response)
+    }
+}
+
+// ============================================================================
+// Lifecycle
+// ============================================================================
+
+/// Wait for a shutdown signal (SIGTERM or SIGINT)
+pub async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            info!("received SIGINT (Ctrl+C), initiating graceful shutdown");
+        },
+        _ = terminate => {
+            info!("received SIGTERM, initiating graceful shutdown");
+        },
+    }
+}
+
+/// Coordinator for managing graceful shutdown across multiple components
+pub struct ShutdownCoordinator {
+    shutdown_tx: tokio::sync::broadcast::Sender<()>,
+}
+
+impl ShutdownCoordinator {
+    pub fn new() -> Self {
+        let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
+        Self { shutdown_tx }
+    }
+
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.shutdown_tx.subscribe()
+    }
+
+    pub fn shutdown(&self) {
+        if let Err(e) = self.shutdown_tx.send(()) {
+            warn!("failed to broadcast shutdown signal: {}", e);
+        }
+    }
+
+    pub async fn wait_for_signal(self) {
+        shutdown_signal().await;
+        self.shutdown();
+    }
+}
+
+impl Default for ShutdownCoordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
+// Service Trait
+// ============================================================================
+
+/// ServiceImplementation trait that generated service code must implement.
+#[async_trait::async_trait]
+pub trait ServiceImplementation: Send + Sync + 'static {
+    /// Register gRPC services with the tonic server.
+    fn register_services(
+        self: Arc<Self>,
+        server: Server,
+    ) -> TonicRouter;
+
+    /// Generate REST endpoints on the Axum router.
+    async fn generate_rest_endpoints(
+        self: Arc<Self>,
+        router: AxumRouter,
+    ) -> AxumRouter;
+}
+
+/// GrpcServer manages gRPC and REST endpoints
+pub struct GrpcServer<S: ServiceImplementation> {
+    config: GrpcServerConfig,
+    service_impl: Arc<S>,
+}
+
+impl<S: ServiceImplementation> GrpcServer<S> {
+    /// Create a new GrpcServer instance
+    pub fn new(
+        config: GrpcServerConfig,
+        service_impl: S,
+    ) -> Result<Self> {
+        Ok(Self {
+            config,
+            service_impl: Arc::new(service_impl),
+        })
+    }
+
+    /// INTERNAL — not part of the public API. Start the server and listen for
+    /// connections until shutdown.
+    ///
+    /// NOT THE SERVING ENTRY POINT — do not call this directly. Generated tacplus
+    /// services are served by the generated ServiceManager, which runs its own
+    /// tonic server through a rustls `ResolvesServerCert` fed by the auto-TLS
+    /// renewal stream, so their serving certs rotate live without a restart.
+    ///
+    /// This method binds the TLS certificate ONCE at startup via tonic's
+    /// `ServerTlsConfig` (see `listen_tls`), so a renewed cert does NOT take
+    /// effect until the process restarts. It is retained only as a low-level
+    /// building block; a live-rotating seam is intentionally not added here
+    /// because the reloading resolver lives one crate up (this lib cannot import
+    /// it) and duplicating it would add rustls deps for an entry point nothing
+    /// calls — de-dup only, not a live bug (NEW-34).
+    #[doc(hidden)]
+    pub async fn listen(self) -> Result<()> {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .init();
+
+        info!("starting GrpcServer");
+        info!("configuration: {:?}", self.config);
+
+        self.config.validate()?;
+
+        info!("TLS mode: all protocols on same port with ALPN");
+        self.listen_tls().await
+    }
+
+    async fn listen_tls(self) -> Result<()> {
+        let tls_config = self.config.tls.as_ref()
+            .ok_or("TLS configuration is required for TLS mode")?;
+        let cert_pair = tls_config.tls_cert.as_ref()
+            .ok_or("TLS certificate pair is required when TLS is enabled")?;
+
+        let grpc_port = self.config.get_grpc_port()?;
+        let addr: SocketAddr = format!("0.0.0.0:{}", grpc_port).parse()
+            .map_err(|e| format!("invalid address: {}", e))?;
+
+        info!("starting TLS server on port {} (gRPC + REST multiplexed via ALPN)", grpc_port);
+
+        // tonic uses rustls for TLS; rustls' supported protocol set is TLS 1.2
+        // and TLS 1.3, so older TLS versions are not accepted.
+        let tonic_tls = tonic::transport::ServerTlsConfig::new()
+            .identity(tonic::transport::Identity::from_pem(
+                cert_pair.cert_pem.as_bytes(),
+                cert_pair.key_pem.as_bytes(),
+            ));
+
+        let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+        let mut shutdown_rx = shutdown_tx.subscribe();
+
+        let service_impl = self.service_impl.clone();
+        let server = Server::builder()
+            .tls_config(tonic_tls)
+            .map_err(|e| format!("failed to configure TLS: {}", e))?;
+        let server_with_services = service_impl.register_services(server);
+
+        // Handle shutdown signals
+        let shutdown_timeout = self.config.shutdown_timeout_secs;
+        let signal_handle = tokio::spawn(async move {
+            tokio::signal::ctrl_c().await.ok();
+            info!("received shutdown signal, initiating graceful shutdown (timeout: {}s)", shutdown_timeout);
+            let _ = shutdown_tx.send(());
+        });
+
+        info!("TLS server listening on {}", addr);
+
+        tokio::select! {
+            result = server_with_services.serve(addr) => {
+                if let Err(e) = result {
+                    error!("TLS server error: {}", e);
+                }
+            }
+            _ = shutdown_rx.recv() => {
+                info!("TLS server shutting down gracefully");
+            }
+        }
+
+        signal_handle.abort();
+        info!("TLS server stopped");
+        Ok(())
+    }
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = GrpcServerConfig::default();
+        assert_eq!(config.listen_address, ":8443");
+        assert!(config.grpc.enabled);
+        assert!(config.rest.enabled);
+        assert_eq!(config.max_request_size, 10 * 1024 * 1024);
+        assert_eq!(config.request_timeout_seconds, 30);
+    }
+
+    #[test]
+    fn test_parse_listen_addr() {
+        let config = GrpcServerConfig {
+            listen_address: ":8080".to_string(),
+            ..Default::default()
+        };
+        let addr = config.parse_listen_addr().unwrap();
+        assert_eq!(addr.port(), 8080);
+    }
+
+    #[test]
+    fn test_get_grpc_port_default_tls() {
+        let config = GrpcServerConfig::default();
+        assert_eq!(config.get_grpc_port().unwrap(), 8443);
+    }
+
+    #[test]
+    fn test_get_rest_port_default_tls() {
+        let config = GrpcServerConfig::default();
+        assert_eq!(config.get_rest_port().unwrap(), 8443);
+    }
+
+    #[test]
+    fn test_validate_requires_tls_cert_pair() {
+        let config = GrpcServerConfig::default();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_disabled_tls() {
+        let config = GrpcServerConfig {
+            tls: Some(TLSConfig {
+                enabled: false,
+                tls_cert: Some(X509CertPair {
+                    cert_pem: "cert".to_string(),
+                    key_pem: "key".to_string(),
+                }),
+                alpn_protocols: Vec::new(),
+            }),
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_tls_same_port() {
+        let config = GrpcServerConfig {
+            tls: Some(TLSConfig {
+                enabled: true,
+                tls_cert: Some(X509CertPair {
+                    cert_pem: "cert".to_string(),
+                    key_pem: "key".to_string(),
+                }),
+                alpn_protocols: Vec::new(),
+            }),
+            grpc: ProtocolConfig { enabled: true, port: 8443 },
+            rest: ProtocolConfig { enabled: true, port: 8443 },
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_tls_rejects_split_ports() {
+        let config = GrpcServerConfig {
+            tls: Some(TLSConfig {
+                enabled: true,
+                tls_cert: Some(X509CertPair {
+                    cert_pem: "cert".to_string(),
+                    key_pem: "key".to_string(),
+                }),
+                alpn_protocols: Vec::new(),
+            }),
+            grpc: ProtocolConfig { enabled: true, port: 8443 },
+            rest: ProtocolConfig { enabled: true, port: 8080 },
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_from_json() {
+        let json = r#"{"listen_address": ":3000", "grpc": {"enabled": false}}"#;
+        let config = GrpcServerConfig::from_json_str(json).unwrap();
+        assert_eq!(config.listen_address, ":3000");
+        assert!(!config.grpc.enabled);
+    }
+
+    #[test]
+    fn test_shutdown_coordinator() {
+        let coordinator = ShutdownCoordinator::new();
+        let _rx1 = coordinator.subscribe();
+        let _rx2 = coordinator.subscribe();
+        // Should not panic
+    }
+
+    #[test]
+    fn test_health_checker_creation() {
+        let config = Arc::new(GrpcServerConfig::default());
+        let checker = HealthChecker::new(config);
+        let status = checker.get_server_status();
+        assert!(status.uptime_seconds >= 0);
+    }
+
+    #[test]
+    fn test_cors_layer_creation() {
+        let config = GrpcServerConfig {
+            enable_cors: true,
+            cors_origins: vec!["http://localhost:3000".to_string()],
+            ..Default::default()
+        };
+        let _layer = create_cors_layer(&config);
+    }
+}

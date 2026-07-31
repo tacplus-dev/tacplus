@@ -1,0 +1,54 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+Multi-tenant nested on-disk layout.
+
+Layout: ``<base>/<tenant>/<project>/<store>.<suffix>``
+
+A namespace (``ns``) is **ROOT / Tenant / Project** — always rooted at ``/``,
+with ``a-z0-9`` segments (e.g. ``/``, ``/drpepper``, ``/drpepper/default``).
+Each segment becomes a real directory, so:
+  - the **root** ns ``/`` → ``<base>/_root/``,
+  - a **tenant** ns ``/drpepper`` → ``<base>/drpepper/``,
+  - a **project** ns ``/drpepper/default`` → ``<base>/drpepper/default/``.
+
+Tenants are never mingled, and deletion is a directory removal that cascades
+naturally: :func:`delete_namespace` on ``/drpepper`` removes all of that
+tenant's projects; on ``/drpepper/default`` removes just that project; on ``/``
+removes only root's own data (tenants are siblings, not children, of ``_root``).
+"""
+
+import os
+import shutil
+from typing import List
+
+# The default tenant: the root namespace.
+ROOT_TENANT = "/"
+# Directory segment used for the root namespace "/".
+ROOT_SEG = "_root"
+
+
+def ns_segments(ns: str) -> List[str]:
+    """Split a namespace into directory segments. Root (or empty) → ``[_root]``;
+    otherwise the non-empty ``/``-separated components (``a-z0-9``)."""
+    parts = [s for s in ns.split("/") if s]
+    if not parts:
+        return [ROOT_SEG]
+    return parts
+
+
+def ns_dir(base: str, ns: str) -> str:
+    """The directory holding a namespace's store files: ``<base>/<seg...>``."""
+    return os.path.join(base, *ns_segments(ns))
+
+
+def store_path(base: str, ns: str, store: str, suffix: str) -> str:
+    """Full path for a store file: ``<base>/<ns-dirs>/<store><suffix>``."""
+    return os.path.join(ns_dir(base, ns), f"{store}{suffix}")
+
+
+def delete_namespace(base: str, ns: str) -> None:
+    """Remove a namespace's data — its directory, cascading to children. For a
+    tenant ns (``/drpepper``) this removes all of its projects; for a project ns
+    (``/drpepper/default``) just that project. Idempotent (missing dir is ok)."""
+    shutil.rmtree(ns_dir(base, ns), ignore_errors=True)

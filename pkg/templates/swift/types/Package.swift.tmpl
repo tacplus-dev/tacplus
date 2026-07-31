@@ -1,0 +1,35 @@
+// swift-tools-version: 6.1
+import PackageDescription
+
+let package = Package(
+    name: "{{.PackageName}}",
+    platforms: [
+        .macOS(.v15)
+    ],
+    products: [
+        .library(
+            name: "{{.PackageName}}",
+            targets: ["{{.PackageName}}"]
+        )
+    ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-protobuf.git", from: "{{.SwiftProtobufVersion}}"),
+        .package(url: "https://github.com/grpc/grpc-swift-2.git", from: "{{.GRPCSwiftVersion}}"),
+        .package(url: "https://github.com/grpc/grpc-swift-protobuf.git", from: "{{.GRPCSwiftProtobufVersion}}"),
+        .package(url: "https://github.com/grpc/grpc-swift-nio-transport.git", from: "{{.GRPCSwiftNIOTransportVersion}}")
+    ],
+    targets: [
+        .target(
+            name: "{{.PackageName}}",
+            dependencies: [
+                .product(name: "SwiftProtobuf", package: "swift-protobuf"),
+                .product(name: "GRPCCore", package: "grpc-swift-2"),
+                .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
+                .product(name: "GRPCNIOTransportHTTP2", package: "grpc-swift-nio-transport")
+            ],
+            swiftSettings: [
+                .swiftLanguageMode(.v6)
+            ]
+        )
+    ]
+)

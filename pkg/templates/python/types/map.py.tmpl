@@ -1,0 +1,79 @@
+{{- /* Python map functions template */ -}}
+# ---- Map Functions ----
+{{- range .MapMessages}}
+
+def {{.FuncName}}_from_map(params: Dict[str, str]):
+    """
+    Creates a {{.TypeName}} from a dictionary of URL parameters.
+    The parameter keys are validated against {{.KeyEnumType}} enum values.
+{{- if .Strict}}
+    Unknown parameter keys will raise a ValueError (strict mode).
+{{- else}}
+    Unknown parameter keys are silently ignored (non-strict mode).
+{{- end}}
+    """
+    result = {{.TypeName}}()
+    for key, value in params.items():
+        # Try to parse the parameter key
+        param_key = None
+        try:
+            # Attempt to get enum value (convert key format if needed)
+            param_key = {{.KeyEnumType}}.Value(key.upper().replace('-', '_'))
+        except ValueError:
+{{- if .Strict}}
+            raise ValueError(f"Invalid parameter key: {key}")
+{{- else}}
+            continue # Ignore unknown keys in non-strict mode
+{{- end}}
+
+{{- range $i, $field := .Fields}}
+{{- if eq $i 0}}
+        if param_key == {{$field.PythonEnumValue}}:
+{{- else}}
+        elif param_key == {{$field.PythonEnumValue}}:
+{{- end}}
+{{- if $field.IsRepeated}}
+            if value:
+                result.{{$field.FieldName}}[:] = value.split(',')
+{{- else if $field.IsInteger}}
+            try:
+                result.{{$field.FieldName}} = int(value)
+            except ValueError:
+                pass # Ignore invalid integers
+{{- else if $field.IsFloat}}
+            try:
+                result.{{$field.FieldName}} = float(value)
+            except ValueError:
+                pass # Ignore invalid floats
+{{- else}}
+            result.{{$field.FieldName}} = value
+{{- end}}
+{{- end}}
+
+    return result
+{{- if .HasToMap}}
+
+def {{.FuncName}}_to_map(m):
+    """
+    Converts a {{.TypeName}} to a dictionary of URL parameters.
+    The dictionary keys are the json_return_value of {{.KeyEnumType}} enum values.
+    Only non-empty fields are included in the dictionary.
+    """
+    result = {}
+    if m is None:
+        return result
+{{- range .ToMapFields}}
+{{- if .IsRepeated}}
+    if m.{{.FieldName}}:
+        result['{{.JsonKey}}'] = ','.join(m.{{.FieldName}})
+{{- else if .IsNumeric}}
+    if m.HasField('{{.ProtoFieldName}}'):
+        result['{{.JsonKey}}'] = str(m.{{.FieldName}})
+{{- else}}
+    if m.HasField('{{.ProtoFieldName}}') and m.{{.FieldName}}:
+        result['{{.JsonKey}}'] = m.{{.FieldName}}
+{{- end}}
+{{- end}}
+    return result
+{{- end}}
+{{- end}}

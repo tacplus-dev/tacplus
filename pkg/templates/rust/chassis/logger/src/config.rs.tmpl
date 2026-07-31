@@ -1,0 +1,573 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Proto-based configuration functions
+
+use crate::constants::{LOG_FORMAT_ENV_VAR, LOG_LEVEL_ENV_VAR};
+use crate::error::{LoggerError, Result};
+use crate::state::{is_installed, mark_installed, set_log_level_trace};
+use std::collections::HashSet;
+use std::env;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Write};
+use std::sync::{Arc, Mutex};
+use tracing::{Level, Metadata};
+use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::fmt::writer::MakeWriter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::EnvFilter;
+use {{.CrateBasePathUnderscore}}_types::sys::logger as proto;
+
+#[derive(Clone)]
+enum LogTarget {
+    Stdout,
+    Stderr,
+    File {
+        path: String,
+        file: Arc<Mutex<File>>,
+    },
+}
+
+impl LogTarget {
+    fn key(&self) -> String {
+        match self {
+            Self::Stdout => "stdout".to_string(),
+            Self::Stderr => "stderr".to_string(),
+            Self::File { path, .. } => format!("file:{path}"),
+        }
+    }
+
+    fn write_all(&self, data: &[u8]) -> io::Result<()> {
+        match self {
+            Self::Stdout => {
+                let mut out = io::stdout().lock();
+                out.write_all(data)?;
+                out.flush()
+            }
+            Self::Stderr => {
+                let mut err = io::stderr().lock();
+                err.write_all(data)?;
+                err.flush()
+            }
+            Self::File { file, .. } => {
+                let mut guard = file
+                    .lock()
+                    .map_err(|_| io::Error::new(io::ErrorKind::Other, "log file mutex poisoned"))?;
+                guard.write_all(data)?;
+                guard.flush()
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct LoggerMakeWriter {
+    output_targets: Arc<Vec<LogTarget>>,
+    error_targets: Arc<Vec<LogTarget>>,
+    initial_fields: Arc<Vec<(String, String)>>,
+    json: bool,
+    pretty_print: bool,
+}
+
+impl LoggerMakeWriter {
+    fn new(
+        output_targets: Vec<LogTarget>,
+        error_targets: Vec<LogTarget>,
+        initial_fields: Vec<(String, String)>,
+        json: bool,
+        pretty_print: bool,
+    ) -> Self {
+        Self {
+            output_targets: Arc::new(output_targets),
+            error_targets: Arc::new(error_targets),
+            initial_fields: Arc::new(initial_fields),
+            json,
+            pretty_print,
+        }
+    }
+
+    fn writer_for(&self, metadata: Option<&Metadata<'_>>) -> LoggerWriter {
+        let mut targets = Vec::new();
+        let mut seen = HashSet::new();
+
+        for target in self.output_targets.iter() {
+            if seen.insert(target.key()) {
+                targets.push(target.clone());
+            }
+        }
+
+        if metadata.map(|m| *m.level() == Level::ERROR).unwrap_or(false) {
+            for target in self.error_targets.iter() {
+                if seen.insert(target.key()) {
+                    targets.push(target.clone());
+                }
+            }
+        }
+
+        LoggerWriter {
+            targets,
+            initial_fields: self.initial_fields.clone(),
+            json: self.json,
+            pretty_print: self.pretty_print,
+            buffer: Vec::new(),
+        }
+    }
+}
+
+impl<'a> MakeWriter<'a> for LoggerMakeWriter {
+    type Writer = LoggerWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.writer_for(None)
+    }
+
+    fn make_writer_for(&'a self, meta: &Metadata<'_>) -> Self::Writer {
+        self.writer_for(Some(meta))
+    }
+}
+
+struct LoggerWriter {
+    targets: Vec<LogTarget>,
+    initial_fields: Arc<Vec<(String, String)>>,
+    json: bool,
+    pretty_print: bool,
+    buffer: Vec<u8>,
+}
+
+impl LoggerWriter {
+    fn flush_buffer(&mut self) -> io::Result<()> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
+
+        let payload = format_payload(
+            std::mem::take(&mut self.buffer),
+            &self.initial_fields,
+            self.json,
+            self.pretty_print,
+        );
+
+        for target in &self.targets {
+            target.write_all(&payload)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Write for LoggerWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buffer.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_buffer()
+    }
+}
+
+impl Drop for LoggerWriter {
+    fn drop(&mut self) {
+        let _ = self.flush_buffer();
+    }
+}
+
+fn format_payload(
+    mut payload: Vec<u8>,
+    initial_fields: &[(String, String)],
+    json: bool,
+    pretty_print: bool,
+) -> Vec<u8> {
+    if initial_fields.is_empty() && !(json && pretty_print) {
+        return payload;
+    }
+
+    if json {
+        let had_newline = payload.ends_with(b"\n");
+        while matches!(payload.last(), Some(b'\n' | b'\r')) {
+            payload.pop();
+        }
+
+        let parsed = serde_json::from_slice::<serde_json::Value>(&payload);
+        if let Ok(mut value) = parsed {
+            if let serde_json::Value::Object(ref mut fields) = value {
+                for (key, field_value) in initial_fields {
+                    fields
+                        .entry(key.clone())
+                        .or_insert_with(|| serde_json::Value::String(field_value.clone()));
+                }
+            }
+
+            let serialized = if pretty_print {
+                serde_json::to_vec_pretty(&value)
+            } else {
+                serde_json::to_vec(&value)
+            };
+
+            if let Ok(mut data) = serialized {
+                if had_newline {
+                    data.push(b'\n');
+                }
+                return data;
+            }
+        }
+
+        if had_newline {
+            payload.push(b'\n');
+        }
+        return payload;
+    }
+
+    let mut prefix = String::new();
+    for (idx, (key, field_value)) in initial_fields.iter().enumerate() {
+        if idx > 0 {
+            prefix.push(' ');
+        }
+        let encoded = serde_json::to_string(field_value).unwrap_or_else(|_| field_value.clone());
+        prefix.push_str(key);
+        prefix.push('=');
+        prefix.push_str(&encoded);
+    }
+
+    let mut data = Vec::with_capacity(prefix.len() + 3 + payload.len());
+    data.extend_from_slice(b"[");
+    data.extend_from_slice(prefix.as_bytes());
+    data.extend_from_slice(b"] ");
+    data.extend_from_slice(&payload);
+    data
+}
+
+fn open_targets(paths: &[String], default_paths: &[&str]) -> Result<Vec<LogTarget>> {
+    let selected: Vec<String> = if paths.is_empty() {
+        default_paths.iter().map(|p| (*p).to_string()).collect()
+    } else {
+        paths.to_vec()
+    };
+
+    let mut targets = Vec::with_capacity(selected.len());
+    for raw_path in selected {
+        let path = raw_path.trim();
+        if path.is_empty() {
+            return Err(LoggerError::initialization_error(
+                "log output path must not be empty",
+            ));
+        }
+
+        match path.to_ascii_lowercase().as_str() {
+            "stdout" => targets.push(LogTarget::Stdout),
+            "stderr" => targets.push(LogTarget::Stderr),
+            _ => {
+                let file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .map_err(|e| {
+                        LoggerError::initialization_error(format!(
+                            "failed to open log output path {path}: {e}"
+                        ))
+                    })?;
+                targets.push(LogTarget::File {
+                    path: path.to_string(),
+                    file: Arc::new(Mutex::new(file)),
+                });
+            }
+        }
+    }
+
+    Ok(targets)
+}
+
+/// Load logger configuration from environment variables into the provided LoggerConfig proto message.
+///
+/// It reads values from environment variables named LogLevel/LogFormat and
+/// populates the provided LoggerConfig proto message.
+///
+/// # Environment variables
+///
+/// * `LogLevel` - Log level (trace, debug, info, warn, error)
+/// * `LogFormat` - Log format (json, console)
+///
+/// # Example
+///
+/// ```no_run
+/// use logger::load_from_env;
+/// use types::sys::logger::types::LoggerConfig;
+///
+/// let mut config = LoggerConfig::default();
+/// load_from_env(&mut config).expect("Failed to load config");
+/// ```
+pub fn load_from_env(config: &mut proto::LoggerConfig) -> Result<()> {
+    let mut errors = Vec::new();
+
+    // Load Level (enum)
+    if let Ok(v) = env::var(LOG_LEVEL_ENV_VAR) {
+        if !v.is_empty() {
+            // Convert user-friendly format (e.g., "debug") to proto format (e.g., "LEVEL_DEBUG")
+            let proto_value = format!("LEVEL_{}", v.to_uppercase());
+            match proto::Level::from_str_name(&proto_value) {
+                Some(level) => {
+                    config.level = level as i32;
+                    tracing::debug!("config.level={} (env var {})", v, LOG_LEVEL_ENV_VAR);
+                }
+                None => {
+                    errors.push(LoggerError::invalid_env_var(
+                        LOG_LEVEL_ENV_VAR.to_string(),
+                        v.clone(),
+                        format!("unknown log level: {}", v),
+                    ));
+                }
+            }
+        }
+    }
+
+    // Load Format (enum)
+    if let Ok(v) = env::var(LOG_FORMAT_ENV_VAR) {
+        if !v.is_empty() {
+            // Convert user-friendly format (e.g., "json") to proto format (e.g., "FORMAT_JSON")
+            let proto_value = format!("FORMAT_{}", v.to_uppercase());
+            match proto::Format::from_str_name(&proto_value) {
+                Some(format) => {
+                    config.format = format as i32;
+                    tracing::debug!("config.format={} (env var {})", v, LOG_FORMAT_ENV_VAR);
+                }
+                None => {
+                    errors.push(LoggerError::invalid_env_var(
+                        LOG_FORMAT_ENV_VAR.to_string(),
+                        v.clone(),
+                        format!("unknown log format: {}", v),
+                    ));
+                }
+            }
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(errors.into_iter().next().unwrap());
+    }
+
+    Ok(())
+}
+
+/// Convert a proto Level to a tracing::Level.
+///
+/// This is used internally to configure the tracing subscriber with the correct level.
+///
+/// # Mapping
+///
+/// * `LEVEL_TRACE` → `tracing::Level::TRACE`
+/// * `LEVEL_DEBUG` → `tracing::Level::DEBUG`
+/// * `LEVEL_INFO` → `tracing::Level::INFO`
+/// * `LEVEL_WARN` → `tracing::Level::WARN`
+/// * `LEVEL_ERROR` → `tracing::Level::ERROR`
+/// * `LEVEL_UNDEFINED` → `tracing::Level::INFO` (default)
+pub fn level_to_tracing_level(level: proto::Level) -> tracing::Level {
+    match level {
+        proto::Level::Trace => {
+            set_log_level_trace(true);
+            tracing::Level::TRACE
+        }
+        proto::Level::Debug => tracing::Level::DEBUG,
+        proto::Level::Info => tracing::Level::INFO,
+        proto::Level::Warn => tracing::Level::WARN,
+        proto::Level::Error => tracing::Level::ERROR,
+        proto::Level::Undefined => tracing::Level::INFO,
+    }
+}
+
+/// Convert a proto Format to an encoding string.
+///
+/// This is used internally to configure the tracing subscriber with the correct encoding.
+///
+/// # Mapping
+///
+/// * `FORMAT_JSON` → "json"
+/// * `FORMAT_CONSOLE` → "console"
+/// * `FORMAT_UNDEFINED` → "json" (default)
+pub fn format_to_encoding(format: proto::Format) -> &'static str {
+    match format {
+        proto::Format::Json => "json",
+        proto::Format::Console => "console",
+        proto::Format::Undefined => "json",
+    }
+}
+
+/// Install a global tracing subscriber based on the provided LoggerConfig proto message.
+///
+/// It configures the logger with all settings from the config and installs the global tracing subscriber.
+///
+/// # Configuration applied
+///
+/// * Format (JSON or console)
+/// * Level (trace, debug, info, warn, error)
+/// * Development mode settings
+/// * Pretty printing for JSON
+/// * Output paths (stdout, stderr, file paths)
+/// * Caller information inclusion
+/// * Initial fields added to every log entry
+///
+/// # Example
+///
+/// ```no_run
+/// use logger::install_from_config;
+/// use types::sys::logger::types::{LoggerConfig, Format, Level};
+///
+/// let config = LoggerConfig {
+///     format: Format::Json.into(),
+///     level: Level::Debug.into(),
+///     development: true,
+///     output_paths: vec!["stdout".to_string()],
+///     ..Default::default()
+/// };
+/// install_from_config(&config).expect("Failed to install logger");
+/// ```
+pub fn install_from_config(config: &proto::LoggerConfig) -> Result<()> {
+    // Return early if already installed
+    if is_installed() {
+        return Ok(());
+    }
+
+    mark_installed();
+
+    let level = level_to_tracing_level(config.level());
+    let encoding = if config.format() == proto::Format::Undefined && config.development {
+        "console"
+    } else {
+        format_to_encoding(config.format())
+    };
+    let output_targets = open_targets(&config.output_paths, &["stderr"])?;
+    let error_targets = open_targets(&config.error_output_paths, &[])?;
+    let initial_fields = config
+        .initial_fields
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect::<Vec<_>>();
+
+    // Create env filter
+    let env_filter = EnvFilter::from_default_env().add_directive(level.into());
+
+    // Configure based on format
+    match encoding {
+        "console" => {
+            let writer = LoggerMakeWriter::new(
+                output_targets,
+                error_targets,
+                initial_fields,
+                false,
+                config.pretty_print,
+            );
+
+            if config.pretty_print {
+                let fmt_layer = tracing_subscriber::fmt::layer()
+                    .pretty()
+                    .with_writer(writer)
+                    .with_target(true)
+                    .with_thread_ids(false)
+                    .with_thread_names(false)
+                    .with_file(!config.disable_caller)
+                    .with_line_number(!config.disable_caller)
+                    .with_span_events(FmtSpan::NONE);
+
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(fmt_layer)
+                    .try_init()
+                    .map_err(|e| LoggerError::initialization_error(e.to_string()))?;
+            } else {
+                let fmt_layer = tracing_subscriber::fmt::layer()
+                    .with_writer(writer)
+                    .with_target(true)
+                    .with_thread_ids(false)
+                    .with_thread_names(false)
+                    .with_file(!config.disable_caller)
+                    .with_line_number(!config.disable_caller)
+                    .with_span_events(FmtSpan::NONE);
+
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(fmt_layer)
+                    .try_init()
+                    .map_err(|e| LoggerError::initialization_error(e.to_string()))?;
+            }
+        }
+        "json" => {
+            let writer = LoggerMakeWriter::new(
+                output_targets,
+                error_targets,
+                initial_fields,
+                true,
+                config.pretty_print,
+            );
+            let fmt_layer = tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(writer)
+                .with_target(true)
+                .with_current_span(false)
+                .with_span_list(false)
+                .with_file(!config.disable_caller)
+                .with_line_number(!config.disable_caller);
+
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(fmt_layer)
+                .try_init()
+                .map_err(|e| LoggerError::initialization_error(e.to_string()))?;
+        }
+        _ => {
+            return Err(LoggerError::initialization_error(format!(
+                "Unknown encoding: {}",
+                encoding
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_level_to_tracing_level() {
+        // Reset trace flag
+        set_log_level_trace(false);
+
+        assert_eq!(
+            level_to_tracing_level(proto::Level::Trace),
+            tracing::Level::TRACE
+        );
+        assert!(crate::state::is_log_level_trace());
+
+        set_log_level_trace(false);
+        assert_eq!(
+            level_to_tracing_level(proto::Level::Debug),
+            tracing::Level::DEBUG
+        );
+        assert!(!crate::state::is_log_level_trace());
+
+        assert_eq!(
+            level_to_tracing_level(proto::Level::Info),
+            tracing::Level::INFO
+        );
+        assert_eq!(
+            level_to_tracing_level(proto::Level::Warn),
+            tracing::Level::WARN
+        );
+        assert_eq!(
+            level_to_tracing_level(proto::Level::Error),
+            tracing::Level::ERROR
+        );
+        assert_eq!(
+            level_to_tracing_level(proto::Level::Undefined),
+            tracing::Level::INFO
+        );
+    }
+
+    #[test]
+    fn test_format_to_encoding() {
+        assert_eq!(format_to_encoding(proto::Format::Json), "json");
+        assert_eq!(format_to_encoding(proto::Format::Console), "console");
+        assert_eq!(format_to_encoding(proto::Format::Undefined), "json");
+    }
+
+}

@@ -1,0 +1,28 @@
+{{.Header}}
+
+package {{.Package}};
+
+import java.util.function.Supplier;
+import {{.ServiceConnectionImport}}.serviceconnection.ServiceConnection.ChannelProvider;
+
+/**
+ * GrpcClients aggregates all typed gRPC client groups.
+ * Each group's clients route through per-target ChannelProviders.
+ */
+public class GrpcClients {
+
+{{- range .Groups}}
+    private final {{.GroupPackage}}.GrpcClients {{.Name}};
+{{- end}}
+
+    public GrpcClients({{range $i, $t := .UniqueTargets}}{{if $i}}, {{end}}ChannelProvider {{$t.ParamName}}{{end}}, java.util.function.Function<String, Supplier<String>> tokenProviderFor) {
+{{- range .Groups}}
+        this.{{.Name}} = new {{.GroupPackage}}.GrpcClients({{range $i, $t := .UniqueTargets}}{{if $i}}, {{end}}{{$t.ParamName}}{{end}}, tokenProviderFor);
+{{- end}}
+    }
+{{range .Groups}}
+    public {{.GroupPackage}}.GrpcClients {{.MethodName}}() {
+        return this.{{.Name}};
+    }
+{{end}}
+}

@@ -1,0 +1,52 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// Package diskstore configures tacplus typed disk persistence:
+//   UC1 — atomic typed snapshot (whole object), and
+//   UC2 — append-only redo log with periodic compaction.
+// See docs/API.md and docs/DEVELOPMENT.md. Generation is gated on the `service_store`
+// annotation; this message supplies behavior only — WHICH types are persisted
+// is decided by the annotation, not here.
+
+syntax = "proto3";
+package diskstore;
+
+import "sys/spec.proto";
+import "sys/filesystem.proto";
+
+// Compression selects at-rest compression for rolled/archived files and
+// snapshot baselines. The live redo-log append tail is always uncompressed so
+// line appends stay cheap.
+enum Compression {
+  COMPRESSION_NONE = 0;
+  COMPRESSION_GZ = 1;
+  COMPRESSION_BZ = 2;
+}
+
+// DiskPersistenceConfig configures the SM-managed persistence component that
+// automates the redo-log lifecycle (UC2) for service_store-annotated types.
+// It is embedded in the ServiceManager config.
+message DiskPersistenceConfig {
+  // roll_interval_seconds is the compaction/roll period. Also bounds the
+  // per-node deterministic roll offset (hash(node-id) % roll_interval).
+  int64 roll_interval_seconds = 1 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.default_int) = 86400
+  ];
+
+  // archive_count is how many rolled archive files to retain.
+  uint32 archive_count = 2 [(spec.default_int) = 3];
+
+  // dir is the base directory (on the service's own volume) for the
+  // active / building / temp / archive files.
+  string dir = 3 [
+    (spec.assert_required) = true,
+    (spec.assert_max_size) = 4096
+  ];
+
+  // file_permission is the Unix permission for the data files (e.g. 0600).
+  filesystem.Permission file_permission = 4;
+
+  // compression for rolled/archived files + snapshots; the live append tail
+  // stays uncompressed.
+  Compression compression = 5 [(spec.assert_enum_defined) = true];
+}

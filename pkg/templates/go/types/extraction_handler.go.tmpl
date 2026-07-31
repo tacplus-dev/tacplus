@@ -1,0 +1,59 @@
+{{- /* Store-agnostic event handler — dispatches a source event to all its projections */ -}}
+{{- /* Generated from (spec.graph_type).source and (spec.timeseries_type).source annotations */ -}}
+
+// GraphMutateFunc writes a graph mutation map to the graph store.
+// typeName is the graph type (e.g. "Session"), xidField is the external ID field
+// (empty for insert-only types). The fields map is produced by ToGraph().
+type GraphMutateFunc func(ctx context.Context, typeName, xidField string, fields map[string]interface{}) error
+
+// TimeseriesInsertFunc inserts a timeseries row into the timeseries store.
+// tableName is the target table, columns is the ordered column names, row is the ordered values.
+type TimeseriesInsertFunc func(ctx context.Context, tableName string, columns []string, row []interface{}) error
+
+// Handle{{.SourceType}} dispatches a {{.SourceType}} to all projection handlers.
+// It calls graphMutate for graph projections and tsInsert for timeseries projections.
+// Either callback may be nil — projections for nil callbacks are skipped.
+func Handle{{.SourceType}}(ctx context.Context, event *{{.SourceQualifier}}{{.SourceType}}, graphMutate GraphMutateFunc, tsInsert TimeseriesInsertFunc) error {
+	if event == nil {
+		return nil
+	}
+
+{{- if .HasNoop}}
+	// Trace round — skip persist, pipeline continues but data is not written
+	if event.Noop {
+		return nil
+	}
+{{- end}}
+
+{{- range .GraphProjections}}
+
+	// {{.TypeName}} — {{.Comment}}
+	if graphMutate != nil {
+		if node := Extract{{.TypeName}}From{{$.SourceType}}(event); node != nil {
+			m, err := {{.TypeName}}ToGraph(node)
+			if err != nil {
+				return fmt.Errorf("{{.TypeName}} to graph: %w", err)
+			}
+			if err := graphMutate(ctx, "{{.GraphName}}", "{{.XidField}}", m); err != nil {
+				return fmt.Errorf("mutate {{.TypeName}}: %w", err)
+			}
+		}
+	}
+{{- end}}
+
+{{- range .TimeseriesProjections}}
+
+	// {{.TypeName}} — timeseries projection (table: {{.TableName}}).
+	if tsInsert != nil {
+		if row := Extract{{.TypeName}}From{{$.SourceType}}(event); row != nil {
+			cols := {{.TypeName}}TimeseriesColumns()
+			vals := {{.TypeName}}ToTimeseriesRow(row)
+			if err := tsInsert(ctx, "{{.TableName}}", cols, vals); err != nil {
+				return fmt.Errorf("insert {{.TypeName}}: %w", err)
+			}
+		}
+	}
+{{- end}}
+
+	return nil
+}

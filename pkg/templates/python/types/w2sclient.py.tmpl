@@ -1,0 +1,406 @@
+{{.Header}}
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import inspect
+import json
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+
+import httpx
+import websockets
+from google.protobuf import json_format
+from google.protobuf import empty_pb2
+
+from {{.PbImportFrom}} import {{.PbModuleName}}_pb2 as pb
+from {{.PbImportFrom}}.helpers import *
+{{.CrossPackageImports}}
+
+TokenProvider = Callable[[], Union[str, Awaitable[str]]]
+
+
+class {{.ClientName}}:
+    """Typed W2S client for {{.ServiceName}}.
+
+    Unary RPCs use HTTP/JSON, server-streaming RPCs use SSE, and
+    client-streaming or bidirectional RPCs use WebSocket frames.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        session: Optional[httpx.AsyncClient] = None,
+        token_provider: Optional[TokenProvider] = None,
+        request_timeout: float = 30.0,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._owns_session = session is None
+        self._session = session or httpx.AsyncClient()
+        self._token_provider = token_provider
+        self._request_timeout = request_timeout
+
+    async def close(self) -> None:
+        if self._owns_session:
+            await self._session.aclose()
+
+    async def _auth_header(self, auth_required: bool) -> Optional[str]:
+        if not auth_required:
+            return None
+        if self._token_provider is None:
+            raise PermissionError("W2S route requires a token provider")
+        token = self._token_provider()
+        if inspect.isawaitable(token):
+            token = await asyncio.wait_for(token, timeout=self._request_timeout)
+        if not token:
+            raise PermissionError("W2S token provider returned an empty token")
+        return f"Bearer {token}"
+
+    def _http_url(self, path: str) -> str:
+        return f"{self._base_url}{path}"
+
+    def _websocket_url(self, path: str) -> str:
+        url = self._http_url(path)
+        if url.startswith("https://"):
+            return "wss://" + url[len("https://"):]
+        if url.startswith("http://"):
+            return "ws://" + url[len("http://"):]
+        if url.startswith("ws://") or url.startswith("wss://"):
+            return url
+        raise ValueError(
+            "W2S base_url must start with http://, https://, ws://, or wss://"
+        )
+
+    def _message_to_body(self, message) -> Dict[str, Any]:
+        return json_format.MessageToDict(message, preserving_proto_field_name=False)
+
+    @contextlib.asynccontextmanager
+    async def _connect_websocket(self, path: str):
+        ws = await asyncio.wait_for(
+            websockets.connect(self._websocket_url(path)),
+            timeout=self._request_timeout,
+        )
+        try:
+            yield ws
+        finally:
+            await ws.close()
+
+    def _payload(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            if "result" in value:
+                return value["result"]
+            if value.get("type") == "message" and "message" in value:
+                return value["message"]
+        return value
+
+    def _raise_json_error(self, value: Any) -> None:
+        if not isinstance(value, dict) or "error" not in value:
+            return
+        err = value["error"]
+        if isinstance(err, dict):
+            message = err.get("message") or err.get("error") or str(err)
+        else:
+            message = str(err)
+        raise RuntimeError(message)
+
+    def _parse_message(self, value: Any, response_class, validate_response=None):
+        self._raise_json_error(value)
+        payload = self._payload(value)
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise RuntimeError("W2S response payload must be a JSON object")
+        result = response_class()
+        json_format.ParseDict(payload, result)
+        if validate_response is not None:
+            validate_response(result)
+        return result
+
+    async def _send_json_request(
+        self,
+        method: str,
+        path: str,
+        body: Dict[str, Any],
+        auth_required: bool,
+    ) -> httpx.Response:
+        method = method.upper()
+        headers = {"Content-Type": "application/json"}
+        auth = await self._auth_header(auth_required)
+        if auth is not None:
+            headers["authorization"] = auth
+        url = self._http_url(path)
+        if method == "GET":
+            return await self._session.get(url, headers=headers, timeout=self._request_timeout)
+        return await self._session.request(
+            method,
+            url,
+            json=body,
+            headers=headers,
+            timeout=self._request_timeout,
+        )
+
+    async def _response_json(self, response: httpx.Response) -> Any:
+        text = response.text
+        value = json.loads(text) if text.strip() else {}
+        if response.status_code >= 400:
+            self._raise_json_error(value)
+            raise RuntimeError(f"W2S HTTP status {response.status_code}")
+        self._raise_json_error(value)
+        return value
+
+    async def _do_json_value(
+        self,
+        method: str,
+        path: str,
+        body: Dict[str, Any],
+        response_class,
+        auth_required: bool,
+        validate_response=None,
+    ):
+        response = await self._send_json_request(method, path, body, auth_required)
+        value = await self._response_json(response)
+        return self._parse_message(value, response_class, validate_response)
+
+    async def _do_json_unit(
+        self,
+        method: str,
+        path: str,
+        body: Dict[str, Any],
+        auth_required: bool,
+    ) -> None:
+        response = await self._send_json_request(method, path, body, auth_required)
+        value = await self._response_json(response)
+        self._raise_json_error(value)
+
+    async def _stream_sse(
+        self,
+        method: str,
+        path: str,
+        body: Dict[str, Any],
+        response_class,
+        auth_required: bool,
+        validate_response=None,
+    ):
+        method = method.upper()
+        headers = {"Accept": "text/event-stream"}
+        auth = await self._auth_header(auth_required)
+        if auth is not None:
+            headers["authorization"] = auth
+        kwargs = {"headers": headers, "timeout": self._request_timeout}
+        if method != "GET":
+            kwargs["json"] = body
+        async with self._session.stream(method, self._http_url(path), **kwargs) as response:
+            if response.status_code >= 400:
+                content = await response.aread()
+                value = json.loads(content.decode("utf-8")) if content.strip() else {}
+                self._raise_json_error(value)
+                raise RuntimeError(f"W2S SSE HTTP status {response.status_code}")
+
+            data_lines: List[str] = []
+            async for line in response.aiter_lines():
+                stripped = line.strip()
+                if stripped == "":
+                    if data_lines:
+                        yield self._parse_message(json.loads("\n".join(data_lines)), response_class, validate_response)
+                        data_lines = []
+                    continue
+                if stripped.startswith(":") or stripped.startswith("event:"):
+                    continue
+                if stripped.startswith("data:"):
+                    data_lines.append(stripped[len("data:"):].lstrip())
+                    continue
+                yield self._parse_message(json.loads(stripped), response_class, validate_response)
+            if data_lines:
+                yield self._parse_message(json.loads("\n".join(data_lines)), response_class, validate_response)
+
+    async def _send_ws_value(self, ws, value: Dict[str, Any]) -> None:
+        await asyncio.wait_for(
+            ws.send(json.dumps(value)),
+            timeout=self._request_timeout,
+        )
+
+    async def _send_start_frame(self, ws, auth_required: bool) -> None:
+        frame: Dict[str, Any] = {"type": "start"}
+        auth = await self._auth_header(auth_required)
+        if auth is not None:
+            frame["authorization"] = auth
+        await self._send_ws_value(ws, frame)
+
+    async def _send_message_frame(
+        self,
+        ws,
+        body: Dict[str, Any],
+        auth_required: bool,
+    ) -> None:
+        authorization = await self._auth_header(auth_required)
+        await self._send_message_frame_with_auth(ws, body, authorization)
+
+    async def _send_message_frame_with_auth(
+        self,
+        ws,
+        body: Dict[str, Any],
+        authorization: Optional[str],
+    ) -> None:
+        frame: Dict[str, Any] = {
+            "type": "message",
+            "message": body,
+        }
+        if authorization is not None:
+            frame["authorization"] = authorization
+        await self._send_ws_value(ws, frame)
+
+    async def _send_complete_frame(self, ws) -> None:
+        await self._send_ws_value(ws, {"type": "complete"})
+
+    async def _recv_ws_data(self, ws):
+        data = await asyncio.wait_for(ws.recv(), timeout=self._request_timeout)
+        if isinstance(data, bytes):
+            raise RuntimeError("binary W2S WebSocket responses are not supported")
+        return data
+
+    def _decode_ws_value(self, data: str) -> Any:
+        value = json.loads(data)
+        self._raise_json_error(value)
+        return value
+
+    async def _recv_ws_json(self, ws, response_class, validate_response=None):
+        while True:
+            value = self._decode_ws_value(await self._recv_ws_data(ws))
+            if isinstance(value, dict) and value.get("type") in {"ping", "pong", "keepalive"}:
+                continue
+            return self._parse_message(value, response_class, validate_response)
+
+    async def _recv_ws_unit(self, ws) -> None:
+        while True:
+            value = self._decode_ws_value(await self._recv_ws_data(ws))
+            if isinstance(value, dict) and value.get("type") in {"ping", "pong", "keepalive"}:
+                continue
+            self._raise_json_error(value)
+            return None
+
+    async def _iterate_requests(self, request_iterator):
+        if hasattr(request_iterator, "__aiter__"):
+            async for item in request_iterator:
+                yield item
+        else:
+            for item in request_iterator:
+                yield item
+
+{{.Methods}}
+
+
+class _W2SBidiHandle:
+    def __init__(self, client: {{.ClientName}}, auth_required: bool) -> None:
+        self._client = client
+        self._auth_required = auth_required
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=32)
+        self._task: Optional[asyncio.Task] = None
+        self._closed = False
+
+    def start(self, path: str, on_connect, on_message, response_class, validate_response=None) -> None:
+        self._task = asyncio.create_task(
+            self._run(path, on_connect, on_message, response_class, validate_response)
+        )
+
+    async def close(self) -> None:
+        self._closed = True
+        if self._task is not None:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+
+    async def finish(self) -> None:
+        await self._queue.put(None)
+        if self._task is not None:
+            await self._task
+
+    async def _send_body(self, body: Dict[str, Any]) -> None:
+        if self._closed:
+            raise RuntimeError("W2S bidirectional stream is closed")
+        authorization = await self._client._auth_header(self._auth_required)
+        loop = asyncio.get_running_loop()
+        ack = loop.create_future()
+        await asyncio.wait_for(
+            self._queue.put((body, authorization, ack)),
+            timeout=self._client._request_timeout,
+        )
+        await asyncio.wait_for(ack, timeout=self._client._request_timeout)
+
+    async def _call_callback(self, callback, *args) -> None:
+        result = callback(*args)
+        if inspect.isawaitable(result):
+            await result
+
+    async def _run(self, path: str, on_connect, on_message, response_class, validate_response) -> None:
+        while not self._closed:
+            try:
+                async with self._client._connect_websocket(path) as ws:
+                    await self._client._send_start_frame(ws, self._auth_required)
+                    connect_task = asyncio.create_task(self._call_callback(on_connect, self))
+
+                    try:
+                        while not self._closed:
+                            send_task = asyncio.create_task(self._queue.get())
+                            recv_task = asyncio.create_task(ws.recv())
+                            wait_tasks = {send_task, recv_task}
+                            if connect_task is not None:
+                                wait_tasks.add(connect_task)
+                            done, pending = await asyncio.wait(
+                                wait_tasks,
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            for task in pending:
+                                if task is not connect_task:
+                                    task.cancel()
+                            for task in pending:
+                                if task is not connect_task:
+                                    with contextlib.suppress(asyncio.CancelledError):
+                                        await task
+
+                            if connect_task is not None and connect_task in done:
+                                connect_task.result()
+                                connect_task = None
+
+                            if send_task in done:
+                                item = send_task.result()
+                                if item is None:
+                                    await self._client._send_complete_frame(ws)
+                                    return
+                                body, authorization, ack = item
+                                try:
+                                    await self._client._send_message_frame_with_auth(
+                                        ws, body, authorization
+                                    )
+                                    ack.set_result(None)
+                                except Exception as exc:
+                                    ack.set_exception(exc)
+                                    break
+
+                            if recv_task in done:
+                                data = recv_task.result()
+                                if isinstance(data, bytes):
+                                    raise RuntimeError(
+                                        "binary W2S WebSocket responses are not supported"
+                                    )
+                                value = self._client._decode_ws_value(data)
+                                if isinstance(value, dict) and value.get("type") in {
+                                    "ping",
+                                    "pong",
+                                    "keepalive",
+                                }:
+                                    continue
+                                msg = self._client._parse_message(value, response_class, validate_response)
+                                await self._call_callback(on_message, msg)
+                    finally:
+                        if connect_task is not None and not connect_task.done():
+                            connect_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await connect_task
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if self._closed:
+                    return
+                await asyncio.sleep(5)
+
+{{.ExtraTypes}}

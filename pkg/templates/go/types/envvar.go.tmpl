@@ -1,0 +1,21 @@
+{{- /* Go environment variable template - generates ToEnvVar/FromEnvVar helpers for messages */ -}}
+{{- range .Messages}}
+// {{.TypeName}}ToEnvVar converts {{.TypeName}} to environment variable key-value pairs.
+func {{.TypeName}}ToEnvVar(v *{{.TypeName}}) map[string]string {
+if v == nil { return nil }
+result := make(map[string]string)
+{{- range .ToEnvVarFields}}
+{{.Assignment}}
+{{- end}}
+return result
+}
+
+// {{.TypeName}}FromEnvVar creates {{.TypeName}} from environment variable key-value pairs.
+func {{.TypeName}}FromEnvVar(env map[string]string) (*{{.TypeName}}, error) {
+result := &{{.TypeName}}{}
+{{- range .FromEnvVarFields}}
+{{.Assignment}}
+{{- end}}
+return result, nil
+}
+{{end}}

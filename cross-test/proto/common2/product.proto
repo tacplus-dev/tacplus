@@ -1,0 +1,447 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// Product catalog types with diverse protobuf types
+
+syntax = "proto3";
+
+package product;
+
+import "sys/spec.proto";
+
+option (spec.string_const) = {name: "DEFAULT_CURRENCY" value: "USD"};
+option (spec.string_const) = {name: "WAREHOUSE_LOCATION" value: "/var/lib/warehouse"};
+option (spec.int_const) = {name: "MAX_INVENTORY" value: 100000};
+option (spec.int_const) = {name: "MIN_REORDER_QUANTITY" value: 10};
+option (spec.float_const) = {name: "TAX_RATE" value: 0.08};
+option (spec.float_const) = {name: "DISCOUNT_THRESHOLD" value: 100.0};
+option (spec.bool_const) = {name: "ENABLE_BACKORDERS" value: false};
+
+// Product category
+enum ProductCategory {
+  PRODUCT_CATEGORY_UNDEFINED = 0;
+  PRODUCT_CATEGORY_ELECTRONICS = 1 [(spec.json_return_value) = "electronics"];
+  PRODUCT_CATEGORY_CLOTHING = 2 [(spec.json_return_value) = "clothing"];
+  PRODUCT_CATEGORY_FOOD = 3 [(spec.json_return_value) = "food"];
+  PRODUCT_CATEGORY_BOOKS = 4 [(spec.json_return_value) = "books"];
+  PRODUCT_CATEGORY_FURNITURE = 5 [(spec.json_return_value) = "furniture"];
+  PRODUCT_CATEGORY_TOYS = 6 [(spec.json_return_value) = "toys"];
+  PRODUCT_CATEGORY_SPORTS = 7 [(spec.json_return_value) = "sports"];
+}
+
+// Product availability status
+enum AvailabilityStatus {
+  AVAILABILITY_STATUS_UNDEFINED = 0;
+  AVAILABILITY_STATUS_IN_STOCK = 1 [(spec.json_return_value) = "in_stock"];
+  AVAILABILITY_STATUS_LOW_STOCK = 2 [(spec.json_return_value) = "low_stock"];
+  AVAILABILITY_STATUS_OUT_OF_STOCK = 3 [(spec.json_return_value) = "out_of_stock"];
+  AVAILABILITY_STATUS_DISCONTINUED = 4 [(spec.json_return_value) = "discontinued"];
+  AVAILABILITY_STATUS_PRE_ORDER = 5 [(spec.json_return_value) = "pre_order"];
+}
+
+// Shipping method
+enum ShippingMethod {
+  SHIPPING_METHOD_UNDEFINED = 0;
+  SHIPPING_METHOD_STANDARD = 1 [(spec.json_return_value) = "standard"];
+  SHIPPING_METHOD_EXPRESS = 2 [(spec.json_return_value) = "express"];
+  SHIPPING_METHOD_OVERNIGHT = 3 [(spec.json_return_value) = "overnight"];
+  SHIPPING_METHOD_INTERNATIONAL = 4 [(spec.json_return_value) = "international"];
+}
+
+// Product condition
+enum ProductCondition {
+  PRODUCT_CONDITION_UNDEFINED = 0;
+  PRODUCT_CONDITION_NEW = 1 [(spec.json_return_value) = "new"];
+  PRODUCT_CONDITION_REFURBISHED = 2 [(spec.json_return_value) = "refurbished"];
+  PRODUCT_CONDITION_USED = 3 [(spec.json_return_value) = "used"];
+}
+
+// Product listing
+message Product {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 29 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Product SKU
+  string sku = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 5,
+    (spec.assert_max_size) = 50
+  ];
+
+  // Product name
+  string name = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 3,
+    (spec.assert_max_size) = 200
+  ];
+
+  // Product description
+  string description = 3 [(spec.assert_max_size) = 5000];
+
+  // Category
+  ProductCategory category = 4 [
+    (spec.assert_required) = true,
+    (spec.assert_enum_defined) = true
+  ];
+
+  // Price in cents
+  int64 price_cents = 5 [(spec.assert_numeric) = {
+    gt: 0,
+    le: 10000000  // $100,000 max
+  }];
+
+  // Weight in grams
+  uint32 weight_grams = 6 [(spec.assert_numeric) = {
+    gt: 0,
+    le: 50000  // 50kg max
+  }];
+
+  // Dimensions in millimeters
+  Dimensions dimensions = 7;
+
+  // Stock quantity
+  int32 stock_quantity = 8 [(spec.assert_numeric) = {
+    ge: 0,
+    le: 100000
+  }];
+
+  // Reorder level
+  int32 reorder_level = 9 [(spec.assert_numeric) = {
+    ge: 0,
+    le: 1000
+  }];
+
+  // Availability status
+  AvailabilityStatus availability = 10 [(spec.assert_enum_defined) = true];
+
+  // Product condition
+  ProductCondition condition = 11 [(spec.assert_enum_defined) = true];
+
+  // Manufacturer
+  string manufacturer = 12 [(spec.assert_max_size) = 100];
+
+  // UPC/Barcode
+  string barcode = 13 [
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 20
+  ];
+
+  // Product images (URLs)
+  repeated string image_urls = 14 [(spec.assert_url) = URL_SCHEME_HTTPS, (spec.assert_max_size) = 100];
+
+  // Tags for search
+  repeated string tags = 15 [(spec.assert_max_size) = 100];
+
+  // Product variants (sizes, colors, etc.)
+  map<string, string> variants = 16 [(spec.assert_max_size) = 100];
+
+  // Pricing tiers by quantity
+  map<string, PriceTier> pricing_tiers = 17 [(spec.assert_max_size) = 100];
+
+  // Discount percentage (0-100)
+  float discount_percent = 18 [(spec.assert_float) = {
+    ge: 0.0,
+    le: 100.0
+  }];
+
+  // Product rating (1-5 stars)
+  float rating = 19 [(spec.assert_float) = {
+    ge: 0.0,
+    le: 5.0,
+    epsilon: 0.01
+  }];
+
+  // Number of reviews
+  uint32 review_count = 20;
+
+  // Is featured product
+  bool is_featured = 21;
+
+  // Is on sale
+  bool is_on_sale = 22;
+
+  // Created timestamp
+  int64 created_at = 23 [
+    (spec.assert_required) = true,
+    (spec.assert_ge) = 1704067200
+  ];
+
+  // Last updated timestamp
+  int64 updated_at = 24 [(spec.assert_ge) = 1704067200];
+
+  // Supplier information
+  Supplier supplier = 25;
+
+  // Product metadata
+  map<string, string> metadata = 26 [(spec.assert_max_size) = 100];
+
+  // Warranty duration in days
+  int32 warranty_days = 27 [(spec.assert_numeric) = {
+    ge: 0,
+    le: 3650  // 10 years max
+  }];
+
+  // Shipping methods available
+  repeated ShippingMethod shipping_methods = 28 [(spec.assert_max_size) = 100];
+}
+
+// Product dimensions
+message Dimensions {
+  // Length in millimeters
+  uint32 length_mm = 1 [(spec.assert_numeric) = {
+    gt: 0,
+    le: 5000
+  }];
+
+  // Width in millimeters
+  uint32 width_mm = 2 [(spec.assert_numeric) = {
+    gt: 0,
+    le: 5000
+  }];
+
+  // Height in millimeters
+  uint32 height_mm = 3 [(spec.assert_numeric) = {
+    gt: 0,
+    le: 5000
+  }];
+}
+
+// Price tier for bulk purchases
+message PriceTier {
+  // Minimum quantity for this tier
+  int32 min_quantity = 1 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 10000
+  }];
+
+  // Price per unit in cents
+  int64 unit_price_cents = 2 [(spec.assert_numeric) = {
+    gt: 0
+  }];
+
+  // Discount percentage
+  float discount_percent = 3 [(spec.assert_float) = {
+    ge: 0.0,
+    le: 100.0
+  }];
+}
+
+// Supplier information
+message Supplier {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 9 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Supplier ID
+  string supplier_id = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 3
+  ];
+
+  // Supplier name
+  string name = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_max_size) = 200
+  ];
+
+  // Contact email
+  string email = 3 [
+    (spec.assert_required) = true,
+    (spec.assert_email) = true
+  ];
+
+  // Contact phone
+  string phone = 4 [
+    (spec.assert_min_size) = 10,
+    (spec.assert_max_size) = 20
+  ];
+
+  // Supplier website
+  string website = 5 [(spec.assert_url) = URL_SCHEME_HTTP_OR_HTTPS];
+
+  // Lead time in days
+  int32 lead_time_days = 6 [(spec.assert_numeric) = {
+    ge: 0,
+    le: 365
+  }];
+
+  // Minimum order quantity
+  int32 min_order_qty = 7 [(spec.assert_numeric) = {
+    ge: 1
+  }];
+
+  // Is verified supplier
+  bool is_verified = 8;
+}
+
+// Inventory location
+message InventoryLocation {
+  // Warehouse code
+  string warehouse_code = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 2,
+    (spec.assert_max_size) = 10
+  ];
+
+  // Aisle
+  string aisle = 2 [(spec.assert_max_size) = 10];
+
+  // Shelf
+  string shelf = 3 [(spec.assert_max_size) = 10];
+
+  // Bin
+  string bin = 4 [(spec.assert_max_size) = 10];
+
+  // Quantity at this location
+  int32 quantity = 5 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Last counted timestamp
+  int64 last_counted = 6;
+}
+
+// Order item
+message OrderItem {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 8 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Product SKU
+  string sku = 1 [(spec.assert_required) = true];
+
+  // Quantity ordered
+  int32 quantity = 2 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 1000
+  }];
+
+  // Unit price in cents at time of order
+  int64 unit_price_cents = 3 [(spec.assert_numeric) = {
+    gt: 0
+  }];
+
+  // Discount applied
+  float discount_percent = 4 [(spec.assert_float) = {
+    ge: 0.0,
+    le: 100.0
+  }];
+
+  // Tax rate applied
+  float tax_rate = 5 [(spec.assert_float) = {
+    ge: 0.0,
+    le: 1.0
+  }];
+
+  // Subtotal in cents (quantity * unit_price)
+  int64 subtotal_cents = 6 [(spec.assert_numeric) = {
+    gt: 0
+  }];
+
+  // Total in cents (after discount and tax)
+  int64 total_cents = 7 [(spec.assert_numeric) = {
+    gt: 0
+  }];
+}
+
+// Product review
+message ProductReview {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 11 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Review ID
+  string review_id = 1 [(spec.assert_required) = true];
+
+  // Product SKU
+  string product_sku = 2 [(spec.assert_required) = true];
+
+  // User ID who wrote review
+  string user_id = 3 [(spec.assert_required) = true];
+
+  // Rating (1-5)
+  int32 rating = 4 [(spec.assert_numeric) = {
+    ge: 1,
+    le: 5
+  }];
+
+  // Review title
+  string title = 5 [
+    (spec.assert_max_size) = 200
+  ];
+
+  // Review content
+  string content = 6 [
+    (spec.assert_min_size) = 10,
+    (spec.assert_max_size) = 5000
+  ];
+
+  // Verified purchase
+  bool verified_purchase = 7;
+
+  // Helpful count
+  uint32 helpful_count = 8;
+
+  // Created timestamp
+  int64 created_at = 9 [(spec.assert_required) = true];
+
+  // Images attached to review
+  repeated string image_urls = 10 [(spec.assert_url) = URL_SCHEME_HTTPS, (spec.assert_max_size) = 100];
+}
+
+// Product search filters
+message ProductSearchFilter {
+  // Tenant ID (16 bytes as 32-char hex, min 8 chars for org-only)
+  string tenant_id = 11 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 8,
+    (spec.assert_max_size) = 32
+  ];
+
+  // Category filter
+  repeated ProductCategory categories = 1 [(spec.assert_max_size) = 100];
+
+  // Price range in cents
+  int64 min_price_cents = 2 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  int64 max_price_cents = 3 [(spec.assert_numeric) = {
+    ge: 0
+  }];
+
+  // Minimum rating
+  float min_rating = 4 [(spec.assert_float) = {
+    ge: 0.0,
+    le: 5.0
+  }];
+
+  // Availability filter
+  repeated AvailabilityStatus availability = 5 [(spec.assert_max_size) = 100];
+
+  // Condition filter
+  repeated ProductCondition conditions = 6 [(spec.assert_max_size) = 100];
+
+  // Tags to match
+  repeated string tags = 7 [(spec.assert_max_size) = 100];
+
+  // Only featured products
+  bool featured_only = 8;
+
+  // Only on sale
+  bool on_sale_only = 9;
+
+  // Manufacturer filter
+  repeated string manufacturers = 10 [(spec.assert_max_size) = 100];
+}

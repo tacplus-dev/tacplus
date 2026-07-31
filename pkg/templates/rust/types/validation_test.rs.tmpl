@@ -1,0 +1,17 @@
+{{- /* Rust validation test template */ -}}
+{{- if not .HasValidations}}
+#[test]
+fn test_{{.SnakeName}}_validation_no_constraints() {
+let msg = {{.TypeName}}::default();
+let result = msg.validate();
+assert!(result.is_ok(), "Validation should pass with no constraints: {:?}", result.err());
+}
+{{- else}}
+#[test]
+fn test_{{.SnakeName}}_validation_default() {
+let msg = {{.TypeName}}::default();
+// Default message may or may not validate depending on required fields
+let _result = msg.validate();
+// This test just ensures validate() can be called
+}
+{{- end}}

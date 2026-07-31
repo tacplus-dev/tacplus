@@ -1,0 +1,195 @@
+{{- /* Graph typed persistence helpers — generated from (spec.graph) annotations */ -}}
+{{- /* Each message with graph-annotated fields gets ToGraph / FromGraph functions */ -}}
+
+// {{.TypeName}}ToGraph converts a proto message to a graph mutation map.
+// Predicate fields are stored as typed predicates (namespaced as {{.TypeName}}.field_name).
+// Include fields are JSON-encoded as string predicates.
+// Returns nil if msg is nil.
+func {{.TypeName}}ToGraph(msg *{{.TypeName}}) (map[string]interface{}, error) {
+	if msg == nil {
+		return nil, nil
+	}
+	m := make(map[string]interface{})
+{{range .Fields}}
+{{- if eq .Mode "PREDICATE"}}
+{{- if .IsUidEdge}}
+	// {{.FieldName}}: uid edge to {{.MessageType}}
+	if msg.{{.GoFieldName}} != nil {
+		nested, err := {{.MessageType}}ToGraph(msg.{{.GoFieldName}})
+		if err != nil {
+			return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+		}
+		if nested != nil {
+			m["{{$.TypeName}}.{{.FieldName}}"] = nested
+		}
+	}
+{{- else if eq .ProtoType "Timestamp"}}
+	// {{.FieldName}}: datetime predicate
+	if msg.{{.GoFieldName}} != nil {
+		m["{{$.TypeName}}.{{.FieldName}}"] = msg.{{.GoFieldName}}.AsTime().Format(time.RFC3339)
+	}
+{{- else if .IsEnum}}
+	// {{.FieldName}}: enum stored as string name
+	if msg.{{.GoFieldName}} != 0 {
+		m["{{$.TypeName}}.{{.FieldName}}"] = msg.{{.GoFieldName}}.String()
+	}
+{{- else}}
+	// {{.FieldName}}: scalar predicate
+	{{- if .IsOptional}}
+	if msg.{{.GoFieldName}} != nil {
+		m["{{$.TypeName}}.{{.FieldName}}"] = {{.Deref}}msg.{{.GoFieldName}}
+	}
+	{{- else}}
+	m["{{$.TypeName}}.{{.FieldName}}"] = msg.{{.GoFieldName}}
+	{{- end}}
+{{- end}}
+{{- else if eq .Mode "INCLUDE"}}
+	// {{.FieldName}}: included as JSON blob
+	{{- if .IsMessage}}
+	if msg.{{.GoFieldName}} != nil {
+		jsonBytes, err := protojson.Marshal(msg.{{.GoFieldName}})
+		if err != nil {
+			return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+		}
+		m["{{$.TypeName}}.{{.FieldName}}"] = string(jsonBytes)
+	}
+	{{- else if .IsMap}}
+	if len(msg.{{.GoFieldName}}) > 0 {
+		jsonBytes, err := json.Marshal(msg.{{.GoFieldName}})
+		if err != nil {
+			return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+		}
+		m["{{$.TypeName}}.{{.FieldName}}"] = string(jsonBytes)
+	}
+	{{- else if .IsRepeated}}
+	if len(msg.{{.GoFieldName}}) > 0 {
+		{{- if .IsRepeatedMessage}}
+		var items []json.RawMessage
+		for _, item := range msg.{{.GoFieldName}} {
+			jsonBytes, err := protojson.Marshal(item)
+			if err != nil {
+				return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+			}
+			items = append(items, jsonBytes)
+		}
+		listBytes, err := json.Marshal(items)
+		if err != nil {
+			return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+		}
+		m["{{$.TypeName}}.{{.FieldName}}"] = string(listBytes)
+		{{- else}}
+		jsonBytes, err := json.Marshal(msg.{{.GoFieldName}})
+		if err != nil {
+			return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+		}
+		m["{{$.TypeName}}.{{.FieldName}}"] = string(jsonBytes)
+		{{- end}}
+	}
+	{{- else}}
+	{
+		jsonBytes, err := json.Marshal(msg.{{.GoFieldName}})
+		if err != nil {
+			return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+		}
+		m["{{$.TypeName}}.{{.FieldName}}"] = string(jsonBytes)
+	}
+	{{- end}}
+{{- end}}
+{{end}}
+	return m, nil
+}
+
+// {{.TypeName}}FromGraph converts a graph query result map back to a proto message.
+// Predicate fields are read from typed predicates (namespaced as {{.TypeName}}.field_name).
+// Include fields are JSON-decoded from string predicates.
+func {{.TypeName}}FromGraph(m map[string]interface{}) (*{{.TypeName}}, error) {
+	if m == nil {
+		return nil, nil
+	}
+	msg := &{{.TypeName}}{}
+{{range .Fields}}
+{{- if eq .Mode "PREDICATE"}}
+{{- if .IsUidEdge}}
+	// {{.FieldName}}: uid edge to {{.MessageType}}
+	if v, ok := m["{{$.TypeName}}.{{.FieldName}}"]; ok {
+		if nested, ok := v.(map[string]interface{}); ok {
+			sub, err := {{.MessageType}}FromGraph(nested)
+			if err != nil {
+				return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+			}
+			msg.{{.GoFieldName}} = sub
+		}
+	}
+{{- else if eq .ProtoType "Timestamp"}}
+	// {{.FieldName}}: datetime predicate
+	if v, ok := m["{{$.TypeName}}.{{.FieldName}}"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			t, err := time.Parse(time.RFC3339, s)
+			if err != nil {
+				return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+			}
+			msg.{{.GoFieldName}} = timestamppb.New(t)
+		}
+	}
+{{- else if .IsEnum}}
+	// {{.FieldName}}: enum from string name
+	if v, ok := m["{{$.TypeName}}.{{.FieldName}}"]; ok {
+		if s, ok := v.(string); ok {
+			if enumVal, ok := {{.EnumType}}_value[s]; ok {
+				msg.{{.GoFieldName}} = {{.EnumType}}(enumVal)
+			}
+		}
+	}
+{{- else}}
+	// {{.FieldName}}: scalar predicate
+	if v, ok := m["{{$.TypeName}}.{{.FieldName}}"]; ok {
+		{{.FromGraphAssign}}
+	}
+{{- end}}
+{{- else if eq .Mode "INCLUDE"}}
+	// {{.FieldName}}: included JSON blob
+	if v, ok := m["{{$.TypeName}}.{{.FieldName}}"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			{{- if .IsMessage}}
+			target := &{{.GoType}}{}
+			if err := protojson.Unmarshal([]byte(s), target); err != nil {
+				return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+			}
+			msg.{{.GoFieldName}} = target
+			{{- else if .IsMap}}
+			var target {{.GoMapType}}
+			if err := json.Unmarshal([]byte(s), &target); err != nil {
+				return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+			}
+			msg.{{.GoFieldName}} = target
+			{{- else if .IsRepeated}}
+			{{- if .IsRepeatedMessage}}
+			var rawItems []json.RawMessage
+			if err := json.Unmarshal([]byte(s), &rawItems); err != nil {
+				return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+			}
+			for _, raw := range rawItems {
+				item := &{{.GoRepeatedElemType}}{}
+				if err := protojson.Unmarshal(raw, item); err != nil {
+					return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+				}
+				msg.{{.GoFieldName}} = append(msg.{{.GoFieldName}}, item)
+			}
+			{{- else}}
+			var target {{.GoType}}
+			if err := json.Unmarshal([]byte(s), &target); err != nil {
+				return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+			}
+			msg.{{.GoFieldName}} = target
+			{{- end}}
+			{{- else}}
+			if err := json.Unmarshal([]byte(s), &msg.{{.GoFieldName}}); err != nil {
+				return nil, fmt.Errorf("field {{.FieldName}}: %w", err)
+			}
+			{{- end}}
+		}
+	}
+{{- end}}
+{{end}}
+	return msg, nil
+}

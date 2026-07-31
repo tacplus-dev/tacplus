@@ -1,0 +1,115 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package diskstore
+
+import (
+	"bytes"
+	"compress/gzip"
+	"io"
+
+	"github.com/dsnet/compress/bzip2"
+)
+
+// Codec is the at-rest compression algorithm. It maps from the proto
+// Compression enum's int32 value.
+//
+// NONE, GZ, and BZ are supported on both write and read. The read path
+// auto-detects by magic bytes so a file's compression can change between
+// writes without storing the codec separately.
+type Codec int
+
+const (
+	// CodecNone leaves data uncompressed.
+	CodecNone Codec = iota
+	// CodecGz selects gzip compression.
+	CodecGz
+	// CodecBz selects bzip2 compression.
+	CodecBz
+)
+
+// CodecFromProtoI32 maps the proto Compression enum (int32): 1 = GZ, 2 = BZ,
+// else NONE.
+func CodecFromProtoI32(v int32) Codec {
+	switch v {
+	case 1:
+		return CodecGz
+	case 2:
+		return CodecBz
+	default:
+		return CodecNone
+	}
+}
+
+var (
+	gzMagic = []byte{0x1f, 0x8b}
+	bzMagic = []byte{'B', 'Z', 'h'}
+)
+
+// Compress compresses data with codec. CodecNone returns the bytes unchanged.
+func Compress(data []byte, codec Codec) ([]byte, error) {
+	switch codec {
+	case CodecNone:
+		out := make([]byte, len(data))
+		copy(out, data)
+		return out, nil
+	case CodecGz:
+		var buf bytes.Buffer
+		enc := gzip.NewWriter(&buf)
+		if _, err := enc.Write(data); err != nil {
+			return nil, wrapIOError(err)
+		}
+		if err := enc.Close(); err != nil {
+			return nil, wrapIOError(err)
+		}
+		return buf.Bytes(), nil
+	case CodecBz:
+		var buf bytes.Buffer
+		enc, err := bzip2.NewWriter(&buf, nil)
+		if err != nil {
+			return nil, wrapIOError(err)
+		}
+		if _, err := enc.Write(data); err != nil {
+			return nil, wrapIOError(err)
+		}
+		if err := enc.Close(); err != nil {
+			return nil, wrapIOError(err)
+		}
+		return buf.Bytes(), nil
+	default:
+		return nil, ErrInvalidData("unknown compression codec")
+	}
+}
+
+// DecompressAuto decompresses data, auto-detecting the codec by magic bytes.
+// Bytes with no recognized magic are returned unchanged (treated as
+// uncompressed).
+func DecompressAuto(data []byte) ([]byte, error) {
+	switch {
+	case bytes.HasPrefix(data, gzMagic):
+		dec, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, wrapIOError(err)
+		}
+		defer dec.Close()
+		out, err := io.ReadAll(dec)
+		if err != nil {
+			return nil, wrapIOError(err)
+		}
+		return out, nil
+	case bytes.HasPrefix(data, bzMagic):
+		dec, err := bzip2.NewReader(bytes.NewReader(data), nil)
+		if err != nil {
+			return nil, wrapIOError(err)
+		}
+		defer dec.Close()
+		out, err := io.ReadAll(dec)
+		if err != nil {
+			return nil, wrapIOError(err)
+		}
+		return out, nil
+	default:
+		out := make([]byte, len(data))
+		copy(out, data)
+		return out, nil
+	}
+}

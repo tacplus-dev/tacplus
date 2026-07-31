@@ -1,0 +1,770 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package types
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"text/template"
+
+	"go.uber.org/zap"
+
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/buildinfo"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/boundaries"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/eventbus"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/keepaliveconst"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/service"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
+	stateproto "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
+)
+
+// grpcServiceEntry holds per-service data for handler and service_manager templates.
+type grpcServiceEntry struct {
+	// Handler trait methods
+	GetterName       string // "identity_grpc_impl"
+	HandleConfigName string // "identity_config"
+	// Proto package name (snake_case)
+	PackageName string // "identity"
+	// gRPC server type
+	ServerType string // "IdentityServiceServer"
+	// tonic server module name (snake_case service name + "_server")
+	ServerModName string // "identity_service_server"
+	// Rust module path for proto types
+	ModPath string // "crate::types::services::identity::identity"
+	// Rust base path for types (without trailing package repeat)
+	TypesBasePath string // "crate::types::services::identity"
+	TraitName     string // "IdentityService" (tonic server trait)
+	// Handler trait name (clean interface with Caller)
+	HandlerTraitName string // "IdentityServiceHandler"
+	// Config module path
+	ConfigModPath string // "crate::types::services::identity::identity"
+	// Service wrapper module (absolute crate path)
+	WrapperModPath string // "crate::s2sm::internal::grpc::servers::services::identity::service"
+	ConstructorFn  string // "new_identity_service"
+	WrapperVar     string // "wrapper_identity"
+	// State config state accessor
+	ConfigStateGroupAccessor string // "services"
+	ConfigStateAccessor      string // "identity_config_state"
+	// HasConfigState is true when the service's package has a ConfigState
+	// generated (from grpc_config annotation). False for services like
+	// services without a generated config state that don't have their own config state.
+	HasConfigState bool
+	// IsS2S is true when this is a service-to-service gRPC service.
+	IsS2S bool
+	// IsC2S is true when this is a client-to-service gRPC service.
+	IsC2S bool
+	// IsC2D is true when this is a client-to-daemon gRPC service (unix socket, no auth).
+	IsC2D bool
+	// C2DSocketPath is the unix socket declared by service_c2d (required, no default).
+	C2DSocketPath string
+	// AuthServices lists the allowed S2S callers (service-level default).
+	AuthServices []string
+	// AuthDisabled skips set_authorize_func on this service's server wrapper.
+	AuthDisabled bool
+	// AuthAnyUser wires fixed-namespace authenticate-at-or-below instead of full authorize.
+	AuthAnyUser bool
+	// HasMethodAuth is true when the wrapper has a register_method_auth function.
+	HasMethodAuth bool
+	// IsHosted is true when this entry came from a vservice declaring HostTag ==
+	// SelfPackage rather than from the host service's own proto package.
+	// Hosted entries get a default Handler trait impl that returns a stub,
+	// so services can compile without immediately implementing every method.
+	IsHosted bool
+}
+
+type rustDiskStoreRuntimeEntry struct {
+	StoreName     string
+	LogField      string
+	HandlerGetter string
+}
+
+// smTemplateData holds the data passed to handler.rs.tmpl and service_manager.rs.tmpl.
+type smTemplateData struct {
+	CrateBasePath           string
+	CrateBasePathUnderscore string
+	SmPrefix                string
+	ServiceLabel            string
+	HasGrpc                 bool
+	HasTlsGrpc              bool // true when non-c2d gRPC services exist (need TLS server)
+	HasAuthGrpc             bool
+	HasS2SGrpc              bool
+	HasC2SGrpc              bool
+	HasC2DGrpc              bool
+	C2DSocketPath           string // service_c2d socket_path the daemon binds (required, no default)
+	HasStates               bool
+	HasSysState            bool
+	HasS2SClients           bool
+	HasServiceHealthState   bool
+	HasAutoTls              bool
+	AutoTlsKeyType          string
+	HasSmb                  bool // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
+	SmbAuthorityServiceID   string
+	IsGateway               bool
+	HasSubscriptions        bool
+	HealthStateProtoDir     string
+	HealthStateModPath      string // Rust module path, e.g. "services::identity"
+	StateStoreServiceID     string
+	HasTypedHealth          bool   // true when the service's package declares a service_health message
+	TypedHealthType         string // e.g. "ColumnarStoreHealth"
+	TypedHealthModPath      string // Rust module path, e.g. "crate::types::services::columnarstore::columnarstore"
+	TacplusVersion          string
+	TacplusGitSha           string
+	ProtoSourceVersion      string
+	ProtoSourceGitSha       string
+	GrpcServices            []grpcServiceEntry
+	Subscriptions           []subscriptionEntry
+	Publishers              []publisherEntry // model-driven EventBus topic publishers (own (spec.service_event) topics)
+	HasPublishers           bool
+	TracePublisherFn        string
+	TargetServices          []TargetServiceInfo // per-target-service connection info for typed accessors
+	DiskStores              []rustDiskStoreRuntimeEntry
+	HasDiskStores           bool
+	KeepaliveTimeSecs          int
+	KeepaliveTimeoutSecs       int
+	KeepalivePermitMinTimeSecs int
+}
+
+// subscriptionEntry holds per-subscription data for the service_manager template.
+type subscriptionEntry struct {
+	FieldSnake        string // e.g. "event_stream"
+	HandlerMethodName string // e.g. "on_event_stream" or "on_event_stream_aegis" (disambiguated)
+	SubscriberMod     string // e.g. "aegis_event_stream" — module name under subscribe/
+	SourcePackage     string // e.g. "aegis"
+	SourceProtoDir    string // e.g. "common", "services"
+	TypeProtoDir      string // e.g. "common" — proto directory where the type is defined
+	TypePackage       string // e.g. "sensor" — package where the type is defined
+	TypeName          string // e.g. "TopologyEvent"
+	TargetService     string // e.g. "eventbus" — service_id to resolve via ServiceHealthState
+}
+
+// buildSMTemplateData constructs the template data for handler.rs and service_manager.rs.
+// clientServices are the resolved S2S client ServiceInfo entries (from grpcclient_gen).
+func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, clientServices []ServiceInfo) (smTemplateData, error) {
+	configStates, err := stateproto.ConfigStateAccessors(config, config.FlatProtoDir)
+	if err != nil {
+		return smTemplateData{}, err
+	}
+
+	// First pass: detect duplicate service name prefixes (e.g., "Proxy" in
+	// anthropic/github/gitlab/openai). Duplicates need package-qualified names.
+	prefixCount := make(map[string]int)
+	for _, svc := range svcs {
+		snakeName := tonicServiceModuleName(svc.ServiceName)
+		prefix := strings.TrimSuffix(snakeName, "_service")
+		prefixCount[prefix]++
+	}
+
+	var grpcSvcs []grpcServiceEntry
+	for _, svc := range svcs {
+		snakeName := tonicServiceModuleName(svc.ServiceName)
+		snakePrefix := strings.TrimSuffix(snakeName, "_service")
+		tonicName := tonicServiceTypeName(svc.ServiceName)
+		tonicServerModName := tonicServiceModuleName(svc.ServiceName) + "_server"
+
+		// Disambiguate identifiers when multiple services share the same name
+		// (e.g., Proxy → AnthropicProxy, GithubProxy, etc.)
+		disambiguated := snakePrefix
+		traitAlias := tonicName
+		if prefixCount[snakePrefix] > 1 {
+			disambiguated = svc.PackageName + "_" + snakePrefix
+			traitAlias = strutil.ToTonicCamelCase(svc.PackageName) + tonicName
+		}
+
+		// Compute the wrapper module name the same way servicewrapper_gen.go does:
+		// strip the package prefix from the snake-cased service name.
+		wrapperModName := strutil.StripPackagePrefix(snakeName, svc.PackageName)
+		// Use the service's actual parent directory (e.g. "services", "sys")
+		// instead of hardcoding "services" so that lib protos like grpcconfig
+		// resolve to the correct module path.
+		parentMod := strings.ReplaceAll(strings.ReplaceAll(svc.ParentDir, "-", "_"), string(filepath.Separator), "::")
+		typesBase := fmt.Sprintf("crate::types::%s::%s", parentMod, svc.PackageName)
+
+		// Config types live in the physical service's package, not the gRPC service's.
+		// For virtual services (e.g., OpaEval in package "opa_eval"), config is in
+		// the physical service's package (e.g., "opa").
+		configPkg := svc.PackageName
+		configParentMod := parentMod
+		if config.SelfPackage != "" && svc.PackageName != config.SelfPackage {
+			configPkg = config.SelfPackage
+			configParentMod = "services"
+		}
+		configTypesBase := fmt.Sprintf("crate::types::%s::%s", configParentMod, configPkg)
+		configStateGroupAccessor := strings.ReplaceAll(configParentMod, "::", "_")
+		configStateAccessor := configPkg + "_config_state"
+		hasConfigState := false
+		if stateInfo, ok := configStates[configPkg]; ok {
+			configStateAccessor = strutil.ToSnakeCase(stateInfo.StateName)
+			stateDir := filepath.ToSlash(filepath.Dir(stateInfo.ProtoFile))
+			if stateDir != "" && stateDir != "." {
+				configStateGroupAccessor = strutil.ToSnakeCase(strings.Split(stateDir, "/")[0])
+			}
+			hasConfigState = true
+		}
+		grpcSvcs = append(grpcSvcs, grpcServiceEntry{
+			GetterName:               disambiguated + "_grpc_impl",
+			HandleConfigName:         disambiguated + "_config",
+			PackageName:              svc.PackageName,
+			ServerType:               tonicName + "Server",
+			ServerModName:            tonicServerModName,
+			ModPath:                  fmt.Sprintf("%s::%s", typesBase, svc.PackageName),
+			TypesBasePath:            typesBase,
+			TraitName:                traitAlias,
+			HandlerTraitName:         svc.ServiceName + "Handler",
+			ConfigModPath:            fmt.Sprintf("%s::%s", configTypesBase, configPkg),
+			WrapperModPath:           fmt.Sprintf("crate::s2sm::internal::grpc::servers::%s::%s::%s", parentMod, svc.PackageName, wrapperModName),
+			ConstructorFn:            "new_" + snakeName,
+			WrapperVar:               "wrapper_" + disambiguated,
+			ConfigStateGroupAccessor: configStateGroupAccessor,
+			ConfigStateAccessor:      configStateAccessor,
+			HasConfigState:           hasConfigState,
+			IsS2S:                    svc.IsS2S,
+			IsC2S:                    svc.IsC2S,
+			IsC2D:                    svc.IsC2D,
+			C2DSocketPath:            svc.C2DSocketPath,
+			AuthServices:             authServicesForService(svc),
+			AuthDisabled:             svc.AuthDisabled,
+			AuthAnyUser:              svc.AuthAnyUser,
+			HasMethodAuth:            svc.HasMethodAuth,
+			IsHosted:                 config.SelfPackage != "" && svc.PackageName != config.SelfPackage,
+		})
+	}
+	diskStores, err := collectRustDiskStoreRuntimeEntries(config, grpcSvcs)
+	if err != nil {
+		return smTemplateData{}, err
+	}
+
+	hasAuthGrpc := false
+	hasS2SGrpc := false
+	hasC2SGrpc := false
+	hasC2DGrpc := false
+	c2dSocketPath := ""
+	hasTlsGrpc := false
+	for _, g := range grpcSvcs {
+		if !g.AuthDisabled {
+			hasAuthGrpc = true
+		}
+		if g.IsS2S {
+			hasS2SGrpc = true
+			hasTlsGrpc = true
+		}
+		if g.IsC2S {
+			hasC2SGrpc = true
+			hasTlsGrpc = true
+		}
+		if g.IsC2D {
+			hasC2DGrpc = true
+			if g.C2DSocketPath == "" {
+				return smTemplateData{}, fmt.Errorf("service %s: service_c2d requires socket_path (no default — a shared default socket would collide)", g.TraitName)
+			}
+			c2dSocketPath = g.C2DSocketPath
+		}
+	}
+
+	hasServiceHealthState := false
+	healthStateProtoDir := ""
+	stateStoreServiceID := "state-store"
+	hasSysState := false
+	for _, b := range config.States {
+		if b.IsHealthState && b.AccessMode != tactype.AccessRO {
+			dir := strings.TrimSuffix(b.ProtoFile, ".proto")
+			if dir != "" {
+				hasServiceHealthState = true
+				healthStateProtoDir = dir
+				stateInfo, err := stateproto.DiscoverStateRoot(config.FlatProtoDir, b.MessageName)
+				if err != nil {
+					return smTemplateData{}, err
+				}
+				healthStateProtoDir = generatedTypesRelDir(stateInfo.ProtoFile, stateInfo.Package)
+				stateStoreServiceID = stateInfo.Package
+			}
+		}
+		if strings.HasPrefix(b.ProtoFile, "sys/") {
+			hasSysState = true
+		}
+	}
+	if config.AllStates {
+		hasSysState = true
+	}
+
+	// Build subscription entries from config.
+	// Detect field name collisions and disambiguate handler method names.
+	fieldCount := make(map[string]int)
+	for _, sub := range config.Subscriptions {
+		fieldCount[sub.SourceField]++
+	}
+
+	// Build a package→protoDir map for resolving type locations,
+	// and detect typed health messages in the service's own package.
+	pkgToDirMap := make(map[string]string)
+	hasTypedHealth := false
+	hasSmb, smbAuthorityServiceID, err := detectSmbRuntimeMetadata(config)
+	if err != nil {
+		return smTemplateData{}, err
+	}
+	typedHealthType := ""
+	typedHealthModPath := ""
+	if config.FlatProtoDir != "" {
+		if dp, err := parser.NewDescriptorParser(config.FlatProtoDir); err == nil {
+			for relPath, fd := range dp.GetAllFiles() {
+				if fd.Package != "" {
+					pkgToDirMap[fd.Package] = filepath.Dir(relPath)
+				}
+				// Detect service_health message in the service's own package.
+				if config.SelfPackage != "" && fd.Package == config.SelfPackage {
+					for _, msg := range fd.Messages {
+						if _, ok := msg.Annotations["service_health"]; ok {
+							hasTypedHealth = true
+							typedHealthType = msg.Name
+							parentDir := filepath.Dir(relPath)
+							typedHealthModPath = fmt.Sprintf("crate::types::%s::%s::%s",
+								strings.ReplaceAll(strings.ReplaceAll(parentDir, "-", "_"), string(filepath.Separator), "::"),
+								fd.Package, fd.Package)
+							break
+						}
+					}
+				}
+			}
+		}
+		if hasSmb {
+			if smbAuthorityServiceID == "" {
+				return smTemplateData{}, fmt.Errorf("service manager data: SMB service %q has no declared (spec.smb_authority)", config.SelfPackage)
+			}
+			if !hasServiceHealthState {
+				return smTemplateData{}, fmt.Errorf("service manager data: SMB service %q requires ServiceHealthState access to resolve SMB authority %q", config.SelfPackage, smbAuthorityServiceID)
+			}
+		}
+	}
+
+	var subs []subscriptionEntry
+	for _, sub := range config.Subscriptions {
+		// Extract the type name and package from the fully-qualified proto name.
+		typeName := sub.SourceTypeFqn
+		typePkg := sub.SourcePackage
+		if idx := strings.LastIndex(typeName, "."); idx >= 0 {
+			typePkg = typeName[:idx]
+			typeName = typeName[idx+1:]
+		}
+		sourceProtoDir := sub.SourceProtoDir
+		if sourceProtoDir == "" {
+			sourceProtoDir = "services"
+		}
+		// Resolve the type's proto directory (may differ from state root's directory).
+		typeProtoDir := sourceProtoDir
+		if dir, ok := pkgToDirMap[typePkg]; ok && dir != "." {
+			typeProtoDir = dir
+		}
+		// Disambiguate handler method name when multiple subscriptions share the same field name.
+		handlerMethod := "on_" + sub.SourceField
+		topicSnake := strutil.ToSnakeCase(eventbus.RPCStemForTopicParts(sub.SourcePackage, sub.SourceStateRoot, sub.SourceField))
+		if fieldCount[sub.SourceField] > 1 {
+			handlerMethod = "on_" + sub.SourceField + "_" + topicSnake
+		}
+		targetService := sub.TargetService
+		if targetService == "" {
+			targetService = eventbus.EventBusTag
+		}
+		subs = append(subs, subscriptionEntry{
+			FieldSnake:        sub.SourceField,
+			HandlerMethodName: handlerMethod,
+			SubscriberMod:     topicSnake,
+			SourcePackage:     sub.SourcePackage,
+			SourceProtoDir:    sourceProtoDir,
+			TypeProtoDir:      typeProtoDir,
+			TypePackage:       typePkg,
+			TypeName:          typeName,
+			TargetService:     targetService,
+		})
+	}
+
+	// Compute proto source git metadata if available.
+	protoGitSha := ""
+	protoSourceVersion := ""
+	if config.InputDir != "" {
+		if out, err := exec.Command("git", "-C", config.InputDir, "rev-parse", "HEAD").Output(); err == nil {
+			protoGitSha = strings.TrimSpace(string(out))
+		}
+		if out, err := exec.Command("git", "-C", config.InputDir, "describe", "--tags", "--abbrev=0").Output(); err == nil {
+			protoSourceVersion = strings.TrimSpace(string(out))
+		}
+	}
+
+	// Compute target services from resolved S2S client services.
+	// Uses the same meshTarget resolution as the aggregator generator.
+	var targetServices []TargetServiceInfo
+	if len(clientServices) > 0 {
+		targetServices = CollectTargetServices(clientServices)
+	}
+
+	// Discover model-driven EventBus publishers from explicit event_publish
+	// declarations.
+	publishers, err := collectEventPublishers(config, config.AnnotatedProtoDir)
+	if err != nil {
+		return smTemplateData{}, fmt.Errorf("failed to collect event-bus publishers: %w", err)
+	}
+	if len(publishers) > 0 {
+		zap.L().Info("Found model-driven EventBus publishers", zap.Int("count", len(publishers)))
+	}
+	tracePublisherFn := ""
+	for _, publisher := range publishers {
+		if publisher.EventTypeFQN == boundaries.TraceEventTypeFQN {
+			tracePublisherFn = publisher.FnName
+			break
+		}
+	}
+
+	return smTemplateData{
+		CrateBasePath:           config.CrateBasePath,
+		CrateBasePathUnderscore: strings.ReplaceAll(config.CrateBasePath, "-", "_"),
+		SmPrefix:                config.GetSmPrefix(),
+		ServiceLabel:            config.ServiceLabel(),
+		HasGrpc:                 len(svcs) > 0,
+		HasTlsGrpc:              hasTlsGrpc,
+		HasAuthGrpc:             hasAuthGrpc,
+		HasS2SGrpc:              hasS2SGrpc,
+		HasC2SGrpc:              hasC2SGrpc,
+		HasC2DGrpc:              hasC2DGrpc,
+		C2DSocketPath:           c2dSocketPath,
+		HasStates:               len(config.States) > 0 || config.AllStates,
+		HasSysState:            hasSysState,
+		HasS2SClients:           len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
+		HasServiceHealthState:   hasServiceHealthState,
+		// Every TLS gRPC service obtains its server cert via auto-TLS
+		// bidi stream (single canonical cert path). The HasAutoTls gate in the
+		// template historically meant "service has a state.auto_tls annotation",
+		// but conceptually every TLS service needs a cert. Conflate them: any
+		// service with TLS gRPC enables the auto-TLS code path, defaulting to
+		// ECDSA P-256 (universal compatibility) if no explicit key type is set.
+		HasAutoTls: config.HasAutoTls() || hasTlsGrpc,
+		AutoTlsKeyType: func() string {
+			if k := config.AutoTlsKeyType(); k != "" {
+				return k
+			}
+			// A spec.smb service reuses the shared generate_key_and_proto helper
+			// for its member keypair, so it needs a concrete key type even when it
+			// has no TLS gRPC of its own. Default to ECDSA P-256 like the TLS path.
+			if hasTlsGrpc || hasSmb {
+				return "ecdsa"
+			}
+			return ""
+		}(),
+		HasSmb:                hasSmb,
+		SmbAuthorityServiceID: smbAuthorityServiceID,
+		IsGateway:             config.IsGateway,
+		HasSubscriptions:      len(config.Subscriptions) > 0,
+		HealthStateProtoDir:   healthStateProtoDir,
+		HealthStateModPath:    strings.ReplaceAll(healthStateProtoDir, "/", "::"),
+		StateStoreServiceID:   stateStoreServiceID,
+		HasTypedHealth:        hasTypedHealth,
+		TypedHealthType:       typedHealthType,
+		TypedHealthModPath:    typedHealthModPath,
+		TacplusVersion:        buildinfo.Version,
+		TacplusGitSha:         buildinfo.GitSha,
+		ProtoSourceVersion:    protoSourceVersion,
+		ProtoSourceGitSha:     protoGitSha,
+		GrpcServices:          grpcSvcs,
+		Subscriptions:         subs,
+		Publishers:            publishers,
+		HasPublishers:         len(publishers) > 0,
+		TracePublisherFn:      tracePublisherFn,
+		TargetServices:             targetServices,
+		DiskStores:                 diskStores,
+		HasDiskStores:              len(diskStores) > 0,
+		KeepaliveTimeSecs:          keepaliveconst.TimeSecs,
+		KeepaliveTimeoutSecs:       keepaliveconst.TimeoutSecs,
+		KeepalivePermitMinTimeSecs: keepaliveconst.PermitMinTimeSecs,
+	}, nil
+}
+
+func collectRustDiskStoreRuntimeEntries(config *tactype.Config, grpcSvcs []grpcServiceEntry) ([]rustDiskStoreRuntimeEntry, error) {
+	if config.FlatProtoDir == "" {
+		return nil, nil
+	}
+	gettersByService := make(map[string]string, len(grpcSvcs))
+	for _, svc := range grpcSvcs {
+		serviceName := strings.TrimSuffix(svc.ServerType, "Server")
+		gettersByService[serviceName] = svc.GetterName
+	}
+	dp, err := parser.NewDescriptorParser(config.FlatProtoDir)
+	if err != nil {
+		return nil, fmt.Errorf("service manager data: collect diskstore runtimes: %w", err)
+	}
+	var entries []rustDiskStoreRuntimeEntry
+	for relPath, fd := range dp.GetAllFiles() {
+		if stateproto.IsInfraProtoFile(relPath, fd) {
+			continue
+		}
+		for _, msg := range fd.Messages {
+			if _, ok := msg.Annotations["service_store"]; !ok {
+				continue
+			}
+			hasKey := false
+			for _, field := range msg.Fields {
+				if ann, ok := field.Annotations["store_key"]; ok && ann.BoolValue {
+					hasKey = true
+					break
+				}
+			}
+			if !hasKey {
+				continue
+			}
+			getter, ok := gettersByService[msg.Name+"StoreService"]
+			if !ok {
+				continue
+			}
+			storeName := prostSnakeName(msg.Name)
+			entries = append(entries, rustDiskStoreRuntimeEntry{
+				StoreName:     storeName,
+				LogField:      storeName + "_log",
+				HandlerGetter: getter,
+			})
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].StoreName < entries[j].StoreName })
+	return entries, nil
+}
+
+// detectSmbRuntimeMetadata reports whether the service's own proto package
+// declares a spec.smb Service Mesh Blackbox service and returns the service_id
+// of the declared spec.smb_authority target.
+func detectSmbRuntimeMetadata(config *tactype.Config) (bool, string, error) {
+	if config.FlatProtoDir == "" || config.SelfPackage == "" {
+		return false, "", nil
+	}
+	dp, err := parser.NewDescriptorParser(config.FlatProtoDir)
+	if err != nil {
+		return false, "", fmt.Errorf("service manager data: parse proto descriptors in %q: %w", config.FlatProtoDir, err)
+	}
+	authorityID, err := parser.SmbAuthorityServiceID(dp)
+	if err != nil {
+		return false, "", fmt.Errorf("service manager data: resolve SMB authority: %w", err)
+	}
+	hasSmb := false
+	for _, fd := range dp.GetAllFiles() {
+		if fd.Package != config.SelfPackage {
+			continue
+		}
+		for si := range fd.Services {
+			if fd.Services[si].IsSMB {
+				hasSmb = true
+				break
+			}
+		}
+	}
+	return hasSmb, authorityID, nil
+}
+
+// generateHandlerInterface generates handler.rs in the sm/ directory.
+func generateHandlerInterface(config *tactype.Config, svcs []service.ServiceInfo, clientServices []ServiceInfo) error {
+	tmplContent, err := loadTemplate("handler.rs.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to load handler template: %w", err)
+	}
+
+	tmpl, err := template.New("handler").Parse(tmplContent)
+	if err != nil {
+		return fmt.Errorf("failed to parse handler template: %w", err)
+	}
+
+	data, err := buildSMTemplateData(config, svcs, clientServices)
+	if err != nil {
+		return fmt.Errorf("failed to build handler template data: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute handler template: %w", err)
+	}
+
+	outputDir := filepath.Join(config.OutputDir, config.GetSmPrefix())
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create handler output dir: %w", err)
+	}
+	outputPath := filepath.Join(outputDir, "handler.rs")
+	if err := os.WriteFile(outputPath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write handler.rs: %w", err)
+	}
+
+	zap.L().Info("Generated Rust handler trait", zap.String("path", outputPath))
+	return nil
+}
+
+// generateServiceManagerSM generates service_manager.rs in the sm/ directory.
+func generateServiceManagerSM(config *tactype.Config, svcs []service.ServiceInfo, clientServices []ServiceInfo) error {
+	tmplContent, err := loadTemplate("service_manager.rs.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to load service_manager template: %w", err)
+	}
+
+	tmpl, err := template.New("servicemanager").Parse(tmplContent)
+	if err != nil {
+		return fmt.Errorf("failed to parse service_manager template: %w", err)
+	}
+
+	data, err := buildSMTemplateData(config, svcs, clientServices)
+	if err != nil {
+		return fmt.Errorf("failed to build service manager template data: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute service_manager template: %w", err)
+	}
+
+	outputDir := filepath.Join(config.OutputDir, config.GetSmPrefix())
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create service_manager dir: %w", err)
+	}
+	outputPath := filepath.Join(outputDir, "mod.rs")
+	if err := os.WriteFile(outputPath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write service_manager.rs: %w", err)
+	}
+
+	zap.L().Info("Generated Rust service_manager", zap.String("path", outputPath))
+	return nil
+}
+
+// generateC2SServiceManager generates the c2sm/ entry point — a lightweight
+// client-only ServiceManager with no health, state, or server lifecycle.
+func generateC2SServiceManager(config *tactype.Config, clientServices []ServiceInfo) error {
+	tmplContent, err := loadTemplate("c2sm.rs.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to load c2sm.rs template: %w", err)
+	}
+
+	tmpl, err := template.New("c2sm").Parse(tmplContent)
+	if err != nil {
+		return fmt.Errorf("failed to parse c2sm.rs template: %w", err)
+	}
+
+	data := struct {
+		TargetServices []TargetServiceInfo
+	}{
+		TargetServices: CollectTargetServices(clientServices),
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute c2sm.rs template: %w", err)
+	}
+
+	outputDir := filepath.Join(config.OutputDir, "c2sm")
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create c2sm dir: %w", err)
+	}
+	outputPath := filepath.Join(outputDir, "mod.rs")
+	if err := os.WriteFile(outputPath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write c2sm mod.rs: %w", err)
+	}
+
+	zap.L().Info("Generated c2sm entry point", zap.String("path", outputPath))
+	return nil
+}
+
+// generateC2DServiceManager generates the c2dm/ entry point.
+func generateC2DServiceManager(config *tactype.Config, clientServices []ServiceInfo) error {
+	tmplContent, err := loadTemplate("c2dm.rs.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to load c2dm.rs template: %w", err)
+	}
+
+	tmpl, err := template.New("c2dm").Parse(tmplContent)
+	if err != nil {
+		return fmt.Errorf("failed to parse c2dm.rs template: %w", err)
+	}
+
+	data := struct {
+		TargetServices []TargetServiceInfo
+	}{
+		TargetServices: CollectTargetServices(clientServices),
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute c2dm.rs template: %w", err)
+	}
+
+	outputDir := filepath.Join(config.OutputDir, "c2dm")
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create c2dm dir: %w", err)
+	}
+	outputPath := filepath.Join(outputDir, "mod.rs")
+	if err := os.WriteFile(outputPath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write c2dm mod.rs: %w", err)
+	}
+
+	zap.L().Info("Generated c2dm entry point", zap.String("path", outputPath))
+	return nil
+}
+
+// generateW2SServiceManager generates the w2sm/ entry point — a lightweight
+// client-only ServiceManager for HTTP/SSE/WebSocket W2S clients.
+func generateW2SServiceManager(config *tactype.Config) error {
+	tmplContent, err := loadTemplate("w2sm.rs.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to load w2sm.rs template: %w", err)
+	}
+
+	tmpl, err := template.New("w2sm").Parse(tmplContent)
+	if err != nil {
+		return fmt.Errorf("failed to parse w2sm.rs template: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, nil); err != nil {
+		return fmt.Errorf("failed to execute w2sm.rs template: %w", err)
+	}
+
+	outputDir := filepath.Join(config.OutputDir, "w2sm")
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create w2sm dir: %w", err)
+	}
+	outputPath := filepath.Join(outputDir, "mod.rs")
+	if err := os.WriteFile(outputPath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write w2sm mod.rs: %w", err)
+	}
+
+	zap.L().Info("Generated w2sm entry point", zap.String("path", outputPath))
+	return nil
+}
+
+// authServicesForService returns the S2S auth_services list from the ServiceInfo.
+func authServicesForService(svc service.ServiceInfo) []string {
+	return svc.AuthServices
+}
+
+// filterExplicitGrpcServices returns only services whose ServiceName matches
+// an entry in config.GrpcServers.
+func filterExplicitGrpcServices(config *tactype.Config, servicesInfo []service.ServiceInfo) []service.ServiceInfo {
+	nameSet := make(map[string]bool)
+	for _, fe := range config.GrpcServers {
+		nameSet[fe.ServiceName] = true
+	}
+	var result []service.ServiceInfo
+	for _, svc := range servicesInfo {
+		if nameSet[svc.ServiceName] {
+			result = append(result, svc)
+		}
+	}
+	return result
+}
+
+func generatedTypesRelDir(protoFile, packageName string) string {
+	parentDir := filepath.Dir(protoFile)
+	if parentDir == "." {
+		parentDir = ""
+	}
+	if parentDir == "" {
+		return packageName
+	}
+	if filepath.Base(parentDir) == packageName {
+		return parentDir
+	}
+	return filepath.Join(parentDir, packageName)
+}

@@ -1,0 +1,306 @@
+<< .Header >>
+
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use tonic::transport::Channel;
+
+<<- if .HasStreaming >>
+use axum::response::sse::{Event, Sse};
+use futures::StreamExt;
+<<- end >>
+<<- if .HasClientStreaming >>
+use futures::stream;
+<<- end >>
+
+#[allow(unused_imports)]
+use serde_json;
+
+<<- if .RestRootPath >>
+
+/// Base path for all REST endpoints, from the REST_ROOT_PATH string constant.
+pub const REST_ROOT_PATH: &str = "<< .RestRootPath >>";
+<<- end >>
+
+/// Result type for REST→gRPC dispatch: JSON string on success, HTTP error on failure.
+pub type DispatchResult = Result<String, (StatusCode, String)>;
+
+/// RestDispatcher resolves channels and auth for outgoing gRPC calls.
+///
+/// Gateway implements this with service resolution + forwarded C2S tokens.
+/// Daemon implements this with S2S ChannelProvider + minted service tokens.
+#[tonic::async_trait]
+pub trait RestDispatcher: Send + Sync {
+    /// Resolve a gRPC channel for the given service.
+    async fn channel(&self, service_id: &str) -> Result<Channel, tonic::Status>;
+
+    /// Resolve an authorization header for outgoing requests to the given service.
+    /// Gateway: forwards the incoming C2S token.
+    /// Daemon: mints an S2S token scoped to the target service.
+    async fn auth_header(&self, service_id: &str) -> Option<String>;
+}
+
+/// Build a tonic Request with forwarded auth and request ID metadata.
+pub fn with_metadata<T>(req: T, auth_header: Option<&str>, request_id: &str) -> tonic::Request<T> {
+    let mut request = tonic::Request::new(req);
+    if let Some(auth) = auth_header {
+        if let Ok(val) = auth.parse() {
+            request.metadata_mut().insert("authorization", val);
+        }
+    }
+    if let Ok(val) = request_id.parse() {
+        request.metadata_mut().insert("x-request-id", val);
+    }
+    request
+}
+
+/// Deserialize a JSON request body into a protobuf message type.
+#[allow(dead_code)]
+fn json_req<T: serde::de::DeserializeOwned + Default>(body: &[u8]) -> Result<T, (StatusCode, String)> {
+    if body.is_empty() {
+        return Ok(T::default());
+    }
+    serde_json::from_slice(body).map_err(|e| {
+        (StatusCode::BAD_REQUEST, format!("{{\"error\":\"invalid request body: {}\"}}", e))
+    })
+}
+
+/// Convert a gRPC status to an HTTP error tuple.
+pub fn grpc_err(status: tonic::Status) -> (StatusCode, String) {
+    let http_code = match status.code() {
+        tonic::Code::NotFound => StatusCode::NOT_FOUND,
+        tonic::Code::InvalidArgument => StatusCode::BAD_REQUEST,
+        tonic::Code::Unauthenticated => StatusCode::UNAUTHORIZED,
+        tonic::Code::PermissionDenied => StatusCode::FORBIDDEN,
+        tonic::Code::Unimplemented => StatusCode::NOT_IMPLEMENTED,
+        tonic::Code::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        tonic::Code::DeadlineExceeded => StatusCode::GATEWAY_TIMEOUT,
+        tonic::Code::ResourceExhausted => StatusCode::TOO_MANY_REQUESTS,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (http_code, format!("{{\"error\":\"{}\"}}", status.message()))
+}
+
+<<- if .HasStreaming >>
+fn sse_error(message: impl std::fmt::Display) -> Event {
+    Event::default().event("error").data(format!("{{\"error\":\"{}\"}}", message))
+}
+<<- end >>
+
+/// Auth policy for a REST route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthPolicy {
+    /// No authentication needed (auth_disabled).
+    NoAuth,
+    /// Valid C2S token required, no entitlement check (auth_any_user).
+    AnyUser,
+    /// Valid C2S token + service_entitlements check (auth_entitled_users or default).
+    Entitled,
+}
+
+/// A REST route entry, generated at compile time from proto annotations.
+#[allow(dead_code)]
+pub struct RouteInfo {
+    pub http_path: &'static str,
+    pub grpc_path: &'static str,
+    pub service_id: &'static str,
+    /// When set, entitlement checks use this vservice name instead of service_id.
+    /// aud validation still uses service_id (the physical host).
+    pub entitlement_service: Option<&'static str>,
+    pub http_methods: &'static [&'static str],
+    pub auth_policy: AuthPolicy,
+    pub entitlement_scopes: &'static [&'static str],
+    pub capability_scope: Option<&'static str>,
+    pub server_streaming: bool,
+    pub client_streaming: bool,
+    pub target_namespace_field: Option<&'static str>,
+}
+
+/// All REST routes, generated from proto annotations at compile time.
+pub static ROUTES: &[RouteInfo] = &[
+<<- range .Routes >>
+    RouteInfo {
+        http_path: "<< .HttpPath >>",
+        grpc_path: "<< .GrpcPath >>",
+        service_id: "<< .ServiceID >>",
+        entitlement_service: << .EntitlementService >>,
+        http_methods: &[<< .HttpMethodsLiteral >>],
+        auth_policy: AuthPolicy::<< .AuthPolicy >>,
+        entitlement_scopes: << .EntitlementScopes >>,
+        capability_scope: << .CapabilityScope >>,
+        server_streaming: << .ServerStreaming >>,
+        client_streaming: << .ClientStreaming >>,
+        target_namespace_field: << .TargetNamespace >>,
+    },
+<<- end >>
+];
+
+/// Dispatch a unary REST→gRPC call via a RestDispatcher.
+///
+/// The dispatcher resolves the channel and auth header for the target service.
+/// Gateway: forwards incoming token + resolves backend via service health.
+/// Daemon: mints a service-scoped token + uses S2S channel.
+pub async fn dispatch(
+    dispatcher: &dyn RestDispatcher,
+    grpc_path: &str,
+    body: &[u8],
+    request_id: &str,
+) -> DispatchResult {
+    match grpc_path {
+<<- range .UnaryArms >>
+        "<< .GrpcPath >>" => {
+            let channel = dispatcher.channel("<< .ServiceID >>").await.map_err(grpc_err)?;
+            let auth = dispatcher.auth_header("<< .ServiceID >>").await;
+            let auth_ref = auth.as_deref();
+<<- if .IsEmptyInput >>
+<<- if .ClientStreaming >>
+            << if .IsEmptyOutput >>let _ =<< else >>let resp =<< end >> << .ClientPath >>::new(channel)
+                .<< .MethodSnake >>(with_metadata(stream::once(futures::future::ready(())), auth_ref, request_id))
+                .await
+                .map_err(grpc_err)?;
+<<- else >>
+            << if .IsEmptyOutput >>let _ =<< else >>let resp =<< end >> << .ClientPath >>::new(channel)
+                .<< .MethodSnake >>(with_metadata((), auth_ref, request_id))
+                .await
+                .map_err(grpc_err)?;
+<<- end >>
+<<- else >>
+            let req = << .FromJsonPath >>(body).map_err(|e| (StatusCode::BAD_REQUEST, format!("{{\"error\":\"invalid request body: {}\"}}", e)))?;
+<<- if .ClientStreaming >>
+            << if .IsEmptyOutput >>let _ =<< else >>let resp =<< end >> << .ClientPath >>::new(channel)
+                .<< .MethodSnake >>(with_metadata(stream::once(futures::future::ready(req)), auth_ref, request_id))
+                .await
+                .map_err(grpc_err)?;
+<<- else >>
+            << if .IsEmptyOutput >>let _ =<< else >>let resp =<< end >> << .ClientPath >>::new(channel)
+                .<< .MethodSnake >>(with_metadata(req, auth_ref, request_id))
+                .await
+                .map_err(grpc_err)?;
+<<- end >>
+<<- end >>
+<<- if .IsEmptyOutput >>
+            Ok("{}".to_string())
+<<- else >>
+            let resp = resp.into_inner();
+<<- if .ValidateOutput >>
+            resp.validate().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{{\"error\":\"response validation failed: {}\"}}", e)))?;
+<<- end >>
+            let bytes = << .ToJsonPath >>(&resp)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{{\"error\":\"failed to serialize response: {}\"}}", e)))?;
+            String::from_utf8(bytes)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{{\"error\":\"failed to encode response: {}\"}}", e)))
+<<- end >>
+        }
+<<- end >>
+        _ => Err((
+            StatusCode::NOT_IMPLEMENTED,
+            format!("{{\"error\":\"unknown gRPC path: {}\"}}", grpc_path),
+        )),
+    }
+}
+
+/// Dispatch a server-streaming RPC via a RestDispatcher, returning an SSE response.
+#[allow(unused_variables)]
+pub async fn dispatch_stream(
+    dispatcher: &dyn RestDispatcher,
+    grpc_path: &str,
+    body: &[u8],
+    request_id: &str,
+) -> Response {
+    match grpc_path {
+<<- range .StreamArms >>
+        "<< .GrpcPath >>" => {
+            let channel = match dispatcher.channel("<< .ServiceID >>").await {
+                Ok(ch) => ch,
+                Err(status) => {
+                    let (code, msg) = grpc_err(status);
+                    return (code, msg).into_response();
+                }
+            };
+            let auth = dispatcher.auth_header("<< .ServiceID >>").await;
+            let auth_ref = auth.as_deref();
+<<- if .IsEmptyInput >>
+<<- if .ClientStreaming >>
+            let stream = match << .ClientPath >>::new(channel)
+                .<< .MethodSnake >>(with_metadata(stream::once(futures::future::ready(())), auth_ref, request_id))
+<<- else >>
+            let stream = match << .ClientPath >>::new(channel)
+                .<< .MethodSnake >>(with_metadata((), auth_ref, request_id))
+<<- end >>
+<<- else >>
+            let req = match << .FromJsonPath >>(body) {
+                Ok(r) => r,
+                Err(e) => return (StatusCode::BAD_REQUEST, format!("{{\"error\":\"invalid request body: {}\"}}", e)).into_response(),
+            };
+<<- if .ClientStreaming >>
+            let stream = match << .ClientPath >>::new(channel)
+                .<< .MethodSnake >>(with_metadata(stream::once(futures::future::ready(req)), auth_ref, request_id))
+<<- else >>
+            let stream = match << .ClientPath >>::new(channel)
+                .<< .MethodSnake >>(with_metadata(req, auth_ref, request_id))
+<<- end >>
+<<- end >>
+                .await
+            {
+                Ok(resp) => {
+                    tracing::info!(grpc_path = %grpc_path, request_id = %request_id, "streaming RPC established");
+                    resp.into_inner()
+                }
+                Err(status) => {
+                    tracing::warn!(
+                        grpc_path = %grpc_path,
+                        request_id = %request_id,
+                        code = ?status.code(),
+                        message = %status.message(),
+                        "streaming RPC failed"
+                    );
+                    let (code, msg) = grpc_err(status);
+                    return (code, msg).into_response();
+                }
+            };
+            let sse_stream = stream.map(|result| match result {
+                Ok(msg) => {
+<<- if .ValidateOutput >>
+                    if let Err(e) = msg.validate() {
+                        return Ok::<_, std::convert::Infallible>(sse_error(format!("response validation failed: {}", e)));
+                    }
+<<- end >>
+                    let bytes = match << .ToJsonPath >>(&msg) {
+                        Ok(bytes) => bytes,
+                        Err(e) => return Ok::<_, std::convert::Infallible>(sse_error(format!("failed to serialize response: {}", e))),
+                    };
+                    let json = match String::from_utf8(bytes) {
+                        Ok(json) => json,
+                        Err(e) => return Ok::<_, std::convert::Infallible>(sse_error(format!("failed to encode response: {}", e))),
+                    };
+                    Ok::<_, std::convert::Infallible>(Event::default().data(json))
+                }
+                Err(status) => {
+                    Ok(sse_error(status.message()))
+                }
+            });
+            Sse::new(sse_stream).into_response()
+        }
+<<- end >>
+        _ => (
+            StatusCode::NOT_IMPLEMENTED,
+            format!("{{\"error\":\"unknown streaming gRPC path: {}\"}}", grpc_path),
+        ).into_response(),
+    }
+}
+
+#[allow(dead_code)]
+/// Serialize a value to a JSON response.
+fn json_response<T: serde::Serialize>(value: &T) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match serde_json::to_string(value) {
+        Ok(json) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/json".to_string())],
+            json,
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{{\"error\":\"failed to serialize response: {}\"}}", e),
+        ).into_response(),
+    }
+}

@@ -1,0 +1,80 @@
+{{- /* Timeseries typed persistence helpers — generated from (spec.timeseries_type) annotations */ -}}
+{{- /* Store-neutral: each message gets Columns / ToTimeseriesRow / TimeseriesScanDest / ApplyTimeseriesRow */ -}}
+
+// {{.TypeName}}TimeseriesColumns returns the ordered column names for the timeseries table.
+func {{.TypeName}}TimeseriesColumns() []string {
+	return []string{
+{{- range .Fields}}
+		"{{.ColumnName}}",
+{{- end}}
+	}
+}
+
+// {{.TypeName}}ToTimeseriesRow converts a proto message to an ordered slice of column values
+// suitable for timeseries batch insertion. Column order matches {{.TypeName}}TimeseriesColumns().
+func {{.TypeName}}ToTimeseriesRow(msg *{{.TypeName}}) []interface{} {
+	if msg == nil {
+		return nil
+	}
+	return []interface{}{
+{{- range .Fields}}
+{{- if .IsEnum}}
+		msg.{{.GoFieldName}}.String(),
+{{- else if eq .ProtoType "Timestamp"}}
+		func() int64 { if msg.{{.GoFieldName}} != nil { return msg.{{.GoFieldName}}.AsTime().UnixMilli() }; return 0 }(),
+{{- else if .IsMessage}}
+		func() string { if msg.{{.GoFieldName}} != nil { b, _ := protojson.Marshal(msg.{{.GoFieldName}}); return string(b) }; return "" }(),
+{{- else}}
+		msg.{{.GoFieldName}},
+{{- end}}
+{{- end}}
+	}
+}
+
+// {{.TypeName}}TimeseriesScanDest returns scan destinations and a proto message for reading
+// timeseries rows. Pass the dest slice to rows.Scan(), then call
+// {{.TypeName}}ApplyTimeseriesRow to set enum/timestamp/message values on the proto message.
+func {{.TypeName}}TimeseriesScanDest() ([]interface{}, *{{.TypeName}}) {
+	msg := &{{.TypeName}}{}
+	dest := make([]interface{}, {{len .Fields}})
+{{- range $i, $f := .Fields}}
+{{- if $f.IsEnum}}
+	var _col{{$i}} string
+	dest[{{$i}}] = &_col{{$i}}
+{{- else if eq $f.ProtoType "Timestamp"}}
+	var _col{{$i}} int64
+	dest[{{$i}}] = &_col{{$i}}
+{{- else if $f.IsMessage}}
+	var _col{{$i}} string
+	dest[{{$i}}] = &_col{{$i}}
+{{- else}}
+	dest[{{$i}}] = &msg.{{$f.GoFieldName}}
+{{- end}}
+{{- end}}
+	return dest, msg
+}
+
+// {{.TypeName}}ApplyTimeseriesRow applies scanned timeseries values to a proto message.
+// Call after rows.Scan() with the dest from {{.TypeName}}TimeseriesScanDest().
+func {{.TypeName}}ApplyTimeseriesRow(dest []interface{}, msg *{{.TypeName}}) {
+{{- range $i, $f := .Fields}}
+{{- if $f.IsEnum}}
+	if s, ok := dest[{{$i}}].(*string); ok && *s != "" {
+		if v, ok := {{$f.EnumType}}_value[*s]; ok {
+			msg.{{$f.GoFieldName}} = {{$f.EnumType}}(v)
+		}
+	}
+{{- else if eq $f.ProtoType "Timestamp"}}
+	if ms, ok := dest[{{$i}}].(*int64); ok && *ms != 0 {
+		msg.{{$f.GoFieldName}} = timestamppb.New(time.UnixMilli(*ms))
+	}
+{{- else if $f.IsMessage}}
+	if s, ok := dest[{{$i}}].(*string); ok && *s != "" {
+		target := &{{$f.GoType}}{}
+		if err := protojson.Unmarshal([]byte(*s), target); err == nil {
+			msg.{{$f.GoFieldName}} = target
+		}
+	}
+{{- end}}
+{{- end}}
+}

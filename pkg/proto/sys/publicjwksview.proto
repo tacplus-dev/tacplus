@@ -1,0 +1,48 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// ============================================================================
+// DO NOT MODIFY THIS FILE
+// ============================================================================
+// This file defines the cross-boundary public JWKS view service.
+// The gateway subscribes to this service to serve its public /.well-known/jwks.json.
+// The cluster automatically implements this service by aggregating all
+// collections annotated with (spec.view_member) = "PublicJwksView".
+//
+// Distinct from JwkVerifyingKeysView (sys/jwkview.proto): that view is the
+// INTERNAL token-verification set (read by every service's authorizer); this
+// view is the PUBLIC JWKS set (read only by the gateway) and additionally
+// includes externally-facing signing keys (e.g. the ES256 key used for WIF
+// assertion tokens) that internal verifiers do not need.
+// ============================================================================
+
+syntax = "proto3";
+
+package publicjwksview;
+
+import "sys/jwk.proto";
+import "sys/spec.proto";
+import "sys/trace.proto";
+
+// PublicJwksViewService provides a read-only aggregated view of all public
+// JWKs the gateway should publish, across all state services that registered
+// via (spec.view_member) = "PublicJwksView".
+//
+// This service is automatically implemented by the cluster. The gateway
+// subscribes to it to serve /.well-known/jwks.json.
+service PublicJwksViewService {
+  rpc Watch(trace.TraceRequest) returns (stream PublicJwksViewResponse);
+  rpc Get(PublicJwksViewGetRequest) returns (PublicJwksViewGetResponse);
+}
+
+message PublicJwksViewResponse {
+  map<string, jwk.Jwk> entries = 1 [(spec.assert_max_size) = 256];  // kid -> Jwk
+}
+
+message PublicJwksViewGetRequest {
+  string kid = 1;
+}
+
+message PublicJwksViewGetResponse {
+  jwk.Jwk value = 1;
+  bool found = 2;
+}

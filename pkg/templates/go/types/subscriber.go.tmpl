@@ -1,0 +1,349 @@
+{{- /* Per-topic event-bus subscriber — generated from (spec.subscribe) annotations */ -}}
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"math"
+	"time"
+
+	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/encoding"
+	grpcproto "google.golang.org/grpc/encoding/proto"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+
+	source "{{.TypeImport}}"
+	eb "{{.EventBusImport}}"
+)
+
+// Ensure proto codec is registered (it is by default, but be explicit).
+var _ = grpcproto.Name
+var _ = encoding.GetCodec("proto")
+
+// Handler is called for each received {{.TypeName}}.
+type Handler func(ctx context.Context, event *source.{{.TypeName}}, meta *eb.RecordMeta) error
+
+// Option configures subscriber behavior.
+type Option func(*options)
+
+type options struct {
+	earliest  bool
+	latest    bool
+	offset    int64
+	hasOffset bool
+}
+
+// WithEarliest starts from the earliest available offset.
+func WithEarliest() Option { return func(o *options) { o.earliest = true } }
+
+// WithLatest starts from the latest offset (new messages only).
+func WithLatest() Option { return func(o *options) { o.latest = true } }
+
+// WithOffset starts from a specific offset.
+func WithOffset(off int64) Option {
+	return func(o *options) { o.offset = off; o.hasOffset = true }
+}
+
+// Subscriber subscribes to {{.SourcePackage}}.{{.SourceStateRoot}}.{{.SourceField}} via event-bus gRPC.
+type Subscriber struct {
+	conn          grpc.ClientConnInterface
+	consumerGroup string
+}
+
+// New creates a subscriber for the {{.SourceField}} topic.
+// consumerGroup identifies this consumer for offset tracking — all instances
+// sharing the same group coordinate partition assignment.
+func New(conn grpc.ClientConnInterface, consumerGroup string) *Subscriber {
+	return &Subscriber{conn: conn, consumerGroup: consumerGroup}
+}
+
+// subscribeRecord is the documented wire message for Subscribe{{.SourceStateRoot}}{{.FieldPascal}}:
+// field 1 carries event-bus RecordMeta and field 2 carries the typed payload.
+// Older brokers streamed the typed payload directly, so Unmarshal accepts both
+// shapes and uses a default RecordMeta for the raw-payload compatibility path.
+type subscribeRecord struct {
+	Meta    *eb.RecordMeta         `protobuf:"bytes,1,opt,name=meta"`
+	Payload *source.{{.TypeName}}  `protobuf:"bytes,2,opt,name=payload"`
+}
+
+func (r *subscribeRecord) Reset()         { *r = subscribeRecord{} }
+func (r *subscribeRecord) String() string { return fmt.Sprintf("subscribeRecord{payload:%v}", r.Payload) }
+func (r *subscribeRecord) ProtoMessage()  {}
+
+// Marshal implements proto marshaling for the subscribe record.
+func (r *subscribeRecord) Marshal() ([]byte, error) {
+	if r.Payload == nil {
+		return nil, nil
+	}
+	return proto.Marshal(r.Payload)
+}
+
+// Unmarshal decodes either the metadata-bearing subscribe record envelope or a
+// legacy raw {{.TypeName}} payload.
+func (r *subscribeRecord) Unmarshal(data []byte) error {
+	if metaBytes, payloadBytes, ok := decodeSubscribeRecord(data); ok {
+		r.Meta = &eb.RecordMeta{}
+		if err := proto.Unmarshal(metaBytes, r.Meta); err != nil {
+			return fmt.Errorf("unmarshal RecordMeta: %w", err)
+		}
+		r.Payload = &source.{{.TypeName}}{}
+		if err := proto.Unmarshal(payloadBytes, r.Payload); err != nil {
+			return fmt.Errorf("unmarshal {{.TypeName}} payload: %w", err)
+		}
+		return nil
+	}
+
+	r.Meta = &eb.RecordMeta{}
+	r.Payload = &source.{{.TypeName}}{}
+	if err := proto.Unmarshal(data, r.Payload); err != nil {
+		return fmt.Errorf("unmarshal {{.TypeName}}: %w", err)
+	}
+	return nil
+}
+
+// Subscribe opens a bidi stream to event-bus and calls handler for each
+// received {{.TypeName}}. It reconnects with exponential backoff on stream
+// errors. The consumer group resumes from the last committed offset.
+//
+// Subscribe blocks until ctx is cancelled, the server cancels the stream
+// (CANCELLED — clean shutdown), or the connection fails persistently
+// (maxConsecutiveFailures in a row) — the caller should then re-resolve a
+// healthy event-bus instance and call Subscribe again on a fresh connection.
+func (s *Subscriber) Subscribe(ctx context.Context, handler Handler, opts ...Option) error {
+	var o options
+	for _, fn := range opts {
+		fn(&o)
+	}
+
+	req := &eb.SubscribeRequest{
+		ConsumerGroup: s.consumerGroup,
+	}
+	switch {
+	case o.earliest:
+		req.StartFrom = &eb.SubscribeRequest_Earliest{Earliest: true}
+	case o.latest:
+		req.StartFrom = &eb.SubscribeRequest_Latest{Latest: true}
+	case o.hasOffset:
+		req.StartFrom = &eb.SubscribeRequest_Offset{Offset: o.offset}
+	}
+
+	sd := &grpc.StreamDesc{
+		StreamName:   "{{.GrpcMethod}}",
+		ServerStreams: true,
+		ClientStreams: true,
+	}
+	fullMethod := "/{{.GrpcService}}/{{.GrpcMethod}}"
+
+	const (
+		minBackoff = 500 * time.Millisecond
+		maxBackoff = 30 * time.Second
+		// maxConsecutiveFailures bounds retries on a single connection. The
+		// conn targets one resolved instance; if that instance was rescheduled
+		// the conn never recovers, so Subscribe returns and the caller's
+		// reconnect loop re-resolves a healthy instance.
+		maxConsecutiveFailures = 10
+	)
+	backoff := minBackoff
+	consecutiveFailures := 0
+
+	for {
+		err := s.subscribeOnce(ctx, fullMethod, sd, req, handler)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err == nil {
+			// Server closed the stream (EOF) — reconnect with minimum backoff.
+			// This is normal after a server restart or load-balancer cycle.
+			zap.L().Info("{{.SourcePackage}}.{{.SourceField}} subscription stream ended (EOF), reconnecting",
+				zap.String("consumer_group", s.consumerGroup))
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(minBackoff):
+			}
+			backoff = minBackoff
+			consecutiveFailures = 0
+			continue
+		}
+
+		st, ok := status.FromError(err)
+		if ok {
+			switch st.Code() {
+			case codes.Canceled:
+				// Clean-shutdown exit: the stream was cancelled (server side or
+				// our own per-call context teardown).
+				zap.L().Info("{{.SourcePackage}}.{{.SourceField}} subscription cancelled",
+					zap.String("consumer_group", s.consumerGroup),
+					zap.Error(err))
+				return err
+			case codes.PermissionDenied, codes.Unauthenticated:
+				// Transient auth blips (token rotation, authorizer cache lag)
+				// must not permanently kill the subscription — retry with the
+				// same capped backoff, logged at error.
+				zap.L().Error("{{.SourcePackage}}.{{.SourceField}} subscription auth error, retrying",
+					zap.String("consumer_group", s.consumerGroup),
+					zap.String("code", st.Code().String()),
+					zap.Error(err))
+			}
+		}
+
+		consecutiveFailures++
+		if consecutiveFailures >= maxConsecutiveFailures {
+			zap.L().Error("{{.SourcePackage}}.{{.SourceField}} subscription failing persistently — returning so the caller can re-resolve event-bus",
+				zap.String("consumer_group", s.consumerGroup),
+				zap.Int("consecutive_failures", consecutiveFailures),
+				zap.Error(err))
+			return err
+		}
+
+		sleep := backoff
+		backoff = time.Duration(math.Min(float64(backoff*2), float64(maxBackoff)))
+
+		zap.L().Warn("{{.SourcePackage}}.{{.SourceField}} subscription error, retrying",
+			zap.String("consumer_group", s.consumerGroup),
+			zap.Duration("retry_in", sleep),
+			zap.Error(err))
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(sleep):
+		}
+	}
+}
+
+func (s *Subscriber) subscribeOnce(
+	ctx context.Context,
+	fullMethod string,
+	sd *grpc.StreamDesc,
+	req *eb.SubscribeRequest,
+	handler Handler,
+) error {
+	// Per-call context: cancelling it on exit sends RST_STREAM to EventBus,
+	// which triggers onError(CANCELLED) on the server side and causes EventBus
+	// to close the broker consumer session. Without this, zombie sessions
+	// accumulate — EventBus's onCompleted() deliberately does NOT close sessions.
+	callCtx, callCancel := context.WithCancel(ctx)
+	defer callCancel()
+
+	stream, err := s.conn.NewStream(callCtx, sd, fullMethod)
+	if err != nil {
+		return fmt.Errorf("open stream: %w", err)
+	}
+
+	if err := stream.SendMsg(req); err != nil {
+		return fmt.Errorf("send subscribe request: %w", err)
+	}
+
+	// Subscription established. Logged for cross-language observability parity
+	// with the rust/java subscribers: without it a HEALTHY go subscriber is
+	// indistinguishable from a dead one (silence after transient-error retries
+	// means success), which has already caused a live misdiagnosis.
+	zap.L().Info("{{.SourcePackage}}.{{.SourceField}} subscription stream started",
+		zap.String("consumer_group", s.consumerGroup))
+
+	for {
+		rec := &subscribeRecord{}
+		if err := stream.RecvMsg(rec); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+
+		if rec.Payload != nil {
+			if err := handler(ctx, rec.Payload, rec.Meta); err != nil {
+				return fmt.Errorf("handler: %w", err)
+			}
+		}
+	}
+}
+
+func decodeVarint(data []byte) (uint64, int) {
+	var x uint64
+	var s uint
+	for i, b := range data {
+		if i >= 10 {
+			return 0, -1
+		}
+		if b < 0x80 {
+			return x | uint64(b)<<s, i + 1
+		}
+		x |= uint64(b&0x7f) << s
+		s += 7
+	}
+	return 0, -1
+}
+
+func decodeSubscribeRecord(data []byte) ([]byte, []byte, bool) {
+	var metaBytes []byte
+	var payloadBytes []byte
+	for i := 0; i < len(data); {
+		tag, n := decodeVarint(data[i:])
+		if n <= 0 {
+			return nil, nil, false
+		}
+		i += n
+		fieldNum := int32(tag >> 3)
+		wireType := int(tag & 0x7)
+		switch wireType {
+		case 0:
+			_, n := decodeVarint(data[i:])
+			if n <= 0 {
+				return nil, nil, false
+			}
+			i += n
+		case 1:
+			if i+8 > len(data) {
+				return nil, nil, false
+			}
+			i += 8
+		case 2:
+			length, n := decodeVarint(data[i:])
+			if n <= 0 {
+				return nil, nil, false
+			}
+			i += n
+			end := i + int(length)
+			if end < i || end > len(data) {
+				return nil, nil, false
+			}
+			switch fieldNum {
+			case 1:
+				metaBytes = data[i:end]
+			case 2:
+				payloadBytes = data[i:end]
+			}
+			i = end
+		case 5:
+			if i+4 > len(data) {
+				return nil, nil, false
+			}
+			i += 4
+		default:
+			return nil, nil, false
+		}
+	}
+	return metaBytes, payloadBytes, len(metaBytes) > 0 && len(payloadBytes) > 0
+}
+
+func appendVarint(buf []byte, x uint64) []byte {
+	for x >= 0x80 {
+		buf = append(buf, byte(x)|0x80)
+		x >>= 7
+	}
+	return append(buf, byte(x))
+}
+
+func sovLen(x int) int {
+	n := 0
+	v := uint64(x)
+	for v >= 0x80 {
+		v >>= 7
+		n++
+	}
+	return n + 1
+}

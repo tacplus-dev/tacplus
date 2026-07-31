@@ -1,0 +1,88 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+/**
+ * At-rest compression for rolled/archived files and snapshot baselines.
+ * The live redo-log append tail is never compressed (cheap line appends).
+ *
+ * On read we auto-detect the codec by magic bytes, so a file's compression
+ * can change between writes without tracking it out-of-band.
+ *
+ * NONE, GZ, and BZ are supported on both write and read.
+ */
+import { createRequire } from 'module';
+import zlib from 'zlib';
+import { DiskStoreError } from './error.js';
+
+type Bzip2Codec = {
+  compressFile(data: Uint8Array): Uint8Array;
+  decompressFile(data: Uint8Array): Uint8Array;
+};
+
+const require = createRequire(import.meta.url);
+const { Bzip2 } = require('compressjs') as { Bzip2: Bzip2Codec };
+
+/** Compression algorithm. Maps from the proto `Compression` enum's value. */
+export enum Codec {
+  None = 0,
+  Gz = 1,
+  Bz = 2,
+}
+
+/** Maps the proto `Compression` enum value: 1 = GZ, 2 = BZ, else NONE. */
+export function codecFromProto(v: number): Codec {
+  switch (v) {
+    case 1:
+      return Codec.Gz;
+    case 2:
+      return Codec.Bz;
+    default:
+      return Codec.None;
+  }
+}
+
+const GZ_MAGIC = Buffer.from([0x1f, 0x8b]);
+const BZ_MAGIC = Buffer.from([0x42, 0x5a, 0x68]); // "BZh"
+
+/** Compress `data` with `codec`. `Codec.None` returns the bytes unchanged. */
+export function compress(data: Buffer, codec: Codec): Buffer {
+  switch (codec) {
+    case Codec.None:
+      return data;
+    case Codec.Gz:
+      try {
+        return zlib.gzipSync(data);
+      } catch (e) {
+        throw DiskStoreError.codec(`gzip failed: ${String(e)}`);
+      }
+    case Codec.Bz:
+      try {
+        return Buffer.from(Bzip2.compressFile(new Uint8Array(data)));
+      } catch (e) {
+        throw DiskStoreError.codec(`bzip2 failed: ${String(e)}`);
+      }
+    default:
+      return data;
+  }
+}
+
+/**
+ * Decompress `data`, auto-detecting the codec by magic bytes. Bytes with no
+ * recognized magic are returned unchanged (treated as uncompressed).
+ */
+export function decompressAuto(data: Buffer): Buffer {
+  if (data.length >= GZ_MAGIC.length && data.subarray(0, GZ_MAGIC.length).equals(GZ_MAGIC)) {
+    try {
+      return zlib.gunzipSync(data);
+    } catch (e) {
+      throw DiskStoreError.codec(`gunzip failed: ${String(e)}`);
+    }
+  }
+  if (data.length >= BZ_MAGIC.length && data.subarray(0, BZ_MAGIC.length).equals(BZ_MAGIC)) {
+    try {
+      return Buffer.from(Bzip2.decompressFile(new Uint8Array(data)));
+    } catch (e) {
+      throw DiskStoreError.codec(`bunzip2 failed: ${String(e)}`);
+    }
+  }
+  return data;
+}

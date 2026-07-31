@@ -1,0 +1,25 @@
+[package]
+name = "servicemanager"
+version = "0.1.0"
+edition = "2021"
+description = "Multi-endpoint gRPC connection pool with latency-based rebalancing"
+
+[dependencies]
+{{.CrateBasePath}}-types = { path = "../../types" }
+jwk = { path = "../jwk" }
+token = { path = "../token" }
+spiffe = { path = "../spiffe" }
+tonic = { version = "0.14.6", features = ["tls-ring"] }
+prost = "0.14"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+# Custom rustls SPIFFE verifier — used via tonic's `tls_config_with_verifier`.
+rustls = { workspace = true }
+rustls-pemfile = "2"
+x509-parser = "0.16"
+
+[dev-dependencies]
+# The x509 crate's signer mints real certs for the SPIFFE-verifier tests
+# (build_root_store bundles); key provides the test key generation.
+x509 = { path = "../x509" }
+key = { path = "../key" }

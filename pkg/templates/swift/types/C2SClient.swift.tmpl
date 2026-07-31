@@ -1,0 +1,84 @@
+import Foundation
+import GRPCCore
+import GRPCNIOTransportHTTP2
+
+/// A caller-supplied token provider. When set on a `C2SClient`, its return value
+/// is injected as an `authorization: Bearer <token>` gRPC metadata header on every
+/// outgoing call. Mirrors the token-provider seam of the Go/TypeScript C2S clients:
+/// tacplus builds no client_im for Swift — the client only exposes this hook.
+public typealias C2STokenProvider = @Sendable () async throws -> String
+
+/// A `ClientInterceptor` that injects a Bearer token into request metadata.
+struct C2SBearerTokenInterceptor: ClientInterceptor {
+    let tokenProvider: C2STokenProvider
+
+    func intercept<Input: Sendable, Output: Sendable>(
+        request: StreamingClientRequest<Input>,
+        context: ClientContext,
+        next: (
+            _ request: StreamingClientRequest<Input>,
+            _ context: ClientContext
+        ) async throws -> StreamingClientResponse<Output>
+    ) async throws -> StreamingClientResponse<Output> {
+        let token = try await self.tokenProvider()
+        var request = request
+        if !token.isEmpty {
+            request.metadata.replaceOrAddString("Bearer \(token)", forKey: "authorization")
+        }
+        return try await next(request, context)
+    }
+}
+
+public struct C2SClient: Sendable {
+    public let host: String
+    public let port: Int
+    public let useTLS: Bool
+    public let tokenProvider: C2STokenProvider?
+
+    /// Creates a C2S client targeting a service over native gRPC.
+    /// - Parameters:
+    ///   - host: target host.
+    ///   - port: target port.
+    ///   - useTLS: when true (default) the connection is secured with TLS using
+    ///     the system default configuration; when false it is plaintext.
+    ///   - tokenProvider: optional token provider. When non-nil, every call carries
+    ///     an `authorization: Bearer <token>` metadata header.
+    public init(
+        host: String,
+        port: Int,
+        useTLS: Bool = true,
+        tokenProvider: C2STokenProvider? = nil
+    ) {
+        self.host = host
+        self.port = port
+        self.useTLS = useTLS
+        self.tokenProvider = tokenProvider
+    }
+
+    private func interceptors() -> [any ClientInterceptor] {
+        guard let tokenProvider = self.tokenProvider else {
+            return []
+        }
+        return [C2SBearerTokenInterceptor(tokenProvider: tokenProvider)]
+    }
+
+    private func transportSecurity() -> HTTP2ClientTransport.Posix.TransportSecurity {
+        self.useTLS ? .tls : .plaintext
+    }
+{{range .Services}}
+
+    public func {{.MethodName}}<Result: Sendable>(
+        _ body: ({{.ClientType}}.Client<HTTP2ClientTransport.Posix>) async throws -> Result
+    ) async throws -> Result {
+        try await withGRPCClient(
+            transport: .http2NIOPosix(
+                target: .dns(host: self.host, port: self.port),
+                transportSecurity: self.transportSecurity()
+            ),
+            interceptors: self.interceptors()
+        ) { client in
+            try await body({{.ClientType}}.Client(wrapping: client))
+        }
+    }
+{{end}}
+}

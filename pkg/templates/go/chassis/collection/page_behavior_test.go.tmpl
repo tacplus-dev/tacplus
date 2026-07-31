@@ -1,0 +1,103 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// CODE GENERATED - DO NOT EDIT
+
+// Behavioral tests for the PAGE token codec (PC-C-2): the token must be
+// BYTE-IDENTICAL across the go/rust/java server backends — a token minted by
+// one backend decodes on any other, and the interop pins below are shared
+// verbatim with the rust page_tests and the java CollectionRuntimeTest. The
+// unicode leg exercises exactly the go-specific hazards: SetEscapeHTML(false)
+// (< > & stay raw), the U+2028/U+2029 unescape rewrite, and the escaped-
+// backslash walk (a literal "\u2028" text sequence must never be rewritten).
+package collection
+
+import "testing"
+
+// Cross-language golden vectors — identical strings are pinned in
+// rust/chassis/collection lib.rs page_tests and java CollectionRuntimeTest.
+const (
+	pageTokenVectorSimple  = "eyJ2IjoxLCJrIjpbImFiYyIsIjEyMyJdfQ"
+	pageTokenVectorUnicode = "eyJ2IjoxLCJrIjpbImFcImJcXGMiLCI8eD4mw6kiLCJsaW5l4oCoc2VwIl19"
+)
+
+func TestPageTokenByteIdentitySimple(t *testing.T) {
+	tok, err := EncodePageToken(&Cursor{Keys: []string{"abc", "123"}})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if tok != pageTokenVectorSimple {
+		t.Fatalf("simple token drifted from the cross-language vector: %q", tok)
+	}
+	c, err := DecodePageToken(tok)
+	if err != nil || len(c.Keys) != 2 || c.Keys[0] != "abc" || c.Keys[1] != "123" {
+		t.Fatalf("roundtrip: %v %+v", err, c)
+	}
+}
+
+// The unicode vector pins the three go-specific hazards in one token: JSON
+// string escapes ("a\"b\\c"), HTML-escaping OFF ("<x>&é" must stay raw), and
+// the U+2028 LINE SEPARATOR unescape rewrite ("line sep" as the raw
+// character).
+func TestPageTokenByteIdentityUnicode(t *testing.T) {
+	keys := []string{"a\"b\\c", "<x>&é", "line sep"}
+	tok, err := EncodePageToken(&Cursor{Keys: keys})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if tok != pageTokenVectorUnicode {
+		t.Fatalf("unicode token drifted from the cross-language vector: %q", tok)
+	}
+	c, err := DecodePageToken(tok)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for i, want := range keys {
+		if c.Keys[i] != want {
+			t.Fatalf("key %d roundtrip: got %q want %q", i, c.Keys[i], want)
+		}
+	}
+}
+
+// A key containing the LITERAL text `\u2028` (backslash, u, 2, 0, 2, 8) is
+// JSON-encoded with an escaped backslash; the unescape walk must leave it
+// untouched — rewriting it would corrupt the key on decode.
+func TestPageTokenEscapedBackslashIsNotRewritten(t *testing.T) {
+	tok, err := EncodePageToken(&Cursor{Keys: []string{`\u2028`}})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if tok != "eyJ2IjoxLCJrIjpbIlxcdTIwMjgiXX0" {
+		t.Fatalf("escaped-backslash token drifted: %q", tok)
+	}
+	c, err := DecodePageToken(tok)
+	if err != nil || len(c.Keys) != 1 || c.Keys[0] != `\u2028` {
+		t.Fatalf("literal \\u2028 text must survive the roundtrip, got %v %+v", err, c)
+	}
+}
+
+func TestPageTokenDecodeNegatives(t *testing.T) {
+	if c, err := DecodePageToken(""); err != nil || c != nil {
+		t.Fatalf("empty token must decode to nil cursor, got %v %+v", err, c)
+	}
+	for _, bad := range []string{
+		"!!!not-base64!!!",
+		"YWJj",                              // valid b64 "abc" but not our envelope
+		"eyJ2IjoyLCJrIjpbImFiYyJdfQ",        // wrong version
+		"eyJ2IjoxLCJrIjpbImFiYyJdfQ==",      // padded base64 is not our alphabet
+	} {
+		if _, err := DecodePageToken(bad); err == nil {
+			t.Fatalf("malformed token %q must be rejected", bad)
+		}
+	}
+}
+
+func TestEffectivePageSizeClamps(t *testing.T) {
+	if got := EffectivePageSize(0, 50, 10000); got != 50 {
+		t.Fatalf("unset requested must default, got %d", got)
+	}
+	if got := EffectivePageSize(999999, 50, 100); got != 100 {
+		t.Fatalf("oversized requested must clamp to the trust ceiling, got %d", got)
+	}
+	if got := EffectivePageSize(20, 50, 10000); got != 20 {
+		t.Fatalf("in-range requested must pass through, got %d", got)
+	}
+}

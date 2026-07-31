@@ -1,0 +1,91 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// ============================================================================
+// DO NOT MODIFY THIS FILE
+// ============================================================================
+// This file defines the TLS certificate lifecycle service used by auto_tls.
+// Services with auto_tls: true open a bidi stream to this service.
+// The certificate authority service implements the server side.
+// ============================================================================
+
+syntax = "proto3";
+
+package tlscert;
+
+import "sys/spec.proto";
+import "sys/x509.proto";
+import "sys/key.proto";
+
+// TlsCertService provides automatic TLS certificate lifecycle management.
+// The certificate authority service implements the server side. Services with
+// auto_tls: true open a bidi stream via the generated ServiceManager.
+//
+// Flow:
+//   1. Service sends Init (identifies itself) + Csr (public key)
+//   2. Certificate authority signs cert under service's intermediate CA, returns CertDelivery
+//   3. At half-life, certificate authority sends Renew
+//   4. Service generates new keypair, sends Csr
+//   5. Certificate authority signs, returns CertDelivery
+//   6. Repeat from 3
+service TlsCertService {
+  // ManageCert: bidi cert lifecycle. Any authenticated service may open a
+  // stream — the SecurityInterceptor validates the bearer token before
+  // the handler runs, and the handler matches the token's location-agnostic
+  // service path (token.service_path(), derived from sub_type/sub — never a
+  // raw SPIFFE URI claim) to the requested service_name in the first Init
+  // message.
+  rpc ManageCert(stream TlsCertClientMsg) returns (stream TlsCertServerMsg) {
+    option (spec.method_s2s) = {auth_services: ["*"]};
+  }
+}
+
+// TlsCertClientMsg is sent by the service on the bidi stream.
+message TlsCertClientMsg {
+  oneof msg {
+    // init identifies the service instance (first message).
+    TlsCertInit init = 1;
+    // csr provides a public key for the certificate authority to sign.
+    TlsCertCsr csr = 2;
+  }
+}
+
+// TlsCertInit identifies a service instance opening a cert management stream.
+message TlsCertInit {
+  // service_name is the canonical service name (from registry).
+  string service_name = 1 [(spec.assert_required) = true, (spec.assert_min_size) = 1];
+  // instance_id is the unique identifier for this service instance.
+  string instance_id = 2 [(spec.assert_required) = true, (spec.assert_min_size) = 1];
+}
+
+// TlsCertCsr provides a public key for the certificate authority to sign.
+message TlsCertCsr {
+  // public_key is the public key to be certified (Ed25519 or ECDSA P-256).
+  // The corresponding private key stays on the service and is never sent upstream.
+  key.PublicKey public_key = 1 [(spec.assert_required) = true];
+}
+
+// TlsCertServerMsg is sent by the certificate authority on the bidi stream.
+message TlsCertServerMsg {
+  oneof msg {
+    // cert delivers a signed certificate chain (no private key).
+    TlsCertDelivery cert = 1;
+    // renew signals the service to generate a new keypair and send a Csr.
+    TlsCertRenew renew = 2;
+    // error signals a terminal error.
+    string error = 3;
+  }
+}
+
+// TlsCertDelivery carries a signed certificate chain from the certificate authority to the service.
+message TlsCertDelivery {
+  // chain contains the signed cert chain: leaf (service cert) + intermediate CA.
+  // No private key — the service generated the keypair locally.
+  x509.X509CertChain chain = 1 [(spec.assert_required) = true];
+}
+
+// TlsCertRenew signals that the service should generate a new keypair and
+// send a Csr. The certificate authority sends this when the current cert reaches half-life.
+message TlsCertRenew {
+  // reason is a human-readable reason for the renewal (e.g., "half-life reached").
+  string reason = 1;
+}

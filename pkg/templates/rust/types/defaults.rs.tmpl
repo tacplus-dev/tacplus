@@ -1,0 +1,75 @@
+{{- /* Rust type defaults template */ -}}
+/// Applies default values to zero-valued fields of {{.TypeName}}.
+pub fn {{.FnName}}_defaults({{if and (not .Defaults) (not .SubMsgCalls)}}_msg{{else}}msg{{end}}: &mut {{.TypeName}}) {
+{{- range .Defaults}}
+{{- if .IsOptional}}
+{{- if eq .Kind "string"}}
+if msg.{{.FieldName}}.as_ref().map_or(true, |v| v.is_empty()) {
+msg.{{.FieldName}} = Some({{.ConstName}}.to_string());
+}
+{{- else if eq .Kind "int"}}
+if msg.{{.FieldName}}.is_none() || msg.{{.FieldName}} == Some(0) {
+{{- if .NeedsCast}}
+msg.{{.FieldName}} = Some({{.ConstName}} as {{.CastType}});
+{{- else}}
+msg.{{.FieldName}} = Some({{.ConstName}});
+{{- end}}
+}
+{{- else if eq .Kind "float"}}
+if msg.{{.FieldName}}.is_none() || msg.{{.FieldName}} == Some(0.0) {
+{{- if .NeedsCast}}
+msg.{{.FieldName}} = Some({{.ConstName}} as {{.CastType}});
+{{- else}}
+msg.{{.FieldName}} = Some({{.ConstName}});
+{{- end}}
+}
+{{- else if eq .Kind "bool"}}
+if msg.{{.FieldName}}.is_none() || msg.{{.FieldName}} == Some(false) {
+msg.{{.FieldName}} = Some({{.ConstName}});
+}
+{{- else if eq .Kind "host"}}
+if msg.{{.FieldName}}.is_none() { msg.{{.FieldName}} = Some(Host { host: "{{.HostHost}}".into(), port: {{.HostPort}}, protocol: 0 }); }
+{{- end}}
+{{- else}}
+{{- if eq .Kind "string"}}
+if msg.{{.FieldName}}.is_empty() {
+msg.{{.FieldName}} = {{.ConstName}}.to_string();
+}
+{{- else if eq .Kind "int"}}
+if msg.{{.FieldName}} == 0 {
+{{- if .NeedsCast}}
+msg.{{.FieldName}} = {{.ConstName}} as {{.CastType}};
+{{- else}}
+msg.{{.FieldName}} = {{.ConstName}};
+{{- end}}
+}
+{{- else if eq .Kind "float"}}
+if msg.{{.FieldName}} == 0.0 {
+{{- if .NeedsCast}}
+msg.{{.FieldName}} = {{.ConstName}} as {{.CastType}};
+{{- else}}
+msg.{{.FieldName}} = {{.ConstName}};
+{{- end}}
+}
+{{- else if eq .Kind "bool"}}
+if !msg.{{.FieldName}} {
+msg.{{.FieldName}} = {{.ConstName}};
+}
+{{- else if eq .Kind "host"}}
+if msg.{{.FieldName}}.is_none() { msg.{{.FieldName}} = Some(Host { host: "{{.HostHost}}".into(), port: {{.HostPort}}, protocol: 0 }); }
+{{- end}}
+{{- end}}
+{{- end}}
+{{- range .SubMsgCalls}}
+{{- if .InitIfNil}}
+{{- if .HasDefaults}}
+let v = msg.{{.FieldName}}.get_or_insert_with(Default::default);
+{{.FuncName}}_defaults(v);
+{{- else}}
+let _ = msg.{{.FieldName}}.get_or_insert_with(Default::default);
+{{- end}}
+{{- else}}
+if let Some(ref mut v) = msg.{{.FieldName}} { {{.FuncName}}_defaults(v); }
+{{- end}}
+{{- end}}
+}

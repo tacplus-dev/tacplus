@@ -1,0 +1,170 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+#
+# CODE GENERATED - DO NOT EDIT
+# Generated runtime support for Kubernetes-style tag sets and selectors.
+
+from __future__ import annotations
+
+import re
+from typing import Mapping
+
+from {{.PythonPackageBase}}.types.sys.tags import tags_pb2
+
+
+_OP_IN = 1
+_OP_NOT_IN = 2
+_OP_EXISTS = 3
+_OP_DOES_NOT_EXIST = 4
+
+_TAG_NAME = re.compile(r"^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$")
+_DNS_SEGMENT = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+
+
+def contains_all(have: tags_pb2.TagSet | None, want: tags_pb2.TagSet | None) -> bool:
+    return contains_all_map(_tags_map(have), _tags_map(want))
+
+
+def contains_all_map(
+    have: Mapping[str, str] | None,
+    want: Mapping[str, str] | None,
+) -> bool:
+    if not want:
+        return True
+    if have is None:
+        return False
+    return all(have.get(key) == value for key, value in want.items())
+
+
+def matches(selector: tags_pb2.TagSelector | None, tags: tags_pb2.TagSet | None) -> bool:
+    return matches_map(selector, _tags_map(tags))
+
+
+def matches_map(
+    selector: tags_pb2.TagSelector | None,
+    tags: Mapping[str, str] | None,
+) -> bool:
+    if selector is None:
+        return True
+    if not contains_all_map(tags, selector.match_tags):
+        return False
+    return all(_match_requirement(req, tags) for req in selector.match_expressions)
+
+
+def validate_tag_set(tag_set: tags_pb2.TagSet | None) -> None:
+    if tag_set is None:
+        raise ValueError("tag set is None")
+    for key, value in tag_set.tags.items():
+        validate_key(key)
+        try:
+            validate_value(value)
+        except ValueError as exc:
+            raise ValueError(f"tag {key!r}: {exc}") from exc
+
+
+def validate_selector(selector: tags_pb2.TagSelector | None) -> None:
+    if selector is None:
+        raise ValueError("tag selector is None")
+    for key, value in selector.match_tags.items():
+        validate_key(key)
+        try:
+            validate_value(value)
+        except ValueError as exc:
+            raise ValueError(f"match_tags[{key!r}]: {exc}") from exc
+    for i, req in enumerate(selector.match_expressions):
+        try:
+            validate_key(req.key)
+        except ValueError as exc:
+            raise ValueError(f"match_expressions[{i}]: {exc}") from exc
+
+        if req.operator in (_OP_IN, _OP_NOT_IN):
+            if not req.values:
+                raise ValueError(
+                    f"match_expressions[{i}]: operator {req.operator} requires at least one value"
+                )
+            for j, value in enumerate(req.values):
+                try:
+                    validate_value(value)
+                except ValueError as exc:
+                    raise ValueError(f"match_expressions[{i}].values[{j}]: {exc}") from exc
+        elif req.operator in (_OP_EXISTS, _OP_DOES_NOT_EXIST):
+            if req.values:
+                raise ValueError(
+                    f"match_expressions[{i}]: operator {req.operator} requires no values"
+                )
+        else:
+            raise ValueError(f"match_expressions[{i}]: invalid operator {req.operator}")
+
+
+def validate_key(key: str) -> None:
+    if key == "":
+        raise ValueError("tag key is empty")
+    name = key
+    if "/" in key:
+        parts = key.split("/")
+        if len(parts) != 2:
+            raise ValueError(f"tag key {key!r} must contain at most one '/'")
+        _validate_prefix(parts[0], key)
+        name = parts[1]
+    try:
+        _validate_name(name, is_value=False)
+    except ValueError as exc:
+        raise ValueError(f"tag key {key!r} has invalid name: {exc}") from exc
+
+
+def validate_value(value: str) -> None:
+    if value == "":
+        return
+    try:
+        _validate_name(value, is_value=True)
+    except ValueError as exc:
+        raise ValueError(f"tag value {value!r} is invalid: {exc}") from exc
+
+
+def _tags_map(tag_set: tags_pb2.TagSet | None) -> Mapping[str, str] | None:
+    if tag_set is None:
+        return None
+    return tag_set.tags
+
+
+def _match_requirement(
+    req: tags_pb2.TagSelectorRequirement,
+    tags: Mapping[str, str] | None,
+) -> bool:
+    value = tags.get(req.key) if tags is not None else None
+    exists = value is not None
+    if req.operator == _OP_IN:
+        return exists and value in req.values
+    if req.operator == _OP_NOT_IN:
+        return not exists or value not in req.values
+    if req.operator == _OP_EXISTS:
+        return exists
+    if req.operator == _OP_DOES_NOT_EXIST:
+        return not exists
+    return False
+
+
+def _validate_prefix(prefix: str, key: str) -> None:
+    if prefix == "":
+        raise ValueError(f"tag key {key!r} has empty prefix")
+    if len(prefix) > 253:
+        raise ValueError(f"tag key {key!r} prefix exceeds 253 characters")
+    for segment in prefix.split("."):
+        if segment == "":
+            raise ValueError(f"tag key {key!r} has empty DNS segment")
+        if len(segment) > 63:
+            raise ValueError(f"tag key {key!r} DNS segment exceeds 63 characters")
+        if not _DNS_SEGMENT.fullmatch(segment):
+            raise ValueError(
+                f"tag key {key!r} DNS segment must contain lowercase alphanumerics or '-' and start/end alphanumeric"
+            )
+
+
+def _validate_name(name: str, is_value: bool) -> None:
+    if name == "":
+        if is_value:
+            return
+        raise ValueError("empty name")
+    if len(name) > 63:
+        raise ValueError("exceeds 63 characters")
+    if not _TAG_NAME.fullmatch(name):
+        raise ValueError("must contain alphanumerics, '-', '_' or '.' and start/end alphanumeric")

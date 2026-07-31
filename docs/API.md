@@ -1,0 +1,588 @@
+# tacplus Generated API
+
+This document defines the public API surfaces tacplus generates and the
+behavioral guarantees those surfaces provide. `USER.md` explains how to declare
+these surfaces in proto and `tacplus.yaml`; `DEVELOPMENT.md` explains how the
+compiler preserves them.
+
+The rule of thumb is simple: hand-written service code implements business
+logic at the generated handler seam. Everything else that is common across
+services or languages is generated and owned by tacplus.
+
+## Generated Surface
+
+For a proto package that declares services, state, stores, or client
+dependencies, tacplus emits the full service surface in the full-service
+targets (`go`, `rust`, `java`):
+
+| Surface | Contract |
+|---|---|
+| ServiceManager | Owns startup, identity, config, state-store connection, TLS, generated clients, server wrappers, health, tracing, and shutdown. |
+| Handler | The only business-logic seam. Implementers provide handler methods; generated wrappers call them after auth and validation. |
+| Service wrappers | Enforce inbound validation, authentication, authorization, namespace policy, tracing/accounting, handler dispatch, outbound validation, and stable status-code mapping. |
+| Client managers | Expose typed C2S/W2S/S2S/C2D clients selected by proto annotations and `tacplus.yaml` transport settings, subject to the target language support matrix. |
+| State clients | Expose typed read/write/watch access to proto-declared state roots, with imports restricted to generated read-only accessors. |
+| Typed disk persistence | Exposes typed snapshot and redo-log persistence for generated store/state types when enabled by the generated service/store config. |
+| registry.json | Exposes the normalized semantic IR: types, services, auth metadata, RPC verb/pattern metadata, state roots, projections, annotations, and generated surface metadata. |
+
+No full-service language is the reference implementation. The contract is the
+annotated proto model plus the generated API behavior described here.
+
+Client-only targets do not implement the service runtime contract, and split
+into two tiers. `swift` and `csharp` are "lite" client targets: they emit C2D,
+C2S, and W2S client surfaces, but their W2S is unary-only (HTTP/JSON; no SSE or
+WebSocket streaming): a declared streaming method is omitted from the W2S client
+(logged; not a generation error, so a mixed service still compiles) and
+— unlike the full-client tier — they currently emit no client-side request
+validation and no default request deadline. `python` and
+`typescript` are full-client targets: they emit every client surface (C2D, C2S,
+W2S, and REST) with client-side validation. Both tiers reject S2S clients,
+server wrappers, ServiceManager runtime, EventBus runtime, health runtime, SMB
+runtime, service state, and service stores loudly, instead of silently producing
+partial service code.
+
+## ServiceManager
+
+The ServiceManager (`sm`) is the top-level reachable surface for generated
+runtime infrastructure. Generated helpers and wrappers may exist internally, but
+application code should reach generated capabilities through `sm`.
+
+The ServiceManager is responsible for:
+
+- loading generated config and runtime environment;
+- creating and refreshing identity tokens;
+- obtaining and renewing TLS material;
+- connecting to the state store and declared service dependencies;
+- exposing typed state, store, and service clients;
+- installing generated server wrappers around the handler;
+- publishing health/readiness and trace/accounting events;
+- shutting down owned tasks, streams, and clients.
+
+If a service implementation manually wires raw gRPC servers, auth interceptors,
+state-watch loops, bearer headers, or generated transport clients that should be
+available through `sm`, that is either a caller bug or a missing generated
+surface.
+
+### Certificate Delivery Streams
+
+Generated ServiceManagers own long-lived certificate delivery streams in
+full-service targets (`go`, `rust`, `java`). The contract applies to both
+auto-TLS (`X509Mint`/`ManageCert`) and SMB member certificate
+(`SmbCertService`/`ManageSmbCert`) streams.
+
+Certificate streams are startup-critical until the first usable credential is
+installed. After that first credential, they are renewal-critical: failures must
+be retried without leaving the service permanently stale or pairing an old
+certificate with a new private key. Handlers only install delivered credentials
+through the generated handler seam.
+
+Startup follows this state machine:
+
+1. Resolve the authority endpoint for the current attempt.
+2. Generate a pending private key and CSR.
+3. Open the certificate stream with a cancellable attempt context.
+4. Wait for the first delivery.
+5. Promote the pending key only after the matching certificate delivery is
+   accepted by the generated handler seam.
+6. Report startup success only after the first credential has been installed.
+
+Startup attempts use bounded exponential backoff with a shutdown escape. If the
+attempt budget is exhausted before first delivery, startup fails loudly.
+Shutdown or cancellation exits without reporting a false startup success.
+
+Required failure behavior:
+
+| Case | Generated behavior |
+|---|---|
+| Authority unreachable before first delivery | Retry with bounded backoff; exhaust budget as startup error. |
+| Stream open error before first delivery | Retry with bounded backoff; exhaust budget as startup error. |
+| Clean stream end before first delivery | Startup error for that attempt; retry until the startup budget is exhausted. |
+| Server error before first delivery | Startup error for that attempt; retry until the startup budget is exhausted. |
+| First-delivery handler failure | Fatal startup error; do not retry because local installation failed. |
+| Shutdown before first delivery | Exit promptly and do not mark startup successful. |
+| Clean stream end after first delivery | Reconnect while running, with backoff and endpoint re-resolution inside the loop. |
+| Server error after first delivery | Reconnect while running, with backoff and endpoint re-resolution inside the loop. |
+| Renewal handler failure | Log and retry; keep the last active credential. |
+| Renewal CSR/key generation failure | Log and retry; keep the last active credential. |
+
+Every renewal attempt uses a pending key distinct from the active key. The
+active key must not be replaced at CSR generation time. Promotion is atomic:
+generate pending key, send the CSR built from it, receive the matching
+certificate chain, invoke the generated handler seam with the pending key and
+delivered certificate, and promote pending to active only if the handler returns
+success. On stream error, clean stream end, handler failure, cancellation, or
+shutdown, the pending key is discarded and the service keeps using the last
+active credential until a future renewal succeeds.
+
+Every stream attempt must have a cancellable context or equivalent cancellation
+handle. On every exit path, including clean stream end, server error, startup
+failure, handler failure, timeout, and shutdown, generated code cancels or
+half-closes the stream or call before retrying or returning. Reconnect loops
+re-resolve the authority endpoint on every attempt; a certificate stream must
+not pin a dead channel, stub, observer, or connection forever after the
+authority endpoint changes.
+
+SMB member certificate delivery follows the same state machine and staging
+rules. The delivered per-SMB CA certificate is the trust anchor for the
+black-box member mesh. The true root CA and any CA private key must not enter
+generated black-box runtime configuration. The generated SMB handler seam
+receives the delivered member certificate chain, the pending member private key,
+and the delivered per-SMB CA certificate; the pending member key is promoted
+only after that handler seam succeeds.
+
+The behavioral fixture for this contract drives both auto-TLS and SMB loops
+through first delivery success, renewal success, clean end before and after
+first delivery, server error before and after first delivery, authority
+unreachable, first-delivery handler failure, renewal handler failure, endpoint
+re-resolution after reconnect, and shutdown during startup and renewal
+attempts. Template-level regression tests pin the state-machine markers where a
+full runtime fixture is not practical.
+
+## Handler And Wrappers
+
+Handlers are the only generated seam intended for handwritten business logic.
+The generated wrapper owns the request pipeline:
+
+1. Decode the proto message.
+2. Authenticate and authorize when auth is enabled. This precedes validation so
+   an unauthenticated caller cannot drive the validation path or distinguish
+   outcomes by the validation errors it returns.
+3. Validate inbound request constraints before handler dispatch.
+4. Enforce subject/object namespace rules when the proto declares namespace
+   fields: a subject may act only at or below its namespace level.
+5. Call the handler.
+6. Validate each outbound response or stream item before sending it.
+7. Map failures to stable generated error/status codes.
+8. Emit trace/accounting/health hooks where the generated service surface
+   requires them.
+
+Outbound validation applies to user-defined response messages on every
+generated full-service send path, including gRPC unary/streaming and W2S
+REST/SSE translation. `google.protobuf.*` well-known responses such as
+`Empty` carry no tacplus `assert_*` constraints, so generated wrappers pass
+them through without a validation call.
+
+Auth-disabled methods skip token lookup and authorization but still validate
+messages. Auth-enabled methods must not reach the handler without a valid token
+and a satisfied authorization decision.
+
+## Transport Surfaces
+
+Service shape is declared in proto. `tacplus.yaml` only chooses which transport
+surfaces to emit for the current package and language.
+
+| Surface | Meaning | Transport |
+|---|---|---|
+| C2S | client to service | native gRPC |
+| W2S | web to service | gRPC-over-HTTP/REST surface suitable for browser callers |
+| S2S | service to service | native gRPC with service identity tokens |
+| C2D | client to daemon | local IPC gRPC, such as Unix domain sockets or named pipes |
+
+C2S and W2S are not mutually exclusive for full-service targets. A native/server
+package may enable either or both. Browser web apps should enable W2S and should
+not enable C2S.
+
+C2D is a local daemon IPC surface; it does not introduce SMN/SMB mesh work.
+The lite client targets (`swift`, `csharp`) emit C2D, C2S, and W2S clients
+(their W2S is unary-only — see above); the full-client targets (`python`,
+`typescript`) additionally emit REST clients.
+
+### Client Send Contract
+
+Generated clients validate before sending. Auth scope depends on the call
+shape:
+
+- **Unary / server-streaming**: a fresh token is obtained per CALL; if the
+  identity manager cannot provide one, the call fails before leaving the
+  process.
+- **Client-streaming / bidi**: auth is STREAM-OPEN scoped — exactly one token
+  is attached to the stream headers when the stream opens (gRPC metadata
+  cannot change mid-stream). There is deliberately no per-send token
+  preflight: it would mint a token the server never sees while still being
+  able to fail a legitimate send. A server that rejects an expired stream
+  credential terminates the stream; the generated reconnect paths (e.g.
+  EventBus subscribers) obtain a fresh token per reconnect attempt.
+
+Auth-disabled calls bypass token lookup.
+
+Generated mutation helpers do not retry by default unless the generated API
+explicitly marks the operation as safe. Read-like helpers may use generated
+retry/backoff policy.
+
+## State And Store Access
+
+A message annotated as service state becomes a typed state root. The generated
+surface includes:
+
+- a state service with typed Get/Set/Watch/Delete-style RPCs for the declared
+  boundaries;
+- typed state clients surfaced from the ServiceManager;
+- generated import accessors for read-only cross-service state imports;
+- server-side enforcement that imports cannot write through raw RPCs;
+- view services for declared read-only unions across compatible roots;
+- topic, queue, command, persistence, and eviction behavior declared by proto
+  annotations.
+
+Services own their state. Other services access exported state through declared
+imports and generated read-only accessors, not by manually dialing backing state
+services.
+
+## Typed Disk Persistence
+
+Typed disk persistence is the generated disk analogue of typed HTTP clients:
+code reads and writes proto types with generated serialization and validation,
+not raw JSON or ad hoc file I/O.
+
+The generated contract is:
+
+- JSON plus newline framing only; no alternate on-disk format;
+- write paths use generated `ToJSON` helpers;
+- read paths use generated `FromJSON` helpers and then `Validate`;
+- invalid data on read fails closed;
+- single-writer, single-process, local-filesystem only;
+- same-directory atomic rename and file/parent-directory fsync for replacement
+  writes;
+- archive rotation for replaced or compacted files;
+- redo logs append newline-delimited records and compact by snapshotting the
+  latest keyed state;
+- restore handles active, temporary, and in-progress promoted files without
+  silently dropping a committed baseline.
+
+The ServiceManager owns scheduled redo-log lifecycle when the init-time
+`grpcconfig.Config.disk_persistence` setting is present. Generated
+ServiceManagers open one redo-log handle per hosted keyed `service_store`,
+expose those handles to service code, and run deterministic per-store roll
+schedulers. This setting is not hot-reloaded; service code should append through
+the ServiceManager-owned handles and should not run its own backup loop for
+generated stores.
+
+## Collection RPCs
+
+Collection-returning RPCs are explicit. A multi-result read declares a
+`method_collection` mode and bound; tacplus derives transport tier, flow
+control, and public handler/client shapes from that declaration.
+
+A unary response whose only meaningful field is one repeated result field is
+the Tier-1 collection convention and must be annotated. Tacplus rejects that
+shape when `method_collection` is absent because there is no safe way to infer
+bounds, transport tier, or public handler/client shape from proto alone.
+Composite responses that happen to contain repeated nested fields are not
+treated as collection reads unless annotated.
+
+### Modes
+
+| Mode | Contract |
+|---|---|
+| SNAPSHOT | Finite point-in-time result. Requires a positive `max_items`; terminates. |
+| WATCH | Open-ended change stream. Requires an explicit `from_revision`; does not self-terminate. |
+| PAGE | Unary, client-driven window over an ordered set. Requires `order_by` and a positive `default_page_size`; the client resumes with an opaque `page_token`. |
+
+An unbounded non-async read is invalid. If a read is unbounded, it is a WATCH.
+
+### Snapshot Tiers
+
+Tacplus computes `max_items * item_bytes` and selects a delivery tier:
+
+| Tier | Wire shape | Handler surface | Client surface |
+|---|---|---|---|
+| Tier 1 | unary response with exactly one repeated field | materialized collection | materialized collection |
+| Tier 2 | server-streaming items | materialized collection | materialized collection |
+| Tier 3 | server-streaming items | lazy producer/iterator | lazy iterator/stream |
+
+Tier-2 and Tier-3 proto methods are ordinary gRPC server-streaming methods. The
+streamed message is the item. Tier-1 proto methods are ordinary unary methods
+whose response contains exactly one repeated field.
+
+### WATCH Contract
+
+A WATCH proto method is an ordinary server-streaming RPC whose response is an
+author-declared envelope:
+
+- `snapshot_item` entries establish the initial state;
+- `snapshot_done` carries the revision at which that snapshot is complete;
+- `delta` entries carry later changes;
+- stale `from_revision` returns `OUT_OF_RANGE`, prompting the client to relist.
+
+The handler returns a language-appropriate `WatchSource` shape containing scope,
+snapshot producer, revision, and change producer. The generated wrapper owns
+envelope framing, replay-ring lookup, relist behavior, teardown, and flow
+control. The replay ring lives in a shared per-language collection runtime lib,
+keyed by scope and bounded by `replay_depth`.
+
+### PAGE Contract
+
+A PAGE proto method is an ordinary **unary** RPC. The request carries the filter
+fields plus `int32 page_size` and `string page_token`; the response carries
+exactly one `repeated` items field, `string next_page_token`, and an optional
+`int64 total_count`. Generation rejects a request that declares `page_token` /
+`page_size` (or a response with `next_page_token`) but lacks
+`COLLECTION_MODE_PAGE` — otherwise it would silently degrade to an unbounded
+unary with no page ceiling.
+
+The generated wrapper owns the page mechanics; the handler is a keyset producer:
+
+- `page_token` decodes to a keyset cursor (the `order_by` key of the last row).
+  A malformed token is `INVALID_ARGUMENT` — never a silent reset to the first
+  page (which would skip rows and read as success).
+- The effective page size is `page_size` when positive, else `default_page_size`,
+  clamped to the trust tier's `MaxPageSize` (`Ceilings.MaxItems`: 100 anon /
+  10k C2S-auth / 1M S2S). This is the per-call row ceiling that SNAPSHOT's
+  `max_items` provides statically and that streaming reads lack.
+- The handler receives `PageParams{limit, after}` plus the request and returns a
+  `Page{items, nextAfter, total}` (`total = -1` means "unknown", not "empty").
+  The wrapper encodes `nextAfter` into `next_page_token` (empty on the last
+  page) and sets `total_count` only when the handler computed it.
+
+The `page_token` is opaque, versioned, and **byte-identical across all
+full-service backends** — base64url(no pad) of `{"v":1,"k":[...]}` over the
+`order_by` key — so a token minted against one backend decodes on any other.
+Pages are best-effort keyset over `order_by` (stable when the sort key is
+monotonic/immutable); they are not a point-in-time snapshot unless the handler
+bakes a revision into the key.
+
+Each language exposes two client seams: an explicit single-page call
+(`{Method}Page` → items + `next_page_token` + total) and an auto-pager (the
+natural method name) that follows `next_page_token` until exhausted —
+`iter.Seq2` (Go), an async generator (TypeScript), an async generator (Python),
+a `futures::Stream` (Rust), and a lazy `Iterator` (Java). The auto-pager
+advances the token on a request clone, so the caller's request is not mutated.
+
+### Flow Control And Teardown
+
+Generated stream wrappers must respect transport backpressure and deterministic
+cleanup. Java uses `ServerCallStreamObserver` readiness hooks. TypeScript uses
+`write()` backpressure and `drain`. Go, Rust, and Python rely on their native
+stream/cancellation semantics.
+
+Idle-timeout backstop — scope. The generated idle-timeout backstop applies to
+**long-lived WATCH streams**: the replay Ring waits for the next delta and, if
+none arrives within the caller's trust-tier `STREAM_IDLE_TIMEOUT`, ends the
+stream with `DEADLINE_EXCEEDED` — a living query must not pin a connection
+forever while idle. It does **not** apply to finite **Tier-3 SNAPSHOT cursors**:
+a cursor is a bounded pull over a materialized result set, so its teardown is
+driven by exhaustion, client cancellation, or the request context deadline, not
+a server-side idle timer. (The cursor producer is a synchronous pull — an
+`iter.Seq2` / equivalent — that cannot be preempted mid-`Next` without leaking
+the producer goroutine, so a per-item idle timer is deliberately not generated;
+a handler whose producer can wedge must honor the context itself.)
+
+## EventBus Topics
+
+EventBus participation in generated service runtimes is declared, never
+inferred. A topic is a message
+carrying `(spec.service_event)` (with `tag` naming the broker service) plus a
+field carrying `(spec.topic) = true`. Producers and consumers declare
+`(spec.event_publish)` / `(spec.event_watch)` with a `topic_ref` in the
+canonical format, parsed from the right so dotted packages work:
+
+```text
+<proto-package>.<topic-message>.<topic-field>
+e.g. claudesensor.AgenticCodeEventBus.event_stream
+```
+
+Full-service generation validates every `topic_ref` before emitting code: it must match the
+grammar, resolve to exactly one package/message/field, point at a
+`(spec.service_event)` message and a `(spec.topic)` field, and preserve the
+field's protobuf type as the event type. Ambiguity or absence fails generation.
+
+Typed EventBus Subscribe responses use a metadata-bearing envelope, not a bare
+event payload. Field 1 is the record metadata and field 2 is the typed event
+payload. The metadata wire fields are stable across languages:
+`key = 1`, `topic = 2`, `partition = 3`, `offset = 4`, and
+`timestamp = 5`.
+
+EventBus publish/watch RPCs are derived RPCs, and **auth uses the standard
+method auth model, not an EventBus-specific vocabulary**: the
+`event_publish`/`event_watch` annotations carry the normal `method_s2s` /
+`method_c2s` shapes, and generation copies that policy onto the derived RPC's
+metadata exactly as if hand-authored. Topic declarations are collected from all
+loaded descriptors, but publish/watch bindings attach only to the **current
+actor's own protos** — importing a proto never makes a service (or the broker
+itself) a producer or subscriber.
+
+## RPC Patterns And Verbs
+
+Every RPC resolves to exactly one pattern from a closed set, with one static
+access kind: `GET` (READ) · `LIST` (READ; SNAPSHOT or PAGE) · `WATCH` (READ) ·
+`CREATE`/`UPDATE`/`DELETE` (WRITE) · `ACTION` · `CLIENT_STREAM` · `BIDI`
+(declared access, default WRITE). One method = one verb = one access kind;
+branching a method's meaning on input is an architectural-norm violation (see
+`DEVELOPMENT.md`).
+
+RPC names are `Verb<Noun>` (PascalCase, verb first) against a **closed verb
+registry**. A verb exists only if the operation cannot be expressed as
+Get/List/Watch/Create/Update/Delete without losing meaning (the fold test);
+synonyms fold to canonicals and are rejected:
+
+- **Core (6)**: Get, List (replaces Search/Query/Find), Watch, Create, Update,
+  Delete.
+- **Action (14)**: Mint, Revoke, Authorize, Send, Publish, Subscribe, Broker,
+  Execute, Cancel, Retry, Reset, Ping, Proxy, Merge. `Subscribe` and `Broker`
+  are canonical action verbs (not folded to `Watch`); the messaging verbs are
+  `Send`/`Publish`/`Subscribe`/`Broker`. Stateful vs stateless rule:
+  `Create`/`Delete` for stored resources; `Mint`/`Revoke` for self-contained
+  credentials (a JWT is `MintToken`, never `CreateSession`). Protocol-mandated
+  URL paths (OAuth/OIDC/SAML) live on `rest_path`/`acs_path`; the *name*
+  conforms to the registry.
+- **AI/Agent (7)**: Generate, Embed, Classify, Rank, Assist, Guard, Evaluate —
+  all under the `AGENT` entitlement scope. Fold rules: Summarize/Translate/
+  Rewrite/Redact→Generate; Moderate/Detect→Classify; Rerank→Rank;
+  Plan/Critique→Assist; semantic Search→List.
+
+The registry is governed: core/action verbs admit rarely under strict review;
+agent verbs have a lighter bar but the registry stays closed. The authored
+compiler dictionary is `pkg/internal/common/verbs/registry.json`; generated
+service semantic output lands in the build artifact `registry.json` `RpcInfo`
+(see Tracing And Registry).
+`EnforceVerbs` is part of descriptor parsing for generated-auth surfaces:
+non-canonical verbs, folded synonyms, noun-first names, and
+verb/pattern/cardinality mismatches fail generation before registry,
+entitlement, or REST metadata can be emitted. Full design genealogy:
+`../archive/RPC_PATTERNS_AND_VERBS_PLAN.md`.
+
+## Auth And Namespace Policy
+
+Auth policy is declared in proto service and method annotations. Generated code
+performs token verification, service/user authorization, entitlement checks, and
+namespace enforcement before handler dispatch.
+
+Subject namespace and object namespace are distinct. When both are declared, the
+subject namespace must be at or above the object namespace. Generated code must
+deny namespace-mismatched calls before the handler. Channels with auth disabled
+do not perform token lookup but still validate message constraints.
+
+## SPIFFE Identity
+
+All SPIFFE identity construction, parsing, and comparison goes through the
+generated `sys/spiffe` — no generated code or downstream service formats or
+splits `spiffe://...` strings by hand.
+
+**Trust domain.** The URI authority: a single globally unique instance name
+containing no `/` (e.g. `example.com`). Configured per deployment
+(`spiffe_trust_domain`); a missing or malformed value fails loudly — there is
+no default.
+
+**URI layout** (typed, self-describing — the kind is recoverable from fixed
+tags, no side channel needed):
+
+```text
+spiffe://<trust_domain>/
+  system/<location...>/services/<service>[/workloads/<child>...]
+  tenants/<tenant>/users/<user>
+  tenants/<tenant>/workspaces/<workspace>...
+  tenants/<tenant>/...[/clients/<client>]
+  tenants/<tenant>/...[/credentials/<kind>/<id>]
+  tenants/<tenant>/...[/data/<kind>/<id>]
+```
+
+`/system` holds infrastructure/service identities; `/tenants` holds
+tenant-scoped principals and resources. The `<location...>` tiers between
+`/system/` and `services` are opaque and variable-arity (the parser keys off
+the `services` tag). Reserved tags (`system`, `tenants`, `services`,
+`workloads`, `users`, `workspaces`, `clients`, `credentials`, `data`) are
+rejected as namespace segments at every depth.
+
+**Segment grammar**: `[A-Za-z0-9][A-Za-z0-9._-]*`. Empty segments, separators,
+traversal, query/fragment, control characters, and encoded separators are
+rejected. **Reject by default; never sanitize-and-accept.** Richer external
+identifiers go through `opaque_segment(kind, value)` (SHA-256 over
+`kind‖0x1F‖NFC(value)`, truncated to 160 bits, lowercase base32 no-pad) —
+byte-identical across supported target surfaces.
+
+**Service identity and matching.** The canonical service SPIFFE ID —
+`spiffe://<td>/system[/<loc>...]/services/<svc>` — is what the cert minter
+emits as the X509 URI SAN and what the generated go/rust/java peer verifiers
+require (parsed via sys/spiffe; `SubjectKind == Service`, trust domain equal,
+service label equal). S2S `auth_services` checks match on the
+location-agnostic `service_path()` (the bare service label, location tiers
+stripped), so the same service matches in any cloud/account/az/cluster.
+
+**Token claims.** The SPIFFE ID is *derived* from claims, never carried as a
+claim: `namespace` is the authorization-tree path; `sub` is the stable
+principal id (not a URI); `sub_type` ∈ {service, workload, user, client,
+external}; `azp` is the attestation context (kernel/oauth/saml/cloud-auth) —
+attestation is never encoded in the subject path, so the same human in the
+same tenant role has the same subject regardless of login method.
+`/tenants/<t>/users/<u>` is a tenant-scoped role, not the global human; the
+person is correlated only via the stable IDP `sub`. External tokens are
+rejected by generated internal auth.
+
+Full design rationale and decision record:
+`../archive/SPIFFE_IDENTITY_NORMALIZATION_PLAN.md`.
+
+## Validation And Errors
+
+Every generated language enforces the same field constraints, default collection
+bounds, oneof scalar string/bytes bounds, maximum message nesting depth, enum
+vocabulary, and message validation semantics. Generated validators reject
+nested message graphs deeper than 24 levels and reject enum numeric values not
+declared in the proto. A declared zero/sentinel enum value is allowed unless
+`assert_enum_defined` is present. Generated code should fail closed for invalid
+proto shapes, invalid runtime config, invalid tokens, unsafe transport setup,
+and failed validation.
+
+Generated types and wrappers should expose tacplus structured errors/status
+codes rather than language-specific exception behavior at public seams.
+
+## Tracing And Registry
+
+Generated service wrappers emit typed trace/accounting data where the surface
+requires it. Request handlers are responsible for propagating non-empty
+`trace_id` fields into downstream requests they create.
+
+`registry.json` is the machine-readable semantic IR. Service-local generators
+must read `registry.json`, not parse proto files directly, when they need
+tacplus semantics such as projections, store metadata, auth metadata, or
+generated surface information.
+
+For generated-auth RPCs, `RpcInfo` includes both transport/auth metadata and
+governed classification metadata. A **C2S** generated-auth method that cannot
+classify fails generation (the external surface is strict). An **S2S** or
+**C2D** generated-auth method that cannot classify does NOT fail generation:
+its `RpcInfo` is emitted with `verb_status = "unclassified"` (or `"exempt"`
+when the method carries no auth model at all), the folded verb recorded in
+`folded_to_verb`, and the governed classification fields (`rpc_verb`,
+`rpc_noun`, `method_pattern`, `access_kind`, …) left empty. Internal surfaces
+are looser because store/infra RPCs legitimately fall outside the C2S verb
+dictionary; the recorded `verb_status` is the signal, not a hard failure. When
+classification succeeds:
+
+- `rpc_verb` and `rpc_noun` from the canonical `Verb<Noun>` split.
+- `method_pattern`: `GET`, `LIST`, `WATCH`, `CREATE`, `UPDATE`, `DELETE`,
+  `ACTION`, `CLIENT_STREAM`, or `BIDI`.
+- `access_kind`: `READ` or `WRITE`.
+- `verb_class`: `core`, `action`, or `agent`.
+- `entitlement_scopes`: grant scopes that admit the method, ordered broad to
+  narrow.
+- `retry_policy`: `READ_ONLY`, `WATCH_RECONNECT`, `IDEMPOTENCY_REQUIRED`, or
+  `NO_GENERATED_AUTO_RETRY`.
+- `capability_scope`: primary package capability bucket for capability-any
+  expansion (`READ`, `WRITE`, `WATCH`, `PAGE`, or `AGENT`).
+- `verb_definition`, `verb_boundary`, and `audit_meaning`: governed dictionary
+  metadata for documentation, review, and operator/security surfaces.
+- `rejected_verbs`: known non-canonical verbs that fold to `rpc_verb` and are
+  rejected by generation.
+- `allowed_patterns`: method patterns the canonical verb may resolve to.
+- `handler_shape`: `UNARY`, `SERVER_STREAM`, `CLIENT_STREAM`, or `BIDI`.
+
+The root `entitlement_grants` array is the generated grant catalog for C2S
+authorization tooling. It includes entitlement-checked C2S methods, not
+`auth_disabled` or `auth_any_user` methods. Exact grants identify one
+package/service/RPC token. Wildcard grants such as `PACKAGE_ANY`,
+`PACKAGE_READ_ANY`, `PACKAGE_WATCH_ANY`, and `PACKAGE_PAGE_ANY` are convenience
+values whose `expands_to` list contains the exact grants they imply. Runtime
+authorizers should authorize against exact grants after expansion; wildcard
+values are not runtime magic.
+
+Empty classification fields are invalid for **C2S** generated-auth surfaces
+(they hard-fail generation). On S2S/C2D surfaces empty fields are permitted and
+accompanied by a non-`classified` `verb_status`, as described above. Consumers
+should read the generated fields (and `verb_status`) rather than inventing a
+second classifier.
+
+## Parity
+
+A generated API is complete only when behavior is equivalent across the
+supported languages for the same proto model. Parity is measured against proto
+annotations, semantic registry metadata, generated-contract tests, and
+soundness checks, not against any single language implementation.

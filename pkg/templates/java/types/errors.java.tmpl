@@ -1,0 +1,13 @@
+{{.Header}}
+package {{.PackagePath}};
+/**
+* ErrorUtils provides convenience methods for creating ProtoException instances
+* with gRPC status codes. These methods follow the Google RPC error model and
+* map to standard gRPC status codes for consistent error handling.
+*
+* See https://cloud.google.com/apis/design/errors for more information.
+* See https://grpc.github.io/grpc/core/md_doc_statuscodes.html for gRPC status codes.
+*/
+public class ErrorUtils {
+{{.Body}}
+}

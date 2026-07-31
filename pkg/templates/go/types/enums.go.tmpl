@@ -1,0 +1,97 @@
+{{- /* Go enum helpers template */ -}}
+// {{.EnumName}}Values returns all valid {{.EnumName}} values (excluding UNDEFINED)
+func {{.EnumName}}Values() []{{.EnumName}} {
+return []{{.EnumName}}{
+{{- range .NonSentinelValues}}
+{{$.EnumName}}_{{.Name}},
+{{- end}}
+}}
+
+// {{.EnumName}}StringValues returns all valid {{.EnumName}} names as strings
+func {{.EnumName}}StringValues() []string {
+return []string{ {{- range $i, $v := .NonSentinelValues}}{{if $i}}, {{end}}"{{$v.FriendlyName}}"{{end}}}}
+
+// Parse{{.EnumName}} converts a string to a {{.EnumName}} enum value
+// Accepts both hyphen and underscore formats for compatibility (case-insensitive)
+func Parse{{.EnumName}}(s string) ({{.EnumName}}, error) {
+// Normalize: convert to lowercase and replace underscores with hyphens for case-insensitive comparison
+normalized := strings.ReplaceAll(strings.ToLower(s), "_", "-")
+switch normalized {
+case "":
+return {{.ZeroValue}}, nil
+{{- range .NonSentinelValues}}
+{{.CaseStatement}}
+return {{$.EnumName}}_{{.Name}}, nil
+{{- end}}
+default:
+return {{.ZeroValue}}, protoerrors.NewErrMissingInvalidData(nil, "invalid {{.LowerEnumName}} %s, expecting one of: %v", s, {{.EnumName}}StringValues())
+}}
+
+// Parse{{.EnumName}}s converts a comma-separated string to a slice of {{.EnumName}} enum values
+// Returns an error if any value is invalid
+func Parse{{.EnumName}}s(s string) ([]{{.EnumName}}, error) {
+if s == "" {
+return nil, nil
+}
+parts := strings.Split(s, ",")
+result := make([]{{.EnumName}}, 0, len(parts))
+for _, part := range parts {
+trimmed := strings.TrimSpace(part)
+if trimmed == "" {
+continue
+}
+val, err := Parse{{.EnumName}}(trimmed)
+if err != nil {
+return nil, err
+}
+result = append(result, val)
+}
+return result, nil
+}
+
+// {{.EnumName}}ToString converts a {{.EnumName}} to its {{.CaseDesc}} string representation
+func {{.EnumName}}ToString(v {{.EnumName}}) string {
+switch v {
+{{- range .NonSentinelValues}}
+case {{$.EnumName}}_{{.Name}}:
+return "{{.FriendlyName}}"
+{{- end}}
+default:
+return ""
+}}
+
+// Parse{{.EnumName}}Liberal parses a {{.EnumName}} liberally, accepting:
+// - Integer values (as string or int)
+// - Enum names in any case
+// - RFC-compliant JSON names
+func Parse{{.EnumName}}Liberal(s string) {{.EnumName}} {
+if s == "" {
+return {{.ZeroValue}}
+}
+// Try parsing as integer
+if num, err := strconv.Atoi(s); err == nil {
+return {{.EnumName}}(num)
+}
+// Normalize and try parsing
+normalized := strings.ToLower(strings.TrimSpace(s))
+normalized = strings.ReplaceAll(normalized, "_", "-")
+normalized = strings.ReplaceAll(normalized, " ", "-")
+switch normalized {
+{{- range .NonSentinelValues}}
+{{.LiberalCaseStatement}}
+return {{$.EnumName}}_{{.Name}}
+{{- end}}
+default:
+return {{.ZeroValue}}
+}}
+
+// {{.EnumName}}ToSpecName converts a {{.EnumName}} to its canonical protobuf spec name
+func {{.EnumName}}ToSpecName(v {{.EnumName}}) string {
+switch v {
+{{- range .AllValues}}
+case {{$.EnumName}}_{{.Name}}:
+return "{{.Name}}"
+{{- end}}
+default:
+return ""
+}}

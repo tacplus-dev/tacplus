@@ -1,0 +1,26 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+Exception re-exports for HTTP client operations.
+
+All errors derive from ProtoError in types.sys.errors.exceptions.
+This module re-exports ProtoError and helpers for HTTP client callers.
+"""
+
+from {{.PythonPackageBase}}.types.sys.errors.exceptions import (
+    ProtoError,
+    from_http_status,
+    invalid_argument,
+    not_found,
+    internal,
+    unauthenticated,
+)
+
+__all__ = [
+    'ProtoError',
+    'from_http_status',
+    'invalid_argument',
+    'not_found',
+    'internal',
+    'unauthenticated',
+]

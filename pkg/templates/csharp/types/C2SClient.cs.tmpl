@@ -1,0 +1,76 @@
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Grpc.Core;
+using Grpc.Net.Client;
+
+namespace {{.PackageName}};
+
+/// <summary>
+/// Client-to-service (C2S) gRPC entry point: dials a service over native gRPC
+/// (HTTP/2) via <see cref="Grpc.Net.Client.GrpcChannel"/> and exposes a typed
+/// client per C2S service.
+///
+/// A caller-supplied token provider may be set; when present its return value is
+/// injected as an <c>authorization: Bearer &lt;token&gt;</c> gRPC metadata header
+/// on every outgoing call. Mirrors the token-provider seam of the Go/Swift/TS C2S
+/// clients: tacplus builds no client_im for C#, the client only exposes this hook.
+/// </summary>
+public sealed class C2SClient : IDisposable
+{
+    /// <summary>The <c>host:port</c> authority this client dials.</summary>
+    public string Address { get; }
+
+    private readonly GrpcChannel _channel;
+
+    /// <summary>
+    /// Creates a C2S client targeting a service over native gRPC.
+    /// </summary>
+    /// <param name="host">Target host.</param>
+    /// <param name="port">Target port.</param>
+    /// <param name="useTls">
+    /// When true (default) the connection uses TLS (<c>https</c>); when false it is
+    /// plaintext (<c>http</c>).
+    /// </param>
+    /// <param name="tokenProvider">
+    /// Optional token provider. When non-null, every call carries an
+    /// <c>authorization: Bearer &lt;token&gt;</c> metadata header.
+    /// </param>
+    public C2SClient(
+        string host,
+        int port,
+        bool useTls = true,
+        Func<CancellationToken, Task<string>>? tokenProvider = null)
+    {
+        var scheme = useTls ? "https" : "http";
+        Address = $"{host}:{port}";
+
+        var options = new GrpcChannelOptions();
+        if (tokenProvider != null)
+        {
+            var callCredentials = CallCredentials.FromInterceptor(async (context, metadata) =>
+            {
+                var token = await tokenProvider(CancellationToken.None).ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(token))
+                {
+                    metadata.Add("authorization", $"Bearer {token}");
+                }
+            });
+            // Compose the per-call bearer credentials onto the channel. On a
+            // plaintext channel gRPC would reject call credentials, so allow them
+            // explicitly via UnsafeUseInsecureChannelCallCredentials.
+            options.Credentials = ChannelCredentials.Create(
+                useTls ? ChannelCredentials.SecureSsl : ChannelCredentials.Insecure,
+                callCredentials);
+            options.UnsafeUseInsecureChannelCallCredentials = !useTls;
+        }
+
+        _channel = GrpcChannel.ForAddress($"{scheme}://{Address}", options);
+    }
+{{range .Services}}
+    /// <summary>Typed gRPC client for the {{.ClientType}} service.</summary>
+    public {{.ClientType}} {{.MethodName}}() => new {{.ClientType}}(_channel);
+{{end}}
+    /// <summary>Disposes the underlying gRPC channel.</summary>
+    public void Dispose() => _channel.Dispose();
+}

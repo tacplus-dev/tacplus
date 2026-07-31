@@ -1,0 +1,72 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! SM-managed roll scheduler: deterministic per-node staggered compaction.
+//!
+//! Each node derives its roll time **deterministically from its stable identity**
+//! (`hash(node_id) % interval`), so replicas stagger across the interval and the
+//! schedule survives restarts without persisting anything — avoiding a
+//! thundering-herd of simultaneous snapshots. The interval comes from the
+//! service-supplied `DiskPersistenceConfig` (config-at-init).
+
+use crate::error::Result;
+use crate::redolog::{Record, RedoLog};
+use std::future::Future;
+use std::time::Duration;
+
+/// Deterministic per-node roll offset within `interval` (FNV-1a of `node_id`).
+/// Stable across restarts; well-distributed so replicas don't collide.
+pub fn roll_offset(node_id: &str, interval: Duration) -> Duration {
+    let secs = interval.as_secs().max(1);
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in node_id.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    Duration::from_secs(h % secs)
+}
+
+/// Run the periodic roll loop for a redo log. `snapshot` returns the current
+/// deduped state to write as the new baseline at each roll. The first roll is
+/// delayed by the node's deterministic offset; thereafter it rolls once per
+/// `interval`. Roll failures are logged and retried on the next interval.
+pub async fn run_roll_scheduler<F, Fut>(
+    log: &RedoLog,
+    interval: Duration,
+    node_id: &str,
+    mut snapshot: F,
+) -> Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Vec<Record>>,
+{
+    tokio::time::sleep(roll_offset(node_id, interval)).await;
+    let mut ticker = tokio::time::interval(interval);
+    ticker.tick().await; // first tick fires immediately; consume it
+    loop {
+        ticker.tick().await;
+        let snap = snapshot().await;
+        if let Err(err) = log.roll(&snap) {
+            log::warn!(
+                "diskstore roll failed; retrying on next interval: node_id={} error={}",
+                node_id,
+                err
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offset_is_deterministic_and_in_range() {
+        let interval = Duration::from_secs(86400);
+        let a = roll_offset("mint-0", interval);
+        let b = roll_offset("mint-0", interval);
+        let c = roll_offset("mint-1", interval);
+        assert_eq!(a, b); // stable for the same node
+        assert!(a < interval && c < interval); // within the interval
+        assert_ne!(a, c); // (very likely) staggered across nodes
+    }
+}

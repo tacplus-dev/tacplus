@@ -1,0 +1,35 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Typed disk persistence.
+//!
+//! The disk analog of the typed HTTP client: read/write a proto **type** to
+//! disk with validation, instead of hand-rolling file I/O + ad-hoc parsing.
+//!
+//! Two modes share one substrate (atomic file ops, archive rotation, at-rest
+//! compression):
+//!
+//! 1. **UC1 — atomic typed snapshot** ([`snapshot`]): persist one whole typed
+//!    message. Write builds a fresh file and renames it over the original, so
+//!    there is never an inconsistent state; the displaced active is archived.
+//! 2. **UC2 — redo log** ([`redolog`]): an append-only WAL of typed mutations
+//!    (NDJSON), deduped to latest-per-key, periodically compacted via
+//!    snapshot+roll with build-then-rename crash recovery.
+//!
+//! Serialization is **always** via the generated `ToJSON`/`FromJSON` helpers
+//! (JSON + newline framing); validation on read is **always on** (we own the
+//! data we write, so invalid-on-read is a bug).
+
+pub mod compress;
+pub mod error;
+pub mod fsutil;
+pub mod path;
+pub mod redolog;
+pub mod schedule;
+pub mod snapshot;
+
+pub use compress::Codec;
+pub use error::{DiskStoreError, Result};
+pub use path::{delete_namespace, ns_dir, ns_segments, store_path, ROOT_TENANT};
+pub use redolog::{dedup_bytes, dedup_file, Inserter, Record, RedoLog};
+pub use schedule::{roll_offset, run_roll_scheduler};
+pub use snapshot::{read_snapshot, write_snapshot, SnapshotOpts};

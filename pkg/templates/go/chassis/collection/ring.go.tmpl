@@ -1,0 +1,286 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// CODE GENERATED - DO NOT EDIT
+// Generated runtime support for WATCH collection methods (replay ring + hub).
+// See docs/API.md (WS-3 WATCH seam). Concurrency correctness is exercised
+// by the cross-test WATCH runtime cases.
+package collection
+
+import (
+	"iter"
+	"sync"
+	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// ErrRelist is the OUT_OF_RANGE status returned when a watcher resumes from a
+// revision older than the ring's oldest retained revision. The client must
+// re-establish from a fresh snapshot (from_revision = 0).
+var ErrRelist = status.Error(codes.OutOfRange, "watch resume revision is older than the replay ring; relist required")
+
+// ErrIdleTimeout is returned when a watcher waits longer than its generated
+// trust-tier idle timeout for the next delta.
+var ErrIdleTimeout = status.Error(codes.DeadlineExceeded, "watch stream idle timeout exceeded")
+
+// WatchSource is what a WATCH handler returns: the data the generated wrapper
+// needs to drive the {Method}WatchEvent envelope. The wrapper owns framing, the
+// ring, relist, and teardown; the handler only provides snapshot + change feed.
+//   - Scope keys the shared replay ring (identical Scope ⇒ shared ring).
+//   - Snapshot yields the consistent snapshot items at Revision.
+//   - Revision is R: the snapshot is complete at this revision (snapshot_done=R).
+//   - Changes lazily opens the post-R live change feed for the scope. The hub
+//     invokes it only for the first active watcher of a scope.
+type WatchSource[Item, Change any] struct {
+	Scope    string
+	Snapshot iter.Seq2[*Item, error]
+	Revision int64
+	Changes  func() iter.Seq2[*Change, error]
+}
+
+// entry is one revision-stamped change retained in a scope's replay ring.
+type entry[C any] struct {
+	revision int64
+	change   *C
+}
+
+// Ring is a count-bounded, revision-ordered replay buffer for one scope, with
+// blocking fan-out to multiple watcher cursors. One Ring per scope is shared by
+// all watchers (N cursors, not N copies); a single producer drains the handler's
+// change feed into it via Publish.
+type Ring[C any] struct {
+	mu          sync.Mutex
+	cond        *sync.Cond
+	cap         int
+	idleTimeout time.Duration
+	buf         []entry[C] // oldest..newest, len <= cap
+	closed      bool
+	lastRev     int64
+}
+
+// NewRing creates a replay ring retaining up to depth most-recent changes.
+func NewRing[C any](depth int, idleSecs int) *Ring[C] {
+	if depth < 1 {
+		depth = 1
+	}
+	r := &Ring[C]{cap: depth}
+	if idleSecs > 0 {
+		r.idleTimeout = time.Duration(idleSecs) * time.Second
+	}
+	r.cond = sync.NewCond(&r.mu)
+	return r
+}
+
+// Publish appends a change at revision rev, evicting the oldest entry when the
+// ring is full, and wakes blocked cursors. Revisions must be monotonically
+// increasing.
+func (r *Ring[C]) Publish(rev int64, change *C) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	if len(r.buf) == r.cap {
+		r.buf = append(r.buf[:0], r.buf[1:]...)
+	}
+	r.buf = append(r.buf, entry[C]{revision: rev, change: change})
+	r.lastRev = rev
+	r.cond.Broadcast()
+}
+
+// Close marks the ring done; blocked cursors return.
+func (r *Ring[C]) Close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	r.cond.Broadcast()
+}
+
+// IsClosed reports whether the ring has been closed (e.g. the last watcher
+// released it). The drain goroutine uses this as its stop signal.
+func (r *Ring[C]) IsClosed() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.closed
+}
+
+// oldestRevision returns the oldest retained revision (0 if empty).
+func (r *Ring[C]) oldestRevision() int64 {
+	if len(r.buf) == 0 {
+		return 0
+	}
+	return r.buf[0].revision
+}
+
+// Resume returns a lazy iterator over changes strictly after fromRevision: first
+// any retained entries in the ring, then live entries as they arrive. It returns
+// ErrRelist (OUT_OF_RANGE) when fromRevision precedes the ring's oldest retained
+// revision, since the gap cannot be replayed. The iterator ends when the consumer
+// stops (cancel/break) or the ring is closed.
+func (r *Ring[C]) Resume(fromRevision int64, release func()) iter.Seq2[*C, error] {
+	return func(yield func(*C, error) bool) {
+		if release != nil {
+			defer release()
+		}
+		nextRevision := fromRevision + 1
+		lastActivity := time.Now()
+		for {
+			var batch []entry[C]
+			var closed bool
+			r.mu.Lock()
+			for {
+				oldest := r.oldestRevision()
+				if nextRevision > 1 && oldest > 0 && nextRevision < oldest {
+					r.mu.Unlock()
+					yield(nil, ErrRelist)
+					return
+				}
+				for _, e := range r.buf {
+					if e.revision >= nextRevision {
+						batch = append(batch, e)
+					}
+				}
+				closed = r.closed
+				if len(batch) > 0 || closed {
+					break
+				}
+				if r.idleTimeout > 0 {
+					remaining := r.idleTimeout - time.Since(lastActivity)
+					if remaining <= 0 {
+						r.mu.Unlock()
+						yield(nil, ErrIdleTimeout)
+						return
+					}
+					timer := time.NewTimer(remaining)
+					done := make(chan struct{})
+					go func() {
+						select {
+						case <-timer.C:
+							r.mu.Lock()
+							r.cond.Broadcast()
+							r.mu.Unlock()
+						case <-done:
+						}
+					}()
+					r.cond.Wait()
+					close(done)
+					timer.Stop()
+				} else {
+					r.cond.Wait()
+				}
+			}
+			r.mu.Unlock()
+			for _, e := range batch {
+				nextRevision = e.revision + 1
+				if !yield(e.change, nil) {
+					return
+				}
+				lastActivity = time.Now()
+			}
+			if closed {
+				return
+			}
+		}
+	}
+}
+
+// Hub owns the per-scope rings so identically-scoped watchers share one ring.
+// The first watcher for a scope creates the ring and starts the single drain of
+// the handler's change feed; later watchers attach cursors to the same ring.
+type Hub[C any] struct {
+	mu       sync.Mutex
+	depth    int
+	idleSecs int
+	rings    map[string]*Ring[C]
+	drain    map[string]bool
+	refs     map[string]int
+}
+
+// NewHub creates a Hub whose rings each retain up to depth changes.
+func NewHub[C any](depth int, idleSecs int) *Hub[C] {
+	return &Hub[C]{depth: depth, idleSecs: idleSecs, rings: map[string]*Ring[C]{}, drain: map[string]bool{}, refs: map[string]int{}}
+}
+
+// ring returns (creating if needed) the shared ring for scope, plus whether this
+// caller is the first and therefore responsible for draining the change feed.
+func (h *Hub[C]) ring(scope string) (*Ring[C], bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if scope == "" {
+		scope = "/"
+	}
+	r, ok := h.rings[scope]
+	if !ok {
+		r = NewRing[C](h.depth, h.idleSecs)
+		h.rings[scope] = r
+	}
+	h.refs[scope]++
+	first := !h.drain[scope]
+	if first {
+		h.drain[scope] = true
+	}
+	return r, first
+}
+
+func (h *Hub[C]) release(scope string, r *Ring[C]) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if scope == "" {
+		scope = "/"
+	}
+	if h.refs[scope] > 1 {
+		h.refs[scope]--
+		return
+	}
+	delete(h.refs, scope)
+	delete(h.drain, scope)
+	if h.rings[scope] == r {
+		delete(h.rings, scope)
+		r.Close()
+	}
+}
+
+// Watch wires a watcher to scope's shared ring. changes is the handler's live
+// change feed; the first watcher for the scope drains it into the ring. The
+// returned iterator yields changes after fromRevision (relisting via ErrRelist
+// when behind the ring). revisionOf extracts the monotonic revision from a change.
+//
+// INVARIANT: the returned iterator MUST be consumed (ranged) to release. The ring
+// reference and (for the first watcher) the drain goroutine are acquired eagerly
+// here via ring(), but are released only by the iterator's deferred release()
+// when ranging ends. Callers must therefore use the result DIRECTLY as a
+// `for … range` expression — as the generated WATCH wrapper does — and must never
+// acquire it into a variable and then early-return without ranging it: that would
+// leak the drain goroutine and leave the scope permanently marked draining (so no
+// future watcher of that scope ever starts a new drain). The Rust WatchHub runs
+// release on task-end and is robust to this; Go's release is consumption-tied.
+func (h *Hub[C]) Watch(scope string, fromRevision int64, changes func() iter.Seq2[*C, error], revisionOf func(*C) int64) iter.Seq2[*C, error] {
+	r, first := h.ring(scope)
+	if first && changes != nil {
+		go func() {
+			for c, err := range changes() {
+				if err != nil {
+					r.Close()
+					return
+				}
+				// Stop signal: release() of the last watcher closes the ring.
+				// Returning here breaks out of the range, which signals the
+				// feed iterator to stop (its yield returns false), so the
+				// drain goroutine and the upstream feed both terminate
+				// instead of leaking on every last-watcher disconnect.
+				// Residual limitation: if the feed blocks indefinitely
+				// waiting for its next item, the goroutine cannot observe the
+				// close until the feed yields again — feeds do not take a
+				// context (see WatchSource.Changes), so a fully prompt
+				// teardown would need a handler-seam change.
+				if r.IsClosed() {
+					return
+				}
+				r.Publish(revisionOf(c), c)
+			}
+			r.Close()
+		}()
+	}
+	return r.Resume(fromRevision, func() { h.release(scope, r) })
+}

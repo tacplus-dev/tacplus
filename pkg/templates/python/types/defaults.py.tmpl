@@ -1,0 +1,42 @@
+{{- /* Python defaults template */ -}}
+# ---- Defaults ----
+{{- range .Defaults}}
+
+def {{.FuncName}}_defaults(msg: {{.QualifiedType}}) -> None:
+    """Applies default values to zero-valued fields of {{.TypeName}}."""
+    if msg is None:
+        return
+{{- range .Fields}}
+{{- if eq .AnnKey "default_string"}}
+    if msg.{{.PyFieldName}} == "":
+        msg.{{.PyFieldName}} = {{.ConstantName}}
+{{- else if eq .AnnKey "default_int"}}
+    if msg.{{.PyFieldName}} == 0:
+        msg.{{.PyFieldName}} = {{.ConstantName}}
+{{- else if eq .AnnKey "default_float"}}
+    if msg.{{.PyFieldName}} == 0.0:
+        msg.{{.PyFieldName}} = {{.ConstantName}}
+{{- else if eq .AnnKey "default_bool"}}
+    if not msg.{{.PyFieldName}}:
+        msg.{{.PyFieldName}} = {{.ConstantName}}
+{{- else if eq .AnnKey "default_host"}}
+    if not msg.{{.PyFieldName}}:
+        msg.{{.PyFieldName}} = Host(host="{{.HostHost}}", port={{.HostPort}})
+{{- end}}
+{{- end}}
+{{- range .SubMsgCalls}}
+{{- if .InitIfNil}}
+    if not msg.HasField("{{.HasFieldName}}"):
+        msg.{{.PyFieldName}}.SetInParent()
+{{- if .HasDefaults}}
+    {{.FuncName}}_defaults(msg.{{.PyFieldName}})
+{{- end}}
+{{- else}}
+    if msg.HasField("{{.HasFieldName}}"):
+        {{.FuncName}}_defaults(msg.{{.PyFieldName}})
+{{- end}}
+{{- end}}
+{{- if and (eq (len .Fields) 0) (eq (len .SubMsgCalls) 0)}}
+    pass
+{{- end}}
+{{- end}}

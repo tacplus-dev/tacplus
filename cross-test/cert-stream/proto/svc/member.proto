@@ -1,0 +1,29 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// Cert-stream behavioral fixture member: it opts into both auto-TLS and SMB so
+// the generated Go service-manager contains both certificate loops.
+
+syntax = "proto3";
+
+package certstream;
+
+import "sys/spec.proto";
+
+message Ping { string m = 1; }
+
+message StreamState {
+  option (spec.service_state) = {
+    name: "StreamState",
+    tag: "state-store",
+    auto_tls: TLS_KEY_TYPE_ED25519,
+    export: true
+  };
+  string marker = 1;
+}
+
+service StreamMemberService {
+  option (spec.service_s2s) = {auth_services: ["*"], tag: "StreamMemberService"};
+  option (spec.smb) = {};
+  rpc Get(Ping) returns (Ping) {
+    option (spec.method_s2s) = {auth_services: ["*"]};
+  }
+}

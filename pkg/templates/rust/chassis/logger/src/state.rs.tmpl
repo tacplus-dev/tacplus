@@ -1,0 +1,91 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Global logger state management
+
+use once_cell::sync::OnceCell;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Global flag tracking whether TRACE level logging is enabled
+static IS_LOG_LEVEL_TRACE: AtomicBool = AtomicBool::new(false);
+
+/// Global flag tracking whether a logger has been installed
+static IS_INSTALLED: OnceCell<()> = OnceCell::new();
+
+/// Returns true if TRACE level logging is globally enabled.
+///
+/// This function can be used to conditionally execute expensive logging operations
+/// only when trace logging is active.
+///
+/// # Example
+///
+/// ```
+/// use logger::is_log_level_trace;
+///
+/// if is_log_level_trace() {
+///     // Perform expensive operation only when trace logging is enabled
+///     let data = generate_detailed_debug_info();
+///     tracing::debug!("Detailed trace info: {:?}", data);
+/// }
+/// # fn generate_detailed_debug_info() -> String { String::new() }
+/// ```
+pub fn is_log_level_trace() -> bool {
+    IS_LOG_LEVEL_TRACE.load(Ordering::Relaxed)
+}
+
+/// Set the trace level flag (internal use only)
+pub(crate) fn set_log_level_trace(enabled: bool) {
+    IS_LOG_LEVEL_TRACE.store(enabled, Ordering::Relaxed);
+}
+
+/// Check if a logger has been installed
+pub(crate) fn is_installed() -> bool {
+    IS_INSTALLED.get().is_some()
+}
+
+/// Mark the logger as installed (internal use only)
+pub(crate) fn mark_installed() {
+    let _ = IS_INSTALLED.set(());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log_level_trace() {
+        // Test setting and getting trace flag
+        set_log_level_trace(false);
+        assert!(!is_log_level_trace());
+
+        set_log_level_trace(true);
+        assert!(is_log_level_trace());
+
+        set_log_level_trace(false);
+        assert!(!is_log_level_trace());
+    }
+
+    #[test]
+    fn test_is_log_level_trace_multiple_calls() {
+        set_log_level_trace(false);
+
+        // Multiple calls should return consistent value
+        let got1 = is_log_level_trace();
+        let got2 = is_log_level_trace();
+        let got3 = is_log_level_trace();
+
+        assert_eq!(got1, got2);
+        assert_eq!(got2, got3);
+        assert!(!got1);
+
+        // Set to true
+        set_log_level_trace(true);
+
+        let got4 = is_log_level_trace();
+        let got5 = is_log_level_trace();
+        let got6 = is_log_level_trace();
+
+        assert_eq!(got4, got5);
+        assert_eq!(got5, got6);
+        assert!(got4);
+    }
+}

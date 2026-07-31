@@ -1,0 +1,22 @@
+# Profile A — tacplus-generated model under chaos, with stubbed rivets.
+# (archive/MODEL_STRESS_TEST_PLAN.md §1a / §10). The harness is reusable: this
+# file is the deployment-profile INPUT. A future Profile B (Schematic system)
+# would supply a different file with kind=system pointing the same machinery at
+# a real service stack.
+name: profile-a-model
+kind: model
+namespace: tacplus.chaos
+languages:
+  - go
+  - rust
+replay_depth: 256
+seed: 1
+inject_coll1_bug: false
+soak:
+  cycles: 8
+  writes_per_cycle: 16
+invariants:
+  watch_gapless: true
+  auth_closed: true
+  no_leak: true
+  unary_interop: true

@@ -1,0 +1,112 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package parser
+
+import (
+	"fmt"
+	"path/filepath"
+
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/collection"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/verbs"
+	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
+)
+
+// ProtoInfo holds parsed information from a proto file
+type ProtoInfo struct {
+	Package           string
+	Services          []*ServiceInfo
+	Messages          []*MessageInfo
+	FilePath          string
+	CrossPackageTypes map[string]string // proto package -> directory for cross-package method types
+	CrossPackageFiles map[string]string // proto package -> proto file for cross-package method types
+}
+
+// ServiceInfo represents a gRPC service definition
+type ServiceInfo struct {
+	Name              string
+	Methods           []*MethodInfo
+	AuthDisabled      bool     // service-level or method-derived auth_disabled
+	AuthServices      []string // service-level S2S auth_services
+	AuthEntitledUsers bool     // service-level C2S auth_entitled_users
+	AuthAnyUser       bool     // method-derived C2S auth_any_user
+	IsC2D             bool     // service_c2d: client-to-daemon local IPC
+	C2DSocketPath     string   // service_c2d socket_path (required, no default)
+	IsC2S             bool     // service_c2s: client-to-server (external) traffic
+	IsS2S             bool     // service_s2s: service-to-service (internal) traffic
+	IsSMB             bool     // smb: service instances use a black-box peer protocol
+	SmbRoot           spec.SmbRoot
+	Synthesized       bool // tacplus-generated service surface
+}
+
+// MethodInfo represents a gRPC method
+type MethodInfo struct {
+	Name                 string
+	InputType            string
+	OutputType           string
+	ClientStreaming      bool
+	ServerStreaming      bool
+	FullInputType        string                // Fully qualified input type
+	FullOutputType       string                // Fully qualified output type
+	HttpMethod           string                // Primary HTTP method for client generation (first GET if present, else POST)
+	HttpMethods          []string              // All HTTP methods (POST always included, plus rest_method extras)
+	HttpPath             string                // Convention REST path: {ROOT_PATH}/{package}/{MethodName}
+	HttpAliasPath        string                // Additional alias path from rest_path
+	HttpBody             string                // HTTP body ("*" or field name)
+	AuthDisabled         bool                  // method-level auth_disabled (from method_s2s or method_c2s)
+	AuthAnyUser          bool                  // method-level auth_any_user (from method_c2s)
+	AuthServices         []string              // method-level S2S auth_services override (from method_s2s)
+	TargetNamespaceField string                // method-level target_namespace_field (from method_c2s); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
+	Collection           *CollectionDescriptor // method-level method_collection (collection-returning read); nil when absent
+	Resolved             *collection.Resolved  // computed codegen view of Collection (mode/tier/bounds); nil when Collection is nil. Set by ResolveCollections.
+	Class                *verbs.Classification // resolved verb/pattern/access (archive/RPC_PATTERNS_AND_VERBS_PLAN.md §2). Set by ClassifyMethods; nil if classification failed (see ClassifyMethods for the reported error).
+}
+
+// MessageInfo represents a protobuf message
+type MessageInfo struct {
+	Name   string
+	Fields []*FieldInfo
+}
+
+// FieldInfo represents a message field
+type FieldInfo struct {
+	Name     string
+	Type     string
+	Number   int
+	Repeated bool
+}
+
+// ParseProtoFile parses a proto file and extracts service definitions.
+//
+// IMPLEMENTATION NOTE: This function now uses DescriptorParser internally for robust,
+// accurate parsing via protobuf descriptors. The regex-based implementation has been
+// replaced to eliminate parsing fragility and ensure correctness.
+//
+// Regex usage rationale:
+//   - NONE: All proto file parsing is now handled by DescriptorParser which uses protoc's
+//     official descriptor API. This ensures accurate parsing of all proto syntax including
+//     services, methods, streaming modes, and message types.
+func ParseProtoFile(filePath string) (*ProtoInfo, error) {
+	// Determine the proto directory (parent directory of the file)
+	protoDir := filepath.Dir(filePath)
+
+	// Create descriptor parser
+	parser, err := NewDescriptorParser(protoDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create descriptor parser: %w", err)
+	}
+
+	// Use descriptor parser to extract service information
+	return parser.ConvertToProtoInfo(filePath)
+}
+
+// StreamingType returns a string describing the streaming type
+func (m *MethodInfo) StreamingType() string {
+	if m.ClientStreaming && m.ServerStreaming {
+		return "bidirectional"
+	} else if m.ClientStreaming {
+		return "client-streaming"
+	} else if m.ServerStreaming {
+		return "server-streaming"
+	}
+	return "unary"
+}

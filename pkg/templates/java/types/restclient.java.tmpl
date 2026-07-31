@@ -1,0 +1,144 @@
+{{.Header}}
+
+package {{.FullPackage}};
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+{{- if .HasStreaming}}
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+{{- end}}
+import com.google.protobuf.Message;
+import com.google.protobuf.util.JsonFormat;
+{{.TypesImport}}
+
+/**
+ * {{.ClientName}} provides a typed REST client for {{.ServiceName}}.
+ * It wraps a java.net.http.HttpClient and provides typed methods for each RPC
+ * using convention-based REST paths (POST /api/{package}/v1/{service}/{method}).
+ */
+public class {{.ClientName}} {
+
+    private final HttpClient httpClient;
+    private final String baseUrl;
+    private final JsonFormat.Printer jsonPrinter;
+    private final JsonFormat.Parser jsonParser;
+
+    public {{.ClientName}}(HttpClient httpClient, String baseUrl) {
+        this.httpClient = httpClient;
+        this.baseUrl = baseUrl;
+        this.jsonPrinter = JsonFormat.printer().omittingInsignificantWhitespace();
+        this.jsonParser = JsonFormat.parser().ignoringUnknownFields();
+    }
+
+    private <T extends Message> T doJson(String method, String path, Message request, Class<T> responseClass) {
+        try {
+            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + path))
+                .header("Content-Type", "application/json");
+
+            if (request != null && "POST".equals(method)) {
+                reqBuilder.POST(HttpRequest.BodyPublishers.ofString(jsonPrinter.print(request)));
+            } else {
+                reqBuilder.method(method, HttpRequest.BodyPublishers.noBody());
+            }
+
+            HttpResponse<String> response = httpClient.send(reqBuilder.build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+            if (response.statusCode() >= 400) {
+                throw new ProtoException("REST call " + method + " " + path +
+                    " returned " + response.statusCode() + ": " + response.body());
+            }
+
+            Message.Builder builder = (Message.Builder) responseClass.getMethod("newBuilder").invoke(null);
+            jsonParser.merge(response.body(), builder);
+            @SuppressWarnings("unchecked")
+            T result = (T) builder.build();
+            return result;
+        } catch (ProtoException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ProtoException("REST call failed: " + e.getMessage(), e);
+        }
+    }
+
+{{- if .HasStreaming}}
+
+    private <T extends Message> Iterator<T> streamNdjson(String method, String path, Message request, Class<T> responseClass) {
+        try {
+            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + path))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/x-ndjson");
+
+            if (request != null && "POST".equals(method)) {
+                reqBuilder.POST(HttpRequest.BodyPublishers.ofString(jsonPrinter.print(request)));
+            } else {
+                reqBuilder.method(method, HttpRequest.BodyPublishers.noBody());
+            }
+
+            HttpResponse<java.io.InputStream> response = httpClient.send(reqBuilder.build(),
+                HttpResponse.BodyHandlers.ofInputStream());
+
+            if (response.statusCode() >= 400) {
+                String body = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
+                throw new ProtoException("REST stream " + method + " " + path +
+                    " returned " + response.statusCode() + ": " + body);
+            }
+
+            BufferedReader reader = new BufferedReader(
+                new InputStreamReader(response.body(), StandardCharsets.UTF_8));
+
+            return new Iterator<T>() {
+                private T next = null;
+                private boolean done = false;
+
+                @Override
+                public boolean hasNext() {
+                    if (next != null) return true;
+                    if (done) return false;
+                    try {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            line = line.trim();
+                            if (line.isEmpty()) continue;
+                            Message.Builder builder = (Message.Builder) responseClass.getMethod("newBuilder").invoke(null);
+                            jsonParser.merge(line, builder);
+                            @SuppressWarnings("unchecked")
+                            T msg = (T) builder.build();
+                            next = msg;
+                            return true;
+                        }
+                        done = true;
+                        reader.close();
+                        return false;
+                    } catch (Exception e) {
+                        done = true;
+                        throw new RuntimeException("Stream read error: " + e.getMessage(), e);
+                    }
+                }
+
+                @Override
+                public T next() {
+                    if (!hasNext()) throw new NoSuchElementException();
+                    T result = next;
+                    next = null;
+                    return result;
+                }
+            };
+        } catch (ProtoException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ProtoException("REST stream failed: " + e.getMessage(), e);
+        }
+    }
+{{- end}}
+
+{{.Methods}}
+}

@@ -1,0 +1,73 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+
+"""
+Utility functions for working with log formats.
+
+This module provides parsing and conversion utilities for
+protobuf Format enums.
+"""
+
+from typing import Optional
+
+
+class LogFormat:
+    """
+    Utility class for working with log formats.
+
+    This class provides parsing and conversion utilities for
+    protobuf Format enums.
+    """
+
+    @staticmethod
+    def parse(value: Optional[str]):
+        """
+        Parses a string to a protobuf Format enum.
+
+        Args:
+            value: The string to parse (case-insensitive)
+
+        Returns:
+            The corresponding Format enum value
+
+        Raises:
+            ValueError: If the string is not a valid format
+        """
+        from {{.PythonPackageBase}}.types.sys.logger import logger_pb2
+
+        if not value:
+            return logger_pb2.FORMAT_UNDEFINED
+
+        normalized = value.upper().strip()
+
+        # Handle shorthands
+        if normalized == "JS":
+            normalized = "JSON"
+        elif normalized == "CON":
+            normalized = "CONSOLE"
+
+        if normalized == "JSON":
+            return logger_pb2.FORMAT_JSON
+        elif normalized == "CONSOLE":
+            return logger_pb2.FORMAT_CONSOLE
+        else:
+            raise ValueError(f"Invalid log format: {value}")
+
+    @staticmethod
+    def to_string(format_enum) -> str:
+        """
+        Converts a protobuf Format to a lowercase string representation.
+
+        Args:
+            format_enum: The protobuf format enum value
+
+        Returns:
+            The string representation (e.g., "json", "console")
+        """
+        from {{.PythonPackageBase}}.types.sys.logger import logger_pb2
+
+        if format_enum == logger_pb2.FORMAT_JSON:
+            return "json"
+        elif format_enum == logger_pb2.FORMAT_CONSOLE:
+            return "console"
+        else:
+            return ""

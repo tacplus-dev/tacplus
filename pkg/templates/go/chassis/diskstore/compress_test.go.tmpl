@@ -1,0 +1,71 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package diskstore
+
+import (
+	"bytes"
+	"testing"
+)
+
+func TestCompressRoundtripNone(t *testing.T) {
+	data := []byte("hello world")
+	c, err := Compress(data, CodecNone)
+	if err != nil {
+		t.Fatalf("compress: %v", err)
+	}
+	got, err := DecompressAuto(c)
+	if err != nil {
+		t.Fatalf("decompress: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("got %q want %q", got, data)
+	}
+}
+
+func TestCompressRoundtripGz(t *testing.T) {
+	data := []byte("hello world, hello world, hello world")
+	c, err := Compress(data, CodecGz)
+	if err != nil {
+		t.Fatalf("compress: %v", err)
+	}
+	if !bytes.HasPrefix(c, gzMagic) {
+		t.Fatalf("gz output missing magic bytes")
+	}
+	got, err := DecompressAuto(c)
+	if err != nil {
+		t.Fatalf("decompress: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("got %q want %q", got, data)
+	}
+}
+
+func TestCompressRoundtripBz(t *testing.T) {
+	data := []byte("hello world, hello world, hello world")
+	c, err := Compress(data, CodecBz)
+	if err != nil {
+		t.Fatalf("compress: %v", err)
+	}
+	if !bytes.HasPrefix(c, bzMagic) {
+		t.Fatalf("bz output missing magic bytes")
+	}
+	got, err := DecompressAuto(c)
+	if err != nil {
+		t.Fatalf("decompress: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("got %q want %q", got, data)
+	}
+}
+
+func TestCodecFromProtoI32(t *testing.T) {
+	if CodecFromProtoI32(1) != CodecGz {
+		t.Fatalf("1 should map to Gz")
+	}
+	if CodecFromProtoI32(2) != CodecBz {
+		t.Fatalf("2 should map to Bz")
+	}
+	if CodecFromProtoI32(0) != CodecNone {
+		t.Fatalf("0 should map to None")
+	}
+}

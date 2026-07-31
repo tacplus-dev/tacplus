@@ -1,0 +1,40 @@
+package grpcserver
+
+import "testing"
+
+func TestIsAtOrBelow(t *testing.T) {
+	cases := []struct {
+		name   string
+		caller string
+		target string
+		want   bool
+	}{
+		{"equal", "spiffe://d/a", "spiffe://d/a", true},
+		{"direct child", "spiffe://d/a", "spiffe://d/a/b", true},
+		{"deep descendant", "spiffe://d/a", "spiffe://d/a/b/c/d", true},
+		{"sibling", "spiffe://d/a", "spiffe://d/b", false},
+		{"parent of caller", "spiffe://d/a/b", "spiffe://d/a", false},
+		{"unrelated subtree", "spiffe://d/a", "spiffe://e/a", false},
+		{"prefix-string-but-not-segment", "spiffe://d/a", "spiffe://d/ab", false},
+		{"prefix-string-but-not-segment-deep", "spiffe://d/foo", "spiffe://d/foobar/x", false},
+		{"empty caller", "", "spiffe://d/a", false},
+		{"empty target", "spiffe://d/a", "", false},
+		{"both empty", "", "", false},
+		{"multi-slash domain equal", "spiffe://io/example/cluster1/drpepper", "spiffe://io/example/cluster1/drpepper", true},
+		{"multi-slash domain descendant", "spiffe://io/example/cluster1/drpepper", "spiffe://io/example/cluster1/drpepper/dev", true},
+		{"multi-slash domain sibling", "spiffe://io/example/cluster1/drpepper", "spiffe://io/example/cluster1/coke", false},
+		{"caller is root domain only", "spiffe://d", "spiffe://d/a", true},
+		{"caller is root domain only, deep target", "spiffe://d", "spiffe://d/a/b/c", true},
+		{"namespace root caller", "/", "/tenant", true},
+		{"namespace direct child", "/tenant", "/tenant/project", true},
+		{"namespace sibling rejected", "/tenant", "/tenant2/project", false},
+		{"namespace parent rejected", "/tenant/project", "/tenant", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsAtOrBelow(tc.caller, tc.target); got != tc.want {
+				t.Errorf("IsAtOrBelow(%q, %q) = %v, want %v", tc.caller, tc.target, got, tc.want)
+			}
+		})
+	}
+}

@@ -1,0 +1,117 @@
+{{.Header}}
+
+package {{.Package}};
+
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+import {{.ChassisBase}}.diskstore.Codec;
+import {{.ChassisBase}}.diskstore.DiskStoreException;
+import {{.ChassisBase}}.diskstore.RedoLog;
+import {{.ChassisBase}}.diskstore.Snapshot;
+import {{.ChassisBase}}.diskstore.StorePath;
+
+/**
+ * Per-service_store typed disk-persistence helpers.
+ * UC1 = atomic snapshot (save/load); UC2 = redo log (open/record/decode).
+ * Serialization goes through the generated ToJson/FromJson Helpers; validation
+ * (always on) runs on read. Types and Helpers are referenced by fully-qualified
+ * name so stores from many proto packages can share this class.
+ *
+ * CODE GENERATED - DO NOT EDIT
+ */
+public final class DiskStores {
+    private DiskStores() {}
+{{range .Stores}}
+    /** Atomically save the latest {{.StoreName}} snapshot (UC1). */
+    public static void save{{.MethodName}}(
+            Path base, String ns, {{.TypeFqn}} msg, Snapshot.Opts opts) {
+        byte[] bytes;
+        try {
+            bytes = {{.HelpersFqn}}.{{.ToJsonFn}}(msg).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw DiskStoreException.codec(e.getMessage(), e);
+        }
+        Path path = StorePath.storePath(base, ns, "{{.StoreName}}", ".snapshot");
+        Snapshot.writeSnapshot(path, bytes, opts);
+    }
+
+    /** Load + validate the {{.StoreName}} snapshot (UC1). Null if absent. */
+    public static {{.TypeFqn}} load{{.MethodName}}(Path base, String ns) {
+        Path path = StorePath.storePath(base, ns, "{{.StoreName}}", ".snapshot");
+        byte[] bytes = Snapshot.readSnapshot(path);
+        if (bytes == null) {
+            return null;
+        }
+        {{.TypeFqn}} msg;
+        try {
+            msg = {{.HelpersFqn}}.{{.FromJsonFn}}(new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            throw DiskStoreException.codec(e.getMessage(), e);
+        }
+        try {
+            {{.HelpersFqn}}.{{.ValidateFn}}(msg);
+        } catch (Exception e) {
+            throw DiskStoreException.validationFailed(e.getMessage(), e);
+        }
+        return msg;
+    }
+{{if not .SnapshotOnly}}
+    /** Open the {{.StoreName}} redo log for the given namespace (UC2). */
+    public static RedoLog open{{.MethodName}}Log(
+            Path base, String ns, int archiveCount, Codec codec) {
+        return RedoLog.open(base, ns, "{{.StoreName}}", archiveCount, codec);
+    }
+
+    /** Build a redo record for a {{.StoreName}} upsert (UC2). */
+    public static RedoLog.Record record{{.MethodName}}({{.TypeFqn}} msg) {
+        String payload;
+        try {
+            payload = {{.HelpersFqn}}.{{.ToJsonFn}}(msg);
+        } catch (Exception e) {
+            throw DiskStoreException.codec(e.getMessage(), e);
+        }
+        return RedoLog.Record.upsert(msg.{{.KeyGetter}}(), payload);
+    }
+
+    /** Build a redo tombstone for a {{.StoreName}} key (UC2). */
+    public static RedoLog.Record delete{{.MethodName}}Record(String key) {
+        return RedoLog.Record.tombstone(key);
+    }
+
+    /** Build a deduped redo-log baseline from the current store items. */
+    public static List<RedoLog.Record> snapshot{{.MethodName}}(List<{{.TypeFqn}}> items) {
+        List<RedoLog.Record> records = new ArrayList<>();
+        for ({{.TypeFqn}} item : items) {
+            if (item == null) {
+                continue;
+            }
+            records.add(record{{.MethodName}}(item));
+        }
+        return records;
+    }
+
+    /** Decode + validate a {{.StoreName}} redo record (UC2). Null for tombstones. */
+    public static {{.TypeFqn}} decode{{.MethodName}}(RedoLog.Record rec) {
+        if (rec.deleted) {
+            return null;
+        }
+        if (rec.payload == null) {
+            throw DiskStoreException.invalidData("record missing payload");
+        }
+        {{.TypeFqn}} msg;
+        try {
+            msg = {{.HelpersFqn}}.{{.FromJsonFn}}(rec.payload);
+        } catch (Exception e) {
+            throw DiskStoreException.codec(e.getMessage(), e);
+        }
+        try {
+            {{.HelpersFqn}}.{{.ValidateFn}}(msg);
+        } catch (Exception e) {
+            throw DiskStoreException.validationFailed(e.getMessage(), e);
+        }
+        return msg;
+    }
+{{end}}{{end}}
+}

@@ -1,0 +1,86 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// Package diskstore provides typed disk persistence: atomic snapshots (UC1) and
+// a redo-log WAL with compaction (UC2). It is the disk analog of the typed HTTP
+// client — read/write a proto type to disk with validation, instead of
+// hand-rolling file I/O + ad-hoc parsing.
+//
+// Two modes share one substrate (atomic file ops, archive rotation, at-rest
+// compression):
+//
+//  1. UC1 — atomic typed snapshot (snapshot.go): persist one whole typed
+//     message. Write builds a fresh file and renames it over the original, so
+//     there is never an inconsistent state; the displaced active is archived.
+//  2. UC2 — redo log (redolog.go): an append-only WAL of typed mutations
+//     (NDJSON), deduped to latest-per-key, periodically compacted via
+//     snapshot+roll with build-then-rename crash recovery.
+//
+// Serialization is always via the generated ToJSON/FromJSON helpers (JSON +
+// newline framing); validation on read is always on (we own the data we write,
+// so invalid-on-read is a bug).
+package diskstore
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+)
+
+// DiskStoreError is a disk-store error with a gRPC-compatible code and a
+// human-readable message (mirrors the httpclient ClientError shape).
+type DiskStoreError struct {
+	// Code is a gRPC-compatible error code.
+	Code int32
+	// Message is a human-readable error message.
+	Message string
+}
+
+// NewDiskStoreError creates a new error with the given code and message.
+func NewDiskStoreError(code int32, message string) *DiskStoreError {
+	return &DiskStoreError{Code: code, Message: message}
+}
+
+// ErrIO reports an I/O failure (code 13: INTERNAL).
+func ErrIO(msg string) *DiskStoreError {
+	return NewDiskStoreError(13, fmt.Sprintf("disk I/O failed: %s", msg))
+}
+
+// ErrGeneral reports a general error (code 13: INTERNAL).
+func ErrGeneral(msg string) *DiskStoreError {
+	return NewDiskStoreError(13, msg)
+}
+
+// ErrNotFound reports a not-found error (code 5: NOT_FOUND).
+func ErrNotFound(msg string) *DiskStoreError {
+	return NewDiskStoreError(5, fmt.Sprintf("not found: %s", msg))
+}
+
+// ErrInvalidData reports invalid data / argument (code 3: INVALID_ARGUMENT).
+func ErrInvalidData(msg string) *DiskStoreError {
+	return NewDiskStoreError(3, fmt.Sprintf("invalid data: %s", msg))
+}
+
+// ErrValidationFailed reports a type validation failure on read
+// (code 3: INVALID_ARGUMENT).
+func ErrValidationFailed(msg string) *DiskStoreError {
+	return NewDiskStoreError(3, fmt.Sprintf("validation failed: %s", msg))
+}
+
+// ErrCodec reports a serialize/deserialize failure (code 13: INTERNAL).
+func ErrCodec(msg string) *DiskStoreError {
+	return NewDiskStoreError(13, fmt.Sprintf("codec error: %s", msg))
+}
+
+// Error implements the error interface.
+func (e *DiskStoreError) Error() string {
+	return e.Message
+}
+
+// wrapIOError converts a standard library I/O error into a DiskStoreError,
+// mapping fs.ErrNotExist to a NOT_FOUND code (mirrors the Rust From<io::Error>).
+func wrapIOError(err error) *DiskStoreError {
+	if errors.Is(err, fs.ErrNotExist) {
+		return ErrNotFound(err.Error())
+	}
+	return ErrIO(err.Error())
+}

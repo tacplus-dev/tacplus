@@ -1,0 +1,28 @@
+{{.Header}}
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
+
+
+@dataclass(frozen=True)
+class BoundaryInfo:
+    """Describes a state boundary."""
+    service: str
+    state_root: str
+    boundary: str
+    persistence: bool
+    collection: bool
+    type_fqn: str
+    is_config: bool
+    graph_type: str
+    rpcs: Tuple[str, ...]
+
+
+def all_boundaries() -> List[BoundaryInfo]:
+    """Returns all state boundaries across all services."""
+    return [
+{{- range $c := .Clients}}
+{{- range $c.Boundaries}}
+        BoundaryInfo(service="{{$c.Group}}/{{$c.PackageName}}", state_root="{{.StateRoot}}", boundary="{{.Boundary}}", persistence={{if .Persistence}}True{{else}}False{{end}}, collection={{if .Collection}}True{{else}}False{{end}}, type_fqn="{{.TypeFQN}}", is_config={{if .IsConfig}}True{{else}}False{{end}}, graph_type="{{.GraphType}}", rpcs=({{range .Rpcs}}"{{.}}", {{end}})),
+{{- end}}
+{{- end}}
+    ]

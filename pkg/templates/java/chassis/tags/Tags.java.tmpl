@@ -1,0 +1,222 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// CODE GENERATED - DO NOT EDIT
+// Generated runtime support for Kubernetes-style tag sets and selectors.
+package {{.ChassisBase}}.tags;
+
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Pattern;
+
+/** Runtime support for Kubernetes-style tag sets and selectors. */
+public final class Tags {
+    private static final Pattern TAG_NAME =
+            Pattern.compile("^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$");
+    private static final Pattern DNS_SEGMENT =
+            Pattern.compile("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$");
+
+    private Tags() {}
+
+    public static boolean containsAll(
+            {{.TypesBase}}.sys.tags.Tags.TagSet have,
+            {{.TypesBase}}.sys.tags.Tags.TagSet want) {
+        return containsAllMap(tagsMap(have), tagsMap(want));
+    }
+
+    public static boolean containsAllMap(Map<String, String> have, Map<String, String> want) {
+        if (want == null || want.isEmpty()) {
+            return true;
+        }
+        if (have == null) {
+            return false;
+        }
+        for (Map.Entry<String, String> entry : want.entrySet()) {
+            if (!entry.getValue().equals(have.get(entry.getKey()))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public static boolean matches(
+            {{.TypesBase}}.sys.tags.Tags.TagSelector selector,
+            {{.TypesBase}}.sys.tags.Tags.TagSet tags) {
+        return matchesMap(selector, tagsMap(tags));
+    }
+
+    public static boolean matchesMap(
+            {{.TypesBase}}.sys.tags.Tags.TagSelector selector,
+            Map<String, String> tags) {
+        if (selector == null) {
+            return true;
+        }
+        if (!containsAllMap(tags, selector.getMatchTagsMap())) {
+            return false;
+        }
+        for ({{.TypesBase}}.sys.tags.Tags.TagSelectorRequirement req
+                : selector.getMatchExpressionsList()) {
+            if (!matchRequirement(req, tags)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public static void validateTagSet({{.TypesBase}}.sys.tags.Tags.TagSet set) {
+        if (set == null) {
+            throw new IllegalArgumentException("tag set is null");
+        }
+        for (Map.Entry<String, String> entry : set.getTagsMap().entrySet()) {
+            validateKey(entry.getKey());
+            try {
+                validateValue(entry.getValue());
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("tag " + entry.getKey() + ": " + e.getMessage(), e);
+            }
+        }
+    }
+
+    public static void validateSelector({{.TypesBase}}.sys.tags.Tags.TagSelector selector) {
+        if (selector == null) {
+            throw new IllegalArgumentException("tag selector is null");
+        }
+        for (Map.Entry<String, String> entry : selector.getMatchTagsMap().entrySet()) {
+            validateKey(entry.getKey());
+            try {
+                validateValue(entry.getValue());
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("match_tags[" + entry.getKey() + "]: " + e.getMessage(), e);
+            }
+        }
+        for (int i = 0; i < selector.getMatchExpressionsCount(); i++) {
+            {{.TypesBase}}.sys.tags.Tags.TagSelectorRequirement req =
+                    selector.getMatchExpressions(i);
+            validateKey(req.getKey());
+            switch (req.getOperator()) {
+                case TAG_SELECTOR_OPERATOR_IN:
+                case TAG_SELECTOR_OPERATOR_NOT_IN:
+                    if (req.getValuesCount() == 0) {
+                        throw new IllegalArgumentException(
+                                "match_expressions[" + i + "]: " + req.getOperator() + " requires at least one value");
+                    }
+                    for (int j = 0; j < req.getValuesCount(); j++) {
+                        try {
+                            validateValue(req.getValues(j));
+                        } catch (IllegalArgumentException e) {
+                            throw new IllegalArgumentException(
+                                    "match_expressions[" + i + "].values[" + j + "]: " + e.getMessage(), e);
+                        }
+                    }
+                    break;
+                case TAG_SELECTOR_OPERATOR_EXISTS:
+                case TAG_SELECTOR_OPERATOR_DOES_NOT_EXIST:
+                    if (req.getValuesCount() != 0) {
+                        throw new IllegalArgumentException(
+                                "match_expressions[" + i + "]: " + req.getOperator() + " requires no values");
+                    }
+                    break;
+                default:
+                    throw new IllegalArgumentException(
+                            "match_expressions[" + i + "]: invalid operator " + req.getOperator());
+            }
+        }
+    }
+
+    public static void validateKey(String key) {
+        if (key == null || key.isEmpty()) {
+            throw new IllegalArgumentException("tag key is empty");
+        }
+        String name = key;
+        if (key.contains("/")) {
+            String[] parts = key.split("/", -1);
+            if (parts.length != 2) {
+                throw new IllegalArgumentException("tag key " + key + " must contain at most one '/'");
+            }
+            validatePrefix(parts[0], key);
+            name = parts[1];
+        }
+        validateName(name, false, "tag key " + key + " has invalid name");
+    }
+
+    public static void validateValue(String value) {
+        if (value == null) {
+            throw new IllegalArgumentException("tag value is null");
+        }
+        if (value.isEmpty()) {
+            return;
+        }
+        validateName(value, true, "tag value " + value + " is invalid");
+    }
+
+    private static Map<String, String> tagsMap({{.TypesBase}}.sys.tags.Tags.TagSet set) {
+        return set == null ? null : set.getTagsMap();
+    }
+
+    private static boolean matchRequirement(
+            {{.TypesBase}}.sys.tags.Tags.TagSelectorRequirement req,
+            Map<String, String> tags) {
+        if (req == null) {
+            return false;
+        }
+        boolean exists = tags != null && tags.containsKey(req.getKey());
+        String value = exists ? tags.get(req.getKey()) : null;
+        switch (req.getOperator()) {
+            case TAG_SELECTOR_OPERATOR_IN:
+                return exists && contains(req.getValuesList(), value);
+            case TAG_SELECTOR_OPERATOR_NOT_IN:
+                return !exists || !contains(req.getValuesList(), value);
+            case TAG_SELECTOR_OPERATOR_EXISTS:
+                return exists;
+            case TAG_SELECTOR_OPERATOR_DOES_NOT_EXIST:
+                return !exists;
+            default:
+                return false;
+        }
+    }
+
+    private static boolean contains(List<String> values, String value) {
+        for (String candidate : values) {
+            if (candidate.equals(value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void validatePrefix(String prefix, String key) {
+        if (prefix == null || prefix.isEmpty()) {
+            throw new IllegalArgumentException("tag key " + key + " has empty prefix");
+        }
+        if (prefix.length() > 253) {
+            throw new IllegalArgumentException("tag key " + key + " prefix exceeds 253 characters");
+        }
+        for (String segment : prefix.split("\\.", -1)) {
+            if (segment.isEmpty()) {
+                throw new IllegalArgumentException("tag key " + key + " has empty DNS segment");
+            }
+            if (segment.length() > 63) {
+                throw new IllegalArgumentException("tag key " + key + " DNS segment exceeds 63 characters");
+            }
+            if (!DNS_SEGMENT.matcher(segment).matches()) {
+                throw new IllegalArgumentException(
+                        "tag key " + key + " DNS segment must contain lowercase alphanumerics or '-' and start/end alphanumeric");
+            }
+        }
+    }
+
+    private static void validateName(String name, boolean value, String context) {
+        if (name == null || name.isEmpty()) {
+            if (value) {
+                return;
+            }
+            throw new IllegalArgumentException(context + ": empty name");
+        }
+        if (name.length() > 63) {
+            throw new IllegalArgumentException(context + ": exceeds 63 characters");
+        }
+        if (!TAG_NAME.matcher(name).matches()) {
+            throw new IllegalArgumentException(
+                    context + ": must contain alphanumerics, '-', '_' or '.' and start/end alphanumeric");
+        }
+    }
+}

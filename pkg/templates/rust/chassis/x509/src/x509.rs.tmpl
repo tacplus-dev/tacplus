@@ -1,0 +1,1205 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// X.509 certificate management functionality.
+//
+// This module provides:
+// - ImmutableCert wrapper for validated certificates
+// - ImmutableCertPair for combining private keys and certificates
+// - PEM encoding/decoding
+//
+// # Note
+//
+//! This module handles certificate parsing, chain management, and TLS config
+//! with peer verification (canonical service SPIFFE ID SAN only), plus a certificate
+//! signer (`sign` / `self_sign`) for parity with the Go and Java x509 sys.
+
+use std::fmt;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use key::base64_utils;
+use key::error::{AuthError, Result};
+use key::keys;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use x509_cert::certificate::Certificate;
+use x509_cert::der::Decode;
+use x509_cert::der::oid::ObjectIdentifier;
+
+/// Immutable X.509 certificate wrapper
+///
+/// This type is thread-safe and designed for efficient reuse.
+/// Once created via `from_pem()`, the certificate is validated and parsed.
+pub struct ImmutableCert {
+    id: String,
+    certificate: Certificate,
+    pem_bytes: Vec<u8>,
+}
+
+impl ImmutableCert {
+    /// Creates a new ImmutableCert from PEM-encoded certificate data
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier for the certificate
+    /// * `base64_pem` - Base64-encoded PEM data
+    ///
+    /// # Returns
+    ///
+    /// A parsed and validated ImmutableCert, or an error if parsing fails
+    pub fn from_pem(id: String, base64_pem: &str) -> Result<Self> {
+        if base64_pem.is_empty() {
+            return Err(AuthError::missing_invalid_data("missing base64 PEM data"));
+        }
+
+        let pem_bytes = base64_utils::decode_base64(base64_pem)?;
+
+        // Parse the PEM
+        let pem_str = std::str::from_utf8(&pem_bytes)
+            .map_err(|_| AuthError::missing_invalid_data("invalid UTF-8 in PEM data"))?;
+
+        if !pem_str.contains("CERTIFICATE") {
+            return Err(AuthError::missing_invalid_data(
+                "PEM data does not contain a certificate",
+            ));
+        }
+
+        // Parse using x509-cert
+        use x509_cert::der::Decode;
+        let pem_parsed = pem::parse(pem_str)
+            .map_err(|e| AuthError::x509(format!("failed to parse PEM: {}", e)))?;
+        let certificate = Certificate::from_der(pem_parsed.contents())
+            .map_err(|e| AuthError::x509(format!("failed to parse certificate: {}", e)))?;
+
+        Ok(Self {
+            id,
+            certificate,
+            pem_bytes,
+        })
+    }
+
+    /// Returns the certificate ID
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns a reference to the parsed certificate
+    pub fn certificate(&self) -> &Certificate {
+        &self.certificate
+    }
+
+    /// Returns the original PEM bytes
+    pub fn pem_bytes(&self) -> &[u8] {
+        &self.pem_bytes
+    }
+
+    /// Converts the certificate to PEM format
+    pub fn to_pem(&self) -> Result<String> {
+        use x509_cert::der::Encode;
+
+        let der = self
+            .certificate
+            .to_der()
+            .map_err(|e| AuthError::x509(format!("failed to encode certificate: {}", e)))?;
+
+        let pem = pem::Pem::new("CERTIFICATE", der);
+        Ok(pem::encode(&pem))
+    }
+}
+
+/// Immutable X.509 certificate pair (certificate + private key)
+///
+/// This type combines a certificate and private key for operations that
+/// require both, such as TLS server configuration or signing other certificates.
+pub struct ImmutableCertPair {
+    key: keys::ImmutableKey,
+    cert: ImmutableCert,
+}
+
+impl ImmutableCertPair {
+    /// Creates a new ImmutableCertPair from a private key and certificate
+    pub fn new(key: keys::ImmutableKey, cert: ImmutableCert) -> Self {
+        Self { key, cert }
+    }
+
+    /// Returns a reference to the private key
+    pub fn key(&self) -> &keys::ImmutableKey {
+        &self.key
+    }
+
+    /// Returns a reference to the certificate
+    pub fn cert(&self) -> &ImmutableCert {
+        &self.cert
+    }
+
+    /// Loads a certificate from PEM data along with the private key
+    ///
+    /// # Note
+    ///
+    /// For creating new certificates, use external tools like openssl:
+    /// ```bash
+    /// openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365
+    /// ```
+    ///
+    /// This method is for loading existing certificate/key pairs.
+    pub fn from_pem(key: keys::ImmutableKey, cert_base64_pem: &str) -> Result<Self> {
+        let cert = ImmutableCert::from_pem(key.id().to_string(), cert_base64_pem)?;
+        Ok(Self { key, cert })
+    }
+}
+
+/// Helper function to load both key and certificate from PEM files
+///
+/// # Example
+///
+/// ```ignore
+/// let key_pem = std::fs::read_to_string("key.pem")?;
+/// let cert_pem = std::fs::read_to_string("cert.pem")?;
+/// let pair = load_cert_pair_from_files("my-key", &key_pem, &cert_pem)?;
+/// ```
+pub fn load_cert_pair_from_files(
+    id: String,
+    key_pem: &str,
+    cert_pem: &str,
+) -> Result<ImmutableCertPair> {
+    let key_base64 = base64_utils::encode_base64_url(key_pem.as_bytes());
+    let cert_base64 = base64_utils::encode_base64_url(cert_pem.as_bytes());
+
+    let key = keys::ImmutableKey::from_pem(id.clone(), &key_base64)?;
+    let cert = ImmutableCert::from_pem(id, &cert_base64)?;
+
+    Ok(ImmutableCertPair { key, cert })
+}
+
+// ── Certificate chain ────────────────────────────────────────────────
+
+/// Immutable X.509 certificate chain with optional private key.
+/// chain[0] is the leaf (end-entity) cert, followed by intermediates ordered toward root.
+///
+/// Provides `tls_config(service_name, trust_domain)` which returns rustls
+/// `ClientConfig` and `ServerConfig` with peer verification matching Go's
+/// `TLSConfig()` pattern: canonical service SPIFFE ID SAN only (no CN/DNS).
+pub struct ImmutableCertChain {
+    chain: Vec<ImmutableCert>,
+    key: Option<keys::ImmutableKey>,
+}
+
+impl ImmutableCertChain {
+    /// Creates an ImmutableCertChain from parsed certificates and an optional key.
+    pub fn new(chain: Vec<ImmutableCert>, key: Option<keys::ImmutableKey>) -> Result<Self> {
+        if chain.is_empty() {
+            return Err(AuthError::missing_invalid_data("cert chain is empty"));
+        }
+        Ok(Self { chain, key })
+    }
+
+    /// Creates a chain holding only a key, for self-signing (bootstrap CA).
+    /// Mirrors Java's `forSelfSigning`. The returned chain has no certs and is
+    /// usable only with `self_sign`; `leaf`/`tls_config` would panic/err.
+    pub fn for_self_signing(key: keys::ImmutableKey) -> Self {
+        Self {
+            chain: Vec::new(),
+            key: Some(key),
+        }
+    }
+
+    /// Returns the leaf (end-entity) certificate — chain[0].
+    pub fn leaf(&self) -> &ImmutableCert {
+        &self.chain[0]
+    }
+
+    /// Returns all certificates in the chain.
+    pub fn chain(&self) -> &[ImmutableCert] {
+        &self.chain
+    }
+
+    /// Returns intermediate certificates (chain[1:]).
+    pub fn intermediates(&self) -> &[ImmutableCert] {
+        if self.chain.len() <= 1 {
+            &[]
+        } else {
+            &self.chain[1..]
+        }
+    }
+
+    /// Returns the private key, if present.
+    pub fn key(&self) -> Option<&keys::ImmutableKey> {
+        self.key.as_ref()
+    }
+
+    /// Returns rustls client and server TLS configs with peer verification.
+    /// Peer identity is pinned to a canonical service SPIFFE ID SAN for
+    /// `service_name` in `trust_domain` — no CN/DNS fallback (see
+    /// verify_service_name).
+    pub fn tls_config(
+        &self,
+        service_name: &str,
+        trust_domain: &str,
+    ) -> Result<(rustls::ClientConfig, rustls::ServerConfig)> {
+        let key = self
+            .key
+            .as_ref()
+            .ok_or_else(|| AuthError::missing_invalid_data("no private key for TLS config"))?;
+
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+
+        // Build cert chain as DER for rustls
+        let cert_chain: Vec<CertificateDer<'static>> = self
+            .chain
+            .iter()
+            .map(|c| cert_to_der(c))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Build private key DER from PEM
+        let key_der = private_key_der_from_pem(key.pem_bytes())?;
+
+        // Build CA root store from intermediates
+        let mut root_store = rustls::RootCertStore::empty();
+        for ic in self.intermediates() {
+            let der = cert_to_der(ic)?;
+            root_store
+                .add(der)
+                .map_err(|e| AuthError::x509(format!("failed to add CA cert: {}", e)))?;
+        }
+        let roots = Arc::new(root_store);
+
+        // Client config: verify server cert chain + service name
+        let server_verifier = {
+            let inner = rustls::client::WebPkiServerVerifier::builder_with_provider(
+                roots.clone(),
+                provider.clone(),
+            )
+            .build()
+            .map_err(|e| AuthError::x509(format!("failed to build server verifier: {}", e)))?;
+            Arc::new(ServiceNameServerVerifier {
+                inner,
+                service_name: service_name.to_string(),
+                trust_domain: trust_domain.to_string(),
+            })
+        };
+
+        let client_config = rustls::ClientConfig::builder_with_provider(provider.clone())
+            .with_safe_default_protocol_versions()
+            .map_err(|e| AuthError::x509(format!("TLS protocol error: {}", e)))?
+            .dangerous()
+            .with_custom_certificate_verifier(server_verifier)
+            .with_client_auth_cert(cert_chain.clone(), key_der.clone_key())
+            .map_err(|e| AuthError::x509(format!("client auth cert error: {}", e)))?;
+
+        // Server config: verify client cert chain + service name (mTLS)
+        let client_verifier = {
+            let inner = rustls::server::WebPkiClientVerifier::builder_with_provider(
+                roots,
+                provider.clone(),
+            )
+            .build()
+            .map_err(|e| AuthError::x509(format!("failed to build client verifier: {}", e)))?;
+            Arc::new(ServiceNameClientVerifier {
+                inner,
+                service_name: service_name.to_string(),
+                trust_domain: trust_domain.to_string(),
+            })
+        };
+
+        let server_config = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| AuthError::x509(format!("TLS protocol error: {}", e)))?
+            .with_client_cert_verifier(client_verifier)
+            .with_single_cert(cert_chain, key_der)
+            .map_err(|e| AuthError::x509(format!("server cert error: {}", e)))?;
+
+        Ok((client_config, server_config))
+    }
+
+    // ── Signing ──────────────────────────────────────────────────────
+    //
+    // Mirrors Go's `ImmutableCertChain.Sign`/`SelfSign` and Java's
+    // `sign`/`selfSign`. The chain's key is the issuer/signing key.
+
+    /// Signs a certificate request using this chain's leaf as the issuer.
+    ///
+    /// Mirrors Go's `ImmutableCertChain.Sign(certRequest)`: the subject's
+    /// public key comes from `req.public_key`, the issuer is the chain leaf's
+    /// subject DN (Go passes `w.leaf` as the parent to `CreateCertificate`,
+    /// which copies the parent Subject into the new cert's Issuer), and the
+    /// cert is signed with the chain's private key. The returned cert's `id` is
+    /// set to the signing key's id.
+    pub fn sign(&self, req: &X509CertRequest) -> Result<ImmutableCert> {
+        let key = self
+            .key
+            .as_ref()
+            .ok_or_else(|| AuthError::missing_invalid_data("no private key for signing"))?;
+        if self.chain.is_empty() {
+            return Err(AuthError::missing_invalid_data("no leaf cert to sign with"));
+        }
+        let subject_public_key = req
+            .public_key
+            .as_ref()
+            .ok_or_else(|| AuthError::missing_invalid_data("missing certRequest.Key"))?;
+        // Issuer DN is copied verbatim from the leaf cert's subject, matching
+        // Go's CreateCertificate(parent = leaf) behaviour.
+        let issuer = IssuerSource::FromLeafSubject(&self.chain[0].certificate);
+        build_signed_cert(key, SubjectKey::Explicit(subject_public_key), issuer, req)
+    }
+
+    /// Creates a self-signed certificate using the chain's key as both subject
+    /// and issuer. Mirrors Go's `ImmutableCertChain.SelfSign`.
+    ///
+    /// When `name` is empty the chain key's id is used as the issuer CN.
+    pub fn self_sign(
+        &self,
+        name: &str,
+        exp: i64,
+        key_usage: X509KeyUsage,
+        ext_key_usage: &[X509ExtKeyUsage],
+    ) -> Result<ImmutableCert> {
+        let key = self
+            .key
+            .as_ref()
+            .ok_or_else(|| AuthError::missing_invalid_data("no private key for self-signing"))?;
+
+        let issuer_cn = if name.is_empty() {
+            key.id().to_string()
+        } else {
+            name.to_string()
+        };
+
+        let req = X509CertRequest {
+            public_key: None, // subject key is the signing key's own public key
+            exp,
+            metadata: None,
+            key_usage,
+            ext_key_usage: ext_key_usage.to_vec(),
+            issuer: issuer_cn,
+            is_ca: false,
+            path_len_constraint: 0,
+            dns_names: Vec::new(),
+            uri_sans: Vec::new(),
+        };
+        // For self-sign, issuer == subject (CN only), mirroring Go where the
+        // parent == template so issuer DN = subject DN.
+        build_signed_cert(key, SubjectKey::SignerOwn, IssuerSource::SameAsSubject, &req)
+    }
+}
+
+// ── Certificate signing request types ────────────────────────────────
+//
+// These mirror the proto `x509.X509CertRequest`, `x509.X509KeyUsage`, and
+// `x509.X509ExtKeyUsage` field-for-field. The Rust x509 lib is intentionally
+// proto-free (it operates on PEM/key wrappers, not prost-generated types — see
+// the rest of this file), so the request is modelled as a plain Rust struct
+// with the same fields, defaults, and enum variants as the proto. See the
+// handoff note for the parity rationale and the one deviation (`metadata`).
+
+/// X.509 key usage, mirroring proto `x509.X509KeyUsage`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum X509KeyUsage {
+    DigitalSignature,
+    ContentCommitment,
+    KeyEncipherment,
+    DataEncipherment,
+    KeyAgreement,
+    CertSign,
+    CrlSign,
+    EncipherOnly,
+    DecipherOnly,
+}
+
+impl Default for X509KeyUsage {
+    /// Matches the proto default (enum value 0 = DIGITAL_SIGNATURE).
+    fn default() -> Self {
+        X509KeyUsage::DigitalSignature
+    }
+}
+
+/// X.509 extended key usage, mirroring proto `x509.X509ExtKeyUsage`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum X509ExtKeyUsage {
+    Any,
+    ServerAuth,
+    ClientAuth,
+    CodeSigning,
+    EmailProtection,
+    IpsecEndSystem,
+    IpsecTunnel,
+    IpsecUser,
+    TimeStamping,
+    OcspSigning,
+    MicrosoftServerGatedCrypto,
+    NetscapeServerGatedCrypto,
+    MicrosoftCommercialCodeSigning,
+    MicrosoftKernelCodeSigning,
+}
+
+/// Certificate signing request, mirroring proto `x509.X509CertRequest`.
+///
+/// `public_key` is the subject key to be certified (proto field `key`); it is
+/// `None` only for self-signing, where the signer's own public key is used.
+/// `metadata` is the pre-encoded value for the metadata extension (see the
+/// deviation note below); it corresponds to proto field `metadata`.
+#[derive(Clone, Default)]
+pub struct X509CertRequest {
+    /// Subject public key to certify (proto `key`).
+    pub public_key: Option<keys::ImmutablePublicKey>,
+    /// Expiration as a Unix timestamp (proto `exp`).
+    pub exp: i64,
+    /// Pre-encoded metadata extension value (proto `metadata`); see note below.
+    pub metadata: Option<Vec<u8>>,
+    /// Intended key usage (proto `key_usage`).
+    pub key_usage: X509KeyUsage,
+    /// Extended key usages (proto `ext_key_usage`).
+    pub ext_key_usage: Vec<X509ExtKeyUsage>,
+    /// Subject/issuer common name (proto `issuer`).
+    pub issuer: String,
+    /// Mark as a CA certificate (proto `is_ca`).
+    pub is_ca: bool,
+    /// CA path length constraint; only meaningful when `is_ca` (proto
+    /// `path_len_constraint`). -1 = unlimited, 0 = leaf-only.
+    pub path_len_constraint: i32,
+    /// DNS SAN entries (proto `dns_names`).
+    pub dns_names: Vec<String>,
+    /// URI SAN entries, e.g. SPIFFE IDs (proto `uri_sans`).
+    pub uri_sans: Vec<String>,
+}
+
+/// OID for the metadata extension, mirroring Go's `X509As1MetaDataOID`:
+/// 1.3.6.1.4.1.99999.1.
+const OID_METADATA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.99999.1");
+
+/// Whose public key goes into the certificate subject.
+enum SubjectKey<'a> {
+    /// Use an explicitly supplied public key (the `sign` case).
+    Explicit(&'a keys::ImmutablePublicKey),
+    /// Use the signing key's own public key (the `self_sign` case).
+    SignerOwn,
+}
+
+/// Where the issuer DN comes from, mirroring Go's `CreateCertificate` parent
+/// handling.
+enum IssuerSource<'a> {
+    /// Self-signed: issuer DN == subject DN (`CN=req.issuer`).
+    SameAsSubject,
+    /// Signed by the chain leaf: copy the leaf cert's Subject DN verbatim.
+    FromLeafSubject(&'a Certificate),
+}
+
+/// Builds and signs a certificate, mirroring Go's `x509Certificate` builder
+/// plus `stdx509.CreateCertificate`. The cert shape matches Go/Java:
+///   - Subject CN = `req.issuer`
+///   - Issuer DN = subject DN (self-sign) or the leaf cert's Subject (sign)
+///   - random 128-bit serial number (mirrors `GenerateSerialNumber`)
+///   - NotBefore = now, NotAfter = `req.exp`
+///   - BasicConstraints (CA + path length) when `is_ca`
+///   - KeyUsage + ExtKeyUsage mapped from the request enums
+///   - DNS SANs (default `["localhost"]` when empty) + URI SANs
+///   - metadata extension under `OID_METADATA` when present
+fn build_signed_cert(
+    signer: &keys::ImmutableKey,
+    subject: SubjectKey<'_>,
+    issuer: IssuerSource<'_>,
+    req: &X509CertRequest,
+) -> Result<ImmutableCert> {
+    use der::asn1::{BitString, Ia5String};
+    use der::{Decode as _, Encode};
+    use spki::SubjectPublicKeyInfoOwned;
+    use x509_cert::builder::{Builder, CertificateBuilder, Profile};
+    use x509_cert::der::flagset::FlagSet;
+    use x509_cert::ext::pkix::name::GeneralName;
+    use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage, SubjectAltName};
+    use x509_cert::name::Name;
+    use x509_cert::time::Validity;
+
+    // Validation mirrors Go's x509Certificate().
+    if req.issuer.is_empty() {
+        return Err(AuthError::missing_invalid_data("missing certRequest.Issuer"));
+    }
+    if req.exp <= 0 {
+        return Err(AuthError::missing_invalid_data("missing certRequest.Exp"));
+    }
+    let now_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if req.exp < now_unix {
+        return Err(AuthError::missing_invalid_data("certRequest.Exp is in the past"));
+    }
+
+    // Subject public key SPKI.
+    let subject_spki = match subject {
+        SubjectKey::Explicit(pk) => public_key_to_spki(pk.public_key())?,
+        SubjectKey::SignerOwn => public_key_to_spki(signer.public_key())?,
+    };
+    let spki = SubjectPublicKeyInfoOwned::try_from(subject_spki.as_slice())
+        .map_err(|e| AuthError::x509(format!("invalid subject public key: {}", e)))?;
+
+    // Names. RFC 4514 string form; CN is escaped minimally (service names and
+    // ids are well-formed identifiers in practice, matching Go/Java usage).
+    let subject_name = Name::from_str(&format!("CN={}", escape_rdn_value(&req.issuer)))
+        .map_err(|e| AuthError::x509(format!("invalid subject name: {}", e)))?;
+    let issuer_name = match issuer {
+        IssuerSource::SameAsSubject => subject_name.clone(),
+        IssuerSource::FromLeafSubject(leaf) => leaf.tbs_certificate.subject.clone(),
+    };
+
+    // Validity: NotBefore = now, NotAfter = exp.
+    let not_after_secs = (req.exp - now_unix).max(0) as u64;
+    let validity = Validity::from_now(Duration::from_secs(not_after_secs))
+        .map_err(|e| AuthError::x509(format!("invalid validity: {}", e)))?;
+
+    let serial = generate_serial_number();
+
+    // Profile::Manual opts out of x509-cert's default extension set so the cert
+    // shape is fully controlled here (parity with Go/Java).
+    let profile = Profile::Manual {
+        issuer: Some(issuer_name),
+    };
+
+    // The CertificateBuilder needs a signer that implements Keypair +
+    // DynSignatureAlgorithmIdentifier (for the algorithm identifier + verifying
+    // key), but the actual TBS signing is done manually below via finalize()/
+    // assemble() to support Ed25519, whose signature type does not implement
+    // the SignatureBitStringEncoding bound required by Builder::build().
+    macro_rules! assemble_with_signer {
+        ($signer:expr, $sign_fn:expr) => {
+            {
+            let mut builder = CertificateBuilder::new(
+                profile.clone(),
+                serial.clone(),
+                validity,
+                subject_name.clone(),
+                spki.clone(),
+                $signer,
+            )
+            .map_err(|e| AuthError::x509(format!("cert builder error: {}", e)))?;
+
+            // KeyUsage (critical, like Go/Java).
+            let ku_flags = key_usage_flags(req.key_usage);
+            let ku = KeyUsage(FlagSet::from(ku_flags));
+            builder
+                .add_extension(&ku)
+                .map_err(|e| AuthError::x509(format!("key usage ext error: {}", e)))?;
+
+            // BasicConstraints when is_ca, mirroring Go (MaxPathLen/Zero) and
+            // Java (BasicConstraints(pathLen) when >= 0 else CA:true).
+            if req.is_ca {
+                let path_len = if req.path_len_constraint >= 0 {
+                    Some(req.path_len_constraint as u8)
+                } else {
+                    None
+                };
+                let bc = BasicConstraints {
+                    ca: true,
+                    path_len_constraint: path_len,
+                };
+                builder
+                    .add_extension(&bc)
+                    .map_err(|e| AuthError::x509(format!("basic constraints ext error: {}", e)))?;
+            }
+
+            // ExtendedKeyUsage.
+            if !req.ext_key_usage.is_empty() {
+                let oids: Vec<ObjectIdentifier> = req
+                    .ext_key_usage
+                    .iter()
+                    .filter_map(|e| ext_key_usage_oid(*e))
+                    .collect();
+                if !oids.is_empty() {
+                    let eku = ExtendedKeyUsage(oids);
+                    builder
+                        .add_extension(&eku)
+                        .map_err(|e| AuthError::x509(format!("ext key usage ext error: {}", e)))?;
+                }
+            }
+
+            // SubjectAltName: DNS (default ["localhost"] when empty) + URI SANs.
+            let mut general_names: Vec<GeneralName> = Vec::new();
+            let dns_names: Vec<String> = if req.dns_names.is_empty() {
+                vec!["localhost".to_string()]
+            } else {
+                req.dns_names.clone()
+            };
+            for dns in &dns_names {
+                let ia5 = Ia5String::new(dns)
+                    .map_err(|e| AuthError::x509(format!("invalid dns name {}: {}", dns, e)))?;
+                general_names.push(GeneralName::DnsName(ia5));
+            }
+            for uri in &req.uri_sans {
+                let ia5 = Ia5String::new(uri)
+                    .map_err(|e| AuthError::x509(format!("invalid uri san {}: {}", uri, e)))?;
+                general_names.push(GeneralName::UniformResourceIdentifier(ia5));
+            }
+            if !general_names.is_empty() {
+                let san = SubjectAltName(general_names);
+                builder
+                    .add_extension(&san)
+                    .map_err(|e| AuthError::x509(format!("san ext error: {}", e)))?;
+            }
+
+            // Metadata extension under the custom OID (raw bytes as the value),
+            // mirroring Go's pkix.Extension{Id: X509As1MetaDataOID, Value: ...}.
+            if let Some(meta) = &req.metadata {
+                let ext = MetadataExtension {
+                    value: meta.clone(),
+                };
+                builder
+                    .add_extension(&ext)
+                    .map_err(|e| AuthError::x509(format!("metadata ext error: {}", e)))?;
+            }
+
+            let tbs = builder
+                .finalize()
+                .map_err(|e| AuthError::x509(format!("tbs encode error: {}", e)))?;
+            let sig_bytes: Vec<u8> = $sign_fn(&tbs)?;
+            let bitstring = BitString::from_bytes(&sig_bytes)
+                .map_err(|e| AuthError::x509(format!("signature encode error: {}", e)))?;
+            builder
+                .assemble(bitstring)
+                .map_err(|e| AuthError::x509(format!("cert assemble error: {}", e)))?
+            }
+        };
+    }
+
+    // Dispatch on the signing key type. Each arm constructs the concrete signer
+    // and a closure producing the signature bytes in the form X.509 expects.
+    let cert: Certificate = match signer.private_key() {
+        keys::PrivateKey::Ed25519(sk) => {
+            use signature::Signer as _;
+            assemble_with_signer!(sk, |tbs: &[u8]| -> Result<Vec<u8>> {
+                let sig: ed25519_dalek::Signature = sk.sign(tbs);
+                Ok(sig.to_bytes().to_vec())
+            })
+        }
+        keys::PrivateKey::EcP256(sk) => {
+            use signature::Signer as _;
+            assemble_with_signer!(sk, |tbs: &[u8]| -> Result<Vec<u8>> {
+                // X.509 uses the DER-encoded ECDSA signature.
+                let sig: ecdsa::der::Signature<p256::NistP256> = sk
+                    .try_sign(tbs)
+                    .map_err(|e| AuthError::ecdsa(e.to_string()))?;
+                Ok(sig.as_bytes().to_vec())
+            })
+        }
+        keys::PrivateKey::EcP384(sk) => {
+            use signature::Signer as _;
+            assemble_with_signer!(sk, |tbs: &[u8]| -> Result<Vec<u8>> {
+                let sig: ecdsa::der::Signature<p384::NistP384> = sk
+                    .try_sign(tbs)
+                    .map_err(|e| AuthError::ecdsa(e.to_string()))?;
+                Ok(sig.as_bytes().to_vec())
+            })
+        }
+        keys::PrivateKey::Rsa(rsa_key) => {
+            use rsa::signature::{SignatureEncoding, Signer as _};
+            // Algorithm chosen by key size, mirroring the key lib (RS384/RS512).
+            let signing_key384 = rsa::pkcs1v15::SigningKey::<sha2::Sha384>::new(rsa_key.clone());
+            let signing_key512 = rsa::pkcs1v15::SigningKey::<sha2::Sha512>::new(rsa_key.clone());
+            match signer.alg() {
+                "RS512" => assemble_with_signer!(&signing_key512, |tbs: &[u8]| -> Result<Vec<u8>> {
+                    let sig: rsa::pkcs1v15::Signature = signing_key512.sign(tbs);
+                    Ok(sig.to_vec())
+                }),
+                _ => assemble_with_signer!(&signing_key384, |tbs: &[u8]| -> Result<Vec<u8>> {
+                    let sig: rsa::pkcs1v15::Signature = signing_key384.sign(tbs);
+                    Ok(sig.to_vec())
+                }),
+            }
+        }
+    };
+
+    // Encode to PEM and wrap as ImmutableCert, with id = signing key id
+    // (mirrors Go's cert.Id = w.key.Proto().Id).
+    let der = cert
+        .to_der()
+        .map_err(|e| AuthError::x509(format!("cert der encode error: {}", e)))?;
+    // Round-trip parse to validate.
+    let _ = Certificate::from_der(&der)
+        .map_err(|e| AuthError::x509(format!("signed cert parse error: {}", e)))?;
+    let pem_block = pem::Pem::new("CERTIFICATE", der);
+    let pem_str = pem::encode(&pem_block);
+    let base64_pem = base64_utils::encode_base64_url(pem_str.as_bytes());
+    ImmutableCert::from_pem(signer.id().to_string(), &base64_pem)
+}
+
+/// Maps a single `X509KeyUsage` to the x509-cert `KeyUsages` flag, mirroring
+/// the Go switch (and Java's `convertKeyUsage`). ContentCommitment maps to
+/// NonRepudiation (the renamed bit 1).
+fn key_usage_flags(ku: X509KeyUsage) -> KeyUsagesFlag {
+    use x509_cert::ext::pkix::KeyUsages;
+    match ku {
+        X509KeyUsage::DigitalSignature => KeyUsages::DigitalSignature,
+        X509KeyUsage::ContentCommitment => KeyUsages::NonRepudiation,
+        X509KeyUsage::KeyEncipherment => KeyUsages::KeyEncipherment,
+        X509KeyUsage::DataEncipherment => KeyUsages::DataEncipherment,
+        X509KeyUsage::KeyAgreement => KeyUsages::KeyAgreement,
+        X509KeyUsage::CertSign => KeyUsages::KeyCertSign,
+        X509KeyUsage::CrlSign => KeyUsages::CRLSign,
+        X509KeyUsage::EncipherOnly => KeyUsages::EncipherOnly,
+        X509KeyUsage::DecipherOnly => KeyUsages::DecipherOnly,
+    }
+}
+
+type KeyUsagesFlag = x509_cert::ext::pkix::KeyUsages;
+
+/// Maps an `X509ExtKeyUsage` to its KeyPurposeId OID, mirroring the Go switch.
+/// Returns `None` for variants Go's stdlib maps but x509-cert has no const for
+/// (Microsoft/Netscape gated crypto, IPSEC user/tunnel/end-system) — matching
+/// Java's `convertSingleExtKeyUsage`, which also drops the unsupported ones.
+fn ext_key_usage_oid(eku: X509ExtKeyUsage) -> Option<ObjectIdentifier> {
+    use const_oid::db::rfc5280::{
+        ANY_EXTENDED_KEY_USAGE, ID_KP_CLIENT_AUTH, ID_KP_CODE_SIGNING, ID_KP_EMAIL_PROTECTION,
+        ID_KP_OCSP_SIGNING, ID_KP_SERVER_AUTH, ID_KP_TIME_STAMPING,
+    };
+    Some(match eku {
+        X509ExtKeyUsage::Any => ANY_EXTENDED_KEY_USAGE,
+        X509ExtKeyUsage::ServerAuth => ID_KP_SERVER_AUTH,
+        X509ExtKeyUsage::ClientAuth => ID_KP_CLIENT_AUTH,
+        X509ExtKeyUsage::CodeSigning => ID_KP_CODE_SIGNING,
+        X509ExtKeyUsage::EmailProtection => ID_KP_EMAIL_PROTECTION,
+        X509ExtKeyUsage::TimeStamping => ID_KP_TIME_STAMPING,
+        X509ExtKeyUsage::OcspSigning => ID_KP_OCSP_SIGNING,
+        // No const-oid entries / not mapped by Java either.
+        X509ExtKeyUsage::IpsecEndSystem
+        | X509ExtKeyUsage::IpsecTunnel
+        | X509ExtKeyUsage::IpsecUser
+        | X509ExtKeyUsage::MicrosoftServerGatedCrypto
+        | X509ExtKeyUsage::NetscapeServerGatedCrypto
+        | X509ExtKeyUsage::MicrosoftCommercialCodeSigning
+        | X509ExtKeyUsage::MicrosoftKernelCodeSigning => return None,
+    })
+}
+
+/// Converts a parsed public key wrapper into SPKI DER bytes.
+fn public_key_to_spki(pk: &keys::PublicKey) -> Result<Vec<u8>> {
+    use spki::EncodePublicKey;
+    let der = match pk {
+        keys::PublicKey::Rsa(k) => k
+            .to_public_key_der()
+            .map_err(|e| AuthError::x509(format!("rsa spki error: {}", e)))?,
+        keys::PublicKey::EcP256(k) => k
+            .to_public_key_der()
+            .map_err(|e| AuthError::x509(format!("p256 spki error: {}", e)))?,
+        keys::PublicKey::EcP384(k) => k
+            .to_public_key_der()
+            .map_err(|e| AuthError::x509(format!("p384 spki error: {}", e)))?,
+        keys::PublicKey::Ed25519(k) => k
+            .to_public_key_der()
+            .map_err(|e| AuthError::x509(format!("ed25519 spki error: {}", e)))?,
+    };
+    Ok(der.as_bytes().to_vec())
+}
+
+/// Generates a cryptographically random 128-bit positive serial number,
+/// mirroring Go's `GenerateSerialNumber`.
+fn generate_serial_number() -> x509_cert::serial_number::SerialNumber {
+    use rand::RngCore;
+    let mut bytes = [0u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    // Clear the top bit to keep the integer positive (DER signed integer).
+    bytes[0] &= 0x7f;
+    // Avoid an all-zero serial.
+    if bytes.iter().all(|b| *b == 0) {
+        bytes[15] = 1;
+    }
+    x509_cert::serial_number::SerialNumber::new(&bytes)
+        .unwrap_or_else(|_| x509_cert::serial_number::SerialNumber::from(1u32))
+}
+
+/// Minimal RFC 4514 escaping for an RDN attribute value. Service names and key
+/// ids used here are well-formed, but we escape the special leading/trailing
+/// and reserved characters defensively.
+fn escape_rdn_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for (i, c) in value.chars().enumerate() {
+        match c {
+            ',' | '+' | '"' | '\\' | '<' | '>' | ';' | '=' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '#' if i == 0 => {
+                out.push('\\');
+                out.push(c);
+            }
+            ' ' if i == 0 || i == value.len() - 1 => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Custom certificate extension carrying the metadata value under
+/// `OID_METADATA`. The raw `value` bytes become the extension's OCTET STRING
+/// content, matching Go's `pkix.Extension{Id, Value}` (non-critical).
+struct MetadataExtension {
+    value: Vec<u8>,
+}
+
+impl const_oid::AssociatedOid for MetadataExtension {
+    const OID: ObjectIdentifier = OID_METADATA;
+}
+
+impl der::Encode for MetadataExtension {
+    fn encoded_len(&self) -> der::Result<der::Length> {
+        der::Length::try_from(self.value.len())
+    }
+    fn encode(&self, writer: &mut impl der::Writer) -> der::Result<()> {
+        writer.write(&self.value)
+    }
+}
+
+impl x509_cert::ext::AsExtension for MetadataExtension {
+    fn critical(&self, _subject: &x509_cert::name::Name, _exts: &[x509_cert::ext::Extension]) -> bool {
+        false
+    }
+}
+
+use std::str::FromStr;
+
+// ── Service name verification ────────────────────────────────────────
+
+/// OID for Subject Alternative Name (2.5.29.17)
+const OID_SAN: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.17");
+
+/// Checks whether a DER-encoded peer certificate presents a canonical service
+/// SPIFFE ID SAN — spiffe://<td>/system[/<loc>...]/services/<svc> — in
+/// `trust_domain` whose service label matches `service_name`. The URI SAN is
+/// PARSED with chassis/spiffe (SubjectKind/TrustDomain/SubjectPath), never by
+/// ad-hoc string splitting. There is NO CN/DNS fallback and NO match when
+/// `trust_domain` is empty: identity is verified by canonical SPIFFE SAN only,
+/// identically across go/rust/java (fail-closed).
+pub fn verify_service_name(cert_der: &[u8], service_name: &str, trust_domain: &str) -> bool {
+    if trust_domain.is_empty() {
+        return false;
+    }
+    let expected_td = match spiffe::normalize_trust_domain(trust_domain) {
+        Ok(td) => td,
+        Err(_) => return false,
+    };
+    let cert = match Certificate::from_der(cert_der) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    if let Some(exts) = &cert.tbs_certificate.extensions {
+        for ext in exts.iter() {
+            if ext.extn_id == OID_SAN {
+                if let Ok(san) =
+                    x509_cert::ext::pkix::SubjectAltName::from_der(ext.extn_value.as_bytes())
+                {
+                    for name in san.0.iter() {
+                        if let x509_cert::ext::pkix::name::GeneralName::UniformResourceIdentifier(
+                            uri,
+                        ) = name
+                        {
+                            let uri_str: &str = uri.as_ref();
+                            if let Ok(parsed) = spiffe::parse_spiffe_id(uri_str) {
+                                if parsed.subject_kind == spiffe::SubjectKind::Service
+                                    && parsed.trust_domain == expected_td
+                                    && parsed.subject_path == service_name
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
+// ── Internal helpers ─────────────────────────────────────────────────
+
+/// Extracts DER bytes from an ImmutableCert's PEM.
+fn cert_to_der(cert: &ImmutableCert) -> Result<CertificateDer<'static>> {
+    let pem_str = std::str::from_utf8(cert.pem_bytes())
+        .map_err(|_| AuthError::missing_invalid_data("invalid UTF-8 in cert PEM"))?;
+    let parsed = pem::parse(pem_str)
+        .map_err(|e| AuthError::pem_parse(format!("failed to parse cert PEM: {}", e)))?;
+    Ok(CertificateDer::from(parsed.into_contents()))
+}
+
+/// Converts PEM-encoded private key bytes to rustls PrivateKeyDer.
+fn private_key_der_from_pem(pem_bytes: &[u8]) -> Result<PrivateKeyDer<'static>> {
+    let pem_str = std::str::from_utf8(pem_bytes)
+        .map_err(|_| AuthError::missing_invalid_data("invalid UTF-8 in key PEM"))?;
+    let parsed = pem::parse(pem_str)
+        .map_err(|e| AuthError::pem_parse(format!("failed to parse key PEM: {}", e)))?;
+    let tag = parsed.tag().to_string();
+    let der = parsed.into_contents();
+    match tag.as_str() {
+        "PRIVATE KEY" => Ok(PrivateKeyDer::Pkcs8(der.into())),
+        "RSA PRIVATE KEY" => Ok(PrivateKeyDer::Pkcs1(der.into())),
+        "EC PRIVATE KEY" => Ok(PrivateKeyDer::Sec1(der.into())),
+        _ => Err(AuthError::unsupported_key_type(format!(
+            "unknown PEM tag: {}",
+            tag
+        ))),
+    }
+}
+
+// ── TLS verifiers ────────────────────────────────────────────────────
+
+/// Server cert verifier that wraps WebPki (for chain validation) and pins the
+/// peer's identity to a canonical service SPIFFE ID SAN in `trust_domain`.
+/// When WebPki reports NotValidForName (SPIFFE certs carry no matching DNS SAN),
+/// identity is verified by SPIFFE SAN only — no CN/DNS fallback. Chain
+/// validation errors are propagated as-is.
+struct ServiceNameServerVerifier {
+    inner: Arc<dyn rustls::client::danger::ServerCertVerifier>,
+    service_name: String,
+    trust_domain: String,
+}
+
+impl fmt::Debug for ServiceNameServerVerifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServiceNameServerVerifier")
+            .field("service_name", &self.service_name)
+            .finish()
+    }
+}
+
+impl rustls::client::danger::ServerCertVerifier for ServiceNameServerVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &rustls::pki_types::ServerName<'_>,
+        ocsp_response: &[u8],
+        now: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        // Validate the certificate CHAIN via WebPki, but do NOT let its DNS
+        // server-name match stand in for identity — a matching DNS SAN must never
+        // bypass the SPIFFE pin (that would let any CA-trusted cert with the right
+        // DNS name impersonate a service). NotValidForName (canonical SPIFFE certs
+        // carry no matching DNS SAN) is treated the same as a successful chain
+        // validation; identity is ALWAYS pinned below by the SPIFFE SAN, matching
+        // go/java (no fallback).
+        match self
+            .inner
+            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
+        {
+            Ok(_)
+            | Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::NotValidForName,
+            )) => {}
+            Err(e) => return Err(e),
+        }
+        if verify_service_name(end_entity.as_ref(), &self.service_name, &self.trust_domain) {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::ApplicationVerificationFailure,
+            ))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.inner.supported_verify_schemes()
+    }
+}
+
+/// Client cert verifier that wraps WebPki (for chain validation) and pins the
+/// peer's identity to a canonical service SPIFFE ID SAN in `trust_domain` — no
+/// CN/DNS fallback.
+struct ServiceNameClientVerifier {
+    inner: Arc<dyn rustls::server::danger::ClientCertVerifier>,
+    service_name: String,
+    trust_domain: String,
+}
+
+impl fmt::Debug for ServiceNameClientVerifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServiceNameClientVerifier")
+            .field("service_name", &self.service_name)
+            .finish()
+    }
+}
+
+impl rustls::server::danger::ClientCertVerifier for ServiceNameClientVerifier {
+    fn offer_client_auth(&self) -> bool {
+        true
+    }
+
+    fn client_auth_mandatory(&self) -> bool {
+        true
+    }
+
+    fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
+        self.inner.root_hint_subjects()
+    }
+
+    fn verify_client_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        now: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::server::danger::ClientCertVerified, rustls::Error> {
+        self.inner
+            .verify_client_cert(end_entity, intermediates, now)?;
+        if !verify_service_name(end_entity.as_ref(), &self.service_name, &self.trust_domain) {
+            return Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::ApplicationVerificationFailure,
+            ));
+        }
+        Ok(rustls::server::danger::ClientCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.inner.supported_verify_schemes()
+    }
+}
+
+// Pins SEC-1 (rust leg): verify_service_name — the SPIFFE identity pin behind
+// ServiceNameServerVerifier — must accept ONLY a canonical service SPIFFE SAN in
+// the configured trust domain, and fail closed on everything else (wrong label,
+// wrong/empty/malformed trust domain, CN/DNS-only certs). Mirrors the go
+// x509_verify_test.go.tmpl semantics; certs are minted with this crate's own
+// signer so the pin exercises real DER, not synthetic structs.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn exp_in_one_hour() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_secs() as i64
+            + 3600
+    }
+
+    /// Mints a self-signed leaf with the given SANs and returns its DER bytes.
+    fn mint_cert_der(dns_names: Vec<String>, uri_sans: Vec<String>) -> Vec<u8> {
+        let key = keys::generate_ec_p256_key().expect("generate p256 key");
+        let req = X509CertRequest {
+            public_key: None,
+            exp: exp_in_one_hour(),
+            metadata: None,
+            key_usage: X509KeyUsage::DigitalSignature,
+            ext_key_usage: Vec::new(),
+            issuer: "test-mint".to_string(),
+            is_ca: false,
+            path_len_constraint: 0,
+            dns_names,
+            uri_sans,
+        };
+        let cert = build_signed_cert(&key, SubjectKey::SignerOwn, IssuerSource::SameAsSubject, &req)
+            .expect("self-sign test cert");
+        cert_to_der(&cert).expect("cert DER").as_ref().to_vec()
+    }
+
+    fn service_san(td: &str, svc: &str) -> String {
+        spiffe::service_spiffe_id(td, "aws/us-east-1a", svc).expect("canonical service SPIFFE id")
+    }
+
+    #[test]
+    fn verify_service_name_accepts_canonical_spiffe_san() {
+        let der = mint_cert_der(Vec::new(), vec![service_san("example.com", "mcp")]);
+        assert!(
+            verify_service_name(&der, "mcp", "example.com"),
+            "canonical service SAN in the trust domain must be accepted"
+        );
+    }
+
+    #[test]
+    fn verify_service_name_rejects_wrong_service_label() {
+        let der = mint_cert_der(Vec::new(), vec![service_san("example.com", "mcp")]);
+        assert!(
+            !verify_service_name(&der, "other", "example.com"),
+            "wrong service label must be rejected"
+        );
+    }
+
+    #[test]
+    fn verify_service_name_rejects_wrong_trust_domain() {
+        let der = mint_cert_der(Vec::new(), vec![service_san("example.com", "mcp")]);
+        assert!(
+            !verify_service_name(&der, "mcp", "other.example"),
+            "wrong trust domain must be rejected"
+        );
+    }
+
+    #[test]
+    fn verify_service_name_fails_closed_on_empty_or_malformed_trust_domain() {
+        let der = mint_cert_der(Vec::new(), vec![service_san("example.com", "mcp")]);
+        assert!(
+            !verify_service_name(&der, "mcp", ""),
+            "empty trust domain must fail closed"
+        );
+        assert!(
+            !verify_service_name(&der, "mcp", "bad/td"),
+            "malformed trust domain must fail closed"
+        );
+    }
+
+    #[test]
+    fn verify_service_name_rejects_cn_dns_only_cert() {
+        // A chain-valid but non-SPIFFE cert (CN + DNS SAN only) must never satisfy
+        // the identity pin — the CA-only trust hole SEC-1 closes.
+        let der = mint_cert_der(vec!["mcp".to_string()], Vec::new());
+        assert!(
+            !verify_service_name(&der, "mcp", "example.com"),
+            "CN/DNS-only cert must be rejected (no SPIFFE fallback)"
+        );
+    }
+
+    #[test]
+    fn cert_pem_round_trips() {
+        let key = keys::generate_ec_p256_key().expect("generate p256 key");
+        let chain = ImmutableCertChain::for_self_signing(key);
+        let cert = chain
+            .self_sign("round-trip", exp_in_one_hour(), X509KeyUsage::DigitalSignature, &[])
+            .expect("self_sign");
+        let pem = cert.to_pem().expect("to_pem");
+        assert!(!pem.is_empty(), "to_pem must produce output");
+        // from_pem takes BASE64-encoded PEM (the wire form load_cert_pair_from_files
+        // produces); to_pem returns raw PEM text — encode between them.
+        let encoded = base64_utils::encode_base64_url(pem.as_bytes());
+        let restored = ImmutableCert::from_pem("round-trip".to_string(), &encoded).expect("from_pem");
+        assert_eq!(
+            restored.pem_bytes(),
+            cert.pem_bytes(),
+            "PEM must survive a to_pem/from_pem round trip"
+        );
+    }
+}

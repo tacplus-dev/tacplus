@@ -1,0 +1,210 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// CODE GENERATED - DO NOT EDIT
+
+package {{.ChassisBase}}.grpcserver;
+
+import {{.ChassisBase}}.key.ImmutableKey;
+import {{.ChassisBase}}.key.KeyHelpers;
+import {{.ChassisBase}}.token.TokenWrapper;
+import {{.TypesBase}}.sys.errors.ProtoException;
+import {{.TypesBase}}.sys.jwk.JwkOuterClass;
+import {{.TypesBase}}.sys.key.KeyOuterClass;
+
+import java.util.Base64;
+import java.util.List;
+import java.util.Map;
+
+// Behavioral self-test for the REAL generated Authorizer (PC-W-1, Java leg —
+// mirrors go/chassis/grpcserver/authorizer_behavior_test.go.tmpl): mints real
+// Ed25519 JWTs, seeds the matching JWK through the public JwkSource seam, and
+// drives authorizeWithToken / authenticateAtOrBelowWithToken over the actual
+// verify path — signature, audience, expiry, unknown-kid, tamper, S2S
+// auth_services, C2S entitlements presence, and the namespace level-or-below
+// rule. No fake auth funcs. Run as a plain main-method self-test by the
+// cross-test gates (like ServiceConnectionTest).
+public class AuthorizerBehaviorTest {
+    private static int failures = 0;
+
+    private static final String TEST_METHOD = "/demo.DemoService/DoThing";
+
+    private static ImmutableKey newTestKey() throws Exception {
+        KeyOuterClass.Key proto = KeyHelpers.newEd25519Key();
+        return ImmutableKey.from(proto);
+    }
+
+    // jwkForKey builds the verifying JWK proto (OKP/Ed25519) for a signing key,
+    // keyed by the key's id (the kid sign() stamps into the token header). The
+    // raw 32-byte public key is the tail of the X.509 SPKI encoding.
+    private static JwkOuterClass.Jwk jwkForKey(ImmutableKey key) {
+        byte[] spki = key.getPublicKey().getEncoded();
+        byte[] raw = new byte[32];
+        System.arraycopy(spki, spki.length - 32, raw, 0, 32);
+        return JwkOuterClass.Jwk.newBuilder()
+            .setKid(key.getProto().getId())
+            .setKty(KeyOuterClass.KeyType.KEY_TYPE_OKP)
+            .setCrv("Ed25519")
+            .setX(Base64.getUrlEncoder().withoutPadding().encodeToString(raw))
+            .build();
+    }
+
+    // authorizerWithKeys builds an Authorizer (no live JWK-view conn) seeded
+    // with the given verifying keys via the public JwkSource seam.
+    private static Authorizer authorizerWithKeys(JwkOuterClass.Jwk... jwks) {
+        Map<String, JwkOuterClass.Jwk> entries = new java.util.HashMap<>();
+        for (JwkOuterClass.Jwk jwk : jwks) {
+            entries.put(jwk.getKid(), jwk);
+        }
+        return new Authorizer(sink -> sink.update(entries));
+    }
+
+    private interface Customize {
+        void apply(TokenWrapper tok) throws Exception;
+    }
+
+    // signedToken mints a token with the shared valid claims (issuer, audience,
+    // future expiry), applies the customization, and signs it with key.
+    private static String signedToken(ImmutableKey key, Customize customize) throws Exception {
+        TokenWrapper tok = TokenWrapper.create()
+            .setIssuer("test-issuer")
+            .setAudience(Authorizer.SERVICE_NAME)
+            .setExpiration(System.currentTimeMillis() / 1000 + 3600);
+        customize.apply(tok);
+        tok.sign(key);
+        return tok.getBase64();
+    }
+
+    private static String bearer(String token) {
+        return "Bearer " + token;
+    }
+
+    private static void mustPass(String name, ThrowingRunnable r) {
+        try {
+            r.run();
+        } catch (Exception e) {
+            System.err.println("FAIL: " + name + " must be authorized, got: " + e);
+            failures++;
+        }
+    }
+
+    private static void mustReject(String name, ThrowingRunnable r) {
+        try {
+            r.run();
+            System.err.println("FAIL: " + name + " must be denied (fail-open)");
+            failures++;
+        } catch (ProtoException expected) {
+            // Denied via the typed error path — expected.
+        } catch (Exception e) {
+            System.err.println("FAIL: " + name + " threw an untyped error: " + e);
+            failures++;
+        }
+    }
+
+    private interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+
+    public static void main(String[] args) throws Exception {
+        // A valid, correctly-signed service token whose caller matches the
+        // method's auth_services pattern is authorized.
+        ImmutableKey key = newTestKey();
+        Authorizer a = authorizerWithKeys(jwkForKey(key));
+        a.setMethodAuth("DoThing", List.of("caller-svc"));
+        String valid = signedToken(key, tok -> tok.setSubType("service").setSubject("caller-svc"));
+        mustPass("valid service token", () -> a.authorizeWithToken(bearer(valid), TEST_METHOD, null));
+
+        // A service caller that does not match auth_services is denied.
+        Authorizer mismatched = authorizerWithKeys(jwkForKey(key));
+        mismatched.setMethodAuth("DoThing", List.of("allowed-svc"));
+        String otherSvc = signedToken(key, tok -> tok.setSubType("service").setSubject("other-svc"));
+        mustReject("service not in auth_services", () -> mismatched.authorizeWithToken(bearer(otherSvc), TEST_METHOD, null));
+
+        // An expired token is rejected even with a valid signature.
+        String expired;
+        {
+            TokenWrapper tok = TokenWrapper.create()
+                .setIssuer("test-issuer")
+                .setAudience(Authorizer.SERVICE_NAME)
+                .setExpiration(System.currentTimeMillis() / 1000 - 3600)
+                .setSubType("service")
+                .setSubject("caller-svc");
+            tok.sign(key);
+            expired = tok.getBase64();
+        }
+        mustReject("expired token", () -> a.authorizeWithToken(bearer(expired), TEST_METHOD, null));
+
+        // A token whose audience does not match this service is rejected.
+        String wrongAud;
+        {
+            TokenWrapper tok = TokenWrapper.create()
+                .setIssuer("test-issuer")
+                .setAudience(Authorizer.SERVICE_NAME + "-not-me")
+                .setExpiration(System.currentTimeMillis() / 1000 + 3600)
+                .setSubType("service")
+                .setSubject("caller-svc");
+            tok.sign(key);
+            wrongAud = tok.getBase64();
+        }
+        mustReject("wrong audience", () -> a.authorizeWithToken(bearer(wrongAud), TEST_METHOD, null));
+
+        // A token signed by a key whose kid is not in the cache is rejected.
+        Authorizer unknownKid = authorizerWithKeys(jwkForKey(newTestKey()));
+        unknownKid.setMethodAuth("DoThing", List.of("caller-svc"));
+        mustReject("unknown kid", () -> unknownKid.authorizeWithToken(bearer(valid), TEST_METHOD, null));
+
+        // A JWK under the REAL kid but with the WRONG public key must not verify
+        // — the CA-only/blind-trust hole.
+        ImmutableKey wrongKey = newTestKey();
+        JwkOuterClass.Jwk forged = jwkForKey(wrongKey).toBuilder()
+            .setKid(key.getProto().getId())
+            .build();
+        Authorizer tampered = authorizerWithKeys(forged);
+        tampered.setMethodAuth("DoThing", List.of("caller-svc"));
+        mustReject("tampered signature", () -> tampered.authorizeWithToken(bearer(valid), TEST_METHOD, null));
+
+        // A user (C2S) token with no service_entitlements claim is denied —
+        // entitlements are fail-closed.
+        String user = signedToken(key, tok -> tok.setSubType("user").setSubject("someone@example.com"));
+        mustReject("user token missing entitlements", () -> a.authorizeWithToken(bearer(user), TEST_METHOD, null));
+
+        // AuthenticateAtOrBelow enforces the universal namespace rule: the
+        // caller's namespace must be at or above the target.
+        String above = signedToken(key, tok -> tok.setSubType("service").setSubject("caller-svc").setNamespace("/a"));
+        mustPass("caller at-or-above target", () -> a.authenticateAtOrBelowWithToken(bearer(above), "/a/b"));
+        String below = signedToken(key, tok -> tok.setSubType("service").setSubject("caller-svc").setNamespace("/a/b"));
+        mustReject("caller below target", () -> a.authenticateAtOrBelowWithToken(bearer(below), "/a"));
+
+        // ---- enforcingInterceptor: wrong audience rejected ----
+        // Simulates what additionalServices (e.g. TypedEventBusBindings) see:
+        // the enforcingInterceptor calls authenticateWithToken which must reject
+        // a token whose audience does not match this service.
+        {
+            String wrongAudToken;
+            {
+                TokenWrapper tok = TokenWrapper.create()
+                    .setIssuer("test-issuer")
+                    .setAudience("kernel")
+                    .setExpiration(System.currentTimeMillis() / 1000 + 3600)
+                    .setSubType("service")
+                    .setSubject("caller-svc");
+                tok.sign(key);
+                wrongAudToken = tok.getBase64();
+            }
+            mustReject("enforcingInterceptor: wrong audience",
+                () -> a.authenticateWithToken("Bearer " + wrongAudToken));
+        }
+
+        // ---- enforcingInterceptor: missing token rejected ----
+        mustReject("enforcingInterceptor: missing token",
+            () -> a.authenticateWithToken(null));
+
+        // ---- enforcingInterceptor: correct audience accepted ----
+        mustPass("enforcingInterceptor: correct audience",
+            () -> a.authenticateWithToken(bearer(valid)));
+
+        if (failures > 0) {
+            System.err.println(failures + " Authorizer behavior check(s) FAILED");
+            System.exit(1);
+        }
+        System.out.println("AuthorizerBehaviorTest: all checks passed");
+    }
+}

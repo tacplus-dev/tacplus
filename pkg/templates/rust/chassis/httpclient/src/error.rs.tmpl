@@ -1,0 +1,136 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Error types for the HTTP client.
+//!
+//! This module defines error types with gRPC-compatible error codes.
+
+use std::fmt;
+
+/// Client error type with gRPC-compatible error codes and convenience constructors.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClientError {
+    /// gRPC-compatible error code
+    pub code: i32,
+    /// Human-readable error message
+    pub message: String,
+}
+
+impl ClientError {
+    /// Creates a new error with the given code and message
+    pub fn new(code: i32, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// HTTP request failed (code 13: INTERNAL)
+    pub fn request_failed(msg: impl Into<String>) -> Self {
+        Self::new(13, format!("HTTP request failed: {}", msg.into()))
+    }
+
+    /// Failed to create HTTP request (code 13: INTERNAL)
+    pub fn request_creation(msg: impl Into<String>) -> Self {
+        Self::new(13, format!("Failed to create request: {}", msg.into()))
+    }
+
+    /// Failed to deserialize response (code 13: INTERNAL)
+    pub fn deserialization_failed(msg: impl Into<String>) -> Self {
+        Self::new(13, format!("Failed to deserialize response: {}", msg.into()))
+    }
+
+    /// Request cancelled (code 1: CANCELLED)
+    pub fn cancelled(msg: impl Into<String>) -> Self {
+        Self::new(1, format!("Request cancelled: {}", msg.into()))
+    }
+
+    /// General error (code 13: INTERNAL)
+    pub fn general(msg: impl Into<String>) -> Self {
+        Self::new(13, msg)
+    }
+
+    /// Not found (code 5: NOT_FOUND)
+    pub fn not_found(msg: impl Into<String>) -> Self {
+        Self::new(5, format!("Not found: {}", msg.into()))
+    }
+
+    /// Unauthorized (code 16: UNAUTHENTICATED)
+    pub fn unauthorized(msg: impl Into<String>) -> Self {
+        Self::new(16, format!("Unauthorized: {}", msg.into()))
+    }
+
+    /// Invalid data (code 3: INVALID_ARGUMENT)
+    pub fn invalid_data(msg: impl Into<String>) -> Self {
+        Self::new(3, format!("Invalid data: {}", msg.into()))
+    }
+
+    /// Configuration error (code 3: INVALID_ARGUMENT)
+    pub fn config_error(msg: impl Into<String>) -> Self {
+        Self::new(3, format!("Configuration error: {}", msg.into()))
+    }
+
+    /// Permission denied (code 7: PERMISSION_DENIED)
+    pub fn permission_denied(msg: impl Into<String>) -> Self {
+        Self::new(7, format!("Permission denied: {}", msg.into()))
+    }
+
+    /// Resource exhausted / rate limited (code 8: RESOURCE_EXHAUSTED)
+    pub fn resource_exhausted(msg: impl Into<String>) -> Self {
+        Self::new(8, format!("Resource exhausted: {}", msg.into()))
+    }
+
+    /// Service unavailable (code 14: UNAVAILABLE)
+    pub fn unavailable(msg: impl Into<String>) -> Self {
+        Self::new(14, format!("Unavailable: {}", msg.into()))
+    }
+
+    /// Gets the error code
+    pub fn code(&self) -> i32 {
+        self.code
+    }
+
+    /// Gets the error message
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+/// Convert HTTP status code to appropriate ClientError
+pub fn status_code_to_error(status_code: u16, status_text: &str) -> ClientError {
+    let message = format!("HTTP {}: {}", status_code, status_text);
+
+    match status_code {
+        401 | 403 => ClientError::unauthorized(message),
+        404 => ClientError::not_found(message),
+        400..=499 => ClientError::invalid_data(message),
+        _ => ClientError::general(message),
+    }
+}
+
+/// Maps an upstream HTTP status code to an appropriate ClientError for API proxying.
+/// More granular than status_code_to_error — distinguishes 429 (rate limit),
+/// 529 (overloaded), and other codes used by LLM API providers.
+pub fn map_upstream_status(status_code: u16, body: &str) -> ClientError {
+    match status_code {
+        401 => ClientError::unauthorized(format!("upstream auth error: {body}")),
+        403 => ClientError::permission_denied(format!("upstream permission denied: {body}")),
+        404 => ClientError::not_found(format!("upstream not found: {body}")),
+        429 => ClientError::resource_exhausted(format!("upstream rate limited: {body}")),
+        400 => ClientError::invalid_data(format!("upstream bad request: {body}")),
+        529 => ClientError::unavailable(format!("upstream overloaded: {body}")),
+        _ => ClientError::general(format!("upstream error {status_code}: {body}")),
+    }
+}
+
+// Implement Display for nice error messages
+impl fmt::Display for ClientError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+// Implement std::error::Error trait
+impl std::error::Error for ClientError {}
+
+/// Result type alias using ClientError
+pub type Result<T> = std::result::Result<T, ClientError>;

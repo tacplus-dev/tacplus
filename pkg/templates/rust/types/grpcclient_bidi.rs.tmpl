@@ -1,0 +1,165 @@
+    /// {{.MethodName}} opens a managed bidirectional stream to {{.ServiceName}}.{{.MethodName}}.
+    ///
+    /// Returns a handle for sending messages. Responses are delivered via
+    /// the on_message callback. The stream reconnects automatically on
+    /// transient failures. An on_connect callback is invoked on each
+    /// (re)connect so the application can send initialization messages.
+    ///
+    /// Design rationale: watches (server-streaming) use callbacks for the
+    /// receive side because they are receive-only. Bidi streams need both
+    /// send and receive. Callbacks work for the receive side (consistent
+    /// with the watch pattern). A send channel is needed for the send side
+    /// because bidi introduces a direction that watches don't have.
+    pub fn {{.MethodSnake}}<F, Fut>(
+        &self,
+        on_connect: F,
+        on_message: Arc<dyn Fn({{.OutputType}}) + Send + Sync>,
+    ) -> {{.HandleType}}
+    where
+        F: Fn({{.HandleType}}) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let (user_tx, mut user_rx) = tokio::sync::mpsc::channel::<{{.InputType}}>(32);
+        let cp = self.channel_provider.clone();
+        let handle = {{.HandleType}} {
+            tx: user_tx,
+        };
+{{- if .AuthRequired}}
+        let tp = self.token_provider.clone();
+{{- end}}
+
+        tokio::spawn(async move {
+            // Connection timeout — prevents indefinite hangs on mesh resolution,
+            // auth token fetch, or stream open. If any operation hangs, the timeout
+            // fires, the error surfaces, and the retry loop handles it.
+            const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+            let mut connects: u64 = 0;
+            let mut sent: u64 = 0;
+            let mut received: u64 = 0;
+            let mut errors: u64 = 0;
+
+            loop {
+                tracing::info!("{{.MethodName}}: connecting");
+
+                let (stream_tx, stream_rx) = tokio::sync::mpsc::channel::<{{.InputType}}>(32);
+                let connect_handle = {{.HandleType}} {
+                    tx: stream_tx.clone(),
+                };
+                on_connect(connect_handle).await;
+
+                let outbound = tokio_stream::wrappers::ReceiverStream::new(stream_rx);
+                let mut req = tonic::Request::new(outbound);
+{{- if .AuthRequired}}
+                let Some(ref tp) = tp else {
+                    errors += 1; tracing::error!(errors, "{{.MethodName}}: auth token provider is required, retrying in 5s");
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    continue;
+                };
+                match tokio::time::timeout(CONNECT_TIMEOUT, (tp)()).await {
+                    Ok(Ok(token)) => {
+                        if token.is_empty() {
+                            errors += 1; tracing::error!(errors, "{{.MethodName}}: auth token is empty, retrying in 5s");
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                            continue;
+                        }
+                        let val = match format!("Bearer {}", token).parse() {
+                            Ok(val) => val,
+                            Err(e) => {
+                                errors += 1; tracing::error!(error = %e, errors, "{{.MethodName}}: invalid auth token, retrying in 5s");
+                                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                continue;
+                            }
+                        };
+                        req.metadata_mut().insert("authorization", val);
+                    }
+                    Ok(Err(e)) => {
+                        errors += 1; tracing::error!(error = %e, errors, "{{.MethodName}}: auth failed, retrying in 5s");
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
+                    Err(_) => {
+                        errors += 1; tracing::error!(errors, "{{.MethodName}}: auth timed out, retrying in 5s");
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
+                }
+{{- end}}
+
+                let channel = match tokio::time::timeout(CONNECT_TIMEOUT, cp.channel()).await {
+                    Ok(Ok(ch)) => ch,
+                    Ok(Err(e)) => {
+                        errors += 1; tracing::error!(error = %e, errors, "{{.MethodName}}: channel error, retrying in 5s");
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
+                    Err(_) => {
+                        errors += 1; tracing::error!(errors, "{{.MethodName}}: channel resolution timed out, retrying in 5s");
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
+                };
+                let mut client = {{.TonicClientName}}::new(channel);
+                let mut inbound = match tokio::time::timeout(CONNECT_TIMEOUT, client.{{.MethodSnake}}(req)).await {
+                    Ok(Ok(resp)) => {
+                        connects += 1;
+                        tracing::info!(connects, "{{.MethodName}}: stream opened");
+                        resp.into_inner()
+                    }
+                    Ok(Err(e)) => {
+                        errors += 1; tracing::error!(error = %e, errors, "{{.MethodName}}: open failed, retrying in 5s");
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
+                    Err(_) => {
+                        errors += 1; tracing::error!(errors, "{{.MethodName}}: stream open timed out, retrying in 5s");
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
+                };
+
+                loop {
+                    tokio::select! {
+                        msg = user_rx.recv() => {
+                            match msg {
+                                Some(m) => {
+                                    if stream_tx.send(m).await.is_err() {
+                                        tracing::warn!(sent, received, "{{.MethodName}}: outbound closed");
+                                        break;
+                                    }
+                                    sent += 1;
+                                }
+                                None => {
+                                    tracing::info!("{{.MethodName}}: handle dropped, shutting down");
+                                    return;
+                                }
+                            }
+                        }
+                        msg = tokio_stream::StreamExt::next(&mut inbound) => {
+                            match msg {
+                                Some(Ok(resp)) => {
+{{.ResponseValidation}}
+                                    received += 1;
+                                    on_message(resp);
+                                }
+                                Some(Err(e)) => {
+                                    errors += 1;
+                                    tracing::warn!(error = %e, sent, received, errors, "{{.MethodName}}: stream error");
+                                    break;
+                                }
+                                None => {
+                                    tracing::info!("{{.MethodName}}: stream ended");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                tracing::warn!(connects, sent, received, errors, "{{.MethodName}}: disconnected, reconnecting in 5s");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        });
+
+        handle
+    }

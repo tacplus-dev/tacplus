@@ -1,0 +1,28 @@
+{
+  "name": "{{.TsPackagePrefix}}chassis-grpcserver",
+  "version": "1.0.0",
+  "description": "gRPC server with gRPC and REST support",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "author": "Second Star Cavalier LLC",
+  "license": "PROPRIETARY",
+  "dependencies": {
+    "@bufbuild/protobuf": "{{.BufbuildProtobuf}}",
+    "@grpc/grpc-js": "^1.10.1",
+    "{{.TsPackagePrefix}}sys-jwkview": "file:../../types/sys/jwkview",
+    "{{.TsPackagePrefix}}sys-trace": "file:../../types/sys/trace",
+    "{{.TsPackagePrefix}}chassis-token": "file:../token",
+    "{{.TsPackagePrefix}}chassis-jwk": "file:../jwk",
+    "{{.TsPackagePrefix}}chassis-spiffe": "file:../spiffe"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  }
+}

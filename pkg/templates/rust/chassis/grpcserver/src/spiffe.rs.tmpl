@@ -1,0 +1,124 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! SPIFFE-URI authorization helpers.
+//!
+//! The universal authorization rule for tenant-scoped operations: a bearer
+//! token may act on its own SPIFFE level or any path-segment descendant, never
+//! above and never sideways. Cross-namespace access is mediated by token
+//! exchange (future), not by relaxing this rule.
+//!
+//! Inputs are namespace paths (e.g. `/tenants/acme`) or full SPIFFE URIs (e.g.
+//! `spiffe://example.com/tenants/acme`); two URIs must share a trust domain,
+//! and a URI never matches a bare path.
+
+/// Returns `true` iff `target` equals `caller` or is a strict path-segment
+/// descendant.
+///
+/// This is the NAMESPACE (authorization-scope) relation, delegated to the
+/// canonical generated spiffe lib; it is distinct from the identity-path
+/// relation (`spiffe::is_spiffe_at_or_below`) and the two must not be
+/// cross-applied. The match is path-segment-aware: `/tenants/foo` is NOT
+/// at-or-below `/tenants/foob`. Malformed URIs fail closed (return `false`).
+pub fn is_at_or_below(caller: &str, target: &str) -> bool {
+    if caller.is_empty() || target.is_empty() {
+        return false;
+    }
+    let c = spiffe::parse_spiffe_id(caller);
+    let t = spiffe::parse_spiffe_id(target);
+    let caller_looks_uri = caller.contains("://");
+    let target_looks_uri = target.contains("://");
+    if caller_looks_uri || target_looks_uri {
+        let (c, t) = match (c, t) {
+            (Ok(c), Ok(t)) => (c, t),
+            _ => return false,
+        };
+        if c.trust_domain != t.trust_domain {
+            return false;
+        }
+        return spiffe::is_at_or_below(&c.namespace, &t.namespace);
+    }
+    spiffe::is_at_or_below(caller, target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn equal() {
+        assert!(is_at_or_below("spiffe://d/a", "spiffe://d/a"));
+    }
+
+    #[test]
+    fn direct_child() {
+        assert!(is_at_or_below("spiffe://d/a", "spiffe://d/a/b"));
+    }
+
+    #[test]
+    fn deep_descendant() {
+        assert!(is_at_or_below("spiffe://d/a", "spiffe://d/a/b/c/d"));
+    }
+
+    #[test]
+    fn sibling_rejected() {
+        assert!(!is_at_or_below("spiffe://d/a", "spiffe://d/b"));
+    }
+
+    #[test]
+    fn parent_of_caller_rejected() {
+        assert!(!is_at_or_below("spiffe://d/a/b", "spiffe://d/a"));
+    }
+
+    #[test]
+    fn unrelated_domain_rejected() {
+        assert!(!is_at_or_below("spiffe://d/a", "spiffe://e/a"));
+    }
+
+    #[test]
+    fn prefix_string_but_not_segment_rejected() {
+        assert!(!is_at_or_below("spiffe://d/a", "spiffe://d/ab"));
+        assert!(!is_at_or_below("spiffe://d/foo", "spiffe://d/foobar/x"));
+    }
+
+    #[test]
+    fn empty_inputs_rejected() {
+        assert!(!is_at_or_below("", "spiffe://d/a"));
+        assert!(!is_at_or_below("spiffe://d/a", ""));
+        assert!(!is_at_or_below("", ""));
+    }
+
+    #[test]
+    fn multi_slash_domain() {
+        let caller = "spiffe://io/example/cluster1/drpepper";
+        assert!(is_at_or_below(caller, caller));
+        assert!(is_at_or_below(caller, &format!("{}/dev", caller)));
+        assert!(!is_at_or_below(caller, "spiffe://io/example/cluster1/coke"));
+    }
+
+    #[test]
+    fn domain_root_caller() {
+        assert!(is_at_or_below("spiffe://d", "spiffe://d/a"));
+        assert!(is_at_or_below("spiffe://d", "spiffe://d/a/b/c"));
+    }
+
+    #[test]
+    fn namespace_paths() {
+        assert!(is_at_or_below("/", "/tenant"));
+        assert!(is_at_or_below("/tenant", "/tenant/project"));
+        assert!(!is_at_or_below("/tenant", "/tenant2/project"));
+        assert!(!is_at_or_below("/tenant/project", "/tenant"));
+    }
+
+    #[test]
+    fn uri_vs_path_mixed_rejected() {
+        assert!(!is_at_or_below("spiffe://d/a", "/a"));
+        assert!(!is_at_or_below("/a", "spiffe://d/a"));
+    }
+
+    #[test]
+    fn malformed_uri_fails_closed() {
+        assert!(!is_at_or_below("spiffe://", "spiffe://d/a"));
+        assert!(!is_at_or_below("spiffe://d/a", "spiffe://d//b"));
+        assert!(!is_at_or_below("spiffe://d/a", "spiffe://d/a?x=1"));
+    }
+}

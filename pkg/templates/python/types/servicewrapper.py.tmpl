@@ -1,0 +1,218 @@
+{{.Header}}
+"""Service wrapper for {{.ServiceName}} with authorization and validation."""
+
+import time
+
+import grpc
+{{- if .HasHandler}}
+from abc import ABC, abstractmethod
+{{- end}}
+
+# Import generated protobuf types
+from {{.PbImportFrom}} import {{.PbModuleName}}_pb2 as pb
+{{.CrossPackageImports}}
+# Import validation helpers
+from {{.HelpersImportFrom}} import *
+{{.CrossHelperImports}}
+from {{.CollectionImportFrom}} import WatchSource, WatchHub, Page, PageParams, decode_page_token, encode_page_token, effective_page_size
+from {{.TraceImportFrom}} import trace_pb2 as trace_pb
+{{- if .HasAccounting}}
+from {{.AccountingImportFrom}} import grpc_code_from_error, should_capture_stack, error_context_from_error
+from {{.AccountingMethodImportFrom}} import accounting_method_pb2
+{{- end}}
+
+{{- if .HasHandler}}
+
+{{.HandlerInterface}}
+{{- end}}
+
+
+class {{.WrapperName}}:
+    """Wraps {{.ServiceName}} with authorization and validation."""
+
+    _GRPC_STATUS_BY_CODE = {
+        1: grpc.StatusCode.CANCELLED,
+        2: grpc.StatusCode.UNKNOWN,
+        3: grpc.StatusCode.INVALID_ARGUMENT,
+        4: grpc.StatusCode.DEADLINE_EXCEEDED,
+        5: grpc.StatusCode.NOT_FOUND,
+        6: grpc.StatusCode.ALREADY_EXISTS,
+        7: grpc.StatusCode.PERMISSION_DENIED,
+        8: grpc.StatusCode.RESOURCE_EXHAUSTED,
+        9: grpc.StatusCode.FAILED_PRECONDITION,
+        10: grpc.StatusCode.ABORTED,
+        11: grpc.StatusCode.OUT_OF_RANGE,
+        12: grpc.StatusCode.UNIMPLEMENTED,
+        13: grpc.StatusCode.INTERNAL,
+        14: grpc.StatusCode.UNAVAILABLE,
+        15: grpc.StatusCode.DATA_LOSS,
+        16: grpc.StatusCode.UNAUTHENTICATED,
+    }
+
+{{- if .HasHandler}}
+    def __init__(self, handler: {{.ServiceName}}Handler):
+        self.handler = handler
+{{- else}}
+    def __init__(self, handler=None):
+        self.handler = handler
+{{- end}}
+{{.WatchFields}}
+        self._authorize_func = None
+        self._authenticate_func = None
+        self._emitter = None
+        self._instance_id = ""
+        self._trace_publisher = None
+
+    def set_instance_id(self, instance_id: str):
+        """Sets the instance ID used for trace rounds."""
+        self._instance_id = instance_id
+
+    def set_authorize_func(self, f):
+        """Sets the authorization function."""
+        self._authorize_func = f
+
+    def set_authenticate_func(self, f):
+        """Sets the authentication function (auth_any_user: token-only verification)."""
+        self._authenticate_func = f
+
+    def has_authorizer(self) -> bool:
+        """Returns whether both generated auth callbacks are wired."""
+        return self._authorize_func is not None and self._authenticate_func is not None
+
+    def _metadata_from_context(self, context):
+        metadata = {}
+        if context is None or not hasattr(context, "invocation_metadata"):
+            return metadata
+        for item in context.invocation_metadata() or ():
+            key = getattr(item, "key", None)
+            value = getattr(item, "value", None)
+            if key is not None:
+                metadata[str(key).lower()] = str(value)
+        return metadata
+
+    def set_emitter(self, emitter):
+        """Sets the accounting emitter for this service wrapper."""
+        self._emitter = emitter
+
+    def set_trace_publisher(self, publisher):
+        """Sets the callback for publishing trace events to EventBus."""
+        self._trace_publisher = publisher
+
+{{- if .HasAccounting}}
+    def _request_id_from_context(self, context) -> str:
+        metadata = self._metadata_from_context(context)
+        return metadata.get("x-request-id") or metadata.get("request-id") or ""
+
+    def _grpc_code_number(self, code) -> int:
+        value = getattr(code, "value", code)
+        if isinstance(value, tuple) and value:
+            return int(value[0])
+        try:
+            return int(value)
+        except Exception:
+            return 2
+
+    def _emit_accounting(self, method, started_at: float, exc, context):
+        if self._emitter is None:
+            return
+        duration_ms = max(0, int((time.time() - started_at) * 1000))
+        request_id = self._request_id_from_context(context)
+        if exc is None:
+            self._emitter.rpc_completed(method, duration_ms, {}, request_id)
+            return
+        code = grpc_code_from_error(exc)
+        code_number = self._grpc_code_number(code)
+        error_context = error_context_from_error(exc, should_capture_stack(code))
+        self._emitter.rpc_error(method, code_number, str(exc), duration_ms, error_context, {}, request_id)
+
+{{- end}}
+
+    def _trace_id_from_request(self, request) -> str:
+        value = getattr(request, "trace_id", "")
+        return value if isinstance(value, str) else ""
+
+    def _noop_from_request(self, request) -> bool:
+        return bool(getattr(request, "noop", False))
+
+    def _publish_trace(self, trace_id: str, kind: int, error: str = "", method=None):
+        if not trace_id or self._trace_publisher is None:
+            return
+        event_kwargs = dict(
+            trace_id=trace_id,
+            round=trace_pb.TraceRound(
+                service="{{.ServiceLabel}}",
+                instance_id=self._instance_id,
+                timestamp_ms=int(time.time() * 1000),
+            ),
+            kind=kind,
+            error=error,
+        )
+        if method is not None:
+            event_kwargs["rpc"] = method
+        event = trace_pb.TraceEvent(**event_kwargs)
+        self._trace_publisher(event)
+
+    def _authorize(self, context, full_method: str, req=None):
+        """Check authorization. Fail-closed: a missing authorize func rejects.
+        auth_disabled methods skip this call (by annotation), so reaching here
+        with no func means a token-auth method was left unwired — never allow it."""
+        if self._authorize_func is None:
+            raise PermissionError(
+                f"authorizer not configured for {full_method} — auth is mandatory and cannot be disabled")
+        self._authorize_func(self._metadata_from_context(context), full_method, req)
+
+    def _authenticate(self, context, target_namespace=None):
+        """Check authentication only (auth_any_user). Fail-closed: a missing func rejects."""
+        if self._authenticate_func is None:
+            raise PermissionError(
+                "authenticator not configured — auth is mandatory and cannot be disabled")
+        self._authenticate_func(self._metadata_from_context(context), target_namespace)
+
+    def _abort_handler_error(self, context, exc):
+        grpc_code = getattr(exc, "grpc_code", None)
+        if grpc_code is not None:
+            context.abort(grpc_code, str(exc))
+        error = getattr(exc, "error", None)
+        code = getattr(error, "code", None)
+        if code is not None:
+            context.abort(self._GRPC_STATUS_BY_CODE.get(code, grpc.StatusCode.INTERNAL), str(exc))
+        if isinstance(exc, PermissionError):
+            context.abort(grpc.StatusCode.UNAUTHENTICATED, str(exc))
+        context.abort(grpc.StatusCode.INTERNAL, str(exc))
+
+    def _abort_request_validation(self, context, exc):
+        context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+
+    def _abort_response_validation(self, context, exc):
+        context.abort(grpc.StatusCode.INTERNAL, str(exc))
+
+    def _validating_request_iterator(self, request_iterator, context, validate_request=None, authorize_request=None):
+        for request in request_iterator:
+            if authorize_request is not None:
+                try:
+                    authorize_request(request)
+                except Exception as exc:
+                    self._abort_handler_error(context, exc)
+            try:
+                if validate_request is not None:
+                    validate_request(request)
+            except Exception as exc:
+                self._abort_request_validation(context, exc)
+            yield request
+
+{{- if .HasHandler}}
+
+{{.GRPCHandlerMethods}}
+    def register_services(self, server):
+        """Register gRPC services with the server."""
+{{.ServiceRegistration}}
+{{- else}}
+
+    def register_services(self, server):
+        """Register gRPC services with the server."""
+        pass
+{{- end}}
+{{- if .RegisterMethodAuth}}
+
+{{.RegisterMethodAuth}}
+{{- end}}

@@ -1,0 +1,41 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// Package tags defines Kubernetes-style tag sets and selectors.
+//
+// Tags are runtime data, not tacplus compiler annotations. They intentionally
+// live outside sys/spec.proto so services can import and store them like any
+// other embedded library type.
+
+syntax = "proto3";
+
+package tags;
+
+// TagSet is a set of key/value tags. Keys are unique within the map.
+message TagSet {
+  map<string, string> tags = 1;
+}
+
+// TagSelector selects tag sets by exact-match tags and expression requirements.
+// All requirements from match_tags and match_expressions are ANDed.
+message TagSelector {
+  // match_tags is equivalent to one IN requirement per entry with a single
+  // accepted value.
+  map<string, string> match_tags = 1;
+
+  // match_expressions carries set-based requirements.
+  repeated TagSelectorRequirement match_expressions = 2;
+}
+
+message TagSelectorRequirement {
+  string key = 1;
+  TagSelectorOperator operator = 2;
+  repeated string values = 3;
+}
+
+enum TagSelectorOperator {
+  TAG_SELECTOR_OPERATOR_UNSPECIFIED = 0;
+  TAG_SELECTOR_OPERATOR_IN = 1;
+  TAG_SELECTOR_OPERATOR_NOT_IN = 2;
+  TAG_SELECTOR_OPERATOR_EXISTS = 3;
+  TAG_SELECTOR_OPERATOR_DOES_NOT_EXIST = 4;
+}

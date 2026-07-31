@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+syntax = "proto3";
+
+package contracttopics;
+
+import "sys/spec.proto";
+
+option (spec.vservice) = {
+  name: "contracttopics"
+  id: 31
+};
+
+message HostedEvent {
+  string event_id = 1 [(spec.assert_required) = true];
+  string tenant_namespace = 2 [(spec.assert_required) = true];
+  string payload = 3;
+  string spiffe_id = 4 [(spec.identity_spiffe_subject) = true];
+}
+
+message HostedEventBus {
+  option (spec.service_state) = {
+    name: "HostedEventBus"
+    tag: "contractfixtures"
+    export: true
+  };
+  option (spec.service_event) = {};
+
+  repeated HostedEvent events = 1 [
+    (spec.topic) = true
+  ];
+}

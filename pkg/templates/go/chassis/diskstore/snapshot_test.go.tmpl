@@ -1,0 +1,88 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package diskstore
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestSnapshotRoundtripAndArchive(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	opts := SnapshotOpts{Codec: CodecGz, Mode: 0o600, ArchiveCount: 2}
+
+	if err := WriteSnapshot(path, []byte("v1"), opts); err != nil {
+		t.Fatalf("write v1: %v", err)
+	}
+	got, ok, err := ReadSnapshot(path)
+	if err != nil || !ok {
+		t.Fatalf("read v1: ok=%v err=%v", ok, err)
+	}
+	if !bytes.Equal(got, []byte("v1")) {
+		t.Fatalf("got %q want v1", got)
+	}
+
+	if err := WriteSnapshot(path, []byte("v2"), opts); err != nil {
+		t.Fatalf("write v2: %v", err)
+	}
+	got, ok, err = ReadSnapshot(path)
+	if err != nil || !ok {
+		t.Fatalf("read v2: ok=%v err=%v", ok, err)
+	}
+	if !bytes.Equal(got, []byte("v2")) {
+		t.Fatalf("got %q want v2", got)
+	}
+	if !fileExists(filepath.Join(dir, "state.json.bak.1")) {
+		t.Fatalf("previous active should be archived")
+	}
+}
+
+func TestReadAbsentIsNotOK(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "missing.json")
+	_, ok, err := ReadSnapshot(path)
+	if err != nil {
+		t.Fatalf("read absent: %v", err)
+	}
+	if ok {
+		t.Fatalf("absent snapshot should report ok=false")
+	}
+}
+
+// PC-L-5 read leg / NEW-37: an absent active file recovers the previous state
+// from .bak.1 instead of silently starting fresh; a present-but-corrupt
+// archive on that recovery path errors LOUDLY.
+func TestReadRecoversFromBakWhenActiveAbsent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	opts := SnapshotOpts{Codec: CodecGz, Mode: 0o600, ArchiveCount: 2}
+
+	if err := WriteSnapshot(path, []byte("v1"), opts); err != nil {
+		t.Fatalf("write v1: %v", err)
+	}
+	if err := WriteSnapshot(path, []byte("v2"), opts); err != nil {
+		t.Fatalf("write v2: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove active: %v", err)
+	}
+
+	got, ok, err := ReadSnapshot(path)
+	if err != nil || !ok {
+		t.Fatalf("recovery read: ok=%v err=%v", ok, err)
+	}
+	if !bytes.Equal(got, []byte("v1")) {
+		t.Fatalf("recovered %q, want the archived v1", got)
+	}
+
+	// Corrupt archive on the recovery path errors loudly, never fresh-start.
+	if err := os.WriteFile(filepath.Join(dir, "state.json.bak.1"), []byte("\x1f\x8btrunc"), 0o600); err != nil {
+		t.Fatalf("corrupt bak: %v", err)
+	}
+	if _, _, err := ReadSnapshot(path); err == nil {
+		t.Fatalf("corrupt .bak.1 on recovery must error, not fresh-start")
+	}
+}

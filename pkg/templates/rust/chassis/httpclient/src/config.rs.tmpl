@@ -1,0 +1,229 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Configuration module for HTTP client.
+//!
+//! This module handles conversion from proto config to reqwest ClientBuilder,
+//! including TLS/mTLS setup, timeouts, and connection pooling.
+
+use crate::error::{ClientError, Result};
+use crate::retry::RetryConfig;
+use {{.CrateBasePathUnderscore}}_types::sys::httpclient::HttpClientConfig as ProtoHttpClientConfig;
+use reqwest::ClientBuilder;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::{ClientConfig, RootCertStore};
+use std::io::Cursor;
+use std::time::Duration;
+
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+
+/// Build a reqwest Client from proto HttpClientConfig
+pub fn build_client(config: Option<&ProtoHttpClientConfig>) -> Result<reqwest::Client> {
+    let default_config = ProtoHttpClientConfig::default();
+    let config = config.unwrap_or(&default_config);
+
+    let mut builder = ClientBuilder::new();
+
+    // Configure TLS
+    let tls_config = build_tls_config(config)?;
+    builder = builder.use_preconfigured_tls(tls_config);
+
+    // Configure request timeout.
+    let timeout_secs = if config.timeout_seconds > 0 {
+        config.timeout_seconds as u64
+    } else {
+        DEFAULT_REQUEST_TIMEOUT_SECS
+    };
+    builder = builder.timeout(Duration::from_secs(timeout_secs));
+    log::debug!("Client timeout set to {} seconds", timeout_secs);
+
+    // Configure connection pool
+    if config.max_idle_conns > 0 {
+        builder = builder.pool_max_idle_per_host(config.max_idle_conns as usize);
+        log::debug!("MaxIdleConns set to {}", config.max_idle_conns);
+    }
+
+    if config.idle_conn_timeout_seconds > 0 {
+        builder = builder.pool_idle_timeout(Duration::from_secs(
+            config.idle_conn_timeout_seconds as u64,
+        ));
+        log::debug!(
+            "IdleConnTimeout set to {} seconds",
+            config.idle_conn_timeout_seconds
+        );
+    }
+
+    // Build the client
+    builder
+        .build()
+        .map_err(|e| ClientError::config_error(format!("Failed to build HTTP client: {}", e)))
+}
+
+/// Build TLS configuration from proto config
+fn build_tls_config(config: &ProtoHttpClientConfig) -> Result<rustls::ClientConfig> {
+    let mut root_store = RootCertStore::empty();
+
+    // Load root certificates
+    if config.root_certs.is_empty() {
+        // Use system root certs
+        log::debug!("config.RootCerts has no certs; using system default CAs");
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    } else {
+        // Use custom root certs
+        log::debug!(
+            "config.RootCerts has {} cert(s)",
+            config.root_certs.len()
+        );
+        for (i, cert_proto) in config.root_certs.iter().enumerate() {
+            let cert_bytes = decode_base64(&cert_proto.base64).map_err(|e| {
+                ClientError::config_error(format!("Failed to decode root cert {}: {}", i, e))
+            })?;
+
+            let certs = parse_pem_certificates(&cert_bytes).map_err(|e| {
+                ClientError::config_error(format!("Failed to parse root cert {}: {}", i, e))
+            })?;
+
+            for cert in certs {
+                root_store.add(cert).map_err(|e| {
+                    ClientError::config_error(format!("Failed to add root cert {} to pool: {}", i, e))
+                })?;
+            }
+        }
+    }
+
+    let builder = ClientConfig::builder()
+        .with_root_certificates(root_store);
+
+    // Configure mTLS client certificate if provided
+    let tls_config = if let Some(ref client_cert) = config.client_cert {
+        log::debug!("config.ClientCert is present; mTLS is enabled");
+
+        let key_bytes = decode_base64(&client_cert.key.as_ref().ok_or_else(|| {
+            ClientError::config_error("client_cert missing private key".to_string())
+        })?.base64).map_err(|e| {
+            ClientError::config_error(format!("Failed to decode client key: {}", e))
+        })?;
+
+        let mut certs = Vec::new();
+        for (i, cert_proto) in client_cert.chain.iter().enumerate() {
+            let cert_bytes = decode_base64(&cert_proto.base64).map_err(|e| {
+                ClientError::config_error(format!("Failed to decode client cert {}: {}", i, e))
+            })?;
+            let mut parsed = parse_pem_certificates(&cert_bytes).map_err(|e| {
+                ClientError::config_error(format!("Failed to parse client cert {}: {}", i, e))
+            })?;
+            certs.append(&mut parsed);
+        }
+
+        if certs.is_empty() {
+            return Err(ClientError::config_error("client_cert chain is empty".to_string()));
+        }
+
+        let key = parse_pem_private_key(&key_bytes).map_err(|e| {
+            ClientError::config_error(format!("Failed to parse client key: {}", e))
+        })?;
+
+        builder
+            .with_client_auth_cert(certs, key)
+            .map_err(|e| {
+                ClientError::config_error(format!("Failed to load client certificate: {}", e))
+            })?
+    } else {
+        log::debug!("config.ClientCert is not present; mTLS is not enabled");
+        builder.with_no_client_auth()
+    };
+
+    log::info!("HTTP client TLS verification enabled");
+
+    Ok(tls_config)
+}
+
+/// Decode base64 string
+fn decode_base64(encoded: &str) -> Result<Vec<u8>> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|e| ClientError::config_error(format!("Base64 decode failed: {}", e)))
+}
+
+/// Parse PEM-encoded certificates
+fn parse_pem_certificates(pem_bytes: &[u8]) -> Result<Vec<CertificateDer<'static>>> {
+    let mut cursor = Cursor::new(pem_bytes);
+    rustls_pemfile::certs(&mut cursor)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| ClientError::config_error(format!("Failed to parse PEM certificates: {}", e)))
+}
+
+/// Parse PEM-encoded private key
+fn parse_pem_private_key(pem_bytes: &[u8]) -> Result<PrivateKeyDer<'static>> {
+    let mut cursor = Cursor::new(pem_bytes);
+
+    // Try parsing as PKCS8 first
+    for item in rustls_pemfile::read_all(&mut cursor)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| ClientError::config_error(format!("Failed to read PEM data: {}", e)))?
+    {
+        match item {
+            rustls_pemfile::Item::Pkcs8Key(key) => return Ok(PrivateKeyDer::Pkcs8(key)),
+            rustls_pemfile::Item::Pkcs1Key(key) => return Ok(PrivateKeyDer::Pkcs1(key)),
+            rustls_pemfile::Item::Sec1Key(key) => return Ok(PrivateKeyDer::Sec1(key)),
+            _ => continue,
+        }
+    }
+
+    Err(ClientError::config_error(
+        "No valid private key found in PEM data".to_string(),
+    ))
+}
+
+/// Extract RetryConfig from proto config
+pub fn get_retry_config(config: Option<&ProtoHttpClientConfig>) -> RetryConfig {
+    if let Some(config) = config {
+        if let Some(ref retry_config) = config.retry_config {
+            return RetryConfig::from(retry_config);
+        }
+    }
+    RetryConfig::default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_client_default() {
+        let result = build_client(None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_build_client_with_timeout() {
+        let config = ProtoHttpClientConfig {
+            timeout_seconds: 30,
+            ..Default::default()
+        };
+        let result = build_client(Some(&config));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_retry_config_default() {
+        let retry_config = get_retry_config(None);
+        assert_eq!(retry_config.max_retries, 3);
+        assert_eq!(retry_config.initial_backoff, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_decode_base64_valid() {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(b"hello world");
+        let result = decode_base64(&encoded);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), b"hello world");
+    }
+
+    #[test]
+    fn test_decode_base64_invalid() {
+        let result = decode_base64("not-valid-base64!!!");
+        assert!(result.is_err());
+    }
+}

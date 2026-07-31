@@ -1,0 +1,19 @@
+[package]
+name = "logger"
+version = "1.0.0"
+edition = "2021"
+authors = ["Second Star Cavalier LLC"]
+
+[dependencies]
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+once_cell = { workspace = true }
+
+# Proto types dependency
+{{.CrateBasePath}}-types = { path = "../../types" }
+
+[dev-dependencies]
+tempfile = "3.8"

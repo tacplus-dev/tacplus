@@ -1,0 +1,24 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package diskstore
+
+import (
+	"testing"
+	"time"
+)
+
+func TestRollOffsetDeterministicAndInRange(t *testing.T) {
+	interval := 86400 * time.Second
+	a := RollOffset("mint-0", interval)
+	b := RollOffset("mint-0", interval)
+	c := RollOffset("mint-1", interval)
+	if a != b {
+		t.Fatalf("offset should be stable for the same node")
+	}
+	if a >= interval || c >= interval {
+		t.Fatalf("offset should be within the interval")
+	}
+	if a == c {
+		t.Fatalf("offsets for different nodes should (very likely) differ")
+	}
+}

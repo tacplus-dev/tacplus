@@ -1,0 +1,42 @@
+{{- /* Python helpers imports template */ -}}
+from __future__ import annotations
+
+{{- if .HasMessages}}
+import os
+import re
+import ipaddress
+import base64
+{{- end}}
+{{- if .NeedsTimedelta}}
+from datetime import timedelta
+{{- end}}
+{{- if .TypingImports}}
+from typing import {{join .TypingImports ", "}}
+{{- end}}
+{{- if .HasEnums}}
+from enum import IntEnum
+{{- end}}
+{{- if .HasMessages}}
+from google.protobuf import json_format
+from google.protobuf.message import DecodeError
+try:
+    import yaml
+    HAS_YAML = True
+except ImportError:
+    HAS_YAML = False
+try:
+    import tomllib
+    import tomli_w
+    HAS_TOML = True
+except ImportError:
+    try:
+        import tomli as tomllib
+        import tomli_w
+        HAS_TOML = True
+    except ImportError:
+        HAS_TOML = False
+{{- end}}
+{{- if .NeedsPb2Import}}
+from . import {{.ProtoFilename}}_pb2
+{{- end}}
+from {{.ExceptionImportFrom}} import invalid_argument

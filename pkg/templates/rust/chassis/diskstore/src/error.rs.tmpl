@@ -1,0 +1,89 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Error type for the disk store, with gRPC-compatible error codes
+//! (mirrors the httpclient `ClientError` shape).
+
+use std::fmt;
+
+/// Disk-store error with a gRPC-compatible code and a human-readable message.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiskStoreError {
+    /// gRPC-compatible error code.
+    pub code: i32,
+    /// Human-readable error message.
+    pub message: String,
+}
+
+impl DiskStoreError {
+    /// Creates a new error with the given code and message.
+    pub fn new(code: i32, message: impl Into<String>) -> Self {
+        Self { code, message: message.into() }
+    }
+
+    /// I/O failure (code 13: INTERNAL).
+    pub fn io(msg: impl Into<String>) -> Self {
+        Self::new(13, format!("disk I/O failed: {}", msg.into()))
+    }
+
+    /// General error (code 13: INTERNAL).
+    pub fn general(msg: impl Into<String>) -> Self {
+        Self::new(13, msg)
+    }
+
+    /// Not found (code 5: NOT_FOUND).
+    pub fn not_found(msg: impl Into<String>) -> Self {
+        Self::new(5, format!("not found: {}", msg.into()))
+    }
+
+    /// Invalid data / argument (code 3: INVALID_ARGUMENT).
+    pub fn invalid_data(msg: impl Into<String>) -> Self {
+        Self::new(3, format!("invalid data: {}", msg.into()))
+    }
+
+    /// Type validation failed on read (code 3: INVALID_ARGUMENT).
+    pub fn validation_failed(msg: impl Into<String>) -> Self {
+        Self::new(3, format!("validation failed: {}", msg.into()))
+    }
+
+    /// Serialize/deserialize failure (code 13: INTERNAL).
+    pub fn codec(msg: impl Into<String>) -> Self {
+        Self::new(13, format!("codec error: {}", msg.into()))
+    }
+
+    /// Gets the error code.
+    pub fn code(&self) -> i32 {
+        self.code
+    }
+
+    /// Gets the error message.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for DiskStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for DiskStoreError {}
+
+impl From<std::io::Error> for DiskStoreError {
+    fn from(e: std::io::Error) -> Self {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            DiskStoreError::not_found(e.to_string())
+        } else {
+            DiskStoreError::io(e.to_string())
+        }
+    }
+}
+
+impl From<serde_json::Error> for DiskStoreError {
+    fn from(e: serde_json::Error) -> Self {
+        DiskStoreError::codec(e.to_string())
+    }
+}
+
+/// Result alias using [`DiskStoreError`].
+pub type Result<T> = std::result::Result<T, DiskStoreError>;

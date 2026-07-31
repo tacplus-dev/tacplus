@@ -1,0 +1,110 @@
+{{.Header}}
+
+import inspect
+import asyncio
+
+import grpc
+from {{.PbImportFrom}} import {{.PbModuleName}}_pb2 as pb
+from {{.PbImportFrom}} import {{.PbModuleName}}_pb2_grpc as pb_grpc
+from {{.PbImportFrom}}.helpers import *
+{{.CrossPackageImports}}
+
+
+class {{.ClientName}}:
+    """Typed gRPC client for {{.ServiceName}}.
+
+    Wraps a ChannelProvider that resolves the active connection for the target
+    service on each call. Methods that require authentication require
+    token_provider and include an Authorization: Bearer header.
+    """
+
+    def __init__(self, channel_provider, token_provider=None):
+        self._channel_provider = channel_provider
+        self._token_provider = token_provider
+        self._timeout_seconds = 30.0
+        self._max_retries = 2
+        self._retry_backoff_seconds = 0.1
+
+    def with_timeout(self, timeout_seconds: float):
+        self._timeout_seconds = timeout_seconds
+        return self
+
+    def with_retry(self, max_retries: int, initial_backoff_seconds: float):
+        self._max_retries = max(0, max_retries)
+        self._retry_backoff_seconds = max(0.0, initial_backoff_seconds)
+        return self
+
+    @property
+    def _stub(self):
+        """Returns a stub connected to the currently active channel."""
+        return pb_grpc.{{.ServiceName}}Stub(self._channel_provider.channel())
+
+    async def _metadata(self, auth_required: bool = True):
+        if not auth_required:
+            return None
+        if self._token_provider is None:
+            raise RuntimeError("auth token provider is required")
+        token = self._token_provider()
+        if inspect.isawaitable(token):
+            token = await token
+        if not token:
+            raise RuntimeError("token provider returned an empty token")
+        return [('authorization', f'Bearer {token}')]
+
+    def _timeout_arg(self):
+        return self._timeout_seconds if self._timeout_seconds > 0 else None
+
+    @staticmethod
+    def _should_retry_outbound(exc) -> bool:
+        if not isinstance(exc, grpc.RpcError):
+            return False
+        code = exc.code()
+        return code in (
+            grpc.StatusCode.UNAVAILABLE,
+            grpc.StatusCode.RESOURCE_EXHAUSTED,
+            grpc.StatusCode.DEADLINE_EXCEEDED,
+        )
+
+    def _retry_backoff(self, attempt: int) -> float:
+        backoff = self._retry_backoff_seconds or 0.1
+        for _ in range(attempt):
+            backoff = min(backoff * 2, 2.0)
+        return backoff
+
+    async def _call_unary(self, auth_required: bool, retry_safe: bool, invoke):
+        max_retries = self._max_retries if retry_safe else 0
+        for attempt in range(max_retries + 1):
+            metadata = await self._metadata(auth_required=auth_required)
+            try:
+                return await invoke(metadata, self._timeout_arg())
+            except grpc.RpcError as e:
+                if attempt >= max_retries or not self._should_retry_outbound(e):
+                    raise
+                await asyncio.sleep(self._retry_backoff(attempt))
+
+    async def _iterate_requests(self, request_iterator):
+        if hasattr(request_iterator, '__aiter__'):
+            async for request in request_iterator:
+                yield request
+            return
+        for request in request_iterator:
+            yield request
+
+    async def _validating_request_iterator(self, request_iterator, validate_request=None):
+        # Auth is STREAM-OPEN scoped (one token in the stream metadata, the
+        # pinned cross-language contract — docs/API.md Client Send Contract).
+        # A per-item token preflight minted a token the server never saw and
+        # destroyed legitimate streams on provider hiccups (NEW-36, the python
+        # leg of PC-W-2).
+        async for request in self._iterate_requests(request_iterator):
+            if validate_request is not None:
+                validate_request(request)
+            yield request
+
+    async def _validating_response_iterator(self, response_iterator, validate_response=None):
+        async for response in response_iterator:
+            if validate_response is not None:
+                validate_response(response)
+            yield response
+
+{{.Methods}}

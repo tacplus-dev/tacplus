@@ -1,0 +1,507 @@
+{{- $hasWatches := or .Singletons .Collections .StateImports -}}
+{{.Header}}
+{{- if $hasWatches}}
+import * as grpc from '@grpc/grpc-js';
+import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
+import { type ChannelProvider } from '{{.ServiceManagerImport}}';
+import * as traceWatchTypes from '{{.TraceImport}}';
+{{- end}}
+import * as types from '{{.TypesImport}}';
+{{- range .CrossImports}}
+import * as {{.Alias}} from '{{.ImportPath}}';
+{{- end}}
+
+{{- if $hasWatches}}
+export interface WatchStatus {
+    watchName: string;
+    received: boolean;
+    retrying: boolean;
+    healthy: boolean;
+    nextAttempt: number;
+    reason: string;
+    error?: unknown;
+    updatedAtMillis: number;
+}
+
+{{- end}}
+// ==================== Subscriber Interfaces ====================
+{{range .Singletons}}
+/** Subscriber interface for the {{.TypeName}} singleton boundary. */
+export interface {{.FieldPascal}}Subscriber {
+    on{{.FieldPascal}}Change(value: {{.TypePrefix}}.{{.TypeName}}): void;
+}
+{{end}}
+{{range .Collections}}
+/** Subscriber interface for the {{.TypeName}} collection boundary. */
+export interface {{.FieldPascal}}Subscriber {
+    on{{.FieldPascal}}Change(entries: Map<string, {{.TypePrefix}}.{{.TypeName}}>): void;
+}
+{{end}}
+
+/**
+ * {{.StateRootName}}Client provides typed client-side state management.
+ * It caches state boundaries and provides a proto() method that
+ * reconstructs the full {{.StateRootName}} proto message.
+ */
+export class {{.StateRootName}}Client {
+{{- range .Singletons}}
+    private _{{.FieldName}}: {{.TypePrefix}}.{{.TypeName}} | null = null;
+    private _{{.FieldName}}Accessor: {{$.StateRootName}}{{.FieldPascal}}Accessor;
+{{- end}}
+{{- range .Collections}}
+    private _{{.FieldName}}: Map<string, {{.TypePrefix}}.{{.TypeName}}> = new Map();
+    private _{{.FieldName}}Callbacks: ((entries: Map<string, {{.TypePrefix}}.{{.TypeName}}>) => void)[] = [];
+    private _{{.FieldName}}Subscribers: {{.FieldPascal}}Subscriber[] = [];
+{{- end}}
+{{- range .StateImports}}
+    private _{{.FieldName}}: {{.ImportAlias}}.{{.TypeName}} | null = null;
+{{- end}}
+{{- if $hasWatches}}
+    private _channelProvider: ChannelProvider | null = null;
+    private _tokenProvider: (() => Promise<string>) | null = null;
+    private _watchStreams: Set<grpc.ClientReadableStream<any>> = new Set();
+    private _watchTimers: Set<ReturnType<typeof setTimeout>> = new Set();
+    private _watchStatuses: Map<string, WatchStatus> = new Map();
+    private _watchStatusListener: ((status: WatchStatus) => void) | null = null;
+    private _closed = false;
+{{- end}}
+
+    constructor() {
+{{- range .Singletons}}
+        this._{{.FieldName}}Accessor = new {{$.StateRootName}}{{.FieldPascal}}Accessor(this);
+{{- end}}
+    }
+
+{{- if $hasWatches}}
+    setChannelProvider(channelProvider: ChannelProvider, tokenProvider?: () => Promise<string>): void {
+        this.stopWatches();
+        this._channelProvider = channelProvider;
+        this._tokenProvider = tokenProvider ?? null;
+        this._closed = false;
+        this.startWatches();
+    }
+
+    close(): void {
+        this._closed = true;
+        this.stopWatches();
+    }
+
+    setWatchStatusListener(listener: ((status: WatchStatus) => void) | null): void {
+        this._watchStatusListener = listener;
+    }
+
+    watchStatuses(): Map<string, WatchStatus> {
+        return new Map(this._watchStatuses);
+    }
+
+    watchesHealthy(): boolean {
+        for (const status of this._watchStatuses.values()) {
+            if (status.retrying) return false;
+        }
+        return true;
+    }
+
+    private recordWatchHealthy(watchName: string, received: boolean): void {
+        this.setWatchStatus({
+            watchName,
+            received,
+            retrying: false,
+            healthy: true,
+            nextAttempt: 0,
+            reason: '',
+            updatedAtMillis: Date.now(),
+        });
+    }
+
+    private recordWatchRetrying(
+        watchName: string,
+        received: boolean,
+        nextAttempt: number,
+        reason: string,
+        error?: unknown,
+    ): void {
+        this.setWatchStatus({
+            watchName,
+            received,
+            retrying: true,
+            healthy: false,
+            nextAttempt,
+            reason,
+            error,
+            updatedAtMillis: Date.now(),
+        });
+    }
+
+    private setWatchStatus(status: WatchStatus): void {
+        this._watchStatuses.set(status.watchName, status);
+        if (this._watchStatusListener) {
+            try {
+                this._watchStatusListener(status);
+            } catch (err) {
+                console.warn(`${status.watchName} watch status listener failed:`, err);
+            }
+        }
+    }
+
+    private startWatches(): void {
+{{- range .Singletons}}
+        void this.runWatch{{.FieldPascal}}(0);
+{{- end}}
+{{- range .Collections}}
+        void this.runWatch{{.FieldPascal}}(0);
+{{- end}}
+{{- range .StateImports}}
+        void this.runWatch{{.FieldPascal}}(0);
+{{- end}}
+    }
+
+    private stopWatches(): void {
+        for (const timer of this._watchTimers) {
+            clearTimeout(timer);
+        }
+        this._watchTimers.clear();
+        for (const stream of this._watchStreams) {
+            stream.cancel();
+        }
+        this._watchStreams.clear();
+    }
+
+    private channel(): grpc.Client {
+        if (!this._channelProvider) {
+            throw new Error('{{.StateRootName}}Client channel provider is not configured');
+        }
+        return this._channelProvider.channel();
+    }
+
+    private async metadata(): Promise<grpc.Metadata> {
+        const metadata = new grpc.Metadata();
+        if (this._tokenProvider) {
+            const token = await this._tokenProvider();
+            if (!token) {
+                throw new Error('token provider returned an empty token');
+            }
+            metadata.add('authorization', `Bearer ${token}`);
+        }
+        return metadata;
+    }
+
+    private scheduleWatchRetry(
+        watchName: string,
+        received: boolean,
+        attempt: number,
+        run: (attempt: number) => Promise<void>,
+        err?: unknown,
+    ): void {
+        if (this._closed) return;
+        const baseDelay = Math.min(2 ** Math.min(attempt, 5) * 1000, 30000);
+        const jitter = Math.floor(Math.random() * Math.min(baseDelay * 0.2, 1000));
+        const delay = baseDelay + jitter;
+        if (err) {
+            console.warn(`${watchName} watch failed; reconnecting in ${delay}ms:`, err);
+        } else {
+            console.warn(`${watchName} watch completed; reconnecting in ${delay}ms`);
+        }
+        this.recordWatchRetrying(watchName, received, attempt, err ? String(err) : 'stream completed', err);
+        const timer = setTimeout(() => {
+            this._watchTimers.delete(timer);
+            void run(attempt);
+        }, delay);
+        this._watchTimers.add(timer);
+    }
+
+{{- range .Singletons}}
+    private async runWatch{{.FieldPascal}}(attempt: number): Promise<void> {
+        if (this._closed) return;
+        let received = false;
+        let stream: grpc.ClientReadableStream<{{.TypePrefix}}.{{.TypeName}}> | null = null;
+        try {
+            const request = create(traceWatchTypes.TraceRequestSchema, {});
+            stream = this.channel().makeServerStreamRequest<traceWatchTypes.TraceRequest, {{.TypePrefix}}.{{.TypeName}}>(
+                '/{{$.ProtoPackage}}.{{$.StateServiceName}}/Watch{{.FieldPascal}}',
+                (msg) => Buffer.from(toBinary(traceWatchTypes.TraceRequestSchema, msg)),
+                (buf) => fromBinary({{.TypePrefix}}.{{.TypeName}}Schema, new Uint8Array(buf)),
+                request,
+                await this.metadata(),
+            );
+            this._watchStreams.add(stream);
+            this.recordWatchHealthy('{{$.StateRootName}}.{{.FieldPascal}}', false);
+            let finished = false;
+            const finish = (err?: unknown) => {
+                if (finished) return;
+                finished = true;
+                if (stream) this._watchStreams.delete(stream);
+                const nextAttempt = received ? 0 : attempt + 1;
+                this.scheduleWatchRetry('{{$.StateRootName}}.{{.FieldPascal}}', received, nextAttempt, (next) => this.runWatch{{.FieldPascal}}(next), err);
+            };
+            stream.on('data', (value) => {
+                if (this._closed) return;
+                received = true;
+                attempt = 0;
+                this.recordWatchHealthy('{{$.StateRootName}}.{{.FieldPascal}}', true);
+                this._{{.FieldName}} = { ...value };
+                this._{{.FieldName}}Accessor._notifyChange(value);
+            });
+            stream.on('error', (err) => finish(err));
+            stream.on('end', () => finish());
+        } catch (err) {
+            if (stream) this._watchStreams.delete(stream);
+            const nextAttempt = received ? 0 : attempt + 1;
+            this.scheduleWatchRetry('{{$.StateRootName}}.{{.FieldPascal}}', received, nextAttempt, (next) => this.runWatch{{.FieldPascal}}(next), err);
+        }
+    }
+
+{{- end}}
+{{- range .Collections}}
+    private async runWatch{{.FieldPascal}}(attempt: number): Promise<void> {
+        if (this._closed) return;
+        let received = false;
+        let stream: grpc.ClientReadableStream<types.{{.FieldPascal}}EntriesResponse> | null = null;
+        try {
+            const request = create(traceWatchTypes.TraceRequestSchema, {});
+            stream = this.channel().makeServerStreamRequest<traceWatchTypes.TraceRequest, types.{{.FieldPascal}}EntriesResponse>(
+                '/{{$.ProtoPackage}}.{{$.StateServiceName}}/Watch{{.FieldPascal}}',
+                (msg) => Buffer.from(toBinary(traceWatchTypes.TraceRequestSchema, msg)),
+                (buf) => fromBinary(types.{{.FieldPascal}}EntriesResponseSchema, new Uint8Array(buf)),
+                request,
+                await this.metadata(),
+            );
+            this._watchStreams.add(stream);
+            this.recordWatchHealthy('{{$.StateRootName}}.{{.FieldPascal}}', false);
+            let finished = false;
+            const finish = (err?: unknown) => {
+                if (finished) return;
+                finished = true;
+                if (stream) this._watchStreams.delete(stream);
+                const nextAttempt = received ? 0 : attempt + 1;
+                this.scheduleWatchRetry('{{$.StateRootName}}.{{.FieldPascal}}', received, nextAttempt, (next) => this.runWatch{{.FieldPascal}}(next), err);
+            };
+            stream.on('data', (value) => {
+                if (this._closed) return;
+                received = true;
+                attempt = 0;
+                this.recordWatchHealthy('{{$.StateRootName}}.{{.FieldPascal}}', true);
+                this._{{.FieldName}} = new Map(
+                    Object.entries(value.entries ?? {}).map(([k, v]) => [k, v as {{.TypePrefix}}.{{.TypeName}}]),
+                );
+                this._notify{{.FieldPascal}}Change();
+            });
+            stream.on('error', (err) => finish(err));
+            stream.on('end', () => finish());
+        } catch (err) {
+            if (stream) this._watchStreams.delete(stream);
+            const nextAttempt = received ? 0 : attempt + 1;
+            this.scheduleWatchRetry('{{$.StateRootName}}.{{.FieldPascal}}', received, nextAttempt, (next) => this.runWatch{{.FieldPascal}}(next), err);
+        }
+    }
+
+{{- end}}
+{{- range .StateImports}}
+    private async runWatch{{.FieldPascal}}(attempt: number): Promise<void> {
+        if (this._closed) return;
+        let received = false;
+        let stream: grpc.ClientReadableStream<{{.ImportAlias}}.{{.TypeName}}> | null = null;
+        try {
+            const request = create(traceWatchTypes.TraceRequestSchema, {});
+            stream = this.channel().makeServerStreamRequest<traceWatchTypes.TraceRequest, {{.ImportAlias}}.{{.TypeName}}>(
+                '/{{$.ProtoPackage}}.{{$.StateServiceName}}/Watch{{.FieldPascal}}',
+                (msg) => Buffer.from(toBinary(traceWatchTypes.TraceRequestSchema, msg)),
+                (buf) => fromBinary({{.ImportAlias}}.{{.TypeName}}Schema, new Uint8Array(buf)),
+                request,
+                await this.metadata(),
+            );
+            this._watchStreams.add(stream);
+            this.recordWatchHealthy('{{$.StateRootName}}.{{.FieldPascal}}', false);
+            let finished = false;
+            const finish = (err?: unknown) => {
+                if (finished) return;
+                finished = true;
+                if (stream) this._watchStreams.delete(stream);
+                const nextAttempt = received ? 0 : attempt + 1;
+                this.scheduleWatchRetry('{{$.StateRootName}}.{{.FieldPascal}}', received, nextAttempt, (next) => this.runWatch{{.FieldPascal}}(next), err);
+            };
+            stream.on('data', (value) => {
+                if (this._closed) return;
+                received = true;
+                attempt = 0;
+                this.recordWatchHealthy('{{$.StateRootName}}.{{.FieldPascal}}', true);
+                this._{{.FieldName}} = { ...value };
+            });
+            stream.on('error', (err) => finish(err));
+            stream.on('end', () => finish());
+        } catch (err) {
+            if (stream) this._watchStreams.delete(stream);
+            const nextAttempt = received ? 0 : attempt + 1;
+            this.scheduleWatchRetry('{{$.StateRootName}}.{{.FieldPascal}}', received, nextAttempt, (next) => this.runWatch{{.FieldPascal}}(next), err);
+        }
+    }
+
+{{- end}}
+{{- else}}
+    setChannelProvider(channelProvider: unknown, tokenProvider?: () => Promise<string>): void {
+        void channelProvider;
+        void tokenProvider;
+    }
+
+    close(): void {}
+{{- end}}
+
+    /**
+     * Assembles the full {{.StateRootName}} from all cached boundaries.
+     */
+    proto(): types.{{.StateRootName}} {
+        return {
+{{- range .Singletons}}
+            {{.FieldName}}: this._{{.FieldName}} ? { ...this._{{.FieldName}} } : undefined,
+{{- end}}
+{{- range .Collections}}
+            {{.FieldName}}: Array.from(this._{{.FieldName}}.values()).map(v => ({ ...v })),
+{{- end}}
+{{- range .StateImports}}
+            {{.FieldName}}: this._{{.FieldName}} ? { ...this._{{.FieldName}} } : undefined,
+{{- end}}
+        } as unknown as types.{{.StateRootName}};
+    }
+
+    // ==================== Singleton Accessors ====================
+{{range .Singletons}}
+    /** {{.FieldPascal}}Accessor provides typed access to the {{.TypeName}} boundary. */
+    {{.FieldName}}(): {{$.StateRootName}}{{.FieldPascal}}Accessor {
+        return this._{{.FieldName}}Accessor;
+    }
+
+    get{{.FieldPascal}}(): {{.TypePrefix}}.{{.TypeName}} | null {
+        return this._{{.FieldName}} ? { ...this._{{.FieldName}} } : null;
+    }
+
+    async fetch{{.FieldPascal}}(): Promise<{{.TypePrefix}}.{{.TypeName}}> {
+        const request = create(traceWatchTypes.TraceRequestSchema, {});
+        const metadata = await this.metadata();
+        const value = await new Promise<{{.TypePrefix}}.{{.TypeName}}>((resolve, reject) => {
+            this.channel().makeUnaryRequest<traceWatchTypes.TraceRequest, {{.TypePrefix}}.{{.TypeName}}>(
+                '/{{$.ProtoPackage}}.{{$.StateServiceName}}/Get{{.FieldPascal}}',
+                (msg) => Buffer.from(toBinary(traceWatchTypes.TraceRequestSchema, msg)),
+                (buf) => fromBinary({{.TypePrefix}}.{{.TypeName}}Schema, new Uint8Array(buf)),
+                request,
+                metadata,
+                (err, response) => {
+                    if (err) {
+                        reject(err);
+                        return;
+                    }
+                    if (!response) {
+                        reject(new Error('{{$.StateRootName}}.{{.FieldPascal}} fetch returned no response'));
+                        return;
+                    }
+                    resolve(response);
+                },
+            );
+        });
+        this._{{.FieldName}} = { ...value };
+        return { ...value };
+    }
+{{if not $.ReadOnly}}
+    set{{.FieldPascal}}(value: {{.TypePrefix}}.{{.TypeName}}): void {
+        this._{{.FieldName}} = value;
+        this._{{.FieldName}}Accessor._notifyChange(value);
+    }
+{{end}}{{end}}
+    // ==================== Collection Wrappers ====================
+{{range .Collections}}
+    get{{.FieldPascal}}(): {{.TypePrefix}}.{{.TypeName}}[] {
+        return Array.from(this._{{.FieldName}}.values()).map(v => ({ ...v }));
+    }
+
+    /** Returns a defensive copy of the cached {{.TypeName}} map. */
+    get{{.FieldPascal}}Map(): Map<string, {{.TypePrefix}}.{{.TypeName}}> {
+        return new Map(Array.from(this._{{.FieldName}}.entries()).map(([k, v]) => [k, { ...v }]));
+    }
+
+    /** Registers a callback that fires when the {{.TypeName}} collection is updated. */
+    on{{.FieldPascal}}Change(cb: (entries: Map<string, {{.TypePrefix}}.{{.TypeName}}>) => void): void {
+        this._{{.FieldName}}Callbacks.push(cb);
+    }
+
+    /** Registers a subscriber that is notified when the {{.TypeName}} collection is updated. */
+    subscribe{{.FieldPascal}}(subscriber: {{.FieldPascal}}Subscriber): void {
+        this._{{.FieldName}}Subscribers.push(subscriber);
+    }
+
+    /** @internal Notifies callbacks and subscribers of collection changes. */
+    _notify{{.FieldPascal}}Change(): void {
+        const snapshot = this.get{{.FieldPascal}}Map();
+        for (const cb of this._{{.FieldName}}Callbacks) {
+            cb(snapshot);
+        }
+        for (const sub of this._{{.FieldName}}Subscribers) {
+            sub.on{{.FieldPascal}}Change(snapshot);
+        }
+    }
+{{if not $.ReadOnly}}
+    add{{.FieldPascal}}(...items: {{.TypePrefix}}.{{.TypeName}}[]): void {
+        for (const item of items) {
+{{- if .KeyFieldName}}
+            this._{{.FieldName}}.set((item as any).{{.KeyFieldName}}, item);
+{{- else}}
+            this._{{.FieldName}}.set(String(this._{{.FieldName}}.size), item);
+{{- end}}
+        }
+        this._notify{{.FieldPascal}}Change();
+    }
+{{end}}{{end}}
+    // ==================== State Import Accessors ====================
+{{range .StateImports}}
+    get{{.TypeName}}(): {{.ImportAlias}}.{{.TypeName}} | null {
+        return this._{{.FieldName}} ? { ...this._{{.FieldName}} } : null;
+    }
+{{end}}
+}
+
+// ==================== Child Accessor Types ====================
+{{range .Singletons}}
+/** {{$.StateRootName}}{{.FieldPascal}}Accessor provides typed access to the {{.TypeName}} boundary. */
+export class {{$.StateRootName}}{{.FieldPascal}}Accessor {
+    private _callbacks: ((value: {{.TypePrefix}}.{{.TypeName}}) => void)[] = [];
+    private _subscribers: {{.FieldPascal}}Subscriber[] = [];
+
+    constructor(private parent: {{$.StateRootName}}Client) {}
+
+    /** Registers a callback that fires when the {{.TypeName}} is updated. */
+    onChange(cb: (value: {{.TypePrefix}}.{{.TypeName}}) => void): void {
+        this._callbacks.push(cb);
+    }
+
+    /** Registers a subscriber that is notified when the {{.TypeName}} is updated via Watch. */
+    subscribe(subscriber: {{.FieldPascal}}Subscriber): void {
+        this._subscribers.push(subscriber);
+    }
+
+    /** @internal */
+    _notifyChange(value: {{.TypePrefix}}.{{.TypeName}}): void {
+        const copy = { ...value };
+        for (const cb of this._callbacks) {
+            cb(copy);
+        }
+        for (const sub of this._subscribers) {
+            sub.on{{.FieldPascal}}Change(copy);
+        }
+    }
+
+    /** Returns the reconstructed {{.TypeName}} proto. */
+    proto(): {{.TypePrefix}}.{{.TypeName}} | null {
+        return this.get();
+    }
+
+    get(): {{.TypePrefix}}.{{.TypeName}} | null {
+        return this.parent.get{{.FieldPascal}}();
+    }
+
+    fetch(): Promise<{{.TypePrefix}}.{{.TypeName}}> {
+        return this.parent.fetch{{.FieldPascal}}();
+    }
+{{if not $.ReadOnly}}
+    set(value: {{.TypePrefix}}.{{.TypeName}}): void {
+        this.parent.set{{.FieldPascal}}(value);
+    }
+{{end}}
+}
+{{end}}

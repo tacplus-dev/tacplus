@@ -1,0 +1,59 @@
+{{.Header}}
+
+import json
+import httpx
+from google.protobuf import json_format
+from {{.PbImportFrom}} import {{.PbModuleName}}_pb2 as pb
+{{.CrossPackageImports}}
+
+
+class {{.ClientName}}:
+    """Typed REST client for {{.ServiceName}}.
+
+    Wraps an httpx client and provides typed methods for each RPC
+    using convention-based REST paths (POST /api/{package}/v1/{service}/{method}).
+    """
+
+    def __init__(self, base_url: str, session=None):
+        self._base_url = base_url.rstrip('/')
+        self._session = session or httpx.Client()
+
+    def _do_json(self, method: str, path: str, request, response_class):
+        """Execute a JSON REST call."""
+        url = self._base_url + path
+        body = None
+        if request is not None:
+            body = json_format.MessageToJson(request)
+
+        if method == "POST":
+            resp = self._session.post(url, content=body, headers={"Content-Type": "application/json"})
+        elif method == "GET":
+            resp = self._session.get(url, headers={"Content-Type": "application/json"})
+        else:
+            resp = self._session.request(method, url, content=body, headers={"Content-Type": "application/json"})
+
+        resp.raise_for_status()
+        result = response_class()
+        json_format.Parse(resp.text, result)
+        return result
+
+    def _stream_ndjson(self, method: str, path: str, request, response_class):
+        """Execute a streaming REST call, yielding NDJSON responses."""
+        url = self._base_url + path
+        body = None
+        if request is not None:
+            body = json_format.MessageToJson(request)
+
+        headers = {"Content-Type": "application/json", "Accept": "application/x-ndjson"}
+
+        with self._session.stream(method, url, content=body, headers=headers) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                line = line.strip()
+                if not line:
+                    continue
+                msg = response_class()
+                json_format.Parse(line, msg)
+                yield msg
+
+{{.Methods}}

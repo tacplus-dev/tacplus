@@ -856,6 +856,29 @@ impl ServiceManager {
         })
     }
 
+    /// Returns an S2S bearer token scoped to the given service audience.
+    /// Use this when building authenticated calls to peer services.
+    pub async fn token_for_service(&self, audience: &str) -> Result<String, Box<dyn std::error::Error>> {
+        self.identity.get_token_for(audience).await
+    }
+
+    /// Returns an audience-scoped token-provider closure backed by the identity
+    /// manager. Suitable for constructing a custom subscriber — the returned
+    /// closure is compatible with [`subscribe`] module `TokenSource` types.
+    pub fn token_provider_for_service(&self, audience: &str) -> TokenProvider {
+        let identity = self.identity.clone();
+        let aud = audience.to_string();
+        Arc::new(move || {
+            let im = identity.clone();
+            let a = aud.clone();
+            Box::pin(async move {
+                im.get_token_for(&a).await.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                    e.to_string().into()
+                })
+            })
+        })
+    }
+
     #[allow(dead_code)]
     fn spawn_owned<F>(&self, task: F)
     where

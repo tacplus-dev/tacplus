@@ -434,6 +434,20 @@ public class ServiceManager implements AutoCloseable {
         };
     }
 
+    /**
+     * Returns gRPC call credentials scoped to the given service audience.
+     * Use this to authenticate calls to a specific service (e.g. building
+     * a custom event-bus subscriber or calling a peer service directly).
+     */
+    public io.grpc.CallCredentials callCredentialsForAudience(String audience) {
+        return identity.callCredentialsForAudience(audience);
+    }
+
+    /** Returns the shared TLS channel factory for creating gRPC channels to peer services. */
+    public ServiceConnection.ChannelFactory getChannelFactory() {
+        return channelFactory;
+    }
+
 {{- if .HasPublishers}}
     @FunctionalInterface
     public interface EventPublisher<T> {
@@ -1509,8 +1523,9 @@ public class ServiceManager implements AutoCloseable {
     /**
      * Resolves a service endpoint by querying ServiceHealthState for healthy instances.
      * Retries with exponential backoff until a healthy instance is found.
+     * Use this to obtain a channel for building custom subscribers or ad-hoc S2S calls.
      */
-    private io.grpc.ManagedChannel resolveService(String serviceName) {
+    public io.grpc.ManagedChannel resolveService(String serviceName) {
         long backoff = 2000;
         final long maxBackoff = 30000;
         while (true) {

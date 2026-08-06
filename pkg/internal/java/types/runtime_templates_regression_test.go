@@ -616,6 +616,25 @@ func TestJavaServiceConnectionVerifiesSpiffePeerIdentity(t *testing.T) {
 	}
 }
 
+// The ServiceManager must expose audience-scoped credentials, the channel
+// factory, and service resolution so handlers can build custom subscribers
+// without standing up a second IdentityManager.
+func TestJavaServiceManagerExposesSubscriberPlumbing(t *testing.T) {
+	rendered := readJavaTemplate(t, "java/types/ServiceManager.java.tmpl")
+
+	for _, want := range []string{
+		"public io.grpc.CallCredentials callCredentialsForAudience(String audience)",
+		"return identity.callCredentialsForAudience(audience);",
+		"public ServiceConnection.ChannelFactory getChannelFactory()",
+		"return channelFactory;",
+		"public io.grpc.ManagedChannel resolveService(String serviceName)",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("ServiceManager must expose subscriber plumbing; missing %q", want)
+		}
+	}
+}
+
 func renderJavaTemplateForTest(t *testing.T, name string, data javaSmTemplateData) string {
 	t.Helper()
 	tmplStr, err := loadTemplate(name)

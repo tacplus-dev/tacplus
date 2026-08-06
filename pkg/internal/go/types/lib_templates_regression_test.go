@@ -509,6 +509,25 @@ func TestGoMeshS2SConnectionsPinExactService(t *testing.T) {
 	}
 }
 
+// The ServiceManager must expose audience-scoped token acquisition and service
+// resolution so handlers can build custom subscribers without duplicating the
+// identity/connection plane.
+func TestGoServiceManagerExposesSubscriberPlumbing(t *testing.T) {
+	tmpl, err := loadTemplate("service_manager.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate service_manager.go.tmpl: %v", err)
+	}
+	for _, want := range []string{
+		"func (sm *ServiceManager) TokenForService(audience string) (string, error)",
+		"func (sm *ServiceManager) ConnToService(name string) (grpc.ClientConnInterface, error)",
+		"func (sm *ServiceManager) ConnToServiceCtx(ctx context.Context, name string) (grpc.ClientConnInterface, error)",
+	} {
+		if !strings.Contains(tmpl, want) {
+			t.Fatalf("Go ServiceManager must expose subscriber plumbing; missing %q", want)
+		}
+	}
+}
+
 // PC-L-10 pin: the go serving certificate must HOT-RELOAD on ManageCert
 // renewal — java (X509ExtendedKeyManager) and rust (reloading resolver) both
 // rotate; a static tls.Config serves an expiring cert until restart. Three

@@ -95,6 +95,30 @@ fn decode_subscribe_record(data: &[u8]) -> Result<({{.TypeName}}, RecordMeta), p
     Ok(({{.TypeName}}::decode(data)?, RecordMeta::default()))
 }
 
+/// Options for controlling subscription start position.
+pub struct SubscribeOptions {
+    earliest: bool,
+    latest: bool,
+    offset: Option<i64>,
+}
+
+impl SubscribeOptions {
+    /// Start from the earliest available offset.
+    pub fn earliest() -> Self {
+        Self { earliest: true, latest: false, offset: None }
+    }
+
+    /// Start from the latest offset (new messages only).
+    pub fn latest() -> Self {
+        Self { earliest: false, latest: true, offset: None }
+    }
+
+    /// Start from a specific offset.
+    pub fn offset(off: i64) -> Self {
+        Self { earliest: false, latest: false, offset: Some(off) }
+    }
+}
+
 /// Subscriber subscribes to {{.SourcePackage}}.{{.SourceStateRoot}}.{{.SourceField}} via event-bus gRPC.
 pub struct Subscriber {
     channel: Channel,
@@ -116,17 +140,23 @@ impl Subscriber {
     }
 
     /// Subscribe opens a bidi stream to event-bus and calls handler for each
-    /// received {{.TypeName}}. It reconnects with exponential backoff on stream
-    /// errors. The consumer group resumes from the last committed offset.
+    /// received {{.TypeName}}. Starts from the earliest available offset.
+    /// It reconnects with exponential backoff on stream errors.
     ///
     /// Subscribe blocks until the channel is closed or a non-retryable error occurs.
     pub async fn subscribe(&self, handler: Handler) {
+        self.subscribe_with(handler, SubscribeOptions::earliest()).await
+    }
+
+    /// Subscribe with explicit start-position options. Use this when you need
+    /// to start from a specific offset or from latest instead of earliest.
+    pub async fn subscribe_with(&self, handler: Handler, opts: SubscribeOptions) {
         const MIN_BACKOFF: Duration = Duration::from_secs(3);
         const MAX_BACKOFF: Duration = Duration::from_secs(30);
         let mut backoff = MIN_BACKOFF;
 
         loop {
-            match self.subscribe_once(&handler).await {
+            match self.subscribe_once(&handler, &opts).await {
                 Ok(()) => {
                     tracing::warn!("{{.SourcePackage}}.{{.SourceField}} subscription stream ended, reconnecting in {}s", MIN_BACKOFF.as_secs());
                     tokio::time::sleep(MIN_BACKOFF).await;
@@ -163,6 +193,7 @@ impl Subscriber {
     async fn subscribe_once(
         &self,
         handler: &Handler,
+        opts: &SubscribeOptions,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Fetch a fresh audience-scoped token for this connect attempt before
         // touching the channel — EventBus Subscribe is an authenticated RPC.
@@ -171,11 +202,18 @@ impl Subscriber {
         let mut grpc = tonic::client::Grpc::new(self.channel.clone());
         grpc.ready().await?;
 
+        let start_from = if let Some(off) = opts.offset {
+            Some(crate::types::generated::eventbus_support::eventbus_support::subscribe_request::StartFrom::Offset(off))
+        } else if opts.latest {
+            Some(crate::types::generated::eventbus_support::eventbus_support::subscribe_request::StartFrom::Latest(true))
+        } else if opts.earliest {
+            Some(crate::types::generated::eventbus_support::eventbus_support::subscribe_request::StartFrom::Earliest(true))
+        } else {
+            None
+        };
         let req = SubscribeRequest {
             consumer_group: self.consumer_group.clone(),
-            start_from: Some(
-                crate::types::generated::eventbus_support::eventbus_support::subscribe_request::StartFrom::Earliest(true),
-            ),
+            start_from,
             ..Default::default()
         };
 

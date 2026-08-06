@@ -1,0 +1,52 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// CODE GENERATED - DO NOT EDIT
+
+// Behavioral self-test for ConfigDefaults: constructs a Config with all fields
+// at proto3 zero, runs the REAL generated ConfigDefaults function, and asserts
+// annotated defaults take effect. This specifically covers the state-authority
+// (kernel) path: loadConfig + ConfigDefaults with no typed-config fetch.
+
+package grpcconfig
+
+import (
+	"testing"
+
+	grpcconfig_pb "{{.ModuleBasePath}}/types/sys/grpcconfig"
+)
+
+func TestConfigDefaults_EmptyConfig_HealthProbePort(t *testing.T) {
+	// Empty Config (submessage absent) — the state-authority path.
+	cfg := &grpcconfig_pb.Config{}
+	if cfg.GetHealthProbePort() != 0 {
+		t.Fatalf("precondition: empty config health_probe_port = %d, want 0", cfg.GetHealthProbePort())
+	}
+	grpcconfig_pb.ConfigDefaults(cfg)
+	if got := cfg.GetHealthProbePort(); got != 8444 {
+		t.Errorf("empty config → health_probe_port = %d, want 8444", got)
+	}
+}
+
+func TestConfigDefaults_ExplicitValue_Preserved(t *testing.T) {
+	cfg := &grpcconfig_pb.Config{HealthProbePort: 9999}
+	grpcconfig_pb.ConfigDefaults(cfg)
+	if got := cfg.GetHealthProbePort(); got != 9999 {
+		t.Errorf("explicit 9999 → health_probe_port = %d, want 9999", got)
+	}
+}
+
+func TestConfigDefaults_Idempotent(t *testing.T) {
+	cfg := &grpcconfig_pb.Config{}
+	grpcconfig_pb.ConfigDefaults(cfg)
+	first := cfg.GetHealthProbePort()
+	grpcconfig_pb.ConfigDefaults(cfg)
+	second := cfg.GetHealthProbePort()
+	if first != second {
+		t.Errorf("configDefaults not idempotent: first=%d, second=%d", first, second)
+	}
+}
+
+func TestConfigDefaults_Constant(t *testing.T) {
+	if grpcconfig_pb.DefaultHealthProbePort != 8444 {
+		t.Errorf("DefaultHealthProbePort = %d, want 8444", grpcconfig_pb.DefaultHealthProbePort)
+	}
+}

@@ -331,6 +331,12 @@ cfg, err := grpcconfig.LoadConfig()
 if err != nil {
 return nil, fmt.Errorf("config: %w", err)
 }
+// Defense-in-depth: LoadConfig() already applies ConfigDefaults, but the
+// state authority (kernel) does not traverse the typed-config call sites
+// that re-apply defaults later. Applying defaults here — immediately after
+// load, before ANY field is read — guarantees every annotated default is
+// in effect on every path, including the state authority's.
+grpcconfig_pb.ConfigDefaults(cfg)
 
 ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 

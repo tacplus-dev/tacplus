@@ -314,6 +314,34 @@ func semanticSurfaceProbes() []semanticSurfaceProbe {
 				"rust": {"Egress data entitlement", "rustEgressSanitizePreamble", "sanitizableType"},
 			},
 		},
+		{
+			// Config defaults parity: all full-service languages MUST iterate the
+			// same annotation keys (default_int, default_string, etc.) and emit a
+			// defaults function. The health_probe_port incident proved that a
+			// single-language canary (go) passing hides a fleet-wide failure in
+			// the others when they silently omit a default.
+			name:  "config defaults annotation coverage",
+			locus: configDefaultsEmitterFiles,
+			patterns: map[string][]string{
+				"go":   {`"default_int"`, `"default_string"`, `"default_float"`, `"default_bool"`, `"default_host"`},
+				"java": {`"default_int"`, `"default_string"`, `"default_float"`, `"default_bool"`, `"default_host"`},
+				"rust": {`"default_int"`, `"default_string"`, `"default_float"`, `"default_bool"`, `"default_host"`},
+			},
+		},
+		{
+			// Defense-in-depth: ServiceManager.create() MUST call configDefaults
+			// immediately after loadConfig, before any field is read. The state
+			// authority (kernel) never traverses the typed-config call sites that
+			// re-apply defaults in run(); without this call in create(),
+			// health_probe_port stays 0 and the probe listener never starts.
+			name:  "configDefaults before first use in ServiceManager",
+			locus: serviceManagerFiles,
+			patterns: map[string][]string{
+				"go":   {"ConfigDefaults(cfg)"},
+				"java": {"configDefaults(cfg).build()"},
+				"rust": {"config_defaults(&mut cfg)"},
+			},
+		},
 	}
 }
 
@@ -704,6 +732,15 @@ var emittedManifestProbes = []struct {
 			"proto.EmitsEntitlementHelpers(pf.RelPath, pf.Package)",
 		},
 	},
+}
+
+// configDefaultsEmitterFiles locates each FULL-SERVICE language's config defaults
+// generator. All three must iterate the same annotation keys and emit defaults
+// for every field — a divergence is the health_probe_port class of bug.
+var configDefaultsEmitterFiles = map[string]string{
+	"go":   "pkg/internal/go/types/constants.go",
+	"java": "pkg/internal/java/types/helpers.go",
+	"rust": "pkg/internal/rust/types/constants.go",
 }
 
 // field kinds whose default-bound coverage we additionally probe (the M18/oneof

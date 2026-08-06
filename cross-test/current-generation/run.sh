@@ -247,7 +247,7 @@ run_java_generated_self_tests() {
 
   : >"$test_log"
   local pattern source_file package_name class_name
-  for pattern in '*/chassis/spiffe/SpiffeVectorsTest.java' '*/chassis/x509/ImmutableCertChainTest.java' '*/chassis/grpcserver/AuthorizerBehaviorTest.java' '*/chassis/collection/CollectionRuntimeTest.java'; do
+  for pattern in '*/chassis/spiffe/SpiffeVectorsTest.java' '*/chassis/x509/ImmutableCertChainTest.java' '*/chassis/grpcserver/AuthorizerBehaviorTest.java' '*/chassis/collection/CollectionRuntimeTest.java' '*/chassis/grpcconfig/ConfigDefaultsTest.java'; do
     source_file="$(find "$output/src/main/java" -type f -path "$pattern" -print -quit)"
     [[ -n "$source_file" ]] || die "missing generated Java self-test source: $pattern"
     package_name="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$source_file")"
@@ -337,6 +337,15 @@ run_rust_spiffe_self_tests() {
       return 1
     }
   assert_clean_log "$log_dir/rust-diskstore-test.log"
+
+  # Behavioral config_defaults test: empty Config → health_probe_port == 8444.
+  # Covers the state-authority (kernel) path where no typed-config fetch occurs.
+  [[ -f "$output/chassis/grpcconfig/Cargo.toml" ]] || die "missing generated Rust grpcconfig crate"
+  (cd "$output" && cargo test -p grpcconfig) >"$log_dir/rust-grpcconfig-test.log" 2>&1 || {
+      cat "$log_dir/rust-grpcconfig-test.log" >&2
+      return 1
+    }
+  assert_clean_log "$log_dir/rust-grpcconfig-test.log"
 }
 
 write_go_compile_mod() {
@@ -1142,6 +1151,228 @@ for language in "${languages[@]}"; do
   compile_current_output "$output_root" "$language" "$dir/tacplus"
   echo "    PASS $language"
 done
+
+# Config-defaults cross-language parity: for every proto message that has
+# spec.default_int / spec.default_string / etc. annotations, verify that
+# ALL three full-service languages generated the exact same set of DEFAULT_*
+# constants. A language that silently omits a default (the health_probe_port
+# incident: go defaulted 8444, java/rust did not) is a build-failing gap.
+# This check runs only when all three languages were generated.
+assert_config_defaults_parity() {
+  local work_root="$1"
+
+  echo "==> Checking config defaults parity across go, java, rust"
+
+  # Extract DEFAULT constant names from each language's generated grpcconfig helpers,
+  # normalized to UPPER_SNAKE_CASE for comparison.
+  extract_go_defaults() {
+    local helpers
+    helpers="$(find "$work_root/go" -type f -name 'helpers.go' -path '*/grpcconfig/*' -print -quit)"
+    [[ -n "$helpers" ]] || die "parity: missing Go grpcconfig helpers.go"
+    grep -oE 'Default[A-Za-z]+' "$helpers" | grep -v 'func\|Defaults' | sort -u | while read -r name; do
+      # PascalCase -> UPPER_SNAKE_CASE: DefaultHealthProbePort -> DEFAULT_HEALTH_PROBE_PORT
+      echo "$name" | sed -E 's/([a-z])([A-Z])/\1_\2/g; s/([A-Z]+)([A-Z][a-z])/\1_\2/g' | tr '[:lower:]' '[:upper:]'
+    done | sort -u
+  }
+  extract_java_defaults() {
+    local helpers
+    helpers="$(find "$work_root/java" -type f -name 'Helpers.java' -path '*/grpcconfig/*' -print -quit)"
+    [[ -n "$helpers" ]] || die "parity: missing Java grpcconfig Helpers.java"
+    grep -oE 'DEFAULT_[A-Z_]+' "$helpers" | sort -u
+  }
+  extract_rust_defaults() {
+    local helpers
+    helpers="$(find "$work_root/rust" -type f -name 'helpers.rs' -path '*/grpcconfig/*' -print -quit)"
+    [[ -n "$helpers" ]] || die "parity: missing Rust grpcconfig helpers.rs"
+    grep -oE 'DEFAULT_[A-Z_]+' "$helpers" | sort -u
+  }
+
+  local go_defaults java_defaults rust_defaults
+  go_defaults="$(extract_go_defaults)"
+  java_defaults="$(extract_java_defaults)"
+  rust_defaults="$(extract_rust_defaults)"
+
+  local go_file java_file rust_file
+  go_file="$(mktemp)"
+  java_file="$(mktemp)"
+  rust_file="$(mktemp)"
+  printf '%s\n' "$go_defaults" > "$go_file"
+  printf '%s\n' "$java_defaults" > "$java_file"
+  printf '%s\n' "$rust_defaults" > "$rust_file"
+
+  local failed=false
+
+  # Compare go vs java
+  local go_only_vs_java java_only_vs_go
+  go_only_vs_java="$(comm -23 "$go_file" "$java_file")"
+  java_only_vs_go="$(comm -13 "$go_file" "$java_file")"
+  if [[ -n "$go_only_vs_java" ]]; then
+    echo "PARITY FAILURE: defaults in Go but not Java:" >&2
+    echo "$go_only_vs_java" | sed 's/^/  /' >&2
+    failed=true
+  fi
+  if [[ -n "$java_only_vs_go" ]]; then
+    echo "PARITY FAILURE: defaults in Java but not Go:" >&2
+    echo "$java_only_vs_go" | sed 's/^/  /' >&2
+    failed=true
+  fi
+
+  # Compare go vs rust
+  local go_only_vs_rust rust_only_vs_go
+  go_only_vs_rust="$(comm -23 "$go_file" "$rust_file")"
+  rust_only_vs_go="$(comm -13 "$go_file" "$rust_file")"
+  if [[ -n "$go_only_vs_rust" ]]; then
+    echo "PARITY FAILURE: defaults in Go but not Rust:" >&2
+    echo "$go_only_vs_rust" | sed 's/^/  /' >&2
+    failed=true
+  fi
+  if [[ -n "$rust_only_vs_go" ]]; then
+    echo "PARITY FAILURE: defaults in Rust but not Go:" >&2
+    echo "$rust_only_vs_go" | sed 's/^/  /' >&2
+    failed=true
+  fi
+
+  rm -f "$go_file" "$java_file" "$rust_file"
+
+  if [[ "$failed" == true ]]; then
+    die "config defaults parity check failed — a language is missing defaults that another has"
+  fi
+
+  echo "    PASS config defaults parity ($(echo "$go_defaults" | wc -l | tr -d ' ') constants matched across go/java/rust)"
+}
+
+# Config-defaults BEHAVIORAL parity: verify that each language's generated
+# defaults function actually SETS every field that has a DEFAULT_* constant.
+# The constant-name parity above catches "constant missing"; this check catches
+# "constant generated but defaults function never applies it" — the exact
+# dead-code class that left health_probe_port at 0 on the live fleet.
+assert_config_defaults_behavioral() {
+  local work_root="$1"
+
+  echo "==> Checking config defaults BEHAVIORAL parity across go, java, rust"
+
+  # For each language, extract field names that are SET inside the defaults
+  # function (not just declared as constants). This proves the generated code
+  # would actually apply the default at runtime.
+
+  # Go: ConfigDefaults function body contains "v.FieldName = ..."
+  extract_go_defaults_applied() {
+    local helpers
+    helpers="$(find "$work_root/go" -type f -name 'helpers.go' -path '*/grpcconfig/*' -print -quit)"
+    [[ -n "$helpers" ]] || die "behavioral: missing Go grpcconfig helpers.go"
+    # Extract field assignments inside ConfigDefaults: "v.SomeName = ..."
+    sed -n '/^func ConfigDefaults/,/^func /p' "$helpers" \
+      | grep -oE 'v\.[A-Z][A-Za-z]+ =' \
+      | sed 's/v\.//; s/ =//' \
+      | sort -u
+  }
+
+  # Java: configDefaults function body contains "builder.setSomeName(...)"
+  extract_java_defaults_applied() {
+    local helpers
+    helpers="$(find "$work_root/java" -type f -name 'Helpers.java' -path '*/grpcconfig/*' -print -quit)"
+    [[ -n "$helpers" ]] || die "behavioral: missing Java grpcconfig Helpers.java"
+    # Extract setter calls inside configDefaults: "builder.setSomeName(...)"
+    sed -n '/public static.*configDefaults/,/^[[:space:]]*public static/p' "$helpers" \
+      | grep -oE 'builder\.set[A-Z][A-Za-z]+' \
+      | sed 's/builder\.set//' \
+      | sort -u
+  }
+
+  # Rust: config_defaults function body contains "msg.some_name = ..."
+  extract_rust_defaults_applied() {
+    local helpers
+    helpers="$(find "$work_root/rust" -type f -name 'helpers.rs' -path '*/grpcconfig/*' -print -quit)"
+    [[ -n "$helpers" ]] || die "behavioral: missing Rust grpcconfig helpers.rs"
+    # Extract field assignments inside config_defaults: "msg.some_name = ..."
+    sed -n '/pub fn config_defaults/,/^pub fn /p' "$helpers" \
+      | grep -oE 'msg\.[a-z_]+ =' \
+      | sed 's/msg\.//; s/ =//' \
+      | sort -u
+  }
+
+  # Normalize field names to UPPER_SNAKE_CASE for cross-language comparison.
+  pascal_to_upper_snake() {
+    sed -E 's/([a-z])([A-Z])/\1_\2/g; s/([A-Z]+)([A-Z][a-z])/\1_\2/g' | tr '[:lower:]' '[:upper:]'
+  }
+  snake_to_upper() {
+    tr '[:lower:]' '[:upper:]'
+  }
+
+  local go_applied java_applied rust_applied
+  go_applied="$(extract_go_defaults_applied | pascal_to_upper_snake | sort -u)"
+  java_applied="$(extract_java_defaults_applied | pascal_to_upper_snake | sort -u)"
+  rust_applied="$(extract_rust_defaults_applied | snake_to_upper | sort -u)"
+
+  local go_file java_file rust_file
+  go_file="$(mktemp)"
+  java_file="$(mktemp)"
+  rust_file="$(mktemp)"
+  printf '%s\n' "$go_applied" > "$go_file"
+  printf '%s\n' "$java_applied" > "$java_file"
+  printf '%s\n' "$rust_applied" > "$rust_file"
+
+  local failed=false
+
+  # Go vs Java behavioral parity
+  local go_only java_only
+  go_only="$(comm -23 "$go_file" "$java_file")"
+  java_only="$(comm -13 "$go_file" "$java_file")"
+  if [[ -n "$go_only" ]]; then
+    echo "BEHAVIORAL PARITY FAILURE: defaults APPLIED in Go but not Java:" >&2
+    echo "$go_only" | sed 's/^/  /' >&2
+    failed=true
+  fi
+  if [[ -n "$java_only" ]]; then
+    echo "BEHAVIORAL PARITY FAILURE: defaults APPLIED in Java but not Go:" >&2
+    echo "$java_only" | sed 's/^/  /' >&2
+    failed=true
+  fi
+
+  # Go vs Rust behavioral parity
+  go_only="$(comm -23 "$go_file" "$rust_file")"
+  local rust_only
+  rust_only="$(comm -13 "$go_file" "$rust_file")"
+  if [[ -n "$go_only" ]]; then
+    echo "BEHAVIORAL PARITY FAILURE: defaults APPLIED in Go but not Rust:" >&2
+    echo "$go_only" | sed 's/^/  /' >&2
+    failed=true
+  fi
+  if [[ -n "$rust_only" ]]; then
+    echo "BEHAVIORAL PARITY FAILURE: defaults APPLIED in Rust but not Go:" >&2
+    echo "$rust_only" | sed 's/^/  /' >&2
+    failed=true
+  fi
+
+  # Sanity: the behavioral set must be non-empty (the grpcconfig.Config has
+  # many defaults) and must include health_probe_port specifically.
+  if ! echo "$go_applied" | grep -q 'HEALTH_PROBE_PORT'; then
+    echo "BEHAVIORAL PARITY FAILURE: Go ConfigDefaults does not apply HEALTH_PROBE_PORT" >&2
+    failed=true
+  fi
+  if ! echo "$java_applied" | grep -q 'HEALTH_PROBE_PORT'; then
+    echo "BEHAVIORAL PARITY FAILURE: Java configDefaults does not apply HEALTH_PROBE_PORT" >&2
+    failed=true
+  fi
+  if ! echo "$rust_applied" | grep -q 'HEALTH_PROBE_PORT'; then
+    echo "BEHAVIORAL PARITY FAILURE: Rust config_defaults does not apply HEALTH_PROBE_PORT" >&2
+    failed=true
+  fi
+
+  rm -f "$go_file" "$java_file" "$rust_file"
+
+  if [[ "$failed" == true ]]; then
+    die "config defaults behavioral parity check failed — a defaults function does not apply a default that should be set"
+  fi
+
+  echo "    PASS config defaults behavioral parity (go: $(echo "$go_applied" | wc -l | tr -d ' ') fields, java: $(echo "$java_applied" | wc -l | tr -d ' ') fields, rust: $(echo "$rust_applied" | wc -l | tr -d ' ') fields)"
+}
+
+# Run parity check only when all three full-service languages were generated.
+if [[ ${#languages[@]} -eq 3 ]]; then
+  assert_config_defaults_parity "$WORK_ROOT"
+  assert_config_defaults_behavioral "$WORK_ROOT"
+fi
 
 # Health-only fixture: exercises the {{else}} server branch in
 # service_manager.rs.tmpl (HasTlsGrpc=false, HasC2DGrpc=false).

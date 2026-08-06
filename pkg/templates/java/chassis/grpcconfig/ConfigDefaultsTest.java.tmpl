@@ -1,0 +1,68 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// CODE GENERATED - DO NOT EDIT
+
+package {{.ChassisBase}}.grpcconfig;
+
+import {{.TypesBase}}.sys.grpcconfig.Grpcconfig.Config;
+import {{.TypesBase}}.sys.grpcconfig.Helpers;
+
+/**
+ * Behavioral self-test for configDefaults: constructs a Config with the
+ * submessage ABSENT (all fields at proto3 zero), runs the REAL generated
+ * configDefaults function, and asserts annotated defaults take effect.
+ *
+ * <p>This specifically covers the state-authority (kernel) path: kernel loads
+ * config via GrpcConfigLoader.loadConfig then reads health_probe_port in
+ * ServiceManager.create() — it never traverses the typed-config call sites
+ * that re-apply defaults in ServiceManager.run(). If configDefaults is not
+ * called before that first read, health_probe_port stays 0 and the plaintext
+ * health listener never starts.
+ *
+ * <p>Run as a main-method self-test by the cross-test gates.
+ */
+public class ConfigDefaultsTest {
+    private static int failures = 0;
+
+    private static void check(String name, boolean ok) {
+        if (!ok) {
+            System.err.println("FAIL: " + name);
+            failures++;
+        } else {
+            System.out.println("  ok: " + name);
+        }
+    }
+
+    public static void main(String[] args) {
+        // 1. Empty Config (submessage absent) → configDefaults applies 8444.
+        //    This is the state-authority path: no typed-config fetch, no
+        //    ServiceManager.run() call sites — just loadConfig + configDefaults.
+        Config empty = Config.getDefaultInstance();
+        check("precondition: empty config health_probe_port == 0",
+              empty.getHealthProbePort() == 0);
+        Config defaulted = Helpers.configDefaults(empty).build();
+        check("empty config → health_probe_port == 8444",
+              defaulted.getHealthProbePort() == 8444);
+
+        // 2. Explicit non-zero is preserved (not overwritten by defaults).
+        Config withCustom = Config.newBuilder().setHealthProbePort(9999).build();
+        Config defaultedCustom = Helpers.configDefaults(withCustom).build();
+        check("explicit 9999 → health_probe_port preserved",
+              defaultedCustom.getHealthProbePort() == 9999);
+
+        // 3. Idempotency: applying configDefaults twice yields the same result.
+        Config twice = Helpers.configDefaults(defaulted).build();
+        check("configDefaults is idempotent",
+              twice.getHealthProbePort() == defaulted.getHealthProbePort());
+
+        // 4. Every annotated default constant has a corresponding setter in
+        //    configDefaults. Verify the constant exists and is positive.
+        check("DEFAULT_HEALTH_PROBE_PORT constant == 8444",
+              Helpers.DEFAULT_HEALTH_PROBE_PORT == 8444L);
+
+        if (failures > 0) {
+            System.err.println(failures + " config defaults test(s) FAILED");
+            System.exit(1);
+        }
+        System.out.println("ConfigDefaultsTest: all assertions passed");
+    }
+}

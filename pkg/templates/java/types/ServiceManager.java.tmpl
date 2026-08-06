@@ -295,6 +295,12 @@ public class ServiceManager implements AutoCloseable {
 
     public static ServiceManager create(String[] args) throws Exception {
         Config cfg = GrpcConfigLoader.loadConfig(args);
+        // Defense-in-depth: loadConfig() already applies configDefaults, but the
+        // state authority (kernel) does not traverse the typed-config call sites
+        // that re-apply defaults later. Applying defaults here — immediately after
+        // load, before ANY field is read — guarantees every annotated default is
+        // in effect on every path, including the state authority's.
+        cfg = {{.TypesBase}}.sys.grpcconfig.Helpers.configDefaults(cfg).build();
         // Bind the plaintext health probe listener BEFORE any kernel-dependent init.
         // The health service starts NOT_SERVING; it is flipped to SERVING only after
         // bootstrap completes in run(). This ensures k8s startup probes can connect

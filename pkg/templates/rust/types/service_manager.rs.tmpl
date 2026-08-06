@@ -24,6 +24,7 @@ use tokio_rustls::TlsAcceptor;
 {{- end}}
 
 use crate::types::sys::grpcconfig::grpcconfig::Config;
+use crate::types::sys::grpcconfig::config_defaults;
 use grpcconfig::load_config;
 use base64::Engine as _;
 use service_im::IdentityManager;
@@ -424,7 +425,13 @@ impl ServiceManager {
             tracing::debug!("CryptoProvider already installed");
         }
 
-        let {{if .HasSysState}}mut {{end}}cfg = load_config()?;
+        let mut cfg = load_config()?;
+        // Defense-in-depth: load_config() already applies config_defaults, but the
+        // state authority (kernel) does not traverse the typed-config call sites
+        // that re-apply defaults later. Applying defaults here — immediately after
+        // load, before ANY field is read — guarantees every annotated default is
+        // in effect on every path, including the state authority's.
+        config_defaults(&mut cfg);
         let tasks: Arc<std::sync::Mutex<Vec<JoinHandle<()>>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
         let tls_degrade: Arc<std::sync::Mutex<TlsDegradeSeam>> = Arc::new(std::sync::Mutex::new(TlsDegradeSeam { fns: Vec::new(), seen: Vec::new() }));
 

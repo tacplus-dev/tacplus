@@ -72,3 +72,40 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
 
     Ok(cfg)
 }
+
+/// Behavioral self-test for config_defaults: constructs a Config with all
+/// fields at proto3 zero, runs the REAL generated config_defaults function,
+/// and asserts annotated defaults take effect. This specifically covers the
+/// state-authority (kernel) path: load_config + config_defaults with no
+/// typed-config fetch.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_defaults_empty_config_health_probe_port() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.health_probe_port, 0, "precondition: empty config");
+        config_defaults(&mut cfg);
+        assert_eq!(cfg.health_probe_port, 8444,
+            "empty config → health_probe_port should be 8444, got {}", cfg.health_probe_port);
+    }
+
+    #[test]
+    fn config_defaults_explicit_value_preserved() {
+        let mut cfg = Config::default();
+        cfg.health_probe_port = 9999;
+        config_defaults(&mut cfg);
+        assert_eq!(cfg.health_probe_port, 9999,
+            "explicit 9999 should be preserved, got {}", cfg.health_probe_port);
+    }
+
+    #[test]
+    fn config_defaults_idempotent() {
+        let mut cfg = Config::default();
+        config_defaults(&mut cfg);
+        let first = cfg.health_probe_port;
+        config_defaults(&mut cfg);
+        assert_eq!(cfg.health_probe_port, first, "config_defaults should be idempotent");
+    }
+}

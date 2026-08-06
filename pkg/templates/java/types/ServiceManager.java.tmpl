@@ -42,6 +42,9 @@ import {{.PackageBase}}.{{.SmPrefix}}.internal.grpc.clients.GrpcClients;
 {{- end}}
 import {{.ChassisBase}}.serviceconnection.ServiceConnection;
 import io.grpc.ManagedChannel;
+import io.grpc.Server;
+import io.grpc.health.v1.HealthCheckResponse;
+import io.grpc.protobuf.services.HealthStatusManager;
 {{- if .HasServiceHealthState}}
 import {{.ChassisBase}}.healthreporter.HealthReporter;
 import {{.ChassisBase}}.spiffe.Spiffe;
@@ -127,6 +130,8 @@ public class ServiceManager implements AutoCloseable {
 {{- if .HasDiskStores}}
     private final DiskStoreLogs diskStoreLogs;
 {{- end}}
+    private final HealthStatusManager healthManager;
+    private volatile Server earlyHealthProbeServer;
     private volatile boolean closing = false;
 {{- if .HasAutoTls}}
     /**
@@ -247,11 +252,15 @@ public class ServiceManager implements AutoCloseable {
             Config config,
             IdentityManager identity,
             ServiceConnection stateStoreConn,
-            ServiceConnection.ChannelFactory channelFactory) {
+            ServiceConnection.ChannelFactory channelFactory,
+            HealthStatusManager healthManager,
+            Server earlyHealthProbeServer) {
         this.config = config;
         this.identity = identity;
         this.stateStoreConn = stateStoreConn;
         this.channelFactory = channelFactory;
+        this.healthManager = healthManager;
+        this.earlyHealthProbeServer = earlyHealthProbeServer;
 {{- if .HasDiskStores}}
         this.diskStoreLogs = openDiskStoreLogs(config);
 {{- end}}
@@ -286,6 +295,18 @@ public class ServiceManager implements AutoCloseable {
 
     public static ServiceManager create(String[] args) throws Exception {
         Config cfg = GrpcConfigLoader.loadConfig(args);
+        // Bind the plaintext health probe listener BEFORE any kernel-dependent init.
+        // The health service starts NOT_SERVING; it is flipped to SERVING only after
+        // bootstrap completes in run(). This ensures k8s startup probes can connect
+        // to the health port even while the service is still waiting for kernel,
+        // TLS certs, or state-store connectivity — preventing the cold-start
+        // deadlock where kernel itself is gated on its own health probe.
+        HealthStatusManager earlyHealthManager = new HealthStatusManager();
+        earlyHealthManager.setStatus("", HealthCheckResponse.ServingStatus.NOT_SERVING);
+        Server earlyProbeServer = null;
+        if (cfg.getHealthProbePort() > 0) {
+            earlyProbeServer = GrpcServer.startHealthProbeServer(cfg.getHealthProbePort(), earlyHealthManager);
+        }
         for (int attempt = 1; ; attempt++) {
             try {
                 if (cfg.getEndpointsList().isEmpty()) {
@@ -306,7 +327,7 @@ public class ServiceManager implements AutoCloseable {
                     + " tacplus_sha={{.TacplusGitSha}}"
                     + " proto_version={{.ProtoSourceVersion}}"
                     + " proto_sha={{.ProtoSourceGitSha}}");
-                ServiceManager sm = new ServiceManager(cfg, identity, stateStoreConn, channelFactory);
+                ServiceManager sm = new ServiceManager(cfg, identity, stateStoreConn, channelFactory, earlyHealthManager, earlyProbeServer);
 {{- if .HasAutoTls}}
                 // Start the auto-TLS bidi stream BEFORE returning so cert accessors
                 // are populated by the time the caller proceeds. The handler slot
@@ -489,6 +510,17 @@ public class ServiceManager implements AutoCloseable {
 	{{- if .HasSmb}}
 	        smbAuthorityConn.close();
 	{{- end}}
+        if (earlyHealthProbeServer != null) {
+            earlyHealthProbeServer.shutdown();
+            try {
+                if (!earlyHealthProbeServer.awaitTermination(5, TimeUnit.SECONDS)) {
+                    earlyHealthProbeServer.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                earlyHealthProbeServer.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
 	        stateStoreConn.close();
         identity.close();
     }
@@ -700,7 +732,7 @@ public class ServiceManager implements AutoCloseable {
         GrpcServer srv = new GrpcServer(config, new GrpcServer.CertProvider() {
             @Override public X509.X509CertChain getChain() { return getTlsCertChain(); }
             @Override public PrivateKey getPrivateKey() { return getTlsPrivateKey(); }
-        }, multiImpl);
+        }, multiImpl, healthManager);
 
         // Start listening after readiness below.
 {{- else}}
@@ -720,7 +752,7 @@ public class ServiceManager implements AutoCloseable {
         GrpcServer healthSrv = new GrpcServer(config, new GrpcServer.CertProvider() {
             @Override public X509.X509CertChain getChain() { return getTlsCertChain(); }
             @Override public PrivateKey getPrivateKey() { return getTlsPrivateKey(); }
-        }, additionalOnlyImpl);
+        }, additionalOnlyImpl, healthManager);
         // Start listening after readiness below.
 {{- end}}
 
@@ -818,21 +850,6 @@ public class ServiceManager implements AutoCloseable {
                 }
             }
         });
-        // Start the plaintext health probe server alongside the TLS server.
-        // Same isolation and status-sharing guarantees as described in
-        // GrpcServer.listenHealthProbe — separate NettyServerBuilder, no TLS,
-        // no interceptors, only grpc.health.v1 via the shared HealthStatusManager.
-        if (config.getHealthProbePort() > 0) {
-            startManagedThread("health-probe", true, () -> {
-                try {
-                    srv.listenHealthProbe(config.getHealthProbePort());
-                } catch (Exception e) {
-                    if (!closing) {
-                        LOG.severe("health probe server error: " + e.getMessage());
-                    }
-                }
-            });
-        }
 {{- else}}
         startManagedThread("health-server", false, () -> {
             try {
@@ -843,18 +860,6 @@ public class ServiceManager implements AutoCloseable {
                 }
             }
         });
-        // Start the plaintext health probe server for the non-business-gRPC path.
-        if (config.getHealthProbePort() > 0) {
-            startManagedThread("health-probe", true, () -> {
-                try {
-                    healthSrv.listenHealthProbe(config.getHealthProbePort());
-                } catch (Exception e) {
-                    if (!closing) {
-                        LOG.severe("health probe server error: " + e.getMessage());
-                    }
-                }
-            });
-        }
 {{- end}}
 
 {{- if .HasAutoTls}}
@@ -1024,6 +1029,17 @@ public class ServiceManager implements AutoCloseable {
 	{{- if .HasSmb}}
 	        smbAuthorityConn.close();
 	{{- end}}
+        if (earlyHealthProbeServer != null) {
+            earlyHealthProbeServer.shutdown();
+            try {
+                if (!earlyHealthProbeServer.awaitTermination(5, TimeUnit.SECONDS)) {
+                    earlyHealthProbeServer.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                earlyHealthProbeServer.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
 	        stateStoreConn.close();
         identity.close();
         stopManagedThreads();

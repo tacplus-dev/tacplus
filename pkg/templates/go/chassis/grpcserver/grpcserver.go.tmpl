@@ -93,6 +93,15 @@ func buildTLSCertificate(chain *x509_pb.X509CertChain, key crypto.PrivateKey) (*
 	return &tlsCertObj, nil
 }
 
+// NewHealthServer creates a gRPC health.Server that starts NOT_SERVING.
+// Use this to create the health server early in the bootstrap sequence,
+// before any kernel-dependent init, and share it with grpcserver.New().
+func NewHealthServer() *health.Server {
+	hs := health.NewServer()
+	hs.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
+	return hs
+}
+
 // New creates a new GrpcServer from a Config.
 // tlsCert and tlsKey are required — Listen() will fail if either is nil.
 //
@@ -102,7 +111,7 @@ func buildTLSCertificate(chain *x509_pb.X509CertChain, key crypto.PrivateKey) (*
 // After creating the server, call Listen() to start it.
 func New(ctx context.Context, config *pb.Config, conn grpc.ClientConnInterface,
 	tlsCert *x509_pb.X509CertChain, tlsKey crypto.PrivateKey,
-	impl ServiceImplementation) (*GrpcServer, error) {
+	impl ServiceImplementation, hs *health.Server) (*GrpcServer, error) {
 	if impl == nil {
 		return nil, protoerrors.NewErrMissingInvalidData(nil, "ServiceImplementation is required")
 	}
@@ -122,8 +131,10 @@ func New(ctx context.Context, config *pb.Config, conn grpc.ClientConnInterface,
 	// first health publish). This makes k8s readiness reflect actual readiness —
 	// the same _ready gate the Python/TS service managers use — rather than
 	// reporting SERVING the instant the port binds.
-	healthServer := health.NewServer()
-	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
+	healthServer := hs
+	if healthServer == nil {
+		healthServer = NewHealthServer()
+	}
 
 	return &GrpcServer{
 		config:       config,
@@ -296,26 +307,13 @@ func gracefulStopWithTimeout(grpcServer *grpc.Server, timeout time.Duration) {
 	}
 }
 
-// ListenHealthProbe starts a separate PLAINTEXT gRPC server that serves ONLY
-// grpc.health.v1. It is a completely separate grpc.Server — no TLS credentials,
-// no keepalive enforcement, no interceptors, no business services — so a
-// plaintext port cannot reach any real service handler. The health status is
-// shared with the TLS server (same healthServer instance), so StatusSink
-// flips both endpoints together.
-//
-// k8s kubelet probes are plaintext-only and cannot speak TLS, so they target
-// this port instead of the main TLS port. The listener binds to 0.0.0.0 (not
-// localhost) because the kubelet dials the pod IP.
-//
-// Blocks until ctx is cancelled. A port of 0 disables the listener.
-func (ps *GrpcServer) ListenHealthProbe(ctx context.Context, port int32) error {
-	if port <= 0 {
+// ListenHealthProbe starts a plaintext health probe server. This standalone
+// function (not a method) can be called before the full GrpcServer exists,
+// enabling the probe to bind before any kernel-dependent bootstrap.
+func ListenHealthProbe(ctx context.Context, port int32, hs *health.Server) error {
+	if port <= 0 || hs == nil {
 		return nil
 	}
-	if ps.healthServer == nil {
-		return protoerrors.NewErrMissingInvalidData(nil, "health server not initialized")
-	}
-
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -323,11 +321,8 @@ func (ps *GrpcServer) ListenHealthProbe(ctx context.Context, port int32) error {
 	}
 	defer lis.Close()
 
-	// A completely separate grpc.Server: no TLS, no interceptors, no service
-	// handlers. Only grpc.health.v1 is registered. This is the isolation
-	// guarantee — the plaintext port exposes nothing beyond health.
 	probeServer := grpc.NewServer()
-	healthpb.RegisterHealthServer(probeServer, ps.healthServer)
+	healthpb.RegisterHealthServer(probeServer, hs)
 
 	zap.L().Info("plaintext health probe server starting",
 		zap.String("address", addr))
@@ -340,13 +335,17 @@ func (ps *GrpcServer) ListenHealthProbe(ctx context.Context, port int32) error {
 	return probeServer.Serve(lis)
 }
 
+func (ps *GrpcServer) ListenHealthProbe(ctx context.Context, port int32) error {
+	return ListenHealthProbe(ctx, port, ps.healthServer)
+}
+
 // NewHealthOnly creates a GrpcServer that serves only the grpc.health.v1
 // endpoint. Used by services that have no business RPCs but still need a
 // health-probeable listener. Like any GrpcServer it starts NOT_SERVING; the
 // caller flips it via SetReady once bootstrap completes.
 func NewHealthOnly(ctx context.Context, config *pb.Config,
-	tlsCert *x509_pb.X509CertChain, tlsKey crypto.PrivateKey) (*GrpcServer, error) {
-	return New(ctx, config, nil, tlsCert, tlsKey, &healthOnlyImpl{})
+	tlsCert *x509_pb.X509CertChain, tlsKey crypto.PrivateKey, hs *health.Server) (*GrpcServer, error) {
+	return New(ctx, config, nil, tlsCert, tlsKey, &healthOnlyImpl{}, hs)
 }
 
 // ListenHealthOnly starts a TLS gRPC server that serves only the
@@ -354,7 +353,7 @@ func NewHealthOnly(ctx context.Context, config *pb.Config,
 // but still need a health-probeable listener.
 func ListenHealthOnly(ctx context.Context, config *pb.Config,
 	tlsCert *x509_pb.X509CertChain, tlsKey crypto.PrivateKey) error {
-	srv, err := NewHealthOnly(ctx, config, tlsCert, tlsKey)
+	srv, err := NewHealthOnly(ctx, config, tlsCert, tlsKey, nil)
 	if err != nil {
 		return err
 	}

@@ -309,6 +309,10 @@ pub struct ServiceManager {
 	    tls_config: tonic::transport::ClientTlsConfig,
 	    tasks: Arc<std::sync::Mutex<Vec<JoinHandle<()>>>>,
     tls_degrade: Arc<std::sync::Mutex<TlsDegradeSeam>>,
+    /// gRPC health reporter handle, created in new() before any kernel-dependent
+    /// init so the plaintext probe can bind immediately. Shared with the TLS
+    /// server in run() via HealthService::from_health_reporter().
+    grpc_health: tonic_health::server::HealthReporter,
 {{- if .HasDiskStores}}
 	    disk_store_logs: Option<Arc<DiskStoreLogs>>,
 {{- end}}
@@ -423,6 +427,40 @@ impl ServiceManager {
         let {{if .HasSysState}}mut {{end}}cfg = load_config()?;
         let tasks: Arc<std::sync::Mutex<Vec<JoinHandle<()>>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
         let tls_degrade: Arc<std::sync::Mutex<TlsDegradeSeam>> = Arc::new(std::sync::Mutex::new(TlsDegradeSeam { fns: Vec::new(), seen: Vec::new() }));
+
+        // Create the gRPC health service and bind the plaintext probe listener
+        // BEFORE any kernel-dependent init. The health service starts NOT_SERVING;
+        // it is flipped to SERVING only after bootstrap completes in run(). This
+        // ensures k8s startup probes can connect to the health port even while the
+        // service is still waiting for kernel, TLS certs, or state-store
+        // connectivity — preventing the cold-start deadlock where kernel itself
+        // is gated on its own health probe.
+        let grpc_health = tonic_health::server::HealthReporter::new();
+        grpc_health.set_service_status("", tonic_health::ServingStatus::NotServing).await;
+        let health_probe_port = cfg.health_probe_port;
+        if health_probe_port > 0 {
+            let probe_svc = tonic_health::pb::health_server::HealthServer::new(
+                tonic_health::server::HealthService::from_health_reporter(grpc_health.clone()),
+            );
+            let probe_handle = tokio::spawn(async move {
+                let addr: std::net::SocketAddr = match format!("0.0.0.0:{}", health_probe_port).parse() {
+                    Ok(a) => a,
+                    Err(e) => {
+                        tracing::error!(error = %e, "invalid health probe address");
+                        return;
+                    }
+                };
+                info!(addr = %addr, "plaintext health probe server listening");
+                if let Err(e) = tonic::transport::Server::builder()
+                    .add_service(probe_svc)
+                    .serve(addr)
+                    .await
+                {
+                    tracing::error!(error = %e, "health probe server error");
+                }
+            });
+            tasks.lock().unwrap().push(probe_handle);
+        }
 
         // Decode the trusted-CAs PEM bundle once; reused for both
         // ClientTlsConfig (used by resolve_eventbus + create_channel)
@@ -728,6 +766,7 @@ impl ServiceManager {
             tls_config,
             tasks,
             tls_degrade,
+            grpc_health,
 {{- if .HasTlsGrpc}}
             authorizer,
 {{- end}}
@@ -1303,17 +1342,14 @@ impl ServiceManager {
 {{- end}}
 {{- end}}
 
-        // gRPC health check service (unauthenticated, standard grpc.health.v1).
-        // Starts NOT_SERVING and is flipped to SERVING only after bootstrap
-        // completes (below, just before serving), so k8s readiness reflects
-        // actual readiness — parity with the Go/Java/Python/TS service managers.
-        let (grpc_health, grpc_health_svc) = tonic_health::server::health_reporter();
-        grpc_health.set_service_status("", tonic_health::ServingStatus::NotServing).await;
-        // Clone the health service for the plaintext probe server BEFORE the
-        // original is moved into the TLS router. Both clones share the same
-        // internal Arc state, so status changes (via grpc_health) are visible
-        // on both the TLS and plaintext listeners simultaneously.
-        let health_probe_svc = grpc_health_svc.clone();
+        // Use the health reporter created in new() — already bound to the
+        // plaintext probe listener. Create a new HealthService from the same
+        // reporter for the TLS router; they share internal Arc state so status
+        // changes are visible on both listeners simultaneously.
+        let grpc_health = self.grpc_health.clone();
+        let grpc_health_svc = tonic_health::pb::health_server::HealthServer::new(
+            tonic_health::server::HealthService::from_health_reporter(self.grpc_health.clone()),
+        );
 
         // Enforce token authentication (signature + audience) on all server
         // routes via a tower layer. Generated services already have per-method
@@ -1698,34 +1734,6 @@ impl ServiceManager {
         }
 {{- end}}
 
-        // Start a separate PLAINTEXT gRPC server that serves ONLY grpc.health.v1.
-        // It is a completely separate tonic::transport::Server — no TLS, no auth
-        // layer, no business services — so the plaintext port exposes nothing
-        // beyond health. The health service clone shares internal Arc state with
-        // the TLS server's copy, so StatusSink status changes are visible on both
-        // listeners simultaneously. Port 0 disables the listener.
-        let health_probe_port = self.cfg.health_probe_port;
-        if health_probe_port > 0 {
-            let probe_svc = health_probe_svc;
-            self.spawn_owned(async move {
-                let addr: std::net::SocketAddr = match format!("0.0.0.0:{}", health_probe_port).parse() {
-                    Ok(a) => a,
-                    Err(e) => {
-                        tracing::error!(error = %e, "invalid health probe address");
-                        return;
-                    }
-                };
-                info!(addr = %addr, "plaintext health probe server listening");
-                if let Err(e) = tonic::transport::Server::builder()
-                    .add_service(probe_svc)
-                    .serve(addr)
-                    .await
-                {
-                    tracing::error!(error = %e, "health probe server error");
-                }
-            });
-        }
-
         // Serve until shutdown signal (SIGINT or SIGTERM).
         router
             .serve_with_incoming_shutdown(incoming, async {
@@ -1747,11 +1755,13 @@ impl ServiceManager {
         // Bootstrap (first health publish{{if .HasSmb}} + SMB member cert{{end}}) already
         // completed above, so this health-only listener comes up SERVING — readiness
         // reflects actual readiness because the endpoint isn't reachable until serve().
-        let (grpc_health, grpc_health_svc) = tonic_health::server::health_reporter();
+        // Use the health reporter created in new() — already bound to the probe listener.
+        let grpc_health = self.grpc_health.clone();
+        let grpc_health_svc = tonic_health::pb::health_server::HealthServer::new(
+            tonic_health::server::HealthService::from_health_reporter(self.grpc_health.clone()),
+        );
+        // Health-only path: bootstrap already completed, flip to SERVING immediately.
         grpc_health.set_service_status("", tonic_health::ServingStatus::Serving).await;
-        // Clone the health service for the plaintext probe server before the
-        // original is moved into the TLS router.
-        let health_probe_svc = grpc_health_svc.clone();
 
 {{- if .HasServiceHealthState}}
         // Bridge ongoing health evaluation to the gRPC health endpoint (health-only server).
@@ -1770,29 +1780,6 @@ impl ServiceManager {
             }));
         }
 {{- end}}
-
-        // Start the plaintext health probe server (health-only path).
-        let health_probe_port = self.cfg.health_probe_port;
-        if health_probe_port > 0 {
-            let probe_svc = health_probe_svc;
-            self.spawn_owned(async move {
-                let addr: std::net::SocketAddr = match format!("0.0.0.0:{}", health_probe_port).parse() {
-                    Ok(a) => a,
-                    Err(e) => {
-                        tracing::error!(error = %e, "invalid health probe address");
-                        return;
-                    }
-                };
-                info!(addr = %addr, "plaintext health probe server listening");
-                if let Err(e) = tonic::transport::Server::builder()
-                    .add_service(probe_svc)
-                    .serve(addr)
-                    .await
-                {
-                    tracing::error!(error = %e, "health probe server error");
-                }
-            });
-        }
 
         let listen_addr = match self.cfg.listen_address.as_ref() {
             Some(h) => {

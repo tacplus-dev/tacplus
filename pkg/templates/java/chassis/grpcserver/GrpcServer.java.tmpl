@@ -75,7 +75,7 @@ public class GrpcServer {
      * SERVING once bootstrap completes, so k8s readiness reflects actual
      * readiness rather than mere port-open.
      */
-    private final HealthStatusManager healthManager = new HealthStatusManager();
+    private final HealthStatusManager healthManager;
 
     /**
      * Creates a GrpcServer that fetches its TLS material from {@code certProvider}
@@ -87,7 +87,7 @@ public class GrpcServer {
      * @param impl the service implementation
      */
     public GrpcServer(Grpcconfig.Config config, CertProvider certProvider,
-                      ServiceImplementation impl) throws ProtoException {
+                      ServiceImplementation impl, HealthStatusManager healthManager) throws ProtoException {
         if (config == null) {
             throw new IllegalArgumentException("config cannot be null");
         }
@@ -98,8 +98,10 @@ public class GrpcServer {
             @Override public PrivateKey getPrivateKey() { return null; }
         };
         this.impl = impl;
-        // HealthStatusManager defaults the "" service to SERVING; force NOT_SERVING
+        // Use the externally-provided HealthStatusManager (shared with the early
+        // health probe server) or create a new one. NOT_SERVING is always enforced
         // until setReady(true) is called after bootstrap completes.
+        this.healthManager = healthManager != null ? healthManager : new HealthStatusManager();
         this.healthManager.setStatus("", HealthCheckResponse.ServingStatus.NOT_SERVING);
         applyConfig(config);
     }
@@ -194,6 +196,27 @@ public class GrpcServer {
                 .build();
         logger.info("plaintext health probe server starting on port {}", port);
         healthProbeServer.start();
+    }
+
+    /**
+     * Starts a plaintext health probe server that serves ONLY grpc.health.v1.
+     * This static method can be called before the full GrpcServer exists,
+     * enabling the probe to bind before any kernel-dependent bootstrap.
+     *
+     * @param port the port to listen on
+     * @param healthManager the shared HealthStatusManager
+     * @return the started Server, or null if port <= 0
+     */
+    public static Server startHealthProbeServer(int port, HealthStatusManager healthManager) throws Exception {
+        if (port <= 0 || healthManager == null) {
+            return null;
+        }
+        Server probeServer = NettyServerBuilder.forAddress(new InetSocketAddress("0.0.0.0", port))
+                .addService(healthManager.getHealthService())
+                .build();
+        logger.info("plaintext health probe server starting on port {}", port);
+        probeServer.start();
+        return probeServer;
     }
 
     private void listenTLS(int port) throws Exception {

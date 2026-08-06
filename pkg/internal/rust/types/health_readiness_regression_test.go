@@ -71,11 +71,10 @@ func TestRustHealthProbeServerIsolation(t *testing.T) {
 	}
 	sm := string(src)
 
-	// The health service must be cloned before being moved into the TLS router.
+	// The health reporter must be stored in the struct and services created from it.
 	for _, want := range []string{
-		"let health_probe_svc = grpc_health_svc.clone();",
-		"health_probe_port",
-		`tonic::transport::Server::builder()`,
+		"grpc_health: tonic_health::server::HealthReporter,",
+		"HealthService::from_health_reporter(self.grpc_health.clone())",
 	} {
 		if !strings.Contains(sm, want) {
 			t.Fatalf("Rust service_manager must set up health probe server; missing %q", want)
@@ -120,4 +119,38 @@ func TestRustServiceManagerHealthStartsNotServingUntilBootstrap(t *testing.T) {
 	if !(idxNotServing < idxServing && idxServing < idxServe) {
 		t.Fatalf("Rust health must go NOT_SERVING -> SERVING -> serve (notServing=%d serving=%d serve=%d)", idxNotServing, idxServing, idxServe)
 	}
+}
+
+// The health probe listener must bind BEFORE any kernel-dependent bootstrap step.
+// The previous implementation created the health service and bound the probe in
+// run(), which deadlocked on a cold start.
+func TestRustHealthProbeBindsBeforeKernelInit(t *testing.T) {
+	src, err := templates.FS.ReadFile("rust/types/service_manager.rs.tmpl")
+	if err != nil {
+		t.Fatalf("read rust service_manager template: %v", err)
+	}
+	sm := string(src)
+
+	// The health probe binding must appear in new(), BEFORE identity init.
+	probeIdx := strings.Index(sm, `"plaintext health probe server listening"`)
+	identityIdx := strings.Index(sm, "IdentityManager::new(channel, &cfg)")
+
+	// Find which is in new() vs run()
+	newIdx := strings.Index(sm, "pub async fn new()")
+	runIdx := strings.Index(sm, "pub async fn run(")
+
+	if probeIdx < 0 {
+		t.Fatalf("health probe binding not found")
+	}
+	if identityIdx < 0 {
+		t.Fatalf("identity init not found")
+	}
+	if probeIdx >= identityIdx {
+		t.Fatalf("health probe must bind BEFORE identity init (probe=%d identity=%d) — cold-start deadlock", probeIdx, identityIdx)
+	}
+	// Probe must be in new(), not run()
+	if probeIdx > runIdx {
+		t.Fatalf("health probe must bind in new(), not in run() (probe=%d run=%d)", probeIdx, runIdx)
+	}
+	_ = newIdx
 }

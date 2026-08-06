@@ -16,7 +16,7 @@ func TestJavaGrpcServerHealthStartsNotServingAndExposesSetReady(t *testing.T) {
 	rendered := readJavaTemplate(t, "java/chassis/grpcserver/GrpcServer.java.tmpl")
 	for _, want := range []string{
 		"import io.grpc.health.v1.HealthCheckResponse;",
-		"private final HealthStatusManager healthManager = new HealthStatusManager();",
+		"private final HealthStatusManager healthManager;",
 		`this.healthManager.setStatus("", HealthCheckResponse.ServingStatus.NOT_SERVING);`,
 		"public void setReady(boolean ready)",
 		"HealthCheckResponse.ServingStatus.SERVING",
@@ -78,14 +78,14 @@ func TestJavaHealthProbeServerIsolation(t *testing.T) {
 		t.Fatalf("listenHealthProbe must NOT register business services")
 	}
 
-	// The service_manager must wire the probe server.
+	// The service_manager must start the probe server in create(), before kernel init.
 	sm := readJavaTemplate(t, "java/types/ServiceManager.java.tmpl")
 	for _, want := range []string{
-		"listenHealthProbe(",
-		"config.getHealthProbePort()",
+		"GrpcServer.startHealthProbeServer(",
+		"earlyHealthManager",
 	} {
 		if !strings.Contains(sm, want) {
-			t.Fatalf("Java ServiceManager must start health probe server; missing %q", want)
+			t.Fatalf("Java ServiceManager must start health probe server early; missing %q", want)
 		}
 	}
 }
@@ -162,6 +162,32 @@ func TestJavaHealthReporterStatusSinkBridgesHealthToGrpc(t *testing.T) {
 	idxSink := strings.Index(sm, "healthReporter.setStatusSink(")
 	if idxBootstrap < 0 || idxSink < 0 || idxSink < idxBootstrap {
 		t.Fatalf("StatusSink must be wired after bootstrap setReady(true) (bootstrap=%d sink=%d)", idxBootstrap, idxSink)
+	}
+}
+
+// The health probe listener must bind BEFORE any kernel-dependent bootstrap step.
+// The previous implementation bound the probe in run() (after identity/state-client
+// init in create()), which deadlocked on a cold start.
+func TestJavaHealthProbeBindsBeforeKernelInit(t *testing.T) {
+	sm := readJavaTemplate(t, "java/types/ServiceManager.java.tmpl")
+
+	// The health probe binding must appear BEFORE the identity init retry loop.
+	probeIdx := strings.Index(sm, "GrpcServer.startHealthProbeServer(")
+	identityIdx := strings.Index(sm, "IdentityManager.create(cfg)")
+	if probeIdx < 0 {
+		t.Fatalf("health probe binding not found in create()")
+	}
+	if identityIdx < 0 {
+		t.Fatalf("identity init not found in create()")
+	}
+	if probeIdx >= identityIdx {
+		t.Fatalf("health probe must bind BEFORE identity init (probe=%d identity=%d) — cold-start deadlock", probeIdx, identityIdx)
+	}
+
+	// The health probe must NOT appear in run() — it must be in create().
+	runIdx := strings.Index(sm, "public void run(Handler handler)")
+	if runIdx >= 0 && probeIdx > runIdx {
+		t.Fatalf("health probe must bind in create(), not in run()")
 	}
 }
 

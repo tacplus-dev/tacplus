@@ -119,6 +119,9 @@ tasks    *serviceTaskScope
 tlsDegradeMu   sync.Mutex
 tlsDegradeFns  []func(reason string)
 tlsDegradeSeen []string
+// healthServer is the shared gRPC health server created before any
+// kernel-dependent init so the plaintext health probe can bind immediately.
+healthServer *health.Server
 identity *service_im.IdentityManager
 	sc       *servicemanager.ServiceManager
 	{{if .HasDiskStores}}
@@ -331,6 +334,21 @@ return nil, fmt.Errorf("config: %w", err)
 
 ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 
+// Bind the plaintext health probe listener BEFORE any kernel-dependent init.
+// The health service starts NOT_SERVING; it is flipped to SERVING only after
+// bootstrap completes in Run(). This ensures k8s startup probes can connect
+// to the health port even while the service is still waiting for kernel,
+// TLS certs, or state-store connectivity — preventing the cold-start
+// deadlock where kernel itself is gated on its own health probe.
+healthServer := grpcserver.NewHealthServer()
+if port := cfg.GetHealthProbePort(); port > 0 {
+	go func() {
+		if err := grpcserver.ListenHealthProbe(ctx, port, healthServer); err != nil && ctx.Err() == nil {
+			zap.L().Error("health probe server error", zap.Error(err))
+		}
+	}()
+}
+
 const maxInitRetries = 30
 initStart := time.Now()
 var identity *service_im.IdentityManager
@@ -515,6 +533,7 @@ cfg:      cfg,
 ctx:      ctx,
 stop:     stop,
 	tasks:    newServiceTaskScope(ctx),
+	healthServer: healthServer,
 	identity: identity,
 	sc:       sc,
 	{{if .HasDiskStores}}
@@ -1042,7 +1061,7 @@ mw.additionalRegistrar = asr
 }
 srv, err := grpcserver.New(sm.ctx, sm.cfg, sm.sc.Conn(),
 sm.sc.TLSCertChain(), sm.sc.TLSPrivateKey(),
-mw)
+mw, sm.healthServer)
 if err != nil {
 return fmt.Errorf("grpcserver: %w", err)
 }
@@ -1124,18 +1143,6 @@ errCh := make(chan error, 1)
 sm.tasks.Go(func(taskCtx context.Context) {
 errCh <- srv.Listen(taskCtx)
 })
-// Start the plaintext health probe server alongside the TLS server. It shares
-// the same healthServer so both endpoints reflect the same NOT_SERVING →
-// SERVING → StatusSink-driven status. The probe server is a completely
-// separate grpc.Server with no TLS and no business services — isolation is
-// the security argument. Port 0 disables it.
-if port := sm.cfg.GetHealthProbePort(); port > 0 {
-sm.tasks.Go(func(taskCtx context.Context) {
-if err := srv.ListenHealthProbe(taskCtx, port); err != nil && taskCtx.Err() == nil {
-zap.L().Error("health probe server error", zap.Error(err))
-}
-})
-}
 {{else}}
 // No tacplus-managed business gRPC services.
 // If handler implements AdditionalServiceRegistrar, start a full gRPC server.
@@ -1143,7 +1150,7 @@ zap.L().Error("health probe server error", zap.Error(err))
 errCh := make(chan error, 1)
 if asr, ok := h.(AdditionalServiceRegistrar); ok {
 additionalMw := &multiWrapper{additionalRegistrar: asr, auth: sm.auth}
-additionalSrv, err := grpcserver.New(sm.ctx, sm.cfg, nil, sm.sc.TLSCertChain(), sm.sc.TLSPrivateKey(), additionalMw)
+additionalSrv, err := grpcserver.New(sm.ctx, sm.cfg, nil, sm.sc.TLSCertChain(), sm.sc.TLSPrivateKey(), additionalMw, sm.healthServer)
 if err != nil {
 return fmt.Errorf("grpcserver (additional): %w", err)
 }
@@ -1151,22 +1158,13 @@ additionalSrv.SetCertProvider(sm.sc.TLSCertChain, sm.sc.TLSPrivateKey)
 healthCtl = additionalSrv
 sm.tasks.Go(func(taskCtx context.Context) { errCh <- additionalSrv.Listen(taskCtx) })
 } else {
-healthOnlySrv, err := grpcserver.NewHealthOnly(sm.ctx, sm.cfg, sm.sc.TLSCertChain(), sm.sc.TLSPrivateKey())
+healthOnlySrv, err := grpcserver.NewHealthOnly(sm.ctx, sm.cfg, sm.sc.TLSCertChain(), sm.sc.TLSPrivateKey(), sm.healthServer)
 if err != nil {
 return fmt.Errorf("grpcserver (health-only): %w", err)
 }
 healthOnlySrv.SetCertProvider(sm.sc.TLSCertChain, sm.sc.TLSPrivateKey)
 healthCtl = healthOnlySrv
 sm.tasks.Go(func(taskCtx context.Context) { errCh <- healthOnlySrv.Listen(taskCtx) })
-}
-// Start the plaintext health probe server for the non-business-gRPC path.
-// Same isolation and status-sharing guarantees as the HasGrpc branch above.
-if port := sm.cfg.GetHealthProbePort(); port > 0 && healthCtl != nil {
-sm.tasks.Go(func(taskCtx context.Context) {
-if err := healthCtl.ListenHealthProbe(taskCtx, port); err != nil && taskCtx.Err() == nil {
-zap.L().Error("health probe server error", zap.Error(err))
-}
-})
 }
 {{end}}
 

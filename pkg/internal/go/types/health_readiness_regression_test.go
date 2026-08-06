@@ -37,6 +37,57 @@ func TestGoGrpcServerHealthStartsNotServingAndExposesSetReady(t *testing.T) {
 	}
 }
 
+// The plaintext health probe server must be a completely separate grpc.Server
+// that serves ONLY grpc.health.v1. It shares the same healthServer instance
+// (so StatusSink flips both endpoints) but has no TLS, no interceptors, and
+// no business services. This is the isolation guarantee.
+func TestGoHealthProbeServerIsolation(t *testing.T) {
+	src, err := templates.FS.ReadFile("go/chassis/grpcserver/grpcserver.go.tmpl")
+	if err != nil {
+		t.Fatalf("read grpcserver template: %v", err)
+	}
+	rendered := string(src)
+
+	// The ListenHealthProbe method must exist and create a separate grpc.Server.
+	for _, want := range []string{
+		"func (ps *GrpcServer) ListenHealthProbe(ctx context.Context, port int32) error",
+		"probeServer := grpc.NewServer()",
+		"healthpb.RegisterHealthServer(probeServer, ps.healthServer)",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("Go grpcserver must have ListenHealthProbe with isolated server; missing %q", want)
+		}
+	}
+
+	// The probe server must NOT have TLS credentials, interceptors, or service
+	// registration. Verify it creates a bare grpc.NewServer() — no ServerOption
+	// arguments beyond the empty call.
+	probeIdx := strings.Index(rendered, "probeServer := grpc.NewServer()")
+	if probeIdx < 0 {
+		t.Fatalf("probe server must use bare grpc.NewServer()")
+	}
+
+	// Must NOT register any ServiceImplementation on the probe server.
+	if strings.Contains(rendered, "ps.impl.RegisterServices(probeServer)") {
+		t.Fatalf("probe server must NOT register business services")
+	}
+
+	// The service_manager must wire the probe server alongside the TLS server.
+	smSrc, err := templates.FS.ReadFile("go/types/service_manager.go.tmpl")
+	if err != nil {
+		t.Fatalf("read service_manager template: %v", err)
+	}
+	sm := string(smSrc)
+	for _, want := range []string{
+		"ListenHealthProbe(taskCtx, port)",
+		"sm.cfg.GetHealthProbePort()",
+	} {
+		if !strings.Contains(sm, want) {
+			t.Fatalf("Go service_manager must start health probe server; missing %q", want)
+		}
+	}
+}
+
 // The service_manager must flip readiness to SERVING only after the serving
 // goroutine has started and bootstrap (incl. first health publish) is done.
 func TestGoServiceManagerFlipsHealthReadyAfterBootstrap(t *testing.T) {

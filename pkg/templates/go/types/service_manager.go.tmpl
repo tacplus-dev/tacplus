@@ -1124,6 +1124,18 @@ errCh := make(chan error, 1)
 sm.tasks.Go(func(taskCtx context.Context) {
 errCh <- srv.Listen(taskCtx)
 })
+// Start the plaintext health probe server alongside the TLS server. It shares
+// the same healthServer so both endpoints reflect the same NOT_SERVING →
+// SERVING → StatusSink-driven status. The probe server is a completely
+// separate grpc.Server with no TLS and no business services — isolation is
+// the security argument. Port 0 disables it.
+if port := sm.cfg.GetHealthProbePort(); port > 0 {
+sm.tasks.Go(func(taskCtx context.Context) {
+if err := srv.ListenHealthProbe(taskCtx, port); err != nil && taskCtx.Err() == nil {
+zap.L().Error("health probe server error", zap.Error(err))
+}
+})
+}
 {{else}}
 // No tacplus-managed business gRPC services.
 // If handler implements AdditionalServiceRegistrar, start a full gRPC server.
@@ -1146,6 +1158,15 @@ return fmt.Errorf("grpcserver (health-only): %w", err)
 healthOnlySrv.SetCertProvider(sm.sc.TLSCertChain, sm.sc.TLSPrivateKey)
 healthCtl = healthOnlySrv
 sm.tasks.Go(func(taskCtx context.Context) { errCh <- healthOnlySrv.Listen(taskCtx) })
+}
+// Start the plaintext health probe server for the non-business-gRPC path.
+// Same isolation and status-sharing guarantees as the HasGrpc branch above.
+if port := sm.cfg.GetHealthProbePort(); port > 0 && healthCtl != nil {
+sm.tasks.Go(func(taskCtx context.Context) {
+if err := healthCtl.ListenHealthProbe(taskCtx, port); err != nil && taskCtx.Err() == nil {
+zap.L().Error("health probe server error", zap.Error(err))
+}
+})
 }
 {{end}}
 

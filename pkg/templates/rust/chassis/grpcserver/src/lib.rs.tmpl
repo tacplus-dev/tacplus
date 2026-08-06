@@ -121,6 +121,12 @@ pub struct GrpcServerConfig {
     /// Graceful shutdown timeout in seconds
     #[serde(default = "default_shutdown_timeout")]
     pub shutdown_timeout_secs: u64,
+
+    /// Port for the plaintext health probe server (grpc.health.v1 only).
+    /// k8s kubelet probes are plaintext-only and cannot speak TLS.
+    /// Set to 0 to disable. Default: 8444.
+    #[serde(default = "default_health_probe_port")]
+    pub health_probe_port: i32,
 }
 
 /// TLS/SSL configuration
@@ -221,6 +227,10 @@ fn default_shutdown_timeout() -> u64 {
     30
 }
 
+fn default_health_probe_port() -> i32 {
+    8444
+}
+
 fn default_log_level() -> String {
     "info".to_string()
 }
@@ -255,6 +265,7 @@ impl Default for GrpcServerConfig {
             auth_rules: Vec::new(),
             static_file_paths: HashMap::new(),
             shutdown_timeout_secs: default_shutdown_timeout(),
+            health_probe_port: default_health_probe_port(),
         }
     }
 }

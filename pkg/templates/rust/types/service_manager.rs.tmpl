@@ -1309,6 +1309,11 @@ impl ServiceManager {
         // actual readiness — parity with the Go/Java/Python/TS service managers.
         let (grpc_health, grpc_health_svc) = tonic_health::server::health_reporter();
         grpc_health.set_service_status("", tonic_health::ServingStatus::NotServing).await;
+        // Clone the health service for the plaintext probe server BEFORE the
+        // original is moved into the TLS router. Both clones share the same
+        // internal Arc state, so status changes (via grpc_health) are visible
+        // on both the TLS and plaintext listeners simultaneously.
+        let health_probe_svc = grpc_health_svc.clone();
 
         // Enforce token authentication (signature + audience) on all server
         // routes via a tower layer. Generated services already have per-method
@@ -1693,6 +1698,34 @@ impl ServiceManager {
         }
 {{- end}}
 
+        // Start a separate PLAINTEXT gRPC server that serves ONLY grpc.health.v1.
+        // It is a completely separate tonic::transport::Server — no TLS, no auth
+        // layer, no business services — so the plaintext port exposes nothing
+        // beyond health. The health service clone shares internal Arc state with
+        // the TLS server's copy, so StatusSink status changes are visible on both
+        // listeners simultaneously. Port 0 disables the listener.
+        let health_probe_port = self.cfg.health_probe_port;
+        if health_probe_port > 0 {
+            let probe_svc = health_probe_svc;
+            self.spawn_owned(async move {
+                let addr: std::net::SocketAddr = match format!("0.0.0.0:{}", health_probe_port).parse() {
+                    Ok(a) => a,
+                    Err(e) => {
+                        tracing::error!(error = %e, "invalid health probe address");
+                        return;
+                    }
+                };
+                info!(addr = %addr, "plaintext health probe server listening");
+                if let Err(e) = tonic::transport::Server::builder()
+                    .add_service(probe_svc)
+                    .serve(addr)
+                    .await
+                {
+                    tracing::error!(error = %e, "health probe server error");
+                }
+            });
+        }
+
         // Serve until shutdown signal (SIGINT or SIGTERM).
         router
             .serve_with_incoming_shutdown(incoming, async {
@@ -1716,6 +1749,9 @@ impl ServiceManager {
         // reflects actual readiness because the endpoint isn't reachable until serve().
         let (grpc_health, grpc_health_svc) = tonic_health::server::health_reporter();
         grpc_health.set_service_status("", tonic_health::ServingStatus::Serving).await;
+        // Clone the health service for the plaintext probe server before the
+        // original is moved into the TLS router.
+        let health_probe_svc = grpc_health_svc.clone();
 
 {{- if .HasServiceHealthState}}
         // Bridge ongoing health evaluation to the gRPC health endpoint (health-only server).
@@ -1734,6 +1770,29 @@ impl ServiceManager {
             }));
         }
 {{- end}}
+
+        // Start the plaintext health probe server (health-only path).
+        let health_probe_port = self.cfg.health_probe_port;
+        if health_probe_port > 0 {
+            let probe_svc = health_probe_svc;
+            self.spawn_owned(async move {
+                let addr: std::net::SocketAddr = match format!("0.0.0.0:{}", health_probe_port).parse() {
+                    Ok(a) => a,
+                    Err(e) => {
+                        tracing::error!(error = %e, "invalid health probe address");
+                        return;
+                    }
+                };
+                info!(addr = %addr, "plaintext health probe server listening");
+                if let Err(e) = tonic::transport::Server::builder()
+                    .add_service(probe_svc)
+                    .serve(addr)
+                    .await
+                {
+                    tracing::error!(error = %e, "health probe server error");
+                }
+            });
+        }
 
         let listen_addr = match self.cfg.listen_address.as_ref() {
             Some(h) => {

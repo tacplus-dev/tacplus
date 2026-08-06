@@ -818,6 +818,21 @@ public class ServiceManager implements AutoCloseable {
                 }
             }
         });
+        // Start the plaintext health probe server alongside the TLS server.
+        // Same isolation and status-sharing guarantees as described in
+        // GrpcServer.listenHealthProbe — separate NettyServerBuilder, no TLS,
+        // no interceptors, only grpc.health.v1 via the shared HealthStatusManager.
+        if (config.getHealthProbePort() > 0) {
+            startManagedThread("health-probe", true, () -> {
+                try {
+                    srv.listenHealthProbe(config.getHealthProbePort());
+                } catch (Exception e) {
+                    if (!closing) {
+                        LOG.severe("health probe server error: " + e.getMessage());
+                    }
+                }
+            });
+        }
 {{- else}}
         startManagedThread("health-server", false, () -> {
             try {
@@ -828,6 +843,18 @@ public class ServiceManager implements AutoCloseable {
                 }
             }
         });
+        // Start the plaintext health probe server for the non-business-gRPC path.
+        if (config.getHealthProbePort() > 0) {
+            startManagedThread("health-probe", true, () -> {
+                try {
+                    healthSrv.listenHealthProbe(config.getHealthProbePort());
+                } catch (Exception e) {
+                    if (!closing) {
+                        LOG.severe("health probe server error: " + e.getMessage());
+                    }
+                }
+            });
+        }
 {{- end}}
 
 {{- if .HasAutoTls}}

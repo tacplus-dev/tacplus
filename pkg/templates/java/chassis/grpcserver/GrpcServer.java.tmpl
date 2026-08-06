@@ -64,6 +64,7 @@ public class GrpcServer {
     private final CertProvider certProvider;
     private Authorizer authorizer;
     private Server grpcServer;
+    private Server healthProbeServer;
     private Javalin httpServer;
     private final CountDownLatch shutdownLatch = new CountDownLatch(1);
 
@@ -165,6 +166,34 @@ public class GrpcServer {
         } finally {
             cleanup();
         }
+    }
+
+    /**
+     * Starts a separate PLAINTEXT gRPC server that serves ONLY grpc.health.v1.
+     * It is a completely separate NettyServerBuilder — no TLS, no interceptors,
+     * no business services — so the plaintext port cannot reach any real service
+     * handler. The health status is shared with the TLS server (same
+     * {@link HealthStatusManager} instance), so StatusSink flips both endpoints
+     * together.
+     *
+     * <p>k8s kubelet probes are plaintext-only and cannot speak TLS, so they target
+     * this port instead of the main TLS port. The listener binds to 0.0.0.0 (not
+     * localhost) because the kubelet dials the pod IP.
+     *
+     * @param port the port to listen on; 0 or negative disables the listener
+     */
+    public void listenHealthProbe(int port) throws Exception {
+        if (port <= 0) {
+            return;
+        }
+        // A completely separate server: no TLS, no interceptors, no service
+        // handlers. Only grpc.health.v1 is registered via the shared
+        // healthManager. This is the isolation guarantee.
+        healthProbeServer = NettyServerBuilder.forAddress(new InetSocketAddress("0.0.0.0", port))
+                .addService(healthManager.getHealthService())
+                .build();
+        logger.info("plaintext health probe server starting on port {}", port);
+        healthProbeServer.start();
     }
 
     private void listenTLS(int port) throws Exception {
@@ -297,6 +326,18 @@ public class GrpcServer {
         if (httpServer != null) {
             try { httpServer.stop(); } catch (Exception e) {
                 logger.warn("Error stopping HTTP server", e);
+            }
+        }
+
+        if (healthProbeServer != null) {
+            healthProbeServer.shutdown();
+            try {
+                if (!healthProbeServer.awaitTermination(5, TimeUnit.SECONDS)) {
+                    healthProbeServer.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                healthProbeServer.shutdownNow();
+                Thread.currentThread().interrupt();
             }
         }
 

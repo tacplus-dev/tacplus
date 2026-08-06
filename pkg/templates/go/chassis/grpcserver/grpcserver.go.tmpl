@@ -296,6 +296,50 @@ func gracefulStopWithTimeout(grpcServer *grpc.Server, timeout time.Duration) {
 	}
 }
 
+// ListenHealthProbe starts a separate PLAINTEXT gRPC server that serves ONLY
+// grpc.health.v1. It is a completely separate grpc.Server — no TLS credentials,
+// no keepalive enforcement, no interceptors, no business services — so a
+// plaintext port cannot reach any real service handler. The health status is
+// shared with the TLS server (same healthServer instance), so StatusSink
+// flips both endpoints together.
+//
+// k8s kubelet probes are plaintext-only and cannot speak TLS, so they target
+// this port instead of the main TLS port. The listener binds to 0.0.0.0 (not
+// localhost) because the kubelet dials the pod IP.
+//
+// Blocks until ctx is cancelled. A port of 0 disables the listener.
+func (ps *GrpcServer) ListenHealthProbe(ctx context.Context, port int32) error {
+	if port <= 0 {
+		return nil
+	}
+	if ps.healthServer == nil {
+		return protoerrors.NewErrMissingInvalidData(nil, "health server not initialized")
+	}
+
+	addr := fmt.Sprintf("0.0.0.0:%d", port)
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		return protoerrors.NewErrGeneral(err, "failed to listen on health probe port %s", addr)
+	}
+	defer lis.Close()
+
+	// A completely separate grpc.Server: no TLS, no interceptors, no service
+	// handlers. Only grpc.health.v1 is registered. This is the isolation
+	// guarantee — the plaintext port exposes nothing beyond health.
+	probeServer := grpc.NewServer()
+	healthpb.RegisterHealthServer(probeServer, ps.healthServer)
+
+	zap.L().Info("plaintext health probe server starting",
+		zap.String("address", addr))
+
+	go func() {
+		<-ctx.Done()
+		probeServer.GracefulStop()
+	}()
+
+	return probeServer.Serve(lis)
+}
+
 // NewHealthOnly creates a GrpcServer that serves only the grpc.health.v1
 // endpoint. Used by services that have no business RPCs but still need a
 // health-probeable listener. Like any GrpcServer it starts NOT_SERVING; the

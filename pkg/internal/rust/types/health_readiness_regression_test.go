@@ -60,6 +60,44 @@ func TestRustHealthReporterStatusSinkBridgesHealthToGrpc(t *testing.T) {
 	}
 }
 
+// The plaintext health probe server must be a completely separate tonic Server
+// that serves ONLY the cloned grpc.health.v1 HealthService. No TLS, no auth
+// layer, no business services. The clone shares internal Arc state so
+// StatusSink status changes are visible on both listeners.
+func TestRustHealthProbeServerIsolation(t *testing.T) {
+	src, err := templates.FS.ReadFile("rust/types/service_manager.rs.tmpl")
+	if err != nil {
+		t.Fatalf("read rust service_manager template: %v", err)
+	}
+	sm := string(src)
+
+	// The health service must be cloned before being moved into the TLS router.
+	for _, want := range []string{
+		"let health_probe_svc = grpc_health_svc.clone();",
+		"health_probe_port",
+		`tonic::transport::Server::builder()`,
+	} {
+		if !strings.Contains(sm, want) {
+			t.Fatalf("Rust service_manager must set up health probe server; missing %q", want)
+		}
+	}
+
+	// The probe server must use a separate tonic::transport::Server — no TLS config.
+	// Find the probe server block and verify it does NOT call tls_config().
+	probeIdx := strings.Index(sm, `"plaintext health probe server listening"`)
+	if probeIdx < 0 {
+		t.Fatalf("Rust service_manager must log plaintext health probe server startup")
+	}
+	// Look backwards for the server builder
+	probeBlock := sm[probeIdx-500 : probeIdx+200]
+	if strings.Contains(probeBlock, "tls_config(") {
+		t.Fatalf("probe server must NOT configure TLS")
+	}
+	if strings.Contains(probeBlock, "AuthEnforcingLayer") {
+		t.Fatalf("probe server must NOT add auth layer")
+	}
+}
+
 func TestRustServiceManagerHealthStartsNotServingUntilBootstrap(t *testing.T) {
 	src, err := templates.FS.ReadFile("rust/types/service_manager.rs.tmpl")
 	if err != nil {

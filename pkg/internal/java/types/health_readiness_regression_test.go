@@ -35,6 +35,61 @@ func TestJavaGrpcServerHealthStartsNotServingAndExposesSetReady(t *testing.T) {
 	}
 }
 
+// The plaintext health probe server must be a completely separate NettyServerBuilder
+// that serves ONLY grpc.health.v1 via the shared HealthStatusManager. No TLS, no
+// interceptors, no business services. This is the isolation guarantee.
+func TestJavaHealthProbeServerIsolation(t *testing.T) {
+	rendered := readJavaTemplate(t, "java/chassis/grpcserver/GrpcServer.java.tmpl")
+
+	// The listenHealthProbe method must exist.
+	for _, want := range []string{
+		"public void listenHealthProbe(int port)",
+		"healthManager.getHealthService()",
+		"healthProbeServer",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("Java GrpcServer must have listenHealthProbe with isolated server; missing %q", want)
+		}
+	}
+
+	// The probe server must NOT have SSL context or interceptors.
+	// Find the listenHealthProbe method and verify it does not call sslContext or intercept.
+	probeStart := strings.Index(rendered, "public void listenHealthProbe(int port)")
+	if probeStart < 0 {
+		t.Fatalf("listenHealthProbe method not found")
+	}
+	// Find the next method boundary (next "public" or "private" after probe start)
+	probeBody := rendered[probeStart:]
+	probeEnd := len(probeBody)
+	for _, marker := range []string{"\n    private void listenTLS", "\n    private SslContext buildSslContext"} {
+		idx := strings.Index(probeBody, marker)
+		if idx > 0 && idx < probeEnd {
+			probeEnd = idx
+		}
+	}
+	probeMethod := probeBody[:probeEnd]
+	if strings.Contains(probeMethod, "sslContext") {
+		t.Fatalf("listenHealthProbe must NOT configure TLS")
+	}
+	if strings.Contains(probeMethod, "intercept(") {
+		t.Fatalf("listenHealthProbe must NOT add interceptors")
+	}
+	if strings.Contains(probeMethod, "impl.registerServices") {
+		t.Fatalf("listenHealthProbe must NOT register business services")
+	}
+
+	// The service_manager must wire the probe server.
+	sm := readJavaTemplate(t, "java/types/ServiceManager.java.tmpl")
+	for _, want := range []string{
+		"listenHealthProbe(",
+		"config.getHealthProbePort()",
+	} {
+		if !strings.Contains(sm, want) {
+			t.Fatalf("Java ServiceManager must start health probe server; missing %q", want)
+		}
+	}
+}
+
 // The service_manager must flip readiness to SERVING after bootstrap (health
 // publish + auto-TLS/SMB), for both the business-gRPC and health-only paths.
 func TestJavaServiceManagerFlipsHealthReadyAfterBootstrap(t *testing.T) {

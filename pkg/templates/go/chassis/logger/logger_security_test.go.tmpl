@@ -10,6 +10,7 @@ package logger
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -95,6 +96,67 @@ func TestCredentialRedaction_ZapLogPath(t *testing.T) {
 	}
 	if !strings.Contains(output, "authorization") {
 		t.Fatalf("header key should be preserved (only value is redacted):\n%s", output)
+	}
+}
+
+// TestCredentialRedaction_StructuredFields covers the leak the message-only
+// redactor could not stop.
+//
+// redactingCore rewrites ent.Message and nothing else, so a credential passed as
+// a structured FIELD -- zap.String("authorization", ...), zap.Error(err) on an
+// error quoting a header, anything bound earlier through logger.With() -- was
+// encoded straight past it and reached the sink intact. Every existing test in
+// this file put the credential in the message text, which is why the gap
+// survived: they all passed while field-borne credentials leaked.
+//
+// The fix redacts at the sink, so this test asserts against the same
+// construction InstallFromConfig uses -- encoder over a redactingWriter. Remove
+// the redactingWriter and every subtest below fails.
+func TestCredentialRedaction_StructuredFields(t *testing.T) {
+	var buf bytes.Buffer
+	enc := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
+	core := newRedactingCore(zapcore.NewCore(
+		enc,
+		zapcore.AddSync(&redactingWriter{w: &buf}),
+		zapcore.DebugLevel,
+	))
+	logger := zap.New(core)
+
+	// A credential in a field value.
+	logger.Debug("outbound call", zap.String("authorization", "Bearer "+fakeToken))
+	// A credential inside an error value.
+	logger.Debug("call failed", zap.Error(fmt.Errorf("rejected header authorization: Bearer %s", fakeToken)))
+	// A credential bound before the log call, via With().
+	logger.With(zap.String("x-auth-token", fakeToken)).Debug("bound context")
+	// A credential in a byte-string field.
+	logger.Debug("raw frame", zap.ByteString("frame", []byte("cookie: session="+fakeToken)))
+	// Non-sensitive content must survive untouched.
+	logger.Debug("healthy", zap.String("peer", "192.168.1.1"), zap.Int("attempt", 3))
+
+	output := buf.String()
+
+	if strings.Contains(output, fakeToken) {
+		t.Fatalf("SECURITY: credential leaked through a structured log field:\n%s", output)
+	}
+	if !strings.Contains(output, "[REDACTED]") {
+		t.Fatalf("expected [REDACTED] marker in field output:\n%s", output)
+	}
+	if !strings.Contains(output, "authorization") {
+		t.Fatalf("field key should be preserved (only the value is redacted):\n%s", output)
+	}
+	if !strings.Contains(output, "192.168.1.1") {
+		t.Fatalf("non-sensitive field values should be preserved:\n%s", output)
+	}
+
+	// Redaction must not corrupt the log line. The value patterns originally ran
+	// to the next whitespace, and compact JSON has none, so a single credential
+	// consumed every remaining field and left an unterminated line -- silently
+	// dropping data and breaking any downstream log parser.
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		var v map[string]any
+		if err := json.Unmarshal([]byte(line), &v); err != nil {
+			t.Errorf("redaction produced unparseable JSON: %v\n  line: %s", err, line)
+		}
 	}
 }
 

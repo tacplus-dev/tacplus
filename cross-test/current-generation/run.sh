@@ -348,6 +348,25 @@ run_rust_spiffe_self_tests() {
     }
   assert_clean_log "$log_dir/rust-diskstore-test.log"
 
+  # The logger crate's credential-redaction tests. These existed in the templates
+  # and were executed by NO gate (cargo check only), so rust's redaction had no
+  # runtime coverage at all while go and java both did. That is how the JSON
+  # structured-field gap survived in rust: redaction runs on already-encoded
+  # output, every test used the `key: value` header shape, and nothing ran them.
+  #
+  # --lib restricts this to the unit tests. It is NOT a claim that the crate's
+  # doc examples pass: six of them do not compile, because they import a bare
+  # `types` crate that has never existed (the real dependency is
+  # <crate-base>_types). They have been broken since they were written and were
+  # invisible while no gate ran this crate. Fixing them is separate work; this
+  # gate deliberately does not pretend to cover them.
+  [[ -f "$output/chassis/logger/Cargo.toml" ]] || die "missing generated Rust logger crate"
+  (cd "$output" && cargo test -p logger --lib) >"$log_dir/rust-logger-test.log" 2>&1 || {
+      cat "$log_dir/rust-logger-test.log" >&2
+      return 1
+    }
+  assert_clean_log "$log_dir/rust-logger-test.log"
+
   # Behavioral config_defaults test: empty Config → health_probe_port == 8444.
   # Covers the state-authority (kernel) path where no typed-config fetch occurs.
   [[ -f "$output/chassis/grpcconfig/Cargo.toml" ]] || die "missing generated Rust grpcconfig crate"

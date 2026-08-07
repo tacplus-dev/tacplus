@@ -183,10 +183,16 @@ class LoggerConfigurator:
 #   - any key ending in -token, _token, -secret, or _secret
 #   - standalone Bearer <token> (catches tokens regardless of context)
 _CREDENTIAL_PATTERNS = [
-    re.compile(r'(?i)(authorization\s*[:=]\s*)(\S+(?:\s+\S+)?)'),
-    re.compile(r'(?i)((?:set-)?cookie\s*[:=]\s*)(\S+)'),
-    re.compile(r'(?i)([\w][\w-]*[-_](?:token|secret)\s*[:=]\s*)(\S+)'),
-    re.compile(r'(?i)(Bearer\s+)(\S{20,})'),
+    # Header/text shape: `authorization: Bearer abc`, `x-auth-token=abc`.
+    re.compile(r'(?i)(authorization\s*[:=]\s*)([^"\s,}]+(?:\s+[^"\s,}]+)?)'),
+    re.compile(r'(?i)((?:set-)?cookie\s*[:=]\s*)([^"\s,}]+)'),
+    re.compile(r'(?i)([\w][\w-]*[-_](?:token|secret)\s*[:=]\s*)([^"\s,}]+)'),
+    # JSON field shape: `"x-auth-token":"abc"`. A structured field puts a closing
+    # quote before the colon, so the patterns above cannot match it. Without this
+    # a credential in any JSON field whose value lacked a "Bearer " prefix was
+    # written out verbatim.
+    re.compile(r'(?i)("(?:authorization|(?:set-)?cookie|[\w][\w-]*[-_](?:token|secret))"\s*:\s*")([^"]*)'),
+    re.compile(r'(?i)(Bearer\s+)([^"\s,}]{20,})'),
 ]
 
 _REDACTED = '[REDACTED]'

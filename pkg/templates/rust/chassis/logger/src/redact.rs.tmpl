@@ -21,10 +21,17 @@ const REDACTED: &str = "[REDACTED]";
 /// - standalone `Bearer <token>` (catches tokens regardless of context)
 static CREDENTIAL_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
-        Regex::new(r"(?i)(authorization\s*[:=]\s*)(\S+(?:\s+\S+)?)").unwrap(),
-        Regex::new(r"(?i)((?:set-)?cookie\s*[:=]\s*)(\S+)").unwrap(),
-        Regex::new(r"(?i)([\w][\w-]*[-_](?:token|secret)\s*[:=]\s*)(\S+)").unwrap(),
-        Regex::new(r"(?i)(Bearer\s+)(\S{20,})").unwrap(),
+        // Header/text shape: `authorization: Bearer abc`, `x-auth-token=abc`.
+        Regex::new(r#"(?i)(authorization\s*[:=]\s*)([^"\s,}]+(?:\s+[^"\s,}]+)?)"#).unwrap(),
+        Regex::new(r#"(?i)((?:set-)?cookie\s*[:=]\s*)([^"\s,}]+)"#).unwrap(),
+        Regex::new(r#"(?i)([\w][\w-]*[-_](?:token|secret)\s*[:=]\s*)([^"\s,}]+)"#).unwrap(),
+        // JSON field shape: `"x-auth-token":"abc"`. A structured field puts a
+        // closing quote before the colon, so the patterns above cannot match it.
+        // Redaction happens on already-encoded output here, so without this a
+        // credential in any JSON field whose value lacked a "Bearer " prefix was
+        // written out verbatim.
+        Regex::new(r#"(?i)("(?:authorization|(?:set-)?cookie|[\w][\w-]*[-_](?:token|secret))"\s*:\s*")([^"]*)"#).unwrap(),
+        Regex::new(r#"(?i)(Bearer\s+)([^"\s,}]{20,})"#).unwrap(),
     ]
 });
 
@@ -166,6 +173,33 @@ mod tests {
         assert!(!result.contains(token), "bearer token leaked: {}", result);
     }
 
+    // Redaction runs on ALREADY-ENCODED output, so in JSON mode it sees
+    // `"x-auth-token":"abc"`, not `x-auth-token: abc`. Every test above uses the
+    // header/text shape; none used the JSON shape, which is why a structured
+    // field carrying a bare credential (no "Bearer " prefix) was emitted verbatim
+    // while the suite stayed green.
+    #[test]
+    fn test_redact_json_structured_field() {
+        let token = "eyJraWQiOiIzOTE2YTM1My1iODY3LTQ1ZTQtODk2ZS1mMDhkZjBhYjcxNDYi";
+
+        // Built by concatenation rather than format!: this file is itself a Go
+        // text/template, and the doubled braces format! needs to emit a literal
+        // brace would be parsed as a template action.
+        let input = "{\"msg\":\"bound\",\"x-auth-token\":\"".to_string() + token + "\"}";
+        let result = redact_credentials(&input);
+        assert!(!result.contains(token), "token leaked from JSON field: {}", result);
+        assert!(result.contains("x-auth-token"), "field key should survive: {}", result);
+
+        let input = "{\"authorization\":\"Bearer ".to_string() + token + "\",\"peer\":\"10.0.0.1\"}";
+        let result = redact_credentials(&input);
+        assert!(!result.contains(token), "token leaked from JSON field: {}", result);
+        // A credential must not swallow the fields that follow it. The value
+        // patterns originally ran to the next whitespace, and compact JSON has
+        // none, so one credential consumed the rest of the line.
+        assert!(result.contains("10.0.0.1"), "following field was eaten: {}", result);
+        assert!(result.ends_with('}'), "log line was truncated: {}", result);
+    }
+
     #[test]
     fn test_preserves_non_sensitive_content() {
         let input = "debug message: user logged in successfully";
@@ -206,7 +240,6 @@ mod tests {
     fn test_redacting_writer_through_tracing() {
         use std::sync::{Arc, Mutex};
         use tracing_subscriber::layer::SubscriberExt;
-        use tracing_subscriber::util::SubscriberInitExt;
 
         let token = "eyJraWQiOiIzOTE2YTM1My1iODY3LTQ1ZTQtODk2ZS1mMDhkZjA";
         let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));

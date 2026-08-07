@@ -66,6 +66,23 @@ public class LogbackConfiguratorSecurityTest {
             !CredentialRedactor.redact("access_token: " + fakeToken).contains(fakeToken));
         mustPass("redact standalone Bearer",
             !CredentialRedactor.redact("Value: Bearer " + fakeToken).contains(fakeToken));
+        // JSON structured-field shape. RedactingEncoder runs on already-encoded
+        // output, so in JSON mode it sees `"x-auth-token":"abc"` and not
+        // `x-auth-token: abc`. Every check above uses the header/text shape, which
+        // is why a structured field carrying a bare credential (no "Bearer "
+        // prefix) was emitted verbatim while this suite stayed green.
+        mustPass("redact JSON field with bare token",
+            !CredentialRedactor.redact("{\"msg\":\"bound\",\"x-auth-token\":\"" + fakeToken + "\"}").contains(fakeToken));
+        mustPass("redact JSON field preserves key",
+            CredentialRedactor.redact("{\"x-auth-token\":\"" + fakeToken + "\"}").contains("x-auth-token"));
+        // A credential must not swallow the fields that follow it. The value
+        // patterns originally ran to the next whitespace, and compact JSON has
+        // none, so one credential consumed the rest of the line.
+        mustPass("redact JSON does not eat following fields",
+            CredentialRedactor.redact("{\"authorization\":\"Bearer " + fakeToken + "\",\"peer\":\"10.0.0.1\"}").contains("10.0.0.1"));
+        mustPass("redact JSON does not truncate the line",
+            CredentialRedactor.redact("{\"authorization\":\"Bearer " + fakeToken + "\",\"peer\":\"10.0.0.1\"}").endsWith("}"));
+
         mustPass("preserves non-sensitive",
             CredentialRedactor.redact("user logged in OK").equals("user logged in OK"));
         mustPass("null returns null",

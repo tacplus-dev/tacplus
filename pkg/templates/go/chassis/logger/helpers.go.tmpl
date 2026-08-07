@@ -5,6 +5,7 @@ package logger
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/hashicorp/go-multierror"
 	"go.uber.org/zap"
@@ -174,11 +175,64 @@ func InstallFromConfig(config *loggerProto.LoggerConfig) (*zap.Logger, error) {
 		zapConfig.ErrorOutputPaths = []string{"stderr"}
 	}
 
-	// Build the logger
-	logger, err := zapConfig.Build()
+	// Build the logger over a REDACTING sink.
+	//
+	// zapConfig.Build() opens its own sinks internally, which leaves no seam to
+	// redact at, and the redactingCore below only rewrites ent.Message. Structured
+	// fields -- zap.String("authorization", ...), zap.Error(err) on an error that
+	// quotes a header, anything bound earlier via logger.With() -- are encoded
+	// straight past a message-only redactor and reach the sink intact. Credentials
+	// leak through log FIELDS at least as readily as through message text.
+	//
+	// Open the sinks here and wrap them in redactingWriter, so redaction happens on
+	// the fully encoded line exactly as java's RedactingEncoder and rust's
+	// LoggerMakeWriter already do. Anything the encoder emits -- message, field
+	// keys, field values, caller, stacktrace -- passes through the redactor, so
+	// there is no field type that can bypass it.
+	sink, _, err := zap.Open(zapConfig.OutputPaths...)
 	if err != nil {
-		return nil, protoerrors.NewErrGeneral(err, "failed to build logger")
+		return nil, protoerrors.NewErrGeneral(err, "failed to open logger output paths")
 	}
+	errSink, _, err := zap.Open(zapConfig.ErrorOutputPaths...)
+	if err != nil {
+		return nil, protoerrors.NewErrGeneral(err, "failed to open logger error output paths")
+	}
+
+	var enc zapcore.Encoder
+	if encoding == "console" {
+		enc = zapcore.NewConsoleEncoder(encoderConfig)
+	} else {
+		enc = zapcore.NewJSONEncoder(encoderConfig)
+	}
+
+	core := zapcore.NewCore(
+		enc,
+		zapcore.AddSync(&redactingWriter{w: sink}),
+		zapConfig.Level,
+	)
+	// Preserve the sampling behaviour zapConfig.Build() would have applied.
+	core = zapcore.NewSamplerWithOptions(
+		core,
+		time.Second,
+		zapConfig.Sampling.Initial,
+		zapConfig.Sampling.Thereafter,
+	)
+
+	opts := []zap.Option{zap.ErrorOutput(errSink)}
+	if !config.DisableCaller {
+		opts = append(opts, zap.AddCaller())
+	}
+	if !config.DisableStacktrace {
+		stackLevel := zapcore.ErrorLevel
+		if config.Development {
+			stackLevel = zapcore.WarnLevel
+		}
+		opts = append(opts, zap.AddStacktrace(stackLevel))
+	}
+	if config.Development {
+		opts = append(opts, zap.Development())
+	}
+	logger := zap.New(core, opts...)
 
 	// Add initial fields if specified
 	if len(config.InitialFields) > 0 {
@@ -189,8 +243,10 @@ func InstallFromConfig(config *loggerProto.LoggerConfig) (*zap.Logger, error) {
 		logger = logger.With(fields...)
 	}
 
-	// Structural credential redaction: wrap the core so that credentials
-	// in log messages are redacted before reaching any sink.
+	// Message-level redaction, kept as defence in depth on top of the redacting
+	// sink above. The sink is the guarantee -- it sees every encoded byte -- but
+	// this costs nothing and keeps redaction in place for anyone who rewraps the
+	// core or swaps the sink.
 	logger = logger.WithOptions(zap.WrapCore(newRedactingCore))
 
 	// Replace global logger

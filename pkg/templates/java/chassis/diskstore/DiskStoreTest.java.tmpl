@@ -1,0 +1,403 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// CODE GENERATED - DO NOT EDIT
+
+package {{.ChassisBase}}.diskstore;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Behavioral self-test for the diskstore chassis (PC-L-8): codec round-trip,
+ * redo-log append/dedup/roll/restore, snapshot write/read/archive/recovery,
+ * store-path layout, roll-schedule determinism, and fs-util error paths.
+ *
+ * <p>Run as a plain main-method self-test by the cross-test gates (like
+ * CollectionRuntimeTest / AuthorizerBehaviorTest).
+ */
+public class DiskStoreTest {
+    private static int failures = 0;
+
+    private static void check(boolean ok, String message) {
+        if (!ok) {
+            System.err.println("FAIL: " + message);
+            failures++;
+        }
+    }
+
+    // ---- Codec round-trip ----
+
+    private static void testCodecRoundtripNone() {
+        byte[] data = "hello world".getBytes(StandardCharsets.UTF_8);
+        byte[] compressed = Codec.compress(data, Codec.NONE);
+        byte[] got = Codec.decompressAuto(compressed);
+        check(java.util.Arrays.equals(got, data), "codec NONE round-trip");
+    }
+
+    private static void testCodecRoundtripGz() {
+        byte[] data = "hello world, hello world, hello world".getBytes(StandardCharsets.UTF_8);
+        byte[] compressed = Codec.compress(data, Codec.GZ);
+        check(compressed.length >= 2 && compressed[0] == (byte) 0x1f && compressed[1] == (byte) 0x8b,
+                "gz output must start with magic bytes");
+        byte[] got = Codec.decompressAuto(compressed);
+        check(java.util.Arrays.equals(got, data), "codec GZ round-trip");
+    }
+
+    private static void testCodecFromProtoInt() {
+        check(Codec.fromProtoInt(1) == Codec.GZ, "fromProtoInt(1) == GZ");
+        check(Codec.fromProtoInt(2) == Codec.BZ, "fromProtoInt(2) == BZ");
+        check(Codec.fromProtoInt(0) == Codec.NONE, "fromProtoInt(0) == NONE");
+        check(Codec.fromProtoInt(99) == Codec.NONE, "fromProtoInt(99) == NONE");
+    }
+
+    // ---- StorePath layout ----
+
+    private static void testRootMapsToRootSeg() {
+        check(StorePath.nsSegments("").equals(List.of("_root")), "empty ns -> [_root]");
+        check(StorePath.nsSegments("/").equals(List.of("_root")), "root ns -> [_root]");
+    }
+
+    private static void testTenantAndProjectSegments() {
+        check(StorePath.nsSegments("/drpepper").equals(List.of("drpepper")),
+                "tenant ns segments");
+        check(StorePath.nsSegments("/drpepper/default").equals(List.of("drpepper", "default")),
+                "project ns segments");
+    }
+
+    private static void testStorePathLayout() throws IOException {
+        Path base = Files.createTempDirectory("ds-path-");
+        try {
+            Path got = StorePath.storePath(base, "/drpepper/default", "verifying_keys", ".log");
+            Path want = base.resolve("drpepper").resolve("default").resolve("verifying_keys.log");
+            check(got.equals(want), "storePath layout: got " + got + " want " + want);
+
+            Path gotRoot = StorePath.storePath(base, "/", "verifying_keys", ".log");
+            Path wantRoot = base.resolve("_root").resolve("verifying_keys.log");
+            check(gotRoot.equals(wantRoot), "storePath root layout: got " + gotRoot + " want " + wantRoot);
+        } finally {
+            deleteRecursive(base);
+        }
+    }
+
+    // ---- Snapshot UC1 ----
+
+    private static void testSnapshotRoundtripAndArchive() throws IOException {
+        Path dir = Files.createTempDirectory("ds-snap-");
+        try {
+            Path path = dir.resolve("state.json");
+            Snapshot.Opts opts = new Snapshot.Opts(Codec.GZ, 0600, 2);
+
+            Snapshot.writeSnapshot(path, "v1".getBytes(StandardCharsets.UTF_8), opts);
+            byte[] got = Snapshot.readSnapshot(path);
+            check(got != null && new String(got, StandardCharsets.UTF_8).equals("v1"),
+                    "snapshot round-trip v1");
+
+            Snapshot.writeSnapshot(path, "v2".getBytes(StandardCharsets.UTF_8), opts);
+            got = Snapshot.readSnapshot(path);
+            check(got != null && new String(got, StandardCharsets.UTF_8).equals("v2"),
+                    "snapshot round-trip v2");
+            check(Files.exists(dir.resolve("state.json.bak.1")),
+                    "previous active should be archived as .bak.1");
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    private static void testReadAbsentIsNull() throws IOException {
+        Path dir = Files.createTempDirectory("ds-snap-absent-");
+        try {
+            byte[] got = Snapshot.readSnapshot(dir.resolve("missing.json"));
+            check(got == null, "absent snapshot must return null");
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    // PC-L-5 read leg: absent active recovers from .bak.1.
+    private static void testReadRecoversFromBakWhenActiveAbsent() throws IOException {
+        Path dir = Files.createTempDirectory("ds-snap-bak-");
+        try {
+            Path path = dir.resolve("state.json");
+            Snapshot.Opts opts = new Snapshot.Opts(Codec.GZ, 0600, 2);
+
+            Snapshot.writeSnapshot(path, "v1".getBytes(StandardCharsets.UTF_8), opts);
+            Snapshot.writeSnapshot(path, "v2".getBytes(StandardCharsets.UTF_8), opts);
+            Files.delete(path);
+
+            byte[] got = Snapshot.readSnapshot(path);
+            check(got != null && new String(got, StandardCharsets.UTF_8).equals("v1"),
+                    "recovery must read archived v1 when active absent");
+
+            // Corrupt archive on recovery path must error loudly (NEW-37).
+            Files.write(dir.resolve("state.json.bak.1"),
+                    new byte[]{0x1f, (byte) 0x8b, 't', 'r', 'u', 'n', 'c'});
+            Files.deleteIfExists(path);
+            try {
+                Snapshot.readSnapshot(path);
+                check(false, "corrupt .bak.1 on recovery must throw, not fresh-start");
+            } catch (DiskStoreException expected) {
+                // good
+            }
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    // ---- RedoLog UC2 ----
+
+    private static void testAppendDedupLatest() throws IOException {
+        Path dir = Files.createTempDirectory("ds-redo-");
+        try {
+            Path base = dir.resolve("data");
+            RedoLog log = RedoLog.open(base, "/drpepper/default", "verifying_keys", 3, Codec.NONE);
+            try {
+                log.append(RedoLog.Record.upsert("a", "{\"v\":1}"));
+                log.append(RedoLog.Record.upsert("b", "{\"v\":1}"));
+                log.append(RedoLog.Record.upsert("a", "{\"v\":2}"));
+            } finally {
+                log.close();
+            }
+
+            List<RedoLog.Record> recs = RedoLog.dedupFile(log.activePath());
+            check(recs.size() == 2, "dedup should yield 2 records, got " + recs.size());
+            RedoLog.Record a = null;
+            for (RedoLog.Record r : recs) {
+                if ("a".equals(r.key)) {
+                    a = r;
+                }
+            }
+            check(a != null && a.payload.contains("2"),
+                    "dedup must keep latest value for 'a'");
+            check(Files.exists(base.resolve("drpepper").resolve("default").resolve("verifying_keys.log")),
+                    "log should be under nested ns dirs");
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    private static void testRollCompactsAndResumes() throws IOException {
+        Path dir = Files.createTempDirectory("ds-roll-");
+        try {
+            Path base = dir.resolve("data");
+            RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 2, Codec.GZ);
+            try {
+                log.append(RedoLog.Record.upsert("a", "{\"v\":1}"));
+                log.append(RedoLog.Record.upsert("a", "{\"v\":2}"));
+
+                List<RedoLog.Record> snap = RedoLog.dedupFile(log.activePath());
+                log.roll(snap);
+                log.append(RedoLog.Record.upsert("b", "{\"v\":9}"));
+
+                CollectInserter c = new CollectInserter();
+                log.restore(c);
+                check(c.recs.size() == 2,
+                        "restore after roll should yield 2 records, got " + c.recs.size());
+                check(Files.exists(base.resolve("drpepper").resolve("verifying_keys.log.bak.1")),
+                        "archive .bak.1 should exist after roll");
+            } finally {
+                log.close();
+            }
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    private static void testRestoreRecoversBuildingSnapshotAndTempTail() throws IOException {
+        Path dir = Files.createTempDirectory("ds-crash-");
+        try {
+            Path base = dir.resolve("data");
+            RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.NONE);
+            Path active = log.activePath();
+            log.close();
+
+            Path building = FsUtil.sibling(active, ".building");
+            Path temp = FsUtil.sibling(active, ".temp");
+            FsUtil.atomicWrite(building,
+                    ("{\"key\":\"a\",\"deleted\":false,\"payload\":{\"v\":1}}\n"
+                            + "{\"key\":\"b\",\"deleted\":false,\"payload\":{\"v\":1}}\n")
+                            .getBytes(StandardCharsets.UTF_8), 0);
+            FsUtil.atomicWrite(temp,
+                    ("{\"key\":\"b\",\"deleted\":false,\"payload\":{\"v\":2}}\n"
+                            + "{\"key\":\"c\",\"deleted\":false,\"payload\":{\"v\":3}}\n")
+                            .getBytes(StandardCharsets.UTF_8), 0);
+            Files.deleteIfExists(active);
+
+            CollectInserter c = new CollectInserter();
+            log.restore(c);
+            check(c.recs.size() == 3,
+                    "crash recovery should yield 3 deduped records, got " + c.recs.size());
+            check(Files.exists(active), "restore should promote building to active");
+            check(!Files.exists(building), "building should be consumed by restore");
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    private static void testDedupBytesReportsLineNumber() {
+        byte[] bad = "{\"key\":\"a\",\"deleted\":false}\nnot-json\n".getBytes(StandardCharsets.UTF_8);
+        try {
+            RedoLog.dedupBytes(bad);
+            check(false, "malformed line must throw");
+        } catch (DiskStoreException e) {
+            check(e.getMessage().contains("line 2"),
+                    "error should mention line 2, got: " + e.getMessage());
+        }
+    }
+
+    private static void testRedoLogEncodeDecodeTombstone() {
+        RedoLog.Record tombstone = RedoLog.Record.tombstone("del-key");
+        String encoded = RedoLog.encode(tombstone);
+        RedoLog.Record decoded = RedoLog.decode(encoded);
+        check("del-key".equals(decoded.key), "tombstone key round-trip");
+        check(decoded.deleted, "tombstone deleted flag round-trip");
+        check(decoded.payload == null, "tombstone payload should be null");
+    }
+
+    // ---- RollSchedule ----
+
+    private static void testRollOffsetDeterministicAndInRange() {
+        Duration interval = Duration.ofSeconds(86400);
+        Duration a = RollSchedule.rollOffset("mint-0", interval);
+        Duration b = RollSchedule.rollOffset("mint-0", interval);
+        Duration c = RollSchedule.rollOffset("mint-1", interval);
+        check(a.equals(b), "roll offset must be stable for same node");
+        check(a.compareTo(interval) < 0 && c.compareTo(interval) < 0,
+                "roll offset must be within the interval");
+        check(!a.equals(c), "roll offsets for different nodes should differ");
+    }
+
+    // ---- FsUtil error paths ----
+
+    private static void testArchiveNameFormat() throws IOException {
+        Path dir = Files.createTempDirectory("ds-fsutil-");
+        try {
+            Path base = dir.resolve("data.json");
+            check(FsUtil.archiveName(base, 1).getFileName().toString().equals("data.json.bak.1"),
+                    "archiveName format .bak.1");
+            check(FsUtil.archiveName(base, 3).getFileName().toString().equals("data.json.bak.3"),
+                    "archiveName format .bak.3");
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    private static void testAtomicWriteAndRead() throws IOException {
+        Path dir = Files.createTempDirectory("ds-atomic-");
+        try {
+            Path path = dir.resolve("test.dat");
+            byte[] data = "atomic-content".getBytes(StandardCharsets.UTF_8);
+            FsUtil.atomicWrite(path, data, 0);
+            check(Files.exists(path), "atomicWrite should create file");
+            byte[] read = Files.readAllBytes(path);
+            check(java.util.Arrays.equals(read, data), "atomicWrite content round-trip");
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    private static void testRotateArchivesChain() throws IOException {
+        Path dir = Files.createTempDirectory("ds-rotate-");
+        try {
+            Path path = dir.resolve("data.json");
+            // Write v1, archive it, write v2, archive it.
+            FsUtil.atomicWrite(path, "v1".getBytes(StandardCharsets.UTF_8), 0);
+            FsUtil.rotateArchives(path, 3);
+            check(Files.exists(FsUtil.archiveName(path, 1)), "rotate should create .bak.1");
+            check(!Files.exists(path), "rotate should remove active");
+
+            FsUtil.atomicWrite(path, "v2".getBytes(StandardCharsets.UTF_8), 0);
+            FsUtil.rotateArchives(path, 3);
+            check(Files.exists(FsUtil.archiveName(path, 2)), "second rotate should shift .bak.1 to .bak.2");
+            String bak2 = new String(Files.readAllBytes(FsUtil.archiveName(path, 2)), StandardCharsets.UTF_8);
+            check("v1".equals(bak2), ".bak.2 should contain v1");
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    private static void testDeleteNamespace() throws IOException {
+        Path dir = Files.createTempDirectory("ds-delns-");
+        try {
+            Path base = dir.resolve("data");
+            Path nsDir = StorePath.nsDir(base, "/drpepper/default");
+            Files.createDirectories(nsDir);
+            Files.write(nsDir.resolve("keys.log"), "test".getBytes(StandardCharsets.UTF_8));
+            StorePath.deleteNamespace(base, "/drpepper/default");
+            check(!Files.exists(nsDir), "deleteNamespace should remove the ns dir");
+            // Tenant parent should still exist.
+            check(Files.exists(base.resolve("drpepper")), "tenant dir should survive project deletion");
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    // ---- helpers ----
+
+    private static final class CollectInserter implements RedoLog.Inserter {
+        final List<RedoLog.Record> recs = new ArrayList<>();
+
+        @Override
+        public void insert(RedoLog.Record rec) {
+            recs.add(rec);
+        }
+    }
+
+    private static void deleteRecursive(Path dir) {
+        try {
+            if (Files.exists(dir)) {
+                try (var walk = Files.walk(dir)) {
+                    walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                        try {
+                            Files.deleteIfExists(p);
+                        } catch (IOException ignored) {
+                        }
+                    });
+                }
+            }
+        } catch (IOException ignored) {
+        }
+    }
+
+    public static void main(String[] args) throws IOException {
+        // Codec
+        testCodecRoundtripNone();
+        testCodecRoundtripGz();
+        testCodecFromProtoInt();
+
+        // StorePath
+        testRootMapsToRootSeg();
+        testTenantAndProjectSegments();
+        testStorePathLayout();
+
+        // Snapshot UC1
+        testSnapshotRoundtripAndArchive();
+        testReadAbsentIsNull();
+        testReadRecoversFromBakWhenActiveAbsent();
+
+        // RedoLog UC2
+        testAppendDedupLatest();
+        testRollCompactsAndResumes();
+        testRestoreRecoversBuildingSnapshotAndTempTail();
+        testDedupBytesReportsLineNumber();
+        testRedoLogEncodeDecodeTombstone();
+
+        // RollSchedule
+        testRollOffsetDeterministicAndInRange();
+
+        // FsUtil
+        testArchiveNameFormat();
+        testAtomicWriteAndRead();
+        testRotateArchivesChain();
+        testDeleteNamespace();
+
+        if (failures > 0) {
+            System.err.println(failures + " DiskStore check(s) FAILED");
+            System.exit(1);
+        }
+        System.out.println("DiskStoreTest: all checks passed");
+    }
+}

@@ -1580,8 +1580,10 @@ var storeVendorAllow = map[string]string{}
 // EXCLUDED entirely: target/ (build artifacts), archive/ (historical docs),
 // roadmap/ (plans legitimately discuss vendors), todo/ (git-ignored ledgers),
 // and .git/. The gate's own source file is skipped by path (it necessarily
-// contains the forbidden list).
-var storeVendorScanRoots = []string{"pkg", "cmd", "docs"}
+// contains the forbidden list). cross-test/ is included so test fixtures that
+// carry vendor tokens are caught; deliberate fixtures are exempted in
+// storeVendorGuardSelf.
+var storeVendorScanRoots = []string{"pkg", "cmd", "docs", "cross-test"}
 
 // storeVendorPattern matches any forbidden token case-insensitively. Word tokens
 // use \b boundaries so store-neutral names (graphstore, columnarstore) don't
@@ -1639,11 +1641,14 @@ func renderStoreVendorSoundness(root string) int {
 }
 
 // storeVendorGuardSelf are the gate's own source files, skipped by path because
-// they necessarily contain the forbidden list (main.go) or seed forbidden tokens
-// to test the gate (main_test.go).
+// they necessarily contain the forbidden list (main.go), seed forbidden tokens
+// to test the gate (main_test.go), or are cross-test fixtures that deliberately
+// exercise vendor-typed schemas (database.proto).
 var storeVendorGuardSelf = map[string]bool{
-	filepath.ToSlash(filepath.Join("cmd", "soundness", "main.go")):      true,
-	filepath.ToSlash(filepath.Join("cmd", "soundness", "main_test.go")): true,
+	filepath.ToSlash(filepath.Join("cmd", "soundness", "main.go")):                          true,
+	filepath.ToSlash(filepath.Join("cmd", "soundness", "main_test.go")):                     true,
+	filepath.ToSlash(filepath.Join("cross-test", "proto", "libraries2", "database.proto")):  true,
+	filepath.ToSlash(filepath.Join("cross-test", "proto", "libraries2", "cache.proto")):     true,
 }
 
 func storeVendorViolations(root string) ([]storeVendorViolation, error) {

@@ -61,6 +61,21 @@ projection output types or their markers.
 - The **projection output messages** (`SessionNode`, `SessionRecord`, …) from the
   `graph_projection`/`timeseries_projection` declarations, stamped with the internal
   markers **`graph_type`** / **`timeseries_type`** so downstream codegen finds them.
+- The **timeseries table name**, derived from the message name in `snake_case`
+  when `(spec.timeseries_type)` sets none explicitly. The conversion is
+  acronym-aware: `HTTPMetric` → `http_metric`, `OpenAIUsage` → `open_ai_usage`.
+
+  > **Migration note.** Before CON-3 a naive converter produced
+  > `h_t_t_p_metric` for those names. Any deployment created before that change
+  > has tables under the old spelling. This name is **persisted** — it is the
+  > table the store writes to — and a change to it fails nothing: generation
+  > succeeds, the service starts, and it quietly begins writing to a new table
+  > while the old one stops receiving rows. To keep an existing table, set
+  > `(spec.timeseries_type).name` explicitly; that value always wins over the
+  > derived one. The derivation is pinned by
+  > `pkg/internal/common/registry/timeseries_tablename_test.go` — changing it
+  > requires a migration, not just an updated expectation.
+
 - The eventbus **topic + publish RPC** from `event`/`record`, with exactly the
   declared C2S/S2S surfaces.
 - Per-store **subscriptions**: each store auto-subscribes to the events/projections

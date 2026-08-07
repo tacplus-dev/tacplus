@@ -1040,18 +1040,19 @@ func generateStateWrapper(config *tactype.Config, svc ServiceInfo, stateRoot *pa
 					boundaryMsg, _ = findMessageAcrossFiles(dp, xpkg, simpleType)
 				}
 			}
+			// Fail closed, as the map case above does. Warn-and-continue here
+			// dropped a DECLARED collection boundary from the generated state
+			// client: generation reported success, no accessor was emitted, and
+			// the only trace was a warning on a log line nobody reads. The
+			// service author sees a boundary they declared simply not exist.
 			if boundaryMsg == nil {
-				zap.L().Warn("Could not find boundary message type",
-					zap.String("type", field.Type),
-					zap.String("service", svc.ServiceName))
-				continue
+				return nil, fmt.Errorf("collection boundary %q on state root %s references message type %q that could not be resolved in this file or across packages",
+					field.Name, svc.ServiceName, field.Type)
 			}
 			keyFieldName, keyGoType := findIndexedKey(boundaryMsg)
 			if keyFieldName == "" {
-				zap.L().Warn("Collection boundary has no indexed key field",
-					zap.String("type", field.Type),
-					zap.String("service", svc.ServiceName))
-				continue
+				return nil, fmt.Errorf("collection boundary %q on state root %s has type %q with no indexed key field — a collection boundary requires one indexed key",
+					field.Name, svc.ServiceName, field.Type)
 			}
 			collections = append(collections, collectionBoundary{
 				FieldName:       fieldPascal,
@@ -1085,9 +1086,12 @@ func generateStateWrapper(config *tactype.Config, svc ServiceInfo, stateRoot *pa
 		}
 		dir := findPackageDir(dp, pkg)
 		if dir == "" {
-			zap.L().Warn("Could not find directory for cross-package type",
-				zap.String("package", pkg))
-			continue
+			// Fail closed. Skipping the import emits a file that references an
+			// undeclared package, so the failure surfaced as a confusing compile
+			// error in generated code rather than at the point the resolution
+			// actually failed.
+			return nil, fmt.Errorf("cross-package type in state root %s references package %q whose directory could not be resolved",
+				svc.ServiceName, pkg)
 		}
 		var importPath string
 		if filepath.Base(dir) == pkg {

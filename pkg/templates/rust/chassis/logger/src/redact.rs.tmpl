@@ -1,0 +1,267 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+//! Credential redaction for log output.
+//!
+//! Provides structural defense against credential leakage by redacting
+//! sensitive header values at the log output boundary. Even if logger level
+//! pins are overridden or a framework logs at an unexpected level, credentials
+//! are stripped before reaching any log sink.
+
+use once_cell::sync::Lazy;
+use regex::Regex;
+use std::io;
+use tracing_subscriber::fmt::MakeWriter;
+
+const REDACTED: &str = "[REDACTED]";
+
+/// Compiled patterns for credential redaction. Covered keys (case-insensitive):
+/// - `authorization` (Bearer, Basic, or any scheme)
+/// - `cookie` / `set-cookie`
+/// - any key ending in `-token`, `_token`, `-secret`, or `_secret`
+/// - standalone `Bearer <token>` (catches tokens regardless of context)
+static CREDENTIAL_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    vec![
+        Regex::new(r"(?i)(authorization\s*[:=]\s*)(\S+(?:\s+\S+)?)").unwrap(),
+        Regex::new(r"(?i)((?:set-)?cookie\s*[:=]\s*)(\S+)").unwrap(),
+        Regex::new(r"(?i)([\w][\w-]*[-_](?:token|secret)\s*[:=]\s*)(\S+)").unwrap(),
+        Regex::new(r"(?i)(Bearer\s+)(\S{20,})").unwrap(),
+    ]
+});
+
+/// Redacts credential values from a string.
+pub fn redact_credentials(s: &str) -> String {
+    let mut result = s.to_string();
+    for re in CREDENTIAL_PATTERNS.iter() {
+        result = re
+            .replace_all(&result, |caps: &regex::Captures| {
+                format!("{}{}", &caps[1], REDACTED)
+            })
+            .into_owned();
+    }
+    result
+}
+
+/// Writer that redacts credentials from all bytes written through it.
+///
+/// Used as the output writer for tracing-subscriber's fmt layer, ensuring
+/// credentials are stripped at the output boundary before reaching the sink.
+pub struct RedactingWriter<W: io::Write> {
+    inner: W,
+    buf: Vec<u8>,
+}
+
+impl<W: io::Write> RedactingWriter<W> {
+    /// Wrap a writer with credential redaction.
+    pub fn new(inner: W) -> Self {
+        Self {
+            inner,
+            buf: Vec::new(),
+        }
+    }
+}
+
+impl<W: io::Write> io::Write for RedactingWriter<W> {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        self.buf.extend_from_slice(data);
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if !self.buf.is_empty() {
+            let s = String::from_utf8_lossy(&self.buf);
+            let redacted = redact_credentials(&s);
+            self.inner.write_all(redacted.as_bytes())?;
+            self.inner.flush()?;
+            self.buf.clear();
+        }
+        Ok(())
+    }
+}
+
+impl<W: io::Write> Drop for RedactingWriter<W> {
+    fn drop(&mut self) {
+        let _ = io::Write::flush(self);
+    }
+}
+
+/// MakeWriter that creates RedactingWriter instances wrapping stderr.
+pub struct RedactingStderrMakeWriter;
+
+impl<'a> MakeWriter<'a> for RedactingStderrMakeWriter {
+    type Writer = RedactingWriter<io::Stderr>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        RedactingWriter::new(io::stderr())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_redact_bearer_token() {
+        let token = "eyJraWQiOiIzOTE2YTM1My1iODY3LTQ1ZTQtODk2ZS1mMDhkZjA";
+        let input = format!("authorization: Bearer {}", token);
+        let result = redact_credentials(&input);
+        assert!(!result.contains(token), "token leaked: {}", result);
+        assert!(
+            result.contains("[REDACTED]"),
+            "missing [REDACTED]: {}",
+            result
+        );
+        assert!(
+            result.contains("authorization"),
+            "key should be preserved: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_redact_case_insensitive() {
+        let token = "eyJraWQiOiIzOTE2YTM1My1iODY3LTQ1ZTQtODk2ZS1mMDhkZjA";
+        for key in &["Authorization", "AUTHORIZATION", "authorization"] {
+            let input = format!("{}: Bearer {}", key, token);
+            let result = redact_credentials(&input);
+            assert!(
+                !result.contains(token),
+                "token leaked for key {}: {}",
+                key,
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn test_redact_cookie() {
+        let result = redact_credentials("cookie: session=abc123def456");
+        assert!(!result.contains("abc123def456"), "cookie leaked: {}", result);
+        assert!(result.contains("[REDACTED]"), "missing [REDACTED]: {}", result);
+    }
+
+    #[test]
+    fn test_redact_set_cookie() {
+        let result = redact_credentials("Set-Cookie: session=secret123");
+        assert!(!result.contains("secret123"), "set-cookie leaked: {}", result);
+        assert!(result.contains("[REDACTED]"), "missing [REDACTED]: {}", result);
+    }
+
+    #[test]
+    fn test_redact_token_secret_suffix() {
+        let result = redact_credentials("x-auth-token: abc123");
+        assert!(!result.contains("abc123"), "token leaked: {}", result);
+
+        let result = redact_credentials("client-secret: xyz789");
+        assert!(!result.contains("xyz789"), "secret leaked: {}", result);
+
+        let result = redact_credentials("access_token: tok999");
+        assert!(!result.contains("tok999"), "token leaked: {}", result);
+    }
+
+    #[test]
+    fn test_redact_standalone_bearer() {
+        let token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0";
+        let input = format!("Value: Bearer {}", token);
+        let result = redact_credentials(&input);
+        assert!(!result.contains(token), "bearer token leaked: {}", result);
+    }
+
+    #[test]
+    fn test_preserves_non_sensitive_content() {
+        let input = "debug message: user logged in successfully";
+        let result = redact_credentials(input);
+        assert_eq!(result, input, "non-sensitive content was modified");
+    }
+
+    #[test]
+    fn test_redacting_writer_behavioral() {
+        use std::io::Write;
+
+        let token = "eyJraWQiOiIzOTE2YTM1My1iODY3LTQ1ZTQtODk2ZS1mMDhkZjA";
+        let mut output_buf = Vec::new();
+        {
+            let mut writer = RedactingWriter::new(&mut output_buf);
+            write!(
+                writer,
+                "HEADERS: authorization: Bearer {}",
+                token
+            )
+            .unwrap();
+            writer.flush().unwrap();
+        }
+        let output = String::from_utf8(output_buf).unwrap();
+        assert!(
+            !output.contains(token),
+            "SECURITY: token leaked through RedactingWriter: {}",
+            output
+        );
+        assert!(
+            output.contains("[REDACTED]"),
+            "expected [REDACTED] in output: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_redacting_writer_through_tracing() {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+
+        let token = "eyJraWQiOiIzOTE2YTM1My1iODY3LTQ1ZTQtODk2ZS1mMDhkZjA";
+        let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+
+        struct TestMakeWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl<'a> MakeWriter<'a> for TestMakeWriter {
+            type Writer = RedactingWriter<TestWriter>;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                RedactingWriter::new(TestWriter(self.0.clone()))
+            }
+        }
+
+        struct TestWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl io::Write for TestWriter {
+            fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(data);
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(TestMakeWriter(buf.clone()))
+                .with_ansi(false)
+                .with_level(true)
+                .with_target(false)
+                .with_file(false)
+                .with_line_number(false),
+        );
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(
+                "HEADERS: authorization: Bearer {}",
+                token
+            );
+            tracing::debug!("Cookie: session={}", token);
+            tracing::debug!("x-auth-token: {}", token);
+        });
+
+        let output = String::from_utf8_lossy(&buf.lock().unwrap()).to_string();
+        assert!(
+            !output.contains(token),
+            "SECURITY: token leaked through tracing log path: {}",
+            output
+        );
+        assert!(
+            output.contains("[REDACTED]"),
+            "expected [REDACTED] in tracing output: {}",
+            output
+        );
+    }
+}

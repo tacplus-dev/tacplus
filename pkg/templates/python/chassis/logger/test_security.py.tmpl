@@ -1,0 +1,149 @@
+# Copyright (c) 2026 Second Star Cavalier LLC
+# CODE GENERATED - DO NOT EDIT
+
+"""
+Behavioral security tests: verify that credentials never reach a log sink,
+regardless of log level, logger source, or configuration.
+
+Tests exercise real log paths (Python logging → formatter → output) and
+assert that emitted output contains neither the token nor the raw header
+value. These are NOT config-checking tests — they capture actual output.
+"""
+
+import io
+import logging
+import sys
+
+from .configurator import (
+    JsonFormatter,
+    ConsoleFormatter,
+    LoggerConfigurator,
+    _redact_credentials,
+)
+
+FAKE_TOKEN = "eyJraWQiOiIzOTE2YTM1My1iODY3LTQ1ZTQtODk2ZS1mMDhkZjBhYjcxNDYi"
+
+_failures = 0
+
+
+def _must_pass(label: str, ok: bool) -> None:
+    global _failures
+    if not ok:
+        print(f"FAIL: {label}", file=sys.stderr)
+        _failures += 1
+    else:
+        print(f"PASS: {label}")
+
+
+def test_redact_credentials_unit():
+    """Unit tests for _redact_credentials."""
+    cases = [
+        ("bearer", f"authorization: Bearer {FAKE_TOKEN}"),
+        ("bearer_caps", f"Authorization: Bearer {FAKE_TOKEN}"),
+        ("bearer_all_caps", f"AUTHORIZATION: Bearer {FAKE_TOKEN}"),
+        ("basic_auth", f"authorization: Basic {FAKE_TOKEN}"),
+        ("cookie", f"cookie: session={FAKE_TOKEN}"),
+        ("set_cookie", f"Set-Cookie: session={FAKE_TOKEN}"),
+        ("x_auth_token", f"x-auth-token: {FAKE_TOKEN}"),
+        ("client_secret", f"client-secret: {FAKE_TOKEN}"),
+        ("access_token", f"access_token: {FAKE_TOKEN}"),
+        ("standalone_bearer", f"Value: Bearer {FAKE_TOKEN}"),
+        ("equals_delim", f"authorization={FAKE_TOKEN}"),
+    ]
+    for name, inp in cases:
+        result = _redact_credentials(inp)
+        _must_pass(f"redact {name}: token removed", FAKE_TOKEN not in result)
+        _must_pass(f"redact {name}: marker present", "[REDACTED]" in result)
+
+    # Non-sensitive content must not be altered.
+    msg = "user logged in from 192.168.1.1, request took 42ms"
+    _must_pass("preserves non-sensitive", _redact_credentials(msg) == msg)
+
+
+def test_json_formatter_log_path():
+    """Exercise the real JSON formatter log path."""
+    formatter = JsonFormatter(pretty_print=False)
+    handler = logging.StreamHandler(stream=io.StringIO())
+    handler.setFormatter(formatter)
+
+    logger = logging.getLogger("test.security.json")
+    logger.handlers.clear()
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+
+    logger.debug("HEADERS: authorization: Bearer %s", FAKE_TOKEN)
+    logger.debug("Cookie: session=%s", FAKE_TOKEN)
+    logger.debug("x-auth-token: %s", FAKE_TOKEN)
+    logger.debug("normal message — this should appear")
+
+    output = handler.stream.getvalue()
+
+    _must_pass("json path: token not in output", FAKE_TOKEN not in output)
+    _must_pass("json path: [REDACTED] in output", "[REDACTED]" in output)
+    _must_pass("json path: non-sensitive preserved", "normal message" in output)
+    _must_pass("json path: header key preserved", "authorization" in output)
+
+
+def test_console_formatter_log_path():
+    """Exercise the real console formatter log path."""
+    formatter = ConsoleFormatter(pretty_print=False, disable_caller=True)
+    handler = logging.StreamHandler(stream=io.StringIO())
+    handler.setFormatter(formatter)
+
+    logger = logging.getLogger("test.security.console")
+    logger.handlers.clear()
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+
+    logger.debug("authorization: Bearer %s", FAKE_TOKEN)
+    logger.debug("normal log line")
+
+    output = handler.stream.getvalue()
+
+    _must_pass("console path: token not in output", FAKE_TOKEN not in output)
+    _must_pass("console path: [REDACTED] in output", "[REDACTED]" in output)
+    _must_pass("console path: non-sensitive preserved", "normal log line" in output)
+
+
+def test_configurator_install_log_path():
+    """Exercise the LoggerConfigurator.install() path with captured output."""
+    from {{.PythonPackageBase}}.types.sys.logger import logger_pb2
+
+    config = logger_pb2.LoggerConfig()
+    config.level = logger_pb2.LEVEL_DEBUG
+
+    # Install reconfigures the root logger.
+    LoggerConfigurator.install(config)
+
+    # Attach a capturing handler.
+    capture = io.StringIO()
+    handler = logging.StreamHandler(stream=capture)
+    handler.setFormatter(JsonFormatter(pretty_print=False))
+    root = logging.getLogger()
+    root.addHandler(handler)
+
+    try:
+        logger = logging.getLogger("test.security.install")
+        logger.debug("HEADERS: authorization: Bearer %s", FAKE_TOKEN)
+        logger.debug("normal debug log")
+
+        output = capture.getvalue()
+        _must_pass("install path: token not in output", FAKE_TOKEN not in output)
+        _must_pass("install path: [REDACTED] in output", "[REDACTED]" in output)
+        _must_pass("install path: non-sensitive preserved", "normal debug log" in output)
+    finally:
+        root.removeHandler(handler)
+
+
+if __name__ == "__main__":
+    test_redact_credentials_unit()
+    test_json_formatter_log_path()
+    test_console_formatter_log_path()
+    test_configurator_install_log_path()
+
+    if _failures > 0:
+        print(f"\n{_failures} security test(s) FAILED", file=sys.stderr)
+        sys.exit(1)
+    print("\nAll security tests passed")

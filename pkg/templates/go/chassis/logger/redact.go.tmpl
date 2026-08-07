@@ -1,0 +1,79 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package logger
+
+import (
+	"io"
+	"regexp"
+
+	"go.uber.org/zap/zapcore"
+)
+
+// credentialPatterns match sensitive header values in log output regardless
+// of how the header data was formatted (gRPC metadata maps, HTTP/2 frame
+// dumps, structured fields, etc.).
+//
+// Covered keys (case-insensitive):
+//   - authorization (Bearer, Basic, or any scheme)
+//   - cookie / set-cookie
+//   - any key ending in -token, _token, -secret, or _secret
+//   - standalone "Bearer <token>" (catches tokens regardless of surrounding format)
+var credentialPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(authorization\s*[:=]\s*)(\S+(?:\s+\S+)?)`),
+	regexp.MustCompile(`(?i)((?:set-)?cookie\s*[:=]\s*)(\S+)`),
+	regexp.MustCompile(`(?i)([\w][\w-]*[-_](?:token|secret)\s*[:=]\s*)(\S+)`),
+	regexp.MustCompile(`(?i)(Bearer\s+)(\S{20,})`),
+}
+
+const redactedPlaceholder = "[REDACTED]"
+
+// RedactCredentials removes credential values from a string. It is called at
+// the log output boundary so that credentials never reach a log sink
+// regardless of log level, logger source, or configuration.
+func RedactCredentials(s string) string {
+	for _, re := range credentialPatterns {
+		s = re.ReplaceAllString(s, "${1}"+redactedPlaceholder)
+	}
+	return s
+}
+
+// redactingCore wraps a zapcore.Core to redact credentials from log entry
+// messages before they reach the underlying sink.
+type redactingCore struct {
+	zapcore.Core
+}
+
+func (c *redactingCore) With(fields []zapcore.Field) zapcore.Core {
+	return &redactingCore{c.Core.With(fields)}
+}
+
+func (c *redactingCore) Check(ent zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
+	if c.Enabled(ent.Level) {
+		return ce.AddCore(ent, c)
+	}
+	return ce
+}
+
+func (c *redactingCore) Write(ent zapcore.Entry, fields []zapcore.Field) error {
+	ent.Message = RedactCredentials(ent.Message)
+	return c.Core.Write(ent, fields)
+}
+
+// newRedactingCore wraps a zapcore.Core with credential redaction.
+func newRedactingCore(core zapcore.Core) zapcore.Core {
+	return &redactingCore{core}
+}
+
+// redactingWriter wraps an io.Writer to redact credentials from written bytes.
+type redactingWriter struct {
+	w io.Writer
+}
+
+func (rw *redactingWriter) Write(p []byte) (n int, err error) {
+	redacted := RedactCredentials(string(p))
+	_, err = rw.w.Write([]byte(redacted))
+	if err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}

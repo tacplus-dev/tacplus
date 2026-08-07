@@ -10,6 +10,7 @@ based on a protobuf LoggerConfig message.
 import json
 import logging
 import logging.handlers
+import re
 import sys
 from typing import Optional
 
@@ -44,9 +45,9 @@ class JsonFormatter(logging.Formatter):
             log_data["exception"] = self.formatException(record.exc_info)
 
         if self.pretty_print:
-            return json.dumps(log_data, indent=2)
+            return _redact_credentials(json.dumps(log_data, indent=2))
         else:
-            return json.dumps(log_data)
+            return _redact_credentials(json.dumps(log_data))
 
 
 class ConsoleFormatter(logging.Formatter):
@@ -64,6 +65,10 @@ class ConsoleFormatter(logging.Formatter):
 
         super().__init__(fmt=fmt, datefmt=datefmt)
         self.disable_caller = disable_caller
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Format and redact credentials from log output."""
+        return _redact_credentials(super().format(record))
 
 
 class LoggerConfigurator:
@@ -100,6 +105,12 @@ class LoggerConfigurator:
         # Set log level
         level = LogLevel.to_python_level(config.level)
         root_logger.setLevel(level)
+
+        # Pin gRPC transport loggers to WARNING. grpc-python's Cython channel
+        # code can emit HTTP/2 frame data (including authorization headers) at
+        # DEBUG. The pin is unconditional so credentials never reach a log sink.
+        for _name in _CREDENTIAL_LEAKING_LOGGERS:
+            logging.getLogger(_name).setLevel(logging.WARNING)
 
         # Configure handlers based on output paths
         LoggerConfigurator._configure_handlers(root_logger, config)
@@ -163,6 +174,39 @@ class LoggerConfigurator:
                 handler = logging.FileHandler(output_path, mode='a')
                 handler.setFormatter(formatter)
                 logger.addHandler(handler)
+
+
+# Compiled patterns for credential redaction at the log output boundary.
+# Covered keys (case-insensitive):
+#   - authorization (Bearer, Basic, or any scheme)
+#   - cookie / set-cookie
+#   - any key ending in -token, _token, -secret, or _secret
+#   - standalone Bearer <token> (catches tokens regardless of context)
+_CREDENTIAL_PATTERNS = [
+    re.compile(r'(?i)(authorization\s*[:=]\s*)(\S+(?:\s+\S+)?)'),
+    re.compile(r'(?i)((?:set-)?cookie\s*[:=]\s*)(\S+)'),
+    re.compile(r'(?i)([\w][\w-]*[-_](?:token|secret)\s*[:=]\s*)(\S+)'),
+    re.compile(r'(?i)(Bearer\s+)(\S{20,})'),
+]
+
+_REDACTED = '[REDACTED]'
+
+
+def _redact_credentials(s: str) -> str:
+    """Redact credential values from a string at the log output boundary."""
+    for pattern in _CREDENTIAL_PATTERNS:
+        s = pattern.sub(r'\1' + _REDACTED, s)
+    return s
+
+
+# gRPC transport loggers that can emit HTTP/2 frame data with authorization
+# headers at DEBUG. Pinned to WARNING in install() so credentials never leak.
+_CREDENTIAL_LEAKING_LOGGERS = [
+    "grpc",
+    "grpc._cython",
+    "grpc._channel",
+    "grpc.aio",
+]
 
 
 # Add TRACE level to Python logging (DEBUG is 10, so TRACE is 5)

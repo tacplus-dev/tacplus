@@ -256,15 +256,24 @@ impl Logger {
 
         let level = self.tracing_level();
 
-        // Create env filter
+        // Create env filter. Transport-layer loggers (h2, hyper, tonic) are
+        // pinned to WARN because at DEBUG/TRACE they emit raw HTTP/2 frame
+        // data including authorization headers with live service JWTs. The
+        // pins are added AFTER the default env filter so they override any
+        // RUST_LOG=trace setting. New crates added to the transport stack
+        // should be added here.
         let env_filter = EnvFilter::from_default_env()
-            .add_directive(level.into());
+            .add_directive(level.into())
+            .add_directive("h2=warn".parse().unwrap())
+            .add_directive("hyper=warn".parse().unwrap())
+            .add_directive("tonic::transport=warn".parse().unwrap());
 
         // Configure based on format
         match self.format {
             LogFormat::Console | LogFormat::Undefined if self.development => {
                 // Console format (development)
                 let fmt_layer = tracing_subscriber::fmt::layer()
+                    .with_writer(crate::redact::RedactingStderrMakeWriter)
                     .with_target(true)
                     .with_thread_ids(false)
                     .with_thread_names(false)
@@ -282,6 +291,7 @@ impl Logger {
                 // JSON format
                 let fmt_layer = tracing_subscriber::fmt::layer()
                     .json()
+                    .with_writer(crate::redact::RedactingStderrMakeWriter)
                     .with_target(true)
                     .with_current_span(false)
                     .with_span_list(false)
@@ -298,6 +308,7 @@ impl Logger {
                 // Default: JSON format
                 let fmt_layer = tracing_subscriber::fmt::layer()
                     .json()
+                    .with_writer(crate::redact::RedactingStderrMakeWriter)
                     .with_target(true)
                     .with_current_span(false)
                     .with_span_list(false)
@@ -391,5 +402,24 @@ mod tests {
         let env_vars = logger.env_vars();
         assert_eq!(env_vars.len(), 1);
         assert_eq!(env_vars.get(LOG_FORMAT_ENV_VAR), Some(&"json".to_string()));
+    }
+
+    #[test]
+    fn test_transport_loggers_pinned_to_warn() {
+        use tracing_subscriber::EnvFilter;
+
+        // Verify the EnvFilter built by install() contains directives that pin
+        // transport loggers to WARN (defense-in-depth alongside structural
+        // redaction).
+        let filter = EnvFilter::new("")
+            .add_directive(tracing::Level::DEBUG.into())
+            .add_directive("h2=warn".parse().unwrap())
+            .add_directive("hyper=warn".parse().unwrap())
+            .add_directive("tonic::transport=warn".parse().unwrap());
+
+        let filter_str = format!("{}", filter);
+        assert!(filter_str.contains("h2=warn"), "filter must contain h2=warn directive, got: {}", filter_str);
+        assert!(filter_str.contains("hyper=warn"), "filter must contain hyper=warn directive, got: {}", filter_str);
+        assert!(filter_str.contains("tonic"), "filter must contain tonic transport directive, got: {}", filter_str);
     }
 }

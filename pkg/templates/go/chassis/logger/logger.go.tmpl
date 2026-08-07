@@ -4,12 +4,14 @@ package logger
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/jinzhu/copier"
 	protoerrors "{{.ModuleBasePath}}/types/sys/errors"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"google.golang.org/grpc/grpclog"
 )
 
 // Logger represents a programmatic logger configuration.
@@ -285,7 +287,28 @@ func (x *Logger) Install() {
 		panic(err)
 	}
 
+	// Structural credential redaction: wrap the core so that credentials
+	// in log messages are redacted before reaching any sink, regardless of
+	// log level or logger source.
+	x.ZapLogger = x.ZapLogger.WithOptions(zap.WrapCore(newRedactingCore))
+
 	zap.ReplaceGlobals(x.ZapLogger)
 
+	// Pin grpc-go's internal logger to WARN so transport-level verbose
+	// output (which can include HTTP/2 metadata with authorization headers)
+	// never reaches a log sink. Verbosity 0 suppresses Info; Warning and
+	// Error still flow to stderr.
+	pinGrpcTransportLogger()
+
 	zap.L().Debug(fmt.Sprintf("delayed log->[%s]", x.logString))
+}
+
+// pinGrpcTransportLogger replaces grpc-go's internal logger with one that
+// discards Info-level output. grpc-go's transport layer at high verbosity can
+// log HTTP/2 metadata including authorization headers. This is defense-in-depth:
+// grpc-go does not log headers by default, but the pin ensures no verbosity
+// flag or future change can leak credentials.
+func pinGrpcTransportLogger() {
+	rw := &redactingWriter{w: os.Stderr}
+	grpclog.SetLoggerV2(grpclog.NewLoggerV2(io.Discard, rw, rw))
 }

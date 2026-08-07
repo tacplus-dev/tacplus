@@ -1,0 +1,132 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// CODE GENERATED - DO NOT EDIT
+
+package {{.ChassisBase}}.logger;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
+import {{.TypesBase}}.sys.logger.Logger.LoggerConfig;
+import org.slf4j.LoggerFactory;
+
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Behavioral security tests: verify that credentials never reach a log sink,
+ * regardless of log level, logger source, or configuration.
+ *
+ * <p>Tests exercise real log paths (SLF4J → Logback → encoder → output) and
+ * assert that emitted output contains neither the token nor the raw header
+ * value. These are NOT config-checking tests — they capture actual output.
+ */
+public class LogbackConfiguratorSecurityTest {
+    private static int failures = 0;
+
+    private static void mustPass(String label, boolean ok) {
+        if (!ok) {
+            System.err.println("FAIL: " + label);
+            failures++;
+        } else {
+            System.out.println("PASS: " + label);
+        }
+    }
+
+    public static void main(String[] args) {
+        String fakeToken = "eyJraWQiOiIzOTE2YTM1My1iODY3LTQ1ZTQtODk2ZS1mMDhkZjBhYjcxNDYi";
+
+        // ── Test 1: CredentialRedactor.redact() unit tests ──
+
+        mustPass("redact bearer token",
+            !CredentialRedactor.redact("authorization: Bearer " + fakeToken).contains(fakeToken));
+        mustPass("redact preserves key",
+            CredentialRedactor.redact("authorization: Bearer " + fakeToken).contains("authorization"));
+        mustPass("redact adds marker",
+            CredentialRedactor.redact("authorization: Bearer " + fakeToken).contains("[REDACTED]"));
+        mustPass("redact case insensitive (Authorization)",
+            !CredentialRedactor.redact("Authorization: Bearer " + fakeToken).contains(fakeToken));
+        mustPass("redact case insensitive (AUTHORIZATION)",
+            !CredentialRedactor.redact("AUTHORIZATION: Bearer " + fakeToken).contains(fakeToken));
+        mustPass("redact basic auth",
+            !CredentialRedactor.redact("authorization: Basic " + fakeToken).contains(fakeToken));
+        mustPass("redact cookie",
+            !CredentialRedactor.redact("cookie: session=" + fakeToken).contains(fakeToken));
+        mustPass("redact set-cookie",
+            !CredentialRedactor.redact("Set-Cookie: session=" + fakeToken).contains(fakeToken));
+        mustPass("redact x-auth-token",
+            !CredentialRedactor.redact("x-auth-token: " + fakeToken).contains(fakeToken));
+        mustPass("redact client-secret",
+            !CredentialRedactor.redact("client-secret: " + fakeToken).contains(fakeToken));
+        mustPass("redact access_token",
+            !CredentialRedactor.redact("access_token: " + fakeToken).contains(fakeToken));
+        mustPass("redact standalone Bearer",
+            !CredentialRedactor.redact("Value: Bearer " + fakeToken).contains(fakeToken));
+        mustPass("preserves non-sensitive",
+            CredentialRedactor.redact("user logged in OK").equals("user logged in OK"));
+        mustPass("null returns null",
+            CredentialRedactor.redact(null) == null);
+
+        // ── Test 2: Real log path through LogbackConfigurator ──
+        // Redirect stderr to capture the actual encoder output.
+
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        PrintStream originalErr = System.err;
+        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+
+        try {
+            LoggerConfig config = LoggerConfig.newBuilder()
+                .setLevel({{.TypesBase}}.sys.logger.Logger.Level.LEVEL_DEBUG)
+                .build();
+            LogbackConfigurator.install(config);
+
+            // Log through a real SLF4J logger — goes through Logback encoder.
+            org.slf4j.Logger appLogger = LoggerFactory.getLogger("test.security");
+            appLogger.debug("HEADERS: authorization: Bearer " + fakeToken);
+            appLogger.debug("Cookie: session=" + fakeToken);
+            appLogger.debug("x-auth-token: " + fakeToken);
+            appLogger.debug("normal message — this should appear");
+
+            System.err.flush();
+            String output = captured.toString(StandardCharsets.UTF_8);
+
+            mustPass("real log path: token not in output", !output.contains(fakeToken));
+            mustPass("real log path: [REDACTED] in output", output.contains("[REDACTED]"));
+            mustPass("real log path: non-sensitive preserved",
+                output.contains("normal message"));
+            mustPass("real log path: header key preserved",
+                output.contains("authorization"));
+
+        } finally {
+            System.setErr(originalErr);
+        }
+
+        // ── Test 3: Defense-in-depth — framework loggers pinned ──
+
+        LoggerContext loggerContext = (LoggerContext) LoggerFactory.getILoggerFactory();
+        String[] frameworkLoggers = {
+            "io.grpc.netty",
+            "io.grpc.netty.shaded.io.grpc.netty",
+            "io.netty",
+            "io.grpc.internal",
+        };
+        for (String name : frameworkLoggers) {
+            Logger fwLogger = loggerContext.getLogger(name);
+            Level effective = fwLogger.getEffectiveLevel();
+            mustPass(name + " pinned >= WARN",
+                effective.isGreaterOrEqual(Level.WARN));
+        }
+
+        // ── Result ──
+
+        if (failures > 0) {
+            System.err.println(failures + " LogbackConfiguratorSecurityTest check(s) FAILED");
+            System.exit(1);
+        }
+        System.out.println("LogbackConfiguratorSecurityTest: all checks passed");
+    }
+}

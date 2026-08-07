@@ -147,8 +147,11 @@ impl LoggerWriter {
             self.pretty_print,
         );
 
+        // Structural credential redaction at the output boundary.
+        let redacted = crate::redact::redact_credentials(&String::from_utf8_lossy(&payload));
+
         for target in &self.targets {
-            target.write_all(&payload)?;
+            target.write_all(redacted.as_bytes())?;
         }
 
         Ok(())

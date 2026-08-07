@@ -189,8 +189,15 @@ func InstallFromConfig(config *loggerProto.LoggerConfig) (*zap.Logger, error) {
 		logger = logger.With(fields...)
 	}
 
+	// Structural credential redaction: wrap the core so that credentials
+	// in log messages are redacted before reaching any sink.
+	logger = logger.WithOptions(zap.WrapCore(newRedactingCore))
+
 	// Replace global logger
 	zap.ReplaceGlobals(logger)
+
+	// Pin grpc-go's internal logger (defense-in-depth; see logger.go).
+	pinGrpcTransportLogger()
 
 	defer logger.Sync()
 

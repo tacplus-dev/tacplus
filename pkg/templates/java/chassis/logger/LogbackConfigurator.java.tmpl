@@ -29,6 +29,25 @@ import java.util.Map;
  */
 public final class LogbackConfigurator {
 
+    /**
+     * gRPC/Netty transport loggers that emit HTTP/2 frame data (including raw
+     * authorization headers) at DEBUG/TRACE. Pinned to WARN unconditionally so
+     * credentials never reach a log sink regardless of the application's root
+     * log level or any logback.xml a service might ship.
+     *
+     * <p>The list uses prefix matching: any child logger (e.g.
+     * {@code io.grpc.netty.shaded.io.grpc.netty.NettyServerHandler}) inherits
+     * the cap from its nearest ancestor. New loggers added under these prefixes
+     * are automatically covered.
+     */
+    private static final String[] CREDENTIAL_LEAKING_LOGGERS = {
+        "io.grpc.netty",
+        "io.grpc.netty.shaded.io.grpc.netty",
+        "io.grpc.netty.shaded.io.netty",
+        "io.netty",
+        "io.grpc.internal",
+    };
+
     private LogbackConfigurator() {
         throw new UnsupportedOperationException("This is a utility class and cannot be instantiated");
     }
@@ -45,12 +64,30 @@ public final class LogbackConfigurator {
         Logger rootLogger = loggerContext.getLogger(Logger.ROOT_LOGGER_NAME);
         rootLogger.setLevel(level);
 
+        // Pin gRPC/Netty transport loggers to WARN. These loggers emit raw
+        // HTTP/2 frame data at DEBUG which includes authorization headers with
+        // live service JWTs. The pin is unconditional: it cannot be overridden
+        // by application config, and child loggers inherit the cap.
+        pinTransportLoggers(loggerContext);
+
         configureAppenders(loggerContext, rootLogger, config);
 
         if (config.getInitialFieldsCount() > 0) {
             for (Map.Entry<String, String> entry : config.getInitialFieldsMap().entrySet()) {
                 org.slf4j.MDC.put(entry.getKey(), entry.getValue());
             }
+        }
+    }
+
+    /**
+     * Pins all credential-leaking framework loggers to WARN. Called from
+     * install() after context.reset() so no prior XML config can undo it,
+     * and the pins are set programmatically so a service's logback.xml
+     * cannot override them.
+     */
+    private static void pinTransportLoggers(LoggerContext loggerContext) {
+        for (String name : CREDENTIAL_LEAKING_LOGGERS) {
+            loggerContext.getLogger(name).setLevel(Level.WARN);
         }
     }
 
@@ -106,7 +143,11 @@ public final class LogbackConfigurator {
 
         encoder.setPattern(pattern);
         encoder.start();
-        return encoder;
+        // Wrap with credential redaction at the encoder output boundary.
+        RedactingEncoder redacting = new RedactingEncoder(encoder);
+        redacting.setContext(context);
+        redacting.start();
+        return redacting;
     }
 
     private static final class JsonLogEncoder extends EncoderBase<ILoggingEvent> {
@@ -159,7 +200,8 @@ public final class LogbackConfigurator {
             appendField(out, "message", event.getFormattedMessage());
             out.append('}');
             out.append('\n');
-            return out.toString().getBytes(StandardCharsets.UTF_8);
+            // Structural credential redaction at the encoder output boundary.
+            return CredentialRedactor.redact(out.toString()).getBytes(StandardCharsets.UTF_8);
         }
 
         @Override
@@ -225,6 +267,38 @@ public final class LogbackConfigurator {
                 }
             }
             return out.toString();
+        }
+    }
+
+    /**
+     * Encoder wrapper that redacts credentials from the final encoded output.
+     * Used to wrap PatternLayoutEncoder for console format output.
+     */
+    private static final class RedactingEncoder extends EncoderBase<ILoggingEvent> {
+        private final Encoder<ILoggingEvent> delegate;
+
+        RedactingEncoder(Encoder<ILoggingEvent> delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public byte[] headerBytes() {
+            return delegate.headerBytes();
+        }
+
+        @Override
+        public byte[] encode(ILoggingEvent event) {
+            byte[] raw = delegate.encode(event);
+            if (raw == null) {
+                return null;
+            }
+            return CredentialRedactor.redact(new String(raw, StandardCharsets.UTF_8))
+                    .getBytes(StandardCharsets.UTF_8);
+        }
+
+        @Override
+        public byte[] footerBytes() {
+            return delegate.footerBytes();
         }
     }
 

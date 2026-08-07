@@ -71,8 +71,8 @@ Use `docs/DEVELOPMENT.md` for compiler and soundness expectations. Use
 consumers and LLM reviewers to follow. If that file is not present locally, use
 the repository URL above. The tacplus analysis must verify that the compiler
 and generated code actually make those consumer rules practical, consistent,
-and enforceable. Use `roadmap/README.md` for current track status and parked or
-withdrawn work.
+and enforceable. Use `roadmap/README.md` for future tracks, historical baseline
+references, and plan archives.
 
 ## tacplus Assumptions
 
@@ -377,8 +377,9 @@ should then include hypotheses that need more evidence, discarded leads that
 looked suspicious but were ruled out, and any open questions that require a
 human decision rather than a technical fix.
 
-Do not use the report to relitigate already withdrawn work. If a concept is
-parked, withdrawn, or downstream-only in `roadmap/README.md`, treat that status as the
+Do not use the report to relitigate already withdrawn work. If a concept was
+parked, withdrawn, or downstream-only (check `roadmap/README.md` for future
+tracks and `archive/` for completed/withdrawn plans), treat that status as the
 source of truth unless current code contradicts it. Withdrawn status applies
 to features and scope decisions only, never to defects: a previously reported
 defect that is still present in the code is an open finding every time, and

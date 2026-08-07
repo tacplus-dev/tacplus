@@ -34,7 +34,7 @@ Message-level:
 | Annotation | Meaning |
 |---|---|
 | `event { c2s{…}? , s2s{…}? }` | eventbus **topic + publish RPC**. ≥1 producer surface required. |
-| `record { key, owner, c2s{…}? , s2s{…}? }` | **is-an `event`** + stored in `record_store` + projectable. `key` = id field, `owner` = ownership field. |
+| `record { key, owner, c2s{…}? , s2s{…}? }` | **is-an `event`** + stored in `record_store` + projectable. `key` = id field (default: `event_id`), `owner` = ownership field. |
 | `graph_projection {…}` | derive a graph node from this record → graphdb. Requires `record`. |
 | `timeseries_projection {…}` | derive a timeseries row from this record → timedb. Requires `record`. |
 

@@ -115,7 +115,29 @@ Only `language` and `output-dir` are required. `pkg` is commonly set explicitly,
 |-------|------|----------|-------------|
 | `language` | string | Yes | Full-service targets: `go`, `rust`, `java`. Full-client targets: `python`, `typescript`. Lite client targets: `swift`, `csharp`. |
 | `output-dir` | string | Yes | Output subdirectory relative to project dir |
-| `pkg` | string | No | Canonical package name (Java-style reverse DNS, e.g. `com.example.myservice`). Converted to native format per language. |
+| `pkg` | string | No | Canonical package name (Java-style reverse DNS, e.g. `com.example.myservice`). Each segment must be a valid identifier (letters, digits, underscores — no hyphens). Converted to native format per language (see table below). |
+
+#### Package Name Conversion
+
+Given a canonical `pkg` (e.g. `com.example.myservice`) and `output-dir` name
+(default `model`), the native package/module/crate name is derived per language:
+
+| Language | Rule | Example (`com.example.myservice`, output `model`) |
+|----------|------|---------------------------------------------------|
+| java | `pkg.output` | `com.example.myservice.model` |
+| go | reverse TLD to host, `/`-join rest, append output | `example.com/myservice/model` |
+| rust | last segment + `-` + output | `myservice-model` |
+| typescript | last segment + `-` + output | `myservice-model` |
+| python | last segment + `_` + output | `myservice_model` |
+| swift | PascalCase(last segment) + PascalCase(output) | `MyserviceModel` |
+| csharp | PascalCase(last segment) + PascalCase(output) | `MyserviceModel` |
+
+Swift and C# use the same PascalCase folding: segments split on `-`, `_`, and
+`.` are title-cased and concatenated. This means distinct canonical packages
+that differ only in segments before the last (e.g. `com.a.identity` vs
+`com.b.identity`) produce **the same** native name for rust/ts/python/swift/csharp.
+Proto package names must be globally unique; choose last segments that are
+unique across the system to avoid collisions in these languages.
 | `src` | string | No | Primary proto source — local path or git URL. No default — must be supplied via `--src` or `tacplus.yaml`. |
 | `sources` | string list | No | Additional proto sources merged with `src` into one generation (e.g. a shared base plus a reusable service's protos). All sources form one proto tree; a file at the same path in two sources must be byte-identical (deduplicated) or it is a hard error, and `dependencies.yaml` is merged across sources (conflicting pins error). Repeatable `--src` on the CLI overrides `src`+`sources`. |
 | `import` | string | No | Path to base config to import (resolved relative to this file) |
@@ -941,9 +963,13 @@ enum RpcID {
 
 These stable numeric IDs are used in the per-proto registry for O(1) type and RPC lookups.
 
-### Norms and agent.md
+### AGENT.md (generated)
 
-`agent.md` files are embedded into `registry.json`. The agentic analysis pass checks for cross-language parity drift, suspicious service shapes, and architectural anti-patterns. This is governance carried in machine-readable form.
+tacplus generates `AGENT.md` from an internal template (`docs/AGENT.md.tmpl`)
+and embeds it into `registry.json` under the `docs` key. It is a generated
+artifact — there is no mechanism for consumer projects to supply or override it.
+The agentic analysis pass uses it to check for cross-language parity drift,
+suspicious service shapes, and architectural anti-patterns.
 
 ---
 

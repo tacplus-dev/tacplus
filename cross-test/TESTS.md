@@ -28,6 +28,9 @@ The cross-test suite has these gates (see `.gitlab-ci.yml` and
 - `consumer-smoke` (`cross-test/consumer-smoke/run.sh`): a local/manual smoke
   target defined in `cross-test/justfile`. It is NOT invoked by CI or the nightly
   matrix — the runtime checks that run in CI live in `consumer-contract` above.
+- `chaos` (`cross-test/chaos/`): model stress / resilience harness (Profile A).
+  Exercises generated model runtime under seeded fault schedules with stubbed
+  rivets. Local/manual — not invoked by CI or the nightly matrix.
 
 Generated outputs are disposable build artifacts. They must not be committed
 under `cross-test/`.
@@ -297,6 +300,22 @@ languages.
 
 Additional smoke paths should be added in this layer rather than reviving
 committed generated output trees.
+
+## Chaos / Model Stress (Profile A)
+
+```bash
+go test ./cross-test/chaos/...
+go run ./cross-test/chaos/cmd/chaos [-profile f.yaml] [-seed N]
+```
+
+The chaos harness exercises the tacplus-generated model runtime under failure
+using stubbed rivets (no kernel, no state store). It drives a synthetic
+multi-language node mesh through seeded fault schedules (SIGTERM, SIGKILL,
+network partition, dependency-down, token-expiry) and verifies deterministic
+invariants: WATCH gapless/ordered/no-dup, auth fail-closed, no-leak trend,
+unary echo-transform. This is a **local/manual** gate — it is not invoked by
+CI or the nightly matrix. See `cross-test/chaos/README.md` for layout and
+Profile B plans.
 
 ## Retired Runtime Harness
 

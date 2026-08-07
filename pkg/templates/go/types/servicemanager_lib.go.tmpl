@@ -315,9 +315,9 @@ func NewServiceManager(ctx context.Context, cfg *grpcconfig_pb.Config, identity 
 	bc.trustDomain = trustDomain
 	bc.certPool = certPool
 	bc.baseDialOpts = opts
-	// The state-store/bootstrap connection dials the token authority (kernel),
-	// whose specific service label is deployment policy not known here, so it
-	// pins the trust domain (any service in it). S2S mesh channels instead pin
+	// The state-store/bootstrap connection dials the token authority, whose
+	// specific service label is deployment policy not known here, so it pins
+	// the trust domain (any service in it). S2S mesh channels instead pin
 	// the exact target via ServiceDialOpts (see below). Chain validity alone is
 	// CA-only trust (fail-open) — matches java/rust (SEC-1 / H1).
 	bc.dialOpts = bc.dialOptsWithVerify(func(cert *x509.Certificate) error {
@@ -345,8 +345,8 @@ func NewServiceManager(ctx context.Context, cfg *grpcconfig_pb.Config, identity 
 			wg.Add(1)
 			go func(idx int, ec *endpointConn) {
 				defer wg.Done()
-				// The SM's own endpoints are the token authority (kernel), pinned
-				// to the trust domain (its specific label is not known here).
+				// The SM's own endpoints are the token authority, pinned to the
+				// trust domain (its specific label is not known here).
 				if err := ec.dial(bc.dialOpts); err != nil {
 					errs[idx] = err
 				}

@@ -21,10 +21,10 @@ use crate::cloud_detect::detect_cloud;
 /// Default audience for token exchange.
 const HAS_TOKEN_EXCHANGER: bool = {{if .HasTokenExchanger}}true{{else}}false{{end}};
 const DEFAULT_AUDIENCE: &str = "{{.DefaultAudience}}";
-/// Env var naming the projected Kubernetes token file (audience `kernel`).
+/// Env var naming the projected Kubernetes token file for the token authority.
 /// Mirrors the operator's `KMAKER_K8S_TOKEN_FILE` precedent. When set and the
-/// file is readable, the service authenticates to the kernel with the projected
-/// token. This is the in-cluster bootstrap path.
+/// file is readable, the service authenticates to the token authority with the
+/// projected token. This is the in-cluster bootstrap path.
 const K8S_TOKEN_FILE_ENV: &str = "KERNEL_K8S_TOKEN_FILE";
 const RECONNECT_POLL: Duration = Duration::from_secs(30);
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);

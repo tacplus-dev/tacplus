@@ -15,7 +15,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.vendor="Second Star Cavalier LLC" \
       org.opencontainers.image.title="TACPlus Compiler System" \
-      org.opencontainers.image.description="Multi-language Protocol Buffer code generator for Go, TypeScript, Python, Rust, Java, and Swift-lite clients"
+      org.opencontainers.image.description="Multi-language Protocol Buffer code generator for Go, TypeScript, Python, Rust, Java, Swift, and C# lite clients"
 
 ARG TARGETARCH
 COPY bin/tacplus-linux-${TARGETARCH} /usr/local/bin/tacplus

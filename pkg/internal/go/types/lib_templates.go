@@ -61,11 +61,8 @@ func writeLibTemplates(config *tactype.Config) error {
 			return nil
 		}
 
-		// Skip templates that are replaced by per-service typed wrappers
+		// Skip templates emitted by dedicated generators (not the generic walker).
 		base := filepath.Base(path)
-		if base == "manager.go.tmpl" || base == "grpcmap.go.tmpl" {
-			return nil
-		}
 		// service_im and client_im require richer template data (the discovered
 		// token-mint exchangers) than the generic chassis walker supplies, and
 		// client_im is emitted only for client builds. They are emitted by

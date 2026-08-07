@@ -116,7 +116,7 @@ Only `language` and `output-dir` are required. `pkg` is commonly set explicitly,
 | `language` | string | Yes | Full-service targets: `go`, `rust`, `java`. Full-client targets: `python`, `typescript`. Lite client targets: `swift`, `csharp`. |
 | `output-dir` | string | Yes | Output subdirectory relative to project dir |
 | `pkg` | string | No | Canonical package name (Java-style reverse DNS, e.g. `com.example.myservice`). Converted to native format per language. |
-| `src` | string | No | Primary proto source — local path or git URL. Defaults to the shared proto repo. |
+| `src` | string | No | Primary proto source — local path or git URL. No default — must be supplied via `--src` or `tacplus.yaml`. |
 | `sources` | string list | No | Additional proto sources merged with `src` into one generation (e.g. a shared base plus a reusable service's protos). All sources form one proto tree; a file at the same path in two sources must be byte-identical (deduplicated) or it is a hard error, and `dependencies.yaml` is merged across sources (conflicting pins error). Repeatable `--src` on the CLI overrides `src`+`sources`. |
 | `import` | string | No | Path to base config to import (resolved relative to this file) |
 

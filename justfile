@@ -21,8 +21,12 @@ install: generate
   go install -trimpath -ldflags="$ldflags" .
   echo "Installed: tacplus ${tag}"
 
-test:
+test: soundness
   go test ./...
+
+# Model/template soundness gate. Runs as part of `test`.
+soundness:
+  go run ./cmd/soundness -root .
 
 vet:
   go vet ./...

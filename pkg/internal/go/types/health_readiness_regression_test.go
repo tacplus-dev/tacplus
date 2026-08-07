@@ -151,3 +151,49 @@ func TestGoServiceManagerFlipsHealthReadyAfterBootstrap(t *testing.T) {
 		t.Fatalf("SetReady(true) must come after the serving goroutine starts (listen=%d ready=%d)", listen, ready)
 	}
 }
+
+// Services that manage their own serving lifecycle (e.g. letsencrypt with
+// custom cert management) never call Run(), so the bootstrap SERVING flip
+// never fires. The SM must expose a public SetServing() method that drives
+// the SAME healthServer backing the 8444 probe — not a second health server.
+func TestGoServiceManagerExposesSetServing(t *testing.T) {
+	src, err := templates.FS.ReadFile("go/types/service_manager.go.tmpl")
+	if err != nil {
+		t.Fatalf("read go service_manager template: %v", err)
+	}
+	sm := string(src)
+
+	// The method must exist with the right signature.
+	if !strings.Contains(sm, "func (sm *ServiceManager) SetServing(serving bool)") {
+		t.Fatalf("Go SM must expose func (sm *ServiceManager) SetServing(serving bool)")
+	}
+
+	// It must use the same healthServer field that backs the probe listener,
+	// not create a new health.Server.
+	if !strings.Contains(sm, "sm.healthServer.SetServingStatus(") {
+		t.Fatalf("SetServing must drive sm.healthServer (the shared handle), not a new server")
+	}
+
+	// The method must NOT appear inside Run() — it is a standalone method.
+	setServingIdx := strings.Index(sm, "func (sm *ServiceManager) SetServing(serving bool)")
+	runIdx := strings.Index(sm, "func (sm *ServiceManager) Run(h Handler) error {")
+	if setServingIdx < 0 {
+		t.Fatalf("SetServing not found")
+	}
+	if runIdx >= 0 && setServingIdx > runIdx {
+		t.Fatalf("SetServing must be defined before Run(), as a standalone accessor (SetServing=%d Run=%d)", setServingIdx, runIdx)
+	}
+
+	// The method must map true→SERVING, false→NOT_SERVING.
+	methodEnd := setServingIdx + 500
+	if methodEnd > len(sm) {
+		methodEnd = len(sm)
+	}
+	methodBody := sm[setServingIdx:methodEnd]
+	if !strings.Contains(methodBody, "HealthCheckResponse_SERVING") {
+		t.Fatalf("SetServing(true) must map to HealthCheckResponse_SERVING")
+	}
+	if !strings.Contains(methodBody, "HealthCheckResponse_NOT_SERVING") {
+		t.Fatalf("SetServing(false) must map to HealthCheckResponse_NOT_SERVING")
+	}
+}

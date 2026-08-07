@@ -837,6 +837,28 @@ impl ServiceManager {
 	        self.identity.instance_id()
 	    }
 
+    /// Marks the service as SERVING or NOT_SERVING on the gRPC health endpoint
+    /// (the same handle that backs the plaintext 8444 probe and the main-server
+    /// health service).
+    ///
+    /// This method is for services that manage their own serving lifecycle
+    /// (e.g. custom external TLS) and never call `run()`. Services that call
+    /// `run()` do not need this — bootstrap automatically flips to SERVING
+    /// after health publish and TLS setup complete.
+    ///
+    /// **Contract**: Do not call this until your service has completed its own
+    /// bootstrap (config loaded, TLS ready, handler initialized). Reporting
+    /// SERVING before bootstrap is complete defeats the purpose of readiness
+    /// probes and may cause k8s to route traffic to an unready instance.
+    pub async fn set_serving(&self, serving: bool) {
+        let status = if serving {
+            tonic_health::ServingStatus::Serving
+        } else {
+            tonic_health::ServingStatus::NotServing
+        };
+        self.grpc_health.set_service_status("", status).await;
+    }
+
 {{- if .HasDiskStores}}
     /// Returns the ServiceManager-owned redo logs when disk persistence is enabled.
     pub fn disk_store_logs(&self) -> Option<Arc<DiskStoreLogs>> {

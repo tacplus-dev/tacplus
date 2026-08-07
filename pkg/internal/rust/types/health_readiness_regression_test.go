@@ -154,3 +154,46 @@ func TestRustHealthProbeBindsBeforeKernelInit(t *testing.T) {
 	}
 	_ = newIdx
 }
+
+// Services that manage their own serving lifecycle (e.g. gateway with custom
+// external TLS) never call run(), so the bootstrap SERVING flip never fires.
+// The SM must expose a public set_serving() method that drives the SAME
+// grpc_health handle backing the 8444 probe — not a second reporter.
+func TestRustServiceManagerExposesSetServing(t *testing.T) {
+	src, err := templates.FS.ReadFile("rust/types/service_manager.rs.tmpl")
+	if err != nil {
+		t.Fatalf("read rust service_manager template: %v", err)
+	}
+	sm := string(src)
+
+	// The method must exist with the right signature.
+	if !strings.Contains(sm, "pub async fn set_serving(&self, serving: bool)") {
+		t.Fatalf("Rust SM must expose pub async fn set_serving(&self, serving: bool)")
+	}
+
+	// It must use the same grpc_health field that backs the probe listener,
+	// not create a new HealthReporter.
+	if !strings.Contains(sm, `self.grpc_health.set_service_status("", status).await;`) {
+		t.Fatalf("set_serving must drive self.grpc_health (the shared handle), not a new reporter")
+	}
+
+	// The method must NOT appear inside run() — it is an accessor on the struct.
+	setServingIdx := strings.Index(sm, "pub async fn set_serving(&self, serving: bool)")
+	runIdx := strings.Index(sm, "pub async fn run(")
+	if setServingIdx < 0 {
+		t.Fatalf("set_serving not found")
+	}
+	if runIdx >= 0 && setServingIdx > runIdx {
+		t.Fatalf("set_serving must be defined before run(), as a standalone accessor (set_serving=%d run=%d)", setServingIdx, runIdx)
+	}
+
+	// The method must map true→Serving, false→NotServing.
+	// Find the method body and check both variants.
+	methodBody := sm[setServingIdx : setServingIdx+500]
+	if !strings.Contains(methodBody, "ServingStatus::Serving") {
+		t.Fatalf("set_serving(true) must map to ServingStatus::Serving")
+	}
+	if !strings.Contains(methodBody, "ServingStatus::NotServing") {
+		t.Fatalf("set_serving(false) must map to ServingStatus::NotServing")
+	}
+}

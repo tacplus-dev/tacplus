@@ -82,9 +82,12 @@ and tool-assisted, but a large diff.
 anything it emits, so `determinism` and `current-generation` prove it byte for
 byte.
 
-Two smaller inconsistencies sit next to it and should be folded into the same
-pass: `package daemon` appears in 3 files each under python/types and
-typescript/types, and `package foo` in 2 files under java/types.
+java is the only real outlier. An earlier draft of this rule also claimed
+`package daemon` under python/typescript and `package foo` under java; that was
+wrong — those strings are proto/Go fixture content inside `*_test.go` files, not
+package clauses. Counting the first `package` line of each file gives 33/37/61/57
+`package types` for python, typescript, rust and go, against java's 54
+`package java`.
 
 ## 4. `_gen.go` means "emits code"
 

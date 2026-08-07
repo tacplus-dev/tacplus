@@ -99,7 +99,7 @@ var languageGeneratorFiles = map[string]string{
 // pattern so they pass vacuously.
 var dataEntitlementEmitterFiles = map[string]string{
 	"go":   "pkg/internal/go/types/sanitize_gen.go",
-	"java": "pkg/internal/java/types/release.go",
+	"java": "pkg/internal/java/types/release_gen.go",
 	"rust": "pkg/internal/rust/types/release_gen.go",
 }
 
@@ -108,7 +108,7 @@ var dataEntitlementEmitterFiles = map[string]string{
 // fail-closed).
 var dataEntitlementBuilderFiles = map[string]string{
 	"go":   "pkg/internal/go/types/entitlement_builder_gen.go",
-	"java": "pkg/internal/java/types/release.go",
+	"java": "pkg/internal/java/types/release_gen.go",
 	"rust": "pkg/internal/rust/types/release_gen.go",
 }
 
@@ -950,8 +950,21 @@ func renderSemanticSurfaces(root string) int {
 		}
 		b, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
-			cache[rel] = ""
-			return ""
+			// A CONFIGURED path that cannot be read is a broken gate, not an
+			// absent surface. Returning "" here made the probe find no pattern
+			// and pass vacuously -- the same outcome as a language that
+			// deliberately has no file (rel == "", handled above). Renaming or
+			// moving any file named in a *Files map therefore switched its
+			// probes off silently while soundness still exited 0.
+			//
+			// Found exactly that way: renaming java's release.go to
+			// release_gen.go left two data-entitlement probes pointing at a
+			// nonexistent path and the gate stayed green.
+			fmt.Fprintf(os.Stderr,
+				"soundness: configured probe file %q cannot be read: %v\n"+
+					"  This disables every probe targeting it. Fix the path in cmd/soundness/main.go.\n",
+				rel, err)
+			os.Exit(1)
 		}
 		cache[rel] = string(b)
 		return string(b)
@@ -1245,8 +1258,21 @@ func renderControlPlane(root string) int {
 		}
 		b, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
-			cache[rel] = ""
-			return ""
+			// A CONFIGURED path that cannot be read is a broken gate, not an
+			// absent surface. Returning "" here made the probe find no pattern
+			// and pass vacuously -- the same outcome as a language that
+			// deliberately has no file (rel == "", handled above). Renaming or
+			// moving any file named in a *Files map therefore switched its
+			// probes off silently while soundness still exited 0.
+			//
+			// Found exactly that way: renaming java's release.go to
+			// release_gen.go left two data-entitlement probes pointing at a
+			// nonexistent path and the gate stayed green.
+			fmt.Fprintf(os.Stderr,
+				"soundness: configured probe file %q cannot be read: %v\n"+
+					"  This disables every probe targeting it. Fix the path in cmd/soundness/main.go.\n",
+				rel, err)
+			os.Exit(1)
 		}
 		cache[rel] = string(b)
 		return string(b)
@@ -1645,10 +1671,10 @@ func renderStoreVendorSoundness(root string) int {
 // to test the gate (main_test.go), or are cross-test fixtures that deliberately
 // exercise vendor-typed schemas (database.proto).
 var storeVendorGuardSelf = map[string]bool{
-	filepath.ToSlash(filepath.Join("cmd", "soundness", "main.go")):                          true,
-	filepath.ToSlash(filepath.Join("cmd", "soundness", "main_test.go")):                     true,
-	filepath.ToSlash(filepath.Join("cross-test", "proto", "libraries2", "database.proto")):  true,
-	filepath.ToSlash(filepath.Join("cross-test", "proto", "libraries2", "cache.proto")):     true,
+	filepath.ToSlash(filepath.Join("cmd", "soundness", "main.go")):                         true,
+	filepath.ToSlash(filepath.Join("cmd", "soundness", "main_test.go")):                    true,
+	filepath.ToSlash(filepath.Join("cross-test", "proto", "libraries2", "database.proto")): true,
+	filepath.ToSlash(filepath.Join("cross-test", "proto", "libraries2", "cache.proto")):    true,
 }
 
 func storeVendorViolations(root string) ([]storeVendorViolation, error) {

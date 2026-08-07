@@ -1382,7 +1382,7 @@ extend google.protobuf.FieldOptions {
   // projection_record_key marks the projection field that carries the SOURCE
   // RECORD's key. tacplus auto-injects this field (or marks the existing one) on
   // every graph/timeseries projection so the projection query can return record
-  // keys — stratum federates into a projection, gets record keys, and hydrates the
+  // keys — the record store federates into a projection, gets record keys, and hydrates the
   // full records from the record_store. Exactly one field per projection carries it.
   bool projection_record_key = 60081;
 

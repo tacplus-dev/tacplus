@@ -314,7 +314,7 @@ message %[1]sWatchEvent {
 	}
 
 	// The RecordMap service — S2S, scoped to argus (the C2S front); clients never
-	// call stratum directly. Per-caller refinable queries over immutable records;
+	// call the record store directly. Per-caller refinable queries over immutable records;
 	// Sample/Pull/Watch apply egress redaction. It is the record store's own service
 	// (emitted into its services/ proto), so the store implements getRecordMapGrpcImpl.
 	//

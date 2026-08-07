@@ -18,7 +18,7 @@ import (
 //
 // A timeseries query is a FEDERATION index, not a data source: it returns the
 // SOURCE RECORD KEYS of rows matching a time range (carried by the row's
-// projection_record_key field), and stratum hydrates the full immutable records
+// projection_record_key field), and the record store hydrates the full immutable records
 // from the record_store. The grouped-analytics plane (TimeseriesGroupCounts) and
 // raw ExecuteQuery are unaffected.
 type tsQueryProjection struct {
@@ -113,7 +113,7 @@ func appendTimeseriesQueryToServiceProto(tempProtoDir, relPath string, projectio
 	for _, p := range projections {
 		reqName := "List" + p.typeName + "Request"
 		respName := "List" + p.typeName + "Response"
-		// The response carries SOURCE RECORD KEYS, not rows: stratum federates into
+		// The response carries SOURCE RECORD KEYS, not rows: the record store federates into
 		// this query, gets the keys, and hydrates the full records from the record_store.
 		// TimeRange is defined by the timedb service's own proto (as for GroupCounts).
 		sb.WriteString(fmt.Sprintf(`

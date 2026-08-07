@@ -182,7 +182,13 @@ Order by cost, cheapest first — rule 2, then 9, then 1, then 4, then 3. Rule 3
 is last because it is a 54-file package rename that will conflict with anything
 else in flight; do it when nothing else is open in `internal/java`.
 
-Rule 2 is done (see the commit adding this file). The rest are not.
+**Adopted so far:** rule 2 (shared template loader) and rule 1's upper-snake case
+— `upperSnake`, `toUpperSnake` and `pascalToUpperSnake` were three identical
+copies of one transform in a single package, now `strutil.ToUpperSnakeCase`. They
+were checked for divergence before merging; they agreed.
+
+**Not yet adopted:** the rest of rule 1 (the remaining scattered helpers), and
+rules 3, 4, 9.
 
 Rule 6 is safe **unless** a collision already exists, which is worth finding out
 either way.

@@ -3282,6 +3282,123 @@ func TestC2DRuntimeSmokeUnixSocket(t *testing.T) {
 EOF
 }
 
+write_go_c2s_stream_auth_failclosed_test() {
+  local test_file="$1"
+  cat > "$test_file" <<'EOF'
+package consumer
+
+// PC-W-7: negative coverage for token failure at stream open.
+//
+// Proposition: when the identity manager cannot provide a token, a
+// client-streaming call FAILS BEFORE ANY RPC LEAVES THE PROCESS (API.md
+// §214-223). The test uses a sentinel gRPC connection that records whether
+// NewStream was ever called; a failing / nil / empty token provider must
+// cause the generated client to return Unauthenticated WITHOUT calling
+// NewStream.
+//
+// Why Go: the mechanism lives in the generated Go client method — the auth
+// snippet is inline before the gRPC call. Rust/Java have the same contract
+// but are tested via their own regression tests; Go is the reference leg
+// and this is the only place the generated Go client is EXECUTED.
+//
+// Verification that the test fails without the fix: temporarily removing
+// the {{- if .AuthRequired}} auth block from grpcclient_gen.go's
+// client-streaming branch (line ~738) and regenerating causes these tests
+// to fail: the sentinel conn's NewStream is called (asserting the RPC
+// escaped the process) and the error code is Internal, not Unauthenticated.
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	c2sm "gitlab.com/example/tacplus/consumer/contractclient/model/c2sm"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// streamAuthSentinelConn records whether NewStream was called. When the auth
+// check works, NewStream must NEVER fire — the method returns before the RPC.
+type streamAuthSentinelConn struct {
+	streamCalled bool
+}
+
+func (*streamAuthSentinelConn) Invoke(context.Context, string, any, any, ...grpc.CallOption) error {
+	return nil
+}
+
+func (c *streamAuthSentinelConn) NewStream(context.Context, *grpc.StreamDesc, string, ...grpc.CallOption) (grpc.ClientStream, error) {
+	c.streamCalled = true
+	// Return an error the test can distinguish from the expected Unauthenticated.
+	return nil, status.Error(codes.Internal, "sentinel: RPC escaped the auth gate")
+}
+
+// TestClientStreamSendEventsTokenErrorFailsClosed asserts that a
+// client-streaming call (SendEvents) fails with Unauthenticated when the
+// token provider returns an error, and that no gRPC stream open is attempted.
+func TestClientStreamSendEventsTokenErrorFailsClosed(t *testing.T) {
+	conn := &streamAuthSentinelConn{}
+	sm := c2sm.New(conn, func() (string, error) {
+		return "", errors.New("identity manager unavailable")
+	})
+	api := sm.Grpc().Clients().Contract().ContractApiClient()
+
+	stream, err := api.SendEvents(context.Background())
+	if err == nil {
+		_ = stream
+		t.Fatal("SendEvents must fail when token provider returns an error")
+	}
+	if got := status.Code(err); got != codes.Unauthenticated {
+		t.Fatalf("SendEvents error code = %v, want Unauthenticated; err = %v", got, err)
+	}
+	if conn.streamCalled {
+		t.Fatal("auth failure must prevent the RPC from leaving the process — NewStream was called")
+	}
+}
+
+// TestClientStreamSendEventsNilProviderFailsClosed asserts the same contract
+// when no token provider is configured at all (nil).
+func TestClientStreamSendEventsNilProviderFailsClosed(t *testing.T) {
+	conn := &streamAuthSentinelConn{}
+	sm := c2sm.New(conn, nil)
+	api := sm.Grpc().Clients().Contract().ContractApiClient()
+
+	stream, err := api.SendEvents(context.Background())
+	if err == nil {
+		_ = stream
+		t.Fatal("SendEvents must fail when token provider is nil")
+	}
+	if got := status.Code(err); got != codes.Unauthenticated {
+		t.Fatalf("nil provider error code = %v, want Unauthenticated; err = %v", got, err)
+	}
+	if conn.streamCalled {
+		t.Fatal("nil provider must prevent the RPC from leaving the process")
+	}
+}
+
+// TestClientStreamSendEventsEmptyTokenFailsClosed asserts the same contract
+// when the provider succeeds but returns an empty credential.
+func TestClientStreamSendEventsEmptyTokenFailsClosed(t *testing.T) {
+	conn := &streamAuthSentinelConn{}
+	sm := c2sm.New(conn, func() (string, error) { return "", nil })
+	api := sm.Grpc().Clients().Contract().ContractApiClient()
+
+	stream, err := api.SendEvents(context.Background())
+	if err == nil {
+		_ = stream
+		t.Fatal("SendEvents must fail when token is empty")
+	}
+	if got := status.Code(err); got != codes.Unauthenticated {
+		t.Fatalf("empty token error code = %v, want Unauthenticated; err = %v", got, err)
+	}
+	if conn.streamCalled {
+		t.Fatal("empty token must prevent the RPC from leaving the process")
+	}
+}
+EOF
+}
+
 compile_go_handwritten_consumer() {
   local output="$1"
   local case_name="$2"
@@ -3296,18 +3413,34 @@ compile_go_handwritten_consumer() {
   case "$case_name" in
     c2s)
       write_go_c2s_consumer_test "$consumer_dir/consumer_test.go"
+      write_go_c2s_stream_auth_failclosed_test "$consumer_dir/stream_auth_test.go"
       ;;
     w2s)
       write_go_w2s_consumer_test "$consumer_dir/consumer_test.go"
       ;;
     both)
       write_go_both_consumer_test "$consumer_dir/consumer_test.go"
+      write_go_c2s_stream_auth_failclosed_test "$consumer_dir/stream_auth_test.go"
       ;;
     c2d)
       write_go_c2d_consumer_test "$consumer_dir/consumer_test.go"
       ;;
     *)
       return
+      ;;
+  esac
+
+  # Assert the fail-closed stream-auth negatives are actually PRESENT before running.
+  # `go test ./...` silently runs whatever *_test.go files happen to exist, so a test
+  # that stops being emitted would vanish with a green run -- the exact failure mode
+  # this suite exists to prevent (a gate that cannot fire reads as coverage). PC-W-7
+  # covers the documented contract that a stream-open token failure must fail before
+  # any RPC leaves the process; if that file is gone, fail loudly instead.
+  case "$case_name" in
+    c2s|both)
+      [[ -f "$consumer_dir/stream_auth_test.go" ]] || die "missing generated Go consumer test: stream_auth_test.go (PC-W-7 stream-open auth negatives)"
+      grep -q 'func TestClientStreamSendEventsTokenErrorFailsClosed' "$consumer_dir/stream_auth_test.go" \
+        || die "stream_auth_test.go present but missing TestClientStreamSendEventsTokenErrorFailsClosed"
       ;;
   esac
 

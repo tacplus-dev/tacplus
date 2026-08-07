@@ -137,14 +137,37 @@ module name is documented in this file, and must be injective. If two distinct
 canonical packages can fold to one module name, generation fails rather than
 silently merging them.
 
-**Why.** Swift and csharp module folding can currently collide two distinct
-canonical packages, and the rules are written down nowhere. A collision merges
-two packages' symbols silently — capability loss with no error, the recurring
-shape.
+**Why.** `swiftIdentifier` / `csharpIdentifier` split on every non-alphanumeric
+character and PascalCase-join the parts, so all separators are erased:
 
-**Cost:** a documented rule plus a collision check in the emitter. **Generated
-output:** none unless a collision already exists, in which case generation starts
-failing and that is the point. **Check for existing collisions before adopting.**
+    foo.bar -> FooBar    foo_bar -> FooBar    foo-bar -> FooBar    foobar -> Foobar
+
+Two names differing only in separators therefore produce one identifier, and the
+symbols merge silently — capability loss with no error, the recurring shape.
+
+The ledger recorded this as *module* folding colliding *packages*. That is not
+what the code does, and the correction matters for anyone implementing the guard:
+`swiftModuleName`/`csharpModuleName` are applied ONCE, to the package base
+(`generator.go:91` and `:94`). The transform underneath them, `swiftIdentifier` /
+`csharpIdentifier`, is what gets applied per name — to service names, message
+names, method names and path segments. **The collision risk is on identifiers,
+not on packages**, so a guard placed on module names would sit where two names
+can never meet and would never fire.
+
+**Measured, so the next person has a baseline** — no collision exists today:
+
+| population | count | collisions |
+|---|---|---|
+| proto packages across the platform | 74 | 0 |
+| message + service names | 1215 | 0 |
+
+**Cost:** a collision check over emitted identifiers, per scope. **Generated
+output:** none today, since nothing currently collides.
+
+**Status:** NOT implemented. The hazard is real but entirely latent, and the
+fix must guard identifiers within a scope rather than package names. Recorded
+with its measurement rather than implemented in a hurry against a premise that
+turned out to be wrong.
 
 ## 7. One annotation vocabulary in `spec.proto`
 

@@ -11,7 +11,26 @@ import (
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
 )
+
+// LoadTemplate reads a template from the embedded templates filesystem under the
+// given subdirectory (e.g. "python/types") and returns its contents.
+//
+// Every language generator needs exactly this, differing only in the
+// subdirectory, so it lives here once rather than as a per-language copy. See
+// docs/NAMING_CONVENTIONS.md rule 2.
+func LoadTemplate(subdir, name string) (string, error) {
+	sub, err := fs.Sub(templates.FS, subdir)
+	if err != nil {
+		return "", fmt.Errorf("failed to create sub filesystem for %s: %w", subdir, err)
+	}
+	content, err := fs.ReadFile(sub, name)
+	if err != nil {
+		return "", fmt.Errorf("failed to read template %s: %w", name, err)
+	}
+	return string(content), nil
+}
 
 // ExecuteTemplate loads a template from the given filesystem, applies the FuncMap,
 // executes it with data, and returns the rendered bytes.

@@ -2,22 +2,13 @@
 
 package java
 
-import (
-	"fmt"
-	"io/fs"
-
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
-)
+import "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/tmplutil"
 
 // loadTemplate loads a template from the embedded templates filesystem for Java.
+//
+// The four language copies of this differed only in the subdirectory string, so
+// the implementation is shared; this stays as a thin local alias to keep the
+// call sites unchanged. See docs/NAMING_CONVENTIONS.md rule 2.
 func loadTemplate(name string) (string, error) {
-	typeFS, err := fs.Sub(templates.FS, "java/types")
-	if err != nil {
-		return "", fmt.Errorf("failed to create sub filesystem: %w", err)
-	}
-	content, err := fs.ReadFile(typeFS, name)
-	if err != nil {
-		return "", fmt.Errorf("failed to read template %s: %w", name, err)
-	}
-	return string(content), nil
+	return tmplutil.LoadTemplate("java/types", name)
 }

@@ -1,0 +1,204 @@
+# Naming and structure conventions
+
+Proposed convention covering the seven consistency entries CON-2 … CON-8. The
+maintainer delegated the choice, so this states the rules rather than the options.
+
+Each rule is followed by what it costs to adopt and whether adopting it changes
+**generated output**. That distinction is the important one: internal generator
+hygiene can be fixed freely, but anything that changes an emitted identifier, file
+name, or persisted name is a consumer-visible break and is listed separately at
+the end rather than done quietly.
+
+Verified against the current tree. Several CON entries were partly stale — the
+specifics below are what is actually there now.
+
+---
+
+## 1. One case converter per transform, in `common/strutil`
+
+**Rule.** Case conversion lives in `pkg/internal/common/strutil`, named for the
+transform it performs: `ToSnakeCase`, `ToPascalCase`, `ToCamelCase`,
+`ToUpperSnakeCase`. A generator package may define a local converter **only**
+when the target language's own toolchain imposes a different rule, and the
+function name must say which language it serves.
+
+**Why.** There are currently twelve case helpers outside `strutil`, and three of
+them independently implement upper-snake:
+
+| function | file |
+|---|---|
+| `upperSnake` | `pkg/internal/proto/registry_enums.go:173` |
+| `toUpperSnake` | `pkg/internal/proto/timeseries_group_counts.go:20` |
+| `pascalToUpperSnake` | `pkg/internal/proto/configholder.go:696` |
+| `pascalCaseWord` | `pkg/runner/runner.go:570` |
+| `goCamelCase` | `pkg/internal/go/types/helpers.go:511` |
+| `toLowerCamel` | `pkg/internal/go/types/extraction_gen.go:386` |
+| `upperSnakeCaseToCamelCase` | `pkg/internal/typescript/types/validation.go:1452` |
+
+Three implementations of one transform is three chances to disagree, and NEW-20
+is the record of what disagreement costs: a converter change silently altered a
+**persisted** table name, orphaning the existing table with nothing failing.
+
+**Legitimately local**, and to be kept — each encodes a foreign toolchain's rule,
+not a general transform:
+
+- `pyGeneratedSnakeName` — python codegen's own naming
+- `tsGeneratedSnakeName`, `tsPascalIdentifier`, `tsSnakeIdentifier` — TS codegen
+- `methodSnakeNameLower` — prost's digit-acronym handling, which deliberately
+  diverges from `ToSnakeCase` (see `tonic_names.go`)
+
+**Cost:** small, mechanical. **Generated output:** must be unchanged — the three
+upper-snake variants have to be checked for behavioural equivalence before
+merging, not assumed equal. Any divergence found is a real bug, and if one of
+them feeds a persisted name it needs the NEW-20 treatment.
+
+## 2. Shared template loading, parameterised by language
+
+**Rule.** One `LoadTemplate(subdir, name string)` in
+`pkg/internal/common/tmplutil`. No per-language copy.
+
+**Why.** `tmplutil.go` exists four times — python, typescript, rust, java — and
+the copies differ only in the package clause, one comment, and the subdirectory
+string passed to `fs.Sub`. It is a parameter, duplicated as a file.
+
+**Cost:** trivial. **Generated output:** none. Do this one first; it is the
+cheapest demonstration that the convention holds.
+
+## 3. Generator package clause matches its directory
+
+**Rule.** A generator package under `pkg/internal/<lang>/types` declares
+`package types`.
+
+**Why.** `pkg/internal/{python,typescript,rust,go}/types` all declare
+`package types`. `pkg/internal/java/types` declares `package java`, across all 54
+files in it. Same directory depth, same role, different clause — so java alone
+cannot be reached by any convention that says "the types package".
+
+**Cost:** NOT trivial, despite looking like it. This is a whole-package rename:
+54 files plus every importer of `internal/java/types` across the repo. Mechanical
+and tool-assisted, but a large diff.
+
+**Generated output:** none — this is the generator's own package name, not
+anything it emits, so `determinism` and `current-generation` prove it byte for
+byte.
+
+Two smaller inconsistencies sit next to it and should be folded into the same
+pass: `package daemon` appears in 3 files each under python/types and
+typescript/types, and `package foo` in 2 files under java/types.
+
+## 4. `_gen.go` means "emits code"
+
+**Rule.** A generator source file is named `<subject>_gen.go` when its job is to
+emit generated code, and `<subject>.go` when it is a helper, model, or registry.
+The suffix describes the file's role, not its age.
+
+**Why.** The suffix is currently applied inconsistently — `release.go` and
+`release_gen.go` coexist with no rule distinguishing them, so the name carries no
+information and a reader cannot tell which files emit.
+
+**Cost:** a rename pass plus import updates. **Generated output:** none. This is
+generator-internal only. Worth doing in one commit so the diff is obviously
+mechanical.
+
+## 5. Every emitted file carries the same DO-NOT-EDIT header
+
+**Rule.** Every generated file begins with the copyright line, `Generated by
+tacplus`, and `CODE GENERATED - DO NOT EDIT`, in the target language's comment
+syntax.
+
+**Why.** The go tree carries 24 pre-rename headers, and swift/csharp templates
+carry no DO-NOT-EDIT line at all. A generated file without that marker is a file
+someone will eventually hand-edit, and the edit will vanish at the next
+generation with no warning.
+
+**Cost:** a header pass across templates. **Generated output:** yes — the header
+text of emitted files changes. Harmless to consumers (comments only) but it will
+show up as a large diff in every consumer's generated tree, so it should land in
+its own commit, announced.
+
+## 6. Package-name transforms are documented and collision-checked
+
+**Rule.** Any transform from a canonical proto package to a target-language
+module name is documented in this file, and must be injective. If two distinct
+canonical packages can fold to one module name, generation fails rather than
+silently merging them.
+
+**Why.** Swift and csharp module folding can currently collide two distinct
+canonical packages, and the rules are written down nowhere. A collision merges
+two packages' symbols silently — capability loss with no error, the recurring
+shape.
+
+**Cost:** a documented rule plus a collision check in the emitter. **Generated
+output:** none unless a collision already exists, in which case generation starts
+failing and that is the point. **Check for existing collisions before adopting.**
+
+## 7. One annotation vocabulary in `spec.proto`
+
+**Rule.** Constraint annotations live in the `assert_*` family. An annotation that
+constrains a field is named `assert_<constraint>`. Option numbers are allocated
+from a documented range per category, and the ranges live in a comment block at
+the top of `spec.proto`.
+
+**Why.** `required_if_false`, `required_if_true` and `required_if_eq`
+(`spec.proto:1070,1075,1103`) constrain fields but sit outside the `assert_`
+family, so neither a reader nor a tool can enumerate "the constraints" by name.
+There is no documented option-number scheme, and two parallel graph annotation
+systems exist.
+
+**Cost:** renaming a proto option is a **breaking change** for every consumer
+proto that uses it. See the end of this file.
+
+## 8. A registry field name means one thing
+
+**Rule.** A name in `tacplus.proto` has exactly one meaning across the schema.
+Where two concepts genuinely differ, they get different names, even if that makes
+one of them longer.
+
+**Why.** `graph_type` means two different things at `tacplus.proto:109` and
+`:280`. `EventPublish` and `WatchInfo` are near-twins whose difference is not
+recoverable from their names. String-typed enums use mixed casing.
+
+**Cost:** renaming a registry field changes the emitted registry. See below.
+
+## 9. Comments describe the mechanism, not one caller
+
+**Rule.** A comment on a general mechanism names the mechanism. Reach for a
+specific service name only when the text is genuinely about that service.
+
+**Why.** "stratum" appears in six comments describing generic behaviour, which
+tells a reader the mechanism is stratum-specific when it is not.
+
+**Cost:** trivial. **Generated output:** none.
+
+---
+
+## Safe to adopt now
+
+Rules 1, 2, 3, 4 and 9 are generator-internal. They change no emitted byte, and
+`determinism` plus `current-generation` prove that: if generated output shifts,
+the byte-identical assertions fail. Each should land in its own commit.
+
+Order by cost, cheapest first — rule 2, then 9, then 1, then 4, then 3. Rule 3
+is last because it is a 54-file package rename that will conflict with anything
+else in flight; do it when nothing else is open in `internal/java`.
+
+Rule 2 is done (see the commit adding this file). The rest are not.
+
+Rule 6 is safe **unless** a collision already exists, which is worth finding out
+either way.
+
+## Needs an explicit go-ahead — these break consumers
+
+Not done as part of adopting this convention, because each changes something
+outside this repository:
+
+- **Rule 5** (headers) — changes the first lines of every generated file. Cosmetic
+  but produces a very large diff in every consumer tree.
+- **Rule 7** (`required_if_*` → `assert_required_if_*`) — renaming a proto option
+  breaks every consumer proto that uses it. Needs a deprecation window: accept
+  both names, warn on the old one, remove later.
+- **Rule 8** (registry field names) — changes the emitted registry, which
+  consumers and the LLM-facing registry read.
+
+The pattern for all three is the same: accept both spellings, warn on the old,
+remove after a stated period. That is a maintainer's call on timing, not mine.

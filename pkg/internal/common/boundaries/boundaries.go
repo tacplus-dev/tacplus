@@ -271,17 +271,17 @@ type SubscriptionData struct {
 // single state root message. New generation paths should use
 // CollectActorSubscriptions so topic refs are validated against the EventBus
 // topic registry.
-func CollectMessageSubscriptions(msg *parser.MessageDescriptor) []SubscriptionData {
-	stateAnn, isState := msg.Annotations["service_state"]
-	if !isState {
-		return nil
-	}
-	stateRoot := stateAnn.StringValue
-
+func CollectMessageSubscriptions(msg *parser.MessageDescriptor) ([]SubscriptionData, error) {
 	subAnn, hasSub := msg.Annotations["subscribe"]
 	if !hasSub || len(subAnn.SubscriptionEntries) == 0 {
-		return nil
+		return nil, nil
 	}
+
+	stateAnn, isState := msg.Annotations["service_state"]
+	if !isState {
+		return nil, fmt.Errorf("(spec.subscribe) on message %s requires (spec.service_state)", msg.Name)
+	}
+	stateRoot := stateAnn.StringValue
 
 	var subs []SubscriptionData
 	for _, entry := range subAnn.SubscriptionEntries {
@@ -300,18 +300,22 @@ func CollectMessageSubscriptions(msg *parser.MessageDescriptor) []SubscriptionDa
 		}
 		subs = append(subs, sd)
 	}
-	return subs
+	return subs, nil
 }
 
 // CollectAllSubscriptions collects subscription metadata from all file descriptors.
-func CollectAllSubscriptions(fds []*parser.FileDescriptor) []SubscriptionData {
+func CollectAllSubscriptions(fds []*parser.FileDescriptor) ([]SubscriptionData, error) {
 	var all []SubscriptionData
 	for _, fd := range fds {
 		for i := range fd.Messages {
-			all = append(all, CollectMessageSubscriptions(&fd.Messages[i])...)
+			subs, err := CollectMessageSubscriptions(&fd.Messages[i])
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", fd.Package, err)
+			}
+			all = append(all, subs...)
 		}
 	}
-	return all
+	return all, nil
 }
 
 // CollectActorSubscriptions normalizes legacy subscribe, explicit event_watch,

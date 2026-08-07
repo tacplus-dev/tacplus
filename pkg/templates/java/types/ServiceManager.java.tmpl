@@ -92,6 +92,7 @@ import java.util.concurrent.BlockingQueue;
 {{- end}}
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 {{- if .HasAutoTls}}
 import java.security.KeyPair;
@@ -134,6 +135,13 @@ public class ServiceManager implements AutoCloseable {
     private final HealthStatusManager healthManager;
     private volatile Server earlyHealthProbeServer;
     private volatile boolean closing = false;
+    // TLS-degrade seam (PC-L-1): renewal give-up / parse failures report here so
+    // the health plane (when wired) marks the instance DEGRADED instead of the
+    // service silently running to certificate expiry. Unconditional so it compiles
+    // with or without a health reporter; reasons are replayed to late subscribers.
+    private final Object tlsDegradeLock = new Object();
+    private final java.util.List<Consumer<String>> tlsDegradeFns = new java.util.ArrayList<>();
+    private final java.util.List<String> tlsDegradeSeen = new java.util.ArrayList<>();
 {{- if .HasAutoTls}}
     /**
      * Atomic snapshot of the current TLS cert chain + matching private key.
@@ -476,6 +484,22 @@ public class ServiceManager implements AutoCloseable {
         return channelFactory;
     }
 
+    /**
+     * Starts a background thread tied to the ServiceManager lifecycle.
+     * The thread is interrupted when the SM shuts down, and the SM waits for
+     * all managed threads to complete before close returns. Use this for
+     * application-level background work (polling, cleanup, periodic sync)
+     * that must participate in graceful shutdown.
+     *
+     * @param name   thread name (visible in stack traces and logs)
+     * @param body   the work to run; should check {@link Thread#interrupted()} or
+     *               catch {@link InterruptedException} for clean shutdown
+     * @return the started thread
+     */
+    public Thread startTask(String name, Runnable body) {
+        return startManagedThread(name, true, body);
+    }
+
 {{- if .HasPublishers}}
     @FunctionalInterface
     public interface EventPublisher<T> {
@@ -559,6 +583,29 @@ public class ServiceManager implements AutoCloseable {
             }
         }
         managedThreads.clear();
+    }
+
+    /** Records a TLS-renewal degradation and notifies subscribers. */
+    private void reportTLSDegraded(String reason) {
+        synchronized (tlsDegradeLock) {
+            tlsDegradeSeen.add(reason);
+            for (Consumer<String> fn : tlsDegradeFns) {
+                fn.accept(reason);
+            }
+        }
+    }
+
+    /**
+     * Registers a subscriber for TLS-degrade events and replays already-recorded
+     * reasons so registration order cannot lose a degradation.
+     */
+    private void onTLSDegraded(Consumer<String> fn) {
+        synchronized (tlsDegradeLock) {
+            tlsDegradeFns.add(fn);
+            for (String r : tlsDegradeSeen) {
+                fn.accept(r);
+            }
+        }
     }
 
 	{{- if .HasDiskStores}}
@@ -788,6 +835,12 @@ public class ServiceManager implements AutoCloseable {
                 spiffeId);
         healthReporter.setStatus(InstanceStatus.INSTANCE_STATUS_HEALTHY);
         healthReporter.setHealthChecker(handler::checkHealth);
+        // PC-L-1: TLS renewal give-up / parse failures degrade this instance in the
+        // fleet health plane instead of being Error-log-only.
+        onTLSDegraded(reason -> {
+            LOG.warning("marking instance DEGRADED: TLS renewal failure: " + reason);
+            healthReporter.setStatus(InstanceStatus.INSTANCE_STATUS_DEGRADED);
+        });
 {{- if .HasTypedHealth}}
         healthReporter.setTypedHealthCollector(base -> handler.collectHealth().toBuilder()
                 .setBase(base)
@@ -1095,6 +1148,7 @@ public class ServiceManager implements AutoCloseable {
                 if (readyLatch.getCount() > 0) {
                     // First cert never delivered — retry with backoff instead of failing.
                     if (attempt >= MAX_INIT_RETRIES) {
+                        sm.reportTLSDegraded("TLS renewal stream gave up before first delivery: " + e.getMessage());
                         readyError.set(e);
                         readyLatch.countDown();
                         return;
@@ -1189,7 +1243,9 @@ public class ServiceManager implements AutoCloseable {
                                             .generatePrivate(new java.security.spec.PKCS8EncodedKeySpec(keyDer));
 {{- end}}
                                 } catch (Exception keyErr) {
-                                    LOG.warning("Failed to parse delivered private key: " + keyErr.getMessage());
+                                    LOG.warning("Failed to parse delivered private key; servers keep the previous cert: " + keyErr.getMessage());
+                                    sm.reportTLSDegraded("renewed TLS private key unparseable: " + keyErr.getMessage());
+                                    return;
                                 }
                                 Handler activeHandler = sm.tlsHandlerSlot.get();
                                 if (activeHandler != null) {

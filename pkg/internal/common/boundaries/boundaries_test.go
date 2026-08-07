@@ -3,8 +3,10 @@
 package boundaries
 
 import (
+	"strings"
 	"testing"
 
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 )
 
@@ -64,5 +66,68 @@ func TestActorOwnsFileByVserviceHostTag(t *testing.T) {
 	}
 	if !actorOwnsFile(hosted, "contract") {
 		t.Fatal("a vservice whose host tag is the actor must be owned")
+	}
+}
+
+// MS-3: (spec.subscribe) on a non-state message must return an error, not
+// silently drop the subscription.
+func TestCollectMessageSubscriptionsRejectsNonStateSubscribe(t *testing.T) {
+	msg := &parser.MessageDescriptor{
+		Name: "MyMessage",
+		Annotations: map[string]model.AnnotationValue{
+			"subscribe": {
+				SubscriptionEntries: []model.SubscriptionEntry{
+					{Source: "pkg.SomeState.some_field"},
+				},
+			},
+			// Deliberately NO "service_state" annotation.
+		},
+	}
+	subs, err := CollectMessageSubscriptions(msg)
+	if err == nil {
+		t.Fatal("expected error for subscribe without service_state, got nil")
+	}
+	if !strings.Contains(err.Error(), "requires (spec.service_state)") {
+		t.Fatalf("error message should mention service_state requirement, got: %s", err.Error())
+	}
+	if subs != nil {
+		t.Fatal("expected nil subscriptions on error")
+	}
+}
+
+// MS-3: a message with both subscribe and service_state should still succeed.
+func TestCollectMessageSubscriptionsAcceptsStateSubscribe(t *testing.T) {
+	msg := &parser.MessageDescriptor{
+		Name: "MyState",
+		Annotations: map[string]model.AnnotationValue{
+			"service_state": {StringValue: "MyState"},
+			"subscribe": {
+				SubscriptionEntries: []model.SubscriptionEntry{
+					{Source: "pkg.OtherState.some_field"},
+				},
+			},
+		},
+	}
+	subs, err := CollectMessageSubscriptions(msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("expected 1 subscription, got %d", len(subs))
+	}
+}
+
+// MS-3: a message with no subscribe annotation should return nil, nil.
+func TestCollectMessageSubscriptionsNoSubscribeReturnsNil(t *testing.T) {
+	msg := &parser.MessageDescriptor{
+		Name:        "PlainMessage",
+		Annotations: map[string]model.AnnotationValue{},
+	}
+	subs, err := CollectMessageSubscriptions(msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if subs != nil {
+		t.Fatal("expected nil subscriptions for message without subscribe")
 	}
 }

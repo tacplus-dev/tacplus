@@ -160,7 +160,11 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 				}
 				pn.Rpcs = rpcs
 				pn.Boundaries = CollectBoundaryProtos(entry.fds, pn.Rpcs)
-				pn.Subscriptions = CollectSubscriptionProtos(entry.fds, allFds)
+				subs, subsErr := CollectSubscriptionProtos(entry.fds, allFds)
+				if subsErr != nil {
+					return nil, fmt.Errorf("collecting subscriptions for %s: %w", node.fullPath, subsErr)
+				}
+				pn.Subscriptions = subs
 
 				// Collect file-level constants.
 				for _, fd := range entry.fds {
@@ -1191,10 +1195,13 @@ func CollectBoundaryProtos(fds []*parser.FileDescriptor, rpcs []*spec.RpcInfo) [
 
 // CollectSubscriptionProtos collects SubscriptionInfo proto objects from parsed file descriptors.
 // It resolves source_type_fqn by looking up the referenced topic field in all known file descriptors.
-func CollectSubscriptionProtos(fds []*parser.FileDescriptor, allFds []*parser.FileDescriptor) []*spec.SubscriptionInfo {
-	allSubs := boundaries.CollectAllSubscriptions(fds)
+func CollectSubscriptionProtos(fds []*parser.FileDescriptor, allFds []*parser.FileDescriptor) ([]*spec.SubscriptionInfo, error) {
+	allSubs, err := boundaries.CollectAllSubscriptions(fds)
+	if err != nil {
+		return nil, err
+	}
 	if len(allSubs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Build a lookup: "package.StateRoot" -> message descriptor
@@ -1229,7 +1236,7 @@ func CollectSubscriptionProtos(fds []*parser.FileDescriptor, allFds []*parser.Fi
 		}
 		result = append(result, si)
 	}
-	return result
+	return result, nil
 }
 
 // CollectEventPublishProtos collects validated event_publish bindings from parsed file descriptors.

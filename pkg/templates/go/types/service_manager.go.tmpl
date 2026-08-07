@@ -813,6 +813,15 @@ sm.healthServer.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
 }
 }
 
+// GoTask launches a background goroutine tied to the ServiceManager lifecycle.
+// The context passed to fn is cancelled when the SM shuts down, and the SM
+// waits for all tasks to complete before Close returns. Use this for
+// application-level background work (polling, cleanup, periodic sync) that
+// must participate in graceful shutdown.
+func (sm *ServiceManager) GoTask(fn func(context.Context)) {
+sm.tasks.Go(fn)
+}
+
 	{{if .HasStates}}
 	// StateClients returns the state client instances.
 	func (sm *ServiceManager) StateClients() *state.StateClients {

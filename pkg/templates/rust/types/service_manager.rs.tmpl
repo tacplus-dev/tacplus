@@ -859,6 +859,19 @@ impl ServiceManager {
         self.grpc_health.set_service_status("", status).await;
     }
 
+    /// Spawns a background task tied to the ServiceManager lifecycle.
+    /// The task is aborted when the SM shuts down, and the SM waits for all
+    /// tasks to complete before shutdown returns. Use this for application-level
+    /// background work (polling, cleanup, periodic sync) that must participate
+    /// in graceful shutdown.
+    pub fn spawn_task<F>(&self, task: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let handle = tokio::spawn(task);
+        self.tasks.lock().unwrap().push(handle);
+    }
+
 {{- if .HasDiskStores}}
     /// Returns the ServiceManager-owned redo logs when disk persistence is enabled.
     pub fn disk_store_logs(&self) -> Option<Arc<DiskStoreLogs>> {

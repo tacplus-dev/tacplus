@@ -1378,10 +1378,64 @@ assert_config_defaults_behavioral() {
   echo "    PASS config defaults behavioral parity (go: $(echo "$go_applied" | wc -l | tr -d ' ') fields, java: $(echo "$java_applied" | wc -l | tr -d ' ') fields, rust: $(echo "$rust_applied" | wc -l | tr -d ' ') fields)"
 }
 
+# TLS-degrade seam parity (PC-L-1): every full-service language must emit
+# the TLS-degrade seam (fields + report method) so that TLS renewal failures
+# surface in the health plane. The seam is unconditional in the template.
+assert_tls_degrade_parity() {
+  local work_root="$1"
+
+  echo "==> Checking TLS-degrade seam parity across go, java, rust"
+
+  local go_sm java_sm rust_sm
+  # NOTE: these patterns must match the REAL generated layout, which is s2sm/:
+  #   go   -> model/s2sm/s2sm.go
+  #   java -> model/s2sm/ServiceManager.java     (path contains /s2sm/, NOT /sm/)
+  #   rust -> model/s2sm/mod.rs                  (NOT service_manager.rs)
+  # The first version of this gate looked for 'service_manager.rs' and '*/sm/*' and so
+  # could never match anything — it reported SKIP on every run. A parity gate that
+  # cannot fire is worse than no gate, because it reads as coverage.
+  go_sm="$(find "$work_root/go" -type f -name 's2sm.go' -print -quit)"
+  java_sm="$(find "$work_root/java" -type f -name 'ServiceManager.java' -path '*s2sm*' -print -quit)"
+  rust_sm="$(find "$work_root/rust" -type f -name 'mod.rs' -path '*s2sm*' -print -quit)"
+
+  # Skip if the fixture does not generate SM files (no spec.service in proto).
+  if [[ -z "$go_sm" && -z "$java_sm" && -z "$rust_sm" ]]; then
+    # Be explicit that this is NOT coverage. The main current-generation fixture has
+    # no (spec.service), so no ServiceManager is generated and this gate cannot run.
+    # Real coverage for the TLS-degrade seam is the template test
+    # pkg/internal/java/types/tls_degrade_template_test.go, which pins the methods AND
+    # both call sites. This gate only becomes meaningful if a multi-language fixture
+    # with a service is added.
+    echo "    SKIP TLS-degrade seam parity — NOT COVERAGE (fixture generates no ServiceManager;"
+    echo "         real coverage is pkg/internal/java/types/tls_degrade_template_test.go)"
+    return
+  fi
+
+  [[ -n "$go_sm" ]] || die "parity: missing Go s2sm.go (java/rust have SM but go does not)"
+  [[ -n "$java_sm" ]] || die "parity: missing Java ServiceManager.java (go/rust have SM but java does not)"
+  [[ -n "$rust_sm" ]] || die "parity: missing Rust service_manager.rs (go/java have SM but rust does not)"
+
+  local fail=false
+  grep -q 'reportTLSDegraded' "$go_sm" || { echo "FAIL: Go SM missing reportTLSDegraded" >&2; fail=true; }
+  grep -q 'reportTLSDegraded' "$java_sm" || { echo "FAIL: Java SM missing reportTLSDegraded" >&2; fail=true; }
+  grep -q 'report_tls_degraded' "$rust_sm" || { echo "FAIL: Rust SM missing report_tls_degraded" >&2; fail=true; }
+
+  grep -q 'onTLSDegraded' "$go_sm" || { echo "FAIL: Go SM missing onTLSDegraded" >&2; fail=true; }
+  grep -q 'onTLSDegraded' "$java_sm" || { echo "FAIL: Java SM missing onTLSDegraded" >&2; fail=true; }
+  grep -q 'on_tls_degraded' "$rust_sm" || { echo "FAIL: Rust SM missing on_tls_degraded" >&2; fail=true; }
+
+  if [[ "$fail" == true ]]; then
+    die "TLS-degrade seam parity check failed — a language is missing the health-degrade seam"
+  fi
+
+  echo "    PASS TLS-degrade seam parity (all three languages)"
+}
+
 # Run parity check only when all three full-service languages were generated.
 if [[ ${#languages[@]} -eq 3 ]]; then
   assert_config_defaults_parity "$WORK_ROOT"
   assert_config_defaults_behavioral "$WORK_ROOT"
+  assert_tls_degrade_parity "$WORK_ROOT"
 fi
 
 # Health-only fixture: exercises the {{else}} server branch in

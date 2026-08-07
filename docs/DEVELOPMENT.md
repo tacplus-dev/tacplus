@@ -462,6 +462,10 @@ Tacplus promises typed, bounded, constrained, language-parity generated code.
 The compiler must keep that promise with build-asserted checks rather than
 manual inspection.
 
+**Read `KNOWN_TEST_GAPS.md` alongside this section.** Several gates are green
+without covering what their name suggests, and that file is the record of which
+ones. A passing run is not by itself evidence that a behaviour is tested.
+
 Current durable gates:
 
 - `go run ./cmd/soundness -root .` checks constraint parity, field-kind probes,

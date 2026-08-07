@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Second Star Cavalier LLC
 
-package java
+package types
 
 import "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/tmplutil"
 

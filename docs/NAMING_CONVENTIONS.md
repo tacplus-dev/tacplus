@@ -74,9 +74,10 @@ cheapest demonstration that the convention holds.
 files in it. Same directory depth, same role, different clause — so java alone
 cannot be reached by any convention that says "the types package".
 
-**Cost:** NOT trivial, despite looking like it. This is a whole-package rename:
-54 files plus every importer of `internal/java/types` across the repo. Mechanical
-and tool-assisted, but a large diff.
+**Cost:** a whole-package rename of 54 files. It turned out cheap to apply
+because the package has exactly ONE importer, `pkg/builder/builder.go`, and it
+already imports under the explicit alias `javatypes` — so no use site referred to
+the package by its default name and nothing outside the directory changed.
 
 **Generated output:** none — this is the generator's own package name, not
 anything it emits, so `determinism` and `current-generation` prove it byte for
@@ -202,8 +203,11 @@ were checked for divergence before merging; they agreed.
 
 Rule 9 is adopted, and rule 4's cross-language `release` drift is fixed.
 
-**Not yet adopted:** the rest of rule 1 (the remaining scattered helpers), rule
-4's bulk `_gen.go` rename, and rule 3 (the 54-file `package java` rename).
+Rule 3 is adopted: `pkg/internal/java/types` now declares `package types` like
+its four siblings.
+
+**Not yet adopted:** the rest of rule 1 (the remaining scattered helpers) and
+rule 4's bulk `_gen.go` rename. Both are safe; neither is urgent.
 
 Rule 6 is safe **unless** a collision already exists, which is worth finding out
 either way.

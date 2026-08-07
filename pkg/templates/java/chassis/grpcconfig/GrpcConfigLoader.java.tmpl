@@ -5,6 +5,7 @@
 
 package {{.ChassisBase}}.grpcconfig;
 
+import {{.ChassisBase}}.logger.LogbackConfigurator;
 import {{.TypesBase}}.sys.grpcconfig.Grpcconfig.Config;
 import {{.TypesBase}}.sys.grpcconfig.Helpers;
 
@@ -37,6 +38,14 @@ public final class GrpcConfigLoader {
      * @throws IllegalArgumentException if no config is provided or validation fails
      */
     public static Config loadConfig(String[] args) throws IOException {
+        // Install credential redaction and transport logger pins BEFORE any
+        // gRPC channel is created. This is the earliest shared entry point for
+        // all Java services (ServiceManager-based AND hand-written like kernel),
+        // so redaction engages unconditionally — no service needs to call
+        // LogbackConfigurator.install() manually. A later install() call with
+        // runtime config (e.g. from ServiceManager.run()) re-applies cleanly.
+        LogbackConfigurator.install(null);
+
         // Scan args for -c <path> or --config <path>
         String path = "";
         for (int i = 0; i < args.length - 1; i++) {

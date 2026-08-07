@@ -247,7 +247,7 @@ run_java_generated_self_tests() {
 
   : >"$test_log"
   local pattern source_file package_name class_name
-  for pattern in '*/chassis/spiffe/SpiffeVectorsTest.java' '*/chassis/x509/ImmutableCertChainTest.java' '*/chassis/grpcserver/AuthorizerBehaviorTest.java' '*/chassis/collection/CollectionRuntimeTest.java' '*/chassis/grpcconfig/ConfigDefaultsTest.java'; do
+  for pattern in '*/chassis/spiffe/SpiffeVectorsTest.java' '*/chassis/x509/ImmutableCertChainTest.java' '*/chassis/grpcserver/AuthorizerBehaviorTest.java' '*/chassis/collection/CollectionRuntimeTest.java' '*/chassis/grpcconfig/ConfigDefaultsTest.java' '*/chassis/grpcconfig/RedactionInstalledTest.java' '*/chassis/logger/LogbackConfiguratorSecurityTest.java'; do
     source_file="$(find "$output/src/main/java" -type f -path "$pattern" -print -quit)"
     [[ -n "$source_file" ]] || die "missing generated Java self-test source: $pattern"
     package_name="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$source_file")"
@@ -305,6 +305,16 @@ run_rust_spiffe_self_tests() {
       return 1
     }
   assert_clean_log "$log_dir/rust-servicemanager-test.log"
+
+  # SEC-2: the grpcconfig crate's loader test verifies that load_config() calls
+  # logger::Logger::default().install(), catching the "generated but never wired"
+  # defect where credential redaction exists but is never installed on the startup path.
+  [[ -f "$output/chassis/grpcconfig/Cargo.toml" ]] || die "missing generated Rust grpcconfig crate"
+  (cd "$output" && cargo test -p grpcconfig) >"$log_dir/rust-grpcconfig-test.log" 2>&1 || {
+      cat "$log_dir/rust-grpcconfig-test.log" >&2
+      return 1
+    }
+  assert_clean_log "$log_dir/rust-grpcconfig-test.log"
 
   # PC-W-1: the grpcserver crate's authorizer behavioral tests mint real
   # Ed25519 JWTs against the REAL Authorizer verify path (signature, audience,

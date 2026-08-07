@@ -9,6 +9,7 @@ import {{.TypesBase}}.sys.grpcconfig.Grpcconfig.Config;
 import {{.TypesBase}}.sys.x509.X509;
 import {{.ChassisBase}}.grpcconfig.GrpcConfigLoader;
 import {{.ChassisBase}}.grpcserver.Authorizer;
+import {{.ChassisBase}}.logger.LogbackConfigurator;
 import {{.ChassisBase}}.grpcserver.GrpcServer;
 import {{.ChassisBase}}.grpcserver.ServiceImplementation;
 import {{.ChassisBase}}.service_im.IdentityManager;
@@ -613,6 +614,14 @@ public class ServiceManager implements AutoCloseable {
             runtimeCfg = {{.TypesBase}}.sys.grpcconfig.Helpers.configDefaults(runtimeCfg).build();
             config = {{.TypesBase}}.sys.grpcconfig.Helpers.mergeConfig(config, runtimeCfg).build();
             LOG.info("Merged runtime config from ServiceConfigState");
+        }
+
+        // Re-install the logger with runtime config so cluster-level logger
+        // settings (level, format, output paths) take effect. The baseline
+        // install happened in GrpcConfigLoader.loadConfig(); this upgrades it
+        // with the runtime-config Logger field, matching Go's SM.Run() pattern.
+        if (config.hasLogger()) {
+            LogbackConfigurator.install(config.getLogger());
         }
 	{{- end}}
 

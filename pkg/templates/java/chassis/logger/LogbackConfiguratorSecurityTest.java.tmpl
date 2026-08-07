@@ -117,7 +117,7 @@ public class LogbackConfiguratorSecurityTest {
         for (String name : frameworkLoggers) {
             Logger fwLogger = loggerContext.getLogger(name);
             Level effective = fwLogger.getEffectiveLevel();
-            mustPass(name + " pinned >= WARN",
+            mustPass(name + " pinned to safe level",
                 effective.isGreaterOrEqual(Level.WARN));
         }
 

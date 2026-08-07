@@ -39,8 +39,8 @@ func TestEmitEntitlementMessage_Shape(t *testing.T) {
 	}
 	want := []string{
 		"message AgentEventEntitlement {",
-		"entitlement.EntitlementLevel email = 2;",   // may_anonymize leaf, mirrors source #2
-		"AddressEntitlement home_sub = 50003;",       // recursion, 50000 + source #3
+		"entitlement.EntitlementLevel email = 2;", // may_anonymize leaf, mirrors source #2
+		"AddressEntitlement home_sub = 50003;",    // recursion, 50000 + source #3
 	}
 	for _, w := range want {
 		if !strings.Contains(got, w) {

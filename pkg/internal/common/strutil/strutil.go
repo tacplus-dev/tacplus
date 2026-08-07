@@ -217,3 +217,15 @@ func StripPackagePrefix(snake, packageName string) string {
 	}
 	return snake
 }
+
+// ToUpperSnakeCase converts a string to UPPER_SNAKE_CASE, the spelling used for
+// proto enum values and generated constants. Acronym handling is inherited from
+// ToSnakeCase.
+//
+// Examples:
+//   - "FooBar" -> "FOO_BAR"
+//   - "HTTPServer" -> "HTTP_SERVER"
+//   - "OpenAIService" -> "OPEN_AI_SERVICE"
+func ToUpperSnakeCase(s string) string {
+	return strings.ToUpper(ToSnakeCase(s))
+}

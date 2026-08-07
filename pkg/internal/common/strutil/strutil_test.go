@@ -544,3 +544,25 @@ func TestRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// ToUpperSnakeCase replaced three byte-identical private helpers that had lived
+// in pkg/internal/proto under three different names (upperSnake, toUpperSnake,
+// pascalToUpperSnake). They agreed at the time they were merged; this pins the
+// behaviour so the single remaining implementation cannot drift, and covers the
+// acronym cases that NEW-20 showed are the ones that actually move.
+func TestToUpperSnakeCase(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"FooBar", "FOO_BAR"},
+		{"fooBar", "FOO_BAR"},
+		{"Foo", "FOO"},
+		{"", ""},
+		{"HTTPServer", "HTTP_SERVER"},
+		{"OpenAIService", "OPEN_AI_SERVICE"},
+		{"getHTTPResponse", "GET_HTTP_RESPONSE"},
+	}
+	for _, tt := range tests {
+		if got := ToUpperSnakeCase(tt.in); got != tt.want {
+			t.Errorf("ToUpperSnakeCase(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}

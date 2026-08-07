@@ -17,9 +17,6 @@ import (
 
 // toUpperSnake renders an identifier as SCREAMING_SNAKE for proto enum values
 // ("SessionRecord" -> "SESSION_RECORD", "event_type" -> "EVENT_TYPE").
-func toUpperSnake(s string) string {
-	return strings.ToUpper(strutil.ToSnakeCase(s))
-}
 
 // tsGroupProjection is one timeseries_projection table that exposes a typed
 // grouped-count query — the projection name (= table) plus its low-cardinality
@@ -147,11 +144,11 @@ message TimeseriesGroupCount {
 `)
 
 	for _, p := range projs {
-		enumPrefix := toUpperSnake(p.name) + "_GROUP_FIELD"
+		enumPrefix := strutil.ToUpperSnakeCase(p.name) + "_GROUP_FIELD"
 		sb.WriteString(fmt.Sprintf("\nenum %sGroupField {\n", p.name))
 		sb.WriteString(fmt.Sprintf("  %s_UNSPECIFIED = 0;\n", enumPrefix))
 		for i, col := range p.groupCols {
-			sb.WriteString(fmt.Sprintf("  %s_%s = %d;\n", enumPrefix, toUpperSnake(col), i+1))
+			sb.WriteString(fmt.Sprintf("  %s_%s = %d;\n", enumPrefix, strutil.ToUpperSnakeCase(col), i+1))
 		}
 		sb.WriteString("}\n")
 		sb.WriteString(fmt.Sprintf(`

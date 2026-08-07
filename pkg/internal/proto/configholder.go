@@ -73,8 +73,8 @@ type ServiceRPCEntry struct {
 // Regex patterns for lightweight grpc_config discovery.
 // These scan raw proto text without needing protoc.
 var (
-	packageRe     = regexp.MustCompile(`(?m)^\s*package\s+(\S+)\s*;`)
-	serviceRe     = regexp.MustCompile(`(?ms)^\s*option\s+\(spec\.service\)\s*=\s*\{([^}]*)\}`)
+	packageRe = regexp.MustCompile(`(?m)^\s*package\s+(\S+)\s*;`)
+	serviceRe = regexp.MustCompile(`(?ms)^\s*option\s+\(spec\.service\)\s*=\s*\{([^}]*)\}`)
 	// Matches any same-line prefix with no slash (inline `{ option` matches, `// option` does not) so a
 	// COMMENTED-OUT annotation — `// option (spec.grpc_config) = {…}` — is not
 	// false-matched as active. Without the anchor a developer who comments the
@@ -298,11 +298,11 @@ func ScanAndGenerateConfigHolder(sourceProtoDir string, dirs ...string) ([]GrpcC
 	svcsBuf.WriteString("}\n")
 
 	for _, svc := range svcRPCs {
-		prefix := pascalToUpperSnake(svc.EnumName) + "_RPCS"
+		prefix := strutil.ToUpperSnakeCase(svc.EnumName) + "_RPCS"
 		svcsBuf.WriteString(fmt.Sprintf("\nenum %sRPCs {\n", svc.EnumName))
 		svcsBuf.WriteString(fmt.Sprintf("  %s_UNSPECIFIED = 0;\n", prefix))
 		for i, rpc := range svc.RPCs {
-			svcsBuf.WriteString(fmt.Sprintf("  %s_%s = %d;\n", prefix, pascalToUpperSnake(rpc), i+1))
+			svcsBuf.WriteString(fmt.Sprintf("  %s_%s = %d;\n", prefix, strutil.ToUpperSnakeCase(rpc), i+1))
 		}
 		svcsBuf.WriteString(fmt.Sprintf("  %s_ANY = 99; // wildcard: allow any RPC\n", prefix))
 		svcsBuf.WriteString("}\n")
@@ -310,12 +310,12 @@ func ScanAndGenerateConfigHolder(sourceProtoDir string, dirs ...string) ([]GrpcC
 
 	// vservice RPC enums (from exported topics).
 	for _, vs := range vsEntries {
-		prefix := pascalToUpperSnake(strutil.ToPascalCase(vs.Name)) + "_RPCS"
+		prefix := strutil.ToUpperSnakeCase(strutil.ToPascalCase(vs.Name)) + "_RPCS"
 		svcsBuf.WriteString(fmt.Sprintf("\n// %s (vservice, hosted by %s)\n", vs.Name, vs.HostTag))
 		svcsBuf.WriteString(fmt.Sprintf("enum %sRPCs {\n", strutil.ToPascalCase(vs.Name)))
 		svcsBuf.WriteString(fmt.Sprintf("  %s_UNSPECIFIED = 0;\n", prefix))
 		for i, rpc := range vs.RPCs {
-			svcsBuf.WriteString(fmt.Sprintf("  %s_%s = %d;\n", prefix, pascalToUpperSnake(rpc), i+1))
+			svcsBuf.WriteString(fmt.Sprintf("  %s_%s = %d;\n", prefix, strutil.ToUpperSnakeCase(rpc), i+1))
 		}
 		svcsBuf.WriteString(fmt.Sprintf("  %s_ANY = 99; // wildcard: allow any RPC\n", prefix))
 		svcsBuf.WriteString("}\n")
@@ -693,9 +693,6 @@ func grantTokenPart(s string) string {
 
 // pascalToUpperSnake converts PascalCase to UPPER_SNAKE_CASE.
 // e.g. "GetClusterInfo" → "GET_CLUSTER_INFO"
-func pascalToUpperSnake(s string) string {
-	return strings.ToUpper(strutil.ToSnakeCase(s))
-}
 
 // ScanVServiceRPCs scans vservices/ for spec.vservice annotations and exported
 // topics using a scoped descriptor parse. For each exported topic, it generates

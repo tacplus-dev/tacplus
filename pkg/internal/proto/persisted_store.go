@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
 	"go.uber.org/zap"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
@@ -42,7 +43,7 @@ func GeneratePersistedStoreEnum(tempProtoDir string) error {
 			if _, ok := msg.Annotations["service_store"]; !ok {
 				continue
 			}
-			valName := upperSnake(msg.Name)
+			valName := strutil.ToUpperSnakeCase(msg.Name)
 			if prev, dup := seen[valName]; dup {
 				return fmt.Errorf("duplicate service_store message name for PersistedStore enum: %q and %q both map to PERSISTED_STORE_%s; service_store message names must be unique across all packages",
 					prev, msg.Name, valName)
@@ -69,7 +70,7 @@ func GeneratePersistedStoreEnum(tempProtoDir string) error {
 	b.WriteString("enum PersistedStore {\n")
 	b.WriteString("  PERSISTED_STORE_UNSPECIFIED = 0;\n")
 	for i, name := range names {
-		b.WriteString(fmt.Sprintf("  PERSISTED_STORE_%s = %d;\n", upperSnake(name), i+1))
+		b.WriteString(fmt.Sprintf("  PERSISTED_STORE_%s = %d;\n", strutil.ToUpperSnakeCase(name), i+1))
 	}
 	b.WriteString("}\n")
 

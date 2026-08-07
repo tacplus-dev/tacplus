@@ -26,7 +26,7 @@ import (
 //     (whole-message level);
 //   - <Sub>Entitlement <field>_sub for a message-typed field whose subtree is
 //     itself relevant (field-by-field recursion), numbered RedactIndicatorFieldBase
-//     + the source number (same reserved band as the injected indicator).
+//   - the source number (same reserved band as the injected indicator).
 //
 // Hard-floor (is_*) fields carry no caller field — they are always applied — so a
 // message with only is_* fields yields an (empty) <T>Entitlement, still paired with

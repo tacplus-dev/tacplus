@@ -16,7 +16,6 @@ import (
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
 )
 
-
 // findMessageClosingBrace finds the position of the closing "}" for a
 // top-level message declaration. Returns the byte offset of the "}" or -1
 // if not found. Uses brace-depth tracking instead of regex.

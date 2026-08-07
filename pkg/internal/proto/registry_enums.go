@@ -129,13 +129,13 @@ func InjectRegistryEnums(protoDir string) error {
 			block.WriteString("enum TypeID {\n")
 			block.WriteString("  TYPE_ID_UNSPECIFIED = 0;\n")
 			for i, name := range typeNames {
-				block.WriteString(fmt.Sprintf("  TYPE_ID_%s = %d;\n", upperSnake(name), i+1))
+				block.WriteString(fmt.Sprintf("  TYPE_ID_%s = %d;\n", strutil.ToUpperSnakeCase(name), i+1))
 			}
 			block.WriteString("}\n")
 		}
 
 		for si, svc := range svcsNeedingEnum {
-			svcUpper := upperSnake(svc.name)
+			svcUpper := strutil.ToUpperSnakeCase(svc.name)
 			enumName := strutil.ToPascalCase(svc.name) + "RpcId"
 			prefix := svcUpper + "_RPC_ID"
 
@@ -148,7 +148,7 @@ func InjectRegistryEnums(protoDir string) error {
 			block.WriteString(fmt.Sprintf("  %s_ALL_MUTATORS = 2;\n", prefix))
 			block.WriteString(fmt.Sprintf("  %s_ALL_EXECUTORS = 3;\n", prefix))
 			for i, method := range svc.methods {
-				block.WriteString(fmt.Sprintf("  %s_%s = %d;\n", prefix, upperSnake(method), i+4))
+				block.WriteString(fmt.Sprintf("  %s_%s = %d;\n", prefix, strutil.ToUpperSnakeCase(method), i+4))
 			}
 			block.WriteString("}\n")
 		}
@@ -168,8 +168,4 @@ func InjectRegistryEnums(protoDir string) error {
 			zap.Bool("rpc_enum", len(rpcMethods) > 0))
 		return nil
 	})
-}
-
-func upperSnake(s string) string {
-	return strings.ToUpper(strutil.ToSnakeCase(s))
 }

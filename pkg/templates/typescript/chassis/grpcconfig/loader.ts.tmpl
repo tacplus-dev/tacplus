@@ -12,6 +12,7 @@ import {
   validateConfig,
   BOOTSTRAP_CONFIG_ENV,
 } from './helpers.js';
+import * as WinstonConfigurator from '../logger/WinstonConfigurator.js';
 
 /**
  * Loads a Config from a config file and/or PROTO_SYS_GRPCCONFIG_CONFIG_* env vars.
@@ -71,5 +72,12 @@ export async function loadConfig(): Promise<Config> {
 
   configDefaults(cfg);
   validateConfig(cfg);
+
+  // Apply the TYPED logger config (logger.LoggerConfig, grpcconfig field 9) so
+  // format, level, output paths and initial fields are honoured. Without this the
+  // whole WinstonConfigurator was generated into every TypeScript service and
+  // called by nothing, leaving field 9 inert.
+  WinstonConfigurator.install(cfg.logger);
+
   return cfg;
 }

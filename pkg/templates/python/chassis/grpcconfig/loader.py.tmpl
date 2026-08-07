@@ -22,6 +22,7 @@ from {{.PythonPackageBase}}.types.sys.grpcconfig.helpers import (
     validate_config,
     BOOTSTRAP_CONFIG_ENV,
 )
+from {{.PythonPackageBase}}.chassis.logger import LoggerConfigurator
 
 
 def load_config() -> grpcconfig_pb2.Config:
@@ -38,6 +39,13 @@ def load_config() -> grpcconfig_pb2.Config:
         RuntimeError: If no config is provided or validation fails
         IOError: If the config file cannot be read
     """
+    # Install credential redaction and the gRPC transport logger pins BEFORE any
+    # channel is created. grpc-python's Cython channel code can emit HTTP/2 frame
+    # data including authorization headers at DEBUG, so this must not wait for the
+    # config to parse. install() pins those loggers unconditionally, so calling it
+    # again below with the typed config never weakens the guarantee.
+    LoggerConfigurator.install(None)
+
     # Scan sys.argv for -c <path> or --config <path>
     path = ""
     args = sys.argv[1:]
@@ -82,4 +90,10 @@ def load_config() -> grpcconfig_pb2.Config:
 
     config_defaults(cfg)
     validate_config(cfg)
+
+    # Apply the TYPED logger config (logger.LoggerConfig, grpcconfig field 9) now
+    # that it is parsed and defaulted, so format, level, output paths and initial
+    # fields are honoured rather than only the bootstrap defaults installed above.
+    LoggerConfigurator.install(cfg.logger)
+
     return cfg

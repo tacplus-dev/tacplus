@@ -445,8 +445,19 @@ pub fn install_from_config(config: &proto::LoggerConfig) -> Result<()> {
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect::<Vec<_>>();
 
-    // Create env filter
-    let env_filter = EnvFilter::from_default_env().add_directive(level.into());
+    // Create env filter. Transport-layer loggers (h2, hyper, tonic) are pinned to
+    // WARN because at DEBUG/TRACE they emit raw HTTP/2 frame data including
+    // authorization headers with live service JWTs. The pins are added AFTER the
+    // default env filter so they override any RUST_LOG=trace setting. These MUST
+    // stay in step with `Logger::install` in logger.rs — this is the config-driven
+    // entry point and reaches production through grpcconfig's load_config, so a pin
+    // present in only one of the two installs is a live credential leak on whichever
+    // path runs. New crates added to the transport stack should be added to both.
+    let env_filter = EnvFilter::from_default_env()
+        .add_directive(level.into())
+        .add_directive("h2=warn".parse().unwrap())
+        .add_directive("hyper=warn".parse().unwrap())
+        .add_directive("tonic::transport=warn".parse().unwrap());
 
     // Configure based on format
     match encoding {

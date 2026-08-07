@@ -20,13 +20,35 @@ const BOOTSTRAP_CONFIG_ENV: &str = "BOOTSTRAP_CONFIG";
 /// 2. Individual PROTO_SYS_GRPCCONFIG_CONFIG_* env vars
 /// 3. Merges (file takes precedence), applies defaults, validates
 pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
-    // Install credential redaction and transport logger pins BEFORE any gRPC
-    // channel is created. This is the earliest shared entry point for all Rust
-    // services (ServiceManager-based AND hand-written), so redaction engages
-    // unconditionally. The logger is idempotent — a later install() call with
-    // runtime config re-applies cleanly.
-    let _ = logger::Logger::default().install();
+    // Install the logger from the TYPED config (logger.LoggerConfig, grpcconfig
+    // field 9) so format, level, output paths and initial fields are honoured —
+    // not just the hardcoded defaults.
+    //
+    // Ordering matters and is not interchangeable. `tracing`'s global subscriber
+    // can only be set ONCE per process, and both install paths call
+    // `mark_installed()`, so whichever runs first WINS and the other silently
+    // returns Ok(()) having done nothing. Installing the default up front (as this
+    // function used to) therefore made the typed config unreachable no matter where
+    // a later call was added. Config loading reads a file and env vars and opens no
+    // gRPC channel, so deferring the install until the config is parsed does not
+    // weaken the "redaction engages before any channel exists" guarantee.
+    //
+    // On any config-load failure we still install the default, so a service that
+    // dies during startup logs its error through a redacting, transport-pinned
+    // logger rather than an uninstalled one.
+    match load_config_inner() {
+        Ok(cfg) => {
+            let _ = logger::install_from_config(&cfg.logger.clone().unwrap_or_default());
+            Ok(cfg)
+        }
+        Err(e) => {
+            let _ = logger::Logger::default().install();
+            Err(e)
+        }
+    }
+}
 
+fn load_config_inner() -> Result<Config, Box<dyn std::error::Error>> {
     // Scan args for -c <path> or --config <path>
     let args: Vec<String> = env::args().collect();
     let mut path = String::new();
@@ -107,17 +129,32 @@ mod tests {
             "explicit 9999 should be preserved, got {}", cfg.health_probe_port);
     }
 
-    /// Structural test: verify that load_config calls logger::Logger::default().install().
-    /// The logger is idempotent — calling install() here verifies the logger crate
-    /// is a dependency and its install method is accessible. The behavioral effect
-    /// (transport logger pins + credential redaction) is verified by the logger crate's
-    /// own tests. This test catches the "generated but never wired" defect.
+    /// Verify the TYPED-config install path that load_config now uses.
+    ///
+    /// The previous version of this test called `logger::Logger::default().install()`
+    /// — the hardcoded-defaults path — and asserted it returned Ok. That proved only
+    /// that the logger crate was a dependency: it passed for the entire period during
+    /// which `install_from_config` existed, was correct, and was never called by
+    /// anything. Exercise the config-driven entry point instead, with a non-default
+    /// config, so a regression to the defaults path fails to compile or fails here.
+    ///
+    /// Note this asserts the API and the accepted config shape, not the resulting
+    /// filter: `tracing`'s global subscriber is process-wide and set-once, so whether
+    /// this call or another test's install wins depends on test execution order. The
+    /// transport-pin content of both install paths is asserted at generation time by
+    /// pkg/internal/rust/chassis/logger_pins_template_test.go, which compares the two
+    /// directive sets directly and fails if they drift apart.
     #[test]
-    fn load_config_installs_logger() {
-        // Calling install() directly — same call that load_config() makes.
-        // If the dependency is missing or the API changes, this fails to compile.
-        let result = logger::Logger::default().install();
-        assert!(result.is_ok(), "logger install should succeed: {:?}", result.err());
+    fn load_config_installs_logger_from_typed_config() {
+        use {{.CrateBasePathUnderscore}}_types::sys::logger as logproto;
+        let cfg = logproto::LoggerConfig {
+            level: logproto::Level::Debug.into(),
+            format: logproto::Format::Json.into(),
+            output_paths: vec!["stderr".to_string()],
+            ..Default::default()
+        };
+        let result = logger::install_from_config(&cfg);
+        assert!(result.is_ok(), "typed-config install should succeed: {:?}", result.err());
     }
 
     #[test]

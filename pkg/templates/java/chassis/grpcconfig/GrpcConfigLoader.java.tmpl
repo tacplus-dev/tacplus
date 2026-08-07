@@ -102,6 +102,25 @@ public final class GrpcConfigLoader {
 
         cfg = Helpers.configDefaults(cfg).build();
         Helpers.validateConfig(cfg);
+
+        // Re-install with the TYPED logger config (logger.LoggerConfig, grpcconfig
+        // field 9) now that it has been parsed and defaulted, so format, level,
+        // output paths and initial fields are honoured rather than only the
+        // bootstrap defaults installed above.
+        //
+        // This must live here and not only in ServiceManager.run(). Four services
+        // are structurally different and never reach that call: kernel and kmaker
+        // never construct the generated ServiceManager at all, and gateway and
+        // letsencrypt construct it but never call run(). Installing only from run()
+        // left every one of them on the defaults path. install() re-applies
+        // cleanly and always pins the transport loggers, so calling it twice is
+        // safe and never drops the credential-redaction guarantee.
+        //
+        // kernel is still not covered by this call -- it resolves its own
+        // Kernel.Config and never invokes GrpcConfigLoader -- and installs
+        // separately from its own bootstrap.
+        LogbackConfigurator.install(cfg.getLogger());
+
         return cfg;
     }
 }

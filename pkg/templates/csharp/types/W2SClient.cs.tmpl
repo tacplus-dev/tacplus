@@ -133,6 +133,18 @@ public sealed class {{$service.ClientTypeName}}
         _client = client;
     }
 {{range .Methods}}
+{{- if .IsStreaming}}
+    /// <summary>
+    /// Streaming method {{$service.PackageName}}.{{.MethodName}} is not supported in the
+    /// C# lite client. Use the Go, Java, or Rust W2S client for streaming.
+    /// </summary>
+    [System.Obsolete("Streaming method {{.MethodName}} requires the Go/Java/Rust W2S client", error: true)]
+    public Task<{{.OutputType}}> {{.MethodName}}Async(
+        {{.InputType}} request,
+        System.Threading.CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException(
+            "C# W2S client does not support streaming method {{.MethodName}}; use Go/Java/Rust W2S client");
+{{- else}}
     /// <summary>Calls {{$service.PackageName}}.{{.MethodName}} via W2S HTTP/JSON.</summary>
     public Task<{{.OutputType}}> {{.MethodName}}Async(
         {{.InputType}} request,
@@ -143,6 +155,7 @@ public sealed class {{$service.ClientTypeName}}
             {{.AuthRequired}},
             request,
             cancellationToken);
+{{- end}}
 {{end}}
 }
 {{end}}

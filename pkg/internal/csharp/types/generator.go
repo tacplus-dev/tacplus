@@ -77,6 +77,10 @@ type w2sMethodTemplateData struct {
 	AuthRequired bool
 	InputType    string
 	OutputType   string
+	// IsStreaming is true for methods that are client- or server-streaming.
+	// The C# lite client emits a throwing stub for these so a consumer sees
+	// the method at compile time instead of a silent omission.
+	IsStreaming bool
 }
 
 // Generate generates a .NET client-lite package from proto files.
@@ -324,12 +328,17 @@ func w2sServicesTemplateData(protoDir string, servicesInfo []service.ServiceInfo
 
 		methods := make([]w2sMethodTemplateData, 0, len(target.Methods))
 		for _, method := range target.Methods {
-			// C# W2S is unary-only: a declared streaming method is skipped (not a
-			// hard error, so a mixed service still compiles) but logged so a client
-			// author is not silently left without the method.
+			// C# W2S is unary-only: streaming methods are emitted as throwing
+			// stubs so a consumer sees them at compile time. A silent continue-skip
+			// at Info level was the previous behavior — it was invisible at default
+			// CLI log levels (the recurring "silent skip" defect shape).
 			if method.ClientStreaming || method.ServerStreaming {
-				zap.L().Info("C# W2S client omits a streaming method (unary-only surface); use the Go/Java/Rust W2S client for streaming",
-					zap.String("service", target.Name), zap.String("method", method.Name))
+				methods = append(methods, w2sMethodTemplateData{
+					MethodName: csharpIdentifier(method.Name),
+					InputType:  csharpProtoTypeName(method.FullInputType, method.InputType, info.Package),
+					OutputType: csharpProtoTypeName(method.FullOutputType, method.OutputType, info.Package),
+					IsStreaming: true,
+				})
 				continue
 			}
 			if method.HttpPath == "" {

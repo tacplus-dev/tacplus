@@ -870,7 +870,7 @@ async fn rust_tls_first_handler_failure_keeps_startup_pending() {
         run_tls_authority_fixture(AuthorityMode::FirstSuccess, handler.clone()).await;
 
     assert!(
-        !result.expect("TLS handler rejection should leave this attempt retryable"),
+        !result.expect("TLS first-handler rejection is a fatal startup error (no retry)"),
         "failed first handler delivery must not report readiness"
     );
     assert!(

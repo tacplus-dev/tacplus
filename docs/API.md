@@ -133,10 +133,16 @@ only after that handler seam succeeds.
 The behavioral fixture for this contract drives both auto-TLS and SMB loops
 through first delivery success, renewal success, clean end before and after
 first delivery, server error before and after first delivery, authority
-unreachable, first-delivery handler failure, renewal handler failure, endpoint
-re-resolution after reconnect, and shutdown during startup and renewal
-attempts. Template-level regression tests pin the state-machine markers where a
-full runtime fixture is not practical.
+unreachable, first-delivery handler failure, renewal handler failure, and
+shutdown during startup and renewal attempts. Template-level regression tests
+pin the state-machine markers where a full runtime fixture is not practical.
+
+The fixture does NOT currently exercise endpoint re-resolution after reconnect
+or CSR/key generation failure injection. Reconnect behavior is tested (the loop
+does reconnect after post-delivery errors), but re-resolution to a changed
+endpoint is not pinned. The contract requires it (see the required failure
+table above), and template code implements it, but no behavioral test verifies
+it.
 
 ## Handler And Wrappers
 
@@ -162,6 +168,13 @@ REST/SSE translation. `google.protobuf.*` well-known responses such as
 `Empty` carry no tacplus `assert_*` constraints, so generated wrappers pass
 them through without a validation call.
 
+**W2S REST/SSE egress validation scope**: the Rust W2S server dispatch
+(`rest_dispatch.rs.tmpl`) validates both unary responses and SSE stream items
+before sending. Go and Java W2S servers validate outbound messages through
+their gRPC wrapper pipeline (the REST surface is implemented as a translation
+layer atop gRPC, so gRPC egress validation covers it). Python and TypeScript
+are client-only targets and do not host a W2S server.
+
 Auth-disabled methods skip token lookup and authorization but still validate
 messages. Auth-enabled methods must not reach the handler without a valid token
 and a satisfied authorization decision.
@@ -184,8 +197,14 @@ not enable C2S.
 
 C2D is a local daemon IPC surface; it does not introduce SMN/SMB mesh work.
 The lite client targets (`swift`, `csharp`) emit C2D, C2S, and W2S clients
-(their W2S is unary-only — see above); the full-client targets (`python`,
-`typescript`) additionally emit REST clients.
+(their W2S is unary-only — streaming methods are emitted as throwing stubs);
+the full-client targets (`python`, `typescript`) additionally emit REST clients.
+
+C2D server wrappers skip token authentication by design: the auth boundary is
+the socket permission (filesystem ACL / named-pipe DACL), not a bearer token.
+The generated wrapper still validates request/response constraints and runs the
+full handler pipeline; only the token-lookup and authorization steps are
+bypassed. This is implemented via the `IsC2D` flag on the service descriptor.
 
 ### Client Send Contract
 

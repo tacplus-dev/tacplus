@@ -13,7 +13,7 @@ import (
 // previously logged nothing on success, so a healthy subscriber looked identical
 // to a dead one — silence after transient-error retries actually meant success.
 // That cost a live misdiagnosis (a graphdb subscriber was reported abandoned
-// while it had an active Kafka consumer group), and it made an e2e check that
+// while it had an active broker consumer group), and it made an e2e check that
 // greps for the started-line unsatisfiable for go services.
 func TestSubscriberTemplatesLogSubscriptionStarted(t *testing.T) {
 	cases := []struct {

@@ -208,6 +208,20 @@ func controlPlaneGuarantees() []controlPlaneGuarantee {
 			},
 		},
 		{name: "per-call outbound timeout (client)", locus: clientFiles, tokens: uniform("timeout", "Timeout", "deadline", "Deadline")},
+		{
+			// REST-based W2S clients (typescript, swift, csharp via lite-client) set
+			// their own HTTP timeouts. The gRPC-based W2S clients (go, java, rust) get
+			// timeouts from the general gRPC client row above, so they are not
+			// duplicated here. PAR-7: this row verifies the TS fix exists.
+			name:  "W2S REST default timeout (HTTP-based clients)",
+			langs: []string{"typescript"},
+			locus: map[string]string{
+				"typescript": "pkg/templates/typescript/types/w2sm.ts.tmpl",
+			},
+			tokens: map[string][]string{
+				"typescript": {"AbortSignal.timeout", "connectTimeoutMs"},
+			},
+		},
 		{name: "bounded outbound retry/backoff (client)", locus: clientFiles, tokens: uniform("retry", "Retry", "backoff", "Backoff")},
 		{
 			name:  "request validation (client outbound)",
@@ -913,6 +927,7 @@ func main() {
 
 	// Control-plane coverage matrix (docs/DEVELOPMENT.md Part II).
 	failures += renderControlPlane(*root)
+	failures += renderLiteClientSoundness(*root)
 	failures += renderSpiffeSoundness(*root)
 	failures += renderStoreVendorSoundness(*root)
 
@@ -1096,6 +1111,116 @@ func renderEmittedManifestProbes(root string) int {
 		}
 		if len(present) > 0 {
 			fmt.Printf("- `%s` · forbidden in %s: %s\n", p.name, p.file, strings.Join(present, ", "))
+			failures++
+			continue
+		}
+		fmt.Printf("- `%s` ✓ (%s)\n", p.name, p.file)
+	}
+	return failures
+}
+
+// liteClientProbes verifies that swift/csharp lite-client generators emit the
+// expected client surfaces. These languages are not in langOrder (no validation
+// emitters) but they DO generate C2D and W2S clients that must not silently
+// regress.
+var liteClientProbes = []struct {
+	name     string
+	file     string
+	patterns []string
+}{
+	{
+		name: "swift C2D client template",
+		file: "pkg/templates/swift/types/C2DClient.swift.tmpl",
+		patterns: []string{
+			"public struct C2DClient",
+			"socketPath",
+			"precondition(!socketPath.isEmpty",
+		},
+	},
+	{
+		name: "swift W2S client template",
+		file: "pkg/templates/swift/types/W2SClient.swift.tmpl",
+		patterns: []string{
+			"public struct W2SClient",
+			"requestTimeout",
+		},
+	},
+	{
+		name: "swift W2S streaming method stub",
+		file: "pkg/templates/swift/types/W2SClient.swift.tmpl",
+		patterns: []string{
+			"@available(*, unavailable",
+			"fatalError",
+		},
+	},
+	{
+		name: "csharp C2D client template",
+		file: "pkg/templates/csharp/types/C2DClient.cs.tmpl",
+		patterns: []string{
+			"public sealed class C2DClient",
+			"PipeName",
+			"ArgumentException",
+		},
+	},
+	{
+		name: "csharp W2S client template",
+		file: "pkg/templates/csharp/types/W2SClient.cs.tmpl",
+		patterns: []string{
+			"public sealed class W2SClient",
+			"TimeSpan.FromSeconds(30)",
+		},
+	},
+	{
+		name: "csharp W2S streaming method stub",
+		file: "pkg/templates/csharp/types/W2SClient.cs.tmpl",
+		patterns: []string{
+			"Obsolete",
+			"NotSupportedException",
+		},
+	},
+	{
+		name: "swift W2S structured errors",
+		file: "pkg/templates/swift/types/W2SClient.swift.tmpl",
+		patterns: []string{
+			"W2SClientError",
+			"missingTokenProvider",
+			"emptyToken",
+			"httpStatus",
+		},
+	},
+	{
+		name: "csharp W2S structured errors",
+		file: "pkg/templates/csharp/types/W2SClient.cs.tmpl",
+		patterns: []string{
+			"W2SClientException",
+			"StatusCode",
+		},
+	},
+}
+
+func renderLiteClientSoundness(root string) int {
+	fmt.Println("\n## Lite-client (swift/csharp) soundness probes (ENFORCED)")
+	fmt.Println("\nSwift and C# are client-lite targets (no validation emitters, not in langOrder).")
+	fmt.Println("These probes verify that the client surfaces they DO generate are present and")
+	fmt.Println("include timeouts, structured errors, and streaming-method stubs.")
+
+	failures := 0
+	for _, p := range liteClientProbes {
+		b, err := os.ReadFile(filepath.Join(root, p.file))
+		if err != nil {
+			fmt.Printf("- `%s` · cannot read %s: %v\n", p.name, p.file, err)
+			failures++
+			continue
+		}
+		src := string(b)
+		var missing []string
+		for _, pattern := range p.patterns {
+			if !strings.Contains(src, pattern) {
+				missing = append(missing, pattern)
+			}
+		}
+		if len(missing) > 0 {
+			fmt.Printf("- `%s` · missing in %s: %s\n", p.name, p.file, strings.Join(missing, ", "))
 			failures++
 			continue
 		}

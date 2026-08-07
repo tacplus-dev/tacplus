@@ -26,6 +26,9 @@ public sealed class C2DClient : IDisposable
     {
         PipeName = pipeName ?? DefaultNamedPipeName();
 
+        if (string.IsNullOrEmpty(PipeName))
+            throw new ArgumentException("C2DClient: pipeName must not be null or empty", nameof(pipeName));
+
         _channel = GrpcChannel.ForAddress(
             "http://localhost",
             new GrpcChannelOptions { HttpHandler = NamedPipesConnectionFactory.Create(PipeName) });

@@ -30,7 +30,7 @@ package demo;
 message DemoEvents {
   option (spec.timeseries_projection) = {
     name: "DemoRecord"
-    engine: "ReplacingMergeTree(ts)"
+    engine: "DemoEngine(ts)"
     ttl: "toDateTime(ts) + INTERVAL 90 DAY"
     field: {source: "kind" low_cardinality: true}
   };

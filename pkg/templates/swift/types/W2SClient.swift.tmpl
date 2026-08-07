@@ -120,6 +120,15 @@ public struct {{$service.ClientTypeName}}: Sendable {
         self.client = client
     }
 {{range .Methods}}
+{{- if .IsStreaming}}
+
+    /// Streaming method {{$service.PackageName}}.{{.MethodName}} is not supported in the
+    /// Swift lite client. Use the Go, Java, or Rust W2S client for streaming.
+    @available(*, unavailable, message: "Streaming method {{.MethodName}} requires the Go/Java/Rust W2S client")
+    public func {{.SwiftMethodName}}(_ request: {{.InputType}}) async throws -> {{.OutputType}} {
+        fatalError("Swift W2S client does not support streaming method {{.MethodName}}; use Go/Java/Rust W2S client")
+    }
+{{- else}}
 
     /// Calls {{$service.PackageName}}.{{.MethodName}} via W2S HTTP/JSON.
     public func {{.SwiftMethodName}}(_ request: {{.InputType}}) async throws -> {{.OutputType}} {
@@ -130,6 +139,7 @@ public struct {{$service.ClientTypeName}}: Sendable {
             request: request
         )
     }
+{{- end}}
 {{end}}
 }
 {{end}}

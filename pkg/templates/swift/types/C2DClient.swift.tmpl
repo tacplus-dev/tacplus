@@ -5,7 +5,12 @@ import GRPCNIOTransportHTTP2
 public struct C2DClient: Sendable {
     public let socketPath: String
 
+    /// Creates a C2D client dialing the daemon at `socketPath`.
+    /// - Parameter socketPath: path to the daemon's unix-domain socket. When
+    ///   omitted, defaults to `~/.{{.DaemonDirectory}}/daemon.sock`.
+    /// - Precondition: `socketPath` must not be empty.
     public init(socketPath: String = C2DClient.defaultSocketPath()) {
+        precondition(!socketPath.isEmpty, "C2DClient: socketPath must not be empty")
         self.socketPath = socketPath
     }
 

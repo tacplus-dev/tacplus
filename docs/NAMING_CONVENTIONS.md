@@ -92,13 +92,23 @@ typescript/types, and `package foo` in 2 files under java/types.
 emit generated code, and `<subject>.go` when it is a helper, model, or registry.
 The suffix describes the file's role, not its age.
 
-**Why.** The suffix is currently applied inconsistently — `release.go` and
-`release_gen.go` coexist with no rule distinguishing them, so the name carries no
-information and a reader cannot tell which files emit.
+**Why.** The suffix carries no information today. The clearest case:
+`java/types/release.go` and `rust/types/release_gen.go` were structurally
+parallel — same function names (`writeRelease`,
+`generate<Lang>EntitlementBuilder`, `write<Lang>EntitlementFields`), same role —
+under two different names. That one is fixed; java now matches rust.
 
-**Cost:** a rename pass plus import updates. **Generated output:** none. This is
-generator-internal only. Worth doing in one commit so the diff is obviously
-mechanical.
+**Cost:** larger than it looks, and larger than the ledger implied. Beyond the
+`release` pair, more than fifteen files under `pkg/internal/proto` write output
+without the suffix (`state.go`, `record_map.go`, `configholder.go`,
+`persisted_store.go`, `timeseries_query.go`, …). Applying the rule fully is a
+15+-file rename touching most of that package.
+
+**Generated output:** none — file names here are generator-internal.
+
+**Status:** the cross-language `release` drift is fixed. The bulk rename is NOT
+done. It is mechanical and safe, but it will conflict with anything else in
+flight in `internal/proto`, so it wants a quiet moment and its own commit.
 
 ## 5. Every emitted file carries the same DO-NOT-EDIT header
 
@@ -187,8 +197,10 @@ else in flight; do it when nothing else is open in `internal/java`.
 copies of one transform in a single package, now `strutil.ToUpperSnakeCase`. They
 were checked for divergence before merging; they agreed.
 
-**Not yet adopted:** the rest of rule 1 (the remaining scattered helpers), and
-rules 3, 4, 9.
+Rule 9 is adopted, and rule 4's cross-language `release` drift is fixed.
+
+**Not yet adopted:** the rest of rule 1 (the remaining scattered helpers), rule
+4's bulk `_gen.go` rename, and rule 3 (the 54-file `package java` rename).
 
 Rule 6 is safe **unless** a collision already exists, which is worth finding out
 either way.

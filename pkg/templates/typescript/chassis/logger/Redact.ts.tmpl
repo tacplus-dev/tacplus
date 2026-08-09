@@ -1,0 +1,125 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+import winston from 'winston';
+
+/**
+ * Credential redaction for log output.
+ *
+ * TypeScript was the only chassis language with NO redaction at all: go, rust,
+ * java and python each strip credentials at the log boundary, while a Winston
+ * logger emitted `authorization: Bearer ...` verbatim at any level, to any sink.
+ *
+ * The patterns below are deliberately the SAME FIVE used by the go chassis
+ * (chassis/logger/redact.go). Divergence here would be worse than absence: an
+ * operator who has verified redaction in one language would reasonably assume it
+ * behaves the same in another.
+ *
+ * Covered keys (case-insensitive):
+ *   - authorization (Bearer, Basic, or any scheme)
+ *   - cookie / set-cookie
+ *   - any key ending in -token, _token, -secret, or _secret
+ *   - standalone "Bearer <token>"
+ *
+ * Two shapes must be matched:
+ *
+ *   Header/text shape -- `authorization: Bearer abc`, `x-auth-token=abc`.
+ *
+ *   JSON field shape -- `"x-auth-token":"abc"`. A structured field puts a CLOSING
+ *   QUOTE before the colon, so `key\s*[:=]` cannot match it. Missing this is how
+ *   credentials logged as structured fields escaped redaction in the other
+ *   languages until it was fixed there.
+ *
+ * Value termination matters too. Capturing values as `\S+` runs to end of line in
+ * compact JSON -- there is no whitespace to stop at -- so one credential would
+ * swallow every following field and leave a truncated, unparseable log line.
+ * Values therefore stop at a quote, comma or closing brace.
+ */
+const credentialPatterns: RegExp[] = [
+  /(authorization\s*[:=]\s*)([^"\s,}]+(?:\s+[^"\s,}]+)?)/gi,
+  /((?:set-)?cookie\s*[:=]\s*)([^"\s,}]+)/gi,
+  /([\w][\w-]*[-_](?:token|secret)\s*[:=]\s*)([^"\s,}]+)/gi,
+  /("(?:authorization|(?:set-)?cookie|[\w][\w-]*[-_](?:token|secret))"\s*:\s*")([^"]*)/gi,
+  /(Bearer\s+)([^"\s,}]{20,})/gi,
+];
+
+const REDACTED_PLACEHOLDER = '[REDACTED]';
+
+/**
+ * Removes credential values from a string.
+ *
+ * @param s the string to redact
+ * @returns the string with credential values replaced by [REDACTED]
+ */
+export function redactCredentials(s: string): string {
+  let out = s;
+  for (const pattern of credentialPatterns) {
+    // lastIndex is reset explicitly: these are module-level /g regexes, and a
+    // stateful lastIndex left over from a previous call would make an identical
+    // input redact differently on the second call.
+    pattern.lastIndex = 0;
+    out = out.replace(pattern, `$1${REDACTED_PLACEHOLDER}`);
+  }
+  return out;
+}
+
+/**
+ * Recursively redacts credential values in any value.
+ *
+ * Redacting only `message` would not be enough: Winston serialises metadata into
+ * the same line, so a credential passed as a structured field -- which is the
+ * idiomatic way to log one -- would reach the sink untouched.
+ *
+ * Cycles are tracked because metadata frequently carries request or error
+ * objects with parent references, and walking one without a guard would hang the
+ * logger.
+ */
+function redactValue(value: unknown, seen: WeakSet<object>): unknown {
+  if (typeof value === 'string') {
+    return redactCredentials(value);
+  }
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+  if (seen.has(value as object)) {
+    return value;
+  }
+  seen.add(value as object);
+
+  if (Array.isArray(value)) {
+    return value.map((v) => redactValue(v, seen));
+  }
+
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = redactValue(v, seen);
+  }
+  return out;
+}
+
+/**
+ * A Winston format that redacts credentials from the message and all metadata.
+ *
+ * Install this FIRST in the format chain so redaction happens before any
+ * serialiser sees the entry, and so it applies whatever output format is
+ * configured. Placing it after json() would leave the JSON path unprotected.
+ */
+export const redactFormat = winston.format((info) => {
+  const seen = new WeakSet<object>();
+
+  if (typeof info.message === 'string') {
+    info.message = redactCredentials(info.message);
+  } else if (info.message !== null && typeof info.message === 'object') {
+    info.message = redactValue(info.message, seen) as typeof info.message;
+  }
+
+  // Symbol-keyed properties are Winston internals (level, splat, message
+  // symbols); only string keys carry user metadata.
+  for (const key of Object.keys(info)) {
+    if (key === 'message' || key === 'level') {
+      continue;
+    }
+    info[key] = redactValue(info[key], seen);
+  }
+
+  return info;
+});

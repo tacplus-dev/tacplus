@@ -4,6 +4,7 @@ import winston from 'winston';
 import { LoggerConfig } from './LoggerConfigHelper.js';
 import * as LogLevel from './LogLevel.js';
 import * as LogFormat from './LogFormat.js';
+import { redactFormat } from './Redact.js';
 
 /**
  * Programmatic configurator for Winston.
@@ -57,6 +58,14 @@ export function install(config?: LoggerConfig): winston.Logger {
  */
 function createFormat(config: LoggerConfig): winston.Logform.Format {
   const formats: winston.Logform.Format[] = [];
+
+  // Credential redaction MUST come first. It has to run before any serialiser
+  // sees the entry, and it must not depend on which output format is configured
+  // -- placing it after json() would leave the structured path unprotected,
+  // which is exactly the gap that let credentials through in other languages.
+  // It is unconditional: there is no config flag to switch it off, because a
+  // logger that can be configured to leak credentials eventually is.
+  formats.push(redactFormat());
 
   // Add timestamp
   formats.push(winston.format.timestamp());

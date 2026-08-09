@@ -485,11 +485,33 @@ impl Authorizer {
 #[derive(Clone)]
 pub struct AuthEnforcingLayer {
     authorizer: Arc<Authorizer>,
+    /// Full gRPC paths ("/pkg.Service/Method") declared auth_disabled.
+    ///
+    /// This layer runs BEFORE the per-method wrappers that the comment above
+    /// calls the authoritative gate, and it rejects anything without an
+    /// authorization header. Without this set an auth_disabled method is
+    /// unreachable on the server no matter what the annotation says -- the
+    /// gateway forwards the call unauthenticated, exactly as designed, and the
+    /// service answers 401. That makes login impossible to bootstrap, since
+    /// ListProviders/Authorize/MintCallbackTokens must all work before any token
+    /// exists.
+    exempt_paths: Arc<std::collections::HashSet<String>>,
 }
 
 impl AuthEnforcingLayer {
     pub fn new(authorizer: Arc<Authorizer>) -> Self {
-        Self { authorizer }
+        Self { authorizer, exempt_paths: Arc::new(std::collections::HashSet::new()) }
+    }
+
+    /// Exempt the given full gRPC method paths from token enforcement.
+    pub fn with_exempt_paths(
+        authorizer: Arc<Authorizer>,
+        paths: impl IntoIterator<Item = String>,
+    ) -> Self {
+        Self {
+            authorizer,
+            exempt_paths: Arc::new(paths.into_iter().collect()),
+        }
     }
 }
 
@@ -500,6 +522,7 @@ impl<S> tower::Layer<S> for AuthEnforcingLayer {
         AuthEnforcingService {
             inner,
             authorizer: self.authorizer.clone(),
+            exempt_paths: self.exempt_paths.clone(),
         }
     }
 }
@@ -510,6 +533,7 @@ impl<S> tower::Layer<S> for AuthEnforcingLayer {
 pub struct AuthEnforcingService<S> {
     inner: S,
     authorizer: Arc<Authorizer>,
+    exempt_paths: Arc<std::collections::HashSet<String>>,
 }
 
 impl<S, ReqBody, ResBody> tower::Service<hyper::http::Request<ReqBody>> for AuthEnforcingService<S>
@@ -537,6 +561,14 @@ where
     fn call(&mut self, req: hyper::http::Request<ReqBody>) -> Self::Future {
         // Health check is unauthenticated by design (standard grpc.health.v1).
         if req.uri().path().starts_with("/grpc.health.v1.Health/") {
+            let fut = self.inner.call(req);
+            return Box::pin(fut);
+        }
+
+        // auth_disabled methods are unauthenticated by declaration. The
+        // per-method wrapper remains the authoritative gate for everything else;
+        // this layer must not pre-empt a method the model says needs no token.
+        if self.exempt_paths.contains(req.uri().path()) {
             let fut = self.inner.call(req);
             return Box::pin(fut);
         }

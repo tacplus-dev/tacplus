@@ -747,12 +747,19 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 			// Derive service-level auth flags from method-level annotations.
 			anyUser := service.AuthAnyUser
 			hasMethodAuth := len(service.AuthServices) > 0
+			// Methods declared auth_disabled must bypass the server's
+			// AuthEnforcingLayer, which runs before the per-method wrappers and
+			// would otherwise 401 them regardless of the annotation.
+			var authExempt []string
 			for _, m := range service.Methods {
 				if m.AuthAnyUser {
 					anyUser = true
 				}
 				if len(m.AuthServices) > 0 {
 					hasMethodAuth = true
+				}
+				if service.AuthDisabled || m.AuthDisabled {
+					authExempt = append(authExempt, fmt.Sprintf("/%s.%s/%s", packageName, service.Name, m.Name))
 				}
 			}
 			servicesInfo = append(servicesInfo, ServiceInfo{
@@ -772,6 +779,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				AuthAnyUser:   anyUser,
 				AuthServices:  service.AuthServices,
 				HasMethodAuth: hasMethodAuth,
+				AuthExemptPaths: authExempt,
 				HostTag:       service.HostTag,
 				// Propagate the synthesized-service marker so ResolveServerServices'
 				// filterByPackage can drop tacplus-generated state/store/config-state

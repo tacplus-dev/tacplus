@@ -37,6 +37,16 @@ type ServiceInfo struct {
 	AuthAnyUser   bool     // C2S: any authenticated user can call
 	AuthServices  []string // S2S: allowed caller identities (service-level default)
 	HasMethodAuth bool     // true if any per-method auth metadata must be registered
+	// AuthExemptPaths are full gRPC method paths ("/pkg.Service/Method") that
+	// carry auth_disabled and must therefore be reachable WITHOUT a token.
+	//
+	// The server-side AuthEnforcingLayer rejects every request lacking an
+	// authorization header before it can reach the per-method wrapper that is
+	// supposed to be the authoritative gate. That made auth_disabled a lie on
+	// the server: the gateway honoured it, the service did not. Login was
+	// structurally impossible as a result -- ListProviders, Authorize and
+	// MintCallbackTokens must all be callable before a token exists.
+	AuthExemptPaths []string
 	HostTag       string   // non-empty for vservices: the SelfPackage of the service that hosts this RPC surface
 	Synthesized   bool     // tacplus-generated state/store/mutation/opa service (not user-defined); excluded from own-package server generation
 }
@@ -506,6 +516,7 @@ func DetectServicesForWrapper(config *tactype.Config, inputDir string, outputDir
 		for _, svc := range fileDesc.Services {
 			// Derive service-level auth flags from method-level annotations.
 			anyUser, hasMethodAuth := deriveServiceAuthFlags(svc)
+			authExempt := authExemptMethodPaths(packageName, svc)
 			servicesInfo = append(servicesInfo, ServiceInfo{
 				ProtoFile:     relPath,
 				PackageName:   packageName,
@@ -525,6 +536,7 @@ func DetectServicesForWrapper(config *tactype.Config, inputDir string, outputDir
 				AuthAnyUser:   anyUser,
 				AuthServices:  svc.AuthServices,
 				HasMethodAuth: hasMethodAuth,
+				AuthExemptPaths: authExempt,
 				HostTag:       svc.HostTag,
 				Synthesized:   svc.Synthesized,
 			})
@@ -534,4 +546,22 @@ func DetectServicesForWrapper(config *tactype.Config, inputDir string, outputDir
 	})
 
 	return servicesInfo, err
+}
+
+// authExemptMethodPaths returns the full gRPC paths of methods that must be
+// reachable WITHOUT a token, i.e. those carrying auth_disabled (or every method
+// when the whole service is auth_disabled).
+//
+// These feed the server's AuthEnforcingLayer. That layer runs before the
+// per-method wrappers and rejects any request without an authorization header,
+// so without this list an auth_disabled method is unreachable on the server even
+// though the gateway correctly forwards it unauthenticated.
+func authExemptMethodPaths(packageName string, svc parser.ServiceDescriptor) []string {
+	var out []string
+	for _, m := range svc.Methods {
+		if svc.AuthDisabled || m.AuthDisabled {
+			out = append(out, fmt.Sprintf("/%s.%s/%s", packageName, svc.Name, m.Name))
+		}
+	}
+	return out
 }

@@ -1402,7 +1402,22 @@ impl ServiceManager {
         // check paths (/grpc.health.v1.Health/) are exempt (unauthenticated
         // by design). Parity with go AuthEnforcingRegistrar / java
         // ServerInterceptors.intercept(svc, authorizer.enforcingInterceptor()).
-        let mut server = server.layer(AuthEnforcingLayer::new(self.authorizer.clone()));
+        // Methods declared auth_disabled must bypass this layer. It runs before
+        // the per-method wrappers and rejects anything without an authorization
+        // header, so without this list the annotation is honoured by the gateway
+        // and silently ignored by the service -- which makes the login bootstrap
+        // (ListProviders/Authorize/MintCallbackTokens) impossible.
+        let auth_exempt_paths: Vec<String> = vec![
+{{- range .GrpcServices}}
+{{- range .AuthExemptPaths}}
+            "{{.}}".to_string(),
+{{- end}}
+{{- end}}
+        ];
+        let mut server = server.layer(AuthEnforcingLayer::with_exempt_paths(
+            self.authorizer.clone(),
+            auth_exempt_paths,
+        ));
 
         // Build router: if handler provides additional services, start from those routes
         // (Server::add_routes), then chain our services (Router::add_service).

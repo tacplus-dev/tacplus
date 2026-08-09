@@ -72,6 +72,10 @@ type grpcServiceEntry struct {
 	AuthAnyUser bool
 	// HasMethodAuth is true when the wrapper has a register_method_auth function.
 	HasMethodAuth bool
+	// AuthExemptPaths are full gRPC paths this service declares auth_disabled.
+	// They must bypass the server's AuthEnforcingLayer, which otherwise rejects
+	// them before the per-method wrapper ever runs.
+	AuthExemptPaths []string
 	// IsHosted is true when this entry came from a vservice declaring HostTag ==
 	// SelfPackage rather than from the host service's own proto package.
 	// Hosted entries get a default Handler trait impl that returns a stub,
@@ -232,6 +236,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			AuthDisabled:             svc.AuthDisabled,
 			AuthAnyUser:              svc.AuthAnyUser,
 			HasMethodAuth:            svc.HasMethodAuth,
+			AuthExemptPaths:          svc.AuthExemptPaths,
 			IsHosted:                 config.SelfPackage != "" && svc.PackageName != config.SelfPackage,
 		})
 	}

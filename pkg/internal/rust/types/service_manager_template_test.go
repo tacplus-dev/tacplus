@@ -191,7 +191,12 @@ func TestRustServiceManagerEnforcesAuthOnAdditionalServices(t *testing.T) {
 
 	// The enforcing layer must be applied to the server before additional
 	// routes are added (main TLS server path).
-	layerIdx := strings.Index(tmpl, "server.layer(AuthEnforcingLayer::new(")
+	// Match the constructor generically. The assertion here is about ORDERING --
+	// the layer must wrap the server before additional routes are added -- not
+	// about which constructor is used. Pinning "::new(" made this fail when the
+	// layer gained with_exempt_paths() for auth_disabled methods, even though the
+	// ordering it guards was unchanged.
+	layerIdx := strings.Index(tmpl, "server.layer(AuthEnforcingLayer::")
 	if layerIdx < 0 {
 		t.Fatalf("Rust ServiceManager must apply AuthEnforcingLayer to the server (not found in template)")
 	}
@@ -268,4 +273,35 @@ func renderRustServiceManagerForTest(t *testing.T, data smTemplateData) string {
 		t.Fatalf("execute service_manager template: %v", err)
 	}
 	return out.String()
+}
+
+// auth_disabled methods must bypass the server-side AuthEnforcingLayer.
+//
+// That layer runs BEFORE the per-method wrappers that the chassis comments call
+// the authoritative gate, and it rejects any request without an authorization
+// header. So an auth_disabled method was honoured by the gateway (which
+// generates AuthPolicy::NoAuth and forwards the call unauthenticated) and then
+// refused by the service itself with 401. Login could not bootstrap at all,
+// because ListProviders, Authorize and MintCallbackTokens must all be callable
+// before any token exists.
+//
+// Caught only by deploying and clicking sign-in; no gate covered it.
+func TestRustServiceManagerExemptsAuthDisabledMethods(t *testing.T) {
+	tmpl, err := loadTemplate("service_manager.rs.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate service_manager.rs.tmpl: %v", err)
+	}
+	if !strings.Contains(tmpl, "AuthEnforcingLayer::with_exempt_paths(") {
+		t.Error("ServiceManager must build the auth layer with exempt paths; " +
+			"AuthEnforcingLayer::new() enforces a token on EVERY method and makes " +
+			"auth_disabled unreachable on the server")
+	}
+	if !strings.Contains(tmpl, "AuthExemptPaths") {
+		t.Error("ServiceManager must emit .AuthExemptPaths from the model; without " +
+			"it the exempt list renders empty and auth_disabled is silently ignored")
+	}
+	// The list must come from the model, not be hardcoded to health checks.
+	if !strings.Contains(tmpl, "auth_exempt_paths") {
+		t.Error("expected an auth_exempt_paths binding passed to the layer")
+	}
 }

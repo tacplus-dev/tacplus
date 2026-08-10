@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/jinzhu/copier"
 	protoerrors "{{.ModuleBasePath}}/types/sys/errors"
@@ -281,16 +282,54 @@ func (x *Logger) Install() {
 
 	setFormat()
 
-	var err error
-	x.ZapLogger, err = zapConfig.Build()
+	// Build over a REDACTING sink, exactly as InstallFromConfig does.
+	//
+	// This path previously used zapConfig.Build() plus a message-only
+	// redactingCore. That leaves structured FIELDS unredacted --
+	// zap.String("authorization", ...), zap.Error(err) on an error quoting a
+	// header, anything bound earlier via logger.With() -- because the core
+	// rewrites ent.Message and the encoder writes fields straight to the sink.
+	// InstallFromConfig was fixed to wrap the sink; this installer was not, so
+	// the two entry points into the SAME logger had different security
+	// properties, and which one a service happened to call decided whether its
+	// field-borne credentials leaked.
+	//
+	// zapConfig.Build() opens its sinks internally and leaves no seam to redact
+	// at, so open them here and wrap them. Everything the encoder emits --
+	// message, field keys, field values, caller, stacktrace -- passes through the
+	// redactor, so no field type can bypass it.
+	sink, _, err := zap.Open(zapConfig.OutputPaths...)
+	if err != nil {
+		panic(err)
+	}
+	errSink, _, err := zap.Open(zapConfig.ErrorOutputPaths...)
 	if err != nil {
 		panic(err)
 	}
 
-	// Structural credential redaction: wrap the core so that credentials
-	// in log messages are redacted before reaching any sink, regardless of
-	// log level or logger source.
-	x.ZapLogger = x.ZapLogger.WithOptions(zap.WrapCore(newRedactingCore))
+	var enc zapcore.Encoder
+	if zapConfig.Encoding == "console" {
+		enc = zapcore.NewConsoleEncoder(encoderConfig)
+	} else {
+		enc = zapcore.NewJSONEncoder(encoderConfig)
+	}
+
+	core := zapcore.NewCore(enc, zapcore.AddSync(&redactingWriter{w: sink}), zapConfig.Level)
+	// Preserve the sampling behaviour zapConfig.Build() would have applied.
+	core = zapcore.NewSamplerWithOptions(
+		core,
+		time.Second,
+		zapConfig.Sampling.Initial,
+		zapConfig.Sampling.Thereafter,
+	)
+
+	// The redactingCore is retained on top. The sink wrapper is what stops
+	// field-borne credentials; this keeps message redaction happening before
+	// encoding, so a credential never sits in an encoder buffer in the clear.
+	x.ZapLogger = zap.New(core,
+		zap.ErrorOutput(errSink),
+		zap.AddCaller(),
+	).WithOptions(zap.WrapCore(newRedactingCore))
 
 	zap.ReplaceGlobals(x.ZapLogger)
 

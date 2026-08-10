@@ -45,6 +45,25 @@ const credentialPatterns: RegExp[] = [
 const REDACTED_PLACEHOLDER = '[REDACTED]';
 
 /**
+ * Metadata keys whose VALUE is a credential regardless of what the value looks
+ * like.
+ *
+ * This is not redundant with credentialPatterns, and omitting it leaks. Those
+ * patterns match credentials embedded in TEXT -- `authorization: Bearer abc` --
+ * where key and value sit in one string. When walking a metadata object the key
+ * and value are SEPARATE strings, so a bare token value like
+ * `{ 'x-auth-token': 'eyJra...' }` matches nothing: it carries no scheme prefix
+ * and no delimiter. Passing a credential as a structured field is the idiomatic
+ * way to log one, so this is the common case, not the edge case.
+ *
+ * Caught by a runtime probe through a real Winston logger; redaction of the
+ * patterns in isolation passed every vector while this path emitted the token in
+ * full.
+ */
+const SENSITIVE_KEY =
+  /^(?:authorization|(?:set-)?cookie|[\w][\w-]*[-_](?:token|secret))$/i;
+
+/**
  * Removes credential values from a string.
  *
  * @param s the string to redact
@@ -91,7 +110,10 @@ function redactValue(value: unknown, seen: WeakSet<object>): unknown {
 
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    out[k] = redactValue(v, seen);
+    // Key-based redaction first: a sensitive key means the value is a credential
+    // whatever it looks like. Recursing instead would inspect only the value's
+    // text, which for a bare token matches nothing.
+    out[k] = SENSITIVE_KEY.test(k) ? REDACTED_PLACEHOLDER : redactValue(v, seen);
   }
   return out;
 }
@@ -118,7 +140,13 @@ export const redactFormat = winston.format((info) => {
     if (key === 'message' || key === 'level') {
       continue;
     }
-    info[key] = redactValue(info[key], seen);
+    // Winston hoists metadata onto info itself, so `log.info(msg, {'x-auth-token': t})`
+    // puts the credential at the TOP level -- not inside a nested object. The
+    // key-based check has to apply here too; applying it only in the recursive
+    // walk is what let this exact shape reach the sink.
+    info[key] = SENSITIVE_KEY.test(key)
+      ? REDACTED_PLACEHOLDER
+      : redactValue(info[key], seen);
   }
 
   return info;

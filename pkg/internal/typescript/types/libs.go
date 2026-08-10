@@ -183,6 +183,18 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 	return nil
 }
 
+// NOT EMITTED, DELIBERATELY: typescript/chassis/logger/**.
+//
+// TypeScript generation is hard client-only -- validateTypeScriptClientOnlyConfig
+// rejects server, S2S-client and ServiceManager generation outright -- so every
+// TS target is a browser bundle. The chassis logger is built on Winston, a Node
+// logging library that pulls in fs/os/streams and does not belong in one.
+//
+// This is worth stating because the templates LOOK live: logger/ carries a full
+// WinstonConfigurator, LoggerConfigHelper and credential redaction, and nothing
+// at the template level says otherwise. They are latent -- maintained but
+// unreachable until a Node-side TS target exists. Read a change to them as
+// future-proofing, not as something shipping to a client today.
 func typeScriptClientOnlyLibTemplate(path string) bool {
 	switch path {
 	// client_im: client identity manager for CLI tools/daemons that

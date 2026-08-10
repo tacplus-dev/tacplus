@@ -3,14 +3,20 @@
 package types
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
 
-// TypeScript was the only chassis language emitting logs with NO credential
-// redaction: go, rust, java and python all strip credentials at the log
-// boundary, while a generated Winston logger wrote `authorization: Bearer ...`
-// verbatim, at any level, to any sink.
+// TypeScript was the only chassis logger with NO credential redaction: go,
+// rust, java and python all strip credentials at the log boundary, while the
+// Winston configurator passed `authorization: Bearer ...` through verbatim at
+// any level, to any sink.
+//
+// Scope, stated honestly: these templates are NOT emitted today (see
+// TestTypeScriptLoggerChassisIsNotEmitted), so this was a latent defect, not a
+// live leak in any generated client. The fix matters when a Node-side TS target
+// appears; it did not close a hole that was shipping.
 //
 // These guards are deliberately about the CALL SITE, not the capability.
 // Shipping a correct redactor that nothing installs is the failure mode this
@@ -98,5 +104,26 @@ func TestTypeScriptRedactionCoversBothHeaderAndJSONShapes(t *testing.T) {
 	// input redacts differently on a second call.
 	if !strings.Contains(impl, "pattern.lastIndex = 0;") {
 		t.Fatalf("global regexes must have lastIndex reset so redaction is idempotent")
+	}
+}
+
+// The logger chassis is NOT emitted: TypeScript generation is hard client-only
+// (browser bundles) and the chassis logger is built on Winston, a Node library.
+// The templates are latent, maintained for a future Node-side TS target.
+//
+// Pin that fact. Someone reading Redact.ts.tmpl sees a complete, correct
+// redactor and reasonably concludes it protects generated clients today -- it
+// does not. If logger/ is ever added to the emit allowlist this test fails,
+// which is the moment to re-verify the redaction against a real generated
+// bundle rather than assuming the template-level guards above are sufficient.
+func TestTypeScriptLoggerChassisIsNotEmitted(t *testing.T) {
+	src, err := os.ReadFile("libs.go")
+	if err != nil {
+		t.Fatalf("read libs.go: %v", err)
+	}
+	if strings.Contains(string(src), `"logger/WinstonConfigurator.ts.tmpl"`) {
+		t.Fatalf("logger chassis is now emitted -- re-verify credential redaction " +
+			"against a REAL generated bundle, and confirm Winston is acceptable " +
+			"in a browser target before accepting this change")
 	}
 }

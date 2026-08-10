@@ -45,6 +45,9 @@ type grpcServiceEntry struct {
 	HandlerTraitName string // "IdentityServiceHandler"
 	// Config module path
 	ConfigModPath string // "crate::types::services::identity::identity"
+	// ConfigHelpersModPath is the module holding the generated config_defaults
+	// for this service's Config, e.g. "crate::types::services::identity::helpers".
+	ConfigHelpersModPath string
 	// Service wrapper module (absolute crate path)
 	WrapperModPath string // "crate::s2sm::internal::grpc::servers::services::identity::service"
 	ConstructorFn  string // "new_identity_service"
@@ -222,6 +225,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			TraitName:                traitAlias,
 			HandlerTraitName:         svc.ServiceName + "Handler",
 			ConfigModPath:            fmt.Sprintf("%s::%s", configTypesBase, configPkg),
+			ConfigHelpersModPath:     fmt.Sprintf("%s::helpers", configTypesBase),
 			WrapperModPath:           fmt.Sprintf("crate::s2sm::internal::grpc::servers::%s::%s::%s", parentMod, svc.PackageName, wrapperModName),
 			ConstructorFn:            "new_" + snakeName,
 			WrapperVar:               "wrapper_" + disambiguated,

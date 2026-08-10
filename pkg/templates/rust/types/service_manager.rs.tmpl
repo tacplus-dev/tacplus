@@ -1356,10 +1356,17 @@ impl ServiceManager {
 	{{- if .HasConfigState}}
 	        {
 	            let accessor = self.state_clients.{{.ConfigStateGroupAccessor}}().{{.ConfigStateAccessor}}();
-	            let initial_cfg = accessor.config().fetch().await
+	            let mut initial_cfg = accessor.config().fetch().await
 	                .map_err(|e| -> Box<dyn std::error::Error> {
 	                    format!("fetch initial {{.TraitName}} config: {}", e).into()
 	                })?;
+	            // Apply the proto-declared field defaults. Kernel seeds config state
+	            // from the deploy bundle, which carries only what the operator was
+	            // given -- a field the bundle omits arrives ZERO, not defaulted. The
+	            // generated config_defaults exists for exactly this and was never
+	            // called on the delivery path, so `[(spec.default_string) = "..."]`
+	            // silently had no effect at runtime.
+	            {{.ConfigHelpersModPath}}::config_defaults(&mut initial_cfg);
 	            handler.{{.HandleConfigName}}(&initial_cfg).await
 	                .map_err(|e| -> Box<dyn std::error::Error> {
 	                    format!("initial {{.TraitName}} config: {}", e).into()
@@ -1369,7 +1376,9 @@ impl ServiceManager {
 	            accessor.config().on_change(Arc::new(move |cfg: &{{.TraitName}}Config| {
 	                let h = handler_for_cfg.clone();
                 let task_registry = tasks_for_cfg.clone();
-                let c = cfg.clone();
+                let mut c = cfg.clone();
+                // Same on hot-reload: a pushed config is defaulted before delivery.
+                {{.ConfigHelpersModPath}}::config_defaults(&mut c);
                 let handle = tokio::spawn(async move {
                     if let Err(e) = h.{{.HandleConfigName}}(&c).await {
                         tracing::error!(error = %e, "{{.HandleConfigName}} failed on config change");

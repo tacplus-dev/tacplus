@@ -51,3 +51,33 @@ func TestRustStateWatchDoesNotHoldStubLockAcrossStream(t *testing.T) {
 			"whole stream and starves every other boundary's watch loop")
 	}
 }
+
+// A service's typed Config arrives from kernel's config state, which is seeded
+// from the deploy bundle. The bundle carries only what the operator was given,
+// so any field it omits arrives ZERO -- not defaulted.
+//
+// tacplus generates a config_defaults() for every message from
+// [(spec.default_string)] and friends, but the ServiceManager never called it on
+// the delivery path. The declared defaults therefore had no runtime effect at
+// all: echo's greeting is declared `[(spec.default_string) = "hello"]` and
+// arrived empty, so the sample service rendered ", hello from the browser".
+//
+// Both delivery points must default: the initial fetch and every hot-reload.
+func TestRustServiceManagerAppliesConfigDefaultsOnDelivery(t *testing.T) {
+	src, err := templates.FS.ReadFile("rust/types/service_manager.rs.tmpl")
+	if err != nil {
+		t.Fatalf("read service_manager template: %v", err)
+	}
+	tmpl := string(src)
+
+	if !strings.Contains(tmpl, "{{.ConfigHelpersModPath}}::config_defaults(&mut initial_cfg);") {
+		t.Fatalf("initial typed config must have config_defaults applied before delivery")
+	}
+	if !strings.Contains(tmpl, "{{.ConfigHelpersModPath}}::config_defaults(&mut c);") {
+		t.Fatalf("hot-reloaded typed config must have config_defaults applied before delivery")
+	}
+	// The value must be mutable at both sites or defaults cannot be written.
+	if !strings.Contains(tmpl, "let mut initial_cfg = accessor.config().fetch()") {
+		t.Fatalf("initial config must be bound mutably so defaults can be applied")
+	}
+}

@@ -509,9 +509,25 @@ impl {{.StateRootName}}ClientInner {
         if self.is_closed() {
             return Ok(false);
         }
-        let mut stub = tokio::select! {
-            _ = &mut close => return Ok(false),
-            stub = self.stub.lock() => stub,
+        // Clone the stub and RELEASE the mutex before opening the stream.
+        //
+        // Holding the guard across the stream is a deadlock: the guard stays in
+        // scope for the entire life of the watch loop below, so the first
+        // boundary to win the lock keeps it forever and every other watch loop
+        // on this client blocks in lock() -- silently, with no error and no log.
+        // Observed live: sentinel started only Cluster.grpc_stats; cluster_info,
+        // cluster_health, node_metrics and four more never began, so their caches
+        // stayed empty and the dashboard failed validation with
+        // "field clusterInfo is required".
+        //
+        // A tonic client is Clone and shares the underlying multiplexed channel,
+        // so cloning per watch is cheap and lets every boundary stream at once.
+        let mut stub = {
+            let guard = tokio::select! {
+                _ = &mut close => return Ok(false),
+                stub = self.stub.lock() => stub,
+            };
+            guard.clone()
         };
         if self.is_closed() {
             return Ok(false);
@@ -615,9 +631,25 @@ impl {{.StateRootName}}ClientInner {
         if self.is_closed() {
             return Ok(false);
         }
-        let mut stub = tokio::select! {
-            _ = &mut close => return Ok(false),
-            stub = self.stub.lock() => stub,
+        // Clone the stub and RELEASE the mutex before opening the stream.
+        //
+        // Holding the guard across the stream is a deadlock: the guard stays in
+        // scope for the entire life of the watch loop below, so the first
+        // boundary to win the lock keeps it forever and every other watch loop
+        // on this client blocks in lock() -- silently, with no error and no log.
+        // Observed live: sentinel started only Cluster.grpc_stats; cluster_info,
+        // cluster_health, node_metrics and four more never began, so their caches
+        // stayed empty and the dashboard failed validation with
+        // "field clusterInfo is required".
+        //
+        // A tonic client is Clone and shares the underlying multiplexed channel,
+        // so cloning per watch is cheap and lets every boundary stream at once.
+        let mut stub = {
+            let guard = tokio::select! {
+                _ = &mut close => return Ok(false),
+                stub = self.stub.lock() => stub,
+            };
+            guard.clone()
         };
         if self.is_closed() {
             return Ok(false);
@@ -751,9 +783,25 @@ impl {{.StateRootName}}ClientInner {
         if self.is_closed() {
             return Ok(false);
         }
-        let mut stub = tokio::select! {
-            _ = &mut close => return Ok(false),
-            stub = self.stub.lock() => stub,
+        // Clone the stub and RELEASE the mutex before opening the stream.
+        //
+        // Holding the guard across the stream is a deadlock: the guard stays in
+        // scope for the entire life of the watch loop below, so the first
+        // boundary to win the lock keeps it forever and every other watch loop
+        // on this client blocks in lock() -- silently, with no error and no log.
+        // Observed live: sentinel started only Cluster.grpc_stats; cluster_info,
+        // cluster_health, node_metrics and four more never began, so their caches
+        // stayed empty and the dashboard failed validation with
+        // "field clusterInfo is required".
+        //
+        // A tonic client is Clone and shares the underlying multiplexed channel,
+        // so cloning per watch is cheap and lets every boundary stream at once.
+        let mut stub = {
+            let guard = tokio::select! {
+                _ = &mut close => return Ok(false),
+                stub = self.stub.lock() => stub,
+            };
+            guard.clone()
         };
         if self.is_closed() {
             return Ok(false);

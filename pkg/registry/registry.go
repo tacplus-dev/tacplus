@@ -43,6 +43,20 @@ type VServiceEntry struct {
 // Both share the same ID space (1-99). Field 100 is reserved for azp.
 // Loaded from registry.yaml in the proto source directory.
 type Registry struct {
+	// IDMin is the lowest ID this registry may auto-assign.
+	//
+	// Service IDs share one 1-99 space across every proto repo that is merged
+	// into a build, but each repo allocates from its OWN registry. Two repos
+	// therefore both pick "max local ID + 1" and collide: that is how the app's
+	// echo service was handed 47, the same ID platform had already given
+	// operator. The multi-source merge hard-errors on the collision, so nothing
+	// ships broken — but the app cannot generate at all until a human picks a
+	// free number by hand.
+	//
+	// Giving each repo a floor removes the collision by construction and needs
+	// no cross-repo discovery: platform allocates from 1, an app from (say) 60.
+	// The merge's hard error remains the backstop for a misconfigured floor.
+	IDMin     int32            `yaml:"id_min,omitempty"`
 	Services  []*ServiceEntry  `yaml:"services"`
 	VServices []*VServiceEntry `yaml:"vservices"`
 	inputDir  string
@@ -230,7 +244,13 @@ func (r *Registry) nextID() int32 {
 			max = e.FieldID
 		}
 	}
-	return max + 1
+	next := max + 1
+	if next < r.IDMin {
+		// An empty (or low) registry in a repo with a floor starts AT the floor,
+		// which is the whole point: the app's first service must not land on 1.
+		return r.IDMin
+	}
+	return next
 }
 
 func (r *Registry) nextTenantSliceField() int32 {

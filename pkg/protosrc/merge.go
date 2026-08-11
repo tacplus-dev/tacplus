@@ -251,7 +251,11 @@ func mergeNamedList(base, overlay []any, ctx string) ([]any, error) {
 				continue
 			}
 			if other, dup := seen[id]; dup {
-				return nil, fmt.Errorf("%s: %s %d assigned to both %q and %q — reassign one source's ID range", ctx, idKey, id, other, name)
+				return nil, fmt.Errorf("%s: %s %d assigned to both %q and %q — "+
+					"each proto repo allocates from its own registry, so set id_min "+
+					"in the app registry.yaml (e.g. id_min: 60) and re-run tacplus "+
+					"registry there so its services allocate above the platform's",
+					ctx, idKey, id, other, name)
 			}
 			seen[id] = name
 		}

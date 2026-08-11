@@ -899,7 +899,12 @@ func (bc *ServiceManager) startLogStream() {
 				}
 				continue
 			}
-			backoff = streamInitialBackoff
+			// Reset on the first delivered frame, not on the open -- opening a
+			// server-streaming RPC does not contact the server, so a stream that
+			// fails immediately would otherwise retry at streamInitialBackoff
+			// forever. See the WatchJwks loop below for the case where that
+			// actually happened.
+			delivered := false
 			for {
 				msg, err := stream.Recv()
 				if err != nil {
@@ -910,6 +915,10 @@ func (bc *ServiceManager) startLogStream() {
 						l.Warn("Log stream ended, reconnecting", zap.Error(err))
 					}
 					break
+				}
+				if !delivered {
+					delivered = true
+					backoff = streamInitialBackoff
 				}
 				text := msg.GetMessage()
 				switch msg.GetLevel() {
@@ -961,7 +970,9 @@ func (bc *ServiceManager) startSubscribe() {
 				}
 				continue
 			}
-			backoff = streamInitialBackoff
+			// Reset on the first delivered frame, not on the open. Same reason as
+			// the Log stream above.
+			delivered := false
 			for {
 				state, err := stream.Recv()
 				if err != nil {
@@ -972,6 +983,10 @@ func (bc *ServiceManager) startSubscribe() {
 						zap.L().Warn("Subscribe stream ended, reconnecting", zap.Error(err))
 					}
 					break
+				}
+				if !delivered {
+					delivered = true
+					backoff = streamInitialBackoff
 				}
 				zap.L().Info("Received cluster state update",
 					zap.Int("clusters", len(state.GetClusters())))
@@ -1016,7 +1031,18 @@ func (bc *ServiceManager) startWatchJwks() {
 				}
 				continue
 			}
-			backoff = streamInitialBackoff
+			// Backoff is reset on the first DELIVERED frame, not here.
+			//
+			// Opening a server-streaming RPC does not contact the server, so
+			// client.WatchJwks above returns a stream handle with a nil error even
+			// when the method does not exist. The failure only appears on Recv.
+			// Resetting the backoff on the open therefore reset it on every single
+			// attempt, and the delay never grew past streamInitialBackoff: a server
+			// that answers UNIMPLEMENTED produced a steady ~1 reconnect per second,
+			// forever. That is exactly what kernel does -- it serves ClusterService
+			// but never implemented WatchJwks -- and graphdb and opa each logged
+			// ~213 warnings every four minutes for it.
+			delivered := false
 			for {
 				jwks, err := stream.Recv()
 				if err != nil {
@@ -1024,9 +1050,22 @@ func (bc *ServiceManager) startWatchJwks() {
 						return
 					}
 					if err != io.EOF {
-						zap.L().Warn("WatchJwks stream ended — reconnecting to keep JWKS cache fresh", zap.Error(err))
+						// Separate the "server does not have this method" case. It
+						// cannot be fixed by reconnecting, and saying so once is worth
+						// more than the same generic line at the backoff cap.
+						if status.Code(err) == codes.Unimplemented {
+							zap.L().Warn("WatchJwks is not implemented by the cluster service — "+
+								"the JWKS cache will not be refreshed by this stream",
+								zap.Error(err), zap.Duration("retry_in", backoff))
+						} else {
+							zap.L().Warn("WatchJwks stream ended — reconnecting to keep JWKS cache fresh", zap.Error(err))
+						}
 					}
 					break
+				}
+				if !delivered {
+					delivered = true
+					backoff = streamInitialBackoff
 				}
 				bc.jwkMu.Lock()
 				bc.jwkCache = jwks.GetKeys()

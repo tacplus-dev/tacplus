@@ -203,11 +203,16 @@ func buildPySmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, p
 	}
 
 	// Build subscription entries from config.
-	// Detect field name collisions and disambiguate handler method names.
-	fieldCount := make(map[string]int)
-	for _, sub := range config.Subscriptions {
-		fieldCount[sub.SourceField]++
-	}
+	// Handler method names are ALWAYS qualified with the topic stem.
+	//
+	// This used to append the stem only when more than one subscription shared a
+	// field name, which made a method's name depend on its SIBLINGS: retiring
+	// three unrelated streams renamed the surviving one from
+	// on_event_stream_agentsensor_agent_event_bus_event_stream to on_event_stream
+	// and broke timedb's hand-written build.rs with "method ... is not a member of
+	// trait `Handler`". A name that changes when an unrelated stream is added or
+	// removed is a hazard for every hand-written impl of the trait, so the shorter
+	// unique-case name is not worth it.
 
 	var subs []pySubscriptionEntry
 	for _, sub := range config.Subscriptions {
@@ -216,14 +221,9 @@ func buildPySmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, p
 		topicPascal := eventbus.RPCStemForTopicParts(sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)
 		topicSnake := strutil.ToSnakeCase(topicPascal)
 
-		handlerMethod := "on_" + sub.SourceField
-		subscriberAlias := fieldPascal
-		varName := sub.SourceField
-		if fieldCount[sub.SourceField] > 1 {
-			handlerMethod = "on_" + sub.SourceField + "_" + topicSnake
-			subscriberAlias = topicPascal
-			varName = topicSnake
-		}
+		handlerMethod := "on_" + sub.SourceField + "_" + topicSnake
+		subscriberAlias := topicPascal
+		varName := topicSnake
 		typeAlias := subscriberAlias + "Event"
 
 		subs = append(subs, pySubscriptionEntry{

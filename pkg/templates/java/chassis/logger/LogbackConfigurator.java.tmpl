@@ -10,6 +10,8 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.encoder.PatternLayoutEncoder;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.IThrowableProxy;
+import ch.qos.logback.classic.spi.StackTraceElementProxy;
 import ch.qos.logback.core.ConsoleAppender;
 import ch.qos.logback.core.FileAppender;
 import ch.qos.logback.core.encoder.Encoder;
@@ -198,6 +200,17 @@ public final class LogbackConfigurator {
             }
             out.append(',');
             appendField(out, "message", event.getFormattedMessage());
+            // The throwable. Dropping it is not a cosmetic loss: logger.error(msg, e)
+            // is the normal way to report a failure, and without this field the JSON
+            // output kept only the message. Many JDK exceptions carry a bare message --
+            // an AccessDeniedException's message is nothing but the path -- so a real
+            // permission denial printed as a naked filename with no type and no frames.
+            // eventbus retried such a failure 131 times before anyone could say why.
+            String stack = renderThrowable(event.getThrowableProxy());
+            if (stack != null) {
+                out.append(',');
+                appendField(out, "exception", stack);
+            }
             out.append('}');
             out.append('\n');
             // Structural credential redaction at the encoder output boundary.
@@ -207,6 +220,55 @@ public final class LogbackConfigurator {
         @Override
         public byte[] footerBytes() {
             return null;
+        }
+
+        /** Frames kept per throwable, and how deep the cause chain is followed. */
+        private static final int MAX_FRAMES_PER_THROWABLE = 30;
+        private static final int MAX_CAUSE_DEPTH = 5;
+
+        /**
+         * Renders a throwable and its cause chain as a single newline-delimited
+         * string, or null when the event carries no throwable.
+         *
+         * Bounded deliberately. An unbounded trace on a hot error path is its own
+         * outage -- and a recursive cause chain would never terminate -- so frames
+         * and depth are both capped and the truncation is stated in the output
+         * rather than left to look like the trace simply ended.
+         */
+        private static String renderThrowable(IThrowableProxy proxy) {
+            if (proxy == null) {
+                return null;
+            }
+            StringBuilder out = new StringBuilder(512);
+            int depth = 0;
+            while (proxy != null && depth <= MAX_CAUSE_DEPTH) {
+                if (depth > 0) {
+                    out.append("Caused by: ");
+                }
+                out.append(proxy.getClassName());
+                if (proxy.getMessage() != null) {
+                    out.append(": ").append(proxy.getMessage());
+                }
+                StackTraceElementProxy[] frames = proxy.getStackTraceElementProxyArray();
+                if (frames != null) {
+                    int shown = Math.min(frames.length, MAX_FRAMES_PER_THROWABLE);
+                    for (int i = 0; i < shown; i++) {
+                        out.append("\n\tat ").append(frames[i].getStackTraceElement());
+                    }
+                    if (frames.length > shown) {
+                        out.append("\n\t... ").append(frames.length - shown).append(" more");
+                    }
+                }
+                proxy = proxy.getCause();
+                depth++;
+                if (proxy != null) {
+                    out.append('\n');
+                }
+            }
+            if (proxy != null) {
+                out.append("\t... cause chain truncated");
+            }
+            return out.toString();
         }
 
         private static void appendField(StringBuilder out, String key, String value) {
@@ -228,7 +290,8 @@ public final class LogbackConfigurator {
                     || "thread".equals(key)
                     || "logger".equals(key)
                     || "caller".equals(key)
-                    || "message".equals(key);
+                    || "message".equals(key)
+                    || "exception".equals(key);
         }
 
         private static String jsonEscape(String s) {

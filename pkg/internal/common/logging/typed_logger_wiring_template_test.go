@@ -95,3 +95,46 @@ func TestJavaLoaderInstallsBootstrapThenTypedLogger(t *testing.T) {
 			"config is parsed and must come first")
 	}
 }
+
+// The JSON encoder must emit the throwable.
+//
+// It did not, and the loss was silent: logger.error(msg, e) is the ordinary way
+// a Java service reports a failure, and the encoder wrote only the formatted
+// message. Many JDK exceptions carry a bare message -- an AccessDeniedException's
+// message is nothing but the path -- so a permission denial on eventbus's data
+// volume printed as a naked filename with no type and no frames, and the service
+// retried it 131 times before the cause could be named.
+//
+// The frame and cause-depth caps matter as much as the field: an unbounded trace
+// on a hot error path is its own outage, and a self-referential cause chain would
+// never terminate.
+func TestJavaJsonEncoderEmitsThrowable(t *testing.T) {
+	s := readTmpl(t, "../../../templates/java/chassis/logger/LogbackConfigurator.java.tmpl")
+
+	if !strings.Contains(s, `appendField(out, "exception", stack);`) {
+		t.Error("the JSON encoder does not emit an exception field; every stack trace " +
+			"logged by a Java service is discarded at the output boundary")
+	}
+	if !strings.Contains(s, "renderThrowable(event.getThrowableProxy())") {
+		t.Error("the encoder must read the throwable off the logging event")
+	}
+	if !strings.Contains(s, "MAX_FRAMES_PER_THROWABLE") || !strings.Contains(s, "MAX_CAUSE_DEPTH") {
+		t.Error("throwable rendering must be bounded in both frames and cause depth")
+	}
+	if !strings.Contains(s, `"Caused by: "`) {
+		t.Error("the cause chain must be rendered; the root cause is usually the useful frame")
+	}
+	// The whole line still goes through CredentialRedactor. A stack trace can carry
+	// a secret in an exception message, so the redaction boundary must stay AFTER
+	// the exception field is appended, not before it.
+	exc := strings.Index(s, `appendField(out, "exception", stack);`)
+	red := strings.Index(s, "CredentialRedactor.redact(out.toString())")
+	if exc >= 0 && red >= 0 && red < exc {
+		t.Error("credential redaction runs before the exception field is appended; " +
+			"a secret in an exception message would escape unredacted")
+	}
+	// An MDC key must not be able to displace or forge the field.
+	if !strings.Contains(s, `|| "exception".equals(key)`) {
+		t.Error(`"exception" must be a reserved JSON field so an MDC entry cannot spoof it`)
+	}
+}

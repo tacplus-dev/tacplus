@@ -2294,6 +2294,12 @@ async fn tls_cert_stream_loop(
             Ok(delivered) => {
                 if delivered {
                     init_attempts = 0;
+                    // A DELIVERED certificate proves the credential was accepted.
+                    // Without this the TLS loop could only ever increment the
+                    // rejection counter, so a service with no state watches — the
+                    // only other clear site — would stay UNHEALTHY forever after a
+                    // brief authority blip, even once it reconnected happily.
+                    service_im::note_credential_accepted();
                 }
                 tracing::warn!("TLS cert stream ended cleanly, reconnecting");
                 None

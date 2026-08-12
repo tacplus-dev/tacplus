@@ -330,9 +330,6 @@ func (c *{{$.ClientTypeName}}) watch{{$s.FieldName}}Loop() {
 			attempt++
 			continue
 		}
-		// An accepted stream proves the credential is good again; clears the
-		// degraded health floor set after repeated rejections.
-		service_im.NoteCredentialAccepted()
 		c.recordWatchHealthy("Watch{{$s.FieldName}}", false)
 		received := c.receive{{$s.FieldName}}Updates(stream)
 		if c.ctx.Err() == nil {
@@ -357,10 +354,18 @@ func (c *{{$.ClientTypeName}}) receive{{$s.FieldName}}Updates(stream types.{{$.S
 			if c.ctx.Err() == nil {
 				zap.L().Warn("Watch{{$s.FieldName}} stream ended unexpectedly",
 					zap.Error(err))
+				// The rejection lands HERE, not on stream creation: grpc-go
+				// returns a server-streaming call as soon as headers are
+				// written, so the server's UNAUTHENTICATED arrives on the
+				// first Recv. Classifying only the start error left the
+				// cache never invalidated on the one path that matters.
+				service_im.NoteIfCredentialRejection(err)
 			}
 			return received
 		}
 		received = true
+		// A DELIVERED message proves the server accepted the credential.
+		service_im.NoteCredentialAccepted()
 		c.recordWatchHealthy("Watch{{$s.FieldName}}", true)
 		if err := {{ValidateRef $s.GoType $s.IsCrossPackage}}(msg); err != nil {
 			zap.L().Warn("Watch{{$s.FieldName}} received invalid message, skipping",
@@ -399,9 +404,6 @@ func (c *{{$.ClientTypeName}}) watch{{$c.FieldName}}Loop() {
 			attempt++
 			continue
 		}
-		// An accepted stream proves the credential is good again; clears the
-		// degraded health floor set after repeated rejections.
-		service_im.NoteCredentialAccepted()
 		c.recordWatchHealthy("Watch{{$c.FieldName}}", false)
 		received := c.receive{{$c.FieldName}}Updates(stream)
 		if c.ctx.Err() == nil {
@@ -431,10 +433,18 @@ func (c *{{$.ClientTypeName}}) receive{{$c.FieldName}}Updates(stream types.{{$.S
 			if c.ctx.Err() == nil {
 				zap.L().Warn("Watch{{$c.FieldName}} stream ended unexpectedly",
 					zap.Error(err))
+				// The rejection lands HERE, not on stream creation: grpc-go
+				// returns a server-streaming call as soon as headers are
+				// written, so the server's UNAUTHENTICATED arrives on the
+				// first Recv. Classifying only the start error left the
+				// cache never invalidated on the one path that matters.
+				service_im.NoteIfCredentialRejection(err)
 			}
 			return received
 		}
 		received = true
+		// A DELIVERED message proves the server accepted the credential.
+		service_im.NoteCredentialAccepted()
 		c.recordWatchHealthy("Watch{{$c.FieldName}}", true)
 		if len(msg.Entries) > maxEntries{{$c.FieldName}} {
 			zap.L().Error("Watch{{$c.FieldName}} snapshot exceeds max collection size — implement paging for large collections",
@@ -479,9 +489,6 @@ func (c *{{$.ClientTypeName}}) watch{{$s.FieldName}}Loop() {
 			attempt++
 			continue
 		}
-		// An accepted stream proves the credential is good again; clears the
-		// degraded health floor set after repeated rejections.
-		service_im.NoteCredentialAccepted()
 		c.recordWatchHealthy("Watch{{$s.FieldName}}", false)
 		received := c.receive{{$s.FieldName}}Updates(stream)
 		if c.ctx.Err() == nil {
@@ -506,10 +513,18 @@ func (c *{{$.ClientTypeName}}) receive{{$s.FieldName}}Updates(stream types.{{$.S
 			if c.ctx.Err() == nil {
 				zap.L().Warn("Watch{{$s.FieldName}} (state-import) stream ended unexpectedly",
 					zap.Error(err))
+				// The rejection lands HERE, not on stream creation: grpc-go
+				// returns a server-streaming call as soon as headers are
+				// written, so the server's UNAUTHENTICATED arrives on the
+				// first Recv. Classifying only the start error left the
+				// cache never invalidated on the one path that matters.
+				service_im.NoteIfCredentialRejection(err)
 			}
 			return received
 		}
 		received = true
+		// A DELIVERED message proves the server accepted the credential.
+		service_im.NoteCredentialAccepted()
 		c.recordWatchHealthy("Watch{{$s.FieldName}}", true)
 		c.mu.Lock()
 		c.cached{{$s.FieldName}} = msg

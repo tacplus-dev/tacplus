@@ -62,8 +62,13 @@ pub fn is_credential_rejection(err: &str) -> bool {
         || e.contains("invalid authentication credentials")
 }
 
-/// Consecutive credential rejections since the last accepted call.
+/// Consecutive REJECTED GENERATIONS since the last accepted call.
 static CONSECUTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Bumped every time the cache is dropped, so concurrent reporters that all saw
+/// the same stale token are counted once between re-mints.
+static GENERATION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+static LAST_COUNTED_GEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Rejections in a row before the service reports itself unhealthy.
 ///
@@ -96,7 +101,20 @@ pub fn note_credential_accepted() {
 /// re-mint is one exchange against the authority that the retry was going to
 /// make anyway.
 pub async fn note_credential_rejection() {
-    CONSECUTIVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Count REJECTED GENERATIONS, not rejections.
+    //
+    // A service runs several loops on one identity — every state watch plus the
+    // TLS cert stream. When the authority restarts they all fail at once with
+    // the SAME stale token, so counting raw rejections crossed the threshold on
+    // the first restart and flapped readiness for the routine case the
+    // threshold exists to absorb. Coalescing on the generation makes "3" mean
+    // three distinct re-mint cycles failed, which is what the threshold claims.
+    let gen = GENERATION.load(std::sync::atomic::Ordering::Relaxed);
+    if LAST_COUNTED_GEN.swap(gen, std::sync::atomic::Ordering::Relaxed) != gen {
+        CONSECUTIVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
     let f = { slot().lock().await.clone() };
     if let Some(f) = f {
         tracing::warn!("credential was rejected — dropping the cached token so the next attempt re-mints");
@@ -159,6 +177,31 @@ mod tests {
 
         note_credential_accepted();
         assert!(!credentials_degraded(), "an accepted credential must clear the degraded state");
+    }
+
+    /// Several loops failing on ONE stale token is one failed generation, not
+    /// three — this is the routine authority-restart shape, and counting it as
+    /// three flapped readiness for an event the threshold exists to absorb.
+    #[tokio::test]
+    async fn concurrent_reporters_on_one_stale_token_count_once() {
+        let _guard = TEST_LOCK.lock().await;
+        note_credential_accepted();
+
+        let gen_before = GENERATION.load(std::sync::atomic::Ordering::Relaxed);
+        // Three loops report the same generation before any re-mint completes.
+        LAST_COUNTED_GEN.store(gen_before.wrapping_sub(1), std::sync::atomic::Ordering::Relaxed);
+        GENERATION.store(gen_before, std::sync::atomic::Ordering::Relaxed);
+        note_credential_rejection().await;
+        GENERATION.store(gen_before, std::sync::atomic::Ordering::Relaxed);
+        note_credential_rejection().await;
+        GENERATION.store(gen_before, std::sync::atomic::Ordering::Relaxed);
+        note_credential_rejection().await;
+
+        assert!(
+            !credentials_degraded(),
+            "one stale token rejected by three loops is ONE failed generation"
+        );
+        note_credential_accepted();
     }
 
     #[tokio::test]

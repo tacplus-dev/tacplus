@@ -140,6 +140,40 @@ public class LogbackConfiguratorSecurityTest {
 
         // ── Result ──
 
+        // ── Declared logger levels must survive install(); pins must not be
+        //     loosened by them ──
+        //
+        // install() calls LoggerContext.reset(), which is what stops a service's
+        // logback.xml from undoing the credential pins. It was also discarding
+        // every operational level a service declared. A service embedding a
+        // third-party broker or driver pins that library's loggers to WARN
+        // because at DEBUG they serialise a payload per request on the threads
+        // serving traffic; those pins were thrown away on every start. Measured
+        // live before the fix: ~4000 DEBUG lines per minute from exactly the
+        // library loggers the service's XML pinned.
+        {
+            ch.qos.logback.classic.LoggerContext ctx =
+                (ch.qos.logback.classic.LoggerContext) org.slf4j.LoggerFactory.getILoggerFactory();
+
+            // A service-declared operational pin, and an attempt to loosen a
+            // credential pin the same way.
+            ctx.getLogger("com.example.noisylib").setLevel(ch.qos.logback.classic.Level.WARN);
+            ctx.getLogger("io.netty").setLevel(ch.qos.logback.classic.Level.DEBUG);
+
+            LoggerConfig debugCfg = LoggerConfig.newBuilder()
+                .setLevel({{.TypesBase}}.sys.logger.Logger.Level.LEVEL_DEBUG)
+                .build();
+            LogbackConfigurator.install(debugCfg);
+
+            mustPass("root honours the configured level",
+                ctx.getLogger(ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME).getLevel()
+                    == ch.qos.logback.classic.Level.DEBUG);
+            mustPass("service-declared logger level survives install",
+                ch.qos.logback.classic.Level.WARN.equals(ctx.getLogger("com.example.noisylib").getLevel()));
+            mustPass("a declared level cannot loosen a credential pin",
+                ch.qos.logback.classic.Level.WARN.equals(ctx.getLogger("io.netty").getLevel()));
+        }
+
         if (failures > 0) {
             System.err.println(failures + " LogbackConfiguratorSecurityTest check(s) FAILED");
             System.exit(1);

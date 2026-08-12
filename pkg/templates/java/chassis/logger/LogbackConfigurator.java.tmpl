@@ -60,11 +60,44 @@ public final class LogbackConfigurator {
         }
 
         LoggerContext loggerContext = (LoggerContext) LoggerFactory.getILoggerFactory();
+
+        // Capture the per-logger levels a service declared (logback.xml, or set
+        // programmatically) BEFORE the reset wipes them.
+        //
+        // reset() is required — it is what guarantees no prior XML config can
+        // survive to undo the credential pins below — but it also discarded
+        // every operational level a service had set for reasons that have
+        // nothing to do with credentials.
+        //
+        // A service that embeds a third-party broker or driver typically pins
+        // that library's loggers to WARN because at DEBUG they serialise a
+        // payload per request on the same threads that serve traffic, which
+        // starves the service under load. Those pins live in the service's
+        // logback.xml and were thrown away on every start. Measured on a live
+        // deployment before this fix: ~4000 DEBUG lines per minute from exactly
+        // the library loggers that service's XML pinned.
+        Map<String, Level> declaredLevels = new java.util.HashMap<>();
+        for (Logger existing : loggerContext.getLoggerList()) {
+            if (Logger.ROOT_LOGGER_NAME.equals(existing.getName())) {
+                continue;
+            }
+            Level explicit = existing.getLevel();
+            if (explicit != null) {
+                declaredLevels.put(existing.getName(), explicit);
+            }
+        }
+
         loggerContext.reset();
 
         Level level = toLogbackLevel(config.getLevel());
         Logger rootLogger = loggerContext.getLogger(Logger.ROOT_LOGGER_NAME);
         rootLogger.setLevel(level);
+
+        // Restore what the service declared, before the credential pins are
+        // applied, so a declared level can never loosen a pin.
+        for (Map.Entry<String, Level> declared : declaredLevels.entrySet()) {
+            loggerContext.getLogger(declared.getKey()).setLevel(declared.getValue());
+        }
 
         // Pin gRPC/Netty transport loggers to WARN. These loggers emit raw
         // HTTP/2 frame data at DEBUG which includes authorization headers with

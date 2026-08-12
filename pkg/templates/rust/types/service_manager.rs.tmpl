@@ -1784,6 +1784,16 @@ impl ServiceManager {
         // Bridge ongoing health evaluation to the gRPC health endpoint: a handler
         // reporting UNHEALTHY flips the endpoint to NOT_SERVING so k8s removes the
         // pod from load-balancer rotation. Recovery flips it back to SERVING.
+        //
+        // Credential health is a chassis FLOOR, not a service concern: a service
+        // must not be able to report itself healthy while its credentials are
+        // being rejected and re-minting is not helping. Readiness previously
+        // stayed 1/1 Ready through a total auth outage because the probe only
+        // asked whether the process was listening.
+        health_reporter.set_degraded_probe(std::sync::Arc::new(|| {
+            service_im::credentials_degraded()
+        }));
+
         {
             let grpc_health_sink = grpc_health.clone();
             health_reporter.set_status_sink(std::sync::Arc::new(move |status: InstanceStatus| {

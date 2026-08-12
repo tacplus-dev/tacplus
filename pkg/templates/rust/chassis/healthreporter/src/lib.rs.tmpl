@@ -79,6 +79,8 @@ struct HealthReporterInner {
     checker: Option<Arc<dyn HealthChecker>>,
     typed_collector: Option<Arc<dyn TypedHealthCollector>>,
     status_sink: Option<StatusSink>,
+    /// Chassis-level floor; see set_degraded_probe.
+    degraded_probe: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     started_at_ms: i64,
     spiffe_id: String,
 }
@@ -128,6 +130,7 @@ impl HealthReporter {
             checker: None,
             typed_collector: None,
             status_sink: None,
+            degraded_probe: None,
             started_at_ms: chrono_now_ms(),
             spiffe_id: spiffe_id.into(),
         }));
@@ -166,6 +169,17 @@ impl HealthReporter {
 
     /// Sets an optional status sink that is notified on each publish cycle with the
     /// computed effective status. Not called during DRAINING (shutdown).
+    /// Installs a chassis-level health FLOOR: while it returns true the instance
+    /// publishes UNHEALTHY no matter what the service's own checker says.
+    ///
+    /// Used for conditions the service cannot sensibly evaluate and must not be
+    /// able to mask — currently "our credentials are being rejected and
+    /// re-minting is not helping". Applied AFTER the checker precisely so it is
+    /// a floor and not a default.
+    pub fn set_degraded_probe(&self, probe: std::sync::Arc<dyn Fn() -> bool + Send + Sync>) {
+        self.inner.lock().unwrap().degraded_probe = Some(probe);
+    }
+
     pub fn set_status_sink(&self, sink: StatusSink) {
         let mut inner = self.inner.lock().unwrap();
         inner.status_sink = Some(sink);
@@ -261,9 +275,9 @@ async fn publish<P: HealthPublisher, M: MetricsProvider>(
     publisher: &P,
     metrics: &M,
 ) -> PublishResult {
-    let (mut status, checker, typed_collector, status_sink, started_at_ms, spiffe_id) = {
+    let (mut status, checker, typed_collector, status_sink, started_at_ms, spiffe_id, degraded_probe) = {
         let i = inner.lock().unwrap();
-        (i.status, i.checker.clone(), i.typed_collector.clone(), i.status_sink.clone(), i.started_at_ms, i.spiffe_id.clone())
+        (i.status, i.checker.clone(), i.typed_collector.clone(), i.status_sink.clone(), i.started_at_ms, i.spiffe_id.clone(), i.degraded_probe.clone())
     };
 
     // If a health checker is set and we're not draining, use its result.
@@ -275,6 +289,19 @@ async fn publish<P: HealthPublisher, M: MetricsProvider>(
                     warn!("HealthChecker panicked; publishing UNHEALTHY");
                     status = InstanceStatus::Unhealthy;
                 }
+            }
+        }
+    }
+
+    // Chassis floor. A service can override the status upward with its own
+    // checker but must not be able to report healthy while it cannot
+    // authenticate: readiness stayed 1/1 Ready through a total auth outage
+    // because the probe only asked whether the process was listening.
+    if status != InstanceStatus::Draining {
+        if let Some(ref probe) = degraded_probe {
+            if probe() {
+                warn!("credentials are being rejected and re-minting is not helping; publishing UNHEALTHY");
+                status = InstanceStatus::Unhealthy;
             }
         }
     }

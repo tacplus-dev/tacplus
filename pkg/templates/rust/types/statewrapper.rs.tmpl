@@ -544,6 +544,9 @@ impl {{.StateRootName}}ClientInner {
         let mut stream = response.into_inner();
         let mut received = false;
         self.record_watch_healthy("Watch{{.FieldPascal}}", false);
+        // An accepted stream proves the credential is good again; clears the
+        // degraded health floor set after repeated rejections.
+        service_im::note_credential_accepted();
         tracing::info!("{{$.StateRootName}}.{{.FieldName}} watch stream started");
 
         loop {
@@ -671,6 +674,9 @@ impl {{.StateRootName}}ClientInner {
         let mut stream = response.into_inner();
         let mut received = false;
         self.record_watch_healthy("Watch{{.FieldPascal}}", false);
+        // An accepted stream proves the credential is good again; clears the
+        // degraded health floor set after repeated rejections.
+        service_im::note_credential_accepted();
         tracing::info!("{{$.StateRootName}}.{{.FieldName}} watch stream started");
 
         loop {
@@ -823,6 +829,9 @@ impl {{.StateRootName}}ClientInner {
         let mut stream = response.into_inner();
         let mut received = false;
         self.record_watch_healthy("Watch{{.FieldPascal}}", false);
+        // An accepted stream proves the credential is good again; clears the
+        // degraded health floor set after repeated rejections.
+        service_im::note_credential_accepted();
         tracing::info!("{{$.StateRootName}}.{{.FieldName}} state-import watch stream started");
 
         loop {

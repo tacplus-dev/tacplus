@@ -62,12 +62,41 @@ pub fn is_credential_rejection(err: &str) -> bool {
         || e.contains("invalid authentication credentials")
 }
 
+/// Consecutive credential rejections since the last accepted call.
+static CONSECUTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Rejections in a row before the service reports itself unhealthy.
+///
+/// Not 1: a single rejection is the NORMAL and expected event when the
+/// authority restarts — the very next call re-mints and succeeds, and flapping
+/// the readiness endpoint for that would be worse than the problem. This
+/// threshold means "re-minting is not helping", which is the state that used to
+/// persist until a human deleted the pod.
+const DEGRADED_AFTER: usize = 3;
+
+/// True when repeated re-mints have failed to produce an accepted credential.
+///
+/// Wired to the health floor so readiness turns NOT_SERVING. Readiness reported
+/// 1/1 Ready throughout a total auth outage — four services unable to make a
+/// single authenticated call for fifteen minutes — because the probe only
+/// asked whether the process was listening.
+pub fn credentials_degraded() -> bool {
+    CONSECUTIVE.load(std::sync::atomic::Ordering::Relaxed) >= DEGRADED_AFTER
+}
+
+/// Records that a credential was ACCEPTED, clearing the degraded state.
+/// Called from the success paths of the same loops that report rejections.
+pub fn note_credential_accepted() {
+    CONSECUTIVE.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Drops the cached credentials so the next call re-mints.
 ///
 /// Safe to call on every failed attempt: invalidation is idempotent, and a
 /// re-mint is one exchange against the authority that the retry was going to
 /// make anyway.
 pub async fn note_credential_rejection() {
+    CONSECUTIVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let f = { slot().lock().await.clone() };
     if let Some(f) = f {
         tracing::warn!("credential was rejected — dropping the cached token so the next attempt re-mints");
@@ -89,6 +118,10 @@ pub async fn note_if_credential_rejection(err: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// The rejection counter is process-global by design — one service, one
+    /// identity — so tests that touch it must not run concurrently.
+    static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[test]
     fn classifies_rejections_but_not_authorization_failures() {
         assert!(is_credential_rejection(
@@ -107,7 +140,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn degrades_only_after_repeated_rejections_and_clears_on_acceptance() {
+        let _guard = TEST_LOCK.lock().await;
+        note_credential_accepted();
+        assert!(!credentials_degraded(), "a healthy service must not start degraded");
+
+        // One rejection is the NORMAL authority-restart case: re-mint and carry
+        // on. Flapping readiness for it would be worse than the problem.
+        note_credential_rejection().await;
+        assert!(!credentials_degraded());
+        note_credential_rejection().await;
+        assert!(!credentials_degraded());
+
+        // Repeated failures mean re-minting is not helping — that is the state
+        // that used to persist until a human deleted the pod.
+        note_credential_rejection().await;
+        assert!(credentials_degraded());
+
+        note_credential_accepted();
+        assert!(!credentials_degraded(), "an accepted credential must clear the degraded state");
+    }
+
+    #[tokio::test]
     async fn invalidator_runs_only_for_rejections() {
+        let _guard = TEST_LOCK.lock().await;
         let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let h = hits.clone();
         register_invalidator(Arc::new(move || {

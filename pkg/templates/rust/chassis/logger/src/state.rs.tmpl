@@ -108,6 +108,41 @@ pub(crate) type BoxedLayer =
 static RELOAD_HANDLE: OnceCell<tracing_subscriber::reload::Handle<BoxedLayer, tracing_subscriber::Registry>> =
     OnceCell::new();
 
+/// The subscriber shape the filter sits on top of.
+type FilterSubscriber = tracing_subscriber::layer::Layered<
+    tracing_subscriber::reload::Layer<BoxedLayer, tracing_subscriber::Registry>,
+    tracing_subscriber::Registry,
+>;
+
+/// Subscriber-wide filter handle, held SEPARATELY from the format layer.
+///
+/// The filter must NOT live inside the format layer's reload cell. A per-layer
+/// filter (`Layer::with_filter`) wrapped in `reload::Layer` loses the filter-id
+/// plumbing the registry uses to apply it, and silently stops filtering
+/// altogether. Observed in production: a service whose transport pins were
+/// present and correct emitted 800 h2 DEBUG frames in two minutes, and those
+/// frames are exactly what the pins exist to suppress because they carry
+/// authorization headers. As a subscriber-level layer the filter applies to the
+/// whole stack regardless of its position in it.
+static FILTER_HANDLE: OnceCell<
+    tracing_subscriber::reload::Handle<tracing_subscriber::EnvFilter, FilterSubscriber>,
+> = OnceCell::new();
+
+/// Store the filter reload handle created by the bootstrap install.
+pub(crate) fn set_filter_handle(
+    h: tracing_subscriber::reload::Handle<tracing_subscriber::EnvFilter, FilterSubscriber>,
+) {
+    let _ = FILTER_HANDLE.set(h);
+}
+
+/// Swap the subscriber-wide filter. Returns false when none is installed.
+pub(crate) fn reload_filter(filter: tracing_subscriber::EnvFilter) -> bool {
+    match FILTER_HANDLE.get() {
+        Some(h) => h.reload(filter).is_ok(),
+        None => false,
+    }
+}
+
 /// Store the reload handle created by the bootstrap install.
 pub(crate) fn set_reload_handle(
     h: tracing_subscriber::reload::Handle<BoxedLayer, tracing_subscriber::Registry>,

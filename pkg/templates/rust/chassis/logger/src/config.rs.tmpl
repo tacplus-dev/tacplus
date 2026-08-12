@@ -463,7 +463,6 @@ pub fn install_from_config(config: &proto::LoggerConfig) -> Result<()> {
         .add_directive("hyper=warn".parse().unwrap())
         .add_directive("tonic::transport=warn".parse().unwrap());
 
-    use tracing_subscriber::Layer as _;
 
     // Configure based on format. Each arm EVALUATES to the layer rather than
     // assigning it, so there is no half-initialised state to reason about.
@@ -488,7 +487,7 @@ pub fn install_from_config(config: &proto::LoggerConfig) -> Result<()> {
                     .with_line_number(!config.disable_caller)
                     .with_span_events(FmtSpan::NONE);
 
-                Box::new(fmt_layer.with_filter(env_filter)) as crate::state::BoxedLayer
+                Box::new(fmt_layer) as crate::state::BoxedLayer
             } else {
                 let fmt_layer = tracing_subscriber::fmt::layer()
                     .with_writer(writer)
@@ -499,7 +498,7 @@ pub fn install_from_config(config: &proto::LoggerConfig) -> Result<()> {
                     .with_line_number(!config.disable_caller)
                     .with_span_events(FmtSpan::NONE);
 
-                Box::new(fmt_layer.with_filter(env_filter)) as crate::state::BoxedLayer
+                Box::new(fmt_layer) as crate::state::BoxedLayer
             }
         }
         "json" => {
@@ -519,7 +518,7 @@ pub fn install_from_config(config: &proto::LoggerConfig) -> Result<()> {
                 .with_file(!config.disable_caller)
                 .with_line_number(!config.disable_caller);
 
-            Box::new(fmt_layer.with_filter(env_filter)) as crate::state::BoxedLayer
+            Box::new(fmt_layer) as crate::state::BoxedLayer
         }
         _ => {
             return Err(LoggerError::initialization_error(format!(
@@ -540,14 +539,24 @@ pub fn install_from_config(config: &proto::LoggerConfig) -> Result<()> {
                 "reloading the configured logger layer failed",
             ));
         }
+        if !crate::state::reload_filter(env_filter) {
+            return Err(LoggerError::initialization_error(
+                "reloading the configured logger filter failed",
+            ));
+        }
         mark_installed();
         return Ok(());
     }
 
+    let (fmt_reload, fmt_handle) = tracing_subscriber::reload::Layer::new(layer);
+    let (filter_reload, filter_handle) = tracing_subscriber::reload::Layer::new(env_filter);
     tracing_subscriber::registry()
-        .with(layer)
+        .with(fmt_reload)
+        .with(filter_reload)
         .try_init()
         .map_err(|e| LoggerError::initialization_error(e.to_string()))?;
+    crate::state::set_reload_handle(fmt_handle);
+    crate::state::set_filter_handle(filter_handle);
     mark_installed();
     Ok(())
 }
@@ -634,7 +643,6 @@ fn pinned_filter(level: Level) -> EnvFilter {
 /// Installing through the reload layer here means redaction is active from the
 /// first line AND `install_from_config` can still apply the typed config later.
 pub fn install_bootstrap() -> Result<()> {
-    use tracing_subscriber::Layer as _;
 
     if is_installed() {
         return Ok(());
@@ -645,23 +653,29 @@ pub fn install_bootstrap() -> Result<()> {
         .and_then(|v| v.parse::<Level>().ok())
         .unwrap_or(Level::INFO);
 
+    // Format layer and filter are SEPARATE reload cells. Putting the filter
+    // inside the format layer via `with_filter` breaks it — see the note on
+    // FILTER_HANDLE in state.rs.
     let layer: crate::state::BoxedLayer = Box::new(
         tracing_subscriber::fmt::layer()
             .with_writer(crate::redact::RedactingStderrMakeWriter)
             .with_target(true)
             .with_file(true)
             .with_line_number(true)
-            .with_span_events(FmtSpan::NONE)
-            .with_filter(pinned_filter(level)),
+            .with_span_events(FmtSpan::NONE),
     );
 
-    let (reloadable, handle) = tracing_subscriber::reload::Layer::new(layer);
+    let (fmt_reload, fmt_handle) = tracing_subscriber::reload::Layer::new(layer);
+    let (filter_reload, filter_handle) =
+        tracing_subscriber::reload::Layer::new(pinned_filter(level));
     tracing_subscriber::registry()
-        .with(reloadable)
+        .with(fmt_reload)
+        .with(filter_reload)
         .try_init()
         .map_err(|e| LoggerError::initialization_error(e.to_string()))?;
 
-    crate::state::set_reload_handle(handle);
+    crate::state::set_reload_handle(fmt_handle);
+    crate::state::set_filter_handle(filter_handle);
     mark_installed();
     Ok(())
 }
@@ -705,5 +719,74 @@ mod bootstrap_install_tests {
             ..Default::default()
         };
         install_from_config(&cfg).expect("typed config must apply over the bootstrap layer");
+    }
+}
+
+
+#[cfg(test)]
+mod transport_pin_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Buf {
+        type Writer = Buf;
+        fn make_writer(&'a self) -> Self::Writer { self.clone() }
+    }
+
+    /// The h2/hyper/tonic pins must suppress transport DEBUG through the SAME
+    /// reload-layer stack production uses.
+    ///
+    /// At DEBUG these crates log raw HTTP/2 frames, which carry authorization
+    /// headers with live service JWTs; with a service configured at level-debug
+    /// the pins are the only thing between that config and credentials in the
+    /// log.
+    ///
+    /// The stack shape is the test. An earlier version of this fix attached the
+    /// filter to the format layer with `with_filter` and wrapped the result in
+    /// `reload::Layer`; a test that filtered WITHOUT the reload wrapper passed,
+    /// while production emitted 800 h2 DEBUG frames in two minutes — the
+    /// per-layer filter loses its filter-id plumbing inside reload and stops
+    /// filtering. So this builds fmt and filter as two separate reload layers,
+    /// exactly as install_bootstrap does.
+    #[test]
+    fn transport_pins_survive_the_reload_stack() {
+        let buf = Buf::default();
+        let fmt_layer: crate::state::BoxedLayer =
+            Box::new(tracing_subscriber::fmt::layer().with_writer(buf.clone()));
+        let (fmt_reload, _fmt_handle) = tracing_subscriber::reload::Layer::new(fmt_layer);
+        let (filter_reload, _filter_handle) =
+            tracing_subscriber::reload::Layer::new(pinned_filter(Level::DEBUG));
+        let subscriber = tracing_subscriber::registry()
+            .with(fmt_reload)
+            .with(filter_reload);
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(target: "h2::codec::framed_read", frame = "Headers { .. }", "received");
+            tracing::debug!(target: "hyper::proto::h2", "hyper frame");
+            tracing::debug!(target: "tonic::transport::channel", "channel debug");
+            tracing::debug!(target: "some_service", "application debug line");
+        });
+
+        let out = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        for pinned in ["h2::codec::framed_read", "hyper::proto::h2", "tonic::transport::channel"] {
+            assert!(
+                !out.contains(pinned),
+                "{pinned} DEBUG leaked past the transport pin — those frames carry auth headers:\n{out}"
+            );
+        }
+        // Vacuity guard: the filter must not simply drop everything.
+        assert!(
+            out.contains("application debug line"),
+            "application DEBUG must still be emitted at level-debug:\n{out}"
+        );
     }
 }

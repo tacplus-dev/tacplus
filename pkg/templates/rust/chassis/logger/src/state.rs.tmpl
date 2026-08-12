@@ -89,3 +89,42 @@ mod tests {
         assert!(got4);
     }
 }
+
+// -----------------------------------------------------------------------------
+// Reload handle
+// -----------------------------------------------------------------------------
+
+/// Handle for swapping the active layer after the typed config is known.
+///
+/// `tracing` allows exactly ONE global subscriber per process. Before this
+/// existed, a service installed a plain subscriber at startup and the chassis's
+/// config-driven install later called `try_init()`, which could only fail — and
+/// its error was discarded, so the redacting layer was linked into the binary
+/// and never received a line. A reload layer is what makes both possible:
+/// redaction from the first line, and the typed config applied once it is read.
+pub(crate) type BoxedLayer =
+    Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>;
+
+static RELOAD_HANDLE: OnceCell<tracing_subscriber::reload::Handle<BoxedLayer, tracing_subscriber::Registry>> =
+    OnceCell::new();
+
+/// Store the reload handle created by the bootstrap install.
+pub(crate) fn set_reload_handle(
+    h: tracing_subscriber::reload::Handle<BoxedLayer, tracing_subscriber::Registry>,
+) {
+    let _ = RELOAD_HANDLE.set(h);
+}
+
+/// Swap the active layer. Returns false when no reloadable subscriber is
+/// installed, in which case the caller must fall back to a one-shot install.
+pub(crate) fn reload_layer(layer: BoxedLayer) -> bool {
+    match RELOAD_HANDLE.get() {
+        Some(h) => h.reload(layer).is_ok(),
+        None => false,
+    }
+}
+
+/// True when a reloadable subscriber is installed and its layer can be swapped.
+pub(crate) fn has_reload_handle() -> bool {
+    RELOAD_HANDLE.get().is_some()
+}

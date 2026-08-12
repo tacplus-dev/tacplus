@@ -38,11 +38,32 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
     // logger rather than an uninstalled one.
     match load_config_inner() {
         Ok(cfg) => {
-            let _ = logger::install_from_config(&cfg.logger.clone().unwrap_or_default());
+            // NOT `let _ =`. Discarding this error is what hid a dead redactor
+            // for weeks: every service installed its own subscriber in main(),
+            // `tracing` allows only one per process, so this call could only
+            // fail — and nobody saw it. The redacting layer was linked into six
+            // service binaries and never received a line.
+            //
+            // eprintln, not tracing: if this failed there is no logger of ours
+            // to report it through, and a credential redactor that is silently
+            // absent must be loud somewhere.
+            if let Err(e) = logger::install_from_config(&cfg.logger.clone().unwrap_or_default()) {
+                eprintln!(
+                    "FATAL-ADJACENT: the redacting logger could not be installed ({e}). \
+                     Logs from this process are NOT credential-redacted. A service must call \
+                     logger::install_bootstrap() at startup instead of building its own \
+                     tracing subscriber."
+                );
+            }
             Ok(cfg)
         }
         Err(e) => {
-            let _ = logger::Logger::default().install();
+            if let Err(install_err) = logger::Logger::default().install() {
+                eprintln!(
+                    "FATAL-ADJACENT: the redacting logger could not be installed ({install_err}). \
+                     Logs from this process are NOT credential-redacted."
+                );
+            }
             Err(e)
         }
     }

@@ -424,12 +424,16 @@ pub fn format_to_encoding(format: proto::Format) -> &'static str {
 /// install_from_config(&config).expect("Failed to install logger");
 /// ```
 pub fn install_from_config(config: &proto::LoggerConfig) -> Result<()> {
-    // Return early if already installed
-    if is_installed() {
+    // A bootstrap install is not a reason to stop: it exists precisely so this
+    // typed config can be applied afterwards, by swapping the reload layer.
+    // Only a non-reloadable subscriber (someone else's) means there is nothing
+    // to do here.
+    //
+    // `mark_installed()` used to run HERE, before the install was attempted, so
+    // a failed install still marked the logger as installed.
+    if is_installed() && !crate::state::has_reload_handle() {
         return Ok(());
     }
-
-    mark_installed();
 
     let level = level_to_tracing_level(config.level());
     let encoding = if config.format() == proto::Format::Undefined && config.development {
@@ -459,8 +463,11 @@ pub fn install_from_config(config: &proto::LoggerConfig) -> Result<()> {
         .add_directive("hyper=warn".parse().unwrap())
         .add_directive("tonic::transport=warn".parse().unwrap());
 
-    // Configure based on format
-    match encoding {
+    use tracing_subscriber::Layer as _;
+
+    // Configure based on format. Each arm EVALUATES to the layer rather than
+    // assigning it, so there is no half-initialised state to reason about.
+    let layer: crate::state::BoxedLayer = match encoding {
         "console" => {
             let writer = LoggerMakeWriter::new(
                 output_targets,
@@ -481,11 +488,7 @@ pub fn install_from_config(config: &proto::LoggerConfig) -> Result<()> {
                     .with_line_number(!config.disable_caller)
                     .with_span_events(FmtSpan::NONE);
 
-                tracing_subscriber::registry()
-                    .with(env_filter)
-                    .with(fmt_layer)
-                    .try_init()
-                    .map_err(|e| LoggerError::initialization_error(e.to_string()))?;
+                Box::new(fmt_layer.with_filter(env_filter)) as crate::state::BoxedLayer
             } else {
                 let fmt_layer = tracing_subscriber::fmt::layer()
                     .with_writer(writer)
@@ -496,11 +499,7 @@ pub fn install_from_config(config: &proto::LoggerConfig) -> Result<()> {
                     .with_line_number(!config.disable_caller)
                     .with_span_events(FmtSpan::NONE);
 
-                tracing_subscriber::registry()
-                    .with(env_filter)
-                    .with(fmt_layer)
-                    .try_init()
-                    .map_err(|e| LoggerError::initialization_error(e.to_string()))?;
+                Box::new(fmt_layer.with_filter(env_filter)) as crate::state::BoxedLayer
             }
         }
         "json" => {
@@ -520,11 +519,7 @@ pub fn install_from_config(config: &proto::LoggerConfig) -> Result<()> {
                 .with_file(!config.disable_caller)
                 .with_line_number(!config.disable_caller);
 
-            tracing_subscriber::registry()
-                .with(env_filter)
-                .with(fmt_layer)
-                .try_init()
-                .map_err(|e| LoggerError::initialization_error(e.to_string()))?;
+            Box::new(fmt_layer.with_filter(env_filter)) as crate::state::BoxedLayer
         }
         _ => {
             return Err(LoggerError::initialization_error(format!(
@@ -532,8 +527,28 @@ pub fn install_from_config(config: &proto::LoggerConfig) -> Result<()> {
                 encoding
             )));
         }
+    };
+
+    // Swap the bootstrap layer when one is installed; otherwise this call is the
+    // first install in the process and takes the subscriber itself. The SAME
+    // configured layer is used either way — rebuilding a default one on the
+    // fallback path would silently drop the configured format, writer and
+    // output paths.
+    if crate::state::has_reload_handle() {
+        if !crate::state::reload_layer(layer) {
+            return Err(LoggerError::initialization_error(
+                "reloading the configured logger layer failed",
+            ));
+        }
+        mark_installed();
+        return Ok(());
     }
 
+    tracing_subscriber::registry()
+        .with(layer)
+        .try_init()
+        .map_err(|e| LoggerError::initialization_error(e.to_string()))?;
+    mark_installed();
     Ok(())
 }
 
@@ -584,4 +599,111 @@ mod tests {
         assert_eq!(format_to_encoding(proto::Format::Undefined), "json");
     }
 
+}
+// -----------------------------------------------------------------------------
+// Bootstrap install
+// -----------------------------------------------------------------------------
+
+/// Env filter with the transport-layer pins applied.
+///
+/// h2, hyper and tonic are pinned to WARN because at DEBUG/TRACE they emit raw
+/// HTTP/2 frame data including authorization headers with live service JWTs.
+/// The pins go on AFTER the default env filter so they override RUST_LOG=trace.
+/// Every install path must use this — a pin present on only one path is a live
+/// credential leak on whichever path runs.
+fn pinned_filter(level: Level) -> EnvFilter {
+    EnvFilter::from_default_env()
+        .add_directive(level.into())
+        .add_directive("h2=warn".parse().unwrap())
+        .add_directive("hyper=warn".parse().unwrap())
+        .add_directive("tonic::transport=warn".parse().unwrap())
+}
+
+/// Install a redacting logger IMMEDIATELY, before any config is available, and
+/// keep it swappable.
+///
+/// Services must call this instead of building their own `tracing_subscriber`.
+/// `tracing` permits exactly one global subscriber per process, so a service
+/// that installs its own wins permanently and the chassis's config-driven
+/// install can only fail — which is precisely what happened: every rust service
+/// called `tracing_subscriber::fmt().init()` in main, the chassis's later
+/// `install_from_config` hit `try_init()` and errored, the error was discarded
+/// by its caller, and the redacting layer never received a single line. The
+/// `[REDACTED]` machinery was linked into six service binaries and was dead.
+///
+/// Installing through the reload layer here means redaction is active from the
+/// first line AND `install_from_config` can still apply the typed config later.
+pub fn install_bootstrap() -> Result<()> {
+    use tracing_subscriber::Layer as _;
+
+    if is_installed() {
+        return Ok(());
+    }
+
+    let level = env::var(LOG_LEVEL_ENV_VAR)
+        .ok()
+        .and_then(|v| v.parse::<Level>().ok())
+        .unwrap_or(Level::INFO);
+
+    let layer: crate::state::BoxedLayer = Box::new(
+        tracing_subscriber::fmt::layer()
+            .with_writer(crate::redact::RedactingStderrMakeWriter)
+            .with_target(true)
+            .with_file(true)
+            .with_line_number(true)
+            .with_span_events(FmtSpan::NONE)
+            .with_filter(pinned_filter(level)),
+    );
+
+    let (reloadable, handle) = tracing_subscriber::reload::Layer::new(layer);
+    tracing_subscriber::registry()
+        .with(reloadable)
+        .try_init()
+        .map_err(|e| LoggerError::initialization_error(e.to_string()))?;
+
+    crate::state::set_reload_handle(handle);
+    mark_installed();
+    Ok(())
+}
+
+#[cfg(test)]
+mod bootstrap_install_tests {
+    use super::*;
+
+    /// The bootstrap install must leave the layer swappable, and the typed
+    /// config must then actually be applied.
+    ///
+    /// Before this existed, every rust service installed a plain subscriber in
+    /// main() and `install_from_config` could only fail — `tracing` allows one
+    /// global subscriber per process. Its Result was discarded by the caller in
+    /// grpcconfig's loader, so the redacting layer was linked into six service
+    /// binaries and never received a line. Runtime proof at the time: those
+    /// services emitted the default console format with ANSI escapes, while the
+    /// java services emitted chassis JSON.
+    ///
+    /// One test, not several: the global subscriber is process-wide, so tests
+    /// that install cannot run independently.
+    #[test]
+    fn bootstrap_installs_and_config_reloads_over_it() {
+        install_bootstrap().expect("bootstrap install");
+        assert!(
+            crate::state::has_reload_handle(),
+            "bootstrap must leave the layer swappable, or the typed config can never apply"
+        );
+        assert!(crate::state::is_installed());
+
+        // A second bootstrap is a no-op, not an error.
+        install_bootstrap().expect("bootstrap is idempotent");
+
+        // The typed config must not be turned away just because something is
+        // already installed — that early return is exactly what made the
+        // config-driven logger unreachable.
+        let cfg = proto::LoggerConfig {
+            level: proto::Level::Debug as i32,
+            format: proto::Format::Json as i32,
+            output_paths: vec!["stderr".to_string()],
+            ..Default::default()
+        };
+        install_from_config(&cfg).expect("typed config must apply over the bootstrap layer");
+    }
 }

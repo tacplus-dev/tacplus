@@ -45,8 +45,20 @@ impl EndpointConn {
             .http2_keep_alive_interval(std::time::Duration::from_secs({{.KeepaliveTimeSecs}}))
             .keep_alive_while_idle(true)
             .keep_alive_timeout(std::time::Duration::from_secs({{.KeepaliveTimeoutSecs}}))
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(300));
+            .connect_timeout(std::time::Duration::from_secs(10));
+        // NO channel-wide `.timeout()`. tonic applies an Endpoint timeout as a
+        // deadline on EVERY request that uses the channel, and this channel
+        // carries server-streaming RPCs — the state watches — which are meant to
+        // stay open indefinitely. A 300s timeout therefore killed every watch
+        // every five minutes: argus logged
+        //   "ArgusConfigState.config watch failed, retrying ... TimeoutExpired"
+        // on a 5m33s cadence for weeks, and each death is a window in which a
+        // state change is missed rather than delivered.
+        //
+        // Liveness does not need it. The keepalive above detects a dead-but-open
+        // connection in ~40s, which is both faster and correct for streams. A
+        // per-call deadline belongs on the individual unary call that wants one
+        // — see `ping` below — not on a channel shared with streams.
         tracing::info!(endpoint = %self.target, "connecting service endpoint");
         let channel = tokio::time::timeout(std::time::Duration::from_secs(15), endpoint.connect())
             .await
@@ -63,7 +75,24 @@ impl EndpointConn {
         let channel = self.channel.as_ref().ok_or("not connected")?;
         let mut client = ClusterServiceClient::new(channel.clone());
         let start = Instant::now();
-        let result = client.ping(TraceRequest::default()).await;
+        // Explicit per-call deadline. The channel deliberately carries none (it
+        // is shared with indefinite state-watch streams), so a health probe that
+        // wants to fail fast has to say so itself. Matches the go chassis, which
+        // has always used a per-call ping timeout rather than a channel one.
+        let result = match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            client.ping(TraceRequest::default()),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => {
+                tracing::warn!(endpoint = %self.target, "Ping timed out, marking endpoint unhealthy");
+                *self.latency.write().await = Duration::MAX;
+                *self.healthy.write().await = false;
+                return Err("ping timed out".into());
+            }
+        };
         let rtt = start.elapsed();
 
         let mut latency = self.latency.write().await;

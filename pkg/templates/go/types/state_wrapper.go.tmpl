@@ -31,6 +31,7 @@ import (
 	"go.uber.org/zap"
 {{- end}}
 	types "{{.TypesImportPath}}"
+	"{{.ServiceIMLibPath}}"
 	"{{.ServiceManagerLibPath}}"
 {{- range .CrossImports}}
 	{{.Alias}} "{{.Path}}"
@@ -316,6 +317,11 @@ func (c *{{$.ClientTypeName}}) watch{{$s.FieldName}}Loop() {
 			if c.ctx.Err() == nil {
 				zap.L().Warn("Watch{{$s.FieldName}} failed to start, retrying",
 					zap.Error(err))
+				// A rejected credential must invalidate the token cache, or this
+				// loop presents the same dead token forever: the cache is keyed on
+				// expiry, and an authority restart invalidates a token that has
+				// NOT expired.
+				service_im.NoteIfCredentialRejection(err)
 				c.recordWatchRetrying("Watch{{$s.FieldName}}", false, attempt+1, err.Error(), err)
 			}
 			if !c.sleepBeforeWatchRetry(attempt) {
@@ -324,6 +330,9 @@ func (c *{{$.ClientTypeName}}) watch{{$s.FieldName}}Loop() {
 			attempt++
 			continue
 		}
+		// An accepted stream proves the credential is good again; clears the
+		// degraded health floor set after repeated rejections.
+		service_im.NoteCredentialAccepted()
 		c.recordWatchHealthy("Watch{{$s.FieldName}}", false)
 		received := c.receive{{$s.FieldName}}Updates(stream)
 		if c.ctx.Err() == nil {
@@ -377,6 +386,11 @@ func (c *{{$.ClientTypeName}}) watch{{$c.FieldName}}Loop() {
 			if c.ctx.Err() == nil {
 				zap.L().Warn("Watch{{$c.FieldName}} failed to start, retrying",
 					zap.Error(err))
+				// A rejected credential must invalidate the token cache, or this
+				// loop presents the same dead token forever: the cache is keyed on
+				// expiry, and an authority restart invalidates a token that has
+				// NOT expired.
+				service_im.NoteIfCredentialRejection(err)
 				c.recordWatchRetrying("Watch{{$c.FieldName}}", false, attempt+1, err.Error(), err)
 			}
 			if !c.sleepBeforeWatchRetry(attempt) {
@@ -385,6 +399,9 @@ func (c *{{$.ClientTypeName}}) watch{{$c.FieldName}}Loop() {
 			attempt++
 			continue
 		}
+		// An accepted stream proves the credential is good again; clears the
+		// degraded health floor set after repeated rejections.
+		service_im.NoteCredentialAccepted()
 		c.recordWatchHealthy("Watch{{$c.FieldName}}", false)
 		received := c.receive{{$c.FieldName}}Updates(stream)
 		if c.ctx.Err() == nil {
@@ -449,6 +466,11 @@ func (c *{{$.ClientTypeName}}) watch{{$s.FieldName}}Loop() {
 			if c.ctx.Err() == nil {
 				zap.L().Warn("Watch{{$s.FieldName}} (state-import) failed to start, retrying",
 					zap.Error(err))
+				// A rejected credential must invalidate the token cache, or this
+				// loop presents the same dead token forever: the cache is keyed on
+				// expiry, and an authority restart invalidates a token that has
+				// NOT expired.
+				service_im.NoteIfCredentialRejection(err)
 				c.recordWatchRetrying("Watch{{$s.FieldName}}", false, attempt+1, err.Error(), err)
 			}
 			if !c.sleepBeforeWatchRetry(attempt) {
@@ -457,6 +479,9 @@ func (c *{{$.ClientTypeName}}) watch{{$s.FieldName}}Loop() {
 			attempt++
 			continue
 		}
+		// An accepted stream proves the credential is good again; clears the
+		// degraded health floor set after repeated rejections.
+		service_im.NoteCredentialAccepted()
 		c.recordWatchHealthy("Watch{{$s.FieldName}}", false)
 		received := c.receive{{$s.FieldName}}Updates(stream)
 		if c.ctx.Err() == nil {

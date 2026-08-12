@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	common_pb "{{.CommonTypesPath}}"
@@ -34,9 +35,11 @@ import (
 	cluster_svc_pb "{{.StateServiceTypesPath}}"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"crypto/tls"
 	"crypto/x509"
 	wrapperX509 "{{.X509LibPath}}"
@@ -156,6 +159,18 @@ func New(ctx context.Context, cfg *grpcconfig_pb.Config) (*IdentityManager, erro
 		ctx:    imCtx,
 		cancel: imCancel,
 	}
+
+	// Wire the token-cache invalidator so a component that sees its credential
+	// REJECTED can force a re-mint. Without this the cache serves a token until
+	// its expiry, which is exactly wrong when the authority restarts.
+	RegisterCredentialInvalidator(func() {
+		if im.k8sMinter != nil {
+			im.k8sMinter.invalidate()
+		}
+		if im.cloudMinter != nil {
+			im.cloudMinter.invalidate()
+		}
+	})
 
 	// Build bare TLS dial options (no auth interceptors).
 	// This is the bootstrap connection that carries the workload's projected
@@ -1528,4 +1543,94 @@ func randomDuration(max time.Duration) time.Duration {
 		return max / 2
 	}
 	return time.Duration(n.Int64())
+}
+
+// -----------------------------------------------------------------------------
+// Credential rejection recovery
+// -----------------------------------------------------------------------------
+//
+// The token cache hands out a token until its expiry. That is correct when a
+// token dies of old age and WRONG when it is invalidated early — which is what
+// a restart of the token authority does. The cached token is then not expired
+// but no longer accepted, so every call fails Unauthenticated and the service
+// keeps presenting the same dead credential.
+//
+// RefreshToken() has always existed and cleared the cache; nothing called it.
+// The rust chassis had the identical gap, and there it cost four services a
+// fifteen-minute outage that only ended when each pod was deleted by hand.
+
+var (
+	authRecoveryMu   sync.Mutex
+	authInvalidator  func()
+	consecutiveRejects atomic.Int64
+)
+
+// degradedAfter is the number of rejections in a row before the service reports
+// itself unhealthy.
+//
+// Not 1: a single rejection is the NORMAL event when the authority restarts —
+// the next call re-mints and succeeds — and flapping readiness for that is
+// worse than the problem. This threshold means "re-minting is not helping".
+const degradedAfter = 3
+
+// RegisterCredentialInvalidator wires the process's token-cache invalidator.
+// Called by the IdentityManager that owns the cache.
+func RegisterCredentialInvalidator(f func()) {
+	authRecoveryMu.Lock()
+	defer authRecoveryMu.Unlock()
+	authInvalidator = f
+}
+
+// IsCredentialRejection reports whether an error means our credential was
+// REJECTED, as opposed to the peer being unreachable or the call being refused
+// on authorization grounds.
+//
+// Deliberately excludes PermissionDenied: that means the credential was
+// understood and refused, so re-minting the same identity would loop forever.
+func IsCredentialRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	if status.Code(err) == codes.Unauthenticated {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unauthenticated") ||
+		strings.Contains(msg, "does not have valid authentication credentials") ||
+		strings.Contains(msg, "token validation failed")
+}
+
+// NoteCredentialRejection drops the cached credentials so the next call
+// re-mints. Idempotent, and safe to call on every failed attempt.
+func NoteCredentialRejection() {
+	consecutiveRejects.Add(1)
+	authRecoveryMu.Lock()
+	f := authInvalidator
+	authRecoveryMu.Unlock()
+	if f != nil {
+		zap.L().Warn("credential was rejected — dropping the cached token so the next attempt re-mints")
+		f()
+	}
+}
+
+// NoteCredentialAccepted clears the degraded state after an accepted call.
+func NoteCredentialAccepted() {
+	consecutiveRejects.Store(0)
+}
+
+// NoteIfCredentialRejection invalidates when the error looks like a rejection.
+// Returns true when it did.
+func NoteIfCredentialRejection(err error) bool {
+	if IsCredentialRejection(err) {
+		NoteCredentialRejection()
+		return true
+	}
+	return false
+}
+
+// CredentialsDegraded reports whether repeated re-mints have failed to produce
+// an accepted credential. Wired to the health floor so readiness stops
+// reporting Ready for a service that cannot authenticate at all.
+func CredentialsDegraded() bool {
+	return consecutiveRejects.Load() >= degradedAfter
 }

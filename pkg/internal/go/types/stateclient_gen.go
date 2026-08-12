@@ -113,6 +113,7 @@ type stateClientData struct {
 	StateRootName         string // PascalCase state root message: "BaseballState" (from service_state annotation)
 	TypesImportPath       string // import path for types (types/services/baseball)
 	ServiceManagerLibPath string // import path for servicemanager lib (chassis/servicemanager)
+	ServiceIMLibPath      string // import path for the identity manager (chassis/service_im)
 	SpecTypesPath         string // import path for Lock types (lock)
 	Singletons            []singletonBoundary
 	Collections           []collectionBoundary
@@ -1112,6 +1113,7 @@ func generateStateWrapper(config *tactype.Config, svc ServiceInfo, stateRoot *pa
 	typesImportPath := fmt.Sprintf("%s/types/%s/%s", config.ModuleBasePath, svc.ParentDir, svc.ImportDirName())
 	specTypesPath := fmt.Sprintf("%s/types/sys/lock", config.ModuleBasePath)
 	serviceManagerLibPath := fmt.Sprintf("%s/chassis/servicemanager", config.ModuleBasePath)
+	serviceIMLibPath := fmt.Sprintf("%s/chassis/service_im", config.ModuleBasePath)
 	traceTypesPath := fmt.Sprintf("%s/types/sys/trace", config.ModuleBasePath)
 
 	// Derive unique directory name from the declared state root name.
@@ -1128,6 +1130,7 @@ func generateStateWrapper(config *tactype.Config, svc ServiceInfo, stateRoot *pa
 		StateRootName:         stateRoot.Name,
 		TypesImportPath:       typesImportPath,
 		ServiceManagerLibPath: serviceManagerLibPath,
+		ServiceIMLibPath:      serviceIMLibPath,
 		SpecTypesPath:         specTypesPath,
 		Singletons:            singletons,
 		Collections:           collections,

@@ -480,6 +480,11 @@ impl {{.StateRootName}}ClientInner {
                         return;
                     }
                     let reason = e.to_string();
+                    // A rejected credential must invalidate the token cache, or
+                    // this loop presents the same dead token forever. The cache
+                    // is keyed on expiry, and an authority restart invalidates a
+                    // token that has NOT expired.
+                    service_im::note_if_credential_rejection(&reason).await;
                     self.record_watch_retrying("Watch{{.FieldPascal}}", false, attempt.saturating_add(1), reason.clone(), Some(reason));
                     tracing::error!(error = %e, "{{$.StateRootName}}.{{.FieldName}} watch failed, retrying");
                     false
@@ -602,6 +607,11 @@ impl {{.StateRootName}}ClientInner {
                         return;
                     }
                     let reason = e.to_string();
+                    // A rejected credential must invalidate the token cache, or
+                    // this loop presents the same dead token forever. The cache
+                    // is keyed on expiry, and an authority restart invalidates a
+                    // token that has NOT expired.
+                    service_im::note_if_credential_rejection(&reason).await;
                     self.record_watch_retrying("Watch{{.FieldPascal}}", false, attempt.saturating_add(1), reason.clone(), Some(reason));
                     tracing::error!(error = %e, "{{$.StateRootName}}.{{.FieldName}} watch failed, retrying");
                     false

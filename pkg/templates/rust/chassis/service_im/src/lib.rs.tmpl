@@ -6,10 +6,12 @@
 //! Identity Manager — service identity bootstrap, token caching, and renewal.
 //! Owns a bare gRPC channel (no interceptors) for token exchange.
 
+pub mod auth_recovery;
 pub mod manager;
 pub mod token_minter;
 pub mod cloud_minter;
 pub mod cloud_detect;
 pub mod aws_sigv4;
 
+pub use auth_recovery::{is_credential_rejection, note_credential_rejection, note_if_credential_rejection};
 pub use manager::IdentityManager;

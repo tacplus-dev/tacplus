@@ -2286,13 +2286,22 @@ async fn tls_cert_stream_loop(
                     init_attempts = 0;
                 }
                 tracing::warn!("TLS cert stream ended cleanly, reconnecting");
+                None
             }
             Err(e) => {
                 tracing::warn!("TLS cert stream disconnected, retrying in 5s: {}", e);
+                // Only the TEXT escapes the arm: `e` is non-Send, so holding it
+                // across the await below makes the whole task non-Send.
+                Some(e.to_string())
             }
         };
         // retry sleep is outside the match arm so `e` (non-Send) is dropped before the await.
-        let _ = retry;
+        // A rejected credential must invalidate the token cache here too: this
+        // stream renews the serving certificate, so a stuck credential costs the
+        // service its TLS as well as its authentication.
+        if let Some(reason) = retry {
+            service_im::note_if_credential_rejection(&reason).await;
+        }
         if waiting_for_first && ready_tx.is_some() {
             init_attempts += 1;
             if init_attempts >= MAX_INIT_RETRIES {

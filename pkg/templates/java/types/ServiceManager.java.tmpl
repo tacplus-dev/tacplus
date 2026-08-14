@@ -835,6 +835,12 @@ public class ServiceManager implements AutoCloseable {
                 spiffeId);
         healthReporter.setStatus(InstanceStatus.INSTANCE_STATUS_HEALTHY);
         healthReporter.setHealthChecker(handler::checkHealth);
+        // Credential health is a chassis FLOOR, not a service concern: a service
+        // must not report itself healthy while its credentials are being
+        // rejected and re-minting is not helping. Readiness previously stayed
+        // Ready through a total auth outage because the probe only asked whether
+        // the process was listening.
+        healthReporter.setDegradedProbe({{.ChassisBase}}.service_im.IdentityManager::credentialsDegraded);
         // PC-L-1: TLS renewal give-up / parse failures degrade this instance in the
         // fleet health plane instead of being Error-log-only.
         onTLSDegraded(reason -> {
@@ -1084,6 +1090,13 @@ public class ServiceManager implements AutoCloseable {
 {{- end}}
 
         handler.shutdown();
+        // Close the REAL authorizer. GrpcServer used to hold and close a
+        // throwaway test-mode one instead, so this one's RemoteJwkSource stayed
+        // active and its onError kept re-subscribing on the dying channel
+        // through shutdown.
+        if (authorizer != null) {
+            authorizer.close();
+        }
 {{- if .HasStates}}
         stateClients.close();
 {{- end}}

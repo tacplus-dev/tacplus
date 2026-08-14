@@ -62,7 +62,6 @@ public class GrpcServer {
     private Grpcconfig.Config config;
     private final ServiceImplementation impl;
     private final CertProvider certProvider;
-    private Authorizer authorizer;
     private Server grpcServer;
     private Server healthProbeServer;
     private Javalin httpServer;
@@ -126,26 +125,23 @@ public class GrpcServer {
     }
 
     private void applyConfig(Grpcconfig.Config config) {
-        if (this.authorizer == null) {
-            this.authorizer = Authorizer.create();
-        }
         this.config = config;
     }
 
-    /**
-     * Sets the Authorizer.
-     * Call before listen() to enable token-based authorization.
-     */
-    public void setAuthorizer(Authorizer authorizer) {
-        this.authorizer = authorizer;
-    }
-
-    /**
-     * Returns the Authorizer.
-     */
-    public Authorizer getAuthorizer() {
-        return authorizer;
-    }
+    // No Authorizer field here, deliberately.
+    //
+    // This class used to build one in applyConfig via Authorizer.create() — the
+    // verify-nothing test-mode instance — and expose a setter that NOTHING ever
+    // called. So every service logged "Token-based authorization enabled (test
+    // mode: empty key source)" at INFO in production, and shutdown closed that
+    // placeholder while the REAL authorizer (built in ServiceManager and used
+    // through enforcingInterceptor) was never closed, leaving its JWK watch
+    // reconnecting against a dying channel.
+    //
+    // Authorization is enforced by the generated wrappers via
+    // Authorizer.enforcingInterceptor(); listenTLS installs only the static
+    // Authorizer.interceptor(), which stashes the header in the context. The go
+    // chassis has no authorizer field either, for the same reason.
 
     public void listen() throws Exception {
         boolean hasTls = certProvider.getChain() != null && certProvider.getPrivateKey() != null;
@@ -380,10 +376,6 @@ public class GrpcServer {
             }
         }
 
-        Authorizer auth = this.authorizer;
-        if (auth != null) {
-            auth.close();
-        }
     }
 
     private long shutdownTimeoutSeconds() {

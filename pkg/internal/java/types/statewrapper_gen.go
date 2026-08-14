@@ -88,6 +88,10 @@ type javaStateWrapperData struct {
 	StateServiceName string // "BaseballStateService" — the gRPC service name
 	GrpcServiceFQN   string // "com.example.types.services.baseball.BaseballStateServiceGrpc" — fully qualified gRPC stub class
 	TraceFQN         string // "com.example.types.sys.trace.Trace"
+	// IdentityManagerFQN is the chassis IdentityManager, used by the watch loops
+	// to invalidate a REJECTED credential so the retry re-mints instead of
+	// replaying a token the authority no longer accepts.
+	IdentityManagerFQN string // "com.example.chassis.service_im.IdentityManager"
 	Imports          []string
 	Singletons       []javaSingletonBoundary
 	Collections      []javaCollectionBoundary
@@ -455,6 +459,7 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 		StateServiceName: stateServiceName,
 		GrpcServiceFQN:   grpcServiceFQN,
 		TraceFQN:         basePackage + ".types.sys.trace.Trace",
+		IdentityManagerFQN: basePackage + ".chassis.service_im.IdentityManager",
 		Imports:          imports,
 		Singletons:       singletons,
 		Collections:      collections,

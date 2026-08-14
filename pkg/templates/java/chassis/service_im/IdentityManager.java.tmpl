@@ -72,6 +72,21 @@ public class IdentityManager implements AutoCloseable {
         this.authorityTargets = authorityTargets;
         this.sslCtx = sslCtx;
         this.activeAuthorityIndex = activeAuthorityIndex;
+
+        // Wire the token-cache invalidator so a component that sees its
+        // credential REJECTED can force a re-mint immediately, rather than
+        // failing every call for up to 30 seconds until the reconnect poll
+        // notices.
+        final KubernetesMinter k8s = k8sMinter;
+        final CloudMinter cloud = cloudMinter;
+        registerCredentialInvalidator(() -> {
+            if (k8s != null) {
+                k8s.invalidate();
+            }
+            if (cloud != null) {
+                cloud.invalidate();
+            }
+        });
     }
 
     // Initial token exchange retry parameters.
@@ -425,4 +440,110 @@ public class IdentityManager implements AutoCloseable {
             ch.shutdownNow();
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Credential rejection recovery
+    // -------------------------------------------------------------------------
+    //
+    // The token cache hands out a token until its expiry. That is right when a
+    // token dies of old age and wrong when it is invalidated EARLY, which is
+    // what a restart of the token authority does: the cached token is not
+    // expired but is no longer accepted.
+    //
+    // Java did recover, but only via the 30s reconnect poll below — so a service
+    // could fail every call for up to 30 seconds per cycle and, if the authority
+    // stayed unreachable, exit(1) after five minutes. Meanwhile readiness kept
+    // reporting healthy, because nothing tied credential state to health. rust
+    // and go invalidate the instant a call is rejected and degrade readiness
+    // after repeated failures; this brings java to the same behaviour.
+
+    private static final Object AUTH_RECOVERY_LOCK = new Object();
+    private static Runnable credentialInvalidator;
+    private static final java.util.concurrent.atomic.AtomicInteger CONSECUTIVE_REJECTIONS =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+    private static final java.util.concurrent.atomic.AtomicInteger REJECTION_GENERATION =
+            new java.util.concurrent.atomic.AtomicInteger(1);
+    private static final java.util.concurrent.atomic.AtomicInteger LAST_COUNTED_GENERATION =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+
+    /**
+     * Rejections in a row before the service reports itself unhealthy.
+     *
+     * Not 1: a single rejection is the NORMAL event when the authority restarts,
+     * and flapping readiness for it is worse than the problem. This means
+     * "re-minting is not helping".
+     */
+    private static final int DEGRADED_AFTER = 3;
+
+    /** Registers the process's token-cache invalidator. */
+    public static void registerCredentialInvalidator(Runnable r) {
+        synchronized (AUTH_RECOVERY_LOCK) {
+            credentialInvalidator = r;
+        }
+    }
+
+    /**
+     * True when an error means our credential was REJECTED, as opposed to the
+     * peer being unreachable or the call being refused on authorization grounds.
+     *
+     * Deliberately excludes PERMISSION_DENIED: that means the credential was
+     * understood and refused, so re-minting the same identity would loop.
+     */
+    public static boolean isCredentialRejection(Throwable t) {
+        if (t == null) {
+            return false;
+        }
+        if (t instanceof io.grpc.StatusRuntimeException) {
+            io.grpc.Status.Code c = ((io.grpc.StatusRuntimeException) t).getStatus().getCode();
+            if (c == io.grpc.Status.Code.UNAUTHENTICATED) {
+                return true;
+            }
+        }
+        String m = t.getMessage() == null ? "" : t.getMessage().toLowerCase();
+        return m.contains("unauthenticated")
+                || m.contains("does not have valid authentication credentials")
+                || m.contains("token validation failed");
+    }
+
+    /** Drops the cached credentials so the next call re-mints. */
+    public static void noteCredentialRejection() {
+        // Count rejected GENERATIONS, not rejections: a service runs several
+        // loops on one identity, and an authority restart fails them all with
+        // the SAME stale token. Counting raw rejections would cross the
+        // threshold on the first restart.
+        int gen = REJECTION_GENERATION.get();
+        if (LAST_COUNTED_GENERATION.getAndSet(gen) != gen) {
+            CONSECUTIVE_REJECTIONS.incrementAndGet();
+        }
+        REJECTION_GENERATION.incrementAndGet();
+
+        Runnable r;
+        synchronized (AUTH_RECOVERY_LOCK) {
+            r = credentialInvalidator;
+        }
+        if (r != null) {
+            LOG.warning("credential was rejected — dropping the cached token so the next attempt re-mints");
+            r.run();
+        }
+    }
+
+    /** Invalidates when the error looks like a rejection. Returns true if it did. */
+    public static boolean noteIfCredentialRejection(Throwable t) {
+        if (isCredentialRejection(t)) {
+            noteCredentialRejection();
+            return true;
+        }
+        return false;
+    }
+
+    /** Records that a credential was ACCEPTED, clearing the degraded state. */
+    public static void noteCredentialAccepted() {
+        CONSECUTIVE_REJECTIONS.set(0);
+    }
+
+    /** True when repeated re-mints have failed to produce an accepted credential. */
+    public static boolean credentialsDegraded() {
+        return CONSECUTIVE_REJECTIONS.get() >= DEGRADED_AFTER;
+    }
+
 }

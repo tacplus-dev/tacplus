@@ -626,6 +626,9 @@ public class StateClient implements AutoCloseable {
                         @Override
                         public void onNext({{.JavaType}} value) {
                             received.set(true);
+                            // A DELIVERED update proves the credential was
+                            // accepted; clears the degraded health floor.
+                            {{$.IdentityManagerFQN}}.noteCredentialAccepted();
                             recordWatchHealthy("Watch{{.FieldPascal}}", true);
                             apply{{.FieldPascal}}Update(value);
                         }
@@ -637,6 +640,12 @@ public class StateClient implements AutoCloseable {
                                 return;
                             }
                             int nextAttempt = received.get() ? 0 : attempt + 1;
+                            // A rejected credential must invalidate the token
+                            // cache, or this loop replays the same dead token
+                            // until the 30s poll happens to notice: the cache is
+                            // keyed on expiry, and an authority restart
+                            // invalidates a token that has NOT expired.
+                            {{$.IdentityManagerFQN}}.noteIfCredentialRejection(t);
                             recordWatchRetrying("Watch{{.FieldPascal}}", received.get(), nextAttempt, t.getMessage(), t);
                             LOG.warning("Watch{{.FieldPascal}} stream failed; retrying: " + t.getMessage());
                             scheduleWatchRestart("Watch{{.FieldPascal}}", nextAttempt, () -> startWatch{{.FieldPascal}}(nextAttempt));
@@ -684,6 +693,9 @@ public class StateClient implements AutoCloseable {
                         @Override
                         public void onNext({{$.OuterClassName}}.{{.FieldPascal}}EntriesResponse value) {
                             received.set(true);
+                            // A DELIVERED update proves the credential was
+                            // accepted; clears the degraded health floor.
+                            {{$.IdentityManagerFQN}}.noteCredentialAccepted();
                             recordWatchHealthy("Watch{{.FieldPascal}}", true);
                             replaceAll{{.FieldPascal}}FromWatch(value.getEntriesMap());
                         }
@@ -695,6 +707,12 @@ public class StateClient implements AutoCloseable {
                                 return;
                             }
                             int nextAttempt = received.get() ? 0 : attempt + 1;
+                            // A rejected credential must invalidate the token
+                            // cache, or this loop replays the same dead token
+                            // until the 30s poll happens to notice: the cache is
+                            // keyed on expiry, and an authority restart
+                            // invalidates a token that has NOT expired.
+                            {{$.IdentityManagerFQN}}.noteIfCredentialRejection(t);
                             recordWatchRetrying("Watch{{.FieldPascal}}", received.get(), nextAttempt, t.getMessage(), t);
                             LOG.warning("Watch{{.FieldPascal}} stream failed; retrying: " + t.getMessage());
                             scheduleWatchRestart("Watch{{.FieldPascal}}", nextAttempt, () -> startWatch{{.FieldPascal}}(nextAttempt));
@@ -742,6 +760,9 @@ public class StateClient implements AutoCloseable {
                         @Override
                         public void onNext({{.JavaType}} value) {
                             received.set(true);
+                            // A DELIVERED update proves the credential was
+                            // accepted; clears the degraded health floor.
+                            {{$.IdentityManagerFQN}}.noteCredentialAccepted();
                             recordWatchHealthy("Watch{{.FieldPascal}}", true);
                             synchronized (cacheLock) {
                                 StateClient.this.{{.FieldName}} = value;

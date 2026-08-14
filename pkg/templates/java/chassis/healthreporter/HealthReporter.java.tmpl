@@ -74,6 +74,8 @@ public class HealthReporter implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final long startedAtMs;
     private volatile InstanceStatus status = InstanceStatus.INSTANCE_STATUS_STARTING;
+    /** Chassis-level floor; see setDegradedProbe. */
+    private volatile java.util.function.BooleanSupplier degradedProbe;
     private volatile HealthChecker checker;
     private volatile TypedHealthCollector typedCollector;
     private volatile StatusSink statusSink;
@@ -109,6 +111,19 @@ public class HealthReporter implements AutoCloseable {
      * Sets an optional health checker that is called on each publish cycle.
      * The checker's result overrides the stored status (except during DRAINING).
      */
+    /**
+     * Installs a chassis-level health FLOOR: while it returns true the instance
+     * publishes UNHEALTHY no matter what the service's own checker says.
+     *
+     * Used for conditions the service cannot sensibly evaluate and must not be
+     * able to mask — currently "our credentials are being rejected and
+     * re-minting is not helping". Applied AFTER the checker precisely so it is
+     * a floor, not a default.
+     */
+    public void setDegradedProbe(java.util.function.BooleanSupplier probe) {
+        this.degradedProbe = probe;
+    }
+
     public void setHealthChecker(HealthChecker checker) {
         this.checker = checker;
     }
@@ -240,6 +255,17 @@ public class HealthReporter implements AutoCloseable {
                 LOG.warning("HealthChecker failed; publishing UNHEALTHY: " + e.getMessage());
                 effectiveStatus = InstanceStatus.INSTANCE_STATUS_UNHEALTHY;
             }
+        }
+
+        // Chassis floor. A service can raise its status with its own checker but
+        // must not report healthy while it cannot authenticate: readiness kept
+        // reporting Ready through a total auth outage because the probe only
+        // asked whether the process was listening.
+        java.util.function.BooleanSupplier probe = degradedProbe;
+        if (effectiveStatus != InstanceStatus.INSTANCE_STATUS_DRAINING
+                && probe != null && probe.getAsBoolean()) {
+            LOG.warning("credentials are being rejected and re-minting is not helping; publishing UNHEALTHY");
+            effectiveStatus = InstanceStatus.INSTANCE_STATUS_UNHEALTHY;
         }
 
         // Notify the status sink (e.g. gRPC health endpoint) of the effective status.

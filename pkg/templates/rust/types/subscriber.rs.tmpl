@@ -166,14 +166,37 @@ impl Subscriber {
                     let status = e.downcast_ref::<tonic::Status>();
                     if let Some(s) = status {
                         match s.code() {
-                            tonic::Code::Cancelled
-                            | tonic::Code::PermissionDenied
-                            | tonic::Code::Unauthenticated => {
+                            // Only an explicit cancellation is fatal. CANCELLED
+                            // means we are shutting down or the caller went away;
+                            // reconnecting then would spin forever.
+                            tonic::Code::Cancelled => {
                                 tracing::error!(
                                     error = %e,
-                                    "{{.SourcePackage}}.{{.SourceField}} subscription non-retryable error"
+                                    "{{.SourcePackage}}.{{.SourceField}} subscription cancelled"
                                 );
                                 return;
+                            }
+                            // UNAUTHENTICATED and PERMISSION_DENIED are RETRYABLE.
+                            //
+                            // They were fatal here, so the FIRST transient auth
+                            // blip killed a rust service's subscription for the
+                            // life of the process — an event-bus restart before
+                            // its verifying keys warm up, a token rotation, or
+                            // authorizer JWK-cache lag was enough. go and java
+                            // both retry these, and go's template says why in as
+                            // many words; rust was the outlier.
+                            //
+                            // A rejected credential also has to invalidate the
+                            // token cache, or the retry replays the same dead
+                            // token: the cache is keyed on expiry and an
+                            // authority restart invalidates a token that has NOT
+                            // expired.
+                            tonic::Code::Unauthenticated | tonic::Code::PermissionDenied => {
+                                service_im::note_if_credential_rejection(&e.to_string()).await;
+                                tracing::error!(
+                                    error = %e,
+                                    "{{.SourcePackage}}.{{.SourceField}} subscription auth error, retrying"
+                                );
                             }
                             _ => {}
                         }

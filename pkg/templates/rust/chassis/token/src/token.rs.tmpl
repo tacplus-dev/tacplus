@@ -738,9 +738,23 @@ impl Token {
             keys::PublicKey::Rsa(rsa_key) => {
                 use rsa::signature::Verifier as RsaVerifier;
                 use rsa::pkcs1v15::VerifyingKey;
-                use sha2::{Sha384, Sha512};
+                use sha2::{Sha256, Sha384, Sha512};
 
                 match jwk.alg() {
+                    // RS256 is here for EXTERNAL identity providers. Tokens we
+                    // issue ourselves use RS384/RS512, but an IdP picks its own
+                    // algorithm and RS256 is what most of them use — Keycloak
+                    // included. Without this arm every external id_token failed
+                    // as an unsupported algorithm, which is why oauth could not
+                    // verify signatures at all and ended up not verifying them.
+                    "RS256" => {
+                        let verifier = VerifyingKey::<Sha256>::new(rsa_key.clone());
+                        let sig = rsa::pkcs1v15::Signature::try_from(signature_bytes.as_slice())
+                            .map_err(|e| AuthError::unauthorized(format!("invalid signature format: {}", e)))?;
+                        verifier
+                            .verify(signing_input.as_bytes(), &sig)
+                            .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
+                    }
                     "RS384" => {
                         let verifier = VerifyingKey::<Sha384>::new(rsa_key.clone());
                         let sig = rsa::pkcs1v15::Signature::try_from(signature_bytes.as_slice())

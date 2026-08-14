@@ -125,7 +125,22 @@ impl ImmutableJwk {
 
         use rsa::traits::PublicKeyParts;
         let key_bytes = (public_key.n().bits() + 7) / 8;
-        let alg = match key_bytes {
+        // Key size is the FALLBACK, not an override.
+        //
+        // A JWK that declares its algorithm is telling us how its signatures
+        // were produced, and that determines the digest — so overwriting it
+        // makes verification use the wrong hash and fail. Deriving from size
+        // suits keys we issue ourselves (where the size/alg pairing is our own
+        // convention and `alg` is often absent), but an external IdP picks its
+        // own: Keycloak signs with RS256 on a 2048-bit key, which this mapping
+        // called RS384, so EVERY external id_token failed with
+        // "token alg RS256 does not match JWK alg RS384". Caught by verifying a
+        // real token from the live IdP rather than a fixture.
+        //
+        // The alg-confusion protection is unaffected: Token::verify still
+        // requires the token's alg to equal the key's, so a token cannot pick
+        // its own algorithm — it must match what the key declares.
+        let derived = match key_bytes {
             0..=255 => {
                 return Err(AuthError::missing_invalid_data(format!(
                     "unsupported RSA key size: {} bytes",
@@ -134,6 +149,16 @@ impl ImmutableJwk {
             }
             256..=511 => "RS384",
             _ => "RS512",
+        };
+        let alg = match jwk.alg.as_deref() {
+            Some(declared @ ("RS256" | "RS384" | "RS512")) => declared,
+            Some(other) => {
+                return Err(AuthError::missing_invalid_data(format!(
+                    "unsupported RSA JWK alg: {}",
+                    other
+                )))
+            }
+            None => derived,
         };
 
         Ok(Self {

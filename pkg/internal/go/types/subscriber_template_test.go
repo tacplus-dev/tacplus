@@ -59,10 +59,17 @@ func TestGoSubscriberUsesDeclaredBrokerService(t *testing.T) {
 		t.Fatalf("read generated subscriber: %v", err)
 	}
 	rendered := string(data)
-	if !strings.Contains(rendered, `fullMethod := "/events.EventBusTypedService/SubscribeAlphaSharedEventBusEventStream"`) {
+	// Per-topic: the subscribe path the generated proto declares. The broker
+	// tag no longer appears in the METHOD name and must not — the per-topic
+	// service is declared in the topic's own package whichever broker hosts
+	// it. The declared tag still selects the CONNECTION: handler_gen resolves
+	// TargetService via ServiceHealthState, which is the routing decision.
+	// This test therefore still catches a subscriber wired to the wrong
+	// topic, and no longer asserts a name no proto declares.
+	if !strings.Contains(rendered, `fullMethod := "/alpha.SharedEventBusStateService/SubscribeToEventStream"`) {
 		t.Fatalf("subscriber did not use declared broker service:\n%s", rendered)
 	}
-	if strings.Contains(rendered, `"/eventbus.EventBusTypedService/SubscribeAlphaSharedEventBusEventStream"`) {
+	if strings.Contains(rendered, `EventBusTypedService`) {
 		t.Fatalf("subscriber fell back to hard-coded eventbus broker:\n%s", rendered)
 	}
 }

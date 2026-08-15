@@ -35,8 +35,8 @@ type tsSubscriberTemplateData struct {
 	EnvelopeName       string // e.g. "AegisStateEventStreamSubscribeRecord"
 	EnvelopeSchemaName string // e.g. "AegisStateEventStreamSubscribeRecordSchema"
 	TypeImportPath     string // relative import path to the generated type index
-	GrpcService        string // e.g. "eventbus.EventBusTypedService"
-	GrpcMethod         string // e.g. "SubscribeAegisAegisStateEventStream"
+	GrpcService        string // e.g. "alpha.SharedEventBusStateService" (per-topic; see EVENTBUS-PUBLISH-API-SPLIT.md)
+	GrpcMethod         string // e.g. "SubscribeToEventStream"
 }
 
 type tsSubscriptionEventInfo struct {
@@ -153,6 +153,11 @@ func generateTsSubscribers(config *tactype.Config) error {
 		rpcStem := eventbus.RPCStemForTopicParts(sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)
 		modName := strutil.ToSnakeCase(rpcStem)
 
+		// Per-topic subscribe name, built once in the eventbus package so the
+		// five language generators cannot spell one wire contract five ways.
+		subService, subMethod := eventbus.PerTopicSubscribeParts(
+			sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)
+
 		data := tsSubscriberTemplateData{
 			SourcePackage:   sub.SourcePackage,
 			SourceStateRoot: sub.SourceStateRoot,
@@ -163,8 +168,8 @@ func generateTsSubscribers(config *tactype.Config) error {
 			EnvelopeName:       strutil.ToPascalCase(sub.SourceStateRoot) + fieldPascal + "SubscribeRecord",
 			EnvelopeSchemaName: strutil.ToPascalCase(sub.SourceStateRoot) + fieldPascal + "SubscribeRecordSchema",
 			TypeImportPath:     tsRelativeModuleImport(filepath.Join(config.GetSmPrefix(), "subscribe"), event.ModuleDir),
-			GrpcService:        eventbus.TypedServiceFullName(sub.TargetService),
-			GrpcMethod:         "Subscribe" + rpcStem,
+			GrpcService:        subService,
+			GrpcMethod:         subMethod,
 		}
 
 		var buf bytes.Buffer

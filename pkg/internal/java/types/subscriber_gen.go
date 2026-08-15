@@ -30,8 +30,8 @@ type javaSubscriberTemplateData struct {
 	TypeImport      string // e.g. "com.example.types.vservices.aegis.Aegis"
 	TypeOuterClass  string // e.g. "Aegis"
 	ClassName       string // e.g. "AegisEventStreamSubscriber"
-	GrpcService     string // e.g. "eventbus.EventBusTypedService"
-	GrpcMethod      string // e.g. "SubscribeAegisAegisStateEventStream"
+	GrpcService     string // e.g. "alpha.SharedEventBusStateService" (per-topic; see EVENTBUS-PUBLISH-API-SPLIT.md)
+	GrpcMethod      string // e.g. "SubscribeToEventStream"
 }
 
 type javaSubscriptionEventInfo struct {
@@ -180,6 +180,11 @@ func generateJavaSubscribers(config *tactype.Config, protoDir string) error {
 		rpcStem := eventbus.RPCStemForTopicParts(sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)
 		className := rpcStem + "Subscriber"
 
+		// Per-topic subscribe name, built once in the eventbus package so the
+		// five language generators cannot spell one wire contract five ways.
+		subService, subMethod := eventbus.PerTopicSubscribeParts(
+			sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)
+
 		data := javaSubscriberTemplateData{
 			PackageBase:     subscribePkg,
 			SourcePackage:   sub.SourcePackage,
@@ -190,8 +195,8 @@ func generateJavaSubscribers(config *tactype.Config, protoDir string) error {
 			TypeImport:      event.TypeImport,
 			TypeOuterClass:  event.TypeOuterClass,
 			ClassName:       className,
-			GrpcService:     eventbus.TypedServiceFullName(sub.TargetService),
-			GrpcMethod:      "Subscribe" + rpcStem,
+			GrpcService:     subService,
+			GrpcMethod:      subMethod,
 		}
 
 		var buf bytes.Buffer

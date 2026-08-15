@@ -129,6 +129,11 @@ func generateSubscribers(config *tactype.Config) error {
 		rpcStem := eventbus.RPCStemForTopicParts(sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)
 		modName := strutil.ToSnakeCase(rpcStem)
 
+		// Per-topic subscribe name, built once in the eventbus package so the
+		// five language generators cannot spell one wire contract five ways.
+		subService, subMethod := eventbus.PerTopicSubscribeParts(
+			sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)
+
 		data := subscriberTemplateData{
 			SourcePackage:   sub.SourcePackage,
 			SourceStateRoot: sub.SourceStateRoot,
@@ -138,8 +143,8 @@ func generateSubscribers(config *tactype.Config) error {
 			TypePackage:     typePkg,
 			FieldPascal:     fieldPascal,
 			TypeName:        typeName,
-			GrpcService:     eventbus.TypedServiceFullName(sub.TargetService),
-			GrpcMethod:      "Subscribe" + rpcStem,
+			GrpcService:     subService,
+			GrpcMethod:      subMethod,
 		}
 
 		var buf bytes.Buffer
@@ -174,7 +179,7 @@ type subscriberTemplateData struct {
 	TypePackage     string // e.g. "sensor" — package where the type is defined
 	FieldPascal     string // e.g. "EventStream"
 	TypeName        string // e.g. "TopologyEvent"
-	GrpcService     string // e.g. "eventbus.EventBusTypedService"
-	GrpcMethod      string // e.g. "SubscribeAegisAegisStateEventStream"
+	GrpcService     string // e.g. "alpha.SharedEventBusStateService" (per-topic; see EVENTBUS-PUBLISH-API-SPLIT.md)
+	GrpcMethod      string // e.g. "SubscribeToEventStream"
 }
 

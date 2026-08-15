@@ -116,3 +116,15 @@ func SubscribePath(rpcStem string) string {
 func SubscribePathForBroker(brokerTag, rpcStem string) string {
 	return "/" + SubscribeFullMethodNameForBroker(brokerTag, rpcStem)
 }
+
+// PerTopicSubscribeParts returns the (service, method) pair a subscriber must
+// call for a topic, given the source package / state root / field a
+// SubscriptionData already carries.
+//
+// Kept here beside the publish helpers so the five language generators cannot
+// each assemble the name their own way — five independent spellings of one wire
+// contract is how the flat/per-topic split arose in the first place.
+func PerTopicSubscribeParts(sourcePackage, sourceStateRoot, sourceField string) (service, method string) {
+	ref := TopicRef{Package: sourcePackage, Message: sourceStateRoot, Field: sourceField}
+	return PerTopicServiceFullName(ref), "SubscribeTo" + pascalField(sourceField)
+}

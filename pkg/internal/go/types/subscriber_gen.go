@@ -31,8 +31,8 @@ type goSubscriberTemplateData struct {
 	TypeName        string // e.g. "SensorEvent"
 	TypeImport      string // e.g. "module/tacplus/types/common/sensor"
 	EventBusImport  string // e.g. "module/tacplus/types/sys/eventbus"
-	GrpcService     string // e.g. "eventbus.EventBusTypedService"
-	GrpcMethod      string // e.g. "SubscribeClaudesensorAgenticCodeEventBusEventStream"
+	GrpcService     string // e.g. "alpha.SharedEventBusStateService" (per-topic; see EVENTBUS-PUBLISH-API-SPLIT.md)
+	GrpcMethod      string // e.g. "SubscribeToEventStream"
 }
 
 // generateGoSubscribers generates per-topic subscriber packages for event-bus
@@ -78,7 +78,6 @@ func generateGoSubscribers(config *tactype.Config) error {
 		}
 
 		fieldPascal := strutil.ToPascalCase(sub.SourceField)
-		rpcStem := eventbus.RPCStemForTopicParts(sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)
 
 		// Resolve the type's proto directory from the parser (may differ from
 		// the state root's directory).
@@ -90,6 +89,11 @@ func generateGoSubscribers(config *tactype.Config) error {
 			typeCategory = dir
 		}
 
+		// Per-topic subscribe name, built once in the eventbus package so the
+		// five language generators cannot spell one wire contract five ways.
+		subService, subMethod := eventbus.PerTopicSubscribeParts(
+			sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)
+
 		data := goSubscriberTemplateData{
 			SourcePackage:   sub.SourcePackage,
 			SourceStateRoot: sub.SourceStateRoot,
@@ -98,8 +102,8 @@ func generateGoSubscribers(config *tactype.Config) error {
 			TypeName:        typeName,
 			TypeImport:      config.ModuleBasePath + "/types/" + typeCategory + "/" + typePkg,
 			EventBusImport:  config.ModuleBasePath + "/types/generated/eventbus_support",
-			GrpcService:     eventbus.TypedServiceFullName(sub.TargetService),
-			GrpcMethod:      "Subscribe" + rpcStem,
+			GrpcService:     subService,
+			GrpcMethod:      subMethod,
 		}
 
 		outDir := filepath.Join(config.OutputDir, "subscribe", sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)

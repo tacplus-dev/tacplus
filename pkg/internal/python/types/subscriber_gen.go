@@ -34,8 +34,8 @@ type pySubscriberTemplateData struct {
 	// meta, field 2 = payload. Decoding it (rather than the bare payload) recovers
 	// offset/timestamp/key for the handler (PC-C-5).
 	EnvelopeName    string // e.g. "AegisStateEventStreamSubscribeRecord"
-	GrpcService     string // e.g. "eventbus.EventBusTypedService"
-	GrpcMethod      string // e.g. "SubscribeAegisAegisStateEventStream"
+	GrpcService     string // e.g. "alpha.SharedEventBusStateService" (per-topic; see EVENTBUS-PUBLISH-API-SPLIT.md)
+	GrpcMethod      string // e.g. "SubscribeToEventStream"
 }
 
 type pySubscriptionEventInfo struct {
@@ -168,6 +168,11 @@ func generatePySubscribers(config *tactype.Config, protoDir string) error {
 		rpcStem := eventbus.RPCStemForTopicParts(sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)
 		modName := strutil.ToSnakeCase(rpcStem)
 
+		// Per-topic subscribe name, built once in the eventbus package so the
+		// five language generators cannot spell one wire contract five ways.
+		subService, subMethod := eventbus.PerTopicSubscribeParts(
+			sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)
+
 		data := pySubscriberTemplateData{
 			SourcePackage:   sub.SourcePackage,
 			SourceStateRoot: sub.SourceStateRoot,
@@ -177,8 +182,8 @@ func generatePySubscribers(config *tactype.Config, protoDir string) error {
 			TypeImportFrom:  event.TypeImportFrom,
 			TypePbModule:    event.TypePbModule,
 			EnvelopeName:    strutil.ToPascalCase(sub.SourceStateRoot) + fieldPascal + "SubscribeRecord",
-			GrpcService:     eventbus.TypedServiceFullName(sub.TargetService),
-			GrpcMethod:      "Subscribe" + rpcStem,
+			GrpcService:     subService,
+			GrpcMethod:      subMethod,
 		}
 
 		var buf bytes.Buffer

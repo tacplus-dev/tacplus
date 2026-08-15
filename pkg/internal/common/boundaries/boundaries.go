@@ -449,8 +449,13 @@ func CollectActorEventPublisherData(p *parser.DescriptorParser, protoDir string,
 			EventTypeName:     eventTypeName,
 			RPCStem:           binding.Topic.RPCStem,
 			PublishStreamName: "Publish" + binding.Topic.RPCStem,
-			PublishFullMethod: eventbus.PublishFullMethodNameForBroker(binding.Topic.EventBusTag, binding.Topic.RPCStem),
-			PublishPath:       eventbus.PublishPathForBroker(binding.Topic.EventBusTag, binding.Topic.RPCStem),
+			// Per-topic, not the flat eventbus.EventBusTypedService/Publish<Stem>.
+			// The flat name is declared in no proto in the tree, so a client
+			// emitting it is reachable only by hardcoding. The broker binds BOTH
+			// (eventbus d3b6f93, corrected in 25d2863), so publishers moving here
+			// keep working against a deployed broker.
+			PublishFullMethod: eventbus.PerTopicPublishFullMethodName(binding.Topic.Ref),
+			PublishPath:       eventbus.PerTopicPublishPath(binding.Topic.Ref),
 		})
 	}
 	return result, nil

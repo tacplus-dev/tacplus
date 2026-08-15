@@ -12,6 +12,63 @@ func TypedServiceFullName(brokerTag string) string {
 	return brokerTag + "." + typedServiceName
 }
 
+// PerTopicServiceFullName returns the per-topic gRPC service name for a topic:
+// "<package>.<Message>StateService".
+//
+// This is the convention the generated PROTO declares, and therefore the only
+// one a descriptor-driven caller -- grpcurl, verify-live, anything using
+// reflection -- can reach. The flat TypedServiceFullName above is declared in no
+// proto in the tree. See control/EVENTBUS-PUBLISH-API-SPLIT.md.
+//
+// The package comes from the topic_ref, which names the proto DECLARING the
+// state message. The broker derives the same name from its own model; the two
+// disagreed once (it used the event type's package instead) and produced a
+// service nothing declared -- eventbus 25d2863.
+func PerTopicServiceFullName(ref TopicRef) string {
+	return ref.Package + "." + ref.Message + "StateService"
+}
+
+// PerTopicPublishFullMethodName returns "<pkg>.<Message>StateService/PublishTo<Field>".
+func PerTopicPublishFullMethodName(ref TopicRef) string {
+	return PerTopicServiceFullName(ref) + "/PublishTo" + pascalField(ref.Field)
+}
+
+// PerTopicPublishPath returns the grpc.ClientConnInterface path for the
+// per-topic publish method.
+func PerTopicPublishPath(ref TopicRef) string {
+	return "/" + PerTopicPublishFullMethodName(ref)
+}
+
+// PerTopicSubscribeFullMethodName returns "<pkg>.<Message>StateService/SubscribeTo<Field>".
+func PerTopicSubscribeFullMethodName(ref TopicRef) string {
+	return PerTopicServiceFullName(ref) + "/SubscribeTo" + pascalField(ref.Field)
+}
+
+// PerTopicSubscribePath returns the grpc.ClientConnInterface path for the
+// per-topic subscribe method.
+func PerTopicSubscribePath(ref TopicRef) string {
+	return "/" + PerTopicSubscribeFullMethodName(ref)
+}
+
+// pascalField converts a proto field name ("trace_events") to the PascalCase
+// form used in the RPC name ("TraceEvents").
+func pascalField(field string) string {
+	var b []rune
+	upper := true
+	for _, r := range field {
+		if r == '_' {
+			upper = true
+			continue
+		}
+		if upper && r >= 'a' && r <= 'z' {
+			r = r - 'a' + 'A'
+		}
+		upper = false
+		b = append(b, r)
+	}
+	return string(b)
+}
+
 // PublishFullMethodName returns the canonical gRPC full method name for an
 // EventBus publish RPC stem.
 func PublishFullMethodName(rpcStem string) string {

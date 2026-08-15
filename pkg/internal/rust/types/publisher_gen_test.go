@@ -33,7 +33,11 @@ func TestExplicitPublisherEntryUsesCanonicalPath(t *testing.T) {
 	if entry.EventTypeFQN != "trace.TraceEvent" {
 		t.Fatalf("EventTypeFQN = %q, want trace.TraceEvent", entry.EventTypeFQN)
 	}
-	if entry.PublishPath != "/eventbus.EventBusTypedService/PublishClaudesensorTraceEventBusTraceEvents" {
+	// Per-topic: the path the generated proto declares. The flat
+	// "/eventbus.EventBusTypedService/Publish<Stem>" that used to be asserted
+	// here is declared in no proto in the tree, so only a client hardcoding it
+	// could reach the broker. See control/EVENTBUS-PUBLISH-API-SPLIT.md.
+	if entry.PublishPath != "/claudesensor.TraceEventBusStateService/PublishToTraceEvents" {
 		t.Fatalf("unexpected canonical publish path %q", entry.PublishPath)
 	}
 }
@@ -61,7 +65,12 @@ func TestPublisherEntryUsesDeclaredBrokerTag(t *testing.T) {
 	if entry.TargetService != "events" {
 		t.Fatalf("TargetService = %q, want events", entry.TargetService)
 	}
-	if entry.PublishPath != "/events.EventBusTypedService/PublishClaudesensorTraceEventBusTraceEvents" {
+	// The declared broker tag no longer appears in the METHOD name, and should
+	// not: the per-topic service is declared in the topic's own package
+	// regardless of which broker hosts it, and the proto is what makes the name
+	// reachable. The tag still selects the broker, which is what TargetService
+	// above asserts — that is the routing decision, not the method name.
+	if entry.PublishPath != "/claudesensor.TraceEventBusStateService/PublishToTraceEvents" {
 		t.Fatalf("unexpected canonical publish path %q", entry.PublishPath)
 	}
 }

@@ -99,7 +99,11 @@ func publisherEntryForTopic(topic eventbus.Topic, prefix, rpcStem, eventTypePath
 		EventTypeFQN:  topic.EventTypeFQN,
 		EventTypeName: eventType,
 		EventTypePath: eventTypePath,
-		PublishPath:   eventbus.PublishPathForBroker(topic.EventBusTag, rpcStem),
+		// Per-topic. This is the SECOND place a publish path is built —
+		// boundaries.go is the other — and switching only that one left the rust
+		// publisher still emitting the flat name into s2sm/mod.rs while every
+		// gate stayed green. See control/EVENTBUS-PUBLISH-API-SPLIT.md.
+		PublishPath:   eventbus.PerTopicPublishPath(topic.Ref),
 	}
 }
 

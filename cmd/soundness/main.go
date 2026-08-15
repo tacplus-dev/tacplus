@@ -514,6 +514,39 @@ var emittedManifestProbes = []struct {
 		},
 	},
 	{
+		// Every place that builds a publish path must build the PER-TOPIC one.
+		//
+		// This exists because switching one of them was not enough and nothing
+		// noticed. boundaries.go was moved to the per-topic helper while
+		// publisher_gen.go kept the flat one, and all four gates stayed green —
+		// the corpus asserts no publish path, so the mismatch only appeared when
+		// a real service was regenerated and the emitted string read by hand.
+		//
+		// The flat eventbus.EventBusTypedService/Publish<Stem> name is declared
+		// in no proto in the tree, so anything emitting it is reachable only by
+		// a client that hardcodes it. See control/EVENTBUS-PUBLISH-API-SPLIT.md.
+		name: "publish paths are per-topic at every construction site",
+		file: "pkg/internal/common/boundaries/boundaries.go",
+		patterns: []string{
+			"PerTopicPublishFullMethodName",
+			"PerTopicPublishPath",
+		},
+		forbidden: []string{
+			"PublishFullMethodNameForBroker(",
+			"PublishPathForBroker(",
+		},
+	},
+	{
+		name: "rust publisher emits the per-topic publish path",
+		file: "pkg/internal/rust/types/publisher_gen.go",
+		patterns: []string{
+			"PerTopicPublishPath",
+		},
+		forbidden: []string{
+			"PublishPathForBroker(",
+		},
+	},
+	{
 		name: "trace publisher declared event type routing",
 		file: "pkg/internal/common/boundaries/boundaries.go",
 		patterns: []string{

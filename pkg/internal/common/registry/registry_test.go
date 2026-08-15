@@ -1140,21 +1140,23 @@ func TestCollectEntitlementGrantsDoesNotDefaultUnclassifiedC2SToPackageAny(t *te
 func TestCollectEntitlementGrantsIncludesGeneratedEventBusTopicMethods(t *testing.T) {
 	root := &spec.PackageNode{Name: "types"}
 	methods := []registryGrantMethod{
-		eventTopicGrantMethod("eventbus", "PublishClaudesensorAgenticCodeEventBusEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWrite}, verbs.ScopeWrite),
-		eventTopicGrantMethod("eventbus", "SubscribeClaudesensorAgenticCodeEventBusEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWatch}, verbs.ScopeWatch),
-		eventTopicGrantMethod("claudesensor", "PublishClaudesensorAgenticCodeEventBusEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWrite}, verbs.ScopeWrite),
-		eventTopicGrantMethod("claudesensor", "SubscribeClaudesensorAgenticCodeEventBusEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWatch}, verbs.ScopeWatch),
+		// Per-topic service+rpc, matching the wire. A grant naming a service the
+		// caller never invokes cannot authorize it.
+		eventTopicGrantMethod("eventbus", "AgenticCodeEventBusStateService", "PublishToEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWrite}, verbs.ScopeWrite),
+		eventTopicGrantMethod("eventbus", "AgenticCodeEventBusStateService", "SubscribeToEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWatch}, verbs.ScopeWatch),
+		eventTopicGrantMethod("claudesensor", "AgenticCodeEventBusStateService", "PublishToEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWrite}, verbs.ScopeWrite),
+		eventTopicGrantMethod("claudesensor", "AgenticCodeEventBusStateService", "SubscribeToEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWatch}, verbs.ScopeWatch),
 	}
 
 	byToken := entitlementGrantMap(collectEntitlementGrants(root, methods...))
 	for _, want := range []string{
-		"EVENTBUS_EVENT_BUS_TYPED_SERVICE_PUBLISH_CLAUDESENSOR_AGENTIC_CODE_EVENT_BUS_EVENT_STREAM",
-		"EVENTBUS_EVENT_BUS_TYPED_SERVICE_SUBSCRIBE_CLAUDESENSOR_AGENTIC_CODE_EVENT_BUS_EVENT_STREAM",
+		"EVENTBUS_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_PUBLISH_TO_EVENT_STREAM",
+		"EVENTBUS_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_SUBSCRIBE_TO_EVENT_STREAM",
 		"EVENTBUS_ANY",
 		"EVENTBUS_WRITE_ANY",
 		"EVENTBUS_WATCH_ANY",
-		"CLAUDESENSOR_EVENT_BUS_TYPED_SERVICE_PUBLISH_CLAUDESENSOR_AGENTIC_CODE_EVENT_BUS_EVENT_STREAM",
-		"CLAUDESENSOR_EVENT_BUS_TYPED_SERVICE_SUBSCRIBE_CLAUDESENSOR_AGENTIC_CODE_EVENT_BUS_EVENT_STREAM",
+		"CLAUDESENSOR_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_PUBLISH_TO_EVENT_STREAM",
+		"CLAUDESENSOR_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_SUBSCRIBE_TO_EVENT_STREAM",
 		"CLAUDESENSOR_ANY",
 		"CLAUDESENSOR_WRITE_ANY",
 		"CLAUDESENSOR_WATCH_ANY",
@@ -1165,13 +1167,13 @@ func TestCollectEntitlementGrantsIncludesGeneratedEventBusTopicMethods(t *testin
 	}
 
 	wantEventBusAny := []string{
-		"EVENTBUS_EVENT_BUS_TYPED_SERVICE_PUBLISH_CLAUDESENSOR_AGENTIC_CODE_EVENT_BUS_EVENT_STREAM",
-		"EVENTBUS_EVENT_BUS_TYPED_SERVICE_SUBSCRIBE_CLAUDESENSOR_AGENTIC_CODE_EVENT_BUS_EVENT_STREAM",
+		"EVENTBUS_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_PUBLISH_TO_EVENT_STREAM",
+		"EVENTBUS_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_SUBSCRIBE_TO_EVENT_STREAM",
 	}
 	if !reflect.DeepEqual(byToken["EVENTBUS_ANY"].ExpandsTo, wantEventBusAny) {
 		t.Fatalf("EVENTBUS_ANY expands_to = %#v, want %#v", byToken["EVENTBUS_ANY"].ExpandsTo, wantEventBusAny)
 	}
-	wantClaudeWrite := []string{"CLAUDESENSOR_EVENT_BUS_TYPED_SERVICE_PUBLISH_CLAUDESENSOR_AGENTIC_CODE_EVENT_BUS_EVENT_STREAM"}
+	wantClaudeWrite := []string{"CLAUDESENSOR_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_PUBLISH_TO_EVENT_STREAM"}
 	if !reflect.DeepEqual(byToken["CLAUDESENSOR_WRITE_ANY"].ExpandsTo, wantClaudeWrite) {
 		t.Fatalf("CLAUDESENSOR_WRITE_ANY expands_to = %#v, want %#v", byToken["CLAUDESENSOR_WRITE_ANY"].ExpandsTo, wantClaudeWrite)
 	}

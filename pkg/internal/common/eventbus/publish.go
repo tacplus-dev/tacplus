@@ -128,3 +128,19 @@ func PerTopicSubscribeParts(sourcePackage, sourceStateRoot, sourceField string) 
 	ref := TopicRef{Package: sourcePackage, Message: sourceStateRoot, Field: sourceField}
 	return PerTopicServiceFullName(ref), "SubscribeTo" + pascalField(sourceField)
 }
+
+// PerTopicServiceName returns the bare per-topic service name ("<Message>StateService"),
+// unqualified by package. Grants carry package separately.
+func PerTopicServiceName(ref TopicRef) string {
+	return ref.Message + "StateService"
+}
+
+// PerTopicPublishRPC returns the per-topic publish RPC name ("PublishTo<Field>").
+func PerTopicPublishRPC(ref TopicRef) string {
+	return "PublishTo" + pascalField(ref.Field)
+}
+
+// PerTopicSubscribeRPC returns the per-topic subscribe RPC name ("SubscribeTo<Field>").
+func PerTopicSubscribeRPC(ref TopicRef) string {
+	return "SubscribeTo" + pascalField(ref.Field)
+}

@@ -444,10 +444,20 @@ func collectEventTopicEntitlementGrantMethods(fds []*parser.FileDescriptor) ([]r
 		if topic.Ref.Package != topic.EventBusTag {
 			packages = append(packages, topic.Ref.Package)
 		}
+		// The grant must describe the SAME service+rpc the caller actually
+		// invokes, because MethodGrant is documented as the only grant shape a
+		// runtime authorizer matches. The wire moved to per-topic, so these move
+		// with it; leaving them on the flat names would describe the
+		// authorization identity of these calls in a naming scheme that no
+		// longer exists on the wire. It happens to be inert today only because
+		// the platform's topics declare auth_services ["*"], which never
+		// consults an exact grant — the first topic to restrict callers would
+		// have found the mismatch the hard way.
+		perTopicService := eventbus.PerTopicServiceName(topic.Ref)
 		for _, pkg := range packages {
 			methods = append(methods,
-				eventTopicGrantMethod(pkg, "Publish"+topic.RPCStem, []verbs.Scope{verbs.ScopeAny, verbs.ScopeWrite}, verbs.ScopeWrite),
-				eventTopicGrantMethod(pkg, "Subscribe"+topic.RPCStem, []verbs.Scope{verbs.ScopeAny, verbs.ScopeWatch}, verbs.ScopeWatch),
+				eventTopicGrantMethod(pkg, perTopicService, eventbus.PerTopicPublishRPC(topic.Ref), []verbs.Scope{verbs.ScopeAny, verbs.ScopeWrite}, verbs.ScopeWrite),
+				eventTopicGrantMethod(pkg, perTopicService, eventbus.PerTopicSubscribeRPC(topic.Ref), []verbs.Scope{verbs.ScopeAny, verbs.ScopeWatch}, verbs.ScopeWatch),
 			)
 		}
 	}
@@ -455,11 +465,11 @@ func collectEventTopicEntitlementGrantMethods(fds []*parser.FileDescriptor) ([]r
 	return methods, nil
 }
 
-func eventTopicGrantMethod(pkg, rpc string, scopes []verbs.Scope, capability verbs.Scope) registryGrantMethod {
+func eventTopicGrantMethod(pkg, service, rpc string, scopes []verbs.Scope, capability verbs.Scope) registryGrantMethod {
 	method := registryGrantMethod{
 		meta: verbs.MethodMeta{
 			Package:    pkg,
-			Service:    "EventBusTypedService",
+			Service:    service,
 			RPC:        rpc,
 			Scopes:     scopes,
 			Capability: capability,

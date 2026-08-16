@@ -90,7 +90,10 @@ func EnsureEventBusSupportProto(protoDir string, opts EventBusSupportProtoOption
 	b.WriteString("  }\n")
 	b.WriteString("  string consumer_group = 5;\n")
 	b.WriteString("}\n\n")
-	b.WriteString("message PublishResponse { bool success = 1; string error = 2; int64 offset = 3; }\n")
+	// Must match eventbus.PublishResponse in platform/proto/services/eventbus.proto
+	// byte-for-byte on the wire — the broker returns that message, generated
+	// publishers decode it with this one.
+	b.WriteString("message PublishResponse { int32 partition = 1; int64 offset = 2; }\n")
 
 	if err := os.WriteFile(path, []byte(b.String()), 0644); err != nil {
 		return "", fmt.Errorf("write %s: %w", EventBusSupportProtoPath, err)

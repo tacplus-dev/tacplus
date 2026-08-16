@@ -39,7 +39,7 @@ func TestEnsureEventBusSupportProtoWritesCanonicalMessages(t *testing.T) {
 		`bool latest = 3;`,
 		`bool earliest = 4;`,
 		`string consumer_group = 5;`,
-		`message PublishResponse { bool success = 1; string error = 2; int64 offset = 3; }`,
+		`message PublishResponse { int32 partition = 1; int64 offset = 2; }`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("support proto missing %q in:\n%s", want, text)

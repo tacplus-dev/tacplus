@@ -35,7 +35,8 @@ type ServiceInfo struct {
 	IsS2S             bool     // service_s2s: service-to-service (internal) traffic
 	IsSMB             bool     // smb: service instances use a black-box peer protocol
 	SmbRoot           spec.SmbRoot
-	Synthesized       bool // tacplus-generated service surface
+	Synthesized       bool   // tacplus-generated service surface
+	SynthesizedKind   string // which generated surface: SynthesizedKindState/Store/RecordMap/OpaEval; "" when not synthesized or kind absent
 }
 
 // MethodInfo represents a gRPC method

@@ -1372,12 +1372,27 @@ func Generate(config *tactype.Config) error {
 	return nil
 }
 
+// s2sGenerationEnabled reports whether this build emits a service-to-service
+// surface, and therefore whether the generated ServiceManager will need an S2S
+// identity (which is what ValidateTokenMinters polices).
+//
+// Synthesized STORE services do not count. spec.service_store synthesizes one
+// <Msg>StoreService per record and emits each as S2S, so a c2d-only daemon that
+// declares records — and uses only the s2sm/diskstore helpers, never the store
+// services — was reported as having an S2S surface and hard-failed generation
+// with "no authoritative (spec.token_minter) service is declared". sideband2 is
+// the concrete case.
+//
+// Synthesized STATE services DO count, which is why this tests the kind rather
+// than Synthesized: a service with a state root must reach its state host, so it
+// genuinely needs an S2S identity, and dropping every synthesized service from
+// this gate would have silently stopped requiring a minter for that whole class.
 func s2sGenerationEnabled(config *tactype.Config, serverServices []ServiceInfo) bool {
 	if config.GrpcS2SClientAll || len(config.GrpcS2SClients) > 0 {
 		return true
 	}
 	for _, svc := range serverServices {
-		if svc.IsS2S {
+		if svc.IsS2S && svc.SynthesizedKind != parser.SynthesizedKindStore {
 			return true
 		}
 	}

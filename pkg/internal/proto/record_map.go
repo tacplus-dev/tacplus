@@ -322,7 +322,7 @@ message %[1]sWatchEvent {
 	// EnforceVerbs gate skips it — its query-lifecycle verbs (Open/Count/Sample/
 	// Pull/Close/Refine) are a generated S2S vocabulary, not governed REST verbs
 	// (cf. the state/opa injectors, which mark themselves the same way).
-	sb.WriteString("\n// tacplus:generated-service\nservice RecordMap {\n")
+	sb.WriteString("\n// tacplus:generated-service " + parser.SynthesizedKindRecordMap + "\nservice RecordMap {\n")
 	sb.WriteString("  option (spec.service_s2s) = {auth_services: [\"argus\"]};\n")
 	for _, r := range records {
 		hasFilter := len(r.filters) > 0

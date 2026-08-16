@@ -44,6 +44,10 @@ type ServiceInfo struct {
 	AuthServices   []string // S2S: allowed caller identities
 	HasMethodAuth  bool     // true if any per-method auth metadata must be registered
 	HostTag        string   // non-empty for vservices: the SelfPackage of the service that hosts this RPC surface
+	// SynthesizedKind is WHICH tacplus-generated surface this is
+	// (parser.SynthesizedKind*), empty for hand-authored services. See the go
+	// generator's field for why the kind, not just the fact, is what matters.
+	SynthesizedKind string
 }
 
 // detectServicesForWrapper scans proto files to find service definitions that need wrapper generation.
@@ -185,25 +189,26 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				}
 			}
 			servicesInfo = append(servicesInfo, ServiceInfo{
-				ProtoFile:      relPath,
-				PackageName:    packageName,
-				ServiceName:    service.Name,
-				GrpcName:       service.GrpcName,
-				IsGrpc:         isGrpc,
-				IsS2S:          service.IsS2S,
-				IsC2S:          service.IsC2S,
-				IsC2D:          service.IsC2D,
-				IsSMB:          service.IsSMB,
-				SmbRoot:        service.SmbRoot,
-				OutputDir:      outputDir,
-				TypesOutputDir: typesOutputDir,
-				ParentDir:      parentDir,
-				Config:         config,
-				AuthDisabled:   service.AuthDisabled,
-				AuthAnyUser:    anyUser,
-				AuthServices:   service.AuthServices,
-				HasMethodAuth:  hasMethodAuth,
-				HostTag:        service.HostTag,
+				ProtoFile:       relPath,
+				PackageName:     packageName,
+				ServiceName:     service.Name,
+				GrpcName:        service.GrpcName,
+				IsGrpc:          isGrpc,
+				IsS2S:           service.IsS2S,
+				SynthesizedKind: service.SynthesizedKind,
+				IsC2S:           service.IsC2S,
+				IsC2D:           service.IsC2D,
+				IsSMB:           service.IsSMB,
+				SmbRoot:         service.SmbRoot,
+				OutputDir:       outputDir,
+				TypesOutputDir:  typesOutputDir,
+				ParentDir:       parentDir,
+				Config:          config,
+				AuthDisabled:    service.AuthDisabled,
+				AuthAnyUser:     anyUser,
+				AuthServices:    service.AuthServices,
+				HasMethodAuth:   hasMethodAuth,
+				HostTag:         service.HostTag,
 			})
 		}
 
@@ -468,7 +473,6 @@ func getOuterClassNameForWrapper(typesOutputDir, protoFile string) string {
 
 	return defaultName
 }
-
 
 // serverClassName returns the Java class name for a service wrapper.
 func serverClassName(serviceName string) string {

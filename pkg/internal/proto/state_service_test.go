@@ -5,6 +5,7 @@ package proto
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -178,12 +179,15 @@ func TestStateImportEmitsReadOnlyStateServiceBoundary(t *testing.T) {
 
 func assertGeneratedServiceMarkerLeadsService(t *testing.T, protoText, serviceName string) {
 	t.Helper()
-	want := "// tacplus:generated-service\nservice " + serviceName + " {"
-	if !strings.Contains(protoText, want) {
-		t.Fatalf("generated service marker must directly lead %s; want substring %q in:\n%s", serviceName, want, protoText)
+	// The sentinel now carries a KIND word, so match the marker and the service
+	// line as a pair rather than one fixed string: the parser reads the kind, and a
+	// test pinned to the bare marker would forbid emitting it.
+	re := regexp.MustCompile(`// tacplus:generated-service ?\w*\nservice ` + regexp.QuoteMeta(serviceName) + ` \{`)
+	if !re.MatchString(protoText) {
+		t.Fatalf("generated service marker must directly lead %s; want %q in:\n%s", serviceName, re, protoText)
 	}
-	bad := "// tacplus:generated-service\n\nservice " + serviceName + " {"
-	if strings.Contains(protoText, bad) {
+	badRe := regexp.MustCompile(`// tacplus:generated-service ?\w*\n\nservice ` + regexp.QuoteMeta(serviceName) + ` \{`)
+	if badRe.MatchString(protoText) {
 		t.Fatalf("generated service marker must not be detached by a blank line for %s", serviceName)
 	}
 }

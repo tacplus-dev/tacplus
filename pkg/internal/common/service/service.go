@@ -47,8 +47,12 @@ type ServiceInfo struct {
 	// structurally impossible as a result -- ListProviders, Authorize and
 	// MintCallbackTokens must all be callable before a token exists.
 	AuthExemptPaths []string
-	HostTag       string   // non-empty for vservices: the SelfPackage of the service that hosts this RPC surface
-	Synthesized   bool     // tacplus-generated state/store/mutation/opa service (not user-defined); excluded from own-package server generation
+	HostTag         string // non-empty for vservices: the SelfPackage of the service that hosts this RPC surface
+	Synthesized     bool   // tacplus-generated state/store/mutation/opa service (not user-defined); excluded from own-package server generation
+	// SynthesizedKind is WHICH generated surface (parser.SynthesizedKind*).
+	// Synthesized alone cannot answer "does this build need an S2S identity":
+	// a generated STATE service says yes, a generated STORE service does not.
+	SynthesizedKind string
 }
 
 // AccountingInfo holds accounting metadata for a service, derived from scanServiceRPCs.
@@ -518,27 +522,28 @@ func DetectServicesForWrapper(config *tactype.Config, inputDir string, outputDir
 			anyUser, hasMethodAuth := deriveServiceAuthFlags(svc)
 			authExempt := authExemptMethodPaths(packageName, svc)
 			servicesInfo = append(servicesInfo, ServiceInfo{
-				ProtoFile:     relPath,
-				PackageName:   packageName,
-				ServiceName:   svc.Name,
-				GrpcName:      svc.GrpcName,
-				IsGrpc:        svc.GrpcName != "",
-				IsS2S:         svc.IsS2S,
-				IsC2S:         svc.IsC2S,
-				IsC2D:         svc.IsC2D,
-				C2DSocketPath: svc.C2DSocketPath,
-				IsSMB:         svc.IsSMB,
-				SmbRoot:       svc.SmbRoot,
-				OutputDir:     outputDir,
-				ParentDir:     parentDir,
-				Config:        config,
-				AuthDisabled:  svc.AuthDisabled,
-				AuthAnyUser:   anyUser,
-				AuthServices:  svc.AuthServices,
-				HasMethodAuth: hasMethodAuth,
+				ProtoFile:       relPath,
+				PackageName:     packageName,
+				ServiceName:     svc.Name,
+				GrpcName:        svc.GrpcName,
+				IsGrpc:          svc.GrpcName != "",
+				IsS2S:           svc.IsS2S,
+				IsC2S:           svc.IsC2S,
+				IsC2D:           svc.IsC2D,
+				C2DSocketPath:   svc.C2DSocketPath,
+				IsSMB:           svc.IsSMB,
+				SmbRoot:         svc.SmbRoot,
+				OutputDir:       outputDir,
+				ParentDir:       parentDir,
+				Config:          config,
+				AuthDisabled:    svc.AuthDisabled,
+				AuthAnyUser:     anyUser,
+				AuthServices:    svc.AuthServices,
+				HasMethodAuth:   hasMethodAuth,
 				AuthExemptPaths: authExempt,
-				HostTag:       svc.HostTag,
-				Synthesized:   svc.Synthesized,
+				HostTag:         svc.HostTag,
+				Synthesized:     svc.Synthesized,
+				SynthesizedKind: svc.SynthesizedKind,
 			})
 		}
 

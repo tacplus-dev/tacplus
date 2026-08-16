@@ -1096,6 +1096,12 @@ type ServiceInfo struct {
 	IsC2D         bool     // true when this is a client-to-daemon service
 	IsSMB         bool     // true when this service has spec.smb
 	SmbRoot       spec.SmbRoot
+	// SynthesizedKind is WHICH tacplus-generated surface this is
+	// (parser.SynthesizedKind*), empty for hand-authored services. Carried so the
+	// token-minter gate can tell a generated STATE service (the process must reach
+	// its state host, so it needs an S2S identity) from a generated STORE service
+	// (a c2d daemon may never serve or call one).
+	SynthesizedKind string
 }
 
 // ImportDirName returns the directory name to use in Go import paths.
@@ -1592,23 +1598,24 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 				}
 			}
 			servicesInfo = append(servicesInfo, ServiceInfo{
-				ProtoFile:     protoFileForInfo,
-				PackageName:   packageName,
-				DirName:       dirNameForInfo,
-				ServiceName:   service.Name,
-				GrpcName:      service.GrpcName,
-				HostTag:       service.HostTag,
-				OutputDir:     outputDir,
-				ParentDir:     parentDirForInfo,
-				Config:        config,
-				AuthDisabled:  service.AuthDisabled,
-				AuthAnyUser:   anyUser,
-				AuthServices:  service.AuthServices,
-				HasMethodAuth: hasMethodAuth,
-				IsS2S:         service.IsS2S,
-				IsC2D:         service.IsC2D,
-				IsSMB:         service.IsSMB,
-				SmbRoot:       service.SmbRoot,
+				ProtoFile:       protoFileForInfo,
+				PackageName:     packageName,
+				DirName:         dirNameForInfo,
+				ServiceName:     service.Name,
+				GrpcName:        service.GrpcName,
+				HostTag:         service.HostTag,
+				OutputDir:       outputDir,
+				ParentDir:       parentDirForInfo,
+				Config:          config,
+				AuthDisabled:    service.AuthDisabled,
+				AuthAnyUser:     anyUser,
+				AuthServices:    service.AuthServices,
+				HasMethodAuth:   hasMethodAuth,
+				IsS2S:           service.IsS2S,
+				IsC2D:           service.IsC2D,
+				IsSMB:           service.IsSMB,
+				SmbRoot:         service.SmbRoot,
+				SynthesizedKind: service.SynthesizedKind,
 			})
 		}
 	}
@@ -1620,12 +1627,27 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 	return servicesInfo, nil
 }
 
+// s2sGenerationEnabled reports whether this build emits a service-to-service
+// surface, and therefore whether the generated ServiceManager will need an S2S
+// identity (which is what ValidateTokenMinters polices).
+//
+// Synthesized STORE services do not count. spec.service_store synthesizes one
+// <Msg>StoreService per record and emits each as S2S, so a c2d-only daemon that
+// declares records — and uses only the s2sm/diskstore helpers, never the store
+// services — was reported as having an S2S surface and hard-failed generation
+// with "no authoritative (spec.token_minter) service is declared". sideband2 is
+// the concrete case.
+//
+// Synthesized STATE services DO count, which is why this tests the kind rather
+// than Synthesized: a service with a state root must reach its state host, so it
+// genuinely needs an S2S identity, and dropping every synthesized service from
+// this gate would have silently stopped requiring a minter for that whole class.
 func s2sGenerationEnabled(config *tactype.Config, serverServices []ServiceInfo) bool {
 	if config.GrpcS2SClientAll || len(config.GrpcS2SClients) > 0 {
 		return true
 	}
 	for _, svc := range serverServices {
-		if svc.IsS2S {
+		if svc.IsS2S && svc.SynthesizedKind != parser.SynthesizedKindStore {
 			return true
 		}
 	}

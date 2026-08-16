@@ -155,6 +155,17 @@ type ServiceDescriptor struct {
 	// Used to distinguish them from user-defined service_s2s with empty
 	// auth_services, which must NOT be filtered out of server generation.
 	Synthesized bool
+	// SynthesizedKind is WHICH generated surface this is, from the word after the
+	// sentinel (SynthesizedKindState/Store/RecordMap/OpaEval). Empty when
+	// Synthesized is false, and empty for a sentinel written without a kind.
+	//
+	// "Synthesized" alone is not enough to reason about: these surfaces do not all
+	// imply the same thing about the process. A generated STATE service means the
+	// process must reach its state host, and therefore needs an S2S identity. A
+	// generated STORE service is the mesh face of spec.service_store and a c2d
+	// daemon may never serve or call it at all. Collapsing the two is what made a
+	// c2d-only build demand a token minter.
+	SynthesizedKind string
 }
 
 // synthesizedServiceMarker is the sentinel emitted in a generated service's
@@ -162,7 +173,44 @@ type ServiceDescriptor struct {
 // synthesis). It marks tacplus-generated services so they can be excluded from
 // own-package server generation without the fragile "S2S + empty auth_services"
 // heuristic (which also matched legitimate user services).
+//
+// The sentinel may be followed by a single-word KIND
+// ("tacplus:generated-service store"). Readers must treat an absent kind as
+// "unknown synthesized surface" rather than as a specific one: the marker
+// predates the kind and a bare sentinel must keep parsing as Synthesized.
 const synthesizedServiceMarker = "tacplus:generated-service"
+
+// Synthesized service kinds, as written after the sentinel. These are the
+// vocabulary shared between the emitters in pkg/internal/proto and every reader
+// of ServiceDescriptor.Synthesized.
+const (
+	SynthesizedKindState     = "state"     // <Root>StateService / <Svc>ConfigStateService
+	SynthesizedKindStore     = "store"     // <Msg>StoreService, from spec.service_store
+	SynthesizedKindRecordMap = "recordmap" // RecordMap, the record working-set surface
+	SynthesizedKindOpaEval   = "opaeval"   // the OPA entitlement-evaluation surface
+)
+
+// parseSynthesizedKind returns the kind word following the sentinel in a
+// service's leading comment, or "" when the comment carries no sentinel or a
+// bare one. Only the four known kinds are accepted, so an unrecognized word
+// reads as "unknown" instead of silently becoming a new kind that no gate knows
+// how to treat.
+func parseSynthesizedKind(comment string) string {
+	idx := strings.Index(comment, synthesizedServiceMarker)
+	if idx < 0 {
+		return ""
+	}
+	rest := comment[idx+len(synthesizedServiceMarker):]
+	if nl := strings.IndexAny(rest, "\r\n"); nl >= 0 {
+		rest = rest[:nl]
+	}
+	switch word := strings.TrimSpace(rest); word {
+	case SynthesizedKindState, SynthesizedKindStore, SynthesizedKindRecordMap, SynthesizedKindOpaEval:
+		return word
+	default:
+		return ""
+	}
+}
 
 // MethodDescriptor contains RPC method information
 type MethodDescriptor struct {
@@ -627,10 +675,11 @@ func (p *DescriptorParser) parseEnumDescriptor(ed protoreflect.EnumDescriptor, c
 func (p *DescriptorParser) parseServiceDescriptor(sd protoreflect.ServiceDescriptor, cm commentMap, parentTag, svcIndex int, _pkg string) ServiceDescriptor {
 	svcComment := cm[pathKey(parentTag, svcIndex)]
 	svc := ServiceDescriptor{
-		Name:        string(sd.Name()),
-		Comment:     svcComment,
-		Methods:     []MethodDescriptor{},
-		Synthesized: strings.Contains(svcComment, synthesizedServiceMarker),
+		Name:            string(sd.Name()),
+		Comment:         svcComment,
+		Methods:         []MethodDescriptor{},
+		Synthesized:     strings.Contains(svcComment, synthesizedServiceMarker),
+		SynthesizedKind: parseSynthesizedKind(svcComment),
 	}
 
 	// Parse service options (service_s2s, service_c2s)
@@ -2700,6 +2749,7 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 			IsSMB:             svc.IsSMB,
 			SmbRoot:           svc.SmbRoot,
 			Synthesized:       svc.Synthesized,
+			SynthesizedKind:   svc.SynthesizedKind,
 		}
 
 		// Convert methods

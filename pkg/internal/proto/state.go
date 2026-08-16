@@ -380,7 +380,11 @@ func buildStateService(
 	buf.WriteString("\n// ============================================================================\n")
 	buf.WriteString("// Auto-generated State Service (tacplus)\n")
 	buf.WriteString("// ============================================================================\n")
-	buf.WriteString("// tacplus:generated-service\n")
+	// The sentinel carries its KIND. A generated STATE service means the process
+	// must reach its state host and therefore needs an S2S identity — unlike a
+	// generated store service, which a c2d daemon may never touch. Readers that
+	// cannot tell them apart forced a minter on builds that need none.
+	buf.WriteString("// tacplus:generated-service " + parser.SynthesizedKindState + "\n")
 
 	fmt.Fprintf(&buf, "service %s {\n", StateServiceName(stateName))
 
@@ -1481,7 +1485,7 @@ func buildStoreService(msgName, keyFieldName, tag string) string {
 	buf.WriteString("\n// ============================================================================\n")
 	buf.WriteString("// Auto-generated Store Service (tacplus)\n")
 	buf.WriteString("// ============================================================================\n")
-	buf.WriteString("// tacplus:generated-service\n")
+	buf.WriteString("// tacplus:generated-service " + parser.SynthesizedKindStore + "\n")
 
 	fmt.Fprintf(&buf, "service %s {\n", svcName)
 	// All store services are S2S — accessible only by authorized services.

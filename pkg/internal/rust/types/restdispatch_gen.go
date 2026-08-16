@@ -281,14 +281,30 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 		}
 		restRoot := descriptorParser.RestRootPath()
 		for _, vs := range vsEntries {
-			for _, rpc := range vs.RPCs {
+			for i, rpc := range vs.RPCs {
 				clientStreaming := strings.HasPrefix(rpc, "Publish")
 				serverStreaming := !strings.HasPrefix(rpc, "Publish")
 				scopesLiteral, capabilityLiteral, err := routeCapabilityMetadataFromShape(rpc, clientStreaming, serverStreaming, "")
 				if err != nil {
 					return fmt.Errorf("resolving vservice route capability metadata for %s/%s: %w", vs.Name, rpc, err)
 				}
-				grpcPath := fmt.Sprintf("/%s.EventBusTypedService/%s", vs.HostTag, rpc)
+				// The gRPC path comes from Routes, never from HostTag + rpc.
+				// This is the gateway's REST -> gRPC table: the browser-facing
+				// way into eventbus. It was the THIRD place building this path,
+				// and the last one still composing the flat broker-qualified
+				// name from a host tag plus the RPC stem, after publishers and
+				// subscribers had moved — which would have made every
+				// REST-initiated publish dispatch to a method the broker is
+				// about to stop serving.
+				//
+				// The HTTP path deliberately keeps the flat rpc name: it is a
+				// published URL and the entitlement key, so renaming it is a
+				// separate, breaking decision from fixing the wire.
+				if i >= len(vs.Routes) {
+					return fmt.Errorf("vservice %s: no per-topic route for RPC %s (Routes and RPCs must stay index-aligned)", vs.Name, rpc)
+				}
+				route := vs.Routes[i]
+				grpcPath := fmt.Sprintf("/%s/%s", route.Service, route.Method)
 				httpPath := fmt.Sprintf("%s/%s/%s", restRoot, vs.Name, rpc)
 				routes = append(routes, routeEntry{
 					HttpPath:           httpPath,

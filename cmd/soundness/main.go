@@ -537,6 +537,34 @@ var emittedManifestProbes = []struct {
 		},
 	},
 	{
+		// The gateway's REST -> gRPC table, and the THIRD place this path is
+		// built. It was still emitting the flat name after publishers and
+		// subscribers had moved, and the earlier version of this gate did not
+		// catch it because the gate enumerated the two files then known — the
+		// same enumerate-what-you-remember mistake as the bug itself.
+		//
+		// The check is now on the SHAPE: no site may compose a path from a
+		// broker tag and "EventBusTypedService". Any new site that tries trips
+		// this, whether or not anyone remembered to list it here.
+		name: "REST dispatch routes to the per-topic path",
+		file: "pkg/internal/rust/types/restdispatch_gen.go",
+		patterns: []string{
+			"vs.Routes",
+			"route.Service",
+		},
+		forbidden: []string{
+			"EventBusTypedService",
+		},
+	},
+	{
+		name: "vservice scan carries per-topic route coordinates",
+		file: "pkg/internal/proto/configholder.go",
+		patterns: []string{
+			"VServiceRoute",
+			"PerTopicServiceFullName",
+		},
+	},
+	{
 		name: "rust publisher emits the per-topic publish path",
 		file: "pkg/internal/rust/types/publisher_gen.go",
 		patterns: []string{

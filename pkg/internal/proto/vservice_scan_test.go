@@ -98,6 +98,13 @@ message AgenticCodeEventBus {
 			"PublishClaudesensorAgenticCodeEventBusEventStream",
 			"SubscribeClaudesensorAgenticCodeEventBusEventStream",
 		},
+		// Index-aligned with RPCs. These are what a caller dials; RPCs stay the
+		// flat historical names because they are also the entitlement keys and
+		// the published REST path segments.
+		Routes: []VServiceRoute{
+			{Service: "claudesensor.AgenticCodeEventBusStateService", Method: "PublishToEventStream"},
+			{Service: "claudesensor.AgenticCodeEventBusStateService", Method: "SubscribeToEventStream"},
+		},
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ScanVServiceRPCs() = %#v, want %#v", got, want)

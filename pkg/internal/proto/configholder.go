@@ -104,6 +104,20 @@ type VServiceEntry struct {
 	FieldID int32    // stable field number for TokenEntitlements
 	HostTag string   // physical service tag (e.g. "eventbus")
 	RPCs    []string // generated RPC names (e.g. "PublishClaudesensorAgenticCodeEventBusEventStream")
+	// Routes carries the per-topic wire coordinates for each entry in RPCs,
+	// index-aligned. RPCs holds the flat historical names, which are still the
+	// entitlement keys; Routes holds what a caller must actually dial. Anything
+	// building a gRPC path MUST use Routes — composing one from HostTag and an
+	// RPCs entry reproduces the flat name the broker is being moved off.
+	Routes []VServiceRoute
+}
+
+// VServiceRoute is the per-topic gRPC coordinate for one topic RPC:
+// a fully-qualified service ("agentsensor.AgentEventBusStateService") and its
+// method ("PublishToEventStream").
+type VServiceRoute struct {
+	Service string
+	Method  string
 }
 
 // ScanAndGenerateConfigHolder scans proto files for file-level (spec.service)
@@ -747,6 +761,7 @@ func ScanVServiceRPCs(scanDir string, reg *ServiceRegistry) ([]VServiceEntry, er
 		}
 
 		var rpcs []string
+		var routes []VServiceRoute
 		var hostTag string
 		for _, msg := range fd.Messages {
 			tagAnn, ok := msg.Annotations["service_event_tag"]
@@ -773,6 +788,17 @@ func ScanVServiceRPCs(scanDir string, reg *ServiceRegistry) ([]VServiceEntry, er
 				rpcSuffix := eventbus.RPCStemForTopicParts(fd.Package, msg.Name, field.Name)
 				rpcs = append(rpcs, "Publish"+rpcSuffix)
 				rpcs = append(rpcs, "Subscribe"+rpcSuffix)
+
+				// Per-topic coordinates, index-aligned with rpcs above. Built
+				// from the same three components the flat stem uses, through the
+				// shared eventbus helpers so this cannot drift from what
+				// publishers and subscribers emit.
+				ref := eventbus.TopicRef{Package: fd.Package, Message: msg.Name, Field: field.Name}
+				svcFQN := eventbus.PerTopicServiceFullName(ref)
+				routes = append(routes,
+					VServiceRoute{Service: svcFQN, Method: eventbus.PerTopicPublishRPC(ref)},
+					VServiceRoute{Service: svcFQN, Method: eventbus.PerTopicSubscribeRPC(ref)},
+				)
 			}
 		}
 
@@ -782,6 +808,7 @@ func ScanVServiceRPCs(scanDir string, reg *ServiceRegistry) ([]VServiceEntry, er
 				FieldID: int32(vsID),
 				HostTag: hostTag,
 				RPCs:    rpcs,
+				Routes:  routes,
 			})
 		}
 	}

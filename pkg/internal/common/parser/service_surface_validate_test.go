@@ -69,6 +69,75 @@ service Echo {
 	}
 }
 
+// service_c2d is the third caller surface and collapses the same way: the
+// downstream consumers take all three flags and pick ONE classification
+// (collection.TrustOf returns a single trust tier), so a service claiming both
+// the unauthenticated unix-socket surface and a network surface silently
+// becomes whichever one the classifier prefers. Reject it at the source.
+func TestValidateServiceSurfaces_RejectsC2DAlongsideAnotherSurface(t *testing.T) {
+	dp := writeSurfaceProtoDir(t, `syntax = "proto3";
+
+package surfacedemo;
+
+import "sys/spec.proto";
+
+message PingRequest {}
+message PingResponse {}
+
+service Echo {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+  option (spec.service_c2d) = {socket_path: "/run/surfacedemo.sock"};
+
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+service Daemon {
+  option (spec.service_s2s) = {auth_services: ["tasks"]};
+  option (spec.service_c2d) = {socket_path: "/run/surfacedemo-daemon.sock"};
+
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+`)
+
+	err := ValidateServiceSurfaces(dp)
+	if err == nil {
+		t.Fatal("ValidateServiceSurfaces accepted services declaring service_c2d alongside another surface")
+	}
+	for _, want := range []string{
+		"surfacedemo.Echo", "spec.service_c2s",
+		"surfacedemo.Daemon", "spec.service_s2s",
+		"spec.service_c2d", "split it into two services",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not name %q", err.Error(), want)
+		}
+	}
+}
+
+// A service declaring only service_c2d is a normal, supported shape and must
+// keep validating clean — the rule is "at most one", not "never c2d".
+func TestValidateServiceSurfaces_AllowsC2DAlone(t *testing.T) {
+	dp := writeSurfaceProtoDir(t, `syntax = "proto3";
+
+package surfacedemo;
+
+import "sys/spec.proto";
+
+message PingRequest {}
+message PingResponse {}
+
+service Daemon {
+  option (spec.service_c2d) = {socket_path: "/run/surfacedemo-daemon.sock"};
+
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+`)
+
+	if err := ValidateServiceSurfaces(dp); err != nil {
+		t.Fatalf("a c2d-only service must validate clean, got: %v", err)
+	}
+}
+
 // The supported shape for two surfaces on related RPCs — one service per
 // surface, as testapp's Echo (C2S) / Probe (S2S) split does — must keep
 // validating clean. This is what the rejection message steers authors to.

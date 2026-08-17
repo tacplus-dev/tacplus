@@ -134,6 +134,15 @@ public class {{.ClassName}} {
                 // UNAUTHENTICATED / PERMISSION_DENIED are retryable too: for
                 // S2S they are usually transient (e.g. event-bus restarted
                 // before its verifying keys warmed up).
+                //
+                // A rejected credential must also invalidate the token cache, or
+                // the retry replays the same dead token: the cache is keyed on
+                // expiry and an authority restart invalidates a token that has
+                // NOT expired. PERMISSION_DENIED is deliberately not treated as
+                // a rejection (see IdentityManager.isCredentialRejection) — that
+                // credential was understood and refused, so re-minting the same
+                // identity would loop. Mirrors rust's subscriber.
+                {{$.IdentityManagerFQN}}.noteIfCredentialRejection(e);
                 Level level = (code == Status.Code.UNAUTHENTICATED || code == Status.Code.PERMISSION_DENIED)
                         ? Level.SEVERE : Level.WARNING;
                 LOG.log(level, "{{.SourcePackage}}.{{.SourceField}} subscription failed (gRPC status="

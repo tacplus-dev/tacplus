@@ -32,6 +32,11 @@ type javaSubscriberTemplateData struct {
 	ClassName       string // e.g. "AegisEventStreamSubscriber"
 	GrpcService     string // e.g. "alpha.SharedEventBusStateService" (per-topic; see EVENTBUS-PUBLISH-API-SPLIT.md)
 	GrpcMethod      string // e.g. "SubscribeToEventStream"
+
+	// IdentityManagerFQN is the chassis IdentityManager, used by the reconnect
+	// loop to drop a rejected credential so the retry re-mints instead of
+	// replaying the same dead token.
+	IdentityManagerFQN string // "com.example.chassis.service_im.IdentityManager"
 }
 
 type javaSubscriptionEventInfo struct {
@@ -197,6 +202,9 @@ func generateJavaSubscribers(config *tactype.Config, protoDir string) error {
 			ClassName:       className,
 			GrpcService:     subService,
 			GrpcMethod:      subMethod,
+
+			IdentityManagerFQN: strings.TrimSuffix(config.JavaPackageBase, ".types") +
+				".chassis.service_im.IdentityManager",
 		}
 
 		var buf bytes.Buffer

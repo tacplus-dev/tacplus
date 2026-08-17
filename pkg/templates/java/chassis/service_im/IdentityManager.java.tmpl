@@ -74,9 +74,9 @@ public class IdentityManager implements AutoCloseable {
         this.activeAuthorityIndex = activeAuthorityIndex;
 
         // Wire the token-cache invalidator so a component that sees its
-        // credential REJECTED can force a re-mint immediately, rather than
-        // failing every call for up to 30 seconds until the reconnect poll
-        // notices.
+        // credential REJECTED can force a re-mint immediately. This is the ONLY
+        // early-invalidation path: the health poll below deliberately respects
+        // the cache, so nothing else drops a token before its expiry.
         final KubernetesMinter k8s = k8sMinter;
         final CloudMinter cloud = cloudMinter;
         registerCredentialInvalidator(() -> {
@@ -233,11 +233,26 @@ public class IdentityManager implements AutoCloseable {
     }
 
     /**
-     * Background daemon thread: forces a fresh token exchange every RECONNECT_POLL_MS.
+     * Background daemon thread: exercises token acquisition every RECONNECT_POLL_MS.
      * Tracks consecutive failure duration; crashes the process after RECONNECT_TIMEOUT_MS
      * so the pod is restarted and gets a clean connection to the token authority.
+     *
+     * <p>It does NOT invalidate the cache first. Doing so re-minted unconditionally
+     * every 30 seconds — roughly twenty times the mint load go and rust place on the
+     * authority, both of which re-mint only on actual need (expiry approaching, or a
+     * credential rejection reported through {@link #noteIfCredentialRejection}).
+     * A cached token that is still valid is evidence of nothing being wrong; the
+     * poll's job is to notice when a token can no longer be OBTAINED, which the
+     * cache-respecting call reports the moment a refresh is actually due.
      */
     private void startHealthMonitor() {
+        // No minter means no token to acquire: getToken() would throw
+        // "no token source configured" on every poll and exit(1) a perfectly
+        // healthy no-auth service after five minutes. rust returns no monitor
+        // task in the same case (manager.rs start_health_monitor).
+        if (k8sMinter == null && cloudMinter == null) {
+            return;
+        }
         healthMonitor = new Thread(() -> {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
@@ -247,12 +262,9 @@ public class IdentityManager implements AutoCloseable {
                     return;
                 }
                 try {
-                    // Force a fresh exchange to detect token-authority connectivity.
-                    if (k8sMinter != null) {
-                        k8sMinter.invalidate();
-                    } else if (cloudMinter != null) {
-                        cloudMinter.invalidate();
-                    }
+                    // Cache-respecting: mints only when the cached token is
+                    // actually due for refresh, or when a rejection already
+                    // dropped it. Same shape as rust's health monitor.
                     getToken();
                     long prev = firstFailureMs.getAndSet(0);
                     if (prev != 0) {
@@ -450,12 +462,13 @@ public class IdentityManager implements AutoCloseable {
     // what a restart of the token authority does: the cached token is not
     // expired but is no longer accepted.
     //
-    // Java did recover, but only via the 30s reconnect poll below — so a service
-    // could fail every call for up to 30 seconds per cycle and, if the authority
-    // stayed unreachable, exit(1) after five minutes. Meanwhile readiness kept
-    // reporting healthy, because nothing tied credential state to health. rust
-    // and go invalidate the instant a call is rejected and degrade readiness
-    // after repeated failures; this brings java to the same behaviour.
+    // Java used to recover only via the 30s reconnect poll, which force-invalidated
+    // on every tick — so a service could fail every call for up to 30 seconds per
+    // cycle, and paid an unconditional mint every 30s for the privilege. Meanwhile
+    // readiness kept reporting healthy, because nothing tied credential state to
+    // health. rust and go invalidate the instant a call is rejected and degrade
+    // readiness after repeated failures; this brings java to the same behaviour,
+    // and the poll no longer force-mints.
 
     private static final Object AUTH_RECOVERY_LOCK = new Object();
     private static Runnable credentialInvalidator;

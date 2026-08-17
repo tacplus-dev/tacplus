@@ -450,6 +450,40 @@ func TestJavaCertStreamsFollowSharedContractMarkers(t *testing.T) {
 	}
 }
 
+// PC-L-6: a renewal keypair is staged as pending BEFORE the CSR is sent, and
+// the send can throw. A CSR that never went out has no in-flight request to
+// pair with, so the catch must drop the staged key on both legs — otherwise
+// the key material is retained indefinitely and the next cert delivery is
+// verified against a public key the authority was never asked to sign.
+func TestJavaRenewalCsrSendFailureClearsPendingKey(t *testing.T) {
+	rendered := readJavaTemplate(t, "java/types/ServiceManager.java.tmpl")
+
+	for _, leg := range []struct{ name, marker string }{
+		{"TLS", `LOG.warning("Failed to generate renewal keypair: " + e.getMessage());`},
+		{"SMB", `LOG.warning("Failed to generate SMB renewal keypair: " + e.getMessage());`},
+	} {
+		start := strings.Index(rendered, leg.marker)
+		if start < 0 {
+			t.Fatalf("%s renewal catch block not found (marker %q)", leg.name, leg.marker)
+		}
+		rest := rendered[start+len(leg.marker):]
+		end := strings.Index(rest, "} else if")
+		if end < 0 {
+			t.Fatalf("%s renewal catch block has no terminator", leg.name)
+		}
+		body := rest[:end]
+		for _, want := range []string{
+			"pendingPrivateKeyDer.set(null);",
+			"pendingPublicKeyDer.set(null);",
+		} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s renewal catch must clear the staged key when the CSR never went out; missing %q in:\n%s",
+					leg.name, want, body)
+			}
+		}
+	}
+}
+
 func TestJavaTypedHealthCollectorRendered(t *testing.T) {
 	handler := renderJavaTemplateForTest(t, "Handler.java.tmpl", javaSmTemplateData{
 		PackageBase:         "com.example",

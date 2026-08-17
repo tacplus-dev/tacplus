@@ -10,10 +10,11 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.example.certstream.model.sys.im.IdentityManager;
-import com.example.certstream.model.sys.im.CloudMinter;
-import com.example.certstream.model.sys.im.TokenMinter;
-import com.example.certstream.model.sys.serviceconnection.ServiceConnection;
+import com.example.certstream.model.chassis.service_im.IdentityManager;
+import com.example.certstream.model.chassis.service_im.CloudMinter;
+import com.example.certstream.model.chassis.service_im.CloudDetect;
+import com.example.certstream.model.chassis.service_im.KubernetesMinter;
+import com.example.certstream.model.chassis.serviceconnection.ServiceConnection;
 import com.example.certstream.model.s2sm.internal.grpc.servers.svc.certstream.StreamMemberService.StreamMemberServiceHandler;
 import com.example.certstream.model.s2sm.internal.grpc.servers.svc.certstream.StreamStateService.StreamStateServiceHandler;
 import com.example.certstream.model.types.sys.grpcconfig.Grpcconfig.Config;
@@ -23,12 +24,19 @@ import com.example.certstream.model.types.sys.smbcert.Smbcert;
 import com.example.certstream.model.types.sys.tlscert.TlsCertServiceGrpc;
 import com.example.certstream.model.types.sys.tlscert.Tlscert;
 import com.example.certstream.model.types.sys.x509.X509;
+import io.grpc.CallOptions;
+import io.grpc.Channel;
+import io.grpc.ClientCall;
+import io.grpc.ClientInterceptor;
+import io.grpc.ForwardingClientCall;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.MethodDescriptor;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.Status;
 import io.grpc.netty.shaded.io.netty.handler.ssl.SslContext;
+import io.grpc.protobuf.services.HealthStatusManager;
 import io.grpc.stub.StreamObserver;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -60,7 +68,8 @@ class CertStreamBehaviorTest {
         CLEAN_BEFORE_FIRST,
         SERVER_ERROR_BEFORE,
         SERVER_ERROR_AFTER,
-        REORDERED_RENEWAL
+        REORDERED_RENEWAL,
+        RENEWAL_CSR_SEND_FAILS
     }
 
     @Test
@@ -210,6 +219,52 @@ class CertStreamBehaviorTest {
         List<byte[]> keys = handler.tlsKeys();
         assertEquals(2, keys.size(), "expected initial + valid renewal TLS deliveries");
         assertFalse(Arrays.equals(keys.get(0), keys.get(1)), "fresh TLS renewal should install a new key");
+    }
+
+    // PC-L-6: a renewal CSR that fails to SEND leaves no in-flight request, so
+    // the staged pending key must be dropped. If it is retained, the next cert
+    // delivery is verified against the never-requested pending public key,
+    // mismatches, and a perfectly good cert is thrown away.
+    @Test
+    void javaTlsFailedRenewalCsrSendClearsPendingKey() throws Exception {
+        RecordingHandler handler = new RecordingHandler();
+        CountDownLatch ready = new CountDownLatch(1);
+
+        Throwable err = runTlsFixture(AuthorityMode.RENEWAL_CSR_SEND_FAILS, handler, ready);
+
+        assertReconnectableCleanEnd(err, "ManageCert");
+        assertEquals(0, ready.getCount(), "TLS ready signal should be published");
+        List<byte[]> keys = handler.tlsKeys();
+        assertEquals(
+                2,
+                keys.size(),
+                "cert delivered after a failed renewal CSR send must still be accepted; "
+                        + "a retained pending key would fail public-key verification and drop it");
+        assertTrue(
+                Arrays.equals(keys.get(0), keys.get(1)),
+                "delivery after a failed renewal CSR send must pair with the ACTIVE key, "
+                        + "proving the pending renewal key was cleared");
+    }
+
+    @Test
+    void javaSmbFailedRenewalCsrSendClearsPendingKey() throws Exception {
+        RecordingHandler handler = new RecordingHandler();
+        CountDownLatch ready = new CountDownLatch(1);
+
+        Throwable err = runSmbFixture(AuthorityMode.RENEWAL_CSR_SEND_FAILS, handler, ready);
+
+        assertReconnectableCleanEnd(err, "ManageSmbCert");
+        assertEquals(0, ready.getCount(), "SMB ready signal should be published");
+        List<byte[]> keys = handler.smbKeys();
+        assertEquals(
+                2,
+                keys.size(),
+                "cert delivered after a failed SMB renewal CSR send must still be accepted; "
+                        + "a retained pending key would fail public-key verification and drop it");
+        assertTrue(
+                Arrays.equals(keys.get(0), keys.get(1)),
+                "delivery after a failed SMB renewal CSR send must pair with the ACTIVE key, "
+                        + "proving the pending renewal key was cleared");
     }
 
     @Test
@@ -425,13 +480,61 @@ class CertStreamBehaviorTest {
                 .addService(new JavaSmbAuthority(mode))
                 .build()
                 .start();
-        ManagedChannel channel = ManagedChannelBuilder.forAddress("127.0.0.1", server.getPort())
-                .usePlaintext()
-                .build();
+        ManagedChannelBuilder<?> channelBuilder = ManagedChannelBuilder.forAddress("127.0.0.1", server.getPort())
+                .usePlaintext();
+        if (mode == AuthorityMode.RENEWAL_CSR_SEND_FAILS) {
+            channelBuilder = channelBuilder.intercept(failSecondCsrSendInterceptor());
+        }
+        ManagedChannel channel = channelBuilder.build();
         return new AuthorityFixture(
                 ServiceConnection.fromChannel("cert-stream-authority", channel),
                 channel,
                 server);
+    }
+
+    /**
+     * Makes the SECOND CSR the client sends on a cert stream (i.e. the renewal
+     * CSR — the initial CSR is the first) throw synchronously out of
+     * {@code outbound.onNext}, without cancelling the stream. That is the only
+     * seam that reproduces "the renewal CSR failed to send" from outside the
+     * generated code.
+     */
+    private static ClientInterceptor failSecondCsrSendInterceptor() {
+        return new ClientInterceptor() {
+            @Override
+            public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
+                    MethodDescriptor<ReqT, RespT> method, CallOptions callOptions, Channel next) {
+                ClientCall<ReqT, RespT> call = next.newCall(method, callOptions);
+                String name = method.getFullMethodName();
+                if (!name.endsWith("/ManageCert") && !name.endsWith("/ManageSmbCert")) {
+                    return call;
+                }
+                return new ForwardingClientCall.SimpleForwardingClientCall<ReqT, RespT>(call) {
+                    private int csrSends;
+
+                    @Override
+                    public void sendMessage(ReqT message) {
+                        if (isCsr(message)) {
+                            csrSends++;
+                            if (csrSends == 2) {
+                                throw new RuntimeException("fixture renewal CSR send failure");
+                            }
+                        }
+                        super.sendMessage(message);
+                    }
+                };
+            }
+        };
+    }
+
+    private static boolean isCsr(Object message) {
+        if (message instanceof Tlscert.TlsCertClientMsg tls) {
+            return tls.hasCsr();
+        }
+        if (message instanceof Smbcert.SmbCertClientMsg smb) {
+            return smb.hasCsr();
+        }
+        return false;
     }
 
     private record AuthorityFixture(
@@ -452,26 +555,30 @@ class CertStreamBehaviorTest {
                 Config.class,
                 IdentityManager.class,
                 ServiceConnection.class,
-                ServiceConnection.ChannelFactory.class);
+                ServiceConnection.ChannelFactory.class,
+                HealthStatusManager.class,
+                Server.class);
         ctor.setAccessible(true);
         ServiceConnection.ChannelFactory channelFactory = (serviceId, target) -> connection.conn();
         return ctor.newInstance(
                 Config.getDefaultInstance(),
                 identity,
                 connection,
-                channelFactory);
+                channelFactory,
+                null,
+                null);
     }
 
     private static IdentityManager fixtureIdentity() throws Exception {
         Constructor<IdentityManager> ctor = IdentityManager.class.getDeclaredConstructor(
-                TokenMinter.class,
+                KubernetesMinter.class,
                 CloudMinter.class,
                 ManagedChannel.class,
                 List.class,
                 SslContext.class,
                 int.class);
         ctor.setAccessible(true);
-        return ctor.newInstance(new FixtureTokenMinter(), null, null, new ArrayList<String>(), null, 0);
+        return ctor.newInstance(null, new FixtureMinter(), null, new ArrayList<String>(), null, 0);
     }
 
     private static Throwable runTlsFixture(
@@ -518,18 +625,18 @@ class CertStreamBehaviorTest {
         }
     }
 
-    private static final class FixtureTokenMinter extends TokenMinter {
-        FixtureTokenMinter() {
-            super(KeyOuterClass.Key.getDefaultInstance(), "certstream");
+    private static final class FixtureMinter extends CloudMinter {
+        FixtureMinter() {
+            super(CloudDetect.CloudVendor.GCP, "certstream");
         }
 
         @Override
-        public synchronized String getToken() {
+        public String getToken() {
             return "fixture-token";
         }
 
         @Override
-        public synchronized String getTokenFor(String audience) {
+        public String getTokenFor(String audience) {
             return "fixture-token";
         }
 
@@ -662,6 +769,17 @@ class CertStreamBehaviorTest {
                                 close();
                                 return;
                             }
+                            if (mode == AuthorityMode.RENEWAL_CSR_SEND_FAILS) {
+                                // The client's renewal CSR never reaches us: the
+                                // fixture interceptor throws on that send. Re-deliver
+                                // the CURRENT cert right after the renew request —
+                                // the client may only accept it if the failed
+                                // renewal's pending key was dropped.
+                                sendRenew("fixture renewal");
+                                sendCert(publicKey, "java-tls-post-failed-csr");
+                                close();
+                                return;
+                            }
                             sendRenew("fixture renewal");
                         } else if (mode == AuthorityMode.REORDERED_RENEWAL && deliveryCount == 2) {
                             sendCert(initialPublicKey, "java-tls-stale-renewal");
@@ -765,6 +883,15 @@ class CertStreamBehaviorTest {
                                 return;
                             }
                             if (mode == AuthorityMode.FIRST_SUCCESS) {
+                                close();
+                                return;
+                            }
+                            if (mode == AuthorityMode.RENEWAL_CSR_SEND_FAILS) {
+                                // See the TLS authority: the renewal CSR never
+                                // arrives, and the re-delivered current cert can
+                                // only be accepted if pending was dropped.
+                                sendRenew("fixture renewal");
+                                sendCert(publicKey, "java-smb-post-failed-csr");
                                 close();
                                 return;
                             }

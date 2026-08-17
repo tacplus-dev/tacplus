@@ -1563,6 +1563,10 @@ public class ServiceManager implements AutoCloseable {
                                         .build());
                             } catch (Exception e) {
                                 LOG.warning("Failed to generate SMB renewal keypair: " + e.getMessage());
+                                // The CSR never went out, so there is no in-flight
+                                // request for this key to pair with. Drop it.
+                                pendingPrivateKeyDer.set(null);
+                                pendingPublicKeyDer.set(null);
                             }
                         } else if (!msg.getError().isEmpty()) {
                             streamError.set(new Exception("server error: " + msg.getError()));

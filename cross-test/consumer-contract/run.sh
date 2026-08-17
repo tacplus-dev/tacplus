@@ -2887,10 +2887,12 @@ func (c *eventBusSubscriberSentinelConn) Invoke(context.Context, string, any, an
 }
 
 func (c *eventBusSubscriberSentinelConn) NewStream(_ context.Context, sd *grpc.StreamDesc, fullMethod string, _ ...grpc.CallOption) (grpc.ClientStream, error) {
-	if fullMethod != "/contractfixtures.EventBusTypedService/SubscribeContractfixturesFixtureStateEvents" {
+	// Per-topic subscribe name (eventbus.PerTopicSubscribeParts), not the flat
+	// EventBusTypedService/Subscribe<Stem> this fixture asserted before 38e40786.
+	if fullMethod != "/contractfixtures.FixtureStateStateService/SubscribeToEvents" {
 		c.t.Fatalf("subscribe full method = %q", fullMethod)
 	}
-	if sd == nil || sd.StreamName != "SubscribeContractfixturesFixtureStateEvents" || !sd.ServerStreams || !sd.ClientStreams {
+	if sd == nil || sd.StreamName != "SubscribeToEvents" || !sd.ServerStreams || !sd.ClientStreams {
 		c.t.Fatalf("unexpected subscribe stream desc: %#v", sd)
 	}
 	c.fullMethod = fullMethod

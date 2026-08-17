@@ -197,6 +197,71 @@ message SubscribeRequest {
 	}
 }
 
+// TestEventBusWireContractSkipsBrokerPresenceStub covers the identification of
+// "canonical": package eventbus is the broker's SERVICE identity, so a proto
+// that only stands in for the broker (cross-test/consumer-contract's
+// contracteventbus.proto) declares it while defining no wire message at all.
+// Such a stub is not the wire contract and must not fail generation.
+func TestEventBusWireContractSkipsBrokerPresenceStub(t *testing.T) {
+	source := writeCanonicalEventBusTree(t, `syntax = "proto3";
+
+package eventbus;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "eventbus"};
+
+message EventBusPing {}
+
+service EventBusBroker {
+  option (spec.service_s2s) = {auth_services: ["*"]};
+
+  rpc Ping(EventBusPing) returns (EventBusPing);
+}
+`)
+	supportDir := t.TempDir()
+	relPath, err := EnsureEventBusSupportProto(supportDir, EventBusSupportProtoOptions{})
+	if err != nil {
+		t.Fatalf("EnsureEventBusSupportProto: %v", err)
+	}
+	if err := ValidateEventBusSupportWireContract(supportDir, relPath, source); err != nil {
+		t.Fatalf("a broker presence stub declares no wire contract and must not fail the gate, got: %v", err)
+	}
+}
+
+// TestEventBusWireContractCatchesDriftAlongsideStub is the other half: a tree
+// carrying BOTH a presence stub and the real canonical proto must still catch
+// drift. Skipping the stub must not skip the file that does declare the shape.
+func TestEventBusWireContractCatchesDriftAlongsideStub(t *testing.T) {
+	source := writeCanonicalEventBusTree(t, canonicalEventBusFixture)
+	if err := os.WriteFile(filepath.Join(source, "services", "contracteventbus.proto"), []byte(`syntax = "proto3";
+
+package eventbus;
+
+message EventBusPing {}
+`), 0644); err != nil {
+		t.Fatalf("write presence stub: %v", err)
+	}
+
+	supportDir := writeSupportTree(t, `syntax = "proto3";
+
+package eventbus_support;
+
+message PublishResponse { bool success = 1; string error = 2; int64 offset = 3; }
+`)
+
+	err := ValidateEventBusSupportWireContract(supportDir, EventBusSupportProtoPath, source)
+	if err == nil {
+		t.Fatal("PublishResponse drift must still fail when a presence stub shares the eventbus package")
+	}
+	if !strings.Contains(err.Error(), "field 2 type mismatch: synthesized string error, canonical int64 offset") {
+		t.Fatalf("failure message missing the drifted field, got:\n%s", err)
+	}
+	if strings.Contains(err.Error(), "contracteventbus.proto") {
+		t.Fatalf("the presence stub must not be reported as canonical, got:\n%s", err)
+	}
+}
+
 // TestEventBusWireContractSkipsTreeWithoutCanonicalProto keeps the gate quiet
 // for source trees that carry no canonical eventbus proto (tacplus's own
 // cross-test fixtures, for instance) rather than failing them.

@@ -98,20 +98,16 @@ func ValidateEventBusSupportWireContract(supportProtoDir, supportRelPath, source
 		return nil
 	}
 
-	canonicalPaths, err := findCanonicalEventBusProtos(sourceProtoDir)
+	canonicalPaths, canonical, err := findCanonicalEventBusContract(sourceProtoDir)
 	if err != nil {
 		return err
 	}
 	if len(canonicalPaths) == 0 {
-		zap.L().Info("EventBus wire contract check skipped: source tree declares no canonical eventbus proto",
+		zap.L().Info("EventBus wire contract check skipped: source tree declares no canonical eventbus wire contract",
 			zap.String("source_proto_dir", sourceProtoDir))
 		return nil
 	}
 
-	canonical, err := eventBusMessages(sourceProtoDir, canonicalPaths, canonicalEventBusPackage)
-	if err != nil {
-		return fmt.Errorf("eventbus wire contract: parse canonical proto: %w", err)
-	}
 	support, err := eventBusMessages(supportProtoDir, []string{filepath.ToSlash(supportRelPath)}, supportEventBusPackage)
 	if err != nil {
 		return fmt.Errorf("eventbus wire contract: parse synthesized %s: %w", supportRelPath, err)
@@ -245,10 +241,75 @@ func wireTypeOf(f parser.FieldDescriptor) string {
 	return t
 }
 
-// findCanonicalEventBusProtos returns the source-relative paths of every proto
-// in the tree that declares the canonical `eventbus` package. The synthesized
+// findCanonicalEventBusContract locates the protos in the source tree that
+// actually carry the canonical EventBus wire contract, and returns their
+// source-relative paths together with every message they declare.
+//
+// The package name alone does NOT identify them. `eventbus` is the broker's
+// service identity (eventbus.EventBusTag), so any proto that stands in for the
+// broker declares that package — including presence-only stubs such as
+// cross-test/consumer-contract's contracteventbus.proto, which exists purely so
+// BuildTopicRegistry can resolve the broker tag and defines no wire messages at
+// all. Treating such a stub as canonical failed generation for every message in
+// eventBusWireContract as "missing" from a proto that never claimed to define
+// them.
+//
+// A proto is canonical when it declares package eventbus AND declares at least
+// one of the wire contract messages — i.e. it makes a claim about the wire shape
+// that the synthesized proto has to agree with. Once a file is selected, every
+// contract rule is enforced against it as before: a canonical proto that carries
+// RecordMeta but drops PublishResponse is still drift, and is still fatal.
+func findCanonicalEventBusContract(sourceProtoDir string) ([]string, map[string]parser.MessageDescriptor, error) {
+	candidates, err := findEventBusPackageProtos(sourceProtoDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(candidates) == 0 {
+		return nil, nil, nil
+	}
+
+	p, err := parser.NewDescriptorParserForFiles(sourceProtoDir, candidates)
+	if err != nil {
+		return nil, nil, fmt.Errorf("eventbus wire contract: parse canonical proto: %w", err)
+	}
+
+	contractMessages := make(map[string]bool, len(eventBusWireContract))
+	for _, rule := range eventBusWireContract {
+		contractMessages[rule.message] = true
+	}
+
+	var paths []string
+	messages := make(map[string]parser.MessageDescriptor)
+	for relPath, fd := range p.GetAllFiles() {
+		if fd == nil || fd.Package != canonicalEventBusPackage {
+			continue
+		}
+		carriesContract := false
+		for _, msg := range fd.Messages {
+			if contractMessages[msg.Name] {
+				carriesContract = true
+				break
+			}
+		}
+		if !carriesContract {
+			zap.L().Info("EventBus wire contract: proto declares package eventbus but no contract message; not canonical",
+				zap.String("proto", filepath.ToSlash(relPath)))
+			continue
+		}
+		paths = append(paths, filepath.ToSlash(relPath))
+		for _, msg := range fd.Messages {
+			messages[msg.Name] = msg
+		}
+	}
+	sort.Strings(paths)
+	return paths, messages, nil
+}
+
+// findEventBusPackageProtos returns the source-relative paths of every proto in
+// the tree that declares the `eventbus` package. This is the cheap prefilter for
+// findCanonicalEventBusContract, not the identification itself. The synthesized
 // support proto declares package eventbus_support, so it can never match.
-func findCanonicalEventBusProtos(sourceProtoDir string) ([]string, error) {
+func findEventBusPackageProtos(sourceProtoDir string) ([]string, error) {
 	var paths []string
 	err := filepath.Walk(sourceProtoDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {

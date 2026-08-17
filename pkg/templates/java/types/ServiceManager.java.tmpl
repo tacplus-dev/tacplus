@@ -431,6 +431,27 @@ public class ServiceManager implements AutoCloseable {
     /** Returns the server-assigned instance ID. */
     public String getInstanceId() { return identity.getInstanceId(); }
 
+    /**
+     * Marks the service as SERVING or NOT_SERVING on the gRPC health endpoint
+     * (the same HealthStatusManager that backs the plaintext health probe and
+     * the main-server health service).
+     *
+     * <p>This method is for services that manage their own serving lifecycle
+     * (e.g. custom external TLS) and never call {@link #run(Handler)}. Services
+     * that call run() do not need this — bootstrap automatically flips to
+     * SERVING after health publish and TLS setup complete.
+     *
+     * <p><b>Contract</b>: Do not call this until your service has completed its
+     * own bootstrap (config loaded, TLS ready, handler initialized). Reporting
+     * SERVING before bootstrap is complete defeats the purpose of readiness
+     * probes and may cause k8s to route traffic to an unready instance.
+     */
+    public void setServing(boolean serving) {
+        healthManager.setStatus("",
+                serving ? HealthCheckResponse.ServingStatus.SERVING
+                        : HealthCheckResponse.ServingStatus.NOT_SERVING);
+    }
+
 {{- if .HasDiskStores}}
     /** Returns ServiceManager-owned redo-log handles for generated service_store stores. */
     public DiskStoreLogs getDiskStoreLogs() { return diskStoreLogs; }

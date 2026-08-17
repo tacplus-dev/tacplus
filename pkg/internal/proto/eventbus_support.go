@@ -55,20 +55,22 @@ func NeedsEventBusSupportProto(protoDir string) bool {
 	return foundTopic
 }
 
-// EnsureEventBusSupportProto writes sys/eventbus.proto if the input tree
-// does not already provide it. The file defines the canonical EventBus wire
-// helper messages used by generated per-topic publisher/subscriber clients.
+// EnsureEventBusSupportProto writes generated/eventbus_support.proto, which
+// defines the canonical EventBus wire helper messages used by generated
+// per-topic publisher/subscriber clients.
+//
+// The file is written unconditionally on every generation. It is pure codegen
+// output — nothing hand-edits it — so an existing copy on disk carries no
+// information worth preserving, and skipping the write when one is present is
+// how a stale wire shape survives regeneration (that is exactly how the
+// PublishResponse drift fixed in babc6a0b persisted in every checked-in
+// service tree until a clean rebuild).
 func EnsureEventBusSupportProto(protoDir string, opts EventBusSupportProtoOptions) (string, error) {
 	if protoDir == "" {
 		return "", fmt.Errorf("eventbus support proto: empty protoDir")
 	}
 	relPath := filepath.FromSlash(EventBusSupportProtoPath)
 	path := filepath.Join(protoDir, relPath)
-	if _, err := os.Stat(path); err == nil {
-		return EventBusSupportProtoPath, nil
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("stat %s: %w", EventBusSupportProtoPath, err)
-	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return "", fmt.Errorf("create eventbus support proto dir: %w", err)
 	}

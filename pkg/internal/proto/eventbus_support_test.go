@@ -47,6 +47,55 @@ func TestEnsureEventBusSupportProtoWritesCanonicalMessages(t *testing.T) {
 	}
 }
 
+// A stale support proto on disk — the shape that shipped before babc6a0b — must
+// be overwritten by the next generation, not preserved. The file is pure codegen
+// output, so an exists-check gate would let a wrong wire shape survive every
+// regeneration in a checked-in service tree.
+func TestEnsureEventBusSupportProtoOverwritesStaleFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, filepath.FromSlash(EventBusSupportProtoPath))
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stale := `syntax = "proto3";
+
+package eventbus_support;
+
+message PublishResponse { bool success = 1; string error = 2; int64 offset = 3; }
+`
+	if err := os.WriteFile(path, []byte(stale), 0644); err != nil {
+		t.Fatalf("seed stale support proto: %v", err)
+	}
+
+	opts := EventBusSupportProtoOptions{GoPackage: "example.com/project/types/generated/eventbus_support"}
+	if _, err := EnsureEventBusSupportProto(dir, opts); err != nil {
+		t.Fatalf("EnsureEventBusSupportProto (first): %v", err)
+	}
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read support proto: %v", err)
+	}
+	if strings.Contains(string(first), "string error = 2;") {
+		t.Fatalf("stale PublishResponse survived regeneration:\n%s", first)
+	}
+	if !strings.Contains(string(first), "message PublishResponse { int32 partition = 1; int64 offset = 2; }") {
+		t.Fatalf("support proto does not carry the canonical PublishResponse:\n%s", first)
+	}
+
+	// A second generation over the freshly written file must be a no-op change:
+	// always-rewrite has to stay deterministic.
+	if _, err := EnsureEventBusSupportProto(dir, opts); err != nil {
+		t.Fatalf("EnsureEventBusSupportProto (second): %v", err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read support proto: %v", err)
+	}
+	if string(second) != string(first) {
+		t.Fatalf("regeneration is not byte-identical:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
 func TestEventBusSupportProtoIsInfra(t *testing.T) {
 	if !IsEventBusSupportProto(EventBusSupportProtoPath) {
 		t.Fatalf("%s must be recognized as EventBus support proto", EventBusSupportProtoPath)

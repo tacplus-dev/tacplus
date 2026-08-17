@@ -183,6 +183,9 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateMethodCollectionsForPackages(dp, collection.BuildMessageIndex(allParsedFiles), b.config.SelfPackage); err != nil {
 		return err
 	}
+	if err := parser.ValidateServiceSurfaces(dp); err != nil {
+		return err
+	}
 	if err := parser.ValidateAuthAnnotations(dp); err != nil {
 		return err
 	}

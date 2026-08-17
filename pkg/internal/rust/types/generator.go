@@ -40,8 +40,12 @@ func Generate(config *tactype.Config) error {
 		return fmt.Errorf("failed to copy proto directory: %w", err)
 	}
 	if proto.NeedsEventBusSupportProto(config.FlatProtoDir) {
-		if _, err := proto.EnsureEventBusSupportProto(protoDir, proto.EventBusSupportProtoOptions{}); err != nil {
+		eventBusProto, err := proto.EnsureEventBusSupportProto(protoDir, proto.EventBusSupportProtoOptions{})
+		if err != nil {
 			return fmt.Errorf("failed to generate eventbus support proto: %w", err)
+		}
+		if err := proto.ValidateEventBusSupportWireContract(protoDir, eventBusProto, config.FlatProtoDir); err != nil {
+			return err
 		}
 	}
 

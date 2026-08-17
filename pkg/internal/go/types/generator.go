@@ -150,6 +150,9 @@ func Generate(config *tactype.Config) error {
 		if err != nil {
 			return fmt.Errorf("failed to generate eventbus support proto: %w", err)
 		}
+		if err := proto.ValidateEventBusSupportWireContract(tempProtoDir, eventBusProto, flatProtoDir); err != nil {
+			return err
+		}
 		if eventBusProto != "" && !slices.Contains(protoFilePaths, eventBusProto) {
 			protoFilePaths = append(protoFilePaths, eventBusProto)
 		}

@@ -572,6 +572,8 @@ fn spawn_tls_loop(
     let cert_proto_store = Arc::new(tokio::sync::RwLock::new(None));
     let cert_pem_store = Arc::new(tokio::sync::RwLock::new(None));
     let key_pem_store = Arc::new(tokio::sync::RwLock::new(None));
+    let server_certified_key_store = Arc::new(std::sync::RwLock::new(None));
+    let tls_degrade = Arc::new(std::sync::Mutex::new(fixture_tls_degrade_seam()));
 
     tokio::spawn(tls_cert_stream_loop(
         empty_authority_connection(),
@@ -585,6 +587,8 @@ fn spawn_tls_loop(
         cert_proto_store,
         cert_pem_store,
         key_pem_store,
+        server_certified_key_store,
+        tls_degrade,
     ))
 }
 
@@ -621,6 +625,8 @@ struct TlsStores {
     cert_proto_store: Arc<tokio::sync::RwLock<Option<x509_pb::X509CertChain>>>,
     cert_pem_store: Arc<tokio::sync::RwLock<Option<String>>>,
     key_pem_store: Arc<tokio::sync::RwLock<Option<String>>>,
+    server_certified_key_store: Arc<std::sync::RwLock<Option<Arc<CertifiedKey>>>>,
+    tls_degrade: Arc<std::sync::Mutex<TlsDegradeSeam>>,
 }
 
 impl TlsStores {
@@ -631,7 +637,16 @@ impl TlsStores {
             cert_proto_store: Arc::new(tokio::sync::RwLock::new(None)),
             cert_pem_store: Arc::new(tokio::sync::RwLock::new(None)),
             key_pem_store: Arc::new(tokio::sync::RwLock::new(None)),
+            server_certified_key_store: Arc::new(std::sync::RwLock::new(None)),
+            tls_degrade: Arc::new(std::sync::Mutex::new(fixture_tls_degrade_seam())),
         }
+    }
+}
+
+fn fixture_tls_degrade_seam() -> TlsDegradeSeam {
+    TlsDegradeSeam {
+        fns: Vec::new(),
+        seen: Vec::new(),
     }
 }
 
@@ -664,6 +679,8 @@ async fn run_tls_authority_fixture(
         &stores.cert_proto_store,
         &stores.cert_pem_store,
         &stores.key_pem_store,
+        stores.server_certified_key_store.clone(),
+        &stores.tls_degrade,
     )
     .await;
 
@@ -715,6 +732,8 @@ async fn rust_tls_cert_stream_reports_missing_authority_without_ready_signal() {
     let cert_proto_store = Arc::new(tokio::sync::RwLock::new(None));
     let cert_pem_store = Arc::new(tokio::sync::RwLock::new(None));
     let key_pem_store = Arc::new(tokio::sync::RwLock::new(None));
+    let server_certified_key_store = Arc::new(std::sync::RwLock::new(None));
+    let tls_degrade = std::sync::Mutex::new(fixture_tls_degrade_seam());
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     let mut ready = Some(tx);
 
@@ -730,6 +749,8 @@ async fn rust_tls_cert_stream_reports_missing_authority_without_ready_signal() {
         &cert_proto_store,
         &cert_pem_store,
         &key_pem_store,
+        server_certified_key_store,
+        &tls_degrade,
     )
     .await
     .expect_err("missing authority connection must be retryable");
@@ -755,6 +776,8 @@ async fn rust_tls_first_delivery_and_renewal_use_distinct_local_keys() {
     let cert_proto_store = Arc::new(tokio::sync::RwLock::new(None));
     let cert_pem_store = Arc::new(tokio::sync::RwLock::new(None));
     let key_pem_store = Arc::new(tokio::sync::RwLock::new(None));
+    let server_certified_key_store = Arc::new(std::sync::RwLock::new(None));
+    let tls_degrade = std::sync::Mutex::new(fixture_tls_degrade_seam());
     let (tx, rx) = tokio::sync::oneshot::channel();
     let mut ready = Some(tx);
 
@@ -770,6 +793,8 @@ async fn rust_tls_first_delivery_and_renewal_use_distinct_local_keys() {
         &cert_proto_store,
         &cert_pem_store,
         &key_pem_store,
+        server_certified_key_store,
+        &tls_degrade,
     )
     .await
     .expect("TLS authority fixture should complete after renewal");

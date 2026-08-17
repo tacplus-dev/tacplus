@@ -1559,6 +1559,8 @@ public class ServiceManager implements AutoCloseable {
                                 }
                             } catch (Exception e) {
                                 LOG.warning("SMB member cert delivery handling failed: " + e.getMessage());
+                                pendingPrivateKeyDer.set(null);
+                                pendingPublicKeyDer.set(null);
                             }
                         } else if (msg.hasRenew()) {
                             LOG.info("SMB member cert renewal requested: " + msg.getRenew().getReason());

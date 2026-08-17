@@ -31,7 +31,9 @@ import (
 	"go.uber.org/zap"
 {{- end}}
 	types "{{.TypesImportPath}}"
+{{- if or $hasSingletons $hasCollections $hasStateImports}}
 	"{{.ServiceIMLibPath}}"
+{{- end}}
 	"{{.ServiceManagerLibPath}}"
 {{- range .CrossImports}}
 	{{.Alias}} "{{.Path}}"

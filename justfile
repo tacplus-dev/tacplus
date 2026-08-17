@@ -61,6 +61,18 @@ determinism-typescript:
 determinism-java:
   bash cross-test/determinism/run.sh --language java
 
+# Behavioral coverage of the generated TLS/SMB cert-stream loops.
+cert-stream: cert-stream-go cert-stream-java cert-stream-rust
+
+cert-stream-go:
+  bash cross-test/cert-stream/run.sh --language go
+
+cert-stream-java:
+  bash cross-test/cert-stream/run.sh --language java
+
+cert-stream-rust:
+  bash cross-test/cert-stream/run.sh --language rust
+
 consumer-build:
   bash cross-test/consumer-contract/run.sh
 

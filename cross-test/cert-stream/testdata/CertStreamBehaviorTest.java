@@ -69,7 +69,8 @@ class CertStreamBehaviorTest {
         SERVER_ERROR_BEFORE,
         SERVER_ERROR_AFTER,
         REORDERED_RENEWAL,
-        RENEWAL_CSR_SEND_FAILS
+        RENEWAL_CSR_SEND_FAILS,
+        DELIVERY_HANDLING_FAILS
     }
 
     @Test
@@ -265,6 +266,34 @@ class CertStreamBehaviorTest {
                 Arrays.equals(keys.get(0), keys.get(1)),
                 "delivery after a failed SMB renewal CSR send must pair with the ACTIVE key, "
                         + "proving the pending renewal key was cleared");
+    }
+
+    // Same leak class as PC-L-6, on the DELIVERY path instead of the renewal
+    // path: the SMB delivery handler's catch-all must clear the pending renewal
+    // refs the way its TLS twin does. If an unexpected exception escapes
+    // mid-delivery, the pending key stays staged, and every later cert is then
+    // verified against a public key the authority was never asked to sign — so a
+    // perfectly good cert is discarded as a mismatch.
+    //
+    // The injection seam is a null ServiceManager: {@code sm.smbHandlerSlot.get()}
+    // is the only dereference inside the delivery try block, so it raises the
+    // unexpected exception at exactly the point a real one would land. That also
+    // means readiness is never published, so the stranded-key mismatch surfaces
+    // as a fatal stream error rather than a warning.
+    @Test
+    void javaSmbFailedDeliveryHandlingClearsPendingKey() throws Exception {
+        CountDownLatch ready = new CountDownLatch(1);
+
+        Throwable err = runSmbFixtureWithoutServiceManager(AuthorityMode.DELIVERY_HANDLING_FAILS, ready);
+
+        assertErrorContains(
+                err,
+                "ManageSmbCert stream completed before first member cert delivery");
+        assertFalse(
+                err.getMessage().contains("public key mismatch"),
+                "cert delivered after a failed delivery-handling attempt must still verify; "
+                        + "a retained pending key rejects it as a public-key mismatch");
+        assertEquals(1, ready.getCount(), "no delivery was handled, so readiness must stay pending");
     }
 
     @Test
@@ -625,6 +654,29 @@ class CertStreamBehaviorTest {
         }
     }
 
+    /**
+     * Runs the SMB cert stream with a null {@link ServiceManager}, so that
+     * handling a delivered cert throws inside the delivery handler's catch-all.
+     * No handler slots exist, so nothing else in the stream depends on it.
+     */
+    private static Throwable runSmbFixtureWithoutServiceManager(
+            AuthorityMode mode,
+            CountDownLatch ready) throws Exception {
+        try (AuthorityFixture authority = startAuthority(mode)) {
+            return invokeAllowingFailure(
+                    privateMethod(
+                            "runSmbCertStream",
+                            ServiceManager.class,
+                            ServiceConnection.class,
+                            IdentityManager.class,
+                            CountDownLatch.class),
+                    null,
+                    authority.connection(),
+                    fixtureIdentity(),
+                    ready);
+        }
+    }
+
     private static final class FixtureMinter extends CloudMinter {
         FixtureMinter() {
             super(CloudDetect.CloudVendor.GCP, "certstream");
@@ -899,6 +951,15 @@ class CertStreamBehaviorTest {
                         } else if (mode == AuthorityMode.REORDERED_RENEWAL && deliveryCount == 2) {
                             sendCert(initialPublicKey, "java-smb-stale-renewal");
                             sendRenew("fixture renewal retry");
+                        } else if (mode == AuthorityMode.DELIVERY_HANDLING_FAILS && deliveryCount == 2) {
+                            // Deliver the renewal cert — handling it throws in the
+                            // client — then re-deliver a cert for the key that was
+                            // active before the renewal. The client can only accept
+                            // that second cert if the thrown delivery dropped its
+                            // pending renewal key.
+                            sendCert(publicKey, "java-smb-renewal-throwing");
+                            sendCert(initialPublicKey, "java-smb-post-throw");
+                            close();
                         } else {
                             sendCert(publicKey, "java-smb-renewal");
                             close();

@@ -151,14 +151,14 @@ impl Subscriber {
     /// Subscribe with explicit start-position options. Use this when you need
     /// to start from a specific offset or from latest instead of earliest.
     pub async fn subscribe_with(&self, handler: Handler, opts: SubscribeOptions) {
-        const MIN_BACKOFF: Duration = Duration::from_secs(3);
+        const MIN_BACKOFF: Duration = Duration::from_millis(500);
         const MAX_BACKOFF: Duration = Duration::from_secs(30);
         let mut backoff = MIN_BACKOFF;
 
         loop {
             match self.subscribe_once(&handler, &opts).await {
                 Ok(()) => {
-                    tracing::warn!("{{.SourcePackage}}.{{.SourceField}} subscription stream ended, reconnecting in {}s", MIN_BACKOFF.as_secs());
+                    tracing::warn!("{{.SourcePackage}}.{{.SourceField}} subscription stream ended, reconnecting in {}ms", MIN_BACKOFF.as_millis());
                     tokio::time::sleep(MIN_BACKOFF).await;
                     backoff = MIN_BACKOFF;
                 }

@@ -17,6 +17,9 @@ import (
 
 	source "{{.TypeImport}}"
 	eb "{{.EventBusImport}}"
+{{- if .ServiceIMImport}}
+	service_im "{{.ServiceIMImport}}"
+{{- end}}
 )
 
 // Ensure proto codec is registered (it is by default, but be explicit).
@@ -183,6 +186,17 @@ func (s *Subscriber) Subscribe(ctx context.Context, handler Handler, opts ...Opt
 				// Transient auth blips (token rotation, authorizer cache lag)
 				// must not permanently kill the subscription — retry with the
 				// same capped backoff, logged at error.
+{{- if .ServiceIMImport}}
+				//
+				// A rejected credential must also invalidate the token cache, or
+				// the retry replays the same dead token: the cache is keyed on
+				// expiry and an authority restart invalidates a token that has
+				// NOT expired. PERMISSION_DENIED is deliberately not treated as
+				// a rejection (see service_im.IsCredentialRejection) — that
+				// credential was understood and refused, so re-minting the same
+				// identity would loop. Mirrors rust's and java's subscribers.
+				service_im.NoteIfCredentialRejection(err)
+{{- end}}
 				zap.L().Error("{{.SourcePackage}}.{{.SourceField}} subscription auth error, retrying",
 					zap.String("consumer_group", s.consumerGroup),
 					zap.String("code", st.Code().String()),

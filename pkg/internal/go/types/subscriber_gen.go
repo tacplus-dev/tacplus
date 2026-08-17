@@ -33,6 +33,12 @@ type goSubscriberTemplateData struct {
 	EventBusImport  string // e.g. "module/tacplus/types/sys/eventbus"
 	GrpcService     string // e.g. "alpha.SharedEventBusStateService" (per-topic; see EVENTBUS-PUBLISH-API-SPLIT.md)
 	GrpcMethod      string // e.g. "SubscribeToEventStream"
+
+	// ServiceIMImport is the chassis identity manager, used by the reconnect
+	// loop to drop a rejected credential so the retry re-mints instead of
+	// replaying the same dead token. Empty in sys-only mode, where the chassis
+	// identity manager is not generated at all.
+	ServiceIMImport string // e.g. "module/tacplus/chassis/service_im"
 }
 
 // generateGoSubscribers generates per-topic subscriber packages for event-bus
@@ -47,6 +53,13 @@ func generateGoSubscribers(config *tactype.Config) error {
 		return fmt.Errorf("failed to create sub filesystem: %w", err)
 	}
 	funcMap := tmplutil.BaseFuncMap()
+
+	// generateIdentityManager is skipped in sys-only mode, so the subscriber
+	// must not reference a package that will not exist.
+	serviceIMImport := ""
+	if !config.SysOnly {
+		serviceIMImport = config.ModuleBasePath + "/chassis/service_im"
+	}
 
 	// Build a package→protoDir map for resolving type locations.
 	pkgToDirMap := make(map[string]string)
@@ -104,6 +117,7 @@ func generateGoSubscribers(config *tactype.Config) error {
 			EventBusImport:  config.ModuleBasePath + "/types/generated/eventbus_support",
 			GrpcService:     subService,
 			GrpcMethod:      subMethod,
+			ServiceIMImport: serviceIMImport,
 		}
 
 		outDir := filepath.Join(config.OutputDir, "subscribe", sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)

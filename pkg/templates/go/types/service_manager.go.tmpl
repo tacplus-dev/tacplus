@@ -1715,11 +1715,21 @@ delivered, err := runTlsCertStream(ctx, connProvider, serviceLabel, h, tp, store
 if delivered {
 readyCh = nil
 initAttempts = 0
+// A DELIVERED certificate proves the credential was accepted. Without
+// this the TLS loop could only ever increment the rejection counter, so
+// a service with no state watches — the only other clear site — would
+// stay degraded forever after a brief authority blip, even once it
+// reconnected happily. Mirrors rust's tls_cert_stream_loop.
+service_im.NoteCredentialAccepted()
 }
 if err != nil {
 if ctx.Err() != nil || err == errTlsFirstCertFatal {
 return
 }
+// A rejected credential must invalidate the token cache here too: this
+// stream renews the serving certificate, so a stuck credential costs the
+// service its TLS as well as its authentication.
+service_im.NoteIfCredentialRejection(err)
 delay := 5 * time.Second
 if readyCh != nil {
 initAttempts++

@@ -4479,7 +4479,7 @@ struct EventBusTypedSubscribeService {
 }
 
 impl tonic::server::NamedService for EventBusTypedSubscribeService {
-    const NAME: &'static str = "contractfixtures.EventBusTypedService";
+    const NAME: &'static str = "contractfixtures.FixtureStateStateService";
 }
 
 impl<B> tonic::codegen::Service<tonic::codegen::http::Request<B>> for EventBusTypedSubscribeService
@@ -4497,7 +4497,9 @@ where
 
     fn call(&mut self, req: tonic::codegen::http::Request<B>) -> Self::Future {
         match req.uri().path() {
-            "/contractfixtures.EventBusTypedService/SubscribeContractfixturesFixtureStateEvents" => {
+            // Per-topic subscribe name (eventbus.PerTopicSubscribeParts), not the flat
+            // EventBusTypedService/Subscribe<Stem> this fixture served before 070d210a.
+            "/contractfixtures.FixtureStateStateService/SubscribeToEvents" => {
                 struct SubscribeSvc {
                     frame: Bytes,
                     captured_request: Arc<std::sync::Mutex<Option<SubscribeRequest>>>,
@@ -6219,6 +6221,7 @@ import com.google.protobuf.ByteString;
 import com.google.protobuf.Timestamp;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import io.grpc.CallCredentials;
 import io.grpc.CallOptions;
 import io.grpc.Channel;
 import io.grpc.ClientCall;
@@ -6251,6 +6254,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -7304,8 +7308,16 @@ public final class Consumer {
         .build();
     FakeEventBusChannel channel = new FakeEventBusChannel(
         encodeJavaSubscribeEnvelope(recordMeta.toByteArray(), event.toByteArray()));
+    CallCredentials creds = new CallCredentials() {
+      @Override
+      public void applyRequestMetadata(RequestInfo requestInfo, Executor appExecutor, MetadataApplier applier) {
+        Metadata headers = new Metadata();
+        headers.put(Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER), "Bearer subscriber-token");
+        applier.apply(headers);
+      }
+    };
     ContractfixturesFixtureStateEventsSubscriber subscriber =
-        new ContractfixturesFixtureStateEventsSubscriber(channel, "contractclient");
+        new ContractfixturesFixtureStateEventsSubscriber(channel, () -> creds, "contractclient");
 
     AtomicReference<Contractfixtures.FixtureEvent> gotEvent = new AtomicReference<>();
     AtomicReference<ContractfixturesFixtureStateEventsSubscriber.RecordMeta> gotMeta = new AtomicReference<>();
@@ -7316,8 +7328,18 @@ public final class Consumer {
     });
     Thread.interrupted();
 
-    if (!"contractfixtures.EventBusTypedService/SubscribeContractfixturesFixtureStateEvents".equals(channel.fullMethod.get())) {
+    // Per-topic subscribe name (eventbus.PerTopicSubscribeParts), not the flat
+    // EventBusTypedService/Subscribe<Stem> this fixture asserted before 070d210a.
+    // grpc-java full method names carry no leading slash.
+    if (!"contractfixtures.FixtureStateStateService/SubscribeToEvents".equals(channel.fullMethod.get())) {
       throw new IllegalStateException("Java subscriber used unexpected EventBus method: " + channel.fullMethod.get());
+    }
+    // The subscriber must attach the supplied call credentials to every
+    // (re)connect — a subscription that opens without them is rejected by
+    // event-bus, and dropping the supplier would silently un-authenticate it.
+    if (channel.credentials.get() != creds) {
+      throw new IllegalStateException("Java subscriber did not attach the supplied call credentials: "
+          + channel.credentials.get());
     }
     byte[] sentRequest = channel.sentRequest.get();
     if (sentRequest == null) {
@@ -7372,6 +7394,7 @@ public final class Consumer {
     private final byte[] frame;
     final AtomicReference<String> fullMethod = new AtomicReference<>();
     final AtomicReference<byte[]> sentRequest = new AtomicReference<>();
+    final AtomicReference<CallCredentials> credentials = new AtomicReference<>();
 
     FakeEventBusChannel(byte[] frame) {
       this.frame = frame;
@@ -7381,6 +7404,7 @@ public final class Consumer {
     @SuppressWarnings("unchecked")
     public <ReqT, RespT> ClientCall<ReqT, RespT> newCall(MethodDescriptor<ReqT, RespT> methodDescriptor, CallOptions callOptions) {
       fullMethod.set(methodDescriptor.getFullMethodName());
+      credentials.set(callOptions.getCredentials());
       return (ClientCall<ReqT, RespT>) new FakeEventBusCall(this);
     }
 

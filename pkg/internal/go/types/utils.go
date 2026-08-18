@@ -549,10 +549,10 @@ func UtilsGoTmpl() string {
 const validationGoTmplBody = `package utils
 
 import (
-	"fmt"
 	"net"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	protoerrors "ERRORS_IMPORT_PATH"
@@ -683,8 +683,8 @@ func ValidateAssertListenAddr(addr string) error {
 	}
 
 	// Validate port
-	port := 0
-	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil || port < 0 || port > 65535 {
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 0 || port > 65535 {
 		return protoerrors.NewErrMissingInvalidData(nil, "invalid port: must be 0-65535, got: %s", portStr)
 	}
 
@@ -699,8 +699,8 @@ func ParseListenAddr(addr string) (host string, port int, err error) {
 	if splitErr != nil {
 		return "", 0, protoerrors.NewErrMissingInvalidData(splitErr, "invalid host:port format: %s", addr)
 	}
-	p := 0
-	if _, scanErr := fmt.Sscanf(portStr, "%d", &p); scanErr != nil || p < 0 || p > 65535 {
+	p, scanErr := strconv.Atoi(portStr)
+	if scanErr != nil || p < 0 || p > 65535 {
 		return "", 0, protoerrors.NewErrMissingInvalidData(nil, "invalid port: must be 0-65535, got: %s", portStr)
 	}
 	return h, p, nil

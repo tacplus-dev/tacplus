@@ -287,8 +287,8 @@ func Validate%sWithDepth(m *%s, depth int) error {
 						fmt.Fprintf(b, `	// Validate %s (assert_ipaddr_type: IPv4 mask)
 	for _, v := range m.%s {
 		if v != "" {
-			var mask int
-			if _, err := fmt.Sscanf(v, "%%d", &mask); err != nil || mask < 0 || mask > 32 {
+			mask, err := strconv.Atoi(v)
+			if err != nil || mask < 0 || mask > 32 {
 				return %s(nil, "field %s must contain valid IPv4 masks (0-32), got: %%s", v)
 			}
 		}
@@ -298,8 +298,8 @@ func Validate%sWithDepth(m *%s, depth int) error {
 					} else {
 						fmt.Fprintf(b, `	// Validate %s (assert_ipaddr_type: IPv4 mask)
 	if m.%s != "" {
-		var mask int
-		if _, err := fmt.Sscanf(m.%s, "%%d", &mask); err != nil || mask < 0 || mask > 32 {
+		mask, err := strconv.Atoi(m.%s)
+		if err != nil || mask < 0 || mask > 32 {
 			return %s(nil, "field %s must be a valid IPv4 mask (0-32), got: %%s", m.%s)
 		}
 	}
@@ -312,8 +312,8 @@ func Validate%sWithDepth(m *%s, depth int) error {
 						fmt.Fprintf(b, `	// Validate %s (assert_ipaddr_type: IPv6 mask)
 	for _, v := range m.%s {
 		if v != "" {
-			var mask int
-			if _, err := fmt.Sscanf(v, "%%d", &mask); err != nil || mask < 0 || mask > 128 {
+			mask, err := strconv.Atoi(v)
+			if err != nil || mask < 0 || mask > 128 {
 				return %s(nil, "field %s must contain valid IPv6 masks (0-128), got: %%s", v)
 			}
 		}
@@ -323,8 +323,8 @@ func Validate%sWithDepth(m *%s, depth int) error {
 					} else {
 						fmt.Fprintf(b, `	// Validate %s (assert_ipaddr_type: IPv6 mask)
 	if m.%s != "" {
-		var mask int
-		if _, err := fmt.Sscanf(m.%s, "%%d", &mask); err != nil || mask < 0 || mask > 128 {
+		mask, err := strconv.Atoi(m.%s)
+		if err != nil || mask < 0 || mask > 128 {
 			return %s(nil, "field %s must be a valid IPv6 mask (0-128), got: %%s", m.%s)
 		}
 	}
@@ -337,8 +337,8 @@ func Validate%sWithDepth(m *%s, depth int) error {
 						fmt.Fprintf(b, `	// Validate %s (assert_ipaddr_type: IPv4 or IPv6 mask)
 	for _, v := range m.%s {
 		if v != "" {
-			var mask int
-			if _, err := fmt.Sscanf(v, "%%d", &mask); err != nil || mask < 0 || mask > 128 {
+			mask, err := strconv.Atoi(v)
+			if err != nil || mask < 0 || mask > 128 {
 				return %s(nil, "field %s must contain valid IP masks (0-128), got: %%s", v)
 			}
 		}
@@ -348,8 +348,8 @@ func Validate%sWithDepth(m *%s, depth int) error {
 					} else {
 						fmt.Fprintf(b, `	// Validate %s (assert_ipaddr_type: IPv4 or IPv6 mask)
 	if m.%s != "" {
-		var mask int
-		if _, err := fmt.Sscanf(m.%s, "%%d", &mask); err != nil || mask < 0 || mask > 128 {
+		mask, err := strconv.Atoi(m.%s)
+		if err != nil || mask < 0 || mask > 128 {
 			return %s(nil, "field %s must be a valid IP mask (0-128), got: %%s", m.%s)
 		}
 	}

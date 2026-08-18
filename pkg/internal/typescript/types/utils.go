@@ -255,7 +255,7 @@ export function validateAssertListenAddr(addr: string): void {
   }
 
   // Validate port
-  const port = parseInt(portStr, 10);
+  const port = /^[+-]?[0-9]+$/.test(portStr) ? Number(portStr) : NaN;
   if (isNaN(port) || port < 0 || port > 65535) {
     throw new Error(` + "`" + `invalid port: must be 0-65535, got: ${portStr}` + "`" + `);
   }
@@ -299,7 +299,7 @@ export function parseListenAddr(addr: string): ListenAddr {
     portStr = addr.substring(lastColon + 1);
   }
 
-  const port = parseInt(portStr, 10);
+  const port = /^[+-]?[0-9]+$/.test(portStr) ? Number(portStr) : NaN;
   if (isNaN(port) || port < 0 || port > 65535) {
     throw new Error(` + "`" + `port out of range (0-65535): ${portStr}` + "`" + `);
   }

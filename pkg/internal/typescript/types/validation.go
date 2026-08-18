@@ -246,7 +246,21 @@ export function %s(m: %s | undefined, depth = 0): void {
 
 			case "assert_email":
 				// Generate email validation
-				fmt.Fprintf(b, `	// Validate %s (assert_email)
+				if field.IsRepeated {
+					fmt.Fprintf(b, `	// Validate %s (assert_email)
+	if (m.%s) {
+		const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+		for (let i = 0; i < m.%s.length; i++) {
+			const val = m.%s[i];
+			if (val && !emailRegex.test(val)) {
+				throw newErrMissingInvalidData(undefined, `+"`field %s[${i}] must be a valid email address`"+`);
+			}
+		}
+	}
+
+`, fieldName, fieldName, fieldName, fieldName, fieldName)
+				} else {
+					fmt.Fprintf(b, `	// Validate %s (assert_email)
 	if (m.%s) {
 		const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 		if (!emailRegex.test(m.%s)) {
@@ -255,6 +269,7 @@ export function %s(m: %s | undefined, depth = 0): void {
 	}
 
 `, fieldName, fieldName, fieldName, fieldName)
+				}
 
 			case "assert_url":
 				if field.Type != "string" {
@@ -276,7 +291,21 @@ export function %s(m: %s | undefined, depth = 0): void {
 
 			case "assert_fqdn":
 				// Generate FQDN validation
-				fmt.Fprintf(b, `	// Validate %s (assert_fqdn)
+				if field.IsRepeated {
+					fmt.Fprintf(b, `	// Validate %s (assert_fqdn)
+	if (m.%s) {
+		const fqdnRegex = /^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
+		for (let i = 0; i < m.%s.length; i++) {
+			const val = m.%s[i];
+			if (val && !fqdnRegex.test(val)) {
+				throw newErrMissingInvalidData(undefined, `+"`field %s[${i}] must be a valid FQDN`"+`);
+			}
+		}
+	}
+
+`, fieldName, fieldName, fieldName, fieldName, fieldName)
+				} else {
+					fmt.Fprintf(b, `	// Validate %s (assert_fqdn)
 	if (m.%s) {
 		const fqdnRegex = /^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
 		if (!fqdnRegex.test(m.%s)) {
@@ -285,10 +314,27 @@ export function %s(m: %s | undefined, depth = 0): void {
 	}
 
 `, fieldName, fieldName, fieldName, fieldName)
+				}
 
 			case "assert_host":
 				// Generate host validation (IP address or FQDN)
-				fmt.Fprintf(b, `	// Validate %s (assert_host: IP address or FQDN)
+				if field.IsRepeated {
+					fmt.Fprintf(b, `	// Validate %s (assert_host: IP address or FQDN)
+	if (m.%s) {
+		const ipv4Regex = /^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+		const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::$|^([0-9a-fA-F]{1,4}:){1,7}:$|^:(:([0-9a-fA-F]{1,4})){1,7}$/;
+		const fqdnRegex = /^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
+		for (let i = 0; i < m.%s.length; i++) {
+			const val = m.%s[i];
+			if (val && !ipv4Regex.test(val) && !ipv6Regex.test(val) && !fqdnRegex.test(val)) {
+				throw newErrMissingInvalidData(undefined, `+"`field %s[${i}] must be a valid IP address or FQDN`"+`);
+			}
+		}
+	}
+
+`, fieldName, fieldName, fieldName, fieldName, fieldName)
+				} else {
+					fmt.Fprintf(b, `	// Validate %s (assert_host: IP address or FQDN)
 	if (m.%s) {
 		const ipv4Regex = /^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
 		const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::$|^([0-9a-fA-F]{1,4}:){1,7}:$|^:(:([0-9a-fA-F]{1,4})){1,7}$/;
@@ -299,10 +345,25 @@ export function %s(m: %s | undefined, depth = 0): void {
 	}
 
 `, fieldName, fieldName, fieldName, fieldName, fieldName, fieldName)
+				}
 
 			case "assert_base64":
 				// Generate base64 validation
-				fmt.Fprintf(b, `	// Validate %s (assert_base64)
+				if field.IsRepeated {
+					fmt.Fprintf(b, `	// Validate %s (assert_base64)
+	if (m.%s) {
+		const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
+		for (let i = 0; i < m.%s.length; i++) {
+			const val = m.%s[i];
+			if (val && !base64Regex.test(val)) {
+				throw newErrMissingInvalidData(undefined, `+"`field %s[${i}] must be valid base64`"+`);
+			}
+		}
+	}
+
+`, fieldName, fieldName, fieldName, fieldName, fieldName)
+				} else {
+					fmt.Fprintf(b, `	// Validate %s (assert_base64)
 	if (m.%s) {
 		const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
 		if (!base64Regex.test(m.%s)) {
@@ -311,6 +372,7 @@ export function %s(m: %s | undefined, depth = 0): void {
 	}
 
 `, fieldName, fieldName, fieldName, fieldName)
+				}
 
 			case "assert_listen_addr":
 				if field.Type != "string" {
@@ -351,7 +413,21 @@ export function %s(m: %s | undefined, depth = 0): void {
 
 			case "assert_semver":
 				// Generate semantic version validation
-				fmt.Fprintf(b, `	// Validate %s (assert_semver)
+				if field.IsRepeated {
+					fmt.Fprintf(b, `	// Validate %s (assert_semver)
+	if (m.%s) {
+		const semverRegex = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
+		for (let i = 0; i < m.%s.length; i++) {
+			const val = m.%s[i];
+			if (val && !semverRegex.test(val)) {
+				throw newErrMissingInvalidData(undefined, `+"`field %s[${i}] must be a valid semantic version (e.g., '1.0.0' or 'v2.3.4')`"+`);
+			}
+		}
+	}
+
+`, fieldName, fieldName, fieldName, fieldName, fieldName)
+				} else {
+					fmt.Fprintf(b, `	// Validate %s (assert_semver)
 	if (m.%s) {
 		const semverRegex = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 		if (!semverRegex.test(m.%s)) {
@@ -360,6 +436,7 @@ export function %s(m: %s | undefined, depth = 0): void {
 	}
 
 `, fieldName, fieldName, fieldName, fieldName)
+				}
 
 			case "assert_enc_type":
 				if field.Type != "string" {

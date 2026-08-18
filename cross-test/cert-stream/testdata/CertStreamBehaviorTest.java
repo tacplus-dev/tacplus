@@ -52,6 +52,8 @@ import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.bouncycastle.asn1.ASN1Primitive;
 import org.bouncycastle.asn1.x500.X500Name;
@@ -398,6 +400,126 @@ class CertStreamBehaviorTest {
         assertFalse(Arrays.equals(keys.get(0), keys.get(1)), "fresh SMB renewal should install a new key");
     }
 
+    // PC-L-3, anti-channel-capture leg. docs/API.md: "Reconnect loops
+    // re-resolve the authority endpoint on every attempt; a certificate stream
+    // must not pin a dead channel, stub, observer, or connection forever after
+    // the authority endpoint changes." The template pin for this lives in
+    // pkg/internal/common/cert_stream_reconnect_parity_test.go, which proves the
+    // channel is acquired INSIDE the per-attempt function for all three
+    // languages. These two tests are the behavioural half for java: they move
+    // the target between attempts and check where the retry actually lands.
+    //
+    // The first attempt talks to a stale authority that ends the stream before
+    // delivering, so the loop retries; by then the ServiceConnection resolves to
+    // a different target. The CSR counters are the direct evidence — the stale
+    // authority must see exactly the one CSR of the failed first attempt, and
+    // the moved authority must see the retry's. A loop that captured the channel
+    // from the first attempt inverts both, keeps re-dialling a target that will
+    // never deliver, and never drops the first-delivery latch.
+    @Test
+    void javaTlsCertStreamReResolvesTheAuthorityAfterTheTargetMoves() throws Exception {
+        try (AuthorityFixture stale = startAuthority(AuthorityMode.CLEAN_BEFORE_FIRST);
+                AuthorityFixture moved = startAuthority(AuthorityMode.FIRST_SUCCESS)) {
+            MovingAuthorityConnection connection =
+                    new MovingAuthorityConnection(stale.channel(), moved.channel());
+            IdentityManager identity = fixtureIdentity();
+            // The ServiceManager gets a plain connection, NOT the moving one: its
+            // constructor resolves a channel of its own for the state clients, and
+            // that resolution would be indistinguishable from a reconnect attempt.
+            // The loop takes the connection it re-resolves as an argument, and that
+            // argument is the seam under test.
+            ServiceManager sm = fixtureServiceManager(moved.connection(), identity);
+            RecordingHandler handler = new RecordingHandler();
+            installHandlerSlots(sm, handler);
+            CountDownLatch ready = new CountDownLatch(1);
+            AtomicReference<Exception> readyError = new AtomicReference<>();
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+
+            Thread loop = startCertStreamLoop(
+                    "tlsCertStreamLoop",
+                    sm,
+                    connection,
+                    identity,
+                    ready,
+                    readyError,
+                    failure,
+                    "TLS moved-authority");
+            boolean delivered;
+            try {
+                delivered = ready.await(30, TimeUnit.SECONDS);
+            } finally {
+                stopCertStreamLoop(loop);
+            }
+
+            assertNull(failure.get(), "TLS loop returned an unexpected failure");
+            assertTrue(delivered, "TLS first delivery must arrive once the authority target moves");
+            assertNull(readyError.get(), "TLS startup must succeed against the moved authority");
+            assertEquals(1, handler.tlsKeys().size(), "expected one TLS delivery, from the moved authority");
+            assertEquals(
+                    1,
+                    stale.tlsCsrs(),
+                    "the stale TLS authority must be dialled on the first attempt and never again");
+            assertTrue(
+                    moved.tlsCsrs() >= 1,
+                    "the TLS retry must reach the moved authority, not a captured channel to the stale one");
+            assertTrue(
+                    connection.resolutions() >= 2,
+                    "the TLS loop must re-resolve the authority connection on every attempt");
+        }
+    }
+
+    @Test
+    void javaSmbCertStreamReResolvesTheAuthorityAfterTheTargetMoves() throws Exception {
+        try (AuthorityFixture stale = startAuthority(AuthorityMode.CLEAN_BEFORE_FIRST);
+                AuthorityFixture moved = startAuthority(AuthorityMode.FIRST_SUCCESS)) {
+            MovingAuthorityConnection connection =
+                    new MovingAuthorityConnection(stale.channel(), moved.channel());
+            IdentityManager identity = fixtureIdentity();
+            // The ServiceManager gets a plain connection, NOT the moving one: its
+            // constructor resolves a channel of its own for the state clients, and
+            // that resolution would be indistinguishable from a reconnect attempt.
+            // The loop takes the connection it re-resolves as an argument, and that
+            // argument is the seam under test.
+            ServiceManager sm = fixtureServiceManager(moved.connection(), identity);
+            RecordingHandler handler = new RecordingHandler();
+            installHandlerSlots(sm, handler);
+            CountDownLatch ready = new CountDownLatch(1);
+            AtomicReference<Exception> readyError = new AtomicReference<>();
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+
+            Thread loop = startCertStreamLoop(
+                    "smbCertStreamLoop",
+                    sm,
+                    connection,
+                    identity,
+                    ready,
+                    readyError,
+                    failure,
+                    "SMB moved-authority");
+            boolean delivered;
+            try {
+                delivered = ready.await(30, TimeUnit.SECONDS);
+            } finally {
+                stopCertStreamLoop(loop);
+            }
+
+            assertNull(failure.get(), "SMB loop returned an unexpected failure");
+            assertTrue(delivered, "SMB first delivery must arrive once the authority target moves");
+            assertNull(readyError.get(), "SMB startup must succeed against the moved authority");
+            assertEquals(1, handler.smbKeys().size(), "expected one SMB delivery, from the moved authority");
+            assertEquals(
+                    1,
+                    stale.smbCsrs(),
+                    "the stale SMB authority must be dialled on the first attempt and never again");
+            assertTrue(
+                    moved.smbCsrs() >= 1,
+                    "the SMB retry must reach the moved authority, not a captured channel to the stale one");
+            assertTrue(
+                    connection.resolutions() >= 2,
+                    "the SMB loop must re-resolve the authority connection on every attempt");
+        }
+    }
+
     @Test
     void javaTlsStartupBackoffExitsOnInterrupt() throws Exception {
         assertLoopExitsOnInterrupt(
@@ -499,9 +621,11 @@ class CertStreamBehaviorTest {
     }
 
     private static AuthorityFixture startAuthority(AuthorityMode mode) throws Exception {
+        JavaTlsAuthority tlsAuthority = new JavaTlsAuthority(mode);
+        JavaSmbAuthority smbAuthority = new JavaSmbAuthority(mode);
         Server server = ServerBuilder.forPort(0)
-                .addService(new JavaTlsAuthority(mode))
-                .addService(new JavaSmbAuthority(mode))
+                .addService(tlsAuthority)
+                .addService(smbAuthority)
                 .build()
                 .start();
         ManagedChannelBuilder<?> channelBuilder = ManagedChannelBuilder.forAddress("127.0.0.1", server.getPort())
@@ -513,7 +637,9 @@ class CertStreamBehaviorTest {
         return new AuthorityFixture(
                 ServiceConnection.fromChannel("cert-stream-authority", channel),
                 channel,
-                server);
+                server,
+                tlsAuthority,
+                smbAuthority);
     }
 
     /**
@@ -564,7 +690,19 @@ class CertStreamBehaviorTest {
     private record AuthorityFixture(
             ServiceConnection connection,
             ManagedChannel channel,
-            Server server) implements AutoCloseable {
+            Server server,
+            JavaTlsAuthority tlsAuthority,
+            JavaSmbAuthority smbAuthority) implements AutoCloseable {
+        /** How many ManageCert CSRs this authority instance has received. */
+        int tlsCsrs() {
+            return tlsAuthority.csrs();
+        }
+
+        /** How many ManageSmbCert CSRs this authority instance has received. */
+        int smbCsrs() {
+            return smbAuthority.csrs();
+        }
+
         @Override
         public void close() {
             channel.shutdownNow();
@@ -776,9 +914,16 @@ class CertStreamBehaviorTest {
 
     private static final class JavaTlsAuthority extends TlsCertServiceGrpc.TlsCertServiceImplBase {
         private final AuthorityMode mode;
+        // Counted per AUTHORITY, not per stream, so a test can tell which
+        // authority instance a reconnect attempt actually landed on.
+        private final AtomicInteger csrs = new AtomicInteger();
 
         JavaTlsAuthority(AuthorityMode mode) {
             this.mode = mode;
+        }
+
+        int csrs() {
+            return csrs.get();
         }
 
         @Override
@@ -794,6 +939,7 @@ class CertStreamBehaviorTest {
                     if (!msg.hasCsr()) {
                         return;
                     }
+                    csrs.incrementAndGet();
                     try {
                         deliveryCount++;
                         KeyOuterClass.PublicKey publicKey = msg.getCsr().getPublicKey();
@@ -893,9 +1039,15 @@ class CertStreamBehaviorTest {
 
     private static final class JavaSmbAuthority extends SmbCertServiceGrpc.SmbCertServiceImplBase {
         private final AuthorityMode mode;
+        // See JavaTlsAuthority.csrs.
+        private final AtomicInteger csrs = new AtomicInteger();
 
         JavaSmbAuthority(AuthorityMode mode) {
             this.mode = mode;
+        }
+
+        int csrs() {
+            return csrs.get();
         }
 
         @Override
@@ -911,6 +1063,7 @@ class CertStreamBehaviorTest {
                     if (!msg.hasCsr()) {
                         return;
                     }
+                    csrs.incrementAndGet();
                     try {
                         deliveryCount++;
                         KeyOuterClass.PublicKey publicKey = msg.getCsr().getPublicKey();
@@ -1128,6 +1281,88 @@ class CertStreamBehaviorTest {
         assertTrue(
                 err.getCause().getMessage().contains(expectedCauseMessage),
                 "expected handler cause containing " + expectedCauseMessage + ", got " + err.getCause());
+    }
+
+    /**
+     * A ServiceConnection whose resolved target MOVES: the first attempt gets
+     * the first channel, every later attempt gets the next one. This is the
+     * fixture stand-in for an authority endpoint that was re-resolved to a new
+     * address while a cert stream was retrying.
+     */
+    private static final class MovingAuthorityConnection extends ServiceConnection {
+        private final ManagedChannel[] targets;
+        private final AtomicInteger resolutions = new AtomicInteger();
+
+        MovingAuthorityConnection(ManagedChannel... targets) {
+            super(
+                    "cert-stream-authority",
+                    (serviceId, target) -> {
+                        throw new AssertionError("the moving authority fixture resolves its own channels");
+                    });
+            this.targets = targets;
+        }
+
+        @Override
+        public ManagedChannel conn() {
+            int resolution = resolutions.getAndIncrement();
+            return targets[Math.min(resolution, targets.length - 1)];
+        }
+
+        int resolutions() {
+            return resolutions.get();
+        }
+    }
+
+    /**
+     * Runs a cert-stream LOOP (not a single session) on its own daemon thread.
+     * The loop only returns on a fatal first delivery or an interrupt, so the
+     * caller waits on the ready latch and then interrupts it.
+     */
+    private static Thread startCertStreamLoop(
+            String loopName,
+            ServiceManager sm,
+            ServiceConnection connection,
+            IdentityManager identity,
+            CountDownLatch ready,
+            AtomicReference<Exception> readyError,
+            AtomicReference<Throwable> failure,
+            String label) throws Exception {
+        Method method = privateMethod(
+                loopName,
+                ServiceManager.class,
+                ServiceConnection.class,
+                IdentityManager.class,
+                CountDownLatch.class,
+                AtomicReference.class);
+        Thread thread = new Thread(
+                () -> {
+                    try {
+                        method.invoke(null, sm, connection, identity, ready, readyError);
+                    } catch (InvocationTargetException ex) {
+                        failure.set(ex.getCause());
+                    } catch (Throwable err) {
+                        failure.set(err);
+                    }
+                },
+                label);
+        thread.setDaemon(true);
+        thread.start();
+        return thread;
+    }
+
+    /**
+     * Stops a cert-stream loop thread. One interrupt is not enough: if it lands
+     * while the loop is inside a stream session, the session throws, the loop
+     * catches it as a normal disconnect and clears the interrupt flag on its way
+     * into the retry sleep. Re-interrupting until the thread exits stops it at
+     * the sleep instead of waiting the full backoff out.
+     */
+    private static void stopCertStreamLoop(Thread loop) throws InterruptedException {
+        for (int attempt = 0; attempt < 50 && loop.isAlive(); attempt++) {
+            loop.interrupt();
+            loop.join(100);
+        }
+        assertFalse(loop.isAlive(), loop.getName() + " loop did not exit after interrupt");
     }
 
     private static void assertLoopExitsOnInterrupt(

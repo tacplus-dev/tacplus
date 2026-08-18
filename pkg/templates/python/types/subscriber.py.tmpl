@@ -14,6 +14,7 @@ from typing import Awaitable, Callable, NamedTuple, Optional
 import grpc
 import grpc.aio
 from {{.TypeImportFrom}} import {{.TypePbModule}} as event_pb
+from {{.ExceptionsImportFrom}}.exceptions import unauthenticated
 
 # Resolve the Subscribe envelope class ONCE at import time. If the envelope is
 # not co-located with the payload event (a generation/config error), this
@@ -139,7 +140,12 @@ class Subscriber:
         # Go/TS subscribers, which attach service tokens to the Subscribe call).
         metadata = None
         if self._token_provider is not None:
-            token = await self._token_provider()
+            try:
+                token = await self._token_provider()
+            except Exception as cause:
+                raise unauthenticated(f"auth token: {cause}") from cause
+            if not token:
+                raise unauthenticated("auth token is empty")
             metadata = (("authorization", f"Bearer {token}"),)
 
         # Open bidi stream via raw channel call.

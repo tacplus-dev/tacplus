@@ -24,6 +24,7 @@ from {{.PbImportFrom}} import {{.PackageName}}_pb2 as pb
 {{- if $hasWatches}}
 from {{.PbImportFrom}} import {{.PackageName}}_pb2_grpc as pb_grpc
 from {{.TraceImportFrom}} import trace_pb2
+from {{.ExceptionsImportFrom}}.exceptions import unauthenticated
 
 logger = logging.getLogger(__name__)
 {{- end}}
@@ -183,11 +184,14 @@ class {{.StateRootName}}Client:
     async def _metadata(self):
         if self._token_provider is None:
             return None
-        token = self._token_provider()
-        if inspect.isawaitable(token):
-            token = await token
+        try:
+            token = self._token_provider()
+            if inspect.isawaitable(token):
+                token = await token
+        except Exception as cause:
+            raise unauthenticated(f"auth token: {cause}") from cause
         if not token:
-            raise RuntimeError("token provider returned an empty token")
+            raise unauthenticated("auth token is empty")
         return [("authorization", f"Bearer {token}")]
 
     async def _sleep_before_watch_retry(self, attempt: int) -> None:

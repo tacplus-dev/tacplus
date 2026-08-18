@@ -52,9 +52,11 @@ func pyProtoPackageLeaf(protoPackage string) string {
 	return parts[len(parts)-1]
 }
 
-// pyExceptionsImportFrom returns the relative import base for the generated
-// exceptions module, from a client file whose relative-import prefix is dots.
-// generateExceptions writes it to types/sys/errors/exceptions.py.
-func pyExceptionsImportFrom(dots string) string {
-	return dots + "types.sys.errors"
+// pyExceptionsImportFrom returns the import base for the generated exceptions
+// module. prefix is whatever leads to the python package root: a relative-import
+// dot run ("....." ) for files nested under it, or "<PythonPackageBase>." for
+// absolute imports. generateExceptions writes the module to
+// types/sys/errors/exceptions.py (helpers_gen.go:128).
+func pyExceptionsImportFrom(prefix string) string {
+	return prefix + "types.sys.errors"
 }

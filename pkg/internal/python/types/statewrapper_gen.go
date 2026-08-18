@@ -23,10 +23,10 @@ import (
 
 // pySingletonBoundary describes a non-repeated message field in the state root.
 type pySingletonBoundary struct {
-	FieldName    string // snake_case: "roster"
-	FieldPascal  string // PascalCase: "Roster"
-	TypeName     string // PascalCase message type: "TeamRoster"
-	IsPersisted  bool
+	FieldName   string // snake_case: "roster"
+	FieldPascal string // PascalCase: "Roster"
+	TypeName    string // PascalCase message type: "TeamRoster"
+	IsPersisted bool
 }
 
 // pyCollectionBoundary describes a repeated message field in the state root.
@@ -63,19 +63,23 @@ type pyViewBoundary struct {
 
 // pyStateWrapperData is the template data for generating the Python state wrapper.
 type pyStateWrapperData struct {
-	Header           string
-	PackageName      string // e.g., "baseball" — used for pb2 module import
-	PbImportFrom     string // computed relative import path to pb2 module
-	TraceImportFrom  string // computed relative import path to trace pb2 module
-	StateRootName    string
-	StateServiceName string
-	Singletons       []pySingletonBoundary
-	Collections      []pyCollectionBoundary
-	StateImports     []pyStateImportField
-	Commands         []pyCommandBoundary
-	Views            []pyViewBoundary
-	ReadOnly         bool // true for :ro (accessors only, no mutators)
-	WriteOnce        bool // true for :worm (write-once read-many: set/add but no lock/delete)
+	Header          string
+	PackageName     string // e.g., "baseball" — used for pb2 module import
+	PbImportFrom    string // computed relative import path to pb2 module
+	TraceImportFrom string // computed relative import path to trace pb2 module
+	// ExceptionsImportFrom is the relative import base for the shared
+	// exceptions module, so the outbound auth seam can raise a structured
+	// UNAUTHENTICATED instead of a bare RuntimeError.
+	ExceptionsImportFrom string
+	StateRootName        string
+	StateServiceName     string
+	Singletons           []pySingletonBoundary
+	Collections          []pyCollectionBoundary
+	StateImports         []pyStateImportField
+	Commands             []pyCommandBoundary
+	Views                []pyViewBoundary
+	ReadOnly             bool // true for :ro (accessors only, no mutators)
+	WriteOnce            bool // true for :worm (write-once read-many: set/add but no lock/delete)
 }
 
 // pyGeneratedStateClient tracks a generated state client for aggregator/registry generation.
@@ -292,10 +296,10 @@ func generatePyStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc *p
 			})
 		} else {
 			singletons = append(singletons, pySingletonBoundary{
-				FieldName:    escapePyKeyword(strutil.ToSnakeCase(field.Name)),
-				FieldPascal:  fieldPascal,
-				TypeName:     typeName,
-				IsPersisted:  field.Annotations["persistence"].BoolValue,
+				FieldName:   escapePyKeyword(strutil.ToSnakeCase(field.Name)),
+				FieldPascal: fieldPascal,
+				TypeName:    typeName,
+				IsPersisted: field.Annotations["persistence"].BoolValue,
 			})
 		}
 	}
@@ -309,19 +313,20 @@ func generatePyStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc *p
 	traceImportFrom := dots + "types.sys.trace"
 
 	data := pyStateWrapperData{
-		Header:           header.GeneratedHeader(consts.LangPython, svc.ProtoFile),
-		PackageName:      pbModuleName,
-		PbImportFrom:     pbImportFrom,
-		TraceImportFrom:  traceImportFrom,
-		StateRootName:    stateRoot.Name,
-		StateServiceName: proto.StateServiceName(stateRoot.Name),
-		Singletons:       singletons,
-		Collections:      collections,
-		StateImports:     stateImports,
-		Commands:         commands,
-		Views:            views,
-		ReadOnly:         accessMode == tactype.AccessRO || (config.HealthStateName != "" && stateRoot.Name == config.HealthStateName),
-		WriteOnce:        accessMode == tactype.AccessWORM,
+		Header:               header.GeneratedHeader(consts.LangPython, svc.ProtoFile),
+		PackageName:          pbModuleName,
+		PbImportFrom:         pbImportFrom,
+		TraceImportFrom:      traceImportFrom,
+		ExceptionsImportFrom: pyExceptionsImportFrom(dots),
+		StateRootName:        stateRoot.Name,
+		StateServiceName:     proto.StateServiceName(stateRoot.Name),
+		Singletons:           singletons,
+		Collections:          collections,
+		StateImports:         stateImports,
+		Commands:             commands,
+		Views:                views,
+		ReadOnly:             accessMode == tactype.AccessRO || (config.HealthStateName != "" && stateRoot.Name == config.HealthStateName),
+		WriteOnce:            accessMode == tactype.AccessWORM,
 	}
 
 	tmplContent, err := loadTemplate("statewrapper.py.tmpl")

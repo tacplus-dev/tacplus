@@ -64,7 +64,7 @@ func TestTypeScriptStateWrapperWatchLifecycleRenders(t *testing.T) {
 		"void this.runWatchBaseState(0);",
 		"stream.cancel();",
 		"this._channelProvider.channel();",
-		"throw new Error('token provider returned an empty token');",
+		"throw unauthenticatedError('auth token is empty');",
 		"this.channel().makeServerStreamRequest<traceWatchTypes.TraceRequest, types.Config>",
 		"this.recordWatchHealthy('DemoState.Config', false);",
 		"this.recordWatchRetrying(watchName, received, attempt, err ? String(err) : 'stream completed', err);",

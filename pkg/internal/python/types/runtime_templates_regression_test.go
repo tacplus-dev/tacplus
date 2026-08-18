@@ -419,16 +419,17 @@ func TestPythonSubscriberDecodesEnvelopeAndSurfacesRecordMeta(t *testing.T) {
 		t.Fatalf("parse subscriber template: %v", err)
 	}
 	data := pySubscriberTemplateData{
-		SourcePackage:   "aegis",
-		SourceStateRoot: "AegisState",
-		SourceField:     "event_stream",
-		FieldPascal:     "EventStream",
-		TypeName:        "TopologyEvent",
-		TypeImportFrom:  "svc_tacplus.types.vservices.aegis",
-		TypePbModule:    "aegis_pb2",
-		EnvelopeName:    "AegisStateEventStreamSubscribeRecord",
-		GrpcService:     "eventbus.EventBusTypedService",
-		GrpcMethod:      "SubscribeAegisAegisStateEventStream",
+		SourcePackage:        "aegis",
+		SourceStateRoot:      "AegisState",
+		SourceField:          "event_stream",
+		FieldPascal:          "EventStream",
+		TypeName:             "TopologyEvent",
+		TypeImportFrom:       "svc_tacplus.types.vservices.aegis",
+		TypePbModule:         "aegis_pb2",
+		ExceptionsImportFrom: pyExceptionsImportFrom("svc_tacplus."),
+		EnvelopeName:         "AegisStateEventStreamSubscribeRecord",
+		GrpcService:          "eventbus.EventBusTypedService",
+		GrpcMethod:           "SubscribeAegisAegisStateEventStream",
 	}
 	var out strings.Builder
 	if err := tmpl.Execute(&out, data); err != nil {

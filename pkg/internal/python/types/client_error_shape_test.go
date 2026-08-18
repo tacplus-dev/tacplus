@@ -70,3 +70,86 @@ func TestPythonExceptionsModuleExportsClientHelpers(t *testing.T) {
 		t.Errorf("pyExceptionsImportFrom = %q, want %q", got, ".....types.sys.errors")
 	}
 }
+
+// Same defect class as PAR-9, at the two python auth seams PAR-9 did not
+// reach. The state client raised a bare RuntimeError on an empty token and let
+// a provider exception escape unwrapped; the event-bus subscriber had no
+// empty-token check at all and attached a literal `Bearer ` header, pushing the
+// diagnosis onto the broker. Both now raise the shared ProtoError helpers.
+func TestPythonStateClientRaisesStructuredUnauthenticated(t *testing.T) {
+	rendered := renderPyStateWrapperForTest(t, pyStateWrapperData{
+		Header:               "# generated for test",
+		PackageName:          "demo",
+		PbImportFrom:         "......types.services.demo",
+		TraceImportFrom:      "......types.sys.trace",
+		ExceptionsImportFrom: pyExceptionsImportFrom("......"),
+		StateRootName:        "DemoState",
+		StateServiceName:     "DemoStateService",
+		Singletons: []pySingletonBoundary{{
+			FieldName:   "config",
+			FieldPascal: "Config",
+			TypeName:    "Config",
+		}},
+	})
+
+	for _, want := range []string{
+		"from ......types.sys.errors.exceptions import unauthenticated",
+		`raise unauthenticated(f"auth token: {cause}") from cause`,
+		`raise unauthenticated("auth token is empty")`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("rendered python state client missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, `raise RuntimeError("token provider returned an empty token")`) {
+		t.Errorf("python state client auth seam still raises a bare RuntimeError")
+	}
+}
+
+// The auth seam only exists when the state root has watches, so the exceptions
+// import must be emitted under the same condition — an unconditional import
+// would name a module the watchless wrapper never uses.
+func TestPythonStateClientWithoutWatchesOmitsExceptionsImport(t *testing.T) {
+	rendered := renderPyStateWrapperForTest(t, pyStateWrapperData{
+		Header:               "# generated for test",
+		PackageName:          "demo",
+		PbImportFrom:         "......types.services.demo",
+		TraceImportFrom:      "......types.sys.trace",
+		ExceptionsImportFrom: pyExceptionsImportFrom("......"),
+		StateRootName:        "DemoState",
+		StateServiceName:     "DemoStateService",
+	})
+
+	if strings.Contains(rendered, "exceptions import unauthenticated") {
+		t.Errorf("watchless python state client must not import the exceptions module:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "async def _metadata") {
+		t.Errorf("watchless python state client must not emit an auth seam:\n%s", rendered)
+	}
+}
+
+// subscriber.py.tmpl is PARKED, not live: generatePySubscribers has no call
+// site and generator.go:812-815 records why (client-side subscription support
+// needs a subscription-only ServiceManager). It is kept correct and pinned the
+// same way the PC-C-5 envelope machinery in the same template is — this test is
+// the pin, deliberately NOT a soundness row, which would probe a dead template.
+func TestPythonSubscriberRaisesStructuredUnauthenticated(t *testing.T) {
+	tmpl := readPythonTemplate(t, "python/types/subscriber.py.tmpl")
+
+	for _, want := range []string{
+		"from {{.ExceptionsImportFrom}}.exceptions import unauthenticated",
+		`raise unauthenticated(f"auth token: {cause}") from cause`,
+		`raise unauthenticated("auth token is empty")`,
+	} {
+		if !strings.Contains(tmpl, want) {
+			t.Errorf("subscriber template missing %q", want)
+		}
+	}
+	// The pre-fix seam attached the header with no guard at all.
+	if strings.Contains(tmpl, "            token = await self._token_provider()\n            metadata =") {
+		t.Errorf("subscriber attaches a bearer header without validating the token")
+	}
+	if got := pyExceptionsImportFrom("svc_tacplus."); got != "svc_tacplus.types.sys.errors" {
+		t.Errorf("pyExceptionsImportFrom(absolute base) = %q, want %q", got, "svc_tacplus.types.sys.errors")
+	}
+}

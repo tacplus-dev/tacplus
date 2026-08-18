@@ -28,14 +28,18 @@ type pySubscriberTemplateData struct {
 	TypeName        string // e.g. "TopologyEvent"
 	TypeImportFrom  string // e.g. "svc_tacplus.types.vservices.claude_sensor"
 	TypePbModule    string // e.g. "claude_sensor_pb2"
+	// ExceptionsImportFrom is the import base for the shared exceptions module,
+	// so the Subscribe auth seam raises a structured UNAUTHENTICATED rather than
+	// attaching an empty "Bearer " header and letting the broker guess.
+	ExceptionsImportFrom string // e.g. "svc_tacplus.types.sys.errors"
 	// EnvelopeName is the generated Subscribe-record wrapper message
 	// (ToPascalCase(SourceStateRoot)+FieldPascal+"SubscribeRecord"), co-generated
 	// with the payload event in the source module. field 1 = EventBusRecordMeta
 	// meta, field 2 = payload. Decoding it (rather than the bare payload) recovers
 	// offset/timestamp/key for the handler (PC-C-5).
-	EnvelopeName    string // e.g. "AegisStateEventStreamSubscribeRecord"
-	GrpcService     string // e.g. "alpha.SharedEventBusStateService" (per-topic; see EVENTBUS-PUBLISH-API-SPLIT.md)
-	GrpcMethod      string // e.g. "SubscribeToEventStream"
+	EnvelopeName string // e.g. "AegisStateEventStreamSubscribeRecord"
+	GrpcService  string // e.g. "alpha.SharedEventBusStateService" (per-topic; see EVENTBUS-PUBLISH-API-SPLIT.md)
+	GrpcMethod   string // e.g. "SubscribeToEventStream"
 }
 
 type pySubscriptionEventInfo struct {
@@ -174,16 +178,17 @@ func generatePySubscribers(config *tactype.Config, protoDir string) error {
 			sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)
 
 		data := pySubscriberTemplateData{
-			SourcePackage:   sub.SourcePackage,
-			SourceStateRoot: sub.SourceStateRoot,
-			SourceField:     sub.SourceField,
-			FieldPascal:     fieldPascal,
-			TypeName:        event.TypeName,
-			TypeImportFrom:  event.TypeImportFrom,
-			TypePbModule:    event.TypePbModule,
-			EnvelopeName:    strutil.ToPascalCase(sub.SourceStateRoot) + fieldPascal + "SubscribeRecord",
-			GrpcService:     subService,
-			GrpcMethod:      subMethod,
+			SourcePackage:        sub.SourcePackage,
+			SourceStateRoot:      sub.SourceStateRoot,
+			SourceField:          sub.SourceField,
+			FieldPascal:          fieldPascal,
+			TypeName:             event.TypeName,
+			TypeImportFrom:       event.TypeImportFrom,
+			TypePbModule:         event.TypePbModule,
+			ExceptionsImportFrom: pyExceptionsImportFrom(config.PythonPackageBase + "."),
+			EnvelopeName:         strutil.ToPascalCase(sub.SourceStateRoot) + fieldPascal + "SubscribeRecord",
+			GrpcService:          subService,
+			GrpcMethod:           subMethod,
 		}
 
 		var buf bytes.Buffer

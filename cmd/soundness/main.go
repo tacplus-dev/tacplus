@@ -253,6 +253,23 @@ func controlPlaneGuarantees() []controlPlaneGuarantee {
 			},
 		},
 		{
+			// Same class as the row above, at the state-client seam PAR-9 did not
+			// reach. go/java/rust attach state-client credentials at the channel
+			// (call credentials), so they have no per-call token seam to probe;
+			// python and typescript build the metadata themselves and reported a
+			// bare RuntimeError / uncoded Error there.
+			name:  "structured auth failure (state client)",
+			langs: []string{"python", "typescript"},
+			locus: map[string]string{
+				"python":     "pkg/templates/python/types/statewrapper.py.tmpl",
+				"typescript": "pkg/templates/typescript/types/statewrapper.ts.tmpl",
+			},
+			tokens: map[string][]string{
+				"python":     {"raise unauthenticated("},
+				"typescript": {"grpc.status.UNAUTHENTICATED"},
+			},
+		},
+		{
 			name:  "unary response validation (client outbound)",
 			locus: clientEmitterFiles,
 			tokens: map[string][]string{

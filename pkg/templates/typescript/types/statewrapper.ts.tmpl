@@ -12,6 +12,15 @@ import * as {{.Alias}} from '{{.ImportPath}}';
 {{- end}}
 
 {{- if $hasWatches}}
+// An outbound state call that cannot be authenticated must reach the caller as
+// a structured UNAUTHENTICATED, not a language-generic Error — matching the
+// generated gRPC client (grpcclient.ts.tmpl) and go/java/rust.
+function unauthenticatedError(message: string): Error & { code?: number } {
+    const err = new Error(message) as Error & { code?: number };
+    err.code = grpc.status.UNAUTHENTICATED;
+    return err;
+}
+
 export interface WatchStatus {
     watchName: string;
     received: boolean;
@@ -176,9 +185,14 @@ export class {{.StateRootName}}Client {
     private async metadata(): Promise<grpc.Metadata> {
         const metadata = new grpc.Metadata();
         if (this._tokenProvider) {
-            const token = await this._tokenProvider();
+            let token: string;
+            try {
+                token = await this._tokenProvider();
+            } catch (cause) {
+                throw unauthenticatedError(`auth token: ${cause instanceof Error ? cause.message : String(cause)}`);
+            }
             if (!token) {
-                throw new Error('token provider returned an empty token');
+                throw unauthenticatedError('auth token is empty');
             }
             metadata.add('authorization', `Bearer ${token}`);
         }

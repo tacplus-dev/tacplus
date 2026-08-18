@@ -15,12 +15,13 @@ import (
 
 func TestPythonStateWrapperWatchLifecycleRenders(t *testing.T) {
 	rendered := renderPyStateWrapperForTest(t, pyStateWrapperData{
-		Header:           "# generated for test",
-		PackageName:      "demo",
-		PbImportFrom:     "......types.services.demo",
-		TraceImportFrom:  "......types.sys.trace",
-		StateRootName:    "DemoState",
-		StateServiceName: "DemoStateService",
+		Header:               "# generated for test",
+		PackageName:          "demo",
+		PbImportFrom:         "......types.services.demo",
+		TraceImportFrom:      "......types.sys.trace",
+		ExceptionsImportFrom: pyExceptionsImportFrom("......"),
+		StateRootName:        "DemoState",
+		StateServiceName:     "DemoStateService",
 		Singletons: []pySingletonBoundary{{
 			FieldName:   "config",
 			FieldPascal: "Config",

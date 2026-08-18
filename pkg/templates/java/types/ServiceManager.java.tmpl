@@ -838,7 +838,17 @@ public class ServiceManager implements AutoCloseable {
         GrpcServer srv = new GrpcServer(config, new GrpcServer.CertProvider() {
             @Override public X509.X509CertChain getChain() { return getTlsCertChain(); }
             @Override public PrivateKey getPrivateKey() { return getTlsPrivateKey(); }
+{{- if .HasAutoTls}}
+            @Override public GrpcServer.CertMaterial getMaterial() {
+                CertAndKey ck = getCertAndKey();
+                return ck == null ? null : new GrpcServer.CertMaterial(ck.chain, ck.privateKey);
+            }
+{{- end}}
         }, multiImpl, healthManager);
+        // A serving cert that cannot be decoded for a handshake is a fleet
+        // health event, not just a log line (PC-L-1; parity with go's
+        // SetCertDegradeReporter).
+        srv.setCertDegradeReporter(this::reportTLSDegraded);
 
         // Start listening after readiness below.
 {{- else}}
@@ -858,7 +868,14 @@ public class ServiceManager implements AutoCloseable {
         GrpcServer healthSrv = new GrpcServer(config, new GrpcServer.CertProvider() {
             @Override public X509.X509CertChain getChain() { return getTlsCertChain(); }
             @Override public PrivateKey getPrivateKey() { return getTlsPrivateKey(); }
+{{- if .HasAutoTls}}
+            @Override public GrpcServer.CertMaterial getMaterial() {
+                CertAndKey ck = getCertAndKey();
+                return ck == null ? null : new GrpcServer.CertMaterial(ck.chain, ck.privateKey);
+            }
+{{- end}}
         }, additionalOnlyImpl, healthManager);
+        healthSrv.setCertDegradeReporter(this::reportTLSDegraded);
         // Start listening after readiness below.
 {{- end}}
 

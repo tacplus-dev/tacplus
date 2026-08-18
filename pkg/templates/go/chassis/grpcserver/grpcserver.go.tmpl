@@ -52,12 +52,15 @@ type GrpcServer struct {
 	tlsKey       crypto.PrivateKey
 	healthServer *health.Server
 
-	// Optional live cert providers (SetCertProvider): when set, Listen resolves
+	// Optional live cert provider (SetCertProvider): when set, Listen resolves
 	// the serving certificate PER HANDSHAKE via tls.Config.GetCertificate, so
 	// ManageCert renewals hot-reload without a restart (PC-L-10; parity with
 	// java's X509ExtendedKeyManager and rust's reloading cert resolver).
-	getChain func() *x509_pb.X509CertChain
-	getKey   func() crypto.PrivateKey
+	//
+	// The chain and the key come from ONE call, not two: reading them
+	// separately can straddle a renewal and pair chain N with key N+1, which
+	// fails to build and spuriously reports the instance degraded.
+	getMaterial func() (*x509_pb.X509CertChain, crypto.PrivateKey)
 
 	// Optional degradation reporter (SetCertDegradeReporter): when set, a failed
 	// rebuild of a renewed serving certificate is reported to the fleet health
@@ -65,13 +68,15 @@ type GrpcServer struct {
 	reportCertDegraded func(reason string)
 }
 
-// SetCertProvider installs live certificate providers. Call before Listen.
-// The providers are read on every TLS handshake; the built tls.Certificate is
+// SetCertProvider installs the live certificate provider. Call before Listen.
+// The provider is read on every TLS handshake; the built tls.Certificate is
 // cached by chain pointer identity, so steady-state handshakes stay cheap and
 // a renewed chain (new pointer) triggers exactly one rebuild.
-func (ps *GrpcServer) SetCertProvider(getChain func() *x509_pb.X509CertChain, getKey func() crypto.PrivateKey) {
-	ps.getChain = getChain
-	ps.getKey = getKey
+//
+// It returns the chain and its matching key together so a handshake can never
+// observe a torn pair across a renewal.
+func (ps *GrpcServer) SetCertProvider(getMaterial func() (*x509_pb.X509CertChain, crypto.PrivateKey)) {
+	ps.getMaterial = getMaterial
 }
 
 // SetCertDegradeReporter installs the callback invoked when a renewed serving
@@ -214,14 +219,14 @@ func (ps *GrpcServer) Listen(ctx context.Context) error {
 			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 				certMu.Lock()
 				defer certMu.Unlock()
-				if ps.getChain == nil || ps.getKey == nil {
+				if ps.getMaterial == nil {
 					return cachedCert, nil
 				}
-				chain := ps.getChain()
+				chain, key := ps.getMaterial()
 				if chain == nil || chain == cachedChain {
 					return cachedCert, nil
 				}
-				rebuilt, err := buildTLSCertificate(chain, ps.getKey())
+				rebuilt, err := buildTLSCertificate(chain, key)
 				if err != nil {
 					zap.L().Error("failed to build renewed TLS serving certificate; keeping previous cert", zap.Error(err))
 					if ps.reportCertDegraded != nil {

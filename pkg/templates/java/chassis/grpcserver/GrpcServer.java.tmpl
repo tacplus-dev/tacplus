@@ -57,11 +57,44 @@ public class GrpcServer {
         X509.X509CertChain getChain();
         /** Returns the current private key matching {@link #getChain()}, or null. */
         PrivateKey getPrivateKey();
+
+        /**
+         * Returns the chain and its matching key TOGETHER, from one read of the
+         * underlying snapshot. A handshake needs both, and resolving them with
+         * two separate calls can straddle a renewal and pair chain N with key
+         * N+1 — the handshake then fails with a cert/key mismatch. Providers
+         * backed by an atomic snapshot MUST override this; the default composes
+         * the two accessors and carries the torn-read window.
+         */
+        default CertMaterial getMaterial() {
+            return new CertMaterial(getChain(), getPrivateKey());
+        }
+    }
+
+    /** An immutable cert chain plus the private key that matches it. */
+    public static final class CertMaterial {
+        public final X509.X509CertChain chain;
+        public final PrivateKey privateKey;
+
+        public CertMaterial(X509.X509CertChain chain, PrivateKey privateKey) {
+            this.chain = chain;
+            this.privateKey = privateKey;
+        }
     }
 
     private Grpcconfig.Config config;
     private final ServiceImplementation impl;
     private final CertProvider certProvider;
+
+    /**
+     * Optional degradation reporter (setCertDegradeReporter): when set, a
+     * serving certificate that cannot be decoded for a handshake is reported to
+     * the fleet health plane as well as logged (PC-L-1). Without it the failure
+     * is log-only and the instance keeps advertising itself as healthy while
+     * every TLS handshake fails. Parity with go's
+     * {@code GrpcServer.SetCertDegradeReporter}.
+     */
+    private volatile java.util.function.Consumer<String> certDegradeReporter;
     private Server grpcServer;
     private Server healthProbeServer;
     private Javalin httpServer;
@@ -103,6 +136,21 @@ public class GrpcServer {
         this.healthManager = healthManager != null ? healthManager : new HealthStatusManager();
         this.healthManager.setStatus("", HealthCheckResponse.ServingStatus.NOT_SERVING);
         applyConfig(config);
+    }
+
+    /**
+     * Installs the callback invoked when the serving certificate cannot be
+     * decoded for a TLS handshake. Call before listen().
+     */
+    public void setCertDegradeReporter(java.util.function.Consumer<String> reporter) {
+        this.certDegradeReporter = reporter;
+    }
+
+    private void reportCertDegraded(String reason) {
+        java.util.function.Consumer<String> reporter = certDegradeReporter;
+        if (reporter != null) {
+            reporter.accept(reason);
+        }
     }
 
     /**
@@ -266,9 +314,21 @@ public class GrpcServer {
             X509ExtendedKeyManager dynamicKeyManager = new X509ExtendedKeyManager() {
                 private static final String ALIAS = "auto-tls";
 
+                /**
+                 * The chain+key pair resolved for the handshake in progress.
+                 * JSSE asks for the chain and the key in two separate calls on
+                 * the same thread; resolving the provider twice can straddle a
+                 * renewal and hand the peer chain N with key N+1, which fails
+                 * the handshake. The pair is captured once in
+                 * getCertificateChain and consumed in getPrivateKey.
+                 */
+                private final ThreadLocal<CertMaterial> handshakeMaterial = new ThreadLocal<>();
+
                 @Override
                 public X509Certificate[] getCertificateChain(String alias) {
-                    X509.X509CertChain chain = certProvider.getChain();
+                    CertMaterial material = certProvider.getMaterial();
+                    handshakeMaterial.set(material);
+                    X509.X509CertChain chain = material != null ? material.chain : null;
                     if (chain == null) return null;
                     try {
                         CertificateFactory cf = CertificateFactory.getInstance("X.509");
@@ -280,12 +340,20 @@ public class GrpcServer {
                         return certs.toArray(new X509Certificate[0]);
                     } catch (Exception e) {
                         logger.warn("Failed to decode cert chain for handshake", e);
+                        reportCertDegraded("serving TLS certificate could not be decoded for a handshake: " + e.getMessage());
                         return null;
                     }
                 }
 
                 @Override
                 public PrivateKey getPrivateKey(String alias) {
+                    CertMaterial material = handshakeMaterial.get();
+                    handshakeMaterial.remove();
+                    if (material != null) {
+                        return material.privateKey;
+                    }
+                    // getCertificateChain did not run on this thread first —
+                    // fall back to a fresh read rather than failing outright.
                     return certProvider.getPrivateKey();
                 }
 

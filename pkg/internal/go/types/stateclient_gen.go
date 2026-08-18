@@ -321,6 +321,10 @@ func (bc *ServiceManager) TLSCertChain() *x509_pb.X509CertChain { return nil }
 
 func (bc *ServiceManager) TLSPrivateKey() gocrypto.PrivateKey { return nil }
 
+func (bc *ServiceManager) TLSCertMaterial() (*x509_pb.X509CertChain, gocrypto.PrivateKey) {
+	return nil, nil
+}
+
 func (bc *ServiceManager) ActiveConn() *grpc.ClientConn { return nil }
 
 func (bc *ServiceManager) Conn() *grpc.ClientConn { return nil }

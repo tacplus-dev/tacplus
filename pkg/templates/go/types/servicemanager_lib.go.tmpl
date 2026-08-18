@@ -519,6 +519,18 @@ func (bc *ServiceManager) TLSPrivateKey() gocrypto.PrivateKey {
 	return bc.tlsPrivKey
 }
 
+// TLSCertMaterial returns the auto-obtained TLS certificate chain and its
+// matching private key under a SINGLE lock acquisition. Serving paths must use
+// this rather than TLSCertChain()+TLSPrivateKey(): two separate calls can
+// straddle a SetTLSCert renewal and pair chain N with key N+1, which fails to
+// build a tls.Certificate (go) or fails the handshake outright (java's
+// two-call X509KeyManager).
+func (bc *ServiceManager) TLSCertMaterial() (*x509_pb.X509CertChain, gocrypto.PrivateKey) {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+	return bc.tlsCertChain, bc.tlsPrivKey
+}
+
 // SetTLSCert atomically replaces the serving certificate chain and private key.
 // Called on ManageCert renewal delivery so live gRPC servers — whose tls.Config
 // resolves the certificate per handshake via TLSCertChain/TLSPrivateKey

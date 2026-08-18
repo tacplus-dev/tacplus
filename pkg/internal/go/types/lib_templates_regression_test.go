@@ -552,7 +552,7 @@ func TestGoServingCertRebuildFailureReportsDegraded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTemplate service_manager.go.tmpl: %v", err)
 	}
-	providers := strings.Count(sm, ".SetCertProvider(sm.sc.TLSCertChain, sm.sc.TLSPrivateKey)")
+	providers := strings.Count(sm, ".SetCertProvider(sm.sc.TLSCertMaterial)")
 	reporters := strings.Count(sm, ".SetCertDegradeReporter(sm.reportTLSDegraded)")
 	if providers == 0 || reporters != providers {
 		t.Fatalf("every server given live cert providers must also report rebuild failures: "+
@@ -591,7 +591,7 @@ func TestGoServingCertHotReloads(t *testing.T) {
 	for _, want := range []string{
 		"storeTlsCert := func(chain *x509_pb.X509CertChain, keyDER []byte) {",
 		"sm.sc.SetTLSCert(chain, key)",
-		"srv.SetCertProvider(sm.sc.TLSCertChain, sm.sc.TLSPrivateKey)",
+		"srv.SetCertProvider(sm.sc.TLSCertMaterial)",
 		"store func(*x509_pb.X509CertChain, []byte)",
 		"store(m.Cert.Chain, certKeyDER)",
 	} {

@@ -580,19 +580,44 @@ export function %s(m: %s | undefined, depth = 0): void {
 
 `, fieldName, annotationValue.IntValue, fieldName, fieldName, annotationValue.IntValue, fieldName, annotationValue.IntValue, fieldName, fieldName)
 				} else if field.Type == "bytes" {
-					fmt.Fprintf(b, `	// Validate %s (assert_min_size: %d bytes)
-	if (m.%s && m.%s.length < %d) {
+					// A truthiness guard would let an empty Uint8Array pass a minimum
+					// every other target rejects (go `len(m.X) < N`, java
+					// `getBytes().length < N`, python `len(...) < N`, rust
+					// `self.x.len() < N`). Only proto3 `optional` absence skips, which
+					// is the presence rule go/rust already use.
+					if field.IsOptional {
+						fmt.Fprintf(b, `	// Validate %s (assert_min_size: %d bytes)
+	if (m.%s !== undefined && m.%s.length < %d) {
 		throw newErrMissingInvalidData(undefined, `+"`field %s below min size of %d bytes, got: ${m.%s.length}`"+`);
 	}
 
 `, fieldName, annotationValue.IntValue, fieldName, fieldName, annotationValue.IntValue, fieldName, annotationValue.IntValue, fieldName)
+					} else {
+						fmt.Fprintf(b, `	// Validate %s (assert_min_size: %d bytes)
+	if (m.%s.length < %d) {
+		throw newErrMissingInvalidData(undefined, `+"`field %s below min size of %d bytes, got: ${m.%s.length}`"+`);
+	}
+
+`, fieldName, annotationValue.IntValue, fieldName, annotationValue.IntValue, fieldName, annotationValue.IntValue, fieldName)
+					}
 				} else {
-					fmt.Fprintf(b, `	// Validate %s (assert_min_size: %d bytes)
-	if (m.%s && new TextEncoder().encode(m.%s).length < %d) {
+					// Same bypass as the bytes branch: `m.X &&` skips the empty string,
+					// which every other target measures as length 0 and rejects.
+					if field.IsOptional {
+						fmt.Fprintf(b, `	// Validate %s (assert_min_size: %d bytes)
+	if (m.%s !== undefined && new TextEncoder().encode(m.%s).length < %d) {
 		throw newErrMissingInvalidData(undefined, `+"`field %s below min size of %d bytes, got: ${new TextEncoder().encode(m.%s).length}`"+`);
 	}
 
 `, fieldName, annotationValue.IntValue, fieldName, fieldName, annotationValue.IntValue, fieldName, annotationValue.IntValue, fieldName)
+					} else {
+						fmt.Fprintf(b, `	// Validate %s (assert_min_size: %d bytes)
+	if (new TextEncoder().encode(m.%s).length < %d) {
+		throw newErrMissingInvalidData(undefined, `+"`field %s below min size of %d bytes, got: ${new TextEncoder().encode(m.%s).length}`"+`);
+	}
+
+`, fieldName, annotationValue.IntValue, fieldName, annotationValue.IntValue, fieldName, annotationValue.IntValue, fieldName)
+					}
 				}
 
 			case "assert_invariant":

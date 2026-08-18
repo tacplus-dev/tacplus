@@ -18,19 +18,28 @@ rediscovered.
 
 ---
 
-## PC-L-3 — Java cert-stream has no exhaustion or channel-capture pin
+## PC-L-3 — Java cert-stream has no exhaustion pin; retry budget isn't testable
 
-**Status:** no Java cert-stream test exists at all.
+**Status:** channel-capture is closed (`CertStreamBehaviorTest.java`,
+`...ReResolvesTheAuthorityAfterTheTargetMoves`, TLS+SMB). Exhaustion still has
+no behavioral pin, in any language — Go and Rust are also missing it, not just
+Java.
 
 The TLS renewal stream can exhaust its retry chain, and a renewed channel can be
-captured by a stale reference. Neither has a pin in Java. The go leg is covered;
-Java parity is asserted only at the template level (that the degrade seam is
-*present*), not behaviourally.
+captured by a stale reference. The channel-capture leg is now proven: a stale
+authority's stream ends, the loop backs off, and by the next attempt the
+connection has re-resolved to the moved target — evidenced by per-authority CSR
+counters (stale sees exactly one, moved sees the retry's).
 
-**To close:** a Java cert-stream test harness — a fake renewal stream that can be
-driven to exhaustion and that exposes which channel instance a caller ended up
-holding. That harness does not exist; PC-L-1's Java leg was closed with template
-pins for the same reason.
+Exhaustion remains open in Java specifically because `MAX_INIT_RETRIES = 30` is
+a `private static final int`, which `javac` inlines at every call site
+(confirmed via `javap` bytecode inspection — the constant is baked in, not
+read from the field). There is no seam to inject a smaller budget, so an
+honest exhaustion test means ~780s of real `Thread.sleep` per run.
+
+**To close:** make the retry budget non-constant/injectable in the Java
+template (and check whether Go/Rust have the same seam gap) so a test can
+drive exhaustion in real time instead of wall-clock time.
 
 ---
 

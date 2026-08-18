@@ -158,10 +158,11 @@ assert_no_legacy_fixture_output() {
   fi
 }
 
-# SPIFFE soundness (plan: Soundness Rules): no raw spiffe:// FORMATTING in
-# generated code outside sys/spiffe and tests — printf verbs, format!/{} and
-# ${} interpolation, f-strings, and string concatenation onto a spiffe literal.
-# All SPIFFE construction must go through the generated sys/spiffe helpers.
+# SPIFFE soundness (plan: Soundness Rules): no raw spiffe:// FORMATTING and no
+# hand-rolled spiffe:// PARSING in generated code outside sys/spiffe and tests —
+# printf verbs, format!/{} and ${} interpolation, f-strings, string concatenation
+# onto a spiffe literal, prefix comparisons, and URI path splitting. All SPIFFE
+# construction and parsing must go through the generated sys/spiffe helpers.
 # Plain mentions in doc comments, protos, and registry metadata are fine.
 assert_spiffe_soundness() {
   local output="$1"
@@ -180,6 +181,14 @@ assert_spiffe_soundness() {
   if [[ -n "$hits" ]]; then
     printf '%s\n' "$hits" >&2
     die "raw spiffe:// formatting found outside sys/spiffe — use the generated spiffe helpers"
+  fi
+
+  # Formatting is only half the rule: hand-rolled PARSING (prefix comparison,
+  # URI path splitting) is the other half, and the repo probe already owns those
+  # patterns. Run that same rule set over the generated output rather than
+  # keeping a second copy of the patterns here, so the two cannot drift.
+  if ! (cd "$ROOT_DIR" && go run ./cmd/soundness -spiffe-scan "$output"); then
+    die "hand-rolled SPIFFE parsing found in generated output — use the generated spiffe helpers"
   fi
 }
 

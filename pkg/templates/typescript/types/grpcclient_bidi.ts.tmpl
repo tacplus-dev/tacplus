@@ -47,7 +47,7 @@
                 try {
                     const token = await tokenProvider();
                     if (!token) {
-                        throw new Error('auth token is empty');
+                        throw bidiUnauthenticated('auth token is empty');
                     }
                     metadata.add('authorization', `Bearer ${token}`);
                 } catch (err) {
@@ -86,11 +86,11 @@
                 const sendFn = async (msg: {{.InputType}}): Promise<void> => {
 {{.RequestValidation}}{{- if .AuthRequired}}
                     if (!tokenProvider) {
-                        throw new Error('auth token provider is required');
+                        throw bidiUnauthenticated('auth token provider is required');
                     }
                     const freshToken = await tokenProvider();
                     if (!freshToken) {
-                        throw new Error('auth token is empty');
+                        throw bidiUnauthenticated('auth token is empty');
                     }
 {{- end}}
                     try {

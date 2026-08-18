@@ -355,7 +355,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, fileDesc *parse
 		}
 	}
 	if hasBidi {
-		extraTypes.WriteString(tsBidiSleepHelper())
+		extraTypes.WriteString(tsBidiHelpers())
 	}
 	if hasClientStreaming {
 		extraTypes.WriteString(tsGrpcAsyncIterableHelper())
@@ -1070,10 +1070,24 @@ export class %s {
 `, methodName, handleType, inputType, inputType, inputType, handleType, inputType, inputType)
 }
 
-// tsBidiSleepHelper returns a small helper used by generated bidi lifecycle
-// loops to sleep for a backoff window, cancellable when the handle closes.
-func tsBidiSleepHelper() string {
+// tsBidiHelpers returns the small helpers used by generated bidi lifecycle
+// loops: a cancellable backoff sleep, and the auth-failure error constructor.
+//
+// bidiUnauthenticated stamps grpc.status.UNAUTHENTICATED the same way the
+// unary/streaming seams in grpcclient.ts.tmpl (metadata()) already do. The bidi
+// send path throws to the CALLER, so an uncoded Error left a caller unable to
+// tell "no credential" from any other send failure (same class as PAR-9).
+func tsBidiHelpers() string {
 	return `
+/** bidiUnauthenticated builds the error thrown when a bidi stream cannot obtain
+ *  a credential, carrying the same grpc.status.UNAUTHENTICATED code the unary
+ *  client seam uses. */
+function bidiUnauthenticated(message: string): Error & { code?: number } {
+    const err = new Error(message) as Error & { code?: number };
+    err.code = grpc.status.UNAUTHENTICATED;
+    return err;
+}
+
 /** bidiSleep waits for the given duration in milliseconds, but returns early
  *  if the handle is closed. */
 function bidiSleep(ms: number, handle: { isClosed(): boolean }): Promise<void> {

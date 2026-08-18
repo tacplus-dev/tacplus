@@ -931,7 +931,17 @@ var fieldKindProbes = []struct {
 
 func main() {
 	root := flag.String("root", ".", "repo root")
+	spiffeScan := flag.String("spiffe-scan", "", "scan this directory of GENERATED output with the SPIFFE/literal soundness rules and exit")
 	flag.Parse()
+
+	// -spiffe-scan runs the same rule set the repo probe runs, against a tree of
+	// generated output instead of the templates that produced it. The cross-test
+	// gate calls it so the two checks cannot drift apart: a rule added here is
+	// applied to generated output the next time the gate runs, with no second
+	// copy of the patterns living in shell.
+	if *spiffeScan != "" {
+		os.Exit(runSpiffeScan(*spiffeScan))
+	}
 
 	specPath := filepath.Join(*root, "pkg/proto/sys/spec.proto")
 	constraints, err := parseConstraints(specPath)
@@ -1592,12 +1602,35 @@ func renderSpiffeSoundness(root string) int {
 	return len(violations)
 }
 
+// runSpiffeScan applies the SPIFFE/literal soundness rules to a directory of
+// generated output and reports every violation. Exit code is the violation
+// count, matching renderSpiffeSoundness.
+func runSpiffeScan(dir string) int {
+	violations, err := spiffeSoundnessViolationsIn(dir, []string{"."})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "spiffe scan of %s failed: %v\n", dir, err)
+		return 1
+	}
+	for _, v := range violations {
+		fmt.Fprintf(os.Stderr, "%s:%d [%s] %s\n", v.RelPath, v.Line, v.Rule, strings.TrimSpace(v.Text))
+	}
+	if len(violations) > 0 {
+		fmt.Fprintf(os.Stderr, "hand-rolled SPIFFE parsing/construction found in generated output under %s — use the generated spiffe helpers\n", dir)
+		return len(violations)
+	}
+	return 0
+}
+
 func spiffeSoundnessViolations(root string) ([]spiffeSoundnessViolation, error) {
+	return spiffeSoundnessViolationsIn(root, []string{"pkg/templates", "pkg/internal"})
+}
+
+// spiffeSoundnessViolationsIn applies the rules to the given subdirectories of
+// root. The repo probe passes the template/emitter trees; -spiffe-scan passes
+// "." so the whole generated tree it is pointed at is walked.
+func spiffeSoundnessViolationsIn(root string, subdirs []string) ([]spiffeSoundnessViolation, error) {
 	var files []string
-	for _, rel := range []string{
-		"pkg/templates",
-		"pkg/internal",
-	} {
+	for _, rel := range subdirs {
 		path := filepath.Join(root, rel)
 		info, err := os.Stat(path)
 		if err != nil {
@@ -1657,9 +1690,9 @@ func spiffeSoundnessViolations(root string) ([]spiffeSoundnessViolation, error) 
 				add("scheme-constant interpolation")
 			case spiffeRawInterpolationRe.MatchString(line):
 				add("raw SPIFFE interpolation")
-			case prefixCompareRe.MatchString(line) && strings.Contains(strings.ToLower(window), "spiffe"):
+			case prefixCompareRe.MatchString(line) && spiffeURINearby(window):
 				add("SPIFFE prefix comparison")
-			case strings.Contains(strings.ToLower(window), "spiffe") &&
+			case spiffeURINearby(window) &&
 				(uriPathExtractionRe.MatchString(line) || pathSplitRe.MatchString(line)) &&
 				uriPathExtractionRe.MatchString(window) && pathSplitRe.MatchString(window):
 				add("URI path splitting")
@@ -1680,6 +1713,17 @@ func spiffeSoundnessViolations(root string) ([]spiffeSoundnessViolation, error) 
 		return out[i].Rule < out[j].Rule
 	})
 	return out, nil
+}
+
+// spiffeURINearby reports whether the window mentions a SPIFFE URI — the scheme
+// literal "spiffe:", not the bare word. The parsing rules key on it because
+// hand-rolled prefix comparison and path splitting are only SPIFFE parsing when
+// a spiffe:// URI is what is being taken apart. Matching the bare word is safe
+// over templates but not over GENERATED output, where a message named e.g.
+// IdentitySpiffeResource puts "spiffe" into the identifiers of every unrelated
+// helper protoc emits for it (Helpers.java's JSON sniff startsWith("{")).
+func spiffeURINearby(window string) bool {
+	return strings.Contains(strings.ToLower(window), "spiffe:")
 }
 
 func spiffeSoundnessWindow(lines []string, idx int) string {
@@ -1716,10 +1760,17 @@ func skipSpiffeSoundnessPath(rel string) bool {
 	for _, suffix := range []string{
 		".md", ".json", ".proto", "_test.go", "_test.go.tmpl", "test_spiffe.py.tmpl",
 		".test.ts.tmpl", "Test.java.tmpl",
+		// The same test files once RENDERED, for -spiffe-scan over generated
+		// output: tests may legitimately build SPIFFE URIs by hand to feed the
+		// parser they are testing (this mirrors the cross-test gate's globs).
+		".test.ts", "Test.java", "_test.rs",
 	} {
 		if strings.HasSuffix(rel, suffix) {
 			return true
 		}
+	}
+	if base := filepath.Base(rel); strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py") {
+		return true
 	}
 	return false
 }

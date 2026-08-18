@@ -253,12 +253,15 @@ func buildStateService(
 		if field.Number >= 200 && field.Number <= 203 {
 			continue
 		}
-		// Skip map fields with scalar/enum values: they are stored as-is by the
-		// backing store and don't need tacplus-generated collection service boundaries.
-		// Using the internal map-entry type as a collection value type causes
-		// protoc to reject the generated proto ("map_entry should not be set
-		// explicitly").
-		if field.IsMap && field.MapValueTypeKind != "message" {
+		// Skip every map field on a state root. ValidateStateConsistency rejects
+		// them loudly before generation reaches here (a boundary must be a named
+		// message type), so this is defence in depth against a validation-ordering
+		// change — matching the boundary collector, which also skips them
+		// (boundaries.go). It must skip MESSAGE-valued maps too: falling through
+		// would classify the field as a boundary and synthesize a service over the
+		// internal map-entry type, which protoc then rejects ("map_entry should not
+		// be set explicitly") — a generated-proto break, not a skipped boundary.
+		if field.IsMap {
 			continue
 		}
 

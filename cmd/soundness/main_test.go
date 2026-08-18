@@ -199,3 +199,71 @@ func TestConstraintReferenced_WordBoundary(t *testing.T) {
 		}
 	}
 }
+
+// -spiffe-scan runs the same rules over GENERATED output, where a message named
+// e.g. IdentitySpiffeResource puts "spiffe" into the identifiers of every
+// unrelated helper emitted for it. Keying the parsing rules on the bare word
+// flagged Helpers.java's JSON sniff (`startsWith("{")`) and failed the
+// current-generation gate; they key on the "spiffe:" scheme literal instead.
+func TestSpiffeScanIgnoresSpiffeNamedIdentifiers(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "model/src/main/java/Helpers.java")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	generated := `
+class Helpers {
+  static IdentitySpiffeResource identitySpiffeResourceFromBytes(byte[] data) {
+    String dataStr = new String(data).trim();
+    if (dataStr.startsWith("{") || dataStr.startsWith("[")) {
+      return identitySpiffeResourceFromJson(dataStr);
+    }
+    return null;
+  }
+}
+`
+	if err := os.WriteFile(path, []byte(generated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	violations, err := spiffeSoundnessViolationsIn(root, []string{"."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("spiffe-named identifiers must not be violations, got %+v", violations)
+	}
+
+	// The narrowing must not blind the rules: real hand-rolled parsing of a
+	// spiffe:// URI in the same generated tree is still caught.
+	badPath := filepath.Join(root, "model/src/main/java/Verify.java")
+	bad := `
+class Verify {
+  boolean check(String uri, String trustDomain) {
+    String prefix = "spiffe://" + trustDomain + "/";
+    if (!uri.startsWith(prefix)) return false;
+    String path = URI.create(uri).getPath();
+    String[] parts = path.substring(1).split("/");
+    return parts.length > 0;
+  }
+}
+`
+	if err := os.WriteFile(badPath, []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	violations, err = spiffeSoundnessViolationsIn(root, []string{"."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rules []string
+	for _, v := range violations {
+		if v.RelPath != "model/src/main/java/Verify.java" {
+			t.Fatalf("unexpected violation path: %+v", v)
+		}
+		rules = append(rules, v.Rule)
+	}
+	sort.Strings(rules)
+	want := []string{"SPIFFE prefix comparison", "URI path splitting", "raw SPIFFE interpolation"}
+	if !reflect.DeepEqual(rules, want) {
+		t.Fatalf("rules = %v, want %v; violations=%+v", rules, want, violations)
+	}
+}

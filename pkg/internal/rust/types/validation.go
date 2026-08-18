@@ -539,10 +539,9 @@ func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Me
 			}
 
 		case "assert_net_port":
-			fmt.Fprintf(b, "// Validate %s (assert_net_port)\n", rustFieldName)
-			fmt.Fprintf(b, "if self.%s < 0 || self.%s > 65535 {\n", rustFieldName, rustFieldName)
-			fmt.Fprintf(b, "return Err(format!(\"field %s must be a valid port number (0-65535), got: {}\", self.%s));\n", rustFieldName, rustFieldName)
-			b.WriteString("}\n")
+			if err := generateRustDurationBoundValidation(b, msg, field, rustFieldName, "assert_net_port", "assert_net_port", "%[1]s < 0 || %[1]s > 65535", "a valid port number (0-65535)"); err != nil {
+				return err
+			}
 
 		case "assert_ipaddr_type":
 			if annotationValue.Type == model.AnnotationTypeEnum {
@@ -553,32 +552,34 @@ func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Me
 			if annotationValue.Type == model.AnnotationTypeEnum {
 				switch annotationValue.EnumValue {
 				case "DURATION_TYPE_POSITIVE":
-					fmt.Fprintf(b, "// Validate %s (assert_duration: POSITIVE)\n", rustFieldName)
-					fmt.Fprintf(b, "if self.%s <= 0 {\n", rustFieldName)
-					fmt.Fprintf(b, "return Err(format!(\"field %s must be positive (> 0), got: {}\", self.%s));\n", rustFieldName, rustFieldName)
-					b.WriteString("}\n")
+					if err := generateRustDurationBoundValidation(b, msg, field, rustFieldName, "assert_duration", "assert_duration: POSITIVE", "%[1]s <= 0", "positive (> 0)"); err != nil {
+						return err
+					}
 				case "DURATION_TYPE_NON_NEGATIVE":
-					fmt.Fprintf(b, "// Validate %s (assert_duration: NON_NEGATIVE)\n", rustFieldName)
-					fmt.Fprintf(b, "if self.%s < 0 {\n", rustFieldName)
-					fmt.Fprintf(b, "return Err(format!(\"field %s must be non-negative (>= 0), got: {}\", self.%s));\n", rustFieldName, rustFieldName)
-					b.WriteString("}\n")
+					if err := generateRustDurationBoundValidation(b, msg, field, rustFieldName, "assert_duration", "assert_duration: NON_NEGATIVE", "%[1]s < 0", "non-negative (>= 0)"); err != nil {
+						return err
+					}
 				}
 			}
 
 		case "assert_duration_min":
 			if annotationValue.Type == model.AnnotationTypeInt {
-				fmt.Fprintf(b, "// Validate %s (assert_duration_min: %d)\n", rustFieldName, annotationValue.IntValue)
-				fmt.Fprintf(b, "if self.%s < %d {\n", rustFieldName, annotationValue.IntValue)
-				fmt.Fprintf(b, "return Err(format!(\"field %s must be >= %d, got: {}\", self.%s));\n", rustFieldName, annotationValue.IntValue, rustFieldName)
-				b.WriteString("}\n")
+				if err := generateRustDurationBoundValidation(b, msg, field, rustFieldName, "assert_duration_min",
+					fmt.Sprintf("assert_duration_min: %d", annotationValue.IntValue),
+					fmt.Sprintf("%%[1]s < %d", annotationValue.IntValue),
+					fmt.Sprintf(">= %d", annotationValue.IntValue)); err != nil {
+					return err
+				}
 			}
 
 		case "assert_duration_max":
 			if annotationValue.Type == model.AnnotationTypeInt {
-				fmt.Fprintf(b, "// Validate %s (assert_duration_max: %d)\n", rustFieldName, annotationValue.IntValue)
-				fmt.Fprintf(b, "if self.%s > %d {\n", rustFieldName, annotationValue.IntValue)
-				fmt.Fprintf(b, "return Err(format!(\"field %s must be <= %d, got: {}\", self.%s));\n", rustFieldName, annotationValue.IntValue, rustFieldName)
-				b.WriteString("}\n")
+				if err := generateRustDurationBoundValidation(b, msg, field, rustFieldName, "assert_duration_max",
+					fmt.Sprintf("assert_duration_max: %d", annotationValue.IntValue),
+					fmt.Sprintf("%%[1]s > %d", annotationValue.IntValue),
+					fmt.Sprintf("<= %d", annotationValue.IntValue)); err != nil {
+					return err
+				}
 			}
 
 		case "assert_gt":
@@ -848,6 +849,38 @@ func generateRustComparisonValidation(b *strings.Builder, msg model.Message, fie
 	}
 	fmt.Fprintf(b, "if %s %s %s {\n", valueExpr, failOp, valueStr)
 	fmt.Fprintf(b, "return Err(format!(\"field %s must be %s %s, got: {}\", %s));\n", rustFieldName, wantOp, valueStr, valueExpr)
+	b.WriteString("}\n")
+	if field.IsOptional {
+		b.WriteString("}\n")
+	}
+
+	return nil
+}
+
+// generateRustDurationBoundValidation emits one of the duration/port bound
+// annotations (assert_net_port / assert_duration / assert_duration_min /
+// assert_duration_max). condFmt is the failing comparison with %[1]s standing
+// for the value expression, and want is the phrase quoted back in the error
+// message. All four compare the field against an integer, so a map, repeated or
+// non-numeric field is an authoring mistake: emitting the comparison anyway
+// produced Rust that does not build (`if self.name < 0` against a String,
+// `if self.ports < 0` against a Vec<i32>). Enums are rejected too, because java
+// renders this family through the bare getter, which does not compile against a
+// protobuf enum. Proto3-optional fields render as Option<T>, so the value has
+// to be unwrapped the way generateRustNumericConstraintValidation already does.
+func generateRustDurationBoundValidation(b *strings.Builder, msg model.Message, field model.Field, rustFieldName, annotation, comment, condFmt, want string) error {
+	if field.IsMap || field.IsRepeated || !isNumericType(field.Type) {
+		return fmt.Errorf("%s annotation on field %s.%s requires a scalar numeric field", annotation, msg.Name, rustFieldName)
+	}
+
+	valueExpr := "self." + rustFieldName
+	fmt.Fprintf(b, "// Validate %s (%s)\n", rustFieldName, comment)
+	if field.IsOptional {
+		fmt.Fprintf(b, "if let Some(val) = self.%s {\n", rustFieldName)
+		valueExpr = "val"
+	}
+	fmt.Fprintf(b, "if "+condFmt+" {\n", valueExpr)
+	fmt.Fprintf(b, "return Err(format!(\"field %s must be %s, got: {}\", %s));\n", rustFieldName, want, valueExpr)
 	b.WriteString("}\n")
 	if field.IsOptional {
 		b.WriteString("}\n")

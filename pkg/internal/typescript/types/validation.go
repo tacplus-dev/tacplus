@@ -149,6 +149,10 @@ export function %s(m: %s | undefined, depth = 0): void {
 					return fmt.Errorf("assert_duration annotation on field %s.%s must be an enum value", msg.Name, fieldName)
 				}
 
+				if field.IsMap || field.IsRepeated || !isNumericType(field.Type) {
+					return fmt.Errorf("assert_duration annotation on field %s.%s requires a scalar numeric field", msg.Name, fieldName)
+				}
+
 				switch annotationValue.EnumValue {
 				case "DURATION_TYPE_POSITIVE":
 					fmt.Fprintf(b, `	// Validate %s (assert_duration: POSITIVE)
@@ -171,6 +175,9 @@ export function %s(m: %s | undefined, depth = 0): void {
 				if annotationValue.Type != model.AnnotationTypeInt {
 					return fmt.Errorf("assert_duration_min annotation on field %s.%s must be an integer value", msg.Name, fieldName)
 				}
+				if field.IsMap || field.IsRepeated || !isNumericType(field.Type) {
+					return fmt.Errorf("assert_duration_min annotation on field %s.%s requires a scalar numeric field", msg.Name, fieldName)
+				}
 
 				fmt.Fprintf(b, `	// Validate %s (assert_duration_min: %d)
 	if (m.%s !== undefined && m.%s < %d) {
@@ -183,6 +190,9 @@ export function %s(m: %s | undefined, depth = 0): void {
 				// Generate maximum duration validation
 				if annotationValue.Type != model.AnnotationTypeInt {
 					return fmt.Errorf("assert_duration_max annotation on field %s.%s must be an integer value", msg.Name, fieldName)
+				}
+				if field.IsMap || field.IsRepeated || !isNumericType(field.Type) {
+					return fmt.Errorf("assert_duration_max annotation on field %s.%s requires a scalar numeric field", msg.Name, fieldName)
 				}
 
 				fmt.Fprintf(b, `	// Validate %s (assert_duration_max: %d)
@@ -298,6 +308,10 @@ export function %s(m: %s | undefined, depth = 0): void {
 
 			case "assert_net_port":
 				// Generate port validation
+				if field.IsMap || field.IsRepeated || !isNumericType(field.Type) {
+					return fmt.Errorf("assert_net_port annotation on field %s.%s requires a scalar numeric field", msg.Name, fieldName)
+				}
+
 				fmt.Fprintf(b, `	// Validate %s (assert_net_port)
 	if (m.%s !== undefined && (m.%s < 0 || m.%s > 65535)) {
 		throw newErrMissingInvalidData(undefined, `+"`field %s must be a valid port number (0-65535), got: ${m.%s}`"+`);

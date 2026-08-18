@@ -248,6 +248,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				}
 
 			case "assert_net_port":
+				if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type)) {
+					return nil, fmt.Errorf("assert_net_port annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
+				}
 				pyLinef(&code, 1, "# Validate %s (assert_net_port)", pyFieldName)
 				pyLinef(&code, 1, "if msg.%s < 0 or msg.%s > 65535:", pyFieldName, pyFieldName)
 				pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be a valid port number (0-65535), got: {msg.%s}\")", pyFieldName, pyFieldName)
@@ -259,6 +262,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 
 			case "assert_duration":
 				if annotationValue.Type == model.AnnotationTypeEnum {
+					if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type)) {
+						return nil, fmt.Errorf("assert_duration annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
+					}
 					switch annotationValue.EnumValue {
 					case "DURATION_TYPE_POSITIVE":
 						pyLinef(&code, 1, "# Validate %s (assert_duration: POSITIVE)", pyFieldName)
@@ -273,6 +279,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 
 			case "assert_duration_min":
 				if annotationValue.Type == model.AnnotationTypeInt {
+					if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type)) {
+						return nil, fmt.Errorf("assert_duration_min annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
+					}
 					pyLinef(&code, 1, "# Validate %s (assert_duration_min: %d)", pyFieldName, annotationValue.IntValue)
 					pyLinef(&code, 1, "if msg.%s < %d:", pyFieldName, annotationValue.IntValue)
 					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be >= %d, got: {msg.%s}\")", pyFieldName, annotationValue.IntValue, pyFieldName)
@@ -280,6 +289,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 
 			case "assert_duration_max":
 				if annotationValue.Type == model.AnnotationTypeInt {
+					if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type)) {
+						return nil, fmt.Errorf("assert_duration_max annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
+					}
 					pyLinef(&code, 1, "# Validate %s (assert_duration_max: %d)", pyFieldName, annotationValue.IntValue)
 					pyLinef(&code, 1, "if msg.%s > %d:", pyFieldName, annotationValue.IntValue)
 					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be <= %d, got: {msg.%s}\")", pyFieldName, annotationValue.IntValue, pyFieldName)

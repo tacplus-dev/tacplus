@@ -237,6 +237,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 				}
 
 			case "assert_net_port":
+				if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type)) {
+					return fmt.Errorf("assert_net_port annotation on field %s.%s requires a scalar numeric field", msg.Name, javaFieldName)
+				}
 				fmt.Fprintf(b, "// Validate %s (assert_net_port)\n", javaFieldName)
 				fmt.Fprintf(b, "if (msg.%s() < 0 || msg.%s() > 65535) {\n", getterName, getterName)
 				fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be a valid port number (0-65535), got: %%d\", msg.%s()));\n", javaFieldName, getterName)
@@ -249,6 +252,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 
 			case "assert_duration":
 				if annotationValue.Type == model.AnnotationTypeEnum {
+					if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type)) {
+						return fmt.Errorf("assert_duration annotation on field %s.%s requires a scalar numeric field", msg.Name, javaFieldName)
+					}
 					switch annotationValue.EnumValue {
 					case "DURATION_TYPE_POSITIVE":
 						fmt.Fprintf(b, "// Validate %s (assert_duration: POSITIVE)\n", javaFieldName)
@@ -265,6 +271,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 
 			case "assert_duration_min":
 				if annotationValue.Type == model.AnnotationTypeInt {
+					if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type)) {
+						return fmt.Errorf("assert_duration_min annotation on field %s.%s requires a scalar numeric field", msg.Name, javaFieldName)
+					}
 					fmt.Fprintf(b, "// Validate %s (assert_duration_min: %d)\n", javaFieldName, annotationValue.IntValue)
 					fmt.Fprintf(b, "if (msg.%s() < %s) {\n", getterName, formatIntLiteral(annotationValue.IntValue, field.Type))
 					fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be >= %d, got: %%d\", msg.%s()));\n", javaFieldName, annotationValue.IntValue, getterName)
@@ -273,6 +282,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 
 			case "assert_duration_max":
 				if annotationValue.Type == model.AnnotationTypeInt {
+					if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type)) {
+						return fmt.Errorf("assert_duration_max annotation on field %s.%s requires a scalar numeric field", msg.Name, javaFieldName)
+					}
 					fmt.Fprintf(b, "// Validate %s (assert_duration_max: %d)\n", javaFieldName, annotationValue.IntValue)
 					fmt.Fprintf(b, "if (msg.%s() > %s) {\n", getterName, formatIntLiteral(annotationValue.IntValue, field.Type))
 					fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be <= %d, got: %%d\", msg.%s()));\n", javaFieldName, annotationValue.IntValue, getterName)

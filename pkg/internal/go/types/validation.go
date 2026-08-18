@@ -483,14 +483,9 @@ func Validate%sWithDepth(m *%s, depth int) error {
 
 			case "assert_net_port":
 				// Generate port validation
-				errFunc := "protoerrors.NewErrMissingInvalidData"
-
-				fmt.Fprintf(b, `	// Validate %s (assert_net_port)
-	if m.%s < 0 || m.%s > 65535 {
-		return %s(nil, "field %s must be a valid port number (0-65535), got: %%d", m.%s)
-	}
-
-`, goFieldName, goFieldName, goFieldName, errFunc, goFieldName, goFieldName)
+				if err := writeGoDurationBoundValidation(b, msg, field, goFieldName, "assert_net_port", "assert_net_port", "%[1]s < 0 || %[1]s > 65535", "a valid port number (0-65535)"); err != nil {
+					return err
+				}
 
 			case "assert_url":
 				// Generate URL validation
@@ -644,23 +639,15 @@ func Validate%sWithDepth(m *%s, depth int) error {
 					return fmt.Errorf("assert_duration annotation on field %s.%s must be an enum value", msg.Name, goFieldName)
 				}
 
-				errFunc := "protoerrors.NewErrMissingInvalidData"
-
 				switch annotationValue.EnumValue {
 				case "DURATION_TYPE_POSITIVE":
-					fmt.Fprintf(b, `	// Validate %s (assert_duration: POSITIVE)
-	if m.%s <= 0 {
-		return %s(nil, "field %s must be positive (> 0), got: %%d", m.%s)
-	}
-
-`, goFieldName, goFieldName, errFunc, goFieldName, goFieldName)
+					if err := writeGoDurationBoundValidation(b, msg, field, goFieldName, "assert_duration", "assert_duration: POSITIVE", "%[1]s <= 0", "positive (> 0)"); err != nil {
+						return err
+					}
 				case "DURATION_TYPE_NON_NEGATIVE":
-					fmt.Fprintf(b, `	// Validate %s (assert_duration: NON_NEGATIVE)
-	if m.%s < 0 {
-		return %s(nil, "field %s must be non-negative (>= 0), got: %%d", m.%s)
-	}
-
-`, goFieldName, goFieldName, errFunc, goFieldName, goFieldName)
+					if err := writeGoDurationBoundValidation(b, msg, field, goFieldName, "assert_duration", "assert_duration: NON_NEGATIVE", "%[1]s < 0", "non-negative (>= 0)"); err != nil {
+						return err
+					}
 				}
 
 			case "assert_duration_min":
@@ -669,14 +656,12 @@ func Validate%sWithDepth(m *%s, depth int) error {
 					return fmt.Errorf("assert_duration_min annotation on field %s.%s must be an integer value", msg.Name, goFieldName)
 				}
 
-				errFunc := "protoerrors.NewErrMissingInvalidData"
-
-				fmt.Fprintf(b, `	// Validate %s (assert_duration_min: %d)
-	if m.%s < %d {
-		return %s(nil, "field %s must be >= %d, got: %%d", m.%s)
-	}
-
-`, goFieldName, annotationValue.IntValue, goFieldName, annotationValue.IntValue, errFunc, goFieldName, annotationValue.IntValue, goFieldName)
+				if err := writeGoDurationBoundValidation(b, msg, field, goFieldName, "assert_duration_min",
+					fmt.Sprintf("assert_duration_min: %d", annotationValue.IntValue),
+					fmt.Sprintf("%%[1]s < %d", annotationValue.IntValue),
+					fmt.Sprintf(">= %d", annotationValue.IntValue)); err != nil {
+					return err
+				}
 
 			case "assert_duration_max":
 				// Generate maximum duration validation
@@ -684,14 +669,12 @@ func Validate%sWithDepth(m *%s, depth int) error {
 					return fmt.Errorf("assert_duration_max annotation on field %s.%s must be an integer value", msg.Name, goFieldName)
 				}
 
-				errFunc := "protoerrors.NewErrMissingInvalidData"
-
-				fmt.Fprintf(b, `	// Validate %s (assert_duration_max: %d)
-	if m.%s > %d {
-		return %s(nil, "field %s must be <= %d, got: %%d", m.%s)
-	}
-
-`, goFieldName, annotationValue.IntValue, goFieldName, annotationValue.IntValue, errFunc, goFieldName, annotationValue.IntValue, goFieldName)
+				if err := writeGoDurationBoundValidation(b, msg, field, goFieldName, "assert_duration_max",
+					fmt.Sprintf("assert_duration_max: %d", annotationValue.IntValue),
+					fmt.Sprintf("%%[1]s > %d", annotationValue.IntValue),
+					fmt.Sprintf("<= %d", annotationValue.IntValue)); err != nil {
+					return err
+				}
 
 			case "assert_listen_addr":
 				// Generate listen address validation (host:port format)
@@ -1508,6 +1491,44 @@ func writeGoComparisonValidation(b *strings.Builder, msg model.Message, field mo
 	if field.IsOptional {
 		b.WriteString("	}\n")
 	}
+
+	return nil
+}
+
+// writeGoDurationBoundValidation emits one of the duration/port bound
+// annotations (assert_net_port / assert_duration / assert_duration_min /
+// assert_duration_max). condFmt is the failing comparison with %[1]s standing
+// for the value expression, and want is the phrase quoted back to the caller in
+// the error message. All four compare the field against an integer, so a map,
+// repeated or non-numeric field is an authoring mistake: emitting the
+// comparison anyway produced Go that does not build (`if m.Name < 0` against a
+// string, `if m.Ports < 0` against a []int32). Enums are rejected too, because
+// java renders this family through the bare getter, which does not compile
+// against a protobuf enum. Proto3-optional fields render as a pointer, so the
+// value has to be dereferenced behind a nil guard the way assert_numeric
+// already does.
+func writeGoDurationBoundValidation(b *strings.Builder, msg model.Message, field model.Field, goFieldName, annotation, comment, condFmt, want string) error {
+	if field.IsMap || field.IsRepeated || !isNumericType(field.Type) {
+		return fmt.Errorf("%s annotation on field %s.%s requires a scalar numeric field", annotation, msg.Name, goFieldName)
+	}
+
+	errFunc := "protoerrors.NewErrMissingInvalidData"
+	valueExpr := "m." + goFieldName
+	if field.IsOptional {
+		valueExpr = "*m." + goFieldName
+	}
+
+	fmt.Fprintf(b, "	// Validate %s (%s)\n", goFieldName, comment)
+	if field.IsOptional {
+		fmt.Fprintf(b, "	if m.%s != nil {\n", goFieldName)
+	}
+	fmt.Fprintf(b, "	if "+condFmt+" {\n", valueExpr)
+	fmt.Fprintf(b, "		return %s(nil, \"field %s must be %s, got: %%d\", %s)\n", errFunc, goFieldName, want, valueExpr)
+	b.WriteString("	}\n")
+	if field.IsOptional {
+		b.WriteString("	}\n")
+	}
+	b.WriteString("\n")
 
 	return nil
 }

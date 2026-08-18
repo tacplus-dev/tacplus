@@ -927,6 +927,64 @@ async fn rust_tls_first_handler_failure_is_fatal() {
 }
 
 #[tokio::test]
+async fn rust_tls_first_handler_failure_stops_the_retry_loop() {
+    let handler = Arc::new(RecordingHandler::fail_tls_at(1));
+    let (conn, server) = start_rust_authority(AuthorityMode::FirstSuccess).await;
+    let handler_dyn: Arc<dyn Handler> = handler.clone();
+    let handler_slot = Arc::new(tokio::sync::RwLock::new(Some(handler_dyn)));
+    let stores = TlsStores::new();
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+
+    let loop_task = tokio::spawn(tls_cert_stream_loop(
+        conn,
+        "StreamMemberService".to_string(),
+        "instance-1".to_string(),
+        handler_slot,
+        fixture_token_provider(),
+        Some(ready_tx),
+        stores.cert_der_store.clone(),
+        stores.key_der_store.clone(),
+        stores.cert_proto_store.clone(),
+        stores.cert_pem_store.clone(),
+        stores.key_pem_store.clone(),
+        stores.server_certified_key_store.clone(),
+        stores.tls_degrade.clone(),
+    ));
+
+    let ready_err = tokio::time::timeout(Duration::from_secs(10), ready_rx)
+        .await
+        .expect("TLS ready signal should arrive")
+        .expect("TLS ready signal should be sent")
+        .expect_err("TLS ready signal should carry the handler error");
+    assert!(
+        ready_err.contains("reject TLS cert delivery 1"),
+        "unexpected TLS handler error: {ready_err}"
+    );
+
+    // The loop must STOP, not reconnect: the shortest retry sleep is 5s, so a
+    // join well inside that window proves no second connection was attempted.
+    tokio::time::timeout(Duration::from_secs(2), loop_task)
+        .await
+        .expect("TLS loop must stop after a fatal first-delivery rejection, not reconnect")
+        .expect("TLS loop task should not panic");
+
+    assert_eq!(
+        handler
+            .tls_keys
+            .lock()
+            .expect("tls key recorder lock")
+            .len(),
+        1,
+        "stopped TLS loop must not reconnect for a second delivery"
+    );
+    assert!(
+        stores.cert_der_store.read().await.is_none(),
+        "rejected first TLS cert should not populate the cert store"
+    );
+    server.abort();
+}
+
+#[tokio::test]
 async fn rust_tls_renewal_handler_failure_keeps_previous_credential() {
     let handler = Arc::new(RecordingHandler::fail_tls_at(2));
     let (result, ready, rx, stores, server) =

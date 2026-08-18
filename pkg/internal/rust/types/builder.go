@@ -1734,11 +1734,14 @@ func fixCrossModuleImports(outputDir string, packageToDirMap map[string]string) 
 			}
 			b.WriteString("// Re-export referenced modules for super:: imports\n")
 
-			// Sort modules for consistent output
+			// Sort modules for consistent output — `modules` is a Go map, so
+			// ranging it directly emits the `pub use` lines in random order and
+			// byte-diffs mod.rs across otherwise-identical runs (GEN-DET-1).
 			var sortedModules []string
 			for module := range modules {
 				sortedModules = append(sortedModules, module)
 			}
+			sort.Strings(sortedModules)
 
 			for _, module := range sortedModules {
 				// Re-export with correct nested path under types/ wrapper

@@ -256,12 +256,17 @@ func buildExtractionTemplateData(
 
 	if isGraphType && hasOneof {
 		// Conditional extraction — find the single oneof variant.
-		// If multiple oneof variants are referenced, use the first one for the
-		// nil guard. (Unusual case; graph types typically map to one oneof variant.)
+		// If multiple oneof variants are referenced, use the first one in proto
+		// field-declaration order for the nil guard. (Unusual case; graph types
+		// typically map to one oneof variant.) Taking it from `mappings` rather
+		// than ranging the oneofVariants map keeps the emitted guard stable:
+		// a map range picks an arbitrary variant per run (GEN-DET-1).
 		var variant string
-		for v := range oneofVariants {
-			variant = v
-			break
+		for _, fm := range mappings {
+			if fm.oneofVariant != "" {
+				variant = fm.oneofVariant
+				break
+			}
 		}
 
 		data.IsConditional = true

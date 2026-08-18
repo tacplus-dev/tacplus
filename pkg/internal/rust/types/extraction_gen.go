@@ -276,11 +276,17 @@ func buildRustExtractionTemplateData(
 	hasOneof := len(oneofVariants) > 0
 
 	if isGraphType && hasOneof {
-		// Conditional extraction — find the single oneof variant.
+		// Conditional extraction — find the single oneof variant. Taken from
+		// `mappings` (proto field-declaration order), not by ranging the
+		// oneofVariants map: a map range picks an arbitrary variant per run when
+		// more than one is referenced, and byte-diffs the emitted guard
+		// (GEN-DET-1). Mirrors the Go emitter.
 		var variant string
-		for v := range oneofVariants {
-			variant = v
-			break
+		for _, fm := range mappings {
+			if fm.oneofVariant != "" {
+				variant = fm.oneofVariant
+				break
+			}
 		}
 
 		data.IsConditional = true

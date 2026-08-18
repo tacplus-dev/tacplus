@@ -297,7 +297,14 @@ func writeCombinedImports(b *strings.Builder, pf model.ProtoFile, protoFilename 
 	for _, e := range enumNames {
 		existingEnums[e] = true
 	}
+	// keyEnumNames is a Go map — sort before appending, or the import list
+	// reorders across otherwise-identical runs (GEN-DET-1).
+	sortedKeyEnums := make([]string, 0, len(keyEnumNames))
 	for enumName := range keyEnumNames {
+		sortedKeyEnums = append(sortedKeyEnums, enumName)
+	}
+	sort.Strings(sortedKeyEnums)
+	for _, enumName := range sortedKeyEnums {
 		if !existingEnums[enumName] {
 			pbImports = append(pbImports, enumName)
 		}

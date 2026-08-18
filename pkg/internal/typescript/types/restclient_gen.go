@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"go.uber.org/zap"
@@ -675,6 +676,11 @@ func generateTsRestClientAggregators(servicesInfo []ServiceInfo) error {
 			return fmt.Errorf("failed to write group aggregator: %w", err)
 		}
 	}
+
+	// Sort the group names before emitting the root aggregator: `groups` is a Go
+	// map, so ranging it leaks Go's randomized map order into generated output
+	// and byte-diffs across otherwise-identical runs (GEN-DET-1).
+	sort.Strings(groupNames)
 
 	// Generate root aggregator — re-export RestTransport once, then all clients
 	rootFile := filepath.Join(smDir, "rest.ts")

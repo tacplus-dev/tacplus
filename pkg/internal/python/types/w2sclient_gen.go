@@ -263,23 +263,25 @@ func generatePyW2SClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 
 	clientName := svc.ServiceName + "W2SClient"
 	data := struct {
-		Header              string
-		PbModuleName        string
-		PbImportFrom        string
-		CrossPackageImports string
-		ServiceName         string
-		ClientName          string
-		Methods             string
-		ExtraTypes          string
+		Header               string
+		PbModuleName         string
+		PbImportFrom         string
+		ExceptionsImportFrom string
+		CrossPackageImports  string
+		ServiceName          string
+		ClientName           string
+		Methods              string
+		ExtraTypes           string
 	}{
-		Header:              header.GeneratedHeader(consts.LangPython, svc.ProtoFile),
-		PbModuleName:        pbModuleName,
-		PbImportFrom:        pbImportFrom,
-		CrossPackageImports: crossPkgImports.String(),
-		ServiceName:         svc.ServiceName,
-		ClientName:          clientName,
-		Methods:             methods.String(),
-		ExtraTypes:          extraTypes.String(),
+		Header:               header.GeneratedHeader(consts.LangPython, svc.ProtoFile),
+		PbModuleName:         pbModuleName,
+		PbImportFrom:         pbImportFrom,
+		ExceptionsImportFrom: pyExceptionsImportFrom(dots),
+		CrossPackageImports:  crossPkgImports.String(),
+		ServiceName:          svc.ServiceName,
+		ClientName:           clientName,
+		Methods:              methods.String(),
+		ExtraTypes:           extraTypes.String(),
 	}
 
 	tmplContent, err := loadTemplate("w2sclient.py.tmpl")

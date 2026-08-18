@@ -233,6 +233,26 @@ func controlPlaneGuarantees() []controlPlaneGuarantee {
 			},
 		},
 		{
+			// PAR-9: an outbound call that cannot be authenticated must surface a
+			// structured UNAUTHENTICATED to the caller, not a language-generic
+			// error. Python raised bare RuntimeError until this row was added.
+			name: "structured auth failure (client outbound)",
+			locus: map[string]string{
+				"go":         "pkg/internal/go/types/grpcclient_gen.go",
+				"java":       "pkg/internal/java/types/grpcclient_gen.go",
+				"python":     "pkg/templates/python/types/grpcclient.py.tmpl",
+				"rust":       "pkg/internal/rust/types/grpcclient_gen.go",
+				"typescript": "pkg/templates/typescript/types/grpcclient.ts.tmpl",
+			},
+			tokens: map[string][]string{
+				"go":         {"codes.Unauthenticated"},
+				"java":       {"newErrUnauthorized"},
+				"python":     {"raise unauthenticated("},
+				"rust":       {"Status::unauthenticated"},
+				"typescript": {"grpc.status.UNAUTHENTICATED"},
+			},
+		},
+		{
 			name:  "unary response validation (client outbound)",
 			locus: clientEmitterFiles,
 			tokens: map[string][]string{
@@ -357,6 +377,42 @@ func semanticSurfaceProbes() []semanticSurfaceProbe {
 			},
 		},
 	}
+}
+
+// foldCompletenessProbes pin the message/field set that a sys-proto fold must
+// preserve. NEW-46: the sys-rename fold 5ae69d03 ("fold common/tokenrequest.proto
+// into sys") silently dropped ExternalTokenMintResponse, WorkloadMintRequest,
+// WorkloadMintResponse and ExternalTokenMintRequest.requested_signing_key_type;
+// no gate noticed — the loss surfaced two commits later as a downstream kernel
+// compile break, and was restored by 10689bd1 / f3fab719. A fold that drops any
+// of these again fails here instead.
+var foldCompletenessProbes = []struct {
+	name     string
+	file     string
+	patterns []string
+}{
+	{
+		name: "sys token-mint contract completeness",
+		file: "pkg/proto/sys/tokenrequest.proto",
+		patterns: []string{
+			"message TokenMintRequest {",
+			"message MintServiceTokenRequest {",
+			"message MintUserTokenRequest {",
+			"message MintClientTokenRequest {",
+			"message TokenMintResponse {",
+			"message X509MintRequest {",
+			"message ExternalTokenMintRequest {",
+			"message ExternalTokenMintResponse {",
+			"message WorkloadMintRequest {",
+			"message WorkloadMintResponse {",
+			// The field the fold dropped from ExternalTokenMintRequest. Field
+			// numbers are pinned too: a renumber is as breaking as a deletion.
+			"key.KeyType requested_signing_key_type = 3;",
+			"token.TokenType auth_type = 3;",
+			"token.Token bootstrap_token = 1;",
+			"string workload_name = 1",
+		},
+	},
 }
 
 var sharedRegistryProbes = []struct {
@@ -982,6 +1038,7 @@ func main() {
 	fmt.Println("\n(Note: presence proves a reference, not correct enforcement; absence is a definitive gap.)")
 
 	failures += renderSemanticSurfaces(*root)
+	failures += renderFoldCompletenessProbes(*root)
 	failures += renderSharedRegistryProbes(*root)
 	failures += renderSpiffeGrammarProbes(*root)
 	failures += renderEmittedManifestProbes(*root)
@@ -1091,6 +1148,37 @@ func renderSemanticSurfaces(root string) int {
 		}
 	}
 	return len(gaps)
+}
+
+// renderFoldCompletenessProbes checks that a proto fold preserved the message
+// and field set it subsumed (NEW-46).
+func renderFoldCompletenessProbes(root string) int {
+	fmt.Println("\n## Proto fold-completeness probes (ENFORCED)")
+	fmt.Println("\nFolding one proto into another must preserve every message and field it subsumed; a silent drop otherwise surfaces only as a downstream compile break.")
+
+	failures := 0
+	for _, p := range foldCompletenessProbes {
+		b, err := os.ReadFile(filepath.Join(root, p.file))
+		if err != nil {
+			fmt.Printf("- `%s` · cannot read %s: %v\n", p.name, p.file, err)
+			failures++
+			continue
+		}
+		src := string(b)
+		var missing []string
+		for _, pattern := range p.patterns {
+			if !strings.Contains(src, pattern) {
+				missing = append(missing, pattern)
+			}
+		}
+		if len(missing) > 0 {
+			fmt.Printf("- `%s` · missing in %s: %s\n", p.name, p.file, strings.Join(missing, ", "))
+			failures++
+			continue
+		}
+		fmt.Printf("- `%s` ✓ (%s, %d pinned)\n", p.name, p.file, len(p.patterns))
+	}
+	return failures
 }
 
 // renderSharedRegistryProbes checks language-neutral registry metadata emitted

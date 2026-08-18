@@ -51,3 +51,10 @@ func pyProtoPackageLeaf(protoPackage string) string {
 	parts := strings.Split(protoPackage, ".")
 	return parts[len(parts)-1]
 }
+
+// pyExceptionsImportFrom returns the relative import base for the generated
+// exceptions module, from a client file whose relative-import prefix is dots.
+// generateExceptions writes it to types/sys/errors/exceptions.py.
+func pyExceptionsImportFrom(dots string) string {
+	return dots + "types.sys.errors"
+}

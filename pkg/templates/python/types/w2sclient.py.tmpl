@@ -15,6 +15,7 @@ from google.protobuf import empty_pb2
 
 from {{.PbImportFrom}} import {{.PbModuleName}}_pb2 as pb
 from {{.PbImportFrom}}.helpers import *
+from {{.ExceptionsImportFrom}}.exceptions import from_http_status, internal, unauthenticated
 {{.CrossPackageImports}}
 
 TokenProvider = Callable[[], Union[str, Awaitable[str]]]
@@ -48,12 +49,12 @@ class {{.ClientName}}:
         if not auth_required:
             return None
         if self._token_provider is None:
-            raise PermissionError("W2S route requires a token provider")
+            raise unauthenticated("W2S route requires a token provider")
         token = self._token_provider()
         if inspect.isawaitable(token):
             token = await asyncio.wait_for(token, timeout=self._request_timeout)
         if not token:
-            raise PermissionError("W2S token provider returned an empty token")
+            raise unauthenticated("W2S token provider returned an empty token")
         return f"Bearer {token}"
 
     def _http_url(self, path: str) -> str:
@@ -93,7 +94,7 @@ class {{.ClientName}}:
                 return value["message"]
         return value
 
-    def _raise_json_error(self, value: Any) -> None:
+    def _raise_json_error(self, value: Any, status_code: Optional[int] = None) -> None:
         if not isinstance(value, dict) or "error" not in value:
             return
         err = value["error"]
@@ -101,7 +102,11 @@ class {{.ClientName}}:
             message = err.get("message") or err.get("error") or str(err)
         else:
             message = str(err)
-        raise RuntimeError(message)
+        # The W2S error envelope carries no code, so the HTTP status is the only
+        # structured signal available (401/403 -> UNAUTHENTICATED).
+        if status_code is not None:
+            raise from_http_status(status_code, message)
+        raise internal(message)
 
     def _parse_message(self, value: Any, response_class, validate_response=None):
         self._raise_json_error(value)
@@ -109,7 +114,7 @@ class {{.ClientName}}:
         if payload is None:
             payload = {}
         if not isinstance(payload, dict):
-            raise RuntimeError("W2S response payload must be a JSON object")
+            raise internal("W2S response payload must be a JSON object")
         result = response_class()
         json_format.ParseDict(payload, result)
         if validate_response is not None:
@@ -143,8 +148,10 @@ class {{.ClientName}}:
         text = response.text
         value = json.loads(text) if text.strip() else {}
         if response.status_code >= 400:
-            self._raise_json_error(value)
-            raise RuntimeError(f"W2S HTTP status {response.status_code}")
+            self._raise_json_error(value, response.status_code)
+            raise from_http_status(
+                response.status_code, f"W2S HTTP status {response.status_code}"
+            )
         self._raise_json_error(value)
         return value
 
@@ -193,8 +200,10 @@ class {{.ClientName}}:
             if response.status_code >= 400:
                 content = await response.aread()
                 value = json.loads(content.decode("utf-8")) if content.strip() else {}
-                self._raise_json_error(value)
-                raise RuntimeError(f"W2S SSE HTTP status {response.status_code}")
+                self._raise_json_error(value, response.status_code)
+                raise from_http_status(
+                    response.status_code, f"W2S SSE HTTP status {response.status_code}"
+                )
 
             data_lines: List[str] = []
             async for line in response.aiter_lines():

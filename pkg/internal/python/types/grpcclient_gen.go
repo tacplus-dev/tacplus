@@ -309,21 +309,23 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 	clientName := svc.ServiceName + "GrpcClient"
 
 	data := struct {
-		Header              string
-		PbModuleName        string
-		PbImportFrom        string
-		CrossPackageImports string
-		ServiceName         string
-		ClientName          string
-		Methods             string
+		Header               string
+		PbModuleName         string
+		PbImportFrom         string
+		ExceptionsImportFrom string
+		CrossPackageImports  string
+		ServiceName          string
+		ClientName           string
+		Methods              string
 	}{
-		Header:              header.GeneratedHeader(consts.LangPython, svc.ProtoFile),
-		PbModuleName:        pbModuleName,
-		PbImportFrom:        pbImportFrom,
-		CrossPackageImports: crossPkgImports.String(),
-		ServiceName:         svc.ServiceName,
-		ClientName:          clientName,
-		Methods:             methods.String(),
+		Header:               header.GeneratedHeader(consts.LangPython, svc.ProtoFile),
+		PbModuleName:         pbModuleName,
+		PbImportFrom:         pbImportFrom,
+		ExceptionsImportFrom: pyExceptionsImportFrom(dots),
+		CrossPackageImports:  crossPkgImports.String(),
+		ServiceName:          svc.ServiceName,
+		ClientName:           clientName,
+		Methods:              methods.String(),
 	}
 
 	tmplContent, err := loadTemplate("grpcclient.py.tmpl")

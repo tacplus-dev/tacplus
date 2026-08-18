@@ -259,8 +259,9 @@ run_java_generated_self_tests() {
     }
   done
   # The java sys walk copies ALL lib templates unconditionally, so
-  # ServiceConnectionTest is emitted for every java build (only GO gates
-  # serviceconnection emission). Run its fail-closed/fail-fast self-test
+  # ServiceConnectionTest is emitted for every java build (go emits its
+  # serviceconnection chassis unconditionally too, since 53955c71; the go leg
+  # asserts that separately). Run its fail-closed/fail-fast self-test
   # (NEW-18/NEW-21). The `if` is defensive; in practice it is always present.
   local sc_test sc_class
   sc_test="$(find "$output/src/main/java" -type f -path '*/chassis/serviceconnection/ServiceConnectionTest.java' -print -quit)"
@@ -1006,6 +1007,15 @@ compile_current_output() {
 
   case "$language" in
     go)
+      # NEW-22: 53955c71 made the go lib walk unconditional, so the
+      # serviceconnection chassis is emitted for every go build. Nothing
+      # asserted its PRESENCE — its absence still compiles, so a revert of that
+      # change was silent. Java has the equivalent assert (ServiceConnectionTest
+      # in run_java_generated_self_tests).
+      local go_sc
+      go_sc="$(find "$output" -type f -path '*/chassis/serviceconnection/serviceconnection.go' -print -quit)"
+      [[ -n "$go_sc" ]] || die "missing generated Go serviceconnection chassis: chassis/serviceconnection/serviceconnection.go"
+
       write_go_compile_mod "$log_dir/go.mod" "$go_module"
       (cd "$log_dir" && go mod tidy && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" go test ./...) >"$log_dir/go-test.log" 2>&1 || {
         cat "$log_dir/go-test.log" >&2

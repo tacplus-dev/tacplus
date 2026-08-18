@@ -927,7 +927,10 @@ tacplus generates a canonical `registry.json` that acts as the normalized semant
 - A root-level `entitlement_grants` catalog for entitlement-checked C2S methods:
   exact package/service/RPC grants plus package and capability wildcards with
   explicit `expands_to` lists
-- Architectural norms from embedded `agent.md` files
+- tacplus's own documentation set, embedded verbatim under `docs` — including the
+  generated `AGENT.md` (rendered from tacplus's template against this registry).
+  Consumer-authored `agent.md` files are NOT read: nothing in tacplus ingests
+  them, so authoring one has no effect on generation or on `registry.json`.
 
 Proto files are the authored source. `registry.json` is the compiled semantic
 model. Consumer tooling that needs tacplus semantics should read

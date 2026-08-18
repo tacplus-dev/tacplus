@@ -186,7 +186,7 @@ This is the same file at build time (for generation, linting, testing, docs, and
 
 Some rules are hard guarantees enforced in every build: type correctness, constraint validation, code generation consistency.
 
-Other rules are architectural norms: patterns that should generally hold but are higher-order than type correctness. These live in `agent.md` files embedded into `registry.json`. The agentic analysis pass checks for cross-language parity drift, suspicious service shapes, and anti-patterns — and can be run on demand without affecting the build.
+Other rules are architectural norms: patterns that should generally hold but are higher-order than type correctness. tacplus carries them in the `AGENT.md` it generates for each build and embeds into `registry.json` alongside the rest of its own documentation set. (tacplus does not read consumer-authored `agent.md` files — there is no ingestion path for them.) The agentic analysis pass checks for cross-language parity drift, suspicious service shapes, and anti-patterns — and can be run on demand without affecting the build.
 
 This is governance carried in machine-readable form. The norms travel with the code.
 

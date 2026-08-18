@@ -7,6 +7,7 @@ import grpc
 from {{.PbImportFrom}} import {{.PbModuleName}}_pb2 as pb
 from {{.PbImportFrom}} import {{.PbModuleName}}_pb2_grpc as pb_grpc
 from {{.PbImportFrom}}.helpers import *
+from {{.ExceptionsImportFrom}}.exceptions import unauthenticated
 {{.CrossPackageImports}}
 
 
@@ -43,12 +44,15 @@ class {{.ClientName}}:
         if not auth_required:
             return None
         if self._token_provider is None:
-            raise RuntimeError("auth token provider is required")
-        token = self._token_provider()
-        if inspect.isawaitable(token):
-            token = await token
+            raise unauthenticated("auth token provider is required")
+        try:
+            token = self._token_provider()
+            if inspect.isawaitable(token):
+                token = await token
+        except Exception as cause:
+            raise unauthenticated(f"auth token: {cause}") from cause
         if not token:
-            raise RuntimeError("token provider returned an empty token")
+            raise unauthenticated("auth token is empty")
         return [('authorization', f'Bearer {token}')]
 
     def _timeout_arg(self):

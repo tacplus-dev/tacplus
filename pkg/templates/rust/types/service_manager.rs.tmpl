@@ -1504,12 +1504,12 @@ impl ServiceManager {
         let metrics = build_metrics_provider(&self.cfg.listen_address);
         // Health identity is the full location-bearing service SPIFFE ID, built
         // by this service's own manager from runtime config via the canonical helper.
-        let spiffe_id = if self.cfg.spiffe_trust_domain.is_empty() {
-            String::new()
-        } else {
-            spiffe::service_spiffe_id(&self.cfg.spiffe_trust_domain, &self.cfg.location_path, "{{.ServiceLabel}}")
-                .map_err(|e| -> Box<dyn std::error::Error> { format!("building service SPIFFE identity: {}", e).into() })?
-        };
+        // No empty-trust-domain tolerance: new() already failed loudly on an empty
+        // spiffe_trust_domain when it built the SPIFFE verifier, so run() cannot be
+        // reached with one, and service_spiffe_id rejects it too. Publishing an empty
+        // health identity instead of failing would be the fail-open shape (NEW-21).
+        let spiffe_id = spiffe::service_spiffe_id(&self.cfg.spiffe_trust_domain, &self.cfg.location_path, "{{.ServiceLabel}}")
+            .map_err(|e| -> Box<dyn std::error::Error> { format!("building service SPIFFE identity: {}", e).into() })?;
         let (first_health_tx, first_health_rx) = tokio::sync::oneshot::channel();
         let health_reporter = Arc::new(HealthReporter::new_with_ready_and_status(
             publisher,

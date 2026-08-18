@@ -312,7 +312,9 @@ func isPermanentIdentityInitError(err error) bool {
 	}
 	// A missing spiffe_trust_domain is a permanent misconfiguration — classify it
 	// by typed sentinel (errors.Is), not by message-substring matching (NEW-21).
-	if errors.Is(err, servicemanager.ErrMissingTrustDomain) {
+	// BOTH init steps can raise it, and identity runs first, so a deployment with
+	// no trust domain hits the service_im sentinel before the servicemanager one.
+	if errors.Is(err, service_im.ErrMissingTrustDomain) || errors.Is(err, servicemanager.ErrMissingTrustDomain) {
 		return true
 	}
 	return strings.Contains(err.Error(), "service token minter is not configured")
@@ -1216,13 +1218,13 @@ healthStub := sm.bc.{{.HealthStateGroupAccessor}}().ServiceHealth().StateStub()
 metrics := buildMetricsProvider(sm.cfg.GetListenAddress())
 // Health identity is the full location-bearing service SPIFFE ID, built by
 // this service's own manager from runtime config via the canonical helper.
-spiffeId := ""
-if td := sm.cfg.GetSpiffeTrustDomain(); td != "" {
-id, idErr := wrapperSpiffe.ServiceSpiffeID(td, sm.cfg.GetLocationPath(), "{{.ServiceLabel}}")
+// No empty-trust-domain tolerance: NewServiceManager already refused an empty
+// spiffe_trust_domain at construction (ErrMissingTrustDomain), so Run() cannot
+// be reached with one, and ServiceSpiffeID rejects it too. Publishing an empty
+// health identity instead of failing would be the fail-open shape (NEW-21).
+spiffeId, idErr := wrapperSpiffe.ServiceSpiffeID(sm.cfg.GetSpiffeTrustDomain(), sm.cfg.GetLocationPath(), "{{.ServiceLabel}}")
 if idErr != nil {
 return fmt.Errorf("building service SPIFFE identity: %w", idErr)
-}
-spiffeId = id
 }
 hr := healthreporter.New(&healthPublisherAdapter{stub: healthStub}, metrics, zap.L(), spiffeId)
 hr.SetStatus(healthreporter.StatusHealthy)

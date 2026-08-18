@@ -30,7 +30,12 @@ The cross-test suite has these gates (see `.gitlab-ci.yml` and
   matrix — the runtime checks that run in CI live in `consumer-contract` above.
 - `chaos` (`cross-test/chaos/`): model stress / resilience harness (Profile A).
   Exercises generated model runtime under seeded fault schedules with stubbed
-  rivets. Local/manual — not invoked by CI or the nightly matrix.
+  rivets. Its Go unit tests DO run in CI — the packages live in this module, so
+  the `test-mr` job's `go test ./...` covers `fault`, `node`, `oracle`,
+  `orchestrator` and `profile`. The DRIVER
+  (`go run ./cross-test/chaos/cmd/chaos`), which is what actually runs a fault
+  schedule end to end, is local/manual and is not invoked by CI or the nightly
+  matrix.
 
 Generated outputs are disposable build artifacts. They must not be committed
 under `cross-test/`.
@@ -313,9 +318,11 @@ using stubbed rivets (no kernel, no state store). It drives a synthetic
 multi-language node mesh through seeded fault schedules (SIGTERM, SIGKILL,
 network partition, dependency-down, token-expiry) and verifies deterministic
 invariants: WATCH gapless/ordered/no-dup, auth fail-closed, no-leak trend,
-unary echo-transform. This is a **local/manual** gate — it is not invoked by
-CI or the nightly matrix. See `cross-test/chaos/README.md` for layout and
-Profile B plans.
+unary echo-transform. Running a fault schedule is **local/manual** — the `chaos`
+binary is not invoked by CI or the nightly matrix. The harness's own unit tests
+are not exempt, though: they are ordinary packages of this module, so CI runs
+them in `test-mr` via `go test ./...`. See `cross-test/chaos/README.md` for
+layout and Profile B plans.
 
 ## Retired Runtime Harness
 

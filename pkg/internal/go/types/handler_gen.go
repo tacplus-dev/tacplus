@@ -810,6 +810,48 @@ func generateServiceManager(config *tactype.Config, svcs []ServiceInfo, allFiles
 	}
 
 	zap.L().Info("Generated service-manager package", zap.String("path", outputPath))
+
+	if err := generateServiceManagerIdentityErrorTest(data, outputDir); err != nil {
+		return err
+	}
+	return nil
+}
+
+// generateServiceManagerIdentityErrorTest emits the self-test for the startup
+// error classifier alongside s2sm.go. isPermanentIdentityInitError is a
+// package-private function of the generated sm package, so the only place that
+// can execute it is a test in that same package; the consumer-contract gate runs
+// `go test -race ./...` over the generated output (run.sh:7962), which is what
+// makes a revert of the typed classification fail a gate instead of passing
+// silently (NEW-21). The current-generation fixture has no (spec.service), so it
+// emits no s2sm package at all and cannot carry this coverage.
+func generateServiceManagerIdentityErrorTest(data any, outputDir string) error {
+	tmplContent, err := loadTemplate("service_manager_identity_error_test.go.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to load service_manager_identity_error_test.go template: %w", err)
+	}
+
+	tmpl, err := template.New("servicemanageridentityerrortest").Parse(tmplContent)
+	if err != nil {
+		return fmt.Errorf("failed to parse service_manager_identity_error_test.go template: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute service_manager_identity_error_test.go template: %w", err)
+	}
+
+	formatted, err := format.Source(buf.Bytes())
+	if err != nil {
+		return fmt.Errorf("failed to format s2sm_identity_error_test.go: %w\nraw output:\n%s", err, buf.String())
+	}
+
+	outputPath := filepath.Join(outputDir, "s2sm_identity_error_test.go")
+	if err := os.WriteFile(outputPath, formatted, 0644); err != nil {
+		return fmt.Errorf("failed to write s2sm_identity_error_test.go: %w", err)
+	}
+
+	zap.L().Info("Generated service-manager identity error self-test", zap.String("path", outputPath))
 	return nil
 }
 

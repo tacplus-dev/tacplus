@@ -554,16 +554,17 @@ func (bc *ServiceManager) obtainTLSCert() error {
 
 	// 3. Build X509MintRequest
 	now := time.Now()
-	// Build the SPIFFE URI SAN through the canonical helper when a trust domain
-	// is configured: spiffe://<td>/system/<location...>/services/<service>.
-	var uriSans []string
-	if td := bc.config.GetSpiffeTrustDomain(); td != "" {
-		spiffeId, err := wrapperSpiffe.ServiceSpiffeID(td, bc.config.GetLocationPath(), serviceAudience)
-		if err != nil {
-			return fmt.Errorf("building service SPIFFE identity for URI SAN: %w", err)
-		}
-		uriSans = []string{spiffeId}
+	// Build the SPIFFE URI SAN through the canonical helper:
+	// spiffe://<td>/system/<location...>/services/<service>. No empty-trust-domain
+	// tolerance — NewServiceManager refuses an empty spiffe_trust_domain at
+	// construction (ErrMissingTrustDomain), so bc cannot exist without one, and
+	// ServiceSpiffeID rejects it too. Minting a cert with NO SPIFFE URI SAN
+	// instead of failing would be the fail-open shape (NEW-21).
+	spiffeId, err := wrapperSpiffe.ServiceSpiffeID(bc.config.GetSpiffeTrustDomain(), bc.config.GetLocationPath(), serviceAudience)
+	if err != nil {
+		return fmt.Errorf("building service SPIFFE identity for URI SAN: %w", err)
 	}
+	uriSans := []string{spiffeId}
 	certReq := &x509_pb.X509CertRequest{
 		Key:         pubKeyProto,
 		Exp:         now.Add(24 * time.Hour).Unix(),

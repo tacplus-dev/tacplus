@@ -13,6 +13,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -145,6 +146,18 @@ type IdentityManager struct {
 	cloudMinter        *cloudTokenMinter // Cloud-native auth (nil if k8s)
 }
 
+// ErrMissingTrustDomain is returned when the identity manager is built without a
+// spiffe_trust_domain. The bootstrap connection carries the workload's projected
+// identity token to the authority, so it pins the authority's SPIFFE trust
+// domain; without one the only option is CA-only trust (fail-open).
+//
+// TYPED so the ServiceManager startup loop can classify it as a PERMANENT
+// misconfiguration by errors.Is instead of retrying it ~30 times over ~13
+// minutes — identity init runs BEFORE the servicemanager, so this is the error a
+// trust-domain-less deployment actually hits first (NEW-21). Mirrors
+// servicemanager.ErrMissingTrustDomain.
+var ErrMissingTrustDomain = errors.New("im: spiffe_trust_domain is required for bootstrap TLS; refusing CA-only trust with no service-identity pin (fail-closed)")
+
 // New creates an IdentityManager: dials a bare connection to the cluster,
 // detects auth method (Kubernetes projected-token or cloud), and performs
 // initial token exchange.
@@ -190,7 +203,7 @@ func New(ctx context.Context, cfg *grpcconfig_pb.Config) (*IdentityManager, erro
 	trustDomain := cfg.GetSpiffeTrustDomain()
 	if trustDomain == "" {
 		imCancel()
-		return nil, fmt.Errorf("im: spiffe_trust_domain is required for bootstrap TLS; refusing CA-only trust with no service-identity pin (fail-closed)")
+		return nil, ErrMissingTrustDomain
 	}
 	certPool := x509.NewCertPool()
 	for i, ca := range cfg.TrustedCas {

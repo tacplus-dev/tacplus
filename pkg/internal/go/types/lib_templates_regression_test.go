@@ -378,7 +378,7 @@ func TestGoServiceManagerBindsX509MintAudienceToServiceLabel(t *testing.T) {
 	for _, want := range []string{
 		`const serviceAudience = "{{.ServiceAudience}}"`,
 		`Id:     serviceAudience + "-tls"`,
-		"wrapperSpiffe.ServiceSpiffeID(td, bc.config.GetLocationPath(), serviceAudience)",
+		"wrapperSpiffe.ServiceSpiffeID(bc.config.GetSpiffeTrustDomain(), bc.config.GetLocationPath(), serviceAudience)",
 		"Issuer:      serviceAudience,",
 		"names := []string{serviceAudience, \"*.\" + serviceAudience}",
 		"Aud:         serviceAudience,",

@@ -674,6 +674,12 @@ assert_service_manager_auth_wiring() {
       require_generated_pattern "$output/s2sm" 'SetAuthorizeFunc\(sm\.authorizeFunc\)' "Go service manager does not wire authorizer callbacks"
       require_generated_pattern "$output/s2sm" 'SetAuthenticateFunc\(sm\.authenticateFunc\)' "Go service manager does not wire authenticator callbacks"
       require_generated_pattern "$output/s2sm" 'HasAuthorizer\(\)' "Go service manager does not assert authorizer startup wiring"
+      # NEW-21: isPermanentIdentityInitError is private to the generated sm
+      # package, so the only thing that can execute it is the self-test emitted
+      # beside s2sm.go. `go test ./...` below runs whatever test files exist, so
+      # dropping the emission would silently drop the coverage — assert the file.
+      [[ -n "$(find "$output/s2sm" -type f -name 's2sm_identity_error_test.go' -print -quit)" ]] ||
+        die "Go service manager is missing its startup-classifier self-test (s2sm_identity_error_test.go)"
       ;;
     rust)
       require_generated_pattern "$output/s2sm" 'register_method_auth\(&self\.authorizer\)' "Rust service manager does not register method auth metadata"

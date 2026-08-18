@@ -845,11 +845,13 @@ public class ServiceManager implements AutoCloseable {
                 .withCallCredentials(identity.callCredentials());
         // Health identity is the full location-bearing service SPIFFE ID, built by
         // this service's own manager from runtime config via the canonical helper.
-        String spiffeId = "";
-        if (!config.getSpiffeTrustDomain().isEmpty()) {
-            spiffeId = Spiffe.serviceSpiffeId(
-                    config.getSpiffeTrustDomain(), config.getLocationPath(), "{{.ServiceLabel}}");
-        }
+        // No empty-trust-domain tolerance: ServiceConnection.channelFactory(cfg)
+        // already threw MissingTrustDomainException for an empty
+        // spiffe_trust_domain before this ServiceManager was constructed, and
+        // Spiffe.serviceSpiffeId rejects one too. Publishing an empty health
+        // identity instead of failing would be the fail-open shape (NEW-21).
+        String spiffeId = Spiffe.serviceSpiffeId(
+                config.getSpiffeTrustDomain(), config.getLocationPath(), "{{.ServiceLabel}}");
         HealthReporter healthReporter = new HealthReporter(
                 healthStub::setInstances,
                 buildMetricsProvider(config),

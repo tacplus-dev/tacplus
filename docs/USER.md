@@ -201,6 +201,28 @@ config error. Two builds of the same proto graph, service identity, language, an
 package name produce the same surfaces regardless of local build settings —
 declare client dependencies in proto, not in `tacplus.yaml`.
 
+### How `pkg` Becomes A Native Package Name
+
+`pkg` is a canonical reverse-DNS name (`com.example.identity`). Each target
+language renders it differently, with the `output-dir` name appended as the
+generated-model segment (`model` below):
+
+| Language | Transform | `com.example.identity` → |
+|---|---|---|
+| java | canonical + `.` + output name | `com.example.identity.model` |
+| go | TLD and host swapped, rest joined with `/` | `example.com/identity/model` |
+| rust, typescript | **last segment** + `-` + output name | `identity-model` |
+| python | **last segment** + `_` + output name | `identity_model` |
+| swift, csharp | **last segment**, PascalCased, + PascalCased output name | `IdentityModel` |
+
+Only java and go carry the whole canonical name. The other five keep the last
+segment alone, and swift/csharp additionally fold `-`, `_` and `.` away, so
+`com.example.identity`, `com.other.identity` and `com.other.ident_ity` all render
+as the same swift module. tacplus cannot detect that: one build sees one `pkg`.
+Distinct services must therefore differ in the LAST segment of `pkg`, not only in
+its prefix — the D-5 convention that proto package names are globally unique
+applies to that segment.
+
 ### Config Composition
 
 Configs can import a base file and override specific fields:
@@ -657,9 +679,11 @@ Views serve two purposes: they expose a single read surface of the same type acr
 | Annotation | Effect |
 |------------|--------|
 | `(spec.persistence) = true` | Boundary is durably stored. Backing store snapshots the boundary state and restores on restart. |
-| `(spec.eviction_ttl_seconds) = 120` | Entries expire if not refreshed. Used for per-node metrics that disappear when a node goes down. |
+| `(spec.eviction_max_size) = 5000` | Bounds the number of entries the generated Go state wrapper will accept for the boundary. |
 | `(spec.epoch_expiration) = true` | An int64 field inside a **collection item** is treated as a Unix epoch expiry timestamp; the state store computes TTL at write time. On a scalar state-root field it is rejected at generation time. On an int64 inside a singleton-only boundary message it is accepted but ignored (documented carve-out — see spec.proto). |
 | `(spec.instance_keyed) = true` | Server composes the entry key from the caller's token claims (`service_id@instance_id`), enforcing per-instance write isolation. |
+
+`(spec.eviction_ttl_seconds)`, `(spec.eviction_max_idle_seconds)`, `(spec.eviction_policy)`, `(spec.eviction_max_size_policy)`, `(spec.sync_backup_count)` and `(spec.async_backup_count)` (and the `state_*` message-level defaults for the same three concerns) are declared in `spec.proto` but **not implemented** — no generator reads them. Generation rejects them rather than accept a retention or durability intent it will not honour. For per-entry expiry use `(spec.epoch_expiration)` on an int64 inside the collection item.
 
 ### Leader Election
 

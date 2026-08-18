@@ -3,6 +3,7 @@
 package proto
 
 import (
+	"strings"
 	"testing"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
@@ -105,28 +106,26 @@ func TestStateBoundaryFieldAnnotationsAreAllParsed(t *testing.T) {
 	}
 }
 
-// The other direction: state.go's doc comment claims these six are unparsed and
-// therefore uncheckable. If the parser starts producing any of them, that claim
-// is stale AND the annotation becomes silently fail-open on a scalar state root
-// until it is added to the set.
-func TestUnparsedBoundaryAnnotationsStayUnparsed(t *testing.T) {
-	documentedUnparsed := []string{
-		"sync_backup_count", "async_backup_count", "eviction_policy",
-		"eviction_max_size_policy", "eviction_ttl_seconds", "eviction_max_idle_seconds",
-	}
+// The other direction. These six were previously unparsed, and therefore
+// uncheckable, so a scalar state root wearing one was fail-open. They are now
+// parsed as presence markers and refused outright — nothing implements them
+// (GEN-ANN-1) — which subsumes the scalar-root guard rather than joining it.
+// Both properties are load-bearing: parsed, so the rejection can fire, and NOT in
+// stateBoundaryFieldAnnotations, which would demote them back to a scalar-only
+// rule that lets them through on a message-typed boundary.
+func TestUnimplementedStatedbAnnotationsAreParsedAndNotBoundaryAnnotations(t *testing.T) {
 	got := boundaryAnnotationProbeFields(t)
-	for _, name := range documentedUnparsed {
-		if _, ok := got[name]; ok {
-			t.Errorf("the descriptor parser now parses (spec.%s), which state.go's stateBoundaryFieldAnnotations comment says it does not — "+
-				"add %q to stateBoundaryFieldAnnotations, a case to TestValidateStateConsistencyRejectsScalarBoundaryAnnotation, "+
-				"and remove it from that comment's not-parsed list", name, name)
+	for _, name := range parser.UnimplementedStatedbAnnotations() {
+		if strings.HasPrefix(name, "state_") {
+			continue // message-level; the probe reads one field's annotations
 		}
-	}
-	// Keep the two lists disjoint by construction.
-	for _, name := range documentedUnparsed {
+		if _, ok := got[name]; !ok {
+			t.Errorf("the descriptor parser no longer records (spec.%s), so the GEN-ANN-1 rejection in ValidateStateConsistency can never fire "+
+				"and the annotation is silently inert again", name)
+		}
 		for _, listed := range stateBoundaryFieldAnnotations {
 			if name == listed {
-				t.Errorf("%q is in both stateBoundaryFieldAnnotations and this test's documented-unparsed list", name)
+				t.Errorf("%q is both rejected as unimplemented and listed as a boundary annotation — it must be exactly one", name)
 			}
 		}
 	}

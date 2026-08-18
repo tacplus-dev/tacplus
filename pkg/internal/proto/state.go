@@ -943,8 +943,9 @@ func findStateImportSourceField(msg *parser.MessageDescriptor, fieldName string)
 //
 // Note: sync_backup_count, async_backup_count, eviction_policy,
 // eviction_max_size_policy, eviction_ttl_seconds, and eviction_max_idle_seconds
-// are valid boundary annotations in spec.proto but are not parsed by the
-// descriptor parser into field.Annotations, so they cannot be checked here.
+// are boundary annotations in spec.proto that no generator implements. They do
+// not belong here — they are rejected outright, on a scalar root or anywhere
+// else, by the parser.UnimplementedStatedbAnnotations loop above (GEN-ANN-1).
 var stateBoundaryFieldAnnotations = []string{
 	"epoch_expiration", "indexed", "persistence",
 	"queue", "priority_queue", "topic", "command",
@@ -970,6 +971,29 @@ func ValidateStateConsistency(inputDir string) error {
 	for relPath, fileDesc := range allFiles {
 		for _, msg := range fileDesc.Messages {
 			ann, hasState := msg.Annotations["service_state"]
+
+			// Statedb tuning annotations spec.proto declares but no generator
+			// consumes: refuse rather than let a durability or retention intent
+			// generate nothing at all (GEN-ANN-1). Checked on every message, not
+			// just state roots — off a state root they are doubly inert.
+			for _, unimplemented := range parser.UnimplementedStatedbAnnotations() {
+				if _, has := msg.Annotations[unimplemented]; has {
+					errors = append(errors, fmt.Sprintf(
+						"%s: message %s has (spec.%s), which tacplus declares but does not implement — "+
+							"no generator reads it, so it would silently generate nothing; remove it",
+						relPath, msg.Name, unimplemented))
+				}
+				for _, field := range msg.Fields {
+					if _, has := field.Annotations[unimplemented]; has {
+						errors = append(errors, fmt.Sprintf(
+							"%s: field %s.%s has (spec.%s), which tacplus declares but does not implement — "+
+								"no generator reads it, so the boundary would silently get no %s behavior; "+
+								"remove it (implemented today: (spec.eviction_max_size) for a size bound, "+
+								"(spec.epoch_expiration) on a collection item for per-entry expiry)",
+							relPath, msg.Name, field.Name, unimplemented, unimplemented))
+					}
+				}
+			}
 
 			// Rule 0b: disable_auth_message requires service_state
 			_, hasStateDisableAuth := msg.Annotations["disable_auth_message"]

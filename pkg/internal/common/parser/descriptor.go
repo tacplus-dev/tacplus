@@ -1510,6 +1510,15 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 		}
 	}
 
+	// State-root defaults for the statedb tuning family no generator consumes.
+	// Presence markers only, for the same loud rejection as their field-level
+	// counterparts (GEN-ANN-1).
+	for name, xt := range unimplementedStatedbMessageExtensions() {
+		if proto.HasExtension(opts, xt) {
+			annotations[name] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+		}
+	}
+
 	// service_event: marks a message as an event source backed by EventBus.
 	// When present without service_state, synthesizes service_state from the
 	// message name and uses the tag as the backing store.
@@ -2167,6 +2176,18 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 		val := proto.GetExtension(opts, spec.E_EvictionMaxSize).(int32)
 		if val > 0 {
 			annotations["eviction_max_size"] = model.AnnotationValue{Type: model.AnnotationTypeInt, IntValue: int64(val)}
+		}
+	}
+
+	// Statedb tuning annotations that spec.proto DECLARES (with examples) but no
+	// generator consumes. Recorded as presence markers only, so
+	// ValidateStateConsistency can reject them loudly instead of the author's
+	// durability/eviction intent silently generating nothing (GEN-ANN-1).
+	// eviction_max_size, just above, is the one member of this family that IS
+	// implemented, so it is not in this list.
+	for name, xt := range unimplementedStatedbFieldExtensions() {
+		if proto.HasExtension(opts, xt) {
+			annotations[name] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 		}
 	}
 

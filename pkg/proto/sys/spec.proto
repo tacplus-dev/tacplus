@@ -373,17 +373,20 @@ extend google.protobuf.MessageOptions {
   // 60036 was (spec.state_consistency) (ConsistencyModel) — removed; boundaries are
   // convergent. Do not reuse 60036.
 
-  // state_eviction_policy specifies the default eviction policy for all boundaries
-  // in a state root message. Individual fields can override with (spec.eviction_policy).
+  // NOT IMPLEMENTED. state_eviction_policy would specify the default eviction
+  // policy for all boundaries in a state root message. No generator reads it;
+  // generation REJECTS it (GEN-ANN-1).
   // Default: EVICTION_POLICY_NONE.
   EvictionPolicy state_eviction_policy = 60038;
 
-  // state_sync_backup_count specifies the default sync backup count for all boundaries.
-  // Individual fields can override with (spec.sync_backup_count). Default: 1.
+  // NOT IMPLEMENTED. state_sync_backup_count would specify the default sync
+  // backup count for all boundaries. No generator reads it; generation REJECTS it
+  // (GEN-ANN-1).
   int32 state_sync_backup_count = 60039;
 
-  // state_async_backup_count specifies the default async backup count for all boundaries.
-  // Individual fields can override with (spec.async_backup_count). Default: 0.
+  // NOT IMPLEMENTED. state_async_backup_count would specify the default async
+  // backup count for all boundaries. No generator reads it; generation REJECTS it
+  // (GEN-ANN-1).
   int32 state_async_backup_count = 60040;
 
   // 60041 was (spec.state_perms) (RO/RW/WORM access grants) — removed; state access
@@ -1223,38 +1226,35 @@ extend google.protobuf.FieldOptions {
   // Example: TaskItem task_queue = 3 [(spec.queue) = true, (spec.leader) = true];
   bool leader = 50018;
 
-  // Statedb storage: number of synchronous backups for this boundary.
-  // Synchronous backups block writes until complete, providing stronger durability.
-  // Range: 0-6. Default: 1.
-  // Example: TeamRoster roster = 1 [(spec.sync_backup_count) = 2];
+  // NOT IMPLEMENTED. Statedb storage: number of synchronous backups for this
+  // boundary. No generator reads this; generation REJECTS it rather than accept a
+  // durability intent tacplus does not honour (GEN-ANN-1).
   int32 sync_backup_count = 50020;
 
-  // Statedb storage: number of asynchronous backups for this boundary.
-  // Asynchronous backups do not block writes, providing better throughput
-  // at the cost of potential data loss during node failure. Range: 0-6. Default: 0.
+  // NOT IMPLEMENTED. Statedb storage: number of asynchronous backups for this
+  // boundary. No generator reads this; generation REJECTS it (GEN-ANN-1).
   int32 async_backup_count = 50021;
 
-  // Statedb eviction: which entries to evict when max_size is reached.
-  // Default: EVICTION_POLICY_NONE (no eviction).
-  // Example: SessionData sessions = 2 [(spec.eviction_policy) = EVICTION_POLICY_LRU];
+  // NOT IMPLEMENTED. Statedb eviction: which entries to evict when max_size is
+  // reached. No generator reads this; generation REJECTS it (GEN-ANN-1).
   EvictionPolicy eviction_policy = 50022;
 
   // Statedb eviction: maximum number of entries (or heap metric) before eviction begins.
   // Default: 0 (no limit).
   int32 eviction_max_size = 50023;
 
-  // Statedb eviction: what the eviction_max_size limit refers to.
-  // Default: MAX_SIZE_POLICY_ENTRY_COUNT.
+  // NOT IMPLEMENTED. Statedb eviction: what the eviction_max_size limit refers
+  // to. No generator reads this; generation REJECTS it (GEN-ANN-1).
   MaxSizePolicy eviction_max_size_policy = 50024;
 
-  // Statedb eviction: time-to-live for entries in seconds.
-  // Entries older than this are automatically evicted.
-  // Default: 0 (no TTL, entries live forever).
+  // NOT IMPLEMENTED. Statedb eviction: time-to-live for entries in seconds. No
+  // generator reads this; generation REJECTS it, because a boundary that silently
+  // never expires anything is the failure it was meant to prevent (GEN-ANN-1).
+  // For per-entry expiry use (spec.epoch_expiration) on the collection item.
   int64 eviction_ttl_seconds = 50025;
 
-  // Statedb eviction: maximum idle time for entries in seconds.
-  // Entries not accessed within this period are automatically evicted.
-  // Default: 0 (no idle expiration).
+  // NOT IMPLEMENTED. Statedb eviction: maximum idle time for entries in seconds.
+  // No generator reads this; generation REJECTS it (GEN-ANN-1).
   int64 eviction_max_idle_seconds = 50026;
 
   // epoch_expiration marks an int64 field as a Unix epoch expiration timestamp (seconds).

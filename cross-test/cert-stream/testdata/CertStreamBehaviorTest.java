@@ -223,49 +223,44 @@ class CertStreamBehaviorTest {
     }
 
     // PC-L-6: a renewal CSR that fails to SEND leaves no in-flight request, so
-    // the staged pending key must be dropped. If it is retained, the next cert
-    // delivery is verified against the never-requested pending public key,
-    // mismatches, and a perfectly good cert is thrown away.
+    // the staged pending key must be dropped AND the session must END.
+    //
+    // Java used to log a warning and keep receiving on a stream with no renewal
+    // in flight: the authority had asked for a renewal, the client silently
+    // answered nothing, and the serving cert ran to expiry. go returns the
+    // session error ("send renewal Csr" / "generate renewal keypair",
+    // service_manager.go.tmpl) and rust propagates with `?`, so in both the
+    // stream loop reconnects and re-CSRs. These tests pin java to that contract.
     @Test
-    void javaTlsFailedRenewalCsrSendClearsPendingKey() throws Exception {
+    void javaTlsFailedRenewalCsrSendEndsSession() throws Exception {
         RecordingHandler handler = new RecordingHandler();
         CountDownLatch ready = new CountDownLatch(1);
 
         Throwable err = runTlsFixture(AuthorityMode.RENEWAL_CSR_SEND_FAILS, handler, ready);
 
-        assertReconnectableCleanEnd(err, "ManageCert");
+        assertErrorContains(err, "send renewal Csr");
         assertEquals(0, ready.getCount(), "TLS ready signal should be published");
-        List<byte[]> keys = handler.tlsKeys();
         assertEquals(
-                2,
-                keys.size(),
-                "cert delivered after a failed renewal CSR send must still be accepted; "
-                        + "a retained pending key would fail public-key verification and drop it");
-        assertTrue(
-                Arrays.equals(keys.get(0), keys.get(1)),
-                "delivery after a failed renewal CSR send must pair with the ACTIVE key, "
-                        + "proving the pending renewal key was cleared");
+                1,
+                handler.tlsKeys().size(),
+                "the session must end at the failed renewal CSR send, so only the "
+                        + "first delivery reaches the handler");
     }
 
     @Test
-    void javaSmbFailedRenewalCsrSendClearsPendingKey() throws Exception {
+    void javaSmbFailedRenewalCsrSendEndsSession() throws Exception {
         RecordingHandler handler = new RecordingHandler();
         CountDownLatch ready = new CountDownLatch(1);
 
         Throwable err = runSmbFixture(AuthorityMode.RENEWAL_CSR_SEND_FAILS, handler, ready);
 
-        assertReconnectableCleanEnd(err, "ManageSmbCert");
+        assertErrorContains(err, "send SMB renewal Csr");
         assertEquals(0, ready.getCount(), "SMB ready signal should be published");
-        List<byte[]> keys = handler.smbKeys();
         assertEquals(
-                2,
-                keys.size(),
-                "cert delivered after a failed SMB renewal CSR send must still be accepted; "
-                        + "a retained pending key would fail public-key verification and drop it");
-        assertTrue(
-                Arrays.equals(keys.get(0), keys.get(1)),
-                "delivery after a failed SMB renewal CSR send must pair with the ACTIVE key, "
-                        + "proving the pending renewal key was cleared");
+                1,
+                handler.smbKeys().size(),
+                "the session must end at the failed SMB renewal CSR send, so only the "
+                        + "first delivery reaches the handler");
     }
 
     // Same leak class as PC-L-6, on the DELIVERY path instead of the renewal

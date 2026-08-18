@@ -458,27 +458,20 @@ func TestJavaCertStreamsFollowSharedContractMarkers(t *testing.T) {
 func TestJavaRenewalCsrSendFailureClearsPendingKey(t *testing.T) {
 	rendered := readJavaTemplate(t, "java/types/ServiceManager.java.tmpl")
 
-	for _, leg := range []struct{ name, marker string }{
-		{"TLS", `LOG.warning("Failed to generate renewal keypair: " + e.getMessage());`},
-		{"SMB", `LOG.warning("Failed to generate SMB renewal keypair: " + e.getMessage());`},
-	} {
-		start := strings.Index(rendered, leg.marker)
-		if start < 0 {
-			t.Fatalf("%s renewal catch block not found (marker %q)", leg.name, leg.marker)
-		}
-		rest := rendered[start+len(leg.marker):]
-		end := strings.Index(rest, "} else if")
-		if end < 0 {
-			t.Fatalf("%s renewal catch block has no terminator", leg.name)
-		}
-		body := rest[:end]
-		for _, want := range []string{
-			"pendingPrivateKeyDer.set(null);",
-			"pendingPublicKeyDer.set(null);",
-		} {
-			if !strings.Contains(body, want) {
-				t.Fatalf("%s renewal catch must clear the staged key when the CSR never went out; missing %q in:\n%s",
-					leg.name, want, body)
+	blocks := renewHandlerBlocks(t, rendered)
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 renewal handlers (TLS + SMB), found %d", len(blocks))
+	}
+	for i, block := range blocks {
+		for j, body := range renewHandlerCatches(t, block, i) {
+			for _, want := range []string{
+				"pendingPrivateKeyDer.set(null);",
+				"pendingPublicKeyDer.set(null);",
+			} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("renewal handler %d catch %d must clear the staged key when the CSR never went out; missing %q in:\n%s",
+						i, j, want, body)
+				}
 			}
 		}
 	}

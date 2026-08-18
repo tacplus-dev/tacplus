@@ -1334,6 +1334,7 @@ public class ServiceManager implements AutoCloseable {
                             }
                         } else if (msg.hasRenew()) {
                             LOG.info("TLS cert renewal requested: " + msg.getRenew().getReason());
+                            KeyOuterClass.PublicKey newPub;
                             try {
                                 KeyPair newKp = kpg.generateKeyPair();
                                 // Stage the new key as pending — do NOT replace
@@ -1343,15 +1344,34 @@ public class ServiceManager implements AutoCloseable {
                                 // (old chain, old key) pair.
                                 pendingPrivateKeyDer.set(newKp.getPrivate().getEncoded());
                                 pendingPublicKeyDer.set(newKp.getPublic().getEncoded());
-                                KeyOuterClass.PublicKey newPub = buildPublicKeyProto(newKp);
+                                newPub = buildPublicKeyProto(newKp);
+                            } catch (Exception e) {
+                                // The CSR never went out, so there is no in-flight
+                                // request for this key to pair with. Drop it, and end
+                                // the session: the authority's renewal request is
+                                // unanswered, so leaving the stream up would let the
+                                // cert run to expiry with no renewal in flight. Ending
+                                // it makes the loop reconnect and re-CSR (go returns
+                                // "generate renewal keypair", rust propagates with `?`).
+                                pendingPrivateKeyDer.set(null);
+                                pendingPublicKeyDer.set(null);
+                                streamError.set(new Exception("generate renewal keypair", e));
+                                done.countDown();
+                                return;
+                            }
+                            try {
                                 outboundRef.get().onNext(Tlscert.TlsCertClientMsg.newBuilder()
                                         .setCsr(Tlscert.TlsCertCsr.newBuilder()
                                                 .setPublicKey(newPub))
                                         .build());
                             } catch (Exception e) {
-                                LOG.warning("Failed to generate renewal keypair: " + e.getMessage());
+                                // Same reasoning as above: the CSR did not reach the
+                                // authority, so drop the staged key and end the session
+                                // (go returns "send renewal Csr").
                                 pendingPrivateKeyDer.set(null);
                                 pendingPublicKeyDer.set(null);
+                                streamError.set(new Exception("send renewal Csr", e));
+                                done.countDown();
                             }
                         } else if (!msg.getError().isEmpty()) {
                             streamError.set(new Exception("server error: " + msg.getError()));
@@ -1564,23 +1584,38 @@ public class ServiceManager implements AutoCloseable {
                             }
                         } else if (msg.hasRenew()) {
                             LOG.info("SMB member cert renewal requested: " + msg.getRenew().getReason());
+                            KeyOuterClass.PublicKey newPub;
                             try {
                                 KeyPair newKp = kpg.generateKeyPair();
                                 // Stage the new key as pending — the active key only
                                 // changes once the matching cert is delivered.
                                 pendingPrivateKeyDer.set(newKp.getPrivate().getEncoded());
                                 pendingPublicKeyDer.set(newKp.getPublic().getEncoded());
-                                KeyOuterClass.PublicKey newPub = buildPublicKeyProto(newKp);
+                                newPub = buildPublicKeyProto(newKp);
+                            } catch (Exception e) {
+                                // The CSR never went out, so there is no in-flight
+                                // request for this key to pair with. Drop it, and end
+                                // the session so the loop reconnects and re-CSRs —
+                                // otherwise the authority's renewal request goes
+                                // unanswered and the member cert runs to expiry
+                                // (go returns the session error, rust propagates `?`).
+                                pendingPrivateKeyDer.set(null);
+                                pendingPublicKeyDer.set(null);
+                                streamError.set(new Exception("generate SMB renewal keypair", e));
+                                done.countDown();
+                                return;
+                            }
+                            try {
                                 outboundRef.get().onNext(Smbcert.SmbCertClientMsg.newBuilder()
                                         .setCsr(Smbcert.SmbCertCsr.newBuilder()
                                                 .setPublicKey(newPub))
                                         .build());
                             } catch (Exception e) {
-                                LOG.warning("Failed to generate SMB renewal keypair: " + e.getMessage());
-                                // The CSR never went out, so there is no in-flight
-                                // request for this key to pair with. Drop it.
+                                // Same reasoning as above.
                                 pendingPrivateKeyDer.set(null);
                                 pendingPublicKeyDer.set(null);
+                                streamError.set(new Exception("send SMB renewal Csr", e));
+                                done.countDown();
                             }
                         } else if (!msg.getError().isEmpty()) {
                             streamError.set(new Exception("server error: " + msg.getError()));

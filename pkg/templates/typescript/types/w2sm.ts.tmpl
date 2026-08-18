@@ -19,6 +19,25 @@ export interface BootstrapConfig {
 export type TokenProvider = () => string | undefined | Promise<string | undefined>;
 
 /**
+ * Error carrying a gRPC status code so a caller can tell an auth failure from
+ * any other transport failure. Mirrors the python W2S client, which raises
+ * ProtoError with the same codes (UNAUTHENTICATED = 16).
+ */
+export class W2SError extends Error {
+  public readonly code: number;
+
+  constructor(code: number, message: string) {
+    super(message);
+    this.name = 'W2SError';
+    this.code = code;
+    Object.setPrototypeOf(this, W2SError.prototype);
+  }
+}
+
+/** gRPC UNAUTHENTICATED, matching grpc.status.UNAUTHENTICATED used by the gRPC clients. */
+const W2S_UNAUTHENTICATED = 16;
+
+/**
  * RestTransport implementation using the browser Fetch API.
  * Prepends the gateway URL from bootstrap config to all requests.
  */
@@ -40,6 +59,24 @@ export class FetchTransport {
     return `Bearer ${token}`;
   }
 
+  /**
+   * Auth header for a route that requires one. Distinguishes "no provider
+   * configured" from "provider returned an empty token" and stamps
+   * UNAUTHENTICATED on both, so a caller can classify the failure. authHeader()
+   * keeps its `string | undefined` shape because it is part of the RestTransport
+   * interface the generated W2S clients consume.
+   */
+  private async requireAuthHeader(): Promise<string> {
+    if (!this.tokenProvider) {
+      throw new W2SError(W2S_UNAUTHENTICATED, 'w2sm: authenticated request requires a token provider');
+    }
+    const token = await this.tokenProvider();
+    if (!token) {
+      throw new W2SError(W2S_UNAUTHENTICATED, 'w2sm: token provider returned an empty token');
+    }
+    return `Bearer ${token}`;
+  }
+
   async requestJson(method: string, url: string, body: unknown, opts?: { auth?: boolean; signal?: AbortSignal }): Promise<unknown> {
     const headers: Record<string, string> = {};
     const upperMethod = method.toUpperCase();
@@ -57,9 +94,7 @@ export class FetchTransport {
       init.body = JSON.stringify(body);
     }
     if (opts?.auth !== false) {
-      const auth = await this.authHeader();
-      if (!auth) throw new Error('w2sm: authenticated request requires a token provider');
-      headers.Authorization = auth;
+      headers.Authorization = await this.requireAuthHeader();
     }
     const resp = await fetch(this.absoluteHttpUrl(url), init);
     if (!resp.ok) {
@@ -76,9 +111,7 @@ export class FetchTransport {
   async getStream(url: string, opts?: { signal?: AbortSignal; auth?: boolean }): Promise<Response> {
     const headers: Record<string, string> = { Accept: 'text/event-stream' };
     if (opts?.auth !== false) {
-      const auth = await this.authHeader();
-      if (!auth) throw new Error('w2sm: authenticated SSE request requires a token provider');
-      headers.Authorization = auth;
+      headers.Authorization = await this.requireAuthHeader();
     }
     return fetch(this.absoluteHttpUrl(url), { signal: opts?.signal, headers });
   }
@@ -89,9 +122,7 @@ export class FetchTransport {
       Accept: 'text/event-stream',
     };
     if (opts?.auth !== false) {
-      const auth = await this.authHeader();
-      if (!auth) throw new Error('w2sm: authenticated SSE request requires a token provider');
-      headers.Authorization = auth;
+      headers.Authorization = await this.requireAuthHeader();
     }
     return fetch(this.absoluteHttpUrl(url), {
       method: 'POST',

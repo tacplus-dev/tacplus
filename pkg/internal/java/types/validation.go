@@ -107,17 +107,13 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 
 			switch annotationName {
 			case "assert_required":
-				if field.Type == "string" {
-					fmt.Fprintf(b, "// Validate %s (assert_required)\n", javaFieldName)
-					if field.IsRepeated {
-						countGetter := getterName + "Count"
-						fmt.Fprintf(b, "if (msg.%s() == 0) {\n", countGetter)
-					} else {
-						fmt.Fprintf(b, "if (msg.%s().isEmpty()) {\n", getterName)
-					}
-					fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,\"field %s is required\");\n", javaFieldName)
-					b.WriteString("}\n")
-				}
+				// Shares javaRequiredZeroCheck with the conditional-requirement family so
+				// that (spec.assert_required) and (spec.required_if_true) test the same
+				// field the same way.
+				fmt.Fprintf(b, "// Validate %s (assert_required)\n", javaFieldName)
+				fmt.Fprintf(b, "if (%s) {\n", javaRequiredZeroCheck(field, javaFieldName, getterName))
+				fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,\"field %s is required\");\n", javaFieldName)
+				b.WriteString("}\n")
 
 			case "assert_email":
 				fmt.Fprintf(b, "// Validate %s (assert_email)\n", javaFieldName)

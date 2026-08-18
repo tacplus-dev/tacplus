@@ -20,11 +20,12 @@ import (
 )
 
 // requiredZeroCheck returns the Go expression to check if a field is at its zero
-// value. It drives the conditional-requirement family (required_if_true /
-// required_if_false / required_if_eq) and mirrors the type ladder assert_required
-// already emits: an unconditional `== ""` compiles only for a string field, so a
-// conditional requirement on a numeric, bool, bytes, enum or optional field used
-// to emit generated Go that does not build.
+// value. It drives the whole requirement family — assert_required plus the
+// conditional required_if_true / required_if_false / required_if_eq — so the same
+// field shape yields the same test whichever annotation asks for it. Each arm has
+// to be type-correct: `== ""` compiles only for a string field, so a requirement
+// on a numeric, bool, bytes, enum, map or proto3-optional field used to emit
+// generated Go that does not build.
 func requiredZeroCheck(field model.Field, goFieldName string) string {
 	switch {
 	case field.IsRepeated || field.IsMap:
@@ -153,63 +154,16 @@ func Validate%sWithDepth(m *%s, depth int) error {
 			// Generate validation code based on annotation type
 			switch annotationName {
 			case "assert_required":
-				// Generate required field validation
+				// Generate required field validation. The zero test is shared with the
+				// conditional-requirement family so that (spec.assert_required) and
+				// (spec.required_if_true) mean the same thing on the same field.
 				errFunc := "protoerrors.NewErrMissingInvalidData"
-
-				if field.Type == "string" {
-					if field.IsRepeated {
-						fmt.Fprintf(b, `	// Validate %s (assert_required)
-	if len(m.%s) == 0 {
+				fmt.Fprintf(b, `	// Validate %s (assert_required)
+	if %s {
 		return %s(nil, "field %s is required")
 	}
 
-`, goFieldName, goFieldName, errFunc, goFieldName)
-					} else {
-						fmt.Fprintf(b, `	// Validate %s (assert_required)
-	if m.%s == "" {
-		return %s(nil, "field %s is required")
-	}
-
-`, goFieldName, goFieldName, errFunc, goFieldName)
-					}
-				} else if field.Type == "int32" || field.Type == "int64" || field.Type == "uint32" || field.Type == "uint64" ||
-					field.Type == "sint32" || field.Type == "sint64" || field.Type == "fixed32" || field.Type == "fixed64" ||
-					field.Type == "sfixed32" || field.Type == "sfixed64" || field.Type == "float" || field.Type == "double" {
-					fmt.Fprintf(b, `	// Validate %s (assert_required: must be > 0)
-	if m.%s <= 0 {
-		return %s(nil, "field %s is required and must be greater than zero")
-	}
-
-`, goFieldName, goFieldName, errFunc, goFieldName)
-				} else if field.IsMessage && !field.IsRepeated {
-					fmt.Fprintf(b, `	// Validate %s (assert_required)
-	if m.%s == nil {
-		return %s(nil, "field %s is required")
-	}
-
-`, goFieldName, goFieldName, errFunc, goFieldName)
-				} else if field.IsMessage && field.IsRepeated {
-					fmt.Fprintf(b, `	// Validate %s (assert_required)
-	if len(m.%s) == 0 {
-		return %s(nil, "field %s is required")
-	}
-
-`, goFieldName, goFieldName, errFunc, goFieldName)
-				} else if field.Type == "bytes" {
-					fmt.Fprintf(b, `	// Validate %s (assert_required)
-	if len(m.%s) == 0 {
-		return %s(nil, "field %s is required")
-	}
-
-`, goFieldName, goFieldName, errFunc, goFieldName)
-				} else if field.Type == "bool" {
-					fmt.Fprintf(b, `	// Validate %s (assert_required)
-	if !m.%s {
-		return %s(nil, "field %s is required")
-	}
-
-`, goFieldName, goFieldName, errFunc, goFieldName)
-				}
+`, goFieldName, requiredZeroCheck(field, goFieldName), errFunc, goFieldName)
 
 			case "assert_ipaddr":
 				// Simple IP address validation (IPv4 or IPv6)

@@ -14,6 +14,23 @@ import (
 	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
 )
 
+// pyRequiredZeroCheck returns the Python expression that tests whether a field is
+// at its zero value. It drives the whole requirement family — assert_required plus
+// the conditional required_if_true / required_if_false / required_if_eq — so the
+// same field shape yields the same test whichever annotation asks for it. A bare
+// `not msg.<f>` reads as False for every singular message field (protobuf's Python
+// messages have no __bool__), which silently drops the requirement.
+func pyRequiredZeroCheck(field model.Field, pyFieldName string) string {
+	switch {
+	case field.IsMap || field.IsRepeated:
+		return fmt.Sprintf("len(msg.%s) == 0", pyFieldName)
+	case field.IsMessage || field.IsOptional:
+		return fmt.Sprintf("not msg.HasField(\"%s\")", field.Name)
+	default:
+		return fmt.Sprintf("not msg.%s", pyFieldName)
+	}
+}
+
 // pyValidationCode holds a pre-rendered validation code block.
 type pyValidationCode struct {
 	Code string
@@ -155,19 +172,10 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 		if annotationValue, hasRequired := field.Annotations["assert_required"]; hasRequired {
 			if annotationValue.Type == model.AnnotationTypeBool && annotationValue.BoolValue {
 				var code strings.Builder
-				switch field.Type {
-				case "string":
-					pyLinef(&code, 1, "# Validate %s (assert_required)", pyFieldName)
-					pyLinef(&code, 1, "if not msg.%s:", pyFieldName)
-					pyLinef(&code, 2, "raise invalid_argument(f\"field %s is required\")", pyFieldName)
-				case "int32", "int64", "uint32", "uint64":
-					pyLinef(&code, 1, "# Validate %s (assert_required)", pyFieldName)
-					pyLinef(&code, 1, "if msg.%s == 0:", pyFieldName)
-					pyLinef(&code, 2, "raise invalid_argument(f\"field %s is required\")", pyFieldName)
-				}
-				if code.Len() > 0 {
-					blocks = append(blocks, pyValidationCode{Code: code.String()})
-				}
+				pyLinef(&code, 1, "# Validate %s (assert_required)", pyFieldName)
+				pyLinef(&code, 1, "if %s:", pyRequiredZeroCheck(field, pyFieldName))
+				pyLinef(&code, 2, "raise invalid_argument(f\"field %s is required\")", pyFieldName)
+				blocks = append(blocks, pyValidationCode{Code: code.String()})
 			}
 		}
 
@@ -410,13 +418,13 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 			case "required_if_true":
 				condFieldPy := escapePyKeyword(strutil.ToSnakeCase(annotationValue.StringValue))
 				pyLinef(&code, 1, "# Validate %s (required_if_true: %s)", pyFieldName, condFieldPy)
-				pyLinef(&code, 1, "if msg.%s and not msg.%s:", condFieldPy, pyFieldName)
+				pyLinef(&code, 1, "if msg.%s and %s:", condFieldPy, pyRequiredZeroCheck(field, pyFieldName))
 				pyLinef(&code, 2, "raise invalid_argument(\"field %s is required when %s is true\")", pyFieldName, condFieldPy)
 
 			case "required_if_false":
 				condFieldPy := escapePyKeyword(strutil.ToSnakeCase(annotationValue.StringValue))
 				pyLinef(&code, 1, "# Validate %s (required_if_false: %s)", pyFieldName, condFieldPy)
-				pyLinef(&code, 1, "if not msg.%s and not msg.%s:", condFieldPy, pyFieldName)
+				pyLinef(&code, 1, "if not msg.%s and %s:", condFieldPy, pyRequiredZeroCheck(field, pyFieldName))
 				pyLinef(&code, 2, "raise invalid_argument(\"field %s is required when %s is false\")", pyFieldName, condFieldPy)
 
 			case "required_if_eq":
@@ -448,9 +456,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 								break
 							}
 						}
-						pyLinef(&code, 1, "if msg.%s == %d and not msg.%s:  # %s", condFieldPy, enumIntVal, pyFieldName, condValue)
+						pyLinef(&code, 1, "if msg.%s == %d and %s:  # %s", condFieldPy, enumIntVal, pyRequiredZeroCheck(field, pyFieldName), condValue)
 					} else {
-						pyLinef(&code, 1, "if msg.%s == \"%s\" and not msg.%s:", condFieldPy, condValue, pyFieldName)
+						pyLinef(&code, 1, "if msg.%s == \"%s\" and %s:", condFieldPy, condValue, pyRequiredZeroCheck(field, pyFieldName))
 					}
 					pyLinef(&code, 2, "raise invalid_argument(\"field %s is required when %s is %s\")", pyFieldName, condFieldSnake, condValue)
 				}

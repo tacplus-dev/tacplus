@@ -16,6 +16,41 @@ import (
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 )
 
+// tsRequiredZeroCheck returns the TypeScript expression that tests whether a field
+// is at its zero value. It drives the whole requirement family — assert_required
+// plus the conditional required_if_true / required_if_false / required_if_eq — so
+// the same field shape yields the same test whichever annotation asks for it. A
+// bare `!m.<f>` is wrong for every non-scalar: protobuf-es renders repeated fields
+// as arrays, maps as objects and bytes as Uint8Array, and all three are truthy
+// when empty, which silently drops the requirement. Enums need the same Number()
+// widening assert_enum_defined uses, or the emitted comparison does not type-check.
+func tsRequiredZeroCheck(field model.Field, tsFieldName string) string {
+	switch {
+	case field.IsMap:
+		return fmt.Sprintf("Object.keys(m.%s).length === 0", tsFieldName)
+	case field.IsRepeated:
+		return fmt.Sprintf("m.%s.length === 0", tsFieldName)
+	case field.IsMessage || field.IsOptional:
+		// protobuf-es renders singular messages and proto3 `optional` scalars as
+		// `T | undefined`.
+		return fmt.Sprintf("m.%s === undefined", tsFieldName)
+	case field.Type == "bytes":
+		return fmt.Sprintf("m.%s.length === 0", tsFieldName)
+	case field.Type == "bool":
+		return fmt.Sprintf("!m.%s", tsFieldName)
+	case field.Type == "string":
+		return fmt.Sprintf(`m.%s === ""`, tsFieldName)
+	case field.IsEnum:
+		// A bare `m.<f> === 0` does not type-check against a protobuf-es enum
+		// member; assert_enum_defined widens the same way.
+		return fmt.Sprintf("Number(m.%s) === 0", tsFieldName)
+	case isBigIntProtoType(field.Type):
+		return fmt.Sprintf("m.%s === 0n", tsFieldName)
+	default:
+		return fmt.Sprintf("m.%s === 0", tsFieldName)
+	}
+}
+
 // generateTypeScriptValidationFunction generates a validate function for a message
 func generateTypeScriptValidationFunction(b *strings.Builder, msg model.Message) error {
 	funcName := fmt.Sprintf("validate%s", msg.Name)
@@ -81,11 +116,11 @@ export function %s(m: %s | undefined, depth = 0): void {
 			case "assert_required":
 				// Generate required field validation
 				fmt.Fprintf(b, `	// Validate %s (assert_required)
-	if (!m.%s) {
+	if (%s) {
 		throw newErrMissingInvalidData(undefined, `+"`field %s is required`"+`);
 	}
 
-`, fieldName, fieldName, fieldName)
+`, fieldName, tsRequiredZeroCheck(field, fieldName), fieldName)
 
 			case "assert_ipaddr":
 				// Simple IP address validation (IPv4 or IPv6)
@@ -439,20 +474,20 @@ export function %s(m: %s | undefined, depth = 0): void {
 			case "required_if_true":
 				condFieldName := upperSnakeCaseToCamelCase(annotationValue.StringValue)
 				fmt.Fprintf(b, `	// Validate %s (required_if_true: %s)
-	if (m.%s && !m.%s) {
+	if (m.%s && %s) {
 		throw newErrMissingInvalidData(undefined, `+"`field %s is required when %s is true`"+`);
 	}
 
-`, fieldName, annotationValue.StringValue, condFieldName, fieldName, fieldName, condFieldName)
+`, fieldName, annotationValue.StringValue, condFieldName, tsRequiredZeroCheck(field, fieldName), fieldName, condFieldName)
 
 			case "required_if_false":
 				condFieldName := upperSnakeCaseToCamelCase(annotationValue.StringValue)
 				fmt.Fprintf(b, `	// Validate %s (required_if_false: %s)
-	if (!m.%s && !m.%s) {
+	if (!m.%s && %s) {
 		throw newErrMissingInvalidData(undefined, `+"`field %s is required when %s is false`"+`);
 	}
 
-`, fieldName, annotationValue.StringValue, condFieldName, fieldName, fieldName, condFieldName)
+`, fieldName, annotationValue.StringValue, condFieldName, tsRequiredZeroCheck(field, fieldName), fieldName, condFieldName)
 
 			case "required_if_eq":
 				parts := strings.SplitN(annotationValue.StringValue, "=", 2)
@@ -473,18 +508,18 @@ export function %s(m: %s | undefined, depth = 0): void {
 					if siblingField != nil && siblingField.IsEnum {
 						enumType := siblingField.Type
 						fmt.Fprintf(b, `	// Validate %s (required_if_eq: %s=%s)
-	if (m.%s === %s.%s && !m.%s) {
+	if (m.%s === %s.%s && %s) {
 		throw newErrMissingInvalidData(undefined, `+"`field %s is required when %s is %s`"+`);
 	}
 
-`, fieldName, condFieldSnake, condValue, condFieldTS, enumType, condValue, fieldName, fieldName, condFieldSnake, condValue)
+`, fieldName, condFieldSnake, condValue, condFieldTS, enumType, condValue, tsRequiredZeroCheck(field, fieldName), fieldName, condFieldSnake, condValue)
 					} else {
 						fmt.Fprintf(b, `	// Validate %s (required_if_eq: %s=%s)
-	if (m.%s === "%s" && !m.%s) {
+	if (m.%s === "%s" && %s) {
 		throw newErrMissingInvalidData(undefined, `+"`field %s is required when %s is %s`"+`);
 	}
 
-`, fieldName, condFieldSnake, condValue, condFieldTS, condValue, fieldName, fieldName, condFieldSnake, condValue)
+`, fieldName, condFieldSnake, condValue, condFieldTS, condValue, tsRequiredZeroCheck(field, fieldName), fieldName, condFieldSnake, condValue)
 					}
 				}
 

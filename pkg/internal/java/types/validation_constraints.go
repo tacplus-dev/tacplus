@@ -271,10 +271,10 @@ func upperFirst(s string) string {
 }
 
 // javaRequiredZeroCheck returns the Java expression that tests whether a field is
-// at its zero value. It drives the conditional-requirement family
-// (required_if_true / required_if_false / required_if_eq) and mirrors the type
-// ladder the Go emitter uses, so the same annotation means the same thing in both
-// server languages.
+// at its zero value. It drives the whole requirement family — assert_required plus
+// the conditional required_if_true / required_if_false / required_if_eq — and
+// mirrors the type ladder the Go emitter uses, so the same annotation means the
+// same thing in both server languages.
 func javaRequiredZeroCheck(field model.Field, javaFieldName, getterName string) string {
 	switch {
 	case field.IsMap:

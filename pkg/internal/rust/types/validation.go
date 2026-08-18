@@ -62,11 +62,11 @@ type rustValidationHelpersData struct {
 }
 
 // rustRequiredZeroCheck returns the Rust expression that tests whether a field is
-// at its zero value. It drives the conditional-requirement family
-// (required_if_true / required_if_false / required_if_eq) and must be
-// type-correct: an unconditional `.is_empty()` compiles only for String / Vec /
-// HashMap, so a conditional requirement on a numeric, bool, enum, message or
-// optional field used to emit generated Rust that does not build.
+// at its zero value. It drives the whole requirement family — assert_required
+// plus the conditional required_if_true / required_if_false / required_if_eq — and
+// must be type-correct: `.is_empty()` compiles only for String / Vec / HashMap, so
+// a requirement on a numeric, bool, enum, message or optional field used to emit
+// generated Rust that does not build.
 func rustRequiredZeroCheck(field model.Field, rustFieldName string) string {
 	switch {
 	case field.IsRepeated || field.IsMap:
@@ -460,12 +460,13 @@ func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Me
 
 		switch annotationName {
 		case "assert_required":
-			if field.Type == "string" {
-				fmt.Fprintf(b, "// Validate %s (assert_required)\n", rustFieldName)
-				fmt.Fprintf(b, "if self.%s.is_empty() {\n", rustFieldName)
-				fmt.Fprintf(b, "return Err(format!(\"field %s is required\"));\n", rustFieldName)
-				b.WriteString("}\n")
-			}
+			// Shares rustRequiredZeroCheck with the conditional-requirement family so
+			// that (spec.assert_required) and (spec.required_if_true) test the same
+			// field the same way.
+			fmt.Fprintf(b, "// Validate %s (assert_required)\n", rustFieldName)
+			fmt.Fprintf(b, "if %s {\n", rustRequiredZeroCheck(field, rustFieldName))
+			fmt.Fprintf(b, "return Err(format!(\"field %s is required\"));\n", rustFieldName)
+			b.WriteString("}\n")
 
 		case "assert_email":
 			fmt.Fprintf(b, "// Validate %s (assert_email)\n", rustFieldName)

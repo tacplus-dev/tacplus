@@ -2440,6 +2440,7 @@ async fn run_tls_cert_stream(
                             return Err(format!("TLS cert public key mismatch: {}", e).into());
                         }
                         tracing::error!("TLS cert public key mismatch on renewal delivery, keeping previous cert: {}", e);
+                        report_tls_degraded(tls_degrade, &format!("renewed TLS certificate does not match the requested key, keeping the previous certificate: {}", e));
                         pending_private_key_der = None;
                         pending_public_key_der = None;
                         continue;
@@ -2518,6 +2519,12 @@ async fn run_tls_cert_stream(
                             Ok(()) => None,
                             Err(e) => {
                                 tracing::error!("Handler new_tls_cert failed: {}", e);
+                                if ready_tx.is_none() {
+                                    // Renewal delivery: the previous certificate stays
+                                    // in service and will expire. First delivery is
+                                    // reported through ready_tx instead.
+                                    report_tls_degraded(tls_degrade, &format!("TLS handler rejected a renewed certificate, keeping the previous certificate: {}", e));
+                                }
                                 Some(e.to_string())
                             }
                         }
@@ -2539,7 +2546,15 @@ async fn run_tls_cert_stream(
                                 *guard = Some(server_certified_key);
                             }
                             Err(e) => {
+                                // The resolver's store is poisoned, so this renewal —
+                                // and every later one — never reaches the handshake
+                                // path: the servers keep resolving the PREVIOUS
+                                // certificate until it expires. Logging alone leaves
+                                // the instance reporting Ready right up to the outage,
+                                // so route it into the health plane like go does for a
+                                // failed serving-cert rebuild (PC-L-1).
                                 tracing::error!("Failed to install TLS server identity: {}", e);
+                                report_tls_degraded(tls_degrade, &format!("renewed TLS serving certificate could not be installed: {}", e));
                             }
                         }
                         if let Some(tx) = ready_tx.take() {

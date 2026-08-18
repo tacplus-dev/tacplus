@@ -108,6 +108,23 @@ func Test_canonicalPkgToNative(t *testing.T) {
 			want:      "kitchensink_tacplus",
 		},
 		{
+			// A two-segment canonical pkg has no path remainder after the reversed
+			// host. Joining blindly used to emit an empty path element
+			// ("example.com//model"), which is not a legal Go import path — every
+			// generated import in the tree would carry it (CON-6).
+			name:       "Go two-segment pkg has no empty path element",
+			canonical:  "com.example",
+			lang:       "go",
+			outputName: "model",
+			want:       "example.com/model",
+		},
+		{
+			name:      "Go two-segment pkg, default output name",
+			canonical: "org.acme",
+			lang:      "go",
+			want:      "acme.org/tacplus",
+		},
+		{
 			name:      "Go nested path",
 			canonical: "com.gitlab.example.services.aegis.mock",
 			lang:      "go",

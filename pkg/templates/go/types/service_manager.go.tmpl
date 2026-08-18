@@ -1139,7 +1139,7 @@ return
 sm.sc.SetTLSCert(chain, key)
 }
 sm.tasks.Go(func(taskCtx context.Context) {
-tlsCertStreamLoop(taskCtx, func() grpc.ClientConnInterface { return sm.sc.Conn() }, "{{.ServiceLabel}}", h, sm.TokenProviderFunc(), storeTlsCert, tlsReadyCh)
+tlsCertStreamLoop(taskCtx, func() grpc.ClientConnInterface { return sm.sc.Conn() }, "{{.ServiceLabel}}", h, sm.TokenProviderFunc(), storeTlsCert, sm.reportTLSDegraded, tlsReadyCh)
 })
 // The ManageCert renewal stream must NOT gate Listen (see above) — the server
 // already serves with the X509Mint certificate. But a terminal failure to ever
@@ -1733,10 +1733,14 @@ var errTlsFirstCertFatal = fmt.Errorf("handler rejected first TLS certificate de
 // retry budget is spent. A handler failure on the FIRST delivery stops the
 // loop, while later renewal-delivery failures are logged and the previous cert
 // stays in service.
-func tlsCertStreamLoop(ctx context.Context, connProvider func() grpc.ClientConnInterface, serviceLabel string, h Handler, tp func() (string, error), store func(*x509_pb.X509CertChain, []byte), readyCh chan<- error) {
+// degrade reports a renewal fault into the ServiceManager health plane. Every
+// path below that keeps the PREVIOUS certificate in service must call it: the
+// instance goes on serving a certificate that will expire, and without a health
+// signal it reports Ready right up to the outage (PC-L-1).
+func tlsCertStreamLoop(ctx context.Context, connProvider func() grpc.ClientConnInterface, serviceLabel string, h Handler, tp func() (string, error), store func(*x509_pb.X509CertChain, []byte), degrade func(string), readyCh chan<- error) {
 initAttempts := 0
 for {
-delivered, err := runTlsCertStream(ctx, connProvider, serviceLabel, h, tp, store, readyCh)
+delivered, err := runTlsCertStream(ctx, connProvider, serviceLabel, h, tp, store, degrade, readyCh)
 if delivered {
 readyCh = nil
 initAttempts = 0
@@ -1785,7 +1789,7 @@ return
 // runTlsCertStream runs one ManageCert stream session. It reports whether the
 // first cert delivery was signalled on readyCh during this session, plus the
 // session error (errTlsFirstCertFatal when the handler rejected the first cert).
-func runTlsCertStream(ctx context.Context, connProvider func() grpc.ClientConnInterface, serviceLabel string, h Handler, tp func() (string, error), store func(*x509_pb.X509CertChain, []byte), readyCh chan<- error) (bool, error) {
+func runTlsCertStream(ctx context.Context, connProvider func() grpc.ClientConnInterface, serviceLabel string, h Handler, tp func() (string, error), store func(*x509_pb.X509CertChain, []byte), degrade func(string), readyCh chan<- error) (bool, error) {
 delivered := false
 conn := connProvider()
 if conn == nil {
@@ -1850,6 +1854,7 @@ if readyCh != nil {
 return delivered, fmt.Errorf("TLS cert public key mismatch: %w", err)
 }
 zap.L().Error("TLS cert public key mismatch on renewal delivery, keeping previous cert", zap.Error(err))
+degrade("renewed TLS certificate does not match the requested key, keeping the previous certificate: " + err.Error())
 pendingPrivateKeyDER = nil
 pendingPublicKeyDER = nil
 continue
@@ -1883,6 +1888,7 @@ pendingPublicKeyDER = nil
 } else if err != nil {
 // Renewal delivery: keep serving with the previous cert.
 zap.L().Error("Handler NewTlsCert failed on renewal delivery, keeping previous cert", zap.Error(err))
+degrade("TLS handler rejected a renewed certificate, keeping the previous certificate: " + err.Error())
 pendingPrivateKeyDER = nil
 pendingPublicKeyDER = nil
 } else {

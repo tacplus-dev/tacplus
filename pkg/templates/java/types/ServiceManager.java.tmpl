@@ -1293,6 +1293,7 @@ public class ServiceManager implements AutoCloseable {
                                         return;
                                     }
                                     LOG.warning("TLS cert public key mismatch on renewal delivery, keeping previous cert: " + verifyErr.getMessage());
+                                    sm.reportTLSDegraded("renewed TLS certificate does not match the requested key, keeping the previous certificate: " + verifyErr.getMessage());
                                     pendingPrivateKeyDer.set(null);
                                     pendingPublicKeyDer.set(null);
                                     return;
@@ -1325,8 +1326,11 @@ public class ServiceManager implements AutoCloseable {
                                             done.countDown();
                                             return;
                                         }
-                                        // Renewal delivery: log and continue.
+                                        // Renewal delivery: the previous certificate
+                                        // stays in service and will expire, so this is
+                                        // log AND degrade, not log alone.
                                         LOG.warning("Handler newTlsCert failed: " + cbErr.getMessage());
+                                        sm.reportTLSDegraded("TLS handler rejected a renewed certificate, keeping the previous certificate: " + cbErr.getMessage());
                                         pendingPrivateKeyDer.set(null);
                                         pendingPublicKeyDer.set(null);
                                         return;

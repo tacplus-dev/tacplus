@@ -547,8 +547,14 @@ func canonicalPkgToNative(canonical, lang, outputName string) string {
 		// Then join the rest with "/"
 		if len(parts) >= 2 {
 			host := parts[1] + "." + parts[0] // e.g. gitlab.com
-			path := strings.Join(parts[2:], "/")
-			return host + "/" + path + "/" + outputName
+			// A two-segment canonical pkg (e.g. "com.example") has no path
+			// remainder, so joining host + "/" + "" + "/" + outputName would emit
+			// an empty path element ("example.com//model"). That is not a legal Go
+			// import path, and every generated import would carry it. Build the
+			// segments and join, so the empty remainder simply drops out.
+			segs := append([]string{host}, parts[2:]...)
+			segs = append(segs, outputName)
+			return strings.Join(segs, "/")
 		}
 		return canonical + "/" + outputName
 	case "rust", "typescript":

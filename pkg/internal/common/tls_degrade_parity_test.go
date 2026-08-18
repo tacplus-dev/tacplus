@@ -120,3 +120,81 @@ func TestJavaDistinguishesTlsHandlerRejectionFromGiveUp(t *testing.T) {
 		t.Error("isPermanentIdentityInitError does not classify FatalTlsHandlerException as permanent: a deterministic handler rejection is retried through the whole init backoff instead of failing fast")
 	}
 }
+
+// PC-L-1, renewal-delivery leg. The auto-TLS renewal loop has three ways to
+// refuse a delivered certificate and keep serving the previous one: the leaf
+// does not match the key we asked for, the delivered private key does not
+// parse, and the application handler rejects the certificate. All three have
+// the same consequence — the instance goes on serving a certificate that WILL
+// expire — but only the unparseable-key path reported it to the health plane.
+// The other two were log-only in every language, so the instance reported Ready
+// right up to the outage and the operator's first signal was the expiry itself.
+//
+// Every "keeping the previous certificate" path must reach reportTLSDegraded /
+// report_tls_degraded, and must do so with the same operator-facing sentence in
+// all three languages (same reasoning as the give-up reason above).
+func TestRenewalKeepingPreviousCertReportsDegradedInEveryLanguage(t *testing.T) {
+	// The two reasons that had no health-plane signal at all.
+	phrases := []string{
+		"renewed TLS certificate does not match the requested key, keeping the previous certificate: ",
+		"TLS handler rejected a renewed certificate, keeping the previous certificate: ",
+	}
+
+	for _, tc := range []struct {
+		lang    string
+		dir     string
+		file    string
+		degrade string
+	}{
+		{"go", "go/types", "service_manager.go.tmpl", "degrade("},
+		{"rust", "rust/types", "service_manager.rs.tmpl", "report_tls_degraded(tls_degrade, "},
+		{"java", "java/types", "ServiceManager.java.tmpl", "sm.reportTLSDegraded("},
+	} {
+		s, err := tmplutil.LoadTemplate(tc.dir, tc.file)
+		if err != nil {
+			t.Fatalf("%s: load %s: %v", tc.lang, tc.file, err)
+		}
+		for _, phrase := range phrases {
+			idx := strings.Index(s, phrase)
+			if idx < 0 {
+				t.Errorf("%s SM template never reports the degrade reason %q; a renewal that keeps the previous certificate must not be log-only", tc.lang, phrase)
+				continue
+			}
+			// The phrase must be an ARGUMENT to the degrade call, not just a log
+			// line that happens to contain the same words.
+			head := s[:idx]
+			call := strings.LastIndex(head, tc.degrade)
+			if call < 0 || strings.Contains(head[call:], "\n") {
+				t.Errorf("%s SM template mentions %q but not as an argument to %s — the reason must reach the health plane, not only the log", tc.lang, phrase, tc.degrade)
+			}
+		}
+	}
+}
+
+// PC-L-1, rust serving-cert install leg. go routes a failed rebuild of the
+// renewed serving certificate into reportTLSDegraded (grpcserver's
+// SetCertDegradeReporter). rust's equivalent — installing the rebuilt
+// CertifiedKey into the handshake resolver's store — swallowed a poisoned-lock
+// failure into a tracing::error!. That store is what every later handshake
+// reads, so once it is unwritable the instance serves its current certificate
+// to expiry while still reporting Ready.
+func TestRustServingCertInstallFailureReportsDegraded(t *testing.T) {
+	s, err := tmplutil.LoadTemplate("rust/types", "service_manager.rs.tmpl")
+	if err != nil {
+		t.Fatalf("load service_manager.rs.tmpl: %v", err)
+	}
+	const logLine = `tracing::error!("Failed to install TLS server identity: {}", e);`
+	idx := strings.Index(s, logLine)
+	if idx < 0 {
+		t.Fatalf("rust SM template no longer has the serving-cert install failure arm (%q); re-target this test", logLine)
+	}
+	rest := s[idx+len(logLine):]
+	// The degrade call must be the very next statement in the same arm.
+	end := strings.Index(rest, "}")
+	if end < 0 {
+		end = len(rest)
+	}
+	if !strings.Contains(rest[:end], "report_tls_degraded(tls_degrade, ") {
+		t.Error("rust SM template logs a failed TLS serving-identity install but never reports it degraded; the instance keeps serving the previous certificate to expiry while reporting Ready (go does report this via SetCertDegradeReporter)")
+	}
+}

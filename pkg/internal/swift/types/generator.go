@@ -401,9 +401,10 @@ func c2dServicesTemplateData(servicesInfo []service.ServiceInfo) []c2dServiceTem
 // w2sServicesTemplateData resolves per-method REST route + type metadata for the
 // W2S (gRPC-over-REST) services. It parses each service's proto (before spec
 // options are stripped) to read the convention HTTP path, verb and I/O types.
-// W2S is unary-only for Swift: streaming methods are SKIPPED (not emitted, and
-// not a hard error) so a mixed service still yields a compilable unary-only
-// surface — the drop is logged so it is not silent. A missing HTTP path
+// W2S is unary-only for Swift: a streaming method is emitted as a throwing
+// "unsupported" stub rather than dropped (NEW-44), so a mixed service still
+// yields a compilable unary-only surface AND the consumer meets the omission at
+// compile time instead of finding the method simply absent. A missing HTTP path
 // on a UNARY method, by contrast, is still rejected loudly.
 func w2sServicesTemplateData(protoDir string, servicesInfo []service.ServiceInfo) ([]w2sServiceTemplateData, error) {
 	dp, err := parser.NewDescriptorParser(protoDir)

@@ -193,6 +193,10 @@ func Validate%sWithDepth(m *%s, depth int) error {
 
 			case "assert_ipaddr_type":
 				// Generate IP address validation based on enum type
+				if field.Type != "string" {
+					return fmt.Errorf("assert_ipaddr_type annotation on field %s.%s requires string type", msg.Name, goFieldName)
+				}
+
 				if annotationValue.Type != model.AnnotationTypeEnum {
 					return fmt.Errorf("assert_ipaddr_type annotation on field %s.%s must be an enum value", msg.Name, goFieldName)
 				}
@@ -452,6 +456,10 @@ func Validate%sWithDepth(m *%s, depth int) error {
 
 			case "assert_enc_type":
 				// Generate encryption key/certificate validation
+				if field.Type != "string" {
+					return fmt.Errorf("assert_enc_type annotation on field %s.%s requires string type", msg.Name, goFieldName)
+				}
+
 				if annotationValue.Type != model.AnnotationTypeEnum {
 					return fmt.Errorf("assert_enc_type annotation on field %s.%s must be an enum value", msg.Name, goFieldName)
 				}
@@ -489,6 +497,10 @@ func Validate%sWithDepth(m *%s, depth int) error {
 
 			case "assert_url":
 				// Generate URL validation
+				if field.Type != "string" {
+					return fmt.Errorf("assert_url annotation on field %s.%s requires string type", msg.Name, goFieldName)
+				}
+
 				if annotationValue.Type != model.AnnotationTypeEnum {
 					return fmt.Errorf("assert_url annotation on field %s.%s must be an enum value", msg.Name, goFieldName)
 				}
@@ -519,6 +531,10 @@ func Validate%sWithDepth(m *%s, depth int) error {
 
 			case "assert_sql":
 				// Generate SQL validation
+				if field.Type != "string" {
+					return fmt.Errorf("assert_sql annotation on field %s.%s requires string type", msg.Name, goFieldName)
+				}
+
 				if annotationValue.Type != model.AnnotationTypeEnum {
 					return fmt.Errorf("assert_sql annotation on field %s.%s must be an enum value", msg.Name, goFieldName)
 				}
@@ -549,6 +565,10 @@ func Validate%sWithDepth(m *%s, depth int) error {
 
 			case "assert_email":
 				// Generate email validation
+				if field.Type != "string" {
+					return fmt.Errorf("assert_email annotation on field %s.%s requires string type", msg.Name, goFieldName)
+				}
+
 				errFunc := "protoerrors.NewErrMissingInvalidData"
 
 				if field.IsRepeated {
@@ -575,6 +595,10 @@ func Validate%sWithDepth(m *%s, depth int) error {
 
 			case "assert_fqdn":
 				// Generate FQDN validation
+				if field.Type != "string" {
+					return fmt.Errorf("assert_fqdn annotation on field %s.%s requires string type", msg.Name, goFieldName)
+				}
+
 				errFunc := "protoerrors.NewErrMissingInvalidData"
 
 				if field.IsRepeated {
@@ -678,6 +702,10 @@ func Validate%sWithDepth(m *%s, depth int) error {
 
 			case "assert_listen_addr":
 				// Generate listen address validation (host:port format)
+				if field.Type != "string" {
+					return fmt.Errorf("assert_listen_addr annotation on field %s.%s requires string type", msg.Name, goFieldName)
+				}
+
 				errFunc := "protoerrors.NewErrMissingInvalidData"
 
 				if field.IsRepeated {
@@ -704,6 +732,10 @@ func Validate%sWithDepth(m *%s, depth int) error {
 
 			case "assert_base64":
 				// Generate base64 validation
+				if field.Type != "string" {
+					return fmt.Errorf("assert_base64 annotation on field %s.%s requires string type", msg.Name, goFieldName)
+				}
+
 				errFunc := "protoerrors.NewErrMissingInvalidData"
 
 				if field.IsRepeated {
@@ -730,6 +762,10 @@ func Validate%sWithDepth(m *%s, depth int) error {
 
 			case "assert_file_path":
 				// Generate file path validation
+				if field.Type != "string" {
+					return fmt.Errorf("assert_file_path annotation on field %s.%s requires string type", msg.Name, goFieldName)
+				}
+
 				if annotationValue.Type != model.AnnotationTypeEnum {
 					return fmt.Errorf("assert_file_path annotation on field %s.%s must be an enum value", msg.Name, goFieldName)
 				}
@@ -903,6 +939,10 @@ func Validate%sWithDepth(m *%s, depth int) error {
 
 			case "assert_semver":
 				// Generate semantic version validation
+				if field.Type != "string" {
+					return fmt.Errorf("assert_semver annotation on field %s.%s requires string type", msg.Name, goFieldName)
+				}
+
 				errFunc := "protoerrors.NewErrMissingInvalidData"
 
 				if field.IsRepeated {

@@ -193,6 +193,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 
 			switch annotationName {
 			case "assert_email":
+				if field.Type != "string" {
+					return nil, fmt.Errorf("assert_email annotation on field %s.%s requires string type", msg.Name, pyFieldName)
+				}
 				pyLinef(&code, 1, "# Validate %s (assert_email)", pyFieldName)
 				if field.IsRepeated {
 					pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
@@ -204,6 +207,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				}
 
 			case "assert_fqdn":
+				if field.Type != "string" {
+					return nil, fmt.Errorf("assert_fqdn annotation on field %s.%s requires string type", msg.Name, pyFieldName)
+				}
 				pyLinef(&code, 1, "# Validate %s (assert_fqdn)", pyFieldName)
 				if field.IsRepeated {
 					pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
@@ -215,6 +221,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				}
 
 			case "assert_host":
+				if field.Type != "string" {
+					return nil, fmt.Errorf("assert_host annotation on field %s.%s requires string type", msg.Name, pyFieldName)
+				}
 				pyLinef(&code, 1, "# Validate %s (assert_host: IP address or FQDN)", pyFieldName)
 				if field.IsRepeated {
 					pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
@@ -226,6 +235,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				}
 
 			case "assert_base64":
+				if field.Type != "string" {
+					return nil, fmt.Errorf("assert_base64 annotation on field %s.%s requires string type", msg.Name, pyFieldName)
+				}
 				pyLinef(&code, 1, "# Validate %s (assert_base64)", pyFieldName)
 				if field.IsRepeated {
 					pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
@@ -237,6 +249,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				}
 
 			case "assert_listen_addr":
+				if field.Type != "string" {
+					return nil, fmt.Errorf("assert_listen_addr annotation on field %s.%s requires string type", msg.Name, pyFieldName)
+				}
 				pyLinef(&code, 1, "# Validate %s (assert_listen_addr)", pyFieldName)
 				if field.IsRepeated {
 					pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
@@ -256,6 +271,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be a valid port number (0-65535), got: {msg.%s}\")", pyFieldName, pyFieldName)
 
 			case "assert_ipaddr_type":
+				if field.Type != "string" {
+					return nil, fmt.Errorf("assert_ipaddr_type annotation on field %s.%s requires string type", msg.Name, pyFieldName)
+				}
 				if annotationValue.Type == model.AnnotationTypeEnum {
 					buildIPAddrValidation(&code, pyFieldName, annotationValue.EnumValue, field.IsRepeated)
 				}
@@ -338,6 +356,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				}
 
 			case "assert_semver":
+				if field.Type != "string" {
+					return nil, fmt.Errorf("assert_semver annotation on field %s.%s requires string type", msg.Name, pyFieldName)
+				}
 				pyLinef(&code, 1, "# Validate %s (assert_semver)", pyFieldName)
 				if field.IsRepeated {
 					pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
@@ -349,6 +370,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				}
 
 			case "assert_sql":
+				if field.Type != "string" {
+					return nil, fmt.Errorf("assert_sql annotation on field %s.%s requires string type", msg.Name, pyFieldName)
+				}
 				if annotationValue.Type == model.AnnotationTypeEnum {
 					pyLinef(&code, 1, "# Validate %s (assert_sql: %s)", pyFieldName, annotationValue.EnumValue)
 					if field.IsRepeated {

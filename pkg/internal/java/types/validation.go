@@ -116,6 +116,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 				b.WriteString("}\n")
 
 			case "assert_email":
+				if field.Type != "string" {
+					return fmt.Errorf("assert_email annotation on field %s.%s requires string type", msg.Name, javaFieldName)
+				}
 				fmt.Fprintf(b, "// Validate %s (assert_email)\n", javaFieldName)
 				if field.IsRepeated {
 					listGetter := getterName + "List"
@@ -131,6 +134,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 				}
 
 			case "assert_fqdn":
+				if field.Type != "string" {
+					return fmt.Errorf("assert_fqdn annotation on field %s.%s requires string type", msg.Name, javaFieldName)
+				}
 				fmt.Fprintf(b, "// Validate %s (assert_fqdn)\n", javaFieldName)
 				if field.IsRepeated {
 					listGetter := getterName + "List"
@@ -146,6 +152,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 				}
 
 			case "assert_host":
+				if field.Type != "string" {
+					return fmt.Errorf("assert_host annotation on field %s.%s requires string type", msg.Name, javaFieldName)
+				}
 				fmt.Fprintf(b, "// Validate %s (assert_host: IP address or FQDN)\n", javaFieldName)
 				if field.IsRepeated {
 					listGetter := getterName + "List"
@@ -161,6 +170,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 				}
 
 			case "assert_base64":
+				if field.Type != "string" {
+					return fmt.Errorf("assert_base64 annotation on field %s.%s requires string type", msg.Name, javaFieldName)
+				}
 				fmt.Fprintf(b, "// Validate %s (assert_base64)\n", javaFieldName)
 				if field.IsRepeated {
 					listGetter := getterName + "List"
@@ -176,6 +188,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 				}
 
 			case "assert_listen_addr":
+				if field.Type != "string" {
+					return fmt.Errorf("assert_listen_addr annotation on field %s.%s requires string type", msg.Name, javaFieldName)
+				}
 				fmt.Fprintf(b, "// Validate %s (assert_listen_addr)\n", javaFieldName)
 				if field.IsRepeated {
 					listGetter := getterName + "List"
@@ -246,6 +261,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 				b.WriteString("}\n")
 
 			case "assert_ipaddr_type":
+				if field.Type != "string" {
+					return fmt.Errorf("assert_ipaddr_type annotation on field %s.%s requires string type", msg.Name, javaFieldName)
+				}
 				if annotationValue.Type == model.AnnotationTypeEnum {
 					writeIPAddrValidation(b, javaFieldName, getterName, annotationValue.EnumValue, field.IsRepeated)
 				}
@@ -352,6 +370,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 				}
 
 			case "assert_semver":
+				if field.Type != "string" {
+					return fmt.Errorf("assert_semver annotation on field %s.%s requires string type", msg.Name, javaFieldName)
+				}
 				fmt.Fprintf(b, "// Validate %s (assert_semver)\n", javaFieldName)
 				if field.IsRepeated {
 					listGetter := getterName + "List"
@@ -367,6 +388,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 				}
 
 			case "assert_sql":
+				if field.Type != "string" {
+					return fmt.Errorf("assert_sql annotation on field %s.%s requires string type", msg.Name, javaFieldName)
+				}
 				if annotationValue.Type == model.AnnotationTypeEnum {
 					fmt.Fprintf(b, "// Validate %s (assert_sql: %s)\n", javaFieldName, annotationValue.EnumValue)
 					if field.IsRepeated {

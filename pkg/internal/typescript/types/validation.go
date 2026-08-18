@@ -136,6 +136,9 @@ export function %s(m: %s | undefined, depth = 0): void {
 `, fieldName, fieldName, fieldName, fieldName, fieldName)
 
 			case "assert_ipaddr_type":
+				if field.Type != "string" {
+					return fmt.Errorf("assert_ipaddr_type annotation on field %s.%s requires string type", msg.Name, fieldName)
+				}
 				if annotationValue.Type != model.AnnotationTypeEnum {
 					return fmt.Errorf("assert_ipaddr_type annotation on field %s.%s must be an enum value", msg.Name, fieldName)
 				}
@@ -272,6 +275,9 @@ export function %s(m: %s | undefined, depth = 0): void {
 
 			case "assert_email":
 				// Generate email validation
+				if field.Type != "string" {
+					return fmt.Errorf("assert_email annotation on field %s.%s requires string type", msg.Name, fieldName)
+				}
 				if field.IsRepeated {
 					fmt.Fprintf(b, `	// Validate %s (assert_email)
 	if (m.%s) {
@@ -321,6 +327,9 @@ export function %s(m: %s | undefined, depth = 0): void {
 
 			case "assert_fqdn":
 				// Generate FQDN validation
+				if field.Type != "string" {
+					return fmt.Errorf("assert_fqdn annotation on field %s.%s requires string type", msg.Name, fieldName)
+				}
 				if field.IsRepeated {
 					fmt.Fprintf(b, `	// Validate %s (assert_fqdn)
 	if (m.%s) {
@@ -348,6 +357,9 @@ export function %s(m: %s | undefined, depth = 0): void {
 
 			case "assert_host":
 				// Generate host validation (IP address or FQDN)
+				if field.Type != "string" {
+					return fmt.Errorf("assert_host annotation on field %s.%s requires string type", msg.Name, fieldName)
+				}
 				if field.IsRepeated {
 					fmt.Fprintf(b, `	// Validate %s (assert_host: IP address or FQDN)
 	if (m.%s) {
@@ -379,6 +391,9 @@ export function %s(m: %s | undefined, depth = 0): void {
 
 			case "assert_base64":
 				// Generate base64 validation
+				if field.Type != "string" {
+					return fmt.Errorf("assert_base64 annotation on field %s.%s requires string type", msg.Name, fieldName)
+				}
 				if field.IsRepeated {
 					fmt.Fprintf(b, `	// Validate %s (assert_base64)
 	if (m.%s) {
@@ -436,6 +451,9 @@ export function %s(m: %s | undefined, depth = 0): void {
 
 			case "assert_file_path":
 				// Generate file path validation
+				if field.Type != "string" {
+					return fmt.Errorf("assert_file_path annotation on field %s.%s requires string type", msg.Name, fieldName)
+				}
 				if annotationValue.Type != model.AnnotationTypeEnum {
 					return fmt.Errorf("assert_file_path annotation on field %s.%s must be an enum value", msg.Name, fieldName)
 				}
@@ -443,6 +461,9 @@ export function %s(m: %s | undefined, depth = 0): void {
 
 			case "assert_semver":
 				// Generate semantic version validation
+				if field.Type != "string" {
+					return fmt.Errorf("assert_semver annotation on field %s.%s requires string type", msg.Name, fieldName)
+				}
 				if field.IsRepeated {
 					fmt.Fprintf(b, `	// Validate %s (assert_semver)
 	if (m.%s) {
@@ -508,6 +529,9 @@ export function %s(m: %s | undefined, depth = 0): void {
 
 			case "assert_sql":
 				// Generate SQL validation
+				if field.Type != "string" {
+					return fmt.Errorf("assert_sql annotation on field %s.%s requires string type", msg.Name, fieldName)
+				}
 				if annotationValue.Type != model.AnnotationTypeEnum {
 					return fmt.Errorf("assert_sql annotation on field %s.%s must be an enum value", msg.Name, fieldName)
 				}

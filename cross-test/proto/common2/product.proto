@@ -185,6 +185,24 @@ message Product {
 
   // Shipping methods available
   repeated ShippingMethod shipping_methods = 28 [(spec.assert_max_size) = 100];
+
+  // Per-warehouse stock counts (repeated assert_numeric: validated per element)
+  repeated int32 warehouse_stock = 31 [
+    (spec.assert_max_size) = 50,
+    (spec.assert_numeric) = {
+      ge: 0,
+      le: 100000
+    }
+  ];
+
+  // Per-review scores (repeated assert_float: validated per element)
+  repeated float review_scores = 32 [
+    (spec.assert_max_size) = 50,
+    (spec.assert_float) = {
+      ge: 0.0,
+      le: 5.0
+    }
+  ];
 }
 
 // Product dimensions

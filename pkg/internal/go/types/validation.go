@@ -74,14 +74,8 @@ func Validate%sWithDepth(m *%s, depth int) error {
 	// Track which helper functions we need to generate
 	needsInHelper := make(map[string][]int64)
 	needsNotInHelper := make(map[string][]int64)
-	needsFloatInHelper := make(map[string]struct {
-		values  []float64
-		epsilon float64
-	})
-	needsFloatNotInHelper := make(map[string]struct {
-		values  []float64
-		epsilon float64
-	})
+	needsFloatInHelper := make(map[string]goFloatMembership)
+	needsFloatNotInHelper := make(map[string]goFloatMembership)
 	messageValidateRef := func(typeName, typePackage string) string {
 		if typeName == "" {
 			return ""
@@ -861,124 +855,73 @@ func Validate%sWithDepth(m *%s, depth int) error {
 
 			case "assert_numeric":
 				// Complex numeric constraint
-				errFunc := "protoerrors.NewErrMissingInvalidData"
-
 				if annotationValue.NumericConstraint != nil {
-					fmt.Fprintf(b, "// Validate %s (assert_numeric)\n", goFieldName)
 					constraint := annotationValue.NumericConstraint
 
-					if constraint.Gt != nil {
-						fmt.Fprintf(b, "if m.%s <= %d {\n", goFieldName, *constraint.Gt)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must be > %d, got: %%v\", m.%s)\n", errFunc, goFieldName, *constraint.Gt, goFieldName)
-						b.WriteString("}\n")
+					var checks strings.Builder
+					switch {
+					case field.IsRepeated:
+						writeGoNumericConstraintChecks(&checks, msg.Name, goFieldName, "val", "i", constraint, needsInHelper, needsNotInHelper)
+					case field.IsOptional:
+						writeGoNumericConstraintChecks(&checks, msg.Name, goFieldName, "*m."+goFieldName, "", constraint, needsInHelper, needsNotInHelper)
+					default:
+						writeGoNumericConstraintChecks(&checks, msg.Name, goFieldName, "m."+goFieldName, "", constraint, needsInHelper, needsNotInHelper)
 					}
-					if constraint.Ge != nil {
-						fmt.Fprintf(b, "if m.%s < %d {\n", goFieldName, *constraint.Ge)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must be >= %d, got: %%v\", m.%s)\n", errFunc, goFieldName, *constraint.Ge, goFieldName)
-						b.WriteString("}\n")
-					}
-					if constraint.Lt != nil {
-						fmt.Fprintf(b, "if m.%s >= %d {\n", goFieldName, *constraint.Lt)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must be < %d, got: %%v\", m.%s)\n", errFunc, goFieldName, *constraint.Lt, goFieldName)
-						b.WriteString("}\n")
-					}
-					if constraint.Le != nil {
-						fmt.Fprintf(b, "if m.%s > %d {\n", goFieldName, *constraint.Le)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must be <= %d, got: %%v\", m.%s)\n", errFunc, goFieldName, *constraint.Le, goFieldName)
-						b.WriteString("}\n")
-					}
-					if constraint.Eq != nil {
-						fmt.Fprintf(b, "if m.%s != %d {\n", goFieldName, *constraint.Eq)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must equal %d, got: %%v\", m.%s)\n", errFunc, goFieldName, *constraint.Eq, goFieldName)
-						b.WriteString("}\n")
-					}
-					if constraint.Ne != nil {
-						fmt.Fprintf(b, "if m.%s == %d {\n", goFieldName, *constraint.Ne)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must not equal %d, got: %%v\", m.%s)\n", errFunc, goFieldName, *constraint.Ne, goFieldName)
-						b.WriteString("}\n")
-					}
-					if len(constraint.In) > 0 {
-						fmt.Fprintf(b, "if !isIn%s%s(m.%s) {\n", msg.Name, goFieldName, goFieldName)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must be one of %v, got: %%v\", m.%s)\n", errFunc, goFieldName, constraint.In, goFieldName)
-						b.WriteString("}\n")
-						needsInHelper[fmt.Sprintf("%s_%s", msg.Name, goFieldName)] = constraint.In
-					}
-					if len(constraint.NotIn) > 0 {
-						fmt.Fprintf(b, "if isIn%s%sNotIn(m.%s) {\n", msg.Name, goFieldName, goFieldName)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must not be one of %v, got: %%v\", m.%s)\n", errFunc, goFieldName, constraint.NotIn, goFieldName)
-						b.WriteString("}\n")
-						needsNotInHelper[fmt.Sprintf("%s_%s", msg.Name, goFieldName)] = constraint.NotIn
-					}
-					if constraint.MultipleOf != nil {
-						fmt.Fprintf(b, "if m.%s %% %d != 0 {\n", goFieldName, *constraint.MultipleOf)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must be a multiple of %d, got: %%v\", m.%s)\n", errFunc, goFieldName, *constraint.MultipleOf, goFieldName)
-						b.WriteString("}\n")
+
+					if checks.Len() > 0 {
+						fmt.Fprintf(b, "// Validate %s (assert_numeric)\n", goFieldName)
+						switch {
+						case field.IsRepeated:
+							fmt.Fprintf(b, "for i, val := range m.%s {\n", goFieldName)
+							b.WriteString(checks.String())
+							b.WriteString("}\n")
+						case field.IsOptional:
+							fmt.Fprintf(b, "if m.%s != nil {\n", goFieldName)
+							b.WriteString(checks.String())
+							b.WriteString("}\n")
+						default:
+							b.WriteString(checks.String())
+						}
 					}
 				}
 
 			case "assert_float":
 				// Complex float constraint
-				errFunc := "protoerrors.NewErrMissingInvalidData"
-
 				if annotationValue.FloatConstraint != nil {
-					fmt.Fprintf(b, "// Validate %s (assert_float)\n", goFieldName)
 					constraint := annotationValue.FloatConstraint
 					epsilon := 1e-9
 					if constraint.Epsilon != nil {
 						epsilon = *constraint.Epsilon
 					}
 
-					// Determine field accessor based on whether it's optional
-					var fieldAccessor string
-					if field.IsOptional {
-						fieldAccessor = fmt.Sprintf("*m.%s", goFieldName)
-						fmt.Fprintf(b, "if m.%s != nil {\n", goFieldName)
-					} else {
-						fieldAccessor = fmt.Sprintf("m.%s", goFieldName)
+					// Determine field accessor based on the field's shape.
+					fieldAccessor := "m." + goFieldName
+					indexVar := ""
+					switch {
+					case field.IsRepeated:
+						fieldAccessor = "val"
+						indexVar = "i"
+					case field.IsOptional:
+						fieldAccessor = "*m." + goFieldName
 					}
 
-					if constraint.Gt != nil {
-						fmt.Fprintf(b, "if %s <= %g {\n", fieldAccessor, *constraint.Gt)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must be > %g, got: %%v\", %s)\n", errFunc, goFieldName, *constraint.Gt, fieldAccessor)
-						b.WriteString("}\n")
-					}
-					if constraint.Ge != nil {
-						fmt.Fprintf(b, "if %s < %g {\n", fieldAccessor, *constraint.Ge)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must be >= %g, got: %%v\", %s)\n", errFunc, goFieldName, *constraint.Ge, fieldAccessor)
-						b.WriteString("}\n")
-					}
-					if constraint.Lt != nil {
-						fmt.Fprintf(b, "if %s >= %g {\n", fieldAccessor, *constraint.Lt)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must be < %g, got: %%v\", %s)\n", errFunc, goFieldName, *constraint.Lt, fieldAccessor)
-						b.WriteString("}\n")
-					}
-					if constraint.Le != nil {
-						fmt.Fprintf(b, "if %s > %g {\n", fieldAccessor, *constraint.Le)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must be <= %g, got: %%v\", %s)\n", errFunc, goFieldName, *constraint.Le, fieldAccessor)
-						b.WriteString("}\n")
-					}
-					if len(constraint.In) > 0 {
-						fmt.Fprintf(b, "if !isInFloat%s%s(%s, %g) {\n", msg.Name, goFieldName, fieldAccessor, epsilon)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must be one of %v, got: %%v\", %s)\n", errFunc, goFieldName, constraint.In, fieldAccessor)
-						b.WriteString("}\n")
-						needsFloatInHelper[fmt.Sprintf("%s_%s", msg.Name, goFieldName)] = struct {
-							values  []float64
-							epsilon float64
-						}{constraint.In, epsilon}
-					}
-					if len(constraint.NotIn) > 0 {
-						fmt.Fprintf(b, "if isInFloat%s%sNotIn(%s, %g) {\n", msg.Name, goFieldName, fieldAccessor, epsilon)
-						fmt.Fprintf(b, "return %s(nil, \"field %s must not be one of %v, got: %%v\", %s)\n", errFunc, goFieldName, constraint.NotIn, fieldAccessor)
-						b.WriteString("}\n")
-						needsFloatNotInHelper[fmt.Sprintf("%s_%s", msg.Name, goFieldName)] = struct {
-							values  []float64
-							epsilon float64
-						}{constraint.NotIn, epsilon}
-					}
+					var checks strings.Builder
+					writeGoFloatConstraintChecks(&checks, msg.Name, goFieldName, fieldAccessor, indexVar, constraint, epsilon, needsFloatInHelper, needsFloatNotInHelper)
 
-					// Close the nil check for optional fields
-					if field.IsOptional {
-						b.WriteString("}\n")
+					if checks.Len() > 0 {
+						fmt.Fprintf(b, "// Validate %s (assert_float)\n", goFieldName)
+						switch {
+						case field.IsRepeated:
+							fmt.Fprintf(b, "for i, val := range m.%s {\n", goFieldName)
+							b.WriteString(checks.String())
+							b.WriteString("}\n")
+						case field.IsOptional:
+							fmt.Fprintf(b, "if m.%s != nil {\n", goFieldName)
+							b.WriteString(checks.String())
+							b.WriteString("}\n")
+						default:
+							b.WriteString(checks.String())
+						}
 					}
 				}
 
@@ -1531,6 +1474,123 @@ func isInFloat%s%sNotIn(val float64, epsilon float64) bool {
 	// No need for ValidateFromBytes, ValidateFromFile, etc.
 
 	return nil
+}
+
+// goFloatMembership captures one assert_float in/not_in list together with the
+// epsilon its comparisons use, so the emitted isInFloat* helper matches the
+// call site that registered it.
+type goFloatMembership struct {
+	values  []float64
+	epsilon float64
+}
+
+// writeGoNumericConstraintChecks emits the assert_numeric comparisons for a
+// single integer value. valueExpr is the expression holding that value and
+// indexVar is the loop index for repeated fields, or "" for scalar and
+// optional fields. Nothing is written when the constraint carries no checks,
+// which lets the caller skip an otherwise-empty (and uncompilable) loop.
+func writeGoNumericConstraintChecks(b *strings.Builder, msgName, goFieldName, valueExpr, indexVar string, constraint *model.NumericConstraint, needsInHelper, needsNotInHelper map[string][]int64) {
+	errFunc := "protoerrors.NewErrMissingInvalidData"
+	label := goFieldName
+	idxArg := ""
+	if indexVar != "" {
+		label = goFieldName + "[%d]"
+		idxArg = indexVar + ", "
+	}
+
+	if constraint.Gt != nil {
+		fmt.Fprintf(b, "if %s <= %d {\n", valueExpr, *constraint.Gt)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must be > %d, got: %%v\", %s%s)\n", errFunc, label, *constraint.Gt, idxArg, valueExpr)
+		b.WriteString("}\n")
+	}
+	if constraint.Ge != nil {
+		fmt.Fprintf(b, "if %s < %d {\n", valueExpr, *constraint.Ge)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must be >= %d, got: %%v\", %s%s)\n", errFunc, label, *constraint.Ge, idxArg, valueExpr)
+		b.WriteString("}\n")
+	}
+	if constraint.Lt != nil {
+		fmt.Fprintf(b, "if %s >= %d {\n", valueExpr, *constraint.Lt)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must be < %d, got: %%v\", %s%s)\n", errFunc, label, *constraint.Lt, idxArg, valueExpr)
+		b.WriteString("}\n")
+	}
+	if constraint.Le != nil {
+		fmt.Fprintf(b, "if %s > %d {\n", valueExpr, *constraint.Le)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must be <= %d, got: %%v\", %s%s)\n", errFunc, label, *constraint.Le, idxArg, valueExpr)
+		b.WriteString("}\n")
+	}
+	if constraint.Eq != nil {
+		fmt.Fprintf(b, "if %s != %d {\n", valueExpr, *constraint.Eq)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must equal %d, got: %%v\", %s%s)\n", errFunc, label, *constraint.Eq, idxArg, valueExpr)
+		b.WriteString("}\n")
+	}
+	if constraint.Ne != nil {
+		fmt.Fprintf(b, "if %s == %d {\n", valueExpr, *constraint.Ne)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must not equal %d, got: %%v\", %s%s)\n", errFunc, label, *constraint.Ne, idxArg, valueExpr)
+		b.WriteString("}\n")
+	}
+	if len(constraint.In) > 0 {
+		fmt.Fprintf(b, "if !isIn%s%s(int64(%s)) {\n", msgName, goFieldName, valueExpr)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must be one of %v, got: %%v\", %s%s)\n", errFunc, label, constraint.In, idxArg, valueExpr)
+		b.WriteString("}\n")
+		needsInHelper[fmt.Sprintf("%s_%s", msgName, goFieldName)] = constraint.In
+	}
+	if len(constraint.NotIn) > 0 {
+		fmt.Fprintf(b, "if isIn%s%sNotIn(int64(%s)) {\n", msgName, goFieldName, valueExpr)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must not be one of %v, got: %%v\", %s%s)\n", errFunc, label, constraint.NotIn, idxArg, valueExpr)
+		b.WriteString("}\n")
+		needsNotInHelper[fmt.Sprintf("%s_%s", msgName, goFieldName)] = constraint.NotIn
+	}
+	if constraint.MultipleOf != nil {
+		fmt.Fprintf(b, "if %s %% %d != 0 {\n", valueExpr, *constraint.MultipleOf)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must be a multiple of %d, got: %%v\", %s%s)\n", errFunc, label, *constraint.MultipleOf, idxArg, valueExpr)
+		b.WriteString("}\n")
+	}
+}
+
+// writeGoFloatConstraintChecks emits the assert_float comparisons for a single
+// float value, following the same valueExpr/indexVar contract as
+// writeGoNumericConstraintChecks.
+func writeGoFloatConstraintChecks(b *strings.Builder, msgName, goFieldName, valueExpr, indexVar string, constraint *model.FloatConstraint, epsilon float64, needsFloatInHelper, needsFloatNotInHelper map[string]goFloatMembership) {
+	errFunc := "protoerrors.NewErrMissingInvalidData"
+	label := goFieldName
+	idxArg := ""
+	if indexVar != "" {
+		label = goFieldName + "[%d]"
+		idxArg = indexVar + ", "
+	}
+
+	if constraint.Gt != nil {
+		fmt.Fprintf(b, "if %s <= %g {\n", valueExpr, *constraint.Gt)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must be > %g, got: %%v\", %s%s)\n", errFunc, label, *constraint.Gt, idxArg, valueExpr)
+		b.WriteString("}\n")
+	}
+	if constraint.Ge != nil {
+		fmt.Fprintf(b, "if %s < %g {\n", valueExpr, *constraint.Ge)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must be >= %g, got: %%v\", %s%s)\n", errFunc, label, *constraint.Ge, idxArg, valueExpr)
+		b.WriteString("}\n")
+	}
+	if constraint.Lt != nil {
+		fmt.Fprintf(b, "if %s >= %g {\n", valueExpr, *constraint.Lt)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must be < %g, got: %%v\", %s%s)\n", errFunc, label, *constraint.Lt, idxArg, valueExpr)
+		b.WriteString("}\n")
+	}
+	if constraint.Le != nil {
+		fmt.Fprintf(b, "if %s > %g {\n", valueExpr, *constraint.Le)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must be <= %g, got: %%v\", %s%s)\n", errFunc, label, *constraint.Le, idxArg, valueExpr)
+		b.WriteString("}\n")
+	}
+	if len(constraint.In) > 0 {
+		fmt.Fprintf(b, "if !isInFloat%s%s(float64(%s), %g) {\n", msgName, goFieldName, valueExpr, epsilon)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must be one of %v, got: %%v\", %s%s)\n", errFunc, label, constraint.In, idxArg, valueExpr)
+		b.WriteString("}\n")
+		needsFloatInHelper[fmt.Sprintf("%s_%s", msgName, goFieldName)] = goFloatMembership{constraint.In, epsilon}
+	}
+	if len(constraint.NotIn) > 0 {
+		fmt.Fprintf(b, "if isInFloat%s%sNotIn(float64(%s), %g) {\n", msgName, goFieldName, valueExpr, epsilon)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must not be one of %v, got: %%v\", %s%s)\n", errFunc, label, constraint.NotIn, idxArg, valueExpr)
+		b.WriteString("}\n")
+		needsFloatNotInHelper[fmt.Sprintf("%s_%s", msgName, goFieldName)] = goFloatMembership{constraint.NotIn, epsilon}
+	}
 }
 
 // generateEncryptionValidationHelpers generates helper functions for encryption validation

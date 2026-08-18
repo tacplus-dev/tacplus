@@ -857,6 +857,12 @@ func Validate%sWithDepth(m *%s, depth int) error {
 				// Complex numeric constraint
 				if annotationValue.NumericConstraint != nil {
 					constraint := annotationValue.NumericConstraint
+					if field.IsMap || !isIntegerType(field.Type) {
+						return fmt.Errorf("assert_numeric annotation on field %s.%s requires an integer field", msg.Name, goFieldName)
+					}
+					if constraint.MultipleOf != nil && *constraint.MultipleOf == 0 {
+						return fmt.Errorf("assert_numeric multiple_of annotation on field %s.%s must be non-zero", msg.Name, goFieldName)
+					}
 
 					var checks strings.Builder
 					switch {
@@ -889,6 +895,9 @@ func Validate%sWithDepth(m *%s, depth int) error {
 				// Complex float constraint
 				if annotationValue.FloatConstraint != nil {
 					constraint := annotationValue.FloatConstraint
+					if field.IsMap || !isFloatType(field.Type) {
+						return fmt.Errorf("assert_float annotation on field %s.%s requires a float or double field", msg.Name, goFieldName)
+					}
 					epsilon := 1e-9
 					if constraint.Epsilon != nil {
 						epsilon = *constraint.Epsilon

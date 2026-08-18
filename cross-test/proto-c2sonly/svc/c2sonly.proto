@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// C2S-only cross-test fixture: the whole server surface is non-S2S.
+//
+// Why this shape exists as a gate: sm/ and both chassis packages ARE generated
+// (serverServices is non-empty), but s2sGenerationEnabled is false, so
+// ValidateTokenMinters does not demand a (spec.token_minter) service and
+// DiscoverTokenExchangerPackage returns nil. That selects the NO-token-exchanger
+// variants of chassis/service_im and chassis/servicemanager — inline sources in
+// pkg/internal/go/types/stateclient_gen.go rather than templates. Until this
+// fixture existed no gate generated that variant, and it shipped broken twice:
+// the NEW-21 classifier's sentinels (batch 12) and the credential-degradation
+// helpers (NEW-47), each an unconditional chassis reference the inline source
+// did not declare.
+//
+// NOT a c2d-only daemon: c2d services are filtered out of serverServices
+// (generator.go:1198), so such a build emits c2dm/ and no sm/ at all.
+
+syntax = "proto3";
+
+package c2sonly;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "c2sonly"};
+
+message PingRequest {
+  string item_id = 1 [(spec.assert_required) = true];
+}
+
+message PingResponse {
+  string result_id = 1 [(spec.assert_required) = true];
+}
+
+service C2SOnlyApi {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  rpc Ping(PingRequest) returns (PingResponse) {
+    option (spec.method_c2s) = {auth_disabled: true};
+  }
+}

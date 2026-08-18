@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PROTO_SRC="$ROOT_DIR/cross-test/proto"
 HEALTHONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-healthonly"
+C2SONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-c2sonly"
 WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/current-generation}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
@@ -106,6 +107,19 @@ write_config() {
 language: "$language"
 pkg: "com.gitlab.example.dummy.proto"
 src: "$PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
+write_c2sonly_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.c2sonly"
+src: "$C2SONLY_PROTO_SRC"
 output-dir: "tacplus"
 EOF
 }
@@ -1158,6 +1172,26 @@ assert_current_output() {
   assert_no_legacy_fixture_output "$output"
 }
 
+# assert_c2sonly_output checks that the C2S-only fixture actually selected the
+# NO-token-exchanger chassis variants. Without this the leg silently degrades: if
+# a future change makes this proto shape discover an exchanger, the tree still
+# compiles and the variant this fixture exists to compile stops being built.
+assert_c2sonly_output() {
+  local output="$1"
+  local language="$2"
+
+  case "$language" in
+    go)
+      local im="$output/chassis/service_im/service_im.go"
+      [[ -f "$im" ]] || die "c2s-only fixture: chassis/service_im/service_im.go not found under $output"
+      grep -q 'errNoTokenSource' "$im" \
+        || die "c2s-only fixture: $im is not the no-token-exchanger variant (no errNoTokenSource); the fixture no longer exercises the inline chassis sources"
+      ;;
+  esac
+
+  assert_no_legacy_fixture_output "$output"
+}
+
 # assert_healthonly_output checks fixture-specific invariants for the health-only
 # proto source (HasTlsGrpc=false, HasC2DGrpc=false, HasAutoTls=true).
 # For Rust, this verifies that the health-only branch was actually emitted —
@@ -1474,6 +1508,37 @@ if [[ ${#languages[@]} -eq 3 ]]; then
   assert_config_defaults_parity "$WORK_ROOT"
   assert_config_defaults_behavioral "$WORK_ROOT"
   assert_tls_degrade_parity "$WORK_ROOT"
+fi
+
+# C2S-only fixture: the whole server surface is non-S2S, so no authoritative
+# token minter is required and the NO-token-exchanger variants of
+# chassis/service_im and chassis/servicemanager are generated (inline sources in
+# pkg/internal/go/types/stateclient_gen.go, not templates). Nothing else in any
+# gate generates that variant, and it shipped un-compilable twice — the NEW-21
+# classifier sentinels and the NEW-47 credential-degradation helpers were each an
+# unconditional chassis reference the inline source did not declare. Go only:
+# java and rust emit ONE class/crate with {{else}} branches inside it, so they
+# have no second variant to drift from.
+if [[ -d "$C2SONLY_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    [[ "$language" == "go" ]] || continue
+    dir="$WORK_ROOT/c2sonly-$language"
+    log="$WORK_ROOT/c2sonly-$language.log"
+    rm -rf "$dir"
+    write_c2sonly_config "$dir" "$language"
+
+    echo "==> Generating $language c2s-only (no-token-exchanger) fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$C2SONLY_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language c2s-only generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_c2sonly_output "$output_root" "$language"
+    echo "==> Compiling $language c2s-only fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/c2sonly"
+    echo "    PASS $language c2s-only"
+  done
 fi
 
 # Health-only fixture: exercises the {{else}} server branch in

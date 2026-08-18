@@ -588,9 +588,14 @@ package service_im
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync/atomic"
 
 	grpcconfig_pb "%[1]s/types/sys/grpcconfig"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"go.uber.org/zap"
 )
 
 // ErrMissingTrustDomain mirrors the sentinel of the same name in the
@@ -655,6 +660,73 @@ func (im *IdentityManager) StreamInterceptor() grpc.StreamClientInterceptor {
 }
 
 func (im *IdentityManager) Close() {}
+
+// -----------------------------------------------------------------------------
+// Credential rejection recovery
+// -----------------------------------------------------------------------------
+//
+// Mirrors the surface of the same section in the token-exchanger variant of this
+// package. The generated state wrappers, subscribers and ServiceManager call
+// NoteIfCredentialRejection / NoteCredentialAccepted / CredentialsDegraded
+// UNCONDITIONALLY, so both variants must expose them or a no-minter build does
+// not compile (NEW-47).
+//
+// The re-mint half of the token-exchanger implementation
+// (RegisterCredentialInvalidator, which drops the cached token) is deliberately
+// absent: this variant mints nothing and caches nothing, so there is no token to
+// invalidate. The COUNTING half is kept as-is, because it is what the health
+// floor reads: a build whose calls are rejected over and over still has to stop
+// reporting itself Ready.
+
+var consecutiveRejects atomic.Int64
+
+// degradedAfter is the number of rejections in a row before the service reports
+// itself unhealthy. Same threshold and same reasoning as the token-exchanger
+// variant: a single rejection is a normal event, three in a row is not.
+const degradedAfter = 3
+
+// IsCredentialRejection reports whether an error means our credential was
+// REJECTED, as opposed to the peer being unreachable or the call being refused
+// on authorization grounds.
+//
+// Deliberately excludes PermissionDenied: that means the credential was
+// understood and refused, so re-presenting the same identity would loop forever.
+func IsCredentialRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	if status.Code(err) == codes.Unauthenticated {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unauthenticated") ||
+		strings.Contains(msg, "does not have valid authentication credentials") ||
+		strings.Contains(msg, "token validation failed")
+}
+
+// NoteCredentialAccepted clears the degraded state after an accepted call.
+func NoteCredentialAccepted() {
+	consecutiveRejects.Store(0)
+}
+
+// NoteIfCredentialRejection records a rejection when the error looks like one.
+// Returns true when it did. There is no cached credential to drop in this
+// variant, so unlike the token-exchanger one it only counts.
+func NoteIfCredentialRejection(err error) bool {
+	if IsCredentialRejection(err) {
+		consecutiveRejects.Add(1)
+		zap.L().Warn("credential was rejected and this build has no token minter — nothing can re-mint it")
+		return true
+	}
+	return false
+}
+
+// CredentialsDegraded reports whether calls keep coming back rejected. Wired to
+// the health floor so readiness stops reporting Ready for a service that cannot
+// authenticate at all.
+func CredentialsDegraded() bool {
+	return consecutiveRejects.Load() >= degradedAfter
+}
 `, config.ModuleBasePath)
 
 	formatted, fmtErr := format.Source([]byte(source))

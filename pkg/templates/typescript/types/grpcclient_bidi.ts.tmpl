@@ -83,17 +83,14 @@
 
                 // Bind handle to this stream — flushes any buffered messages
                 // and routes future send() calls to this stream.
+                // Auth is STREAM-OPEN scoped (docs/API.md "Client Send Contract"):
+                // the one token attached to `metadata` above travels with the
+                // stream, and gRPC metadata cannot change mid-stream. So there is
+                // deliberately no per-send token preflight here — it would mint a
+                // token the server never sees while still being able to fail a
+                // legitimate send. go/java/rust bidi send paths do the same.
                 const sendFn = async (msg: {{.InputType}}): Promise<void> => {
-{{.RequestValidation}}{{- if .AuthRequired}}
-                    if (!tokenProvider) {
-                        throw bidiUnauthenticated('auth token provider is required');
-                    }
-                    const freshToken = await tokenProvider();
-                    if (!freshToken) {
-                        throw bidiUnauthenticated('auth token is empty');
-                    }
-{{- end}}
-                    try {
+{{.RequestValidation}}                    try {
                         if (!stream.write(msg)) {
                             await new Promise<void>((resolve) => stream.once('drain', resolve));
                         }

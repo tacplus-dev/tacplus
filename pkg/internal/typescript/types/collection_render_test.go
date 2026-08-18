@@ -323,6 +323,10 @@ func TestTsBidiTemplateSendPathCarriesNoAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTemplate grpcclient_bidi.ts.tmpl: %v", err)
 	}
+	// NOTE: this only catches a `this.metadata()` call in the send path. The
+	// stronger pin on the same contract — which also catches a direct
+	// tokenProvider() preflight — is TestTypeScriptBidiSendDoesNotPreflightToken
+	// in grpcclient_bidi_regression_test.go.
 	if idx := strings.Index(tmplStr, "sendFn"); idx >= 0 && strings.Contains(tmplStr[idx:], "this.metadata(") {
 		t.Fatalf("bidi sendFn path must not carry per-send auth (stream-open scoped)")
 	}

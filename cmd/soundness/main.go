@@ -270,6 +270,29 @@ func controlPlaneGuarantees() []controlPlaneGuarantee {
 			},
 		},
 		{
+			// PAR-7: a unary W2S call with no caller-supplied deadline must still
+			// get one. The typescript FetchTransport stored connectTimeoutMs but
+			// never applied it on the unary requestJson path, and fetch has no
+			// default timeout, so such a call could hang forever. The probe keys on
+			// the APPLY site — the leg PAR-7 broke — not on the 30s default literal,
+			// which each language's render tests already assert.
+			name: "W2S unary request deadline (client outbound)",
+			locus: map[string]string{
+				"go":         "pkg/templates/go/types/w2sclient.go.tmpl",
+				"java":       "pkg/templates/java/types/w2sclient.java.tmpl",
+				"python":     "pkg/templates/python/types/w2sclient.py.tmpl",
+				"rust":       "pkg/templates/rust/types/w2sclient.rs.tmpl",
+				"typescript": "pkg/templates/typescript/types/w2sm.ts.tmpl",
+			},
+			tokens: map[string][]string{
+				"go":         {"reqCtx, cancel := c.contextWithTimeout(ctx)"},
+				"java":       {".timeout(connectTimeout)"},
+				"python":     {"timeout=self._request_timeout"},
+				"rust":       {"timeout(self.connect_timeout, request.send())"},
+				"typescript": {"AbortSignal.timeout(this.connectTimeoutMs)"},
+			},
+		},
+		{
 			name:  "unary response validation (client outbound)",
 			locus: clientEmitterFiles,
 			tokens: map[string][]string{

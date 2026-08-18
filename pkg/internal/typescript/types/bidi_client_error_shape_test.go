@@ -10,19 +10,14 @@ import (
 
 // Same class as PAR-9 (python clients) and the batch-7 typescript state client,
 // at the typescript BIDI client seam. grpcclient.ts.tmpl's metadata() already
-// stamps grpc.status.UNAUTHENTICATED; the bidi send path threw a bare uncoded
-// Error, and that throw reaches the CALLER (sendFn is the handle's send()), so
-// a caller could not tell "no credential" from any other send failure.
+// stamps grpc.status.UNAUTHENTICATED; the bidi stream-open auth seam threw a
+// bare uncoded Error, so a caller could not tell "no credential" from any other
+// failure.
 func TestTypeScriptBidiClientThrowsUnauthenticatedCode(t *testing.T) {
 	rendered := renderTSBidiMethodForTest(t, true)
 
-	for _, want := range []string{
-		"throw bidiUnauthenticated('auth token provider is required');",
-		"throw bidiUnauthenticated('auth token is empty');",
-	} {
-		if !strings.Contains(rendered, want) {
-			t.Errorf("rendered typescript bidi method missing %q:\n%s", want, rendered)
-		}
+	if want := "throw bidiUnauthenticated('auth token is empty');"; !strings.Contains(rendered, want) {
+		t.Errorf("rendered typescript bidi method missing %q:\n%s", want, rendered)
 	}
 	for _, bad := range []string{
 		"throw new Error('auth token provider is required');",

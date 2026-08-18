@@ -212,6 +212,11 @@ func TestValidateStateConsistencyRejectsScalarBoundaryAnnotation(t *testing.T) {
 		field string
 	}{
 		{"epoch_expiration", `int64 lease_expires_at = 1 [(spec.epoch_expiration) = true];`},
+		{"priority_queue", `string alerts = 1 [(spec.priority_queue) = "severity"];`},
+		{"command", `string do_thing = 1 [(spec.command) = true];`},
+		{"view_sources", `string all_keys = 1 [(spec.view_sources) = "config_keys"];`},
+		{"view_member", `string members = 1 [(spec.view_member) = "all_keys"];`},
+		{"instance_keyed", `string per_instance = 1 [(spec.instance_keyed) = true];`},
 		{"indexed", `int64 idx = 1 [(spec.indexed) = true];`},
 		{"persistence", `string blob = 1 [(spec.persistence) = true];`},
 		{"queue", `string tasks = 1 [(spec.queue) = true];`},

@@ -198,6 +198,10 @@ export function %s(m: %s | undefined, depth = 0): void {
 					return fmt.Errorf("assert_gt annotation on field %s.%s must be an integer value", msg.Name, fieldName)
 				}
 
+				if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type) || field.IsEnum) {
+					return fmt.Errorf("assert_gt annotation on field %s.%s requires a scalar numeric field", msg.Name, fieldName)
+				}
+
 				fmt.Fprintf(b, `	// Validate %s (assert_gt: %d)
 	if (m.%s !== undefined && m.%s <= %d) {
 		throw newErrMissingInvalidData(undefined, `+"`field %s must be > %d, got: ${m.%s}`"+`);
@@ -209,6 +213,10 @@ export function %s(m: %s | undefined, depth = 0): void {
 				// Simple greater than or equal comparison
 				if annotationValue.Type != model.AnnotationTypeInt {
 					return fmt.Errorf("assert_ge annotation on field %s.%s must be an integer value", msg.Name, fieldName)
+				}
+
+				if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type) || field.IsEnum) {
+					return fmt.Errorf("assert_ge annotation on field %s.%s requires a scalar numeric field", msg.Name, fieldName)
 				}
 
 				fmt.Fprintf(b, `	// Validate %s (assert_ge: %d)
@@ -224,6 +232,10 @@ export function %s(m: %s | undefined, depth = 0): void {
 					return fmt.Errorf("assert_lt annotation on field %s.%s must be an integer value", msg.Name, fieldName)
 				}
 
+				if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type) || field.IsEnum) {
+					return fmt.Errorf("assert_lt annotation on field %s.%s requires a scalar numeric field", msg.Name, fieldName)
+				}
+
 				fmt.Fprintf(b, `	// Validate %s (assert_lt: %d)
 	if (m.%s !== undefined && m.%s >= %d) {
 		throw newErrMissingInvalidData(undefined, `+"`field %s must be < %d, got: ${m.%s}`"+`);
@@ -235,6 +247,10 @@ export function %s(m: %s | undefined, depth = 0): void {
 				// Simple less than or equal comparison
 				if annotationValue.Type != model.AnnotationTypeInt {
 					return fmt.Errorf("assert_le annotation on field %s.%s must be an integer value", msg.Name, fieldName)
+				}
+
+				if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type) || field.IsEnum) {
+					return fmt.Errorf("assert_le annotation on field %s.%s requires a scalar numeric field", msg.Name, fieldName)
 				}
 
 				fmt.Fprintf(b, `	// Validate %s (assert_le: %d)

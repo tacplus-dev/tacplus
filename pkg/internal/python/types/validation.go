@@ -287,6 +287,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 
 			case "assert_gt":
 				if annotationValue.Type == model.AnnotationTypeInt {
+					if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type) || field.IsEnum) {
+						return nil, fmt.Errorf("assert_gt annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
+					}
 					pyLinef(&code, 1, "# Validate %s (assert_gt: %d)", pyFieldName, annotationValue.IntValue)
 					pyLinef(&code, 1, "if msg.%s <= %d:", pyFieldName, annotationValue.IntValue)
 					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be > %d, got: {msg.%s}\")", pyFieldName, annotationValue.IntValue, pyFieldName)
@@ -294,6 +297,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 
 			case "assert_ge":
 				if annotationValue.Type == model.AnnotationTypeInt {
+					if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type) || field.IsEnum) {
+						return nil, fmt.Errorf("assert_ge annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
+					}
 					pyLinef(&code, 1, "# Validate %s (assert_ge: %d)", pyFieldName, annotationValue.IntValue)
 					pyLinef(&code, 1, "if msg.%s < %d:", pyFieldName, annotationValue.IntValue)
 					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be >= %d, got: {msg.%s}\")", pyFieldName, annotationValue.IntValue, pyFieldName)
@@ -301,6 +307,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 
 			case "assert_lt":
 				if annotationValue.Type == model.AnnotationTypeInt {
+					if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type) || field.IsEnum) {
+						return nil, fmt.Errorf("assert_lt annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
+					}
 					pyLinef(&code, 1, "# Validate %s (assert_lt: %d)", pyFieldName, annotationValue.IntValue)
 					pyLinef(&code, 1, "if msg.%s >= %d:", pyFieldName, annotationValue.IntValue)
 					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be < %d, got: {msg.%s}\")", pyFieldName, annotationValue.IntValue, pyFieldName)
@@ -308,6 +317,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 
 			case "assert_le":
 				if annotationValue.Type == model.AnnotationTypeInt {
+					if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type) || field.IsEnum) {
+						return nil, fmt.Errorf("assert_le annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
+					}
 					pyLinef(&code, 1, "# Validate %s (assert_le: %d)", pyFieldName, annotationValue.IntValue)
 					pyLinef(&code, 1, "if msg.%s > %d:", pyFieldName, annotationValue.IntValue)
 					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be <= %d, got: {msg.%s}\")", pyFieldName, annotationValue.IntValue, pyFieldName)

@@ -583,50 +583,30 @@ func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Me
 
 		case "assert_gt":
 			if annotationValue.Type == model.AnnotationTypeInt {
-				valueStr := fmt.Sprintf("%d", annotationValue.IntValue)
-				if field.Type == "float" || field.Type == "double" {
-					valueStr = fmt.Sprintf("%d.0", annotationValue.IntValue)
+				if err := generateRustComparisonValidation(b, msg, field, rustFieldName, "assert_gt", "<=", ">", annotationValue.IntValue); err != nil {
+					return err
 				}
-				fmt.Fprintf(b, "// Validate %s (assert_gt: %s)\n", rustFieldName, valueStr)
-				fmt.Fprintf(b, "if self.%s <= %s {\n", rustFieldName, valueStr)
-				fmt.Fprintf(b, "return Err(format!(\"field %s must be > %s, got: {}\", self.%s));\n", rustFieldName, valueStr, rustFieldName)
-				b.WriteString("}\n")
 			}
 
 		case "assert_ge":
 			if annotationValue.Type == model.AnnotationTypeInt {
-				valueStr := fmt.Sprintf("%d", annotationValue.IntValue)
-				if field.Type == "float" || field.Type == "double" {
-					valueStr = fmt.Sprintf("%d.0", annotationValue.IntValue)
+				if err := generateRustComparisonValidation(b, msg, field, rustFieldName, "assert_ge", "<", ">=", annotationValue.IntValue); err != nil {
+					return err
 				}
-				fmt.Fprintf(b, "// Validate %s (assert_ge: %s)\n", rustFieldName, valueStr)
-				fmt.Fprintf(b, "if self.%s < %s {\n", rustFieldName, valueStr)
-				fmt.Fprintf(b, "return Err(format!(\"field %s must be >= %s, got: {}\", self.%s));\n", rustFieldName, valueStr, rustFieldName)
-				b.WriteString("}\n")
 			}
 
 		case "assert_lt":
 			if annotationValue.Type == model.AnnotationTypeInt {
-				valueStr := fmt.Sprintf("%d", annotationValue.IntValue)
-				if field.Type == "float" || field.Type == "double" {
-					valueStr = fmt.Sprintf("%d.0", annotationValue.IntValue)
+				if err := generateRustComparisonValidation(b, msg, field, rustFieldName, "assert_lt", ">=", "<", annotationValue.IntValue); err != nil {
+					return err
 				}
-				fmt.Fprintf(b, "// Validate %s (assert_lt: %s)\n", rustFieldName, valueStr)
-				fmt.Fprintf(b, "if self.%s >= %s {\n", rustFieldName, valueStr)
-				fmt.Fprintf(b, "return Err(format!(\"field %s must be < %s, got: {}\", self.%s));\n", rustFieldName, valueStr, rustFieldName)
-				b.WriteString("}\n")
 			}
 
 		case "assert_le":
 			if annotationValue.Type == model.AnnotationTypeInt {
-				valueStr := fmt.Sprintf("%d", annotationValue.IntValue)
-				if field.Type == "float" || field.Type == "double" {
-					valueStr = fmt.Sprintf("%d.0", annotationValue.IntValue)
+				if err := generateRustComparisonValidation(b, msg, field, rustFieldName, "assert_le", ">", "<=", annotationValue.IntValue); err != nil {
+					return err
 				}
-				fmt.Fprintf(b, "// Validate %s (assert_le: %s)\n", rustFieldName, valueStr)
-				fmt.Fprintf(b, "if self.%s > %s {\n", rustFieldName, valueStr)
-				fmt.Fprintf(b, "return Err(format!(\"field %s must be <= %s, got: {}\", self.%s));\n", rustFieldName, valueStr, rustFieldName)
-				b.WriteString("}\n")
 			}
 
 		case "assert_semver":
@@ -835,6 +815,41 @@ func generateRustEnumDefinedValidation(b *strings.Builder, msg model.Message, fi
 	} else {
 		fmt.Fprintf(b, "if self.%s == 0 {\n", fieldName)
 		fmt.Fprintf(b, "return Err(\"field %s must be defined\".to_string());\n", fieldName)
+		b.WriteString("}\n")
+	}
+
+	return nil
+}
+
+// generateRustComparisonValidation emits one of the simple bound annotations
+// (assert_gt / assert_ge / assert_lt / assert_le). failOp is the operator that
+// makes the generated `if` fire and wantOp the one quoted back in the error
+// message. spec.proto scopes the family to scalar numeric fields, so a map,
+// repeated or non-numeric field is an authoring mistake: emitting the
+// comparison anyway produced Rust that does not build (`if self.name <= 5`
+// against a String, `if self.ports <= 5` against a Vec<i32>). Proto3-optional
+// fields render as Option<T>, so the value has to be unwrapped the way
+// generateRustNumericConstraintValidation already does.
+func generateRustComparisonValidation(b *strings.Builder, msg model.Message, field model.Field, rustFieldName, annotation, failOp, wantOp string, bound int64) error {
+	if field.IsMap || field.IsRepeated || !(isNumericType(field.Type) || field.IsEnum) {
+		return fmt.Errorf("%s annotation on field %s.%s requires a scalar numeric field", annotation, msg.Name, rustFieldName)
+	}
+
+	valueStr := fmt.Sprintf("%d", bound)
+	if isFloatType(field.Type) {
+		valueStr = fmt.Sprintf("%d.0", bound)
+	}
+
+	valueExpr := "self." + rustFieldName
+	fmt.Fprintf(b, "// Validate %s (%s: %s)\n", rustFieldName, annotation, valueStr)
+	if field.IsOptional {
+		fmt.Fprintf(b, "if let Some(val) = self.%s {\n", rustFieldName)
+		valueExpr = "val"
+	}
+	fmt.Fprintf(b, "if %s %s %s {\n", valueExpr, failOp, valueStr)
+	fmt.Fprintf(b, "return Err(format!(\"field %s must be %s %s, got: {}\", %s));\n", rustFieldName, wantOp, valueStr, valueExpr)
+	b.WriteString("}\n")
+	if field.IsOptional {
 		b.WriteString("}\n")
 	}
 

@@ -69,7 +69,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 			javaFieldName := toJavaFieldName(field.Name)
 			getterName := "get" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
 			for _, annotationName := range model.SortedAnnotationNames(field.Annotations) {
-			annotationValue := field.Annotations[annotationName]
+				annotationValue := field.Annotations[annotationName]
 				if annotationValue.Type == model.AnnotationTypeBool && !annotationValue.BoolValue {
 					continue
 				}
@@ -281,6 +281,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 
 			case "assert_gt":
 				if annotationValue.Type == model.AnnotationTypeInt {
+					if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type) || field.IsEnum) {
+						return fmt.Errorf("assert_gt annotation on field %s.%s requires a scalar numeric field", msg.Name, javaFieldName)
+					}
 					valueExpr := fmt.Sprintf("msg.%s()", getterName)
 					if field.IsEnum {
 						valueExpr = fmt.Sprintf("msg.%s().getNumber()", getterName)
@@ -293,6 +296,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 
 			case "assert_ge":
 				if annotationValue.Type == model.AnnotationTypeInt {
+					if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type) || field.IsEnum) {
+						return fmt.Errorf("assert_ge annotation on field %s.%s requires a scalar numeric field", msg.Name, javaFieldName)
+					}
 					valueExpr := fmt.Sprintf("msg.%s()", getterName)
 					if field.IsEnum {
 						valueExpr = fmt.Sprintf("msg.%s().getNumber()", getterName)
@@ -305,6 +311,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 
 			case "assert_lt":
 				if annotationValue.Type == model.AnnotationTypeInt {
+					if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type) || field.IsEnum) {
+						return fmt.Errorf("assert_lt annotation on field %s.%s requires a scalar numeric field", msg.Name, javaFieldName)
+					}
 					valueExpr := fmt.Sprintf("msg.%s()", getterName)
 					if field.IsEnum {
 						valueExpr = fmt.Sprintf("msg.%s().getNumber()", getterName)
@@ -317,6 +326,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 
 			case "assert_le":
 				if annotationValue.Type == model.AnnotationTypeInt {
+					if field.IsMap || field.IsRepeated || !(isIntegerType(field.Type) || isFloatType(field.Type) || field.IsEnum) {
+						return fmt.Errorf("assert_le annotation on field %s.%s requires a scalar numeric field", msg.Name, javaFieldName)
+					}
 					valueExpr := fmt.Sprintf("msg.%s()", getterName)
 					if field.IsEnum {
 						valueExpr = fmt.Sprintf("msg.%s().getNumber()", getterName)

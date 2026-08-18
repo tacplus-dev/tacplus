@@ -815,43 +815,27 @@ func Validate%sWithDepth(m *%s, depth int) error {
 
 			case "assert_gt":
 				// Simple greater than comparison
-				errFunc := "protoerrors.NewErrMissingInvalidData"
-
-				fmt.Fprintf(b, `	// Validate %s (assert_gt: %d)
-	if m.%s <= %d {
-		return %s(nil, "field %s must be > %d, got: %%v", m.%s)
-	}
-`, goFieldName, annotationValue.IntValue, goFieldName, annotationValue.IntValue, errFunc, goFieldName, annotationValue.IntValue, goFieldName)
+				if err := writeGoComparisonValidation(b, msg, field, goFieldName, "assert_gt", "<=", ">", annotationValue.IntValue); err != nil {
+					return err
+				}
 
 			case "assert_ge":
 				// Simple greater than or equal comparison
-				errFunc := "protoerrors.NewErrMissingInvalidData"
-
-				fmt.Fprintf(b, `	// Validate %s (assert_ge: %d)
-	if m.%s < %d {
-		return %s(nil, "field %s must be >= %d, got: %%v", m.%s)
-	}
-`, goFieldName, annotationValue.IntValue, goFieldName, annotationValue.IntValue, errFunc, goFieldName, annotationValue.IntValue, goFieldName)
+				if err := writeGoComparisonValidation(b, msg, field, goFieldName, "assert_ge", "<", ">=", annotationValue.IntValue); err != nil {
+					return err
+				}
 
 			case "assert_lt":
 				// Simple less than comparison
-				errFunc := "protoerrors.NewErrMissingInvalidData"
-
-				fmt.Fprintf(b, `	// Validate %s (assert_lt: %d)
-	if m.%s >= %d {
-		return %s(nil, "field %s must be < %d, got: %%v", m.%s)
-	}
-`, goFieldName, annotationValue.IntValue, goFieldName, annotationValue.IntValue, errFunc, goFieldName, annotationValue.IntValue, goFieldName)
+				if err := writeGoComparisonValidation(b, msg, field, goFieldName, "assert_lt", ">=", "<", annotationValue.IntValue); err != nil {
+					return err
+				}
 
 			case "assert_le":
 				// Simple less than or equal comparison
-				errFunc := "protoerrors.NewErrMissingInvalidData"
-
-				fmt.Fprintf(b, `	// Validate %s (assert_le: %d)
-	if m.%s > %d {
-		return %s(nil, "field %s must be <= %d, got: %%v", m.%s)
-	}
-`, goFieldName, annotationValue.IntValue, goFieldName, annotationValue.IntValue, errFunc, goFieldName, annotationValue.IntValue, goFieldName)
+				if err := writeGoComparisonValidation(b, msg, field, goFieldName, "assert_le", ">", "<=", annotationValue.IntValue); err != nil {
+					return err
+				}
 
 			case "assert_numeric":
 				// Complex numeric constraint
@@ -1491,6 +1475,41 @@ func isInFloat%s%sNotIn(val float64, epsilon float64) bool {
 type goFloatMembership struct {
 	values  []float64
 	epsilon float64
+}
+
+// writeGoComparisonValidation emits one of the simple bound annotations
+// (assert_gt / assert_ge / assert_lt / assert_le). failOp is the operator that
+// makes the generated `if` fire and wantOp the one quoted back to the caller in
+// the error message. spec.proto scopes the family to scalar numeric fields, so
+// a map, repeated or non-numeric field is an authoring mistake: emitting the
+// comparison anyway produced Go that does not build (`if m.Name < 5` against a
+// string, `if m.Ports < 5` against a []int32). Proto3-optional fields render as
+// a pointer, so the value has to be dereferenced behind a nil guard the way
+// assert_numeric already does.
+func writeGoComparisonValidation(b *strings.Builder, msg model.Message, field model.Field, goFieldName, annotation, failOp, wantOp string, bound int64) error {
+	if field.IsMap || field.IsRepeated || !(isNumericType(field.Type) || field.IsEnum) {
+		return fmt.Errorf("%s annotation on field %s.%s requires a scalar numeric field", annotation, msg.Name, goFieldName)
+	}
+
+	errFunc := "protoerrors.NewErrMissingInvalidData"
+	valueExpr := "m." + goFieldName
+	if field.IsOptional {
+		valueExpr = "*m." + goFieldName
+	}
+
+	fmt.Fprintf(b, "	// Validate %s (%s: %d)\n", goFieldName, annotation, bound)
+	if field.IsOptional {
+		fmt.Fprintf(b, "	if m.%s != nil {\n", goFieldName)
+	}
+	fmt.Fprintf(b, `	if %s %s %d {
+		return %s(nil, "field %s must be %s %d, got: %%v", %s)
+	}
+`, valueExpr, failOp, bound, errFunc, goFieldName, wantOp, bound, valueExpr)
+	if field.IsOptional {
+		b.WriteString("	}\n")
+	}
+
+	return nil
 }
 
 // writeGoNumericConstraintChecks emits the assert_numeric comparisons for a

@@ -356,6 +356,17 @@ public class ServiceManager implements AutoCloseable {
                         () -> tlsCertStreamLoop(sm, stateStoreConn, identity, tlsReady, tlsError));
                 tlsReady.await();
                 if (tlsError.get() != null) {
+                    // Two very different faults arrive here and they must not be
+                    // reported with the same words. A FatalTlsHandlerException
+                    // means the authority DID deliver a certificate and this
+                    // service's own handler refused it — an operator told "failed
+                    // to deliver initial certificate" would go and debug the
+                    // authority or the network, which is the wrong half of the
+                    // system. Parity with go's Run() drain and rust's
+                    // tls_ready_rx arm (PC-L-1).
+                    if (tlsError.get() instanceof FatalTlsHandlerException) {
+                        throw new RuntimeException("auto-TLS handler rejected the first certificate delivery", tlsError.get());
+                    }
                     throw new RuntimeException("auto-TLS cert stream failed to deliver initial certificate", tlsError.get());
                 }
 {{- end}}
@@ -389,6 +400,16 @@ public class ServiceManager implements AutoCloseable {
             if (cur instanceof IdentityManager.TokenMinterNotConfiguredException) {
                 return true;
             }
+{{- if .HasAutoTls}}
+            // A handler that refuses a valid first certificate will refuse its
+            // successor too — the rejection is local and deterministic. Without
+            // this clause the whole ServiceManager init is retried MAX_INIT_RETRIES
+            // times with backoff, masking a permanent misconfiguration as a
+            // transient one. Same rule, same NEW-21 shape: classified by TYPE.
+            if (cur instanceof FatalTlsHandlerException) {
+                return true;
+            }
+{{- end}}
         }
         return false;
     }
@@ -1465,6 +1486,12 @@ public class ServiceManager implements AutoCloseable {
                     readyLatch.countDown();
                     return;
                 }
+                // A rejected credential must invalidate the token cache here too.
+                // Without this an UNAUTHENTICATED ManageSmbCert stream retries
+                // forever presenting the SAME cached token and never re-mints, so
+                // the member never rejoins its peer mesh. Mirrors
+                // tlsCertStreamLoop above.
+                {{.ChassisBase}}.service_im.IdentityManager.noteIfCredentialRejection(e);
                 attempt++;
                 if (readyLatch.getCount() > 0) {
                     // First member cert never delivered — retry with backoff.
@@ -1578,6 +1605,13 @@ public class ServiceManager implements AutoCloseable {
                                     pendingPrivateKeyDer.set(null);
                                     pendingPublicKeyDer.set(null);
                                 }
+                                // A DELIVERED member cert proves the credential was
+                                // accepted. Mirrors the TLS loop: without it an
+                                // SMB-only service (no auto-TLS, no state watches)
+                                // has no site that can ever clear the rejection
+                                // counter, so it stays degraded forever after a
+                                // brief authority blip.
+                                {{.ChassisBase}}.service_im.IdentityManager.noteCredentialAccepted();
                                 if (readyLatch.getCount() > 0) {
                                     readyLatch.countDown();
                                 }

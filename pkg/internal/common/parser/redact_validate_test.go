@@ -229,3 +229,50 @@ func TestRedactLanguageMapsCoversAllEmitters(t *testing.T) {
 		}
 	}
 }
+
+// TestRedactSupportedLanguagesHaveAnEgressSanitizeEmitter closes the fail-open
+// half of NEW-7. A directory under pkg/internal/<lang>/types/ is NOT evidence
+// that the language emits the Sanitize<T> egress transform: the whole point of
+// redactSupportedLanguages is to name the languages where a (spec.redact) field
+// is actually honoured, and every language has that directory.
+//
+// Get it wrong in the permissive direction and the build stays SILENT: adding a
+// language to redactSupportedLanguages before its Release codegen lands makes
+// ValidateRedactLanguageSupport return nil, and the service ships an
+// unredacted egress surface — exactly the leak the annotation exists to
+// prevent. So the set is tied to the artefact that does the work: the
+// egress-sanitize emitter file. Both directions are checked, so removing the
+// emitter without removing the language fails here too.
+func TestRedactSupportedLanguagesHaveAnEgressSanitizeEmitter(t *testing.T) {
+	internalDir := filepath.Join("..", "..")
+	entries, err := os.ReadDir(internalDir)
+	if err != nil {
+		t.Fatalf("cannot read pkg/internal/: %v", err)
+	}
+
+	withEmitter := make(map[string]bool)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		emitter := filepath.Join(internalDir, e.Name(), "types", "egress_sanitize_gen.go")
+		if _, err := os.Stat(emitter); err == nil {
+			withEmitter[e.Name()] = true
+		}
+	}
+
+	if len(withEmitter) == 0 {
+		t.Fatal("found no egress_sanitize_gen.go under any pkg/internal/<lang>/types/ — the emitter was renamed and this test no longer proves anything")
+	}
+
+	for lang := range redactSupportedLanguages {
+		if !withEmitter[lang] {
+			t.Errorf("redactSupportedLanguages claims %q honours (spec.redact) but pkg/internal/%s/types/egress_sanitize_gen.go does not exist: the build would pass and ship an UNREDACTED egress surface", lang, lang)
+		}
+	}
+	for lang := range withEmitter {
+		if !redactSupportedLanguages[lang] {
+			t.Errorf("pkg/internal/%s/types/egress_sanitize_gen.go exists but %q is not in redactSupportedLanguages: a record declaring (spec.redact) is refused for a language that can in fact redact it", lang, lang)
+		}
+	}
+}

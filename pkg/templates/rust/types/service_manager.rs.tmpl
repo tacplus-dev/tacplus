@@ -2609,7 +2609,7 @@ async fn smb_cert_stream_loop(
     let mut init_attempts: u32 = 0;
     loop {
         let waiting_for_first = ready_tx.is_some();
-        let fatal = match run_smb_cert_stream(
+        let retry = match run_smb_cert_stream(
             conn.clone(), &service_label, &instance_id, &handler,
             token_provider.clone(), &mut ready_tx,
         ).await {
@@ -2618,15 +2618,31 @@ async fn smb_cert_stream_loop(
                     // Handler rejected the first delivery — abort the loop.
                     return;
                 }
+                if waiting_for_first && ready_tx.is_none() {
+                    // A DELIVERED member cert proves the credential was accepted.
+                    // Mirrors tls_cert_stream_loop: without it an SMB-only service
+                    // (no auto-TLS, no state watches) has no site that can ever
+                    // clear the rejection counter, so it stays degraded forever
+                    // after a brief authority blip.
+                    service_im::note_credential_accepted();
+                }
                 tracing::warn!("SMB cert stream ended cleanly, reconnecting");
-                false
+                None
             }
             Err(e) => {
                 tracing::warn!("SMB cert stream disconnected, retrying in 5s: {}", e);
-                false
+                // Only the TEXT escapes the arm: `e` is non-Send, so holding it
+                // across the await below makes the whole task non-Send.
+                Some(e.to_string())
             }
         };
-        let _ = fatal;
+        // A rejected credential must invalidate the token cache here too. Without
+        // this an UNAUTHENTICATED ManageSmbCert stream retries forever presenting
+        // the SAME cached token and never re-mints, so the member never rejoins
+        // its peer mesh. Mirrors tls_cert_stream_loop above.
+        if let Some(reason) = retry.as_deref() {
+            service_im::note_if_credential_rejection(reason).await;
+        }
         if waiting_for_first && ready_tx.is_some() {
             init_attempts += 1;
             if init_attempts >= MAX_INIT_RETRIES {

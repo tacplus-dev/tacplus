@@ -76,3 +76,47 @@ func TestApiDocSummaryPutsAuthBeforeValidation(t *testing.T) {
 		t.Errorf("docs/API.md summary row lists inbound validation before authentication, contradicting the numbered pipeline (auth precedes validation) and the generated wrappers:\n%s", line)
 	}
 }
+
+// PC-L-1, java leg. Batch 16 taught go's Run() drain and rust's tls_ready_rx
+// arm to distinguish the two faults that arrive on the first-delivery signal:
+// the authority never delivering a certificate (retry budget spent) versus the
+// authority delivering one and this service's own handler refusing it. Java was
+// left reporting BOTH as "auto-TLS cert stream failed to deliver initial
+// certificate", pointing an operator at the authority or the network when the
+// fault is local.
+//
+// Java also retried it. A handler that refuses a valid certificate will refuse
+// its successor, but the rejection surfaced as a plain RuntimeException inside
+// the newInstance retry loop, so the whole ServiceManager init was re-run
+// MAX_INIT_RETRIES times with backoff before failing — a permanent
+// misconfiguration masked as a transient one (the NEW-21 shape). It is now
+// classified permanent BY TYPE, like the other two permanent init errors.
+func TestJavaDistinguishesTlsHandlerRejectionFromGiveUp(t *testing.T) {
+	s, err := tmplutil.LoadTemplate("java/types", "ServiceManager.java.tmpl")
+	if err != nil {
+		t.Fatalf("load ServiceManager.java.tmpl: %v", err)
+	}
+
+	const rejectMsg = "auto-TLS handler rejected the first certificate delivery"
+	if !strings.Contains(s, rejectMsg) {
+		t.Errorf("java startup reports no distinct cause for a handler-rejected first certificate (want %q); an operator is sent to debug the authority for a local fault", rejectMsg)
+	}
+
+	const giveUpMsg = "auto-TLS cert stream failed to deliver initial certificate"
+	if !strings.Contains(s, giveUpMsg) {
+		t.Errorf("java no longer reports the give-up cause %q", giveUpMsg)
+	}
+
+	classifier := "private static boolean isPermanentIdentityInitError(Throwable t) {"
+	i := strings.Index(s, classifier)
+	if i < 0 {
+		t.Fatal("isPermanentIdentityInitError not found — the permanent-init classifier was renamed")
+	}
+	body := s[i:]
+	if j := strings.Index(body, "\n        return false;"); j >= 0 {
+		body = body[:j]
+	}
+	if !strings.Contains(body, "cur instanceof FatalTlsHandlerException") {
+		t.Error("isPermanentIdentityInitError does not classify FatalTlsHandlerException as permanent: a deterministic handler rejection is retried through the whole init backoff instead of failing fast")
+	}
+}

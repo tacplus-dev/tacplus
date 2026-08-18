@@ -136,7 +136,11 @@ func isValidEntitlementMode(s string) bool {
 // (spec.redact) must NOT build for a full-service language absent here: silently
 // emitting an unredacted egress surface would leak the very data the annotation
 // exists to protect. Add a full-service language only once its Release codegen and
-// tests land.
+// tests land. Tied mechanically to that emitter's existence by
+// TestRedactSupportedLanguagesHaveAnEgressSanitizeEmitter — this map is not
+// allowed to disagree with pkg/internal/<lang>/types/egress_sanitize_gen.go in
+// either direction, because getting it wrong the permissive way ships an
+// unredacted egress surface with a silent build.
 var redactSupportedLanguages = map[string]bool{
 	"go":   true,
 	"rust": true,

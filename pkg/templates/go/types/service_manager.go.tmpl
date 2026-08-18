@@ -1936,11 +1936,21 @@ delivered, err := runSmbCertStream(ctx, connProvider, serviceLabel, h, tp, ready
 if delivered {
 readyCh = nil
 initAttempts = 0
+// A DELIVERED member cert proves the credential was accepted. Mirrors the
+// TLS loop above: without it an SMB-only service (no auto-TLS, no state
+// watches) has no site that can ever clear the rejection counter, so it
+// stays degraded forever after a brief authority blip.
+service_im.NoteCredentialAccepted()
 }
 if err != nil {
 if ctx.Err() != nil || err == errSmbFirstCertFatal {
 return
 }
+// A rejected credential must invalidate the token cache here too. Without
+// this an UNAUTHENTICATED ManageSmbCert stream retries forever presenting
+// the SAME cached token and never re-mints, so the member never rejoins
+// its peer mesh. Mirrors tlsCertStreamLoop above.
+service_im.NoteIfCredentialRejection(err)
 delay := 5 * time.Second
 if readyCh != nil {
 initAttempts++

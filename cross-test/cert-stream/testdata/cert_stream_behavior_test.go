@@ -390,6 +390,16 @@ func TestGoTlsCertStreamBehavior(t *testing.T) {
 		if !errors.Is(ready, handlerErr) {
 			t.Fatalf("ready signal = %v, want handler error", ready)
 		}
+		// The ready signal must ALSO carry errTlsFirstCertFatal. Run()'s
+		// background drain is the only consumer, and it discriminates on this
+		// sentinel to decide which degrade reason to report: a rejected
+		// delivery is this service's own handler refusing a certificate the
+		// authority DID sign, not the authority failing to deliver one. Without
+		// the sentinel both faults printed "gave up before first delivery" and
+		// pointed the operator at the wrong half of the system.
+		if !errors.Is(ready, errTlsFirstCertFatal) {
+			t.Fatalf("ready signal = %v, want it wrapped with errTlsFirstCertFatal so Run can name the cause", ready)
+		}
 	})
 
 	t.Run("renewal handler failure keeps loop nonfatal", func(t *testing.T) {

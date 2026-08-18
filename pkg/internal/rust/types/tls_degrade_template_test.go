@@ -21,7 +21,7 @@ func TestRustSMTemplateTLSDegradeSeam(t *testing.T) {
 		"fn report_tls_degraded(",
 		"fn on_tls_degraded(",
 		`report_tls_degraded(tls_degrade, &format!("renewed TLS private key unparseable: {}", e))`,
-		`report_tls_degraded(&tls_degrade, &format!("TLS renewal stream gave up before first delivery after {} attempts", init_attempts))`,
+		`report_tls_degraded(&tls_degrade, &format!("TLS renewal stream gave up before first delivery: {}", cause))`,
 		"hr.set_status(InstanceStatus::Degraded)",
 	} {
 		if !strings.Contains(tmpl, want) {

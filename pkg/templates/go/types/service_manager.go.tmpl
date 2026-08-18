@@ -1150,8 +1150,19 @@ sm.tasks.Go(func(taskCtx context.Context) {
 select {
 case err := <-tlsReadyCh:
 if err != nil {
+// Two very different faults arrive on this channel and they must not
+// be reported with the same words. errTlsFirstCertFatal means the
+// authority DID deliver a certificate and this service's own handler
+// refused it — an operator told "the stream gave up before first
+// delivery" would go and debug the authority or the network, which is
+// the wrong half of the system. The give-up case is the other one.
+if errors.Is(err, errTlsFirstCertFatal) {
+zap.L().Error("handler rejected the first renewed TLS certificate; renewal stream stopped, serving on the initial X509Mint certificate until it expires", zap.Error(err))
+sm.reportTLSDegraded("TLS handler rejected the first renewed certificate: " + err.Error())
+} else {
 zap.L().Error("TLS cert renewal stream failed before first delivery; serving on the initial X509Mint certificate until it expires", zap.Error(err))
 sm.reportTLSDegraded("TLS renewal stream gave up before first delivery: " + err.Error())
+}
 }
 case <-taskCtx.Done():
 }
@@ -1704,17 +1715,24 @@ return nil
 {{end}}
 {{end}}
 {{if .HasAutoTls}}
-// errTlsFirstCertFatal stops the TLS cert stream loop when the handler
-// rejects the FIRST certificate delivery — the service cannot serve without a
-// usable cert, so startup must abort (Run returns the handler error, which is
-// reported via readyCh).
+// errTlsFirstCertFatal stops the TLS cert stream loop when the handler rejects
+// the FIRST certificate delivery. Retrying is pointless: a handler that refuses
+// a valid certificate will refuse its successor too.
+//
+// It is fatal to the STREAM, not to startup. Unlike the SMB stream, the TLS
+// renewal stream does not gate Listen — the gRPC server is already serving the
+// X509Mint certificate obtained before Run — so Run does NOT return this error.
+// It is wrapped onto readyCh, and Run's background drain marks the instance
+// DEGRADED and keeps serving the boot certificate until it expires (PC-L-1).
 var errTlsFirstCertFatal = fmt.Errorf("handler rejected first TLS certificate delivery")
 
 // tlsCertStreamLoop manages the bidi TLS certificate stream.
 // It retries with backoff on disconnection. The outcome of the first cert
-// delivery (nil or the handler error) is signalled on readyCh; a handler
-// failure on the FIRST delivery is fatal and stops the loop, while later
-// renewal-delivery failures are logged and the previous cert stays in service.
+// delivery is signalled on readyCh: nil on success, an errTlsFirstCertFatal-
+// wrapped error when the handler rejected it, or a give-up error once the
+// retry budget is spent. A handler failure on the FIRST delivery stops the
+// loop, while later renewal-delivery failures are logged and the previous cert
+// stays in service.
 func tlsCertStreamLoop(ctx context.Context, connProvider func() grpc.ClientConnInterface, serviceLabel string, h Handler, tp func() (string, error), store func(*x509_pb.X509CertChain, []byte), readyCh chan<- error) {
 initAttempts := 0
 for {
@@ -1838,15 +1856,23 @@ continue
 }
 err := h.NewTlsCert(m.Cert.Chain, certKeyDER)
 if readyCh != nil {
-// First delivery: report the outcome to Run(). A handler
-// failure here is fatal — the service must not start without
-// a served certificate.
+// First delivery: report the outcome to Run(). A handler failure
+// here is fatal TO THE STREAM — the loop stops retrying, because a
+// handler that refuses a valid certificate will refuse the next one
+// too. It does NOT abort startup: the gRPC server is already serving
+// the X509Mint certificate obtained before Run (see the Listen
+// comment above), so Run marks the instance DEGRADED and keeps
+// serving until that boot certificate expires.
 delivered = true
-readyCh <- err
-readyCh = nil
 if err != nil {
+// Wrap with the sentinel so the Run() drain can distinguish a
+// rejected delivery from an authority that never delivered.
+readyCh <- fmt.Errorf("%w: %w", errTlsFirstCertFatal, err)
+readyCh = nil
 return delivered, errTlsFirstCertFatal
 }
+readyCh <- nil
+readyCh = nil
 if store != nil {
 store(m.Cert.Chain, certKeyDER)
 }

@@ -564,7 +564,7 @@ fn fixture_token_provider() -> TokenProvider {
 }
 
 fn spawn_tls_loop(
-    ready_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    ready_tx: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
 ) -> tokio::task::JoinHandle<()> {
     let handler_slot = Arc::new(tokio::sync::RwLock::new(None));
     let cert_der_store = Arc::new(tokio::sync::RwLock::new(None));
@@ -655,8 +655,8 @@ async fn run_tls_authority_fixture(
     handler: Arc<RecordingHandler>,
 ) -> (
     Result<bool, Box<dyn std::error::Error>>,
-    Option<tokio::sync::oneshot::Sender<()>>,
-    tokio::sync::oneshot::Receiver<()>,
+    Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+    tokio::sync::oneshot::Receiver<Result<(), String>>,
     TlsStores,
     tokio::task::JoinHandle<()>,
 ) {
@@ -889,20 +889,27 @@ async fn rust_tls_server_error_after_first_delivery_is_reconnectable() {
 }
 
 #[tokio::test]
-async fn rust_tls_first_handler_failure_keeps_startup_pending() {
+async fn rust_tls_first_handler_failure_is_fatal() {
     let handler = Arc::new(RecordingHandler::fail_tls_at(1));
-    let (result, ready, mut rx, stores, server) =
+    let (result, ready, rx, stores, server) =
         run_tls_authority_fixture(AuthorityMode::FirstSuccess, handler.clone()).await;
 
     assert!(
-        !result.expect("TLS first-handler rejection is a fatal startup error (no retry)"),
+        !result.expect("TLS first-handler rejection ends the session, it is not a transport error"),
         "failed first handler delivery must not report readiness"
     );
     assert!(
-        ready.is_some(),
-        "first-delivery signal should remain pending after handler rejection"
+        ready.is_none(),
+        "first-delivery signal should be consumed so startup fails instead of retrying"
     );
-    assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    let ready_err = rx
+        .await
+        .expect("TLS ready signal should be sent")
+        .expect_err("TLS ready signal should carry the handler error");
+    assert!(
+        ready_err.contains("reject TLS cert delivery 1"),
+        "unexpected TLS handler error: {ready_err}"
+    );
     assert!(
         stores.cert_der_store.read().await.is_none(),
         "rejected first TLS cert should not populate the cert store"

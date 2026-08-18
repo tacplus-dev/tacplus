@@ -736,7 +736,7 @@ impl ServiceManager {
         let tls_handler_slot_arc: Arc<tokio::sync::RwLock<Option<Arc<dyn Handler>>>> = Arc::new(tokio::sync::RwLock::new(None));
         let tls_server_certified_key_arc: Arc<std::sync::RwLock<Option<Arc<CertifiedKey>>>> = Arc::new(std::sync::RwLock::new(None));
         {
-            let (tls_ready_tx, tls_ready_rx) = tokio::sync::oneshot::channel::<()>();
+            let (tls_ready_tx, tls_ready_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
             let tls_conn = state_store_conn.clone();
             let tls_tp: TokenProvider = {
                 let im = identity.clone();
@@ -764,7 +764,17 @@ impl ServiceManager {
                     cert_pem_store, key_pem_store, server_certified_key_store, tls_degrade_clone,
                 ).await;
             });
-            tls_ready_rx.await.map_err(|_| "auto-TLS cert stream failed to deliver initial certificate")?;
+            // The stream reports the OUTCOME of the first delivery, not just the
+            // fact of it: a give-up before first delivery, or a handler that
+            // rejects the first certificate, must name its cause here. Parity
+            // with go (readyCh carries the error) and with smb_ready_rx below;
+            // without it a misconfigured deployment only ever surfaces the
+            // generic "did not deliver" text.
+            match tls_ready_rx.await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(format!("first TLS certificate delivery: {}", e).into()),
+                Err(_) => return Err("auto-TLS cert stream failed to deliver initial certificate".into()),
+            }
             tasks.lock().unwrap().push(tls_handle);
         }
 {{- end}}
@@ -2268,15 +2278,18 @@ async fn {{.StreamFn}}(
 {{- if .HasAutoTls}}
 
 /// Manages the bidi TLS certificate stream, retrying on disconnection.
-/// On the first successful cert delivery, signals `ready_tx` so the service can start.
-/// If `ready_tx` is dropped without sending, the service will fail to start.
+/// The OUTCOME of the first cert delivery is signalled on `ready_tx`: `Ok(())`
+/// once a cert is installed, `Err(reason)` when the handler rejects that first
+/// cert or the loop gives up before any delivery. Both `Err` cases are fatal —
+/// the loop stops and the service fails to start, naming the cause. If
+/// `ready_tx` is dropped without sending, the service will fail to start.
 async fn tls_cert_stream_loop(
     conn: Arc<ServiceConnection>,
     service_label: String,
     instance_id: String,
     handler_slot: Arc<tokio::sync::RwLock<Option<Arc<dyn Handler>>>>,
     token_provider: TokenProvider,
-    mut ready_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    mut ready_tx: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
     cert_der_store: Arc<tokio::sync::RwLock<Option<Vec<Vec<u8>>>>>,
     key_der_store: Arc<tokio::sync::RwLock<Option<Vec<u8>>>>,
     cert_proto_store: Arc<tokio::sync::RwLock<Option<x509_pb::X509CertChain>>>,
@@ -2295,6 +2308,14 @@ async fn tls_cert_stream_loop(
             server_certified_key_store.clone(), &tls_degrade,
         ).await {
             Ok(delivered) => {
+                if waiting_for_first && !delivered && ready_tx.is_none() {
+                    // run_tls_cert_stream took ready_tx to report a handler that
+                    // REJECTED the first certificate. Startup has already been
+                    // failed with that error; retrying cannot help, so stop the
+                    // loop. Parity with go's errTlsFirstCertFatal and with
+                    // smb_cert_stream_loop below.
+                    return;
+                }
                 if delivered {
                     init_attempts = 0;
                     // A DELIVERED certificate proves the credential was accepted.
@@ -2318,14 +2339,28 @@ async fn tls_cert_stream_loop(
         // A rejected credential must invalidate the token cache here too: this
         // stream renews the serving certificate, so a stuck credential costs the
         // service its TLS as well as its authentication.
-        if let Some(reason) = retry {
-            service_im::note_if_credential_rejection(&reason).await;
+        if let Some(reason) = retry.as_deref() {
+            service_im::note_if_credential_rejection(reason).await;
         }
         if waiting_for_first && ready_tx.is_some() {
             init_attempts += 1;
             if init_attempts >= MAX_INIT_RETRIES {
                 tracing::error!(attempts = init_attempts, "TLS cert stream failed before first delivery");
-                report_tls_degraded(&tls_degrade, &format!("TLS renewal stream gave up before first delivery after {} attempts", init_attempts));
+                let cause = retry.as_deref().unwrap_or("no cert delivered").to_string();
+                let give_up = format!(
+                    "TLS cert stream failed before first delivery after {} attempts: {}",
+                    init_attempts, cause);
+                // The DEGRADE reason keeps the go/java wording verbatim
+                // (service_manager.go.tmpl:1154, ServiceManager.java.tmpl:1194)
+                // — it is operator-facing health-plane text and must read the
+                // same in every language. The attempt-count variant above is
+                // for startup's ready channel, which go/java do not have.
+                report_tls_degraded(&tls_degrade, &format!("TLS renewal stream gave up before first delivery: {}", cause));
+                // Startup is blocked on this channel — hand it the CAUSE, not a
+                // generic timeout, so a misconfiguration is named once.
+                if let Some(tx) = ready_tx.take() {
+                    let _ = tx.send(Err(give_up));
+                }
                 return;
             }
             let delay = std::time::Duration::from_secs(std::cmp::min(1u64 << std::cmp::min(init_attempts, 5), 30));
@@ -2342,7 +2377,7 @@ async fn run_tls_cert_stream(
     instance_id: &str,
     handler_slot: &Arc<tokio::sync::RwLock<Option<Arc<dyn Handler>>>>,
     token_provider: TokenProvider,
-    ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
+    ready_tx: &mut Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
     cert_der_store: &Arc<tokio::sync::RwLock<Option<Vec<Vec<u8>>>>>,
     key_der_store: &Arc<tokio::sync::RwLock<Option<Vec<u8>>>>,
     cert_proto_store: &Arc<tokio::sync::RwLock<Option<x509_pb::X509CertChain>>>,
@@ -2478,18 +2513,18 @@ async fn run_tls_cert_stream(
                     // the initial cert (before run() is called) the slot is empty —
                     // that's fine, the cert is still stored for the polling accessors.
                     let handler_opt = handler_slot.read().await.clone();
-                    let handler_ok = if let Some(handler) = handler_opt {
+                    let handler_err: Option<String> = if let Some(handler) = handler_opt {
                         match handler.new_tls_cert(&chain, &candidate_private_key_der).await {
-                            Ok(()) => true,
+                            Ok(()) => None,
                             Err(e) => {
                                 tracing::error!("Handler new_tls_cert failed: {}", e);
-                                false
+                                Some(e.to_string())
                             }
                         }
                     } else {
-                        true
+                        None
                     };
-                    if handler_ok {
+                    if handler_err.is_none() {
                         active_private_key_der = candidate_private_key_der.clone();
                         active_public_key_der = candidate_public_key_der.clone();
                         pending_private_key_der = None;
@@ -2509,12 +2544,23 @@ async fn run_tls_cert_stream(
                         }
                         if let Some(tx) = ready_tx.take() {
                             // Signal that the first cert was delivered — service can start.
-                            let _ = tx.send(());
+                            let _ = tx.send(Ok(()));
                             delivered_first = true;
                         }
                     } else {
                         pending_private_key_der = None;
                         pending_public_key_der = None;
+                        if let Some(tx) = ready_tx.take() {
+                            // FIRST delivery: the handler rejected the only cert the
+                            // service can serve with, so startup must abort with that
+                            // error rather than retry (go: errTlsFirstCertFatal).
+                            // delivered_first stays false — the loop reads
+                            // "ready_tx taken without a delivery" as fatal.
+                            let _ = tx.send(Err(format!(
+                                "handler new_tls_cert failed on first delivery: {}",
+                                handler_err.unwrap_or_default())));
+                            return Ok(delivered_first);
+                        }
                     }
                 }
             }

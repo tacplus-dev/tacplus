@@ -19,7 +19,7 @@ targets (`go`, `rust`, `java`):
 |---|---|
 | ServiceManager | Owns startup, identity, config, state-store connection, TLS, generated clients, server wrappers, health, tracing, and shutdown. |
 | Handler | The only business-logic seam. Implementers provide handler methods; generated wrappers call them after auth and validation. |
-| Service wrappers | Enforce inbound validation, authentication, authorization, namespace policy, tracing/accounting, handler dispatch, outbound validation, and stable status-code mapping. |
+| Service wrappers | Enforce authentication, authorization, inbound validation, namespace policy, tracing/accounting, handler dispatch, outbound validation, and stable status-code mapping. Auth precedes validation — see the pipeline below. |
 | Client managers | Expose typed C2S/W2S/S2S/C2D clients selected by proto annotations and `tacplus.yaml` transport settings, subject to the target language support matrix. |
 | State clients | Expose typed read/write/watch access to proto-declared state roots, with imports restricted to generated read-only accessors. |
 | Typed disk persistence | Exposes typed snapshot and redo-log persistence for generated store/state types when enabled by the generated service/store config. |

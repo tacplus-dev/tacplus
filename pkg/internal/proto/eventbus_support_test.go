@@ -158,3 +158,53 @@ message DemoState {
 		t.Fatal("NeedsEventBusSupportProto returned false for an EventBus topic")
 	}
 }
+
+// The synthesized SubscribeRequest used to be a strict subset of the canonical
+// one: it carried only offset/latest/earliest/consumer_group, so a generated
+// subscriber could not express seek-by-timestamp, replay speed, pause,
+// backpressure, sampling or partition pinning even though the broker serves all
+// of them. The wire contract gate allows a subset by design (SubscribeRequest is
+// CLIENT→SERVER), so nothing caught it. This pins the full canonical shape.
+func TestEnsureEventBusSupportProtoCarriesFullSubscribeRequest(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := EnsureEventBusSupportProto(dir, EventBusSupportProtoOptions{}); err != nil {
+		t.Fatalf("EnsureEventBusSupportProto: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(EventBusSupportProtoPath)))
+	if err != nil {
+		t.Fatalf("read support proto: %v", err)
+	}
+	text := string(data)
+
+	// Field numbers are the contract; they must match
+	// platform/proto/services/eventbus.proto exactly.
+	for _, want := range []string{
+		"enum BackpressurePolicy {",
+		"BACKPRESSURE_BUFFER = 0;",
+		"BACKPRESSURE_DROP_OLD = 1;",
+		"BACKPRESSURE_SAMPLE = 2;",
+		"google.protobuf.Timestamp timestamp = 2;",
+		"double speed_multiplier = 6;",
+		"bool pause = 7;",
+		"BackpressurePolicy backpressure = 8;",
+		"int32 sample_interval = 9;",
+		"repeated int32 partitions = 10;",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("support proto missing %q in:\n%s", want, text)
+		}
+	}
+
+	// timestamp = 2 belongs INSIDE the start_from oneof, next to offset/latest/
+	// earliest — outside it, seeking by timestamp would not clear a prior seek.
+	oneof := text[strings.Index(text, "oneof start_from {"):]
+	oneof = oneof[:strings.Index(oneof, "}")]
+	if !strings.Contains(oneof, "google.protobuf.Timestamp timestamp = 2;") {
+		t.Fatalf("timestamp = 2 must be a start_from oneof member, got oneof:\n%s", oneof)
+	}
+	for _, notInOneof := range []string{"speed_multiplier", "pause", "backpressure", "sample_interval", "partitions"} {
+		if strings.Contains(oneof, notInOneof) {
+			t.Fatalf("%s must not be inside the start_from oneof, got oneof:\n%s", notInOneof, oneof)
+		}
+	}
+}

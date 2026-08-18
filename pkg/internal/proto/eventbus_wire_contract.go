@@ -83,6 +83,21 @@ var eventBusWireContract = []wireContractRule{
 	},
 }
 
+// eventBusEnumContract lists every enum the synthesized support proto shares
+// with the canonical eventbus proto. An enum's value NUMBERING is a wire
+// commitment exactly like a field number: the value travels as a bare varint, so
+// a synthesized BACKPRESSURE_SAMPLE = 5 against a canonical = 2 tells the broker
+// something the client never meant. compareWireShape cannot see this — it
+// compares fields, and both sides' field 8 is just "an enum" — so enums get
+// their own rule.
+var eventBusEnumContract = []wireContractRule{
+	{
+		message: "BackpressurePolicy",
+		mode:    wireExact,
+		reason:  "generated subscribers send this value on SubscribeRequest.backpressure; the broker switches on the number",
+	},
+}
+
 // ValidateEventBusSupportWireContract compares the synthesized EventBus support
 // proto that generation is about to compile against the canonical eventbus
 // proto in the source tree, and fails loud on any drift.
@@ -108,15 +123,15 @@ func ValidateEventBusSupportWireContract(supportProtoDir, supportRelPath, source
 		return nil
 	}
 
-	support, err := eventBusMessages(supportProtoDir, []string{filepath.ToSlash(supportRelPath)}, supportEventBusPackage)
+	support, err := eventBusDeclsIn(supportProtoDir, []string{filepath.ToSlash(supportRelPath)}, supportEventBusPackage)
 	if err != nil {
 		return fmt.Errorf("eventbus wire contract: parse synthesized %s: %w", supportRelPath, err)
 	}
 
 	var problems []string
 	for _, rule := range eventBusWireContract {
-		syn, haveSyn := support[rule.message]
-		can, haveCan := canonical[rule.message]
+		syn, haveSyn := support.messages[rule.message]
+		can, haveCan := canonical.messages[rule.message]
 		if !haveSyn {
 			// The support proto is free not to carry a message at all.
 			continue
@@ -128,6 +143,24 @@ func ValidateEventBusSupportWireContract(supportProtoDir, supportRelPath, source
 			continue
 		}
 		if diffs := compareWireShape(syn, can, rule.mode); len(diffs) > 0 {
+			problems = append(problems, fmt.Sprintf("%s — %s:\n    %s",
+				rule.message, rule.reason, strings.Join(diffs, "\n    ")))
+		}
+	}
+	for _, rule := range eventBusEnumContract {
+		syn, haveSyn := support.enums[rule.message]
+		can, haveCan := canonical.enums[rule.message]
+		if !haveSyn {
+			// The support proto is free not to carry an enum at all.
+			continue
+		}
+		if !haveCan {
+			problems = append(problems, fmt.Sprintf(
+				"%s: synthesized %s.%s has no counterpart in canonical package %s (%s)",
+				rule.message, supportEventBusPackage, rule.message, canonicalEventBusPackage, rule.reason))
+			continue
+		}
+		if diffs := compareEnumShape(syn, can); len(diffs) > 0 {
 			problems = append(problems, fmt.Sprintf("%s — %s:\n    %s",
 				rule.message, rule.reason, strings.Join(diffs, "\n    ")))
 		}
@@ -203,7 +236,7 @@ func compareWireShape(syn, can parser.MessageDescriptor, mode wireCompareMode) [
 				sf.Number, wireTypeOf(sf), sf.Name, sf.Number))
 			continue
 		}
-		if wireTypeOf(sf) != wireTypeOf(cf) {
+		if comparableWireTypeOf(sf, supportEventBusPackage) != comparableWireTypeOf(cf, canonicalEventBusPackage) {
 			diffs = append(diffs, fmt.Sprintf(
 				"field %d type mismatch: synthesized %s %s, canonical %s %s",
 				sf.Number, wireTypeOf(sf), sf.Name, wireTypeOf(cf), cf.Name))
@@ -227,6 +260,77 @@ func compareWireShape(syn, can parser.MessageDescriptor, mode wireCompareMode) [
 
 	sort.Strings(diffs)
 	return diffs
+}
+
+// compareEnumShape returns the differences between a synthesized enum and its
+// canonical counterpart. Both directions matter — a subscriber writes the value
+// and the broker reads it — so the comparison is exact: same names at the same
+// numbers, no extras on either side.
+func compareEnumShape(syn, can parser.EnumDescriptor) []string {
+	canByNumber := make(map[int32]string, len(can.Values))
+	for _, v := range can.Values {
+		canByNumber[v.Number] = v.Name
+	}
+	synByNumber := make(map[int32]string, len(syn.Values))
+	for _, v := range syn.Values {
+		synByNumber[v.Number] = v.Name
+	}
+
+	var diffs []string
+	for _, v := range syn.Values {
+		canName, ok := canByNumber[v.Number]
+		if !ok {
+			diffs = append(diffs, fmt.Sprintf(
+				"value %s = %d exists only in the synthesized proto; canonical has no value %d",
+				v.Name, v.Number, v.Number))
+			continue
+		}
+		if canName != v.Name {
+			diffs = append(diffs, fmt.Sprintf(
+				"value %d name mismatch: synthesized %q, canonical %q",
+				v.Number, v.Name, canName))
+		}
+	}
+	for _, v := range can.Values {
+		if _, ok := synByNumber[v.Number]; !ok {
+			diffs = append(diffs, fmt.Sprintf(
+				"value %s = %d exists only in the canonical proto; the synthesized enum must carry it",
+				v.Name, v.Number))
+		}
+	}
+
+	sort.Strings(diffs)
+	return diffs
+}
+
+// comparableWireTypeOf renders a field's type for COMPARISON between the two
+// protos. It is wireTypeOf with one normalization: a type declared in the
+// field's own proto package is compared unqualified.
+//
+// The two protos necessarily disagree on that prefix — the same declaration is
+// `eventbus.BackpressurePolicy` canonically and `eventbus_support.BackpressurePolicy`
+// in the synthesized copy — and the prefix has no wire meaning: an enum is a
+// varint and a message is a length-delimited submessage whichever package
+// declared it. Only the owning package's own prefix is stripped, so every other
+// qualification (google.protobuf.Timestamp, trace.TraceEvent) still has to match
+// exactly, and two genuinely different local types still compare unequal.
+//
+// Stripping the prefix loses the one thing the prefix used to imply, so the
+// type kind is carried explicitly: `message BackpressurePolicy` and
+// `enum BackpressurePolicy` both render as the bare name once qualification is
+// gone, yet they are wire type 2 and wire type 0 respectively. Without the kind
+// the gate would call that pair identical.
+func comparableWireTypeOf(f parser.FieldDescriptor, ownPackage string) string {
+	strip := func(t string) string {
+		return strings.TrimPrefix(t, ownPackage+".")
+	}
+	if f.IsMap {
+		return fmt.Sprintf("map<%s, %s:%s>", strip(f.MapKeyType), f.MapValueTypeKind, strip(f.MapValueType))
+	}
+	if f.IsRepeated {
+		return "repeated " + f.TypeKind + ":" + strip(f.Type)
+	}
+	return f.TypeKind + ":" + strip(f.Type)
 }
 
 // wireTypeOf renders a field's type the way it would be written in a proto,
@@ -259,18 +363,18 @@ func wireTypeOf(f parser.FieldDescriptor) string {
 // that the synthesized proto has to agree with. Once a file is selected, every
 // contract rule is enforced against it as before: a canonical proto that carries
 // RecordMeta but drops PublishResponse is still drift, and is still fatal.
-func findCanonicalEventBusContract(sourceProtoDir string) ([]string, map[string]parser.MessageDescriptor, error) {
+func findCanonicalEventBusContract(sourceProtoDir string) ([]string, eventBusDecls, error) {
 	candidates, err := findEventBusPackageProtos(sourceProtoDir)
 	if err != nil {
-		return nil, nil, err
+		return nil, eventBusDecls{}, err
 	}
 	if len(candidates) == 0 {
-		return nil, nil, nil
+		return nil, eventBusDecls{}, nil
 	}
 
 	p, err := parser.NewDescriptorParserForFiles(sourceProtoDir, candidates)
 	if err != nil {
-		return nil, nil, fmt.Errorf("eventbus wire contract: parse canonical proto: %w", err)
+		return nil, eventBusDecls{}, fmt.Errorf("eventbus wire contract: parse canonical proto: %w", err)
 	}
 
 	contractMessages := make(map[string]bool, len(eventBusWireContract))
@@ -279,7 +383,7 @@ func findCanonicalEventBusContract(sourceProtoDir string) ([]string, map[string]
 	}
 
 	var paths []string
-	messages := make(map[string]parser.MessageDescriptor)
+	decls := newEventBusDecls()
 	for relPath, fd := range p.GetAllFiles() {
 		if fd == nil || fd.Package != canonicalEventBusPackage {
 			continue
@@ -297,12 +401,10 @@ func findCanonicalEventBusContract(sourceProtoDir string) ([]string, map[string]
 			continue
 		}
 		paths = append(paths, filepath.ToSlash(relPath))
-		for _, msg := range fd.Messages {
-			messages[msg.Name] = msg
-		}
+		decls.collect(fd)
 	}
 	sort.Strings(paths)
-	return paths, messages, nil
+	return paths, decls, nil
 }
 
 // findEventBusPackageProtos returns the source-relative paths of every proto in
@@ -359,21 +461,44 @@ func declaresPackage(text, pkg string) bool {
 	return false
 }
 
-// eventBusMessages parses the named protos and returns every top-level message
-// declared in the given package, keyed by message name.
-func eventBusMessages(protoDir string, relPaths []string, pkg string) (map[string]parser.MessageDescriptor, error) {
+// eventBusDecls holds the top-level declarations one side of the contract makes,
+// keyed by name. Enums are carried alongside messages because a wire-bearing
+// field can be typed by either, and an enum's VALUE numbering is as much a wire
+// commitment as a field number is.
+type eventBusDecls struct {
+	messages map[string]parser.MessageDescriptor
+	enums    map[string]parser.EnumDescriptor
+}
+
+func newEventBusDecls() eventBusDecls {
+	return eventBusDecls{
+		messages: make(map[string]parser.MessageDescriptor),
+		enums:    make(map[string]parser.EnumDescriptor),
+	}
+}
+
+func (d eventBusDecls) collect(fd *parser.FileDescriptor) {
+	for _, msg := range fd.Messages {
+		d.messages[msg.Name] = msg
+	}
+	for _, enum := range fd.Enums {
+		d.enums[enum.Name] = enum
+	}
+}
+
+// eventBusDeclsIn parses the named protos and returns every top-level message
+// and enum declared in the given package, keyed by name.
+func eventBusDeclsIn(protoDir string, relPaths []string, pkg string) (eventBusDecls, error) {
 	p, err := parser.NewDescriptorParserForFiles(protoDir, relPaths)
 	if err != nil {
-		return nil, err
+		return eventBusDecls{}, err
 	}
-	out := make(map[string]parser.MessageDescriptor)
+	out := newEventBusDecls()
 	for _, fd := range p.GetAllFiles() {
 		if fd.Package != pkg {
 			continue
 		}
-		for _, msg := range fd.Messages {
-			out[msg.Name] = msg
-		}
+		out.collect(fd)
 	}
 	return out, nil
 }

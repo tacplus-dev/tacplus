@@ -279,3 +279,184 @@ func TestEventBusWireContractSkipsTreeWithoutCanonicalProto(t *testing.T) {
 		t.Fatalf("a tree with no canonical eventbus proto must skip the check, got: %v", err)
 	}
 }
+
+// Carrying the full canonical SubscribeRequest means the synthesized proto now
+// declares its own BackpressurePolicy enum, so field 8's type reads
+// `eventbus_support.BackpressurePolicy` on one side and `eventbus.BackpressurePolicy`
+// on the other. comparableWireTypeOf normalizes that owning-package prefix away.
+// It must not normalize anything else: a synthesized field pointing at a
+// genuinely different local type is still drift, and still fatal.
+func TestEventBusWireContractCatchesDivergentLocalTypeName(t *testing.T) {
+	source := writeCanonicalEventBusTree(t, canonicalEventBusFixture)
+	supportDir := writeSupportTree(t, `syntax = "proto3";
+
+package eventbus_support;
+
+import "google/protobuf/timestamp.proto";
+
+enum DeliveryPolicy {
+  DELIVERY_BUFFER = 0;
+}
+
+message SubscribeRequest {
+  string consumer_group = 5;
+  DeliveryPolicy backpressure = 8;
+}
+`)
+
+	err := ValidateEventBusSupportWireContract(supportDir, EventBusSupportProtoPath, source)
+	if err == nil {
+		t.Fatal("a synthesized field typed with a different local enum must fail the wire contract gate")
+	}
+	for _, want := range []string{
+		"EventBus wire contract drift",
+		"SubscribeRequest",
+		"field 8 type mismatch: synthesized eventbus_support.DeliveryPolicy backpressure, canonical eventbus.BackpressurePolicy backpressure",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("failure message missing %q, got:\n%s", want, err)
+		}
+	}
+}
+
+// The subset rule still only excuses ABSENT fields. Now that the synthesized
+// SubscribeRequest carries every canonical field, a renumbering of one of the
+// newly added fields — pause at 8 instead of 7 — is real drift on the wire and
+// must fail.
+func TestEventBusWireContractCatchesRenumberedSubscribeRequestField(t *testing.T) {
+	source := writeCanonicalEventBusTree(t, canonicalEventBusFixture)
+	supportDir := writeSupportTree(t, `syntax = "proto3";
+
+package eventbus_support;
+
+import "google/protobuf/timestamp.proto";
+
+message SubscribeRequest {
+  string consumer_group = 5;
+  bool pause = 8;
+}
+`)
+
+	err := ValidateEventBusSupportWireContract(supportDir, EventBusSupportProtoPath, source)
+	if err == nil {
+		t.Fatal("pause renumbered to field 8 must fail the wire contract gate")
+	}
+	if !strings.Contains(err.Error(), "field 8 type mismatch: synthesized bool pause, canonical eventbus.BackpressurePolicy backpressure") {
+		t.Fatalf("unexpected failure message:\n%s", err)
+	}
+}
+
+// Normalizing the owning-package prefix away is what lets `eventbus_support.
+// BackpressurePolicy` compare equal to `eventbus.BackpressurePolicy`. The prefix
+// was also the only thing distinguishing a message from an enum of the same
+// name, so the comparison carries the type kind explicitly. A synthesized
+// `message BackpressurePolicy` at field 8 is length-delimited where the broker
+// reads a varint — real drift, and it must still fail.
+func TestEventBusWireContractCatchesMessageStandingInForEnum(t *testing.T) {
+	source := writeCanonicalEventBusTree(t, canonicalEventBusFixture)
+	supportDir := writeSupportTree(t, `syntax = "proto3";
+
+package eventbus_support;
+
+import "google/protobuf/timestamp.proto";
+
+message BackpressurePolicy { int32 policy = 1; }
+
+message SubscribeRequest {
+  string consumer_group = 5;
+  BackpressurePolicy backpressure = 8;
+}
+`)
+
+	err := ValidateEventBusSupportWireContract(supportDir, EventBusSupportProtoPath, source)
+	if err == nil {
+		t.Fatal("a synthesized message standing in for a canonical enum must fail the wire contract gate")
+	}
+	if !strings.Contains(err.Error(), "field 8 type mismatch") {
+		t.Fatalf("unexpected failure message:\n%s", err)
+	}
+}
+
+// The synthesized proto now declares its own BackpressurePolicy, and an enum's
+// value numbering is a wire commitment: the value travels as a bare varint, so a
+// synthesized BACKPRESSURE_SAMPLE = 5 makes a subscriber ask the broker for
+// something it never meant. compareWireShape cannot see this — both sides'
+// field 8 is just "an enum" — so the enum rule has to catch it.
+func TestEventBusWireContractCatchesEnumValueSkew(t *testing.T) {
+	source := writeCanonicalEventBusTree(t, canonicalEventBusFixture)
+	supportDir := writeSupportTree(t, `syntax = "proto3";
+
+package eventbus_support;
+
+import "google/protobuf/timestamp.proto";
+
+enum BackpressurePolicy {
+  BACKPRESSURE_BUFFER = 0;
+  BACKPRESSURE_DROP_OLD = 1;
+  BACKPRESSURE_SAMPLE = 5;
+}
+`)
+
+	err := ValidateEventBusSupportWireContract(supportDir, EventBusSupportProtoPath, source)
+	if err == nil {
+		t.Fatal("BACKPRESSURE_SAMPLE renumbered to 5 must fail the wire contract gate")
+	}
+	for _, want := range []string{
+		"BackpressurePolicy",
+		"value BACKPRESSURE_SAMPLE = 5 exists only in the synthesized proto; canonical has no value 5",
+		"value BACKPRESSURE_SAMPLE = 2 exists only in the canonical proto; the synthesized enum must carry it",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("failure message missing %q, got:\n%s", want, err)
+		}
+	}
+}
+
+// A renamed enum value at the right number is drift too: generated code in every
+// language names the constant, so a subscriber compiled against the synthesized
+// name and a broker switching on the canonical one disagree at the source level
+// even where the varint happens to line up.
+func TestEventBusWireContractCatchesEnumValueRename(t *testing.T) {
+	source := writeCanonicalEventBusTree(t, canonicalEventBusFixture)
+	supportDir := writeSupportTree(t, `syntax = "proto3";
+
+package eventbus_support;
+
+import "google/protobuf/timestamp.proto";
+
+enum BackpressurePolicy {
+  BACKPRESSURE_BUFFER = 0;
+  BACKPRESSURE_DROP_OLDEST = 1;
+  BACKPRESSURE_SAMPLE = 2;
+}
+`)
+
+	err := ValidateEventBusSupportWireContract(supportDir, EventBusSupportProtoPath, source)
+	if err == nil {
+		t.Fatal("a renamed enum value must fail the wire contract gate")
+	}
+	if !strings.Contains(err.Error(), `value 1 name mismatch: synthesized "BACKPRESSURE_DROP_OLDEST", canonical "BACKPRESSURE_DROP_OLD"`) {
+		t.Fatalf("unexpected failure message:\n%s", err)
+	}
+}
+
+// A support proto that declares no BackpressurePolicy at all is not drift — the
+// enum rule, like the message rules, only constrains what the synthesized proto
+// actually declares.
+func TestEventBusWireContractAllowsAbsentEnum(t *testing.T) {
+	source := writeCanonicalEventBusTree(t, canonicalEventBusFixture)
+	supportDir := writeSupportTree(t, `syntax = "proto3";
+
+package eventbus_support;
+
+import "google/protobuf/timestamp.proto";
+
+message SubscribeRequest {
+  string consumer_group = 5;
+}
+`)
+
+	if err := ValidateEventBusSupportWireContract(supportDir, EventBusSupportProtoPath, source); err != nil {
+		t.Fatalf("a support proto that declares no BackpressurePolicy must pass: %v", err)
+	}
+}

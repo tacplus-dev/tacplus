@@ -84,13 +84,30 @@ func EnsureEventBusSupportProto(protoDir string, opts EventBusSupportProtoOption
 	b.WriteString("\n")
 	b.WriteString("import \"google/protobuf/timestamp.proto\";\n\n")
 	b.WriteString("message RecordMeta { bytes key = 1; string topic = 2; int32 partition = 3; int64 offset = 4; google.protobuf.Timestamp timestamp = 5; }\n\n")
+	// Must match eventbus.BackpressurePolicy / eventbus.SubscribeRequest in
+	// platform/proto/services/eventbus.proto field-for-field — generated
+	// subscribers encode this and the broker decodes it. Every canonical field
+	// is carried so a generated subscriber can express the full replay control
+	// surface (seek-by-timestamp, speed, pause, backpressure, partitions), not
+	// just the offset/latest/earliest subset.
+	b.WriteString("enum BackpressurePolicy {\n")
+	b.WriteString("  BACKPRESSURE_BUFFER = 0;\n")
+	b.WriteString("  BACKPRESSURE_DROP_OLD = 1;\n")
+	b.WriteString("  BACKPRESSURE_SAMPLE = 2;\n")
+	b.WriteString("}\n\n")
 	b.WriteString("message SubscribeRequest {\n")
 	b.WriteString("  oneof start_from {\n")
 	b.WriteString("    int64 offset = 1;\n")
+	b.WriteString("    google.protobuf.Timestamp timestamp = 2;\n")
 	b.WriteString("    bool latest = 3;\n")
 	b.WriteString("    bool earliest = 4;\n")
 	b.WriteString("  }\n")
 	b.WriteString("  string consumer_group = 5;\n")
+	b.WriteString("  double speed_multiplier = 6;\n")
+	b.WriteString("  bool pause = 7;\n")
+	b.WriteString("  BackpressurePolicy backpressure = 8;\n")
+	b.WriteString("  int32 sample_interval = 9;\n")
+	b.WriteString("  repeated int32 partitions = 10;\n")
 	b.WriteString("}\n\n")
 	// Must match eventbus.PublishResponse in platform/proto/services/eventbus.proto
 	// byte-for-byte on the wire — the broker returns that message, generated

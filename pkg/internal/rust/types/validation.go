@@ -61,6 +61,29 @@ type rustValidationHelpersData struct {
 	NeedsEncType    bool
 }
 
+// rustRequiredZeroCheck returns the Rust expression that tests whether a field is
+// at its zero value. It drives the conditional-requirement family
+// (required_if_true / required_if_false / required_if_eq) and must be
+// type-correct: an unconditional `.is_empty()` compiles only for String / Vec /
+// HashMap, so a conditional requirement on a numeric, bool, enum, message or
+// optional field used to emit generated Rust that does not build.
+func rustRequiredZeroCheck(field model.Field, rustFieldName string) string {
+	switch {
+	case field.IsRepeated || field.IsMap:
+		return fmt.Sprintf("self.%s.is_empty()", rustFieldName)
+	case field.IsOptional || field.IsMessage:
+		// prost renders singular message fields and proto3 `optional` scalars as Option<T>.
+		return fmt.Sprintf("self.%s.is_none()", rustFieldName)
+	case field.Type == "string" || field.Type == "bytes":
+		return fmt.Sprintf("self.%s.is_empty()", rustFieldName)
+	case field.Type == "bool":
+		return fmt.Sprintf("!self.%s", rustFieldName)
+	default:
+		// Numeric scalars and enums (prost renders enums as i32) compare against 0.
+		return fmt.Sprintf("self.%s == 0", rustFieldName)
+	}
+}
+
 // writeValidation writes validation functions to the shared builder
 func writeValidation(b *strings.Builder, pf model.ProtoFile) {
 	if len(pf.Messages) == 0 {
@@ -689,14 +712,14 @@ func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Me
 		case "required_if_true":
 			condFieldRust := strutil.ToSnakeCase(annotationValue.StringValue)
 			fmt.Fprintf(b, "// Validate %s (required_if_true: %s)\n", rustFieldName, condFieldRust)
-			fmt.Fprintf(b, "if self.%s && self.%s.is_empty() {\n", condFieldRust, rustFieldName)
+			fmt.Fprintf(b, "if self.%s && %s {\n", condFieldRust, rustRequiredZeroCheck(field, rustFieldName))
 			fmt.Fprintf(b, "return Err(\"field %s is required when %s is true\".to_string());\n", rustFieldName, condFieldRust)
 			b.WriteString("}\n")
 
 		case "required_if_false":
 			condFieldRust := strutil.ToSnakeCase(annotationValue.StringValue)
 			fmt.Fprintf(b, "// Validate %s (required_if_false: %s)\n", rustFieldName, condFieldRust)
-			fmt.Fprintf(b, "if !self.%s && self.%s.is_empty() {\n", condFieldRust, rustFieldName)
+			fmt.Fprintf(b, "if !self.%s && %s {\n", condFieldRust, rustRequiredZeroCheck(field, rustFieldName))
 			fmt.Fprintf(b, "return Err(\"field %s is required when %s is false\".to_string());\n", rustFieldName, condFieldRust)
 			b.WriteString("}\n")
 
@@ -717,12 +740,13 @@ func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Me
 				}
 
 				fmt.Fprintf(b, "// Validate %s (required_if_eq: %s=%s)\n", rustFieldName, condFieldSnake, condValue)
+				zeroCheck := rustRequiredZeroCheck(field, rustFieldName)
 				if siblingField != nil && siblingField.IsEnum {
 					enumType := toProstEnumName(siblingField.Type)
 					variantName := toProstEnumVariant(condValue, enumType)
-					fmt.Fprintf(b, "if self.%s == %s::%s as i32 && self.%s.is_empty() {\n", condFieldRust, enumType, variantName, rustFieldName)
+					fmt.Fprintf(b, "if self.%s == %s::%s as i32 && %s {\n", condFieldRust, enumType, variantName, zeroCheck)
 				} else {
-					fmt.Fprintf(b, "if self.%s == \"%s\" && self.%s.is_empty() {\n", condFieldRust, condValue, rustFieldName)
+					fmt.Fprintf(b, "if self.%s == \"%s\" && %s {\n", condFieldRust, condValue, zeroCheck)
 				}
 				fmt.Fprintf(b, "return Err(\"field %s is required when %s is %s\".to_string());\n", rustFieldName, condFieldSnake, condValue)
 				b.WriteString("}\n")
@@ -775,11 +799,12 @@ func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Me
 					annotationValue.StringValue, rustFieldName)
 			}
 		default:
-			// An unknown VALIDATION annotation (assert_*) is a hard error: the
+			// An unknown VALIDATION annotation (assert_* or required_if_*) is a hard
+			// error: the
 			// generator has no template for it, so the declared constraint would
 			// be silently dropped (OF-26d). Non-validation annotations fall
 			// through harmlessly.
-			if strings.HasPrefix(annotationName, "assert_") {
+			if strings.HasPrefix(annotationName, "assert_") || strings.HasPrefix(annotationName, "required_if_") {
 				return fmt.Errorf("unsupported validation annotation %q on field %s.%s (no Rust validation template)", annotationName, msg.Name, rustFieldName)
 			}
 		}

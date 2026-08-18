@@ -19,16 +19,31 @@ import (
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 )
 
-// requiredZeroCheck returns the Go expression to check if a field is at its zero value.
-// Message fields use "== nil", repeated/slice fields use "len(...) == 0", strings use `== ""`.
+// requiredZeroCheck returns the Go expression to check if a field is at its zero
+// value. It drives the conditional-requirement family (required_if_true /
+// required_if_false / required_if_eq) and mirrors the type ladder assert_required
+// already emits: an unconditional `== ""` compiles only for a string field, so a
+// conditional requirement on a numeric, bool, bytes, enum or optional field used
+// to emit generated Go that does not build.
 func requiredZeroCheck(field model.Field, goFieldName string) string {
-	if field.IsMessage {
-		return fmt.Sprintf("m.%s == nil", goFieldName)
-	}
-	if field.IsRepeated {
+	switch {
+	case field.IsRepeated || field.IsMap:
 		return fmt.Sprintf("len(m.%s) == 0", goFieldName)
+	case field.IsOptional:
+		// proto3 `optional` scalars are pointers in generated Go.
+		return fmt.Sprintf("m.%s == nil", goFieldName)
+	case field.IsMessage:
+		return fmt.Sprintf("m.%s == nil", goFieldName)
+	case field.Type == "bytes":
+		return fmt.Sprintf("len(m.%s) == 0", goFieldName)
+	case field.Type == "bool":
+		return fmt.Sprintf("!m.%s", goFieldName)
+	case field.Type == "string":
+		return fmt.Sprintf(`m.%s == ""`, goFieldName)
+	default:
+		// Numeric scalars and enums (generated as int32) compare against 0.
+		return fmt.Sprintf("m.%s == 0", goFieldName)
 	}
-	return fmt.Sprintf(`m.%s == ""`, goFieldName)
 }
 
 // generateValidationHelpers generates Validate functions for message types
@@ -1208,11 +1223,12 @@ func Validate%sWithDepth(m *%s, depth int) error {
 				// Silently skip: these do not produce validation code.
 
 			default:
-				// An unknown VALIDATION annotation (assert_*) is a hard error: the
+				// An unknown VALIDATION annotation (assert_* or required_if_*) is a hard
+				// error: the
 				// generator has no template for it, so the declared constraint would
 				// be silently dropped (OF-26d). Non-validation annotations are
 				// allow-listed above and skipped.
-				if strings.HasPrefix(annotationName, "assert_") {
+				if strings.HasPrefix(annotationName, "assert_") || strings.HasPrefix(annotationName, "required_if_") {
 					return fmt.Errorf("unsupported validation annotation %q on field %s.%s (no Go validation template)", annotationName, msg.Name, goFieldName)
 				}
 				// Truly unknown non-validation annotation - warn so new annotations get noticed

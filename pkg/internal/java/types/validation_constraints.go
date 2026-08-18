@@ -269,3 +269,83 @@ func upperFirst(s string) string {
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
 }
+
+// javaRequiredZeroCheck returns the Java expression that tests whether a field is
+// at its zero value. It drives the conditional-requirement family
+// (required_if_true / required_if_false / required_if_eq) and mirrors the type
+// ladder the Go emitter uses, so the same annotation means the same thing in both
+// server languages.
+func javaRequiredZeroCheck(field model.Field, javaFieldName, getterName string) string {
+	switch {
+	case field.IsMap:
+		return fmt.Sprintf("msg.%sMap().isEmpty()", getterName)
+	case field.IsRepeated:
+		return fmt.Sprintf("msg.%sCount() == 0", getterName)
+	case field.IsOptional || field.IsMessage:
+		return fmt.Sprintf("!msg.has%s()", upperFirst(javaFieldName))
+	case field.Type == "string" || field.Type == "bytes":
+		return fmt.Sprintf("msg.%s().isEmpty()", getterName)
+	case field.Type == "bool":
+		return fmt.Sprintf("!msg.%s()", getterName)
+	case field.IsEnum:
+		// Enum getters return the enum; the numeric accessor avoids naming the
+		// generated Java enum class (see writeJavaEnumDefinedValidation).
+		return fmt.Sprintf("msg.%sValue() == 0", getterName)
+	default:
+		return fmt.Sprintf("msg.%s() == 0", getterName)
+	}
+}
+
+// javaSiblingGetter returns the getter name for a sibling field referenced by a
+// conditional-requirement annotation (e.g. "enable_tls" -> "getEnableTls").
+func javaSiblingGetter(siblingName string) string {
+	return "get" + upperFirst(toJavaFieldName(siblingName))
+}
+
+// writeJavaRequiredIfBool emits the required_if_true / required_if_false
+// constraint: the annotated field must be set whenever the named boolean sibling
+// holds wantTrue.
+func writeJavaRequiredIfBool(b *strings.Builder, msg model.Message, field model.Field, javaFieldName, getterName, siblingName string, wantTrue bool) {
+	if siblingName == "" {
+		return
+	}
+	annotation, state, negate := "required_if_true", "true", ""
+	if !wantTrue {
+		annotation, state, negate = "required_if_false", "false", "!"
+	}
+	fmt.Fprintf(b, "// Validate %s (%s: %s)\n", javaFieldName, annotation, siblingName)
+	fmt.Fprintf(b, "if (%smsg.%s() && %s) {\n", negate, javaSiblingGetter(siblingName), javaRequiredZeroCheck(field, javaFieldName, getterName))
+	writeJavaValidationThrow(b, fmt.Sprintf("field %s is required when %s is %s", javaFieldName, siblingName, state))
+	b.WriteString("}\n")
+}
+
+// writeJavaRequiredIfEq emits the required_if_eq constraint: the annotated field
+// must be set whenever the named sibling equals the given value. The annotation
+// value arrives as "field=value" (see the descriptor parser).
+func writeJavaRequiredIfEq(b *strings.Builder, msg model.Message, field model.Field, javaFieldName, getterName, spec string) {
+	parts := strings.SplitN(spec, "=", 2)
+	if len(parts) != 2 || parts[0] == "" {
+		return
+	}
+	condFieldName, condValue := parts[0], parts[1]
+
+	var sibling *model.Field
+	for i := range msg.Fields {
+		if msg.Fields[i].Name == condFieldName {
+			sibling = &msg.Fields[i]
+			break
+		}
+	}
+
+	// An enum sibling is compared by variant NAME so the emitter never has to
+	// resolve the generated Java enum class; a string sibling by value.
+	condExpr := fmt.Sprintf("%q.equals(msg.%s())", condValue, javaSiblingGetter(condFieldName))
+	if sibling != nil && sibling.IsEnum {
+		condExpr = fmt.Sprintf("%q.equals(msg.%s().name())", condValue, javaSiblingGetter(condFieldName))
+	}
+
+	fmt.Fprintf(b, "// Validate %s (required_if_eq: %s=%s)\n", javaFieldName, condFieldName, condValue)
+	fmt.Fprintf(b, "if (%s && %s) {\n", condExpr, javaRequiredZeroCheck(field, javaFieldName, getterName))
+	writeJavaValidationThrow(b, fmt.Sprintf("field %s is required when %s is %s", javaFieldName, condFieldName, condValue))
+	b.WriteString("}\n")
+}

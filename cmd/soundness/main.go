@@ -1571,7 +1571,15 @@ func parseConstraints(specPath string) ([]string, error) {
 	}
 	// Constraint names may contain digits (assert_base64); `\b` keeps the name
 	// from bleeding into the field number on the other side of the `=`.
-	re := regexp.MustCompile(`\b(assert_[a-z0-9_]+)\b\s*=\s*\d+`)
+	//
+	// The conditional-requirement family (required_if_true / required_if_false /
+	// required_if_eq) is a field-level validation constraint like the assert_*
+	// family, and belongs in the parity matrix for the same reason: it is parsed
+	// into field.Annotations and each language's validation emitter is expected to
+	// enforce it. Matching only `assert_` left the family invisible here, which is
+	// how Java shipped with no required_if_* enforcement at all while the matrix
+	// read fully green.
+	re := regexp.MustCompile(`\b((?:assert|required_if)_[a-z0-9_]+)\b\s*=\s*\d+`)
 	seen := map[string]bool{}
 	var out []string
 	for _, m := range re.FindAllStringSubmatch(string(b), -1) {

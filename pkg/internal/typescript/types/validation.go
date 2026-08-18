@@ -591,7 +591,15 @@ export function %s(m: %s | undefined, depth = 0): void {
 				// Non-validation annotations - handled by other generators or informational only.
 
 			default:
-				// Unknown annotation - warn and skip
+				// An unknown VALIDATION annotation is a hard error, matching the
+				// go/java/python/rust emitters (OF-26d): the generator has no
+				// template for it, so the declared constraint would be dropped and
+				// the TypeScript client would accept requests every other target
+				// rejects. A stderr warning is not enough — nothing fails on it.
+				if strings.HasPrefix(annotationName, "assert_") || strings.HasPrefix(annotationName, "required_if_") {
+					return fmt.Errorf("unsupported validation annotation %q on field %s.%s (no TypeScript validation template)", annotationName, msg.Name, fieldName)
+				}
+				// Truly unknown non-validation annotation - warn so new annotations get noticed.
 				fmt.Fprintf(os.Stderr, "WARNING: skipping unknown annotation '%s' on field %s.%s\n",
 					annotationName, msg.Name, fieldName)
 			}

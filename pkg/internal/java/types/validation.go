@@ -405,6 +405,15 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 					return err
 				}
 
+			case "required_if_true":
+				writeJavaRequiredIfBool(b, msg, field, javaFieldName, getterName, annotationValue.StringValue, true)
+
+			case "required_if_false":
+				writeJavaRequiredIfBool(b, msg, field, javaFieldName, getterName, annotationValue.StringValue, false)
+
+			case "required_if_eq":
+				writeJavaRequiredIfEq(b, msg, field, javaFieldName, getterName, annotationValue.StringValue)
+
 			case "assert_invariant":
 				// Emitted as a formal //@ invariant by the JML annotation pass
 				// (writeJmlSpecs); no runtime constraint, matching the Go emitter.
@@ -422,11 +431,14 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 				b.WriteString("}\n")
 
 			default:
-				// An unknown VALIDATION annotation (assert_*) is a hard error: the
-				// generator has no template for it, so the declared constraint would
-				// be silently dropped (OF-26d). Non-validation annotations fall
-				// through harmlessly.
-				if strings.HasPrefix(annotationName, "assert_") {
+				// An unknown VALIDATION annotation is a hard error: the generator has
+				// no template for it, so the declared constraint would be silently
+				// dropped (OF-26d). The conditional-requirement family
+				// (required_if_*) counts as validation even though it carries no
+				// assert_ prefix — it went unimplemented in Java precisely because
+				// this guard only looked for that prefix. Non-validation annotations
+				// fall through harmlessly.
+				if strings.HasPrefix(annotationName, "assert_") || strings.HasPrefix(annotationName, "required_if_") {
 					return fmt.Errorf("unsupported validation annotation %q on field %s.%s (no Java validation template)", annotationName, msg.Name, javaFieldName)
 				}
 			}

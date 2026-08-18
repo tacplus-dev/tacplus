@@ -401,3 +401,42 @@ message ClusterConfig {
   // Route randomly
   bool route_randomly = 7;
 }
+
+// Warm-up configuration.
+//
+// Exercises the conditional-requirement family (required_if_true /
+// required_if_false / required_if_eq) on field types other than string. Every
+// other fixture use of the family sits on a string field, which let the emitters
+// ship an untyped zero-value check — `m.Field == ""` in Go, `.is_empty()` in
+// Rust — that does not compile against a numeric, bool, bytes, enum, message or
+// repeated field, and let Java ship no enforcement at all. Generated validation
+// for this message is compiled by the current-generation gate in go, java and
+// rust.
+message WarmupConfig {
+  // Warm the cache on startup
+  bool warm_on_start = 1;
+
+  // Number of keys to preload
+  int32 preload_keys = 2 [(spec.required_if_true) = "warm_on_start"];
+
+  // Keys to preload
+  repeated string preload_patterns = 3 [
+    (spec.assert_max_size) = 100,
+    (spec.required_if_true) = "warm_on_start"
+  ];
+
+  // Serialized warm-up snapshot
+  bytes preload_snapshot = 4 [(spec.required_if_true) = "warm_on_start"];
+
+  // Cluster to warm from
+  ClusterConfig source_cluster = 5 [(spec.required_if_true) = "warm_on_start"];
+
+  // Eviction policy applied while warming
+  EvictionPolicy warm_eviction = 6;
+
+  // Ceiling applied only under the LRU warm policy
+  int64 warm_max_bytes = 7 [(spec.required_if_eq) = {field: "warm_eviction", value: "EVICTION_POLICY_LRU"}];
+
+  // Cold-start deadline, required when warm-up is off
+  int32 cold_start_timeout_ms = 8 [(spec.required_if_false) = "warm_on_start"];
+}

@@ -489,10 +489,11 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 					}
 				}
 			default:
-				// Unknown validation annotation (assert_*) is a hard error: no Python
+				// Unknown validation annotation (assert_* or required_if_*) is a hard
+				// error: no Python
 				// template exists, so the declared constraint would be silently dropped
 				// (OF-26d). Non-validation annotations fall through harmlessly.
-				if strings.HasPrefix(annotationName, "assert_") {
+				if strings.HasPrefix(annotationName, "assert_") || strings.HasPrefix(annotationName, "required_if_") {
 					return nil, fmt.Errorf("unsupported validation annotation %q on field %s.%s (no Python validation template)", annotationName, msg.Name, pyFieldName)
 				}
 			}

@@ -13,7 +13,6 @@ import (
 "fmt"
 "os"
 "os/signal"
-"strings"
 "sync"
 "syscall"
 "time"
@@ -317,7 +316,10 @@ func isPermanentIdentityInitError(err error) bool {
 	if errors.Is(err, service_im.ErrMissingTrustDomain) || errors.Is(err, servicemanager.ErrMissingTrustDomain) {
 		return true
 	}
-	return strings.Contains(err.Error(), "service token minter is not configured")
+	// A build with no token exchanger has no way to mint a service token, so the
+	// identity chassis refuses at construction. Same rule: classify by typed
+	// sentinel (errors.Is), not by message-substring matching (NEW-21 leg b).
+	return errors.Is(err, service_im.ErrTokenMinterNotConfigured)
 }
 
 // New creates a ServiceManager: loads config, creates the
@@ -1111,6 +1113,7 @@ return fmt.Errorf("grpcserver: %w", err)
 // Resolve the serving certificate per handshake so ManageCert renewals
 // hot-reload without a restart (PC-L-10).
 srv.SetCertProvider(sm.sc.TLSCertChain, sm.sc.TLSPrivateKey)
+srv.SetCertDegradeReporter(sm.reportTLSDegraded)
 {{end}}
 
 {{if .HasAutoTls}}
@@ -1198,6 +1201,7 @@ if err != nil {
 return fmt.Errorf("grpcserver (additional): %w", err)
 }
 additionalSrv.SetCertProvider(sm.sc.TLSCertChain, sm.sc.TLSPrivateKey)
+additionalSrv.SetCertDegradeReporter(sm.reportTLSDegraded)
 healthCtl = additionalSrv
 sm.tasks.Go(func(taskCtx context.Context) { errCh <- additionalSrv.Listen(taskCtx) })
 } else {
@@ -1206,6 +1210,7 @@ if err != nil {
 return fmt.Errorf("grpcserver (health-only): %w", err)
 }
 healthOnlySrv.SetCertProvider(sm.sc.TLSCertChain, sm.sc.TLSPrivateKey)
+healthOnlySrv.SetCertDegradeReporter(sm.reportTLSDegraded)
 healthCtl = healthOnlySrv
 sm.tasks.Go(func(taskCtx context.Context) { errCh <- healthOnlySrv.Listen(taskCtx) })
 }

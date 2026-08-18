@@ -290,7 +290,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-var errTokenMinterNotConfigured = errors.New("service token minter is not configured")
+// ErrMissingTrustDomain mirrors the sentinel of the same name in the
+// token-exchanger variant of this package. This degraded variant never builds a
+// service-mesh channel, so it never returns it — but the generated ServiceManager
+// classifies permanent identity-init failures by errors.Is against
+// servicemanager.ErrMissingTrustDomain in EVERY build (NEW-21), so both variants
+// must expose the same package API or a no-minter build does not compile.
+var ErrMissingTrustDomain = errors.New("spiffe_trust_domain is required for service-mesh TLS; refusing CA-only trust with no service-identity pin (fail-closed)")
 
 type ServiceManager struct {
 	config   *grpcconfig_pb.Config
@@ -299,7 +305,7 @@ type ServiceManager struct {
 
 func NewServiceManager(ctx context.Context, cfg *grpcconfig_pb.Config, identity *service_im.IdentityManager) (*ServiceManager, error) {
 	_ = ctx
-	return nil, errTokenMinterNotConfigured
+	return nil, service_im.ErrTokenMinterNotConfigured
 }
 
 func (bc *ServiceManager) Config() *grpcconfig_pb.Config {
@@ -321,7 +327,7 @@ func (bc *ServiceManager) Conn() *grpc.ClientConn { return nil }
 
 func (bc *ServiceManager) CreateChannel(target string) (*grpc.ClientConn, error) {
 	_ = target
-	return nil, errTokenMinterNotConfigured
+	return nil, service_im.ErrTokenMinterNotConfigured
 }
 
 func (bc *ServiceManager) InstanceID() string {
@@ -339,7 +345,7 @@ func (bc *ServiceManager) ReconcileEndpoints(newHosts []*host_pb.Host) {
 
 func (bc *ServiceManager) VerifyToken(tokenString string) (*wrapperToken.TokenWrapper, error) {
 	_ = tokenString
-	return nil, errTokenMinterNotConfigured
+	return nil, service_im.ErrTokenMinterNotConfigured
 }
 
 func (bc *ServiceManager) AuthUnaryInterceptor() grpc.UnaryServerInterceptor {
@@ -348,7 +354,7 @@ func (bc *ServiceManager) AuthUnaryInterceptor() grpc.UnaryServerInterceptor {
 		_ = req
 		_ = info
 		_ = handler
-		return nil, status.Error(codes.Unauthenticated, errTokenMinterNotConfigured.Error())
+		return nil, status.Error(codes.Unauthenticated, service_im.ErrTokenMinterNotConfigured.Error())
 	}
 }
 
@@ -358,7 +364,7 @@ func (bc *ServiceManager) AuthStreamInterceptor() grpc.StreamServerInterceptor {
 		_ = ss
 		_ = info
 		_ = handler
-		return status.Error(codes.Unauthenticated, errTokenMinterNotConfigured.Error())
+		return status.Error(codes.Unauthenticated, service_im.ErrTokenMinterNotConfigured.Error())
 	}
 }
 
@@ -587,7 +593,19 @@ import (
 	"google.golang.org/grpc"
 )
 
-var errTokenMinterNotConfigured = errors.New("service token minter is not configured")
+// ErrMissingTrustDomain mirrors the sentinel of the same name in the
+// token-exchanger variant of this package. This degraded variant builds no
+// bootstrap TLS context, so it never returns it — but the generated
+// ServiceManager classifies against service_im.ErrMissingTrustDomain in EVERY
+// build (NEW-21), so both variants must expose the same package API or a
+// no-minter build does not compile.
+var ErrMissingTrustDomain = errors.New("im: spiffe_trust_domain is required for bootstrap TLS; refusing CA-only trust with no service-identity pin (fail-closed)")
+
+// ErrTokenMinterNotConfigured mirrors the same sentinel in the token-exchanger
+// variant of this package: this build has no exchanger, so no service token can
+// ever be minted. TYPED so the ServiceManager startup loop classifies it as a
+// PERMANENT failure with errors.Is instead of matching the message (NEW-21).
+var ErrTokenMinterNotConfigured = errors.New("im: service token minter is not configured")
 var errNoTokenSource = errors.New("no token source configured")
 
 type IdentityManager struct {
@@ -597,7 +615,7 @@ type IdentityManager struct {
 func New(ctx context.Context, cfg *grpcconfig_pb.Config) (*IdentityManager, error) {
 	_ = ctx
 	if cfg != nil && cfg.GetPrivateKey() != nil {
-		return nil, errTokenMinterNotConfigured
+		return nil, ErrTokenMinterNotConfigured
 	}
 	return &IdentityManager{cfg: cfg}, nil
 }

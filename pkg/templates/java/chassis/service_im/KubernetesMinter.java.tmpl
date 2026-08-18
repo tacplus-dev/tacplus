@@ -154,7 +154,7 @@ public class KubernetesMinter {
 
         return serviceToken;
 {{else}}
-        throw new IllegalStateException("service token minter is not configured");
+        throw new IdentityManager.TokenMinterNotConfiguredException("service token minter is not configured");
 {{end}}
     }
 

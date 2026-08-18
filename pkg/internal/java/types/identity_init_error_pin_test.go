@@ -28,14 +28,14 @@ func TestJavaServiceManagerClassifiesMissingTrustDomainByType(t *testing.T) {
 		t.Fatal("Java ServiceManager must not classify a missing trust domain by message substring (NEW-21)")
 	}
 
-	typedIdx := strings.Index(rendered, "if (cur instanceof ServiceConnection.MissingTrustDomainException) {")
-	minterIdx := strings.Index(rendered, `msg.contains("service token minter is not configured")`)
-	if minterIdx < 0 {
-		t.Fatal("Java ServiceManager must still treat a missing token minter as permanent")
+	// The missing-minter arm is the second permanent class, and it is typed too
+	// (NEW-21 leg b): no message-substring classification survives here.
+	if !strings.Contains(rendered, "if (cur instanceof IdentityManager.TokenMinterNotConfiguredException) {") {
+		t.Fatal("Java ServiceManager must still treat a missing token minter as permanent, by type")
 	}
-	if typedIdx > minterIdx {
-		t.Fatal("the typed trust-domain check must precede the message-substring fallback, so the " +
-			"typed seam is what classifies it")
+	if strings.Contains(rendered, "msg.contains(") || strings.Contains(rendered, "cur.getMessage()") {
+		t.Fatal("Java ServiceManager must not classify a permanent identity-init failure by message " +
+			"substring: the message is not a contract and drifts silently (NEW-21)")
 	}
 }
 
@@ -53,5 +53,34 @@ func TestJavaServiceManagerHasNoEmptyTrustDomainTolerance(t *testing.T) {
 	if strings.Contains(rendered, "if (!config.getSpiffeTrustDomain().isEmpty()) {") {
 		t.Fatal("Java health identity must not tolerate an empty trust domain: publishing an empty " +
 			"instance identity instead of failing is the fail-open shape (NEW-21)")
+	}
+}
+
+// NEW-21 leg (b), java parity. The missing-minter arm was the classifier's last
+// message-substring seam; it now matches the typed exception the identity chassis
+// throws, and every no-exchanger throw site raises that type.
+func TestJavaIdentityChassisThrowsTypedMissingMinter(t *testing.T) {
+	im := readJavaTemplate(t, "java/chassis/service_im/IdentityManager.java.tmpl")
+	for _, want := range []string{
+		"public static final class TokenMinterNotConfiguredException extends IllegalStateException {",
+		`throw new TokenMinterNotConfiguredException("IM: service token minter is not configured");`,
+	} {
+		if !strings.Contains(im, want) {
+			t.Fatalf("java IdentityManager must raise a TYPED missing-minter failure; missing %q", want)
+		}
+	}
+
+	for _, file := range []string{
+		"java/chassis/service_im/CloudMinter.java.tmpl",
+		"java/chassis/service_im/KubernetesMinter.java.tmpl",
+	} {
+		src := readJavaTemplate(t, file)
+		if !strings.Contains(src, `throw new IdentityManager.TokenMinterNotConfiguredException("service token minter is not configured");`) {
+			t.Fatalf("%s must raise the typed missing-minter failure (NEW-21 leg b)", file)
+		}
+		if strings.Contains(src, `throw new IllegalStateException("service token minter is not configured");`) {
+			t.Fatalf("%s must not raise the untyped missing-minter failure: the ServiceManager "+
+				"classifies it by type, so an IllegalStateException is retried for ~13 minutes", file)
+		}
 	}
 }

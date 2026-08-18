@@ -31,6 +31,24 @@ import java.util.concurrent.atomic.AtomicLong;
 public class IdentityManager implements AutoCloseable {
     private static final Logger LOG = Logger.getLogger(IdentityManager.class.getName());
 
+    /**
+     * Thrown when a service identity is requested in a build that declares no
+     * token exchanger, so no service token can ever be minted.
+     *
+     * A TYPED exception so the ServiceManager can classify it as a permanent
+     * (non-retryable) init error by type rather than by matching the message
+     * substring (NEW-21 leg b). Extends IllegalStateException so existing callers
+     * that catch the latter keep working, and because a build with no minter is a
+     * configuration error, not a recoverable runtime condition.
+     */
+    public static final class TokenMinterNotConfiguredException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+
+        public TokenMinterNotConfiguredException(String message) {
+            super(message);
+        }
+    }
+
     private static final boolean HAS_TOKEN_EXCHANGER = {{if .HasTokenExchanger}}true{{else}}false{{end}};
     private static final String DEFAULT_AUDIENCE = "{{.DefaultAudience}}";
 
@@ -148,7 +166,7 @@ public class IdentityManager implements AutoCloseable {
 
         if (k8sTokenFile != null && !k8sTokenFile.isEmpty()) {
             if (!HAS_TOKEN_EXCHANGER) {
-                throw new RuntimeException("IM: service token minter is not configured");
+                throw new TokenMinterNotConfiguredException("IM: service token minter is not configured");
             }
             LOG.info("IM: kubernetes token file configured — using projected-token auth: " + k8sTokenFile);
             k8sMinter = new KubernetesMinter(k8sTokenFile, DEFAULT_AUDIENCE);

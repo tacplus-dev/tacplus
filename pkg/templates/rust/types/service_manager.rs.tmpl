@@ -411,8 +411,11 @@ fn open_disk_store_logs(cfg: &Config) -> Result<Option<Arc<DiskStoreLogs>>, Box<
 
 const MAX_INIT_RETRIES: u32 = 30;
 
-fn is_permanent_identity_init_error(err: &dyn std::error::Error) -> bool {
-    err.to_string().contains("service token minter is not configured")
+fn is_permanent_identity_init_error(err: &(dyn std::error::Error + 'static)) -> bool {
+    // A build with no token exchanger can never mint a service token, so the
+    // identity chassis refuses at construction. Classified by TYPE (downcast),
+    // not by message-substring matching (NEW-21 leg b).
+    err.downcast_ref::<service_im::TokenMinterNotConfigured>().is_some()
 }
 
 impl ServiceManager {

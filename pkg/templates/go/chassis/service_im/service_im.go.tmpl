@@ -158,6 +158,17 @@ type IdentityManager struct {
 // servicemanager.ErrMissingTrustDomain.
 var ErrMissingTrustDomain = errors.New("im: spiffe_trust_domain is required for bootstrap TLS; refusing CA-only trust with no service-identity pin (fail-closed)")
 
+// ErrTokenMinterNotConfigured is returned when the identity chassis is asked for
+// a service identity in a build that has no token exchanger, so no service token
+// can ever be minted — a permanent misconfiguration, not a transient one.
+//
+// TYPED for the same reason as ErrMissingTrustDomain: the ServiceManager startup
+// loop classifies it with errors.Is rather than by matching the message text
+// (NEW-21 leg b). Declared in both variants of this package — the no-exchanger
+// variant is the one that returns it — so the classifier compiles and means the
+// same thing in every build.
+var ErrTokenMinterNotConfigured = errors.New("im: service token minter is not configured")
+
 // New creates an IdentityManager: dials a bare connection to the cluster,
 // detects auth method (Kubernetes projected-token or cloud), and performs
 // initial token exchange.

@@ -199,9 +199,8 @@ func TestGoServiceManagerTreatsMissingTokenMinterAsPermanent(t *testing.T) {
 		t.Fatalf("loadTemplate service_manager.go.tmpl: %v", err)
 	}
 	for _, want := range []string{
-		`"strings"`,
 		"func isPermanentIdentityInitError(err error) bool",
-		`strings.Contains(err.Error(), "service token minter is not configured")`,
+		"errors.Is(err, service_im.ErrTokenMinterNotConfigured)",
 		"if isPermanentIdentityInitError(idErr) {",
 		`return nil, fmt.Errorf("identity permanent startup failure: %w", idErr)`,
 	} {
@@ -525,6 +524,39 @@ func TestGoServiceManagerExposesSubscriberPlumbing(t *testing.T) {
 		if !strings.Contains(tmpl, want) {
 			t.Fatalf("Go ServiceManager must expose subscriber plumbing; missing %q", want)
 		}
+	}
+}
+
+// PC-L-1 pin: a renewed serving certificate that cannot be rebuilt was LOG-ONLY.
+// The server keeps serving the previous certificate — correct — but nothing
+// outside the log said the renewal was not taking effect, so the instance stayed
+// HEALTHY in the fleet plane right up to expiry. It now reports the same
+// degradation seam the ServiceManager uses for its own renewal failures, and
+// every server the SM starts installs the reporter.
+func TestGoServingCertRebuildFailureReportsDegraded(t *testing.T) {
+	grpcsrv, err := templates.FS.ReadFile("go/chassis/grpcserver/grpcserver.go.tmpl")
+	if err != nil {
+		t.Fatalf("read grpcserver template: %v", err)
+	}
+	for _, want := range []string{
+		"func (ps *GrpcServer) SetCertDegradeReporter(fn func(reason string)) {",
+		`ps.reportCertDegraded("renewed TLS serving certificate could not be built: " + err.Error())`,
+	} {
+		if !strings.Contains(string(grpcsrv), want) {
+			t.Fatalf("a failed serving-cert rebuild must reach the degradation seam, not just the log "+
+				"(PC-L-1); missing %q", want)
+		}
+	}
+
+	sm, err := loadTemplate("service_manager.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate service_manager.go.tmpl: %v", err)
+	}
+	providers := strings.Count(sm, ".SetCertProvider(sm.sc.TLSCertChain, sm.sc.TLSPrivateKey)")
+	reporters := strings.Count(sm, ".SetCertDegradeReporter(sm.reportTLSDegraded)")
+	if providers == 0 || reporters != providers {
+		t.Fatalf("every server given live cert providers must also report rebuild failures: "+
+			"%d SetCertProvider call(s) but %d SetCertDegradeReporter call(s) (PC-L-1)", providers, reporters)
 	}
 }
 

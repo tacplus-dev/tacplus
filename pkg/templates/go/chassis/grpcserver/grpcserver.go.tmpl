@@ -58,6 +58,11 @@ type GrpcServer struct {
 	// java's X509ExtendedKeyManager and rust's reloading cert resolver).
 	getChain func() *x509_pb.X509CertChain
 	getKey   func() crypto.PrivateKey
+
+	// Optional degradation reporter (SetCertDegradeReporter): when set, a failed
+	// rebuild of a renewed serving certificate is reported to the fleet health
+	// plane as well as logged (PC-L-1). Serving continues on the last good cert.
+	reportCertDegraded func(reason string)
 }
 
 // SetCertProvider installs live certificate providers. Call before Listen.
@@ -67,6 +72,18 @@ type GrpcServer struct {
 func (ps *GrpcServer) SetCertProvider(getChain func() *x509_pb.X509CertChain, getKey func() crypto.PrivateKey) {
 	ps.getChain = getChain
 	ps.getKey = getKey
+}
+
+// SetCertDegradeReporter installs the callback invoked when a renewed serving
+// certificate cannot be built. Call before Listen.
+//
+// Without it the failure is log-only: the server silently keeps serving the
+// previous certificate until it expires, and nothing outside the log ever says
+// the renewal is not taking effect (PC-L-1). The reporter is the same seam the
+// ServiceManager uses for its own renewal failures, so the instance goes
+// DEGRADED in the fleet health plane.
+func (ps *GrpcServer) SetCertDegradeReporter(fn func(reason string)) {
+	ps.reportCertDegraded = fn
 }
 
 // buildTLSCertificate assembles a tls.Certificate from an X509CertChain
@@ -188,8 +205,8 @@ func (ps *GrpcServer) Listen(ctx context.Context) error {
 		// Resolve the serving certificate per handshake so ManageCert renewals
 		// hot-reload without restart (PC-L-10). The built certificate is cached by
 		// chain pointer; a provider error keeps serving the last good cert rather
-		// than failing handshakes (renewal problems are surfaced by the cert
-		// stream's own logging).
+		// than failing handshakes, and is reported to the degradation seam when one
+		// is installed (PC-L-1).
 		var certMu sync.Mutex
 		cachedChain := ps.tlsCert
 		cachedCert := initialCert
@@ -207,6 +224,9 @@ func (ps *GrpcServer) Listen(ctx context.Context) error {
 				rebuilt, err := buildTLSCertificate(chain, ps.getKey())
 				if err != nil {
 					zap.L().Error("failed to build renewed TLS serving certificate; keeping previous cert", zap.Error(err))
+					if ps.reportCertDegraded != nil {
+						ps.reportCertDegraded("renewed TLS serving certificate could not be built: " + err.Error())
+					}
 					return cachedCert, nil
 				}
 				cachedChain = chain

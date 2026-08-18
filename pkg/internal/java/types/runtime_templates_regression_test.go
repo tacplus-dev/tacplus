@@ -126,7 +126,7 @@ func TestJavaServiceManagerTreatsMissingTokenMinterAsPermanent(t *testing.T) {
 
 	for _, want := range []string{
 		"private static boolean isPermanentIdentityInitError(Throwable t)",
-		`msg.contains("service token minter is not configured")`,
+		"if (cur instanceof IdentityManager.TokenMinterNotConfiguredException) {",
 		"if (isPermanentIdentityInitError(e)) {",
 		`throw new RuntimeException("permanent identity startup failure", e);`,
 	} {

@@ -31,3 +31,36 @@ func TestRustServiceManagerHasNoEmptyTrustDomainTolerance(t *testing.T) {
 			"instance identity instead of failing is the fail-open shape (NEW-21)")
 	}
 }
+
+// NEW-21 leg (b), rust parity. The rust classifier was pure message-substring
+// matching; it now downcasts the typed error the identity chassis returns when a
+// build declares no token exchanger. `service_im` must export it, and the
+// no-exchanger minter stubs must return it rather than a bare string.
+func TestRustServiceManagerClassifiesMissingTokenMinterByType(t *testing.T) {
+	for _, tc := range []struct{ file, want string }{
+		{"rust/types/service_manager.rs.tmpl", "err.downcast_ref::<service_im::TokenMinterNotConfigured>().is_some()"},
+		{"rust/chassis/service_im/src/manager.rs.tmpl", "pub struct TokenMinterNotConfigured;"},
+		{"rust/chassis/service_im/src/manager.rs.tmpl", "impl std::error::Error for TokenMinterNotConfigured {}"},
+		{"rust/chassis/service_im/src/manager.rs.tmpl", "return Err(Box::new(TokenMinterNotConfigured));"},
+		{"rust/chassis/service_im/src/lib.rs.tmpl", "pub use manager::{IdentityManager, TokenMinterNotConfigured};"},
+		{"rust/chassis/service_im/src/token_minter.rs.tmpl", "Err(Box::new(crate::manager::TokenMinterNotConfigured))"},
+		{"rust/chassis/service_im/src/cloud_minter.rs.tmpl", "Err(Box::new(crate::manager::TokenMinterNotConfigured))"},
+	} {
+		src, err := templates.FS.ReadFile(tc.file)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.file, err)
+		}
+		if !strings.Contains(string(src), tc.want) {
+			t.Fatalf("%s must carry the typed missing-minter seam; missing %q", tc.file, tc.want)
+		}
+	}
+
+	sm, err := templates.FS.ReadFile("rust/types/service_manager.rs.tmpl")
+	if err != nil {
+		t.Fatalf("read rust/types/service_manager.rs.tmpl: %v", err)
+	}
+	if strings.Contains(string(sm), `contains("service token minter is not configured")`) {
+		t.Fatal("rust ServiceManager must not classify a permanent identity-init failure by message " +
+			"substring: the chassis message is not a contract (NEW-21 leg b)")
+	}
+}

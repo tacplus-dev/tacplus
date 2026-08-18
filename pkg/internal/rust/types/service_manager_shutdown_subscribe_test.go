@@ -64,8 +64,8 @@ func TestRustServiceManagerTreatsMissingTokenMinterAsPermanent(t *testing.T) {
 		t.Fatalf("loadTemplate: %v", err)
 	}
 	for _, want := range []string{
-		"fn is_permanent_identity_init_error(err: &dyn std::error::Error) -> bool",
-		`err.to_string().contains("service token minter is not configured")`,
+		"fn is_permanent_identity_init_error(err: &(dyn std::error::Error + 'static)) -> bool",
+		"err.downcast_ref::<service_im::TokenMinterNotConfigured>().is_some()",
 		"if is_permanent_identity_init_error(e.as_ref()) {",
 		`return Err(format!("permanent identity startup failure: {}", e).into());`,
 	} {

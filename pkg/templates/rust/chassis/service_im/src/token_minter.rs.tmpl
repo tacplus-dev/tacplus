@@ -230,7 +230,7 @@ impl KubernetesTokenMinter {
     /// Creates a KubernetesTokenMinter from a projected token-file path.
     pub fn new(token_file: &str, default_audience: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let _ = (token_file, default_audience);
-        Err("service token minter is not configured".into())
+        Err(Box::new(crate::manager::TokenMinterNotConfigured))
     }
 
     /// Sets the gRPC channel for token exchange.
@@ -240,13 +240,13 @@ impl KubernetesTokenMinter {
 
     /// Returns a valid bearer token for the default audience.
     pub async fn get_token(&self) -> Result<String, Box<dyn std::error::Error>> {
-        Err("service token minter is not configured".into())
+        Err(Box::new(crate::manager::TokenMinterNotConfigured))
     }
 
     /// Returns a valid bearer token for the given audience, performing exchange if needed.
     pub async fn get_token_for(&self, audience: &str) -> Result<String, Box<dyn std::error::Error>> {
         let _ = audience;
-        Err("service token minter is not configured".into())
+        Err(Box::new(crate::manager::TokenMinterNotConfigured))
     }
 
     /// Clears all cached tokens, forcing re-exchange.

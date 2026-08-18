@@ -178,7 +178,7 @@ public class CloudMinter {
             }
         }
 {{else}}
-        throw new IllegalStateException("service token minter is not configured");
+        throw new IdentityManager.TokenMinterNotConfiguredException("service token minter is not configured");
 {{end}}
     }
 
@@ -205,7 +205,7 @@ public class CloudMinter {
         tokens.put(audience, new TokenEntry(serviceToken, tokenExp));
         return serviceToken;
 {{else}}
-        throw new IllegalStateException("service token minter is not configured");
+        throw new IdentityManager.TokenMinterNotConfiguredException("service token minter is not configured");
 {{end}}
     }
 
@@ -266,7 +266,7 @@ public class CloudMinter {
             }
         }
 {{else}}
-        throw new IllegalStateException("service token minter is not configured");
+        throw new IdentityManager.TokenMinterNotConfiguredException("service token minter is not configured");
 {{end}}
     }
 

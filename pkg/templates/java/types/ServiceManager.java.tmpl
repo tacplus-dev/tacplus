@@ -383,8 +383,10 @@ public class ServiceManager implements AutoCloseable {
             if (cur instanceof ServiceConnection.MissingTrustDomainException) {
                 return true;
             }
-            String msg = cur.getMessage();
-            if (msg != null && msg.contains("service token minter is not configured")) {
+            // A build with no token exchanger can never mint a service token, so
+            // the identity chassis refuses at construction. Same rule: classified
+            // by TYPE, not by message-substring matching (NEW-21 leg b).
+            if (cur instanceof IdentityManager.TokenMinterNotConfiguredException) {
                 return true;
             }
         }

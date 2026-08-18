@@ -33,7 +33,8 @@ func TestGeneratedServiceManagerIdentityErrorSelfTestIsEmitted(t *testing.T) {
 		`"example.com/acme/model/chassis/service_im"`,
 		`fmt.Errorf("service mesh client: %w", servicemanager.ErrMissingTrustDomain)`,
 		"errors.New(servicemanager.ErrMissingTrustDomain.Error())",
-		`errors.New("identity: service token minter is not configured")`,
+		"isPermanentIdentityInitError(service_im.ErrTokenMinterNotConfigured)",
+		"errors.New(service_im.ErrTokenMinterNotConfigured.Error())",
 		`errors.New("connection refused")`,
 	} {
 		if !strings.Contains(rendered, want) {
@@ -56,6 +57,24 @@ func TestGoServiceManagerClassifiesMissingTrustDomainByTypedSentinel(t *testing.
 	}
 	if strings.Contains(tmpl, `strings.Contains(err.Error(), "spiffe_trust_domain`) {
 		t.Fatal("Go ServiceManager must not classify a missing trust domain by message substring (NEW-21)")
+	}
+}
+
+// NEW-21 leg (b): the missing-minter half of the classifier is typed too. It was
+// the last message-substring seam in the classifier — the chassis message is not
+// a contract, and rewording it silently turned a permanent misconfiguration back
+// into ~13 minutes of retries.
+func TestGoServiceManagerClassifiesMissingTokenMinterByTypedSentinel(t *testing.T) {
+	tmpl, err := loadTemplate("service_manager.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate service_manager.go.tmpl: %v", err)
+	}
+	if !strings.Contains(tmpl, "return errors.Is(err, service_im.ErrTokenMinterNotConfigured)") {
+		t.Fatal("Go ServiceManager must classify a missing token minter by typed sentinel (NEW-21 leg b)")
+	}
+	if strings.Contains(tmpl, "strings.Contains(err.Error()") {
+		t.Fatal("Go ServiceManager must not classify a permanent identity-init failure by message " +
+			"substring: the chassis message is not a contract (NEW-21)")
 	}
 }
 

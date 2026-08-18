@@ -54,13 +54,21 @@ func TestIsPermanentIdentityInitErrorClassifiesMissingTrustDomain(t *testing.T) 
 	}
 }
 
-// The other permanent startup condition. Its seam is still a message substring
-// (there is no sentinel to match on), so it is pinned by behavior here rather
-// than only by the template text.
+// The other permanent startup condition: a build with no token exchanger can
+// never mint a service token, so identity init refuses at construction. Typed
+// like the trust-domain one (NEW-21 leg b) — an error merely carrying the same
+// text is NOT the sentinel.
 func TestIsPermanentIdentityInitErrorClassifiesMissingTokenMinter(t *testing.T) {
-	err := errors.New("identity: service token minter is not configured")
-	if !isPermanentIdentityInitError(err) {
+	if !isPermanentIdentityInitError(service_im.ErrTokenMinterNotConfigured) {
 		t.Error("a missing token minter must be classified permanent; it cannot heal by retrying")
+	}
+	if !isPermanentIdentityInitError(fmt.Errorf("identity: %w", service_im.ErrTokenMinterNotConfigured)) {
+		t.Error("a wrapped ErrTokenMinterNotConfigured must be classified permanent; the classifier " +
+			"must use errors.Is, not equality")
+	}
+	if isPermanentIdentityInitError(errors.New(service_im.ErrTokenMinterNotConfigured.Error())) {
+		t.Error("missing-minter classification must be by typed sentinel (errors.Is), not by " +
+			"message text; a substring match re-introduces the NEW-21 seam")
 	}
 }
 

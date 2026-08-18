@@ -697,6 +697,12 @@ public class StateClient implements AutoCloseable {
                             // accepted; clears the degraded health floor.
                             {{$.IdentityManagerFQN}}.noteCredentialAccepted();
                             recordWatchHealthy("Watch{{.FieldPascal}}", true);
+                            // Client-side safety limit from (spec.eviction_max_size);
+                            // diagnostic only, the snapshot is still cached in full.
+                            if (value.getEntriesMap().size() > {{.MaxEntries}}) {
+                                LOG.severe("Watch{{.FieldPascal}} snapshot exceeds max collection size - implement paging for large collections"
+                                        + " (received=" + value.getEntriesMap().size() + ", max={{.MaxEntries}})");
+                            }
                             replaceAll{{.FieldPascal}}FromWatch(value.getEntriesMap());
                         }
 

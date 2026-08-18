@@ -36,6 +36,10 @@ type pyCollectionBoundary struct {
 	TypeName     string // PascalCase item type: "Player"
 	KeyFieldName string // snake_case key field: "player_id"
 	IsPersisted  bool
+
+	// MaxEntries is the client-side snapshot safety limit: the field's
+	// (spec.eviction_max_size) when declared, else the shared default.
+	MaxEntries int64
 }
 
 // pyStateImportField describes a field with state_import annotation.
@@ -293,6 +297,8 @@ func generatePyStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc *p
 				TypeName:     typeName,
 				KeyFieldName: escapePyKeyword(strutil.ToSnakeCase(keyFieldName)),
 				IsPersisted:  field.Annotations["persistence"].BoolValue,
+
+				MaxEntries: boundaries.CollectionSafetyLimit(field),
 			})
 		} else {
 			singletons = append(singletons, pySingletonBoundary{

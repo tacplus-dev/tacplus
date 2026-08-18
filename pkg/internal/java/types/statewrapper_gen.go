@@ -41,6 +41,10 @@ type javaCollectionBoundary struct {
 	KeyFieldName   string // camelCase: "playerId"
 	KeyFieldPascal string // PascalCase: "PlayerId"
 	IsPersisted    bool
+
+	// MaxEntries is the client-side snapshot safety limit: the field's
+	// (spec.eviction_max_size) when declared, else the shared default.
+	MaxEntries int64
 }
 
 // javaStateImportField describes a field with state_import annotation.
@@ -410,6 +414,8 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 				KeyFieldName:   keyFieldName,
 				KeyFieldPascal: keyFieldPascal,
 				IsPersisted:    field.Annotations["persistence"].BoolValue,
+
+				MaxEntries: boundaries.CollectionSafetyLimit(field),
 			})
 		} else {
 			singletons = append(singletons, javaSingletonBoundary{

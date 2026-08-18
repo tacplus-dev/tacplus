@@ -112,6 +112,24 @@ func CollectMessageBoundaries(msg *parser.MessageDescriptor, fd *parser.FileDesc
 	return boundaries
 }
 
+// DefaultCollectionSafetyLimit is the entry count a generated state-client
+// collection watch accepts without complaint when the boundary field declares
+// no (spec.eviction_max_size). It mirrors the Go state wrapper's long-standing
+// maxEntries default so every language reports the same overflow.
+const DefaultCollectionSafetyLimit = 100000
+
+// CollectionSafetyLimit returns the client-side entry bound a generated
+// collection watch enforces for a state boundary field: the field's
+// (spec.eviction_max_size) when it declares one, otherwise
+// DefaultCollectionSafetyLimit. Every language's state-wrapper generator reads
+// the annotation through here so the emitters cannot drift from each other.
+func CollectionSafetyLimit(field parser.FieldDescriptor) int64 {
+	if ann, ok := field.Annotations["eviction_max_size"]; ok && ann.IntValue > 0 {
+		return ann.IntValue
+	}
+	return DefaultCollectionSafetyLimit
+}
+
 // CollectAllBoundaries collects boundary metadata from all file descriptors.
 func CollectAllBoundaries(fds []*parser.FileDescriptor) []BoundaryData {
 	var all []BoundaryData

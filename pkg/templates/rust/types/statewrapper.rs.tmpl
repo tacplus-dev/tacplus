@@ -693,6 +693,15 @@ impl {{.StateRootName}}ClientInner {
                 Ok(resp) => {
                     received = true;
                     self.record_watch_healthy("Watch{{.FieldPascal}}", true);
+                    // Client-side safety limit from (spec.eviction_max_size);
+                    // diagnostic only, the snapshot is still cached in full.
+                    if resp.entries.len() > {{.MaxEntries}} {
+                        tracing::error!(
+                            received = resp.entries.len(),
+                            max = {{.MaxEntries}},
+                            "Watch{{.FieldPascal}} snapshot exceeds max collection size - implement paging for large collections"
+                        );
+                    }
                     let (callbacks, subscribers, snapshot) = {
                         let mut state = self.state.write().unwrap();
                         state.{{.FieldName}}_cache.clear();

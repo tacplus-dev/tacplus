@@ -251,6 +251,14 @@ class {{.StateRootName}}Client:
                     received = True
                     attempt = 0
                     self._record_watch_healthy("Watch{{.FieldPascal}}", True)
+                    # Client-side safety limit from (spec.eviction_max_size);
+                    # diagnostic only, the snapshot is still cached in full.
+                    if len(value.entries) > {{.MaxEntries}}:
+                        logger.error(
+                            "Watch{{.FieldPascal}} snapshot exceeds max collection size - implement paging for large collections (received=%d, max=%d)",
+                            len(value.entries),
+                            {{.MaxEntries}},
+                        )
                     self._{{.FieldName}} = {
                         str(k): copy.deepcopy(v)
                         for k, v in value.entries.items()

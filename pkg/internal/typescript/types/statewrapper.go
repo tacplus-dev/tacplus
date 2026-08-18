@@ -38,6 +38,10 @@ type tsCollectionBoundary struct {
 	TypePrefix   string // import alias: "types" (own package) or "x509Types" (cross-package)
 	KeyFieldName string // camelCase key field: "playerId"
 	IsPersisted  bool
+
+	// MaxEntries is the client-side snapshot safety limit: the field's
+	// (spec.eviction_max_size) when declared, else the shared default.
+	MaxEntries int64
 }
 
 // tsStateImportField describes a field with state_import annotation.
@@ -315,6 +319,8 @@ func generateTSStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc *p
 				TypePrefix:   typePrefix,
 				KeyFieldName: keyFieldName,
 				IsPersisted:  field.Annotations["persistence"].BoolValue,
+
+				MaxEntries: boundaries.CollectionSafetyLimit(field),
 			})
 		} else {
 			singletons = append(singletons, tsSingletonBoundary{

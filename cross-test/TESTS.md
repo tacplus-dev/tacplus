@@ -3,6 +3,14 @@
 The cross-test suite has these gates (see `.gitlab-ci.yml` and
 `cross-test/nightly-matrix.sh` for exactly where each runs):
 
+LED-2 status: the three mechanical phases of cross-language runtime evidence are
+all complete — servers (`server-runtime`, java/rust hosts driven by the go
+client), the golden-byte wire corpus (`wire-corpus`, one encode decoded and
+value-asserted by five languages), and clients (`server-runtime`'s client half,
+java client -> rust server and rust client -> java server). What remains is
+breadth, not a missing kind of evidence: the full N x N client/server matrix,
+W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
+
 - `cmd/soundness` (`go run ./cmd/soundness -root .`): source-level parity —
   derive the canonical `assert_*` constraint set from `sys/spec.proto`, report
   constraint-handler parity across supported target surfaces, and fail if any
@@ -32,21 +40,29 @@ The cross-test suite has these gates (see `.gitlab-ci.yml` and
   endpoints) and the python/typescript generated CLIENTS exercise it over the
   wire. Runs per-consumer in the `runtime-smoke-mr` CI job and in the nightly
   matrix.
-- `server-runtime` (`cross-test/server-runtime/run.sh`): cross-language SERVER
-  runtime gate — the transpose of `runtime-smoke`. A real generated JAVA
+- `server-runtime` (`cross-test/server-runtime/run.sh`): cross-language runtime
+  gate for java and rust, in BOTH directions. Server half: a real generated JAVA
   `ContractApi` server wrapper and a real generated RUST `ContractApi`
   `ValidationWrapper` are each hosted on a TCP port and driven by the generated
-  GO C2S client over the wire (unary `auth_disabled`, `auth_any_user` SNAPSHOT
-  stream, `auth_any_user` PAGE with keyset continuation across two pages, and
-  the fail-closed rejection of an `auth_entitled_users` method before the
-  handler). This is the only in-repo evidence that java- and rust-hosted
-  generated servers interoperate with another language's generated client;
-  before it, both languages appeared only as self-generated client+server pairs
-  inside one process. Server coverage ONLY — the full N x N client/server
-  matrix, W2S against java/rust hosts, and the shared cross-language constraint
-  corpus are still NOT covered. Local/manual
-  (`just -f cross-test/justfile server-runtime`); not in CI, not in `just test`,
-  not in the nightly matrix.
+  GO C2S client over the wire. Client half: the real generated JAVA C2S client
+  drives the RUST-hosted server, and the real generated RUST C2S client drives
+  the JAVA-hosted server. Every leg asserts the same four things (unary
+  `auth_disabled`, `auth_any_user` SNAPSHOT stream, `auth_any_user` PAGE with
+  keyset continuation across two pages, and the fail-closed rejection of an
+  `auth_entitled_users` method before the handler). This is the only in-repo
+  evidence that java and rust generated code interoperates with another
+  language's generated code over the wire at all; before it, both languages
+  appeared only as self-generated client+server pairs inside one process.
+  One cross-language pairing per driving client, NOT the full N x N matrix —
+  python/typescript/swift/csharp as driving clients against java/rust hosts,
+  java/rust against a go host, W2S against java/rust hosts, and
+  `Watch`/client-streaming/bidi legs are still NOT covered. Known and
+  documented cross-language difference: the fail-closed leg returns
+  `UNAUTHENTICATED` from the java host and `PERMISSION_DENIED` from the rust
+  host, because java emits a concrete default `Authorizer` while rust emits only
+  the trait. Local/manual (`just -f cross-test/justfile server-runtime`, or
+  `server-runtime-clients` for the client half alone); not in CI, not in
+  `just test`, not in the nightly matrix.
 - `wire-corpus` (`cross-test/wire-corpus/run.sh`): cross-language
   SERIALIZATION-EQUIVALENCE gate. One `CorpusRecord` message is encoded ONCE by
   go, deterministically, into checked-in golden bytes

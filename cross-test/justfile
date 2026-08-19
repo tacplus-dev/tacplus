@@ -72,6 +72,7 @@ runtime-smoke-typescript:
 # Cross-language SERVER coverage: real generated java/rust servers driven by
 # the generated go client. Multi-runtime (go + maven + cargo) and slow, so it
 # is a standalone target and is NOT part of `just test`.
+# The default target also runs the CLIENT half below.
 server-runtime:
     bash {{root}}/server-runtime/run.sh
 
@@ -80,6 +81,17 @@ server-runtime-java:
 
 server-runtime-rust:
     bash {{root}}/server-runtime/run.sh --server rust
+
+# Cross-language CLIENT coverage: the generated java client driving the
+# rust-hosted server and the generated rust client driving the java-hosted
+# server. Same multi-runtime cost, same standalone rules.
+server-runtime-clients: server-runtime-client-java server-runtime-client-rust
+
+server-runtime-client-java:
+    bash {{root}}/server-runtime/run.sh --client java
+
+server-runtime-client-rust:
+    bash {{root}}/server-runtime/run.sh --client rust
 
 # Cross-language SERIALIZATION-EQUIVALENCE coverage: one message, encoded once
 # by go into a checked-in golden byte corpus, decoded and value-asserted by all

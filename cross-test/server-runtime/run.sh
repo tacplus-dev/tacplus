@@ -1,30 +1,36 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 Second Star Cavalier LLC
 #
-# Cross-language SERVER runtime gate (LED-2 phase 1).
+# Cross-language RUNTIME gate for java and rust (LED-2 phases 1 and 3).
 #
-# runtime-smoke covers the transpose of this gate: a GO generated server driven
-# by python/typescript generated clients. Java and Rust generated servers had
-# never been driven by another language's client anywhere in the repo — both
-# only ever appeared as self-generated client+server pairs inside a single
-# process (consumer-contract). This gate closes the SERVER half:
+# runtime-smoke covers a GO generated server driven by python/typescript
+# generated clients. Java and Rust generated code had never crossed a language
+# boundary over the wire in either direction — both only ever appeared as
+# self-generated client+server pairs inside a single process
+# (consumer-contract). This gate closes both halves:
 #
+#   SERVER half (phase 1):
 #   - a real generated JAVA ContractApi server wrapper, hosted on a TCP port,
 #     driven by the generated GO C2S client
 #   - a real generated RUST ContractApi ValidationWrapper, likewise, driven by
 #     the generated GO C2S client
 #
+#   CLIENT half (phase 3):
+#   - the real generated JAVA C2S client driving the RUST-hosted server
+#   - the real generated RUST C2S client driving the JAVA-hosted server
+#
 # The fixtures implement ONLY the generated handler interfaces (and the auth
 # seams the generator exposes). Validation, PAGE token encoding, egress
-# sanitization, auth gating and dispatch are the generated wrappers' code.
+# sanitization, auth gating and dispatch are the generated wrappers' code; the
+# drivers are the generated C2S clients and do nothing by hand.
 #
-# Coverage per server: auth_disabled unary, auth_any_user server-streaming
+# Coverage per leg: auth_disabled unary, auth_any_user server-streaming
 # (SNAPSHOT), auth_any_user PAGE with keyset continuation across two pages, and
 # the fail-closed rejection of an auth_entitled_users method before the handler.
 #
-# NOT covered here, deliberately (deferred phase): the full N x N client/server
-# matrix, python/typescript/swift/csharp as driving clients against java/rust,
-# W2S surfaces, and the shared cross-language constraint corpus.
+# NOT covered here, deliberately: the full N x N client/server matrix
+# (python/typescript/swift/csharp as driving clients against java/rust hosts),
+# W2S surfaces against java/rust hosts, and Watch/client-streaming/bidi legs.
 #
 # Separate from runtime-smoke and NOT part of `just test`: it needs the go, java
 # (maven) and rust (cargo) toolchains concurrently.
@@ -37,6 +43,7 @@ WORK_ROOT="${TACPLUS_SERVER_RUNTIME_WORKDIR:-}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 KEEP_WORK="${TACPLUS_SERVER_RUNTIME_KEEP:-false}"
 SERVER_FILTER=""
+CLIENT_FILTER=""
 FIXTURE_PID=""
 CLIENT_TIMEOUT_SECONDS=300
 
@@ -46,11 +53,16 @@ Usage:
   cross-test/server-runtime/run.sh [options]
 
 Options:
-  --server LANG     Run one hosted server: java, rust
+  --server LANG     Run one hosted-server leg (driven by the go client): java, rust
+  --client LANG     Run one driving-client leg (against the other language's
+                    hosted server): java, rust
   --workdir DIR     Use a specific temporary work directory
   --tacplus BIN     Use an existing tacplus binary
   --keep            Keep the temporary work directory
   -h, --help        Show this help
+
+With no --server/--client filter both halves run. Passing only one of them
+narrows the run to that half.
 
 Environment:
   TACPLUS_BIN                          Existing tacplus binary to use
@@ -75,6 +87,11 @@ while [[ $# -gt 0 ]]; do
     --server)
       need_value "$1" "${2:-}"
       SERVER_FILTER="$2"
+      shift 2
+      ;;
+    --client)
+      need_value "$1" "${2:-}"
+      CLIENT_FILTER="$2"
       shift 2
       ;;
     --workdir)
@@ -108,6 +125,30 @@ case "$SERVER_FILTER" in
   java|rust ) servers=("$SERVER_FILTER") ;;
   * ) die "unsupported server: $SERVER_FILTER" ;;
 esac
+
+case "$CLIENT_FILTER" in
+  "" ) clients=(java rust) ;;
+  java|rust ) clients=("$CLIENT_FILTER") ;;
+  * ) die "unsupported client: $CLIENT_FILTER" ;;
+esac
+
+# Passing only one filter narrows the run to that half.
+if [[ -n "$SERVER_FILTER" && -z "$CLIENT_FILTER" ]]; then
+  clients=()
+elif [[ -n "$CLIENT_FILTER" && -z "$SERVER_FILTER" ]]; then
+  servers=()
+fi
+
+# Each driving client is paired with the OTHER language's hosted server: that is
+# the pairing this repo had no evidence for at all, and it reuses the servers
+# this gate already hosts instead of standing up new fixtures.
+peer_server_for_client() {
+  case "$1" in
+    java) echo rust ;;
+    rust) echo java ;;
+    *) die "no peer server for client: $1" ;;
+  esac
+}
 
 if [[ -z "$WORK_ROOT" ]]; then
   WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/tacplus-server-runtime.XXXXXX")"
@@ -221,7 +262,7 @@ replace gitlab.com/example/tacplus/consumer/contractclient => ..
 EOF
 }
 
-# The DRIVING client: the generated go C2S client, built once and pointed at
+# The go DRIVING client: the generated go C2S client, built once and pointed at
 # each hosted server in turn.
 build_go_client() {
   local dir="$WORK_ROOT/go-client"
@@ -229,7 +270,7 @@ build_go_client() {
   write_go_mod "$dir/go.mod"
   local client_dir="$dir/client"
   mkdir -p "$client_dir"
-  cp "$GATE_DIR/client/main.go" "$client_dir/main.go"
+  cp "$GATE_DIR/client/go/main.go" "$client_dir/main.go"
   write_client_mod "$client_dir/go.mod"
   echo "==> Building go generated-client driver"
   (cd "$client_dir" && go mod tidy && go build -o client .) >"$dir/client-build.log" 2>&1 || {
@@ -237,7 +278,7 @@ build_go_client() {
     die "go client build failed"
   }
   assert_clean_log "$dir/client-build.log"
-  CLIENT_BIN="$client_dir/client"
+  GO_CLIENT_BIN="$client_dir/client"
 }
 
 java_home_env() {
@@ -253,9 +294,13 @@ java_home_env() {
   fi
 }
 
-build_java_server() {
-  command -v mvn >/dev/null || die "mvn is required to build the java fixture server"
-  local dir="$WORK_ROOT/java-server"
+# Generates and compiles the java model once; both the java fixture server and
+# the java driving client link against it.
+JAVA_MODEL_READY=false
+build_java_model() {
+  [[ "$JAVA_MODEL_READY" == true ]] && return
+  command -v mvn >/dev/null || die "mvn is required to build the java model"
+  local dir="$WORK_ROOT/java"
   generate_model java "$dir"
   local output="$dir/model"
   local compile_dir="$dir/compile"
@@ -278,58 +323,102 @@ build_java_server() {
   }
   assert_clean_log "$dir/classpath.log"
 
+  JAVA_MODEL_DIR="$dir"
   JAVA_CLASSPATH="$compile_dir/target/classes:$(cat "$dir/classpath.txt")"
-  local fixture_dir="$dir/fixture"
-  mkdir -p "$fixture_dir/classes"
-  cp "$GATE_DIR/fixture/java/Fixture.java" "$fixture_dir/Fixture.java"
-
-  local javac=javac java_bin=java
+  JAVA_JAVAC=javac
+  JAVA_BIN=java
   if [[ -n "$java_env" ]]; then
-    javac="${java_env#JAVA_HOME=}/bin/javac"
-    java_bin="${java_env#JAVA_HOME=}/bin/java"
+    JAVA_JAVAC="${java_env#JAVA_HOME=}/bin/javac"
+    JAVA_BIN="${java_env#JAVA_HOME=}/bin/java"
   fi
-  echo "==> Compiling java fixture server"
-  "$javac" -Xlint:all -Werror --release 17 -cp "$JAVA_CLASSPATH" -d "$fixture_dir/classes" "$fixture_dir/Fixture.java" \
-    >"$dir/fixture-build.log" 2>&1 || {
-    cat "$dir/fixture-build.log" >&2
-    die "java fixture server build failed"
-  }
-  assert_clean_log "$dir/fixture-build.log"
-  JAVA_BIN="$java_bin"
-  JAVA_FIXTURE_CLASSPATH="$fixture_dir/classes:$JAVA_CLASSPATH"
-  JAVA_LOG_DIR="$dir"
+  JAVA_MODEL_READY=true
 }
 
-build_rust_server() {
-  command -v cargo >/dev/null || die "cargo is required to build the rust fixture server"
-  local dir="$WORK_ROOT/rust-server"
+# Compiles one java fixture source (server or client) against the model.
+compile_java_source() {
+  local kind="$1"
+  local src="$2"
+  local dir="$JAVA_MODEL_DIR/$kind"
+  mkdir -p "$dir/classes"
+  cp "$src" "$dir/$(basename "$src")"
+  echo "==> Compiling java $kind"
+  "$JAVA_JAVAC" -Xlint:all -Werror --release 17 -cp "$JAVA_CLASSPATH" -d "$dir/classes" "$dir/$(basename "$src")" \
+    >"$JAVA_MODEL_DIR/$kind-build.log" 2>&1 || {
+    cat "$JAVA_MODEL_DIR/$kind-build.log" >&2
+    die "java $kind build failed"
+  }
+  assert_clean_log "$JAVA_MODEL_DIR/$kind-build.log"
+  JAVA_COMPILED_CLASSPATH="$dir/classes:$JAVA_CLASSPATH"
+}
+
+build_java_server() {
+  build_java_model
+  compile_java_source fixture "$GATE_DIR/fixture/java/Fixture.java"
+  JAVA_FIXTURE_CLASSPATH="$JAVA_COMPILED_CLASSPATH"
+  JAVA_LOG_DIR="$JAVA_MODEL_DIR"
+}
+
+build_java_client() {
+  build_java_model
+  compile_java_source client "$GATE_DIR/client/java/Client.java"
+  JAVA_CLIENT_CLASSPATH="$JAVA_COMPILED_CLASSPATH"
+}
+
+# Generates the rust model once; both the rust fixture server and the rust
+# driving client link against it.
+RUST_MODEL_READY=false
+build_rust_model() {
+  [[ "$RUST_MODEL_READY" == true ]] && return
+  command -v cargo >/dev/null || die "cargo is required to build the rust fixtures"
+  local dir="$WORK_ROOT/rust"
   generate_model rust "$dir"
-  local output="$dir/model"
-  local fixture_dir="$dir/fixture"
-  mkdir -p "$fixture_dir/src"
-  cp "$GATE_DIR/fixture/rust/main.rs" "$fixture_dir/src/main.rs"
-  cat > "$fixture_dir/Cargo.toml" <<EOF
+  RUST_MODEL_DIR="$dir"
+  RUST_MODEL_READY=true
+}
+
+# Builds one rust fixture crate (server or client) against the model.
+build_rust_crate() {
+  local kind="$1"
+  local src="$2"
+  local crate="server-runtime-rust-$kind"
+  local dir="$RUST_MODEL_DIR/$kind"
+  mkdir -p "$dir/src"
+  cp "$src" "$dir/src/main.rs"
+  cat > "$dir/Cargo.toml" <<EOF
 [package]
-name = "server-runtime-rust-fixture"
+name = "$crate"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-collection = { path = "$output/chassis/collection" }
-contractclient-model = { path = "$output" }
-servicemanager = { path = "$output/chassis/servicemanager" }
+collection = { path = "$RUST_MODEL_DIR/model/chassis/collection" }
+contractclient-model = { path = "$RUST_MODEL_DIR/model" }
+futures = "0.3.31"
+servicemanager = { path = "$RUST_MODEL_DIR/model/chassis/servicemanager" }
 tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "net", "signal", "sync"] }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tonic = "0.14.0"
 EOF
-  echo "==> Building rust fixture server"
-  (cd "$fixture_dir" && CARGO_TARGET_DIR="$fixture_dir/target" cargo build --quiet) >"$dir/fixture-build.log" 2>&1 || {
-    cat "$dir/fixture-build.log" >&2
-    die "rust fixture server build failed"
+  echo "==> Building rust $kind"
+  (cd "$dir" && CARGO_TARGET_DIR="$dir/target" cargo build --quiet) >"$RUST_MODEL_DIR/$kind-build.log" 2>&1 || {
+    cat "$RUST_MODEL_DIR/$kind-build.log" >&2
+    die "rust $kind build failed"
   }
-  assert_clean_log "$dir/fixture-build.log"
-  RUST_FIXTURE_BIN="$fixture_dir/target/debug/server-runtime-rust-fixture"
-  RUST_LOG_DIR="$dir"
+  assert_clean_log "$RUST_MODEL_DIR/$kind-build.log"
+  RUST_CRATE_BIN="$dir/target/debug/$crate"
+}
+
+build_rust_server() {
+  build_rust_model
+  build_rust_crate fixture "$GATE_DIR/fixture/rust/main.rs"
+  RUST_FIXTURE_BIN="$RUST_CRATE_BIN"
+  RUST_LOG_DIR="$RUST_MODEL_DIR"
+}
+
+build_rust_client() {
+  build_rust_model
+  build_rust_crate client "$GATE_DIR/client/rust/main.rs"
+  RUST_CLIENT_BIN="$RUST_CRATE_BIN"
 }
 
 # Starts a fixture server, waits for its {"grpc":"host:port"} startup line, and
@@ -359,6 +448,30 @@ start_fixture() {
   }
 }
 
+# Starts the hosted server for one language and leaves SERVER_ADDR set.
+start_server_for() {
+  case "$1" in
+    java)
+      build_java_server
+      # --sun-misc-unsafe-memory-access=allow: protobuf-java/netty still use
+      # sun.misc.Unsafe; JDK 24+ warns on first use and this gate asserts the
+      # fixture server's stderr stays empty.
+      start_fixture "$JAVA_LOG_DIR" "$JAVA_BIN" --sun-misc-unsafe-memory-access=allow \
+        -Dlogback.configurationFile="$GATE_DIR/fixture/java/logback.xml" \
+        -cp "$JAVA_FIXTURE_CLASSPATH" fixture.Fixture
+      SERVER_LOG_DIR="$JAVA_LOG_DIR"
+      ;;
+    rust)
+      build_rust_server
+      start_fixture "$RUST_LOG_DIR" "$RUST_FIXTURE_BIN"
+      SERVER_LOG_DIR="$RUST_LOG_DIR"
+      ;;
+    *)
+      die "unsupported server: $1"
+      ;;
+  esac
+}
+
 finish_fixture() {
   local log_dir="$1"
   stop_fixture
@@ -368,42 +481,68 @@ finish_fixture() {
   fi
 }
 
+# Runs one driving client against the currently started server.
 run_client_against() {
-  local lang="$1"
-  local log_dir="$2"
-  echo "==> Driving the $lang generated server with the go generated client ($SERVER_ADDR)"
-  TACPLUS_SERVER_ADDR="$SERVER_ADDR" TACPLUS_SERVER_LANG="$lang" \
-    timeout "$CLIENT_TIMEOUT_SECONDS" "$CLIENT_BIN" >"$log_dir/client.log" 2>&1 || {
-    cat "$log_dir/client.log" >&2
+  local client_lang="$1"
+  local server_lang="$2"
+  local log_dir="$3"
+  shift 3
+  local log="$log_dir/client-$client_lang.log"
+  echo "==> Driving the $server_lang generated server with the $client_lang generated client ($SERVER_ADDR)"
+  TACPLUS_SERVER_ADDR="$SERVER_ADDR" TACPLUS_SERVER_LANG="$server_lang" \
+    timeout "$CLIENT_TIMEOUT_SECONDS" "$@" >"$log" 2>&1 || {
+    cat "$log" >&2
     cat "$log_dir/fixture-stderr.log" >&2 || true
-    die "go generated client failed against the $lang generated server"
+    die "$client_lang generated client failed against the $server_lang generated server"
   }
-  cat "$log_dir/client.log"
-  assert_clean_log "$log_dir/client.log"
+  cat "$log"
+  assert_clean_log "$log"
 }
 
-build_go_client
+if [[ ${#servers[@]} -gt 0 ]]; then
+  build_go_client
+fi
 
-for server in "${servers[@]}"; do
-  case "$server" in
-    java)
-      build_java_server
-      # --sun-misc-unsafe-memory-access=allow: protobuf-java/netty still use
-      # sun.misc.Unsafe; JDK 24+ warns on first use and this gate asserts the
-      # fixture server's stderr stays empty.
-      start_fixture "$JAVA_LOG_DIR" "$JAVA_BIN" --sun-misc-unsafe-memory-access=allow \
-        -Dlogback.configurationFile="$GATE_DIR/fixture/java/logback.xml" \
-        -cp "$JAVA_FIXTURE_CLASSPATH" fixture.Fixture
-      run_client_against java "$JAVA_LOG_DIR"
-      finish_fixture "$JAVA_LOG_DIR"
-      ;;
-    rust)
-      build_rust_server
-      start_fixture "$RUST_LOG_DIR" "$RUST_FIXTURE_BIN"
-      run_client_against rust "$RUST_LOG_DIR"
-      finish_fixture "$RUST_LOG_DIR"
-      ;;
-  esac
+# SERVER half: each hosted server driven by the go generated client.
+for server in "${servers[@]:-}"; do
+  [[ -n "$server" ]] || continue
+  start_server_for "$server"
+  run_client_against go "$server" "$SERVER_LOG_DIR" "$GO_CLIENT_BIN"
+  finish_fixture "$SERVER_LOG_DIR"
 done
 
-echo "server-runtime OK (${servers[*]} generated servers driven by the go generated client)"
+# CLIENT half: each generated client driving the OTHER language's hosted server.
+for client in "${clients[@]:-}"; do
+  [[ -n "$client" ]] || continue
+  peer="$(peer_server_for_client "$client")"
+  case "$client" in
+    java)
+      build_java_client
+      start_server_for "$peer"
+      run_client_against java "$peer" "$SERVER_LOG_DIR" \
+        "$JAVA_BIN" --sun-misc-unsafe-memory-access=allow \
+        -Dlogback.configurationFile="$GATE_DIR/fixture/java/logback.xml" \
+        -cp "$JAVA_CLIENT_CLASSPATH" client.Client
+      ;;
+    rust)
+      build_rust_client
+      start_server_for "$peer"
+      run_client_against rust "$peer" "$SERVER_LOG_DIR" "$RUST_CLIENT_BIN"
+      ;;
+  esac
+  finish_fixture "$SERVER_LOG_DIR"
+done
+
+summary=""
+if [[ ${#servers[@]} -gt 0 ]]; then
+  summary="${servers[*]} generated servers driven by the go generated client"
+fi
+if [[ ${#clients[@]} -gt 0 ]]; then
+  pairs=()
+  for client in "${clients[@]}"; do
+    pairs+=("$client-client->$(peer_server_for_client "$client")-server")
+  done
+  [[ -n "$summary" ]] && summary="$summary; "
+  summary="$summary${pairs[*]}"
+fi
+echo "server-runtime OK ($summary)"

@@ -11,6 +11,7 @@ just -f cross-test/justfile current-generation
 just consumer-build
 just -f cross-test/justfile runtime-smoke
 just -f cross-test/justfile server-runtime
+just -f cross-test/justfile server-runtime-clients
 just -f cross-test/justfile wire-corpus
 just consumer-smoke
 just consumer-smoke-go
@@ -41,17 +42,21 @@ It runs in the `runtime-smoke-mr` CI job and the nightly matrix; it lives
 outside `consumer-contract` because it needs go build + python + node
 runtimes concurrently.
 
-`server-runtime` is the transpose of `runtime-smoke`: real generated JAVA and
-RUST `ContractApi` servers are each hosted on a TCP port and driven by the
-generated GO C2S client over the wire (unary `auth_disabled`, `auth_any_user`
-SNAPSHOT stream, `auth_any_user` PAGE with keyset continuation, and the
-fail-closed rejection of an `auth_entitled_users` method before the handler).
-It is the only in-repo evidence that java- and rust-hosted generated servers
-interoperate with another language's generated client. It is SERVER coverage
-only: the full N x N client/server matrix, W2S against java/rust hosts, and the
-shared cross-language constraint corpus remain uncovered. Local/manual — it
-needs go + maven + cargo concurrently, so it is not in CI, not in the nightly
-matrix, and not in `just test`. See `cross-test/server-runtime/README.md`.
+`server-runtime` is the cross-language runtime gate for java and rust, in both
+directions. Real generated JAVA and RUST `ContractApi` servers are each hosted
+on a TCP port and driven by the generated GO C2S client; the generated JAVA C2S
+client then drives the RUST-hosted server and the generated RUST C2S client
+drives the JAVA-hosted server. Every leg asserts the same four things (unary
+`auth_disabled`, `auth_any_user` SNAPSHOT stream, `auth_any_user` PAGE with
+keyset continuation, and the fail-closed rejection of an `auth_entitled_users`
+method before the handler). It is the only in-repo evidence that java and rust
+generated code interoperates with another language's generated code over the
+wire. It is one cross-language pairing per driving client, not the full N x N
+matrix: python/typescript/swift/csharp against java/rust hosts, java/rust
+against a go host, and W2S against java/rust hosts remain uncovered.
+Local/manual — it needs go + maven + cargo concurrently, so it is not in CI, not
+in the nightly matrix, and not in `just test`. See
+`cross-test/server-runtime/README.md`.
 
 `wire-corpus` is the serialization-equivalence gate: one `CorpusRecord`
 message is encoded ONCE by go into checked-in golden bytes

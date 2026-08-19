@@ -45,18 +45,21 @@ drive exhaustion in real time instead of wall-clock time.
 
 ## PC-L-9 — ServiceManager teardown leak evidence is synthetic
 
-**Status:** the leak oracle is real; what it measures is not a generated
-ServiceManager.
+**Status:** closed for goroutines; the open-FD leg runs on Linux only.
 
-`cross-test/chaos/oracle` has a `LeakOracle` that asserts resource counters stay
-flat across soak cycles, and `oracle_test.go` exercises it against hand-built
-counter trends. That tests the ORACLE's arithmetic. No test runs a generated
-ServiceManager through a create/teardown cycle and feeds its real counters in, so
-an SM that leaks on teardown would not be caught by anything here.
+`cross-test/chaos/leaksoak` generates a real Go model, runs the generated
+`chassis/servicemanager` ServiceManager through eight create/teardown cycles in
+that model's own process, and feeds the real `runtime.NumGoroutine()` trend into
+the unchanged `oracle.LeakOracle`. A live ServiceManager holds ten goroutines and
+settles back to the baseline after `Close()`; the harness fails if the live count
+never exceeds the baseline, so it cannot pass green by measuring nothing. Proven
+by reverting: a single parked goroutine per cycle turns the oracle red with a
+rising per-cycle `no_resource_leak` violation.
 
-**To close:** an SM lifecycle harness that can construct and tear down a generated
-ServiceManager repeatedly in-process and expose goroutine/connection/file-handle
-counts to the existing oracle. The oracle side is already built.
+**Remaining:** open FDs are scraped from `/proc/self/fd`, which does not exist on
+macOS, so the oracle's `OpenFDs` leg is inert on a developer Mac and live in
+Linux CI. Closing that would need an FD-count mechanism that is neither cgo nor
+`lsof`-shelling.
 
 ---
 

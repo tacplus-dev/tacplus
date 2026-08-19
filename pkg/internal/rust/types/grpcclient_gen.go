@@ -311,6 +311,8 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMa
 	// Build method implementations and extra types (bidi handles go outside impl block)
 	var methods strings.Builder
 	var extraTypes strings.Builder
+	usesOutboundTimeout := false
+	usesUnaryRetry := false
 	for _, method := range targetService.Methods {
 		result, err := generateRustGrpcClientMethod(targetService, method, info.Package, info.CrossPackageTypes)
 		if err != nil {
@@ -322,6 +324,8 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMa
 			extraTypes.WriteString(result.extraType)
 			extraTypes.WriteString("\n")
 		}
+		usesOutboundTimeout = usesOutboundTimeout || result.usesOutboundTimeout
+		usesUnaryRetry = usesUnaryRetry || result.usesUnaryRetry
 	}
 
 	clientName := svc.ServiceName + "GrpcClient"
@@ -334,6 +338,8 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMa
 		CrossPackageImports string
 		Methods             string
 		ExtraTypes          string
+		UsesOutboundTimeout bool
+		UsesUnaryRetry      bool
 	}{
 		Header:              header.GeneratedHeader(consts.LangRust, svc.ProtoFile),
 		ServiceName:         tonicName,
@@ -342,6 +348,8 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMa
 		CrossPackageImports: crossPkgImports.String(),
 		Methods:             methods.String(),
 		ExtraTypes:          extraTypes.String(),
+		UsesOutboundTimeout: usesOutboundTimeout,
+		UsesUnaryRetry:      usesUnaryRetry,
 	}
 
 	tmplStr, err := loadTemplate("grpcclient.rs.tmpl")
@@ -417,6 +425,13 @@ func grpcClientNames(svc ServiceInfo, svcNameCount map[string]int) (fieldName, c
 type grpcMethodResult struct {
 	method    string
 	extraType string // types that go outside the impl block (e.g. bidi handles)
+	// usesOutboundTimeout is true when the generated method body calls
+	// self.apply_outbound_timeout.
+	usesOutboundTimeout bool
+	// usesUnaryRetry is true when the generated method body calls
+	// self.unary_with_retry (which also pulls in should_retry_outbound and
+	// outbound_backoff).
+	usesUnaryRetry bool
 }
 
 func rustGrpcRequestValidation(method *parser.MethodInfo, reqVar string) string {
@@ -579,7 +594,7 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
             items.push(item);
         }
         Ok(items)
-    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, reqMut, rustGrpcRequestValidation(method, "req"), auth, channelResolve, methodSnake)}, nil
+    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, reqMut, rustGrpcRequestValidation(method, "req"), auth, channelResolve, methodSnake), usesOutboundTimeout: true}, nil
 	}
 
 	if method.ServerStreaming && method.IsWatchCollection() {
@@ -762,7 +777,7 @@ impl %s {
 			method.Name, svc.Name, method.Name,
 			methodSnake, inputType, itemType,
 			inputType, itemType,
-			methodSnake)}, nil
+			methodSnake), usesOutboundTimeout: true}, nil
 	}
 
 	// Unary method
@@ -795,5 +810,5 @@ impl %s {
 %s
                 Ok(response)
             })
-	    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, rustGrpcRequestValidation(method, "req_base"), retrySafe, reqMut, auth, channelResolve, methodSnake, rustGrpcResponseValidation(method, "response"))}, nil
+	    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, rustGrpcRequestValidation(method, "req_base"), retrySafe, reqMut, auth, channelResolve, methodSnake, rustGrpcResponseValidation(method, "response")), usesOutboundTimeout: true, usesUnaryRetry: true}, nil
 }

@@ -4,8 +4,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::{sleep, timeout};
-use servicemanager::ChannelProvider;
+{{if .UsesUnaryRetry}}use tokio::time::{sleep, timeout};
+{{end}}use servicemanager::ChannelProvider;
 {{.ServiceImports}}
 {{.CrossPackageImports}}
 
@@ -59,13 +59,13 @@ impl {{.ClientName}} {
         self.retry_backoff = retry_backoff;
         self
     }
-
+{{if .UsesOutboundTimeout}}
     fn apply_outbound_timeout<T>(&self, req: &mut tonic::Request<T>) {
         if !self.timeout.is_zero() {
             req.set_timeout(self.timeout);
         }
     }
-
+{{end}}{{if .UsesUnaryRetry}}
     fn should_retry_outbound(status: &tonic::Status) -> bool {
         matches!(
             status.code(),
@@ -109,7 +109,7 @@ impl {{.ClientName}} {
         }
         Err(tonic::Status::unknown("unreachable retry state"))
     }
-
+{{end}}
 {{.Methods}}
 }
 {{.ExtraTypes}}

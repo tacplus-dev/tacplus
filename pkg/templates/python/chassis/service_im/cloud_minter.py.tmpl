@@ -27,6 +27,15 @@ MAX_TOKEN_CACHE_ENTRIES = 1000
 HAS_TOKEN_EXCHANGER = {{if .HasTokenExchanger}}True{{else}}False{{end}}
 
 
+class TokenMinterNotConfiguredError(RuntimeError):
+    """Raised when this service was built without a token exchanger.
+
+    Subclasses RuntimeError so existing ``except RuntimeError`` handlers keep
+    working; callers that need to classify this as a permanent misconfiguration
+    should catch this type instead of matching on the message text.
+    """
+
+
 class CloudTokenMinter:
     """Handles cloud-native token exchange."""
 
@@ -89,7 +98,7 @@ class CloudTokenMinter:
 
     async def _do_cloud_exchange(self) -> None:
         if not HAS_TOKEN_EXCHANGER:
-            raise RuntimeError("service token minter is not configured")
+            raise TokenMinterNotConfiguredError("service token minter is not configured")
         if self._channel is None:
             raise RuntimeError("channel not set")
 
@@ -139,7 +148,7 @@ class CloudTokenMinter:
 
     async def _do_generic_exchange(self) -> None:
         if not HAS_TOKEN_EXCHANGER:
-            raise RuntimeError("service token minter is not configured")
+            raise TokenMinterNotConfiguredError("service token minter is not configured")
         if self._channel is None:
             raise RuntimeError("channel not set")
         if not self._refresh_token:
@@ -171,7 +180,7 @@ class CloudTokenMinter:
 
     async def _do_service_exchange(self, audience: str) -> str:
         if not HAS_TOKEN_EXCHANGER:
-            raise RuntimeError("service token minter is not configured")
+            raise TokenMinterNotConfiguredError("service token minter is not configured")
         if self._channel is None:
             raise RuntimeError("channel not set")
         if not self._generic_access:

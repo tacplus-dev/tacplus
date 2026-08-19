@@ -146,8 +146,10 @@ class ServiceManager:
         Generates an Ed25519 keypair locally, sends the public key for signing,
         and stores the returned cert chain + local private key.
         """
+        from {{.PythonPackageBase}}.chassis.service_im import TokenMinterNotConfiguredError
+
         if not HAS_TOKEN_EXCHANGER:
-            raise RuntimeError("service token minter is not configured")
+            raise TokenMinterNotConfiguredError("service token minter is not configured")
 
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         from cryptography.hazmat.primitives.serialization import (

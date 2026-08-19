@@ -12,11 +12,12 @@ Owns a bare gRPC channel (no interceptors) for token exchange.
 
 from .identity_manager import IdentityManager
 from .cloud_detect import detect_cloud, CloudVendor
-from .cloud_minter import CloudTokenMinter
+from .cloud_minter import CloudTokenMinter, TokenMinterNotConfiguredError
 
 __all__ = [
     "IdentityManager",
     "CloudVendor",
     "detect_cloud",
     "CloudTokenMinter",
+    "TokenMinterNotConfiguredError",
 ]

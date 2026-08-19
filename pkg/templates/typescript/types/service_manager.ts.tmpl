@@ -9,7 +9,7 @@ import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 import { EmptySchema } from '@bufbuild/protobuf/wkt';
 {{- end}}
 import { type Config } from '../types/sys/grpcconfig/index.js';
-import { IdentityManager } from '../chassis/service_im/index.js';
+import { IdentityManager, TokenMinterNotConfiguredError } from '../chassis/service_im/index.js';
 import { ServiceConnection, ChannelProvider } from '../chassis/servicemanager/index.js';
 import { loadConfig } from '../chassis/grpcconfig/index.js';
 import { type X509CertChain, X509CertChainSchema } from '../types/sys/x509/index.js';
@@ -321,7 +321,7 @@ export class ServiceManager {
     identity: IdentityManager,
   ): Promise<{ chain: X509CertChain; key: Buffer }> {
     if (!HAS_TOKEN_EXCHANGER || X509_MINT_METHOD.length === 0) {
-      throw new Error('service token minter is not configured');
+      throw new TokenMinterNotConfiguredError('service token minter is not configured');
     }
 
     const cryptoMod = await import('node:crypto');
@@ -374,7 +374,7 @@ export class ServiceManager {
         },
       );
 {{- else}}
-      reject(new Error('service token minter is not configured'));
+      reject(new TokenMinterNotConfiguredError('service token minter is not configured'));
 {{- end}}
     });
 

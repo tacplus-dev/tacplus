@@ -26,6 +26,18 @@ const HAS_TOKEN_EXCHANGER = {{if .HasTokenExchanger}}true{{else}}false{{end}};
 const TOKEN_EXCHANGE_METHOD = '{{if .HasTokenExchanger}}/{{.TokenExchangerPackage}}.{{.MintServiceName}}/MintServiceToken{{end}}';
 
 /**
+ * Thrown when this service was built without a token exchanger. Callers that
+ * need to classify this as a permanent misconfiguration should check
+ * `instanceof TokenMinterNotConfiguredError` instead of matching message text.
+ */
+export class TokenMinterNotConfiguredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TokenMinterNotConfiguredError';
+  }
+}
+
+/**
  * CloudTokenMinter handles cloud-native token exchange (AWS/GCP/Azure).
  */
 interface TokenEntry {
@@ -250,7 +262,7 @@ export class CloudTokenMinter {
 
   private callExchange(req: {{if .HasTokenExchanger}}Partial<MintServiceTokenRequest>{{else}}Record<string, unknown>{{end}}): Promise<any> {
     if (!HAS_TOKEN_EXCHANGER || TOKEN_EXCHANGE_METHOD.length === 0) {
-      return Promise.reject(new Error('service token minter is not configured'));
+      return Promise.reject(new TokenMinterNotConfiguredError('service token minter is not configured'));
     }
     if (!this.client) throw new Error('token exchange client not initialized');
     return new Promise((resolve, reject) => {

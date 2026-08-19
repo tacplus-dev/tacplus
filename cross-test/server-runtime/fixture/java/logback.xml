@@ -1,0 +1,8 @@
+<!-- Copyright (c) 2026 Second Star Cavalier LLC
+
+     Keeps the fixture server's stdout reserved for its single startup port line
+     and its stderr empty, which the gate asserts. Matches the consumer-contract
+     java consumer's logback-quiet.xml. -->
+<configuration>
+  <root level="ERROR"/>
+</configuration>

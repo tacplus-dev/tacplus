@@ -1,0 +1,204 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// server-runtime RUST fixture server: hosts the REAL generated ContractApi
+// ValidationWrapper (s2sm/internal/grpc/servers/contract/contractclient/
+// contract_api.rs) on a real TCP port so another language's generated client
+// can drive it over the wire.
+//
+// As with the java fixture, this file supplies only the generated
+// ContractApiHandler trait impl and an Authorizer. Validation, PAGE token
+// encoding, egress sanitization, auth gating and dispatch all live in the
+// generated wrapper.
+//
+// Startup contract: prints a single JSON line to stdout
+//
+//     {"grpc":"127.0.0.1:N"}
+//
+// then serves until SIGINT/SIGTERM.
+
+use std::pin::Pin;
+use std::sync::Arc;
+
+use contractclient_model::s2sm::internal::grpc::servers::contract::contractclient::contract_api::{
+    Authorizer, ContractApiHandler, ValidationWrapper,
+};
+use contractclient_model::types::contract::contractclient::contract_api_server::ContractApiServer;
+use contractclient_model::types::contract::contractclient::{
+    ContractEvent, ContractPageRequest, ContractRequest, ContractResponse, ContractWatchChange,
+    ContractWatchRequest,
+};
+use tokio::net::TcpListener;
+use tokio_stream::wrappers::TcpListenerStream;
+use tokio_stream::Stream;
+
+const BEARER: &str = "Bearer fixture-token";
+
+type EventStream = Pin<Box<dyn Stream<Item = Result<ContractEvent, tonic::Status>> + Send>>;
+
+fn valid_response() -> ContractResponse {
+    ContractResponse { result_id: "result-123".to_string(), accepted: true, ..Default::default() }
+}
+
+fn event(id: &str) -> ContractEvent {
+    ContractEvent {
+        event_id: id.to_string(),
+        tenant_namespace: "tenant.alpha".to_string(),
+        payload: "ok".to_string(),
+        ..Default::default()
+    }
+}
+
+struct Handler;
+
+#[tonic::async_trait]
+impl ContractApiHandler for Handler {
+    async fn get_contract(
+        &self,
+        _caller: Option<&servicemanager::auth::Caller>,
+        _req: ContractRequest,
+    ) -> Result<ContractResponse, tonic::Status> {
+        // Never reachable: the generated wrapper authorizes GetContract before
+        // dispatch and this fixture's authorizer rejects it. If a client ever
+        // sees this marker, auth was bypassed.
+        Ok(ContractResponse {
+            result_id: "HANDLER-REACHED".to_string(),
+            accepted: true,
+            ..Default::default()
+        })
+    }
+
+    async fn get_public_contract(
+        &self,
+        _caller: Option<&servicemanager::auth::Caller>,
+        _req: ContractRequest,
+    ) -> Result<ContractResponse, tonic::Status> {
+        Ok(valid_response())
+    }
+
+    async fn list_events(
+        &self,
+        _caller: Option<&servicemanager::auth::Caller>,
+        _req: ContractRequest,
+    ) -> Result<tonic::Response<EventStream>, tonic::Status> {
+        let stream = tokio_stream::iter(vec![Ok(event("event-1"))]);
+        Ok(tonic::Response::new(Box::pin(stream) as EventStream))
+    }
+
+    async fn watch(
+        &self,
+        _caller: Option<&servicemanager::auth::Caller>,
+        _req: ContractWatchRequest,
+    ) -> Result<collection::WatchSource<ContractEvent, ContractWatchChange>, tonic::Status> {
+        Err(tonic::Status::unimplemented("watch is out of scope for the server-runtime gate"))
+    }
+
+    async fn list_events_paged(
+        &self,
+        _caller: Option<&servicemanager::auth::Caller>,
+        _req: ContractPageRequest,
+        page: collection::PageParams,
+    ) -> Result<collection::Page<ContractEvent>, tonic::Status> {
+        // TWO keyset pages, matching the go runtime-smoke fixture: the first
+        // call returns a resume cursor so the client's auto-pager is forced
+        // through the token-CONTINUATION branch on the wire.
+        match page.after {
+            None => Ok(collection::Page {
+                items: vec![event("event-1")],
+                next_after: Some(collection::Cursor { keys: vec!["event-1".to_string()] }),
+                total: 2,
+            }),
+            Some(cursor) => {
+                if cursor.keys != vec!["event-1".to_string()] {
+                    return Err(tonic::Status::invalid_argument(format!(
+                        "unexpected resume cursor {:?}",
+                        cursor.keys
+                    )));
+                }
+                Ok(collection::Page { items: vec![event("event-2")], next_after: None, total: 2 })
+            }
+        }
+    }
+
+    async fn send_events(
+        &self,
+        _caller: Option<&servicemanager::auth::Caller>,
+        _req: tonic::Request<EventStream>,
+    ) -> Result<tonic::Response<ContractResponse>, tonic::Status> {
+        Ok(tonic::Response::new(valid_response()))
+    }
+
+    async fn assist_events(
+        &self,
+        _caller: Option<&servicemanager::auth::Caller>,
+        _req: tonic::Request<EventStream>,
+    ) -> Result<tonic::Response<EventStream>, tonic::Status> {
+        let stream = tokio_stream::iter(vec![Ok(event("event-reply"))]);
+        Ok(tonic::Response::new(Box::pin(stream) as EventStream))
+    }
+}
+
+// FixtureAuthorizer models the two distinct seams the generated wrapper drives:
+// `authorize` (auth_entitled_users — GetContract) is refused, so the fail-closed
+// leg is exercised; `check_at_or_below` (auth_any_user — ListEvents /
+// ListEventsPaged) accepts the fixture bearer.
+struct FixtureAuthorizer;
+
+#[tonic::async_trait]
+impl Authorizer for FixtureAuthorizer {
+    async fn authorize(
+        &self,
+        full_method: &str,
+        _authorization: Option<&str>,
+    ) -> Result<(), tonic::Status> {
+        Err(tonic::Status::permission_denied(format!(
+            "no service_entitlements for {}",
+            full_method
+        )))
+    }
+
+    async fn check_at_or_below(
+        &self,
+        authorization: Option<&str>,
+        target_namespace: &str,
+    ) -> Result<(), tonic::Status> {
+        if authorization != Some(BEARER) {
+            return Err(tonic::Status::unauthenticated("unexpected authorization header"));
+        }
+        if !target_namespace.is_empty() && target_namespace != "/" {
+            return Err(tonic::Status::permission_denied(format!(
+                "unexpected target namespace {}",
+                target_namespace
+            )));
+        }
+        Ok(())
+    }
+}
+
+// The gate stops fixtures with SIGTERM; SIGINT is honored for interactive use.
+async fn shutdown_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+    let mut interrupt = signal(SignalKind::interrupt()).expect("install SIGINT handler");
+    tokio::select! {
+        _ = term.recv() => {}
+        _ = interrupt.recv() => {}
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let wrapper = ValidationWrapper::new(Arc::new(Handler));
+    wrapper.set_authorize_func(Some(Arc::new(FixtureAuthorizer))).await;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    println!("{{\"grpc\":\"{}\"}}", addr);
+    use std::io::Write;
+    std::io::stdout().flush()?;
+
+    tonic::transport::Server::builder()
+        .add_service(ContractApiServer::new(wrapper))
+        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown_signal())
+        .await?;
+    Ok(())
+}

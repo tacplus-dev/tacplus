@@ -32,6 +32,21 @@ The cross-test suite has these gates (see `.gitlab-ci.yml` and
   endpoints) and the python/typescript generated CLIENTS exercise it over the
   wire. Runs per-consumer in the `runtime-smoke-mr` CI job and in the nightly
   matrix.
+- `server-runtime` (`cross-test/server-runtime/run.sh`): cross-language SERVER
+  runtime gate — the transpose of `runtime-smoke`. A real generated JAVA
+  `ContractApi` server wrapper and a real generated RUST `ContractApi`
+  `ValidationWrapper` are each hosted on a TCP port and driven by the generated
+  GO C2S client over the wire (unary `auth_disabled`, `auth_any_user` SNAPSHOT
+  stream, `auth_any_user` PAGE with keyset continuation across two pages, and
+  the fail-closed rejection of an `auth_entitled_users` method before the
+  handler). This is the only in-repo evidence that java- and rust-hosted
+  generated servers interoperate with another language's generated client;
+  before it, both languages appeared only as self-generated client+server pairs
+  inside one process. Server coverage ONLY — the full N x N client/server
+  matrix, W2S against java/rust hosts, and the shared cross-language constraint
+  corpus are still NOT covered. Local/manual
+  (`just -f cross-test/justfile server-runtime`); not in CI, not in `just test`,
+  not in the nightly matrix.
 - `consumer-smoke` (`cross-test/consumer-smoke/run.sh`): a local/manual smoke
   target defined in `cross-test/justfile`. It is NOT invoked by CI or the nightly
   matrix — the runtime checks that run in CI live in `consumer-contract` above.

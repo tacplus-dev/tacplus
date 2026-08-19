@@ -10,6 +10,7 @@ just -f cross-test/justfile
 just -f cross-test/justfile current-generation
 just consumer-build
 just -f cross-test/justfile runtime-smoke
+just -f cross-test/justfile server-runtime
 just consumer-smoke
 just consumer-smoke-go
 just consumer-smoke-java
@@ -38,6 +39,18 @@ accounting/trace seams (observed via the fixture's `/fixture/stats` endpoint).
 It runs in the `runtime-smoke-mr` CI job and the nightly matrix; it lives
 outside `consumer-contract` because it needs go build + python + node
 runtimes concurrently.
+
+`server-runtime` is the transpose of `runtime-smoke`: real generated JAVA and
+RUST `ContractApi` servers are each hosted on a TCP port and driven by the
+generated GO C2S client over the wire (unary `auth_disabled`, `auth_any_user`
+SNAPSHOT stream, `auth_any_user` PAGE with keyset continuation, and the
+fail-closed rejection of an `auth_entitled_users` method before the handler).
+It is the only in-repo evidence that java- and rust-hosted generated servers
+interoperate with another language's generated client. It is SERVER coverage
+only: the full N x N client/server matrix, W2S against java/rust hosts, and the
+shared cross-language constraint corpus remain uncovered. Local/manual — it
+needs go + maven + cargo concurrently, so it is not in CI, not in the nightly
+matrix, and not in `just test`. See `cross-test/server-runtime/README.md`.
 
 `consumer-smoke` runs the focused runtime consumer smokes. Go currently covers:
 the generated C2S client calling `PublicRead` through a `bufconn` gRPC server

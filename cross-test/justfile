@@ -69,6 +69,18 @@ runtime-smoke-python:
 runtime-smoke-typescript:
     bash {{root}}/runtime-smoke/run.sh --consumer typescript
 
+# Cross-language SERVER coverage: real generated java/rust servers driven by
+# the generated go client. Multi-runtime (go + maven + cargo) and slow, so it
+# is a standalone target and is NOT part of `just test`.
+server-runtime:
+    bash {{root}}/server-runtime/run.sh
+
+server-runtime-java:
+    bash {{root}}/server-runtime/run.sh --server java
+
+server-runtime-rust:
+    bash {{root}}/server-runtime/run.sh --server rust
+
 consumer-smoke:
     bash {{root}}/consumer-smoke/run.sh
 

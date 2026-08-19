@@ -149,3 +149,24 @@ consumer-smoke-typescript:
 
 clean:
   rm -rf bin target
+
+# Scratch dirs are left behind only when a run is SIGKILLed before its cleanup
+# can run. Never wired into `test` or any gate. Only touches top-level
+# `tacplus-*` entries older than a day, so it can't race a running job.
+# Manual housekeeping: remove leaked tacplus-* scratch dirs under ${TMPDIR}.
+clean-scratch:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  dir="${TMPDIR:-/tmp}"
+  # Strip trailing slashes; "/" collapses to "" and is rejected below.
+  while [[ "$dir" == */ ]]; do dir="${dir%/}"; done
+  if [[ -z "$dir" ]]; then
+    echo "clean-scratch: refusing to run: TMPDIR resolves to '/' or is empty" >&2
+    exit 1
+  fi
+  if [[ ! -d "$dir" ]]; then
+    echo "clean-scratch: refusing to run: '$dir' is not a directory" >&2
+    exit 1
+  fi
+  echo "clean-scratch: sweeping ${dir}/tacplus-* older than 1 day"
+  find "$dir" -maxdepth 1 -name 'tacplus-*' -mtime +1 -print -exec rm -rf {} +

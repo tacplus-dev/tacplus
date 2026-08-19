@@ -22,11 +22,11 @@ import (
 
 	"example.com/certstream/tacplus/model/chassis/servicemanager"
 	fe "example.com/certstream/tacplus/model/s2sm/grpc/servers/svc/certstream"
+	certstreamtypes "example.com/certstream/tacplus/model/types/svc/certstream"
 	keypb "example.com/certstream/tacplus/model/types/sys/key"
 	smbcertpb "example.com/certstream/tacplus/model/types/sys/smbcert"
 	tlscertpb "example.com/certstream/tacplus/model/types/sys/tlscert"
 	x509pb "example.com/certstream/tacplus/model/types/sys/x509"
-	certstreamtypes "example.com/certstream/tacplus/model/types/svc/certstream"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
@@ -50,6 +50,8 @@ type recordingHandler struct {
 	mu        sync.Mutex
 	tlsKeys   [][]byte
 	smbKeys   [][]byte
+	tlsChains []*x509pb.X509CertChain
+	smbChains []*x509pb.X509CertChain
 	failTLSAt map[int]error
 	failSMBAt map[int]error
 }
@@ -62,20 +64,22 @@ func (h *recordingHandler) StreamStateGrpcImpl() fe.StreamStateServiceHandler {
 	return nil
 }
 
-func (h *recordingHandler) NewTlsCert(_ *x509pb.X509CertChain, privateKeyDER []byte) error {
+func (h *recordingHandler) NewTlsCert(chain *x509pb.X509CertChain, privateKeyDER []byte) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.tlsKeys = append(h.tlsKeys, append([]byte(nil), privateKeyDER...))
+	h.tlsChains = append(h.tlsChains, chain)
 	if err := h.failTLSAt[len(h.tlsKeys)]; err != nil {
 		return err
 	}
 	return nil
 }
 
-func (h *recordingHandler) NewSmbCert(_ *x509pb.X509CertChain, privateKeyDER []byte, _ *x509pb.X509Cert) error {
+func (h *recordingHandler) NewSmbCert(chain *x509pb.X509CertChain, privateKeyDER []byte, _ *x509pb.X509Cert) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.smbKeys = append(h.smbKeys, append([]byte(nil), privateKeyDER...))
+	h.smbChains = append(h.smbChains, chain)
 	if err := h.failSMBAt[len(h.smbKeys)]; err != nil {
 		return err
 	}
@@ -100,6 +104,36 @@ type certAuthority struct {
 	caCert  *x509std.Certificate
 	caKey   crypto.Signer
 	caProto *x509pb.X509Cert
+
+	// dialed, when non-nil, receives one token per stream this authority
+	// serves, so a test can act between a failed attempt and its retry.
+	dialed chan struct{}
+
+	streamMu   sync.Mutex
+	tlsStreams int
+	smbStreams int
+}
+
+func (a *certAuthority) noteStream(tls bool) {
+	a.streamMu.Lock()
+	if tls {
+		a.tlsStreams++
+	} else {
+		a.smbStreams++
+	}
+	a.streamMu.Unlock()
+	if a.dialed != nil {
+		select {
+		case a.dialed <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (a *certAuthority) streamCounts() (int, int) {
+	a.streamMu.Lock()
+	defer a.streamMu.Unlock()
+	return a.tlsStreams, a.smbStreams
 }
 
 func newCertAuthority(t *testing.T, mode authorityMode) *certAuthority {
@@ -140,6 +174,7 @@ func newCertAuthorityWithBlock(t *testing.T, mode authorityMode, blocked chan<- 
 }
 
 func (a *certAuthority) ManageCert(stream tlscertpb.TlsCertService_ManageCertServer) error {
+	a.noteStream(true)
 	pub, err := recvTLSInitAndCSR(stream)
 	if err != nil {
 		return err
@@ -205,6 +240,7 @@ func (a *certAuthority) ManageCert(stream tlscertpb.TlsCertService_ManageCertSer
 }
 
 func (a *certAuthority) ManageSmbCert(stream smbcertpb.SmbCertService_ManageSmbCertServer) error {
+	a.noteStream(false)
 	pub, err := recvSMBInitAndCSR(stream)
 	if err != nil {
 		return err
@@ -438,10 +474,60 @@ func TestGoTlsCertStreamBehavior(t *testing.T) {
 			t.Fatal("valid renewal should install the fresh pending TLS key")
 		}
 	})
+	// PC-L-1's DEGRADED-marking seam. Both renewal paths below keep the
+	// PREVIOUS certificate in service: the instance goes on serving a cert
+	// that will expire, so without a health signal it reports Ready right up
+	// to the outage. The reason text is what the operator reads, so it must
+	// name which half of the system faulted.
+	t.Run("renewal handler rejection degrades with the handler's reason", func(t *testing.T) {
+		handlerErr := errors.New("reject renewal TLS cert")
+		h := &recordingHandler{failTLSAt: map[int]error{2: handlerErr}}
+		delivered, _, ready, reasons := runTLSFixtureDegrade(t, modeRenewalSuccess, h)
+		if !delivered {
+			t.Fatal("expected first delivery to be reported")
+		}
+		if ready != nil {
+			t.Fatalf("first ready signal = %v, want nil", ready)
+		}
+		if len(reasons) != 1 {
+			t.Fatalf("degrade calls = %v, want exactly one for the rejected renewal", reasons)
+		}
+		if !strings.Contains(reasons[0], "TLS handler rejected a renewed certificate") {
+			t.Fatalf("degrade reason = %q, want it to name this service's handler as the fault", reasons[0])
+		}
+		if !strings.Contains(reasons[0], handlerErr.Error()) {
+			t.Fatalf("degrade reason = %q, want it to carry the handler's own error", reasons[0])
+		}
+	})
+
+	t.Run("stale renewal cert degrades with a key-mismatch reason", func(t *testing.T) {
+		h := &recordingHandler{}
+		delivered, _, ready, reasons := runTLSFixtureDegrade(t, modeReorderedRenewal, h)
+		if !delivered {
+			t.Fatal("expected first delivery to be reported")
+		}
+		if ready != nil {
+			t.Fatalf("first ready signal = %v, want nil", ready)
+		}
+		if len(reasons) != 1 {
+			t.Fatalf("degrade calls = %v, want exactly one for the discarded stale cert", reasons)
+		}
+		if !strings.Contains(reasons[0], "does not match the requested key") {
+			t.Fatalf("degrade reason = %q, want it to name the authority's cert as the fault", reasons[0])
+		}
+	})
+
+	t.Run("clean renewal does not degrade", func(t *testing.T) {
+		h := &recordingHandler{}
+		_, _, _, reasons := runTLSFixtureDegrade(t, modeRenewalSuccess, h)
+		if len(reasons) != 0 {
+			t.Fatalf("degrade calls = %v, want none on a healthy renewal", reasons)
+		}
+	})
 
 	t.Run("missing authority connection fails before first delivery", func(t *testing.T) {
 		readyCh := make(chan error, 1)
-		delivered, err := runTlsCertStream(context.Background(), func() grpc.ClientConnInterface { return nil }, "certstream", &recordingHandler{}, func() (string, error) { return "token", nil }, nil, readyCh)
+		delivered, err := runTlsCertStream(context.Background(), func() grpc.ClientConnInterface { return nil }, "certstream", &recordingHandler{}, func() (string, error) { return "token", nil }, nil, func(string) {}, readyCh)
 		if delivered {
 			t.Fatal("did not expect delivery without connection")
 		}
@@ -450,6 +536,58 @@ func TestGoTlsCertStreamBehavior(t *testing.T) {
 		}
 		if ready := drainReady(readyCh); !errors.Is(ready, errNoReadySignal) {
 			t.Fatalf("ready signal = %v, want none", ready)
+		}
+	})
+
+	// PC-L-2 behavioral leg. connProvider is invoked fresh on every attempt so a
+	// retry RE-RESOLVES the authority endpoint. Template text pins prove the
+	// call site sits inside runTlsCertStream; only this proves the effect: move
+	// the target between a failed attempt and its retry, and the retry must land
+	// on the new authority instead of a connection memoized from attempt one.
+	t.Run("retry re-resolves the target and dials the swapped authority", func(t *testing.T) {
+		stale := newCertAuthority(t, modeServerErrorBefore)
+		stale.dialed = make(chan struct{}, 1)
+		staleConn, staleCleanup := startAuthorityFor(t, stale)
+		defer staleCleanup()
+		fresh := newCertAuthority(t, modeFirstSuccess)
+		freshConn, freshCleanup := startAuthorityFor(t, fresh)
+		defer freshCleanup()
+
+		target := &swappableTarget{conn: staleConn}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		readyCh := make(chan error, 1)
+		h := &recordingHandler{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			tlsCertStreamLoop(ctx, target.provider, "certstream", h, func() (string, error) { return "token", nil }, nil, func(string) {}, readyCh)
+		}()
+
+		waitSignal(t, stale.dialed, "TLS attempt against the stale target")
+		target.swap(freshConn)
+
+		// The loop backs off a couple of seconds before its first retry.
+		if ready := waitReadyWithin(t, readyCh, "TLS delivery after target swap", 15*time.Second); ready != nil {
+			t.Fatalf("ready signal = %v, want nil from the swapped target", ready)
+		}
+		cancel()
+		waitLoopExit(t, done, "TLS target-swap loop")
+
+		if calls := target.calls(); calls < 2 {
+			t.Fatalf("connProvider calls = %d, want one per attempt (at least 2)", calls)
+		}
+		if staleTLS, _ := stale.streamCounts(); staleTLS != 1 {
+			t.Fatalf("stale authority served %d ManageCert streams, want only the one failed attempt", staleTLS)
+		}
+		if freshTLS, _ := fresh.streamCounts(); freshTLS < 1 {
+			t.Fatal("retry never reached the swapped authority: the loop reused a stale connection")
+		}
+		if len(h.tlsChains) != 1 {
+			t.Fatalf("expected exactly one TLS delivery, got %d", len(h.tlsChains))
+		}
+		if got := h.tlsChains[0].GetChain()[1].GetBase64(); got != fresh.caProto.GetBase64() {
+			t.Fatal("delivered TLS cert was not signed by the swapped authority's CA")
 		}
 	})
 }
@@ -588,6 +726,53 @@ func TestGoSmbCertStreamBehavior(t *testing.T) {
 			t.Fatalf("ready signal = %v, want none", ready)
 		}
 	})
+
+	// PC-L-2 behavioral leg, SMB member-cert half. Same contract, separate loop.
+	t.Run("retry re-resolves the target and dials the swapped authority", func(t *testing.T) {
+		stale := newCertAuthority(t, modeServerErrorBefore)
+		stale.dialed = make(chan struct{}, 1)
+		staleConn, staleCleanup := startAuthorityFor(t, stale)
+		defer staleCleanup()
+		fresh := newCertAuthority(t, modeFirstSuccess)
+		freshConn, freshCleanup := startAuthorityFor(t, fresh)
+		defer freshCleanup()
+
+		target := &swappableTarget{conn: staleConn}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		readyCh := make(chan error, 1)
+		h := &recordingHandler{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			smbCertStreamLoop(ctx, target.provider, "certstream", h, func() (string, error) { return "token", nil }, readyCh)
+		}()
+
+		waitSignal(t, stale.dialed, "SMB attempt against the stale target")
+		target.swap(freshConn)
+
+		if ready := waitReadyWithin(t, readyCh, "SMB delivery after target swap", 15*time.Second); ready != nil {
+			t.Fatalf("ready signal = %v, want nil from the swapped target", ready)
+		}
+		cancel()
+		waitLoopExit(t, done, "SMB target-swap loop")
+
+		if calls := target.calls(); calls < 2 {
+			t.Fatalf("connProvider calls = %d, want one per attempt (at least 2)", calls)
+		}
+		if _, staleSMB := stale.streamCounts(); staleSMB != 1 {
+			t.Fatalf("stale authority served %d ManageSmbCert streams, want only the one failed attempt", staleSMB)
+		}
+		if _, freshSMB := fresh.streamCounts(); freshSMB < 1 {
+			t.Fatal("retry never reached the swapped authority: the loop reused a stale connection")
+		}
+		if len(h.smbChains) != 1 {
+			t.Fatalf("expected exactly one SMB delivery, got %d", len(h.smbChains))
+		}
+		if got := h.smbChains[0].GetChain()[1].GetBase64(); got != fresh.caProto.GetBase64() {
+			t.Fatal("delivered SMB member cert was not signed by the swapped authority's CA")
+		}
+	})
 }
 
 func TestGoCertStreamShutdownEscape(t *testing.T) {
@@ -597,7 +782,7 @@ func TestGoCertStreamShutdownEscape(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			tlsCertStreamLoop(ctx, func() grpc.ClientConnInterface { return nil }, "certstream", &recordingHandler{}, func() (string, error) { return "token", nil }, nil, readyCh)
+			tlsCertStreamLoop(ctx, func() grpc.ClientConnInterface { return nil }, "certstream", &recordingHandler{}, func() (string, error) { return "token", nil }, nil, func(string) {}, readyCh)
 		}()
 
 		time.Sleep(20 * time.Millisecond)
@@ -634,7 +819,7 @@ func TestGoCertStreamShutdownEscape(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			tlsCertStreamLoop(ctx, func() grpc.ClientConnInterface { return conn }, "certstream", h, func() (string, error) { return "token", nil }, nil, readyCh)
+			tlsCertStreamLoop(ctx, func() grpc.ClientConnInterface { return conn }, "certstream", h, func() (string, error) { return "token", nil }, nil, func(string) {}, readyCh)
 		}()
 
 		if ready := waitReady(t, readyCh, "TLS first delivery"); ready != nil {
@@ -679,8 +864,24 @@ func runTLSFixture(t *testing.T, mode authorityMode, h *recordingHandler) (bool,
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	readyCh := make(chan error, 1)
-	delivered, err := runTlsCertStream(ctx, func() grpc.ClientConnInterface { return conn }, "certstream", h, func() (string, error) { return "token", nil }, nil, readyCh)
+	delivered, err := runTlsCertStream(ctx, func() grpc.ClientConnInterface { return conn }, "certstream", h, func() (string, error) { return "token", nil }, nil, func(string) {}, readyCh)
 	return delivered, err, drainReady(readyCh)
+}
+
+// runTLSFixtureDegrade mirrors runTLSFixture but records what the stream
+// reports through PC-L-1's degrade seam, so a test can assert WHICH renewal
+// fault the health plane was told about, not merely that the stream survived.
+func runTLSFixtureDegrade(t *testing.T, mode authorityMode, h *recordingHandler) (bool, error, error, []string) {
+	t.Helper()
+	conn, cleanup := startAuthority(t, mode)
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	readyCh := make(chan error, 1)
+	var reasons []string
+	degrade := func(reason string) { reasons = append(reasons, reason) }
+	delivered, err := runTlsCertStream(ctx, func() grpc.ClientConnInterface { return conn }, "certstream", h, func() (string, error) { return "token", nil }, nil, degrade, readyCh)
+	return delivered, err, drainReady(readyCh), reasons
 }
 
 func runSMBFixture(t *testing.T, mode authorityMode, h *recordingHandler) (bool, error, error) {
@@ -701,10 +902,19 @@ func startAuthority(t *testing.T, mode authorityMode) (*grpc.ClientConn, func())
 
 func startAuthorityWithBlock(t *testing.T, mode authorityMode) (*grpc.ClientConn, func(), <-chan struct{}) {
 	t.Helper()
-	lis := bufconn.Listen(1024 * 1024)
-	srv := grpc.NewServer()
 	blocked := make(chan struct{}, 1)
 	authority := newCertAuthorityWithBlock(t, mode, blocked)
+	conn, cleanup := startAuthorityFor(t, authority)
+	return conn, cleanup, blocked
+}
+
+// startAuthorityFor serves one already-constructed authority on its own bufconn
+// listener, so a test can stand up two distinct authorities and swap the
+// connection handed to a cert-stream loop between them.
+func startAuthorityFor(t *testing.T, authority *certAuthority) (*grpc.ClientConn, func()) {
+	t.Helper()
+	lis := bufconn.Listen(1024 * 1024)
+	srv := grpc.NewServer()
 	tlscertpb.RegisterTlsCertServiceServer(srv, authority)
 	smbcertpb.RegisterSmbCertServiceServer(srv, authority)
 	go func() {
@@ -727,7 +937,35 @@ func startAuthorityWithBlock(t *testing.T, mode authorityMode) (*grpc.ClientConn
 		_ = conn.Close()
 		srv.Stop()
 		_ = lis.Close()
-	}, blocked
+	}
+}
+
+// swappableTarget models an authority endpoint that MOVES. connProvider must be
+// invoked fresh on every attempt, so a retry sees whatever the target resolves
+// to now — not a handle memoized from the first attempt.
+type swappableTarget struct {
+	mu    sync.Mutex
+	conn  grpc.ClientConnInterface
+	count int
+}
+
+func (s *swappableTarget) provider() grpc.ClientConnInterface {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.count++
+	return s.conn
+}
+
+func (s *swappableTarget) swap(conn grpc.ClientConnInterface) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.conn = conn
+}
+
+func (s *swappableTarget) calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.count
 }
 
 func recvTLSInitAndCSR(stream tlscertpb.TlsCertService_ManageCertServer) (any, error) {
@@ -825,10 +1063,15 @@ func drainReady(ch <-chan error) error {
 
 func waitReady(t *testing.T, ch <-chan error, label string) error {
 	t.Helper()
+	return waitReadyWithin(t, ch, label, 2*time.Second)
+}
+
+func waitReadyWithin(t *testing.T, ch <-chan error, label string, d time.Duration) error {
+	t.Helper()
 	select {
 	case err := <-ch:
 		return err
-	case <-time.After(2 * time.Second):
+	case <-time.After(d):
 		t.Fatalf("%s did not report ready", label)
 		return nil
 	}

@@ -43,6 +43,25 @@ drive exhaustion in real time instead of wall-clock time.
 
 ---
 
+## PC-L-2b — Go cert-stream give-up path's DEGRADED reason is unpinned
+
+**Status:** the retry-target-swap leg (PC-L-2) and the renewal-time `degrade`
+seam (PC-L-1's key-mismatch and handler-rejection reasons) are both now
+covered by `cert_stream_behavior_test.go`. One path through the same
+DEGRADED-marking machinery is not: give-up-before-first-delivery.
+
+That path never calls `degrade(reason string)` directly — it sends a wrapped
+error on `readyCh`, and `Run()`'s background drain does the DEGRADED marking,
+discriminating the reason by testing the error against sentinels like
+`errTlsFirstCertFatal`. `Run()` sits above the `cert-stream` fixture used by
+this test file, so it isn't drivable from here without a different harness.
+
+**To close:** a test hosting `Run()` itself (or the smallest slice of it that
+performs the sentinel discrimination) that drives the give-up-before-first-
+delivery path and asserts which DEGRADED reason gets reported.
+
+---
+
 ## PC-L-9 — ServiceManager teardown leak evidence is synthetic
 
 **Status:** closed for goroutines; the open-FD leg runs on Linux only.

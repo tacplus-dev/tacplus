@@ -1,3 +1,5 @@
+//go:build soak
+
 // Copyright (c) 2026 Second Star Cavalier LLC
 
 // Package leaksoak closes docs/KNOWN_TEST_GAPS.md PC-L-9: the chaos LeakOracle
@@ -11,6 +13,10 @@
 // cross-test/chaos/node so that generation/exec machinery stays out of those
 // pure packages; the driver it runs lives under testdata/ (ignored by the go
 // tool) exactly like cross-test/cert-stream/testdata.
+//
+// Excluded from `go test ./...` (the `soak` build tag) because it generates
+// and builds a full driver binary per run — too slow for the mandatory
+// `just test` gate. Run via `just leak-soak`.
 package leaksoak
 
 import (

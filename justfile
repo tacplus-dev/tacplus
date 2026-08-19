@@ -73,6 +73,11 @@ cert-stream-java:
 cert-stream-rust:
   bash cross-test/cert-stream/run.sh --language rust
 
+# PC-L-9 chaos soak: generates+builds a driver binary per run, too slow for
+# `just test`. Excluded from `go test ./...` via the `soak` build tag.
+leak-soak:
+  go test -tags soak ./cross-test/chaos/leaksoak/...
+
 consumer-build:
   bash cross-test/consumer-contract/run.sh
 

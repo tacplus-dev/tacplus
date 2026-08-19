@@ -214,6 +214,10 @@ case "$LANGUAGE" in
     grep -rq "tlsCertStreamLoop" "$OUT/s2sm"      || die "go TLS cert stream loop missing"
     grep -rq "smbCertStreamLoop" "$OUT/s2sm"      || die "go SMB cert stream loop missing"
     grep -rq "certLeafMatchesPublicKey" "$OUT/s2sm" || die "public-key validation missing"
+    # The retry budget is a parameter so exhaustion is testable (PC-L-3), but the
+    # production call site must still spend the unchanged default of 30.
+    grep -rq "const certStreamMaxInitRetries = 30" "$OUT/s2sm" || die "go cert stream default retry budget changed"
+    grep -rq "tlsReadyCh, certStreamMaxInitRetries)" "$OUT/s2sm" || die "go TLS cert stream does not pass the default retry budget"
     grep -q '"smb_authority": *true' "$OUT/registry.json" || die "registry missing SMB authority"
 
     cp "$ROOT_DIR/cross-test/cert-stream/testdata/cert_stream_behavior_test.go" "$OUT/s2sm/cert_stream_behavior_test.go"
@@ -239,7 +243,7 @@ require (
 EOF
 
     echo "==> Running generated Go cert-stream behavior tests"
-    (cd "$OUT" && go mod tidy && go test -count=1 ./s2sm -run 'TestGo.*CertStreamBehavior') \
+    (cd "$OUT" && go mod tidy && go test -count=1 -timeout 300s ./s2sm -run '^TestGo') \
       || die "generated Go cert-stream behavior tests failed"
     ;;
   rust)

@@ -18,12 +18,15 @@ rediscovered.
 
 ---
 
-## PC-L-3 — Java cert-stream has no exhaustion pin; retry budget isn't testable
+## PC-L-3 — Java and Rust cert-stream have no exhaustion pin; retry budget isn't testable
 
 **Status:** channel-capture is closed (`CertStreamBehaviorTest.java`,
-`...ReResolvesTheAuthorityAfterTheTargetMoves`, TLS+SMB). Exhaustion still has
-no behavioral pin, in any language — Go and Rust are also missing it, not just
-Java.
+`...ReResolvesTheAuthorityAfterTheTargetMoves`, TLS+SMB). **Go is now closed**
+for exhaustion: `tlsCertStreamLoop` takes its first-delivery retry budget as a
+parameter (falling back to `certStreamMaxInitRetries = 30` when non-positive),
+and `TestGoTlsCertStreamRetryExhaustion` in
+`cross-test/cert-stream/testdata/cert_stream_behavior_test.go` drives a budget
+of 3 to real give-up in ~6s. Java and Rust still have no exhaustion pin.
 
 The TLS renewal stream can exhaust its retry chain, and a renewed channel can be
 captured by a stale reference. The channel-capture leg is now proven: a stale
@@ -37,9 +40,15 @@ a `private static final int`, which `javac` inlines at every call site
 read from the field). There is no seam to inject a smaller budget, so an
 honest exhaustion test means ~780s of real `Thread.sleep` per run.
 
-**To close:** make the retry budget non-constant/injectable in the Java
-template (and check whether Go/Rust have the same seam gap) so a test can
-drive exhaustion in real time instead of wall-clock time.
+Rust has the same gap and one extra complication: `tls_cert_stream_loop`
+(and `smb_cert_stream_loop`) read the SAME `const MAX_INIT_RETRIES: u32 = 30`
+used by the general-init loops, so a Rust seam either splits that constant
+first or widens blast radius beyond the cert streams. Go's two budgets were
+already separate constants, which is why the Go leg was cheap to close.
+
+**To close:** make the retry budget injectable in the Java and Rust templates —
+the same seam the Go template now has — so a test can drive exhaustion in real
+time instead of wall-clock time.
 
 ---
 

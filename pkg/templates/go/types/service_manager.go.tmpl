@@ -1139,7 +1139,7 @@ return
 sm.sc.SetTLSCert(chain, key)
 }
 sm.tasks.Go(func(taskCtx context.Context) {
-tlsCertStreamLoop(taskCtx, func() grpc.ClientConnInterface { return sm.sc.Conn() }, "{{.ServiceLabel}}", h, sm.TokenProviderFunc(), storeTlsCert, sm.reportTLSDegraded, tlsReadyCh)
+tlsCertStreamLoop(taskCtx, func() grpc.ClientConnInterface { return sm.sc.Conn() }, "{{.ServiceLabel}}", h, sm.TokenProviderFunc(), storeTlsCert, sm.reportTLSDegraded, tlsReadyCh, certStreamMaxInitRetries)
 })
 // The ManageCert renewal stream must NOT gate Listen (see above) — the server
 // already serves with the X509Mint certificate. But a terminal failure to ever
@@ -1733,11 +1733,18 @@ var errTlsFirstCertFatal = fmt.Errorf("handler rejected first TLS certificate de
 // retry budget is spent. A handler failure on the FIRST delivery stops the
 // loop, while later renewal-delivery failures are logged and the previous cert
 // stays in service.
+// maxInitRetries is the first-delivery retry budget; it falls back to
+// certStreamMaxInitRetries when non-positive. It is a parameter rather than a
+// const so an exhaustion test can spend the budget in seconds (PC-L-3);
+// production passes certStreamMaxInitRetries.
 // degrade reports a renewal fault into the ServiceManager health plane. Every
 // path below that keeps the PREVIOUS certificate in service must call it: the
 // instance goes on serving a certificate that will expire, and without a health
 // signal it reports Ready right up to the outage (PC-L-1).
-func tlsCertStreamLoop(ctx context.Context, connProvider func() grpc.ClientConnInterface, serviceLabel string, h Handler, tp func() (string, error), store func(*x509_pb.X509CertChain, []byte), degrade func(string), readyCh chan<- error) {
+func tlsCertStreamLoop(ctx context.Context, connProvider func() grpc.ClientConnInterface, serviceLabel string, h Handler, tp func() (string, error), store func(*x509_pb.X509CertChain, []byte), degrade func(string), readyCh chan<- error, maxInitRetries int) {
+if maxInitRetries <= 0 {
+maxInitRetries = certStreamMaxInitRetries
+}
 initAttempts := 0
 for {
 delivered, err := runTlsCertStream(ctx, connProvider, serviceLabel, h, tp, store, degrade, readyCh)
@@ -1762,7 +1769,7 @@ service_im.NoteIfCredentialRejection(err)
 delay := 5 * time.Second
 if readyCh != nil {
 initAttempts++
-if initAttempts >= certStreamMaxInitRetries {
+if initAttempts >= maxInitRetries {
 select {
 case readyCh <- fmt.Errorf("TLS cert stream failed before first delivery after %d attempts: %w", initAttempts, err):
 default:
@@ -1771,7 +1778,7 @@ return
 }
 delay = time.Duration(min(1<<min(initAttempts, 5), 30)) * time.Second
 zap.L().Warn("TLS cert stream failed before first delivery, retrying",
-zap.Int("attempt", initAttempts), zap.Int("max", certStreamMaxInitRetries), zap.Duration("delay", delay), zap.Error(err))
+zap.Int("attempt", initAttempts), zap.Int("max", maxInitRetries), zap.Duration("delay", delay), zap.Error(err))
 } else {
 zap.L().Warn("TLS cert stream disconnected, retrying", zap.Duration("delay", delay), zap.Error(err))
 }

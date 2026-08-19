@@ -561,7 +561,7 @@ func TestGoTlsCertStreamBehavior(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			tlsCertStreamLoop(ctx, target.provider, "certstream", h, func() (string, error) { return "token", nil }, nil, func(string) {}, readyCh)
+			tlsCertStreamLoop(ctx, target.provider, "certstream", h, func() (string, error) { return "token", nil }, nil, func(string) {}, readyCh, 0)
 		}()
 
 		waitSignal(t, stale.dialed, "TLS attempt against the stale target")
@@ -782,7 +782,7 @@ func TestGoCertStreamShutdownEscape(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			tlsCertStreamLoop(ctx, func() grpc.ClientConnInterface { return nil }, "certstream", &recordingHandler{}, func() (string, error) { return "token", nil }, nil, func(string) {}, readyCh)
+			tlsCertStreamLoop(ctx, func() grpc.ClientConnInterface { return nil }, "certstream", &recordingHandler{}, func() (string, error) { return "token", nil }, nil, func(string) {}, readyCh, 0)
 		}()
 
 		time.Sleep(20 * time.Millisecond)
@@ -819,7 +819,7 @@ func TestGoCertStreamShutdownEscape(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			tlsCertStreamLoop(ctx, func() grpc.ClientConnInterface { return conn }, "certstream", h, func() (string, error) { return "token", nil }, nil, func(string) {}, readyCh)
+			tlsCertStreamLoop(ctx, func() grpc.ClientConnInterface { return conn }, "certstream", h, func() (string, error) { return "token", nil }, nil, func(string) {}, readyCh, 0)
 		}()
 
 		if ready := waitReady(t, readyCh, "TLS first delivery"); ready != nil {
@@ -854,6 +854,61 @@ func TestGoCertStreamShutdownEscape(t *testing.T) {
 		if len(h.smbKeys) != 1 {
 			t.Fatalf("expected only the startup SMB cert before shutdown, got %d", len(h.smbKeys))
 		}
+	})
+}
+
+// TestGoTlsCertStreamRetryExhaustion drives the give-up-before-first-delivery
+// path in real time. The production budget (certStreamMaxInitRetries = 30) takes
+// ~812s of backoff to spend honestly, which is why this path had no behavioral
+// pin; tlsCertStreamLoop now takes the budget as a parameter so a test can spend
+// it in seconds (PC-L-3).
+func TestGoTlsCertStreamRetryExhaustion(t *testing.T) {
+	t.Run("TLS loop gives up after the injected budget", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		readyCh := make(chan error, 1)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			// A nil connection fails every attempt before first delivery, so the
+			// loop can only exit by exhausting its budget. Budget 3 costs 2s+4s
+			// of backoff instead of the production budget's ~812s.
+			tlsCertStreamLoop(ctx, func() grpc.ClientConnInterface { return nil }, "certstream", &recordingHandler{}, func() (string, error) { return "token", nil }, nil, func(string) {}, readyCh, 3)
+		}()
+
+		ready := waitReadyWithin(t, readyCh, "TLS retry exhaustion", 15*time.Second)
+		if ready == nil {
+			t.Fatal("ready signal = nil, want a give-up error")
+		}
+		if errors.Is(ready, errTlsFirstCertFatal) {
+			t.Fatalf("ready signal = %v, want a give-up error, not a handler rejection", ready)
+		}
+		if !strings.Contains(ready.Error(), "TLS cert stream failed before first delivery after 3 attempts") {
+			t.Fatalf("ready signal = %v, want the give-up error naming 3 attempts", ready)
+		}
+		waitLoopExit(t, done, "TLS retry exhaustion")
+	})
+
+	t.Run("default budget is not the injected one", func(t *testing.T) {
+		// Guards the hard constraint behind the seam: a caller that passes no
+		// budget keeps the production one. A budget of 3 gives up after ~6s, so
+		// silence past that window proves the default is materially larger.
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		readyCh := make(chan error, 1)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			tlsCertStreamLoop(ctx, func() grpc.ClientConnInterface { return nil }, "certstream", &recordingHandler{}, func() (string, error) { return "token", nil }, nil, func(string) {}, readyCh, 0)
+		}()
+
+		select {
+		case ready := <-readyCh:
+			t.Fatalf("default-budget loop gave up early with %v", ready)
+		case <-time.After(8 * time.Second):
+		}
+		cancel()
+		waitLoopExit(t, done, "default budget")
 	})
 }
 

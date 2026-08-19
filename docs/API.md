@@ -200,11 +200,15 @@ The lite client targets (`swift`, `csharp`) emit C2D, C2S, and W2S clients
 (their W2S is unary-only — streaming methods are emitted as throwing stubs);
 the full-client targets (`python`, `typescript`) additionally emit REST clients.
 
-C2D server wrappers skip token authentication by design: the auth boundary is
-the socket permission (filesystem ACL / named-pipe DACL), not a bearer token.
-The generated wrapper still validates request/response constraints and runs the
-full handler pipeline; only the token-lookup and authorization steps are
-bypassed. This is implemented via the `IsC2D` flag on the service descriptor.
+**C2D server auth-skip scope**: Rust is the only target that hosts a generated
+C2D server wrapper (`C2dServer` in `service_manager.rs.tmpl`). That wrapper
+skips token authentication by design: the auth boundary is the socket permission
+(filesystem ACL / named-pipe DACL), not a bearer token. It still validates
+request/response constraints and runs the full handler pipeline; only the
+token-lookup and authorization steps are bypassed, via the `IsC2D` flag on the
+service descriptor. Go and Java emit C2D clients only — `IsC2D` is excluded from
+their server resolution paths by design, since no Go or Java service declares
+`service_c2d` as a server. Python and TypeScript are client-only targets.
 
 ### Client Send Contract
 

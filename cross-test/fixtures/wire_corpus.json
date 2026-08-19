@@ -1,0 +1,38 @@
+{
+  "_comment": "Canonical cross-language SERIALIZATION-EQUIVALENCE corpus (LED-2 phase 2). Single source of truth: go encodes each vector ONCE with deterministic marshalling and the bytes are checked in below as `hex`; go, java, python, rust and typescript each decode THAT blob with their generated CorpusRecord type and assert the decoded values equal `expect` exactly. Regenerate `hex` after editing `expect` with `cross-test/wire-corpus/run.sh --emit` — never hand-edit an `expect` value to make a decoder agree; a disagreement is a real cross-language finding.",
+  "scheme_version": "v1",
+  "message": "corpusclient.CorpusRecord",
+  "proto": "cross-test/wire-corpus/proto/corpus/corpus.proto",
+  "vectors": [
+    {
+      "name": "full",
+      "_comment": "Every covered shape populated. int64 at the negative boundary, uint64 above 2^53, a 3-entry map whose declaration order is NOT sorted order, `optional` PRESENT carrying its zero value, and non-UTF-8 bytes.",
+      "hex": "08808080808080808080011081808080808080101a100a05616c7068611207612d76616c75651a070a036d696412001a0f0a047a65746112077a2d76616c756520002a0900ff10deadbeef7f80",
+      "expect": {
+        "big_negative": "-9223372036854775808",
+        "big_unsigned": "9007199254740993",
+        "labels": {
+          "alpha": "a-value",
+          "mid": "",
+          "zeta": "z-value"
+        },
+        "opt_count_present": true,
+        "opt_count": 0,
+        "blob_hex": "00ff10deadbeef7f80"
+      }
+    },
+    {
+      "name": "sparse",
+      "_comment": "The transpose. int64 at the positive boundary, uint64 at 2^64-1, no map entries, `optional` ABSENT, empty bytes. Distinguishing this vector from `full` on opt_count is only possible for a runtime that models proto3 explicit presence.",
+      "hex": "08ffffffffffffffff7f10ffffffffffffffffff01",
+      "expect": {
+        "big_negative": "9223372036854775807",
+        "big_unsigned": "18446744073709551615",
+        "labels": {},
+        "opt_count_present": false,
+        "opt_count": 0,
+        "blob_hex": ""
+      }
+    }
+  ]
+}

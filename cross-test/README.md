@@ -11,6 +11,7 @@ just -f cross-test/justfile current-generation
 just consumer-build
 just -f cross-test/justfile runtime-smoke
 just -f cross-test/justfile server-runtime
+just -f cross-test/justfile wire-corpus
 just consumer-smoke
 just consumer-smoke-go
 just consumer-smoke-java
@@ -51,6 +52,20 @@ only: the full N x N client/server matrix, W2S against java/rust hosts, and the
 shared cross-language constraint corpus remain uncovered. Local/manual — it
 needs go + maven + cargo concurrently, so it is not in CI, not in the nightly
 matrix, and not in `just test`. See `cross-test/server-runtime/README.md`.
+
+`wire-corpus` is the serialization-equivalence gate: one `CorpusRecord`
+message is encoded ONCE by go into checked-in golden bytes
+(`cross-test/fixtures/wire_corpus.json`), and all five generated languages
+decode that same blob and assert every decoded field value against the expected
+constants in that fixture. It is the only in-repo evidence of cross-language
+wire-VALUE equivalence — every other gate here is source parity, compile, or RPC
+behavior. It covers only the shapes this repo actually uses and that actually
+differ between runtimes (int64 at the boundary, uint64 above 2^53,
+`map<string,string>`, proto3 `optional` present-with-zero vs absent, and
+non-UTF-8 bytes); constraint-class enforcement and the encode direction remain
+uncovered. Local/manual — it needs go + maven + cargo + python + node
+concurrently, so it is not in CI, not in the nightly matrix, and not in
+`just test`. See `cross-test/wire-corpus/README.md`.
 
 `consumer-smoke` runs the focused runtime consumer smokes. Go currently covers:
 the generated C2S client calling `PublicRead` through a `bufconn` gRPC server

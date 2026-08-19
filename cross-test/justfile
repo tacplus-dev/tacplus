@@ -81,6 +81,34 @@ server-runtime-java:
 server-runtime-rust:
     bash {{root}}/server-runtime/run.sh --server rust
 
+# Cross-language SERIALIZATION-EQUIVALENCE coverage: one message, encoded once
+# by go into a checked-in golden byte corpus, decoded and value-asserted by all
+# five generated languages. Needs go + maven + cargo + python + node
+# concurrently, so it is a standalone target and is NOT part of `just test`.
+wire-corpus:
+    bash {{root}}/wire-corpus/run.sh
+
+wire-corpus-go:
+    bash {{root}}/wire-corpus/run.sh --language go
+
+wire-corpus-java:
+    bash {{root}}/wire-corpus/run.sh --language java
+
+wire-corpus-python:
+    bash {{root}}/wire-corpus/run.sh --language python
+
+wire-corpus-rust:
+    bash {{root}}/wire-corpus/run.sh --language rust
+
+wire-corpus-typescript:
+    bash {{root}}/wire-corpus/run.sh --language typescript
+
+# Re-encode the checked-in golden bytes from the fixture's own expect blocks.
+# Manual: run it only after deliberately editing an expect value, never to make
+# a disagreeing decoder pass.
+wire-corpus-emit:
+    bash {{root}}/wire-corpus/run.sh --emit
+
 consumer-smoke:
     bash {{root}}/consumer-smoke/run.sh
 

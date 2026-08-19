@@ -47,6 +47,17 @@ The cross-test suite has these gates (see `.gitlab-ci.yml` and
   corpus are still NOT covered. Local/manual
   (`just -f cross-test/justfile server-runtime`); not in CI, not in `just test`,
   not in the nightly matrix.
+- `wire-corpus` (`cross-test/wire-corpus/run.sh`): cross-language
+  SERIALIZATION-EQUIVALENCE gate. One `CorpusRecord` message is encoded ONCE by
+  go, deterministically, into checked-in golden bytes
+  (`cross-test/fixtures/wire_corpus.json`); go, java, python, rust and
+  typescript then each decode that same blob with their generated type and
+  assert every decoded FIELD VALUE equals the expected constants in that same
+  fixture. It is the only in-repo evidence that a message encoded in one
+  language decodes to identical values in all five — every other gate is source
+  parity, compile, or RPC behavior. Local/manual
+  (`just -f cross-test/justfile wire-corpus`); not in CI, not in `just test`,
+  not in the nightly matrix.
 - `consumer-smoke` (`cross-test/consumer-smoke/run.sh`): a local/manual smoke
   target defined in `cross-test/justfile`. It is NOT invoked by CI or the nightly
   matrix — the runtime checks that run in CI live in `consumer-contract` above.
@@ -327,6 +338,42 @@ languages.
 
 Additional smoke paths should be added in this layer rather than reviving
 committed generated output trees.
+
+## Wire Corpus (serialization equivalence)
+
+```bash
+just -f cross-test/justfile wire-corpus
+just -f cross-test/justfile wire-corpus-go
+just -f cross-test/justfile wire-corpus-java
+just -f cross-test/justfile wire-corpus-python
+just -f cross-test/justfile wire-corpus-rust
+just -f cross-test/justfile wire-corpus-typescript
+just -f cross-test/justfile wire-corpus-emit
+```
+
+`cross-test/fixtures/wire_corpus.json` is the single source of truth: each
+vector carries the golden `hex` AND the `expect` values it must decode to. The
+go leg is the only encoder — `--emit` re-encodes each vector from its own
+`expect` block with deterministic marshalling (sorted map keys) and rewrites
+`hex`. Every language then generates the model from `cross-test/wire-corpus/proto`
+and decodes THAT blob with its generated `CorpusRecord` type. Five decoders
+against one corpus, not a 5x5 matrix. The go leg additionally re-encodes
+`expect` and asserts the bytes are byte-identical to the checked-in `hex`, which
+pins the corpus against a future change in go's encoding.
+
+The message covers exactly the shapes this repo uses that differ between
+runtimes: `int64` at the +/-2^63 boundary, `uint64` above 2^53 (and at 2^64-1,
+which java can only render with `Long.toUnsignedString`), a
+`map<string, string>` with several entries declared out of sorted order and one
+empty value, a proto3 `optional int32` in BOTH the present-with-zero and absent
+states, and a non-UTF-8 `bytes` field. `sint*`/`sfixed*`, non-string map keys,
+`google.protobuf.Timestamp` precision and `fixed32`/`fixed64` are deliberately
+out of scope: the repo has zero, zero, zero and three uses of them
+respectively. See `cross-test/wire-corpus/README.md`.
+
+A decoder that disagrees with the golden bytes is a finding. `--emit` exists
+only for a deliberate change to the corpus, never to make a disagreeing decoder
+pass.
 
 ## Chaos / Model Stress (Profile A)
 

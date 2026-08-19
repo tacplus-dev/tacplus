@@ -78,6 +78,31 @@ cert-stream-rust:
 w2s-validate:
   bash cross-test/w2s-validate/run.sh
 
+# Cross-language serialization-equivalence corpus: one message, encoded once by
+# go into checked-in golden bytes, decoded and value-asserted by all five
+# generated languages. Local/manual — not part of `test`.
+wire-corpus:
+  bash cross-test/wire-corpus/run.sh
+
+wire-corpus-go:
+  bash cross-test/wire-corpus/run.sh --language go
+
+wire-corpus-java:
+  bash cross-test/wire-corpus/run.sh --language java
+
+wire-corpus-python:
+  bash cross-test/wire-corpus/run.sh --language python
+
+wire-corpus-rust:
+  bash cross-test/wire-corpus/run.sh --language rust
+
+wire-corpus-typescript:
+  bash cross-test/wire-corpus/run.sh --language typescript
+
+# Re-encode the golden bytes from the fixture's own expect blocks. Manual only.
+wire-corpus-emit:
+  bash cross-test/wire-corpus/run.sh --emit
+
 # PC-L-9 chaos soak: generates+builds a driver binary per run, too slow for
 # `just test`. Excluded from `go test ./...` via the `soak` build tag.
 leak-soak:

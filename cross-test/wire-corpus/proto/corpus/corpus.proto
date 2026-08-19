@@ -1,0 +1,63 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// Serialization-equivalence corpus (LED-2 phase 2).
+//
+// CorpusRecord exists only to be encoded ONCE (by go, into the checked-in
+// cross-test/fixtures/wire_corpus.json golden vectors) and decoded by every
+// generated language, which then asserts the decoded field VALUES against the
+// expected constants in that same fixture.
+//
+// The field set is deliberately narrow: it covers only the wire shapes this
+// repo actually uses and that actually differ between language runtimes. See
+// cross-test/wire-corpus/README.md for why sint*/sfixed*/non-string map keys
+// are out of scope (zero real usage repo-wide).
+
+syntax = "proto3";
+
+package corpusclient;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "corpusclient"};
+option (spec.grpc_c2s_client) = {service: "corpusclient.CorpusApi"};
+
+message CorpusRecord {
+  // Signed 64-bit at the boundary. Encoded as a 10-byte varint (proto3 int64
+  // sign-extends); a language that decodes into a 32-bit or float slot loses
+  // it.
+  int64 big_negative = 1;
+
+  // Unsigned 64-bit above 2^53 — the JS/TypeScript float-precision killer.
+  uint64 big_unsigned = 2;
+
+  // Multiple entries, insertion order deliberately unsorted. Golden bytes are
+  // produced with deterministic marshalling (sorted keys); decoders must
+  // compare by key lookup, never by iteration order.
+  map<string, string> labels = 3 [(spec.assert_max_size) = 8];
+
+  // proto3 explicit presence. Vector "full" sets it PRESENT with the zero
+  // value; vector "sparse" leaves it ABSENT. A language that collapses
+  // optional to a bare default cannot tell those two vectors apart.
+  optional int32 opt_count = 4;
+
+  // Non-UTF-8 payload: proves bytes are not round-tripped through a string
+  // type anywhere.
+  bytes blob = 5 [(spec.assert_max_size) = 64];
+}
+
+message CorpusRequest {
+  string tenant_namespace = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 1
+  ];
+}
+
+// A C2S service exists only so every target — including the full-client
+// targets (python, typescript) — generates the CorpusRecord message type.
+service CorpusApi {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  rpc GetRecord(CorpusRequest) returns (CorpusRecord) {
+    option (spec.method_c2s) = {auth_disabled: true};
+  }
+}

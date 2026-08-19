@@ -251,6 +251,10 @@ EOF
     grep -rq "tls_cert_stream_loop" "$OUT/s2sm"      || die "rust TLS cert stream loop missing"
     grep -rq "smb_cert_stream_loop" "$OUT/s2sm"      || die "rust SMB cert stream loop missing"
     grep -rq "cert_leaf_matches_public_key" "$OUT/s2sm" || die "rust public-key validation missing"
+    # The retry budget is a parameter so exhaustion is testable (PC-L-3), but the
+    # production call site must still spend the unchanged default of 30.
+    grep -rq "const MAX_INIT_RETRIES: u32 = 30;" "$OUT/s2sm" || die "rust cert stream default retry budget changed"
+    grep -rA1 "tls_degrade_clone," "$OUT/s2sm" | grep -q "MAX_INIT_RETRIES," || die "rust TLS cert stream does not pass the default retry budget"
     grep -q '"smb_authority": *true' "$OUT/registry.json" || die "registry missing SMB authority"
 
     cp "$ROOT_DIR/cross-test/cert-stream/testdata/cert_stream_behavior_test.rs" "$OUT/s2sm/cert_stream_behavior_test.rs"

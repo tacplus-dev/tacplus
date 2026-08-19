@@ -762,6 +762,7 @@ impl ServiceManager {
                     tls_conn, service_label, instance_id, handler_slot, tls_tp,
                     Some(tls_ready_tx), cert_der_store, key_der_store, cert_proto_store,
                     cert_pem_store, key_pem_store, server_certified_key_store, tls_degrade_clone,
+                    MAX_INIT_RETRIES,
                 ).await;
             });
             // The stream reports the OUTCOME of the first delivery, not just the
@@ -2283,6 +2284,11 @@ async fn {{.StreamFn}}(
 /// cert or the loop gives up before any delivery. Both `Err` cases are fatal —
 /// the loop stops and the service fails to start, naming the cause. If
 /// `ready_tx` is dropped without sending, the service will fail to start.
+/// `max_init_retries` is the first-delivery retry budget; it falls back to
+/// `MAX_INIT_RETRIES` when 0. It is a parameter rather than the bare const so
+/// an exhaustion test can spend the budget in seconds (PC-L-3); production
+/// passes `MAX_INIT_RETRIES`. The general-init, state-store and health-reporter
+/// loops still read the const directly and are unchanged.
 async fn tls_cert_stream_loop(
     conn: Arc<ServiceConnection>,
     service_label: String,
@@ -2297,7 +2303,9 @@ async fn tls_cert_stream_loop(
     key_pem_store: Arc<tokio::sync::RwLock<Option<String>>>,
     server_certified_key_store: Arc<std::sync::RwLock<Option<Arc<CertifiedKey>>>>,
     tls_degrade: Arc<std::sync::Mutex<TlsDegradeSeam>>,
+    max_init_retries: u32,
 ) {
+    let max_init_retries = if max_init_retries == 0 { MAX_INIT_RETRIES } else { max_init_retries };
     let mut init_attempts: u32 = 0;
     loop {
         let waiting_for_first = ready_tx.is_some();
@@ -2344,7 +2352,7 @@ async fn tls_cert_stream_loop(
         }
         if waiting_for_first && ready_tx.is_some() {
             init_attempts += 1;
-            if init_attempts >= MAX_INIT_RETRIES {
+            if init_attempts >= max_init_retries {
                 tracing::error!(attempts = init_attempts, "TLS cert stream failed before first delivery");
                 let cause = retry.as_deref().unwrap_or("no cert delivered").to_string();
                 let give_up = format!(

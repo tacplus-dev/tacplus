@@ -565,6 +565,7 @@ fn fixture_token_provider() -> TokenProvider {
 
 fn spawn_tls_loop(
     ready_tx: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+    max_init_retries: u32,
 ) -> tokio::task::JoinHandle<()> {
     let handler_slot = Arc::new(tokio::sync::RwLock::new(None));
     let cert_der_store = Arc::new(tokio::sync::RwLock::new(None));
@@ -589,6 +590,7 @@ fn spawn_tls_loop(
         key_pem_store,
         server_certified_key_store,
         tls_degrade,
+        max_init_retries,
     ))
 }
 
@@ -949,6 +951,7 @@ async fn rust_tls_first_handler_failure_stops_the_retry_loop() {
         stores.key_pem_store.clone(),
         stores.server_certified_key_store.clone(),
         stores.tls_degrade.clone(),
+        0,
     ));
 
     let ready_err = tokio::time::timeout(Duration::from_secs(10), ready_rx)
@@ -1057,7 +1060,7 @@ async fn rust_tls_stale_renewal_cert_is_ignored_until_fresh_csr_is_signed() {
 #[tokio::test]
 async fn rust_tls_startup_backoff_task_exits_when_aborted() {
     let (tx, mut rx) = tokio::sync::oneshot::channel();
-    let handle = spawn_tls_loop(Some(tx));
+    let handle = spawn_tls_loop(Some(tx), 0);
 
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
@@ -1066,10 +1069,91 @@ async fn rust_tls_startup_backoff_task_exits_when_aborted() {
 
 #[tokio::test]
 async fn rust_tls_renewal_backoff_task_exits_when_aborted() {
-    let handle = spawn_tls_loop(None);
+    let handle = spawn_tls_loop(None, 0);
 
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     assert_task_aborts(handle, "TLS renewal backoff").await;
+}
+
+// PC-L-3: the give-up-before-first-delivery path had no behavioral pin in any
+// language, because spending the production budget (MAX_INIT_RETRIES = 30)
+// honestly costs ~812s of backoff. tls_cert_stream_loop now takes the budget as
+// a trailing parameter, so a test can spend it in seconds. The chain that
+// matters is the whole give-up chain: report the instance degraded, hand
+// startup the cause, and STOP the loop.
+#[tokio::test]
+async fn rust_tls_cert_stream_gives_up_after_the_injected_budget() {
+    let handler_slot = Arc::new(tokio::sync::RwLock::new(None));
+    let stores = TlsStores::new();
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+
+    // An empty dynamic connection has no active target, so every attempt fails
+    // before first delivery and the loop can only exit by exhausting its budget.
+    // Budget 3 spends 2s + 4s of backoff instead of the production ~812s.
+    let loop_task = tokio::spawn(tls_cert_stream_loop(
+        empty_authority_connection(),
+        "StreamMemberService".to_string(),
+        "instance-1".to_string(),
+        handler_slot,
+        fixture_token_provider(),
+        Some(ready_tx),
+        stores.cert_der_store.clone(),
+        stores.key_der_store.clone(),
+        stores.cert_proto_store.clone(),
+        stores.cert_pem_store.clone(),
+        stores.key_pem_store.clone(),
+        stores.server_certified_key_store.clone(),
+        stores.tls_degrade.clone(),
+        3,
+    ));
+
+    let ready_err = tokio::time::timeout(Duration::from_secs(20), ready_rx)
+        .await
+        .expect("TLS give-up signal should arrive well inside the production budget")
+        .expect("TLS ready signal should be sent")
+        .expect_err("exhausting the retry budget must fail startup");
+    assert!(
+        ready_err.contains("TLS cert stream failed before first delivery after 3 attempts"),
+        "give-up error must name the injected budget, got: {ready_err}"
+    );
+    assert!(
+        ready_err.contains("no active connection for ManageCert"),
+        "give-up error must carry the last cause, got: {ready_err}"
+    );
+
+    // The loop must STOP once the budget is spent, not keep retrying.
+    tokio::time::timeout(Duration::from_secs(2), loop_task)
+        .await
+        .expect("TLS loop must stop after exhausting its retry budget")
+        .expect("TLS loop task should not panic");
+
+    let seen = stores
+        .tls_degrade
+        .lock()
+        .expect("tls degrade seam lock")
+        .seen
+        .clone();
+    assert!(
+        seen.iter()
+            .any(|r| r.contains("TLS renewal stream gave up before first delivery")),
+        "give-up must report the instance degraded, saw: {seen:?}"
+    );
+}
+
+// Guards the hard constraint behind the seam: a caller that injects no budget
+// (0) keeps the production one. A budget of 3 gives up after ~6s, so silence
+// past that window proves the default is materially larger.
+#[tokio::test]
+async fn rust_tls_default_budget_outlasts_a_test_budget() {
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    let handle = spawn_tls_loop(Some(tx), 0);
+
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert!(
+        matches!(rx.try_recv(), Err(TryRecvError::Empty)),
+        "default-budget loop gave up inside the window a budget of 3 exits in"
+    );
+    assert_task_aborts(handle, "TLS default budget").await;
 }
 
 #[tokio::test]

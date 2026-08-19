@@ -18,45 +18,78 @@ rediscovered.
 
 ---
 
-## PC-L-3 — Rust cert-stream has no exhaustion pin; retry budget isn't testable
+## PC-L-3 — cert-stream TLS exhaustion pin — CLOSED (Go, Java, Rust)
 
-**Status:** channel-capture is closed (`CertStreamBehaviorTest.java`,
-`...ReResolvesTheAuthorityAfterTheTargetMoves`, TLS+SMB). **Go and Java are now
-closed** for exhaustion. Go: `tlsCertStreamLoop` takes its first-delivery retry
-budget as a parameter (falling back to `certStreamMaxInitRetries = 30` when
-non-positive), and `TestGoTlsCertStreamRetryExhaustion` in
-`cross-test/cert-stream/testdata/cert_stream_behavior_test.go` drives a budget
-of 3 to real give-up in ~6s. Java: `tlsCertStreamLoop` gained a 6-arg overload
-taking the budget (falling back to `MAX_INIT_RETRIES = 30` when non-positive),
-the 5-arg production entry point passes `MAX_INIT_RETRIES`, and
-`javaTlsCertStreamGivesUpAfterTheInjectedBudget` /
-`javaTlsCertStreamDefaultBudgetOutlastsATestBudget` in
-`cross-test/cert-stream/testdata/CertStreamBehaviorTest.java` pin the give-up
-chain and the unchanged default. Rust still has no exhaustion pin.
+**Status:** closed. Channel-capture was closed first
+(`CertStreamBehaviorTest.java`, `...ReResolvesTheAuthorityAfterTheTargetMoves`,
+TLS+SMB); TLS exhaustion is now closed in all three languages.
 
-The TLS renewal stream can exhaust its retry chain, and a renewed channel can be
-captured by a stale reference. The channel-capture leg is now proven: a stale
-authority's stream ends, the loop backs off, and by the next attempt the
-connection has re-resolved to the moved target — evidenced by per-authority CSR
-counters (stale sees exactly one, moved sees the retry's).
+- **Go:** `tlsCertStreamLoop` takes its first-delivery retry budget as a
+  parameter (falling back to `certStreamMaxInitRetries = 30` when non-positive),
+  and `TestGoTlsCertStreamRetryExhaustion` in
+  `cross-test/cert-stream/testdata/cert_stream_behavior_test.go` drives a budget
+  of 3 to real give-up in ~6s.
+- **Java:** `tlsCertStreamLoop` gained a 6-arg overload taking the budget
+  (falling back to `MAX_INIT_RETRIES = 30` when non-positive), the 5-arg
+  production entry point passes `MAX_INIT_RETRIES`, and
+  `javaTlsCertStreamGivesUpAfterTheInjectedBudget` /
+  `javaTlsCertStreamDefaultBudgetOutlastsATestBudget` in
+  `cross-test/cert-stream/testdata/CertStreamBehaviorTest.java` pin the give-up
+  chain and the unchanged default.
+- **Rust:** `tls_cert_stream_loop` takes a trailing `max_init_retries: u32`
+  (falling back to `MAX_INIT_RETRIES = 30` when 0), the production call site
+  passes `MAX_INIT_RETRIES`, and
+  `rust_tls_cert_stream_gives_up_after_the_injected_budget` /
+  `rust_tls_default_budget_outlasts_a_test_budget` in
+  `cross-test/cert-stream/testdata/cert_stream_behavior_test.rs` pin the
+  give-up chain (degrade report + startup cause + loop stop) and the unchanged
+  default.
 
-Java's `MAX_INIT_RETRIES = 30` is a `private static final int`, which `javac`
-inlines at every call site (confirmed via `javap` bytecode inspection — the
-constant is baked in, not read from the field), so the budget had to become a
-parameter before an exhaustion test could avoid ~780s of real `Thread.sleep`
-per run. Note that Java's constant is shared with the general-init retry loop
-and `healthReporter.start(...)` — the overload does NOT split it; the other two
-call sites still read the constant directly and are unchanged.
+Why a seam was needed at all: spending the production budget honestly costs
+~812s of backoff in Go/Rust and ~780s of `Thread.sleep` in Java. Java's
+`MAX_INIT_RETRIES` is additionally a `private static final int`, which `javac`
+inlines at every call site (confirmed via `javap`), so it could not be
+monkey-patched from a test even in principle.
 
-Rust has the same gap and one extra complication: `tls_cert_stream_loop`
-(and `smb_cert_stream_loop`) read the SAME `const MAX_INIT_RETRIES: u32 = 30`
-used by the general-init loops, so a Rust seam either splits that constant
-first or widens blast radius beyond the cert streams. Go's two budgets were
-already separate constants, which is why the Go leg was cheap to close.
+Blast radius was deliberately kept at zero: Java's constant is shared with the
+general-init loop and `healthReporter.start(...)`, and Rust's is shared with
+general-init, the two state-store waits, and the health reporter. Neither seam
+splits the constant — every non-TLS-cert-stream call site still reads it
+directly and is unchanged. `just determinism` / `just current-generation` pin
+that the emitted default behavior is byte-identical.
 
-**To close:** make the retry budget injectable in the Rust template — the same
-seam the Go and Java templates now have — so a test can drive exhaustion in real
-time instead of wall-clock time.
+`cross-test/cert-stream/run.sh` asserts, per language, both that the default
+budget is still 30 and that the production call site passes it explicitly.
+
+---
+
+## PC-L-3b — SMB cert-stream exhaustion is unpinned in every language
+
+**Status:** open. Same defect class as PC-L-3's TLS leg, one loop over.
+
+`smbCertStreamLoop` (Go, `service_manager.go.tmpl`), `smbCertStreamLoop` (Java,
+`ServiceManager.java.tmpl`) and `smb_cert_stream_loop` (Rust,
+`service_manager.rs.tmpl`) all still compare `initAttempts`/`attempt`/
+`init_attempts` against the bare budget constant — `certStreamMaxInitRetries`
+in Go, `MAX_INIT_RETRIES` in Java and Rust. None of the three took the seam that
+PC-L-3 added to its TLS sibling, so the SMB give-up-before-first-delivery path
+cannot be driven in a test without the same ~780-812s of real backoff, and
+consequently has no behavioral pin in any language.
+
+Note there was no pre-existing Go SMB entry in this file to match wording
+against: the SMB gap was undocumented in all three languages until now. PC-L-3's
+three legs were each scoped to TLS only by the controller, deliberately — this
+entry records what that scoping left behind rather than implying regression.
+
+What is covered today: SMB channel-capture and the handler/renewal paths are
+pinned by the `rust_smb_*` / `javaSmb*` / `TestGoSmb*` cases in the cert-stream
+behavior tests. Only exhaustion is missing.
+
+**To close:** give each `smb*CertStreamLoop` the same budget seam its TLS
+sibling now has — a trailing parameter in Go and Rust, an overload in Java —
+with the production call site passing the unchanged constant, then add an
+exhaustion test per language mirroring the TLS ones. Keep the shared constants
+unsplit, as PC-L-3 did.
 
 ---
 

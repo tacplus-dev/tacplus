@@ -3166,6 +3166,12 @@ import (
 	"google.golang.org/grpc"
 )
 
+// daemonServer is hand-rolled on purpose: Go has no generated C2D server
+// wrapper to host. Go excludes C2D services from server generation by design
+// (docs/API.md "C2D server auth-skip scope") and emits C2D clients only, so
+// this test can only exercise the generated C2D *client* against a plain
+// hand-written gRPC server. Runtime coverage of the generated C2D server wrapper
+// lives in the Rust c2d consumer (write_rust_c2d_consumer, PC-W-3).
 type daemonServer struct {
 	types.UnimplementedContractDaemonServer
 }
@@ -5347,6 +5353,21 @@ EOF
 write_rust_c2d_consumer() {
   local main_rs="$1"
   cat > "$main_rs" <<'EOF'
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::net::TcpListener;
+use tokio_stream::wrappers::TcpListenerStream;
+
+use contractclient_model::s2sm::internal::grpc::servers::contract::contractclient::contract_daemon::{
+    Authorizer as ContractDaemonAuthorizer, ContractDaemonHandler, ValidationWrapper,
+};
+use contractclient_model::types::contract::contractclient::contract_daemon_client::ContractDaemonClient;
+use contractclient_model::types::contract::contractclient::contract_daemon_server::ContractDaemonServer;
+use contractclient_model::types::contract::contractclient::{
+    ContractMode, ContractRequest, ContractResponse,
+};
+
 fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     rt.block_on(async {
@@ -5354,7 +5375,157 @@ fn main() {
         let sm = contractclient_model::c2dm::ServiceManager::new(channel);
         let _api = sm.grpc().contractclient().contract_daemon_client();
         let _socket_path = sm.socket_path();
+
+        run_c2d_server_auth_skip_smoke().await;
     });
+}
+
+struct DaemonHandler;
+
+#[tonic::async_trait]
+impl ContractDaemonHandler for DaemonHandler {
+    async fn get_local(
+        &self,
+        caller: Option<&servicemanager::auth::Caller>,
+        req: ContractRequest,
+    ) -> Result<ContractResponse, tonic::Status> {
+        // C2D carries no token, so the wrapper has no caller identity to pass on.
+        assert!(caller.is_none(), "C2D handler must not receive a caller");
+        Ok(ContractResponse {
+            result_id: format!("c2d-{}", req.item_id),
+            accepted: true,
+            ..Default::default()
+        })
+    }
+
+    async fn generate_local_events(
+        &self,
+        _caller: Option<&servicemanager::auth::Caller>,
+        _req: ContractRequest,
+    ) -> Result<
+        tonic::Response<
+            std::pin::Pin<
+                Box<
+                    dyn tokio_stream::Stream<
+                            Item = Result<
+                                contractclient_model::types::contract::contractclient::ContractEvent,
+                                tonic::Status,
+                            >,
+                        > + Send,
+                >,
+            >,
+        >,
+        tonic::Status,
+    > {
+        Err(tonic::Status::unimplemented("not exercised"))
+    }
+}
+
+/// DenyAllAuthorizer rejects every authorization decision it is asked to make.
+/// Wiring it proves the C2D wrapper never consults the authorizer: if it did,
+/// the calls below would fail Unauthenticated instead of reaching the handler.
+struct DenyAllAuthorizer;
+
+#[tonic::async_trait]
+impl ContractDaemonAuthorizer for DenyAllAuthorizer {
+    async fn authorize(
+        &self,
+        _full_method: &str,
+        _authorization: Option<&str>,
+    ) -> Result<(), tonic::Status> {
+        Err(tonic::Status::unauthenticated("deny-all authorizer"))
+    }
+
+    async fn check_at_or_below(
+        &self,
+        _authorization: Option<&str>,
+        _target_namespace: &str,
+    ) -> Result<(), tonic::Status> {
+        Err(tonic::Status::unauthenticated("deny-all authorizer"))
+    }
+}
+
+fn valid_local_request(item_id: &str) -> ContractRequest {
+    ContractRequest {
+        tenant_namespace: "tenant-a".to_string(),
+        item_id: item_id.to_string(),
+        mode: ContractMode::Read as i32,
+        ..Default::default()
+    }
+}
+
+// PC-W-3: the generated C2D server wrapper skips token authentication by design
+// (the auth boundary is the socket permission, not a bearer token) but still runs
+// the full validation pipeline — see docs/API.md "C2D server auth-skip scope".
+// Rust is the only target that hosts a generated C2D server wrapper. This proves
+// both halves live over the wire against a real generated ValidationWrapper.
+async fn run_c2d_server_auth_skip_smoke() {
+    let wrapper = ValidationWrapper::new(Arc::new(DaemonHandler));
+    wrapper
+        .set_authorize_func(Some(Arc::new(DenyAllAuthorizer)))
+        .await;
+    // Guard the negative: the deny-all authorizer really is installed, so the
+    // successful calls below cannot be explained by an unwired authorizer slot.
+    assert!(wrapper.has_authorizer().await, "deny-all authorizer must be wired");
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind rust c2d server");
+    let addr = listener.local_addr().expect("rust c2d server addr");
+    let incoming = TcpListenerStream::new(listener);
+    let server = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(ContractDaemonServer::new(wrapper))
+            .serve_with_incoming(incoming)
+            .await
+            .expect("serve rust c2d");
+    });
+
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{}", addr))
+        .expect("rust c2d endpoint")
+        .connect_timeout(Duration::from_secs(2))
+        .connect()
+        .await
+        .expect("connect rust c2d");
+    let mut client = ContractDaemonClient::new(channel);
+
+    // (a) No authorization metadata at all, and a deny-all authorizer wired:
+    // the call must still reach the handler. Auth is genuinely bypassed.
+    let response = client
+        .get_local(valid_local_request("item-1"))
+        .await
+        .expect("C2D call without a token must succeed")
+        .into_inner();
+    assert_eq!(response.result_id, "c2d-item-1");
+    assert!(response.accepted);
+
+    // An invalid bearer token is likewise not consulted — no token lookup runs.
+    let mut request = tonic::Request::new(valid_local_request("item-2"));
+    request.metadata_mut().insert(
+        "authorization",
+        "Bearer not-a-real-token".parse().expect("metadata value"),
+    );
+    let response = client
+        .get_local(request)
+        .await
+        .expect("C2D call with an invalid token must succeed")
+        .into_inner();
+    assert_eq!(response.result_id, "c2d-item-2");
+
+    // (b) Validation still runs: item_id carries assert_min_size = 3, so a
+    // two-character item_id must be rejected before the handler is reached.
+    let err = client
+        .get_local(valid_local_request("ab"))
+        .await
+        .expect_err("C2D request violating assert_min_size must be rejected");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("validation failed"),
+        "C2D validation rejection message = {}",
+        err.message()
+    );
+
+    server.abort();
 }
 EOF
 }

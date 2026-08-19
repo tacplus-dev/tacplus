@@ -143,6 +143,30 @@ format for per-rule coverage.
 
 ---
 
+## PC-W-5 — `proxy_dispatch::validate_request()` still has no in-repo caller
+
+**Status:** the REST leg is now closed; the gRPC-proxy leg is not.
+
+W2S request (ingress) validation in the generated Rust REST dispatch is wired
+and pinned: `cross-test/w2s-validate` hosts the real generated
+`rest_dispatch::dispatch` / `dispatch_stream` against a real tonic backend and
+proves an `assert_email` violation is rejected `400` without reaching the
+backend, with a valid request as the negative control.
+
+`proxy_dispatch::validate_request(grpc_path, proto_bytes)` is a different seam:
+it decodes raw proto frames, so its caller is the gateway's `proxy_grpc` layer,
+which lives in the consuming repo and not here. Nothing in this repo calls it,
+and no fixture can call it meaningfully without hosting a gRPC proxy — the
+generated code contains the capability but never the call site, so a test that
+invoked it directly would prove only that the function compiles.
+
+**To close:** a fixture that generates a gateway (`spec.service.gateway`) and
+hosts a real gRPC proxy hop in front of a backend service, so frames reach
+`validate_request` the way production frames do. That is a materially larger
+harness than the REST fixture, which needs no proxy at all.
+
+---
+
 ## How to close one of these
 
 Two things make a fix real here, and only the second is usually skipped:

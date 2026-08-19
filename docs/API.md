@@ -175,6 +175,15 @@ their gRPC wrapper pipeline (the REST surface is implemented as a translation
 layer atop gRPC, so gRPC egress validation covers it). Python and TypeScript
 are client-only targets and do not host a W2S server.
 
+**W2S REST/SSE ingress validation scope**: the Rust W2S server dispatch
+(`rest_dispatch.rs.tmpl`) validates the decoded request on both the unary and
+the SSE leg before forwarding it to the backend gRPC service, rejecting a
+failure as `400` with `request validation failed`. As with egress, requests
+whose input type is `google.protobuf.*` (including `Empty`) carry no tacplus
+`assert_*` constraints and are forwarded without a validation call. Go and Java
+W2S servers validate inbound messages through their gRPC wrapper pipeline.
+Python and TypeScript are client-only targets and do not host a W2S server.
+
 Auth-disabled methods skip token lookup and authorization but still validate
 messages. Auth-enabled methods must not reach the handler without a valid token
 and a satisfied authorization decision.

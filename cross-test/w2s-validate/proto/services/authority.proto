@@ -1,0 +1,28 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// W2S request-validation fixture minter. Declared only so the generated
+// ServiceManager can obtain an S2S identity; the fixture never calls it.
+
+syntax = "proto3";
+
+package w2svalidateauthority;
+
+import "sys/spec.proto";
+import "sys/tokenrequest.proto";
+import "sys/x509.proto";
+
+service TokenMintService {
+  option (spec.service_s2s) = {auth_services: ["*"]};
+  option (spec.token_minter) = {};
+
+  rpc TokenMint(tokenrequest.TokenMintRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.method_s2s) = {auth_disabled: true};
+  }
+
+  rpc MintServiceToken(tokenrequest.MintServiceTokenRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.method_s2s) = {auth_disabled: true};
+  }
+
+  rpc X509Mint(tokenrequest.X509MintRequest) returns (x509.X509CertChain) {
+    option (spec.method_s2s) = {auth_disabled: true};
+  }
+}

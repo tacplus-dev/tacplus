@@ -28,6 +28,7 @@ type dispatchArm struct {
 	MethodSnake     string // e.g., "get_user"
 	IsEmptyInput    bool
 	IsEmptyOutput   bool
+	ValidateInput   bool
 	ValidateOutput  bool
 	ClientStreaming bool
 	ClientPath      string // fully-qualified Rust tonic client path
@@ -241,6 +242,7 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 				MethodSnake:     methodSnake,
 				IsEmptyInput:    isEmptyInput,
 				IsEmptyOutput:   isEmptyOutput,
+				ValidateInput:   !isEmptyInput && rustW2SCanValidate(method.FullInputType),
 				ValidateOutput:  !isEmptyOutput && rustW2SCanValidate(method.FullOutputType),
 				ClientStreaming: method.ClientStreaming,
 				ClientPath:      resolveClientPath(svc.ServiceName, svc.PackageName, svcPkgToDir, cratePrefix),

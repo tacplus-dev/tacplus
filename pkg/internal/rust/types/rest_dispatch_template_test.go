@@ -91,6 +91,59 @@ func TestRustRestDispatchValidatesSSEItemBeforeJson(t *testing.T) {
 	}
 }
 
+func TestRustRestDispatchValidatesRequestBeforeForwarding(t *testing.T) {
+	out := renderRustRestDispatchForTest(t, restDispatchData{
+		HasStreaming: true,
+		UnaryArms: []dispatchArm{
+			{
+				GrpcPath:      "/contract.ContractApi/GetAudit",
+				ServiceID:     "contract",
+				MethodSnake:   "get_audit",
+				ClientPath:    "contract::contract_api_client::ContractApiClient",
+				FromJsonPath:  "contract::get_audit_request_from_json",
+				ToJsonPath:    "contract::get_audit_response_to_json",
+				ValidateInput: true,
+			},
+		},
+		StreamArms: []dispatchArm{
+			{
+				GrpcPath:      "/contract.ContractApi/WatchAudit",
+				ServiceID:     "contract",
+				MethodSnake:   "watch_audit",
+				ClientPath:    "contract::contract_api_client::ContractApiClient",
+				FromJsonPath:  "contract::watch_audit_request_from_json",
+				ToJsonPath:    "contract::watch_audit_event_to_json",
+				ValidateInput: true,
+			},
+		},
+	})
+
+	decode := strings.Index(out, "contract::get_audit_request_from_json(body)")
+	validate := strings.Index(out, "req.validate().map_err")
+	forward := strings.Index(out, ".get_audit(with_metadata(req")
+	streamDecode := strings.Index(out, "contract::watch_audit_request_from_json(body)")
+	streamValidate := strings.Index(out, "if let Err(e) = req.validate()")
+	streamForward := strings.Index(out, ".watch_audit(with_metadata(req")
+	for label, idx := range map[string]int{
+		"unary request decode":     decode,
+		"unary request validation": validate,
+		"unary forward":            forward,
+		"SSE request decode":       streamDecode,
+		"SSE request validation":   streamValidate,
+		"SSE forward":              streamForward,
+	} {
+		if idx < 0 {
+			t.Fatalf("rendered REST dispatch missing %s:\n%s", label, out)
+		}
+	}
+	if !(decode < validate && validate < forward) {
+		t.Fatalf("REST unary request must validate before forwarding:\n%s", out)
+	}
+	if !(streamDecode < streamValidate && streamValidate < streamForward) {
+		t.Fatalf("SSE request must validate before forwarding:\n%s", out)
+	}
+}
+
 func renderRustRestDispatchForTest(t *testing.T, data restDispatchData) string {
 	t.Helper()
 	tmplStr, err := loadTemplate("rest_dispatch.rs.tmpl")

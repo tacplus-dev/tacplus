@@ -19,6 +19,13 @@ The cross-test suite has these gates (see `.gitlab-ci.yml` and
 - `smb` (`cross-test/smb/run.sh`) and `cert-stream`
   (`cross-test/cert-stream/run.sh`): service-mesh-boundary and certificate-stream
   runtime gates for Go, Java, and Rust. Run in the nightly matrix.
+- `w2s-validate` (`cross-test/w2s-validate/run.sh`): W2S request (ingress)
+  validation gate for Rust — generates a service whose C2S backend has an
+  `assert_*` request constraint, hosts the REAL generated
+  `rest_dispatch::dispatch` / `dispatch_stream` against a real tonic backend,
+  and asserts an invalid request is rejected `400` without reaching the backend
+  while a valid one is forwarded. This is the only in-repo host of a generated
+  Rust W2S SERVER surface. Local/manual (`just w2s-validate`); not yet in CI.
 - `runtime-smoke` (`cross-test/runtime-smoke/run.sh`): cross-language runtime
   smoke — a go fixture server built from the generated go servers hosts the
   contract on localhost (C2S gRPC + hand-written W2S HTTP/SSE/WebSocket

@@ -73,6 +73,11 @@ cert-stream-java:
 cert-stream-rust:
   bash cross-test/cert-stream/run.sh --language rust
 
+# Behavioral coverage of W2S request (ingress) validation in the generated
+# Rust REST dispatch module.
+w2s-validate:
+  bash cross-test/w2s-validate/run.sh
+
 # PC-L-9 chaos soak: generates+builds a driver binary per run, too slow for
 # `just test`. Excluded from `go test ./...` via the `soak` build tag.
 leak-soak:

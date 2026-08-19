@@ -394,6 +394,7 @@ edition = "2021"
 collection = { path = "$RUST_MODEL_DIR/model/chassis/collection" }
 contractclient-model = { path = "$RUST_MODEL_DIR/model" }
 futures = "0.3.31"
+grpcserver = { path = "$RUST_MODEL_DIR/model/chassis/grpcserver" }
 servicemanager = { path = "$RUST_MODEL_DIR/model/chassis/servicemanager" }
 tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "net", "signal", "sync"] }
 tokio-stream = { version = "0.1.17", features = ["net"] }

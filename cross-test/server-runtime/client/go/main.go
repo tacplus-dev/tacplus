@@ -129,14 +129,18 @@ func checkPage(ctx context.Context, api *client.ContractApiClient, lang string) 
 // cannot accept. The remote generated wrapper must reject before the handler —
 // the fixture handlers return result_id "HANDLER-REACHED" for this method, so a
 // success (or that marker) here means auth was bypassed.
+//
+// Both hosted fixtures run the REAL generated Authorizer over an explicitly
+// empty verifying-key set, so the opaque fixture bearer is rejected at token
+// verification in both languages: UNAUTHENTICATED, exactly, either side.
 func checkFailClosed(ctx context.Context, api *client.ContractApiClient, lang string) {
 	resp, err := api.GetContract(ctx, validRequest())
 	if err == nil {
 		fail("%s GetContract was accepted (result_id=%q) — auth is not fail-closed", lang, resp.GetResultId())
 	}
 	code := status.Code(err)
-	if code != codes.Unauthenticated && code != codes.PermissionDenied {
-		fail("%s GetContract rejected with %s, want Unauthenticated or PermissionDenied: %v", lang, code, err)
+	if code != codes.Unauthenticated {
+		fail("%s GetContract rejected with %s, want Unauthenticated: %v", lang, code, err)
 	}
 	fmt.Printf("  %s: GetContract fail-closed rejection ok (%s)\n", lang, code)
 }

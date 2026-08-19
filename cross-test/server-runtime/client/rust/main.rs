@@ -127,6 +127,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The remote generated wrapper must reject before the handler — the fixture
     // handlers return result_id "HANDLER-REACHED" for this method, so a success
     // (or that marker) here means auth was bypassed.
+    //
+    // Both hosted fixtures run the REAL generated Authorizer over an explicitly
+    // empty verifying-key set, so the opaque fixture bearer is rejected at token
+    // verification in both languages: UNAUTHENTICATED, exactly, either side.
     match api.get_contract(valid_request()).await {
         Ok(resp) => fail(format!(
             "{} GetContract was accepted (result_id={}) — auth is not fail-closed",
@@ -135,9 +139,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )),
         Err(status) => {
             let code = status.code();
-            if code != tonic::Code::Unauthenticated && code != tonic::Code::PermissionDenied {
+            if code != tonic::Code::Unauthenticated {
                 fail(format!(
-                    "{} GetContract rejected with {:?}, want Unauthenticated or PermissionDenied: {}",
+                    "{} GetContract rejected with {:?}, want Unauthenticated: {}",
                     lang, code, status
                 ));
             }

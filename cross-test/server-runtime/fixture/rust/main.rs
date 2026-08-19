@@ -6,9 +6,11 @@
 // can drive it over the wire.
 //
 // As with the java fixture, this file supplies only the generated
-// ContractApiHandler trait impl and an Authorizer. Validation, PAGE token
-// encoding, egress sanitization, auth gating and dispatch all live in the
-// generated wrapper.
+// ContractApiHandler trait impl and an Authorizer -- and, as in the java
+// fixture, that Authorizer is the REAL generated one
+// (chassis/grpcserver/src/authorizer.rs). Validation, PAGE token encoding,
+// egress sanitization, auth gating and dispatch all live in the generated
+// wrapper.
 //
 // Startup contract: prints a single JSON line to stdout
 //
@@ -27,6 +29,7 @@ use contractclient_model::types::contract::contractclient::{
     ContractEvent, ContractPageRequest, ContractRequest, ContractResponse, ContractWatchChange,
     ContractWatchRequest,
 };
+use grpcserver::authorizer::Authorizer as GrpcAuthorizer;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_stream::Stream;
@@ -58,7 +61,8 @@ impl ContractApiHandler for Handler {
         _req: ContractRequest,
     ) -> Result<ContractResponse, tonic::Status> {
         // Never reachable: the generated wrapper authorizes GetContract before
-        // dispatch and this fixture's authorizer rejects it. If a client ever
+        // dispatch and the fixture wires no verifying key, so the real
+        // generated authorizer rejects the opaque bearer. If a client ever
         // sees this marker, auth was bypassed.
         Ok(ContractResponse {
             result_id: "HANDLER-REACHED".to_string(),
@@ -137,23 +141,51 @@ impl ContractApiHandler for Handler {
     }
 }
 
-// FixtureAuthorizer models the two distinct seams the generated wrapper drives:
-// `authorize` (auth_entitled_users — GetContract) is refused, so the fail-closed
-// leg is exercised; `check_at_or_below` (auth_any_user — ListEvents /
-// ListEventsPaged) accepts the fixture bearer.
-struct FixtureAuthorizer;
+// FixtureAuthorizer bridges the generated wrapper's Authorizer trait onto the
+// REAL generated grpcserver Authorizer, the same way the generated
+// ServiceManager's AuthorizerAdapter does, and mirrors the two seams the java
+// fixture wires:
+//
+// - `authorize` (auth_entitled_users -- GetContract) delegates to the real
+//   generated authorizer, constructed over an explicitly empty key set. This is
+//   the rust twin of the java fixture's `Authorizer.create()`: real JWT
+//   verification, no verifying keys wired, so the fail-closed leg is rejected
+//   by generated auth code rather than by a fixture stand-in.
+// - `check_at_or_below` (auth_any_user -- ListEvents / ListEventsPaged) is a
+//   fixture check on the opaque bearer, mirroring the java fixture's
+//   `setAuthenticateFunc`: that token is not a JWT and could never verify, so
+//   both fixtures short-circuit this seam identically.
+struct FixtureAuthorizer {
+    authorizer: GrpcAuthorizer,
+}
+
+impl FixtureAuthorizer {
+    // Empty seed == the java fixture's `Authorizer.create()`: real verification
+    // against an explicitly empty key set, never a bypass. No background JWK
+    // watch, so the fixture stays offline.
+    fn new() -> Self {
+        Self { authorizer: GrpcAuthorizer::with_seeded_jwks(Vec::new()) }
+    }
+}
 
 #[tonic::async_trait]
 impl Authorizer for FixtureAuthorizer {
     async fn authorize(
         &self,
         full_method: &str,
-        _authorization: Option<&str>,
+        authorization: Option<&str>,
     ) -> Result<(), tonic::Status> {
-        Err(tonic::Status::permission_denied(format!(
-            "no service_entitlements for {}",
-            full_method
-        )))
+        // Same shape as the generated AuthorizerAdapter: derive the bare method
+        // name from the full gRPC path and map the authorizer's code back onto
+        // a tonic Status.
+        let method = full_method.rsplit('/').next().unwrap_or(full_method);
+        self.authorizer
+            .authorize_grpc(full_method, method, authorization, &std::collections::HashMap::new())
+            .await
+            .map_err(|e| match e.code {
+                16 => tonic::Status::unauthenticated(e.message),
+                _ => tonic::Status::permission_denied(e.message),
+            })
     }
 
     async fn check_at_or_below(
@@ -188,7 +220,7 @@ async fn shutdown_signal() {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wrapper = ValidationWrapper::new(Arc::new(Handler));
-    wrapper.set_authorize_func(Some(Arc::new(FixtureAuthorizer))).await;
+    wrapper.set_authorize_func(Some(Arc::new(FixtureAuthorizer::new()))).await;
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;

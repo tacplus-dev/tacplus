@@ -67,24 +67,31 @@ hand-rolled stubs, no hand-built metadata:
 | unary | `GetPublicContract` (`auth_disabled`) | full request→handler→response round trip with exact field values |
 | server stream | `ListEvents` (`auth_any_user`, SNAPSHOT) | streaming egress + the auth_any_user seam, including the bearer token the generated client attaches |
 | PAGE | `ListEventsPaged` (`auth_any_user`) | the server encodes a resume cursor and the generated client's auto-pager decodes it and walks two pages |
-| fail-closed | `GetContract` (`auth_entitled_users`) | the generated wrapper rejects before the handler; the fixture handler returns `HANDLER-REACHED`, so a bypass is loud |
+| fail-closed | `GetContract` (`auth_entitled_users`) | the generated wrapper plus the real generated Authorizer reject before the handler (`UNAUTHENTICATED`, both hosts); the fixture handler returns `HANDLER-REACHED`, so a bypass is loud |
 
-## Known cross-language difference (not a fixture papering-over)
+## Fail-closed leg: real generated auth on both sides
 
-The fail-closed leg is rejected with **`UNAUTHENTICATED` (16)** by the
-java-hosted server and **`PERMISSION_DENIED` (7)** by the rust-hosted server, so
-every driver accepts either code. The cause is a structural asymmetry in the
-generated auth seam, not in the drivers:
+Both hosted fixtures run the **real generated `chassis/grpcserver` Authorizer**
+on the `authorize` seam, constructed over an explicitly empty verifying-key set:
 
-- java emits a concrete `chassis/grpcserver/Authorizer` with JWT verification
-  built in (`Authorizer.create()`), which rejects the fixture's opaque bearer
-  token at token verification → `UNAUTHENTICATED`
-- rust emits an `Authorizer` **trait** only, with no default implementation, so
-  the fixture must supply one; it refuses `authorize` outright →
-  `PERMISSION_DENIED`
+- java: `Authorizer.create()` (`Fixture.java`)
+- rust: `Authorizer::with_seeded_jwks(Vec::new())`, bridged onto the generated
+  wrapper's `Authorizer` trait by `FixtureAuthorizer` in `fixture/rust/main.rs`
+  the same way the generated ServiceManager's `AuthorizerAdapter` does
 
-This predates phase 3 (it was already visible in the phase 1 go-driven legs) and
-is recorded here rather than smoothed over.
+So the fail-closed leg exercises generated JWT verification in both languages:
+the opaque fixture bearer is not a JWT, fails at token parse, and both hosted
+servers reject with **`UNAUTHENTICATED` (16)**. Every driver asserts that exact
+code — no "either code" latitude.
+
+The `auth_any_user` seam (`check_at_or_below` / `setAuthenticateFunc`) is the
+one place both fixtures still supply their own check: the opaque bearer could
+never verify against a real key set, so both short-circuit it identically.
+
+Earlier revisions of this gate saw java answer `UNAUTHENTICATED` and rust
+`PERMISSION_DENIED`. That was not a generator asymmetry — rust emits a concrete,
+JWT-verifying `Authorizer` too — it was this fixture hand-rolling a stand-in
+that refused `authorize` without ever inspecting the token.
 
 ## Not covered here
 

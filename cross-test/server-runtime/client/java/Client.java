@@ -125,14 +125,18 @@ public final class Client {
     // cannot accept. The remote generated wrapper must reject before the handler
     // — the fixture handlers return result_id "HANDLER-REACHED" for this method,
     // so a success (or that marker) here means auth was bypassed.
+    //
+    // Both hosted fixtures run the REAL generated Authorizer over an explicitly
+    // empty verifying-key set, so the opaque fixture bearer is rejected at token
+    // verification in both languages: UNAUTHENTICATED, exactly, either side.
     private static void checkFailClosed(ContractApiGrpcClient api, String lang) {
         try {
             Contractclient.ContractResponse resp = api.getContract(validRequest());
             fail("%s GetContract was accepted (result_id=%s) — auth is not fail-closed", lang, resp.getResultId());
         } catch (ProtoException e) {
             int code = e.getCode();
-            if (code != ProtoException.UNAUTHENTICATED && code != ProtoException.PERMISSION_DENIED) {
-                fail("%s GetContract rejected with code %d, want UNAUTHENTICATED(16) or PERMISSION_DENIED(7): %s",
+            if (code != ProtoException.UNAUTHENTICATED) {
+                fail("%s GetContract rejected with code %d, want UNAUTHENTICATED(16): %s",
                 lang, code, e.getMessage());
             }
             System.out.printf("  %s: GetContract fail-closed rejection ok (code %d)%n", lang, code);

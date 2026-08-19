@@ -269,6 +269,10 @@ EOF
     grep -rq "verifyLeafMatchesPublicKey" "$OUT/src/main/java" || die "java public-key validation missing"
     grep -rq "no active connection for ManageCert" "$OUT/src/main/java" || die "java TLS missing-connection error missing"
     grep -rq "no active connection for ManageSmbCert" "$OUT/src/main/java" || die "java SMB missing-connection error missing"
+    # The retry budget is an overload parameter so exhaustion is testable (PC-L-3),
+    # but the production entry point must still spend the unchanged default of 30.
+    grep -rq "private static final int MAX_INIT_RETRIES = 30;" "$OUT/src/main/java" || die "java default retry budget changed"
+    grep -rq "tlsCertStreamLoop(sm, stateStoreConn, identity, readyLatch, readyError, MAX_INIT_RETRIES);" "$OUT/src/main/java" || die "java TLS cert stream production entry point does not pass the default retry budget"
     grep -q '"smb_authority": *true' "$OUT/registry.json" || die "registry missing SMB authority"
 
     mkdir -p "$OUT/src/test/java/com/example/certstream/model/s2sm"

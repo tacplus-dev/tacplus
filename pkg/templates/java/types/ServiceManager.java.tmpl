@@ -1201,12 +1201,34 @@ public class ServiceManager implements AutoCloseable {
         }
     }
 
+    /** Production entry point: spends the full MAX_INIT_RETRIES budget. */
     private static void tlsCertStreamLoop(
             ServiceManager sm,
             ServiceConnection stateStoreConn,
             IdentityManager identity,
             CountDownLatch readyLatch,
             AtomicReference<Exception> readyError) {
+        tlsCertStreamLoop(sm, stateStoreConn, identity, readyLatch, readyError, MAX_INIT_RETRIES);
+    }
+
+    /**
+     * maxInitRetries is the first-delivery retry budget; it falls back to
+     * MAX_INIT_RETRIES when non-positive. It is an overload parameter rather
+     * than a bare read of the constant so an exhaustion test can spend the
+     * budget in seconds (PC-L-3) — javac inlines a {@code private static final
+     * int} at every call site, so there is no other seam. Production calls the
+     * 5-arg overload above, which passes MAX_INIT_RETRIES.
+     */
+    private static void tlsCertStreamLoop(
+            ServiceManager sm,
+            ServiceConnection stateStoreConn,
+            IdentityManager identity,
+            CountDownLatch readyLatch,
+            AtomicReference<Exception> readyError,
+            int maxInitRetries) {
+        if (maxInitRetries <= 0) {
+            maxInitRetries = MAX_INIT_RETRIES;
+        }
         int attempt = 0;
         while (true) {
             try {
@@ -1228,14 +1250,14 @@ public class ServiceManager implements AutoCloseable {
                 attempt++;
                 if (readyLatch.getCount() > 0) {
                     // First cert never delivered — retry with backoff instead of failing.
-                    if (attempt >= MAX_INIT_RETRIES) {
+                    if (attempt >= maxInitRetries) {
                         sm.reportTLSDegraded("TLS renewal stream gave up before first delivery: " + e.getMessage());
                         readyError.set(e);
                         readyLatch.countDown();
                         return;
                     }
                     long delay = Math.min((long) Math.pow(2, Math.min(attempt, 5)), 30);
-                    LOG.warning("TLS cert stream failed before first cert (attempt " + attempt + "/" + MAX_INIT_RETRIES + "), retrying in " + delay + "s: " + e.getMessage());
+                    LOG.warning("TLS cert stream failed before first cert (attempt " + attempt + "/" + maxInitRetries + "), retrying in " + delay + "s: " + e.getMessage());
                     try { Thread.sleep(delay * 1000); } catch (InterruptedException ie) { return; }
                 } else {
                     LOG.warning("TLS cert stream disconnected, retrying in 5s: " + e.getMessage());

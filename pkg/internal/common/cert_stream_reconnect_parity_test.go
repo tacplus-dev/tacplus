@@ -75,13 +75,15 @@ func TestCertStreamsReResolveTheConnectionPerAttempt(t *testing.T) {
 			t.Errorf("java %s must resolve the channel per attempt from the ServiceConnection", fn)
 		}
 	}
-	for _, loop := range []string{
-		"private static void tlsCertStreamLoop(",
-		"private static void smbCertStreamLoop(",
+	for _, loop := range []struct{ name, start string }{
+		// tlsCertStreamLoop is overloaded (PC-L-3 retry-budget seam); anchor on the
+		// trailing parameter so this pins the real loop, not the 5-arg delegator.
+		{"tlsCertStreamLoop", "int maxInitRetries) {"},
+		{"smbCertStreamLoop", "private static void smbCertStreamLoop("},
 	} {
-		body := funcBody(t, javaSM, loop, "\n    private static", "\n\t    private static")
+		body := funcBody(t, javaSM, loop.start, "\n    private static", "\n\t    private static")
 		if strings.Contains(body, "ManagedChannel") {
-			t.Errorf("java %s must not hold a ManagedChannel across reconnect attempts", loop)
+			t.Errorf("java %s must not hold a ManagedChannel across reconnect attempts", loop.name)
 		}
 	}
 
@@ -107,9 +109,18 @@ func TestJavaCertStreamRetryExhaustionEndsStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load ServiceManager.java.tmpl: %v", err)
 	}
-	body := funcBody(t, javaSM, "private static void tlsCertStreamLoop(", "\n    private static", "\n\t    private static")
+	// The budget is an overload parameter so an exhaustion test can spend it in
+	// seconds; the 5-arg production entry point must still pass MAX_INIT_RETRIES,
+	// or the emitted default silently changes.
+	if !strings.Contains(javaSM, "tlsCertStreamLoop(sm, stateStoreConn, identity, readyLatch, readyError, MAX_INIT_RETRIES);") {
+		t.Fatalf("java TLS cert-stream production entry point must spend the MAX_INIT_RETRIES budget (PC-L-3)")
+	}
+	if !strings.Contains(javaSM, "private static final int MAX_INIT_RETRIES = 30;") {
+		t.Fatalf("java default first-delivery retry budget must stay 30 (PC-L-3)")
+	}
+	body := funcBody(t, javaSM, "int maxInitRetries) {", "\n    private static", "\n\t    private static")
 
-	i := strings.Index(body, "if (attempt >= MAX_INIT_RETRIES) {")
+	i := strings.Index(body, "if (attempt >= maxInitRetries) {")
 	if i < 0 {
 		t.Fatalf("java TLS cert-stream loop has no bounded first-delivery retry budget (PC-L-3)")
 	}

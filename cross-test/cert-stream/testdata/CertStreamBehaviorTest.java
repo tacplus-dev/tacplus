@@ -520,6 +520,117 @@ class CertStreamBehaviorTest {
         }
     }
 
+    /**
+     * Drives the give-up-before-first-delivery path in real time. The production
+     * budget (MAX_INIT_RETRIES = 30) takes ~812s of backoff to spend honestly,
+     * which is why this path had no behavioral pin; tlsCertStreamLoop now takes
+     * the budget as an overload parameter so a test can spend it in seconds
+     * (PC-L-3).
+     */
+    @Test
+    void javaTlsCertStreamGivesUpAfterTheInjectedBudget() throws Exception {
+        // The empty authority never yields a connection, so every attempt fails
+        // before first delivery and the loop can only exit by exhausting its
+        // budget. A budget of 3 costs 2s + 4s of backoff instead of ~812s.
+        // The ServiceManager gets a live connection because its constructor resolves
+        // a channel of its own for the state clients; the loop under test gets the
+        // empty one, which is the argument that decides the retry outcome.
+        try (AuthorityFixture authority = startAuthority()) {
+        ServiceConnection connection = emptyAuthorityConnection();
+        IdentityManager identity = fixtureIdentity();
+        ServiceManager sm = fixtureServiceManager(authority.connection(), identity);
+        CountDownLatch ready = new CountDownLatch(1);
+        AtomicReference<Exception> readyError = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Method loop = privateMethod(
+                "tlsCertStreamLoop",
+                ServiceManager.class,
+                ServiceConnection.class,
+                IdentityManager.class,
+                CountDownLatch.class,
+                AtomicReference.class,
+                int.class);
+
+        Thread thread = new Thread(
+                () -> {
+                    try {
+                        loop.invoke(null, sm, connection, identity, ready, readyError, 3);
+                    } catch (InvocationTargetException ex) {
+                        failure.set(ex.getCause());
+                    } catch (Throwable err) {
+                        failure.set(err);
+                    }
+                },
+                "TLS retry exhaustion");
+        thread.setDaemon(true);
+        long start = System.nanoTime();
+        thread.start();
+        boolean gaveUp = ready.await(60, TimeUnit.SECONDS);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+        try {
+            assertTrue(
+                    gaveUp,
+                    "the TLS loop must give up after the injected budget of 3 attempts, but it did"
+                            + " not signal within 60s — the injected budget was ignored");
+        } finally {
+            stopCertStreamLoop(thread);
+        }
+
+        assertNull(failure.get(), "TLS exhaustion loop returned an unexpected failure");
+        assertTrue(
+                elapsedMs < 30_000L,
+                "a budget of 3 costs ~6s of backoff, but give-up took " + elapsedMs
+                        + "ms — the injected budget was ignored");
+        assertNotNull(readyError.get(), "give-up must publish a startup error");
+        assertFalse(
+                readyError.get().getClass().getSimpleName().contains("FatalTlsHandler"),
+                "give-up must not be reported as a handler rejection: " + readyError.get());
+        List<String> degraded = tlsDegradeReasons(sm);
+        assertEquals(1, degraded.size(), "give-up must degrade the instance exactly once: " + degraded);
+        assertTrue(
+                degraded.get(0).contains("TLS renewal stream gave up before first delivery"),
+                "unexpected degrade reason: " + degraded.get(0));
+        }
+    }
+
+    /**
+     * Guards the hard constraint behind the seam: the production entry point (the
+     * 5-arg overload) still spends the full MAX_INIT_RETRIES budget. A budget of
+     * 3 gives up after ~6s, so silence well past that window proves the default
+     * is materially larger.
+     */
+    @Test
+    void javaTlsCertStreamDefaultBudgetOutlastsATestBudget() throws Exception {
+        try (AuthorityFixture authority = startAuthority()) {
+        ServiceConnection connection = emptyAuthorityConnection();
+        IdentityManager identity = fixtureIdentity();
+        ServiceManager sm = fixtureServiceManager(authority.connection(), identity);
+        CountDownLatch ready = new CountDownLatch(1);
+        AtomicReference<Exception> readyError = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        Thread thread = startCertStreamLoop(
+                "tlsCertStreamLoop",
+                sm,
+                connection,
+                identity,
+                ready,
+                readyError,
+                failure,
+                "TLS default budget");
+        try {
+            assertFalse(
+                    ready.await(15, TimeUnit.SECONDS),
+                    "the default-budget TLS loop gave up inside a window sized for a test budget");
+        } finally {
+            stopCertStreamLoop(thread);
+        }
+        assertNull(failure.get(), "default-budget TLS loop returned an unexpected failure");
+        assertNull(readyError.get(), "default-budget TLS loop must not publish a startup error yet");
+        assertTrue(tlsDegradeReasons(sm).isEmpty(), "default-budget TLS loop must not degrade yet");
+        }
+    }
+
     @Test
     void javaTlsStartupBackoffExitsOnInterrupt() throws Exception {
         assertLoopExitsOnInterrupt(
@@ -834,6 +945,13 @@ class CertStreamBehaviorTest {
     private static void installHandlerSlots(ServiceManager sm, Handler handler) throws Exception {
         installHandlerSlot(sm, "tlsHandlerSlot", handler);
         installHandlerSlot(sm, "smbHandlerSlot", handler);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<String> tlsDegradeReasons(ServiceManager sm) throws Exception {
+        Field field = ServiceManager.class.getDeclaredField("tlsDegradeSeen");
+        field.setAccessible(true);
+        return new ArrayList<>((List<String>) field.get(sm));
     }
 
     @SuppressWarnings("unchecked")

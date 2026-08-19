@@ -18,15 +18,21 @@ rediscovered.
 
 ---
 
-## PC-L-3 — Java and Rust cert-stream have no exhaustion pin; retry budget isn't testable
+## PC-L-3 — Rust cert-stream has no exhaustion pin; retry budget isn't testable
 
 **Status:** channel-capture is closed (`CertStreamBehaviorTest.java`,
-`...ReResolvesTheAuthorityAfterTheTargetMoves`, TLS+SMB). **Go is now closed**
-for exhaustion: `tlsCertStreamLoop` takes its first-delivery retry budget as a
-parameter (falling back to `certStreamMaxInitRetries = 30` when non-positive),
-and `TestGoTlsCertStreamRetryExhaustion` in
+`...ReResolvesTheAuthorityAfterTheTargetMoves`, TLS+SMB). **Go and Java are now
+closed** for exhaustion. Go: `tlsCertStreamLoop` takes its first-delivery retry
+budget as a parameter (falling back to `certStreamMaxInitRetries = 30` when
+non-positive), and `TestGoTlsCertStreamRetryExhaustion` in
 `cross-test/cert-stream/testdata/cert_stream_behavior_test.go` drives a budget
-of 3 to real give-up in ~6s. Java and Rust still have no exhaustion pin.
+of 3 to real give-up in ~6s. Java: `tlsCertStreamLoop` gained a 6-arg overload
+taking the budget (falling back to `MAX_INIT_RETRIES = 30` when non-positive),
+the 5-arg production entry point passes `MAX_INIT_RETRIES`, and
+`javaTlsCertStreamGivesUpAfterTheInjectedBudget` /
+`javaTlsCertStreamDefaultBudgetOutlastsATestBudget` in
+`cross-test/cert-stream/testdata/CertStreamBehaviorTest.java` pin the give-up
+chain and the unchanged default. Rust still has no exhaustion pin.
 
 The TLS renewal stream can exhaust its retry chain, and a renewed channel can be
 captured by a stale reference. The channel-capture leg is now proven: a stale
@@ -34,11 +40,13 @@ authority's stream ends, the loop backs off, and by the next attempt the
 connection has re-resolved to the moved target — evidenced by per-authority CSR
 counters (stale sees exactly one, moved sees the retry's).
 
-Exhaustion remains open in Java specifically because `MAX_INIT_RETRIES = 30` is
-a `private static final int`, which `javac` inlines at every call site
-(confirmed via `javap` bytecode inspection — the constant is baked in, not
-read from the field). There is no seam to inject a smaller budget, so an
-honest exhaustion test means ~780s of real `Thread.sleep` per run.
+Java's `MAX_INIT_RETRIES = 30` is a `private static final int`, which `javac`
+inlines at every call site (confirmed via `javap` bytecode inspection — the
+constant is baked in, not read from the field), so the budget had to become a
+parameter before an exhaustion test could avoid ~780s of real `Thread.sleep`
+per run. Note that Java's constant is shared with the general-init retry loop
+and `healthReporter.start(...)` — the overload does NOT split it; the other two
+call sites still read the constant directly and are unchanged.
 
 Rust has the same gap and one extra complication: `tls_cert_stream_loop`
 (and `smb_cert_stream_loop`) read the SAME `const MAX_INIT_RETRIES: u32 = 30`
@@ -46,8 +54,8 @@ used by the general-init loops, so a Rust seam either splits that constant
 first or widens blast radius beyond the cert streams. Go's two budgets were
 already separate constants, which is why the Go leg was cheap to close.
 
-**To close:** make the retry budget injectable in the Java and Rust templates —
-the same seam the Go template now has — so a test can drive exhaustion in real
+**To close:** make the retry budget injectable in the Rust template — the same
+seam the Go and Java templates now have — so a test can drive exhaustion in real
 time instead of wall-clock time.
 
 ---

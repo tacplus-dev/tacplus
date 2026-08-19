@@ -39,7 +39,7 @@ func TestJavaEgress_Tier2Wrapper_SanitizesItems(t *testing.T) {
 		javaTier2Method(), "Catalog", "", "Catalog.ListItemsRequest", "Catalog.Item",
 		"", "", false, true,
 		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{},
-		javaEgressTestSanitizer(), map[string]string{})
+		javaEgressTestSanitizer(), map[string]string{}, nil)
 	for _, want := range []string{
 		"java.util.Set<String> __dataGrants = new java.util.HashSet<>();",
 		`getFieldsOrDefault("data_grants", null)`,
@@ -58,7 +58,7 @@ func TestJavaEgress_Tier3Wrapper_SanitizesItems(t *testing.T) {
 		javaTier3Method(), "Catalog", "", "Catalog.ListItemsRequest", "Catalog.Item",
 		"", "", false, true,
 		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{},
-		javaEgressTestSanitizer(), map[string]string{})
+		javaEgressTestSanitizer(), map[string]string{}, nil)
 	if !strings.Contains(got, "__out.onNext(Helpers.sanitizeItem(__it.next(), __entItem, __hmacKey));") {
 		t.Fatalf("Tier-3 wrapper must sanitize each lazily-pulled item:\n%s", got)
 	}
@@ -69,7 +69,7 @@ func TestJavaEgress_WatchWrapper_SanitizesSnapshotAndDelta(t *testing.T) {
 		javaWatchMethod(), "Catalog", "", "Catalog.WatchReq", "Catalog.WatchEvent",
 		"", "", false, true,
 		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{},
-		javaEgressTestSanitizer(), map[string]string{})
+		javaEgressTestSanitizer(), map[string]string{}, nil)
 	for _, want := range []string{
 		// snapshot item is the record type — sanitized whole.
 		".setSnapshotItem(Helpers.sanitizeItem(__source.snapshot.next(), __entItem, __hmacKey))",
@@ -91,7 +91,7 @@ func TestJavaEgress_PageWrapper_SanitizesItems(t *testing.T) {
 		m, "Catalog", "", "Catalog.ListEventsRequest", "Catalog.ListEventsPage",
 		"", "", false, true,
 		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{},
-		javaEgressTestSanitizer(), map[string]string{})
+		javaEgressTestSanitizer(), map[string]string{}, nil)
 	for _, want := range []string{
 		"java.util.List<Catalog.Item> __sanitizedItems = new java.util.ArrayList<>(__page.items.size());",
 		"__sanitizedItems.add(Helpers.sanitizeItem(__m, __entItem, __hmacKey));",
@@ -113,7 +113,7 @@ func TestJavaEgress_UnaryWrapper_SanitizesEnvelopeFields(t *testing.T) {
 		m, "Catalog", "", "Catalog.SampleRequest", "Catalog.SampleResponse",
 		"", "", false, true,
 		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{},
-		javaEgressTestSanitizer(), map[string]string{})
+		javaEgressTestSanitizer(), map[string]string{}, nil)
 	for _, want := range []string{
 		"Catalog.SampleResponse.Builder __rb = response.toBuilder();",
 		"for (int __i = 0; __i < __rb.getItemsCount(); __i++) {",
@@ -135,7 +135,7 @@ func TestJavaEgress_NoEntitlement_NoWiring(t *testing.T) {
 		javaTier2Method(), "Catalog", "", "Catalog.ListItemsRequest", "Catalog.Item",
 		"", "", false, true,
 		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{},
-		san, map[string]string{})
+		san, map[string]string{}, nil)
 	if strings.Contains(got, "__dataGrants") || strings.Contains(got, "sanitize") {
 		t.Fatalf("no-entitlement method must have no egress sanitize wiring:\n%s", got)
 	}

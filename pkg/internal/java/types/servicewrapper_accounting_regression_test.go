@@ -41,6 +41,7 @@ func TestJavaUnaryAccountingTreatsResponseValidationAsError(t *testing.T) {
 		proto.SkippedTraceTypes{},
 		nil,
 		nil,
+		nil,
 	)
 
 	validation := strings.Index(rendered, "Helpers.validateContractResponse(response);")
@@ -83,6 +84,7 @@ func TestJavaUnaryTraceTreatsHandlerAndValidationErrorsAsResponseTrace(t *testin
 		proto.SkippedTraceTypes{},
 		nil,
 		nil,
+		nil,
 	)
 
 	for _, want := range []string{
@@ -115,6 +117,7 @@ func TestJavaWatchAccountingRunsInSenderThread(t *testing.T) {
 		"services",
 		map[string]string{},
 		proto.SkippedTraceTypes{},
+		nil,
 		nil,
 		nil,
 	)
@@ -159,6 +162,7 @@ func TestJavaClientStreamingAccountingUsesAsyncLifecycle(t *testing.T) {
 		"contract",
 		map[string]string{},
 		proto.SkippedTraceTypes{},
+		nil,
 		nil,
 		nil,
 	)
@@ -212,6 +216,7 @@ func TestJavaBidiAccountingUsesAsyncLifecycle(t *testing.T) {
 		proto.SkippedTraceTypes{},
 		nil,
 		nil,
+		nil,
 	)
 
 	for _, want := range []string{
@@ -258,6 +263,7 @@ func TestJavaServerStreamingValidatesResponseItemsBeforeSend(t *testing.T) {
 		"contract",
 		map[string]string{},
 		proto.SkippedTraceTypes{},
+		nil,
 		nil,
 		nil,
 	)
@@ -410,6 +416,7 @@ func TestJavaStreamPreflightUsesRootNamespaceGate(t *testing.T) {
 				"contract",
 				map[string]string{},
 				proto.SkippedTraceTypes{},
+				nil,
 				nil,
 				nil,
 			)

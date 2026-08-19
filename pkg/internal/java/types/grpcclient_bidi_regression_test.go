@@ -28,6 +28,7 @@ func TestJavaGrpcBidiAuthenticatesAtStreamOpenOnly(t *testing.T) {
 		"ContractOuterClass.ContractResponse",
 		"",
 		"",
+		nil,
 	)
 
 	for _, want := range []string{

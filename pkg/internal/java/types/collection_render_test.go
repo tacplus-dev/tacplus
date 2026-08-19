@@ -32,7 +32,7 @@ func javaTier2Method() *parser.MethodInfo {
 }
 
 func TestJavaTier2_Handler_ReturnsList(t *testing.T) {
-	got := generateJavaHandlerMethod(javaTier2Method(), "Catalog.ListItemsRequest", "Catalog.Item")
+	got := generateJavaHandlerMethod(javaTier2Method(), "Catalog.ListItemsRequest", "Catalog.Item", nil)
 	if !strings.Contains(got, "java.util.List<Catalog.Item>") {
 		t.Fatalf("Tier-2 handler must return a List collection:\n%s", got)
 	}
@@ -45,7 +45,7 @@ func TestJavaTier2_Wrapper_FlowControlledChunking(t *testing.T) {
 	got := generateJavaGRPCWrapper(
 		javaTier2Method(), "Catalog", "", "Catalog.ListItemsRequest", "Catalog.Item",
 		"", "", false, true,
-		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{}, nil, nil)
+		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{}, nil, nil, nil)
 	for _, want := range []string{
 		"java.util.List<Catalog.Item> __items =",
 		"io.grpc.stub.ServerCallStreamObserver<Catalog.Item> __sco",
@@ -68,7 +68,7 @@ func javaTier3Method() *parser.MethodInfo {
 }
 
 func TestJavaTier3_Handler_ReturnsIterator(t *testing.T) {
-	got := generateJavaHandlerMethod(javaTier3Method(), "Catalog.ListItemsRequest", "Catalog.Item")
+	got := generateJavaHandlerMethod(javaTier3Method(), "Catalog.ListItemsRequest", "Catalog.Item", nil)
 	if !strings.Contains(got, "java.util.Iterator<Catalog.Item>") {
 		t.Fatalf("Tier-3 handler must return a lazy Iterator producer:\n%s", got)
 	}
@@ -81,7 +81,7 @@ func TestJavaTier3_Wrapper_DrivesIteratorWithFlowControlAndClose(t *testing.T) {
 	got := generateJavaGRPCWrapper(
 		javaTier3Method(), "Catalog", "", "Catalog.ListItemsRequest", "Catalog.Item",
 		"", "", false, true,
-		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{}, nil, nil)
+		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{}, nil, nil, nil)
 	for _, want := range []string{
 		"final java.util.Iterator<Catalog.Item> __it =",
 		"io.grpc.stub.ServerCallStreamObserver<Catalog.Item> __sco",
@@ -97,7 +97,7 @@ func TestJavaTier3_Wrapper_DrivesIteratorWithFlowControlAndClose(t *testing.T) {
 
 func TestJavaTier3_Client_ReturnsCloseableIterator(t *testing.T) {
 	svc := &parser.ServiceInfo{Name: "Catalog", AuthDisabled: true}
-	got := generateJavaGrpcClientMethod(svc, javaTier3Method(), "Catalog.ListItemsRequest", "Catalog.Item", "", "")
+	got := generateJavaGrpcClientMethod(svc, javaTier3Method(), "Catalog.ListItemsRequest", "Catalog.Item", "", "", nil)
 	for _, want := range []string{
 		"public CloseableIterator<Catalog.Item>",
 		"io.grpc.Context.CancellableContext __ctx = io.grpc.Context.current().withCancellation()",
@@ -112,7 +112,7 @@ func TestJavaTier3_Client_ReturnsCloseableIterator(t *testing.T) {
 
 func TestJavaTier2_Client_DrainsIteratorIntoList(t *testing.T) {
 	svc := &parser.ServiceInfo{Name: "Catalog", AuthDisabled: true}
-	got := generateJavaGrpcClientMethod(svc, javaTier2Method(), "Catalog.ListItemsRequest", "Catalog.Item", "", "")
+	got := generateJavaGrpcClientMethod(svc, javaTier2Method(), "Catalog.ListItemsRequest", "Catalog.Item", "", "", nil)
 	for _, want := range []string{
 		"public java.util.List<Catalog.Item>",
 		"java.util.Iterator<Catalog.Item> it = stub.",
@@ -147,7 +147,7 @@ func javaWatchMethod() *parser.MethodInfo {
 }
 
 func TestJavaWatch_Handler_ReturnsWatchSource(t *testing.T) {
-	got := generateJavaHandlerMethod(javaWatchMethod(), "Catalog.WatchReq", "Catalog.WatchEvent")
+	got := generateJavaHandlerMethod(javaWatchMethod(), "Catalog.WatchReq", "Catalog.WatchEvent", nil)
 	want := "CollectionRuntime.WatchSource<Catalog.Item, Catalog.WatchChange> watch(Caller caller, Catalog.WatchReq request)"
 	if !strings.Contains(got, want) {
 		t.Fatalf("WATCH handler must return WatchSource.\nwant: %s\ngot:\n%s", want, got)
@@ -158,7 +158,7 @@ func TestJavaWatch_Wrapper_EnvelopeRingAndFlowControl(t *testing.T) {
 	got := generateJavaGRPCWrapper(
 		javaWatchMethod(), "Catalog", "", "Catalog.WatchReq", "Catalog.WatchEvent",
 		"", "", false, true,
-		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{}, nil, nil)
+		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{}, nil, nil, nil)
 	for _, want := range []string{
 		"CollectionRuntime.WatchSource<Catalog.Item, Catalog.WatchChange> __source = handler.watch(caller, request)",
 		"watchWatchHub.watch(",
@@ -184,7 +184,7 @@ func TestJavaWatch_Wrapper_NoFromRevisionField(t *testing.T) {
 	got := generateJavaGRPCWrapper(
 		m, "Catalog", "", "Catalog.WatchReq", "Catalog.WatchEvent",
 		"", "", false, true,
-		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{}, nil, nil)
+		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{}, nil, nil, nil)
 	if strings.Contains(got, "request.getFromRevision()") {
 		t.Fatalf("handle-based watch must not call request.getFromRevision()\ngot:\n%s", got)
 	}
@@ -195,7 +195,7 @@ func TestJavaWatch_Wrapper_NoFromRevisionField(t *testing.T) {
 
 func TestJavaWatch_Client_ReturnsCloseableIterator(t *testing.T) {
 	svc := &parser.ServiceInfo{Name: "Catalog", AuthDisabled: true}
-	got := generateJavaGrpcClientMethod(svc, javaWatchMethod(), "Catalog.WatchReq", "Catalog.WatchEvent", "", "")
+	got := generateJavaGrpcClientMethod(svc, javaWatchMethod(), "Catalog.WatchReq", "Catalog.WatchEvent", "", "", nil)
 	for _, want := range []string{
 		"public CloseableIterator<Catalog.WatchEvent>",
 		"WATCH collection RPC",
@@ -228,7 +228,7 @@ func javaPageMethod() *parser.MethodInfo {
 }
 
 func TestJavaPage_Handler_ReturnsPage(t *testing.T) {
-	got := generateJavaHandlerMethod(javaPageMethod(), "Catalog.ListEventsRequest", "Catalog.ListEventsPage")
+	got := generateJavaHandlerMethod(javaPageMethod(), "Catalog.ListEventsRequest", "Catalog.ListEventsPage", nil)
 	want := "CollectionRuntime.Page<Catalog.Event> listEvents(Caller caller, Catalog.ListEventsRequest request, CollectionRuntime.PageParams page)"
 	if !strings.Contains(got, want) {
 		t.Fatalf("PAGE handler must take PageParams and return Page.\nwant: %s\ngot:\n%s", want, got)
@@ -239,7 +239,7 @@ func TestJavaPage_Wrapper_DecodesBoundsEncodes(t *testing.T) {
 	got := generateJavaGRPCWrapper(
 		javaPageMethod(), "Catalog", "", "Catalog.ListEventsRequest", "Catalog.ListEventsPage",
 		"", "", false, true,
-		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{}, nil, nil)
+		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{}, nil, nil, nil)
 	for _, want := range []string{
 		"CollectionRuntime.decodePageToken(request.getPageToken())",
 		"CollectionRuntime.effectivePageSize(request.getPageSize(), 50L, 10000L)",
@@ -268,7 +268,7 @@ func TestJavaPage_WrapperAccounting_DoesNotRedeclareResponse(t *testing.T) {
 		map[string]service.AccountingInfo{
 			"catalog": {RPCs: map[string]bool{"ListEvents": true}},
 		},
-		"catalog", "services", map[string]string{}, proto.SkippedTraceTypes{}, nil, nil)
+		"catalog", "services", map[string]string{}, proto.SkippedTraceTypes{}, nil, nil, nil)
 	if !strings.Contains(got, "Catalog.ListEventsPage response;\n            try {") {
 		t.Fatalf("PAGE accounting wrapper must declare response before the handler try block\ngot:\n%s", got)
 	}
@@ -279,7 +279,7 @@ func TestJavaPage_WrapperAccounting_DoesNotRedeclareResponse(t *testing.T) {
 
 func TestJavaPage_Client_ExplicitPageAndAutoPager(t *testing.T) {
 	svc := &parser.ServiceInfo{Name: "Catalog", AuthDisabled: true}
-	got := generateJavaGrpcClientMethod(svc, javaPageMethod(), "Catalog.ListEventsRequest", "Catalog.ListEventsPage", "", "")
+	got := generateJavaGrpcClientMethod(svc, javaPageMethod(), "Catalog.ListEventsRequest", "Catalog.ListEventsPage", "", "", nil)
 	for _, want := range []string{
 		"public CollectionRuntime.PageResult<Catalog.Event> listEventsPage(Catalog.ListEventsRequest request)",
 		"new CollectionRuntime.PageResult<>(response.getItemsList(), response.getNextPageToken(), response.getTotalCount())",

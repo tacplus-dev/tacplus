@@ -670,13 +670,13 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		inputHelpers := resolveValidationHelpers(method.FullInputType, info.Package, crossPkgHelpers)
 		outputHelpers := resolveValidationHelpers(method.FullOutputType, info.Package, crossPkgHelpers)
 		if method.IsWatchCollection() {
-			changeType := javaWatchTypeRef(method.Resolved.WatchChangeType, outputType)
+			changeType := javaWatchTypeRef(method.Resolved.WatchChangeType, outputType, crossPkgOuterClasses)
 			fmt.Fprintf(&watchFields, "    private final CollectionRuntime.WatchHub<%s> %sWatchHub = new CollectionRuntime.WatchHub<>(%d, %d);\n",
 				changeType, methodNameLowerCamel(method.Name), method.Resolved.ReplayDepth, method.Resolved.IdleSecs)
 		}
-		handlerInterface.WriteString(generateJavaHandlerMethod(method, inputType, outputType))
+		handlerInterface.WriteString(generateJavaHandlerMethod(method, inputType, outputType, crossPkgOuterClasses))
 		effectiveAuthAnyUser := method.AuthAnyUser
-		grpcMethods.WriteString(generateJavaGRPCWrapper(method, serviceName, svc.GrpcName, inputType, outputType, inputHelpers, outputHelpers, effectiveAuthAnyUser, method.AuthDisabled || svc.AuthDisabled || svc.IsC2D, accountingMap, info.Package, svc.ParentDir, info.CrossPackageTypes, skippedTraceTypes, san, crossPkgHelpers))
+		grpcMethods.WriteString(generateJavaGRPCWrapper(method, serviceName, svc.GrpcName, inputType, outputType, inputHelpers, outputHelpers, effectiveAuthAnyUser, method.AuthDisabled || svc.AuthDisabled || svc.IsC2D, accountingMap, info.Package, svc.ParentDir, info.CrossPackageTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses))
 		grpcMethods.WriteString("\n")
 
 		// Resolve effective auth_services: method-level overrides service-level.
@@ -888,10 +888,13 @@ func simpleTypeName(fullType string) string {
 // The item is usually in the same package as the response envelope, so we default
 // to the envelope's resolved Java outer class (which carries any outer-class
 // conflict resolution). When the item is CROSS-PACKAGE (e.g. a stratum RecordMap
-// paging agentsensor.AgentEvent), we derive the item's own Java outer class from
-// its proto package — otherwise it would be mis-qualified with the response's
-// package (Stratum.AgentEvent), which does not exist.
-func javaWatchTypeRef(fullType, outputType string) string {
+// paging agentsensor.AgentEvent), we resolve the item's own Java outer class from
+// crossPkgOuterClasses — the SAME map resolveJavaMethodType and the wrapper's
+// import lines use, so a conflict-renamed outer class (tasks.proto declaring
+// "service Tasks" -> TasksOuterClass) is referenced exactly as it is imported.
+// Otherwise the item would be mis-qualified with the response's package
+// (Stratum.AgentEvent), which does not exist.
+func javaWatchTypeRef(fullType, outputType string, crossPkgOuterClasses map[string]string) string {
 	simple := simpleTypeName(fullType)
 	envPrefix := outputType
 	if i := strings.LastIndex(envPrefix, "."); i >= 0 {
@@ -902,6 +905,9 @@ func javaWatchTypeRef(fullType, outputType string) string {
 		// EqualFold: the envelope prefix is the Java outer class (e.g. "Catalog")
 		// while the item package is the proto package (e.g. "catalog").
 		if !strings.EqualFold(itemPkg, envPrefix) {
+			if crossOuterClass, ok := crossPkgOuterClasses[itemPkg]; ok {
+				return crossOuterClass + "." + simple
+			}
 			return javaOuterFromProtoPkg(itemPkg) + "." + simple
 		}
 	}
@@ -910,9 +916,9 @@ func javaWatchTypeRef(fullType, outputType string) string {
 
 // javaOuterFromProtoPkg derives the default Java outer class for a proto package
 // (capitalize the first letter), matching tacplus's java_outer_classname
-// convention. (Outer-class-conflict packages — *OuterClass — are not handled
-// here; cross-package collection items in such packages would need the resolved
-// outer threaded through.)
+// convention. This is the last-resort fallback for a cross-package item whose
+// package is absent from crossPkgOuterClasses; conflict-renamed (*OuterClass)
+// packages are resolved through that map in javaWatchTypeRef.
 func javaOuterFromProtoPkg(pkg string) string {
 	if pkg == "" {
 		return pkg
@@ -924,7 +930,7 @@ func javaOuterFromProtoPkg(pkg string) string {
 // Unary methods return the response directly. Streaming methods keep StreamObserver pattern.
 // Empty request types are omitted — the gRPC contract requires them, but the handler doesn't.
 // Empty output types return void — the wrapper constructs the Empty response.
-func generateJavaHandlerMethod(method *parser.MethodInfo, inputType, outputType string) string {
+func generateJavaHandlerMethod(method *parser.MethodInfo, inputType, outputType string, crossPkgOuterClasses map[string]string) string {
 	methodName := strutil.ToCamelCase(strutil.ToSnakeCase(method.Name))
 	if len(methodName) > 0 {
 		methodName = strings.ToLower(methodName[:1]) + methodName[1:]
@@ -938,7 +944,7 @@ func generateJavaHandlerMethod(method *parser.MethodInfo, inputType, outputType 
 		// codec and the page_size bound; the handler is a keyset producer: given
 		// PageParams (limit, after) plus request (the filter fields) it returns one
 		// CollectionRuntime.Page (items + the cursor to resume after + a total).
-		itemType := javaWatchTypeRef(method.Resolved.PageItemType, outputType)
+		itemType := javaWatchTypeRef(method.Resolved.PageItemType, outputType, crossPkgOuterClasses)
 		if handlerEmpty {
 			return fmt.Sprintf("        CollectionRuntime.Page<%s> %s(Caller caller, CollectionRuntime.PageParams page) throws ProtoException;\n",
 				itemType, methodName)
@@ -977,8 +983,8 @@ func generateJavaHandlerMethod(method *parser.MethodInfo, inputType, outputType 
 		return fmt.Sprintf("        java.util.Iterator<%s> %s(Caller caller, %s request) throws ProtoException;\n",
 			outputType, methodName, inputType)
 	case !method.ClientStreaming && method.ServerStreaming && method.IsWatchCollection():
-		itemType := javaWatchTypeRef(method.Resolved.WatchItemType, outputType)
-		changeType := javaWatchTypeRef(method.Resolved.WatchChangeType, outputType)
+		itemType := javaWatchTypeRef(method.Resolved.WatchItemType, outputType, crossPkgOuterClasses)
+		changeType := javaWatchTypeRef(method.Resolved.WatchChangeType, outputType, crossPkgOuterClasses)
 		if handlerEmpty {
 			return fmt.Sprintf("        CollectionRuntime.WatchSource<%s, %s> %s(Caller caller) throws ProtoException;\n",
 				itemType, changeType, methodName)
@@ -1044,7 +1050,7 @@ func javaTypeHasTraceFields(fullType, servicePackage, parentDir string, crossPkg
 	return !strings.HasPrefix(parentDir, "sys")
 }
 
-func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers string, authAnyUser bool, authDisabled bool, accountingMap map[string]service.AccountingInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer, crossPkgHelpers map[string]string) string {
+func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers string, authAnyUser bool, authDisabled bool, accountingMap map[string]service.AccountingInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer, crossPkgHelpers map[string]string, crossPkgOuterClasses map[string]string) string {
 	methodName := strutil.ToCamelCase(strutil.ToSnakeCase(method.Name))
 	// Ensure first letter is lowercase for Java method convention
 	if len(methodName) > 0 {
@@ -1239,7 +1245,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 		// trust-tier page_size bound; the handler is a keyset producer returning a
 		// CollectionRuntime.Page. A malformed page_token throws INVALID_ARGUMENT
 		// (decodePageToken), never a silent reset to page 1.
-		itemType := javaWatchTypeRef(method.Resolved.PageItemType, outputType)
+		itemType := javaWatchTypeRef(method.Resolved.PageItemType, outputType, crossPkgOuterClasses)
 		itemsPascal := strutil.ToPascalCase(method.Resolved.PageItemsField)
 		pageInputValidation := ""
 		if inputHelpers != "" {
@@ -1784,8 +1790,8 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 		// The generated wrapper owns envelope framing, replay/relist via WatchHub,
 		// and Java flow control. A dedicated sender thread waits for readiness and
 		// data so the ServerCallStreamObserver onReady callback never blocks.
-		itemType := javaWatchTypeRef(method.Resolved.WatchItemType, outputType)
-		changeType := javaWatchTypeRef(method.Resolved.WatchChangeType, outputType)
+		itemType := javaWatchTypeRef(method.Resolved.WatchItemType, outputType, crossPkgOuterClasses)
+		changeType := javaWatchTypeRef(method.Resolved.WatchChangeType, outputType, crossPkgOuterClasses)
 		watchHandlerCall := fmt.Sprintf("handler.%s(caller, request)", methodName)
 		if handlerEmpty {
 			watchHandlerCall = fmt.Sprintf("handler.%s(caller)", methodName)

@@ -38,6 +38,7 @@ func TestJavaBidiWrapperAuthorizesStreamOpenFailClosed(t *testing.T) {
 		proto.SkippedTraceTypes{},
 		nil,
 		nil,
+		nil,
 	)
 
 	authIdx := strings.Index(rendered, `checkAuth("ContractApi/Chat", null);`)

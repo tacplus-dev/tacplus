@@ -229,7 +229,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		outputType := resolvedMethod.outputType
 		inputValidator := javaW2SValidationRef(method.FullInputType, method.InputType, info.Package, crossPkgHelpers)
 		outputValidator := javaW2SValidationRef(method.FullOutputType, method.OutputType, info.Package, crossPkgHelpers)
-		methods.WriteString(generateJavaGrpcClientMethod(targetService, method, inputType, outputType, inputValidator, outputValidator))
+		methods.WriteString(generateJavaGrpcClientMethod(targetService, method, inputType, outputType, inputValidator, outputValidator, crossPkgOuterClasses))
 		methods.WriteString("\n")
 	}
 
@@ -381,7 +381,7 @@ func javaGrpcResponseObserverWrapper(outputType, outputValidator string) (string
 }
 
 // generateJavaGrpcClientMethod generates a Java method for the gRPC client wrapper.
-func generateJavaGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, inputType, outputType, inputValidator, outputValidator string) string {
+func generateJavaGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, inputType, outputType, inputValidator, outputValidator string, crossPkgOuterClasses map[string]string) string {
 	// Use protoc's naming convention: lowercase first letter only.
 	// e.g. "ExecuteDQL" → "executeDQL" (not "executeDql").
 	// A snake_case round-trip would mangle all-caps acronyms.
@@ -599,7 +599,7 @@ func generateJavaGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
 		// auto-pager (the natural method name) returning a lazy Iterator that
 		// follows next_page_token until exhausted. The auto-pager advances the
 		// token on a request clone, so the caller's request is not mutated.
-		itemType := javaWatchTypeRef(method.Resolved.PageItemType, outputType)
+		itemType := javaWatchTypeRef(method.Resolved.PageItemType, outputType, crossPkgOuterClasses)
 		itemsListGetter := "get" + strutil.ToPascalCase(method.Resolved.PageItemsField) + "List"
 		totalExpr := "-1L"
 		if method.Resolved.PageHasTotal {

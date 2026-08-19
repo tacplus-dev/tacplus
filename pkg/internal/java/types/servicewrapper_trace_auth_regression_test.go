@@ -44,6 +44,7 @@ func TestJavaUnaryTraceNoopDoesNotSkipAuthorize(t *testing.T) {
 		proto.SkippedTraceTypes{},
 		nil,
 		nil,
+		nil,
 	)
 
 	if strings.Contains(rendered, "if (!isNoop)") {
@@ -78,6 +79,7 @@ func TestJavaUnaryTraceNoopDoesNotSkipAuthenticate(t *testing.T) {
 		"contract",
 		map[string]string{},
 		proto.SkippedTraceTypes{},
+		nil,
 		nil,
 		nil,
 	)
@@ -124,6 +126,7 @@ func TestJavaUnaryTraceNoopDoesNotSkipRequestValidation(t *testing.T) {
 				"contract",
 				map[string]string{},
 				proto.SkippedTraceTypes{},
+				nil,
 				nil,
 				nil,
 			)

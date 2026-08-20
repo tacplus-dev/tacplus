@@ -72,6 +72,7 @@ class CertStreamBehaviorTest {
         SERVER_ERROR_AFTER,
         REORDERED_RENEWAL,
         RENEWAL_CSR_SEND_FAILS,
+        RENEWAL_CSR_SEND_FAILS_STREAM_STAYS_OPEN,
         DELIVERY_HANDLING_FAILS
     }
 
@@ -263,6 +264,88 @@ class CertStreamBehaviorTest {
                 handler.smbKeys().size(),
                 "the session must end at the failed SMB renewal CSR send, so only the "
                         + "first delivery reaches the handler");
+    }
+
+    // Ending the session must end the CALL. Java used to leave the ManageCert /
+    // ManageSmbCert call open on the shared channel after the loop had already
+    // failed: the authority kept sending, and onNext kept installing certs for a
+    // session that no longer existed — including a message already in flight
+    // when the loop decided to fail. That is a fail-OPEN on the cert path. These
+    // tests seed a SECOND server message that arrives strictly after the failed
+    // renewal CSR send and pin both halves of the fix: the call is cancelled,
+    // and the late delivery never reaches the handler.
+    @Test
+    void javaTlsEndedSessionCancelsTheCallAndIgnoresLateDeliveries() throws Exception {
+        RecordingHandler handler = new RecordingHandler();
+        CountDownLatch ready = new CountDownLatch(1);
+
+        try (AuthorityFixture authority = startAuthority(
+                AuthorityMode.RENEWAL_CSR_SEND_FAILS_STREAM_STAYS_OPEN)) {
+            IdentityManager identity = fixtureIdentity();
+            ServiceManager sm = fixtureServiceManager(authority.connection(), identity);
+            installHandlerSlots(sm, handler);
+
+            Throwable err = invokeAllowingFailure(
+                    privateMethod(
+                            "runTlsCertStream",
+                            ServiceManager.class,
+                            ServiceConnection.class,
+                            IdentityManager.class,
+                            CountDownLatch.class),
+                    sm,
+                    authority.connection(),
+                    identity,
+                    ready);
+
+            assertErrorContains(err, "send renewal Csr");
+            assertEquals(1, handler.tlsKeys().size(), "only the first delivery is handled");
+            authority.tlsAuthority.sendLateCert("java-tls-late-delivery");
+            assertEquals(
+                    1,
+                    awaitDeliveryCount(() -> handler.tlsKeys().size(), 2),
+                    "a cert delivered after the session ended must not reach the handler");
+            assertTrue(
+                    authority.tlsAuthority.awaitCancelled(5, TimeUnit.SECONDS),
+                    "ending the TLS cert-stream session must cancel the ManageCert call so "
+                            + "the authority stops sending");
+        }
+    }
+
+    @Test
+    void javaSmbEndedSessionCancelsTheCallAndIgnoresLateDeliveries() throws Exception {
+        RecordingHandler handler = new RecordingHandler();
+        CountDownLatch ready = new CountDownLatch(1);
+
+        try (AuthorityFixture authority = startAuthority(
+                AuthorityMode.RENEWAL_CSR_SEND_FAILS_STREAM_STAYS_OPEN)) {
+            IdentityManager identity = fixtureIdentity();
+            ServiceManager sm = fixtureServiceManager(authority.connection(), identity);
+            installHandlerSlots(sm, handler);
+
+            Throwable err = invokeAllowingFailure(
+                    privateMethod(
+                            "runSmbCertStream",
+                            ServiceManager.class,
+                            ServiceConnection.class,
+                            IdentityManager.class,
+                            CountDownLatch.class),
+                    sm,
+                    authority.connection(),
+                    identity,
+                    ready);
+
+            assertErrorContains(err, "send SMB renewal Csr");
+            assertEquals(1, handler.smbKeys().size(), "only the first delivery is handled");
+            authority.smbAuthority.sendLateCert("java-smb-late-delivery");
+            assertEquals(
+                    1,
+                    awaitDeliveryCount(() -> handler.smbKeys().size(), 2),
+                    "a member cert delivered after the session ended must not reach the handler");
+            assertTrue(
+                    authority.smbAuthority.awaitCancelled(5, TimeUnit.SECONDS),
+                    "ending the SMB cert-stream session must cancel the ManageSmbCert call so "
+                            + "the authority stops sending");
+        }
     }
 
     // Same leak class as PC-L-6, on the DELIVERY path instead of the renewal
@@ -719,6 +802,23 @@ class CertStreamBehaviorTest {
         assertTrue(err.getMessage().contains("expected public key is empty"));
     }
 
+    /**
+     * Waits up to two seconds for the handler's delivery count to reach
+     * {@code unwanted}. Returns as soon as it does, so a late delivery that IS
+     * applied fails fast and only the passing case spends the whole budget.
+     */
+    private static int awaitDeliveryCount(
+            java.util.function.Supplier<Integer> counter,
+            int unwanted) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        int count = counter.get();
+        while (count < unwanted && System.nanoTime() < deadline) {
+            Thread.sleep(25);
+            count = counter.get();
+        }
+        return count;
+    }
+
     private static ServiceConnection emptyAuthorityConnection() {
         return new ServiceConnection(
                 "cert-stream-authority",
@@ -741,7 +841,8 @@ class CertStreamBehaviorTest {
                 .start();
         ManagedChannelBuilder<?> channelBuilder = ManagedChannelBuilder.forAddress("127.0.0.1", server.getPort())
                 .usePlaintext();
-        if (mode == AuthorityMode.RENEWAL_CSR_SEND_FAILS) {
+        if (mode == AuthorityMode.RENEWAL_CSR_SEND_FAILS
+                || mode == AuthorityMode.RENEWAL_CSR_SEND_FAILS_STREAM_STAYS_OPEN) {
             channelBuilder = channelBuilder.intercept(failSecondCsrSendInterceptor());
         }
         ManagedChannel channel = channelBuilder.build();
@@ -1035,6 +1136,12 @@ class CertStreamBehaviorTest {
         // Counted per AUTHORITY, not per stream, so a test can tell which
         // authority instance a reconnect attempt actually landed on.
         private final AtomicInteger csrs = new AtomicInteger();
+        // Server side of the still-open stream, so a test can send AFTER the
+        // client loop has already ended its session, plus the signal that the
+        // client actually cancelled the call.
+        private final AtomicReference<StreamObserver<Tlscert.TlsCertServerMsg>> live = new AtomicReference<>();
+        private final AtomicReference<KeyOuterClass.PublicKey> lastPublicKey = new AtomicReference<>();
+        private final CountDownLatch cancelled = new CountDownLatch(1);
 
         JavaTlsAuthority(AuthorityMode mode) {
             this.mode = mode;
@@ -1044,9 +1151,29 @@ class CertStreamBehaviorTest {
             return csrs.get();
         }
 
+        boolean awaitCancelled(long timeout, TimeUnit unit) throws InterruptedException {
+            return cancelled.await(timeout, unit);
+        }
+
+        void sendLateCert(String id) {
+            StreamObserver<Tlscert.TlsCertServerMsg> observer = live.get();
+            KeyOuterClass.PublicKey publicKey = lastPublicKey.get();
+            assertNotNull(observer, "no ManageCert stream to send a late cert on");
+            assertNotNull(publicKey, "no CSR public key to sign a late cert for");
+            try {
+                observer.onNext(Tlscert.TlsCertServerMsg.newBuilder()
+                        .setCert(Tlscert.TlsCertDelivery.newBuilder()
+                                .setChain(certChainForPublicKey(publicKey, id)))
+                        .build());
+            } catch (Exception ignored) {
+                // Sending on a cancelled call throws; that is the fixed behaviour.
+            }
+        }
+
         @Override
         public StreamObserver<Tlscert.TlsCertClientMsg> manageCert(
                 StreamObserver<Tlscert.TlsCertServerMsg> responseObserver) {
+            live.set(responseObserver);
             return new StreamObserver<>() {
                 private int deliveryCount;
                 private boolean closed;
@@ -1061,6 +1188,7 @@ class CertStreamBehaviorTest {
                     try {
                         deliveryCount++;
                         KeyOuterClass.PublicKey publicKey = msg.getCsr().getPublicKey();
+                        lastPublicKey.set(publicKey);
                         if (deliveryCount == 1) {
                             initialPublicKey = publicKey;
                             if (mode == AuthorityMode.CLEAN_BEFORE_FIRST) {
@@ -1091,6 +1219,14 @@ class CertStreamBehaviorTest {
                                 close();
                                 return;
                             }
+                            if (mode == AuthorityMode.RENEWAL_CSR_SEND_FAILS_STREAM_STAYS_OPEN) {
+                                // Same failed renewal CSR, but the authority then
+                                // leaves the stream open and sends nothing more, so
+                                // the test controls what arrives after the client
+                                // has already ended its session.
+                                sendRenew("fixture renewal");
+                                return;
+                            }
                             sendRenew("fixture renewal");
                         } else if (mode == AuthorityMode.REORDERED_RENEWAL && deliveryCount == 2) {
                             sendCert(initialPublicKey, "java-tls-stale-renewal");
@@ -1107,10 +1243,17 @@ class CertStreamBehaviorTest {
                 @Override
                 public void onError(Throwable t) {
                     closed = true;
+                    cancelled.countDown();
                 }
 
                 @Override
                 public void onCompleted() {
+                    if (mode == AuthorityMode.RENEWAL_CSR_SEND_FAILS_STREAM_STAYS_OPEN) {
+                        // The client half-closed when its loop ended. A real
+                        // authority keeps sending on the still-open call, which
+                        // is exactly what this mode exists to reproduce.
+                        return;
+                    }
                     close();
                 }
 
@@ -1159,6 +1302,10 @@ class CertStreamBehaviorTest {
         private final AuthorityMode mode;
         // See JavaTlsAuthority.csrs.
         private final AtomicInteger csrs = new AtomicInteger();
+        // See JavaTlsAuthority.live/lastPublicKey/cancelled.
+        private final AtomicReference<StreamObserver<Smbcert.SmbCertServerMsg>> live = new AtomicReference<>();
+        private final AtomicReference<KeyOuterClass.PublicKey> lastPublicKey = new AtomicReference<>();
+        private final CountDownLatch cancelled = new CountDownLatch(1);
 
         JavaSmbAuthority(AuthorityMode mode) {
             this.mode = mode;
@@ -1168,9 +1315,30 @@ class CertStreamBehaviorTest {
             return csrs.get();
         }
 
+        boolean awaitCancelled(long timeout, TimeUnit unit) throws InterruptedException {
+            return cancelled.await(timeout, unit);
+        }
+
+        void sendLateCert(String id) {
+            StreamObserver<Smbcert.SmbCertServerMsg> observer = live.get();
+            KeyOuterClass.PublicKey publicKey = lastPublicKey.get();
+            assertNotNull(observer, "no ManageSmbCert stream to send a late cert on");
+            assertNotNull(publicKey, "no CSR public key to sign a late cert for");
+            try {
+                observer.onNext(Smbcert.SmbCertServerMsg.newBuilder()
+                        .setCert(Smbcert.SmbCertDelivery.newBuilder()
+                                .setMemberChain(certChainForPublicKey(publicKey, id))
+                                .setCa(protoCert("java-smb-ca", new byte[] {1, 2, 3})))
+                        .build());
+            } catch (Exception ignored) {
+                // Sending on a cancelled call throws; that is the fixed behaviour.
+            }
+        }
+
         @Override
         public StreamObserver<Smbcert.SmbCertClientMsg> manageSmbCert(
                 StreamObserver<Smbcert.SmbCertServerMsg> responseObserver) {
+            live.set(responseObserver);
             return new StreamObserver<>() {
                 private int deliveryCount;
                 private boolean closed;
@@ -1185,6 +1353,7 @@ class CertStreamBehaviorTest {
                     try {
                         deliveryCount++;
                         KeyOuterClass.PublicKey publicKey = msg.getCsr().getPublicKey();
+                        lastPublicKey.set(publicKey);
                         if (deliveryCount == 1) {
                             initialPublicKey = publicKey;
                             if (mode == AuthorityMode.CLEAN_BEFORE_FIRST) {
@@ -1213,6 +1382,13 @@ class CertStreamBehaviorTest {
                                 close();
                                 return;
                             }
+                            if (mode == AuthorityMode.RENEWAL_CSR_SEND_FAILS_STREAM_STAYS_OPEN) {
+                                // See the TLS authority: leave the stream open so
+                                // the test owns what arrives after the client has
+                                // ended its session.
+                                sendRenew("fixture renewal");
+                                return;
+                            }
                             sendRenew("fixture renewal");
                         } else if (mode == AuthorityMode.REORDERED_RENEWAL && deliveryCount == 2) {
                             sendCert(initialPublicKey, "java-smb-stale-renewal");
@@ -1238,10 +1414,17 @@ class CertStreamBehaviorTest {
                 @Override
                 public void onError(Throwable t) {
                     closed = true;
+                    cancelled.countDown();
                 }
 
                 @Override
                 public void onCompleted() {
+                    if (mode == AuthorityMode.RENEWAL_CSR_SEND_FAILS_STREAM_STAYS_OPEN) {
+                        // The client half-closed when its loop ended. A real
+                        // authority keeps sending on the still-open call, which
+                        // is exactly what this mode exists to reproduce.
+                        return;
+                    }
                     close();
                 }
 

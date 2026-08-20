@@ -1308,11 +1308,39 @@ public class ServiceManager implements AutoCloseable {
         CountDownLatch done = new CountDownLatch(1);
         AtomicReference<Exception> streamError = new AtomicReference<>();
         AtomicReference<StreamObserver<Tlscert.TlsCertClientMsg>> outboundRef = new AtomicReference<>();
+        AtomicReference<io.grpc.stub.ClientCallStreamObserver<Tlscert.TlsCertClientMsg>> callRef = new AtomicReference<>();
+        // Ending the session must end the CALL, not just the loop. Without an
+        // explicit cancel the ManageCert call stays open on the shared channel
+        // after the loop has already failed, so the authority keeps sending and
+        // onNext keeps applying certs for a session that no longer exists — and
+        // a message already in flight is still handled after the decision to
+        // fail. go returns out of the loop and rust propagates with `?`, which
+        // drops their stream; java has to say so explicitly.
+        java.util.function.Consumer<Exception> endSession = err -> {
+            streamError.compareAndSet(null, err);
+            done.countDown();
+            io.grpc.stub.ClientCallStreamObserver<Tlscert.TlsCertClientMsg> call = callRef.get();
+            if (call != null) {
+                try {
+                    call.cancel("ManageCert session ended", err);
+                } catch (RuntimeException ignored) {}
+            }
+        };
 
         StreamObserver<Tlscert.TlsCertClientMsg> outbound = stub.manageCert(
-                new StreamObserver<Tlscert.TlsCertServerMsg>() {
+                new io.grpc.stub.ClientResponseObserver<Tlscert.TlsCertClientMsg, Tlscert.TlsCertServerMsg>() {
+                    @Override
+                    public void beforeStart(io.grpc.stub.ClientCallStreamObserver<Tlscert.TlsCertClientMsg> requestStream) {
+                        callRef.set(requestStream);
+                    }
+
                     @Override
                     public void onNext(Tlscert.TlsCertServerMsg msg) {
+                        // The session already ended; a message that was in flight
+                        // when it did must not be applied.
+                        if (done.getCount() == 0) {
+                            return;
+                        }
                         if (msg.hasCert()) {
                             try {
                                 X509.X509CertChain chain = msg.getCert().getChain();
@@ -1327,8 +1355,7 @@ public class ServiceManager implements AutoCloseable {
                                     verifyLeafMatchesPublicKey(chain, publicKeyDer);
                                 } catch (Exception verifyErr) {
                                     if (readyLatch.getCount() > 0) {
-                                        streamError.set(new Exception("TLS cert public key mismatch", verifyErr));
-                                        done.countDown();
+                                        endSession.accept(new Exception("TLS cert public key mismatch", verifyErr));
                                         return;
                                     }
                                     LOG.warning("TLS cert public key mismatch on renewal delivery, keeping previous cert: " + verifyErr.getMessage());
@@ -1360,9 +1387,8 @@ public class ServiceManager implements AutoCloseable {
                                             // Handler failure on the FIRST cert delivery is
                                             // fatal: fail startup instead of signalling
                                             // readiness as if the cert had been applied.
-                                            streamError.set(new FatalTlsHandlerException(
+                                            endSession.accept(new FatalTlsHandlerException(
                                                     "handler newTlsCert failed on first cert delivery", cbErr));
-                                            done.countDown();
                                             return;
                                         }
                                         // Renewal delivery: the previous certificate
@@ -1423,8 +1449,7 @@ public class ServiceManager implements AutoCloseable {
                                 // "generate renewal keypair", rust propagates with `?`).
                                 pendingPrivateKeyDer.set(null);
                                 pendingPublicKeyDer.set(null);
-                                streamError.set(new Exception("generate renewal keypair", e));
-                                done.countDown();
+                                endSession.accept(new Exception("generate renewal keypair", e));
                                 return;
                             }
                             try {
@@ -1438,18 +1463,16 @@ public class ServiceManager implements AutoCloseable {
                                 // (go returns "send renewal Csr").
                                 pendingPrivateKeyDer.set(null);
                                 pendingPublicKeyDer.set(null);
-                                streamError.set(new Exception("send renewal Csr", e));
-                                done.countDown();
+                                endSession.accept(new Exception("send renewal Csr", e));
                             }
                         } else if (!msg.getError().isEmpty()) {
-                            streamError.set(new Exception("server error: " + msg.getError()));
-                            done.countDown();
+                            endSession.accept(new Exception("server error: " + msg.getError()));
                         }
                     }
 
                     @Override
                     public void onError(Throwable t) {
-                        streamError.set(new Exception(t));
+                        streamError.compareAndSet(null, new Exception(t));
                         done.countDown();
                     }
 
@@ -1594,11 +1617,39 @@ public class ServiceManager implements AutoCloseable {
         CountDownLatch done = new CountDownLatch(1);
         AtomicReference<Exception> streamError = new AtomicReference<>();
         AtomicReference<StreamObserver<Smbcert.SmbCertClientMsg>> outboundRef = new AtomicReference<>();
+        AtomicReference<io.grpc.stub.ClientCallStreamObserver<Smbcert.SmbCertClientMsg>> callRef = new AtomicReference<>();
+        // Ending the session must end the CALL, not just the loop. Without an
+        // explicit cancel the ManageSmbCert call stays open on the shared channel
+        // after the loop has already failed, so the authority keeps sending and
+        // onNext keeps applying certs for a session that no longer exists — and
+        // a message already in flight is still handled after the decision to
+        // fail. go returns out of the loop and rust propagates with `?`, which
+        // drops their stream; java has to say so explicitly.
+        java.util.function.Consumer<Exception> endSession = err -> {
+            streamError.compareAndSet(null, err);
+            done.countDown();
+            io.grpc.stub.ClientCallStreamObserver<Smbcert.SmbCertClientMsg> call = callRef.get();
+            if (call != null) {
+                try {
+                    call.cancel("ManageSmbCert session ended", err);
+                } catch (RuntimeException ignored) {}
+            }
+        };
 
         StreamObserver<Smbcert.SmbCertClientMsg> outbound = stub.manageSmbCert(
-                new StreamObserver<Smbcert.SmbCertServerMsg>() {
+                new io.grpc.stub.ClientResponseObserver<Smbcert.SmbCertClientMsg, Smbcert.SmbCertServerMsg>() {
+                    @Override
+                    public void beforeStart(io.grpc.stub.ClientCallStreamObserver<Smbcert.SmbCertClientMsg> requestStream) {
+                        callRef.set(requestStream);
+                    }
+
                     @Override
                     public void onNext(Smbcert.SmbCertServerMsg msg) {
+                        // The session already ended; a message that was in flight
+                        // when it did must not be applied.
+                        if (done.getCount() == 0) {
+                            return;
+                        }
                         if (msg.hasCert()) {
                             try {
                                 X509.X509CertChain memberChain = msg.getCert().getMemberChain();
@@ -1614,8 +1665,7 @@ public class ServiceManager implements AutoCloseable {
                                     verifyLeafMatchesPublicKey(memberChain, publicKeyDer);
                                 } catch (Exception verifyErr) {
                                     if (readyLatch.getCount() > 0) {
-                                        streamError.set(new Exception("SMB member cert public key mismatch", verifyErr));
-                                        done.countDown();
+                                        endSession.accept(new Exception("SMB member cert public key mismatch", verifyErr));
                                         return;
                                     }
                                     LOG.warning("SMB member cert public key mismatch on renewal delivery, keeping previous credential: " + verifyErr.getMessage());
@@ -1630,9 +1680,8 @@ public class ServiceManager implements AutoCloseable {
                                     } catch (Exception cbErr) {
                                         if (readyLatch.getCount() > 0) {
                                             // Handler failure on the FIRST delivery is fatal.
-                                            streamError.set(new FatalSmbHandlerException(
+                                            endSession.accept(new FatalSmbHandlerException(
                                                     "handler newSmbCert failed on first member cert delivery", cbErr));
-                                            done.countDown();
                                             return;
                                         }
                                         // Renewal delivery: keep the previous credential.
@@ -1682,8 +1731,7 @@ public class ServiceManager implements AutoCloseable {
                                 // (go returns the session error, rust propagates `?`).
                                 pendingPrivateKeyDer.set(null);
                                 pendingPublicKeyDer.set(null);
-                                streamError.set(new Exception("generate SMB renewal keypair", e));
-                                done.countDown();
+                                endSession.accept(new Exception("generate SMB renewal keypair", e));
                                 return;
                             }
                             try {
@@ -1695,18 +1743,16 @@ public class ServiceManager implements AutoCloseable {
                                 // Same reasoning as above.
                                 pendingPrivateKeyDer.set(null);
                                 pendingPublicKeyDer.set(null);
-                                streamError.set(new Exception("send SMB renewal Csr", e));
-                                done.countDown();
+                                endSession.accept(new Exception("send SMB renewal Csr", e));
                             }
                         } else if (!msg.getError().isEmpty()) {
-                            streamError.set(new Exception("server error: " + msg.getError()));
-                            done.countDown();
+                            endSession.accept(new Exception("server error: " + msg.getError()));
                         }
                     }
 
                     @Override
                     public void onError(Throwable t) {
-                        streamError.set(new Exception(t));
+                        streamError.compareAndSet(null, new Exception(t));
                         done.countDown();
                     }
 

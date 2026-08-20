@@ -33,12 +33,24 @@ func TestJavaCertRenewalKeygenFailureEndsSession(t *testing.T) {
 			t.Fatalf("renewal handler %d: expected a keygen catch and a CSR-send catch, found %d", i, len(catches))
 		}
 		for j, c := range catches {
-			if !strings.Contains(c, "streamError.set(") {
-				t.Errorf("renewal handler %d catch %d: must set streamError so runXCertStream rethrows and the loop reconnects; catch:\n%s", i, j, c)
+			if !strings.Contains(c, "endSession.accept(") {
+				t.Errorf("renewal handler %d catch %d: must end the session via endSession so runXCertStream rethrows, the call is cancelled, and the loop reconnects; catch:\n%s", i, j, c)
 			}
-			if !strings.Contains(c, "done.countDown()") {
-				t.Errorf("renewal handler %d catch %d: must count down `done` so the session ends; catch:\n%s", i, j, c)
-			}
+		}
+	}
+
+	// endSession is what "end the session" means now, so it has to do all
+	// three things: record the error, release the loop, and CANCEL the call.
+	// Without the cancel the authority keeps sending on a stream the loop has
+	// already failed and onNext keeps applying certs — a fail-open.
+	for _, required := range []string{
+		"streamError.compareAndSet(null, err);",
+		"done.countDown();",
+		"call.cancel(\"ManageCert session ended\", err);",
+		"call.cancel(\"ManageSmbCert session ended\", err);",
+	} {
+		if !strings.Contains(tmpl, required) {
+			t.Errorf("java SM template endSession is missing %q", required)
 		}
 	}
 

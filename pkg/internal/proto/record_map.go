@@ -55,7 +55,10 @@ type recordFilter struct {
 //	rpc Close<T>(QueryHandle) returns (QueryStats);
 //
 // The set holds record REFERENCES; records are immutable, only the query predicate is
-// mutable (narrow-only for now). Sample, Pull, and each Watch stream item return record
+// mutable — Refine replaces it outright (no narrow-only enforcement: nothing compares
+// the new predicate against the old one, so a caller entitled to Open is equally free
+// to Refine to match-all; the RecordMap authorizer is per-RPC-method, not per-filter,
+// so this is not a privilege escalation). Sample, Pull, and each Watch stream item return record
 // data, and ALL THREE apply EGRESS DATA ENTITLEMENT — the store calls the generated
 // Sanitize<T>(record, entitlement, hmacKey) with a per-caller entitlement derived
 // from caller entitlements before returning data; the sanitized view is never baked
@@ -337,7 +340,8 @@ message %[1]sWatchEvent {
   rpc Close%[1]s(QueryHandle) returns (QueryStats);
 `, r.typeName, r.key))
 		if hasFilter {
-			// Refine narrows the query's predicate in place (narrow-only for now).
+			// Refine replaces the query's predicate in place (unrestricted — not
+			// enforced narrow-only; see the package doc comment above).
 			// Watch streams a living query's changes (snapshot then deltas).
 			// SubscribeCount streams the live size.
 			sb.WriteString(fmt.Sprintf(`  rpc Refine%[1]s(Refine%[1]sRequest) returns (QueryStats);

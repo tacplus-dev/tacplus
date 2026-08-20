@@ -40,6 +40,9 @@ type FieldDescriptor struct {
 	// DataEntitlementMode is the field's own (spec.redact) mode string
 	// ("drop"/"pseudonymize"/"may_redact"/"may_anonymize"), "" if unannotated.
 	DataEntitlementMode string `json:"data_entitlement_mode,omitempty"`
+	// FilterMode is the field's own (spec.query_field) op string ("eq"/"range"),
+	// "" if unannotated (not filterable — the field is absent from <T>Filter).
+	FilterMode string `json:"filter_mode,omitempty"`
 	// Timeseries column annotations (store-neutral)
 	Timeseries              bool  `json:"timeseries,omitempty"`               // true if field has (spec.timeseries_column)
 	TimeseriesOrderKey      int   `json:"timeseries_order_key,omitempty"`     // store-neutral sort-key position (1-indexed)
@@ -214,6 +217,13 @@ func BuildTypeDescriptor(msg model.Message, pkg string, msgIdx map[string]Messag
 			// the drift guard can detect a proto/registry mismatch.
 			if ann, ok := field.Annotations["redact"]; ok {
 				fd.DataEntitlementMode = ann.StringValue
+			}
+			// RecordMap filterability (spec.query_field). The descriptor parser
+			// stamps "eq"/"range" — the same op the record-map injector builds its
+			// recordFilter from — so the registry carries the filter shape a
+			// consumer would otherwise have to read off the generated <T>Filter.
+			if ann, ok := field.Annotations["query_field"]; ok && ann.StringValue != "" {
+				fd.FilterMode = ann.StringValue
 			}
 			// Timeseries field annotations (store-neutral)
 			if _, ok := field.Annotations["timeseries_column"]; ok {

@@ -404,6 +404,31 @@ func TestBuildFieldInfoProtoIncludesDataEntitlementMode(t *testing.T) {
 	}
 }
 
+// The registry must carry the per-field RecordMap filterability (from
+// spec.query_field) so a consumer reading registry.json at runtime — with no
+// compiled record type to inspect — knows whether a field can be filtered on and
+// whether the generated <T>Filter criterion is EQ or a _from/_to RANGE pair.
+// Cross-checked against the injector's actual output in
+// pkg/internal/proto/record_filter_registry_test.go.
+func TestBuildFieldInfoProtoIncludesFilterMode(t *testing.T) {
+	cases := map[string]spec.QueryOp{
+		"eq":    spec.QueryOp_QUERY_OP_EQ,
+		"range": spec.QueryOp_QUERY_OP_RANGE,
+		"":      spec.QueryOp_QUERY_OP_UNSPECIFIED,
+		"bogus": spec.QueryOp_QUERY_OP_UNSPECIFIED,
+	}
+	for mode, want := range cases {
+		got := buildFieldInfoProto(llmdesc.FieldDescriptor{
+			Name:       "timestamp_ms",
+			Type:       "int64",
+			FilterMode: mode,
+		})
+		if got.GetFilterMode() != want {
+			t.Errorf("mode %q -> %v, want %v", mode, got.GetFilterMode(), want)
+		}
+	}
+}
+
 // The message-level default (spec.data_entitlement) is recorded on TypeInfo.
 func TestBuildTypeInfoProtoIncludesDataEntitlementDefault(t *testing.T) {
 	got := BuildTypeInfoProto(llmdesc.RegistryTypeInfo{

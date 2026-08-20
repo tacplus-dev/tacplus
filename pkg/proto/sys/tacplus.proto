@@ -275,6 +275,12 @@ message FieldInfo {
   // This field's wire number is the field id reported in the sanitize
   // redacted-id set and checked by the data-entitlement drift guard.
   spec.RedactMode data_entitlement_mode = 31;
+  // filter_mode is the field's RecordMap filterability, from (spec.query_field).op:
+  // EQ  -> the generated <T>Filter carries `optional <type> <name>`;
+  // RANGE -> it carries `optional <type> <name>_from` + `optional <type> <name>_to`.
+  // UNSPECIFIED = the field carries no (spec.query_field) and is NOT filterable — a
+  // record type whose fields are all UNSPECIFIED gets no <T>Filter message at all.
+  spec.QueryOp filter_mode = 32;
 }
 
 // TypeInfo describes a protobuf message type in the generated registry.

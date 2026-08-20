@@ -824,6 +824,7 @@ func buildFieldInfoProto(field llmdesc.FieldDescriptor) *spec.FieldInfo {
 		TimeseriesPartitionKey:    field.TimeseriesPartitionKey,
 		TimeseriesCardinalityHint: spec.CardinalityHint(field.TimeseriesCardinality),
 		DataEntitlementMode:       entitlementModeToProto(field.DataEntitlementMode),
+		FilterMode:                filterModeToProto(field.FilterMode),
 	}
 	if defaultJSON := marshalDefault(field.Default); defaultJSON != "" {
 		fi.DefaultJson = defaultJSON
@@ -864,6 +865,21 @@ func entitlementModeToProto(mode string) spec.RedactMode {
 		return spec.RedactMode_REDACT_MODE_MAY_ANONYMIZE
 	default:
 		return spec.RedactMode_REDACT_MODE_UNSPECIFIED
+	}
+}
+
+// filterModeToProto maps a (spec.query_field) op string (as stamped by the
+// descriptor parser: "eq"/"range") to its spec.QueryOp. An empty or unrecognized
+// string maps to QUERY_OP_UNSPECIFIED — the field carries no (spec.query_field)
+// and is not filterable, so it has no criterion on the generated <T>Filter.
+func filterModeToProto(mode string) spec.QueryOp {
+	switch mode {
+	case "eq":
+		return spec.QueryOp_QUERY_OP_EQ
+	case "range":
+		return spec.QueryOp_QUERY_OP_RANGE
+	default:
+		return spec.QueryOp_QUERY_OP_UNSPECIFIED
 	}
 }
 

@@ -98,3 +98,17 @@ func TestRedactModeString(t *testing.T) {
 		}
 	}
 }
+
+// A field cannot be both (spec.redact) and (spec.query_field): the record map emits
+// a typed <T>Filter over every query field, so filtering on a redacted value leaks
+// it back by inference. Model-level seam; the proto-fixture proof that this fires on
+// the annotations protoc actually stamps lives in
+// pkg/internal/proto/redact_query_field_test.go.
+func TestValidateDataEntitlementRejectsRedactedQueryField(t *testing.T) {
+	field := entField("title", "string", false, "drop")
+	field.Annotations["query_field"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringValue: "eq"}
+	err := ValidateDataEntitlementAnnotations(recordWith(field))
+	if err == nil || !strings.Contains(err.Error(), "Event.title: cannot be both (spec.redact) and (spec.query_field)") {
+		t.Fatalf("expected redact+query_field to fail loudly, got: %v", err)
+	}
+}

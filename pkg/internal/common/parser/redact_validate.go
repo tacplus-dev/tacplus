@@ -24,6 +24,8 @@ import (
 //   - the two ANONYMIZE modes (PSEUDONYMIZE, MAY_ANONYMIZE) are keyed HMAC over a
 //     single value and require a plain (non-repeated, non-message) string or bytes;
 //   - map and oneof fields are not supported;
+//   - a redacted field must not also be a (spec.query_field): a typed filter over a
+//     redacted value leaks it back by inference;
 //   - a message-level (spec.data_entitlement) default must carry a real mode.
 //
 // It is valid on any message, not only a (spec.record) — data entitlement applies
@@ -42,6 +44,17 @@ func ValidateDataEntitlementAnnotations(allFiles []model.ProtoFile) error {
 				ann, ok := field.Annotations["redact"]
 				if !ok {
 					continue
+				}
+				// A redacted field must not also be a query criterion. The record map
+				// emits a typed <T>Filter over every (spec.query_field), so a caller
+				// could filter/predicate on exactly the value Sanitize<T> clears at
+				// egress and read it back by inference — which defeats the redaction
+				// entirely. Rejected in every mode, before the mode check, so it fires
+				// on the combination regardless of what else is wrong with the field.
+				if _, isQuery := field.Annotations["query_field"]; isQuery {
+					errs = append(errs, fmt.Sprintf(
+						"%s.%s: cannot be both (spec.redact) and (spec.query_field) — a filterable field defeats redaction",
+						msg.Name, field.Name))
 				}
 				mode := ann.StringValue
 				if !isValidEntitlementMode(mode) {

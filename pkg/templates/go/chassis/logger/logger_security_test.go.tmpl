@@ -12,6 +12,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -156,6 +158,93 @@ func TestCredentialRedaction_StructuredFields(t *testing.T) {
 		var v map[string]any
 		if err := json.Unmarshal([]byte(line), &v); err != nil {
 			t.Errorf("redaction produced unparseable JSON: %v\n  line: %s", err, line)
+		}
+	}
+}
+
+// TestCredentialRedaction_InstallPath exercises the REAL Install() entry point
+// end to end, instead of re-building its construction by hand.
+//
+// Every other test in this file, TestCredentialRedaction_StructuredFields
+// included, asserts against a core the test itself assembles. That proves the
+// redacting CAPABILITY works; it proves nothing about whether Install() wires it
+// up. That gap is the exact shape of the original defect: the capability was
+// present and correct, and Install() did not use it -- it called
+// zapConfig.Build() over a message-only redactingCore, so structured fields
+// reached stderr in the clear while every test in this file stayed green.
+//
+// The compiler-side guard is a source-text assertion on this template, which can
+// pass on a string that appears in a comment or in dead code. This test instead
+// calls Install(), logs a credential-bearing FIELD through the global logger
+// Install() replaces, and inspects the bytes that actually arrive at the sink.
+//
+// Seam: Install() hard-codes the "stderr" output path, and zap resolves that
+// path to os.Stderr at zap.Open() time. Swapping os.Stderr for a pipe before the
+// call therefore captures the real sink without altering the code under test.
+func TestCredentialRedaction_InstallPath(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create pipe: %v", err)
+	}
+
+	// Drain concurrently: a pipe blocks its writer once the buffer fills, and
+	// the logger writes before this test reads.
+	captured := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(r)
+		captured <- string(b)
+	}()
+
+	realStderr := os.Stderr
+	prevGlobal := zap.L()
+	os.Stderr = w
+
+	lg := &Logger{Format: LogFormatJson, Level: LogLevelInfo}
+	lg.Install()
+
+	// Log through the GLOBAL logger Install() installed, not a local handle:
+	// that is how service code reaches this logger.
+	zap.L().Info("outbound call", zap.String("authorization", "Bearer "+fakeToken))
+	zap.L().Info("bound context", zap.String("x-auth-token", fakeToken))
+	zap.L().Info("healthy", zap.String("peer", "192.168.1.1"))
+	_ = zap.L().Sync()
+
+	// Restore before asserting, so a failing t.Fatalf still leaves the process
+	// with a working stderr.
+	_ = w.Close()
+	os.Stderr = realStderr
+	zap.ReplaceGlobals(prevGlobal)
+	// Install() pinned grpclog to a redactingWriter over the PIPE. Re-pin it so
+	// later grpclog output does not write to a closed descriptor.
+	pinGrpcTransportLogger()
+
+	output := <-captured
+
+	// Without this, every assertion below would pass vacuously on empty output
+	// if the capture seam ever broke -- which would report the redaction as
+	// working when nothing had been observed at all.
+	if output == "" {
+		t.Fatal("captured no output from Install()'s sink: the capture seam is broken, " +
+			"so this test proves nothing about redaction")
+	}
+	if strings.Contains(output, fakeToken) {
+		t.Fatalf("SECURITY: Install() let a field-borne credential reach the sink:\n%s", output)
+	}
+	if !strings.Contains(output, "[REDACTED]") {
+		t.Fatalf("expected [REDACTED] marker in Install() output:\n%s", output)
+	}
+	if !strings.Contains(output, "authorization") {
+		t.Fatalf("field key should be preserved (only the value is redacted):\n%s", output)
+	}
+	if !strings.Contains(output, "192.168.1.1") {
+		t.Fatalf("non-sensitive field values should be preserved:\n%s", output)
+	}
+
+	// Redaction must not corrupt the line it rewrites.
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		var v map[string]any
+		if err := json.Unmarshal([]byte(line), &v); err != nil {
+			t.Errorf("Install() produced unparseable JSON: %v\n  line: %s", err, line)
 		}
 	}
 }

@@ -57,9 +57,10 @@ const tokenRefreshBuffer = 60 * time.Second
 const defaultAudience = "{{.ServiceAudience}}"
 
 // k8sTokenFileEnv names the env var pointing at the projected Kubernetes
-// service-account token file (audience "kernel"). Mirrors the operator's
+// service-account token file (audience configured via defaultAudience/AudienceMappings,
+// typically the token-exchange authority e.g. "kernel"). Mirrors the operator's
 // KMAKER_K8S_TOKEN_FILE precedent. When set and the file is readable, the service
-// authenticates to the kernel with the projected token. This is the in-cluster
+// authenticates to that authority with the projected token. This is the in-cluster
 // bootstrap path; the static cred_pair (private_key) bootstrap arm has been removed.
 const k8sTokenFileEnv = "KERNEL_K8S_TOKEN_FILE"
 
@@ -201,7 +202,7 @@ func New(ctx context.Context, cfg *grpcconfig_pb.Config) (*IdentityManager, erro
 	// identity token to the authority, so it fails closed and pins the peer's
 	// SPIFFE trust domain: chain validity alone is CA-only trust (fail-open) —
 	// any CA-issued cert could impersonate the authority and harvest that token
-	// (SEC-1 / H1). The authority (kernel) presents a canonical service SPIFFE
+	// (SEC-1 / H1). The authority (e.g. kernel) presents a canonical service SPIFFE
 	// cert (spiffe://<td>/system/services/<label>), so we pin the trust domain
 	// (any service in it) the same way mesh channels do — not a specific
 	// authority service label, which is deployment policy the generic chassis
@@ -548,7 +549,8 @@ func (im *IdentityManager) Close() {
 
 // k8sTokenMinter handles token exchange using a projected Kubernetes
 // service-account token instead of a CredPair-signed throwaway JWT:
-//  1. Reads the projected token file (audience "kernel")
+//  1. Reads the projected token file (audience per defaultAudience/AudienceMappings,
+//     typically the token-exchange authority e.g. "kernel")
 //  2. Exchanges it via {{.MintServiceName}} for refresh + access tokens (Phase 1),
 //     presenting it as the kubernetes_token credential
 //  3. Exchanges the access token for an audience-scoped service token (Phase 2)

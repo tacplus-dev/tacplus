@@ -11,7 +11,8 @@
 //! but no longer accepted, so every call fails UNAUTHENTICATED and the service
 //! keeps presenting the same dead credential until the natural expiry.
 //!
-//! Observed: restarting kernel put four services into a permanent
+//! Observed: restarting the token authority (kernel, in the observed deployment)
+//! put four services into a permanent
 //! "token validation failed" storm across every path they had — TLS cert
 //! renewal, node registration, health publish, state watches — and none of them
 //! recovered until the pod was deleted by hand. `TokenMinter::invalidate()`

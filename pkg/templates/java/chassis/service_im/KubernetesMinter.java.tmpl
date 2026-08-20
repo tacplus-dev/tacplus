@@ -22,7 +22,8 @@ import java.util.concurrent.TimeUnit;
  * Kubernetes projected-token exchange: read projected SA token → service token.
  *
  * <p>Mirrors {@link TokenMinter} but presents a projected Kubernetes
- * service-account token (audience "kernel") as the {@code kubernetes_token}
+ * service-account token (audience per the configured token-exchange authority,
+ * e.g. "kernel") as the {@code kubernetes_token}
  * credential instead of signing a throwaway JWT with a CredPair private key. The
  * token file is re-read on every exchange because the kubelet rotates projected
  * tokens in place (~600s TTL); only the exchanged per-audience service tokens are

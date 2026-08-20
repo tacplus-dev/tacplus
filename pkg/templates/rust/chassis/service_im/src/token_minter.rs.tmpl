@@ -7,8 +7,8 @@
 //!
 //! The static cred_pair bootstrap minter (which signed a throwaway JWT with the
 //! service's `private_key`) has been removed. In-cluster services bootstrap via a
-//! projected Kubernetes service-account token; the kernel-signed Phase-2 exchange
-//! (`input_token = access_token`) is retained here.
+//! projected Kubernetes service-account token; the Phase-2 exchange signed by the
+//! configured token-exchange authority (`input_token = access_token`) is retained here.
 
 {{- if .HasTokenExchanger }}
 use std::collections::HashMap;
@@ -38,7 +38,8 @@ struct TokenEntry {
 /// service-account token instead of a CredPair-signed throwaway JWT.
 ///
 /// It is gated on a configured token-file path (env `KERNEL_K8S_TOKEN_FILE`).
-/// The projected token already carries the `kernel` audience, so the
+/// The projected token already carries the configured authority's audience
+/// (e.g. `kernel`), so the
 /// minter presents the file contents as the `kubernetes_token` credential on
 /// the Phase-1 MintServiceToken call, then performs the identical Phase-2
 /// access→service exchange as the CredPair minter. The file is re-read on every

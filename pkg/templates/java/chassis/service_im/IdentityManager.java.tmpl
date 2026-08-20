@@ -405,8 +405,9 @@ public class IdentityManager implements AutoCloseable {
 
     /**
      * Returns gRPC CallCredentials that always use a fixed audience, ignoring the
-     * method descriptor. Used for state-store connections where all RPCs go to
-     * kernel regardless of the owning service's proto package in the method path.
+     * method descriptor. Used for state-store connections where all RPCs go to a
+     * single configured authority (e.g. kernel) regardless of the owning service's
+     * proto package in the method path.
      */
     public CallCredentials callCredentialsForAudience(String fixedAudience) {
         return new CallCredentials() {

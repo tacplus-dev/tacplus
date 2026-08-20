@@ -236,6 +236,16 @@ type MethodDescriptor struct {
 	AuthAnyUser          bool                  // method-level auth_any_user (from method_c2s)
 	TargetNamespaceField string                // method-level target_namespace_field (from method_c2s); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
 	Collection           *CollectionDescriptor // method-level method_collection (collection-returning read); nil when absent
+	Rpc                  *RpcDescriptor        // method-level spec.rpc (call surface); nil when absent
+}
+
+// RpcDescriptor carries a method's spec.rpc annotation: the two independent
+// call-surface axes (principal, exposure) and the non-exclusive protocol
+// flags. Nil on MethodDescriptor means the method carries no spec.rpc.
+type RpcDescriptor struct {
+	Principal spec.RpcPrincipal // who calls; RPC_PRINCIPAL_UNSPECIFIED when the annotation omits it
+	Exposure  spec.RpcExposure  // where from; RPC_EXPOSURE_INTERNAL is the default
+	Flags     []spec.RpcFlag    // non-exclusive protocol properties, as declared
 }
 
 // CollectionDescriptor carries a method's method_collection annotation
@@ -924,6 +934,18 @@ func (p *DescriptorParser) parseMethodOptions(method protoreflect.MethodDescript
 			}
 			if f := val.GetTargetNamespaceField(); f != "" {
 				md.TargetNamespaceField = f
+			}
+		}
+	}
+
+	// rpc (RpcAnnotation) — per-RPC call surface (principal / exposure / flags)
+	if proto.HasExtension(opts, spec.E_Rpc) {
+		val := proto.GetExtension(opts, spec.E_Rpc).(*spec.RpcAnnotation)
+		if val != nil {
+			md.Rpc = &RpcDescriptor{
+				Principal: val.GetPrincipal(),
+				Exposure:  val.GetExposure(),
+				Flags:     val.GetFlags(),
 			}
 		}
 	}

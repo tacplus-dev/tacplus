@@ -21,9 +21,9 @@ message StreamState {
 }
 
 service StreamMemberService {
-  option (spec.service_s2s) = {auth_services: ["*"], tag: "StreamMemberService"};
+  option (spec.service_s2s) = {tag: "StreamMemberService"};
   option (spec.smb) = {};
   rpc Get(Ping) returns (Ping) {
-    option (spec.method_s2s) = {auth_services: ["*"]};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
   }
 }

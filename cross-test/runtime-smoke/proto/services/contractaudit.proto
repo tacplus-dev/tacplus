@@ -33,18 +33,18 @@ service ContractAuditApi {
   option (spec.service_c2s) = {auth_entitled_users: true};
 
   rpc ExecuteAudit(AuditRequest) returns (AuditResponse) {
-    option (spec.method_c2s) = {auth_disabled: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
   }
 
   rpc GenerateAuditEvents(AuditRequest) returns (stream AuditEvent) {
-    option (spec.method_c2s) = {auth_disabled: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
   }
 
   rpc SendAuditEvents(stream AuditEvent) returns (AuditResponse) {
-    option (spec.method_c2s) = {auth_disabled: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
   }
 
   rpc AssistAuditEvents(stream AuditEvent) returns (stream AuditEvent) {
-    option (spec.method_c2s) = {auth_disabled: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
   }
 }

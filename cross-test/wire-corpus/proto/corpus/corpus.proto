@@ -58,6 +58,6 @@ service CorpusApi {
   option (spec.service_c2s) = {auth_entitled_users: true};
 
   rpc GetRecord(CorpusRequest) returns (CorpusRecord) {
-    option (spec.method_c2s) = {auth_disabled: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
   }
 }

@@ -25,7 +25,9 @@ message TimeRange {
 message TimedbPing {}
 
 service ContractTimedb {
-  option (spec.service_s2s) = {auth_services: ["*"]};
+  option (spec.service_s2s) = {};
 
-  rpc Ping(TimedbPing) returns (TimedbPing);
+  rpc Ping(TimedbPing) returns (TimedbPing) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 }

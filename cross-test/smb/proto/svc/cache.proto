@@ -18,17 +18,17 @@ message CacheState {
 }
 
 service CacheService {
-  option (spec.service_s2s) = {auth_services: ["*"], tag: "CacheService"};
+  option (spec.service_s2s) = {tag: "CacheService"};
   option (spec.smb) = {};
   rpc Get(Ping) returns (Ping) {
-    option (spec.method_s2s) = {auth_services: ["*"]};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
   }
 }
 
 service KernelCacheService {
-  option (spec.service_s2s) = {auth_services: ["*"], tag: "KernelCacheService"};
+  option (spec.service_s2s) = {tag: "KernelCacheService"};
   option (spec.smb) = {root: SMB_ROOT_CLUSTER};
   rpc Get(Ping) returns (Ping) {
-    option (spec.method_s2s) = {auth_services: ["*"]};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
   }
 }

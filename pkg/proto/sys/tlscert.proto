@@ -35,7 +35,7 @@ service TlsCertService {
   // raw SPIFFE URI claim) to the requested service_name in the first Init
   // message.
   rpc ManageCert(stream TlsCertClientMsg) returns (stream TlsCertServerMsg) {
-    option (spec.method_s2s) = {auth_services: ["*"]};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
   }
 }
 

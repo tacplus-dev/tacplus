@@ -109,29 +109,37 @@ message ContractPageResponse {
 }
 
 service ContractS2S {
-  option (spec.service_s2s) = {auth_services: ["*"]};
+  option (spec.service_s2s) = {};
 
-  rpc Ping(ContractRequest) returns (ContractResponse);
-  rpc GenerateEvents(ContractRequest) returns (stream ContractEvent);
-  rpc SendEvents(stream ContractEvent) returns (ContractResponse);
-  rpc AssistEvents(stream ContractEvent) returns (stream ContractEvent);
+  rpc Ping(ContractRequest) returns (ContractResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+  rpc GenerateEvents(ContractRequest) returns (stream ContractEvent) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+  rpc SendEvents(stream ContractEvent) returns (ContractResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+  rpc AssistEvents(stream ContractEvent) returns (stream ContractEvent) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 }
 
 service ContractApi {
   option (spec.service_c2s) = {auth_entitled_users: true};
 
   rpc GetContract(ContractRequest) returns (ContractResponse) {
-    option (spec.method_c2s) = {target_namespace_field: "tenant_namespace"};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ENTITLED_USERS], target_namespace_field: "tenant_namespace"};
     option (spec.rest_method) = {methods: [REST_METHOD_GET]};
   }
 
   rpc GetPublicContract(ContractRequest) returns (ContractResponse) {
-    option (spec.method_c2s) = {auth_disabled: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
     option (spec.rest_path) = "contract/public-read";
   }
 
   rpc ListEvents(ContractRequest) returns (stream ContractEvent) {
-    option (spec.method_c2s) = {auth_any_user: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
     option (spec.method_collection) = {
       mode: COLLECTION_MODE_SNAPSHOT
       order_by: "event_id"
@@ -140,7 +148,7 @@ service ContractApi {
   }
 
   rpc Watch(ContractWatchRequest) returns (stream ContractWatchEvent) {
-    option (spec.method_c2s) = {auth_any_user: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
     option (spec.method_collection) = {
       mode: COLLECTION_MODE_WATCH
       order_by: "event_id"
@@ -148,7 +156,7 @@ service ContractApi {
   }
 
   rpc ListEventsPaged(ContractPageRequest) returns (ContractPageResponse) {
-    option (spec.method_c2s) = {auth_any_user: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
     option (spec.method_collection) = {
       mode: COLLECTION_MODE_PAGE
       order_by: "event_id"
@@ -156,8 +164,12 @@ service ContractApi {
     };
   }
 
-  rpc SendEvents(stream ContractEvent) returns (ContractResponse);
-  rpc AssistEvents(stream ContractEvent) returns (stream ContractEvent);
+  rpc SendEvents(stream ContractEvent) returns (ContractResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ENTITLED_USERS]};
+  }
+  rpc AssistEvents(stream ContractEvent) returns (stream ContractEvent) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ENTITLED_USERS]};
+  }
 }
 
 service ContractDaemon {

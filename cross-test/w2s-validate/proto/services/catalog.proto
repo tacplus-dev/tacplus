@@ -29,13 +29,13 @@ service CatalogService {
   option (spec.service_c2s) = {auth_entitled_users: true};
 
   rpc GetItem(GetItemRequest) returns (GetItemResponse) {
-    option (spec.method_c2s) = {auth_any_user: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
   }
 
   // Server-streaming twin of GetItem, so the fixture also covers the SSE
   // dispatch_stream() leg of the same request-validation seam.
   rpc WatchItems(GetItemRequest) returns (stream GetItemResponse) {
-    option (spec.method_c2s) = {auth_any_user: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
     option (spec.method_collection) = {mode: COLLECTION_MODE_WATCH, order_by: ["owner"]};
   }
 }

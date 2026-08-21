@@ -16,46 +16,72 @@ option (spec.int_const) = {name: "MAX_BATCH_SIZE" value: 100};
 
 // Inventory service with all RPC patterns
 service InventoryService {
-  option (spec.service_s2s) = {auth_services: ["*"], tag: "InventoryService"};
+  option (spec.service_s2s) = {tag: "InventoryService"};
 
   // Unary RPC - Get product by SKU
-  rpc GetProduct(GetProductRequest) returns (GetProductResponse);
+  rpc GetProduct(GetProductRequest) returns (GetProductResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Unary RPC - Create new product
-  rpc CreateProduct(CreateProductRequest) returns (CreateProductResponse);
+  rpc CreateProduct(CreateProductRequest) returns (CreateProductResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Unary RPC - Update product
-  rpc UpdateProduct(UpdateProductRequest) returns (UpdateProductResponse);
+  rpc UpdateProduct(UpdateProductRequest) returns (UpdateProductResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Unary RPC - Delete product
-  rpc DeleteProduct(DeleteProductRequest) returns (DeleteProductResponse);
+  rpc DeleteProduct(DeleteProductRequest) returns (DeleteProductResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Unary RPC - Search products
-  rpc SearchProducts(SearchProductsRequest) returns (SearchProductsResponse);
+  rpc SearchProducts(SearchProductsRequest) returns (SearchProductsResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Server streaming RPC - List all products
-  rpc ListProducts(ListProductsRequest) returns (stream product.Product);
+  rpc ListProducts(ListProductsRequest) returns (stream product.Product) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Server streaming RPC - Monitor inventory changes
-  rpc MonitorInventory(MonitorInventoryRequest) returns (stream InventoryEvent);
+  rpc MonitorInventory(MonitorInventoryRequest) returns (stream InventoryEvent) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Client streaming RPC - Batch import products
-  rpc ImportProducts(stream product.Product) returns (ImportProductsResponse);
+  rpc ImportProducts(stream product.Product) returns (ImportProductsResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Client streaming RPC - Batch update stock
-  rpc BatchUpdateStock(stream StockUpdate) returns (BatchUpdateStockResponse);
+  rpc BatchUpdateStock(stream StockUpdate) returns (BatchUpdateStockResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Bidirectional streaming RPC - Real-time inventory sync
-  rpc SyncInventory(stream InventoryDelta) returns (stream InventoryDelta);
+  rpc SyncInventory(stream InventoryDelta) returns (stream InventoryDelta) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Bidirectional streaming RPC - Interactive stock adjustment
-  rpc AdjustStock(stream StockAdjustmentRequest) returns (stream StockAdjustmentResponse);
+  rpc AdjustStock(stream StockAdjustmentRequest) returns (stream StockAdjustmentResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Unary RPC - Get inventory statistics
-  rpc GetInventoryStats(GetInventoryStatsRequest) returns (GetInventoryStatsResponse);
+  rpc GetInventoryStats(GetInventoryStatsRequest) returns (GetInventoryStatsResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Unary RPC - Generate inventory report
-  rpc GenerateReport(GenerateReportRequest) returns (GenerateReportResponse);
+  rpc GenerateReport(GenerateReportRequest) returns (GenerateReportResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 }
 
 // Get product request

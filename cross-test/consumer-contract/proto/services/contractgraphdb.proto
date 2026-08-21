@@ -16,7 +16,9 @@ option (spec.graph_store) = {};
 message GraphdbPing {}
 
 service ContractGraphdb {
-  option (spec.service_s2s) = {auth_services: ["*"]};
+  option (spec.service_s2s) = {};
 
-  rpc Ping(GraphdbPing) returns (GraphdbPing);
+  rpc Ping(GraphdbPing) returns (GraphdbPing) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 }

@@ -16,7 +16,9 @@ option (spec.record_store) = {};
 message StratumPing {}
 
 service ContractStratum {
-  option (spec.service_s2s) = {auth_services: ["*"]};
+  option (spec.service_s2s) = {};
 
-  rpc Ping(StratumPing) returns (StratumPing);
+  rpc Ping(StratumPing) returns (StratumPing) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 }

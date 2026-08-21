@@ -61,7 +61,7 @@ service SmbCertService {
   // sub_type/sub — never a raw SPIFFE URI claim) to the smb_service named in the
   // first Init message.
   rpc ManageSmbCert(stream SmbCertClientMsg) returns (stream SmbCertServerMsg) {
-    option (spec.method_s2s) = {auth_services: ["*"]};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
   }
 }
 

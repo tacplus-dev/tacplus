@@ -17,31 +17,47 @@ option (spec.bool_const) = {name: "ENABLE_REALTIME" value: true};
 
 // Analytics service
 service AnalyticsService {
-  option (spec.service_s2s) = {auth_services: ["*"], tag: "AnalyticsService"};
+  option (spec.service_s2s) = {tag: "AnalyticsService"};
 
   // Unary - Query aggregated metrics
-  rpc QueryMetrics(MetricsQuery) returns (MetricsResponse);
+  rpc QueryMetrics(MetricsQuery) returns (MetricsResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Unary - Get dashboard data
-  rpc GetDashboard(DashboardRequest) returns (DashboardResponse);
+  rpc GetDashboard(DashboardRequest) returns (DashboardResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Server streaming - Stream time series data
-  rpc StreamTimeSeries(TimeSeriesRequest) returns (stream TimeSeriesPoint);
+  rpc StreamTimeSeries(TimeSeriesRequest) returns (stream TimeSeriesPoint) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Server streaming - Monitor events in real-time
-  rpc MonitorEvents(EventMonitorRequest) returns (stream AnalyticsEvent);
+  rpc MonitorEvents(EventMonitorRequest) returns (stream AnalyticsEvent) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Client streaming - Ingest events
-  rpc IngestEvents(stream AnalyticsEvent) returns (IngestResponse);
+  rpc IngestEvents(stream AnalyticsEvent) returns (IngestResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Bidirectional streaming - Interactive query session
-  rpc InteractiveQuery(stream QueryRequest) returns (stream QueryResponse);
+  rpc InteractiveQuery(stream QueryRequest) returns (stream QueryResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Unary - Run cohort analysis
-  rpc RunCohortAnalysis(CohortAnalysisRequest) returns (CohortAnalysisResponse);
+  rpc RunCohortAnalysis(CohortAnalysisRequest) returns (CohortAnalysisResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 
   // Unary - Calculate funnel metrics
-  rpc CalculateFunnel(FunnelRequest) returns (FunnelResponse);
+  rpc CalculateFunnel(FunnelRequest) returns (FunnelResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 }
 
 // Metric aggregation type

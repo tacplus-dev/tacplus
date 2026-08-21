@@ -11,8 +11,8 @@ import (
 // Pins the spec.rpc method option: principal and exposure land as the declared
 // enum values, flags land as the declared unordered set, exposure falls back to
 // RPC_EXPOSURE_INTERNAL when omitted, and a method with no spec.rpc keeps a nil
-// RpcDescriptor. Nothing consumes spec.rpc yet, so this parse is the whole
-// contract the annotation currently has.
+// RpcDescriptor. TestParseMethodOptions_RpcAuth pins the second half — the auth
+// facts spec.rpc carries into the method descriptor the generators read.
 
 // rpcParser writes a proto using spec.rpc into a temp dir (alongside a copy of
 // spec.proto) and returns a DescriptorParser over it.
@@ -61,7 +61,7 @@ service Surface {
     option (spec.rpc) = {
       principal: RPC_PRINCIPAL_USER,
       exposure: RPC_EXPOSURE_EXTERNAL,
-      flags: [RPC_FLAG_AUTH_DISABLED, RPC_FLAG_AUTH_ANY_USER]
+      flags: [RPC_FLAG_PUBLIC_NO_AUTH, RPC_FLAG_AUTH_ANY_USER]
     };
   }
 
@@ -97,7 +97,7 @@ service Surface {
 			Principal: spec.RpcPrincipal_RPC_PRINCIPAL_USER,
 			Exposure:  spec.RpcExposure_RPC_EXPOSURE_EXTERNAL,
 			Flags: []spec.RpcFlag{
-				spec.RpcFlag_RPC_FLAG_AUTH_DISABLED,
+				spec.RpcFlag_RPC_FLAG_PUBLIC_NO_AUTH,
 				spec.RpcFlag_RPC_FLAG_AUTH_ANY_USER,
 			},
 		},
@@ -135,6 +135,99 @@ service Surface {
 				t.Errorf("%s: Flags = %v, want %v", name, g.Flags, w.Flags)
 				break
 			}
+		}
+	}
+}
+
+// Pins the auth facts spec.rpc carries onto the method descriptor: both
+// no-token flags land as AuthDisabled, RPC_FLAG_AUTH_ANY_USER lands as
+// AuthAnyUser, and auth_services / target_namespace_field land verbatim. These
+// are the fields the per-language generators and the registry read.
+func TestParseMethodOptions_RpcAuth(t *testing.T) {
+	skipIfNoProtoc(t)
+
+	p := rpcParser(t, `
+service Surface {
+  // Public endpoint: no token at all.
+  rpc Discovery(Ping) returns (Ping) {
+    option (spec.rpc) = {
+      principal: RPC_PRINCIPAL_USER,
+      exposure: RPC_EXPOSURE_EXTERNAL,
+      flags: [RPC_FLAG_PUBLIC_NO_AUTH]
+    };
+  }
+
+  // Bootstrap: authenticates from the request body, so the interceptor skips it.
+  rpc Bootstrap(Ping) returns (Ping) {
+    option (spec.rpc) = {
+      principal: RPC_PRINCIPAL_SERVICE,
+      flags: [RPC_FLAG_SELF_AUTHENTICATES],
+      auth_services: ["*"]
+    };
+  }
+
+  // Any authenticated user, no entitlement check.
+  rpc Exchange(Ping) returns (Ping) {
+    option (spec.rpc) = {
+      principal: RPC_PRINCIPAL_USER,
+      exposure: RPC_EXPOSURE_EXTERNAL,
+      flags: [RPC_FLAG_AUTH_ANY_USER]
+    };
+  }
+
+  // Named callers plus a level-or-below namespace gate.
+  rpc Scoped(Ping) returns (Ping) {
+    option (spec.rpc) = {
+      principal: RPC_PRINCIPAL_SERVICE,
+      auth_services: ["sentinel", "gateway"],
+      target_namespace_field: "m"
+    };
+  }
+}
+`)
+
+	fd, err := p.GetFileDescriptor("rpctest.proto")
+	if err != nil {
+		t.Fatalf("GetFileDescriptor: %v", err)
+	}
+
+	type authWant struct {
+		disabled      bool
+		anyUser       bool
+		services      []string
+		targetNsField string
+	}
+	want := map[string]authWant{
+		"Discovery": {disabled: true},
+		"Bootstrap": {disabled: true, services: []string{"*"}},
+		"Exchange":  {anyUser: true},
+		"Scoped":    {services: []string{"sentinel", "gateway"}, targetNsField: "m"},
+	}
+
+	for _, m := range fd.Services[0].Methods {
+		w, ok := want[m.Name]
+		if !ok {
+			t.Errorf("%s: unexpected method", m.Name)
+			continue
+		}
+		if m.AuthDisabled != w.disabled {
+			t.Errorf("%s: AuthDisabled = %v, want %v", m.Name, m.AuthDisabled, w.disabled)
+		}
+		if m.AuthAnyUser != w.anyUser {
+			t.Errorf("%s: AuthAnyUser = %v, want %v", m.Name, m.AuthAnyUser, w.anyUser)
+		}
+		if len(m.AuthServices) != len(w.services) {
+			t.Errorf("%s: AuthServices = %v, want %v", m.Name, m.AuthServices, w.services)
+		} else {
+			for i := range w.services {
+				if m.AuthServices[i] != w.services[i] {
+					t.Errorf("%s: AuthServices = %v, want %v", m.Name, m.AuthServices, w.services)
+					break
+				}
+			}
+		}
+		if m.TargetNamespaceField != w.targetNsField {
+			t.Errorf("%s: TargetNamespaceField = %q, want %q", m.Name, m.TargetNamespaceField, w.targetNsField)
 		}
 	}
 }

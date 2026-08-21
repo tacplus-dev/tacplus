@@ -757,15 +757,15 @@ The `name` is the canonical service identity used across the mesh. `store: true`
 
 ### Service-Level Auth Annotations
 
-**`service_s2s`** — declares a service-to-service gRPC service. Only authenticated service identities can call these RPCs. The `auth_services` field lists which service identities are allowed:
+**`service_s2s`** — declares a service-to-service gRPC service. Only authenticated service identities can call these RPCs. `tag` names the physical service hosting a vservice interface:
 
 ```protobuf
 service InternalAdmin {
-  option (spec.service_s2s) = {auth_services: ["*"]};  // any authenticated service
+  option (spec.service_s2s) = {};
 }
 
-service RestrictedAPI {
-  option (spec.service_s2s) = {auth_services: ["serviceA", "serviceB"]};
+service StratumHosted {
+  option (spec.service_s2s) = {tag: "stratum"};
 }
 ```
 
@@ -778,29 +778,39 @@ service Dashboard {
 }
 ```
 
-**`method_c2s`** — relaxes the service default for a single RPC. `auth_disabled` and `auth_any_user` are method-level only:
+**`rpc`** — declares one RPC's call surface: who calls it (`principal`), where it
+is reachable from (`exposure`), its non-exclusive protocol `flags`, the service
+identities allowed to call it (`auth_services`), and the request field carrying
+the target namespace (`target_namespace_field`). Everything that can legitimately
+differ between two RPCs of the same service lives here:
 
 ```protobuf
 service Auth {
   option (spec.service_c2s) = {auth_entitled_users: true};
 
-  // Public endpoint (no token required)
+  // Public endpoint (no token required at all)
   rpc Discovery(Req) returns (Resp) {
-    option (spec.method_c2s) = {auth_disabled: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
   }
 
   // Any authenticated user, no entitlement check
   rpc Exchange(Req) returns (Resp) {
-    option (spec.method_c2s) = {auth_any_user: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
   }
 }
-```
 
-**`method_s2s`** — overrides `auth_services` for a single RPC within a `service_s2s` service:
+service RestrictedAPI {
+  option (spec.service_s2s) = {};
 
-```protobuf
-rpc SensitiveOperation(Req) returns (Resp) {
-  option (spec.method_s2s) = {auth_services: ["serviceA", "serviceB"]};
+  // Only these two service identities may call
+  rpc SensitiveOperation(Req) returns (Resp) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["serviceA", "serviceB"]};
+  }
+
+  // Authenticates the caller from the request body, so no bearer token
+  rpc Bootstrap(Req) returns (Resp) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
+  }
 }
 ```
 

@@ -17,7 +17,9 @@ option (spec.service) = {name: "eventbus"};
 message EventBusPing {}
 
 service EventBusBroker {
-  option (spec.service_s2s) = {auth_services: ["*"]};
+  option (spec.service_s2s) = {};
 
-  rpc Ping(EventBusPing) returns (EventBusPing);
+  rpc Ping(EventBusPing) returns (EventBusPing) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 }

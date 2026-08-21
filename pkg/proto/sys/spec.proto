@@ -853,12 +853,13 @@ message TimeseriesFieldOption {
 
 // ServiceS2SAnnotation declares a service-to-service gRPC service.
 // Only authenticated service identities can call these RPCs.
-// Auth overrides (auth_disabled) are method-level only — use spec.method_s2s
-// on individual RPCs to disable auth for corner cases like bootstrap.
+// Per-RPC auth lives on spec.rpc: allowed callers (auth_services) and the
+// bootstrap corner cases (RPC_FLAG_SELF_AUTHENTICATES) are declared there.
 message ServiceS2SAnnotation {
   // auth_services: service identities allowed to call (service-level default).
   // ["*"] = any service. Named entries restrict to those identities.
-  // Can be overridden per-method via spec.method_s2s.
+  // Overridden per-RPC by spec.rpc auth_services; tacplus-generated service
+  // protos (state, record_map, timeseries, opa_eval) still declare it here.
   repeated string auth_services = 1;
 
   // tag is the routing label for the physical service that hosts this S2S
@@ -869,8 +870,8 @@ message ServiceS2SAnnotation {
 
 // ServiceC2SAnnotation declares a client-to-service gRPC service.
 // Exposed through the gateway to end users.
-// Auth overrides (auth_disabled, auth_any_user) are method-level only —
-// use spec.method_c2s on individual RPCs to override the default policy.
+// Per-RPC auth lives on spec.rpc: an RPC declares its own policy through
+// RPC_FLAG_PUBLIC_NO_AUTH / RPC_FLAG_AUTH_ANY_USER / RPC_FLAG_AUTH_ENTITLED_USERS.
 // Default policy: entitled users (gateway enforces entitlements).
 message ServiceC2SAnnotation {
   // auth_entitled_users: users with matching entitlements can call.
@@ -1017,16 +1018,22 @@ enum RpcExposure {
 // an RPC may carry any combination of them (including none).
 enum RpcFlag {
   RPC_FLAG_UNSPECIFIED = 0;
-  // RPC_FLAG_AUTH_DISABLED: this RPC requires no caller token. Either it is a
-  // public endpoint (OIDC discovery, JWKS) or it authenticates itself from the
-  // request body (bootstrap token minting); the caller interceptor skips it.
-  RPC_FLAG_AUTH_DISABLED = 1;
+  // RPC_FLAG_PUBLIC_NO_AUTH: this RPC is a public endpoint that requires no
+  // caller token at all (OIDC discovery, JWKS). Nothing authenticates the
+  // caller, because there is nothing to authenticate.
+  RPC_FLAG_PUBLIC_NO_AUTH = 1;
   // RPC_FLAG_AUTH_ANY_USER: any authenticated user may call, with no
   // entitlement check (e.g. token exchange, event streams).
   RPC_FLAG_AUTH_ANY_USER = 2;
   // RPC_FLAG_AUTH_ENTITLED_USERS: only users holding a matching entitlement
   // may call. This is today's default policy for user-facing RPCs.
   RPC_FLAG_AUTH_ENTITLED_USERS = 3;
+  // RPC_FLAG_SELF_AUTHENTICATES: this RPC carries no bearer token because it
+  // authenticates the caller from the request body itself (bootstrap token
+  // minting, cred-pair JWT). The caller interceptor skips it; the handler does
+  // the authentication. Distinct from RPC_FLAG_PUBLIC_NO_AUTH: the caller is
+  // still authenticated, just not by the token path.
+  RPC_FLAG_SELF_AUTHENTICATES = 4;
 }
 
 // RpcAnnotation declares an RPC's call surface on two independent axes plus a
@@ -1046,6 +1053,25 @@ message RpcAnnotation {
   RpcExposure exposure = 2;
   // flags is an unordered set; RPC_FLAG_UNSPECIFIED is not a valid entry.
   repeated RpcFlag flags = 3;
+
+  // auth_services lists the service identities allowed to call this RPC.
+  // ["*"] = any authenticated service. Only meaningful when principal is
+  // RPC_PRINCIPAL_SERVICE. Per-RPC: two RPCs of one service may legitimately
+  // admit different callers.
+  repeated string auth_services = 4;
+
+  // target_namespace_field names the request field whose string value carries
+  // the target namespace path (e.g. "/io/example/tenant"). When set, the
+  // authorizer enforces the level-or-below rule: the caller's namespace (from
+  // the bearer token's `namespace` claim) must equal the target namespace or
+  // be a strict path-segment ancestor of it. The field must exist on this
+  // RPC's request message and be of type string.
+  //
+  // Use the proto field name (snake_case as declared), e.g. "tenant_namespace".
+  // Leave unset for RPCs whose target is implicit (e.g. List* methods that
+  // scope the response to the caller's subtree at the handler). Under
+  // RPC_FLAG_AUTH_ANY_USER this instead holds an absolute namespace literal.
+  string target_namespace_field = 5;
 }
 
 // CollectionMode declares how a multi-result read behaves. See docs/API.md.
@@ -1858,8 +1884,10 @@ extend google.protobuf.ServiceOptions {
   string event_tag = 70012;
 
   // service_s2s declares a service-to-service gRPC service.
-  // Only authenticated service identities can call these RPCs.
-  // Example: option (spec.service_s2s) = {auth_services: ["gateway"]};
+  // Only authenticated service identities can call these RPCs; which ones is
+  // declared per-RPC on spec.rpc.
+  // Example: option (spec.service_s2s) = {};
+  // Example: option (spec.service_s2s) = {tag: "stratum"};
   ServiceS2SAnnotation service_s2s = 70013;
 
   // service_c2s declares a client-to-service gRPC service.
@@ -1927,17 +1955,8 @@ extend google.protobuf.MethodOptions {
   // Example: option (spec.proof_ensures) = "response.token.len() > 0";
   string proof_ensures = 80011;
 
-  // method_s2s overrides service-level defaults for a single S2S RPC.
-  // Only valid on methods within a service_s2s service.
-  // Example: option (spec.method_s2s) = {auth_services: ["sentinel", "gateway"]};
-  // Example: option (spec.method_s2s) = {auth_disabled: true};
-  MethodS2SAnnotation method_s2s = 80012;
-
-  // method_c2s overrides service-level defaults for a single C2S RPC.
-  // Only valid on methods within a service_c2s service.
-  // Example: option (spec.method_c2s) = {auth_disabled: true};
-  // Example: option (spec.method_c2s) = {auth_any_user: true};
-  MethodC2SAnnotation method_c2s = 80013;
+  // 80012 (method_s2s) and 80013 (method_c2s) are retired: every RPC-level auth
+  // fact they carried now lives on spec.rpc (80015). Do not reuse the numbers.
 
   // method_collection marks a collection-returning read and declares its shape.
   // Example: option (spec.method_collection) = {mode: COLLECTION_MODE_SNAPSHOT, max_items: 1000, order_by: ["created_at"]};
@@ -1945,8 +1964,9 @@ extend google.protobuf.MethodOptions {
   MethodCollection method_collection = 80014;
 
   // rpc declares an RPC's call surface: who calls it (principal), where it is
-  // reachable from (exposure), and its non-exclusive protocol flags.
-  // Example: option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE};
+  // reachable from (exposure), its non-exclusive protocol flags, the service
+  // identities allowed to call it, and its target namespace field.
+  // Example: option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
   // Example: option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ENTITLED_USERS]};
   RpcAnnotation rpc = 80015;
 

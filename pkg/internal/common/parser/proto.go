@@ -53,10 +53,10 @@ type MethodInfo struct {
 	HttpPath             string                // Convention REST path: {ROOT_PATH}/{package}/{MethodName}
 	HttpAliasPath        string                // Additional alias path from rest_path
 	HttpBody             string                // HTTP body ("*" or field name)
-	AuthDisabled         bool                  // method-level auth_disabled (from method_s2s or method_c2s)
-	AuthAnyUser          bool                  // method-level auth_any_user (from method_c2s)
-	AuthServices         []string              // method-level S2S auth_services override (from method_s2s)
-	TargetNamespaceField string                // method-level target_namespace_field (from method_c2s); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
+	AuthDisabled         bool                  // per-RPC auth_disabled (from spec.rpc RPC_FLAG_PUBLIC_NO_AUTH / RPC_FLAG_SELF_AUTHENTICATES)
+	AuthAnyUser          bool                  // per-RPC auth_any_user (from spec.rpc RPC_FLAG_AUTH_ANY_USER)
+	AuthServices         []string              // per-RPC S2S auth_services override (from spec.rpc)
+	TargetNamespaceField string                // per-RPC target_namespace_field (from spec.rpc); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
 	Collection           *CollectionDescriptor // method-level method_collection (collection-returning read); nil when absent
 	Resolved             *collection.Resolved  // computed codegen view of Collection (mode/tier/bounds); nil when Collection is nil. Set by ResolveCollections.
 	Class                *verbs.Classification // resolved verb/pattern/access (archive/RPC_PATTERNS_AND_VERBS_PLAN.md §2). Set by ClassifyMethods; nil if classification failed (see ClassifyMethods for the reported error).

@@ -138,18 +138,18 @@ message FixtureActor {
 }
 
 service FixtureTokenMint {
-  option (spec.service_s2s) = {auth_services: ["*"]};
+  option (spec.service_s2s) = {};
   option (spec.token_minter) = {};
 
   rpc TokenMint(tokenrequest.TokenMintRequest) returns (tokenrequest.TokenMintResponse) {
-    option (spec.method_s2s) = {auth_disabled: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
   }
 
   rpc MintServiceToken(tokenrequest.MintServiceTokenRequest) returns (tokenrequest.TokenMintResponse) {
-    option (spec.method_s2s) = {auth_disabled: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
   }
 
   rpc X509Mint(tokenrequest.X509MintRequest) returns (x509.X509CertChain) {
-    option (spec.method_s2s) = {auth_disabled: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
   }
 }

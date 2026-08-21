@@ -231,10 +231,10 @@ type MethodDescriptor struct {
 	restMethodExtra      []string              // parsed from rest_method annotation (extra methods beyond POST)
 	ProofRequires        string                // method-level proof_requires annotation (formal verification precondition)
 	ProofEnsures         string                // method-level proof_ensures annotation (formal verification postcondition)
-	AuthServices         []string              // method-level S2S auth_services override (from method_s2s)
-	AuthDisabled         bool                  // method-level auth_disabled (from method_s2s or method_c2s)
-	AuthAnyUser          bool                  // method-level auth_any_user (from method_c2s)
-	TargetNamespaceField string                // method-level target_namespace_field (from method_c2s); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
+	AuthServices         []string              // per-RPC S2S auth_services override (from spec.rpc)
+	AuthDisabled         bool                  // per-RPC auth_disabled (from spec.rpc RPC_FLAG_PUBLIC_NO_AUTH / RPC_FLAG_SELF_AUTHENTICATES)
+	AuthAnyUser          bool                  // per-RPC auth_any_user (from spec.rpc RPC_FLAG_AUTH_ANY_USER)
+	TargetNamespaceField string                // per-RPC target_namespace_field (from spec.rpc); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
 	Collection           *CollectionDescriptor // method-level method_collection (collection-returning read); nil when absent
 	Rpc                  *RpcDescriptor        // method-level spec.rpc (call surface); nil when absent
 }
@@ -808,7 +808,7 @@ func (p *DescriptorParser) parseServiceOptions(sd protoreflect.ServiceDescriptor
 	}
 
 	// service_c2s (ServiceC2SAnnotation) — client-to-service gRPC service.
-	// auth_disabled and auth_any_user are now method-level only (spec.method_c2s).
+	// Per-RPC auth policy is declared on spec.rpc.
 	if proto.HasExtension(opts, spec.E_ServiceC2S) {
 		val := proto.GetExtension(opts, spec.E_ServiceC2S).(*spec.ServiceC2SAnnotation)
 		if val != nil {
@@ -911,34 +911,9 @@ func (p *DescriptorParser) parseMethodOptions(method protoreflect.MethodDescript
 		md.ProofEnsures = proto.GetExtension(opts, spec.E_ProofEnsures).(string)
 	}
 
-	// method_s2s (MethodS2SAnnotation) — per-method S2S auth_services override
-	if proto.HasExtension(opts, spec.E_MethodS2S) {
-		val := proto.GetExtension(opts, spec.E_MethodS2S).(*spec.MethodS2SAnnotation)
-		if val != nil {
-			md.AuthServices = val.GetAuthServices()
-			if val.GetAuthDisabled() {
-				md.AuthDisabled = true
-			}
-		}
-	}
-
-	// method_c2s (MethodC2SAnnotation) — per-method C2S auth overrides
-	if proto.HasExtension(opts, spec.E_MethodC2S) {
-		val := proto.GetExtension(opts, spec.E_MethodC2S).(*spec.MethodC2SAnnotation)
-		if val != nil {
-			if val.GetAuthDisabled() {
-				md.AuthDisabled = true
-			}
-			if val.GetAuthAnyUser() {
-				md.AuthAnyUser = true
-			}
-			if f := val.GetTargetNamespaceField(); f != "" {
-				md.TargetNamespaceField = f
-			}
-		}
-	}
-
 	// rpc (RpcAnnotation) — per-RPC call surface (principal / exposure / flags)
+	// plus the auth facts that legitimately differ between two RPCs of one
+	// service: the allowed caller identities and the target namespace field.
 	if proto.HasExtension(opts, spec.E_Rpc) {
 		val := proto.GetExtension(opts, spec.E_Rpc).(*spec.RpcAnnotation)
 		if val != nil {
@@ -946,6 +921,23 @@ func (p *DescriptorParser) parseMethodOptions(method protoreflect.MethodDescript
 				Principal: val.GetPrincipal(),
 				Exposure:  val.GetExposure(),
 				Flags:     val.GetFlags(),
+			}
+			for _, f := range val.GetFlags() {
+				switch f {
+				// Both flags mean "no bearer token on this RPC, so the caller
+				// interceptor skips it"; they differ in why (public endpoint vs
+				// authenticates from the request body), not in the wiring.
+				case spec.RpcFlag_RPC_FLAG_PUBLIC_NO_AUTH, spec.RpcFlag_RPC_FLAG_SELF_AUTHENTICATES:
+					md.AuthDisabled = true
+				case spec.RpcFlag_RPC_FLAG_AUTH_ANY_USER:
+					md.AuthAnyUser = true
+				}
+			}
+			if svcs := val.GetAuthServices(); len(svcs) > 0 {
+				md.AuthServices = svcs
+			}
+			if f := val.GetTargetNamespaceField(); f != "" {
+				md.TargetNamespaceField = f
 			}
 		}
 	}

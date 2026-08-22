@@ -73,6 +73,17 @@ cert-stream-java:
 cert-stream-rust:
   bash cross-test/cert-stream/run.sh --language rust
 
+# Generation gate against the REAL platform + app proto repos (not the
+# cross-test/proto fixtures every other gate uses). This is the check that
+# would have caught A2 (2026-08-22): all other gates build tacplus's own
+# fixtures and stayed green while A2 broke generation for every real
+# consumer. Requires ../platform and ../testapp checked out as siblings of
+# this repo (override with PLATFORM_PROTO / APP_PROTO env vars).
+# NOT YET in the mandatory set — proposed, cost not yet approved (~3min
+# wall-clock as of 2026-08-22).
+platform-generation:
+  bash cross-test/platform-generation/run.sh
+
 # Behavioral coverage of W2S request (ingress) validation in the generated
 # Rust REST dispatch module.
 w2s-validate:

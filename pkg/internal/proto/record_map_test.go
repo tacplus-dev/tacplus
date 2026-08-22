@@ -140,17 +140,18 @@ option (spec.record_store) = {};
 		`AgentEventWatchChange delta = 3;`,
 		// service + rpcs
 		`service RecordMap {`,
-		`option (spec.service_s2s) = {auth_services: ["argus"]};`,
-		`rpc OpenAgentEventQuery(OpenAgentEventQueryRequest) returns (QueryHandle);`,
-		`rpc CountAgentEvent(QueryHandle) returns (RecordCount);`,
-		`rpc SampleAgentEvent(SampleAgentEventRequest) returns (SampleAgentEventResponse);`,
+		`option (spec.service_s2s) = {};`,
+		`option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};`,
+		`rpc OpenAgentEventQuery(OpenAgentEventQueryRequest) returns (QueryHandle) {`,
+		`rpc CountAgentEvent(QueryHandle) returns (RecordCount) {`,
+		`rpc SampleAgentEvent(SampleAgentEventRequest) returns (SampleAgentEventResponse) {`,
 		`rpc PullAgentEvent(PullAgentEventRequest) returns (PullAgentEventResponse) {`,
 		`option (spec.method_collection) = {mode: COLLECTION_MODE_PAGE, order_by: ["event_id"], default_page_size: 100};`,
-		`rpc CloseAgentEvent(QueryHandle) returns (QueryStats);`,
-		`rpc RefineAgentEvent(RefineAgentEventRequest) returns (QueryStats);`,
+		`rpc CloseAgentEvent(QueryHandle) returns (QueryStats) {`,
+		`rpc RefineAgentEvent(RefineAgentEventRequest) returns (QueryStats) {`,
 		`rpc WatchAgentEvent(QueryHandle) returns (stream AgentEventWatchEvent) {`,
 		`option (spec.method_collection) = {mode: COLLECTION_MODE_WATCH, order_by: ["event_id"]};`,
-		`rpc SubscribeAgentEventCount(QueryHandle) returns (stream RecordCount);`,
+		`rpc SubscribeAgentEventCount(QueryHandle) returns (stream RecordCount) {`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated proto missing %q:\n%s", want, got)

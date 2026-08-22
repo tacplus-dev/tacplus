@@ -166,10 +166,12 @@ message Get%[1]sGroupCountsResponse {
 	// The TimeseriesGroupCounts service. S2S, scoped to argus (the C2S front),
 	// hosted by the timeseries store itself (its own services/ proto).
 	sb.WriteString("\nservice TimeseriesGroupCounts {\n")
-	sb.WriteString("  option (spec.service_s2s) = {auth_services: [\"argus\"]};\n")
+	sb.WriteString("  option (spec.service_s2s) = {};\n")
 	for _, p := range projs {
 		sb.WriteString(fmt.Sprintf(
-			"  rpc Get%[1]sGroupCounts(Get%[1]sGroupCountsRequest) returns (Get%[1]sGroupCountsResponse);\n",
+			"  rpc Get%[1]sGroupCounts(Get%[1]sGroupCountsRequest) returns (Get%[1]sGroupCountsResponse) {\n"+
+				"    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: [\"argus\"]};\n"+
+				"  }\n",
 			p.name))
 	}
 	sb.WriteString("}\n")

@@ -326,29 +326,43 @@ message %[1]sWatchEvent {
 	// Pull/Close/Refine) are a generated S2S vocabulary, not governed REST verbs
 	// (cf. the state/opa injectors, which mark themselves the same way).
 	sb.WriteString("\n// tacplus:generated-service " + parser.SynthesizedKindRecordMap + "\nservice RecordMap {\n")
-	sb.WriteString("  option (spec.service_s2s) = {auth_services: [\"argus\"]};\n")
+	sb.WriteString("  option (spec.service_s2s) = {};\n")
 	for _, r := range records {
 		hasFilter := len(r.filters) > 0
 		// Universal query lifecycle: open (snapshot or living) → count/sample/pull → close.
 		sb.WriteString(fmt.Sprintf(`
-  rpc Open%[1]sQuery(Open%[1]sQueryRequest) returns (QueryHandle);
-  rpc Count%[1]s(QueryHandle) returns (RecordCount);
-  rpc Sample%[1]s(Sample%[1]sRequest) returns (Sample%[1]sResponse);
+  rpc Open%[1]sQuery(Open%[1]sQueryRequest) returns (QueryHandle) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
+  }
+  rpc Count%[1]s(QueryHandle) returns (RecordCount) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
+  }
+  rpc Sample%[1]s(Sample%[1]sRequest) returns (Sample%[1]sResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
+  }
   rpc Pull%[1]s(Pull%[1]sRequest) returns (Pull%[1]sResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
     option (spec.method_collection) = {mode: COLLECTION_MODE_PAGE, order_by: [%[2]q], default_page_size: 100};
   }
-  rpc Close%[1]s(QueryHandle) returns (QueryStats);
+  rpc Close%[1]s(QueryHandle) returns (QueryStats) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
+  }
 `, r.typeName, r.key))
 		if hasFilter {
 			// Refine replaces the query's predicate in place (unrestricted — not
 			// enforced narrow-only; see the package doc comment above).
 			// Watch streams a living query's changes (snapshot then deltas).
 			// SubscribeCount streams the live size.
-			sb.WriteString(fmt.Sprintf(`  rpc Refine%[1]s(Refine%[1]sRequest) returns (QueryStats);
+			sb.WriteString(fmt.Sprintf(`  rpc Refine%[1]s(Refine%[1]sRequest) returns (QueryStats) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
+  }
   rpc Watch%[1]s(QueryHandle) returns (stream %[1]sWatchEvent) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
     option (spec.method_collection) = {mode: COLLECTION_MODE_WATCH, order_by: [%[2]q]};
   }
-  rpc Subscribe%[1]sCount(QueryHandle) returns (stream RecordCount);
+  rpc Subscribe%[1]sCount(QueryHandle) returns (stream RecordCount) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
+  }
 `, r.typeName, r.key))
 		}
 	}

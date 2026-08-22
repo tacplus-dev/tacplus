@@ -59,8 +59,9 @@ message TimeRange {
 		`message GetToolUseRecordGroupCountsResponse {`,
 		`repeated TimeseriesGroupCount counts = 1;`,
 		`service TimeseriesGroupCounts {`,
-		`option (spec.service_s2s) = {auth_services: ["argus"]};`,
-		`rpc GetToolUseRecordGroupCounts(GetToolUseRecordGroupCountsRequest) returns (GetToolUseRecordGroupCountsResponse);`,
+		`option (spec.service_s2s) = {};`,
+		`option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};`,
+		`rpc GetToolUseRecordGroupCounts(GetToolUseRecordGroupCountsRequest) returns (GetToolUseRecordGroupCountsResponse) {`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated proto missing %q:\n%s", want, got)

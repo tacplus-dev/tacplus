@@ -58,7 +58,8 @@ message TimeRange {
 		`string next_page_token = 2;`,
 		`int64 total_count = 3;`,
 		`service TimeseriesQuery {`,
-		`option (spec.service_s2s) = {auth_services: ["argus"]};`,
+		`option (spec.service_s2s) = {};`,
+		`option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};`,
 		`rpc ListSessionRecord(ListSessionRecordRequest) returns (ListSessionRecordResponse)`,
 		`option (spec.method_collection) = {mode: COLLECTION_MODE_PAGE, order_by: ["event_id"], default_page_size: 100};`,
 	} {

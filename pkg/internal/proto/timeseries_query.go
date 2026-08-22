@@ -132,12 +132,13 @@ message %s {
 	}
 
 	sb.WriteString("\nservice TimeseriesQuery {\n")
-	sb.WriteString("  option (spec.service_s2s) = {auth_services: [\"argus\"]};\n")
+	sb.WriteString("  option (spec.service_s2s) = {};\n")
 	for _, p := range projections {
 		reqName := "List" + p.typeName + "Request"
 		respName := "List" + p.typeName + "Response"
 		sb.WriteString(fmt.Sprintf(`
   rpc List%s(%s) returns (%s) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
     option (spec.method_collection) = {mode: COLLECTION_MODE_PAGE, order_by: [%q], default_page_size: 100};
   }
 `, p.typeName, reqName, respName, p.orderBy))

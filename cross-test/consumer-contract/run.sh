@@ -6080,12 +6080,12 @@ write_java_compile_pom() {
     <dependency>
       <groupId>com.google.protobuf</groupId>
       <artifactId>protobuf-java</artifactId>
-      <version>4.35.1</version>
+      <version>4.36.0</version>
     </dependency>
     <dependency>
       <groupId>com.google.protobuf</groupId>
       <artifactId>protobuf-java-util</artifactId>
-      <version>4.35.1</version>
+      <version>4.36.0</version>
     </dependency>
     <dependency>
       <groupId>io.grpc</groupId>

@@ -36,8 +36,8 @@ lang:
             ch.qos.logback:logback-classic: 1.5.29
             ch.qos.logback:logback-core: 1.5.29
             com.google.code.gson:gson: 2.13.2
-            com.google.protobuf:protobuf-java: 4.35.0
-            com.google.protobuf:protobuf-java-util: 4.35.0
+            com.google.protobuf:protobuf-java: 4.36.0
+            com.google.protobuf:protobuf-java-util: 4.36.0
             com.moandjiezana.toml:toml4j: 0.7.2
             io.grpc:grpc-netty-shaded: 1.79.0
             io.grpc:grpc-protobuf: 1.79.0

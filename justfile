@@ -2,6 +2,22 @@
 
 pkg := "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/buildinfo"
 
+# Pinned host protoc. The generator shells out to the host `protoc`, and the
+# gencode protoc emits declares a MINIMUM protobuf runtime version; the runtime
+# refuses gencode newer than itself. So every protobuf-java pin in this repo
+# must move in lockstep with this value:
+#   cross-test/current-generation/run.sh  write_java_compile_pom()
+#   cross-test/cert-stream/run.sh         write_java_compile_pom()
+#   cross-test/consumer-contract/run.sh   (pom heredoc)
+#   cross-test/server-runtime/fixture/java/pom.xml
+#   cross-test/wire-corpus/decoder/java/pom.xml
+#   cross-test/**/dependencies.yaml       com.google.protobuf:protobuf-java{,-util}
+# On 2026-08-22 a `brew upgrade` silently moved protoc to 36.0 while the pins
+# said 4.35.x, and three mandatory gates died with a three-layers-deep Java
+# ExceptionInInitializerError instead of a version error. `just protoc-check`
+# exists so that never happens silently again.
+protoc_version := "36.0"
+
 default: install
 
 generate:
@@ -61,6 +77,32 @@ determinism-typescript:
 determinism-java:
   bash cross-test/determinism/run.sh --language java
 
+# Assert the host protoc matches the pin above. Run as the first step of
+# `gates`; run it by hand after any toolchain upgrade.
+protoc-check:
+  #!/usr/bin/env bash
+  set -uo pipefail
+  if ! command -v protoc >/dev/null 2>&1; then
+    echo "protoc-check: protoc not found on PATH (expected libprotoc {{protoc_version}})" >&2
+    exit 1
+  fi
+  actual="$(protoc --version | awk '{print $2}')"
+  if [[ "$actual" != "{{protoc_version}}" ]]; then
+    {
+      echo "protoc-check: host protoc is ${actual}, expected {{protoc_version}}."
+      echo "  protoc gencode declares a minimum protobuf runtime version, and every"
+      echo "  protobuf-java pin in this repo is matched to protoc {{protoc_version}}."
+      echo "  A mismatch does NOT surface as a version error: it surfaces as a Java"
+      echo "  ExceptionInInitializerError from the protobuf runtime check, several"
+      echo "  layers below anything that names a version."
+      echo "  Fix: install protoc {{protoc_version}}, or - if you are deliberately"
+      echo "  moving the toolchain - update protoc_version in justfile AND every"
+      echo "  protobuf-java pin listed in the comment beside it."
+    } >&2
+    exit 1
+  fi
+  echo "protoc-check: libprotoc ${actual} (pinned {{protoc_version}})"
+
 # Run the mandatory gate set (soundness, test, current-generation,
 # determinism, cert-stream) and report a trustworthy overall pass/fail.
 # A naive `for g in ...; do just "$g"; done` loop whose last command per
@@ -70,6 +112,16 @@ gates:
   #!/usr/bin/env bash
   set -uo pipefail
   fail=0
+  # Toolchain preflight: a protoc/runtime mismatch breaks three of the gates
+  # below with an error that names neither protoc nor a version.
+  echo "=== protoc-check ==="
+  just protoc-check
+  rc=$?
+  echo "=== protoc-check rc=$rc ==="
+  if [[ $rc -ne 0 ]]; then
+    echo "=== OVERALL fail=1 (protoc preflight) ==="
+    exit 1
+  fi
   for g in soundness test current-generation determinism cert-stream; do
     echo "=== $g ==="
     just "$g"

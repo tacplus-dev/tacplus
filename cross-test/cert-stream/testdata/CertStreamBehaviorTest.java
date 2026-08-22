@@ -37,6 +37,7 @@ import io.grpc.ServerBuilder;
 import io.grpc.Status;
 import io.grpc.netty.shaded.io.netty.handler.ssl.SslContext;
 import io.grpc.protobuf.services.HealthStatusManager;
+import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -1166,7 +1167,11 @@ class CertStreamBehaviorTest {
                                 .setChain(certChainForPublicKey(publicKey, id)))
                         .build());
             } catch (Exception ignored) {
-                // Sending on a cancelled call throws; that is the fixed behaviour.
+                // Once the call is cancelled this send is dropped (silently,
+                // because a cancel handler is installed above) or throws,
+                // depending on how far the cancellation has propagated. Either
+                // way the client must not see the cert — that is what the
+                // caller asserts.
             }
         }
 
@@ -1174,6 +1179,19 @@ class CertStreamBehaviorTest {
         public StreamObserver<Tlscert.TlsCertClientMsg> manageCert(
                 StreamObserver<Tlscert.TlsCertServerMsg> responseObserver) {
             live.set(responseObserver);
+            // Observe cancellation through the call's own cancel callback, not
+            // through this request observer's onError. gRPC only synthesises
+            // that onError when the client has NOT already half-closed
+            // (ServerCalls' listener guards it with `if (!halfClosed)`), and
+            // the generated client ends a session by counting its done latch
+            // down and THEN cancelling: the loop thread it releases half-closes
+            // from `finally` at the same moment the callback thread cancels. So
+            // whether the half-close or the cancel reaches the server first is a
+            // thread race, and every run that lost it left the latch below
+            // untripped even though the call really was cancelled. The cancel
+            // handler fires either way.
+            ((ServerCallStreamObserver<Tlscert.TlsCertServerMsg>) responseObserver)
+                    .setOnCancelHandler(cancelled::countDown);
             return new StreamObserver<>() {
                 private int deliveryCount;
                 private boolean closed;
@@ -1331,7 +1349,11 @@ class CertStreamBehaviorTest {
                                 .setCa(protoCert("java-smb-ca", new byte[] {1, 2, 3})))
                         .build());
             } catch (Exception ignored) {
-                // Sending on a cancelled call throws; that is the fixed behaviour.
+                // Once the call is cancelled this send is dropped (silently,
+                // because a cancel handler is installed above) or throws,
+                // depending on how far the cancellation has propagated. Either
+                // way the client must not see the cert — that is what the
+                // caller asserts.
             }
         }
 
@@ -1339,6 +1361,19 @@ class CertStreamBehaviorTest {
         public StreamObserver<Smbcert.SmbCertClientMsg> manageSmbCert(
                 StreamObserver<Smbcert.SmbCertServerMsg> responseObserver) {
             live.set(responseObserver);
+            // Observe cancellation through the call's own cancel callback, not
+            // through this request observer's onError. gRPC only synthesises
+            // that onError when the client has NOT already half-closed
+            // (ServerCalls' listener guards it with `if (!halfClosed)`), and
+            // the generated client ends a session by counting its done latch
+            // down and THEN cancelling: the loop thread it releases half-closes
+            // from `finally` at the same moment the callback thread cancels. So
+            // whether the half-close or the cancel reaches the server first is a
+            // thread race, and every run that lost it left the latch below
+            // untripped even though the call really was cancelled. The cancel
+            // handler fires either way.
+            ((ServerCallStreamObserver<Smbcert.SmbCertServerMsg>) responseObserver)
+                    .setOnCancelHandler(cancelled::countDown);
             return new StreamObserver<>() {
                 private int deliveryCount;
                 private boolean closed;

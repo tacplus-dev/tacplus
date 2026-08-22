@@ -206,6 +206,30 @@ assert_spiffe_soundness() {
   fi
 }
 
+dump_step_log() {
+  local log="$1"
+  if [[ -f "$log" ]]; then
+    cat "$log" >&2
+    return
+  fi
+  # The log is missing, which means the step never ran: bash could not create
+  # the redirect target, failed the command before it started, and the `cat`
+  # that used to sit here then died with "No such file or directory" — burying
+  # the real cause (this is what killed the gate on 21 Aug). Name the actual
+  # problem instead.
+  local dir
+  dir="$(dirname "$log")"
+  echo "step failed before it could write $log — the command never ran" >&2
+  if [[ ! -d "$dir" ]]; then
+    echo "  cause: log directory does not exist: $dir" >&2
+  elif [[ ! -w "$dir" ]]; then
+    echo "  cause: log directory is not writable: $dir" >&2
+  else
+    echo "  log directory exists and is writable: $dir" >&2
+    echo "  cause: the redirect failed for another reason (out of disk? see any bash redirection error above)" >&2
+  fi
+}
+
 assert_clean_log() {
   local log="$1"
   if [[ ! -s "$log" ]]; then
@@ -241,12 +265,12 @@ run_java_generated_self_tests() {
 
   if [[ -n "$java_env" ]]; then
     (cd "$compile_dir" && env "$java_env" mvn -q dependency:build-classpath -Dmdep.outputFile="$classpath_file") >"$classpath_log" 2>&1 || {
-      cat "$classpath_log" >&2
+      dump_step_log "$classpath_log"
       return 1
     }
   else
     (cd "$compile_dir" && mvn -q dependency:build-classpath -Dmdep.outputFile="$classpath_file") >"$classpath_log" 2>&1 || {
-      cat "$classpath_log" >&2
+      dump_step_log "$classpath_log"
       return 1
     }
   fi
@@ -277,7 +301,7 @@ run_java_generated_self_tests() {
     [[ -n "$package_name" ]] || die "could not determine Java package for $source_file"
     class_name="$package_name.$(basename "$source_file" .java)"
     SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$class_name" >>"$test_log" 2>&1 || {
-      cat "$test_log" >&2
+      dump_step_log "$test_log"
       return 1
     }
   done
@@ -291,7 +315,7 @@ run_java_generated_self_tests() {
   if [[ -n "$sc_test" ]]; then
     sc_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$sc_test").$(basename "$sc_test" .java)"
     "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$sc_class" >>"$test_log" 2>&1 || {
-      cat "$test_log" >&2
+      dump_step_log "$test_log"
       return 1
     }
   fi
@@ -304,7 +328,7 @@ run_rust_spiffe_self_tests() {
   [[ -f "$output/chassis/spiffe/Cargo.toml" ]] || die "missing generated Rust spiffe crate"
 
   (cd "$output" && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" cargo test -p spiffe) >"$log_dir/rust-spiffe-test.log" 2>&1 || {
-      cat "$log_dir/rust-spiffe-test.log" >&2
+      dump_step_log "$log_dir/rust-spiffe-test.log"
       return 1
     }
   assert_clean_log "$log_dir/rust-spiffe-test.log"
@@ -315,7 +339,7 @@ run_rust_spiffe_self_tests() {
   # no other gate runs rust x509 tests.
   [[ -f "$output/chassis/x509/Cargo.toml" ]] || die "missing generated Rust x509 crate"
   (cd "$output" && cargo test -p x509) >"$log_dir/rust-x509-test.log" 2>&1 || {
-      cat "$log_dir/rust-x509-test.log" >&2
+      dump_step_log "$log_dir/rust-x509-test.log"
       return 1
     }
   assert_clean_log "$log_dir/rust-x509-test.log"
@@ -325,7 +349,7 @@ run_rust_spiffe_self_tests() {
   # crate's signer (dev-dependency of the servicemanager crate).
   [[ -f "$output/chassis/servicemanager/Cargo.toml" ]] || die "missing generated Rust servicemanager crate"
   (cd "$output" && cargo test -p servicemanager) >"$log_dir/rust-servicemanager-test.log" 2>&1 || {
-      cat "$log_dir/rust-servicemanager-test.log" >&2
+      dump_step_log "$log_dir/rust-servicemanager-test.log"
       return 1
     }
   assert_clean_log "$log_dir/rust-servicemanager-test.log"
@@ -335,7 +359,7 @@ run_rust_spiffe_self_tests() {
   # defect where credential redaction exists but is never installed on the startup path.
   [[ -f "$output/chassis/grpcconfig/Cargo.toml" ]] || die "missing generated Rust grpcconfig crate"
   (cd "$output" && cargo test -p grpcconfig) >"$log_dir/rust-grpcconfig-test.log" 2>&1 || {
-      cat "$log_dir/rust-grpcconfig-test.log" >&2
+      dump_step_log "$log_dir/rust-grpcconfig-test.log"
       return 1
     }
   assert_clean_log "$log_dir/rust-grpcconfig-test.log"
@@ -347,7 +371,7 @@ run_rust_spiffe_self_tests() {
   # Authorizer is silent — no other gate runs rust grpcserver tests.
   [[ -f "$output/chassis/grpcserver/Cargo.toml" ]] || die "missing generated Rust grpcserver crate"
   (cd "$output" && cargo test -p grpcserver) >"$log_dir/rust-grpcserver-test.log" 2>&1 || {
-      cat "$log_dir/rust-grpcserver-test.log" >&2
+      dump_step_log "$log_dir/rust-grpcserver-test.log"
       return 1
     }
   assert_clean_log "$log_dir/rust-grpcserver-test.log"
@@ -357,7 +381,7 @@ run_rust_spiffe_self_tests() {
   # codec tests). Never previously executed by any gate (cargo check only).
   [[ -f "$output/chassis/collection/Cargo.toml" ]] || die "missing generated Rust collection crate"
   (cd "$output" && cargo test -p collection) >"$log_dir/rust-collection-test.log" 2>&1 || {
-      cat "$log_dir/rust-collection-test.log" >&2
+      dump_step_log "$log_dir/rust-collection-test.log"
       return 1
     }
   assert_clean_log "$log_dir/rust-collection-test.log"
@@ -367,7 +391,7 @@ run_rust_spiffe_self_tests() {
   # (cargo check only).
   [[ -f "$output/chassis/diskstore/Cargo.toml" ]] || die "missing generated Rust diskstore crate"
   (cd "$output" && cargo test -p diskstore) >"$log_dir/rust-diskstore-test.log" 2>&1 || {
-      cat "$log_dir/rust-diskstore-test.log" >&2
+      dump_step_log "$log_dir/rust-diskstore-test.log"
       return 1
     }
   assert_clean_log "$log_dir/rust-diskstore-test.log"
@@ -386,7 +410,7 @@ run_rust_spiffe_self_tests() {
   # gate deliberately does not pretend to cover them.
   [[ -f "$output/chassis/logger/Cargo.toml" ]] || die "missing generated Rust logger crate"
   (cd "$output" && cargo test -p logger --lib) >"$log_dir/rust-logger-test.log" 2>&1 || {
-      cat "$log_dir/rust-logger-test.log" >&2
+      dump_step_log "$log_dir/rust-logger-test.log"
       return 1
     }
   assert_clean_log "$log_dir/rust-logger-test.log"
@@ -395,7 +419,7 @@ run_rust_spiffe_self_tests() {
   # Covers the state-authority (kernel) path where no typed-config fetch occurs.
   [[ -f "$output/chassis/grpcconfig/Cargo.toml" ]] || die "missing generated Rust grpcconfig crate"
   (cd "$output" && cargo test -p grpcconfig) >"$log_dir/rust-grpcconfig-test.log" 2>&1 || {
-      cat "$log_dir/rust-grpcconfig-test.log" >&2
+      dump_step_log "$log_dir/rust-grpcconfig-test.log"
       return 1
     }
   assert_clean_log "$log_dir/rust-grpcconfig-test.log"
@@ -580,11 +604,11 @@ write_saml_runtime_fixture() {
   command -v openssl >/dev/null || die "openssl is required for generated SAML runtime probes"
   mkdir -p "$dir"
   if ! openssl ecparam -name prime256v1 -genkey -noout -out "$dir/idp-key.pem" >"$dir/openssl-key.log" 2>&1; then
-    cat "$dir/openssl-key.log" >&2
+    dump_step_log "$dir/openssl-key.log"
     return 1
   fi
   if ! openssl req -new -x509 -key "$dir/idp-key.pem" -out "$dir/idp-cert.pem" -days 2 -subj "/CN=tacplus-test-idp" >"$dir/openssl-cert.log" 2>&1; then
-    cat "$dir/openssl-cert.log" >&2
+    dump_step_log "$dir/openssl-cert.log"
     return 1
   fi
 }
@@ -716,12 +740,12 @@ EOF
 
   if [[ -n "$java_env" ]]; then
     (cd "$compile_dir" && env "$java_env" mvn -q dependency:build-classpath -Dmdep.outputFile=classpath.txt) >"$log_dir/maven-runtime-classpath.log" 2>&1 || {
-      cat "$log_dir/maven-runtime-classpath.log" >&2
+      dump_step_log "$log_dir/maven-runtime-classpath.log"
       return 1
     }
   else
     (cd "$compile_dir" && mvn -q dependency:build-classpath -Dmdep.outputFile=classpath.txt) >"$log_dir/maven-runtime-classpath.log" 2>&1 || {
-      cat "$log_dir/maven-runtime-classpath.log" >&2
+      dump_step_log "$log_dir/maven-runtime-classpath.log"
       return 1
     }
   fi
@@ -739,11 +763,11 @@ EOF
   fi
 
   "$javac_bin" -cp "$cp" -d "$probe_dir/classes" "$probe_dir/SamlRuntimeProbe.java" >"$log_dir/java-saml-runtime.log" 2>&1 || {
-    cat "$log_dir/java-saml-runtime.log" >&2
+    dump_step_log "$log_dir/java-saml-runtime.log"
     return 1
   }
   "$java_bin" -cp "$probe_dir/classes:$cp" SamlRuntimeProbe "$fixture_dir/idp-key.pem" "$fixture_dir/idp-cert.pem" >>"$log_dir/java-saml-runtime.log" 2>&1 || {
-    cat "$log_dir/java-saml-runtime.log" >&2
+    dump_step_log "$log_dir/java-saml-runtime.log"
     return 1
   }
   assert_clean_log "$log_dir/java-saml-runtime.log"
@@ -761,7 +785,7 @@ ensure_python_saml_runtime_deps() {
 
   "$python_cmd" -m pip install -q --disable-pip-version-check --target "$deps_dir" \
     'cryptography>=42.0.0' 'protobuf>=6.33.6' >"$log" 2>&1 || {
-    cat "$log" >&2
+    dump_step_log "$log"
     return 1
   }
 }
@@ -892,7 +916,7 @@ expect_failure(
 PY
 
   PYTHONPATH="$deps_dir:$py_root${PYTHONPATH:+:$PYTHONPATH}" "$python_cmd" "$probe" "$py_pkg" "$fixture_dir/idp-key.pem" "$fixture_dir/idp-cert.pem" >"$log_dir/python-saml-runtime.log" 2>&1 || {
-    cat "$log_dir/python-saml-runtime.log" >&2
+    dump_step_log "$log_dir/python-saml-runtime.log"
     return 1
   }
   assert_clean_log "$log_dir/python-saml-runtime.log"
@@ -994,7 +1018,7 @@ expectFailure(
 JS
 
   (cd "$output" && node "$probe" "$output" "$fixture_dir/idp-key.pem" "$fixture_dir/idp-cert.pem") >"$log_dir/typescript-saml-runtime.log" 2>&1 || {
-    cat "$log_dir/typescript-saml-runtime.log" >&2
+    dump_step_log "$log_dir/typescript-saml-runtime.log"
     return 1
   }
   assert_clean_log "$log_dir/typescript-saml-runtime.log"
@@ -1041,7 +1065,7 @@ compile_current_output() {
 
       write_go_compile_mod "$log_dir/go.mod" "$go_module"
       (cd "$log_dir" && go mod tidy && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" go test ./...) >"$log_dir/go-test.log" 2>&1 || {
-        cat "$log_dir/go-test.log" >&2
+        dump_step_log "$log_dir/go-test.log"
         return 1
       }
       assert_clean_log "$log_dir/go-test.log"
@@ -1056,12 +1080,12 @@ compile_current_output() {
       java_env="$(java_home_env)"
       if [[ -n "$java_env" ]]; then
         (cd "$compile_dir" && env "$java_env" mvn -q -DskipTests compile) >"$log_dir/maven-compile.log" 2>&1 || {
-          cat "$log_dir/maven-compile.log" >&2
+          dump_step_log "$log_dir/maven-compile.log"
           return 1
         }
       else
         (cd "$compile_dir" && mvn -q -DskipTests compile) >"$log_dir/maven-compile.log" 2>&1 || {
-          cat "$log_dir/maven-compile.log" >&2
+          dump_step_log "$log_dir/maven-compile.log"
           return 1
         }
       fi
@@ -1071,12 +1095,12 @@ compile_current_output() {
     python)
       if [[ -n "$PYTHON_BIN" ]]; then
         "$PYTHON_BIN" -m compileall -q "$base" >"$log_dir/python-compileall.log" 2>&1 || {
-          cat "$log_dir/python-compileall.log" >&2
+          dump_step_log "$log_dir/python-compileall.log"
           return 1
         }
       else
         python3 -m compileall -q "$base" >"$log_dir/python-compileall.log" 2>&1 || {
-          cat "$log_dir/python-compileall.log" >&2
+          dump_step_log "$log_dir/python-compileall.log"
           return 1
         }
       fi
@@ -1085,7 +1109,7 @@ compile_current_output() {
     rust)
       if [[ -f "$output/Cargo.toml" ]]; then
         (cd "$output" && CARGO_TARGET_DIR="$output/target" cargo check) >"$log_dir/cargo-check.log" 2>&1 || {
-          cat "$log_dir/cargo-check.log" >&2
+          dump_step_log "$log_dir/cargo-check.log"
           return 1
         }
         assert_clean_log "$log_dir/cargo-check.log"
@@ -1095,7 +1119,7 @@ compile_current_output() {
     typescript)
       if [[ -f "$output/package.json" ]]; then
         (cd "$output" && npm install && npm run build) >"$log_dir/npm-build.log" 2>&1 || {
-          cat "$log_dir/npm-build.log" >&2
+          dump_step_log "$log_dir/npm-build.log"
           return 1
         }
         assert_clean_log "$log_dir/npm-build.log"

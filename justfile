@@ -61,6 +61,25 @@ determinism-typescript:
 determinism-java:
   bash cross-test/determinism/run.sh --language java
 
+# Run the mandatory gate set (soundness, test, current-generation,
+# determinism, cert-stream) and report a trustworthy overall pass/fail.
+# A naive `for g in ...; do just "$g"; done` loop whose last command per
+# iteration is `echo` always exits 0 regardless of what failed inside —
+# do not write that pattern again; this recipe exists so nobody has to.
+gates:
+  #!/usr/bin/env bash
+  set -uo pipefail
+  fail=0
+  for g in soundness test current-generation determinism cert-stream; do
+    echo "=== $g ==="
+    just "$g"
+    rc=$?
+    echo "=== $g rc=$rc ==="
+    [[ $rc -ne 0 ]] && fail=1
+  done
+  echo "=== OVERALL fail=$fail ==="
+  exit $fail
+
 # Behavioral coverage of the generated TLS/SMB cert-stream loops.
 cert-stream: cert-stream-go cert-stream-java cert-stream-rust
 

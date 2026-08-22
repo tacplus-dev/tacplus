@@ -73,12 +73,12 @@ write_java_cert_stream_pom() {
     <dependency>
       <groupId>com.google.protobuf</groupId>
       <artifactId>protobuf-java</artifactId>
-      <version>4.35.1</version>
+      <version>4.36.0</version>
     </dependency>
     <dependency>
       <groupId>com.google.protobuf</groupId>
       <artifactId>protobuf-java-util</artifactId>
-      <version>4.35.1</version>
+      <version>4.36.0</version>
     </dependency>
     <dependency>
       <groupId>io.grpc</groupId>
@@ -189,7 +189,7 @@ esac
 TACPLUS_BIN="${TACPLUS_BIN:-$ROOT_DIR/target/tacplus-cert-stream-check}"
 if [[ ! -x "$TACPLUS_BIN" || -z "${TACPLUS_BIN_PREBUILT:-}" ]]; then
   echo "==> Building tacplus binary"
-  (cd "$ROOT_DIR" && go build -o "$TACPLUS_BIN" .)
+  (cd "$ROOT_DIR" && go generate ./pkg/internal/proto/spec/... && go build -o "$TACPLUS_BIN" .)
 fi
 
 WORK="$(mktemp -d)"

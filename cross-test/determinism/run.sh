@@ -100,7 +100,7 @@ WORK_ROOT="$(cd "$WORK_ROOT" && pwd)"
 if [[ -z "$TACPLUS_BIN" ]]; then
   TACPLUS_BIN="$ROOT_DIR/target/tacplus-determinism"
   echo "==> Building local tacplus binary"
-  (cd "$ROOT_DIR" && go build -o "$TACPLUS_BIN" .)
+  (cd "$ROOT_DIR" && go generate ./pkg/internal/proto/spec/... && go build -o "$TACPLUS_BIN" .)
 fi
 
 if [[ "$TACPLUS_BIN" == */* ]]; then

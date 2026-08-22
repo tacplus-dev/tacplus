@@ -91,7 +91,7 @@ WORK_ROOT="$(cd "$WORK_ROOT" && pwd)"
 if [[ -z "$TACPLUS_BIN" ]]; then
   TACPLUS_BIN="$ROOT_DIR/target/tacplus-current-generation"
   echo "==> Building local tacplus binary"
-  (cd "$ROOT_DIR" && go build -o "$TACPLUS_BIN" .)
+  (cd "$ROOT_DIR" && go generate ./pkg/internal/proto/spec/... && go build -o "$TACPLUS_BIN" .)
 fi
 
 if [[ "$TACPLUS_BIN" == */* ]]; then
@@ -472,12 +472,12 @@ write_java_compile_pom() {
     <dependency>
       <groupId>com.google.protobuf</groupId>
       <artifactId>protobuf-java</artifactId>
-      <version>4.35.1</version>
+      <version>4.36.0</version>
     </dependency>
     <dependency>
       <groupId>com.google.protobuf</groupId>
       <artifactId>protobuf-java-util</artifactId>
-      <version>4.35.1</version>
+      <version>4.36.0</version>
     </dependency>
     <dependency>
       <groupId>io.grpc</groupId>

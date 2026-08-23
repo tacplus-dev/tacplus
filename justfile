@@ -2,6 +2,16 @@
 
 pkg := "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/buildinfo"
 
+# Every recipe below that regenerates or compiles writes this checkout's shared
+# target/ and generated-sources/ trees. Several background jobs run these
+# against the SAME checkout at once and have corrupted each other's results
+# three times (2026-08-19, -08-22, -08-23). So those recipes run through
+# scripts/with-tree-lock.sh, which serializes them on a lock scoped to this
+# checkout; a second caller waits for the first instead of racing it. The lock
+# is re-entrant, so a locked recipe may call `just <other-locked-recipe>`.
+# If you add a recipe that regenerates or compiles, prefix it with {{lock}} too.
+lock := "bash scripts/with-tree-lock.sh"
+
 # Pinned host protoc. The generator shells out to the host `protoc`, and the
 # gencode protoc emits declares a MINIMUM protobuf runtime version; the runtime
 # refuses gencode newer than itself. So every protobuf-java pin in this repo
@@ -21,11 +31,11 @@ protoc_version := "36.0"
 default: install
 
 generate:
-  go generate ./pkg/internal/proto/spec/...
+  {{lock}} go generate ./pkg/internal/proto/spec/...
 
 build: generate
   mkdir -p bin
-  go build -trimpath -ldflags="-s -w" -o bin/tacplus .
+  {{lock}} go build -trimpath -ldflags="-s -w" -o bin/tacplus .
 
 install: generate
   #!/usr/bin/env bash
@@ -34,48 +44,48 @@ install: generate
   sha=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
   # Local build: mark the commit as a local build so it's never mistaken for CI.
   ldflags="-s -w -X {{pkg}}.Version=${tag} -X {{pkg}}.GitSha=${sha}-local"
-  go install -trimpath -ldflags="$ldflags" .
+  {{lock}} go install -trimpath -ldflags="$ldflags" .
   echo "Installed: tacplus ${tag}"
 
 test: soundness
-  go test ./...
+  {{lock}} go test ./...
 
 # Model/template soundness gate. Runs as part of `test`.
 soundness:
-  go run ./cmd/soundness -root .
+  {{lock}} go run ./cmd/soundness -root .
 
 vet:
   go vet ./...
 
 current-generation:
-  bash cross-test/current-generation/run.sh
+  {{lock}} bash cross-test/current-generation/run.sh
 
 current-generation-go:
-  bash cross-test/current-generation/run.sh --language go
+  {{lock}} bash cross-test/current-generation/run.sh --language go
 
 current-generation-java:
-  bash cross-test/current-generation/run.sh --language java
+  {{lock}} bash cross-test/current-generation/run.sh --language java
 
 current-generation-rust:
-  bash cross-test/current-generation/run.sh --language rust
+  {{lock}} bash cross-test/current-generation/run.sh --language rust
 
 determinism:
-  bash cross-test/determinism/run.sh
+  {{lock}} bash cross-test/determinism/run.sh
 
 determinism-go:
-  bash cross-test/determinism/run.sh --language go
+  {{lock}} bash cross-test/determinism/run.sh --language go
 
 determinism-rust:
-  bash cross-test/determinism/run.sh --language rust
+  {{lock}} bash cross-test/determinism/run.sh --language rust
 
 determinism-python:
-  bash cross-test/determinism/run.sh --language python
+  {{lock}} bash cross-test/determinism/run.sh --language python
 
 determinism-typescript:
-  bash cross-test/determinism/run.sh --language typescript
+  {{lock}} bash cross-test/determinism/run.sh --language typescript
 
 determinism-java:
-  bash cross-test/determinism/run.sh --language java
+  {{lock}} bash cross-test/determinism/run.sh --language java
 
 # Assert the host protoc matches the pin above. Run as the first step of
 # `gates`; run it by hand after any toolchain upgrade.
@@ -111,6 +121,12 @@ protoc-check:
 gates:
   #!/usr/bin/env bash
   set -uo pipefail
+  # Hold the tree lock across the WHOLE suite, not once per gate: taking it per
+  # gate would let another job interleave a regeneration between two of them.
+  # The nested `just` calls below re-enter this same lock.
+  if [[ "${TACPLUS_TREE_LOCK:-}" != "{{justfile_directory()}}/.tacplus-tree.lock" ]]; then
+    exec {{lock}} just gates
+  fi
   fail=0
   # Toolchain preflight: a protoc/runtime mismatch breaks three of the gates
   # below with an error that names neither protoc nor a version.
@@ -136,13 +152,13 @@ gates:
 cert-stream: cert-stream-go cert-stream-java cert-stream-rust
 
 cert-stream-go:
-  bash cross-test/cert-stream/run.sh --language go
+  {{lock}} bash cross-test/cert-stream/run.sh --language go
 
 cert-stream-java:
-  bash cross-test/cert-stream/run.sh --language java
+  {{lock}} bash cross-test/cert-stream/run.sh --language java
 
 cert-stream-rust:
-  bash cross-test/cert-stream/run.sh --language rust
+  {{lock}} bash cross-test/cert-stream/run.sh --language rust
 
 # Generation gate against the REAL platform + app proto repos (not the
 # cross-test/proto fixtures every other gate uses). This is the check that
@@ -153,84 +169,84 @@ cert-stream-rust:
 # NOT YET in the mandatory set — proposed, cost not yet approved (~3min
 # wall-clock as of 2026-08-22).
 platform-generation:
-  bash cross-test/platform-generation/run.sh
+  {{lock}} bash cross-test/platform-generation/run.sh
 
 # Behavioral coverage of W2S request (ingress) validation in the generated
 # Rust REST dispatch module.
 w2s-validate:
-  bash cross-test/w2s-validate/run.sh
+  {{lock}} bash cross-test/w2s-validate/run.sh
 
 # Cross-language serialization-equivalence corpus: one message, encoded once by
 # go into checked-in golden bytes, decoded and value-asserted by all five
 # generated languages. Local/manual — not part of `test`.
 wire-corpus:
-  bash cross-test/wire-corpus/run.sh
+  {{lock}} bash cross-test/wire-corpus/run.sh
 
 wire-corpus-go:
-  bash cross-test/wire-corpus/run.sh --language go
+  {{lock}} bash cross-test/wire-corpus/run.sh --language go
 
 wire-corpus-java:
-  bash cross-test/wire-corpus/run.sh --language java
+  {{lock}} bash cross-test/wire-corpus/run.sh --language java
 
 wire-corpus-python:
-  bash cross-test/wire-corpus/run.sh --language python
+  {{lock}} bash cross-test/wire-corpus/run.sh --language python
 
 wire-corpus-rust:
-  bash cross-test/wire-corpus/run.sh --language rust
+  {{lock}} bash cross-test/wire-corpus/run.sh --language rust
 
 wire-corpus-typescript:
-  bash cross-test/wire-corpus/run.sh --language typescript
+  {{lock}} bash cross-test/wire-corpus/run.sh --language typescript
 
 # Re-encode the golden bytes from the fixture's own expect blocks. Manual only.
 wire-corpus-emit:
-  bash cross-test/wire-corpus/run.sh --emit
+  {{lock}} bash cross-test/wire-corpus/run.sh --emit
 
 # PC-L-9 chaos soak: generates+builds a driver binary per run, too slow for
 # `just test`. Excluded from `go test ./...` via the `soak` build tag.
 leak-soak:
-  go test -tags soak ./cross-test/chaos/leaksoak/...
+  {{lock}} go test -tags soak ./cross-test/chaos/leaksoak/...
 
 consumer-build:
-  bash cross-test/consumer-contract/run.sh
+  {{lock}} bash cross-test/consumer-contract/run.sh
 
 consumer-build-go:
-  bash cross-test/consumer-contract/run.sh --language go
+  {{lock}} bash cross-test/consumer-contract/run.sh --language go
 
 consumer-build-java:
-  bash cross-test/consumer-contract/run.sh --language java
+  {{lock}} bash cross-test/consumer-contract/run.sh --language java
 
 consumer-build-python:
-  bash cross-test/consumer-contract/run.sh --language python
+  {{lock}} bash cross-test/consumer-contract/run.sh --language python
 
 consumer-build-typescript:
-  bash cross-test/consumer-contract/run.sh --language typescript
+  {{lock}} bash cross-test/consumer-contract/run.sh --language typescript
 
 consumer-build-rust:
-  bash cross-test/consumer-contract/run.sh --language rust
+  {{lock}} bash cross-test/consumer-contract/run.sh --language rust
 
 consumer-build-swift:
-  bash cross-test/consumer-contract/run.sh --language swift
+  {{lock}} bash cross-test/consumer-contract/run.sh --language swift
 
 consumer-smoke:
-  bash cross-test/consumer-smoke/run.sh
+  {{lock}} bash cross-test/consumer-smoke/run.sh
 
 consumer-smoke-go:
-  bash cross-test/consumer-smoke/run.sh --language go
+  {{lock}} bash cross-test/consumer-smoke/run.sh --language go
 
 consumer-smoke-java:
-  bash cross-test/consumer-smoke/run.sh --language java
+  {{lock}} bash cross-test/consumer-smoke/run.sh --language java
 
 consumer-smoke-python:
-  bash cross-test/consumer-smoke/run.sh --language python
+  {{lock}} bash cross-test/consumer-smoke/run.sh --language python
 
 consumer-smoke-rust:
-  bash cross-test/consumer-smoke/run.sh --language rust
+  {{lock}} bash cross-test/consumer-smoke/run.sh --language rust
 
 consumer-smoke-typescript:
-  bash cross-test/consumer-smoke/run.sh --language typescript
+  {{lock}} bash cross-test/consumer-smoke/run.sh --language typescript
 
 clean:
-  rm -rf bin target
+  {{lock}} rm -rf bin target
 
 # Scratch dirs are left behind only when a run is SIGKILLed before its cleanup
 # can run. Never wired into `test` or any gate. Only touches top-level

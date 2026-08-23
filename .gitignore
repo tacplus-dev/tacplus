@@ -164,3 +164,7 @@ cross-toolchain/
 
 # Built soundness matrix binary (source lives in cmd/soundness/)
 /soundness
+
+# Tree-exclusion lock (scripts/with-tree-lock.sh); present only while a
+# generate/build/gate run holds it.
+/.tacplus-tree.lock/

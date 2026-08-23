@@ -885,26 +885,45 @@ func InjectGrpcConfigState(sourceProtoDir, tempProtoDir, flatProtoDir string) ([
 		return nil, nil
 	}
 
-	// Discover the primary state store from proto annotations.
-	// A service with option (spec.service) = {store: true} is a backing store.
-	// Config state is routed to the primary store's package name.
+	// Discover the backing store that hosts config state.
 	//
-	// GetAllFiles ranges a MAP, so breaking at the "first" ServiceStore selected a
-	// nondeterministic package whenever more than one store existed — flipping
-	// config-state routing (the ConfigState tag) across otherwise-identical builds.
-	// Collect every store package and take the alphabetically first, matching the
-	// determinism convention used elsewhere for annotated-source selection.
-	var storePkgs []string
+	// option (spec.service) = {store: true} says a service CAN back state;
+	// option (spec.service) = {config_store: true} says config state is routed
+	// to THAT service. The two are deliberately separate: previously this picked
+	// the alphabetically first store: true package, which silently routed every
+	// service's config through eventbus (< kernel) because eventbus is a store
+	// for its own topic state. Alphabetical order is not an architectural
+	// decision, so the routing target is now declared, not derived.
+	//
+	// GetAllFiles ranges a MAP, so both loops below sort rather than break at a
+	// "first" match — an unsorted scan flipped config routing across otherwise
+	// identical builds.
+	var configStorePkgs, storePkgs []string
 	for _, fileDesc := range dp.GetAllFiles() {
+		if fileDesc.ServiceConfigStore {
+			configStorePkgs = append(configStorePkgs, fileDesc.Package)
+		}
 		if fileDesc.ServiceStore {
 			storePkgs = append(storePkgs, fileDesc.Package)
 		}
 	}
-	if len(storePkgs) == 0 {
-		return nil, fmt.Errorf("no service with store: true found in proto set — config state requires a backing store")
-	}
+	sort.Strings(configStorePkgs)
 	sort.Strings(storePkgs)
-	primaryStore := storePkgs[0]
+
+	var primaryStore string
+	switch {
+	case len(configStorePkgs) > 1:
+		return nil, fmt.Errorf("multiple services declare config_store: true (%s) — exactly one service may host config state", strings.Join(configStorePkgs, ", "))
+	case len(configStorePkgs) == 1:
+		primaryStore = configStorePkgs[0]
+	case len(storePkgs) == 0:
+		return nil, fmt.Errorf("no service with store: true found in proto set — config state requires a backing store")
+	case len(storePkgs) == 1:
+		// Unambiguous: one store, nothing to choose between.
+		primaryStore = storePkgs[0]
+	default:
+		return nil, fmt.Errorf("proto set has %d services with store: true (%s) and none with config_store: true — mark the service that hosts config state with option (spec.service) = {config_store: true}", len(storePkgs), strings.Join(storePkgs, ", "))
+	}
 
 	// Inject ConfigState into each service's proto file.
 	for _, cfg := range configs {
@@ -912,7 +931,7 @@ func InjectGrpcConfigState(sourceProtoDir, tempProtoDir, flatProtoDir string) ([
 
 		// Build the ConfigState message to append. Uses the local Config type
 		// (not fully-qualified) since it's in the same proto file.
-		// The tag routes to the primary store discovered from (spec.service).store.
+		// The tag routes to the store discovered from (spec.service).config_store.
 		configState := fmt.Sprintf(`
 // %s is the state boundary for %s service configuration.
 // Auto-injected by tacplus from (spec.grpc_config) annotation.

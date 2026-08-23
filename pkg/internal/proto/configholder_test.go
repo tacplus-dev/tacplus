@@ -167,7 +167,7 @@ message DemoConfig {
 // DETERMINISTIC — the old code broke at the first ServiceStore in a map range, so
 // the ConfigState tag flipped between stores across identical builds. It must now
 // route to the alphabetically-first store regardless of map-iteration order.
-func TestInjectGrpcConfigStateRoutesToDeterministicStore(t *testing.T) {
+func TestInjectGrpcConfigStateRoutesToDeclaredConfigStore(t *testing.T) {
 	if _, err := exec.LookPath("protoc"); err != nil {
 		t.Skip("protoc not available")
 	}
@@ -177,11 +177,15 @@ func TestInjectGrpcConfigStateRoutesToDeterministicStore(t *testing.T) {
 		[]byte("services:\n  - name: demo\n    id: 5\n  - name: alpha\n    id: 6\n  - name: zeta\n    id: 7\n"), 0o644); err != nil {
 		t.Fatalf("write registry.yaml: %v", err)
 	}
-	// Two backing stores in distinct packages; the primary must be "alpha".
+	// Two backing stores in distinct packages. "zeta" declares config_store, and
+	// "alpha" sorts first — so alphabetical-first selection would pick the wrong
+	// one. That is exactly the defect config_store exists to remove: on the real
+	// platform set it silently routed every service's config through eventbus
+	// (< kernel) because eventbus is a store for its own topic state.
 	writeProto(t, dir, "zeta.proto", `syntax = "proto3";
 package zeta;
 import "sys/spec.proto";
-option (spec.service) = {name: "zeta", store: true};
+option (spec.service) = {name: "zeta", store: true, config_store: true};
 message ZetaState { option (spec.service_state) = {name: "ZetaState", tag: "zeta"}; string id = 1; }
 `)
 	writeProto(t, dir, "alpha.proto", `syntax = "proto3";
@@ -208,11 +212,94 @@ message DemoConfig {
 		t.Fatalf("read injected demo.proto: %v", err)
 	}
 	text := string(injected)
-	if !strings.Contains(text, `tag: "alpha"`) {
-		t.Fatalf("config state must route to the alphabetically-first store (alpha):\n%s", text)
+	if !strings.Contains(text, `tag: "zeta"`) {
+		t.Fatalf("config state must route to the declared config_store (zeta):\n%s", text)
 	}
-	if strings.Contains(text, `tag: "zeta"`) {
-		t.Fatalf("config state must not route to the non-primary store (zeta):\n%s", text)
+	if strings.Contains(text, `tag: "alpha"`) {
+		t.Fatalf("config state must not route to a store that only declares store: true (alpha):\n%s", text)
+	}
+}
+
+// Several stores and no config_store is ambiguous: whatever the generator picked
+// would be an arbitrary architectural decision made by sort order. Fail loud.
+func TestInjectGrpcConfigStateRejectsAmbiguousStores(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available")
+	}
+	dir := t.TempDir()
+	copySpecProtoForConfigSliceTest(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "registry.yaml"),
+		[]byte("services:\n  - name: demo\n    id: 5\n  - name: alpha\n    id: 6\n  - name: zeta\n    id: 7\n"), 0o644); err != nil {
+		t.Fatalf("write registry.yaml: %v", err)
+	}
+	writeProto(t, dir, "zeta.proto", `syntax = "proto3";
+package zeta;
+import "sys/spec.proto";
+option (spec.service) = {name: "zeta", store: true};
+message ZetaState { option (spec.service_state) = {name: "ZetaState", tag: "zeta"}; string id = 1; }
+`)
+	writeProto(t, dir, "alpha.proto", `syntax = "proto3";
+package alpha;
+import "sys/spec.proto";
+option (spec.service) = {name: "alpha", store: true};
+message AlphaState { option (spec.service_state) = {name: "AlphaState", tag: "alpha"}; string id = 1; }
+`)
+	writeProto(t, dir, "demo.proto", `syntax = "proto3";
+package demo;
+import "sys/spec.proto";
+option (spec.service) = {name: "demo"};
+message DemoConfig {
+  option (spec.grpc_config) = {service_name: "demo"};
+  string setting = 1;
+}
+`)
+
+	_, err := InjectGrpcConfigState(dir, dir, dir)
+	if err == nil {
+		t.Fatal("expected a loud error when several stores exist and none declares config_store")
+	}
+	if !strings.Contains(err.Error(), "config_store") {
+		t.Fatalf("error must name the annotation that resolves it, got: %v", err)
+	}
+}
+
+// A single store is unambiguous — nothing to choose between — so config_store is
+// not required there. Every cross-test fixture set is in this shape.
+func TestInjectGrpcConfigStateAllowsSoleStoreWithoutConfigStore(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available")
+	}
+	dir := t.TempDir()
+	copySpecProtoForConfigSliceTest(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "registry.yaml"),
+		[]byte("services:\n  - name: demo\n    id: 5\n  - name: alpha\n    id: 6\n"), 0o644); err != nil {
+		t.Fatalf("write registry.yaml: %v", err)
+	}
+	writeProto(t, dir, "alpha.proto", `syntax = "proto3";
+package alpha;
+import "sys/spec.proto";
+option (spec.service) = {name: "alpha", store: true};
+message AlphaState { option (spec.service_state) = {name: "AlphaState", tag: "alpha"}; string id = 1; }
+`)
+	writeProto(t, dir, "demo.proto", `syntax = "proto3";
+package demo;
+import "sys/spec.proto";
+option (spec.service) = {name: "demo"};
+message DemoConfig {
+  option (spec.grpc_config) = {service_name: "demo"};
+  string setting = 1;
+}
+`)
+
+	if _, err := InjectGrpcConfigState(dir, dir, dir); err != nil {
+		t.Fatalf("InjectGrpcConfigState: %v", err)
+	}
+	injected, err := os.ReadFile(filepath.Join(dir, "demo.proto"))
+	if err != nil {
+		t.Fatalf("read injected demo.proto: %v", err)
+	}
+	if !strings.Contains(string(injected), `tag: "alpha"`) {
+		t.Fatalf("config state must route to the sole store (alpha):\n%s", string(injected))
 	}
 }
 

@@ -47,6 +47,7 @@ type FileDescriptor struct {
 	ServiceName         string           // File-level service identity from option (spec.service)
 	ServiceID           int32            // Stable service id from option (spec.service)
 	ServiceStore        bool             // Whether this service is a backing store from option (spec.service).store
+	ServiceConfigStore  bool             // Whether this service is the config backing store from option (spec.service).config_store
 	ServiceGateway      bool             // Whether this service is a gateway from option (spec.service).gateway
 	ServiceRestDispatch bool             // Whether this service needs REST→gRPC dispatch from option (spec.service).rest_dispatch
 	StateImports        []string         // Canonical state imports from field-level state_import roots plus legacy file-level mirrors
@@ -499,7 +500,7 @@ func (p *DescriptorParser) parseFileDescriptor(fd protoreflect.FileDescriptor) {
 
 	// Parse generate_user_api option
 	fileDesc.GenerateUserApi = p.parseGenerateUserApi(fd)
-	fileDesc.ServiceName, fileDesc.ServiceID, fileDesc.ServiceStore, fileDesc.ServiceGateway, fileDesc.ServiceRestDispatch = p.parseServiceIdentity(fd, fileDesc.Package)
+	fileDesc.ServiceName, fileDesc.ServiceID, fileDesc.ServiceStore, fileDesc.ServiceConfigStore, fileDesc.ServiceGateway, fileDesc.ServiceRestDispatch = p.parseServiceIdentity(fd, fileDesc.Package)
 	fileDesc.FileStateImports = p.parseStateImports(fd)
 	fileDesc.FieldStateImports = collectFieldStateImports(fileDesc.Messages)
 	fileDesc.StateImports = mergeStateImportRoots(fileDesc.FileStateImports, fileDesc.FieldStateImports)
@@ -1384,26 +1385,26 @@ func (p *DescriptorParser) parseVService(fd protoreflect.FileDescriptor) (string
 // parseServiceIdentity extracts the file-level service identity option.
 // pkg is the proto package name, used as the default service name when
 // spec.service has no explicit name because identity comes from the package.
-func (p *DescriptorParser) parseServiceIdentity(fd protoreflect.FileDescriptor, pkg string) (string, int32, bool, bool, bool) {
+func (p *DescriptorParser) parseServiceIdentity(fd protoreflect.FileDescriptor, pkg string) (string, int32, bool, bool, bool, bool) {
 	opts := fd.Options().(*descriptorpb.FileOptions)
 	if opts == nil {
-		return "", 0, false, false, false
+		return "", 0, false, false, false, false
 	}
 
 	if !proto.HasExtension(opts, spec.E_Service) {
-		return "", 0, false, false, false
+		return "", 0, false, false, false, false
 	}
 
 	val := proto.GetExtension(opts, spec.E_Service).(*spec.ServiceAnnotation)
 	if val == nil {
-		return "", 0, false, false, false
+		return "", 0, false, false, false, false
 	}
 
 	name := val.GetName()
 	if name == "" {
 		name = pkg
 	}
-	return name, 0, val.GetStore(), val.GetGateway(), val.GetRestDispatch()
+	return name, 0, val.GetStore(), val.GetConfigStore(), val.GetGateway(), val.GetRestDispatch()
 }
 
 // parsemodel.ParamMapConfig extracts the generate_from_map message option

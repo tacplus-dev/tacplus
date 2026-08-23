@@ -1758,6 +1758,13 @@ message ServiceAnnotation {
   // store declares this service as a backing store.
   // Other services reference it via StateAnnotation.tag.
   bool store = 3;
+  // config_store declares this service as THE backing store for auto-injected
+  // per-service config state (the <Service>ConfigState messages tacplus injects
+  // from (spec.grpc_config)). At most one service in a proto set may set it.
+  // Distinct from store: store says "this service can back state", config_store
+  // says which one config is routed to. Without it, a proto set with more than
+  // one store has no non-arbitrary answer.
+  bool config_store = 6;
   // gateway declares this service as a gateway (reverse proxy).
   // Changes TLS source to GatewayTlsState (public cert) instead of X509Mint (internal CA).
   // The generated run() watches GatewayTlsState for cert hot-reload instead of running

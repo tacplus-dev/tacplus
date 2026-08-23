@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"go.uber.org/zap"
@@ -82,6 +83,17 @@ func AppendStateServiceToProtos(tempProtoDir, inputDir string) error {
 
 	generated := make(map[string]bool)
 
+	// Who may call each generated state service: the owning package plus every
+	// package that declares a state_import of the root. Indexed once over the
+	// whole descriptor set, since importers live in other services' protos.
+	importersByRoot := stateImportersByRoot(dp.GetAllFiles())
+
+	// State services whose root declares disable_auth_message: no token
+	// validation at all, so no caller list — the auth post-condition skips them.
+	// Keyed by "<relPath>/<ServiceName>" because a service name alone is not
+	// unique across packages (e.g. every service's ServiceConfigState root).
+	authExempt := make(map[string]bool)
+
 	// Group state roots by file so we can emit shared messages once per file.
 	type fileEntry struct {
 		fileDesc *parser.FileDescriptor
@@ -124,10 +136,18 @@ func AppendStateServiceToProtos(tempProtoDir, inputDir string) error {
 				fileMap[relPath] = fe
 				fileOrder = append(fileOrder, relPath)
 			}
+			var authServices []string
+			if _, authDisabled := fileDesc.Messages[i].Annotations["disable_auth_message"]; authDisabled {
+				authExempt[filepath.ToSlash(relPath)+"/"+StateServiceName(stateName)] = true
+			} else {
+				authServices = stateServiceAuthServices(fileDesc.Package, importersByRoot[key])
+			}
+
 			fe.roots = append(fe.roots, stateRootEntry{
-				stateRoot:  &fileDesc.Messages[i],
-				stateName:  stateName,
-				readsState: readsState,
+				stateRoot:    &fileDesc.Messages[i],
+				stateName:    stateName,
+				readsState:   readsState,
+				authServices: authServices,
 			})
 		}
 	}
@@ -147,7 +167,85 @@ func AppendStateServiceToProtos(tempProtoDir, inputDir string) error {
 		}
 	}
 
+	// Post-condition, checked on what was actually written: a state service
+	// emitted without a resolvable caller list fails closed at runtime on every
+	// S2S call with no other build-time signal, so generation stops here instead.
+	if err := ValidateGeneratedStateServiceAuth(tempProtoDir, authExempt); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// stateImportersByRoot maps "package.StateName" to the packages that declare a
+// read-only import of that root, from either the field-level state_import
+// projections or the legacy file-level state_imports option. Those importers,
+// plus the owning package itself, are exactly the callers the root's generated
+// state service must authorize — see stateServiceAuthServices.
+func stateImportersByRoot(allFiles map[string]*parser.FileDescriptor) map[string][]string {
+	byRoot := make(map[string]map[string]bool)
+	add := func(root, pkg string) {
+		if root == "" || pkg == "" {
+			return
+		}
+		if byRoot[root] == nil {
+			byRoot[root] = make(map[string]bool)
+		}
+		byRoot[root][pkg] = true
+	}
+	for _, fileDesc := range allFiles {
+		for _, imp := range fileDesc.FieldStateImports {
+			add(imp.Root, fileDesc.Package)
+		}
+		for _, root := range fileDesc.FileStateImports {
+			add(root, fileDesc.Package)
+		}
+	}
+	out := make(map[string][]string, len(byRoot))
+	for root, pkgs := range byRoot {
+		list := make([]string, 0, len(pkgs))
+		for pkg := range pkgs {
+			list = append(list, pkg)
+		}
+		sort.Strings(list)
+		out[root] = list
+	}
+	return out
+}
+
+// stateServiceAuthServices resolves the auth_services list for a state root's
+// generated service. A state service is reachable by its owning service (which
+// holds RW on its own state) and by every service that declares a state_import
+// of it; nothing else has a generated client for it, so nothing else is
+// authorized. Importers are RO by construction — ResolveStatesFromProto records
+// them as AccessRO and the state-client generator emits accessors only for RO
+// states, so a service-level list grants them no usable mutator path.
+//
+// The list is never empty: the owner is always present. That is the point —
+// an empty auth_services on an S2S service means every service caller is
+// denied at runtime with no build-time signal, which is exactly the failure
+// ValidateGeneratedStateServiceAuth exists to make impossible.
+func stateServiceAuthServices(ownerPkg string, importers []string) []string {
+	auth := []string{ownerPkg}
+	for _, pkg := range importers {
+		if pkg != ownerPkg {
+			auth = append(auth, pkg)
+		}
+	}
+	return auth
+}
+
+// formatAuthServicesOption renders the service-level spec.service_s2s option
+// carrying the resolved caller list. Service-level auth_services is the
+// declared home for tacplus-generated service protos (see ServiceS2SAnnotation
+// in sys/spec.proto); the per-language service wrappers fan it out to a
+// per-RPC SetMethodAuth registration for every method on the service.
+func formatAuthServicesOption(auth []string) string {
+	quoted := make([]string, 0, len(auth))
+	for _, a := range auth {
+		quoted = append(quoted, fmt.Sprintf("%q", a))
+	}
+	return fmt.Sprintf("\toption (spec.service_s2s) = {auth_services: [%s]};\n", strings.Join(quoted, ", "))
 }
 
 // sharedMessageNeeds tracks which file-scoped shared messages are required
@@ -221,6 +319,7 @@ func buildStateService(
 	stateRoot *parser.MessageDescriptor,
 	stateName string,
 	readsState []string,
+	authServices []string,
 ) stateServiceResult {
 	pkg := fileDesc.Package
 
@@ -392,7 +491,16 @@ func buildStateService(
 	fmt.Fprintf(&buf, "service %s {\n", StateServiceName(stateName))
 
 	// All state services are S2S — accessible only by authorized services.
-	fmt.Fprintf(&buf, "\toption (spec.service_s2s) = {};\n")
+	// The caller list is resolved from the root's owner and its declared
+	// state_import-ers; an empty spec.service_s2s here would leave every RPC
+	// with no auth_services policy, which the authorizers reject at runtime
+	// with no build-time signal. disable_auth_message roots skip token
+	// validation entirely and therefore carry no caller list.
+	if len(authServices) > 0 {
+		buf.WriteString(formatAuthServicesOption(authServices))
+	} else {
+		fmt.Fprintf(&buf, "\toption (spec.service_s2s) = {};\n")
+	}
 
 	// Propagate service_event annotation to generated service options.
 	if ann, ok := stateRoot.Annotations["service_event_tag"]; ok && ann.StringValue != "" {
@@ -672,6 +780,10 @@ type stateRootEntry struct {
 	stateRoot  *parser.MessageDescriptor
 	stateName  string
 	readsState []string
+	// authServices is the resolved S2S caller list for this root's generated
+	// service (owner + declared state_import-ers). Empty only when the root is
+	// disable_auth_message, where token validation is skipped entirely.
+	authServices []string
 }
 
 func appendStateServicesForFile(
@@ -685,7 +797,7 @@ func appendStateServicesForFile(
 	var results []stateServiceResult
 	var merged sharedMessageNeeds
 	for _, root := range roots {
-		r := buildStateService(fileDesc, root.stateRoot, root.stateName, root.readsState)
+		r := buildStateService(fileDesc, root.stateRoot, root.stateName, root.readsState, root.authServices)
 		results = append(results, r)
 		merged.mapEmpty = merged.mapEmpty || r.needs.mapEmpty
 		merged.queueReceipt = merged.queueReceipt || r.needs.queueReceipt

@@ -1588,7 +1588,11 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 			// auth_any_user: true if ANY method has it (service needs authenticate-at-or-below wiring).
 			// auth_disabled: true if service-level OR ALL methods have it.
 			anyUser := service.AuthAnyUser
-			hasMethodAuth := len(service.AuthServices) > 0
+			// A service with no RPCs registers nothing: the wrapper emits
+			// Register<Svc>MethodAuth only when it produced at least one
+			// SetMethodAuth line, so claiming HasMethodAuth here would make the
+			// ServiceManager call a function that was never generated.
+			hasMethodAuth := len(service.Methods) > 0 && len(service.AuthServices) > 0
 			for _, m := range service.Methods {
 				if m.AuthAnyUser {
 					anyUser = true

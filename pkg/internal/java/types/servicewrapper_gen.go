@@ -176,7 +176,10 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 
 			// Derive service-level auth flags from method-level annotations.
 			anyUser := service.AuthAnyUser
-			hasMethodAuth := len(service.AuthServices) > 0
+			// A service with no RPCs registers nothing, and its wrapper emits no
+			// register-method-auth function; see the Go generator for the
+			// ServiceManager call this would otherwise dangle.
+			hasMethodAuth := len(service.Methods) > 0 && len(service.AuthServices) > 0
 			for _, m := range service.Methods {
 				if m.AuthAnyUser {
 					anyUser = true

@@ -1350,6 +1350,11 @@ func Generate(config *tactype.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to compute security policies: %w", err)
 	}
+	// Post-condition: the read policy published here must match the caller list
+	// gating the generated state services, or the two access planes have drifted.
+	if err := proto.ValidateStatePolicyAuthParity(config.FlatProtoDir, securityPolicies); err != nil {
+		return err
+	}
 	if err := proto.WriteCodegenConfig(parentDir, config.JavaPackageBase, config.Lang.Java.JavaImportBase()+".graphs", securityPolicies, svcRPCs); err != nil {
 		return fmt.Errorf("failed to write codegen config: %w", err)
 	}

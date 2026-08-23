@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
@@ -454,9 +455,18 @@ func WriteCodegenConfig(targetDir, javaPackageBase, interfacesPackage string, po
 // ComputeSecurityPolicies derives access policies from proto annotations.
 // For each message with service_state, it computes:
 //   - rw: ["service:<package>"] (owning service, implicit)
-//   - ro: ["*"] (all state services allow cross-namespace RO)
+//   - ro: ["service:<owner>", "service:<importer>", ...] — the owning service
+//     plus every service that declares a (spec.state_import) of the root. A
+//     service may read another service's state only if it has declared a
+//     dependency on it, so there is no blanket "*" read grant.
 //   - disableAuth: from disable_auth_message annotation
 //   - boundaryGrants: from boundary_callers on queue/topic/command fields
+//
+// The RO set is resolved by the same stateImportersByRoot/stateServiceAuthServices
+// pair that AppendStateServiceToProtos uses for the generated state service's
+// auth_services, differing only in the "service:" prefix the kernel-side
+// SecurityPolicyParser expects; ValidateStatePolicyAuthParity is the
+// post-condition that keeps the two from drifting apart.
 //
 // inputDir is the flat proto directory for descriptor parsing.
 func ComputeSecurityPolicies(inputDir string) ([]SecurityPolicy, error) {
@@ -464,6 +474,8 @@ func ComputeSecurityPolicies(inputDir string) ([]SecurityPolicy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create descriptor parser for security policies: %w", err)
 	}
+
+	importersByRoot := stateImportersByRoot(dp.GetAllFiles())
 
 	var policies []SecurityPolicy
 
@@ -485,8 +497,8 @@ func ComputeSecurityPolicies(inputDir string) ([]SecurityPolicy, error) {
 
 			// Owning service always has RW
 			rw := []string{"service:" + pkg}
-			// Cross-namespace default: RO for all
-			ro := []string{"*"}
+			// Cross-namespace read: owner plus declared state_import importers.
+			ro := prefixServicePackages(stateServiceAuthServices(pkg, importersByRoot[pkg+"."+stateName]))
 
 			// Check for instance_keyed fields → any authenticated service can write
 			for _, field := range msg.Fields {
@@ -573,4 +585,112 @@ func ComputeSecurityPolicies(inputDir string) ([]SecurityPolicy, error) {
 	}
 
 	return policies, nil
+}
+
+// prefixServicePackages renders resolved package names in the "service:<pkg>"
+// form the kernel's SecurityPolicyParser matches subjects against. The
+// resolution itself lives in stateServiceAuthServices, which yields plain
+// package names for the generated state service's auth_services option; this
+// is the only difference between the two formats.
+func prefixServicePackages(pkgs []string) []string {
+	out := make([]string, 0, len(pkgs))
+	for _, pkg := range pkgs {
+		out = append(out, "service:"+pkg)
+	}
+	return out
+}
+
+// ValidateStatePolicyAuthParity is the cross-plane post-condition on state
+// access control: for every service_state root, the caller set gating the
+// generated gRPC state service (auth_services, enforced by the chassis
+// interceptor) must equal the caller set gating boundary reads
+// (SecurityPolicy.RO, enforced by the kernel's SecurityInterceptor via
+// codegen-config.json), modulo the "service:" prefix.
+//
+// The two planes are layered — a caller must pass both — so a root whose RO is
+// wider than its auth_services is not immediately exploitable. It is still a
+// hard error: the RO set is what codegen-config.json publishes as the read
+// policy for that graph, and a silent divergence between the two derivations is
+// exactly how ro: ["*"] outlived the rule that a service may read another
+// service's state only if it declares a dependency on it. Both sets now come
+// from the same stateImportersByRoot/stateServiceAuthServices pair, so this
+// check should be structurally unreachable; it exists so that editing one
+// derivation without the other fails generation instead of drifting.
+//
+// Roots declaring (spec.disable_auth_message) are skipped: they carry no
+// auth_services by design (see ValidateGeneratedStateServiceAuth) and their
+// graph is registered as no-auth on the kernel side, so there is nothing to
+// compare.
+func ValidateStatePolicyAuthParity(inputDir string, policies []SecurityPolicy) error {
+	dp, err := parser.NewDescriptorParser(inputDir)
+	if err != nil {
+		return fmt.Errorf("failed to create descriptor parser for state policy parity: %w", err)
+	}
+
+	byRoot := make(map[string]SecurityPolicy, len(policies))
+	for _, p := range policies {
+		byRoot[p.Package+"."+p.Name] = p
+	}
+	importersByRoot := stateImportersByRoot(dp.GetAllFiles())
+
+	var violations []string
+	for relPath, fileDesc := range dp.GetAllFiles() {
+		if IsInfraProto(relPath) {
+			continue
+		}
+		for i := range fileDesc.Messages {
+			msg := &fileDesc.Messages[i]
+			ann, hasState := msg.Annotations["service_state"]
+			if !hasState || ann.StringValue == "" {
+				continue
+			}
+			if _, authDisabled := msg.Annotations["disable_auth_message"]; authDisabled {
+				continue
+			}
+
+			key := fileDesc.Package + "." + ann.StringValue
+			policy, ok := byRoot[key]
+			if !ok {
+				violations = append(violations, fmt.Sprintf(
+					"%s: state root %s has no computed SecurityPolicy", relPath, key))
+				continue
+			}
+
+			want := prefixServicePackages(stateServiceAuthServices(fileDesc.Package, importersByRoot[key]))
+			if !sameStringSet(want, policy.RO) {
+				violations = append(violations, fmt.Sprintf(
+					"%s: state root %s auth_services %v disagree with SecurityPolicy.RO %v",
+					relPath, key, want, policy.RO))
+			}
+		}
+	}
+
+	if len(violations) > 0 {
+		sort.Strings(violations)
+		return fmt.Errorf("state service auth_services and SecurityPolicy.RO disagree:\n  %s",
+			strings.Join(violations, "\n  "))
+	}
+	return nil
+}
+
+// sameStringSet reports whether two lists hold the same set of values,
+// ignoring order and duplicates.
+func sameStringSet(a, b []string) bool {
+	seen := make(map[string]bool, len(a))
+	for _, v := range a {
+		seen[v] = true
+	}
+	other := make(map[string]bool, len(b))
+	for _, v := range b {
+		other[v] = true
+	}
+	if len(seen) != len(other) {
+		return false
+	}
+	for v := range seen {
+		if !other[v] {
+			return false
+		}
+	}
+	return true
 }

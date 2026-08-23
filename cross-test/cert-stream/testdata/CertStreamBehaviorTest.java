@@ -33,8 +33,8 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.MethodDescriptor;
 import io.grpc.Server;
-import io.grpc.ServerBuilder;
 import io.grpc.Status;
+import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.netty.shaded.io.netty.handler.ssl.SslContext;
 import io.grpc.protobuf.services.HealthStatusManager;
 import io.grpc.stub.ServerCallStreamObserver;
@@ -44,6 +44,8 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigInteger;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -835,7 +837,24 @@ class CertStreamBehaviorTest {
     private static AuthorityFixture startAuthority(AuthorityMode mode) throws Exception {
         JavaTlsAuthority tlsAuthority = new JavaTlsAuthority(mode);
         JavaSmbAuthority smbAuthority = new JavaSmbAuthority(mode);
-        Server server = ServerBuilder.forPort(0)
+        // Bind the authority to the loopback address SPECIFICALLY, not the
+        // wildcard address `ServerBuilder.forPort` uses. A wildcard bind does
+        // not reserve 127.0.0.1:<that port>: another socket may afterwards bind
+        // that exact address with SO_REUSEADDR and succeed, and every connect to
+        // 127.0.0.1 then goes to the MORE SPECIFIC bind - i.e. to the other
+        // process, not to this fixture. Whatever answers instead is not an
+        // HTTP/2 peer, so the client's first inbound bytes are not a SETTINGS
+        // frame, netty raises an Http2Exception, and grpc-netty's
+        // Utils.statusFromThrowable turns that into `INTERNAL: http2 exception`
+        // in place of whatever error the test asserted - which is exactly how
+        // javaSmbFailedDeliveryHandlingClearsPendingKey has been seen to fail.
+        // A port already bound loopback-specifically cannot be bound
+        // loopback-specifically again ("Address already in use"), so binding
+        // this way closes that hole. (The port cannot be lost through EPHEMERAL
+        // allocation - the kernel never hands out a port another socket holds -
+        // so this shuts the door on a peer that names the port explicitly.)
+        Server server = NettyServerBuilder
+                .forAddress(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0))
                 .addService(tlsAuthority)
                 .addService(smbAuthority)
                 .build()

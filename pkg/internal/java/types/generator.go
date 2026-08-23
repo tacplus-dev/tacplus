@@ -1355,7 +1355,16 @@ func Generate(config *tactype.Config) error {
 	if err := proto.ValidateStatePolicyAuthParity(config.FlatProtoDir, securityPolicies); err != nil {
 		return err
 	}
-	if err := proto.WriteCodegenConfig(parentDir, config.JavaPackageBase, config.Lang.Java.JavaImportBase()+".graphs", securityPolicies, svcRPCs); err != nil {
+	// Accepted token audiences for this service: its own service label — the
+	// same identity the generated Authorizer matches `aud` against — plus every
+	// vservice it hosts, whose name is its own audience.
+	acceptedAudiences := []string{config.ServiceLabel()}
+	for _, vs := range vsEntries {
+		if vs.HostTag == config.ServiceLabel() && vs.Name != "" {
+			acceptedAudiences = append(acceptedAudiences, vs.Name)
+		}
+	}
+	if err := proto.WriteCodegenConfig(parentDir, config.JavaPackageBase, config.Lang.Java.JavaImportBase()+".graphs", acceptedAudiences, securityPolicies, svcRPCs); err != nil {
 		return fmt.Errorf("failed to write codegen config: %w", err)
 	}
 

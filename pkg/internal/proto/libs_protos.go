@@ -407,6 +407,7 @@ type ServiceRPCMapping struct {
 type codegenConfig struct {
 	JavaPackageBase    string              `json:"javaPackageBase"`
 	InterfacesPackage  string              `json:"interfacesPackage"`
+	AcceptedAudiences  []string            `json:"acceptedAudiences,omitempty"`
 	SecurityPolicies   []SecurityPolicy    `json:"securityPolicies,omitempty"`
 	ServiceRPCMappings []ServiceRPCMapping `json:"serviceRPCMappings,omitempty"`
 }
@@ -414,7 +415,7 @@ type codegenConfig struct {
 // WriteCodegenConfig writes a codegen-config.json file into targetDir/proto-annotated/
 // containing package configuration that downstream codegen plugins (e.g., the Maven
 // StateServerMojo) can read instead of requiring hardcoded Maven parameters.
-func WriteCodegenConfig(targetDir, javaPackageBase, interfacesPackage string, policies []SecurityPolicy, svcRPCs []ServiceRPCEntry) error {
+func WriteCodegenConfig(targetDir, javaPackageBase, interfacesPackage string, acceptedAudiences []string, policies []SecurityPolicy, svcRPCs []ServiceRPCEntry) error {
 	annotatedDir := filepath.Join(targetDir, "proto-annotated")
 	if err := os.MkdirAll(annotatedDir, 0755); err != nil {
 		return fmt.Errorf("failed to create annotated proto directory: %w", err)
@@ -432,6 +433,7 @@ func WriteCodegenConfig(targetDir, javaPackageBase, interfacesPackage string, po
 	cfg := codegenConfig{
 		JavaPackageBase:    javaPackageBase,
 		InterfacesPackage:  interfacesPackage,
+		AcceptedAudiences:  acceptedAudiences,
 		SecurityPolicies:   policies,
 		ServiceRPCMappings: mappings,
 	}
@@ -447,6 +449,7 @@ func WriteCodegenConfig(targetDir, javaPackageBase, interfacesPackage string, po
 	}
 
 	zap.L().Info("wrote codegen-config.json", zap.String("path", configPath),
+		zap.Strings("acceptedAudiences", acceptedAudiences),
 		zap.Int("policies", len(policies)),
 		zap.Int("serviceRPCMappings", len(mappings)))
 	return nil

@@ -130,7 +130,7 @@ public final class Fixture {
         ContractApi wrapper = new ContractApi(new Handler(), Authorizer.create());
         // auth_any_user seam: the generated wrapper calls this before ListEvents /
         // ListEventsPaged / Watch. The authorization header reaches us through
-        // the generated Authorizer.interceptor() context key.
+        // the generated Authorizer.headerCaptureInterceptor() context key.
         wrapper.setAuthenticateFunc((ContractApi.Authenticator) targetNamespace -> {
             String header = Authorizer.AUTH_HEADER_CTX_KEY.get();
             if (!BEARER.equals(header)) {
@@ -141,7 +141,7 @@ public final class Fixture {
             }
         });
 
-        ServerBuilder<?> builder = ServerBuilder.forPort(0).intercept(Authorizer.interceptor());
+        ServerBuilder<?> builder = ServerBuilder.forPort(0).intercept(Authorizer.headerCaptureInterceptor());
         wrapper.registerServices(builder);
         Server server = builder.build().start();
 

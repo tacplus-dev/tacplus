@@ -157,10 +157,26 @@ public class Authorizer {
             Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
 
     /**
-     * Returns a ServerInterceptor that extracts the Authorization header and
-     * stores it in AUTH_HEADER_CTX_KEY for downstream use by authorize().
+     * Returns a ServerInterceptor that copies the raw {@code authorization}
+     * metadata header into {@link #AUTH_HEADER_CTX_KEY} so downstream code can
+     * read it. That is all it does.
+     *
+     * <p><b>This interceptor performs NO authentication and NO authorization.</b>
+     * It does not parse the header, does not verify a signature, does not check
+     * an audience, and never rejects a call — a request with a forged, expired
+     * or absent token passes straight through it. A server whose only Authorizer
+     * touch is this interceptor is completely unprotected.
+     *
+     * <p>It exists solely so that code which DOES enforce can find the header:
+     * the generated service wrappers call {@link #authorize} / {@link #authenticate},
+     * which read {@link #AUTH_HEADER_CTX_KEY}. Anything registered without a
+     * generated wrapper must be wrapped in a real enforcing interceptor —
+     * {@link #enforcingInterceptor} (signature + audience) or
+     * {@link #authorizingInterceptor} (that plus the per-method auth_services
+     * policy) — the way {@code ServiceManager} wraps
+     * {@code Handler.additionalServices()}.
      */
-    public static ServerInterceptor interceptor() {
+    public static ServerInterceptor headerCaptureInterceptor() {
         return new ServerInterceptor() {
             @Override
             public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
@@ -368,7 +384,7 @@ public class Authorizer {
 
     /**
      * Authorizes a request using the auth header from gRPC Context.
-     * Requires the Authorizer.interceptor() to be installed on the gRPC server.
+     * Requires {@link #headerCaptureInterceptor()} to be installed on the gRPC server.
      */
     public void authorize(String fullMethod, Object request) throws ProtoException {
         // Always enforce: authorizeWithToken throws on a null/empty header. A missing

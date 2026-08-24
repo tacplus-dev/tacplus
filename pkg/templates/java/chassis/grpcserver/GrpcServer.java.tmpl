@@ -188,8 +188,9 @@ public class GrpcServer {
     //
     // Authorization is enforced by the generated wrappers via
     // Authorizer.enforcingInterceptor(); listenTLS installs only the static
-    // Authorizer.interceptor(), which stashes the header in the context. The go
-    // chassis has no authorizer field either, for the same reason.
+    // Authorizer.headerCaptureInterceptor(), which stashes the header in the
+    // context and enforces nothing on its own. The go chassis has no authorizer
+    // field either, for the same reason.
 
     public void listen() throws Exception {
         boolean hasTls = certProvider.getChain() != null && certProvider.getPrivateKey() != null;
@@ -271,7 +272,7 @@ public class GrpcServer {
         if (impl != null) {
             NettyServerBuilder serverBuilder = NettyServerBuilder.forPort(port)
                 .sslContext(sslContext)
-                .intercept(Authorizer.interceptor());
+                .intercept(Authorizer.headerCaptureInterceptor());
 
             if (config.getMaxRequestSize() > 0) {
                 serverBuilder.maxInboundMessageSize((int) config.getMaxRequestSize());

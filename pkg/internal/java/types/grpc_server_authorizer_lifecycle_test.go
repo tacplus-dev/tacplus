@@ -81,8 +81,8 @@ func TestJavaGrpcServerHoldsNoAuthorizer(t *testing.T) {
 
 	// listenTLS still installs the static header-stashing interceptor; that is
 	// the only Authorizer touch the server is allowed to have.
-	if !strings.Contains(rendered, "Authorizer.interceptor()") {
-		t.Fatal("GrpcServer.java template no longer installs Authorizer.interceptor(); " +
+	if !strings.Contains(rendered, "Authorizer.headerCaptureInterceptor()") {
+		t.Fatal("GrpcServer.java template no longer installs Authorizer.headerCaptureInterceptor(); " +
 			"the auth header would never reach the context")
 	}
 }

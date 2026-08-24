@@ -736,8 +736,10 @@ public class ServiceManager implements AutoCloseable {
 
 	{{- if .HasStates}}
         // Fetch initial typed config from state and deliver to handler.
-{{- range .GrpcServices}}
-{{- if .HasConfigState}}
+        // One fetch per ConfigState, shared by every handler that reads it: the
+        // request is identical, and one unary call per handler bursts past the
+        // state store's per-(peer, method) polling rate limit at startup.
+{{- range .ConfigFetches}}
         {
             var configStub = {{.ConfigStateStub}}.newBlockingStub(stateStoreConn.conn())
                     .withCallCredentials(identity.callCredentials());
@@ -747,21 +749,30 @@ public class ServiceManager implements AutoCloseable {
             {{.ConfigType}} envCfg = {{$.TypesBase}}.services.{{.ConfigPackageName}}.Helpers.configFromEnvVar(
                     System.getenv()).build();
             typedConfig = {{$.TypesBase}}.services.{{.ConfigPackageName}}.Helpers.mergeConfig(envCfg, typedConfig).build();
-            handler.{{.HandleConfigName}}(typedConfig);
+{{- range .HandleConfigNames}}
+            handler.{{.}}(typedConfig);
+{{- end}}
             var configAccessor = stateClients.{{.ConfigStateGroupAccessor}}().{{.ConfigStateAccessor}}().config();
             configAccessor.onChange(nextConfig -> {
+                {{.ConfigType}} nextTypedConfig;
                 try {
-                    {{.ConfigType}} nextTypedConfig = {{$.TypesBase}}.services.{{.ConfigPackageName}}.Helpers.configDefaults(nextConfig).build();
+                    nextTypedConfig = {{$.TypesBase}}.services.{{.ConfigPackageName}}.Helpers.configDefaults(nextConfig).build();
                     {{.ConfigType}} nextEnvCfg = {{$.TypesBase}}.services.{{.ConfigPackageName}}.Helpers.configFromEnvVar(
                             System.getenv()).build();
                     nextTypedConfig = {{$.TypesBase}}.services.{{.ConfigPackageName}}.Helpers.mergeConfig(nextEnvCfg, nextTypedConfig).build();
-                    handler.{{.HandleConfigName}}(nextTypedConfig);
                 } catch (Exception e) {
-                    LOG.warning("{{.HandleConfigName}} failed on config update: " + e.getMessage());
+                    LOG.warning("config update failed to merge: " + e.getMessage());
+                    return;
                 }
+{{- range .HandleConfigNames}}
+                try {
+                    handler.{{.}}(nextTypedConfig);
+                } catch (Exception e) {
+                    LOG.warning("{{.}} failed on config update: " + e.getMessage());
+                }
+{{- end}}
             });
         }
-{{- end}}
 {{- end}}
 {{- end}}
 

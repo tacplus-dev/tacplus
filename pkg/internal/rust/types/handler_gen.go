@@ -86,6 +86,25 @@ type grpcServiceEntry struct {
 	IsHosted bool
 }
 
+// rustConfigHandlerEntry names one handler fed by a shared config fetch.
+type rustConfigHandlerEntry struct {
+	HandleConfigName string // "timedb_query_config"
+	TraitName        string // "TimedbQuery"
+}
+
+// rustConfigFetchEntry groups every config-handler block that reads the same
+// ConfigState into a single startup fetch. The fetch is the same unary read for
+// each block, so issuing one per block bursts N identical calls at startup and
+// trips the state store's per-(peer, method) polling rate limit.
+type rustConfigFetchEntry struct {
+	ConfigStateGroupAccessor string // "services"
+	ConfigStateAccessor      string // "timedb_config_state"
+	ConfigHelpersModPath     string // "crate::types::services::timedb::helpers"
+	ConfigModPath            string // "crate::types::services::timedb::timedb"
+	ConfigAliasType          string // "TimedbQueryConfig" — alias of the shared Config type
+	Handlers                 []rustConfigHandlerEntry
+}
+
 type rustDiskStoreRuntimeEntry struct {
 	StoreName     string
 	LogField      string
@@ -126,6 +145,7 @@ type smTemplateData struct {
 	ProtoSourceVersion      string
 	ProtoSourceGitSha       string
 	GrpcServices            []grpcServiceEntry
+	ConfigFetches           []rustConfigFetchEntry
 	Subscriptions           []subscriptionEntry
 	Publishers              []publisherEntry // model-driven EventBus topic publishers (own (spec.service_event) topics)
 	HasPublishers           bool
@@ -479,6 +499,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		ProtoSourceVersion:    protoSourceVersion,
 		ProtoSourceGitSha:     protoGitSha,
 		GrpcServices:          grpcSvcs,
+		ConfigFetches:         rustConfigFetches(grpcSvcs),
 		Subscriptions:         subs,
 		Publishers:            publishers,
 		HasPublishers:         len(publishers) > 0,
@@ -490,6 +511,35 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		KeepaliveTimeoutSecs:       keepaliveconst.TimeoutSecs,
 		KeepalivePermitMinTimeSecs: keepaliveconst.PermitMinTimeSecs,
 	}, nil
+}
+
+// rustConfigFetches collapses the config-handler blocks onto one entry per
+// distinct ConfigState, preserving first-appearance order.
+func rustConfigFetches(grpcSvcs []grpcServiceEntry) []rustConfigFetchEntry {
+	var fetches []rustConfigFetchEntry
+	index := map[string]int{}
+	for _, svc := range grpcSvcs {
+		if !svc.HasConfigState {
+			continue
+		}
+		key := svc.ConfigStateGroupAccessor + "|" + svc.ConfigStateAccessor + "|" +
+			svc.ConfigHelpersModPath + "|" + svc.ConfigModPath
+		handler := rustConfigHandlerEntry{HandleConfigName: svc.HandleConfigName, TraitName: svc.TraitName}
+		if i, ok := index[key]; ok {
+			fetches[i].Handlers = append(fetches[i].Handlers, handler)
+			continue
+		}
+		index[key] = len(fetches)
+		fetches = append(fetches, rustConfigFetchEntry{
+			ConfigStateGroupAccessor: svc.ConfigStateGroupAccessor,
+			ConfigStateAccessor:      svc.ConfigStateAccessor,
+			ConfigHelpersModPath:     svc.ConfigHelpersModPath,
+			ConfigModPath:            svc.ConfigModPath,
+			ConfigAliasType:          svc.TraitName + "Config",
+			Handlers:                 []rustConfigHandlerEntry{handler},
+		})
+	}
+	return fetches
 }
 
 func collectRustDiskStoreRuntimeEntries(config *tactype.Config, grpcSvcs []grpcServiceEntry) ([]rustDiskStoreRuntimeEntry, error) {

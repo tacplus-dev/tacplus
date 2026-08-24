@@ -68,10 +68,8 @@ use {{.TypedHealthModPath}}::{{.TypedHealthType}};
 use grpcserver::authorizer::Authorizer as GrpcAuthorizer;
 use grpcserver::authorizer::AuthEnforcingLayer;
 {{- end}}
-{{- range .GrpcServices}}
-{{- if .HasConfigState}}
-use {{.ConfigModPath}}::Config as {{.TraitName}}Config;
-{{- end}}
+{{- range .ConfigFetches}}
+use {{.ConfigModPath}}::Config as {{.ConfigAliasType}};
 {{- end}}
 {{- if .HasAutoTls}}
 use crate::types::sys::tlscert::tlscert as tlscert_pb;
@@ -1366,13 +1364,15 @@ impl ServiceManager {
 
 {{- if .HasStates}}
         // Deliver initial per-service typed config from state and register hot-reload.
-	{{- range .GrpcServices}}
-	{{- if .HasConfigState}}
+        // One fetch per ConfigState, shared by every handler that reads it: the read
+        // is identical, and one fetch per handler bursts past the state store's
+        // per-(peer, method) polling rate limit at startup.
+	{{- range .ConfigFetches}}
 	        {
 	            let accessor = self.state_clients.{{.ConfigStateGroupAccessor}}().{{.ConfigStateAccessor}}();
 	            let mut initial_cfg = accessor.config().fetch().await
 	                .map_err(|e| -> Box<dyn std::error::Error> {
-	                    format!("fetch initial {{.TraitName}} config: {}", e).into()
+	                    format!("fetch initial {{.ConfigStateAccessor}} config: {}", e).into()
 	                })?;
 	            // Apply the proto-declared field defaults. Kernel seeds config state
 	            // from the deploy bundle, which carries only what the operator was
@@ -1381,29 +1381,36 @@ impl ServiceManager {
 	            // called on the delivery path, so `[(spec.default_string) = "..."]`
 	            // silently had no effect at runtime.
 	            {{.ConfigHelpersModPath}}::config_defaults(&mut initial_cfg);
+	{{- range .Handlers}}
 	            handler.{{.HandleConfigName}}(&initial_cfg).await
 	                .map_err(|e| -> Box<dyn std::error::Error> {
 	                    format!("initial {{.TraitName}} config: {}", e).into()
 	                })?;
+	{{- end}}
 	            let handler_for_cfg = handler.clone();
                 let tasks_for_cfg = self.tasks.clone();
-	            accessor.config().on_change(Arc::new(move |cfg: &{{.TraitName}}Config| {
+	            accessor.config().on_change(Arc::new(move |cfg: &{{.ConfigAliasType}}| {
 	                let h = handler_for_cfg.clone();
                 let task_registry = tasks_for_cfg.clone();
                 let mut c = cfg.clone();
                 // Same on hot-reload: a pushed config is defaulted before delivery.
                 {{.ConfigHelpersModPath}}::config_defaults(&mut c);
-                let handle = tokio::spawn(async move {
-                    if let Err(e) = h.{{.HandleConfigName}}(&c).await {
-                        tracing::error!(error = %e, "{{.HandleConfigName}} failed on config change");
-                    }
-                });
-                if let Ok(mut tasks) = task_registry.lock() {
-                    tasks.push(handle);
-                };
+	{{- range .Handlers}}
+                {
+                    let h = h.clone();
+                    let c = c.clone();
+                    let handle = tokio::spawn(async move {
+                        if let Err(e) = h.{{.HandleConfigName}}(&c).await {
+                            tracing::error!(error = %e, "{{.HandleConfigName}} failed on config change");
+                        }
+                    });
+                    if let Ok(mut tasks) = task_registry.lock() {
+                        tasks.push(handle);
+                    };
+                }
+	{{- end}}
             }));
         }
-{{- end}}
 {{- end}}
 {{- end}}
 

@@ -46,6 +46,19 @@ type javaGrpcServiceEntry struct {
 	HasMethodAuth            bool   // true if wrapper has registerMethodAuth method
 }
 
+// javaConfigFetchEntry groups every config-handler block that reads the same
+// ConfigState into a single startup fetch. The initial getConfig RPC is
+// identical for each block, so issuing one per block bursts N identical unary
+// calls at startup and trips the kernel's per-(peer, method) polling rate limit.
+type javaConfigFetchEntry struct {
+	ConfigType               string   // "Eventbus.Config"
+	ConfigPackageName        string   // "eventbus"
+	ConfigStateGroupAccessor string   // "services"
+	ConfigStateAccessor      string   // "eventbusConfigState"
+	ConfigStateStub          string   // "EventbusConfigStateServiceGrpc"
+	HandleConfigNames        []string // every handler fed by this one fetch
+}
+
 // javaSubscriptionEntry holds per-subscription data for handler and service_manager templates.
 type javaSubscriptionEntry struct {
 	FieldPascal       string // e.g. "EventStream"
@@ -109,6 +122,7 @@ type javaSmTemplateData struct {
 	TypedHealthImport      string // e.g. "com.example.types.services.columnarstore.Columnarstore"
 	TypedHealthJavaType    string // e.g. "Columnarstore.ColumnarStoreHealth"
 	GrpcServices           []javaGrpcServiceEntry
+	ConfigFetches          []javaConfigFetchEntry
 	Subscriptions          []javaSubscriptionEntry
 	Publishers             []javaPublisherEntry
 	PublisherImports       []string
@@ -398,6 +412,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		TypedHealthImport:      typedHealthImport,
 		TypedHealthJavaType:    typedHealthJavaType,
 		GrpcServices:           grpcSvcs,
+		ConfigFetches:          javaConfigFetches(grpcSvcs),
 		Subscriptions:          subs,
 		Publishers:             publishers,
 		PublisherImports:       publisherImports,
@@ -405,6 +420,34 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		DiskStores:             diskStores,
 		HasDiskStores:          len(diskStores) > 0,
 	}, nil
+}
+
+// javaConfigFetches collapses the config-handler blocks onto one entry per
+// distinct ConfigState, preserving first-appearance order.
+func javaConfigFetches(grpcSvcs []javaGrpcServiceEntry) []javaConfigFetchEntry {
+	var fetches []javaConfigFetchEntry
+	index := map[string]int{}
+	for _, svc := range grpcSvcs {
+		if !svc.HasConfigState {
+			continue
+		}
+		key := svc.ConfigStateStub + "|" + svc.ConfigType + "|" + svc.ConfigPackageName +
+			"|" + svc.ConfigStateGroupAccessor + "|" + svc.ConfigStateAccessor
+		if i, ok := index[key]; ok {
+			fetches[i].HandleConfigNames = append(fetches[i].HandleConfigNames, svc.HandleConfigName)
+			continue
+		}
+		index[key] = len(fetches)
+		fetches = append(fetches, javaConfigFetchEntry{
+			ConfigType:               svc.ConfigType,
+			ConfigPackageName:        svc.ConfigPackageName,
+			ConfigStateGroupAccessor: svc.ConfigStateGroupAccessor,
+			ConfigStateAccessor:      svc.ConfigStateAccessor,
+			ConfigStateStub:          svc.ConfigStateStub,
+			HandleConfigNames:        []string{svc.HandleConfigName},
+		})
+	}
+	return fetches
 }
 
 func collectJavaDiskStoreRuntimeEntries(config *tactype.Config, grpcSvcs []javaGrpcServiceEntry) ([]javaDiskStoreRuntimeEntry, error) {

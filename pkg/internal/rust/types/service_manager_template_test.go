@@ -34,7 +34,7 @@ func TestRustServiceManagerMutexLockBlocksAreStatementTerminated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTemplate: %v", err)
 	}
-	if want := "                };\n            }));"; !strings.Contains(tmplStr, want) {
+	if want := "                        tasks.push(handle);\n                    };\n                }"; !strings.Contains(tmplStr, want) {
 		t.Fatalf("Rust ServiceManager template missing config hot-reload statement terminator %q", want)
 	}
 }

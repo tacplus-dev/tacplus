@@ -136,6 +136,22 @@ public final class Auth {
     }
 
     /**
+     * Builds the {@link Caller} handed to generated handler methods from the
+     * caller's VERIFIED token, or returns null when nothing verified a token on
+     * this RPC (auth_disabled, RPC_FLAG_PUBLIC_NO_AUTH, RPC_FLAG_SELF_AUTHENTICATES,
+     * or no Authorizer interceptor installed).
+     *
+     * <p>The payload comes from {@link #tokenPayloadFromContext}, i.e. the token
+     * the Authorizer already checked for signature, expiry, token class and
+     * audience — never from a raw decode of the bearer header.
+     */
+    public static Caller callerFromContext() {
+        String payload = tokenPayloadFromContext();
+        if (payload.isEmpty()) return null;
+        return new Caller(payload, requestIdFromContext());
+    }
+
+    /**
      * Extracts the caller's sub (SPIFFE URI) from the caller's verified token.
      * Returns empty string if nothing verified a token on this RPC or the token
      * has no sub claim.

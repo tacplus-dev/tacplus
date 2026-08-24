@@ -12,7 +12,10 @@ package {{.ChassisBase}}.servicemanager;
  * with future capabilities (delegation chains, audit context) without
  * changing handler method signatures.
  *
- * <p>Caller is null when a method has disable_auth = true and no token is present.
+ * <p>Built by {@code Auth.callerFromContext()} from the token the Authorizer
+ * verified for this RPC. Caller is null exactly when nothing verified a token
+ * on the call — auth_disabled, RPC_FLAG_PUBLIC_NO_AUTH, RPC_FLAG_SELF_AUTHENTICATES —
+ * so a handler that reads it never sees unverified claims.
  */
 public final class Caller {
 

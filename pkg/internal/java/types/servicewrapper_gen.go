@@ -1307,7 +1307,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 %s%s
             // Extract caller identity and request ID
             String requestId = Auth.requestIdFromContext();
-            Caller caller = null;
+            Caller caller = Auth.callerFromContext();
             logger.debug("rpc method={} request_id={}", "%s", requestId);
             long startTime = System.currentTimeMillis();
             %s response;
@@ -1358,7 +1358,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 %s%s
             // Extract caller identity and request ID
             String requestId = Auth.requestIdFromContext();
-            Caller caller = null;
+            Caller caller = Auth.callerFromContext();
             logger.debug("rpc method={} request_id={}", "%s", requestId);
             %s response;
 %s%s
@@ -1443,7 +1443,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 %s%s
             // Extract caller identity and request ID
             String requestId = Auth.requestIdFromContext();
-            Caller caller = null;
+            Caller caller = Auth.callerFromContext();
             logger.debug("rpc method={} request_id={}", "%s", requestId);
             long startTime = System.currentTimeMillis();
             try {
@@ -1493,7 +1493,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 %s%s
             // Extract caller identity and request ID
             String requestId = Auth.requestIdFromContext();
-            Caller caller = null;
+            Caller caller = Auth.callerFromContext();
             logger.debug("rpc method={} request_id={}", "%s", requestId);
             try {
                 %s;
@@ -1527,7 +1527,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 %s%s
             // Extract caller identity and request ID
             String requestId = Auth.requestIdFromContext();
-            Caller caller = null;
+            Caller caller = Auth.callerFromContext();
             logger.debug("rpc method={} request_id={}", "%s", requestId);
             long startTime = System.currentTimeMillis();
 	            %s response;
@@ -1581,7 +1581,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 %s%s
             // Extract caller identity and request ID
             String requestId = Auth.requestIdFromContext();
-            Caller caller = null;
+            Caller caller = Auth.callerFromContext();
             logger.debug("rpc method={} request_id={}", "%s", requestId);
             %s response;
             try {
@@ -1647,7 +1647,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 %s
 %s
             String requestId = Auth.requestIdFromContext();
-            Caller caller = null;
+            Caller caller = Auth.callerFromContext();
             logger.debug("rpc method={} request_id={}", "%s", requestId);
             long startTime = System.currentTimeMillis();
             java.util.List<%s> __items;
@@ -1687,7 +1687,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 %s
 %s
             String requestId = Auth.requestIdFromContext();
-            Caller caller = null;
+            Caller caller = Auth.callerFromContext();
             logger.debug("rpc method={} request_id={}", "%s", requestId);
             java.util.List<%s> __items = %s;
 %s
@@ -1742,7 +1742,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 %s
 %s
             String requestId = Auth.requestIdFromContext();
-            Caller caller = null;
+            Caller caller = Auth.callerFromContext();
             logger.debug("rpc method={} request_id={}", "%s", requestId);
             long startTime = System.currentTimeMillis();
             final java.util.Iterator<%s> __it;
@@ -1782,7 +1782,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 %s
 %s
             String requestId = Auth.requestIdFromContext();
-            Caller caller = null;
+            Caller caller = Auth.callerFromContext();
             logger.debug("rpc method={} request_id={}", "%s", requestId);
             final java.util.Iterator<%s> __it = %s;
 %s
@@ -1961,7 +1961,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 %s
 %s
             String requestId = Auth.requestIdFromContext();
-            Caller caller = null;
+            Caller caller = Auth.callerFromContext();
             logger.debug("rpc method={} request_id={}", "%s", requestId);
             long startTime = System.currentTimeMillis();
 %s
@@ -1980,7 +1980,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 %s
 %s
             String requestId = Auth.requestIdFromContext();
-            Caller caller = null;
+            Caller caller = Auth.callerFromContext();
             logger.debug("rpc method={} request_id={}", "%s", requestId);
 %s
         } catch (ProtoException e) {
@@ -2006,7 +2006,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 %s
             // Extract caller identity and request ID
             String requestId = Auth.requestIdFromContext();
-            Caller caller = null;
+            Caller caller = Auth.callerFromContext();
             logger.debug("rpc method={} request_id={}", "%s", requestId);
             long startTime = System.currentTimeMillis();
             try {
@@ -2046,7 +2046,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 %s
             // Extract caller identity and request ID
             String requestId = Auth.requestIdFromContext();
-            Caller caller = null;
+            Caller caller = Auth.callerFromContext();
             logger.debug("rpc method={} request_id={}", "%s", requestId);
             %s;
         } catch (ProtoException e) {
@@ -2115,7 +2115,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 
         // Extract caller identity and request ID
         String requestId = Auth.requestIdFromContext();
-        Caller caller = null;
+        Caller caller = Auth.callerFromContext();
         logger.debug("rpc method={} request_id={}", "%s", requestId);
         long startTime = System.currentTimeMillis();
         AccountingMethod accountingMethod = %s;
@@ -2145,7 +2145,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 
         // Extract caller identity and request ID
         String requestId = Auth.requestIdFromContext();
-	        Caller caller = null;
+	        Caller caller = Auth.callerFromContext();
 	        logger.debug("rpc method={} request_id={}", "%s", requestId);
 	        try {
 	            return %s;
@@ -2220,7 +2220,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 
         // Extract caller identity and request ID
         String requestId = Auth.requestIdFromContext();
-        Caller caller = null;
+        Caller caller = Auth.callerFromContext();
         logger.debug("rpc method={} request_id={}", "%s", requestId);
         long startTime = System.currentTimeMillis();
         AccountingMethod accountingMethod = %s;
@@ -2250,7 +2250,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 
         // Extract caller identity and request ID
         String requestId = Auth.requestIdFromContext();
-	        Caller caller = null;
+	        Caller caller = Auth.callerFromContext();
 	        logger.debug("rpc method={} request_id={}", "%s", requestId);
 	        try {
 	            return %s;

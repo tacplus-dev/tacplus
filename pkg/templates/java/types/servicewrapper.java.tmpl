@@ -31,7 +31,8 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
     /** Authenticator interface for token-only verification (auth_any_user). */
     @FunctionalInterface
     public interface Authenticator {
-        void authenticate(String targetNamespace) throws ProtoException;
+        /** Returns the verified caller's identity claims for accounting. */
+        java.util.Map<String, String> authenticate(String targetNamespace) throws ProtoException;
     }
 
     private static final Logger logger = LoggerFactory.getLogger({{.ServerClassName}}.class);
@@ -123,16 +124,18 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
         this.emitter = emitter;
     }
 
-    private void emitRpcCompleted(AccountingMethod accountingMethod, long startTime, String requestId) {
+    private void emitRpcCompleted(AccountingMethod accountingMethod, long startTime,
+            java.util.Map<String, String> callerIdentity, String requestId) {
         AccountingManager.Emitter em = this.emitter;
         if (em == null) {
             return;
         }
         long durationMs = System.currentTimeMillis() - startTime;
-        em.rpcCompleted(accountingMethod, durationMs, new java.util.HashMap<>(), requestId);
+        em.rpcCompleted(accountingMethod, durationMs, callerIdentity, requestId);
     }
 
-    private void emitRpcError(AccountingMethod accountingMethod, Throwable t, long startTime, String requestId) {
+    private void emitRpcError(AccountingMethod accountingMethod, Throwable t, long startTime,
+            java.util.Map<String, String> callerIdentity, String requestId) {
         AccountingManager.Emitter em = this.emitter;
         if (em == null) {
             return;
@@ -141,13 +144,14 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
         io.grpc.Status.Code code = AccountingManager.grpcCodeFromError(t);
         em.rpcError(accountingMethod, code.value(), t.getMessage(), durationMs,
                 AccountingManager.errorContextFromError(t, AccountingManager.shouldCaptureStack(code)),
-                new java.util.HashMap<>(), requestId);
+                callerIdentity, requestId);
     }
 
     private <T> StreamObserver<T> accountingResponseObserver(
             StreamObserver<T> delegate,
             AccountingMethod accountingMethod,
             long startTime,
+            java.util.Map<String, String> callerIdentity,
             String requestId,
             java.util.concurrent.atomic.AtomicBoolean accounted) {
         java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -161,7 +165,7 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
             public void onError(Throwable t) {
                 if (closed.compareAndSet(false, true)) {
                     if (accounted.compareAndSet(false, true)) {
-                        emitRpcError(accountingMethod, t, startTime, requestId);
+                        emitRpcError(accountingMethod, t, startTime, callerIdentity, requestId);
                     }
                     delegate.onError(t);
                 }
@@ -171,7 +175,7 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
             public void onCompleted() {
                 if (closed.compareAndSet(false, true)) {
                     if (accounted.compareAndSet(false, true)) {
-                        emitRpcCompleted(accountingMethod, startTime, requestId);
+                        emitRpcCompleted(accountingMethod, startTime, callerIdentity, requestId);
                     }
                     delegate.onCompleted();
                 }
@@ -183,6 +187,7 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
             StreamObserver<T> delegate,
             AccountingMethod accountingMethod,
             long startTime,
+            java.util.Map<String, String> callerIdentity,
             String requestId,
             java.util.concurrent.atomic.AtomicBoolean accounted) {
         java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -196,7 +201,7 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
                     delegate.onNext(value);
                 } catch (Throwable t) {
                     if (accounted.compareAndSet(false, true)) {
-                        emitRpcError(accountingMethod, t, startTime, requestId);
+                        emitRpcError(accountingMethod, t, startTime, callerIdentity, requestId);
                     }
                     throw t;
                 }
@@ -206,7 +211,7 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
             public void onError(Throwable t) {
                 if (closed.compareAndSet(false, true)) {
                     if (accounted.compareAndSet(false, true)) {
-                        emitRpcError(accountingMethod, t, startTime, requestId);
+                        emitRpcError(accountingMethod, t, startTime, callerIdentity, requestId);
                     }
                     delegate.onError(t);
                 }
@@ -223,29 +228,38 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
 {{- end}}
 
 {{- if .RequiresAuth}}
-    /** Check authorization. Always enforced — the authorizer is mandatory. */
-    private void checkAuth(String fullMethod, Object request) throws ProtoException {
-        authorizer.authorize(fullMethod, request);
+    /**
+     * Check authorization. Always enforced — the authorizer is mandatory.
+     * Returns the verified caller's identity claims, which are what accounting
+     * records attribute the call to.
+     */
+    private java.util.Map<String, String> checkAuth(String fullMethod, Object request) throws ProtoException {
+        return {{.AuthorizerFQN}}.identityClaims(authorizer.authorize(fullMethod, request));
     }
 {{- else}}
-    /** No authorization — this service is auth_disabled / c2d by proto annotation. */
-    private void checkAuth(String fullMethod, Object request) throws ProtoException {
+    /**
+     * No authorization — this service is auth_disabled / c2d by proto annotation.
+     * Nothing verified a caller, so accounting records carry no identity.
+     */
+    private java.util.Map<String, String> checkAuth(String fullMethod, Object request) throws ProtoException {
+        return java.util.Collections.emptyMap();
     }
 {{- end}}
 
     /** Check authentication at the root namespace. Fail-closed if not wired. */
-    private void checkAuthenticate() throws ProtoException {
-        checkAuthenticate("/");
+    private java.util.Map<String, String> checkAuthenticate() throws ProtoException {
+        return checkAuthenticate("/");
     }
 
     /** Check authentication and enforce a fixed namespace target. */
-    private void checkAuthenticate(String targetNamespace) throws ProtoException {
+    private java.util.Map<String, String> checkAuthenticate(String targetNamespace) throws ProtoException {
         Authenticator auth = this.authenticator;
         if (auth == null) {
             throw ProtoException.newErrUnauthorized(null,
                     "authenticator not configured — auth is mandatory and cannot be disabled");
         }
-        auth.authenticate(targetNamespace);
+        java.util.Map<String, String> identity = auth.authenticate(targetNamespace);
+        return identity == null ? java.util.Collections.emptyMap() : identity;
     }
 
     /**

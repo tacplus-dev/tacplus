@@ -170,12 +170,12 @@ func TestJavaClientStreamingAccountingUsesAsyncLifecycle(t *testing.T) {
 	for _, want := range []string{
 		"AccountingMethod accountingMethod = AccountingMethod.newBuilder().setContract(Services.ContractRPCs.CONTRACT_RPCS_UPLOAD).build();",
 		"java.util.concurrent.atomic.AtomicBoolean __accounted = new java.util.concurrent.atomic.AtomicBoolean(false);",
-		"accountingResponseObserver(responseObserver, accountingMethod, startTime, requestId, __accounted)",
+		"accountingResponseObserver(responseObserver, accountingMethod, startTime, callerIdentity, requestId, __accounted)",
 		"validatingResponseObserver(__accountingResponseObserver, value -> Helpers.validateContractResponse(value))",
 		"validatingRequestObserver(handler.upload(caller, validatingResponseObserver(__accountingResponseObserver",
 		"Helpers.validateContractRequest(value);",
 		"}, __accountingResponseObserver);",
-		"return accountingRequestObserver(__handlerObserver, accountingMethod, startTime, requestId, __accounted);",
+		"return accountingRequestObserver(__handlerObserver, accountingMethod, startTime, callerIdentity, requestId, __accounted);",
 		"__accountingResponseObserver.onError(toGrpcError(e));",
 	} {
 		if !strings.Contains(rendered, want) {
@@ -222,12 +222,12 @@ func TestJavaBidiAccountingUsesAsyncLifecycle(t *testing.T) {
 	for _, want := range []string{
 		"AccountingMethod accountingMethod = AccountingMethod.newBuilder().setContract(Services.ContractRPCs.CONTRACT_RPCS_CHAT).build();",
 		"java.util.concurrent.atomic.AtomicBoolean __accounted = new java.util.concurrent.atomic.AtomicBoolean(false);",
-		"accountingResponseObserver(responseObserver, accountingMethod, startTime, requestId, __accounted)",
+		"accountingResponseObserver(responseObserver, accountingMethod, startTime, callerIdentity, requestId, __accounted)",
 		"validatingResponseObserver(__accountingResponseObserver, value -> Helpers.validateContractEvent(value))",
 		"validatingRequestObserver(handler.chat(caller, validatingResponseObserver(__accountingResponseObserver",
 		"Helpers.validateContractRequest(value);",
 		"}, __accountingResponseObserver);",
-		"return accountingRequestObserver(__handlerObserver, accountingMethod, startTime, requestId, __accounted);",
+		"return accountingRequestObserver(__handlerObserver, accountingMethod, startTime, callerIdentity, requestId, __accounted);",
 		"__accountingResponseObserver.onError(toGrpcError(e));",
 	} {
 		if !strings.Contains(rendered, want) {
@@ -428,5 +428,69 @@ func TestJavaStreamPreflightUsesRootNamespaceGate(t *testing.T) {
 				t.Fatalf("Java stream preflight must not use token-only checkAuthenticate():\n%s", rendered)
 			}
 		})
+	}
+}
+
+// F10: an accounting record has to name the principal the Authorizer verified.
+// The wrapper used to hand every emit a fresh empty map, so the only thing
+// tying a record to a caller was the caller-written x-request-id header.
+func TestJavaAccountingCarriesVerifiedCallerIdentity(t *testing.T) {
+	accounting := map[string]service.AccountingInfo{
+		"contract": {EnumName: "Contract", RPCs: map[string]bool{"Read": true, "PublicRead": true}},
+	}
+
+	authorized := generateJavaGRPCWrapper(
+		&parser.MethodInfo{
+			Name:           "Read",
+			InputType:      "ContractRequest",
+			OutputType:     "ContractResponse",
+			FullInputType:  "contractclient.ContractRequest",
+			FullOutputType: "contractclient.ContractResponse",
+		},
+		"ContractApi", "contract",
+		"Contractclient.ContractRequest", "Contractclient.ContractResponse",
+		"", "", false, false, accounting,
+		"contractclient", "contract",
+		map[string]string{}, proto.SkippedTraceTypes{}, nil, nil, nil,
+	)
+
+	if strings.Contains(authorized, "new java.util.HashMap<>(), requestId") {
+		t.Fatalf("accounting must not emit an empty identity map on an authorized RPC:\n%s", authorized)
+	}
+	if !strings.Contains(authorized, `callerIdentity = checkAuth("ContractApi/Read", request);`) {
+		t.Fatalf("authorized RPC must source its identity from checkAuth:\n%s", authorized)
+	}
+	for _, want := range []string{
+		"em.rpcCompleted(accountingMethod, durationMs, callerIdentity, requestId);",
+		"callerIdentity, requestId);",
+	} {
+		if !strings.Contains(authorized, want) {
+			t.Fatalf("authorized RPC accounting missing %q:\n%s", want, authorized)
+		}
+	}
+
+	// auth_disabled: nothing verifies a caller, so the record must carry no
+	// identity at all rather than something the caller asserted.
+	noAuth := generateJavaGRPCWrapper(
+		&parser.MethodInfo{
+			Name:           "PublicRead",
+			InputType:      "ContractRequest",
+			OutputType:     "ContractResponse",
+			FullInputType:  "contractclient.ContractRequest",
+			FullOutputType: "contractclient.ContractResponse",
+			AuthDisabled:   true,
+		},
+		"ContractApi", "contract",
+		"Contractclient.ContractRequest", "Contractclient.ContractResponse",
+		"", "", false, true, accounting,
+		"contractclient", "contract",
+		map[string]string{}, proto.SkippedTraceTypes{}, nil, nil, nil,
+	)
+
+	if !strings.Contains(noAuth, "java.util.Map<String, String> callerIdentity = java.util.Collections.emptyMap();") {
+		t.Fatalf("auth_disabled RPC must account with an empty identity:\n%s", noAuth)
+	}
+	if strings.Contains(noAuth, "checkAuth(") {
+		t.Fatalf("auth_disabled RPC must not call checkAuth:\n%s", noAuth)
 	}
 }

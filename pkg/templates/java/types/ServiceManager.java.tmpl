@@ -818,11 +818,11 @@ public class ServiceManager implements AutoCloseable {
         {{.WrapperVarName}}.setAuthenticateFunc(({{.ServerClassName}}.Authenticator) targetNamespace -> {
             String authHeader = Authorizer.AUTH_HEADER_CTX_KEY.get();
             if (authHeader == null) {
-                authorizer.authenticateWithToken(authHeader);
+                return Authorizer.identityClaims(authorizer.authenticateWithToken(authHeader));
             } else if (targetNamespace == null) {
-                authorizer.authenticateWithToken(authHeader);
+                return Authorizer.identityClaims(authorizer.authenticateWithToken(authHeader));
             } else {
-                authorizer.authenticateAtOrBelowWithToken(authHeader, targetNamespace);
+                return Authorizer.identityClaims(authorizer.authenticateAtOrBelowWithToken(authHeader, targetNamespace));
             }
         });
 {{- end}}

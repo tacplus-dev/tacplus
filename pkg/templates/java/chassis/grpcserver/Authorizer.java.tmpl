@@ -385,20 +385,22 @@ public class Authorizer {
     /**
      * Authorizes a request using the auth header from gRPC Context.
      * Requires {@link #headerCaptureInterceptor()} to be installed on the gRPC server.
+     *
+     * @return the caller's verified token — the only authenticated identity for this call
      */
-    public void authorize(String fullMethod, Object request) throws ProtoException {
+    public TokenWrapper authorize(String fullMethod, Object request) throws ProtoException {
         // Always enforce: authorizeWithToken throws on a null/empty header. A missing
         // token must be rejected, never silently allowed. Methods that legitimately
         // need no token are auth_disabled by annotation and never call this.
-        authorizeWithToken(AUTH_HEADER_CTX_KEY.get(), fullMethod, request);
+        return authorizeWithToken(AUTH_HEADER_CTX_KEY.get(), fullMethod, request);
     }
 
     /**
      * Authorizes a request using the authorization header value (back-compat — no request body).
      * Use {@link #authorizeWithToken(String, String, Object)} for level-or-below enforcement.
      */
-    public void authorizeWithToken(String authHeader, String fullMethod) throws ProtoException {
-        authorizeWithToken(authHeader, fullMethod, null);
+    public TokenWrapper authorizeWithToken(String authHeader, String fullMethod) throws ProtoException {
+        return authorizeWithToken(authHeader, fullMethod, null);
     }
 
     /**
@@ -406,9 +408,10 @@ public class Authorizer {
      *
      * @param authHeader the raw Authorization header value (e.g. "Bearer eyJ...")
      * @param fullMethod the full gRPC method name
+     * @return the caller's verified token — the only authenticated identity for this call
      * @throws ProtoException if authorization fails
      */
-    public void authorizeWithToken(String authHeader, String fullMethod, Object request) throws ProtoException {
+    public TokenWrapper authorizeWithToken(String authHeader, String fullMethod, Object request) throws ProtoException {
         TokenWrapper tw = verifyBearer(authHeader);
 
         // S2S path: service/workload tokens carry structured identity claims
@@ -445,7 +448,7 @@ public class Authorizer {
 
             // Level-or-below check (applies to S2S when target_namespace_field is set).
             checkTargetNamespace(methodName, tw.getNamespace(), request);
-            return;
+            return tw;
         }
 
         // C2S path: user tokens carry service_entitlements.
@@ -463,6 +466,7 @@ public class Authorizer {
         // Level-or-below check: caller's namespace must be at or above the target namespace
         // named by the method's target_namespace_field annotation.
         checkTargetNamespace(methodName, tw.getNamespace(), request);
+        return tw;
     }
 
     /**
@@ -470,23 +474,53 @@ public class Authorizer {
      * Does NOT check entitlements. Used for auth_any_user services.
      *
      * @param authHeader the raw Authorization header value (e.g. "Bearer eyJ...")
+     * @return the caller's verified token — the only authenticated identity for this call
      * @throws ProtoException if authentication fails
      */
-    public void authenticateWithToken(String authHeader) throws ProtoException {
-        verifyBearer(authHeader);
+    public TokenWrapper authenticateWithToken(String authHeader) throws ProtoException {
+        TokenWrapper tw = verifyBearer(authHeader);
         // auth_any_user: token is valid and correctly scoped — allow.
+        return tw;
     }
 
     /**
      * Authenticates a request and enforces the universal namespace rule against
      * a fixed target namespace. Empty targetNamespace defaults to root ("/").
      */
-    public void authenticateAtOrBelowWithToken(String authHeader, String targetNamespace) throws ProtoException {
+    public TokenWrapper authenticateAtOrBelowWithToken(String authHeader, String targetNamespace) throws ProtoException {
         TokenWrapper tw = verifyBearer(authHeader);
         String target = (targetNamespace == null || targetNamespace.isEmpty()) ? "/" : targetNamespace;
         if (!Spiffe.isAtOrBelow(tw.getNamespace(), target)) {
             throw ProtoException.newErrPermissionDenied(null,
                     "caller namespace \"" + tw.getNamespace() + "\" is not at-or-above target \"" + target + "\"");
+        }
+        return tw;
+    }
+
+    /**
+     * Returns the accounting identity of a verified token: the claims that name
+     * the principal an audit record is attributed to. Same claim set the Go
+     * chassis records, so a record means the same thing in either language.
+     *
+     * <p>A null token means nothing verified an identity on this call — the map
+     * is empty, and the record says "no authenticated caller" rather than
+     * repeating something the caller chose.
+     */
+    public static java.util.Map<String, String> identityClaims(TokenWrapper tw) {
+        java.util.Map<String, String> identity = new java.util.LinkedHashMap<>();
+        if (tw == null) {
+            return identity;
+        }
+        putIfPresent(identity, "sub", tw.getSubject());
+        putIfPresent(identity, "aud", tw.getAudience());
+        putIfPresent(identity, "iss", tw.getIssuer());
+        putIfPresent(identity, "azp", tw.getAzp());
+        return identity;
+    }
+
+    private static void putIfPresent(java.util.Map<String, String> identity, String key, String value) {
+        if (value != null && !value.isEmpty()) {
+            identity.put(key, value);
         }
     }
 

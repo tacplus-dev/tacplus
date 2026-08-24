@@ -171,6 +171,14 @@ cert-stream-rust:
 platform-generation:
   {{lock}} bash cross-test/platform-generation/run.sh
 
+# Wire-level gate: accounting records carry the identity the Authorizer
+# VERIFIED, and carry none at all when nothing verified one. Guards F10 — the
+# generated Java wrapper used to emit every record with an empty identity map,
+# leaving the caller-written x-request-id as the only correlation key.
+# Needs the go and java (maven) toolchains. Not part of `just test`.
+accounting-identity:
+  {{lock}} bash cross-test/accounting-identity/run.sh
+
 # Behavioral coverage of W2S request (ingress) validation in the generated
 # Rust REST dispatch module.
 w2s-validate:

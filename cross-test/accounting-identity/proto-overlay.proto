@@ -1,0 +1,16 @@
+  // --- accounting-identity gate overlay (F10) ---------------------------------
+  // ContractAuditApi is the one fixture service in the generated accounting
+  // enum, and every RPC it declares is PUBLIC_NO_AUTH. The gate needs RPCs that
+  // DO verify a caller, one per authorization path the wrapper has, so the
+  // accounting record has a verified identity to carry.
+
+  // AUTH_ANY_USER — reaches the wrapper's checkAuthenticate() path.
+  rpc GetAudit(AuditRequest) returns (AuditResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
+  }
+
+  // AUTH_ENTITLED_USERS — reaches the wrapper's checkAuth() path.
+  rpc ExecuteEntitledAudit(AuditRequest) returns (AuditResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ENTITLED_USERS]};
+  }
+

@@ -1074,19 +1074,22 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 	// cred_pair in the body). Every other method always enforces.
 	var authCheck string
 	if authDisabled {
-		authCheck = ""
+		// Nothing verifies a caller here, so accounting records carry no identity.
+		authCheck = `        java.util.Map<String, String> callerIdentity = java.util.Collections.emptyMap();`
 	} else if authAnyUser {
 		authCheck = fmt.Sprintf(`        // Check authentication (auth_any_user: fixed namespace target)
+        java.util.Map<String, String> callerIdentity;
         try {
-            checkAuthenticate(%q);
+            callerIdentity = checkAuthenticate(%q);
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return;
         }`, authAnyUserTarget)
 	} else {
 		authCheck = fmt.Sprintf(`        // Check authorization
+        java.util.Map<String, String> callerIdentity;
         try {
-            checkAuth("%s", request);
+            callerIdentity = checkAuth("%s", request);
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return;
@@ -1126,14 +1129,16 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 			// auth_disabled: no auth check, but the method body still needs the
 			// isTracing/isNoop declarations the trace block normally provides.
 			traceAuthCheck = `            boolean isTracing = !request.getTraceId().isEmpty();
-            boolean isNoop = isTracing && request.getNoop();`
+            boolean isNoop = isTracing && request.getNoop();
+            java.util.Map<String, String> callerIdentity = java.util.Collections.emptyMap();`
 		} else if authAnyUser {
 			// Auth runs unconditionally: noop skips the handler but not auth.
 			traceAuthCheck = fmt.Sprintf(`            boolean isTracing = !request.getTraceId().isEmpty();
             boolean isNoop = isTracing && request.getNoop();
             // Check authentication (auth_any_user: fixed namespace target)
+            java.util.Map<String, String> callerIdentity;
             try {
-                checkAuthenticate(%q);
+                callerIdentity = checkAuthenticate(%q);
             } catch (ProtoException e) {
                 responseObserver.onError(toGrpcError(e));
                 return;
@@ -1143,8 +1148,9 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 			traceAuthCheck = fmt.Sprintf(`            boolean isTracing = !request.getTraceId().isEmpty();
             boolean isNoop = isTracing && request.getNoop();
             // Check authorization
+            java.util.Map<String, String> callerIdentity;
             try {
-                checkAuth("%s", request);
+                callerIdentity = checkAuth("%s", request);
             } catch (ProtoException e) {
                 responseObserver.onError(toGrpcError(e));
                 return;
@@ -1315,7 +1321,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
                     io.grpc.Status.Code code = AccountingManager.grpcCodeFromError(handlerEx);
                     em.rpcError(accountingMethod, code.value(), handlerEx.getMessage(), durationMs,
                         AccountingManager.errorContextFromError(handlerEx, AccountingManager.shouldCaptureStack(code)),
-                        new java.util.HashMap<>(), requestId);
+                        callerIdentity, requestId);
                 }
                 throw handlerEx;
             }
@@ -1323,7 +1329,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
             AccountingManager.Emitter em = this.emitter;
             if (em != null) {
                 AccountingMethod accountingMethod = %s;
-                em.rpcCompleted(accountingMethod, durationMs, new java.util.HashMap<>(), requestId);
+                em.rpcCompleted(accountingMethod, durationMs, callerIdentity, requestId);
             }
 %s
             responseObserver.onNext(response);
@@ -1451,7 +1457,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
                     io.grpc.Status.Code code = AccountingManager.grpcCodeFromError(handlerEx);
                     em.rpcError(accountingMethod, code.value(), handlerEx.getMessage(), durationMs,
                         AccountingManager.errorContextFromError(handlerEx, AccountingManager.shouldCaptureStack(code)),
-                        new java.util.HashMap<>(), requestId);
+                        callerIdentity, requestId);
                 }
                 throw handlerEx;
             }
@@ -1459,7 +1465,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
             AccountingManager.Emitter em = this.emitter;
             if (em != null) {
                 AccountingMethod accountingMethod = %s;
-                em.rpcCompleted(accountingMethod, durationMs, new java.util.HashMap<>(), requestId);
+                em.rpcCompleted(accountingMethod, durationMs, callerIdentity, requestId);
             }
             %s
             responseObserver.onNext(com.google.protobuf.Empty.getDefaultInstance());
@@ -1537,7 +1543,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
                     io.grpc.Status.Code code = AccountingManager.grpcCodeFromError(handlerEx);
                     em.rpcError(accountingMethod, code.value(), handlerEx.getMessage(), durationMs,
                         AccountingManager.errorContextFromError(handlerEx, AccountingManager.shouldCaptureStack(code)),
-                        new java.util.HashMap<>(), requestId);
+                        callerIdentity, requestId);
                 }
                 throw handlerEx;
             }
@@ -1545,7 +1551,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
             AccountingManager.Emitter em = this.emitter;
             if (em != null) {
 	                AccountingMethod accountingMethod = %s;
-	                em.rpcCompleted(accountingMethod, durationMs, new java.util.HashMap<>(), requestId);
+	                em.rpcCompleted(accountingMethod, durationMs, callerIdentity, requestId);
 	            }
 	%s
 	            responseObserver.onNext(response);
@@ -1655,7 +1661,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
                     io.grpc.Status.Code code = AccountingManager.grpcCodeFromError(handlerEx);
                     em.rpcError(accountingMethod, code.value(), handlerEx.getMessage(), durationMs,
                         AccountingManager.errorContextFromError(handlerEx, AccountingManager.shouldCaptureStack(code)),
-                        new java.util.HashMap<>(), requestId);
+                        callerIdentity, requestId);
                 }
                 throw handlerEx;
             }
@@ -1664,7 +1670,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
             AccountingManager.Emitter em = this.emitter;
             if (em != null) {
                 AccountingMethod accountingMethod = %s;
-                em.rpcCompleted(accountingMethod, durationMs, new java.util.HashMap<>(), requestId);
+                em.rpcCompleted(accountingMethod, durationMs, callerIdentity, requestId);
             }
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
@@ -1750,7 +1756,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
                     io.grpc.Status.Code code = AccountingManager.grpcCodeFromError(handlerEx);
                     em.rpcError(accountingMethod, code.value(), handlerEx.getMessage(), durationMs,
                         AccountingManager.errorContextFromError(handlerEx, AccountingManager.shouldCaptureStack(code)),
-                        new java.util.HashMap<>(), requestId);
+                        callerIdentity, requestId);
                 }
                 throw handlerEx;
             }
@@ -1759,7 +1765,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
             AccountingManager.Emitter em = this.emitter;
             if (em != null) {
                 AccountingMethod accountingMethod = %s;
-                em.rpcCompleted(accountingMethod, durationMs, new java.util.HashMap<>(), requestId);
+                em.rpcCompleted(accountingMethod, durationMs, callerIdentity, requestId);
             }
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
@@ -1807,7 +1813,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
                         AccountingManager.Emitter em = this.emitter;
                         if (em != null) {
                             AccountingMethod accountingMethod = %s;
-                            em.rpcCompleted(accountingMethod, durationMs, new java.util.HashMap<>(), requestId);
+                            em.rpcCompleted(accountingMethod, durationMs, callerIdentity, requestId);
                         }`, accountingMethodExpr)
 			watchErrorAccounting = fmt.Sprintf(`
                         long durationMs = System.currentTimeMillis() - startTime;
@@ -1817,7 +1823,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
                             io.grpc.Status.Code code = AccountingManager.grpcCodeFromError(t);
                             em.rpcError(accountingMethod, code.value(), t.getMessage(), durationMs,
                                 AccountingManager.errorContextFromError(t, AccountingManager.shouldCaptureStack(code)),
-                                new java.util.HashMap<>(), requestId);
+                                callerIdentity, requestId);
                         }`, accountingMethodExpr)
 		}
 		// The request only supplies a resume point when it declares a
@@ -2013,7 +2019,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
                     io.grpc.Status.Code code = AccountingManager.grpcCodeFromError(handlerEx);
                     em.rpcError(accountingMethod, code.value(), handlerEx.getMessage(), durationMs,
                         AccountingManager.errorContextFromError(handlerEx, AccountingManager.shouldCaptureStack(code)),
-                        new java.util.HashMap<>(), requestId);
+                        callerIdentity, requestId);
                 }
                 throw handlerEx;
             }
@@ -2021,7 +2027,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
             AccountingManager.Emitter em = this.emitter;
             if (em != null) {
                 AccountingMethod accountingMethod = %s;
-                em.rpcCompleted(accountingMethod, durationMs, new java.util.HashMap<>(), requestId);
+                em.rpcCompleted(accountingMethod, durationMs, callerIdentity, requestId);
             }
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
@@ -2055,11 +2061,13 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 		// Client streaming — authorize on stream open, delegate to handler
 		var authCheckNoReq string
 		if authDisabled {
-			authCheckNoReq = ""
+			// Nothing verifies a caller here, so accounting records carry no identity.
+			authCheckNoReq = `        java.util.Map<String, String> callerIdentity = java.util.Collections.emptyMap();`
 		} else if authAnyUser {
 			authCheckNoReq = fmt.Sprintf(`        // Check authentication (auth_any_user: fixed namespace target)
+        java.util.Map<String, String> callerIdentity;
         try {
-            checkAuthenticate(%q);
+            callerIdentity = checkAuthenticate(%q);
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return new StreamObserver<%s>() {
@@ -2070,8 +2078,9 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
         }`, authAnyUserTarget, inputType, inputType)
 		} else if needsStreamMessageAuth {
 			authCheckNoReq = fmt.Sprintf(`        // Check authentication before per-message target namespace authorization
+        java.util.Map<String, String> callerIdentity;
         try {
-            checkAuthenticate("/");
+            callerIdentity = checkAuthenticate("/");
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return new StreamObserver<%s>() {
@@ -2082,8 +2091,9 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
         }`, inputType, inputType)
 		} else {
 			authCheckNoReq = fmt.Sprintf(`        // Check authorization
+        java.util.Map<String, String> callerIdentity;
         try {
-            checkAuth("%s", null);
+            callerIdentity = checkAuth("%s", null);
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return new StreamObserver<%s>() {
@@ -2111,10 +2121,10 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
         AccountingMethod accountingMethod = %s;
         java.util.concurrent.atomic.AtomicBoolean __accounted = new java.util.concurrent.atomic.AtomicBoolean(false);
         StreamObserver<%s> __accountingResponseObserver =
-                accountingResponseObserver(responseObserver, accountingMethod, startTime, requestId, __accounted);
+                accountingResponseObserver(responseObserver, accountingMethod, startTime, callerIdentity, requestId, __accounted);
         try {
             StreamObserver<%s> __handlerObserver = %s;
-            return accountingRequestObserver(__handlerObserver, accountingMethod, startTime, requestId, __accounted);
+            return accountingRequestObserver(__handlerObserver, accountingMethod, startTime, callerIdentity, requestId, __accounted);
         } catch (Exception e) {
             __accountingResponseObserver.onError(toGrpcError(e));
             return new StreamObserver<%s>() {
@@ -2156,11 +2166,13 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 		// Bidirectional streaming — authorize on stream open, delegate to handler
 		var authCheckNoReq string
 		if authDisabled {
-			authCheckNoReq = ""
+			// Nothing verifies a caller here, so accounting records carry no identity.
+			authCheckNoReq = `        java.util.Map<String, String> callerIdentity = java.util.Collections.emptyMap();`
 		} else if authAnyUser {
 			authCheckNoReq = fmt.Sprintf(`        // Check authentication (auth_any_user: fixed namespace target)
+        java.util.Map<String, String> callerIdentity;
         try {
-            checkAuthenticate(%q);
+            callerIdentity = checkAuthenticate(%q);
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return new StreamObserver<%s>() {
@@ -2171,8 +2183,9 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
         }`, authAnyUserTarget, inputType, inputType)
 		} else if needsStreamMessageAuth {
 			authCheckNoReq = fmt.Sprintf(`        // Check authentication before per-message target namespace authorization
+        java.util.Map<String, String> callerIdentity;
         try {
-            checkAuthenticate("/");
+            callerIdentity = checkAuthenticate("/");
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return new StreamObserver<%s>() {
@@ -2183,8 +2196,9 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
         }`, inputType, inputType)
 		} else {
 			authCheckNoReq = fmt.Sprintf(`        // Check authorization
+        java.util.Map<String, String> callerIdentity;
         try {
-            checkAuth("%s", null);
+            callerIdentity = checkAuth("%s", null);
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return new StreamObserver<%s>() {
@@ -2212,10 +2226,10 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
         AccountingMethod accountingMethod = %s;
         java.util.concurrent.atomic.AtomicBoolean __accounted = new java.util.concurrent.atomic.AtomicBoolean(false);
         StreamObserver<%s> __accountingResponseObserver =
-                accountingResponseObserver(responseObserver, accountingMethod, startTime, requestId, __accounted);
+                accountingResponseObserver(responseObserver, accountingMethod, startTime, callerIdentity, requestId, __accounted);
         try {
             StreamObserver<%s> __handlerObserver = %s;
-            return accountingRequestObserver(__handlerObserver, accountingMethod, startTime, requestId, __accounted);
+            return accountingRequestObserver(__handlerObserver, accountingMethod, startTime, callerIdentity, requestId, __accounted);
         } catch (Exception e) {
             __accountingResponseObserver.onError(toGrpcError(e));
             return new StreamObserver<%s>() {

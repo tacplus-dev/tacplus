@@ -132,10 +132,11 @@ func (es *javaEgressSanitizer) envelopeSanFields(fullType, servicePackage string
 }
 
 // javaEgressSanitizePreamble renders the once-per-RPC setup: collect the
-// caller's token data grants from the JWT payload in the gRPC context
-// (fail-closed — a missing/unparseable payload or claim yields no grants, hence
-// the most-protective view), snapshot the ANONYMIZE key, and build each needed
-// per-type entitlement. targets may contain duplicates; deduped preserving order.
+// caller's token data grants from the caller's VERIFIED token (fail-closed — an
+// RPC where nothing verified a token has no caller and therefore no grants,
+// hence the most-protective view), snapshot the ANONYMIZE key, and build each
+// needed per-type entitlement. targets may contain duplicates; deduped
+// preserving order.
 func javaEgressSanitizePreamble(targets []javaSanTarget) string {
 	if len(targets) == 0 {
 		return ""
@@ -143,26 +144,16 @@ func javaEgressSanitizePreamble(targets []javaSanTarget) string {
 	var b strings.Builder
 	b.WriteString(`
             // Egress data entitlement (RED-1): the wrapper — never the handler — sanitizes
-            // every emitted record. Grants come from the caller's token (OPA-stamped);
-            // absent caller/claim/grant is fail-closed to the most-protective view.
+            // every emitted record. Grants come from the caller's VERIFIED token
+            // (OPA-stamped); absent caller/claim/grant is fail-closed to the
+            // most-protective view.
             java.util.Set<String> __dataGrants = new java.util.HashSet<>();
-            try {
-                String __claimsPayload = Auth.tokenPayloadFromContext();
-                if (__claimsPayload != null && !__claimsPayload.isEmpty()) {
-                    com.google.protobuf.Struct.Builder __claims = com.google.protobuf.Struct.newBuilder();
-                    com.google.protobuf.util.JsonFormat.parser().ignoringUnknownFields().merge(__claimsPayload, __claims);
-                    com.google.protobuf.Value __se = __claims.build().getFieldsOrDefault("service_entitlements", null);
-                    if (__se != null && __se.hasStructValue()) {
-                        com.google.protobuf.Value __dg = __se.getStructValue().getFieldsOrDefault("data_grants", null);
-                        if (__dg != null && __dg.hasListValue()) {
-                            for (com.google.protobuf.Value __v : __dg.getListValue().getValuesList()) {
-                                if (__v.hasStringValue()) { __dataGrants.add(__v.getStringValue()); }
-                            }
-                        }
-                    }
+            TokenWrapper __callerToken = Auth.verifiedTokenFromContext();
+            if (__callerToken != null) {
+                var __serviceEntitlements = __callerToken.getServiceEntitlements();
+                if (__serviceEntitlements != null) {
+                    __dataGrants.addAll(__serviceEntitlements.getDataGrantsList());
                 }
-            } catch (Exception __claimsEx) {
-                // fail-closed: unparseable claims yield no grants
             }
             final byte[] __hmacKey = this.anonymizeHmacKey;
 `)

@@ -179,6 +179,12 @@ platform-generation:
 accounting-identity:
   {{lock}} bash cross-test/accounting-identity/run.sh
 
+# Wire-level gate for claims provenance in the generated Java chassis (F11):
+# identity claims must come from a VERIFIED token, never from a base64 decode of
+# the bearer header. Local/manual — needs the go and java toolchains.
+claims-provenance:
+  {{lock}} bash cross-test/claims-provenance/run.sh
+
 # Behavioral coverage of W2S request (ingress) validation in the generated
 # Rust REST dispatch module.
 w2s-validate:

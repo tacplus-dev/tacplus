@@ -1,0 +1,15 @@
+// Overlay applied to contract/contract.proto's ContractApi service by run.sh.
+//
+// A no-auth RPC returning a record that carries a (spec.redact) MAY_REDACT
+// field. That combination — no verification anywhere on the path, RED-1 egress
+// sanitization on the response — is the shape F11 is about. The canonical
+// consumer-contract fixture has no such method, so this gate adds one to its
+// OWN copy of the tree rather than changing the shared fixture.
+//
+// Anonymous COLLECTION reads are refused by the generator at any streaming
+// tier, so this is a Tier-1 unary read.
+  rpc GetPublicEvent(ContractRequest) returns (ContractEvent) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
+    option (spec.rest_path) = "contract/public-event";
+  }
+

@@ -135,6 +135,17 @@ func Generate(config *tactype.Config) error {
 		return fmt.Errorf("failed to generate PersistedStore enum: %w", err)
 	}
 
+	// generated/services.proto and generated/accounting_method.proto were first
+	// written by CopyAndPrepareProtoDir, from the UN-injected source protos. The
+	// injectors above can add C2S services — the record query plane's c2s half
+	// does — and a C2S RPC needs a <Svc>RPCs enum value and an AccountingMethod
+	// field like any hand-authored one. Re-run the scan over the INJECTED tree so
+	// protoc below compiles the complete set; without this the generated service
+	// wrappers name an AccountingMethod field the compiled type does not have.
+	if _, _, _, err := proto.ScanAndGenerateConfigHolder(config.InputDir, protoDir); err != nil {
+		return fmt.Errorf("failed to regenerate generated/*.proto after service injection: %w", err)
+	}
+
 	// Auto-register virtual service gRPC servers based on proto annotations.
 	if isOpaServer, err := proto.IsOpaServer(config.FlatProtoDir, config.SelfPackage); err != nil {
 		return fmt.Errorf("failed to check OPA server status: %w", err)

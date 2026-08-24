@@ -41,18 +41,27 @@ type recordFilter struct {
 }
 
 // AppendRecordMapServiceToProtos scans all proto files for spec.record messages
-// and appends a RecordMap service to the proto of every record_store (stratum).
+// and appends the record query plane to the proto of every record_store (stratum).
 //
-// RecordMap is the record-store query plane: per-record-type, per-caller REFINABLE
-// QUERIES over immutable records. Each record type T gets:
+// The plane is the record store's per-record-type, per-caller REFINABLE QUERIES
+// over immutable records, and it is emitted on BOTH caller surfaces as two
+// sibling services — a service may declare only one surface, so one service
+// cannot serve both (see the surface comment in appendRecordMapToServiceProto):
 //
-//	rpc Open<T>Query(...) returns (QueryHandle);    // snapshot or living query → handle
-//	rpc Refine<T>(...) returns (QueryStats);         // narrow the predicate (filterable types)
-//	rpc Count<T>(QueryHandle) returns (RecordCount);
-//	rpc Sample<T>(...) returns (Sample<T>Response);  // seeded monte-carlo draw
-//	rpc Pull<T>(...) returns (Pull<T>Response);      // paged read
-//	rpc Watch<T>(QueryHandle) returns (stream ...);  // living-query changes
-//	rpc Close<T>(QueryHandle) returns (QueryStats);
+//	service RecordMap    (spec.service_s2s)  peers, authorized by peer identity
+//	service RecordQuery  (spec.service_c2s)  user tokens through the gateway,
+//	                                         authorized by service entitlements
+//
+// Each record type T gets one query lifecycle per surface; the s2s spelling is
+// the generated query vocabulary, the c2s spelling is its governed-verb twin:
+//
+//	Open<T>Query(...) -> QueryHandle       Create<T>Query(...)  snapshot or living query → handle
+//	Refine<T>(...) -> QueryStats           Update<T>Query(...)  replace the predicate (filterable types)
+//	Count<T>(QueryHandle) -> RecordCount   Get<T>Count(...)
+//	Sample<T>(...) -> Sample<T>Response    Get<T>Sample(...)    seeded monte-carlo draw
+//	Pull<T>(...) -> Pull<T>Response        List<T>(...)         paged read
+//	Watch<T>(QueryHandle) -> stream ...    Watch<T>(...)        living-query changes
+//	Close<T>(QueryHandle) -> QueryStats    Delete<T>Query(...)
 //
 // The set holds record REFERENCES; records are immutable, only the query predicate is
 // mutable — Refine replaces it outright (no narrow-only enforcement: nothing compares
@@ -62,9 +71,15 @@ type recordFilter struct {
 // data, and ALL THREE apply EGRESS DATA ENTITLEMENT — the store calls the generated
 // Sanitize<T>(record, entitlement, hmacKey) with a per-caller entitlement derived
 // from caller entitlements before returning data; the sanitized view is never baked
-// into stored state. Count returns only a size. The service is S2S: callers reach it through argus
-// (the C2S front), never directly. tacplus knows the typed query and its shape, not the
+// into stored state. Count returns only a size. Both surfaces run the same
+// lifecycle over the same handles; they differ only in who may call and how that
+// caller is authorized. tacplus knows the typed query and its shape, not the
 // query→execution transform (impl-side).
+//
+// NOT built here: the per-caller row filter (which record ROWS a c2s caller may
+// see, as opposed to which FIELDS egress raw). The c2s surface is shaped so it
+// can be added later — Create<T>Query is the lifecycle's only entry point, so a
+// row predicate pinned there is carried by every call made against the handle.
 //
 // Like its sibling injectors (AppendTimeseriesQueryServiceToProtos), this runs on
 // EVERY service's codegen so the injected service is visible in every proto view
@@ -316,15 +331,75 @@ message %[1]sWatchEvent {
 		}
 	}
 
-	// The RecordMap service — S2S, scoped to argus (the C2S front); clients never
-	// call the record store directly. Per-caller refinable queries over immutable records;
-	// Sample/Pull/Watch apply egress redaction. It is the record store's own service
-	// (emitted into its services/ proto), so the store implements getRecordMapGrpcImpl.
+	// TWO CALLER SURFACES, ONE QUERY PLANE.
 	//
-	// The `tacplus:generated-service` sentinel marks this as synthesized so the
-	// EnforceVerbs gate skips it — its query-lifecycle verbs (Open/Count/Sample/
-	// Pull/Close/Refine) are a generated S2S vocabulary, not governed REST verbs
-	// (cf. the state/opa injectors, which mark themselves the same way).
+	// A service declares exactly one caller surface — parser.ValidateServiceSurfaces
+	// refuses a service that carries two — so the plane is emitted TWICE, once per
+	// surface. This is the same split testapp echo.proto uses for Echo (c2s) and
+	// Probe (s2s), and the shape that validator's own error message points at.
+	//
+	//   RecordMap    S2S. Reached by a peer service, authorized by peer identity
+	//                through auth_services. Unchanged by the c2s addition.
+	//   RecordQuery  C2S. Reached with a user token through the gateway,
+	//                authorized by that token's service entitlements.
+	//
+	// The c2s half is not a convenience alias. The platform's wildcard grant
+	// catalog is built from c2s RPCs ONLY (registry.collectEntitlementGrants skips
+	// every non-c2s RPC), so an s2s-only surface has no grant vocabulary at all:
+	// <PKG>_ANY for a record store expanded to nothing, and no grant string —
+	// wildcard or exact — could authorize a user call into it. Emitting the c2s
+	// sibling is what puts the query plane INTO the generated catalog, so
+	// <PKG>_ANY becomes a real grant that grows with new record types by
+	// generation rather than by hand.
+	//
+	// Both surfaces share every message above; only the RPC vocabulary differs. A
+	// c2s RPC must classify against the closed verb registry — an unclassifiable
+	// c2s method is a hard generation failure, not a warning — so the c2s half
+	// spells the same lifecycle in governed verbs. That is also what earns it
+	// capability wildcards (<PKG>_READ_ANY / _WRITE_ANY / _PAGE_ANY / _WATCH_ANY)
+	// instead of only the package-wide <PKG>_ANY:
+	//
+	//   Open<T>Query      -> Create<T>Query      CREATE / WRITE
+	//   Refine<T>         -> Update<T>Query      UPDATE / WRITE
+	//   Count<T>          -> Get<T>Count         GET    / READ
+	//   Sample<T>         -> Get<T>Sample        GET    / READ
+	//   Pull<T>           -> List<T>             LIST   / PAGE
+	//   Close<T>          -> Delete<T>Query      DELETE / WRITE
+	//   Watch<T>          -> Watch<T>            WATCH
+	//   Subscribe<T>Count -> Subscribe<T>Count   ACTION / READ
+	//
+	// Create<T>Query is the lifecycle's single entry point: every later call
+	// carries only the handle it returns, so a per-caller row filter can later be
+	// attached there without reshaping the c2s RPC boundary.
+	sb.WriteString(recordMapS2SService(records))
+	sb.WriteString(recordQueryC2SService(records))
+
+	var buf strings.Builder
+	buf.Write(content)
+	buf.WriteString(sb.String())
+	if err := os.WriteFile(filePath, []byte(buf.String()), 0644); err != nil {
+		return fmt.Errorf("failed to write proto file %s: %w", relPath, err)
+	}
+
+	zap.L().Info("appended record query plane",
+		zap.String("file", relPath),
+		zap.Int("record_types", len(records)))
+	return nil
+}
+
+// recordMapS2SService renders the S2S half of the record query plane: the
+// service a peer reaches directly, authorized by peer identity through
+// auth_services rather than by a user token's entitlements. Per-caller
+// refinable queries over immutable records; Sample/Pull/Watch apply egress
+// redaction. It is the record store's own service (emitted into its services/
+// proto), so the store implements getRecordMapGrpcImpl.
+//
+// The `tacplus:generated-service` sentinel marks this as synthesized so the
+// EnforceVerbs gate skips it — its query-lifecycle verbs (Open/Count/Sample/
+// Pull/Close/Refine) are a generated s2s vocabulary, not governed REST verbs
+// (cf. the state/opa injectors, which mark themselves the same way).
+func recordMapS2SService(records []recordType) string {
+	var sb strings.Builder
 	sb.WriteString("\n// tacplus:generated-service " + parser.SynthesizedKindRecordMap + "\nservice RecordMap {\n")
 	sb.WriteString("  option (spec.service_s2s) = {};\n")
 	for _, r := range records {
@@ -367,18 +442,41 @@ message %[1]sWatchEvent {
 		}
 	}
 	sb.WriteString("}\n")
+	return sb.String()
+}
 
-	var buf strings.Builder
-	buf.Write(content)
-	buf.WriteString(sb.String())
-	if err := os.WriteFile(filePath, []byte(buf.String()), 0644); err != nil {
-		return fmt.Errorf("failed to write proto file %s: %w", relPath, err)
+// recordQueryC2SService renders the C2S half: the same query lifecycle, spelled
+// in governed verbs so it classifies, reachable with a user token through the
+// gateway and authorized by that token's service entitlements. It carries no
+// (spec.rpc) auth override — the service-level auth_entitled_users default is
+// the whole point, since that is what puts these RPCs in the generated grant
+// catalog. See the surface comment in appendRecordMapToServiceProto for the
+// per-RPC mapping and for why the c2s half has to exist at all.
+func recordQueryC2SService(records []recordType) string {
+	var sb strings.Builder
+	sb.WriteString("\n// tacplus:generated-service " + parser.SynthesizedKindRecordMap + "\nservice RecordQuery {\n")
+	sb.WriteString("  option (spec.service_c2s) = {auth_entitled_users: true};\n")
+	for _, r := range records {
+		sb.WriteString(fmt.Sprintf(`
+  rpc Create%[1]sQuery(Open%[1]sQueryRequest) returns (QueryHandle);
+  rpc Get%[1]sCount(QueryHandle) returns (RecordCount);
+  rpc Get%[1]sSample(Sample%[1]sRequest) returns (Sample%[1]sResponse);
+  rpc List%[1]s(Pull%[1]sRequest) returns (Pull%[1]sResponse) {
+    option (spec.method_collection) = {mode: COLLECTION_MODE_PAGE, order_by: [%[2]q], default_page_size: 100};
+  }
+  rpc Delete%[1]sQuery(QueryHandle) returns (QueryStats);
+`, r.typeName, r.key))
+		if len(r.filters) > 0 {
+			sb.WriteString(fmt.Sprintf(`  rpc Update%[1]sQuery(Refine%[1]sRequest) returns (QueryStats);
+  rpc Watch%[1]s(QueryHandle) returns (stream %[1]sWatchEvent) {
+    option (spec.method_collection) = {mode: COLLECTION_MODE_WATCH, order_by: [%[2]q]};
+  }
+  rpc Subscribe%[1]sCount(QueryHandle) returns (stream RecordCount);
+`, r.typeName, r.key))
+		}
 	}
-
-	zap.L().Info("appended record query plane",
-		zap.String("file", relPath),
-		zap.Int("record_types", len(records)))
-	return nil
+	sb.WriteString("}\n")
+	return sb.String()
 }
 
 // injectImports inserts import lines after the last existing import statement.

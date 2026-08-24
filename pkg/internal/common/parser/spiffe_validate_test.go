@@ -122,3 +122,94 @@ func TestIdentityBoolAnnotationsRequireString(t *testing.T) {
 		})
 	}
 }
+
+// The tests above drive validateSpiffeMessage directly. These drive the
+// exported gate the generator actually calls, so the file walk and the error
+// aggregation are exercised too — not just the per-message rules.
+
+func spiffeParser(files map[string]*FileDescriptor) *DescriptorParser {
+	return &DescriptorParser{descriptors: files}
+}
+
+func TestValidateSpiffeIdentityAnnotationsNilParser(t *testing.T) {
+	if err := ValidateSpiffeIdentityAnnotations(nil); err != nil {
+		t.Fatalf("ValidateSpiffeIdentityAnnotations(nil) = %v, want nil", err)
+	}
+}
+
+func TestValidateSpiffeIdentityAnnotationsAcceptsWellFormedFiles(t *testing.T) {
+	dp := spiffeParser(map[string]*FileDescriptor{
+		"connector.proto": {
+			Path:    "connector.proto",
+			Package: "connector",
+			Messages: []MessageDescriptor{*identityResourceMsg(&model.IdentitySpiffeResourceValue{
+				NamespaceField: "tenant_namespace",
+				Kind:           "gitlab-event",
+				IdField:        "event_id",
+			})},
+		},
+	})
+	if err := ValidateSpiffeIdentityAnnotations(dp); err != nil {
+		t.Fatalf("ValidateSpiffeIdentityAnnotations rejected a well-formed file: %v", err)
+	}
+}
+
+// A resource SPIFFE naming a sibling that does not exist cannot be constructed
+// at runtime, so generation must fail — and the error must name the file's
+// package and message so the author can find it.
+func TestValidateSpiffeIdentityAnnotationsRejectsUnconstructibleIdentity(t *testing.T) {
+	dp := spiffeParser(map[string]*FileDescriptor{
+		"connector.proto": {
+			Path:    "connector.proto",
+			Package: "connector",
+			Messages: []MessageDescriptor{*identityResourceMsg(&model.IdentitySpiffeResourceValue{
+				NamespaceField: "no_such_field",
+				Kind:           "gitlab-event",
+				IdField:        "event_id",
+			})},
+		},
+	})
+	err := ValidateSpiffeIdentityAnnotations(dp)
+	if err == nil {
+		t.Fatal("ValidateSpiffeIdentityAnnotations accepted an unconstructible resource identity, want error")
+	}
+	if !strings.Contains(err.Error(), "spiffe identity annotation errors") {
+		t.Fatalf("error = %q, want the aggregated gate message", err.Error())
+	}
+	if !strings.Contains(err.Error(), "connector.Event.owner_spiffe") {
+		t.Fatalf("error = %q, want it to locate the offending field", err.Error())
+	}
+}
+
+// Violations in more than one message are reported together.
+func TestValidateSpiffeIdentityAnnotationsReportsEveryMessage(t *testing.T) {
+	bad := identityResourceMsg(&model.IdentitySpiffeResourceValue{
+		NamespaceField: "tenant_namespace",
+		Kind:           "data", // reserved SPIFFE tag
+		IdField:        "event_id",
+	})
+	other := &MessageDescriptor{
+		Name: "Claims",
+		Fields: []FieldDescriptor{
+			{Name: "ns", Type: "int64", Annotations: map[string]model.AnnotationValue{
+				"identity_namespace": {Type: model.AnnotationTypeBool, BoolValue: true},
+			}},
+		},
+	}
+	dp := spiffeParser(map[string]*FileDescriptor{
+		"connector.proto": {
+			Path:     "connector.proto",
+			Package:  "connector",
+			Messages: []MessageDescriptor{*bad, *other},
+		},
+	})
+	err := ValidateSpiffeIdentityAnnotations(dp)
+	if err == nil {
+		t.Fatal("ValidateSpiffeIdentityAnnotations accepted two broken messages, want error")
+	}
+	for _, want := range []string{"connector.Event.owner_spiffe", "connector.Claims.ns"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want it to name %s", err.Error(), want)
+		}
+	}
+}

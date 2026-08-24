@@ -135,6 +135,8 @@ public class ServiceManager implements AutoCloseable {
     private final HealthStatusManager healthManager;
     private volatile Server earlyHealthProbeServer;
     private volatile boolean closing = false;
+    /** The mandatory Authorizer, built in start(). Null before then. */
+    private volatile Authorizer authorizer;
     // TLS-degrade seam (PC-L-1): renewal give-up / parse failures report here so
     // the health plane (when wired) marks the instance DEGRADED instead of the
     // service silently running to certificate expiry. Unconditional so it compiles
@@ -485,6 +487,18 @@ public class ServiceManager implements AutoCloseable {
     public StateClients getStateClients() { return stateClients; }
 {{- end}}
 
+    /**
+     * Returns the Authorizer built in start(), or null before it has run.
+     *
+     * <p>Handlers that register their own ServerServiceDefinitions through
+     * {@code Handler.additionalServices()} need it: those definitions get no
+     * generated wrapper, so nothing calls authorize() for them. Pass it to
+     * {@link Authorizer#authorizingInterceptor()} (and register the methods'
+     * auth_services patterns with {@link Authorizer#setMethodAuth}) to get the
+     * same authorization a generated service wrapper performs.
+     */
+    public Authorizer getAuthorizer() { return authorizer; }
+
 {{- if .HasGrpcS2SClients}}
     /** Returns the typed gRPC client aggregator for S2S calls. */
     public GrpcClients getGrpcClients() { return grpcClients; }
@@ -756,6 +770,7 @@ public class ServiceManager implements AutoCloseable {
         // JwkVerifyingKeysViewService over the state-store channel. Security is generated
         // and fail-closed — there is no way to construct a token-auth wrapper without it.
         Authorizer authorizer = new Authorizer(Authorizer.remoteSource(stateStoreConn.conn()));
+        this.authorizer = authorizer;
         // Register per-method auth_services patterns from proto annotations.
 {{- range .GrpcServices}}
 {{- if .HasMethodAuth}}

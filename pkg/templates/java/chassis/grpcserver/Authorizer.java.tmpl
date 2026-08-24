@@ -204,6 +204,42 @@ public class Authorizer {
         };
     }
 
+    /**
+     * Returns a ServerInterceptor that fully AUTHORIZES every incoming call:
+     * signature + audience, then the per-method auth_services policy for S2S
+     * callers or the service_entitlements claim for user callers — the same
+     * check {@link #authorize} performs inside a generated service wrapper.
+     *
+     * This is the sibling of {@link #enforcingInterceptor}, which only
+     * authenticates. Services that register their own ServerServiceDefinitions
+     * through Handler.additionalServices() have no generated wrapper to call
+     * authorize() for them, so without this their methods are authenticated but
+     * never authorized. Fail-closed: a method with no registered auth_services
+     * pattern is denied, so forgetting to call setMethodAuth() rejects rather
+     * than admits.
+     */
+    public ServerInterceptor authorizingInterceptor() {
+        return new ServerInterceptor() {
+            @Override
+            public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
+                    ServerCall<ReqT, RespT> call,
+                    Metadata headers,
+                    ServerCallHandler<ReqT, RespT> next) {
+                String authHeader = headers.get(AUTH_METADATA_KEY);
+                try {
+                    authorizeWithToken(authHeader, call.getMethodDescriptor().getFullMethodName());
+                } catch (ProtoException e) {
+                    io.grpc.Status status = io.grpc.Status.fromCodeValue(e.getCode())
+                            .withDescription(e.getMessage());
+                    call.close(status, new Metadata());
+                    return new ServerCall.Listener<>() {};
+                }
+                Context ctx = Context.current().withValue(AUTH_HEADER_CTX_KEY, authHeader);
+                return Contexts.interceptCall(ctx, call, headers, next);
+            }
+        };
+    }
+
     /** Receives JWK map updates from a {@link JwkSource}. */
     @FunctionalInterface
     public interface JwkSink {

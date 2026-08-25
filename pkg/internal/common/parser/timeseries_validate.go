@@ -35,6 +35,11 @@ func ValidateTimeseriesAnnotations(allFiles []model.ProtoFile) error {
 				hasSource = true
 			}
 
+			var dedupKeyFields []string
+			if dedupAnn, hasDedup := msg.Annotations["timeseries_dedup"]; hasDedup && dedupAnn.TimeseriesDedup != nil {
+				dedupKeyFields = dedupAnn.TimeseriesDedup.KeyFields
+			}
+
 			var orderKeys []int
 			orderKeyFields := make(map[int]string)
 			var tsFields int
@@ -76,6 +81,11 @@ func ValidateTimeseriesAnnotations(allFiles []model.ProtoFile) error {
 						orderKeyFields[key] = field.Name
 						orderKeys = append(orderKeys, key)
 					}
+					if len(dedupKeyFields) > 0 {
+						errs = append(errs, fmt.Sprintf(
+							"%s: order_key %d conflicts with dedup.key_fields %v — key_fields already establishes row identity/order for dedup; remove order_key",
+							fieldLoc, key, dedupKeyFields))
+					}
 				}
 			}
 
@@ -86,8 +96,9 @@ func ValidateTimeseriesAnnotations(allFiles []model.ProtoFile) error {
 				continue
 			}
 
-			// Must have at least one order key
-			if len(orderKeys) == 0 {
+			// Must have at least one order key, unless dedup.key_fields already
+			// establishes row identity/order.
+			if len(orderKeys) == 0 && len(dedupKeyFields) == 0 {
 				errs = append(errs, fmt.Sprintf(
 					"%s: at least one field must have order_key > 0",
 					loc))

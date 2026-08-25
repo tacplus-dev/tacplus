@@ -198,14 +198,15 @@ public final class ClaimsProvenanceTest {
         wrapper.setAuthenticateFunc((ContractApi.Authenticator) targetNamespace -> {
             String header = Authorizer.AUTH_HEADER_CTX_KEY.get();
             if (targetNamespace == null || targetNamespace.isEmpty()) {
-                authorizer.authenticateWithToken(header);
+                return Authorizer.identityClaims(authorizer.authenticateWithToken(header));
             } else {
-                authorizer.authenticateAtOrBelowWithToken(header, targetNamespace);
+                return Authorizer.identityClaims(
+                        authorizer.authenticateAtOrBelowWithToken(header, targetNamespace));
             }
         });
         ServerBuilder<?> builder = ServerBuilder.forPort(0)
                 .intercept(Auth.requestIdInterceptor())
-                .intercept(Authorizer.interceptor());
+                .intercept(Authorizer.headerCaptureInterceptor());
         wrapper.registerServices(builder);
         return builder.build().start();
     }

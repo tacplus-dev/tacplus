@@ -546,6 +546,35 @@ extend google.protobuf.MessageOptions {
   // method_c2s unless the surrounding actor context provides an unambiguous
   // default.
   repeated EventWatchAnnotation event_watch = 60074;
+
+  // owner_default declares what the OWNER of a row of this type may do with it
+  // by default (§4b). The owner is the principal named by this message's
+  // (spec.store_principal) field — a message declaring owner_default without one
+  // has no owner to speak of and is rejected at generation time.
+  //
+  // The generated service wrapper enforces it: a method the verb registry
+  // classifies as WRITE that touches a type declaring {write: false} is refused
+  // with PERMISSION_DENIED before the handler runs, and likewise a READ method
+  // touching {read: false}. Absent the option nothing is enforced, so this is
+  // additive to every existing type.
+  //
+  // It is a DEFAULT: a wider entitlement riding on the grant (PrincipalScope)
+  // is the seam that would override it. No such override exists yet, so today
+  // the refusal is unconditional on the RPCs that touch the type.
+  //
+  // Example: option (spec.owner_default) = {read: true, write: false};
+  OwnerDefault owner_default = 60080;
+}
+
+// OwnerDefault is the rights a type's owner holds over its own rows by default.
+// Both fields default to false, so an owner_default that names neither denies
+// both — the option is never a no-op, which is what makes a declaration
+// observable rather than decorative.
+message OwnerDefault {
+  // read: the owner may read rows of this type.
+  bool read = 1;
+  // write: the owner may create or modify rows of this type.
+  bool write = 2;
 }
 
 // SubscriptionAnnotation declares that this state service subscribes to

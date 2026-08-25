@@ -1588,6 +1588,17 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 		}
 	}
 
+	// owner_default: what the type's OWNER may do with its own rows. Recorded as
+	// a presence marker plus the two booleans, so an explicit {read:true,write:true}
+	// is distinguishable from no declaration at all.
+	if proto.HasExtension(opts, spec.E_OwnerDefault) {
+		if od, ok := proto.GetExtension(opts, spec.E_OwnerDefault).(*spec.OwnerDefault); ok && od != nil {
+			annotations["owner_default"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+			annotations["owner_default_read"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: od.GetRead()}
+			annotations["owner_default_write"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: od.GetWrite()}
+		}
+	}
+
 	// data_entitlement: message(type)-level default data-entitlement transform for
 	// the message's eligible fields. Recorded whenever present (even an empty {})
 	// so ValidateDataEntitlementAnnotations can reject an invalid mode loudly.

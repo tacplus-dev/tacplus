@@ -352,21 +352,27 @@ message %[1]sWatchEvent {
 	// <PKG>_ANY becomes a real grant that grows with new record types by
 	// generation rather than by hand.
 	//
-	// Both surfaces share every message above; only the RPC vocabulary differs. A
-	// c2s RPC must classify against the closed verb registry — an unclassifiable
-	// c2s method is a hard generation failure, not a warning — so the c2s half
-	// spells the same lifecycle in governed verbs. That is also what earns it
-	// capability wildcards (<PKG>_READ_ANY / _WRITE_ANY / _PAGE_ANY / _WATCH_ANY)
-	// instead of only the package-wide <PKG>_ANY:
+	// Both surfaces share every message above AND every RPC name. A c2s RPC must
+	// classify against the closed verb registry — an unclassifiable c2s method is
+	// a hard generation failure, not a warning — so the c2s half spells the
+	// lifecycle in governed verbs. That is also what earns it capability wildcards
+	// (<PKG>_READ_ANY / _WRITE_ANY / _PAGE_ANY / _WATCH_ANY) instead of only the
+	// package-wide <PKG>_ANY. The s2s half spells it the SAME way, so one logical
+	// operation carries one name on both surfaces:
 	//
-	//   Open<T>Query      -> Create<T>Query      CREATE / WRITE
-	//   Refine<T>         -> Update<T>Query      UPDATE / WRITE
-	//   Count<T>          -> Get<T>Count         GET    / READ
-	//   Sample<T>         -> Get<T>Sample        GET    / READ
-	//   Pull<T>           -> List<T>             LIST   / PAGE
-	//   Close<T>          -> Delete<T>Query      DELETE / WRITE
-	//   Watch<T>          -> Watch<T>            WATCH
-	//   Subscribe<T>Count -> Subscribe<T>Count   ACTION / READ
+	//   Create<T>Query      CREATE / WRITE
+	//   Update<T>Query      UPDATE / WRITE
+	//   Get<T>Count         GET    / READ
+	//   Get<T>Sample        GET    / READ
+	//   List<T>             LIST   / PAGE
+	//   Delete<T>Query      DELETE / WRITE
+	//   Watch<T>            WATCH
+	//   Subscribe<T>Count   ACTION / READ
+	//
+	// The s2s half was originally spelled Open/Count/Sample/Pull/Close/Refine; it
+	// was renamed to the governed spelling above (controller ruling, 2026-08-24)
+	// because the sentinel below makes the gate skip it either way, so matching
+	// the c2s names is free and a divergent vocabulary is not.
 	//
 	// Create<T>Query is the lifecycle's single entry point: every later call
 	// carries only the handle it returns, so a per-caller row filter can later be
@@ -390,45 +396,45 @@ message %[1]sWatchEvent {
 // recordMapS2SService renders the S2S half of the record query plane: the
 // service a peer reaches directly, authorized by peer identity through
 // auth_services rather than by a user token's entitlements. Per-caller
-// refinable queries over immutable records; Sample/Pull/Watch apply egress
+// refinable queries over immutable records; GetSample/List/Watch apply egress
 // redaction. It is the record store's own service (emitted into its services/
 // proto), so the store implements getRecordMapGrpcImpl.
 //
 // The `tacplus:generated-service` sentinel marks this as synthesized so the
-// EnforceVerbs gate skips it — its query-lifecycle verbs (Open/Count/Sample/
-// Pull/Close/Refine) are a generated s2s vocabulary, not governed REST verbs
-// (cf. the state/opa injectors, which mark themselves the same way).
+// EnforceVerbs gate skips it (cf. the state/opa injectors, which mark themselves
+// the same way). Its RPC names nonetheless match RecordQuery's governed spelling
+// exactly — see the surface comment in appendRecordMapToServiceProto.
 func recordMapS2SService(records []recordType) string {
 	var sb strings.Builder
 	sb.WriteString("\n// tacplus:generated-service " + parser.SynthesizedKindRecordMap + "\nservice RecordMap {\n")
 	sb.WriteString("  option (spec.service_s2s) = {};\n")
 	for _, r := range records {
 		hasFilter := len(r.filters) > 0
-		// Universal query lifecycle: open (snapshot or living) → count/sample/pull → close.
+		// Universal query lifecycle: create (snapshot or living) → count/sample/list → delete.
 		sb.WriteString(fmt.Sprintf(`
-  rpc Open%[1]sQuery(Open%[1]sQueryRequest) returns (QueryHandle) {
+  rpc Create%[1]sQuery(Open%[1]sQueryRequest) returns (QueryHandle) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
   }
-  rpc Count%[1]s(QueryHandle) returns (RecordCount) {
+  rpc Get%[1]sCount(QueryHandle) returns (RecordCount) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
   }
-  rpc Sample%[1]s(Sample%[1]sRequest) returns (Sample%[1]sResponse) {
+  rpc Get%[1]sSample(Sample%[1]sRequest) returns (Sample%[1]sResponse) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
   }
-  rpc Pull%[1]s(Pull%[1]sRequest) returns (Pull%[1]sResponse) {
+  rpc List%[1]s(Pull%[1]sRequest) returns (Pull%[1]sResponse) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
     option (spec.method_collection) = {mode: COLLECTION_MODE_PAGE, order_by: [%[2]q], default_page_size: 100};
   }
-  rpc Close%[1]s(QueryHandle) returns (QueryStats) {
+  rpc Delete%[1]sQuery(QueryHandle) returns (QueryStats) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
   }
 `, r.typeName, r.key))
 		if hasFilter {
-			// Refine replaces the query's predicate in place (unrestricted — not
+			// UpdateQuery replaces the query's predicate in place (unrestricted — not
 			// enforced narrow-only; see the package doc comment above).
 			// Watch streams a living query's changes (snapshot then deltas).
 			// SubscribeCount streams the live size.
-			sb.WriteString(fmt.Sprintf(`  rpc Refine%[1]s(Refine%[1]sRequest) returns (QueryStats) {
+			sb.WriteString(fmt.Sprintf(`  rpc Update%[1]sQuery(Refine%[1]sRequest) returns (QueryStats) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};
   }
   rpc Watch%[1]s(QueryHandle) returns (stream %[1]sWatchEvent) {

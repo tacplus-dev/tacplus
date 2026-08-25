@@ -119,13 +119,13 @@ option (spec.record_store) = {};
 		`optional string spiffe_id = 1;`,
 		`optional int64 timestamp_ms_from = 2;`,
 		`optional int64 timestamp_ms_to = 3;`,
-		// open + refine
+		// create + update
 		`message OpenAgentEventQueryRequest {`,
 		`AgentEventFilter filter = 1;`,
 		`bool standing = 2;`,
 		`message RefineAgentEventRequest {`,
 		`AgentEventFilter filter = 2;`,
-		// sample (seeded) + pull (paged)
+		// sample (seeded) + list (paged)
 		`message SampleAgentEventRequest {`,
 		`uint64 seed = 3;`,
 		`message SampleAgentEventResponse {`,
@@ -142,13 +142,13 @@ option (spec.record_store) = {};
 		`service RecordMap {`,
 		`option (spec.service_s2s) = {};`,
 		`option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};`,
-		`rpc OpenAgentEventQuery(OpenAgentEventQueryRequest) returns (QueryHandle) {`,
-		`rpc CountAgentEvent(QueryHandle) returns (RecordCount) {`,
-		`rpc SampleAgentEvent(SampleAgentEventRequest) returns (SampleAgentEventResponse) {`,
-		`rpc PullAgentEvent(PullAgentEventRequest) returns (PullAgentEventResponse) {`,
+		`rpc CreateAgentEventQuery(OpenAgentEventQueryRequest) returns (QueryHandle) {`,
+		`rpc GetAgentEventCount(QueryHandle) returns (RecordCount) {`,
+		`rpc GetAgentEventSample(SampleAgentEventRequest) returns (SampleAgentEventResponse) {`,
+		`rpc ListAgentEvent(PullAgentEventRequest) returns (PullAgentEventResponse) {`,
 		`option (spec.method_collection) = {mode: COLLECTION_MODE_PAGE, order_by: ["event_id"], default_page_size: 100};`,
-		`rpc CloseAgentEvent(QueryHandle) returns (QueryStats) {`,
-		`rpc RefineAgentEvent(RefineAgentEventRequest) returns (QueryStats) {`,
+		`rpc DeleteAgentEventQuery(QueryHandle) returns (QueryStats) {`,
+		`rpc UpdateAgentEventQuery(RefineAgentEventRequest) returns (QueryStats) {`,
 		`rpc WatchAgentEvent(QueryHandle) returns (stream AgentEventWatchEvent) {`,
 		`option (spec.method_collection) = {mode: COLLECTION_MODE_WATCH, order_by: ["event_id"]};`,
 		`rpc SubscribeAgentEventCount(QueryHandle) returns (stream RecordCount) {`,
@@ -159,8 +159,9 @@ option (spec.record_store) = {};
 	}
 
 	// RecordMap must carry the synthesized-service sentinel so the EnforceVerbs
-	// gate skips it — its Open/Count/Sample/Pull/Close/Refine query-lifecycle
-	// verbs are a generated S2S vocabulary, not governed REST verbs. Without it,
-	// no stratum.RecordMap consumer (e.g. argus) can generate its client.
+	// gate skips it. Its RPCs are spelled in the same governed verbs as the c2s
+	// RecordQuery sibling, but the sentinel is what keeps the gate off a
+	// synthesized service. Without it, no stratum.RecordMap consumer (e.g. argus)
+	// can generate its client.
 	assertGeneratedServiceMarkerLeadsService(t, got, "RecordMap")
 }

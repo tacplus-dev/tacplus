@@ -200,7 +200,17 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 		// PAGE or streaming method carrying such rows would return them
 		// unfiltered, so refuse to generate rather than under-enforce silently.
 		if method.StreamingType() != "unary" || method.IsPageCollection() {
-			for _, t := range []string{method.FullOutputType, method.Resolved.PageItemType, method.Resolved.WatchItemType} {
+			// Resolved is the computed COLLECTION view and is nil for a method
+			// that declares no collection at all — a plain server-streaming RPC
+			// such as oauth's Session.*. Only the two item types come from it;
+			// the output type is always present. Reading through it
+			// unconditionally panicked the generator on every such method,
+			// which is why every other site in the tree nil-checks it.
+			candidates := []string{method.FullOutputType}
+			if method.Resolved != nil {
+				candidates = append(candidates, method.Resolved.PageItemType, method.Resolved.WatchItemType)
+			}
+			for _, t := range candidates {
 				if t == "" {
 					continue
 				}

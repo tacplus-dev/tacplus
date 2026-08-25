@@ -19,6 +19,12 @@ import (
 //   - order_key values must be unique and contiguous starting from 1
 //   - CARDINALITY_LOW hint only on string or enum types
 //   - Messages with source must have projection_source on every timeseries field
+//
+// LIMITATION: this only inspects order_key/dedup.key_fields declared directly on
+// the message's own fields. A message's separately-declared timeseries_projection
+// block has its own inline field: entries and is not walked here, so an order_key/
+// key_fields conflict expressed only in a projection will not be caught by this
+// validator.
 func ValidateTimeseriesAnnotations(allFiles []model.ProtoFile) error {
 	var errs []string
 

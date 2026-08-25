@@ -49,6 +49,13 @@ func generateRustTimeseriesHelpers(allFiles []model.ProtoFile, outputDir string)
 		return fmt.Errorf("failed to parse timeseries template: %w", err)
 	}
 
+	// Build a lookup of package -> proto file for cross-package enum resolution,
+	// same pattern as writeSerialization's protoByPkg.
+	protoByPkg := make(map[string]model.ProtoFile)
+	for _, p := range allFiles {
+		protoByPkg[p.Package] = p
+	}
+
 	for _, pf := range allFiles {
 		if strings.HasPrefix(pf.RelPath, "google/") {
 			continue
@@ -58,7 +65,7 @@ func generateRustTimeseriesHelpers(allFiles []model.ProtoFile, outputDir string)
 				continue
 			}
 
-			data := buildRustTimeseriesTemplateData(msg, pf.Package)
+			data := buildRustTimeseriesTemplateData(msg, pf.Package, protoByPkg)
 			if err := writeRustTimeseriesFile(pf, data, tmpl, outputDir); err != nil {
 				return fmt.Errorf("failed to generate Rust timeseries helpers for %s.%s: %w", pf.Package, msg.Name, err)
 			}
@@ -80,7 +87,7 @@ func hasRustTimeseriesType(msg model.Message) bool {
 // data for Rust. The generated helpers are store-neutral: Row struct + from_proto
 // + column list. No backend DDL is rendered here — a downstream materializer
 // renders the concrete schema from the registry's semantic metadata.
-func buildRustTimeseriesTemplateData(msg model.Message, pkg string) rustTimeseriesTemplateData {
+func buildRustTimeseriesTemplateData(msg model.Message, pkg string, protoByPkg map[string]model.ProtoFile) rustTimeseriesTemplateData {
 	data := rustTimeseriesTemplateData{
 		TypeName:      msg.Name,
 		SnakeTypeName: strutil.ToSnakeCase(msg.Name),
@@ -104,6 +111,16 @@ func buildRustTimeseriesTemplateData(msg model.Message, pkg string) rustTimeseri
 
 		if f.IsEnum {
 			fd.EnumType = f.Type
+			// Cross-package enums aren't visible via the generated file's `use super::*`,
+			// so qualify them with a full crate path (same pattern as writeSerialization's
+			// collectEnumInfo).
+			if f.TypePackage != "" {
+				if epf, ok := protoByPkg[f.TypePackage]; ok {
+					parentDir := filepath.Dir(epf.RelPath)
+					fd.EnumType = fmt.Sprintf("crate::%s::%s::%s",
+						strings.ReplaceAll(parentDir, "/", "::"), f.TypePackage, f.Type)
+				}
+			}
 		}
 
 		data.Fields = append(data.Fields, fd)

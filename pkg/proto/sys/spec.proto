@@ -572,16 +572,21 @@ extend google.protobuf.MessageOptions {
 // so it is one more claim on an existing seam, not a second auth path.
 //
 // The generated service wrapper reads it by name and compares it to the row's
-// principal. SELF (and absent/unspecified, which fail closed to SELF) means the
-// caller may act only as its own principal, which is what scopes a
+// principal. SELF_ONLY (and absent/unspecified, which fail closed to it) means
+// the caller may act only as its own principal, which is what scopes a
 // (spec.owner_default) refusal to the row's owner instead of to every caller.
 // Anything wider means the caller is not the owner acting on itself.
+//
+// SELF_ONLY, not SELF: the Rust variant is the value name with the enum prefix
+// stripped, and `Self` is a Rust keyword that protoc-gen-prost-serde does not
+// escape (prost renders `Self_`, the serde companion renders `Self`, and the
+// crate does not compile). See PRINCIPAL_SCOPE_QUESTIONS.md.
 enum PrincipalScope {
-  // Unspecified is the proto3 zero value and is treated as SELF: a token that
-  // says nothing about principal scope has not been widened.
+  // Unspecified is the proto3 zero value and is treated as SELF_ONLY: a token
+  // that says nothing about principal scope has not been widened.
   PRINCIPAL_SCOPE_UNSPECIFIED = 0;
-  // Self: the caller may act only on rows whose principal is the caller.
-  PRINCIPAL_SCOPE_SELF = 1;
+  // Self only: the caller may act only on rows whose principal is the caller.
+  PRINCIPAL_SCOPE_SELF_ONLY = 1;
   // Subtree: the caller may act on rows whose principal is at or below the
   // caller's own namespace.
   PRINCIPAL_SCOPE_SUBTREE = 2;

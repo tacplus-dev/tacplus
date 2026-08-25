@@ -100,9 +100,9 @@ func ownerDefaultOf(annotations map[string]model.AnnotationValue, name string) (
 // (spec.principal_scope): how wide the caller's authority over PRINCIPALS is.
 // It rides the same OPA-stamped service_entitlements claim bag the egress data
 // grants already ride, so this is one more claim lookup rather than a second
-// auth path. Absent, empty or SELF is fail-closed to self — the caller may act
-// only as its own principal — which is what scopes an owner_default refusal to
-// the owner instead of to everybody.
+// auth path. Absent, empty, UNSPECIFIED or SELF_ONLY is fail-closed to self —
+// the caller may act only as its own principal — which is what scopes an
+// owner_default refusal to the owner instead of to everybody.
 func rustPrincipalScopeLocal(indent string) string {
 	return fmt.Sprintf(`%s// (spec.principal_scope): the width of the caller's authority over principals.
 %slet mut __principal_scope = String::new();
@@ -114,7 +114,7 @@ func rustPrincipalScopeLocal(indent string) string {
 %s    }
 %s}
 %slet __scope_is_self = __principal_scope.is_empty()
-%s    || __principal_scope == "PRINCIPAL_SCOPE_SELF"
+%s    || __principal_scope == "PRINCIPAL_SCOPE_SELF_ONLY"
 %s    || __principal_scope == "PRINCIPAL_SCOPE_UNSPECIFIED";
 `, indent, indent, indent, indent, indent, indent, indent, indent, indent, indent, indent, indent)
 }

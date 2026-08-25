@@ -138,7 +138,7 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
-  for g in soundness test current-generation determinism cert-stream; do
+  for g in soundness test current-generation determinism cert-stream claims-provenance; do
     echo "=== $g ==="
     just "$g"
     rc=$?
@@ -181,7 +181,7 @@ accounting-identity:
 
 # Wire-level gate for claims provenance in the generated Java chassis (F11):
 # identity claims must come from a VERIFIED token, never from a base64 decode of
-# the bearer header. Local/manual — needs the go and java toolchains.
+# the bearer header. Part of `gates` (needs the go and java toolchains).
 claims-provenance:
   {{lock}} bash cross-test/claims-provenance/run.sh
 

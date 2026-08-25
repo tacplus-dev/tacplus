@@ -36,7 +36,8 @@ func rustEgressTestSanitizer() *rustEgressSanitizer {
 }
 
 func TestRustEgress_Tier2Wrapper_SanitizesItems(t *testing.T) {
-	got := generateRustGRPCWrapper(
+	got := mustGenerateRustGRPCWrapper(
+		t,
 		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
 		rustTier2Method(), "catalog", "services", map[string]string{}, "",
 		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, rustEgressTestSanitizer())
@@ -54,7 +55,8 @@ func TestRustEgress_Tier2Wrapper_SanitizesItems(t *testing.T) {
 }
 
 func TestRustEgress_WatchWrapper_SanitizesSnapshotAndDelta(t *testing.T) {
-	got := generateRustGRPCWrapper(
+	got := mustGenerateRustGRPCWrapper(
+		t,
 		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
 		rustWatchMethod(), "catalog", "services", map[string]string{}, "",
 		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, rustEgressTestSanitizer())
@@ -78,7 +80,8 @@ func TestRustEgress_WatchWrapper_SanitizesSnapshotAndDelta(t *testing.T) {
 
 func TestRustEgress_LazyStreamWrapper_SanitizesItems(t *testing.T) {
 	// Tier-3 routes to the lazy server-streaming seam in Rust.
-	got := generateRustGRPCWrapper(
+	got := mustGenerateRustGRPCWrapper(
+		t,
 		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
 		rustTier3Method(), "catalog", "services", map[string]string{}, "",
 		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, rustEgressTestSanitizer())
@@ -102,7 +105,8 @@ func TestRustEgress_PageWrapper_SanitizesItems(t *testing.T) {
 			PageItemType: "catalog.Item", PageItemsField: "items",
 		},
 	}
-	got := generateRustGRPCWrapper(
+	got := mustGenerateRustGRPCWrapper(
+		t,
 		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
 		m, "catalog", "services", map[string]string{}, "",
 		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, rustEgressTestSanitizer())
@@ -121,7 +125,8 @@ func TestRustEgress_UnaryWrapper_SanitizesEnvelopeFields(t *testing.T) {
 		Name: "SampleItem", InputType: "SampleRequest", OutputType: "SampleResponse",
 		FullInputType: "catalog.SampleRequest", FullOutputType: "catalog.SampleResponse",
 	}
-	got := generateRustGRPCWrapper(
+	got := mustGenerateRustGRPCWrapper(
+		t,
 		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
 		m, "catalog", "services", map[string]string{}, "",
 		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, rustEgressTestSanitizer())
@@ -141,7 +146,8 @@ func TestRustEgress_NoEntitlement_NoWiring(t *testing.T) {
 	san := newRustEgressSanitizer([]model.ProtoFile{{Package: "catalog", Messages: []model.Message{
 		{Name: "Item", Fields: []model.Field{{Name: "id", Type: "string", Number: 1}}},
 	}}})
-	got := generateRustGRPCWrapper(
+	got := mustGenerateRustGRPCWrapper(
+		t,
 		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
 		rustTier2Method(), "catalog", "services", map[string]string{}, "",
 		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, san)

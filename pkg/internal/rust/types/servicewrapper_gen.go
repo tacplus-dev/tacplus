@@ -226,7 +226,10 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 			fmt.Fprintf(&watchFields, "    %s: collection::WatchHub<%s>,\n", fieldName, changeType)
 			fmt.Fprintf(&watchFieldsInit, "            %s: collection::WatchHub::new(%d, %d),\n", fieldName, method.Resolved.ReplayDepth, method.Resolved.IdleSecs)
 		}
-		wrapper := generateRustGRPCWrapper(targetService, method, info.Package, svc.ParentDir, info.CrossPackageTypes, svc.GrpcName, accountingMap, skippedTraceTypes, san)
+		wrapper, err := generateRustGRPCWrapper(targetService, method, info.Package, svc.ParentDir, info.CrossPackageTypes, svc.GrpcName, accountingMap, skippedTraceTypes, san)
+		if err != nil {
+			return err
+		}
 		// Replace hardcoded None caller with token extraction so handlers
 		// receive the authenticated Caller from the bearer token.
 		wrapper = strings.ReplaceAll(wrapper,
@@ -921,7 +924,7 @@ func rustTypeHasTraceFields(fullType, servicePackage, parentDir string, crossPkg
 
 // generateRustGRPCWrapper generates a gRPC method wrapper with validation for ValidationWrapper.
 // grpcName is the service's grpc_config name (e.g. "sentinel") used to construct the AccountingMethod.
-func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, grpcName string, accountingMap map[string]service.AccountingInfo, skippedTraceTypes proto.SkippedTraceTypes, san *rustEgressSanitizer) string {
+func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, grpcName string, accountingMap map[string]service.AccountingInfo, skippedTraceTypes proto.SkippedTraceTypes, san *rustEgressSanitizer) (string, error) {
 	methodSnake := prostSnakeName(method.Name)
 	fullMethod := fmt.Sprintf("/%s/%s.%s/%s", parentDir, servicePackage, svc.Name, method.Name)
 	inputType, outputType := resolveRustTypeQualified(method, servicePackage, crossPkgTypes)
@@ -929,6 +932,22 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 
 	emptyInput := method.FullInputType == "google.protobuf.Empty"
 	handlerEmpty := emptyInput || method.FullInputType == "trace.TraceRequest"
+
+	// (spec.owner_default) rides the REQUEST-VALIDATION seam, immediately after
+	// the (spec.principal) stamp, because that is the only point where both
+	// halves of the comparison exist: the authenticated caller and the request's
+	// bound principal. The snippet is empty unless a type this method touches
+	// contradicts its access. A method that would be refused but has no such
+	// seam — streaming, PAGE, or an empty request — cannot make the comparison,
+	// so refuse to generate rather than under-enforce silently, exactly as the
+	// (spec.store_principal) read filter does for the same shapes.
+	ownerDefaultGuard, err := rustOwnerDefaultGuard(method, san, servicePackage)
+	if err != nil {
+		return "", err
+	}
+	if ownerDefaultGuard != "" && (handlerEmpty || method.StreamingType() != "unary" || method.IsPageCollection()) {
+		return "", fmt.Errorf("%s touches a type declaring (spec.owner_default) that contradicts its access, but its %s request shape has no validation seam at which the caller can be compared to the row's principal", method.Name, method.StreamingType())
+	}
 	hasAccounting := false
 	if amInfo, ok := accountingMap[grpcName]; ok {
 		hasAccounting = amInfo.RPCs[method.Name]
@@ -1078,7 +1097,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         let duration_ms = start.elapsed().as_millis() as i64;
 %s
         result
-    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation, tier2HandlerCall, streamExpr, method.Name, streamAccountingBlock)
+    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation, tier2HandlerCall, streamExpr, method.Name, streamAccountingBlock), nil
 			}
 			return fmt.Sprintf(`    type %sStream = %s;
 
@@ -1094,7 +1113,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         let items = %s?;
         let stream = %s;
         Ok(tonic::Response::new(Box::pin(stream) as Self::%sStream))
-    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation, tier2HandlerCall, streamExpr, method.Name)
+    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation, tier2HandlerCall, streamExpr, method.Name), nil
 		}
 
 		if !method.ClientStreaming && method.ServerStreaming && method.IsWatchCollection() {
@@ -1264,7 +1283,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 				outputType, method.Resolved.WatchOneOf, oneofPath, validateEnvelope, sendClosed,
 				changeSan, outputType, method.Resolved.WatchOneOf, oneofPath, validateEnvelope, sendClosed,
 				sendErr, completed,
-				method.Name)
+				method.Name), nil
 		}
 
 		// Streaming methods - extract caller, delegate to handler
@@ -1320,7 +1339,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	        let duration_ms = start.elapsed().as_millis() as i64;
 	%s
 	        result
-	    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation, handlerCall, streamResponseReturn, streamAccountingBlock)
+	    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation, handlerCall, streamResponseReturn, streamAccountingBlock), nil
 			}
 			return fmt.Sprintf(`    type %sStream = %s;
 
@@ -1335,7 +1354,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	%s
 	        let response = %s?;
 	%s
-	    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation, handlerCall, streamResponseReturn)
+	    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation, handlerCall, streamResponseReturn), nil
 		} else if method.ClientStreaming && method.ServerStreaming {
 			if hasAccounting {
 				return fmt.Sprintf(`    type %sStream = %s;
@@ -1357,7 +1376,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	        let duration_ms = start.elapsed().as_millis() as i64;
 	%s
 	        result
-	    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, requestStreamBlock, methodSnake, streamResponseReturn, streamAccountingBlock)
+	    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, requestStreamBlock, methodSnake, streamResponseReturn, streamAccountingBlock), nil
 			}
 			return fmt.Sprintf(`    type %sStream = %s;
 
@@ -1372,7 +1391,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	%s
 	        let response = self.handler.%s(caller.as_ref(), request).await?;
 	%s
-	    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, requestStreamBlock, methodSnake, streamResponseReturn)
+	    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, requestStreamBlock, methodSnake, streamResponseReturn), nil
 		} else {
 			// Client streaming only
 			if hasAccounting {
@@ -1394,7 +1413,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	        let duration_ms = start.elapsed().as_millis() as i64;
 	%s
 	        result
-	    }`, methodSnake, inputType, outputType, authLine, fullMethod, requestStreamBlock, methodSnake, unaryStreamResponseValidation, streamAccountingBlock)
+	    }`, methodSnake, inputType, outputType, authLine, fullMethod, requestStreamBlock, methodSnake, unaryStreamResponseValidation, streamAccountingBlock), nil
 			}
 			return fmt.Sprintf(`    async fn %s(
 	        &self,
@@ -1408,7 +1427,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	        let response = self.handler.%s(caller.as_ref(), request).await?;
 	%s
 	        Ok(response)
-	    }`, methodSnake, inputType, outputType, authLine, fullMethod, requestStreamBlock, methodSnake, unaryStreamResponseValidation)
+	    }`, methodSnake, inputType, outputType, authLine, fullMethod, requestStreamBlock, methodSnake, unaryStreamResponseValidation), nil
 		}
 	}
 
@@ -1432,6 +1451,9 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 		if pf := san.requestPrincipalField(method.FullInputType, servicePackage); pf != "" {
 			validationBlock += rustRequestPrincipalBlock(pf, method.Name)
 		}
+		// (spec.owner_default): refuse the owner's own contradicted access,
+		// after the stamp has bound the request principal to the caller.
+		validationBlock += ownerDefaultGuard
 	}
 	responseValidationBlock := rustServerResponseValidationBlock("resp", method.FullOutputType)
 
@@ -1489,7 +1511,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 			fullMethod, pageValidation,
 			method.Resolved.DefaultPageSize, method.Resolved.MaxPageSize, methodSnake, pageSan,
 			outputType, itemsField, totalBlock, responseValidationBlock)
-		return pageBody
+		return pageBody, nil
 	}
 
 	// Egress data entitlement for unary responses (e.g. RecordMap Sample<T>): a
@@ -1542,7 +1564,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 		%s
 		        let resp = result?;
 		        Ok(tonic::Response::new(resp))
-		    }`, methodSnake, inputType, outputType, authLine, fullMethod, methodSnake, responseValidationBlock, outputType, accountingBlock)
+		    }`, methodSnake, inputType, outputType, authLine, fullMethod, methodSnake, responseValidationBlock, outputType, accountingBlock), nil
 		}
 
 		return fmt.Sprintf(`    async fn %s(
@@ -1568,7 +1590,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	%s
 		        let resp = result?;
 		        Ok(tonic::Response::new(resp))
-		    }`, methodSnake, inputType, outputType, authBlock, reqMut, fullMethod, validationBlock, traceAppend, respMut, methodSnake, handlerArgs, responseValidationBlock, traceCopy, outputType, traceErrorOnResult, accountingBlock)
+		    }`, methodSnake, inputType, outputType, authBlock, reqMut, fullMethod, validationBlock, traceAppend, respMut, methodSnake, handlerArgs, responseValidationBlock, traceCopy, outputType, traceErrorOnResult, accountingBlock), nil
 	}
 
 	// No accounting — original behavior
@@ -1588,7 +1610,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	%s
 
 	        Ok(tonic::Response::new(resp))
-	    }`, methodSnake, inputType, outputType, authLine, fullMethod, methodSnake, responseValidationBlock)
+	    }`, methodSnake, inputType, outputType, authLine, fullMethod, methodSnake, responseValidationBlock), nil
 	}
 
 	return fmt.Sprintf(`    async fn %s(
@@ -1612,5 +1634,5 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         let resp = result?;
 %s
 	        Ok(tonic::Response::new(resp))
-	    }`, methodSnake, inputType, outputType, authBlock, reqMut, fullMethod, validationBlock, traceAppend, respMut, methodSnake, handlerArgs, responseValidationBlock, outputType, traceErrorOnResult, traceCopy)
+	    }`, methodSnake, inputType, outputType, authBlock, reqMut, fullMethod, validationBlock, traceAppend, respMut, methodSnake, handlerArgs, responseValidationBlock, outputType, traceErrorOnResult, traceCopy), nil
 }

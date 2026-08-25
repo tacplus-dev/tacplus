@@ -181,7 +181,8 @@ func TestRustHealthReporterWrapsCheckerAndClassifiesFirstPublish(t *testing.T) {
 // enforce_at_or_below("/") floor — the verification fix lives behind
 // check_caller_at_or_below, not in changed namespace semantics.
 func TestRustAuthAnyUserWrapperEmitsEnforceAtOrBelow(t *testing.T) {
-	rendered := generateRustGRPCWrapper(
+	rendered := mustGenerateRustGRPCWrapper(
+		t,
 		&parser.ServiceInfo{Name: "ContractApi"},
 		&parser.MethodInfo{
 			Name:           "PublicRead",
@@ -266,7 +267,8 @@ func TestRustNoopTraceDoesNotSkipAuth(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rendered := generateRustGRPCWrapper(
+			rendered := mustGenerateRustGRPCWrapper(
+				t,
 				&parser.ServiceInfo{Name: "ContractApi"},
 				tc.method,
 				"contractclient",
@@ -337,7 +339,8 @@ func TestRustNoopTraceDoesNotSkipRequestValidation(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rendered := generateRustGRPCWrapper(
+			rendered := mustGenerateRustGRPCWrapper(
+				t,
 				tc.svc,
 				tc.method,
 				"contractclient",
@@ -365,7 +368,8 @@ func TestRustNoopTraceDoesNotSkipRequestValidation(t *testing.T) {
 // it must emit the plain auth line — always executed — and no noop machinery.
 func TestRustPageWrapperAlwaysRunsAuth(t *testing.T) {
 	m := rustPageMethod()
-	rendered := generateRustGRPCWrapper(
+	rendered := mustGenerateRustGRPCWrapper(
+		t,
 		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
 		m, "catalog", "services", map[string]string{}, "",
 		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, nil)

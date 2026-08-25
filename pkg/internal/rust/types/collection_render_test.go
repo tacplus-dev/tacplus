@@ -40,7 +40,8 @@ func TestRustTier2_Handler_ReturnsVec(t *testing.T) {
 }
 
 func TestRustTier2_Wrapper_ChunksVecIntoStream(t *testing.T) {
-	got := generateRustGRPCWrapper(
+	got := mustGenerateRustGRPCWrapper(
+		t,
 		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
 		rustTier2Method(), "catalog", "services", map[string]string{}, "",
 		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, nil)
@@ -128,7 +129,8 @@ func TestRustWatch_Handler_ReturnsWatchSource(t *testing.T) {
 }
 
 func TestRustWatch_Wrapper_EnvelopeAndRing(t *testing.T) {
-	got := generateRustGRPCWrapper(
+	got := mustGenerateRustGRPCWrapper(
+		t,
 		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
 		rustWatchMethod(), "catalog", "services", map[string]string{}, "",
 		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, nil)
@@ -190,7 +192,8 @@ func TestRustPage_Handler_ReturnsPage(t *testing.T) {
 }
 
 func TestRustPage_Wrapper_DecodesBoundsEncodes(t *testing.T) {
-	got := generateRustGRPCWrapper(
+	got := mustGenerateRustGRPCWrapper(
+		t,
 		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
 		rustPageMethod(), "catalog", "services", map[string]string{}, "",
 		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, nil)

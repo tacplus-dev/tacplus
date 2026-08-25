@@ -96,14 +96,52 @@ func ownerDefaultOf(annotations map[string]model.AnnotationValue, name string) (
 	}, true
 }
 
+// rustPrincipalScopeLocal renders the local binding the caller's grant-carried
+// (spec.principal_scope): how wide the caller's authority over PRINCIPALS is.
+// It rides the same OPA-stamped service_entitlements claim bag the egress data
+// grants already ride, so this is one more claim lookup rather than a second
+// auth path. Absent, empty or SELF is fail-closed to self — the caller may act
+// only as its own principal — which is what scopes an owner_default refusal to
+// the owner instead of to everybody.
+func rustPrincipalScopeLocal(indent string) string {
+	return fmt.Sprintf(`%s// (spec.principal_scope): the width of the caller's authority over principals.
+%slet mut __principal_scope = String::new();
+%sif let Some(c) = caller.as_ref() {
+%s    if let Some(se) = c.token().service_entitlements() {
+%s        if let Some(s) = se.get("principal_scope").and_then(|v| v.as_str()) {
+%s            __principal_scope = s.to_string();
+%s        }
+%s    }
+%s}
+%slet __scope_is_self = __principal_scope.is_empty()
+%s    || __principal_scope == "PRINCIPAL_SCOPE_SELF"
+%s    || __principal_scope == "PRINCIPAL_SCOPE_UNSPECIFIED";
+`, indent, indent, indent, indent, indent, indent, indent, indent, indent, indent, indent, indent)
+}
+
 // rustOwnerDefaultGuard renders the refusal the wrapper emits when the method's
-// static access contradicts the owner rights of a type it touches, or "" when
-// nothing is declared or nothing is contradicted. The error names the type and
-// the right, so a denial here is never mistaken for a missing grant.
+// access contradicts the owner rights of a type it touches, or "" when nothing
+// is declared or nothing is contradicted. The error names the type and the
+// right, so a denial here is never mistaken for a missing grant.
+//
+// The refusal is the OWNER's, not everyone's. Two facts scope it:
+//
+//   - __scope_is_self: a caller whose grant carries a (spec.principal_scope)
+//     wider than self is not acting as the row's own principal, so an owner
+//     default — a DEFAULT — does not bind it.
+//   - the request's (spec.principal) field: the principal this write applies
+//     to, already bound to the authenticated subject by the stamp-or-refuse
+//     block that runs just above. Equal means the owner is writing its own row.
+//
+// CREATE is exempt: it brings a row into existence, so there is no prior owner
+// for the type's owner rights to speak about. UPDATE/DELETE and the other write
+// verbs are what "the owner may not write its own rows" governs.
 //
 // A method that touches such a type but carries no resolved verb classification
 // cannot be judged either way; that is an error rather than a silent pass,
-// matching how the principal read filter refuses to under-enforce.
+// matching how the principal read filter refuses to under-enforce. So is a write
+// refusal on a request that carries no (spec.principal) field: without one the
+// wrapper cannot tell whose row is being written and must not guess.
 func rustOwnerDefaultGuard(method *parser.MethodInfo, san *rustEgressSanitizer, servicePkg string) (string, error) {
 	rights := san.ownerDefaultTypes(method, servicePkg)
 	if len(rights) == 0 {
@@ -111,6 +149,9 @@ func rustOwnerDefaultGuard(method *parser.MethodInfo, san *rustEgressSanitizer, 
 	}
 	if method.Class == nil {
 		return "", fmt.Errorf("%s touches a type declaring (spec.owner_default) but its verb did not classify, so its read/write access is unknown and the owner default cannot be enforced", method.Name)
+	}
+	if method.Class.Pattern == verbs.PatternCreate {
+		return "", nil
 	}
 	var refused []string
 	for _, r := range rights {
@@ -124,8 +165,32 @@ func rustOwnerDefaultGuard(method *parser.MethodInfo, san *rustEgressSanitizer, 
 	if len(refused) == 0 {
 		return "", nil
 	}
-	return fmt.Sprintf("\n        // (spec.owner_default): %s forbids this access for the row owner.\n"+
-		"        return Err(tonic::Status::permission_denied(\n"+
-		"            \"%s: (spec.owner_default) on %s denies the owner this operation\"));",
-		strings.Join(refused, ", "), method.Name, strings.Join(refused, ", ")), nil
+	named := strings.Join(refused, ", ")
+	deny := fmt.Sprintf(`            return Err(tonic::Status::permission_denied(
+                "%s: (spec.owner_default) on %s denies the owner this operation"));
+`, method.Name, named)
+
+	if method.Class.Access == verbs.AccessRead {
+		// A read the owner may not make. There is no row principal to compare:
+		// the (spec.store_principal) read filter has already narrowed the rows
+		// to the caller, so a self-scoped caller reading them IS the owner.
+		return fmt.Sprintf(`
+        // (spec.owner_default): %s forbids this access for the row owner.
+%s        if __scope_is_self {
+%s        }
+`, named, rustPrincipalScopeLocal("        "), deny), nil
+	}
+
+	pf := san.requestPrincipalField(method.FullInputType, servicePkg)
+	if pf == "" {
+		return "", fmt.Errorf("%s writes a type declaring (spec.owner_default) with write:false, but %s carries no (spec.principal) field naming the principal being written, so the wrapper cannot tell the owner's write from anyone else's", method.Name, method.FullInputType)
+	}
+	return fmt.Sprintf(`
+        // (spec.owner_default): %s forbids this access for the row owner.
+        // req.%s is the row's principal — (spec.principal) bound it to the
+        // authenticated subject just above — so an equal subject is the owner
+        // writing its own row. A wider (spec.principal_scope) is not.
+%s%s        if __scope_is_self && req.%s == __od_caller {
+%s        }
+`, named, pf, rustPrincipalScopeLocal("        "), rustPrincipalResolve("__od_caller", method.Name, "        "), pf, deny), nil
 }

@@ -558,12 +558,35 @@ extend google.protobuf.MessageOptions {
   // touching {read: false}. Absent the option nothing is enforced, so this is
   // additive to every existing type.
   //
-  // It is a DEFAULT: a wider entitlement riding on the grant (PrincipalScope)
-  // is the seam that would override it. No such override exists yet, so today
-  // the refusal is unconditional on the RPCs that touch the type.
+  // It is a DEFAULT, so it binds only a caller acting as its own principal.
+  // PrincipalScope (below) is the override: a grant carrying a scope wider than
+  // self is not the owner acting on itself and is not refused here.
   //
   // Example: option (spec.owner_default) = {read: true, write: false};
   OwnerDefault owner_default = 60080;
+}
+
+// PrincipalScope is how wide a caller's authority over PRINCIPALS is. It rides
+// the caller's grant as the "principal_scope" key of the OPA-stamped
+// service_entitlements claim bag — the same bag the egress "data_grants" ride —
+// so it is one more claim on an existing seam, not a second auth path.
+//
+// The generated service wrapper reads it by name and compares it to the row's
+// principal. SELF (and absent/unspecified, which fail closed to SELF) means the
+// caller may act only as its own principal, which is what scopes a
+// (spec.owner_default) refusal to the row's owner instead of to every caller.
+// Anything wider means the caller is not the owner acting on itself.
+enum PrincipalScope {
+  // Unspecified is the proto3 zero value and is treated as SELF: a token that
+  // says nothing about principal scope has not been widened.
+  PRINCIPAL_SCOPE_UNSPECIFIED = 0;
+  // Self: the caller may act only on rows whose principal is the caller.
+  PRINCIPAL_SCOPE_SELF = 1;
+  // Subtree: the caller may act on rows whose principal is at or below the
+  // caller's own namespace.
+  PRINCIPAL_SCOPE_SUBTREE = 2;
+  // Any: the caller may act on any principal's rows.
+  PRINCIPAL_SCOPE_ANY = 3;
 }
 
 // OwnerDefault is the rights a type's owner holds over its own rows by default.

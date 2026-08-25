@@ -12,7 +12,8 @@ import (
 )
 
 func TestRustUnaryAccountingTreatsResponseValidationAsError(t *testing.T) {
-	rendered := generateRustGRPCWrapper(
+	rendered := mustGenerateRustGRPCWrapper(
+		t,
 		&parser.ServiceInfo{Name: "ContractApi", AuthDisabled: true},
 		&parser.MethodInfo{
 			Name:           "PublicRead",
@@ -50,7 +51,8 @@ func TestRustUnaryAccountingTreatsResponseValidationAsError(t *testing.T) {
 }
 
 func TestRustUnaryTraceTreatsHandlerAndValidationErrorsAsResponseTrace(t *testing.T) {
-	rendered := generateRustGRPCWrapper(
+	rendered := mustGenerateRustGRPCWrapper(
+		t,
 		&parser.ServiceInfo{Name: "ContractApi", AuthDisabled: true},
 		&parser.MethodInfo{
 			Name:           "PublicRead",
@@ -128,7 +130,8 @@ func TestRustStreamingAccountingCoversMethodKinds(t *testing.T) {
 			},
 		},
 	} {
-		rendered := generateRustGRPCWrapper(
+		rendered := mustGenerateRustGRPCWrapper(
+			t,
 			svc,
 			tc.method,
 			"contractclient",
@@ -157,7 +160,8 @@ func TestRustStreamingAccountingCoversMethodKinds(t *testing.T) {
 }
 
 func TestRustWatchAccountingRunsInProducerTask(t *testing.T) {
-	rendered := generateRustGRPCWrapper(
+	rendered := mustGenerateRustGRPCWrapper(
+		t,
 		&parser.ServiceInfo{Name: "Catalog", AuthDisabled: true, Methods: []*parser.MethodInfo{rustWatchMethod()}},
 		rustWatchMethod(),
 		"catalog",

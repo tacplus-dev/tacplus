@@ -131,6 +131,55 @@ message %s {
 `, reqName, respName, p.keyType))
 	}
 
+	// TWO CALLER SURFACES, ONE QUERY PLANE — the same split record_map.go makes
+	// for RecordMap/RecordQuery, for the same reason.
+	//
+	// A service declares exactly one caller surface (parser.ValidateServiceSurfaces
+	// refuses a service carrying two), so the plane is emitted TWICE:
+	//
+	//   TimeseriesQuery     S2S. Reached by a peer service, authorized by peer
+	//                       identity through auth_services. Unchanged.
+	//   TimeseriesKeyQuery  C2S. Reached with a user token through the gateway,
+	//                       authorized by that token's service entitlements.
+	//
+	// The c2s half is not a convenience alias. registry.collectEntitlementGrants
+	// builds the platform's grant catalog from c2s RPCs ONLY, so an s2s-only
+	// surface has no grant vocabulary at all: a timeseries store minted zero
+	// <PKG>_* grants and no <PKG>_ANY macro, and no grant string — wildcard or
+	// exact — could authorize a user call into it. Emitting the c2s sibling is
+	// what puts the timeseries query plane INTO the catalog, so <PKG>_ANY becomes
+	// a real grant that grows with new projections by generation rather than by
+	// hand.
+	//
+	// Both surfaces share every message above AND every RPC name: List<T> already
+	// classifies as LIST/PAGE against the closed verb registry, which is what a
+	// c2s RPC must do, so one logical operation carries one name on both.
+	//
+	// Direction ruling (2026-08-23, restated 2026-08-25): a client calls timedb
+	// DIRECTLY with a user token — it does not federate through the record store.
+	// That is why the answer here is a c2s twin and NOT widening the s2s
+	// auth_services allowlist.
+	sb.WriteString(timeseriesQueryS2SService(projections))
+	sb.WriteString(timeseriesKeyQueryC2SService(projections))
+
+	var buf strings.Builder
+	buf.Write(content)
+	buf.WriteString(sb.String())
+	if err := os.WriteFile(filePath, []byte(buf.String()), 0644); err != nil {
+		return fmt.Errorf("failed to write proto file %s: %w", relPath, err)
+	}
+
+	zap.L().Info("appended TimeseriesQuery service",
+		zap.String("file", relPath),
+		zap.Int("projections", len(projections)))
+	return nil
+}
+
+// timeseriesQueryS2SService renders the S2S half of the timeseries key query
+// plane: the service a peer reaches directly, authorized by peer identity
+// through auth_services rather than by a user token's entitlements.
+func timeseriesQueryS2SService(projections []tsQueryProjection) string {
+	var sb strings.Builder
 	sb.WriteString("\nservice TimeseriesQuery {\n")
 	sb.WriteString("  option (spec.service_s2s) = {};\n")
 	for _, p := range projections {
@@ -144,18 +193,30 @@ message %s {
 `, p.typeName, reqName, respName, p.orderBy))
 	}
 	sb.WriteString("}\n")
+	return sb.String()
+}
 
-	var buf strings.Builder
-	buf.Write(content)
-	buf.WriteString(sb.String())
-	if err := os.WriteFile(filePath, []byte(buf.String()), 0644); err != nil {
-		return fmt.Errorf("failed to write proto file %s: %w", relPath, err)
+// timeseriesKeyQueryC2SService renders the C2S half: the same per-projection
+// paged key query, reachable with a user token through the gateway and
+// authorized by that token's service entitlements. It carries no (spec.rpc)
+// auth override — the service-level auth_entitled_users default is the whole
+// point, since that is what puts these RPCs in the generated grant catalog.
+// See the surface comment in appendTimeseriesQueryToServiceProto.
+func timeseriesKeyQueryC2SService(projections []tsQueryProjection) string {
+	var sb strings.Builder
+	sb.WriteString("\nservice TimeseriesKeyQuery {\n")
+	sb.WriteString("  option (spec.service_c2s) = {auth_entitled_users: true};\n")
+	for _, p := range projections {
+		reqName := "List" + p.typeName + "Request"
+		respName := "List" + p.typeName + "Response"
+		sb.WriteString(fmt.Sprintf(`
+  rpc List%s(%s) returns (%s) {
+    option (spec.method_collection) = {mode: COLLECTION_MODE_PAGE, order_by: [%q], default_page_size: 100};
+  }
+`, p.typeName, reqName, respName, p.orderBy))
 	}
-
-	zap.L().Info("appended TimeseriesQuery service",
-		zap.String("file", relPath),
-		zap.Int("projections", len(projections)))
-	return nil
+	sb.WriteString("}\n")
+	return sb.String()
 }
 
 // timeseriesFirstField returns the first field name of a timeseries_type message

@@ -5,6 +5,7 @@
 
 package {{.ChassisBase}}.servicemanager;
 
+import {{.ChassisBase}}.token.TokenWrapper;
 import {{.TypesBase}}.sys.jwk.JwkOuterClass.Jwk;
 
 import io.grpc.Context;
@@ -39,15 +40,62 @@ public final class Auth {
     public static final Context.Key<String> REQUEST_ID_CTX =
             Context.key("x-request-id");
 
-    /** Context key for the decoded JWT payload JSON extracted by the interceptor. */
-    public static final Context.Key<String> TOKEN_PAYLOAD_CTX =
-            Context.key("token-payload");
+    /**
+     * Per-call slot for the caller's token. It starts EMPTY and is filled only by
+     * {@link #recordVerifiedToken}, which the Authorizer calls after it has
+     * verified the token's signature, audience and expiry. On an RPC where
+     * nothing verifies — auth_disabled, RPC_FLAG_PUBLIC_NO_AUTH,
+     * RPC_FLAG_SELF_AUTHENTICATES — the slot stays empty and every consumer sees
+     * no caller at all, which is the fail-closed answer.
+     *
+     * <p>Claims are NEVER read from a raw decode of the bearer header: a decode
+     * proves only that the caller can write base64.
+     */
+    public static final class VerifiedToken {
+        private volatile TokenWrapper token;
+
+        private VerifiedToken() {}
+    }
+
+    /** Context key for the caller's verified token slot. */
+    public static final Context.Key<VerifiedToken> VERIFIED_TOKEN_CTX =
+            Context.key("verified-token");
 
     /**
-     * Returns a gRPC server interceptor that extracts x-request-id and the
-     * bearer token payload from metadata and stores both in the gRPC Context.
-     * The token payload is base64url-decoded from the JWT's second segment
-     * (the Authorizer has already verified the signature).
+     * Returns ctx carrying a verified-token slot, reusing the one already there.
+     * Installed by every Authorizer interceptor so that whichever of them runs
+     * first owns the slot and later verification fills that same one.
+     */
+    public static Context withVerifiedTokenSlot(Context ctx) {
+        return VERIFIED_TOKEN_CTX.get(ctx) != null
+                ? ctx
+                : ctx.withValue(VERIFIED_TOKEN_CTX, new VerifiedToken());
+    }
+
+    /**
+     * Records the token the Authorizer just verified into the current call's
+     * slot. A no-op when no slot is installed (no Authorizer interceptor on this
+     * server), which leaves consumers with no claims rather than unverified ones.
+     */
+    public static void recordVerifiedToken(TokenWrapper token) {
+        VerifiedToken slot = VERIFIED_TOKEN_CTX.get();
+        if (slot != null) {
+            slot.token = token;
+        }
+    }
+
+    /**
+     * Returns the caller's verified token, or null when nothing verified one on
+     * this RPC.
+     */
+    public static TokenWrapper verifiedTokenFromContext() {
+        VerifiedToken slot = VERIFIED_TOKEN_CTX.get();
+        return slot == null ? null : slot.token;
+    }
+
+    /**
+     * Returns a gRPC server interceptor that extracts x-request-id from metadata
+     * and stores it in the gRPC Context.
      */
     public static ServerInterceptor requestIdInterceptor() {
         return new ServerInterceptor() {
@@ -56,22 +104,7 @@ public final class Auth {
                     ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
                 String requestId = headers.get(REQUEST_ID_KEY);
                 if (requestId == null) requestId = "";
-                String tokenPayload = "";
-                String auth = headers.get(AUTH_KEY);
-                if (auth != null && auth.startsWith("Bearer ")) {
-                    String token = auth.substring(7);
-                    String[] parts = token.split("\\.");
-                    if (parts.length == 3) {
-                        try {
-                            tokenPayload = new String(Base64.getUrlDecoder().decode(parts[1]));
-                        } catch (IllegalArgumentException ignored) {
-                            // Malformed base64 — leave payload empty.
-                        }
-                    }
-                }
-                Context ctx = Context.current()
-                        .withValue(REQUEST_ID_CTX, requestId)
-                        .withValue(TOKEN_PAYLOAD_CTX, tokenPayload);
+                Context ctx = Context.current().withValue(REQUEST_ID_CTX, requestId);
                 return Contexts.interceptCall(ctx, call, headers, next);
             }
         };
@@ -86,18 +119,26 @@ public final class Auth {
     }
 
     /**
-     * Extracts the decoded JWT payload JSON from the current gRPC context.
-     * Returns empty string if no token was present.
+     * Extracts the JWT payload JSON of the caller's VERIFIED token from the
+     * current gRPC context. Returns empty string when nothing verified a token
+     * on this RPC.
      */
     public static String tokenPayloadFromContext() {
-        String payload = TOKEN_PAYLOAD_CTX.get();
-        return payload != null ? payload : "";
+        TokenWrapper token = verifiedTokenFromContext();
+        if (token == null) return "";
+        String[] parts = token.getBase64().split("\\.");
+        if (parts.length != 3) return "";
+        try {
+            return new String(Base64.getUrlDecoder().decode(parts[1]));
+        } catch (IllegalArgumentException e) {
+            return "";
+        }
     }
 
     /**
-     * Extracts the caller's sub (SPIFFE URI) from the Bearer token stored in the current gRPC context.
-     * The sub is read from the token payload captured by requestIdInterceptor() before auth.
-     * Returns empty string if no token was present or the token has no sub claim.
+     * Extracts the caller's sub (SPIFFE URI) from the caller's verified token.
+     * Returns empty string if nothing verified a token on this RPC or the token
+     * has no sub claim.
      */
     public static String callerSubFromContext() {
         String payload = tokenPayloadFromContext();

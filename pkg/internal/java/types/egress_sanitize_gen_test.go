@@ -42,7 +42,10 @@ func TestJavaEgress_Tier2Wrapper_SanitizesItems(t *testing.T) {
 		javaEgressTestSanitizer(), map[string]string{}, nil)
 	for _, want := range []string{
 		"java.util.Set<String> __dataGrants = new java.util.HashSet<>();",
-		`getFieldsOrDefault("data_grants", null)`,
+		// Grants come from the caller's VERIFIED token, never from a decode of
+		// the bearer header (F11).
+		"TokenWrapper __callerToken = Auth.verifiedTokenFromContext();",
+		"__dataGrants.addAll(__serviceEntitlements.getDataGrantsList());",
 		"final byte[] __hmacKey = this.anonymizeHmacKey;",
 		"final var __entItem = Helpers.buildItemEntitlement(__dataGrants);",
 		"__out.onNext(Helpers.sanitizeItem(__it.next(), __entItem, __hmacKey));",

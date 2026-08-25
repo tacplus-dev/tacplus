@@ -583,6 +583,11 @@ public final class TokenWrapper {
     /**
      * Copies claims from a protobuf Struct into the token payload.
      * Claims in skipKeys are ignored. Claims in originPrefixKeys get an "origin_" prefix.
+     * A claim the producer already origin_-prefixed is copied verbatim and is never
+     * treated as a skip key: the prefix exists precisely to keep an IdP value from
+     * colliding with the Schematic claim of the same name, so there is nothing left
+     * to skip — even when the prefixed name is itself a declared payload type
+     * (origin_iss is both, and was being dropped on every re-mint because of it).
      * Protobuf Value types are automatically converted to JSON-compatible strings.
      */
     public TokenWrapper setClaimsFromStruct(Struct claims,
@@ -590,7 +595,9 @@ public final class TokenWrapper {
         if (claims == null) return this;
         for (Map.Entry<String, Value> entry : claims.getFieldsMap().entrySet()) {
             String key = entry.getKey();
-            if (skipKeys.contains(key)) continue;
+            boolean alreadyPrefixed = key.startsWith("origin_")
+                    && originPrefixKeys.contains(key.substring("origin_".length()));
+            if (!alreadyPrefixed && skipKeys.contains(key)) continue;
             String outputKey = originPrefixKeys.contains(key) ? "origin_" + key : key;
             setCustomField(outputKey, entry.getValue());
         }

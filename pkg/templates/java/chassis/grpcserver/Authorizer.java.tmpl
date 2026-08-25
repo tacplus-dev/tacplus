@@ -3,6 +3,7 @@
 package {{.ChassisBase}}.grpcserver;
 
 import {{.ChassisBase}}.jwk.ImmutableJwk;
+import {{.ChassisBase}}.servicemanager.Auth;
 import {{.ChassisBase}}.token.TokenWrapper;
 import {{.PackageBase}}.grants.Grants;
 import {{.TypesBase}}.sys.errors.ProtoException;
@@ -175,6 +176,10 @@ public class Authorizer {
      * {@link #authorizingInterceptor} (that plus the per-method auth_services
      * policy) — the way {@code ServiceManager} wraps
      * {@code Handler.additionalServices()}.
+     *
+     * <p>It also installs the empty verified-token slot the generated wrappers'
+     * authorize()/authenticate() calls fill once verifyBearer succeeds. On a
+     * method that never calls either, the slot stays empty.
      */
     public static ServerInterceptor headerCaptureInterceptor() {
         return new ServerInterceptor() {
@@ -184,7 +189,8 @@ public class Authorizer {
                     Metadata headers,
                     ServerCallHandler<ReqT, RespT> next) {
                 String authHeader = headers.get(AUTH_METADATA_KEY);
-                Context ctx = Context.current().withValue(AUTH_HEADER_CTX_KEY, authHeader);
+                Context ctx = Auth.withVerifiedTokenSlot(Context.current())
+                        .withValue(AUTH_HEADER_CTX_KEY, authHeader);
                 return Contexts.interceptCall(ctx, call, headers, next);
             }
         };
@@ -206,6 +212,11 @@ public class Authorizer {
                     Metadata headers,
                     ServerCallHandler<ReqT, RespT> next) {
                 String authHeader = headers.get(AUTH_METADATA_KEY);
+                // Verify INSIDE ctx so verifyBearer records the verified token
+                // into the slot this call will carry.
+                Context ctx = Auth.withVerifiedTokenSlot(Context.current())
+                        .withValue(AUTH_HEADER_CTX_KEY, authHeader);
+                Context prev = ctx.attach();
                 try {
                     authenticateWithToken(authHeader);
                 } catch (ProtoException e) {
@@ -213,8 +224,9 @@ public class Authorizer {
                             .withDescription(e.getMessage());
                     call.close(status, new Metadata());
                     return new ServerCall.Listener<>() {};
+                } finally {
+                    ctx.detach(prev);
                 }
-                Context ctx = Context.current().withValue(AUTH_HEADER_CTX_KEY, authHeader);
                 return Contexts.interceptCall(ctx, call, headers, next);
             }
         };
@@ -242,6 +254,11 @@ public class Authorizer {
                     Metadata headers,
                     ServerCallHandler<ReqT, RespT> next) {
                 String authHeader = headers.get(AUTH_METADATA_KEY);
+                // Verify INSIDE ctx so verifyBearer records the verified token
+                // into the slot this call will carry.
+                Context ctx = Auth.withVerifiedTokenSlot(Context.current())
+                        .withValue(AUTH_HEADER_CTX_KEY, authHeader);
+                Context prev = ctx.attach();
                 try {
                     authorizeWithToken(authHeader, call.getMethodDescriptor().getFullMethodName());
                 } catch (ProtoException e) {
@@ -249,8 +266,9 @@ public class Authorizer {
                             .withDescription(e.getMessage());
                     call.close(status, new Metadata());
                     return new ServerCall.Listener<>() {};
+                } finally {
+                    ctx.detach(prev);
                 }
-                Context ctx = Context.current().withValue(AUTH_HEADER_CTX_KEY, authHeader);
                 return Contexts.interceptCall(ctx, call, headers, next);
             }
         };
@@ -564,6 +582,10 @@ public class Authorizer {
             throw ProtoException.newErrPermissionDenied(null,
                     "token audience \"" + aud + "\" does not match service \"" + SERVICE_NAME + "\"");
         }
+
+        // Signature, expiry, token class and audience all checked: this is the
+        // only place a token becomes readable as the caller's identity.
+        Auth.recordVerifiedToken(tw);
 
         return tw;
     }

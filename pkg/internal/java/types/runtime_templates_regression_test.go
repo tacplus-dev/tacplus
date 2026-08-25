@@ -662,6 +662,32 @@ func TestJavaServiceManagerExposesSubscriberPlumbing(t *testing.T) {
 	}
 }
 
+// An already origin_-prefixed claim must survive setClaimsFromStruct. origin_iss is
+// both an origin_-prefixed IdP claim and a declared JwtPayloadType, so it lands in the
+// caller's skip set (kernel builds it from Helpers.jwtPayloadTypeValidValues()); with
+// the skip check first it was dropped on every re-mint and OPA saw zero entitlements.
+func TestJavaTokenWrapperKeepsAlreadyOriginPrefixedClaims(t *testing.T) {
+	rendered := readJavaTemplate(t, "java/chassis/token/TokenWrapper.java.tmpl")
+
+	for _, want := range []string{
+		`boolean alreadyPrefixed = key.startsWith("origin_")`,
+		`&& originPrefixKeys.contains(key.substring("origin_".length()));`,
+		"if (!alreadyPrefixed && skipKeys.contains(key)) continue;",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("setClaimsFromStruct must exempt already origin_-prefixed claims from skipKeys; missing %q", want)
+		}
+	}
+	if strings.Contains(rendered, "if (skipKeys.contains(key)) continue;") {
+		t.Fatal("setClaimsFromStruct must not skip on skipKeys before the already-origin_-prefixed check")
+	}
+	guard := strings.Index(rendered, "boolean alreadyPrefixed")
+	skip := strings.Index(rendered, "skipKeys.contains(key)) continue;")
+	if guard < 0 || skip < 0 || guard > skip {
+		t.Fatal("the already-origin_-prefixed guard must be computed before the skipKeys check")
+	}
+}
+
 func renderJavaTemplateForTest(t *testing.T, name string, data javaSmTemplateData) string {
 	t.Helper()
 	tmplStr, err := loadTemplate(name)

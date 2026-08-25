@@ -138,6 +138,21 @@ var byToken = map[string]Grant{
 
 const goGrantsFooter = `}
 
+// Tokens returns every generated grant token in stable catalog order — the same
+// enumerator the Java helper exposes as Grants.tokens(). Callers that need "every
+// grant this build knows about" (operator/UI grant pickers, an all-entitlements
+// expansion) must read it from here: a hand-written token list drifts silently
+// when a service joins or leaves the fleet, and the dead entries it leaves behind
+// normalize to nothing.
+func Tokens() []string {
+	out := make([]string, 0, len(byToken))
+	for token := range byToken {
+		out = append(out, token)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Lookup returns the Grant for a token and whether it is a known grant.
 func Lookup(token string) (Grant, bool) { g, ok := byToken[token]; return g, ok }
 

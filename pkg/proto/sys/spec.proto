@@ -1588,6 +1588,30 @@ extend google.protobuf.FieldOptions {
   // generates a typed Sanitize<T>(record, <T>Entitlement, hmacKey) transform; the
   // store computes the entitlement (mechanism in tacplus, policy in service).
   RedactOption redact = 60082;
+
+  // ----- Principal annotations (§4b: the principal is a property of the type) -----
+  // These two say WHERE the caller's principal lives, once, on the type. The
+  // generated service wrapper then owns the stamp, the forgery refusal and the
+  // read filter, so no handler hand-writes any of the three. They are stronger
+  // than (spec.identity_subject), which only classifies a field as holding *a*
+  // subject id: these bind the field to the *authenticated caller's* subject.
+
+  // principal: this REQUEST string field carries the caller's principal. The
+  // generated wrapper resolves the authenticated caller's subject and then:
+  //   - empty  -> stamps the subject into the field before the handler runs;
+  //   - equal  -> accepts unchanged;
+  //   - differs-> refuses with INVALID_ARGUMENT (never silently overwritten).
+  // An unauthenticated caller on a principal-bearing RPC is UNAUTHENTICATED.
+  // Example: string created_by = 2 [(spec.principal) = true];
+  bool principal = 60083;
+
+  // store_principal: this RECORD string field holds the row's owning principal.
+  // The generated wrapper filters every repeated field of that record type in a
+  // response down to rows the caller owns, so a read plane cannot return one
+  // principal's rows to another. Egress-side only, exactly like (spec.redact):
+  // rows are stored raw and the filter is applied on the way out.
+  // Example: string created_by = 4 [(spec.store_principal) = true];
+  bool store_principal = 60084;
 }
 
 // QueryOp is the match kind for a (spec.query_field) record filter criterion.

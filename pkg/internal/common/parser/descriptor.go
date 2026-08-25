@@ -1918,6 +1918,13 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 	if proto.HasExtension(opts, spec.E_AssertHost) && proto.GetExtension(opts, spec.E_AssertHost).(bool) {
 		annotations["assert_host"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 	}
+	// Principal annotations: where the caller's principal lives on the type.
+	if proto.HasExtension(opts, spec.E_Principal) && proto.GetExtension(opts, spec.E_Principal).(bool) {
+		annotations["principal"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
+	if proto.HasExtension(opts, spec.E_StorePrincipal) && proto.GetExtension(opts, spec.E_StorePrincipal).(bool) {
+		annotations["store_principal"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
 	// SPIFFE identity annotations (plan D5)
 	if proto.HasExtension(opts, spec.E_IdentityNamespace) && proto.GetExtension(opts, spec.E_IdentityNamespace).(bool) {
 		annotations["identity_namespace"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}

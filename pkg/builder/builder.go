@@ -192,6 +192,9 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateSpiffeIdentityAnnotations(dp); err != nil {
 		return err
 	}
+	if err := parser.ValidatePrincipalAnnotations(dp); err != nil {
+		return err
+	}
 	if err := parser.ValidateSmbAuthority(dp); err != nil {
 		return err
 	}

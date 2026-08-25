@@ -196,6 +196,20 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	var grpcWrappers, watchFields, watchFieldsInit strings.Builder
 	var methodAuthLines []string
 	for _, method := range targetService.Methods {
+		// (spec.store_principal) is enforced on the unary egress seam only. A
+		// PAGE or streaming method carrying such rows would return them
+		// unfiltered, so refuse to generate rather than under-enforce silently.
+		if method.StreamingType() != "unary" || method.IsPageCollection() {
+			for _, t := range []string{method.FullOutputType, method.Resolved.PageItemType, method.Resolved.WatchItemType} {
+				if t == "" {
+					continue
+				}
+				if san.storePrincipalField(t, info.Package) != "" || len(san.principalListFields(t, info.Package)) > 0 {
+					return fmt.Errorf("%s.%s returns %s, which carries (spec.store_principal), on a %s path; the principal read filter is generated for unary responses only",
+						targetService.Name, method.Name, t, method.StreamingType())
+				}
+			}
+		}
 		if method.IsWatchCollection() {
 			_, changeType := rustWatchTypes(method, info.Package, info.CrossPackageTypes)
 			fieldName := methodSnakeNameLower(method.Name) + "_watch_hub"
@@ -1404,6 +1418,10 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         // Validate request before invoking the handler.
         req.validate().map_err(|e| tonic::Status::invalid_argument(format!("validation failed: {}", e)))?;
 `
+		// (spec.principal): stamp or refuse before the handler sees the request.
+		if pf := san.requestPrincipalField(method.FullInputType, servicePackage); pf != "" {
+			validationBlock += rustRequestPrincipalBlock(pf, method.Name)
+		}
 	}
 	responseValidationBlock := rustServerResponseValidationBlock("resp", method.FullOutputType)
 
@@ -1482,6 +1500,12 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 			unarySan = rustEgressSanitizePreamble(targets) + "        let mut resp = resp;\n" + rustEgressEnvelopeStmts(fs, "resp", "        ")
 		}
 		responseValidationBlock = unarySan + responseValidationBlock
+	}
+
+	// (spec.store_principal): filter rows the caller does not own out of the
+	// response, before it is validated and returned. Egress-side, like sanitize.
+	if lf := san.principalListFields(method.FullOutputType, servicePackage); len(lf) > 0 {
+		responseValidationBlock = rustResponsePrincipalFilterBlock(lf, method.Name) + responseValidationBlock
 	}
 
 	// Unary methods - authorize, extract caller, validate, delegate to handler

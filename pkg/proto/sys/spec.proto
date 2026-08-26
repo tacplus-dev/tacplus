@@ -129,6 +129,13 @@ extend google.protobuf.FileOptions {
   // Example: option (spec.record_store) = {};
   RecordStoreAnnotation record_store = 50023;
   // 50024 retired (cold_store — tiering is internal to the store service).
+
+  // trait declares a cross-service trait implemented by a host service.
+  // Like vservice, a trait is not a physical process: its RPCs are hosted by a
+  // physical service while entitlements are checked against the trait name.
+  // A trait declaration populates the same identity the vservice option does.
+  // Example: option (spec.trait) = {id: 40, name: "query"};
+  TraitAnnotation trait = 50025;
 }
 
 // Enum value JSON serialization
@@ -1690,6 +1697,17 @@ message VServiceAnnotation {
   // name is the canonical vservice name used as the entitlement key (e.g., "claudesensor").
   string name = 1;
   // id is the stable field number in TokenEntitlements for this vservice.
+  int32 id = 2;
+}
+
+// TraitAnnotation declares a trait identity for a proto file.
+// Traits carry the same identity shape as a vservice — a canonical name used as
+// the entitlement key plus a stable TokenEntitlements field id — and are parsed
+// into the same descriptor fields.
+message TraitAnnotation {
+  // name is the canonical trait name used as the entitlement key (e.g., "query").
+  string name = 1;
+  // id is the stable field number in TokenEntitlements for this trait.
   int32 id = 2;
 }
 

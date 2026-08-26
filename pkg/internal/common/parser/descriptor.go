@@ -61,8 +61,8 @@ type FileDescriptor struct {
 	OpaImportTargets    []VirtualImport // Parsed OPA imports with target service
 	TimeseriesStore     bool            // Whether this service is a timeseries data store from option (spec.timeseries_store)
 	RecordStore         bool            // Whether this service is an in-memory hot event store from option (spec.record_store)
-	VServiceName        string          // File-level virtual-service identity name from option (spec.vservice).name
-	VServiceID          int32           // File-level virtual-service field id from option (spec.vservice).id
+	VServiceName        string          // File-level virtual-service identity name from option (spec.vservice).name or (spec.trait).name
+	VServiceID          int32           // File-level virtual-service field id from option (spec.vservice).id or (spec.trait).id
 }
 
 // VirtualImport represents a dependency on a virtual service with an explicit target.
@@ -511,6 +511,9 @@ func (p *DescriptorParser) parseFileDescriptor(fd protoreflect.FileDescriptor) {
 	fileDesc.TimeseriesStore = p.parseTimeseriesStore(fd)
 	fileDesc.RecordStore = p.parseRecordStore(fd)
 	fileDesc.VServiceName, fileDesc.VServiceID = p.parseVService(fd)
+	if name, id := p.parseTrait(fd); name != "" {
+		fileDesc.VServiceName, fileDesc.VServiceID = name, id
+	}
 
 	p.descriptors[fd.Path()] = fileDesc
 }
@@ -1365,6 +1368,21 @@ func (p *DescriptorParser) parseVService(fd protoreflect.FileDescriptor) (string
 		return "", 0
 	}
 	val := proto.GetExtension(opts, spec.E_Vservice).(*spec.VServiceAnnotation)
+	if val == nil {
+		return "", 0
+	}
+	return val.GetName(), val.GetId()
+}
+
+// parseTrait extracts the file-level (spec.trait) trait identity (name + field
+// id). Empty name means the file declares no trait. Twin of parseVService: a
+// trait carries the same identity shape and lands in the same descriptor fields.
+func (p *DescriptorParser) parseTrait(fd protoreflect.FileDescriptor) (string, int32) {
+	opts := fd.Options().(*descriptorpb.FileOptions)
+	if opts == nil || !proto.HasExtension(opts, spec.E_Trait) {
+		return "", 0
+	}
+	val := proto.GetExtension(opts, spec.E_Trait).(*spec.TraitAnnotation)
 	if val == nil {
 		return "", 0
 	}

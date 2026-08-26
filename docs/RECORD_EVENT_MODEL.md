@@ -159,9 +159,11 @@ declaration requires the other to generate.
   `QUERY_*` grants in `service_entitlements`: the package-wide `QUERY_ANY`, the
   capability wildcards `QUERY_READ_ANY` / `QUERY_WRITE_ANY` / `QUERY_PAGE_ANY` /
   `QUERY_WATCH_ANY`, or an exact grant such as
-  `QUERY_RECORD_QUERY_CREATE_TASK_ACTIVITY_QUERY`. testapp's e2e drives exactly that:
-  a logged-in user calling `query.RecordQuery/CreateTaskActivityQuery` and
-  `query.RecordQuery/ListTaskActivity`. The S2S half's only declared peer is **argus**,
+  `QUERY_RECORD_QUERY_CREATE_TASK_ACTIVITY_QUERY`. testapp's e2e drives exactly that
+  path — a logged-in user calling `CreateTaskActivityQuery` and then `ListTaskActivity`
+  on `RecordQuery`, which the `query` package makes
+  `query.RecordQuery/CreateTaskActivityQuery` on the wire. The S2S half's only
+  declared peer is **argus**,
   which left the fleet 2026-08-20, so `RecordMap` has **no live caller today**; it is
   kept because one plane once per audience is the shape, and its audience is now a
   line in a proto that can be read and deleted rather than a literal in generator

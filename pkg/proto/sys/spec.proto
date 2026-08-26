@@ -85,11 +85,7 @@ extend google.protobuf.FileOptions {
   // tacplus generates typed client methods on the importing service's SM.
   repeated OpaImport opa_import = 50013;
 
-  // graph_store marks this service as a graph data store. The store receives
-  // its projection data by subscribing to the EventBus topics that carry its
-  // projection sources (no mutation service is generated).
-  // Example: option (spec.graph_store) = {};
-  GraphStoreAnnotation graph_store = 50014;
+  // 50014 retired (graph_store — graph store support removed 2026-08-25).
 
   // timeseries_store marks this service as a timeseries data store. The store
   // receives its projection data by subscribing to the EventBus topics that
@@ -410,14 +406,7 @@ extend google.protobuf.MessageOptions {
   //   option (spec.subscribe) = {source: "claudesensor.AgenticCodeEventBus.event_stream"};
   repeated SubscriptionAnnotation subscribe = 60045;
 
-  // graph_type marks this message as a graph type for schema generation.
-  // Used by subscribe-gen to generate graph-store projections and mutation handlers.
-  // Messages with this annotation become graph types with indexed predicates.
-  // Nested messages WITHOUT this annotation are serialized as JSON string predicates
-  // when referenced from a graph type — see D2 in the design doc.
-  // Example:
-  //   option (spec.graph_type) = {name: "Entity", xid_field: "id"};
-  GraphTypeAnnotation graph_type = 60046;
+  // 60046 retired (graph_type — graph store support removed 2026-08-25).
 
   // record marks this message as a stored record (an event held in full by the
   // record_store, stratum) and makes it projectable. key = unique id field,
@@ -435,17 +424,7 @@ extend google.protobuf.MessageOptions {
   //   option (spec.event) = {c2s: {auth_any_user: true}, s2s: {}};
   EventAnnotation event = 60079;
 
-  // graph_projection declares a graph node type derived from this event.
-  // tacplus generates the node message, projection_source mappings, and
-  // graph annotations. Repeated — one per graph type to extract.
-  // Example:
-  //   option (spec.graph_projection) = {
-  //     name: "Session"
-  //     xid: "session_id"
-  //     field: {source: "session_id"  index: "exact"  upsert: true}
-  //     field: {source: "email"       index: "exact"}
-  //   };
-  repeated GraphProjection graph_projection = 60066;
+  // 60066 retired (graph_projection — graph store support removed 2026-08-25).
 
   // timeseries_projection declares a timeseries table type derived from
   // this event. tacplus generates the record message, column annotations,
@@ -631,40 +610,8 @@ message EventWatchAnnotation {
   MethodC2SAnnotation method_c2s = 3;
 }
 
-// GraphTypeAnnotation marks a proto message as a graph type for schema generation.
-// Used to generate mutation handlers and graph store projections.
-//
-// Design decisions (D1, D2, D3 from the graph schema plan):
-//
-// D1: Annotations go on SOURCE messages (e.g. GraphEntity in aegis.proto),
-// not on the consumer. The source messages are the authority on the data model.
-// This follows the same pattern as service_state, topic, and subscribe —
-// the annotation lives where the structure is defined.
-//
-// D2: Nested messages WITHOUT graph_type are serialized as JSON string
-// predicates. Graph storage is for traversal (structural fields), not
-// analytical queries on metadata. JSON storage avoids ~50 null predicates
-// per entity, prevents schema churn, and allows incremental promotion.
-//
-// D3: xid_field controls the mutation strategy. When set, subscribe-gen
-// generates a conditional upsert by external id (xid) — query by xid,
-// then update-or-insert. When empty, subscribe-gen generates JSON insert (append-only).
-message GraphTypeAnnotation {
-  // name is the graph type name (e.g. "Entity", "Edge").
-  string name = 1;
-  // xid_field is the proto field used as the external ID for upserts.
-  // When set, subscribe-gen generates upsert mutations keyed on this field.
-  // When empty, subscribe-gen generates insert-only JSON mutations.
-  string xid_field = 2;
-  // source is the fully-qualified event message this graph type is extracted from.
-  // When set, subscribe-gen generates field extraction code that maps fields
-  // from the source event to this graph type using (spec.projection_source) annotations.
-  // Example: "sensor.SensorEvent"
-  string source = 3;
-}
-
 // RecordAnnotation marks a message as a stored record: an event held in full by
-// the record_store (stratum) and projectable to graph/timeseries stores. A record
+// the record_store (stratum) and projectable to timeseries stores. A record
 // IS an event (it flows through eventbus); every record declares a key field
 // (unique identifier) and an owner field (ownership/identity).
 message RecordAnnotation {
@@ -691,35 +638,6 @@ message EventAnnotation {
   MethodC2SAnnotation c2s = 1;
   // s2s, when present, exposes the publish RPC to internal services.
   MethodS2SAnnotation s2s = 2;
-}
-
-// GraphProjection declares a graph node type extracted from an event message.
-// tacplus generates the node message with graph annotations, projection_source
-// mappings, and conditional extraction logic for oneof fields.
-message GraphProjection {
-  // name is the graph type name (e.g. "Session", "Agent", "ToolUse").
-  string name = 1;
-  // xid is the source field path used as the external ID for upserts.
-  // Dot notation accesses oneof payloads (e.g. "tool_use.tool_use_id").
-  string xid = 2;
-  // field is the list of fields to include in the generated graph node.
-  repeated GraphProjectionField field = 3;
-}
-
-// GraphProjectionField maps a source event field to a graph node predicate.
-message GraphProjectionField {
-  // source is the field path on the source event (e.g. "email", "tool_use.tool_name").
-  string source = 1;
-  // as renames the field in the generated node (defaults to last segment of source).
-  string as = 2;
-  // index is the graph index type: "exact", "hash", "int", "float", etc.
-  string index = 3;
-  // edge names the target graph type when this field is a uid edge (e.g. "Session").
-  string edge = 4;
-  // include stores the field as JSON blob (GRAPH_MODE_INCLUDE) instead of a predicate.
-  bool include = 5;
-  // upsert marks this field as the upsert key (must match the projection's xid).
-  bool upsert = 6;
 }
 
 // CardinalityHint is a store-neutral hint about how many distinct values a
@@ -791,64 +709,6 @@ message TimeseriesProjectionField {
   reserved "low_cardinality";
   // cardinality_hint is a store-neutral hint about the column's distinct-value count.
   CardinalityHint cardinality_hint = 6;
-}
-
-// GraphMode controls how a field is persisted in graph storage.
-// UNSPECIFIED means the field is omitted (not stored).
-// Annotations are opt-in: fields without (spec.graph) are not persisted.
-enum GraphMode {
-  // Field is not stored in graph storage.
-  GRAPH_MODE_UNSPECIFIED = 0;
-
-  // Field is stored as a JSON blob. Not queryable, but preserved
-  // for round-trip fidelity. Suitable for maps, collections, and nested data
-  // that doesn't need graph traversal or filtering.
-  GRAPH_MODE_INCLUDE = 1;
-
-  // Field becomes a graph predicate with an index. Scalar fields map to
-  // typed predicates (string, int, float, bool, datetime). Message fields
-  // become uid edges — the target message must also have (spec.graph)
-  // annotations and exactly one upsert field.
-  // NOT valid on repeated fields or maps — use INCLUDE for collections.
-  GRAPH_MODE_PREDICATE = 2;
-}
-
-// GraphFieldOption configures how a single proto field maps to graph storage.
-// Applied via (spec.graph) on individual fields. Only fields with this
-// annotation are persisted; all others are omitted by default.
-//
-// Example usage:
-//   string id = 1 [(spec.graph) = {mode: PREDICATE, index: "exact", upsert: true}];
-//   string email = 2 [(spec.graph) = {mode: PREDICATE, index: "exact"}];
-//   NetworkInfo network = 3 [(spec.graph) = {mode: PREDICATE, reverse: true}];
-//   map<string, string> labels = 4 [(spec.graph) = {mode: INCLUDE}];
-//   int32 internal_counter = 5; // no annotation — omitted from graph storage
-message GraphFieldOption {
-  // mode controls whether this field is a graph predicate, included as JSON,
-  // or omitted entirely (UNSPECIFIED / absent).
-  GraphMode mode = 1;
-
-  // index is required when mode is PREDICATE and the field is a scalar type.
-  // Ignored for uid edges (message fields) and INCLUDE mode.
-  // Values depend on the graph store type:
-  //   string:   "exact", "hash", "term", "fulltext", "trigram"
-  //   int/uint: "int"
-  //   float:    "float"
-  //   bool:     "bool"
-  //   datetime: "hour", "day", "month", "year"
-  string index = 2;
-
-  // upsert marks this field as the identity predicate for upsert mutations.
-  // Exactly one field per message must be marked upsert: true when the message
-  // is the target of a uid edge from another message.
-  // Only valid with mode: PREDICATE.
-  bool upsert = 3;
-
-  // reverse marks a uid edge predicate as reverse-traversable, enabling
-  // traversal from child to parent (e.g., given a NetworkInfo node, find all
-  // ServiceInstances that reference it).
-  // Only valid with mode: PREDICATE on message-type fields.
-  bool reverse = 4;
 }
 
 // ============================================================================
@@ -1504,17 +1364,11 @@ extend google.protobuf.FieldOptions {
   // when Sentinel stops updating them (use eviction_ttl_seconds).
   bool collected_health = 50039;
 
-  // graph_index specifies graph index directive(s) for this field.
-  // Used to generate graph store projections with proper indexes.
-  // Comma-separated for multiple: "exact", "term,fulltext", "trigram".
-  // Empty string or absent = predicate is stored but not indexed (not queryable via func()).
-  // Only meaningful on fields within a message annotated with (spec.graph_type).
-  // Example: string id = 1 [(spec.graph_index) = "exact"];
-  string graph_index = 60050;
+  // 60050 retired (graph_index — graph store support removed 2026-08-25).
 
   // projection_source maps a projection field to its source path on the event message.
-  // Used on fields within messages annotated with (spec.graph_type) or
-  // (spec.timeseries_type) that have a source set. Uses dot notation for
+  // Used on fields within messages annotated with (spec.timeseries_type)
+  // that have a source set. Uses dot notation for
   // nested/oneof field access.
   // Examples:
   //   "agent_id"              — top-level field on the source event
@@ -1524,21 +1378,12 @@ extend google.protobuf.FieldOptions {
 
   // projection_record_key marks the projection field that carries the SOURCE
   // RECORD's key. tacplus auto-injects this field (or marks the existing one) on
-  // every graph/timeseries projection so the projection query can return record
+  // every timeseries projection so the projection query can return record
   // keys — the record store federates into a projection, gets record keys, and hydrates the
   // full records from the record_store. Exactly one field per projection carries it.
   bool projection_record_key = 60081;
 
-  // graph_edge declares this field as a uid edge to another graph type.
-  // The value is the target graph type name (as declared in graph_type.name).
-  // At schema generation: predicate becomes a reverse-traversable uid edge instead of scalar.
-  // At mutation time: the string xid value is resolved to the target node's
-  // uid via eq(xid, ...) and a uid edge is created.
-  // Only meaningful on string fields within a (spec.graph_type) message.
-  // The field name becomes the edge predicate; projection_source provides the
-  // target's xid from the source event.
-  // Example: string session = 2 [(spec.graph_edge) = "Session"];
-  string graph_edge = 60064;
+  // 60064 retired (graph_edge — graph store support removed 2026-08-25).
 
   // assert_invariant declares a formal invariant for this field.
   // The expression is a boolean predicate in the target language's syntax.
@@ -1586,17 +1431,7 @@ extend google.protobuf.FieldOptions {
   // Example: string callback_url = 5 [(spec.json_aliases) = "callbackUrl"];
   repeated string json_aliases = 60062;
 
-  // ── Graph Persistence Annotations ───────────────────────────────────────────
-  // Controls how individual fields are persisted in the graph store. Fields
-  // without this annotation are omitted entirely — graph storage is opt-in.
-  // See GraphFieldOption and GraphMode for detailed documentation.
-  //
-  // Example:
-  //   string id = 1 [(spec.graph) = {mode: PREDICATE, index: "exact", upsert: true}];
-  //   string name = 2 [(spec.graph) = {mode: PREDICATE, index: "term"}];
-  //   NetworkInfo net = 3 [(spec.graph) = {mode: PREDICATE, reverse: true}];
-  //   map<string, string> tags = 4 [(spec.graph) = {mode: INCLUDE}];
-  GraphFieldOption graph = 60065;
+  // 60065 retired (graph — graph store support removed 2026-08-25).
 
   // ── Timeseries Projection Annotations ────────────────────────────────────────
   // Controls how individual fields map to timeseries columns. Fields without
@@ -1796,11 +1631,6 @@ message ServiceStoreAnnotation {
   // tag is the routing label for the backing store (e.g. "state-store").
   string tag = 1;
 }
-
-// GraphStoreAnnotation marks a service proto as a graph data store.
-// The store receives its projection data by auto-subscribing to the EventBus
-// topics that carry its projection sources; no mutation service is generated.
-message GraphStoreAnnotation {}
 
 // TimeseriesStoreAnnotation marks a service proto as a timeseries data store.
 // The store receives its projection data by auto-subscribing to the EventBus

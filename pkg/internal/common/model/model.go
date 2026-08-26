@@ -102,7 +102,6 @@ type FloatConstraint struct {
 	NotIn   []float64 // must not be one of these values (within epsilon)
 }
 
-
 // HostValue holds the default host and port for a host.Host field.
 type HostValue struct {
 	Host string
@@ -145,23 +144,6 @@ type EventBusBindingEntry struct {
 	MethodC2S *EventBusMethodC2S
 }
 
-// GraphProjectionFieldEntry represents a single field in a graph projection.
-type GraphProjectionFieldEntry struct {
-	Source  string // source field path (e.g. "email", "tool_use.tool_name")
-	As      string // rename in projection (defaults to last segment of source)
-	Index   string // graph index type: "exact", "hash", "int", etc.
-	Edge    string // target graph type for uid edges (e.g. "Session")
-	Include bool   // store as JSON blob (GRAPH_MODE_INCLUDE)
-	Upsert  bool   // field is the upsert key
-}
-
-// GraphProjectionEntry represents a graph node type extracted from an event.
-type GraphProjectionEntry struct {
-	Name   string // graph type name (e.g. "Session")
-	Xid    string // source field path for external ID
-	Fields []GraphProjectionFieldEntry
-}
-
 // TimeseriesCardinalityHint is the store-neutral distinct-value hint for a
 // timeseries column. Values mirror spec.CardinalityHint (0/1/2).
 type TimeseriesCardinalityHint int32
@@ -196,10 +178,10 @@ type DedupPolicyEntry struct {
 
 // TimeseriesProjectionFieldEntry represents a single field in a timeseries projection.
 type TimeseriesProjectionFieldEntry struct {
-	Source          string // source field path
-	As              string // rename in record (defaults to last segment of source)
-	OrderKey        int32  // store-neutral sort-key position (0 = not a sort key)
-	PartitionKey    bool   // store-neutral partition role
+	Source          string                    // source field path
+	As              string                    // rename in record (defaults to last segment of source)
+	OrderKey        int32                     // store-neutral sort-key position (0 = not a sort key)
+	PartitionKey    bool                      // store-neutral partition role
 	CardinalityHint TimeseriesCardinalityHint // store-neutral distinct-value hint
 }
 
@@ -225,15 +207,14 @@ type AnnotationValue struct {
 	NumericConstraint           *NumericConstraint
 	FloatConstraint             *FloatConstraint
 	IdentitySpiffeResource      *IdentitySpiffeResourceValue // For identity_spiffe_resource annotations
-	StringSliceValue            []string                    // For repeated string annotations (e.g., view_sources)
-	HostValue                   *HostValue                  // For default_host annotations on host.Host fields
-	SubscriptionEntries         []SubscriptionEntry         // For subscribe annotations on service_state messages
-	EventPublishEntries         []EventBusBindingEntry      // For event_publish annotations
-	EventWatchEntries           []EventBusBindingEntry      // For event_watch annotations
-	GraphProjectionEntries      []GraphProjectionEntry      // For graph_projection annotations
-	TimeseriesProjectionEntries []TimeseriesProjectionEntry // For timeseries_projection annotations
-	TimeseriesRetention         *RetentionPolicyEntry       // For timeseries_type retention (store-neutral)
-	TimeseriesDedup             *DedupPolicyEntry           // For timeseries_type dedup (store-neutral)
+	StringSliceValue            []string                     // For repeated string annotations (e.g., view_sources)
+	HostValue                   *HostValue                   // For default_host annotations on host.Host fields
+	SubscriptionEntries         []SubscriptionEntry          // For subscribe annotations on service_state messages
+	EventPublishEntries         []EventBusBindingEntry       // For event_publish annotations
+	EventWatchEntries           []EventBusBindingEntry       // For event_watch annotations
+	TimeseriesProjectionEntries []TimeseriesProjectionEntry  // For timeseries_projection annotations
+	TimeseriesRetention         *RetentionPolicyEntry        // For timeseries_type retention (store-neutral)
+	TimeseriesDedup             *DedupPolicyEntry            // For timeseries_type dedup (store-neutral)
 }
 
 // Field represents a field in a message

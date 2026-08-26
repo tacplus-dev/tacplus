@@ -768,15 +768,14 @@ export function %s(m: %s | undefined, depth = 0): void {
 				"boundary_callers",
 				"reads_state", "key", "param_key", "json_return_value",
 				"store_key", "quorum_write", "collected_health",
-				"graph_index", "projection_source", "projection_record_key", "graph_edge",
+				"projection_source", "projection_record_key",
 				"query_field", "redact",
-				"graph_mode", "graph_field_index", "graph_upsert",
 				"timeseries_column", "timeseries_order_key",
 				"timeseries_partition_key", "timeseries_cardinality_hint",
 				"json_key", "json_aliases",
 				"cache", "timeseries", "archive",
 				"record", "record_key", "record_owner",
-				"graph_reverse", "graph_xid_field", "subscribe",
+				"subscribe",
 				"identity_namespace", "identity_subject",
 				"identity_spiffe_subject", "identity_spiffe_resource":
 				// Non-validation annotations - handled by other generators or informational only.

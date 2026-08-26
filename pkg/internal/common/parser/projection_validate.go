@@ -15,9 +15,7 @@ import (
 // requires graph/timeseries/extraction codegen (Open/Refine/Sample/Pull over the
 // projected record) in a full-service target.
 var projectionAnnotations = []string{
-	"graph_type",
 	"timeseries_type",
-	"graph_type_source",
 	"timeseries_table_source",
 }
 

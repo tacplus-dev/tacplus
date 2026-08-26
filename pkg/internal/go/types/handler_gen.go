@@ -187,7 +187,6 @@ type SubscriptionTemplateEntry struct {
 	TypePkgAlias             string // e.g. "aegis_pb"
 	TypePkgImport            string // e.g. "module/tacplus/types/services/aegis"
 	EventBusImport           string // e.g. "module/tacplus/types/sys/eventbus"
-	HasGraphProjections      bool   // source event has graph_type projections
 	HasTimeseriesProjections bool   // source event has timeseries_type projections
 	TargetService            string // e.g. "eventbus" — service_id to resolve via ServiceHealthState
 }
@@ -212,7 +211,7 @@ type serviceManagerTemplateData struct {
 	HasGrpc                  bool     // true when gRPC services are configured
 	HasGrpcServers           bool     // true when gRPC server wrappers are configured
 	HasStates                bool     // true when states are configured
-	HasSysState             bool     // true when any state is from the sys/ proto dir
+	HasSysState              bool     // true when any state is from the sys/ proto dir
 	HasGrpcS2SClients        bool     // true when gRPC clients are configured
 	HasSubscriptions         bool     // true when event-bus subscriptions are declared
 	HasPublishers            bool     // true when event-bus publishers are declared and resolvable
@@ -220,12 +219,11 @@ type serviceManagerTemplateData struct {
 	AutoTlsKeyType           string   // key algorithm: "ed25519" or "ecdsa"
 	HasSmb                   bool     // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
 	SmbAuthorityServiceID    string   // service_id of the declared (spec.smb_authority) service
-	HasGraphProjections      bool     // true when any subscription has graph projections
 	HasTimeseriesProjections bool     // true when any subscription has timeseries projections
 	ProjectionPkgAlias       string   // alias for source event package (e.g. "sensor_pb")
 	ProjectionPkgImport      string   // import path for source event package
 	HasTypedHealth           bool     // true when the service's package declares a service_health message
-	TypedHealthType          string   // e.g. "GraphStoreHealth"
+	TypedHealthType          string   // e.g. "TimeseriesStoreHealth"
 	TypedHealthPkgAlias      string   // e.g. "graphstore_pb"
 	TypedHealthPkgImport     string   // e.g. "module/types/services/graphstore"
 	TacplusVersion           string   // e.g. "v1.2.71"
@@ -517,14 +515,10 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 
 		// Determine projection flags by scanning allFiles for messages that
 		// extract from this subscription's source event type.
-		hasGraph := false
 		hasTimeseries := false
 		for _, pf := range allFiles {
 			for _, msg := range pf.Messages {
 				if extractionSourceFQN(msg) == sub.SourceTypeFqn {
-					if _, ok := msg.Annotations["graph_type"]; ok {
-						hasGraph = true
-					}
 					if _, ok := msg.Annotations["timeseries_type"]; ok {
 						hasTimeseries = true
 					}
@@ -545,25 +539,20 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			TypePkgAlias:             typePkg + "_pb",
 			TypePkgImport:            config.ModuleBasePath + "/types/" + typeProtoDir + "/" + typePkg,
 			EventBusImport:           config.ModuleBasePath + "/types/generated/eventbus_support",
-			HasGraphProjections:      hasGraph,
 			HasTimeseriesProjections: hasTimeseries,
 			TargetService:            targetService,
 		})
 	}
 
 	// Compute top-level projection flags across all subscriptions.
-	hasAnyGraph := false
 	hasAnyTimeseries := false
 	projPkgAlias := ""
 	projPkgImport := ""
 	for _, se := range subEntries {
-		if se.HasGraphProjections {
-			hasAnyGraph = true
-		}
 		if se.HasTimeseriesProjections {
 			hasAnyTimeseries = true
 		}
-		if (se.HasGraphProjections || se.HasTimeseriesProjections) && projPkgAlias == "" {
+		if se.HasTimeseriesProjections && projPkgAlias == "" {
 			projPkgAlias = se.TypePkgAlias
 			projPkgImport = se.TypePkgImport
 		}
@@ -637,7 +626,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		HasGrpc:                  len(svcs) > 0,
 		HasGrpcServers:           len(svcs) > 0,
 		HasStates:                len(config.States) > 0 || config.AllStates,
-		HasSysState:             hasSysState,
+		HasSysState:              hasSysState,
 		HasGrpcS2SClients:        len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
 		HasSubscriptions:         len(subEntries) > 0,
 		HasPublishers:            hasPublishers,
@@ -645,7 +634,6 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		AutoTlsKeyType:           config.AutoTlsKeyType(),
 		HasSmb:                   hasSmb,
 		SmbAuthorityServiceID:    smbAuthorityServiceID,
-		HasGraphProjections:      hasAnyGraph,
 		HasTimeseriesProjections: hasAnyTimeseries,
 		ProjectionPkgAlias:       projPkgAlias,
 		ProjectionPkgImport:      projPkgImport,

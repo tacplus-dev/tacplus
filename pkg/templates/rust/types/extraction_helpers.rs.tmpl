@@ -1,23 +1,9 @@
-{{- /* Extraction helpers — generated from (spec.graph_type).source and (spec.timeseries_type).source annotations */ -}}
+{{- /* Extraction helpers — generated from (spec.timeseries_type).source annotations */ -}}
 {{- /* For each projection message with a source, generates extract_<projection>_from_<source>() */ -}}
 
 /// Extracts a [`{{.ProjectionType}}`] from a [`{{.SourceType}}`].
-{{- if .IsConditional}}
-/// Returns `None` when the event doesn't contain a `{{.OneofVariantSnake}}` payload.
-{{- end}}
 pub fn extract_{{.SnakeProjection}}_from_{{.SnakeSource}}(event: &{{.SourceQualifier}}{{.SourceType}}) -> Option<{{.ProjectionType}}> {
-{{- if .IsConditional}}
-    let payload = match &event.payload {
-        Some({{.SourceQualifier}}{{.PayloadEnumPath}}::{{.OneofVariantPascal}}(p)) => p,
-        _ => return None,
-    };
-    Some({{.ProjectionType}} {
-{{- range .Fields}}
-        {{.RustFieldName}}: {{.ValueExpr}},
-{{- end}}
-        ..Default::default()
-    })
-{{- else if .HasOneofGroups}}
+{{- if .HasOneofGroups}}
     let mut msg = {{.ProjectionType}} {
 {{- range .TopLevelFields}}
         {{.RustFieldName}}: {{.ValueExpr}},

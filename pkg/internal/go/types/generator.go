@@ -365,12 +365,6 @@ func Generate(config *tactype.Config) error {
 		return fmt.Errorf("failed to process proto files: %w", err)
 	}
 
-	// Generate graph typed persistence helpers (ToGraph/FromGraph) for messages
-	// with (spec.graph) field annotations.
-	if err := generateGraphHelpers(allParsedFiles, builderTempDir); err != nil {
-		return fmt.Errorf("failed to generate graph helpers: %w", err)
-	}
-
 	// Generate timeseries typed helpers (ToTimeseriesRow/FromTimeseriesRow/DDL/ColumnNames)
 	// for messages with (spec.timeseries_type) annotation.
 	if err := generateTimeseriesHelpers(allParsedFiles, builderTempDir); err != nil {
@@ -378,7 +372,7 @@ func Generate(config *tactype.Config) error {
 	}
 
 	// Generate extraction functions (Extract<Projection>From<Source>) for messages
-	// with (spec.graph_type).source or (spec.timeseries_type).source annotation.
+	// with a (spec.timeseries_type).source annotation.
 	if err := generateExtractionHelpers(allParsedFiles, builderTempDir); err != nil {
 		return fmt.Errorf("failed to generate extraction helpers: %w", err)
 	}
@@ -471,9 +465,9 @@ func Generate(config *tactype.Config) error {
 		// Collect event-bus watches from legacy subscribe, explicit event_watch,
 		// and store-derived subscriptions. Parse tempProtoDir (not flatProtoDir):
 		// it is a superset that includes the generated projection messages
-		// (graph_type / timeseries_type), so a graph_store / timeseries_store
-		// derives its subscriptions from those projections. Parsing flatProtoDir
-		// missed them, so graph_store silently auto-subscribed to nothing.
+		// (timeseries_type), so a timeseries_store derives its subscriptions from
+		// those projections. Parsing flatProtoDir missed them, so a store
+		// silently auto-subscribed to nothing.
 		config.Subscriptions, err = collectSubscriptions(config, tempProtoDir)
 		if err != nil {
 			return fmt.Errorf("failed to collect event-bus subscriptions: %w", err)
@@ -1678,11 +1672,10 @@ func copyHelperFiles(builderTempDir, outputDir string) error {
 		// Only copy helpers.go, graph_*.go, timeseries_*.go, extraction_*.go, and test files
 		isTestFile := strings.HasSuffix(path, "_test.go")
 		isGeneratedCode := strings.HasSuffix(path, "helpers.go")
-		isGraphHelper := strings.HasPrefix(filepath.Base(path), "graph_") && strings.HasSuffix(path, ".go")
 		isTimeseriesHelper := strings.HasPrefix(filepath.Base(path), "timeseries_") && strings.HasSuffix(path, ".go")
 		isExtractionHelper := strings.HasPrefix(filepath.Base(path), "extraction_") && strings.HasSuffix(path, ".go")
 
-		if !isGeneratedCode && !isTestFile && !isGraphHelper && !isTimeseriesHelper && !isExtractionHelper {
+		if !isGeneratedCode && !isTestFile && !isTimeseriesHelper && !isExtractionHelper {
 			return nil
 		}
 

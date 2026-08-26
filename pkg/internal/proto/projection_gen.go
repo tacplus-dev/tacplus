@@ -14,12 +14,9 @@ import (
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 )
 
-// GenerateProjectionMessages scans all proto files for spec.graph_projection
-// and spec.timeseries_projection annotations and generates the corresponding
+// GenerateProjectionMessages scans all proto files for
+// spec.timeseries_projection annotations and generates the corresponding
 // projection message types, appending them to the proto file in tempProtoDir.
-//
-// Graph projections become messages with spec.graph_type, spec.graph,
-// spec.graph_index, spec.graph_edge, and spec.projection_source annotations.
 //
 // Timeseries projections become messages with spec.timeseries_type,
 // spec.timeseries_column, and spec.projection_source annotations.
@@ -35,9 +32,8 @@ func GenerateProjectionMessages(tempProtoDir, inputDir string) error {
 		}
 
 		for _, msg := range fd.Messages {
-			graphAnn, hasGraph := msg.Annotations["graph_projection"]
 			tsAnn, hasTS := msg.Annotations["timeseries_projection"]
-			if !hasGraph && !hasTS {
+			if !hasTS {
 				continue
 			}
 
@@ -45,19 +41,9 @@ func GenerateProjectionMessages(tempProtoDir, inputDir string) error {
 
 			var sb strings.Builder
 			sb.WriteString("\n// ============================================================================\n")
-			sb.WriteString("// Auto-generated projection messages from spec.graph_projection and\n")
+			sb.WriteString("// Auto-generated projection messages from\n")
 			sb.WriteString("// spec.timeseries_projection annotations (tacplus)\n")
 			sb.WriteString("// ============================================================================\n")
-
-			if hasGraph {
-				for _, gp := range graphAnn.GraphProjectionEntries {
-					proto, err := generateGraphProjection(gp, sourceFQN, msg, fd)
-					if err != nil {
-						return fmt.Errorf("projection gen: graph projection %q on %s: %w", gp.Name, sourceFQN, err)
-					}
-					sb.WriteString(proto)
-				}
-			}
 
 			if hasTS {
 				for _, tp := range tsAnn.TimeseriesProjectionEntries {
@@ -87,92 +73,11 @@ func GenerateProjectionMessages(tempProtoDir, inputDir string) error {
 			zap.L().Info("generated projection messages",
 				zap.String("source", sourceFQN),
 				zap.String("file", relPath),
-				zap.Int("graph", len(graphAnn.GraphProjectionEntries)),
 				zap.Int("timeseries", len(tsAnn.TimeseriesProjectionEntries)))
 		}
 	}
 
 	return nil
-}
-
-// generateGraphProjection generates a graph node message from a GraphProjectionEntry.
-func generateGraphProjection(gp model.GraphProjectionEntry, sourceFQN string, msg parser.MessageDescriptor, fd *parser.FileDescriptor) (string, error) {
-	nodeName := gp.Name + "Node"
-
-	// Resolve xid field name (after 'as' rename).
-	xidFieldName := resolveFieldName(gp.Xid, gp.Fields)
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("\n// %sNode — auto-generated graph projection of %s.\n", gp.Name, sourceFQN))
-	sb.WriteString(fmt.Sprintf("message %s {\n", nodeName))
-	sb.WriteString(fmt.Sprintf("  option (spec.graph_type) = {name: %q, xid_field: %q, source: %q};\n\n", gp.Name, xidFieldName, sourceFQN))
-
-	recordKey := sourceRecordKey(msg)
-	recordKeyEmitted := false
-
-	for i, f := range gp.Fields {
-		fieldNum := i + 1
-		fieldName := resolveOutputFieldName(f)
-		protoType, err := resolveFieldType(f.Source, msg, fd)
-		if err != nil {
-			return "", fmt.Errorf("field %q: %w", f.Source, err)
-		}
-
-		// For edge fields, type is always string (holds the xid value).
-		if f.Edge != "" {
-			protoType = "string"
-		}
-
-		// Build field annotations.
-		var anns []string
-		anns = append(anns, fmt.Sprintf("(spec.projection_source) = %q", f.Source))
-
-		// Mark the field that carries the source record's key (for federation/hydration).
-		if f.Source == recordKey {
-			anns = append(anns, "(spec.projection_record_key) = true")
-			recordKeyEmitted = true
-		}
-
-		if f.Edge != "" {
-			anns = append(anns, fmt.Sprintf("(spec.graph_edge) = %q", f.Edge))
-		}
-		if f.Index != "" {
-			anns = append(anns, fmt.Sprintf("(spec.graph_index) = %q", f.Index))
-		}
-
-		// Build (spec.graph) annotation.
-		if f.Include {
-			anns = append(anns, "(spec.graph) = {mode: GRAPH_MODE_INCLUDE}")
-		} else if f.Edge != "" {
-			// Edge fields don't need a graph mode — graph_edge handles it.
-		} else {
-			var graphParts []string
-			graphParts = append(graphParts, "mode: GRAPH_MODE_PREDICATE")
-			if f.Index != "" {
-				graphParts = append(graphParts, fmt.Sprintf("index: %q", f.Index))
-			}
-			if f.Upsert {
-				graphParts = append(graphParts, "upsert: true")
-			}
-			anns = append(anns, fmt.Sprintf("(spec.graph) = {%s}", strings.Join(graphParts, ", ")))
-		}
-
-		sb.WriteString(fmt.Sprintf("  %s %s = %d [%s];\n", protoType, fieldName, fieldNum, strings.Join(anns, ", ")))
-	}
-
-	// Auto-inject the source record's key so the projection query can return record
-	// keys (federation → hydrate). Only when the author didn't already project it.
-	if !recordKeyEmitted {
-		keyType, err := resolveFieldType(recordKey, msg, fd)
-		if err != nil {
-			return "", fmt.Errorf("record key %q for graph projection %q: %w", recordKey, gp.Name, err)
-		}
-		sb.WriteString(fmt.Sprintf("  %s %s = %d [(spec.projection_source) = %q, (spec.projection_record_key) = true, (spec.graph) = {mode: GRAPH_MODE_PREDICATE, index: \"exact\"}];\n",
-			keyType, recordKey, len(gp.Fields)+1, recordKey))
-	}
-
-	sb.WriteString("}\n")
-	return sb.String(), nil
 }
 
 // sourceRecordKey returns the source record's key field name: the record's
@@ -237,7 +142,7 @@ func generateTimeseriesProjection(tp model.TimeseriesProjectionEntry, sourceFQN 
 
 	for i, f := range tp.Fields {
 		fieldNum := i + 1
-		fieldName := resolveOutputFieldName(model.GraphProjectionFieldEntry{Source: f.Source, As: f.As})
+		fieldName := resolveOutputFieldName(f.Source, f.As)
 		protoType, err := resolveFieldType(f.Source, msg, fd)
 		if err != nil {
 			return "", fmt.Errorf("field %q: %w", f.Source, err)
@@ -352,22 +257,10 @@ func fieldProtoType(f parser.FieldDescriptor, fd *parser.FileDescriptor) string 
 
 // resolveOutputFieldName determines the output field name for a projection field.
 // Uses 'as' if set, otherwise the last segment of the source path.
-func resolveOutputFieldName(f model.GraphProjectionFieldEntry) string {
-	if f.As != "" {
-		return f.As
+func resolveOutputFieldName(source, as string) string {
+	if as != "" {
+		return as
 	}
-	parts := strings.Split(f.Source, ".")
-	return parts[len(parts)-1]
-}
-
-// resolveFieldName finds the output name for the xid field in the projection.
-func resolveFieldName(xidSource string, fields []model.GraphProjectionFieldEntry) string {
-	for _, f := range fields {
-		if f.Source == xidSource {
-			return resolveOutputFieldName(f)
-		}
-	}
-	// Fallback: last segment of the source path.
-	parts := strings.Split(xidSource, ".")
+	parts := strings.Split(source, ".")
 	return parts[len(parts)-1]
 }

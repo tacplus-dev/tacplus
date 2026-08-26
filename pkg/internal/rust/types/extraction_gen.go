@@ -20,19 +20,16 @@ import (
 
 // rustExtractionTemplateData holds pre-computed data for the Rust extraction helpers template.
 type rustExtractionTemplateData struct {
-	ProjectionType     string                     // e.g., "SessionNode"
-	SnakeProjection    string                     // e.g., "session_node"
-	SourceType         string                     // e.g., "SensorEvent"
-	SnakeSource        string                     // e.g., "sensor_event"
-	SourceQualifier    string                     // "" if same package, "sensor::" if different (unused for now — same package)
-	IsConditional      bool                       // graph_type with oneof refs -> return None when variant absent
-	OneofVariantPascal string                     // e.g., "ToolUse" — for match arm
-	OneofVariantSnake  string                     // e.g., "tool_use" — for doc comment
-	PayloadEnumPath    string                     // e.g., "sensor_event::Payload" — the Rust enum path for the oneof
-	HasOneofGroups     bool                       // unconditional but has oneof fields (timeseries pattern)
-	Fields             []rustExtractionFieldData  // all fields (for IsConditional and simple)
-	TopLevelFields     []rustExtractionFieldData  // top-level fields (for HasOneofGroups)
-	OneofGroups        []rustExtractionOneofGroup // grouped oneof fields (for HasOneofGroups)
+	ProjectionType  string                     // e.g., "SessionNode"
+	SnakeProjection string                     // e.g., "session_node"
+	SourceType      string                     // e.g., "SensorEvent"
+	SnakeSource     string                     // e.g., "sensor_event"
+	SourceQualifier string                     // "" if same package, "sensor::" if different (unused for now — same package)
+	PayloadEnumPath string                     // e.g., "sensor_event::Payload" — the Rust enum path for the oneof
+	HasOneofGroups  bool                       // unconditional but has oneof fields (timeseries pattern)
+	Fields          []rustExtractionFieldData  // all fields (for the simple pattern)
+	TopLevelFields  []rustExtractionFieldData  // top-level fields (for HasOneofGroups)
+	OneofGroups     []rustExtractionOneofGroup // grouped oneof fields (for HasOneofGroups)
 }
 
 // rustExtractionFieldData holds per-field data for the Rust extraction template.
@@ -63,7 +60,7 @@ type rustProjectionEntry struct {
 }
 
 // generateRustExtractionHelpers generates extraction functions for all messages that
-// have a graph_type.source or timeseries_type.source annotation.
+// have a timeseries_type.source annotation.
 func generateRustExtractionHelpers(allFiles []model.ProtoFile, outputDir string) error {
 	extractionTmplContent, err := loadTemplate("extraction_helpers.rs.tmpl")
 	if err != nil {
@@ -168,12 +165,9 @@ func generateRustExtractionHelpers(allFiles []model.ProtoFile, outputDir string)
 	return nil
 }
 
-// rustExtractionSourceFQN returns the source event FQN from graph_type.source or
-// timeseries_type.source annotations. Returns "" if neither is set.
+// rustExtractionSourceFQN returns the source event FQN from the
+// timeseries_type.source annotation. Returns "" if it is not set.
 func rustExtractionSourceFQN(msg model.Message) string {
-	if ann, ok := msg.Annotations["graph_type_source"]; ok && ann.StringValue != "" {
-		return ann.StringValue
-	}
 	if ann, ok := msg.Annotations["timeseries_table_source"]; ok && ann.StringValue != "" {
 		return ann.StringValue
 	}
@@ -219,11 +213,6 @@ func buildRustExtractionTemplateData(
 	sourcePkg string,
 	allFiles []model.ProtoFile,
 ) (rustExtractionTemplateData, error) {
-	isGraphType := false
-	if _, ok := projMsg.Annotations["graph_type"]; ok {
-		isGraphType = true
-	}
-
 	sourceQualifier := ""
 	if sourcePkg != projPkg {
 		sourceQualifier = sourcePkg + "::"
@@ -244,7 +233,7 @@ func buildRustExtractionTemplateData(
 	// Collect fields and detect oneof usage.
 	type fieldMapping struct {
 		projField    model.Field
-		graphSource  string
+		sourceExpr   string
 		oneofVariant string // first segment if dot notation, "" if top-level
 		innerField   string // second segment if dot notation
 	}
@@ -259,8 +248,8 @@ func buildRustExtractionTemplateData(
 		}
 
 		fm := fieldMapping{
-			projField:   f,
-			graphSource: gs.StringValue,
+			projField:  f,
+			sourceExpr: gs.StringValue,
 		}
 
 		parts := strings.SplitN(gs.StringValue, ".", 2)
@@ -275,38 +264,7 @@ func buildRustExtractionTemplateData(
 
 	hasOneof := len(oneofVariants) > 0
 
-	if isGraphType && hasOneof {
-		// Conditional extraction — find the single oneof variant. Taken from
-		// `mappings` (proto field-declaration order), not by ranging the
-		// oneofVariants map: a map range picks an arbitrary variant per run when
-		// more than one is referenced, and byte-diffs the emitted guard
-		// (GEN-DET-1). Mirrors the Go emitter.
-		var variant string
-		for _, fm := range mappings {
-			if fm.oneofVariant != "" {
-				variant = fm.oneofVariant
-				break
-			}
-		}
-
-		data.IsConditional = true
-		data.OneofVariantPascal = strutil.ToPascalCase(variant)
-		data.OneofVariantSnake = variant
-
-		for _, fm := range mappings {
-			fd := rustExtractionFieldData{
-				RustFieldName: fm.projField.Name, // proto field names are snake_case
-			}
-
-			if fm.oneofVariant != "" {
-				fd.ValueExpr = buildRustValueExpr("payload", fm.innerField, fm.projField, sourceMsg)
-			} else {
-				fd.ValueExpr = buildRustValueExpr("event", fm.graphSource, fm.projField, sourceMsg)
-			}
-
-			data.Fields = append(data.Fields, fd)
-		}
-	} else if hasOneof {
+	if hasOneof {
 		// Unconditional with oneof groups (timeseries pattern).
 		data.HasOneofGroups = true
 
@@ -316,7 +274,7 @@ func buildRustExtractionTemplateData(
 			}
 			data.TopLevelFields = append(data.TopLevelFields, rustExtractionFieldData{
 				RustFieldName: fm.projField.Name,
-				ValueExpr:     buildRustValueExpr("event", fm.graphSource, fm.projField, sourceMsg),
+				ValueExpr:     buildRustValueExpr("event", fm.sourceExpr, fm.projField, sourceMsg),
 			})
 		}
 
@@ -349,7 +307,7 @@ func buildRustExtractionTemplateData(
 		for _, fm := range mappings {
 			data.Fields = append(data.Fields, rustExtractionFieldData{
 				RustFieldName: fm.projField.Name,
-				ValueExpr:     buildRustValueExpr("event", fm.graphSource, fm.projField, sourceMsg),
+				ValueExpr:     buildRustValueExpr("event", fm.sourceExpr, fm.projField, sourceMsg),
 			})
 		}
 	}

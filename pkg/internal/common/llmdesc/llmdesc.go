@@ -30,13 +30,7 @@ type FieldDescriptor struct {
 	EnumValues       []EnumValue            `json:"enum_values,omitempty"`
 	MapKey           string                 `json:"map_key_type,omitempty"`
 	MapValue         string                 `json:"map_value_type,omitempty"`
-	GraphIndex       string                 `json:"graph_index,omitempty"`
 	ProjectionSource string                 `json:"projection_source,omitempty"`
-	GraphEdge        string                 `json:"graph_edge,omitempty"`
-	GraphMode        string                 `json:"graph_mode,omitempty"` // "INCLUDE" or "PREDICATE"
-	GraphFieldIndex  string                 `json:"graph_field_index,omitempty"`
-	GraphUpsert      bool                   `json:"graph_upsert,omitempty"`
-	GraphReverse     bool                   `json:"graph_reverse,omitempty"`
 	// DataEntitlementMode is the field's own (spec.redact) mode string
 	// ("drop"/"pseudonymize"/"may_redact"/"may_anonymize"), "" if unannotated.
 	DataEntitlementMode string `json:"data_entitlement_mode,omitempty"`
@@ -44,10 +38,10 @@ type FieldDescriptor struct {
 	// "" if unannotated (not filterable — the field is absent from <T>Filter).
 	FilterMode string `json:"filter_mode,omitempty"`
 	// Timeseries column annotations (store-neutral)
-	Timeseries              bool  `json:"timeseries,omitempty"`               // true if field has (spec.timeseries_column)
-	TimeseriesOrderKey      int   `json:"timeseries_order_key,omitempty"`     // store-neutral sort-key position (1-indexed)
-	TimeseriesPartitionKey  bool  `json:"timeseries_partition_key,omitempty"` // store-neutral partition role
-	TimeseriesCardinality   int32 `json:"timeseries_cardinality_hint,omitempty"` // store-neutral distinct-value hint (0/1/2)
+	Timeseries             bool  `json:"timeseries,omitempty"`                  // true if field has (spec.timeseries_column)
+	TimeseriesOrderKey     int   `json:"timeseries_order_key,omitempty"`        // store-neutral sort-key position (1-indexed)
+	TimeseriesPartitionKey bool  `json:"timeseries_partition_key,omitempty"`    // store-neutral partition role
+	TimeseriesCardinality  int32 `json:"timeseries_cardinality_hint,omitempty"` // store-neutral distinct-value hint (0/1/2)
 }
 
 // ConstraintDescriptor is the machine-readable form of a field validation rule.
@@ -189,28 +183,10 @@ func BuildTypeDescriptor(msg model.Message, pkg string, msgIdx map[string]Messag
 		fd.Required, fd.Default, fd.Constraints = ExtractFieldConstraints(field)
 		fd.ConstraintInfos = ExtractFieldConstraintInfos(field)
 
-		// Extract graph annotations
+		// Extract projection annotations
 		if field.Annotations != nil {
-			if ann, ok := field.Annotations["graph_index"]; ok && ann.StringValue != "" {
-				fd.GraphIndex = ann.StringValue
-			}
 			if ann, ok := field.Annotations["projection_source"]; ok && ann.StringValue != "" {
 				fd.ProjectionSource = ann.StringValue
-			}
-			if ann, ok := field.Annotations["graph_edge"]; ok && ann.StringValue != "" {
-				fd.GraphEdge = ann.StringValue
-			}
-			if ann, ok := field.Annotations["graph_mode"]; ok && ann.StringValue != "" {
-				fd.GraphMode = ann.StringValue
-			}
-			if ann, ok := field.Annotations["graph_field_index"]; ok && ann.StringValue != "" {
-				fd.GraphFieldIndex = ann.StringValue
-			}
-			if ann, ok := field.Annotations["graph_upsert"]; ok && ann.BoolValue {
-				fd.GraphUpsert = true
-			}
-			if ann, ok := field.Annotations["graph_reverse"]; ok && ann.BoolValue {
-				fd.GraphReverse = true
 			}
 			// Data-entitlement field mode (spec.redact). Recorded whenever the
 			// annotation is present so the registry carries the per-field mode and

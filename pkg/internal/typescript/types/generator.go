@@ -209,7 +209,7 @@ func validateTypeScriptClientOnlyAnnotations(config *tactype.Config, protoDir st
 		if fd.ServiceStore || fd.ServiceGateway || fd.ServiceRestDispatch {
 			reasons = append(reasons, fmt.Sprintf("service runtime generation from (spec.service) in %s", path))
 		}
-		if fd.GraphStore || fd.TimeseriesStore || fd.RecordStore {
+		if fd.TimeseriesStore || fd.RecordStore {
 			reasons = append(reasons, fmt.Sprintf("EventBus/store service generation from %s", path))
 		}
 

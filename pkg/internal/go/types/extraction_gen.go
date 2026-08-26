@@ -22,16 +22,13 @@ import (
 
 // extractionTemplateData holds pre-computed data for the extraction helpers template.
 type extractionTemplateData struct {
-	ProjectionType     string                 // e.g., "SessionNode"
-	SourceType         string                 // e.g., "SensorEvent"
-	SourceQualifier    string                 // "" if same package, "sensor." if different
-	IsConditional      bool                   // graph_type with oneof refs → return nil when variant absent
-	OneofVariantPascal string                 // e.g., "ToolUse" — for Get<Variant>() call
-	OneofVariantSnake  string                 // e.g., "tool_use" — for doc comment
-	HasOneofGroups     bool                   // unconditional but has oneof fields (timeseries pattern)
-	Fields             []extractionFieldData  // all fields (for IsConditional and simple)
-	TopLevelFields     []extractionFieldData  // top-level fields (for HasOneofGroups)
-	OneofGroups        []extractionOneofGroup // grouped oneof fields (for HasOneofGroups)
+	ProjectionType  string                 // e.g., "SessionNode"
+	SourceType      string                 // e.g., "SensorEvent"
+	SourceQualifier string                 // "" if same package, "sensor." if different
+	HasOneofGroups  bool                   // unconditional but has oneof fields (timeseries pattern)
+	Fields          []extractionFieldData  // all fields (for the simple pattern)
+	TopLevelFields  []extractionFieldData  // top-level fields (for HasOneofGroups)
+	OneofGroups     []extractionOneofGroup // grouped oneof fields (for HasOneofGroups)
 }
 
 // extractionFieldData holds per-field data for the extraction template.
@@ -60,7 +57,7 @@ type projectionEntry struct {
 }
 
 // generateExtractionHelpers generates extraction functions for all messages that
-// have a graph_type.source or timeseries_type.source annotation. These functions
+// have a timeseries_type.source annotation. These functions
 // convert a source event message into a typed projection message.
 //
 // After generating individual Extract<Projection>From<Source> functions, it groups
@@ -149,12 +146,9 @@ func generateExtractionHelpers(allFiles []model.ProtoFile, typesOutputDir string
 	return nil
 }
 
-// extractionSourceFQN returns the source event FQN from graph_type.source or
-// timeseries_type.source annotations. Returns "" if neither is set.
+// extractionSourceFQN returns the source event FQN from the
+// timeseries_type.source annotation. Returns "" if it is not set.
 func extractionSourceFQN(msg model.Message) string {
-	if ann, ok := msg.Annotations["graph_type_source"]; ok && ann.StringValue != "" {
-		return ann.StringValue
-	}
 	if ann, ok := msg.Annotations["timeseries_table_source"]; ok && ann.StringValue != "" {
 		return ann.StringValue
 	}
@@ -200,11 +194,6 @@ func buildExtractionTemplateData(
 	sourcePkg string,
 	allFiles []model.ProtoFile,
 ) (extractionTemplateData, error) {
-	isGraphType := false
-	if _, ok := projMsg.Annotations["graph_type"]; ok {
-		isGraphType = true
-	}
-
 	sourceQualifier := ""
 	if sourcePkg != projPkg {
 		sourceQualifier = sourcePkg + "."
@@ -219,7 +208,7 @@ func buildExtractionTemplateData(
 	// Collect fields and detect oneof usage.
 	type fieldMapping struct {
 		projField    model.Field
-		graphSource  string
+		sourceExpr   string
 		oneofVariant string // first segment if dot notation, "" if top-level
 		innerField   string // second segment if dot notation
 	}
@@ -234,8 +223,8 @@ func buildExtractionTemplateData(
 		}
 
 		fm := fieldMapping{
-			projField:   f,
-			graphSource: gs.StringValue,
+			projField:  f,
+			sourceExpr: gs.StringValue,
 		}
 
 		parts := strings.SplitN(gs.StringValue, ".", 2)
@@ -249,46 +238,11 @@ func buildExtractionTemplateData(
 	}
 
 	// Determine extraction pattern:
-	// - graph_type with oneof refs → conditional (return nil when variant absent)
 	// - timeseries_type with oneof refs → unconditional with oneof groups
 	// - no oneof refs → simple struct literal
 	hasOneof := len(oneofVariants) > 0
 
-	if isGraphType && hasOneof {
-		// Conditional extraction — find the single oneof variant.
-		// If multiple oneof variants are referenced, use the first one in proto
-		// field-declaration order for the nil guard. (Unusual case; graph types
-		// typically map to one oneof variant.) Taking it from `mappings` rather
-		// than ranging the oneofVariants map keeps the emitted guard stable:
-		// a map range picks an arbitrary variant per run (GEN-DET-1).
-		var variant string
-		for _, fm := range mappings {
-			if fm.oneofVariant != "" {
-				variant = fm.oneofVariant
-				break
-			}
-		}
-
-		data.IsConditional = true
-		data.OneofVariantPascal = toGoFieldName(variant)
-		data.OneofVariantSnake = variant
-
-		for _, fm := range mappings {
-			fd := extractionFieldData{
-				GoFieldName: toGoFieldName(fm.projField.Name),
-			}
-
-			if fm.oneofVariant != "" {
-				// Field from the oneof payload — use "payload" variable.
-				fd.ValueExpr = buildValueExpr("payload", fm.innerField, fm.projField, sourceMsg, sourcePkg, allFiles)
-			} else {
-				// Top-level field on the event.
-				fd.ValueExpr = buildValueExpr("event", fm.graphSource, fm.projField, sourceMsg, sourcePkg, allFiles)
-			}
-
-			data.Fields = append(data.Fields, fd)
-		}
-	} else if hasOneof {
+	if hasOneof {
 		// Unconditional with oneof groups (timeseries pattern).
 		data.HasOneofGroups = true
 
@@ -299,7 +253,7 @@ func buildExtractionTemplateData(
 			}
 			data.TopLevelFields = append(data.TopLevelFields, extractionFieldData{
 				GoFieldName: toGoFieldName(fm.projField.Name),
-				ValueExpr:   buildValueExpr("event", fm.graphSource, fm.projField, sourceMsg, sourcePkg, allFiles),
+				ValueExpr:   buildValueExpr("event", fm.sourceExpr, fm.projField, sourceMsg, sourcePkg, allFiles),
 			})
 		}
 
@@ -333,7 +287,7 @@ func buildExtractionTemplateData(
 		for _, fm := range mappings {
 			data.Fields = append(data.Fields, extractionFieldData{
 				GoFieldName: toGoFieldName(fm.projField.Name),
-				ValueExpr:   buildValueExpr("event", fm.graphSource, fm.projField, sourceMsg, sourcePkg, allFiles),
+				ValueExpr:   buildValueExpr("event", fm.sourceExpr, fm.projField, sourceMsg, sourcePkg, allFiles),
 			})
 		}
 	}

@@ -153,7 +153,6 @@ func TestGoServiceManagerRendersDistinctSubscriptionCallbacksWithMeta(t *testing
 				TypePkgImport:            "example.com/demo/model/types/services/sensor",
 				EventBusImport:           "example.com/demo/model/types/sys/eventbus",
 				TargetService:            "eventbus",
-				HasGraphProjections:      true,
 				HasTimeseriesProjections: true,
 			},
 			{

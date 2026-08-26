@@ -23,19 +23,6 @@ message FixtureEvent {
     owner: "spiffe_id"
     s2s: {auth_services: ["*"]}
   };
-  option (spec.graph_projection) = {
-    name: "FixtureEventNode"
-    xid: "event_id"
-    field: {
-      source: "event_id"
-      index: "exact"
-      upsert: true
-    }
-    field: {
-      source: "tenant_namespace"
-      index: "exact"
-    }
-  };
   // A timeseries offshoot of the same record — exercises the timeseries projection
   // + TimeseriesGroupCounts + TimeseriesQuery (key-returning) generators. The record
   // key (event_id) is auto-injected by tacplus for federation/hydration.

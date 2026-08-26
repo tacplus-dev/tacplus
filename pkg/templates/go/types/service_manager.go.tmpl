@@ -144,9 +144,6 @@ auth             grpcserver.Authorizer
 authorizeFunc    func(ctx context.Context, fullMethod string, req any) error
 authenticateFunc func(ctx context.Context) error
 authenticateAtOrBelowFunc func(ctx context.Context, targetNamespace string) error
-{{if .HasGraphProjections}}
-graphMutateFunc {{.ProjectionPkgAlias}}.GraphMutateFunc
-{{end}}
 {{if .HasTimeseriesProjections}}
 tsInsertFunc {{.ProjectionPkgAlias}}.TimeseriesInsertFunc
 {{end}}
@@ -594,7 +591,7 @@ return sm.identity.GetToken
 // Authorize validates that the caller in ctx is permitted to invoke fullMethod
 // with the given request. Returns a gRPC status error on denial.
 // Always available — services that disable auth in proto simply won't call it,
-// but it remains available for ad-hoc use in hand-written code (e.g. a graph store S2S).
+// but it remains available for ad-hoc use in hand-written code (e.g. a store S2S).
 func (sm *ServiceManager) Authorize(ctx context.Context, fullMethod string, req any) error {
 return sm.authorizeFunc(ctx, fullMethod, req)
 }
@@ -612,14 +609,6 @@ func (sm *ServiceManager) Conn() grpc.ClientConnInterface {
 return sm.sc.Conn()
 }
 
-{{if .HasGraphProjections}}
-// SetGraphMutateFunc sets the graph store mutation callback.
-// Call before Run(). The service manager passes this to HandleXxx for graph projections.
-func (sm *ServiceManager) SetGraphMutateFunc(fn {{.ProjectionPkgAlias}}.GraphMutateFunc) {
-sm.graphMutateFunc = fn
-}
-{{end}}
-
 {{if .HasTimeseriesProjections}}
 // SetTimeseriesInsertFunc sets the timeseries store insert callback.
 // Call before Run(). The service manager passes this to HandleXxx for timeseries projections.
@@ -632,7 +621,7 @@ sm.tsInsertFunc = fn
 {{range .Subscriptions}}
 // {{.HandlerFuncSetterName}} sets a custom handler called for each
 // {{.SourcePackage}}.{{.SourceField}} event received from EventBus before the
-// standard graph/timeseries projection pipeline. Set before Run().
+// standard timeseries projection pipeline. Set before Run().
 func (sm *ServiceManager) {{.HandlerFuncSetterName}}(fn func(ctx context.Context, event *{{.TypePkgAlias}}.{{.TypeName}}, meta *eb_pb.RecordMeta) error) {
 sm.{{.HandlerFuncFieldName}} = fn
 }
@@ -1348,7 +1337,7 @@ if err := sm.{{.HandlerFuncFieldName}}(ctx, event, meta); err != nil {
 return err
 }
 }
-return {{.TypePkgAlias}}.Handle{{.TypeName}}(ctx, event, {{- if $.HasGraphProjections}} {{.TypePkgAlias}}.GraphMutateFunc(sm.graphMutateFunc){{else}} nil{{end}}, {{- if $.HasTimeseriesProjections}} {{.TypePkgAlias}}.TimeseriesInsertFunc(sm.tsInsertFunc){{else}} nil{{end}})
+return {{.TypePkgAlias}}.Handle{{.TypeName}}(ctx, event, {{- if $.HasTimeseriesProjections}} {{.TypePkgAlias}}.TimeseriesInsertFunc(sm.tsInsertFunc){{else}} nil{{end}})
 }, {{.SubPkgAlias}}.WithEarliest()); err != nil && subCtx.Err() == nil {
 zap.L().Error("subscription {{.SourcePackage}}.{{.SourceField}} ended, re-resolving {{.TargetService}}", zap.Error(err))
 }

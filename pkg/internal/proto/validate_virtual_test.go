@@ -171,14 +171,15 @@ import "sys/spec.proto";
 
 message SessionEvent {
   option (spec.record) = {key: "event_id", owner: "spiffe_id", s2s: {}};
-  option (spec.graph_projection) = {
-    name: "Session"
-    xid: "event_id"
-    field: [{source: "event_id", index: "exact", upsert: true}]
+  option (spec.timeseries_projection) = {
+    name: "SessionRow"
+    retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
+    field: {source: "timestamp_ms" partition_key: true}
   };
 
   string event_id = 1;
   string spiffe_id = 2;
+  int64 timestamp_ms = 3;
 }
 `,
 	})
@@ -198,13 +199,14 @@ package events;
 import "sys/spec.proto";
 
 message SessionEvent {
-  option (spec.graph_projection) = {
-    name: "Session"
-    xid: "event_id"
-    field: [{source: "event_id", index: "exact", upsert: true}]
+  option (spec.timeseries_projection) = {
+    name: "SessionRow"
+    retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
+    field: {source: "timestamp_ms" partition_key: true}
   };
 
   string event_id = 1;
+  int64 timestamp_ms = 2;
 }
 `,
 	})

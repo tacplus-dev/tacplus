@@ -59,7 +59,6 @@ type FileDescriptor struct {
 	AllGrpcS2SClients   bool            // File-level flag from option (spec.all_grpc_s2s_clients): generate S2S clients for ALL services
 	OpaImports          []string        // File-level OPA eval imports from option (spec.opa_import), e.g. "userentitlements.EntitlementEvalInput"
 	OpaImportTargets    []VirtualImport // Parsed OPA imports with target service
-	GraphStore          bool            // Whether this service is a graph data store from option (spec.graph_store)
 	TimeseriesStore     bool            // Whether this service is a timeseries data store from option (spec.timeseries_store)
 	RecordStore         bool            // Whether this service is an in-memory hot event store from option (spec.record_store)
 	VServiceName        string          // File-level virtual-service identity name from option (spec.vservice).name
@@ -68,8 +67,8 @@ type FileDescriptor struct {
 
 // VirtualImport represents a dependency on a virtual service with an explicit target.
 type VirtualImport struct {
-	Source  string // For OPA: "package.InputMessageName". Empty for graph/timeseries.
-	Service string // Physical service that implements the virtual service (e.g. "opa", "graphstore").
+	Source  string // For OPA: "package.InputMessageName". Empty for timeseries.
+	Service string // Physical service that implements the virtual service (e.g. "opa").
 }
 
 // FieldStateImport describes a field-level (spec.state_import) declaration.
@@ -509,7 +508,6 @@ func (p *DescriptorParser) parseFileDescriptor(fd protoreflect.FileDescriptor) {
 	fileDesc.GrpcW2SClients = p.parseGrpcW2SClients(fd)
 	fileDesc.AllGrpcS2SClients = p.parseBoolFileOption(fd, spec.E_AllGrpcS2SClients)
 	fileDesc.OpaImports, fileDesc.OpaImportTargets = p.parseOpaImports(fd)
-	fileDesc.GraphStore = p.parseGraphStore(fd)
 	fileDesc.TimeseriesStore = p.parseTimeseriesStore(fd)
 	fileDesc.RecordStore = p.parseRecordStore(fd)
 	fileDesc.VServiceName, fileDesc.VServiceID = p.parseVService(fd)
@@ -1341,15 +1339,6 @@ func (p *DescriptorParser) parseOpaImports(fd protoreflect.FileDescriptor) ([]st
 	return imports, targets
 }
 
-// parseGraphStore checks for the file-level spec.graph_store option.
-func (p *DescriptorParser) parseGraphStore(fd protoreflect.FileDescriptor) bool {
-	opts := fd.Options().(*descriptorpb.FileOptions)
-	if opts == nil {
-		return false
-	}
-	return proto.HasExtension(opts, spec.E_GraphStore)
-}
-
 // parseTimeseriesStore checks for the file-level spec.timeseries_store option.
 func (p *DescriptorParser) parseTimeseriesStore(fd protoreflect.FileDescriptor) bool {
 	opts := fd.Options().(*descriptorpb.FileOptions)
@@ -1608,7 +1597,6 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 		}
 	}
 
-
 	// grpc_config: marks this message as a gRPC service's configuration
 	if proto.HasExtension(opts, spec.E_GrpcConfig) {
 		val := proto.GetExtension(opts, spec.E_GrpcConfig).(*spec.GrpcConfigAnnotation)
@@ -1684,29 +1672,6 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 		}
 	}
 
-	// graph_type: marks this message as a graph type for schema generation
-	if proto.HasExtension(opts, spec.E_GraphType) {
-		val := proto.GetExtension(opts, spec.E_GraphType).(*spec.GraphTypeAnnotation)
-		if val != nil && val.GetName() != "" {
-			annotations["graph_type"] = model.AnnotationValue{
-				Type:        model.AnnotationTypeString,
-				StringValue: val.GetName(),
-			}
-			if val.GetXidField() != "" {
-				annotations["graph_xid_field"] = model.AnnotationValue{
-					Type:        model.AnnotationTypeString,
-					StringValue: val.GetXidField(),
-				}
-			}
-			if val.GetSource() != "" {
-				annotations["graph_type_source"] = model.AnnotationValue{
-					Type:        model.AnnotationTypeString,
-					StringValue: val.GetSource(),
-				}
-			}
-		}
-	}
-
 	// record: opts this message into EventDB
 	if proto.HasExtension(opts, spec.E_Record) {
 		val := proto.GetExtension(opts, spec.E_Record).(*spec.RecordAnnotation)
@@ -1768,36 +1733,6 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 			Type:                model.AnnotationTypeBool,
 			BoolValue:           true,
 			EventPublishEntries: []model.EventBusBindingEntry{{MethodC2S: c2s, MethodS2S: s2s}},
-		}
-	}
-
-	// graph_projection: declares graph node types extracted from this event
-	if proto.HasExtension(opts, spec.E_GraphProjection) {
-		vals := proto.GetExtension(opts, spec.E_GraphProjection).([]*spec.GraphProjection)
-		if len(vals) > 0 {
-			entries := make([]model.GraphProjectionEntry, 0, len(vals))
-			for _, gp := range vals {
-				entry := model.GraphProjectionEntry{
-					Name: gp.GetName(),
-					Xid:  gp.GetXid(),
-				}
-				for _, f := range gp.GetField() {
-					entry.Fields = append(entry.Fields, model.GraphProjectionFieldEntry{
-						Source:  f.GetSource(),
-						As:      f.GetAs(),
-						Index:   f.GetIndex(),
-						Edge:    f.GetEdge(),
-						Include: f.GetInclude(),
-						Upsert:  f.GetUpsert(),
-					})
-				}
-				entries = append(entries, entry)
-			}
-			annotations["graph_projection"] = model.AnnotationValue{
-				Type:                   model.AnnotationTypeBool,
-				BoolValue:              true,
-				GraphProjectionEntries: entries,
-			}
 		}
 	}
 
@@ -2203,7 +2138,6 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 		annotations["collected_health"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 	}
 
-
 	// eviction_max_size (int32) - max entries before eviction; enforced server-side and as client-side safety limit
 	if proto.HasExtension(opts, spec.E_EvictionMaxSize) {
 		val := proto.GetExtension(opts, spec.E_EvictionMaxSize).(int32)
@@ -2335,17 +2269,6 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 		}
 	}
 
-	// graph_index (string) — graph index directives for schema generation
-	if proto.HasExtension(opts, spec.E_GraphIndex) {
-		val := proto.GetExtension(opts, spec.E_GraphIndex).(string)
-		if val != "" {
-			annotations["graph_index"] = model.AnnotationValue{
-				Type:        model.AnnotationTypeString,
-				StringValue: val,
-			}
-		}
-	}
-
 	// projection_source (string) — maps a projection field to its source path on the event message
 	if proto.HasExtension(opts, spec.E_ProjectionSource) {
 		val := proto.GetExtension(opts, spec.E_ProjectionSource).(string)
@@ -2365,17 +2288,6 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 			annotations["projection_record_key"] = model.AnnotationValue{
 				Type:      model.AnnotationTypeBool,
 				BoolValue: true,
-			}
-		}
-	}
-
-	// graph_edge (string) — declares this field as a uid edge to another graph type
-	if proto.HasExtension(opts, spec.E_GraphEdge) {
-		val := proto.GetExtension(opts, spec.E_GraphEdge).(string)
-		if val != "" {
-			annotations["graph_edge"] = model.AnnotationValue{
-				Type:        model.AnnotationTypeString,
-				StringValue: val,
 			}
 		}
 	}
@@ -2406,39 +2318,6 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 			annotations["json_aliases"] = model.AnnotationValue{
 				Type:             model.AnnotationTypeString,
 				StringSliceValue: val,
-			}
-		}
-	}
-
-	// graph (GraphFieldOption) — graph persistence mode for this field
-	if proto.HasExtension(opts, spec.E_Graph) {
-		val := proto.GetExtension(opts, spec.E_Graph).(*spec.GraphFieldOption)
-		if val != nil && val.GetMode() != spec.GraphMode_GRAPH_MODE_UNSPECIFIED {
-			mode := "INCLUDE"
-			if val.GetMode() == spec.GraphMode_GRAPH_MODE_PREDICATE {
-				mode = "PREDICATE"
-			}
-			annotations["graph_mode"] = model.AnnotationValue{
-				Type:        model.AnnotationTypeString,
-				StringValue: mode,
-			}
-			if val.GetIndex() != "" {
-				annotations["graph_field_index"] = model.AnnotationValue{
-					Type:        model.AnnotationTypeString,
-					StringValue: val.GetIndex(),
-				}
-			}
-			if val.GetUpsert() {
-				annotations["graph_upsert"] = model.AnnotationValue{
-					Type:      model.AnnotationTypeBool,
-					BoolValue: true,
-				}
-			}
-			if val.GetReverse() {
-				annotations["graph_reverse"] = model.AnnotationValue{
-					Type:      model.AnnotationTypeBool,
-					BoolValue: true,
-				}
 			}
 		}
 	}

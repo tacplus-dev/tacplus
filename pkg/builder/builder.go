@@ -156,9 +156,6 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err != nil {
 		return err
 	}
-	if err := parser.ValidateGraphAnnotations(allParsedFiles); err != nil {
-		return err
-	}
 	if err := parser.ValidateTimeseriesAnnotations(allParsedFiles); err != nil {
 		return err
 	}

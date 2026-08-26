@@ -81,7 +81,7 @@ func ValidateVirtualImports(inputDir string) error {
 }
 
 // ValidateRecordLinkage enforces the core record/event invariant:
-//   - a message with a projection (graph_projection/timeseries_projection) must
+//   - a message with a projection (timeseries_projection) must
 //     itself be a record (spec.record) — projections are offshoots of a record.
 //
 // This is checked at the message level, so it holds regardless of how the proto
@@ -105,9 +105,8 @@ func ValidateRecordLinkage(inputDir string) error {
 		}
 		for _, msg := range fd.Messages {
 			_, isRecord := msg.Annotations["record"]
-			_, hasGraphProj := msg.Annotations["graph_projection"]
 			_, hasTsProj := msg.Annotations["timeseries_projection"]
-			if (hasGraphProj || hasTsProj) && !isRecord {
+			if hasTsProj && !isRecord {
 				errors = append(errors, fmt.Sprintf(
 					"%s: message %s declares a projection but is not a spec.record (projections are offshoots of a record)",
 					relPath, msg.Name))

@@ -10,7 +10,13 @@ a rebuild.
 > #1): out of the fleet build, protos deleted. With them went the `graph_store`,
 > `graph_projection` and `timeseries_store` annotations' only hosts, and the
 > `TimedbQuery` / `GraphdbQuery` / `TimeseriesQuery` / `TimeseriesGroupCounts`
-> query planes. `timeseries_projection` SURVIVES, and not as a leftover: it is
+> query planes. The `graph_store` / `graph_type` / `graph_projection` generator
+> code — parser, IR, Go graph helpers (`ToGraph`/`FromGraph`), the graph branch of
+> the extraction emitters, and the graph legs of the Go templates — was removed
+> from tacplus on the same day (BONEYARD_QUESTIONS Q2), along with the field-level
+> `spec.graph`, `graph_index` and `graph_edge` options that only ever applied
+> inside a `graph_type` message. All those option numbers are retired in
+> `spec.proto`, never reused. `timeseries_projection` SURVIVES, and not as a leftover: it is
 > where a stored record's **retention policy** lives (stratum's EventStoreGenerator
 > requires `retention.timestamp_field` on every stored record), and its output is a
 > store-neutral typed conversion. Splitting that transformation from delivery is a

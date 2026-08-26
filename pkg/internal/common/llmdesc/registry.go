@@ -13,20 +13,16 @@ import (
 // RegistryTypeInfo holds pre-computed data for a single message type
 // exposed through the always-on top-level registry.
 type RegistryTypeInfo struct {
-	Package         string
-	TypeName        string
-	FQN             string
-	TypeDir         string
-	SchemaJSON      string
-	Descriptor      TypeDescriptor
-	GraphType       string // graph type name from (spec.graph_type)
-	GraphXidField   string // xid field from (spec.graph_type).xid_field
-	GraphTypeSource string // source event FQN from (spec.graph_type).source
+	Package    string
+	TypeName   string
+	FQN        string
+	TypeDir    string
+	SchemaJSON string
+	Descriptor TypeDescriptor
 	// EventDB
 	RecordKey   string // event key field from (spec.record).key
 	RecordOwner string // owner field from (spec.record).owner
 	// Projections
-	GraphProjections      []model.GraphProjectionEntry      // from (spec.graph_projection)
 	TimeseriesProjections []model.TimeseriesProjectionEntry // from (spec.timeseries_projection)
 	// Legacy timeseries_type (hand-written projection types). Store-neutral:
 	// retention/dedup are semantic intent, not backend DDL.
@@ -79,17 +75,8 @@ func CollectRegistryTypes(allFiles []model.ProtoFile) []RegistryTypeInfo {
 				Descriptor: desc,
 			}
 
-			// Extract graph annotations from message-level annotations.
+			// Extract record/projection annotations from message-level annotations.
 			if msg.Annotations != nil {
-				if ann, ok := msg.Annotations["graph_type"]; ok && ann.StringValue != "" {
-					rti.GraphType = ann.StringValue
-				}
-				if ann, ok := msg.Annotations["graph_xid_field"]; ok && ann.StringValue != "" {
-					rti.GraphXidField = ann.StringValue
-				}
-				if ann, ok := msg.Annotations["graph_type_source"]; ok && ann.StringValue != "" {
-					rti.GraphTypeSource = ann.StringValue
-				}
 				// EventDB annotations. A record's key is its declared (spec.record).key
 				// or model.DefaultRecordKeyField — the ONE canonical default shared with
 				// the RecordMap query plane and projection generators. The registry emits
@@ -105,9 +92,6 @@ func CollectRegistryTypes(allFiles []model.ProtoFile) []RegistryTypeInfo {
 					rti.RecordOwner = ann.StringValue
 				}
 				// Projection annotations
-				if ann, ok := msg.Annotations["graph_projection"]; ok {
-					rti.GraphProjections = ann.GraphProjectionEntries
-				}
 				if ann, ok := msg.Annotations["timeseries_projection"]; ok {
 					rti.TimeseriesProjections = ann.TimeseriesProjectionEntries
 				}

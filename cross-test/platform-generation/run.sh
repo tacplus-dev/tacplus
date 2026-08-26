@@ -25,7 +25,7 @@ PLATFORM_PROTO="${PLATFORM_PROTO:-$PLATFORM_ROOT/proto}"
 APP_PROTO="${APP_PROTO:-$APP_ROOT/proto}"
 PROTO_TAG="${PROTO_TAG:-latest}"
 
-PLATFORM_SVCS="${PLATFORM_SVCS:-eventbus gateway graphdb kernel kmaker oauth opa sentinel stratum timedb}"
+PLATFORM_SVCS="${PLATFORM_SVCS:-eventbus gateway kernel kmaker oauth opa sentinel stratum}"
 APP_SVCS="${APP_SVCS:-echo tasks}"
 SVCS="$PLATFORM_SVCS $APP_SVCS"
 

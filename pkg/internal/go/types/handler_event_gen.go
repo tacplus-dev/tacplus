@@ -24,19 +24,9 @@ import (
 type handlerTemplateData struct {
 	SourceType            string // e.g., "SensorEvent"
 	SourceQualifier       string // "" if same package, "sensor." if different
-	HasGraph              bool   // true when at least one graph projection exists
 	HasTimeseries         bool   // true when at least one timeseries projection exists
 	HasNoop               bool   // true when source message has a noop field (field 201)
-	GraphProjections      []handlerGraphEntry
 	TimeseriesProjections []handlerTimeseriesEntry
-}
-
-// handlerGraphEntry is a graph projection in the handler.
-type handlerGraphEntry struct {
-	TypeName  string // e.g., "SessionNode"
-	GraphName string // e.g., "Session" — from graph_type.name
-	XidField  string // e.g., "session_id" — from graph_type.xid_field
-	Comment   string // description for the generated comment
 }
 
 // handlerTimeseriesEntry is a timeseries projection in the handler.
@@ -46,7 +36,7 @@ type handlerTimeseriesEntry struct {
 }
 
 // generateEventHandlers generates store-agnostic event handlers for all source
-// event types that have graph_type or timeseries_type projections.
+// event types that have timeseries_type projections.
 func generateEventHandlers(allFiles []model.ProtoFile, typesOutputDir string) error {
 	// Group projections by source FQN and package.
 	type handlerKey struct {
@@ -58,7 +48,6 @@ func generateEventHandlers(allFiles []model.ProtoFile, typesOutputDir string) er
 		sourceType      string
 		sourceQualifier string
 		hasNoop         bool
-		graphEntries    []handlerGraphEntry
 		tsEntries       []handlerTimeseriesEntry
 	}
 	handlers := make(map[handlerKey]*handlerInfo)
@@ -104,31 +93,7 @@ func generateEventHandlers(allFiles []model.ProtoFile, typesOutputDir string) er
 				handlerOrder = append(handlerOrder, key)
 			}
 
-			// Determine if this is a graph or timeseries projection.
-			if _, isGraphType := msg.Annotations["graph_type"]; isGraphType {
-				graphName := ""
-				xidField := ""
-				if ann, ok := msg.Annotations["graph_type"]; ok {
-					graphName = ann.StringValue
-				}
-				if ann, ok := msg.Annotations["graph_xid_field"]; ok {
-					xidField = ann.StringValue
-				}
-				comment := "extracted from every event"
-				// Check if this is a conditional extraction (has oneof refs).
-				for _, f := range msg.Fields {
-					if gs, ok := f.Annotations["projection_source"]; ok && strings.Contains(gs.StringValue, ".") {
-						comment = "conditional on oneof payload"
-						break
-					}
-				}
-				h.graphEntries = append(h.graphEntries, handlerGraphEntry{
-					TypeName:  msg.Name,
-					GraphName: graphName,
-					XidField:  xidField,
-					Comment:   comment,
-				})
-			} else if _, isTsTable := msg.Annotations["timeseries_type"]; isTsTable {
+			if _, isTsTable := msg.Annotations["timeseries_type"]; isTsTable {
 				tableName := strutil.ToSnakeCase(msg.Name)
 				if ann, ok := msg.Annotations["timeseries_table_name"]; ok && ann.StringValue != "" {
 					tableName = ann.StringValue
@@ -144,17 +109,15 @@ func generateEventHandlers(allFiles []model.ProtoFile, typesOutputDir string) er
 	// Generate handler files.
 	for _, key := range handlerOrder {
 		h := handlers[key]
-		if len(h.graphEntries) == 0 && len(h.tsEntries) == 0 {
+		if len(h.tsEntries) == 0 {
 			continue
 		}
 
 		data := handlerTemplateData{
 			SourceType:            h.sourceType,
 			SourceQualifier:       h.sourceQualifier,
-			HasGraph:              len(h.graphEntries) > 0,
 			HasTimeseries:         len(h.tsEntries) > 0,
 			HasNoop:               h.hasNoop,
-			GraphProjections:      h.graphEntries,
 			TimeseriesProjections: h.tsEntries,
 		}
 
@@ -163,7 +126,6 @@ func generateEventHandlers(allFiles []model.ProtoFile, typesOutputDir string) er
 		}
 		zap.L().Debug("Generated event handler",
 			zap.String("source", key.sourceFQN),
-			zap.Int("graph", len(h.graphEntries)),
 			zap.Int("timeseries", len(h.tsEntries)))
 	}
 

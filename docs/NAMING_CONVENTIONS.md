@@ -179,8 +179,9 @@ the top of `spec.proto`.
 **Why.** `required_if_false`, `required_if_true` and `required_if_eq`
 (`spec.proto:1070,1075,1103`) constrain fields but sit outside the `assert_`
 family, so neither a reader nor a tool can enumerate "the constraints" by name.
-There is no documented option-number scheme, and two parallel graph annotation
-systems exist.
+There is no documented option-number scheme. (The two parallel graph annotation
+systems this rule also cited are gone — graph store support was removed
+2026-08-25.)
 
 **Cost:** renaming a proto option is a **breaking change** for every consumer
 proto that uses it. See the end of this file.
@@ -191,8 +192,11 @@ proto that uses it. See the end of this file.
 Where two concepts genuinely differ, they get different names, even if that makes
 one of them longer.
 
-**Why.** `graph_type` means two different things at `tacplus.proto:109` and
-`:280`. `EventPublish` and `WatchInfo` are near-twins whose difference is not
+**Why.** `graph_type` used to mean two different things in `tacplus.proto`: the
+state-graph boundary kind on `BoundaryInfo`, and the graph-store node type name on
+`TypeInfo`. The second was removed with graph store support (2026-08-25), so only
+the boundary-kind meaning survives — the collision is resolved by deletion, not by
+a rename. `EventPublish` and `WatchInfo` are near-twins whose difference is not
 recoverable from their names. String-typed enums use mixed casing.
 
 **Cost:** renaming a registry field changes the emitted registry. See below.

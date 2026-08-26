@@ -46,7 +46,7 @@ type BoundaryData struct {
 	Collection      bool   // true when the field is repeated
 	TypeFQN         string // proto type FQN, e.g. "baseball.Roster"
 	IsConfig        bool   // true when state has a grpc_config annotated type
-	GraphType       string // "singleton", "collection", "topic", "queue", "priority_queue", "command", "view", "state_import", "private"
+	GraphType       string // state-graph boundary kind: "singleton", "collection", "topic", "queue", "priority_queue", "command", "view", "state_import", "private" (unrelated to the removed graph store)
 	CollectedHealth bool   // true when boundary is marked for Sentinel health collection
 	EvictionMaxSize int64  // max entries before eviction (from spec.eviction_max_size), 0 = unlimited
 	Rpcs            []string
@@ -556,13 +556,13 @@ func DeriveStoreSubscriptionsFromRegistry(p *parser.DescriptorParser, selfPackag
 	return subs, nil
 }
 
-// DeriveStoreSubscriptions discovers EventBus subscriptions that a graph,
-// timeseries, or hot store should have, based on projection source annotations
+// DeriveStoreSubscriptions discovers EventBus subscriptions that a timeseries
+// or hot store should have, based on projection source annotations
 // or record-annotated types.
 //
 // It follows the chain:
 //
-//	graph_type_source / timeseries_table_source → source type FQN
+//	timeseries_table_source → source type FQN
 //	→ find EventBus topic (service_event + topic field) that publishes that type
 //	→ subscription entry
 //
@@ -585,28 +585,21 @@ func DeriveStoreSubscriptions(p *parser.DescriptorParser, selfPackage string) []
 }
 
 func collectStoreSourceFQNs(p *parser.DescriptorParser, selfPackage string) map[string]bool {
-	isGraphStore := false
 	isTimeseriesStore := false
 	isRecordStore := false
 	for _, fd := range p.GetAllFiles() {
 		if fd.Package == selfPackage {
-			isGraphStore = isGraphStore || fd.GraphStore
 			isTimeseriesStore = isTimeseriesStore || fd.TimeseriesStore
 			isRecordStore = isRecordStore || fd.RecordStore
 		}
 	}
-	if !isGraphStore && !isTimeseriesStore && !isRecordStore {
+	if !isTimeseriesStore && !isRecordStore {
 		return nil
 	}
 
 	sourceFQNs := make(map[string]bool)
 	for _, fd := range p.GetAllFiles() {
 		for _, msg := range fd.Messages {
-			if isGraphStore {
-				if ann, ok := msg.Annotations["graph_type_source"]; ok && ann.StringValue != "" {
-					sourceFQNs[ann.StringValue] = true
-				}
-			}
 			if isTimeseriesStore {
 				if ann, ok := msg.Annotations["timeseries_table_source"]; ok && ann.StringValue != "" {
 					sourceFQNs[ann.StringValue] = true

@@ -646,9 +646,6 @@ func BuildTypeInfoProto(t llmdesc.RegistryTypeInfo) *spec.TypeInfo {
 		Package:          t.Descriptor.Package,
 		Description:      t.Descriptor.Description,
 		SchemaJson:       t.SchemaJSON,
-		GraphType:        t.GraphType,
-		GraphXidField:    t.GraphXidField,
-		GraphTypeSource:  t.GraphTypeSource,
 		RecordKey:        t.RecordKey,
 		RecordOwner:      t.RecordOwner,
 		ServiceStore:     t.ServiceStore,
@@ -656,24 +653,6 @@ func BuildTypeInfoProto(t llmdesc.RegistryTypeInfo) *spec.TypeInfo {
 		ServiceStoreTag:  t.ServiceStoreTag,
 
 		DataEntitlementDefault: entitlementModeToProto(t.Descriptor.DataEntitlementDefault),
-	}
-	// Graph projections
-	for _, gp := range t.GraphProjections {
-		gpInfo := &spec.GraphProjectionInfo{
-			Name: gp.Name,
-			Xid:  gp.Xid,
-		}
-		for _, f := range gp.Fields {
-			gpInfo.Field = append(gpInfo.Field, &spec.GraphProjectionFieldInfo{
-				Source:  f.Source,
-				As:      f.As,
-				Index:   f.Index,
-				Edge:    f.Edge,
-				Include: f.Include,
-				Upsert:  f.Upsert,
-			})
-		}
-		ti.GraphProjections = append(ti.GraphProjections, gpInfo)
 	}
 	// Timeseries projections — the registry carries store-neutral semantic intent
 	// (retention/dedup/cardinality_hint). A downstream materializer renders the
@@ -813,13 +792,7 @@ func buildFieldInfoProto(field llmdesc.FieldDescriptor) *spec.FieldInfo {
 		QuorumWrite:               field.QuorumWrite,
 		MapKeyType:                field.MapKey,
 		MapValueType:              field.MapValue,
-		GraphIndex:                field.GraphIndex,
 		ProjectionSource:          field.ProjectionSource,
-		GraphEdge:                 field.GraphEdge,
-		GraphMode:                 field.GraphMode,
-		GraphFieldIndex:           field.GraphFieldIndex,
-		GraphUpsert:               field.GraphUpsert,
-		GraphReverse:              field.GraphReverse,
 		TimeseriesOrderKey:        int32(field.TimeseriesOrderKey),
 		TimeseriesPartitionKey:    field.TimeseriesPartitionKey,
 		TimeseriesCardinalityHint: spec.CardinalityHint(field.TimeseriesCardinality),

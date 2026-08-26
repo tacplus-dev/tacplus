@@ -35,6 +35,39 @@ func IsTraceEventPublisherData(publisher EventPublisherData) bool {
 	return publisher.EventTypeFQN == TraceEventTypeFQN
 }
 
+// AccountingRecordTypeFQN is the durable accounting record — the flat, stored
+// projection of accounting.Event that the chassis accounting sink publishes.
+// Declared in platform/proto/vservices/accounting-record.proto; the topic
+// wrapper (AccountingRecordBus) is synthesized from its spec.record.
+const AccountingRecordTypeFQN = "accountingrecord.AccountingRecord"
+
+// LookupAccountingRecordTopic returns the EventBus topic that carries
+// AccountingRecord, if the loaded proto set declares one. Unlike every other
+// publisher, this binding is not declared per-actor: accounting is a chassis
+// concern, so the generator resolves the topic from the record type itself.
+// Returns ok=false when the proto set has no accounting record (client repos,
+// or any build that does not include platform/proto/vservices).
+func LookupAccountingRecordTopic(p *parser.DescriptorParser) (eventbus.Topic, bool, error) {
+	registry, err := eventbus.BuildTopicRegistry(allParserFiles(p))
+	if err != nil {
+		return eventbus.Topic{}, false, err
+	}
+	matches := registry.TopicRefsForEventType(AccountingRecordTypeFQN)
+	switch len(matches) {
+	case 0:
+		return eventbus.Topic{}, false, nil
+	case 1:
+		return matches[0], true, nil
+	default:
+		refs := make([]string, 0, len(matches))
+		for _, t := range matches {
+			refs = append(refs, t.Ref.Raw)
+		}
+		sort.Strings(refs)
+		return eventbus.Topic{}, false, fmt.Errorf("%s is carried by more than one EventBus topic (%s); the accounting sink needs exactly one", AccountingRecordTypeFQN, strings.Join(refs, ", "))
+	}
+}
+
 // BoundaryData is the language-neutral metadata for a single boundary field.
 type BoundaryData struct {
 	StateRoot       string   // e.g. "BaseballState"

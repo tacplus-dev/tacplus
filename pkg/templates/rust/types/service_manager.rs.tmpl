@@ -1120,6 +1120,49 @@ impl ServiceManager {
         self.{{.TracePublisherFn}}().await
     }
 {{- end}}
+{{- if .HasServiceHealthState}}
+{{- with .AccountingPublisher}}
+
+    /// Creates the accounting record publisher's queue and returns its SENDER,
+    /// not a try-send closure.
+    ///
+    /// Every other publisher hands out `Fn(T) -> Result<(), TrySendError<T>>`,
+    /// which drops on a full queue and reports it. Accounting must not drop: an
+    /// audit trail with silent holes is worse than a slow RPC, so the sink owns
+    /// the Sender and awaits `send`, applying backpressure to the emitting RPC
+    /// instead. The queue is deeper than the trace queue for the same reason —
+    /// a brief publisher stall should absorb, not stall callers.
+    async fn create_accounting_publisher_sender(&self) -> tokio::sync::mpsc::Sender<{{.EventTypeName}}> {
+        const ACCOUNTING_QUEUE_DEPTH: usize = 1024;
+        let ({{.VarPrefix}}_tx, {{.VarPrefix}}_rx) =
+            tokio::sync::mpsc::channel::<{{.EventTypeName}}>(ACCOUNTING_QUEUE_DEPTH);
+        let {{.VarPrefix}}_im = self.identity.clone();
+        let {{.VarPrefix}}_tp: TokenProvider = Arc::new(move || {
+            let im = {{.VarPrefix}}_im.clone();
+            Box::pin(async move {
+                im.get_token_for("{{.TargetService}}").await.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                    e.to_string().into()
+                })
+            })
+        });
+        let {{.VarPrefix}}_identity = self.identity.clone();
+        let {{.VarPrefix}}_tls_config = self.tls_config.clone();
+        let {{.VarPrefix}}_state_store_conn = self.state_store_conn.conn().await;
+        self.spawn_owned(async move {
+            {{.LoopFn}}(
+                "{{.Label}}",
+                "{{.TargetService}}",
+                {{.VarPrefix}}_state_store_conn,
+                {{.VarPrefix}}_identity.clone(),
+                {{.VarPrefix}}_tls_config,
+                {{.VarPrefix}}_tp,
+                {{.VarPrefix}}_rx,
+            ).await;
+        });
+        {{.VarPrefix}}_tx
+    }
+{{- end}}
+{{- end}}
 
     /// Creates a TraceRound stamped with this service's identity and current time.
     pub fn trace_round(&self) -> TraceRound {
@@ -1360,6 +1403,27 @@ impl ServiceManager {
 {{- end}}
         }
 {{- end}}
+{{- end}}
+
+{{- if and .HasServiceHealthState .AccountingPublisher}}
+        // Wire the durable accounting emitter to every wrapper. The wrapper emit
+        // sites already exist on both the success and the error path of every
+        // accounted RPC; without this the slot is None and accounting produces
+        // neither a record nor a log line.
+        //
+        // The sink's send is BLOCKING, not try-send-and-drop, unlike the trace
+        // publisher above — see EventBusSink's send contract in chassis/am.
+        {
+            let accounting_tx = self.create_accounting_publisher_sender().await;
+            let source_id = format!("{}-{}", "{{.ServiceLabel}}", self.instance_id());
+            let emitter = Arc::new(am::Emitter::new(
+                source_id.clone(),
+                Box::new(am::EventBusSink::new(accounting_tx, source_id)),
+            ));
+{{- range .GrpcServices}}
+            {{.WrapperVar}}.set_emitter(Some(emitter.clone())).await;
+{{- end}}
+        }
 {{- end}}
 
 {{- if .HasStates}}
@@ -1970,21 +2034,25 @@ struct AuthorizerAdapter {
 
 #[tonic::async_trait]
 impl {{.WrapperModPath}}::Authorizer for AuthorizerAdapter {
-    async fn authorize(&self, full_method: &str, authorization: Option<&str>) -> Result<(), tonic::Status> {
+    async fn authorize(&self, full_method: &str, authorization: Option<&str>) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
         // Extract method name from full gRPC path, e.g. "/pkg.Service/Method" → "Method".
         let method = full_method.rsplit('/').next().unwrap_or(full_method);
+        // The verified token is the ONLY source of a caller identity an
+        // accounting record may name — see GrpcAuthorizer::identity_claims.
         self.authorizer
             .authorize_grpc(full_method, method, authorization, &std::collections::HashMap::new())
             .await
+            .map(|tw| GrpcAuthorizer::identity_claims(&tw))
             .map_err(|e| match e.code {
                 16 => tonic::Status::unauthenticated(e.message),
                 _ => tonic::Status::permission_denied(e.message),
             })
     }
 
-    async fn check_at_or_below(&self, authorization: Option<&str>, target_namespace: &str) -> Result<(), tonic::Status> {
+    async fn check_at_or_below(&self, authorization: Option<&str>, target_namespace: &str) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
         self.authorizer
             .check_caller_at_or_below(authorization, target_namespace)
+            .map(|tw| GrpcAuthorizer::identity_claims(&tw))
             .map_err(|e| match e.code {
                 16 => tonic::Status::unauthenticated(e.message),
                 _ => tonic::Status::permission_denied(e.message),

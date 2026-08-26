@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/boundaries"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/keepaliveconst"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 	commonspiffe "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/spiffe"
@@ -124,6 +125,22 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		clientTokenMintMethod = strutil.ToSnakeCase(clientInfo.TokenMintMethod)
 	}
 
+	// Does this proto set declare the durable accounting record? Client repos
+	// and any build without platform/proto/vservices do not, and the chassis
+	// accounting sink is gated on it — EventBusSink cannot name a type that
+	// was never generated.
+	hasAccountingRecord := false
+	if config.AnnotatedProtoDir != "" {
+		dp, err := parser.NewDescriptorParser(config.AnnotatedProtoDir)
+		if err != nil {
+			return fmt.Errorf("create descriptor parser for accounting record detection: %w", err)
+		}
+		_, hasAccountingRecord, err = boundaries.LookupAccountingRecordTopic(dp)
+		if err != nil {
+			return fmt.Errorf("resolve accounting record topic: %w", err)
+		}
+	}
+
 	// Build per-service RPC info for the authorizer template.
 	var svcRPCInfos []serviceRPCInfo
 	for _, svc := range svcRPCs {
@@ -152,6 +169,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		ClientTokenMintMethod       string
 		HasClientTokenExchanger     bool
 		ServiceRPCs                 []serviceRPCInfo // per-service RPC enum info for authorizer
+		HasAccountingRecord         bool             // proto set declares accountingrecord.AccountingRecord
 		ServiceLabel                string           // service identity baked into Authorizer
 		AcceptedAudiences           []string         // every `aud` the Authorizer accepts: own label + hosted traits
 		Spiffe                      commonspiffe.TemplateGrammar
@@ -174,6 +192,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		ClientTokenMintMethod:       clientTokenMintMethod,
 		HasClientTokenExchanger:     hasClientTokenExchanger,
 		ServiceRPCs:                 svcRPCInfos,
+		HasAccountingRecord:         hasAccountingRecord,
 		ServiceLabel:                config.ServiceLabel(),
 		AcceptedAudiences:           acceptedAudiences,
 		Spiffe:                      commonspiffe.TemplateData(),

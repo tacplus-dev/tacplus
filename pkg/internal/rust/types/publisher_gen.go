@@ -82,6 +82,41 @@ func collectEventPublishers(config *tactype.Config, protoDir string) ([]publishe
 	return result, nil
 }
 
+// collectAccountingPublisher returns the publisher entry for the accounting
+// record topic, if the proto set declares one.
+//
+// This is the one publisher that is NOT declared per-actor. Accounting is a
+// chassis concern: every service emits it, so requiring an event_publish on
+// every service's Config would be the same declaration copied N times, and a
+// service that forgot it would silently produce no audit trail. The producer
+// surface is already declared once, on the record itself
+// (s2s: {auth_services: ["*"]}), so the generator resolves the topic from the
+// record type instead.
+func collectAccountingPublisher(config *tactype.Config, protoDir string) (*publisherEntry, error) {
+	if protoDir == "" {
+		protoDir = config.FlatProtoDir
+	}
+	if protoDir == "" {
+		return nil, nil
+	}
+	p, err := parser.NewDescriptorParser(protoDir)
+	if err != nil {
+		return nil, fmt.Errorf("create descriptor parser for accounting publisher detection: %w", err)
+	}
+	topic, ok, err := boundaries.LookupAccountingRecordTopic(p)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	entry := explicitPublisherEntry(p, topic)
+	if entry.EventTypeName == "" {
+		return nil, nil
+	}
+	return &entry, nil
+}
+
 func explicitPublisherEntry(p *parser.DescriptorParser, topic eventbus.Topic) publisherEntry {
 	topicSnake := strutil.ToSnakeCase(topic.RPCStem)
 	return publisherEntryForTopic(topic, topicSnake, topic.RPCStem, rustEventTypePath(p, topic))

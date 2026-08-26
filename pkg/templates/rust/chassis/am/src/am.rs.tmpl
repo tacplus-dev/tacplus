@@ -11,15 +11,26 @@ use {{.CrateBasePathUnderscore}}_types::sys::accounting::accounting::{
     EventLevel, RpcCompleted, RpcError, StateUpdated, TokenRejected,
 };
 use {{.CrateBasePathUnderscore}}_types::generated::accounting_method::accounting_method::AccountingMethod;
+#[allow(unused_imports)]
+use {{.CrateBasePathUnderscore}}_types::generated::services::services as services_pb;
+{{- if .HasAccountingRecord}}
+use {{.CrateBasePathUnderscore}}_types::vservices::accountingrecord::accountingrecord::AccountingRecord;
+{{- end}}
 
 // ---------------------------------------------------------------------------
 // Sink trait
 // ---------------------------------------------------------------------------
 
 /// Sink is the backend that receives accounting events.
-/// Implementations: LoggerSink (tracing), EventBusSink (future).
+/// Implementations: LoggerSink (tracing), EventBusSink (durable, via EventBus).
+///
+/// `emit` is async because the durable sink must not drop: it hands the record
+/// to a bounded queue with a BLOCKING send, so a backed-up accounting pipeline
+/// applies backpressure to the RPC that produced the record instead of silently
+/// losing it. A synchronous trait could only offer try-send-and-drop.
+#[tonic::async_trait]
 pub trait Sink: Send + Sync + 'static {
-    fn emit(&self, event: &Event);
+    async fn emit(&self, event: &Event);
 }
 
 // ---------------------------------------------------------------------------
@@ -60,7 +71,7 @@ impl Emitter {
     }
 
     /// Emits an INFO RpcCompleted event.
-    pub fn rpc_completed(
+    pub async fn rpc_completed(
         &self,
         method: AccountingMethod,
         duration_ms: i64,
@@ -72,11 +83,11 @@ impl Emitter {
             method: Some(method),
             duration_ms,
         }));
-        self.sink.emit(&ev);
+        self.sink.emit(&ev).await;
     }
 
     /// Emits an ERROR RpcError event.
-    pub fn rpc_error(
+    pub async fn rpc_error(
         &self,
         method: AccountingMethod,
         code: i32,
@@ -94,11 +105,11 @@ impl Emitter {
             duration_ms,
             error_context,
         }));
-        self.sink.emit(&ev);
+        self.sink.emit(&ev).await;
     }
 
     /// Emits a WARN TokenRejected event.
-    pub fn token_rejected(
+    pub async fn token_rejected(
         &self,
         reason: &str,
         method: AccountingMethod,
@@ -110,11 +121,11 @@ impl Emitter {
             reason: reason.to_string(),
             method: Some(method),
         }));
-        self.sink.emit(&ev);
+        self.sink.emit(&ev).await;
     }
 
     /// Emits a WARN EndpointHealthChanged event.
-    pub fn endpoint_health_changed(
+    pub async fn endpoint_health_changed(
         &self,
         endpoint: &str,
         healthy: bool,
@@ -126,11 +137,11 @@ impl Emitter {
             healthy,
             latency_ms,
         }));
-        self.sink.emit(&ev);
+        self.sink.emit(&ev).await;
     }
 
     /// Emits an INFO StateUpdated event.
-    pub fn state_updated(
+    pub async fn state_updated(
         &self,
         entity_type: &str,
         entity_id: &str,
@@ -144,11 +155,11 @@ impl Emitter {
             entity_id: entity_id.to_string(),
             action: action.into(),
         }));
-        self.sink.emit(&ev);
+        self.sink.emit(&ev).await;
     }
 
     /// Emits an ERROR Diagnostic event (escape hatch).
-    pub fn diagnostic(
+    pub async fn diagnostic(
         &self,
         message: &str,
         context: &str,
@@ -162,7 +173,7 @@ impl Emitter {
             context: context.to_string(),
             error_context,
         }));
-        self.sink.emit(&ev);
+        self.sink.emit(&ev).await;
     }
 }
 
@@ -215,8 +226,9 @@ pub fn error_context_from_status(status: &tonic::Status) -> ErrorContext {
 /// LoggerSink delegates typed accounting events to tracing as structured log entries.
 pub struct LoggerSink;
 
+#[tonic::async_trait]
 impl Sink for LoggerSink {
-    fn emit(&self, event: &Event) {
+    async fn emit(&self, event: &Event) {
         let source_id = &event.source_id;
         let request_id = &event.request_id;
         let timestamp_ms = event.timestamp_ms;
@@ -298,3 +310,127 @@ impl Sink for LoggerSink {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// AccountingMethod → stable label
+// ---------------------------------------------------------------------------
+
+/// Renders an AccountingMethod as the proto enum value name of whichever
+/// per-service field is set, e.g. "TASKS_RPCS_CREATE_TASK".
+///
+/// AccountingRecord.method is an EQ query_field, so it needs one stable string
+/// per RPC. as_str_name() is the proto-declared name and changes only when the
+/// enum does, which is exactly the stability a stored query key needs — the
+/// prost Debug rendering is neither compact nor guaranteed.
+#[allow(dead_code, unused_variables)]
+pub fn method_label(method: &AccountingMethod) -> String {
+{{- range .ServiceRPCs}}
+    if method.{{.FieldName}} != 0 {
+        if let Ok(v) = services_pb::{{.ProstEnumType}}::try_from(method.{{.FieldName}}) {
+            return v.as_str_name().to_string();
+        }
+    }
+{{- end}}
+    String::new()
+}
+{{- if .HasAccountingRecord}}
+
+// ---------------------------------------------------------------------------
+// EventBusSink — durable backend: flattens Event → AccountingRecord and
+// publishes it onto the accounting topic.
+// ---------------------------------------------------------------------------
+
+/// EventBusSink is the durable accounting backend. It flattens the emit-time
+/// `accounting::Event` oneof envelope into the flat, stored `AccountingRecord`
+/// and hands it to the generated per-topic publisher's queue.
+///
+/// SEND CONTRACT — BLOCKING, NOT DROPPING. Unlike the best-effort trace and
+/// business-record publishers (which `try_send` and log on a full queue), this
+/// sink awaits `Sender::send`. A full queue therefore parks the emitting RPC's
+/// completion path until the publisher drains, rather than discarding a record.
+/// Accounting is an audit trail: a silently missing row is worse than a slow
+/// RPC. The only record this sink can lose is one emitted after the receiver is
+/// gone (process shutdown), and that path logs at ERROR.
+pub struct EventBusSink {
+    tx: tokio::sync::mpsc::Sender<AccountingRecord>,
+    source_id: String,
+    seq: std::sync::atomic::AtomicU64,
+}
+
+impl EventBusSink {
+    /// Creates a sink that publishes through the given per-topic publisher queue.
+    /// `source_id` is the emitting process ("{service_id}-{instance_id}"), used
+    /// to make accounting_id unique across instances.
+    pub fn new(tx: tokio::sync::mpsc::Sender<AccountingRecord>, source_id: String) -> Self {
+        Self {
+            tx,
+            source_id,
+            seq: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Mints the record key. accounting_id is assert_required, so it has to be
+    /// non-empty and unique: process identity + emit time + a per-process
+    /// counter is unique without pulling in a uuid dependency.
+    fn next_accounting_id(&self, timestamp_ms: i64) -> String {
+        let seq = self.seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("{}-{:013}-{:012}", self.source_id, timestamp_ms, seq)
+    }
+
+    /// Flattens the emit-time envelope into the stored record.
+    ///
+    /// spiffe_id is deliberately left unset: eventbus stamps the owner field
+    /// with the PUBLISHER's verified SPIFFE ID on the way in, so a value set
+    /// here would be overwritten, and setting one would be a claim about
+    /// identity that nothing checked.
+    fn flatten(&self, event: &Event) -> AccountingRecord {
+        let (method, code, duration_ms) = match &event.event {
+            Some(event::Event::RpcCompleted(p)) => (
+                p.method.as_ref().map(method_label).unwrap_or_default(),
+                0,
+                p.duration_ms,
+            ),
+            Some(event::Event::RpcError(p)) => (
+                p.method.as_ref().map(method_label).unwrap_or_default(),
+                p.code,
+                p.duration_ms,
+            ),
+            Some(event::Event::TokenRejected(p)) => (
+                p.method.as_ref().map(method_label).unwrap_or_default(),
+                0,
+                0,
+            ),
+            _ => (String::new(), 0, 0),
+        };
+        AccountingRecord {
+            accounting_id: self.next_accounting_id(event.timestamp_ms),
+            request_id: event.request_id.clone(),
+            source_id: event.source_id.clone(),
+            timestamp_ms: event.timestamp_ms,
+            level: event.level,
+            method,
+            code,
+            duration_ms,
+            // The principal the Authorizer verified, not a caller-written header.
+            principal_sub: event.identity.get("sub").cloned().unwrap_or_default(),
+            ..Default::default()
+        }
+    }
+}
+
+#[tonic::async_trait]
+impl Sink for EventBusSink {
+    async fn emit(&self, event: &Event) {
+        let record = self.flatten(event);
+        let accounting_id = record.accounting_id.clone();
+        if self.tx.send(record).await.is_err() {
+            // Receiver dropped — the publish loop is gone, which only happens
+            // on shutdown. Loud, because this is the one lossy path.
+            tracing::error!(
+                accounting_id = %accounting_id,
+                "accounting publisher closed; record dropped"
+            );
+        }
+    }
+}
+{{- end}}

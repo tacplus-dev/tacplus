@@ -1240,14 +1240,31 @@ func CollectSubscriptionProtos(fds []*parser.FileDescriptor, allFds []*parser.Fi
 
 // CollectEventPublishProtos collects validated event_publish bindings from parsed file descriptors.
 func CollectEventPublishProtos(fds []*parser.FileDescriptor, allFds []*parser.FileDescriptor) ([]*spec.EventPublishInfo, error) {
-	if !hasEventBindingAnnotation(fds, "event_publish") {
-		return nil, nil
-	}
 	registry, err := eventbus.BuildTopicRegistry(allFds)
 	if err != nil {
 		return nil, err
 	}
+	// The accounting record topic is published by EVERY service — the chassis
+	// emits it, no service declares it. The binding still has to appear here:
+	// the operator derives a delegate's authorized_services (and therefore
+	// whether kernel will mint an aud=<broker> token at all) from
+	// event_publishes[].broker_label, so a service that publishes accounting
+	// without this entry is denied at the mint and its accounting queue backs
+	// up behind a broker it can never reach.
+	accounting, err := accountingPublishInfo(fds, registry)
+	if err != nil {
+		return nil, err
+	}
+	if !hasEventBindingAnnotation(fds, "event_publish") {
+		if accounting != nil {
+			return []*spec.EventPublishInfo{accounting}, nil
+		}
+		return nil, nil
+	}
 	var result []*spec.EventPublishInfo
+	if accounting != nil {
+		result = append(result, accounting)
+	}
 	for _, fd := range fds {
 		for i := range fd.Messages {
 			msg := &fd.Messages[i]
@@ -1279,6 +1296,50 @@ func CollectEventPublishProtos(fds []*parser.FileDescriptor, allFds []*parser.Fi
 	}
 	sort.Slice(result, func(i, j int) bool { return eventPublishSortKey(result[i]) < eventPublishSortKey(result[j]) })
 	return result, nil
+}
+
+// accountingPublishInfo synthesizes the accounting-record publish binding for a
+// registry leaf that declares a physical service (option (spec.service)).
+// Returns nil for every other leaf, and for proto sets that declare no
+// accounting record at all.
+//
+// It is attributed to the declaring file's package so the entry is stable and
+// deduplicates against an explicit declaration, should a service ever add one.
+func accountingPublishInfo(fds []*parser.FileDescriptor, registry *eventbus.TopicRegistry) (*spec.EventPublishInfo, error) {
+	var actor *parser.FileDescriptor
+	for _, fd := range fds {
+		if fd.ServiceName != "" {
+			actor = fd
+			break
+		}
+	}
+	if actor == nil {
+		return nil, nil
+	}
+	matches := registry.TopicRefsForEventType(boundaries.AccountingRecordTypeFQN)
+	if len(matches) != 1 {
+		// 0: no accounting record in this proto set. >1: ambiguous, and the
+		// generator's own lookup already fails loudly on that.
+		return nil, nil
+	}
+	topic := matches[0]
+	binding, err := registry.Resolve(topic.Ref.Raw)
+	if err != nil {
+		return nil, err
+	}
+	info := &spec.EventPublishInfo{
+		ActorPackage: actor.Package,
+		ActorMessage: "",
+		TopicRef:     binding.Ref.Raw,
+		EventTypeFqn: binding.EventTypeFQN,
+		BrokerLabel:  binding.EventBusLabel,
+		RpcStem:      binding.RPCStem,
+		AuthModel:    "s2s",
+	}
+	if binding.PublishS2S != nil {
+		info.AuthServices = binding.PublishS2S.AuthServices
+	}
+	return info, nil
 }
 
 // CollectEventWatchProtos collects validated event_watch bindings from parsed file descriptors.

@@ -150,6 +150,10 @@ type smTemplateData struct {
 	Publishers              []publisherEntry // model-driven EventBus topic publishers (own (spec.service_event) topics)
 	HasPublishers           bool
 	TracePublisherFn        string
+	// AccountingPublisher is the generator-resolved publisher for the durable
+	// accounting record topic. nil when the proto set declares no accounting
+	// record (client repos), in which case no emitter is wired at all.
+	AccountingPublisher *publisherEntry
 	TargetServices          []TargetServiceInfo // per-target-service connection info for typed accessors
 	DiskStores              []rustDiskStoreRuntimeEntry
 	HasDiskStores           bool
@@ -449,6 +453,27 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		}
 	}
 
+	// The accounting publisher is generator-resolved, not model-declared — see
+	// collectAccountingPublisher. Append it to Publishers so its publish loop
+	// and stream helper are emitted by the same template block as every other
+	// topic, unless the service already declared it explicitly.
+	accountingPublisher, err := collectAccountingPublisher(config, config.AnnotatedProtoDir)
+	if err != nil {
+		return smTemplateData{}, fmt.Errorf("failed to resolve accounting publisher: %w", err)
+	}
+	if accountingPublisher != nil {
+		declared := false
+		for _, publisher := range publishers {
+			if publisher.FnName == accountingPublisher.FnName {
+				declared = true
+				break
+			}
+		}
+		if !declared {
+			publishers = append(publishers, *accountingPublisher)
+		}
+	}
+
 	return smTemplateData{
 		CrateBasePath:           config.CrateBasePath,
 		CrateBasePathUnderscore: strings.ReplaceAll(config.CrateBasePath, "-", "_"),
@@ -504,6 +529,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		Publishers:            publishers,
 		HasPublishers:         len(publishers) > 0,
 		TracePublisherFn:      tracePublisherFn,
+		AccountingPublisher:   accountingPublisher,
 		TargetServices:             targetServices,
 		DiskStores:                 diskStores,
 		HasDiskStores:              len(diskStores) > 0,

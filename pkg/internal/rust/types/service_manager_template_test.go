@@ -305,3 +305,73 @@ func TestRustServiceManagerExemptsAuthDisabledMethods(t *testing.T) {
 		t.Error("expected an auth_exempt_paths binding passed to the layer")
 	}
 }
+
+// Item 7 / Piece B: SetEmitter was generated on every wrapper and called by
+// nobody, so the emitter slot was None on every request in every deployed
+// service and accounting produced neither a durable record nor a log line.
+// This asserts the ServiceManager actually constructs the sink and wires it,
+// and that it does so with the NON-DROPPING send contract (a Sender the sink
+// awaits), not the bounded try-send closure the trace publisher uses.
+func TestRustServiceManagerWiresAccountingEmitter(t *testing.T) {
+	accounting := publisherEntry{
+		FnName:        "create_accountingrecord_accounting_record_bus_stream_publisher",
+		LoopFn:        "accountingrecord_accounting_record_bus_stream_publish_loop",
+		VarPrefix:     "accountingrecord_accounting_record_bus_stream",
+		Label:         "accountingrecord.AccountingRecordBus.stream publisher",
+		TargetService: "eventbus",
+		EventTypeFQN:  "accountingrecord.AccountingRecord",
+		EventTypeName: "AccountingRecord",
+		EventTypePath: "crate::types::vservices::accountingrecord::AccountingRecord",
+	}
+	rendered := renderRustServiceManagerForTest(t, smTemplateData{
+		ServiceLabel:          "tasks",
+		HasGrpc:               true,
+		HasTlsGrpc:            true,
+		HasServiceHealthState: true,
+		GrpcServices: []grpcServiceEntry{{
+			TraitName:  "Tasks",
+			WrapperVar: "wrapper_tasks",
+		}},
+		Publishers:          []publisherEntry{accounting},
+		HasPublishers:       true,
+		AccountingPublisher: &accounting,
+	})
+
+	for _, want := range []string{
+		"async fn create_accounting_publisher_sender(&self) -> tokio::sync::mpsc::Sender<AccountingRecord>",
+		"let accounting_tx = self.create_accounting_publisher_sender().await;",
+		"am::EventBusSink::new(accounting_tx, source_id)",
+		"am::Emitter::new(",
+		"wrapper_tasks.set_emitter(Some(emitter.clone())).await;",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered Rust ServiceManager missing accounting emitter wiring %q:\n%s", want, rendered)
+		}
+	}
+
+	// The accounting queue must not hand out a try_send closure: dropping an
+	// audit record on a full queue is exactly what the item-9 zero-loss ruling
+	// forbids for this producer.
+	senderFn := rendered[strings.Index(rendered, "async fn create_accounting_publisher_sender"):]
+	senderFn = senderFn[:strings.Index(senderFn, "\n    }")]
+	if strings.Contains(senderFn, "try_send") {
+		t.Fatalf("the accounting publisher must return a blocking Sender, never a try_send closure:\n%s", senderFn)
+	}
+}
+
+// A proto set with no accounting record (client repos) must render no emitter
+// wiring at all rather than naming a type that was never generated.
+func TestRustServiceManagerOmitsAccountingEmitterWithoutRecord(t *testing.T) {
+	rendered := renderRustServiceManagerForTest(t, smTemplateData{
+		ServiceLabel:          "demo",
+		HasGrpc:               true,
+		HasTlsGrpc:            true,
+		HasServiceHealthState: true,
+		GrpcServices:          []grpcServiceEntry{{TraitName: "Demo", WrapperVar: "wrapper_demo"}},
+	})
+	for _, unwanted := range []string{"create_accounting_publisher_sender", "EventBusSink", "set_emitter"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("ServiceManager must not reference %q when the proto set declares no accounting record:\n%s", unwanted, rendered)
+		}
+	}
+}

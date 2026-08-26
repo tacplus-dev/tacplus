@@ -37,13 +37,19 @@ impl {{.WrapperName}} {
 {{.HandlerTrait}}
 
 /// Authorizer trait for authorization checks on gRPC methods.
+///
+/// Both calls return the VERIFIED caller's identity claims on success. That
+/// return value is what an accounting record attributes the call to: the claims
+/// the authorizer actually checked, never something the caller wrote into a
+/// header. An auth_disabled method verifies nothing and therefore accounts with
+/// an empty map rather than a caller assertion.
 #[tonic::async_trait]
 pub trait Authorizer: Send + Sync + 'static {
-    async fn authorize(&self, full_method: &str, authorization: Option<&str>) -> Result<(), tonic::Status>;
+    async fn authorize(&self, full_method: &str, authorization: Option<&str>) -> Result<std::collections::HashMap<String, String>, tonic::Status>;
     /// Enforces the level-or-below rule: the caller's namespace (from `authorization`)
     /// must equal or be a path-segment ancestor of `target_namespace`. Used by methods
     /// annotated with `target_namespace_field` for tenant-scoped operations.
-    async fn check_at_or_below(&self, authorization: Option<&str>, target_namespace: &str) -> Result<(), tonic::Status>;
+    async fn check_at_or_below(&self, authorization: Option<&str>, target_namespace: &str) -> Result<std::collections::HashMap<String, String>, tonic::Status>;
 }
 
 /// ValidationWrapper wraps a {{.ServiceName}}Handler with authorization and validation.
@@ -54,9 +60,7 @@ pub struct ValidationWrapper {
     handler: Arc<dyn {{.ServiceName}}Handler>,
     authorizer: Arc<tokio::sync::RwLock<Option<Arc<dyn Authorizer>>>>,
 {{.WatchFields}}
-{{- if .HasAccounting}}
     emitter: Arc<tokio::sync::RwLock<Option<Arc<am::Emitter>>>>,
-{{- end}}
     instance_id: Arc<tokio::sync::RwLock<String>>,
     trace_publish: Arc<tokio::sync::RwLock<Option<Arc<dyn Fn(crate::types::sys::trace::TraceEvent) + Send + Sync>>>>,
     anonymize_hmac_key: Arc<tokio::sync::RwLock<Vec<u8>>>,
@@ -69,9 +73,7 @@ impl ValidationWrapper {
             handler,
             authorizer: Arc::new(tokio::sync::RwLock::new(None)),
 {{.WatchFieldsInit}}
-{{- if .HasAccounting}}
             emitter: Arc::new(tokio::sync::RwLock::new(None)),
-{{- end}}
             instance_id: Arc::new(tokio::sync::RwLock::new(String::new())),
             trace_publish: Arc::new(tokio::sync::RwLock::new(None)),
             anonymize_hmac_key: Arc::new(tokio::sync::RwLock::new(Vec::new())),
@@ -140,18 +142,20 @@ impl ValidationWrapper {
             f(event);
         }
     }
-{{- if .HasAccounting}}
 
-    /// Sets the accounting emitter for this service wrapper.
+    /// Sets the accounting emitter for this service wrapper. Called by the
+    /// ServiceManager on every wrapper at startup, exactly like
+    /// set_trace_publisher — a wrapper with no accounted RPCs simply never
+    /// reads the slot.
+    #[allow(dead_code)]
     pub async fn set_emitter(&self, emitter: Option<Arc<am::Emitter>>) {
         let mut guard = self.emitter.write().await;
         *guard = emitter;
     }
-{{- end}}
 
     /// Check authorization. No-op if authorizer is None.
     #[allow(dead_code)]
-    async fn authorize_method<T>(&self, full_method: &str, req: &tonic::Request<T>) -> Result<(), tonic::Status> {
+    async fn authorize_method<T>(&self, full_method: &str, req: &tonic::Request<T>) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
         // Fail-closed: auth_disabled methods skip this call (by annotation), so a
         // None authorizer here means a token-auth method was left unwired. Reject.
         let auth = self.authorizer.read().await;
@@ -171,7 +175,7 @@ impl ValidationWrapper {
     /// of `target_namespace`. Fail-closed: a None authorizer rejects. Used by methods
     /// with `target_namespace_field` annotation.
     #[allow(dead_code)]
-    async fn enforce_at_or_below<T>(&self, req: &tonic::Request<T>, target_namespace: &str) -> Result<(), tonic::Status> {
+    async fn enforce_at_or_below<T>(&self, req: &tonic::Request<T>, target_namespace: &str) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
         let auth = self.authorizer.read().await;
         match *auth {
             Some(ref a) => {
@@ -189,7 +193,7 @@ impl ValidationWrapper {
     /// Used by client-streaming/bidi request adapters where each message carries
     /// the target namespace but the stream metadata is fixed at open.
     #[allow(dead_code)]
-    async fn enforce_at_or_below_authorization(&self, authorization: Option<&str>, target_namespace: &str) -> Result<(), tonic::Status> {
+    async fn enforce_at_or_below_authorization(&self, authorization: Option<&str>, target_namespace: &str) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
         let auth = self.authorizer.read().await;
         match *auth {
             Some(ref a) => a.check_at_or_below(authorization, target_namespace).await,

@@ -11,6 +11,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/boundaries"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/header"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
@@ -50,6 +51,14 @@ func generateServiceWrappers(servicesInfo []ServiceInfo, inputDir string, packag
 	}
 	san := newRustEgressSanitizer(allFiles)
 
+	// Q2: resolve the accounting topic once so every wrapper can drop that
+	// topic's own publish RPC from its accounting map. See
+	// accounting_exclusion.go for why this exclusion is mandatory.
+	accountingTopic, hasAccountingTopic, err := boundaries.LookupAccountingRecordTopic(descriptorParser)
+	if err != nil {
+		return fmt.Errorf("resolve accounting record topic: %w", err)
+	}
+
 	for _, svc := range servicesInfo {
 		// Use the descriptor parser to get method information
 		protoInfo, err := descriptorParser.ConvertToProtoInfo(svc.ProtoFile)
@@ -58,7 +67,10 @@ func generateServiceWrappers(servicesInfo []ServiceInfo, inputDir string, packag
 		}
 
 		// Generate servicewrapper.rs in the services output directory
-		if err := generateServiceWrapper(svc, protoInfo, packageToDirMap, accountingMap, skippedTraceTypes, san); err != nil {
+		svcAccountingMap := excludeAccountingSelfPublish(
+			accountingMap, svc.GrpcName, protoInfo.Package, svc.ServiceName,
+			accountingTopic, hasAccountingTopic)
+		if err := generateServiceWrapper(svc, protoInfo, packageToDirMap, svcAccountingMap, skippedTraceTypes, san); err != nil {
 			return fmt.Errorf("failed to generate servicewrapper for %s: %w", svc.ServiceName, err)
 		}
 	}
@@ -290,11 +302,14 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	// Compute the crate path to the types module (e.g., "services::baseball::baseball" for services/baseball)
 	typesCratePath := strings.ReplaceAll(strings.ReplaceAll(svc.ParentDir, "-", "_"), string(filepath.Separator), "::") + "::" + svc.PackageName
 
-	// Build accounting imports when grpcName is set
-	var accountingImports string
+	// `use am;` is unconditional: every wrapper carries the emitter slot and
+	// set_emitter, the same way it carries set_trace_publisher, so the
+	// ServiceManager can wire accounting without knowing which wrappers have
+	// accounted RPCs. The enum imports stay conditional — they are only
+	// referenced by an emitted accounting block.
+	accountingImports := "use am;\n"
 	if hasAccounting {
-		accountingImports = `use am;
-use crate::types::generated::accounting_method::accounting_method::AccountingMethod;
+		accountingImports += `use crate::types::generated::accounting_method::accounting_method::AccountingMethod;
 use crate::types::generated::services::services as services_pb;
 `
 	}
@@ -713,11 +728,11 @@ func buildRustAccountingBlock(method *parser.MethodInfo, grpcName, svcProtoName 
                 let method = %s;
                 match &result {
                     Ok(_) => {
-                        emitter.rpc_completed(method, duration_ms, std::collections::HashMap::new(), &request_id);
+                        emitter.rpc_completed(method, duration_ms, __tacplus_caller_identity.clone(), &request_id).await;
                     }
                     Err(status) => {
                         let err_ctx = am::error_context_from_status(status);
-                        emitter.rpc_error(method, status.code() as i32, status.message(), duration_ms, Some(err_ctx), std::collections::HashMap::new(), &request_id);
+                        emitter.rpc_error(method, status.code() as i32, status.message(), duration_ms, Some(err_ctx), __tacplus_caller_identity.clone(), &request_id).await;
                     }
                 }
             }
@@ -749,6 +764,16 @@ AccountingMethod {
         }`, fieldName, rustEnumType, rustEnumVariant)
 }
 
+// rustCallerIdentityVar is the local the generated wrapper binds the
+// AUTHORIZER-VERIFIED caller identity to. Every accounting emit in the wrapper
+// reads it. It is __-prefixed so a wrapper with no accounting does not warn on
+// an unused binding, and so it cannot collide with a proto field name.
+//
+// Before this existed the Rust wrapper handed every emit a fresh empty map, so
+// the only thing tying an accounting record to a caller was the caller-written
+// x-request-id header. Java fixed this first (F10); this is the Rust port.
+const rustCallerIdentityVar = "__tacplus_caller_identity"
+
 // rustCallerExtraction is the Rust code that extracts a Caller from the
 // authorization header. Replaces the placeholder `let caller = None` so that
 // handlers receive the authenticated identity. Requires `request_id` to
@@ -773,15 +798,17 @@ func rustAuthLine(svc *parser.ServiceInfo, method *parser.MethodInfo, fullMethod
 	// fail closed ("authorizer not configured — auth is mandatory"), breaking the
 	// daemon's own control plane (e.g. a client daemon's DaemonControl/HookReceiver).
 	if method.AuthDisabled || svc.AuthDisabled || svc.IsC2D {
-		base = "// c2d/auth_disabled: no authorization check"
+		// Nothing verified a caller here, so accounting records carry no identity —
+		// an empty map, never something the caller asserted in a header.
+		base = "// c2d/auth_disabled: no authorization check\n        let " + rustCallerIdentityVar + ": std::collections::HashMap<String, String> = std::collections::HashMap::new();"
 	} else if method.AuthAnyUser {
 		targetNamespace := strings.TrimSpace(method.TargetNamespaceField)
 		if targetNamespace == "" {
 			targetNamespace = "/"
 		}
-		base = fmt.Sprintf("self.enforce_at_or_below(&request, %q).await?;", targetNamespace)
+		base = fmt.Sprintf("let %s = self.enforce_at_or_below(&request, %q).await?;", rustCallerIdentityVar, targetNamespace)
 	} else {
-		base = fmt.Sprintf("self.authorize_method(\"%s\", &request).await?;", fullMethod)
+		base = fmt.Sprintf("let %s = self.authorize_method(\"%s\", &request).await?;", rustCallerIdentityVar, fullMethod)
 	}
 
 	// target_namespace_field: emit level-or-below enforcement using direct field access.
@@ -1180,6 +1207,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         let __tacplus_accounting_method = %s;
         let __tacplus_emitter = self.emitter.clone();
         let __tacplus_request_id = request_id.clone();
+        let __tacplus_accounting_identity = __tacplus_caller_identity.clone();
         macro_rules! __tacplus_watch_rpc_error {
             ($status:expr) => {{
                 let duration_ms = __tacplus_accounting_start.elapsed().as_millis() as i64;
@@ -1192,9 +1220,9 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
                         $status.message(),
                         duration_ms,
                         Some(err_ctx),
-                        std::collections::HashMap::new(),
+                        __tacplus_accounting_identity.clone(),
                         &__tacplus_request_id,
-                    );
+                    ).await;
                 }
             }};
         }
@@ -1206,9 +1234,9 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
                     emitter.rpc_completed(
                         __tacplus_accounting_method.clone(),
                         duration_ms,
-                        std::collections::HashMap::new(),
+                        __tacplus_accounting_identity.clone(),
                         &__tacplus_request_id,
-                    );
+                    ).await;
                 }
             }};
         }

@@ -239,13 +239,38 @@ impl Authorizer {
     /// `target_namespace`. This is the convenience entry point used by
     /// generated service wrappers — the namespace claim is only trusted
     /// because the token's signature has been verified first.
-    pub fn check_caller_at_or_below(&self, authorization: Option<&str>, target_namespace: &str) -> Result<()> {
+    pub fn check_caller_at_or_below(&self, authorization: Option<&str>, target_namespace: &str) -> Result<token::Token> {
         let tw = self.verify_bearer(authorization)?;
         let caller_namespace = tw.namespace().unwrap_or("");
         if caller_namespace.is_empty() {
             return Err(AuthorizerError::permission_denied("token has empty namespace claim"));
         }
-        self.check_at_or_below(caller_namespace, target_namespace)
+        self.check_at_or_below(caller_namespace, target_namespace)?;
+        Ok(tw)
+    }
+
+    /// Returns the accounting identity of a verified token: the claims that name
+    /// the principal an audit record is attributed to. Same claim set the Go and
+    /// Java chassis record, so a record means the same thing in any language.
+    ///
+    /// Only ever called with a token the authorizer itself verified — an
+    /// unverified or absent token yields no identity at all, so the record says
+    /// "no authenticated caller" rather than repeating something the caller chose.
+    pub fn identity_claims(tw: &token::Token) -> HashMap<String, String> {
+        let mut identity = HashMap::new();
+        for (key, value) in [
+            ("sub", tw.subject()),
+            ("aud", tw.audience()),
+            ("iss", tw.issuer()),
+            ("azp", tw.azp()),
+        ] {
+            if let Some(v) = value {
+                if !v.is_empty() {
+                    identity.insert(key.to_string(), v.to_string());
+                }
+            }
+        }
+        identity
     }
 
     /// Returns the JWK cache for direct key access.
@@ -352,7 +377,7 @@ impl Authorizer {
         method: &str,
         authorization: Option<&str>,
         _metadata: &HashMap<String, String>,
-    ) -> Result<()> {
+    ) -> Result<token::Token> {
         let tw = self.verify_bearer(authorization)?;
 
         // S2S path: service/workload tokens carry structured identity claims
@@ -382,14 +407,15 @@ impl Authorizer {
             // Level-or-below checks for methods annotated with
             // target_namespace_field are enforced by the generated service
             // wrappers via check_at_or_below (applies to S2S too), unchanged.
-            return Ok(());
+            return Ok(tw);
         }
 
         // C2S path: user tokens carry service_entitlements.
         let te = tw.service_entitlements().ok_or_else(|| {
             AuthorizerError::permission_denied("token missing service_entitlements claim")
         })?;
-        self.authorize_by_service_entitlements(te, full_method, method)
+        self.authorize_by_service_entitlements(te, full_method, method)?;
+        Ok(tw)
     }
 
     /// Checks whether the token's service_entitlements value grants access to the
@@ -457,6 +483,7 @@ impl Authorizer {
         let method = path.rsplit('/').next().unwrap_or(path);
         self.authorize_grpc(path, method, authorization, &HashMap::new())
             .await
+            .map(|_| ())
     }
 
     /// Synchronous token authentication: verifies signature, audience, expiry,

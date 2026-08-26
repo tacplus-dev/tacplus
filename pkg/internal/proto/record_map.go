@@ -30,6 +30,9 @@ type recordType struct {
 	relPath  string // e.g. "vservices/agent-sensor.proto"
 	key      string // record key field, e.g. "event_id" (order_by for the Pull page)
 	filters  []recordFilter
+	// minGroupSize is (spec.record).min_group_size: the smallest result size the
+	// record's size-only RPCs may disclose. 0 = undeclared, no stamp.
+	minGroupSize int32
 }
 
 // recordFilter is a (spec.query_field) criterion on a record field — a typed
@@ -176,12 +179,20 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 					rangeOp:   qf.StringValue == "range",
 				})
 			}
+			// min_group_size is declared on the RECORD; the downstream generators
+			// read it off the METHOD, so the injector propagates it onto the
+			// size-only RPCs below (never re-derived from an RPC name).
+			var minGroupSize int32
+			if m, ok := msg.Annotations["record_min_group_size"]; ok {
+				minGroupSize = int32(m.IntValue)
+			}
 			records = append(records, recordType{
-				typeName: msg.Name,
-				pkg:      fd.Package,
-				relPath:  relPath,
-				key:      key,
-				filters:  filters,
+				typeName:     msg.Name,
+				pkg:          fd.Package,
+				relPath:      relPath,
+				key:          key,
+				filters:      filters,
+				minGroupSize: minGroupSize,
 			})
 		}
 	}
@@ -498,6 +509,29 @@ func authServicesLiteral(authServices []string) string {
 	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
+// minGroupSizeOption renders the stamped method option for a record declaring
+// (spec.record).min_group_size, indented for an RPC that already has an option
+// body. Empty when the record declares no threshold — the annotation is
+// additive, so an undeclared record's RPCs are emitted exactly as before.
+//
+// A negative threshold never reaches here: ValidateMinGroupSizeAnnotations
+// rejects it at generation time.
+func minGroupSizeOption(r recordType) string {
+	if r.minGroupSize <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("    option (spec.min_group_size) = %d;\n", r.minGroupSize)
+}
+
+// minGroupSizeBody is the same stamp for the c2s half, whose RPCs carry no
+// options at all: it is either the bare ";" terminator or the option body.
+func minGroupSizeBody(r recordType) string {
+	if r.minGroupSize <= 0 {
+		return ";"
+	}
+	return fmt.Sprintf(" {\n%s  }", minGroupSizeOption(r))
+}
+
 // recordMapS2SService renders the S2S half of the record query plane: the
 // service a peer reaches directly, authorized by peer identity through the
 // trait's declared auth_services rather than by a user token's entitlements.
@@ -526,7 +560,7 @@ func recordMapS2SService(plane traitPlane, records []recordType) string {
   }
   rpc Get%[1]sCount(QueryHandle) returns (RecordCount) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
-  }
+%[4]s  }
   rpc Get%[1]sSample(Sample%[1]sRequest) returns (Sample%[1]sResponse) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
   }
@@ -537,7 +571,7 @@ func recordMapS2SService(plane traitPlane, records []recordType) string {
   rpc Delete%[1]sQuery(QueryHandle) returns (QueryStats) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
   }
-`, r.typeName, r.key, auth))
+`, r.typeName, r.key, auth, minGroupSizeOption(r)))
 		if hasFilter {
 			// UpdateQuery replaces the query's predicate in place (unrestricted — not
 			// enforced narrow-only; see the package doc comment above).
@@ -545,15 +579,15 @@ func recordMapS2SService(plane traitPlane, records []recordType) string {
 			// SubscribeCount streams the live size.
 			sb.WriteString(fmt.Sprintf(`  rpc Update%[1]sQuery(Refine%[1]sRequest) returns (QueryStats) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
-  }
+%[4]s  }
   rpc Watch%[1]s(QueryHandle) returns (stream %[1]sWatchEvent) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
     option (spec.method_collection) = {mode: COLLECTION_MODE_WATCH, order_by: [%[2]q]};
   }
   rpc Subscribe%[1]sCount(QueryHandle) returns (stream RecordCount) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
-  }
-`, r.typeName, r.key, auth))
+%[4]s  }
+`, r.typeName, r.key, auth, minGroupSizeOption(r)))
 		}
 	}
 	sb.WriteString("}\n")
@@ -578,20 +612,20 @@ func recordQueryC2SService(plane traitPlane, records []recordType) string {
 	for _, r := range records {
 		sb.WriteString(fmt.Sprintf(`
   rpc Create%[1]sQuery(Open%[1]sQueryRequest) returns (QueryHandle);
-  rpc Get%[1]sCount(QueryHandle) returns (RecordCount);
+  rpc Get%[1]sCount(QueryHandle) returns (RecordCount)%[3]s
   rpc Get%[1]sSample(Sample%[1]sRequest) returns (Sample%[1]sResponse);
   rpc List%[1]s(Pull%[1]sRequest) returns (Pull%[1]sResponse) {
     option (spec.method_collection) = {mode: COLLECTION_MODE_PAGE, order_by: [%[2]q], default_page_size: 100};
   }
   rpc Delete%[1]sQuery(QueryHandle) returns (QueryStats);
-`, r.typeName, r.key))
+`, r.typeName, r.key, minGroupSizeBody(r)))
 		if len(r.filters) > 0 {
-			sb.WriteString(fmt.Sprintf(`  rpc Update%[1]sQuery(Refine%[1]sRequest) returns (QueryStats);
+			sb.WriteString(fmt.Sprintf(`  rpc Update%[1]sQuery(Refine%[1]sRequest) returns (QueryStats)%[3]s
   rpc Watch%[1]s(QueryHandle) returns (stream %[1]sWatchEvent) {
     option (spec.method_collection) = {mode: COLLECTION_MODE_WATCH, order_by: [%[2]q]};
   }
-  rpc Subscribe%[1]sCount(QueryHandle) returns (stream RecordCount);
-`, r.typeName, r.key))
+  rpc Subscribe%[1]sCount(QueryHandle) returns (stream RecordCount)%[3]s
+`, r.typeName, r.key, minGroupSizeBody(r)))
 		}
 	}
 	sb.WriteString("}\n")

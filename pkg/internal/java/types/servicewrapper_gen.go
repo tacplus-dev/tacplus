@@ -1062,8 +1062,18 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 	emptyInput := method.FullInputType == "google.protobuf.Empty"
 	handlerEmpty := emptyInput || method.FullInputType == "trace.TraceRequest"
 
-	// Full method name for authorization (e.g. "SnoopyService/GetAtomic")
+	// Full method name for logging/tracing/accounting (e.g. "SnoopyService/GetAtomic")
 	fullMethod := fmt.Sprintf("%s/%s", serviceName, method.Name)
+	// The name the Authorizer derives the required grant symbol from. The Authorizer
+	// falls back to its OWN service name for the grant's package when it is handed an
+	// unqualified name, which is right for a service the process owns and wrong for a
+	// vservice: RecordQuery on the `query` trait is entitled by QUERY_RECORD_QUERY_*,
+	// not by the host's STRATUM_* vocabulary. Qualify the hosted surface's name so the
+	// trait's package, not the host's, is what the symbol is derived from.
+	authMethod := fullMethod
+	if parentDir == "vservices" {
+		authMethod = fmt.Sprintf("%s.%s/%s", servicePackage, serviceName, method.Name)
+	}
 	authAnyUserTarget := strings.TrimSpace(method.TargetNamespaceField)
 	if authAnyUserTarget == "" {
 		authAnyUserTarget = "/"
@@ -1093,7 +1103,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return;
-        }`, fullMethod)
+        }`, authMethod)
 	}
 
 	emptyOutput := method.FullOutputType == "google.protobuf.Empty"
@@ -1154,7 +1164,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
             } catch (ProtoException e) {
                 responseObserver.onError(toGrpcError(e));
                 return;
-            }`, fullMethod)
+            }`, authMethod)
 		}
 
 		// Trace: publish trace event, noop returns default response.
@@ -1240,7 +1250,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 		}
 		var checks []string
 		if needsStreamMessageAuth {
-			checks = append(checks, fmt.Sprintf("checkAuth(%q, value);", fullMethod))
+			checks = append(checks, fmt.Sprintf("checkAuth(%q, value);", authMethod))
 		}
 		if inputHelpers != "" && !handlerEmpty {
 			checks = append(checks, fmt.Sprintf("%s.validate%s(value);", inputHelpers, method.InputType))
@@ -2101,7 +2111,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
                 @Override public void onError(Throwable t) {}
                 @Override public void onCompleted() {}
             };
-        }`, fullMethod, inputType, inputType)
+        }`, authMethod, inputType, inputType)
 		}
 
 		if hasAccounting {
@@ -2206,7 +2216,7 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
                 @Override public void onError(Throwable t) {}
                 @Override public void onCompleted() {}
             };
-        }`, fullMethod, inputType, inputType)
+        }`, authMethod, inputType, inputType)
 		}
 
 		if hasAccounting {

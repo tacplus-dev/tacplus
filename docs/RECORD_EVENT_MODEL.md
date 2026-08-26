@@ -179,12 +179,12 @@ declaration requires the other to generate.
   | RPC | emitted for | meaning |
   |---|---|---|
   | `Create<T>Query(Open<T>QueryRequest) → QueryHandle` | every `T` | open a snapshot or living query; the lifecycle's single entry point |
-  | `Update<T>Query(Refine<T>Request) → QueryStats` | filterable `T` | replace the predicate outright |
-  | `Get<T>Count(QueryHandle) → RecordCount` | every `T` | size only, never record data |
+  | `Update<T>Query(Refine<T>Request) → QueryStats` | filterable `T` | replace the predicate outright; `size` is the new predicate's match count (min_group_size-guarded) |
+  | `Get<T>Count(QueryHandle) → RecordCount` | every `T` | size only, never record data (min_group_size-guarded) |
   | `Get<T>Sample(Sample<T>Request) → Sample<T>Response` | every `T` | seeded monte-carlo draw of `n` records — cheap exploration without reading everything |
   | `List<T>(Pull<T>Request) → Pull<T>Response` | every `T` | paged read of all matches (`method_collection` PAGE) |
   | `Watch<T>(QueryHandle) → stream <T>WatchEvent` | filterable `T` | living query: snapshot, then deltas |
-  | `Subscribe<T>Count(QueryHandle) → stream RecordCount` | filterable `T` | live size |
+  | `Subscribe<T>Count(QueryHandle) → stream RecordCount` | filterable `T` | live size (min_group_size-guarded) |
   | `Delete<T>Query(QueryHandle) → QueryStats` | every `T` | close the handle |
 
   Only the **RPC names** are verb-governed; the request/response **messages** still
@@ -222,6 +222,27 @@ declaration requires the other to generate.
     (`grpcconfig.Config.anonymize_hmac_key`) — **mechanism in tacplus, policy in
     OPA**. The caller passes no redaction knobs. The seam is per-hop, so a future
     two-stage path (stratum→an intermediary→user) can reuse it unchanged.
+  - **Minimum group size** is generated from the message-level
+    `(spec.record).min_group_size = N` — a k-anonymity floor on the surfaces that return a
+    size and **no rows**. The record-map injector stamps `option (spec.min_group_size) = N`
+    onto `Get<T>Count`, `Subscribe<T>Count` (`RecordCount.count`) and `Update<T>Query`
+    (`QueryStats.size`, the match count of the newly installed predicate — unguarded, that
+    one RPC reproduces the count the guard just refused), on **both** halves of the plane.
+    The **generated WRAPPER** (never the handler) refuses a size below `N` with
+    **PERMISSION_DENIED**, so a second implementor of `query` cannot ship the plane
+    unguarded. The refusal is an error or nothing: no sentinel count, no suppression flag,
+    and the message names only the declared threshold, never the actual size. A stream is
+    terminated rather than silently filtered — going quiet at exactly `N-1` would disclose
+    the crossing by silence. Unset/`0` is no guard, and since `Update<T>Query` /
+    `Subscribe<T>Count` are emitted only for a filterable `T`, an unfilterable record is
+    guarded on `Get<T>Count` alone.
+  - **`total_count` is deliberately outside that guard.** `Pull<T>Response.total_count` —
+    the paged read's own size, alongside `items` and `next_page_token` — is **not**
+    stamped and **not** refused: it accompanies rows the caller is entitled to and has
+    just been handed, so it discloses nothing those rows do not. Neither is
+    `Delete<T>Query`'s `QueryStats`, whose `size` is a hardcoded zero. "The count" that
+    min_group_size withholds is therefore always a *size-only* count; a future change that
+    makes a paged read return counts without rows has crossed that line.
 - Combining records of **multiple types** into one working set is done **service-side**
   — the caller opens several single-type queries and aggregates the already-redacted
   results in its own memory; stratum holds no cross-type sets.
@@ -229,6 +250,12 @@ declaration requires the other to generate.
 ## Validations (tacplus errors)
 
 - an `event`/`record` that declares zero producer surfaces;
+- a **negative `(spec.record).min_group_size`**, or a threshold declared into a fleet
+  where no `(spec.trait)` hosts a record query plane — a guard that can never refuse, and
+  a guard with no guarded surface behind it (`ValidateMinGroupSizeAnnotations` in
+  `pkg/internal/common/parser/min_group_size_validate.go`). The Go and Rust service-wrapper
+  generators additionally fail on any method carrying the stamped option, since the guard
+  is generated for Java wrappers only;
 - a **store whose source type resolves to no EventBus topic** — the generated
   store would subscribe to nothing and never ingest a row. This is the paired
   control for the transformation/delivery split: a transformation alone is fine

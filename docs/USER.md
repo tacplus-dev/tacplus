@@ -924,7 +924,7 @@ The authoritative, exhaustive contract is in
 | Annotation | Meaning |
 |------------|---------|
 | `(spec.event) = {c2s?, s2s?}` | eventbus topic + publish RPC (at least one producer surface required) |
-| `(spec.record) = {key, owner, c2s?, s2s?, retention?}` | **delivery**: an `event` that is also stored in `record_store` and is projectable — `key` is the id field, `owner` the ownership field, `retention` the store-neutral row retention policy (`{timestamp_field, duration_seconds}`; required by stratum for every record it stores) |
+| `(spec.record) = {key, owner, c2s?, s2s?, retention?, min_group_size?}` | **delivery**: an `event` that is also stored in `record_store` and is projectable — `key` is the id field, `owner` the ownership field, `retention` the store-neutral row retention policy (`{timestamp_field, duration_seconds}`; required by stratum for every record it stores), `min_group_size` the smallest result size the record's size-only query surfaces will disclose (see below) |
 | `(spec.transformation) = {…}` | **transformation**: a pure typed conversion of this message into a derived row type. Needs no `record`, no topic and no subscription, and carries no retention — declaring a transformation and declaring delivery are independent |
 
 **Field-level (on a `record` message's fields):**
@@ -958,6 +958,44 @@ Data entitlement sanitizes a record on its way out of a service. It is a lattice
   value of that format: `(spec.assert_email)` → a synthetic email, `assert_ipaddr_type`
   IPV4/IPV6 → a valid IP (private / documentation range), `assert_fqdn` → a valid
   hostname. Fields without a format constraint get the `pseud:<hex>` token.
+
+#### Minimum group size (size-only query refusal)
+
+`(spec.record).min_group_size = N` is the smallest result size this record's
+**size-only** query surfaces will disclose. `0` / unset is no guard: the annotation is
+additive, so a record that does not declare it gets exactly the plane it got before.
+
+- **What it guards.** The three RPCs of the generated query plane that return a size and
+  no rows — `Get<T>Count` and `Subscribe<T>Count` (`RecordCount.count`), and
+  `Update<T>Query` (`QueryStats.size`, the match count of the *newly installed*
+  predicate; left open, it is a one-RPC bypass of the `Get<T>Count` guard). Both halves of
+  the plane are guarded, the S2S `RecordMap` and the C2S `RecordQuery`, unary and
+  streaming alike. `Update<T>Query` and `Subscribe<T>Count` are emitted only for a
+  filterable `T`, so an unfilterable record is guarded on `Get<T>Count` alone.
+- **Where the line is.** It does **not** cover `List<T>`'s `total_count`: that size
+  accompanies rows the caller has just been handed and discloses nothing the rows
+  themselves do not. `Delete<T>Query`'s `QueryStats.size` is a hardcoded zero and carries
+  no stamp. A future change that makes a paged read return counts without rows has crossed
+  that line.
+- **The refusal is an error, never a value.** The generated wrapper — never the handler —
+  throws `PERMISSION_DENIED` when the size is below `N`. There is no sentinel count and no
+  `suppressed` flag: a caller that knows nothing about suppression must not be able to
+  read the refusal as data. The message names the annotation and the declared threshold
+  and nothing tighter — "only 2 matched" would disclose exactly what the guard withholds.
+  A stream is **terminated** with that error, on its first frame or on a later crossing,
+  rather than silently filtered: a live count that just goes quiet at `N-1` discloses the
+  crossing by silence.
+- **Declared on the record, enforced off the method.** The record-map injector propagates
+  the value onto each guarded RPC as `option (spec.min_group_size) = N;`, and the
+  downstream generators read that method option — none of them re-derives `T` from an RPC
+  name.
+- **Two generation-time errors.** A negative threshold fails generation, and so does a
+  threshold declared into a fleet where no `(spec.trait)` hosts a record query plane (no
+  trait whose host declares `(spec.record_store)`) — a threshold with no guarded surface
+  behind it is decoration, and an unread annotation fails generation here the same way it
+  does everywhere else. Enforcement is generated for **Java** service wrappers only; the
+  Go and Rust wrapper generators fail the build on a stamped method rather than serve a
+  size-only RPC unguarded.
 
 **Service-level (once per service):**
 

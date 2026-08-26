@@ -1,10 +1,20 @@
 # Record / Event / Store / Projection model (annotation contract)
 
-This is the authoritative tacplus contract for the data plane shared by **eventbus**,
-**stratum**, **timedb**, and **graphdb**. Those four are generic, app-agnostic
-services: their hand-written code names no vservice; everything vservice-specific
-is generated from the annotations below. `mv <vservice>.proto .off` makes the
-vservice disappear everywhere with only a rebuild.
+This is the authoritative tacplus contract for the data plane shared by **eventbus**
+and **stratum**. Both are generic, app-agnostic services: their hand-written code
+names no vservice; everything vservice-specific is generated from the annotations
+below. `mv <vservice>.proto .off` makes the vservice disappear everywhere with only
+a rebuild.
+
+> **timedb and graphdb went to the boneyard 2026-08-25** (BIG GOAL 3, first move
+> #1): out of the fleet build, protos deleted. With them went the `graph_store`,
+> `graph_projection` and `timeseries_store` annotations' only hosts, and the
+> `TimedbQuery` / `GraphdbQuery` / `TimeseriesQuery` / `TimeseriesGroupCounts`
+> query planes. `timeseries_projection` SURVIVES, and not as a leftover: it is
+> where a stored record's **retention policy** lives (stratum's EventStoreGenerator
+> requires `retention.timestamp_field` on every stored record), and its output is a
+> store-neutral typed conversion. Splitting that transformation from delivery is a
+> separate, later task.
 
 ## Mental model
 
@@ -15,17 +25,15 @@ vservice disappear everywhere with only a rebuild.
 - A **record** *is* an event that is additionally **stored in full** (stratum) and
   is **projectable**. `records ⊂ events`: every record is an event; not every event
   is a record (e.g. a trace event is event-only).
-- **stratum** holds the full records. **timedb** and **graphdb** hold **projections**
-  — offshoots derived from a record.
+- **stratum** holds the full records. A **projection** is an offshoot derived from a
+  record; since the boneyard there is no separate service that hosts one.
 
 ```
-producer ─[event]→ eventbus ─┬─→ stratum   stores the full record
-                             ├─→ timedb    extracts + stores timeseries projections
-                             └─→ graphdb   extracts + stores graph projections
+producer ─[event]→ eventbus ──→ stratum   stores the full record
 ```
 
 Both producer paths are identical downstream: `client → gateway → eventbus → …`
-and `service → eventbus → …`. The stores care only about the type, not the producer.
+and `service → eventbus → …`. The store cares only about the type, not the producer.
 
 ## Hand-written annotations (the entire surface)
 
@@ -35,8 +43,7 @@ Message-level:
 |---|---|
 | `event { c2s{…}? , s2s{…}? }` | eventbus **topic + publish RPC**. ≥1 producer surface required. |
 | `record { key, owner, c2s{…}? , s2s{…}? }` | **is-an `event`** + stored in `record_store` + projectable. `key` = id field (default: `event_id`), `owner` = ownership field. |
-| `graph_projection {…}` | derive a graph node from this record → graphdb. Requires `record`. |
-| `timeseries_projection {…}` | derive a timeseries row from this record → timedb. Requires `record`. |
+| `timeseries_projection {…}` | derive a typed timeseries row from this record, and declare its **retention** (`retention.timestamp_field` is required on every stored record). Requires `record`. |
 
 Field-level (on a `record` message's fields):
 
@@ -50,17 +57,15 @@ Service-level (once per service):
 | Annotation | Service |
 |---|---|
 | `record_store {}` | stratum (the full-record store) |
-| `graph_store {}` | graphdb |
-| `timeseries_store {}` | timedb |
 
 On a stored event you write only `record` (it implies `event`). You never write the
 projection output types or their markers.
 
 ## Generated (never hand-written)
 
-- The **projection output messages** (`SessionNode`, `SessionRecord`, …) from the
-  `graph_projection`/`timeseries_projection` declarations, stamped with the internal
-  markers **`graph_type`** / **`timeseries_type`** so downstream codegen finds them.
+- The **projection output messages** (`SessionRecord`, …) from the
+  `timeseries_projection` declarations, stamped with the internal marker
+  **`timeseries_type`** so downstream codegen finds them.
 - The **timeseries table name**, derived from the message name in `snake_case`
   when `(spec.timeseries_type)` sets none explicitly. The conversion is
   acronym-aware: `HTTPMetric` → `http_metric`, `OpenAIUsage` → `open_ai_usage`.
@@ -118,24 +123,27 @@ projection output types or their markers.
     (`grpcconfig.Config.anonymize_hmac_key`) — **mechanism in tacplus, policy in
     OPA**. The caller passes no redaction knobs. Two-stage (stratum→argus,
     argus→user) can reuse the same seam later.
-- **graph_store / timeseries_store** — typed **S2S** projection queries that return
-  **keys**; stratum federates into them and hydrates full records by key. (Federation
-  is part of a query, not a separate op.)
 - Combining records of **multiple types** into one working set is done **service-side**
   — argus / the LLM-fronting service pulls several single-type sets and aggregates the
   already-redacted results in its own memory; stratum holds no cross-type sets.
 
 ## Validations (tacplus errors)
 
-- a `graph_projection`/`timeseries_projection` on a message that is not a `record`;
-- a `record` or projection with no hosting store service (`record_store` /
-  `graph_store` / `timeseries_store`);
+- a `timeseries_projection` on a message that is not a `record`;
 - an `event`/`record` that declares zero producer surfaces.
+
+> **Not implemented, despite having been listed here:** "a `record` or projection
+> with no hosting store service". `pkg/internal/proto/validate_virtual.go` records
+> that the check was deliberately not enforced — the host store lives in a separate
+> service proto and is absent from isolated/partial proto sets, so enforcing it
+> per-service-build produced false failures. It was reinstated as neither a
+> per-build nor a whole-fleet lint, so **it has never fired**. Listed here as a
+> guarantee it does not provide, it was decoration; see
+> `BONEYARD_QUESTIONS.md` Q1.
 
 ## Implementation neutrality
 
 The contract names no backing store. stratum's distribution/compute (currently
 in-memory + a distributed executor; later a unified "fast-store" tier and python3
-transformers) and timedb/graphdb's engines are implementation details, never present
-in proto/tacplus. Do not introduce impl names (engine names, vendors, internal
+transformers) is an implementation detail, never present in proto/tacplus. Do not introduce impl names (engine names, vendors, internal
 codenames) into annotations or generated output.

@@ -123,12 +123,10 @@ func Generate(config *tactype.Config) error {
 	if err := proto.AppendRecordMapServiceToProtos(protoDir, config.FlatProtoDir, config.SelfPackage); err != nil {
 		return fmt.Errorf("failed to append record map service to protos: %w", err)
 	}
-	if err := proto.AppendTimeseriesGroupCountsServiceToProtos(protoDir, config.FlatProtoDir, config.SelfPackage); err != nil {
-		return fmt.Errorf("failed to append timeseries group-counts service to protos: %w", err)
-	}
-	if err := proto.AppendTimeseriesQueryServiceToProtos(protoDir, config.FlatProtoDir, config.SelfPackage); err != nil {
-		return fmt.Errorf("failed to append timeseries query service to protos: %w", err)
-	}
+	// TimeseriesGroupCounts / TimeseriesQuery injection removed 2026-08-25 with
+	// the timedb boneyard (BIG GOAL 3, first move #1) — no timeseries_store
+	// exists in any proto set, so both could only no-op, and neither ever had a
+	// consumer.
 	// Emit generated/persisted_store.proto (PersistedStore enum, one value per
 	// service_store) for the typed disk-persistence feature.
 	if err := proto.GeneratePersistedStoreEnum(protoDir); err != nil {

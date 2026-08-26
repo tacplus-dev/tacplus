@@ -299,12 +299,12 @@ func Generate(config *tactype.Config) error {
 	if err := proto.AppendRecordMapServiceToProtos(tempProtoDir, flatProtoDir, config.SelfPackage); err != nil {
 		return fmt.Errorf("failed to append record map service to protos: %w", err)
 	}
-	if err := proto.AppendTimeseriesGroupCountsServiceToProtos(tempProtoDir, flatProtoDir, config.SelfPackage); err != nil {
-		return fmt.Errorf("failed to append timeseries group-counts service to protos: %w", err)
-	}
-	if err := proto.AppendTimeseriesQueryServiceToProtos(tempProtoDir, flatProtoDir, config.SelfPackage); err != nil {
-		return fmt.Errorf("failed to append timeseries query service to protos: %w", err)
-	}
+	// TimeseriesGroupCounts and TimeseriesQuery used to be injected here, onto
+	// the proto of every timeseries_store. Removed 2026-08-25 with the timedb
+	// boneyard (BIG GOAL 3, first move #1): there is no timeseries_store in any
+	// proto set any more, so both injectors could only ever no-op, and neither
+	// ever had a consumer (timedb's own build.rs: "No consumer wires
+	// timedb.TimeseriesQuery yet"). The typed query surface is the record plane.
 	// If this service is the OPA evaluator, register one OpaEval gRPC server per
 	// vservice proto file that contains spec.opa_eval definitions. Each file
 	// contributes its own OpaEval service in its own package (e.g. backendtoken.OpaEval,

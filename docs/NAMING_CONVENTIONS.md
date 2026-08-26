@@ -22,13 +22,13 @@ transform it performs: `ToSnakeCase`, `ToPascalCase`, `ToCamelCase`,
 when the target language's own toolchain imposes a different rule, and the
 function name must say which language it serves.
 
-**Why.** There are currently twelve case helpers outside `strutil`, and three of
-them independently implement upper-snake:
+**Why.** There are currently eleven case helpers outside `strutil`, and two of
+them independently implement upper-snake (a third, `toUpperSnake`, went with
+`timeseries_group_counts.go` in the 2026-08-25 timedb boneyard):
 
 | function | file |
 |---|---|
 | `upperSnake` | `pkg/internal/proto/registry_enums.go:173` |
-| `toUpperSnake` | `pkg/internal/proto/timeseries_group_counts.go:20` |
 | `pascalToUpperSnake` | `pkg/internal/proto/configholder.go:696` |
 | `pascalCaseWord` | `pkg/runner/runner.go:570` |
 | `goCamelCase` | `pkg/internal/go/types/helpers.go:511` |
@@ -105,7 +105,7 @@ under two different names. That one is fixed; java now matches rust.
 **Cost:** larger than it looks, and larger than the ledger implied. Beyond the
 `release` pair, more than fifteen files under `pkg/internal/proto` write output
 without the suffix (`state.go`, `record_map.go`, `configholder.go`,
-`persisted_store.go`, `timeseries_query.go`, …). Applying the rule fully is a
+`persisted_store.go`, `entitlement_gen.go`, …). Applying the rule fully is a
 15+-file rename touching most of that package.
 
 **Generated output:** none — file names here are generator-internal.

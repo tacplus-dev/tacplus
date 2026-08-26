@@ -518,12 +518,10 @@ func Generate(config *tactype.Config) error {
 	if err := proto.AppendRecordMapServiceToProtos(protoSrcDir, config.FlatProtoDir, config.SelfPackage); err != nil {
 		return fmt.Errorf("failed to append record map service to protos: %w", err)
 	}
-	if err := proto.AppendTimeseriesGroupCountsServiceToProtos(protoSrcDir, config.FlatProtoDir, config.SelfPackage); err != nil {
-		return fmt.Errorf("failed to append timeseries group-counts service to protos: %w", err)
-	}
-	if err := proto.AppendTimeseriesQueryServiceToProtos(protoSrcDir, config.FlatProtoDir, config.SelfPackage); err != nil {
-		return fmt.Errorf("failed to append timeseries query service to protos: %w", err)
-	}
+	// TimeseriesGroupCounts / TimeseriesQuery injection removed 2026-08-25 with
+	// the timedb boneyard (BIG GOAL 3, first move #1) — no timeseries_store
+	// exists in any proto set, so both could only no-op, and neither ever had a
+	// consumer.
 	// Auto-register virtual service gRPC servers based on proto annotations.
 	if isOpaServer, err := proto.IsOpaServer(config.FlatProtoDir, config.SelfPackage); err != nil {
 		return fmt.Errorf("failed to check OPA server status: %w", err)

@@ -884,7 +884,6 @@ The authoritative, exhaustive contract is in
 |------------|---------|
 | `(spec.event) = {c2s?, s2s?}` | eventbus topic + publish RPC (at least one producer surface required) |
 | `(spec.record) = {key, owner, c2s?, s2s?}` | an `event` that is also stored in `record_store` and is projectable — `key` is the id field, `owner` the ownership field |
-| `(spec.graph_projection) = {…}` | derive a graph node from this record (requires `record`) → graph store |
 | `(spec.timeseries_projection) = {…}` | derive a timeseries row from this record (requires `record`) → timeseries store |
 
 **Field-level (on a `record` message's fields):**
@@ -924,8 +923,6 @@ Data entitlement sanitizes a record on its way out of a service. It is a lattice
 | Annotation | Service |
 |------------|---------|
 | `(spec.record_store) = {}` | stratum — the full-record store |
-| `(spec.graph_store) = {}` | graph database |
-| `(spec.timeseries_store) = {}` | timeseries database |
 
 Example — a stored, projectable record:
 
@@ -939,7 +936,7 @@ message SensorEvent {
 ```
 
 You write only the annotations above. The projection **output** messages and
-their internal `graph_type` / `timeseries_type` markers, the eventbus topic +
+their internal `timeseries_type` marker, the eventbus topic +
 publish RPCs, the per-store subscriptions, and the query plane are all
 **generated** — never hand-written. The read surface of a `record_store` is the
 generated refinable-query plane (Open/Refine/Count/Sample/Pull/Watch/Close over

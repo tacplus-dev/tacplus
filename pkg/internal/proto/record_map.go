@@ -81,14 +81,13 @@ type recordFilter struct {
 // can be added later — Create<T>Query is the lifecycle's only entry point, so a
 // row predicate pinned there is carried by every call made against the handle.
 //
-// Like its sibling injectors (AppendTimeseriesQueryServiceToProtos), this runs on
-// EVERY service's codegen so the injected service is visible in every proto view
+// Like AppendStoreServiceToProtos, this runs on EVERY service's codegen so the
+// injected service is visible in every proto view
 // (e.g. argus declares grpc_s2s_client against stratum.RecordMap). The injection is
 // identical regardless of who is building, so selfPackage is unused.
 //
-// TODO (follow-on): broaden (union) alongside narrow-only Refine. (Timeseries
-// federation returns record keys — see timeseries_query.go; the egress data
-// entitlement transform Sanitize<T> is generated in the per-type helpers.)
+// TODO (follow-on): broaden (union) alongside narrow-only Refine. (The egress
+// data entitlement transform Sanitize<T> is generated in the per-type helpers.)
 // validateRecordKeyExists fails loud when a record's key names a field the record
 // does not declare. Kept as a pure function (no descriptor parsing) so the guard
 // has a protoc-free unit pin — the descriptor-backed integration test skips when

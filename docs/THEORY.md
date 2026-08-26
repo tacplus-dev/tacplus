@@ -109,7 +109,7 @@ This enforces a single-writer model. Services communicate state changes through 
 
 ## Services And Vservices
 
-A service is a long-lived deployable unit such as timedb, graphdb, or eventbus.
+A service is a long-lived deployable unit such as stratum, eventbus, or kernel.
 A vservice is a tacplus-declared, service-implemented data contract: an event
 type, projection set, subscribe surface, and entitlement model.
 

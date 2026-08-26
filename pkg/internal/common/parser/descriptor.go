@@ -53,16 +53,30 @@ type FileDescriptor struct {
 	StateImports        []string         // Canonical state imports from field-level state_import roots plus legacy file-level mirrors
 	FileStateImports    []string         // Legacy file-level state_imports option values, e.g. "identity.Identity"
 	FieldStateImports   []FieldStateImport
-	GrpcS2SClients      []string        // File-level S2S client deps from option (spec.grpc_s2s_client), e.g. "identity.Mint"
-	GrpcC2SClients      []string        // File-level C2S client deps from option (spec.grpc_c2s_client), e.g. "gateway.TokenMint"
-	GrpcW2SClients      []string        // File-level W2S client deps from option (spec.grpc_w2s_client), e.g. "dashboard.Dashboard"
-	AllGrpcS2SClients   bool            // File-level flag from option (spec.all_grpc_s2s_clients): generate S2S clients for ALL services
-	OpaImports          []string        // File-level OPA eval imports from option (spec.opa_import), e.g. "userentitlements.EntitlementEvalInput"
-	OpaImportTargets    []VirtualImport // Parsed OPA imports with target service
-	TimeseriesStore     bool            // Whether this service is a timeseries data store from option (spec.timeseries_store)
-	RecordStore         bool            // Whether this service is an in-memory hot event store from option (spec.record_store)
-	VServiceName        string          // File-level virtual-service identity name from option (spec.vservice).name or (spec.trait).name
-	VServiceID          int32           // File-level virtual-service field id from option (spec.vservice).id or (spec.trait).id
+	GrpcS2SClients      []string         // File-level S2S client deps from option (spec.grpc_s2s_client), e.g. "identity.Mint"
+	GrpcC2SClients      []string         // File-level C2S client deps from option (spec.grpc_c2s_client), e.g. "gateway.TokenMint"
+	GrpcW2SClients      []string         // File-level W2S client deps from option (spec.grpc_w2s_client), e.g. "dashboard.Dashboard"
+	AllGrpcS2SClients   bool             // File-level flag from option (spec.all_grpc_s2s_clients): generate S2S clients for ALL services
+	OpaImports          []string         // File-level OPA eval imports from option (spec.opa_import), e.g. "userentitlements.EntitlementEvalInput"
+	OpaImportTargets    []VirtualImport  // Parsed OPA imports with target service
+	TimeseriesStore     bool             // Whether this service is a timeseries data store from option (spec.timeseries_store)
+	RecordStore         bool             // Whether this service is an in-memory hot event store from option (spec.record_store)
+	VServiceName        string           // File-level virtual-service identity name from option (spec.vservice).name or (spec.trait).name
+	VServiceID          int32            // File-level virtual-service field id from option (spec.vservice).id or (spec.trait).id
+	Trait               *TraitDescriptor // File-level trait declaration from option (spec.trait); nil when the file declares none
+}
+
+// TraitDescriptor is a parsed file-level (spec.trait) declaration: the contract
+// identity plus everything the generated plane needs that used to be a
+// generator constant — which physical service hosts the RPCs, what the two
+// emitted sibling services are called, and which peers may call the S2S half.
+type TraitDescriptor struct {
+	Name         string   // canonical trait name, the entitlement/audience key
+	ID           int32    // stable TokenEntitlements field id
+	Host         string   // routing label of the physical implementor
+	S2SService   string   // name of the emitted peer-facing sibling service
+	C2SService   string   // name of the emitted client-facing sibling service
+	AuthServices []string // peer identities allowed to call the S2S half
 }
 
 // VirtualImport represents a dependency on a virtual service with an explicit target.
@@ -511,8 +525,9 @@ func (p *DescriptorParser) parseFileDescriptor(fd protoreflect.FileDescriptor) {
 	fileDesc.TimeseriesStore = p.parseTimeseriesStore(fd)
 	fileDesc.RecordStore = p.parseRecordStore(fd)
 	fileDesc.VServiceName, fileDesc.VServiceID = p.parseVService(fd)
-	if name, id := p.parseTrait(fd); name != "" {
-		fileDesc.VServiceName, fileDesc.VServiceID = name, id
+	fileDesc.Trait = p.parseTrait(fd)
+	if fileDesc.Trait != nil && fileDesc.Trait.Name != "" {
+		fileDesc.VServiceName, fileDesc.VServiceID = fileDesc.Trait.Name, fileDesc.Trait.ID
 	}
 
 	p.descriptors[fd.Path()] = fileDesc
@@ -1379,19 +1394,28 @@ func (p *DescriptorParser) parseVService(fd protoreflect.FileDescriptor) (string
 	return val.GetName(), val.GetId()
 }
 
-// parseTrait extracts the file-level (spec.trait) trait identity (name + field
-// id). Empty name means the file declares no trait. Twin of parseVService: a
-// trait carries the same identity shape and lands in the same descriptor fields.
-func (p *DescriptorParser) parseTrait(fd protoreflect.FileDescriptor) (string, int32) {
+// parseTrait extracts the file-level (spec.trait) declaration. nil means the
+// file declares no trait. Twin of parseVService for the identity half: a trait
+// carries the same identity shape and lands in the same descriptor fields; the
+// remaining fields carry what a trait-driven plane emits (host, the two sibling
+// service names, and the S2S audience).
+func (p *DescriptorParser) parseTrait(fd protoreflect.FileDescriptor) *TraitDescriptor {
 	opts := fd.Options().(*descriptorpb.FileOptions)
 	if opts == nil || !proto.HasExtension(opts, spec.E_Trait) {
-		return "", 0
+		return nil
 	}
 	val := proto.GetExtension(opts, spec.E_Trait).(*spec.TraitAnnotation)
 	if val == nil {
-		return "", 0
+		return nil
 	}
-	return val.GetName(), val.GetId()
+	return &TraitDescriptor{
+		Name:         val.GetName(),
+		ID:           val.GetId(),
+		Host:         val.GetHost(),
+		S2SService:   val.GetS2SService(),
+		C2SService:   val.GetC2SService(),
+		AuthServices: val.GetAuthServices(),
+	}
 }
 
 // parseServiceIdentity extracts the file-level service identity option.

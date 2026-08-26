@@ -308,14 +308,14 @@ func resolveGrpcRefs(refs []string, allFiles map[string]*parser.FileDescriptor) 
 
 		var matches []string
 		packageSeen := false
-		recordStorePath := ""
+		traitPlanePath := ""
 		for path, fd := range allFiles {
 			if fd.Package != pkg {
 				continue
 			}
 			packageSeen = true
-			if fd.RecordStore && fd.ServiceName != "" {
-				recordStorePath = path
+			if t := fd.Trait; t != nil && (svcName == t.S2SService || svcName == t.C2SService) {
+				traitPlanePath = path
 			}
 			for _, svc := range fd.Services {
 				if svc.Name == svcName {
@@ -324,12 +324,13 @@ func resolveGrpcRefs(refs []string, allFiles map[string]*parser.FileDescriptor) 
 				}
 			}
 		}
-		// The typed RecordMap map-plane service is injected into the
-		// record_store proto later (AppendRecordMapServiceToProtos), so a client
-		// (e.g. argus) referencing <record_store_pkg>.RecordMap is valid even though
-		// the service is not yet materialized during inference.
-		if len(matches) == 0 && svcName == "RecordMap" && recordStorePath != "" {
-			matches = append(matches, recordStorePath)
+		// A trait's plane services are injected into the trait's proto later
+		// (AppendRecordMapServiceToProtos), so a client referencing
+		// <trait_pkg>.<declared service name> is valid even though the service is
+		// not yet materialized during inference. The names come off the
+		// declaration, so nothing here has to know what any plane is called.
+		if len(matches) == 0 && traitPlanePath != "" {
+			matches = append(matches, traitPlanePath)
 		}
 		if !packageSeen {
 			return nil, fmt.Errorf("no proto file found for package %q (from %q)", pkg, ref)

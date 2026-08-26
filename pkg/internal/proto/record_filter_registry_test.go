@@ -16,9 +16,9 @@ import (
 
 // Golden cross-check: what the registry emits for a record field's filterability
 // (llmdesc.FieldDescriptor.FilterMode -> registry.json "filter_mode") must agree
-// with what the RecordMap injector actually puts on the generated <T>Filter.
+// with what the record-plane injector actually puts on the generated <T>Filter.
 //
-// A registry consumer (e.g. argus) has no compiled record type to read; it learns
+// A registry consumer has no compiled record type to read; it learns
 // "is this field filterable, and EQ or RANGE" from the registry alone. If the two
 // ever drift, the consumer builds a filter criterion the store cannot honor.
 //
@@ -53,6 +53,22 @@ message AgentEvent {
   int64 timestamp_ms = 3 [(spec.query_field) = {op: QUERY_OP_RANGE}];
   string payload = 4;
 }
+`)
+	// The plane is emitted from the trait declaration, not from the record store,
+	// so the fixture has to declare the trait that asks for it.
+	writeProto(t, dir, filepath.Join("vservices", "query.proto"), `syntax = "proto3";
+package taskquery;
+
+import "sys/spec.proto";
+
+option (spec.trait) = {
+  id: 40
+  name: "query"
+  host: "stratum"
+  s2s_service: "RecordMap"
+  c2s_service: "RecordQuery"
+  auth_services: ["reporter"]
+};
 `)
 	writeProto(t, dir, filepath.Join("vservices", "tasks.proto"), `syntax = "proto3";
 package tasks;
@@ -128,7 +144,7 @@ message TaskNote {
 	if err := AppendRecordMapServiceToProtos(dir, dir, ""); err != nil {
 		t.Fatalf("AppendRecordMapServiceToProtos: %v", err)
 	}
-	injected, err := os.ReadFile(filepath.Join(dir, "services", "stratum.proto"))
+	injected, err := os.ReadFile(filepath.Join(dir, "vservices", "query.proto"))
 	if err != nil {
 		t.Fatal(err)
 	}

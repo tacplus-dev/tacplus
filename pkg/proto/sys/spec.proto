@@ -1720,6 +1720,27 @@ message TraitAnnotation {
   string name = 1;
   // id is the stable field number in TokenEntitlements for this trait.
   int32 id = 2;
+
+  // host is the routing label of the physical service that implements this
+  // trait's RPCs. It becomes the (spec.service_s2s)/(spec.service_c2s) label on
+  // the emitted sibling services, so the gateway dials the host while callers
+  // are still entitled against `name` — the audience is the contract, not the
+  // implementor.
+  string host = 3;
+
+  // s2s_service and c2s_service name the two sibling services the trait's plane
+  // is emitted as. A service may declare only one caller surface
+  // (ValidateServiceSurfaces), so one plane serving both peers and users is two
+  // services. They are declared rather than derived from `name` so the emitted
+  // identities are readable in the declaration instead of in generator source.
+  string s2s_service = 4;
+  string c2s_service = 5;
+
+  // auth_services lists the peer identities allowed to call the S2S half, the
+  // per-RPC (spec.rpc).auth_services the emitted service carries. Declared here
+  // rather than hardcoded in the generator: the platform generator must not
+  // name an application service.
+  repeated string auth_services = 6;
 }
 
 // ServiceAnnotation declares the owning service identity for a proto file.

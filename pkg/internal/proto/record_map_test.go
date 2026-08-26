@@ -72,23 +72,38 @@ message DemoEvent {
 
 func TestAppendRecordMapToServiceProtoEmitsQueryPlaneContract(t *testing.T) {
 	dir := t.TempDir()
-	relPath := filepath.Join("services", "stratum.proto")
+	relPath := filepath.Join("vservices", "query.proto")
 	path := filepath.Join(dir, relPath)
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(`syntax = "proto3";
-package stratum;
+package taskquery;
 
 import "sys/spec.proto";
 
-option (spec.service) = {};
-option (spec.record_store) = {};
+option (spec.trait) = {
+  id: 40
+  name: "query"
+  host: "stratum"
+  s2s_service: "RecordMap"
+  c2s_service: "RecordQuery"
+  auth_services: ["reporter"]
+};
 `), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	err := appendRecordMapToServiceProto(dir, relPath, []recordType{{
+	plane := traitPlane{
+		relPath:      relPath,
+		name:         "query",
+		host:         "stratum",
+		s2sService:   "RecordMap",
+		c2sService:   "RecordQuery",
+		authServices: []string{"reporter"},
+	}
+
+	err := appendRecordPlaneToTraitProto(dir, plane, []recordType{{
 		typeName: "AgentEvent",
 		pkg:      "agentsensor",
 		relPath:  "vservices/agent-sensor.proto",
@@ -99,7 +114,7 @@ option (spec.record_store) = {};
 		},
 	}})
 	if err != nil {
-		t.Fatalf("appendRecordMapToServiceProto failed: %v", err)
+		t.Fatalf("appendRecordPlaneToTraitProto failed: %v", err)
 	}
 
 	gotBytes, err := os.ReadFile(path)
@@ -140,8 +155,11 @@ option (spec.record_store) = {};
 		`AgentEventWatchChange delta = 3;`,
 		// service + rpcs
 		`service RecordMap {`,
-		`option (spec.service_s2s) = {};`,
-		`option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["argus"]};`,
+		`option (spec.service_s2s) = {label: "stratum"};`,
+		`option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["reporter"]};`,
+		// c2s sibling: hosted on the same physical service, entitled against the trait.
+		`service RecordQuery {`,
+		`option (spec.service_c2s) = {auth_entitled_users: true, label: "stratum"};`,
 		`rpc CreateAgentEventQuery(OpenAgentEventQueryRequest) returns (QueryHandle) {`,
 		`rpc GetAgentEventCount(QueryHandle) returns (RecordCount) {`,
 		`rpc GetAgentEventSample(SampleAgentEventRequest) returns (SampleAgentEventResponse) {`,
@@ -158,10 +176,233 @@ option (spec.record_store) = {};
 		}
 	}
 
-	// RecordMap must carry the synthesized-service sentinel so the EnforceVerbs
-	// gate skips it. Its RPCs are spelled in the same governed verbs as the c2s
-	// RecordQuery sibling, but the sentinel is what keeps the gate off a
-	// synthesized service. Without it, no stratum.RecordMap consumer (e.g. argus)
-	// can generate its client.
+	// The S2S audience comes off the declaration, so no application service name
+	// may survive in generator source.
+	if strings.Contains(got, "argus") {
+		t.Fatalf("emitted plane still carries a hardcoded auth target:\n%s", got)
+	}
+
+	// Both halves must carry the synthesized-service sentinel so the EnforceVerbs
+	// gate skips them. Their RPCs are spelled in the same governed verbs, but the
+	// sentinel is what keeps the gate off a synthesized service. Without it, no
+	// consumer of the s2s half can generate its client.
 	assertGeneratedServiceMarkerLeadsService(t, got, "RecordMap")
+	assertGeneratedServiceMarkerLeadsService(t, got, "RecordQuery")
+}
+
+// recordPlaneFixture writes the three protos the trait-driven record query plane
+// needs: a physical record store, a record type, and (when withTrait) the trait
+// declaration that asks for the plane over them.
+func recordPlaneFixture(t *testing.T, withTrait bool) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := CopySysProtos(dir); err != nil {
+		t.Fatalf("CopySysProtos: %v", err)
+	}
+	if err := writeMinimalGeneratedStubs([]string{dir}); err != nil {
+		t.Fatalf("writeMinimalGeneratedStubs: %v", err)
+	}
+	writeProto(t, dir, "services/stratum.proto", `syntax = "proto3";
+package stratum;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "stratum"};
+option (spec.record_store) = {};
+`)
+	writeProto(t, dir, "vservices/tasks.proto", `syntax = "proto3";
+package tasks;
+
+import "sys/spec.proto";
+
+message TaskActivity {
+  option (spec.record) = {key: "event_id", owner: "owner_id", s2s: {auth_services: ["*"]}};
+  string event_id = 1;
+  string owner_id = 2;
+  string actor = 3 [(spec.query_field) = {op: QUERY_OP_EQ}];
+}
+`)
+	if withTrait {
+		writeProto(t, dir, "vservices/query.proto", `syntax = "proto3";
+package taskquery;
+
+import "sys/spec.proto";
+
+option (spec.trait) = {
+  id: 40
+  name: "query"
+  host: "stratum"
+  s2s_service: "RecordMap"
+  c2s_service: "RecordQuery"
+  auth_services: ["reporter"]
+};
+`)
+	}
+	return dir
+}
+
+func readProto(t *testing.T, dir, rel string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, rel))
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	return string(b)
+}
+
+// The paired control for the trait: the DECLARATION is what produces the query
+// plane, not the presence of a record store.
+//
+// Positive leg — with the trait declared, its own proto carries both sibling
+// services, both labelled with the declared host, and the s2s half's audience is
+// the declared one. The record store's own proto carries neither: the plane
+// belongs to the contract, not the implementor.
+func TestRecordQueryPlaneEmittedFromTraitDeclaration(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available")
+	}
+	dir := recordPlaneFixture(t, true)
+
+	if err := AppendRecordMapServiceToProtos(dir, dir, ""); err != nil {
+		t.Fatalf("AppendRecordMapServiceToProtos: %v", err)
+	}
+
+	trait := readProto(t, dir, "vservices/query.proto")
+	for _, want := range []string{
+		`import "vservices/tasks.proto";`,
+		"service RecordMap {",
+		`option (spec.service_s2s) = {label: "stratum"};`,
+		`option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["reporter"]};`,
+		"service RecordQuery {",
+		`option (spec.service_c2s) = {auth_entitled_users: true, label: "stratum"};`,
+		"rpc CreateTaskActivityQuery(OpenTaskActivityQueryRequest) returns (QueryHandle)",
+		"rpc WatchTaskActivity(QueryHandle) returns (stream TaskActivityWatchEvent)",
+	} {
+		if !strings.Contains(trait, want) {
+			t.Fatalf("trait proto missing %q:\n%s", want, trait)
+		}
+	}
+
+	host := readProto(t, dir, "services/stratum.proto")
+	if strings.Contains(host, "service ") {
+		t.Fatalf("record store proto must gain no service of its own:\n%s", host)
+	}
+
+	// The emitted plane must be well-formed enough to parse, and must satisfy the
+	// host-label/audience pairing: the gateway dials the host, but the audience it
+	// entitles callers against is the trait name.
+	dp, err := parser.NewDescriptorParser(dir)
+	if err != nil {
+		t.Fatalf("re-parsing the emitted plane failed: %v", err)
+	}
+	if err := parser.ValidateC2SHostLabels(dp); err != nil {
+		t.Fatalf("emitted c2s surface fails its own host-label control: %v", err)
+	}
+	fd, err := dp.GetFileDescriptor("vservices/query.proto")
+	if err != nil {
+		t.Fatalf("GetFileDescriptor: %v", err)
+	}
+	if fd.VServiceName != "query" {
+		t.Fatalf("audience identity = %q, want the trait name %q", fd.VServiceName, "query")
+	}
+	var sawC2S bool
+	for _, svc := range fd.Services {
+		if svc.Name != "RecordQuery" {
+			continue
+		}
+		sawC2S = true
+		if !svc.IsC2S {
+			t.Fatalf("RecordQuery is not classified c2s")
+		}
+		if svc.HostLabel != "stratum" {
+			t.Fatalf("RecordQuery host label = %q, want stratum", svc.HostLabel)
+		}
+	}
+	if !sawC2S {
+		t.Fatal("emitted c2s sibling did not parse back as a service")
+	}
+}
+
+// Negative leg — remove the trait declaration and the same proto set, record
+// store and record type included, produces no query plane at all. No error, no
+// partial emission, and above all no fallback to a generator-hardcoded host or
+// audience.
+func TestRecordQueryPlaneAbsentWithoutTraitDeclaration(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available")
+	}
+	dir := recordPlaneFixture(t, false)
+
+	if err := AppendRecordMapServiceToProtos(dir, dir, ""); err != nil {
+		t.Fatalf("AppendRecordMapServiceToProtos must not fail with no trait declared: %v", err)
+	}
+
+	for _, rel := range []string{"services/stratum.proto", "vservices/tasks.proto"} {
+		got := readProto(t, dir, rel)
+		for _, unwanted := range []string{"RecordMap", "RecordQuery", "QueryHandle", "argus"} {
+			if strings.Contains(got, unwanted) {
+				t.Fatalf("%s gained %q with no trait declared:\n%s", rel, unwanted, got)
+			}
+		}
+	}
+}
+
+// A trait naming a host nothing serves is a typo, and a typo that routes nowhere
+// must fail generation rather than emit a plane no service picks up.
+func TestRecordQueryPlaneFailsLoudOnUnservedHost(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available")
+	}
+	dir := recordPlaneFixture(t, false)
+	writeProto(t, dir, "vservices/query.proto", `syntax = "proto3";
+package taskquery;
+
+import "sys/spec.proto";
+
+option (spec.trait) = {
+  id: 40
+  name: "query"
+  host: "stratumm"
+  s2s_service: "RecordMap"
+  c2s_service: "RecordQuery"
+  auth_services: ["reporter"]
+};
+`)
+	err := AppendRecordMapServiceToProtos(dir, dir, "")
+	if err == nil {
+		t.Fatal("expected fail-loud for a host label no service serves")
+	}
+	if !strings.Contains(err.Error(), "stratumm") {
+		t.Fatalf("error should name the unserved host, got: %v", err)
+	}
+}
+
+// A trait that asks for the plane must declare its S2S audience. An empty
+// auth_services would emit an s2s half callable by nobody — the silent-staleness
+// failure mode the hardcoded ["argus"] had, reintroduced as a silent empty.
+func TestRecordQueryPlaneFailsLoudOnMissingAuthServices(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available")
+	}
+	dir := recordPlaneFixture(t, false)
+	writeProto(t, dir, "vservices/query.proto", `syntax = "proto3";
+package taskquery;
+
+import "sys/spec.proto";
+
+option (spec.trait) = {
+  id: 40
+  name: "query"
+  host: "stratum"
+  s2s_service: "RecordMap"
+  c2s_service: "RecordQuery"
+};
+`)
+	err := AppendRecordMapServiceToProtos(dir, dir, "")
+	if err == nil {
+		t.Fatal("expected fail-loud when a trait declares no auth_services")
+	}
+	if !strings.Contains(err.Error(), "auth_services") {
+		t.Fatalf("error should name auth_services, got: %v", err)
+	}
 }

@@ -37,6 +37,20 @@ func physicalServingLabels(fds []*FileDescriptor) map[string]bool {
 	return labels
 }
 
+// PhysicalServingLabels is the DescriptorParser form of physicalServingLabels:
+// the set of labels the loaded proto set actually serves. Callers that resolve
+// a declared host label against reality (the C2S validator here, the
+// trait-driven record plane injector) share this one definition so "served"
+// never means two different things.
+func PhysicalServingLabels(dp *DescriptorParser) map[string]bool {
+	all := dp.GetAllFiles()
+	fds := make([]*FileDescriptor, 0, len(all))
+	for _, fd := range all {
+		fds = append(fds, fd)
+	}
+	return physicalServingLabels(fds)
+}
+
 // ValidateC2SHostLabels enforces the two halves of a trait-hosted C2S surface.
 //
 // A C2S service declaring (spec.service_c2s).label says "these client-facing

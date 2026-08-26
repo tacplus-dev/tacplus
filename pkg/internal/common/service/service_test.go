@@ -102,6 +102,37 @@ func TestResolveGrpcRefsRequiresExistingService(t *testing.T) {
 	}
 }
 
+// A peer may declare a client against a trait's plane before the plane exists:
+// the two sibling services are injected into the trait's proto after inference
+// runs. The escape hatch resolves them off the DECLARATION — the trait names its
+// own services — so nothing here knows what any plane is called.
+func TestResolveGrpcRefsResolvesTraitPlaneBeforeInjection(t *testing.T) {
+	files := map[string]*parser.FileDescriptor{
+		"vservices/query.proto": {
+			Package: "taskquery",
+			Trait: &parser.TraitDescriptor{
+				Name:       "query",
+				Host:       "stratum",
+				S2SService: "RecordMap",
+				C2SService: "RecordQuery",
+			},
+		},
+	}
+
+	got, err := resolveGrpcRefs([]string{"taskquery.RecordMap"}, files)
+	if err != nil {
+		t.Fatalf("trait plane ref error: %v", err)
+	}
+	if len(got) != 1 || got[0].ProtoFile != "vservices/query.proto" || got[0].ServiceName != "RecordMap" {
+		t.Fatalf("trait plane ref = %#v, want vservices/query.proto/RecordMap", got)
+	}
+
+	// Only the names the trait actually declares get the hatch.
+	if _, err := resolveGrpcRefs([]string{"taskquery.SomethingElse"}, files); err == nil {
+		t.Fatal("undeclared service in a trait package resolved; want error")
+	}
+}
+
 func TestCollectOwnPackageGrpcAnnotationsMergesPackageFiles(t *testing.T) {
 	files := map[string]*parser.FileDescriptor{
 		"contract/contract.proto": {

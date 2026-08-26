@@ -21,10 +21,10 @@ import (
 //   - Messages with source must have projection_source on every timeseries field
 //
 // LIMITATION: this only inspects order_key/dedup.key_fields declared directly on
-// the message's own fields. A message's separately-declared timeseries_projection
+// the message's own fields. A message's separately-declared (spec.transformation)
 // block has its own inline field: entries and is not walked here, so an order_key/
-// key_fields conflict expressed only in a projection will not be caught by this
-// validator.
+// key_fields conflict expressed only in a transformation will not be caught by
+// this validator.
 func ValidateTimeseriesAnnotations(allFiles []model.ProtoFile) error {
 	var errs []string
 

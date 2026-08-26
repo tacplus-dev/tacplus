@@ -537,12 +537,31 @@ func DeriveStoreSubscriptionsFromRegistry(p *parser.DescriptorParser, selfPackag
 		return nil, nil
 	}
 
-	var subs []SubscriptionData
+	// Deterministic order so the error below names the same source every run.
+	ordered := make([]string, 0, len(sourceFQNs))
 	for sourceFQN := range sourceFQNs {
+		ordered = append(ordered, sourceFQN)
+	}
+	sort.Strings(ordered)
+
+	var subs []SubscriptionData
+	for _, sourceFQN := range ordered {
 		matches := registry.TopicRefsForEventType(sourceFQN)
 		switch len(matches) {
 		case 0:
-			continue
+			// PAIRED CONTROL. This store hosts rows derived from sourceFQN, but no
+			// EventBus topic publishes that type — so the generated store would
+			// subscribe to nothing and never ingest a single row. That used to be a
+			// silent `continue`: generation succeeded and produced a store that was
+			// dead on arrival.
+			//
+			// A transformation on its own is fine and generates with no eventbus in
+			// sight; a store on its own is fine too. What is NOT fine is a store that
+			// claims a source with no delivery behind it. Fail loudly instead.
+			return nil, fmt.Errorf("store source type %q resolves to no EventBus topic: "+
+				"the generated store would never ingest a row. Declare delivery for %q "+
+				"(a spec.record/spec.event with a producer surface, so a topic is "+
+				"synthesized), or drop the store's claim on it", sourceFQN, sourceFQN)
 		case 1:
 			subs = append(subs, subscriptionDataFromTopic(selfPackage, matches[0], "store_derived"))
 		default:

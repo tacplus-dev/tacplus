@@ -16,20 +16,24 @@ option (spec.vservice) = {
 };
 
 message FixtureEvent {
-  // A projection is an offshoot of a record, so FixtureEvent must be a record.
-  // A record implies an event and must declare its producer surface (s2s here).
+  // DELIVERY. A record implies an event and must declare its producer surface
+  // (s2s here). retention is delivery-side state: how long the delivered rows are
+  // kept. It lives here, never on the transformation below — see
+  // (spec.record).retention in sys/spec.proto.
   option (spec.record) = {
     key: "event_id"
     owner: "spiffe_id"
     s2s: {auth_services: ["*"]}
+    retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
   };
-  // A timeseries offshoot of the same record — exercises the timeseries projection
-  // + TimeseriesGroupCounts + TimeseriesQuery (key-returning) generators. The record
-  // key (event_id) is auto-injected by tacplus for federation/hydration.
-  option (spec.timeseries_projection) = {
+  // TRANSFORMATION. A pure typed conversion FixtureEvent -> FixtureEventRecord.
+  // Exercises the transformation + TimeseriesGroupCounts + TimeseriesQuery
+  // (key-returning) generators. Because the SOURCE is a record, the record key
+  // (event_id) is auto-injected by tacplus for federation/hydration; a
+  // transformation over a non-record source (see FixtureProbe) gets no key.
+  option (spec.transformation) = {
     name: "FixtureEventRecord"
     dedup: {strategy: DEDUP_LATEST_BY_VERSION version_field: "timestamp_ms" key_fields: "timestamp_ms"}
-    retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
     field: {source: "timestamp_ms" order_key: 1 partition_key: true}
     field: {source: "tenant_namespace" cardinality_hint: CARDINALITY_LOW}
   };
@@ -64,6 +68,25 @@ message FixtureEvent {
   // more_contacts_sub entitlement is applied to every element of the list.
   // (Repeated fields must declare a max element count.)
   repeated FixtureContact more_contacts = 9 [(spec.assert_max_size) = 16];
+}
+
+// PAIRED CONTROL (delivery half). FixtureAudit declares DELIVERY and nothing
+// else: a record with a producer surface, stored and retained, driven by the
+// FixtureState subscription — and NO (spec.transformation) anywhere. Delivery
+// generates with no transformation attached, exactly as a transformation
+// generates with no delivery attached (see FixtureProbe in cross-test/proto).
+message FixtureAudit {
+  option (spec.record) = {
+    key: "audit_id"
+    owner: "spiffe_id"
+    s2s: {auth_services: ["*"]}
+    retention: {timestamp_field: "recorded_at_ms" duration_seconds: 7776000}
+  };
+
+  string audit_id = 1 [(spec.assert_required) = true];
+  string spiffe_id = 2 [(spec.identity_spiffe_subject) = true];
+  int64 recorded_at_ms = 3 [(spec.query_field) = {op: QUERY_OP_RANGE}];
+  string action = 4 [(spec.query_field) = {op: QUERY_OP_EQ}];
 }
 
 // A nested sub-message reached through FixtureEvent.contact — proves recursive

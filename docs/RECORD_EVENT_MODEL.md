@@ -16,11 +16,13 @@ a rebuild.
 > from tacplus on the same day (BONEYARD_QUESTIONS Q2), along with the field-level
 > `spec.graph`, `graph_index` and `graph_edge` options that only ever applied
 > inside a `graph_type` message. All those option numbers are retired in
-> `spec.proto`, never reused. `timeseries_projection` SURVIVES, and not as a leftover: it is
-> where a stored record's **retention policy** lives (stratum's EventStoreGenerator
-> requires `retention.timestamp_field` on every stored record), and its output is a
-> store-neutral typed conversion. Splitting that transformation from delivery is a
-> separate, later task.
+> `spec.proto`, never reused. `timeseries_projection` has since been retired too
+> (option 60067, 2026-08-25, PLAN.md acceptance item 3): it bundled a pure typed
+> conversion together with a **retention policy** and with eventbus delivery, and
+> those are now three separate declarations. The conversion is
+> **`spec.transformation`**; retention is **`(spec.record).retention`**; delivery is
+> the `record`/`event` producer surface and the topic it synthesizes. Neither the
+> transformation nor the delivery declaration requires the other to generate.
 
 ## Mental model
 
@@ -48,8 +50,8 @@ Message-level:
 | Annotation | Meaning |
 |---|---|
 | `event { c2s{…}? , s2s{…}? }` | eventbus **topic + publish RPC**. ≥1 producer surface required. |
-| `record { key, owner, c2s{…}? , s2s{…}? }` | **is-an `event`** + stored in `record_store` + projectable. `key` = id field (default: `event_id`), `owner` = ownership field. |
-| `timeseries_projection {…}` | derive a typed timeseries row from this record, and declare its **retention** (`retention.timestamp_field` is required on every stored record). Requires `record`. |
+| `record { key, owner, c2s{…}? , s2s{…}? , retention{…}? }` | **DELIVERY.** **is-an `event`** + stored in `record_store` + projectable. `key` = id field (default: `event_id`), `owner` = ownership field, `retention` = the store-neutral row retention policy (`retention.timestamp_field` is required on every stratum-stored record). |
+| `transformation {…}` | **TRANSFORMATION.** A pure typed conversion of this message into a derived row type. Requires **no** `record`, **no** topic, **no** subscription — and carries **no** retention (a pure function has no lifetime). |
 
 Field-level (on a `record` message's fields):
 
@@ -65,12 +67,20 @@ Service-level (once per service):
 | `record_store {}` | stratum (the full-record store) |
 
 On a stored event you write only `record` (it implies `event`). You never write the
-projection output types or their markers.
+derived output types or their markers.
+
+**Transformation and delivery are independent declarations.** A `transformation`
+on a plain message generates its derived type with no eventbus involvement at all
+(fixture: `FixtureProbe` in `cross-test/proto/common2/user.proto`); a `record`
+with a producer surface and retention delivers and stores with no transformation
+attached (fixture: `FixtureAudit` in
+`cross-test/consumer-contract/proto/services/contractfixtures.proto`). Neither
+declaration requires the other to generate.
 
 ## Generated (never hand-written)
 
-- The **projection output messages** (`SessionRecord`, …) from the
-  `timeseries_projection` declarations, stamped with the internal marker
+- The **derived output messages** (`SessionRecord`, …) from the
+  `transformation` declarations, stamped with the internal marker
   **`timeseries_type`** so downstream codegen finds them.
 - The **timeseries table name**, derived from the message name in `snake_case`
   when `(spec.timeseries_type)` sets none explicitly. The conversion is
@@ -135,8 +145,19 @@ projection output types or their markers.
 
 ## Validations (tacplus errors)
 
-- a `timeseries_projection` on a message that is not a `record`;
-- an `event`/`record` that declares zero producer surfaces.
+- an `event`/`record` that declares zero producer surfaces;
+- a **store whose source type resolves to no EventBus topic** — the generated
+  store would subscribe to nothing and never ingest a row. This is the paired
+  control for the transformation/delivery split: a transformation alone is fine
+  and a store alone is fine, but a store that claims a source with no delivery
+  behind it is a silent dead store, and now fails generation
+  (`DeriveStoreSubscriptionsFromRegistry` in
+  `pkg/internal/common/boundaries/boundaries.go`).
+
+> A `transformation` on a message that is not a `record` is **explicitly legal**
+> since 2026-08-25. It used to be rejected; requiring a record made every
+> transformation drag the eventbus-driven store path in with it, which is the
+> coupling acceptance item 3 removed.
 
 > **Not implemented, despite having been listed here:** "a `record` or projection
 > with no hosting store service". `pkg/internal/proto/validate_virtual.go` records

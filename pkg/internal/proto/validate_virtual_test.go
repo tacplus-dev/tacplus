@@ -158,11 +158,11 @@ message EvalInput {
 	}
 }
 
-// ValidateRecordLinkage enforces two record/event invariants: a projection is
-// an offshoot of a record, and an event declares its producer surface rather
-// than defaulting to one.
+// ValidateRecordLinkage enforces the event invariant: an event declares its
+// producer surface rather than defaulting to one. It deliberately does NOT
+// require a transformation's source to be a record.
 
-func TestValidateRecordLinkageAcceptsRecordWithProjectionAndSurface(t *testing.T) {
+func TestValidateRecordLinkageAcceptsRecordWithTransformationAndSurface(t *testing.T) {
 	dir := virtualFixture(t, map[string]string{
 		"events/events.proto": `syntax = "proto3";
 package events;
@@ -170,10 +170,12 @@ package events;
 import "sys/spec.proto";
 
 message SessionEvent {
-  option (spec.record) = {key: "event_id", owner: "spiffe_id", s2s: {}};
-  option (spec.timeseries_projection) = {
-    name: "SessionRow"
+  option (spec.record) = {
+    key: "event_id", owner: "spiffe_id", s2s: {}
     retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
+  };
+  option (spec.transformation) = {
+    name: "SessionRow"
     field: {source: "timestamp_ms" partition_key: true}
   };
 
@@ -189,9 +191,11 @@ message SessionEvent {
 	}
 }
 
-// A projection on a message that is not a record has no record to be an
-// offshoot of — the projection would be fed by nothing.
-func TestValidateRecordLinkageRejectsProjectionWithoutRecord(t *testing.T) {
+// PAIRED CONTROL (declaration half): a transformation is a pure typed conversion
+// A -> B. It needs no spec.record, no producer surface, and no EventBus topic to
+// be a legal declaration — requiring a record is exactly the coupling the
+// transformation/delivery split cuts.
+func TestValidateRecordLinkageAcceptsTransformationWithoutRecord(t *testing.T) {
 	dir := virtualFixture(t, map[string]string{
 		"events/events.proto": `syntax = "proto3";
 package events;
@@ -199,9 +203,8 @@ package events;
 import "sys/spec.proto";
 
 message SessionEvent {
-  option (spec.timeseries_projection) = {
+  option (spec.transformation) = {
     name: "SessionRow"
-    retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
     field: {source: "timestamp_ms" partition_key: true}
   };
 
@@ -211,15 +214,8 @@ message SessionEvent {
 `,
 	})
 
-	err := ValidateRecordLinkage(dir)
-	if err == nil {
-		t.Fatal("ValidateRecordLinkage accepted a projection on a non-record message, want error")
-	}
-	if !strings.Contains(err.Error(), "declares a projection but is not a spec.record") {
-		t.Fatalf("error = %q, want the projection-without-record message", err.Error())
-	}
-	if !strings.Contains(err.Error(), "SessionEvent") {
-		t.Fatalf("error = %q, want it to name the message", err.Error())
+	if err := ValidateRecordLinkage(dir); err != nil {
+		t.Fatalf("ValidateRecordLinkage rejected a record-free transformation: %v", err)
 	}
 }
 

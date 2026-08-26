@@ -27,17 +27,42 @@ var reservedSpecOptionFields = map[string]string{
 	"default_expr":    "(removed — store decides defaults)",
 }
 
+// reservedSpecOptionFieldsByOption holds reserved field names that are reserved
+// in ONE annotation message but still ACTIVE in another, so they cannot go in the
+// global table above without false-positiving on the option that still uses them.
+// Keyed by the spec option name the block opens with.
+//
+// retention is the case this exists for: it is reserved on Transformation and on
+// TimeseriesTypeAnnotation (a transformation is a pure typed conversion and has no
+// lifetime) but ACTIVE on RecordAnnotation, where delivery-side retention lives.
+var reservedSpecOptionFieldsByOption = map[string]map[string]string{
+	"transformation":  {"retention": "(spec.record).retention — retention is delivery-side state, not transformation state"},
+	"timeseries_type": {"retention": "(spec.record).retention — retention is delivery-side state, not transformation state"},
+}
+
+func reservedFieldRe(name string) *regexp.Regexp {
+	return regexp.MustCompile(`(^|[\s{])` + name + `\s*:`)
+}
+
 var reservedFieldRes = func() map[string]*regexp.Regexp {
 	res := make(map[string]*regexp.Regexp, len(reservedSpecOptionFields))
 	for name := range reservedSpecOptionFields {
-		res[name] = regexp.MustCompile(`(^|[\s{])` + name + `\s*:`)
+		res[name] = reservedFieldRe(name)
+	}
+	for _, byName := range reservedSpecOptionFieldsByOption {
+		for name := range byName {
+			if _, ok := res[name]; !ok {
+				res[name] = reservedFieldRe(name)
+			}
+		}
 	}
 	return res
 }()
 
 // specOptionStartRe matches an active (non-commented) spec.* option start, with
 // any same-line prefix that contains no comment slash (MS-10 comment-safe form).
-var specOptionStartRe = regexp.MustCompile(`(?m)^[^\n/]*?option\s+\(\s*spec\.`)
+// Group 1 is the option name, so a per-option reserved table can be applied.
+var specOptionStartRe = regexp.MustCompile(`(?m)^[^\n/]*?option\s+\(\s*spec\.([a-z_]+)`)
 
 // ValidateReservedSpecOptionFields hard-errors when any proto under protoDir
 // uses a reserved (removed) field name inside a spec.* option literal. Without
@@ -61,18 +86,26 @@ func ValidateReservedSpecOptionFields(protoDir string) error {
 			return rerr
 		}
 		text := string(data)
-		for _, loc := range specOptionStartRe.FindAllStringIndex(text, -1) {
+		for _, loc := range specOptionStartRe.FindAllStringSubmatchIndex(text, -1) {
 			block, endLine := specOptionBlock(text, loc[0])
 			if block == "" {
 				continue
 			}
+			optionName := text[loc[2]:loc[3]]
 			stripped := stripBlockComments(block)
 			startLine := 1 + strings.Count(text[:loc[0]], "\n")
 			for name, re := range reservedFieldRes {
+				replacement, global := reservedSpecOptionFields[name]
+				if !global {
+					replacement, global = reservedSpecOptionFieldsByOption[optionName][name]
+					if !global {
+						continue
+					}
+				}
 				if re.MatchString(stripped) {
 					violations = append(violations, fmt.Sprintf(
-						"%s:%d-%d: spec option uses reserved field %q — protoc silently drops it; use %s",
-						rel, startLine, endLine, name, reservedSpecOptionFields[name]))
+						"%s:%d-%d: spec option (spec.%s) uses reserved field %q — protoc silently drops it; use %s",
+						rel, startLine, endLine, optionName, name, replacement))
 				}
 			}
 		}

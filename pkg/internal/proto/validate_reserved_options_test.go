@@ -28,7 +28,7 @@ func TestValidateReservedSpecOptionFields_Rejects(t *testing.T) {
 	writeProtoFile(t, dir, "vservices/demo.proto", `syntax = "proto3";
 package demo;
 message DemoEvents {
-  option (spec.timeseries_projection) = {
+  option (spec.transformation) = {
     name: "DemoRecord"
     engine: "DemoEngine(ts)"
     ttl: "toDateTime(ts) + INTERVAL 90 DAY"
@@ -54,13 +54,12 @@ func TestValidateReservedSpecOptionFields_NoFalsePositives(t *testing.T) {
 	dir := t.TempDir()
 	writeProtoFile(t, dir, "services/clean.proto", `syntax = "proto3";
 package clean;
-// option (spec.timeseries_projection) = { engine: "old" ttl: "old" };
+// option (spec.transformation) = { engine: "old" ttl: "old" };
 message CleanEvents {
-  option (spec.timeseries_projection) = {
+  option (spec.transformation) = {
     name: "CleanRecord"
     // engine: "commented inside block"
     when: "ev"
-    retention: {timestamp_field: "ts" duration_seconds: 60}
     field: {source: "note" as: "engine_note"}
     field: {source: "desc" cardinality_hint: CARDINALITY_LOW}
   };
@@ -71,7 +70,7 @@ message Unrelated {
   string description = 3; // mentions ttl: and engine: in prose? only in comment
 }
 message StringCarrier {
-  option (spec.record) = {key: "id" owner: "who"};
+  option (spec.record) = {key: "id" owner: "who" retention: {timestamp_field: "ts" duration_seconds: 60}};
   string id = 1;
   string who = 2;
   string query = 3; // e.g. value might be "SELECT ... TTL ..." at runtime; not proto text
@@ -103,8 +102,20 @@ func TestReservedTableMatchesSpecProto(t *testing.T) {
 	if len(declared) == 0 {
 		t.Fatal("no reserved names parsed from spec.proto — pin is broken")
 	}
-	// Every declared reserved name that our validator claims must be declared.
+	// covered is the union of the global table and the per-option table: a name
+	// reserved on one annotation message but still active on another is covered
+	// only within the options that reserve it.
+	covered := map[string]bool{}
 	for name := range reservedSpecOptionFields {
+		covered[name] = true
+	}
+	for _, byName := range reservedSpecOptionFieldsByOption {
+		for name := range byName {
+			covered[name] = true
+		}
+	}
+	// Every declared reserved name that our validator claims must be declared.
+	for name := range covered {
 		if !declared[name] {
 			t.Errorf("validator table has %q but spec.proto does not reserve it", name)
 		}
@@ -113,8 +124,40 @@ func TestReservedTableMatchesSpecProto(t *testing.T) {
 	// except names too generic to scan safely (documented exclusions).
 	excluded := map[string]bool{"type": true} // too generic: matches ordinary text-format usage
 	for name := range declared {
-		if !excluded[name] && reservedSpecOptionFields[name] == "" {
+		if !excluded[name] && !covered[name] {
 			t.Errorf("spec.proto reserves %q but the validator table does not cover it", name)
 		}
+	}
+}
+
+// retention is reserved on (spec.transformation) but ACTIVE on (spec.record): the
+// per-option table must reject it in the first and accept it in the second, or the
+// transformation/delivery split leaks back into the transformation silently.
+func TestValidateReservedSpecOptionFields_RetentionIsOptionScoped(t *testing.T) {
+	dir := t.TempDir()
+	writeProtoFile(t, dir, "vservices/split.proto", `syntax = "proto3";
+package split;
+message Ev {
+  option (spec.record) = {key: "id" retention: {timestamp_field: "ts" duration_seconds: 60}};
+  option (spec.transformation) = {
+    name: "EvRow"
+    retention: {timestamp_field: "ts" duration_seconds: 60}
+    field: {source: "ts" order_key: 1}
+  };
+}
+`)
+	err := ValidateReservedSpecOptionFields(dir)
+	if err == nil {
+		t.Fatal("expected retention-on-transformation to be rejected, got nil")
+	}
+	if !strings.Contains(err.Error(), "(spec.transformation)") || !strings.Contains(err.Error(), "retention") {
+		t.Fatalf("error should name the transformation option and retention:\n%v", err)
+	}
+	// Exactly one violation: the record's own retention is ACTIVE, not flagged.
+	if n := strings.Count(err.Error(), "uses reserved field"); n != 1 {
+		t.Fatalf("expected exactly one violation (transformation only), got %d:\n%v", n, err)
+	}
+	if !strings.Contains(err.Error(), "split.proto:5-9") {
+		t.Fatalf("violation should point at the transformation block:\n%v", err)
 	}
 }

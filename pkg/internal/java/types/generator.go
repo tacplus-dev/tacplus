@@ -940,7 +940,7 @@ func Generate(config *tactype.Config) error {
 	if err := proto.AppendEventBusWrappersToProtos(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to append eventbus topic wrappers to protos: %w", err)
 	}
-	if err := proto.GenerateProjectionMessages(protoDir, config.FlatProtoDir); err != nil {
+	if err := proto.GenerateTransformationMessages(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to generate projection messages: %w", err)
 	}
 	if err := proto.AppendRecordMapServiceToProtos(protoDir, config.FlatProtoDir, config.SelfPackage); err != nil {

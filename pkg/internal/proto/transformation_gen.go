@@ -14,16 +14,18 @@ import (
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 )
 
-// GenerateProjectionMessages scans all proto files for
-// spec.timeseries_projection annotations and generates the corresponding
-// projection message types, appending them to the proto file in tempProtoDir.
+// GenerateTransformationMessages scans all proto files for spec.transformation
+// annotations and generates the corresponding derived message types, appending
+// them to the proto file in tempProtoDir.
 //
-// Timeseries projections become messages with spec.timeseries_type,
-// spec.timeseries_column, and spec.projection_source annotations.
-func GenerateProjectionMessages(tempProtoDir, inputDir string) error {
+// A transformation becomes a message with spec.timeseries_type,
+// spec.timeseries_column, and spec.projection_source annotations — the
+// generator-internal compile target. Nothing about delivery is consulted here:
+// the source need not be a spec.record and need not have an EventBus topic.
+func GenerateTransformationMessages(tempProtoDir, inputDir string) error {
 	dp, err := parser.NewDescriptorParser(inputDir)
 	if err != nil {
-		return fmt.Errorf("projection gen: failed to create descriptor parser: %w", err)
+		return fmt.Errorf("transformation gen: failed to create descriptor parser: %w", err)
 	}
 
 	for relPath, fd := range dp.GetAllFiles() {
@@ -32,7 +34,7 @@ func GenerateProjectionMessages(tempProtoDir, inputDir string) error {
 		}
 
 		for _, msg := range fd.Messages {
-			tsAnn, hasTS := msg.Annotations["timeseries_projection"]
+			tsAnn, hasTS := msg.Annotations["transformation"]
 			if !hasTS {
 				continue
 			}
@@ -41,25 +43,23 @@ func GenerateProjectionMessages(tempProtoDir, inputDir string) error {
 
 			var sb strings.Builder
 			sb.WriteString("\n// ============================================================================\n")
-			sb.WriteString("// Auto-generated projection messages from\n")
-			sb.WriteString("// spec.timeseries_projection annotations (tacplus)\n")
+			sb.WriteString("// Auto-generated derived types from\n")
+			sb.WriteString("// spec.transformation annotations (tacplus)\n")
 			sb.WriteString("// ============================================================================\n")
 
-			if hasTS {
-				for _, tp := range tsAnn.TimeseriesProjectionEntries {
-					proto, err := generateTimeseriesProjection(tp, sourceFQN, msg, fd)
-					if err != nil {
-						return fmt.Errorf("projection gen: timeseries projection %q on %s: %w", tp.Name, sourceFQN, err)
-					}
-					sb.WriteString(proto)
+			for _, tp := range tsAnn.TransformationEntries {
+				proto, err := generateTransformation(tp, sourceFQN, msg, fd)
+				if err != nil {
+					return fmt.Errorf("transformation gen: transformation %q on %s: %w", tp.Name, sourceFQN, err)
 				}
+				sb.WriteString(proto)
 			}
 
 			// Append to the proto file in tempProtoDir.
 			filePath := filepath.Join(tempProtoDir, relPath)
 			content, err := os.ReadFile(filePath)
 			if err != nil {
-				return fmt.Errorf("projection gen: failed to read %s: %w", relPath, err)
+				return fmt.Errorf("transformation gen: failed to read %s: %w", relPath, err)
 			}
 
 			var buf strings.Builder
@@ -67,27 +67,37 @@ func GenerateProjectionMessages(tempProtoDir, inputDir string) error {
 			buf.WriteString(sb.String())
 
 			if err := os.WriteFile(filePath, []byte(buf.String()), 0644); err != nil {
-				return fmt.Errorf("projection gen: failed to write %s: %w", relPath, err)
+				return fmt.Errorf("transformation gen: failed to write %s: %w", relPath, err)
 			}
 
-			zap.L().Info("generated projection messages",
+			zap.L().Info("generated transformation messages",
 				zap.String("source", sourceFQN),
 				zap.String("file", relPath),
-				zap.Int("timeseries", len(tsAnn.TimeseriesProjectionEntries)))
+				zap.Int("transformations", len(tsAnn.TransformationEntries)))
 		}
 	}
 
 	return nil
 }
 
-// sourceRecordKey returns the source record's key field name: the record's
-// declared (spec.record).key (surfaced as the record_key annotation), or
-// defaultRecordKeyField when none is declared — the SAME default the RecordMap
-// query plane uses, so a record and its projections agree on the key. If the named
-// field does not exist on the message, projection generation fails loudly when it
-// resolves the key's type (resolveFieldType), never emitting a projection whose
-// record key cannot be hydrated.
+// sourceRecordKey returns the source record's key field name, or "" when the
+// source is not a record at all.
+//
+// A record key exists only on the DELIVERY side. A transformation over a plain
+// (non-record) message has no record to hydrate back to, so it gets no injected
+// key — that is the whole point of the split: the pure conversion generates with
+// no delivery declaration in sight.
+//
+// For a record the key is its declared (spec.record).key (surfaced as the
+// record_key annotation), or defaultRecordKeyField when none is declared — the
+// SAME default the RecordMap query plane uses, so a record and its derived types
+// agree on the key. If the named field does not exist on the message, generation
+// fails loudly when it resolves the key's type (resolveFieldType), never emitting
+// a derived type whose record key cannot be hydrated.
 func sourceRecordKey(msg parser.MessageDescriptor) string {
+	if _, isRecord := msg.Annotations["record"]; !isRecord {
+		return ""
+	}
 	if k, ok := msg.Annotations["record_key"]; ok && strings.TrimSpace(k.StringValue) != "" {
 		return k.StringValue
 	}
@@ -114,16 +124,13 @@ func cardinalityHintName(h model.TimeseriesCardinalityHint) string {
 	}
 }
 
-// generateTimeseriesProjection generates a timeseries record message from a TimeseriesProjectionEntry.
-func generateTimeseriesProjection(tp model.TimeseriesProjectionEntry, sourceFQN string, msg parser.MessageDescriptor, fd *parser.FileDescriptor) (string, error) {
+// generateTransformation generates a derived row message from a TransformationEntry.
+func generateTransformation(tp model.TransformationEntry, sourceFQN string, msg parser.MessageDescriptor, fd *parser.FileDescriptor) (string, error) {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("\n// %s — auto-generated timeseries projection of %s.\n", tp.Name, sourceFQN))
+	sb.WriteString(fmt.Sprintf("\n// %s — auto-generated transformation of %s.\n", tp.Name, sourceFQN))
 	sb.WriteString(fmt.Sprintf("message %s {\n", tp.Name))
 	sb.WriteString(fmt.Sprintf("  option (spec.timeseries_type) = {\n"))
 	sb.WriteString(fmt.Sprintf("    source: %q\n", sourceFQN))
-	if r := tp.Retention; r != nil {
-		sb.WriteString(fmt.Sprintf("    retention: {timestamp_field: %q duration_seconds: %d}\n", r.TimestampField, r.DurationSeconds))
-	}
 	if d := tp.Dedup; d != nil {
 		sb.WriteString("    dedup: {")
 		sb.WriteString("strategy: " + dedupStrategyName(d.Strategy))
@@ -165,7 +172,7 @@ func generateTimeseriesProjection(tp model.TimeseriesProjectionEntry, sourceFQN 
 		anns = append(anns, fmt.Sprintf("(spec.projection_source) = %q", f.Source))
 
 		// Mark the field that carries the source record's key (for federation/hydration).
-		if f.Source == recordKey {
+		if recordKey != "" && f.Source == recordKey {
 			anns = append(anns, "(spec.projection_record_key) = true")
 			recordKeyEmitted = true
 		}
@@ -173,12 +180,14 @@ func generateTimeseriesProjection(tp model.TimeseriesProjectionEntry, sourceFQN 
 		sb.WriteString(fmt.Sprintf("  %s %s = %d [\n    %s\n  ];\n", protoType, fieldName, fieldNum, strings.Join(anns, ",\n    ")))
 	}
 
-	// Auto-inject the source record's key so the projection query can return record
-	// keys (federation → hydrate). Only when the author didn't already project it.
-	if !recordKeyEmitted {
+	// Auto-inject the source record's key so the derived-type query can return
+	// record keys (federation → hydrate). Only when the source IS a record (a
+	// transformation over a plain message has no record to hydrate back to) and the
+	// author didn't already project it.
+	if recordKey != "" && !recordKeyEmitted {
 		keyType, err := resolveFieldType(recordKey, msg, fd)
 		if err != nil {
-			return "", fmt.Errorf("record key %q for timeseries projection %q: %w", recordKey, tp.Name, err)
+			return "", fmt.Errorf("record key %q for transformation %q: %w", recordKey, tp.Name, err)
 		}
 		sb.WriteString(fmt.Sprintf("  %s %s = %d [\n    (spec.timeseries_column) = {},\n    (spec.projection_source) = %q,\n    (spec.projection_record_key) = true\n  ];\n",
 			keyType, recordKey, len(tp.Fields)+1, recordKey))

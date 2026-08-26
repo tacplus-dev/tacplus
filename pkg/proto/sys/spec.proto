@@ -426,21 +426,28 @@ extend google.protobuf.MessageOptions {
 
   // 60066 retired (graph_projection — graph store support removed 2026-08-25).
 
-  // timeseries_projection declares a timeseries table type derived from
-  // this event. tacplus generates the record message, column annotations,
-  // and projection_source mappings. Common context fields (all non-oneof
-  // fields used in the projection) are included automatically. The shape is
-  // store-neutral — retention/dedup/cardinality_hint are semantic intent, and
-  // a downstream materializer renders the concrete engine/TTL/merge behavior.
-  // Repeated — one per oneof variant / table.
+  // 60067 retired (timeseries_projection — split into spec.transformation
+  // (the pure conversion) + spec.record.retention (delivery-side lifetime),
+  // 2026-08-25).
+
+  // transformation declares a pure typed conversion of this message into a
+  // derived row type. tacplus generates the derived message, its column
+  // annotations, and its projection_source mappings.
+  //
+  // DELIVERY IS NOT DECLARED HERE. A transformation needs no spec.record, no
+  // EventBus topic, and no subscription to generate; conversely a record
+  // delivers and stores with no transformation attached. Retention — the one
+  // piece of delivery state the old timeseries_projection bundled in — lives on
+  // (spec.record).retention.
+  //
+  // Repeated — one per oneof variant / derived type.
   // Example:
-  //   option (spec.timeseries_projection) = {
+  //   option (spec.transformation) = {
   //     name: "SessionRecord"
   //     when: "session"
-  //     retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
   //     field: {source: "session.model"  cardinality_hint: CARDINALITY_LOW}
   //   };
-  repeated TimeseriesProjection timeseries_projection = 60067;
+  repeated Transformation transformation = 60085;
 
   // service_event declares that this state root's topic publish RPCs should be
   // exposed through the API gateway. tacplus propagates this to the generated
@@ -625,6 +632,22 @@ message RecordAnnotation {
   MethodC2SAnnotation c2s = 3;
   // s2s, when present, exposes the record's publish RPC to internal services.
   MethodS2SAnnotation s2s = 4;
+  // retention is the store-neutral row retention policy for this record's
+  // stored rows (unset = indefinite).
+  //
+  // Retention is DELIVERY-side state, not transformation state. A
+  // (spec.transformation) is a pure typed conversion A -> B; a pure function has
+  // no lifetime, so a retention window cannot live on it. It lives here, on the
+  // declaration that says this message is stored and delivered — the same place
+  // key/owner/producer-surface live. A downstream materializer (e.g. stratum's
+  // EventStoreGenerator) reads it from here to render the concrete eviction rule.
+  //
+  // Example:
+  //   option (spec.record) = {
+  //     key: "event_id" owner: "spiffe_id" s2s: {auth_services: ["*"]}
+  //     retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
+  //   };
+  RetentionPolicy retention = 5;
 }
 
 // EventAnnotation marks a message as an EventBus event: tacplus generates a topic
@@ -672,33 +695,38 @@ message DedupPolicy {
   string version_field = 3;        // selects winning row under DEDUP_LATEST_BY_VERSION
 }
 
-// TimeseriesProjection declares a timeseries table type extracted from an event.
-// tacplus generates the record message with timeseries_column annotations and
-// projection_source mappings. Common context fields from the source event are
-// included automatically — only payload-specific fields need listing. The shape
-// is store-neutral: retention and dedup are declared as semantic intent, and a
-// downstream materializer renders the concrete engine/TTL/merge behavior.
-message TimeseriesProjection {
-  // name is the table/record type name (e.g. "SessionRecord").
+// Transformation declares a pure typed conversion of this message into a
+// derived row type: source message A -> derived type B. tacplus generates the
+// derived message with its column annotations and projection_source mappings.
+//
+// A transformation says NOTHING about delivery. It does not require the source
+// to be a (spec.record), it does not create or subscribe to an EventBus topic,
+// and it carries no retention window — retention is delivery-side state and
+// lives on (spec.record).retention. Declaring a transformation and declaring
+// delivery are independent: either generates without the other.
+//
+// The shape is store-neutral: dedup and cardinality_hint are declared as
+// semantic intent, and a downstream materializer renders the concrete
+// engine/merge behavior.
+message Transformation {
+  // name is the derived row type name (e.g. "SessionRecord").
   string name = 1;
-  reserved 2, 3;
-  reserved "engine", "ttl";
-  // when is the oneof variant name that triggers this record (e.g. "session").
-  // Only events carrying this payload variant produce a row.
+  reserved 2, 3, 6;
+  reserved "engine", "ttl", "retention";
+  // when is the oneof variant name that triggers this row (e.g. "session").
+  // Only source messages carrying this payload variant produce a row.
   string when = 4;
-  // field lists payload-specific fields beyond the common context.
-  repeated TimeseriesProjectionField field = 5;
-  // retention is the store-neutral row retention policy (unset = indefinite).
-  RetentionPolicy retention = 6;
-  // dedup is the store-neutral duplicate-resolution policy.
+  // field lists the source fields projected into the derived type.
+  repeated TransformationField field = 5;
+  // dedup is the store-neutral duplicate-resolution policy for the derived rows.
   DedupPolicy dedup = 7;
 }
 
-// TimeseriesProjectionField maps a source event field to a timeseries column.
-message TimeseriesProjectionField {
-  // source is the field path on the source event (e.g. "session.model").
+// TransformationField maps a source message field to a derived-type column.
+message TransformationField {
+  // source is the field path on the source message (e.g. "session.model").
   string source = 1;
-  // as renames the column in the generated record (defaults to last segment of source).
+  // as renames the column in the derived type (defaults to last segment of source).
   string as = 2;
   // order_key is the column's position in the store-neutral sort-key role
   // (0 = not a sort key). A materializer maps this to the engine's sort order.
@@ -723,24 +751,23 @@ message TimeseriesProjectionField {
 //
 // Example:
 //   message SensorTimeseries {
-//     option (spec.timeseries_type) = {
-//       source: "sensor.SensorEvent",
-//       retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
-//     };
+//     option (spec.timeseries_type) = {source: "sensor.SensorEvent"};
 //     ...
 //   }
+//
+// This is a GENERATOR-INTERNAL compile target: tacplus emits it from every
+// (spec.transformation). It carries no retention — retention is delivery-side
+// state and lives on (spec.record).retention.
 message TimeseriesTypeAnnotation {
   // Table name. Default: snake_case of message name.
   string name = 1;
-  reserved 2, 3;
-  reserved "engine", "ttl";
+  reserved 2, 3, 5;
+  reserved "engine", "ttl", "retention";
   // Source event FQN for field extraction.
   // When set, every field in this message must have (spec.projection_source) to map
   // from the source event to this projection.
   // Example: "sensor.SensorEvent"
   string source = 4;
-  // retention is the store-neutral row retention policy (unset = indefinite).
-  RetentionPolicy retention = 5;
   // dedup is the store-neutral duplicate-resolution policy.
   DedupPolicy dedup = 6;
 }

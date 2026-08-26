@@ -22,15 +22,18 @@ type RegistryTypeInfo struct {
 	// EventDB
 	RecordKey   string // event key field from (spec.record).key
 	RecordOwner string // owner field from (spec.record).owner
-	// Projections
-	TimeseriesProjections []model.TimeseriesProjectionEntry // from (spec.timeseries_projection)
-	// Legacy timeseries_type (hand-written projection types). Store-neutral:
-	// retention/dedup are semantic intent, not backend DDL.
-	TimeseriesType        bool                        // true if message has (spec.timeseries_type)
-	TimeseriesTableName   string                      // table name (or snake_case of message name)
-	TimeseriesTableSource string                      // source event FQN
-	TimeseriesRetention   *model.RetentionPolicyEntry // store-neutral retention (nil = indefinite)
-	TimeseriesDedup       *model.DedupPolicyEntry     // store-neutral dedup policy (nil = none)
+	// RecordRetention is the DELIVERY-side row retention policy from
+	// (spec.record).retention (nil = indefinite). It is deliberately not on a
+	// transformation: a pure typed conversion has no lifetime.
+	RecordRetention *model.RetentionPolicyEntry
+	// Transformations declared on this message, from (spec.transformation).
+	Transformations []model.TransformationEntry
+	// timeseries_type is the generator-internal compile target a transformation
+	// emits. Store-neutral: dedup is semantic intent, not backend DDL.
+	TimeseriesType        bool                    // true if message has (spec.timeseries_type)
+	TimeseriesTableName   string                  // table name (or snake_case of message name)
+	TimeseriesTableSource string                  // source message FQN
+	TimeseriesDedup       *model.DedupPolicyEntry // store-neutral dedup policy (nil = none)
 	// Durable service_store metadata
 	ServiceStore       bool
 	ServiceStoreName   string
@@ -91,9 +94,12 @@ func CollectRegistryTypes(allFiles []model.ProtoFile) []RegistryTypeInfo {
 				if ann, ok := msg.Annotations["record_owner"]; ok && ann.StringValue != "" {
 					rti.RecordOwner = ann.StringValue
 				}
-				// Projection annotations
-				if ann, ok := msg.Annotations["timeseries_projection"]; ok {
-					rti.TimeseriesProjections = ann.TimeseriesProjectionEntries
+				if ann, ok := msg.Annotations["record_retention"]; ok && ann.RecordRetention != nil {
+					rti.RecordRetention = ann.RecordRetention
+				}
+				// Transformation annotations
+				if ann, ok := msg.Annotations["transformation"]; ok {
+					rti.Transformations = ann.TransformationEntries
 				}
 				// Timeseries table annotations (store-neutral)
 				if _, ok := msg.Annotations["timeseries_type"]; ok {
@@ -103,9 +109,6 @@ func CollectRegistryTypes(allFiles []model.ProtoFile) []RegistryTypeInfo {
 					}
 					if ann, ok := msg.Annotations["timeseries_table_source"]; ok && ann.StringValue != "" {
 						rti.TimeseriesTableSource = ann.StringValue
-					}
-					if ann, ok := msg.Annotations["timeseries_retention"]; ok && ann.TimeseriesRetention != nil {
-						rti.TimeseriesRetention = ann.TimeseriesRetention
 					}
 					if ann, ok := msg.Annotations["timeseries_dedup"]; ok && ann.TimeseriesDedup != nil {
 						rti.TimeseriesDedup = ann.TimeseriesDedup

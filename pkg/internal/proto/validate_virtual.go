@@ -80,9 +80,13 @@ func ValidateVirtualImports(inputDir string) error {
 	return nil
 }
 
-// ValidateRecordLinkage enforces the core record/event invariant:
-//   - a message with a projection (timeseries_projection) must
-//     itself be a record (spec.record) — projections are offshoots of a record.
+// ValidateRecordLinkage enforces the core event invariant:
+//   - an event/record must declare at least one producer surface (c2s or s2s).
+//
+// It deliberately does NOT require a transformation's source to be a record. A
+// (spec.transformation) is a pure typed conversion A -> B; requiring a record
+// would make every transformation drag the eventbus-driven store path in with
+// it, which is exactly the coupling the transformation/delivery split cuts.
 //
 // This is checked at the message level, so it holds regardless of how the proto
 // set is scoped. (A complementary "a record/projection must have its hosting
@@ -104,13 +108,6 @@ func ValidateRecordLinkage(inputDir string) error {
 			continue
 		}
 		for _, msg := range fd.Messages {
-			_, isRecord := msg.Annotations["record"]
-			_, hasTsProj := msg.Annotations["timeseries_projection"]
-			if hasTsProj && !isRecord {
-				errors = append(errors, fmt.Sprintf(
-					"%s: message %s declares a projection but is not a spec.record (projections are offshoots of a record)",
-					relPath, msg.Name))
-			}
 			// An event/record must declare at least one producer surface (c2s or
 			// s2s) — the producer surface is declared, never defaulted. An
 			// internal-only event sets only s2s.

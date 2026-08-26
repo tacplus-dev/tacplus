@@ -176,45 +176,45 @@ type DedupPolicyEntry struct {
 	VersionField string   // winning-row selector under DedupLatestByVersion
 }
 
-// TimeseriesProjectionFieldEntry represents a single field in a timeseries projection.
-type TimeseriesProjectionFieldEntry struct {
+// TransformationFieldEntry represents a single field in a transformation.
+type TransformationFieldEntry struct {
 	Source          string                    // source field path
-	As              string                    // rename in record (defaults to last segment of source)
+	As              string                    // rename in derived type (defaults to last segment of source)
 	OrderKey        int32                     // store-neutral sort-key position (0 = not a sort key)
 	PartitionKey    bool                      // store-neutral partition role
 	CardinalityHint TimeseriesCardinalityHint // store-neutral distinct-value hint
 }
 
-// TimeseriesProjectionEntry represents a store-neutral timeseries table extracted
-// from an event. Retention/dedup are semantic intent; a downstream materializer
-// renders the concrete backend schema.
-type TimeseriesProjectionEntry struct {
-	Name      string // table/record type name (e.g. "SessionRecord")
-	When      string // oneof variant that triggers this record
-	Fields    []TimeseriesProjectionFieldEntry
-	Retention *RetentionPolicyEntry // store-neutral retention (nil = indefinite)
-	Dedup     *DedupPolicyEntry     // store-neutral dedup policy (nil = none)
+// TransformationEntry represents a pure typed conversion of a source message into
+// a derived row type. Dedup is semantic intent; a downstream materializer renders
+// the concrete backend schema. It carries NO retention — retention is
+// delivery-side state and lives on the record annotation.
+type TransformationEntry struct {
+	Name   string // derived row type name (e.g. "SessionRecord")
+	When   string // oneof variant that triggers this row
+	Fields []TransformationFieldEntry
+	Dedup  *DedupPolicyEntry // store-neutral dedup policy (nil = none)
 }
 
 // AnnotationValue represents a field annotation value
 type AnnotationValue struct {
-	Type                        AnnotationType
-	BoolValue                   bool
-	EnumValue                   string // e.g., "IP_ADDR_TYPE_IP_V4"
-	IntValue                    int64  // e.g., 10 for min_length
-	StringValue                 string
-	FloatValue                  float64
-	NumericConstraint           *NumericConstraint
-	FloatConstraint             *FloatConstraint
-	IdentitySpiffeResource      *IdentitySpiffeResourceValue // For identity_spiffe_resource annotations
-	StringSliceValue            []string                     // For repeated string annotations (e.g., view_sources)
-	HostValue                   *HostValue                   // For default_host annotations on host.Host fields
-	SubscriptionEntries         []SubscriptionEntry          // For subscribe annotations on service_state messages
-	EventPublishEntries         []EventBusBindingEntry       // For event_publish annotations
-	EventWatchEntries           []EventBusBindingEntry       // For event_watch annotations
-	TimeseriesProjectionEntries []TimeseriesProjectionEntry  // For timeseries_projection annotations
-	TimeseriesRetention         *RetentionPolicyEntry        // For timeseries_type retention (store-neutral)
-	TimeseriesDedup             *DedupPolicyEntry            // For timeseries_type dedup (store-neutral)
+	Type                   AnnotationType
+	BoolValue              bool
+	EnumValue              string // e.g., "IP_ADDR_TYPE_IP_V4"
+	IntValue               int64  // e.g., 10 for min_length
+	StringValue            string
+	FloatValue             float64
+	NumericConstraint      *NumericConstraint
+	FloatConstraint        *FloatConstraint
+	IdentitySpiffeResource *IdentitySpiffeResourceValue // For identity_spiffe_resource annotations
+	StringSliceValue       []string                     // For repeated string annotations (e.g., view_sources)
+	HostValue              *HostValue                   // For default_host annotations on host.Host fields
+	SubscriptionEntries    []SubscriptionEntry          // For subscribe annotations on service_state messages
+	EventPublishEntries    []EventBusBindingEntry       // For event_publish annotations
+	EventWatchEntries      []EventBusBindingEntry       // For event_watch annotations
+	TransformationEntries  []TransformationEntry        // For transformation annotations
+	RecordRetention        *RetentionPolicyEntry        // For (spec.record).retention (store-neutral)
+	TimeseriesDedup        *DedupPolicyEntry            // For timeseries_type dedup (store-neutral)
 }
 
 // Field represents a field in a message

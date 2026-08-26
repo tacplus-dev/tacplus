@@ -1695,6 +1695,16 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 					StringValue: val.GetOwner(),
 				}
 			}
+			// retention is DELIVERY-side state: it belongs to the declaration that
+			// says this message is stored and delivered, never to a transformation
+			// (a pure typed conversion has no lifetime).
+			if r := retentionPolicyEntry(val.GetRetention()); r != nil {
+				annotations["record_retention"] = model.AnnotationValue{
+					Type:            model.AnnotationTypeBool,
+					BoolValue:       true,
+					RecordRetention: r,
+				}
+			}
 		}
 	}
 
@@ -1742,22 +1752,22 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 		}
 	}
 
-	// timeseries_projection: declares store-neutral timeseries tables extracted
-	// from this event. Retention/dedup are semantic intent; a downstream
-	// materializer renders the concrete backend schema.
-	if proto.HasExtension(opts, spec.E_TimeseriesProjection) {
-		vals := proto.GetExtension(opts, spec.E_TimeseriesProjection).([]*spec.TimeseriesProjection)
+	// transformation: declares pure typed conversions of this message into derived
+	// row types. Dedup/cardinality_hint are semantic intent; a downstream
+	// materializer renders the concrete backend schema. No delivery state here —
+	// retention lives on (spec.record).retention.
+	if proto.HasExtension(opts, spec.E_Transformation) {
+		vals := proto.GetExtension(opts, spec.E_Transformation).([]*spec.Transformation)
 		if len(vals) > 0 {
-			entries := make([]model.TimeseriesProjectionEntry, 0, len(vals))
+			entries := make([]model.TransformationEntry, 0, len(vals))
 			for _, tp := range vals {
-				entry := model.TimeseriesProjectionEntry{
-					Name:      tp.GetName(),
-					When:      tp.GetWhen(),
-					Retention: retentionPolicyEntry(tp.GetRetention()),
-					Dedup:     dedupPolicyEntry(tp.GetDedup()),
+				entry := model.TransformationEntry{
+					Name:  tp.GetName(),
+					When:  tp.GetWhen(),
+					Dedup: dedupPolicyEntry(tp.GetDedup()),
 				}
 				for _, f := range tp.GetField() {
-					entry.Fields = append(entry.Fields, model.TimeseriesProjectionFieldEntry{
+					entry.Fields = append(entry.Fields, model.TransformationFieldEntry{
 						Source:          f.GetSource(),
 						As:              f.GetAs(),
 						OrderKey:        f.GetOrderKey(),
@@ -1767,10 +1777,10 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 				}
 				entries = append(entries, entry)
 			}
-			annotations["timeseries_projection"] = model.AnnotationValue{
-				Type:                        model.AnnotationTypeBool,
-				BoolValue:                   true,
-				TimeseriesProjectionEntries: entries,
+			annotations["transformation"] = model.AnnotationValue{
+				Type:                  model.AnnotationTypeBool,
+				BoolValue:             true,
+				TransformationEntries: entries,
 			}
 		}
 	}
@@ -1788,13 +1798,6 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 				annotations["timeseries_table_name"] = model.AnnotationValue{
 					Type:        model.AnnotationTypeString,
 					StringValue: val.GetName(),
-				}
-			}
-			if r := retentionPolicyEntry(val.GetRetention()); r != nil {
-				annotations["timeseries_retention"] = model.AnnotationValue{
-					Type:                    model.AnnotationTypeBool,
-					BoolValue:               true,
-					TimeseriesRetention:     r,
 				}
 			}
 			if d := dedupPolicyEntry(val.GetDedup()); d != nil {

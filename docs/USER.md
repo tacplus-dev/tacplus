@@ -883,8 +883,8 @@ The authoritative, exhaustive contract is in
 | Annotation | Meaning |
 |------------|---------|
 | `(spec.event) = {c2s?, s2s?}` | eventbus topic + publish RPC (at least one producer surface required) |
-| `(spec.record) = {key, owner, c2s?, s2s?}` | an `event` that is also stored in `record_store` and is projectable — `key` is the id field, `owner` the ownership field |
-| `(spec.timeseries_projection) = {…}` | derive a timeseries row from this record (requires `record`) → timeseries store |
+| `(spec.record) = {key, owner, c2s?, s2s?, retention?}` | **delivery**: an `event` that is also stored in `record_store` and is projectable — `key` is the id field, `owner` the ownership field, `retention` the store-neutral row retention policy (`{timestamp_field, duration_seconds}`; required by stratum for every record it stores) |
+| `(spec.transformation) = {…}` | **transformation**: a pure typed conversion of this message into a derived row type. Needs no `record`, no topic and no subscription, and carries no retention — declaring a transformation and declaring delivery are independent |
 
 **Field-level (on a `record` message's fields):**
 

@@ -308,3 +308,34 @@ message Address {
     le: 180.0
   }];
 }
+
+// ============================================================================
+// PAIRED CONTROL (transformation half) — BIG GOAL 3, PLAN.md acceptance item 3
+// ============================================================================
+//
+// FixtureProbe declares a TRANSFORMATION and nothing else. It is not a
+// (spec.record), it is not a (spec.event), no EventBus topic carries it, no
+// service subscribes to it, and no store hosts it. It still generates: the pure
+// typed conversion FixtureProbe -> FixtureProbeRow is emitted with its column
+// annotations and projection_source mappings.
+//
+// This is the half of the split that used to be impossible. Before item 3 the
+// only way to declare a transformation was the retired projection annotation,
+// which required (spec.record) — so asking for a conversion dragged the whole
+// eventbus-driven store path in with it. The other half (delivery with no
+// transformation) is FixtureAudit in the consumer-contract fixture set.
+//
+// Note what is ABSENT: no retention. A transformation is a pure function and has
+// no lifetime; retention is delivery-side state and lives on (spec.record).
+message FixtureProbe {
+  option (spec.transformation) = {
+    name: "FixtureProbeRow"
+    field: {source: "probe_id" order_key: 1}
+    field: {source: "observed_at_ms" order_key: 2 partition_key: true}
+    field: {source: "kind" cardinality_hint: CARDINALITY_LOW}
+  };
+
+  string probe_id = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 128];
+  int64 observed_at_ms = 2 [(spec.assert_gt) = 0];
+  string kind = 3 [(spec.assert_max_size) = 64];
+}

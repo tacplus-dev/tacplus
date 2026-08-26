@@ -303,8 +303,8 @@ message TypeInfo {
   // record_owner from (spec.record).owner. Event owner/identity field.
   string record_owner = 17;
   reserved 18;  // graph_projections — graph store support removed 2026-08-25
-  // timeseries_projections from (spec.timeseries_projection). Tables to generate.
-  repeated TimeseriesProjectionInfo timeseries_projections = 19;
+  // transformations from (spec.transformation). Derived row types to generate.
+  repeated TransformationInfo transformations = 19;
 
   // True when this message is annotated as a durable service_store value.
   bool service_store = 20;
@@ -313,10 +313,9 @@ message TypeInfo {
   // Hosting service labels from (spec.service_store).label.
   repeated string service_store_label = 22;
 
-  // Store-neutral retention policy for a standalone (spec.timeseries_type) table,
-  // from its .retention. Unset = indefinite. (Source-derived projections carry
-  // their own retention on TimeseriesProjectionInfo instead.)
-  RetentionPolicyInfo timeseries_retention = 23;
+  reserved 23;  // timeseries_retention — retention is delivery-side state and
+                // now lives on record_retention (from (spec.record).retention),
+                // never on a transformation or its compile target. 2026-08-25.
   // Store-neutral dedup policy for a standalone (spec.timeseries_type) table, from
   // its .dedup. Unset = append-only (no dedup) — the standalone-table default.
   DedupPolicyInfo timeseries_dedup = 24;
@@ -325,10 +324,16 @@ message TypeInfo {
   // default transform applied to this message's eligible fields, overridden per
   // field by (spec.redact). UNSPECIFIED = no message-level default.
   spec.RedactMode data_entitlement_default = 25;
+
+  // record_retention from (spec.record).retention: the store-neutral row
+  // retention policy for this record's stored rows. Unset = indefinite.
+  // Retention is DELIVERY-side state — a transformation is a pure conversion and
+  // carries none.
+  RetentionPolicyInfo record_retention = 26;
 }
 
-// TimeseriesProjectionFieldInfo describes a single field in a timeseries projection.
-message TimeseriesProjectionFieldInfo {
+// TransformationFieldInfo describes a single field in a transformation.
+message TransformationFieldInfo {
   string source = 1;
   string as = 2;
   int32 order_key = 3;
@@ -355,15 +360,16 @@ message DedupPolicyInfo {
   string version_field = 3;        // winning-row selector under DEDUP_LATEST_BY_VERSION
 }
 
-// TimeseriesProjectionInfo describes a timeseries table extracted from an event.
-// Store-neutral: retention/dedup are semantic intent, not backend DDL.
-message TimeseriesProjectionInfo {
+// TransformationInfo describes a derived row type produced by a pure typed
+// conversion of a source message. Store-neutral: dedup and cardinality_hint are
+// semantic intent, not backend DDL. It carries NO retention — retention is
+// delivery-side state and lives on TypeInfo.record_retention.
+message TransformationInfo {
   string name = 1;
-  reserved 2, 3;
-  reserved "engine", "ttl";
+  reserved 2, 3, 6;
+  reserved "engine", "ttl", "retention";
   string when = 4;
-  repeated TimeseriesProjectionFieldInfo field = 5;
-  RetentionPolicyInfo retention = 6;
+  repeated TransformationFieldInfo field = 5;
   DedupPolicyInfo dedup = 7;
 }
 

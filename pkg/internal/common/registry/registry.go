@@ -648,25 +648,26 @@ func BuildTypeInfoProto(t llmdesc.RegistryTypeInfo) *spec.TypeInfo {
 		SchemaJson:        t.SchemaJSON,
 		RecordKey:         t.RecordKey,
 		RecordOwner:       t.RecordOwner,
+		RecordRetention:   retentionPolicyProto(t.RecordRetention),
 		ServiceStore:      t.ServiceStore,
 		ServiceStoreName:  t.ServiceStoreName,
 		ServiceStoreLabel: t.ServiceStoreLabels,
 
 		DataEntitlementDefault: entitlementModeToProto(t.Descriptor.DataEntitlementDefault),
 	}
-	// Timeseries projections — the registry carries store-neutral semantic intent
-	// (retention/dedup/cardinality_hint). A downstream materializer renders the
-	// concrete backend schema (engine/TTL/merge). Where the annotation omits dedup,
-	// defaultProjectionDedup preserves the legacy default losslessly.
-	for _, tp := range t.TimeseriesProjections {
-		tpInfo := &spec.TimeseriesProjectionInfo{
-			Name:      tp.Name,
-			When:      tp.When,
-			Retention: retentionPolicyProto(tp.Retention),
-			Dedup:     defaultProjectionDedup(tp),
+	// Transformations — the registry carries store-neutral semantic intent
+	// (dedup/cardinality_hint). A downstream materializer renders the concrete
+	// backend schema (engine/merge). Where the annotation omits dedup,
+	// defaultTransformationDedup preserves the legacy default losslessly.
+	// Retention is NOT here: it is delivery-side state, carried on record_retention.
+	for _, tp := range t.Transformations {
+		tpInfo := &spec.TransformationInfo{
+			Name:  tp.Name,
+			When:  tp.When,
+			Dedup: defaultTransformationDedup(tp),
 		}
 		for _, f := range tp.Fields {
-			tpInfo.Field = append(tpInfo.Field, &spec.TimeseriesProjectionFieldInfo{
+			tpInfo.Field = append(tpInfo.Field, &spec.TransformationFieldInfo{
 				Source:          f.Source,
 				As:              f.As,
 				OrderKey:        f.OrderKey,
@@ -674,7 +675,7 @@ func BuildTypeInfoProto(t llmdesc.RegistryTypeInfo) *spec.TypeInfo {
 				CardinalityHint: spec.CardinalityHint(f.CardinalityHint),
 			})
 		}
-		ti.TimeseriesProjections = append(ti.TimeseriesProjections, tpInfo)
+		ti.Transformations = append(ti.Transformations, tpInfo)
 	}
 	for _, field := range t.Descriptor.Fields {
 		ti.Fields = append(ti.Fields, buildFieldInfoProto(field))
@@ -693,10 +694,9 @@ func BuildTypeInfoProto(t llmdesc.RegistryTypeInfo) *spec.TypeInfo {
 		}
 		ti.TimeseriesTableName = tableName
 		ti.TimeseriesTableSource = t.TimeseriesTableSource
-		// Standalone-table retention/dedup are store-neutral intent declared on
-		// (spec.timeseries_type); a source-derived projection carries its own on
-		// TimeseriesProjectionInfo instead. Unset stays nil (indefinite / append-only).
-		ti.TimeseriesRetention = retentionPolicyProto(t.TimeseriesRetention)
+		// Table dedup is store-neutral intent declared on (spec.timeseries_type).
+		// Unset stays nil (append-only). Retention is never here — it is
+		// delivery-side state on record_retention.
 		ti.TimeseriesDedup = dedupPolicyProto(t.TimeseriesDedup)
 	}
 
@@ -715,25 +715,25 @@ func retentionPolicyProto(r *model.RetentionPolicyEntry) *spec.RetentionPolicyIn
 	}
 }
 
-// defaultProjectionDedup resolves the store-neutral dedup policy for a timeseries
-// projection, preserving the legacy default losslessly. A projection always
-// derives from a source event's at-least-once delivery, so when the annotation
+// defaultTransformationDedup resolves the store-neutral dedup policy for a
+// transformation, preserving the legacy default losslessly. A derived row type is
+// materialized from a source delivered at least once, so when the annotation
 // omits dedup we default to keeping the latest row per key by timestamp_ms — the
 // store-neutral "replace by latest timestamp" dedup default.
-// The key fields are the projection's sort-key (order_key) fields, in order.
-func defaultProjectionDedup(tp model.TimeseriesProjectionEntry) *spec.DedupPolicyInfo {
+// The key fields are the transformation's sort-key (order_key) fields, in order.
+func defaultTransformationDedup(tp model.TransformationEntry) *spec.DedupPolicyInfo {
 	if tp.Dedup != nil {
 		return dedupPolicyProto(tp.Dedup)
 	}
 	return &spec.DedupPolicyInfo{
 		Strategy:     spec.DedupStrategy_DEDUP_LATEST_BY_VERSION,
-		KeyFields:    projectionOrderKeyFields(tp),
+		KeyFields:    transformationOrderKeyFields(tp),
 		VersionField: "timestamp_ms",
 	}
 }
 
 // dedupPolicyProto converts a model dedup entry into its registry proto form,
-// returning nil when dedup is unset (append-only). Unlike a projection, a
+// returning nil when dedup is unset (append-only). Unlike a transformation, a
 // standalone (spec.timeseries_type) table gets NO implicit latest-by-version
 // default — an unset dedup stays append-only.
 func dedupPolicyProto(d *model.DedupPolicyEntry) *spec.DedupPolicyInfo {
@@ -747,11 +747,11 @@ func dedupPolicyProto(d *model.DedupPolicyEntry) *spec.DedupPolicyInfo {
 	}
 }
 
-// projectionOrderKeyFields returns the projection's sort-key column names ordered
-// by their order_key position — the logical row identity used as the default
-// dedup key. The column name is the field's `as` override or the last segment of
-// its source path.
-func projectionOrderKeyFields(tp model.TimeseriesProjectionEntry) []string {
+// transformationOrderKeyFields returns the transformation's sort-key column names
+// ordered by their order_key position — the logical row identity used as the
+// default dedup key. The column name is the field's `as` override or the last
+// segment of its source path.
+func transformationOrderKeyFields(tp model.TransformationEntry) []string {
 	type oc struct {
 		name string
 		pos  int32

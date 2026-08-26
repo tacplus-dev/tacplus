@@ -331,3 +331,41 @@ func TestResolveClientSurfacesWithoutDeclaredRefs(t *testing.T) {
 		t.Fatalf("W2S surface without proto refs returned %d services, want nil", len(got))
 	}
 }
+
+// A trait-hosted C2S surface is grouped onto its host the same way a hosted
+// S2S vservice is: both carry the host in HostLabel, so filterByHostTag needs
+// no C2S-specific branch. The host's server build must pick up the trait's
+// client-facing RPCs, or the trait declares a surface nothing serves.
+func TestResolveServerServicesIncludesTraitHostedC2S(t *testing.T) {
+	services := []ServiceInfo{
+		{ProtoFile: "services/stratum.proto", PackageName: "stratum", ServiceName: "RecordStore", GrpcName: "stratum", IsGrpc: true, IsS2S: true},
+		{ProtoFile: "vservices/query.proto", PackageName: "taskquery", ServiceName: "QueryApi", GrpcName: "taskquery", IsGrpc: true, IsC2S: true, HostLabel: "stratum"},
+		{ProtoFile: "vservices/other.proto", PackageName: "othertrait", ServiceName: "OtherApi", GrpcName: "othertrait", IsGrpc: true, IsC2S: true, HostLabel: "elsewhere"},
+	}
+	got := ResolveServerServices(&tactype.Config{Language: "rust", SelfPackage: "stratum"}, services)
+
+	var names []string
+	for _, svc := range got {
+		names = append(names, svc.ServiceName)
+	}
+	want := []string{"RecordStore", "QueryApi"}
+	if len(names) != len(want) {
+		t.Fatalf("server services = %v, want %v", names, want)
+	}
+	for i, n := range want {
+		if names[i] != n {
+			t.Fatalf("server services = %v, want %v", names, want)
+		}
+	}
+}
+
+// The host label selects the host: a C2S surface labelled for another service
+// must not land in this service's server build.
+func TestResolveServerServicesExcludesOtherHostsC2S(t *testing.T) {
+	services := []ServiceInfo{
+		{ProtoFile: "vservices/query.proto", PackageName: "taskquery", ServiceName: "QueryApi", GrpcName: "taskquery", IsGrpc: true, IsC2S: true, HostLabel: "stratum"},
+	}
+	if got := ResolveServerServices(&tactype.Config{Language: "rust", SelfPackage: "elsewhere"}, services); len(got) != 0 {
+		t.Fatalf("got %d server services, want 0", len(got))
+	}
+}

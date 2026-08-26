@@ -145,7 +145,7 @@ type ServiceDescriptor struct {
 	TokenMinterProxy  bool     // token_minter {proxy: true}: the client-reachable (C2S) mint front; bare {} is the authoritative S2S minter
 	Gateway           bool     // derived: IsC2S && !AuthDisabled
 	EventLabel        string   // value from event_label annotation (routing label for event services)
-	HostLabel         string   // value from service_s2s {label: "..."} — the package name of the service that hosts this vservice
+	HostLabel         string   // value from service_s2s/service_c2s {label: "..."} — the package name of the service that hosts this vservice or trait surface
 	AuthDisabled      bool     // C2S: no token required
 	AuthServices      []string // S2S: service identities allowed to call (service-level default)
 	AuthEntitledUsers bool     // C2S: users with matching entitlements can call
@@ -818,6 +818,11 @@ func (p *DescriptorParser) parseServiceOptions(sd protoreflect.ServiceDescriptor
 			svc.GrpcName = pkg
 			svc.GrpcInstances = []string{pkg}
 			svc.AuthEntitledUsers = val.GetAuthEntitledUsers()
+			// non-empty for a trait-hosted C2S surface: names the physical
+			// service that serves these RPCs. The audience the gateway checks
+			// is the file's trait name, not this label — see
+			// ValidateC2SHostLabels.
+			svc.HostLabel = val.GetLabel()
 			// Gateway: all C2S services are gateway-exposed.
 			svc.Gateway = true
 		}

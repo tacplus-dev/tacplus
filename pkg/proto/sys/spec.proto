@@ -830,6 +830,17 @@ message ServiceC2SAnnotation {
   // checks are required for all RPCs in this service.
   bool auth_entitled_users = 3;
 
+  // label is the routing label for the physical service that hosts this C2S
+  // interface, the twin of (spec.service_s2s).label. A trait declares its
+  // client-facing surface in its own proto and names the implementor here, so
+  // the surface is not locked to the implementor's identity.
+  //
+  // The label names the HOST (whom the gateway dials). The AUDIENCE the
+  // gateway checks the caller's token against is the file's (spec.trait).name,
+  // not this label: the audience is the contract, so a second implementor of
+  // the same trait needs no client change. A label no loaded service serves
+  // fails generation, and so does a label on a file that declares no trait.
+  string label = 4;
 }
 
 // ServiceC2DAnnotation declares a client-to-daemon gRPC service.

@@ -167,6 +167,22 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 			continue
 		}
 
+		// Resolved once per service: which physical service the gateway dials,
+		// and which audience it entitles callers against. The two differ only
+		// for a trait-hosted C2S surface.
+		traitName := ""
+		if svc.HostLabel != "" {
+			hostFd, err := descriptorParser.GetFileDescriptor(svc.ProtoFile)
+			if err != nil {
+				return fmt.Errorf("resolving trait identity for host-labelled service %s: %w", svc.ServiceName, err)
+			}
+			traitName = hostFd.VServiceName
+		}
+		serviceID, entitlementService, err := routeIdentityForService(svc, traitName)
+		if err != nil {
+			return err
+		}
+
 		for _, method := range targetService.Methods {
 			if method.HttpPath == "" {
 				continue
@@ -182,13 +198,11 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 			if err != nil {
 				return fmt.Errorf("resolving REST route capability metadata for %s.%s/%s: %w", svc.PackageName, svc.ServiceName, method.Name, err)
 			}
-			serviceID := svc.PackageName
-
 			routes = append(routes, routeEntry{
 				HttpPath:           method.HttpPath,
 				GrpcPath:           grpcPath,
 				ServiceID:          serviceID,
-				EntitlementService: "None",
+				EntitlementService: entitlementService,
 				HttpMethodsLiteral: methodsLiteral,
 				AuthPolicy:         authPolicy,
 				EntitlementScopes:  scopesLiteral,
@@ -203,7 +217,7 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 					HttpPath:           method.HttpAliasPath,
 					GrpcPath:           grpcPath,
 					ServiceID:          serviceID,
-					EntitlementService: "None",
+					EntitlementService: entitlementService,
 					HttpMethodsLiteral: methodsLiteral,
 					AuthPolicy:         authPolicy,
 					EntitlementScopes:  scopesLiteral,
@@ -784,4 +798,29 @@ func generateProxyDispatch(config *tactype.Config, servicesInfo []ServiceInfo, i
 	}
 
 	return nil
+}
+
+// routeIdentityForService resolves the two identities a ROUTES entry carries:
+// ServiceID, the physical service the gateway dials, and EntitlementService,
+// the audience it checks the caller's token against.
+//
+// For an ordinary C2S service the surface, the host and the audience are all
+// the same name, so ServiceID is the proto package and EntitlementService is
+// None (the gateway falls back to the ServiceID's own entitlements).
+//
+// A trait-hosted C2S surface splits them: (spec.service_c2s).label names the
+// implementor that serves the RPCs, while the audience stays the TRAIT name.
+// The audience is the contract, not the concrete service — pinning it to the
+// host would re-couple every client to the implementor, so a second implementor
+// of the same trait would force every client's token to be re-issued. This is
+// the same pair the hosted-vservice topic routes already emit
+// (ServiceID = vs.HostLabel, EntitlementService = vs.Name).
+func routeIdentityForService(svc ServiceInfo, traitName string) (serviceID, entitlementService string, err error) {
+	if svc.HostLabel == "" {
+		return svc.PackageName, "None", nil
+	}
+	if traitName == "" {
+		return "", "", fmt.Errorf("service %s.%s declares (spec.service_c2s).label %q but its proto declares no (spec.trait).name to entitle callers against", svc.PackageName, svc.ServiceName, svc.HostLabel)
+	}
+	return svc.HostLabel, fmt.Sprintf("Some(%q)", traitName), nil
 }

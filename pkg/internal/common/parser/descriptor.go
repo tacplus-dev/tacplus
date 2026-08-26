@@ -771,8 +771,8 @@ func (p *DescriptorParser) parseServiceDescriptor(sd protoreflect.ServiceDescrip
 		}
 
 		// Gateway-exposed event service Publish RPCs.
-		// When a state service has event_tag set, generate convention REST paths
-		// for Publish* RPCs using the tag as the route prefix.
+		// When a state service has event_label set, generate convention REST paths
+		// for Publish* RPCs using the label as the route prefix.
 		if svc.EventLabel != "" && svc.Gateway && strings.HasPrefix(md.Name, "Publish") && len(md.HttpMethods) == 0 {
 			md.HttpMethods = []string{"POST"}
 			md.HttpMethod = "POST"

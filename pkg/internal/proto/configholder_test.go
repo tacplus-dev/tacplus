@@ -404,7 +404,7 @@ message Config {
 
 // MS-10 (sibling scanners): the RPC-surface option scanners had the same
 // unanchored comment-false-match — a commented (spec.service_c2s) / _c2d /
-// event_tag inside a service block would misclassify the surface. Pin that the
+// event_label inside a service block would misclassify the surface. Pin that the
 // anchored patterns ignore a commented option but still match an indented,
 // active one.
 func TestRpcSurfaceScanners_IgnoreCommentedOptions(t *testing.T) {

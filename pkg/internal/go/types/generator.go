@@ -139,7 +139,7 @@ func Generate(config *tactype.Config) error {
 
 	// Generate generated/*.proto from grpc_config annotations.
 	// Must happen before any descriptor parser runs (service protos may import it).
-	_, svcRPCs, _, err := proto.ScanAndGenerateConfigHolder(config.InputDir, tempProtoDir)
+	_, svcRPCs, vsEntries, err := proto.ScanAndGenerateConfigHolder(config.InputDir, tempProtoDir)
 	if err != nil {
 		return fmt.Errorf("failed to generate generated/*.proto: %w", err)
 	}
@@ -721,7 +721,7 @@ func Generate(config *tactype.Config) error {
 
 	// Write library templates
 	zap.L().Info("Writing library templates")
-	if err := writeLibTemplates(config); err != nil {
+	if err := writeLibTemplates(config, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries)); err != nil {
 		return fmt.Errorf("failed to write library templates: %w", err)
 	}
 

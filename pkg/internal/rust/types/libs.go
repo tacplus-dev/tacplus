@@ -39,7 +39,7 @@ func toProstRPCEnumName(enumName string) string {
 
 // writeLibTemplates processes the embedded Rust library templates and writes them
 // to the output directory at {langDir}/chassis/
-func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry) error {
+func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, acceptedAudiences []string) error {
 	langDir := config.LangDir()
 	sysBaseDir := filepath.Join(langDir, "chassis")
 
@@ -153,6 +153,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry) 
 		HasClientTokenExchanger     bool
 		ServiceRPCs                 []serviceRPCInfo // per-service RPC enum info for authorizer
 		ServiceLabel                string           // service identity baked into Authorizer
+		AcceptedAudiences           []string         // every `aud` the Authorizer accepts: own label + hosted traits
 		Spiffe                      commonspiffe.TemplateGrammar
 		KeepaliveTimeSecs           int
 		KeepaliveTimeoutSecs        int
@@ -174,6 +175,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry) 
 		HasClientTokenExchanger:     hasClientTokenExchanger,
 		ServiceRPCs:                 svcRPCInfos,
 		ServiceLabel:                config.ServiceLabel(),
+		AcceptedAudiences:           acceptedAudiences,
 		Spiffe:                      commonspiffe.TemplateData(),
 		KeepaliveTimeSecs:           keepaliveconst.TimeSecs,
 		KeepaliveTimeoutSecs:        keepaliveconst.TimeoutSecs,

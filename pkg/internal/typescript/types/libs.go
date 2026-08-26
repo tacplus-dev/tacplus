@@ -29,7 +29,7 @@ import (
 //     have no S2S identity and cannot call the authoritative mint directly; they
 //     mint through the C2S proxy (or the authoritative minter as a fallback when
 //     no proxy is declared). Mirrors rust's libs.go two-exchanger computation.
-func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExchangerInfo) error {
+func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExchangerInfo, acceptedAudiences []string) error {
 	langDir := config.LangDir()
 	sysBaseDir := filepath.Join(langDir, "chassis")
 
@@ -92,7 +92,8 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 		TokenExchangerPackage string // proto package name for token mint service
 		MintServiceName       string // proto service name, e.g. "Mint"
 		DefaultAudience       string
-		ServiceLabel          string // service identity baked into Authorizer
+		ServiceLabel          string   // service identity baked into Authorizer
+		AcceptedAudiences     []string // every `aud` the Authorizer accepts: own label + hosted traits
 		BufbuildProtobuf      string // @bufbuild/protobuf version from dependencies.yaml
 		ClientOnly            bool
 		// Client-reachable (C2S) mint — used by client_im.
@@ -111,6 +112,7 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 		MintServiceName:             mintServiceName,
 		DefaultAudience:             defaultAudience,
 		ServiceLabel:                config.ServiceLabel(),
+		AcceptedAudiences:           acceptedAudiences,
 		BufbuildProtobuf:            bufbuildVersion,
 		ClientOnly:                  true,
 		HasClientTokenExchanger:     hasClientTokenExchanger,

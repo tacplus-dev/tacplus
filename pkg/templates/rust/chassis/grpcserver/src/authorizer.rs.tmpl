@@ -152,6 +152,12 @@ pub struct Authorizer {
 /// The service identity baked in at code generation time.
 const SERVICE_NAME: &str = "{{.ServiceLabel}}";
 
+/// Every token audience this service accepts: its own name plus the name of
+/// each trait it hosts. A trait's audience is the trait name, not the host's,
+/// so a host that implements a trait must accept the trait audience or it
+/// rejects calls the caller authenticated correctly.
+const ACCEPTED_AUDIENCES: &[&str] = &[{{range $i, $a := .AcceptedAudiences}}{{if $i}}, {{end}}"{{$a}}"{{end}}];
+
 impl Authorizer {
     /// Creates a new Authorizer and starts a background JWK watch stream.
     ///
@@ -326,11 +332,11 @@ impl Authorizer {
             )));
         }
 
-        // Check aud matches service name
+        // Check aud is one this service accepts
         let aud = tw.audience().unwrap_or("");
-        if aud != SERVICE_NAME {
+        if !ACCEPTED_AUDIENCES.contains(&aud) {
             return Err(AuthorizerError::permission_denied(format!(
-                "token audience \"{}\" does not match service \"{}\"",
+                "token audience \"{}\" is not accepted by service \"{}\"",
                 aud, SERVICE_NAME
             )));
         }

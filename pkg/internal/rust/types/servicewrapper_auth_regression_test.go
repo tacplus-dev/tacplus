@@ -82,7 +82,7 @@ func TestRustAuthorizerCheckCallerAtOrBelowVerifiesToken(t *testing.T) {
 		"unknown signing key",
 		"refresh tokens cannot be used for API access",
 		`token_use == "bootstrap" || token_use == "locality" || token_use == "external"`,
-		"aud != SERVICE_NAME",
+		"!ACCEPTED_AUDIENCES.contains(&aud)",
 	} {
 		if !strings.Contains(vbBody, want) {
 			t.Fatalf("verify_bearer missing verification step %q:\n%s", want, vbBody)

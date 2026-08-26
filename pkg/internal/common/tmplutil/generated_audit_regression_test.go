@@ -494,7 +494,7 @@ func TestGeneratedAuthorizersPreserveAuthStatusCodes(t *testing.T) {
 				`throw ProtoException.newErrUnauthorized(null,"invalid token: " + e.getMessage());`,
 				`throw ProtoException.newErrUnauthorized(null,"token verification failed: " + e.getMessage());`,
 				`throw ProtoException.newErrPermissionDenied(null,`,
-				`"token audience \"" + aud + "\" does not match service \"" + SERVICE_NAME + "\"");`,
+				`"token audience \"" + aud + "\" is not accepted by service \"" + SERVICE_NAME + "\"");`,
 				`throw ProtoException.newErrPermissionDenied(null, "token missing service_entitlements claim");`,
 			},
 			forbid: []string{
@@ -505,7 +505,7 @@ func TestGeneratedAuthorizersPreserveAuthStatusCodes(t *testing.T) {
 				`throw ProtoException.newErrPermissionDenied(null,"token verification failed: " + e.getMessage());`,
 				`throw ProtoException.newErrPermissionDenied(null, "token verification failed: " + e.getMessage());`,
 				`throw ProtoException.newErrUnauthorized(null,
-                    "token audience \"" + aud + "\" does not match service \"" + SERVICE_NAME + "\"");`,
+                    "token audience \"" + aud + "\" is not accepted by service \"" + SERVICE_NAME + "\"");`,
 			},
 		},
 		{
@@ -517,7 +517,7 @@ func TestGeneratedAuthorizersPreserveAuthStatusCodes(t *testing.T) {
 				`raise unauthenticated(f"invalid token: {e}")`,
 				`raise unauthenticated(f"token verification failed: {e}")`,
 				`raise permission_denied(`,
-				`f'token audience "{aud}" does not match service "{self._SERVICE_NAME}"'`,
+				`f'token audience "{aud}" is not accepted by service "{self._SERVICE_NAME}"'`,
 				`raise permission_denied("token missing service_entitlements claim")`,
 			},
 			forbid: []string{
@@ -525,7 +525,7 @@ func TestGeneratedAuthorizersPreserveAuthStatusCodes(t *testing.T) {
 				`raise permission_denied(f"invalid token: {e}")`,
 				`raise permission_denied(f"token verification failed: {e}")`,
 				`raise unauthenticated(
-                f'token audience "{aud}" does not match service "{self._SERVICE_NAME}"'
+                f'token audience "{aud}" is not accepted by service "{self._SERVICE_NAME}"'
             )`,
 			},
 		},
@@ -537,13 +537,13 @@ func TestGeneratedAuthorizersPreserveAuthStatusCodes(t *testing.T) {
 				"return new AuthError(grpc.status.UNAUTHENTICATED, message);",
 				"return new AuthError(grpc.status.PERMISSION_DENIED, message);",
 				"throw AuthError.unauthenticated('missing authorization header');",
-				"throw AuthError.permissionDenied(`token audience \"${aud}\" does not match service \"${Authorizer.SERVICE_NAME}\"`);",
+				"throw AuthError.permissionDenied(`token audience \"${aud}\" is not accepted by service \"${Authorizer.SERVICE_NAME}\"`);",
 				"throw AuthError.permissionDenied('token missing service_entitlements claim');",
 			},
 			forbid: []string{
 				"throw new Error('missing authorization header');",
 				"throw new Error('token missing service_entitlements claim');",
-				"throw AuthError.unauthenticated(`token audience \"${aud}\" does not match service \"${Authorizer.SERVICE_NAME}\"`);",
+				"throw AuthError.unauthenticated(`token audience \"${aud}\" is not accepted by service \"${Authorizer.SERVICE_NAME}\"`);",
 			},
 		},
 	}
@@ -572,4 +572,87 @@ func readTemplateForAuditTest(t *testing.T, root, rel string) string {
 		t.Fatalf("read template %s: %v", rel, err)
 	}
 	return string(b)
+}
+
+// A trait's audience is the trait name, not the name of the host implementing
+// it (query-trait ruling Q2), so a host accepts `aud` iff it is the host's own
+// label OR the name of a trait it hosts. Before this, every generated Authorizer
+// compared `aud` against a single baked-in service name and rejected the trait
+// audience outright — stratum answered a correctly-authenticated `aud=query`
+// call with `token audience "query" does not match service "stratum"`.
+//
+// This pins the membership form in every language: the accepted set must come
+// from .AcceptedAudiences, and no authorizer may go back to testing `aud`
+// against the lone service-name constant.
+func TestGeneratedAuthorizersAcceptTraitAudiences(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "..")
+	tests := []struct {
+		name   string
+		path   string
+		want   []string
+		forbid []string
+	}{
+		{
+			name: "go",
+			path: "pkg/templates/go/chassis/grpcserver/authorizer.go.tmpl",
+			want: []string{
+				"var acceptedAudiences = map[string]struct{}{",
+				"{{- range .AcceptedAudiences}}",
+				"if _, ok := acceptedAudiences[tw.GetAudience()]; !ok {",
+			},
+			forbid: []string{"tw.GetAudience() != serviceName"},
+		},
+		{
+			name: "java",
+			path: "pkg/templates/java/chassis/grpcserver/Authorizer.java.tmpl",
+			want: []string{
+				"static final java.util.List<String> ACCEPTED_AUDIENCES = java.util.List.of({{range $i, $a := .AcceptedAudiences}}",
+				"if (!ACCEPTED_AUDIENCES.contains(aud)) {",
+			},
+			forbid: []string{"if (!SERVICE_NAME.equals(aud)) {"},
+		},
+		{
+			name: "python",
+			path: "pkg/templates/python/chassis/grpcserver/authorizer.py.tmpl",
+			want: []string{
+				`_ACCEPTED_AUDIENCES = frozenset([{{range $i, $a := .AcceptedAudiences}}`,
+				"if aud not in self._ACCEPTED_AUDIENCES:",
+			},
+			forbid: []string{"if aud != self._SERVICE_NAME:"},
+		},
+		{
+			name: "typescript",
+			path: "pkg/templates/typescript/chassis/grpcserver/Authorizer.ts.tmpl",
+			want: []string{
+				"private static readonly ACCEPTED_AUDIENCES: ReadonlySet<string> = new Set([{{range $i, $a := .AcceptedAudiences}}",
+				"if (!Authorizer.ACCEPTED_AUDIENCES.has(aud)) {",
+			},
+			forbid: []string{"if (aud !== Authorizer.SERVICE_NAME) {"},
+		},
+		{
+			name: "rust",
+			path: "pkg/templates/rust/chassis/grpcserver/src/authorizer.rs.tmpl",
+			want: []string{
+				`const ACCEPTED_AUDIENCES: &[&str] = &[{{range $i, $a := .AcceptedAudiences}}`,
+				"if !ACCEPTED_AUDIENCES.contains(&aud) {",
+			},
+			forbid: []string{"if aud != SERVICE_NAME {"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := readTemplateForAuditTest(t, root, tt.path)
+			for _, want := range tt.want {
+				if !strings.Contains(src, want) {
+					t.Fatalf("%s must accept the trait audience set; missing %q", tt.path, want)
+				}
+			}
+			for _, banned := range tt.forbid {
+				if strings.Contains(src, banned) {
+					t.Fatalf("%s must not match aud against a single service name; found %q", tt.path, banned)
+				}
+			}
+		})
+	}
 }

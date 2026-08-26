@@ -23,7 +23,7 @@ import (
 
 // writeLibTemplates processes the embedded Java library templates and writes them
 // to the output directory at {langDir}/wrappers/src/main/java/{packagePath}/
-func writeLibTemplates(config *tactype.Config) error {
+func writeLibTemplates(config *tactype.Config, acceptedAudiences []string) error {
 	langDir := config.LangDir()
 
 	// Package base path as directory structure
@@ -128,7 +128,8 @@ func writeLibTemplates(config *tactype.Config) error {
 		MintServiceName            string // proto service name, e.g. "Mint"
 		DefaultAudience            string
 		AudienceMappings           []audienceMapping
-		ServiceLabel               string // service identity baked into Authorizer
+		ServiceLabel               string   // service identity baked into Authorizer
+		AcceptedAudiences          []string // every `aud` the Authorizer accepts: own label + hosted traits
 		Spiffe                     commonspiffe.TemplateGrammar
 		KeepaliveTimeSecs          int
 		KeepaliveTimeoutSecs       int
@@ -147,6 +148,7 @@ func writeLibTemplates(config *tactype.Config) error {
 		DefaultAudience:            defaultAudience,
 		AudienceMappings:           audienceMappings,
 		ServiceLabel:               config.ServiceLabel(),
+		AcceptedAudiences:          acceptedAudiences,
 		Spiffe:                     commonspiffe.TemplateData(),
 		KeepaliveTimeSecs:          keepaliveconst.TimeSecs,
 		KeepaliveTimeoutSecs:       keepaliveconst.TimeoutSecs,

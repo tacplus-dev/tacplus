@@ -21,7 +21,7 @@ import (
 
 // writeLibTemplates processes the embedded Go library templates and writes them
 // to the output directory at {langDir}/sys/{libname}/
-func writeLibTemplates(config *tactype.Config) error {
+func writeLibTemplates(config *tactype.Config, acceptedAudiences []string) error {
 	langDir := config.LangDir()
 	chassisDir := filepath.Join(langDir, "chassis")
 
@@ -30,7 +30,8 @@ func writeLibTemplates(config *tactype.Config) error {
 	// Template data
 	data := struct {
 		ModuleBasePath            string
-		ServiceLabel              string // service identity baked into Authorizer
+		ServiceLabel              string   // service identity baked into Authorizer
+		AcceptedAudiences         []string // every `aud` the Authorizer accepts: own label + hosted traits
 		Spiffe                    commonspiffe.TemplateGrammar
 		KeepaliveTimeSecs         int
 		KeepaliveTimeoutSecs      int
@@ -38,6 +39,7 @@ func writeLibTemplates(config *tactype.Config) error {
 	}{
 		ModuleBasePath:             config.ModuleBasePath,
 		ServiceLabel:               config.ServiceLabel(),
+		AcceptedAudiences:          acceptedAudiences,
 		Spiffe:                     commonspiffe.TemplateData(),
 		KeepaliveTimeSecs:          keepaliveconst.TimeSecs,
 		KeepaliveTimeoutSecs:       keepaliveconst.TimeoutSecs,

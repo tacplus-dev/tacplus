@@ -406,7 +406,7 @@ func Generate(config *tactype.Config) error {
 
 	// Generate generated/*.proto from grpc_config annotations. Must happen before
 	// proto codegen so accounting_method/services contain the real RPC enums.
-	_, svcRPCs, _, err := proto.ScanAndGenerateConfigHolder(config.InputDir, protoSrcDir)
+	_, svcRPCs, vsEntries, err := proto.ScanAndGenerateConfigHolder(config.InputDir, protoSrcDir)
 	if err != nil {
 		return fmt.Errorf("failed to generate generated/*.proto: %w", err)
 	}
@@ -721,7 +721,7 @@ func Generate(config *tactype.Config) error {
 
 	// Write library templates
 	zap.L().Info("Writing TypeScript library templates")
-	if err := writeLibTemplates(config, mintExchangerInfo, clientMintExchangerInfo); err != nil {
+	if err := writeLibTemplates(config, mintExchangerInfo, clientMintExchangerInfo, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries)); err != nil {
 		return fmt.Errorf("failed to write library templates: %w", err)
 	}
 

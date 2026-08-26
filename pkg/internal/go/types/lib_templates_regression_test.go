@@ -19,7 +19,7 @@ func TestWriteLibTemplatesAlwaysWritesGrpcServer(t *testing.T) {
 		ModuleBasePath: "example.com/consumer/tacplus",
 	}
 
-	if err := writeLibTemplates(cfg); err != nil {
+	if err := writeLibTemplates(cfg, []string{cfg.ServiceLabel()}); err != nil {
 		t.Fatalf("writeLibTemplates: %v", err)
 	}
 

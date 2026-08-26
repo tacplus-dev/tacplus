@@ -29,7 +29,7 @@ import (
 //     have no S2S identity and cannot call the authoritative mint directly; they
 //     mint through the C2S proxy (or the authoritative minter as a fallback when
 //     no proxy is declared). Mirrors rust's libs.go two-exchanger computation.
-func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExchangerInfo) error {
+func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExchangerInfo, acceptedAudiences []string) error {
 	langDir := config.LangDir()
 	sysBaseDir := filepath.Join(langDir, "chassis")
 
@@ -85,7 +85,8 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 		MintServiceName             string // proto service name, e.g. "Mint"
 		DefaultAudience             string
 		BootstrapServiceID          string
-		ServiceLabel                string // service identity baked into Authorizer
+		ServiceLabel                string   // service identity baked into Authorizer
+		AcceptedAudiences           []string // every `aud` the Authorizer accepts: own label + hosted traits
 		ClientOnly                  bool
 		HasClientTokenExchanger bool
 		ClientMintGrpcModule    string // full dotted python module for the C2S mint grpc stub
@@ -100,6 +101,7 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 		DefaultAudience:         defaultAudience,
 		BootstrapServiceID:      defaultAudience,
 		ServiceLabel:            config.ServiceLabel(),
+		AcceptedAudiences:       acceptedAudiences,
 		ClientOnly:              true,
 		HasClientTokenExchanger: hasClientTokenExchanger,
 		ClientMintGrpcModule:    clientMintGrpcModule,

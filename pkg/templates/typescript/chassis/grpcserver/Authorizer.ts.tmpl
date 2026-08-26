@@ -165,6 +165,13 @@ export class JwkCache {
 
 export class Authorizer {
   private static readonly SERVICE_NAME = "{{.ServiceLabel}}";
+  /**
+   * Every token audience this service accepts: its own name plus the name of
+   * each trait it hosts. A trait's audience is the trait name, not the host's,
+   * so a host that implements a trait must accept the trait audience or it
+   * rejects calls the caller authenticated correctly.
+   */
+  private static readonly ACCEPTED_AUDIENCES: ReadonlySet<string> = new Set([{{range $i, $a := .AcceptedAudiences}}{{if $i}}, {{end}}"{{$a}}"{{end}}]);
   private _jwkCache: JwkCache;
   private _methodAuthPatterns: Map<string, RegExp[]>;
   private _methodTargetNamespaceFields: Map<string, string>;
@@ -289,10 +296,10 @@ export class Authorizer {
       throw AuthError.unauthenticated(`${tokenUse} tokens cannot be used for API access`);
     }
 
-    // Check aud matches service name
+    // Check aud is one this service accepts
     const aud = tw.getAudience();
-    if (aud !== Authorizer.SERVICE_NAME) {
-      throw AuthError.permissionDenied(`token audience "${aud}" does not match service "${Authorizer.SERVICE_NAME}"`);
+    if (!Authorizer.ACCEPTED_AUDIENCES.has(aud)) {
+      throw AuthError.permissionDenied(`token audience "${aud}" is not accepted by service "${Authorizer.SERVICE_NAME}"`);
     }
 
     // S2S path: service/workload tokens carry structured identity claims
@@ -392,8 +399,8 @@ export class Authorizer {
     }
 
     const aud = tw.getAudience();
-    if (aud !== Authorizer.SERVICE_NAME) {
-      throw AuthError.permissionDenied(`token audience "${aud}" does not match service "${Authorizer.SERVICE_NAME}"`);
+    if (!Authorizer.ACCEPTED_AUDIENCES.has(aud)) {
+      throw AuthError.permissionDenied(`token audience "${aud}" is not accepted by service "${Authorizer.SERVICE_NAME}"`);
     }
 
     if (targetNamespace !== undefined) {

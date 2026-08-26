@@ -270,7 +270,7 @@ func TestPythonWriteLibTemplatesEmitsTagsHelpers(t *testing.T) {
 		PythonPackageBase: "demo_tacplus",
 		AnnotatedProtoDir: protoDir,
 	}
-	if err := writeLibTemplates(cfg, nil, nil); err != nil {
+	if err := writeLibTemplates(cfg, nil, nil, []string{cfg.ServiceLabel()}); err != nil {
 		t.Fatalf("writeLibTemplates: %v", err)
 	}
 	path := filepath.Join(out, "chassis", "tags", "__init__.py")

@@ -120,6 +120,23 @@ type VServiceRoute struct {
 	Method  string
 }
 
+// AcceptedAudiencesForHost lists the token audiences this service accepts: its
+// own service label — the identity the generated Authorizer matches `aud`
+// against — plus every contract it hosts, whose name is its own audience. A
+// trait's audience is the trait name, never the host label, so the host must
+// accept it explicitly or it rejects calls the caller authenticated correctly.
+func AcceptedAudiencesForHost(serviceLabel string, vsEntries []VServiceEntry) []string {
+	audiences := []string{serviceLabel}
+	seen := map[string]bool{serviceLabel: true}
+	for _, vs := range vsEntries {
+		if vs.HostLabel == serviceLabel && vs.Name != "" && !seen[vs.Name] {
+			seen[vs.Name] = true
+			audiences = append(audiences, vs.Name)
+		}
+	}
+	return audiences
+}
+
 // ScanAndGenerateConfigHolder scans proto files for file-level (spec.service)
 // declarations plus grpc_config annotations using regex (no protoc needed)
 // and writes four proto files into generated/ in each of the given directories:

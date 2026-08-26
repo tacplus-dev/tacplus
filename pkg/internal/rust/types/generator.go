@@ -346,7 +346,7 @@ func Generate(config *tactype.Config) error {
 
 	// Scan service RPCs early — needed by both lib templates (authorizer) and
 	// service wrappers (accounting). Must happen before writeLibTemplates.
-	_, svcRPCs, _, err := proto.ScanAndGenerateConfigHolder(config.InputDir, absInputDir)
+	_, svcRPCs, vsEntries, err := proto.ScanAndGenerateConfigHolder(config.InputDir, absInputDir)
 	if err != nil {
 		zap.L().Warn("Failed to scan service RPCs", zap.Error(err))
 	}
@@ -354,7 +354,7 @@ func Generate(config *tactype.Config) error {
 	// Write library templates BEFORE service wrappers because writeLibTemplates
 	// cleans the sys/ directory. Service wrappers build on top afterward.
 	zap.L().Info("Writing Rust library templates")
-	if err := writeLibTemplates(config, svcRPCs); err != nil {
+	if err := writeLibTemplates(config, svcRPCs, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries)); err != nil {
 		return fmt.Errorf("failed to write library templates: %w", err)
 	}
 

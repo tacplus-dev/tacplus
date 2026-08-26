@@ -301,6 +301,13 @@ public class Authorizer {
     // Package-private so the same-package AuthorizerBehaviorTest can mint tokens
     // with the audience the verify path actually checks.
     static final String SERVICE_NAME = "{{.ServiceLabel}}";
+    /**
+     * Every token audience this service accepts: its own name plus the name of
+     * each trait it hosts. A trait's audience is the trait name, not the host's,
+     * so a host that implements a trait must accept the trait audience or it
+     * rejects calls the caller authenticated correctly.
+     */
+    static final java.util.List<String> ACCEPTED_AUDIENCES = java.util.List.of({{range $i, $a := .AcceptedAudiences}}{{if $i}}, {{end}}"{{$a}}"{{end}});
     private final JwkCache jwkCache;
     private final JwkSource jwkSource;
     private final ConcurrentHashMap<String, List<Pattern>> methodAuthPatterns = new ConcurrentHashMap<>();
@@ -578,9 +585,9 @@ public class Authorizer {
         rejectApiTokenClass(tw);
 
         String aud = tw.getAudience();
-        if (!SERVICE_NAME.equals(aud)) {
+        if (!ACCEPTED_AUDIENCES.contains(aud)) {
             throw ProtoException.newErrPermissionDenied(null,
-                    "token audience \"" + aud + "\" does not match service \"" + SERVICE_NAME + "\"");
+                    "token audience \"" + aud + "\" is not accepted by service \"" + SERVICE_NAME + "\"");
         }
 
         // Signature, expiry, token class and audience all checked: this is the

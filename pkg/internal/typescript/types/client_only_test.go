@@ -189,7 +189,7 @@ func TestTypeScriptWriteLibTemplatesEmitsTagsHelpers(t *testing.T) {
 		TsPackageBase:     "demo-tacplus",
 		AnnotatedProtoDir: protoDir,
 	}
-	if err := writeLibTemplates(cfg, nil, nil); err != nil {
+	if err := writeLibTemplates(cfg, nil, nil, []string{cfg.ServiceLabel()}); err != nil {
 		t.Fatalf("writeLibTemplates: %v", err)
 	}
 	for _, rel := range []string{

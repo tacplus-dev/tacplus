@@ -150,6 +150,16 @@ func (m *JwkCache) watchView(ctx context.Context, client jwkviewpb.JwkVerifyingK
 // serviceName is the service identity baked in at code generation time.
 const serviceName = "{{.ServiceLabel}}"
 
+// acceptedAudiences is every token audience this service accepts: its own name
+// plus the name of each trait it hosts. A trait's audience is the trait name,
+// not the host's, so a host that implements a trait must accept the trait
+// audience or it rejects calls the caller authenticated correctly.
+var acceptedAudiences = map[string]struct{}{
+{{- range .AcceptedAudiences}}
+	"{{.}}": {},
+{{- end}}
+}
+
 // authorizer implements the Authorizer interface using token signature verification.
 // User tokens carry a service_entitlements claim with normalized exact RPC grant tokens;
 // S2S service tokens are authorized via auth_services RE2 patterns.
@@ -426,9 +436,9 @@ func (a *authorizer) verifyBearer(ctx context.Context) (*tokenlib.TokenWrapper, 
 		return nil, err
 	}
 
-	if tw.GetAudience() != serviceName {
+	if _, ok := acceptedAudiences[tw.GetAudience()]; !ok {
 		return nil, protoerrors.NewErrPermissionDenied(nil,
-			"token audience %q does not match service %q", tw.GetAudience(), serviceName)
+			"token audience %q is not accepted by service %q", tw.GetAudience(), serviceName)
 	}
 	return tw, nil
 }

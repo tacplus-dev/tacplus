@@ -126,6 +126,11 @@ class Authorizer:
     """
 
     _SERVICE_NAME = "{{.ServiceLabel}}"
+    # Every token audience this service accepts: its own name plus the name of
+    # each trait it hosts. A trait's audience is the trait name, not the host's,
+    # so a host that implements a trait must accept the trait audience or it
+    # rejects calls the caller authenticated correctly.
+    _ACCEPTED_AUDIENCES = frozenset([{{range $i, $a := .AcceptedAudiences}}{{if $i}}, {{end}}"{{$a}}"{{end}}])
 
     def __init__(self, jwk_channel=None):
         """
@@ -267,11 +272,11 @@ class Authorizer:
         if token_use in ("bootstrap", "locality", "external"):
             raise unauthenticated(f"{token_use} tokens cannot be used for API access")
 
-        # Check aud matches service name
+        # Check aud is one this service accepts
         aud = tw.get_audience()
-        if aud != self._SERVICE_NAME:
+        if aud not in self._ACCEPTED_AUDIENCES:
             raise permission_denied(
-                f'token audience "{aud}" does not match service "{self._SERVICE_NAME}"'
+                f'token audience "{aud}" is not accepted by service "{self._SERVICE_NAME}"'
             )
 
         # S2S path: service/workload tokens carry structured identity claims
@@ -367,9 +372,9 @@ class Authorizer:
             raise unauthenticated(f"{auth_token_use} tokens cannot be used for API access")
 
         aud = tw.get_audience()
-        if aud != self._SERVICE_NAME:
+        if aud not in self._ACCEPTED_AUDIENCES:
             raise permission_denied(
-                f'token audience "{aud}" does not match service "{self._SERVICE_NAME}"'
+                f'token audience "{aud}" is not accepted by service "{self._SERVICE_NAME}"'
             )
 
         if target_namespace is not None:

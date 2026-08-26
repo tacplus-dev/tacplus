@@ -812,7 +812,23 @@ func ScanVServiceRPCs(scanDir string, reg *ServiceRegistry) ([]VServiceEntry, er
 			}
 		}
 
-		if len(rpcs) > 0 {
+		// A contract whose RPCs do not route through topics still needs an
+		// entry. Exported topics are only ONE way a contract names its host;
+		// a trait names it directly, and its RPCs are plain request/response
+		// calls. Keying the entry on topics alone left such a contract with no
+		// entry at all, so its name never reached the host's accepted-audience
+		// set (java/types/generator.go builds that set from HostLabel/Name) and
+		// the host rejected calls the caller had authenticated correctly.
+		//
+		// RPCs/Routes stay topic-only: every consumer of those two fields reads
+		// them as topic coordinates (the gateway's REST table dispatches them as
+		// Publish/Subscribe), and a trait's plain RPCs already get their routes
+		// through the ordinary service path. What changes here is whether the
+		// entry EXISTS, not what a topic entry contains.
+		if hostLabel == "" {
+			hostLabel = nonTopicHostLabel(fd)
+		}
+		if len(rpcs) > 0 || hostLabel != "" {
 			result = append(result, VServiceEntry{
 				Name:      fd.VServiceName,
 				FieldID:   int32(vsID),
@@ -827,6 +843,28 @@ func ScanVServiceRPCs(scanDir string, reg *ServiceRegistry) ([]VServiceEntry, er
 		return result[i].FieldID < result[j].FieldID
 	})
 	return result, nil
+}
+
+// nonTopicHostLabel resolves the physical service hosting a contract that
+// exports no topics, from the two places such a contract names its host: the
+// (spec.service_s2s)/(spec.service_c2s) label on a surface it declares itself,
+// and the (spec.trait).host on the declaration. Empty means the file names no
+// host and asks for nothing — an identity-only declaration gets no entry.
+//
+// The trait fallback is not redundant with the surface label: a trait's plane is
+// APPENDED to its proto later in the pipeline (AppendRecordMapServiceToProtos),
+// after this scan has already read the tree, so at scan time such a trait
+// declares its host and no services at all.
+func nonTopicHostLabel(fd *parser.FileDescriptor) string {
+	for _, svc := range fd.Services {
+		if svc.HostLabel != "" && len(svc.Methods) > 0 {
+			return svc.HostLabel
+		}
+	}
+	if fd.Trait != nil {
+		return fd.Trait.Host
+	}
+	return ""
 }
 
 // InjectGrpcConfigState scans proto files for messages with (spec.grpc_config)

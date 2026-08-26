@@ -1353,15 +1353,7 @@ func Generate(config *tactype.Config) error {
 	if err := proto.ValidateStatePolicyAuthParity(config.FlatProtoDir, securityPolicies); err != nil {
 		return err
 	}
-	// Accepted token audiences for this service: its own service label — the
-	// same identity the generated Authorizer matches `aud` against — plus every
-	// vservice it hosts, whose name is its own audience.
-	acceptedAudiences := []string{config.ServiceLabel()}
-	for _, vs := range vsEntries {
-		if vs.HostLabel == config.ServiceLabel() && vs.Name != "" {
-			acceptedAudiences = append(acceptedAudiences, vs.Name)
-		}
-	}
+	acceptedAudiences := acceptedAudiencesForHost(config.ServiceLabel(), vsEntries)
 	if err := proto.WriteCodegenConfig(parentDir, config.JavaPackageBase, config.Lang.Java.JavaImportBase()+".graphs", acceptedAudiences, securityPolicies, svcRPCs); err != nil {
 		return fmt.Errorf("failed to write codegen config: %w", err)
 	}
@@ -1382,6 +1374,21 @@ func Generate(config *tactype.Config) error {
 	zap.L().Info("Java generation complete")
 	zap.L().Info("To build", zap.String("command", "cd "+parentDir+"&& mvn clean install"))
 	return nil
+}
+
+// acceptedAudiencesForHost lists the token audiences this service accepts: its
+// own service label — the same identity the generated Authorizer matches `aud`
+// against — plus every contract it hosts, whose name is its own audience. A
+// trait's audience is the trait name, never the host label, so the host must
+// accept it explicitly or it rejects calls the caller authenticated correctly.
+func acceptedAudiencesForHost(serviceLabel string, vsEntries []proto.VServiceEntry) []string {
+	audiences := []string{serviceLabel}
+	for _, vs := range vsEntries {
+		if vs.HostLabel == serviceLabel && vs.Name != "" {
+			audiences = append(audiences, vs.Name)
+		}
+	}
+	return audiences
 }
 
 // s2sGenerationEnabled reports whether this build emits a service-to-service

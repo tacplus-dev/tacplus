@@ -13,7 +13,7 @@ import "sys/x509.proto";
 message Ping { string m = 1; }
 
 service AuthorityService {
-  option (spec.service_s2s) = {tag: "AuthorityService"};
+  option (spec.service_s2s) = {label: "AuthorityService"};
   option (spec.smb_authority) = {};
   rpc Get(Ping) returns (Ping) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};

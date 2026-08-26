@@ -90,7 +90,7 @@ sub-fields, followed by ordinary members (fields, rpcs, nested types):
 
 ```tac
 state LetsEncryptState {
-  tag "kernel"                                  // → service_state.tag
+  label ["kernel"]                              // → service_state.label
   export                                        // → service_state.export = true
   LetsEncryptCertData cert_data = 1 [persistence];
 }
@@ -98,7 +98,7 @@ state LetsEncryptState {
 lowers to
 ```proto
 message LetsEncryptState {
-  option (spec.service_state) = {tag: "kernel", export: true};
+  option (spec.service_state) = {label: ["kernel"], export: true};
   LetsEncryptCertData cert_data = 1 [(spec.persistence) = true];
 }
 ```
@@ -127,12 +127,10 @@ Literal grammar (identical in both positions):
 
 **Arity is schema-driven, never name-driven.** Whether a value is a scalar or a
 bracket list comes from the field's type in `spec.proto` (`repeated` ⇒ `[ ]`,
-singular ⇒ bare), and the value itself is opaque to tacplus. (Tags are a routing
-label tacplus does not interpret. Note: `StateAnnotation.tag` is currently
-*singular* `string`; under the schema-driven rule it lowers as `tag "kernel"`. If
-multiple tags are wanted, widen the field to `repeated string tag` in `spec.proto`
-and `tag ["kernel", "edge"]` falls out automatically — do not special-case the
-transpiler. See Open Questions.)
+singular ⇒ bare), and the value itself is opaque to tacplus. (Labels are a routing
+label tacplus does not interpret. `StateAnnotation.label` is `repeated string`
+since BIG GOAL 3 item 2, so under the schema-driven rule it lowers as
+`label ["kernel", "edge"]` with no special case in the transpiler.)
 
 Standard proto options (`[deprecated = true]`, `default`, …) are not `spec`
 extensions, are not in the registry, and pass through untouched.
@@ -275,10 +273,10 @@ convert one consumer service as a worked example.
 
 ## Open questions
 
-1. **`StateAnnotation.tag` arity.** Singular today; the `state` example wants
-   multiple. Widen to `repeated string tag` in `spec.proto` (and update
-   `descriptor.go` parsing + existing `.proto`), or keep singular and lower as
-   `tag "kernel"`? The transpiler stays schema-driven either way.
+1. ~~**`StateAnnotation.tag` arity.**~~ **RESOLVED** (BIG GOAL 3 item 2): the
+   field is `repeated string label` — widened and renamed in one migration, with
+   `descriptor.go` and every `.proto` annotation site updated. The transpiler
+   stays schema-driven and lowers it as `label ["kernel", "edge"]`.
 2. **Bare-option scope.** v1 assumes the bare-option rule applies in field
    options and block header statements only. Other option scopes (file options,
    enum-value options like `json_return_value`) stay fully qualified unless we

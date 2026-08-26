@@ -19,7 +19,7 @@ func TestJavaPublisherEntryUsesDeclaredBrokerMethod(t *testing.T) {
 	}
 	entry := javaPublisherEntryFromData(cfg, "", boundaries.EventPublisherData{
 		TopicRef:          "contractfixtures.FixtureState.events",
-		BrokerTag:         "contractfixtures",
+		BrokerLabel:         "contractfixtures",
 		EventTypeFQN:      "contractfixtures.FixtureEvent",
 		EventTypeName:     "FixtureEvent",
 		RPCStem:           "ContractfixturesFixtureStateEvents",

@@ -47,12 +47,12 @@ func generateGrpcClients(servicesInfo []ServiceInfo, inputDir string, packageToD
 }
 
 // resolveMeshTarget determines the physical service ID for routing.
-// Priority: TargetService from the active client surface > HostTag > PackageName.
+// Priority: TargetService from the active client surface > HostLabel > PackageName.
 func resolveMeshTarget(svc ServiceInfo) string {
 	config := svc.Config
 	meshTarget := svc.PackageName
-	if svc.HostTag != "" {
-		meshTarget = svc.HostTag
+	if svc.HostLabel != "" {
+		meshTarget = svc.HostLabel
 	}
 	entries := config.GrpcS2SClients
 	switch config.GetSmPrefix() {

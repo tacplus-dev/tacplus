@@ -40,7 +40,7 @@ func TestActorOwnsFileRejectsImportedForeignProto(t *testing.T) {
 	imported := &parser.FileDescriptor{
 		Package:     "eventbus",
 		ServiceName: "eventbus",
-		Services:    []parser.ServiceDescriptor{{Name: "EventBusService", HostTag: ""}},
+		Services:    []parser.ServiceDescriptor{{Name: "EventBusService", HostLabel: ""}},
 	}
 	if actorOwnsFile(imported, "contract") {
 		t.Fatal("importing a foreign topic proto must NOT make the importer its producer/owner")
@@ -62,7 +62,7 @@ func TestActorOwnsFileEmptySelfPackageOwnsAll(t *testing.T) {
 func TestActorOwnsFileByVserviceHostTag(t *testing.T) {
 	hosted := &parser.FileDescriptor{
 		Package:  "topics",
-		Services: []parser.ServiceDescriptor{{Name: "MyTopics", HostTag: "contract"}},
+		Services: []parser.ServiceDescriptor{{Name: "MyTopics", HostLabel: "contract"}},
 	}
 	if !actorOwnsFile(hosted, "contract") {
 		t.Fatal("a vservice whose host tag is the actor must be owned")

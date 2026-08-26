@@ -23,7 +23,7 @@ import (
 //
 //	// tacplus:generated EventBus topic wrapper for Foo.
 //	message FooBus {
-//	  option (spec.service_event) = {tag: "eventbus", export: true};
+//	  option (spec.service_event) = {label: "eventbus", export: true};
 //	  Foo stream = 1 [(spec.topic) = true];
 //	}
 //
@@ -87,7 +87,7 @@ func AppendEventBusWrappersToProtos(tempProtoDir, inputDir string) error {
 
 			buf.WriteString("\n// tacplus:generated EventBus topic wrapper for " + msg.Name + ".\n")
 			buf.WriteString("message " + wrapperName + " {\n")
-			buf.WriteString("  option (spec.service_event) = {tag: \"eventbus\", export: true};\n")
+			buf.WriteString("  option (spec.service_event) = {label: \"eventbus\", export: true};\n")
 			buf.WriteString("  " + msg.Name + " stream = 1 [(spec.topic) = true];\n")
 			buf.WriteString("}\n")
 			generated = append(generated, wrapperName)

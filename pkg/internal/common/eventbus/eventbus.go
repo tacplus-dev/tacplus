@@ -13,7 +13,7 @@ import (
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
 )
 
-const EventBusTag = "eventbus"
+const EventBusLabel = "eventbus"
 
 var protoIdentRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
@@ -31,7 +31,7 @@ type Topic struct {
 	Ref           TopicRef
 	ProtoFile     string
 	EventTypeFQN  string
-	EventBusTag   string
+	EventBusLabel   string
 	Export        bool
 	RPCStem       string
 	LegacyRPCStem string
@@ -106,17 +106,17 @@ func ParseTopicRef(raw string) (TopicRef, error) {
 func BuildTopicRegistry(fds []*parser.FileDescriptor) (*TopicRegistry, error) {
 	reg := &TopicRegistry{topics: make(map[string]Topic)}
 	rpcStems := make(map[string]string)
-	brokerTags := collectBrokerServiceTags(fds)
+	brokerLabels := parser.CollectServingLabels(fds)
 	surfaceByFQN := collectEventSurfaces(fds)
 	for _, fd := range sortedFiles(fds) {
 		for mi := range fd.Messages {
 			msg := &fd.Messages[mi]
-			tagAnn, isEvent := msg.Annotations["service_event_tag"]
-			if !isEvent || tagAnn.StringValue == "" {
+			labelAnn, isEvent := msg.Annotations["service_event_label"]
+			if !isEvent || labelAnn.StringValue == "" {
 				continue
 			}
-			if !brokerTags[tagAnn.StringValue] {
-				return nil, fmt.Errorf("EventBus topic %s.%s declares broker tag %q but no matching broker service exists", fd.Package, msg.Name, tagAnn.StringValue)
+			if !brokerLabels[labelAnn.StringValue] {
+				return nil, fmt.Errorf("EventBus topic %s.%s declares broker label %q but no matching broker service exists", fd.Package, msg.Name, labelAnn.StringValue)
 			}
 			export := false
 			if ann, ok := msg.Annotations["service_state_export"]; ok {
@@ -138,7 +138,7 @@ func BuildTopicRegistry(fds []*parser.FileDescriptor) (*TopicRegistry, error) {
 					Ref:           ref,
 					ProtoFile:     fd.Path,
 					EventTypeFQN:  field.Type,
-					EventBusTag:   tagAnn.StringValue,
+					EventBusLabel:   labelAnn.StringValue,
 					Export:        export,
 					RPCStem:       topicRPCStem(ref, true),
 					LegacyRPCStem: topicRPCStem(ref, false),
@@ -183,21 +183,6 @@ func collectEventSurfaces(fds []*parser.FileDescriptor) map[string]eventSurface 
 		}
 	}
 	return surfaces
-}
-
-func collectBrokerServiceTags(fds []*parser.FileDescriptor) map[string]bool {
-	tags := make(map[string]bool)
-	for _, fd := range fds {
-		for _, svc := range fd.Services {
-			if svc.GrpcName != "" {
-				tags[svc.GrpcName] = true
-			}
-			if svc.HostTag != "" {
-				tags[svc.HostTag] = true
-			}
-		}
-	}
-	return tags
 }
 
 // Resolve validates and resolves a topic_ref against this registry.

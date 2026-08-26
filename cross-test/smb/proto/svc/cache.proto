@@ -13,12 +13,12 @@ import "sys/spec.proto";
 message Ping { string m = 1; }
 
 message CacheState {
-  option (spec.service_state) = {name: "CacheState", tag: "state-store", export: true};
+  option (spec.service_state) = {name: "CacheState", label: ["mysmb"], export: true};
   string marker = 1;
 }
 
 service CacheService {
-  option (spec.service_s2s) = {tag: "CacheService"};
+  option (spec.service_s2s) = {label: "CacheService"};
   option (spec.smb) = {};
   rpc Get(Ping) returns (Ping) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
@@ -26,7 +26,7 @@ service CacheService {
 }
 
 service KernelCacheService {
-  option (spec.service_s2s) = {tag: "KernelCacheService"};
+  option (spec.service_s2s) = {label: "KernelCacheService"};
   option (spec.smb) = {root: SMB_ROOT_CLUSTER};
   rpc Get(Ping) returns (Ping) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};

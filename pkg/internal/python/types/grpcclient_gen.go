@@ -47,12 +47,12 @@ func generateGrpcClients(servicesInfo []ServiceInfo, inputDir string) error {
 }
 
 // resolveTarget determines the physical service ID for routing.
-// Priority: TargetService from the active client surface > HostTag > PackageName.
+// Priority: TargetService from the active client surface > HostLabel > PackageName.
 func resolveTarget(svc ServiceInfo) string {
 	config := svc.Config
 	target := svc.PackageName
-	if svc.HostTag != "" {
-		target = svc.HostTag
+	if svc.HostLabel != "" {
+		target = svc.HostLabel
 	}
 	for _, entry := range pythonGrpcTargetEntries(config) {
 		if pythonGrpcEntryMatchesService(entry, svc) && entry.TargetService != "" {

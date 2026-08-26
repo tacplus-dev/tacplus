@@ -95,7 +95,7 @@ func publisherEntryForTopic(topic eventbus.Topic, prefix, rpcStem, eventTypePath
 		StreamFn:      prefix + "_publish_stream",
 		VarPrefix:     prefix,
 		Label:         topic.Ref.Raw + " publisher",
-		TargetService: topic.EventBusTag,
+		TargetService: topic.EventBusLabel,
 		EventTypeFQN:  topic.EventTypeFQN,
 		EventTypeName: eventType,
 		EventTypePath: eventTypePath,

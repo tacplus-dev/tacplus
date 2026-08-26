@@ -15,7 +15,7 @@ package %s;
 import "sys/spec.proto";
 
 message %s {
-  option (spec.service_store) = {tag: "state-store"};
+  option (spec.service_store) = {label: ["state-store"]};
   string client_id = 1 [(spec.store_key) = true];
   string client_secret = 2 [(spec.assert_max_size) = 64];
 }

@@ -583,7 +583,7 @@ A message annotated with `(spec.service_state)` becomes a state root — a named
 
 ```protobuf
 message MyServiceState {
-  option (spec.service_state) = {tag: "myservice", export: true};
+  option (spec.service_state) = {label: ["myservice"], export: true};
 
   Config config = 1;
 
@@ -599,8 +599,8 @@ message Session {
 ```
 
 Every message-typed field of a state root is a **boundary** — stored independently
-and convergent (lockless, last-writer-wins / append-only). The `tag` field routes
-the state to its backing store service. The `export` flag makes the state available
+and convergent (lockless, last-writer-wins / append-only). The repeated `label`
+field routes the state to its backing store services. The `export` flag makes the state available
 for read-only import by other services.
 
 tacplus generates:
@@ -628,7 +628,7 @@ Fields within a state root can be:
 
 ```protobuf
 message OwnerState {
-  option (spec.service_state) = {tag: "ownerservice", export: true};
+  option (spec.service_state) = {label: ["ownerservice"], export: true};
 
   OwnerRecord current_record = 1;
 }
@@ -638,7 +638,7 @@ message OwnerState {
 
 ```protobuf
 message ConsumerState {
-  option (spec.service_state) = {tag: "consumerservice"};
+  option (spec.service_state) = {label: ["consumerservice"]};
 
   ownerservice.OwnerRecord current_owner_record = 1 [
     (spec.state_import) = "ownerservice.OwnerState.current_record"
@@ -699,7 +699,7 @@ A message annotated with `service_store` becomes a durable key-value store backe
 
 ```protobuf
 message CredPair {
-  option (spec.service_store) = {tag: "myservice"};
+  option (spec.service_store) = {label: ["myservice"]};
   string client_id = 1 [(spec.store_key) = true];
   Jwk public_key = 2;
 }
@@ -720,7 +720,7 @@ Fields annotated with `(spec.command) = true` become mutation RPCs on the state 
 State roots can opt into automatic TLS certificate lifecycle:
 
 ```protobuf
-option (spec.service_state) = {tag: "myservice", auto_tls: TLS_KEY_TYPE_ED25519};
+option (spec.service_state) = {label: ["myservice"], auto_tls: TLS_KEY_TYPE_ED25519};
 ```
 
 tacplus generates a bidi stream subscription to the token minting service's TLS cert endpoint. The service generates keypairs locally; the signing service delivers certs, triggering renewal at half-life.
@@ -736,7 +736,7 @@ option (spec.subscribe) = {source: "producer.ProducerState.event_stream"};
 And expose topic RPCs through the API gateway:
 
 ```protobuf
-option (spec.service_event) = {tag: "eventbus", export: true};
+option (spec.service_event) = {label: "eventbus", export: true};
 ```
 
 ### File-Level Service Identity
@@ -757,7 +757,7 @@ The `name` is the canonical service identity used across the mesh. `store: true`
 
 ### Service-Level Auth Annotations
 
-**`service_s2s`** — declares a service-to-service gRPC service. Only authenticated service identities can call these RPCs. `tag` names the physical service hosting a vservice interface:
+**`service_s2s`** — declares a service-to-service gRPC service. Only authenticated service identities can call these RPCs. `label` names the physical service hosting a vservice interface:
 
 ```protobuf
 service InternalAdmin {
@@ -765,7 +765,7 @@ service InternalAdmin {
 }
 
 service StratumHosted {
-  option (spec.service_s2s) = {tag: "stratum"};
+  option (spec.service_s2s) = {label: "stratum"};
 }
 ```
 

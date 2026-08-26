@@ -7,7 +7,7 @@ const typedServiceName = "EventBusTypedService"
 // TypedServiceFullName returns the broker-qualified typed EventBus service name.
 func TypedServiceFullName(brokerTag string) string {
 	if brokerTag == "" {
-		brokerTag = EventBusTag
+		brokerTag = EventBusLabel
 	}
 	return brokerTag + "." + typedServiceName
 }
@@ -72,7 +72,7 @@ func pascalField(field string) string {
 // PublishFullMethodName returns the canonical gRPC full method name for an
 // EventBus publish RPC stem.
 func PublishFullMethodName(rpcStem string) string {
-	return PublishFullMethodNameForBroker(EventBusTag, rpcStem)
+	return PublishFullMethodNameForBroker(EventBusLabel, rpcStem)
 }
 
 // PublishFullMethodNameForBroker returns the canonical gRPC full method name
@@ -84,7 +84,7 @@ func PublishFullMethodNameForBroker(brokerTag, rpcStem string) string {
 // PublishPath returns the canonical grpc.ClientConnInterface path for an
 // EventBus publish RPC stem.
 func PublishPath(rpcStem string) string {
-	return PublishPathForBroker(EventBusTag, rpcStem)
+	return PublishPathForBroker(EventBusLabel, rpcStem)
 }
 
 // PublishPathForBroker returns the canonical grpc.ClientConnInterface path for
@@ -96,7 +96,7 @@ func PublishPathForBroker(brokerTag, rpcStem string) string {
 // SubscribeFullMethodName returns the canonical gRPC full method name for an
 // EventBus subscribe RPC stem.
 func SubscribeFullMethodName(rpcStem string) string {
-	return SubscribeFullMethodNameForBroker(EventBusTag, rpcStem)
+	return SubscribeFullMethodNameForBroker(EventBusLabel, rpcStem)
 }
 
 // SubscribeFullMethodNameForBroker returns the canonical gRPC full method name
@@ -108,7 +108,7 @@ func SubscribeFullMethodNameForBroker(brokerTag, rpcStem string) string {
 // SubscribePath returns the canonical grpc.ClientConnInterface path for an
 // EventBus subscribe RPC stem.
 func SubscribePath(rpcStem string) string {
-	return SubscribePathForBroker(EventBusTag, rpcStem)
+	return SubscribePathForBroker(EventBusLabel, rpcStem)
 }
 
 // SubscribePathForBroker returns the canonical grpc.ClientConnInterface path

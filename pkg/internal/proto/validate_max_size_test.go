@@ -78,7 +78,7 @@ message Player {
 }
 
 message SampleState {
-  option (spec.service_state) = {name: "SampleState", tag: "sample"};
+  option (spec.service_state) = {name: "SampleState", label: ["sample"]};
 
   repeated Player players = 1;
 }
@@ -107,7 +107,7 @@ package sample;
 import "sys/spec.proto";
 
 message SampleState {
-  option (spec.service_state) = {name: "SampleState", tag: "sample"};
+  option (spec.service_state) = {name: "SampleState", label: ["sample"]};
 
   map<string, string> settings = 1;
 }

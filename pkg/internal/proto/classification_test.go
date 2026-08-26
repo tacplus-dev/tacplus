@@ -69,7 +69,7 @@ func TestDeclaresServiceStateModel(t *testing.T) {
 func TestDeclaresServiceStateSource(t *testing.T) {
 	for _, source := range []string{
 		`message DemoState { option (spec.service_state) = "DemoState"; }`,
-		`message DemoEvent { option ( spec.service_event ) = { tag: "demo" }; }`,
+		`message DemoEvent { option ( spec.service_event ) = { label: "demo" }; }`,
 	} {
 		if !DeclaresServiceStateSource(source) {
 			t.Fatalf("source should declare service state: %s", source)

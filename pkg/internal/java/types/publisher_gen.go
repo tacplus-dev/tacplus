@@ -81,7 +81,7 @@ func javaPublisherEntryFromData(config *tactype.Config, protoDir string, publish
 		StreamName:        prefix + "PublishStream",
 		ThreadName:        "publisher-" + strutil.ToKebabCase(publisher.RPCStem),
 		Label:             publisher.TopicRef + " publisher",
-		TargetService:     publisher.BrokerTag,
+		TargetService:     publisher.BrokerLabel,
 		TypeName:          event.TypeName,
 		TypeImport:        event.TypeImport,
 		TypeOuterClass:    event.TypeOuterClass,

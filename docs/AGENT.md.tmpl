@@ -52,7 +52,7 @@ derived from proto annotations and compiler default bounds. Prefer
 `constraint_infos` over parsing the legacy prose strings in `constraints`.
 
 Durable `service_store` messages are surfaced in metadata:
-- `TypeInfo.service_store` / `service_store_name` / `service_store_tag`
+- `TypeInfo.service_store` / `service_store_name` / `service_store_label`
 - `FieldInfo.store_key` — the key field for a service_store value
 - `FieldInfo.quorum_write` — field writes require quorum acknowledgement
 
@@ -60,7 +60,7 @@ Durable `service_store` messages are surfaced in metadata:
 
 `PackageNode.vservices` lists file-level `(spec.vservice)` identities with
 `name`, `id`, and declaring `package`. Hosted vservice RPC surfaces expose their
-hosting tag on `ServiceInfo.host_tag`.
+hosting label on `ServiceInfo.host_label`.
 
 ## Client Dependencies
 
@@ -74,7 +74,7 @@ Each edge includes `source_package`, `surface_kind`, `service`,
 `PackageNode.event_publishes` and `PackageNode.event_watches` list validated
 actor bindings from `(spec.event_publish)` and `(spec.event_watch)`. Each entry
 includes the actor package/message, canonical `topic_ref`, resolved
-`event_type_fqn`, broker tag, RPC stem, and derived auth shape.
+`event_type_fqn`, broker label, RPC stem, and derived auth shape.
 
 ## RPC Surfaces
 

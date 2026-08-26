@@ -510,7 +510,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		handlerMethod := "On" + fieldPascal + topicPascal
 		targetService := sub.TargetService
 		if targetService == "" {
-			targetService = eventbus.EventBusTag
+			targetService = eventbus.EventBusLabel
 		}
 
 		// Determine projection flags by scanning allFiles for messages that
@@ -735,7 +735,7 @@ func detectTracePublisherTemplateData(config *tactype.Config) (*tracePublisherTe
 	}
 	return &tracePublisherTemplateData{
 		topicRef:   pub.TopicRef,
-		target:     pub.BrokerTag,
+		target:     pub.BrokerLabel,
 		streamName: pub.PublishStreamName,
 		grpcPath:   pub.PublishPath,
 	}, nil

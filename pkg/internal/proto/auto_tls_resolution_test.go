@@ -15,7 +15,7 @@ package %PKG%;
 import "sys/spec.proto";
 
 message FooState {
-  option (spec.service_state) = {name: "FooState", tag: "state-store", auto_tls: %TLS%, export: true};
+  option (spec.service_state) = {name: "FooState", label: ["state-store"], auto_tls: %TLS%, export: true};
   string id = 1;
 }
 `

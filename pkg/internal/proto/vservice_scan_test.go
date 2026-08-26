@@ -67,7 +67,7 @@ message AgenticCodeEvent {
 message AgenticCodeEventBus {
   option (spec.service_state) = {
     name: "AgenticCodeEventBus"
-    tag: "events"
+    label: ["events"]
     export: true
   };
   option (spec.service_event) = {};
@@ -93,7 +93,7 @@ message AgenticCodeEventBus {
 	want := []VServiceEntry{{
 		Name:    "claudesensor",
 		FieldID: 30,
-		HostTag: "events",
+		HostLabel: "events",
 		RPCs: []string{
 			"PublishClaudesensorAgenticCodeEventBusEventStream",
 			"SubscribeClaudesensorAgenticCodeEventBusEventStream",

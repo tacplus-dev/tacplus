@@ -796,7 +796,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				AuthServices:    service.AuthServices,
 				HasMethodAuth:   hasMethodAuth,
 				AuthExemptPaths: authExempt,
-				HostTag:         service.HostTag,
+				HostLabel:         service.HostLabel,
 				// Propagate the synthesized-service marker so ResolveServerServices'
 				// filterByPackage can drop tacplus-generated state/store/config-state
 				// services. Omitting this (the Rust detect path did) left Synthesized

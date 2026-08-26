@@ -43,7 +43,7 @@ type ServiceInfo struct {
 	AuthAnyUser    bool     // C2S: any authenticated user can call
 	AuthServices   []string // S2S: allowed caller identities
 	HasMethodAuth  bool     // true if any per-method auth metadata must be registered
-	HostTag        string   // non-empty for vservices: the SelfPackage of the service that hosts this RPC surface
+	HostLabel        string   // non-empty for vservices: the SelfPackage of the service that hosts this RPC surface
 	// SynthesizedKind is WHICH tacplus-generated surface this is
 	// (parser.SynthesizedKind*), empty for hand-authored services. See the go
 	// generator's field for why the kind, not just the fact, is what matters.
@@ -211,7 +211,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				AuthAnyUser:     anyUser,
 				AuthServices:    service.AuthServices,
 				HasMethodAuth:   hasMethodAuth,
-				HostTag:         service.HostTag,
+				HostLabel:         service.HostLabel,
 			})
 		}
 
@@ -241,7 +241,7 @@ func filterServicesByGrpcEntries(servicesInfo []ServiceInfo, entries []tactype.G
 // If GrpcServers is set, filters to only those services.
 // Otherwise auto-infers:
 //   - Own-package S2S/C2S services (e.g. services/identity.proto with service_s2s when SelfPackage="identity")
-//   - Hosted vservices from other packages that declare {tag: "<SelfPackage>"} on their service_s2s annotation
+//   - Hosted vservices from other packages that declare {label: "<SelfPackage>"} on their service_s2s annotation
 func resolveServerServices(config *tactype.Config, servicesInfo []ServiceInfo) []ServiceInfo {
 	if config.GrpcServerAll {
 		return filterGrpcAnnotated(servicesInfo)
@@ -272,13 +272,13 @@ func resolveServerServices(config *tactype.Config, servicesInfo []ServiceInfo) [
 	return nil
 }
 
-// filterByHostTag returns vservice entries from other packages whose HostTag matches pkg.
+// filterByHostTag returns vservice entries from other packages whose HostLabel matches pkg.
 // These are services defined in vservices/ protos that designate pkg as their host via
-// option (spec.service_s2s) = {tag: "<pkg>"}.
+// option (spec.service_s2s) = {label: "<pkg>"}.
 func filterByHostTag(servicesInfo []ServiceInfo, pkg string) []ServiceInfo {
 	var result []ServiceInfo
 	for _, svc := range servicesInfo {
-		if svc.HostTag == pkg && svc.PackageName != pkg {
+		if svc.HostLabel == pkg && svc.PackageName != pkg {
 			result = append(result, svc)
 		}
 	}

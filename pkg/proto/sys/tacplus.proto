@@ -73,7 +73,7 @@ message BoundaryInfo {
   // ServiceName enum is generated into generated/services.proto — it is
   // SERVICE_NAME_UNSPECIFIED in the base registry tacplus emits (the base enum has
   // only UNSPECIFIED/ANY). For the owning-service identifier tacplus actually
-  // emits, use `tag` (field 15), the service_state routing tag.
+  // emits, use `label` (field 15), the service_state routing labels.
   ServiceName service = 1;
 
   // State root message name, e.g. "ClusterState".
@@ -105,8 +105,9 @@ message BoundaryInfo {
   // True when this boundary is a configuration boundary (ConfigState pattern).
   bool is_config = 14;
 
-  // Routing tag from service_state annotation (e.g., "state-store", "eventbus").
-  string tag = 15;
+  // Routing labels from the service_state annotation (e.g., ["state-store"],
+  // ["kernel", "edge"]).
+  repeated string label = 15;
 
   // Graph type of this boundary: "singleton", "collection", "topic",
   // "queue", "priority_queue", "command", "view", "state_import", "private".
@@ -152,7 +153,7 @@ message EventPublishInfo {
   string actor_message = 2;
   string topic_ref = 3;
   string event_type_fqn = 4;
-  string broker_tag = 5;
+  string broker_label = 5;
   string rpc_stem = 6;
   string auth_model = 7;
   repeated string auth_services = 8;
@@ -167,7 +168,7 @@ message EventWatchInfo {
   string actor_message = 2;
   string topic_ref = 3;
   string event_type_fqn = 4;
-  string broker_tag = 5;
+  string broker_label = 5;
   string rpc_stem = 6;
   string auth_model = 7;
   repeated string auth_services = 8;
@@ -309,8 +310,8 @@ message TypeInfo {
   bool service_store = 20;
   // Durable service_store name. Defaults to the protobuf message name.
   string service_store_name = 21;
-  // Hosting service tag from (spec.service_store).tag.
-  string service_store_tag = 22;
+  // Hosting service labels from (spec.service_store).label.
+  repeated string service_store_label = 22;
 
   // Store-neutral retention policy for a standalone (spec.timeseries_type) table,
   // from its .retention. Unset = indefinite. (Source-derived projections carry
@@ -514,8 +515,8 @@ message ServiceInfo {
   reserved 7;
   reserved "dependencies";
 
-  // event_tag is the routing label for gateway-exposed event services.
-  string event_tag = 8;
+  // event_label is the routing label for gateway-exposed event services.
+  string event_label = 8;
 
   // smb marks a Service Mesh Blackbox service: its own instances talk over a
   // black-box peer protocol within a single cluster (SPIFFE
@@ -534,8 +535,8 @@ message ServiceInfo {
   // per-SMB intermediate rooted in the cluster CA.
   optional spec.SmbRoot smb_root = 11;
 
-  // host_tag is the service_s2s tag for hosted vservice RPC surfaces.
-  string host_tag = 12;
+  // host_label is the service_s2s label for hosted vservice RPC surfaces.
+  string host_label = 12;
 }
 
 // VServiceInfo describes a file-level virtual service identity.

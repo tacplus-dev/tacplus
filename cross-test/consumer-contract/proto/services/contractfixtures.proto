@@ -77,7 +77,7 @@ message FixtureContact {
 message FixtureState {
   option (spec.service_state) = {
     name: "FixtureState"
-    tag: "contractfixtures"
+    label: ["contractfixtures"]
     export: true
   };
   option (spec.service_event) = {};
@@ -91,7 +91,7 @@ message FixtureState {
 }
 
 message FixtureStoreEntry {
-  option (spec.service_store) = {tag: "contractfixtures"};
+  option (spec.service_store) = {label: ["contractfixtures"]};
 
   string entry_id = 1 [
     (spec.assert_required) = true,

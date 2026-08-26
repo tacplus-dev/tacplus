@@ -205,8 +205,8 @@ func TestCollectRegistryTypesPreservesServiceStoreMetadata(t *testing.T) {
 				{
 					Name: "CredPair",
 					Annotations: map[string]model.AnnotationValue{
-						"service_store":     {Type: model.AnnotationTypeString, StringValue: "CredPair"},
-						"service_store_tag": {Type: model.AnnotationTypeString, StringValue: "auth"},
+						"service_store":       {Type: model.AnnotationTypeString, StringValue: "CredPair"},
+						"service_store_label": {Type: model.AnnotationTypeString, StringSliceValue: []string{"auth"}},
 					},
 				},
 			},
@@ -217,9 +217,9 @@ func TestCollectRegistryTypesPreservesServiceStoreMetadata(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("CollectRegistryTypes returned %d types, want 1", len(got))
 	}
-	if !got[0].ServiceStore || got[0].ServiceStoreName != "CredPair" || got[0].ServiceStoreTag != "auth" {
+	if !got[0].ServiceStore || got[0].ServiceStoreName != "CredPair" || len(got[0].ServiceStoreLabels) != 1 || got[0].ServiceStoreLabels[0] != "auth" {
 		t.Fatalf("service_store metadata = (%v, %q, %q), want (true, CredPair, auth)",
-			got[0].ServiceStore, got[0].ServiceStoreName, got[0].ServiceStoreTag)
+			got[0].ServiceStore, got[0].ServiceStoreName, got[0].ServiceStoreLabels)
 	}
 }
 

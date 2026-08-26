@@ -211,10 +211,10 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 								Package:     fd.Package,
 								GrpcService: serviceKey,
 								Rpcs:        serviceRpcs,
-								HostTag:     svc.HostTag,
+								HostLabel:   svc.HostLabel,
 							}
-							if svc.EventTag != "" {
-								si.EventTag = svc.EventTag
+							if svc.EventLabel != "" {
+								si.EventLabel = svc.EventLabel
 							}
 							if svc.IsSMB {
 								si.Smb = true
@@ -440,8 +440,8 @@ func collectEventTopicEntitlementGrantMethods(fds []*parser.FileDescriptor) ([]r
 		if !topic.Export {
 			continue
 		}
-		packages := []string{topic.EventBusTag}
-		if topic.Ref.Package != topic.EventBusTag {
+		packages := []string{topic.EventBusLabel}
+		if topic.Ref.Package != topic.EventBusLabel {
 			packages = append(packages, topic.Ref.Package)
 		}
 		// The grant must describe the SAME service+rpc the caller actually
@@ -641,16 +641,16 @@ func resolveSubdir(pf model.ProtoFile) string {
 // BuildTypeInfoProto converts an llmdesc.RegistryTypeInfo to a proto TypeInfo.
 func BuildTypeInfoProto(t llmdesc.RegistryTypeInfo) *spec.TypeInfo {
 	ti := &spec.TypeInfo{
-		Fqn:              t.FQN,
-		Name:             t.Descriptor.Name,
-		Package:          t.Descriptor.Package,
-		Description:      t.Descriptor.Description,
-		SchemaJson:       t.SchemaJSON,
-		RecordKey:        t.RecordKey,
-		RecordOwner:      t.RecordOwner,
-		ServiceStore:     t.ServiceStore,
-		ServiceStoreName: t.ServiceStoreName,
-		ServiceStoreTag:  t.ServiceStoreTag,
+		Fqn:               t.FQN,
+		Name:              t.Descriptor.Name,
+		Package:           t.Descriptor.Package,
+		Description:       t.Descriptor.Description,
+		SchemaJson:        t.SchemaJSON,
+		RecordKey:         t.RecordKey,
+		RecordOwner:       t.RecordOwner,
+		ServiceStore:      t.ServiceStore,
+		ServiceStoreName:  t.ServiceStoreName,
+		ServiceStoreLabel: t.ServiceStoreLabels,
 
 		DataEntitlementDefault: entitlementModeToProto(t.Descriptor.DataEntitlementDefault),
 	}
@@ -1179,7 +1179,7 @@ func CollectBoundaryProtos(fds []*parser.FileDescriptor, rpcs []*spec.RpcInfo) [
 			TypeFqn:        bd.TypeFQN,
 			Collection:     bd.Collection,
 			IsConfig:       bd.IsConfig,
-			Tag:            bd.Tag,
+			Label:          bd.Labels,
 			GraphType:      bd.GraphType,
 			AutoTlsKeyType: bd.AutoTlsKeyType,
 		}
@@ -1266,7 +1266,7 @@ func CollectEventPublishProtos(fds []*parser.FileDescriptor, allFds []*parser.Fi
 					ActorMessage:         binding.ActorMessage,
 					TopicRef:             binding.Topic.Ref.Raw,
 					EventTypeFqn:         binding.Topic.EventTypeFQN,
-					BrokerTag:            binding.Topic.EventBusTag,
+					BrokerLabel:          binding.Topic.EventBusLabel,
 					RpcStem:              binding.Topic.RPCStem,
 					AuthModel:            authModel,
 					AuthServices:         authServices,
@@ -1309,7 +1309,7 @@ func CollectEventWatchProtos(fds []*parser.FileDescriptor, allFds []*parser.File
 					ActorMessage:         binding.ActorMessage,
 					TopicRef:             binding.Topic.Ref.Raw,
 					EventTypeFqn:         binding.Topic.EventTypeFQN,
-					BrokerTag:            binding.Topic.EventBusTag,
+					BrokerLabel:          binding.Topic.EventBusLabel,
 					RpcStem:              binding.Topic.RPCStem,
 					AuthModel:            authModel,
 					AuthServices:         authServices,

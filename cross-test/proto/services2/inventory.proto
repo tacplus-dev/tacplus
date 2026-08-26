@@ -16,7 +16,7 @@ option (spec.int_const) = {name: "MAX_BATCH_SIZE" value: 100};
 
 // Inventory service with all RPC patterns
 service InventoryService {
-  option (spec.service_s2s) = {tag: "InventoryService"};
+  option (spec.service_s2s) = {label: "InventoryService"};
 
   // Unary RPC - Get product by SKU
   rpc GetProduct(GetProductRequest) returns (GetProductResponse) {

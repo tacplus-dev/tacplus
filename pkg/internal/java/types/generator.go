@@ -1358,7 +1358,7 @@ func Generate(config *tactype.Config) error {
 	// vservice it hosts, whose name is its own audience.
 	acceptedAudiences := []string{config.ServiceLabel()}
 	for _, vs := range vsEntries {
-		if vs.HostTag == config.ServiceLabel() && vs.Name != "" {
+		if vs.HostLabel == config.ServiceLabel() && vs.Name != "" {
 			acceptedAudiences = append(acceptedAudiences, vs.Name)
 		}
 	}

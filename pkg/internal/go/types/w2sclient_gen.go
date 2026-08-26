@@ -99,8 +99,8 @@ func generateW2SServiceManager(config *tactype.Config) error {
 func resolveW2STarget(svc ServiceInfo) string {
 	config := svc.Config
 	meshTarget := svc.PackageName
-	if svc.HostTag != "" {
-		meshTarget = svc.HostTag
+	if svc.HostLabel != "" {
+		meshTarget = svc.HostLabel
 	}
 	for _, entry := range config.GrpcW2SClients {
 		matchKey := strings.TrimSuffix(filepath.Base(entry.ProtoFile), ".proto")

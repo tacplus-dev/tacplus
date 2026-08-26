@@ -1079,7 +1079,7 @@ type ServiceInfo struct {
 	DirName       string // Directory name from proto package (e.g. "ironmaiden"); used in import paths
 	ServiceName   string
 	GrpcName      string // service identity used for routing (defaults to proto package)
-	HostTag       string // physical service hosting this virtual service, from service_s2s tag
+	HostLabel       string // physical service hosting this virtual service, from service_s2s tag
 	OutputDir     string
 	ParentDir     string
 	Config        *tactype.Config
@@ -1604,7 +1604,7 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 				DirName:         dirNameForInfo,
 				ServiceName:     service.Name,
 				GrpcName:        service.GrpcName,
-				HostTag:         service.HostTag,
+				HostLabel:         service.HostLabel,
 				OutputDir:       outputDir,
 				ParentDir:       parentDirForInfo,
 				Config:          config,
@@ -1969,7 +1969,7 @@ func collectSubscriptions(config *tactype.Config, protoDir string) ([]tactype.Su
 			SourcePackage:   sd.SourcePackage,
 			SourceStateRoot: sd.SourceStateRoot,
 			SourceField:     sd.SourceField,
-			TargetService:   sd.BrokerTag,
+			TargetService:   sd.BrokerLabel,
 			SourceTypeFqn:   res.TypeFqn,
 			SourceProtoDir:  res.ProtoDir,
 		})

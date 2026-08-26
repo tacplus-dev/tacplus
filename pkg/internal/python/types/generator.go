@@ -398,7 +398,7 @@ func pythonClientOnlyFileInScope(config *tactype.Config, fd *parser.FileDescript
 		return true
 	}
 	for _, svc := range fd.Services {
-		if svc.HostTag == config.SelfPackage {
+		if svc.HostLabel == config.SelfPackage {
 			return true
 		}
 	}

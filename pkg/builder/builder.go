@@ -177,6 +177,9 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateServiceStores(allParsedFiles); err != nil {
 		return err
 	}
+	if err := parser.ValidateRoutingLabels(dp); err != nil {
+		return err
+	}
 	if err := parser.ValidateMethodCollectionsForPackages(dp, collection.BuildMessageIndex(allParsedFiles), b.config.SelfPackage); err != nil {
 		return err
 	}

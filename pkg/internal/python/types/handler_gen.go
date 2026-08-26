@@ -335,7 +335,7 @@ func detectTracePublisherTemplateData(config *tactype.Config) (*tracePublisherTe
 	}
 	return &tracePublisherTemplateData{
 		topicRef: pub.TopicRef,
-		target:   pub.BrokerTag,
+		target:   pub.BrokerLabel,
 		grpcPath: pub.PublishPath,
 	}, nil
 }

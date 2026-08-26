@@ -79,7 +79,7 @@ func goPublisherEntryFromData(config *tactype.Config, publisher boundaries.Event
 		LoopName:          prefix + "PublishLoop",
 		StreamName:        prefix + "PublishStream",
 		Label:             publisher.TopicRef + " publisher",
-		TargetService:     publisher.BrokerTag,
+		TargetService:     publisher.BrokerLabel,
 		EventTypeName:     typeName,
 		TypePkgAlias:      sanitizeGoImportAlias(typePkg + "_pb"),
 		TypePkgImport:     config.ModuleBasePath + "/types/" + typeProtoDir + "/" + typePkg,

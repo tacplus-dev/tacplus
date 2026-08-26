@@ -138,7 +138,7 @@ func TestGeneratedServicesKeepSynthesizedMarkerAsLeadingComment(t *testing.T) {
 	stateProto := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil).serviceProto
 	assertGeneratedServiceMarkerLeadsService(t, stateProto, StateServiceName(stateRoot.Name))
 
-	storeProto := buildStoreService("DemoStore", "id", "")
+	storeProto := buildStoreService("DemoStore", "id", nil)
 	assertGeneratedServiceMarkerLeadsService(t, storeProto, StoreServiceName("DemoStore"))
 }
 

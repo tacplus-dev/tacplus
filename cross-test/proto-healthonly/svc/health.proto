@@ -15,6 +15,10 @@ package healthonly;
 
 import "sys/spec.proto";
 
+// This fixture declares no gRPC service, so it declares its own backing-store
+// identity: without it no service serves the routing label its states name.
+option (spec.service) = {name: "healthonly", store: true};
+
 // PingState is the sole state root. There are intentionally no gRPC service
 // declarations (no spec.service_s2s, no spec.service_c2d), so:
 //   HasTlsGrpc   = false
@@ -26,7 +30,7 @@ import "sys/spec.proto";
 message PingState {
   option (spec.service_state) = {
     name:     "PingState",
-    tag:      "state-store",
+    label:    ["healthonly"],
     auto_tls: TLS_KEY_TYPE_ED25519
   };
 

@@ -503,8 +503,8 @@ func buildStateService(
 	}
 
 	// Propagate service_event annotation to generated service options.
-	if ann, ok := stateRoot.Annotations["service_event_tag"]; ok && ann.StringValue != "" {
-		fmt.Fprintf(&buf, "\toption (spec.event_tag) = \"%s\";\n", ann.StringValue)
+	if ann, ok := stateRoot.Annotations["service_event_label"]; ok && ann.StringValue != "" {
+		fmt.Fprintf(&buf, "\toption (spec.event_label) = \"%s\";\n", ann.StringValue)
 	}
 
 	for _, b := range singletons {
@@ -1379,7 +1379,7 @@ func ValidateC2STopicActorIdentity(inputDir string) error {
 	for relPath, fileDesc := range dp.GetAllFiles() {
 		for _, msg := range fileDesc.Messages {
 			// Only check service_event messages with export: true.
-			if _, isEvent := msg.Annotations["service_event_tag"]; !isEvent {
+			if _, isEvent := msg.Annotations["service_event_label"]; !isEvent {
 				continue
 			}
 			exportAnn, hasExport := msg.Annotations["service_state_export"]
@@ -1444,7 +1444,7 @@ func hasServiceState(fileDesc *parser.FileDescriptor) bool {
 		if _, ok := msg.Annotations["service_state"]; ok {
 			// Skip state synthesized from service_event — those are EventBus topic
 			// declarations, not real state roots that would cause import conflicts.
-			if _, isEvent := msg.Annotations["service_event_tag"]; isEvent {
+			if _, isEvent := msg.Annotations["service_event_label"]; isEvent {
 				continue
 			}
 			return true
@@ -1552,17 +1552,16 @@ func AppendStoreServiceToProtos(tempProtoDir, inputDir string) error {
 				continue
 			}
 
-			tagAnn := fileDesc.Messages[i].Annotations["service_store_tag"]
-			tag := tagAnn.StringValue
+			labels := fileDesc.Messages[i].Annotations["service_store_label"].StringSliceValue
 
-			proto := buildStoreService(storeName, keyFieldName, tag)
+			proto := buildStoreService(storeName, keyFieldName, labels)
 			storeProtos = append(storeProtos, proto)
 			needsEmpty = true
 
 			zap.L().Info("generated store service",
 				zap.String("message", storeName),
 				zap.String("key", keyFieldName),
-				zap.String("tag", tag),
+				zap.Strings("labels", labels),
 				zap.String("file", relPath))
 		}
 
@@ -1614,8 +1613,12 @@ func AppendStoreServiceToProtos(tempProtoDir, inputDir string) error {
 	return nil
 }
 
-// buildStoreService builds the proto text for a single store service.
-func buildStoreService(msgName, keyFieldName, tag string) string {
+// buildStoreService builds the proto text for a single store service. labels are
+// the store's declared routing labels. (spec.event_label) is a singular option
+// and cannot carry a set, so it is emitted only for a single-label store; a store
+// declaring several routes through TypeInfo.service_store_label in registry.json,
+// which carries all of them.
+func buildStoreService(msgName, keyFieldName string, labels []string) string {
 	svcName := StoreServiceName(msgName)
 	goKeyName := strutil.ToCamelCase(keyFieldName)
 
@@ -1629,8 +1632,8 @@ func buildStoreService(msgName, keyFieldName, tag string) string {
 	fmt.Fprintf(&buf, "service %s {\n", svcName)
 	// All store services are S2S — accessible only by authorized services.
 	fmt.Fprintf(&buf, "\toption (spec.service_s2s) = {};\n")
-	if tag != "" {
-		fmt.Fprintf(&buf, "\toption (spec.event_tag) = \"%s\";\n", tag)
+	if len(labels) == 1 {
+		fmt.Fprintf(&buf, "\toption (spec.event_label) = \"%s\";\n", labels[0])
 	}
 	fmt.Fprintf(&buf, "\trpc Put(%s) returns (google.protobuf.Empty);\n", msgName)
 	fmt.Fprintf(&buf, "\trpc Get(%sStoreKeyRequest) returns (%s);\n", msgName, msgName)

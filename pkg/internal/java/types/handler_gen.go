@@ -329,7 +329,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		handlerMethod := "on" + fieldPascal + topicPascal
 		targetService := sub.TargetService
 		if targetService == "" {
-			targetService = eventbus.EventBusTag
+			targetService = eventbus.EventBusLabel
 		}
 
 		subs = append(subs, javaSubscriptionEntry{
@@ -521,7 +521,7 @@ func detectTracePublisherTemplateData(config *tactype.Config) (*tracePublisherTe
 	}
 	return &tracePublisherTemplateData{
 		topicRef:   pub.TopicRef,
-		target:     pub.BrokerTag,
+		target:     pub.BrokerLabel,
 		fullMethod: pub.PublishFullMethod,
 	}, nil
 }

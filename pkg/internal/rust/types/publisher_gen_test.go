@@ -50,7 +50,7 @@ func TestPublisherEntryUsesDeclaredBrokerTag(t *testing.T) {
 			Message: "TraceEventBus",
 			Field:   "trace_events",
 		},
-		EventBusTag:  "events",
+		EventBusLabel:  "events",
 		EventTypeFQN: "trace.TraceEvent",
 		RPCStem:      "ClaudesensorTraceEventBusTraceEvents",
 	}

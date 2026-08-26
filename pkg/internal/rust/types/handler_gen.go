@@ -79,7 +79,7 @@ type grpcServiceEntry struct {
 	// They must bypass the server's AuthEnforcingLayer, which otherwise rejects
 	// them before the per-method wrapper ever runs.
 	AuthExemptPaths []string
-	// IsHosted is true when this entry came from a vservice declaring HostTag ==
+	// IsHosted is true when this entry came from a vservice declaring HostLabel ==
 	// SelfPackage rather than from the host service's own proto package.
 	// Hosted entries get a default Handler trait impl that returns a stub,
 	// so services can compile without immediately implementing every method.
@@ -398,7 +398,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		handlerMethod := "on_" + sub.SourceField + "_" + topicSnake
 		targetService := sub.TargetService
 		if targetService == "" {
-			targetService = eventbus.EventBusTag
+			targetService = eventbus.EventBusLabel
 		}
 		subs = append(subs, subscriptionEntry{
 			FieldSnake:        sub.SourceField,

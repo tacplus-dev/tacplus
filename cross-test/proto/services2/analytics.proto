@@ -17,7 +17,7 @@ option (spec.bool_const) = {name: "ENABLE_REALTIME" value: true};
 
 // Analytics service
 service AnalyticsService {
-  option (spec.service_s2s) = {tag: "AnalyticsService"};
+  option (spec.service_s2s) = {label: "AnalyticsService"};
 
   // Unary - Query aggregated metrics
   rpc QueryMetrics(MetricsQuery) returns (MetricsResponse) {

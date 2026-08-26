@@ -21,7 +21,7 @@ func TestParseTopicRefSupportsDottedPackages(t *testing.T) {
 
 func TestBuildTopicRegistryAllowsLegacyStemCollisionWithCanonicalNames(t *testing.T) {
 	reg, err := BuildTopicRegistry([]*parser.FileDescriptor{
-		brokerFile(EventBusTag),
+		brokerFile(EventBusLabel),
 		topicFile("alpha", "SharedEventBus", "event_stream", "alpha.Event"),
 		topicFile("beta", "SharedEventBus", "event_stream", "beta.Event"),
 	})
@@ -46,7 +46,7 @@ func TestBuildTopicRegistryAllowsLegacyStemCollisionWithCanonicalNames(t *testin
 
 func TestValidateBindingRequiresExactlyOneAuthShape(t *testing.T) {
 	reg, err := BuildTopicRegistry([]*parser.FileDescriptor{
-		brokerFile(EventBusTag),
+		brokerFile(EventBusLabel),
 		topicFile("alpha", "SharedEventBus", "event_stream", "alpha.Event"),
 	})
 	if err != nil {
@@ -82,13 +82,13 @@ func TestBuildTopicRegistryUsesDeclaredBrokerTag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve returned error: %v", err)
 	}
-	if topic.EventBusTag != "events" {
-		t.Fatalf("topic EventBusTag = %q, want events", topic.EventBusTag)
+	if topic.EventBusLabel != "events" {
+		t.Fatalf("topic EventBusLabel = %q, want events", topic.EventBusLabel)
 	}
-	if got := PublishPathForBroker(topic.EventBusTag, topic.RPCStem); got != "/events.EventBusTypedService/PublishAlphaSharedEventBusEventStream" {
+	if got := PublishPathForBroker(topic.EventBusLabel, topic.RPCStem); got != "/events.EventBusTypedService/PublishAlphaSharedEventBusEventStream" {
 		t.Fatalf("PublishPathForBroker = %q", got)
 	}
-	if got := SubscribePathForBroker(topic.EventBusTag, topic.RPCStem); got != "/events.EventBusTypedService/SubscribeAlphaSharedEventBusEventStream" {
+	if got := SubscribePathForBroker(topic.EventBusLabel, topic.RPCStem); got != "/events.EventBusTypedService/SubscribeAlphaSharedEventBusEventStream" {
 		t.Fatalf("SubscribePathForBroker = %q", got)
 	}
 }
@@ -104,7 +104,7 @@ func TestBuildTopicRegistryRejectsMissingBrokerTag(t *testing.T) {
 }
 
 func topicFile(pkg, msg, field, eventType string) *parser.FileDescriptor {
-	return topicFileWithTag(pkg, msg, field, eventType, EventBusTag)
+	return topicFileWithTag(pkg, msg, field, eventType, EventBusLabel)
 }
 
 func topicFileWithTag(pkg, msg, field, eventType, tag string) *parser.FileDescriptor {
@@ -115,7 +115,7 @@ func topicFileWithTag(pkg, msg, field, eventType, tag string) *parser.FileDescri
 			{
 				Name: msg,
 				Annotations: map[string]model.AnnotationValue{
-					"service_event_tag": {StringValue: tag},
+					"service_event_label": {StringValue: tag},
 				},
 				Fields: []parser.FieldDescriptor{
 					{

@@ -47,7 +47,7 @@ type ServiceInfo struct {
 	// structurally impossible as a result -- ListProviders, Authorize and
 	// MintCallbackTokens must all be callable before a token exists.
 	AuthExemptPaths []string
-	HostTag         string // non-empty for vservices: the SelfPackage of the service that hosts this RPC surface
+	HostLabel         string // non-empty for vservices: the SelfPackage of the service that hosts this RPC surface
 	Synthesized     bool   // tacplus-generated state/store/mutation/opa service (not user-defined); excluded from own-package server generation
 	// SynthesizedKind is WHICH generated surface (parser.SynthesizedKind*).
 	// Synthesized alone cannot answer "does this build need an S2S identity":
@@ -88,7 +88,7 @@ func FilterServicesByGrpcEntries(servicesInfo []ServiceInfo, entries []tactype.G
 // If GrpcServerAll is set, returns all services with a gRPC annotation.
 // If GrpcServers is set, filters to only those services.
 // Otherwise auto-infers from the service's own proto file (identified by SelfPackage),
-// plus any vservices in other proto files that declare {tag: "<SelfPackage>"} on their
+// plus any vservices in other proto files that declare {label: "<SelfPackage>"} on their
 // service_s2s annotation — meaning this service is the designated host.
 func ResolveServerServices(config *tactype.Config, servicesInfo []ServiceInfo) []ServiceInfo {
 	// Client targets emit NO service runtime — never any server wrappers, even
@@ -133,13 +133,13 @@ func ResolveServerServices(config *tactype.Config, servicesInfo []ServiceInfo) [
 	return result
 }
 
-// filterByHostTag returns vservice entries from other packages whose HostTag matches pkg.
+// filterByHostTag returns vservice entries from other packages whose HostLabel matches pkg.
 // These are services defined in vservices/ protos that designate pkg as their host via
-// option (spec.service_s2s) = {tag: "<pkg>"}.
+// option (spec.service_s2s) = {label: "<pkg>"}.
 func filterByHostTag(servicesInfo []ServiceInfo, pkg string) []ServiceInfo {
 	var result []ServiceInfo
 	for _, svc := range servicesInfo {
-		if svc.HostTag == pkg && svc.PackageName != pkg {
+		if svc.HostLabel == pkg && svc.PackageName != pkg {
 			result = append(result, svc)
 		}
 	}
@@ -541,7 +541,7 @@ func DetectServicesForWrapper(config *tactype.Config, inputDir string, outputDir
 				AuthServices:    svc.AuthServices,
 				HasMethodAuth:   hasMethodAuth,
 				AuthExemptPaths: authExempt,
-				HostTag:         svc.HostTag,
+				HostLabel:         svc.HostLabel,
 				Synthesized:     svc.Synthesized,
 				SynthesizedKind: svc.SynthesizedKind,
 			})

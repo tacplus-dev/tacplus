@@ -40,7 +40,7 @@ message Item {
 }
 
 message DemoState {
-  option (spec.service_state) = {name: "DemoState", tag: "demo"};
+  option (spec.service_state) = {name: "DemoState", label: ["demo"]};
 
   `+tc.field+`
 }
@@ -79,7 +79,7 @@ message Item {
 }
 
 message DemoState {
-  option (spec.service_state) = {name: "DemoState", tag: "demo"};
+  option (spec.service_state) = {name: "DemoState", label: ["demo"]};
   `+tc.option+`
 
   Item roster = 1;
@@ -110,7 +110,7 @@ message Item {
 }
 
 message DemoState {
-  option (spec.service_state) = {name: "DemoState", tag: "demo"};
+  option (spec.service_state) = {name: "DemoState", label: ["demo"]};
 
   Item sessions = 1 [(spec.eviction_max_size) = 100];
 }
@@ -155,7 +155,7 @@ message Item {
 }
 
 message DemoState {
-  option (spec.service_state) = {name: "DemoState", tag: "demo"};
+  option (spec.service_state) = {name: "DemoState", label: ["demo"]};
   `+option+`
 
   `+field+`

@@ -90,7 +90,7 @@ message Foo {
 
 // Genuine hand-written wrapper (mid-migration): carries the topic field.
 message FooBus {
-  option (spec.service_event) = {tag: "eventbus", export: true};
+  option (spec.service_event) = {label: "eventbus", export: true};
   Foo stream = 1 [(spec.topic) = true];
 }
 `)

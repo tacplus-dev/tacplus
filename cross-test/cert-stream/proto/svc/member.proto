@@ -13,7 +13,7 @@ message Ping { string m = 1; }
 message StreamState {
   option (spec.service_state) = {
     name: "StreamState",
-    tag: "state-store",
+    label: ["certstream"],
     auto_tls: TLS_KEY_TYPE_ED25519,
     export: true
   };
@@ -21,7 +21,7 @@ message StreamState {
 }
 
 service StreamMemberService {
-  option (spec.service_s2s) = {tag: "StreamMemberService"};
+  option (spec.service_s2s) = {label: "StreamMemberService"};
   option (spec.smb) = {};
   rpc Get(Ping) returns (Ping) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};

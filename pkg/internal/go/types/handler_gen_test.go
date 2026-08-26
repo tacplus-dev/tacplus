@@ -57,7 +57,7 @@ func TestGoPublisherEntryUsesDeclaredBrokerPath(t *testing.T) {
 	}
 	entry := goPublisherEntryFromData(cfg, boundaries.EventPublisherData{
 		TopicRef:          "contractfixtures.FixtureState.events",
-		BrokerTag:         "contractfixtures",
+		BrokerLabel:         "contractfixtures",
 		EventTypeFQN:      "contractfixtures.FixtureEvent",
 		EventTypeName:     "FixtureEvent",
 		RPCStem:           "ContractfixturesFixtureStateEvents",

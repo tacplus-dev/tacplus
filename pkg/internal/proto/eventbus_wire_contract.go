@@ -350,7 +350,7 @@ func wireTypeOf(f parser.FieldDescriptor) string {
 // source-relative paths together with every message they declare.
 //
 // The package name alone does NOT identify them. `eventbus` is the broker's
-// service identity (eventbus.EventBusTag), so any proto that stands in for the
+// service identity (eventbus.EventBusLabel), so any proto that stands in for the
 // broker declares that package — including presence-only stubs such as
 // cross-test/consumer-contract's contracteventbus.proto, which exists purely so
 // BuildTopicRegistry can resolve the broker tag and defines no wire messages at

@@ -290,7 +290,7 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 				if err != nil {
 					return fmt.Errorf("resolving vservice route capability metadata for %s/%s: %w", vs.Name, rpc, err)
 				}
-				// The gRPC path comes from Routes, never from HostTag + rpc.
+				// The gRPC path comes from Routes, never from HostLabel + rpc.
 				// This is the gateway's REST -> gRPC table: the browser-facing
 				// way into eventbus. It was the THIRD place building this path,
 				// and the last one still composing the flat broker-qualified
@@ -311,7 +311,7 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 				routes = append(routes, routeEntry{
 					HttpPath:           httpPath,
 					GrpcPath:           grpcPath,
-					ServiceID:          vs.HostTag,
+					ServiceID:          vs.HostLabel,
 					EntitlementService: fmt.Sprintf("Some(\"%s\")", vs.Name),
 					HttpMethodsLiteral: `"POST"`,
 					AuthPolicy:         "Entitled",

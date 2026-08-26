@@ -20,7 +20,7 @@ import (
 // binding declared by the current actor.
 type EventPublisherData struct {
 	TopicRef          string // e.g. "claudesensor.TraceEventBus.trace_events"
-	BrokerTag         string // service_id of the broker backing this topic
+	BrokerLabel       string // service_id of the broker backing this topic
 	EventTypeFQN      string // e.g. "trace.TraceEvent"
 	EventTypeName     string // e.g. "TraceEvent"
 	RPCStem           string // e.g. "ClaudesensorTraceEventBusTraceEvents"
@@ -37,11 +37,11 @@ func IsTraceEventPublisherData(publisher EventPublisherData) bool {
 
 // BoundaryData is the language-neutral metadata for a single boundary field.
 type BoundaryData struct {
-	StateRoot       string // e.g. "BaseballState"
-	Tag             string // routing label from service_state_tag annotation
-	AutoTlsKeyType  string // key algorithm when auto_tls is enabled ("ed25519" or "ecdsa"), empty = disabled
-	Boundary        string // PascalCase field name, e.g. "Roster"
-	FieldName       string // original field name, e.g. "roster"
+	StateRoot       string   // e.g. "BaseballState"
+	Labels          []string // routing labels from the service_state_label annotation
+	AutoTlsKeyType  string   // key algorithm when auto_tls is enabled ("ed25519" or "ecdsa"), empty = disabled
+	Boundary        string   // PascalCase field name, e.g. "Roster"
+	FieldName       string   // original field name, e.g. "roster"
 	Persistence     bool
 	Collection      bool   // true when the field is repeated
 	TypeFQN         string // proto type FQN, e.g. "baseball.Roster"
@@ -63,10 +63,10 @@ func CollectMessageBoundaries(msg *parser.MessageDescriptor, fd *parser.FileDesc
 	}
 	stateRoot := stateAnn.StringValue
 
-	// Routing tag from service_state_tag.
-	var tag string
-	if tagAnn, ok := msg.Annotations["service_state_tag"]; ok {
-		tag = tagAnn.StringValue
+	// Routing labels from service_state_label.
+	var labels []string
+	if labelAnn, ok := msg.Annotations["service_state_label"]; ok {
+		labels = labelAnn.StringSliceValue
 	}
 
 	// Auto-TLS: automatic cert lifecycle management.
@@ -85,7 +85,7 @@ func CollectMessageBoundaries(msg *parser.MessageDescriptor, fd *parser.FileDesc
 		}
 		bd := BoundaryData{
 			StateRoot:      stateRoot,
-			Tag:            tag,
+			Labels:         labels,
 			AutoTlsKeyType: autoTlsKeyType,
 			Boundary:       strutil.ToPascalCase(field.Name),
 			FieldName:      field.Name,
@@ -278,7 +278,7 @@ func detectConfig(msg *parser.MessageDescriptor, fd *parser.FileDescriptor) bool
 type SubscriptionData struct {
 	StateRoot       string // owning state root, e.g. "DgraphState"
 	Source          string // raw source ref, e.g. "claudesensor.AgenticCodeEventBus.event_stream"
-	BrokerTag       string // service_id of the broker backing this topic
+	BrokerLabel     string // service_id of the broker backing this topic
 	SourcePackage   string // parsed package, e.g. "claudesensor"
 	SourceStateRoot string // parsed topic message, e.g. "AgenticCodeEventBus"
 	SourceField     string // parsed field name, e.g. "event_stream"
@@ -310,7 +310,7 @@ func CollectMessageSubscriptions(msg *parser.MessageDescriptor) ([]SubscriptionD
 		sd := SubscriptionData{
 			StateRoot:       stateRoot,
 			Source:          ref.Raw,
-			BrokerTag:       eventbus.EventBusTag,
+			BrokerLabel:     eventbus.EventBusLabel,
 			SourcePackage:   ref.Package,
 			SourceStateRoot: ref.Message,
 			SourceField:     ref.Field,
@@ -462,7 +462,7 @@ func CollectActorEventPublisherData(p *parser.DescriptorParser, protoDir string,
 		}
 		result = append(result, EventPublisherData{
 			TopicRef:          binding.Topic.Ref.Raw,
-			BrokerTag:         binding.Topic.EventBusTag,
+			BrokerLabel:       binding.Topic.EventBusLabel,
 			EventTypeFQN:      eventType,
 			EventTypeName:     eventTypeName,
 			RPCStem:           binding.Topic.RPCStem,
@@ -620,7 +620,7 @@ func subscriptionDataFromTopic(stateRoot string, topic eventbus.Topic, origin st
 	return SubscriptionData{
 		StateRoot:       stateRoot,
 		Source:          topic.Ref.Raw,
-		BrokerTag:       topic.EventBusTag,
+		BrokerLabel:     topic.EventBusLabel,
 		SourcePackage:   topic.Ref.Package,
 		SourceStateRoot: topic.Ref.Message,
 		SourceField:     topic.Ref.Field,
@@ -682,7 +682,7 @@ func actorOwnsFile(fd *parser.FileDescriptor, selfPackage string) bool {
 		return true
 	}
 	for _, svc := range fd.Services {
-		if svc.HostTag == selfPackage {
+		if svc.HostLabel == selfPackage {
 			return true
 		}
 	}

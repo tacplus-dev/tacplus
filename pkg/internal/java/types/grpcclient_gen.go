@@ -34,7 +34,7 @@ type generatedGrpcClientJava struct {
 	ParentDir   string // e.g. "services"
 	FullPackage string // e.g. "com.example.wrappers.grpcclients.services.baseball"
 	ProtoFile   string
-	HostTag     string
+	HostLabel     string
 }
 
 // generateGrpcClients generates typed gRPC client wrappers for each gRPC service.
@@ -69,7 +69,7 @@ func generateGrpcClients(config *tactype.Config, servicesInfo []ServiceInfo, inp
 			ParentDir:   strings.Split(normalizedRelPath, string(filepath.Separator))[0],
 			FullPackage: fullPackage,
 			ProtoFile:   svc.ProtoFile,
-			HostTag:     svc.HostTag,
+			HostLabel:     svc.HostLabel,
 		})
 	}
 
@@ -816,7 +816,7 @@ func javaClientTargets(config *tactype.Config, servicesInfo []ServiceInfo) []grp
 	targetSeen := make(map[string]bool)
 	var targets []grpcClientTargetJava
 	for _, svc := range servicesInfo {
-		targetServiceID := javaResolveGrpcTarget(config, svc.ProtoFile, svc.PackageName, svc.HostTag)
+		targetServiceID := javaResolveGrpcTarget(config, svc.ProtoFile, svc.PackageName, svc.HostLabel)
 		if targetSeen[targetServiceID] {
 			continue
 		}
@@ -879,7 +879,7 @@ func generateGrpcClientGroupAggregators(config *tactype.Config, wrappers []gener
 			seen[methodName] = true
 			// Mesh routing target: use TargetService from the active client surface
 			// when set. Virtual services route to their physical host.
-			targetServiceID := javaResolveGrpcTarget(config, w.ProtoFile, w.PackageName, w.HostTag)
+			targetServiceID := javaResolveGrpcTarget(config, w.ProtoFile, w.PackageName, w.HostLabel)
 			// When two services share the same simple class name we must use the fully-qualified
 			// name in the generated Java to avoid import conflicts and ambiguity.
 			typeRef := w.ClassName
@@ -998,7 +998,7 @@ func generateGrpcClientRootAggregator(config *tactype.Config, wrappers []generat
 		targetSeen := make(map[string]bool)
 		var groupTargets []grpcClientTargetJava
 		for _, gw := range groupWrapperMap[w.ParentDir] {
-			targetServiceID := javaResolveGrpcTarget(config, gw.ProtoFile, gw.PackageName, gw.HostTag)
+			targetServiceID := javaResolveGrpcTarget(config, gw.ProtoFile, gw.PackageName, gw.HostLabel)
 			if !targetSeen[targetServiceID] {
 				targetSeen[targetServiceID] = true
 				t := grpcClientTargetJava{

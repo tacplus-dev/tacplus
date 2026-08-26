@@ -32,9 +32,9 @@ type RegistryTypeInfo struct {
 	TimeseriesRetention   *model.RetentionPolicyEntry // store-neutral retention (nil = indefinite)
 	TimeseriesDedup       *model.DedupPolicyEntry     // store-neutral dedup policy (nil = none)
 	// Durable service_store metadata
-	ServiceStore     bool
-	ServiceStoreName string
-	ServiceStoreTag  string
+	ServiceStore       bool
+	ServiceStoreName   string
+	ServiceStoreLabels []string
 }
 
 // CollectRegistryTypes scans allFiles for all message types and returns their
@@ -115,8 +115,8 @@ func CollectRegistryTypes(allFiles []model.ProtoFile) []RegistryTypeInfo {
 					rti.ServiceStore = true
 					rti.ServiceStoreName = ann.StringValue
 				}
-				if ann, ok := msg.Annotations["service_store_tag"]; ok && ann.StringValue != "" {
-					rti.ServiceStoreTag = ann.StringValue
+				if ann, ok := msg.Annotations["service_store_label"]; ok && len(ann.StringSliceValue) > 0 {
+					rti.ServiceStoreLabels = ann.StringSliceValue
 				}
 			}
 

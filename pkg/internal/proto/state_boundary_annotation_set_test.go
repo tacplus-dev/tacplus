@@ -29,7 +29,7 @@ message Item {
 }
 
 message DemoState {
-  option (spec.service_state) = {name: "DemoState", tag: "demo"};
+  option (spec.service_state) = {name: "DemoState", label: ["demo"]};
 
   Item everything = 1 [
     (spec.epoch_expiration) = true,

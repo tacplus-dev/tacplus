@@ -74,7 +74,7 @@ Services own their state. A message annotated with `(spec.service_state)` become
 
 ```protobuf
 message ServiceState {
-  option (spec.service_state) = {tag: "myservice", export: true};
+  option (spec.service_state) = {label: ["myservice"], export: true};
 
   Config config = 1;
   Session current_session = 2;
@@ -89,7 +89,7 @@ read-only imports on the fields that project exported state:
 
 ```protobuf
 message ConsumerState {
-  option (spec.service_state) = {tag: "consumer"};
+  option (spec.service_state) = {label: ["consumer"]};
 
   myservice.Session current_session = 1 [
     (spec.state_import) = "myservice.ServiceState.current_session"

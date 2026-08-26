@@ -115,7 +115,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				AuthAnyUser:   anyUser,
 				AuthServices:  service.AuthServices,
 				HasMethodAuth: hasMethodAuth,
-				HostTag:       service.HostTag,
+				HostLabel:       service.HostLabel,
 			})
 		}
 

@@ -144,8 +144,8 @@ type ServiceDescriptor struct {
 	IsTokenMinter     bool     // token_minter annotation present: this service mints service-identity tokens
 	TokenMinterProxy  bool     // token_minter {proxy: true}: the client-reachable (C2S) mint front; bare {} is the authoritative S2S minter
 	Gateway           bool     // derived: IsC2S && !AuthDisabled
-	EventTag          string   // value from event_tag annotation (routing label for event services)
-	HostTag           string   // value from service_s2s {tag: "..."} — the package name of the service that hosts this vservice
+	EventLabel        string   // value from event_label annotation (routing label for event services)
+	HostLabel         string   // value from service_s2s {label: "..."} — the package name of the service that hosts this vservice
 	AuthDisabled      bool     // C2S: no token required
 	AuthServices      []string // S2S: service identities allowed to call (service-level default)
 	AuthEntitledUsers bool     // C2S: users with matching entitlements can call
@@ -773,10 +773,10 @@ func (p *DescriptorParser) parseServiceDescriptor(sd protoreflect.ServiceDescrip
 		// Gateway-exposed event service Publish RPCs.
 		// When a state service has event_tag set, generate convention REST paths
 		// for Publish* RPCs using the tag as the route prefix.
-		if svc.EventTag != "" && svc.Gateway && strings.HasPrefix(md.Name, "Publish") && len(md.HttpMethods) == 0 {
+		if svc.EventLabel != "" && svc.Gateway && strings.HasPrefix(md.Name, "Publish") && len(md.HttpMethods) == 0 {
 			md.HttpMethods = []string{"POST"}
 			md.HttpMethod = "POST"
-			md.HttpPath = fmt.Sprintf("%s/%s/%s", p.restRootPath, svc.EventTag, md.Name)
+			md.HttpPath = fmt.Sprintf("%s/%s/%s", p.restRootPath, svc.EventLabel, md.Name)
 			md.HttpBody = "*"
 		}
 
@@ -802,7 +802,7 @@ func (p *DescriptorParser) parseServiceOptions(sd protoreflect.ServiceDescriptor
 			svc.GrpcName = pkg
 			svc.GrpcInstances = []string{pkg}
 			svc.AuthServices = val.GetAuthServices()
-			svc.HostTag = val.GetTag() // non-empty for vservices: names the package of the service that hosts this RPC surface
+			svc.HostLabel = val.GetLabel() // non-empty for vservices: names the package of the service that hosts this RPC surface
 		}
 	}
 
@@ -831,9 +831,9 @@ func (p *DescriptorParser) parseServiceOptions(sd protoreflect.ServiceDescriptor
 		}
 	}
 
-	// event_tag (string) — routing label for gateway-exposed event services
-	if proto.HasExtension(opts, spec.E_EventTag) {
-		svc.EventTag = proto.GetExtension(opts, spec.E_EventTag).(string)
+	// event_label (string) — routing label for gateway-exposed event services
+	if proto.HasExtension(opts, spec.E_EventLabel) {
+		svc.EventLabel = proto.GetExtension(opts, spec.E_EventLabel).(string)
 	}
 
 	// smb (SmbAnnotation) — Service Mesh Blackbox: this service's own instances
@@ -1500,9 +1500,9 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 				stateName = string(md.Name())
 			}
 			annotations["service_state"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringValue: stateName}
-			tag := val.GetTag()
-			if tag != "" {
-				annotations["service_state_tag"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringValue: tag}
+			labels := val.GetLabel()
+			if len(labels) > 0 {
+				annotations["service_state_label"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringSliceValue: labels}
 			}
 			if val.GetAutoTls() != spec.TlsKeyType_TLS_KEY_TYPE_NONE {
 				keyType := strings.ToLower(strings.TrimPrefix(val.GetAutoTls().String(), "TLS_KEY_TYPE_"))
@@ -1525,25 +1525,31 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 
 	// service_event: marks a message as an event source backed by EventBus.
 	// When present without service_state, synthesizes service_state from the
-	// message name and uses the tag as the backing store.
+	// message name and uses the label as the backing store.
+	//
+	// A topic is published to exactly one broker, so service_event's label stays
+	// singular while service_state's is repeated. The historical fallback (omit
+	// the event label, inherit the state one) therefore only resolves when the
+	// state root declares exactly one label; more than one has no non-arbitrary
+	// answer and is rejected in validateMessageAnnotations.
 	if proto.HasExtension(opts, spec.E_ServiceEvent) {
 		val := proto.GetExtension(opts, spec.E_ServiceEvent).(*spec.ServiceEventAnnotation)
 		if val != nil {
-			tag := val.GetTag()
-			if tag == "" {
-				if stateTag, ok := annotations["service_state_tag"]; ok {
-					tag = stateTag.StringValue
+			label := val.GetLabel()
+			if label == "" {
+				if stateAnn, ok := annotations["service_state_label"]; ok && len(stateAnn.StringSliceValue) == 1 {
+					label = stateAnn.StringSliceValue[0]
 				}
 			}
-			if tag != "" {
-				annotations["service_event_tag"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringValue: tag}
+			if label != "" {
+				annotations["service_event_label"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringValue: label}
 				if val.GetExport() {
 					annotations["service_state_export"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 				}
 				// Synthesize service_state when absent — makes service_event standalone.
 				if _, hasState := annotations["service_state"]; !hasState {
 					annotations["service_state"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringValue: string(md.Name())}
-					annotations["service_state_tag"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringValue: tag}
+					annotations["service_state_label"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringSliceValue: []string{label}}
 				}
 			}
 		}
@@ -1555,9 +1561,9 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 		if val != nil {
 			storeName := string(md.Name())
 			annotations["service_store"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringValue: storeName}
-			tag := val.GetTag()
-			if tag != "" {
-				annotations["service_store_tag"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringValue: tag}
+			labels := val.GetLabel()
+			if len(labels) > 0 {
+				annotations["service_store_label"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringSliceValue: labels}
 			}
 		}
 	}

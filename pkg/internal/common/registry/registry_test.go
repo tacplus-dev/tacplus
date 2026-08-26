@@ -497,9 +497,9 @@ func schemaDefProperties(t *testing.T, defs map[string]any, name string) map[str
 
 func TestBuildTypeInfoProtoIncludesServiceStoreMetadata(t *testing.T) {
 	got := BuildTypeInfoProto(llmdesc.RegistryTypeInfo{
-		ServiceStore:     true,
-		ServiceStoreName: "CredPair",
-		ServiceStoreTag:  "auth",
+		ServiceStore:       true,
+		ServiceStoreName:   "CredPair",
+		ServiceStoreLabels: []string{"auth"},
 		Descriptor: llmdesc.TypeDescriptor{
 			Name:    "CredPair",
 			Package: "auth",
@@ -510,9 +510,9 @@ func TestBuildTypeInfoProtoIncludesServiceStoreMetadata(t *testing.T) {
 		},
 	})
 
-	if !got.GetServiceStore() || got.GetServiceStoreName() != "CredPair" || got.GetServiceStoreTag() != "auth" {
+	if !got.GetServiceStore() || got.GetServiceStoreName() != "CredPair" || len(got.GetServiceStoreLabel()) != 1 || got.GetServiceStoreLabel()[0] != "auth" {
 		t.Fatalf("service_store metadata = (%v, %q, %q), want (true, CredPair, auth)",
-			got.GetServiceStore(), got.GetServiceStoreName(), got.GetServiceStoreTag())
+			got.GetServiceStore(), got.GetServiceStoreName(), got.GetServiceStoreLabel())
 	}
 	fields := map[string]*spec.FieldInfo{}
 	for _, field := range got.GetFields() {
@@ -582,7 +582,7 @@ func TestCollectEventTopologyProtos(t *testing.T) {
 			{
 				Name: "TraceEventBus",
 				Annotations: map[string]model.AnnotationValue{
-					"service_event_tag": {Type: model.AnnotationTypeString, StringValue: "eventbus"},
+					"service_event_label": {Type: model.AnnotationTypeString, StringValue: "eventbus"},
 				},
 				Fields: []parser.FieldDescriptor{
 					{
@@ -639,8 +639,8 @@ func TestCollectEventTopologyProtos(t *testing.T) {
 	if pub.ActorPackage != "audit" || pub.ActorMessage != "AuditActor" || pub.TopicRef != "events.TraceEventBus.trace_events" {
 		t.Fatalf("publish actor/topic = (%q, %q, %q), want audit/AuditActor/topic", pub.ActorPackage, pub.ActorMessage, pub.TopicRef)
 	}
-	if pub.EventTypeFqn != "trace.TraceEvent" || pub.BrokerTag != "eventbus" || pub.RpcStem != "EventsTraceEventBusTraceEvents" {
-		t.Fatalf("publish topic metadata = (%q, %q, %q), want trace.TraceEvent/eventbus/stem", pub.EventTypeFqn, pub.BrokerTag, pub.RpcStem)
+	if pub.EventTypeFqn != "trace.TraceEvent" || pub.BrokerLabel != "eventbus" || pub.RpcStem != "EventsTraceEventBusTraceEvents" {
+		t.Fatalf("publish topic metadata = (%q, %q, %q), want trace.TraceEvent/eventbus/stem", pub.EventTypeFqn, pub.BrokerLabel, pub.RpcStem)
 	}
 	if pub.AuthModel != "s2s" || !reflect.DeepEqual(pub.AuthServices, []string{"audit"}) {
 		t.Fatalf("publish auth = (%q, %#v), want s2s/audit", pub.AuthModel, pub.AuthServices)
@@ -692,19 +692,19 @@ import "sys/spec.proto";
 message Ping { string m = 1; }
 
 service CacheService {
-  option (spec.service_s2s) = {auth_services: ["*"], tag: "CacheService"};
+  option (spec.service_s2s) = {auth_services: ["*"], label: "CacheService"};
   option (spec.smb) = {};
   rpc Get(Ping) returns (Ping);
 }
 
 service KernelCacheService {
-  option (spec.service_s2s) = {auth_services: ["*"], tag: "KernelCacheService"};
+  option (spec.service_s2s) = {auth_services: ["*"], label: "KernelCacheService"};
   option (spec.smb) = {root: SMB_ROOT_CLUSTER};
   rpc Get(Ping) returns (Ping);
 }
 
 service AuthorityService {
-  option (spec.service_s2s) = {auth_services: ["*"], tag: "AuthorityService"};
+  option (spec.service_s2s) = {auth_services: ["*"], label: "AuthorityService"};
   option (spec.smb_authority) = {};
   rpc Get(Ping) returns (Ping);
 }
@@ -786,7 +786,7 @@ import "sys/spec.proto";
 message Ping { string m = 1; }
 
 service CacheService {
-  option (spec.service_s2s) = {auth_services: ["*"], tag: "CacheService"};
+  option (spec.service_s2s) = {auth_services: ["*"], label: "CacheService"};
   rpc Get(Ping) returns (Ping);
 }
 `
@@ -959,7 +959,7 @@ option (spec.vservice) = {id: 30, name: "claudesensor"};
 message Ping { string m = 1; }
 
 service ClaudeSensorApi {
-  option (spec.service_s2s) = {auth_services: ["*"], tag: "sensorhost"};
+  option (spec.service_s2s) = {auth_services: ["*"], label: "sensorhost"};
   rpc GetPing(Ping) returns (Ping);
 }
 `
@@ -1010,8 +1010,8 @@ service ClaudeSensorApi {
 	if len(leaf.Services) != 1 {
 		t.Fatalf("services = %#v, want one service", leaf.Services)
 	}
-	if leaf.Services[0].HostTag != "sensorhost" {
-		t.Fatalf("host_tag = %q, want sensorhost", leaf.Services[0].HostTag)
+	if leaf.Services[0].HostLabel != "sensorhost" {
+		t.Fatalf("host_label = %q, want sensorhost", leaf.Services[0].HostLabel)
 	}
 }
 

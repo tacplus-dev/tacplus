@@ -91,7 +91,7 @@ var (
 	// the same MS-10 fix applied to grpcConfigRe.
 	serviceC2sRe   = regexp.MustCompile(`(?m)^[^\n/]*?option\s+\(spec\.service_c2s\)\s*=`)
 	serviceC2dRe   = regexp.MustCompile(`(?m)^[^\n/]*?option\s+\(spec\.service_c2d\)\s*=`)
-	eventTagRe     = regexp.MustCompile(`(?m)^[^\n/]*?option\s+\(spec\.event_tag\)\s*=`)
+	eventLabelRe   = regexp.MustCompile(`(?m)^[^\n/]*?option\s+\(spec\.event_label\)\s*=`)
 	serviceStartRe = regexp.MustCompile(`(?m)^service\s+(\w+)\s*\{`)
 	rpcNameRe      = regexp.MustCompile(`(?m)^\s*rpc\s+(\w+)\s*\(`)
 
@@ -100,14 +100,14 @@ var (
 
 // VServiceEntry represents a vservice with exported topic RPCs.
 type VServiceEntry struct {
-	Name    string   // entitlement key (e.g. "claudesensor")
-	FieldID int32    // stable field number for TokenEntitlements
-	HostTag string   // physical service tag (e.g. "eventbus")
-	RPCs    []string // generated RPC names (e.g. "PublishClaudesensorAgenticCodeEventBusEventStream")
+	Name      string   // entitlement key (e.g. "claudesensor")
+	FieldID   int32    // stable field number for TokenEntitlements
+	HostLabel string   // physical service tag (e.g. "eventbus")
+	RPCs      []string // generated RPC names (e.g. "PublishClaudesensorAgenticCodeEventBusEventStream")
 	// Routes carries the per-topic wire coordinates for each entry in RPCs,
 	// index-aligned. RPCs holds the flat historical names, which are still the
 	// entitlement keys; Routes holds what a caller must actually dial. Anything
-	// building a gRPC path MUST use Routes — composing one from HostTag and an
+	// building a gRPC path MUST use Routes — composing one from HostLabel and an
 	// RPCs entry reproduces the flat name the broker is being moved off.
 	Routes []VServiceRoute
 }
@@ -325,7 +325,7 @@ func ScanAndGenerateConfigHolder(sourceProtoDir string, dirs ...string) ([]GrpcC
 	// vservice RPC enums (from exported topics).
 	for _, vs := range vsEntries {
 		prefix := strutil.ToUpperSnakeCase(strutil.ToPascalCase(vs.Name)) + "_RPCS"
-		svcsBuf.WriteString(fmt.Sprintf("\n// %s (vservice, hosted by %s)\n", vs.Name, vs.HostTag))
+		svcsBuf.WriteString(fmt.Sprintf("\n// %s (vservice, hosted by %s)\n", vs.Name, vs.HostLabel))
 		svcsBuf.WriteString(fmt.Sprintf("enum %sRPCs {\n", strutil.ToPascalCase(vs.Name)))
 		svcsBuf.WriteString(fmt.Sprintf("  %s_UNSPECIFIED = 0;\n", prefix))
 		for i, rpc := range vs.RPCs {
@@ -624,7 +624,7 @@ func scanServiceRPCs(servicesDir string, entries []GrpcConfigEntry, reg *Service
 
 		for _, block := range blocks {
 			// Skip injected event state services (e.g. AgenticCodeEventBusStateService).
-			if eventTagRe.MatchString(block.body) {
+			if eventLabelRe.MatchString(block.body) {
 				continue
 			}
 
@@ -772,20 +772,20 @@ func ScanVServiceRPCs(scanDir string, reg *ServiceRegistry) ([]VServiceEntry, er
 
 		var rpcs []string
 		var routes []VServiceRoute
-		var hostTag string
+		var hostLabel string
 		for _, msg := range fd.Messages {
-			tagAnn, ok := msg.Annotations["service_event_tag"]
-			if !ok || tagAnn.StringValue == "" {
+			labelAnn, ok := msg.Annotations["service_event_label"]
+			if !ok || labelAnn.StringValue == "" {
 				continue
 			}
 			exportAnn, ok := msg.Annotations["service_state_export"]
 			if !ok || !exportAnn.BoolValue {
 				continue
 			}
-			if hostTag == "" {
-				hostTag = tagAnn.StringValue
-			} else if hostTag != tagAnn.StringValue {
-				return nil, fmt.Errorf("%s: vservice %q exports topics on multiple broker tags (%q and %q)", path, fd.VServiceName, hostTag, tagAnn.StringValue)
+			if hostLabel == "" {
+				hostLabel = labelAnn.StringValue
+			} else if hostLabel != labelAnn.StringValue {
+				return nil, fmt.Errorf("%s: vservice %q exports topics on multiple broker labels (%q and %q)", path, fd.VServiceName, hostLabel, labelAnn.StringValue)
 			}
 			for _, field := range msg.Fields {
 				topicAnn, ok := field.Annotations["topic"]
@@ -814,11 +814,11 @@ func ScanVServiceRPCs(scanDir string, reg *ServiceRegistry) ([]VServiceEntry, er
 
 		if len(rpcs) > 0 {
 			result = append(result, VServiceEntry{
-				Name:    fd.VServiceName,
-				FieldID: int32(vsID),
-				HostTag: hostTag,
-				RPCs:    rpcs,
-				Routes:  routes,
+				Name:      fd.VServiceName,
+				FieldID:   int32(vsID),
+				HostLabel: hostLabel,
+				RPCs:      rpcs,
+				Routes:    routes,
 			})
 		}
 	}
@@ -941,12 +941,12 @@ func InjectGrpcConfigState(sourceProtoDir, tempProtoDir, flatProtoDir string) ([
 
 		// Build the ConfigState message to append. Uses the local Config type
 		// (not fully-qualified) since it's in the same proto file.
-		// The tag routes to the store discovered from (spec.service).config_store.
+		// The label routes to the store discovered from (spec.service).config_store.
 		configState := fmt.Sprintf(`
 // %s is the state boundary for %s service configuration.
 // Auto-injected by tacplus from (spec.grpc_config) annotation.
 message %s {
-  option (spec.service_state) = {name: "%s", tag: "%s"};
+  option (spec.service_state) = {name: "%s", label: ["%s"]};
 
   %s config = 1 [
     (spec.persistence) = true

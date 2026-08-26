@@ -15,7 +15,7 @@ option (spec.grpc_c2s_client) = {service: "catalog.CatalogService"};
 message Ping { string m = 1; }
 
 service W2sValidateService {
-  option (spec.service_s2s) = {tag: "W2sValidateService"};
+  option (spec.service_s2s) = {label: "W2sValidateService"};
   rpc Get(Ping) returns (Ping) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
   }

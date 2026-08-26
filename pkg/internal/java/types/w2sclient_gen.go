@@ -95,8 +95,8 @@ func javaW2SClientPackage(config *tactype.Config, typeDir, packageName string) s
 // resolveJavaW2STarget determines the physical service ID for W2S routing groups.
 func resolveJavaW2STarget(svc ServiceInfo) string {
 	target := svc.PackageName
-	if svc.HostTag != "" {
-		target = svc.HostTag
+	if svc.HostLabel != "" {
+		target = svc.HostLabel
 	}
 	for _, entry := range svc.Config.GrpcW2SClients {
 		matchKey := entry.ProtoPackage

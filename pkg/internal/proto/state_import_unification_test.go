@@ -19,7 +19,7 @@ message OwnerRecord {
 }
 
 message OwnerState {
-  option (spec.service_state) = {name: "OwnerState", tag: "owner", export: true};
+  option (spec.service_state) = {name: "OwnerState", label: ["owner"], export: true};
 
   OwnerRecord current = 1;
 }
@@ -32,7 +32,7 @@ import "sys/spec.proto";
 import "owner.proto";
 
 message ConsumerState {
-  option (spec.service_state) = {name: "ConsumerState", tag: "consumer"};
+  option (spec.service_state) = {name: "ConsumerState", label: ["consumer"]};
 
   owner.OwnerRecord imported_current = 1 [
     (spec.state_import) = "owner.OwnerState.current"
@@ -188,7 +188,7 @@ package demo;
 import "sys/spec.proto";
 
 message DemoState {
-  option (spec.service_state) = {name: "DemoState", tag: "demo"};
+  option (spec.service_state) = {name: "DemoState", label: ["demo"]};
 
   map<string, string> settings = 1;
 }
@@ -241,7 +241,7 @@ package demo;
 import "sys/spec.proto";
 
 message DemoState {
-  option (spec.service_state) = {name: "DemoState", tag: "demo"};
+  option (spec.service_state) = {name: "DemoState", label: ["demo"]};
 
   `+tc.field+`
 }
@@ -274,7 +274,7 @@ package demo;
 import "sys/spec.proto";
 
 message DemoState {
-  option (spec.service_state) = {name: "DemoState", tag: "demo"};
+  option (spec.service_state) = {name: "DemoState", label: ["demo"]};
   option (spec.subscribe) = {source: "not_a_valid_ref"};
 
   string name = 1;
@@ -345,7 +345,7 @@ import "sys/spec.proto";
 option (spec.service) = {name: "kernel", store: true};
 
 message KernelState {
-  option (spec.service_state) = {name: "KernelState", tag: "kernel", export: true};
+  option (spec.service_state) = {name: "KernelState", label: ["kernel"], export: true};
   string x = 1;
 }
 `)
@@ -357,7 +357,7 @@ package other;
 import "sys/spec.proto";
 
 message OtherState {
-  option (spec.service_state) = {name: "OtherState", tag: "other", export: true};
+  option (spec.service_state) = {name: "OtherState", label: ["other"], export: true};
   string y = 1;
 }
 `)
@@ -400,7 +400,7 @@ package other;
 import "sys/spec.proto";
 
 message OtherState {
-  option (spec.service_state) = {name: "OtherState", tag: "other", export: true};
+  option (spec.service_state) = {name: "OtherState", label: ["other"], export: true};
   string y = 1;
 }
 `)

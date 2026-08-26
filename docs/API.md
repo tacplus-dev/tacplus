@@ -402,7 +402,7 @@ a handler whose producer can wedge must honor the context itself.)
 
 EventBus participation in generated service runtimes is declared, never
 inferred. A topic is a message
-carrying `(spec.service_event)` (with `tag` naming the broker service) plus a
+carrying `(spec.service_event)` (with `label` naming the broker service) plus a
 field carrying `(spec.topic) = true`. Producers and consumers declare
 `(spec.event_publish)` / `(spec.event_watch)` with a `topic_ref` in the
 canonical format, parsed from the right so dotted packages work:

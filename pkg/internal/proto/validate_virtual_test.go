@@ -33,7 +33,7 @@ import "sys/spec.proto";
 import "sys/opalib.proto";
 
 message OpaServerState {
-  option (spec.service_state) = {name: "OpaServerState", tag: "opaserver"};
+  option (spec.service_state) = {name: "OpaServerState", label: ["opaserver"]};
 
   opalib.OpaPolicy policy = 1;
 }
@@ -47,7 +47,7 @@ package plainserver;
 import "sys/spec.proto";
 
 message PlainServerState {
-  option (spec.service_state) = {name: "PlainServerState", tag: "plainserver"};
+  option (spec.service_state) = {name: "PlainServerState", label: ["plainserver"]};
 
   string note = 1;
 }

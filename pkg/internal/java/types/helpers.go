@@ -1740,7 +1740,7 @@ func writeMerge(b *strings.Builder, pf model.ProtoFile, outerClassName string) {
 // writeScopeToEntitlements generates the scopeToEntitlements static method for the entitlements
 // Helpers class. The method scopes a full TokenEntitlements down to only exact grant tokens relevant to
 // targetAud (the JWT audience string, which equals the proto package name of the target service).
-// vServices are co-scoped with the physical service that hosts them (HostTag).
+// vServices are co-scoped with the physical service that hosts them (HostLabel).
 // Returns an empty TokenEntitlements for unknown service names.
 // Callers that need special handling for the IAM service itself (for example, returning the full
 // entitlements for default-audience tokens) should check before delegating to this method.
@@ -1748,7 +1748,7 @@ func writeScopeToEntitlements(b *strings.Builder, svcRPCs []proto.ServiceRPCEntr
 	// Build hostTag → vservice names map for co-scoping.
 	vsMap := make(map[string][]string)
 	for _, vs := range vsEntries {
-		vsMap[vs.HostTag] = append(vsMap[vs.HostTag], vs.Name)
+		vsMap[vs.HostLabel] = append(vsMap[vs.HostLabel], vs.Name)
 	}
 
 	b.WriteString("/**\n")

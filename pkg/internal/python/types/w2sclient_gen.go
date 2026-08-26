@@ -50,8 +50,8 @@ func generateW2SClients(servicesInfo []ServiceInfo, inputDir string) error {
 func resolveW2STarget(svc ServiceInfo) string {
 	config := svc.Config
 	target := svc.PackageName
-	if svc.HostTag != "" {
-		target = svc.HostTag
+	if svc.HostLabel != "" {
+		target = svc.HostLabel
 	}
 	for _, entry := range config.GrpcW2SClients {
 		matchKey := strings.TrimSuffix(filepath.Base(entry.ProtoFile), ".proto")

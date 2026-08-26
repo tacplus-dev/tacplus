@@ -35,7 +35,7 @@ message HostedEvent {
 message HostedEventBus {
   option (spec.service_state) = {
     name: "HostedEventBus"
-    tag: "topics"
+    label: ["topics"]
     export: true
   };
   option (spec.service_event) = {};
@@ -127,7 +127,7 @@ message HostedEvent {
 }
 
 message HostedEventBus {
-  option (spec.service_state) = {name: "HostedEventBus", tag: "topics"};
+  option (spec.service_state) = {name: "HostedEventBus", label: ["topics"]};
   option (spec.service_event) = {};
 
   repeated HostedEvent events = 1 [(spec.topic) = true];

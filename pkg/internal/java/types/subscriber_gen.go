@@ -144,7 +144,7 @@ func collectJavaSubscriptions(config *tactype.Config, protoDir string) ([]tactyp
 			SourcePackage:   sd.SourcePackage,
 			SourceStateRoot: sd.SourceStateRoot,
 			SourceField:     sd.SourceField,
-			TargetService:   sd.BrokerTag,
+			TargetService:   sd.BrokerLabel,
 			SourceTypeFqn:   res.TypeFqn,
 			SourceProtoDir:  res.ProtoDir,
 		})

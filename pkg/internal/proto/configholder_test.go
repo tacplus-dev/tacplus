@@ -186,13 +186,13 @@ func TestInjectGrpcConfigStateRoutesToDeclaredConfigStore(t *testing.T) {
 package zeta;
 import "sys/spec.proto";
 option (spec.service) = {name: "zeta", store: true, config_store: true};
-message ZetaState { option (spec.service_state) = {name: "ZetaState", tag: "zeta"}; string id = 1; }
+message ZetaState { option (spec.service_state) = {name: "ZetaState", label: ["zeta"]}; string id = 1; }
 `)
 	writeProto(t, dir, "alpha.proto", `syntax = "proto3";
 package alpha;
 import "sys/spec.proto";
 option (spec.service) = {name: "alpha", store: true};
-message AlphaState { option (spec.service_state) = {name: "AlphaState", tag: "alpha"}; string id = 1; }
+message AlphaState { option (spec.service_state) = {name: "AlphaState", label: ["alpha"]}; string id = 1; }
 `)
 	writeProto(t, dir, "demo.proto", `syntax = "proto3";
 package demo;
@@ -212,10 +212,10 @@ message DemoConfig {
 		t.Fatalf("read injected demo.proto: %v", err)
 	}
 	text := string(injected)
-	if !strings.Contains(text, `tag: "zeta"`) {
+	if !strings.Contains(text, `label: ["zeta"]`) {
 		t.Fatalf("config state must route to the declared config_store (zeta):\n%s", text)
 	}
-	if strings.Contains(text, `tag: "alpha"`) {
+	if strings.Contains(text, `label: ["alpha"]`) {
 		t.Fatalf("config state must not route to a store that only declares store: true (alpha):\n%s", text)
 	}
 }
@@ -236,13 +236,13 @@ func TestInjectGrpcConfigStateRejectsAmbiguousStores(t *testing.T) {
 package zeta;
 import "sys/spec.proto";
 option (spec.service) = {name: "zeta", store: true};
-message ZetaState { option (spec.service_state) = {name: "ZetaState", tag: "zeta"}; string id = 1; }
+message ZetaState { option (spec.service_state) = {name: "ZetaState", label: ["zeta"]}; string id = 1; }
 `)
 	writeProto(t, dir, "alpha.proto", `syntax = "proto3";
 package alpha;
 import "sys/spec.proto";
 option (spec.service) = {name: "alpha", store: true};
-message AlphaState { option (spec.service_state) = {name: "AlphaState", tag: "alpha"}; string id = 1; }
+message AlphaState { option (spec.service_state) = {name: "AlphaState", label: ["alpha"]}; string id = 1; }
 `)
 	writeProto(t, dir, "demo.proto", `syntax = "proto3";
 package demo;
@@ -279,7 +279,7 @@ func TestInjectGrpcConfigStateAllowsSoleStoreWithoutConfigStore(t *testing.T) {
 package alpha;
 import "sys/spec.proto";
 option (spec.service) = {name: "alpha", store: true};
-message AlphaState { option (spec.service_state) = {name: "AlphaState", tag: "alpha"}; string id = 1; }
+message AlphaState { option (spec.service_state) = {name: "AlphaState", label: ["alpha"]}; string id = 1; }
 `)
 	writeProto(t, dir, "demo.proto", `syntax = "proto3";
 package demo;
@@ -298,7 +298,7 @@ message DemoConfig {
 	if err != nil {
 		t.Fatalf("read injected demo.proto: %v", err)
 	}
-	if !strings.Contains(string(injected), `tag: "alpha"`) {
+	if !strings.Contains(string(injected), `label: ["alpha"]`) {
 		t.Fatalf("config state must route to the sole store (alpha):\n%s", string(injected))
 	}
 }
@@ -417,7 +417,7 @@ func TestRpcSurfaceScanners_IgnoreCommentedOptions(t *testing.T) {
 	}{
 		{"service_c2s", serviceC2sRe, "option (spec.service_c2s) = {};"},
 		{"service_c2d", serviceC2dRe, "option (spec.service_c2d) = {};"},
-		{"event_tag", eventTagRe, "option (spec.event_tag) = {tag: \"x\"};"},
+		{"event_label", eventLabelRe, "option (spec.event_label) = \"x\";"},
 	}
 	for _, tc := range cases {
 		commented := "service Foo {\n  // " + tc.option + "\n  rpc Ping(Empty) returns (Empty);\n}\n"

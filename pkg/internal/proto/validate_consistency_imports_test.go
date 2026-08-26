@@ -33,7 +33,7 @@ message OwnerRecord {
 }
 
 message OwnerState {
-  option (spec.service_state) = {name: "OwnerState", tag: "owner", export: true};
+  option (spec.service_state) = {name: "OwnerState", label: ["owner"], export: true};
 
   OwnerRecord current = 1;
 }
@@ -69,7 +69,7 @@ import "sys/spec.proto";
 import "owner.proto";
 
 message ConsumerState {
-  option (spec.service_state) = {name: "ConsumerState", tag: "consumer"};
+  option (spec.service_state) = {name: "ConsumerState", label: ["consumer"]};
 
   owner.OwnerRecord imported_current = 1;
 }
@@ -108,7 +108,7 @@ message HostedEvent {
 }
 
 message HostedEventBus {
-  option (spec.service_event) = {tag: "topics"};
+  option (spec.service_event) = {label: "topics"};
 
   repeated HostedEvent events = 1 [(spec.topic) = true];
 }
@@ -120,7 +120,7 @@ import "sys/spec.proto";
 import "topics.proto";
 
 message ConsumerState {
-  option (spec.service_state) = {name: "ConsumerState", tag: "consumer"};
+  option (spec.service_state) = {name: "ConsumerState", label: ["consumer"]};
 
   topics.HostedEvent latest = 1;
 }

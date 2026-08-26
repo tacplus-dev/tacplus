@@ -117,7 +117,7 @@ extend google.protobuf.FileOptions {
 
   // vservice declares a virtual service identity for this proto file.
   // Virtual services are not physical processes — their RPCs are hosted by a
-  // physical service (identified by the service_event tag). vservice identity
+  // physical service (identified by the service_event label). vservice identity
   // enables entitlement-based C2S authorization: aud targets the physical host
   // while entitlements are checked against the vservice name.
   // Example: option (spec.vservice) = {id: 30, name: "claudesensor"};
@@ -363,7 +363,7 @@ extend google.protobuf.MessageOptions {
   ParamMapConfig generate_from_map = 60028;
 
   // service_state marks a message as a state root.
-  // Example: option (spec.service_state) = {name: "BaseballState", tag: "state-store"};
+  // Example: option (spec.service_state) = {name: "BaseballState", label: ["state-store"]};
   StateAnnotation service_state = 60035;
 
   // 60036 was (spec.state_consistency) (ConsistencyModel) — removed; boundaries are
@@ -444,7 +444,7 @@ extend google.protobuf.MessageOptions {
 
   // service_event declares that this state root's topic publish RPCs should be
   // exposed through the API gateway. tacplus propagates this to the generated
-  // state service as spec.service_c2s and spec.event_tag options.
+  // state service as spec.service_c2s and spec.event_label options.
   ServiceEventAnnotation service_event = 60060;
 
   // timeseries_type opts a message into timeseries table generation.
@@ -457,7 +457,7 @@ extend google.protobuf.MessageOptions {
   // The backing store implementation can map these RPCs to replicated storage.
   // Example:
   //   message CredPair {
-  //     option (spec.service_store) = {tag: "state-store"};
+  //     option (spec.service_store) = {label: ["state-store"]};
   //     string client_id = 1 [(spec.store_key) = true];
   //     string client_secret = 2;
   //   }
@@ -779,10 +779,10 @@ message ServiceS2SAnnotation {
   // protos (state, record_map, timeseries, opa_eval) still declare it here.
   repeated string auth_services = 1;
 
-  // tag is the routing label for the physical service that hosts this S2S
+  // label is the routing label for the physical service that hosts this S2S
   // interface. Used for vservice routing tables where the interface is defined
   // in a vservice proto but hosted by a physical service (e.g. "stratum").
-  string tag = 3;
+  string label = 3;
 }
 
 // ServiceC2SAnnotation declares a client-to-service gRPC service.
@@ -1041,8 +1041,8 @@ message MethodCollection {
 // ServiceEventAnnotation declares that a state service's topic/queue RPCs
 // are accessible to other services (S2S only, like service_state).
 message ServiceEventAnnotation {
-  // tag is the routing label for service resolution (e.g. "eventbus").
-  string tag = 1;
+  // label is the routing label for service resolution (e.g. "eventbus").
+  string label = 1;
   // export makes this event topic available for RO import by other services.
   bool export = 3;
 }
@@ -1606,8 +1606,10 @@ enum TlsKeyType {
 message StateAnnotation {
   // name is the state root name (e.g. "ClusterState", "AegisState").
   string name = 1;
-  // tag is the routing label for the backing store (e.g. "state-store", "eventbus").
-  string tag = 3;
+  // label lists the routing labels for the backing stores this state root
+  // routes to (e.g. ["state-store"], ["kernel", "edge"]). Every label must be
+  // served by a loaded service; a label no service serves fails generation.
+  repeated string label = 3;
   // auto_tls enables automatic TLS certificate lifecycle management.
   // When set, tacplus generates a bidi stream subscription to the certificate
   // authority service and a new_tls_cert Handler method for cert delivery.
@@ -1628,8 +1630,10 @@ message StateAnnotation {
 // Access is via delegate pattern: services authenticate clients, then
 // write through the backing service. External clients never write directly.
 message ServiceStoreAnnotation {
-  // tag is the routing label for the backing store (e.g. "state-store").
-  string tag = 1;
+  // label lists the routing labels for the backing stores this store routes to
+  // (e.g. ["state-store"]). Every label must be served by a loaded service; a
+  // label no service serves fails generation.
+  repeated string label = 1;
 }
 
 // TimeseriesStoreAnnotation marks a service proto as a timeseries data store.
@@ -1667,7 +1671,7 @@ message ServiceAnnotation {
   // name is the canonical service name (e.g. "identity", "gateway").
   string name = 1;
   // store declares this service as a backing store.
-  // Other services reference it via StateAnnotation.tag.
+  // Other services reference it via StateAnnotation.label.
   bool store = 3;
   // config_store declares this service as THE backing store for auto-injected
   // per-service config state (the <Service>ConfigState messages tacplus injects
@@ -1796,16 +1800,16 @@ message RestMethods {
 }
 
 extend google.protobuf.ServiceOptions {
-  // event_tag is the routing label for gateway-exposed event services.
+  // event_label is the routing label for gateway-exposed event services.
   // Set by tacplus on generated state services that have spec.service_event.
   // The gateway uses this as the service_id for backend resolution.
-  string event_tag = 70012;
+  string event_label = 70012;
 
   // service_s2s declares a service-to-service gRPC service.
   // Only authenticated service identities can call these RPCs; which ones is
   // declared per-RPC on spec.rpc.
   // Example: option (spec.service_s2s) = {};
-  // Example: option (spec.service_s2s) = {tag: "stratum"};
+  // Example: option (spec.service_s2s) = {label: "stratum"};
   ServiceS2SAnnotation service_s2s = 70013;
 
   // service_c2s declares a client-to-service gRPC service.

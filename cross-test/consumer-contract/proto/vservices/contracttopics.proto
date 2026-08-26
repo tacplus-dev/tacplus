@@ -21,7 +21,7 @@ message HostedEvent {
 message HostedEventBus {
   option (spec.service_state) = {
     name: "HostedEventBus"
-    tag: "contractfixtures"
+    label: ["contractfixtures"]
     export: true
   };
   option (spec.service_event) = {};

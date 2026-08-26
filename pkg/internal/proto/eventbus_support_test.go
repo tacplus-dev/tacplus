@@ -146,7 +146,7 @@ message DemoEvent {
 }
 
 message DemoState {
-  option (spec.service_event) = {tag: "eventbus" export: true};
+  option (spec.service_event) = {label: "eventbus" export: true};
 
   repeated DemoEvent events = 1 [(spec.topic) = true];
 }

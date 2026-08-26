@@ -110,6 +110,12 @@ type VServiceEntry struct {
 	// building a gRPC path MUST use Routes — composing one from HostLabel and an
 	// RPCs entry reproduces the flat name the broker is being moved off.
 	Routes []VServiceRoute
+	// IsTrait records which declaration produced this entry: (spec.trait) rather
+	// than (spec.vservice). Both kinds share this struct because they share an
+	// identity shape, but they are not the same contract, and the generated
+	// enum comment names the kind — calling a trait a vservice there is the one
+	// place that mislabel reaches consumers (it lands in registry.json).
+	IsTrait bool
 }
 
 // VServiceRoute is the per-topic gRPC coordinate for one topic RPC:
@@ -342,7 +348,11 @@ func ScanAndGenerateConfigHolder(sourceProtoDir string, dirs ...string) ([]GrpcC
 	// vservice RPC enums (from exported topics).
 	for _, vs := range vsEntries {
 		prefix := strutil.ToUpperSnakeCase(strutil.ToPascalCase(vs.Name)) + "_RPCS"
-		svcsBuf.WriteString(fmt.Sprintf("\n// %s (vservice, hosted by %s)\n", vs.Name, vs.HostLabel))
+		kind := "vservice"
+		if vs.IsTrait {
+			kind = "trait"
+		}
+		svcsBuf.WriteString(fmt.Sprintf("\n// %s (%s, hosted by %s)\n", vs.Name, kind, vs.HostLabel))
 		svcsBuf.WriteString(fmt.Sprintf("enum %sRPCs {\n", strutil.ToPascalCase(vs.Name)))
 		svcsBuf.WriteString(fmt.Sprintf("  %s_UNSPECIFIED = 0;\n", prefix))
 		for i, rpc := range vs.RPCs {
@@ -852,6 +862,7 @@ func ScanVServiceRPCs(scanDir string, reg *ServiceRegistry) ([]VServiceEntry, er
 				HostLabel: hostLabel,
 				RPCs:      rpcs,
 				Routes:    routes,
+				IsTrait:   fd.Trait != nil,
 			})
 		}
 	}

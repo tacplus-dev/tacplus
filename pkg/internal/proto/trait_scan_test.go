@@ -102,6 +102,10 @@ service RecordQuery {
 		Name:      "query",
 		FieldID:   40,
 		HostLabel: "stratum",
+		// (spec.trait), not (spec.vservice) — the generated enum comment names
+		// the kind, so this flag is what keeps registry.json from calling the
+		// query trait a vservice.
+		IsTrait: true,
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ScanVServiceRPCs() = %#v, want %#v", got, want)
@@ -147,6 +151,10 @@ message CreateQueryRequest { string filter = 1; }
 		Name:      "query",
 		FieldID:   40,
 		HostLabel: "stratum",
+		// (spec.trait), not (spec.vservice) — the generated enum comment names
+		// the kind, so this flag is what keeps registry.json from calling the
+		// query trait a vservice.
+		IsTrait: true,
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ScanVServiceRPCs() = %#v, want %#v", got, want)

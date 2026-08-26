@@ -64,6 +64,12 @@ func ValidateRoutingLabels(dp *DescriptorParser) error {
 	for _, path := range paths {
 		fds = append(fds, all[path])
 	}
+	return validateRoutingLabels(fds)
+}
+
+// validateRoutingLabels is the file-list form of ValidateRoutingLabels; fds must
+// already be in a deterministic order so the error text is stable.
+func validateRoutingLabels(fds []*FileDescriptor) error {
 	served := CollectServingLabels(fds)
 
 	var errs []string

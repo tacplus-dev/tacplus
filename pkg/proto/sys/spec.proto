@@ -655,6 +655,18 @@ message RecordAnnotation {
   //     retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
   //   };
   RetentionPolicy retention = 5;
+
+  // min_group_size is the smallest result size this record's size-only query
+  // surfaces will disclose. 0 / unset = no guard (additive, like owner_default).
+  //
+  // "Size-only" is the line: it covers the surfaces that return a size and no
+  // rows (Get<T>Count, Subscribe<T>Count, and the QueryStats.size that
+  // Update<T>Query returns for its newly-installed predicate). It deliberately
+  // does NOT cover List<T>'s total_count, which accompanies rows the caller has
+  // just been handed and so discloses nothing the rows themselves do not. A
+  // future change that makes a paged read return counts without rows has
+  // crossed that line.
+  int32 min_group_size = 6;
 }
 
 // EventAnnotation marks a message as an EventBus event: tacplus generates a topic
@@ -1968,6 +1980,11 @@ extend google.protobuf.MethodOptions {
   // Example: option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
   // Example: option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ENTITLED_USERS]};
   RpcAnnotation rpc = 80015;
+
+  // min_group_size is the smallest result size this RPC will disclose. Stamped
+  // by the record-map injector onto every size-only RPC of a record declaring
+  // (spec.record).min_group_size. Not hand-written on any RPC.
+  int32 min_group_size = 80016;
 
 }
 

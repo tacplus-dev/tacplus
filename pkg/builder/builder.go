@@ -201,6 +201,9 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateOwnerDefaultAnnotations(dp); err != nil {
 		return err
 	}
+	if err := parser.ValidateMinGroupSizeAnnotations(dp); err != nil {
+		return err
+	}
 	if err := parser.ValidateSmbAuthority(dp); err != nil {
 		return err
 	}

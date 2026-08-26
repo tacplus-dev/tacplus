@@ -1752,6 +1752,16 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 					RecordRetention: r,
 				}
 			}
+			// min_group_size is the smallest result size this record's size-only
+			// query surfaces disclose. Carried unconditionally when declared —
+			// including a negative value, which ValidateMinGroupSizeAnnotations
+			// rejects at generation time rather than silently dropping here.
+			if val.GetMinGroupSize() != 0 {
+				annotations["record_min_group_size"] = model.AnnotationValue{
+					Type:     model.AnnotationTypeInt,
+					IntValue: int64(val.GetMinGroupSize()),
+				}
+			}
 		}
 	}
 

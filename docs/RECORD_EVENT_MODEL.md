@@ -57,8 +57,8 @@ Field-level (on a `record` message's fields):
 
 | Annotation | Meaning |
 |---|---|
-| `query_field { op: EQ\|RANGE }` | expose this field as a typed filter criterion in the RecordMap query plane (`<T>Filter`). |
-| `redact { mode: DROP\|PSEUDONYMIZE\|MAY_REDACT\|MAY_ANONYMIZE }` | field is **egress-redactable** (data entitlement): stored raw, sanitized at `Sample`/`Pull`/`Watch` per caller. DROP/PSEUDONYMIZE always apply; MAY_* are caller-decided. Generates `Sanitize<T>` + `<T>Entitlement`. |
+| `query_field { op: EQ\|RANGE }` | expose this field as a typed filter criterion in the `query` trait's plane (`<T>Filter`). |
+| `redact { mode: DROP\|PSEUDONYMIZE\|MAY_REDACT\|MAY_ANONYMIZE }` | field is **egress-redactable** (data entitlement): stored raw, sanitized at `Get<T>Sample`/`List<T>`/`Watch<T>` per caller. DROP/PSEUDONYMIZE always apply; MAY_* are caller-decided. Generates `Sanitize<T>` + `<T>Entitlement`. |
 
 Service-level (once per service):
 
@@ -105,21 +105,102 @@ declaration requires the other to generate.
 
 ## Query plane
 
-- **record_store (stratum)** — a per-record-type **refinable-query API** is generated
-  for every `record`. A caller (an **S2S** front like **argus**, never a direct client)
-  opens a query over one record type and gets a **handle** to a per-caller result set
-  of matching record **references** (keys). The records themselves are **immutable** and
-  the set is never a copy of them — the mutable thing is the query predicate. On a
-  handle: **refine** (narrow the predicate), **count** (size), **sample** (a seeded
-  monte-carlo draw of `n` records — cheap exploration without pulling everything),
-  **pull** (paged read of all matches), and **watch** (a living query streams changes).
-  A query is either a **one-time snapshot** or **long-lived / living** (new matching
-  records auto-join). Ops run server-side. Three ops return record data — **sample**,
-  **pull**, and **watch** (each stream item is a record) — and **all three apply egress
-  redaction**; the caller's entitlements shape the released view at read time, and
-  redaction is **never** baked into stored state. **count** returns only a size, never
+- **Asked for by a `(spec.trait)` declaration, not by the generator.** The plane is
+  the record store's per-record-type, per-caller **refinable-query API**, generated
+  for every `record` — but *which* proto it is emitted into, *who* implements it,
+  what the emitted services are called, and *who* may call the peer half all come off
+  a trait declaration rather than off generator constants. Today that declaration is
+  testapp's `vservices/query.proto`:
+
+  ```protobuf
+  package query;
+
+  option (spec.trait) = {
+    name: "query"             // entitlement key AND the audience callers authenticate against
+    host: "stratum"           // the physical implementor — it is what declares (spec.record_store)
+    s2s_service: "RecordMap"  // the emitted peer-facing service
+    c2s_service: "RecordQuery" // the emitted client-facing service
+    auth_services: ["argus"]  // peer identities allowed onto the S2S half
+  };
+  ```
+
+  Delete that file and the plane is not emitted at all — no host to append to, no
+  service names, no fallback. That is the paired control the generator constants it
+  replaced could not have: the host used to be "whatever declares `record_store`",
+  the names were the literals `RecordMap`/`RecordQuery`, and the S2S audience was
+  `["argus"]` repeated at eight call sites in platform generator source, where it
+  stayed for months after argus left the fleet because nothing in a build could see
+  it had gone dead.
+
+  The trait's **proto package is also `query`**, so one word is the trait name, the
+  audience (`aud=query`), the proto package and the entitlement prefix (`QUERY_*`).
+  The plane still covers **every** `(spec.record)` message in the fleet rather than a
+  list kept in the declaration, so a new record type joins the surface by generation.
+
+- **Two services, one plane.** `ValidateServiceSurfaces` refuses a service carrying
+  two caller surfaces, so a plane serving both peers and users is emitted twice —
+  `RecordMap` (`spec.service_s2s`), reached by a peer and authorized by peer identity
+  through the trait's declared `auth_services`; and `RecordQuery` (`spec.service_c2s`
+  + `auth_entitled_users`), reached with a user token and authorized by that token's
+  entitlements. Both carry `(spec.service_*).label = "stratum"`: the **host is whom
+  the gateway dials, the trait is the audience the caller's token is checked
+  against** (`routeIdentityForService`). Pinning the audience to the host would
+  re-couple every client to the implementor.
+
+- **Implemented severally, by stratum alone.** `query` has exactly one implementor
+  today — not joint or ensemble hosting; timedb and graphdb went to the boneyard
+  2026-08-25 and took their query planes with them. A second implementor is
+  expressible and would need no client change (the audience is the contract, not the
+  concrete service), but none exists, so nothing here has yet been proven to
+  generalize beyond the one implementor.
+
+- **Direct clients call it.** The C2S half is reached with a **user token** — through
+  the gateway, or straight at the host's gRPC socket — carrying `aud=query` and
+  `QUERY_*` grants in `service_entitlements`: the package-wide `QUERY_ANY`, the
+  capability wildcards `QUERY_READ_ANY` / `QUERY_WRITE_ANY` / `QUERY_PAGE_ANY` /
+  `QUERY_WATCH_ANY`, or an exact grant such as
+  `QUERY_RECORD_QUERY_CREATE_TASK_ACTIVITY_QUERY`. testapp's e2e drives exactly that:
+  a logged-in user calling `query.RecordQuery/CreateTaskActivityQuery` and
+  `query.RecordQuery/ListTaskActivity`. The S2S half's only declared peer is **argus**,
+  which left the fleet 2026-08-20, so `RecordMap` has **no live caller today**; it is
+  kept because one plane once per audience is the shape, and its audience is now a
+  line in a proto that can be read and deleted rather than a literal in generator
+  source.
+
+- **The lifecycle.** A caller opens a query over one record type and gets a **handle**
+  to a per-caller result set of matching record **references** (keys). The records
+  themselves are **immutable** and the set is never a copy of them — the mutable thing
+  is the query predicate. Both surfaces spell the ops in the **same governed verbs**
+  (the S2S half was `Open`/`Refine`/`Count`/`Sample`/`Pull`/`Close` until the
+  2026-08-24 rename and is not any more):
+
+  | RPC | emitted for | meaning |
+  |---|---|---|
+  | `Create<T>Query(Open<T>QueryRequest) → QueryHandle` | every `T` | open a snapshot or living query; the lifecycle's single entry point |
+  | `Update<T>Query(Refine<T>Request) → QueryStats` | filterable `T` | replace the predicate outright |
+  | `Get<T>Count(QueryHandle) → RecordCount` | every `T` | size only, never record data |
+  | `Get<T>Sample(Sample<T>Request) → Sample<T>Response` | every `T` | seeded monte-carlo draw of `n` records — cheap exploration without reading everything |
+  | `List<T>(Pull<T>Request) → Pull<T>Response` | every `T` | paged read of all matches (`method_collection` PAGE) |
+  | `Watch<T>(QueryHandle) → stream <T>WatchEvent` | filterable `T` | living query: snapshot, then deltas |
+  | `Subscribe<T>Count(QueryHandle) → stream RecordCount` | filterable `T` | live size |
+  | `Delete<T>Query(QueryHandle) → QueryStats` | every `T` | close the handle |
+
+  Only the **RPC names** are verb-governed; the request/response **messages** still
+  carry the query vocabulary (`Open…QueryRequest`, `Refine…Request`, `Sample…`,
+  `Pull…`). A query is either a **one-time snapshot** or **long-lived / living** (new
+  matching records auto-join). Ops run server-side. `Update<T>Query` replaces the
+  predicate outright — nothing compares the new predicate against the old, so a caller
+  entitled to create is equally free to widen it; authorization is per-RPC-method, not
+  per-filter. **The caller that created a handle owns it** and closes it with
+  `Delete<T>Query`; stratum holds the per-caller set, and no intermediary owns handle
+  lifecycle or cleanup on the caller's behalf.
+
+  Three ops return record data — **`Get<T>Sample`, `List<T>`, and `Watch<T>`** (each
+  stream item is a record) — and **all three apply egress redaction**; the caller's
+  entitlements shape the released view at read time, and redaction is **never** baked
+  into stored state. `Get<T>Count` and `Subscribe<T>Count` return only a size, never
   record data. tacplus knows the typed query and its shape, not the query→execution
-  transform (impl-side). argus owns handle lifecycle / cleanup.
+  transform (impl-side).
   - **Egress data entitlement** is generated from field-level `(spec.redact)`: for each
     record type T with redactable fields, tacplus emits `Sanitize<T>(record, <T>Entitlement, hmacKey)`
     — a sanitized **copy** (REDACT → zeroed + indicator set, ANONYMIZE → a keyed
@@ -128,8 +209,8 @@ declaration requires the other to generate.
     level (`MAY_REDACT` → REDACT, `MAY_ANONYMIZE` → ANONYMIZE) and egresses raw
     only under an explicit `RAW` level. The **generated WRAPPER** (never the
     handler, never impl code) applies it on **every record-bearing egress path —
-    `Sample`, `Pull`, AND each `Watch` snapshot item and delta** (a living query
-    must not leak what a `Pull` would redact), after the handler returns, so a
+    `Get<T>Sample`, `List<T>`, AND each `Watch<T>` snapshot item and delta** (a
+    living query must not leak what a `List<T>` would redact), after the handler returns, so a
     handler physically cannot bypass it. The **policy** (which fields a caller may
     see raw) is an identity property of the caller's token: OPA stamps
     `data_grants` into the `service_entitlements` claim at token-exchange time,
@@ -137,11 +218,11 @@ declaration requires the other to generate.
     (a matching grant loosens the field to RAW; never below a hard floor), and
     the wrapper supplies the per-deployment ANONYMIZE secret from config
     (`grpcconfig.Config.anonymize_hmac_key`) — **mechanism in tacplus, policy in
-    OPA**. The caller passes no redaction knobs. Two-stage (stratum→argus,
-    argus→user) can reuse the same seam later.
+    OPA**. The caller passes no redaction knobs. The seam is per-hop, so a future
+    two-stage path (stratum→an intermediary→user) can reuse it unchanged.
 - Combining records of **multiple types** into one working set is done **service-side**
-  — argus / the LLM-fronting service pulls several single-type sets and aggregates the
-  already-redacted results in its own memory; stratum holds no cross-type sets.
+  — the caller opens several single-type queries and aggregates the already-redacted
+  results in its own memory; stratum holds no cross-type sets.
 
 ## Validations (tacplus errors)
 

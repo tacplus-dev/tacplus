@@ -266,7 +266,7 @@ CLI flags override YAML values when both are specified.
 | `tacplus build` | Generate proto types and services for a single language |
 | `tacplus validate` | Validate proto files |
 | `tacplus verify` | Run formal verification on Rust or Java code |
-| `tacplus registry` | Update the service/vservice registry from proto definitions |
+| `tacplus registry` | Update the service / vservice / trait registry from proto definitions |
 | `tacplus upgrade` | Upgrade tacplus to the latest patch release |
 | `tacplus version` | Print the version and build information |
 
@@ -751,13 +751,47 @@ option (spec.service) = {name: "dashboard"};               // application servic
 
 The `name` is the canonical service identity used across the mesh. `store: true` declares a backing store service. `gateway: true` changes TLS handling to use public certificates (for browser-facing TLS termination).
 
+### File-Level Contract Identity (vservice, trait)
+
+A proto file can instead declare a **contract** — not a process, but a named surface
+that some physical service implements and that callers are entitled against by that
+name. Two options carry the same identity shape (a canonical name used as the
+entitlement key, plus an optional `id` — the stable `TokenEntitlements` field
+number for that contract):
+
+```protobuf
+option (spec.vservice) = {id: 30, name: "claudesensor"};   // a DATA contract
+```
+
+```protobuf
+option (spec.trait) = {                                     // an RPC contract
+  name: "query"              // entitlement key AND the audience callers authenticate against
+  host: "stratum"            // routing label of the physical implementor
+  s2s_service: "RecordMap"   // emitted peer-facing service name
+  c2s_service: "RecordQuery" // emitted client-facing service name
+  auth_services: ["argus"]   // peer identities allowed onto the S2S half
+};
+```
+
+`host` becomes the `(spec.service_s2s)` / `(spec.service_c2s)` `label` on the emitted
+services, so the gateway dials the host — but the audience the caller's token is
+checked against is `name`, never the host label. **The audience is the contract, not
+the implementor**, so a second implementor of the same trait needs no client change.
+A `label` that no loaded service serves fails generation, and so does a `label` on a
+file that declares no trait.
+
+Everything the surface needs is in the declaration rather than in generator source:
+delete the file and the surface is not generated at all. `query` is the shipped
+example — it asks stratum for the record query plane; see
+[`RECORD_EVENT_MODEL.md`](RECORD_EVENT_MODEL.md).
+
 ---
 
 ## Auth System
 
 ### Service-Level Auth Annotations
 
-**`service_s2s`** — declares a service-to-service gRPC service. Only authenticated service identities can call these RPCs. `label` names the physical service hosting a vservice interface:
+**`service_s2s`** — declares a service-to-service gRPC service. Only authenticated service identities can call these RPCs. `label` names the physical service hosting a vservice or trait interface:
 
 ```protobuf
 service InternalAdmin {
@@ -769,14 +803,21 @@ service StratumHosted {
 }
 ```
 
-**`service_c2s`** — declares a client-to-service gRPC service, exposed through the API gateway to end users. `auth_entitled_users` is the service-level default policy:
+**`service_c2s`** — declares a client-to-service gRPC service, exposed through the API gateway to end users. `auth_entitled_users` is the service-level default policy. `label` is the twin of the `service_s2s` one — it names the physical host for a trait's client-facing surface, while the audience the gateway checks the caller's token against stays the file's `(spec.trait).name`:
 
 ```protobuf
 // Entitlement check applies to every RPC (the default C2S policy)
 service Dashboard {
   option (spec.service_c2s) = {auth_entitled_users: true};
 }
+
+// A trait's client-facing surface: dialed at stratum, entitled against the trait
+service RecordQuery {
+  option (spec.service_c2s) = {auth_entitled_users: true, label: "stratum"};
+}
 ```
+
+A service may declare only **one** caller surface (`ValidateServiceSurfaces`), so a contract that must serve both peers and users is two sibling services — which is why the `query` trait declares both an `s2s_service` and a `c2s_service`.
 
 **`rpc`** — declares one RPC's call surface: who calls it (`principal`), where it
 is reachable from (`exposure`), its non-exclusive protocol `flags`, the service
@@ -890,7 +931,7 @@ The authoritative, exhaustive contract is in
 
 | Annotation | Meaning |
 |------------|---------|
-| `(spec.query_field) = {op: EQ\|RANGE}` | expose the field as a typed filter in the RecordMap query plane |
+| `(spec.query_field) = {op: EQ\|RANGE}` | expose the field as a typed filter in the `query` trait's record query plane |
 | `(spec.redact) = {mode: DROP\|PSEUDONYMIZE\|MAY_REDACT\|MAY_ANONYMIZE}` | marks a field for **data entitlement** (see below). DROP/PSEUDONYMIZE always apply (hard floor); MAY_REDACT/MAY_ANONYMIZE let the caller decide at egress. Valid on scalars, message-typed fields (redact clears the whole sub-message), and repeated fields; ANONYMIZE requires string/bytes |
 
 #### Data entitlement (egress redaction)
@@ -939,8 +980,12 @@ You write only the annotations above. The projection **output** messages and
 their internal `timeseries_type` marker, the eventbus topic +
 publish RPCs, the per-store subscriptions, and the query plane are all
 **generated** — never hand-written. The read surface of a `record_store` is the
-generated refinable-query plane (Open/Refine/Count/Sample/Pull/Watch/Close over
-record keys), not a hand-written subscription handler.
+generated refinable-query plane over record keys —
+`Create<T>Query` / `Update<T>Query` / `Get<T>Count` / `Get<T>Sample` / `List<T>` /
+`Watch<T>` / `Subscribe<T>Count` / `Delete<T>Query`, the same governed spelling on
+both caller surfaces — not a hand-written subscription handler. That plane is asked
+for by a `(spec.trait)` declaration, not by the `record_store` annotation alone: see
+[`RECORD_EVENT_MODEL.md`](RECORD_EVENT_MODEL.md).
 
 ---
 

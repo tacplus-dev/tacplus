@@ -107,11 +107,21 @@ This enforces a single-writer model. Services communicate state changes through 
 
 ---
 
-## Services And Vservices
+## Services, Vservices, And Traits
 
-A service is a long-lived deployable unit such as stratum, eventbus, or kernel.
-A vservice is a tacplus-declared, service-implemented data contract: an event
-type, projection set, subscribe surface, and entitlement model.
+A **service** is a long-lived deployable unit such as stratum, eventbus, or kernel.
+It is a process: something that is built, deployed, and dialed.
+
+A **vservice** and a **trait** are both tacplus-declared, service-implemented
+contracts. Neither is a process. Both carry the same identity shape — a canonical
+name that is the entitlement key, plus an optional stable `TokenEntitlements` field
+id — and both are hosted by a physical service while callers are entitled against the
+contract's name, never the host's. They differ in what they declare:
+
+| | declares | hosted by |
+|---|---|---|
+| `(spec.vservice)` | a **data** contract: event type, projection set, subscribe surface, entitlement model | the service whose `(spec.service_s2s).label` claims it |
+| `(spec.trait)` | an **RPC** contract: a named surface with a host, its emitted service names, and its peer audience | the service named in `(spec.trait).host` |
 
 The useful mental model is a database with tables:
 
@@ -122,11 +132,26 @@ The useful mental model is a database with tables:
 | create a table | add a vservice proto, regenerate tacplus, rebuild the service |
 | schema migration | revise the proto for that vservice |
 
-Vservices are flexible and service implementations are stable. Adding or
-changing one vservice should not destabilize unrelated vservices hosted by the
-same service. Service-local generators should consume `registry.json`, not parse
-proto files directly, so the service and all of its vservices use the same
-semantic IR that tacplus used to generate code.
+A trait is the other axis. Where a vservice asks "who owns this data", a trait asks
+"who implements this surface" — and answers it in the proto rather than in generator
+source. The declaration names the host, so the plane exists because of the
+declaration, not because of a constant somewhere: delete the trait proto and the
+surface is not generated at all. The **audience is the contract, not the
+implementor** — the host label is only whom the gateway dials, while the caller's
+token is checked against the trait name — so a second implementor of the same trait
+needs no client change.
+
+The `query` trait is the worked example: `name: "query"`, `host: "stratum"`, and the
+record query plane emitted onto both caller surfaces from it. Note the honest limit —
+`query` has exactly one implementor today, so the second-implementor property is
+expressible but unproven. See
+[`RECORD_EVENT_MODEL.md`](RECORD_EVENT_MODEL.md) for the plane it generates.
+
+Vservices and traits are flexible and service implementations are stable. Adding or
+changing one contract should not destabilize unrelated contracts hosted by the same
+service. Service-local generators should consume `registry.json`, not parse proto
+files directly, so the service and everything it hosts use the same semantic IR that
+tacplus used to generate code.
 
 ---
 

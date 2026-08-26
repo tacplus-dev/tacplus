@@ -60,6 +60,7 @@ type MethodInfo struct {
 	Collection           *CollectionDescriptor // method-level method_collection (collection-returning read); nil when absent
 	Resolved             *collection.Resolved  // computed codegen view of Collection (mode/tier/bounds); nil when Collection is nil. Set by ResolveCollections.
 	Class                *verbs.Classification // resolved verb/pattern/access (archive/RPC_PATTERNS_AND_VERBS_PLAN.md §2). Set by ClassifyMethods; nil if classification failed (see ClassifyMethods for the reported error).
+	MinGroupSize         int32                 // method-level (spec.min_group_size): the smallest result size this size-only RPC discloses; 0 when the record declares no threshold
 }
 
 // MessageInfo represents a protobuf message

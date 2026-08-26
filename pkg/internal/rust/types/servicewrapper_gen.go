@@ -196,6 +196,14 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	var grpcWrappers, watchFields, watchFieldsInit strings.Builder
 	var methodAuthLines []string
 	for _, method := range targetService.Methods {
+		// (spec.record).min_group_size is enforced in the generated Java service
+		// wrapper only. A Rust host of a record query plane would serve the
+		// size-only RPCs with no guard at all, so refuse to generate rather than
+		// ship the disclosure silently.
+		if method.MinGroupSize > 0 {
+			return fmt.Errorf("%s.%s carries (spec.min_group_size) = %d, but the guard is generated for Java service wrappers only; a Rust host of this record query plane would serve it unguarded",
+				targetService.Name, method.Name, method.MinGroupSize)
+		}
 		// (spec.store_principal) is enforced on the unary egress seam only. A
 		// PAGE or streaming method carrying such rows would return them
 		// unfiltered, so refuse to generate rather than under-enforce silently.

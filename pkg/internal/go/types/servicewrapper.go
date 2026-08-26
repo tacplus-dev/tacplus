@@ -198,6 +198,14 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	for _, service := range targetServices {
 		handlerInterface.WriteString(generateGoHandlerInterface(service, info.Package))
 		for _, method := range service.Methods {
+			// (spec.record).min_group_size is enforced in the generated Java
+			// service wrapper only. A Go host of a record query plane would serve
+			// the size-only RPCs with no guard at all, so refuse to generate
+			// rather than ship the disclosure silently.
+			if method.MinGroupSize > 0 {
+				return fmt.Errorf("%s.%s carries (spec.min_group_size) = %d, but the guard is generated for Java service wrappers only; a Go host of this record query plane would serve it unguarded",
+					service.Name, method.Name, method.MinGroupSize)
+			}
 			grpcWrappers.WriteString(generateGRPCWrapper(service, method, info.Package, svc.ParentDir, svc.GrpcName, accountingMap, info.CrossPackageTypes, skippedTraceTypes, san))
 			grpcWrappers.WriteString("\n")
 

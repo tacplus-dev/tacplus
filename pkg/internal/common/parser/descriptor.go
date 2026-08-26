@@ -251,6 +251,7 @@ type MethodDescriptor struct {
 	TargetNamespaceField string                // per-RPC target_namespace_field (from spec.rpc); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
 	Collection           *CollectionDescriptor // method-level method_collection (collection-returning read); nil when absent
 	Rpc                  *RpcDescriptor        // method-level spec.rpc (call surface); nil when absent
+	MinGroupSize         int32                 // method-level (spec.min_group_size), stamped by the record-map injector onto a record's size-only RPCs; 0 when absent
 }
 
 // RpcDescriptor carries a method's spec.rpc annotation: the two independent
@@ -962,6 +963,13 @@ func (p *DescriptorParser) parseMethodOptions(method protoreflect.MethodDescript
 				md.TargetNamespaceField = f
 			}
 		}
+	}
+
+	// min_group_size (int32) — the smallest result size this size-only RPC will
+	// disclose. Stamped by the record-map injector from the record's
+	// (spec.record).min_group_size; never hand-written on an RPC.
+	if proto.HasExtension(opts, spec.E_MinGroupSize) {
+		md.MinGroupSize = proto.GetExtension(opts, spec.E_MinGroupSize).(int32)
 	}
 
 	// method_collection (MethodCollection) — collection-returning read shape
@@ -2778,6 +2786,7 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 				AuthServices:         method.AuthServices,
 				TargetNamespaceField: method.TargetNamespaceField,
 				Collection:           method.Collection,
+				MinGroupSize:         method.MinGroupSize,
 			}
 			serviceInfo.Methods = append(serviceInfo.Methods, methodInfo)
 		}

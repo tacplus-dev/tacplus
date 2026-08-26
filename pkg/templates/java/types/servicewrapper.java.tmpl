@@ -340,6 +340,51 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
         };
     }
 
+    // guardedResponseObserver terminates a stream on a declared refusal, carrying
+    // the refusal's own status code through (a (spec.min_group_size) frame is
+    // PERMISSION_DENIED, not a validation INTERNAL). Unlike a filtering delegate
+    // it does not withhold frames: a stream that went quiet at exactly the
+    // threshold would disclose the crossing by its silence.
+    private static <T> StreamObserver<T> guardedResponseObserver(
+            StreamObserver<T> delegate,
+            MessageValidator<T> guard) {
+        if (guard == null) {
+            return delegate;
+        }
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        return new StreamObserver<T>() {
+            @Override
+            public void onNext(T value) {
+                if (closed.get()) {
+                    return;
+                }
+                try {
+                    guard.validate(value);
+                } catch (Throwable t) {
+                    if (closed.compareAndSet(false, true)) {
+                        delegate.onError(toGrpcError(t));
+                    }
+                    return;
+                }
+                delegate.onNext(value);
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                if (closed.compareAndSet(false, true)) {
+                    delegate.onError(t);
+                }
+            }
+
+            @Override
+            public void onCompleted() {
+                if (!closed.get()) {
+                    delegate.onCompleted();
+                }
+            }
+        };
+    }
+
     private static <T> StreamObserver<T> validatingResponseObserver(
             StreamObserver<T> delegate,
             MessageValidator<T> validator) {

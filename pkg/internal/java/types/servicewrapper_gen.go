@@ -677,6 +677,12 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			fmt.Fprintf(&watchFields, "    private final CollectionRuntime.WatchHub<%s> %sWatchHub = new CollectionRuntime.WatchHub<>(%d, %d);\n",
 				changeType, methodNameLowerCamel(method.Name), method.Resolved.ReplayDepth, method.Resolved.IdleSecs)
 		}
+		// A method carrying (spec.min_group_size) that this wrapper cannot guard
+		// must fail generation, not ship the size-only RPC unguarded.
+		if why := javaMinGroupSizeUnenforceable(method, san, info.Package); why != "" {
+			return fmt.Errorf("%s.%s carries (spec.min_group_size) = %d but %s",
+				targetService.Name, method.Name, method.MinGroupSize, why)
+		}
 		handlerInterface.WriteString(generateJavaHandlerMethod(method, inputType, outputType, crossPkgOuterClasses))
 		effectiveAuthAnyUser := method.AuthAnyUser
 		grpcMethods.WriteString(generateJavaGRPCWrapper(method, serviceName, svc.GrpcName, inputType, outputType, inputHelpers, outputHelpers, effectiveAuthAnyUser, method.AuthDisabled || svc.AuthDisabled || svc.IsC2D, accountingMap, info.Package, svc.ParentDir, info.CrossPackageTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses))
@@ -1053,6 +1059,86 @@ func javaTypeHasTraceFields(fullType, servicePackage, parentDir string, crossPkg
 	return !strings.HasPrefix(parentDir, "sys")
 }
 
+// minGroupSizeField resolves WHICH field of a size-only response carries the
+// size the (spec.record).min_group_size guard compares. The record-map injector
+// stamps the method option onto RPCs returning RecordCount (count) and
+// QueryStats (size); rather than pin those two names in the generator, the field
+// is read off the response message itself — the one scalar integer it carries.
+//
+// "" when the type is unknown or carries no single integer field.
+// generateServiceWrapper turns that into a generation error rather than
+// emitting an unguarded size-only RPC.
+func (es *javaEgressSanitizer) minGroupSizeField(fullType, servicePackage string) string {
+	if es == nil || fullType == "" {
+		return ""
+	}
+	pkg, name := splitJavaEgressFQN(fullType, servicePackage)
+	msg, ok := es.msgs[pkg+"\x00"+name]
+	if !ok {
+		return ""
+	}
+	found := ""
+	for i := range msg.Fields {
+		f := &msg.Fields[i]
+		if f.IsRepeated || f.IsMap || f.IsMessage || f.IsEnum {
+			continue
+		}
+		switch f.Type {
+		case "int32", "int64", "uint32", "uint64":
+		default:
+			continue
+		}
+		if found != "" {
+			// Two integers: which one is "the size" is not decidable here.
+			return ""
+		}
+		found = f.Name
+	}
+	return found
+}
+
+// javaMinGroupSizeGuard renders the (spec.record).min_group_size refusal over a
+// size-only response. valueExpr names the response in scope; indent is the
+// leading whitespace of the block it is spliced into. Empty when the method
+// carries no threshold — the annotation is additive, so an undeclared record's
+// RPCs are emitted exactly as before.
+//
+// The refusal is PERMISSION_DENIED and carries no count: naming the actual
+// number, or any bound tighter than the declared threshold, would disclose
+// exactly what the guard exists to withhold. The threshold itself is in the
+// proto and is safe to name.
+func javaMinGroupSizeGuard(method *parser.MethodInfo, sizeField, valueExpr, indent string) string {
+	if method.MinGroupSize <= 0 || sizeField == "" {
+		return ""
+	}
+	n := method.MinGroupSize
+	return fmt.Sprintf(`%[1]s// (spec.record).min_group_size: a response that carries only a size, over
+%[1]s// fewer than %[2]d records, is a membership disclosure by arithmetic. The
+%[1]s// wrapper, never the handler, refuses.
+%[1]sif (%[3]s.get%[4]s() < %[2]dL) {
+%[1]s    throw new ProtoException(ProtoException.PERMISSION_DENIED, "min_group_size: a count over fewer than %[2]d records is a membership disclosure; widen the query's filter");
+%[1]s}
+`, indent, n, valueExpr, javaPascalField(sizeField))
+}
+
+// javaMinGroupSizeUnenforceable reports why the guard cannot be generated for a
+// method that declares a threshold, or "" when it can. A size-only RPC that the
+// wrapper cannot guard must fail generation rather than ship unguarded — the
+// same fail-closed stance (spec.store_principal) already takes for the shapes
+// its egress filter cannot reach.
+func javaMinGroupSizeUnenforceable(method *parser.MethodInfo, san *javaEgressSanitizer, servicePackage string) string {
+	if method.MinGroupSize <= 0 {
+		return ""
+	}
+	if method.ClientStreaming {
+		return "the guard is generated on unary responses and server streams only"
+	}
+	if san.minGroupSizeField(method.FullOutputType, servicePackage) == "" {
+		return fmt.Sprintf("response %s carries no single integer size field for the guard to compare", method.FullOutputType)
+	}
+	return ""
+}
+
 func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers string, authAnyUser bool, authDisabled bool, accountingMap map[string]service.AccountingInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer, crossPkgHelpers map[string]string, crossPkgOuterClasses map[string]string) string {
 	methodName := strutil.ToCamelCase(strutil.ToSnakeCase(method.Name))
 	// Ensure first letter is lowercase for Java method convention
@@ -1242,6 +1328,14 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 	streamResponseObserver := "responseObserver"
 	if outputHelpers != "" && !emptyOutput {
 		streamResponseObserver = fmt.Sprintf("validatingResponseObserver(responseObserver, value -> %s.validate%s(value))", outputHelpers, method.OutputType)
+	}
+	// (spec.record).min_group_size on a streamed size (Subscribe<T>Count): the
+	// same arithmetic as the unary count, delivered repeatedly. The guard is a
+	// delegate in front of the validating one, so a below-threshold frame
+	// terminates the stream with PERMISSION_DENIED rather than being withheld —
+	// a stream that goes quiet at exactly N-1 discloses the crossing by silence.
+	if g := javaMinGroupSizeGuard(method, san.minGroupSizeField(method.FullOutputType, servicePackage), "value", "                "); g != "" {
+		streamResponseObserver = fmt.Sprintf("guardedResponseObserver(%s, value -> {\n%s            })", streamResponseObserver, g)
 	}
 	needsStreamMessageAuth := method.ClientStreaming && method.TargetNamespaceField != "" && !authDisabled && !authAnyUser
 	clientStreamInputObserver := func(handlerObserverExpr, responseObserverExpr string) string {
@@ -1435,7 +1529,10 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 				stmts.WriteString("            response = __rb.build();\n")
 				unarySan = javaEgressSanitizePreamble(targets) + stmts.String()
 			}
-			outputValidation = unarySan + outputValidation
+			// (spec.record).min_group_size runs first: the refusal is about the
+			// number itself, so it must precede any transformation of the response.
+			outputValidation = javaMinGroupSizeGuard(method, san.minGroupSizeField(method.FullOutputType, servicePackage), "response", "            ") +
+				unarySan + outputValidation
 		}
 
 		handlerCall := fmt.Sprintf("handler.%s(caller, request)", methodName)

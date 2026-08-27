@@ -39,6 +39,13 @@ type tsGrpcServiceEntry struct {
 	HasConfigState           bool
 	AuthDisabled             bool
 	AuthAnyUser              bool
+	// HasAccounting is true when this wrapper's generated class defines
+	// setEmitter (i.e. it ended up with at least one accounted RPC, post Q2's
+	// self-publish exclusion — see accounting_exclusion.go). setEmitter is NOT
+	// unconditional in the TypeScript wrapper template (guarded behind
+	// {{if .HasAccounting}}, same as Java), so the ServiceManager wiring loop
+	// must guard setEmitter(...) calls on this.
+	HasAccounting bool
 }
 
 // tsSubscriptionEntry holds per-subscription data for handler and service_manager templates.
@@ -87,6 +94,17 @@ type tsSmTemplateData struct {
 	TracePublisherTopicRef string
 	TracePublisherTarget   string
 	TracePublishGrpcPath   string
+	// HasAccountingPublisher/AccountingPublisher* wire the durable accounting
+	// emitter (chassis/am EventBusSink) to every wrapper that has setEmitter
+	// (see tsGrpcServiceEntry.HasAccounting). False when the proto set
+	// declares no accounting record (client repos), in which case no emitter
+	// is wired at all — see accounting_exclusion.go.
+	HasAccountingPublisher      bool
+	AccountingPublisherTopicRef string
+	AccountingPublisherTarget   string
+	AccountingPublishGrpcPath   string
+	AccountingEventTypeName     string // "AccountingRecord"
+	AccountingEventImportPath   string // relative import path to the generated accountingrecord type index
 	// TokenExchangerPackage / MintServiceName are needed by service_manager.ts.tmpl
 	// to call X509Mint directly. They are discovered the same way as in sys.go.
 	HasTokenExchanger     bool
@@ -119,8 +137,11 @@ func tsClientTargets(clientSvcs []service.ServiceInfo) []tsTargetServiceEntry {
 }
 
 // buildTsSmTemplateData constructs the template data.
-// svcs are server services; clientSvcs are S2S client services (may be nil).
-func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, clientSvcs ...[]service.ServiceInfo) (tsSmTemplateData, error) {
+// svcs are server services; hasAccountingByService is keyed by ServiceName
+// (from generateServiceWrappers, post Q2-exclusion — see
+// tsGrpcServiceEntry.HasAccounting); clientSvcs are S2S client services (may
+// be nil).
+func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, hasAccountingByService map[string]bool, clientSvcs ...[]service.ServiceInfo) (tsSmTemplateData, error) {
 	var grpcSvcs []tsGrpcServiceEntry
 	configStates, err := stateproto.ConfigStateAccessors(config, config.FlatProtoDir)
 	if err != nil {
@@ -165,6 +186,7 @@ func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, c
 			HasConfigState:           hasConfigState,
 			AuthDisabled:             svc.AuthDisabled,
 			AuthAnyUser:              svc.AuthAnyUser,
+			HasAccounting:            hasAccountingByService[svc.ServiceName],
 		})
 	}
 
@@ -279,6 +301,24 @@ func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, c
 		tracePublishGrpcPath = tracePublisher.grpcPath
 	}
 
+	accountingPublisher, err := detectTsAccountingPublisherTemplateData(config)
+	if err != nil {
+		return tsSmTemplateData{}, err
+	}
+	hasAccountingPublisher := accountingPublisher != nil && hasServiceHealthState && len(svcs) > 0
+	accountingPublisherTopicRef := ""
+	accountingPublisherTarget := ""
+	accountingPublishGrpcPath := ""
+	accountingEventTypeName := ""
+	accountingEventImportPath := ""
+	if accountingPublisher != nil {
+		accountingPublisherTopicRef = accountingPublisher.topicRef
+		accountingPublisherTarget = accountingPublisher.target
+		accountingPublishGrpcPath = accountingPublisher.grpcPath
+		accountingEventTypeName = accountingPublisher.eventTypeName
+		accountingEventImportPath = accountingPublisher.eventImportPath
+	}
+
 	// Detect a spec.smb Service Mesh Blackbox service in the own package
 	// (SPIFFE plan D7) — drives the SMB member-cert stream seam. Mirrors the
 	// SelfPackage-based detection in the Go generator.
@@ -299,35 +339,41 @@ func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, c
 	}
 
 	return tsSmTemplateData{
-		TsPackageBase:          config.TsPackageBase,
-		TsPackagePrefix:        tsPackagePrefix,
-		ServiceLabel:           config.ServiceLabel(),
-		HasGrpc:                len(svcs) > 0,
-		HasStates:              len(config.States) > 0 || config.AllStates,
-		HasGrpcS2SClients:      len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
-		HasServiceHealthState:  hasServiceHealthState,
-		HasAutoTls:             config.HasAutoTls(),
-		AutoTlsKeyType:         config.AutoTlsKeyType(),
-		HasSmb:                 hasSmb,
-		HasSubscriptions:       len(subs) > 0,
-		HealthStateProtoDir:    healthStateProtoDir,
-		HealthStatePackage:     healthStatePackage,
-		StateStoreServiceID:    healthStatePackage,
-		TacplusVersion:         buildinfo.Version,
-		TacplusGitSha:          buildinfo.GitSha,
-		ProtoSourceVersion:     protoSourceVersion,
-		ProtoSourceGitSha:      protoGitSha,
-		HasTracePublisher:      hasTracePublisher,
-		TracePublisherTopicRef: tracePublisherTopicRef,
-		TracePublisherTarget:   tracePublisherTarget,
-		TracePublishGrpcPath:   tracePublishGrpcPath,
-		HasTokenExchanger:      hasTokenExchanger,
-		TokenExchangerPackage:  texPkg,
-		MintServiceName:        mintServiceName,
-		DefaultAudience:        defaultAudience,
-		GrpcServices:           grpcSvcs,
-		Subscriptions:          subs,
-		TargetServices:         targetSvcs,
+		TsPackageBase:               config.TsPackageBase,
+		TsPackagePrefix:             tsPackagePrefix,
+		ServiceLabel:                config.ServiceLabel(),
+		HasGrpc:                     len(svcs) > 0,
+		HasStates:                   len(config.States) > 0 || config.AllStates,
+		HasGrpcS2SClients:           len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
+		HasServiceHealthState:       hasServiceHealthState,
+		HasAutoTls:                  config.HasAutoTls(),
+		AutoTlsKeyType:              config.AutoTlsKeyType(),
+		HasSmb:                      hasSmb,
+		HasSubscriptions:            len(subs) > 0,
+		HealthStateProtoDir:         healthStateProtoDir,
+		HealthStatePackage:          healthStatePackage,
+		StateStoreServiceID:         healthStatePackage,
+		TacplusVersion:              buildinfo.Version,
+		TacplusGitSha:               buildinfo.GitSha,
+		ProtoSourceVersion:          protoSourceVersion,
+		ProtoSourceGitSha:           protoGitSha,
+		HasTracePublisher:           hasTracePublisher,
+		TracePublisherTopicRef:      tracePublisherTopicRef,
+		TracePublisherTarget:        tracePublisherTarget,
+		TracePublishGrpcPath:        tracePublishGrpcPath,
+		HasAccountingPublisher:      hasAccountingPublisher,
+		AccountingPublisherTopicRef: accountingPublisherTopicRef,
+		AccountingPublisherTarget:   accountingPublisherTarget,
+		AccountingPublishGrpcPath:   accountingPublishGrpcPath,
+		AccountingEventTypeName:     accountingEventTypeName,
+		AccountingEventImportPath:   accountingEventImportPath,
+		HasTokenExchanger:           hasTokenExchanger,
+		TokenExchangerPackage:       texPkg,
+		MintServiceName:             mintServiceName,
+		DefaultAudience:             defaultAudience,
+		GrpcServices:                grpcSvcs,
+		Subscriptions:               subs,
+		TargetServices:              targetSvcs,
 	}, nil
 }
 
@@ -379,8 +425,66 @@ func eventPublishProtoFiles(config *tactype.Config) []string {
 	return protoFiles
 }
 
+// tsAccountingPublisherTemplateData is the resolved publisher for the durable
+// accounting record topic, if the proto set declares one.
+//
+// This is the one publisher that is NOT declared per-actor. Accounting is a
+// chassis concern: every service emits it, so requiring an event_publish on
+// every service's Config would be the same declaration copied N times, and a
+// service that forgot it would silently produce no audit trail. The producer
+// surface is already declared once, on the record itself
+// (s2s: {auth_services: ["*"]}), so the generator resolves the topic from the
+// record type instead — mirrors the Go/Java/Python generators' equivalent
+// (mechanical port, per the design doc's B-rest note).
+type tsAccountingPublisherTemplateData struct {
+	topicRef        string
+	target          string
+	grpcPath        string
+	eventTypeName   string // e.g. "AccountingRecord"
+	eventImportPath string // relative import path (from the sm/ dir) to the generated accountingrecord type index
+}
+
+func detectTsAccountingPublisherTemplateData(config *tactype.Config) (*tsAccountingPublisherTemplateData, error) {
+	protoDir := config.AnnotatedProtoDir
+	if protoDir == "" {
+		return nil, nil
+	}
+	p, err := parser.NewDescriptorParser(protoDir)
+	if err != nil {
+		return nil, fmt.Errorf("create descriptor parser for accounting publisher detection: %w", err)
+	}
+	topic, ok, err := boundaries.LookupAccountingRecordTopic(p)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+
+	smDir := filepath.Join(config.OutputDir, config.GetSmPrefix())
+	eventModuleDir := typescriptModuleDirForPackageOrDir(config.OutputDir, topic.Ref.Package, filepath.Dir(topic.ProtoFile))
+	eventImportPath := tsRelativeModuleImport(smDir, eventModuleDir)
+
+	return &tsAccountingPublisherTemplateData{
+		topicRef:        topic.Ref.Raw,
+		target:          topic.EventBusLabel,
+		grpcPath:        eventbus.PerTopicPublishPath(topic.Ref),
+		eventTypeName:   eventTypeNameFromFQN(topic.EventTypeFQN),
+		eventImportPath: eventImportPath,
+	}, nil
+}
+
+// eventTypeNameFromFQN returns the bare message name from a fully-qualified
+// proto type name, e.g. "accountingrecord.AccountingRecord" -> "AccountingRecord".
+func eventTypeNameFromFQN(fqn string) string {
+	if idx := strings.LastIndex(fqn, "."); idx >= 0 {
+		return fqn[idx+1:]
+	}
+	return fqn
+}
+
 // generateTsHandlerInterface generates handler.ts in the sm/ directory.
-func generateTsHandlerInterface(config *tactype.Config, svcs []service.ServiceInfo) error {
+func generateTsHandlerInterface(config *tactype.Config, svcs []service.ServiceInfo, hasAccountingByService map[string]bool) error {
 	tmplContent, err := loadTemplate("handler.ts.tmpl")
 	if err != nil {
 		return fmt.Errorf("failed to load handler template: %w", err)
@@ -391,7 +495,7 @@ func generateTsHandlerInterface(config *tactype.Config, svcs []service.ServiceIn
 		return fmt.Errorf("failed to parse handler template: %w", err)
 	}
 
-	data, err := buildTsSmTemplateData(config, svcs)
+	data, err := buildTsSmTemplateData(config, svcs, hasAccountingByService)
 	if err != nil {
 		return fmt.Errorf("failed to build handler template data: %w", err)
 	}
@@ -415,7 +519,7 @@ func generateTsHandlerInterface(config *tactype.Config, svcs []service.ServiceIn
 }
 
 // generateTsServiceManager generates service_manager.ts in the sm/ directory.
-func generateTsServiceManager(config *tactype.Config, svcs []service.ServiceInfo, clientSvcs ...[]service.ServiceInfo) error {
+func generateTsServiceManager(config *tactype.Config, svcs []service.ServiceInfo, hasAccountingByService map[string]bool, clientSvcs ...[]service.ServiceInfo) error {
 	tmplContent, err := loadTemplate("service_manager.ts.tmpl")
 	if err != nil {
 		return fmt.Errorf("failed to load service_manager template: %w", err)
@@ -426,7 +530,7 @@ func generateTsServiceManager(config *tactype.Config, svcs []service.ServiceInfo
 		return fmt.Errorf("failed to parse service_manager template: %w", err)
 	}
 
-	data, err := buildTsSmTemplateData(config, svcs, clientSvcs...)
+	data, err := buildTsSmTemplateData(config, svcs, hasAccountingByService, clientSvcs...)
 	if err != nil {
 		return fmt.Errorf("failed to build service manager template data: %w", err)
 	}

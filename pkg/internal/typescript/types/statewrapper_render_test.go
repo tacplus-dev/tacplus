@@ -149,7 +149,7 @@ func TestTypeScriptServiceManagerWiresStateClients(t *testing.T) {
 		},
 	}
 
-	if err := generateTsServiceManager(cfg, nil); err != nil {
+	if err := generateTsServiceManager(cfg, nil, nil); err != nil {
 		t.Fatalf("generateTsServiceManager: %v", err)
 	}
 	renderedBytes, err := os.ReadFile(filepath.Join(outputDir, "s2sm", "index.ts"))

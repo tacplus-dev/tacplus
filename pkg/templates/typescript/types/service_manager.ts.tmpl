@@ -8,6 +8,11 @@ import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 {{- if .HasTracePublisher}}
 import { EmptySchema } from '@bufbuild/protobuf/wkt';
 {{- end}}
+{{- if .HasAccountingPublisher}}
+import { EmptySchema as AccountingEmptySchema } from '@bufbuild/protobuf/wkt';
+import { EventBusSink, Emitter } from '../chassis/am/index.js';
+import { type {{.AccountingEventTypeName}}, {{.AccountingEventTypeName}}Schema } from '{{.AccountingEventImportPath}}';
+{{- end}}
 import { type Config } from '../types/sys/grpcconfig/index.js';
 import { IdentityManager, TokenMinterNotConfiguredError } from '../chassis/service_im/index.js';
 import { ServiceConnection, ChannelProvider } from '../chassis/servicemanager/index.js';
@@ -664,6 +669,142 @@ export class ServiceManager {
     }
   }
 {{- end}}
+{{- if .HasAccountingPublisher}}
+  private createAccountingEmitter(): Emitter {
+    // Topic: {{.AccountingPublisherTopicRef}}.
+    //
+    // NON-DROPPING (item 9's ruling): unlike the trace publisher above, this
+    // queue never rejects a push. EventBusSink.emit (chassis/am) is a
+    // synchronous void call from the generated wrapper's emitAccounting, so
+    // it cannot itself await backpressure the way Go/Rust/Java/Python's
+    // blocking/awaited bounded-queue send does; instead the queue keeps
+    // accepting past `maxQueueWarn` and only logs a warning, so an
+    // accounting record is never silently discarded.
+    const queue: {{.AccountingEventTypeName}}[] = [];
+    const signal = this.abortController.signal;
+    let waiter: { resolve: () => void; reject: (err: Error) => void } | null = null;
+
+    signal.addEventListener('abort', () => {
+      const w = waiter;
+      waiter = null;
+      if (w) w.reject(new Error('accounting publisher aborted'));
+    }, { once: true });
+
+    const take = async (): Promise<{{.AccountingEventTypeName}}> => {
+      while (queue.length === 0) {
+        if (signal.aborted) throw new Error('accounting publisher aborted');
+        await new Promise<void>((resolve, reject) => {
+          waiter = { resolve, reject };
+        });
+      }
+      return queue.shift()!;
+    };
+
+    this.trackTask('accounting publisher', this.accountingPublishResolveLoop(take, signal));
+
+    const wake = () => {
+      const w = waiter;
+      waiter = null;
+      if (w) w.resolve();
+    };
+    const sink = new EventBusSink(queue, this.instanceId, wake);
+    return new Emitter(this.instanceId, sink);
+  }
+
+  private async accountingPublishResolveLoop(take: () => Promise<{{.AccountingEventTypeName}}>, signal: AbortSignal): Promise<void> {
+    let backoff = 3000;
+    const maxBackoff = 30000;
+    while (!signal.aborted) {
+      try {
+        const ebConn = await this.resolveService('{{.AccountingPublisherTarget}}', signal);
+        await this.accountingPublishLoop(ebConn, take, signal);
+        return;
+      } catch (err) {
+        if (signal.aborted) return;
+        console.warn(`accounting publisher: failed to resolve eventbus, retrying in ${backoff}ms: ${err}`);
+        await this.sleep(backoff, signal);
+        backoff = Math.min(backoff * 2, maxBackoff);
+      }
+    }
+  }
+
+  private async accountingPublishLoop(
+    ebConn: grpc.Client,
+    take: () => Promise<{{.AccountingEventTypeName}}>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    let backoff = 3000;
+    const maxBackoff = 30000;
+    while (!signal.aborted) {
+      try {
+        await this.accountingPublishStream(ebConn, take, signal);
+        return;
+      } catch (err) {
+        if (signal.aborted) return;
+        console.warn(`accounting publish stream failed, reconnecting in ${backoff}ms: ${err}`);
+        await this.sleep(backoff, signal);
+        backoff = Math.min(backoff * 2, maxBackoff);
+      }
+    }
+  }
+
+  private async accountingPublishStream(
+    ebConn: grpc.Client,
+    take: () => Promise<{{.AccountingEventTypeName}}>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const token = await this.identity.getTokenFor('{{.AccountingPublisherTarget}}');
+    const metadata = new grpc.Metadata();
+    metadata.set('authorization', `Bearer ${token}`);
+    const stream = ebConn.makeBidiStreamRequest<{{.AccountingEventTypeName}}, unknown>(
+      '{{.AccountingPublishGrpcPath}}',
+      (msg: {{.AccountingEventTypeName}}) => Buffer.from(toBinary({{.AccountingEventTypeName}}Schema, msg)),
+      (buf: Buffer) => fromBinary(AccountingEmptySchema, new Uint8Array(buf)),
+      metadata,
+    );
+    stream.on('data', () => { /* ack ignored */ });
+    const onAbortCancel = () => {
+      try { stream.cancel(); } catch { /* no-op */ }
+    };
+    signal.addEventListener('abort', onAbortCancel, { once: true });
+
+    const closed = new Promise<never>((_resolve, reject) => {
+      stream.on('error', (err) => reject(err));
+      stream.on('end', () => reject(new Error('accounting publish stream ended')));
+      stream.on('close', () => reject(new Error('accounting publish stream closed')));
+    });
+    closed.catch(() => { /* observed via Promise.race */ });
+
+    try {
+      while (!signal.aborted) {
+        const record = await Promise.race([take(), closed]);
+        if (!stream.write(record)) {
+          let cleanup = () => { /* no-op */ };
+          try {
+            await Promise.race([
+              new Promise<void>((resolve, reject) => {
+                const onDrain = () => resolve();
+                const onAbort = () => reject(new Error('accounting publisher aborted'));
+                cleanup = () => {
+                  stream.removeListener('drain', onDrain);
+                  signal.removeEventListener('abort', onAbort);
+                };
+                stream.once('drain', onDrain);
+                signal.addEventListener('abort', onAbort, { once: true });
+              }),
+              closed,
+            ]);
+          } finally {
+            cleanup();
+          }
+        }
+      }
+    } finally {
+      signal.removeEventListener('abort', onAbortCancel);
+      try { stream.cancel(); } catch { /* no-op */ }
+    }
+  }
+{{- end}}
 {{- end}}
 
   /** Releases all resources. Use when not calling run(). */
@@ -745,11 +886,17 @@ export class ServiceManager {
 {{- if .HasTracePublisher}}
     const tracePublisher = this.createTracePublisher();
 {{- end}}
+{{- if .HasAccountingPublisher}}
+    const accountingEmitter = this.createAccountingEmitter();
+{{- end}}
 {{- range .GrpcServices}}
     const {{.WrapperVarName}} = new {{.WrapperVarName}}Class(handler.{{.GetterName}}());
     {{.WrapperVarName}}.setInstanceId(this.instanceId);
 {{- if $.HasTracePublisher}}
     {{.WrapperVarName}}.setTracePublisher(tracePublisher);
+{{- end}}
+{{- if and $.HasAccountingPublisher .HasAccounting}}
+    {{.WrapperVarName}}.setEmitter(accountingEmitter);
 {{- end}}
     {{.WrapperVarName}}.registerMethodAuth(authorizer);
     {{.WrapperVarName}}.setAuthorizeFunc((fullMethod, metadata, req) => authorizer.authorize(metadata, fullMethod, req));

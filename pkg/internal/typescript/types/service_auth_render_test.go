@@ -99,7 +99,7 @@ func TestTypeScriptServiceWrapperAuthWiringRendersMetadataAndMethodPolicies(t *t
 		}},
 	}
 
-	if err := generateServiceWrapper(svc, info, nil, map[string]service.AccountingInfo{}); err != nil {
+	if _, err := generateServiceWrapper(svc, info, nil, map[string]service.AccountingInfo{}); err != nil {
 		t.Fatalf("generateServiceWrapper: %v", err)
 	}
 	rendered := readOnlyFileInDir(t, outputDir)
@@ -162,7 +162,7 @@ func TestTypeScriptServiceManagerInstallsGrpcAuthorizerCallbacks(t *testing.T) {
 		AuthServices: []string{"identity"},
 	}}
 
-	if err := generateTsServiceManager(cfg, svcs); err != nil {
+	if err := generateTsServiceManager(cfg, svcs, nil); err != nil {
 		t.Fatalf("generateTsServiceManager: %v", err)
 	}
 	renderedBytes, err := os.ReadFile(filepath.Join(outputDir, "s2sm", "index.ts"))

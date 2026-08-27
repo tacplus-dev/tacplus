@@ -517,7 +517,7 @@ func Generate(config *tactype.Config) error {
 				}
 				accountingMap[svc.GrpcName] = service.AccountingInfo{EnumName: svc.EnumName, RPCs: rpcs, RPCOrdinals: ordinals}
 			}
-			if err := generateServiceWrappers(serverServices, protoSrcDir, accountingMap); err != nil {
+			if _, err := generateServiceWrappers(serverServices, protoSrcDir, accountingMap); err != nil {
 				return fmt.Errorf("failed to generate service wrappers: %w", err)
 			}
 			if err := generateServicesPackageJson(serverServices); err != nil {

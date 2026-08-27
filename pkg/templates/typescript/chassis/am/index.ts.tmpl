@@ -11,3 +11,6 @@
 
 export { Emitter, LoggerSink, captureErrorContext, shouldCaptureStack, grpcCodeFromError, errorContextFromError } from './AccountingManager.js';
 export type { Sink } from './AccountingManager.js';
+{{- if .HasAccountingRecord}}
+export { EventBusSink, methodLabel } from './AccountingManager.js';
+{{- end}}

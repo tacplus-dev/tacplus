@@ -18,6 +18,10 @@ import type {
   StateAction,
 } from '../../types/sys/accounting/index.js';
 import type { AccountingMethod } from '../../types/generated/accounting_method/index.js';
+{{- if .HasAccountingRecord}}
+import { create } from '@bufbuild/protobuf';
+import { type AccountingRecord, AccountingRecordSchema } from '{{.AccountingRecordImportPath}}';
+{{- end}}
 
 // ---------------------------------------------------------------------------
 // Sink interface
@@ -281,3 +285,126 @@ export class LoggerSink implements Sink {
     }
   }
 }
+{{- if .HasAccountingRecord}}
+
+// ---------------------------------------------------------------------------
+// EventBusSink — durable backend, publishes AccountingRecord to EventBus
+// ---------------------------------------------------------------------------
+
+/**
+ * Renders an AccountingMethod as the name of whichever per-service RPC enum
+ * field is set, e.g. "CONTRACT_RPCS_READ". Mirrors Go's MethodLabel / Java's
+ * methodLabel / Python's method_label: exactly one of AccountingMethod's
+ * per-service fields is non-zero for any given call, so the first non-zero
+ * field wins. The ordinal->label tables are baked in at generation time
+ * (there is no runtime enum-reflection helper for protobuf-es the way
+ * Go/Java/Python's generated enums provide).
+ */
+export function methodLabel(method: unknown): string {
+  if (method == null) return '';
+  const m = method as Record<string, number>;
+{{- range .ServiceRPCs}}
+  if (m.{{.FieldName}}) {
+    switch (m.{{.FieldName}}) {
+{{- range .RPCs}}
+      case {{.Ordinal}}: return '{{.Label}}';
+{{- end}}
+      default: return '';
+    }
+  }
+{{- end}}
+  return '';
+}
+
+let accountingIdSeq = 0;
+
+function nextAccountingId(sourceId: string, timestampMs: number): string {
+  accountingIdSeq += 1;
+  return `${sourceId}-${String(timestampMs).padStart(13, '0')}-${String(accountingIdSeq).padStart(12, '0')}`;
+}
+
+/**
+ * EventBusSink is the durable accounting backend. It flattens the Emitter's
+ * typed event into the stored AccountingRecord and hands it to the generated
+ * per-topic publisher's queue (built by service_manager.ts.tmpl's
+ * createAccountingEmitter, mirroring createTracePublisher).
+ *
+ * SEND CONTRACT — NON-DROPPING (item 9's ruling). Unlike LoggerSink or the
+ * trace publisher (best-effort, drops the event when the queue is full),
+ * this sink never discards a record: a missing accounting row is worse than
+ * a slow RPC. Go/Rust/Java/Python enforce this with a literal blocking (or
+ * awaited) bounded-queue send, which has no synchronous equivalent in
+ * Node's single-threaded event loop — Sink.emit is a synchronous void call
+ * from the generated wrapper's emitAccounting (see design doc Piece B: "no
+ * per-method codegen changes" to the existing emit call sites), so it cannot
+ * itself await backpressure. Instead the queue never rejects a push: past
+ * `maxQueueWarn` it keeps accepting and only logs a warning, so nothing is
+ * ever silently dropped, while the publish loop below drains it as fast as
+ * EventBus allows.
+ */
+export class EventBusSink implements Sink {
+  private readonly queue: AccountingRecord[];
+  private readonly sourceId: string;
+  private readonly maxQueueWarn: number;
+  private readonly wake: () => void;
+
+  constructor(queue: AccountingRecord[], sourceId: string, wake: () => void, maxQueueWarn = 1024) {
+    this.queue = queue;
+    this.sourceId = sourceId;
+    this.wake = wake;
+    this.maxQueueWarn = maxQueueWarn;
+  }
+
+  private flatten(event: Event): AccountingRecord {
+    let method: unknown;
+    let code = 0;
+    let durationMs = 0n;
+    const evPayload = (event as any).event;
+    if (evPayload) {
+      switch (evPayload.case) {
+        case 'rpcCompleted':
+          method = evPayload.value.method;
+          durationMs = evPayload.value.durationMs ?? 0n;
+          break;
+        case 'rpcError':
+          method = evPayload.value.method;
+          code = evPayload.value.code ?? 0;
+          durationMs = evPayload.value.durationMs ?? 0n;
+          break;
+        case 'tokenRejected':
+          method = evPayload.value.method;
+          break;
+        default:
+          break;
+      }
+    }
+
+    const timestampMs = (event as any).timestampMs ?? 0n;
+    // The verified principal a token/mTLS identity resolved to, not a
+    // caller-supplied header. See item 9's identity ruling.
+    const identity = ((event as any).identity ?? {}) as Record<string, string>;
+
+    return create(AccountingRecordSchema, {
+      accountingId: nextAccountingId(this.sourceId, Number(timestampMs)),
+      requestId: (event as any).requestId ?? '',
+      sourceId: ((event as any).sourceId as string | undefined) || this.sourceId,
+      timestampMs,
+      level: (event as any).level ?? 0,
+      method: methodLabel(method),
+      code,
+      durationMs,
+      principalSub: identity.sub ?? '',
+      spiffeId: identity.spiffe_id ?? '',
+    });
+  }
+
+  emit(event: Event): void {
+    const record = this.flatten(event);
+    if (this.queue.length >= this.maxQueueWarn) {
+      console.warn(`accounting publisher queue over ${this.maxQueueWarn}, still enqueuing (never dropping): ${record.accountingId}`);
+    }
+    this.queue.push(record);
+    this.wake();
+  }
+}
+{{- end}}

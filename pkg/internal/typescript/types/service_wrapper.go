@@ -11,6 +11,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/boundaries"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/header"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/service"
@@ -38,38 +39,60 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 
 // generateServiceWrappers generates servicewrapper.ts for each service in the services directory.
 // Uses a single DescriptorParser rooted at inputDir so protoc can resolve cross-package imports.
-func generateServiceWrappers(servicesInfo []ServiceInfo, inputDir string, accountingMap map[string]service.AccountingInfo) error {
+//
+// Returns, keyed by ServiceName, whether that wrapper ended up with accounting
+// wired in (i.e. defines setEmitter) — post Q2-exclusion. setEmitter is NOT
+// unconditional in the TypeScript wrapper (it is gated behind
+// {{if .HasAccounting}}, same bug class Java had), so the ServiceManager
+// template's setEmitter(...) wiring loop must guard on this per service.
+func generateServiceWrappers(servicesInfo []ServiceInfo, inputDir string, accountingMap map[string]service.AccountingInfo) (map[string]bool, error) {
 	// Create one descriptor parser for the entire proto root
 	descriptorParser, err := parser.NewDescriptorParser(inputDir)
 	if err != nil {
-		return fmt.Errorf("failed to create descriptor parser: %w", err)
+		return nil, fmt.Errorf("failed to create descriptor parser: %w", err)
 	}
+
+	// Q2: resolve the accounting topic once so every wrapper can drop that
+	// topic's own publish RPC from its accounting map. See
+	// accounting_exclusion.go for why this exclusion is mandatory.
+	accountingTopic, hasAccountingTopic, err := boundaries.LookupAccountingRecordTopic(descriptorParser)
+	if err != nil {
+		return nil, fmt.Errorf("resolve accounting record topic: %w", err)
+	}
+
+	hasAccountingByService := make(map[string]bool, len(servicesInfo))
 
 	for _, svc := range servicesInfo {
 		// Use the descriptor parser to get method information
 		protoInfo, err := descriptorParser.ConvertToProtoInfo(svc.ProtoFile)
 		if err != nil {
-			return fmt.Errorf("failed to parse %s: %w", svc.ProtoFile, err)
+			return nil, fmt.Errorf("failed to parse %s: %w", svc.ProtoFile, err)
 		}
 		fileDesc, err := descriptorParser.GetFileDescriptor(svc.ProtoFile)
 		if err != nil {
-			return fmt.Errorf("failed to get descriptor for %s: %w", svc.ProtoFile, err)
+			return nil, fmt.Errorf("failed to get descriptor for %s: %w", svc.ProtoFile, err)
 		}
 
+		svcAccountingMap := excludeAccountingSelfPublish(
+			accountingMap, svc.GrpcName, protoInfo.Package, svc.ServiceName,
+			accountingTopic, hasAccountingTopic)
+
 		// Generate servicewrapper.ts in the services output directory
-		if err := generateServiceWrapper(svc, protoInfo, fileDesc, accountingMap); err != nil {
-			return fmt.Errorf("failed to generate servicewrapper for %s: %w", svc.ServiceName, err)
+		hasAccounting, err := generateServiceWrapper(svc, protoInfo, fileDesc, svcAccountingMap)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate servicewrapper for %s: %w", svc.ServiceName, err)
 		}
+		hasAccountingByService[svc.ServiceName] = hasAccounting
 	}
-	return nil
+	return hasAccountingByService, nil
 }
 
 // generateServiceWrapper creates the servicewrapper.ts file for a service
-func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, fileDesc *parser.FileDescriptor, accountingMap map[string]service.AccountingInfo) error {
+func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, fileDesc *parser.FileDescriptor, accountingMap map[string]service.AccountingInfo) (bool, error) {
 	// Ensure output directory exists (created here, not in detectServicesForWrapper,
 	// so directories are only created for services that pass gRPC filtering)
 	if err := os.MkdirAll(svc.OutputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
+		return false, fmt.Errorf("failed to create output directory: %w", err)
 	}
 
 	// Determine wrapper filename, stripping redundant package prefix
@@ -197,7 +220,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, fileDesc *p
 	// Load template from embedded filesystem
 	tmplContent, err := loadTemplate("service_wrapper.ts.tmpl")
 	if err != nil {
-		return fmt.Errorf("failed to load service_wrapper template: %w", err)
+		return false, fmt.Errorf("failed to load service_wrapper template: %w", err)
 	}
 
 	// Determine wrapper name from annotation
@@ -253,20 +276,20 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, fileDesc *p
 
 	t, err := template.New("servicewrapper").Parse(tmplContent)
 	if err != nil {
-		return fmt.Errorf("failed to parse template: %w", err)
+		return false, fmt.Errorf("failed to parse template: %w", err)
 	}
 
 	file, err := os.Create(outputPath)
 	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
+		return false, fmt.Errorf("failed to create file: %w", err)
 	}
 	defer file.Close()
 
 	if err := t.Execute(file, data); err != nil {
-		return fmt.Errorf("failed to execute template: %w", err)
+		return false, fmt.Errorf("failed to execute template: %w", err)
 	}
 
-	return nil
+	return hasAccounting, nil
 }
 
 // tsTypeRef returns the TypeScript type reference for a method's input/output type.

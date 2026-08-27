@@ -14,12 +14,20 @@ is battle-tested, swap to EventBusSink with no other code changes.
 from __future__ import annotations
 
 import inspect
+import itertools
 import logging
 import time
 import traceback
 from typing import Any, Dict, Optional, Protocol
 
 import grpc
+{{- if .HasAccountingRecord}}
+
+import asyncio
+
+from {{.AccountingRecordImportFrom}} import {{.AccountingRecordPbModule}} as accountingrecord_pb
+from {{.ServicesImportFrom}} import {{.ServicesPbModule}} as services_pb
+{{- end}}
 
 logger = logging.getLogger("accounting")
 
@@ -273,3 +281,91 @@ class LoggerSink:
             )
         else:
             logger.info("accounting (unknown event type) %s", base)
+{{- if .HasAccountingRecord}}
+
+
+# ---------------------------------------------------------------------------
+# EventBusSink — durable backend, publishes AccountingRecord to EventBus
+# ---------------------------------------------------------------------------
+
+
+def method_label(method: Any) -> str:
+    """Renders an AccountingMethod as the name of whichever per-service RPC
+    enum field is set, e.g. "CONTRACT_RPCS_READ". Mirrors Go's MethodLabel /
+    Java's methodLabel: exactly one of AccountingMethod's per-service fields
+    is non-zero for any given call, so the first non-zero field wins."""
+    if method is None:
+        return ""
+{{- range .ServiceRPCs}}
+    if method.{{.FieldName}}:
+        return services_pb.{{.EnumName}}RPCs.Name(method.{{.FieldName}})
+{{- end}}
+    return ""
+
+
+class EventBusSink:
+    """EventBusSink is the durable accounting backend. It flattens the
+    Emitter's typed event dict into the stored AccountingRecord and hands it
+    to the generated per-topic publisher's queue.
+
+    SEND CONTRACT — BLOCKING, NOT DROPPING (item 9's ruling). Unlike
+    LoggerSink or the trace publisher (best-effort, drops on a full queue),
+    this sink retries until the bounded queue accepts the record: a silently
+    missing accounting row is worse than a slow RPC.
+    """
+
+    def __init__(self, queue: Any, source_id: str) -> None:
+        self._queue = queue
+        self._source_id = source_id
+        self._seq = itertools.count(1)
+
+    def _next_accounting_id(self, timestamp_ms: int) -> str:
+        return f"{self._source_id}-{timestamp_ms:013d}-{next(self._seq):012d}"
+
+    def _flatten(self, event: Dict[str, Any]):
+        method = None
+        code = 0
+        duration_ms = 0
+        if "rpc_completed" in event:
+            p = event["rpc_completed"]
+            method = p.get("method")
+            duration_ms = p.get("duration_ms", 0)
+        elif "rpc_error" in event:
+            p = event["rpc_error"]
+            method = p.get("method")
+            code = p.get("code", 0)
+            duration_ms = p.get("duration_ms", 0)
+        elif "token_rejected" in event:
+            p = event["token_rejected"]
+            method = p.get("method")
+
+        timestamp_ms = event.get("timestamp_ms", 0)
+        identity = event.get("identity") or {}
+        return accountingrecord_pb.AccountingRecord(
+            accounting_id=self._next_accounting_id(timestamp_ms),
+            request_id=event.get("request_id", ""),
+            source_id=event.get("source_id", "") or self._source_id,
+            timestamp_ms=timestamp_ms,
+            level=event.get("level", 0),
+            method=method_label(method),
+            code=code,
+            duration_ms=duration_ms,
+            # The principal a verified token/mTLS identity resolved to, not a
+            # caller-supplied header. See item 9's identity ruling.
+            principal_sub=identity.get("sub", ""),
+            spiffe_id=identity.get("spiffe_id", ""),
+        )
+
+    def emit(self, event: Dict[str, Any]) -> None:
+        record = self._flatten(event)
+        while True:
+            try:
+                self._queue.put_nowait(record)
+                return
+            except asyncio.QueueFull:
+                logger.warning(
+                    "accounting publisher queue full, blocking until drained: %s",
+                    record.accounting_id,
+                )
+                time.sleep(0.01)
+{{- end}}

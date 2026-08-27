@@ -87,9 +87,20 @@ type pySmTemplateData struct {
 	TracePublisherTopicRef string
 	TracePublisherTarget   string
 	TracePublishGrpcPath   string
-	GrpcServices           []pyGrpcServiceEntry
-	Subscriptions          []pySubscriptionEntry
-	TargetServices         []pyTargetServiceEntry
+	// HasAccountingPublisher/AccountingPublisher* wire the durable accounting
+	// emitter (chassis/am EventBusSink) to every wrapper. False when the proto
+	// set declares no accounting record (client repos), in which case no
+	// emitter is wired at all — see accounting_exclusion.go.
+	HasAccountingPublisher      bool
+	AccountingPublisherTopicRef string
+	AccountingPublisherTarget   string
+	AccountingPublishGrpcPath   string
+	AccountingEventTypeName     string // "AccountingRecord"
+	AccountingEventImportFrom   string // e.g. "svc.types.vservices.accountingrecord"
+	AccountingEventPbModule     string // "accountingrecord_pb2"
+	GrpcServices                []pyGrpcServiceEntry
+	Subscriptions               []pySubscriptionEntry
+	TargetServices              []pyTargetServiceEntry
 }
 
 func pythonClientTargets(clientSvcs []service.ServiceInfo) []pyTargetServiceEntry {
@@ -282,32 +293,59 @@ func buildPySmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, p
 		tracePublishGrpcPath = tracePublisher.grpcPath
 	}
 
+	accountingPublisher, err := detectAccountingPublisherTemplateData(config)
+	if err != nil {
+		return pySmTemplateData{}, err
+	}
+	hasAccountingPublisher := accountingPublisher != nil && hasServiceHealthState && len(svcs) > 0
+	accountingPublisherTopicRef := ""
+	accountingPublisherTarget := ""
+	accountingPublishGrpcPath := ""
+	accountingEventTypeName := ""
+	accountingEventImportFrom := ""
+	accountingEventPbModule := ""
+	if accountingPublisher != nil {
+		accountingPublisherTopicRef = accountingPublisher.topicRef
+		accountingPublisherTarget = accountingPublisher.target
+		accountingPublishGrpcPath = accountingPublisher.grpcPath
+		accountingEventTypeName = accountingPublisher.eventTypeName
+		accountingEventImportFrom = accountingPublisher.eventImportFrom
+		accountingEventPbModule = accountingPublisher.eventPbModule
+	}
+
 	return pySmTemplateData{
-		PythonPackageBase:      config.PythonPackageBase,
-		ServiceLabel:           config.ServiceLabel(),
-		HasGrpc:                len(svcs) > 0,
-		HasStates:              len(config.States) > 0 || config.AllStates,
-		HasGrpcS2SClients:      len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
-		HasServiceHealthState:  hasServiceHealthState,
-		HasAutoTls:             config.HasAutoTls(),
-		AutoTlsKeyType:         config.AutoTlsKeyType(),
-		HasSmb:                 hasSmb,
-		HasSubscriptions:       len(subs) > 0,
-		HealthStateProtoDir:    healthStateProtoDir,
-		HealthStateModule:      healthStateModule,
-		HealthStatePbModule:    healthStatePbModule,
-		StateStoreServiceID:    healthStatePackage,
-		TacplusVersion:         buildinfo.Version,
-		TacplusGitSha:          buildinfo.GitSha,
-		ProtoSourceVersion:     protoSourceVersion,
-		ProtoSourceGitSha:      protoGitSha,
-		HasTracePublisher:      hasTracePublisher,
-		TracePublisherTopicRef: tracePublisherTopicRef,
-		TracePublisherTarget:   tracePublisherTarget,
-		TracePublishGrpcPath:   tracePublishGrpcPath,
-		GrpcServices:           grpcSvcs,
-		Subscriptions:          subs,
-		TargetServices:         targetSvcs,
+		PythonPackageBase:           config.PythonPackageBase,
+		ServiceLabel:                config.ServiceLabel(),
+		HasGrpc:                     len(svcs) > 0,
+		HasStates:                   len(config.States) > 0 || config.AllStates,
+		HasGrpcS2SClients:           len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
+		HasServiceHealthState:       hasServiceHealthState,
+		HasAutoTls:                  config.HasAutoTls(),
+		AutoTlsKeyType:              config.AutoTlsKeyType(),
+		HasSmb:                      hasSmb,
+		HasSubscriptions:            len(subs) > 0,
+		HealthStateProtoDir:         healthStateProtoDir,
+		HealthStateModule:           healthStateModule,
+		HealthStatePbModule:         healthStatePbModule,
+		StateStoreServiceID:         healthStatePackage,
+		TacplusVersion:              buildinfo.Version,
+		TacplusGitSha:               buildinfo.GitSha,
+		ProtoSourceVersion:          protoSourceVersion,
+		ProtoSourceGitSha:           protoGitSha,
+		HasTracePublisher:           hasTracePublisher,
+		TracePublisherTopicRef:      tracePublisherTopicRef,
+		TracePublisherTarget:        tracePublisherTarget,
+		TracePublishGrpcPath:        tracePublishGrpcPath,
+		HasAccountingPublisher:      hasAccountingPublisher,
+		AccountingPublisherTopicRef: accountingPublisherTopicRef,
+		AccountingPublisherTarget:   accountingPublisherTarget,
+		AccountingPublishGrpcPath:   accountingPublishGrpcPath,
+		AccountingEventTypeName:     accountingEventTypeName,
+		AccountingEventImportFrom:   accountingEventImportFrom,
+		AccountingEventPbModule:     accountingEventPbModule,
+		GrpcServices:                grpcSvcs,
+		Subscriptions:               subs,
+		TargetServices:              targetSvcs,
 	}, nil
 }
 
@@ -338,6 +376,79 @@ func detectTracePublisherTemplateData(config *tactype.Config) (*tracePublisherTe
 		target:   pub.BrokerLabel,
 		grpcPath: pub.PublishPath,
 	}, nil
+}
+
+// accountingPublisherTemplateData is the resolved publisher for the durable
+// accounting record topic, if the proto set declares one.
+//
+// This is the one publisher that is NOT declared per-actor. Accounting is a
+// chassis concern: every service emits it, so requiring an event_publish on
+// every service's Config would be the same declaration copied N times, and a
+// service that forgot it would silently produce no audit trail. The producer
+// surface is already declared once, on the record itself
+// (s2s: {auth_services: ["*"]}), so the generator resolves the topic from the
+// record type instead — mirrors the Go/Java generators' collectAccountingPublisher
+// (mechanical port, per the design doc's B-rest note).
+type accountingPublisherTemplateData struct {
+	topicRef        string
+	target          string
+	grpcPath        string
+	eventTypeName   string // e.g. "AccountingRecord"
+	eventImportFrom string // e.g. "svc.types.vservices.accountingrecord"
+	eventPbModule   string // e.g. "accountingrecord_pb2"
+}
+
+func detectAccountingPublisherTemplateData(config *tactype.Config) (*accountingPublisherTemplateData, error) {
+	protoDir := config.AnnotatedProtoDir
+	if protoDir == "" {
+		return nil, nil
+	}
+	p, err := parser.NewDescriptorParser(protoDir)
+	if err != nil {
+		return nil, fmt.Errorf("create descriptor parser for accounting publisher detection: %w", err)
+	}
+	topic, ok, err := boundaries.LookupAccountingRecordTopic(p)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+
+	eventPkg := topic.Ref.Package
+	eventImportFrom := ""
+	eventPbModule := pyModuleName(eventPkg) + "_pb2"
+	for relPath, fd := range p.GetAllFiles() {
+		if fd.Package != eventPkg {
+			continue
+		}
+		parentDir := filepath.Dir(relPath)
+		if parentDir == "." {
+			parentDir = ""
+		}
+		packageDir := pyProtoPackageDirName(eventPkg, relPath)
+		eventImportFrom = config.PythonPackageBase + ".types." + pyJoinDotted(pyDottedPath(parentDir), packageDir)
+		eventPbModule = pyModuleName(strings.TrimSuffix(filepath.Base(relPath), ".proto")) + "_pb2"
+		break
+	}
+
+	return &accountingPublisherTemplateData{
+		topicRef:        topic.Ref.Raw,
+		target:          topic.EventBusLabel,
+		grpcPath:        eventbus.PerTopicPublishPath(topic.Ref),
+		eventTypeName:   eventTypeNameFromFQN(topic.EventTypeFQN),
+		eventImportFrom: eventImportFrom,
+		eventPbModule:   eventPbModule,
+	}, nil
+}
+
+// eventTypeNameFromFQN returns the bare message name from a fully-qualified
+// proto type name, e.g. "accountingrecord.AccountingRecord" -> "AccountingRecord".
+func eventTypeNameFromFQN(fqn string) string {
+	if idx := strings.LastIndex(fqn, "."); idx >= 0 {
+		return fqn[idx+1:]
+	}
+	return fqn
 }
 
 func eventPublishProtoFiles(config *tactype.Config) []string {

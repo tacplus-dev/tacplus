@@ -13,6 +13,10 @@ from .accounting_manager import (
     Sink,
     Emitter,
     LoggerSink,
+{{- if .HasAccountingRecord}}
+    EventBusSink,
+    method_label,
+{{- end}}
     capture_error_context,
     should_capture_stack,
     grpc_code_from_error,
@@ -23,6 +27,10 @@ __all__ = [
     "Sink",
     "Emitter",
     "LoggerSink",
+{{- if .HasAccountingRecord}}
+    "EventBusSink",
+    "method_label",
+{{- end}}
     "capture_error_context",
     "should_capture_stack",
     "grpc_code_from_error",

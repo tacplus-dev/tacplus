@@ -11,6 +11,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/boundaries"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/header"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/service"
@@ -115,7 +116,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				AuthAnyUser:   anyUser,
 				AuthServices:  service.AuthServices,
 				HasMethodAuth: hasMethodAuth,
-				HostLabel:       service.HostLabel,
+				HostLabel:     service.HostLabel,
 			})
 		}
 
@@ -134,6 +135,14 @@ func generateServiceWrappers(servicesInfo []ServiceInfo, inputDir string, accoun
 		return fmt.Errorf("failed to create descriptor parser: %w", err)
 	}
 
+	// Q2: resolve the accounting topic once so every wrapper can drop that
+	// topic's own publish RPC from its accounting map. See
+	// accounting_exclusion.go for why this exclusion is mandatory.
+	accountingTopic, hasAccountingTopic, err := boundaries.LookupAccountingRecordTopic(descriptorParser)
+	if err != nil {
+		return fmt.Errorf("resolve accounting record topic: %w", err)
+	}
+
 	for _, svc := range servicesInfo {
 		// Use the descriptor parser to get method information
 		protoInfo, err := descriptorParser.ConvertToProtoInfo(svc.ProtoFile)
@@ -142,7 +151,10 @@ func generateServiceWrappers(servicesInfo []ServiceInfo, inputDir string, accoun
 		}
 
 		// Generate servicewrapper.py in the types output directory
-		if err := generateServiceWrapper(svc, protoInfo, accountingMap); err != nil {
+		svcAccountingMap := excludeAccountingSelfPublish(
+			accountingMap, svc.GrpcName, protoInfo.Package, svc.ServiceName,
+			accountingTopic, hasAccountingTopic)
+		if err := generateServiceWrapper(svc, protoInfo, svcAccountingMap); err != nil {
 			return fmt.Errorf("failed to generate servicewrapper for %s: %w", svc.ServiceName, err)
 		}
 	}

@@ -26,6 +26,10 @@ from {{.PythonPackageBase}}.chassis.healthreporter import HealthReporter
 {{- if .HasTracePublisher}}
 from {{.PythonPackageBase}}.types.sys.trace import trace_pb2 as trace_pb
 {{- end}}
+{{- if .HasAccountingPublisher}}
+from {{.PythonPackageBase}}.chassis.am import EventBusSink, Emitter
+from {{.AccountingEventImportFrom}} import {{.AccountingEventPbModule}} as accountingrecord_pb
+{{- end}}
 
 import grpc
 import grpc.aio
@@ -323,6 +327,68 @@ class ServiceManager:
         async for _ in call(events(), metadata=metadata):
             pass
 {{- end}}
+{{- if .HasAccountingPublisher}}
+    def _create_accounting_emitter(self):
+        """Creates the accounting emitter for {{.AccountingPublisherTopicRef}}.
+
+        Non-dropping (item 9's ruling): the sink blocks on a bounded queue
+        instead of discarding records like the best-effort trace publisher
+        above — a missing accounting row is worse than a slow RPC.
+        """
+        queue: asyncio.Queue = asyncio.Queue(maxsize=1024)
+        self._create_task(self._accounting_publish_resolve_loop(queue))
+        sink = EventBusSink(queue, self.instance_id)
+        return Emitter(self.instance_id, sink)
+
+    async def _accounting_publish_resolve_loop(self, queue: asyncio.Queue) -> None:
+        backoff = 3.0
+        max_backoff = 30.0
+        while True:
+            try:
+                eb_conn = await self._resolve_service("{{.AccountingPublisherTarget}}")
+                await self._accounting_publish_loop(eb_conn, queue)
+                return
+            except Exception as e:
+                logger.warning(
+                    "accounting publisher: failed to resolve eventbus, retrying in %.0fs: %s",
+                    backoff,
+                    e,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
+
+    async def _accounting_publish_loop(self, eb_conn, queue: asyncio.Queue) -> None:
+        backoff = 3.0
+        max_backoff = 30.0
+        while True:
+            try:
+                await self._accounting_publish_stream(eb_conn, queue)
+                return
+            except Exception as e:
+                logger.warning(
+                    "accounting publish stream failed, reconnecting in %.0fs: %s",
+                    backoff,
+                    e,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
+
+    async def _accounting_publish_stream(self, eb_conn, queue: asyncio.Queue) -> None:
+        token = await self._identity.get_token_for("{{.AccountingPublisherTarget}}")
+        metadata = [("authorization", f"******")]
+        call = eb_conn.stream_stream(
+            "{{.AccountingPublishGrpcPath}}",
+            request_serializer=accountingrecord_pb.{{.AccountingEventTypeName}}.SerializeToString,
+            response_deserializer=lambda data: data,
+        )
+
+        async def events():
+            while True:
+                yield await queue.get()
+
+        async for _ in call(events(), metadata=metadata):
+            pass
+{{- end}}
 {{- end}}
 
     async def close(self) -> None:
@@ -416,11 +482,17 @@ class ServiceManager:
 {{- if .HasTracePublisher}}
         trace_publisher = self._create_trace_publisher()
 {{- end}}
+{{- if .HasAccountingPublisher}}
+        accounting_emitter = self._create_accounting_emitter()
+{{- end}}
 {{- range .GrpcServices}}
         {{.WrapperVarName}} = {{.WrapperVarName}}_cls(handler.{{.GetterName}}())
         {{.WrapperVarName}}.set_instance_id(self.instance_id)
 {{- if $.HasTracePublisher}}
         {{.WrapperVarName}}.set_trace_publisher(trace_publisher)
+{{- end}}
+{{- if $.HasAccountingPublisher}}
+        {{.WrapperVarName}}.set_emitter(accounting_emitter)
 {{- end}}
 {{- if .HasMethodAuth}}
         {{.WrapperVarName}}.register_method_auth(authorizer)

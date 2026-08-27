@@ -7,6 +7,9 @@ package {{.ChassisBase}}.am;
 
 import {{.TypesBase}}.sys.accounting.Accounting;
 import {{.TypesBase}}.generated.accounting_method.AccountingMethodOuterClass.AccountingMethod;
+{{- if .HasAccountingRecord}}
+import {{.AccountingRecordTypeImport}};
+{{- end}}
 
 import io.grpc.Status;
 import org.slf4j.Logger;
@@ -20,8 +23,9 @@ import java.util.Map;
  *
  * <p>Events are proto messages defined in accounting.proto. The AM uses a
  * delegation pattern: typed events go in, and the configured Sink delivers
- * them. The initial Sink is LoggerSink (delegates to SLF4J). When EventBus
- * is battle-tested, swap to EventBusSink with no other code changes.
+ * them. LoggerSink (delegates to SLF4J) and EventBusSink (durable, via
+ * EventBus) are both generated; the ServiceManager wires whichever Sink an
+ * Emitter uses.
  */
 public final class AccountingManager {
 
@@ -31,7 +35,10 @@ public final class AccountingManager {
     // Sink interface
     // -----------------------------------------------------------------------
 
-    /** Sink is the backend that receives accounting events. */
+    /**
+     * Sink is the backend that receives accounting events.
+     * Implementations: LoggerSink (SLF4J), EventBusSink (durable, via EventBus).
+     */
     public interface Sink {
         void emit(Accounting.Event event);
     }
@@ -277,4 +284,150 @@ public final class AccountingManager {
             }
         }
     }
+
+    // -------------------------------------------------------------------
+    // AccountingMethod -> stable label
+    // -------------------------------------------------------------------
+
+    /**
+     * Renders an AccountingMethod as the proto-declared enum value name of
+     * whichever per-service field is set, e.g. "TASKS_RPCS_CREATE_TASK".
+     *
+     * <p>AccountingRecord.method is an EQ query_field, so it needs one stable
+     * string per RPC. The generated enum's name() returns the proto-declared
+     * value name and changes only when the enum does, which is exactly the
+     * stability a stored query key needs.
+     */
+    public static String methodLabel(AccountingMethod method) {
+        if (method == null) {
+            return "";
+        }
+{{- range .ServiceRPCs}}
+        if (method.get{{.FieldName}}Value() != 0) {
+            return method.get{{.FieldName}}().name();
+        }
+{{- end}}
+        return "";
+    }
+{{- if .HasAccountingRecord}}
+
+    // -------------------------------------------------------------------
+    // EventBusSink — durable backend: flattens Event -> AccountingRecord and
+    // publishes it onto the accounting topic.
+    // -------------------------------------------------------------------
+
+    /**
+     * EventBusSink is the durable accounting backend. It flattens the
+     * emit-time {@code Accounting.Event} oneof envelope into the flat,
+     * stored {@code AccountingRecord} and hands it to the generated
+     * per-topic publisher's queue.
+     *
+     * <p>SEND CONTRACT — BLOCKING, NOT DROPPING. Unlike the best-effort trace
+     * publisher (which enqueues with a non-blocking offer() and drops on a
+     * full queue), this sink blocks on the queue put, retrying until either
+     * the record is accepted or the ServiceManager signals shutdown. A full
+     * queue therefore parks the emitting RPC's completion path until the
+     * publisher drains, rather than discarding a record. Accounting is an
+     * audit trail: a silently missing row is worse than a slow RPC. The only
+     * record this sink can lose is one emitted after the service is shutting
+     * down, and that path logs at ERROR.
+     */
+    public static final class EventBusSink implements Sink {
+        private static final Logger logger = LoggerFactory.getLogger("accounting");
+
+        private final java.util.concurrent.BlockingQueue<{{.AccountingRecordJavaType}}> queue;
+        private final String sourceId;
+        // stopped reports true when the owning ServiceManager is shutting
+        // down. emit() polls it between blocking offer() attempts so a full
+        // queue blocks the caller instead of dropping, while still giving up
+        // once there is no publish loop left to drain it.
+        private final java.util.function.BooleanSupplier stopped;
+        private final java.util.concurrent.atomic.AtomicLong seq = new java.util.concurrent.atomic.AtomicLong();
+
+        /**
+         * Creates a sink that publishes through the given per-topic publisher
+         * queue. sourceId is the emitting process ("{service_id}-{instance_id}"),
+         * used to make accounting_id unique across instances. stopped is the
+         * ServiceManager's shutdown signal.
+         */
+        public EventBusSink(java.util.concurrent.BlockingQueue<{{.AccountingRecordJavaType}}> queue,
+                             String sourceId,
+                             java.util.function.BooleanSupplier stopped) {
+            this.queue = queue;
+            this.sourceId = sourceId;
+            this.stopped = stopped;
+        }
+
+        // Mints the record key. accounting_id is assert_required, so it has
+        // to be non-empty and unique: process identity + emit time + a
+        // per-process counter is unique without pulling in a uuid dependency.
+        private String nextAccountingId(long timestampMs) {
+            long next = seq.incrementAndGet();
+            return String.format("%s-%013d-%012d", sourceId, timestampMs, next);
+        }
+
+        // Converts the emit-time envelope into the stored record.
+        //
+        // spiffe_id is deliberately left unset: eventbus stamps the owner
+        // field with the PUBLISHER's verified SPIFFE ID on the way in, so a
+        // value set here would be overwritten, and setting one would be a
+        // claim about identity that nothing checked.
+        private {{.AccountingRecordJavaType}} flatten(Accounting.Event event) {
+            String method = "";
+            int code = 0;
+            long durationMs = 0;
+            switch (event.getEventCase()) {
+                case RPC_COMPLETED:
+                    method = methodLabel(event.getRpcCompleted().getMethod());
+                    durationMs = event.getRpcCompleted().getDurationMs();
+                    break;
+                case RPC_ERROR:
+                    method = methodLabel(event.getRpcError().getMethod());
+                    code = event.getRpcError().getCode();
+                    durationMs = event.getRpcError().getDurationMs();
+                    break;
+                case TOKEN_REJECTED:
+                    method = methodLabel(event.getTokenRejected().getMethod());
+                    break;
+                default:
+                    break;
+            }
+            return {{.AccountingRecordJavaType}}.newBuilder()
+                    .setAccountingId(nextAccountingId(event.getTimestampMs()))
+                    .setRequestId(event.getRequestId())
+                    .setSourceId(event.getSourceId())
+                    .setTimestampMs(event.getTimestampMs())
+                    .setLevel(event.getLevel())
+                    .setMethod(method)
+                    .setCode(code)
+                    .setDurationMs(durationMs)
+                    // The principal the Authorizer verified, not a
+                    // caller-written header.
+                    .setPrincipalSub(event.getIdentityOrDefault("sub", ""))
+                    .build();
+        }
+
+        /**
+         * Flattens event and blocks until the publisher accepts it, or until
+         * the service is shutting down.
+         */
+        @Override
+        public void emit(Accounting.Event event) {
+            {{.AccountingRecordJavaType}} record = flatten(event);
+            try {
+                while (!stopped.getAsBoolean()) {
+                    if (queue.offer(record, 250, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                        return;
+                    }
+                }
+                // The publish loop is gone, which only happens on shutdown.
+                // Loud, because this is the one lossy path.
+                logger.error("accounting publisher closed; record dropped accounting_id={}", record.getAccountingId());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                logger.error("accounting publisher interrupted; record dropped accounting_id={}", record.getAccountingId());
+            }
+        }
+    }
+{{- end}}
 }

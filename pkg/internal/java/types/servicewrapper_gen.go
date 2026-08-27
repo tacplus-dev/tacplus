@@ -12,6 +12,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/boundaries"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/header"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
@@ -372,11 +373,16 @@ type generatedGrpcWrapper struct {
 
 // generateServiceWrappers generates ServiceWrapper.java for each service in the services directory.
 // Uses a single DescriptorParser rooted at inputDir so protoc can resolve cross-package imports.
-func generateServiceWrappers(config *tactype.Config, servicesInfo []ServiceInfo, inputDir string, accountingMap map[string]service.AccountingInfo, skippedTraceTypes proto.SkippedTraceTypes) error {
+// generateServiceWrappers generates every service wrapper and returns, keyed
+// by ServiceName, whether that wrapper ended up with accounting wired in
+// (i.e. defines setEmitter) — post Q2-exclusion. The ServiceManager template
+// uses this to guard its setEmitter(...) wiring loop, since not every wrapper
+// necessarily has that method (services with no accounted RPCs don't).
+func generateServiceWrappers(config *tactype.Config, servicesInfo []ServiceInfo, inputDir string, accountingMap map[string]service.AccountingInfo, skippedTraceTypes proto.SkippedTraceTypes) (map[string]bool, error) {
 	// Create one descriptor parser for the entire proto root (like Go does)
 	descriptorParser, err := parser.NewDescriptorParser(inputDir)
 	if err != nil {
-		return fmt.Errorf("failed to create descriptor parser: %w", err)
+		return nil, fmt.Errorf("failed to create descriptor parser: %w", err)
 	}
 
 	// Build the egress-sanitize oracle over the (entitlement-augmented) descriptor
@@ -389,25 +395,39 @@ func generateServiceWrappers(config *tactype.Config, servicesInfo []ServiceInfo,
 		}
 		mf, err := descriptorParser.ConvertToProtoFile(relPath)
 		if err != nil {
-			return fmt.Errorf("convert %s for egress sanitize resolution: %w", relPath, err)
+			return nil, fmt.Errorf("convert %s for egress sanitize resolution: %w", relPath, err)
 		}
 		allFiles = append(allFiles, mf)
 	}
 	san := newJavaEgressSanitizer(allFiles)
 
+	// Q2: resolve the accounting topic once so every wrapper can drop that
+	// topic's own publish RPC from its accounting map. See
+	// accounting_exclusion.go for why this exclusion is mandatory.
+	accountingTopic, hasAccountingTopic, err := boundaries.LookupAccountingRecordTopic(descriptorParser)
+	if err != nil {
+		return nil, fmt.Errorf("resolve accounting record topic: %w", err)
+	}
+
 	var generated []generatedGrpcWrapper
+	hasAccountingByService := make(map[string]bool, len(servicesInfo))
 
 	for _, svc := range servicesInfo {
 		// Use the descriptor parser to get method information
 		protoInfo, err := descriptorParser.ConvertToProtoInfo(svc.ProtoFile)
 		if err != nil {
-			return fmt.Errorf("failed to parse %s: %w", svc.ProtoFile, err)
+			return nil, fmt.Errorf("failed to parse %s: %w", svc.ProtoFile, err)
 		}
 
 		// Generate ServiceWrapper.java in the services output directory
-		if err := generateServiceWrapper(svc, protoInfo, accountingMap, skippedTraceTypes, san); err != nil {
-			return fmt.Errorf("failed to generate service wrapper for %s: %w", svc.ServiceName, err)
+		svcAccountingMap := excludeAccountingSelfPublish(
+			accountingMap, svc.GrpcName, protoInfo.Package, svc.ServiceName,
+			accountingTopic, hasAccountingTopic)
+		hasAccounting, err := generateServiceWrapper(svc, protoInfo, svcAccountingMap, skippedTraceTypes, san)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate service wrapper for %s: %w", svc.ServiceName, err)
 		}
+		hasAccountingByService[svc.ServiceName] = hasAccounting
 
 		// Track for aggregator generation (only gRPC services)
 		if svc.IsGrpc {
@@ -430,15 +450,15 @@ func generateServiceWrappers(config *tactype.Config, servicesInfo []ServiceInfo,
 
 	// Generate per-group gRPC aggregators
 	if err := generateGrpcGroupAggregators(config, generated); err != nil {
-		return fmt.Errorf("failed to generate gRPC group aggregators: %w", err)
+		return nil, fmt.Errorf("failed to generate gRPC group aggregators: %w", err)
 	}
 
 	// Generate root gRPC aggregator
 	if err := generateGrpcRootAggregator(config, generated); err != nil {
-		return fmt.Errorf("failed to generate gRPC root aggregator: %w", err)
+		return nil, fmt.Errorf("failed to generate gRPC root aggregator: %w", err)
 	}
 
-	return nil
+	return hasAccountingByService, nil
 }
 
 // getOuterClassNameForWrapper detects the Java outer class name for a proto file.
@@ -484,12 +504,12 @@ func serverClassName(serviceName string) string {
 
 // generateServiceWrapper creates a named wrapper Java file for a single service.
 // gRPC services → {Name}Service.java (e.g., BaseballService.java)
-func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingMap map[string]service.AccountingInfo, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer) error {
+func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingMap map[string]service.AccountingInfo, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer) (bool, error) {
 	className := serverClassName(svc.ServiceName)
 	outputPath := filepath.Join(svc.OutputDir, className+".java")
 
 	if err := os.MkdirAll(svc.OutputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create service wrapper output dir: %w", err)
+		return false, fmt.Errorf("failed to create service wrapper output dir: %w", err)
 	}
 
 	zap.L().Info("Generating service wrapper", zap.String("service", svc.ServiceName), zap.String("path", outputPath))
@@ -503,7 +523,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		}
 	}
 	if targetService == nil {
-		return fmt.Errorf("service %s not found in proto info for %s", svc.ServiceName, svc.ProtoFile)
+		return false, fmt.Errorf("service %s not found in proto info for %s", svc.ServiceName, svc.ProtoFile)
 	}
 
 	serviceName := svc.ServiceName
@@ -680,7 +700,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		// A method carrying (spec.min_group_size) that this wrapper cannot guard
 		// must fail generation, not ship the size-only RPC unguarded.
 		if why := javaMinGroupSizeUnenforceable(method, san, info.Package); why != "" {
-			return fmt.Errorf("%s.%s carries (spec.min_group_size) = %d but %s",
+			return false, fmt.Errorf("%s.%s carries (spec.min_group_size) = %d but %s",
 				targetService.Name, method.Name, method.MinGroupSize, why)
 		}
 		handlerInterface.WriteString(generateJavaHandlerMethod(method, inputType, outputType, crossPkgOuterClasses))
@@ -724,7 +744,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 
 	tmpl, err := loadTemplate("servicewrapper.java.tmpl")
 	if err != nil {
-		return fmt.Errorf("failed to load service wrapper template: %w", err)
+		return false, fmt.Errorf("failed to load service wrapper template: %w", err)
 	}
 
 	// Build the types import statement for the wrappers package
@@ -809,20 +829,20 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 
 	t, err := template.New("servicewrapper").Parse(tmpl)
 	if err != nil {
-		return fmt.Errorf("failed to parse template: %w", err)
+		return false, fmt.Errorf("failed to parse template: %w", err)
 	}
 
 	file, err := os.Create(outputPath)
 	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
+		return false, fmt.Errorf("failed to create file: %w", err)
 	}
 	defer file.Close()
 
 	if err := t.Execute(file, data); err != nil {
-		return fmt.Errorf("failed to execute template: %w", err)
+		return false, fmt.Errorf("failed to execute template: %w", err)
 	}
 
-	return nil
+	return hasAccounting, nil
 }
 
 // resolveValidationHelpers returns the Helpers class qualifier for a given type.

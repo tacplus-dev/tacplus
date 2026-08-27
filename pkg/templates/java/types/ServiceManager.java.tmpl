@@ -68,6 +68,10 @@ import java.util.List;
 import {{.}};
 {{- end}}
 {{- end}}
+{{- if .HasAccountingPublisher}}
+import {{.ChassisBase}}.am.AccountingManager;
+import {{.AccountingPublisher.TypeImport}};
+{{- end}}
 {{- if .HasSysState}}
 import {{.TypesBase}}.sys.grpcconfig.ServiceConfigStateServiceGrpc;
 {{- end}}
@@ -86,7 +90,7 @@ import java.util.Arrays;
 {{- if or .HasServiceHealthState .HasStates .HasTracePublisher}}
 import {{.TypesBase}}.sys.trace.Trace;
 {{- end}}
-{{- if or .HasTracePublisher .HasPublishers}}
+{{- if or .HasTracePublisher .HasPublishers .HasAccountingPublisher}}
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 {{- end}}
@@ -819,6 +823,37 @@ public class ServiceManager implements AutoCloseable {
             });
 {{- end}}
         }
+{{- end}}
+
+{{- if and .HasGrpc .HasAccountingPublisher}}
+{{- with .AccountingPublisher}}
+        // Wire the durable accounting emitter to every wrapper. The wrapper
+        // emit sites already exist on both the success and the error path of
+        // every accounted RPC; without this the field is null and accounting
+        // produces neither a record nor a log line.
+        //
+        // The queue send is BLOCKING, not the offer()-and-drop used by the
+        // trace publisher above — see AccountingManager.EventBusSink's send
+        // contract in chassis/am. The queue is deeper than the trace queue
+        // for the same reason: a brief publisher stall should absorb, not
+        // drop.
+        {
+            BlockingQueue<{{.TypeOuterClass}}.{{.TypeName}}> accountingQueue = new ArrayBlockingQueue<>(1024);
+            startManagedThread(
+                    "{{.ThreadName}}",
+                    true,
+                    () -> {{.ResolveLoopName}}(accountingQueue));
+            String accountingSourceId = "{{$.ServiceLabel}}" + "-" + getInstanceId();
+            AccountingManager.Emitter accountingEmitter = new AccountingManager.Emitter(
+                    accountingSourceId,
+                    new AccountingManager.EventBusSink(accountingQueue, accountingSourceId, () -> closing));
+{{- range $.GrpcServices}}
+{{- if .HasAccounting}}
+            {{.WrapperVarName}}.setEmitter(accountingEmitter);
+{{- end}}
+{{- end}}
+        }
+{{- end}}
 {{- end}}
 
         // Token-auth services also wire the authenticator path. auth_any_user
@@ -2025,6 +2060,106 @@ public class ServiceManager implements AutoCloseable {
         }
     }
 
+{{- end}}
+{{- end}}
+
+{{- if .HasAccountingPublisher}}
+{{- with .AccountingPublisher}}
+    // {{.ResolveLoopName}}/{{.StreamName}} drain the durable accounting
+    // record queue into EventBus. A record stays "pending" until the broker
+    // acknowledges it, so stream/re-resolution failures do not discard an
+    // already-enqueued record — the queue send being BLOCKING
+    // (AccountingManager.EventBusSink.emit) is what makes THAT step
+    // non-dropping; this loop just makes sure an accepted record is retried
+    // until it is durably published.
+    private void {{.ResolveLoopName}}(BlockingQueue<{{.TypeOuterClass}}.{{.TypeName}}> queue) {
+        long backoff = 3000;
+        final long maxBackoff = 30000;
+        {{.TypeOuterClass}}.{{.TypeName}} pending = null;
+
+        while (!Thread.currentThread().isInterrupted()) {
+            try {
+                if (pending == null) {
+                    pending = queue.poll(1, TimeUnit.SECONDS);
+                    if (pending == null) {
+                        continue;
+                    }
+                }
+                io.grpc.Channel ebConn = resolveService("{{.TargetService}}");
+                {{.StreamName}}(ebConn, pending);
+                pending = null;
+                backoff = 3000;
+            } catch (Exception e) {
+                LOG.warning("accounting publisher {{.Label}} publish attempt failed for broker {{.TargetService}}, retrying in " + backoff + "ms: " + e.getMessage());
+                try { Thread.sleep(backoff); } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                if (backoff < maxBackoff) {
+                    backoff = Math.min(backoff * 2, maxBackoff);
+                }
+            }
+        }
+    }
+
+    private void {{.StreamName}}(io.grpc.Channel ebConn, {{.TypeOuterClass}}.{{.TypeName}} event) throws Exception {
+        io.grpc.MethodDescriptor<{{.TypeOuterClass}}.{{.TypeName}}, com.google.protobuf.Empty> method =
+                io.grpc.MethodDescriptor.<{{.TypeOuterClass}}.{{.TypeName}}, com.google.protobuf.Empty>newBuilder()
+                        .setType(io.grpc.MethodDescriptor.MethodType.BIDI_STREAMING)
+                        .setFullMethodName("{{.PublishFullMethod}}")
+                        .setRequestMarshaller(io.grpc.protobuf.ProtoUtils.marshaller({{.TypeOuterClass}}.{{.TypeName}}.getDefaultInstance()))
+                        .setResponseMarshaller(io.grpc.protobuf.ProtoUtils.marshaller(com.google.protobuf.Empty.getDefaultInstance()))
+                        .build();
+
+        CountDownLatch streamDone = new CountDownLatch(1);
+        CountDownLatch streamReady = new CountDownLatch(1);
+        CountDownLatch streamAck = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Throwable> streamError = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<io.grpc.stub.ClientCallStreamObserver<{{.TypeOuterClass}}.{{.TypeName}}>> requestRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
+        io.grpc.stub.StreamObserver<{{.TypeOuterClass}}.{{.TypeName}}> outbound = io.grpc.stub.ClientCalls.asyncBidiStreamingCall(
+                ebConn.newCall(method, io.grpc.CallOptions.DEFAULT
+                        .withCallCredentials(identity.callCredentials())),
+                new io.grpc.stub.ClientResponseObserver<{{.TypeOuterClass}}.{{.TypeName}}, com.google.protobuf.Empty>() {
+                    @Override public void beforeStart(io.grpc.stub.ClientCallStreamObserver<{{.TypeOuterClass}}.{{.TypeName}}> requestStream) {
+                        requestRef.set(requestStream);
+                        requestStream.setOnReadyHandler(() -> {
+                            if (requestStream.isReady()) {
+                                streamReady.countDown();
+                            }
+                        });
+                    }
+                    @Override public void onNext(com.google.protobuf.Empty value) { streamAck.countDown(); streamDone.countDown(); }
+                    @Override public void onError(Throwable t) { streamError.set(t); streamDone.countDown(); }
+                    @Override public void onCompleted() { streamDone.countDown(); }
+                });
+
+        awaitPublisherReady(requestRef.get(), streamReady);
+        outbound.onNext(event);
+        outbound.onCompleted();
+        try {
+            while (streamDone.getCount() > 0) {
+                if (streamDone.await(1, TimeUnit.SECONDS)) {
+                    break;
+                }
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new InterruptedException("interrupted while publishing {{.Label}}");
+                }
+            }
+        } finally {
+            if (streamDone.getCount() > 0) {
+                try { outbound.onError(new RuntimeException("accounting publisher interrupted before ack")); } catch (Exception ignored) {}
+            }
+        }
+
+        if (streamError.get() != null) {
+            throw new Exception("accounting publisher {{.Label}} stream error", streamError.get());
+        }
+        if (streamAck.getCount() > 0) {
+            throw new Exception("accounting publisher {{.Label}} stream completed before ack");
+        }
+    }
 {{- end}}
 {{- end}}
 

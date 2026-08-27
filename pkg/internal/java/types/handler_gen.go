@@ -44,6 +44,12 @@ type javaGrpcServiceEntry struct {
 	AuthDisabled             bool   // C2S: no token required
 	AuthAnyUser              bool   // C2S: any authenticated user can call
 	HasMethodAuth            bool   // true if wrapper has registerMethodAuth method
+	// HasAccounting is true when this wrapper's generated class defines
+	// setEmitter (i.e. it ended up with at least one accounted RPC, post Q2's
+	// self-publish exclusion — see accounting_exclusion.go). The
+	// ServiceManager wiring loop must guard setEmitter(...) calls on this,
+	// since not every wrapper has that method.
+	HasAccounting bool
 }
 
 // javaConfigFetchEntry groups every config-handler block that reads the same
@@ -126,6 +132,12 @@ type javaSmTemplateData struct {
 	Subscriptions          []javaSubscriptionEntry
 	Publishers             []javaPublisherEntry
 	PublisherImports       []string
+	// HasAccountingPublisher/AccountingPublisher wire the durable accounting
+	// emitter (chassis/am EventBusSink) to every wrapper. False when the
+	// proto set declares no accounting record (client repos), in which case
+	// no emitter is wired at all — see accounting_exclusion.go.
+	HasAccountingPublisher bool
+	AccountingPublisher    javaPublisherEntry
 	TargetServices         []javaTargetServiceEntry // unique target services for S2S clients
 	DiskStores             []javaDiskStoreRuntimeEntry
 	HasDiskStores          bool
@@ -146,7 +158,7 @@ func javaSmTargetServices(config *tactype.Config, clientSvcs []ServiceInfo) []ja
 }
 
 // buildJavaSmTemplateData constructs the template data.
-func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientSvcs []ServiceInfo, protoDir string) (javaSmTemplateData, error) {
+func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientSvcs []ServiceInfo, protoDir string, hasAccountingByService map[string]bool) (javaSmTemplateData, error) {
 	packageBase := config.JavaPackageBase
 	configStates, err := stateproto.ConfigStateAccessors(config, config.FlatProtoDir)
 	if err != nil {
@@ -207,6 +219,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 			AuthDisabled:             svc.AuthDisabled,
 			AuthAnyUser:              svc.AuthAnyUser,
 			HasMethodAuth:            svc.HasMethodAuth,
+			HasAccounting:            hasAccountingByService[svc.ServiceName],
 		})
 	}
 	diskStores, err := collectJavaDiskStoreRuntimeEntries(config, grpcSvcs)
@@ -378,6 +391,16 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 	}
 	hasPublishers := len(publishers) > 0 && hasServiceHealthState
 
+	accountingPublisher, err := collectJavaAccountingPublisher(config, protoDir)
+	if err != nil {
+		return javaSmTemplateData{}, fmt.Errorf("failed to resolve accounting publisher: %w", err)
+	}
+	hasAccountingPublisher := accountingPublisher != nil && hasServiceHealthState && len(svcs) > 0
+	var accountingPublisherEntry javaPublisherEntry
+	if accountingPublisher != nil {
+		accountingPublisherEntry = *accountingPublisher
+	}
+
 	return javaSmTemplateData{
 		PackageBase:            packageBase,
 		ChassisBase:               packageBase + ".chassis",
@@ -416,6 +439,8 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		Subscriptions:          subs,
 		Publishers:             publishers,
 		PublisherImports:       publisherImports,
+		HasAccountingPublisher: hasAccountingPublisher,
+		AccountingPublisher:    accountingPublisherEntry,
 		TargetServices:         targetServices,
 		DiskStores:             diskStores,
 		HasDiskStores:          len(diskStores) > 0,
@@ -596,7 +621,7 @@ func javaTypesPackageForProto(packageBase, protoFile, protoPackage string, decla
 }
 
 // generateJavaHandlerInterface generates Handler.java in the sm/ directory.
-func generateJavaHandlerInterface(config *tactype.Config, svcs []ServiceInfo, clientSvcs []ServiceInfo, protoDir string) error {
+func generateJavaHandlerInterface(config *tactype.Config, svcs []ServiceInfo, clientSvcs []ServiceInfo, protoDir string, hasAccountingByService map[string]bool) error {
 	tmplContent, err := loadTemplate("Handler.java.tmpl")
 	if err != nil {
 		return fmt.Errorf("failed to load handler template: %w", err)
@@ -607,7 +632,7 @@ func generateJavaHandlerInterface(config *tactype.Config, svcs []ServiceInfo, cl
 		return fmt.Errorf("failed to parse handler template: %w", err)
 	}
 
-	data, err := buildJavaSmTemplateData(config, svcs, clientSvcs, protoDir)
+	data, err := buildJavaSmTemplateData(config, svcs, clientSvcs, protoDir, hasAccountingByService)
 	if err != nil {
 		return fmt.Errorf("failed to build handler template data: %w", err)
 	}
@@ -632,7 +657,7 @@ func generateJavaHandlerInterface(config *tactype.Config, svcs []ServiceInfo, cl
 }
 
 // generateJavaServiceManager generates ServiceManager.java in the sm/ directory.
-func generateJavaServiceManager(config *tactype.Config, svcs []ServiceInfo, clientSvcs []ServiceInfo, protoDir string) error {
+func generateJavaServiceManager(config *tactype.Config, svcs []ServiceInfo, clientSvcs []ServiceInfo, protoDir string, hasAccountingByService map[string]bool) error {
 	tmplContent, err := loadTemplate("ServiceManager.java.tmpl")
 	if err != nil {
 		return fmt.Errorf("failed to load service_manager template: %w", err)
@@ -643,7 +668,7 @@ func generateJavaServiceManager(config *tactype.Config, svcs []ServiceInfo, clie
 		return fmt.Errorf("failed to parse service_manager template: %w", err)
 	}
 
-	data, err := buildJavaSmTemplateData(config, svcs, clientSvcs, protoDir)
+	data, err := buildJavaSmTemplateData(config, svcs, clientSvcs, protoDir, hasAccountingByService)
 	if err != nil {
 		return fmt.Errorf("failed to build service manager template data: %w", err)
 	}

@@ -16,14 +16,22 @@ import (
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/keepaliveconst"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 	commonspiffe "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/spiffe"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
 	stateproto "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
 )
 
+// javaAmServiceRPC is the per-service RPC-enum accessor data
+// AccountingManager.java.tmpl's methodLabel needs — one entry per gRPC
+// service in the fleet's generated AccountingMethod message.
+type javaAmServiceRPC struct {
+	FieldName string // Java accessor name on AccountingMethod, e.g. "Contract"
+}
+
 // writeLibTemplates processes the embedded Java library templates and writes them
 // to the output directory at {langDir}/wrappers/src/main/java/{packagePath}/
-func writeLibTemplates(config *tactype.Config, acceptedAudiences []string) error {
+func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRPCs []stateproto.ServiceRPCEntry) error {
 	langDir := config.LangDir()
 
 	// Package base path as directory structure
@@ -114,6 +122,29 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string) error
 		}
 	}
 
+	// Does this proto set declare the durable accounting record? Client repos
+	// and any build without platform/proto/vservices do not, and the chassis
+	// EventBusSink is gated on it — it cannot name a type that was never
+	// generated. Reuses the same resolution collectJavaAccountingPublisher
+	// gives the ServiceManager wiring, so both sides agree on one type.
+	protoDir := config.AnnotatedProtoDir
+	accountingPublisher, err := collectJavaAccountingPublisher(config, protoDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve accounting publisher for chassis am templates: %w", err)
+	}
+	hasAccountingRecord := accountingPublisher != nil
+	accountingRecordTypeImport := ""
+	accountingRecordJavaType := ""
+	if accountingPublisher != nil {
+		accountingRecordTypeImport = accountingPublisher.TypeImport
+		accountingRecordJavaType = accountingPublisher.TypeOuterClass + "." + accountingPublisher.TypeName
+	}
+
+	serviceRPCs := make([]javaAmServiceRPC, 0, len(svcRPCs))
+	for _, svc := range svcRPCs {
+		serviceRPCs = append(serviceRPCs, javaAmServiceRPC{FieldName: strutil.ToPascalCase(svc.GrpcName)})
+	}
+
 	// Template data
 	data := struct {
 		PackageBase                string
@@ -134,6 +165,10 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string) error
 		KeepaliveTimeSecs          int
 		KeepaliveTimeoutSecs       int
 		KeepalivePermitMinTimeSecs int
+		HasAccountingRecord        bool   // proto set declares accountingrecord.AccountingRecord
+		AccountingRecordTypeImport string // e.g. "com.example.types.vservices.accountingrecord.Accountingrecord"
+		AccountingRecordJavaType   string // e.g. "Accountingrecord.AccountingRecord"
+		ServiceRPCs                []javaAmServiceRPC
 	}{
 		PackageBase:                packageBase,
 		InterfacesBase:             config.Lang.Java.JavaImportBase(),
@@ -153,6 +188,10 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string) error
 		KeepaliveTimeSecs:          keepaliveconst.TimeSecs,
 		KeepaliveTimeoutSecs:       keepaliveconst.TimeoutSecs,
 		KeepalivePermitMinTimeSecs: keepaliveconst.PermitMinTimeSecs,
+		HasAccountingRecord:        hasAccountingRecord,
+		AccountingRecordTypeImport: accountingRecordTypeImport,
+		AccountingRecordJavaType:   accountingRecordJavaType,
+		ServiceRPCs:                serviceRPCs,
 	}
 
 	langFS, err := fs.Sub(templates.FS, "java/chassis")

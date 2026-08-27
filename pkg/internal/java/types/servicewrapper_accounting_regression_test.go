@@ -329,7 +329,7 @@ func TestJavaMixedAuthServiceKeepsProtectedMethodsAuthorized(t *testing.T) {
 		}},
 	}
 
-	if err := generateServiceWrapper(svc, info, nil, proto.SkippedTraceTypes{}, nil); err != nil {
+	if _, err := generateServiceWrapper(svc, info, nil, proto.SkippedTraceTypes{}, nil); err != nil {
 		t.Fatalf("generateServiceWrapper: %v", err)
 	}
 	renderedBytes, err := os.ReadFile(filepath.Join(wrapperDir, "ContractApi.java"))

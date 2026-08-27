@@ -1127,9 +1127,15 @@ func Generate(config *tactype.Config) error {
 	}
 	// Generate service wrappers — only for gRPC server services
 	serverServices := resolveServerServices(config, servicesInfo)
+	// hasAccountingByService (ServiceName -> bool) records, per wrapper, whether
+	// it ended up with accounting wired in (post Q2-exclusion) — i.e. whether it
+	// defines setEmitter. ServiceManager's wiring loop must only call setEmitter
+	// on wrappers that have it.
+	var hasAccountingByService map[string]bool
 	if len(serverServices) > 0 {
 		zap.L().Info("Generating Java service wrappers", zap.Int("count", len(serverServices)))
-		if err := generateServiceWrappers(config, serverServices, protoDir, accountingMap, skippedTraceTypes); err != nil {
+		hasAccountingByService, err = generateServiceWrappers(config, serverServices, protoDir, accountingMap, skippedTraceTypes)
+		if err != nil {
 			return fmt.Errorf("failed to generate service wrappers: %w", err)
 		}
 	}
@@ -1266,10 +1272,10 @@ func Generate(config *tactype.Config) error {
 			}
 		}
 		zap.L().Info("Generating Java handler interface and service_manager")
-		if err := generateJavaHandlerInterface(config, grpcSvcs, clientServices, protoDir); err != nil {
+		if err := generateJavaHandlerInterface(config, grpcSvcs, clientServices, protoDir, hasAccountingByService); err != nil {
 			return fmt.Errorf("failed to generate handler interface: %w", err)
 		}
-		if err := generateJavaServiceManager(config, grpcSvcs, clientServices, protoDir); err != nil {
+		if err := generateJavaServiceManager(config, grpcSvcs, clientServices, protoDir, hasAccountingByService); err != nil {
 			return fmt.Errorf("failed to generate service_manager: %w", err)
 		}
 	}
@@ -1318,7 +1324,7 @@ func Generate(config *tactype.Config) error {
 
 	// Write library templates
 	zap.L().Info("Writing Java library templates")
-	if err := writeLibTemplates(config, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries)); err != nil {
+	if err := writeLibTemplates(config, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries), svcRPCs); err != nil {
 		return fmt.Errorf("failed to write library templates: %w", err)
 	}
 

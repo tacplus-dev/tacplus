@@ -1676,6 +1676,16 @@ message StateAnnotation {
   // export makes this state root available for RO import by other services.
   // Without export, the state is private to the owning service.
   bool export = 5;
+  // requires_artifact_on_write marks this state root as "the living side" —
+  // user-owned/user-facing data whose mutation must leave a durable artifact.
+  // When set, every WRITE-classified RPC (spec.internal/common/verbs registry)
+  // on a non-synthesized service declared in the same package must be
+  // accompanied by at least one (spec.record)-annotated message in that
+  // package; a write RPC with no record in scope fails generation
+  // (ValidateArtifactOnWrite). Control-plane/config state roots (kernel, opa,
+  // sentinel, oauth, letsencrypt, operator) must NOT set this — it is only for
+  // state that represents user-owned knowledge, not service configuration.
+  bool requires_artifact_on_write = 6;
 }
 
 // ServiceStoreAnnotation marks a message as a durable key-value store.

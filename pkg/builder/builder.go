@@ -122,6 +122,9 @@ func (b *Builder) BuildLanguage(ctx context.Context) error {
 	if err := proto.ValidateC2STopicActorIdentity(b.config.FlatProtoDir); err != nil {
 		return err
 	}
+	if err := proto.ValidateArtifactOnWrite(b.config.FlatProtoDir); err != nil {
+		return err
+	}
 	if err := proto.ValidateMaxSize(b.config.FlatProtoDir); err != nil {
 		return err
 	}

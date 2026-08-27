@@ -289,16 +289,28 @@ class LoggerSink:
 # ---------------------------------------------------------------------------
 
 
+def _rpc_short_name(enum_value_name: str) -> str:
+    """Converts a generated RPC enum's proto value name (e.g.
+    "TASKS_RPCS_UPDATE_TASK") into the RPC's own declared name (e.g.
+    "UpdateTask"): every such enum's variant is "<SERVICE>_RPCS_<RPC>" in
+    SCREAMING_SNAKE_CASE, so drop the "_RPCS_" prefix and re-case the
+    remainder to UpperCamelCase."""
+    marker = "_RPCS_"
+    idx = enum_value_name.find(marker)
+    suffix = enum_value_name[idx + len(marker):] if idx >= 0 else enum_value_name
+    return "".join(word.capitalize() for word in suffix.split("_") if word)
+
+
 def method_label(method: Any) -> str:
-    """Renders an AccountingMethod as the name of whichever per-service RPC
-    enum field is set, e.g. "CONTRACT_RPCS_READ". Mirrors Go's MethodLabel /
-    Java's methodLabel: exactly one of AccountingMethod's per-service fields
+    """Renders an AccountingMethod as the RPC name of whichever per-service
+    field is set, e.g. "UpdateTask". Mirrors Go's MethodLabel / Java's
+    methodLabel: exactly one of AccountingMethod's per-service fields
     is non-zero for any given call, so the first non-zero field wins."""
     if method is None:
         return ""
 {{- range .ServiceRPCs}}
     if method.{{.FieldName}}:
-        return services_pb.{{.EnumName}}RPCs.Name(method.{{.FieldName}})
+        return _rpc_short_name(services_pb.{{.EnumName}}RPCs.Name(method.{{.FieldName}}))
 {{- end}}
     return ""
 

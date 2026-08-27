@@ -315,19 +315,47 @@ impl Sink for LoggerSink {
 // AccountingMethod → stable label
 // ---------------------------------------------------------------------------
 
-/// Renders an AccountingMethod as the proto enum value name of whichever
-/// per-service field is set, e.g. "TASKS_RPCS_CREATE_TASK".
+/// Converts a generated RPC enum's proto value name (e.g.
+/// "TASKS_RPCS_UPDATE_TASK") into the RPC's own declared name (e.g.
+/// "UpdateTask"): every such enum's variant is "<SERVICE>_RPCS_<RPC>" in
+/// SCREAMING_SNAKE_CASE, so drop the "_RPCS_" prefix and re-case the
+/// remainder to UpperCamelCase. Without this, AccountingRecord.method never
+/// contains the RPC name any other system (grants, tracing, a caller
+/// correlating a record back to the call it accounted for) uses to name the
+/// same RPC — only the enum's own token does.
+fn rpc_short_name(enum_value_name: &str) -> String {
+    let suffix = enum_value_name
+    .split_once("_RPCS_")
+    .map(|(_, rest)| rest)
+    .unwrap_or(enum_value_name);
+    suffix
+    .split('_')
+    .map(|word| {
+        let mut chars = word.chars();
+        match chars.next() {
+            Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+            None => String::new(),
+        }
+    })
+    .collect()
+}
+
+/// Renders an AccountingMethod as the RPC name of whichever per-service field
+/// is set, e.g. "UpdateTask".
 ///
 /// AccountingRecord.method is an EQ query_field, so it needs one stable string
-/// per RPC. as_str_name() is the proto-declared name and changes only when the
-/// enum does, which is exactly the stability a stored query key needs — the
-/// prost Debug rendering is neither compact nor guaranteed.
+/// per RPC. as_str_name() is the proto-declared enum value name and changes
+/// only when the enum does, which is exactly the stability a stored query key
+/// needs — the prost Debug rendering is neither compact nor guaranteed. It is
+/// re-cased through rpc_short_name so the stored value names the RPC the way
+/// every other system in this codebase already does (grants, tracing), not as
+/// the raw enum token.
 #[allow(dead_code, unused_variables)]
 pub fn method_label(method: &AccountingMethod) -> String {
 {{- range .ServiceRPCs}}
     if method.{{.FieldName}} != 0 {
         if let Ok(v) = services_pb::{{.ProstEnumType}}::try_from(method.{{.FieldName}}) {
-            return v.as_str_name().to_string();
+            return rpc_short_name(v.as_str_name());
         }
     }
 {{- end}}

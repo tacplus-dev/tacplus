@@ -232,7 +232,7 @@ func TestPythonAccountingManagerEventBusSinkRendersValidPython(t *testing.T) {
 		"class EventBusSink:",
 		"def method_label(method: Any) -> str:",
 		"if method.demo_service:",
-		"return services_pb.DemoServiceRPCs.Name(method.demo_service)",
+		"return _rpc_short_name(services_pb.DemoServiceRPCs.Name(method.demo_service))",
 		"except asyncio.QueueFull:",
 		"time.sleep(0.01)",
 	} {

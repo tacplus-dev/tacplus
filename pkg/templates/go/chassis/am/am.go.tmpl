@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 	{{if .HasAccountingRecord}}
 	"sync/atomic"
 	{{end}}
@@ -364,20 +365,45 @@ func (LoggerSink) Emit(_ context.Context, event *accounting_pb.Event) error {
 // AccountingMethod → stable label
 // ---------------------------------------------------------------------------
 
-// MethodLabel renders an AccountingMethod as the proto-declared enum value
-// name of whichever per-service field is set, e.g. "TASKS_RPCS_CREATE_TASK".
+// rpcShortName converts a generated RPC enum's proto value name (e.g.
+// "TASKS_RPCS_UPDATE_TASK") into the RPC's own declared name (e.g.
+// "UpdateTask"): every such enum's variant is "<SERVICE>_RPCS_<RPC>" in
+// SCREAMING_SNAKE_CASE, so drop the "_RPCS_" prefix and re-case the
+// remainder to UpperCamelCase. Without this, AccountingRecord.method never
+// contains the RPC name any other system (grants, tracing, a caller
+// correlating a record back to the call it accounted for) uses to name the
+// same RPC — only the enum's own token does.
+func rpcShortName(enumValueName string) string {
+	suffix := enumValueName
+	if idx := strings.Index(enumValueName, "_RPCS_"); idx >= 0 {
+		suffix = enumValueName[idx+len("_RPCS_"):]
+	}
+	parts := strings.Split(suffix, "_")
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(p[:1]) + strings.ToLower(p[1:])
+	}
+	return strings.Join(parts, "")
+}
+
+// MethodLabel renders an AccountingMethod as the RPC name of whichever
+// per-service field is set, e.g. "UpdateTask".
 //
 // AccountingRecord.method is an EQ query_field, so it needs one stable string
 // per RPC. The generated enum's String() returns the proto-declared value
 // name and changes only when the enum does, which is exactly the stability a
-// stored query key needs.
+// stored query key needs. It is re-cased through rpcShortName so the stored
+// value names the RPC the way every other system in this codebase already
+// does (grants, tracing), not as the raw enum token.
 func MethodLabel(method *accounting_method_pb.AccountingMethod) string {
 	if method == nil {
 		return ""
 	}
 {{- range .ServiceRPCs}}
 	if v := method.Get{{.FieldName}}(); v != 0 {
-		return v.String()
+		return rpcShortName(v.String())
 	}
 {{- end}}
 	return ""

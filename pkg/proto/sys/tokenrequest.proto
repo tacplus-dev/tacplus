@@ -118,6 +118,24 @@ message ExternalTokenMintResponse {
   string saml_assertion = 4 [(spec.assert_max_size) = 65536];
 }
 
+// MintDelegatedTokenRequest is the input for standing-delegation (Grant) token
+// minting. The delegate's own identity is verified from its S2S bearer token
+// (Authorization header), not carried in the request — only the Grant id it
+// holds and asserts is.
+message MintDelegatedTokenRequest {
+  // grant_id is the opaque Grant.id the caller (a delegate) holds and asserts.
+  string grant_id = 1 [(spec.assert_required) = true];
+  string trace_id = 200;
+  bool noop = 201;
+}
+
+// MintDelegatedTokenResponse is the response for MintDelegatedToken.
+message MintDelegatedTokenResponse {
+  // token is the minted short-lived access token. No refresh/offline
+  // companion — re-mint per use from the same grant_id.
+  token.Token token = 1;
+}
+
 // WorkloadMintRequest mints a child workload identity. The child's SPIFFE ID is
 // the caller's spiffe_id + "/" + workload_name.
 message WorkloadMintRequest {

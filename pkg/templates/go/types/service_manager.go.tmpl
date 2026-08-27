@@ -90,6 +90,10 @@ eb_pb "{{(index .Subscriptions 0).EventBusImport}}"
 {{.Alias}} "{{.ImportPath}}"
 {{- end}}
 {{end}}
+{{if .HasAccountingPublisher}}
+"{{.ModuleBasePath}}/chassis/am"
+{{.AccountingPublisher.TypePkgAlias}} "{{.AccountingPublisher.TypePkgImport}}"
+{{end}}
 grpcconfig_pb "{{.ModuleBasePath}}/types/sys/grpcconfig"
 trace_pb "{{.ModuleBasePath}}/types/sys/trace"
 "google.golang.org/grpc/metadata"
@@ -1082,6 +1086,33 @@ return fmt.Errorf("authorizer not wired for {{.ServerType}} (build/SM bug) - man
 {{.WrapperVarName}}.SetTracePublisher(tracePublish)
 {{- end}}
 
+{{if and .HasGrpc .HasAccountingPublisher}}
+// Wire the durable accounting emitter to every wrapper. The wrapper emit
+// sites already exist on both the success and the error path of every
+// accounted RPC; without this the slot is nil and accounting produces
+// neither a record nor a log line.
+//
+// The channel send is BLOCKING, not select-with-default like the trace
+// publisher above — see EventBusSink's send contract in chassis/am. The
+// queue is deeper than the trace queue for the same reason: a brief
+// publisher stall should absorb, not drop.
+const accountingQueueDepth = 1024
+accountingCh := make(chan *{{.AccountingPublisher.TypePkgAlias}}.{{.AccountingPublisher.EventTypeName}}, accountingQueueDepth)
+sm.tasks.Go(func(taskCtx context.Context) {
+{{.AccountingPublisher.LoopName}}(taskCtx,
+func(ctx context.Context) (grpc.ClientConnInterface, error) {
+return sm.resolveServiceCtx(ctx, "{{.AccountingPublisher.TargetService}}")
+},
+func() (string, error) { return sm.identity.GetTokenFor("{{.AccountingPublisher.TargetService}}") },
+accountingCh)
+})
+accountingSourceID := "{{.ServiceLabel}}" + "-" + sm.sc.InstanceID()
+accountingEmitter := am.NewEmitter(accountingSourceID, am.NewEventBusSink(accountingCh, accountingSourceID, sm.ctx.Done()))
+{{- range .GrpcServices}}
+{{.WrapperVarName}}.SetEmitter(accountingEmitter)
+{{- end}}
+{{end}}
+
 mw := &multiWrapper{
 impls: []grpcserver.ServiceImplementation{
 {{- range .GrpcServices}}
@@ -1666,6 +1697,119 @@ backoff = minBackoff
 
 // {{.StreamName}} publishes one {{.EventTypeName}} event and returns only after
 // the EventBus stream sends an ack. The caller keeps the event pending on error.
+func {{.StreamName}}(ctx context.Context, conn grpc.ClientConnInterface, tp func() (string, error), event *{{.TypePkgAlias}}.{{.EventTypeName}}) error {
+token, err := tp()
+if err != nil {
+return fmt.Errorf("token for {{.Label}}: %w", err)
+}
+authCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+
+sd := &grpc.StreamDesc{
+StreamName:    "{{.PublishStreamName}}",
+ServerStreams: true,
+ClientStreams: true,
+}
+stream, err := conn.NewStream(authCtx, sd, "{{.PublishPath}}")
+if err != nil {
+return fmt.Errorf("open {{.Label}} stream: %w", err)
+}
+sendClosed := false
+defer func() {
+if !sendClosed {
+_ = stream.CloseSend()
+}
+}()
+
+if err := stream.SendMsg(event); err != nil {
+return fmt.Errorf("send {{.Label}} event: %w", err)
+}
+if err := stream.CloseSend(); err != nil {
+return fmt.Errorf("close {{.Label}} send stream: %w", err)
+}
+sendClosed = true
+if err := stream.RecvMsg(&tracePublishAck{}); err != nil {
+return fmt.Errorf("receive {{.Label}} ack: %w", err)
+}
+return nil
+}
+{{end}}
+{{end}}
+{{if .HasAccountingPublisher}}
+{{with .AccountingPublisher}}
+
+// {{.LoopName}} drains {{.EventTypeName}} accounting records into EventBus.
+// Each record stays pending until the broker acknowledges it, so
+// stream/re-resolution failures do not discard already-accepted records —
+// the durable-sink send contract (EventBusSink.Emit) is what makes this the
+// non-dropping path, not this loop.
+func {{.LoopName}}(ctx context.Context, resolve func(context.Context) (grpc.ClientConnInterface, error), tp func() (string, error), ch <-chan *{{.TypePkgAlias}}.{{.EventTypeName}}) {
+const minBackoff = 3 * time.Second
+const maxBackoff = 30 * time.Second
+backoff := minBackoff
+var pending *{{.TypePkgAlias}}.{{.EventTypeName}}
+
+for ctx.Err() == nil {
+if pending == nil {
+select {
+case event, ok := <-ch:
+if !ok {
+return
+}
+pending = event
+case <-ctx.Done():
+return
+}
+}
+conn, err := resolve(ctx)
+if err != nil {
+if ctx.Err() != nil {
+return
+}
+zap.L().Warn("accounting publisher failed to resolve EventBus broker, retrying",
+zap.String("publisher", "{{.Label}}"),
+zap.String("service", "{{.TargetService}}"),
+zap.Error(err), zap.Duration("backoff", backoff))
+select {
+case <-time.After(backoff):
+case <-ctx.Done():
+return
+}
+if backoff < maxBackoff {
+backoff *= 2
+if backoff > maxBackoff {
+backoff = maxBackoff
+}
+}
+continue
+}
+if err := {{.StreamName}}(ctx, conn, tp, pending); err != nil {
+if ctx.Err() != nil {
+return
+}
+zap.L().Warn("accounting EventBus publisher stream failed, reconnecting",
+zap.String("publisher", "{{.Label}}"),
+zap.Error(err), zap.Duration("backoff", backoff))
+select {
+case <-time.After(backoff):
+case <-ctx.Done():
+return
+}
+if backoff < maxBackoff {
+backoff *= 2
+if backoff > maxBackoff {
+backoff = maxBackoff
+}
+}
+continue
+}
+pending = nil
+backoff = minBackoff
+}
+}
+
+// {{.StreamName}} publishes one {{.EventTypeName}} accounting record and
+// returns only after the EventBus stream sends an ack. The caller keeps the
+// record pending on error.
 func {{.StreamName}}(ctx context.Context, conn grpc.ClientConnInterface, tp func() (string, error), event *{{.TypePkgAlias}}.{{.EventTypeName}}) error {
 token, err := tp()
 if err != nil {

@@ -9,18 +9,25 @@
 // typed accounting events. Events are proto messages defined in accounting.proto.
 //
 // The AM uses a delegation pattern: typed events go in, and the configured Sink
-// delivers them. The initial Sink is LoggerSink (delegates to zap). When EventBus
-// is battle-tested, swap to EventBusSink with no other code changes.
+// delivers them. LoggerSink (delegates to zap) and EventBusSink (durable, via
+// EventBus) are both generated; the ServiceManager wires whichever Sink an
+// Emitter uses.
 package am
 
 import (
 	"context"
 	"fmt"
 	"runtime"
+	{{if .HasAccountingRecord}}
+	"sync/atomic"
+	{{end}}
 	"time"
 
 	accounting_pb "{{.ModuleBasePath}}/types/sys/accounting"
 	accounting_method_pb "{{.ModuleBasePath}}/types/generated/accounting_method"
+	{{if .HasAccountingRecord}}
+	accountingrecord_pb "{{.ModuleBasePath}}/types/vservices/accountingrecord"
+	{{end}}
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -31,7 +38,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // Sink is the backend that receives accounting events.
-// Implementations: LoggerSink (zap), EventBusSink (future).
+// Implementations: LoggerSink (zap), EventBusSink (durable, via EventBus).
 type Sink interface {
 	Emit(ctx context.Context, event *accounting_pb.Event) error
 }
@@ -354,16 +361,119 @@ func (LoggerSink) Emit(_ context.Context, event *accounting_pb.Event) error {
 }
 
 // ---------------------------------------------------------------------------
-// EventBusSink — future backend, commented out until EventBus is tested
+// AccountingMethod → stable label
 // ---------------------------------------------------------------------------
 
-// TODO: uncomment and wire when EventBus is battle-tested.
+// MethodLabel renders an AccountingMethod as the proto-declared enum value
+// name of whichever per-service field is set, e.g. "TASKS_RPCS_CREATE_TASK".
 //
-// type EventBusSink struct {
-//     client eventbus_pb.AdminClient
-// }
+// AccountingRecord.method is an EQ query_field, so it needs one stable string
+// per RPC. The generated enum's String() returns the proto-declared value
+// name and changes only when the enum does, which is exactly the stability a
+// stored query key needs.
+func MethodLabel(method *accounting_method_pb.AccountingMethod) string {
+	if method == nil {
+		return ""
+	}
+{{- range .ServiceRPCs}}
+	if v := method.Get{{.FieldName}}(); v != 0 {
+		return v.String()
+	}
+{{- end}}
+	return ""
+}
+{{- if .HasAccountingRecord}}
+
+// ---------------------------------------------------------------------------
+// EventBusSink — durable backend: flattens Event → AccountingRecord and
+// publishes it onto the accounting topic.
+// ---------------------------------------------------------------------------
+
+// EventBusSink is the durable accounting backend. It flattens the emit-time
+// accounting_pb.Event oneof envelope into the flat, stored AccountingRecord
+// and hands it to the generated per-topic publisher's queue.
 //
-// func (s *EventBusSink) Emit(ctx context.Context, event *accounting_pb.Event) error {
-//     // serialize event, publish to accounting topic
-//     return nil
-// }
+// SEND CONTRACT — BLOCKING, NOT DROPPING. Unlike the best-effort trace
+// publisher (which enqueues with a non-blocking send and drops on a full
+// queue), this sink blocks on the channel send. A full queue therefore parks
+// the emitting RPC's completion path until the publisher drains, rather than
+// discarding a record. Accounting is an audit trail: a silently missing row
+// is worse than a slow RPC. The only record this sink can lose is one emitted
+// after the service is shutting down, and that path logs at ERROR.
+type EventBusSink struct {
+	tx       chan<- *accountingrecord_pb.AccountingRecord
+	sourceID string
+	// stop is closed when the owning ServiceManager is shutting down. Emit
+	// selects on it so a full queue blocks the caller instead of dropping,
+	// while still giving up once there is no publish loop left to drain it.
+	stop <-chan struct{}
+	seq  atomic.Uint64
+}
+
+// NewEventBusSink creates a sink that publishes through the given per-topic
+// publisher queue. sourceID is the emitting process ("{service_id}-{instance_id}"),
+// used to make accounting_id unique across instances. stop is the
+// ServiceManager's shutdown signal.
+func NewEventBusSink(tx chan<- *accountingrecord_pb.AccountingRecord, sourceID string, stop <-chan struct{}) *EventBusSink {
+	return &EventBusSink{tx: tx, sourceID: sourceID, stop: stop}
+}
+
+// nextAccountingID mints the record key. accounting_id is assert_required, so
+// it has to be non-empty and unique: process identity + emit time + a
+// per-process counter is unique without pulling in a uuid dependency.
+func (s *EventBusSink) nextAccountingID(timestampMs int64) string {
+	seq := s.seq.Add(1)
+	return fmt.Sprintf("%s-%013d-%012d", s.sourceID, timestampMs, seq)
+}
+
+// flatten converts the emit-time envelope into the stored record.
+//
+// spiffe_id is deliberately left unset: eventbus stamps the owner field with
+// the PUBLISHER's verified SPIFFE ID on the way in, so a value set here would
+// be overwritten, and setting one would be a claim about identity that
+// nothing checked.
+func (s *EventBusSink) flatten(event *accounting_pb.Event) *accountingrecord_pb.AccountingRecord {
+	var method string
+	var code int32
+	var durationMs int64
+	switch payload := event.Event.(type) {
+	case *accounting_pb.Event_RpcCompleted:
+		method = MethodLabel(payload.RpcCompleted.Method)
+		durationMs = payload.RpcCompleted.DurationMs
+	case *accounting_pb.Event_RpcError:
+		method = MethodLabel(payload.RpcError.Method)
+		code = payload.RpcError.Code
+		durationMs = payload.RpcError.DurationMs
+	case *accounting_pb.Event_TokenRejected:
+		method = MethodLabel(payload.TokenRejected.Method)
+	}
+	return &accountingrecord_pb.AccountingRecord{
+		AccountingId: s.nextAccountingID(event.TimestampMs),
+		RequestId:    event.RequestId,
+		SourceId:     event.SourceId,
+		TimestampMs:  event.TimestampMs,
+		Level:        event.Level,
+		Method:       method,
+		Code:         code,
+		DurationMs:   durationMs,
+		// The principal the Authorizer verified, not a caller-written header.
+		PrincipalSub: event.Identity["sub"],
+	}
+}
+
+// Emit flattens event and blocks until the publisher accepts it, or until the
+// service is shutting down.
+func (s *EventBusSink) Emit(_ context.Context, event *accounting_pb.Event) error {
+	record := s.flatten(event)
+	select {
+	case s.tx <- record:
+		return nil
+	case <-s.stop:
+		// The publish loop is gone, which only happens on shutdown. Loud,
+		// because this is the one lossy path.
+		zap.L().Error("accounting publisher closed; record dropped",
+			zap.String("accounting_id", record.AccountingId))
+		return fmt.Errorf("accounting publisher closed; record dropped")
+	}
+}
+{{- end}}

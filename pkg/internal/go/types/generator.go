@@ -721,7 +721,7 @@ func Generate(config *tactype.Config) error {
 
 	// Write library templates
 	zap.L().Info("Writing library templates")
-	if err := writeLibTemplates(config, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries)); err != nil {
+	if err := writeLibTemplates(config, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries), svcRPCs); err != nil {
 		return fmt.Errorf("failed to write library templates: %w", err)
 	}
 

@@ -13,29 +13,63 @@ import (
 
 	"go.uber.org/zap"
 
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/boundaries"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/keepaliveconst"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 	commonspiffe "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/spiffe"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
 )
 
+// amServiceRPC is the per-service RPC-enum accessor data the am.go.tmpl
+// MethodLabel function needs — one entry per gRPC service in the fleet's
+// generated AccountingMethod message.
+type amServiceRPC struct {
+	FieldName string // Go accessor name on *AccountingMethod, e.g. "Tasks"
+}
+
 // writeLibTemplates processes the embedded Go library templates and writes them
 // to the output directory at {langDir}/sys/{libname}/
-func writeLibTemplates(config *tactype.Config, acceptedAudiences []string) error {
+func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRPCs []proto.ServiceRPCEntry) error {
 	langDir := config.LangDir()
 	chassisDir := filepath.Join(langDir, "chassis")
 
 	zap.L().Info("Writing library templates", zap.String("dir", chassisDir))
 
+	// Does this proto set declare the durable accounting record? Client repos
+	// and any build without platform/proto/vservices do not, and the chassis
+	// EventBusSink is gated on it — it cannot name a type that was never
+	// generated.
+	hasAccountingRecord := false
+	if config.AnnotatedProtoDir != "" {
+		dp, err := parser.NewDescriptorParser(config.AnnotatedProtoDir)
+		if err != nil {
+			return fmt.Errorf("create descriptor parser for accounting record detection: %w", err)
+		}
+		_, hasAccountingRecord, err = boundaries.LookupAccountingRecordTopic(dp)
+		if err != nil {
+			return fmt.Errorf("resolve accounting record topic: %w", err)
+		}
+	}
+
+	serviceRPCs := make([]amServiceRPC, 0, len(svcRPCs))
+	for _, svc := range svcRPCs {
+		serviceRPCs = append(serviceRPCs, amServiceRPC{FieldName: strutil.ToPascalCase(svc.GrpcName)})
+	}
+
 	// Template data
 	data := struct {
-		ModuleBasePath            string
-		ServiceLabel              string   // service identity baked into Authorizer
-		AcceptedAudiences         []string // every `aud` the Authorizer accepts: own label + hosted traits
-		Spiffe                    commonspiffe.TemplateGrammar
-		KeepaliveTimeSecs         int
-		KeepaliveTimeoutSecs      int
+		ModuleBasePath             string
+		ServiceLabel               string   // service identity baked into Authorizer
+		AcceptedAudiences          []string // every `aud` the Authorizer accepts: own label + hosted traits
+		Spiffe                     commonspiffe.TemplateGrammar
+		KeepaliveTimeSecs          int
+		KeepaliveTimeoutSecs       int
 		KeepalivePermitMinTimeSecs int
+		HasAccountingRecord        bool // proto set declares accountingrecord.AccountingRecord
+		ServiceRPCs                []amServiceRPC
 	}{
 		ModuleBasePath:             config.ModuleBasePath,
 		ServiceLabel:               config.ServiceLabel(),
@@ -44,6 +78,8 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string) error
 		KeepaliveTimeSecs:          keepaliveconst.TimeSecs,
 		KeepaliveTimeoutSecs:       keepaliveconst.TimeoutSecs,
 		KeepalivePermitMinTimeSecs: keepaliveconst.PermitMinTimeSecs,
+		HasAccountingRecord:        hasAccountingRecord,
+		ServiceRPCs:                serviceRPCs,
 	}
 
 	langFS, err := fs.Sub(templates.FS, "go/chassis")

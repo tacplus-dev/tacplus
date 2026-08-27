@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/tools/imports"
 
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/boundaries"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/collection"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
@@ -82,6 +83,14 @@ func generateServiceWrappers(config *tactype.Config, servicesInfo []ServiceInfo,
 	}
 	san := newEgressSanitizer(allFiles)
 
+	// Q2: resolve the accounting topic once so every wrapper can drop that
+	// topic's own publish RPC from its accounting map. See
+	// accounting_exclusion.go for why this exclusion is mandatory.
+	accountingTopic, hasAccountingTopic, err := boundaries.LookupAccountingRecordTopic(descriptorParser)
+	if err != nil {
+		return nil, fmt.Errorf("resolve accounting record topic: %w", err)
+	}
+
 	var generated []generatedServiceWrapper
 	// Track directories where sanitizedContext helper has been written
 	sanitizedContextDirs := make(map[string]bool)
@@ -105,7 +114,10 @@ func generateServiceWrappers(config *tactype.Config, servicesInfo []ServiceInfo,
 		}
 
 		// Generate service wrapper in the gRPC servers output directory
-		if err := generateServiceWrapper(svc, protoInfo, accountingMap, skippedTraceTypes, san); err != nil {
+		svcAccountingMap := excludeAccountingSelfPublish(
+			accountingMap, svc.GrpcName, protoInfo.Package, svc.ServiceName,
+			accountingTopic, hasAccountingTopic)
+		if err := generateServiceWrapper(svc, protoInfo, svcAccountingMap, skippedTraceTypes, san); err != nil {
 			return nil, fmt.Errorf("failed to generate service wrapper for %s: %w", svc.ServiceName, err)
 		}
 

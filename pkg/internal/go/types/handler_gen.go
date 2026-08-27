@@ -215,6 +215,12 @@ type serviceManagerTemplateData struct {
 	HasGrpcS2SClients        bool     // true when gRPC clients are configured
 	HasSubscriptions         bool     // true when event-bus subscriptions are declared
 	HasPublishers            bool     // true when event-bus publishers are declared and resolvable
+	// AccountingPublisher is the generator-resolved publisher for the durable
+	// accounting record topic. HasAccountingPublisher is false when the proto
+	// set declares no accounting record (client repos), in which case no
+	// emitter is wired at all.
+	HasAccountingPublisher   bool
+	AccountingPublisher      PublisherTemplateEntry
 	HasAutoTls               bool     // true when any state has auto_tls enabled
 	AutoTlsKeyType           string   // key algorithm: "ed25519" or "ecdsa"
 	HasSmb                   bool     // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
@@ -244,6 +250,16 @@ type serviceManagerTemplateData struct {
 	Publishers               []PublisherTemplateEntry
 	DiskStores               []DiskStoreRuntimeEntry
 	HasDiskStores            bool
+}
+
+// accountingPublisherOrZero returns the zero PublisherTemplateEntry for a nil
+// pointer so the template data can carry a plain value (guarded by
+// HasAccountingPublisher) instead of a pointer.
+func accountingPublisherOrZero(p *PublisherTemplateEntry) PublisherTemplateEntry {
+	if p == nil {
+		return PublisherTemplateEntry{}
+	}
+	return *p
 }
 
 // buildServiceManagerData constructs the template data for service_manager.go and handler.go generation.
@@ -565,6 +581,12 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 	hasPublishers := len(publishers) > 0 && hasServiceHealthState
 	publisherTypeImports := goPublisherTypeImports(publishers, subEntries, typeImports, len(svcs) > 0 && (len(config.States) > 0 || config.AllStates))
 
+	accountingPublisher, err := collectGoAccountingPublisher(config, config.AnnotatedProtoDir, pkgToDirMap)
+	if err != nil {
+		return serviceManagerTemplateData{}, fmt.Errorf("failed to resolve accounting publisher: %w", err)
+	}
+	hasAccountingPublisher := accountingPublisher != nil && hasServiceHealthState && len(svcs) > 0
+
 	// Compute proto source git metadata if available.
 	protoGitSha := ""
 	protoSourceVersion := ""
@@ -657,6 +679,8 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		Subscriptions:            subEntries,
 		PublisherTypeImports:     publisherTypeImports,
 		Publishers:               publishers,
+		HasAccountingPublisher:   hasAccountingPublisher,
+		AccountingPublisher:      accountingPublisherOrZero(accountingPublisher),
 		DiskStores:               diskStores,
 		HasDiskStores:            len(diskStores) > 0,
 	}, nil

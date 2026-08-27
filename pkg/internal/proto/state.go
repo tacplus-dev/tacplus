@@ -1359,6 +1359,12 @@ func ValidateStateConsistency(inputDir string) error {
 //
 // Human-readable claims (e.g. actor_email) are optional event-time display
 // metadata and are not required by this rule.
+//
+// This function also enforces the actor-provenance rules for the OPTIONAL
+// (spec.identity_spiffe_actor) field (the delegated-mint actor, distinct
+// from the required subject/resource identity above): at most one such
+// field per topic type, and it must never also be (spec.store_principal),
+// so the actor can never appear in a store's read filter.
 func ValidateC2STopicActorIdentity(inputDir string) error {
 	dp, err := parser.NewDescriptorParser(inputDir)
 	if err != nil {
@@ -1406,18 +1412,33 @@ func ValidateC2STopicActorIdentity(inputDir string) error {
 
 				// Require a string field carrying a SPIFFE identity — either a
 				// stampable subject SPIFFE or a constructed resource SPIFFE.
+				// Also enforce the actor-provenance rule: at most one
+				// (spec.identity_spiffe_actor) field per topic type (it's
+				// optional, unlike the required-exactly-one subject/resource
+				// identity above), and no field may be annotated both
+				// (spec.identity_spiffe_actor) and (spec.store_principal) —
+				// the actor must never appear in a store's read filter.
 				hasSpiffeIdentity := false
+				actorFieldCount := 0
 				for _, f := range typeDef.Fields {
 					if f.TypeKind != "scalar" || f.Type != "string" {
 						continue
 					}
 					if f.Annotations["identity_spiffe_subject"].BoolValue {
 						hasSpiffeIdentity = true
-						break
 					}
 					if _, hasResource := f.Annotations["identity_spiffe_resource"]; hasResource {
 						hasSpiffeIdentity = true
-						break
+					}
+					if f.Annotations["identity_spiffe_actor"].BoolValue {
+						actorFieldCount++
+						if f.Annotations["store_principal"].BoolValue {
+							errors = append(errors, fmt.Sprintf(
+								"%s: C2S topic %s.%s has type %s field %s is annotated both "+
+									"(spec.identity_spiffe_actor) and (spec.store_principal) — "+
+									"the actor must never appear in a store's read filter",
+								relPath, msg.Name, field.Name, field.Type, f.Name))
+						}
 					}
 				}
 				if !hasSpiffeIdentity {
@@ -1427,6 +1448,12 @@ func ValidateC2STopicActorIdentity(inputDir string) error {
 							"field annotated (spec.identity_spiffe_subject) or "+
 							"(spec.identity_spiffe_resource) for server-authoritative identity",
 						relPath, msg.Name, field.Name, field.Type))
+				}
+				if actorFieldCount > 1 {
+					errors = append(errors, fmt.Sprintf(
+						"%s: C2S topic %s.%s has type %s with %d fields annotated "+
+							"(spec.identity_spiffe_actor) — at most one is allowed per topic type",
+						relPath, msg.Name, field.Name, field.Type, actorFieldCount))
 				}
 			}
 		}

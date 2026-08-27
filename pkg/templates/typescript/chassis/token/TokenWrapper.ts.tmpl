@@ -336,6 +336,7 @@ export class TokenWrapper {
   static readonly CLAIM_SUB_TYPE = 'sub_type';
   static readonly CLAIM_PRINCIPAL = 'principal';
   static readonly CLAIM_AZP = 'azp';
+  static readonly CLAIM_ACT = 'act';
   static readonly CLAIM_PROFILES = 'profiles';
   static readonly CLAIM_ENTITLEMENTS = 'entitlements';
   static readonly CLAIM_SERVICE_NAME = 'service_name';
@@ -393,6 +394,17 @@ export class TokenWrapper {
     this.checkMutable();
     this.initPayload();
     this.token.payload!['azp'] = azp;
+    return this;
+  }
+
+  getAct(): string {
+    return this.token.payload?.['act'] ?? '';
+  }
+
+  setAct(act: string): TokenWrapper {
+    this.checkMutable();
+    this.initPayload();
+    this.token.payload!['act'] = act;
     return this;
   }
 

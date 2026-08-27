@@ -49,7 +49,7 @@ func validateSpiffeMessage(pkg string, msg *MessageDescriptor, errs *[]string) {
 	for fi := range msg.Fields {
 		field := &msg.Fields[fi]
 
-		for _, name := range []string{"identity_namespace", "identity_subject", "identity_spiffe_subject"} {
+		for _, name := range []string{"identity_namespace", "identity_subject", "identity_spiffe_subject", "identity_spiffe_actor"} {
 			if _, ok := field.Annotations[name]; !ok {
 				continue
 			}

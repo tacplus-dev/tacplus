@@ -89,6 +89,19 @@ func rustPrincipalResolve(local, method, indent string) string {
 `, indent, local, indent, indent, indent, indent, method)
 }
 
+// rustActorResolve renders the local that binds the `act` (actor) claim off
+// the caller's token, when present. Unlike rustPrincipalResolve, an absent
+// actor is the ORDINARY case (an un-delegated call) — this never errors, it
+// binds an Option<String> and lets the caller decide what "None" means.
+func rustActorResolve(local, method, indent string) string {
+	_ = method // kept for signature symmetry with rustPrincipalResolve
+	return fmt.Sprintf(`%slet %s = caller.as_ref()
+%s    .and_then(|c| c.token().actor())
+%s    .filter(|s| !s.is_empty())
+%s    .map(|s| s.to_string());
+`, indent, local, indent, indent, indent)
+}
+
 // rustRequestPrincipalBlock renders the (spec.principal) stamp-or-refuse check.
 // Empty is stamped from the caller, equal passes, different is refused: a forged
 // principal is never silently overwritten.

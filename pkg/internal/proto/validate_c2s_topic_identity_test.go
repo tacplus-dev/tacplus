@@ -138,3 +138,55 @@ message HostedEventBus {
 		t.Fatalf("ValidateC2STopicActorIdentity rejected a non-exported event bus: %v", err)
 	}
 }
+
+// (spec.identity_spiffe_actor) is OPTIONAL provenance metadata for the
+// delegated-mint actor — a topic type may declare exactly one such field
+// alongside its required subject/resource identity, and the gate must accept
+// it.
+func TestValidateC2STopicActorIdentityAcceptsOptionalActorField(t *testing.T) {
+	dir := c2sTopicFixture(t, `  string event_id = 1;
+  string spiffe_id = 2 [(spec.identity_spiffe_subject) = true];
+  string actor_spiffe_id = 3 [(spec.identity_spiffe_actor) = true];
+`)
+
+	if err := ValidateC2STopicActorIdentity(dir); err != nil {
+		t.Fatalf("ValidateC2STopicActorIdentity rejected a topic with a valid optional actor field: %v", err)
+	}
+}
+
+// At most one (spec.identity_spiffe_actor) field is allowed per topic type.
+func TestValidateC2STopicActorIdentityRejectsTwoActorFields(t *testing.T) {
+	dir := c2sTopicFixture(t, `  string event_id = 1;
+  string spiffe_id = 2 [(spec.identity_spiffe_subject) = true];
+  string actor_spiffe_id = 3 [(spec.identity_spiffe_actor) = true];
+  string other_actor_spiffe_id = 4 [(spec.identity_spiffe_actor) = true];
+`)
+
+	err := ValidateC2STopicActorIdentity(dir)
+	if err == nil {
+		t.Fatal("ValidateC2STopicActorIdentity accepted a topic with two (spec.identity_spiffe_actor) fields, want error")
+	}
+	if !strings.Contains(err.Error(), "at most one is allowed") {
+		t.Fatalf("error = %q, want the at-most-one-actor-field message", err.Error())
+	}
+}
+
+// A field must never be both (spec.identity_spiffe_actor) and
+// (spec.store_principal) — the actor must never appear in a store's read
+// filter. This is a build-time assertion of that invariant, not just
+// convention.
+func TestValidateC2STopicActorIdentityRejectsActorFieldAlsoStorePrincipal(t *testing.T) {
+	dir := c2sTopicFixture(t, `  string event_id = 1;
+  string spiffe_id = 2 [(spec.identity_spiffe_subject) = true];
+  string actor_spiffe_id = 3 [(spec.identity_spiffe_actor) = true, (spec.store_principal) = true];
+`)
+
+	err := ValidateC2STopicActorIdentity(dir)
+	if err == nil {
+		t.Fatal("ValidateC2STopicActorIdentity accepted a field annotated both identity_spiffe_actor and store_principal, want error")
+	}
+	if !strings.Contains(err.Error(), "identity_spiffe_actor") || !strings.Contains(err.Error(), "store_principal") {
+		t.Fatalf("error = %q, want it to name both annotations", err.Error())
+	}
+}
+

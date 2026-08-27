@@ -423,6 +423,7 @@ impl Token {
     pub const CLAIM_SUB_TYPE: &'static str = "sub_type";
     pub const CLAIM_PRINCIPAL: &'static str = "principal";
     pub const CLAIM_AZP: &'static str = "azp";
+    pub const CLAIM_ACT: &'static str = "act";
     pub const CLAIM_PROFILES: &'static str = "profiles";
     pub const CLAIM_ENTITLEMENTS: &'static str = "entitlements";
     pub const CLAIM_SERVICE_NAME: &'static str = "service_name";
@@ -466,6 +467,18 @@ impl Token {
     /// Sets the azp (authorized party) claim.
     pub fn set_azp(&mut self, azp: impl Into<String>) -> Result<&mut Self> {
         self.set_custom_field(Self::CLAIM_AZP, Value::String(azp.into()))
+    }
+
+    /// Gets the act (actor) claim: the delegate/agent identity presenting a
+    /// delegated-user token. `None` when the token carries no actor (the
+    /// ordinary, non-delegated case) — this is not an error condition.
+    pub fn actor(&self) -> Option<&str> {
+        self.payload.custom.get(Self::CLAIM_ACT).and_then(|v| v.as_str())
+    }
+
+    /// Sets the act (actor) claim.
+    pub fn set_actor(&mut self, actor: impl Into<String>) -> Result<&mut Self> {
+        self.set_custom_field(Self::CLAIM_ACT, Value::String(actor.into()))
     }
 
     /// Gets the service_name claim.

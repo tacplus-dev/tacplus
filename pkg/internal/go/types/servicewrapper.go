@@ -745,7 +745,7 @@ func generateGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, ser
 	if caller != nil {
 		payload := caller.Token().Proto().Payload
 		identityMap = map[string]string{}
-		for _, k := range []string{"sub", "aud", "iss", "azp"} {
+		for _, k := range []string{"sub", "aud", "iss", "azp", "act"} {
 			if v, ok := payload[k]; ok && v != "" { identityMap[k] = v }
 		}
 	}`

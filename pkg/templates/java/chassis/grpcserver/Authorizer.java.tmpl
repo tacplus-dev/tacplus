@@ -540,6 +540,7 @@ public class Authorizer {
         putIfPresent(identity, "aud", tw.getAudience());
         putIfPresent(identity, "iss", tw.getIssuer());
         putIfPresent(identity, "azp", tw.getAzp());
+        putIfPresent(identity, "act", tw.getAct());
         return identity;
     }
 

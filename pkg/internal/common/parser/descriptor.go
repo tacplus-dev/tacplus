@@ -1970,6 +1970,9 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 			}
 		}
 	}
+	if proto.HasExtension(opts, spec.E_IdentitySpiffeActor) && proto.GetExtension(opts, spec.E_IdentitySpiffeActor).(bool) {
+		annotations["identity_spiffe_actor"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
 	// Field-level default value annotations
 	if proto.HasExtension(opts, spec.E_DefaultString) {
 		val := proto.GetExtension(opts, spec.E_DefaultString).(string)

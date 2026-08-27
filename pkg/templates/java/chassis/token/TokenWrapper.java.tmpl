@@ -410,6 +410,7 @@ public final class TokenWrapper {
     public static final String CLAIM_SUB_TYPE = "sub_type";
     public static final String CLAIM_PRINCIPAL = "principal";
     public static final String CLAIM_AZP = "azp";
+    public static final String CLAIM_ACT = "act";
     public static final String CLAIM_PROFILES = "profiles";
     public static final String CLAIM_ENTITLEMENTS = "entitlements";
     public static final String CLAIM_SERVICE_NAME = "service_name";
@@ -444,6 +445,15 @@ public final class TokenWrapper {
 
     public TokenWrapper setAzp(String azp) {
         return setPayloadString(CLAIM_AZP, azp);
+    }
+
+    /** act (actor): the delegate/agent identity presenting a delegated-user token. Null when the token carries no actor. */
+    public String getAct() {
+        return getPayloadString(CLAIM_ACT);
+    }
+
+    public TokenWrapper setAct(String act) {
+        return setPayloadString(CLAIM_ACT, act);
     }
 
     public String getServiceName() {

@@ -1561,6 +1561,17 @@ extend google.protobuf.FieldOptions {
   // rows are stored raw and the filter is applied on the way out.
   // Example: string created_by = 4 [(spec.store_principal) = true];
   bool store_principal = 60084;
+
+  // identity_spiffe_actor: this OPTIONAL string field holds the delegated-
+  // mint actor's identity, stamped by EventBus from the token's `act` claim
+  // (JWT_PAYLOAD_TYPE_ACT) at publish time — the delegate/agent that made
+  // the call on the user's behalf, distinct from (spec.identity_spiffe_subject)
+  // which is always the authenticated caller (the user, when delegated).
+  // Unset when the token carries no `act` claim (the ordinary, non-delegated
+  // case). This field is provenance metadata on the event envelope ONLY —
+  // it is never a (spec.principal)/(spec.store_principal) field and must
+  // never be wired into either.
+  bool identity_spiffe_actor = 60085;
 }
 
 // QueryOp is the match kind for a (spec.query_field) record filter criterion.

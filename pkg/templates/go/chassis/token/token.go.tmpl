@@ -643,6 +643,22 @@ func (token *TokenWrapper) SetAzp(azp string) *TokenWrapper {
 	return token
 }
 
+// GetAct returns the act (actor) claim from the JWT payload — the
+// delegate/agent identity presenting a delegated-user token. Empty when the
+// token carries no actor (the ordinary, non-delegated case).
+func (token *TokenWrapper) GetAct() string {
+	token.initToken()
+	return token.token.Payload[tokenProto.JwtPayloadTypeToString(tokenProto.JwtPayloadType_JWT_PAYLOAD_TYPE_ACT)]
+}
+
+// SetAct sets the act (actor) claim in the JWT payload.
+func (token *TokenWrapper) SetAct(act string) *TokenWrapper {
+	token.checkMutable()
+	token.initToken()
+	token.token.Payload[tokenProto.JwtPayloadTypeToString(tokenProto.JwtPayloadType_JWT_PAYLOAD_TYPE_ACT)] = act
+	return token
+}
+
 // GetServiceName returns the service_name claim from the JWT payload.
 func (token *TokenWrapper) GetServiceName() string {
 	token.initToken()

@@ -73,6 +73,7 @@ _PAYLOAD_TOKEN_USE = "token_use"
 _PAYLOAD_SUB_TYPE = "sub_type"
 _PAYLOAD_PRINCIPAL = "principal"
 _PAYLOAD_AZP = "azp"
+_PAYLOAD_ACT = "act"
 _PAYLOAD_PROFILES = "profiles"
 _PAYLOAD_ENTITLEMENTS = "entitlements"
 _PAYLOAD_SERVICE_NAME = "service_name"
@@ -471,6 +472,17 @@ class TokenWrapper:
         """Set the azp (authorized party) claim. Returns self for chaining."""
         self._check_mutable()
         self._payload[_PAYLOAD_AZP] = azp
+        return self
+
+    def get_act(self) -> str:
+        """Return the act (actor) claim: the delegate/agent identity presenting
+        a delegated-user token. Empty when the token carries no actor."""
+        return str(self._payload.get(_PAYLOAD_ACT, ""))
+
+    def set_act(self, act: str) -> "TokenWrapper":
+        """Set the act (actor) claim. Returns self for chaining."""
+        self._check_mutable()
+        self._payload[_PAYLOAD_ACT] = act
         return self
 
     def get_service_name(self) -> str:

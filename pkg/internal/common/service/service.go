@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	protogen "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
 	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
 )
@@ -310,6 +311,7 @@ func resolveGrpcRefs(refs []string, allFiles map[string]*parser.FileDescriptor) 
 		var matches []string
 		packageSeen := false
 		traitPlanePath := ""
+		var eventC2SStatePaths []string
 		for path, fd := range allFiles {
 			if fd.Package != pkg {
 				continue
@@ -317,6 +319,14 @@ func resolveGrpcRefs(refs []string, allFiles map[string]*parser.FileDescriptor) 
 			packageSeen = true
 			if t := fd.Trait; t != nil && (svcName == t.S2SService || svcName == t.C2SService) {
 				traitPlanePath = path
+			}
+			for _, msg := range fd.Messages {
+				if !msg.Annotations["event_c2s"].BoolValue || strings.HasSuffix(msg.Name, "Bus") {
+					continue
+				}
+				if svcName == protogen.StateServiceName(msg.Name+"Bus") {
+					eventC2SStatePaths = append(eventC2SStatePaths, path)
+				}
 			}
 			for _, svc := range fd.Services {
 				if svc.Name == svcName {
@@ -332,6 +342,12 @@ func resolveGrpcRefs(refs []string, allFiles map[string]*parser.FileDescriptor) 
 		// declaration, so nothing here has to know what any plane is called.
 		if len(matches) == 0 && traitPlanePath != "" {
 			matches = append(matches, traitPlanePath)
+		}
+		// EventBus wrappers inject their grpc_c2s_client reference before the
+		// wrapper's state service is materialized. Resolve only the canonical
+		// per-event service name derived from a parsed event_c2s declaration.
+		if len(matches) == 0 {
+			matches = append(matches, eventC2SStatePaths...)
 		}
 		if !packageSeen {
 			return nil, fmt.Errorf("no proto file found for package %q (from %q)", pkg, ref)

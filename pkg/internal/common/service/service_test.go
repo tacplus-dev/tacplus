@@ -135,6 +135,70 @@ func TestResolveGrpcRefsResolvesTraitPlaneBeforeInjection(t *testing.T) {
 	}
 }
 
+func TestInferGrpcClientsResolvesEventC2SStateServiceBeforeInjection(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS("../../proto/testdata/eventbus_c2s_contract")); err != nil {
+		t.Fatalf("copy fixture: %v", err)
+	}
+	if err := protogen.CopySysProtos(dir); err != nil {
+		t.Fatalf("CopySysProtos: %v", err)
+	}
+	if _, _, _, err := protogen.ScanAndGenerateConfigHolder(dir, dir); err != nil {
+		t.Fatalf("ScanAndGenerateConfigHolder: %v", err)
+	}
+	if err := protogen.AppendEventBusWrappersToProtos(dir, dir); err != nil {
+		t.Fatalf("AppendEventBusWrappersToProtos: %v", err)
+	}
+
+	dp, err := parser.NewDescriptorParser(dir)
+	if err != nil {
+		t.Fatalf("NewDescriptorParser: %v", err)
+	}
+	files := dp.GetAllFiles()
+	tasks := files["services/tasks.proto"]
+	if tasks == nil {
+		t.Fatal("services/tasks.proto not parsed")
+	}
+	injectedRef := false
+	for _, ref := range tasks.GrpcC2SClients {
+		if ref == "tasks.DelegationProbeBusStateService" {
+			injectedRef = true
+			break
+		}
+	}
+	if !injectedRef {
+		t.Fatalf("GrpcC2SClients = %#v, want injected DelegationProbeBusStateService ref", tasks.GrpcC2SClients)
+	}
+	for _, svc := range tasks.Services {
+		if svc.Name == "DelegationProbeBusStateService" {
+			t.Fatal("DelegationProbeBusStateService already materialized before inference")
+		}
+	}
+
+	config := &tactype.Config{SelfPackage: "tasks"}
+	if err := InferGrpcClientsFromAnnotations(config, dir); err != nil {
+		t.Fatalf("InferGrpcClientsFromAnnotations before state injection: %v", err)
+	}
+	want := tactype.GrpcEntry{
+		ProtoFile:   "services/tasks.proto",
+		ServiceName: "DelegationProbeBusStateService",
+	}
+	found := false
+	for _, entry := range config.GrpcC2SClients {
+		if entry == want {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("GrpcC2SClients = %#v, want entry %#v", config.GrpcC2SClients, want)
+	}
+
+	if _, err := resolveGrpcRefs([]string{"tasks.UnrelatedStateService"}, files); err == nil {
+		t.Fatal("unrelated missing service in EventBus package resolved; want error")
+	}
+}
+
 func TestCollectOwnPackageGrpcAnnotationsMergesPackageFiles(t *testing.T) {
 	files := map[string]*parser.FileDescriptor{
 		"contract/contract.proto": {

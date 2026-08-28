@@ -243,7 +243,7 @@ Full-service generators emit top-level service-manager surfaces such as
 `s2sm/`, `c2sm/`, `c2dm/`, and `w2sm/` when the corresponding proto annotations
 and `tacplus.yaml` client surface settings require them. Client-only generators
 emit client-side surfaces only — full-client targets (Python, TypeScript) emit
-C2D/C2S/W2S/REST clients; lite targets (Swift, C#) emit C2D clients only — and
+C2D/C2S/W2S/REST clients; lite targets (Swift, C#) emit C2D/C2S/W2S clients — and
 must not emit `s2sm`, `c2sm`, `w2sm`, server wrappers, EventBus
 subscribers/publishers, health runtime, or SMB runtime.
 

@@ -121,6 +121,17 @@ func Generate(config *tactype.Config) error {
 	if err := proto.AppendEntitlementMessagesToProtos(protoSrcDir, protoSrcDir); err != nil {
 		return fmt.Errorf("failed to append entitlement messages: %w", err)
 	}
+	if err := proto.AppendEventBusWrappersToProtos(protoSrcDir, protoSrcDir); err != nil {
+		return fmt.Errorf("failed to append eventbus topic wrappers to protos: %w", err)
+	}
+	if proto.NeedsEventBusSupportProto(protoSrcDir) {
+		if _, err := proto.EnsureEventBusSupportProto(protoSrcDir, proto.EventBusSupportProtoOptions{}); err != nil {
+			return fmt.Errorf("failed to generate eventbus support proto: %w", err)
+		}
+	}
+	if err := proto.AppendStateServiceToProtos(protoSrcDir, protoSrcDir); err != nil {
+		return fmt.Errorf("failed to append state service to protos: %w", err)
+	}
 
 	// Populate config.GrpcC2SClients / GrpcW2SClients from the proto graph's
 	// grpc_c2s_client / grpc_w2s_client declarations (the same proto-driven path

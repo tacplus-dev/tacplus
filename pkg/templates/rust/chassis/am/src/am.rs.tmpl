@@ -315,6 +315,7 @@ impl Sink for LoggerSink {
 // AccountingMethod → stable label
 // ---------------------------------------------------------------------------
 
+{{- if .ServiceRPCs}}
 /// Converts a generated RPC enum's proto value name (e.g.
 /// "TASKS_RPCS_UPDATE_TASK") into the RPC's own declared name (e.g.
 /// "UpdateTask"): every such enum's variant is "<SERVICE>_RPCS_<RPC>" in
@@ -339,6 +340,7 @@ fn rpc_short_name(enum_value_name: &str) -> String {
     })
     .collect()
 }
+{{- end}}
 
 /// Renders an AccountingMethod as the RPC name of whichever per-service field
 /// is set, e.g. "UpdateTask".

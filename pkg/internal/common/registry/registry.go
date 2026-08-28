@@ -437,12 +437,23 @@ func collectEventTopicEntitlementGrantMethods(fds []*parser.FileDescriptor) ([]r
 
 	var methods []registryGrantMethod
 	for _, topic := range registry.Topics() {
-		if !topic.Export {
+		c2s := topic.PublishC2S
+		declaredC2SProducer := c2s != nil
+		if c2s == nil {
+			// Legacy hand-written service_event topics predate event/record
+			// producer surfaces. Export was their C2S declaration. A topic with an
+			// explicit S2S producer surface is internal even though its generated
+			// wrapper is exported for broker discovery.
+			if !topic.Export || topic.PublishS2S != nil {
+				continue
+			}
+			c2s = &model.EventBusMethodC2S{}
+		}
+		if c2s.AuthDisabled || c2s.AuthAnyUser {
 			continue
 		}
-		packages := []string{topic.EventBusLabel}
-		if topic.Ref.Package != topic.EventBusLabel {
-			packages = append(packages, topic.Ref.Package)
+		if topic.Ref.Package == topic.EventBusLabel {
+			continue
 		}
 		// The grant must describe the SAME service+rpc the caller actually
 		// invokes, because MethodGrant is documented as the only grant shape a
@@ -453,11 +464,20 @@ func collectEventTopicEntitlementGrantMethods(fds []*parser.FileDescriptor) ([]r
 		// the platform's topics declare auth_services ["*"], which never
 		// consults an exact grant — the first topic to restrict callers would
 		// have found the mismatch the hard way.
+		// The real synthesized C2S descriptor contributes the topic-package
+		// grants through the ordinary service catalog. EventBus is the routing
+		// and token audience, so retain only its alias here; adding the topic
+		// package again would duplicate the ordinary exact grant.
 		perTopicService := eventbus.PerTopicServiceName(topic.Ref)
-		for _, pkg := range packages {
+		methods = append(methods,
+			eventTopicGrantMethod(topic.EventBusLabel, perTopicService, eventbus.PerTopicPublishRPC(topic.Ref), []verbs.Scope{verbs.ScopeAny, verbs.ScopeWrite}, verbs.ScopeWrite),
+		)
+		// Legacy service_event export declared the whole state service C2S. The
+		// record/event c2s annotation declares only the producer RPC, so it must
+		// not manufacture a client Subscribe grant.
+		if !declaredC2SProducer {
 			methods = append(methods,
-				eventTopicGrantMethod(pkg, perTopicService, eventbus.PerTopicPublishRPC(topic.Ref), []verbs.Scope{verbs.ScopeAny, verbs.ScopeWrite}, verbs.ScopeWrite),
-				eventTopicGrantMethod(pkg, perTopicService, eventbus.PerTopicSubscribeRPC(topic.Ref), []verbs.Scope{verbs.ScopeAny, verbs.ScopeWatch}, verbs.ScopeWatch),
+				eventTopicGrantMethod(topic.EventBusLabel, perTopicService, eventbus.PerTopicSubscribeRPC(topic.Ref), []verbs.Scope{verbs.ScopeAny, verbs.ScopeWatch}, verbs.ScopeWatch),
 			)
 		}
 	}

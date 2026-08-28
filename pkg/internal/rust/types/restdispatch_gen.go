@@ -168,10 +168,10 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 		}
 
 		// Resolved once per service: which physical service the gateway dials,
-		// and which audience it entitles callers against. The two differ only
-		// for a trait-hosted C2S surface.
+		// and which audience it entitles callers against. The two differ for
+		// trait-hosted and event-labelled C2S surfaces.
 		traitName := ""
-		if svc.HostLabel != "" {
+		if svc.EventLabel == "" && svc.HostLabel != "" {
 			hostFd, err := descriptorParser.GetFileDescriptor(svc.ProtoFile)
 			if err != nil {
 				return fmt.Errorf("resolving trait identity for host-labelled service %s: %w", svc.ServiceName, err)
@@ -804,6 +804,12 @@ func generateProxyDispatch(config *tactype.Config, servicesInfo []ServiceInfo, i
 // ServiceID, the physical service the gateway dials, and EntitlementService,
 // the audience it checks the caller's token against.
 //
+// An event-labelled C2S service is declared in the client's contract package
+// but physically served by the event broker. Its event label is the physical
+// ServiceID, while its package remains the entitlement audience. EventLabel
+// takes precedence over HostLabel if both are present because spec.event_label
+// explicitly defines the gateway's physical service_id.
+//
 // For an ordinary C2S service the surface, the host and the audience are all
 // the same name, so ServiceID is the proto package and EntitlementService is
 // None (the gateway falls back to the ServiceID's own entitlements).
@@ -816,6 +822,9 @@ func generateProxyDispatch(config *tactype.Config, servicesInfo []ServiceInfo, i
 // the same pair the hosted-vservice topic routes already emit
 // (ServiceID = vs.HostLabel, EntitlementService = vs.Name).
 func routeIdentityForService(svc ServiceInfo, traitName string) (serviceID, entitlementService string, err error) {
+	if svc.EventLabel != "" {
+		return svc.EventLabel, fmt.Sprintf("Some(%q)", svc.PackageName), nil
+	}
 	if svc.HostLabel == "" {
 		return svc.PackageName, "None", nil
 	}

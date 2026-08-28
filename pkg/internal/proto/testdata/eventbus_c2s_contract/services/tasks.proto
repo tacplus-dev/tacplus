@@ -1,0 +1,42 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+syntax = "proto3";
+
+package tasks;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "tasks"};
+
+message DelegationProbe {
+  option (spec.record) = {
+    key: "probe_id"
+    owner: "owner_spiffe_id"
+    c2s: {}
+  };
+
+  string probe_id = 1 [(spec.assert_required) = true];
+  string owner_spiffe_id = 2 [(spec.identity_spiffe_subject) = true];
+}
+
+message InternalAudit {
+  option (spec.event) = {s2s: {auth_services: ["tasks"]}};
+
+  string audit_id = 1 [(spec.assert_required) = true];
+}
+
+message DualSurfaceEvent {
+  option (spec.event) = {
+    c2s: {}
+    s2s: {auth_services: ["tasks"]}
+  };
+
+  string event_id = 1 [(spec.assert_required) = true];
+}
+
+message DualSurfaceProducer {
+  option (spec.event_publish) = {
+    topic_ref: "tasks.DualSurfaceEventBus.stream"
+    method_s2s: {auth_services: ["tasks"]}
+  };
+}

@@ -52,6 +52,45 @@ func TestRouteIdentityForOrdinaryC2S(t *testing.T) {
 	}
 }
 
+// An event-labelled C2S surface is declared in the record owner's package but
+// physically served by EventBus. The gateway must dial the event label while
+// checking the caller's entitlement against the declared client contract.
+func TestRouteIdentityForEventLabelledC2S(t *testing.T) {
+	svc := ServiceInfo{
+		PackageName: "tasks",
+		ServiceName: "DelegationProbeBusStateService",
+		IsC2S:       true,
+		EventLabel:  "eventbus",
+	}
+	serviceID, entitlementService, err := routeIdentityForService(svc, "")
+	if err != nil {
+		t.Fatalf("routeIdentityForService: %v", err)
+	}
+	if serviceID != "eventbus" {
+		t.Errorf("ServiceID = %q, want eventbus (the physical broker the gateway dials)", serviceID)
+	}
+	if entitlementService != `Some("tasks")` {
+		t.Errorf(`EntitlementService = %q, want Some("tasks") (the declared client contract)`, entitlementService)
+	}
+}
+
+func TestRouteIdentityEventLabelTakesPrecedenceOverHostLabel(t *testing.T) {
+	svc := ServiceInfo{
+		PackageName: "tasks",
+		ServiceName: "DelegationProbeBusStateService",
+		IsC2S:       true,
+		EventLabel:  "eventbus",
+		HostLabel:   "stratum",
+	}
+	serviceID, entitlementService, err := routeIdentityForService(svc, "query")
+	if err != nil {
+		t.Fatalf("routeIdentityForService: %v", err)
+	}
+	if serviceID != "eventbus" || entitlementService != `Some("tasks")` {
+		t.Fatalf("route identity = (%q, %q), want event label and package contract", serviceID, entitlementService)
+	}
+}
+
 // A host label with no trait name has no audience: emitting Some("") would give
 // the gateway an entitlement check against the empty string.
 func TestRouteIdentityRejectsHostLabelWithoutTrait(t *testing.T) {

@@ -1,0 +1,18 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+syntax = "proto3";
+
+package eventbus;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "eventbus"};
+
+message PingRequest {}
+message PingResponse {}
+
+service EventBusBroker {
+  option (spec.service_s2s) = {auth_services: ["*"]};
+
+  rpc Ping(PingRequest) returns (PingResponse);
+}

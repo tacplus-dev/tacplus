@@ -867,7 +867,8 @@ mod authorizer_behavior_tests {
         let tok = service_token(&key, "other-svc");
         a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
             .await
-            .expect_err("service not in auth_services must be denied");
+            .err()
+            .expect("service not in auth_services must be denied");
     }
 
     // An expired token is rejected even with a valid signature.
@@ -882,7 +883,8 @@ mod authorizer_behavior_tests {
         });
         a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
             .await
-            .expect_err("expired token must be rejected");
+            .err()
+            .expect("expired token must be rejected");
     }
 
     // A token whose audience does not match this service is rejected.
@@ -897,7 +899,8 @@ mod authorizer_behavior_tests {
         });
         a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
             .await
-            .expect_err("wrong audience must be rejected");
+            .err()
+            .expect("wrong audience must be rejected");
     }
 
     // A token signed by a key whose kid is not in the cache is rejected.
@@ -910,7 +913,8 @@ mod authorizer_behavior_tests {
         let tok = service_token(&key, "caller-svc");
         a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
             .await
-            .expect_err("token with an unknown signing key must be rejected");
+            .err()
+            .expect("token with an unknown signing key must be rejected");
     }
 
     // A JWK under the REAL kid but with the WRONG public key must not verify —
@@ -925,7 +929,8 @@ mod authorizer_behavior_tests {
         let tok = service_token(&real_key, "caller-svc");
         a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
             .await
-            .expect_err("token verified against a mismatched public key must be rejected");
+            .err()
+            .expect("token verified against a mismatched public key must be rejected");
     }
 
     // A user (C2S) token with no service_entitlements claim is denied —
@@ -940,7 +945,8 @@ mod authorizer_behavior_tests {
         });
         a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
             .await
-            .expect_err("user token missing service_entitlements must be denied");
+            .err()
+            .expect("user token missing service_entitlements must be denied");
     }
 
     // check_caller_at_or_below enforces the universal namespace rule: the
@@ -966,6 +972,7 @@ mod authorizer_behavior_tests {
             tok.set_namespace("/a/b").expect("namespace");
         });
         a.check_caller_at_or_below(Some(&below), "/a")
-            .expect_err("caller below the target namespace must be denied");
+            .err()
+            .expect("caller below the target namespace must be denied");
     }
 }

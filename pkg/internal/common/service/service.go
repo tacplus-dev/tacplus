@@ -47,7 +47,8 @@ type ServiceInfo struct {
 	// structurally impossible as a result -- ListProviders, Authorize and
 	// MintCallbackTokens must all be callable before a token exists.
 	AuthExemptPaths []string
-	HostLabel         string // non-empty for vservices: the SelfPackage of the service that hosts this RPC surface
+	EventLabel      string // physical service routing label from spec.event_label
+	HostLabel       string // non-empty for vservices: the SelfPackage of the service that hosts this RPC surface
 	Synthesized     bool   // tacplus-generated state/store/mutation/opa service (not user-defined); excluded from own-package server generation
 	// SynthesizedKind is WHICH generated surface (parser.SynthesizedKind*).
 	// Synthesized alone cannot answer "does this build need an S2S identity":
@@ -542,7 +543,8 @@ func DetectServicesForWrapper(config *tactype.Config, inputDir string, outputDir
 				AuthServices:    svc.AuthServices,
 				HasMethodAuth:   hasMethodAuth,
 				AuthExemptPaths: authExempt,
-				HostLabel:         svc.HostLabel,
+				EventLabel:      svc.EventLabel,
+				HostLabel:       svc.HostLabel,
 				Synthesized:     svc.Synthesized,
 				SynthesizedKind: svc.SynthesizedKind,
 			})

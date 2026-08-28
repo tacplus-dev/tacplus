@@ -720,6 +720,14 @@ func Generate(config *tactype.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to generate generated/*.proto: %w", err)
 	}
+	if err := proto.AppendEventBusWrappersToProtos(protoDir, config.FlatProtoDir); err != nil {
+		return fmt.Errorf("failed to append eventbus topic wrappers to protos: %w", err)
+	}
+	if proto.NeedsEventBusSupportProto(protoDir) {
+		if _, err := proto.EnsureEventBusSupportProto(protoDir, proto.EventBusSupportProtoOptions{}); err != nil {
+			return fmt.Errorf("failed to generate eventbus support proto: %w", err)
+		}
+	}
 
 	// Generate virtual service protos into generated/.
 	// Must happen before the generated/ discovery below so they're registered as modules.
@@ -742,7 +750,7 @@ func Generate(config *tactype.Config) error {
 	config.GrpcS2SClients = append(config.GrpcS2SClients, virtualClients...)
 
 	// Infer gRPC client dependencies from grpc_s2s_client/c2s/w2s proto annotations.
-	if err := service.InferGrpcClientsFromAnnotations(config, config.FlatProtoDir); err != nil {
+	if err := service.InferGrpcClientsFromAnnotations(config, protoDir); err != nil {
 		return fmt.Errorf("failed to infer gRPC clients from proto annotations: %w", err)
 	}
 
@@ -931,14 +939,11 @@ func Generate(config *tactype.Config) error {
 	if err := proto.AppendEntitlementMessagesToProtos(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to append entitlement messages: %w", err)
 	}
-	if err := proto.AppendStateServiceToProtos(protoDir, config.FlatProtoDir); err != nil {
+	if err := proto.AppendStateServiceToProtos(protoDir, protoDir); err != nil {
 		return fmt.Errorf("failed to append state service to protos: %w", err)
 	}
 	if err := proto.AppendStoreServiceToProtos(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to append store service to protos: %w", err)
-	}
-	if err := proto.AppendEventBusWrappersToProtos(protoDir, config.FlatProtoDir); err != nil {
-		return fmt.Errorf("failed to append eventbus topic wrappers to protos: %w", err)
 	}
 	if err := proto.GenerateTransformationMessages(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to generate projection messages: %w", err)

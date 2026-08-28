@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/eventbus"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
 )
@@ -82,6 +83,7 @@ func AppendStateServiceToProtos(tempProtoDir, inputDir string) error {
 	}
 
 	generated := make(map[string]bool)
+	eventSurfaces := collectStateEventSurfaces(dp.GetAllFiles())
 
 	// Who may call each generated state service: the owning package plus every
 	// package that declares a state_import of the root. Indexed once over the
@@ -162,7 +164,7 @@ func AppendStateServiceToProtos(tempProtoDir, inputDir string) error {
 		if _, ok := pkgEmitted[fe.fileDesc.Package]; !ok {
 			pkgEmitted[fe.fileDesc.Package] = &sharedMessageNeeds{}
 		}
-		if err := appendStateServicesForFile(tempProtoDir, fe.fileDesc, fe.roots, fe.relPath, pkgEmitted[fe.fileDesc.Package]); err != nil {
+		if err := appendStateServicesForFile(tempProtoDir, fe.fileDesc, fe.roots, fe.relPath, pkgEmitted[fe.fileDesc.Package], eventSurfaces); err != nil {
 			return fmt.Errorf("failed to append state services for %s: %w", relPath, err)
 		}
 	}
@@ -248,18 +250,66 @@ func formatAuthServicesOption(auth []string) string {
 	return fmt.Sprintf("\toption (spec.service_s2s) = {auth_services: [%s]};\n", strings.Join(quoted, ", "))
 }
 
+func formatEventBusC2SMethodOption(auth *model.EventBusMethodC2S) string {
+	if auth == nil || (!auth.AuthDisabled && !auth.AuthAnyUser && auth.TargetNamespaceField == "") {
+		return ""
+	}
+	parts := []string{
+		"principal: RPC_PRINCIPAL_USER",
+		"exposure: RPC_EXPOSURE_EXTERNAL",
+	}
+	var flags []string
+	if auth.AuthDisabled {
+		flags = append(flags, "RPC_FLAG_PUBLIC_NO_AUTH")
+	}
+	if auth.AuthAnyUser {
+		flags = append(flags, "RPC_FLAG_AUTH_ANY_USER")
+	}
+	if len(flags) > 0 {
+		parts = append(parts, "flags: ["+strings.Join(flags, ", ")+"]")
+	}
+	if auth.TargetNamespaceField != "" {
+		parts = append(parts, fmt.Sprintf("target_namespace_field: %q", auth.TargetNamespaceField))
+	}
+	return "\t\toption (spec.rpc) = {" + strings.Join(parts, ", ") + "};\n"
+}
+
 // sharedMessageNeeds tracks which file-scoped shared messages are required
 // across all state roots in a single proto file.
 type sharedMessageNeeds struct {
-	mapEmpty            bool
-	queueReceipt        bool
-	topicPublishReceipt bool
-	eventBusRecordMeta  bool
-	leaderElection      bool
-	collectionQuery     bool
-	emptyImport         bool
-	traceImport         bool
-	timestampImport     bool
+	mapEmpty              bool
+	queueReceipt          bool
+	eventBusRecordMeta    bool
+	leaderElection        bool
+	collectionQuery       bool
+	emptyImport           bool
+	traceImport           bool
+	timestampImport       bool
+	eventBusSupportImport bool
+}
+
+type stateEventSurface struct {
+	c2s      *model.EventBusMethodC2S
+	declared bool
+}
+
+func collectStateEventSurfaces(allFiles map[string]*parser.FileDescriptor) map[string]stateEventSurface {
+	surfaces := make(map[string]stateEventSurface)
+	for _, fd := range allFiles {
+		for i := range fd.Messages {
+			msg := &fd.Messages[i]
+			ann, ok := msg.Annotations["event_surface"]
+			if !ok || len(ann.EventPublishEntries) == 0 {
+				continue
+			}
+			entry := ann.EventPublishEntries[0]
+			surfaces[fd.Package+"."+msg.Name] = stateEventSurface{
+				c2s:      entry.MethodC2S,
+				declared: true,
+			}
+		}
+	}
+	return surfaces
 }
 
 // stateServiceResult holds the output of building one state root's service definition.
@@ -320,6 +370,7 @@ func buildStateService(
 	stateName string,
 	readsState []string,
 	authServices []string,
+	eventSurfaces map[string]stateEventSurface,
 ) stateServiceResult {
 	pkg := fileDesc.Package
 
@@ -340,6 +391,8 @@ func buildStateService(
 		viewSources     []string
 		refreshOnMiss   string
 		subscribeRecord string
+		publishC2S      *model.EventBusMethodC2S
+		hasEventSurface bool
 	}
 
 	var singletons, collections, queues, priorityQueues, topics, commands, views []boundaryField
@@ -444,6 +497,10 @@ func buildStateService(
 			isInstanceKeyed: isInstanceKeyed,
 			refreshOnMiss:   refreshOnMiss,
 		}
+		if surface, ok := eventSurfaces[field.Type]; ok {
+			bf.publishC2S = surface.c2s
+			bf.hasEventSurface = surface.declared
+		}
 
 		switch {
 		case hasQueue && queueAnn.BoolValue:
@@ -478,6 +535,20 @@ func buildStateService(
 	}
 
 	var buf strings.Builder
+	eventC2S := false
+	hasDeclaredEventSurface := false
+	for _, topic := range topics {
+		if topic.isPrivate {
+			continue
+		}
+		hasDeclaredEventSurface = hasDeclaredEventSurface || topic.hasEventSurface
+		eventC2S = eventC2S || topic.publishC2S != nil
+	}
+	if !hasDeclaredEventSurface && len(topics) > 0 {
+		if export, ok := stateRoot.Annotations["service_state_export"]; ok && export.BoolValue {
+			eventC2S = true
+		}
+	}
 
 	buf.WriteString("\n// ============================================================================\n")
 	buf.WriteString("// Auto-generated State Service (tacplus)\n")
@@ -490,16 +561,22 @@ func buildStateService(
 
 	fmt.Fprintf(&buf, "service %s {\n", StateServiceName(stateName))
 
-	// All state services are S2S — accessible only by authorized services.
-	// The caller list is resolved from the root's owner and its declared
-	// state_import-ers; an empty spec.service_s2s here would leave every RPC
-	// with no auth_services policy, which the authorizers reject at runtime
-	// with no build-time signal. disable_auth_message roots skip token
-	// validation entirely and therefore carry no caller list.
-	if len(authServices) > 0 {
-		buf.WriteString(formatAuthServicesOption(authServices))
+	// Record/event topics with a declared C2S producer surface are served by
+	// EventBus under this per-topic service name. Put that real descriptor on the
+	// ordinary C2S path; all other state services remain S2S.
+	if eventC2S {
+		buf.WriteString("\toption (spec.service_c2s) = {auth_entitled_users: true};\n")
 	} else {
-		fmt.Fprintf(&buf, "\toption (spec.service_s2s) = {};\n")
+		// The caller list is resolved from the root's owner and its declared
+		// state_import-ers; an empty spec.service_s2s here would leave every RPC
+		// with no auth_services policy, which the authorizers reject at runtime
+		// with no build-time signal. disable_auth_message roots skip token
+		// validation entirely and therefore carry no caller list.
+		if len(authServices) > 0 {
+			buf.WriteString(formatAuthServicesOption(authServices))
+		} else {
+			fmt.Fprintf(&buf, "\toption (spec.service_s2s) = {};\n")
+		}
 	}
 
 	// Propagate service_event annotation to generated service options.
@@ -584,9 +661,22 @@ func buildStateService(
 		if b.isPrivate {
 			continue
 		}
+		// A record/event c2s declaration is a producer surface only. When this
+		// state service is the ordinary C2S client descriptor, omit internal-only
+		// topics and do not turn the broker's S2S Subscribe method into a C2S RPC.
+		if eventC2S && b.hasEventSurface && b.publishC2S == nil {
+			continue
+		}
 		fmt.Fprintf(&buf, "\t// Topic: %s\n", b.goName)
-		fmt.Fprintf(&buf, "\trpc PublishTo%s(%s) returns (TopicPublishReceipt);\n", b.goName, b.typeName)
-		fmt.Fprintf(&buf, "\trpc SubscribeTo%s(trace.TraceRequest) returns (stream %s);\n", b.goName, b.subscribeRecord)
+		methodOption := formatEventBusC2SMethodOption(b.publishC2S)
+		if methodOption == "" {
+			fmt.Fprintf(&buf, "\trpc PublishTo%s(stream %s) returns (stream eventbus_support.PublishResponse);\n", b.goName, b.typeName)
+		} else {
+			fmt.Fprintf(&buf, "\trpc PublishTo%s(stream %s) returns (stream eventbus_support.PublishResponse) {\n%s\t}\n", b.goName, b.typeName, methodOption)
+		}
+		if !eventC2S || !b.hasEventSurface {
+			fmt.Fprintf(&buf, "\trpc SubscribeTo%s(stream eventbus_support.SubscribeRequest) returns (stream %s);\n", b.goName, b.subscribeRecord)
+		}
 	}
 
 	hasLeaderBoundary := false
@@ -741,15 +831,15 @@ func buildStateService(
 	}
 
 	needs := sharedMessageNeeds{
-		mapEmpty:            true, // always needed (singletons use it too via collection RPCs in same file)
-		queueReceipt:        len(queues) > 0 || len(priorityQueues) > 0,
-		topicPublishReceipt: hasNonPrivateTopics,
-		eventBusRecordMeta:  hasNonPrivateTopics,
-		leaderElection:      hasLeaderBoundary,
-		collectionQuery:     hasNonPrivateCollections || len(views) > 0,
-		emptyImport:         len(commands) > 0,
-		traceImport:         len(singletons) > 0 || len(readOnlySingletons) > 0 || len(collections) > 0 || len(queues) > 0 || len(priorityQueues) > 0 || len(topics) > 0 || hasLeaderBoundary || len(views) > 0,
-		timestampImport:     hasNonPrivateTopics,
+		mapEmpty:              true, // always needed (singletons use it too via collection RPCs in same file)
+		queueReceipt:          len(queues) > 0 || len(priorityQueues) > 0,
+		eventBusRecordMeta:    hasNonPrivateTopics,
+		leaderElection:        hasLeaderBoundary,
+		collectionQuery:       hasNonPrivateCollections || len(views) > 0,
+		emptyImport:           len(commands) > 0,
+		traceImport:           len(singletons) > 0 || len(readOnlySingletons) > 0 || len(collections) > 0 || len(queues) > 0 || len(priorityQueues) > 0 || hasLeaderBoundary || len(views) > 0,
+		timestampImport:       hasNonPrivateTopics,
+		eventBusSupportImport: hasNonPrivateTopics,
 	}
 
 	return stateServiceResult{
@@ -792,22 +882,23 @@ func appendStateServicesForFile(
 	roots []stateRootEntry,
 	relPath string,
 	pkgEmitted *sharedMessageNeeds,
+	eventSurfaces map[string]stateEventSurface,
 ) error {
 	// Build all service definitions and merge their shared message needs.
 	var results []stateServiceResult
 	var merged sharedMessageNeeds
 	for _, root := range roots {
-		r := buildStateService(fileDesc, root.stateRoot, root.stateName, root.readsState, root.authServices)
+		r := buildStateService(fileDesc, root.stateRoot, root.stateName, root.readsState, root.authServices, eventSurfaces)
 		results = append(results, r)
 		merged.mapEmpty = merged.mapEmpty || r.needs.mapEmpty
 		merged.queueReceipt = merged.queueReceipt || r.needs.queueReceipt
-		merged.topicPublishReceipt = merged.topicPublishReceipt || r.needs.topicPublishReceipt
 		merged.eventBusRecordMeta = merged.eventBusRecordMeta || r.needs.eventBusRecordMeta
 		merged.leaderElection = merged.leaderElection || r.needs.leaderElection
 		merged.collectionQuery = merged.collectionQuery || r.needs.collectionQuery
 		merged.emptyImport = merged.emptyImport || r.needs.emptyImport
 		merged.traceImport = merged.traceImport || r.needs.traceImport
 		merged.timestampImport = merged.timestampImport || r.needs.timestampImport
+		merged.eventBusSupportImport = merged.eventBusSupportImport || r.needs.eventBusSupportImport
 	}
 
 	// Read the proto file
@@ -845,6 +936,11 @@ func appendStateServicesForFile(
 	if merged.timestampImport {
 		if !strings.Contains(text, `"google/protobuf/timestamp.proto"`) {
 			text = addImport(text, `import "google/protobuf/timestamp.proto";`)
+		}
+	}
+	if merged.eventBusSupportImport {
+		if !strings.Contains(text, `"`+EventBusSupportProtoPath+`"`) {
+			text = addImport(text, `import "`+EventBusSupportProtoPath+`";`)
 		}
 	}
 
@@ -930,11 +1026,6 @@ func appendStateServicesForFile(
 		shared.WriteString(stateServiceTraceMessage("QueueSizeResponse", "int32 size = 1;"))
 		shared.WriteString("\n")
 		pkgEmitted.queueReceipt = true
-	}
-	if merged.topicPublishReceipt && !pkgEmitted.topicPublishReceipt {
-		shared.WriteString(stateServiceTraceMessage("TopicPublishReceipt", "bool published = 1;"))
-		shared.WriteString("\n")
-		pkgEmitted.topicPublishReceipt = true
 	}
 	if merged.eventBusRecordMeta && !pkgEmitted.eventBusRecordMeta {
 		shared.WriteString(stateServiceMessage(

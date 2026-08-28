@@ -24,9 +24,13 @@ var generatedStateServiceRe = regexp.MustCompile(
 // auth_services entry.
 var s2sAuthServicesRe = regexp.MustCompile(`\(spec\.service_s2s\)\s*=\s*\{[^}]*auth_services\s*:\s*\[\s*"`)
 
+var c2sServiceRe = regexp.MustCompile(`\(spec\.service_c2s\)\s*=`)
+
 // ValidateGeneratedStateServiceAuth is the post-condition on state-service
-// emission: every generated state service must declare a non-empty
-// auth_services on its spec.service_s2s option.
+// emission: every generated S2S state service must declare a non-empty
+// auth_services on its spec.service_s2s option. Record/event topic services
+// with a declared C2S producer surface are checked by the ordinary C2S auth
+// path instead.
 //
 // Why this is a hard error and not a lint: the Go, Java and Rust chassis
 // authorizers all fail closed on an unregistered method — a service caller hits
@@ -64,6 +68,9 @@ func ValidateGeneratedStateServiceAuth(protoDir string, authExempt map[string]bo
 			body := text[m[1]:]
 			if end := strings.Index(body, "\n}"); end >= 0 {
 				body = body[:end]
+			}
+			if c2sServiceRe.MatchString(body) {
+				continue
 			}
 			if !s2sAuthServicesRe.MatchString(body) {
 				violations = append(violations, fmt.Sprintf(

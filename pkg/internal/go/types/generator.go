@@ -143,7 +143,10 @@ func Generate(config *tactype.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to generate generated/*.proto: %w", err)
 	}
-	if proto.NeedsEventBusSupportProto(flatProtoDir) {
+	if err := proto.AppendEventBusWrappersToProtos(tempProtoDir, flatProtoDir); err != nil {
+		return fmt.Errorf("failed to append eventbus topic wrappers to protos: %w", err)
+	}
+	if proto.NeedsEventBusSupportProto(tempProtoDir) {
 		eventBusProto, err := proto.EnsureEventBusSupportProto(tempProtoDir, proto.EventBusSupportProtoOptions{
 			GoPackage: fmt.Sprintf("%s/types/generated/eventbus_support", config.ModuleBasePath),
 		})
@@ -186,7 +189,7 @@ func Generate(config *tactype.Config) error {
 	config.GrpcS2SClients = append(config.GrpcS2SClients, virtualClients...)
 
 	// Infer gRPC client dependencies from grpc_s2s_client/c2s/w2s proto annotations.
-	if err := service.InferGrpcClientsFromAnnotations(config, flatProtoDir); err != nil {
+	if err := service.InferGrpcClientsFromAnnotations(config, tempProtoDir); err != nil {
 		return fmt.Errorf("failed to infer gRPC clients from proto annotations: %w", err)
 	}
 
@@ -284,14 +287,11 @@ func Generate(config *tactype.Config) error {
 	}
 
 	zap.L().Info("Appending state service definitions to service protos")
-	if err := proto.AppendStateServiceToProtos(tempProtoDir, flatProtoDir); err != nil {
+	if err := proto.AppendStateServiceToProtos(tempProtoDir, tempProtoDir); err != nil {
 		return fmt.Errorf("failed to append state service to protos: %w", err)
 	}
 	if err := proto.AppendStoreServiceToProtos(tempProtoDir, flatProtoDir); err != nil {
 		return fmt.Errorf("failed to append store service to protos: %w", err)
-	}
-	if err := proto.AppendEventBusWrappersToProtos(tempProtoDir, flatProtoDir); err != nil {
-		return fmt.Errorf("failed to append eventbus topic wrappers to protos: %w", err)
 	}
 	if err := proto.GenerateTransformationMessages(tempProtoDir, flatProtoDir); err != nil {
 		return fmt.Errorf("failed to generate projection messages: %w", err)

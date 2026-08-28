@@ -3,9 +3,11 @@
 package service
 
 import (
+	"os"
 	"testing"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	protogen "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
 )
 
@@ -182,6 +184,44 @@ func TestDeriveServiceAuthFlagsIncludesTargetNamespace(t *testing.T) {
 	if !hasMethodAuth {
 		t.Fatal("target_namespace_field must force method auth registration")
 	}
+}
+
+func TestDetectServicesForWrapperCarriesEventLabel(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS("../../proto/testdata/eventbus_c2s_contract")); err != nil {
+		t.Fatalf("copy fixture: %v", err)
+	}
+	if err := protogen.CopySysProtos(dir); err != nil {
+		t.Fatalf("CopySysProtos: %v", err)
+	}
+	if _, _, _, err := protogen.ScanAndGenerateConfigHolder(dir, dir); err != nil {
+		t.Fatalf("ScanAndGenerateConfigHolder: %v", err)
+	}
+	if err := protogen.AppendEventBusWrappersToProtos(dir, dir); err != nil {
+		t.Fatalf("AppendEventBusWrappersToProtos: %v", err)
+	}
+	if _, err := protogen.EnsureEventBusSupportProto(dir, protogen.EventBusSupportProtoOptions{}); err != nil {
+		t.Fatalf("EnsureEventBusSupportProto: %v", err)
+	}
+	if err := protogen.AppendStateServiceToProtos(dir, dir); err != nil {
+		t.Fatalf("AppendStateServiceToProtos: %v", err)
+	}
+
+	services, err := DetectServicesForWrapper(&tactype.Config{}, dir, func(*tactype.Config, string, string, string) string {
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("DetectServicesForWrapper: %v", err)
+	}
+	for _, svc := range services {
+		if svc.PackageName == "tasks" && svc.ServiceName == "DelegationProbeBusStateService" {
+			if svc.EventLabel != "eventbus" {
+				t.Fatalf("EventLabel = %q, want eventbus", svc.EventLabel)
+			}
+			return
+		}
+	}
+	t.Fatal("DelegationProbeBusStateService not detected")
 }
 
 // Client targets emit NO service runtime: server wrappers never resolve for

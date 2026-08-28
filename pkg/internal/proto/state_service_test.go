@@ -15,10 +15,11 @@ import (
 
 func TestTopicSubscribeStreamsMetadataEnvelope(t *testing.T) {
 	stateRoot := topicStateRootForTest()
-	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil)
+	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil, nil)
 
 	for _, want := range []string{
-		"rpc SubscribeToEvents(trace.TraceRequest) returns (stream DemoEventBusEventsSubscribeRecord);",
+		"rpc PublishToEvents(stream DemoEvent) returns (stream eventbus_support.PublishResponse);",
+		"rpc SubscribeToEvents(stream eventbus_support.SubscribeRequest) returns (stream DemoEventBusEventsSubscribeRecord);",
 	} {
 		if !strings.Contains(result.serviceProto, want) {
 			t.Fatalf("topic Subscribe schema missing %q in:\n%s", want, result.serviceProto)
@@ -59,6 +60,7 @@ message DemoEventBus {}
 		[]stateRootEntry{{stateRoot: stateRoot, stateName: stateRoot.Name}},
 		"demo.proto",
 		&sharedMessageNeeds{},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("append state service: %v", err)
@@ -71,6 +73,7 @@ message DemoEventBus {}
 	text := string(data)
 	for _, want := range []string{
 		`import "google/protobuf/timestamp.proto";`,
+		`import "generated/eventbus_support.proto";`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("generated proto missing %q in:\n%s", want, text)
@@ -106,7 +109,7 @@ func TestStateServiceSyntheticCollectionMessagesCarryTraceFields(t *testing.T) {
 			IsRepeated: true,
 		}},
 	}
-	stateProto := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil).serviceProto
+	stateProto := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil, nil).serviceProto
 
 	for _, messageName := range []string{
 		"NodesGetRequest",
@@ -135,7 +138,7 @@ func TestGeneratedServicesKeepSynthesizedMarkerAsLeadingComment(t *testing.T) {
 			TypeKind: "message",
 		}},
 	}
-	stateProto := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil).serviceProto
+	stateProto := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil, nil).serviceProto
 	assertGeneratedServiceMarkerLeadsService(t, stateProto, StateServiceName(stateRoot.Name))
 
 	storeProto := buildStoreService("DemoStore", "id", nil)
@@ -154,7 +157,7 @@ func TestStateImportEmitsReadOnlyStateServiceBoundary(t *testing.T) {
 			},
 		}},
 	}
-	stateProto := buildStateService(&parser.FileDescriptor{Package: "consumer"}, stateRoot, stateRoot.Name, nil, nil).serviceProto
+	stateProto := buildStateService(&parser.FileDescriptor{Package: "consumer"}, stateRoot, stateRoot.Name, nil, nil, nil).serviceProto
 
 	for _, want := range []string{
 		"rpc GetImportedCurrent(trace.TraceRequest) returns (owner.OwnerRecord);",

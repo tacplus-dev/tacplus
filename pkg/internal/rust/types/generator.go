@@ -39,7 +39,10 @@ func Generate(config *tactype.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to copy proto directory: %w", err)
 	}
-	if proto.NeedsEventBusSupportProto(config.FlatProtoDir) {
+	if err := proto.AppendEventBusWrappersToProtos(protoDir, config.FlatProtoDir); err != nil {
+		return fmt.Errorf("failed to append eventbus topic wrappers to protos: %w", err)
+	}
+	if proto.NeedsEventBusSupportProto(protoDir) {
 		eventBusProto, err := proto.EnsureEventBusSupportProto(protoDir, proto.EventBusSupportProtoOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to generate eventbus support proto: %w", err)
@@ -70,7 +73,7 @@ func Generate(config *tactype.Config) error {
 	config.GrpcS2SClients = append(config.GrpcS2SClients, virtualClients...)
 
 	// Infer gRPC client dependencies from grpc_s2s_client/c2s/w2s proto annotations.
-	if err := service.InferGrpcClientsFromAnnotations(config, config.FlatProtoDir); err != nil {
+	if err := service.InferGrpcClientsFromAnnotations(config, protoDir); err != nil {
 		return fmt.Errorf("failed to infer gRPC clients from proto annotations: %w", err)
 	}
 
@@ -98,7 +101,7 @@ func Generate(config *tactype.Config) error {
 	}
 
 	// Append state/store service definitions BEFORE trace injection so that
-	// auto-appended message types (LeaderRecord, TopicPublishReceipt, etc.)
+	// auto-appended message types (LeaderRecord, EventBus envelopes, etc.)
 	// also receive trace fields.
 	// Inject per-field "<field>_redacted" indicator bools before native compilation
 	// so they appear in every language's generated type.
@@ -108,14 +111,11 @@ func Generate(config *tactype.Config) error {
 	if err := proto.AppendEntitlementMessagesToProtos(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to append entitlement messages: %w", err)
 	}
-	if err := proto.AppendStateServiceToProtos(protoDir, config.FlatProtoDir); err != nil {
+	if err := proto.AppendStateServiceToProtos(protoDir, protoDir); err != nil {
 		return fmt.Errorf("failed to append state service to protos: %w", err)
 	}
 	if err := proto.AppendStoreServiceToProtos(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to append store service to protos: %w", err)
-	}
-	if err := proto.AppendEventBusWrappersToProtos(protoDir, config.FlatProtoDir); err != nil {
-		return fmt.Errorf("failed to append eventbus topic wrappers to protos: %w", err)
 	}
 	if err := proto.GenerateTransformationMessages(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to generate projection messages: %w", err)
@@ -796,7 +796,8 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				AuthServices:    service.AuthServices,
 				HasMethodAuth:   hasMethodAuth,
 				AuthExemptPaths: authExempt,
-				HostLabel:         service.HostLabel,
+				EventLabel:      service.EventLabel,
+				HostLabel:       service.HostLabel,
 				// Propagate the synthesized-service marker so ResolveServerServices'
 				// filterByPackage can drop tacplus-generated state/store/config-state
 				// services. Omitting this (the Rust detect path did) left Synthesized

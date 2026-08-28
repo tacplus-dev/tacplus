@@ -52,13 +52,18 @@ func AppendEventBusWrappersToProtos(tempProtoDir, inputDir string) error {
 
 		existing := make(map[string]bool, len(fileDesc.Messages))
 		msgByName := make(map[string]*parser.MessageDescriptor, len(fileDesc.Messages))
+		existingC2SClients := make(map[string]bool, len(fileDesc.GrpcC2SClients))
 		for i := range fileDesc.Messages {
 			existing[fileDesc.Messages[i].Name] = true
 			msgByName[fileDesc.Messages[i].Name] = &fileDesc.Messages[i]
 		}
+		for _, ref := range fileDesc.GrpcC2SClients {
+			existingC2SClients[ref] = true
+		}
 
 		var buf bytes.Buffer
 		var generated []string
+		var generatedC2SClients []string
 		for i := range fileDesc.Messages {
 			msg := &fileDesc.Messages[i]
 			if ev, ok := msg.Annotations["event"]; !ok || !ev.BoolValue {
@@ -69,6 +74,13 @@ func AppendEventBusWrappersToProtos(tempProtoDir, inputDir string) error {
 				continue
 			}
 			wrapperName := msg.Name + "Bus"
+			if msg.Annotations["event_c2s"].BoolValue {
+				clientRef := fileDesc.Package + "." + StateServiceName(wrapperName)
+				if !existingC2SClients[clientRef] {
+					existingC2SClients[clientRef] = true
+					generatedC2SClients = append(generatedC2SClients, clientRef)
+				}
+			}
 			if existing[wrapperName] {
 				// A message with the wrapper's name already exists. If it is a genuine
 				// EventBus topic wrapper (hand-written, mid-migration — it carries a
@@ -92,7 +104,7 @@ func AppendEventBusWrappersToProtos(tempProtoDir, inputDir string) error {
 			buf.WriteString("}\n")
 			generated = append(generated, wrapperName)
 		}
-		if buf.Len() == 0 {
+		if buf.Len() == 0 && len(generatedC2SClients) == 0 {
 			continue
 		}
 
@@ -100,6 +112,11 @@ func AppendEventBusWrappersToProtos(tempProtoDir, inputDir string) error {
 		content, err := os.ReadFile(protoPath)
 		if err != nil {
 			return fmt.Errorf("failed to read proto file %s: %w", relPath, err)
+		}
+		for _, clientRef := range generatedC2SClients {
+			content = injectImports(content, []string{
+				fmt.Sprintf("option (spec.grpc_c2s_client) = {service: %q};", clientRef),
+			})
 		}
 		text := string(content) + buf.String()
 		if err := os.WriteFile(protoPath, []byte(text), 0644); err != nil {

@@ -1,0 +1,6 @@
+# Managed by tacplus — do not edit IDs manually.
+services:
+    - name: eventbus
+      id: 1
+    - name: tasks
+      id: 2

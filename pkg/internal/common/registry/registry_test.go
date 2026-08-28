@@ -1204,6 +1204,52 @@ func TestCollectEntitlementGrantsIncludesGeneratedEventBusTopicMethods(t *testin
 	}
 }
 
+// A routing-alias grant (physical dial package, e.g. "eventbus") must attach
+// its package to the contract grant's RoutingAliasPackages so a Java consumer
+// scoping a token to the physical audience can still keep the contract grant.
+// Mirrors the real DelegationProbe fleet shape: TASKS_DELEGATION_PROBE_BUS_
+// STATE_SERVICE_PUBLISH_TO_STREAM (contract) / EVENTBUS_DELEGATION_PROBE_BUS_
+// STATE_SERVICE_PUBLISH_TO_STREAM (alias) share service+rpc but not package.
+func TestCollectEntitlementGrantsAttachesRoutingAliasPackageToContractGrant(t *testing.T) {
+	root := &spec.PackageNode{
+		Name: "types",
+		Services: []*spec.ServiceInfo{
+			{
+				Name:    "DelegationProbeBusStateService",
+				Package: "tasks",
+				Rpcs: []*spec.RpcInfo{
+					{
+						Rpc:       "PublishToStream",
+						AuthModel: "c2s",
+					},
+				},
+			},
+		},
+	}
+	alias := eventTopicGrantMethod("eventbus", "DelegationProbeBusStateService", "PublishToStream",
+		[]verbs.Scope{verbs.ScopeAny, verbs.ScopeWrite}, verbs.ScopeWrite)
+	alias.isRoutingAlias = true
+	alias.routingAliasContractPackage = "tasks"
+
+	byToken := entitlementGrantMap(collectEntitlementGrants(root, alias))
+
+	contract := byToken["TASKS_DELEGATION_PROBE_BUS_STATE_SERVICE_PUBLISH_TO_STREAM"]
+	if contract == nil {
+		t.Fatalf("missing contract grant; got %#v", byToken)
+	}
+	if !reflect.DeepEqual(contract.RoutingAliasPackages, []string{"eventbus"}) {
+		t.Fatalf("contract grant RoutingAliasPackages = %#v, want [eventbus]", contract.RoutingAliasPackages)
+	}
+
+	aliasGrant := byToken["EVENTBUS_DELEGATION_PROBE_BUS_STATE_SERVICE_PUBLISH_TO_STREAM"]
+	if aliasGrant == nil {
+		t.Fatalf("missing alias grant; got %#v", byToken)
+	}
+	if len(aliasGrant.RoutingAliasPackages) != 0 {
+		t.Fatalf("alias grant must not carry its own RoutingAliasPackages, got %#v", aliasGrant.RoutingAliasPackages)
+	}
+}
+
 func TestValidateEntitlementGrantTokenCollisionsRejectsDuplicates(t *testing.T) {
 	err := validateEntitlementGrantTokenCollisions([]*spec.EntitlementGrantInfo{
 		{

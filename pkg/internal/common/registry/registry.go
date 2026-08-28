@@ -350,6 +350,16 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 type registryGrantMethod struct {
 	meta  verbs.MethodMeta
 	token string
+
+	// isRoutingAlias marks a grant registered under a route's physical dial
+	// package (e.g. "eventbus") rather than its entitlement contract package.
+	// routingAliasContractPackage names the real contract package this
+	// alias's (service, rpc) shares with an ordinary exact grant — that
+	// grant's EntitlementGrantInfo.RoutingAliasPackages gets this alias's
+	// meta.Package appended, so a token scoped to the physical package keeps
+	// the contract-package grant. See collectEventTopicEntitlementGrantMethods.
+	isRoutingAlias               bool
+	routingAliasContractPackage string
 }
 
 func collectEntitlementGrants(root *spec.PackageNode, additionalMethods ...registryGrantMethod) []*spec.EntitlementGrantInfo {
@@ -391,14 +401,38 @@ func collectEntitlementGrants(root *spec.PackageNode, additionalMethods ...regis
 
 	var out []*spec.EntitlementGrantInfo
 	byPkg := make(map[string][]registryGrantMethod)
+	// contractInfoByKey resolves an alias's (contract package, service, rpc)
+	// back to the contract's own EntitlementGrantInfo, so routing-alias
+	// packages can be attached to it below. Keyed by contract package
+	// (never the alias's physical package) to avoid mismatching two
+	// unrelated services that happen to share a service+rpc spelling.
+	contractInfoByKey := make(map[string]*spec.EntitlementGrantInfo)
 	for _, m := range methods {
-		out = append(out, &spec.EntitlementGrantInfo{
+		info := &spec.EntitlementGrantInfo{
 			Token:       m.token,
 			Package:     m.meta.Package,
 			ServiceName: m.meta.Service,
 			Rpc:         m.meta.RPC,
-		})
+		}
+		out = append(out, info)
 		byPkg[m.meta.Package] = append(byPkg[m.meta.Package], m)
+		if !m.isRoutingAlias && m.meta.RPC != "" {
+			contractInfoByKey[m.meta.Package+"\x00"+m.meta.Service+"\x00"+m.meta.RPC] = info
+		}
+	}
+	for _, m := range methods {
+		if !m.isRoutingAlias {
+			continue
+		}
+		key := m.routingAliasContractPackage + "\x00" + m.meta.Service + "\x00" + m.meta.RPC
+		if contract, ok := contractInfoByKey[key]; ok {
+			contract.RoutingAliasPackages = append(contract.RoutingAliasPackages, m.meta.Package)
+		}
+	}
+	for _, info := range out {
+		if len(info.RoutingAliasPackages) > 1 {
+			sort.Strings(info.RoutingAliasPackages)
+		}
 	}
 
 	var pkgs []string
@@ -469,16 +503,18 @@ func collectEventTopicEntitlementGrantMethods(fds []*parser.FileDescriptor) ([]r
 		// and token audience, so retain only its alias here; adding the topic
 		// package again would duplicate the ordinary exact grant.
 		perTopicService := eventbus.PerTopicServiceName(topic.Ref)
-		methods = append(methods,
-			eventTopicGrantMethod(topic.EventBusLabel, perTopicService, eventbus.PerTopicPublishRPC(topic.Ref), []verbs.Scope{verbs.ScopeAny, verbs.ScopeWrite}, verbs.ScopeWrite),
-		)
+		publishAlias := eventTopicGrantMethod(topic.EventBusLabel, perTopicService, eventbus.PerTopicPublishRPC(topic.Ref), []verbs.Scope{verbs.ScopeAny, verbs.ScopeWrite}, verbs.ScopeWrite)
+		publishAlias.isRoutingAlias = true
+		publishAlias.routingAliasContractPackage = topic.Ref.Package
+		methods = append(methods, publishAlias)
 		// Legacy service_event export declared the whole state service C2S. The
 		// record/event c2s annotation declares only the producer RPC, so it must
 		// not manufacture a client Subscribe grant.
 		if !declaredC2SProducer {
-			methods = append(methods,
-				eventTopicGrantMethod(topic.EventBusLabel, perTopicService, eventbus.PerTopicSubscribeRPC(topic.Ref), []verbs.Scope{verbs.ScopeAny, verbs.ScopeWatch}, verbs.ScopeWatch),
-			)
+			subscribeAlias := eventTopicGrantMethod(topic.EventBusLabel, perTopicService, eventbus.PerTopicSubscribeRPC(topic.Ref), []verbs.Scope{verbs.ScopeAny, verbs.ScopeWatch}, verbs.ScopeWatch)
+			subscribeAlias.isRoutingAlias = true
+			subscribeAlias.routingAliasContractPackage = topic.Ref.Package
+			methods = append(methods, subscribeAlias)
 		}
 	}
 	sort.Slice(methods, func(i, j int) bool { return methods[i].token < methods[j].token })

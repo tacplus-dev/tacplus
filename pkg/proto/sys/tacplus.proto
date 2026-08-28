@@ -602,6 +602,15 @@ message EntitlementGrantInfo {
   // expands_to lists exact grant tokens implied by a wildcard grant.
   // Exact grants leave this empty.
   repeated string expands_to = 6;
+
+  // routing_alias_packages lists physical routing-alias packages this exact
+  // grant's (service, rpc) is also reachable under, e.g. an EventBus-hosted
+  // C2S publish RPC declared in package "tasks" is physically dialed via
+  // package "eventbus". A token audience-scoped to one of these packages
+  // should still keep this grant: the alias names the physical dial target,
+  // not the entitlement contract, which stays this grant's own package.
+  // Wildcard grants leave this empty.
+  repeated string routing_alias_packages = 7;
 }
 
 // BuildInfo contains version and build metadata for the registry.

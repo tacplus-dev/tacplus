@@ -48,6 +48,8 @@ func emitJavaGrantsHelper(cfg Config, grants []*spec.EntitlementGrantInfo) error
 		entries.WriteString(javaString(g.GetCapabilityScope()))
 		entries.WriteString(", ")
 		entries.WriteString(javaStringList(g.GetExpandsTo()))
+		entries.WriteString(", ")
+		entries.WriteString(javaStringList(g.GetRoutingAliasPackages()))
 		entries.WriteString("));\n")
 	}
 
@@ -125,6 +127,14 @@ public final class Grants {
         public final String capability;
         /** For wildcard grants: the exact tokens it implies; empty for exact grants. */
         public final List<String> expandsTo;
+        /**
+         * For exact grants whose (service, rpc) is also physically reachable
+         * through a routing-alias package (e.g. an EventBus-hosted C2S publish
+         * RPC declared in one proto package but dialed through "eventbus"): the
+         * alias packages it is reachable under. Empty for grants with no alias
+         * route, and for wildcard grants.
+         */
+        public final List<String> routingAliasPackages;
 
         public Grant(
                 String token,
@@ -132,13 +142,15 @@ public final class Grants {
                 String service,
                 String rpc,
                 String capability,
-                List<String> expandsTo) {
+                List<String> expandsTo,
+                List<String> routingAliasPackages) {
             this.token = token;
             this.pkg = pkg;
             this.service = service;
             this.rpc = rpc;
             this.capability = capability;
             this.expandsTo = List.copyOf(expandsTo);
+            this.routingAliasPackages = List.copyOf(routingAliasPackages);
         }
 
         /** Reports whether this grant is a package/capability wildcard. */
@@ -167,6 +179,22 @@ public final class Grants {
 	/** Returns the Grant for a token, or empty if it is not a known grant. */
 	public static Optional<Grant> lookup(String token) {
 		return Optional.ofNullable(BY_TOKEN.get(token));
+	}
+
+	/**
+	 * Reports whether {@code token} authorizes service audience
+	 * {@code targetPackage} — either because targetPackage is the grant's own
+	 * entitlement-contract package, or because the grant's (service, rpc) is
+	 * also physically routed through targetPackage as a routing alias (e.g. an
+	 * EventBus-hosted C2S publish RPC declared in one proto package but dialed
+	 * through "eventbus"). An unknown token authorizes nothing.
+	 */
+	public static boolean authorizesAudience(String token, String targetPackage) {
+		Grant g = BY_TOKEN.get(token);
+		if (g == null) {
+			return false;
+		}
+		return g.pkg.equals(targetPackage) || g.routingAliasPackages.contains(targetPackage);
 	}
 
     /** Reports whether token is a known package/capability wildcard grant. */

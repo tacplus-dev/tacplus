@@ -21,6 +21,9 @@ func TestEmitJavaGrantsHelper(t *testing.T) {
 		{Token: "OPENAI_READ_ANY", Package: "openai", CapabilityScope: "READ", ExpandsTo: []string{
 			"OPENAI_OPEN_AI_SERVICE_GET_API_KEY",
 		}},
+		{Token: "TASKS_DELEGATION_PROBE_BUS_STATE_SERVICE_PUBLISH_TO_STREAM", Package: "tasks",
+			ServiceName: "DelegationProbeBusStateService", Rpc: "PublishToStream",
+			RoutingAliasPackages: []string{"eventbus"}},
 	}
 
 	dir := t.TempDir()
@@ -56,6 +59,11 @@ func TestEmitJavaGrantsHelper(t *testing.T) {
 		"public static Optional<Grant> lookup(String token)",
 		"public static boolean isWildcard(String token)",
 		"stay fail-closed",
+		`"DelegationProbeBusStateService"`,
+		`"PublishToStream"`,
+		`List.of("eventbus")`,
+		"public final List<String> routingAliasPackages;",
+		"public static boolean authorizesAudience(String token, String targetPackage)",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("generated Grants.java missing %q", want)

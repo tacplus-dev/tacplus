@@ -1,9 +1,8 @@
 {{- /* Store-agnostic event handler — dispatches a source event to all its projections */ -}}
 {{- /* Generated from (spec.timeseries_type).source annotations */ -}}
-
-// TimeseriesInsertFunc inserts a timeseries row into the timeseries store.
-// tableName is the target table, columns is the ordered column names, row is the ordered values.
-type TimeseriesInsertFunc func(ctx context.Context, tableName string, columns []string, row []interface{}) error
+{{- /* TimeseriesInsertFunc is package-scoped, not per-source-type: it is declared */ -}}
+{{- /* once per package in extraction_handler_support.go, not repeated here — a */ -}}
+{{- /* second handler file in the same package would otherwise redeclare it. */ -}}
 
 // Handle{{.SourceType}} dispatches a {{.SourceType}} to all projection handlers.
 // It calls tsInsert for timeseries projections.

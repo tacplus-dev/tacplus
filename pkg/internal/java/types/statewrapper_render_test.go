@@ -9,14 +9,19 @@ import (
 )
 
 func TestStateWrapperTopicBoundaryUsesTopicRPCsNotWatchRPCs(t *testing.T) {
+	// Topics are backed by bidi-streaming PublishTo*/SubscribeTo* RPCs
+	// (proto/state.go), not unary/blocking-server-streaming RPCs, so a
+	// topic-only state wrapper needs the async stub — but none of the
+	// singleton/collection Watch-loop machinery, which is a separate concern.
 	rendered := renderJavaStateWrapperForTest(t, javaStateWrapperData{
-		Header:           "// generated for test",
-		Package:          "com.example.tacplus.s2sm.internal.state.vservices.demo.demoeventbus",
-		OuterClassName:   "Demo",
-		StateRootName:    "DemoEventBus",
-		StateServiceName: "DemoEventBusStateService",
-		GrpcServiceFQN:   "com.example.tacplus.types.vservices.demo.DemoEventBusStateServiceGrpc",
-		TraceFQN:         "com.example.tacplus.types.sys.trace.Trace",
+		Header:                    "// generated for test",
+		Package:                   "com.example.tacplus.s2sm.internal.state.vservices.demo.demoeventbus",
+		OuterClassName:            "Demo",
+		StateRootName:             "DemoEventBus",
+		StateServiceName:          "DemoEventBusStateService",
+		GrpcServiceFQN:            "com.example.tacplus.types.vservices.demo.DemoEventBusStateServiceGrpc",
+		TraceFQN:                  "com.example.tacplus.types.sys.trace.Trace",
+		EventBusSupportOuterClass: "EventbusSupport",
 		Topics: []javaTopicBoundary{{
 			FieldName:           "eventStream",
 			FieldPascal:         "EventStream",
@@ -27,8 +32,10 @@ func TestStateWrapperTopicBoundaryUsesTopicRPCsNotWatchRPCs(t *testing.T) {
 	})
 
 	for _, expected := range []string{
-		"stateStub.publishToEventStream(value)",
-		"stateStub.subscribeToEventStream(Trace.TraceRequest.getDefaultInstance())",
+		"stateAsyncStub.publishToEventStream(",
+		"EventbusSupport.PublishResponse publishToEventStream(Demo.SensorEvent value)",
+		"stateAsyncStub.subscribeToEventStream(",
+		"outbound.onNext(EventbusSupport.SubscribeRequest.getDefaultInstance());",
 		"public java.util.Iterator<Demo.DemoEventBusEventStreamSubscribeRecord> subscribeToEventStreamRecords()",
 		"final java.util.Iterator<Demo.DemoEventBusEventStreamSubscribeRecord> records = subscribeToEventStreamRecords();",
 		"return records.next().getPayload();",
@@ -39,14 +46,16 @@ func TestStateWrapperTopicBoundaryUsesTopicRPCsNotWatchRPCs(t *testing.T) {
 	}
 
 	for _, unexpected := range []string{
+		"TopicPublishReceipt",
+		"stateStub.publishToEventStream(",
+		"stateStub.subscribeToEventStream(",
 		"watchEventStream",
 		"startWatchEventStream",
-		"stateAsyncStub",
 		"ClientCallStreamObserver",
 		"ClientResponseObserver",
 	} {
 		if strings.Contains(rendered, unexpected) {
-			t.Fatalf("topic-only state wrapper rendered watch machinery %q:\n%s", unexpected, rendered)
+			t.Fatalf("topic-only state wrapper rendered unexpected/dead contract %q:\n%s", unexpected, rendered)
 		}
 	}
 }

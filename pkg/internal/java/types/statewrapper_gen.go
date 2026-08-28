@@ -25,11 +25,11 @@ import (
 
 // javaSingletonBoundary describes a non-repeated message field in the state root.
 type javaSingletonBoundary struct {
-	FieldName    string // camelCase: "roster"
-	FieldPascal  string // PascalCase: "Roster"
-	TypeName     string // Simple: "TeamRoster"
-	JavaType     string // Qualified: "Baseball.TeamRoster"
-	IsPersisted  bool
+	FieldName   string // camelCase: "roster"
+	FieldPascal string // PascalCase: "Roster"
+	TypeName    string // Simple: "TeamRoster"
+	JavaType    string // Qualified: "Baseball.TeamRoster"
+	IsPersisted bool
 }
 
 // javaCollectionBoundary describes a repeated message field in the state root.
@@ -96,15 +96,19 @@ type javaStateWrapperData struct {
 	// to invalidate a REJECTED credential so the retry re-mints instead of
 	// replaying a token the authority no longer accepts.
 	IdentityManagerFQN string // "com.example.chassis.service_im.IdentityManager"
-	Imports          []string
-	Singletons       []javaSingletonBoundary
-	Collections      []javaCollectionBoundary
-	Topics           []javaTopicBoundary
-	StateImports     []javaStateImportField
-	Commands         []javaCommandBoundary
-	Views            []javaViewBoundary
-	ReadOnly         bool // true for :ro (accessors only, no mutators)
-	WriteOnce        bool // true for :worm (write-once read-many: set/add but no lock/delete)
+	// EventBusSupportOuterClass is the generated Java outer class for the
+	// eventbus_support proto (PublishResponse/SubscribeRequest), populated
+	// only when Topics is non-empty.
+	EventBusSupportOuterClass string
+	Imports                   []string
+	Singletons                []javaSingletonBoundary
+	Collections               []javaCollectionBoundary
+	Topics                    []javaTopicBoundary
+	StateImports              []javaStateImportField
+	Commands                  []javaCommandBoundary
+	Views                     []javaViewBoundary
+	ReadOnly                  bool // true for :ro (accessors only, no mutators)
+	WriteOnce                 bool // true for :worm (write-once read-many: set/add but no lock/delete)
 }
 
 // ==================== Aggregator / registry types ====================
@@ -419,11 +423,11 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 			})
 		} else {
 			singletons = append(singletons, javaSingletonBoundary{
-				FieldName:    strutil.ToLowerCamelCase(field.Name),
-				FieldPascal:  strutil.ToPascalCase(field.Name),
-				TypeName:     typeName,
-				JavaType:     javaType,
-				IsPersisted:  field.Annotations["persistence"].BoolValue,
+				FieldName:   strutil.ToLowerCamelCase(field.Name),
+				FieldPascal: strutil.ToPascalCase(field.Name),
+				TypeName:    typeName,
+				JavaType:    javaType,
+				IsPersisted: field.Annotations["persistence"].BoolValue,
 			})
 		}
 	}
@@ -449,6 +453,13 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 		typesImportPath = fmt.Sprintf("%s.types.%s.%s.%s.%s", basePackage, stateTypeDir, serviceName, serviceName, outerClass)
 	}
 
+	var eventBusSupportOuterClass string
+	if len(topics) > 0 {
+		eventBusSupportOuterClass = resolveCrossOuterClass(dp, "eventbus_support")
+		eventBusSupportDir := resolveProtoDir(dp, "eventbus_support")
+		imports = append(imports, fmt.Sprintf("%s.types.%s.%s.%s", basePackage, eventBusSupportDir, "eventbus_support", eventBusSupportOuterClass))
+	}
+
 	imports = append(imports, typesImportPath)
 	imports = uniqueJavaStateImports(imports)
 
@@ -458,23 +469,24 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 	grpcServiceFQN := typesPackage + "." + stateServiceName + "Grpc"
 
 	data := javaStateWrapperData{
-		Header:           header.GeneratedHeader(consts.LangJava, svc.ProtoFile),
-		Package:          javaPackage,
-		OuterClassName:   outerClass,
-		StateRootName:    stateRoot.Name,
-		StateServiceName: stateServiceName,
-		GrpcServiceFQN:   grpcServiceFQN,
-		TraceFQN:         basePackage + ".types.sys.trace.Trace",
-		IdentityManagerFQN: basePackage + ".chassis.service_im.IdentityManager",
-		Imports:          imports,
-		Singletons:       singletons,
-		Collections:      collections,
-		Topics:           topics,
-		StateImports:     stateImports,
-		Commands:         commands,
-		Views:            views,
-		ReadOnly:         accessMode == tactype.AccessRO || (config.HealthStateName != "" && stateRoot.Name == config.HealthStateName),
-		WriteOnce:        accessMode == tactype.AccessWORM,
+		Header:                    header.GeneratedHeader(consts.LangJava, svc.ProtoFile),
+		Package:                   javaPackage,
+		OuterClassName:            outerClass,
+		StateRootName:             stateRoot.Name,
+		StateServiceName:          stateServiceName,
+		GrpcServiceFQN:            grpcServiceFQN,
+		TraceFQN:                  basePackage + ".types.sys.trace.Trace",
+		IdentityManagerFQN:        basePackage + ".chassis.service_im.IdentityManager",
+		EventBusSupportOuterClass: eventBusSupportOuterClass,
+		Imports:                   imports,
+		Singletons:                singletons,
+		Collections:               collections,
+		Topics:                    topics,
+		StateImports:              stateImports,
+		Commands:                  commands,
+		Views:                     views,
+		ReadOnly:                  accessMode == tactype.AccessRO || (config.HealthStateName != "" && stateRoot.Name == config.HealthStateName),
+		WriteOnce:                 accessMode == tactype.AccessWORM,
 	}
 
 	if err := executeJavaTemplate("statewrapper.java.tmpl", "java-statewrapper", javaPackage, "StateClient.java", config, data); err != nil {

@@ -2,7 +2,8 @@
 package {{.Package}};
 
 {{- $hasWatches := or .Singletons .Collections .StateImports}}
-{{- $hasTrace := or $hasWatches .Topics}}
+{{- $needsAsyncStub := or $hasWatches .Topics}}
+{{- $hasTrace := $hasWatches}}
 {{- if or .Collections .Views .Singletons .StateImports}}
 import java.util.ArrayList;
 import java.util.List;
@@ -52,8 +53,10 @@ public class StateClient implements AutoCloseable {
 {{- end}}
     private final Object cacheLock = new Object();
     private {{.StateServiceName}}Grpc.{{.StateServiceName}}BlockingStub stateStub;
-{{- if $hasWatches}}
+{{- if $needsAsyncStub}}
     private {{.StateServiceName}}Grpc.{{.StateServiceName}}Stub stateAsyncStub;
+{{- end}}
+{{- if $hasWatches}}
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean watchesStarted = new AtomicBoolean(false);
     private final ScheduledExecutorService watchExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -85,12 +88,12 @@ public class StateClient implements AutoCloseable {
      */
     public void setChannel(Channel channel, CallCredentials credentials) {
         this.stateStub = {{.StateServiceName}}Grpc.newBlockingStub(channel);
-{{- if $hasWatches}}
+{{- if $needsAsyncStub}}
         this.stateAsyncStub = {{.StateServiceName}}Grpc.newStub(channel);
 {{- end}}
         if (credentials != null) {
             this.stateStub = this.stateStub.withCallCredentials(credentials);
-{{- if $hasWatches}}
+{{- if $needsAsyncStub}}
             this.stateAsyncStub = this.stateAsyncStub.withCallCredentials(credentials);
 {{- end}}
         }
@@ -511,27 +514,124 @@ public class StateClient implements AutoCloseable {
 {{range .Topics}}
 {{if not $.ReadOnly}}
     /**
-     * Publishes a {{.TypeName}} message to the {{.FieldPascal}} topic.
+     * Publishes a {{.TypeName}} message to the {{.FieldPascal}} topic and blocks
+     * for the broker's ack. {{.FieldPascal}} is backed by a bidi-streaming
+     * PublishTo{{.FieldPascal}}/SubscribeTo{{.FieldPascal}} RPC pair (not a unary
+     * call), so publishing opens a single-message stream rather than calling the
+     * blocking stub directly.
      */
-    public {{$.OuterClassName}}.TopicPublishReceipt publishTo{{.FieldPascal}}({{.JavaType}} value) {
-        if (stateStub == null) {
+    public {{$.EventBusSupportOuterClass}}.PublishResponse publishTo{{.FieldPascal}}({{.JavaType}} value) {
+        if (stateAsyncStub == null) {
             throw new IllegalStateException("stateStub not initialized - call setChannel() first");
         }
-        return stateStub.publishTo{{.FieldPascal}}(value);
+        final java.util.concurrent.CompletableFuture<{{$.EventBusSupportOuterClass}}.PublishResponse> ack = new java.util.concurrent.CompletableFuture<>();
+        io.grpc.stub.StreamObserver<{{.JavaType}}> outbound = stateAsyncStub.publishTo{{.FieldPascal}}(
+                new io.grpc.stub.StreamObserver<{{$.EventBusSupportOuterClass}}.PublishResponse>() {
+                    @Override
+                    public void onNext({{$.EventBusSupportOuterClass}}.PublishResponse response) {
+                        ack.complete(response);
+                    }
+
+                    @Override
+                    public void onError(Throwable t) {
+                        ack.completeExceptionally(t);
+                    }
+
+                    @Override
+                    public void onCompleted() {
+                        ack.completeExceptionally(new IllegalStateException(
+                                "{{.FieldPascal}} publish stream closed before an ack was received"));
+                    }
+                });
+        outbound.onNext(value);
+        outbound.onCompleted();
+        try {
+            return ack.get(30, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            throw new RuntimeException("publishTo{{.FieldPascal}} failed", cause);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("publishTo{{.FieldPascal}} interrupted", e);
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new RuntimeException("publishTo{{.FieldPascal}} timed out waiting for ack", e);
+        }
     }
 {{end}}
     /**
-     * Opens a blocking server-streaming subscription to {{.FieldPascal}} records,
-     * including EventBus metadata and payload.
+     * Opens a subscription to {{.FieldPascal}} records, including EventBus
+     * metadata and payload, and returns a blocking iterator over them.
+     * {{.FieldPascal}} is backed by a bidi-streaming RPC: this sends a single
+     * default {{$.EventBusSupportOuterClass}}.SubscribeRequest and half-closes
+     * the request side, then adapts the inbound record stream to a blocking
+     * {@link java.util.Iterator}.
      */
     public java.util.Iterator<{{.SubscribeRecordType}}> subscribeTo{{.FieldPascal}}Records() {
-        if (stateStub == null) {
+        if (stateAsyncStub == null) {
             throw new IllegalStateException("stateStub not initialized - call setChannel() first");
         }
-        return stateStub.subscribeTo{{.FieldPascal}}(Trace.TraceRequest.getDefaultInstance());
+        final java.util.concurrent.BlockingQueue<Object> queue = new java.util.concurrent.LinkedBlockingQueue<>();
+        final Object done = new Object();
+        io.grpc.stub.StreamObserver<{{$.EventBusSupportOuterClass}}.SubscribeRequest> outbound = stateAsyncStub.subscribeTo{{.FieldPascal}}(
+                new io.grpc.stub.StreamObserver<{{.SubscribeRecordType}}>() {
+                    @Override
+                    public void onNext({{.SubscribeRecordType}} value) {
+                        queue.add(value);
+                    }
+
+                    @Override
+                    public void onError(Throwable t) {
+                        queue.add(t);
+                    }
+
+                    @Override
+                    public void onCompleted() {
+                        queue.add(done);
+                    }
+                });
+        outbound.onNext({{$.EventBusSupportOuterClass}}.SubscribeRequest.getDefaultInstance());
+        outbound.onCompleted();
+
+        return new java.util.Iterator<{{.SubscribeRecordType}}>() {
+            private Object next;
+
+            private void advance() {
+                if (next == null) {
+                    try {
+                        next = queue.take();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        next = done;
+                    }
+                }
+            }
+
+            @Override
+            public boolean hasNext() {
+                advance();
+                return next != done;
+            }
+
+            @Override
+            public {{.SubscribeRecordType}} next() {
+                advance();
+                if (next == done) {
+                    throw new java.util.NoSuchElementException();
+                }
+                if (next instanceof Throwable) {
+                    Throwable t = (Throwable) next;
+                    next = null;
+                    throw new RuntimeException("subscribeTo{{.FieldPascal}} stream failed", t);
+                }
+                {{.SubscribeRecordType}} value = ({{.SubscribeRecordType}}) next;
+                next = null;
+                return value;
+            }
+        };
     }
     /**
-     * Opens a blocking server-streaming subscription to the {{.FieldPascal}} topic.
+     * Opens a subscription to the {{.FieldPascal}} topic and returns a blocking
+     * iterator over the payloads (metadata discarded).
      */
     public java.util.Iterator<{{.JavaType}}> subscribeTo{{.FieldPascal}}() {
         final java.util.Iterator<{{.SubscribeRecordType}}> records = subscribeTo{{.FieldPascal}}Records();

@@ -667,6 +667,95 @@ message RecordAnnotation {
   // future change that makes a paged read return counts without rows has
   // crossed that line.
   int32 min_group_size = 6;
+
+  // residency is how long this record type's rows stay resident in MEMORY.
+  //
+  // It is a data-lifecycle property of the type inside ONE store, not a choice
+  // of backing store: field 50024 (cold_store) was retired above because
+  // "tiering is internal to the store service", and that ruling stands. There is
+  // still exactly one record store. This names the WINDOW, and hot/warm/cold are
+  // presets of it.
+  //
+  // Unset = RESIDENCY_HOT, which is what every record does today. Additive, the
+  // same way min_group_size and owner_default are.
+  //
+  // Residency is NOT retention. Retention (field 5) DELETES rows and measures
+  // from the author's business timestamp; residency EVICTS rows from memory and
+  // measures from the store epoch (the (spec.store_epoch) field, stamped by the
+  // wrapper on every write). Eviction is cache maintenance: a warm row evicted
+  // from memory is still complete and queryable on disk.
+  //
+  // Example:
+  //   option (spec.record) = {
+  //     key: "accounting_id" owner: "spiffe_id"
+  //     residency: {window: RESIDENCY_WARM}
+  //   };
+  ResidencyPolicy residency = 7;
+
+  // mutability is whether this record type's rows may be changed after they are
+  // written. It is an ATTRIBUTE, orthogonal to residency: immutable-warm
+  // (accounting) and mutable-warm are both legitimate, and so is either with
+  // RESIDENCY_HOT.
+  //
+  // Unset = MUTABILITY_CRUD, which is what every record does today.
+  //
+  // MUTABILITY_APPEND_ONLY is enforced at BOTH ends or it is decoration: the
+  // generator emits no row-mutating RPC for the type (ValidateMutabilityAnnotations
+  // refuses one at generation), and the generated service wrapper refuses to host
+  // one. This is the same two-ended shape (spec.record).min_group_size already has.
+  Mutability mutability = 8;
+}
+
+// Residency is the memory-residency window preset for a stored record type.
+// The presets are the whole vocabulary; there is no free-form third axis.
+enum Residency {
+  // Unspecified = RESIDENCY_HOT. Absence must keep meaning today's behaviour,
+  // or every record proto in the fleet changes meaning on the P1 upgrade.
+  RESIDENCY_UNSPECIFIED = 0;
+
+  // HOT: in memory forever, or until deleted. Window = unbounded.
+  RESIDENCY_HOT = 1;
+
+  // WARM: in memory for a window; complete and queryable on disk beneath it.
+  // Window = ResidencyPolicy.window_seconds, or the configured default when
+  // that is 0. Rows are evicted from memory at window age and served from disk
+  // thereafter; a write returns the row to the window.
+  RESIDENCY_WARM = 2;
+
+  // COLD: RESERVED, NOT IMPLEMENTED. Semantics would be window = 0 — straight
+  // to disk, never resident — if a high-volume need ever appears. Declaring it
+  // FAILS GENERATION (see ValidateResidencyAnnotations). The value exists so the
+  // refusal can be explicit instead of the declaration being a typo nobody
+  // catches.
+  RESIDENCY_COLD = 3;
+}
+
+// ResidencyPolicy states a record type's memory-residency window.
+message ResidencyPolicy {
+  // window is the preset. Required when residency is declared at all;
+  // RESIDENCY_UNSPECIFIED inside a present ResidencyPolicy is a generation
+  // error, not a silent HOT (an author who wrote the block meant something).
+  Residency window = 1;
+
+  // window_seconds overrides the configured default window. WARM ONLY:
+  // set on HOT or COLD it is a knob nothing reads, and generation REJECTS it
+  // rather than accept an intent tacplus does not honour.
+  // 0 = use the configured default.
+  int64 window_seconds = 2;
+}
+
+// Mutability is whether a stored record type's rows may change after write.
+enum Mutability {
+  // Unspecified = MUTABILITY_CRUD (today's behaviour).
+  MUTABILITY_UNSPECIFIED = 0;
+
+  // CRUD: rows may be updated and deleted by key.
+  MUTABILITY_CRUD = 1;
+
+  // APPEND_ONLY: rows are written once. No row-mutating RPC is generated for
+  // the type and the generated wrapper refuses to host one. Its disk slices are
+  // pure appends — sealed, checksummable units.
+  MUTABILITY_APPEND_ONLY = 2;
 }
 
 // EventAnnotation marks a message as an EventBus event: tacplus generates a topic
@@ -697,6 +786,14 @@ enum CardinalityHint {
 message RetentionPolicy {
   string timestamp_field = 1;   // row field the retention age is measured from
   int64 duration_seconds = 2;   // retain this long after timestamp_field; 0 = indefinite
+
+  // forever declares that this record type's rows are never aged out. It is the
+  // EXPLICIT spelling of what an absent retention block means implicitly, and it
+  // exists so an append-only "forever" dataset can be refused a retention knob —
+  // you cannot refuse a knob on the grounds that another knob is absent.
+  // forever:true with duration_seconds > 0 is a contradiction and fails
+  // generation (ValidateResidencyAnnotations).
+  bool forever = 3;
 }
 
 // DedupStrategy is a store-neutral statement of how duplicate rows are resolved.
@@ -1407,11 +1504,37 @@ extend google.protobuf.FieldOptions {
   // The field type must be string. The key is used as the entry key.
   bool store_key = 50037;
 
-  // quorum_write marks a state field as requiring write quorum.
-  // Writes are acked only after replication to 2+ nodes.
-  // On a single-node cluster, writes succeed immediately (no quorum possible).
-  // Only valid on fields within a service_state or service_store message.
+  // quorum_write marks a state field as requiring write quorum: the write is
+  // acked only after the value is durable on (spec.min_durable_copies) distinct
+  // nodes. Only valid on fields within a service_state or service_store message.
+  //
+  // BELOW THAT THRESHOLD THE WRITE IS REJECTED, NOT ACKED. This comment used to
+  // read "on a single-node cluster, writes succeed immediately (no quorum
+  // possible)" — an implicit auto-degrade on cluster size. That was retired
+  // (ruling, 2026-08-29) because a production cluster that has lost two members
+  // is indistinguishable from a laptop, so the degrade silently converts the
+  // durability guarantee into its absence exactly when it matters. The threshold
+  // is now an explicit knob: see (spec.min_durable_copies) below, which a local
+  // dev tree sets to 1 DELIBERATELY.
   bool quorum_write = 50038;
+
+  // min_durable_copies is how many distinct nodes must hold a value durably
+  // before a (spec.quorum_write) field's write is acked. Default 2 when unset;
+  // 1 is the deliberate single-node development setting.
+  //
+  // A write that cannot reach this many durable copies is REJECTED with
+  // FAILED_PRECONDITION before any local effect — it never acks-then-hopes. That
+  // is the whole point of the knob: the alternative (degrade to whatever the
+  // cluster can manage) is the failure the threshold exists to catch.
+  //
+  // Only valid on a field that also carries (spec.quorum_write): a durability
+  // threshold on a field with no quorum requirement is a knob nothing reads, and
+  // generation REJECTS it rather than accept an intent tacplus does not honour
+  // (ValidateMinDurableCopiesAnnotations).
+  //
+  // Values below 1 are a generation error. A value of 1 disables the
+  // multi-node requirement and is legal, loudly, for local development.
+  int32 min_durable_copies = 50040;
 
   // collected_health marks a state boundary for Sentinel health collection.
   // Sentinel discovers instances via ServiceHealthState, calls a generated
@@ -1572,6 +1695,34 @@ extend google.protobuf.FieldOptions {
   // it is never a (spec.principal)/(spec.store_principal) field and must
   // never be wired into either.
   bool identity_spiffe_actor = 60085;
+
+  // store_epoch: this RECORD int64 field holds the row's STORE EPOCH — Unix
+  // milliseconds of the row's LAST WRITE, stamped by the generated wrapper.
+  //
+  // Same doctrine as (spec.principal)/(spec.store_principal) above: the
+  // annotation says WHERE the value lives, once, on the type; the generated
+  // wrapper owns the stamp so no handler hand-writes it.
+  //
+  // WHERE THE STAMP HAPPENS. A record has no write RPC — it reaches the store
+  // on the store's EventBus subscription (spec.record implies spec.event), so
+  // the stamping seam is the generated service manager's subscription dispatch,
+  // not a request wrapper. There is therefore no caller to refuse: the store's
+  // clock is stamped over whatever arrived, UNCONDITIONALLY, which is a
+  // stronger guarantee than a refusal (the value cannot be caller-influenced at
+  // all) and does not drop the record. A producer that sets the field is not
+  // erroring, it is writing into a slot the store owns.
+  //
+  // The store epoch is what the residency window is measured against, and the
+  // predicate a two-leg query would partition on: memory serves
+  // epoch >= now - window, the disk leg gets epoch < now - window bolted onto
+  // the filter. It is therefore also a RANGE query criterion in the generated
+  // filter, so the field carries (spec.query_field) = {op: QUERY_OP_RANGE}.
+  //
+  // NOT (spec.epoch_expiration) (above, statedb per-entry TTL) and NOT
+  // (spec.record).retention.timestamp_field (the author's business timestamp,
+  // which retention measures from). Three different clocks; only this one is
+  // store-owned.
+  bool store_epoch = 60086;
 }
 
 // QueryOp is the match kind for a (spec.query_field) record filter criterion.

@@ -44,7 +44,7 @@ type ServiceInfo struct {
 	AuthAnyUser    bool     // C2S: any authenticated user can call
 	AuthServices   []string // S2S: allowed caller identities
 	HasMethodAuth  bool     // true if any per-method auth metadata must be registered
-	HostLabel        string   // non-empty for vservices: the SelfPackage of the service that hosts this RPC surface
+	HostLabel      string   // non-empty for vservices: the SelfPackage of the service that hosts this RPC surface
 	// SynthesizedKind is WHICH tacplus-generated surface this is
 	// (parser.SynthesizedKind*), empty for hand-authored services. See the go
 	// generator's field for why the kind, not just the fact, is what matters.
@@ -212,7 +212,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				AuthAnyUser:     anyUser,
 				AuthServices:    service.AuthServices,
 				HasMethodAuth:   hasMethodAuth,
-				HostLabel:         service.HostLabel,
+				HostLabel:       service.HostLabel,
 			})
 		}
 
@@ -702,6 +702,18 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		if why := javaMinGroupSizeUnenforceable(method, san, info.Package); why != "" {
 			return false, fmt.Errorf("%s.%s carries (spec.min_group_size) = %d but %s",
 				targetService.Name, method.Name, method.MinGroupSize, why)
+		}
+		// A row mutation over an append-only record has no guard to render: the
+		// correct generated code for it is none at all.
+		if why := javaAppendOnlyUnenforceable(method, san, info.Package); why != "" {
+			return false, fmt.Errorf("%s.%s must not be generated because %s",
+				targetService.Name, method.Name, why)
+		}
+		// A write whose store epoch this wrapper cannot stamp must fail
+		// generation, not reach a handler with an unstamped epoch.
+		if why := javaStoreEpochUnenforceable(method, san, info.Package); why != "" {
+			return false, fmt.Errorf("%s.%s carries a (spec.store_epoch) field on %s but %s",
+				targetService.Name, method.Name, method.FullInputType, why)
 		}
 		handlerInterface.WriteString(generateJavaHandlerMethod(method, inputType, outputType, crossPkgOuterClasses))
 		effectiveAuthAnyUser := method.AuthAnyUser
@@ -1509,6 +1521,14 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 			inputValidation = fmt.Sprintf(`
             // Validate request before invoking the handler.
             %s.validate%s(request);`, inputHelpers, method.InputType)
+		}
+		// (spec.store_epoch): stamp or refuse before the handler sees the
+		// request. Runs after validation — a request that is not well-formed is
+		// rejected on its own terms before the store writes its clock onto it.
+		if !handlerEmpty {
+			if g := javaStoreEpochStamp(san.storeEpochField(method.FullInputType, servicePackage), "request", "            "); g != "" {
+				inputValidation += "\n" + g
+			}
 		}
 
 		if outputHelpers != "" && !emptyOutput {
@@ -2555,4 +2575,115 @@ func generateGrpcRootAggregator(config *tactype.Config, wrappers []generatedGrpc
 
 	zap.L().Info("Generated root GrpcServers.java", zap.String("path", outputPath))
 	return nil
+}
+
+// ----- (spec.store_epoch) and (spec.record).mutability in the service wrapper -----
+//
+// These are the RUNTIME end of the two annotations whose generation end lives in
+// pkg/internal/common/parser (ValidateResidencyAnnotations, validateAppendOnlyMethods).
+// Both follow the shape (spec.record).min_group_size already has above: the same
+// declared value drives a generation-time refusal AND a rendered guard, and the
+// generator FAILS rather than emit a surface it cannot guard.
+
+// storeEpochField resolves WHICH field of a message carries the row's store epoch,
+// or "" when it declares none. The location is the annotation's whole job — the
+// stamp itself is the wrapper's, exactly as with (spec.principal).
+//
+// Well-formedness (int64, non-repeated, RANGE-queryable) is enforced once, at
+// parse time, by parser.ValidateResidencyAnnotations. This is a lookup, not a
+// second opinion.
+func (es *javaEgressSanitizer) storeEpochField(fullType, servicePackage string) string {
+	if es == nil || fullType == "" {
+		return ""
+	}
+	pkg, name := splitJavaEgressFQN(fullType, servicePackage)
+	msg, ok := es.msgs[pkg+"\x00"+name]
+	if !ok {
+		return ""
+	}
+	for i := range msg.Fields {
+		if msg.Fields[i].Annotations["store_epoch"].BoolValue {
+			return msg.Fields[i].Name
+		}
+	}
+	return ""
+}
+
+// isAppendOnlyRecord reports whether fullType is a record declaring
+// MUTABILITY_APPEND_ONLY.
+func (es *javaEgressSanitizer) isAppendOnlyRecord(fullType, servicePackage string) bool {
+	if es == nil || fullType == "" {
+		return false
+	}
+	pkg, name := splitJavaEgressFQN(fullType, servicePackage)
+	msg, ok := es.msgs[pkg+"\x00"+name]
+	if !ok {
+		return false
+	}
+	if ann, ok := msg.Annotations["record"]; !ok || !ann.BoolValue {
+		return false
+	}
+	return msg.Annotations["record_mutability"].StringValue == "MUTABILITY_APPEND_ONLY"
+}
+
+// javaStoreEpochStamp renders the (spec.store_epoch) stamp-or-refuse check over a
+// request in scope. valueExpr names the request; indent is the leading whitespace
+// of the block it is spliced into.
+//
+// Unlike (spec.principal), there is no "equal passes" case: the store owns this
+// value outright, so it is never caller-supplied and any supplied value — even a
+// correct-looking one — is a refusal. INVALID_ARGUMENT, in the wrapper, never in
+// the handler.
+func javaStoreEpochStamp(field, valueExpr, indent string) string {
+	if field == "" {
+		return ""
+	}
+	p := javaPascalField(field)
+	return fmt.Sprintf(`%[1]s// (spec.store_epoch) %[2]s: the row's last-write clock is the STORE's, never
+%[1]s// the caller's. Unset -> stamped here; set -> refused. The wrapper owns the
+%[1]s// stamp so no handler hand-writes it (same doctrine as (spec.principal)).
+%[1]sif (%[3]s.get%[4]s() != 0L) {
+%[1]s    throw new ProtoException(ProtoException.INVALID_ARGUMENT, "%[2]s is stamped by the store and must not be supplied by the caller");
+%[1]s}
+%[1]s%[3]s = %[3]s.toBuilder().set%[4]s(System.currentTimeMillis()).build();
+`, indent, field, valueExpr, p)
+}
+
+// javaStoreEpochUnenforceable reports why the (spec.store_epoch) stamp cannot be
+// generated for a method that carries an epoch-bearing request, or "" when it
+// can. A write the wrapper cannot stamp must fail generation rather than reach a
+// handler with an unstamped epoch — an unstamped store epoch is a row the
+// residency window measures as infinitely old.
+func javaStoreEpochUnenforceable(method *parser.MethodInfo, san *javaEgressSanitizer, servicePackage string) string {
+	if san.storeEpochField(method.FullInputType, servicePackage) == "" {
+		return ""
+	}
+	if method.ClientStreaming || method.ServerStreaming {
+		return "the stamp is generated on unary requests only; a streamed write would need a per-item stamp the wrapper does not render"
+	}
+	return ""
+}
+
+// javaAppendOnlyUnenforceable reports why this wrapper must not host the method,
+// or "" when it may. A row mutation over an append-only record has no guard to
+// render — the correct generated code for it is NO generated code — so hosting it
+// is a generation failure, which is what "emits no mutating RPCs" means at the
+// wrapper end.
+//
+// parser.validateAppendOnlyMethods refuses the same method earlier, at the
+// descriptor. This is the second end: the two read the same annotation through
+// the same definition of "row-mutating" (parser.IsRowMutatingPattern), so a
+// revert of either one is caught by the other rather than shipping a mutating
+// surface for a write-once record.
+func javaAppendOnlyUnenforceable(method *parser.MethodInfo, san *javaEgressSanitizer, servicePackage string) string {
+	if !parser.IsRowMutatingPattern(method.Class) {
+		return ""
+	}
+	for _, t := range []string{method.FullInputType, method.FullOutputType} {
+		if san.isAppendOnlyRecord(t, servicePackage) {
+			return fmt.Sprintf("it carries %s, which declares (spec.record).mutability = MUTABILITY_APPEND_ONLY; "+
+				"an append-only record's rows are written once, so no row-mutating RPC may be hosted for the type", t)
+		}
+	}
+	return ""
 }

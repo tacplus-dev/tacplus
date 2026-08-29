@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/verbs"
 	"go.uber.org/zap"
 )
 
@@ -33,6 +35,10 @@ type recordType struct {
 	// minGroupSize is (spec.record).min_group_size: the smallest result size the
 	// record's size-only RPCs may disclose. 0 = undeclared, no stamp.
 	minGroupSize int32
+	// appendOnly is (spec.record).mutability = MUTABILITY_APPEND_ONLY: this
+	// record's rows are written once. The plane emits no row-mutating RPC for
+	// such a type, and assertNoRowMutatingRPCs holds the template to that.
+	appendOnly bool
 }
 
 // recordFilter is a (spec.query_field) criterion on a record field — a typed
@@ -186,6 +192,10 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 			if m, ok := msg.Annotations["record_min_group_size"]; ok {
 				minGroupSize = int32(m.IntValue)
 			}
+			// mutability is declared on the RECORD and read by the emission
+			// guard below; carried here so "is this type append-only" has one
+			// answer on the plane, not one per call site.
+			appendOnly := msg.Annotations["record_mutability"].StringValue == "MUTABILITY_APPEND_ONLY"
 			records = append(records, recordType{
 				typeName:     msg.Name,
 				pkg:          fd.Package,
@@ -193,6 +203,7 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 				key:          key,
 				filters:      filters,
 				minGroupSize: minGroupSize,
+				appendOnly:   appendOnly,
 			})
 		}
 	}
@@ -481,8 +492,20 @@ message %[1]sWatchEvent {
 	// Create<T>Query is the lifecycle's single entry point: every later call
 	// carries only the handle it returns, so a per-caller row filter can later be
 	// attached there without reshaping the c2s RPC boundary.
-	sb.WriteString(recordMapS2SService(plane, records))
-	sb.WriteString(recordQueryC2SService(plane, records))
+	s2s := recordMapS2SService(plane, records)
+	c2s := recordQueryC2SService(plane, records)
+	// (spec.record).mutability generation end, on the surface the generator
+	// itself emits. ValidateAppendOnlyMethods refuses an AUTHOR-declared row
+	// mutation; this refuses a GENERATOR-emitted one, so a future edit that
+	// teaches the template a row-write verb cannot ship it for an append-only
+	// record with every gate still green.
+	for _, half := range []string{s2s, c2s} {
+		if err := assertNoRowMutatingRPCs(half, records); err != nil {
+			return fmt.Errorf("record query plane for trait %q in %s: %w", plane.name, relPath, err)
+		}
+	}
+	sb.WriteString(s2s)
+	sb.WriteString(c2s)
 
 	var buf strings.Builder
 	buf.Write(content)
@@ -662,4 +685,78 @@ func injectImports(content []byte, imports []string) []byte {
 	result = append(result, imports...)
 	result = append(result, lines[lastImportIdx+1:]...)
 	return []byte(strings.Join(result, "\n"))
+}
+
+// emittedRPCSignature matches an emitted RPC line, capturing the method name and
+// its request and response message types (with any `stream` marker dropped).
+var emittedRPCSignature = regexp.MustCompile(
+	`(?m)^\s*rpc\s+([A-Za-z0-9_]+)\s*\(\s*(?:stream\s+)?([A-Za-z0-9_.]+)\s*\)\s*returns\s*\(\s*(?:stream\s+)?([A-Za-z0-9_.]+)\s*\)`)
+
+// assertNoRowMutatingRPCs refuses a rendered plane half that carries a
+// row-mutating RPC over an append-only record type.
+//
+// A ROW-MUTATING RPC for record T is an RPC whose verb resolves to the UPDATE or
+// DELETE pattern and whose REQUEST OR RESPONSE MESSAGE IS T — the same definition
+// parser.AppendOnlyRecordOnMethod applies to author-declared RPCs, so the two ends
+// cannot drift into meaning different things. The plane's Update<T>Query and
+// Delete<T>Query are deliberately NOT caught: they carry Refine<T>Request,
+// QueryHandle and QueryStats, never T, because they mutate the query predicate
+// and the query's lifetime rather than a stored row.
+//
+// This is a generator self-check, not an author diagnostic: today the template
+// emits no row write at all, so it can only fire on a future template edit. That
+// is exactly what it is for — the alternative is an append-only record acquiring
+// a row-write RPC with every gate green.
+func assertNoRowMutatingRPCs(planeText string, records []recordType) error {
+	appendOnly := make(map[string]bool)
+	for _, r := range records {
+		if r.appendOnly {
+			appendOnly[r.typeName] = true
+			appendOnly[r.pkg+"."+r.typeName] = true
+		}
+	}
+	if len(appendOnly) == 0 {
+		return nil
+	}
+	var errs []string
+	for _, m := range emittedRPCSignature.FindAllStringSubmatch(planeText, -1) {
+		rpcName, reqType, respType := m[1], m[2], m[3]
+		verb := leadingVerbOf(rpcName)
+		if verb == "" {
+			continue
+		}
+		def, ok := verbs.Lookup(verb)
+		if !ok || (def.Pattern != verbs.PatternUpdate && def.Pattern != verbs.PatternDelete) {
+			continue
+		}
+		for _, t := range []string{reqType, respType} {
+			if appendOnly[t] {
+				errs = append(errs, fmt.Sprintf(
+					"rpc %s(%s) returns (%s) is a %s carrying %s, which declares "+
+						"(spec.record).mutability = MUTABILITY_APPEND_ONLY; an append-only record's rows are "+
+						"written once, so the plane must emit no row-mutating RPC for the type",
+					rpcName, reqType, respType, def.Pattern, t))
+				break
+			}
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	sort.Strings(errs)
+	return fmt.Errorf("append-only record mutation errors:\n  %s", strings.Join(errs, "\n  "))
+}
+
+// leadingVerbOf returns the longest registered canonical verb that prefixes an
+// emitted RPC name, or "" when none does. Longest-match so "Subscribe" is not
+// read as "Sub", and canonical-only so a folded synonym is not silently treated
+// as its canonical (an unclassifiable name fails the verb gate elsewhere).
+func leadingVerbOf(rpcName string) string {
+	best := ""
+	for v := range verbs.All() {
+		if len(v) > len(best) && strings.HasPrefix(rpcName, v) {
+			best = v
+		}
+	}
+	return best
 }

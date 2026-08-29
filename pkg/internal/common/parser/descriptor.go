@@ -1773,6 +1773,28 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 					IntValue: int64(val.GetMinGroupSize()),
 				}
 			}
+			// residency is the memory-residency WINDOW; retention above is row
+			// DELETION. Two clocks, deliberately (see the field comments in
+			// spec.proto). Carried whenever the block is PRESENT — including a
+			// RESIDENCY_UNSPECIFIED window and a RESIDENCY_COLD one, both of
+			// which ValidateResidencyAnnotations rejects at generation time
+			// rather than being silently dropped here into today's HOT default.
+			if r := residencyPolicyEntry(val.GetResidency()); r != nil {
+				annotations["record_residency"] = model.AnnotationValue{
+					Type:            model.AnnotationTypeString,
+					StringValue:     r.Window,
+					RecordResidency: r,
+				}
+			}
+			// mutability is an ATTRIBUTE orthogonal to residency. Unset =
+			// MUTABILITY_CRUD (today's behaviour), so only a declared value is
+			// carried; MUTABILITY_APPEND_ONLY is what suppresses row mutation.
+			if m := val.GetMutability(); m != spec.Mutability_MUTABILITY_UNSPECIFIED {
+				annotations["record_mutability"] = model.AnnotationValue{
+					Type:        model.AnnotationTypeString,
+					StringValue: m.String(),
+				}
+			}
 		}
 	}
 
@@ -1947,6 +1969,12 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 	}
 	if proto.HasExtension(opts, spec.E_StorePrincipal) && proto.GetExtension(opts, spec.E_StorePrincipal).(bool) {
 		annotations["store_principal"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
+	// store_epoch: where the row's last-write clock lives on the type. Same
+	// doctrine as the two above — the annotation owns the LOCATION, the generated
+	// wrapper owns the stamp.
+	if proto.HasExtension(opts, spec.E_StoreEpoch) && proto.GetExtension(opts, spec.E_StoreEpoch).(bool) {
+		annotations["store_epoch"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 	}
 	// SPIFFE identity annotations (plan D5)
 	if proto.HasExtension(opts, spec.E_IdentityNamespace) && proto.GetExtension(opts, spec.E_IdentityNamespace).(bool) {
@@ -2213,6 +2241,18 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 		annotations["quorum_write"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 	}
 
+	// min_durable_copies (int32) - how many distinct nodes must hold the value
+	// durably before a quorum_write acks. Carried whenever DECLARED, including a
+	// value below 1 and a value on a field with no quorum_write: both are
+	// rejected by ValidateMinDurableCopiesAnnotations at generation time rather
+	// than silently dropped here into the default.
+	if proto.HasExtension(opts, spec.E_MinDurableCopies) {
+		annotations["min_durable_copies"] = model.AnnotationValue{
+			Type:     model.AnnotationTypeInt,
+			IntValue: int64(proto.GetExtension(opts, spec.E_MinDurableCopies).(int32)),
+		}
+	}
+
 	// collected_health (bool) - marks boundary for Sentinel health collection
 	if proto.HasExtension(opts, spec.E_CollectedHealth) && proto.GetExtension(opts, spec.E_CollectedHealth).(bool) {
 		annotations["collected_health"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
@@ -2444,6 +2484,23 @@ func retentionPolicyEntry(r *spec.RetentionPolicy) *model.RetentionPolicyEntry {
 	return &model.RetentionPolicyEntry{
 		TimestampField:  r.GetTimestampField(),
 		DurationSeconds: r.GetDurationSeconds(),
+		Forever:         r.GetForever(),
+	}
+}
+
+// residencyPolicyEntry converts a spec.ResidencyPolicy into its model form,
+// returning nil when the policy is absent (unset = RESIDENCY_HOT, which is what
+// every record does today). A PRESENT block is always carried, window preset and
+// all: an author who wrote the block meant something, and deciding here that an
+// unspecified or unimplemented window is "really" HOT is the fail-silent class
+// ValidateResidencyAnnotations exists to close.
+func residencyPolicyEntry(r *spec.ResidencyPolicy) *model.ResidencyPolicyEntry {
+	if r == nil {
+		return nil
+	}
+	return &model.ResidencyPolicyEntry{
+		Window:        r.GetWindow().String(),
+		WindowSeconds: r.GetWindowSeconds(),
 	}
 }
 
@@ -2852,6 +2909,14 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 	if len(classificationFailures) > 0 {
 		return nil, fmt.Errorf("rpc verb/pattern classification failed for %d method(s): %s",
 			len(classificationFailures), strings.Join(classificationFailures, "; "))
+	}
+
+	// (spec.record).mutability = MUTABILITY_APPEND_ONLY, generation end: no
+	// service may declare a row-mutating RPC over an append-only record. Runs
+	// here, immediately after classification, because the refusal is defined on
+	// the resolved verb PATTERN and not on an RPC name.
+	if err := validateAppendOnlyMethods(info.Services, appendOnlyRecordTypes(p)); err != nil {
+		return nil, err
 	}
 
 	// Convert messages

@@ -216,6 +216,23 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 			return fmt.Errorf("%s.%s carries (spec.min_group_size) = %d, but the guard is generated for Java service wrappers only; a Rust host of this record query plane would serve it unguarded",
 				targetService.Name, method.Name, method.MinGroupSize)
 		}
+		// (spec.record).mutability = MUTABILITY_APPEND_ONLY: a row mutation over
+		// a write-once record has no guard to render in ANY language, so hosting
+		// it is a generation failure here too. Same refusal the Java wrapper
+		// makes (javaAppendOnlyUnenforceable), reached through the same
+		// definition of "row-mutating".
+		if t := rustAppendOnlyRecordOnMethod(method, san, info.Package); t != "" {
+			return fmt.Errorf("%s.%s must not be generated: it carries %s, which declares (spec.record).mutability = MUTABILITY_APPEND_ONLY; an append-only record's rows are written once, so no row-mutating RPC may be hosted for the type",
+				targetService.Name, method.Name, t)
+		}
+		// (spec.store_epoch) is stamped in the generated Java service wrapper
+		// only. A Rust host would reach its handler with an unstamped epoch — a
+		// row the residency window measures as infinitely old — so refuse to
+		// generate rather than write the wrong clock silently.
+		if f := rustStoreEpochField(method.FullInputType, san, info.Package); f != "" {
+			return fmt.Errorf("%s.%s takes %s, whose field %q carries (spec.store_epoch), but the stamp is generated for Java service wrappers only; a Rust host of this write would leave the store epoch unstamped",
+				targetService.Name, method.Name, method.FullInputType, f)
+		}
 		// (spec.store_principal) is enforced on the unary egress seam only. A
 		// PAGE or streaming method carrying such rows would return them
 		// unfiltered, so refuse to generate rather than under-enforce silently.
@@ -1671,4 +1688,52 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 %s
 	        Ok(tonic::Response::new(resp))
 	    }`, methodSnake, inputType, outputType, authBlock, reqMut, fullMethod, validationBlock, traceAppend, respMut, methodSnake, handlerArgs, responseValidationBlock, outputType, traceErrorOnResult, traceCopy), nil
+}
+
+// rustStoreEpochField returns the name of fullType's (spec.store_epoch) field, or
+// "" when it declares none. The Rust wrapper never STAMPS it — the stamp is
+// generated for Java service wrappers only — so this exists purely so a Rust host
+// of an epoch-bearing write fails generation instead of writing an unstamped row.
+func rustStoreEpochField(fullType string, san *rustEgressSanitizer, servicePackage string) string {
+	if san == nil || fullType == "" {
+		return ""
+	}
+	pkg, name := splitRustEgressFQN(fullType, servicePackage)
+	msg, ok := san.msgs[pkg+"\x00"+name]
+	if !ok {
+		return ""
+	}
+	for i := range msg.Fields {
+		if msg.Fields[i].Annotations["store_epoch"].BoolValue {
+			return msg.Fields[i].Name
+		}
+	}
+	return ""
+}
+
+// rustAppendOnlyRecordOnMethod returns the append-only record type a row-mutating
+// method carries, or "" when the method is not one. Same definition of
+// "row-mutating" the parser and the Java wrapper use (parser.IsRowMutatingPattern),
+// so the three ends cannot drift apart.
+func rustAppendOnlyRecordOnMethod(method *parser.MethodInfo, san *rustEgressSanitizer, servicePackage string) string {
+	if san == nil || !parser.IsRowMutatingPattern(method.Class) {
+		return ""
+	}
+	for _, t := range []string{method.FullInputType, method.FullOutputType} {
+		if t == "" {
+			continue
+		}
+		pkg, name := splitRustEgressFQN(t, servicePackage)
+		msg, ok := san.msgs[pkg+"\x00"+name]
+		if !ok {
+			continue
+		}
+		if ann, ok := msg.Annotations["record"]; !ok || !ann.BoolValue {
+			continue
+		}
+		if msg.Annotations["record_mutability"].StringValue == "MUTABILITY_APPEND_ONLY" {
+			return t
+		}
+	}
+	return ""
 }

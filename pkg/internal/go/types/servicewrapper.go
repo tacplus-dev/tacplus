@@ -218,6 +218,23 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 				return fmt.Errorf("%s.%s carries (spec.min_group_size) = %d, but the guard is generated for Java service wrappers only; a Go host of this record query plane would serve it unguarded",
 					service.Name, method.Name, method.MinGroupSize)
 			}
+			// (spec.record).mutability = MUTABILITY_APPEND_ONLY: a row mutation
+			// over a write-once record has no guard to render in ANY language,
+			// so hosting it is a generation failure here too. Same refusal the
+			// Java wrapper makes (javaAppendOnlyUnenforceable), reached through
+			// the same definition of "row-mutating".
+			if t := goAppendOnlyRecordOnMethod(method, san, info.Package); t != "" {
+				return fmt.Errorf("%s.%s must not be generated: it carries %s, which declares (spec.record).mutability = MUTABILITY_APPEND_ONLY; an append-only record's rows are written once, so no row-mutating RPC may be hosted for the type",
+					service.Name, method.Name, t)
+			}
+			// (spec.store_epoch) is stamped in the generated Java service
+			// wrapper only. A Go host would reach its handler with an unstamped
+			// epoch — a row the residency window measures as infinitely old —
+			// so refuse to generate rather than write the wrong clock silently.
+			if f := goStoreEpochField(method.FullInputType, san, info.Package); f != "" {
+				return fmt.Errorf("%s.%s takes %s, whose field %q carries (spec.store_epoch), but the stamp is generated for Java service wrappers only; a Go host of this write would leave the store epoch unstamped",
+					service.Name, method.Name, method.FullInputType, f)
+			}
 			grpcWrappers.WriteString(generateGRPCWrapper(service, method, info.Package, svc.ParentDir, svc.GrpcName, accountingMap, info.CrossPackageTypes, skippedTraceTypes, san))
 			grpcWrappers.WriteString("\n")
 
@@ -1579,4 +1596,52 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 %s%s%s
 	return resp, nil
 }`, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, unaryAuth, callerExtract, inputValidation, handlerCall, traceErrorCopy, unarySan, outputValidation, traceResponseCopy)
+}
+
+// goStoreEpochField returns the name of fullType's (spec.store_epoch) field, or
+// "" when it declares none. The Go wrapper never STAMPS it — the stamp is
+// generated for Java service wrappers only — so this exists purely so a Go host
+// of an epoch-bearing write fails generation instead of writing an unstamped row.
+func goStoreEpochField(fullType string, san *egressSanitizer, servicePackage string) string {
+	if san == nil || fullType == "" {
+		return ""
+	}
+	pkg, name := splitEgressFQN(fullType, servicePackage)
+	msg, ok := san.msgs[pkg+"\x00"+name]
+	if !ok {
+		return ""
+	}
+	for i := range msg.Fields {
+		if msg.Fields[i].Annotations["store_epoch"].BoolValue {
+			return msg.Fields[i].Name
+		}
+	}
+	return ""
+}
+
+// goAppendOnlyRecordOnMethod returns the append-only record type a row-mutating
+// method carries, or "" when the method is not one. Same definition of
+// "row-mutating" the parser and the Java wrapper use (parser.IsRowMutatingPattern),
+// so the three ends cannot drift apart.
+func goAppendOnlyRecordOnMethod(method *parser.MethodInfo, san *egressSanitizer, servicePackage string) string {
+	if san == nil || !parser.IsRowMutatingPattern(method.Class) {
+		return ""
+	}
+	for _, t := range []string{method.FullInputType, method.FullOutputType} {
+		if t == "" {
+			continue
+		}
+		pkg, name := splitEgressFQN(t, servicePackage)
+		msg, ok := san.msgs[pkg+"\x00"+name]
+		if !ok {
+			continue
+		}
+		if ann, ok := msg.Annotations["record"]; !ok || !ann.BoolValue {
+			continue
+		}
+		if msg.Annotations["record_mutability"].StringValue == "MUTABILITY_APPEND_ONLY" {
+			return t
+		}
+	}
+	return ""
 }

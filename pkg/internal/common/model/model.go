@@ -167,6 +167,16 @@ const (
 type RetentionPolicyEntry struct {
 	TimestampField  string // row field the retention age is measured from
 	DurationSeconds int64  // retain this long after TimestampField; 0 = indefinite
+	Forever         bool   // rows are never aged out; the EXPLICIT spelling of an absent policy
+}
+
+// ResidencyPolicyEntry is a record type's memory-residency window: how long its
+// rows stay resident in MEMORY, measured from the (spec.store_epoch) field.
+// Distinct from RetentionPolicyEntry, which DELETES rows and measures from the
+// author's business timestamp.
+type ResidencyPolicyEntry struct {
+	Window        string // "RESIDENCY_UNSPECIFIED" | "RESIDENCY_HOT" | "RESIDENCY_WARM" | "RESIDENCY_COLD"
+	WindowSeconds int64  // WARM only; 0 = use the configured default
 }
 
 // DedupPolicyEntry is the store-neutral duplicate-resolution policy.
@@ -214,6 +224,7 @@ type AnnotationValue struct {
 	EventWatchEntries      []EventBusBindingEntry       // For event_watch annotations
 	TransformationEntries  []TransformationEntry        // For transformation annotations
 	RecordRetention        *RetentionPolicyEntry        // For (spec.record).retention (store-neutral)
+	RecordResidency        *ResidencyPolicyEntry        // For (spec.record).residency (memory-residency window)
 	TimeseriesDedup        *DedupPolicyEntry            // For timeseries_type dedup (store-neutral)
 }
 

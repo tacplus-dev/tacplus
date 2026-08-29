@@ -168,6 +168,11 @@ type SubscriptionEntry struct {
 	// type declares none). RESIDENCY_WARM selects a per-INSTANCE consumer group
 	// for the topic — see javaSubscriptionEntry.PerInstanceConsumerGroup.
 	SourceResidency string
+	// SourceStoreEpochField is SourceTypeFqn's (spec.store_epoch) field name ("" when
+	// the type declares none). A record has no write RPC, so this subscription IS
+	// the write path into the store and the dispatch is where the store's clock is
+	// stamped — see spec.proto's store_epoch comment.
+	SourceStoreEpochField string
 }
 
 // GetSmPrefix returns the service-manager directory prefix ("s2sm", "c2sm", "c2dm", or "w2sm").

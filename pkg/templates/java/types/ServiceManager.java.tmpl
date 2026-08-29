@@ -1199,6 +1199,15 @@ public class ServiceManager implements AutoCloseable {
                 while (!Thread.currentThread().isInterrupted()) {
                     try {
                         subscriber.subscribe((event, meta) -> {
+{{- if .StoreEpochFieldPascal}}
+                            // (spec.store_epoch) {{.StoreEpochField}}: a record has no write RPC —
+                            // it reaches this store on this subscription — so this dispatch is the
+                            // write path and the store's clock is stamped here, over whatever
+                            // arrived. Unconditional, not stamp-or-refuse: there is no caller on a
+                            // subscription to refuse, and an unstamped row cannot be ordered
+                            // against the other nodes' redo logs at restore.
+                            event = event.toBuilder().set{{.StoreEpochFieldPascal}}(System.currentTimeMillis()).build();
+{{- end}}
                             handler.{{.HandlerMethodName}}(event,
                                     new Handler.SubscriptionMeta(meta.offset, meta.timestamp, meta.key, meta.topic, meta.partition));
                         });

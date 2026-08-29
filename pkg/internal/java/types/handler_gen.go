@@ -85,6 +85,15 @@ type javaSubscriptionEntry struct {
 	// and wrong for a node-local one. A per-instance group makes the broker fan
 	// the topic out to every instance instead of splitting it.
 	PerInstanceConsumerGroup bool
+	// StoreEpochFieldPascal is the PascalCase stem of the source record's
+	// (spec.store_epoch) field ("" when it declares none), e.g. "StoreEpochMs".
+	// A record has no write RPC, so this dispatch is the write path into the
+	// store and the place the store's clock is stamped — unconditionally, over
+	// whatever arrived, because there is no caller here to refuse (see
+	// spec.proto's store_epoch comment).
+	StoreEpochFieldPascal string
+	// StoreEpochField is the same field's proto name, for the emitted comment.
+	StoreEpochField string
 }
 
 // javaTargetServiceEntry describes a unique target service for ServiceConnection creation.
@@ -370,6 +379,9 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 			TargetService:     targetService,
 
 			PerInstanceConsumerGroup: sub.SourceResidency == "RESIDENCY_WARM",
+
+			StoreEpochFieldPascal: javaPascalField(sub.SourceStoreEpochField),
+			StoreEpochField:       sub.SourceStoreEpochField,
 		})
 	}
 

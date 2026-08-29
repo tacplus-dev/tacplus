@@ -532,6 +532,11 @@ type SubscriptionResolution struct {
 	TypeFqn   string // e.g. "sensor.SensorEvent"
 	ProtoDir  string // e.g. "common", "services"
 	Residency string // (spec.record).residency of TypeFqn, "" when it declares none
+	// StoreEpochField is the name of TypeFqn's (spec.store_epoch) field, "" when
+	// it declares none. A record has no write RPC — it reaches a store on the
+	// store's EventBus subscription — so the subscription dispatch is the seam
+	// the store's clock is stamped at. See spec.proto's store_epoch comment.
+	StoreEpochField string
 }
 
 // ResolveSubscriptionSource resolves the fully-qualified type name and proto
@@ -554,9 +559,10 @@ func ResolveSubscriptionSource(p *parser.DescriptorParser, flatDir string, sd Su
 							protoDir = ""
 						}
 						return SubscriptionResolution{
-							TypeFqn:   field.Type,
-							ProtoDir:  protoDir,
-							Residency: recordResidency(p, field.Type),
+							TypeFqn:         field.Type,
+							ProtoDir:        protoDir,
+							Residency:       recordResidency(p, field.Type),
+							StoreEpochField: recordStoreEpochField(p, field.Type),
 						}
 					}
 				}
@@ -590,6 +596,37 @@ func recordResidency(p *parser.DescriptorParser, typeFqn string) string {
 			}
 			if r := msg.Annotations["record_residency"].RecordResidency; r != nil {
 				return r.Window
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// recordStoreEpochField returns the name of the (spec.store_epoch) field declared
+// by the message named by typeFqn, or "" when the type is not found or declares
+// none.
+//
+// Same shape as recordResidency, and for the same reason: a lookup, not a second
+// opinion. The field's well-formedness (int64, non-repeated, RANGE-queryable) is
+// enforced once at parse time by parser.ValidateResidencyAnnotations.
+func recordStoreEpochField(p *parser.DescriptorParser, typeFqn string) string {
+	if typeFqn == "" {
+		return ""
+	}
+	for _, fd := range p.GetAllFiles() {
+		if fd.Package == "" || !strings.HasPrefix(typeFqn, fd.Package+".") {
+			continue
+		}
+		for mi := range fd.Messages {
+			msg := &fd.Messages[mi]
+			if fd.Package+"."+msg.Name != typeFqn {
+				continue
+			}
+			for i := range msg.Fields {
+				if msg.Fields[i].Annotations["store_epoch"].BoolValue {
+					return msg.Fields[i].Name
+				}
 			}
 			return ""
 		}

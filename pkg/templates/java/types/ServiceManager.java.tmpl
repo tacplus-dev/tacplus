@@ -618,6 +618,41 @@ public class ServiceManager implements AutoCloseable {
         identity.close();
     }
 
+{{- if .HasWarmSubscriptions}}
+
+    /**
+     * perInstanceConsumerGroup returns the consumer group for a topic whose record
+     * type declares (spec.record).residency = RESIDENCY_WARM.
+     *
+     * <p>Every other topic subscribes under the bare service label, so the broker
+     * splits the topic across the service's instances — each record reaches exactly
+     * one of them. That is correct when the destination is shared cluster-wide. A
+     * warm record's destination is NODE-LOCAL, and a node-local store is only
+     * complete if that node sees every record, so warm topics must be fanned out
+     * rather than split. Appending the instance's own identity to the label gives
+     * each instance a group of its own, which is what makes the broker fan out.
+     *
+     * <p>The identity must be STABLE across restarts, or every restart would
+     * abandon a consumer group and re-read the topic from the beginning under a new
+     * one. POD_NAME is stable for a given pod and is injected by the operator; the
+     * hostname is the same string in Kubernetes and covers running outside it.
+     * There is deliberately no fall back to the shared label: silently re-sharding
+     * a node-local store is the failure this method exists to prevent.
+     */
+    private static String perInstanceConsumerGroup(String serviceLabel) {
+        String instance = System.getenv("POD_NAME");
+        if (instance == null || instance.isEmpty()) {
+            try {
+                instance = java.net.InetAddress.getLocalHost().getHostName();
+            } catch (java.net.UnknownHostException e) {
+                throw new IllegalStateException(
+                        "a RESIDENCY_WARM topic needs a per-instance consumer group, but neither POD_NAME nor a hostname is available", e);
+            }
+        }
+        return serviceLabel + "-" + instance;
+    }
+{{- end}}
+
     private Thread startManagedThread(String name, boolean daemon, Runnable body) {
         Thread t = new Thread(() -> {
             try {
@@ -1126,7 +1161,16 @@ public class ServiceManager implements AutoCloseable {
         List<Thread> subThreads = new ArrayList<>();
 {{- range .Subscriptions}}
         {
+{{- if .PerInstanceConsumerGroup}}
+            // (spec.record).residency = RESIDENCY_WARM on {{.TypeName}}: this topic
+            // feeds a NODE-LOCAL store, so this node's copy is only complete if it
+            // receives every record. Under the shared service-label group the broker
+            // hands each record to exactly ONE instance. A per-instance group makes
+            // it fan the topic out to all of them instead.
+            String serviceLabel = perInstanceConsumerGroup("{{$.ServiceLabel}}");
+{{- else}}
             String serviceLabel = "{{$.ServiceLabel}}";
+{{- end}}
             // The target is re-resolved from ServiceHealthState on every
             // (re)connect attempt (inside the subscriber's reconnect loop), so
             // the subscription recovers when the instance is rescheduled.

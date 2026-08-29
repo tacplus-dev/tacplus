@@ -529,8 +529,9 @@ func FindTraceEventPublisherData(p *parser.DescriptorParser, protoDir string, pr
 
 // SubscriptionResolution holds the resolved type and directory for a subscription source.
 type SubscriptionResolution struct {
-	TypeFqn  string // e.g. "sensor.SensorEvent"
-	ProtoDir string // e.g. "common", "services"
+	TypeFqn   string // e.g. "sensor.SensorEvent"
+	ProtoDir  string // e.g. "common", "services"
+	Residency string // (spec.record).residency of TypeFqn, "" when it declares none
 }
 
 // ResolveSubscriptionSource resolves the fully-qualified type name and proto
@@ -552,13 +553,48 @@ func ResolveSubscriptionSource(p *parser.DescriptorParser, flatDir string, sd Su
 						if protoDir == "." {
 							protoDir = ""
 						}
-						return SubscriptionResolution{TypeFqn: field.Type, ProtoDir: protoDir}
+						return SubscriptionResolution{
+							TypeFqn:   field.Type,
+							ProtoDir:  protoDir,
+							Residency: recordResidency(p, field.Type),
+						}
 					}
 				}
 			}
 		}
 	}
 	return SubscriptionResolution{}
+}
+
+// recordResidency returns the (spec.record).residency window declared by the
+// message named by typeFqn (e.g. "accountingrecord.AccountingRecord"), or "" when
+// the type is not found or declares no residency block.
+//
+// This is a lookup, not a second opinion: the block's well-formedness is enforced
+// once, at parse time, by parser.ValidateResidencyAnnotations. It reads the same
+// annotation that parser.residencyPolicyEntry populates, through the same
+// msg.Annotations["record_residency"] key the validator uses, so there is one
+// definition of "this record is warm" rather than one per consumer.
+func recordResidency(p *parser.DescriptorParser, typeFqn string) string {
+	if typeFqn == "" {
+		return ""
+	}
+	for _, fd := range p.GetAllFiles() {
+		if fd.Package == "" || !strings.HasPrefix(typeFqn, fd.Package+".") {
+			continue
+		}
+		for mi := range fd.Messages {
+			msg := &fd.Messages[mi]
+			if fd.Package+"."+msg.Name != typeFqn {
+				continue
+			}
+			if r := msg.Annotations["record_residency"].RecordResidency; r != nil {
+				return r.Window
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 // DeriveStoreSubscriptionsFromRegistry discovers store EventBus subscriptions

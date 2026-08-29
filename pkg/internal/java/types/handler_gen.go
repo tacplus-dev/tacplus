@@ -77,6 +77,14 @@ type javaSubscriptionEntry struct {
 	TypeOuterClass    string // e.g. "Aegis"
 	ClassName         string // e.g. "AegisEventStreamSubscriber"
 	TargetService     string // e.g. "eventbus" — service_id to resolve via ServiceHealthState
+	// PerInstanceConsumerGroup is true when the topic's record type declares
+	// (spec.record).residency = RESIDENCY_WARM. A warm record's rows land in a
+	// NODE-LOCAL store, so a node's copy is only complete if that node receives
+	// every record. Under the shared service-label group the broker hands each record
+	// to exactly one instance, which is right for the cluster-wide in-memory map
+	// and wrong for a node-local one. A per-instance group makes the broker fan
+	// the topic out to every instance instead of splitting it.
+	PerInstanceConsumerGroup bool
 }
 
 // javaTargetServiceEntry describes a unique target service for ServiceConnection creation.
@@ -110,6 +118,10 @@ type javaSmTemplateData struct {
 	HasSmb                 bool // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
 	SmbAuthorityServiceID  string
 	HasSubscriptions       bool
+	// HasWarmSubscriptions is true when any subscription sets
+	// PerInstanceConsumerGroup; it gates the one helper those subscriptions need,
+	// so a service with none generates byte-identical to before.
+	HasWarmSubscriptions   bool
 	HasPublishers          bool
 	HealthStateProtoDir    string // e.g. "services/identity"
 	HealthStateJavaPkg     string // e.g. "services.identity" (Java package path)
@@ -356,7 +368,17 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 			TypeOuterClass:    event.TypeOuterClass,
 			ClassName:         className,
 			TargetService:     targetService,
+
+			PerInstanceConsumerGroup: sub.SourceResidency == "RESIDENCY_WARM",
 		})
+	}
+
+	hasWarmSubscriptions := false
+	for _, sub := range subs {
+		if sub.PerInstanceConsumerGroup {
+			hasWarmSubscriptions = true
+			break
+		}
 	}
 
 	// Compute proto source git metadata if available.
@@ -417,6 +439,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		HasSmb:                 hasSmb,
 		SmbAuthorityServiceID:  smbAuthorityServiceID,
 		HasSubscriptions:       len(subs) > 0,
+		HasWarmSubscriptions:   hasWarmSubscriptions,
 		HasPublishers:          hasPublishers,
 		HealthStateProtoDir:    healthStateProtoDir,
 		HealthStateJavaPkg:     strings.ReplaceAll(healthStateProtoDir, "/", "."),

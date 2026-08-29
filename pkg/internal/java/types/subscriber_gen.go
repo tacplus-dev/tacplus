@@ -147,6 +147,7 @@ func collectJavaSubscriptions(config *tactype.Config, protoDir string) ([]tactyp
 			TargetService:   sd.BrokerLabel,
 			SourceTypeFqn:   res.TypeFqn,
 			SourceProtoDir:  res.ProtoDir,
+			SourceResidency: res.Residency,
 		})
 		if sd.Origin == "store_derived" {
 			zap.L().Info("Auto-derived store subscription",

@@ -164,6 +164,10 @@ type SubscriptionEntry struct {
 	TargetService   string // broker service_id that hosts the EventBus typed service
 	SourceTypeFqn   string // e.g. "aegis.TopologyEvent" — resolved from proto
 	SourceProtoDir  string // e.g. "services", "common" — proto directory where source was found
+	// SourceResidency is (spec.record).residency of SourceTypeFqn ("" when the
+	// type declares none). RESIDENCY_WARM selects a per-INSTANCE consumer group
+	// for the topic — see javaSubscriptionEntry.PerInstanceConsumerGroup.
+	SourceResidency string
 }
 
 // GetSmPrefix returns the service-manager directory prefix ("s2sm", "c2sm", "c2dm", or "w2sm").

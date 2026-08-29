@@ -37,13 +37,54 @@ type javaDiskStore struct {
 	// SnapshotOnly is true when the store has no store_key field: emit UC1
 	// snapshot save/load only (no UC2 redo log — a whole-object singleton).
 	SnapshotOnly bool
+
+	// QuorumWrite is true when any field of the store declares
+	// (spec.quorum_write): emit the generated write gate.
+	QuorumWrite bool
+	// MinDurableCopies is the declared (spec.min_durable_copies) floor the gate
+	// enforces. Only meaningful when QuorumWrite.
+	MinDurableCopies int
+	// ConstName is the SCREAMING_SNAKE store name, for the emitted constant.
+	ConstName string
+}
+
+// defaultMinDurableCopies is the floor a (spec.quorum_write) field carries when
+// it declares no (spec.min_durable_copies) of its own — spec.proto's documented
+// "Default 2 when unset".
+const defaultMinDurableCopies = 2
+
+// storeQuorum reads a store's write gate off its fields: whether any field
+// declares (spec.quorum_write), and the floor to enforce.
+//
+// A store row is written whole, so when several fields declare a floor the
+// STRICTEST one governs — a per-field floor would need a per-field write, which
+// no store surface has.
+func storeQuorum(msg *parser.MessageDescriptor) (bool, int) {
+	quorum := false
+	min := 0
+	for i := range msg.Fields {
+		field := &msg.Fields[i]
+		qw, ok := field.Annotations["quorum_write"]
+		if !ok || !qw.BoolValue {
+			continue
+		}
+		quorum = true
+		floor := defaultMinDurableCopies
+		if mdc, ok := field.Annotations["min_durable_copies"]; ok {
+			floor = int(mdc.IntValue)
+		}
+		if floor > min {
+			min = floor
+		}
+	}
+	return quorum, min
 }
 
 type javaDiskStoreData struct {
-	Header   string
-	Package  string // package of the generated DiskStores class
+	Header      string
+	Package     string // package of the generated DiskStores class
 	ChassisBase string // diskstore lib package base ({JavaPackageBase}.sys)
-	Stores   []javaDiskStore
+	Stores      []javaDiskStore
 }
 
 // generateJavaDiskStore emits per-service_store typed disk-persistence helpers
@@ -65,7 +106,8 @@ func generateJavaDiskStore(config *tactype.Config, protoDir, srcDir string) erro
 		if internalproto.IsInfraProto(relPath) {
 			continue
 		}
-		for _, msg := range fd.Messages {
+		for msgIdx := range fd.Messages {
+			msg := fd.Messages[msgIdx]
 			if _, ok := msg.Annotations["service_store"]; !ok {
 				continue
 			}
@@ -94,17 +136,21 @@ func generateJavaDiskStore(config *tactype.Config, protoDir, srcDir string) erro
 			if !snapshotOnly {
 				keyGetter = "get" + strutil.ToPascalCase(keyField)
 			}
+			quorumWrite, minDurableCopies := storeQuorum(&fd.Messages[msgIdx])
 			lower := strutil.ToLowerFirst(msg.Name)
 			stores = append(stores, javaDiskStore{
-				StoreName:    strutil.ToSnakeCase(msg.Name),
-				MethodName:   msg.Name,
-				TypeFqn:      typesPackage + "." + outerClass + "." + msg.Name,
-				HelpersFqn:   typesPackage + ".Helpers",
-				ToJsonFn:     lower + "ToJson",
-				FromJsonFn:   lower + "FromJson",
-				ValidateFn:   "validate" + msg.Name,
-				KeyGetter:    keyGetter,
-				SnapshotOnly: snapshotOnly,
+				StoreName:        strutil.ToSnakeCase(msg.Name),
+				MethodName:       msg.Name,
+				TypeFqn:          typesPackage + "." + outerClass + "." + msg.Name,
+				HelpersFqn:       typesPackage + ".Helpers",
+				ToJsonFn:         lower + "ToJson",
+				FromJsonFn:       lower + "FromJson",
+				ValidateFn:       "validate" + msg.Name,
+				KeyGetter:        keyGetter,
+				SnapshotOnly:     snapshotOnly,
+				ConstName:        strings.ToUpper(strutil.ToSnakeCase(msg.Name)),
+				QuorumWrite:      quorumWrite,
+				MinDurableCopies: minDurableCopies,
 			})
 		}
 	}
@@ -116,10 +162,10 @@ func generateJavaDiskStore(config *tactype.Config, protoDir, srcDir string) erro
 
 	pkg := config.JavaPackageBase + ".chassis.diskstore.stores"
 	data := javaDiskStoreData{
-		Header:   header.GeneratedHeader(consts.LangJava, "diskstore_stores"),
-		Package:  pkg,
+		Header:      header.GeneratedHeader(consts.LangJava, "diskstore_stores"),
+		Package:     pkg,
 		ChassisBase: config.JavaPackageBase + ".chassis",
-		Stores:   stores,
+		Stores:      stores,
 	}
 
 	tmplStr, err := loadTemplate("diskstore_stores.java.tmpl")

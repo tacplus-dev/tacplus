@@ -15,6 +15,7 @@ import {{.ChassisBase}}.grpcserver.ServiceImplementation;
 import {{.ChassisBase}}.service_im.IdentityManager;
 {{- if .HasDiskStores}}
 import {{.ChassisBase}}.diskstore.Codec;
+import {{.ChassisBase}}.diskstore.LocalRows;
 import {{.ChassisBase}}.diskstore.RedoLog;
 import {{.ChassisBase}}.diskstore.RollSchedule;
 import {{.ChassisBase}}.diskstore.StorePath;
@@ -723,8 +724,24 @@ public class ServiceManager implements AutoCloseable {
 	                    nodeId + "/{{.StoreName}}",
                     () -> {
                         try {
-                            var response = handler.{{.HandlerGetter}}().list(null);
-                            return DiskStores.snapshot{{.MethodName}}(response.getItemsList());
+                            var store = handler.{{.HandlerGetter}}();
+                            var response = store.list(null);
+                            var records = DiskStores.snapshot{{.MethodName}}(response.getItemsList());
+                            // The baseline is LOCALITY-SCOPED when the store says it is
+                            // partitioned: list(null) is the whole cluster's rows, and a
+                            // node whose baseline claims rows it does not own breaks the
+                            // partial-log invariant recovery resolves staleness with.
+                            if (store instanceof LocalRows) {
+                                LocalRows local = (LocalRows) store;
+                                java.util.List<RedoLog.Record> scoped = new java.util.ArrayList<>();
+                                for (RedoLog.Record rec : records) {
+                                    if (local.isLocalRow(rec.key)) {
+                                        scoped.add(rec);
+                                    }
+                                }
+                                return scoped;
+                            }
+                            return records;
                         } catch (Exception e) {
                             LOG.warning("diskstore snapshot failed for {{.StoreName}}; roll will retry on next interval: "
                                     + e.getMessage());

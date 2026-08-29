@@ -16,6 +16,8 @@ public class DiskStoreException extends RuntimeException {
     public static final int INVALID_ARGUMENT = 3;
     /** gRPC NOT_FOUND. */
     public static final int NOT_FOUND = 5;
+    /** gRPC FAILED_PRECONDITION. */
+    public static final int FAILED_PRECONDITION = 9;
     /** gRPC INTERNAL. */
     public static final int INTERNAL = 13;
 
@@ -71,6 +73,23 @@ public class DiskStoreException extends RuntimeException {
     /** Type validation failed on read with cause (code 3: INVALID_ARGUMENT). */
     public static DiskStoreException validationFailed(String msg, Throwable cause) {
         return new DiskStoreException(INVALID_ARGUMENT, "validation failed: " + msg, cause);
+    }
+
+    /**
+     * The write could not reach its declared durability floor (code 9:
+     * FAILED_PRECONDITION).
+     *
+     * <p>This is a REFUSAL, not a degrade. A store declaring
+     * {@code (spec.quorum_write)} states that a value is only written once it is
+     * durable on {@code (spec.min_durable_copies)} distinct nodes; below that the
+     * write is rejected before any local effect rather than acked locally and
+     * hoped about, because a cluster that has lost members is otherwise
+     * indistinguishable from a single-node development tree.
+     */
+    public static DiskStoreException belowQuorum(String store, int durableCopies, int minDurableCopies) {
+        return new DiskStoreException(FAILED_PRECONDITION,
+                "store " + store + ": write needs " + minDurableCopies
+                        + " durable copies, cluster can supply " + durableCopies);
     }
 
     /** Serialize/deserialize failure (code 13: INTERNAL). */

@@ -8,6 +8,7 @@ import java.util.List;
 
 import {{.ChassisBase}}.diskstore.Codec;
 import {{.ChassisBase}}.diskstore.DiskStoreException;
+import {{.ChassisBase}}.diskstore.QuorumGate;
 import {{.ChassisBase}}.diskstore.RedoLog;
 import {{.ChassisBase}}.diskstore.Snapshot;
 import {{.ChassisBase}}.diskstore.StorePath;
@@ -23,7 +24,26 @@ import {{.ChassisBase}}.diskstore.StorePath;
  */
 public final class DiskStores {
     private DiskStores() {}
-{{range .Stores}}
+{{range .Stores}}{{if .QuorumWrite}}
+    /**
+     * Distinct nodes that must hold a {{.StoreName}} value durably before the
+     * write is acked — the store's declared (spec.min_durable_copies).
+     */
+    public static final int MIN_DURABLE_COPIES_{{.ConstName}} = {{.MinDurableCopies}};
+
+    /**
+     * Refuses a {{.StoreName}} write that cannot reach
+     * {@link #MIN_DURABLE_COPIES_{{.ConstName}}} durable copies.
+     *
+     * <p>Called by the store's write path with the number of distinct nodes that
+     * will hold the value durably — only the store knows that number. Below the
+     * floor this throws FAILED_PRECONDITION BEFORE any local effect, rather than
+     * writing locally and calling it a success.
+     */
+    public static void require{{.MethodName}}Quorum(int durableCopies) {
+        QuorumGate.require("{{.StoreName}}", durableCopies, MIN_DURABLE_COPIES_{{.ConstName}});
+    }
+{{end}}
     /** Atomically save the latest {{.StoreName}} snapshot (UC1). */
     public static void save{{.MethodName}}(
             Path base, String ns, {{.TypeFqn}} msg, Snapshot.Opts opts) {

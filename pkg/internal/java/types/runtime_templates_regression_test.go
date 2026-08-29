@@ -587,7 +587,10 @@ func TestJavaServiceManagerRendersDiskStoreRollSchedulers(t *testing.T) {
 		"RollSchedule.runRollScheduler(",
 		"diskStoreLogs.rollInterval",
 		"nodeId + \"/cred_pair\"",
-		"handler.getCredPairStoreGrpcImpl().list(null)",
+		// The baseline is narrowed by LocalRows before it is written (see
+		// diskstore_locality_gen_test.go), so the list call is now two lines.
+		"var store = handler.getCredPairStoreGrpcImpl();",
+		"var response = store.list(null);",
 		"DiskStores.snapshotCredPair(response.getItemsList())",
 		"java.util.List<ScheduledExecutorService> diskStoreSchedulers = startDiskStoreRollSchedulers(handler);",
 	} {

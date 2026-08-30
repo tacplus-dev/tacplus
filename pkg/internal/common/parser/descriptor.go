@@ -1808,11 +1808,13 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 		annotations["event"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 		var c2s *model.EventBusMethodC2S
 		var s2s *model.EventBusMethodS2S
+		var s2sSubscribe *model.EventBusMethodS2S
 		if proto.HasExtension(opts, spec.E_Event) {
 			ev := proto.GetExtension(opts, spec.E_Event).(*spec.EventAnnotation)
 			if ev != nil {
 				c2s = methodC2SEntry(ev.GetC2S())
 				s2s = methodS2SEntry(ev.GetS2S())
+				s2sSubscribe = methodS2SEntry(ev.GetS2SSubscribe())
 			}
 		}
 		if hasRecordExt {
@@ -1823,6 +1825,9 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 				}
 				if s2s == nil {
 					s2s = methodS2SEntry(rec.GetS2S())
+				}
+				if s2sSubscribe == nil {
+					s2sSubscribe = methodS2SEntry(rec.GetS2SSubscribe())
 				}
 			}
 		}
@@ -1836,9 +1841,13 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 		// auth only) so the topic registry can attach it to the topic and
 		// auth-less event_publish bindings can inherit it.
 		annotations["event_surface"] = model.AnnotationValue{
-			Type:                model.AnnotationTypeBool,
-			BoolValue:           true,
-			EventPublishEntries: []model.EventBusBindingEntry{{MethodC2S: c2s, MethodS2S: s2s}},
+			Type:      model.AnnotationTypeBool,
+			BoolValue: true,
+			EventPublishEntries: []model.EventBusBindingEntry{{
+				MethodC2S:          c2s,
+				MethodS2S:          s2s,
+				MethodS2SSubscribe: s2sSubscribe,
+			}},
 		}
 	}
 

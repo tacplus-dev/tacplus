@@ -142,6 +142,11 @@ type EventBusBindingEntry struct {
 	TopicRef  string
 	MethodS2S *EventBusMethodS2S
 	MethodC2S *EventBusMethodC2S
+	// MethodS2SSubscribe is the CONSUMER half of the surface, from
+	// (spec.record).s2s_subscribe / (spec.event).s2s_subscribe. MethodS2S names
+	// who may publish to the topic; this names who may subscribe to it. Nil when
+	// the author declared none, which leaves the service-level default in place.
+	MethodS2SSubscribe *EventBusMethodS2S
 }
 
 // TimeseriesCardinalityHint is the store-neutral distinct-value hint for a

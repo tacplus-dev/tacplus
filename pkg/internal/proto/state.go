@@ -310,9 +310,10 @@ type sharedMessageNeeds struct {
 }
 
 type stateEventSurface struct {
-	c2s      *model.EventBusMethodC2S
-	s2s      *model.EventBusMethodS2S
-	declared bool
+	c2s          *model.EventBusMethodC2S
+	s2s          *model.EventBusMethodS2S
+	s2sSubscribe *model.EventBusMethodS2S
+	declared     bool
 }
 
 func collectStateEventSurfaces(allFiles map[string]*parser.FileDescriptor) map[string]stateEventSurface {
@@ -326,9 +327,10 @@ func collectStateEventSurfaces(allFiles map[string]*parser.FileDescriptor) map[s
 			}
 			entry := ann.EventPublishEntries[0]
 			surfaces[fd.Package+"."+msg.Name] = stateEventSurface{
-				c2s:      entry.MethodC2S,
-				s2s:      entry.MethodS2S,
-				declared: true,
+				c2s:          entry.MethodC2S,
+				s2s:          entry.MethodS2S,
+				s2sSubscribe: entry.MethodS2SSubscribe,
+				declared:     true,
 			}
 		}
 	}
@@ -416,6 +418,7 @@ func buildStateService(
 		subscribeRecord string
 		publishC2S      *model.EventBusMethodC2S
 		publishS2S      *model.EventBusMethodS2S
+		subscribeS2S    *model.EventBusMethodS2S
 		hasEventSurface bool
 	}
 
@@ -524,6 +527,7 @@ func buildStateService(
 		if surface, ok := eventSurfaces[field.Type]; ok {
 			bf.publishC2S = surface.c2s
 			bf.publishS2S = surface.s2s
+			bf.subscribeS2S = surface.s2sSubscribe
 			bf.hasEventSurface = surface.declared
 		}
 
@@ -702,13 +706,20 @@ func buildStateService(
 		} else {
 			fmt.Fprintf(&buf, "\trpc PublishTo%s(stream %s) returns (stream eventbus_support.PublishResponse) {\n%s\t}\n", b.goName, b.typeName, methodOption)
 		}
-		// Subscribe carries no per-RPC option: (spec.record).s2s / (spec.event).s2s
-		// is documented as the PRODUCER surface ("exposes the record's publish RPC
-		// to internal services"), so propagating it onto the consumer RPC would be
-		// inventing a policy the author never declared. Subscribe keeps the
-		// service-level default.
+		// Subscribe carries the CONSUMER declaration and never the producer one:
+		// (spec.record).s2s / (spec.event).s2s is documented as the publish surface,
+		// so propagating it here would invent a policy the author never wrote.
+		// (spec.record).s2s_subscribe / (spec.event).s2s_subscribe is the consumer
+		// half, and it emits at the same per-RPC level for the same reason — one
+		// topic, not the whole state root. Undeclared keeps the service-level
+		// default, which is what every topic had before the field existed.
 		if !eventC2S || !b.hasEventSurface {
-			fmt.Fprintf(&buf, "\trpc SubscribeTo%s(stream eventbus_support.SubscribeRequest) returns (stream %s);\n", b.goName, b.subscribeRecord)
+			subscribeOption := formatEventBusS2SMethodOption(b.subscribeS2S)
+			if subscribeOption == "" {
+				fmt.Fprintf(&buf, "\trpc SubscribeTo%s(stream eventbus_support.SubscribeRequest) returns (stream %s);\n", b.goName, b.subscribeRecord)
+			} else {
+				fmt.Fprintf(&buf, "\trpc SubscribeTo%s(stream eventbus_support.SubscribeRequest) returns (stream %s) {\n%s\t}\n", b.goName, b.subscribeRecord, subscribeOption)
+			}
 		}
 	}
 

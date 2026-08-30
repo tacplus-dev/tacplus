@@ -251,3 +251,76 @@ func TestRecordPrincipal_UnresolvableRecordRefusesGeneration(t *testing.T) {
 		t.Fatalf("a record declaring an owner is enforceable, got refusal %q", got)
 	}
 }
+
+// The SIZE-ONLY half. Get<T>Count returns a number computed over the handle's
+// predicate and no rows, so no egress filter can narrow it; the predicate is
+// pinned at Create<T>Query instead, and every later call on the handle inherits
+// it. Stamp-or-refuse, never a silent overwrite.
+func recordPrincipalPredicateSanitizer() *javaEgressSanitizer {
+	return newJavaEgressSanitizer([]model.ProtoFile{{Package: "query", Messages: []model.Message{
+		{Name: "AgentEventFilter", Fields: []model.Field{
+			{Name: "event_id", Type: "string", IsOptional: true, Number: 1},
+			{Name: "spiffe_id", Type: "string", IsOptional: true, Number: 2,
+				Annotations: map[string]model.AnnotationValue{
+					"store_principal": {Type: model.AnnotationTypeBool, BoolValue: true},
+				}},
+		}},
+		// A record whose principal is not EQ-queryable carries no such criterion.
+		{Name: "OrphanFilter", Fields: []model.Field{
+			{Name: "id", Type: "string", IsOptional: true, Number: 1},
+		}},
+		{Name: "OpenAgentEventQueryRequest", Fields: []model.Field{
+			{Name: "filter", Type: "AgentEventFilter", IsMessage: true, Number: 1},
+			{Name: "standing", Type: "bool", Number: 2},
+		}},
+		{Name: "OpenOrphanQueryRequest", Fields: []model.Field{
+			{Name: "filter", Type: "OrphanFilter", IsMessage: true, Number: 1},
+		}},
+		{Name: "QueryHandle", Fields: []model.Field{{Name: "query_id", Type: "string", Number: 1}}},
+	}}})
+}
+
+func renderPredicatePin(input string, isC2S bool) string {
+	m := &parser.MethodInfo{
+		Name: "CreateAgentEventQuery", InputType: input, OutputType: "QueryHandle",
+		FullInputType: "query." + input, FullOutputType: "query.QueryHandle",
+		AuthDisabled: true,
+	}
+	return generateJavaGRPCWrapperSurface(
+		m, "RecordQuery", "query", "Query."+input, "Query.QueryHandle",
+		"Helpers", "Helpers", false, true,
+		map[string]service.AccountingInfo{}, "query", "vservices",
+		map[string]string{}, proto.SkippedTraceTypes{},
+		recordPrincipalPredicateSanitizer(), nil, nil, isC2S,
+	)
+}
+
+func TestRecordPrincipal_PredicateIsPinnedAtTheEntryPoint(t *testing.T) {
+	got := renderPredicatePin("OpenAgentEventQueryRequest", true)
+	for _, want := range []string{
+		"final String __queryPrincipal = __qTok == null ? null : __qTok.getSubject();",
+		"if (!request.getFilter().hasSpiffeId() || request.getFilter().getSpiffeId().isEmpty()) {",
+		"request = request.toBuilder().setFilter(request.getFilter().toBuilder().setSpiffeId(__queryPrincipal)).build();",
+		"} else if (!__queryPrincipal.equals(request.getFilter().getSpiffeId())) {",
+		"ProtoException.INVALID_ARGUMENT",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("create-query wrapper missing %q\ngot:\n%s", want, got)
+		}
+	}
+	validate := strings.Index(got, "Helpers.validateOpenAgentEventQueryRequest(request);")
+	pin := strings.Index(got, "__queryPrincipal")
+	call := strings.Index(got, "handler.createAgentEventQuery(")
+	if !(validate >= 0 && validate < pin && pin < call) {
+		t.Fatalf("the pin must run after request validation and before the handler\ngot:\n%s", got)
+	}
+}
+
+func TestRecordPrincipal_PredicatePinIsC2SOnlyAndOptional(t *testing.T) {
+	if got := renderPredicatePin("OpenAgentEventQueryRequest", false); strings.Contains(got, "__queryPrincipal") {
+		t.Fatalf("the s2s surface must not pin the predicate to a user principal\ngot:\n%s", got)
+	}
+	if got := renderPredicatePin("OpenOrphanQueryRequest", true); strings.Contains(got, "__queryPrincipal") {
+		t.Fatalf("a predicate with no principal criterion has nothing to pin\ngot:\n%s", got)
+	}
+}

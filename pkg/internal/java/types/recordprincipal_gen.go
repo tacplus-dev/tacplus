@@ -284,3 +284,85 @@ func javaRecordPrincipalUnenforceable(method *parser.MethodInfo, san *javaEgress
 	}
 	return ""
 }
+
+// ---------------------------------------------------------------------------
+// The SIZE-ONLY half.
+//
+// The egress filter above narrows the ROWS a c2s caller is handed. It cannot
+// narrow Get<T>Count, Subscribe<T>Count or Update<T>Query's size: those return a
+// number computed over the handle's predicate and no rows at all, so there is
+// nothing at egress to drop. Left alone they are a per-victim cardinality
+// oracle — "how many rows match spiffe_id == <someone else>" is answerable in
+// one RPC by a caller who can see none of them.
+//
+// The plane was shaped for the fix: Create<T>Query is its single entry point, so
+// a predicate pinned there is carried by every later call made against the
+// handle. record_map.go marks the owning-principal CRITERION of the generated
+// <T>Filter with (spec.store_principal); this is the wrapper end that pins it,
+// with the same stamp-or-refuse doctrine (spec.principal) already uses:
+//
+//	unset    -> stamped with the caller's subject
+//	equal    -> accepted unchanged
+//	different-> INVALID_ARGUMENT, never silently overwritten
+//
+// A record whose principal is not EQ-queryable carries no such criterion and
+// gets no pin. That is a narrowing gap in the size-only RPCs only — the rows
+// themselves are still filtered at egress.
+
+// javaPredicatePrincipalField returns (requestFieldName, principalFieldName) for
+// a request that carries a query predicate naming the row's owning principal, or
+// two empty strings when it carries none.
+func (es *javaEgressSanitizer) predicatePrincipalField(fullType, servicePackage string) (string, string) {
+	if es == nil || fullType == "" {
+		return "", ""
+	}
+	pkg, name := splitJavaEgressFQN(fullType, servicePackage)
+	msg, ok := es.msgs[pkg+"\x00"+name]
+	if !ok {
+		return "", ""
+	}
+	for i := range msg.Fields {
+		f := &msg.Fields[i]
+		if !f.IsMessage || f.IsRepeated || f.IsMap {
+			continue
+		}
+		fpkg, fname := splitJavaEgressFQN(fieldTypeFQN(f, pkg), servicePackage)
+		pred, ok := es.msgs[fpkg+"\x00"+fname]
+		if !ok {
+			continue
+		}
+		for j := range pred.Fields {
+			pf := &pred.Fields[j]
+			if pf.Annotations["store_principal"].BoolValue && !pf.IsRepeated && !pf.IsMessage {
+				return f.Name, pf.Name
+			}
+		}
+	}
+	return "", ""
+}
+
+// javaPredicatePrincipalPin renders the stamp-or-refuse over the request's query
+// predicate. valueExpr names the request in scope.
+func javaPredicatePrincipalPin(reqField, principal, valueExpr, method, indent string) string {
+	if reqField == "" || principal == "" {
+		return ""
+	}
+	rf := javaPascalField(reqField)
+	pf := javaPascalField(principal)
+	return fmt.Sprintf(`%[1]s// (spec.store_principal) on the query predicate: this plane is per-principal.
+%[1]s// The wrapper — never the handler — pins the predicate to the authenticated
+%[1]s// caller at the lifecycle's single entry point, so every later call made
+%[1]s// against the returned handle inherits it, the size-only ones included.
+%[1]s// Unset -> stamped; equal -> accepted; different -> refused.
+%[1]svar __qTok = Auth.verifiedTokenFromContext();
+%[1]sfinal String __queryPrincipal = __qTok == null ? null : __qTok.getSubject();
+%[1]sif (__queryPrincipal == null || __queryPrincipal.isEmpty()) {
+%[1]s    throw new ProtoException(ProtoException.PERMISSION_DENIED, "%[2]s queries rows owned by a principal and the caller presented no verified subject");
+%[1]s}
+%[1]sif (!%[3]s.get%[4]s().has%[5]s() || %[3]s.get%[4]s().get%[5]s().isEmpty()) {
+%[1]s    %[3]s = %[3]s.toBuilder().set%[4]s(%[3]s.get%[4]s().toBuilder().set%[5]s(__queryPrincipal)).build();
+%[1]s} else if (!__queryPrincipal.equals(%[3]s.get%[4]s().get%[5]s())) {
+%[1]s    throw new ProtoException(ProtoException.INVALID_ARGUMENT, "%[6]s names a principal other than the caller; the query plane is per-principal and the predicate is not the caller's to choose");
+%[1]s}
+`, indent, method, valueExpr, rf, pf, reqField+"."+principal)
+}

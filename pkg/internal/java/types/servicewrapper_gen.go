@@ -1561,6 +1561,15 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 				inputValidation += "\n" + g
 			}
 		}
+		// (spec.store_principal) on the query predicate: pin it to the caller
+		// before the handler registers the query. Same seam, same doctrine, and
+		// the c2s gate is the same one the egress row filter runs under.
+		if isC2S && !handlerEmpty {
+			rf, pf := san.predicatePrincipalField(method.FullInputType, servicePackage)
+			if g := javaPredicatePrincipalPin(rf, pf, "request", method.Name, "            "); g != "" {
+				inputValidation += "\n" + g
+			}
+		}
 
 		if outputHelpers != "" && !emptyOutput {
 			outputValidation = fmt.Sprintf(`

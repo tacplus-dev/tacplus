@@ -39,6 +39,18 @@ type recordType struct {
 	// record's rows are written once. The plane emits no row-mutating RPC for
 	// such a type, and assertNoRowMutatingRPCs holds the template to that.
 	appendOnly bool
+	// principal is the criterion naming the ROW'S OWNING PRINCIPAL, when the
+	// record declares one AND it is EQ-queryable (so the plane has somewhere to
+	// put it). The emitted <T>Filter carries (spec.store_principal) on that
+	// criterion, which is what tells a c2s wrapper to pin the predicate to the
+	// authenticated caller at Create<T>Query — the "per-caller row filter" this
+	// file's surface comment describes as the lifecycle's single entry point.
+	//
+	// Empty when the record declares no principal, or declares one the plane
+	// cannot filter on. The egress row filter still narrows the ROWS in that
+	// case; what is lost is the narrowing of the SIZE-ONLY RPCs, which no egress
+	// filter can reach.
+	principal string
 }
 
 // recordFilter is a (spec.query_field) criterion on a record field — a typed
@@ -196,6 +208,7 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 			// guard below; carried here so "is this type append-only" has one
 			// answer on the plane, not one per call site.
 			appendOnly := msg.Annotations["record_mutability"].StringValue == "MUTABILITY_APPEND_ONLY"
+			principal := recordPrincipalCriterion(&msg, filters)
 			records = append(records, recordType{
 				typeName:     msg.Name,
 				pkg:          fd.Package,
@@ -204,6 +217,7 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 				filters:      filters,
 				minGroupSize: minGroupSize,
 				appendOnly:   appendOnly,
+				principal:    principal,
 			})
 		}
 	}
@@ -371,7 +385,11 @@ enum RecordChangeType {
 					sb.WriteString(fmt.Sprintf("  optional %s %s_to = %d;\n", f.protoType, f.name, n))
 					n++
 				} else {
-					sb.WriteString(fmt.Sprintf("  optional %s %s = %d;\n", f.protoType, f.name, n))
+					opt := ""
+					if f.name == r.principal {
+						opt = " [(spec.store_principal) = true]"
+					}
+					sb.WriteString(fmt.Sprintf("  optional %s %s = %d%s;\n", f.protoType, f.name, n, opt))
 					n++
 				}
 			}
@@ -759,4 +777,44 @@ func leadingVerbOf(rpcName string) string {
 		}
 	}
 	return best
+}
+
+// recordPrincipalCriterion returns the name of the filter criterion that names
+// the row's owning principal, or "" when the plane has none to pin.
+//
+// The row's principal is declared exactly as the egress filter reads it, most
+// specific first: (spec.store_principal) on a record field, else
+// (spec.record).owner. It only becomes a CRITERION when it is also EQ-queryable
+// — a RANGE criterion cannot express "equal to me", and a field with no
+// (spec.query_field) at all has no criterion in the emitted <T>Filter to carry
+// the annotation.
+//
+// This is the SIZE-ONLY half of the row-level principal guarantee. The generated
+// egress filter narrows the rows a c2s caller is handed; it cannot narrow
+// Get<T>Count / Subscribe<T>Count / Update<T>Query's size, which return a number
+// computed over the handle's predicate and no rows at all. Pinning the predicate
+// at the lifecycle's single entry point is what narrows those too.
+func recordPrincipalCriterion(msg *parser.MessageDescriptor, filters []recordFilter) string {
+	if msg == nil {
+		return ""
+	}
+	name := ""
+	for i := range msg.Fields {
+		if msg.Fields[i].Annotations["store_principal"].BoolValue {
+			name = msg.Fields[i].Name
+			break
+		}
+	}
+	if name == "" {
+		name = msg.Annotations["record_owner"].StringValue
+	}
+	if name == "" {
+		return ""
+	}
+	for _, f := range filters {
+		if f.name == name && !f.rangeOp && f.protoType == "string" {
+			return name
+		}
+	}
+	return ""
 }

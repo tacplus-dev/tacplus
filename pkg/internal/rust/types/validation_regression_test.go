@@ -270,3 +270,38 @@ func auditConstraintParityMessage() model.Message {
 		},
 	}
 }
+
+// Defense in depth behind parser.ValidateAnnotationCharset: a required_if_eq
+// condition carrying a quote must stay inside the emitted Rust literals rather
+// than closing them and having the remainder read as code.
+func TestRustValidationQuotesRequiredIfEqValue(t *testing.T) {
+	msg := model.Message{
+		Name: "Widget",
+		Fields: []model.Field{
+			{Name: "kind", Type: "string"},
+			{Name: "name", Type: "string", Annotations: map[string]model.AnnotationValue{
+				"required_if_eq": {
+					Type:        model.AnnotationTypeString,
+					StringValue: `kind=a" || pwned() || "b`,
+				},
+			}},
+		},
+	}
+	var b strings.Builder
+	if err := generateMessageValidation(&b, msg, nil); err != nil {
+		t.Fatalf("generateMessageValidation: %v", err)
+	}
+	rendered := b.String()
+
+	for _, want := range []string{
+		`if self.kind == "a\" || pwned() || \"b" &&`,
+		`return Err("field name is required when kind is a\" || pwned() || \"b".to_string());`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered Rust validation missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, `== "a" || pwned()`) {
+		t.Fatalf("required_if_eq value broke out of the generated literal:\n%s", rendered)
+	}
+}

@@ -192,3 +192,42 @@ func TestGoValidationIgnoresNonValidationAnnotation(t *testing.T) {
 		t.Fatalf("non-validation annotation must not error: %v", err)
 	}
 }
+
+// requiredIfEqMessage carries a required_if_eq condition whose value is
+// interpolated into the generated comparison and error literals.
+func requiredIfEqMessage(cond string) model.Message {
+	return model.Message{
+		Name: "Widget",
+		Fields: []model.Field{
+			{Name: "kind", Type: "string"},
+			{Name: "name", Type: "string", Annotations: map[string]model.AnnotationValue{
+				"required_if_eq": {Type: model.AnnotationTypeString, StringValue: cond},
+			}},
+		},
+	}
+}
+
+// Defense in depth behind parser.ValidateAnnotationCharset: even handed a
+// condition carrying a quote, the emitted comparison and message literals stay
+// well-formed and the payload stays inert data. Before this, the same input
+// emitted `if m.Kind == "a" || Pwned() || "b" && ...` — code that compiles and
+// calls a function the .proto author named.
+func TestGoValidationQuotesRequiredIfEqValue(t *testing.T) {
+	var b strings.Builder
+	if err := generateValidationHelpers(&b, requiredIfEqMessage(`kind=a" || Pwned() || "b`)); err != nil {
+		t.Fatalf("generateValidationHelpers: %v", err)
+	}
+	rendered := b.String()
+
+	for _, want := range []string{
+		`if m.Kind == "a\" || Pwned() || \"b" &&`,
+		`"field Name is required when kind is \"a\" || Pwned() || \"b\""`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered Go validation missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, `== "a" || Pwned()`) {
+		t.Fatalf("required_if_eq value broke out of the generated literal:\n%s", rendered)
+	}
+}

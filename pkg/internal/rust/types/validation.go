@@ -752,9 +752,13 @@ func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Me
 					variantName := toProstEnumVariant(condValue, enumType)
 					fmt.Fprintf(b, "if self.%s == %s::%s as i32 && %s {\n", condFieldRust, enumType, variantName, zeroCheck)
 				} else {
-					fmt.Fprintf(b, "if self.%s == \"%s\" && %s {\n", condFieldRust, condValue, zeroCheck)
+					// condValue is quoted with %q, matching the Java
+					// backend. Go and Rust string-literal escaping agree on
+					// every character parse-time validation lets through, and
+					// %q keeps the emitted literal well-formed regardless.
+					fmt.Fprintf(b, "if self.%s == %q && %s {\n", condFieldRust, condValue, zeroCheck)
 				}
-				fmt.Fprintf(b, "return Err(\"field %s is required when %s is %s\".to_string());\n", rustFieldName, condFieldSnake, condValue)
+				fmt.Fprintf(b, "return Err(%q.to_string());\n", fmt.Sprintf("field %s is required when %s is %s", rustFieldName, condFieldSnake, condValue))
 				b.WriteString("}\n")
 			}
 

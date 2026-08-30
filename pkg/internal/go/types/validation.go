@@ -11,6 +11,7 @@ package types
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -1036,12 +1037,17 @@ func Validate%sWithDepth(m *%s, depth int) error {
 `, goFieldName, condFieldSnake, condValue, condFieldGo, enumType, condValue, zeroCheck, errFunc, goFieldName, condFieldSnake, condValue)
 					} else {
 						// String comparison
+						// condValue is quoted with %q, the way the Java backend
+						// quotes it, and escaped where it lands inside the
+						// message literal. Parse-time charset validation
+						// already rejects breakout characters; this keeps the
+						// emitted literal well-formed if that ever loosens.
 						fmt.Fprintf(b, `	// Validate %s (required_if_eq: %s=%s)
-	if m.%s == "%s" && %s {
+	if m.%s == %q && %s {
 		return %s(nil, "field %s is required when %s is \"%s\"")
 	}
 
-`, goFieldName, condFieldSnake, condValue, condFieldGo, condValue, zeroCheck, errFunc, goFieldName, condFieldSnake, condValue)
+`, goFieldName, condFieldSnake, condValue, condFieldGo, condValue, zeroCheck, errFunc, goFieldName, condFieldSnake, goEscapeInStringLiteral(condValue))
 					}
 				}
 
@@ -1979,4 +1985,12 @@ func generateFilePathValidationHelpers(b *strings.Builder) {
 
 	// Alias for numeric enum value fallback (PATH_DIR = 4)
 	b.WriteString("\nvar validateFilePath4 = validateFilePathPATH_DIR\n")
+}
+
+// goEscapeInStringLiteral escapes s for placement INSIDE an already-open Go
+// string literal in the emitted source, where %q cannot be used because the
+// surrounding quotes are part of the emitted message text.
+func goEscapeInStringLiteral(s string) string {
+	q := strconv.Quote(s)
+	return q[1 : len(q)-1]
 }

@@ -159,6 +159,13 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err != nil {
 		return err
 	}
+	// Charset-check annotation strings before any other semantic check: every
+	// later check, and every generator template, reads these same strings, and a
+	// value carrying a quote or a line break can break out of the string literal
+	// or comment it is emitted into.
+	if err := parser.ValidateAnnotationCharset(dp); err != nil {
+		return err
+	}
 	if err := parser.ValidateTimeseriesAnnotations(allParsedFiles); err != nil {
 		return err
 	}

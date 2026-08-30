@@ -715,9 +715,15 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			return false, fmt.Errorf("%s.%s carries a (spec.store_epoch) field on %s but %s",
 				targetService.Name, method.Name, method.FullInputType, why)
 		}
+		// A c2s read over record rows the wrapper cannot narrow to the caller
+		// must fail generation, not ship an unfiltered read plane.
+		if why := javaRecordPrincipalUnenforceable(method, san, info.Package, svc.IsC2S); why != "" {
+			return false, fmt.Errorf("%s.%s cannot be generated for a c2s surface because %s",
+				targetService.Name, method.Name, why)
+		}
 		handlerInterface.WriteString(generateJavaHandlerMethod(method, inputType, outputType, crossPkgOuterClasses))
 		effectiveAuthAnyUser := method.AuthAnyUser
-		grpcMethods.WriteString(generateJavaGRPCWrapper(method, serviceName, svc.GrpcName, inputType, outputType, inputHelpers, outputHelpers, effectiveAuthAnyUser, method.AuthDisabled || svc.AuthDisabled || svc.IsC2D, accountingMap, info.Package, svc.ParentDir, info.CrossPackageTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses))
+		grpcMethods.WriteString(generateJavaGRPCWrapperSurface(method, serviceName, svc.GrpcName, inputType, outputType, inputHelpers, outputHelpers, effectiveAuthAnyUser, method.AuthDisabled || svc.AuthDisabled || svc.IsC2D, accountingMap, info.Package, svc.ParentDir, info.CrossPackageTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses, svc.IsC2S))
 		grpcMethods.WriteString("\n")
 
 		// Resolve effective auth_services: method-level overrides service-level.
@@ -1171,7 +1177,18 @@ func javaMinGroupSizeUnenforceable(method *parser.MethodInfo, san *javaEgressSan
 	return ""
 }
 
+// generateJavaGRPCWrapper renders a wrapper for a surface that is NOT c2s. Kept
+// as the plain spelling because most callers (and every render test) are asking
+// about a shape the (spec.store_principal) row filter has nothing to say about.
 func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers string, authAnyUser bool, authDisabled bool, accountingMap map[string]service.AccountingInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer, crossPkgHelpers map[string]string, crossPkgOuterClasses map[string]string) string {
+	return generateJavaGRPCWrapperSurface(method, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers, authAnyUser, authDisabled, accountingMap, servicePackage, parentDir, crossPkgTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses, false)
+}
+
+// generateJavaGRPCWrapperSurface is the wrapper renderer. isC2S is what decides
+// whether the (spec.store_principal) egress row filter is generated: the filter
+// narrows rows to the authenticated USER, which is a statement only the c2s
+// surface can make (see recordprincipal_gen.go).
+func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers string, authAnyUser bool, authDisabled bool, accountingMap map[string]service.AccountingInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer, crossPkgHelpers map[string]string, crossPkgOuterClasses map[string]string, isC2S bool) string {
 	methodName := strutil.ToCamelCase(strutil.ToSnakeCase(method.Name))
 	// Ensure first letter is lowercase for Java method convention
 	if len(methodName) > 0 {
@@ -1416,14 +1433,28 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 		}
 		// Egress data entitlement: sanitize every page item after the handler
 		// returns, before the response is assembled/validated.
+		// (spec.store_principal) runs FIRST, before the entitlement sanitize:
+		// a row the caller does not own must not reach the sanitizer at all, and
+		// filtering here (not after the page is assembled) is what keeps
+		// next_page_token and total_count describing the rows actually shown.
+		pagePrincipal := ""
+		pageSrcExpr := "__page.items"
+		if isC2S {
+			pagePrincipal = san.principalField(method.Resolved.PageItemType, servicePackage)
+		}
+		pageFilter := javaPrincipalPageFilter(pagePrincipal, itemType, method.Name, "            ")
+		if pageFilter != "" {
+			pageSrcExpr = "__ownedItems"
+		}
 		pageSan := ""
-		pageItemsExpr := "__page.items"
+		pageItemsExpr := pageSrcExpr
 		if t, ok := san.sanitizableType(method.Resolved.PageItemType, servicePackage, crossPkgHelpers); ok {
-			pageSan = javaEgressSanitizePreamble([]javaSanTarget{t}) + fmt.Sprintf(`            java.util.List<%s> __sanitizedItems = new java.util.ArrayList<>(__page.items.size());
-            for (%s __m : __page.items) { __sanitizedItems.add(%s); }
-`, itemType, itemType, t.sanitizeExpr("__m"))
+			pageSan = javaEgressSanitizePreamble([]javaSanTarget{t}) + fmt.Sprintf(`            java.util.List<%s> __sanitizedItems = new java.util.ArrayList<>(%s.size());
+            for (%s __m : %s) { __sanitizedItems.add(%s); }
+`, itemType, pageSrcExpr, itemType, pageSrcExpr, t.sanitizeExpr("__m"))
 			pageItemsExpr = "__sanitizedItems"
 		}
+		pageSan = pageFilter + pageSan
 		// Build the page body: decode -> bound -> call handler -> assemble response.
 		pageBody := fmt.Sprintf(`            CollectionRuntime.Cursor __after = CollectionRuntime.decodePageToken(request.getPageToken());
             long __limit = CollectionRuntime.effectivePageSize(request.getPageSize(), %dL, %dL);
@@ -1569,10 +1600,23 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 				stmts.WriteString("            response = __rb.build();\n")
 				unarySan = javaEgressSanitizePreamble(targets) + stmts.String()
 			}
+			// (spec.store_principal): rows the caller does not own never leave
+			// the process. Ahead of the sanitize for the same reason as the page
+			// leg — an unowned row must not reach the sanitizer at all.
+			unaryPrincipal := ""
+			if isC2S {
+				var lf []javaPrincipalListField
+				for _, f := range san.principalListFields(method.FullOutputType, servicePackage) {
+					if f.ItemField != "" {
+						lf = append(lf, f)
+					}
+				}
+				unaryPrincipal = javaPrincipalUnaryFilter(lf, outputType, method.Name, "            ")
+			}
 			// (spec.record).min_group_size runs first: the refusal is about the
 			// number itself, so it must precede any transformation of the response.
 			outputValidation = javaMinGroupSizeGuard(method, san.minGroupSizeField(method.FullOutputType, servicePackage), "response", "            ") +
-				unarySan + outputValidation
+				unaryPrincipal + unarySan + outputValidation
 		}
 
 		handlerCall := fmt.Sprintf("handler.%s(caller, request)", methodName)
@@ -2029,6 +2073,17 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 		if len(watchTargets) > 0 {
 			watchPre = javaEgressSanitizePreamble(watchTargets) + watchFns
 		}
+		// (spec.store_principal) on a watched stream: the guard is spliced into
+		// the send path (below), so an event carrying a row the caller does not
+		// own is never written. snapshot_done carries no row and still passes,
+		// so a filtered stream still ends its snapshot phase.
+		watchPrincipalGuard := ""
+		if isC2S {
+			watchPrincipalGuard = san.javaPrincipalWatchGuard(method.FullOutputType, servicePackage, "                ")
+			if watchPrincipalGuard != "" {
+				watchPre = javaPrincipalResolve(method.Name, "            ") + watchPre
+			}
+		}
 		watchDrive := fmt.Sprintf(`%s            final CollectionRuntime.WatchSource<%s, %s> __source = %s;
             final long __fromRevision = %s;
             final long __resumeRevision = __fromRevision == 0 ? __source.revision : __fromRevision;
@@ -2100,6 +2155,16 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
             }, "tacplus-watch-%s");
             __watchThread.setDaemon(true);
             __watchThread.start();`, watchPre, itemType, changeType, watchHandlerCall, fromRevisionExpr, changeType, methodName, outputType, outputType, outputType, streamResponseObserver, outputType, outputType, watchItemExpr, outputType, outputType, watchChangeExpr, watchCompletedAccounting, watchErrorAccounting, methodName)
+
+		// Splice the (spec.store_principal) refusal into the send path. Done on
+		// the rendered text rather than as a format verb because the guard is a
+		// property of the response TYPE, not of any of the twenty positional
+		// substitutions above.
+		if watchPrincipalGuard != "" {
+			watchDrive = strings.Replace(watchDrive,
+				"__send = (__event) -> {\n",
+				"__send = (__event) -> {\n"+watchPrincipalGuard, 1)
+		}
 
 		if hasAccounting {
 			return fmt.Sprintf(`    @Override

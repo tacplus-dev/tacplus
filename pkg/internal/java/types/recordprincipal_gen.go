@@ -1,0 +1,286 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+package types
+
+import (
+	"fmt"
+	"strings"
+
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+)
+
+// The Java twin of the Rust (spec.store_principal) egress row filter
+// (rust/types/principal_gen.go). §4b's guarantee is `principal ∈ entitled_set`:
+// a read plane must never hand one principal another's rows. The Rust service
+// wrapper has enforced that since the annotation landed; the Java wrapper never
+// did, so every record-store host written in Java — stratum, and the generated
+// record query plane it hosts — returned every principal's rows to any caller
+// holding the plane's grant.
+//
+// WHERE THE ROW'S PRINCIPAL IS DECLARED. Two annotations name it, and both are
+// read here, most specific first:
+//
+//	(spec.store_principal) on a record field — the purpose-built declaration,
+//	    the one the Rust filter reads, and the override for a record whose
+//	    (spec.record).owner is NOT the human principal (accounting rows are
+//	    owned by the EMITTING SERVICE; their human principal is a different
+//	    field entirely).
+//	(spec.record).owner — the record's own owner declaration. Every record
+//	    already carries one, so reading it as the fallback is what makes this
+//	    filter apply to every current and future record type without a second
+//	    annotation being remembered.
+//
+// A c2s method that returns record rows the wrapper cannot resolve a principal
+// for FAILS GENERATION (javaRecordPrincipalUnenforceable) rather than shipping
+// an unfiltered read plane — the same fail-closed stance (spec.min_group_size)
+// and (spec.store_epoch) already take for the shapes they cannot reach.
+//
+// C2S ONLY. The filter compares the row's owning principal against the
+// AUTHENTICATED CALLER's subject, which is a statement about a user. On the s2s
+// half of the same plane the caller is a peer service authorized by identity
+// through auth_services; narrowing its reads to rows it published itself would
+// not be a privacy boundary, it would just break peer aggregation. Which rows a
+// PEER may see is the auth_services decision, made before the handler runs.
+
+// javaPrincipalListField is one repeated record-bearing field of a response,
+// paired with the row field naming the owner of each of its rows.
+type javaPrincipalListField struct {
+	Field     string // response field name, e.g. "items"
+	ItemField string // row field naming the owner, e.g. "spiffe_id"
+}
+
+// principalField returns the name of fullType's row-principal field, or "" when
+// the type is not a record or declares no principal. See the doctrine above for
+// why two annotations are consulted.
+func (es *javaEgressSanitizer) principalField(fullType, servicePackage string) string {
+	msg := es.recordMessage(fullType, servicePackage)
+	if msg == nil {
+		return ""
+	}
+	for i := range msg.Fields {
+		if msg.Fields[i].Annotations["store_principal"].BoolValue {
+			return msg.Fields[i].Name
+		}
+	}
+	owner := msg.Annotations["record_owner"].StringValue
+	if owner == "" {
+		return ""
+	}
+	for i := range msg.Fields {
+		f := &msg.Fields[i]
+		if f.Name != owner {
+			continue
+		}
+		// The owner has to be a plain string to be compared against a subject.
+		if f.IsRepeated || f.IsMap || f.IsMessage || f.IsEnum || f.Type != "string" {
+			return ""
+		}
+		return f.Name
+	}
+	return ""
+}
+
+// recordMessage resolves fullType to its parsed message when — and only when —
+// it declares (spec.record). A non-record message carries no rows, so no filter
+// is owed for it and none is refused over it.
+func (es *javaEgressSanitizer) recordMessage(fullType, servicePackage string) *model.Message {
+	if es == nil || fullType == "" || strings.HasPrefix(fullType, "google.protobuf.") {
+		return nil
+	}
+	pkg, name := splitJavaEgressFQN(fullType, servicePackage)
+	msg, ok := es.msgs[pkg+"\x00"+name]
+	if !ok {
+		return nil
+	}
+	if ann, ok := msg.Annotations["record"]; !ok || !ann.BoolValue {
+		return nil
+	}
+	return msg
+}
+
+// fieldTypeFQN is the fully qualified name of a message field's type.
+func fieldTypeFQN(f *model.Field, ownerPkg string) string {
+	pkg := f.TypePackage
+	if pkg == "" {
+		pkg = ownerPkg
+	}
+	return pkg + "." + f.Type
+}
+
+// principalListFields returns the repeated record-bearing fields of fullType.
+// An unresolvable record (repeated rows, no principal) is reported through the
+// zero ItemField so the caller can refuse generation rather than emit nothing.
+func (es *javaEgressSanitizer) principalListFields(fullType, servicePackage string) []javaPrincipalListField {
+	if es == nil || fullType == "" {
+		return nil
+	}
+	pkg, name := splitJavaEgressFQN(fullType, servicePackage)
+	msg, ok := es.msgs[pkg+"\x00"+name]
+	if !ok {
+		return nil
+	}
+	var out []javaPrincipalListField
+	for i := range msg.Fields {
+		f := &msg.Fields[i]
+		if !f.IsRepeated || !f.IsMessage || f.IsMap {
+			continue
+		}
+		ft := fieldTypeFQN(f, pkg)
+		if es.recordMessage(ft, servicePackage) == nil {
+			continue
+		}
+		out = append(out, javaPrincipalListField{Field: f.Name, ItemField: es.principalField(ft, servicePackage)})
+	}
+	return out
+}
+
+// javaPrincipalResolve renders the local binding the authenticated caller's
+// principal. It is the token's `sub` claim verbatim, because that is exactly
+// what EventBus stamps into a record's owner field at publish time
+// (PublishHandler's IdentityStamper: "the sub claim, already a SPIFFE URI").
+// Comparing anything else here would compare two different spellings of the
+// same identity and filter every row away.
+//
+// Fail-closed: no verified token, or a token with no subject, is a refusal, not
+// an empty filter.
+func javaPrincipalResolve(method, indent string) string {
+	return fmt.Sprintf(`%[1]s// (spec.store_principal): the row filter's principal is the AUTHENTICATED
+%[1]s// caller's subject — the same value EventBus stamps into the row's owner
+%[1]s// field at publish time. Fail closed: no verified subject, no rows.
+%[1]svar __pTok = Auth.verifiedTokenFromContext();
+%[1]sfinal String __rowPrincipal = __pTok == null ? null : __pTok.getSubject();
+%[1]sif (__rowPrincipal == null || __rowPrincipal.isEmpty()) {
+%[1]s    throw new ProtoException(ProtoException.PERMISSION_DENIED, "%[2]s returns rows owned by a principal and the caller presented no verified subject");
+%[1]s}
+`, indent, method)
+}
+
+// javaPrincipalUnaryFilter renders the egress row filter over a unary response
+// that carries repeated record rows. Rows are dropped through the builder's
+// remove<Field>(int) so no item type has to be named here.
+func javaPrincipalUnaryFilter(fields []javaPrincipalListField, outputType, method, indent string) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(javaPrincipalResolve(method, indent))
+	fmt.Fprintf(&b, "%s%s.Builder __pfb = response.toBuilder();\n", indent, outputType)
+	for _, f := range fields {
+		p := javaPascalField(f.Field)
+		fmt.Fprintf(&b, "%[1]sfor (int __pi = __pfb.get%[2]sCount() - 1; __pi >= 0; __pi--) {\n", indent, p)
+		fmt.Fprintf(&b, "%[1]s    if (!__rowPrincipal.equals(__pfb.get%[2]s(__pi).get%[3]s())) { __pfb.remove%[2]s(__pi); }\n",
+			indent, p, javaPascalField(f.ItemField))
+		fmt.Fprintf(&b, "%s}\n", indent)
+	}
+	fmt.Fprintf(&b, "%sresponse = __pfb.build();\n", indent)
+	return b.String()
+}
+
+// javaPrincipalPageFilter renders the egress row filter over a page of record
+// rows, before the page is sanitized and assembled. Filtering BEFORE the page is
+// built (rather than after) is what keeps next_page_token and total_count
+// describing the rows the caller is actually shown.
+func javaPrincipalPageFilter(principal, itemType, method, indent string) string {
+	if principal == "" {
+		return ""
+	}
+	return javaPrincipalResolve(method, indent) +
+		fmt.Sprintf(`%[1]sjava.util.List<%[2]s> __ownedItems = new java.util.ArrayList<>(__page.items.size());
+%[1]sfor (%[2]s __prow : __page.items) { if (__rowPrincipal.equals(__prow.get%[3]s())) { __ownedItems.add(__prow); } }
+`, indent, itemType, javaPascalField(principal))
+}
+
+// javaPrincipalWatchGuard renders the per-event refusal spliced into the watch
+// stream's send path: an event carrying a row the caller does not own is never
+// written to the stream. The snapshot_done marker carries no row and is always
+// sent, so a filtered stream still terminates its snapshot phase.
+//
+// Two levels are walked because that is exactly what the record query plane
+// emits: <T>WatchEvent.snapshot_item is a row, and <T>WatchEvent.delta is a
+// <T>WatchChange whose `item` is one.
+func (es *javaEgressSanitizer) javaPrincipalWatchGuard(eventType, servicePackage, indent string) string {
+	if es == nil || eventType == "" {
+		return ""
+	}
+	pkg, name := splitJavaEgressFQN(eventType, servicePackage)
+	msg, ok := es.msgs[pkg+"\x00"+name]
+	if !ok {
+		return ""
+	}
+	var b strings.Builder
+	for i := range msg.Fields {
+		f := &msg.Fields[i]
+		if !f.IsMessage || f.IsRepeated || f.IsMap {
+			continue
+		}
+		ft := fieldTypeFQN(f, pkg)
+		p := javaPascalField(f.Name)
+		if principal := es.principalField(ft, servicePackage); principal != "" {
+			fmt.Fprintf(&b, "%[1]sif (__event.has%[2]s() && !__rowPrincipal.equals(__event.get%[2]s().get%[3]s())) { return; }\n",
+				indent, p, javaPascalField(principal))
+			continue
+		}
+		// One level deeper: the change envelope around a row.
+		npkg, nname := splitJavaEgressFQN(ft, servicePackage)
+		nested, ok := es.msgs[npkg+"\x00"+nname]
+		if !ok {
+			continue
+		}
+		for j := range nested.Fields {
+			nf := &nested.Fields[j]
+			if !nf.IsMessage || nf.IsRepeated || nf.IsMap {
+				continue
+			}
+			principal := es.principalField(fieldTypeFQN(nf, npkg), servicePackage)
+			if principal == "" {
+				continue
+			}
+			np := javaPascalField(nf.Name)
+			fmt.Fprintf(&b, "%[1]sif (__event.has%[2]s() && __event.get%[2]s().has%[3]s() && !__rowPrincipal.equals(__event.get%[2]s().get%[3]s().get%[4]s())) { return; }\n",
+				indent, p, np, javaPascalField(principal))
+		}
+	}
+	return b.String()
+}
+
+// javaRecordPrincipalUnenforceable reports why the row filter cannot be
+// generated for a c2s method that returns record rows, or "" when it can.
+//
+// A record read plane the wrapper cannot narrow must fail generation. The
+// alternative — emitting the RPC unfiltered — is exactly the state this whole
+// file exists to end, and it is invisible in a green build.
+func javaRecordPrincipalUnenforceable(method *parser.MethodInfo, san *javaEgressSanitizer, servicePackage string, isC2S bool) string {
+	if !isC2S || san == nil {
+		return ""
+	}
+	// Paged reads.
+	if method.Resolved != nil && method.Resolved.PageItemType != "" {
+		if san.recordMessage(method.Resolved.PageItemType, servicePackage) != nil &&
+			san.principalField(method.Resolved.PageItemType, servicePackage) == "" {
+			return fmt.Sprintf("it pages %s, a (spec.record) declaring no owner the wrapper can filter on: "+
+				"give the row's owning-principal field (spec.store_principal) = true, or declare "+
+				"(spec.record).owner naming a plain string field", method.Resolved.PageItemType)
+		}
+		return ""
+	}
+	// Watched reads.
+	if method.Resolved != nil && method.Resolved.WatchItemType != "" {
+		if san.recordMessage(method.Resolved.WatchItemType, servicePackage) != nil &&
+			san.principalField(method.Resolved.WatchItemType, servicePackage) == "" {
+			return fmt.Sprintf("it watches %s, a (spec.record) declaring no owner the wrapper can filter on: "+
+				"give the row's owning-principal field (spec.store_principal) = true, or declare "+
+				"(spec.record).owner naming a plain string field", method.Resolved.WatchItemType)
+		}
+		return ""
+	}
+	// Unary reads carrying repeated rows.
+	for _, lf := range san.principalListFields(method.FullOutputType, servicePackage) {
+		if lf.ItemField == "" {
+			return fmt.Sprintf("its response field %q carries (spec.record) rows declaring no owner the wrapper "+
+				"can filter on: give the row's owning-principal field (spec.store_principal) = true, or declare "+
+				"(spec.record).owner naming a plain string field", lf.Field)
+		}
+	}
+	return ""
+}

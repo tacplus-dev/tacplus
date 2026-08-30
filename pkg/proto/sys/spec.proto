@@ -1950,6 +1950,18 @@ message ServiceAnnotation {
   // to this service. The service acts as a reverse proxy, translating HTTP/JSON
   // requests into typed gRPC calls. Used by gateway and the CLI.
   bool rest_dispatch = 5;
+  // accepted_audiences widens the set of token `aud` values this service's
+  // generated Authorizer accepts, beyond the two it already derives: its own
+  // service label, plus every vservice/trait it hosts (AcceptedAudiencesForHost).
+  // Omitting it — which every service does today — leaves that derived set
+  // exactly as it is, so this field is backward compatible by construction.
+  //
+  // Declaring an audience here does NOT grant anything. It only stops the
+  // Authorizer rejecting a token that was correctly minted for that audience;
+  // the caller must still be entitled to the RPC. Who may add an entry is not a
+  // runtime question: this is a proto annotation under VCS and code review, the
+  // same trust boundary as (spec.trait) or an entitlement declaration.
+  repeated string accepted_audiences = 7;
 }
 
 // GrpcConfigAnnotation marks a message as a gRPC service's configuration.

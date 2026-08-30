@@ -726,7 +726,11 @@ func Generate(config *tactype.Config) error {
 
 	// Write library templates
 	zap.L().Info("Writing TypeScript library templates")
-	if err := writeLibTemplates(config, mintExchangerInfo, clientMintExchangerInfo, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries)); err != nil {
+	declaredAuds, err := proto.ScanAcceptedAudiences(config.InputDir, config.ServiceLabel())
+	if err != nil {
+		return fmt.Errorf("failed to scan (spec.service).accepted_audiences: %w", err)
+	}
+	if err := writeLibTemplates(config, mintExchangerInfo, clientMintExchangerInfo, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries, declaredAuds)); err != nil {
 		return fmt.Errorf("failed to write library templates: %w", err)
 	}
 

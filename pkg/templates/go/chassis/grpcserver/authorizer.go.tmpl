@@ -153,7 +153,9 @@ const serviceName = "{{.ServiceLabel}}"
 // acceptedAudiences is every token audience this service accepts: its own name
 // plus the name of each trait it hosts. A trait's audience is the trait name,
 // not the host's, so a host that implements a trait must accept the trait
-// audience or it rejects calls the caller authenticated correctly.
+// audience or it rejects calls the caller authenticated correctly. The set also
+// carries whatever the service declared in (spec.service).accepted_audiences;
+// declaring nothing — the default — leaves it exactly as derived above.
 var acceptedAudiences = map[string]struct{}{
 {{- range .AcceptedAudiences}}
 	"{{.}}": {},

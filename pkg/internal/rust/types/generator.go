@@ -354,7 +354,11 @@ func Generate(config *tactype.Config) error {
 	// Write library templates BEFORE service wrappers because writeLibTemplates
 	// cleans the sys/ directory. Service wrappers build on top afterward.
 	zap.L().Info("Writing Rust library templates")
-	if err := writeLibTemplates(config, svcRPCs, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries)); err != nil {
+	declaredAuds, err := proto.ScanAcceptedAudiences(config.InputDir, config.ServiceLabel())
+	if err != nil {
+		return fmt.Errorf("failed to scan (spec.service).accepted_audiences: %w", err)
+	}
+	if err := writeLibTemplates(config, svcRPCs, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries, declaredAuds)); err != nil {
 		return fmt.Errorf("failed to write library templates: %w", err)
 	}
 

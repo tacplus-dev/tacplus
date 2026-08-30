@@ -84,6 +84,12 @@ var (
 	nameRe        = regexp.MustCompile(`name:\s*"([^"]+)"`)
 	serviceNameRe = regexp.MustCompile(`service_name:\s*"([^"]+)"`)
 	idRe          = regexp.MustCompile(`id:\s*(\d+)`)
+	// (spec.service).accepted_audiences, in either textproto spelling:
+	// a bracketed list `accepted_audiences: ["a", "b"]` or repeated scalar
+	// lines `accepted_audiences: "a"`. Group 1 is the raw right-hand side;
+	// quotedStringRe pulls the entries out of it.
+	acceptedAudsRe  = regexp.MustCompile(`accepted_audiences\s*:\s*(\[[^\]]*\]|"[^"]*")`)
+	quotedStringRe  = regexp.MustCompile(`"([^"]*)"`)
 	messageNameRe = regexp.MustCompile(`(?m)^\s*message\s+(\w+)\s*\{`)
 
 	// Patterns for RPC scanning. Anchored to line-start (only tabs/spaces before
@@ -131,7 +137,12 @@ type VServiceRoute struct {
 // against — plus every contract it hosts, whose name is its own audience. A
 // trait's audience is the trait name, never the host label, so the host must
 // accept it explicitly or it rejects calls the caller authenticated correctly.
-func AcceptedAudiencesForHost(serviceLabel string, vsEntries []VServiceEntry) []string {
+//
+// declared carries (spec.service).accepted_audiences, the service's explicit
+// widening of that set (see ScanAcceptedAudiences). A service that declares
+// nothing — every service today — gets exactly the derived set it got before
+// the annotation existed, which is what makes this backward compatible.
+func AcceptedAudiencesForHost(serviceLabel string, vsEntries []VServiceEntry, declared []string) []string {
 	audiences := []string{serviceLabel}
 	seen := map[string]bool{serviceLabel: true}
 	for _, vs := range vsEntries {
@@ -140,7 +151,59 @@ func AcceptedAudiencesForHost(serviceLabel string, vsEntries []VServiceEntry) []
 			audiences = append(audiences, vs.Name)
 		}
 	}
+	for _, aud := range declared {
+		if aud != "" && !seen[aud] {
+			seen[aud] = true
+			audiences = append(audiences, aud)
+		}
+	}
 	return audiences
+}
+
+// ScanAcceptedAudiences reads (spec.service).accepted_audiences off the proto
+// that declares serviceLabel, under sourceProtoDir. It returns nil when the
+// service declares none, which is the default and the pre-annotation behavior.
+//
+// This deliberately does NOT check the declared audiences against the
+// entitlement catalog. Two reasons, both settled: the annotation does one job —
+// widen the accepted `aud` set — and an audience naming no hosted surface is
+// inert rather than dangerous, since entitlement checks still run per RPC. A
+// catalog cross-check here would be a LINT for typos, never a security gate,
+// and the declaring service owns getting its own declaration right.
+func ScanAcceptedAudiences(sourceProtoDir, serviceLabel string) ([]string, error) {
+	var declared []string
+	err := filepath.Walk(sourceProtoDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+			return err
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(content)
+		svcName, ok, err := parseServiceAnnotation(text)
+		if err != nil || !ok || svcName != serviceLabel {
+			// A parse error here is not this function's to report:
+			// ScanAndGenerateConfigHolder scans the same files and fails on it.
+			return nil
+		}
+		match := serviceRe.FindStringSubmatch(text)
+		if match == nil {
+			return nil
+		}
+		audsMatch := acceptedAudsRe.FindStringSubmatch(match[1])
+		if audsMatch == nil {
+			return nil
+		}
+		for _, q := range quotedStringRe.FindAllStringSubmatch(audsMatch[1], -1) {
+			declared = append(declared, q[1])
+		}
+		return filepath.SkipAll
+	})
+	if err != nil {
+		return nil, err
+	}
+	return declared, nil
 }
 
 // ScanAndGenerateConfigHolder scans proto files for file-level (spec.service)

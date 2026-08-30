@@ -721,7 +721,11 @@ func Generate(config *tactype.Config) error {
 
 	// Write library templates
 	zap.L().Info("Writing library templates")
-	if err := writeLibTemplates(config, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries), svcRPCs); err != nil {
+	declaredAuds, err := proto.ScanAcceptedAudiences(config.InputDir, config.ServiceLabel())
+	if err != nil {
+		return fmt.Errorf("failed to scan (spec.service).accepted_audiences: %w", err)
+	}
+	if err := writeLibTemplates(config, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries, declaredAuds), svcRPCs); err != nil {
 		return fmt.Errorf("failed to write library templates: %w", err)
 	}
 

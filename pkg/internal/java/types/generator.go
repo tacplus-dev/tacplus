@@ -1329,7 +1329,11 @@ func Generate(config *tactype.Config) error {
 
 	// Write library templates
 	zap.L().Info("Writing Java library templates")
-	if err := writeLibTemplates(config, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries), svcRPCs); err != nil {
+	declaredAuds, err := proto.ScanAcceptedAudiences(config.InputDir, config.ServiceLabel())
+	if err != nil {
+		return fmt.Errorf("failed to scan (spec.service).accepted_audiences: %w", err)
+	}
+	if err := writeLibTemplates(config, proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries, declaredAuds), svcRPCs); err != nil {
 		return fmt.Errorf("failed to write library templates: %w", err)
 	}
 
@@ -1364,7 +1368,7 @@ func Generate(config *tactype.Config) error {
 	if err := proto.ValidateStatePolicyAuthParity(config.FlatProtoDir, securityPolicies); err != nil {
 		return err
 	}
-	acceptedAudiences := proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries)
+	acceptedAudiences := proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries, declaredAuds)
 	if err := proto.WriteCodegenConfig(parentDir, config.JavaPackageBase, config.Lang.Java.JavaImportBase()+".graphs", acceptedAudiences, securityPolicies, svcRPCs); err != nil {
 		return fmt.Errorf("failed to write codegen config: %w", err)
 	}

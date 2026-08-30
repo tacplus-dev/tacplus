@@ -250,6 +250,27 @@ func formatAuthServicesOption(auth []string) string {
 	return fmt.Sprintf("\toption (spec.service_s2s) = {auth_services: [%s]};\n", strings.Join(quoted, ", "))
 }
 
+// formatEventBusS2SMethodOption renders the per-RPC spec.rpc option carrying the
+// caller list the event/record message declared in (spec.record).s2s /
+// (spec.event).s2s. Without it a topic's RPCs fall back to the state service's
+// service-level list, which for a synthesized <Event>Bus wrapper is resolved from
+// the owning PACKAGE (stateServiceAuthServices) — silently narrowing an
+// author-declared ["*"] to ["<package>"]. Per-RPC because that is the scope the
+// declaration has (one topic, not the whole state root), and because the registry
+// and every service wrapper already resolve a method-level auth_services as an
+// override of the service-level default.
+func formatEventBusS2SMethodOption(auth *model.EventBusMethodS2S) string {
+	if auth == nil || len(auth.AuthServices) == 0 {
+		return ""
+	}
+	quoted := make([]string, 0, len(auth.AuthServices))
+	for _, a := range auth.AuthServices {
+		quoted = append(quoted, fmt.Sprintf("%q", a))
+	}
+	return fmt.Sprintf("\t\toption (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: [%s]};\n",
+		strings.Join(quoted, ", "))
+}
+
 func formatEventBusC2SMethodOption(auth *model.EventBusMethodC2S) string {
 	if auth == nil || (!auth.AuthDisabled && !auth.AuthAnyUser && auth.TargetNamespaceField == "") {
 		return ""
@@ -290,6 +311,7 @@ type sharedMessageNeeds struct {
 
 type stateEventSurface struct {
 	c2s      *model.EventBusMethodC2S
+	s2s      *model.EventBusMethodS2S
 	declared bool
 }
 
@@ -305,6 +327,7 @@ func collectStateEventSurfaces(allFiles map[string]*parser.FileDescriptor) map[s
 			entry := ann.EventPublishEntries[0]
 			surfaces[fd.Package+"."+msg.Name] = stateEventSurface{
 				c2s:      entry.MethodC2S,
+				s2s:      entry.MethodS2S,
 				declared: true,
 			}
 		}
@@ -392,6 +415,7 @@ func buildStateService(
 		refreshOnMiss   string
 		subscribeRecord string
 		publishC2S      *model.EventBusMethodC2S
+		publishS2S      *model.EventBusMethodS2S
 		hasEventSurface bool
 	}
 
@@ -499,6 +523,7 @@ func buildStateService(
 		}
 		if surface, ok := eventSurfaces[field.Type]; ok {
 			bf.publishC2S = surface.c2s
+			bf.publishS2S = surface.s2s
 			bf.hasEventSurface = surface.declared
 		}
 
@@ -670,10 +695,18 @@ func buildStateService(
 		fmt.Fprintf(&buf, "\t// Topic: %s\n", b.goName)
 		methodOption := formatEventBusC2SMethodOption(b.publishC2S)
 		if methodOption == "" {
+			methodOption = formatEventBusS2SMethodOption(b.publishS2S)
+		}
+		if methodOption == "" {
 			fmt.Fprintf(&buf, "\trpc PublishTo%s(stream %s) returns (stream eventbus_support.PublishResponse);\n", b.goName, b.typeName)
 		} else {
 			fmt.Fprintf(&buf, "\trpc PublishTo%s(stream %s) returns (stream eventbus_support.PublishResponse) {\n%s\t}\n", b.goName, b.typeName, methodOption)
 		}
+		// Subscribe carries no per-RPC option: (spec.record).s2s / (spec.event).s2s
+		// is documented as the PRODUCER surface ("exposes the record's publish RPC
+		// to internal services"), so propagating it onto the consumer RPC would be
+		// inventing a policy the author never declared. Subscribe keeps the
+		// service-level default.
 		if !eventC2S || !b.hasEventSurface {
 			fmt.Fprintf(&buf, "\trpc SubscribeTo%s(stream eventbus_support.SubscribeRequest) returns (stream %s);\n", b.goName, b.subscribeRecord)
 		}

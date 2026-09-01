@@ -792,6 +792,34 @@ enum Mutability {
   MUTABILITY_APPEND_ONLY = 2;
 }
 
+// Ejectionable is whether ONE ROW may be evicted from memory when its residency
+// window expires. It is the per-row gate on the window (spec.record).residency
+// declares for the whole type.
+//
+// It is an ATTRIBUTE, orthogonal to residency, exactly as Mutability is: the
+// type says HOW LONG rows stay resident, each row says WHETHER the window
+// applies to it at all. Both axes are needed because a single warm record type
+// legitimately holds rows that must not leave memory (a mailbox's undelivered
+// message) alongside rows that may (one already retrieved).
+//
+// Unset = EJECTIONABLE_NEVER, which is HOT's safe default: a row nobody marked
+// stays in memory. Absence must keep meaning today's behaviour, and the safe
+// direction for a marker an author forgets is "keep the row", never "drop it".
+enum Ejectionable {
+  // Unspecified = EJECTIONABLE_NEVER. The row is never evicted.
+  EJECTIONABLE_UNSPECIFIED = 0;
+
+  // NEVER: the residency window does not apply to this row. It stays resident
+  // for as long as the type's rows are retained at all. The explicit spelling
+  // of an absent value, the same way RetentionPolicy.forever is.
+  EJECTIONABLE_NEVER = 1;
+
+  // WINDOW: the residency window applies to this row as declared — it is
+  // evicted from memory once its (spec.store_epoch) is older than the window,
+  // and served from disk thereafter.
+  EJECTIONABLE_WINDOW = 2;
+}
+
 // EventAnnotation marks a message as an EventBus event: tacplus generates a topic
 // and a publish RPC for it. The producer surface is declared (not defaulted):
 // set c2s to expose the publish RPC to external clients (via gateway), s2s to
@@ -1809,6 +1837,36 @@ extend google.protobuf.FieldOptions {
   // availability blip is the cheaper failure.
   // Example: string namespace = 5 [(spec.store_namespace) = true];
   bool store_namespace = 60088;
+
+  // ----- Residency: the per-row gate on the type's eviction window -----
+
+  // ejectionable: this RECORD field carries the row's own answer to "does the
+  // residency window apply to me?". The field must be of type spec.Ejectionable
+  // and a record declares at most one; ValidateEjectionableAnnotations refuses
+  // anything else.
+  //
+  // A marker, like (spec.store_epoch) and (spec.store_namespace) above: the
+  // annotation owns the LOCATION and nothing else. (spec.record).residency
+  // declares the window for the TYPE; this names the field whose per-row value
+  // decides whether that window is consulted for a given row. The two are
+  // orthogonal the same way mutability is orthogonal to residency.
+  //
+  // UNSET IS NEVER-EVICT. An EJECTIONABLE_UNSPECIFIED row is not evicted, which
+  // is exactly what RESIDENCY_HOT means and exactly what every record does
+  // today. So this is additive: a record that declares no ejectionable field
+  // keeps today's behaviour, and a record that declares one keeps it for every
+  // row that leaves the field at zero. The safe direction for a marker an
+  // author forgets is "keep the row"; the fail-silent alternative would drop
+  // data.
+  //
+  // Only meaningful on a record that declares (spec.record).residency — there
+  // is no window to gate otherwise, and declaring the gate anyway is a
+  // GENERATION ERROR rather than an inert annotation, the same posture
+  // ValidateResidencyAnnotations VAL-6 takes for a residency nothing reads.
+  //
+  // Example:
+  //   spec.Ejectionable ejectionable = 6 [(spec.ejectionable) = true];
+  bool ejectionable = 60089;
 }
 
 // QueryOp is the match kind for a (spec.query_field) record filter criterion.

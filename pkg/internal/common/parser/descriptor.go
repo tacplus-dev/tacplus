@@ -1993,6 +1993,12 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 	if proto.HasExtension(opts, spec.E_StoreEpoch) && proto.GetExtension(opts, spec.E_StoreEpoch).(bool) {
 		annotations["store_epoch"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 	}
+	// ejectionable: where the row's per-row gate on the residency window lives.
+	// Same doctrine again — the annotation owns the LOCATION, the row's own value
+	// owns the answer, and an unset value means never evict.
+	if proto.HasExtension(opts, spec.E_Ejectionable) && proto.GetExtension(opts, spec.E_Ejectionable).(bool) {
+		annotations["ejectionable"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
 	// SPIFFE identity annotations (plan D5)
 	if proto.HasExtension(opts, spec.E_IdentityNamespace) && proto.GetExtension(opts, spec.E_IdentityNamespace).(bool) {
 		annotations["identity_namespace"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}

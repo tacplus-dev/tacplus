@@ -763,16 +763,6 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 				method.Name, method.TargetNamespaceField))
 		}
 	}
-	// The session-carrying MCP transport: one generated handler method per
-	// service that hosts tools, never declared by the service author. No gRPC
-	// wrapper, no @Override on the ImplBase and no per-method auth registration
-	// accompany it — no rpc of this name exists in the proto that protoc
-	// compiled, so there is no ImplBase method to override. This is the seam the
-	// per-language MCP SDK integration will terminate the session on; the frame
-	// type is the JSON-RPC frame itself (parser.McpCarrierFrameType).
-	if targetService.HasMcpRpcs {
-		handlerInterface.WriteString(generateJavaMcpCarrierHandlerMethod(targetService.Name))
-	}
 	handlerInterface.WriteString("    }\n")
 
 	// Build registerMethodAuth static method code.
@@ -995,25 +985,6 @@ func javaOuterFromProtoPkg(pkg string) string {
 		return pkg
 	}
 	return strings.ToUpper(pkg[:1]) + pkg[1:]
-}
-
-// generateJavaMcpCarrierHandlerMethod generates the Handler-interface signature
-// for a service's generated MCP session carrier.
-//
-// Bidirectional, so it takes the same StreamObserver shape every other bidi
-// method on this interface takes; the frames are JSON-RPC text rather than a
-// proto message, so the element type is String.
-func generateJavaMcpCarrierHandlerMethod(serviceName string) string {
-	methodName := methodNameLowerCamel(parser.McpCarrierRpcName(serviceName))
-	var b strings.Builder
-	b.WriteString("        /**\n")
-	for _, line := range strings.Split(parser.McpCarrierDescription(serviceName), "\n") {
-		b.WriteString(strings.TrimRight("         * "+line, " "))
-		b.WriteString("\n")
-	}
-	b.WriteString("         */\n")
-	fmt.Fprintf(&b, "        StreamObserver<String> %s(Caller caller, StreamObserver<String> responseObserver) throws ProtoException;\n", methodName)
-	return b.String()
 }
 
 // generateJavaHandlerMethod generates a single method signature for the Handler interface.

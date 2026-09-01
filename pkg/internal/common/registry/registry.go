@@ -1100,6 +1100,14 @@ func CollectRpcProtos(fds []*parser.FileDescriptor) ([]*spec.RpcInfo, error) {
 					Surfaces:               rpcSurfaceInfos(svc, m, grpcPath, authServices, authDisabled, authAnyUser),
 					Mcp:                    m.IsMcp,
 					McpToolName:            m.McpToolName,
+					// The session-carrying MCP transport is an ordinary rpc by
+					// the time it gets here — tacplus injected its declaration
+					// into this service's proto before protoc ran (see
+					// pkg/internal/proto/mcp_carrier.go), so it arrives with a
+					// real grpc_path, auth model, surfaces and entitlement grant
+					// like any other. Marking it is all that is left: consumers
+					// need to tell the transport apart from the tools it carries.
+					McpSessionCarrier: svc.HasMcpRpcs && m.Name == parser.McpCarrierRpcName(svc.Name),
 				}
 				// method_collection (collection-returning read) — surface the
 				// declared shape so service-local generators see it.
@@ -1140,26 +1148,6 @@ func CollectRpcProtos(fds []*parser.FileDescriptor) ([]*spec.RpcInfo, error) {
 					rpc.AllowedPatterns = patternStrings(def.AllowedPatterns())
 				}
 				rpcs = append(rpcs, rpc)
-			}
-			// The session-carrying MCP transport. One per service that hosts
-			// tools, synthesized here rather than declared in the proto, because
-			// its existence follows from HasMcpRpcs alone (parser/mcp_carrier.go).
-			// It carries the same shape as the tool entries above — identity and
-			// description, no grpc_path, no REST route, no surfaces, no verb
-			// classification, and so no entitlement grant — because it too has no
-			// declared rpc behind it. Its exposure is not restated here: it lives
-			// on the owning ServiceInfo as mcp_exposure.
-			if svc.HasMcpRpcs {
-				rpcs = append(rpcs, &spec.RpcInfo{
-					ServiceName:       svc.Name,
-					Rpc:               parser.McpCarrierRpcName(svc.Name),
-					Description:       parser.McpCarrierDescription(svc.Name),
-					InputType:         parser.McpCarrierFrameType,
-					OutputType:        parser.McpCarrierFrameType,
-					ClientStreaming:   true,
-					ServerStreaming:   true,
-					McpSessionCarrier: true,
-				})
 			}
 		}
 	}

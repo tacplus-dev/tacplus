@@ -330,6 +330,26 @@ func CopyAndPrepareProtoDir(inputDir, targetDir string) (string, error) {
 		}
 	}
 
+	// Inject the MCP session carrier into every service that declares an
+	// RPC_PRINCIPAL_MCP tool. Here, not in each language generator, because the
+	// carrier has to be a real rpc in the tree protoc compiles for EVERY
+	// language, and because this is the last point at which every import a
+	// service proto can name (generated/, sys/) already resolves. A tree with no
+	// MCP rpc is untouched.
+	injected, err := AppendMcpCarrierRpcsToProtos(protoDir, inputDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to inject MCP session carrier rpcs: %w", err)
+	}
+	if len(injected) > 0 {
+		// The scan above ran over the un-injected tree, so the carrier is missing
+		// from its service's <Svc>RPCs enum and TokenEntitlements mapping. Re-run
+		// it over the injected tree; a c2s carrier needs an enum value exactly
+		// like the hand-declared rpcs beside it.
+		if _, _, _, err := ScanAndGenerateConfigHolder(inputDir, protoDir); err != nil {
+			return "", fmt.Errorf("failed to regenerate generated/*.proto after MCP carrier injection: %w", err)
+		}
+	}
+
 	return protoDir, nil
 }
 

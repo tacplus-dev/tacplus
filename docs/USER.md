@@ -904,19 +904,31 @@ Everything else is reuse, deliberately:
   most-permissive `exposure` across those rpcs. The registry records both as
   `ServiceInfo.mcp` and `ServiceInfo.mcp_exposure`.
 
-  The transport itself appears in the registry as one synthesized rpc on that
-  service, `Broker<Service>McpSession`, marked `mcp_session_carrier`. It is
-  bidirectional and carries one complete JSON-RPC frame per stream message, so
-  its `input_type`/`output_type` are the proto scalar `string` rather than a
-  message: no proto message is generated for it in any language. Like the tools
-  it serves it publishes no gRPC path, REST route or entitlement grant, because
-  there is no declared rpc behind it.
+  The transport itself is one extra rpc on that service,
+  `Broker<Service>McpSession`, marked `mcp_session_carrier` in the registry.
+  tacplus does not synthesize it in the model: it injects a real declaration
 
-  In generated code it appears as one extra method on the service's handler
-  interface — `StreamObserver<String> broker<Service>McpSession(Caller, StreamObserver<String>)`
-  in Java, the equivalent bidi signature over `String` frames in Rust. That
-  method is the seam the MCP SDK integration terminates the session on; tacplus
-  does not yet generate the JSON-RPC framing or tool dispatch above it.
+  ```proto
+  rpc Broker<Service>McpSession(stream mcp.McpRequest) returns (stream mcp.McpResponse) {
+    option (spec.rpc) = {
+      principal: RPC_PRINCIPAL_USER,
+      exposure: <the service's mcp_exposure>,
+      flags: [RPC_FLAG_AUTH_ENTITLED_USERS]
+    };
+  }
+  ```
+
+  into the service's own proto before protoc runs. So it is an ordinary rpc
+  everywhere downstream: a real `grpc_path`, the hosting service's `auth_model`,
+  a REST route, an entitlement grant, an authorizing server wrapper, a method on
+  the tonic trait and on grpc-java's `ImplBase`, and clients in every language —
+  none of it MCP-specific. The frames are the shared sys types `mcp.McpRequest`
+  and `mcp.McpResponse` (`sys/mcp.proto`), each one complete JSON-RPC 2.0 message
+  in a `payload` string, bounded at 1 MiB in and 4 MB out.
+
+  The handler method it produces is the seam the MCP SDK integration terminates
+  the session on; tacplus does not generate the JSON-RPC framing or tool dispatch
+  above it.
 
 ### Entitlements Model
 

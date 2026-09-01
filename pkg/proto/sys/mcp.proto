@@ -1,0 +1,43 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+
+// Package mcp holds the wire frames of the generated MCP session carrier.
+//
+// A service that declares at least one (spec.rpc) principal: RPC_PRINCIPAL_MCP
+// rpc gets one generated bidirectional rpc — Broker<Service>McpSession — over
+// which an MCP client speaks to it. These are that rpc's request and response
+// types: one complete JSON-RPC 2.0 frame per stream message, never fragmented
+// across messages. tacplus injects the rpc declaration into the service's own
+// proto before protoc runs (pkg/internal/proto/mcp_carrier.go), so the carrier
+// is an ordinary gRPC method with an ordinary auth model and entitlement grant.
+//
+// The frames are deliberately opaque. The MCP session is the payload's own
+// concern: nothing in tacplus reads inside a frame, and the tool set a session
+// reaches is derived from the RPC_PRINCIPAL_MCP rpcs in the build, not from
+// anything named here.
+syntax = "proto3";
+
+package mcp;
+
+import "sys/spec.proto";
+
+// McpRequest carries one JSON-RPC frame from an MCP client to the service.
+message McpRequest {
+  // payload is one complete JSON-RPC 2.0 message, serialized.
+  //
+  // Client frames are tool calls and protocol handshakes, both small; the
+  // bound is a ceiling on a malformed or hostile frame, not a working limit.
+  string payload = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 1048576];
+}
+
+// McpResponse carries one JSON-RPC frame from the service back to the client.
+message McpResponse {
+  // payload is one complete JSON-RPC 2.0 message, serialized.
+  //
+  // A tool result holding a page of records is the large case, so this bound
+  // is well above the 32 KB default for an unannotated string. It sits under
+  // the 4 MiB gRPC message default so that a frame the service is willing to
+  // validate is also one an ordinary client will accept; a handler turns an
+  // over-size result into a JSON-RPC error on that request rather than failing
+  // the whole stream.
+  string payload = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 4000000];
+}

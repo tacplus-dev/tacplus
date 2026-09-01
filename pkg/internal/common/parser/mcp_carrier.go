@@ -4,7 +4,8 @@ package parser
 
 import "fmt"
 
-// The session-carrying MCP transport.
+// The session-carrying MCP transport — its NAME and DOC TEXT, which the proto
+// injector and every consumer of the generated model have to agree on.
 //
 // A service that declares at least one RPC_PRINCIPAL_MCP rpc (ServiceDescriptor
 // .HasMcpRpcs) needs one authenticated, bidirectional channel over which an MCP
@@ -14,21 +15,16 @@ import "fmt"
 // HasMcpRpcs, the same way the low-level dispatch machinery of an ordinary rpc
 // is generated without a separate opt-in.
 //
+// The carrier itself is not synthesized in the model. tacplus injects a real
+// rpc declaration into the service's own proto before protoc runs
+// (pkg/internal/proto/mcp_carrier.go), so from parse onward it is an ordinary
+// rpc with an ordinary grpc_path, auth model, and entitlement grant. Its frames
+// are the sys types mcp.McpRequest / mcp.McpResponse.
+//
 // Its exposure is not carried here — it is derived (union, most-permissive
 // wins) from the constituent tools and already lives on the owning service as
-// ServiceDescriptor.McpExposure / ServiceInfo.mcp_exposure, so the carrier reads
-// it from the service rather than restating it.
-
-// McpCarrierFrameType is the shape of one message on the carrier: a single
-// complete JSON-RPC 2.0 frame, serialized, never fragmented across messages.
-//
-// It is the proto scalar `string`, not a message name, because no proto message
-// is generated for the carrier in any language — naming one in registry.json
-// would be a dangling reference to a type no generator emits. The deleted argus
-// precedent declared its own McpRequest/McpResponse pair whose whole content was
-// `string payload`; a generated carrier has no proto file of its own to declare
-// that pair in, so it carries the payload type directly.
-const McpCarrierFrameType = "string"
+// ServiceDescriptor.McpExposure / ServiceInfo.mcp_exposure, which is also what
+// the injector stamps on the declaration.
 
 // McpCarrierRpcName is the name of the carrier generated for serviceName.
 func McpCarrierRpcName(serviceName string) string {

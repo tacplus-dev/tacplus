@@ -720,6 +720,25 @@ func Generate(config *tactype.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to generate generated/*.proto: %w", err)
 	}
+
+	// Inject the MCP session carrier into every service that declares an
+	// RPC_PRINCIPAL_MCP tool. It has to be a real rpc in the tree protoc
+	// compiles, and this is the first point at which every import a service
+	// proto can name (generated/, sys/) resolves, so the descriptor parse it
+	// needs succeeds. A tree with no MCP rpc is untouched.
+	mcpCarriers, err := proto.AppendMcpCarrierRpcsToProtos(protoDir, config.InputDir)
+	if err != nil {
+		return fmt.Errorf("failed to inject MCP session carrier rpcs: %w", err)
+	}
+	if len(mcpCarriers) > 0 {
+		// The scan above ran over the un-injected tree, so the carrier is missing
+		// from its service's <Svc>RPCs enum and TokenEntitlements mapping. A c2s
+		// carrier needs an enum value exactly like the rpcs declared beside it.
+		_, svcRPCs, vsEntries, err = proto.ScanAndGenerateConfigHolder(config.InputDir, protoDir)
+		if err != nil {
+			return fmt.Errorf("failed to regenerate generated/*.proto after MCP carrier injection: %w", err)
+		}
+	}
 	if err := proto.AppendEventBusWrappersToProtos(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to append eventbus topic wrappers to protos: %w", err)
 	}

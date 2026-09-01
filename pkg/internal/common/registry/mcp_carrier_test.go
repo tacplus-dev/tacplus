@@ -10,8 +10,27 @@ import (
 	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
 )
 
+// mcpCarrierFds is what the descriptor parser sees AFTER the proto injector has
+// run (pkg/internal/proto/mcp_carrier.go): the carrier is a declared rpc on the
+// hosting service, not a model-layer synthesis. Everything downstream of the
+// parser therefore treats it as an ordinary rpc, which is the whole point.
+func mcpCarrierFds() []*parser.FileDescriptor {
+	fds := mcpSurfaceFds()
+	svc := &fds[0].Services[0]
+	svc.Methods = append(svc.Methods, parser.MethodDescriptor{
+		Name:            parser.McpCarrierRpcName(svc.Name),
+		Comment:         parser.McpCarrierDescription(svc.Name),
+		InputType:       "mcp.McpRequest",
+		OutputType:      "mcp.McpResponse",
+		ClientStreaming: true,
+		ServerStreaming: true,
+	})
+	return fds
+}
+
 // mcpCarrierControlFds is the paired control: an ordinary c2s service with no
-// MCP rpc at all, which must get no carrier.
+// MCP rpc at all, which the injector leaves alone and which must therefore have
+// no carrier anywhere in the registry.
 func mcpCarrierControlFds() []*parser.FileDescriptor {
 	return []*parser.FileDescriptor{
 		{
@@ -35,10 +54,10 @@ func mcpCarrierControlFds() []*parser.FileDescriptor {
 	}
 }
 
-// A service that hosts MCP tools gets exactly one generated session carrier,
-// bidirectional, framed as JSON-RPC text — and it is not itself a tool.
-func TestCollectRpcProtosSynthesizesMcpSessionCarrier(t *testing.T) {
-	rpcs, err := CollectRpcProtos(mcpSurfaceFds())
+// The carrier is marked as the transport — not as a tool — and carries the real
+// frame message types the injected declaration names.
+func TestCollectRpcProtosMarksMcpSessionCarrier(t *testing.T) {
+	rpcs, err := CollectRpcProtos(mcpCarrierFds())
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}
@@ -53,18 +72,15 @@ func TestCollectRpcProtosSynthesizesMcpSessionCarrier(t *testing.T) {
 		t.Fatalf("got %d session carriers, want exactly 1", len(carriers))
 	}
 	c := carriers[0]
-	if c.GetRpc() != "BrokerScottyMcpSession" {
-		t.Errorf("rpc = %q, want BrokerScottyMcpSession", c.GetRpc())
-	}
-	if c.GetServiceName() != "Scotty" {
-		t.Errorf("service_name = %q, want Scotty", c.GetServiceName())
+	if c.GetRpc() != "BrokerScottyMcpSession" || c.GetServiceName() != "Scotty" {
+		t.Errorf("carrier = %s.%s, want Scotty.BrokerScottyMcpSession", c.GetServiceName(), c.GetRpc())
 	}
 	if !c.GetClientStreaming() || !c.GetServerStreaming() {
 		t.Errorf("client_streaming = %v, server_streaming = %v, want both true",
 			c.GetClientStreaming(), c.GetServerStreaming())
 	}
-	if c.GetInputType() != "string" || c.GetOutputType() != "string" {
-		t.Errorf("input/output type = %q/%q, want string/string — one JSON-RPC frame per message",
+	if c.GetInputType() != "mcp.McpRequest" || c.GetOutputType() != "mcp.McpResponse" {
+		t.Errorf("input/output type = %q/%q, want mcp.McpRequest/mcp.McpResponse",
 			c.GetInputType(), c.GetOutputType())
 	}
 	if c.GetMcp() || c.GetMcpToolName() != "" {
@@ -73,16 +89,62 @@ func TestCollectRpcProtosSynthesizesMcpSessionCarrier(t *testing.T) {
 	if !strings.Contains(c.GetDescription(), "Model Context Protocol") {
 		t.Errorf("description does not describe the carrier: %q", c.GetDescription())
 	}
-	// It is not a declared rpc, so it publishes no call surface — same as the
-	// tools it serves.
-	if c.GetGrpcPath() != "" || c.GetHttpPath() != "" || len(c.GetSurfaces()) != 0 || c.GetAuthModel() != "" {
-		t.Errorf("carrier leaked a call surface: grpc_path=%q http_path=%q surfaces=%d auth_model=%q",
-			c.GetGrpcPath(), c.GetHttpPath(), len(c.GetSurfaces()), c.GetAuthModel())
+}
+
+// The carrier is a real gRPC method: it publishes the call surface every other
+// declared rpc of its service does. This is exactly what the tools it serves do
+// NOT get, and the difference is the reason the carrier exists.
+func TestCollectRpcProtosMcpCarrierHasCallSurface(t *testing.T) {
+	rpcs, err := CollectRpcProtos(mcpCarrierFds())
+	if err != nil {
+		t.Fatalf("CollectRpcProtos returned error: %v", err)
+	}
+	c := mcpSurfaceRpc(t, rpcs, "BrokerScottyMcpSession")
+
+	if got, want := c.GetGrpcPath(), "/scotty.Scotty/BrokerScottyMcpSession"; got != want {
+		t.Errorf("grpc_path = %q, want %q", got, want)
+	}
+	if got := c.GetAuthModel(); got != "c2s" {
+		t.Errorf("auth_model = %q, want c2s — the carrier is the one thing an MCP client authenticates to", got)
+	}
+	if c.GetAuthDisabled() || c.GetAuthAnyUser() {
+		t.Errorf("carrier is unauthenticated: auth_disabled = %v, auth_any_user = %v",
+			c.GetAuthDisabled(), c.GetAuthAnyUser())
+	}
+	if len(c.GetSurfaces()) == 0 {
+		t.Errorf("carrier publishes no surface at all")
 	}
 }
 
-// The carrier is a consequence of HasMcpRpcs and nothing else: a service with no
-// MCP rpc gets none.
+// The carrier mints an entitlement grant like any other c2s rpc. Without one
+// nothing authorizes the single channel every MCP tool call arrives on.
+func TestCollectEntitlementGrantsIncludesMcpCarrier(t *testing.T) {
+	rpcs, err := CollectRpcProtos(mcpCarrierFds())
+	if err != nil {
+		t.Fatalf("CollectRpcProtos returned error: %v", err)
+	}
+	root := &spec.PackageNode{
+		Services: []*spec.ServiceInfo{{Name: "Scotty", Package: "scotty", Rpcs: rpcs}},
+	}
+	var found *spec.EntitlementGrantInfo
+	for _, g := range collectEntitlementGrants(root) {
+		if g.GetRpc() == "BrokerScottyMcpSession" {
+			found = g
+		}
+		if g.GetRpc() == "GetTicketBrief" {
+			t.Errorf("MCP tool minted an entitlement grant: %s", g.GetToken())
+		}
+	}
+	if found == nil {
+		t.Fatal("MCP session carrier minted no entitlement grant")
+	}
+	if found.GetToken() == "" {
+		t.Errorf("carrier grant has an empty token: %+v", found)
+	}
+}
+
+// The carrier is a consequence of an RPC_PRINCIPAL_MCP rpc and nothing else: a
+// service with no MCP rpc is never injected into, so no carrier reaches here.
 func TestCollectRpcProtosNoCarrierWithoutMcpRpcs(t *testing.T) {
 	rpcs, err := CollectRpcProtos(mcpCarrierControlFds())
 	if err != nil {
@@ -95,12 +157,14 @@ func TestCollectRpcProtosNoCarrierWithoutMcpRpcs(t *testing.T) {
 		}
 		t.Fatalf("rpcs = %v, want exactly [GetTicket]", names)
 	}
+	if rpcs[0].GetMcpSessionCarrier() {
+		t.Error("an ordinary rpc was marked as the MCP session carrier")
+	}
 }
 
-// The carrier has no grpc_path, so the by-prefix grouping that assembles a
-// ServiceInfo's rpcs must still place it on the service that hosts it.
+// The carrier groups onto the service that hosts it, alongside its tools.
 func TestRpcInfosForServiceIncludesCarrier(t *testing.T) {
-	rpcs, err := CollectRpcProtos(mcpSurfaceFds())
+	rpcs, err := CollectRpcProtos(mcpCarrierFds())
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}
@@ -115,23 +179,6 @@ func TestRpcInfosForServiceIncludesCarrier(t *testing.T) {
 	for _, name := range got {
 		if !want[name] {
 			t.Errorf("unexpected rpc %q grouped onto Scotty", name)
-		}
-	}
-}
-
-// The carrier mints no entitlement grant: it carries no auth_model, the same
-// gate the tools rely on.
-func TestCollectEntitlementGrantsSkipsMcpCarrier(t *testing.T) {
-	rpcs, err := CollectRpcProtos(mcpSurfaceFds())
-	if err != nil {
-		t.Fatalf("CollectRpcProtos returned error: %v", err)
-	}
-	root := &spec.PackageNode{
-		Services: []*spec.ServiceInfo{{Name: "Scotty", Package: "scotty", Rpcs: rpcs}},
-	}
-	for _, g := range collectEntitlementGrants(root) {
-		if g.GetRpc() == "BrokerScottyMcpSession" {
-			t.Errorf("MCP session carrier minted an entitlement grant: %s", g.GetToken())
 		}
 	}
 }

@@ -22,8 +22,14 @@ import (
 // top-level message declaration. Returns the byte offset of the "}" or -1
 // if not found. Uses brace-depth tracking instead of regex.
 func findMessageClosingBrace(text, messageName string) int {
-	// Find "message <Name>" followed by optional whitespace and "{"
-	target := "message " + messageName
+	return findDeclClosingBrace(text, "message", messageName)
+}
+
+// findDeclClosingBrace finds the position of the closing "}" for a top-level
+// `<keyword> <name> { ... }` declaration ("message" or "service"). Returns the
+// byte offset of the "}" or -1 if not found.
+func findDeclClosingBrace(text, keyword, name string) int {
+	target := keyword + " " + name
 	searchFrom := 0
 	for {
 		idx := strings.Index(text[searchFrom:], target)

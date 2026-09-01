@@ -681,11 +681,12 @@ func rpcInfosForService(rpcs []*spec.RpcInfo, protoPackage, serviceName string) 
 			out = append(out, rpc)
 			continue
 		}
-		// An MCP tool carries no gRPC path — it is not gRPC-callable — so it has
-		// to be matched by the service it was declared on instead. Without this
-		// a service's own tools would be missing from the very ServiceInfo whose
+		// An MCP tool carries no gRPC path — it is not gRPC-callable — and nor
+		// does the generated session carrier, so both have to be matched by the
+		// service they belong to instead. Without this a service's own tools and
+		// its carrier would be missing from the very ServiceInfo whose
 		// mcp/mcp_exposure flags say it hosts them.
-		if rpc.GetMcp() && rpc.GetServiceName() == serviceName {
+		if (rpc.GetMcp() || rpc.GetMcpSessionCarrier()) && rpc.GetServiceName() == serviceName {
 			out = append(out, rpc)
 		}
 	}
@@ -1139,6 +1140,26 @@ func CollectRpcProtos(fds []*parser.FileDescriptor) ([]*spec.RpcInfo, error) {
 					rpc.AllowedPatterns = patternStrings(def.AllowedPatterns())
 				}
 				rpcs = append(rpcs, rpc)
+			}
+			// The session-carrying MCP transport. One per service that hosts
+			// tools, synthesized here rather than declared in the proto, because
+			// its existence follows from HasMcpRpcs alone (parser/mcp_carrier.go).
+			// It carries the same shape as the tool entries above — identity and
+			// description, no grpc_path, no REST route, no surfaces, no verb
+			// classification, and so no entitlement grant — because it too has no
+			// declared rpc behind it. Its exposure is not restated here: it lives
+			// on the owning ServiceInfo as mcp_exposure.
+			if svc.HasMcpRpcs {
+				rpcs = append(rpcs, &spec.RpcInfo{
+					ServiceName:       svc.Name,
+					Rpc:               parser.McpCarrierRpcName(svc.Name),
+					Description:       parser.McpCarrierDescription(svc.Name),
+					InputType:         parser.McpCarrierFrameType,
+					OutputType:        parser.McpCarrierFrameType,
+					ClientStreaming:   true,
+					ServerStreaming:   true,
+					McpSessionCarrier: true,
+				})
 			}
 		}
 	}

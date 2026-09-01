@@ -183,6 +183,15 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 		handlerTrait.WriteString(generateRustHandlerMethod(method, info.Package, info.CrossPackageTypes))
 		handlerTrait.WriteString("\n")
 	}
+	// The session-carrying MCP transport: one generated trait method per service
+	// that hosts tools, never declared by the service author. It gets no tonic
+	// trait method and no gRPC wrapper — no rpc of this name exists in the proto
+	// protoc compiled, so tonic's server trait has no slot for it. This is the
+	// seam the per-language MCP SDK integration will terminate the session on.
+	if targetService.HasMcpRpcs {
+		handlerTrait.WriteString(generateRustMcpCarrierHandlerMethod(targetService.Name))
+		handlerTrait.WriteString("\n")
+	}
 	handlerTrait.WriteString("}\n")
 
 	// Emit a default stub impl: {Service}HandlerStub returns Unimplemented
@@ -201,6 +210,10 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 			continue
 		}
 		handlerTrait.WriteString(generateRustHandlerStubMethod(method, info.Package, serviceName, info.CrossPackageTypes))
+		handlerTrait.WriteString("\n")
+	}
+	if targetService.HasMcpRpcs {
+		handlerTrait.WriteString(generateRustMcpCarrierStubMethod(targetService.Name))
 		handlerTrait.WriteString("\n")
 	}
 	handlerTrait.WriteString("}\n")
@@ -726,6 +739,38 @@ func generateRustProxyMethod(svc *parser.ServiceInfo, method *parser.MethodInfo,
 }
 
 // generateRustTraitMethod generates a trait method signature for ServiceWrapper
+// mcpCarrierStreamTypes returns the (request, response) stream types of a
+// generated MCP session carrier. The frames are JSON-RPC text rather than a
+// proto message, so the element type is String; the stream shape is the same one
+// every other bidi method on the handler trait uses.
+func mcpCarrierStreamTypes() (string, string) {
+	return fmt.Sprintf(requestStreamFmt, "String"), fmt.Sprintf(responseStreamFmt, "String")
+}
+
+// generateRustMcpCarrierHandlerMethod generates the handler-trait signature for
+// a service's generated MCP session carrier.
+func generateRustMcpCarrierHandlerMethod(serviceName string) string {
+	requestStream, responseStream := mcpCarrierStreamTypes()
+	var b strings.Builder
+	for _, line := range strings.Split(parser.McpCarrierDescription(serviceName), "\n") {
+		b.WriteString(strings.TrimRight("    /// "+line, " "))
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "    async fn %s(&self, caller: Option<&servicemanager::auth::Caller>, req: tonic::Request<%s>) -> Result<tonic::Response<%s>, tonic::Status>;",
+		prostSnakeName(parser.McpCarrierRpcName(serviceName)), requestStream, responseStream)
+	return b.String()
+}
+
+// generateRustMcpCarrierStubMethod generates the HandlerStub body for the
+// carrier, matching the Unimplemented default every other stub method returns.
+func generateRustMcpCarrierStubMethod(serviceName string) string {
+	requestStream, responseStream := mcpCarrierStreamTypes()
+	rpcName := parser.McpCarrierRpcName(serviceName)
+	return fmt.Sprintf("    async fn %s(&self, _caller: Option<&servicemanager::auth::Caller>, _req: tonic::Request<%s>) -> Result<tonic::Response<%s>, tonic::Status> {\n        Err(tonic::Status::unimplemented(%q))\n    }",
+		prostSnakeName(rpcName), requestStream, responseStream,
+		fmt.Sprintf("%s.%s: handler not implemented", serviceName, rpcName))
+}
+
 // generateRustMcpRefusalMethod renders the tonic trait method for an
 // RPC_PRINCIPAL_MCP rpc.
 //

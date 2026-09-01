@@ -496,6 +496,13 @@ message RpcInfo {
   // snake_case, or the spec.rpc mcp_tool_name override when one is declared.
   // Empty unless mcp is true.
   string mcp_tool_name = 52;
+
+  // mcp_session_carrier is true for the one rpc per MCP-hosting service that
+  // tacplus generates rather than the author declaring: the bidirectional
+  // session over which MCP JSON-RPC frames reach that service's tools. Its
+  // exposure is the owning ServiceInfo.mcp_exposure. Mutually exclusive with
+  // `mcp` — the carrier is the transport, not a tool.
+  bool mcp_session_carrier = 53;
 }
 
 // EnumInfo describes a top-level protobuf enum definition.

@@ -37,6 +37,7 @@ type ServiceInfo struct {
 	SmbRoot           spec.SmbRoot
 	Synthesized       bool   // tacplus-generated service surface
 	SynthesizedKind   string // which generated surface: SynthesizedKindState/Store/RecordMap/OpaEval; "" when not synthesized or kind absent
+	HasMcpRpcs        bool   // mirrors ServiceDescriptor.HasMcpRpcs: at least one rpc is an MCP tool, so this service gets the generated session carrier (see mcp_carrier.go)
 }
 
 // MethodInfo represents a gRPC method

@@ -904,6 +904,20 @@ Everything else is reuse, deliberately:
   most-permissive `exposure` across those rpcs. The registry records both as
   `ServiceInfo.mcp` and `ServiceInfo.mcp_exposure`.
 
+  The transport itself appears in the registry as one synthesized rpc on that
+  service, `Broker<Service>McpSession`, marked `mcp_session_carrier`. It is
+  bidirectional and carries one complete JSON-RPC frame per stream message, so
+  its `input_type`/`output_type` are the proto scalar `string` rather than a
+  message: no proto message is generated for it in any language. Like the tools
+  it serves it publishes no gRPC path, REST route or entitlement grant, because
+  there is no declared rpc behind it.
+
+  In generated code it appears as one extra method on the service's handler
+  interface — `StreamObserver<String> broker<Service>McpSession(Caller, StreamObserver<String>)`
+  in Java, the equivalent bidi signature over `String` frames in Rust. That
+  method is the seam the MCP SDK integration terminates the session on; tacplus
+  does not yet generate the JSON-RPC framing or tool dispatch above it.
+
 ### Entitlements Model
 
 For `service_c2s` services with `auth_entitled_users: true`, user tokens carry

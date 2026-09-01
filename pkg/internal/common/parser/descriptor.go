@@ -2887,6 +2887,7 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 			SmbRoot:           svc.SmbRoot,
 			Synthesized:       svc.Synthesized,
 			SynthesizedKind:   svc.SynthesizedKind,
+			HasMcpRpcs:        svc.HasMcpRpcs,
 		}
 
 		// Convert methods

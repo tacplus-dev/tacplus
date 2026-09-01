@@ -28,11 +28,13 @@ import (
 
 // generateServiceWrappers generates servicewrapper.rs for each service in the services directory.
 // Uses a single DescriptorParser rooted at inputDir so protoc can resolve cross-package imports.
-func generateServiceWrappers(servicesInfo []ServiceInfo, inputDir string, packageToDirMap map[string]string, accountingMap map[string]service.AccountingInfo, skippedTraceTypes proto.SkippedTraceTypes) error {
+// The bool reports whether any wrapper got a generated MCP termination, which
+// is what decides whether the model crate depends on the MCP SDK.
+func generateServiceWrappers(servicesInfo []ServiceInfo, inputDir string, packageToDirMap map[string]string, accountingMap map[string]service.AccountingInfo, skippedTraceTypes proto.SkippedTraceTypes) (bool, error) {
 	// Create one descriptor parser for the entire proto root (like Go does)
 	descriptorParser, err := parser.NewDescriptorParser(inputDir)
 	if err != nil {
-		return fmt.Errorf("failed to create descriptor parser: %w", err)
+		return false, fmt.Errorf("failed to create descriptor parser: %w", err)
 	}
 
 	// Build the egress-sanitize oracle over the (entitlement-augmented) descriptor
@@ -45,7 +47,7 @@ func generateServiceWrappers(servicesInfo []ServiceInfo, inputDir string, packag
 		}
 		mf, err := descriptorParser.ConvertToProtoFile(relPath)
 		if err != nil {
-			return fmt.Errorf("convert %s for egress sanitize resolution: %w", relPath, err)
+			return false, fmt.Errorf("convert %s for egress sanitize resolution: %w", relPath, err)
 		}
 		allFiles = append(allFiles, mf)
 	}
@@ -56,14 +58,20 @@ func generateServiceWrappers(servicesInfo []ServiceInfo, inputDir string, packag
 	// accounting_exclusion.go for why this exclusion is mandatory.
 	accountingTopic, hasAccountingTopic, err := boundaries.LookupAccountingRecordTopic(descriptorParser)
 	if err != nil {
-		return fmt.Errorf("resolve accounting record topic: %w", err)
+		return false, fmt.Errorf("resolve accounting record topic: %w", err)
 	}
 
+	hasMcp := false
 	for _, svc := range servicesInfo {
 		// Use the descriptor parser to get method information
 		protoInfo, err := descriptorParser.ConvertToProtoInfo(svc.ProtoFile)
 		if err != nil {
-			return fmt.Errorf("failed to parse %s: %w", svc.ProtoFile, err)
+			return false, fmt.Errorf("failed to parse %s: %w", svc.ProtoFile, err)
+		}
+		for _, s := range protoInfo.Services {
+			if s.Name == svc.ServiceName && s.HasMcpRpcs {
+				hasMcp = true
+			}
 		}
 
 		// Generate servicewrapper.rs in the services output directory
@@ -71,10 +79,10 @@ func generateServiceWrappers(servicesInfo []ServiceInfo, inputDir string, packag
 			accountingMap, svc.GrpcName, protoInfo.Package, svc.ServiceName,
 			accountingTopic, hasAccountingTopic)
 		if err := generateServiceWrapper(svc, protoInfo, packageToDirMap, svcAccountingMap, skippedTraceTypes, san); err != nil {
-			return fmt.Errorf("failed to generate servicewrapper for %s: %w", svc.ServiceName, err)
+			return false, fmt.Errorf("failed to generate servicewrapper for %s: %w", svc.ServiceName, err)
 		}
 	}
-	return nil
+	return hasMcp, nil
 }
 
 // generateServiceWrapper creates a {service_snake}.rs file for a single service.
@@ -167,6 +175,10 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	var clientInitialization strings.Builder
 	fmt.Fprintf(&clientInitialization, "self.%s_client = Some(%sClient::new(state_channel.clone()));\n", svcSnake, tonicName)
 
+	// The generated MCP session carrier, when this service has one. It is the
+	// one rpc the ValidationWrapper serves without a handler method.
+	mcpCarrier := rustMcpCarrierMethod(targetService)
+
 	// Build Handler trait (clean interface with Caller parameter)
 	var handlerTrait strings.Builder
 	handlerTrait.WriteString(fmt.Sprintf("/// %sHandler defines the clean handler interface for %s.\n", serviceName, serviceName))
@@ -175,9 +187,15 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	handlerTrait.WriteString("#[tonic::async_trait]\n")
 	handlerTrait.WriteString(fmt.Sprintf("pub trait %sHandler: Send + Sync + 'static {\n", serviceName))
 	for _, method := range targetService.Methods {
-		// An MCP tool is not gRPC-callable, so the service is not asked to
-		// implement a gRPC handler for it. See generateRustMcpRefusalMethod.
-		if method.IsMcp {
+		// The generated session carrier is NOT a handler method: carrying an
+		// MCP session is nothing the service writes, and the ValidationWrapper
+		// serves it from the generated dispatch below
+		// (generateRustMcpCarrierWrapper). Its tools ARE handler methods —
+		// tacplus generates the interface, the service implements the body, the
+		// same contract as any USER/SERVICE rpc (decision doc section 8). Only
+		// the registrar differs: an MCP tool reaches its handler through the
+		// tool dispatcher rather than the gRPC service registrar.
+		if method == mcpCarrier {
 			continue
 		}
 		handlerTrait.WriteString(generateRustHandlerMethod(method, info.Package, info.CrossPackageTypes))
@@ -197,7 +215,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	handlerTrait.WriteString("#[tonic::async_trait]\n")
 	handlerTrait.WriteString(fmt.Sprintf("impl %sHandler for %sHandlerStub {\n", serviceName, serviceName))
 	for _, method := range targetService.Methods {
-		if method.IsMcp {
+		if method == mcpCarrier {
 			continue
 		}
 		handlerTrait.WriteString(generateRustHandlerStubMethod(method, info.Package, serviceName, info.CrossPackageTypes))
@@ -221,6 +239,14 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	var grpcWrappers, watchFields, watchFieldsInit strings.Builder
 	var methodAuthLines []string
 	for _, method := range targetService.Methods {
+		// The session carrier is served by the generated MCP dispatch rather
+		// than by a handler method; it still authorizes exactly as the ordinary
+		// bidi wrapper does.
+		if method == mcpCarrier {
+			grpcWrappers.WriteString(generateRustMcpCarrierWrapper(targetService, method, info.Package, svc.ParentDir, info.CrossPackageTypes))
+			grpcWrappers.WriteString("\n")
+			continue
+		}
 		// An MCP tool gets no gRPC method wrapper: no authorize call, no
 		// accounting emit, no handler delegation, and no per-method auth
 		// registration. tonic's server trait has no default bodies, so this
@@ -358,6 +384,11 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	// ServiceManager can wire accounting without knowing which wrappers have
 	// accounted RPCs. The enum imports stay conditional — they are only
 	// referenced by an emitted accounting block.
+	mcpDispatch, err := generateRustMcpDispatch(targetService, info.Package, info.CrossPackageTypes, san)
+	if err != nil {
+		return err
+	}
+
 	accountingImports := "use am;\n"
 	if hasAccounting {
 		accountingImports += `use crate::types::generated::accounting_method::accounting_method::AccountingMethod;
@@ -385,6 +416,7 @@ use crate::types::generated::services::services as services_pb;
 		HasAccounting        bool
 		AccountingImports    string
 		RegisterMethodAuth   string
+		McpDispatch          string
 	}{
 		Header:               header.GeneratedHeader(consts.LangRust, svc.ProtoFile),
 		ServiceName:          serviceName,
@@ -405,6 +437,7 @@ use crate::types::generated::services::services as services_pb;
 		HasAccounting:        hasAccounting,
 		AccountingImports:    accountingImports,
 		RegisterMethodAuth:   registerMethodAuth,
+		McpDispatch:          mcpDispatch,
 	}
 
 	t, err := template.New("servicewrapper").Parse(tmpl)
@@ -719,7 +752,12 @@ func generateRustProxyMethod(svc *parser.ServiceInfo, method *parser.MethodInfo,
 
         // Bidirectional streaming proxy requires stream bridging - implement in service layer
         Err(tonic::Status::unimplemented("bidirectional streaming proxy not yet implemented"))
-    }`, methodSnake, method.InputType, method.Name, svc.Name, method.Name)
+    // inputType, not method.InputType: every other branch here uses the
+    // resolved path, and a bare simple name does not resolve for a
+    // cross-package request type. Latent until the generated MCP session
+    // carrier made a cross-package bidi rpc reachable (its request is
+    // mcp.McpRequest).
+    }`, methodSnake, inputType, method.Name, svc.Name, method.Name)
 	}
 
 	return ""

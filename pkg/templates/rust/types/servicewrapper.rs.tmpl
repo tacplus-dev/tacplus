@@ -219,3 +219,6 @@ impl {{.TonicServiceName}} for ValidationWrapper {
 
 {{.RegisterMethodAuth}}
 {{- end}}
+{{- if .McpDispatch}}
+{{.McpDispatch}}
+{{- end}}

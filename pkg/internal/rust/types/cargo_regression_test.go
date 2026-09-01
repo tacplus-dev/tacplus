@@ -67,7 +67,7 @@ async-trait = { workspace = true }
 
 	err := createWorkspaceCargoToml(&tactype.Config{
 		CrateBasePath: "current-generation",
-	}, out, true, false)
+	}, out, true, false, false)
 	if err == nil {
 		t.Fatal("expected missing async-trait dependency error")
 	}

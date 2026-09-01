@@ -362,6 +362,10 @@ func Generate(config *tactype.Config) error {
 		return fmt.Errorf("failed to write library templates: %w", err)
 	}
 
+	// Whether any generated service wrapper carries an MCP termination. Decides
+	// the model crate's MCP SDK dependency; set by generateServiceWrappers.
+	hasMcpRpcs := false
+
 	// Detect services and generate service wrappers (before module structure so mod.rs picks them up)
 	servicesInfo, err := detectServicesForWrapper(config, absInputDir)
 	if err != nil {
@@ -402,9 +406,11 @@ func Generate(config *tactype.Config) error {
 		}
 		if len(serverServices) > 0 {
 			zap.L().Info("Generating Rust service wrappers", zap.Int("count", len(serverServices)))
-			if err := generateServiceWrappers(serverServices, absInputDir, packageToDirMap, accountingMap, skippedTraceTypes); err != nil {
+			wrappersHaveMcp, err := generateServiceWrappers(serverServices, absInputDir, packageToDirMap, accountingMap, skippedTraceTypes)
+			if err != nil {
 				return fmt.Errorf("failed to generate service wrappers: %w", err)
 			}
+			hasMcpRpcs = wrappersHaveMcp
 		}
 	}
 
@@ -639,7 +645,7 @@ func Generate(config *tactype.Config) error {
 	// This must happen AFTER HTTP client generation so we can detect client crate directories.
 	// The workspace defines shared dependency versions for all crates.
 	zap.L().Info("Creating workspace Cargo.toml")
-	if err := createWorkspaceCargoToml(config, config.OutputDir, hasServices, len(config.Subscriptions) > 0); err != nil {
+	if err := createWorkspaceCargoToml(config, config.OutputDir, hasServices, len(config.Subscriptions) > 0, hasMcpRpcs); err != nil {
 		return fmt.Errorf("failed to create workspace Cargo.toml: %w", err)
 	}
 

@@ -26,6 +26,18 @@ const (
 	noopFieldName      = "noop"
 )
 
+// IsTraceField reports whether a message field is one of the two tacplus
+// injects into every user-defined message. Name and number are both checked
+// because InjectTraceFields skips a message that already defines either name at
+// a different number, and such a field is the service author's own.
+//
+// Callers are generators that must not publish the injected fields as part of a
+// message's user-facing contract — the MCP tool schema is the first.
+func IsTraceField(name string, number int) bool {
+	return (name == traceIDFieldName && number == traceIDFieldNumber) ||
+		(name == noopFieldName && number == noopFieldNumber)
+}
+
 // TraceFieldsProto is the proto-syntax field definitions for trace fields.
 // Used by InjectTraceFields and AppendStateServiceToProtos so auto-appended
 // message types carry trace fields without needing a second injection pass.

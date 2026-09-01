@@ -926,9 +926,38 @@ Everything else is reuse, deliberately:
   and `mcp.McpResponse` (`sys/mcp.proto`), each one complete JSON-RPC 2.0 message
   in a `payload` string, bounded at 1 MiB in and 4 MB out.
 
-  The handler method it produces is the seam the MCP SDK integration terminates
-  the session on; tacplus does not generate the JSON-RPC framing or tool dispatch
-  above it.
+  **In Rust, tacplus generates the whole termination above that rpc** and the
+  carrier is therefore NOT a handler method: the generated service wrapper
+  authorizes the session exactly as it authorizes any bidi rpc, refuses one with
+  no verified caller, and hands the stream to a generated `rmcp` worker
+  transport. What the service implements is only the tools, as ordinary typed
+  handler methods. Alongside the wrapper the Rust generator emits, per service:
+
+  - `<SERVICE>_MCP_TOOLS` — the published tool set: name, the rpc's own doc
+    comment, and a JSON Schema derived from the request message. Fields the
+    server computes are ABSENT from that schema rather than merely ignored —
+    `(spec.principal)`, `(spec.store_principal)`, `(spec.namespace)`,
+    `(spec.store_namespace)`, and the injected `trace_id`/`noop` pair — and a
+    tool call that names one is refused.
+  - `<Service>McpSurface` — an `rmcp::ServerHandler` answering `tools/list` and
+    `tools/call`. A call decodes into the rpc's own typed request, runs the same
+    request validation, principal/namespace stamps and egress row filters the
+    gRPC wrapper runs, dispatches to `<Service>Handler::<rpc>`, and encodes the
+    typed response as the tool result.
+  - `serve_<service>_mcp_session(...)` and its worker — one MCP session over one
+    gRPC stream, bounding outbound frames at `mcp.McpResponse.payload`'s
+    `(spec.assert_max_size)` so an over-size tool result fails that one request
+    instead of the whole session.
+  - a `#[cfg(test)]` module asserting the tool set is published, that a tool call
+    reaches its typed handler with the arguments decoded, and that a
+    client-supplied server-computed field is refused.
+
+  The Rust model crate depends on `rmcp` only when a service in the build
+  declares an MCP tool.
+
+  In Java and Go the carrier is still a handler method and the seam the MCP SDK
+  integration terminates the session on; those two languages' dispatch is a
+  separate subtask.
 
 ### Entitlements Model
 

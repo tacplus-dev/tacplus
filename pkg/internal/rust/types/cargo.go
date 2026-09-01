@@ -36,6 +36,9 @@ type cargoWorkspaceData struct {
 	AutoTlsKeyType     string
 	HasSmb             bool
 	SkipWorkspace      bool
+	HasMcpRpcs         bool
+	RmcpVersion        string
+	SchemarsVersion    string
 	LibCrates          []cargoLibCrate
 }
 
@@ -50,7 +53,7 @@ type typesCargoData struct {
 // It defines workspace members and shared dependency versions so that individual
 // crate Cargo.toml files can use { workspace = true }, and also includes the
 // [package] section for the root types crate.
-func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServiceWrappers bool, hasSubscriptions bool) error {
+func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServiceWrappers bool, hasSubscriptions bool, hasMcpRpcs bool) error {
 	// outputDir is the rust root directory (e.g., rust/)
 	rustRootDir := outputDir
 	cargoPath := filepath.Join(rustRootDir, "Cargo.toml")
@@ -234,6 +237,9 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 		AutoTlsKeyType:     autoTlsKeyType,
 		HasSmb:             hasSmb,
 		SkipWorkspace:      skipWorkspace,
+		HasMcpRpcs:         hasMcpRpcs,
+		RmcpVersion:        rmcpCrateVersion,
+		SchemarsVersion:    schemarsCrateVersion,
 		LibCrates:          libCrates,
 	}
 

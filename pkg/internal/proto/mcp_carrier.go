@@ -43,6 +43,18 @@ const (
 	mcpResponseFrameType = "mcp.McpResponse"
 )
 
+// McpResponseFrameMaxBytes is the (spec.assert_max_size) bound on
+// mcp.McpResponse.payload.
+//
+// A generated MCP transport has to know it: past this value the generated
+// response validation fails the whole STREAM, killing the session over one
+// large tool result, so the transport turns an over-size frame into a JSON-RPC
+// error on that one request instead. sys/mcp.proto is embedded rather than
+// parsed from the consumer's proto tree — its messages are stripped from the
+// per-language message index as infra — so the value is stated here and pinned
+// to the proto by TestMcpResponseFrameBoundMatchesProto.
+const McpResponseFrameMaxBytes = 4000000
+
 // AppendMcpCarrierRpcsToProtos injects, into every service that declares at
 // least one RPC_PRINCIPAL_MCP rpc, the bidirectional session carrier
 //

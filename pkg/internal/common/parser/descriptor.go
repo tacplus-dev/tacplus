@@ -2919,6 +2919,8 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 				Collection:           method.Collection,
 				MinGroupSize:         method.MinGroupSize,
 				IsMcp:                method.IsMcp,
+				McpToolName:          method.McpToolName,
+				Comment:              method.Comment,
 			}
 			serviceInfo.Methods = append(serviceInfo.Methods, methodInfo)
 		}

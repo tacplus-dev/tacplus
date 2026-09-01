@@ -5,6 +5,8 @@ package proto
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -217,5 +219,30 @@ func TestAppendMcpCarrierRpcsMirrorsMcpExposure(t *testing.T) {
 	}
 	if text := mcpCarrierServiceProto(t, internal); !strings.Contains(text, "exposure: RPC_EXPOSURE_INTERNAL") {
 		t.Errorf("carrier of an INTERNAL-only tool set is not INTERNAL:\n%s", text)
+	}
+}
+
+// TestMcpResponseFrameBoundMatchesProto pins McpResponseFrameMaxBytes to the
+// bound sys/mcp.proto actually declares. The generated Rust MCP transport uses
+// the constant to keep a frame under the limit the generated response
+// validation enforces; if the two drift, an over-size result kills the whole
+// session instead of failing one tool call.
+func TestMcpResponseFrameBoundMatchesProto(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "proto", "sys", "mcp.proto"))
+	if err != nil {
+		t.Fatalf("read sys/mcp.proto: %v", err)
+	}
+	re := regexp.MustCompile(`message McpResponse \{[^}]*\(spec\.assert_max_size\) = (\d+)`)
+	m := re.FindSubmatch(src)
+	if m == nil {
+		t.Fatal("sys/mcp.proto declares no (spec.assert_max_size) on McpResponse.payload")
+	}
+	declared, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatalf("parse declared bound %q: %v", m[1], err)
+	}
+	if declared != McpResponseFrameMaxBytes {
+		t.Fatalf("McpResponseFrameMaxBytes = %d, but sys/mcp.proto declares %d; the generated MCP transport would bound frames at the wrong size",
+			McpResponseFrameMaxBytes, declared)
 	}
 }

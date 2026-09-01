@@ -47,6 +47,15 @@ regex = { workspace = true }
 {{.Name}} = { path = "chassis/{{.Name}}" }
 {{- end}}
 {{- end}}
+{{- if .HasMcpRpcs}}
+# The MCP SDK backing the generated Model Context Protocol termination for
+# services declaring (spec.rpc) principal: RPC_PRINCIPAL_MCP. Pinned rather than
+# taken from dependencies.yaml for the same reason as hmac/sha2/hex in
+# types/Cargo.toml: the generated dispatch is written against this API, so a
+# consumer moving the version would break generated code rather than their own.
+rmcp = { version = "{{.RmcpVersion}}", features = ["server", "macros", "schemars", "transport-worker"] }
+schemars = "{{.SchemarsVersion}}"
+{{- end}}
 tonic-health = { workspace = true }
 rustls = { workspace = true }
 {{- if or .HasAutoTls .HasSmb}}

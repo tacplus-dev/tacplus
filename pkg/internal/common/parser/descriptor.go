@@ -5,6 +5,7 @@ package parser
 import (
 	"fmt"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -180,6 +181,17 @@ type ServiceDescriptor struct {
 	// daemon may never serve or call it at all. Collapsing the two is what made a
 	// c2d-only build demand a token minter.
 	SynthesizedKind string
+
+	// HasMcpRpcs is true when at least one method declares principal
+	// RPC_PRINCIPAL_MCP. The session-carrying MCP transport is a consequence of
+	// that fact, never a separate opt-in, so this is the whole input to "does
+	// this service need one".
+	HasMcpRpcs bool
+	// McpExposure is the derived exposure of that transport: the most-permissive
+	// exposure declared across this service's MCP methods, so one EXTERNAL tool
+	// makes the carrier reachable from outside to serve it. Meaningless unless
+	// HasMcpRpcs.
+	McpExposure spec.RpcExposure
 }
 
 // synthesizedServiceMarker is the sentinel emitted in a generated service's
@@ -252,15 +264,18 @@ type MethodDescriptor struct {
 	Collection           *CollectionDescriptor // method-level method_collection (collection-returning read); nil when absent
 	Rpc                  *RpcDescriptor        // method-level spec.rpc (call surface); nil when absent
 	MinGroupSize         int32                 // method-level (spec.min_group_size), stamped by the record-map injector onto a record's size-only RPCs; 0 when absent
+	IsMcp                bool                  // derived: spec.rpc declares principal RPC_PRINCIPAL_MCP — this RPC is an MCP tool, not a gRPC call
+	McpToolName          string                // derived: the tool name this RPC publishes under (snake_case of Name, or the mcp_tool_name override); empty unless IsMcp
 }
 
 // RpcDescriptor carries a method's spec.rpc annotation: the two independent
 // call-surface axes (principal, exposure) and the non-exclusive protocol
 // flags. Nil on MethodDescriptor means the method carries no spec.rpc.
 type RpcDescriptor struct {
-	Principal spec.RpcPrincipal // who calls; RPC_PRINCIPAL_UNSPECIFIED when the annotation omits it
-	Exposure  spec.RpcExposure  // where from; RPC_EXPOSURE_INTERNAL is the default
-	Flags     []spec.RpcFlag    // non-exclusive protocol properties, as declared
+	Principal   spec.RpcPrincipal // who calls; RPC_PRINCIPAL_UNSPECIFIED when the annotation omits it
+	Exposure    spec.RpcExposure  // where from; RPC_EXPOSURE_INTERNAL is the default
+	Flags       []spec.RpcFlag    // non-exclusive protocol properties, as declared
+	McpToolName string            // mcp_tool_name as declared (the override), empty when omitted; MethodDescriptor.McpToolName carries the resolved name
 }
 
 // CollectionDescriptor carries a method's method_collection annotation
@@ -800,6 +815,16 @@ func (p *DescriptorParser) parseServiceDescriptor(sd protoreflect.ServiceDescrip
 		}
 
 		svc.Methods = append(svc.Methods, md)
+
+		// Derived, not declared: §9 of the MCP design. EXTERNAL wins because the
+		// carrier has to be reachable from wherever its most-exposed tool is
+		// called.
+		if md.IsMcp {
+			svc.HasMcpRpcs = true
+			if md.Rpc != nil && md.Rpc.Exposure == spec.RpcExposure_RPC_EXPOSURE_EXTERNAL {
+				svc.McpExposure = spec.RpcExposure_RPC_EXPOSURE_EXTERNAL
+			}
+		}
 	}
 
 	return svc
@@ -941,9 +966,21 @@ func (p *DescriptorParser) parseMethodOptions(method protoreflect.MethodDescript
 		val := proto.GetExtension(opts, spec.E_Rpc).(*spec.RpcAnnotation)
 		if val != nil {
 			md.Rpc = &RpcDescriptor{
-				Principal: val.GetPrincipal(),
-				Exposure:  val.GetExposure(),
-				Flags:     val.GetFlags(),
+				Principal:   val.GetPrincipal(),
+				Exposure:    val.GetExposure(),
+				Flags:       val.GetFlags(),
+				McpToolName: val.GetMcpToolName(),
+			}
+			// An MCP tool's name and description are the RPC's own name and doc
+			// comment, resolved here so no consumer re-derives the convention.
+			// The override is the rare escape hatch; ValidateMcpAnnotations
+			// rejects it on a non-MCP RPC rather than dropping it silently.
+			if val.GetPrincipal() == spec.RpcPrincipal_RPC_PRINCIPAL_MCP {
+				md.IsMcp = true
+				md.McpToolName = val.GetMcpToolName()
+				if md.McpToolName == "" {
+					md.McpToolName = strutil.ToSnakeCase(md.Name)
+				}
 			}
 			for _, f := range val.GetFlags() {
 				switch f {

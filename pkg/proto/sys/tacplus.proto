@@ -485,6 +485,17 @@ message RpcInfo {
   // includes derived W2S gRPC-over-REST exposure when a C2S RPC has REST route
   // metadata.
   repeated RpcSurfaceInfo surfaces = 50;
+
+  // mcp is true when the rpc declares principal RPC_PRINCIPAL_MCP: it is an MCP
+  // tool, not a gRPC call. The tool's description is the `description` field
+  // (field 8) — the rpc's own doc comment — so there is no second description
+  // here to drift from it.
+  bool mcp = 51;
+
+  // mcp_tool_name is the tool name this rpc is published under: the RPC name in
+  // snake_case, or the spec.rpc mcp_tool_name override when one is declared.
+  // Empty unless mcp is true.
+  string mcp_tool_name = 52;
 }
 
 // EnumInfo describes a top-level protobuf enum definition.
@@ -543,6 +554,17 @@ message ServiceInfo {
 
   // host_label is the service_s2s label for hosted vservice RPC surfaces.
   string host_label = 12;
+
+  // mcp is true when at least one of this service's rpcs declares principal
+  // RPC_PRINCIPAL_MCP. That fact alone is what decides whether the service gets
+  // the generated session-carrying MCP transport; it is never declared.
+  bool mcp = 13;
+
+  // mcp_exposure is the derived exposure of that generated carrier: the
+  // most-permissive (union) exposure of this service's MCP rpcs, so one EXTERNAL
+  // tool makes the carrier reachable from outside to serve it. Meaningless
+  // unless mcp is true.
+  spec.RpcExposure mcp_exposure = 14;
 }
 
 // VServiceInfo describes a file-level virtual service identity.

@@ -855,6 +855,55 @@ service RestrictedAPI {
 }
 ```
 
+`RPC_PRINCIPAL_MCP` is the third value on the same axis: the rpc declares an **MCP
+tool**, not a gRPC call. tacplus generates its schema and a handler interface
+method the service implements by hand, and maps it to no gRPC RPC of its own —
+what the handler body does (call its own RPC, call another service, fold a Watch
+into one snapshot, nothing) is ordinary application code. Because `principal`
+holds one value, "MCP tool" and "gRPC call" are mutually exclusive by
+construction: a service wanting both surfaces for related functionality declares
+two rpcs.
+
+```protobuf
+service Tickets {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  // GetTicketBrief summarizes one ticket for a model.
+  rpc GetTicketBrief(GetTicketRequest) returns (GetTicketResponse) {
+    option (spec.rpc) = {
+      principal: RPC_PRINCIPAL_MCP,
+      exposure: RPC_EXPOSURE_EXTERNAL,
+      flags: [RPC_FLAG_AUTH_ENTITLED_USERS]
+    };
+  }
+}
+```
+
+Everything else is reuse, deliberately:
+
+- **Authorization is unchanged.** `flags` / `auth_services` /
+  `target_namespace_field` mean the same thing against whatever `Caller` the MCP
+  session captured at handshake as they do against a gRPC caller. There are no
+  MCP-specific authorization fields, because two independently-maintained
+  authorization surfaces are exactly what drifts.
+- **`(spec.principal)` / `(spec.store_principal)` on the request message are
+  honored identically.** That is the mechanism behind "the owner predicate is
+  server-computed and never an LLM-writable tool argument": the wrapper stamps
+  the field from the caller and refuses a request that supplied a different one.
+- **The tool name and description come from the rpc itself** — name = the RPC
+  name in snake_case (`GetTicketBrief` -> `get_ticket_brief`), description = the
+  rpc's own leading `//` doc comment — so there is no second description to drift
+  from the real one. `mcp_tool_name` overrides only the name, for the rare RPC
+  whose name makes a bad tool name; it must be snake_case, and declaring it on an
+  rpc that is not `RPC_PRINCIPAL_MCP` fails generation rather than being ignored.
+- **Streaming is a hard generation failure**, unconditionally: a tool call has no
+  wire representation for a stream. A handler may drive a `Watch` internally and
+  fold it into one response.
+- **The session-carrying transport is never declared.** A service having at least
+  one `RPC_PRINCIPAL_MCP` rpc is what generates it; its exposure is the
+  most-permissive `exposure` across those rpcs. The registry records both as
+  `ServiceInfo.mcp` and `ServiceInfo.mcp_exposure`.
+
 ### Entitlements Model
 
 For `service_c2s` services with `auth_entitled_users: true`, user tokens carry

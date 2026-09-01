@@ -212,6 +212,8 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 								GrpcService: serviceKey,
 								Rpcs:        serviceRpcs,
 								HostLabel:   svc.HostLabel,
+								Mcp:         svc.HasMcpRpcs,
+								McpExposure: svc.McpExposure,
 							}
 							if svc.EventLabel != "" {
 								si.EventLabel = svc.EventLabel
@@ -358,7 +360,7 @@ type registryGrantMethod struct {
 	// grant's EntitlementGrantInfo.RoutingAliasPackages gets this alias's
 	// meta.Package appended, so a token scoped to the physical package keeps
 	// the contract-package grant. See collectEventTopicEntitlementGrantMethods.
-	isRoutingAlias               bool
+	isRoutingAlias              bool
 	routingAliasContractPackage string
 }
 
@@ -1067,6 +1069,8 @@ func CollectRpcProtos(fds []*parser.FileDescriptor) ([]*spec.RpcInfo, error) {
 					HttpMethods:            m.HttpMethods,
 					HttpAliasPath:          m.HttpAliasPath,
 					Surfaces:               rpcSurfaceInfos(svc, m, grpcPath, authServices, authDisabled, authAnyUser),
+					Mcp:                    m.IsMcp,
+					McpToolName:            m.McpToolName,
 				}
 				// method_collection (collection-returning read) — surface the
 				// declared shape so service-local generators see it.

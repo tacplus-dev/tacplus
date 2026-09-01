@@ -1127,10 +1127,11 @@ message MethodC2SAnnotation {
   string target_namespace_field = 5;
 }
 
-// RpcPrincipal declares WHO calls an RPC: a user identity or a service
-// identity. The two are mutually exclusive, so this is an enum rather than a
-// flag. Every spec.rpc must set it — there is no safe default, because either
-// wrong answer is a silent authorization bug rather than a loud failure.
+// RpcPrincipal declares WHO calls an RPC: a user identity, a service identity,
+// or a model acting through a generated MCP tool surface. They are mutually
+// exclusive, so this is an enum rather than a flag. Every spec.rpc must set it —
+// there is no safe default, because either wrong answer is a silent
+// authorization bug rather than a loud failure.
 enum RpcPrincipal {
   RPC_PRINCIPAL_UNSPECIFIED = 0;
   // RPC_PRINCIPAL_USER: the caller acts as a user identity. Internally that is
@@ -1138,6 +1139,20 @@ enum RpcPrincipal {
   RPC_PRINCIPAL_USER = 1;
   // RPC_PRINCIPAL_SERVICE: the caller acts as a service identity.
   RPC_PRINCIPAL_SERVICE = 2;
+  // RPC_PRINCIPAL_MCP: this RPC is declared as an MCP tool rather than a gRPC
+  // call. tacplus generates the tool schema and a handler interface method the
+  // service implements by hand; it maps the tool to no gRPC RPC of its own.
+  // Being a value of this enum rather than a flag is what makes "MCP tool" and
+  // "gRPC call" 1:1 exclusive by construction: an rpc block holds one principal,
+  // so a service wanting both surfaces for related functionality declares two
+  // rpcs. Authorization is unchanged — flags / auth_services /
+  // target_namespace_field mean the same thing against whatever Caller the MCP
+  // session captured at handshake as they do against a gRPC caller.
+  //
+  // Streaming is a hard generation failure on this principal: the tool-call wire
+  // format has no representation for a stream. A handler is free to drive a
+  // Watch internally and fold it into one response.
+  RPC_PRINCIPAL_MCP = 3;
 }
 
 // RpcExposure declares WHERE an RPC is reachable from. Also mutually
@@ -1210,6 +1225,16 @@ message RpcAnnotation {
   // scope the response to the caller's subtree at the handler). Under
   // RPC_FLAG_AUTH_ANY_USER this instead holds an absolute namespace literal.
   string target_namespace_field = 5;
+
+  // mcp_tool_name overrides the generated MCP tool name for a
+  // RPC_PRINCIPAL_MCP rpc. Leave it unset: the default is the RPC name in MCP
+  // naming convention (snake_case), and the tool description is the rpc's own
+  // leading // doc comment, so neither is a second surface that can drift from
+  // the real one. Set it only for the rare RPC whose name does not make a good
+  // tool name. Must be snake_case ([a-z][a-z0-9_]*), and is only meaningful on
+  // RPC_PRINCIPAL_MCP — declaring it elsewhere fails generation rather than
+  // being silently ignored.
+  string mcp_tool_name = 6;
 }
 
 // CollectionMode declares how a multi-result read behaves. See docs/API.md.

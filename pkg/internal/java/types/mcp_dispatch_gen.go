@@ -543,18 +543,13 @@ func javaMcpScalarJSONType(protoType string) string {
 // javaMcpFileParams is everything the emitter needs that generateServiceWrapper
 // has already resolved.
 type javaMcpFileParams struct {
-	JavaPackage    string // the wrapper's own package
-	ServicePackage string // the proto package
-	OuterClassName string
-	ProtoFile      string
+	JavaPackage string // the wrapper's own package
+	ProtoFile   string
 	// FrameType is the resolved Java type of the carrier's frames
 	// ("Mcp.McpRequest" / "Mcp.McpResponse"), which the wrapper already imports.
 	FrameRequestType  string
 	FrameResponseType string
-	// FrameHelpers is the Helpers class qualifier for the mcp package, used for
-	// the outbound frame's generated validation.
-	FrameHelpers string
-	Imports      string
+	Imports           string
 	// NonToolHandlerDecls are the handler-interface declarations of this
 	// service's NON-tool rpcs, verbatim as the wrapper emitted them. The
 	// generated test's stub implements the whole interface, and reusing the

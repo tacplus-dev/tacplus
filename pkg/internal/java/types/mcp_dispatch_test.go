@@ -104,12 +104,9 @@ func javaMcpTestService() *parser.ServiceInfo {
 func javaMcpTestFileParams() javaMcpFileParams {
 	return javaMcpFileParams{
 		JavaPackage:       "com.example.s2sm.internal.grpc.servers.svc.ticket",
-		ServicePackage:    "ticket",
-		OuterClassName:    "Ticket",
 		ProtoFile:         "svc/ticket.proto",
 		FrameRequestType:  "Mcp.McpRequest",
 		FrameResponseType: "Mcp.McpResponse",
-		FrameHelpers:      "com.example.types.sys.mcp.Helpers",
 		Imports:           "import com.example.types.svc.ticket.*;",
 		NonToolHandlerDecls: []string{
 			"        Ticket.GetTicketResponse getTicket(Caller caller, Ticket.GetTicketRequest request) throws ProtoException;\n",

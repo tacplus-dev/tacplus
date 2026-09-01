@@ -916,12 +916,9 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		}
 		mcpParams := javaMcpFileParams{
 			JavaPackage:       fullPackage,
-			ServicePackage:    info.Package,
-			OuterClassName:    outerClassName,
 			ProtoFile:         svc.ProtoFile,
 			FrameRequestType:  resolveJavaMethodType(mcpCarrier.FullInputType, mcpCarrier.InputType, info.Package, outerClassName, crossPkgOuterClasses),
 			FrameResponseType: resolveJavaMethodType(mcpCarrier.FullOutputType, mcpCarrier.OutputType, info.Package, outerClassName, crossPkgOuterClasses),
-			FrameHelpers:      resolveValidationHelpers(mcpCarrier.FullOutputType, info.Package, crossPkgHelpers),
 			// The wrapper's own import block verbatim, so every proto type the
 			// dispatch names resolves exactly as it does next door, plus the
 			// Caller the surface is bound to and the SDK itself.

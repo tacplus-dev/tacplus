@@ -985,9 +985,46 @@ Everything else is reuse, deliberately:
   lives in `dependencies.yaml`. The SDK's own module requires `go >= 1.25.0`, so
   a consumer module below that cannot build a service with an MCP tool.
 
-  In Java the carrier is still a handler method and the seam the MCP SDK
-  integration terminates the session on; that language's dispatch is a separate
-  subtask.
+  **In Java, tacplus generates the same termination**, against the official
+  `io.modelcontextprotocol.sdk:mcp`. The carrier is likewise NOT a handler
+  method: it goes through the wrapper's ordinary bidi branch — same
+  authorization, same caller extraction, same frame validation — with a
+  fail-closed check that the session has a verified caller, and delegates to a
+  generated class. Beside the wrapper the Java generator emits `<Service>Mcp`,
+  holding:
+
+  - `<Service>Mcp.tools()` — the published tool set as `List<McpSchema.Tool>`,
+    each built from the generated JSON Schema, omitting the same server-computed
+    fields.
+  - `<Service>Mcp.Surface` — the per-session surface, bound to one verified
+    `Caller`. It holds the caller as a FIELD rather than reading it off the gRPC
+    `Context`, because the SDK dispatches a tool call on its own scheduler
+    thread where `Auth.callerFromContext()` is not in scope. A `tools/call`
+    decodes into the rpc's own protobuf request with `JsonFormat.parser()`
+    (which REJECTS an unknown field, so `additionalProperties: false` is
+    enforced server-side too), runs the generated request validation, stamps
+    `(spec.principal)` / `(spec.namespace)` from that `Caller`, dispatches to
+    `<Service>Handler.<rpc>`, filters `(spec.store_principal)` /
+    `(spec.store_namespace)` rows out of the response — with the record plane's
+    own `Runtime.getRuntime().halt(1)` backstop on a foreign-tenant row — and
+    frames the typed result. A tool failure is a `CallToolResult` with
+    `isError`, not a JSON-RPC protocol error, so the model can read and correct
+    its own call.
+  - `<Service>Mcp.serve(...)` and an `McpServerTransportProvider` over the gRPC
+    bidi `StreamObserver` pair — one complete JSON-RPC frame per stream message,
+    bounded at `mcp.McpResponse.payload`'s `(spec.assert_max_size)`. An
+    undecodable frame is answered with a JSON-RPC parse error and the session
+    survives it.
+  - `<Service>McpTest` — a generated main-method self-test (the shape every
+    other generated Java test takes) that drives each tool through the dispatch,
+    asserts the typed handler was reached with the server-STAMPED value the call
+    never carried, asserts a client-supplied caller-scoped field is refused
+    before the handler is reached, and drives a whole session over the carrier as
+    raw JSON-RPC frames.
+
+  Java's generated code lands in the consuming Maven module, so tacplus writes no
+  `pom.xml` for it: the consumer declares the SDK, and the version inventory
+  lives in `dependencies.yaml`. The SDK requires Java 17 or later.
 
 ### Entitlements Model
 

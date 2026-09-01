@@ -346,6 +346,10 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 	if err != nil {
 		return smTemplateData{}, err
 	}
+	hasMcpRpcs, err := detectOwnPackageMcpRpcs(config)
+	if err != nil {
+		return smTemplateData{}, err
+	}
 	typedHealthType := ""
 	typedHealthModPath := ""
 	if config.FlatProtoDir != "" {
@@ -496,7 +500,14 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		// but conceptually every TLS service needs a cert. Conflate them: any
 		// service with TLS gRPC enables the auto-TLS code path, defaulting to
 		// ECDSA P-256 (universal compatibility) if no explicit key type is set.
-		HasAutoTls: config.HasAutoTls() || hasTlsGrpc,
+		// hasMcpRpcs is a third contributor and not a redundant one: an MCP-only
+		// service (every rpc RPC_PRINCIPAL_MCP, no service_s2s/service_c2s) has
+		// no entry in GrpcServices at all, so hasTlsGrpc is false, yet run()
+		// still serves — the health-only branch of the template binds a TLS
+		// listener and so references reloading_tls_incoming and
+		// tls_server_certified_key, both gated on HasAutoTls. Without this the
+		// generated s2sm does not compile (E0425/E0609).
+		HasAutoTls: config.HasAutoTls() || hasTlsGrpc || hasMcpRpcs,
 		AutoTlsKeyType: func() string {
 			if k := config.AutoTlsKeyType(); k != "" {
 				return k
@@ -504,7 +515,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			// A spec.smb service reuses the shared generate_key_and_proto helper
 			// for its member keypair, so it needs a concrete key type even when it
 			// has no TLS gRPC of its own. Default to ECDSA P-256 like the TLS path.
-			if hasTlsGrpc || hasSmb {
+			if hasTlsGrpc || hasSmb || hasMcpRpcs {
 				return "ecdsa"
 			}
 			return ""
@@ -644,6 +655,32 @@ func detectSmbRuntimeMetadata(config *tactype.Config) (bool, string, error) {
 		}
 	}
 	return hasSmb, authorityID, nil
+}
+
+// detectOwnPackageMcpRpcs reports whether the service's own proto package
+// declares a service with at least one RPC_PRINCIPAL_MCP rpc — the same
+// condition cargo.go's HasMcpRpcs is built from, read here off the descriptors
+// because such a service is absent from the resolved gRPC service list when it
+// declares no ordinary s2s/c2s surface of its own.
+func detectOwnPackageMcpRpcs(config *tactype.Config) (bool, error) {
+	if config.FlatProtoDir == "" || config.SelfPackage == "" {
+		return false, nil
+	}
+	dp, err := parser.NewDescriptorParser(config.FlatProtoDir)
+	if err != nil {
+		return false, fmt.Errorf("service manager data: parse proto descriptors in %q: %w", config.FlatProtoDir, err)
+	}
+	for _, fd := range dp.GetAllFiles() {
+		if fd.Package != config.SelfPackage {
+			continue
+		}
+		for si := range fd.Services {
+			if fd.Services[si].HasMcpRpcs {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // generateHandlerInterface generates handler.rs in the sm/ directory.

@@ -679,6 +679,14 @@ func rpcInfosForService(rpcs []*spec.RpcInfo, protoPackage, serviceName string) 
 	for _, rpc := range rpcs {
 		if strings.HasPrefix(rpc.GetGrpcPath(), prefix) {
 			out = append(out, rpc)
+			continue
+		}
+		// An MCP tool carries no gRPC path — it is not gRPC-callable — so it has
+		// to be matched by the service it was declared on instead. Without this
+		// a service's own tools would be missing from the very ServiceInfo whose
+		// mcp/mcp_exposure flags say it hosts them.
+		if rpc.GetMcp() && rpc.GetServiceName() == serviceName {
+			out = append(out, rpc)
 		}
 	}
 	return out
@@ -1027,6 +1035,26 @@ func CollectRpcProtos(fds []*parser.FileDescriptor) ([]*spec.RpcInfo, error) {
 	for _, fd := range fds {
 		for _, svc := range fd.Services {
 			for _, m := range svc.Methods {
+				// RPC_PRINCIPAL_MCP declares a tool, not a call: the MCP design
+				// (§5) is that tacplus maps an MCP tool to no gRPC RPC at all.
+				// The entry keeps the tool's identity and description — that is
+				// what the MCP transport is generated from — and carries nothing
+				// that would publish it as a call: no grpc_path, no REST route,
+				// no surfaces, no verb classification. collectEntitlementGrants
+				// keys on auth_model == "c2s", so leaving it unset is also what
+				// suppresses the entitlement grant.
+				if m.IsMcp {
+					rpcs = append(rpcs, &spec.RpcInfo{
+						ServiceName: svc.Name,
+						Rpc:         m.Name,
+						Description: m.Comment,
+						InputType:   m.InputType,
+						OutputType:  m.OutputType,
+						Mcp:         true,
+						McpToolName: m.McpToolName,
+					})
+					continue
+				}
 				// Determine auth model from service annotation.
 				authModel := ""
 				if svc.IsS2S {

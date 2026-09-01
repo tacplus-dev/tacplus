@@ -154,6 +154,11 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	// Build gRPC proxy method implementations for ServiceWrapper (only target service)
 	var proxyMethods strings.Builder
 	for _, method := range targetService.Methods {
+		if method.IsMcp {
+			proxyMethods.WriteString(generateRustMcpRefusalMethod(targetService, method, info.Package, info.CrossPackageTypes))
+			proxyMethods.WriteString("\n")
+			continue
+		}
 		proxyMethods.WriteString(generateRustProxyMethod(targetService, method, info.Package, info.CrossPackageTypes))
 		proxyMethods.WriteString("\n")
 	}
@@ -170,6 +175,11 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	handlerTrait.WriteString("#[tonic::async_trait]\n")
 	handlerTrait.WriteString(fmt.Sprintf("pub trait %sHandler: Send + Sync + 'static {\n", serviceName))
 	for _, method := range targetService.Methods {
+		// An MCP tool is not gRPC-callable, so the service is not asked to
+		// implement a gRPC handler for it. See generateRustMcpRefusalMethod.
+		if method.IsMcp {
+			continue
+		}
 		handlerTrait.WriteString(generateRustHandlerMethod(method, info.Package, info.CrossPackageTypes))
 		handlerTrait.WriteString("\n")
 	}
@@ -187,6 +197,9 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	handlerTrait.WriteString("#[tonic::async_trait]\n")
 	handlerTrait.WriteString(fmt.Sprintf("impl %sHandler for %sHandlerStub {\n", serviceName, serviceName))
 	for _, method := range targetService.Methods {
+		if method.IsMcp {
+			continue
+		}
 		handlerTrait.WriteString(generateRustHandlerStubMethod(method, info.Package, serviceName, info.CrossPackageTypes))
 		handlerTrait.WriteString("\n")
 	}
@@ -208,6 +221,15 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	var grpcWrappers, watchFields, watchFieldsInit strings.Builder
 	var methodAuthLines []string
 	for _, method := range targetService.Methods {
+		// An MCP tool gets no gRPC method wrapper: no authorize call, no
+		// accounting emit, no handler delegation, and no per-method auth
+		// registration. tonic's server trait has no default bodies, so this
+		// impl must stay total; the refusal is what fills the slot.
+		if method.IsMcp {
+			grpcWrappers.WriteString(generateRustMcpRefusalMethod(targetService, method, info.Package, info.CrossPackageTypes))
+			grpcWrappers.WriteString("\n")
+			continue
+		}
 		// (spec.record).min_group_size is enforced in the generated Java service
 		// wrapper only. A Rust host of a record query plane would serve the
 		// size-only RPCs with no guard at all, so refuse to generate rather than
@@ -309,6 +331,11 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	var traitImpls strings.Builder
 	fmt.Fprintf(&traitImpls, "#[tonic::async_trait]impl %s for %s {\n", tonicName, wrapperName)
 	for _, method := range targetService.Methods {
+		if method.IsMcp {
+			traitImpls.WriteString(generateRustMcpRefusalMethod(targetService, method, info.Package, info.CrossPackageTypes))
+			traitImpls.WriteString("\n")
+			continue
+		}
 		traitImpls.WriteString(generateRustTraitMethod(targetService, method, info.Package, info.CrossPackageTypes))
 		traitImpls.WriteString("\n")
 	}
@@ -699,6 +726,28 @@ func generateRustProxyMethod(svc *parser.ServiceInfo, method *parser.MethodInfo,
 }
 
 // generateRustTraitMethod generates a trait method signature for ServiceWrapper
+// generateRustMcpRefusalMethod renders the tonic trait method for an
+// RPC_PRINCIPAL_MCP rpc.
+//
+// The rpc is an MCP tool, not a gRPC call, so nothing else is generated for it:
+// no handler-trait method, no gRPC wrapper, no REST route, no entitlement
+// grant. tonic's generated server trait has no default method bodies, though,
+// so the wrapper must still supply one to implement the trait at all — and the
+// only body that keeps the suppression honest is an outright refusal. It takes
+// no caller, reads no request, and reaches no handler. MCP-1 rejects a
+// streaming MCP rpc at parse time, so the unary shape is the only one reachable
+// here.
+func generateRustMcpRefusalMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePkg string, crossPkgTypes map[string]string) string {
+	methodSnake := prostSnakeName(method.Name)
+	inputType, outputType := resolveRustTypeQualified(method, servicePkg, crossPkgTypes)
+	return fmt.Sprintf(`    async fn %s(
+        &self,
+        _request: tonic::Request<%s>,
+    ) -> Result<tonic::Response<%s>, tonic::Status> {
+        Err(tonic::Status::unimplemented("%s.%s is an MCP tool, not a gRPC method"))
+    }`, methodSnake, inputType, outputType, svc.Name, method.Name)
+}
+
 func generateRustTraitMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePkg string, crossPkgTypes map[string]string) string {
 	_, outputType := resolveRustTypeQualified(method, servicePkg, crossPkgTypes)
 	switch {

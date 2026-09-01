@@ -182,6 +182,12 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 			// ServiceManager call this would otherwise dangle.
 			hasMethodAuth := len(service.Methods) > 0 && len(service.AuthServices) > 0
 			for _, m := range service.Methods {
+				// An MCP tool has no generated gRPC wrapper, so it contributes
+				// nothing to the wrapper's auth surface — no per-method auth
+				// registration, no service-level any-user widening.
+				if m.IsMcp {
+					continue
+				}
 				if m.AuthAnyUser {
 					anyUser = true
 				}
@@ -688,6 +694,14 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	// Method-level auth_services overrides service-level.
 	var methodAuthLines []string
 	for _, method := range targetService.Methods {
+		// An RPC_PRINCIPAL_MCP rpc is a tool, not a gRPC call: it gets no
+		// handler-interface method, no @Override on the gRPC ImplBase, and no
+		// per-method auth registration. The generated ImplBase already answers
+		// UNIMPLEMENTED for a method the wrapper does not override, so unlike
+		// Rust's tonic trait nothing has to be emitted in its place.
+		if method.IsMcp {
+			continue
+		}
 		inputType := resolveJavaMethodType(method.FullInputType, method.InputType, info.Package, outerClassName, crossPkgOuterClasses)
 		outputType := resolveJavaMethodType(method.FullOutputType, method.OutputType, info.Package, outerClassName, crossPkgOuterClasses)
 		inputHelpers := resolveValidationHelpers(method.FullInputType, info.Package, crossPkgHelpers)

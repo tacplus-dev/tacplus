@@ -772,6 +772,12 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 			// would otherwise 401 them regardless of the annotation.
 			var authExempt []string
 			for _, m := range service.Methods {
+				// An MCP tool has no generated gRPC wrapper, so it contributes
+				// nothing to the wrapper's auth surface — no per-method auth
+				// registration, no service-level any-user widening.
+				if m.IsMcp {
+					continue
+				}
 				if m.AuthAnyUser {
 					anyUser = true
 				}

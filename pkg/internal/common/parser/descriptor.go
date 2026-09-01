@@ -765,7 +765,14 @@ func (p *DescriptorParser) parseServiceDescriptor(sd protoreflect.ServiceDescrip
 		//   {REST_ROOT_PATH}/{package}/{MethodName}
 		// POST is always present. Additional methods come from rest_method.
 		// rest_path creates an additive alias (relative to REST_ROOT_PATH).
-		if svc.GrpcName != "" && len(md.HttpMethods) == 0 {
+		//
+		// An RPC_PRINCIPAL_MCP rpc is deliberately excluded: it declares a tool,
+		// not a call, and the MCP design (§5) is that tacplus maps it to no gRPC
+		// RPC at all. Leaving HttpPath/HttpMethods empty is what suppresses its
+		// REST route and w2s surface — every consumer of those two fields
+		// (rpcSurfaceInfos, the w2s/rest client generators) already treats an
+		// empty path as "no REST surface".
+		if svc.GrpcName != "" && len(md.HttpMethods) == 0 && !md.IsMcp {
 			// Build method list: POST always present
 			methods := []string{"POST"}
 			// Server-streaming defaults to GET
@@ -2910,6 +2917,7 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 				TargetNamespaceField: method.TargetNamespaceField,
 				Collection:           method.Collection,
 				MinGroupSize:         method.MinGroupSize,
+				IsMcp:                method.IsMcp,
 			}
 			serviceInfo.Methods = append(serviceInfo.Methods, methodInfo)
 		}

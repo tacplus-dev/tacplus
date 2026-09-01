@@ -8,7 +8,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use prost::Message;
+// ANONYMOUS, and it has to be. This template also imports the subscribed
+// record type by its own name, and a record type legitimately named `Message`
+// (messaging.Message, the platform's message primitive) collides with the
+// prost trait: `error[E0252]: the name Message is defined multiple times`,
+// followed by every use of the record type resolving to the trait. `as _`
+// brings the trait's methods and associated functions into scope — which is
+// all this file needs from it — without binding the name.
+use prost::Message as _;
 use prost::bytes::{Buf, Bytes};
 use tokio_stream::StreamExt;
 use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};

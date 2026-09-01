@@ -210,6 +210,16 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	for _, service := range targetServices {
 		handlerInterface.WriteString(generateGoHandlerInterface(service, info.Package))
 		for _, method := range service.Methods {
+			// An RPC_PRINCIPAL_MCP rpc is a tool, not a gRPC call: it gets no
+			// handler-interface method, no method on the wrapper, and no
+			// per-method auth registration. The wrapper embeds
+			// types.Unimplemented<Service>Server, so a method the wrapper does
+			// not define already answers UNIMPLEMENTED — like Java's ImplBase
+			// and unlike Rust's tonic trait, nothing has to be emitted in its
+			// place.
+			if method.IsMcp {
+				continue
+			}
 			// (spec.record).min_group_size is enforced in the generated Java
 			// service wrapper only. A Go host of a record query plane would serve
 			// the size-only RPCs with no guard at all, so refuse to generate
@@ -578,6 +588,11 @@ func generateGoHandlerInterface(svc *parser.ServiceInfo, servicePackage string) 
 	var b strings.Builder
 	fmt.Fprintf(&b, "type %sHandler interface {\n", svc.Name)
 	for _, method := range svc.Methods {
+		// An MCP tool is not gRPC-callable, so the service is not asked to
+		// implement a gRPC handler for it. Matches the Java and Rust wrappers.
+		if method.IsMcp {
+			continue
+		}
 		goInput := goTypeRef(method.FullInputType, method.InputType, servicePackage)
 		goOutput := goTypeRef(method.FullOutputType, method.OutputType, servicePackage)
 		handlerEmpty := isEmptyType(method.FullInputType) || isTraceRequestType(method.FullInputType)

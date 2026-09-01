@@ -310,6 +310,13 @@ func generateGoW2SClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 	hasClientOnlyStreaming := false
 	hasBidi := false
 	for _, method := range targetService.Methods {
+		// An RPC_PRINCIPAL_MCP rpc carries no REST route by construction — the
+		// parser leaves HttpPath/HttpMethods empty for it — so there is no w2s
+		// client method to emit. Without this it would trip the missing-route
+		// refusal below and fail generation outright.
+		if method.IsMcp {
+			continue
+		}
 		if method.HttpPath == "" {
 			return fmt.Errorf("%s.%s requires W2S REST route metadata; clients.w2s.enabled cannot emit a method without an HTTP path",
 				targetService.Name, method.Name)
@@ -411,6 +418,13 @@ func collectGoW2SReferencedTypeImports(svc *parser.ServiceInfo, servicePackage s
 	hasTypesImport := false
 
 	for _, method := range svc.Methods {
+		// Skipped for the same reason as the method emission itself: an MCP
+		// tool gets no w2s client method, so its types are not referenced. The
+		// import block is rendered by format.Source, which does not prune an
+		// unused import, so this must stay in step with the emission loop.
+		if method.IsMcp {
+			continue
+		}
 		for _, fullType := range goW2SReferencedTypes(method) {
 			pkg, simple := splitProtoType(fullType)
 			switch {

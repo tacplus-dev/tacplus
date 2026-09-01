@@ -1611,6 +1611,12 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 			// ServiceManager call a function that was never generated.
 			hasMethodAuth := len(service.Methods) > 0 && len(service.AuthServices) > 0
 			for _, m := range service.Methods {
+				// An MCP tool has no generated gRPC wrapper, so it contributes
+				// nothing to the wrapper's auth surface — no per-method auth
+				// registration, no service-level any-user widening.
+				if m.IsMcp {
+					continue
+				}
 				if m.AuthAnyUser {
 					anyUser = true
 				}

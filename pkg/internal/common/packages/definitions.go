@@ -36,15 +36,17 @@ var KnownPackages = []PackageDefinition{
 	},
 	{
 		// Backs the generated Model Context Protocol termination for a service
-		// declaring (spec.rpc) principal: RPC_PRINCIPAL_MCP. Go only: Rust pins
-		// rmcp in its own generator (mcp_dispatch_gen.go) because the generated
-		// crate has a Cargo.toml to pin it in, and Go's generated code lands in
-		// the consumer's own module, whose go.mod tacplus does not write.
+		// declaring (spec.rpc) principal: RPC_PRINCIPAL_MCP. Go and Java only:
+		// Rust pins rmcp in its own generator (rust/types/mcp_dispatch_gen.go)
+		// because the generated crate has a Cargo.toml to pin it in, while Go's
+		// and Java's generated code lands in the consumer's own module, whose
+		// go.mod / pom.xml tacplus does not write.
 		Name:        "mcp",
 		Description: "Model Context Protocol SDK - backs the generated MCP tool dispatch",
-		Languages:   []string{"go"},
+		Languages:   []string{"go", "java"},
 		Mappings: map[string][]string{
-			"go": {"github.com/modelcontextprotocol/go-sdk"},
+			"go":   {"github.com/modelcontextprotocol/go-sdk"},
+			"java": {"io.modelcontextprotocol.sdk:mcp"},
 		},
 	},
 	{

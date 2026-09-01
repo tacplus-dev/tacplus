@@ -693,13 +693,27 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	// Build registerMethodAuth body: collect per-method auth_services and target namespace metadata.
 	// Method-level auth_services overrides service-level.
 	var methodAuthLines []string
+	// The handler-interface declarations of the NON-tool rpcs, kept so the
+	// generated MCP self-test's stub can implement the whole interface with the
+	// wrapper's own signatures rather than a second renderer's guess at them.
+	var nonToolHandlerDecls []string
+	// The generated MCP session carrier, when this service has one. It is the
+	// one rpc the wrapper serves without a handler method.
+	mcpCarrier := javaMcpCarrierMethod(targetService)
 	for _, method := range targetService.Methods {
 		// An RPC_PRINCIPAL_MCP rpc is a tool, not a gRPC call: it gets no
-		// handler-interface method, no @Override on the gRPC ImplBase, and no
-		// per-method auth registration. The generated ImplBase already answers
-		// UNIMPLEMENTED for a method the wrapper does not override, so unlike
-		// Rust's tonic trait nothing has to be emitted in its place.
+		// @Override on the gRPC ImplBase and no per-method auth registration.
+		// The generated ImplBase already answers UNIMPLEMENTED for a method the
+		// wrapper does not override, so unlike Rust's tonic trait nothing has to
+		// be emitted in its place.
+		//
+		// It DOES get a handler-interface method: that is what the generated MCP
+		// dispatch calls (mcp_dispatch_gen.go). Only the gRPC-callable surface
+		// is suppressed.
 		if method.IsMcp {
+			inputType := resolveJavaMethodType(method.FullInputType, method.InputType, info.Package, outerClassName, crossPkgOuterClasses)
+			outputType := resolveJavaMethodType(method.FullOutputType, method.OutputType, info.Package, outerClassName, crossPkgOuterClasses)
+			handlerInterface.WriteString(generateJavaHandlerMethod(method, inputType, outputType, crossPkgOuterClasses))
 			continue
 		}
 		inputType := resolveJavaMethodType(method.FullInputType, method.InputType, info.Package, outerClassName, crossPkgOuterClasses)
@@ -735,7 +749,17 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			return false, fmt.Errorf("%s.%s cannot be generated for a c2s surface because %s",
 				targetService.Name, method.Name, why)
 		}
-		handlerInterface.WriteString(generateJavaHandlerMethod(method, inputType, outputType, crossPkgOuterClasses))
+		// The generated session carrier is served by the wrapper itself
+		// (javaMcpTransport), not by the service: nothing about carrying an MCP
+		// session is the service's to write. Its TOOLS are on this interface;
+		// the carriage is not. It still gets the ordinary bidi gRPC override —
+		// same authorization, same caller extraction, same frame validation —
+		// with only the delegation target swapped.
+		if method != mcpCarrier {
+			decl := generateJavaHandlerMethod(method, inputType, outputType, crossPkgOuterClasses)
+			handlerInterface.WriteString(decl)
+			nonToolHandlerDecls = append(nonToolHandlerDecls, decl)
+		}
 		effectiveAuthAnyUser := method.AuthAnyUser
 		grpcMethods.WriteString(generateJavaGRPCWrapperSurface(method, serviceName, svc.GrpcName, inputType, outputType, inputHelpers, outputHelpers, effectiveAuthAnyUser, method.AuthDisabled || svc.AuthDisabled || svc.IsC2D, accountingMap, info.Package, svc.ParentDir, info.CrossPackageTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses, svc.IsC2S))
 		grpcMethods.WriteString("\n")
@@ -872,6 +896,44 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 
 	if err := t.Execute(file, data); err != nil {
 		return false, fmt.Errorf("failed to execute template: %w", err)
+	}
+
+	// The MCP termination lands in its own class beside the wrapper: same
+	// package, so the carrier method the wrapper emits calls straight into it,
+	// but its own imports (the MCP SDK, Reactor, the JSON-RPC codec) do not have
+	// to be threaded through the wrapper template for the services that declare
+	// no tool.
+	if mcpCarrier != nil {
+		tools, err := javaMcpTools(targetService, info.Package, outerClassName, crossPkgOuterClasses, crossPkgHelpers, san)
+		if err != nil {
+			return false, err
+		}
+		if len(tools) == 0 {
+			// HasMcpRpcs is what produced the carrier, so this cannot happen; if
+			// it ever does, a carrier with no tool set is a generation bug, not a
+			// service that serves nothing.
+			return false, fmt.Errorf("%s has a generated MCP session carrier but no RPC_PRINCIPAL_MCP rpc", serviceName)
+		}
+		mcpParams := javaMcpFileParams{
+			JavaPackage:       fullPackage,
+			ServicePackage:    info.Package,
+			OuterClassName:    outerClassName,
+			ProtoFile:         svc.ProtoFile,
+			FrameRequestType:  resolveJavaMethodType(mcpCarrier.FullInputType, mcpCarrier.InputType, info.Package, outerClassName, crossPkgOuterClasses),
+			FrameResponseType: resolveJavaMethodType(mcpCarrier.FullOutputType, mcpCarrier.OutputType, info.Package, outerClassName, crossPkgOuterClasses),
+			FrameHelpers:      resolveValidationHelpers(mcpCarrier.FullOutputType, info.Package, crossPkgHelpers),
+			// The wrapper's own import block verbatim, so every proto type the
+			// dispatch names resolves exactly as it does next door, plus the
+			// Caller the surface is bound to and the SDK itself.
+			Imports:             javaMcpImports(typesImport, serviceManagerImport),
+			NonToolHandlerDecls: nonToolHandlerDecls,
+		}
+		if err := writeJavaMcpDispatchFile(targetService, tools, svc.OutputDir, mcpParams); err != nil {
+			return false, err
+		}
+		if err := writeJavaMcpDispatchTestFile(targetService, tools, svc.OutputDir, mcpParams); err != nil {
+			return false, err
+		}
 	}
 
 	return hasAccounting, nil
@@ -2425,6 +2487,17 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 
 	case method.ClientStreaming && method.ServerStreaming:
 		// Bidirectional streaming — authorize on stream open, delegate to handler
+		//
+		// The generated MCP session carrier has no handler method to delegate
+		// to: the whole session is generated (mcp_dispatch_gen.go). It goes
+		// through this ordinary branch — same authorization, same caller
+		// extraction, same validatingRequestObserver/validatingResponseObserver
+		// framing — with only the delegation target swapped and a fail-closed
+		// caller check in front.
+		mcpCarrierCall := ""
+		if method.Name == parser.McpCarrierRpcName(serviceName) {
+			mcpCarrierCall = fmt.Sprintf("%sMcp.serve(handler, caller, %%s)", serviceName)
+		}
 		var authCheckNoReq string
 		if authDisabled {
 			// Nothing verifies a caller here, so accounting records carry no identity.
@@ -2472,9 +2545,11 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 
 		if hasAccounting {
 			accountedStreamResponseObserver := strings.ReplaceAll(streamResponseObserver, "responseObserver", "__accountingResponseObserver")
-			handlerObserverExpr := clientStreamInputObserver(
-				fmt.Sprintf("handler.%s(caller, %s)", methodName, accountedStreamResponseObserver),
-				"__accountingResponseObserver")
+			accountedDelegate := fmt.Sprintf("handler.%s(caller, %s)", methodName, accountedStreamResponseObserver)
+			if mcpCarrierCall != "" {
+				accountedDelegate = fmt.Sprintf(mcpCarrierCall, accountedStreamResponseObserver)
+			}
+			handlerObserverExpr := clientStreamInputObserver(accountedDelegate, "__accountingResponseObserver")
 			return fmt.Sprintf(`    @Override
     public StreamObserver<%s> %s(StreamObserver<%s> responseObserver) {
 %s
@@ -2505,6 +2580,24 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 				inputType, inputType)
 		}
 
+		delegate := fmt.Sprintf("handler.%s(caller, %s)", methodName, streamResponseObserver)
+		callerGuard := ""
+		if mcpCarrierCall != "" {
+			delegate = fmt.Sprintf(mcpCarrierCall, streamResponseObserver)
+			// Fail closed: every server-computed predicate in the tool surface
+			// comes from this caller, so a session with no verified identity
+			// would run its tools unscoped.
+			callerGuard = `
+        if (caller == null) {
+            responseObserver.onError(toGrpcError(new ProtoException(ProtoException.UNAUTHENTICATED, "an MCP session requires an authenticated caller")));
+            return new StreamObserver<` + inputType + `>() {
+                @Override public void onNext(` + inputType + ` value) {}
+                @Override public void onError(Throwable t) {}
+                @Override public void onCompleted() {}
+            };
+        }`
+		}
+
 		return fmt.Sprintf(`    @Override
     public StreamObserver<%s> %s(StreamObserver<%s> responseObserver) {
 %s
@@ -2512,7 +2605,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
         // Extract caller identity and request ID
         String requestId = Auth.requestIdFromContext();
 	        Caller caller = Auth.callerFromContext();
-	        logger.debug("rpc method={} request_id={}", "%s", requestId);
+	        logger.debug("rpc method={} request_id={}", "%s", requestId);%s
 	        try {
 	            return %s;
 	        } catch (ProtoException e) {
@@ -2524,8 +2617,8 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             };
         }
     }
-	`, inputType, methodName, outputType, authCheckNoReq, fullMethod,
-			clientStreamInputObserver(fmt.Sprintf("handler.%s(caller, %s)", methodName, streamResponseObserver), "responseObserver"),
+	`, inputType, methodName, outputType, authCheckNoReq, fullMethod, callerGuard,
+			clientStreamInputObserver(delegate, "responseObserver"),
 			inputType, inputType)
 	}
 

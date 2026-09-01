@@ -53,6 +53,20 @@ public final class Caller {
     }
 
     /**
+     * Returns the caller's sub claim — the authenticated principal, as the
+     * SPIFFE URI EventBus stamps into a record's owner field at publish time.
+     * Empty when the token carries no sub claim.
+     *
+     * <p>The Caller-bound twin of {@code Auth.callerSubFromContext()}, and the
+     * subject half of {@link #getNamespace()}. Needed wherever the caller is
+     * held as a VALUE rather than read off the gRPC Context — the generated MCP
+     * dispatch, whose tool calls run on the SDK's own scheduler thread.
+     */
+    public String getSubject() {
+        return tokenPayload == null ? "" : Auth.claimFromPayload(tokenPayload, "sub");
+    }
+
+    /**
      * Returns the x-request-id forwarded from the gateway.
      */
     public String getRequestId() {

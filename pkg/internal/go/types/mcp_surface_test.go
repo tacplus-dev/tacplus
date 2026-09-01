@@ -44,13 +44,18 @@ func mcpToolAndControlService() (*parser.ServiceInfo, *parser.MethodInfo, *parse
 	return &parser.ServiceInfo{Name: "TicketApi", Methods: []*parser.MethodInfo{tool, control}}, tool, control
 }
 
-func TestGoHandlerInterfaceOmitsMcpTool(t *testing.T) {
+// The handler-interface METHOD is the one part of the suppression that came
+// back: real MCP dispatch needs a typed target to call, and the decision doc
+// (§8) specifies exactly this shape — one handler method per MCP-marked rpc,
+// with the same signature every other unary rpc has. See
+// TestGoMcpCarrierIsNotAHandlerMethodButItsToolsAre for the carrier's half.
+func TestGoHandlerInterfaceCarriesMcpToolAsAnOrdinaryUnaryMethod(t *testing.T) {
 	svc, _, _ := mcpToolAndControlService()
 
 	rendered := generateGoHandlerInterface(svc, "ticket")
 
-	if strings.Contains(rendered, "GetTicketBrief") {
-		t.Fatalf("MCP tool reached the Go handler interface; it is not gRPC-callable:\n%s", rendered)
+	if !strings.Contains(rendered, "GetTicketBrief(ctx context.Context, caller *servicemanager.Caller, req *types.GetTicketBriefRequest) (*types.GetTicketBriefResponse, error)") {
+		t.Fatalf("MCP tool is not a handler method, so the generated dispatch has nothing typed to call:\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "GetTicket(ctx context.Context") {
 		t.Fatalf("non-MCP control rpc is missing from the Go handler interface:\n%s", rendered)
@@ -87,7 +92,10 @@ func TestGoServiceWrapperOmitsMcpToolMethodAndAuth(t *testing.T) {
 	if !strings.Contains(rendered, "types.UnimplementedTicketApiServer") {
 		t.Fatalf("wrapper no longer embeds the Unimplemented server; suppression would make it non-total:\n%s", rendered)
 	}
-	if strings.Contains(rendered, "GetTicketBrief") {
+	// The tool is still absent from every gRPC-CALLABLE surface: no method on
+	// the wrapper, no per-method auth registration. Only the handler seam came
+	// back, and it is reached from the generated MCP dispatch instead.
+	if strings.Contains(rendered, "func (p *TicketApi) GetTicketBrief") {
 		t.Fatalf("MCP tool leaked into the Go gRPC wrapper:\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "func (p *TicketApi) GetTicket(ctx context.Context") {

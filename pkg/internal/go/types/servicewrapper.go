@@ -211,12 +211,15 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		handlerInterface.WriteString(generateGoHandlerInterface(service, info.Package))
 		for _, method := range service.Methods {
 			// An RPC_PRINCIPAL_MCP rpc is a tool, not a gRPC call: it gets no
-			// handler-interface method, no method on the wrapper, and no
-			// per-method auth registration. The wrapper embeds
-			// types.Unimplemented<Service>Server, so a method the wrapper does
-			// not define already answers UNIMPLEMENTED — like Java's ImplBase
-			// and unlike Rust's tonic trait, nothing has to be emitted in its
-			// place.
+			// method on the wrapper and no per-method auth registration. The
+			// wrapper embeds types.Unimplemented<Service>Server, so a method the
+			// wrapper does not define already answers UNIMPLEMENTED — like
+			// Java's ImplBase and unlike Rust's tonic trait, nothing has to be
+			// emitted in its place.
+			//
+			// It DOES get a handler-interface method: that is what the generated
+			// MCP dispatch calls (mcp_dispatch_gen.go). Only the gRPC-callable
+			// surface is suppressed.
 			if method.IsMcp {
 				continue
 			}
@@ -474,6 +477,29 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		return fmt.Errorf("failed to write service wrapper: %w", err)
 	}
 
+	// The MCP termination lands in its own file beside the wrapper: same
+	// package, so the carrier method the wrapper emits calls straight into it,
+	// but its own import block (the MCP SDK, protojson, the JSON-RPC codec) does
+	// not have to be threaded through the wrapper template for the services that
+	// declare no tool.
+	for _, service := range targetServices {
+		mcpParams := goMcpFileParams{
+			PackageName:              grpcPkgName,
+			TypesModulePath:          typesModulePath,
+			ServiceManagerImportPath: serviceManagerImportPath,
+			ModuleBasePath:           svc.Config.ModuleBasePath,
+			CrossPackageTypes:        info.CrossPackageTypes,
+			ServicePackage:           info.Package,
+			used:                     goMcpUsedPackages(service, info.Package),
+		}
+		if err := writeGoMcpDispatchFile(service, wrapperOutputDir, mcpParams, san); err != nil {
+			return err
+		}
+		if err := writeGoMcpDispatchTestFile(service, wrapperOutputDir, mcpParams, san); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -587,10 +613,14 @@ func isTier2SnapshotCollection(m *parser.MethodInfo) bool {
 func generateGoHandlerInterface(svc *parser.ServiceInfo, servicePackage string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "type %sHandler interface {\n", svc.Name)
+	mcpCarrier := goMcpCarrierMethod(svc)
 	for _, method := range svc.Methods {
-		// An MCP tool is not gRPC-callable, so the service is not asked to
-		// implement a gRPC handler for it. Matches the Java and Rust wrappers.
-		if method.IsMcp {
+		// The generated session carrier is served by the wrapper itself
+		// (generateGoMcpDispatch), not by the service: nothing about carrying an
+		// MCP session is the service's to write, and a Go interface has no
+		// default body to give it one. Its TOOLS are on this interface; the
+		// carriage is not.
+		if mcpCarrier != nil && method.Name == mcpCarrier.Name {
 			continue
 		}
 		goInput := goTypeRef(method.FullInputType, method.InputType, servicePackage)
@@ -887,20 +917,39 @@ if tok := servicemanager.TokenFromContext(%s); tok != nil {
 			}
 		}
 		callerExtract := fmt.Sprintf(callerBlock, "stream.Context()", "stream.Context()", fullMethodConstant, fullMethodConstant)
+
+		// The generated MCP session carrier has no handler method to delegate to:
+		// the whole session is generated (mcp_dispatch_gen.go). It authorizes and
+		// extracts its caller exactly as any other bidi rpc — the carrier IS an
+		// ordinary rpc with an ordinary auth model — and then hands the validated
+		// stream to the generated session server.
+		handlerCall := fmt.Sprintf("p.handler.%s(caller, %s)", method.Name, bidiStreamArg)
+		if goIsMcpCarrier(svc, method) {
+			handlerCall = fmt.Sprintf("serve%sMcpSession(stream.Context(), p.handler, caller, %s)", svc.Name, bidiStreamArg)
+			// Fail closed: every server-computed predicate in the tool surface
+			// comes from this caller, so a session with no verified identity
+			// would run its tools unscoped.
+			callerExtract += `
+	if caller == nil {
+		return status.Error(codes.Unauthenticated, "an MCP session requires an authenticated caller")
+	}
+`
+		}
+
 		if hasAccounting {
 			return fmt.Sprintf(`// %s implements %s.%s (bidirectional streaming)
 	func (p *{{.ServerName}}) %s(stream grpc.BidiStreamingServer[%s, %s]) error {%s%s
 		start := time.Now()
-		streamErr := p.handler.%s(caller, %s)
+		streamErr := %s
 		durationMs := time.Since(start).Milliseconds()
 	%s
 		return streamErr
-	}`, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, checks, callerExtract, method.Name, bidiStreamArg, streamAccountingBlock)
+	}`, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, checks, callerExtract, handlerCall, streamAccountingBlock)
 		}
 		return fmt.Sprintf(`// %s implements %s.%s (bidirectional streaming)
 	func (p *{{.ServerName}}) %s(stream grpc.BidiStreamingServer[%s, %s]) error {%s%s
-		return p.handler.%s(caller, %s)
-	}`, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, checks, callerExtract, method.Name, bidiStreamArg)
+		return %s
+	}`, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, checks, callerExtract, handlerCall)
 	} else if isTier2SnapshotCollection(method) {
 		// Tier-2 SNAPSHOT collection: the wire is still server-streaming, but the
 		// handler returns a materialized []*Item; the wrapper chunks it into

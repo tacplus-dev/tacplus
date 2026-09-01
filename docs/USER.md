@@ -955,9 +955,39 @@ Everything else is reuse, deliberately:
   The Rust model crate depends on `rmcp` only when a service in the build
   declares an MCP tool.
 
-  In Java and Go the carrier is still a handler method and the seam the MCP SDK
-  integration terminates the session on; those two languages' dispatch is a
-  separate subtask.
+  **In Go, tacplus generates the same termination**, against the official
+  `github.com/modelcontextprotocol/go-sdk`. The carrier is likewise NOT a handler
+  method: the generated wrapper authorizes it, refuses a session with no verified
+  caller, and hands the validated stream to a generated transport. Beside the
+  wrapper the Go generator emits `<service>_mcp.go`, holding:
+
+  - `<Service>McpTools()` — the published tool set as `[]*mcp.Tool`, each with
+    the generated JSON Schema, omitting the same server-computed fields.
+  - `<Service>McpSurface` — the per-session surface. A `tools/call` decodes into
+    the rpc's own protobuf request with `protojson` (which REJECTS an unknown
+    field, so `additionalProperties: false` is enforced server-side too), runs
+    the generated request validation, stamps `(spec.principal)` /
+    `(spec.namespace)` from the verified `Caller`, dispatches to
+    `<Service>Handler.<Rpc>`, filters `(spec.store_principal)` /
+    `(spec.store_namespace)` rows out of the response, and frames the typed
+    result. A tool failure is a `CallToolResult` with `IsError`, not a JSON-RPC
+    protocol error, so the model can read and correct its own call.
+  - `serve<Service>McpSession(...)` and an `mcp.Transport` over the gRPC bidi
+    stream — one complete JSON-RPC frame per stream message, bounded at
+    `mcp.McpResponse.payload`'s `(spec.assert_max_size)`.
+  - `<service>_mcp_test.go` — a generated gate that drives a whole session
+    (initialize, `tools/list`, one `tools/call`) over that transport and asserts
+    the typed handler was reached and a client-supplied caller-scoped field was
+    refused.
+
+  Go's generated code lands in the consuming module, so tacplus writes no
+  manifest for it: `go mod tidy` resolves the SDK, and the version inventory
+  lives in `dependencies.yaml`. The SDK's own module requires `go >= 1.25.0`, so
+  a consumer module below that cannot build a service with an MCP tool.
+
+  In Java the carrier is still a handler method and the seam the MCP SDK
+  integration terminates the session on; that language's dispatch is a separate
+  subtask.
 
 ### Entitlements Model
 

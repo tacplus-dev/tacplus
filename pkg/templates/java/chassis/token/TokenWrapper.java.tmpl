@@ -710,6 +710,11 @@ public final class TokenWrapper {
             throw new IllegalStateException("token is missing expiration");
         }
 
+        // Mint-time namespace requirement: every token carries the tenant it belongs to. The namespace claim is what the generated (spec.namespace)/(spec.store_namespace) isolation seams compare against, so a token minted without one is a token no record read can be held to.
+        if (getNamespace() == null || getNamespace().isEmpty()) {
+            throw new IllegalStateException("token is missing namespace");
+        }
+
         // Update token with key info
         TokenOuterClass.Token.Builder builder = token.toBuilder();
         builder.putHeader("kid", key.getProto().getId());

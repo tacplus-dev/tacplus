@@ -1723,6 +1723,53 @@ extend google.protobuf.FieldOptions {
   // which retention measures from). Three different clocks; only this one is
   // store-owned.
   bool store_epoch = 60086;
+
+  // ----- Namespace isolation annotations (the generated tenant backstop) -----
+  // The principal pair above binds a field to the caller's SUBJECT. These two
+  // are the same two mechanisms bound to the caller's NAMESPACE claim instead,
+  // and they exist for a different guarantee: not "these are my rows" but "this
+  // is my tenant". The service's own query logic is expected to be correct; the
+  // generated code is the backstop that makes a cross-tenant leak structurally
+  // impossible even when it is not.
+  //
+  // EXACT MATCH, NOT CONTAINMENT. (spec.method_c2s).target_namespace_field
+  // enforces the ADMINISTRATIVE "level-or-below" rule over the tenant tree.
+  // Data isolation is plain equality instead: users and their data always land
+  // in a leaf, so a caller at /acme sees rows stamped /acme and no others. Root
+  // ("/") is an ordinary namespace under that rule, not a wildcard — platform
+  // data is simply data namespaced at root, visible only to a caller whose own
+  // namespace claim is exactly root.
+
+  // namespace: this REQUEST string field carries the caller's namespace. The
+  // generated wrapper resolves the authenticated caller's namespace claim and
+  // then, exactly as (spec.principal) does for the subject:
+  //   - empty  -> stamps the namespace into the field before the handler runs;
+  //   - equal  -> accepts unchanged;
+  //   - differs-> refuses with INVALID_ARGUMENT (never silently overwritten).
+  // An unauthenticated caller on a namespace-bearing RPC is UNAUTHENTICATED.
+  // Example: string namespace = 2 [(spec.namespace) = true];
+  bool namespace = 60087;
+
+  // store_namespace: this RECORD string field holds the row's owning namespace.
+  // MANDATORY: every (spec.record)-annotated message must declare exactly one,
+  // and generation FAILS for one that does not — the same posture the record
+  // query plane's non-empty auth_services requirement already takes. An opt-in
+  // isolation backstop is not a backstop; the annotation an author forgets is
+  // exactly the record that leaks.
+  //
+  // The generated wrapper filters every repeated field of that record type in a
+  // response down to rows whose stamped namespace EXACTLY equals the caller's.
+  // Egress-side only, exactly like (spec.store_principal): rows are stored raw
+  // and the filter is applied on the way out.
+  //
+  // A row that has to be filtered CRASHES THE PROCESS rather than failing the
+  // one call. Reaching that line means the store handed the wrapper another
+  // tenant's row, which multi-tenant tests are supposed to catch before release
+  // and a canary is built to absorb; a crash-rate spike halts a rollout, where
+  // a per-call error would be swallowed. Against a silent cross-tenant leak an
+  // availability blip is the cheaper failure.
+  // Example: string namespace = 5 [(spec.store_namespace) = true];
+  bool store_namespace = 60088;
 }
 
 // QueryOp is the match kind for a (spec.query_field) record filter criterion.

@@ -641,6 +641,11 @@ export class TokenWrapper {
       throw new Error('token is missing expiration');
     }
 
+    // Mint-time namespace requirement: every token carries the tenant it belongs to. The namespace claim is what the generated (spec.namespace)/(spec.store_namespace) isolation seams compare against, so a token minted without one is a token no record read can be held to.
+    if (!this.getNamespace()) {
+      throw new Error('token is missing namespace');
+    }
+
     this.setKid(key.getId());
     this.setAlg(key.getAlg());
     this.setTyp('JWT');

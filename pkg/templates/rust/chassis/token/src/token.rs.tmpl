@@ -636,6 +636,11 @@ impl Token {
             return Err(AuthError::missing_invalid_data("token is missing expiration"));
         }
 
+        // Mint-time namespace requirement: every token carries the tenant it belongs to. The namespace claim is what the generated (spec.namespace)/(spec.store_namespace) isolation seams compare against, so a token minted without one is a token no record read can be held to.
+        if self.payload.namespace.as_deref().unwrap_or("").is_empty() {
+            return Err(AuthError::missing_invalid_data("token is missing namespace"));
+        }
+
         self.set_kid(key.id().to_string())?;
         self.set_alg(key.alg().to_string())?;
         self.set_typ("JWT")?;
@@ -841,6 +846,7 @@ mod tests {
         let mut token = Token::new();
         token.set_issuer("test-issuer").unwrap();
         token.set_subject("test-subject").unwrap();
+        token.set_namespace("/tenants/acme").unwrap();
         token.set_expiration(Utc::now().timestamp() + 3600).unwrap();
 
         token.sign(&key).unwrap();
@@ -860,6 +866,7 @@ mod tests {
 
         let mut token = Token::new();
         token.set_issuer("test").unwrap();
+        token.set_namespace("/tenants/acme").unwrap();
         token.set_expiration(Utc::now().timestamp() + 3600).unwrap();
 
         token.sign(&key).unwrap();
@@ -867,6 +874,37 @@ mod tests {
         // This should return an error, not panic
         let result = token.set_issuer("new-issuer");
         assert!(result.is_err());
+    }
+
+    // Mint-time namespace requirement, paired control. The namespace claim is
+    // what the generated (spec.namespace)/(spec.store_namespace) isolation seams
+    // compare against, so a token minted without one is a token no record read
+    // can be held to. Same category of check as the missing-expiration refusal
+    // directly above it in sign().
+    #[test]
+    fn test_sign_requires_namespace() {
+        let key = keys::generate_ed25519_key().unwrap();
+
+        let mut token = Token::new();
+        token.set_issuer("test-issuer").unwrap();
+        token.set_subject("test-subject").unwrap();
+        token.set_expiration(Utc::now().timestamp() + 3600).unwrap();
+        let err = token.sign(&key).expect_err("minting without a namespace must fail");
+        assert!(
+            err.to_string().contains("token is missing namespace"),
+            "refusal must name the missing claim, got: {}",
+            err
+        );
+        assert!(!token.is_immutable(), "a refused mint must not sign the token");
+
+        // The IDENTICAL token WITH a namespace mints.
+        let mut token = Token::new();
+        token.set_issuer("test-issuer").unwrap();
+        token.set_subject("test-subject").unwrap();
+        token.set_expiration(Utc::now().timestamp() + 3600).unwrap();
+        token.set_namespace("/tenants/acme").unwrap();
+        token.sign(&key).expect("minting with a namespace must succeed");
+        assert!(token.is_immutable());
     }
 
     #[test]

@@ -1446,6 +1446,16 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		if pageFilter != "" {
 			pageSrcExpr = "__ownedItems"
 		}
+		// (spec.store_namespace) runs after the principal filter and over its
+		// output: the tenant boundary is checked on exactly the rows that would
+		// otherwise be assembled into the page.
+		if isC2S {
+			if nsFilter := javaNamespacePageFilter(san.namespaceField(method.Resolved.PageItemType, servicePackage),
+				itemType, pageSrcExpr, method.Name, "            "); nsFilter != "" {
+				pageFilter += nsFilter
+				pageSrcExpr = "__tenantItems"
+			}
+		}
 		pageSan := ""
 		pageItemsExpr := pageSrcExpr
 		if t, ok := san.sanitizableType(method.Resolved.PageItemType, servicePackage, crossPkgHelpers); ok {
@@ -1622,10 +1632,18 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 				}
 				unaryPrincipal = javaPrincipalUnaryFilter(lf, outputType, method.Name, "            ")
 			}
+			// (spec.store_namespace): rows of another tenant never leave the
+			// process, and having found one aborts. After the principal filter
+			// for the same reason as the page leg.
+			unaryNamespace := ""
+			if isC2S {
+				unaryNamespace = javaNamespaceUnaryFilter(san.namespaceListFields(method.FullOutputType, servicePackage),
+					outputType, method.Name, "            ")
+			}
 			// (spec.record).min_group_size runs first: the refusal is about the
 			// number itself, so it must precede any transformation of the response.
 			outputValidation = javaMinGroupSizeGuard(method, san.minGroupSizeField(method.FullOutputType, servicePackage), "response", "            ") +
-				unaryPrincipal + unarySan + outputValidation
+				unaryPrincipal + unaryNamespace + unarySan + outputValidation
 		}
 
 		handlerCall := fmt.Sprintf("handler.%s(caller, request)", methodName)
@@ -2087,10 +2105,18 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		// own is never written. snapshot_done carries no row and still passes,
 		// so a filtered stream still ends its snapshot phase.
 		watchPrincipalGuard := ""
+		watchNamespaceGuard := ""
 		if isC2S {
 			watchPrincipalGuard = san.javaPrincipalWatchGuard(method.FullOutputType, servicePackage, "                ")
 			if watchPrincipalGuard != "" {
 				watchPre = javaPrincipalResolve(method.Name, "            ") + watchPre
+			}
+			// (spec.store_namespace) on a watched stream: same splice, and an
+			// event carrying another tenant's row aborts rather than being
+			// skipped — see recordnamespace_gen.go.
+			watchNamespaceGuard = san.javaNamespaceWatchGuard(method.FullOutputType, servicePackage, method.Name, "                ")
+			if watchNamespaceGuard != "" {
+				watchPre = javaNamespaceResolve(method.Name, "            ") + watchPre
 			}
 		}
 		watchDrive := fmt.Sprintf(`%s            final CollectionRuntime.WatchSource<%s, %s> __source = %s;
@@ -2169,10 +2195,10 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		// the rendered text rather than as a format verb because the guard is a
 		// property of the response TYPE, not of any of the twenty positional
 		// substitutions above.
-		if watchPrincipalGuard != "" {
+		if watchPrincipalGuard+watchNamespaceGuard != "" {
 			watchDrive = strings.Replace(watchDrive,
 				"__send = (__event) -> {\n",
-				"__send = (__event) -> {\n"+watchPrincipalGuard, 1)
+				"__send = (__event) -> {\n"+watchPrincipalGuard+watchNamespaceGuard, 1)
 		}
 
 		if hasAccounting {

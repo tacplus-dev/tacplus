@@ -829,6 +829,9 @@ mod authorizer_behavior_tests {
         tok.set_issuer("test-issuer").expect("issuer");
         tok.set_audience(audience).expect("audience");
         tok.set_expiration(exp).expect("expiration");
+        // Every minted token carries a namespace (Token::sign refuses without
+        // one); customize may still override it.
+        tok.set_namespace("/tenants/acme").expect("namespace");
         customize(&mut tok);
         tok.sign(key).expect("sign");
         format!("Bearer {}", tok.base64().expect("signed token has base64"))

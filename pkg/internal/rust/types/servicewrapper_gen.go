@@ -255,6 +255,13 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 					return fmt.Errorf("%s.%s returns %s, which carries (spec.store_principal), on a %s path; the principal read filter is generated for unary responses only",
 						targetService.Name, method.Name, t, method.StreamingType())
 				}
+				// Same seam, same limit: (spec.store_namespace) is mandatory on
+				// every record, so a Rust page/stream over record rows would
+				// return them with no tenant boundary at all.
+				if san.storeNamespaceField(t, info.Package) != "" || len(san.namespaceListFields(t, info.Package)) > 0 {
+					return fmt.Errorf("%s.%s returns %s, which carries (spec.store_namespace), on a %s path; the namespace read filter is generated for unary responses only",
+						targetService.Name, method.Name, t, method.StreamingType())
+				}
 			}
 		}
 		if method.IsWatchCollection() {
@@ -1504,6 +1511,10 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 		if pf := san.requestPrincipalField(method.FullInputType, servicePackage); pf != "" {
 			validationBlock += rustRequestPrincipalBlock(pf, method.Name)
 		}
+		// (spec.namespace): the same stamp or refuse, bound to the namespace claim.
+		if nf := san.requestNamespaceField(method.FullInputType, servicePackage); nf != "" {
+			validationBlock += rustRequestNamespaceBlock(nf, method.Name)
+		}
 		// (spec.owner_default): refuse the owner's own contradicted access,
 		// after the stamp has bound the request principal to the caller.
 		validationBlock += ownerDefaultGuard
@@ -1591,6 +1602,14 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	// response, before it is validated and returned. Egress-side, like sanitize.
 	if lf := san.principalListFields(method.FullOutputType, servicePackage); len(lf) > 0 {
 		responseValidationBlock = rustResponsePrincipalFilterBlock(lf, method.Name) + responseValidationBlock
+	}
+
+	// (spec.store_namespace): hold the rows to the caller's tenant on the same
+	// egress seam. Runs after the principal filter is spliced in, so it is the
+	// OUTERMOST of the two — the tenant boundary is checked over exactly the
+	// rows that would otherwise be returned.
+	if lf := san.namespaceListFields(method.FullOutputType, servicePackage); len(lf) > 0 {
+		responseValidationBlock = rustResponseNamespaceFilterBlock(lf, method.Name) + responseValidationBlock
 	}
 
 	// Unary methods - authorize, extract caller, validate, delegate to handler

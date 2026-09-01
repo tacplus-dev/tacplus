@@ -110,6 +110,18 @@ impl Caller {
         &self.token
     }
 
+    /// Returns the caller's namespace claim — its position in the
+    /// authorization tree, and the tenant its data is isolated to. None when
+    /// the token carries no namespace claim; a token without one cannot be
+    /// minted (see `Token::sign`), so None here means an unauthenticated call.
+    ///
+    /// This is the raw claim, the same value the generated
+    /// (spec.namespace)/(spec.store_namespace) seams compare against. Use
+    /// `token().namespace_path()` where the NORMALIZED tree path is wanted.
+    pub fn namespace(&self) -> Option<&str> {
+        self.token.namespace()
+    }
+
     /// Returns the x-request-id forwarded from the gateway.
     pub fn request_id(&self) -> &str {
         &self.request_id

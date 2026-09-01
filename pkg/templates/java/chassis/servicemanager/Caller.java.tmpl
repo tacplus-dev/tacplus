@@ -41,6 +41,18 @@ public final class Caller {
     }
 
     /**
+     * Returns the caller's namespace claim — its position in the authorization
+     * tree, and the tenant its data is isolated to. Empty when the token
+     * carries no namespace claim.
+     *
+     * <p>This is the raw claim, the same value the generated
+     * (spec.namespace)/(spec.store_namespace) seams compare against.
+     */
+    public String getNamespace() {
+        return tokenPayload == null ? "" : Auth.claimFromPayload(tokenPayload, "namespace");
+    }
+
+    /**
      * Returns the x-request-id forwarded from the gateway.
      */
     public String getRequestId() {

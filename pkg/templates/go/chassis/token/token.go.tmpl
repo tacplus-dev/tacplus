@@ -817,6 +817,11 @@ func (token *TokenWrapper) Sign(key *wrapperKey.ImmutableKey) error {
 		return protoerrors.NewErrMissingInvalidData(nil, "token is missing expiration")
 	}
 
+	// Mint-time namespace requirement: every token carries the tenant it belongs to. The namespace claim is what the generated (spec.namespace)/(spec.store_namespace) isolation seams compare against, so a token minted without one is a token no record read can be held to.
+	if token.GetNamespace() == "" {
+		return protoerrors.NewErrMissingInvalidData(nil, "token is missing namespace")
+	}
+
 	token.SetKid(key.Proto().Id)
 	token.SetAlg(key.Alg())
 	token.SetTyp("JWT")

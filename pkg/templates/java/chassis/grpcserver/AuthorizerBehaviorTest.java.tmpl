@@ -67,7 +67,8 @@ public class AuthorizerBehaviorTest {
         TokenWrapper tok = TokenWrapper.create()
             .setIssuer("test-issuer")
             .setAudience(Authorizer.SERVICE_NAME)
-            .setExpiration(System.currentTimeMillis() / 1000 + 3600);
+            .setExpiration(System.currentTimeMillis() / 1000 + 3600)
+            .setNamespace("/tenants/acme");
         customize.apply(tok);
         tok.sign(key);
         return tok.getBase64();
@@ -125,6 +126,7 @@ public class AuthorizerBehaviorTest {
                 .setIssuer("test-issuer")
                 .setAudience(Authorizer.SERVICE_NAME)
                 .setExpiration(System.currentTimeMillis() / 1000 - 3600)
+                .setNamespace("/tenants/acme")
                 .setSubType("service")
                 .setSubject("caller-svc");
             tok.sign(key);
@@ -139,6 +141,7 @@ public class AuthorizerBehaviorTest {
                 .setIssuer("test-issuer")
                 .setAudience(Authorizer.SERVICE_NAME + "-not-me")
                 .setExpiration(System.currentTimeMillis() / 1000 + 3600)
+                .setNamespace("/tenants/acme")
                 .setSubType("service")
                 .setSubject("caller-svc");
             tok.sign(key);
@@ -184,6 +187,7 @@ public class AuthorizerBehaviorTest {
                     .setIssuer("test-issuer")
                     .setAudience("kernel")
                     .setExpiration(System.currentTimeMillis() / 1000 + 3600)
+                    .setNamespace("/tenants/acme")
                     .setSubType("service")
                     .setSubject("caller-svc");
                 tok.sign(key);

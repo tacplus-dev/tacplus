@@ -7,10 +7,11 @@ import (
 	"strings"
 )
 
-// ValidatePrincipalAnnotations enforces the shape the principal annotations
-// need to be generatable: the wrapper compares the field against the caller's
-// subject string, so the field must be a singular string. Generation FAILS on
-// violation rather than emitting code that cannot compile.
+// ValidatePrincipalAnnotations enforces the shape the principal and namespace
+// annotations need to be generatable: the wrapper compares the field against a
+// caller string (the subject, or the namespace claim), so the field must be a
+// singular string. Generation FAILS on violation rather than emitting code that
+// cannot compile.
 func ValidatePrincipalAnnotations(dp *DescriptorParser) error {
 	if dp == nil {
 		return nil
@@ -24,7 +25,7 @@ func ValidatePrincipalAnnotations(dp *DescriptorParser) error {
 			seen := map[string]string{}
 			for fi := range msg.Fields {
 				field := &msg.Fields[fi]
-				for _, name := range []string{"principal", "store_principal"} {
+				for _, name := range []string{"principal", "store_principal", "namespace", "store_namespace"} {
 					if _, ok := field.Annotations[name]; !ok {
 						continue
 					}

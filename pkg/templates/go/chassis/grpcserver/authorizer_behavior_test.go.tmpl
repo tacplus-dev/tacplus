@@ -65,7 +65,8 @@ func signedToken(t *testing.T, key *keylib.ImmutableKey, customize func(*tokenli
 	tok := tokenlib.NewImmutableToken(nil).
 		SetIssuer("test-issuer").
 		SetAudience(serviceName).
-		SetExpiration(time.Now().Add(time.Hour).Unix())
+		SetExpiration(time.Now().Add(time.Hour).Unix()).
+		SetNamespace("/tenants/acme")
 	customize(tok)
 	if err := tok.Sign(key); err != nil {
 		t.Fatalf("Sign: %v", err)
@@ -134,6 +135,7 @@ func TestAuthorizerRejectsExpiredToken(t *testing.T) {
 		SetIssuer("test-issuer").
 		SetAudience(serviceName).
 		SetExpiration(time.Now().Add(-time.Hour).Unix()).
+		SetNamespace("/tenants/acme").
 		SetSubType("service").
 		SetSubject("caller-svc")
 	if err := tok.Sign(key); err != nil {
@@ -154,6 +156,7 @@ func TestAuthorizerRejectsWrongAudience(t *testing.T) {
 		SetIssuer("test-issuer").
 		SetAudience(serviceName + "-not-me").
 		SetExpiration(time.Now().Add(time.Hour).Unix()).
+		SetNamespace("/tenants/acme").
 		SetSubType("service").
 		SetSubject("caller-svc")
 	if err := tok.Sign(key); err != nil {

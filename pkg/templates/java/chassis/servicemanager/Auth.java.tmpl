@@ -164,6 +164,32 @@ public final class Auth {
     }
 
     /**
+     * Extracts the caller's namespace claim — its position in the authorization
+     * tree, and the tenant its data is isolated to. Returns empty string if
+     * nothing verified a token on this RPC or the token has no namespace claim;
+     * a token without one cannot be minted (see {@code TokenWrapper.sign}), so
+     * an empty result here means an unauthenticated call.
+     *
+     * <p>This is the raw claim, the same value the generated
+     * (spec.namespace)/(spec.store_namespace) seams compare against. Use
+     * {@code TokenWrapper.namespacePath()} where the NORMALIZED tree path is
+     * wanted — the level-or-below administrative rule, not this one.
+     */
+    public static String callerNamespaceFromContext() {
+        String payload = tokenPayloadFromContext();
+        if (payload.isEmpty()) return "";
+        String ns = extractJsonField(payload, "namespace");
+        return ns != null ? ns : "";
+    }
+
+    /** Reads one claim out of a verified payload JSON. Package-visible so
+     *  {@link Caller} can answer for the payload it already holds. */
+    static String claimFromPayload(String payloadJson, String key) {
+        String v = extractJsonField(payloadJson, key);
+        return v != null ? v : "";
+    }
+
+    /**
      * Extracts a Bearer token from gRPC metadata.
      * @throws io.grpc.StatusRuntimeException if no valid Bearer token is present
      */

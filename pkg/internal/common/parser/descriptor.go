@@ -1970,6 +1970,14 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 	if proto.HasExtension(opts, spec.E_StorePrincipal) && proto.GetExtension(opts, spec.E_StorePrincipal).(bool) {
 		annotations["store_principal"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 	}
+	// Namespace annotations: the same two seams bound to the caller's namespace
+	// claim instead of its subject — the tenant-isolation backstop.
+	if proto.HasExtension(opts, spec.E_Namespace) && proto.GetExtension(opts, spec.E_Namespace).(bool) {
+		annotations["namespace"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
+	if proto.HasExtension(opts, spec.E_StoreNamespace) && proto.GetExtension(opts, spec.E_StoreNamespace).(bool) {
+		annotations["store_namespace"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
 	// store_epoch: where the row's last-write clock lives on the type. Same
 	// doctrine as the two above — the annotation owns the LOCATION, the generated
 	// wrapper owns the stamp.

@@ -345,6 +345,14 @@ public class Authorizer {
      * Registers allowed caller patterns for a method. Patterns are RE2 regexes
      * matched against the LOCATION-AGNOSTIC service path from
      * {@code TokenWrapper.servicePath()}. "*" is shorthand for "match any caller".
+     *
+     * <p>{@code methodName} may be either the bare rpc name ("PutNodes") or the
+     * full grpc path ("/pkg.Service/PutNodes"). A generated service wrapper
+     * registers the bare name, which is unambiguous for its own methods. A host
+     * serving SEVERAL service definitions in one process — eventbus's per-topic
+     * pub/sub services, say — must register full paths: two services may declare
+     * the same rpc name with different auth_services, and keyed by bare name one
+     * policy would silently overwrite the other.
      */
     public void setMethodAuth(String methodName, List<String> patterns) {
         if (patterns == null || patterns.isEmpty()) return;
@@ -454,7 +462,13 @@ public class Authorizer {
                 throw ProtoException.newErrUnauthorized(null, e.getMessage());
             }
 
-            List<Pattern> allowed = methodAuthPatterns.get(methodName);
+            // Full grpc path first, bare rpc name second. Registrations keyed by
+            // full path are per-service exact; the bare-name fallback is what
+            // every generated wrapper registers under.
+            List<Pattern> allowed = methodAuthPatterns.get(fullMethod);
+            if (allowed == null) {
+                allowed = methodAuthPatterns.get(methodName);
+            }
             if (allowed == null) {
                 throw ProtoException.newErrPermissionDenied(null,
                         "no auth_services policy configured for service caller \"" + servicePath + "\" on \"" + methodName + "\"");

@@ -638,6 +638,7 @@ message RecordAnnotation {
   // way spec.event does. See EventAnnotation.
   MethodC2SAnnotation c2s = 3;
   // s2s, when present, exposes the record's publish RPC to internal services.
+  // It is the PRODUCER surface only; the consumer surface is s2s_subscribe.
   MethodS2SAnnotation s2s = 4;
   // retention is the store-neutral row retention policy for this record's
   // stored rows (unset = indefinite).
@@ -704,6 +705,39 @@ message RecordAnnotation {
   // refuses one at generation), and the generated service wrapper refuses to host
   // one. This is the same two-ended shape (spec.record).min_group_size already has.
   Mutability mutability = 8;
+
+  // s2s_subscribe, when present, exposes the record's SUBSCRIBE RPC to the named
+  // internal services. It is the consumer half of the pair whose producer half
+  // is s2s (field 4), and it exists because a topic has two boundaries and only
+  // one of them was declarable.
+  //
+  // A record's synthesized <Record>Bus topic wrapper hosts both PublishTo<T> and
+  // SubscribeTo<T>. s2s names who may PUBLISH. Nothing named who may CONSUME, so
+  // the subscribe RPC could only ever fall back to the state service's
+  // service-level list, which for a synthesized wrapper is resolved from the
+  // owning PACKAGE — and the record store that consumes every record topic is
+  // never in the owning package. Under per-topic authorization that is
+  // fail-closed: the store is denied on every topic it exists to read.
+  //
+  // Declared rather than inferred on purpose. Treating "the record store" as an
+  // implicitly authorized consumer would put an undeclared trust relationship in
+  // the generator with no proto anyone could read to audit it, and would silently
+  // grant or silently withhold access to any FUTURE consumer of a record topic.
+  // Who may read a record's stream is exactly as much a policy statement as who
+  // may write it, so it is written down in the same place, in the same shape.
+  //
+  // Same semantics as s2s: ["*"] is any authenticated service, an explicit list
+  // is exactly that list, and an absent annotation leaves the service-level
+  // default in place (i.e. this is additive — a record that declares none keeps
+  // today's behaviour).
+  //
+  // Example — a stored record consumed by the record store:
+  //   option (spec.record) = {
+  //     key: "accounting_id" owner: "spiffe_id"
+  //     s2s: {auth_services: ["*"]}              // anyone may publish
+  //     s2s_subscribe: {auth_services: ["stratum"]}  // only the store may read
+  //   };
+  MethodS2SAnnotation s2s_subscribe = 9;
 }
 
 // Residency is the memory-residency window preset for a stored record type.
@@ -768,7 +802,12 @@ message EventAnnotation {
   // c2s, when present, exposes the publish RPC to external clients (via gateway).
   MethodC2SAnnotation c2s = 1;
   // s2s, when present, exposes the publish RPC to internal services.
+  // Producer surface only; the consumer surface is s2s_subscribe.
   MethodS2SAnnotation s2s = 2;
+  // s2s_subscribe, when present, exposes the SUBSCRIBE RPC of this event's topic
+  // to the named internal services. See RecordAnnotation.s2s_subscribe for the
+  // full reasoning; the semantics are identical.
+  MethodS2SAnnotation s2s_subscribe = 3;
 }
 
 // CardinalityHint is a store-neutral hint about how many distinct values a

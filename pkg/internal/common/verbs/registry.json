@@ -155,6 +155,28 @@
       "audit": "Operation cancellation."
     },
     {
+      "verb": "Acquire",
+      "pattern": "ACTION",
+      "access": "WRITE",
+      "class": "action",
+      "capability": "WRITE",
+      "retry": "IDEMPOTENCY_REQUIRED",
+      "definition": "Take exclusive hold of a named lock, returning a fencing token.",
+      "boundary": "NOT Create; a hold is not durable resource state the caller owns, and it may legitimately not be granted \u2014 a refused Acquire returns granted=false, not an error. NOT Mint; the token is an index into server-held state, not a self-contained credential.",
+      "audit": "Mutual-exclusion hold taken."
+    },
+    {
+      "verb": "Release",
+      "pattern": "ACTION",
+      "access": "WRITE",
+      "class": "action",
+      "capability": "WRITE",
+      "retry": "IDEMPOTENCY_REQUIRED",
+      "definition": "Give up a lock held under a fencing token.",
+      "boundary": "NOT Delete; drops a hold without deleting the lock's key. NOT Revoke; the holder gives up its own hold rather than invalidating someone else's credential.",
+      "audit": "Mutual-exclusion hold released."
+    },
+    {
       "verb": "Retry",
       "pattern": "ACTION",
       "access": "WRITE",

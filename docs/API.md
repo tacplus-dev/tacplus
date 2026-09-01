@@ -448,8 +448,8 @@ synonyms fold to canonicals and are rejected:
 
 - **Core (6)**: Get, List (replaces Search/Query/Find), Watch, Create, Update,
   Delete.
-- **Action (14)**: Mint, Revoke, Authorize, Send, Publish, Subscribe, Broker,
-  Execute, Cancel, Retry, Reset, Ping, Proxy, Merge. `Subscribe` and `Broker`
+- **Action (16)**: Mint, Revoke, Authorize, Send, Publish, Subscribe, Broker,
+  Execute, Cancel, Acquire, Release, Retry, Reset, Ping, Proxy, Merge. `Subscribe` and `Broker`
   are canonical action verbs (not folded to `Watch`); the messaging verbs are
   `Send`/`Publish`/`Subscribe`/`Broker`. Stateful vs stateless rule:
   `Create`/`Delete` for stored resources; `Mint`/`Revoke` for self-contained

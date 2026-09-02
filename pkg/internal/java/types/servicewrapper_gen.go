@@ -1652,6 +1652,15 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			if g := javaPredicatePrincipalPin(rf, pf, "request", method.Name, "            "); g != "" {
 				inputValidation += "\n" + g
 			}
+			// (spec.store_namespace) on the same predicate, pinned on the same
+			// seam. It exists because the tenant field became an EQ criterion when
+			// (spec.record).c2s_read started requiring one: a criterion a caller
+			// could set and the egress filter would then ABORT over is a
+			// client-triggerable process halt, so the pin lands with it.
+			nrf, nf := san.predicateNamespaceField(method.FullInputType, servicePackage)
+			if g := javaPredicateNamespacePin(nrf, nf, "request", method.Name, "            "); g != "" {
+				inputValidation += "\n" + g
+			}
 		}
 
 		if outputHelpers != "" && !emptyOutput {

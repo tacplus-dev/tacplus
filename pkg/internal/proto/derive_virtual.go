@@ -137,7 +137,7 @@ func DeriveVirtualServiceClients(inputDir, selfPackage string) ([]tactype.GrpcEn
 				zap.String("service", selfPackage),
 				zap.String("plane", traitFd.Trait.S2SService),
 				zap.String("host", traitFd.Trait.Host),
-				zap.Strings("records", serviceDesc.RecordReads))
+				zap.Strings("records", recordReadNames(serviceDesc.RecordReads)))
 		}
 	}
 
@@ -237,4 +237,14 @@ func FindAnnotatedSourceFileFromDir(inputDir, annotation string) (relPath, pkg s
 		return "", ""
 	}
 	return findAnnotatedSourceFile(dp, annotation)
+}
+
+// recordReadNames renders a service's (spec.record_read) declarations as the
+// record names alone, for the log line above.
+func recordReadNames(reads []parser.RecordRead) []string {
+	out := make([]string, 0, len(reads))
+	for _, r := range reads {
+		out = append(out, r.Record)
+	}
+	return out
 }

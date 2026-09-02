@@ -50,7 +50,12 @@ pub trait Handler: Send + Sync + 'static {
     /// Returns the handler implementation for {{.TraitName}}.
     /// The returned handler is wrapped with validation and authorization
     /// by generated code before being registered with the gRPC server.
-{{- if .IsHosted}}
+{{- if .IsGeneratedRecordC2S}}
+    /// {{.TraitName}} is the client-facing record read plane. Its handler is
+    /// GENERATED (s2sm/record_c2s.rs) and bound by the ServiceManager, so there
+    /// is deliberately no getter here: the tenant pin and the row scope in those
+    /// bodies are the authorization, not a default an implementation may replace.
+{{- else if .IsHosted}}
     /// Hosted vservice — default returns a stub that responds with Unimplemented.
     /// Override to provide a real implementation.
     fn {{.GetterName}}(&self) -> Arc<dyn {{.WrapperModPath}}::{{.HandlerTraitName}}> {
@@ -59,7 +64,7 @@ pub trait Handler: Send + Sync + 'static {
 {{- else}}
     fn {{.GetterName}}(&self) -> Arc<dyn {{.WrapperModPath}}::{{.HandlerTraitName}}>;
 {{- end}}
-{{- if .HasConfigState}}
+{{- if and .HasConfigState (not .IsGeneratedRecordC2S)}}
 
     /// Called with the initial typed config before the server starts,
     /// and again on every config update.

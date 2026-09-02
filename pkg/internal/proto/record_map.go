@@ -332,9 +332,13 @@ func collectRecordQueryPlanes(dp *parser.DescriptorParser) ([]traitPlane, error)
 		if t.Name == "" {
 			return nil, fmt.Errorf("trait in %s declares host %q but no name to entitle callers against", relPath, t.Host)
 		}
-		if t.S2SService == "" || t.C2SService == "" {
-			return nil, fmt.Errorf("trait %q in %s must declare both s2s_service and c2s_service (got %q and %q)",
-				t.Name, relPath, t.S2SService, t.C2SService)
+		// s2s_service is the plane. c2s_service is OPTIONAL: a trait may host the
+		// s2s half alone, and then no client-facing sibling is emitted and no
+		// grant for it lands in the catalog. A service that wants its records
+		// readable by users declares (spec.record_read).c2s and gets a scoped
+		// <Svc>Records plane of its own instead of a share in this fleet-wide one.
+		if t.S2SService == "" {
+			return nil, fmt.Errorf("trait %q in %s must declare s2s_service (got %q)", t.Name, relPath, t.S2SService)
 		}
 		if len(t.AuthServices) == 0 {
 			return nil, fmt.Errorf("trait %q in %s declares no auth_services: the s2s half would be callable by nobody", t.Name, relPath)
@@ -512,6 +516,9 @@ message %[1]sWatchEvent {
 	//                  through the trait's declared auth_services.
 	//   <c2s_service>  C2S. Reached with a user token through the gateway,
 	//                  authorized by that token's entitlements for the TRAIT.
+	//                  OPTIONAL — omitted when the trait declares no c2s_service,
+	//                  in which case everything below about the c2s half simply
+	//                  does not happen for that trait.
 	//
 	// The c2s half is not a convenience alias. The platform's wildcard grant
 	// catalog is built from c2s RPCs ONLY (registry.collectEntitlementGrants skips
@@ -548,13 +555,21 @@ message %[1]sWatchEvent {
 	// carries only the handle it returns, so a per-caller row filter can later be
 	// attached there without reshaping the c2s RPC boundary.
 	s2s := recordMapS2SService(plane, records)
-	c2s := recordQueryC2SService(plane, records)
+	// Emitted only when the trait declares c2s_service. An s2s-only trait keeps
+	// the peer plane and contributes nothing to the c2s grant catalog.
+	c2s := ""
+	if plane.c2sService != "" {
+		c2s = recordQueryC2SService(plane, records)
+	}
 	// (spec.record).mutability generation end, on the surface the generator
 	// itself emits. ValidateAppendOnlyMethods refuses an AUTHOR-declared row
 	// mutation; this refuses a GENERATOR-emitted one, so a future edit that
 	// teaches the template a row-write verb cannot ship it for an append-only
 	// record with every gate still green.
 	for _, half := range []string{s2s, c2s} {
+		if half == "" {
+			continue
+		}
 		if err := assertNoRowMutatingRPCs(half, records); err != nil {
 			return fmt.Errorf("record query plane for trait %q in %s: %w", plane.name, relPath, err)
 		}

@@ -65,7 +65,7 @@ type FileDescriptor struct {
 	VServiceName        string           // File-level virtual-service identity name from option (spec.vservice).name or (spec.trait).name
 	VServiceID          int32            // File-level virtual-service field id from option (spec.vservice).id or (spec.trait).id
 	Trait               *TraitDescriptor // File-level trait declaration from option (spec.trait); nil when the file declares none
-	RecordReads         []string         // File-level record read deps from option (spec.record_read), e.g. "messaging.Message"
+	RecordReads         []RecordRead     // File-level record read deps from option (spec.record_read)
 }
 
 // TraitDescriptor is a parsed file-level (spec.trait) declaration: the contract
@@ -172,7 +172,7 @@ type ServiceDescriptor struct {
 	// auth_services, which must NOT be filtered out of server generation.
 	Synthesized bool
 	// SynthesizedKind is WHICH generated surface this is, from the word after the
-	// sentinel (SynthesizedKindState/Store/RecordMap/OpaEval). Empty when
+	// sentinel (SynthesizedKindState/Store/RecordMap/RecordC2S/OpaEval). Empty when
 	// Synthesized is false, and empty for a sentinel written without a kind.
 	//
 	// "Synthesized" alone is not enough to reason about: these surfaces do not all
@@ -214,7 +214,13 @@ const (
 	SynthesizedKindState     = "state"     // <Root>StateService / <Svc>ConfigStateService
 	SynthesizedKindStore     = "store"     // <Msg>StoreService, from spec.service_store
 	SynthesizedKindRecordMap = "recordmap" // RecordMap, the record working-set surface
-	SynthesizedKindOpaEval   = "opaeval"   // the OPA entitlement-evaluation surface
+	// SynthesizedKindRecordC2S is the CLIENT-FACING record read plane —
+	// <Service>Records, emitted into the READING service's own proto from
+	// (spec.record_read).c2s. Distinct from recordmap: that one is the store's
+	// working-set surface and lives on the record store, this one is two scoped
+	// read RPCs living on the service that chose to disclose the rows.
+	SynthesizedKindRecordC2S = "recordc2s"
+	SynthesizedKindOpaEval   = "opaeval" // the OPA entitlement-evaluation surface
 )
 
 // parseSynthesizedKind returns the kind word following the sentinel in a
@@ -232,7 +238,7 @@ func parseSynthesizedKind(comment string) string {
 		rest = rest[:nl]
 	}
 	switch word := strings.TrimSpace(rest); word {
-	case SynthesizedKindState, SynthesizedKindStore, SynthesizedKindRecordMap, SynthesizedKindOpaEval:
+	case SynthesizedKindState, SynthesizedKindStore, SynthesizedKindRecordMap, SynthesizedKindRecordC2S, SynthesizedKindOpaEval:
 		return word
 	default:
 		return ""
@@ -1351,11 +1357,37 @@ func (p *DescriptorParser) parseGrpcS2SClients(fd protoreflect.FileDescriptor) [
 	return clients
 }
 
-// parseRecordReads extracts file-level (spec.record_read) options: the
-// fully-qualified (spec.record) message names this service reads the stored rows
-// of. The GRANT half lives on the record itself as (spec.record).s2s_read;
-// ValidateRecordReadAnnotations refuses a build where the two disagree.
-func (p *DescriptorParser) parseRecordReads(fd protoreflect.FileDescriptor) []string {
+// RecordRead is one parsed file-level (spec.record_read) declaration: the record
+// whose stored rows this service reads, and — when the reader asked for one —
+// the client-facing surface it wants emitted over them.
+//
+// The GRANT halves live on the record itself as (spec.record).s2s_read and
+// (spec.record).c2s_read; ValidateRecordReadAnnotations refuses a build where
+// either pair disagrees.
+type RecordRead struct {
+	// Record is the fully-qualified record name, e.g. "messaging.Message".
+	Record string
+	// C2S is the (spec.record_read).c2s block, or nil when the reader declared
+	// none — which is every declaration that predates the field, and the case
+	// that must emit exactly what it emitted before.
+	C2S *RecordReadC2S
+}
+
+// RecordReadC2S is a parsed (spec.record_read).c2s block: which rows the emitted
+// client-facing surface may return, and how far outside the cluster it reaches.
+type RecordReadC2S struct {
+	// Scope is the C2SScope enum value NAME, e.g. "C2S_SCOPE_PRINCIPAL". The
+	// name rather than the number so every downstream error message can quote
+	// what the author wrote. C2S_SCOPE_UNSPECIFIED is normalized to
+	// C2S_SCOPE_PRINCIPAL here — the narrowest value is what absence means.
+	Scope string
+	// Exposure is the RpcExposure enum value NAME stamped onto the emitted RPCs,
+	// e.g. "RPC_EXPOSURE_EXTERNAL".
+	Exposure string
+}
+
+// parseRecordReads extracts file-level (spec.record_read) options.
+func (p *DescriptorParser) parseRecordReads(fd protoreflect.FileDescriptor) []RecordRead {
 	opts := fd.Options().(*descriptorpb.FileOptions)
 	if opts == nil {
 		return nil
@@ -1364,9 +1396,20 @@ func (p *DescriptorParser) parseRecordReads(fd protoreflect.FileDescriptor) []st
 		return nil
 	}
 	vals := proto.GetExtension(opts, spec.E_RecordRead).([]*spec.RecordRead)
-	var reads []string
+	var reads []RecordRead
 	for _, v := range vals {
-		reads = append(reads, v.GetRecord())
+		rr := RecordRead{Record: v.GetRecord()}
+		if c := v.GetC2S(); c != nil {
+			scope := c.GetScope()
+			if scope == spec.C2SScope_C2S_SCOPE_UNSPECIFIED {
+				scope = spec.C2SScope_C2S_SCOPE_PRINCIPAL
+			}
+			rr.C2S = &RecordReadC2S{
+				Scope:    scope.String(),
+				Exposure: c.GetExposure().String(),
+			}
+		}
+		reads = append(reads, rr)
 	}
 	return reads
 }
@@ -1873,6 +1916,18 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 					Type:             model.AnnotationTypeBool,
 					BoolValue:        true,
 					StringSliceValue: append([]string(nil), sr.GetAuthServices()...),
+				}
+			}
+			// c2s_read is the record's DISCLOSURE grant: which services may
+			// re-expose these rows to their own end users. Carried on the same
+			// terms as s2s_read above — the BLOCK's presence is the signal, and
+			// an empty auth_services list is refused by
+			// ValidateRecordReadAnnotations rather than being dropped here.
+			if cr := val.GetC2SRead(); cr != nil {
+				annotations["record_c2s_read"] = model.AnnotationValue{
+					Type:             model.AnnotationTypeBool,
+					BoolValue:        true,
+					StringSliceValue: append([]string(nil), cr.GetAuthServices()...),
 				}
 			}
 		}

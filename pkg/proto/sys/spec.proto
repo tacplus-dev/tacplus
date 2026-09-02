@@ -160,7 +160,21 @@ extend google.protobuf.FileOptions {
   //   get(key)              -> Option<T>       point read by the record's key
   //   list(filter, page)    -> (Vec<T>, token) paged read over a typed predicate
   //
+  // Adding the `c2s` block asks for a SECOND surface on top of that reader: a
+  // synthesized `<Service>Records` sibling service in THIS service's own proto,
+  // carrying Get<T> and Get<T>Page — a client-facing read of the same rows,
+  // scoped to the calling person and their tenant by pins the generated handler
+  // applies before the store is asked. Its grant half is
+  // (spec.record).c2s_read, and it is a separate right from s2s_read: reading a
+  // record type with your own authority and DISCLOSING it to a human are
+  // different decisions, and the record owner makes the second one.
+  //
   // Example: option (spec.record_read) = {record: "messaging.Message"};
+  // Example, with the client-facing half:
+  //   option (spec.record_read) = {
+  //     record: "scotty.ScottyActivity"
+  //     c2s: {scope: C2S_SCOPE_PRINCIPAL, exposure: RPC_EXPOSURE_EXTERNAL}
+  //   };
   repeated RecordRead record_read = 50026;
 }
 
@@ -822,6 +836,50 @@ message RecordAnnotation {
   //     s2s_read: {auth_services: ["messaging"]}
   //   };
   MethodS2SAnnotation s2s_read = 10;
+
+  // c2s_read, when present, names the services allowed to RE-EXPOSE this
+  // record's stored rows TO THEIR OWN END USERS — the client-facing read plane,
+  // hosted by the reading service itself and never by the record store.
+  //
+  // It is the FOURTH boundary, and it is not a narrowing of the third:
+  //
+  //   s2s            who may PUBLISH onto the record's topic  (write the stream)
+  //   s2s_subscribe  who may CONSUME the record's topic       (tail the stream)
+  //   s2s_read       who may READ the record's STORED ROWS    (query the store)
+  //   c2s_read       who may DISCLOSE those rows TO A PERSON  (re-expose them)
+  //
+  // A service can hold s2s_read without c2s_read and that combination is the
+  // common one: read a record type to make an internal decision, and never show
+  // it to anyone. Making disclosure a separate grant is what keeps that
+  // distinction sayable, and it keeps the RECORD OWNER in the loop on every
+  // re-exposure of its data rather than only on the first read of it.
+  //
+  // TWO SEMANTIC DIFFERENCES FROM s2s_read, both deliberate:
+  //
+  //   ["*"] FAILS GENERATION. On s2s_read the wildcard means "any authenticated
+  //       peer inside the fleet", which is broad but is a statement someone
+  //       might mean. "Any service may show my rows to any of its users" is not
+  //       a statement anyone means to make, so it is refused rather than
+  //       supported.
+  //   c2s_read IMPLIES s2s_read for the same service, and the pair with the
+  //       second half missing fails generation. The generated c2s handler's
+  //       entire data path IS the s2s reader; a disclosure grant without a read
+  //       grant is a surface that cannot execute.
+  //
+  // PAIRED CONTROL, exactly as s2s_read is. This is the grant half; the use half
+  // is (spec.record_read).c2s on the reading service's own proto, and
+  // ValidateRecordReadAnnotations refuses a build in which one is declared
+  // without the other, in both directions.
+  //
+  // Example — a record its producer also shows to its users:
+  //   option (spec.record) = {
+  //     key: "activity_id" owner: "spiffe_id"
+  //     s2s:           {auth_services: ["scotty"]}
+  //     s2s_subscribe: {auth_services: ["stratum"]}
+  //     s2s_read:      {auth_services: ["scotty"]}
+  //     c2s_read:      {auth_services: ["scotty"]}
+  //   };
+  MethodS2SAnnotation c2s_read = 11;
 }
 
 // Residency is the memory-residency window preset for a stored record type.
@@ -2165,11 +2223,17 @@ message TraitAnnotation {
   // implementor.
   string host = 3;
 
-  // s2s_service and c2s_service name the two sibling services the trait's plane
-  // is emitted as. A service may declare only one caller surface
+  // s2s_service and c2s_service name the sibling services the trait's plane is
+  // emitted as. A service may declare only one caller surface
   // (ValidateServiceSurfaces), so one plane serving both peers and users is two
   // services. They are declared rather than derived from `name` so the emitted
   // identities are readable in the declaration instead of in generator source.
+  //
+  // s2s_service is required. c2s_service is OPTIONAL: leave it empty and the
+  // trait hosts the peer half only — no client-facing sibling is emitted and the
+  // plane contributes no grants to the c2s catalog. A service that wants its own
+  // records readable by users declares (spec.record_read).c2s, which gives it a
+  // scoped <Svc>Records plane instead of a share in this fleet-wide one.
   string s2s_service = 4;
   string c2s_service = 5;
 
@@ -2307,6 +2371,70 @@ message RecordRead {
   // (spec.record).key already takes for a key naming a field that does not
   // exist.
   string record = 1;
+
+  // c2s, when present, asks for a CLIENT-FACING read surface over this record's
+  // rows, emitted into THIS service's own proto as a synthesized sibling
+  // service (`<Service>Records`) carrying Get<T> and List<T>.
+  //
+  // Absent — which is every declaration that predates this field — the reader
+  // gets the s2s typed reader and nothing else, byte for byte as before.
+  //
+  // The grant half is (spec.record).c2s_read on the record, and it must name
+  // this service. See the C2SScope comments for what the emitted surface is
+  // allowed to return.
+  RecordReadC2S c2s = 2;
+}
+
+// C2SScope names WHICH ROWS a client-facing record read may return, out of a
+// closed set. It is not a predicate language and must never become one.
+//
+// Every value here is derivable from VERIFIED TOKEN CLAIMS alone. The moment a
+// scope would need something else — "the decider this ticket is routed to", a
+// reach down an org hierarchy — it has stopped being a generated backstop and
+// become business logic, and such a read belongs in a HAND-WRITTEN RPC whose
+// body calls the generated s2s reader. That boundary is the design, not a gap
+// in it.
+//
+// Declared top-level rather than nested inside RecordReadC2S: a nested enum
+// generates but does not compile in the Rust model crate.
+enum C2SScope {
+  // Unspecified = C2S_SCOPE_PRINCIPAL. The narrowest value is the default, so a
+  // reader that declares the block and forgets the scope discloses the least,
+  // not the most.
+  C2S_SCOPE_UNSPECIFIED = 0;
+
+  // PRINCIPAL: rows whose owning-principal field equals the caller's subject,
+  // AND whose namespace equals the caller's tenant. "My own rows."
+  //
+  // The principal field is resolved exactly as the egress row filter resolves
+  // it — (spec.store_principal) on a record field, else (spec.record).owner —
+  // and ONLY when that field is also an EQ criterion on the generated <T>Filter.
+  // When it resolves to nothing, generation FAILS rather than degrading to a
+  // tenant-wide read: on ScottyActivity and AccountingRecord the declared
+  // `owner` is the PUBLISHING SERVICE, so a filter on it would show a human
+  // every row in its tenant while looking like it showed them their own.
+  C2S_SCOPE_PRINCIPAL = 1;
+
+  // NAMESPACE: every row in the caller's tenant, with no principal narrowing.
+  // A legitimate shape — an org-wide audit feed — but a disclosure decision, so
+  // it must be written down and can never be what absence means.
+  //
+  // DECLARED BUT NOT IMPLEMENTED in v1: generation fails with an explicit
+  // "declared but not implemented" error, the same stance RESIDENCY_COLD takes.
+  // The value exists so it cannot be invented twice with two meanings.
+  C2S_SCOPE_NAMESPACE = 2;
+}
+
+// RecordReadC2S is the USE half of the client-facing read plane: what
+// (spec.record_read).c2s asks tacplus to emit.
+message RecordReadC2S {
+  // scope names which rows the surface may return. See C2SScope.
+  C2SScope scope = 1;
+
+  // exposure is stamped onto the emitted RPCs' (spec.rpc). INTERNAL (the
+  // default) keeps the surface inside the cluster boundary; EXTERNAL publishes
+  // it through the gateway, which is what a mobile or browser client needs.
+  RpcExposure exposure = 2;
 }
 
 // GrpcC2SClient declares a client-facing service dependency.

@@ -174,7 +174,8 @@ func collectRecordReaders(config *tactype.Config, protoDir string) ([]recordRead
 	clientModPath := strings.Join(clientModParts, "::")
 
 	var entries []recordReaderEntry
-	for _, fqn := range self.RecordReads {
+	for _, rr := range self.RecordReads {
+		fqn := rr.Record
 		rec, recPath, recFd := findRecordByFQN(dp, fqn)
 		if rec == nil {
 			// Refused by ValidateRecordReadAnnotations; see above.

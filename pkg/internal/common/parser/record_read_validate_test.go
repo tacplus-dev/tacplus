@@ -35,7 +35,7 @@ func recordReadFds(grant []string, grantDeclared bool, reads []string, readerSer
 			AuthServices: []string{"stratum"},
 		}},
 		{Path: "owner.proto", Package: "owner", ServiceName: "owner", Messages: []MessageDescriptor{rec}},
-		{Path: "reader.proto", Package: "reader", ServiceName: readerService, RecordReads: reads},
+		{Path: "reader.proto", Package: "reader", ServiceName: readerService, RecordReads: recordReadDecls(reads)},
 	}
 }
 
@@ -160,5 +160,243 @@ func TestRecordReadGrantWithNoQueryPlaneRejected(t *testing.T) {
 func TestRecordReadAbsentEverywhereAccepted(t *testing.T) {
 	if err := validateRecordReadAnnotations(recordReadFds(nil, false, nil, "reader")); err != nil {
 		t.Fatalf("a fleet declaring neither half must validate, got: %v", err)
+	}
+}
+
+// recordReadDecls lifts a list of record names into (spec.record_read)
+// declarations with no c2s block — the s2s-only shape every test above uses.
+func recordReadDecls(names []string) []RecordRead {
+	out := make([]RecordRead, 0, len(names))
+	for _, n := range names {
+		out = append(out, RecordRead{Record: n})
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// The c2s pair: (spec.record).c2s_read + (spec.record_read).c2s.
+//
+// Each test below triggers exactly one refusal, because each refusal exists for
+// a different failure and the error text is what tells an author which one they
+// hit.
+// ---------------------------------------------------------------------------
+
+// c2sField describes one field on the fixture record.
+type c2sField struct {
+	name      string
+	principal bool
+	namespace bool
+	queryEq   bool
+}
+
+// recordReadC2SFds builds the same fleet as recordReadFds with a record shaped
+// for the client-facing plane: an s2s_read grant naming the reader, the given
+// c2s_read grant, and the given field set.
+func recordReadC2SFds(c2sGrant []string, c2sDeclared bool, fields []c2sField, use *RecordReadC2S) []*FileDescriptor {
+	rec := MessageDescriptor{
+		Name: "Row",
+		Annotations: map[string]model.AnnotationValue{
+			"record": {Type: model.AnnotationTypeBool, BoolValue: true},
+			"record_s2s_read": {
+				Type: model.AnnotationTypeBool, BoolValue: true,
+				StringSliceValue: []string{"reader"},
+			},
+		},
+	}
+	if c2sDeclared {
+		rec.Annotations["record_c2s_read"] = model.AnnotationValue{
+			Type: model.AnnotationTypeBool, BoolValue: true, StringSliceValue: c2sGrant,
+		}
+	}
+	for _, f := range fields {
+		fd := FieldDescriptor{Name: f.name, Type: "string", Annotations: map[string]model.AnnotationValue{}}
+		if f.principal {
+			fd.Annotations["store_principal"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+		}
+		if f.namespace {
+			fd.Annotations["store_namespace"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+		}
+		if f.queryEq {
+			fd.Annotations["query_field"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringValue: "eq"}
+		}
+		rec.Fields = append(rec.Fields, fd)
+	}
+	reads := []RecordRead{{Record: "owner.Row", C2S: use}}
+	return []*FileDescriptor{
+		{Path: "store.proto", Package: "store", ServiceName: "stratum", RecordStore: true},
+		{Path: "query.proto", Package: "query", Trait: &TraitDescriptor{
+			Name: "query", Host: "stratum", S2SService: "RecordMap", C2SService: "RecordQuery",
+			AuthServices: []string{"stratum"},
+		}},
+		{Path: "owner.proto", Package: "owner", ServiceName: "owner", Messages: []MessageDescriptor{rec}},
+		{Path: "reader.proto", Package: "reader", ServiceName: "reader", RecordReads: reads},
+	}
+}
+
+// wellFormedC2SFields is the record shape the plane needs: a principal field and
+// a namespace field, both EQ-queryable so both pins have a criterion.
+func wellFormedC2SFields() []c2sField {
+	return []c2sField{
+		{name: "acted_by", principal: true, queryEq: true},
+		{name: "namespace", namespace: true, queryEq: true},
+	}
+}
+
+func principalScope() *RecordReadC2S {
+	return &RecordReadC2S{Scope: "C2S_SCOPE_PRINCIPAL", Exposure: "RPC_EXPOSURE_EXTERNAL"}
+}
+
+// The happy path, so every refusal below is attributable to the one thing it
+// changes rather than to the fixture being wrong.
+func TestRecordReadC2SPairedControlAccepted(t *testing.T) {
+	err := validateRecordReadAnnotations(
+		recordReadC2SFds([]string{"reader"}, true, wellFormedC2SFields(), principalScope()))
+	if err != nil {
+		t.Fatalf("a matched c2s grant/use pair must validate, got: %v", err)
+	}
+}
+
+// ["*"] on c2s_read is refused where the same wildcard on s2s_read is accepted:
+// "any service may show my rows to any of its users" is not a statement a record
+// owner makes.
+func TestRecordReadC2SWildcardGrantRejected(t *testing.T) {
+	err := validateRecordReadAnnotations(
+		recordReadC2SFds([]string{"*"}, true, wellFormedC2SFields(), principalScope()))
+	if err == nil {
+		t.Fatal("expected failure for c2s_read: [\"*\"]")
+	}
+	if !strings.Contains(err.Error(), `c2s_read may not use ["*"]`) {
+		t.Fatalf("error must name the wildcard refusal, got: %v", err)
+	}
+}
+
+// USE WITHOUT THE DISCLOSURE GRANT. The reader holds s2s_read and asks for a
+// client-facing surface anyway; the record never agreed to the disclosure.
+func TestRecordReadC2SUseWithoutGrantRejected(t *testing.T) {
+	err := validateRecordReadAnnotations(
+		recordReadC2SFds(nil, false, wellFormedC2SFields(), principalScope()))
+	if err == nil {
+		t.Fatal("expected failure when a reader asks for a c2s read the record grants nobody")
+	}
+	if !strings.Contains(err.Error(), "declares no (spec.record).c2s_read") {
+		t.Fatalf("error must name the missing disclosure grant, got: %v", err)
+	}
+}
+
+// GRANT WITHOUT USE, on the disclosure half. A standing permission to re-expose
+// a record to end users that nothing exercises is the worse of the two unused
+// grants, so it has no wildcard exemption to fall through.
+func TestRecordReadC2SGrantWithoutUseRejected(t *testing.T) {
+	fds := recordReadC2SFds([]string{"reader"}, true, wellFormedC2SFields(), principalScope())
+	// Drop the c2s block from the use half, keeping the s2s read so only the
+	// disclosure grant goes unexercised.
+	for _, fd := range fds {
+		if fd.Package == "reader" {
+			fd.RecordReads = []RecordRead{{Record: "owner.Row"}}
+		}
+	}
+	err := validateRecordReadAnnotations(fds)
+	if err == nil {
+		t.Fatal("expected failure for a c2s_read grant no reader exercises")
+	}
+	if !strings.Contains(err.Error(), "unexercised disclosure grant") {
+		t.Fatalf("error must name the unexercised grant, got: %v", err)
+	}
+}
+
+// c2s_read WITHOUT s2s_read for the same service. The c2s handler's data path IS
+// the s2s reader, so the pair with the second half missing is a surface that
+// cannot execute.
+func TestRecordReadC2SWithoutS2SReadRejected(t *testing.T) {
+	fds := recordReadC2SFds([]string{"reader"}, true, wellFormedC2SFields(), principalScope())
+	for _, fd := range fds {
+		for mi := range fd.Messages {
+			delete(fd.Messages[mi].Annotations, "record_s2s_read")
+		}
+	}
+	err := validateRecordReadAnnotations(fds)
+	if err == nil {
+		t.Fatal("expected failure for c2s_read on a record granting nobody s2s_read")
+	}
+	if !strings.Contains(err.Error(), "s2s_read") {
+		t.Fatalf("error must name the missing s2s_read, got: %v", err)
+	}
+}
+
+// C2S_SCOPE_NAMESPACE is in the enum and not in the generator. The refusal says
+// so rather than the value silently behaving like PRINCIPAL.
+func TestRecordReadC2SNamespaceScopeRejected(t *testing.T) {
+	err := validateRecordReadAnnotations(recordReadC2SFds([]string{"reader"}, true, wellFormedC2SFields(),
+		&RecordReadC2S{Scope: "C2S_SCOPE_NAMESPACE", Exposure: "RPC_EXPOSURE_EXTERNAL"}))
+	if err == nil {
+		t.Fatal("expected failure for the unimplemented C2S_SCOPE_NAMESPACE")
+	}
+	if !strings.Contains(err.Error(), "declared but NOT IMPLEMENTED") {
+		t.Fatalf("error must say the scope is declared and not implemented, got: %v", err)
+	}
+}
+
+// An owning principal that cannot become an EQ criterion. Generation fails
+// rather than degrading to a tenant-wide read that LOOKS per-person.
+func TestRecordReadC2SUnenforceablePrincipalRejected(t *testing.T) {
+	fields := []c2sField{
+		{name: "acted_by", principal: true}, // no query_field: nothing to pin into
+		{name: "namespace", namespace: true, queryEq: true},
+	}
+	err := validateRecordReadAnnotations(
+		recordReadC2SFds([]string{"reader"}, true, fields, principalScope()))
+	if err == nil {
+		t.Fatal("expected failure for a principal field with no EQ query_field")
+	}
+	if !strings.Contains(err.Error(), "C2S_SCOPE_PRINCIPAL") || !strings.Contains(err.Error(), "acted_by") {
+		t.Fatalf("error must name the scope and the unusable field, got: %v", err)
+	}
+}
+
+// A namespace field with no criterion. The tenant pin would be generated and
+// silently ignored by the store, leaving the aborting egress filter as the only
+// boundary — the one arrangement the design rules out.
+func TestRecordReadC2SUnqueryableNamespaceRejected(t *testing.T) {
+	fields := []c2sField{
+		{name: "acted_by", principal: true, queryEq: true},
+		{name: "namespace", namespace: true}, // no query_field
+	}
+	err := validateRecordReadAnnotations(
+		recordReadC2SFds([]string{"reader"}, true, fields, principalScope()))
+	if err == nil {
+		t.Fatal("expected failure for a namespace field with no EQ query_field")
+	}
+	if !strings.Contains(err.Error(), "store_namespace") || !strings.Contains(err.Error(), "silently ignored") {
+		t.Fatalf("error must explain the inert pin, got: %v", err)
+	}
+}
+
+// A Go target is refused by name. The Go service wrapper carries neither record
+// egress filter, so the surface would be emitted unguarded — a pre-existing hole
+// in that generator, and one this plane must not walk into silently.
+func TestRecordReadC2SGoTargetRejected(t *testing.T) {
+	fds := recordReadC2SFds([]string{"reader"}, true, wellFormedC2SFields(), principalScope())
+	for _, lang := range []string{"rust", "java"} {
+		if err := validateRecordReadC2SLanguageSupport(fds, "reader", lang); err != nil {
+			t.Fatalf("%s carries both egress filters and must be accepted, got: %v", lang, err)
+		}
+	}
+	err := validateRecordReadC2SLanguageSupport(fds, "reader", "go")
+	if err == nil {
+		t.Fatal("expected failure for a Go target declaring (spec.record_read).c2s")
+	}
+	for _, want := range []string{"store_principal", "store_namespace", `"go"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error must name %s, got: %v", want, err)
+		}
+	}
+	// A Go service that declares no c2s block is untouched: this is additive.
+	for _, fd := range fds {
+		if fd.Package == "reader" {
+			fd.RecordReads = []RecordRead{{Record: "owner.Row"}}
+		}
+	}
+	if err := validateRecordReadC2SLanguageSupport(fds, "reader", "go"); err != nil {
+		t.Fatalf("an s2s-only reader must build for Go, got: %v", err)
 	}
 }

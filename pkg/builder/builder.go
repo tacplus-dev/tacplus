@@ -178,6 +178,9 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateReservedFieldNumbers(allParsedFiles); err != nil {
 		return err
 	}
+	if err := parser.ValidateRecordReadC2SLanguageSupport(dp, b.config.SelfPackage, b.config.Language); err != nil {
+		return err
+	}
 	if err := parser.ValidateRedactLanguageSupport(allParsedFiles, b.config.Language); err != nil {
 		return err
 	}

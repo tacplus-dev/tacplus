@@ -84,6 +84,14 @@ type grpcServiceEntry struct {
 	// Hosted entries get a default Handler trait impl that returns a stub,
 	// so services can compile without immediately implementing every method.
 	IsHosted bool
+	// IsGeneratedRecordC2S marks the synthesized <Svc>Records surface, whose
+	// handler is GENERATED (s2sm/record_c2s.rs) rather than written. It is the
+	// only service for which the Handler trait carries no getter at all: there is
+	// one correct body for its RPCs, that body is the authorization, and an
+	// author-supplied override is not a customisation point anyone wants.
+	IsGeneratedRecordC2S bool
+	// GeneratedImplStruct names that generated implementation.
+	GeneratedImplStruct string
 }
 
 // rustConfigHandlerEntry names one handler fed by a shared config fetch.
@@ -151,7 +159,13 @@ type smTemplateData struct {
 	HasPublishers           bool
 	RecordReaders           []recordReaderEntry // model-driven (spec.record_read) typed readers over stored record rows
 	HasRecordReaders        bool
-	TracePublisherFn        string
+	// RecordC2S is the generated handler for the client-facing record read plane,
+	// nil unless this service declares (spec.record_read).c2s.
+	RecordC2S *recordC2SFile
+	// RecordC2SService names the ONE service whose handler implementation is
+	// generated rather than supplied by the author ("<Svc>Records"), or "".
+	RecordC2SService string
+	TracePublisherFn string
 	// AccountingPublisher is the generator-resolved publisher for the durable
 	// accounting record topic. nil when the proto set declares no accounting
 	// record (client repos), in which case no emitter is wired at all.
@@ -268,6 +282,9 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			HasMethodAuth:            svc.HasMethodAuth,
 			AuthExemptPaths:          svc.AuthExemptPaths,
 			IsHosted:                 config.SelfPackage != "" && svc.PackageName != config.SelfPackage,
+			// The one service whose handler the ServiceManager supplies itself.
+			IsGeneratedRecordC2S: svc.SynthesizedKind == parser.SynthesizedKindRecordC2S,
+			GeneratedImplStruct:  svc.ServiceName + "GeneratedHandler",
 		})
 	}
 	diskStores, err := collectRustDiskStoreRuntimeEntries(config, grpcSvcs)
@@ -449,6 +466,14 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		return smTemplateData{}, fmt.Errorf("failed to collect record readers: %w", err)
 	}
 
+	// The client-facing record read plane, when this service asked for one. Its
+	// handler is generated, not implemented, so it is resolved here alongside the
+	// readers it delegates to.
+	recordC2S, err := collectRecordC2SPlane(config, config.AnnotatedProtoDir)
+	if err != nil {
+		return smTemplateData{}, fmt.Errorf("failed to collect the client-facing record read plane: %w", err)
+	}
+
 	// Discover model-driven EventBus publishers from explicit event_publish
 	// declarations.
 	publishers, err := collectEventPublishers(config, config.AnnotatedProtoDir)
@@ -550,6 +575,8 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		HasPublishers:              len(publishers) > 0,
 		RecordReaders:              recordReaders,
 		HasRecordReaders:           len(recordReaders) > 0,
+		RecordC2S:                  recordC2S,
+		RecordC2SService:           recordC2SServiceName(recordC2S),
 		TracePublisherFn:           tracePublisherFn,
 		AccountingPublisher:        accountingPublisher,
 		TargetServices:             targetServices,
@@ -568,6 +595,14 @@ func rustConfigFetches(grpcSvcs []grpcServiceEntry) []rustConfigFetchEntry {
 	index := map[string]int{}
 	for _, svc := range grpcSvcs {
 		if !svc.HasConfigState {
+			continue
+		}
+		// The client-facing record read plane's handler is generated, so there is
+		// no author-supplied type to deliver config to. Its behaviour comes from
+		// the record's annotations, not from a runtime Config, and emitting a
+		// config callback for it would put a method on the Handler trait that only
+		// generated code could implement.
+		if svc.IsGeneratedRecordC2S {
 			continue
 		}
 		key := svc.ConfigStateGroupAccessor + "|" + svc.ConfigStateAccessor + "|" +
@@ -759,6 +794,11 @@ func generateServiceManagerSM(config *tactype.Config, svcs []service.ServiceInfo
 	// record's stored rows; write that module beside it, or the declaration names
 	// a file that does not exist.
 	if err := generateRecordReaders(config, data.RecordReaders); err != nil {
+		return err
+	}
+	// Same contract for the client-facing plane's generated handler: the SM
+	// declares `pub mod record_c2s;` only when it exists, so write it here.
+	if err := generateRecordC2SPlane(config, data.RecordC2S); err != nil {
 		return err
 	}
 

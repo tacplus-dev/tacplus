@@ -12,6 +12,9 @@ pub mod subscribe;
 {{- if .HasRecordReaders}}
 pub mod record_readers;
 {{- end}}
+{{- if .RecordC2SService}}
+pub mod record_c2s;
+{{- end}}
 
 use std::sync::Arc;
 use tokio::signal;
@@ -1347,9 +1350,21 @@ impl ServiceManager {
 
 	        // Wrap handler implementations with validation and register services.
 {{- range .GrpcServices}}
+{{- if .IsGeneratedRecordC2S}}
+        // The client-facing record read plane's handler is GENERATED, not
+        // supplied: `Weak` rather than `Arc` because the manager owns the wrapper
+        // that owns this handler, and an owning back-reference would close a
+        // cycle that never drops.
+        let {{.WrapperVar}} = {{.WrapperModPath}}::ValidationWrapper::new(
+            std::sync::Arc::new(record_c2s::{{.GeneratedImplStruct}}::new(
+                std::sync::Arc::downgrade(&self),
+            )),
+        );
+{{- else}}
         let {{.WrapperVar}} = {{.WrapperModPath}}::ValidationWrapper::new(
             handler.{{.GetterName}}(),
         );
+{{- end}}
         {{.WrapperVar}}.set_instance_id(self.instance_id().to_string()).await;
         {{.WrapperVar}}.set_anonymize_hmac_key(self.cfg.anonymize_hmac_key.clone()).await;
 {{- end}}

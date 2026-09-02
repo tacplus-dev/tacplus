@@ -205,12 +205,16 @@ func Generate(config *tactype.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to derive virtual service clients: %w", err)
 	}
-	config.GrpcS2SClients = append(config.GrpcS2SClients, virtualClients...)
 
 	// Infer gRPC client dependencies from grpc_s2s_client/c2s/w2s proto annotations.
 	if err := service.InferGrpcClientsFromAnnotations(config, tempProtoDir); err != nil {
 		return fmt.Errorf("failed to infer gRPC clients from proto annotations: %w", err)
 	}
+	// Derived clients are unioned in AFTER inference, not appended before it:
+	// inference skips its explicit-declaration block when GrpcS2SClients is
+	// already non-empty, so a service declaring both (spec.record_read) and an
+	// explicit (spec.grpc_s2s_client) used to lose the explicit one silently.
+	config.GrpcS2SClients = service.MergeGrpcEntries(config.GrpcS2SClients, virtualClients)
 
 	// Add generated/*.proto files to the compilation list and inject go_package.
 	// They are created after the sys scan above, so we add them explicitly.
@@ -317,6 +321,12 @@ func Generate(config *tactype.Config) error {
 	}
 	if err := proto.AppendRecordMapServiceToProtos(tempProtoDir, flatProtoDir, config.SelfPackage); err != nil {
 		return fmt.Errorf("failed to append record map service to protos: %w", err)
+	}
+	// The CLIENT-FACING half, after the record plane above because it folds the
+	// same criteria and must see the same records. Emits nothing unless a
+	// service declares (spec.record_read).c2s.
+	if err := proto.AppendRecordC2SServiceToProtos(tempProtoDir, flatProtoDir, config.SelfPackage); err != nil {
+		return fmt.Errorf("failed to append client-facing record read plane to protos: %w", err)
 	}
 	// TimeseriesGroupCounts and TimeseriesQuery used to be injected here, onto
 	// the proto of every timeseries_store. Removed 2026-08-25 with the timedb

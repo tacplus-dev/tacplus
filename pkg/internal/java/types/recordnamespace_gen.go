@@ -206,3 +206,79 @@ func (es *javaEgressSanitizer) javaNamespaceWatchGuard(eventType, servicePackage
 	}
 	return b.String()
 }
+
+// THE TENANT PIN ON THE QUERY PREDICATE.
+//
+// The twin of javaPredicatePrincipalPin next door, and it became necessary the
+// moment a record's (spec.store_namespace) field acquired a (spec.query_field) —
+// which (spec.record).c2s_read now requires, because a tenant pin the store does
+// not evaluate is not a pin at all.
+//
+// Without this, that criterion is a NEW hazard on the record plane's existing
+// c2s half: a caller could name another tenant in the predicate, the store would
+// return that tenant's rows, and the egress filter above would drop them and
+// ABORT. A client-triggerable process halt is strictly worse than the state
+// before, so the criterion and this pin land together.
+//
+// Same doctrine as the principal pin, with one difference that follows from the
+// backstop's: a mismatch is refused rather than overwritten, so a caller naming
+// a foreign tenant gets INVALID_ARGUMENT and the abort behind it stays
+// unreachable from the outside.
+
+// predicateNamespaceField returns (requestFieldName, namespaceFieldName) for a
+// request carrying a query predicate whose criteria include the row's tenant, or
+// two empty strings when it carries none.
+func (es *javaEgressSanitizer) predicateNamespaceField(fullType, servicePackage string) (string, string) {
+	if es == nil || fullType == "" {
+		return "", ""
+	}
+	pkg, name := splitJavaEgressFQN(fullType, servicePackage)
+	msg, ok := es.msgs[pkg+"\x00"+name]
+	if !ok {
+		return "", ""
+	}
+	for i := range msg.Fields {
+		f := &msg.Fields[i]
+		if !f.IsMessage || f.IsRepeated || f.IsMap {
+			continue
+		}
+		fpkg, fname := splitJavaEgressFQN(fieldTypeFQN(f, pkg), servicePackage)
+		pred, ok := es.msgs[fpkg+"\x00"+fname]
+		if !ok {
+			continue
+		}
+		for j := range pred.Fields {
+			pf := &pred.Fields[j]
+			if pf.Annotations["store_namespace"].BoolValue && !pf.IsRepeated && !pf.IsMessage {
+				return f.Name, pf.Name
+			}
+		}
+	}
+	return "", ""
+}
+
+// javaPredicateNamespacePin renders the stamp-or-refuse over the request's query
+// predicate. valueExpr names the request in scope.
+func javaPredicateNamespacePin(reqField, namespace, valueExpr, method, indent string) string {
+	if reqField == "" || namespace == "" {
+		return ""
+	}
+	rf := javaPascalField(reqField)
+	nf := javaPascalField(namespace)
+	return fmt.Sprintf(`%[1]s// (spec.store_namespace) on the query predicate: pin the tenant before the
+%[1]s// store is asked. EXACT match against the caller's namespace claim, never the
+%[1]s// level-or-below containment the administrative rule uses.
+%[1]s// Unset -> stamped; equal -> accepted; different -> refused, which is what
+%[1]s// keeps the aborting egress backstop unreachable from outside the process.
+%[1]svar __nsTok = Auth.verifiedTokenFromContext();
+%[1]sfinal String __queryNamespace = __nsTok == null ? null : __nsTok.getNamespace();
+%[1]sif (__queryNamespace == null || __queryNamespace.isEmpty()) {
+%[1]s    throw new ProtoException(ProtoException.PERMISSION_DENIED, "%[2]s queries rows held to a tenant and the caller presented no verified namespace claim");
+%[1]s}
+%[1]sif (!%[3]s.get%[4]s().has%[5]s() || %[3]s.get%[4]s().get%[5]s().isEmpty()) {
+%[1]s    %[3]s = %[3]s.toBuilder().set%[4]s(%[3]s.get%[4]s().toBuilder().set%[5]s(__queryNamespace)).build();
+%[1]s} else if (!__queryNamespace.equals(%[3]s.get%[4]s().get%[5]s())) {
+%[1]s    throw new ProtoException(ProtoException.INVALID_ARGUMENT, "%[6]s names a tenant other than the caller's; the tenant boundary is not the predicate's to choose");
+%[1]s}
+`, indent, method, valueExpr, rf, nf, reqField+"."+namespace)
+}

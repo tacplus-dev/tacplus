@@ -165,7 +165,20 @@ func filterByPackage(servicesInfo []ServiceInfo, pkg string) []ServiceInfo {
 			continue
 		}
 		// Exclude tacplus-generated state/store/mutation/opa services.
-		if svc.Synthesized {
+		//
+		// EXCEPT the client-facing record read plane. <Svc>Records is synthesized
+		// like the others, but unlike them it is served by the READING SERVICE's
+		// own gRPC server: it has no separate wiring to be hosted through, and its
+		// whole purpose is to put two scoped read RPCs on that service's c2s
+		// surface so their grants land in that service's catalog. Excluding it
+		// here would emit the proto and then serve nothing.
+		//
+		// Its handler is still not the author's to write — the ServiceManager
+		// binds a GENERATED implementation over the typed record reader — but the
+		// wrapper, the registration and the grant catalog entry all come from the
+		// ordinary path, which is exactly what makes gate 1 fall out of generation
+		// rather than being built.
+		if svc.Synthesized && svc.SynthesizedKind != parser.SynthesizedKindRecordC2S {
 			continue
 		}
 		result = append(result, svc)
@@ -276,6 +289,35 @@ func collectOwnPackageGrpcAnnotations(selfPackage string, allFiles map[string]*p
 		w2sRefs = mergeGrpcRefs(w2sRefs, fd.GrpcW2SClients)
 	}
 	return found, allS2SClients, s2sRefs, c2sRefs, w2sRefs
+}
+
+// MergeGrpcEntries unions GrpcEntry groups, keeping the first occurrence of each
+// (proto file, service name) pair — the same dedup discipline mergeGrpcRefs uses
+// on the unresolved refs.
+//
+// This exists so a caller can union DERIVED clients (the record query plane
+// entry DeriveVirtualServiceClients produces from (spec.record_read), the
+// OpaEval entry it produces from opa_import) into the set
+// InferGrpcClientsFromAnnotations resolved from the proto's own explicit
+// (spec.grpc_s2s_client) declarations. Appending the derived ones FIRST used to
+// make config.GrpcS2SClients non-empty before inference ran, and inference's
+// "already set from yaml or CLI" guard then skipped the explicit declarations
+// entirely — silently, with no error and no log line. Explicit entries come
+// first here so a YAML/CLI override keeps its own InstanceName/AuthDisabled.
+func MergeGrpcEntries(groups ...[]tactype.GrpcEntry) []tactype.GrpcEntry {
+	seen := make(map[string]bool)
+	var result []tactype.GrpcEntry
+	for _, group := range groups {
+		for _, e := range group {
+			key := e.ProtoFile + "\x00" + e.ServiceName
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			result = append(result, e)
+		}
+	}
+	return result
 }
 
 func mergeGrpcRefs(groups ...[]string) []string {

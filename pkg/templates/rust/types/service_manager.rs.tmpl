@@ -9,6 +9,9 @@ pub mod handler;
 {{- if .HasSubscriptions}}
 pub mod subscribe;
 {{- end}}
+{{- if .HasRecordReaders}}
+pub mod record_readers;
+{{- end}}
 
 use std::sync::Arc;
 use tokio::signal;
@@ -1067,6 +1070,26 @@ impl ServiceManager {
     }
 {{- end}}
 
+{{- if .HasRecordReaders}}
+	{{- range .RecordReaders}}
+
+    /// Returns the typed reader over {{.RecordFQN}}'s STORED ROWS.
+    ///
+    /// Generated from `option (spec.record_read) = {record: "{{.RecordFQN}}"}` on
+    /// this service's proto, and reachable only because {{.RecordFQN}} names this
+    /// service in its own `(spec.record).s2s_read` grant — the two halves of one
+    /// paired control, checked at generation time.
+    ///
+    /// This reads the record store, not the record's EventBus topic. The topic
+    /// carries the stream as it happens; this answers questions about rows that
+    /// were already written, including rows this service wrote itself.
+    pub fn {{.FnName}}(&self) -> record_readers::{{.StructName}}<'_> {
+        record_readers::{{.StructName}}::new(
+            self.s2s.{{.HostAccessor}}().{{.ClientFn}}(),
+        )
+    }
+	{{- end}}
+{{- end}}
 	{{- range .Publishers}}
 
     /// Creates a {{.EventTypeName}} publisher that sends events to EventBus via a

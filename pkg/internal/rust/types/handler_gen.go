@@ -125,7 +125,7 @@ type smTemplateData struct {
 	HasC2DGrpc              bool
 	C2DSocketPath           string // service_c2d socket_path the daemon binds (required, no default)
 	HasStates               bool
-	HasSysState            bool
+	HasSysState             bool
 	HasS2SClients           bool
 	HasServiceHealthState   bool
 	HasAutoTls              bool
@@ -149,14 +149,16 @@ type smTemplateData struct {
 	Subscriptions           []subscriptionEntry
 	Publishers              []publisherEntry // model-driven EventBus topic publishers (own (spec.service_event) topics)
 	HasPublishers           bool
+	RecordReaders           []recordReaderEntry // model-driven (spec.record_read) typed readers over stored record rows
+	HasRecordReaders        bool
 	TracePublisherFn        string
 	// AccountingPublisher is the generator-resolved publisher for the durable
 	// accounting record topic. nil when the proto set declares no accounting
 	// record (client repos), in which case no emitter is wired at all.
-	AccountingPublisher *publisherEntry
-	TargetServices          []TargetServiceInfo // per-target-service connection info for typed accessors
-	DiskStores              []rustDiskStoreRuntimeEntry
-	HasDiskStores           bool
+	AccountingPublisher        *publisherEntry
+	TargetServices             []TargetServiceInfo // per-target-service connection info for typed accessors
+	DiskStores                 []rustDiskStoreRuntimeEntry
+	HasDiskStores              bool
 	KeepaliveTimeSecs          int
 	KeepaliveTimeoutSecs       int
 	KeepalivePermitMinTimeSecs int
@@ -440,6 +442,13 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		targetServices = CollectTargetServices(clientServices)
 	}
 
+	// Discover the typed readers this service's (spec.record_read) declarations
+	// ask for, over the stored rows of records it was granted read access to.
+	recordReaders, err := collectRecordReaders(config, config.AnnotatedProtoDir)
+	if err != nil {
+		return smTemplateData{}, fmt.Errorf("failed to collect record readers: %w", err)
+	}
+
 	// Discover model-driven EventBus publishers from explicit event_publish
 	// declarations.
 	publishers, err := collectEventPublishers(config, config.AnnotatedProtoDir)
@@ -491,7 +500,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		HasC2DGrpc:              hasC2DGrpc,
 		C2DSocketPath:           c2dSocketPath,
 		HasStates:               len(config.States) > 0 || config.AllStates,
-		HasSysState:            hasSysState,
+		HasSysState:             hasSysState,
 		HasS2SClients:           len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
 		HasServiceHealthState:   hasServiceHealthState,
 		// Every TLS gRPC service obtains its server cert via auto-TLS
@@ -520,27 +529,29 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			}
 			return ""
 		}(),
-		HasSmb:                hasSmb,
-		SmbAuthorityServiceID: smbAuthorityServiceID,
-		IsGateway:             config.IsGateway,
-		HasSubscriptions:      len(config.Subscriptions) > 0,
-		HealthStateProtoDir:   healthStateProtoDir,
-		HealthStateModPath:    strings.ReplaceAll(healthStateProtoDir, "/", "::"),
-		StateStoreServiceID:   stateStoreServiceID,
-		HasTypedHealth:        hasTypedHealth,
-		TypedHealthType:       typedHealthType,
-		TypedHealthModPath:    typedHealthModPath,
-		TacplusVersion:        buildinfo.Version,
-		TacplusGitSha:         buildinfo.GitSha,
-		ProtoSourceVersion:    protoSourceVersion,
-		ProtoSourceGitSha:     protoGitSha,
-		GrpcServices:          grpcSvcs,
-		ConfigFetches:         rustConfigFetches(grpcSvcs),
-		Subscriptions:         subs,
-		Publishers:            publishers,
-		HasPublishers:         len(publishers) > 0,
-		TracePublisherFn:      tracePublisherFn,
-		AccountingPublisher:   accountingPublisher,
+		HasSmb:                     hasSmb,
+		SmbAuthorityServiceID:      smbAuthorityServiceID,
+		IsGateway:                  config.IsGateway,
+		HasSubscriptions:           len(config.Subscriptions) > 0,
+		HealthStateProtoDir:        healthStateProtoDir,
+		HealthStateModPath:         strings.ReplaceAll(healthStateProtoDir, "/", "::"),
+		StateStoreServiceID:        stateStoreServiceID,
+		HasTypedHealth:             hasTypedHealth,
+		TypedHealthType:            typedHealthType,
+		TypedHealthModPath:         typedHealthModPath,
+		TacplusVersion:             buildinfo.Version,
+		TacplusGitSha:              buildinfo.GitSha,
+		ProtoSourceVersion:         protoSourceVersion,
+		ProtoSourceGitSha:          protoGitSha,
+		GrpcServices:               grpcSvcs,
+		ConfigFetches:              rustConfigFetches(grpcSvcs),
+		Subscriptions:              subs,
+		Publishers:                 publishers,
+		HasPublishers:              len(publishers) > 0,
+		RecordReaders:              recordReaders,
+		HasRecordReaders:           len(recordReaders) > 0,
+		TracePublisherFn:           tracePublisherFn,
+		AccountingPublisher:        accountingPublisher,
 		TargetServices:             targetServices,
 		DiskStores:                 diskStores,
 		HasDiskStores:              len(diskStores) > 0,
@@ -744,6 +755,13 @@ func generateServiceManagerSM(config *tactype.Config, svcs []service.ServiceInfo
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf("failed to create service_manager dir: %w", err)
 	}
+	// The SM declares `pub mod record_readers;` when this service reads any
+	// record's stored rows; write that module beside it, or the declaration names
+	// a file that does not exist.
+	if err := generateRecordReaders(config, data.RecordReaders); err != nil {
+		return err
+	}
+
 	outputPath := filepath.Join(outputDir, "mod.rs")
 	if err := os.WriteFile(outputPath, buf.Bytes(), 0644); err != nil {
 		return fmt.Errorf("failed to write service_manager.rs: %w", err)

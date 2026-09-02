@@ -821,6 +821,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				ServiceName:     service.Name,
 				GrpcName:        service.GrpcName,
 				IsGrpc:          isGrpc,
+				HasMcp:          hasMcp,
 				IsS2S:           service.IsS2S,
 				IsC2S:           service.IsC2S,
 				IsC2D:           service.IsC2D,

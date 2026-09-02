@@ -26,6 +26,7 @@ type ServiceInfo struct {
 	ServiceName   string
 	GrpcName      string // service identity used for routing (defaults to package name)
 	IsGrpc        bool   // true if service has a gRPC annotation (service_s2s, service_c2s, or service_c2d)
+	HasMcp        bool   // true if any of the service's RPCs is an MCP tool (spec.mcp)
 	IsS2S         bool   // true if service has service_s2s annotation
 	IsC2S         bool   // true if service has service_c2s annotation
 	IsC2D         bool   // true if service has service_c2d annotation
@@ -159,7 +160,14 @@ func filterByHostTag(servicesInfo []ServiceInfo, pkg string) []ServiceInfo {
 func filterByPackage(servicesInfo []ServiceInfo, pkg string) []ServiceInfo {
 	var result []ServiceInfo
 	for _, svc := range servicesInfo {
-		if svc.PackageName != pkg || !svc.IsGrpc {
+		// A category-A MCP-only service (no service_s2s/service_c2s/service_c2d,
+		// so IsGrpc is false) still needs a server wrapper: its MCP dispatch
+		// surface is only generated on the wrapper path this filter gates.
+		// Dropping it here starved generateServiceWrappers/mcp_dispatch_gen.go
+		// of the service entirely, in every language (this filter is shared),
+		// even after the per-language "isGrpc && hasMcp" gate at the detect
+		// step was fixed to keep it around that far.
+		if svc.PackageName != pkg || (!svc.IsGrpc && !svc.HasMcp) {
 			continue
 		}
 		if svc.IsC2D {

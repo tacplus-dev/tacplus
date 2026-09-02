@@ -376,6 +376,22 @@ func TestResolveServerServices_KeepsUserS2SWithEmptyAuth_DropsSynthesized(t *tes
 	}
 }
 
+// A category-A MCP-only service (no service_s2s/service_c2s/service_c2d, so
+// IsGrpc is false) must still get a server wrapper generated: that's the only
+// path that reaches mcp_dispatch_gen.go. filterByPackage previously dropped
+// any non-gRPC service outright, starving MCP-only services of a wrapper even
+// after the per-language detect step learned to keep them around this far.
+func TestResolveServerServices_KeepsMcpOnlyService(t *testing.T) {
+	config := &tactype.Config{SelfPackage: "docmanageragent"}
+	services := []ServiceInfo{
+		{ProtoFile: "services/docmanageragent.proto", PackageName: "docmanageragent", ServiceName: "DocManagerAgent", GrpcName: "", IsGrpc: false, HasMcp: true},
+	}
+	got := ResolveServerServices(config, services)
+	if len(got) != 1 || got[0].ServiceName != "DocManagerAgent" {
+		t.Fatalf("want [DocManagerAgent] kept (MCP-only service), got %v", got)
+	}
+}
+
 func TestResolveClientServices_GrpcS2SClientAll(t *testing.T) {
 	services := makeServices()
 	config := &tactype.Config{GrpcS2SClientAll: true}

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
 )
 
 // recordReadPlane is the trait plane every test in this file emits against. Its
@@ -143,81 +144,117 @@ func TestKeyFilterCriterionSkipsNonScalarKey(t *testing.T) {
 	}
 }
 
-// The reader declares (spec.record_read) and nothing else; the transport
-// dependency on the plane's S2S half is injected, because it is a CONSEQUENCE of
-// the read rather than a second decision that could disagree with the first.
-func TestRecordReadInjectsImpliedS2SClient(t *testing.T) {
+// The reader declares (spec.record_read) and nothing else. The transport
+// dependency on the plane's S2S half is DERIVED — not restated in the reader's
+// proto, where it could disagree with the plane it actually calls.
+//
+// Derived rather than injected into the proto text because client inference runs
+// BEFORE the plane's services are materialized: AppendRecordMapServiceToProtos
+// appends them later, so an option injected there would be read by nothing.
+func TestRecordReadDerivesPlaneClient(t *testing.T) {
 	if _, err := exec.LookPath("protoc"); err != nil {
 		t.Skip("protoc not available")
 	}
 	dir := recordReadFixture(t, `s2s_read: {auth_services: ["reader"]}`, true)
 
-	if err := AppendRecordMapServiceToProtos(dir, dir, ""); err != nil {
-		t.Fatalf("AppendRecordMapServiceToProtos: %v", err)
-	}
-
-	body, err := os.ReadFile(filepath.Join(dir, "reader.proto"))
+	entries, err := DeriveVirtualServiceClients(dir, "reader")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("DeriveVirtualServiceClients: %v", err)
 	}
-	if !strings.Contains(string(body), `option (spec.grpc_s2s_client) = {service: "query.RecordMap"};`) {
-		t.Fatalf("reader proto must gain the implied s2s client, got:\n%s", body)
+	var got *tactype.GrpcEntry
+	for i := range entries {
+		if entries[i].ServiceName == "RecordMap" {
+			got = &entries[i]
+			break
+		}
 	}
-	// It must land in the file preamble. An option after the first top-level
-	// block is a FileOptions extension inside a ServiceOptions body, which protoc
-	// rejects outright — the failure this placement rule exists to prevent.
-	txt := string(body)
-	optIdx := strings.Index(txt, "option (spec.grpc_s2s_client)")
-	svcIdx := strings.Index(txt, "\nservice ")
-	if svcIdx != -1 && optIdx > svcIdx {
-		t.Fatalf("implied client option landed inside a top-level block:\n%s", txt)
+	if got == nil {
+		t.Fatalf("reader must derive a client for the plane's S2S half, got %+v", entries)
+	}
+	if got.ProtoPackage != "query" {
+		t.Errorf("derived client must name the trait's package, got %q", got.ProtoPackage)
+	}
+	if !strings.HasSuffix(got.ProtoFile, "query.proto") {
+		t.Errorf("derived client must point at the trait's proto, got %q", got.ProtoFile)
 	}
 }
 
-// The injection is idempotent: an author who wrote the client by hand gets one
-// option, not two.
-func TestRecordReadImpliedClientNotDuplicated(t *testing.T) {
+// One entry however many records are read: they are all RPCs on one service.
+func TestRecordReadDerivesOnePlaneClientForManyRecords(t *testing.T) {
 	if _, err := exec.LookPath("protoc"); err != nil {
 		t.Skip("protoc not available")
 	}
 	dir := recordReadFixture(t, `s2s_read: {auth_services: ["reader"]}`, true)
+	addSecondRecordRead(t, dir)
 
-	if err := AppendRecordMapServiceToProtos(dir, dir, ""); err != nil {
-		t.Fatalf("first pass: %v", err)
-	}
-	if err := AppendRecordMapServiceToProtos(dir, dir, ""); err != nil {
-		t.Fatalf("second pass: %v", err)
-	}
-	body, err := os.ReadFile(filepath.Join(dir, "reader.proto"))
+	entries, err := DeriveVirtualServiceClients(dir, "reader")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("DeriveVirtualServiceClients: %v", err)
 	}
-	if n := strings.Count(string(body), `option (spec.grpc_s2s_client) = {service: "query.RecordMap"};`); n != 1 {
-		t.Fatalf("implied client option emitted %d times, want 1", n)
+	n := 0
+	for _, e := range entries {
+		if e.ServiceName == "RecordMap" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("two record_read declarations must derive ONE plane client, got %d", n)
 	}
 }
 
-// A file declaring no (spec.record_read) is never rewritten. The injection must
-// touch exactly the readers and nothing else.
-func TestNoRecordReadLeavesProtoUntouched(t *testing.T) {
+// A service declaring no (spec.record_read) derives no plane client. The
+// mechanism is additive: every service in the fleet predates it.
+func TestNoRecordReadDerivesNoPlaneClient(t *testing.T) {
 	if _, err := exec.LookPath("protoc"); err != nil {
 		t.Skip("protoc not available")
 	}
 	dir := recordReadFixture(t, "", false)
 
-	before, err := os.ReadFile(filepath.Join(dir, "reader.proto"))
+	entries, err := DeriveVirtualServiceClients(dir, "reader")
+	if err != nil {
+		t.Fatalf("DeriveVirtualServiceClients: %v", err)
+	}
+	for _, e := range entries {
+		if e.ServiceName == "RecordMap" {
+			t.Fatalf("a service declaring no record_read must derive no plane client, got %+v", entries)
+		}
+	}
+}
+
+// addSecondRecordRead gives the fixture's owner proto a second granted record and
+// the reader a second (spec.record_read) naming it.
+func addSecondRecordRead(t *testing.T, dir string) {
+	t.Helper()
+	writeProto(t, dir, "owner2.proto", `syntax = "proto3";
+package owner2;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "owner2"};
+
+message Row2 {
+  option (spec.record) = {
+    key: "row_id"
+    owner: "spiffe_id"
+    s2s: {auth_services: ["owner2"]}
+    s2s_read: {auth_services: ["reader"]}
+  };
+  string row_id = 1;
+  string spiffe_id = 2 [(spec.identity_spiffe_subject) = true];
+  string namespace = 3 [(spec.store_namespace) = true];
+}
+`)
+	path := filepath.Join(dir, "reader.proto")
+	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := AppendRecordMapServiceToProtos(dir, dir, ""); err != nil {
-		t.Fatalf("AppendRecordMapServiceToProtos: %v", err)
-	}
-	after, err := os.ReadFile(filepath.Join(dir, "reader.proto"))
-	if err != nil {
+	out := strings.Replace(string(body),
+		`option (spec.record_read) = {record: "owner.Row"};`,
+		`option (spec.record_read) = {record: "owner.Row"};
+option (spec.record_read) = {record: "owner2.Row2"};`, 1)
+	if err := os.WriteFile(path, []byte(out), 0644); err != nil {
 		t.Fatal(err)
-	}
-	if string(before) != string(after) {
-		t.Fatalf("a proto declaring no record_read must not be rewritten:\n%s", after)
 	}
 }
 

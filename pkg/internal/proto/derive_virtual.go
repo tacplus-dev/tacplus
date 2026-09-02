@@ -4,6 +4,7 @@ package proto
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
@@ -76,6 +77,67 @@ func DeriveVirtualServiceClients(inputDir, selfPackage string) ([]tactype.GrpcEn
 				zap.String("source", imp.Source),
 				zap.String("sourceFile", protoFile))
 
+		}
+	}
+
+	// (spec.record_read) -> a client for the record query plane's S2S half.
+	//
+	// The reader declares which RECORDS it reads; it never names the plane, the
+	// store, or the transport. Those are consequences of the read, derived here
+	// from the (spec.trait) that hosts the plane, so a reader's proto cannot
+	// disagree with the plane it actually calls. Restating the dependency by hand
+	// is exactly the two-independently-maintained-surfaces shape BIG GOAL 7's
+	// eventbus finding was.
+	//
+	// Derived rather than injected into the proto TEXT, because client inference
+	// runs BEFORE the plane's services are materialized
+	// (AppendRecordMapServiceToProtos appends them later). service.go's resolver
+	// already understands that a client may reference a trait's declared service
+	// name before it exists; this produces the entry that resolver expects.
+	//
+	// One entry regardless of how many records are read: they are all RPCs on the
+	// same service. Nothing is emitted when the reader declares no record_read,
+	// so this is a no-op for every service in the fleet that predates the field.
+	if len(serviceDesc.RecordReads) > 0 {
+		var traitFd *parser.FileDescriptor
+		var traitPath string
+		recordStores := make(map[string]bool)
+		for _, fd := range dp.GetAllFiles() {
+			if fd.RecordStore && fd.ServiceName != "" {
+				recordStores[fd.ServiceName] = true
+			}
+		}
+		var paths []string
+		for rp := range dp.GetAllFiles() {
+			paths = append(paths, rp)
+		}
+		sort.Strings(paths)
+		for _, rp := range paths {
+			fd := dp.GetAllFiles()[rp]
+			if fd.Trait == nil || fd.Trait.Host == "" || fd.Trait.S2SService == "" {
+				continue
+			}
+			if !recordStores[fd.Trait.Host] {
+				continue
+			}
+			traitFd = fd
+			traitPath = rp
+			break
+		}
+		// No plane to name. ValidateRecordReadAnnotations has already refused this
+		// build with a message that says so; returning an error here too would
+		// only replace that message with a worse one.
+		if traitFd != nil {
+			entries = append(entries, tactype.GrpcEntry{
+				ProtoFile:    traitPath,
+				ServiceName:  traitFd.Trait.S2SService,
+				ProtoPackage: traitFd.Package,
+			})
+			zap.L().Info("derived record query plane client from record_read",
+				zap.String("service", selfPackage),
+				zap.String("plane", traitFd.Trait.S2SService),
+				zap.String("host", traitFd.Trait.Host),
+				zap.Strings("records", serviceDesc.RecordReads))
 		}
 	}
 

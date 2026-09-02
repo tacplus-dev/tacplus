@@ -265,6 +265,18 @@ func generateGrpcOverRestClient(svc ServiceInfo, info *parser.ProtoInfo, fileDes
 	}
 	if requireFullW2S {
 		for _, method := range targetService.Methods {
+			// An RPC_PRINCIPAL_MCP rpc carries no REST route by construction —
+			// the parser leaves HttpPath/HttpMethod empty for it — so there is
+			// no w2s client method to emit and its absence is not a defect.
+			// This mirrors the same skip the Go backend already carries
+			// (go/types/w2sclient_gen.go). Without it, a service with one MCP
+			// tool cannot have a w2s client AT ALL: scotty.Scotty declares
+			// GetMyTicketAudit as RPC_PRINCIPAL_MCP, and the refusal below
+			// fired on it even though the gateway's own REST route table
+			// deliberately omits that rpc.
+			if method.IsMcp {
+				continue
+			}
 			if method.HttpPath == "" {
 				return fmt.Errorf("%s.%s requires W2S REST route metadata; clients.w2s.enabled cannot emit a method without an HTTP path",
 					targetService.Name, method.Name)
@@ -466,6 +478,12 @@ func generateGrpcOverRestClient(svc ServiceInfo, info *parser.ProtoInfo, fileDes
 }
 
 func shouldEmitGrpcOverRestMethod(method *parser.MethodInfo, requireFullW2S bool) bool {
+	// An MCP tool is not a gRPC-over-REST call. It has no route, so it emits no
+	// method and — because this predicate also gates the cross-package import
+	// block — no import of its request/response types either.
+	if method.IsMcp {
+		return false
+	}
 	if requireFullW2S {
 		return method.HttpPath != ""
 	}

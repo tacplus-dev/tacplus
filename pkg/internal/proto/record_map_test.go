@@ -406,3 +406,90 @@ option (spec.trait) = {
 		t.Fatalf("error should name auth_services, got: %v", err)
 	}
 }
+
+// c2s_service is OPTIONAL: a trait may host the s2s half alone. The plane still
+// exists — the record store is still readable service-to-service, so VAL-6's
+// "nothing would read it" stays satisfied — but no client-facing sibling is
+// emitted and no c2s grant for one lands in the catalog. That is what lets a
+// fleet retire the shared fleet-wide c2s query plane in favour of per-service
+// <Svc>Records planes ((spec.record_read).c2s) without also giving up the s2s
+// half every stored record's residency validation depends on.
+//
+// Regression pin: both halves of this were previously mandatory —
+// collectRecordQueryPlanes rejected an empty c2s_service as a half-specified
+// plane, and appendRecordPlaneToTraitProto emitted the c2s sibling
+// unconditionally. Reverting either goes green without this test.
+func TestRecordQueryPlaneS2SOnlyTraitEmitsNoC2SSibling(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available")
+	}
+	dir := recordPlaneFixture(t, false)
+	writeProto(t, dir, "vservices/query.proto", `syntax = "proto3";
+package taskquery;
+
+import "sys/spec.proto";
+
+option (spec.trait) = {
+  id: 40
+  name: "query"
+  host: "stratum"
+  s2s_service: "RecordMap"
+  auth_services: ["reporter"]
+};
+`)
+
+	if err := AppendRecordMapServiceToProtos(dir, dir, ""); err != nil {
+		t.Fatalf("an s2s-only trait must generate, got: %v", err)
+	}
+
+	trait := readProto(t, dir, "vservices/query.proto")
+	for _, want := range []string{
+		`import "vservices/tasks.proto";`,
+		"service RecordMap {",
+		`option (spec.service_s2s) = {label: "stratum"};`,
+		`option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["reporter"]};`,
+		"rpc CreateTaskActivityQuery(OpenTaskActivityQueryRequest) returns (QueryHandle)",
+	} {
+		if !strings.Contains(trait, want) {
+			t.Fatalf("s2s half missing %q:\n%s", want, trait)
+		}
+	}
+
+	// The c2s sibling is the whole of what an s2s-only trait must NOT emit.
+	if strings.Contains(trait, "service RecordQuery") {
+		t.Fatalf("s2s-only trait emitted a c2s sibling:\n%s", trait)
+	}
+	if strings.Contains(trait, "spec.service_c2s") {
+		t.Fatalf("s2s-only trait emitted a c2s service option:\n%s", trait)
+	}
+
+	// The emitted plane must still parse, and the surviving half must still be
+	// the s2s one hosted on the declared label.
+	dp, err := parser.NewDescriptorParser(dir)
+	if err != nil {
+		t.Fatalf("re-parsing the emitted s2s-only plane failed: %v", err)
+	}
+	fd, err := dp.GetFileDescriptor("vservices/query.proto")
+	if err != nil {
+		t.Fatalf("GetFileDescriptor: %v", err)
+	}
+	var sawS2S bool
+	for _, svc := range fd.Services {
+		if svc.Name == "RecordQuery" {
+			t.Fatal("RecordQuery parsed back from an s2s-only trait")
+		}
+		if svc.Name != "RecordMap" {
+			continue
+		}
+		sawS2S = true
+		if svc.IsC2S {
+			t.Fatal("RecordMap is classified c2s")
+		}
+		if svc.HostLabel != "stratum" {
+			t.Fatalf("RecordMap host label = %q, want stratum", svc.HostLabel)
+		}
+	}
+	if !sawS2S {
+		t.Fatal("emitted s2s half did not parse back as a service")
+	}
+}

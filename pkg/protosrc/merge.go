@@ -166,6 +166,25 @@ func mergeYAML(base, overlay map[string]any, ctx string) (map[string]any, error)
 			out[k] = m
 			continue
 		}
+		// registry.yaml's id_min is an ALLOCATION FLOOR ("never auto-assign
+		// below this"), not a value two sources have to agree on. Each app
+		// proto repo sets its own so its services land clear of the platform's
+		// and of every other app's, which means a build merging two app sources
+		// legitimately sees two different floors. The merged allocator must
+		// respect both, so the merge is max() — and because every already-named
+		// service carries an explicit id in the lists below, raising the floor
+		// renumbers nothing. Demanding equality here is what made
+		// platform+testapp+scotty (60 vs 70) unbuildable.
+		if ctx+"."+k == "registry.yaml.id_min" {
+			bn, bOK := asInt64(bv)
+			on, oOK := asInt64(ov)
+			if bOK && oOK {
+				if on > bn {
+					out[k] = ov
+				}
+				continue
+			}
+		}
 		// Sequences of named entries (registry.yaml services/vservices, each a
 		// {name, id|field_id, ...} map) union by name across sources, so a base
 		// and an app registry can each own their own service IDs.

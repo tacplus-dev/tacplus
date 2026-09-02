@@ -233,3 +233,69 @@ func TestMergeSources_DependenciesConflict(t *testing.T) {
 		t.Errorf("error should name the conflicting dependency: %v", err)
 	}
 }
+
+// id_min is an allocation FLOOR, not a value the sources must agree on. Two app
+// proto repos legitimately carry different floors (testapp 60, scotty 70) so
+// their services allocate clear of each other; a build merging both must keep
+// the higher one rather than refuse. Nothing already named is renumbered — every
+// entry in services/vservices carries an explicit id.
+func TestMergeSources_RegistryIDMinTakesMax(t *testing.T) {
+	a := t.TempDir()
+	b := t.TempDir()
+	dest := t.TempDir()
+
+	writeFile(t, a, "a.proto", "package a;\n")
+	writeFile(t, a, "registry.yaml", "id_min: 60\nservices:\n  - name: echo\n    id: 60\n")
+	writeFile(t, b, "b.proto", "package b;\n")
+	writeFile(t, b, "registry.yaml", "id_min: 70\nservices:\n  - name: scotty\n    id: 70\n")
+
+	if err := MergeSources([]string{a, b}, dest); err != nil {
+		t.Fatalf("MergeSources: %v", err)
+	}
+	var doc struct {
+		IDMin    int `yaml:"id_min"`
+		Services []struct {
+			Name string `yaml:"name"`
+			ID   int    `yaml:"id"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, filepath.Join(dest, "registry.yaml"))), &doc); err != nil {
+		t.Fatalf("parse merged registry: %v", err)
+	}
+	if doc.IDMin != 70 {
+		t.Errorf("id_min = %d, want 70 (the higher floor)", doc.IDMin)
+	}
+	if len(doc.Services) != 2 {
+		t.Errorf("services not unioned: %+v", doc.Services)
+	}
+	for _, s := range doc.Services {
+		if (s.Name == "echo" && s.ID != 60) || (s.Name == "scotty" && s.ID != 70) {
+			t.Errorf("raising the floor must not renumber: %+v", s)
+		}
+	}
+}
+
+// Order must not matter: the higher floor wins whichever source carries it.
+func TestMergeSources_RegistryIDMinMaxIsOrderIndependent(t *testing.T) {
+	a := t.TempDir()
+	b := t.TempDir()
+	dest := t.TempDir()
+
+	writeFile(t, a, "a.proto", "package a;\n")
+	writeFile(t, a, "registry.yaml", "id_min: 70\n")
+	writeFile(t, b, "b.proto", "package b;\n")
+	writeFile(t, b, "registry.yaml", "id_min: 60\n")
+
+	if err := MergeSources([]string{a, b}, dest); err != nil {
+		t.Fatalf("MergeSources: %v", err)
+	}
+	var doc struct {
+		IDMin int `yaml:"id_min"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, filepath.Join(dest, "registry.yaml"))), &doc); err != nil {
+		t.Fatalf("parse merged registry: %v", err)
+	}
+	if doc.IDMin != 70 {
+		t.Errorf("id_min = %d, want 70 (the higher floor)", doc.IDMin)
+	}
+}

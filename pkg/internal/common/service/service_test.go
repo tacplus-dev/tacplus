@@ -4,6 +4,8 @@ package service
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
@@ -502,5 +504,184 @@ func TestResolveServerServicesExcludesOtherHostsC2S(t *testing.T) {
 	}
 	if got := ResolveServerServices(&tactype.Config{Language: "rust", SelfPackage: "elsewhere"}, services); len(got) != 0 {
 		t.Fatalf("got %d server services, want 0", len(got))
+	}
+}
+
+// writeTestProto writes one proto into the fixture tree.
+func writeTestProto(t *testing.T, root, rel, content string) {
+	t.Helper()
+	path := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir for %s: %v", rel, err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write %s: %v", rel, err)
+	}
+}
+
+// recordReadPlusExplicitClientFixture builds a fleet in which ONE service
+// declares both halves of the collision: (spec.record_read), which DERIVES a
+// virtual client for the record plane's s2s half, and an explicit
+// (spec.grpc_s2s_client), which must be resolved from the annotation.
+func recordReadPlusExplicitClientFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := protogen.CopySysProtos(dir); err != nil {
+		t.Fatalf("CopySysProtos: %v", err)
+	}
+	writeTestProto(t, dir, "store.proto", `syntax = "proto3";
+package store;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "stratum"};
+option (spec.record_store) = {};
+`)
+	writeTestProto(t, dir, "owner.proto", `syntax = "proto3";
+package owner;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "owner"};
+
+message Row {
+  option (spec.record) = {
+    key: "row_id"
+    owner: "spiffe_id"
+    s2s: {auth_services: ["owner"]}
+    s2s_read: {auth_services: ["reader"]}
+  };
+  string row_id = 1;
+  string spiffe_id = 2 [(spec.identity_spiffe_subject) = true];
+  string namespace = 3 [(spec.store_namespace) = true];
+}
+`)
+	writeTestProto(t, dir, "lock.proto", `syntax = "proto3";
+package lock;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "kernel"};
+
+service FencedLock {
+  option (spec.service_s2s) = {};
+  rpc Acquire(AcquireRequest) returns (AcquireResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}
+
+message AcquireRequest {
+  string trace_id = 200;
+}
+
+message AcquireResponse {
+  string trace_id = 200;
+}
+`)
+	writeTestProto(t, dir, "reader.proto", `syntax = "proto3";
+package reader;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "reader"};
+option (spec.record_read) = {record: "owner.Row"};
+option (spec.grpc_s2s_client) = {service: "lock.FencedLock"};
+
+service Reader {
+  option (spec.service_s2s) = {};
+  rpc Ping(PingRequest) returns (PingResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}
+
+message PingRequest {
+  string trace_id = 200;
+}
+
+message PingResponse {
+  string trace_id = 200;
+}
+`)
+	writeTestProto(t, dir, filepath.Join("vservices", "query.proto"), `syntax = "proto3";
+package query;
+
+import "sys/spec.proto";
+
+option (spec.trait) = {
+  id: 40
+  name: "query"
+  host: "stratum"
+  s2s_service: "RecordMap"
+  c2s_service: "RecordQuery"
+  auth_services: ["stratum"]
+};
+`)
+	return dir
+}
+
+// A service that declares BOTH (spec.record_read) and an explicit
+// (spec.grpc_s2s_client) must end up with BOTH clients.
+//
+// The two are produced by different mechanisms that write the same field:
+// DeriveVirtualServiceClients derives the record plane's s2s client from
+// record_read, and InferGrpcClientsFromAnnotations resolves the explicit
+// declaration — but the latter skips its explicit-declaration block whenever
+// GrpcS2SClients is ALREADY non-empty, a guard meant to protect a YAML/CLI
+// override. So the ORDER matters: derive-then-append made the derived entry
+// look like an operator override and silently swallowed the explicit
+// declaration, with no error and no warning.
+//
+// This pins the sequence every language generator runs: infer FIRST, then union
+// the derived entries in. Reverting any generator to append-before-infer, or
+// swapping MergeGrpcEntries back to a plain append, drops one of the two.
+func TestExplicitS2SClientSurvivesRecordReadDerivation(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available")
+	}
+	dir := recordReadPlusExplicitClientFixture(t)
+
+	// Materializes generated/*.proto, which sys/accounting.proto imports.
+	if _, _, _, err := protogen.ScanAndGenerateConfigHolder(dir, dir); err != nil {
+		t.Fatalf("ScanAndGenerateConfigHolder: %v", err)
+	}
+
+	// The generator's real sequence, in order.
+	virtualClients, err := protogen.DeriveVirtualServiceClients(dir, "reader")
+	if err != nil {
+		t.Fatalf("DeriveVirtualServiceClients: %v", err)
+	}
+	config := &tactype.Config{SelfPackage: "reader"}
+	if err := InferGrpcClientsFromAnnotations(config, dir); err != nil {
+		t.Fatalf("InferGrpcClientsFromAnnotations: %v", err)
+	}
+	config.GrpcS2SClients = MergeGrpcEntries(config.GrpcS2SClients, virtualClients)
+
+	// The derived half: the record plane's s2s service.
+	// The explicit half: the client the proto actually declares.
+	var sawPlane, sawExplicit bool
+	for _, e := range config.GrpcS2SClients {
+		switch e.ServiceName {
+		case "RecordMap":
+			sawPlane = true
+		case "FencedLock":
+			sawExplicit = true
+		}
+	}
+	if !sawPlane {
+		t.Errorf("record_read must still derive the plane client, got %#v", config.GrpcS2SClients)
+	}
+	if !sawExplicit {
+		t.Errorf("explicit grpc_s2s_client was dropped, got %#v", config.GrpcS2SClients)
+	}
+
+	// A union, not a duplication: neither mechanism may emit the same client twice.
+	seen := map[string]int{}
+	for _, e := range config.GrpcS2SClients {
+		seen[e.ProtoFile+"\x00"+e.ServiceName]++
+	}
+	for key, n := range seen {
+		if n > 1 {
+			t.Errorf("client %q emitted %d times, want 1", key, n)
+		}
 	}
 }

@@ -351,6 +351,22 @@ func semanticSurfaceProbes() []semanticSurfaceProbe {
 			},
 		},
 		{
+			// Virtual clients derived from (spec.record_read) must be UNIONED into
+			// GrpcS2SClients after InferGrpcClientsFromAnnotations has run, never
+			// appended before it. Inference skips its explicit-declaration block
+			// whenever GrpcS2SClients is already non-empty — a guard meant to protect
+			// a YAML/CLI override — so an append-before-infer makes the derived entry
+			// impersonate an operator override and silently drops the service's own
+			// (spec.grpc_s2s_client), with no error and no warning.
+			//
+			// Every language generator runs this same sequence, so every one of them
+			// can regress it independently. MergeGrpcEntries is the union; its absence
+			// from any generator IS the regression.
+			name:     "record_read virtual clients unioned after client inference",
+			locus:    languageGeneratorFiles,
+			patterns: uniform("service.MergeGrpcEntries(config.GrpcS2SClients, virtualClients)"),
+		},
+		{
 			// Data-entitlement egress transform. Full-service languages MUST emit the
 			// recursive Sanitize<T> that consumes the generated <T>Entitlement and the
 			// keyed-HMAC primitive; client-only python/typescript pass vacuously (no

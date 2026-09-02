@@ -774,7 +774,18 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 
 		for _, service := range fileDesc.Services {
 			isGrpc := service.GrpcName != ""
-			if !isGrpc && !hasState {
+			// A category-A MCP-only service (no service_s2s/service_c2s/service_c2d,
+			// so GrpcName is "") still needs its wrapper generated: the synthesized
+			// MCP session carrier RPC was already materialized onto its proto, and
+			// skipping it here means mcp_dispatch_gen.go never runs for it either.
+			hasMcp := false
+			for _, m := range service.Methods {
+				if m.IsMcp {
+					hasMcp = true
+					break
+				}
+			}
+			if !isGrpc && !hasState && !hasMcp {
 				continue
 			}
 			// Derive service-level auth flags from method-level annotations.

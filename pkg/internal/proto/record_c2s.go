@@ -320,13 +320,15 @@ message Get%[1]sPageResponse {
 	//
 	// The wrapper's (spec.store_principal) and (spec.store_namespace) egress
 	// filters — the row scope, and the tenant backstop that makes a cross-tenant
-	// leak impossible rather than unlikely — are spliced onto the UNARY,
-	// NON-COLLECTION seam. servicewrapper_gen.go refuses outright to generate a
-	// COLLECTION_MODE_PAGE method returning record rows, because that seam would
-	// return them unfiltered ("the principal read filter is generated for unary
-	// responses only"). A PAGE List<T> here would therefore be a client-facing
-	// read of record rows with no row filter and no tenant boundary — the same
-	// defect this generator refuses for a Go target, reached from the other side.
+	// leak impossible rather than unlikely — were originally spliced onto the
+	// UNARY, NON-COLLECTION seam only; servicewrapper_gen.go's PAGE branch now
+	// generates the same filters (fixed 2026-09-02), but this surface still
+	// avoids COLLECTION_MODE_PAGE for the independent reason below (PAGE is the
+	// wrong MODEL for this read), so the RPC shape here is unchanged. Kept as
+	// history: a PAGE List<T> reaching this generator with no egress filter at
+	// all used to be possible for a Go target with no equivalent refusal —
+	// verify that gap is still open (or already closed) before relying on this
+	// paragraph as current fact.
 	//
 	// PAGE is also the wrong MODEL for this read, independent of the filters. A
 	// COLLECTION_MODE_PAGE handler is a KEYSET producer: the wrapper owns the

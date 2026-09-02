@@ -281,33 +281,34 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 			return fmt.Errorf("%s.%s takes %s, whose field %q carries (spec.store_epoch), but the stamp is generated for Java service wrappers only; a Rust host of this write would leave the store epoch unstamped",
 				targetService.Name, method.Name, method.FullInputType, f)
 		}
-		// (spec.store_principal) is enforced on the unary egress seam only. A
-		// PAGE or streaming method carrying such rows would return them
-		// unfiltered, so refuse to generate rather than under-enforce silently.
-		if method.StreamingType() != "unary" || method.IsPageCollection() {
+		// (spec.store_principal) is enforced on the unary and PAGE egress seams.
+		// A genuinely streaming method (WATCH) carrying such rows would return
+		// them unfiltered — there is no per-item egress hook on that path — so
+		// refuse to generate rather than under-enforce silently.
+		if method.StreamingType() != "unary" {
 			// Resolved is the computed COLLECTION view and is nil for a method
 			// that declares no collection at all — a plain server-streaming RPC
-			// such as oauth's Session.*. Only the two item types come from it;
-			// the output type is always present. Reading through it
-			// unconditionally panicked the generator on every such method,
-			// which is why every other site in the tree nil-checks it.
+			// such as oauth's Session.*. Only the WATCH item type comes from it
+			// here; PAGE is excluded below because generateRustGRPCWrapper's PAGE
+			// branch now generates the same egress filter the unary branch does
+			// (over method.FullOutputType, which is already the first candidate).
 			candidates := []string{method.FullOutputType}
 			if method.Resolved != nil {
-				candidates = append(candidates, method.Resolved.PageItemType, method.Resolved.WatchItemType)
+				candidates = append(candidates, method.Resolved.WatchItemType)
 			}
 			for _, t := range candidates {
 				if t == "" {
 					continue
 				}
 				if san.storePrincipalField(t, info.Package) != "" || len(san.principalListFields(t, info.Package)) > 0 {
-					return fmt.Errorf("%s.%s returns %s, which carries (spec.store_principal), on a %s path; the principal read filter is generated for unary responses only",
+					return fmt.Errorf("%s.%s returns %s, which carries (spec.store_principal), on a %s path; the principal read filter is generated for unary and page responses only",
 						targetService.Name, method.Name, t, method.StreamingType())
 				}
 				// Same seam, same limit: (spec.store_namespace) is mandatory on
-				// every record, so a Rust page/stream over record rows would
-				// return them with no tenant boundary at all.
+				// every record, so a Rust stream over record rows would return
+				// them with no tenant boundary at all.
 				if san.storeNamespaceField(t, info.Package) != "" || len(san.namespaceListFields(t, info.Package)) > 0 {
-					return fmt.Errorf("%s.%s returns %s, which carries (spec.store_namespace), on a %s path; the namespace read filter is generated for unary responses only",
+					return fmt.Errorf("%s.%s returns %s, which carries (spec.store_namespace), on a %s path; the namespace read filter is generated for unary and page responses only",
 						targetService.Name, method.Name, t, method.StreamingType())
 				}
 			}
@@ -1637,6 +1638,22 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         let mut page = page;
         page.items = page.items.iter().map(|m| %s).collect();`, t.sanitizeExpr("m"))
 		}
+		// (spec.store_principal)/(spec.store_namespace): the same egress
+		// backstop the unary branch below splices into responseValidationBlock.
+		// PAGE returns before reaching that code, so without this a page/list
+		// response's rows were never checked against the caller's principal or
+		// tenant at all, unlike a unary response over the same item type.
+		// Computed over the assembled response envelope (method.FullOutputType),
+		// exactly like the unary leg — the page item type is a repeated field
+		// of that envelope, which is what these helpers look for.
+		var pageEgressFilter string
+		if lf := san.principalListFields(method.FullOutputType, servicePackage); len(lf) > 0 {
+			pageEgressFilter += rustResponsePrincipalFilterBlock(lf, method.Name)
+		}
+		if lf := san.namespaceListFields(method.FullOutputType, servicePackage); len(lf) > 0 {
+			pageEgressFilter += rustResponseNamespaceFilterBlock(lf, method.Name)
+		}
+		responseValidationBlock = pageEgressFilter + responseValidationBlock
 		pageBody := fmt.Sprintf(`    async fn %s(
         &self,
         request: tonic::Request<%s>,

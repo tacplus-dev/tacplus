@@ -43,7 +43,8 @@ message FixtureEvent {
   // Refine, Watch, and the oneof watch envelope.
   string tenant_namespace = 2 [
     (spec.assert_required) = true,
-    (spec.query_field) = {op: QUERY_OP_EQ}
+    (spec.query_field) = {op: QUERY_OP_EQ},
+    (spec.store_namespace) = true
   ];
   // Egress data entitlement (spec.redact) — exercises the Sanitize<T> codegen for
   // the full-service store languages (go/rust/java; the transform is COMPILED as
@@ -87,6 +88,7 @@ message FixtureAudit {
   string spiffe_id = 2 [(spec.identity_spiffe_subject) = true];
   int64 recorded_at_ms = 3 [(spec.query_field) = {op: QUERY_OP_RANGE}];
   string action = 4 [(spec.query_field) = {op: QUERY_OP_EQ}];
+  string namespace = 5 [(spec.store_namespace) = true];
 }
 
 // A nested sub-message reached through FixtureEvent.contact — proves recursive

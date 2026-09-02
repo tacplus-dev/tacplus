@@ -129,6 +129,18 @@ func Generate(config *tactype.Config) error {
 	if err := proto.AppendStateServiceToProtos(protoSrcDir, protoSrcDir); err != nil {
 		return fmt.Errorf("failed to append state service to protos: %w", err)
 	}
+	if err := proto.AppendRecordMapServiceToProtos(protoSrcDir, protoSrcDir, config.SelfPackage); err != nil {
+		return fmt.Errorf("failed to append record map service to protos: %w", err)
+	}
+	// The CLIENT-FACING half, after the record plane above because it folds the
+	// same criteria and must see the same records. Emits nothing unless a
+	// service declares (spec.record_read).c2s. Every other language backend
+	// (go/rust/java/typescript/python) runs both injectors; Swift needs them too
+	// so a peer's grpc_c2s_client against a synthesized <Svc>Records service
+	// resolves during inference below.
+	if err := proto.AppendRecordC2SServiceToProtos(protoSrcDir, protoSrcDir, config.SelfPackage); err != nil {
+		return fmt.Errorf("failed to append client-facing record read plane to protos: %w", err)
+	}
 
 	// Populate config.GrpcC2SClients / GrpcW2SClients from the proto graph's
 	// grpc_c2s_client / grpc_w2s_client declarations (the same proto-driven path

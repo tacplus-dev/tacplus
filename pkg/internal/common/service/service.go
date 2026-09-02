@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
 	protogen "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
 	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
@@ -354,6 +355,7 @@ func resolveGrpcRefs(refs []string, allFiles map[string]*parser.FileDescriptor) 
 		packageSeen := false
 		traitPlanePath := ""
 		var eventC2SStatePaths []string
+		recordC2SPath := ""
 		for path, fd := range allFiles {
 			if fd.Package != pkg {
 				continue
@@ -368,6 +370,19 @@ func resolveGrpcRefs(refs []string, allFiles map[string]*parser.FileDescriptor) 
 				}
 				if svcName == protogen.StateServiceName(msg.Name+"Bus") {
 					eventC2SStatePaths = append(eventC2SStatePaths, path)
+				}
+			}
+			// A reader's client-facing record read plane
+			// (AppendRecordC2SServiceToProtos) is injected into the reader's OWN
+			// proto as a sibling service named "<Svc>Records", so a client
+			// referencing it is valid even though the service is not yet
+			// materialized during inference.
+			if fd.ServiceName != "" && svcName == strutil.ToPascalCase(fd.ServiceName)+"Records" {
+				for _, decl := range fd.RecordReads {
+					if decl.C2S != nil {
+						recordC2SPath = path
+						break
+					}
 				}
 			}
 			for _, svc := range fd.Services {
@@ -390,6 +405,9 @@ func resolveGrpcRefs(refs []string, allFiles map[string]*parser.FileDescriptor) 
 		// per-event service name derived from a parsed event_c2s declaration.
 		if len(matches) == 0 {
 			matches = append(matches, eventC2SStatePaths...)
+		}
+		if len(matches) == 0 && recordC2SPath != "" {
+			matches = append(matches, recordC2SPath)
 		}
 		if !packageSeen {
 			return nil, fmt.Errorf("no proto file found for package %q (from %q)", pkg, ref)

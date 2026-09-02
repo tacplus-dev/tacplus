@@ -65,6 +65,7 @@ type FileDescriptor struct {
 	VServiceName        string           // File-level virtual-service identity name from option (spec.vservice).name or (spec.trait).name
 	VServiceID          int32            // File-level virtual-service field id from option (spec.vservice).id or (spec.trait).id
 	Trait               *TraitDescriptor // File-level trait declaration from option (spec.trait); nil when the file declares none
+	RecordReads         []string         // File-level record read deps from option (spec.record_read), e.g. "messaging.Message"
 }
 
 // TraitDescriptor is a parsed file-level (spec.trait) declaration: the contract
@@ -534,6 +535,7 @@ func (p *DescriptorParser) parseFileDescriptor(fd protoreflect.FileDescriptor) {
 	fileDesc.FieldStateImports = collectFieldStateImports(fileDesc.Messages)
 	fileDesc.StateImports = mergeStateImportRoots(fileDesc.FileStateImports, fileDesc.FieldStateImports)
 	fileDesc.GrpcS2SClients = p.parseGrpcS2SClients(fd)
+	fileDesc.RecordReads = p.parseRecordReads(fd)
 	fileDesc.GrpcC2SClients = p.parseGrpcC2SClients(fd)
 	fileDesc.GrpcW2SClients = p.parseGrpcW2SClients(fd)
 	fileDesc.AllGrpcS2SClients = p.parseBoolFileOption(fd, spec.E_AllGrpcS2SClients)
@@ -1349,6 +1351,26 @@ func (p *DescriptorParser) parseGrpcS2SClients(fd protoreflect.FileDescriptor) [
 	return clients
 }
 
+// parseRecordReads extracts file-level (spec.record_read) options: the
+// fully-qualified (spec.record) message names this service reads the stored rows
+// of. The GRANT half lives on the record itself as (spec.record).s2s_read;
+// ValidateRecordReadAnnotations refuses a build where the two disagree.
+func (p *DescriptorParser) parseRecordReads(fd protoreflect.FileDescriptor) []string {
+	opts := fd.Options().(*descriptorpb.FileOptions)
+	if opts == nil {
+		return nil
+	}
+	if !proto.HasExtension(opts, spec.E_RecordRead) {
+		return nil
+	}
+	vals := proto.GetExtension(opts, spec.E_RecordRead).([]*spec.RecordRead)
+	var reads []string
+	for _, v := range vals {
+		reads = append(reads, v.GetRecord())
+	}
+	return reads
+}
+
 // parseGrpcC2SClients extracts file-level grpc_c2s_client options.
 func (p *DescriptorParser) parseGrpcC2SClients(fd protoreflect.FileDescriptor) []string {
 	opts := fd.Options().(*descriptorpb.FileOptions)
@@ -1837,6 +1859,20 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 				annotations["record_mutability"] = model.AnnotationValue{
 					Type:        model.AnnotationTypeString,
 					StringValue: m.String(),
+				}
+			}
+			// s2s_read is the record's STORED-ROW read grant: which services may
+			// query this record type's rows through the record query plane's S2S
+			// half. Carried whenever the BLOCK is present, including with an empty
+			// auth_services list, which ValidateRecordReadAnnotations rejects at
+			// generation time rather than being silently dropped here into the
+			// trait-wide fallback — a record that meant to name readers and named
+			// none must not quietly inherit the whole fleet's list.
+			if sr := val.GetS2SRead(); sr != nil {
+				annotations["record_s2s_read"] = model.AnnotationValue{
+					Type:             model.AnnotationTypeBool,
+					BoolValue:        true,
+					StringSliceValue: append([]string(nil), sr.GetAuthServices()...),
 				}
 			}
 		}

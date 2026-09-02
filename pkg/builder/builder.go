@@ -229,6 +229,9 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateMcpAnnotations(dp); err != nil {
 		return err
 	}
+	if err := parser.ValidateRecordReadAnnotations(dp); err != nil {
+		return err
+	}
 	if err := parser.ValidateSmbAuthority(dp); err != nil {
 		return err
 	}

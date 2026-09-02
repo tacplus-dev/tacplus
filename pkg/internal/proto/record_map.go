@@ -51,6 +51,22 @@ type recordType struct {
 	// case; what is lost is the narrowing of the SIZE-ONLY RPCs, which no egress
 	// filter can reach.
 	principal string
+	// readAuth is (spec.record).s2s_read.auth_services: the services allowed to
+	// READ this record type's stored rows. It REPLACES the trait-wide audience on
+	// this record's RPCs alone, which is what makes the store's grants
+	// per-service-per-record-type rather than fleet-wide (see the field comment
+	// on RecordAnnotation.s2s_read).
+	//
+	// nil = the record declares no s2s_read and keeps the trait-wide list. A
+	// DECLARED-but-empty list never reaches here: ValidateRecordReadAnnotations
+	// fails the build first, on the same reasoning collectRecordQueryPlanes
+	// refuses a trait with no auth_services — a read surface callable by nobody
+	// is a declaration that did not mean what it says.
+	readAuth []string
+	// declaresRead records whether the s2s_read BLOCK was present, independent of
+	// what it contained. It is what gates keyFilterCriterion below, so the key
+	// becomes an EQ criterion exactly when a reader exists to ask for it.
+	declaresRead bool
 }
 
 // recordFilter is a (spec.query_field) criterion on a record field — a typed
@@ -208,6 +224,25 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 			// guard below; carried here so "is this type append-only" has one
 			// answer on the plane, not one per call site.
 			appendOnly := msg.Annotations["record_mutability"].StringValue == "MUTABILITY_APPEND_ONLY"
+			// s2s_read: the record's own read audience, and the gate on the key
+			// criterion below. Read BEFORE the key is folded into the filter list,
+			// because whether the key becomes a filter depends on this.
+			var readAuth []string
+			var declaresRead bool
+			if sr, ok := msg.Annotations["record_s2s_read"]; ok && sr.BoolValue {
+				declaresRead = true
+				readAuth = append([]string(nil), sr.StringSliceValue...)
+			}
+			// Point-read-by-key is the read surface's most basic question, and the
+			// plane could not express it before: the key carries no
+			// (spec.query_field) on any record in the fleet, so it never reached
+			// <T>Filter. Fold it in as an EQ criterion when — and only when — a
+			// reader is declared, which keeps this additive for every record that
+			// declares no s2s_read. Skipped when the author already declared the
+			// key queryable, so the criterion is never emitted twice.
+			if declaresRead {
+				filters = appendKeyFilterCriterion(filters, key, &msg)
+			}
 			principal := recordPrincipalCriterion(&msg, filters)
 			records = append(records, recordType{
 				typeName:     msg.Name,
@@ -218,6 +253,8 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 				minGroupSize: minGroupSize,
 				appendOnly:   appendOnly,
 				principal:    principal,
+				readAuth:     readAuth,
+				declaresRead: declaresRead,
 			})
 		}
 	}
@@ -244,7 +281,123 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 			return err
 		}
 	}
+	// The reader half: a service declaring (spec.record_read) needs a transport
+	// client for the plane's S2S half, and does NOT restate it. The dependency is
+	// a CONSEQUENCE of the read, not a second decision the author makes, and
+	// making them write both would be the two-independently-maintained-surfaces
+	// shape this tree keeps finding drift in (BIG GOAL 7's eventbus finding was
+	// exactly that). So it is injected here, where the plane's service name is
+	// known, rather than required in the reader's proto where it could disagree.
+	if err := injectImpliedRecordReadClients(tempProtoDir, dp, planes); err != nil {
+		return err
+	}
 	return nil
+}
+
+// injectImpliedRecordReadClients adds the (spec.grpc_s2s_client) option for the
+// record query plane's S2S half to every proto declaring (spec.record_read).
+//
+// It is a no-op when the file already declares that client — an author who wrote
+// it by hand gets exactly one option, not a duplicate — and when no plane exists
+// to name, which ValidateRecordReadAnnotations has already refused separately
+// with a message that says so.
+func injectImpliedRecordReadClients(tempProtoDir string, dp *parser.DescriptorParser, planes []traitPlane) error {
+	if len(planes) == 0 {
+		return nil
+	}
+	// One plane is the ordinary case. With several, the reader would need a
+	// client per plane; nothing in the fleet has ever declared two record-query
+	// traits (a second one is a hard error in the merge — see the CAVEAT in
+	// query.proto's own header), so this takes the first deterministically rather
+	// than inventing a multi-plane reader shape nothing has asked for.
+	plane := planes[0]
+	target := plane.name + "." + plane.s2sService
+
+	var relPaths []string
+	for relPath, fd := range dp.GetAllFiles() {
+		if len(fd.RecordReads) > 0 {
+			relPaths = append(relPaths, relPath)
+		}
+	}
+	sort.Strings(relPaths)
+
+	for _, relPath := range relPaths {
+		filePath := filepath.Join(tempProtoDir, relPath)
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			return fmt.Errorf("failed to read proto file %s for implied record-read client: %w", relPath, err)
+		}
+		optLine := fmt.Sprintf("option (spec.grpc_s2s_client) = {service: %q};", target)
+		if strings.Contains(string(content), optLine) {
+			continue
+		}
+		out := injectFileOption(content, optLine)
+		if err := os.WriteFile(filePath, out, 0644); err != nil {
+			return fmt.Errorf("failed to write proto file %s for implied record-read client: %w", relPath, err)
+		}
+		zap.L().Info("injected implied record-read s2s client",
+			zap.String("file", relPath),
+			zap.String("target", target))
+	}
+	return nil
+}
+
+// injectFileOption inserts a file-level option line after the last existing
+// top-level option, falling back to after the last import and then after the
+// package declaration — the same descent injectImports makes, for the same
+// reason: a proto3 file admits options anywhere after `package`, but putting
+// them where the author's own options already are keeps the injected file
+// readable when someone dumps the temp tree to debug a generation.
+func injectFileOption(content []byte, optLine string) []byte {
+	lines := strings.Split(string(content), "\n")
+	// The scan stops at the first top-level block. A file-level option must land
+	// in the file's own preamble, and `option ` lines also appear INSIDE message
+	// and service bodies (where they are message/method options): matching one of
+	// those put a FileOptions extension inside a ServiceOptions block, which
+	// protoc rejects with "is not a field or extension of message ServiceOptions".
+	// Column 0 is the test — this tree's protos are gofmt-like consistent about
+	// indenting nested declarations — and the block scan is the backstop for it.
+	limit := len(lines)
+	for i, line := range lines {
+		if strings.HasPrefix(line, "message ") || strings.HasPrefix(line, "service ") ||
+			strings.HasPrefix(line, "enum ") || strings.HasPrefix(line, "extend ") {
+			limit = i
+			break
+		}
+	}
+	insertAt := -1
+	for i := 0; i < limit; i++ {
+		line := lines[i]
+		if line != strings.TrimLeft(line, " \t") {
+			continue
+		}
+		if strings.HasPrefix(line, "option ") && strings.HasSuffix(strings.TrimSpace(line), ";") {
+			insertAt = i
+		}
+	}
+	if insertAt == -1 {
+		for i := 0; i < limit; i++ {
+			if strings.HasPrefix(lines[i], "import ") {
+				insertAt = i
+			}
+		}
+	}
+	if insertAt == -1 {
+		for i := 0; i < limit; i++ {
+			if strings.HasPrefix(lines[i], "package ") {
+				insertAt = i
+				break
+			}
+		}
+	}
+	if insertAt == -1 {
+		insertAt = 0
+	}
+	out := make([]string, 0, len(lines)+1)
+	out = append(out, lines[:insertAt+1]...)
+	out = append(out, optLine)
+	out = append(out, lines[insertAt+1:]...)
+	return []byte(strings.Join(out, "\n"))
 }
 
 // collectRecordQueryPlanes resolves every (spec.trait) declaration whose host is
@@ -550,6 +703,51 @@ func authServicesLiteral(authServices []string) string {
 	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
+// readAuthLiteral renders the audience for ONE record's read RPCs on the s2s
+// half: the record's own (spec.record).s2s_read.auth_services when it declares
+// them, and the trait-wide list otherwise.
+//
+// The fallback is what keeps s2s_read additive. Every record in the fleet
+// predates this field, and each one must keep emitting exactly the audience it
+// emitted before, or adding the field to ONE record would silently rewrite the
+// authorization of every other.
+func readAuthLiteral(plane traitPlane, r recordType) string {
+	if len(r.readAuth) > 0 {
+		return authServicesLiteral(r.readAuth)
+	}
+	return authServicesLiteral(plane.authServices)
+}
+
+// appendKeyFilterCriterion folds a record's KEY field into its filter list as an
+// EQ criterion, so the plane can express a point read.
+//
+// Returns the list unchanged when the author already declared the key
+// queryable — the criterion is the same one either way, and emitting it twice
+// would produce a duplicate field in <T>Filter — and when the key names a field
+// whose type the filter cannot carry (a message, an enum, a repeated field). The
+// caller has already proven the key EXISTS (validateRecordKeyExists), so a miss
+// here is a type mismatch, not a typo, and it degrades to "no point read" rather
+// than failing the build: list/query still work, and the record's other
+// criteria are untouched.
+func appendKeyFilterCriterion(filters []recordFilter, key string, msg *parser.MessageDescriptor) []recordFilter {
+	for i := range filters {
+		if filters[i].name == key {
+			return filters
+		}
+	}
+	for i := range msg.Fields {
+		f := &msg.Fields[i]
+		if f.Name != key {
+			continue
+		}
+		if f.IsRepeated || f.IsMap || f.TypeKind != "scalar" {
+			return filters
+		}
+		return append(filters, recordFilter{name: f.Name, protoType: f.Type, rangeOp: false})
+	}
+	return filters
+}
+
 // minGroupSizeOption renders the stamped method option for a record declaring
 // (spec.record).min_group_size, indented for an RPC that already has an option
 // body. Empty when the record declares no threshold — the annotation is
@@ -588,12 +786,18 @@ func minGroupSizeBody(r recordType) string {
 // the same way). Its RPC names nonetheless match the c2s sibling's governed
 // spelling exactly — see the surface comment in appendRecordPlaneToTraitProto.
 func recordMapS2SService(plane traitPlane, records []recordType) string {
-	auth := authServicesLiteral(plane.authServices)
 	var sb strings.Builder
 	sb.WriteString("\n// tacplus:generated-service " + parser.SynthesizedKindRecordMap + "\nservice " + plane.s2sService + " {\n")
 	sb.WriteString(fmt.Sprintf("  option (spec.service_s2s) = {label: %q};\n", plane.host))
 	for _, r := range records {
 		hasFilter := len(r.filters) > 0
+		// The record's OWN read audience when it declares one, the trait's
+		// otherwise. This one line is the whole of the per-service-per-record-type
+		// grant: everything downstream — the Java and Rust wrappers' method auth
+		// tables — already prefers a per-METHOD auth_services over the
+		// service-level default, so scoping a record's read rights is a matter of
+		// emitting a different list here, not of new enforcement anywhere.
+		auth := readAuthLiteral(plane, r)
 		// Universal query lifecycle: create (snapshot or living) → count/sample/list → delete.
 		sb.WriteString(fmt.Sprintf(`
   rpc Create%[1]sQuery(Open%[1]sQueryRequest) returns (QueryHandle) {

@@ -136,6 +136,32 @@ extend google.protobuf.FileOptions {
   // A trait declaration populates the same identity the vservice option does.
   // Example: option (spec.trait) = {id: 40, name: "query"};
   TraitAnnotation trait = 50025;
+
+  // record_read declares that THIS service reads the stored rows of the named
+  // (spec.record) types, through the record query plane's S2S half.
+  //
+  // It is the USE half of a paired control whose GRANT half is
+  // (spec.record).s2s_read on the record itself. One says "these services may
+  // read my rows"; this says "I read that record's rows". The generator refuses
+  // a build in which one is declared without the other, so a client that would
+  // be denied at runtime cannot be generated, and a grant nothing uses cannot
+  // sit unnoticed.
+  //
+  // Declaring it is the ONLY thing the reader has to write. It implies the
+  // underlying (spec.grpc_s2s_client) on the trait's S2S half — the reader does
+  // not restate the transport dependency, because the transport is a
+  // consequence of the read, not a second decision.
+  //
+  // What it generates is a typed, per-record reader on the service manager that
+  // collapses the plane's three-call query lifecycle
+  // (Create<T>Query -> List<T> -> Delete<T>Query) into the two questions a
+  // reader actually asks:
+  //
+  //   get(key)              -> Option<T>       point read by the record's key
+  //   list(filter, page)    -> (Vec<T>, token) paged read over a typed predicate
+  //
+  // Example: option (spec.record_read) = {record: "messaging.Message"};
+  repeated RecordRead record_read = 50026;
 }
 
 // Enum value JSON serialization
@@ -738,6 +764,64 @@ message RecordAnnotation {
   //     s2s_subscribe: {auth_services: ["stratum"]}  // only the store may read
   //   };
   MethodS2SAnnotation s2s_subscribe = 9;
+
+  // s2s_read, when present, exposes this record's STORED-ROW READ surface to the
+  // named internal services — the record query plane's S2S half, hosted by the
+  // record store.
+  //
+  // It is the third member of a set whose other two already exist, and it is
+  // declared for exactly the reason s2s_subscribe is. A record type has three
+  // boundaries, not two:
+  //
+  //   s2s            who may PUBLISH onto the record's topic  (write the stream)
+  //   s2s_subscribe  who may CONSUME the record's topic       (tail the stream)
+  //   s2s_read       who may READ the record's STORED ROWS    (query the store)
+  //
+  // Until this field existed the third boundary had no per-record declaration at
+  // all: every record's read RPCs carried the TRAIT-WIDE (spec.trait).auth_services
+  // list, so authorizing one service to read one record type authorized it to read
+  // EVERY record type in the fleet. That is precisely what
+  // decisions/mcp-generation-and-service-owned-data-2026-08-31.md §2 rules out —
+  // "Stratum grants entitlements per service, per record type, INDEPENDENTLY" —
+  // and it is why that document's §1 calls the shared `query` trait superseded.
+  // The trait-wide list stays as the fallback for records that declare nothing,
+  // so this is additive exactly the way s2s_subscribe, min_group_size and
+  // owner_default are.
+  //
+  // Declared rather than inferred, on the same reasoning s2s_subscribe records:
+  // treating "the service that produces a record type" as an implicitly
+  // authorized reader would put an undeclared trust relationship in the
+  // generator with no proto anyone could read to audit it. A producer is not
+  // automatically a reader — §2's whole point is that read and write rights are
+  // granted independently — so the read right is written down where the other two
+  // are, in the same shape.
+  //
+  // PAIRED CONTROL. This is the grant half. The USE half is
+  // (spec.record_read) on the reading service's own proto, and the generator
+  // refuses a build where one is declared without the other: a service that
+  // declares (spec.record_read) on a record whose s2s_read does not name it
+  // fails generation rather than emitting a client that would be denied at
+  // runtime. Neither end can drift from the other, because neither end works
+  // alone.
+  //
+  // Same semantics as s2s and s2s_subscribe: ["*"] is any authenticated service,
+  // an explicit list is exactly that list, and an absent annotation leaves the
+  // trait-wide default in place.
+  //
+  // Declaring it also makes the record's KEY field an EQ criterion on the
+  // generated <T>Filter, whether or not the key carries its own
+  // (spec.query_field). Point-read-by-key is the read surface's most basic
+  // question and the plane could not express it otherwise; see
+  // record_map.go's keyFilterCriterion.
+  //
+  // Example — a record its own producer reads back:
+  //   option (spec.record) = {
+  //     key: "delivery_id" owner: "spiffe_id"
+  //     s2s: {auth_services: ["messaging"]}
+  //     s2s_subscribe: {auth_services: ["stratum"]}
+  //     s2s_read: {auth_services: ["messaging"]}
+  //   };
+  MethodS2SAnnotation s2s_read = 10;
 }
 
 // Residency is the memory-residency window preset for a stored record type.
@@ -2204,6 +2288,25 @@ message OpaImport {
 message GrpcS2SClient {
   // service is "package.ServiceName" (e.g. "identity.Mint").
   string service = 1;
+}
+
+// RecordRead declares that this service reads a (spec.record) type's STORED
+// ROWS through the record query plane's S2S half.
+//
+// The USE half of the paired control whose grant half is
+// (spec.record).s2s_read. See spec.record_read in the FileOptions block above
+// for what it generates and why the transport dependency is implied rather than
+// restated.
+message RecordRead {
+  // record is the fully-qualified record message name, "package.Message"
+  // (e.g. "messaging.Message"). Proto package names are globally unique, so no
+  // file path is needed; tacplus resolves the name to its declaring file.
+  //
+  // A name that resolves to no message, or to a message carrying no
+  // (spec.record), is a hard generation failure — the same fail-loud posture
+  // (spec.record).key already takes for a key naming a field that does not
+  // exist.
+  string record = 1;
 }
 
 // GrpcC2SClient declares a client-facing service dependency.

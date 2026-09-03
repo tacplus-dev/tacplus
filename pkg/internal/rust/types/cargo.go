@@ -307,7 +307,12 @@ func requiredWorkspaceDependencyRefs(rustRootDir string, hasServiceWrappers, has
 		add("tonic", "tonic-prost")
 	}
 	if hasServiceWrappers || hasGrpcClients || hasW2SClients {
-		add("prost", "tonic", "futures", "tokio-stream", "tokio", "serde", "serde_json", "reqwest", "tokio-util", "tonic-prost", "tracing")
+		// tinyvec is pinned as a direct dep (not just transitively pulled in via
+		// reqwest -> quinn) to force the resolver to 1.12.0: tinyvec 1.13.0 has a
+		// still-open upstream bug ("cannot find macro `vec`") on newer rustc, and
+		// no newer tinyvec has been published to fix it.
+		// See decisions/2026-09-03-tinyvec-current-generation-root-cause.md.
+		add("prost", "tonic", "futures", "tokio-stream", "tokio", "serde", "serde_json", "reqwest", "tinyvec", "tokio-util", "tonic-prost", "tracing")
 	}
 	if hasW2SClients {
 		add("tokio-tungstenite")

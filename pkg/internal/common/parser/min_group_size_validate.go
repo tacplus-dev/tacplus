@@ -41,6 +41,18 @@ func ValidateMinGroupSizeAnnotations(dp *DescriptorParser) error {
 	return validateMinGroupSizeAnnotations(fds)
 }
 
+// noRecordQueryPlaneHint is appended to every "no (spec.trait) hosts a record
+// query plane" refusal. By convention (spec.trait) is declared by whichever
+// application opts in to hosting a record's query plane, never by a platform
+// service's own proto — so a platform service generated on its own, without any
+// application proto in the run, will always trip this check for every record
+// that declares residency/mutability, min_group_size, or s2s_read. That is
+// expected, not a sign the record is misconfigured; the hint exists so that
+// failure mode reads as "wrong generation scope" rather than "broken record."
+const noRecordQueryPlaneHint = " (this is checked only against the proto files given to this generation run; " +
+	"a platform service generated standalone, without any application proto that declares (spec.trait), will " +
+	"always fail this check for every such record — generate the merged application+platform build instead)"
+
 // hasRecordQueryPlane reports whether the fleet carries a (spec.trait) that asks
 // for the record query plane: a trait with a host, where that host is a service
 // declaring (spec.record_store). This is the same condition the record-map
@@ -86,8 +98,8 @@ func validateMinGroupSizeAnnotations(fds []*FileDescriptor) error {
 			}
 			if !planeExists {
 				errs = append(errs, fmt.Sprintf(
-					"%s.%s: (spec.record).min_group_size declares a threshold but no (spec.trait) hosts a record query plane, so nothing would enforce it",
-					fd.Package, msg.Name))
+					"%s.%s: (spec.record).min_group_size declares a threshold but no (spec.trait) hosts a record query plane, so nothing would enforce it%s",
+					fd.Package, msg.Name, noRecordQueryPlaneHint))
 			}
 		}
 	}

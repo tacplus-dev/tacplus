@@ -133,8 +133,8 @@ func validateResidencyAnnotations(fds []*FileDescriptor) error {
 			if !planeExists {
 				errs = append(errs, fmt.Sprintf(
 					"%s.%s: (spec.record) declares residency/mutability but no (spec.trait) hosts a "+
-						"record query plane, so nothing would read it",
-					fd.Package, msg.Name))
+						"record query plane, so nothing would read it%s",
+					fd.Package, msg.Name, noRecordQueryPlaneHint))
 			}
 
 			// VAL-4: acceptance item 9. An append-only dataset declaring

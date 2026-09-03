@@ -173,8 +173,8 @@ func validateRecordReadAnnotations(fds []*FileDescriptor) error {
 			// annotation is a generation failure" rule min_group_size applies.
 			if !planeExists {
 				errs = append(errs, fmt.Sprintf(
-					"%s: (spec.record).s2s_read declares a read audience but no (spec.trait) hosts a record query plane, so nothing would enforce it",
-					fqn))
+					"%s: (spec.record).s2s_read declares a read audience but no (spec.trait) hosts a record query plane, so nothing would enforce it%s",
+					fqn, noRecordQueryPlaneHint))
 				continue
 			}
 			g := &recordReadGrant{fqn: fqn, authServices: sr.StringSliceValue}

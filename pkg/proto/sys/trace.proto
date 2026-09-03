@@ -48,7 +48,10 @@ enum TraceEventKind {
 
 message TraceEvent {
   string trace_id = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 64];
-  TraceRound round = 2 [(spec.assert_required) = true];
+  // round is unset on the first event of a SubscribeTrace stream, which
+  // carries only the server-generated trace_id (see eventbus's
+  // WatchTraceHandler); it is set on every subsequent per-hop event.
+  TraceRound round = 2;
   // rpc identifies the specific service and method being traced using the
   // generated AccountingMethod enum type. Exactly one field is set to the
   // corresponding RPC enum value; all others default to 0.

@@ -531,7 +531,26 @@ impl %[1]s {
 `, strconv.Quote(t.ToolName), rustMcpDispatchFnName(t))
 	}
 
-	fmt.Fprintf(&b, `}
+	fmt.Fprintf(&b, `
+    /// Dispatch a tool call by name without an MCP session.
+    ///
+    /// An in-process caller (a service acting as its own MCP client, e.g. an
+    /// agentic loop dispatching its own tool calls) has no
+    /// `+"`rmcp::service::RequestContext<RoleServer>`"+` and, per design, must not
+    /// create one just to reach %[1]s's tool logic — `+"`rmcp::Peer::<R>::new`"+` is
+    /// crate-private in rmcp, so a live session cannot be fabricated. This is
+    /// the session-free entry point: `+"`call_tool`"+` below is a thin wrapper
+    /// around it for real MCP sessions.
+    pub async fn call(
+        &self,
+        name: &str,
+        arguments: rmcp::model::JsonObject,
+    ) -> Result<serde_json::Value, tonic::Status> {
+        match name {
+%[2]s            other => Err(tonic::Status::not_found(format!("unknown tool {other:?}"))),
+        }
+    }
+}
 
 impl rmcp::ServerHandler for %[1]s {
     fn get_info(&self) -> rmcp::model::ServerInfo {
@@ -557,15 +576,7 @@ impl rmcp::ServerHandler for %[1]s {
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
         let arguments = request.arguments.unwrap_or_default();
-        let result = match request.name.as_ref() {
-%[2]s            other => {
-                return Err(rmcp::ErrorData::invalid_params(
-                    format!("unknown tool {other:?}"),
-                    None,
-                ))
-            }
-        };
-        match result {
+        match self.call(request.name.as_ref(), arguments).await {
             Ok(value) => Ok(rmcp::model::CallToolResult::structured(value).into()),
             // A refusal the caller must be able to read — a missing argument,
             // a caller-scoped field they tried to set — is a tool result, not a

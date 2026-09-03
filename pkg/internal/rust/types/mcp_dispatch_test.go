@@ -124,6 +124,31 @@ func TestRustMcpDispatchPublishesTheToolAndDispatchesToTheHandler(t *testing.T) 
 	}
 }
 
+// An in-process caller (a service acting as its own MCP client, e.g. an
+// agentic loop dispatching its own tool calls) has no
+// rmcp::service::RequestContext<RoleServer> and must not fabricate one just to
+// reach the generated tool logic — rmcp::Peer::<R>::new is crate-private, so a
+// live session cannot be built from outside rmcp. The surface must therefore
+// expose a session-free entry point, with call_tool as a thin wrapper around
+// it rather than the only way in.
+func TestRustMcpSurfaceExposesASessionFreeDispatchEntryPoint(t *testing.T) {
+	svc, _, _, _ := rustMcpTestService()
+
+	got := mustRustMcpDispatch(t, svc)
+
+	for _, want := range []string{
+		`pub async fn call(`,
+		`        name: &str,`,
+		`        arguments: rmcp::model::JsonObject,`,
+		`) -> Result<serde_json::Value, tonic::Status> {`,
+		`self.call(request.name.as_ref(), arguments).await`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated MCP surface is missing session-free dispatch %q\ngot:\n%s", want, got)
+		}
+	}
+}
+
 // A service with no RPC_PRINCIPAL_MCP rpc is the paired control for the whole
 // seam: it has no carrier, so it gets no MCP termination at all.
 func TestRustMcpDispatchIsEmptyWithoutAnMcpRpc(t *testing.T) {

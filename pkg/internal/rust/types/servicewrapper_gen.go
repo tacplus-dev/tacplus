@@ -245,6 +245,23 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 		if method == mcpCarrier {
 			grpcWrappers.WriteString(generateRustMcpCarrierWrapper(targetService, method, info.Package, svc.ParentDir, info.CrossPackageTypes))
 			grpcWrappers.WriteString("\n")
+			// The carrier authorizes exactly as the ordinary bidi wrapper does
+			// (comment above), so it needs the same set_method_auth
+			// registration: method-level override if present, else the
+			// service-level pattern.
+			carrierAuth := svc.AuthServices
+			if len(method.AuthServices) > 0 {
+				carrierAuth = method.AuthServices
+			}
+			if len(carrierAuth) > 0 {
+				var quoted []string
+				for _, pattern := range carrierAuth {
+					quoted = append(quoted, fmt.Sprintf("%q", pattern))
+				}
+				methodAuthLines = append(methodAuthLines, fmt.Sprintf(
+					"    auth.set_method_auth(%q, &[%s]);",
+					method.Name, strings.Join(quoted, ", ")))
+			}
 			continue
 		}
 		// An MCP tool gets no gRPC method wrapper: no authorize call, no

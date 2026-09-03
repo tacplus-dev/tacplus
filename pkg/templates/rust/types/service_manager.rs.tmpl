@@ -1395,15 +1395,16 @@ impl ServiceManager {
 {{- end}}
 {{- end}}
 
-{{- if or .HasC2SGrpc .HasS2SGrpc}}
-        // Wire the authorizer to every mandatory-auth wrapper — both C2S
-        // (user-facing) and S2S (service-to-service). One authorizer handles
-        // both: authorize_grpc checks C2S user tokens via service_entitlements
-        // and S2S service tokens via the auth_services RE2 patterns registered
-        // above. c2d services are excluded (local-socket IPC, no token auth).
+{{- if or .HasC2SGrpc .HasS2SGrpc .HasMcpGrpc}}
+        // Wire the authorizer to every mandatory-auth wrapper — C2S
+        // (user-facing), S2S (service-to-service), and an MCP session carrier
+        // (user-facing, same as C2S). One authorizer handles all: authorize_grpc
+        // checks C2S/MCP user tokens via service_entitlements and S2S service
+        // tokens via the auth_services RE2 patterns registered above. c2d
+        // services are excluded (local-socket IPC, no token auth).
         let auth_adapter = Arc::new(AuthorizerAdapter { authorizer: self.authorizer.clone() });
 {{- range .GrpcServices}}
-{{- if and (or .IsC2S .IsS2S) (not .AuthDisabled)}}
+{{- if and (or .IsC2S .IsS2S .HasMcp) (not .AuthDisabled)}}
 {{- if .AuthAnyUser}}
         {{.WrapperVar}}.set_authenticate_func(Some(auth_adapter.clone())).await;
 {{- else}}
@@ -1417,7 +1418,7 @@ impl ServiceManager {
         // such wrapper is wired before we serve; panic (crashloop) instead of
         // silently returning a per-request 500 (gray failure) on every call.
 {{- range .GrpcServices}}
-{{- if and (or .IsC2S .IsS2S) (not .AuthDisabled)}}
+{{- if and (or .IsC2S .IsS2S .HasMcp) (not .AuthDisabled)}}
         if !{{.WrapperVar}}.has_authorizer().await {
             panic!("authorizer not wired for {{.TraitName}} (build/SM bug) — mandatory-auth service cannot serve without an authorizer");
         }
@@ -2060,7 +2061,7 @@ impl ServiceManager {
         Ok(())
     }
 }
-{{- if or .HasC2SGrpc .HasS2SGrpc}}
+{{- if or .HasC2SGrpc .HasS2SGrpc .HasMcpGrpc}}
 
 /// Bridges the grpcserver Authorizer to per-service ValidationWrapper Authorizer traits.
 struct AuthorizerAdapter {
@@ -2068,7 +2069,7 @@ struct AuthorizerAdapter {
 }
 
 {{- range .GrpcServices}}
-{{- if and (or .IsC2S .IsS2S) (not .AuthDisabled)}}
+{{- if and (or .IsC2S .IsS2S .HasMcp) (not .AuthDisabled)}}
 
 #[tonic::async_trait]
 impl {{.WrapperModPath}}::Authorizer for AuthorizerAdapter {

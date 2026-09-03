@@ -568,12 +568,20 @@ func Generate(config *tactype.Config) error {
 		}
 		if len(serverSvcs) > 0 || len(config.States) > 0 {
 			var grpcSvcs []service.ServiceInfo
-			// Filter to gRPC-annotated services. The auto-discovery in
-			// ResolveServerServices already handles SelfPackage + hosted vservices
-			// + synthetic store services additively, so no further restrictive
-			// filter is needed here.
+			// Filter to gRPC-annotated services, plus MCP-only services: a
+			// category-A MCP-only service (no service_s2s/service_c2s/
+			// service_c2d, so IsGrpc is false) still carries a synthesized MCP
+			// session carrier RPC, materialized onto its proto the same way it
+			// is for the wrapper generator above (see the isGrpc/hasMcp gate
+			// near detectServicesForWrapper) — it needs a Handler trait getter
+			// and a ServiceManager mount just like any other gRPC service, or
+			// the wrapper it gets from generateServiceWrappers compiles but is
+			// never reachable. The auto-discovery in ResolveServerServices
+			// already handles SelfPackage + hosted vservices + synthetic store
+			// services additively, so no further restrictive filter is needed
+			// here.
 			for _, svc := range serverSvcs {
-				if svc.IsGrpc {
+				if svc.IsGrpc || svc.HasMcp {
 					grpcSvcs = append(grpcSvcs, svc)
 				}
 			}

@@ -65,6 +65,12 @@ type grpcServiceEntry struct {
 	IsC2S bool
 	// IsC2D is true when this is a client-to-daemon gRPC service (unix socket, no auth).
 	IsC2D bool
+	// HasMcp is true when this service's only gRPC surface is a synthesized MCP
+	// session carrier RPC (no service_s2s/service_c2s/service_c2d annotation).
+	// It needs the same mandatory-auth wiring as a C2S service: the carrier
+	// authenticates its caller via the wrapper's authorize_method, exactly like
+	// any other user-facing RPC.
+	HasMcp bool
 	// C2DSocketPath is the unix socket declared by service_c2d (required, no default).
 	C2DSocketPath string
 	// AuthServices lists the allowed S2S callers (service-level default).
@@ -130,6 +136,7 @@ type smTemplateData struct {
 	HasAuthGrpc             bool
 	HasS2SGrpc              bool
 	HasC2SGrpc              bool
+	HasMcpGrpc              bool // true when any service is an MCP-only carrier (needs the same authorizer wiring as C2S)
 	HasC2DGrpc              bool
 	C2DSocketPath           string // service_c2d socket_path the daemon binds (required, no default)
 	HasStates               bool
@@ -275,6 +282,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			IsS2S:                    svc.IsS2S,
 			IsC2S:                    svc.IsC2S,
 			IsC2D:                    svc.IsC2D,
+			HasMcp:                   svc.HasMcp,
 			C2DSocketPath:            svc.C2DSocketPath,
 			AuthServices:             authServicesForService(svc),
 			AuthDisabled:             svc.AuthDisabled,
@@ -295,6 +303,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 	hasAuthGrpc := false
 	hasS2SGrpc := false
 	hasC2SGrpc := false
+	hasMcpGrpc := false
 	hasC2DGrpc := false
 	c2dSocketPath := ""
 	hasTlsGrpc := false
@@ -308,6 +317,15 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		}
 		if g.IsC2S {
 			hasC2SGrpc = true
+			hasTlsGrpc = true
+		}
+		if g.HasMcp {
+			hasMcpGrpc = true
+			// The MCP session carrier is a real client-facing RPC (same TLS
+			// listener as a C2S service) — without this, the entire TLS
+			// server/router/add_service block in the run() template (gated
+			// on HasTlsGrpc) is skipped and the carrier is never mounted at
+			// all, even though the Handler getter and wrapper are wired.
 			hasTlsGrpc = true
 		}
 		if g.IsC2D {
@@ -522,6 +540,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		HasAuthGrpc:             hasAuthGrpc,
 		HasS2SGrpc:              hasS2SGrpc,
 		HasC2SGrpc:              hasC2SGrpc,
+		HasMcpGrpc:              hasMcpGrpc,
 		HasC2DGrpc:              hasC2DGrpc,
 		C2DSocketPath:           c2dSocketPath,
 		HasStates:               len(config.States) > 0 || config.AllStates,

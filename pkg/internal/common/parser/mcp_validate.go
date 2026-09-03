@@ -40,6 +40,17 @@ import (
 //	       The override's whole job is to be the published tool name. The default
 //	       is snake_case by construction; an override that is not would put a
 //	       name on the wire that the convention says cannot appear.
+//	MCP-4  a service with HasMcpRpcs but none of service_c2s/_s2s/_c2d -> fail
+//	       The injected session carrier's auth model is the hosting service's
+//	       (mcp_carrier.go: "Its auth model is the hosting service's"). A
+//	       service declaring only RPC_PRINCIPAL_MCP rpcs and no service auth
+//	       annotation has no auth model at all, so the carrier is generated,
+//	       mounted and routed, but CollectRpcProtos never gives it auth_model
+//	       "c2s" and it mints no entitlement grant — a channel every MCP tool
+//	       call arrives on that no token can ever be authorized to call.
+//	       Caught only by live verification otherwise: gates and cargo check
+//	       are silent, since the carrier compiles and dispatches fine right up
+//	       until the PermissionDenied at the entitlement check.
 
 // mcpToolNameRe is the MCP tool-name convention the default (snake_case of the
 // RPC name) satisfies by construction, and the override must satisfy by hand.
@@ -72,6 +83,18 @@ func validateMcpAnnotations(fds []*FileDescriptor) error {
 	for _, fd := range fds {
 		for si := range fd.Services {
 			svc := &fd.Services[si]
+
+			// MCP-4.
+			if svc.HasMcpRpcs && !svc.IsC2S && !svc.IsS2S && !svc.IsC2D {
+				errs = append(errs, fmt.Sprintf(
+					"%s.%s: declares an RPC_PRINCIPAL_MCP rpc but no service_c2s/service_s2s/"+
+						"service_c2d annotation; the generated MCP session carrier's auth model "+
+						"follows the hosting service's, so with none set it mints no entitlement "+
+						"grant and no token can ever call it. Add option (spec.service_c2s) = {} "+
+						"(or service_s2s / service_c2d) to the service",
+					fd.Package, svc.Name))
+			}
+
 			for mi := range svc.Methods {
 				m := &svc.Methods[mi]
 				if m.Rpc == nil {

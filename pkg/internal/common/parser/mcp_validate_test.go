@@ -187,6 +187,8 @@ func TestValidateMcpAcceptsUnaryTool(t *testing.T) {
 
 	p := rpcParser(t, `
 service Surface {
+  option (spec.service_c2s) = {};
+
   // Return one ticket by id.
   rpc GetTicket(Ping) returns (Ping) {
     option (spec.rpc) = {
@@ -289,5 +291,46 @@ service Surface {
 	}
 	if !strings.Contains(err.Error(), "is not an MCP tool name") {
 		t.Fatalf("refusal must say the name is not a tool name, got: %v", err)
+	}
+}
+
+// MCP-4: an MCP-only service with no service_c2s/_s2s/_c2d annotation gets an
+// injected session carrier with no auth model at all, so it mints no
+// entitlement grant and no token can ever call it.
+func TestValidateMcpRefusesMcpServiceWithNoAuthModel(t *testing.T) {
+	skipIfNoProtoc(t)
+
+	p := rpcParser(t, `
+service Surface {
+  rpc GetTicket(Ping) returns (Ping) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_MCP};
+  }
+}
+`)
+	err := ValidateMcpAnnotations(p)
+	if err == nil {
+		t.Fatal("an MCP-only service with no service auth annotation must fail generation")
+	}
+	if !strings.Contains(err.Error(), "no service_c2s/service_s2s/service_c2d annotation") {
+		t.Fatalf("refusal must name the missing annotation, got: %v", err)
+	}
+}
+
+// MCP-4 (control): service_s2s alone is a valid auth model for the carrier —
+// the check only cares that one of the three is declared.
+func TestValidateMcpAcceptsMcpServiceWithS2SAuthModel(t *testing.T) {
+	skipIfNoProtoc(t)
+
+	p := rpcParser(t, `
+service Surface {
+  option (spec.service_s2s) = {};
+
+  rpc GetTicket(Ping) returns (Ping) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_MCP};
+  }
+}
+`)
+	if err := ValidateMcpAnnotations(p); err != nil {
+		t.Fatalf("an MCP-only service with service_s2s must generate: %v", err)
 	}
 }

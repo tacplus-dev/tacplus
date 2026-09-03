@@ -400,18 +400,14 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 	var crossPkgImports strings.Builder
 	emitted := make(map[string]bool)
 	// Handle well-known google.protobuf types with proper Go imports.
-	// For empty output unary methods, the output type is discarded (_, err :=)
-	// so we only need the import when it's used in the method body:
-	// - Input types always need it (e.g., &emptypb.Empty{})
-	// - Output types need it only when the method returns the value (non-empty output)
+	// Both input and output types always need the import when they are a
+	// well-known type: for empty-output unary methods, *emptypb.Empty is
+	// still referenced as the retry closure's return type even though the
+	// value itself is discarded (_, err := ...), and for empty-input
+	// methods the &emptypb.Empty{} literal is constructed directly.
 	for _, service := range targetServices {
 		for _, method := range service.Methods {
-			typesToCheck := []string{method.FullInputType}
-			// Only include output type import if not discarded
-			isUnaryEmpty := !method.ClientStreaming && !method.ServerStreaming && isEmptyType(method.FullOutputType)
-			if !isUnaryEmpty {
-				typesToCheck = append(typesToCheck, method.FullOutputType)
-			}
+			typesToCheck := []string{method.FullInputType, method.FullOutputType}
 			for _, fullType := range typesToCheck {
 				if strings.HasPrefix(fullType, "google.protobuf.") {
 					typeName := fullType[len("google.protobuf."):]

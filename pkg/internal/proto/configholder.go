@@ -335,18 +335,25 @@ func ScanAndGenerateConfigHolder(sourceProtoDir string, dirs ...string) ([]GrpcC
 		return nil, nil, nil, nil
 	}
 
+	// services is the union of (spec.service)-declared identities and
+	// (spec.grpc_config)-only services (which have a config holder but never
+	// declared (spec.service) explicitly), deduped by name. A service with
+	// only a grpc_config annotation (e.g. operator) must still get a
+	// SERVICE_NAME_* enum value — dropping it silently produced UNSPECIFIED
+	// delegate entries for any such service (found via operator, 2026-09-03).
 	var services []ServiceIdentityEntry
 	for _, svc := range serviceMap {
 		services = append(services, svc)
 	}
-	if len(services) == 0 {
-		for _, entry := range entries {
-			services = append(services, ServiceIdentityEntry{
-				ServiceName: entry.ServiceName,
-				FieldID:     entry.FieldID,
-				ProtoPath:   entry.ProtoImportPath,
-			})
+	for _, entry := range entries {
+		if _, ok := serviceMap[entry.ServiceName]; ok {
+			continue
 		}
+		services = append(services, ServiceIdentityEntry{
+			ServiceName: entry.ServiceName,
+			FieldID:     entry.FieldID,
+			ProtoPath:   entry.ProtoImportPath,
+		})
 	}
 
 	// Sort by field ID for deterministic output.

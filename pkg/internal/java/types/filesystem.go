@@ -19,6 +19,10 @@ func writeFilesystemHelpers(b *strings.Builder, outerClassName string) {
     if (SKIP_NAMES.contains(name)) {
       return true;
     }
+    // Skip macOS AppleDouble resource-fork sidecar files (e.g. "._main.rego").
+    if (name.startsWith("._")) {
+      return true;
+    }
     // Skip non-regular, non-directory entries (symlinks, sockets, pipes, devices)
     if (!java.nio.file.Files.isRegularFile(entry) && !java.nio.file.Files.isDirectory(entry)) {
       return true;

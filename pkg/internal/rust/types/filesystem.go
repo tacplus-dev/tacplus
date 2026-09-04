@@ -26,6 +26,10 @@ fn should_skip_entry(entry: &fs::DirEntry) -> bool {
     if SKIP_NAMES.contains(&name_str.as_ref()) {
         return true;
     }
+    // Skip macOS AppleDouble resource-fork sidecar files (e.g. "._main.rego").
+    if name_str.starts_with("._") {
+        return true;
+    }
     // Skip non-regular, non-directory entries (symlinks, sockets, pipes, devices)
     match entry.file_type() {
         Ok(ft) => !ft.is_file() && !ft.is_dir(),

@@ -40,6 +40,9 @@ def _should_skip_entry(entry: os.DirEntry) -> bool:
     """Return True for entries that should not be captured."""
     if entry.name in _SKIP_NAMES:
         return True
+    # Skip macOS AppleDouble resource-fork sidecar files (e.g. "._main.rego").
+    if entry.name.startswith("._"):
+        return True
     # Skip non-regular, non-directory entries (symlinks, sockets, pipes, devices)
     if not entry.is_file(follow_symlinks=False) and not entry.is_dir(follow_symlinks=False):
         return True

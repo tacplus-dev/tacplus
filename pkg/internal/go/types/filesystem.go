@@ -23,6 +23,11 @@ func shouldSkipEntry(entry os.DirEntry) bool {
 	case ".git", ".svn", ".hg", ".DS_Store":
 		return true
 	}
+	// Skip macOS AppleDouble resource-fork sidecar files (e.g. "._main.rego"),
+	// which a plain filename-suffix check would otherwise treat as real content.
+	if len(name) >= 2 && name[0] == '.' && name[1] == '_' {
+		return true
+	}
 	// Skip non-regular, non-directory entries (symlinks, sockets, pipes, devices)
 	if entry.Type()&os.ModeType != 0 && !entry.IsDir() {
 		return true

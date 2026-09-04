@@ -35,6 +35,10 @@ function shouldSkipEntry(entry: fs.Dirent): boolean {
   if (SKIP_NAMES.has(entry.name)) {
     return true;
   }
+  // Skip macOS AppleDouble resource-fork sidecar files (e.g. "._main.rego").
+  if (entry.name.startsWith("._")) {
+    return true;
+  }
   // Skip non-regular, non-directory entries (symlinks, sockets, pipes, devices)
   if (!entry.isFile() && !entry.isDirectory()) {
     return true;

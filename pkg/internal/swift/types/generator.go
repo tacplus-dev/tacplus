@@ -74,10 +74,14 @@ type w2sMethodTemplateData struct {
 	AuthRequired    bool
 	InputType       string
 	OutputType      string
-	// IsStreaming is true for methods that are client- or server-streaming.
-	// The Swift lite client emits a throwing stub for these so a consumer sees
-	// the method at compile time instead of a silent omission.
+	// IsStreaming is true for server-streaming methods, which the Swift W2S
+	// client consumes as SSE and surfaces as an AsyncThrowingStream.
 	IsStreaming bool
+	// IsUnsupportedStream is true for client-streaming and bidi methods. The
+	// gateway carries those over WebSocket, which the Swift W2S client does not
+	// speak, so they are emitted as unavailable stubs — a consumer sees the
+	// method at compile time instead of a silent omission.
+	IsUnsupportedStream bool
 }
 
 // Generate generates a SwiftPM client-lite package from proto files.
@@ -429,6 +433,39 @@ func c2dServicesTemplateData(servicesInfo []service.ServiceInfo) []c2dServiceTem
 // yields a compilable unary-only surface AND the consumer meets the omission at
 // compile time instead of finding the method simply absent. A missing HTTP path
 // on a UNARY method, by contrast, is still rejected loudly.
+// w2sMethodData shapes one W2S method for the Swift client template.
+//
+// Unary and server-streaming methods both ride the gateway's REST route (the
+// latter as SSE), so both carry HTTPPath/HTTPMethod/AuthRequired. Client-
+// streaming and bidi go over WebSocket at the gateway, which the Swift W2S
+// client does not speak: they are emitted as unavailable stubs so a consumer
+// sees them at compile time. A silent continue-skip at Info level was the
+// original behavior — it was invisible at default CLI log levels (the recurring
+// "silent skip" defect shape).
+func w2sMethodData(svc service.ServiceInfo, target *parser.ServiceInfo, method *parser.MethodInfo, protoPackage string) (w2sMethodTemplateData, error) {
+	data := w2sMethodTemplateData{
+		MethodName:      method.Name,
+		SwiftMethodName: swiftLowerIdentifier(method.Name),
+		InputType:       swiftProtoTypeName(method.FullInputType, method.InputType, protoPackage),
+		OutputType:      swiftProtoTypeName(method.FullOutputType, method.OutputType, protoPackage),
+	}
+	if method.ClientStreaming {
+		data.IsUnsupportedStream = true
+		return data, nil
+	}
+	if method.HttpPath == "" {
+		return w2sMethodTemplateData{}, fmt.Errorf("swift W2S method %s.%s requires REST route metadata (no HTTP path)", target.Name, method.Name)
+	}
+	data.HTTPPath = method.HttpPath
+	data.AuthRequired = !(svc.AuthDisabled || target.AuthDisabled || method.AuthDisabled)
+	data.HTTPMethod = "POST"
+	if isEmptySwiftType(method.FullInputType) && method.HttpMethod != "" {
+		data.HTTPMethod = method.HttpMethod
+	}
+	data.IsStreaming = method.ServerStreaming
+	return data, nil
+}
+
 func w2sServicesTemplateData(protoDir string, servicesInfo []service.ServiceInfo) ([]w2sServiceTemplateData, error) {
 	dp, err := parser.NewDescriptorParser(protoDir)
 	if err != nil {
@@ -455,37 +492,11 @@ func w2sServicesTemplateData(protoDir string, servicesInfo []service.ServiceInfo
 
 		methods := make([]w2sMethodTemplateData, 0, len(target.Methods))
 		for _, method := range target.Methods {
-			// Swift W2S is unary-only: streaming methods are emitted as throwing
-			// stubs so a consumer sees them at compile time. A silent continue-skip
-			// at Info level was the previous behavior — it was invisible at default
-			// CLI log levels (the recurring "silent skip" defect shape).
-			if method.ClientStreaming || method.ServerStreaming {
-				methods = append(methods, w2sMethodTemplateData{
-					MethodName:      method.Name,
-					SwiftMethodName: swiftLowerIdentifier(method.Name),
-					InputType:       swiftProtoTypeName(method.FullInputType, method.InputType, info.Package),
-					OutputType:      swiftProtoTypeName(method.FullOutputType, method.OutputType, info.Package),
-					IsStreaming:     true,
-				})
-				continue
+			shaped, err := w2sMethodData(svc, target, method, info.Package)
+			if err != nil {
+				return nil, err
 			}
-			if method.HttpPath == "" {
-				return nil, fmt.Errorf("swift W2S method %s.%s requires REST route metadata (no HTTP path)", target.Name, method.Name)
-			}
-			authRequired := !(svc.AuthDisabled || target.AuthDisabled || method.AuthDisabled)
-			httpMethod := "POST"
-			if isEmptySwiftType(method.FullInputType) && method.HttpMethod != "" {
-				httpMethod = method.HttpMethod
-			}
-			methods = append(methods, w2sMethodTemplateData{
-				MethodName:      method.Name,
-				SwiftMethodName: swiftLowerIdentifier(method.Name),
-				HTTPMethod:      httpMethod,
-				HTTPPath:        method.HttpPath,
-				AuthRequired:    authRequired,
-				InputType:       swiftProtoTypeName(method.FullInputType, method.InputType, info.Package),
-				OutputType:      swiftProtoTypeName(method.FullOutputType, method.OutputType, info.Package),
-			})
+			methods = append(methods, shaped)
 		}
 
 		result = append(result, w2sServiceTemplateData{

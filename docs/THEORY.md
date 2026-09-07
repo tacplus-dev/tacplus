@@ -40,7 +40,7 @@ tacplus/
   AGENT.md      -- Architectural norms for agentic analysis
 ```
 
-The rule is simple for full-service targets: if tacplus generates service runtime behavior, it does so for Go, Java, and Rust with parity. Swift, C#, Python, and TypeScript are client-only targets and must reject service-side/runtime generation instead of emitting partial servers. They come in two tiers: Swift and C# are "lite" client targets (C2D, C2S, and W2S clients; W2S unary-only), while Python and TypeScript are full-client targets that generate every client surface (C2D, C2S, W2S, REST).
+The rule is simple for full-service targets: if tacplus generates service runtime behavior, it does so for Go, Java, and Rust with parity. Swift, C#, Python, and TypeScript are client-only targets and must reject service-side/runtime generation instead of emitting partial servers. They come in two tiers: Swift and C# are "lite" client targets (C2D, C2S, and W2S clients; Swift's W2S is unary + server-streaming over SSE, C#'s is unary-only, and the streaming methods neither can carry are emitted as unavailable stubs), while Python and TypeScript are full-client targets that generate every client surface (C2D, C2S, W2S, REST).
 
 ---
 

@@ -171,13 +171,17 @@ Language targets do not all support the same surface set:
   ServiceManager runtime, EventBus subscriber/publisher runtime, health runtime,
   SMB runtime, service state, or service stores — is rejected loudly.
 - Lite client targets (`swift`, `csharp`) generate C2D, C2S, and W2S client
-  surfaces. Their W2S is unary-only (HTTP/JSON; no SSE or WebSocket streaming):
-  a declared client/server-streaming method is **omitted** from the generated
-  W2S client (not a generation error, so a mixed unary+streaming service still
-  produces a compilable client) — the omission is logged. Use the
-  Go/Java/Rust W2S client for streaming. Unlike the full-client tier they
-  currently emit no client-side request validation and no default request
-  deadline. Any service-side surface is rejected loudly.
+  surfaces. Swift's W2S carries unary methods over HTTP/JSON and
+  server-streaming methods over SSE (as an `AsyncThrowingStream`, with no
+  deadline — cancel the enclosing `Task` to end it). C#'s W2S is unary-only.
+  A streaming method the target cannot carry — client-streaming and bidi for
+  Swift, which the gateway serves over WebSocket, and every streaming method
+  for C# — is emitted as a **compile-time-unavailable stub**, not omitted, so a
+  mixed unary+streaming service still produces a compilable client and no
+  declared method silently disappears. Use the Go/Java/Rust W2S client for
+  those. Unlike the full-client tier they currently emit no client-side request
+  validation and no default request deadline. Any service-side surface is
+  rejected loudly.
 
 Full-service targets generate a `c2dm` manager for services marked with
 `(spec.service_c2d)`, with typed gRPC clients over local daemon IPC. Go and Rust
@@ -187,7 +191,8 @@ dial a Unix-domain socket. Java accepts a caller-supplied local-daemon
 Swift and C# emit lite client packages that include a C2D surface: Swift emits a
 SwiftPM package with a Unix-domain socket `C2DClient` helper, while C# emits a
 .NET package that defaults to named pipes on Windows and Unix-domain sockets
-elsewhere. They also emit C2S and (unary-only) W2S client surfaces. Python
+elsewhere. They also emit C2S and W2S client surfaces (Swift's W2S adds server-streaming
+over SSE; C#'s is unary-only). Python
 and TypeScript emit a C2D client-side surface for `(spec.service_c2d)` services,
 alongside their C2S/W2S/REST client surfaces.
 

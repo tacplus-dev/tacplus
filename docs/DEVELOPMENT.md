@@ -120,7 +120,8 @@ Language targets are intentionally split. Full-service generators are `go`,
 `rust`, and `java`; they own ServiceManager, server wrappers, EventBus, health,
 SMB, stores, states, and C2S/W2S/S2S/C2D clients. Client-only generators split
 into two tiers: `swift` and `csharp` are "lite" client targets (C2D, C2S, and
-W2S clients; W2S unary-only), while `python` and `typescript` are full-client
+W2S clients; Swift's W2S is unary + server-streaming over SSE, C#'s is
+unary-only), while `python` and `typescript` are full-client
 targets that own every client surface (C2D/C2S/W2S/REST). Python and TypeScript must reject service-side annotations or
 config requests (servers, S2S clients, ServiceManager runtime, EventBus, health,
 SMB, stores, states) with clear client-only errors rather than emitting partial

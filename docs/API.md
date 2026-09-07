@@ -30,11 +30,13 @@ annotated proto model plus the generated API behavior described here.
 
 Client-only targets do not implement the service runtime contract, and split
 into two tiers. `swift` and `csharp` are "lite" client targets: they emit C2D,
-C2S, and W2S client surfaces, but their W2S is unary-only (HTTP/JSON; no SSE or
-WebSocket streaming): a declared streaming method is omitted from the W2S client
-(logged; not a generation error, so a mixed service still compiles) and
-— unlike the full-client tier — they currently emit no client-side request
-validation and no default request deadline. `python` and
+C2S, and W2S client surfaces. Swift's W2S covers unary (HTTP/JSON) and
+server-streaming (SSE) methods; C#'s W2S is unary-only. A method neither tier
+can carry — client-streaming and bidi, which the gateway serves over WebSocket,
+plus every streaming method for C# — is emitted as a compile-time-unavailable
+stub rather than omitted, so a mixed service still compiles and no declared
+method silently disappears. Unlike the full-client tier, both currently emit no
+client-side request validation and no default request deadline. `python` and
 `typescript` are full-client targets: they emit every client surface (C2D, C2S,
 W2S, and REST) with client-side validation. Both tiers reject S2S clients,
 server wrappers, ServiceManager runtime, EventBus runtime, health runtime, SMB
@@ -206,7 +208,8 @@ not enable C2S.
 
 C2D is a local daemon IPC surface; it does not introduce SMN/SMB mesh work.
 The lite client targets (`swift`, `csharp`) emit C2D, C2S, and W2S clients
-(their W2S is unary-only — streaming methods are emitted as throwing stubs);
+(Swift's W2S is unary + server-streaming over SSE, C#'s is unary-only; the
+streaming methods neither can carry are emitted as unavailable stubs);
 the full-client targets (`python`, `typescript`) additionally emit REST clients.
 
 **C2D server auth-skip scope**: Rust is the only target that hosts a generated

@@ -21,6 +21,106 @@ public enum W2SClientError: Error {
     case httpStatus(code: Int, body: String)
     /// The gateway response could not be decoded.
     case decode(String)
+    /// A server-streaming (SSE) response carried an error or was malformed.
+    case stream(String)
+}
+
+/// One decoded Server-Sent Event from a W2S server-streaming response: the
+/// accumulated `data:` payload plus whether an `event: error` line preceded it.
+struct W2SSSEEvent: Sendable {
+    let data: String
+    let isError: Bool
+}
+
+/// Incremental SSE parser for W2S server-streaming responses.
+///
+/// The line rules match the Go, Python and TypeScript W2S clients:
+///
+/// - a line starting with `:` is a comment and is ignored;
+/// - `event: error` marks the next data block as an error envelope;
+/// - `data:` lines accumulate (exactly one leading space stripped, per the SSE
+///   specification), and are joined with a newline and emitted on the next
+///   blank line;
+/// - any other non-empty line is taken as a complete JSON message on its own
+///   (NDJSON tolerance, as the TypeScript client has);
+/// - an accumulated event larger than `maxEventBytes` is a hard error, so a
+///   runaway gateway response cannot exhaust memory.
+///
+/// It is a pure value type with no I/O so it can be exercised without a network.
+struct W2SSSEParser {
+    /// Maximum size of one accumulated event, matching the Go client's 1 MiB
+    /// scanner limit.
+    static let maxEventBytes = 1024 * 1024
+
+    private var dataLines: [String] = []
+    private var pendingError = false
+    private var pendingBytes = 0
+
+    /// Feeds one line (without its terminator) and returns a completed event, if
+    /// this line completed one.
+    mutating func push(_ line: String) throws -> W2SSSEEvent? {
+        var text = line
+        while text.hasSuffix("\r") {
+            text.removeLast()
+        }
+        if text.trimmingCharacters(in: .whitespaces).isEmpty {
+            return self.flush()
+        }
+        if text.hasPrefix(":") {
+            return nil
+        }
+        if let value = W2SSSEParser.fieldValue(text, field: "event") {
+            if value == "error" {
+                self.pendingError = true
+            }
+            return nil
+        }
+        if let value = W2SSSEParser.fieldValue(text, field: "data") {
+            self.pendingBytes += value.utf8.count + 1
+            if self.pendingBytes > W2SSSEParser.maxEventBytes {
+                self.reset()
+                throw W2SClientError.stream("W2S SSE event exceeds \(W2SSSEParser.maxEventBytes) bytes")
+            }
+            self.dataLines.append(value)
+            return nil
+        }
+        let isError = self.pendingError
+        self.reset()
+        return W2SSSEEvent(data: text, isError: isError)
+    }
+
+    /// Flushes an event left unterminated when the response body ended.
+    mutating func finish() -> W2SSSEEvent? {
+        self.flush()
+    }
+
+    private mutating func flush() -> W2SSSEEvent? {
+        guard !self.dataLines.isEmpty else {
+            return nil
+        }
+        let event = W2SSSEEvent(data: self.dataLines.joined(separator: "\n"), isError: self.pendingError)
+        self.reset()
+        return event
+    }
+
+    private mutating func reset() {
+        self.dataLines.removeAll()
+        self.pendingError = false
+        self.pendingBytes = 0
+    }
+
+    /// Splits `field: value`, stripping exactly one leading space from the value
+    /// as the SSE specification requires.
+    private static func fieldValue(_ line: String, field: String) -> String? {
+        guard line.hasPrefix(field + ":") else {
+            return nil
+        }
+        var value = String(line.dropFirst(field.count + 1))
+        if value.hasPrefix(" ") {
+            value.removeFirst()
+        }
+        return value
+    }
 }
 
 /// W2SClient issues gRPC-over-REST calls against a gateway base URL.
@@ -109,6 +209,117 @@ public struct W2SClient: Sendable {
             throw W2SClientError.decode("\(error)")
         }
     }
+
+    /// Invokes a server-streaming W2S method: marshals `request` to protobuf-JSON,
+    /// sends it to `baseURL + path` with `Accept: text/event-stream`, and yields
+    /// each decoded SSE message.
+    ///
+    /// No per-request deadline is applied: a server stream is open-ended by
+    /// nature, so `requestTimeout` (a unary deadline) would cut a healthy stream
+    /// short. A caller that wants a deadline cancels the enclosing `Task`, which
+    /// cancels the HTTP request and ends the stream.
+    public func invokeStream<Request: SwiftProtobuf.Message, Response: SwiftProtobuf.Message>(
+        method: String,
+        path: String,
+        authRequired: Bool,
+        request: Request
+    ) async throws -> AsyncThrowingStream<Response, Error> {
+        guard let url = URL(string: self.baseURL + path) else {
+            throw W2SClientError.decode("invalid W2S URL: \(self.baseURL + path)")
+        }
+        var httpRequest = URLRequest(url: url)
+        httpRequest.httpMethod = method
+        httpRequest.setValue("text/event-stream", forHTTPHeaderField: "accept")
+        if method != "GET" {
+            httpRequest.setValue("application/json", forHTTPHeaderField: "content-type")
+            httpRequest.httpBody = try request.jsonUTF8Data()
+        }
+        if let authorization = try await self.authorizationHeader(required: authRequired) {
+            httpRequest.setValue(authorization, forHTTPHeaderField: "authorization")
+        }
+
+        let (bytes, response) = try await self.session.bytes(for: httpRequest)
+        if let httpResponse = response as? HTTPURLResponse,
+           httpResponse.statusCode < 200 || httpResponse.statusCode >= 300 {
+            var body = ""
+            for try await line in bytes.lines {
+                body += line
+            }
+            throw W2SClientError.httpStatus(code: httpResponse.statusCode, body: body)
+        }
+
+        return AsyncThrowingStream<Response, Error> { continuation in
+            let task = Task {
+                var parser = W2SSSEParser()
+                do {
+                    for try await line in bytes.lines {
+                        if let event = try parser.push(line) {
+                            continuation.yield(try W2SClient.decodeStreamEvent(event, as: Response.self))
+                        }
+                    }
+                    if let event = parser.finish() {
+                        continuation.yield(try W2SClient.decodeStreamEvent(event, as: Response.self))
+                    }
+                    continuation.finish()
+                } catch {
+                    // Cancellation lands here too: finishing with the error ends the
+                    // stream for the consumer instead of hanging it.
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
+    /// Decodes one SSE payload into `Response`, unwrapping the gateway's JSON
+    /// envelope shapes the same way the TypeScript W2S client does: an `error`
+    /// key is a stream error, a `result` key or a `{"type": "message", "message":
+    /// …}` wrapper is unwrapped, anything else is the message itself.
+    static func decodeStreamEvent<Response: SwiftProtobuf.Message>(
+        _ event: W2SSSEEvent,
+        as responseType: Response.Type
+    ) throws -> Response {
+        guard let raw = event.data.data(using: .utf8) else {
+            throw W2SClientError.stream("W2S SSE payload is not valid UTF-8")
+        }
+        if let envelope = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] {
+            if let value = envelope["error"] {
+                throw W2SClientError.stream(String(describing: value))
+            }
+            if event.isError {
+                throw W2SClientError.stream(event.data)
+            }
+            if let result = envelope["result"] {
+                return try W2SClient.decodeJSONValue(result, as: responseType)
+            }
+            if envelope["type"] as? String == "message", let message = envelope["message"] {
+                return try W2SClient.decodeJSONValue(message, as: responseType)
+            }
+        } else if event.isError {
+            throw W2SClientError.stream(event.data)
+        }
+        do {
+            return try Response(jsonUTF8Data: raw)
+        } catch {
+            throw W2SClientError.decode("\(error)")
+        }
+    }
+
+    private static func decodeJSONValue<Response: SwiftProtobuf.Message>(
+        _ value: Any,
+        as responseType: Response.Type
+    ) throws -> Response {
+        guard JSONSerialization.isValidJSONObject(value) else {
+            throw W2SClientError.stream("W2S SSE envelope payload is not a JSON object")
+        }
+        do {
+            return try Response(jsonUTF8Data: JSONSerialization.data(withJSONObject: value))
+        } catch {
+            throw W2SClientError.decode("\(error)")
+        }
+    }
 }
 {{range $service := .Services}}
 
@@ -122,11 +333,25 @@ public struct {{$service.ClientTypeName}}: Sendable {
 {{range .Methods}}
 {{- if .IsStreaming}}
 
-    /// Streaming method {{$service.PackageName}}.{{.MethodName}} is not supported in the
-    /// Swift lite client. Use the Go, Java, or Rust W2S client for streaming.
-    @available(*, unavailable, message: "Streaming method {{.MethodName}} requires the Go/Java/Rust W2S client")
+    /// Streams {{$service.PackageName}}.{{.MethodName}} via W2S server-sent events.
+    ///
+    /// The stream has no deadline; cancel the enclosing `Task` to end it.
+    public func {{.SwiftMethodName}}(_ request: {{.InputType}}) async throws -> AsyncThrowingStream<{{.OutputType}}, Error> {
+        try await self.client.invokeStream(
+            method: "{{.HTTPMethod}}",
+            path: "{{.HTTPPath}}",
+            authRequired: {{.AuthRequired}},
+            request: request
+        )
+    }
+{{- else if .IsUnsupportedStream}}
+
+    /// {{$service.PackageName}}.{{.MethodName}} is client-streaming or bidirectional. The
+    /// gateway carries those over WebSocket, which the Swift W2S client does not
+    /// speak. Use the Go, Java, or Rust W2S client for them.
+    @available(*, unavailable, message: "{{.MethodName}} is client-streaming or bidi (WebSocket); not supported by the Swift W2S client")
     public func {{.SwiftMethodName}}(_ request: {{.InputType}}) async throws -> {{.OutputType}} {
-        fatalError("Swift W2S client does not support streaming method {{.MethodName}}; use Go/Java/Rust W2S client")
+        fatalError("Swift W2S client does not support client-streaming/bidi method {{.MethodName}}; use the Go/Java/Rust W2S client")
     }
 {{- else}}
 

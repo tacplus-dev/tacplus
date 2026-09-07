@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/service"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
 )
@@ -102,6 +103,88 @@ func TestW2SMethodTypeNamespacing(t *testing.T) {
 	}
 	if got := swiftServiceNamespace("contractclient", "ContractResponse"); got != "Contractclient_ContractResponse" {
 		t.Fatalf("W2S output type namespace = %q, want %q", got, "Contractclient_ContractResponse")
+	}
+}
+
+// W2S server-streaming methods carry the same route metadata as unary methods
+// (the gateway serves them as SSE on that route). Only client-streaming/bidi
+// are stubs. Before this, ALL streaming methods dropped their route.
+func TestW2SMethodDataStreaming(t *testing.T) {
+	svc := service.ServiceInfo{ServiceName: "contractclient.ContractApi"}
+	target := &parser.ServiceInfo{Name: "ContractApi"}
+
+	serverStreaming := &parser.MethodInfo{
+		Name:            "ListEvents",
+		ServerStreaming: true,
+		InputType:       "ContractRequest",
+		OutputType:      "ContractEvent",
+		FullInputType:   ".contractclient.ContractRequest",
+		FullOutputType:  ".contractclient.ContractEvent",
+		HttpPath:        "/api/v1/contractclient/ContractApi/ListEvents",
+		HttpMethod:      "POST",
+	}
+	got, err := w2sMethodData(svc, target, serverStreaming, "contractclient")
+	if err != nil {
+		t.Fatalf("w2sMethodData(server-streaming): %v", err)
+	}
+	if !got.IsStreaming || got.IsUnsupportedStream {
+		t.Fatalf("server-streaming flags = (IsStreaming %v, IsUnsupportedStream %v), want (true, false)", got.IsStreaming, got.IsUnsupportedStream)
+	}
+	if got.HTTPPath != serverStreaming.HttpPath {
+		t.Errorf("server-streaming HTTPPath = %q, want %q", got.HTTPPath, serverStreaming.HttpPath)
+	}
+	if got.HTTPMethod != "POST" {
+		t.Errorf("server-streaming HTTPMethod = %q, want POST", got.HTTPMethod)
+	}
+	if !got.AuthRequired {
+		t.Error("server-streaming AuthRequired = false, want true")
+	}
+
+	// GET is used only when the input is google.protobuf.Empty, exactly as for
+	// unary methods.
+	emptyInput := *serverStreaming
+	emptyInput.FullInputType = ".google.protobuf.Empty"
+	emptyInput.HttpMethod = "GET"
+	got, err = w2sMethodData(svc, target, &emptyInput, "contractclient")
+	if err != nil {
+		t.Fatalf("w2sMethodData(empty input): %v", err)
+	}
+	if got.HTTPMethod != "GET" {
+		t.Errorf("Empty-input server-streaming HTTPMethod = %q, want GET", got.HTTPMethod)
+	}
+	nonEmpty := *serverStreaming
+	nonEmpty.HttpMethod = "GET"
+	got, err = w2sMethodData(svc, target, &nonEmpty, "contractclient")
+	if err != nil {
+		t.Fatalf("w2sMethodData(non-empty input): %v", err)
+	}
+	if got.HTTPMethod != "POST" {
+		t.Errorf("non-Empty input with rest GET: HTTPMethod = %q, want POST", got.HTTPMethod)
+	}
+
+	// Client-streaming and bidi stay stubs: no route, marked unsupported.
+	for _, tt := range []struct {
+		name   string
+		method *parser.MethodInfo
+	}{
+		{"client-streaming", &parser.MethodInfo{Name: "SendEvents", ClientStreaming: true, HttpPath: "/api/v1/x"}},
+		{"bidi", &parser.MethodInfo{Name: "AssistEvents", ClientStreaming: true, ServerStreaming: true, HttpPath: "/api/v1/x"}},
+	} {
+		got, err := w2sMethodData(svc, target, tt.method, "contractclient")
+		if err != nil {
+			t.Fatalf("w2sMethodData(%s): %v", tt.name, err)
+		}
+		if !got.IsUnsupportedStream || got.IsStreaming {
+			t.Errorf("%s flags = (IsStreaming %v, IsUnsupportedStream %v), want (false, true)", tt.name, got.IsStreaming, got.IsUnsupportedStream)
+		}
+		if got.HTTPPath != "" || got.HTTPMethod != "" {
+			t.Errorf("%s must carry no route, got path %q method %q", tt.name, got.HTTPPath, got.HTTPMethod)
+		}
+	}
+
+	// A routeless unary/server-streaming method is still a hard error.
+	if _, err := w2sMethodData(svc, target, &parser.MethodInfo{Name: "NoRoute", ServerStreaming: true}, "contractclient"); err == nil {
+		t.Error("w2sMethodData with no HTTP path: expected error, got nil")
 	}
 }
 

@@ -49,6 +49,12 @@ type ServiceInfo struct {
 	// (parser.SynthesizedKind*), empty for hand-authored services. See the go
 	// generator's field for why the kind, not just the fact, is what matters.
 	SynthesizedKind string
+	// TenantOwned is option (spec.service).tenant_owned of the service that OWNS
+	// this surface — the host for a trait/vservice surface, the declaring file
+	// otherwise. A tenant-owned service is deployed one instance per tenant and
+	// carries a /tenants/<t> identity, which is the whole input to whether its
+	// s2s record plane gets the runtime tenant pin (recordnamespace_gen.go).
+	TenantOwned bool
 }
 
 // detectServicesForWrapper scans proto files to find service definitions that need wrapper generation.
@@ -61,6 +67,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 	}
 
 	var servicesInfo []ServiceInfo
+	tenantOwnedPkgs := map[string]bool{}
 
 	// Check if inputDir has directory-based service protos ({dir}/{name}/{file}.proto).
 	useDirectoryMode := false
@@ -97,6 +104,19 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 		if err != nil {
 			zap.L().Debug("Skipping proto file (no descriptor)", zap.String("path", relPath), zap.Error(err))
 			return nil
+		}
+
+		// option (spec.service).tenant_owned is a FILE-level fact about the
+		// service that owns the package, and the record query plane a trait
+		// emits lands in the TRAIT's file, not the host's. So the flag is
+		// collected per package here and resolved through the host label after
+		// the walk, once every file has been seen.
+		if fileDesc.ServiceTenantOwned {
+			ownerPkg := fileDesc.Package
+			if idx := strings.Index(ownerPkg, "."); idx > 0 {
+				ownerPkg = ownerPkg[:idx]
+			}
+			tenantOwnedPkgs[ownerPkg] = true
 		}
 
 		if len(fileDesc.Services) == 0 {
@@ -224,8 +244,22 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
 
-	return servicesInfo, err
+	// A hosted surface (a trait's record plane, a vservice) is owned by the
+	// service that HOSTS it, so that is whose tenant_owned decides. An unknown
+	// host resolves to false, which is the pre-existing behavior.
+	for i := range servicesInfo {
+		owner := servicesInfo[i].HostLabel
+		if owner == "" {
+			owner = servicesInfo[i].PackageName
+		}
+		servicesInfo[i].TenantOwned = tenantOwnedPkgs[owner]
+	}
+
+	return servicesInfo, nil
 }
 
 // filterServicesByGrpcEntries returns services whose ProtoFile matches any gRPC entry's ProtoFile.
@@ -697,6 +731,14 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	// generated MCP self-test's stub can implement the whole interface with the
 	// wrapper's own signatures rather than a second renderer's guess at them.
 	var nonToolHandlerDecls []string
+	// The peer half of a TENANT-OWNED service's record query plane, and only
+	// that. It is the one s2s surface whose caller can be either a /system peer
+	// (fleet-wide, as always) or a per-tenant peer (pinned), so it is the one
+	// s2s surface that carries the (spec.store_namespace) seams under a runtime
+	// gate. Every other s2s wrapper — every surface of a shared service
+	// included — generates exactly what it generated before.
+	recordPlaneS2S := !svc.IsC2S && svc.TenantOwned && svc.SynthesizedKind == parser.SynthesizedKindRecordMap
+
 	// The generated MCP session carrier, when this service has one. It is the
 	// one rpc the wrapper serves without a handler method.
 	mcpCarrier := javaMcpCarrierMethod(targetService)
@@ -761,7 +803,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			nonToolHandlerDecls = append(nonToolHandlerDecls, decl)
 		}
 		effectiveAuthAnyUser := method.AuthAnyUser
-		grpcMethods.WriteString(generateJavaGRPCWrapperSurface(method, serviceName, svc.GrpcName, inputType, outputType, inputHelpers, outputHelpers, effectiveAuthAnyUser, method.AuthDisabled || svc.AuthDisabled || svc.IsC2D, accountingMap, info.Package, svc.ParentDir, info.CrossPackageTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses, svc.IsC2S))
+		grpcMethods.WriteString(generateJavaGRPCWrapperSurface(method, serviceName, svc.GrpcName, inputType, outputType, inputHelpers, outputHelpers, effectiveAuthAnyUser, method.AuthDisabled || svc.AuthDisabled || svc.IsC2D, accountingMap, info.Package, svc.ParentDir, info.CrossPackageTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses, svc.IsC2S, recordPlaneS2S))
 		grpcMethods.WriteString("\n")
 
 		// Resolve effective auth_services: method-level overrides service-level.
@@ -1254,14 +1296,21 @@ func javaMinGroupSizeUnenforceable(method *parser.MethodInfo, san *javaEgressSan
 // as the plain spelling because most callers (and every render test) are asking
 // about a shape the (spec.store_principal) row filter has nothing to say about.
 func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers string, authAnyUser bool, authDisabled bool, accountingMap map[string]service.AccountingInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer, crossPkgHelpers map[string]string, crossPkgOuterClasses map[string]string) string {
-	return generateJavaGRPCWrapperSurface(method, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers, authAnyUser, authDisabled, accountingMap, servicePackage, parentDir, crossPkgTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses, false)
+	return generateJavaGRPCWrapperSurface(method, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers, authAnyUser, authDisabled, accountingMap, servicePackage, parentDir, crossPkgTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses, false, false)
 }
 
 // generateJavaGRPCWrapperSurface is the wrapper renderer. isC2S is what decides
 // whether the (spec.store_principal) egress row filter is generated: the filter
 // narrows rows to the authenticated USER, which is a statement only the c2s
 // surface can make (see recordprincipal_gen.go).
-func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers string, authAnyUser bool, authDisabled bool, accountingMap map[string]service.AccountingInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer, crossPkgHelpers map[string]string, crossPkgOuterClasses map[string]string, isC2S bool) string {
+//
+// recordPlaneS2S is the ONE way the (spec.store_namespace) seams reach an s2s
+// surface: the peer half of a TENANT-OWNED service's record query plane, where
+// the same four seams are emitted but decide at RUNTIME, per caller, whether to
+// pin — /system peers fleet-wide, /tenants/<t> peers pinned to themselves. It
+// never affects (spec.store_principal), which stays c2s-only: a peer service is
+// not a user. See recordnamespace_gen.go.
+func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers string, authAnyUser bool, authDisabled bool, accountingMap map[string]service.AccountingInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer, crossPkgHelpers map[string]string, crossPkgOuterClasses map[string]string, isC2S bool, recordPlaneS2S bool) string {
 	methodName := strutil.ToCamelCase(strutil.ToSnakeCase(method.Name))
 	// Ensure first letter is lowercase for Java method convention
 	if len(methodName) > 0 {
@@ -1522,9 +1571,9 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		// (spec.store_namespace) runs after the principal filter and over its
 		// output: the tenant boundary is checked on exactly the rows that would
 		// otherwise be assembled into the page.
-		if isC2S {
+		if isC2S || recordPlaneS2S {
 			if nsFilter := javaNamespacePageFilter(san.namespaceField(method.Resolved.PageItemType, servicePackage),
-				itemType, pageSrcExpr, method.Name, "            "); nsFilter != "" {
+				itemType, pageSrcExpr, method.Name, "            ", recordPlaneS2S); nsFilter != "" {
 				pageFilter += nsFilter
 				pageSrcExpr = "__tenantItems"
 			}
@@ -1647,10 +1696,15 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		// (spec.store_principal) on the query predicate: pin it to the caller
 		// before the handler registers the query. Same seam, same doctrine, and
 		// the c2s gate is the same one the egress row filter runs under.
-		if isC2S && !handlerEmpty {
-			rf, pf := san.predicatePrincipalField(method.FullInputType, servicePackage)
-			if g := javaPredicatePrincipalPin(rf, pf, "request", method.Name, "            "); g != "" {
-				inputValidation += "\n" + g
+		if (isC2S || recordPlaneS2S) && !handlerEmpty {
+			// (spec.store_principal) stays c2s-only even on the tenant-owned
+			// s2s plane: a peer service is not a user, and there is no user to
+			// narrow to.
+			if isC2S {
+				rf, pf := san.predicatePrincipalField(method.FullInputType, servicePackage)
+				if g := javaPredicatePrincipalPin(rf, pf, "request", method.Name, "            "); g != "" {
+					inputValidation += "\n" + g
+				}
 			}
 			// (spec.store_namespace) on the same predicate, pinned on the same
 			// seam. It exists because the tenant field became an EQ criterion when
@@ -1658,7 +1712,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			// could set and the egress filter would then ABORT over is a
 			// client-triggerable process halt, so the pin lands with it.
 			nrf, nf := san.predicateNamespaceField(method.FullInputType, servicePackage)
-			if g := javaPredicateNamespacePin(nrf, nf, "request", method.Name, "            "); g != "" {
+			if g := javaPredicateNamespacePin(nrf, nf, "request", method.Name, "            ", recordPlaneS2S); g != "" {
 				inputValidation += "\n" + g
 			}
 		}
@@ -1718,9 +1772,9 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			// process, and having found one aborts. After the principal filter
 			// for the same reason as the page leg.
 			unaryNamespace := ""
-			if isC2S {
+			if isC2S || recordPlaneS2S {
 				unaryNamespace = javaNamespaceUnaryFilter(san.namespaceListFields(method.FullOutputType, servicePackage),
-					outputType, method.Name, "            ")
+					outputType, method.Name, "            ", recordPlaneS2S)
 			}
 			// (spec.record).min_group_size runs first: the refusal is about the
 			// number itself, so it must precede any transformation of the response.
@@ -2188,17 +2242,21 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		// so a filtered stream still ends its snapshot phase.
 		watchPrincipalGuard := ""
 		watchNamespaceGuard := ""
-		if isC2S {
-			watchPrincipalGuard = san.javaPrincipalWatchGuard(method.FullOutputType, servicePackage, "                ")
-			if watchPrincipalGuard != "" {
-				watchPre = javaPrincipalResolve(method.Name, "            ") + watchPre
+		if isC2S || recordPlaneS2S {
+			// As on the predicate seam: the principal guard is a statement about
+			// a user, so it stays c2s-only.
+			if isC2S {
+				watchPrincipalGuard = san.javaPrincipalWatchGuard(method.FullOutputType, servicePackage, "                ")
+				if watchPrincipalGuard != "" {
+					watchPre = javaPrincipalResolve(method.Name, "            ") + watchPre
+				}
 			}
 			// (spec.store_namespace) on a watched stream: same splice, and an
 			// event carrying another tenant's row aborts rather than being
 			// skipped — see recordnamespace_gen.go.
-			watchNamespaceGuard = san.javaNamespaceWatchGuard(method.FullOutputType, servicePackage, method.Name, "                ")
+			watchNamespaceGuard = san.javaNamespaceWatchGuard(method.FullOutputType, servicePackage, method.Name, "                ", recordPlaneS2S)
 			if watchNamespaceGuard != "" {
-				watchPre = javaNamespaceResolve(method.Name, "            ") + watchPre
+				watchPre = javaNamespaceResolve(method.Name, "            ", recordPlaneS2S) + watchPre
 			}
 		}
 		watchDrive := fmt.Sprintf(`%s            final CollectionRuntime.WatchSource<%s, %s> __source = %s;

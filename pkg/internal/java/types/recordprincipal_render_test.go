@@ -89,7 +89,7 @@ func renderRecordPrincipal(m *parser.MethodInfo, isC2S bool) string {
 		"Helpers", "Helpers", false, true,
 		map[string]service.AccountingInfo{}, "query", "vservices",
 		map[string]string{}, proto.SkippedTraceTypes{},
-		recordPrincipalSanitizer(), nil, nil, isC2S,
+		recordPrincipalSanitizer(), nil, nil, isC2S, false,
 	)
 }
 
@@ -291,7 +291,7 @@ func renderPredicatePin(input string, isC2S bool) string {
 		"Helpers", "Helpers", false, true,
 		map[string]service.AccountingInfo{}, "query", "vservices",
 		map[string]string{}, proto.SkippedTraceTypes{},
-		recordPrincipalPredicateSanitizer(), nil, nil, isC2S,
+		recordPrincipalPredicateSanitizer(), nil, nil, isC2S, false,
 	)
 }
 

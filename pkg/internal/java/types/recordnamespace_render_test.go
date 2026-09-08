@@ -64,6 +64,19 @@ func recordNamespaceSanitizer() *javaEgressSanitizer {
 				{Name: "snapshot_item", Type: "AgentEvent", TypePackage: "agentsensor", IsMessage: true, Number: 1},
 				{Name: "delta", Type: "AgentEventWatchChange", TypePackage: "query", IsMessage: true, Number: 2},
 			}},
+			// The PAGE leg's response, and the query predicate the lifecycle's
+			// entry point carries — the other two of the four seams.
+			{Name: "PullAgentEventResponse", Fields: []model.Field{
+				{Name: "items", Type: "AgentEvent", TypePackage: "agentsensor", IsRepeated: true, IsMessage: true, Number: 1},
+			}},
+			{Name: "AgentEventQuery", Fields: []model.Field{
+				{Name: "namespace", Type: "string", Number: 1, Annotations: map[string]model.AnnotationValue{
+					"store_namespace": {Type: model.AnnotationTypeBool, BoolValue: true},
+				}},
+			}},
+			{Name: "CreateAgentEventQueryRequest", Fields: []model.Field{
+				{Name: "query", Type: "AgentEventQuery", TypePackage: "query", IsMessage: true, Number: 1},
+			}},
 		}},
 	})
 }
@@ -74,7 +87,7 @@ func TestJavaNamespaceUnaryFilterHaltsOnMismatch(t *testing.T) {
 	if len(fields) != 1 || fields[0].ItemField != "namespace" {
 		t.Fatalf("the response's record rows must resolve their namespace field, got %+v", fields)
 	}
-	got := javaNamespaceUnaryFilter(fields, "SampleAgentEventResponse", "SampleAgentEvent", "            ")
+	got := javaNamespaceUnaryFilter(fields, "SampleAgentEventResponse", "SampleAgentEvent", "            ", false)
 	for _, want := range []string{
 		"Auth.callerNamespaceFromContext()",
 		"__rowNamespace.equals(__nfb.getItems(__ni).getNamespace())",
@@ -106,7 +119,7 @@ func TestJavaNamespaceFilterSkipsNonRecordRows(t *testing.T) {
 // would stream every delta unchecked.
 func TestJavaNamespaceWatchGuardCoversBothLevels(t *testing.T) {
 	san := recordNamespaceSanitizer()
-	got := san.javaNamespaceWatchGuard("query.AgentEventWatchEvent", "query", "WatchAgentEvent", "                ")
+	got := san.javaNamespaceWatchGuard("query.AgentEventWatchEvent", "query", "WatchAgentEvent", "                ", false)
 	for _, want := range []string{
 		"__event.hasSnapshotItem() && !__rowNamespace.equals(__event.getSnapshotItem().getNamespace())",
 		"__event.hasDelta() && __event.getDelta().hasItem() && !__rowNamespace.equals(__event.getDelta().getItem().getNamespace())",
@@ -192,11 +205,18 @@ func renderNamespaceWrapper(t *testing.T, isC2S bool) string {
 		FullOutputType: "query.SampleAgentEventResponse",
 		AuthDisabled:   true,
 	}
+	return renderNamespaceMethod(t, m, isC2S, false)
+}
+
+// renderNamespaceMethod is the same full-wrapper render for an arbitrary method
+// and either surface. recordPlaneS2S is the tenant-owned s2s runtime gate.
+func renderNamespaceMethod(t *testing.T, m *parser.MethodInfo, isC2S, recordPlaneS2S bool) string {
+	t.Helper()
 	return generateJavaGRPCWrapperSurface(
 		m, "RecordQuery", "query", "Query."+m.InputType, "Query."+m.OutputType,
 		"Helpers", "Helpers", false, true, map[string]service.AccountingInfo{},
 		"query", "vservices", map[string]string{}, proto.SkippedTraceTypes{},
-		recordNamespaceSanitizer(), nil, nil, isC2S,
+		recordNamespaceSanitizer(), nil, nil, isC2S, recordPlaneS2S,
 	)
 }
 
@@ -219,13 +239,52 @@ func TestJavaNamespaceFilterLandsInGeneratedWrapper(t *testing.T) {
 	}
 }
 
-// Paired control: the IDENTICAL method on the s2s surface generates NO namespace
-// filter. The caller there is a peer service authorized through auth_services,
-// and narrowing its reads to its own namespace would break peer aggregation
-// rather than draw a tenant boundary.
+// Paired control, SHARED-SERVICE half: the IDENTICAL method on the s2s surface
+// of a service that is NOT tenant_owned generates NO namespace filter. The
+// caller there is a peer service authorized through auth_services, and
+// narrowing every peer's reads to its own namespace would break the fleet-wide
+// aggregation the plane exists to serve. This is the regression guard for
+// argus/stratum and every other shared reader.
 func TestJavaNamespaceFilterIsC2SOnly(t *testing.T) {
 	got := renderNamespaceWrapper(t, false)
 	if strings.Contains(got, "callerNamespaceFromContext") || strings.Contains(got, "halt(1)") {
-		t.Fatalf("the s2s wrapper must carry no namespace filter\ngot:\n%s", got)
+		t.Fatalf("a shared service's s2s wrapper must carry no namespace filter\ngot:\n%s", got)
+	}
+	if strings.Contains(got, "__nsPinned") {
+		t.Fatalf("a shared service's s2s wrapper must carry no runtime tenant gate\ngot:\n%s", got)
+	}
+	// And it is BYTE-IDENTICAL to the same wrapper rendered with the tenant-owned
+	// gate wired but the service not tenant-owned — the gate is the only input.
+	if same := renderNamespaceMethod(t, &parser.MethodInfo{
+		Name: "SampleAgentEvent", InputType: "SampleAgentEventRequest", OutputType: "SampleAgentEventResponse",
+		FullInputType: "query.SampleAgentEventRequest", FullOutputType: "query.SampleAgentEventResponse",
+		AuthDisabled: true,
+	}, false, false); same != got {
+		t.Fatalf("the shared s2s wrapper must not depend on anything but its own inputs")
+	}
+}
+
+// The tenant-owned half of the same control: the SAME method on the SAME s2s
+// surface, when the service is tenant_owned, DOES carry the seams — under the
+// runtime gate, never unconditionally.
+func TestJavaNamespaceFilterOnTenantOwnedS2S(t *testing.T) {
+	got := renderNamespaceMethod(t, &parser.MethodInfo{
+		Name: "SampleAgentEvent", InputType: "SampleAgentEventRequest", OutputType: "SampleAgentEventResponse",
+		FullInputType: "query.SampleAgentEventRequest", FullOutputType: "query.SampleAgentEventResponse",
+		AuthDisabled: true,
+	}, false, true)
+	for _, want := range []string{
+		"Auth.callerNamespaceFromContext()",
+		`final boolean __nsPinned = !__rowNamespace.startsWith("/system");`,
+		"if (__nsPinned && !__rowNamespace.equals(__nfb.getItems(__ni).getNamespace())) {",
+		"Runtime.getRuntime().halt(1);",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("the tenant-owned s2s wrapper is missing %q\ngot:\n%s", want, got)
+		}
+	}
+	// (spec.store_principal) is about a USER and stays c2s-only even here.
+	if strings.Contains(got, "__rowPrincipal") {
+		t.Fatalf("the tenant-owned s2s wrapper must not gain the per-user principal filter\ngot:\n%s", got)
 	}
 }

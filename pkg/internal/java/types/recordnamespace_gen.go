@@ -33,13 +33,28 @@ import (
 //	    exception would degrade to one failed RPC and be swallowed; the point is
 //	    that the fleet notices. See spec.proto's (spec.store_namespace) doctrine.
 //
-// C2S ONLY, for the same reason the principal filter is. The comparison is
-// against the AUTHENTICATED CALLER's namespace, which is a statement about a
-// user and their tenant. On the s2s half of the same plane the caller is a peer
-// service authorized by identity through auth_services, and narrowing its reads
-// to its own service namespace would not be a tenant boundary — it would break
-// every peer aggregation the record query plane exists to serve. Which rows a
-// PEER may see is the auth_services decision, made before the handler runs.
+// C2S ALWAYS; S2S ONLY FOR A TENANT-OWNED SERVICE, AND THEN ONLY AT RUNTIME.
+// The comparison is against the AUTHENTICATED CALLER's namespace, which on the
+// c2s half is a statement about a user and their tenant. On the s2s half the
+// caller is a peer service authorized by identity through auth_services, and
+// narrowing EVERY peer's reads to its own namespace would not be a tenant
+// boundary — it would break the fleet-wide peer aggregation the record query
+// plane exists to serve.
+//
+// But a tenant-owned service (option (spec.service).tenant_owned) is deployed
+// one instance per tenant and carries a /tenants/<t> service identity, so its
+// s2s record plane has TWO kinds of caller and cannot answer them the same way.
+// The runtime gate below is that distinction, and it is a RUNTIME one because
+// the caller — not the generator — is what differs:
+//
+//	/system peer   -> fleet-wide, exactly the read this plane has always served.
+//	/tenants/<t>   -> the same pin + filters the c2s half applies, with the
+//	                  caller's OWN namespace claim as the pin value. Never a
+//	                  request field and never service config: the tenant comes
+//	                  only from the SPIFFE id in the token.
+//
+// A service that is not tenant_owned emits no gate at all — its s2s wrapper is
+// byte-identical to what it generated before this existed.
 
 // javaNamespaceListField is one repeated record-bearing field of a response,
 // paired with the row field naming the namespace each of its rows belongs to.
@@ -97,8 +112,13 @@ func (es *javaEgressSanitizer) namespaceListFields(fullType, servicePackage stri
 // javaNamespaceResolve renders the local binding the caller's namespace claim.
 // Fail-closed: no verified token, or a token with no namespace claim, is a
 // refusal, not an unbounded read.
-func javaNamespaceResolve(method, indent string) string {
-	return fmt.Sprintf(`%[1]s// (spec.store_namespace): the tenant boundary is the AUTHENTICATED caller's
+//
+// runtimeGate renders the tenant-owned s2s form as well: the same binding, plus
+// __nsPinned, which is what every filter below is guarded on so a /system peer
+// keeps its fleet-wide read. On the c2s half there is nothing to decide at
+// runtime and no __nsPinned is emitted.
+func javaNamespaceResolve(method, indent string, runtimeGate bool) string {
+	out := fmt.Sprintf(`%[1]s// (spec.store_namespace): the tenant boundary is the AUTHENTICATED caller's
 %[1]s// namespace claim, compared for EXACT equality — not the level-or-below rule
 %[1]s// (spec.method_c2s).target_namespace_field uses for administrative reach.
 %[1]s// Fail closed: no verified namespace, no rows.
@@ -107,6 +127,25 @@ func javaNamespaceResolve(method, indent string) string {
 %[1]s    throw new ProtoException(ProtoException.PERMISSION_DENIED, "%[2]s returns rows owned by a namespace and the caller presented no verified namespace claim");
 %[1]s}
 `, indent, method)
+	if runtimeGate {
+		out += fmt.Sprintf(`%[1]s// This is a tenant-owned service's s2s read plane, so WHICH of the two reads
+%[1]s// the caller gets is decided here, per request, by the caller's own identity:
+%[1]s// a /system peer keeps the fleet-wide read this plane has always served; a
+%[1]s// /tenants/<t> peer is pinned to its own tenant and to nothing else.
+%[1]sfinal boolean __nsPinned = !__rowNamespace.startsWith("/system");
+`, indent)
+	}
+	return out
+}
+
+// javaNamespaceGuardExpr is the row comparison the filters branch on: the plain
+// mismatch on the c2s half, and the mismatch AND-ed with the runtime pin on a
+// tenant-owned service's s2s half.
+func javaNamespaceGuardExpr(mismatch string, runtimeGate bool) string {
+	if runtimeGate {
+		return "__nsPinned && " + mismatch
+	}
+	return mismatch
 }
 
 // javaNamespaceCrash renders the halt taken when a foreign row is found. halt,
@@ -121,17 +160,18 @@ func javaNamespaceCrash(method, what, indent string) string {
 
 // javaNamespaceUnaryFilter renders the egress filter over a unary response
 // carrying repeated record rows.
-func javaNamespaceUnaryFilter(fields []javaNamespaceListField, outputType, method, indent string) string {
+func javaNamespaceUnaryFilter(fields []javaNamespaceListField, outputType, method, indent string, runtimeGate bool) string {
 	if len(fields) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(javaNamespaceResolve(method, indent))
+	b.WriteString(javaNamespaceResolve(method, indent, runtimeGate))
 	fmt.Fprintf(&b, "%s%s.Builder __nfb = response.toBuilder();\n", indent, outputType)
 	for _, f := range fields {
 		p := javaPascalField(f.Field)
 		fmt.Fprintf(&b, "%[1]sfor (int __ni = __nfb.get%[2]sCount() - 1; __ni >= 0; __ni--) {\n", indent, p)
-		fmt.Fprintf(&b, "%[1]s    if (!__rowNamespace.equals(__nfb.get%[2]s(__ni).get%[3]s())) {\n", indent, p, javaPascalField(f.ItemField))
+		fmt.Fprintf(&b, "%[1]s    if (%[2]s) {\n", indent,
+			javaNamespaceGuardExpr(fmt.Sprintf("!__rowNamespace.equals(__nfb.get%s(__ni).get%s())", p, javaPascalField(f.ItemField)), runtimeGate))
 		fmt.Fprintf(&b, "%[1]s        __nfb.remove%[2]s(__ni);\n", indent, p)
 		b.WriteString(javaNamespaceCrash(method, "rows in "+f.Field, indent+"        "))
 		fmt.Fprintf(&b, "%s    }\n%s}\n", indent, indent)
@@ -143,16 +183,23 @@ func javaNamespaceUnaryFilter(fields []javaNamespaceListField, outputType, metho
 // javaNamespacePageFilter renders the egress filter over a page of record rows,
 // before the page is sanitized and assembled. srcExpr names the list in scope —
 // the raw page items, or the principal filter's output when that ran first.
-func javaNamespacePageFilter(namespace, itemType, srcExpr, method, indent string) string {
+func javaNamespacePageFilter(namespace, itemType, srcExpr, method, indent string, runtimeGate bool) string {
 	if namespace == "" {
 		return ""
 	}
-	return javaNamespaceResolve(method, indent) +
+	// The keep test, not the drop test, is what carries the runtime gate here:
+	// an unpinned (/system) caller keeps every row, so __tenantItems is still
+	// the list the page is assembled from and nothing downstream changes shape.
+	keep := fmt.Sprintf("__rowNamespace.equals(__nrow.get%s())", javaPascalField(namespace))
+	if runtimeGate {
+		keep = "!__nsPinned || " + keep
+	}
+	return javaNamespaceResolve(method, indent, runtimeGate) +
 		fmt.Sprintf(`%[1]sjava.util.List<%[2]s> __tenantItems = new java.util.ArrayList<>(%[3]s.size());
 %[1]sfor (%[2]s __nrow : %[3]s) {
-%[1]s    if (__rowNamespace.equals(__nrow.get%[4]s())) { __tenantItems.add(__nrow); continue; }
+%[1]s    if (%[4]s) { __tenantItems.add(__nrow); continue; }
 %[5]s%[1]s}
-`, indent, itemType, srcExpr, javaPascalField(namespace), javaNamespaceCrash(method, "page rows", indent+"    "))
+`, indent, itemType, srcExpr, keep, javaNamespaceCrash(method, "page rows", indent+"    "))
 }
 
 // javaNamespaceWatchGuard renders the per-event check spliced into the watch
@@ -160,7 +207,7 @@ func javaNamespacePageFilter(namespace, itemType, srcExpr, method, indent string
 // guard walks two: <T>WatchEvent.snapshot_item is a row, and <T>WatchEvent.delta
 // is a <T>WatchChange whose `item` is one. snapshot_done carries no row and is
 // untouched, so a guarded stream still ends its snapshot phase.
-func (es *javaEgressSanitizer) javaNamespaceWatchGuard(eventType, servicePackage, method, indent string) string {
+func (es *javaEgressSanitizer) javaNamespaceWatchGuard(eventType, servicePackage, method, indent string, runtimeGate bool) string {
 	if es == nil || eventType == "" {
 		return ""
 	}
@@ -178,7 +225,8 @@ func (es *javaEgressSanitizer) javaNamespaceWatchGuard(eventType, servicePackage
 		ft := fieldTypeFQN(f, pkg)
 		p := javaPascalField(f.Name)
 		if ns := es.namespaceField(ft, servicePackage); ns != "" {
-			fmt.Fprintf(&b, "%[1]sif (__event.has%[2]s() && !__rowNamespace.equals(__event.get%[2]s().get%[3]s())) {\n", indent, p, javaPascalField(ns))
+			fmt.Fprintf(&b, "%[1]sif (%[2]s) {\n", indent,
+				javaNamespaceGuardExpr(fmt.Sprintf("__event.has%[1]s() && !__rowNamespace.equals(__event.get%[1]s().get%[2]s())", p, javaPascalField(ns)), runtimeGate))
 			b.WriteString(javaNamespaceCrash(method, "a watch event", indent+"    "))
 			fmt.Fprintf(&b, "%s}\n", indent)
 			continue
@@ -198,8 +246,9 @@ func (es *javaEgressSanitizer) javaNamespaceWatchGuard(eventType, servicePackage
 				continue
 			}
 			np := javaPascalField(nf.Name)
-			fmt.Fprintf(&b, "%[1]sif (__event.has%[2]s() && __event.get%[2]s().has%[3]s() && !__rowNamespace.equals(__event.get%[2]s().get%[3]s().get%[4]s())) {\n",
-				indent, p, np, javaPascalField(ns))
+			fmt.Fprintf(&b, "%[1]sif (%[2]s) {\n", indent,
+				javaNamespaceGuardExpr(fmt.Sprintf("__event.has%[1]s() && __event.get%[1]s().has%[2]s() && !__rowNamespace.equals(__event.get%[1]s().get%[2]s().get%[3]s())",
+					p, np, javaPascalField(ns)), runtimeGate))
 			b.WriteString(javaNamespaceCrash(method, "a watch event", indent+"    "))
 			fmt.Fprintf(&b, "%s}\n", indent)
 		}
@@ -259,12 +308,31 @@ func (es *javaEgressSanitizer) predicateNamespaceField(fullType, servicePackage 
 
 // javaPredicateNamespacePin renders the stamp-or-refuse over the request's query
 // predicate. valueExpr names the request in scope.
-func javaPredicateNamespacePin(reqField, namespace, valueExpr, method, indent string) string {
+func javaPredicateNamespacePin(reqField, namespace, valueExpr, method, indent string, runtimeGate bool) string {
 	if reqField == "" || namespace == "" {
 		return ""
 	}
 	rf := javaPascalField(reqField)
 	nf := javaPascalField(namespace)
+	// The stamp-or-refuse itself is identical on both halves; on a tenant-owned
+	// service's s2s half it is reached only by a /tenants/<t> peer, so a /system
+	// peer's predicate is left exactly as it wrote it and its read stays
+	// fleet-wide.
+	var body, gateOpen, gateClose string
+	pinIndent := indent
+	if runtimeGate {
+		pinIndent = indent + "    "
+		gateOpen = fmt.Sprintf(`%[1]s// A /system peer keeps the fleet-wide read: no pin, predicate untouched.
+%[1]sif (!__queryNamespace.startsWith("/system")) {
+`, indent)
+		gateClose = indent + "}\n"
+	}
+	body = fmt.Sprintf(`%[1]sif (!%[2]s.get%[3]s().has%[4]s() || %[2]s.get%[3]s().get%[4]s().isEmpty()) {
+%[1]s    %[2]s = %[2]s.toBuilder().set%[3]s(%[2]s.get%[3]s().toBuilder().set%[4]s(__queryNamespace)).build();
+%[1]s} else if (!__queryNamespace.equals(%[2]s.get%[3]s().get%[4]s())) {
+%[1]s    throw new ProtoException(ProtoException.INVALID_ARGUMENT, "%[5]s names a tenant other than the caller's; the tenant boundary is not the predicate's to choose");
+%[1]s}
+`, pinIndent, valueExpr, rf, nf, reqField+"."+namespace)
 	return fmt.Sprintf(`%[1]s// (spec.store_namespace) on the query predicate: pin the tenant before the
 %[1]s// store is asked. EXACT match against the caller's namespace claim, never the
 %[1]s// level-or-below containment the administrative rule uses.
@@ -275,10 +343,5 @@ func javaPredicateNamespacePin(reqField, namespace, valueExpr, method, indent st
 %[1]sif (__queryNamespace == null || __queryNamespace.isEmpty()) {
 %[1]s    throw new ProtoException(ProtoException.PERMISSION_DENIED, "%[2]s queries rows held to a tenant and the caller presented no verified namespace claim");
 %[1]s}
-%[1]sif (!%[3]s.get%[4]s().has%[5]s() || %[3]s.get%[4]s().get%[5]s().isEmpty()) {
-%[1]s    %[3]s = %[3]s.toBuilder().set%[4]s(%[3]s.get%[4]s().toBuilder().set%[5]s(__queryNamespace)).build();
-%[1]s} else if (!__queryNamespace.equals(%[3]s.get%[4]s().get%[5]s())) {
-%[1]s    throw new ProtoException(ProtoException.INVALID_ARGUMENT, "%[6]s names a tenant other than the caller's; the tenant boundary is not the predicate's to choose");
-%[1]s}
-`, indent, method, valueExpr, rf, nf, reqField+"."+namespace)
+`, indent, method) + gateOpen + body + gateClose
 }

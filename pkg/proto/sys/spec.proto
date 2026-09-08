@@ -835,6 +835,26 @@ message RecordAnnotation {
   //     s2s_subscribe: {auth_services: ["stratum"]}
   //     s2s_read: {auth_services: ["messaging"]}
   //   };
+  //
+  // CROSS-TENANT DOCTRINE. auth_services is an identity grant, not a namespace
+  // scope: an authorized peer service reads FLEET-WIDE, across every tenant's
+  // rows, same as today. The C2S half of this same plane (spec.c2s_read below)
+  // pins the caller to their own token namespace; the S2S half deliberately does
+  // not, because narrowing a peer's reads to its own service namespace would not
+  // be a tenant boundary — it would break every cross-tenant peer aggregation
+  // this plane exists to serve (see the identical reasoning already written
+  // where it is enforced in code:
+  // pkg/internal/java/types/recordnamespace_gen.go's "C2S ONLY" comment).
+  // Which rows a peer may see is the auth_services decision, made before the
+  // handler runs — there is no second, namespace-shaped decision underneath it.
+  //
+  // This changes for ONE case: a tenant-owned service's own S2S RecordMap reads
+  // (a caller whose token namespace is /tenants/<t>, calling a service declared
+  // (spec.service).tenant_owned) gain the same pin+filters the C2S half already
+  // has — /system/* callers are unaffected and stay fleet-wide. That is separate,
+  // not-yet-generated runtime behavior (tenant-owned-service-identity goal item
+  // 3); until it lands, every S2S reader — tenant-owned service or not — reads
+  // fleet-wide exactly as described above.
   MethodS2SAnnotation s2s_read = 10;
 
   // c2s_read, when present, names the services allowed to RE-EXPOSE this

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -394,7 +395,12 @@ func newDescriptorParser(protoDir string, protoFiles []string) (*DescriptorParse
 	}
 	args = append(args, protoFiles...)
 
-	cmd := exec.Command("protoc", args...)
+	protocPath, err := tactype.ResolveProtocBinary()
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := exec.Command(protocPath, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("protoc failed: %w\n%s", err, string(output))

@@ -931,6 +931,41 @@ func TestNewDescriptorParser_Success(t *testing.T) {
 	}
 }
 
+// TestNewDescriptorParser_HonorsProtocBinaryEnv proves descriptor generation
+// uses the same pinnable protoc resolution as every language generator
+// (tactype.ResolveProtocBinary), instead of always shelling out to whatever
+// "protoc" happens to be first on PATH. Regression for the docmanager
+// incident where a drifted host protoc stamped gencode newer than the
+// pinned protobuf runtime, crash-looping the built service.
+func TestNewDescriptorParser_HonorsProtocBinaryEnv(t *testing.T) {
+	realProtoc, err := findProtoc()
+	if err != nil || realProtoc == "" {
+		t.Skip("protoc not available, skipping descriptor parser test")
+	}
+	dir, _ := writeTestProtoDir(t)
+
+	wrapperDir := t.TempDir()
+	markerPath := filepath.Join(wrapperDir, "invoked")
+	wrapperPath := filepath.Join(wrapperDir, "protoc")
+	script := "#!/bin/sh\ntouch " + markerPath + "\nexec " + realProtoc + " \"$@\"\n"
+	if err := os.WriteFile(wrapperPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write wrapper script: %v", err)
+	}
+
+	t.Setenv("PROTOC_BINARY", wrapperPath)
+
+	parser, err := NewDescriptorParser(dir)
+	if err != nil {
+		t.Fatalf("NewDescriptorParser() error: %v", err)
+	}
+	if parser == nil {
+		t.Fatal("NewDescriptorParser() returned nil parser")
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("PROTOC_BINARY wrapper was not invoked: %v", err)
+	}
+}
+
 func TestNewDescriptorParser_EmptyDirectory(t *testing.T) {
 	skipIfNoProtoc(t)
 	dir := t.TempDir()

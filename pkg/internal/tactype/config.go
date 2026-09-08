@@ -241,17 +241,11 @@ func (c *Config) AutoTlsKeyType() string {
 func (c *Config) ResolveProtocPaths() error {
 	// Find protoc if not specified
 	if c.ProtocPath == "" {
-		// Try environment variable
-		if envPath := os.Getenv("PROTOC_BINARY"); envPath != "" {
-			c.ProtocPath = envPath
-		} else {
-			// Try PATH
-			path, err := exec.LookPath("protoc")
-			if err != nil {
-				return fmt.Errorf("protoc compiler not found in PATH. Please install protoc, set PROTOC_BINARY env var, or specify --protoc-binary flag")
-			}
-			c.ProtocPath = path
+		path, err := ResolveProtocBinary()
+		if err != nil {
+			return err
 		}
+		c.ProtocPath = path
 	}
 
 	// Verify the protoc path exists
@@ -261,6 +255,25 @@ func (c *Config) ResolveProtocPaths() error {
 
 	// Resolve language-specific plugin paths
 	return c.resolveLanguagePlugin()
+}
+
+// ResolveProtocBinary finds the protoc compiler using priority:
+// 1. PROTOC_BINARY environment variable
+// 2. PATH lookup
+//
+// This is the single resolution mechanism callers should use to locate protoc,
+// so that pinning it via PROTOC_BINARY (e.g. to match a service's pinned
+// protobuf.version) takes effect everywhere protoc is invoked, not just in
+// per-language plugin generation.
+func ResolveProtocBinary() (string, error) {
+	if envPath := os.Getenv("PROTOC_BINARY"); envPath != "" {
+		return envPath, nil
+	}
+	path, err := exec.LookPath("protoc")
+	if err != nil {
+		return "", fmt.Errorf("protoc compiler not found in PATH. Please install protoc, set PROTOC_BINARY env var, or specify --protoc-binary flag")
+	}
+	return path, nil
 }
 
 // ServiceLabel returns a short human-readable identifier for this service,

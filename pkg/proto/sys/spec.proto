@@ -2279,6 +2279,16 @@ message ServiceAnnotation {
   // runtime question: this is a proto annotation under VCS and code review, the
   // same trust boundary as (spec.trait) or an entitlement declaration.
   repeated string accepted_audiences = 7;
+  // tenant_owned declares this service as a per-tenant instance: the operator
+  // runs one deployment per tenant, and the service's SPIFFE identity is
+  // spiffe://<td>/tenants/<tenant>/services/<name> instead of the shared
+  // /system/services/<name> every other service gets. Tenant identity comes
+  // ONLY from the caller's token namespace at runtime — this annotation does
+  // not carry a tenant, it only declares that the service is instantiated
+  // per-tenant. Read by the operator (per-tenant Deployments), the gateway
+  // (route by token namespace), and the record-plane store wrapper (tenant
+  // pin on S2S reads). Default false — every service today is shared.
+  bool tenant_owned = 8;
 }
 
 // GrpcConfigAnnotation marks a message as a gRPC service's configuration.

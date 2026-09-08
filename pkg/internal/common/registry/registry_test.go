@@ -750,6 +750,83 @@ service AuthorityService {
 	}
 }
 
+// TestGenerateEmitsTenantOwned proves registry.json carries the tenant_owned
+// declaration from option (spec.service).tenant_owned, the single fact the
+// operator (per-tenant Deployments), the gateway (route by token namespace),
+// and the record-plane store wrapper all read to know a service is
+// per-tenant instead of shared. Default false (omitted) for every other
+// service, matching every other service today.
+func TestGenerateEmitsTenantOwned(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available, skipping descriptor-backed registry test")
+	}
+
+	dir := t.TempDir()
+	sysDir := filepath.Join(dir, "sys")
+	if err := os.MkdirAll(sysDir, 0o755); err != nil {
+		t.Fatalf("mkdir sys: %v", err)
+	}
+	specProto, err := os.ReadFile(filepath.Join("..", "..", "..", "proto", "sys", "spec.proto"))
+	if err != nil {
+		t.Fatalf("read spec.proto: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sysDir, "spec.proto"), specProto, 0o644); err != nil {
+		t.Fatalf("write spec.proto: %v", err)
+	}
+	svcDir := filepath.Join(dir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("mkdir svc: %v", err)
+	}
+	protoText := `syntax = "proto3";
+
+package mytenantsvc;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "mytenantsvc", tenant_owned: true};
+
+message Ping { string m = 1; }
+
+service PingService {
+  option (spec.service_s2s) = {auth_services: ["*"], label: "PingService"};
+  rpc Get(Ping) returns (Ping);
+}
+`
+	if err := os.WriteFile(filepath.Join(svcDir, "ping.proto"), []byte(protoText), 0o644); err != nil {
+		t.Fatalf("write proto: %v", err)
+	}
+
+	dp, err := parser.NewDescriptorParser(dir)
+	if err != nil {
+		t.Fatalf("NewDescriptorParser: %v", err)
+	}
+	out := filepath.Join(dir, "out")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatalf("mkdir out: %v", err)
+	}
+
+	err = Generate(Config{
+		OutputDir: out,
+		InputDir:  dir,
+		Language:  "none",
+	}, []model.ProtoFile{{
+		Package: "mytenantsvc",
+		RelPath: "svc/ping.proto",
+	}}, dp)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(out, "registry.json"))
+	if err != nil {
+		t.Fatalf("read registry.json: %v", err)
+	}
+	registryJSON := string(data)
+	if !regexp.MustCompile(`"tenant_owned":\s*true`).MatchString(registryJSON) {
+		t.Fatalf("registry.json missing tenant_owned: true:\n%s", registryJSON)
+	}
+}
+
 // TestGenerateRegistryIsDeterministic proves registry.json is a function of the
 // semantic inputs only: generating the same proto graph, service identity,
 // language, and version to two different output directories produces

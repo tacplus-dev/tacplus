@@ -572,6 +572,12 @@ message ServiceInfo {
   // tool makes the carrier reachable from outside to serve it. Meaningless
   // unless mcp is true.
   spec.RpcExposure mcp_exposure = 14;
+
+  // tenant_owned mirrors (spec.service).tenant_owned: true when the operator
+  // runs one instance of this service per tenant, identity
+  // spiffe://<td>/tenants/<tenant>/services/<name>. Read by the operator, the
+  // gateway, and the record-plane store wrapper. Default false.
+  bool tenant_owned = 15;
 }
 
 // VServiceInfo describes a file-level virtual service identity.

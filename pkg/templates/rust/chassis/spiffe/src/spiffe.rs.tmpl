@@ -469,7 +469,7 @@ fn classify(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
     if idx_of(&idx, WORKLOADS_SEGMENT) >= 0 {
         p.subject_kind = SubjectKind::Workload;
         classify_system(p, segs)
-    } else if segs[0] == SYSTEM_SEGMENT && idx_of(&idx, SERVICES_SEGMENT) >= 0 {
+    } else if (segs[0] == SYSTEM_SEGMENT || segs[0] == TENANTS_SEGMENT) && idx_of(&idx, SERVICES_SEGMENT) >= 0 {
         p.subject_kind = SubjectKind::Service;
         classify_system(p, segs)
     } else if idx_of(&idx, USERS_SEGMENT) >= 0 {
@@ -488,9 +488,13 @@ fn classify(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
     }
 }
 
+// Handles both service-root shapes: /system/<location...>/services/<svc> (shared
+// services, location-agnostic) and /tenants/<tenant>/services/<svc> (tenant-owned
+// services, one operator-managed instance per tenant). Namespace is everything
+// before "services"; for the tenant root that's exactly "/tenants/<tenant>".
 fn classify_system(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
     let si = index_of(segs, SERVICES_SEGMENT);
-    if segs[0] != SYSTEM_SEGMENT || si < 0 || (si as usize) + 1 >= segs.len() {
+    if (segs[0] != SYSTEM_SEGMENT && segs[0] != TENANTS_SEGMENT) || si < 0 || (si as usize) + 1 >= segs.len() {
         return err(format!("spiffe: malformed system/service identity: /{}", segs.join("/")));
     }
     let si = si as usize;

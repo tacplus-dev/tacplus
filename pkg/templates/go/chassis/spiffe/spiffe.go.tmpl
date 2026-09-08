@@ -10,6 +10,7 @@
 // Identity is a typed, self-describing URI:
 //
 //	spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
+//	spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
 //	spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
 //	spiffe://<trust_domain>/<namespace>/users/<user>
 //	spiffe://<trust_domain>/<namespace>/clients/<client>
@@ -450,7 +451,7 @@ func classify(p *ParsedSpiffeID, segs []string) error {
 	case idx[WorkloadsSegment] >= 0:
 		p.SubjectKind = KindWorkload
 		return classifySystem(p, segs)
-	case segs[0] == SystemSegment && idx[ServicesSegment] >= 0:
+	case (segs[0] == SystemSegment || segs[0] == TenantsSegment) && idx[ServicesSegment] >= 0:
 		p.SubjectKind = KindService
 		return classifySystem(p, segs)
 	case idx[UsersSegment] >= 0:
@@ -469,13 +470,17 @@ func classify(p *ParsedSpiffeID, segs []string) error {
 	}
 }
 
+// classifySystem handles both service-root shapes: /system/<location...>/services/<svc>
+// (shared services, location-agnostic) and /tenants/<tenant>/services/<svc> (tenant-owned
+// services, one operator-managed instance per tenant). Namespace is everything before
+// "services"; for the tenant root that's exactly "/tenants/<tenant>", no location.
 func classifySystem(p *ParsedSpiffeID, segs []string) error {
 	si := indexOf(segs, ServicesSegment)
-	if segs[0] != SystemSegment || si < 0 || si+1 >= len(segs) {
+	if (segs[0] != SystemSegment && segs[0] != TenantsSegment) || si < 0 || si+1 >= len(segs) {
 		return fmt.Errorf("spiffe: malformed system/service identity: /%s", strings.Join(segs, "/"))
 	}
 	p.LocationPath = strings.Join(segs[1:si], "/")
-	p.Namespace = "/" + strings.Join(segs[:si], "/") // /system[/location...]
+	p.Namespace = "/" + strings.Join(segs[:si], "/") // /system[/location...] or /tenants/<tenant>
 	p.SubjectPath = strings.Join(segs[si+1:], "/")    // <service>[/workloads/<child>...]
 	return nil
 }

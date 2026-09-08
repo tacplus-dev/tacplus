@@ -11,6 +11,7 @@ generated code or downstream service should format "spiffe://..." by hand.
 Identity is a typed, self-describing URI:
 
     spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
+    spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
     spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
     spiffe://<trust_domain>/<namespace>/users/<user>
     spiffe://<trust_domain>/<namespace>/clients/<client>
@@ -396,7 +397,7 @@ def _classify(p: ParsedSpiffeId, segs: List[str]) -> None:
     if idx[WORKLOADS_SEGMENT] >= 0:
         p.subject_kind = KIND_WORKLOAD
         _classify_system(p, segs)
-    elif segs[0] == SYSTEM_SEGMENT and idx[SERVICES_SEGMENT] >= 0:
+    elif segs[0] in (SYSTEM_SEGMENT, TENANTS_SEGMENT) and idx[SERVICES_SEGMENT] >= 0:
         p.subject_kind = KIND_SERVICE
         _classify_system(p, segs)
     elif idx[USERS_SEGMENT] >= 0:
@@ -414,8 +415,13 @@ def _classify(p: ParsedSpiffeId, segs: List[str]) -> None:
 
 
 def _classify_system(p: ParsedSpiffeId, segs: List[str]) -> None:
+    # Handles both service-root shapes: /system/<location...>/services/<svc>
+    # (shared services, location-agnostic) and /tenants/<tenant>/services/<svc>
+    # (tenant-owned services, one operator-managed instance per tenant).
+    # Namespace is everything before "services"; for the tenant root that's
+    # exactly "/tenants/<tenant>".
     si = _index_of(segs, SERVICES_SEGMENT)
-    if segs[0] != SYSTEM_SEGMENT or si < 0 or si + 1 >= len(segs):
+    if segs[0] not in (SYSTEM_SEGMENT, TENANTS_SEGMENT) or si < 0 or si + 1 >= len(segs):
         raise ValueError(
             "spiffe: malformed system/service identity: /" + "/".join(segs)
         )

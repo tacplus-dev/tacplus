@@ -10,6 +10,7 @@
 // Identity is a typed, self-describing URI:
 //
 //   spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
+//   spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
 //   spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
 //   spiffe://<trust_domain>/<namespace>/users/<user>
 //   spiffe://<trust_domain>/<namespace>/clients/<client>
@@ -452,7 +453,7 @@ function classify(p: ParsedSpiffeId, segs: string[]): void {
     classifySystem(p, segs);
     return;
   }
-  if (segs[0] === SYSTEM_SEGMENT && idx[SERVICES_SEGMENT] >= 0) {
+  if ((segs[0] === SYSTEM_SEGMENT || segs[0] === TENANTS_SEGMENT) && idx[SERVICES_SEGMENT] >= 0) {
     p.subjectKind = SubjectKind.Service;
     classifySystem(p, segs);
     return;
@@ -478,9 +479,13 @@ function classify(p: ParsedSpiffeId, segs: string[]): void {
   p.namespace = '/' + segs.join('/');
 }
 
+// Handles both service-root shapes: /system/<location...>/services/<svc> (shared
+// services, location-agnostic) and /tenants/<tenant>/services/<svc> (tenant-owned
+// services, one operator-managed instance per tenant). Namespace is everything
+// before "services"; for the tenant root that's exactly "/tenants/<tenant>".
 function classifySystem(p: ParsedSpiffeId, segs: string[]): void {
   const si = indexOf(segs, SERVICES_SEGMENT);
-  if (segs[0] !== SYSTEM_SEGMENT || si < 0 || si + 1 >= segs.length) {
+  if ((segs[0] !== SYSTEM_SEGMENT && segs[0] !== TENANTS_SEGMENT) || si < 0 || si + 1 >= segs.length) {
     throw new Error(`spiffe: malformed system/service identity: /${segs.join('/')}`);
   }
   p.locationPath = segs.slice(1, si).join('/');

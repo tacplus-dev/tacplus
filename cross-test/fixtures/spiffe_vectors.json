@@ -57,6 +57,12 @@
       "subject_path": "mcp/workloads/agent-42"
     },
     {
+      "input": "spiffe://example.com/tenants/acme/services/docmanageragent",
+      "subject_kind": "service",
+      "namespace": "/tenants/acme",
+      "subject_path": "docmanageragent"
+    },
+    {
       "input": "spiffe://example.com/tenants/acme/workspaces/dev/users/jody",
       "subject_kind": "user",
       "namespace": "/tenants/acme/workspaces/dev",
@@ -72,6 +78,7 @@
   "round_trip": [
     "spiffe://example.com/system/aws/us-east-1a/cluster-7/team-a/services/mcp",
     "spiffe://example.com/system/aws/us-east-1a/cluster-7/team-a/services/mcp/workloads/agent-42",
+    "spiffe://example.com/tenants/acme/services/docmanageragent",
     "spiffe://example.com/tenants/acme/workspaces/dev",
     "spiffe://example.com/tenants/acme/workspaces/dev/users/jody",
     "spiffe://example.com/tenants/acme/workspaces/dev/data/gitlab-event/evt-1"

@@ -493,6 +493,7 @@ var sharedRegistryProbes = []struct {
 			"string subject_namespace_source",
 			"string target_namespace_source",
 			"string target_namespace",
+			"string tenant_scope",
 		},
 	},
 	{

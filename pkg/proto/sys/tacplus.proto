@@ -396,6 +396,11 @@ message RpcSurfaceInfo {
   string http_path = 13;
   repeated string http_methods = 14;
   string http_alias_path = 15;
+
+  // tenant_scope for this one surface. Non-empty only on the "s2s" surface of
+  // the record query plane's peer-facing half; see RpcInfo.tenant_scope for the
+  // values and for why the field exists at all.
+  string tenant_scope = 16;
 }
 
 // RpcInfo describes a protobuf RPC in the generated registry.
@@ -503,6 +508,34 @@ message RpcInfo {
   // exposure is the owning ServiceInfo.mcp_exposure. Mutually exclusive with
   // `mcp` — the carrier is the transport, not a tool.
   bool mcp_session_carrier = 53;
+
+  // tenant_scope says whether an authorized caller of this rpc reads every
+  // tenant's rows or only its own. It is emitted ONLY on the S2S record query
+  // plane — the synthesized RecordMap service, whose rpcs carry
+  // (spec.record).s2s_read.auth_services. It is empty everywhere else and says
+  // nothing about those rpcs.
+  //
+  // It exists because subject_namespace_source is misleading on this one
+  // surface. "token.namespace" reads as "the caller's namespace is consulted
+  // uniformly", which here is either never true or only conditionally true:
+  //
+  //   "fleet"         — consulted for nothing. Every authorized caller reads
+  //                     across every tenant's rows, always. That is the
+  //                     deliberate cross-tenant doctrine documented on
+  //                     (spec.record).s2s_read: auth_services is an identity
+  //                     grant, not a namespace scope.
+  //   "caller_pinned" — consulted, as a RUNTIME branch on the CALLER's own
+  //                     token namespace claim: a /system caller stays
+  //                     fleet-wide, a /tenants/<t> caller reads only <t>'s
+  //                     rows. Emitted when the service HOSTING the record plane
+  //                     declares option (spec.service).tenant_owned.
+  //
+  // "caller_pinned" is a property of WHO CALLS, not of the record. No record
+  // declares its own tenant scope and no request field selects one — a scope a
+  // caller could name would not be a tenant boundary. Two callers of the same
+  // rpc over the same record get different row sets under this value; that is
+  // what it is reporting.
+  string tenant_scope = 54;
 }
 
 // EnumInfo describes a top-level protobuf enum definition.

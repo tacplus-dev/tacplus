@@ -123,6 +123,10 @@ Each `RpcInfo` carries:
 - `auth_model` — primary annotated service model (`s2s`, `c2s`, or `c2d`)
 - `target_namespace_field`, `subject_namespace_source`,
   `target_namespace_source`, `target_namespace` — namespace authorization inputs
+- `tenant_scope` — S2S record query plane only: `fleet` (every authorized caller
+  reads across all tenants) or `caller_pinned` (a `/system` caller stays
+  fleet-wide, a `/tenants/<t>` caller reads only `<t>`, decided at runtime from
+  the caller's own token claim). Empty on every other rpc
 - `surfaces` — per-transport auth metadata, including derived W2S rows
 - `category` — legacy accessor/mutator/executor classification
 - `rpc_verb`, `rpc_noun`, `method_pattern`, `access_kind`, `verb_class`,

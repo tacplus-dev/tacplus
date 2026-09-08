@@ -43,7 +43,7 @@ func TestCollectRpcProtosIncludesClassification(t *testing.T) {
 		},
 	}
 
-	got, err := CollectRpcProtos(fds)
+	got, err := CollectRpcProtos(fds, fds)
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestCollectRpcProtosRejectsVerbClassificationFailure(t *testing.T) {
 		},
 	}
 
-	got, err := CollectRpcProtos(fds)
+	got, err := CollectRpcProtos(fds, fds)
 	if err == nil {
 		t.Fatalf("CollectRpcProtos returned %#v, want classification error", got)
 	}
@@ -163,7 +163,7 @@ func TestCollectRpcProtosIncludesVerbStatusForNonFatalFailures(t *testing.T) {
 		},
 	}
 
-	got, err := CollectRpcProtos(fds)
+	got, err := CollectRpcProtos(fds, fds)
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestCollectRpcProtosHardFailsUnclassifiableC2SMethod(t *testing.T) {
 			},
 		},
 	}
-	if _, err := CollectRpcProtos(fds); err == nil {
+	if _, err := CollectRpcProtos(fds, fds); err == nil {
 		t.Fatal("an unclassifiable C2S generated-auth method must fail generation (strict external surface)")
 	}
 }
@@ -271,7 +271,7 @@ func TestCollectRpcProtosIncludesNamespaceAuthMetadata(t *testing.T) {
 		},
 	}
 
-	got, err := CollectRpcProtos(fds)
+	got, err := CollectRpcProtos(fds, fds)
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}
@@ -1374,4 +1374,128 @@ func findPackageNode(root *spec.PackageNode, fullPath string) *spec.PackageNode 
 		}
 	}
 	return nil
+}
+
+// recordPlaneFds is the shape the record query plane really has in a build: the
+// trait's own file (package "query") carries BOTH synthesized services and names
+// the host through (spec.service_*).label, while option (spec.service).tenant_owned
+// lives on the HOST's file, in a different package and a different leaf directory.
+// That split is the whole reason CollectRpcProtos takes the wider graph.
+func recordPlaneFds(hostTenantOwned bool) []*parser.FileDescriptor {
+	readRpcs := []parser.MethodDescriptor{
+		{Name: "CreateWidgetQuery", InputType: "OpenWidgetQueryRequest", OutputType: "QueryHandle", AuthServices: []string{"argus"}},
+		{Name: "ListWidget", InputType: "PullWidgetRequest", OutputType: "PullWidgetResponse", AuthServices: []string{"argus"},
+			Collection: &parser.CollectionDescriptor{Mode: "PAGE", DefaultPageSize: 100, OrderBy: []string{"widget_id"}}},
+	}
+	return []*parser.FileDescriptor{
+		{
+			Package:            "stratum",
+			ServiceTenantOwned: hostTenantOwned,
+			Services: []parser.ServiceDescriptor{
+				{
+					Name:         "StratumAdmin",
+					IsS2S:        true,
+					AuthServices: []string{"argus"},
+					Methods:      []parser.MethodDescriptor{{Name: "GetStratumStatus", InputType: "StatusRequest", OutputType: "StatusResponse"}},
+				},
+			},
+		},
+		{
+			Package: "query",
+			Services: []parser.ServiceDescriptor{
+				{
+					Name:            "RecordMap",
+					IsS2S:           true,
+					AuthServices:    []string{"argus"},
+					Synthesized:     true,
+					SynthesizedKind: parser.SynthesizedKindRecordMap,
+					HostLabel:       "stratum",
+					Methods:         readRpcs,
+				},
+				{
+					Name:              "RecordQuery",
+					IsC2S:             true,
+					AuthEntitledUsers: true,
+					Synthesized:       true,
+					SynthesizedKind:   parser.SynthesizedKindRecordMap,
+					HostLabel:         "stratum",
+					Methods:           readRpcs,
+				},
+			},
+		},
+	}
+}
+
+func rpcByServiceAndName(t *testing.T, rpcs []*spec.RpcInfo, service, name string) *spec.RpcInfo {
+	t.Helper()
+	for _, r := range rpcs {
+		if r.ServiceName == service && r.Rpc == name {
+			return r
+		}
+	}
+	t.Fatalf("no rpc %s/%s in %d collected rpcs", service, name, len(rpcs))
+	return nil
+}
+
+func surfaceByKind(t *testing.T, rpc *spec.RpcInfo, kind string) *spec.RpcSurfaceInfo {
+	t.Helper()
+	for _, s := range rpc.Surfaces {
+		if s.SurfaceKind == kind {
+			return s
+		}
+	}
+	t.Fatalf("rpc %s has no %q surface", rpc.Rpc, kind)
+	return nil
+}
+
+func TestTenantScopeOnRecordPlaneS2SReads(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		hostTenantOwned bool
+		wantRecordMap   string
+	}{
+		{name: "shared host reads fleet-wide", hostTenantOwned: false, wantRecordMap: tenantScopeFleet},
+		{name: "tenant-owned host pins on the caller", hostTenantOwned: true, wantRecordMap: tenantScopeCallerPinned},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fds := recordPlaneFds(tc.hostTenantOwned)
+			rpcs, err := CollectRpcProtos(fds, fds)
+			if err != nil {
+				t.Fatalf("CollectRpcProtos returned error: %v", err)
+			}
+
+			for _, name := range []string{"CreateWidgetQuery", "ListWidget"} {
+				rpc := rpcByServiceAndName(t, rpcs, "RecordMap", name)
+				if rpc.TenantScope != tc.wantRecordMap {
+					t.Fatalf("RecordMap/%s tenant_scope = %q, want %q", name, rpc.TenantScope, tc.wantRecordMap)
+				}
+				if got := surfaceByKind(t, rpc, "s2s").TenantScope; got != tc.wantRecordMap {
+					t.Fatalf("RecordMap/%s s2s surface tenant_scope = %q, want %q", name, got, tc.wantRecordMap)
+				}
+				// The honesty fix is ADDITIVE: the namespace-source fields keep
+				// reporting exactly what they reported before.
+				if rpc.SubjectNamespaceSource != "token.namespace" {
+					t.Fatalf("RecordMap/%s subject_namespace_source = %q, want token.namespace", name, rpc.SubjectNamespaceSource)
+				}
+			}
+
+			// The c2s sibling is the same synthesized plane but not an S2S read
+			// surface: its namespace filter is mandatory and unconditional, so it
+			// has no tenant scope to report. Neither does a hand-authored S2S rpc.
+			c2s := rpcByServiceAndName(t, rpcs, "RecordQuery", "ListWidget")
+			if c2s.TenantScope != "" {
+				t.Fatalf("RecordQuery/ListWidget tenant_scope = %q, want empty", c2s.TenantScope)
+			}
+			if got := surfaceByKind(t, c2s, "c2s").TenantScope; got != "" {
+				t.Fatalf("RecordQuery/ListWidget c2s surface tenant_scope = %q, want empty", got)
+			}
+			plain := rpcByServiceAndName(t, rpcs, "StratumAdmin", "GetStratumStatus")
+			if plain.TenantScope != "" {
+				t.Fatalf("StratumAdmin/GetStratumStatus tenant_scope = %q, want empty", plain.TenantScope)
+			}
+			if plain.SubjectNamespaceSource != "token.namespace" {
+				t.Fatalf("StratumAdmin/GetStratumStatus subject_namespace_source = %q, want token.namespace", plain.SubjectNamespaceSource)
+			}
+		})
+	}
 }

@@ -154,7 +154,7 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 						pn.Types = append(pn.Types, BuildTypeInfoProto(t))
 					}
 				}
-				rpcs, err := CollectRpcProtos(entry.fds)
+				rpcs, err := CollectRpcProtos(entry.fds, allFds)
 				if err != nil {
 					return nil, fmt.Errorf("collecting rpc metadata for %s: %w", node.fullPath, err)
 				}
@@ -1032,10 +1032,18 @@ func RpcCategoryFromVerb(methodName string) spec.RpcCategory {
 }
 
 // CollectRpcProtos collects RpcInfo proto objects from parsed file descriptors.
-func CollectRpcProtos(fds []*parser.FileDescriptor) ([]*spec.RpcInfo, error) {
+//
+// allFds is the whole proto graph, not just fds: tenant_scope on the record
+// query plane depends on option (spec.service).tenant_owned of the service that
+// HOSTS the plane, and the plane is emitted into the TRAIT's file, in a
+// different leaf directory from the host's own proto. Pass fds itself when
+// there is no wider graph.
+func CollectRpcProtos(fds, allFds []*parser.FileDescriptor) ([]*spec.RpcInfo, error) {
+	tenantOwnedPkgs := tenantOwnedPackages(allFds)
 	var rpcs []*spec.RpcInfo
 	for _, fd := range fds {
 		for _, svc := range fd.Services {
+			hostTenantOwned := tenantOwnedPkgs[serviceOwnerPackage(fd, svc)]
 			for _, m := range svc.Methods {
 				// RPC_PRINCIPAL_MCP declares a tool, not a call: the MCP design
 				// (§5) is that tacplus maps an MCP tool to no gRPC RPC at all.
@@ -1098,7 +1106,8 @@ func CollectRpcProtos(fds []*parser.FileDescriptor) ([]*spec.RpcInfo, error) {
 					HttpPath:               m.HttpPath,
 					HttpMethods:            m.HttpMethods,
 					HttpAliasPath:          m.HttpAliasPath,
-					Surfaces:               rpcSurfaceInfos(svc, m, grpcPath, authServices, authDisabled, authAnyUser),
+					TenantScope:            recordPlaneTenantScope(svc, authModel, hostTenantOwned),
+					Surfaces:               rpcSurfaceInfos(svc, m, grpcPath, authServices, authDisabled, authAnyUser, hostTenantOwned),
 					Mcp:                    m.IsMcp,
 					McpToolName:            m.McpToolName,
 					// The session-carrying MCP transport is an ordinary rpc by
@@ -1155,6 +1164,68 @@ func CollectRpcProtos(fds []*parser.FileDescriptor) ([]*spec.RpcInfo, error) {
 	return rpcs, nil
 }
 
+// The two states of RpcInfo.tenant_scope. See the field's comment in
+// pkg/proto/sys/tacplus.proto for what each one promises a fleet auditor; the
+// short version is that "caller_pinned" is a fact about WHO CALLS (a runtime
+// branch on the caller token's own namespace claim), never a scope the record
+// declares or the request selects.
+const (
+	tenantScopeFleet        = "fleet"
+	tenantScopeCallerPinned = "caller_pinned"
+)
+
+// tenantOwnedPackages collects the packages whose owning service declares
+// option (spec.service).tenant_owned. tenant_owned is a FILE-level fact and a
+// package may be declared across several files, so the whole graph is walked
+// and the flag is keyed by the package's leading segment — the same key
+// (spec.service_s2s).label carries.
+func tenantOwnedPackages(fds []*parser.FileDescriptor) map[string]bool {
+	owned := map[string]bool{}
+	for _, fd := range fds {
+		if fd.ServiceTenantOwned {
+			owned[leadingPackageSegment(fd.Package)] = true
+		}
+	}
+	return owned
+}
+
+// serviceOwnerPackage names the service whose tenant_owned decides for svc: the
+// HOST for a hosted surface (a trait's record query plane, a vservice), whose
+// label is exactly the host package name, and the declaring file's own package
+// otherwise. An unknown host resolves to no entry, i.e. not tenant-owned, which
+// is the pre-tenant_owned behavior.
+func serviceOwnerPackage(fd *parser.FileDescriptor, svc parser.ServiceDescriptor) string {
+	if svc.HostLabel != "" {
+		return svc.HostLabel
+	}
+	return leadingPackageSegment(fd.Package)
+}
+
+func leadingPackageSegment(pkg string) string {
+	if idx := strings.Index(pkg, "."); idx > 0 {
+		return pkg[:idx]
+	}
+	return pkg
+}
+
+// recordPlaneTenantScope computes RpcInfo.tenant_scope. Only the S2S half of the
+// synthesized record query plane has a tenant scope worth reporting — that is
+// the one surface whose rpcs carry (spec.record).s2s_read.auth_services, and the
+// one place the generated store wrapper branches on the caller's namespace
+// (pkg/internal/java/types/servicewrapper_gen.go's recordPlaneS2S, which gates
+// on exactly this pair of facts). Every other authenticated rpc keeps
+// subject_namespace_source/target_namespace_source as its whole namespace story
+// and gets "" here.
+func recordPlaneTenantScope(svc parser.ServiceDescriptor, authModel string, hostTenantOwned bool) string {
+	if authModel != "s2s" || svc.SynthesizedKind != parser.SynthesizedKindRecordMap {
+		return ""
+	}
+	if hostTenantOwned {
+		return tenantScopeCallerPinned
+	}
+	return tenantScopeFleet
+}
+
 func namespaceAuthMetadata(authModel string, authDisabled, authAnyUser bool, targetNamespaceField string) (subjectSource, targetSource, fixedTarget string) {
 	if authModel == "" || authModel == "c2d" || authDisabled {
 		return "", "", ""
@@ -1173,7 +1244,7 @@ func namespaceAuthMetadata(authModel string, authDisabled, authAnyUser bool, tar
 	return subjectSource, "request.field", ""
 }
 
-func rpcSurfaceInfos(svc parser.ServiceDescriptor, m parser.MethodDescriptor, grpcPath string, authServices []string, authDisabled, authAnyUser bool) []*spec.RpcSurfaceInfo {
+func rpcSurfaceInfos(svc parser.ServiceDescriptor, m parser.MethodDescriptor, grpcPath string, authServices []string, authDisabled, authAnyUser, hostTenantOwned bool) []*spec.RpcSurfaceInfo {
 	var surfaces []*spec.RpcSurfaceInfo
 	add := func(surfaceKind, transport, authModel string, includeHTTP bool) {
 		subjectNamespaceSource, targetNamespaceSource, targetNamespace := namespaceAuthMetadata(authModel, authDisabled, authAnyUser, m.TargetNamespaceField)
@@ -1189,6 +1260,7 @@ func rpcSurfaceInfos(svc parser.ServiceDescriptor, m parser.MethodDescriptor, gr
 			SubjectNamespaceSource: subjectNamespaceSource,
 			TargetNamespaceSource:  targetNamespaceSource,
 			TargetNamespace:        targetNamespace,
+			TenantScope:            recordPlaneTenantScope(svc, authModel, hostTenantOwned),
 			GrpcPath:               grpcPath,
 		}
 		if includeHTTP {

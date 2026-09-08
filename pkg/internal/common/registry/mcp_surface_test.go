@@ -57,7 +57,7 @@ func mcpSurfaceRpc(t *testing.T, rpcs []*spec.RpcInfo, name string) *spec.RpcInf
 // field that would publish it as a gRPC or REST call. The design is explicit
 // that tacplus maps an MCP tool to no gRPC RPC at all.
 func TestCollectRpcProtosMcpRpcHasNoCallSurface(t *testing.T) {
-	rpcs, err := CollectRpcProtos(mcpSurfaceFds())
+	rpcs, err := CollectRpcProtos(mcpSurfaceFds(), mcpSurfaceFds())
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestCollectRpcProtosMcpRpcHasNoCallSurface(t *testing.T) {
 // mint an entitlement grant — an external grant for something that is not
 // gRPC-callable is the leak this suppression closes.
 func TestCollectEntitlementGrantsSkipsMcpRpc(t *testing.T) {
-	rpcs, err := CollectRpcProtos(mcpSurfaceFds())
+	rpcs, err := CollectRpcProtos(mcpSurfaceFds(), mcpSurfaceFds())
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}

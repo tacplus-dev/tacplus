@@ -12,6 +12,7 @@
 //   spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
 //   spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
 //   spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
+//   spiffe://<trust_domain>/people/<person>/users/<person>
 //   spiffe://<trust_domain>/<namespace>/users/<user>
 //   spiffe://<trust_domain>/<namespace>/clients/<client>
 //   spiffe://<trust_domain>/<namespace>/credentials/<kind>/<id>
@@ -29,6 +30,7 @@ export const SCHEME_VERSION = 'v1';
 // and is rejected as a user-supplied identifier segment at any depth.
 export const SYSTEM_SEGMENT = 'system';
 export const TENANTS_SEGMENT = 'tenants';
+export const PEOPLE_SEGMENT = 'people';
 export const SERVICES_SEGMENT = 'services';
 export const WORKLOADS_SEGMENT = 'workloads';
 export const USERS_SEGMENT = 'users';
@@ -50,6 +52,7 @@ export enum SubjectKind {
 const RESERVED_TAGS: Set<string> = new Set([
   SYSTEM_SEGMENT,
   TENANTS_SEGMENT,
+  PEOPLE_SEGMENT,
   SERVICES_SEGMENT,
   WORKLOADS_SEGMENT,
   USERS_SEGMENT,
@@ -188,9 +191,19 @@ function validateNamespaceSegments(segs: string[]): void {
         }
       }
       break;
+    case PEOPLE_SEGMENT:
+      if (segs.length >= 2 && RESERVED_TAGS.has(segs[1])) {
+        throw new Error(`spiffe: reserved tag "${segs[1]}" cannot be a person id`);
+      }
+      if (segs.length >= 3) {
+        throw new Error(
+          `spiffe: nothing may follow a person id in a namespace, got "${segs[2]}"`,
+        );
+      }
+      break;
     default:
       throw new Error(
-        `spiffe: namespace must start with "${SYSTEM_SEGMENT}" or "${TENANTS_SEGMENT}", got "${segs[0]}"`,
+        `spiffe: namespace must start with "${SYSTEM_SEGMENT}", "${TENANTS_SEGMENT}", or "${PEOPLE_SEGMENT}", got "${segs[0]}"`,
       );
   }
 }
@@ -458,6 +471,10 @@ function classify(p: ParsedSpiffeId, segs: string[]): void {
     classifySystem(p, segs);
     return;
   }
+  if (segs[0] === PEOPLE_SEGMENT && idx[USERS_SEGMENT] >= 0) {
+    classifyPerson(p, segs);
+    return;
+  }
   if (idx[USERS_SEGMENT] >= 0) {
     classifyNamespaced(p, segs, idx[USERS_SEGMENT], SubjectKind.User);
     return;
@@ -491,6 +508,19 @@ function classifySystem(p: ParsedSpiffeId, segs: string[]): void {
   p.locationPath = segs.slice(1, si).join('/');
   p.namespace = '/' + segs.slice(0, si).join('/'); // /system[/location...]
   p.subjectPath = segs.slice(si + 1).join('/'); // <service>[/workloads/<child>...]
+}
+
+// The person root: /people/<person>/users/<person>, the only identity shape rooted
+// at "people". Deliberately tighter than the generic namespaced-user arm: the person
+// id is repeated as the users leaf, and no location segments, no "services" branch,
+// and no further suffix are accepted.
+function classifyPerson(p: ParsedSpiffeId, segs: string[]): void {
+  if (segs.length !== 4 || segs[2] !== USERS_SEGMENT || segs[1] !== segs[3]) {
+    throw new Error(`spiffe: malformed person identity: /${segs.join('/')}`);
+  }
+  p.subjectKind = SubjectKind.User;
+  p.namespace = '/' + PEOPLE_SEGMENT + '/' + segs[1];
+  p.subjectPath = segs[3];
 }
 
 function classifyNamespaced(

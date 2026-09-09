@@ -12,6 +12,7 @@
 //	spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
 //	spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
 //	spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
+//	spiffe://<trust_domain>/people/<person>/users/<person>
 //	spiffe://<trust_domain>/<namespace>/users/<user>
 //	spiffe://<trust_domain>/<namespace>/clients/<client>
 //	spiffe://<trust_domain>/<namespace>/credentials/<kind>/<id>
@@ -43,6 +44,7 @@ const (
 const (
 	SystemSegment      = "system"
 	TenantsSegment     = "tenants"
+	PeopleSegment      = "people"
 	ServicesSegment    = "services"
 	WorkloadsSegment   = "workloads"
 	UsersSegment       = "users"
@@ -65,9 +67,10 @@ const (
 )
 
 var reservedTags = map[string]bool{
-	SystemSegment: true, TenantsSegment: true, ServicesSegment: true,
-	WorkloadsSegment: true, UsersSegment: true, WorkspacesSegment: true,
-	ClientsSegment: true, CredentialsSegment: true, DataSegment: true,
+	SystemSegment: true, TenantsSegment: true, PeopleSegment: true,
+	ServicesSegment: true, WorkloadsSegment: true, UsersSegment: true,
+	WorkspacesSegment: true, ClientsSegment: true, CredentialsSegment: true,
+	DataSegment: true,
 }
 
 // segmentRe is the shared single-segment grammar: {{.Spiffe.SegmentGrammar}}.
@@ -121,9 +124,10 @@ func NormalizeTrustDomain(value string) (string, error) {
 // full URI.
 //
 // Valid shapes: "/" (root); "/system" or "/system/<loc>..."; "/tenants" or
-// "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>...". A reserved tag is
-// rejected as a tenant/location/workspace name, and the workspaces tag is the
-// only structural tag permitted under a tenant.
+// "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/people" or
+// "/people/<person>". A reserved tag is rejected as a tenant/location/workspace/
+// person name, the workspaces tag is the only structural tag permitted under a
+// tenant, and nothing at all may follow a person.
 func NormalizeNamespace(namespace string) (string, error) {
 	ns := strings.TrimSpace(namespace)
 	if ns == "" {
@@ -187,8 +191,15 @@ func validateNamespaceSegments(segs []string) error {
 				}
 			}
 		}
+	case PeopleSegment:
+		if len(segs) >= 2 && reservedTags[segs[1]] {
+			return fmt.Errorf("spiffe: reserved tag %q cannot be a person id", segs[1])
+		}
+		if len(segs) >= 3 {
+			return fmt.Errorf("spiffe: nothing may follow a person id in a namespace, got %q", segs[2])
+		}
 	default:
-		return fmt.Errorf("spiffe: namespace must start with %q or %q, got %q", SystemSegment, TenantsSegment, segs[0])
+		return fmt.Errorf("spiffe: namespace must start with %q, %q, or %q, got %q", SystemSegment, TenantsSegment, PeopleSegment, segs[0])
 	}
 	return nil
 }
@@ -454,6 +465,8 @@ func classify(p *ParsedSpiffeID, segs []string) error {
 	case (segs[0] == SystemSegment || segs[0] == TenantsSegment) && idx[ServicesSegment] >= 0:
 		p.SubjectKind = KindService
 		return classifySystem(p, segs)
+	case segs[0] == PeopleSegment && idx[UsersSegment] >= 0:
+		return classifyPerson(p, segs)
 	case idx[UsersSegment] >= 0:
 		return classifyNamespaced(p, segs, idx[UsersSegment], KindUser)
 	case idx[ClientsSegment] >= 0:
@@ -482,6 +495,20 @@ func classifySystem(p *ParsedSpiffeID, segs []string) error {
 	p.LocationPath = strings.Join(segs[1:si], "/")
 	p.Namespace = "/" + strings.Join(segs[:si], "/") // /system[/location...] or /tenants/<tenant>
 	p.SubjectPath = strings.Join(segs[si+1:], "/")    // <service>[/workloads/<child>...]
+	return nil
+}
+
+// classifyPerson handles the person root: /people/<person>/users/<person>, the only
+// identity shape rooted at "people". It is deliberately tighter than the generic
+// namespaced-user arm: the person id is repeated as the users leaf, and no location
+// segments, no "services" branch, and no further suffix are accepted.
+func classifyPerson(p *ParsedSpiffeID, segs []string) error {
+	if len(segs) != 4 || segs[2] != UsersSegment || segs[1] != segs[3] {
+		return fmt.Errorf("spiffe: malformed person identity: /%s", strings.Join(segs, "/"))
+	}
+	p.SubjectKind = KindUser
+	p.Namespace = "/" + PeopleSegment + "/" + segs[1]
+	p.SubjectPath = segs[3]
 	return nil
 }
 

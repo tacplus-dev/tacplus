@@ -13,6 +13,7 @@ Identity is a typed, self-describing URI:
     spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
     spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
     spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
+    spiffe://<trust_domain>/people/<person>/users/<person>
     spiffe://<trust_domain>/<namespace>/users/<user>
     spiffe://<trust_domain>/<namespace>/clients/<client>
     spiffe://<trust_domain>/<namespace>/credentials/<kind>/<id>
@@ -43,6 +44,7 @@ SCHEME_VERSION = "v1"
 # and is rejected as a user-supplied identifier segment at any depth.
 SYSTEM_SEGMENT = "system"
 TENANTS_SEGMENT = "tenants"
+PEOPLE_SEGMENT = "people"
 SERVICES_SEGMENT = "services"
 WORKLOADS_SEGMENT = "workloads"
 USERS_SEGMENT = "users"
@@ -63,6 +65,7 @@ _RESERVED_TAGS = frozenset(
     {
         SYSTEM_SEGMENT,
         TENANTS_SEGMENT,
+        PEOPLE_SEGMENT,
         SERVICES_SEGMENT,
         WORKLOADS_SEGMENT,
         USERS_SEGMENT,
@@ -131,10 +134,11 @@ def normalize_namespace(namespace: str) -> str:
     full URI.
 
     Valid shapes: "/" (root); "/system" or "/system/<loc>..."; "/tenants" or
-    "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>...". A reserved tag
-    is rejected as a tenant/location/workspace name, and the workspaces tag is
-    the only structural tag permitted under a tenant. Raises ValueError on
-    invalid input.
+    "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/people" or
+    "/people/<person>". A reserved tag is rejected as a tenant/location/
+    workspace/person name, the workspaces tag is the only structural tag
+    permitted under a tenant, and nothing at all may follow a person. Raises
+    ValueError on invalid input.
     """
     ns = namespace.strip()
     if ns == "":
@@ -188,10 +192,18 @@ def _validate_namespace_segments(segs: List[str]) -> None:
                     raise ValueError(
                         f"spiffe: reserved tag {s!r} not allowed as a workspace segment"
                     )
+    elif segs[0] == PEOPLE_SEGMENT:
+        if len(segs) >= 2 and segs[1] in _RESERVED_TAGS:
+            raise ValueError(f"spiffe: reserved tag {segs[1]!r} cannot be a person id")
+        if len(segs) >= 3:
+            raise ValueError(
+                "spiffe: nothing may follow a person id in a namespace, got "
+                f"{segs[2]!r}"
+            )
     else:
         raise ValueError(
-            f"spiffe: namespace must start with {SYSTEM_SEGMENT!r} or "
-            f"{TENANTS_SEGMENT!r}, got {segs[0]!r}"
+            f"spiffe: namespace must start with {SYSTEM_SEGMENT!r}, "
+            f"{TENANTS_SEGMENT!r}, or {PEOPLE_SEGMENT!r}, got {segs[0]!r}"
         )
 
 
@@ -400,6 +412,8 @@ def _classify(p: ParsedSpiffeId, segs: List[str]) -> None:
     elif segs[0] in (SYSTEM_SEGMENT, TENANTS_SEGMENT) and idx[SERVICES_SEGMENT] >= 0:
         p.subject_kind = KIND_SERVICE
         _classify_system(p, segs)
+    elif segs[0] == PEOPLE_SEGMENT and idx[USERS_SEGMENT] >= 0:
+        _classify_person(p, segs)
     elif idx[USERS_SEGMENT] >= 0:
         _classify_namespaced(p, segs, idx[USERS_SEGMENT], KIND_USER)
     elif idx[CLIENTS_SEGMENT] >= 0:
@@ -428,6 +442,18 @@ def _classify_system(p: ParsedSpiffeId, segs: List[str]) -> None:
     p.location_path = "/".join(segs[1:si])
     p.namespace = "/" + "/".join(segs[:si])  # /system[/location...]
     p.subject_path = "/".join(segs[si + 1:])  # <service>[/workloads/<child>...]
+
+
+def _classify_person(p: ParsedSpiffeId, segs: List[str]) -> None:
+    # The person root: /people/<person>/users/<person>, the only identity shape
+    # rooted at "people". Deliberately tighter than the generic namespaced-user
+    # arm: the person id is repeated as the users leaf, and no location segments,
+    # no "services" branch, and no further suffix are accepted.
+    if len(segs) != 4 or segs[2] != USERS_SEGMENT or segs[1] != segs[3]:
+        raise ValueError("spiffe: malformed person identity: /" + "/".join(segs))
+    p.subject_kind = KIND_USER
+    p.namespace = "/" + PEOPLE_SEGMENT + "/" + segs[1]
+    p.subject_path = segs[3]
 
 
 def _classify_namespaced(

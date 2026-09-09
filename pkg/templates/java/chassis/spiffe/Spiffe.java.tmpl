@@ -12,6 +12,7 @@
 //   spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
 //   spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
 //   spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
+//   spiffe://<trust_domain>/people/<person>/users/<person>
 //   spiffe://<trust_domain>/<namespace>/users/<user>
 //   spiffe://<trust_domain>/<namespace>/clients/<client>
 //   spiffe://<trust_domain>/<namespace>/credentials/<kind>/<id>
@@ -55,6 +56,7 @@ public final class Spiffe {
     /** Reserved path tags. Each is a structural separator at its designated position. */
     public static final String SYSTEM_SEGMENT = "system";
     public static final String TENANTS_SEGMENT = "tenants";
+    public static final String PEOPLE_SEGMENT = "people";
     public static final String SERVICES_SEGMENT = "services";
     public static final String WORKLOADS_SEGMENT = "workloads";
     public static final String USERS_SEGMENT = "users";
@@ -90,7 +92,7 @@ public final class Spiffe {
     }
 
     private static final Set<String> RESERVED_TAGS = new LinkedHashSet<>(Arrays.asList(
-            SYSTEM_SEGMENT, TENANTS_SEGMENT, SERVICES_SEGMENT, WORKLOADS_SEGMENT,
+            SYSTEM_SEGMENT, TENANTS_SEGMENT, PEOPLE_SEGMENT, SERVICES_SEGMENT, WORKLOADS_SEGMENT,
             USERS_SEGMENT, WORKSPACES_SEGMENT, CLIENTS_SEGMENT, CREDENTIALS_SEGMENT, DATA_SEGMENT));
 
     // Shared single-segment grammar: {{.Spiffe.SegmentGrammar}}.
@@ -217,9 +219,20 @@ public final class Spiffe {
                     }
                 }
                 break;
+            case PEOPLE_SEGMENT:
+                if (segs.length >= 2 && RESERVED_TAGS.contains(segs[1])) {
+                    throw new IllegalArgumentException(
+                            "spiffe: reserved tag \"" + segs[1] + "\" cannot be a person id");
+                }
+                if (segs.length >= 3) {
+                    throw new IllegalArgumentException(
+                            "spiffe: nothing may follow a person id in a namespace, got \"" + segs[2] + "\"");
+                }
+                break;
             default:
                 throw new IllegalArgumentException("spiffe: namespace must start with \"" + SYSTEM_SEGMENT
-                        + "\" or \"" + TENANTS_SEGMENT + "\", got \"" + segs[0] + "\"");
+                        + "\", \"" + TENANTS_SEGMENT + "\", or \"" + PEOPLE_SEGMENT
+                        + "\", got \"" + segs[0] + "\"");
         }
     }
 
@@ -483,6 +496,8 @@ public final class Spiffe {
                 && idx.get(SERVICES_SEGMENT) >= 0) {
             p.subjectKind = SubjectKind.SERVICE;
             classifySystem(p, segs);
+        } else if (segs.get(0).equals(PEOPLE_SEGMENT) && idx.get(USERS_SEGMENT) >= 0) {
+            classifyPerson(p, segs);
         } else if (idx.get(USERS_SEGMENT) >= 0) {
             classifyNamespaced(p, segs, idx.get(USERS_SEGMENT), SubjectKind.USER);
         } else if (idx.get(CLIENTS_SEGMENT) >= 0) {
@@ -512,6 +527,20 @@ public final class Spiffe {
         p.locationPath = String.join("/", segs.subList(1, si));
         p.namespace = "/" + String.join("/", segs.subList(0, si)); // /system[/location...]
         p.subjectPath = String.join("/", segs.subList(si + 1, segs.size())); // <service>[/workloads/<child>...]
+    }
+
+    // The person root: /people/<person>/users/<person>, the only identity shape rooted
+    // at "people". Deliberately tighter than the generic namespaced-user arm: the person
+    // id is repeated as the users leaf, and no location segments, no "services" branch,
+    // and no further suffix are accepted.
+    private static void classifyPerson(ParsedSpiffeId p, List<String> segs) {
+        if (segs.size() != 4 || !segs.get(2).equals(USERS_SEGMENT) || !segs.get(1).equals(segs.get(3))) {
+            throw new IllegalArgumentException(
+                    "spiffe: malformed person identity: /" + String.join("/", segs));
+        }
+        p.subjectKind = SubjectKind.USER;
+        p.namespace = "/" + PEOPLE_SEGMENT + "/" + segs.get(1);
+        p.subjectPath = segs.get(3);
     }
 
     private static void classifyNamespaced(ParsedSpiffeId p, List<String> segs, int tagIdx, SubjectKind kind) {

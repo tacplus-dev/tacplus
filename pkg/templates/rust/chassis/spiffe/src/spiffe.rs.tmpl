@@ -22,6 +22,7 @@ pub const SCHEME_VERSION: &str = "v1";
 // and is rejected as a user-supplied identifier segment at any depth.
 pub const SYSTEM_SEGMENT: &str = "system";
 pub const TENANTS_SEGMENT: &str = "tenants";
+pub const PEOPLE_SEGMENT: &str = "people";
 pub const SERVICES_SEGMENT: &str = "services";
 pub const WORKLOADS_SEGMENT: &str = "workloads";
 pub const USERS_SEGMENT: &str = "users";
@@ -33,6 +34,7 @@ pub const DATA_SEGMENT: &str = "data";
 const RESERVED_TAGS: &[&str] = &[
     SYSTEM_SEGMENT,
     TENANTS_SEGMENT,
+    PEOPLE_SEGMENT,
     SERVICES_SEGMENT,
     WORKLOADS_SEGMENT,
     USERS_SEGMENT,
@@ -236,10 +238,24 @@ fn validate_namespace_segments(segs: &[&str]) -> Result<()> {
                 }
             }
         }
+        PEOPLE_SEGMENT => {
+            if segs.len() >= 2 && is_reserved_tag(segs[1]) {
+                return err(format!(
+                    "spiffe: reserved tag {:?} cannot be a person id",
+                    segs[1]
+                ));
+            }
+            if segs.len() >= 3 {
+                return err(format!(
+                    "spiffe: nothing may follow a person id in a namespace, got {:?}",
+                    segs[2]
+                ));
+            }
+        }
         other => {
             return err(format!(
-                "spiffe: namespace must start with {:?} or {:?}, got {:?}",
-                SYSTEM_SEGMENT, TENANTS_SEGMENT, other
+                "spiffe: namespace must start with {:?}, {:?}, or {:?}, got {:?}",
+                SYSTEM_SEGMENT, TENANTS_SEGMENT, PEOPLE_SEGMENT, other
             ));
         }
     }
@@ -472,6 +488,8 @@ fn classify(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
     } else if (segs[0] == SYSTEM_SEGMENT || segs[0] == TENANTS_SEGMENT) && idx_of(&idx, SERVICES_SEGMENT) >= 0 {
         p.subject_kind = SubjectKind::Service;
         classify_system(p, segs)
+    } else if segs[0] == PEOPLE_SEGMENT && idx_of(&idx, USERS_SEGMENT) >= 0 {
+        classify_person(p, segs)
     } else if idx_of(&idx, USERS_SEGMENT) >= 0 {
         classify_namespaced(p, segs, idx_of(&idx, USERS_SEGMENT) as usize, SubjectKind::User)
     } else if idx_of(&idx, CLIENTS_SEGMENT) >= 0 {
@@ -501,6 +519,20 @@ fn classify_system(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
     p.location_path = segs[1..si].join("/");
     p.namespace = format!("/{}", segs[..si].join("/")); // /system[/location...]
     p.subject_path = segs[si + 1..].join("/"); // <service>[/workloads/<child>...]
+    Ok(())
+}
+
+// The person root: /people/<person>/users/<person>, the only identity shape rooted
+// at "people". Deliberately tighter than the generic namespaced-user arm: the
+// person id is repeated as the users leaf, and no location segments, no "services"
+// branch, and no further suffix are accepted.
+fn classify_person(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
+    if segs.len() != 4 || segs[2] != USERS_SEGMENT || segs[1] != segs[3] {
+        return err(format!("spiffe: malformed person identity: /{}", segs.join("/")));
+    }
+    p.subject_kind = SubjectKind::User;
+    p.namespace = format!("/{}/{}", PEOPLE_SEGMENT, segs[1]);
+    p.subject_path = segs[3].to_string();
     Ok(())
 }
 

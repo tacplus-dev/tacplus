@@ -11,6 +11,7 @@ const (
 
 	SystemSegment      = "system"
 	TenantsSegment     = "tenants"
+	PeopleSegment      = "people"
 	ServicesSegment    = "services"
 	WorkloadsSegment   = "workloads"
 	UsersSegment       = "users"
@@ -23,6 +24,7 @@ const (
 var ReservedSegments = []string{
 	SystemSegment,
 	TenantsSegment,
+	PeopleSegment,
 	ServicesSegment,
 	WorkloadsSegment,
 	UsersSegment,

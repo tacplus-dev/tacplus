@@ -57,12 +57,35 @@ message MintServiceTokenRequest {
   bool noop = 201;
 }
 
+// AuthBrokerKind classifies what a broker attests when it calls MintUserToken.
+// The kind is not decoration: it selects which proof kernel verifies and which
+// namespace the resulting token may carry.
+enum AuthBrokerKind {
+  AUTH_BROKER_KIND_UNSPECIFIED = 0;
+  // An IdP assertion the broker has already validated (oauth, saml). Kernel
+  // trusts the broker's attestation — today's behaviour, unchanged.
+  AUTH_BROKER_KIND_IDP = 1;
+  // Possession of a personal principal's device key. Kernel verifies the
+  // proof itself; may mint only a /people/<pid> personal token.
+  AUTH_BROKER_KIND_DEVICE = 2;
+  // Control of an email address a tenant authorized.
+  AUTH_BROKER_KIND_EMAIL_LINK = 3;
+  // An admin-issued link accepted on the member's own device.
+  AUTH_BROKER_KIND_PERSONAL_LINK = 4;
+}
+
 // MintUserTokenRequest is the input for user-token minting.
 message MintUserTokenRequest {
   string subject = 1;
   google.protobuf.Struct claims = 2;
   int64 exp = 3;
   bool offline_access = 4;
+  // broker_kind is the class of proof this call presents. Kernel refuses if
+  // the resolved Delegate's auth_broker_kinds does not contain it.
+  AuthBrokerKind broker_kind = 5;
+  // proof_token is the principal-held proof (a device- or link-signed JWT)
+  // that kernel verifies ITSELF. Required for every kind except IDP.
+  string proof_token = 6;
   string trace_id = 200;
   bool noop = 201;
 }

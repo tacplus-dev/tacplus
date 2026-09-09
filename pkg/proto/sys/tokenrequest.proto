@@ -27,6 +27,11 @@ message TokenMintRequest {
   string locality_token = 10;
   string project = 11;
   repeated string service_auds = 12 [(spec.assert_max_size) = 1024];
+  // Which tenant namespace to mint a personal-principal token for. Only meaningful when the
+  // caller's identity is a personal principal (see sys/kernel.proto PersonalPrincipal) with a
+  // live TenantMembership in that namespace; ignored otherwise. Selects among a personal
+  // principal's N per-tenant memberships at mint time.
+  string tenant_namespace = 13;
   string trace_id = 200;
   bool noop = 201;
 }

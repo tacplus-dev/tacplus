@@ -517,24 +517,25 @@ message RpcInfo {
   //
   // It exists because subject_namespace_source is misleading on this one
   // surface. "token.namespace" reads as "the caller's namespace is consulted
-  // uniformly", which here is either never true or only conditionally true:
+  // uniformly", which here is true only conditionally:
   //
-  //   "fleet"         — consulted for nothing. Every authorized caller reads
-  //                     across every tenant's rows, always. That is the
-  //                     deliberate cross-tenant doctrine documented on
-  //                     (spec.record).s2s_read: auth_services is an identity
-  //                     grant, not a namespace scope.
   //   "caller_pinned" — consulted, as a RUNTIME branch on the CALLER's own
   //                     token namespace claim: a /system caller stays
   //                     fleet-wide, a /tenants/<t> caller reads only <t>'s
-  //                     rows. Emitted when the service HOSTING the record plane
-  //                     declares option (spec.service).tenant_owned.
+  //                     rows.
   //
-  // "caller_pinned" is a property of WHO CALLS, not of the record. No record
-  // declares its own tenant scope and no request field selects one — a scope a
-  // caller could name would not be a tenant boundary. Two callers of the same
-  // rpc over the same record get different row sets under this value; that is
-  // what it is reporting.
+  // "caller_pinned" is a property of WHO CALLS, not of the record, and not of
+  // the host. It does NOT depend on the record plane's host declaring
+  // option (spec.service).tenant_owned: a tenant caller reading through a
+  // shared host is pinned just the same, which is the entire point of keying
+  // the boundary on the token rather than on deployment shape. So every rpc on
+  // this plane carries this one value; there is no second value, because there
+  // is no longer an S2S record plane generated without the runtime branch.
+  //
+  // No record declares its own tenant scope and no request field selects one —
+  // a scope a caller could name would not be a tenant boundary. Two callers of
+  // the same rpc over the same record get different row sets under this value;
+  // that is what it is reporting.
   string tenant_scope = 54;
 }
 

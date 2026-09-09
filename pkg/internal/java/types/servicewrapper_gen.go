@@ -49,12 +49,6 @@ type ServiceInfo struct {
 	// (parser.SynthesizedKind*), empty for hand-authored services. See the go
 	// generator's field for why the kind, not just the fact, is what matters.
 	SynthesizedKind string
-	// TenantOwned is option (spec.service).tenant_owned of the service that OWNS
-	// this surface — the host for a trait/vservice surface, the declaring file
-	// otherwise. A tenant-owned service is deployed one instance per tenant and
-	// carries a /tenants/<t> identity, which is the whole input to whether its
-	// s2s record plane gets the runtime tenant pin (recordnamespace_gen.go).
-	TenantOwned bool
 }
 
 // detectServicesForWrapper scans proto files to find service definitions that need wrapper generation.
@@ -67,7 +61,6 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 	}
 
 	var servicesInfo []ServiceInfo
-	tenantOwnedPkgs := map[string]bool{}
 
 	// Check if inputDir has directory-based service protos ({dir}/{name}/{file}.proto).
 	useDirectoryMode := false
@@ -104,19 +97,6 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 		if err != nil {
 			zap.L().Debug("Skipping proto file (no descriptor)", zap.String("path", relPath), zap.Error(err))
 			return nil
-		}
-
-		// option (spec.service).tenant_owned is a FILE-level fact about the
-		// service that owns the package, and the record query plane a trait
-		// emits lands in the TRAIT's file, not the host's. So the flag is
-		// collected per package here and resolved through the host label after
-		// the walk, once every file has been seen.
-		if fileDesc.ServiceTenantOwned {
-			ownerPkg := fileDesc.Package
-			if idx := strings.Index(ownerPkg, "."); idx > 0 {
-				ownerPkg = ownerPkg[:idx]
-			}
-			tenantOwnedPkgs[ownerPkg] = true
 		}
 
 		if len(fileDesc.Services) == 0 {
@@ -246,17 +226,6 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 	})
 	if err != nil {
 		return nil, err
-	}
-
-	// A hosted surface (a trait's record plane, a vservice) is owned by the
-	// service that HOSTS it, so that is whose tenant_owned decides. An unknown
-	// host resolves to false, which is the pre-existing behavior.
-	for i := range servicesInfo {
-		owner := servicesInfo[i].HostLabel
-		if owner == "" {
-			owner = servicesInfo[i].PackageName
-		}
-		servicesInfo[i].TenantOwned = tenantOwnedPkgs[owner]
 	}
 
 	return servicesInfo, nil
@@ -731,13 +700,21 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	// generated MCP self-test's stub can implement the whole interface with the
 	// wrapper's own signatures rather than a second renderer's guess at them.
 	var nonToolHandlerDecls []string
-	// The peer half of a TENANT-OWNED service's record query plane, and only
-	// that. It is the one s2s surface whose caller can be either a /system peer
-	// (fleet-wide, as always) or a per-tenant peer (pinned), so it is the one
-	// s2s surface that carries the (spec.store_namespace) seams under a runtime
-	// gate. Every other s2s wrapper — every surface of a shared service
-	// included — generates exactly what it generated before.
-	recordPlaneS2S := !svc.IsC2S && svc.TenantOwned && svc.SynthesizedKind == parser.SynthesizedKindRecordMap
+	// The peer half of a record query plane, whoever hosts it. It is the one
+	// s2s surface whose caller can be either a /system peer (fleet-wide, as
+	// always) or a per-tenant peer (pinned), so it is the one s2s surface that
+	// carries the (spec.store_namespace) seams under a runtime gate. Every
+	// other s2s wrapper generates exactly what it generated before.
+	//
+	// The host's own option (spec.service).tenant_owned is deliberately NOT a
+	// condition here. The tenant boundary belongs to the CALLER: a
+	// /tenants/<t>/services/<svc> peer reading through a SHARED host must still
+	// be pinned to <t>'s rows. Gating on the host would emit no pin at all on
+	// exactly that path — a fleet-wide read for a tenant caller, backwards from
+	// the boundary this seam exists to enforce. The pin itself is already
+	// caller-keyed at runtime (__nsPinned reads the request's own token claim),
+	// so emitting it unconditionally here costs /system peers nothing.
+	recordPlaneS2S := !svc.IsC2S && svc.SynthesizedKind == parser.SynthesizedKindRecordMap
 
 	// The generated MCP session carrier, when this service has one. It is the
 	// one rpc the wrapper serves without a handler method.
@@ -1305,11 +1282,11 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 // surface can make (see recordprincipal_gen.go).
 //
 // recordPlaneS2S is the ONE way the (spec.store_namespace) seams reach an s2s
-// surface: the peer half of a TENANT-OWNED service's record query plane, where
-// the same four seams are emitted but decide at RUNTIME, per caller, whether to
-// pin — /system peers fleet-wide, /tenants/<t> peers pinned to themselves. It
-// never affects (spec.store_principal), which stays c2s-only: a peer service is
-// not a user. See recordnamespace_gen.go.
+// surface: the peer half of a record query plane, where the same four seams are
+// emitted but decide at RUNTIME, per caller, whether to pin — /system peers
+// fleet-wide, /tenants/<t> peers pinned to themselves. It never affects
+// (spec.store_principal), which stays c2s-only: a peer service is not a user.
+// See recordnamespace_gen.go.
 func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers string, authAnyUser bool, authDisabled bool, accountingMap map[string]service.AccountingInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer, crossPkgHelpers map[string]string, crossPkgOuterClasses map[string]string, isC2S bool, recordPlaneS2S bool) string {
 	methodName := strutil.ToCamelCase(strutil.ToSnakeCase(method.Name))
 	// Ensure first letter is lowercase for Java method convention

@@ -16,6 +16,7 @@ import (
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/verbs"
 	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestCollectRpcProtosIncludesClassification(t *testing.T) {
@@ -43,7 +44,7 @@ func TestCollectRpcProtosIncludesClassification(t *testing.T) {
 		},
 	}
 
-	got, err := CollectRpcProtos(fds, fds)
+	got, err := CollectRpcProtos(fds)
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestCollectRpcProtosRejectsVerbClassificationFailure(t *testing.T) {
 		},
 	}
 
-	got, err := CollectRpcProtos(fds, fds)
+	got, err := CollectRpcProtos(fds)
 	if err == nil {
 		t.Fatalf("CollectRpcProtos returned %#v, want classification error", got)
 	}
@@ -163,7 +164,7 @@ func TestCollectRpcProtosIncludesVerbStatusForNonFatalFailures(t *testing.T) {
 		},
 	}
 
-	got, err := CollectRpcProtos(fds, fds)
+	got, err := CollectRpcProtos(fds)
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}
@@ -210,7 +211,7 @@ func TestCollectRpcProtosHardFailsUnclassifiableC2SMethod(t *testing.T) {
 			},
 		},
 	}
-	if _, err := CollectRpcProtos(fds, fds); err == nil {
+	if _, err := CollectRpcProtos(fds); err == nil {
 		t.Fatal("an unclassifiable C2S generated-auth method must fail generation (strict external surface)")
 	}
 }
@@ -271,7 +272,7 @@ func TestCollectRpcProtosIncludesNamespaceAuthMetadata(t *testing.T) {
 		},
 	}
 
-	got, err := CollectRpcProtos(fds, fds)
+	got, err := CollectRpcProtos(fds)
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}
@@ -1380,7 +1381,8 @@ func findPackageNode(root *spec.PackageNode, fullPath string) *spec.PackageNode 
 // trait's own file (package "query") carries BOTH synthesized services and names
 // the host through (spec.service_*).label, while option (spec.service).tenant_owned
 // lives on the HOST's file, in a different package and a different leaf directory.
-// That split is the whole reason CollectRpcProtos takes the wider graph.
+// The host's flag is still varied across these cases, to prove tenant_scope no
+// longer depends on it.
 func recordPlaneFds(hostTenantOwned bool) []*parser.FileDescriptor {
 	readRpcs := []parser.MethodDescriptor{
 		{Name: "CreateWidgetQuery", InputType: "OpenWidgetQueryRequest", OutputType: "QueryHandle", AuthServices: []string{"argus"}},
@@ -1448,29 +1450,36 @@ func surfaceByKind(t *testing.T, rpc *spec.RpcInfo, kind string) *spec.RpcSurfac
 	return nil
 }
 
+// tenant_scope reports the s2s record plane as caller_pinned, and does so
+// WHETHER OR NOT the plane's host is tenant_owned.
+//
+// The host-keyed version of this gate reported "fleet" for a shared host, which
+// matched a generator that emitted no pin there at all. Both halves were wrong
+// the same way: the tenant boundary is the CALLER's token namespace, so a
+// /tenants/<t> peer reading through shared stratum is pinned like any other, and
+// the registry has to report the plane the way the wrapper actually generates it.
 func TestTenantScopeOnRecordPlaneS2SReads(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
 		hostTenantOwned bool
-		wantRecordMap   string
 	}{
-		{name: "shared host reads fleet-wide", hostTenantOwned: false, wantRecordMap: tenantScopeFleet},
-		{name: "tenant-owned host pins on the caller", hostTenantOwned: true, wantRecordMap: tenantScopeCallerPinned},
+		{name: "shared host still pins on the caller", hostTenantOwned: false},
+		{name: "tenant-owned host pins on the caller", hostTenantOwned: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fds := recordPlaneFds(tc.hostTenantOwned)
-			rpcs, err := CollectRpcProtos(fds, fds)
+			rpcs, err := CollectRpcProtos(fds)
 			if err != nil {
 				t.Fatalf("CollectRpcProtos returned error: %v", err)
 			}
 
 			for _, name := range []string{"CreateWidgetQuery", "ListWidget"} {
 				rpc := rpcByServiceAndName(t, rpcs, "RecordMap", name)
-				if rpc.TenantScope != tc.wantRecordMap {
-					t.Fatalf("RecordMap/%s tenant_scope = %q, want %q", name, rpc.TenantScope, tc.wantRecordMap)
+				if rpc.TenantScope != tenantScopeCallerPinned {
+					t.Fatalf("RecordMap/%s tenant_scope = %q, want %q", name, rpc.TenantScope, tenantScopeCallerPinned)
 				}
-				if got := surfaceByKind(t, rpc, "s2s").TenantScope; got != tc.wantRecordMap {
-					t.Fatalf("RecordMap/%s s2s surface tenant_scope = %q, want %q", name, got, tc.wantRecordMap)
+				if got := surfaceByKind(t, rpc, "s2s").TenantScope; got != tenantScopeCallerPinned {
+					t.Fatalf("RecordMap/%s s2s surface tenant_scope = %q, want %q", name, got, tenantScopeCallerPinned)
 				}
 				// The honesty fix is ADDITIVE: the namespace-source fields keep
 				// reporting exactly what they reported before.
@@ -1497,5 +1506,29 @@ func TestTenantScopeOnRecordPlaneS2SReads(t *testing.T) {
 				t.Fatalf("StratumAdmin/GetStratumStatus subject_namespace_source = %q, want token.namespace", plain.SubjectNamespaceSource)
 			}
 		})
+	}
+}
+
+// The two host shapes are not merely both caller_pinned — they produce a
+// BYTE-IDENTICAL registry. The host's tenant_owned is no longer an input to any
+// rpc-level field, so nothing downstream can key a tenant boundary on deployment
+// shape by reading this file.
+func TestTenantScopeIgnoresHostTenantOwned(t *testing.T) {
+	shared, err := CollectRpcProtos(recordPlaneFds(false))
+	if err != nil {
+		t.Fatalf("CollectRpcProtos(shared host) returned error: %v", err)
+	}
+	owned, err := CollectRpcProtos(recordPlaneFds(true))
+	if err != nil {
+		t.Fatalf("CollectRpcProtos(tenant-owned host) returned error: %v", err)
+	}
+	if len(shared) != len(owned) {
+		t.Fatalf("rpc counts differ: shared %d, tenant-owned %d", len(shared), len(owned))
+	}
+	for i := range shared {
+		if !proto.Equal(shared[i], owned[i]) {
+			t.Fatalf("rpc %s/%s differs on host tenant_owned:\n shared: %v\n  owned: %v",
+				shared[i].ServiceName, shared[i].Rpc, shared[i], owned[i])
+		}
 	}
 }

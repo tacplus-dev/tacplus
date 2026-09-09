@@ -57,7 +57,7 @@ func mcpCarrierControlFds() []*parser.FileDescriptor {
 // The carrier is marked as the transport — not as a tool — and carries the real
 // frame message types the injected declaration names.
 func TestCollectRpcProtosMarksMcpSessionCarrier(t *testing.T) {
-	rpcs, err := CollectRpcProtos(mcpCarrierFds(), mcpCarrierFds())
+	rpcs, err := CollectRpcProtos(mcpCarrierFds())
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestCollectRpcProtosMarksMcpSessionCarrier(t *testing.T) {
 // declared rpc of its service does. This is exactly what the tools it serves do
 // NOT get, and the difference is the reason the carrier exists.
 func TestCollectRpcProtosMcpCarrierHasCallSurface(t *testing.T) {
-	rpcs, err := CollectRpcProtos(mcpCarrierFds(), mcpCarrierFds())
+	rpcs, err := CollectRpcProtos(mcpCarrierFds())
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestCollectRpcProtosMcpCarrierHasCallSurface(t *testing.T) {
 // The carrier mints an entitlement grant like any other c2s rpc. Without one
 // nothing authorizes the single channel every MCP tool call arrives on.
 func TestCollectEntitlementGrantsIncludesMcpCarrier(t *testing.T) {
-	rpcs, err := CollectRpcProtos(mcpCarrierFds(), mcpCarrierFds())
+	rpcs, err := CollectRpcProtos(mcpCarrierFds())
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestCollectEntitlementGrantsIncludesMcpCarrier(t *testing.T) {
 // The carrier is a consequence of an RPC_PRINCIPAL_MCP rpc and nothing else: a
 // service with no MCP rpc is never injected into, so no carrier reaches here.
 func TestCollectRpcProtosNoCarrierWithoutMcpRpcs(t *testing.T) {
-	rpcs, err := CollectRpcProtos(mcpCarrierControlFds(), mcpCarrierControlFds())
+	rpcs, err := CollectRpcProtos(mcpCarrierControlFds())
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestCollectRpcProtosNoCarrierWithoutMcpRpcs(t *testing.T) {
 
 // The carrier groups onto the service that hosts it, alongside its tools.
 func TestRpcInfosForServiceIncludesCarrier(t *testing.T) {
-	rpcs, err := CollectRpcProtos(mcpCarrierFds(), mcpCarrierFds())
+	rpcs, err := CollectRpcProtos(mcpCarrierFds())
 	if err != nil {
 		t.Fatalf("CollectRpcProtos returned error: %v", err)
 	}

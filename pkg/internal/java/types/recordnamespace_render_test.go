@@ -209,7 +209,7 @@ func renderNamespaceWrapper(t *testing.T, isC2S bool) string {
 }
 
 // renderNamespaceMethod is the same full-wrapper render for an arbitrary method
-// and either surface. recordPlaneS2S is the tenant-owned s2s runtime gate.
+// and either surface. recordPlaneS2S is the s2s record-plane runtime gate.
 func renderNamespaceMethod(t *testing.T, m *parser.MethodInfo, isC2S, recordPlaneS2S bool) string {
 	t.Helper()
 	return generateJavaGRPCWrapperSurface(
@@ -239,35 +239,31 @@ func TestJavaNamespaceFilterLandsInGeneratedWrapper(t *testing.T) {
 	}
 }
 
-// Paired control, SHARED-SERVICE half: the IDENTICAL method on the s2s surface
-// of a service that is NOT tenant_owned generates NO namespace filter. The
-// caller there is a peer service authorized through auth_services, and
-// narrowing every peer's reads to its own namespace would break the fleet-wide
-// aggregation the plane exists to serve. This is the regression guard for
-// argus/stratum and every other shared reader.
+// Paired control, NON-RECORD half: the IDENTICAL method on an s2s surface that
+// is NOT a synthesized record query plane generates NO namespace filter. The
+// (spec.store_namespace) seams belong to the record plane alone; a hand-authored
+// s2s service is not one, and its wrapper must be byte-for-byte what it always
+// was. This is the regression guard that the gate widening below did not leak
+// into every other s2s surface in the fleet.
 func TestJavaNamespaceFilterIsC2SOnly(t *testing.T) {
 	got := renderNamespaceWrapper(t, false)
 	if strings.Contains(got, "callerNamespaceFromContext") || strings.Contains(got, "halt(1)") {
-		t.Fatalf("a shared service's s2s wrapper must carry no namespace filter\ngot:\n%s", got)
+		t.Fatalf("a non-record s2s wrapper must carry no namespace filter\ngot:\n%s", got)
 	}
 	if strings.Contains(got, "__nsPinned") {
-		t.Fatalf("a shared service's s2s wrapper must carry no runtime tenant gate\ngot:\n%s", got)
-	}
-	// And it is BYTE-IDENTICAL to the same wrapper rendered with the tenant-owned
-	// gate wired but the service not tenant-owned — the gate is the only input.
-	if same := renderNamespaceMethod(t, &parser.MethodInfo{
-		Name: "SampleAgentEvent", InputType: "SampleAgentEventRequest", OutputType: "SampleAgentEventResponse",
-		FullInputType: "query.SampleAgentEventRequest", FullOutputType: "query.SampleAgentEventResponse",
-		AuthDisabled: true,
-	}, false, false); same != got {
-		t.Fatalf("the shared s2s wrapper must not depend on anything but its own inputs")
+		t.Fatalf("a non-record s2s wrapper must carry no runtime tenant gate\ngot:\n%s", got)
 	}
 }
 
-// The tenant-owned half of the same control: the SAME method on the SAME s2s
-// surface, when the service is tenant_owned, DOES carry the seams — under the
-// runtime gate, never unconditionally.
-func TestJavaNamespaceFilterOnTenantOwnedS2S(t *testing.T) {
+// The record-plane half of the same control: the SAME method on the SAME s2s
+// surface, when that surface IS the synthesized record query plane, carries the
+// seams — under the runtime gate, never unconditionally.
+//
+// The host's own (spec.service).tenant_owned is NOT an input here, which is the
+// point of this test's name change: the boundary is the CALLER's namespace, read
+// per request, so the pin is emitted on every s2s record plane and a /system
+// peer is let through at runtime rather than at generation time.
+func TestJavaNamespaceFilterOnS2SRecordPlane(t *testing.T) {
 	got := renderNamespaceMethod(t, &parser.MethodInfo{
 		Name: "SampleAgentEvent", InputType: "SampleAgentEventRequest", OutputType: "SampleAgentEventResponse",
 		FullInputType: "query.SampleAgentEventRequest", FullOutputType: "query.SampleAgentEventResponse",
@@ -275,16 +271,62 @@ func TestJavaNamespaceFilterOnTenantOwnedS2S(t *testing.T) {
 	}, false, true)
 	for _, want := range []string{
 		"Auth.callerNamespaceFromContext()",
-		`final boolean __nsPinned = !__rowNamespace.startsWith("/system");`,
+		javaNsPinnedDecl,
 		"if (__nsPinned && !__rowNamespace.equals(__nfb.getItems(__ni).getNamespace())) {",
 		"Runtime.getRuntime().halt(1);",
 	} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("the tenant-owned s2s wrapper is missing %q\ngot:\n%s", want, got)
+			t.Fatalf("the s2s record-plane wrapper is missing %q\ngot:\n%s", want, got)
 		}
 	}
 	// (spec.store_principal) is about a USER and stays c2s-only even here.
 	if strings.Contains(got, "__rowPrincipal") {
-		t.Fatalf("the tenant-owned s2s wrapper must not gain the per-user principal filter\ngot:\n%s", got)
+		t.Fatalf("the s2s record-plane wrapper must not gain the per-user principal filter\ngot:\n%s", got)
+	}
+}
+
+// javaNsPinnedDecl is the generated runtime pin, quoted once so the tests below
+// agree with the renderer on the exact predicate they reason about.
+const javaNsPinnedDecl = `final boolean __nsPinned = !__rowNamespace.startsWith("/system");`
+
+// The security case the host-keyed gate got backwards, and the reason it was
+// dropped: a TENANT-OWNED CALLER reading through a SHARED, non-tenant-owned HOST
+// must still be pinned to its own tenant.
+//
+// The old gate keyed on the host, so this path generated NO pin at all and a
+// /tenants/<t> peer got a fleet-wide read of every tenant's rows. The renderer
+// has no host input left to pass, so the guard is that the pin is present on the
+// s2s record plane unconditionally, and that the predicate it emits classifies
+// callers the right way round.
+//
+// The predicate is Java, so it is not executed here; it is a single
+// startsWith, and this evaluates that same rule in Go against the namespace
+// grammar spiffe.go classifies, to state in a test what the generated branch
+// means for each kind of caller.
+func TestJavaNamespacePinIsCallerKeyedNotHostKeyed(t *testing.T) {
+	got := renderNamespaceMethod(t, &parser.MethodInfo{
+		Name: "SampleAgentEvent", InputType: "SampleAgentEventRequest", OutputType: "SampleAgentEventResponse",
+		FullInputType: "query.SampleAgentEventRequest", FullOutputType: "query.SampleAgentEventResponse",
+		AuthDisabled: true,
+	}, false, true)
+	if !strings.Contains(got, javaNsPinnedDecl) {
+		t.Fatalf("the s2s record plane must pin on the caller whoever hosts it\ngot:\n%s", got)
+	}
+
+	for _, tc := range []struct {
+		caller    string
+		wantPinne bool
+		why       string
+	}{
+		{"/system", false, "the fleet's own control plane keeps its fleet-wide read"},
+		{"/system/services/argus", false, "a /system peer is fleet-wide however deep its path"},
+		{"/tenants/acme/services/docmanager", true, "a tenant-owned caller is pinned even through a shared host"},
+		{"/tenants/beta/services/docmanager", true, "and so is the second tenant, to its own rows"},
+		{"/tenants/acme", true, "a bare tenant identity is pinned too"},
+	} {
+		// The generated Java, evaluated as Go: !ns.startsWith("/system").
+		if pinned := !strings.HasPrefix(tc.caller, "/system"); pinned != tc.wantPinne {
+			t.Fatalf("caller %q: __nsPinned = %v, want %v (%s)", tc.caller, pinned, tc.wantPinne, tc.why)
+		}
 	}
 }

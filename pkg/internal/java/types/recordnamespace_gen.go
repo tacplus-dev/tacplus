@@ -33,7 +33,7 @@ import (
 //	    exception would degrade to one failed RPC and be swallowed; the point is
 //	    that the fleet notices. See spec.proto's (spec.store_namespace) doctrine.
 //
-// C2S ALWAYS; S2S ONLY FOR A TENANT-OWNED SERVICE, AND THEN ONLY AT RUNTIME.
+// C2S ALWAYS; S2S ON THE RECORD PLANE, AND THERE ONLY AT RUNTIME.
 // The comparison is against the AUTHENTICATED CALLER's namespace, which on the
 // c2s half is a statement about a user and their tenant. On the s2s half the
 // caller is a peer service authorized by identity through auth_services, and
@@ -42,10 +42,10 @@ import (
 // plane exists to serve.
 //
 // But a tenant-owned service (option (spec.service).tenant_owned) is deployed
-// one instance per tenant and carries a /tenants/<t> service identity, so its
+// one instance per tenant and carries a /tenants/<t> service identity, so the
 // s2s record plane has TWO kinds of caller and cannot answer them the same way.
 // The runtime gate below is that distinction, and it is a RUNTIME one because
-// the caller — not the generator — is what differs:
+// the CALLER — not the generator — is what differs:
 //
 //	/system peer   -> fleet-wide, exactly the read this plane has always served.
 //	/tenants/<t>   -> the same pin + filters the c2s half applies, with the
@@ -53,8 +53,14 @@ import (
 //	                  request field and never service config: the tenant comes
 //	                  only from the SPIFFE id in the token.
 //
-// A service that is not tenant_owned emits no gate at all — its s2s wrapper is
-// byte-identical to what it generated before this existed.
+// The HOST's own tenant_owned is not consulted. Whether the caller is a tenant
+// is a fact about the caller's token, so a /tenants/<t> peer reading through a
+// SHARED host must be pinned exactly as it would be through a tenant-owned one;
+// keying the gate on the host emitted no pin on that path and handed a tenant
+// caller a fleet-wide read. So every s2s record plane carries the gate, and it
+// is the runtime branch — not the presence of the code — that keeps /system
+// peers fleet-wide. Surfaces that are not the record plane emit nothing and
+// stay byte-identical to what they generated before this existed.
 
 // javaNamespaceListField is one repeated record-bearing field of a response,
 // paired with the row field naming the namespace each of its rows belongs to.
@@ -113,7 +119,7 @@ func (es *javaEgressSanitizer) namespaceListFields(fullType, servicePackage stri
 // Fail-closed: no verified token, or a token with no namespace claim, is a
 // refusal, not an unbounded read.
 //
-// runtimeGate renders the tenant-owned s2s form as well: the same binding, plus
+// runtimeGate renders the s2s record-plane form as well: the same binding, plus
 // __nsPinned, which is what every filter below is guarded on so a /system peer
 // keeps its fleet-wide read. On the c2s half there is nothing to decide at
 // runtime and no __nsPinned is emitted.
@@ -128,10 +134,11 @@ func javaNamespaceResolve(method, indent string, runtimeGate bool) string {
 %[1]s}
 `, indent, method)
 	if runtimeGate {
-		out += fmt.Sprintf(`%[1]s// This is a tenant-owned service's s2s read plane, so WHICH of the two reads
-%[1]s// the caller gets is decided here, per request, by the caller's own identity:
-%[1]s// a /system peer keeps the fleet-wide read this plane has always served; a
-%[1]s// /tenants/<t> peer is pinned to its own tenant and to nothing else.
+		out += fmt.Sprintf(`%[1]s// This is the s2s record read plane, so WHICH of the two reads the caller gets
+%[1]s// is decided here, per request, by the caller's own identity — never by which
+%[1]s// service hosts the plane: a /system peer keeps the fleet-wide read this plane
+%[1]s// has always served; a /tenants/<t> peer is pinned to its own tenant and to
+%[1]s// nothing else.
 %[1]sfinal boolean __nsPinned = !__rowNamespace.startsWith("/system");
 `, indent)
 	}
@@ -139,8 +146,8 @@ func javaNamespaceResolve(method, indent string, runtimeGate bool) string {
 }
 
 // javaNamespaceGuardExpr is the row comparison the filters branch on: the plain
-// mismatch on the c2s half, and the mismatch AND-ed with the runtime pin on a
-// tenant-owned service's s2s half.
+// mismatch on the c2s half, and the mismatch AND-ed with the runtime pin on the
+// s2s record plane's half.
 func javaNamespaceGuardExpr(mismatch string, runtimeGate bool) string {
 	if runtimeGate {
 		return "__nsPinned && " + mismatch
@@ -314,10 +321,9 @@ func javaPredicateNamespacePin(reqField, namespace, valueExpr, method, indent st
 	}
 	rf := javaPascalField(reqField)
 	nf := javaPascalField(namespace)
-	// The stamp-or-refuse itself is identical on both halves; on a tenant-owned
-	// service's s2s half it is reached only by a /tenants/<t> peer, so a /system
-	// peer's predicate is left exactly as it wrote it and its read stays
-	// fleet-wide.
+	// The stamp-or-refuse itself is identical on both halves; on the s2s record
+	// plane it is reached only by a /tenants/<t> peer, so a /system peer's
+	// predicate is left exactly as it wrote it and its read stays fleet-wide.
 	var body, gateOpen, gateClose string
 	pinIndent := indent
 	if runtimeGate {

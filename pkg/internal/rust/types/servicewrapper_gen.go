@@ -551,12 +551,13 @@ func rustWatchTypes(method *parser.MethodInfo, servicePkg string, crossPkgTypes 
 		resolveOneRustTypeQualified(changeSimple, method.Resolved.WatchChangeType, servicePkg, crossPkgTypes)
 }
 
-func rustOneofEnumPath(outputType, outputProtoType string) string {
+func rustOneofEnumPath(outputType, outputProtoType, oneofName string) string {
 	module := prostSnakeName(outputProtoType)
+	enumName := strutil.ToCamelCase(oneofName)
 	if i := strings.LastIndex(outputType, "::"); i >= 0 {
-		return outputType[:i+2] + module + "::Event"
+		return outputType[:i+2] + module + "::" + enumName
 	}
-	return module + "::Event"
+	return module + "::" + enumName
 }
 
 // ResponseStream is the boxed stream type used for server-side streaming responses.
@@ -1284,7 +1285,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 			// WATCH collection: handler returns WatchSource, wrapper emits the
 			// {Method}WatchEvent envelope and drives the shared replay hub.
 			itemType, changeType := rustWatchTypes(method, servicePackage, crossPkgTypes)
-			oneofPath := rustOneofEnumPath(outputType, method.OutputType)
+			oneofPath := rustOneofEnumPath(outputType, method.OutputType, method.Resolved.WatchOneOf)
 			fieldName := methodSnakeNameLower(method.Name) + "_watch_hub"
 			handlerCall := fmt.Sprintf("self.handler.%s(caller.as_ref(), req_msg).await", methodSnake)
 			if handlerEmpty {

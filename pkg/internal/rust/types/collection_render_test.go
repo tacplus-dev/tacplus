@@ -165,6 +165,32 @@ func TestRustWatch_Client_ReturnsTonicStreamingEnvelope(t *testing.T) {
 	}
 }
 
+// The wrapper's oneof enum path must be derived from the oneof's actual name
+// (prost renders `oneof frame` as `pub enum Frame`), not hardcoded to "Event".
+// A hardcoded "Event" generates cleanly (validateWatchEnvelope only checks the
+// three variant names, not the oneof's own name) and then fails to compile.
+func TestRustWatch_Wrapper_OneofEnumNameFollowsTheOneofsOwnName(t *testing.T) {
+	m := rustWatchMethod()
+	m.Resolved.WatchOneOf = "frame"
+	got := mustGenerateRustGRPCWrapper(
+		t,
+		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
+		m, "catalog", "services", map[string]string{}, "",
+		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, nil)
+	for _, want := range []string{
+		"watch_event::Frame::SnapshotItem(item)",
+		"watch_event::Frame::SnapshotDone(source_revision)",
+		"watch_event::Frame::Delta(change)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("WATCH wrapper with oneof `frame` missing %q\ngot:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "::Event::") {
+		t.Fatalf("WATCH wrapper must not hardcode the oneof enum as Event when the oneof is named `frame`:\n%s", got)
+	}
+}
+
 // --- PAGE (unary keyset window: explicit page + auto-pager) -------------------
 
 func rustPageMethod() *parser.MethodInfo {

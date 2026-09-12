@@ -383,6 +383,24 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 		outDir = resolveOutputDir(filepath.Join(cwd, base), pt, outputName)
 	}
 
+	// The computed output directory must stay inside the project directory.
+	// output-dir/output-name come from tacplus.yaml and the resolved tree is
+	// removed with os.RemoveAll before regeneration, so a value like
+	// "../sibling" would delete an unrelated tree outside the project.
+	contained, err := outputDirWithinProject(cwd, outDir)
+	if err != nil {
+		protoCleanup()
+		return nil, err
+	}
+	if !contained {
+		protoCleanup()
+		spec := fmt.Sprintf("output-name %q", outputName)
+		if cfg != nil {
+			spec = fmt.Sprintf("output-dir %q / output-name %q", cfg.OutputDir, outputName)
+		}
+		return nil, fmt.Errorf("tacplus.yaml %s resolves the output directory to %q, which is outside the project directory %q; tacplus deletes and regenerates the output directory, so it must be contained within the project", spec, outDir, cwd)
+	}
+
 	// Derive package base. The pkg field in tacplus.yaml uses canonical Java-style
 	// reverse DNS format (e.g. "com.example.services.identity").
 	// canonicalPkgToNative converts it to the native format for the target language.
@@ -472,6 +490,30 @@ func languageToProjectType(lang string) projectfile.ProjectType {
 // The conventional subdir is the configured output name (default "model").
 func resolveOutputDir(cwd string, projectType projectfile.ProjectType, outputName string) string {
 	return filepath.Join(cwd, outputName)
+}
+
+// outputDirWithinProject reports whether outDir resolves to a path inside cwd.
+// Both are resolved to absolute, cleaned paths and compared on path boundaries
+// via filepath.Rel, so a sibling such as "/foo/barbaz" is not mistaken for a
+// path contained in "/foo/bar".
+func outputDirWithinProject(cwd, outDir string) (bool, error) {
+	absCwd, err := filepath.Abs(cwd)
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve project directory %q: %w", cwd, err)
+	}
+	absOut, err := filepath.Abs(outDir)
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve output directory %q: %w", outDir, err)
+	}
+	rel, err := filepath.Rel(absCwd, absOut)
+	if err != nil {
+		// No relative path exists (e.g. different volumes) — not contained.
+		return false, nil
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false, nil
+	}
+	return true, nil
 }
 
 // goModuleBasePath derives the Go import root for the generated tree. The

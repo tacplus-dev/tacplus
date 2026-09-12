@@ -5,8 +5,10 @@ package runner
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/projectfile"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/tacplusyaml"
 )
@@ -367,6 +369,88 @@ func Test_goModuleBasePath(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("goModuleBasePath(%q, %q, %q, %q) = %q, want %q",
 					pkg, cwd, tt.outDir, tt.outputName, got, tt.want)
+			}
+		})
+	}
+}
+
+// Test_resolveConfig_outputDirContainment is the regression for the arbitrary
+// directory deletion reported in decisions/security-audit-2026-09-12
+// (Tier 1 #1): tacplus.yaml output-dir/output-name were joined onto the project
+// directory with no containment check, and the result is passed to
+// os.RemoveAll before regeneration. An output-dir of "../sibling" therefore
+// deleted an unrelated tree outside the project.
+func Test_resolveConfig_outputDirContainment(t *testing.T) {
+	tests := []struct {
+		name       string
+		outputDir  string
+		outputName string
+		wantErr    bool
+	}{
+		{name: "parent escape via output-dir", outputDir: "../sibling", wantErr: true},
+		{name: "parent escape via output-name", outputDir: ".", outputName: "..", wantErr: true},
+		// An absolute output-dir is re-rooted under the project by the existing
+		// filepath.Join, so it stays contained.
+		{name: "absolute output-dir is re-rooted under project", outputDir: "/tmp", wantErr: false},
+		{name: "default layout", outputDir: ".", wantErr: false},
+		{name: "nested output-dir", outputDir: "gen/proto", wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			projectDir := filepath.Join(root, "project")
+			siblingDir := filepath.Join(root, "sibling")
+			siblingFile := filepath.Join(siblingDir, "keep.txt")
+			for _, d := range []string{projectDir, siblingDir} {
+				if err := os.MkdirAll(d, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(siblingFile, []byte("keep"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			t.Chdir(projectDir)
+			cwd, err := os.Getwd()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			outputName := tt.outputName
+			if outputName == "" {
+				outputName = tactype.DefaultOutputName
+			}
+			rc, err := resolveConfig(Params{Config: &tacplusyaml.Config{
+				Language:   "go",
+				Pkg:        "com.example.services.thing",
+				OutputDir:  tt.outputDir,
+				OutputName: tt.outputName,
+			}})
+			if rc != nil && rc.cleanup != nil {
+				defer rc.cleanup()
+			}
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("resolveConfig(output-dir %q, output-name %q) = %q, want containment error",
+						tt.outputDir, tt.outputName, rc.config.OutputDir)
+				}
+				if !strings.Contains(err.Error(), "outside the project directory") {
+					t.Errorf("error %q does not report that the output directory is outside the project", err)
+				}
+				if _, statErr := os.Stat(siblingFile); statErr != nil {
+					t.Errorf("file outside the project was touched: %v", statErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("resolveConfig(output-dir %q) unexpected error: %v", tt.outputDir, err)
+			}
+			want := filepath.Join(cwd, filepath.Clean(tt.outputDir), outputName)
+			if rc.config.OutputDir != want {
+				t.Errorf("OutputDir = %q, want %q", rc.config.OutputDir, want)
 			}
 		})
 	}

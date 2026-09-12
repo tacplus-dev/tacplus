@@ -3,10 +3,13 @@
 package upgrade
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -21,13 +24,45 @@ import (
 
 const (
 	upgradeProjectID   = "81965435"
-	upgradeAPIBase     = "https://gitlab.com/api/v4"
 	upgradeHTTPTimeout = 30 * time.Second
 )
 
+// upgradeAPIBase is a var rather than a const so tests can point it at a fake server.
+var upgradeAPIBase = "https://gitlab.com/api/v4"
+
 var upgradeVersion string
 
-var upgradeHTTPClient = &http.Client{Timeout: upgradeHTTPTimeout}
+var upgradeHTTPClient = &http.Client{
+	Timeout:       upgradeHTTPTimeout,
+	CheckRedirect: stripTokenOnCrossHostRedirect,
+}
+
+// stripTokenOnCrossHostRedirect removes the PRIVATE-TOKEN header when a redirect
+// points at a host other than the one originally requested. Go strips Authorization
+// and Cookie on cross-host redirects itself, but knows nothing about GitLab's custom
+// auth header, so it would otherwise be forwarded verbatim to the redirect target.
+// The comparison is an exact host match: GitLab redirects package downloads to signed
+// object-storage URLs that need no token anyway, so there is nothing to gain from a
+// looser "same registered domain" rule.
+func stripTokenOnCrossHostRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after 10 redirects")
+	}
+	if len(via) > 0 && req.URL.Host != via[0].URL.Host {
+		req.Header.Del("PRIVATE-TOKEN")
+	}
+	return nil
+}
+
+// gitlabGet issues an authenticated GET against the GitLab API.
+func gitlabGet(url, token string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("PRIVATE-TOKEN", token)
+	return upgradeHTTPClient.Do(req)
+}
 
 // GetCmd returns the upgrade cobra command.
 func GetCmd() *cobra.Command {
@@ -99,10 +134,16 @@ func runUpgrade(_ *cobra.Command, _ []string) error {
 	}
 
 	pkg := fmt.Sprintf("tacplus-%d-%d", mm[0], mm[1])
-	url := fmt.Sprintf("%s/projects/%s/packages/generic/%s/%d/%s",
-		upgradeAPIBase, upgradeProjectID, pkg, patch, binName)
+	pkgVersion := strconv.Itoa(patch)
+	downloadURL := fmt.Sprintf("%s/projects/%s/packages/generic/%s/%s/%s",
+		upgradeAPIBase, upgradeProjectID, pkg, pkgVersion, binName)
 
 	fmt.Printf("Installing tacplus %s (%s)...\n", tag, binName)
+
+	wantSHA256, err := fetchPackageSHA256(token, pkg, pkgVersion, binName)
+	if err != nil {
+		return fmt.Errorf("looking up checksum for %s: %w", binName, err)
+	}
 
 	current, err := os.Executable()
 	if err != nil {
@@ -113,7 +154,7 @@ func runUpgrade(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("resolving symlinks: %w", err)
 	}
 
-	if err := downloadReplace(url, token, current); err != nil {
+	if err := downloadReplace(downloadURL, token, current, wantSHA256); err != nil {
 		return err
 	}
 
@@ -224,14 +265,7 @@ func parsePatch(tag string) (int, error) {
 
 // fetchReleases returns all release tag names sorted newest-first.
 func fetchReleases(token string) ([]string, error) {
-	url := fmt.Sprintf("%s/projects/%s/releases?per_page=100", upgradeAPIBase, upgradeProjectID)
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("PRIVATE-TOKEN", token)
-
-	resp, err := upgradeHTTPClient.Do(req)
+	resp, err := gitlabGet(fmt.Sprintf("%s/projects/%s/releases?per_page=100", upgradeAPIBase, upgradeProjectID), token)
 	if err != nil {
 		return nil, fmt.Errorf("fetching releases: %w", err)
 	}
@@ -256,6 +290,77 @@ func fetchReleases(token string) ([]string, error) {
 	return tags, nil
 }
 
+// fetchPackageSHA256 returns the SHA-256 GitLab computed for the named file of a
+// generic package, using the Packages API:
+//
+//	GET /projects/:id/packages?package_type=generic&package_name=&package_version=
+//	GET /projects/:id/packages/:package_id/package_files
+//
+// A failure to obtain the checksum is a hard error — an unverified binary is never
+// installed.
+func fetchPackageSHA256(token, pkg, version, fileName string) (string, error) {
+	listURL := fmt.Sprintf("%s/projects/%s/packages?package_type=generic&package_name=%s&package_version=%s",
+		upgradeAPIBase, upgradeProjectID, url.QueryEscape(pkg), url.QueryEscape(version))
+
+	var packages []struct {
+		ID      int    `json:"id"`
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	if err := getJSON(listURL, token, &packages); err != nil {
+		return "", err
+	}
+
+	pkgID := 0
+	for _, p := range packages {
+		if p.Name == pkg && p.Version == version {
+			pkgID = p.ID
+			break
+		}
+	}
+	if pkgID == 0 {
+		return "", fmt.Errorf("generic package %s version %s not found", pkg, version)
+	}
+
+	filesURL := fmt.Sprintf("%s/projects/%s/packages/%d/package_files", upgradeAPIBase, upgradeProjectID, pkgID)
+	var files []struct {
+		FileName   string `json:"file_name"`
+		FileSHA256 string `json:"file_sha256"`
+	}
+	if err := getJSON(filesURL, token, &files); err != nil {
+		return "", err
+	}
+
+	for _, f := range files {
+		if f.FileName != fileName {
+			continue
+		}
+		if f.FileSHA256 == "" {
+			return "", fmt.Errorf("GitLab reported no sha256 for %s", fileName)
+		}
+		return f.FileSHA256, nil
+	}
+	return "", fmt.Errorf("file %s not found in package %s version %s", fileName, pkg, version)
+}
+
+// getJSON performs an authenticated GET and decodes a JSON response body into out.
+func getJSON(url, token string, out any) error {
+	resp, err := gitlabGet(url, token)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("GET %s: HTTP %d: %s", url, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("parsing response from %s: %w", url, err)
+	}
+	return nil
+}
+
 // platformBinary returns the binary filename for the current OS/arch.
 func platformBinary(major, minor, patch int) (string, error) {
 	var suffix string
@@ -276,17 +381,12 @@ func platformBinary(major, minor, patch int) (string, error) {
 	return fmt.Sprintf("tacplus-%d-%d-%d-%s", major, minor, patch, suffix), nil
 }
 
-// downloadReplace downloads url into a temp file then atomically replaces dest.
-// On Windows (where running executables are locked) it writes dest+".new" instead.
-func downloadReplace(url, token, dest string) error {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("PRIVATE-TOKEN", token)
-
-	fmt.Printf("Downloading from %s\n", url)
-	resp, err := upgradeHTTPClient.Do(req)
+// downloadReplace downloads url into a temp file, verifies its SHA-256 against
+// wantSHA256, then atomically replaces dest. On Windows (where running executables
+// are locked) the verified file is left at dest+".new.exe" instead.
+func downloadReplace(downloadURL, token, dest, wantSHA256 string) error {
+	fmt.Printf("Downloading from %s\n", downloadURL)
+	resp, err := gitlabGet(downloadURL, token)
 	if err != nil {
 		return fmt.Errorf("downloading binary: %w", err)
 	}
@@ -298,17 +398,6 @@ func downloadReplace(url, token, dest string) error {
 	}
 
 	dir := filepath.Dir(dest)
-
-	if runtime.GOOS == "windows" {
-		newPath := strings.TrimSuffix(dest, ".exe") + ".new.exe"
-		if err := writeFile(newPath, resp.Body, 0755); err != nil {
-			return err
-		}
-		fmt.Printf("Downloaded to %s\n", newPath)
-		fmt.Printf("To complete the upgrade, run:\n  move /Y %q %q\n", newPath, dest)
-		return nil
-	}
-
 	tmp, err := os.CreateTemp(dir, ".tacplus-upgrade-*")
 	if err != nil {
 		return fmt.Errorf("creating temp file: %w", err)
@@ -316,32 +405,38 @@ func downloadReplace(url, token, dest string) error {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 
-	if _, err := io.Copy(tmp, resp.Body); err != nil {
+	hasher := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmp, hasher), resp.Body); err != nil {
 		tmp.Close()
 		return fmt.Errorf("writing download: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing temp file: %w", err)
 	}
+
+	got := hex.EncodeToString(hasher.Sum(nil))
+	if !strings.EqualFold(got, wantSHA256) {
+		return fmt.Errorf("checksum mismatch: expected sha256 %s, got %s — refusing to install", wantSHA256, got)
+	}
+
 	if err := os.Chmod(tmpName, 0755); err != nil {
 		return fmt.Errorf("setting permissions: %w", err)
 	}
+
+	if runtime.GOOS == "windows" {
+		newPath := strings.TrimSuffix(dest, ".exe") + ".new.exe"
+		if err := os.Rename(tmpName, newPath); err != nil {
+			return fmt.Errorf("writing %s: %w", newPath, err)
+		}
+		fmt.Printf("Downloaded to %s\n", newPath)
+		fmt.Printf("To complete the upgrade, run:\n  move /Y %q %q\n", newPath, dest)
+		return nil
+	}
+
 	if err := os.Rename(tmpName, dest); err != nil {
 		return fmt.Errorf("replacing binary: %w", err)
 	}
 	return nil
-}
-
-func writeFile(path string, r io.Reader, mode os.FileMode) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-	if err != nil {
-		return fmt.Errorf("creating %s: %w", path, err)
-	}
-	if _, err := io.Copy(f, r); err != nil {
-		f.Close()
-		return fmt.Errorf("writing %s: %w", path, err)
-	}
-	return f.Close()
 }
 
 // gitlabToken returns a GitLab PAT from env or ~/.netrc.

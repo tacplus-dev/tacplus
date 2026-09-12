@@ -203,7 +203,7 @@ impl Authorizer {
                 if *p == "*" {
                     regex::Regex::new(".*").unwrap()
                 } else {
-                    regex::Regex::new(&format!("^{}$", p)).unwrap()
+                    regex::Regex::new(&format!("^(?:{})$", p)).unwrap()
                 }
             })
             .collect();
@@ -872,6 +872,41 @@ mod authorizer_behavior_tests {
             .await
             .err()
             .expect("service not in auth_services must be denied");
+    }
+
+    // An auth_services pattern containing alternation must still match the
+    // WHOLE caller identity. Anchoring as `^{}$` is wrong: `|` binds looser
+    // than the anchors, so "billing|payments" would compile to
+    // "^billing|payments$" — "starts with billing, OR ends with payments" —
+    // and admit callers like "evil-payments" or "billing-but-not-really". The
+    // pattern is wrapped in a non-capturing group so the anchors apply to the
+    // whole alternation.
+    #[tokio::test]
+    async fn alternation_pattern_is_fully_anchored() {
+        let key = new_test_key();
+
+        for caller in ["billing", "payments"] {
+            let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+            a.set_method_auth(METHOD, &["billing|payments"]);
+            let tok = service_token(&key, caller);
+            a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("caller {caller} exactly matches an alternation branch and must be authorized, got: {e:?}")
+                });
+        }
+
+        for caller in ["evil-payments", "billing-but-not-really"] {
+            let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+            a.set_method_auth(METHOD, &["billing|payments"]);
+            let tok = service_token(&key, caller);
+            assert!(
+                a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+                    .await
+                    .is_err(),
+                "caller {caller} only partially matches an alternation branch and must be denied"
+            );
+        }
     }
 
     // An expired token is rejected even with a valid signature.

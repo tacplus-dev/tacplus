@@ -219,7 +219,7 @@ func (a *authorizer) SetMethodAuth(methodName string, patterns []string) {
 		if p == "*" {
 			compiled = append(compiled, regexp.MustCompile(".*"))
 		} else {
-			compiled = append(compiled, regexp.MustCompile("^"+p+"$"))
+			compiled = append(compiled, regexp.MustCompile("^(?:"+p+")$"))
 		}
 	}
 	a.methodAuthPatterns[methodName] = compiled

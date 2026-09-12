@@ -125,6 +125,34 @@ func TestAuthorizerRejectsServiceNotInAuthServices(t *testing.T) {
 	}
 }
 
+// An auth_services pattern containing alternation must still match the WHOLE
+// caller identity. Anchoring as "^"+p+"$" is wrong: `|` binds looser than the
+// anchors, so "billing|payments" would compile to "^billing|payments$" —
+// "starts with billing, OR ends with payments" — and admit callers like
+// "evil-payments" or "billing-but-not-really". The pattern is wrapped in a
+// non-capturing group so the anchors apply to the whole alternation.
+func TestAuthorizerAlternationPatternIsFullyAnchored(t *testing.T) {
+	key := newTestKey(t)
+
+	for _, caller := range []string{"billing", "payments"} {
+		a := authorizerWithKeys(t, jwkForKey(t, key))
+		a.SetMethodAuth("DoThing", []string{"billing|payments"})
+		tok := signedToken(t, key, serviceToken(caller))
+		if err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
+			t.Fatalf("caller %q exactly matches an alternation branch and must be authorized, got: %v", caller, err)
+		}
+	}
+
+	for _, caller := range []string{"evil-payments", "billing-but-not-really"} {
+		a := authorizerWithKeys(t, jwkForKey(t, key))
+		a.SetMethodAuth("DoThing", []string{"billing|payments"})
+		tok := signedToken(t, key, serviceToken(caller))
+		if err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
+			t.Fatalf("caller %q only partially matches an alternation branch and must be denied", caller)
+		}
+	}
+}
+
 // An expired token is rejected even with a valid signature.
 func TestAuthorizerRejectsExpiredToken(t *testing.T) {
 	key := newTestKey(t)

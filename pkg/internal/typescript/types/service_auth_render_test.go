@@ -5,6 +5,7 @@ package types
 import (
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -311,4 +312,46 @@ func readOnlyFileInDir(t *testing.T, dir string) string {
 		t.Fatalf("read generated file %s: %v", files[0], err)
 	}
 	return string(b)
+}
+
+// An auth_services pattern containing alternation must still match the WHOLE
+// caller identity. Compiling it as `^${p}$` is wrong: `|` binds looser than the
+// anchors, so "billing|payments" becomes "^billing|payments$" — "starts with
+// billing, OR ends with payments" — admitting callers like "evil-payments".
+// TypeScript has no generated-code test runner (the cross-test gates only tsc-
+// build the TS output), so this lifts the pattern-compilation expression
+// verbatim out of the template and evaluates it under the real ECMAScript
+// engine (node), which is what actually decides the semantics at runtime.
+func TestTypeScriptAuthorizerAnchorsWholeAuthServicesPattern(t *testing.T) {
+	renderedBytes, err := fs.ReadFile(templates.FS, "typescript/chassis/grpcserver/Authorizer.ts.tmpl")
+	if err != nil {
+		t.Fatalf("load Authorizer.ts.tmpl: %v", err)
+	}
+	rendered := string(renderedBytes)
+
+	// Lift setMethodAuth's pattern-compilation expression: "patterns.map(" up to
+	// the end of the enclosing statement.
+	const exprStart = "patterns.map("
+	i := strings.Index(rendered, exprStart)
+	if i < 0 {
+		t.Fatalf("Authorizer.ts.tmpl no longer compiles auth_services patterns via %q", exprStart)
+	}
+	j := strings.Index(rendered[i:], "),\n")
+	if j < 0 {
+		t.Fatalf("could not find the end of setMethodAuth's pattern-compilation expression")
+	}
+	compileExpr := strings.Join(strings.Fields(rendered[i:i+j+1]), " ")
+
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node binary found; skipping ECMAScript semantics check")
+	}
+	script := "const patterns = ['billing|payments'];\n" +
+		"const compiled = " + compileExpr + ";\n" +
+		"const match = (c) => compiled.some((re) => re.test(c));\n" +
+		"for (const c of ['billing', 'payments']) { if (!match(c)) { console.log('exact match denied: ' + c); process.exit(1); } }\n" +
+		"for (const c of ['evil-payments', 'billing-but-not-really']) { if (match(c)) { console.log('partial match accepted: ' + c); process.exit(1); } }\n"
+	if out, err := exec.Command(node, "-e", script).CombinedOutput(); err != nil {
+		t.Fatalf("auth_services pattern %s is not fully anchored under ECMAScript: %v\n%s", compileExpr, err, out)
+	}
 }

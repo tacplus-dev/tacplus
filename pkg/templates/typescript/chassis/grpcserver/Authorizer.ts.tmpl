@@ -206,7 +206,7 @@ export class Authorizer {
     if (patterns.length === 0) return;
     this._methodAuthPatterns.set(
       methodName,
-      patterns.map((p) => new RegExp(p === '*' ? '.*' : `^${p}$`)),
+      patterns.map((p) => new RegExp(p === '*' ? '.*' : `^(?:${p})$`)),
     );
   }
 

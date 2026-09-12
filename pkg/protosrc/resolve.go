@@ -3,6 +3,7 @@
 package protosrc
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -107,15 +108,18 @@ func repoSlug(url string) string {
 	return s
 }
 
-// authenticatedURL embeds CI_JOB_TOKEN into an HTTPS git URL when running in
-// GitLab CI. This is more reliable than .netrc across subgroup boundaries.
-// If CI_JOB_TOKEN is not set, the URL is returned unchanged.
-func authenticatedURL(url string) string {
+// authArgs returns per-invocation git flags carrying the GitLab CI credential
+// when running in GitLab CI. The credential is passed as an http.extraheader
+// config override on the command line, which is process-scoped: git never
+// writes it to any .git/config, unlike a credential embedded in the remote URL.
+// If CI_JOB_TOKEN is not set, no flags are returned.
+func authArgs(url string) []string {
 	token := os.Getenv("CI_JOB_TOKEN")
 	if token == "" || !strings.HasPrefix(url, "https://") {
-		return url
+		return nil
 	}
-	return strings.Replace(url, "https://", "https://gitlab-ci-token:"+token+"@", 1)
+	basic := base64.StdEncoding.EncodeToString([]byte("gitlab-ci-token:" + token))
+	return []string{"-c", "http.extraheader=AUTHORIZATION: basic " + basic}
 }
 
 // cachedRepo uses a persistent cache to avoid redundant clones.
@@ -133,15 +137,19 @@ func cachedRepo(url string, tag string) (*Result, error) {
 		resolvedTag = strings.TrimSuffix(tag, ".latest")
 	}
 
+	// Credentials are supplied per git invocation, never baked into the remote
+	// URL: the cache directory is persistent, and git would write an
+	// authenticated remote URL into its .git/config.
+	auth := authArgs(url)
+
 	// Check if cache exists (has a .git directory)
 	if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
-		// First run: clone. Embed CI_JOB_TOKEN in URL for GitLab CI environments.
-		cloneURL := authenticatedURL(url)
+		// First run: clone with the plain, token-free URL as the remote.
 		zap.L().Info("cloning proto source (first run)", zap.String("url", url), zap.String("cache", dir))
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			return nil, fmt.Errorf("failed to create cache parent: %w", err)
 		}
-		cmd := exec.Command("git", "clone", "--", cloneURL, dir)
+		cmd := exec.Command("git", append(append([]string{}, auth...), "clone", "--", url, dir)...)
 		cmd.Stdout = os.Stderr
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
@@ -149,11 +157,14 @@ func cachedRepo(url string, tag string) (*Result, error) {
 			return nil, fmt.Errorf("failed to clone %q: %w", url, err)
 		}
 	} else {
+		// NOTE: a cache directory created by an older version of tacplus may
+		// still have a token embedded in its stored remote URL
+		// (git remote get-url origin); such a cache must be deleted manually.
 		zap.L().Info("using cached proto source", zap.String("url", url), zap.String("cache", dir))
 	}
 
 	// Fetch and checkout the requested ref
-	if err := fetchAndCheckout(dir, resolvedTag); err != nil {
+	if err := fetchAndCheckout(dir, resolvedTag, auth); err != nil {
 		return nil, err
 	}
 
@@ -162,13 +173,13 @@ func cachedRepo(url string, tag string) (*Result, error) {
 }
 
 // fetchAndCheckout fetches from origin and checks out the requested tag/ref.
-func fetchAndCheckout(dir string, tag string) error {
+func fetchAndCheckout(dir string, tag string, auth []string) error {
 	if tag == "" || tag == "latest" {
 		// Fetch and checkout origin/HEAD
-		if err := gitIn(dir, "fetch", "origin"); err != nil {
+		if err := gitIn(dir, auth, "fetch", "origin"); err != nil {
 			return fmt.Errorf("git fetch failed: %w", err)
 		}
-		if err := gitIn(dir, "checkout", "FETCH_HEAD"); err != nil {
+		if err := gitIn(dir, auth, "checkout", "FETCH_HEAD"); err != nil {
 			return fmt.Errorf("git checkout FETCH_HEAD failed: %w", err)
 		}
 		return nil
@@ -180,10 +191,10 @@ func fetchAndCheckout(dir string, tag string) error {
 		if strings.HasPrefix(tag, "v") {
 			gitTag = tag
 		}
-		if err := gitIn(dir, "fetch", "origin", "--tags"); err != nil {
+		if err := gitIn(dir, auth, "fetch", "origin", "--tags"); err != nil {
 			return fmt.Errorf("git fetch --tags failed: %w", err)
 		}
-		if err := gitIn(dir, "checkout", gitTag); err != nil {
+		if err := gitIn(dir, auth, "checkout", gitTag); err != nil {
 			return fmt.Errorf("git checkout %s failed: %w", gitTag, err)
 		}
 		return nil
@@ -191,7 +202,7 @@ func fetchAndCheckout(dir string, tag string) error {
 
 	if strings.Count(tag, ".") == 1 {
 		// Major.Minor — find latest patch
-		if err := gitIn(dir, "fetch", "origin", "--tags"); err != nil {
+		if err := gitIn(dir, auth, "fetch", "origin", "--tags"); err != nil {
 			return fmt.Errorf("git fetch --tags failed: %w", err)
 		}
 
@@ -205,7 +216,7 @@ func fetchAndCheckout(dir string, tag string) error {
 			return fmt.Errorf("failed to find latest tag for %s.*: %w", prefix, err)
 		}
 
-		if err := gitIn(dir, "checkout", latestTag); err != nil {
+		if err := gitIn(dir, auth, "checkout", latestTag); err != nil {
 			return fmt.Errorf("git checkout %s failed: %w", latestTag, err)
 		}
 
@@ -216,9 +227,10 @@ func fetchAndCheckout(dir string, tag string) error {
 	return fmt.Errorf("invalid tag format %q: expected 'latest', 'X.Y', 'X.Y.Z', or 'X.Y.latest'", tag)
 }
 
-// gitIn runs a git command in the given directory.
-func gitIn(dir string, args ...string) error {
-	cmd := exec.Command("git", args...)
+// gitIn runs a git command in the given directory. Any auth flags are passed
+// before the subcommand so they apply to this invocation only.
+func gitIn(dir string, auth []string, args ...string) error {
+	cmd := exec.Command("git", append(append([]string{}, auth...), args...)...)
 	cmd.Dir = dir
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr

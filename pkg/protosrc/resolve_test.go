@@ -3,8 +3,12 @@
 package protosrc
 
 import (
+	"encoding/base64"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -126,4 +130,71 @@ func TestCollectFiles(t *testing.T) {
 
 	// This tests the formatter package's collectFiles — but it's unexported there.
 	// Instead we test the protosrc helpers which are the main target.
+}
+
+func TestAuthArgs(t *testing.T) {
+	t.Setenv("CI_JOB_TOKEN", "s3cr3t-token")
+
+	if got := authArgs("git@gitlab.com:org/repo.git"); got != nil {
+		t.Errorf("authArgs(ssh url) = %v, want nil", got)
+	}
+
+	got := authArgs("https://gitlab.com/org/repo.git")
+	want := []string{"-c", "http.extraheader=AUTHORIZATION: basic " +
+		base64.StdEncoding.EncodeToString([]byte("gitlab-ci-token:s3cr3t-token"))}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("authArgs() = %v, want %v", got, want)
+	}
+
+	t.Setenv("CI_JOB_TOKEN", "")
+	if got := authArgs("https://gitlab.com/org/repo.git"); got != nil {
+		t.Errorf("authArgs() with no token = %v, want nil", got)
+	}
+}
+
+// TestCloneDoesNotPersistToken clones a local repo the same way cachedRepo does
+// and asserts the CI_JOB_TOKEN never lands in the clone's .git/config.
+func TestCloneDoesNotPersistToken(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	const token = "s3cr3t-token"
+	t.Setenv("CI_JOB_TOKEN", token)
+
+	// Origin repo with one commit.
+	origin := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = origin
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Clone it exactly as cachedRepo does: plain URL + per-invocation auth flags.
+	url := "https://gitlab.com/org/repo.git"
+	auth := authArgs(url)
+	dst := filepath.Join(t.TempDir(), "clone")
+	cmd := exec.Command("git", append(append([]string{}, auth...), "clone", "-q", "--", origin, dst)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clone failed: %v\n%s", err, out)
+	}
+
+	cfg, err := os.ReadFile(filepath.Join(dst, ".git", "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(cfg), token) {
+		t.Errorf(".git/config contains CI_JOB_TOKEN:\n%s", cfg)
+	}
+	b64 := base64.StdEncoding.EncodeToString([]byte("gitlab-ci-token:" + token))
+	if strings.Contains(string(cfg), b64) {
+		t.Errorf(".git/config contains encoded credential:\n%s", cfg)
+	}
+	if strings.Contains(string(cfg), "extraheader") {
+		t.Errorf(".git/config persisted extraheader:\n%s", cfg)
+	}
 }

@@ -88,9 +88,9 @@ var (
 	// a bracketed list `accepted_audiences: ["a", "b"]` or repeated scalar
 	// lines `accepted_audiences: "a"`. Group 1 is the raw right-hand side;
 	// quotedStringRe pulls the entries out of it.
-	acceptedAudsRe  = regexp.MustCompile(`accepted_audiences\s*:\s*(\[[^\]]*\]|"[^"]*")`)
-	quotedStringRe  = regexp.MustCompile(`"([^"]*)"`)
-	messageNameRe = regexp.MustCompile(`(?m)^\s*message\s+(\w+)\s*\{`)
+	acceptedAudsRe = regexp.MustCompile(`accepted_audiences\s*:\s*(\[[^\]]*\]|"[^"]*")`)
+	quotedStringRe = regexp.MustCompile(`"([^"]*)"`)
+	messageNameRe  = regexp.MustCompile(`(?m)^\s*message\s+(\w+)\s*\{`)
 
 	// Patterns for RPC scanning. Anchored to line-start (only tabs/spaces before
 	// `option`) so a commented-out annotation is not false-matched as active —

@@ -141,7 +141,7 @@ func TestGeneratedServicesKeepSynthesizedMarkerAsLeadingComment(t *testing.T) {
 	stateProto := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil, nil).serviceProto
 	assertGeneratedServiceMarkerLeadsService(t, stateProto, StateServiceName(stateRoot.Name))
 
-	storeProto := buildStoreService("DemoStore", "id", nil)
+	storeProto := buildStoreService("demo", "DemoStore", "id", nil)
 	assertGeneratedServiceMarkerLeadsService(t, storeProto, StoreServiceName("DemoStore"))
 }
 
@@ -253,5 +253,20 @@ func topicStateRootForTest() *parser.MessageDescriptor {
 				"topic": {Type: model.AnnotationTypeBool, BoolValue: true},
 			},
 		}},
+	}
+}
+
+// A store service emitted with an empty auth_services builds and ships, then
+// denies every S2S caller at runtime with no build-time signal. The caller list
+// is the package that declares the (spec.service_store) message.
+func TestStoreServiceCarriesOwningPackageAsAuthServices(t *testing.T) {
+	storeProto := buildStoreService("demo", "DemoStore", "id", nil)
+
+	want := `option (spec.service_s2s) = {auth_services: ["demo"]};`
+	if !strings.Contains(storeProto, want) {
+		t.Fatalf("store service missing %q in:\n%s", want, storeProto)
+	}
+	if strings.Contains(storeProto, "(spec.service_s2s) = {}") {
+		t.Fatalf("store service still emits an empty auth_services:\n%s", storeProto)
 	}
 }

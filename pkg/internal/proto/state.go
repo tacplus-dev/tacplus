@@ -1722,7 +1722,7 @@ func AppendStoreServiceToProtos(tempProtoDir, inputDir string) error {
 
 			labels := fileDesc.Messages[i].Annotations["service_store_label"].StringSliceValue
 
-			proto := buildStoreService(storeName, keyFieldName, labels)
+			proto := buildStoreService(fileDesc.Package, storeName, keyFieldName, labels)
 			storeProtos = append(storeProtos, proto)
 			needsEmpty = true
 
@@ -1778,7 +1778,10 @@ func AppendStoreServiceToProtos(tempProtoDir, inputDir string) error {
 		}
 	}
 
-	return nil
+	// Same post-condition state services carry: a store service emitted with an
+	// empty caller list builds and ships, then denies every S2S call at runtime
+	// with no other build-time signal.
+	return ValidateGeneratedStoreServiceAuth(tempProtoDir)
 }
 
 // buildStoreService builds the proto text for a single store service. labels are
@@ -1786,7 +1789,11 @@ func AppendStoreServiceToProtos(tempProtoDir, inputDir string) error {
 // and cannot carry a set, so it is emitted only for a single-label store; a store
 // declaring several routes through TypeInfo.service_store_label in registry.json,
 // which carries all of them.
-func buildStoreService(msgName, keyFieldName string, labels []string) string {
+//
+// ownerPkg is the package that declares the store message. It is the store
+// service's caller list: an empty auth_services fails closed on every S2S call
+// at runtime (see ValidateGeneratedStoreServiceAuth).
+func buildStoreService(ownerPkg, msgName, keyFieldName string, labels []string) string {
 	svcName := StoreServiceName(msgName)
 	goKeyName := strutil.ToCamelCase(keyFieldName)
 
@@ -1799,7 +1806,7 @@ func buildStoreService(msgName, keyFieldName string, labels []string) string {
 
 	fmt.Fprintf(&buf, "service %s {\n", svcName)
 	// All store services are S2S — accessible only by authorized services.
-	fmt.Fprintf(&buf, "\toption (spec.service_s2s) = {};\n")
+	buf.WriteString(formatAuthServicesOption([]string{ownerPkg}))
 	if len(labels) == 1 {
 		fmt.Fprintf(&buf, "\toption (spec.event_label) = \"%s\";\n", labels[0])
 	}

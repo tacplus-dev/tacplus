@@ -97,3 +97,105 @@ service HandWritten {
 		t.Fatalf("hand-authored service must not be flagged: %v", err)
 	}
 }
+
+// The store synthesis path carries the same post-condition: an empty
+// auth_services on a generated store service is the shape that fails closed at
+// runtime on every S2S call with no build signal.
+func TestValidateGeneratedStoreServiceAuthRejectsEmptyAuthServices(t *testing.T) {
+	dir := t.TempDir()
+	writeStateSvcProto(t, dir, "svc/thing.proto", `syntax = "proto3";
+package thing;
+
+// tacplus:generated-service store
+service ThingStoreService {
+	option (spec.service_s2s) = {};
+	rpc Get(Empty) returns (Empty);
+}
+`)
+
+	err := ValidateGeneratedStoreServiceAuth(dir)
+	if err == nil {
+		t.Fatal("expected an error for a store service with no auth_services")
+	}
+	if !strings.Contains(err.Error(), "ThingStoreService") {
+		t.Fatalf("error should name the offending service, got: %v", err)
+	}
+}
+
+func TestValidateGeneratedStoreServiceAuthAcceptsResolvedCallers(t *testing.T) {
+	dir := t.TempDir()
+	writeStateSvcProto(t, dir, "svc/thing.proto", `syntax = "proto3";
+package thing;
+
+// tacplus:generated-service store
+service ThingStoreService {
+	option (spec.service_s2s) = {auth_services: ["thing"]};
+	rpc Get(Empty) returns (Empty);
+}
+`)
+
+	if err := ValidateGeneratedStoreServiceAuth(dir); err != nil {
+		t.Fatalf("ValidateGeneratedStoreServiceAuth: %v", err)
+	}
+}
+
+func TestValidateGeneratedOpaEvalServiceAuthRejectsEmptyAuthServices(t *testing.T) {
+	dir := t.TempDir()
+	writeStateSvcProto(t, dir, "svc/thing.proto", `syntax = "proto3";
+package thing;
+
+// tacplus:generated-service opaeval
+service OpaEval {
+	option (spec.service_s2s) = {};
+	rpc EvalThing(Empty) returns (Empty);
+}
+`)
+
+	err := ValidateGeneratedOpaEvalServiceAuth(dir)
+	if err == nil {
+		t.Fatal("expected an error for an OpaEval service with no auth_services")
+	}
+	if !strings.Contains(err.Error(), "OpaEval") {
+		t.Fatalf("error should name the offending service, got: %v", err)
+	}
+}
+
+func TestValidateGeneratedOpaEvalServiceAuthAcceptsResolvedCallers(t *testing.T) {
+	dir := t.TempDir()
+	writeStateSvcProto(t, dir, "svc/thing.proto", `syntax = "proto3";
+package thing;
+
+// tacplus:generated-service opaeval
+service OpaEval {
+	option (spec.service_s2s) = {auth_services: ["thing"]};
+	rpc EvalThing(Empty) returns (Empty);
+}
+`)
+
+	if err := ValidateGeneratedOpaEvalServiceAuth(dir); err != nil {
+		t.Fatalf("ValidateGeneratedOpaEvalServiceAuth: %v", err)
+	}
+}
+
+// Each synthesis path's validator matches only its own sentinel: a store
+// service's empty auth_services must not be reported by the state validator
+// (and vice versa), or a state-path exemption set would silently apply to it.
+func TestValidateGeneratedServiceAuthIsScopedToItsOwnSentinel(t *testing.T) {
+	dir := t.TempDir()
+	writeStateSvcProto(t, dir, "svc/thing.proto", `syntax = "proto3";
+package thing;
+
+// tacplus:generated-service store
+service ThingStoreService {
+	option (spec.service_s2s) = {};
+	rpc Get(Empty) returns (Empty);
+}
+`)
+
+	if err := ValidateGeneratedStateServiceAuth(dir, nil); err != nil {
+		t.Fatalf("state validator must ignore a store sentinel, got: %v", err)
+	}
+	if err := ValidateGeneratedOpaEvalServiceAuth(dir); err != nil {
+		t.Fatalf("opa eval validator must ignore a store sentinel, got: %v", err)
+	}
+}

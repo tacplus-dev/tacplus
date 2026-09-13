@@ -13,12 +13,19 @@ import (
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 )
 
-// generatedStateServiceRe matches the sentinel/service header pair that
-// AppendStateServiceToProtos emits for every spec.service_state root, capturing
-// the service name. Config-state services carry the same sentinel and are
-// checked identically.
-var generatedStateServiceRe = regexp.MustCompile(
-	`(?m)^// tacplus:generated-service ` + parser.SynthesizedKindState + `\n\s*service\s+(\w+)\s*\{`)
+// generatedServiceRe matches the sentinel/service header pair that a synthesis
+// path emits for one SynthesizedKind, capturing the service name.
+func generatedServiceRe(kind string) *regexp.Regexp {
+	return regexp.MustCompile(
+		`(?m)^// tacplus:generated-service ` + kind + `\n\s*service\s+(\w+)\s*\{`)
+}
+
+// Config-state services carry the state sentinel and are checked identically.
+var (
+	generatedStateServiceRe   = generatedServiceRe(parser.SynthesizedKindState)
+	generatedStoreServiceRe   = generatedServiceRe(parser.SynthesizedKindStore)
+	generatedOpaEvalServiceRe = generatedServiceRe(parser.SynthesizedKindOpaEval)
+)
 
 // s2sAuthServicesRe matches a spec.service_s2s option carrying at least one
 // auth_services entry.
@@ -43,6 +50,32 @@ var c2sServiceRe = regexp.MustCompile(`\(spec\.service_c2s\)\s*=`)
 // (spec.disable_auth_message): those skip token validation entirely, so they
 // carry no caller list by design. Keys are "<protoDir-relative path>/<ServiceName>".
 func ValidateGeneratedStateServiceAuth(protoDir string, authExempt map[string]bool) error {
+	return validateGeneratedServiceAuth(protoDir, generatedStateServiceRe, "state", authExempt,
+		"the caller list is resolved from the state root's owning package and its "+
+			"declared (spec.state_import)/(spec.state_imports) importers, or the root "+
+			"must declare (spec.disable_auth_message) = true")
+}
+
+// ValidateGeneratedStoreServiceAuth is the same post-condition for the store
+// synthesis path (AppendStoreServiceToProtos). Store roots cannot declare
+// (spec.disable_auth_message) — it is rejected on any message without
+// (spec.service_state) — so there is no exemption set here.
+func ValidateGeneratedStoreServiceAuth(protoDir string) error {
+	return validateGeneratedServiceAuth(protoDir, generatedStoreServiceRe, "store", nil,
+		"the caller list is the package that declares the (spec.service_store) message")
+}
+
+// ValidateGeneratedOpaEvalServiceAuth is the same post-condition for the OPA
+// entitlement-evaluation synthesis path (GenerateOpaEvalProto).
+func ValidateGeneratedOpaEvalServiceAuth(protoDir string) error {
+	return validateGeneratedServiceAuth(protoDir, generatedOpaEvalServiceRe, "opa eval", nil,
+		"the caller list is the package the OpaEval service is generated for")
+}
+
+// validateGeneratedServiceAuth walks protoDir and flags every service matched by
+// re whose body carries no non-empty auth_services. remedy is appended to each
+// violation to name the caller list that synthesis path is supposed to resolve.
+func validateGeneratedServiceAuth(protoDir string, re *regexp.Regexp, kind string, authExempt map[string]bool, remedy string) error {
 	var violations []string
 
 	err := filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
@@ -59,7 +92,7 @@ func ValidateGeneratedStateServiceAuth(protoDir string, authExempt map[string]bo
 			rel = path
 		}
 
-		for _, m := range generatedStateServiceRe.FindAllStringSubmatchIndex(text, -1) {
+		for _, m := range re.FindAllStringSubmatchIndex(text, -1) {
 			svcName := text[m[2]:m[3]]
 			if authExempt[filepath.ToSlash(rel)+"/"+svcName] {
 				continue
@@ -74,25 +107,22 @@ func ValidateGeneratedStateServiceAuth(protoDir string, authExempt map[string]bo
 			}
 			if !s2sAuthServicesRe.MatchString(body) {
 				violations = append(violations, fmt.Sprintf(
-					"%s: generated state service %s has no auth_services on (spec.service_s2s) — "+
+					"%s: generated %s service %s has no auth_services on (spec.service_s2s) — "+
 						"every service caller would be denied at runtime with "+
-						"\"no auth_services policy configured\" and no build-time signal; "+
-						"the caller list is resolved from the state root's owning package and its "+
-						"declared (spec.state_import)/(spec.state_imports) importers, or the root "+
-						"must declare (spec.disable_auth_message) = true",
-					rel, svcName))
+						"\"no auth_services policy configured\" and no build-time signal; %s",
+					rel, kind, svcName, remedy))
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("validate generated state service auth: %w", err)
+		return fmt.Errorf("validate generated %s service auth: %w", kind, err)
 	}
 
 	if len(violations) > 0 {
 		sort.Strings(violations)
-		return fmt.Errorf("generated state services missing auth_services:\n  %s",
-			strings.Join(violations, "\n  "))
+		return fmt.Errorf("generated %s services missing auth_services:\n  %s",
+			kind, strings.Join(violations, "\n  "))
 	}
 	return nil
 }

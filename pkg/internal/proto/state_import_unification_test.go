@@ -383,6 +383,77 @@ message OtherState {
 	}
 }
 
+// A service that declares store: true for ITS OWN state — without
+// config_store: true — is NOT the canonical backing store, so it must NOT get
+// RW to every partition in the build. eventbus is exactly this shape: a store
+// for its own topic/event state. Granting it the all-states treatment wired an
+// auto-started Watch onto ~40 roots it never imports, which OPA denied on every
+// retry (a permanent fleet-wide PERMISSION_DENIED storm). The canonical store is
+// declared with config_store: true, the same resolution config routing uses.
+func TestResolveStatesNonCanonicalStoreDoesNotGetAllPartitions(t *testing.T) {
+	dir := t.TempDir()
+	if err := CopySysProtos(dir); err != nil {
+		t.Fatalf("CopySysProtos: %v", err)
+	}
+	if err := writeMinimalGeneratedStubs([]string{dir}); err != nil {
+		t.Fatalf("writeMinimalGeneratedStubs: %v", err)
+	}
+	// The canonical backing store: store: true AND config_store: true.
+	writeProto(t, dir, "kernel.proto", `syntax = "proto3";
+package kernel;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "kernel", store: true, config_store: true};
+
+message KernelState {
+  option (spec.service_state) = {name: "KernelState", label: ["kernel"], export: true};
+  string x = 1;
+}
+`)
+	// A store for its own state only — not the canonical one.
+	writeProto(t, dir, "eventbus.proto", `syntax = "proto3";
+package eventbus;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "eventbus", store: true};
+
+message EventbusState {
+  option (spec.service_state) = {name: "EventbusState", label: ["eventbus"], export: true};
+  string y = 1;
+}
+`)
+	writeProto(t, dir, "owner.proto", ownerStateImportProto)
+
+	cfg := &tactype.Config{SelfPackage: "eventbus"}
+	if err := ResolveStatesFromProto(cfg, dir); err != nil {
+		t.Fatalf("ResolveStatesFromProto: %v", err)
+	}
+	for _, st := range cfg.States {
+		if st.MessageName != "EventbusState" {
+			t.Errorf("a store: true service that is not the canonical backing store must resolve only its OWN state; got %q: %+v", st.MessageName, cfg.States)
+		}
+	}
+
+	// The canonical store still reaches every partition.
+	kcfg := &tactype.Config{SelfPackage: "kernel"}
+	if err := ResolveStatesFromProto(kcfg, dir); err != nil {
+		t.Fatalf("ResolveStatesFromProto(kernel): %v", err)
+	}
+	want := map[string]bool{"KernelState": false, "EventbusState": false, "OwnerState": false}
+	for _, st := range kcfg.States {
+		if _, ok := want[st.MessageName]; ok {
+			want[st.MessageName] = true
+		}
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Errorf("canonical backing store did not resolve state %q: %+v", name, kcfg.States)
+		}
+	}
+}
+
 // Complement: an ORDINARY (non-store) service resolves only its OWN state, not
 // foreign partitions — the backing-store all-states grant is store-specific.
 func TestResolveStatesOrdinaryServiceGetsOnlyOwnState(t *testing.T) {

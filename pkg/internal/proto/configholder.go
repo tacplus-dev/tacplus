@@ -965,6 +965,50 @@ func nonTopicHostLabel(fd *parser.FileDescriptor) string {
 	return ""
 }
 
+// resolvePrimaryStore returns the package of THE canonical backing store — the
+// one service that hosts config state and physically holds every distributed
+// state partition in the build. It returns "" (no error) when the proto set has
+// no backing store at all; callers that require one say so themselves.
+//
+// option (spec.service) = {store: true} says a service CAN back state;
+// option (spec.service) = {config_store: true} says THAT service is the
+// canonical one. The two are deliberately separate: previously this picked the
+// alphabetically first store: true package, which silently routed every
+// service's config through eventbus (< kernel) because eventbus is a store for
+// its own topic state. Alphabetical order is not an architectural decision, so
+// the canonical store is declared, not derived.
+//
+// GetAllFiles ranges a MAP, so both loops below sort rather than break at a
+// "first" match — an unsorted scan flipped config routing across otherwise
+// identical builds.
+func resolvePrimaryStore(allFiles map[string]*parser.FileDescriptor) (string, error) {
+	var configStorePkgs, storePkgs []string
+	for _, fileDesc := range allFiles {
+		if fileDesc.ServiceConfigStore {
+			configStorePkgs = append(configStorePkgs, fileDesc.Package)
+		}
+		if fileDesc.ServiceStore {
+			storePkgs = append(storePkgs, fileDesc.Package)
+		}
+	}
+	sort.Strings(configStorePkgs)
+	sort.Strings(storePkgs)
+
+	switch {
+	case len(configStorePkgs) > 1:
+		return "", fmt.Errorf("multiple services declare config_store: true (%s) — exactly one service may host config state", strings.Join(configStorePkgs, ", "))
+	case len(configStorePkgs) == 1:
+		return configStorePkgs[0], nil
+	case len(storePkgs) == 0:
+		return "", nil
+	case len(storePkgs) == 1:
+		// Unambiguous: one store, nothing to choose between.
+		return storePkgs[0], nil
+	default:
+		return "", fmt.Errorf("proto set has %d services with store: true (%s) and none with config_store: true — mark the service that hosts config state with option (spec.service) = {config_store: true}", len(storePkgs), strings.Join(storePkgs, ", "))
+	}
+}
+
 // InjectGrpcConfigState scans proto files for messages with (spec.grpc_config)
 // annotations and appends a per-service *ConfigState message to each service's own
 // proto file. The ConfigState is a service_state boundary wrapping the service's
@@ -1032,43 +1076,12 @@ func InjectGrpcConfigState(sourceProtoDir, tempProtoDir, flatProtoDir string) ([
 	}
 
 	// Discover the backing store that hosts config state.
-	//
-	// option (spec.service) = {store: true} says a service CAN back state;
-	// option (spec.service) = {config_store: true} says config state is routed
-	// to THAT service. The two are deliberately separate: previously this picked
-	// the alphabetically first store: true package, which silently routed every
-	// service's config through eventbus (< kernel) because eventbus is a store
-	// for its own topic state. Alphabetical order is not an architectural
-	// decision, so the routing target is now declared, not derived.
-	//
-	// GetAllFiles ranges a MAP, so both loops below sort rather than break at a
-	// "first" match — an unsorted scan flipped config routing across otherwise
-	// identical builds.
-	var configStorePkgs, storePkgs []string
-	for _, fileDesc := range dp.GetAllFiles() {
-		if fileDesc.ServiceConfigStore {
-			configStorePkgs = append(configStorePkgs, fileDesc.Package)
-		}
-		if fileDesc.ServiceStore {
-			storePkgs = append(storePkgs, fileDesc.Package)
-		}
+	primaryStore, err := resolvePrimaryStore(dp.GetAllFiles())
+	if err != nil {
+		return nil, err
 	}
-	sort.Strings(configStorePkgs)
-	sort.Strings(storePkgs)
-
-	var primaryStore string
-	switch {
-	case len(configStorePkgs) > 1:
-		return nil, fmt.Errorf("multiple services declare config_store: true (%s) — exactly one service may host config state", strings.Join(configStorePkgs, ", "))
-	case len(configStorePkgs) == 1:
-		primaryStore = configStorePkgs[0]
-	case len(storePkgs) == 0:
+	if primaryStore == "" {
 		return nil, fmt.Errorf("no service with store: true found in proto set — config state requires a backing store")
-	case len(storePkgs) == 1:
-		// Unambiguous: one store, nothing to choose between.
-		primaryStore = storePkgs[0]
-	default:
-		return nil, fmt.Errorf("proto set has %d services with store: true (%s) and none with config_store: true — mark the service that hosts config state with option (spec.service) = {config_store: true}", len(storePkgs), strings.Join(storePkgs, ", "))
 	}
 
 	// Inject ConfigState into each service's proto file.
@@ -1415,19 +1428,23 @@ func ResolveStatesFromProto(config *tactype.Config, inputDir string) error {
 		}
 	}
 
-	// Detect the backing-store service from proto annotation
-	// (spec.service = {store: true}). The backing store PHYSICALLY HOLDS every
-	// distributed state partition in the build, so it gets RW to ALL states by
-	// design — this is not per-state tagging and not over-broad: a backing store
-	// that could not reach a partition could not back it. Ordinary services get
-	// only their own states (RW) plus explicit state_import projections (RO).
-	isStore := config.AllStates
-	for _, fd := range allFiles {
-		if fd.Package == config.SelfPackage && fd.ServiceStore {
-			isStore = true
-			break
-		}
+	// Detect THE canonical backing store (the store: true service that also
+	// declares config_store: true, or the sole store: true service). That store
+	// PHYSICALLY HOLDS every distributed state partition in the build, so it
+	// gets RW to ALL states by design — this is not per-state tagging and not
+	// over-broad: a backing store that could not reach a partition could not
+	// back it. Ordinary services get only their own states (RW) plus explicit
+	// state_import projections (RO).
+	//
+	// This must be the SAME resolution config routing uses: keying off any
+	// store: true package gave eventbus — a store for its own topic state only —
+	// RW plus an auto-started Watch on every root in the build, which OPA
+	// correctly denied, producing a permanent fleet-wide PERMISSION_DENIED storm.
+	primaryStore, err := resolvePrimaryStore(allFiles)
+	if err != nil {
+		return err
 	}
+	isStore := config.AllStates || config.SelfPackage == primaryStore
 
 	var states []tactype.StateEntry
 

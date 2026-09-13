@@ -827,8 +827,13 @@ func generateTypeScriptModule(config *tactype.Config, inputDir, protoFile string
 
 	if strings.Contains(protocGenEs, "npx") { // detect npx wrapper vs direct binary path
 		// Use npx wrapper
+		wrapperPath, err := createNpxWrapper()
+		if err != nil {
+			return fmt.Errorf("failed to create npx wrapper: %w", err)
+		}
+		defer os.Remove(wrapperPath)
 		cmd = exec.Command(config.ProtocPath,
-			"--plugin=protoc-gen-es="+createNpxWrapper(),
+			"--plugin=protoc-gen-es="+wrapperPath,
 			"--es_out="+outputDir,
 			"--es_opt=target=ts",
 			"--proto_path="+inputDir,
@@ -884,14 +889,26 @@ func generateTypeScriptModule(config *tactype.Config, inputDir, protoFile string
 	return nil
 }
 
-// createNpxWrapper creates a wrapper script for npx protoc-gen-es
-func createNpxWrapper() string {
-	wrapperPath := "/tmp/protoc-gen-es-wrapper.sh"
-	content := "#!/bin/bash\nexec npx -y @bufbuild/protoc-gen-es@^2 \"$@\"\n"
-	if err := os.WriteFile(wrapperPath, []byte(content), 0755); err != nil {
-		zap.L().Warn("Failed to create npx wrapper", zap.Error(err))
+// createNpxWrapper creates a wrapper script for npx protoc-gen-es in a fresh,
+// exclusively-created temp file, so a shared /tmp can't let another user
+// plant or symlink the path before us. Caller is responsible for removing it.
+func createNpxWrapper() (string, error) {
+	f, err := os.CreateTemp("", "protoc-gen-es-wrapper-*.sh")
+	if err != nil {
+		return "", err
 	}
-	return wrapperPath
+	defer f.Close()
+
+	content := "#!/bin/bash\nexec npx -y @bufbuild/protoc-gen-es@^2 \"$@\"\n"
+	if _, err := f.WriteString(content); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	if err := f.Chmod(0700); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 // copyHelperFiles copies generated enum and constant files from builder output

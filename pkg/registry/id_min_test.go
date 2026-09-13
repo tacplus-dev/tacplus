@@ -5,6 +5,7 @@ package registry
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -70,5 +71,65 @@ func TestNoIDMinPreservesSequentialAllocation(t *testing.T) {
 	}
 	if id != 10 {
 		t.Errorf("got id %d, want 10 (max+1) — a registry without a floor must be unchanged", id)
+	}
+}
+
+// Finding 7: the registry's allocation floor must survive a rewrite. `tacplus
+// registry` discovers a new service, assigns it an ID and saves — if the floor
+// is dropped from the file, the NEXT run allocates from 1 again and collides
+// with IDs owned by the platform registry this repo merges with.
+func TestSaveRoundTripsIDMin(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "registry.yaml"),
+		[]byte("id_min: 60\nservices:\n  - name: myapp-thing\n    id: 60\n"), 0644); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+	r, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// Discover a new service, exactly as `tacplus registry` does, then save.
+	if _, err := r.ServiceID("myapp-other"); err != nil {
+		t.Fatalf("assign: %v", err)
+	}
+	if err := r.Save(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	reloaded, err := Load(dir)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if reloaded.IDMin != 60 {
+		data, _ := os.ReadFile(filepath.Join(dir, "registry.yaml"))
+		t.Fatalf("id_min after save/reload = %d, want 60 — the floor was dropped from the file:\n%s",
+			reloaded.IDMin, data)
+	}
+}
+
+// A registry that never had a floor must not gain one on save: emitting
+// `id_min: 0` would be a floor of zero written where there was none.
+func TestSaveOmitsUnsetIDMin(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "registry.yaml"),
+		[]byte("services:\n  - name: a\n    id: 1\n"), 0644); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+	r, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, err := r.ServiceID("b"); err != nil {
+		t.Fatalf("assign: %v", err)
+	}
+	if err := r.Save(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "registry.yaml"))
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if strings.Contains(string(data), "id_min") {
+		t.Errorf("registry without a floor gained an id_min key on save:\n%s", data)
 	}
 }

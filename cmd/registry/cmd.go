@@ -4,10 +4,6 @@ package registry
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -37,28 +33,23 @@ func GetCmd() *cobra.Command {
 	return rootCmd
 }
 
-var (
-	serviceRe = regexp.MustCompile(`(?m)^option\s+\(spec\.service\)\s*=\s*\{[^}]*name:\s*"([^"]+)"`)
-)
-
 func runRegistry(cmd *cobra.Command, args []string) error {
 	reg, err := registry.Load(protoDir)
 	if err != nil {
 		return fmt.Errorf("loading registry: %w", err)
 	}
 
-	// Scan services/ for (spec.service) declarations.
-	servicesDir := filepath.Join(protoDir, "services")
-	if err := scanDir(servicesDir, serviceRe, func(name string) error {
-		_, err := reg.ServiceID(name)
-		return err
-	}); err != nil {
-		return fmt.Errorf("scanning services: %w", err)
-	}
-
-	vserviceNames, err := registry.ScanVServiceNames(protoDir)
+	// Discover declarations anywhere in the tree, the way generation does — a
+	// service outside services/ must still be assigned an ID.
+	serviceNames, vserviceNames, err := registry.ScanRegistryNames(protoDir)
 	if err != nil {
-		return fmt.Errorf("scanning vservices: %w", err)
+		return fmt.Errorf("scanning proto declarations: %w", err)
+	}
+	for _, name := range serviceNames {
+		zap.L().Debug("found service declaration", zap.String("name", name))
+		if _, err := reg.ServiceID(name); err != nil {
+			return fmt.Errorf("assigning service %q: %w", name, err)
+		}
 	}
 	for _, name := range vserviceNames {
 		zap.L().Debug("found vservice declaration", zap.String("name", name))
@@ -84,29 +75,4 @@ func runRegistry(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-func scanDir(dir string, re *regexp.Regexp, assign func(string) error) error {
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil
-	}
-	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
-			return err
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		matches := re.FindAllStringSubmatch(string(data), -1)
-		for _, m := range matches {
-			if len(m) > 1 {
-				zap.L().Debug("found declaration", zap.String("name", m[1]), zap.String("file", path))
-				if err := assign(m[1]); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
 }

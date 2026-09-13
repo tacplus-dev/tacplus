@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -19,10 +18,6 @@ import (
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 	pkgproto "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/proto"
-)
-
-var (
-	serviceNameRe = regexp.MustCompile(`(?m)^option\s+\(spec\.service\)\s*=\s*\{[^}]*name:\s*"([^"]+)"`)
 )
 
 // ServiceEntry is a single service entry in the registry.
@@ -88,10 +83,19 @@ func Load(inputDir string) (*Registry, error) {
 	if err := yaml.Unmarshal(data, r); err != nil {
 		return nil, fmt.Errorf("parsing registry.yaml: %w", err)
 	}
+	// Duplicate names fail closed: the map keeps only the last entry while the
+	// slices keep both, so lookups and iteration would disagree about what the
+	// registry says.
 	for _, e := range r.Services {
+		if _, dup := r.byName[e.Name]; dup {
+			return nil, fmt.Errorf("parsing registry.yaml: duplicate service name %q", e.Name)
+		}
 		r.byName[e.Name] = e
 	}
 	for _, e := range r.VServices {
+		if _, dup := r.vsByName[e.Name]; dup {
+			return nil, fmt.Errorf("parsing registry.yaml: duplicate vservice name %q", e.Name)
+		}
 		r.vsByName[e.Name] = e
 	}
 	zap.L().Info("loaded registry",
@@ -220,11 +224,14 @@ func (r *Registry) Save() error {
 	if !r.dirty || r.inputDir == "" {
 		return nil
 	}
+	// IDMin is omitempty because zero is exactly how Load spells "no floor":
+	// a registry that never had one must not gain `id_min: 0` on save.
 	type registryFile struct {
+		IDMin     int32            `yaml:"id_min,omitempty"`
 		Services  []*ServiceEntry  `yaml:"services"`
 		VServices []*VServiceEntry `yaml:"vservices,omitempty"`
 	}
-	data, err := yaml.Marshal(&registryFile{Services: r.Services, VServices: r.VServices})
+	data, err := yaml.Marshal(&registryFile{IDMin: r.IDMin, Services: r.Services, VServices: r.VServices})
 	if err != nil {
 		return fmt.Errorf("marshaling registry.yaml: %w", err)
 	}
@@ -232,25 +239,43 @@ func (r *Registry) Save() error {
 	return os.WriteFile(path, append([]byte("# Managed by tacplus — do not edit IDs manually.\n"), data...), 0644)
 }
 
+// nextID returns max(existing)+1, at or above the registry's floor. Registry
+// IDs are TokenEntitlements field numbers, so gap-filling on every allocation
+// would risk reusing a retired ID's number for a different service. Only when
+// max+1 overflows the 1-99 space do we fall back to scanning for the lowest
+// free ID — a single manually assigned entry sitting at 99 must not falsely
+// report the whole space exhausted with 98 IDs still free.
 func (r *Registry) nextID() int32 {
-	var max int32
+	// An empty (or low) registry in a repo with a floor starts AT the floor,
+	// which is the whole point: the app's first service must not land on 1.
+	floor := r.IDMin
+	if floor < 1 {
+		floor = 1
+	}
+	used := make(map[int32]bool, len(r.Services)+len(r.VServices))
+	max := floor - 1
 	for _, e := range r.Services {
+		used[e.ID] = true
 		if e.ID > max {
 			max = e.ID
 		}
 	}
 	for _, e := range r.VServices {
+		used[e.FieldID] = true
 		if e.FieldID > max {
 			max = e.FieldID
 		}
 	}
-	next := max + 1
-	if next < r.IDMin {
-		// An empty (or low) registry in a repo with a floor starts AT the floor,
-		// which is the whole point: the app's first service must not land on 1.
-		return r.IDMin
+	if max+1 <= 99 {
+		return max + 1
 	}
-	return next
+	for id := floor; id <= 99; id++ {
+		if !used[id] {
+			return id
+		}
+	}
+	// Field 100 is reserved for azp; callers turn this into the overflow error.
+	return 100
 }
 
 func (r *Registry) nextTenantSliceField() int32 {
@@ -284,37 +309,42 @@ func Validate(protoDir string) error {
 
 	var missing []string
 
-	// Check services.
-	servicesDir := filepath.Join(protoDir, "services")
-	if names, err := scanNames(servicesDir, serviceNameRe); err != nil {
-		return fmt.Errorf("scanning services: %w", err)
-	} else {
-		for _, name := range names {
-			if _, ok := reg.byName[name]; !ok {
-				missing = append(missing, fmt.Sprintf("service %q (add to registry.yaml services section)", name))
-			}
+	serviceNames, vserviceNames, err := ScanRegistryNames(protoDir)
+	if err != nil {
+		return fmt.Errorf("scanning proto declarations: %w", err)
+	}
+	for _, name := range serviceNames {
+		if _, ok := reg.byName[name]; !ok {
+			missing = append(missing, fmt.Sprintf("service %q (add to registry.yaml services section)", name))
+		}
+	}
+	for _, name := range vserviceNames {
+		if _, ok := reg.vsByName[name]; !ok {
+			missing = append(missing, fmt.Sprintf("vservice %q (add to registry.yaml vservices section)", name))
 		}
 	}
 
-	if names, err := ScanVServiceNames(protoDir); err != nil {
-		return fmt.Errorf("scanning vservices: %w", err)
-	} else {
-		for _, name := range names {
-			if _, ok := reg.vsByName[name]; !ok {
-				missing = append(missing, fmt.Sprintf("vservice %q (add to registry.yaml vservices section)", name))
-			}
-		}
-	}
-
-	// Check for ID collisions between services and vservices.
+	// Services and vservices share one ID space, so every ID must be unique
+	// across BOTH kinds and be a legal TokenEntitlements field number: 1-99,
+	// with 100 reserved for azp.
 	idOwner := make(map[int32]string)
+	checkID := func(kind, name string, id int32) {
+		who := fmt.Sprintf("%s %q", kind, name)
+		if id < 1 || id > 99 {
+			missing = append(missing, fmt.Sprintf("illegal ID: %s has ID %d, outside the usable range 1-99 (100 is reserved for azp)", who, id))
+			return
+		}
+		if existing, ok := idOwner[id]; ok {
+			missing = append(missing, fmt.Sprintf("ID collision: %s has ID %d already used by %s", who, id, existing))
+			return
+		}
+		idOwner[id] = who
+	}
 	for _, e := range reg.Services {
-		idOwner[e.ID] = "service " + e.Name
+		checkID("service", e.Name, e.ID)
 	}
 	for _, e := range reg.VServices {
-		if existing, ok := idOwner[e.FieldID]; ok {
-			missing = append(missing, fmt.Sprintf("ID collision: vservice %q has field_id %d already used by %s", e.Name, e.FieldID, existing))
-		}
+		checkID("vservice", e.Name, e.FieldID)
 	}
 
 	if len(missing) > 0 {
@@ -323,17 +353,21 @@ func Validate(protoDir string) error {
 	return nil
 }
 
-// ScanVServiceNames returns file-level (spec.vservice).name declarations from
-// vservices/ using a scoped descriptor parse. This keeps vservice registry
-// discovery aligned with the compiler's descriptor model while avoiding a full
-// proto-tree parse during pre-generation.
-func ScanVServiceNames(protoDir string) ([]string, error) {
-	vservicesDir := filepath.Join(protoDir, "vservices")
-	if _, err := os.Stat(vservicesDir); os.IsNotExist(err) {
-		return nil, nil
+// ScanRegistryNames returns the file-level (spec.service).name and
+// (spec.vservice).name declarations anywhere under protoDir, using the same
+// descriptor model the generator uses. Scanning only services/ and vservices/
+// missed declarations the generator itself finds and consumes — a service
+// declared under any other package directory was never assigned an ID nor
+// reported missing.
+//
+// The parse is scoped to the tree's own files (imports are still resolved) so
+// it works pre-generation, when generated/*.proto has not been written yet.
+func ScanRegistryNames(protoDir string) (services []string, vservices []string, err error) {
+	if _, err := os.Stat(protoDir); os.IsNotExist(err) {
+		return nil, nil, nil
 	}
 	var protoFiles []string
-	if err := filepath.Walk(vservicesDir, func(path string, info os.FileInfo, err error) error {
+	if err := filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
 			return err
 		}
@@ -344,35 +378,41 @@ func ScanVServiceNames(protoDir string) ([]string, error) {
 		protoFiles = append(protoFiles, filepath.ToSlash(relPath))
 		return nil
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(protoFiles) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	sort.Strings(protoFiles)
 	descriptorRoot, cleanup, err := prepareVServiceDescriptorRoot(protoDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer cleanup()
 
 	p, err := parser.NewDescriptorParserForFiles(descriptorRoot, protoFiles)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var names []string
+	seenService := make(map[string]bool)
+	seenVService := make(map[string]bool)
 	for _, path := range protoFiles {
 		fd, err := p.GetFileDescriptor(path)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if fd.VServiceName == "" {
-			continue
+		if fd.ServiceName != "" && !seenService[fd.ServiceName] {
+			seenService[fd.ServiceName] = true
+			services = append(services, fd.ServiceName)
 		}
-		names = append(names, fd.VServiceName)
+		if fd.VServiceName != "" && !seenVService[fd.VServiceName] {
+			seenVService[fd.VServiceName] = true
+			vservices = append(vservices, fd.VServiceName)
+		}
 	}
-	sort.Strings(names)
-	return names, nil
+	sort.Strings(services)
+	sort.Strings(vservices)
+	return services, vservices, nil
 }
 
 func prepareVServiceDescriptorRoot(protoDir string) (string, func(), error) {
@@ -485,27 +525,4 @@ func copyEmbeddedProtoFS(protoFS fs.FS, embedDir, targetDir, targetSubdir string
 		}
 	}
 	return nil
-}
-
-func scanNames(dir string, re *regexp.Regexp) ([]string, error) {
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil, nil
-	}
-	var names []string
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
-			return err
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		for _, m := range re.FindAllStringSubmatch(string(data), -1) {
-			if len(m) > 1 {
-				names = append(names, m[1])
-			}
-		}
-		return nil
-	})
-	return names, err
 }

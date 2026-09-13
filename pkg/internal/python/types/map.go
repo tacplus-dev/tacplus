@@ -113,7 +113,7 @@ func writeFromMap(b *strings.Builder, pf model.ProtoFile) error {
 			pythonEnumValue := keyEnumType + "." + field.ParamKey
 
 			fields = append(fields, pyMapFieldData{
-				FieldName:       escapePyKeyword(strutil.ToSnakeCase(field.Name)),
+				FieldName:       strutil.ToSnakeCase(field.Name),
 				PythonEnumValue: pythonEnumValue,
 				IsRepeated:      field.IsRepeated,
 				IsInteger:       isIntegerType(field.Type),
@@ -140,7 +140,7 @@ func writeFromMap(b *strings.Builder, pf model.ProtoFile) error {
 			}
 
 			toMapFields = append(toMapFields, pyToMapFieldData{
-				FieldName:      escapePyKeyword(strutil.ToSnakeCase(field.Name)),
+				FieldName:      strutil.ToSnakeCase(field.Name),
 				ProtoFieldName: field.Name,
 				JsonKey:        jsonKey,
 				IsRepeated:     field.IsRepeated,
@@ -172,7 +172,7 @@ func writeFromMap(b *strings.Builder, pf model.ProtoFile) error {
 		return fmt.Errorf("failed to create sub filesystem: %w", err)
 	}
 
-	result, err := tmplutil.ExecuteTemplate(typeFS, "map.py.tmpl", tmplutil.BaseFuncMap(), data)
+	result, err := tmplutil.ExecuteTemplate(typeFS, "map.py.tmpl", pyFieldFuncMap(), data)
 	if err != nil {
 		return fmt.Errorf("failed to execute map template: %w", err)
 	}

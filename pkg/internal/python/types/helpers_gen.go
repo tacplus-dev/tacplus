@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/header"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
@@ -20,7 +21,6 @@ import (
 )
 
 // pythonKeywords is the set of Python reserved keywords that cannot be used as identifiers.
-// Protobuf-python appends a trailing underscore to field names that collide with these.
 var pythonKeywords = map[string]bool{
 	"False": true, "None": true, "True": true, "and": true, "as": true,
 	"assert": true, "async": true, "await": true, "break": true, "class": true,
@@ -31,13 +31,49 @@ var pythonKeywords = map[string]bool{
 	"return": true, "try": true, "while": true, "with": true, "yield": true,
 }
 
-// escapePyKeyword appends a trailing underscore to Python reserved keywords,
-// matching the protobuf-python convention for field name escaping.
+// escapePyKeyword appends a trailing underscore to Python reserved keywords.
+//
+// This is only valid for identifiers the generator invents in Python source it
+// owns — module aliases, wrapper attributes, method names — where "def from()"
+// would not parse. It must NOT be used for protobuf field access: protobuf-python
+// keeps the raw proto field name on the message object (a field named "from" is
+// reachable only as getattr(msg, 'from')), so an escaped name there is simply a
+// name that does not exist. Use pyFieldGet/pyFieldSet for field access instead.
 func escapePyKeyword(name string) string {
 	if pythonKeywords[name] {
 		return name + "_"
 	}
 	return name
+}
+
+// pyFieldGet renders a Python expression reading proto field name from obj.
+//
+// Dot access to a keyword-named attribute is a SyntaxError, so keyword fields are
+// read with getattr. Single quotes are used for the name because these expressions
+// are interpolated into double-quoted f-strings, where nesting the same quote
+// character does not parse before Python 3.12.
+func pyFieldGet(obj, name string) string {
+	if pythonKeywords[name] {
+		return fmt.Sprintf("getattr(%s, '%s')", obj, name)
+	}
+	return obj + "." + name
+}
+
+// pyFieldSet renders a Python statement assigning expr to proto field name on obj.
+// See pyFieldGet for why keyword-named fields cannot use dot syntax.
+func pyFieldSet(obj, name, expr string) string {
+	if pythonKeywords[name] {
+		return fmt.Sprintf("setattr(%s, '%s', %s)", obj, name, expr)
+	}
+	return obj + "." + name + " = " + expr
+}
+
+// pyFieldFuncMap is the shared template func map plus the proto field accessors.
+func pyFieldFuncMap() template.FuncMap {
+	fm := tmplutil.BaseFuncMap()
+	fm["pyGet"] = pyFieldGet
+	fm["pySet"] = pyFieldSet
+	return fm
 }
 
 // pyImportsData holds the template data for the imports section of helpers.py.
@@ -375,7 +411,7 @@ func writeDefaults(b *strings.Builder, pf model.ProtoFile) error {
 				if !ok {
 					continue
 				}
-				pyFieldName := escapePyKeyword(strutil.ToSnakeCase(field.Name))
+				pyFieldName := strutil.ToSnakeCase(field.Name)
 				constantName := strutil.DefaultConstName(msg.Name, field.Name, dupFields)
 				df := pyDefaultField{
 					PyFieldName:  pyFieldName,
@@ -405,7 +441,7 @@ func writeDefaults(b *strings.Builder, pf model.ProtoFile) error {
 
 			subMsgCalls = append(subMsgCalls, pySubMsgCall{
 				HasFieldName:  field.Name,
-				PyFieldName:   escapePyKeyword(strutil.ToSnakeCase(field.Name)),
+				PyFieldName:   strutil.ToSnakeCase(field.Name),
 				FuncName:      strutil.ToSnakeCase(field.Type),
 				InitIfNil:     isRequired,
 				HasDefaults:   transitive,
@@ -435,7 +471,7 @@ func writeDefaults(b *strings.Builder, pf model.ProtoFile) error {
 		return fmt.Errorf("failed to create sub filesystem: %w", err)
 	}
 
-	result, err := tmplutil.ExecuteTemplate(typeFS, "defaults.py.tmpl", tmplutil.BaseFuncMap(), data)
+	result, err := tmplutil.ExecuteTemplate(typeFS, "defaults.py.tmpl", pyFieldFuncMap(), data)
 	if err != nil {
 		return fmt.Errorf("failed to execute defaults template: %w", err)
 	}
@@ -464,7 +500,7 @@ func writeUndefaults(b *strings.Builder, pf model.ProtoFile) error {
 				if !ok {
 					continue
 				}
-				pyFieldName := escapePyKeyword(strutil.ToSnakeCase(field.Name))
+				pyFieldName := strutil.ToSnakeCase(field.Name)
 				constantName := strutil.DefaultConstName(msg.Name, field.Name, dupFields)
 				df := pyDefaultField{
 					PyFieldName:  pyFieldName,
@@ -489,7 +525,7 @@ func writeUndefaults(b *strings.Builder, pf model.ProtoFile) error {
 			}
 			subMsgCalls = append(subMsgCalls, pySubMsgCall{
 				HasFieldName:  field.Name,
-				PyFieldName:   escapePyKeyword(strutil.ToSnakeCase(field.Name)),
+				PyFieldName:   strutil.ToSnakeCase(field.Name),
 				FuncName:      strutil.ToSnakeCase(field.Type),
 				HasDefaults:   true,
 				QualifiedType: fmt.Sprintf("%s_pb2.%s", protoFilename, field.Type),
@@ -518,7 +554,7 @@ func writeUndefaults(b *strings.Builder, pf model.ProtoFile) error {
 		return fmt.Errorf("failed to create sub filesystem: %w", err)
 	}
 
-	result, err := tmplutil.ExecuteTemplate(typeFS, "undefaults.py.tmpl", tmplutil.BaseFuncMap(), data)
+	result, err := tmplutil.ExecuteTemplate(typeFS, "undefaults.py.tmpl", pyFieldFuncMap(), data)
 	if err != nil {
 		return fmt.Errorf("failed to execute undefaults template: %w", err)
 	}
@@ -595,7 +631,7 @@ func writeMerge(b *strings.Builder, pf model.ProtoFile) error {
 				continue
 			}
 
-			pyFieldName := escapePyKeyword(strutil.ToSnakeCase(field.Name))
+			pyFieldName := strutil.ToSnakeCase(field.Name)
 			mf := pyMergeField{
 				FieldName:      pyFieldName,
 				ProtoFieldName: field.Name,
@@ -661,7 +697,7 @@ func writeMerge(b *strings.Builder, pf model.ProtoFile) error {
 		return fmt.Errorf("failed to create sub filesystem: %w", err)
 	}
 
-	result, err := tmplutil.ExecuteTemplate(typeFS, "merge.py.tmpl", tmplutil.BaseFuncMap(), data)
+	result, err := tmplutil.ExecuteTemplate(typeFS, "merge.py.tmpl", pyFieldFuncMap(), data)
 	if err != nil {
 		return fmt.Errorf("failed to execute merge template: %w", err)
 	}

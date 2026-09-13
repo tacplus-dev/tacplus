@@ -56,9 +56,8 @@ func writeMessageToEnvVarPy(b *strings.Builder, msg model.Message, pf model.Prot
 			continue
 		}
 
-		pyFieldName := escapePyKeyword(strutil.ToSnakeCase(field.Name))
 		envKey := prefix + "_" + strings.ToUpper(field.Name)
-		accessor := "msg." + pyFieldName
+		accessor := pyFieldGet("msg", strutil.ToSnakeCase(field.Name))
 
 		switch {
 		case field.IsEnum:
@@ -167,79 +166,81 @@ func writeMessageFromEnvVarPy(b *strings.Builder, msg model.Message, pf model.Pr
 			continue
 		}
 
-		pyFieldName := escapePyKeyword(strutil.ToSnakeCase(field.Name))
+		rawFieldName := strutil.ToSnakeCase(field.Name)
 		envKey := prefix + "_" + strings.ToUpper(field.Name)
 
 		switch {
 		case field.IsEnum:
-			writeEnumFieldFromEnvVarPy(b, field, pyFieldName, envKey)
+			writeEnumFieldFromEnvVarPy(b, field, rawFieldName, envKey)
 		case field.IsMessage:
-			writeMessageFieldFromEnvVarPy(b, field, pyFieldName)
+			writeMessageFieldFromEnvVarPy(b, field, rawFieldName)
 		default:
-			writeScalarFieldFromEnvVarPy(b, field, pyFieldName, envKey)
+			writeScalarFieldFromEnvVarPy(b, field, rawFieldName, envKey)
 		}
 	}
 
 	b.WriteString("    return result\n\n")
 }
 
-func writeScalarFieldFromEnvVarPy(b *strings.Builder, field model.Field, pyFieldName, envKey string) {
+func writeScalarFieldFromEnvVarPy(b *strings.Builder, field model.Field, rawFieldName, envKey string) {
 	if field.IsRepeated {
-		writeRepeatedScalarFromEnvVarPy(b, field, pyFieldName, envKey)
+		writeRepeatedScalarFromEnvVarPy(b, field, rawFieldName, envKey)
 		return
 	}
 
 	valGet := fmt.Sprintf("env.get('%s', '')", envKey)
+	set := func(expr string) string { return pyFieldSet("result", rawFieldName, expr) }
 
 	switch field.Type {
 	case "string":
-		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        result.%s = _val\n", valGet, pyFieldName)
+		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        %s\n", valGet, set("_val"))
 	case "int32", "sint32", "sfixed32", "int64", "sint64", "sfixed64":
-		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        result.%s = int(_val)\n", valGet, pyFieldName)
+		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        %s\n", valGet, set("int(_val)"))
 	case "uint32", "fixed32", "uint64", "fixed64":
-		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        result.%s = int(_val)\n", valGet, pyFieldName)
+		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        %s\n", valGet, set("int(_val)"))
 	case "float", "double":
-		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        result.%s = float(_val)\n", valGet, pyFieldName)
+		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        %s\n", valGet, set("float(_val)"))
 	case "bool":
-		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        result.%s = _val.lower() == 'true'\n", valGet, pyFieldName)
+		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        %s\n", valGet, set("_val.lower() == 'true'"))
 	case "bytes":
-		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        import base64\n        result.%s = base64.b64decode(_val)\n", valGet, pyFieldName)
+		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        import base64\n        %s\n", valGet, set("base64.b64decode(_val)"))
 	}
 }
 
-func writeRepeatedScalarFromEnvVarPy(b *strings.Builder, field model.Field, pyFieldName, envKey string) {
+func writeRepeatedScalarFromEnvVarPy(b *strings.Builder, field model.Field, rawFieldName, envKey string) {
 	valGet := fmt.Sprintf("env.get('%s', '')", envKey)
+	target := pyFieldGet("result", rawFieldName)
 
 	switch field.Type {
 	case "string":
-		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        result.%s.extend(_val.split(','))\n", valGet, pyFieldName)
+		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        %s.extend(_val.split(','))\n", valGet, target)
 	case "int32", "sint32", "sfixed32", "int64", "sint64", "sfixed64",
 		"uint32", "fixed32", "uint64", "fixed64":
-		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        result.%s.extend(int(s.strip()) for s in _val.split(','))\n", valGet, pyFieldName)
+		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        %s.extend(int(s.strip()) for s in _val.split(','))\n", valGet, target)
 	case "float", "double":
-		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        result.%s.extend(float(s.strip()) for s in _val.split(','))\n", valGet, pyFieldName)
+		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        %s.extend(float(s.strip()) for s in _val.split(','))\n", valGet, target)
 	case "bool":
-		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        result.%s.extend(s.strip().lower() == 'true' for s in _val.split(','))\n", valGet, pyFieldName)
+		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        %s.extend(s.strip().lower() == 'true' for s in _val.split(','))\n", valGet, target)
 	}
 }
 
-func writeEnumFieldFromEnvVarPy(b *strings.Builder, field model.Field, pyFieldName, envKey string) {
+func writeEnumFieldFromEnvVarPy(b *strings.Builder, field model.Field, rawFieldName, envKey string) {
 	parseFunc := "parse_" + strutil.ToSnakeCase(field.Type)
 	valGet := fmt.Sprintf("env.get('%s', '')", envKey)
 
 	if field.IsRepeated {
-		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        result.%s.extend(%s(s.strip()) for s in _val.split(','))\n",
-			valGet, pyFieldName, parseFunc)
+		fmt.Fprintf(b, "    _val = %s\n    if _val:\n        %s.extend(%s(s.strip()) for s in _val.split(','))\n",
+			valGet, pyFieldGet("result", rawFieldName), parseFunc)
 		return
 	}
 
-	fmt.Fprintf(b, "    _val = %s\n    if _val:\n        result.%s = %s(_val)\n", valGet, pyFieldName, parseFunc)
+	fmt.Fprintf(b, "    _val = %s\n    if _val:\n        %s\n", valGet, pyFieldSet("result", rawFieldName, parseFunc+"(_val)"))
 }
 
-func writeMessageFieldFromEnvVarPy(b *strings.Builder, field model.Field, pyFieldName string) {
+func writeMessageFieldFromEnvVarPy(b *strings.Builder, field model.Field, rawFieldName string) {
 	fromEnvVarFunc := strutil.ToSnakeCase(field.Type) + "_from_env_var"
-	fmt.Fprintf(b, "    _sub = %s(env)\n    if _sub.ByteSize() > 0:\n        result.%s.CopyFrom(_sub)\n",
-		fromEnvVarFunc, pyFieldName)
+	fmt.Fprintf(b, "    _sub = %s(env)\n    if _sub.ByteSize() > 0:\n        %s.CopyFrom(_sub)\n",
+		fromEnvVarFunc, pyFieldGet("result", rawFieldName))
 }
 
 // isWellKnownTypePy returns true if the type package is a protobuf well-known type.

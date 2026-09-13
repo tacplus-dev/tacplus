@@ -8,32 +8,32 @@ def {{.FuncName}}_defaults(msg: {{.QualifiedType}}) -> None:
         return
 {{- range .Fields}}
 {{- if eq .AnnKey "default_string"}}
-    if msg.{{.PyFieldName}} == "":
-        msg.{{.PyFieldName}} = {{.ConstantName}}
+    if {{pyGet "msg" .PyFieldName}} == "":
+        {{pySet "msg" .PyFieldName .ConstantName}}
 {{- else if eq .AnnKey "default_int"}}
-    if msg.{{.PyFieldName}} == 0:
-        msg.{{.PyFieldName}} = {{.ConstantName}}
+    if {{pyGet "msg" .PyFieldName}} == 0:
+        {{pySet "msg" .PyFieldName .ConstantName}}
 {{- else if eq .AnnKey "default_float"}}
-    if msg.{{.PyFieldName}} == 0.0:
-        msg.{{.PyFieldName}} = {{.ConstantName}}
+    if {{pyGet "msg" .PyFieldName}} == 0.0:
+        {{pySet "msg" .PyFieldName .ConstantName}}
 {{- else if eq .AnnKey "default_bool"}}
-    if not msg.{{.PyFieldName}}:
-        msg.{{.PyFieldName}} = {{.ConstantName}}
+    if not {{pyGet "msg" .PyFieldName}}:
+        {{pySet "msg" .PyFieldName .ConstantName}}
 {{- else if eq .AnnKey "default_host"}}
-    if not msg.{{.PyFieldName}}:
-        msg.{{.PyFieldName}} = Host(host="{{.HostHost}}", port={{.HostPort}})
+    if not {{pyGet "msg" .PyFieldName}}:
+        {{pySet "msg" .PyFieldName (printf "Host(host=\"%s\", port=%d)" .HostHost .HostPort)}}
 {{- end}}
 {{- end}}
 {{- range .SubMsgCalls}}
 {{- if .InitIfNil}}
     if not msg.HasField("{{.HasFieldName}}"):
-        msg.{{.PyFieldName}}.SetInParent()
+        {{pyGet "msg" .PyFieldName}}.SetInParent()
 {{- if .HasDefaults}}
-    {{.FuncName}}_defaults(msg.{{.PyFieldName}})
+    {{.FuncName}}_defaults({{pyGet "msg" .PyFieldName}})
 {{- end}}
 {{- else}}
     if msg.HasField("{{.HasFieldName}}"):
-        {{.FuncName}}_defaults(msg.{{.PyFieldName}})
+        {{.FuncName}}_defaults({{pyGet "msg" .PyFieldName}})
 {{- end}}
 {{- end}}
 {{- if and (eq (len .Fields) 0) (eq (len .SubMsgCalls) 0)}}

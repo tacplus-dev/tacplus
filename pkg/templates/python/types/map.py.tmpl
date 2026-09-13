@@ -34,19 +34,19 @@ def {{.FuncName}}_from_map(params: Dict[str, str]):
 {{- end}}
 {{- if $field.IsRepeated}}
             if value:
-                result.{{$field.FieldName}}[:] = value.split(',')
+                {{pyGet "result" $field.FieldName}}[:] = value.split(',')
 {{- else if $field.IsInteger}}
             try:
-                result.{{$field.FieldName}} = int(value)
+                {{pySet "result" $field.FieldName "int(value)"}}
             except ValueError:
                 pass # Ignore invalid integers
 {{- else if $field.IsFloat}}
             try:
-                result.{{$field.FieldName}} = float(value)
+                {{pySet "result" $field.FieldName "float(value)"}}
             except ValueError:
                 pass # Ignore invalid floats
 {{- else}}
-            result.{{$field.FieldName}} = value
+            {{pySet "result" $field.FieldName "value"}}
 {{- end}}
 {{- end}}
 
@@ -64,14 +64,14 @@ def {{.FuncName}}_to_map(m):
         return result
 {{- range .ToMapFields}}
 {{- if .IsRepeated}}
-    if m.{{.FieldName}}:
-        result['{{.JsonKey}}'] = ','.join(m.{{.FieldName}})
+    if {{pyGet "m" .FieldName}}:
+        result['{{.JsonKey}}'] = ','.join({{pyGet "m" .FieldName}})
 {{- else if .IsNumeric}}
     if m.HasField('{{.ProtoFieldName}}'):
-        result['{{.JsonKey}}'] = str(m.{{.FieldName}})
+        result['{{.JsonKey}}'] = str({{pyGet "m" .FieldName}})
 {{- else}}
-    if m.HasField('{{.ProtoFieldName}}') and m.{{.FieldName}}:
-        result['{{.JsonKey}}'] = m.{{.FieldName}}
+    if m.HasField('{{.ProtoFieldName}}') and {{pyGet "m" .FieldName}}:
+        result['{{.JsonKey}}'] = {{pyGet "m" .FieldName}}
 {{- end}}
 {{- end}}
     return result

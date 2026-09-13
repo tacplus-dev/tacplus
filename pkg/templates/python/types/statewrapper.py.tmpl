@@ -321,15 +321,15 @@ class {{.StateRootName}}Client:
         state = pb.{{.StateRootName}}()
 {{- range .Singletons}}
         if self._{{.FieldName}} is not None:
-            state.{{.FieldName}}.CopyFrom(self._{{.FieldName}})
+            {{pyGet "state" .ProtoFieldName}}.CopyFrom(self._{{.FieldName}})
 {{- end}}
 {{- range .Collections}}
         for v in self._{{.FieldName}}.values():
-            state.{{.FieldName}}.append(copy.deepcopy(v))
+            {{pyGet "state" .ProtoFieldName}}.append(copy.deepcopy(v))
 {{- end}}
 {{- range .StateImports}}
         if self._{{.FieldName}} is not None:
-            state.{{.FieldName}}.CopyFrom(self._{{.FieldName}})
+            {{pyGet "state" .ProtoFieldName}}.CopyFrom(self._{{.FieldName}})
 {{- end}}
         return state
 

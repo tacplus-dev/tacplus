@@ -942,7 +942,7 @@ var fieldKindProbes = []struct {
 		patterns: map[string][]string{
 			"go":         {"field.IsOneOf", "m.Get%s()", "assert_max_size"},
 			"java":       {"field.IsOneOf", "msg.%s().getBytes(java.nio.charset.StandardCharsets.UTF_8).length", "assert_max_size"},
-			"python":     {"field.IsOneOf", "msg.%s.encode('utf-8')", "assert_max_size"},
+			"python":     {"field.IsOneOf", "%s.encode('utf-8')) > %d:", "assert_max_size"},
 			"rust":       {"generateRustOneofScalarMaxSize", "writeRustOneofScalarMaxSize"},
 			"typescript": {"writeTypeScriptOneofScalarMaxSize", "m.%s.case === '%s'"},
 		},

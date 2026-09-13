@@ -23,19 +23,21 @@ import (
 
 // pySingletonBoundary describes a non-repeated message field in the state root.
 type pySingletonBoundary struct {
-	FieldName   string // snake_case: "roster"
-	FieldPascal string // PascalCase: "Roster"
-	TypeName    string // PascalCase message type: "TeamRoster"
-	IsPersisted bool
+	FieldName      string // escaped snake_case wrapper attribute: "roster"
+	ProtoFieldName string // raw snake_case proto field: "roster"
+	FieldPascal    string // PascalCase: "Roster"
+	TypeName       string // PascalCase message type: "TeamRoster"
+	IsPersisted    bool
 }
 
 // pyCollectionBoundary describes a repeated message field in the state root.
 type pyCollectionBoundary struct {
-	FieldName    string // snake_case: "players"
-	FieldPascal  string // PascalCase: "Players"
-	TypeName     string // PascalCase item type: "Player"
-	KeyFieldName string // snake_case key field: "player_id"
-	IsPersisted  bool
+	FieldName      string // escaped snake_case wrapper attribute: "players"
+	ProtoFieldName string // raw snake_case proto field: "players"
+	FieldPascal    string // PascalCase: "Players"
+	TypeName       string // PascalCase item type: "Player"
+	KeyFieldName   string // snake_case key field: "player_id"
+	IsPersisted    bool
 
 	// MaxEntries is the client-side snapshot safety limit: the field's
 	// (spec.eviction_max_size) when declared, else the shared default.
@@ -44,9 +46,10 @@ type pyCollectionBoundary struct {
 
 // pyStateImportField describes a field with state_import annotation.
 type pyStateImportField struct {
-	FieldName   string // snake_case: "football_team_roster"
-	FieldPascal string // PascalCase: "FootballTeamRoster"
-	TypeName    string // PascalCase: "TeamRoster"
+	FieldName      string // escaped snake_case wrapper attribute: "football_team_roster"
+	ProtoFieldName string // raw snake_case proto field: "football_team_roster"
+	FieldPascal    string // PascalCase: "FootballTeamRoster"
+	TypeName       string // PascalCase: "TeamRoster"
 }
 
 // pyCommandBoundary describes a command RPC field in the state root.
@@ -214,9 +217,10 @@ func generatePyStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc *p
 		if importAnn, ok := field.Annotations["state_import"]; ok && importAnn.StringValue != "" {
 			typeName := extractPySimpleTypeName(field.Type)
 			stateImports = append(stateImports, pyStateImportField{
-				FieldName:   escapePyKeyword(strutil.ToSnakeCase(field.Name)),
-				FieldPascal: strutil.ToPascalCase(field.Name),
-				TypeName:    typeName,
+				FieldName:      escapePyKeyword(strutil.ToSnakeCase(field.Name)),
+				ProtoFieldName: strutil.ToSnakeCase(field.Name),
+				FieldPascal:    strutil.ToPascalCase(field.Name),
+				TypeName:       typeName,
 			})
 			continue
 		}
@@ -249,7 +253,7 @@ func generatePyStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc *p
 				FieldName:    escapePyKeyword(strutil.ToSnakeCase(field.Name)),
 				FieldPascal:  strutil.ToPascalCase(field.Name),
 				TypeName:     typeName,
-				KeyFieldName: escapePyKeyword(strutil.ToSnakeCase(keyFieldName)),
+				KeyFieldName: strutil.ToSnakeCase(keyFieldName),
 				ViewSources:  sourcePascal,
 			})
 			continue
@@ -292,20 +296,22 @@ func generatePyStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc *p
 				}
 			}
 			collections = append(collections, pyCollectionBoundary{
-				FieldName:    escapePyKeyword(strutil.ToSnakeCase(field.Name)),
-				FieldPascal:  fieldPascal,
-				TypeName:     typeName,
-				KeyFieldName: escapePyKeyword(strutil.ToSnakeCase(keyFieldName)),
-				IsPersisted:  field.Annotations["persistence"].BoolValue,
+				FieldName:      escapePyKeyword(strutil.ToSnakeCase(field.Name)),
+				ProtoFieldName: strutil.ToSnakeCase(field.Name),
+				FieldPascal:    fieldPascal,
+				TypeName:       typeName,
+				KeyFieldName:   strutil.ToSnakeCase(keyFieldName),
+				IsPersisted:    field.Annotations["persistence"].BoolValue,
 
 				MaxEntries: boundaries.CollectionSafetyLimit(field),
 			})
 		} else {
 			singletons = append(singletons, pySingletonBoundary{
-				FieldName:   escapePyKeyword(strutil.ToSnakeCase(field.Name)),
-				FieldPascal: fieldPascal,
-				TypeName:    typeName,
-				IsPersisted: field.Annotations["persistence"].BoolValue,
+				FieldName:      escapePyKeyword(strutil.ToSnakeCase(field.Name)),
+				ProtoFieldName: strutil.ToSnakeCase(field.Name),
+				FieldPascal:    fieldPascal,
+				TypeName:       typeName,
+				IsPersisted:    field.Annotations["persistence"].BoolValue,
 			})
 		}
 	}
@@ -342,6 +348,7 @@ func generatePyStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc *p
 
 	funcMap := template.FuncMap{
 		"snakeCase": strutil.ToSnakeCase,
+		"pyGet":     pyFieldGet,
 	}
 	tmpl, err := template.New("py-statewrapper").Funcs(funcMap).Parse(tmplContent)
 	if err != nil {

@@ -6,49 +6,49 @@ def {{.FuncName}}(dst: {{.QualifiedType}}, src: {{.QualifiedType}}) -> None:
     """Fills zero-valued fields in dst from src. dst takes precedence."""
 {{- range .Fields}}
 {{- if eq .Kind "string"}}
-    if dst.{{.FieldName}} == "":
-        dst.{{.FieldName}} = src.{{.FieldName}}
+    if {{pyGet "dst" .FieldName}} == "":
+        {{pySet "dst" .FieldName (pyGet "src" .FieldName)}}
 {{- else if eq .Kind "int"}}
-    if dst.{{.FieldName}} == 0:
-        dst.{{.FieldName}} = src.{{.FieldName}}
+    if {{pyGet "dst" .FieldName}} == 0:
+        {{pySet "dst" .FieldName (pyGet "src" .FieldName)}}
 {{- else if eq .Kind "float"}}
-    if dst.{{.FieldName}} == 0.0:
-        dst.{{.FieldName}} = src.{{.FieldName}}
+    if {{pyGet "dst" .FieldName}} == 0.0:
+        {{pySet "dst" .FieldName (pyGet "src" .FieldName)}}
 {{- else if eq .Kind "bool"}}
-    if not dst.{{.FieldName}}:
-        dst.{{.FieldName}} = src.{{.FieldName}}
+    if not {{pyGet "dst" .FieldName}}:
+        {{pySet "dst" .FieldName (pyGet "src" .FieldName)}}
 {{- else if eq .Kind "enum"}}
-    if dst.{{.FieldName}} == 0:
-        dst.{{.FieldName}} = src.{{.FieldName}}
+    if {{pyGet "dst" .FieldName}} == 0:
+        {{pySet "dst" .FieldName (pyGet "src" .FieldName)}}
 {{- else if eq .Kind "bytes"}}
-    if len(dst.{{.FieldName}}) == 0:
-        dst.{{.FieldName}} = src.{{.FieldName}}
+    if len({{pyGet "dst" .FieldName}}) == 0:
+        {{pySet "dst" .FieldName (pyGet "src" .FieldName)}}
 {{- else if eq .Kind "message"}}
 {{- if .SamePkg}}
     if not dst.HasField("{{.ProtoFieldName}}") and src.HasField("{{.ProtoFieldName}}"):
-        dst.{{.FieldName}}.CopyFrom(src.{{.FieldName}})
+        {{pyGet "dst" .FieldName}}.CopyFrom({{pyGet "src" .FieldName}})
     elif dst.HasField("{{.ProtoFieldName}}") and src.HasField("{{.ProtoFieldName}}"):
-        {{.MergeFn}}(dst.{{.FieldName}}, src.{{.FieldName}})
+        {{.MergeFn}}({{pyGet "dst" .FieldName}}, {{pyGet "src" .FieldName}})
 {{- else}}
     if not dst.HasField("{{.ProtoFieldName}}") and src.HasField("{{.ProtoFieldName}}"):
-        dst.{{.FieldName}}.CopyFrom(src.{{.FieldName}})
+        {{pyGet "dst" .FieldName}}.CopyFrom({{pyGet "src" .FieldName}})
 {{- end}}
 {{- else if eq .Kind "repeated"}}
-    if len(dst.{{.FieldName}}) == 0:
-        dst.{{.FieldName}}.extend(src.{{.FieldName}})
+    if len({{pyGet "dst" .FieldName}}) == 0:
+        {{pyGet "dst" .FieldName}}.extend({{pyGet "src" .FieldName}})
 {{- else if eq .Kind "map"}}
 {{- if .MapValueSamePkg}}
-    if len(dst.{{.FieldName}}) == 0:
-        dst.{{.FieldName}}.update(src.{{.FieldName}})
+    if len({{pyGet "dst" .FieldName}}) == 0:
+        {{pyGet "dst" .FieldName}}.update({{pyGet "src" .FieldName}})
     else:
-        for k, src_val in src.{{.FieldName}}.items():
-            if k in dst.{{.FieldName}}:
-                {{.MapValueMergeFn}}(dst.{{.FieldName}}[k], src_val)
+        for k, src_val in {{pyGet "src" .FieldName}}.items():
+            if k in {{pyGet "dst" .FieldName}}:
+                {{.MapValueMergeFn}}({{pyGet "dst" .FieldName}}[k], src_val)
             else:
-                dst.{{.FieldName}}[k].CopyFrom(src_val)
+                {{pyGet "dst" .FieldName}}[k].CopyFrom(src_val)
 {{- else}}
-    if len(dst.{{.FieldName}}) == 0:
-        dst.{{.FieldName}}.update(src.{{.FieldName}})
+    if len({{pyGet "dst" .FieldName}}) == 0:
+        {{pyGet "dst" .FieldName}}.update({{pyGet "src" .FieldName}})
 {{- end}}
 {{- end}}
 {{- end}}

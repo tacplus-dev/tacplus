@@ -110,6 +110,7 @@ func renderPyStateWrapperForTest(t *testing.T, data pyStateWrapperData) string {
 	}
 	tmpl, err := template.New("statewrapper").Funcs(template.FuncMap{
 		"snakeCase": strutil.ToSnakeCase,
+		"pyGet":     pyFieldGet,
 	}).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse state wrapper template: %v", err)

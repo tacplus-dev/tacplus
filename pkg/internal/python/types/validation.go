@@ -23,11 +23,11 @@ import (
 func pyRequiredZeroCheck(field model.Field, pyFieldName string) string {
 	switch {
 	case field.IsMap || field.IsRepeated:
-		return fmt.Sprintf("len(msg.%s) == 0", pyFieldName)
+		return fmt.Sprintf("len(%s) == 0", pyFieldGet("msg", pyFieldName))
 	case field.IsMessage || field.IsOptional:
 		return fmt.Sprintf("not msg.HasField(\"%s\")", field.Name)
 	default:
-		return fmt.Sprintf("not msg.%s", pyFieldName)
+		return fmt.Sprintf("not %s", pyFieldGet("msg", pyFieldName))
 	}
 }
 
@@ -148,14 +148,14 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 			if len(field.Annotations) == 0 {
 				continue
 			}
-			pyFieldName := escapePyKeyword(strutil.ToSnakeCase(field.Name))
+			pyFieldName := strutil.ToSnakeCase(field.Name)
 			if annotationValue, ok := field.Annotations["assert_max_size"]; ok && annotationValue.Type == model.AnnotationTypeInt && (field.Type == "string" || field.Type == "bytes") {
 				var code strings.Builder
 				pyLinef(&code, 1, "# Validate %s (assert_max_size: %d bytes)", pyFieldName, annotationValue.IntValue)
 				if field.Type == "bytes" {
-					pyLinef(&code, 1, "if len(msg.%s) > %d:", pyFieldName, annotationValue.IntValue)
+					pyLinef(&code, 1, "if len(%s) > %d:", pyFieldGet("msg", pyFieldName), annotationValue.IntValue)
 				} else {
-					pyLinef(&code, 1, "if len(msg.%s.encode('utf-8')) > %d:", pyFieldName, annotationValue.IntValue)
+					pyLinef(&code, 1, "if len(%s.encode('utf-8')) > %d:", pyFieldGet("msg", pyFieldName), annotationValue.IntValue)
 				}
 				pyLinef(&code, 2, "raise invalid_argument(f\"field %s exceeds max size of %d bytes\")", pyFieldName, annotationValue.IntValue)
 				blocks = append(blocks, pyValidationCode{Code: code.String()})
@@ -166,7 +166,7 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 			continue
 		}
 
-		pyFieldName := escapePyKeyword(strutil.ToSnakeCase(field.Name))
+		pyFieldName := strutil.ToSnakeCase(field.Name)
 
 		// Check assert_required FIRST
 		if annotationValue, hasRequired := field.Annotations["assert_required"]; hasRequired {
@@ -198,12 +198,12 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				}
 				pyLinef(&code, 1, "# Validate %s (assert_email)", pyFieldName)
 				if field.IsRepeated {
-					pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
+					pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
 					pyLine(&code, 2, "if val:")
 					pyLinef(&code, 3, "_validate_email(val, '%s')", pyFieldName)
 				} else {
-					pyLinef(&code, 1, "if msg.%s:", pyFieldName)
-					pyLinef(&code, 2, "_validate_email(msg.%s, '%s')", pyFieldName, pyFieldName)
+					pyLinef(&code, 1, "if %s:", pyFieldGet("msg", pyFieldName))
+					pyLinef(&code, 2, "_validate_email(%s, '%s')", pyFieldGet("msg", pyFieldName), pyFieldName)
 				}
 
 			case "assert_fqdn":
@@ -212,12 +212,12 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				}
 				pyLinef(&code, 1, "# Validate %s (assert_fqdn)", pyFieldName)
 				if field.IsRepeated {
-					pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
+					pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
 					pyLine(&code, 2, "if val:")
 					pyLinef(&code, 3, "_validate_fqdn(val, '%s')", pyFieldName)
 				} else {
-					pyLinef(&code, 1, "if msg.%s:", pyFieldName)
-					pyLinef(&code, 2, "_validate_fqdn(msg.%s, '%s')", pyFieldName, pyFieldName)
+					pyLinef(&code, 1, "if %s:", pyFieldGet("msg", pyFieldName))
+					pyLinef(&code, 2, "_validate_fqdn(%s, '%s')", pyFieldGet("msg", pyFieldName), pyFieldName)
 				}
 
 			case "assert_host":
@@ -226,12 +226,12 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				}
 				pyLinef(&code, 1, "# Validate %s (assert_host: IP address or FQDN)", pyFieldName)
 				if field.IsRepeated {
-					pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
+					pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
 					pyLine(&code, 2, "if val:")
 					pyLinef(&code, 3, "_validate_host(val, '%s')", pyFieldName)
 				} else {
-					pyLinef(&code, 1, "if msg.%s:", pyFieldName)
-					pyLinef(&code, 2, "_validate_host(msg.%s, '%s')", pyFieldName, pyFieldName)
+					pyLinef(&code, 1, "if %s:", pyFieldGet("msg", pyFieldName))
+					pyLinef(&code, 2, "_validate_host(%s, '%s')", pyFieldGet("msg", pyFieldName), pyFieldName)
 				}
 
 			case "assert_base64":
@@ -240,12 +240,12 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				}
 				pyLinef(&code, 1, "# Validate %s (assert_base64)", pyFieldName)
 				if field.IsRepeated {
-					pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
+					pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
 					pyLine(&code, 2, "if val:")
 					pyLinef(&code, 3, "_validate_base64(val, '%s')", pyFieldName)
 				} else {
-					pyLinef(&code, 1, "if msg.%s:", pyFieldName)
-					pyLinef(&code, 2, "_validate_base64(msg.%s, '%s')", pyFieldName, pyFieldName)
+					pyLinef(&code, 1, "if %s:", pyFieldGet("msg", pyFieldName))
+					pyLinef(&code, 2, "_validate_base64(%s, '%s')", pyFieldGet("msg", pyFieldName), pyFieldName)
 				}
 
 			case "assert_listen_addr":
@@ -254,12 +254,12 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				}
 				pyLinef(&code, 1, "# Validate %s (assert_listen_addr)", pyFieldName)
 				if field.IsRepeated {
-					pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
+					pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
 					pyLine(&code, 2, "if val:")
 					pyLinef(&code, 3, "_validate_listen_addr(val, '%s')", pyFieldName)
 				} else {
-					pyLinef(&code, 1, "if msg.%s:", pyFieldName)
-					pyLinef(&code, 2, "_validate_listen_addr(msg.%s, '%s')", pyFieldName, pyFieldName)
+					pyLinef(&code, 1, "if %s:", pyFieldGet("msg", pyFieldName))
+					pyLinef(&code, 2, "_validate_listen_addr(%s, '%s')", pyFieldGet("msg", pyFieldName), pyFieldName)
 				}
 
 			case "assert_net_port":
@@ -267,8 +267,8 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 					return nil, fmt.Errorf("assert_net_port annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
 				}
 				pyLinef(&code, 1, "# Validate %s (assert_net_port)", pyFieldName)
-				pyLinef(&code, 1, "if msg.%s < 0 or msg.%s > 65535:", pyFieldName, pyFieldName)
-				pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be a valid port number (0-65535), got: {msg.%s}\")", pyFieldName, pyFieldName)
+				pyLinef(&code, 1, "if %s < 0 or %s > 65535:", pyFieldGet("msg", pyFieldName), pyFieldGet("msg", pyFieldName))
+				pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be a valid port number (0-65535), got: {%s}\")", pyFieldName, pyFieldGet("msg", pyFieldName))
 
 			case "assert_ipaddr_type":
 				if field.Type != "string" {
@@ -286,12 +286,12 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 					switch annotationValue.EnumValue {
 					case "DURATION_TYPE_POSITIVE":
 						pyLinef(&code, 1, "# Validate %s (assert_duration: POSITIVE)", pyFieldName)
-						pyLinef(&code, 1, "if msg.%s <= 0:", pyFieldName)
-						pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be positive (> 0), got: {msg.%s}\")", pyFieldName, pyFieldName)
+						pyLinef(&code, 1, "if %s <= 0:", pyFieldGet("msg", pyFieldName))
+						pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be positive (> 0), got: {%s}\")", pyFieldName, pyFieldGet("msg", pyFieldName))
 					case "DURATION_TYPE_NON_NEGATIVE":
 						pyLinef(&code, 1, "# Validate %s (assert_duration: NON_NEGATIVE)", pyFieldName)
-						pyLinef(&code, 1, "if msg.%s < 0:", pyFieldName)
-						pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be non-negative (>= 0), got: {msg.%s}\")", pyFieldName, pyFieldName)
+						pyLinef(&code, 1, "if %s < 0:", pyFieldGet("msg", pyFieldName))
+						pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be non-negative (>= 0), got: {%s}\")", pyFieldName, pyFieldGet("msg", pyFieldName))
 					}
 				}
 
@@ -301,8 +301,8 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 						return nil, fmt.Errorf("assert_duration_min annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
 					}
 					pyLinef(&code, 1, "# Validate %s (assert_duration_min: %d)", pyFieldName, annotationValue.IntValue)
-					pyLinef(&code, 1, "if msg.%s < %d:", pyFieldName, annotationValue.IntValue)
-					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be >= %d, got: {msg.%s}\")", pyFieldName, annotationValue.IntValue, pyFieldName)
+					pyLinef(&code, 1, "if %s < %d:", pyFieldGet("msg", pyFieldName), annotationValue.IntValue)
+					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be >= %d, got: {%s}\")", pyFieldName, annotationValue.IntValue, pyFieldGet("msg", pyFieldName))
 				}
 
 			case "assert_duration_max":
@@ -311,8 +311,8 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 						return nil, fmt.Errorf("assert_duration_max annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
 					}
 					pyLinef(&code, 1, "# Validate %s (assert_duration_max: %d)", pyFieldName, annotationValue.IntValue)
-					pyLinef(&code, 1, "if msg.%s > %d:", pyFieldName, annotationValue.IntValue)
-					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be <= %d, got: {msg.%s}\")", pyFieldName, annotationValue.IntValue, pyFieldName)
+					pyLinef(&code, 1, "if %s > %d:", pyFieldGet("msg", pyFieldName), annotationValue.IntValue)
+					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be <= %d, got: {%s}\")", pyFieldName, annotationValue.IntValue, pyFieldGet("msg", pyFieldName))
 				}
 
 			case "assert_gt":
@@ -321,8 +321,8 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 						return nil, fmt.Errorf("assert_gt annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
 					}
 					pyLinef(&code, 1, "# Validate %s (assert_gt: %d)", pyFieldName, annotationValue.IntValue)
-					pyLinef(&code, 1, "if msg.%s <= %d:", pyFieldName, annotationValue.IntValue)
-					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be > %d, got: {msg.%s}\")", pyFieldName, annotationValue.IntValue, pyFieldName)
+					pyLinef(&code, 1, "if %s <= %d:", pyFieldGet("msg", pyFieldName), annotationValue.IntValue)
+					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be > %d, got: {%s}\")", pyFieldName, annotationValue.IntValue, pyFieldGet("msg", pyFieldName))
 				}
 
 			case "assert_ge":
@@ -331,8 +331,8 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 						return nil, fmt.Errorf("assert_ge annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
 					}
 					pyLinef(&code, 1, "# Validate %s (assert_ge: %d)", pyFieldName, annotationValue.IntValue)
-					pyLinef(&code, 1, "if msg.%s < %d:", pyFieldName, annotationValue.IntValue)
-					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be >= %d, got: {msg.%s}\")", pyFieldName, annotationValue.IntValue, pyFieldName)
+					pyLinef(&code, 1, "if %s < %d:", pyFieldGet("msg", pyFieldName), annotationValue.IntValue)
+					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be >= %d, got: {%s}\")", pyFieldName, annotationValue.IntValue, pyFieldGet("msg", pyFieldName))
 				}
 
 			case "assert_lt":
@@ -341,8 +341,8 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 						return nil, fmt.Errorf("assert_lt annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
 					}
 					pyLinef(&code, 1, "# Validate %s (assert_lt: %d)", pyFieldName, annotationValue.IntValue)
-					pyLinef(&code, 1, "if msg.%s >= %d:", pyFieldName, annotationValue.IntValue)
-					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be < %d, got: {msg.%s}\")", pyFieldName, annotationValue.IntValue, pyFieldName)
+					pyLinef(&code, 1, "if %s >= %d:", pyFieldGet("msg", pyFieldName), annotationValue.IntValue)
+					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be < %d, got: {%s}\")", pyFieldName, annotationValue.IntValue, pyFieldGet("msg", pyFieldName))
 				}
 
 			case "assert_le":
@@ -351,8 +351,8 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 						return nil, fmt.Errorf("assert_le annotation on field %s.%s requires a scalar numeric field", msg.Name, pyFieldName)
 					}
 					pyLinef(&code, 1, "# Validate %s (assert_le: %d)", pyFieldName, annotationValue.IntValue)
-					pyLinef(&code, 1, "if msg.%s > %d:", pyFieldName, annotationValue.IntValue)
-					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be <= %d, got: {msg.%s}\")", pyFieldName, annotationValue.IntValue, pyFieldName)
+					pyLinef(&code, 1, "if %s > %d:", pyFieldGet("msg", pyFieldName), annotationValue.IntValue)
+					pyLinef(&code, 2, "raise invalid_argument(f\"field %s must be <= %d, got: {%s}\")", pyFieldName, annotationValue.IntValue, pyFieldGet("msg", pyFieldName))
 				}
 
 			case "assert_semver":
@@ -361,12 +361,12 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				}
 				pyLinef(&code, 1, "# Validate %s (assert_semver)", pyFieldName)
 				if field.IsRepeated {
-					pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
+					pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
 					pyLine(&code, 2, "if val:")
 					pyLinef(&code, 3, "_validate_semver(val, '%s')", pyFieldName)
 				} else {
-					pyLinef(&code, 1, "if msg.%s:", pyFieldName)
-					pyLinef(&code, 2, "_validate_semver(msg.%s, '%s')", pyFieldName, pyFieldName)
+					pyLinef(&code, 1, "if %s:", pyFieldGet("msg", pyFieldName))
+					pyLinef(&code, 2, "_validate_semver(%s, '%s')", pyFieldGet("msg", pyFieldName), pyFieldName)
 				}
 
 			case "assert_sql":
@@ -376,12 +376,12 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				if annotationValue.Type == model.AnnotationTypeEnum {
 					pyLinef(&code, 1, "# Validate %s (assert_sql: %s)", pyFieldName, annotationValue.EnumValue)
 					if field.IsRepeated {
-						pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
+						pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
 						pyLine(&code, 2, "if val:")
 						pyLinef(&code, 3, "_validate_sql(val, '%s', '%s')", annotationValue.EnumValue, pyFieldName)
 					} else {
-						pyLinef(&code, 1, "if msg.%s:", pyFieldName)
-						pyLinef(&code, 2, "_validate_sql(msg.%s, '%s', '%s')", pyFieldName, annotationValue.EnumValue, pyFieldName)
+						pyLinef(&code, 1, "if %s:", pyFieldGet("msg", pyFieldName))
+						pyLinef(&code, 2, "_validate_sql(%s, '%s', '%s')", pyFieldGet("msg", pyFieldName), annotationValue.EnumValue, pyFieldName)
 					}
 				}
 
@@ -392,12 +392,12 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				if annotationValue.Type == model.AnnotationTypeEnum {
 					pyLinef(&code, 1, "# Validate %s (assert_url: %s)", pyFieldName, annotationValue.EnumValue)
 					if field.IsRepeated {
-						pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
+						pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
 						pyLine(&code, 2, "if val:")
 						pyLinef(&code, 3, "_validate_url(val, '%s', '%s')", annotationValue.EnumValue, pyFieldName)
 					} else {
-						pyLinef(&code, 1, "if msg.%s:", pyFieldName)
-						pyLinef(&code, 2, "_validate_url(msg.%s, '%s', '%s')", pyFieldName, annotationValue.EnumValue, pyFieldName)
+						pyLinef(&code, 1, "if %s:", pyFieldGet("msg", pyFieldName))
+						pyLinef(&code, 2, "_validate_url(%s, '%s', '%s')", pyFieldGet("msg", pyFieldName), annotationValue.EnumValue, pyFieldName)
 					}
 				}
 
@@ -408,12 +408,12 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				if annotationValue.Type == model.AnnotationTypeEnum {
 					pyLinef(&code, 1, "# Validate %s (assert_file_path: %s)", pyFieldName, annotationValue.EnumValue)
 					if field.IsRepeated {
-						pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
+						pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
 						pyLine(&code, 2, "if val:")
 						pyLinef(&code, 3, "_validate_file_path(val, '%s', '%s')", annotationValue.EnumValue, pyFieldName)
 					} else {
-						pyLinef(&code, 1, "if msg.%s:", pyFieldName)
-						pyLinef(&code, 2, "_validate_file_path(msg.%s, '%s', '%s')", pyFieldName, annotationValue.EnumValue, pyFieldName)
+						pyLinef(&code, 1, "if %s:", pyFieldGet("msg", pyFieldName))
+						pyLinef(&code, 2, "_validate_file_path(%s, '%s', '%s')", pyFieldGet("msg", pyFieldName), annotationValue.EnumValue, pyFieldName)
 					}
 				}
 
@@ -424,12 +424,12 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				if annotationValue.Type == model.AnnotationTypeEnum {
 					pyLinef(&code, 1, "# Validate %s (assert_enc_type: %s)", pyFieldName, annotationValue.EnumValue)
 					if field.IsRepeated {
-						pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
+						pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
 						pyLine(&code, 2, "if val:")
 						pyLinef(&code, 3, "_validate_enc_type(val, '%s', '%s')", annotationValue.EnumValue, pyFieldName)
 					} else {
-						pyLinef(&code, 1, "if msg.%s:", pyFieldName)
-						pyLinef(&code, 2, "_validate_enc_type(msg.%s, '%s', '%s')", pyFieldName, annotationValue.EnumValue, pyFieldName)
+						pyLinef(&code, 1, "if %s:", pyFieldGet("msg", pyFieldName))
+						pyLinef(&code, 2, "_validate_enc_type(%s, '%s', '%s')", pyFieldGet("msg", pyFieldName), annotationValue.EnumValue, pyFieldName)
 					}
 				}
 
@@ -455,24 +455,24 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 
 			case "epoch_expiration":
 				pyLinef(&code, 1, "# Validate %s (epoch_expiration)", pyFieldName)
-				pyLinef(&code, 1, "if msg.%s != 0:", pyFieldName)
+				pyLinef(&code, 1, "if %s != 0:", pyFieldGet("msg", pyFieldName))
 				pyLine(&code, 2, "import time as _time")
 				pyLine(&code, 2, "_now = int(_time.time())")
-				pyLinef(&code, 2, "if msg.%s <= _now:", pyFieldName)
-				pyLinef(&code, 3, "raise invalid_argument(f\"field %s must be a future epoch timestamp, got: {msg.%s} (now: {_now})\")", pyFieldName, pyFieldName)
-				pyLinef(&code, 2, "if msg.%s > _now + 31536000:", pyFieldName)
-				pyLinef(&code, 3, "raise invalid_argument(f\"field %s must be within 1 year from now, got: {msg.%s} (max: {_now + 31536000})\")", pyFieldName, pyFieldName)
+				pyLinef(&code, 2, "if %s <= _now:", pyFieldGet("msg", pyFieldName))
+				pyLinef(&code, 3, "raise invalid_argument(f\"field %s must be a future epoch timestamp, got: {%s} (now: {_now})\")", pyFieldName, pyFieldGet("msg", pyFieldName))
+				pyLinef(&code, 2, "if %s > _now + 31536000:", pyFieldGet("msg", pyFieldName))
+				pyLinef(&code, 3, "raise invalid_argument(f\"field %s must be within 1 year from now, got: {%s} (max: {_now + 31536000})\")", pyFieldName, pyFieldGet("msg", pyFieldName))
 
 			case "required_if_true":
-				condFieldPy := escapePyKeyword(strutil.ToSnakeCase(annotationValue.StringValue))
+				condFieldPy := strutil.ToSnakeCase(annotationValue.StringValue)
 				pyLinef(&code, 1, "# Validate %s (required_if_true: %s)", pyFieldName, condFieldPy)
-				pyLinef(&code, 1, "if msg.%s and %s:", condFieldPy, pyRequiredZeroCheck(field, pyFieldName))
+				pyLinef(&code, 1, "if %s and %s:", pyFieldGet("msg", condFieldPy), pyRequiredZeroCheck(field, pyFieldName))
 				pyLinef(&code, 2, "raise invalid_argument(\"field %s is required when %s is true\")", pyFieldName, condFieldPy)
 
 			case "required_if_false":
-				condFieldPy := escapePyKeyword(strutil.ToSnakeCase(annotationValue.StringValue))
+				condFieldPy := strutil.ToSnakeCase(annotationValue.StringValue)
 				pyLinef(&code, 1, "# Validate %s (required_if_false: %s)", pyFieldName, condFieldPy)
-				pyLinef(&code, 1, "if not msg.%s and %s:", condFieldPy, pyRequiredZeroCheck(field, pyFieldName))
+				pyLinef(&code, 1, "if not %s and %s:", pyFieldGet("msg", condFieldPy), pyRequiredZeroCheck(field, pyFieldName))
 				pyLinef(&code, 2, "raise invalid_argument(\"field %s is required when %s is false\")", pyFieldName, condFieldPy)
 
 			case "required_if_eq":
@@ -480,7 +480,7 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				if len(parts) == 2 {
 					condFieldSnake := parts[0]
 					condValue := parts[1]
-					condFieldPy := escapePyKeyword(strutil.ToSnakeCase(condFieldSnake))
+					condFieldPy := strutil.ToSnakeCase(condFieldSnake)
 
 					var siblingField *model.Field
 					for i := range msg.Fields {
@@ -504,9 +504,9 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 								break
 							}
 						}
-						pyLinef(&code, 1, "if msg.%s == %d and %s:  # %s", condFieldPy, enumIntVal, pyRequiredZeroCheck(field, pyFieldName), condValue)
+						pyLinef(&code, 1, "if %s == %d and %s:  # %s", pyFieldGet("msg", condFieldPy), enumIntVal, pyRequiredZeroCheck(field, pyFieldName), condValue)
 					} else {
-						pyLinef(&code, 1, "if msg.%s == \"%s\" and %s:", condFieldPy, condValue, pyRequiredZeroCheck(field, pyFieldName))
+						pyLinef(&code, 1, "if %s == \"%s\" and %s:", pyFieldGet("msg", condFieldPy), condValue, pyRequiredZeroCheck(field, pyFieldName))
 					}
 					pyLinef(&code, 2, "raise invalid_argument(\"field %s is required when %s is %s\")", pyFieldName, condFieldSnake, condValue)
 				}
@@ -515,14 +515,14 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				if annotationValue.Type == model.AnnotationTypeInt {
 					if field.IsRepeated || field.IsMap {
 						pyLinef(&code, 1, "# Validate %s (assert_max_size: %d)", pyFieldName, annotationValue.IntValue)
-						pyLinef(&code, 1, "if len(msg.%s) > %d:", pyFieldName, annotationValue.IntValue)
-						pyLinef(&code, 2, "raise invalid_argument(f\"field %s exceeds max size of %d, got: {len(msg.%s)}\")", pyFieldName, annotationValue.IntValue, pyFieldName)
+						pyLinef(&code, 1, "if len(%s) > %d:", pyFieldGet("msg", pyFieldName), annotationValue.IntValue)
+						pyLinef(&code, 2, "raise invalid_argument(f\"field %s exceeds max size of %d, got: {len(%s)}\")", pyFieldName, annotationValue.IntValue, pyFieldGet("msg", pyFieldName))
 					} else {
 						pyLinef(&code, 1, "# Validate %s (assert_max_size: %d bytes)", pyFieldName, annotationValue.IntValue)
 						if field.Type == "bytes" {
-							pyLinef(&code, 1, "if len(msg.%s) > %d:", pyFieldName, annotationValue.IntValue)
+							pyLinef(&code, 1, "if len(%s) > %d:", pyFieldGet("msg", pyFieldName), annotationValue.IntValue)
 						} else {
-							pyLinef(&code, 1, "if len(msg.%s.encode('utf-8')) > %d:", pyFieldName, annotationValue.IntValue)
+							pyLinef(&code, 1, "if len(%s.encode('utf-8')) > %d:", pyFieldGet("msg", pyFieldName), annotationValue.IntValue)
 						}
 						pyLinef(&code, 2, "raise invalid_argument(f\"field %s exceeds max size of %d bytes\")", pyFieldName, annotationValue.IntValue)
 					}
@@ -532,14 +532,14 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				if annotationValue.Type == model.AnnotationTypeInt {
 					if field.IsRepeated || field.IsMap {
 						pyLinef(&code, 1, "# Validate %s (assert_min_size: %d)", pyFieldName, annotationValue.IntValue)
-						pyLinef(&code, 1, "if len(msg.%s) < %d:", pyFieldName, annotationValue.IntValue)
-						pyLinef(&code, 2, "raise invalid_argument(f\"field %s below min size of %d, got: {len(msg.%s)}\")", pyFieldName, annotationValue.IntValue, pyFieldName)
+						pyLinef(&code, 1, "if len(%s) < %d:", pyFieldGet("msg", pyFieldName), annotationValue.IntValue)
+						pyLinef(&code, 2, "raise invalid_argument(f\"field %s below min size of %d, got: {len(%s)}\")", pyFieldName, annotationValue.IntValue, pyFieldGet("msg", pyFieldName))
 					} else {
 						pyLinef(&code, 1, "# Validate %s (assert_min_size: %d bytes)", pyFieldName, annotationValue.IntValue)
 						if field.Type == "bytes" {
-							pyLinef(&code, 1, "if len(msg.%s) < %d:", pyFieldName, annotationValue.IntValue)
+							pyLinef(&code, 1, "if len(%s) < %d:", pyFieldGet("msg", pyFieldName), annotationValue.IntValue)
 						} else {
-							pyLinef(&code, 1, "if len(msg.%s.encode('utf-8')) < %d:", pyFieldName, annotationValue.IntValue)
+							pyLinef(&code, 1, "if len(%s.encode('utf-8')) < %d:", pyFieldGet("msg", pyFieldName), annotationValue.IntValue)
 						}
 						pyLinef(&code, 2, "raise invalid_argument(f\"field %s below min size of %d bytes\")", pyFieldName, annotationValue.IntValue)
 					}
@@ -572,13 +572,13 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 			continue
 		}
 
-		pyFieldName := escapePyKeyword(strutil.ToSnakeCase(field.Name))
+		pyFieldName := strutil.ToSnakeCase(field.Name)
 		defaultCount := collection.DefaultCollCount
 
 		var code strings.Builder
 		pyLinef(&code, 1, "# Validate %s (default max size: %d elements)", pyFieldName, defaultCount)
-		pyLinef(&code, 1, "if len(msg.%s) > %d:", pyFieldName, defaultCount)
-		pyLinef(&code, 2, "raise invalid_argument(f\"field %s exceeds max size of %d elements, got: {len(msg.%s)}\")", pyFieldName, defaultCount, pyFieldName)
+		pyLinef(&code, 1, "if len(%s) > %d:", pyFieldGet("msg", pyFieldName), defaultCount)
+		pyLinef(&code, 2, "raise invalid_argument(f\"field %s exceeds max size of %d elements, got: {len(%s)}\")", pyFieldName, defaultCount, pyFieldGet("msg", pyFieldName))
 		blocks = append(blocks, pyValidationCode{Code: code.String()})
 	}
 
@@ -588,18 +588,18 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 			continue
 		}
 
-		pyFieldName := escapePyKeyword(strutil.ToSnakeCase(field.Name))
+		pyFieldName := strutil.ToSnakeCase(field.Name)
 		defaultSize := collection.DefaultScalarBytes
 
 		var code strings.Builder
 		if field.IsRepeated && field.Type == "string" {
 			pyLinef(&code, 1, "# Validate %s elements (default max size: %d bytes)", pyFieldName, defaultSize)
-			pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
+			pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
 			pyLinef(&code, 2, "if len(val.encode('utf-8')) > %d:", defaultSize)
 			pyLinef(&code, 3, "raise invalid_argument(f\"field %s element exceeds max size of %d bytes, got: {len(val.encode('utf-8'))}\")", pyFieldName, defaultSize)
 		} else if field.IsRepeated && field.Type == "bytes" {
 			pyLinef(&code, 1, "# Validate %s elements (default max size: %d bytes)", pyFieldName, defaultSize)
-			pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
+			pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
 			pyLinef(&code, 2, "if len(val) > %d:", defaultSize)
 			pyLinef(&code, 3, "raise invalid_argument(f\"field %s element exceeds max size of %d bytes, got: {len(val)}\")", pyFieldName, defaultSize)
 		}
@@ -607,18 +607,18 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 		if field.IsMap {
 			if field.MapKeyType == "string" {
 				pyLinef(&code, 1, "# Validate %s keys (default max size: %d bytes)", pyFieldName, defaultSize)
-				pyLinef(&code, 1, "for key in msg.%s.keys():", pyFieldName)
+				pyLinef(&code, 1, "for key in %s.keys():", pyFieldGet("msg", pyFieldName))
 				pyLinef(&code, 2, "if len(key.encode('utf-8')) > %d:", defaultSize)
 				pyLinef(&code, 3, "raise invalid_argument(f\"field %s key exceeds max size of %d bytes, got: {len(key.encode('utf-8'))}\")", pyFieldName, defaultSize)
 			}
 			if field.MapValueType == "string" {
 				pyLinef(&code, 1, "# Validate %s values (default max size: %d bytes)", pyFieldName, defaultSize)
-				pyLinef(&code, 1, "for val in msg.%s.values():", pyFieldName)
+				pyLinef(&code, 1, "for val in %s.values():", pyFieldGet("msg", pyFieldName))
 				pyLinef(&code, 2, "if len(val.encode('utf-8')) > %d:", defaultSize)
 				pyLinef(&code, 3, "raise invalid_argument(f\"field %s value exceeds max size of %d bytes, got: {len(val.encode('utf-8'))}\")", pyFieldName, defaultSize)
 			} else if field.MapValueType == "bytes" {
 				pyLinef(&code, 1, "# Validate %s values (default max size: %d bytes)", pyFieldName, defaultSize)
-				pyLinef(&code, 1, "for val in msg.%s.values():", pyFieldName)
+				pyLinef(&code, 1, "for val in %s.values():", pyFieldGet("msg", pyFieldName))
 				pyLinef(&code, 2, "if len(val) > %d:", defaultSize)
 				pyLinef(&code, 3, "raise invalid_argument(f\"field %s value exceeds max size of %d bytes, got: {len(val)}\")", pyFieldName, defaultSize)
 			}
@@ -641,15 +641,15 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 			continue
 		}
 
-		pyFieldName := escapePyKeyword(strutil.ToSnakeCase(field.Name))
+		pyFieldName := strutil.ToSnakeCase(field.Name)
 		defaultSize := collection.DefaultScalarBytes
 
 		var code strings.Builder
 		pyLinef(&code, 1, "# Validate %s (default max size: %d bytes)", pyFieldName, defaultSize)
 		if field.Type == "bytes" {
-			pyLinef(&code, 1, "if len(msg.%s) > %d:", pyFieldName, defaultSize)
+			pyLinef(&code, 1, "if len(%s) > %d:", pyFieldGet("msg", pyFieldName), defaultSize)
 		} else {
-			pyLinef(&code, 1, "if len(msg.%s.encode('utf-8')) > %d:", pyFieldName, defaultSize)
+			pyLinef(&code, 1, "if len(%s.encode('utf-8')) > %d:", pyFieldGet("msg", pyFieldName), defaultSize)
 		}
 		pyLinef(&code, 2, "raise invalid_argument(f\"field %s exceeds max size of %d bytes\")", pyFieldName, defaultSize)
 		blocks = append(blocks, pyValidationCode{Code: code.String()})
@@ -657,12 +657,12 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 
 	// Recursive validation for nested generated messages, including oneof variants.
 	for _, field := range msg.Fields {
-		pyFieldName := escapePyKeyword(strutil.ToSnakeCase(field.Name))
+		pyFieldName := strutil.ToSnakeCase(field.Name)
 
 		if field.MapValueIsEnum && field.MapValueTypePackage == "" {
 			var code strings.Builder
 			pyLinef(&code, 1, "# Validate %s enum values are known", pyFieldName)
-			pyLinef(&code, 1, "for key, val in msg.%s.items():", pyFieldName)
+			pyLinef(&code, 1, "for key, val in %s.items():", pyFieldGet("msg", pyFieldName))
 			pyLinef(&code, 2, "if int(val) not in %s.DESCRIPTOR.values_by_number:", field.MapValueType)
 			pyLinef(&code, 3, "raise invalid_argument(f\"field %s[{key}] has unknown enum value {int(val)}\")", pyFieldName)
 			blocks = append(blocks, pyValidationCode{Code: code.String()})
@@ -676,22 +676,22 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 		var code strings.Builder
 		pyLinef(&code, 1, "# Validate %s enum value is known", pyFieldName)
 		if field.IsRepeated {
-			pyLinef(&code, 1, "for i, val in enumerate(msg.%s):", pyFieldName)
+			pyLinef(&code, 1, "for i, val in enumerate(%s):", pyFieldGet("msg", pyFieldName))
 			pyLinef(&code, 2, "if int(val) not in %s.DESCRIPTOR.values_by_number:", field.Type)
 			pyLinef(&code, 3, "raise invalid_argument(f\"field %s[{i}] has unknown enum value {int(val)}\")", pyFieldName)
 		} else if field.IsOptional {
-			pyLinef(&code, 1, "if msg.HasField('%s') and int(msg.%s) not in %s.DESCRIPTOR.values_by_number:", field.Name, pyFieldName, field.Type)
-			pyLinef(&code, 2, "raise invalid_argument(f\"field %s has unknown enum value {int(msg.%s)}\")", pyFieldName, pyFieldName)
+			pyLinef(&code, 1, "if msg.HasField('%s') and int(%s) not in %s.DESCRIPTOR.values_by_number:", field.Name, pyFieldGet("msg", pyFieldName), field.Type)
+			pyLinef(&code, 2, "raise invalid_argument(f\"field %s has unknown enum value {int(%s)}\")", pyFieldName, pyFieldGet("msg", pyFieldName))
 		} else {
-			pyLinef(&code, 1, "if int(msg.%s) not in %s.DESCRIPTOR.values_by_number:", pyFieldName, field.Type)
-			pyLinef(&code, 2, "raise invalid_argument(f\"field %s has unknown enum value {int(msg.%s)}\")", pyFieldName, pyFieldName)
+			pyLinef(&code, 1, "if int(%s) not in %s.DESCRIPTOR.values_by_number:", pyFieldGet("msg", pyFieldName), field.Type)
+			pyLinef(&code, 2, "raise invalid_argument(f\"field %s has unknown enum value {int(%s)}\")", pyFieldName, pyFieldGet("msg", pyFieldName))
 		}
 		blocks = append(blocks, pyValidationCode{Code: code.String()})
 	}
 
 	// Recursively validate nested generated messages, including oneof variants.
 	for _, field := range msg.Fields {
-		pyFieldName := escapePyKeyword(strutil.ToSnakeCase(field.Name))
+		pyFieldName := strutil.ToSnakeCase(field.Name)
 
 		if field.MapValueIsMessage {
 			validateFunc := pythonMessageValidationFunc(field.MapValueType, field.MapValueTypePackage)
@@ -701,7 +701,7 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 
 			var code strings.Builder
 			pyLinef(&code, 1, "# Validate %s message values", pyFieldName)
-			pyLinef(&code, 1, "for val in msg.%s.values():", pyFieldName)
+			pyLinef(&code, 1, "for val in %s.values():", pyFieldGet("msg", pyFieldName))
 			pyLinef(&code, 2, "%s(val, _depth + 1)", validateFunc)
 			blocks = append(blocks, pyValidationCode{Code: code.String()})
 			continue
@@ -720,15 +720,15 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 		if field.IsOneOf {
 			pyLinef(&code, 1, "# Validate %s nested message", pyFieldName)
 			pyLinef(&code, 1, "if msg.WhichOneof('%s') == '%s':", field.OneOfName, field.Name)
-			pyLinef(&code, 2, "%s(msg.%s, _depth + 1)", validateFunc, pyFieldName)
+			pyLinef(&code, 2, "%s(%s, _depth + 1)", validateFunc, pyFieldGet("msg", pyFieldName))
 		} else if field.IsRepeated {
 			pyLinef(&code, 1, "# Validate %s nested messages", pyFieldName)
-			pyLinef(&code, 1, "for val in msg.%s:", pyFieldName)
+			pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
 			pyLinef(&code, 2, "%s(val, _depth + 1)", validateFunc)
 		} else {
 			pyLinef(&code, 1, "# Validate %s nested message", pyFieldName)
 			pyLinef(&code, 1, "if msg.HasField('%s'):", field.Name)
-			pyLinef(&code, 2, "%s(msg.%s, _depth + 1)", validateFunc, pyFieldName)
+			pyLinef(&code, 2, "%s(%s, _depth + 1)", validateFunc, pyFieldGet("msg", pyFieldName))
 		}
 		blocks = append(blocks, pyValidationCode{Code: code.String()})
 	}
@@ -750,14 +750,14 @@ func buildPyEnumDefinedValidation(b *strings.Builder, msg model.Message, field m
 
 	pyLinef(b, 1, "# Validate %s (assert_enum_defined)", fieldName)
 	if field.IsRepeated {
-		pyLinef(b, 1, "for i, val in enumerate(msg.%s):", fieldName)
+		pyLinef(b, 1, "for i, val in enumerate(%s):", pyFieldGet("msg", fieldName))
 		pyLine(b, 2, "if val == 0:")
 		pyLinef(b, 3, "raise invalid_argument(f\"field %s[{i}] must be defined\")", fieldName)
 	} else if field.IsOptional {
-		pyLinef(b, 1, "if msg.HasField('%s') and msg.%s == 0:", fieldName, fieldName)
+		pyLinef(b, 1, "if msg.HasField('%s') and %s == 0:", fieldName, pyFieldGet("msg", fieldName))
 		pyLinef(b, 2, "raise invalid_argument(\"field %s must be defined\")", fieldName)
 	} else {
-		pyLinef(b, 1, "if msg.%s == 0:", fieldName)
+		pyLinef(b, 1, "if %s == 0:", pyFieldGet("msg", fieldName))
 		pyLinef(b, 2, "raise invalid_argument(\"field %s must be defined\")", fieldName)
 	}
 
@@ -777,18 +777,18 @@ func buildPyNumericConstraintValidation(b *strings.Builder, msg model.Message, f
 
 	pyLinef(b, 1, "# Validate %s (assert_numeric)", fieldName)
 	if field.IsRepeated {
-		pyLinef(b, 1, "for i, val in enumerate(msg.%s):", fieldName)
+		pyLinef(b, 1, "for i, val in enumerate(%s):", pyFieldGet("msg", fieldName))
 		writePyNumericConstraintChecks(b, fieldName+"[{i}]", "val", constraint, 2)
 		return nil
 	}
 	if field.IsOptional {
 		pyLinef(b, 1, "if msg.HasField('%s'):", fieldName)
-		pyLinef(b, 2, "val = msg.%s", fieldName)
+		pyLinef(b, 2, "val = %s", pyFieldGet("msg", fieldName))
 		writePyNumericConstraintChecks(b, fieldName, "val", constraint, 2)
 		return nil
 	}
 
-	pyLinef(b, 1, "val = msg.%s", fieldName)
+	pyLinef(b, 1, "val = %s", pyFieldGet("msg", fieldName))
 	writePyNumericConstraintChecks(b, fieldName, "val", constraint, 1)
 	return nil
 }
@@ -849,18 +849,18 @@ func buildPyFloatConstraintValidation(b *strings.Builder, msg model.Message, fie
 
 	pyLinef(b, 1, "# Validate %s (assert_float)", fieldName)
 	if field.IsRepeated {
-		pyLinef(b, 1, "for i, val in enumerate(msg.%s):", fieldName)
+		pyLinef(b, 1, "for i, val in enumerate(%s):", pyFieldGet("msg", fieldName))
 		writePyFloatConstraintChecks(b, fieldName+"[{i}]", "val", constraint, epsilon, 2)
 		return nil
 	}
 	if field.IsOptional {
 		pyLinef(b, 1, "if msg.HasField('%s'):", fieldName)
-		pyLinef(b, 2, "val = msg.%s", fieldName)
+		pyLinef(b, 2, "val = %s", pyFieldGet("msg", fieldName))
 		writePyFloatConstraintChecks(b, fieldName, "val", constraint, epsilon, 2)
 		return nil
 	}
 
-	pyLinef(b, 1, "val = msg.%s", fieldName)
+	pyLinef(b, 1, "val = %s", pyFieldGet("msg", fieldName))
 	writePyFloatConstraintChecks(b, fieldName, "val", constraint, epsilon, 1)
 	return nil
 }
@@ -929,14 +929,14 @@ func buildIPAddrValidation(b *strings.Builder, fieldName, ipType string, isRepea
 
 	var baseLevel int
 	if isRepeated {
-		pyLinef(b, 1, "for val in msg.%s:", fieldName)
+		pyLinef(b, 1, "for val in %s:", pyFieldGet("msg", fieldName))
 		pyLine(b, 2, "if val:")
 		baseLevel = 3
 	} else {
-		pyLinef(b, 1, "if msg.%s:", fieldName)
+		pyLinef(b, 1, "if %s:", pyFieldGet("msg", fieldName))
 		baseLevel = 2
 	}
-	varRef := fmt.Sprintf("msg.%s", fieldName)
+	varRef := pyFieldGet("msg", fieldName)
 	if isRepeated {
 		varRef = "val"
 	}

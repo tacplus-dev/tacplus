@@ -291,7 +291,9 @@ func Generate(config *tactype.Config) error {
 		return err
 	}
 	proto.InjectConfigStates(config, feConfigs)
-	proto.InjectTenantConfigSubscriptions(config, config.FlatProtoDir, feConfigs)
+	if err := proto.InjectTenantConfigSubscriptions(config, config.FlatProtoDir, feConfigs); err != nil {
+		return fmt.Errorf("failed to inject tenant config subscriptions: %w", err)
+	}
 	if err := proto.InjectHealthState(config, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to inject health state: %w", err)
 	}

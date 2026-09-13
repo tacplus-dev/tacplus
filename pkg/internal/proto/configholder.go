@@ -1636,15 +1636,17 @@ func InjectConfigStates(config *tactype.Config, entries []GrpcConfigEntry) {
 // This means consuming services never need to declare
 // state_imports in their own proto files — tacplus derives the subscription
 // automatically from the TenantConfig field names.
-func InjectTenantConfigSubscriptions(config *tactype.Config, inputDir string, entries []GrpcConfigEntry) {
+func InjectTenantConfigSubscriptions(config *tactype.Config, inputDir string, entries []GrpcConfigEntry) error {
 	if config.SelfPackage == "" || len(entries) == 0 {
-		return
+		return nil
 	}
 
 	dp, err := parser.NewDescriptorParser(inputDir)
 	if err != nil {
-		zap.L().Warn("InjectTenantConfigSubscriptions: failed to create descriptor parser", zap.Error(err))
-		return
+		// Fatal: a silent return here drops every per-service config
+		// subscription, so generation would emit a service that is quietly
+		// missing the state it needs rather than fail.
+		return fmt.Errorf("tenant config subscriptions: parse proto descriptors in %q: %w", inputDir, err)
 	}
 
 	allFiles := dp.GetAllFiles()
@@ -1668,7 +1670,7 @@ func InjectTenantConfigSubscriptions(config *tactype.Config, inputDir string, en
 		}
 	}
 	if len(msgIndex) == 0 {
-		return
+		return nil
 	}
 
 	// For each grpc_config entry, check whether its Config type transitively
@@ -1791,6 +1793,8 @@ func InjectTenantConfigSubscriptions(config *tactype.Config, inputDir string, en
 			zap.String("owner", entry.ServiceName),
 			zap.String("state", stateName))
 	}
+
+	return nil
 }
 
 // writeMinimalGeneratedStubs writes placeholder generated/*.proto files into

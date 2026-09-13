@@ -11,6 +11,7 @@ import (
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
 )
 
 func TestDeclaredConfigStateRootsFollowGrpcConfigDeclarations(t *testing.T) {
@@ -459,5 +460,29 @@ message RealConfig {
 	// Panic-safety: a negative index returns empty, not a slice panic.
 	if got := findContainingMessage(text, -1); got != "" {
 		t.Fatalf("negative index must return empty, got %q", got)
+	}
+}
+
+// TestInjectTenantConfigSubscriptionsPropagatesParserError asserts that a
+// descriptor-parser failure is surfaced instead of being swallowed (which left
+// the service quietly missing its per-service config subscription).
+func TestInjectTenantConfigSubscriptionsPropagatesParserError(t *testing.T) {
+	config := &tactype.Config{SelfPackage: "gateway"}
+	entries := []GrpcConfigEntry{{
+		ServiceName:     "audit",
+		ConfigType:      "audit.Config",
+		ProtoImportPath: "services/audit.proto",
+	}}
+
+	missingDir := filepath.Join(t.TempDir(), "does-not-exist")
+	err := InjectTenantConfigSubscriptions(config, missingDir, entries)
+	if err == nil {
+		t.Fatal("expected an error when the descriptor parser cannot be created, got nil")
+	}
+	if !strings.Contains(err.Error(), "tenant config subscriptions") {
+		t.Fatalf("error not wrapped with context: %v", err)
+	}
+	if len(config.States) != 0 {
+		t.Fatalf("expected no states to be injected on failure, got %v", config.States)
 	}
 }

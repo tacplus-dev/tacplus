@@ -1330,48 +1330,93 @@ func attrSortKey(a xml.Attr, prefixToURI map[string]string) string {
 	return uri + "\x01" + a.Name.Local
 }
 
-// extractAndStripSignature extracts the <saml:Assertion> element from a SAMLResponse XML string,
-// removes the embedded <ds:Signature> element, and returns the assertion XML ready for c14n.
+// extractAndStripSignature extracts the signed Assertion element from a SAMLResponse XML string,
+// removes its enveloped Signature child, and returns the assertion XML ready for c14n.
+//
+// The element is located by XML structure, not by literal text search: it is the single direct
+// Assertion child (in the SAML assertion namespace) of the root Response element — the same
+// element encoding/xml populates xmlResponse.Assertion from. That equivalence is what ties the
+// bytes that get digested to the element the verified claims are read from; selecting the element
+// by a prefix-sensitive text search allows a document whose parsed claims come from one element
+// while the digest is computed over another (XML signature wrapping).
 func extractAndStripSignature(responseXML, assertionID string) (string, error) {
-	assertionStart := strings.Index(responseXML, `<saml:Assertion`)
-	if assertionStart < 0 {
-		return "", fmt.Errorf("could not find <saml:Assertion> in response xml")
-	}
+	dec := xml.NewDecoder(strings.NewReader(responseXML))
 
-	assertionCloseTag := `</saml:Assertion>`
-	assertionEnd := strings.Index(responseXML[assertionStart:], assertionCloseTag)
-	if assertionEnd < 0 {
-		return "", fmt.Errorf("could not find </saml:Assertion> in response xml")
-	}
-	assertionEnd += assertionStart + len(assertionCloseTag)
-	assertionXML := responseXML[assertionStart:assertionEnd]
-	if strings.Contains(responseXML[assertionEnd:], `<saml:Assertion`) {
-		return "", fmt.Errorf("saml response contains multiple Assertion elements")
-	}
-	if assertionID != "" {
-		idDouble := `ID="` + xmlEscapeAttr(assertionID) + `"`
-		idSingle := `ID='` + xmlEscapeAttr(assertionID) + `'`
-		if !strings.Contains(assertionXML, idDouble) && !strings.Contains(assertionXML, idSingle) {
-			return "", fmt.Errorf("signed assertion ID %q not found in extracted Assertion element", assertionID)
+	var (
+		depth       int
+		found       bool
+		inAssertion bool
+		elementID   string
+		assertStart int
+		assertEnd   int
+		haveSig     bool
+		sigClosed   bool
+		sigStart    int
+		sigEnd      int
+	)
+
+	for {
+		off := dec.InputOffset()
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("parse saml response xml: %w", err)
+		}
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			depth++
+			switch {
+			case depth == 1:
+				if t.Name.Space != nsSAMLProtocol || t.Name.Local != "Response" {
+					return "", fmt.Errorf("saml response root element is {%s}%s, not a samlp:Response", t.Name.Space, t.Name.Local)
+				}
+			case depth == 2 && t.Name.Space == nsSAMLAssertion && t.Name.Local == "Assertion":
+				if found {
+					return "", fmt.Errorf("saml response contains multiple Assertion elements")
+				}
+				found = true
+				inAssertion = true
+				assertStart = int(off)
+				for _, a := range t.Attr {
+					if a.Name.Space == "" && a.Name.Local == "ID" {
+						elementID = a.Value
+					}
+				}
+			case depth == 3 && inAssertion && t.Name.Space == nsXMLDSig && t.Name.Local == "Signature":
+				if haveSig {
+					return "", fmt.Errorf("saml assertion contains multiple Signature elements")
+				}
+				haveSig = true
+				sigStart = int(off)
+			}
+
+		case xml.EndElement:
+			if haveSig && !sigClosed && inAssertion && depth == 3 {
+				sigEnd = int(dec.InputOffset())
+				sigClosed = true
+			}
+			if inAssertion && depth == 2 {
+				assertEnd = int(dec.InputOffset())
+				inAssertion = false
+			}
+			depth--
 		}
 	}
 
-	// Remove the <ds:Signature>...</ds:Signature> block
-	sigStart := strings.Index(assertionXML, `<ds:Signature `)
-	if sigStart < 0 {
-		sigStart = strings.Index(assertionXML, `<ds:Signature>`)
+	if !found {
+		return "", fmt.Errorf("could not find an Assertion element in the saml response")
 	}
-	if sigStart < 0 {
+	if assertionID != "" && elementID != assertionID {
+		return "", fmt.Errorf("signed assertion ID %q does not match Assertion element ID %q", assertionID, elementID)
+	}
+	if !haveSig {
 		// No signature to remove — return as-is (digest verification will fail if expected)
-		return assertionXML, nil
+		return responseXML[assertStart:assertEnd], nil
 	}
-	sigEnd := strings.Index(assertionXML, `</ds:Signature>`)
-	if sigEnd < 0 {
-		return "", fmt.Errorf("found <ds:Signature> opening tag but no closing tag")
-	}
-	sigEnd += len(`</ds:Signature>`)
-
-	return assertionXML[:sigStart] + assertionXML[sigEnd:], nil
+	return responseXML[assertStart:sigStart] + responseXML[sigEnd:assertEnd], nil
 }
 
 // ========================================

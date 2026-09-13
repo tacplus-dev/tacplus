@@ -140,3 +140,44 @@ func TestSamlVerifyRejectsMultipleAssertions(t *testing.T) {
 		t.Fatalf("expected multiple-assertion rejection, got %v", err)
 	}
 }
+
+// TestSamlVerifyRejectsWrappedAssertion builds a signature-wrapping attack: the genuinely signed
+// assertion is hidden inside an element the response parser skips, and a forged assertion — same
+// ID, same copied Signature, attacker-controlled claims — is bound to the assertion namespace
+// under a different prefix so it is what the parser actually reads. Verification must digest the
+// element the claims came from, so it must reject this.
+func TestSamlVerifyRejectsWrappedAssertion(t *testing.T) {
+	assertion, cert := signedAssertion(t, StatusSuccess)
+	response := assertion.GetXml()
+
+	start := strings.Index(response, "<saml:Assertion")
+	end := strings.Index(response[start:], "</saml:Assertion>")
+	if start < 0 || end < 0 {
+		t.Fatalf("signed response missing assertion:\n%s", response)
+	}
+	end += start + len("</saml:Assertion>")
+	signed := response[start:end]
+
+	// Same assertion, rebound to the assertion namespace under a different prefix, with the
+	// subject and email attribute replaced by the attacker's.
+	forged := strings.ReplaceAll(signed, `xmlns:saml="`, `xmlns:atk="`)
+	forged = strings.ReplaceAll(forged, "saml:", "atk:")
+	forged = strings.ReplaceAll(forged, ">alice@example.com<", ">attacker@evil.example<")
+
+	// <samlp:Extensions> has no field in xmlResponse, so the parser skips the real assertion.
+	wrapped := response[:start] +
+		"<samlp:Extensions>" + signed + "</samlp:Extensions>" +
+		forged +
+		response[end:]
+
+	parsed, err := ParseSamlResponse(wrapped)
+	if err != nil {
+		t.Fatalf("parse wrapped response: %v", err)
+	}
+	if got := parsed.GetSubjectNameId(); got != "attacker@evil.example" {
+		t.Fatalf("expected the forged assertion to be the one parsed, got NameID %q", got)
+	}
+	if err := parsed.Verify(cert); err == nil {
+		t.Fatalf("wrapped response was accepted: Verify returned nil for claims NameID=%q", parsed.GetSubjectNameId())
+	}
+}

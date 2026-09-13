@@ -3,13 +3,16 @@
 package protosrc
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"go.uber.org/zap"
 )
@@ -96,7 +99,14 @@ func cacheDir(url string) (string, error) {
 // repoSlug converts a git URL to a filesystem-safe directory name.
 // e.g. "https://gitlab.com/example/proto.git"
 //
-//	→ "gitlab.com-example-proto"
+//	→ "gitlab.com-example-proto-2f8a1c0d9e4b"
+//
+// The readable part alone is not injective: ":" and "/" both collapse to "-",
+// so "gitlab.com/a/b-c" and "gitlab.com/a-b/c" produce identical text. Two
+// unrelated repos then shared one cache directory and the first one cloned
+// there silently served its protos under the other's name. The suffix is a
+// SHA-256 prefix over the full URL, so distinct URLs always get distinct
+// directories while the readable part stays legible for debugging.
 func repoSlug(url string) string {
 	s := url
 	s = strings.TrimPrefix(s, "https://")
@@ -105,7 +115,33 @@ func repoSlug(url string) string {
 	s = strings.TrimSuffix(s, ".git")
 	s = strings.ReplaceAll(s, ":", "-")
 	s = strings.ReplaceAll(s, "/", "-")
-	return s
+	sum := sha256.Sum256([]byte(url))
+	return s + "-" + hex.EncodeToString(sum[:])[:12]
+}
+
+// lockCache takes an exclusive advisory lock covering a cache directory and
+// returns the function that releases it. Two concurrent builds against the
+// same proto source would otherwise both find no .git and both clone into the
+// same path, or run a fetch while the other is mid-checkout. The lock file
+// sits beside the cache directory rather than inside it, so it is unaffected
+// by git clone creating (or a failed clone removing) the directory itself.
+// Unix-only, which is all tacplus — a developer/CI build tool — runs on.
+func lockCache(dir string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create cache parent: %w", err)
+	}
+	f, err := os.OpenFile(dir+".lock", os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open cache lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("failed to lock cache %q: %w", dir, err)
+	}
+	return func() {
+		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, nil
 }
 
 // authArgs returns per-invocation git flags carrying the GitLab CI credential
@@ -131,6 +167,14 @@ func cachedRepo(url string, tag string) (*Result, error) {
 		return nil, err
 	}
 
+	// Held across clone+fetch+checkout: the whole sequence mutates this one
+	// directory, so a concurrent build must queue behind it, not interleave.
+	unlock, err := lockCache(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
 	// Normalize X.Y.latest → X.Y for resolution
 	resolvedTag := tag
 	if strings.HasSuffix(tag, ".latest") {
@@ -146,9 +190,6 @@ func cachedRepo(url string, tag string) (*Result, error) {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
 		// First run: clone with the plain, token-free URL as the remote.
 		zap.L().Info("cloning proto source (first run)", zap.String("url", url), zap.String("cache", dir))
-		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
-			return nil, fmt.Errorf("failed to create cache parent: %w", err)
-		}
 		cmd := exec.Command("git", append(append([]string{}, auth...), "clone", "--", url, dir)...)
 		cmd.Stdout = os.Stderr
 		cmd.Stderr = os.Stderr

@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestIsGitURL(t *testing.T) {
@@ -196,5 +198,181 @@ func TestCloneDoesNotPersistToken(t *testing.T) {
 	}
 	if strings.Contains(string(cfg), "extraheader") {
 		t.Errorf(".git/config persisted extraheader:\n%s", cfg)
+	}
+}
+
+// oldRepoSlug is the pre-fix slug function, kept here only to prove the
+// collision it produced was real and not hypothetical.
+func oldRepoSlug(url string) string {
+	s := url
+	s = strings.TrimPrefix(s, "https://")
+	s = strings.TrimPrefix(s, "http://")
+	s = strings.TrimPrefix(s, "git@")
+	s = strings.TrimSuffix(s, ".git")
+	s = strings.ReplaceAll(s, ":", "-")
+	s = strings.ReplaceAll(s, "/", "-")
+	return s
+}
+
+func TestRepoSlugInjective(t *testing.T) {
+	// The pair the old slug collapsed: "a/b-c" and "a-b/c" both became
+	// "gitlab.com-a-b-c", so two unrelated repos shared one cache directory.
+	collide := [2]string{
+		"https://gitlab.com/a/b-c.git",
+		"https://gitlab.com/a-b/c.git",
+	}
+	if oldRepoSlug(collide[0]) != oldRepoSlug(collide[1]) {
+		t.Fatalf("old slug no longer collides on %v — this test is vacuous", collide)
+	}
+	if repoSlug(collide[0]) == repoSlug(collide[1]) {
+		t.Errorf("repoSlug still collides on %v: %q", collide, repoSlug(collide[0]))
+	}
+
+	pairs := [][2]string{
+		collide,
+		{"https://gitlab.com/org/repo.git", "https://gitlab.com/other/repo.git"}, // different org
+		{"https://gitlab.com/org/repo.git", "https://gitlab.com/org/repo2.git"},  // different repo
+		{"https://gitlab.com/org/repo.git", "https://gitlab.com/org/repo"},       // .git vs not
+		{"https://gitlab.com/org/repo.git", "http://gitlab.com/org/repo.git"},    // https vs http
+		{"https://gitlab.com/org/repo.git", "git@gitlab.com:org/repo.git"},       // https vs ssh
+		{"git@gitlab.com:org/repo.git", "git@github.com:org/repo.git"},           // different host
+		{"https://gitlab.com/x/y-z/w.git", "https://gitlab.com/x-y/z-w.git"},     // deeper collapse
+	}
+	for _, p := range pairs {
+		if repoSlug(p[0]) == repoSlug(p[1]) {
+			t.Errorf("repoSlug(%q) == repoSlug(%q) == %q", p[0], p[1], repoSlug(p[0]))
+		}
+	}
+
+	// The readable prefix from the docstring survives, so cache dirs stay
+	// identifiable by eye.
+	if got := repoSlug("https://gitlab.com/example/proto.git"); !strings.HasPrefix(got, "gitlab.com-example-proto-") {
+		t.Errorf("repoSlug lost its readable prefix: %q", got)
+	}
+
+	// Same URL twice must land in the same directory, or the cache never hits.
+	if repoSlug(collide[0]) != repoSlug(collide[0]) {
+		t.Error("repoSlug is not deterministic")
+	}
+}
+
+// TestLockCacheSerializes proves a second holder blocks until the first
+// releases. lockCache is held across cachedRepo's whole clone+fetch+checkout
+// sequence (see the lockCache call at the top of cachedRepo in resolve.go).
+func TestLockCacheSerializes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cache", "slug")
+
+	var inside atomic.Int32
+	var maxInside atomic.Int32
+	var acquired atomic.Int32
+
+	first, err := lockCache(dir)
+	if err != nil {
+		t.Fatalf("first lockCache: %v", err)
+	}
+	inside.Add(1)
+
+	done := make(chan error, 1)
+	go func() {
+		release, err := lockCache(dir)
+		if err != nil {
+			done <- err
+			return
+		}
+		acquired.Store(1)
+		if n := inside.Add(1); n > maxInside.Load() {
+			maxInside.Store(n)
+		}
+		inside.Add(-1)
+		release()
+		done <- nil
+	}()
+
+	// The second acquire must still be blocked while the first is held.
+	time.Sleep(200 * time.Millisecond)
+	if acquired.Load() != 0 {
+		t.Error("second lockCache acquired while the first was still held")
+	}
+
+	inside.Add(-1)
+	first()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("second lockCache: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("second lockCache never acquired after release")
+	}
+	if maxInside.Load() > 1 {
+		t.Errorf("%d holders inside the lock at once", maxInside.Load())
+	}
+}
+
+// TestCachedRepoConcurrent runs the real cachedRepo path — the same one
+// Resolve takes for a git source — from several goroutines at once against one
+// cache directory. Without the lock the racers both clone into the same path
+// and fetch across each other's checkout; with it each must come back with an
+// intact worktree.
+func TestCachedRepoConcurrent(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	origin := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = origin
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	// cacheDir keys off the home directory; point it at a scratch one.
+	t.Setenv("HOME", t.TempDir())
+
+	const racers = 4
+	errs := make(chan error, racers)
+	dirs := make(chan string, racers)
+	start := make(chan struct{})
+	for i := 0; i < racers; i++ {
+		go func() {
+			<-start
+			res, err := cachedRepo(origin, "latest")
+			if err != nil {
+				errs <- err
+				return
+			}
+			dirs <- res.Dir
+			errs <- nil
+		}()
+	}
+	close(start)
+
+	for i := 0; i < racers; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent cachedRepo failed: %v", err)
+		}
+	}
+	close(dirs)
+
+	var cache string
+	for d := range dirs {
+		if cache == "" {
+			cache = d
+		} else if d != cache {
+			t.Fatalf("racers disagreed on cache dir: %q vs %q", cache, d)
+		}
+	}
+
+	// The worktree must be a healthy repo, not a half-written clone.
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = cache
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cache worktree is corrupt: %v\n%s", err, out)
 	}
 }

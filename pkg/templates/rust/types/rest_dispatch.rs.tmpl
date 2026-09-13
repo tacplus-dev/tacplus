@@ -18,7 +18,7 @@ use serde_json;
 <<- if .RestRootPath >>
 
 /// Base path for all REST endpoints, from the REST_ROOT_PATH string constant.
-pub const REST_ROOT_PATH: &str = "<< .RestRootPath >>";
+pub const REST_ROOT_PATH: &str = "<< rustStr .RestRootPath >>";
 <<- end >>
 
 /// Result type for REST→gRPC dispatch: JSON string on success, HTTP error on failure.
@@ -119,9 +119,9 @@ pub struct RouteInfo {
 pub static ROUTES: &[RouteInfo] = &[
 <<- range .Routes >>
     RouteInfo {
-        http_path: "<< .HttpPath >>",
-        grpc_path: "<< .GrpcPath >>",
-        service_id: "<< .ServiceID >>",
+        http_path: "<< rustStr .HttpPath >>",
+        grpc_path: "<< rustStr .GrpcPath >>",
+        service_id: "<< rustStr .ServiceID >>",
         entitlement_service: << .EntitlementService >>,
         http_methods: &[<< .HttpMethodsLiteral >>],
         auth_policy: AuthPolicy::<< .AuthPolicy >>,
@@ -147,9 +147,9 @@ pub async fn dispatch(
 ) -> DispatchResult {
     match grpc_path {
 <<- range .UnaryArms >>
-        "<< .GrpcPath >>" => {
-            let channel = dispatcher.channel("<< .ServiceID >>").await.map_err(grpc_err)?;
-            let auth = dispatcher.auth_header("<< .ServiceID >>").await;
+        "<< rustStr .GrpcPath >>" => {
+            let channel = dispatcher.channel("<< rustStr .ServiceID >>").await.map_err(grpc_err)?;
+            let auth = dispatcher.auth_header("<< rustStr .ServiceID >>").await;
             let auth_ref = auth.as_deref();
 <<- if .IsEmptyInput >>
 <<- if .ClientStreaming >>
@@ -211,15 +211,15 @@ pub async fn dispatch_stream(
 ) -> Response {
     match grpc_path {
 <<- range .StreamArms >>
-        "<< .GrpcPath >>" => {
-            let channel = match dispatcher.channel("<< .ServiceID >>").await {
+        "<< rustStr .GrpcPath >>" => {
+            let channel = match dispatcher.channel("<< rustStr .ServiceID >>").await {
                 Ok(ch) => ch,
                 Err(status) => {
                     let (code, msg) = grpc_err(status);
                     return (code, msg).into_response();
                 }
             };
-            let auth = dispatcher.auth_header("<< .ServiceID >>").await;
+            let auth = dispatcher.auth_header("<< rustStr .ServiceID >>").await;
             let auth_ref = auth.as_deref();
 <<- if .IsEmptyInput >>
 <<- if .ClientStreaming >>

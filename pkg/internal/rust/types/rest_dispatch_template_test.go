@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"strings"
 	"testing"
-	"text/template"
 )
 
 func TestRustRestDispatchValidatesUnaryResponseBeforeJson(t *testing.T) {
@@ -146,13 +145,9 @@ func TestRustRestDispatchValidatesRequestBeforeForwarding(t *testing.T) {
 
 func renderRustRestDispatchForTest(t *testing.T, data restDispatchData) string {
 	t.Helper()
-	tmplStr, err := loadTemplate("rest_dispatch.rs.tmpl")
+	tmpl, err := parseRestDispatchTemplate()
 	if err != nil {
-		t.Fatalf("loadTemplate: %v", err)
-	}
-	tmpl, err := template.New("rest_dispatch").Delims("<<", ">>").Parse(tmplStr)
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
+		t.Fatalf("parseRestDispatchTemplate: %v", err)
 	}
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {

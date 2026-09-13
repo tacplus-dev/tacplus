@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -1182,8 +1183,12 @@ func (p *DescriptorParser) parseFileConstants(fd protoreflect.FileDescriptor) []
 		stringConsts := proto.GetExtension(opts, spec.E_StringConst).([]*spec.StringConst)
 		for _, sc := range stringConsts {
 			constants = append(constants, model.Constant{
-				Name:  sc.GetName(),
-				Value: fmt.Sprintf(`"%s"`, sc.GetValue()),
+				Name: sc.GetName(),
+				// strconv.Quote, not a hand-rolled `"%s"`: the value is
+				// proto-author-controlled and lands verbatim in generated
+				// source, so a quote or backslash in it would otherwise
+				// terminate or corrupt the emitted string literal.
+				Value: strconv.Quote(sc.GetValue()),
 				Type:  "string",
 			})
 		}
@@ -1233,7 +1238,7 @@ func (p *DescriptorParser) resolveStringConstant(name string) string {
 	for _, fd := range p.descriptors {
 		for _, c := range fd.Constants {
 			if c.Name == name {
-				return strings.Trim(c.Value, `"`)
+				return c.RawValue()
 			}
 		}
 	}

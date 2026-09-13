@@ -172,7 +172,7 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 						if pn.Constants == nil {
 							pn.Constants = make(map[string]string)
 						}
-						pn.Constants[c.Name] = strings.Trim(c.Value, `"`)
+						pn.Constants[c.Name] = c.RawValue()
 					}
 				}
 

@@ -373,15 +373,9 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 		zap.Bool("isGateway", config.IsGateway),
 	)
 
-	tmplStr, err := loadTemplate("rest_dispatch.rs.tmpl")
+	tmpl, err := parseRestDispatchTemplate()
 	if err != nil {
-		return fmt.Errorf("failed to load rest_dispatch template: %w", err)
-	}
-
-	// Use custom delimiters to avoid conflicts with Rust's {{ }} brace escaping.
-	tmpl, err := template.New("rest_dispatch").Delims("<<", ">>").Parse(tmplStr)
-	if err != nil {
-		return fmt.Errorf("failed to parse rest_dispatch template: %w", err)
+		return err
 	}
 
 	file, err := os.Create(outputPath)
@@ -641,6 +635,55 @@ func formatHttpMethods(methods []string) string {
 		quoted[i] = fmt.Sprintf("%q", m)
 	}
 	return strings.Join(quoted, ", ")
+}
+
+// parseRestDispatchTemplate loads and parses rest_dispatch.rs.tmpl.
+func parseRestDispatchTemplate() (*template.Template, error) {
+	tmplStr, err := loadTemplate("rest_dispatch.rs.tmpl")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load rest_dispatch template: %w", err)
+	}
+
+	// Use custom delimiters to avoid conflicts with Rust's {{ }} brace escaping.
+	tmpl, err := template.New("rest_dispatch").
+		Delims("<<", ">>").
+		Funcs(template.FuncMap{"rustStr": rustStringEscape}).
+		Parse(tmplStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse rest_dispatch template: %w", err)
+	}
+	return tmpl, nil
+}
+
+// rustStringEscape escapes a value for interpolation between the quotes of a
+// Rust string literal. The REST paths, gRPC paths and service IDs it guards are
+// proto-annotation-derived, so an author-supplied quote or backslash would
+// otherwise terminate or corrupt the emitted literal.
+func rustStringEscape(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		case 0:
+			b.WriteString(`\0`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\u{%x}`, r)
+				continue
+			}
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func rustOptionString(value string) string {

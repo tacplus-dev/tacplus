@@ -4,6 +4,7 @@ package model
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -59,8 +60,18 @@ type Enum struct {
 type Constant struct {
 	Name    string
 	Type    string // Optional type (e.g., "time.Duration")
-	Value   string
+	Value   string // Go-syntax source literal, rendered into generated source by every backend
 	Comment string
+}
+
+// RawValue returns the value a string constant's literal denotes, undoing the
+// Go-literal quoting Value carries. Non-string constants (and any value that is
+// not a quoted literal) are returned unchanged.
+func (c Constant) RawValue() string {
+	if unquoted, err := strconv.Unquote(c.Value); err == nil {
+		return unquoted
+	}
+	return c.Value
 }
 
 // AnnotationType represents the type of an annotation value

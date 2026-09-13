@@ -79,7 +79,9 @@ func computeSrcHash(projectDir, outputDir, language string) (string, error) {
 	var listing []string
 	err := filepath.Walk(projectDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil
+			// Surface walk errors (e.g. permission denied) rather than
+			// silently hashing a subset of the source tree.
+			return err
 		}
 		base := filepath.Base(path)
 		if info.IsDir() {
@@ -109,7 +111,10 @@ func computeSrcHash(projectDir, outputDir, language string) (string, error) {
 		h.Write([]byte{0})
 		fh, err := hashFile(path)
 		if err != nil {
-			continue
+			// A file we listed but cannot hash means the computed digest
+			// would not reflect the true source tree — fail instead of
+			// returning a hash that can spuriously match the cache.
+			return "", fmt.Errorf("hash src file %s: %w", path, err)
 		}
 		h.Write([]byte(fh))
 		h.Write([]byte{0})
@@ -152,9 +157,11 @@ func computeBuildHash(protoDir, projectDir, outputDir, language string, cfg *tac
 	// cfg is the MERGED config (the same one generation uses), so hashing it —
 	// rather than re-reading cwd/tacplus.yaml — means an edit to a `-c` overlay
 	// or an `import:`ed base config also invalidates the cache.
-	if cfgHash, err := hashConfig(cfg); err == nil {
-		h.ConfigHash = cfgHash
+	cfgHash, err := hashConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("hash config: %w", err)
 	}
+	h.ConfigHash = cfgHash
 
 	// Walk all files in the proto source directory recursively.
 	// Track every file (not just .proto) so that directory structure and
@@ -162,7 +169,9 @@ func computeBuildHash(protoDir, projectDir, outputDir, language string, cfg *tac
 	var listing []string
 	err = filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil
+			// Surface walk errors rather than silently hashing a subset
+			// of the proto tree.
+			return err
 		}
 		rel, err := filepath.Rel(protoDir, path)
 		if err != nil {
@@ -180,7 +189,7 @@ func computeBuildHash(protoDir, projectDir, outputDir, language string, cfg *tac
 		listing = append(listing, rel)
 		fh, err := hashFile(path)
 		if err != nil {
-			return nil
+			return fmt.Errorf("hash proto file %s: %w", path, err)
 		}
 		h.Files[rel] = fh
 		return nil
@@ -201,11 +210,15 @@ func computeBuildHash(protoDir, projectDir, outputDir, language string, cfg *tac
 
 	// Hash project source files so that code changes (without proto changes)
 	// also invalidate the cache and trigger a rebuild.
-	if srcHash, err := computeSrcHash(projectDir, outputDir, language); err == nil {
-		h.SrcHash = srcHash
-	} else {
-		zap.L().Warn("Could not compute src hash", zap.Error(err))
+	// An unhashable source tree must not degrade to an empty SrcHash: two
+	// consecutive failing runs would both record "" and compare equal, which
+	// is the same false-cache-hit this guards against. Fail so the caller
+	// falls through to a full rebuild.
+	srcHash, err := computeSrcHash(projectDir, outputDir, language)
+	if err != nil {
+		return nil, fmt.Errorf("hash project source: %w", err)
 	}
+	h.SrcHash = srcHash
 
 	return h, nil
 }

@@ -4,6 +4,7 @@ package types
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
@@ -192,5 +193,67 @@ func TestDaemonDirectory(t *testing.T) {
 	got := daemonDirectory(&tactype.Config{SelfPackage: "blue_rock"}, nil)
 	if got != "blue-rock" {
 		t.Fatalf("daemonDirectory() = %q, want %q", got, "blue-rock")
+	}
+}
+
+// TestRenderC2SClientRejectsBearerTokenOverPlaintext pins the loopback restriction
+// on the C2S bearer token: a token provider combined with useTLS=false is only
+// allowed for a loopback host. There is no C#/Swift execution harness in this repo
+// (cross-test builds Go/Java/Python/Rust/TypeScript only), so — as with the other
+// C2SClient tests here — the contract is asserted on the emitted source.
+func TestRenderC2SClientRejectsBearerTokenOverPlaintext(t *testing.T) {
+	out, err := executeSwiftTemplate("C2SClient.swift.tmpl", c2sClientTemplateData{
+		PackageName: "TasksClient",
+		Services: []c2dServiceTemplateData{
+			{MethodName: "withContractApi", ClientType: "Contractclient_ContractApi"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("executeSwiftTemplate(C2SClient.swift.tmpl): %v", err)
+	}
+	s := string(out)
+
+	// Plaintext + tokenProvider + non-loopback host must fail construction, so
+	// `init` has to be a throwing initializer.
+	if !strings.Contains(s, "        tokenProvider: C2STokenProvider? = nil\n    ) throws {\n") {
+		t.Fatalf("C2SClient.swift init is not a throwing initializer\n%s", s)
+	}
+	guard := "if tokenProvider != nil, !useTLS, !C2SClient.isLoopbackHost(host) {"
+	if !strings.Contains(s, guard) {
+		t.Fatalf("C2SClient.swift does not gate the bearer token on TLS/loopback (missing %q)\n%s", guard, s)
+	}
+	for _, want := range []string{
+		"public enum C2SClientError: Error {",
+		"case bearerTokenOverPlaintext(host: String)",
+		"throw C2SClientError.bearerTokenOverPlaintext(host: host)",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("C2SClient.swift missing %q\n%s", want, s)
+		}
+	}
+
+	// Loopback hosts stay allowed (local dev / integration tests), and only the
+	// "localhost" name is matched case-insensitively.
+	want := `        host.lowercased() == "localhost" || host == "127.0.0.1" || host == "::1"`
+	if !strings.Contains(s, want) {
+		t.Errorf("C2SClient.swift loopback check missing %q\n%s", want, s)
+	}
+
+	// The TLS path is untouched: the interceptor is still installed whenever a
+	// token provider survives the guard, and transport security still keys off
+	// useTLS — but nothing is stored or dialed before the guard runs.
+	guardAt := strings.Index(s, guard)
+	for _, after := range []string{
+		"self.tokenProvider = tokenProvider",
+		"return [C2SBearerTokenInterceptor(tokenProvider: tokenProvider)]",
+		"self.useTLS ? .tls : .plaintext",
+	} {
+		at := strings.Index(s, after)
+		if at < 0 {
+			t.Fatalf("C2SClient.swift missing %q\n%s", after, s)
+		}
+		if at < guardAt {
+			t.Errorf("C2SClient.swift reaches %q before the plaintext-bearer guard\n%s", after, s)
+		}
 	}
 }

@@ -242,3 +242,62 @@ func TestRenderNamedPipesConnectionFactoryTemplate(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderC2SClientRejectsBearerTokenOverPlaintext pins the loopback restriction
+// on the C2S bearer token: a token provider combined with useTls=false is only
+// allowed for a loopback host. There is no C#/Swift execution harness in this repo
+// (cross-test builds Go/Java/Python/Rust/TypeScript only), so — as with the other
+// C2SClient tests here — the contract is asserted on the emitted source.
+func TestRenderC2SClientRejectsBearerTokenOverPlaintext(t *testing.T) {
+	out, err := executeCSharpTemplate("C2SClient.cs.tmpl", c2sClientTemplateData{
+		PackageName: "MyTacplus",
+		Services: []c2dServiceTemplateData{
+			{MethodName: "WithContractApi", ClientType: "Contractclient.ContractApi.ContractApiClient"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("render C2SClient: %v", err)
+	}
+	s := string(out)
+
+	// Plaintext + tokenProvider + non-loopback host must throw before any channel
+	// or credential is built.
+	guard := "if (tokenProvider != null && !useTls && !IsLoopbackHost(host))"
+	if !strings.Contains(s, guard) {
+		t.Fatalf("C2SClient.cs does not gate the bearer token on TLS/loopback (missing %q)\n%s", guard, s)
+	}
+	if !strings.Contains(s, "throw new ArgumentException(") {
+		t.Errorf("C2SClient.cs loopback guard does not throw ArgumentException\n%s", s)
+	}
+
+	// Loopback hosts stay allowed (local dev / integration tests), and only the
+	// "localhost" name is matched case-insensitively.
+	for _, want := range []string{
+		"private static bool IsLoopbackHost(string host) =>",
+		`string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)`,
+		`|| host == "127.0.0.1"`,
+		`|| host == "::1";`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("C2SClient.cs loopback check missing %q\n%s", want, s)
+		}
+	}
+
+	// The TLS path is untouched: credentials are still composed and the insecure
+	// escape hatch is still keyed off !useTls — but it is now only reachable past
+	// the guard above.
+	guardAt := strings.Index(s, guard)
+	for _, after := range []string{
+		"options.UnsafeUseInsecureChannelCallCredentials = !useTls;",
+		"CallCredentials.FromInterceptor",
+		"GrpcChannel.ForAddress(",
+	} {
+		at := strings.Index(s, after)
+		if at < 0 {
+			t.Fatalf("C2SClient.cs missing %q\n%s", after, s)
+		}
+		if at < guardAt {
+			t.Errorf("C2SClient.cs reaches %q before the plaintext-bearer guard\n%s", after, s)
+		}
+	}
+}

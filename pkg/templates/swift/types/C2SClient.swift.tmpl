@@ -8,6 +8,14 @@ import GRPCNIOTransportHTTP2
 /// tacplus builds no client_im for Swift — the client only exposes this hook.
 public typealias C2STokenProvider = @Sendable () async throws -> String
 
+/// Errors surfaced by the C2S (native gRPC) client.
+public enum C2SClientError: Error {
+    /// A token provider was supplied for a plaintext connection to a non-loopback
+    /// host. The token would leave the machine unencrypted, so the client refuses
+    /// to be constructed rather than sending it.
+    case bearerTokenOverPlaintext(host: String)
+}
+
 /// A `ClientInterceptor` that injects a Bearer token into request metadata.
 struct C2SBearerTokenInterceptor: ClientInterceptor {
     let tokenProvider: C2STokenProvider
@@ -43,16 +51,29 @@ public struct C2SClient: Sendable {
     ///     the system default configuration; when false it is plaintext.
     ///   - tokenProvider: optional token provider. When non-nil, every call carries
     ///     an `authorization: Bearer <token>` metadata header.
+    /// - Throws: `C2SClientError.bearerTokenOverPlaintext` when `tokenProvider` is
+    ///   non-nil, `useTLS` is false and `host` is not a loopback address: a bearer
+    ///   token must never leave the machine in plaintext.
     public init(
         host: String,
         port: Int,
         useTLS: Bool = true,
         tokenProvider: C2STokenProvider? = nil
-    ) {
+    ) throws {
+        if tokenProvider != nil, !useTLS, !C2SClient.isLoopbackHost(host) {
+            throw C2SClientError.bearerTokenOverPlaintext(host: host)
+        }
+
         self.host = host
         self.port = port
         self.useTLS = useTLS
         self.tokenProvider = tokenProvider
+    }
+
+    /// True when `host` is a loopback literal. Literal string comparison only —
+    /// no DNS resolution and no IP parsing.
+    private static func isLoopbackHost(_ host: String) -> Bool {
+        host.lowercased() == "localhost" || host == "127.0.0.1" || host == "::1"
     }
 
     private func interceptors() -> [any ClientInterceptor] {

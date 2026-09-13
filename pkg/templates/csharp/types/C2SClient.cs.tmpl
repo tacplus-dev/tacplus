@@ -36,12 +36,24 @@ public sealed class C2SClient : IDisposable
     /// Optional token provider. When non-null, every call carries an
     /// <c>authorization: Bearer &lt;token&gt;</c> metadata header.
     /// </param>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="tokenProvider"/> is supplied,
+    /// <paramref name="useTls"/> is false and <paramref name="host"/> is not a
+    /// loopback address: a bearer token must never leave the machine in plaintext.
+    /// </exception>
     public C2SClient(
         string host,
         int port,
         bool useTls = true,
         Func<CancellationToken, Task<string>>? tokenProvider = null)
     {
+        if (tokenProvider != null && !useTls && !IsLoopbackHost(host))
+        {
+            throw new ArgumentException(
+                $"C2SClient: refusing to send a bearer token in plaintext to non-loopback host '{host}'; use TLS or omit the token provider",
+                nameof(host));
+        }
+
         var scheme = useTls ? "https" : "http";
         Address = $"{host}:{port}";
 
@@ -58,7 +70,8 @@ public sealed class C2SClient : IDisposable
             });
             // Compose the per-call bearer credentials onto the channel. On a
             // plaintext channel gRPC would reject call credentials, so allow them
-            // explicitly via UnsafeUseInsecureChannelCallCredentials.
+            // explicitly via UnsafeUseInsecureChannelCallCredentials — reachable
+            // only for a loopback host, per the guard at the top of this constructor.
             options.Credentials = ChannelCredentials.Create(
                 useTls ? ChannelCredentials.SecureSsl : ChannelCredentials.Insecure,
                 callCredentials);
@@ -67,6 +80,15 @@ public sealed class C2SClient : IDisposable
 
         _channel = GrpcChannel.ForAddress($"{scheme}://{Address}", options);
     }
+
+    /// <summary>
+    /// True when <paramref name="host"/> is a loopback literal. Literal string
+    /// comparison only — no DNS resolution and no IP parsing.
+    /// </summary>
+    private static bool IsLoopbackHost(string host) =>
+        string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+        || host == "127.0.0.1"
+        || host == "::1";
 {{range .Services}}
     /// <summary>Typed gRPC client for the {{.ClientType}} service.</summary>
     public {{.ClientType}} {{.MethodName}}() => new {{.ClientType}}(_channel);

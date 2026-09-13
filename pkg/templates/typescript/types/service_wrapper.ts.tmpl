@@ -96,8 +96,8 @@ export class {{.WrapperName}} {
 
     /** Registers per-method auth metadata with the Authorizer. */
     registerMethodAuth(authorizer: {
-        setMethodAuth(methodName: string, patterns: string[]): void;
-        setMethodTargetNamespaceField(methodName: string, fieldName: string): void;
+        setMethodAuth(methodKey: string, patterns: string[]): void;
+        setMethodTargetNamespaceField(methodKey: string, fieldName: string): void;
     }): void {
 {{.RegisterMethodAuth}}
     }

@@ -37,9 +37,13 @@ type Authorizer interface {
 	// to the root namespace "/".
 	AuthenticateAtOrBelow(ctx context.Context, targetNamespace string) error
 	// SetMethodAuth registers explicit service-caller patterns for a method.
-	SetMethodAuth(methodName string, patterns []string)
-	// SetMethodTargetNamespaceField registers level-or-below target namespace checks.
-	SetMethodTargetNamespaceField(methodName, fieldName string)
+	// methodKey is the SERVICE-QUALIFIED method identifier "pkg.Service/Method",
+	// not the bare RPC name — one process may host several services, and two of
+	// them may declare the same RPC name with different auth_services.
+	SetMethodAuth(methodKey string, patterns []string)
+	// SetMethodTargetNamespaceField registers level-or-below target namespace
+	// checks, keyed by the same service-qualified identifier as SetMethodAuth.
+	SetMethodTargetNamespaceField(methodKey, fieldName string)
 	// JwkCache returns the underlying JWK cache for direct key access.
 	JwkCache() *JwkCache
 	// EnforcingUnaryInterceptor returns a unary interceptor that verifies
@@ -165,6 +169,12 @@ var acceptedAudiences = map[string]struct{}{
 // authorizer implements the Authorizer interface using token signature verification.
 // User tokens carry a service_entitlements claim with normalized exact RPC grant tokens;
 // S2S service tokens are authorized via auth_services RE2 patterns.
+// Both per-method maps are keyed by the SERVICE-QUALIFIED method identifier
+// ("pkg.Service/Method") produced by qualifiedMethodKey, never by the bare RPC
+// name: one process may host several services' wrappers behind a single
+// authorizer, and two of them may declare an identically named RPC with
+// different auth_services. Keyed by the bare name, whichever registered last
+// would silently overwrite the other and enforce its policy for both.
 type authorizer struct {
 	jwkCache                   *JwkCache
 	methodAuthPatterns         map[string][]*regexp.Regexp
@@ -200,17 +210,21 @@ func NewAuthorizer(ctx context.Context, conn grpc.ClientConnInterface) (*authori
 // target namespace path for a method. When set, Authorize enforces the
 // level-or-below rule: caller's namespace claim must equal or be a strict
 // path-segment ancestor of the value of fieldName on the request.
-func (a *authorizer) SetMethodTargetNamespaceField(methodName, fieldName string) {
+// methodKey is the service-qualified identifier "pkg.Service/Method".
+func (a *authorizer) SetMethodTargetNamespaceField(methodKey, fieldName string) {
 	if fieldName == "" {
 		return
 	}
-	a.methodTargetNamespaceField[methodName] = fieldName
+	a.methodTargetNamespaceField[methodKey] = fieldName
 }
 
 // SetMethodAuth registers allowed caller patterns for a method. Patterns are RE2 regexes
 // matched against the service path (SPIFFE URI minus the deployment prefix).
 // "*" is shorthand for "match any caller".
-func (a *authorizer) SetMethodAuth(methodName string, patterns []string) {
+// methodKey is the service-qualified identifier "pkg.Service/Method" that
+// qualifiedMethodKey derives from the incoming full gRPC method; registering a
+// bare RPC name here would collide across co-hosted services.
+func (a *authorizer) SetMethodAuth(methodKey string, patterns []string) {
 	if len(patterns) == 0 {
 		return
 	}
@@ -222,7 +236,7 @@ func (a *authorizer) SetMethodAuth(methodName string, patterns []string) {
 			compiled = append(compiled, regexp.MustCompile("^(?:"+p+")$"))
 		}
 	}
-	a.methodAuthPatterns[methodName] = compiled
+	a.methodAuthPatterns[methodKey] = compiled
 }
 
 // JwkCache returns the underlying JWK cache for direct key access.
@@ -248,12 +262,13 @@ func (a *authorizer) Authorize(ctx context.Context, fullMethod string, req any) 
 	// clouds/accounts/AZs/clusters; raw sub/namespace are never matched directly.
 	if subType := tw.GetSubType(); subType == "service" || subType == "workload" {
 		methodName := extractMethodName(fullMethod)
+		methodKey := qualifiedMethodKey(fullMethod)
 		servicePath, err := tw.ServicePath()
 		if err != nil {
 			return err
 		}
 
-		allowed, ok := a.methodAuthPatterns[methodName]
+		allowed, ok := a.methodAuthPatterns[methodKey]
 		if !ok {
 			return protoerrors.NewErrPermissionDenied(nil,
 				"no auth_services policy configured for service caller %q on %q", servicePath, methodName)
@@ -271,14 +286,14 @@ func (a *authorizer) Authorize(ctx context.Context, fullMethod string, req any) 
 		}
 
 		// Level-or-below check (applies to S2S too when target_namespace_field is set).
-		if err := a.checkTargetNamespace(methodName, tw.GetNamespace(), req); err != nil {
+		if err := a.checkTargetNamespace(methodKey, tw.GetNamespace(), req); err != nil {
 			return err
 		}
 		return nil
 	}
 
 	// C2S path: user tokens carry service_entitlements with exact RPC grants.
-	methodName := extractMethodName(fullMethod)
+	methodKey := qualifiedMethodKey(fullMethod)
 
 	te := tw.GetServiceEntitlements()
 	if te == nil {
@@ -294,7 +309,7 @@ func (a *authorizer) Authorize(ctx context.Context, fullMethod string, req any) 
 
 	// Level-or-below check: caller's namespace must be at or above the target namespace
 	// named by the method's target_namespace_field annotation.
-	if err := a.checkTargetNamespace(methodName, tw.GetNamespace(), req); err != nil {
+	if err := a.checkTargetNamespace(methodKey, tw.GetNamespace(), req); err != nil {
 		return err
 	}
 	return nil
@@ -303,25 +318,25 @@ func (a *authorizer) Authorize(ctx context.Context, fullMethod string, req any) 
 // checkTargetNamespace enforces the level-or-below rule for methods annotated
 // with target_namespace_field. The request field named by the annotation must
 // contain a namespace-path string at or below the caller's namespace.
-func (a *authorizer) checkTargetNamespace(methodName, callerNamespace string, req any) error {
-	fieldName, ok := a.methodTargetNamespaceField[methodName]
+func (a *authorizer) checkTargetNamespace(methodKey, callerNamespace string, req any) error {
+	fieldName, ok := a.methodTargetNamespaceField[methodKey]
 	if !ok || fieldName == "" {
 		return nil
 	}
 	pm, ok := req.(interface{ ProtoReflect() protoreflect.Message })
 	if !ok {
 		return protoerrors.NewErrGeneral(nil,
-			"target_namespace_field configured but request is not a proto message for %q", methodName)
+			"target_namespace_field configured but request is not a proto message for %q", methodKey)
 	}
 	msg := pm.ProtoReflect()
 	fd := msg.Descriptor().Fields().ByName(protoreflect.Name(fieldName))
 	if fd == nil {
 		return protoerrors.NewErrGeneral(nil,
-			"target_namespace_field %q not found on request for %q", fieldName, methodName)
+			"target_namespace_field %q not found on request for %q", fieldName, methodKey)
 	}
 	if fd.Kind() != protoreflect.StringKind {
 		return protoerrors.NewErrGeneral(nil,
-			"target_namespace_field %q is not a string field for %q", fieldName, methodName)
+			"target_namespace_field %q is not a string field for %q", fieldName, methodKey)
 	}
 	target := msg.Get(fd).String()
 	if target == "" {
@@ -570,4 +585,29 @@ func extractMethodName(fullMethod string) string {
 		return fullMethod[i+1:]
 	}
 	return fullMethod
+}
+
+// qualifiedMethodKey returns the SERVICE-QUALIFIED method identifier
+// "pkg.Service/Method" — the last two path segments of a full gRPC method.
+// It is the key both per-method policy maps use, so that two services hosted
+// behind one authorizer keep separate policies for identically named RPCs.
+//
+// Both full-method shapes the generated wrappers produce reduce to the same
+// key: "/pkg.Service/Method" and "/<parent>/pkg.Service/Method" both yield
+// "pkg.Service/Method".
+func qualifiedMethodKey(fullMethod string) string {
+	method := fullMethod
+	rest := ""
+	if i := strings.LastIndex(fullMethod, "/"); i >= 0 {
+		method = fullMethod[i+1:]
+		rest = fullMethod[:i]
+	}
+	service := rest
+	if i := strings.LastIndex(rest, "/"); i >= 0 {
+		service = rest[i+1:]
+	}
+	if service == "" {
+		return method
+	}
+	return service + "/" + method
 }

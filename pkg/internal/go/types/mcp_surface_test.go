@@ -101,10 +101,10 @@ func TestGoServiceWrapperOmitsMcpToolMethodAndAuth(t *testing.T) {
 	if !strings.Contains(rendered, "func (p *TicketApi) GetTicket(ctx context.Context") {
 		t.Fatalf("non-MCP control rpc is missing from the Go gRPC wrapper:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, `auth.SetMethodAuth("GetTicket", []string{"spiffe://*/console"})`) {
+	if !strings.Contains(rendered, `auth.SetMethodAuth("ticket.TicketApi/GetTicket", []string{"spiffe://*/console"})`) {
 		t.Fatalf("non-MCP control rpc lost its per-method auth registration:\n%s", rendered)
 	}
-	if strings.Contains(rendered, `auth.SetMethodAuth("GetTicketBrief"`) {
+	if strings.Contains(rendered, `auth.SetMethodAuth("ticket.TicketApi/GetTicketBrief"`) {
 		t.Fatalf("MCP tool registered per-method auth for a gRPC method that does not exist:\n%s", rendered)
 	}
 }

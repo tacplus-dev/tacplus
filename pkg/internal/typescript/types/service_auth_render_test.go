@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -110,9 +111,9 @@ func TestTypeScriptServiceWrapperAuthWiringRendersMetadataAndMethodPolicies(t *t
 		"private authenticateFunc: ((metadata: Record<string, string>, targetNamespace?: string) => void | Promise<void>) | null;",
 		"await this.authorizeFunc(fullMethod, this.metadataToRecord(metadata), req);",
 		"await this.authenticateFunc(this.metadataToRecord(metadata), targetNamespace);",
-		"authorizer.setMethodAuth(\"Read\", [\"identity\", \"opa\"]);",
-		"authorizer.setMethodTargetNamespaceField(\"Read\", \"tenant_namespace\");",
-		"authorizer.setMethodAuth(\"Override\", [\"eventbus\"]);",
+		"authorizer.setMethodAuth(\"demo.DemoService/Read\", [\"identity\", \"opa\"]);",
+		"authorizer.setMethodTargetNamespaceField(\"demo.DemoService/Read\", \"tenant_namespace\");",
+		"authorizer.setMethodAuth(\"demo.DemoService/Override\", [\"eventbus\"]);",
 		"await this.authorize('/demo.DemoService/Read', call.metadata, call.request);",
 		"await this.authorize('/demo.DemoService/Tail', call.metadata, call.request);",
 		"await this.authorize('/demo.DemoService/Upload', call.metadata, null);",
@@ -130,8 +131,8 @@ func TestTypeScriptServiceWrapperAuthWiringRendersMetadataAndMethodPolicies(t *t
 	for _, notWant := range []string{
 		"authorize('/demo.DemoService/Health'",
 		"authenticate('/demo.DemoService/Health'",
-		"authorizer.setMethodAuth(\"PingAny\"",
-		"authorizer.setMethodAuth(\"Health\"",
+		"authorizer.setMethodAuth(\"demo.DemoService/PingAny\"",
+		"authorizer.setMethodAuth(\"demo.DemoService/Health\"",
 		"call.destroy(this.toGrpcError(err));",
 		"stream.destroy(this.toGrpcError(err));",
 		"stream.destroy(this.toGrpcErrorWithCode(err, grpc.status.INTERNAL));",
@@ -204,9 +205,9 @@ func TestTypeScriptGrpcAuthorizerJwkWatchUsesJwkViewStreamWithBoundedReconnect(t
 		"throw AuthError.unauthenticated('unknown signing key: ' + kid);",
 		"throw AuthError.permissionDenied(`caller namespace \"${callerNamespace}\" is not at-or-above target \"${target}\"`);",
 		"private _methodTargetNamespaceFields: Map<string, string>;",
-		"setMethodTargetNamespaceField(methodName: string, fieldName: string): void {",
+		"setMethodTargetNamespaceField(methodKey: string, fieldName: string): void {",
 		"async authorize(metadata: Record<string, string>, fullMethod: string, request?: unknown): Promise<void> {",
-		"this.checkTargetNamespace(methodName, tw.getNamespace(), request);",
+		"this.checkTargetNamespace(methodKey, tw.getNamespace(), request);",
 		"function readStringField(request: Record<string, unknown>, protoFieldName: string): unknown {",
 		"function isAtOrBelow(caller: string, target: string): boolean {",
 		"private readonly maxReconnectBackoffMs = 30000;",
@@ -353,5 +354,73 @@ func TestTypeScriptAuthorizerAnchorsWholeAuthServicesPattern(t *testing.T) {
 		"for (const c of ['evil-payments', 'billing-but-not-really']) { if (match(c)) { console.log('partial match accepted: ' + c); process.exit(1); } }\n"
 	if out, err := exec.Command(node, "-e", script).CombinedOutput(); err != nil {
 		t.Fatalf("auth_services pattern %s is not fully anchored under ECMAScript: %v\n%s", compileExpr, err, out)
+	}
+}
+
+// Two DIFFERENT services hosted behind ONE Authorizer that each declare an rpc
+// with the SAME bare name must keep their own auth_services. Keyed by the bare
+// name ("Get"), the second registration silently overwrote the first, so
+// whichever service registered last decided authorization for BOTH.
+//
+// TypeScript has no generated-code test runner (the cross-test gates only tsc-
+// build the TS output), so — like the alternation-anchoring check above — this
+// lifts the real key-derivation function verbatim out of the template and runs
+// it under node against the keys the GENERATOR actually emits, which together
+// are what decide the lookup at runtime.
+func TestTypeScriptAuthorizerKeysMethodPolicyPerService(t *testing.T) {
+	renderedBytes, err := fs.ReadFile(templates.FS, "typescript/chassis/grpcserver/Authorizer.ts.tmpl")
+	if err != nil {
+		t.Fatalf("load Authorizer.ts.tmpl: %v", err)
+	}
+	rendered := string(renderedBytes)
+
+	// Lift qualifiedMethodKey's whole declaration out of the template.
+	const fnStart = "export function qualifiedMethodKey(fullMethod: string): string {"
+	i := strings.Index(rendered, fnStart)
+	if i < 0 {
+		t.Fatalf("Authorizer.ts.tmpl no longer declares qualifiedMethodKey")
+	}
+	j := strings.Index(rendered[i:], "\n}")
+	if j < 0 {
+		t.Fatalf("could not find the end of qualifiedMethodKey")
+	}
+	fnSrc := strings.TrimPrefix(rendered[i:i+j+2], "export ")
+
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node binary found; skipping ECMAScript semantics check")
+	}
+
+	// The keys the generator emits for two services that both declare "Get".
+	alphaKey := tsQualifiedMethodAuthKey("alpha", "AlphaService", "Get")
+	betaKey := tsQualifiedMethodAuthKey("beta", "BetaService", "Get")
+	if alphaKey == betaKey {
+		t.Fatalf("generator emits the same registration key %q for two different services", alphaKey)
+	}
+
+	script := fnSrc + `
+// Exactly what two generated registerMethodAuth functions do against the one
+// Authorizer the ServiceManager builds.
+const policy = new Map();
+policy.set(` + strconv.Quote(alphaKey) + `, 'alpha-caller');
+policy.set(` + strconv.Quote(betaKey) + `, 'beta-caller');
+
+const lookup = (fullMethod) => policy.get(qualifiedMethodKey(fullMethod));
+
+const alphaFull = '/alpha.AlphaService/Get';
+const betaFull = '/beta.BetaService/Get';
+
+if (policy.size !== 2) { console.log('a registration overwrote the other: size=' + policy.size); process.exit(1); }
+if (lookup(alphaFull) !== 'alpha-caller') { console.log('alpha policy lost: ' + lookup(alphaFull)); process.exit(1); }
+if (lookup(betaFull) !== 'beta-caller') { console.log('beta policy lost: ' + lookup(betaFull)); process.exit(1); }
+
+// The routing-parent shape resolves to the same key.
+if (qualifiedMethodKey('/services/alpha.AlphaService/Get') !== ` + strconv.Quote(alphaKey) + `) {
+  console.log('parent-prefixed full method did not resolve to the registered key');
+  process.exit(1);
+}
+`
+	if out, err := exec.Command(node, "-e", script).CombinedOutput(); err != nil {
+		t.Fatalf("per-service method-policy keying is broken under ECMAScript: %v\n%s", err, out)
 	}
 }

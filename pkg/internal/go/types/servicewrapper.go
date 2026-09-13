@@ -251,6 +251,14 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			grpcWrappers.WriteString(generateGRPCWrapper(service, method, info.Package, svc.ParentDir, svc.GrpcName, accountingMap, info.CrossPackageTypes, skippedTraceTypes, san))
 			grpcWrappers.WriteString("\n")
 
+			// Per-method policy is keyed by the SERVICE-QUALIFIED method
+			// identifier the Authorizer derives from the incoming full gRPC
+			// method (qualifiedMethodKey), never by the bare RPC name: one
+			// process may host several services behind one Authorizer, and a
+			// bare-name key lets a second service's identically named RPC
+			// silently overwrite the first's auth_services.
+			methodKey := qualifiedMethodAuthKey(info.Package, service.Name, method.Name)
+
 			// Resolve effective auth_services: method-level overrides service-level.
 			effectiveAuth := svc.AuthServices
 			if len(method.AuthServices) > 0 {
@@ -263,7 +271,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 				}
 				methodAuthLines = append(methodAuthLines, fmt.Sprintf(
 					"auth.SetMethodAuth(%q, []string{%s})",
-					method.Name, strings.Join(quoted, ", ")))
+					methodKey, strings.Join(quoted, ", ")))
 			}
 
 			// Register request-field target_namespace_field for level-or-below enforcement.
@@ -271,7 +279,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			if method.TargetNamespaceField != "" && !method.AuthAnyUser {
 				methodAuthLines = append(methodAuthLines, fmt.Sprintf(
 					"auth.SetMethodTargetNamespaceField(%q, %q)",
-					method.Name, method.TargetNamespaceField))
+					methodKey, method.TargetNamespaceField))
 			}
 		}
 	}
@@ -1708,4 +1716,16 @@ func goAppendOnlyRecordOnMethod(method *parser.MethodInfo, san *egressSanitizer,
 		}
 	}
 	return ""
+}
+
+// qualifiedMethodAuthKey builds the SERVICE-QUALIFIED method identifier that
+// keys the Authorizer's per-method policy maps: "pkg.Service/Method", the last
+// two segments of the full gRPC method path the wrapper passes to Authorize.
+// It must stay in lockstep with qualifiedMethodKey in the grpcserver chassis
+// (pkg/templates/go/chassis/grpcserver/authorizer.go.tmpl).
+func qualifiedMethodAuthKey(protoPackage, serviceName, methodName string) string {
+	if protoPackage == "" {
+		return serviceName + "/" + methodName
+	}
+	return protoPackage + "." + serviceName + "/" + methodName
 }

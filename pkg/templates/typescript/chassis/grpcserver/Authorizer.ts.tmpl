@@ -201,33 +201,45 @@ export class Authorizer {
     return this._jwkCache;
   }
 
-  /** Registers allowed caller patterns for a method. "*" matches any service caller. */
-  setMethodAuth(methodName: string, patterns: string[]): void {
+  /**
+   * Registers allowed caller patterns for a method. "*" matches any service caller.
+   *
+   * `methodKey` is the SERVICE-QUALIFIED identifier "pkg.Service/Method" that
+   * `qualifiedMethodKey` derives from the incoming full gRPC method, never the
+   * bare rpc name: one process may host several services behind a single
+   * Authorizer, and two of them may declare an identically named rpc with
+   * different auth_services. Keyed by the bare name, whichever registered last
+   * would silently overwrite the other and decide authorization for both.
+   */
+  setMethodAuth(methodKey: string, patterns: string[]): void {
     if (patterns.length === 0) return;
     this._methodAuthPatterns.set(
-      methodName,
+      methodKey,
       patterns.map((p) => new RegExp(p === '*' ? '.*' : `^(?:${p})$`)),
     );
   }
 
-  /** Registers the request field carrying the target namespace for a method. */
-  setMethodTargetNamespaceField(methodName: string, fieldName: string): void {
+  /**
+   * Registers the request field carrying the target namespace for a method,
+   * keyed by the same service-qualified identifier as setMethodAuth.
+   */
+  setMethodTargetNamespaceField(methodKey: string, fieldName: string): void {
     if (!fieldName) return;
-    this._methodTargetNamespaceFields.set(methodName, fieldName);
+    this._methodTargetNamespaceFields.set(methodKey, fieldName);
   }
 
-  private checkTargetNamespace(methodName: string, callerNamespace: string, request?: unknown): void {
-    const fieldName = this._methodTargetNamespaceFields.get(methodName);
+  private checkTargetNamespace(methodKey: string, callerNamespace: string, request?: unknown): void {
+    const fieldName = this._methodTargetNamespaceFields.get(methodKey);
     if (!fieldName) return;
     if (request === null || typeof request !== 'object') {
-      throw AuthError.permissionDenied(`target_namespace_field configured but request is not an object for "${methodName}"`);
+      throw AuthError.permissionDenied(`target_namespace_field configured but request is not an object for "${methodKey}"`);
     }
     const target = readStringField(request as Record<string, unknown>, fieldName);
     if (target === undefined) {
-      throw AuthError.permissionDenied(`target_namespace_field "${fieldName}" not found on request for "${methodName}"`);
+      throw AuthError.permissionDenied(`target_namespace_field "${fieldName}" not found on request for "${methodKey}"`);
     }
     if (typeof target !== 'string') {
-      throw AuthError.permissionDenied(`target_namespace_field "${fieldName}" is not a string field for "${methodName}"`);
+      throw AuthError.permissionDenied(`target_namespace_field "${fieldName}" is not a string field for "${methodKey}"`);
     }
     if (target === '') {
       throw AuthError.permissionDenied(`target namespace field "${fieldName}" is empty`);
@@ -310,13 +322,14 @@ export class Authorizer {
     const subType = tw.getSubType();
     if (subType === 'service' || subType === 'workload') {
       const methodName = extractMethodName(fullMethod);
+      const methodKey = qualifiedMethodKey(fullMethod);
       let servicePath: string;
       try {
         servicePath = tw.servicePath();
       } catch (err) {
         throw AuthError.unauthenticated(errorMessage(err));
       }
-      const allowed = this._methodAuthPatterns.get(methodName);
+      const allowed = this._methodAuthPatterns.get(methodKey);
       if (!allowed) {
         throw AuthError.permissionDenied(`no auth_services policy configured for service caller "${servicePath}" on "${methodName}"`);
       }
@@ -324,7 +337,7 @@ export class Authorizer {
         throw AuthError.permissionDenied(`service "${servicePath}" not authorized for "${methodName}"`);
       }
       // Level-or-below check (applies to S2S too when target_namespace_field is set).
-      this.checkTargetNamespace(methodName, tw.getNamespace(), request);
+      this.checkTargetNamespace(methodKey, tw.getNamespace(), request);
       return;
     }
 
@@ -336,7 +349,7 @@ export class Authorizer {
     }
 
     if (serviceEntitlementsGrantRPC(te, Authorizer.SERVICE_NAME, fullMethod)) {
-      this.checkTargetNamespace(methodName, tw.getNamespace(), request);
+      this.checkTargetNamespace(qualifiedMethodKey(fullMethod), tw.getNamespace(), request);
       return;
     }
     throw AuthError.permissionDenied(
@@ -557,4 +570,24 @@ export function parseStringList(raw: unknown): string[] {
 function extractMethodName(fullMethod: string): string {
   const i = fullMethod.lastIndexOf('/');
   return i >= 0 ? fullMethod.substring(i + 1) : fullMethod;
+}
+
+/**
+ * Returns the SERVICE-QUALIFIED method identifier "pkg.Service/Method" — the
+ * last two path segments of a full gRPC method. This is the key both per-method
+ * policy maps use, so that two services hosted behind one Authorizer keep
+ * separate policies for identically named rpcs.
+ *
+ * Both full-method shapes the generated wrappers produce reduce to the same
+ * key: "/pkg.Service/Method" and "/<parent>/pkg.Service/Method" both yield
+ * "pkg.Service/Method".
+ */
+export function qualifiedMethodKey(fullMethod: string): string {
+  const i = fullMethod.lastIndexOf('/');
+  if (i < 0) return fullMethod;
+  const method = fullMethod.substring(i + 1);
+  const rest = fullMethod.substring(0, i);
+  const j = rest.lastIndexOf('/');
+  const service = j >= 0 ? rest.substring(j + 1) : rest;
+  return service === '' ? method : `${service}/${method}`;
 }

@@ -93,7 +93,9 @@ func TestRustMcpOnlyServiceRegistersCarrierMethodAuth(t *testing.T) {
 	// service-level AuthServices) and must carry the carrier's own line —
 	// not just be a dangling call with an empty function.
 	carrierName := parser.McpCarrierRpcName("TicketAgent")
-	wantLine := `auth.set_method_auth("` + carrierName + `", &["ticket-agent"]);`
+	// Registered under the SERVICE-QUALIFIED key, not the bare carrier rpc name:
+	// the Authorizer looks policy up by "pkg.Service/Method".
+	wantLine := `auth.set_method_auth("ticket.TicketAgent/` + carrierName + `", &["ticket-agent"]);`
 	if !strings.Contains(got, "pub fn register_method_auth(") {
 		t.Fatalf("MCP-only service with AuthServices must still emit register_method_auth:\n%s", got)
 	}

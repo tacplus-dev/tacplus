@@ -93,6 +93,10 @@ func authorizerWithKeys(t *testing.T, jwks ...*wrapperJwk.ImmutableJwk) *authori
 
 const testMethod = "/demo.DemoService/DoThing"
 
+// testMethodKey is the service-qualified key the Authorizer derives from
+// testMethod, and the key a generated wrapper registers policy under.
+const testMethodKey = "demo.DemoService/DoThing"
+
 func serviceToken(caller string) func(*tokenlib.TokenWrapper) {
 	return func(tok *tokenlib.TokenWrapper) {
 		tok.SetSubType("service").SetSubject(caller)
@@ -104,7 +108,7 @@ func serviceToken(caller string) func(*tokenlib.TokenWrapper) {
 func TestAuthorizerAcceptsValidServiceToken(t *testing.T) {
 	key := newTestKey(t)
 	a := authorizerWithKeys(t, jwkForKey(t, key))
-	a.SetMethodAuth("DoThing", []string{"caller-svc"})
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
 
 	tok := signedToken(t, key, serviceToken("caller-svc"))
 	if err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
@@ -117,7 +121,7 @@ func TestAuthorizerAcceptsValidServiceToken(t *testing.T) {
 func TestAuthorizerRejectsServiceNotInAuthServices(t *testing.T) {
 	key := newTestKey(t)
 	a := authorizerWithKeys(t, jwkForKey(t, key))
-	a.SetMethodAuth("DoThing", []string{"allowed-svc"})
+	a.SetMethodAuth(testMethodKey, []string{"allowed-svc"})
 
 	tok := signedToken(t, key, serviceToken("other-svc"))
 	if err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
@@ -136,7 +140,7 @@ func TestAuthorizerAlternationPatternIsFullyAnchored(t *testing.T) {
 
 	for _, caller := range []string{"billing", "payments"} {
 		a := authorizerWithKeys(t, jwkForKey(t, key))
-		a.SetMethodAuth("DoThing", []string{"billing|payments"})
+		a.SetMethodAuth(testMethodKey, []string{"billing|payments"})
 		tok := signedToken(t, key, serviceToken(caller))
 		if err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
 			t.Fatalf("caller %q exactly matches an alternation branch and must be authorized, got: %v", caller, err)
@@ -145,7 +149,7 @@ func TestAuthorizerAlternationPatternIsFullyAnchored(t *testing.T) {
 
 	for _, caller := range []string{"evil-payments", "billing-but-not-really"} {
 		a := authorizerWithKeys(t, jwkForKey(t, key))
-		a.SetMethodAuth("DoThing", []string{"billing|payments"})
+		a.SetMethodAuth(testMethodKey, []string{"billing|payments"})
 		tok := signedToken(t, key, serviceToken(caller))
 		if err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
 			t.Fatalf("caller %q only partially matches an alternation branch and must be denied", caller)
@@ -157,7 +161,7 @@ func TestAuthorizerAlternationPatternIsFullyAnchored(t *testing.T) {
 func TestAuthorizerRejectsExpiredToken(t *testing.T) {
 	key := newTestKey(t)
 	a := authorizerWithKeys(t, jwkForKey(t, key))
-	a.SetMethodAuth("DoThing", []string{"caller-svc"})
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
 
 	tok := tokenlib.NewImmutableToken(nil).
 		SetIssuer("test-issuer").
@@ -178,7 +182,7 @@ func TestAuthorizerRejectsExpiredToken(t *testing.T) {
 func TestAuthorizerRejectsWrongAudience(t *testing.T) {
 	key := newTestKey(t)
 	a := authorizerWithKeys(t, jwkForKey(t, key))
-	a.SetMethodAuth("DoThing", []string{"caller-svc"})
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
 
 	tok := tokenlib.NewImmutableToken(nil).
 		SetIssuer("test-issuer").
@@ -201,7 +205,7 @@ func TestAuthorizerRejectsUnknownKid(t *testing.T) {
 	key := newTestKey(t)
 	// Seed a DIFFERENT key so the token's kid is unknown.
 	a := authorizerWithKeys(t, jwkForKey(t, newTestKey(t)))
-	a.SetMethodAuth("DoThing", []string{"caller-svc"})
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
 
 	tok := signedToken(t, key, serviceToken("caller-svc"))
 	if err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
@@ -228,7 +232,7 @@ func TestAuthorizerRejectsTamperedSignature(t *testing.T) {
 		t.Fatalf("NewImmutableJwk: %v", err)
 	}
 	a := authorizerWithKeys(t, forged)
-	a.SetMethodAuth("DoThing", []string{"caller-svc"})
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
 
 	tok := signedToken(t, realKey, serviceToken("caller-svc"))
 	if err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
@@ -309,5 +313,95 @@ func TestAuthenticateRejectsMissingToken(t *testing.T) {
 	ctx := context.Background()
 	if err := a.Authenticate(ctx); err == nil {
 		t.Fatal("missing token must be rejected by Authenticate")
+	}
+}
+
+// Two DIFFERENT services hosted behind ONE Authorizer that each declare an RPC
+// with the SAME bare name must keep their own auth_services. Keyed by the bare
+// name ("Get"), the second registration silently overwrote the first, so
+// whichever service registered last decided authorization for BOTH — a caller
+// entitled to alpha.AlphaService/Get also passed for beta.BetaService/Get.
+// Policy is keyed by the service-qualified identifier instead.
+func TestAuthorizerKeepsPerServicePolicyForSameNamedRpc(t *testing.T) {
+	const (
+		alphaMethod = "/alpha.AlphaService/Get"
+		betaMethod  = "/beta.BetaService/Get"
+	)
+
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	// Exactly what two generated RegisterXMethodAuth functions do against the
+	// one Authorizer the ServiceManager builds.
+	a.SetMethodAuth(qualifiedMethodKey(alphaMethod), []string{"alpha-caller"})
+	a.SetMethodAuth(qualifiedMethodKey(betaMethod), []string{"beta-caller"})
+
+	alphaTok := signedToken(t, key, serviceToken("alpha-caller"))
+	betaTok := signedToken(t, key, serviceToken("beta-caller"))
+
+	// Each caller is authorized for its OWN service's Get.
+	if err := a.Authorize(bearerCtx(alphaTok), alphaMethod, nil); err != nil {
+		t.Fatalf("alpha-caller must be authorized for %s, got: %v", alphaMethod, err)
+	}
+	if err := a.Authorize(bearerCtx(betaTok), betaMethod, nil); err != nil {
+		t.Fatalf("beta-caller must be authorized for %s, got: %v", betaMethod, err)
+	}
+
+	// And is denied on the OTHER service's identically named Get.
+	if err := a.Authorize(bearerCtx(alphaTok), betaMethod, nil); err == nil {
+		t.Fatalf("alpha-caller must be denied for %s: auth_services do not cross services", betaMethod)
+	}
+	if err := a.Authorize(bearerCtx(betaTok), alphaMethod, nil); err == nil {
+		t.Fatalf("beta-caller must be denied for %s: auth_services do not cross services", alphaMethod)
+	}
+}
+
+// The same collision reaches target_namespace_field: two co-hosted services
+// declaring the same RPC name must not inherit each other's namespace-field
+// registration. Only alpha's Get names a target field; beta's must stay
+// unguarded rather than picking up alpha's field name (or vice versa).
+func TestAuthorizerKeepsPerServiceTargetNamespaceFieldForSameNamedRpc(t *testing.T) {
+	const (
+		alphaMethod = "/alpha.AlphaService/Get"
+		betaMethod  = "/beta.BetaService/Get"
+	)
+
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(qualifiedMethodKey(alphaMethod), []string{"caller-svc"})
+	a.SetMethodAuth(qualifiedMethodKey(betaMethod), []string{"caller-svc"})
+	a.SetMethodTargetNamespaceField(qualifiedMethodKey(alphaMethod), "tenant_namespace")
+
+	if got := a.methodTargetNamespaceField[qualifiedMethodKey(betaMethod)]; got != "" {
+		t.Fatalf("beta.BetaService/Get must have no target_namespace_field, got %q from alpha's registration", got)
+	}
+	if got := a.methodTargetNamespaceField[qualifiedMethodKey(alphaMethod)]; got != "tenant_namespace" {
+		t.Fatalf("alpha.AlphaService/Get must keep its own target_namespace_field, got %q", got)
+	}
+
+	// A nil request would fail alpha's field lookup; beta's Get, carrying no
+	// registration of its own, must authorize on auth_services alone.
+	tok := signedToken(t, key, serviceToken("caller-svc"))
+	if err := a.Authorize(bearerCtx(tok), betaMethod, nil); err != nil {
+		t.Fatalf("beta.BetaService/Get must not inherit alpha's target_namespace_field, got: %v", err)
+	}
+}
+
+// qualifiedMethodKey reduces both full-method shapes the generated wrappers
+// produce — with and without the routing parent segment — to the same
+// service-qualified key, so a wrapper's registration matches at lookup time.
+func TestQualifiedMethodKeyShapes(t *testing.T) {
+	for _, tc := range []struct {
+		full string
+		want string
+	}{
+		{"/demo.DemoService/DoThing", "demo.DemoService/DoThing"},
+		{"/services/demo.DemoService/DoThing", "demo.DemoService/DoThing"},
+		{"/vservices/demo.DemoService/DoThing", "demo.DemoService/DoThing"},
+		{"/DemoService/DoThing", "DemoService/DoThing"},
+		{"DoThing", "DoThing"},
+	} {
+		if got := qualifiedMethodKey(tc.full); got != tc.want {
+			t.Errorf("qualifiedMethodKey(%q) = %q, want %q", tc.full, got, tc.want)
+		}
 	}
 }

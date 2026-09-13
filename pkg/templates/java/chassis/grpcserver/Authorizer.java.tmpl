@@ -346,15 +346,17 @@ public class Authorizer {
      * matched against the LOCATION-AGNOSTIC service path from
      * {@code TokenWrapper.servicePath()}. "*" is shorthand for "match any caller".
      *
-     * <p>{@code methodName} may be either the bare rpc name ("PutNodes") or the
-     * full grpc path ("/pkg.Service/PutNodes"). A generated service wrapper
-     * registers the bare name, which is unambiguous for its own methods. A host
-     * serving SEVERAL service definitions in one process — eventbus's per-topic
-     * pub/sub services, say — must register full paths: two services may declare
-     * the same rpc name with different auth_services, and keyed by bare name one
-     * policy would silently overwrite the other.
+     * <p>{@code methodKey} is the SERVICE-QUALIFIED method identifier the
+     * generated wrapper hands to {@link #authorize}: "Service/PutNodes", or
+     * "pkg.Service/PutNodes" for a vservice. It is never the bare rpc name. One
+     * process may serve SEVERAL service definitions — eventbus's per-topic
+     * pub/sub services, say — and two of them may declare the same rpc name
+     * with different auth_services; keyed by the bare name, whichever
+     * registered last would silently overwrite the other and decide
+     * authorization for both. Lookup is by this exact key, so a registration
+     * and the authorize() call for the same method must use the same string.
      */
-    public void setMethodAuth(String methodName, List<String> patterns) {
+    public void setMethodAuth(String methodKey, List<String> patterns) {
         if (patterns == null || patterns.isEmpty()) return;
         List<Pattern> compiled = new ArrayList<>();
         for (String p : patterns) {
@@ -364,17 +366,20 @@ public class Authorizer {
                 compiled.add(Pattern.compile(p));
             }
         }
-        methodAuthPatterns.put(methodName, compiled);
+        methodAuthPatterns.put(methodKey, compiled);
     }
 
     /**
      * Registers the request field name carrying the target namespace path for a method.
      * When set, authorize() enforces the level-or-below rule: caller's namespace claim must
      * equal or be a strict path-segment ancestor of the value of fieldName on the request.
+     *
+     * <p>{@code methodKey} is the same service-qualified identifier
+     * {@link #setMethodAuth} takes, for the same reason.
      */
-    public void setMethodTargetNamespaceField(String methodName, String fieldName) {
+    public void setMethodTargetNamespaceField(String methodKey, String fieldName) {
         if (fieldName == null || fieldName.isEmpty()) return;
-        methodTargetNamespaceField.put(methodName, fieldName);
+        methodTargetNamespaceField.put(methodKey, fieldName);
     }
 
     /**
@@ -382,22 +387,22 @@ public class Authorizer {
      * The request field named by the annotation must contain a namespace-path string at or
      * below the caller's namespace.
      */
-    private void checkTargetNamespace(String methodName, String callerNamespace, Object request) throws ProtoException {
-        String fieldName = methodTargetNamespaceField.get(methodName);
+    private void checkTargetNamespace(String methodKey, String callerNamespace, Object request) throws ProtoException {
+        String fieldName = methodTargetNamespaceField.get(methodKey);
         if (fieldName == null || fieldName.isEmpty()) return;
         if (!(request instanceof com.google.protobuf.MessageOrBuilder)) {
             throw ProtoException.newErrPermissionDenied(null,
-                    "target_namespace_field configured but request is not a proto message for \"" + methodName + "\"");
+                    "target_namespace_field configured but request is not a proto message for \"" + methodKey + "\"");
         }
         com.google.protobuf.MessageOrBuilder msg = (com.google.protobuf.MessageOrBuilder) request;
         Descriptors.FieldDescriptor fd = msg.getDescriptorForType().findFieldByName(fieldName);
         if (fd == null) {
             throw ProtoException.newErrPermissionDenied(null,
-                    "target_namespace_field \"" + fieldName + "\" not found on request for \"" + methodName + "\"");
+                    "target_namespace_field \"" + fieldName + "\" not found on request for \"" + methodKey + "\"");
         }
         if (fd.getType() != Descriptors.FieldDescriptor.Type.STRING) {
             throw ProtoException.newErrPermissionDenied(null,
-                    "target_namespace_field \"" + fieldName + "\" is not a string field for \"" + methodName + "\"");
+                    "target_namespace_field \"" + fieldName + "\" is not a string field for \"" + methodKey + "\"");
         }
         String target = (String) msg.getField(fd);
         if (target == null || target.isEmpty()) {
@@ -462,13 +467,11 @@ public class Authorizer {
                 throw ProtoException.newErrUnauthorized(null, e.getMessage());
             }
 
-            // Full grpc path first, bare rpc name second. Registrations keyed by
-            // full path are per-service exact; the bare-name fallback is what
-            // every generated wrapper registers under.
+            // Keyed by the exact service-qualified identifier the wrapper
+            // passes in — see setMethodAuth. There is deliberately NO bare-rpc-
+            // name fallback: that is what let one co-hosted service's policy
+            // answer for another's identically named rpc.
             List<Pattern> allowed = methodAuthPatterns.get(fullMethod);
-            if (allowed == null) {
-                allowed = methodAuthPatterns.get(methodName);
-            }
             if (allowed == null) {
                 throw ProtoException.newErrPermissionDenied(null,
                         "no auth_services policy configured for service caller \"" + servicePath + "\" on \"" + methodName + "\"");
@@ -486,7 +489,7 @@ public class Authorizer {
             }
 
             // Level-or-below check (applies to S2S when target_namespace_field is set).
-            checkTargetNamespace(methodName, tw.getNamespace(), request);
+            checkTargetNamespace(fullMethod, tw.getNamespace(), request);
             return tw;
         }
 
@@ -504,7 +507,7 @@ public class Authorizer {
 
         // Level-or-below check: caller's namespace must be at or above the target namespace
         // named by the method's target_namespace_field annotation.
-        checkTargetNamespace(methodName, tw.getNamespace(), request);
+        checkTargetNamespace(fullMethod, tw.getNamespace(), request);
         return tw;
     }
 

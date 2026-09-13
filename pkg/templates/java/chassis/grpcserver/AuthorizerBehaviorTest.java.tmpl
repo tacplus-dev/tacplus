@@ -109,13 +109,13 @@ public class AuthorizerBehaviorTest {
         // method's auth_services pattern is authorized.
         ImmutableKey key = newTestKey();
         Authorizer a = authorizerWithKeys(jwkForKey(key));
-        a.setMethodAuth("DoThing", List.of("caller-svc"));
+        a.setMethodAuth(TEST_METHOD, List.of("caller-svc"));
         String valid = signedToken(key, tok -> tok.setSubType("service").setSubject("caller-svc"));
         mustPass("valid service token", () -> a.authorizeWithToken(bearer(valid), TEST_METHOD, null));
 
         // A service caller that does not match auth_services is denied.
         Authorizer mismatched = authorizerWithKeys(jwkForKey(key));
-        mismatched.setMethodAuth("DoThing", List.of("allowed-svc"));
+        mismatched.setMethodAuth(TEST_METHOD, List.of("allowed-svc"));
         String otherSvc = signedToken(key, tok -> tok.setSubType("service").setSubject("other-svc"));
         mustReject("service not in auth_services", () -> mismatched.authorizeWithToken(bearer(otherSvc), TEST_METHOD, null));
 
@@ -151,7 +151,7 @@ public class AuthorizerBehaviorTest {
 
         // A token signed by a key whose kid is not in the cache is rejected.
         Authorizer unknownKid = authorizerWithKeys(jwkForKey(newTestKey()));
-        unknownKid.setMethodAuth("DoThing", List.of("caller-svc"));
+        unknownKid.setMethodAuth(TEST_METHOD, List.of("caller-svc"));
         mustReject("unknown kid", () -> unknownKid.authorizeWithToken(bearer(valid), TEST_METHOD, null));
 
         // A JWK under the REAL kid but with the WRONG public key must not verify
@@ -161,7 +161,7 @@ public class AuthorizerBehaviorTest {
             .setKid(key.getProto().getId())
             .build();
         Authorizer tampered = authorizerWithKeys(forged);
-        tampered.setMethodAuth("DoThing", List.of("caller-svc"));
+        tampered.setMethodAuth(TEST_METHOD, List.of("caller-svc"));
         mustReject("tampered signature", () -> tampered.authorizeWithToken(bearer(valid), TEST_METHOD, null));
 
         // A user (C2S) token with no service_entitlements claim is denied —
@@ -204,6 +204,57 @@ public class AuthorizerBehaviorTest {
         // ---- enforcingInterceptor: correct audience accepted ----
         mustPass("enforcingInterceptor: correct audience",
             () -> a.authenticateWithToken(bearer(valid)));
+
+        // ---- two co-hosted services, same rpc name, separate policies ----
+        // Keyed by the bare rpc name ("Get"), the second registration silently
+        // overwrote the first, so whichever service registered last decided
+        // authorization for BOTH — a caller entitled to AlphaService/Get also
+        // passed for BetaService/Get. Policy is keyed by the service-qualified
+        // identifier the wrapper passes to authorize() instead.
+        {
+            final String alphaMethod = "AlphaService/Get";
+            final String betaMethod = "BetaService/Get";
+            Authorizer cohosted = authorizerWithKeys(jwkForKey(key));
+            // Exactly what two generated registerMethodAuth methods do against
+            // the one Authorizer the ServiceManager builds.
+            cohosted.setMethodAuth(alphaMethod, List.of("alpha-caller"));
+            cohosted.setMethodAuth(betaMethod, List.of("beta-caller"));
+
+            String alphaTok = signedToken(key, tok -> tok.setSubType("service").setSubject("alpha-caller"));
+            String betaTok = signedToken(key, tok -> tok.setSubType("service").setSubject("beta-caller"));
+
+            mustPass("co-hosted: alpha-caller on AlphaService/Get",
+                () -> cohosted.authorizeWithToken(bearer(alphaTok), alphaMethod, null));
+            mustPass("co-hosted: beta-caller on BetaService/Get",
+                () -> cohosted.authorizeWithToken(bearer(betaTok), betaMethod, null));
+            mustReject("co-hosted: alpha-caller must not cross to BetaService/Get",
+                () -> cohosted.authorizeWithToken(bearer(alphaTok), betaMethod, null));
+            mustReject("co-hosted: beta-caller must not cross to AlphaService/Get",
+                () -> cohosted.authorizeWithToken(bearer(betaTok), alphaMethod, null));
+
+            // The same collision reaches target_namespace_field: only alpha's
+            // Get names a target field, so beta's must stay unguarded rather
+            // than inheriting alpha's field name.
+            cohosted.setMethodTargetNamespaceField(alphaMethod, "tenant_namespace");
+            mustPass("co-hosted: BetaService/Get does not inherit alpha's target_namespace_field",
+                () -> cohosted.authorizeWithToken(bearer(betaTok), betaMethod, null));
+        }
+
+        // ---- the bare rpc name is NOT a policy key ----
+        // This is the half that makes the check above non-vacuous. The bare
+        // name used to be a lookup fallback, so a single registration under
+        // "Get" answered for EVERY co-hosted service's Get. Registering a bare
+        // name now matches nothing, and both services fail closed rather than
+        // one inheriting the other's auth_services.
+        {
+            Authorizer bareKeyed = authorizerWithKeys(jwkForKey(key));
+            bareKeyed.setMethodAuth("Get", List.of("alpha-caller"));
+            String alphaTok = signedToken(key, tok -> tok.setSubType("service").setSubject("alpha-caller"));
+            mustReject("bare rpc name is not a key: AlphaService/Get",
+                () -> bareKeyed.authorizeWithToken(bearer(alphaTok), "AlphaService/Get", null));
+            mustReject("bare rpc name is not a key: BetaService/Get",
+                () -> bareKeyed.authorizeWithToken(bearer(alphaTok), "BetaService/Get", null));
+        }
 
         if (failures > 0) {
             System.err.println(failures + " Authorizer behavior check(s) FAILED");

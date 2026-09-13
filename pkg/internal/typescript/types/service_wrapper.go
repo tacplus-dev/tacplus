@@ -193,6 +193,14 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, fileDesc *p
 			serviceDefinition.WriteString(generateTsServiceDefinitionEntry(targetService, method, info.Package))
 			grpcMethods.WriteString(generateTsGRPCWrapperMethod(targetService, method, info.Package, svc.ParentDir, svc.GrpcName, accountingMap))
 
+			// Per-method policy is keyed by the SERVICE-QUALIFIED method
+			// identifier the Authorizer derives from the incoming full gRPC
+			// method (qualifiedMethodKey), never by the bare rpc name: one
+			// process may host several services behind one Authorizer, and a
+			// bare-name key lets a second service's identically named rpc
+			// silently overwrite the first's auth_services.
+			methodAuthKey := tsQualifiedMethodAuthKey(info.Package, targetService.Name, method.Name)
+
 			// Resolve effective auth_services: method-level overrides service-level.
 			effectiveAuth := svc.AuthServices
 			if len(method.AuthServices) > 0 {
@@ -206,13 +214,13 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, fileDesc *p
 				}
 				methodAuthLines = append(methodAuthLines, fmt.Sprintf(
 					"        authorizer.setMethodAuth(%q, [%s]);",
-					method.Name, strings.Join(quoted, ", ")))
+					methodAuthKey, strings.Join(quoted, ", ")))
 			}
 
 			if method.TargetNamespaceField != "" && !method.AuthAnyUser {
 				methodAuthLines = append(methodAuthLines, fmt.Sprintf(
 					"        authorizer.setMethodTargetNamespaceField(%q, %q);",
-					method.Name, method.TargetNamespaceField))
+					methodAuthKey, method.TargetNamespaceField))
 			}
 		}
 	}
@@ -979,4 +987,16 @@ func generateServicesPackageJson(servicesInfo []ServiceInfo) error {
 	}
 
 	return nil
+}
+
+// tsQualifiedMethodAuthKey builds the SERVICE-QUALIFIED method identifier that
+// keys the Authorizer's per-method policy maps: "pkg.Service/Method", the last
+// two segments of the full gRPC method path the wrapper passes to authorize().
+// Must stay in lockstep with qualifiedMethodKey in the grpcserver chassis
+// (pkg/templates/typescript/chassis/grpcserver/Authorizer.ts.tmpl).
+func tsQualifiedMethodAuthKey(protoPackage, serviceName, methodName string) string {
+	if protoPackage == "" {
+		return serviceName + "/" + methodName
+	}
+	return protoPackage + "." + serviceName + "/" + methodName
 }

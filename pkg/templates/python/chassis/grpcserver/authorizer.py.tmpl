@@ -145,6 +145,13 @@ class Authorizer:
             jwk_channel: Optional gRPC channel for JWK subscription
         """
         self._jwk_cache = JwkCache(jwk_channel)
+        # Both per-method maps are keyed by the SERVICE-QUALIFIED method
+        # identifier ("pkg.Service/Method") produced by
+        # _qualified_method_key, never by the bare RPC name: one process may
+        # host several services' wrappers behind a single authorizer, and two
+        # of them may declare an identically named RPC with different
+        # auth_services. Keyed by the bare name, whichever registered last
+        # would silently overwrite the other and decide authorization for both.
         self._method_auth_patterns: Dict[str, List[re.Pattern]] = {}
         self._method_target_namespace_field: Dict[str, str] = {}
 
@@ -154,11 +161,15 @@ class Authorizer:
             jwk_channel is not None,
         )
 
-    def set_method_auth(self, method_name: str, patterns: List[str]) -> None:
+    def set_method_auth(self, method_key: str, patterns: List[str]) -> None:
         """
         Registers allowed caller patterns for a method. Patterns are RE2 regexes
         matched against the location-agnostic service path from
         TokenWrapper.service_path(). "*" is shorthand for "match any caller".
+
+        method_key is the service-qualified identifier "pkg.Service/Method"
+        that _qualified_method_key derives from the incoming full gRPC method,
+        not the bare RPC name.
         """
         if not patterns:
             return
@@ -168,40 +179,43 @@ class Authorizer:
                 compiled.append(re.compile(".*"))
             else:
                 compiled.append(re.compile(p))
-        self._method_auth_patterns[method_name] = compiled
+        self._method_auth_patterns[method_key] = compiled
 
-    def set_method_target_namespace_field(self, method_name: str, field_name: str) -> None:
+    def set_method_target_namespace_field(self, method_key: str, field_name: str) -> None:
         """
         Registers the request field name carrying the target namespace path
         for a method. When set, authorize() enforces the level-or-below rule:
         the caller's namespace claim must equal or be a strict path-segment
         ancestor of the value of field_name on the request.
+
+        method_key is the same service-qualified identifier set_method_auth
+        takes, for the same reason.
         """
         if not field_name:
             return
-        self._method_target_namespace_field[method_name] = field_name
+        self._method_target_namespace_field[method_key] = field_name
 
-    def _check_target_namespace(self, method_name: str, caller_namespace: str, request: Any) -> None:
+    def _check_target_namespace(self, method_key: str, caller_namespace: str, request: Any) -> None:
         """
         Enforces the level-or-below rule for methods annotated with target_namespace_field.
         The request field named by the annotation must contain a namespace-path string at
         or below the caller's namespace.
         """
-        field_name = self._method_target_namespace_field.get(method_name)
+        field_name = self._method_target_namespace_field.get(method_key)
         if not field_name:
             return
         if request is None:
             raise permission_denied(
-                f'target_namespace_field configured but request is None for "{method_name}"'
+                f'target_namespace_field configured but request is None for "{method_key}"'
             )
         if not hasattr(request, field_name):
             raise permission_denied(
-                f'target_namespace_field "{field_name}" not found on request for "{method_name}"'
+                f'target_namespace_field "{field_name}" not found on request for "{method_key}"'
             )
         target = getattr(request, field_name)
         if not isinstance(target, str):
             raise permission_denied(
-                f'target_namespace_field "{field_name}" is not a string for "{method_name}"'
+                f'target_namespace_field "{field_name}" is not a string for "{method_key}"'
             )
         if not target:
             raise permission_denied(f'target namespace field "{field_name}" is empty')
@@ -288,9 +302,10 @@ class Authorizer:
         sub_type = tw.get_sub_type()
         if sub_type in ("service", "workload"):
             method_name = _extract_method_name(full_method)
+            method_key = _qualified_method_key(full_method)
             service_path = tw.service_path()
 
-            allowed = self._method_auth_patterns.get(method_name)
+            allowed = self._method_auth_patterns.get(method_key)
             if allowed is None:
                 raise permission_denied(
                     f'no auth_services policy configured for service caller "{service_path}" on "{method_name}"'
@@ -302,7 +317,7 @@ class Authorizer:
                 )
 
             # Level-or-below check (applies to S2S when target_namespace_field is set).
-            self._check_target_namespace(method_name, tw.get_namespace(), request)
+            self._check_target_namespace(method_key, tw.get_namespace(), request)
             return
 
         # C2S path: user tokens carry service_entitlements.
@@ -319,7 +334,7 @@ class Authorizer:
 
         # Level-or-below check: caller's namespace must be at or above the target namespace
         # named by the method's target_namespace_field annotation.
-        self._check_target_namespace(method_name, tw.get_namespace() or "", request)
+        self._check_target_namespace(_qualified_method_key(full_method), tw.get_namespace() or "", request)
 
     def authenticate(self, metadata: Dict[str, str], target_namespace: str | None = None) -> None:
         """
@@ -444,3 +459,24 @@ def _extract_method_name(full_method: str) -> str:
     """Returns the unqualified method name from a fully qualified gRPC method."""
     i = full_method.rfind("/")
     return full_method[i + 1:] if i >= 0 else full_method
+
+
+def _qualified_method_key(full_method: str) -> str:
+    """
+    Returns the SERVICE-QUALIFIED method identifier "pkg.Service/Method" — the
+    last two path segments of a full gRPC method. This is the key both
+    per-method policy maps use, so that two services hosted behind one
+    authorizer keep separate policies for identically named RPCs.
+
+    Both full-method shapes the generated wrappers produce reduce to the same
+    key: "/pkg.Service/Method" and "/<parent>/pkg.Service/Method" both yield
+    "pkg.Service/Method".
+    """
+    i = full_method.rfind("/")
+    if i < 0:
+        return full_method
+    method = full_method[i + 1:]
+    rest = full_method[:i]
+    j = rest.rfind("/")
+    service = rest[j + 1:] if j >= 0 else rest
+    return method if service == "" else service + "/" + method

@@ -260,7 +260,8 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 				}
 				methodAuthLines = append(methodAuthLines, fmt.Sprintf(
 					"    auth.set_method_auth(%q, &[%s]);",
-					method.Name, strings.Join(quoted, ", ")))
+					rustQualifiedMethodAuthKey(info.Package, targetService.Name, method.Name),
+					strings.Join(quoted, ", ")))
 			}
 			continue
 		}
@@ -360,7 +361,8 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 			}
 			methodAuthLines = append(methodAuthLines, fmt.Sprintf(
 				"    auth.set_method_auth(%q, &[%s]);",
-				method.Name, strings.Join(quoted, ", ")))
+				rustQualifiedMethodAuthKey(info.Package, targetService.Name, method.Name),
+				strings.Join(quoted, ", ")))
 		}
 	}
 
@@ -1877,4 +1879,17 @@ func rustAppendOnlyRecordOnMethod(method *parser.MethodInfo, san *rustEgressSani
 		}
 	}
 	return ""
+}
+
+// rustQualifiedMethodAuthKey builds the SERVICE-QUALIFIED method identifier that
+// keys the Authorizer's per-method auth_services map: "pkg.Service/Method", the
+// last two segments of the full gRPC method path the wrapper passes to
+// authorize_grpc. A bare RPC name would collide across services co-hosted
+// behind one Authorizer. Must stay in lockstep with qualified_method_key in the
+// grpcserver chassis (pkg/templates/rust/chassis/grpcserver/src/authorizer.rs.tmpl).
+func rustQualifiedMethodAuthKey(protoPackage, serviceName, methodName string) string {
+	if protoPackage == "" {
+		return serviceName + "/" + methodName
+	}
+	return protoPackage + "." + serviceName + "/" + methodName
 }

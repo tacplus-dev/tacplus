@@ -285,6 +285,14 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			}
 			grpcHandlerMethods.WriteString(generatePyGRPCWrapperMethod(targetService, method, info.Package, svc.ParentDir, svc.GrpcName, accountingMap))
 
+			// Per-method policy is keyed by the SERVICE-QUALIFIED method
+			// identifier the authorizer derives from the incoming full gRPC
+			// method (_qualified_method_key), never by the bare RPC name: one
+			// process may host several services behind one authorizer, and a
+			// bare-name key lets a second service's identically named RPC
+			// silently overwrite the first's auth_services.
+			methodAuthKey := pyQualifiedMethodAuthKey(info.Package, targetService.Name, method.Name)
+
 			// Resolve effective auth_services: method-level overrides service-level.
 			effectiveAuth := svc.AuthServices
 			if len(method.AuthServices) > 0 {
@@ -297,7 +305,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 				}
 				methodAuthLines = append(methodAuthLines, fmt.Sprintf(
 					"        authorizer.set_method_auth(%q, [%s])",
-					method.Name, strings.Join(quoted, ", ")))
+					methodAuthKey, strings.Join(quoted, ", ")))
 			}
 
 			// Register request-field target_namespace_field for level-or-below enforcement.
@@ -305,7 +313,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			if method.TargetNamespaceField != "" && !method.AuthAnyUser {
 				methodAuthLines = append(methodAuthLines, fmt.Sprintf(
 					"        authorizer.set_method_target_namespace_field(%q, %q)",
-					method.Name, method.TargetNamespaceField))
+					methodAuthKey, method.TargetNamespaceField))
 			}
 		}
 
@@ -1070,4 +1078,16 @@ func generatePyRootAggregator(catDir, fileName string, groups []string) error {
 	}
 
 	return nil
+}
+
+// pyQualifiedMethodAuthKey builds the SERVICE-QUALIFIED method identifier that
+// keys the authorizer's per-method policy maps: "pkg.Service/Method", the last
+// two segments of the full gRPC method path the wrapper passes to authorize().
+// Must stay in lockstep with _qualified_method_key in the grpcserver chassis
+// (pkg/templates/python/chassis/grpcserver/authorizer.py.tmpl).
+func pyQualifiedMethodAuthKey(protoPackage, serviceName, methodName string) string {
+	if protoPackage == "" {
+		return serviceName + "/" + methodName
+	}
+	return protoPackage + "." + serviceName + "/" + methodName
 }

@@ -783,6 +783,13 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		grpcMethods.WriteString(generateJavaGRPCWrapperSurface(method, serviceName, svc.GrpcName, inputType, outputType, inputHelpers, outputHelpers, effectiveAuthAnyUser, method.AuthDisabled || svc.AuthDisabled || svc.IsC2D, accountingMap, info.Package, svc.ParentDir, info.CrossPackageTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses, svc.IsC2S, recordPlaneS2S))
 		grpcMethods.WriteString("\n")
 
+		// Per-method policy is keyed by the SERVICE-QUALIFIED identifier the
+		// wrapper passes to Authorizer.authorize() for this very method, never
+		// by the bare RPC name: one process may host several services behind
+		// one Authorizer, and a bare-name key lets a second service's
+		// identically named RPC silently overwrite the first's auth_services.
+		methodAuthKey := javaMethodAuthKey(info.Package, serviceName, method.Name, svc.ParentDir)
+
 		// Resolve effective auth_services: method-level overrides service-level.
 		effectiveAuth := svc.AuthServices
 		if len(method.AuthServices) > 0 {
@@ -795,7 +802,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			}
 			methodAuthLines = append(methodAuthLines, fmt.Sprintf(
 				"        authorizer.setMethodAuth(\"%s\", java.util.List.of(%s));",
-				method.Name, strings.Join(quoted, ", ")))
+				methodAuthKey, strings.Join(quoted, ", ")))
 		}
 
 		// Register request-field target_namespace_field for level-or-below enforcement.
@@ -803,7 +810,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		if method.TargetNamespaceField != "" && !effectiveAuthAnyUser {
 			methodAuthLines = append(methodAuthLines, fmt.Sprintf(
 				"        authorizer.setMethodTargetNamespaceField(%q, %q);",
-				method.Name, method.TargetNamespaceField))
+				methodAuthKey, method.TargetNamespaceField))
 		}
 	}
 	handlerInterface.WriteString("    }\n")
@@ -1304,10 +1311,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 	// vservice: RecordQuery on the `query` trait is entitled by QUERY_RECORD_QUERY_*,
 	// not by the host's STRATUM_* vocabulary. Qualify the hosted surface's name so the
 	// trait's package, not the host's, is what the symbol is derived from.
-	authMethod := fullMethod
-	if parentDir == "vservices" {
-		authMethod = fmt.Sprintf("%s.%s/%s", servicePackage, serviceName, method.Name)
-	}
+	authMethod := javaMethodAuthKey(servicePackage, serviceName, method.Name, parentDir)
 	authAnyUserTarget := strings.TrimSpace(method.TargetNamespaceField)
 	if authAnyUserTarget == "" {
 		authAnyUserTarget = "/"
@@ -2934,4 +2938,21 @@ func javaAppendOnlyUnenforceable(method *parser.MethodInfo, san *javaEgressSanit
 		}
 	}
 	return ""
+}
+
+// javaMethodAuthKey builds the method identifier the generated wrapper hands to
+// Authorizer.authorize() — and therefore the key its per-method auth_services
+// and target_namespace_field maps must be registered under.
+//
+// The shape is deliberate and must not be "fully qualified everywhere": the
+// Authorizer derives the required C2S grant symbol from this same string and
+// falls back to its OWN service name for the grant's package when handed an
+// unqualified name. That fallback is right for a service the process owns and
+// wrong for a vservice, whose trait package must supply the symbol — so a
+// vservice, and only a vservice, is package-qualified here.
+func javaMethodAuthKey(servicePackage, serviceName, methodName, parentDir string) string {
+	if parentDir == "vservices" {
+		return fmt.Sprintf("%s.%s/%s", servicePackage, serviceName, methodName)
+	}
+	return fmt.Sprintf("%s/%s", serviceName, methodName)
 }

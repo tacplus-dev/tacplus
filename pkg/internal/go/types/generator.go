@@ -1376,11 +1376,6 @@ func filterGrpcAnnotated(config *tactype.Config, servicesInfo []ServiceInfo) ([]
 // generated ServiceManager call a function that was never defined.
 func deriveGoServiceAuthFlags(service parser.ServiceDescriptor) (anyUser bool, hasMethodAuth bool) {
 	anyUser = service.AuthAnyUser
-	// A service with no RPCs registers nothing: the wrapper emits
-	// Register<Svc>MethodAuth only when it produced at least one
-	// SetMethodAuth line, so claiming HasMethodAuth here would make the
-	// ServiceManager call a function that was never generated.
-	hasMethodAuth = len(service.Methods) > 0 && len(service.AuthServices) > 0
 	for _, m := range service.Methods {
 		// An MCP tool has no generated gRPC wrapper, so it contributes
 		// nothing to the wrapper's auth surface — no per-method auth
@@ -1390,6 +1385,15 @@ func deriveGoServiceAuthFlags(service parser.ServiceDescriptor) (anyUser bool, h
 		}
 		if m.AuthAnyUser {
 			anyUser = true
+		}
+		// A service-level auth_services default is written as one SetMethodAuth
+		// line per gRPC-callable rpc, so it is claimed here per surviving
+		// method rather than once for the service: a service with no RPCs at
+		// all — or none left after the MCP skip above — produces no line, and
+		// claiming HasMethodAuth for it would make the ServiceManager call a
+		// Register<Svc>MethodAuth that was never generated.
+		if len(service.AuthServices) > 0 {
+			hasMethodAuth = true
 		}
 		if len(m.AuthServices) > 0 {
 			hasMethodAuth = true

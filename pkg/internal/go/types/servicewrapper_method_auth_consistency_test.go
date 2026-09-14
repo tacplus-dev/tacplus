@@ -97,6 +97,45 @@ func TestGoMethodAuthFlagMatchesGeneratedWrapper(t *testing.T) {
 			wantDef: true,
 		},
 		{
+			// Service-level auth_services with every rpc an MCP tool: the
+			// wrapper skips every method, so it writes no SetMethodAuth line
+			// and defines nothing, while the seed used to claim the flag from
+			// len(service.Methods) alone.
+			name: "service auth_services with only mcp methods",
+			desc: parser.ServiceDescriptor{
+				Name:         "ContractApi",
+				AuthServices: []string{"spiffe://*/console"},
+				Methods: []parser.MethodDescriptor{{
+					Name:       "Lookup",
+					InputType:  "LookupRequest",
+					OutputType: "LookupResponse",
+					IsMcp:      true,
+				}},
+			},
+			wantDef: false,
+		},
+		{
+			name: "service auth_services with an mcp method beside a grpc one",
+			desc: parser.ServiceDescriptor{
+				Name:         "ContractApi",
+				AuthServices: []string{"spiffe://*/console"},
+				Methods: []parser.MethodDescriptor{
+					{
+						Name:       "Lookup",
+						InputType:  "LookupRequest",
+						OutputType: "LookupResponse",
+						IsMcp:      true,
+					},
+					{
+						Name:       "Read",
+						InputType:  "ReadRequest",
+						OutputType: "ReadResponse",
+					},
+				},
+			},
+			wantDef: true,
+		},
+		{
 			name: "no auth metadata at all",
 			desc: parser.ServiceDescriptor{
 				Name: "ContractApi",

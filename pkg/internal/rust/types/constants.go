@@ -156,7 +156,7 @@ func collectFieldDefaultConstants(pf model.ProtoFile) []fieldDefaultConstant {
 				switch ann.Type {
 				case model.AnnotationTypeString:
 					rustType = "&str"
-					rustValue = fmt.Sprintf("%q", ann.StringValue)
+					rustValue = rustQuote(ann.StringValue)
 				case model.AnnotationTypeInt:
 					rustType = "i64"
 					rustValue = fmt.Sprintf("%d", ann.IntValue)

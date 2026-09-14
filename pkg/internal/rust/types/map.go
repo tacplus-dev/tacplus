@@ -170,7 +170,7 @@ func generateFromMapMethod(b *strings.Builder, msg model.Message, pf model.Proto
 		}
 		var quoted []string
 		for _, alias := range aliases {
-			quoted = append(quoted, fmt.Sprintf("%q", alias))
+			quoted = append(quoted, rustQuote(alias))
 		}
 		fmt.Fprintf(b, "%s => Some(%s::%s),\n", strings.Join(quoted, " | "), keyEnumType, variant)
 	}

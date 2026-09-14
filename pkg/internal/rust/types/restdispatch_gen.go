@@ -622,7 +622,7 @@ func routeCapabilityMetadataFromClass(class verbs.Classification) string {
 	scopes := class.ScopesAdmitting()
 	quoted := make([]string, 0, len(scopes))
 	for _, scope := range scopes {
-		quoted = append(quoted, fmt.Sprintf("%q", string(scope)))
+		quoted = append(quoted, rustQuote(string(scope)))
 	}
 	return "&[" + strings.Join(quoted, ", ") + "]"
 }
@@ -632,7 +632,7 @@ func routeCapabilityMetadataFromClass(class verbs.Classification) string {
 func formatHttpMethods(methods []string) string {
 	quoted := make([]string, len(methods))
 	for i, m := range methods {
-		quoted[i] = fmt.Sprintf("%q", m)
+		quoted[i] = rustQuote(m)
 	}
 	return strings.Join(quoted, ", ")
 }
@@ -690,7 +690,7 @@ func rustOptionString(value string) string {
 	if value == "" {
 		return "None"
 	}
-	return fmt.Sprintf("Some(%q)", value)
+	return fmt.Sprintf("Some(%s)", rustQuote(value))
 }
 
 // resolveFromBinaryPath builds the fully-qualified Rust path to a from_binary function.
@@ -866,7 +866,7 @@ func generateProxyDispatch(config *tactype.Config, servicesInfo []ServiceInfo, i
 // (ServiceID = vs.HostLabel, EntitlementService = vs.Name).
 func routeIdentityForService(svc ServiceInfo, traitName string) (serviceID, entitlementService string, err error) {
 	if svc.EventLabel != "" {
-		return svc.EventLabel, fmt.Sprintf("Some(%q)", svc.PackageName), nil
+		return svc.EventLabel, fmt.Sprintf("Some(%s)", rustQuote(svc.PackageName)), nil
 	}
 	if svc.HostLabel == "" {
 		return svc.PackageName, "None", nil
@@ -874,5 +874,5 @@ func routeIdentityForService(svc ServiceInfo, traitName string) (serviceID, enti
 	if traitName == "" {
 		return "", "", fmt.Errorf("service %s.%s declares (spec.service_c2s).label %q but its proto declares no (spec.trait).name to entitle callers against", svc.PackageName, svc.ServiceName, svc.HostLabel)
 	}
-	return svc.HostLabel, fmt.Sprintf("Some(%q)", traitName), nil
+	return svc.HostLabel, fmt.Sprintf("Some(%s)", rustQuote(traitName)), nil
 }

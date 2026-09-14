@@ -256,7 +256,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 			if len(carrierAuth) > 0 {
 				var quoted []string
 				for _, pattern := range carrierAuth {
-					quoted = append(quoted, fmt.Sprintf("%q", pattern))
+					quoted = append(quoted, rustQuote(pattern))
 				}
 				methodAuthLines = append(methodAuthLines, fmt.Sprintf(
 					"    auth.set_method_auth(%q, &[%s]);",
@@ -357,7 +357,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 		if len(effectiveAuth) > 0 {
 			var quoted []string
 			for _, pattern := range effectiveAuth {
-				quoted = append(quoted, fmt.Sprintf("%q", pattern))
+				quoted = append(quoted, rustQuote(pattern))
 			}
 			methodAuthLines = append(methodAuthLines, fmt.Sprintf(
 				"    auth.set_method_auth(%q, &[%s]);",

@@ -20,8 +20,8 @@ def {{.FuncName}}_undefaults(msg: {{.QualifiedType}}) -> None:
     if {{pyGet "msg" .PyFieldName}} == {{.ConstantName}}:
         {{pySet "msg" .PyFieldName "False"}}
 {{- else if eq .AnnKey "default_host"}}
-    if {{pyGet "msg" .PyFieldName}} and {{pyGet "msg" .PyFieldName}}.host == "{{.HostHost}}" and {{pyGet "msg" .PyFieldName}}.port == {{.HostPort}}:
-        {{pySet "msg" .PyFieldName "None"}}
+    if msg.HasField("{{.ProtoFieldName}}") and {{pyGet "msg" .PyFieldName}}.host == "{{.HostHost}}" and {{pyGet "msg" .PyFieldName}}.port == {{.HostPort}}:
+        msg.ClearField("{{.ProtoFieldName}}")
 {{- end}}
 {{- end}}
 {{- range .SubMsgCalls}}

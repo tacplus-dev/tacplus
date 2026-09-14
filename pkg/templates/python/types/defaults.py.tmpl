@@ -20,8 +20,9 @@ def {{.FuncName}}_defaults(msg: {{.QualifiedType}}) -> None:
     if not {{pyGet "msg" .PyFieldName}}:
         {{pySet "msg" .PyFieldName .ConstantName}}
 {{- else if eq .AnnKey "default_host"}}
-    if not {{pyGet "msg" .PyFieldName}}:
-        {{pySet "msg" .PyFieldName (printf "Host(host=\"%s\", port=%d)" .HostHost .HostPort)}}
+    if not msg.HasField("{{.ProtoFieldName}}"):
+        {{pyGet "msg" .PyFieldName}}.host = "{{.HostHost}}"
+        {{pyGet "msg" .PyFieldName}}.port = {{.HostPort}}
 {{- end}}
 {{- end}}
 {{- range .SubMsgCalls}}

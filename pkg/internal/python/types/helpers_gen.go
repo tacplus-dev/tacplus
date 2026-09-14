@@ -92,8 +92,11 @@ type pyDefaultField struct {
 	PyFieldName  string
 	ConstantName string
 	AnnKey       string
-	HostHost     string // For default_host: the default hostname
-	HostPort     int32  // For default_host: the default port number
+	// ProtoFieldName is the raw proto field name, for HasField()/ClearField(),
+	// which take the proto name rather than a Python attribute.
+	ProtoFieldName string
+	HostHost       string // For default_host: the default hostname
+	HostPort       int32  // For default_host: the default port number
 }
 
 // pySubMsgCall holds data for a sub-message defaults call.
@@ -414,9 +417,10 @@ func writeDefaults(b *strings.Builder, pf model.ProtoFile) error {
 				pyFieldName := strutil.ToSnakeCase(field.Name)
 				constantName := strutil.DefaultConstName(msg.Name, field.Name, dupFields)
 				df := pyDefaultField{
-					PyFieldName:  pyFieldName,
-					ConstantName: constantName,
-					AnnKey:       annKey,
+					PyFieldName:    pyFieldName,
+					ConstantName:   constantName,
+					AnnKey:         annKey,
+					ProtoFieldName: field.Name,
 				}
 				if annKey == "default_host" && annVal.HostValue != nil {
 					df.HostHost = annVal.HostValue.Host
@@ -503,9 +507,10 @@ func writeUndefaults(b *strings.Builder, pf model.ProtoFile) error {
 				pyFieldName := strutil.ToSnakeCase(field.Name)
 				constantName := strutil.DefaultConstName(msg.Name, field.Name, dupFields)
 				df := pyDefaultField{
-					PyFieldName:  pyFieldName,
-					ConstantName: constantName,
-					AnnKey:       annKey,
+					PyFieldName:    pyFieldName,
+					ConstantName:   constantName,
+					AnnKey:         annKey,
+					ProtoFieldName: field.Name,
 				}
 				if annKey == "default_host" && annVal.HostValue != nil {
 					df.HostHost = annVal.HostValue.Host

@@ -3,17 +3,10 @@
 #
 # CODE GENERATED - DO NOT EDIT
 
-"""Token verification and auth utilities."""
+"""Auth utilities."""
 
 from __future__ import annotations
 
-import base64
-import json
-import time
-from typing import Any
-
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from cryptography.hazmat.primitives.serialization import load_der_public_key
 import grpc
 
 
@@ -29,61 +22,3 @@ def extract_bearer_token(context: grpc.aio.ServicerContext) -> str:
     if not auth.startswith("Bearer "):
         context.abort(grpc.StatusCode.UNAUTHENTICATED, "authorization header is not Bearer")
     return auth[7:]
-
-
-def verify_token(token_string: str, jwk_cache: list[Any]) -> dict[str, Any]:
-    """Verifies a JWT token string using the given JWK cache.
-
-    Returns the parsed payload on success.
-    """
-    parts = token_string.split(".")
-    if len(parts) != 3:
-        raise ValueError("invalid JWT: expected 3 parts")
-
-    header = json.loads(_b64url_decode(parts[0]))
-    payload = json.loads(_b64url_decode(parts[1]))
-
-    kid = header.get("kid")
-    if not kid:
-        raise ValueError("JWT missing kid in header")
-
-    matching_key = None
-    for k in jwk_cache:
-        if k.kid == kid:
-            matching_key = k
-            break
-    if matching_key is None:
-        raise ValueError(f'no matching key found for kid "{kid}"')
-
-    # Verify Ed25519 signature
-    pub_bytes = matching_key.public_key
-    if not pub_bytes:
-        raise ValueError("JWK has no public key")
-
-    # Build Ed25519 SPKI DER encoding
-    spki_prefix = bytes([
-        0x30, 0x2A, 0x30, 0x05, 0x06, 0x03, 0x2B, 0x65, 0x70, 0x03, 0x21, 0x00,
-    ])
-    spki_der = spki_prefix + pub_bytes
-    public_key = load_der_public_key(spki_der)
-
-    sig_input = f"{parts[0]}.{parts[1]}".encode()
-    signature = _b64url_decode_bytes(parts[2])
-    public_key.verify(signature, sig_input)
-
-    # Check expiry
-    if "exp" in payload and payload["exp"] < time.time():
-        raise ValueError("JWT has expired")
-
-    return payload
-
-
-def _b64url_decode(s: str) -> bytes:
-    padding = 4 - len(s) % 4
-    if padding != 4:
-        s += "=" * padding
-    return base64.urlsafe_b64decode(s)
-
-
-def _b64url_decode_bytes(s: str) -> bytes:
-    return _b64url_decode(s)

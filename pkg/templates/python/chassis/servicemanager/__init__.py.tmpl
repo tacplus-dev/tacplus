@@ -21,7 +21,7 @@ Multi-endpoint gRPC connection pool with latency-based rebalancing.
 
 from .manager import ServiceManager
 from .connection import ServiceConnection, ChannelProvider
-from .auth import extract_bearer_token, verify_token
+from .auth import extract_bearer_token
 from .caller import Caller
 
 __all__ = [
@@ -29,7 +29,6 @@ __all__ = [
     "ServiceConnection",
     "ChannelProvider",
     "extract_bearer_token",
-    "verify_token",
     "Caller",
 ]
 {{- end}}

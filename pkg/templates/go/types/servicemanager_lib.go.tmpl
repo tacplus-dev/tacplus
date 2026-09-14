@@ -22,7 +22,6 @@ import (
 	"math"
 	mrand "math/rand"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -34,7 +33,6 @@ import (
 	key_pb "{{.KeyTypesPath}}"
 	logger_pb "{{.LoggerTypesPath}}"
 	x509_pb "{{.X509TypesPath}}"
-	wrapperJwk "{{.JwkLibPath}}"
 	wrapperSpiffe "{{.SpiffeLibPath}}"
 	wrapperToken "{{.TokenLibPath}}"
 	wrapperX509 "{{.X509LibPath}}"
@@ -1093,105 +1091,8 @@ func (bc *ServiceManager) startWatchJwks() {
 }
 
 // ---------------------------------------------------------------------------
-// Token verification
-// ---------------------------------------------------------------------------
-
-// VerifyToken parses and validates a JWT token string using the cached JWKS.
-func (bc *ServiceManager) VerifyToken(tokenString string) (*wrapperToken.TokenWrapper, error) {
-	tok, err := wrapperToken.ParseToken(tokenString)
-	if err != nil {
-		return nil, fmt.Errorf("parsing token: %w", err)
-	}
-
-	kid := tok.GetKid()
-	if kid == "" {
-		return nil, fmt.Errorf("JWT missing kid in header")
-	}
-
-	bc.jwkMu.RLock()
-	var matchingKey *jwk_pb.Jwk
-	for _, k := range bc.jwkCache {
-		if k.GetKid() == kid {
-			matchingKey = k
-			break
-		}
-	}
-	bc.jwkMu.RUnlock()
-
-	if matchingKey == nil {
-		return nil, fmt.Errorf("no matching key found for kid %q", kid)
-	}
-
-	immJwk, err := wrapperJwk.NewImmutableJwk(matchingKey)
-	if err != nil {
-		return nil, fmt.Errorf("creating immutable JWK: %w", err)
-	}
-
-	if err := tok.Verify(immJwk); err != nil {
-		return nil, fmt.Errorf("token verification failed: %w", err)
-	}
-
-	return tok, nil
-}
-
-// ---------------------------------------------------------------------------
-// gRPC server interceptors
-// ---------------------------------------------------------------------------
-
-// AuthUnaryInterceptor returns a gRPC unary server interceptor that validates
-// inbound Bearer tokens and checks audience.
-func (bc *ServiceManager) AuthUnaryInterceptor() grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		tokenStr, err := extractBearerToken(ctx)
-		if err != nil {
-			return nil, status.Errorf(codes.Unauthenticated, "missing authorization: %v", err)
-		}
-		tok, err := bc.VerifyToken(tokenStr)
-		if err != nil {
-			return nil, status.Errorf(codes.Unauthenticated, "invalid token: %v", err)
-		}
-		if aud := tok.GetAudience(); aud != serviceAudience {
-			return nil, status.Errorf(codes.PermissionDenied,
-				"token audience %q does not match service %q", aud, serviceAudience)
-		}
-		ctx = context.WithValue(ctx, tokenContextKey{}, tok)
-		return handler(ctx, req)
-	}
-}
-
-// AuthStreamInterceptor returns a gRPC stream server interceptor that validates
-// inbound Bearer tokens and checks audience.
-func (bc *ServiceManager) AuthStreamInterceptor() grpc.StreamServerInterceptor {
-	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		tokenStr, err := extractBearerToken(ss.Context())
-		if err != nil {
-			return status.Errorf(codes.Unauthenticated, "missing authorization: %v", err)
-		}
-		tok, err := bc.VerifyToken(tokenStr)
-		if err != nil {
-			return status.Errorf(codes.Unauthenticated, "invalid token: %v", err)
-		}
-		if aud := tok.GetAudience(); aud != serviceAudience {
-			return status.Errorf(codes.PermissionDenied,
-				"token audience %q does not match service %q", aud, serviceAudience)
-		}
-		ctx := context.WithValue(ss.Context(), tokenContextKey{}, tok)
-		return handler(srv, &wrappedServerStream{ServerStream: ss, ctx: ctx})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Context helpers
 // ---------------------------------------------------------------------------
-
-// tokenContextKey is the context key for storing the verified token.
-type tokenContextKey struct{}
-
-// TokenFromContext extracts the verified token from the context.
-func TokenFromContext(ctx context.Context) *wrapperToken.TokenWrapper {
-	tok, _ := ctx.Value(tokenContextKey{}).(*wrapperToken.TokenWrapper)
-	return tok
-}
 
 // GrpcRequestIDHeader is the gRPC metadata key for request tracing.
 const GrpcRequestIDHeader = "x-request-id"
@@ -1236,31 +1137,6 @@ func RequestIDFromContext(ctx context.Context) string {
 		return ""
 	}
 	return vals[0]
-}
-
-// wrappedServerStream wraps grpc.ServerStream to override the context.
-type wrappedServerStream struct {
-	grpc.ServerStream
-	ctx context.Context
-}
-
-func (w *wrappedServerStream) Context() context.Context { return w.ctx }
-
-// extractBearerToken extracts the Bearer token from gRPC metadata.
-func extractBearerToken(ctx context.Context) (string, error) {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return "", fmt.Errorf("no metadata in context")
-	}
-	vals := md.Get("authorization")
-	if len(vals) == 0 {
-		return "", fmt.Errorf("no authorization header")
-	}
-	auth := vals[0]
-	if !strings.HasPrefix(auth, "Bearer ") {
-		return "", fmt.Errorf("authorization header is not Bearer")
-	}
-	return strings.TrimPrefix(auth, "Bearer "), nil
 }
 
 // closeAll closes all endpoint connections.

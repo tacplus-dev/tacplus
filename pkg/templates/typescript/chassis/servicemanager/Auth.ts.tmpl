@@ -3,9 +3,6 @@
 //
 // CODE GENERATED - DO NOT EDIT
 
-import { type Jwk } from '../../types/sys/jwk/index.js';
-import * as crypto from 'crypto';
-
 /**
  * Extracts a Bearer token from gRPC metadata.
  */
@@ -22,58 +19,4 @@ export function extractBearerToken(
     throw new Error('authorization header is not Bearer');
   }
   return auth.slice(7);
-}
-
-/**
- * Verifies a JWT token string using the given JWK cache.
- * Returns the parsed payload on success.
- */
-export function verifyToken(
-  tokenString: string,
-  jwkCache: Jwk[],
-): Record<string, unknown> {
-  const parts = tokenString.split('.');
-  if (parts.length !== 3) {
-    throw new Error('invalid JWT: expected 3 parts');
-  }
-
-  const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString());
-  const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
-
-  if (!header.kid) {
-    throw new Error('JWT missing kid in header');
-  }
-
-  const matchingKey = jwkCache.find(k => k.kid === header.kid);
-  if (!matchingKey) {
-    throw new Error(`no matching key found for kid "${header.kid}"`);
-  }
-
-  // Verify signature using Ed25519 public key (x field holds the public key for OKP/Ed25519)
-  if (!matchingKey.x || matchingKey.x.length === 0) {
-    throw new Error('JWK has no public key');
-  }
-
-  const sigInput = Buffer.from(`${parts[0]}.${parts[1]}`);
-  const signature = Buffer.from(parts[2], 'base64url');
-  const pubKey = crypto.createPublicKey({
-    key: Buffer.concat([
-      Buffer.from('302a300506032b6570032100', 'hex'), // Ed25519 SPKI prefix
-      Buffer.from(matchingKey.x, 'base64url'),
-    ]),
-    format: 'der',
-    type: 'spki',
-  });
-
-  const valid = crypto.verify(null, sigInput, pubKey, signature);
-  if (!valid) {
-    throw new Error('JWT signature verification failed');
-  }
-
-  // Check expiry
-  if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
-    throw new Error('JWT has expired');
-  }
-
-  return payload;
 }

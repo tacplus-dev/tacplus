@@ -285,9 +285,7 @@ import (
 	host_pb "%[1]s/types/sys/host"
 	x509_pb "%[1]s/types/sys/x509"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
 )
 
 // ErrMissingTrustDomain mirrors the sentinel of the same name in the
@@ -345,38 +343,6 @@ func (bc *ServiceManager) Close() error { return nil }
 
 func (bc *ServiceManager) ReconcileEndpoints(newHosts []*host_pb.Host) {
 	_ = newHosts
-}
-
-func (bc *ServiceManager) VerifyToken(tokenString string) (*wrapperToken.TokenWrapper, error) {
-	_ = tokenString
-	return nil, service_im.ErrTokenMinterNotConfigured
-}
-
-func (bc *ServiceManager) AuthUnaryInterceptor() grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		_ = ctx
-		_ = req
-		_ = info
-		_ = handler
-		return nil, status.Error(codes.Unauthenticated, service_im.ErrTokenMinterNotConfigured.Error())
-	}
-}
-
-func (bc *ServiceManager) AuthStreamInterceptor() grpc.StreamServerInterceptor {
-	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		_ = srv
-		_ = ss
-		_ = info
-		_ = handler
-		return status.Error(codes.Unauthenticated, service_im.ErrTokenMinterNotConfigured.Error())
-	}
-}
-
-type tokenContextKey struct{}
-
-func TokenFromContext(ctx context.Context) *wrapperToken.TokenWrapper {
-	tok, _ := ctx.Value(tokenContextKey{}).(*wrapperToken.TokenWrapper)
-	return tok
 }
 
 const GrpcRequestIDHeader = "x-request-id"

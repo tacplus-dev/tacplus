@@ -6,7 +6,6 @@
 package {{.ChassisBase}}.servicemanager;
 
 import {{.ChassisBase}}.token.TokenWrapper;
-import {{.TypesBase}}.sys.jwk.JwkOuterClass.Jwk;
 
 import io.grpc.Context;
 import io.grpc.Contexts;
@@ -16,12 +15,7 @@ import io.grpc.ServerCallHandler;
 import io.grpc.ServerInterceptor;
 import io.grpc.Status;
 
-import java.security.KeyFactory;
-import java.security.PublicKey;
-import java.security.Signature;
-import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
-import java.util.List;
 
 /**
  * Token verification and auth utilities.
@@ -202,75 +196,6 @@ public final class Auth {
             throw Status.UNAUTHENTICATED.withDescription("authorization header is not Bearer").asRuntimeException();
         }
         return auth.substring(7);
-    }
-
-    /**
-     * Verifies a JWT token string using the given JWK cache.
-     * Returns the parsed payload as a JSON string on success.
-     */
-    public static String verifyToken(String tokenString, List<Jwk> jwkCache) throws Exception {
-        String[] parts = tokenString.split("\\.");
-        if (parts.length != 3) {
-            throw new IllegalArgumentException("invalid JWT: expected 3 parts");
-        }
-
-        Base64.Decoder decoder = Base64.getUrlDecoder();
-        String headerJson = new String(decoder.decode(parts[0]));
-        String payloadJson = new String(decoder.decode(parts[1]));
-
-        // Extract kid from header
-        String kid = extractJsonField(headerJson, "kid");
-        if (kid == null) {
-            throw new IllegalArgumentException("JWT missing kid in header");
-        }
-
-        // Find matching key
-        Jwk matchingKey = null;
-        for (Jwk k : jwkCache) {
-            if (kid.equals(k.getKid())) {
-                matchingKey = k;
-                break;
-            }
-        }
-        if (matchingKey == null) {
-            throw new IllegalArgumentException("no matching key found for kid \"" + kid + "\"");
-        }
-
-        // Verify Ed25519 signature — public key is base64url-encoded in the x field
-        String xValue = matchingKey.getX();
-        if (xValue == null || xValue.isEmpty()) {
-            throw new IllegalArgumentException("JWK has no public key (x field)");
-        }
-        byte[] pubKeyBytes = Base64.getUrlDecoder().decode(xValue);
-
-        // Build Ed25519 X.509 SPKI encoding
-        byte[] spkiPrefix = new byte[]{
-                0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00
-        };
-        byte[] spki = new byte[spkiPrefix.length + pubKeyBytes.length];
-        System.arraycopy(spkiPrefix, 0, spki, 0, spkiPrefix.length);
-        System.arraycopy(pubKeyBytes, 0, spki, spkiPrefix.length, pubKeyBytes.length);
-
-        KeyFactory kf = KeyFactory.getInstance("Ed25519");
-        PublicKey publicKey = kf.generatePublic(new X509EncodedKeySpec(spki));
-        Signature sig = Signature.getInstance("Ed25519");
-        sig.initVerify(publicKey);
-        sig.update((parts[0] + "." + parts[1]).getBytes());
-        byte[] sigBytes = decoder.decode(parts[2]);
-        if (!sig.verify(sigBytes)) {
-            throw new SecurityException("JWT signature verification failed");
-        }
-
-        // Check expiry
-        String expStr = extractJsonField(payloadJson, "exp");
-        if (expStr != null) {
-            long exp = Long.parseLong(expStr);
-            if (exp < System.currentTimeMillis() / 1000) {
-                throw new SecurityException("JWT has expired");
-            }
-        }
-
-        return payloadJson;
     }
 
     private static String extractJsonField(String json, String key) {

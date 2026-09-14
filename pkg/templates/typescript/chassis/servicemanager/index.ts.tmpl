@@ -30,6 +30,6 @@ export {
   InstanceStatus,
 } from './EndpointConn.js';
 {{- if not .ClientOnly}}
-export { extractBearerToken, verifyToken } from './Auth.js';
+export { extractBearerToken } from './Auth.js';
 export { Caller } from './Caller.js';
 {{- end}}

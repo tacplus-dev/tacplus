@@ -1404,6 +1404,19 @@ func ResolveStatesFromProto(config *tactype.Config, inputDir string) error {
 
 	allFiles := dp.GetAllFiles()
 
+	// allFiles is a MAP. Every loop below walks it in sorted path order, never
+	// raw range order: config.States is a SLICE whose order reaches generated
+	// output (stateclient_gen.go's AudienceMappings and generator.go's
+	// state-proto import lists are emitted in States order), and
+	// (*Config).AutoTlsKeyType() returns the FIRST entry carrying a key type.
+	// Raw map order let two identical builds emit different audience tables and
+	// different serving key algorithms.
+	filePaths := make([]string, 0, len(allFiles))
+	for path := range allFiles {
+		filePaths = append(filePaths, path)
+	}
+	sort.Strings(filePaths)
+
 	// Build index: "package.StateName" → {protoFile, autoTls, exported}
 	type stateInfo struct {
 		protoFile string
@@ -1412,7 +1425,10 @@ func ResolveStatesFromProto(config *tactype.Config, inputDir string) error {
 	}
 	stateIndex := make(map[string]stateInfo)
 
-	for path, fd := range allFiles {
+	// Sorted so that when two files in one package declare the same state root
+	// name, the surviving entry (last write wins) is the same on every build.
+	for _, path := range filePaths {
+		fd := allFiles[path]
 		for _, msg := range fd.Messages {
 			if ann, ok := msg.Annotations["service_state"]; ok && ann.StringValue != "" {
 				key := fd.Package + "." + ann.StringValue
@@ -1448,8 +1464,13 @@ func ResolveStatesFromProto(config *tactype.Config, inputDir string) error {
 
 	var states []tactype.StateEntry
 
-	// 1. Own states: service_state messages in the service's own package → RW
-	for path, fd := range allFiles {
+	// 1. Own states: service_state messages in the service's own package → RW.
+	// Appended FIRST and in sorted path order, so (*Config).AutoTlsKeyType()'s
+	// "first entry with a key type" is always one of THIS service's own state
+	// declarations when it has any — a service's auto_tls is its own serving
+	// keypair (spec.proto StateAnnotation.auto_tls), never a foreign state's.
+	for _, path := range filePaths {
+		fd := allFiles[path]
 		if fd.Package != config.SelfPackage {
 			continue
 		}
@@ -1472,7 +1493,8 @@ func ResolveStatesFromProto(config *tactype.Config, inputDir string) error {
 	// 2. Imported states: field-level state_import projections and file-level
 	// state_imports declarations in the service's own proto files → RO.
 	importedRoots := make(map[string]string)
-	for path, fd := range allFiles {
+	for _, path := range filePaths {
+		fd := allFiles[path]
 		if fd.Package != config.SelfPackage {
 			continue
 		}
@@ -1517,7 +1539,15 @@ func ResolveStatesFromProto(config *tactype.Config, inputDir string) error {
 	// build — the store physically holds every partition, so this is by design,
 	// not over-broad. Own-package states are already added RW above and skipped.
 	if isStore {
-		for key, info := range stateIndex {
+		// stateIndex is a MAP; sorted so the store's (large) tail of foreign
+		// state entries lands in the same order on every build.
+		stateKeys := make([]string, 0, len(stateIndex))
+		for key := range stateIndex {
+			stateKeys = append(stateKeys, key)
+		}
+		sort.Strings(stateKeys)
+		for _, key := range stateKeys {
+			info := stateIndex[key]
 			msgName := stateRootName(key)
 			if msgName == "" {
 				continue

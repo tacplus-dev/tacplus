@@ -3039,6 +3039,18 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 	// Detect cross-package type references in service methods
 	crossPackageTypes := make(map[string]string)
 	crossPackageFiles := make(map[string]string)
+	// p.descriptors is a MAP and a proto package legitimately spans several
+	// files (and several directories — e.g. services/ and vservices/ sharing one
+	// package). The scan below records ONE file per package as that package's
+	// import location, and CrossPackageFiles feeds the emitted Python import
+	// line verbatim (python/types/proto_imports.go). Picking the first raw-map
+	// match made that line differ between identical builds, so fix the choice:
+	// the lowest descriptor path for the package.
+	descPaths := make([]string, 0, len(p.descriptors))
+	for descPath := range p.descriptors {
+		descPaths = append(descPaths, descPath)
+	}
+	sort.Strings(descPaths)
 	for _, svc := range info.Services {
 		for _, method := range svc.Methods {
 			fullTypes := []string{method.FullInputType, method.FullOutputType}
@@ -3052,8 +3064,8 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 					if pkg != info.Package && pkg != "" && !strings.HasPrefix(pkg, "google.") {
 						if _, exists := crossPackageTypes[pkg]; !exists {
 							// Look up the directory for this package from parsed descriptors
-							for descPath, desc := range p.descriptors {
-								if desc.Package == pkg {
+							for _, descPath := range descPaths {
+								if desc := p.descriptors[descPath]; desc.Package == pkg {
 									dir := filepath.Dir(descPath)
 									if dir == "." {
 										dir = ""

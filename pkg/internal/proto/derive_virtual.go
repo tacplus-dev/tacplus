@@ -29,9 +29,20 @@ func DeriveVirtualServiceClients(inputDir, selfPackage string) ([]tactype.GrpcEn
 		return nil, fmt.Errorf("failed to create descriptor parser for virtual client derivation: %w", err)
 	}
 
-	// Find the service's own proto file.
+	// Find the service's own proto file. Nothing in the schema limits a package
+	// to ONE file carrying option (spec.service) — parseServiceIdentity is
+	// per-file and defaults the name to the package — and the fields read off
+	// serviceDesc below (Imports, OpaImportTargets, RecordReads) are file-scoped,
+	// so a raw map walk could derive a different client set on each build. Sorted
+	// path order, matching findAnnotatedSourceFile and the trait scan below.
 	var serviceDesc *parser.FileDescriptor
-	for _, fd := range dp.GetAllFiles() {
+	selfPaths := make([]string, 0, len(dp.GetAllFiles()))
+	for rp := range dp.GetAllFiles() {
+		selfPaths = append(selfPaths, rp)
+	}
+	sort.Strings(selfPaths)
+	for _, rp := range selfPaths {
+		fd := dp.GetAllFiles()[rp]
 		if fd.ServiceName != "" && fd.Package == selfPackage {
 			serviceDesc = fd
 			break

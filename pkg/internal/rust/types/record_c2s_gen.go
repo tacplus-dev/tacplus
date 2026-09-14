@@ -93,9 +93,19 @@ func collectRecordC2SPlane(config *tactype.Config, protoDir string) (*recordC2SF
 		return nil, fmt.Errorf("failed to parse protos for the client-facing record read plane: %w", err)
 	}
 
+	// Sorted for the same reason the trait scan below is: GetAllFiles is a map,
+	// a package may carry option (spec.service) in more than one file, and
+	// RecordReads is file-scoped — so the raw-map "first match" could emit a
+	// different C2S plane on each build.
 	var self *parser.FileDescriptor
 	var selfPath string
-	for relPath, fd := range dp.GetAllFiles() {
+	selfPaths := make([]string, 0, len(dp.GetAllFiles()))
+	for relPath := range dp.GetAllFiles() {
+		selfPaths = append(selfPaths, relPath)
+	}
+	sort.Strings(selfPaths)
+	for _, relPath := range selfPaths {
+		fd := dp.GetAllFiles()[relPath]
 		if fd.ServiceName != "" && fd.Package == config.SelfPackage {
 			self = fd
 			selfPath = relPath

@@ -108,10 +108,23 @@ func AppendStateServiceToProtos(tempProtoDir, inputDir string) error {
 		relPath  string
 		roots    []stateRootEntry
 	}
-	fileOrder := make([]string, 0) // maintain iteration order
+	fileOrder := make([]string, 0) // processing order; see sorted walk below
 	fileMap := make(map[string]*fileEntry)
 
-	for relPath, fileDesc := range dp.GetAllFiles() {
+	// GetAllFiles is a MAP, and processing order is externally observable: the
+	// pkgEmitted bookkeeping below emits each package's shared messages
+	// (MapEmpty, CollectionQuery, ...) into whichever of that package's files is
+	// processed FIRST. Under raw map order two identical builds put those
+	// messages in different proto files — and therefore in different generated
+	// type modules. Walk sorted so "first in the package" is a fixed file.
+	allPaths := make([]string, 0, len(dp.GetAllFiles()))
+	for relPath := range dp.GetAllFiles() {
+		allPaths = append(allPaths, relPath)
+	}
+	sort.Strings(allPaths)
+
+	for _, relPath := range allPaths {
+		fileDesc := dp.GetAllFiles()[relPath]
 		// Skip infrastructure protos except the manifest-declared runtime config
 		// state proto, which contains ServiceConfigState.
 		if IsInfraProtoFile(relPath, fileDesc) && !IsRuntimeConfigStateProto(relPath) {

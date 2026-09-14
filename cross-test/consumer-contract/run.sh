@@ -669,7 +669,7 @@ assert_service_manager_auth_wiring() {
   case "$language" in
     go)
       require_generated_pattern "$output/s2sm" 'RegisterContractApiMethodAuth\(sm\.auth\)' "Go service manager does not register ContractApi auth metadata"
-      require_generated_pattern "$output/s2sm" 'SetMethodTargetNamespaceField\("GetContract", "tenant_namespace"\)' "Go service wrapper does not register target namespace metadata"
+      require_generated_pattern "$output/s2sm" 'SetMethodTargetNamespaceField\("contractclient\.ContractApi/GetContract", "tenant_namespace"\)' "Go service wrapper does not register target namespace metadata"
       require_generated_pattern "$output/s2sm" 'SetAuthorizeFunc\(sm\.authorizeFunc\)' "Go service manager does not wire authorizer callbacks"
       require_generated_pattern "$output/s2sm" 'SetAuthenticateFunc\(sm\.authenticateFunc\)' "Go service manager does not wire authenticator callbacks"
       require_generated_pattern "$output/s2sm" 'HasAuthorizer\(\)' "Go service manager does not assert authorizer startup wiring"

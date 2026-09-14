@@ -1015,7 +1015,10 @@ func resolveJavaMethodType(fullType, simpleType, servicePackage, outerClassName 
 }
 
 func methodNameLowerCamel(name string) string {
-	methodName := strutil.ToCamelCase(strutil.ToSnakeCase(name))
+	// Use protoc's naming convention: lowercase first letter only.
+	// e.g. "ExecuteDQL" → "executeDQL" (not "executeDql").
+	// A snake_case round-trip would mangle all-caps acronyms.
+	methodName := name
 	if len(methodName) > 0 {
 		methodName = strings.ToLower(methodName[:1]) + methodName[1:]
 	}
@@ -1077,7 +1080,11 @@ func javaOuterFromProtoPkg(pkg string) string {
 // Empty request types are omitted — the gRPC contract requires them, but the handler doesn't.
 // Empty output types return void — the wrapper constructs the Empty response.
 func generateJavaHandlerMethod(method *parser.MethodInfo, inputType, outputType string, crossPkgOuterClasses map[string]string) string {
-	methodName := strutil.ToCamelCase(strutil.ToSnakeCase(method.Name))
+	// Use protoc's naming convention: lowercase first letter only.
+	// e.g. "ExecuteDQL" → "executeDQL" (not "executeDql").
+	// A snake_case round-trip would mangle all-caps acronyms. This name must
+	// agree with the handler.<name>(...) calls the wrapper surface emits.
+	methodName := method.Name
 	if len(methodName) > 0 {
 		methodName = strings.ToLower(methodName[:1]) + methodName[1:]
 	}
@@ -1295,8 +1302,14 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 // (spec.store_principal), which stays c2s-only: a peer service is not a user.
 // See recordnamespace_gen.go.
 func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers string, authAnyUser bool, authDisabled bool, accountingMap map[string]service.AccountingInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer, crossPkgHelpers map[string]string, crossPkgOuterClasses map[string]string, isC2S bool, recordPlaneS2S bool) string {
-	methodName := strutil.ToCamelCase(strutil.ToSnakeCase(method.Name))
-	// Ensure first letter is lowercase for Java method convention
+	// Use protoc's naming convention: lowercase first letter only.
+	// e.g. "ExecuteDQL" → "executeDQL" (not "executeDql").
+	// A snake_case round-trip would mangle all-caps acronyms — and this name is
+	// what the @Override'd methods of grpc-java's generated XxxImplBase are
+	// spelled with, so it must match protoc-gen-grpc-java exactly or the
+	// override does not compile. It also spells the handler.<name>(...) calls,
+	// which generateJavaHandlerMethod declares.
+	methodName := method.Name
 	if len(methodName) > 0 {
 		methodName = strings.ToLower(methodName[:1]) + methodName[1:]
 	}

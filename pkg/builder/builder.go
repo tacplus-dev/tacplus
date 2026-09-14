@@ -244,6 +244,9 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateRestPathCollisions(dp); err != nil {
 		return err
 	}
+	if err := parser.ValidateRestRootPath(dp); err != nil {
+		return err
+	}
 	return nil
 }
 

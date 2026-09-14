@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -81,9 +82,7 @@ func TestRustParamKeyAliasLiteralUsesRustUnicodeEscapes(t *testing.T) {
 	if err := writeFromMap(&b, pf); err != nil {
 		t.Fatalf("writeFromMap: %v", err)
 	}
-	// Only the from_map half: to_map builds its key literal by raw %s
-	// interpolation, escaping nothing at all, which is a wider bug than this
-	// one and is not what rustQuote was reached for here.
+	// Only the from_map half here; the to_map keys have their own tests below.
 	rendered := b.String()
 	fromMap := rendered[:strings.Index(rendered, "_to_map(")]
 
@@ -257,3 +256,142 @@ func TestRustQuotedSitesCompile(t *testing.T) {
 		t.Fatalf("rustc accepted the Go-quoted control, so this test proves nothing:\n%s", old)
 	}
 }
+
+// to_map is the other half of the same generator, and it interpolated the
+// (spec.json_return_value) text raw into "%s".to_string() — no escaping at all,
+// so a quote or backslash broke the literal outright and a non-printable rune
+// embedded as itself. Every field shape gets its own key here, since each of the
+// eight insert sites builds the literal on its own.
+//
+// The probe is U+202E rather than the U+200B used above: rustc accepts a raw
+// U+200B in a literal, so it could not distinguish the fix from the raw
+// interpolation it replaced, whereas a raw bidi override is a hard error.
+func TestRustToMapKeyLiteralsUseRustUnicodeEscapes(t *testing.T) {
+	pf := rustToMapEscapeProtoFile()
+
+	var b strings.Builder
+	if err := writeFromMap(&b, pf); err != nil {
+		t.Fatalf("writeFromMap: %v", err)
+	}
+	rendered := b.String()
+	toMap := rendered[strings.Index(rendered, "_to_map("):]
+
+	keys := rustToMapInsertKeyLiterals(toMap)
+	if len(keys) != 8 {
+		t.Fatalf("expected eight to_map insert keys, got %d: %q\n%s", len(keys), keys, toMap)
+	}
+	for _, key := range keys {
+		if !strings.Contains(key, `\u{202e}`) {
+			t.Errorf("to_map key literal %s is missing the Rust unicode escape", key)
+		}
+	}
+	if strings.Contains(toMap, `\u202e`) {
+		t.Errorf("to_map carries a Go-only escape rustc rejects:\n%s", toMap)
+	}
+	if strings.Contains(toMap, rlo) {
+		t.Errorf("a raw U+202E survived into the generated to_map:\n%s", toMap)
+	}
+
+	// The characters that break the literal outright rather than mis-escaping it.
+	hostile := model.ProtoFile{
+		Package: "audit",
+		Enums: []model.Enum{{
+			Name:   "AuditParamKey",
+			Values: []model.EnumValue{{Name: "AUDIT_PARAM_KEY_NAME", JsonValue: `a"b\c`}},
+		}},
+		Messages: []model.Message{{
+			Name:           "AuditParams",
+			ParamMapConfig: &model.ParamMapConfig{KeyEnum: "AuditParamKey", Strict: true},
+			Fields:         []model.Field{{Name: "name", Type: "string", ParamKey: "AUDIT_PARAM_KEY_NAME"}},
+		}},
+	}
+	var hb strings.Builder
+	if err := writeFromMap(&hb, hostile); err != nil {
+		t.Fatalf("writeFromMap (hostile): %v", err)
+	}
+	hostileToMap := hb.String()[strings.Index(hb.String(), "_to_map("):]
+	if want := `result.insert("a\"b\\c".to_string()`; !strings.Contains(hostileToMap, want) {
+		t.Errorf("to_map did not escape the literal-breaking characters, want %s:\n%s", want, hostileToMap)
+	}
+}
+
+// rustc is the arbiter for the to_map keys too: the escaped literals compile and
+// the raw interpolation they replaced does not.
+func TestRustToMapKeyLiteralsCompile(t *testing.T) {
+	if _, err := exec.LookPath("rustc"); err != nil {
+		t.Skip("rustc not installed; skipping the compile check")
+	}
+	var b strings.Builder
+	if err := writeFromMap(&b, rustToMapEscapeProtoFile()); err != nil {
+		t.Fatalf("writeFromMap: %v", err)
+	}
+	rendered := b.String()
+	keys := rustToMapInsertKeyLiterals(rendered[strings.Index(rendered, "_to_map("):])
+	if len(keys) != 8 {
+		t.Fatalf("expected eight to_map insert keys, got %d: %q", len(keys), keys)
+	}
+
+	src := "pub const TO_MAP_KEYS: &[&str] = &[\n" + strings.Join(keys, ",\n") + ",\n];\n"
+	if err := rustcAccepts(t, src); err != nil {
+		t.Fatalf("rustc rejected the generated to_map keys: %v\n--- src ---\n%s", err, src)
+	}
+
+	// The control: the key text interpolated raw, as to_map did before.
+	old := strings.ReplaceAll(src, `\u{202e}`, rlo)
+	if old == src {
+		t.Fatalf("could not build the pre-fix control from:\n%s", src)
+	}
+	if err := rustcAccepts(t, old); err == nil {
+		t.Fatalf("rustc accepted the raw-interpolation control, so this test proves nothing:\n%s", old)
+	}
+}
+
+// One message covering every field shape generateToMapMethod branches on, each
+// with its own json_return_value carrying U+202E.
+func rustToMapEscapeProtoFile() model.ProtoFile {
+	shapes := []struct {
+		field model.Field
+		key   string
+	}{
+		{model.Field{Name: "ids", Type: "int64", IsRepeated: true}, "ids"},
+		{model.Field{Name: "tags", Type: "string", IsRepeated: true}, "tags"},
+		{model.Field{Name: "opt_count", Type: "int64", IsOptional: true}, "opt_count"},
+		{model.Field{Name: "count", Type: "int64"}, "count"},
+		{model.Field{Name: "opt_blob", Type: "bytes", IsOptional: true}, "opt_blob"},
+		{model.Field{Name: "blob", Type: "bytes"}, "blob"},
+		{model.Field{Name: "opt_name", Type: "string", IsOptional: true}, "opt_name"},
+		{model.Field{Name: "name", Type: "string"}, "name"},
+	}
+
+	var values []model.EnumValue
+	var fields []model.Field
+	for _, shape := range shapes {
+		enumName := "AUDIT_PARAM_KEY_" + strings.ToUpper(shape.key)
+		values = append(values, model.EnumValue{Name: enumName, JsonValue: shape.key + rlo + "key"})
+		field := shape.field
+		field.ParamKey = enumName
+		fields = append(fields, field)
+	}
+
+	return model.ProtoFile{
+		Package:  "audit",
+		Enums:    []model.Enum{{Name: "AuditParamKey", Values: values}},
+		Messages: []model.Message{{Name: "AuditParams", ParamMapConfig: &model.ParamMapConfig{KeyEnum: "AuditParamKey", Strict: true}, Fields: fields}},
+	}
+}
+
+// rustToMapInsertKeyLiterals pulls the quoted key out of every
+// result.insert(<literal>.to_string(), ...) the generator emitted.
+var rustToMapInsertKeyRe = regexp.MustCompile(`result\.insert\(("(?:[^"\\]|\\.)*")\.to_string\(\)`)
+
+func rustToMapInsertKeyLiterals(toMap string) []string {
+	var keys []string
+	for _, m := range rustToMapInsertKeyRe.FindAllStringSubmatch(toMap, -1) {
+		keys = append(keys, m[1])
+	}
+	return keys
+}
+
+// rlo is a raw bidi override: not unicode.IsPrint, and rustc rejects it
+// unescaped inside a string literal.
+const rlo = "\u202e"

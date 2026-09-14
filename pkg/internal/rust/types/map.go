@@ -283,32 +283,32 @@ func generateToMapMethod(b *strings.Builder, msg model.Message, pf model.ProtoFi
 			// For repeated fields, join with comma
 			fmt.Fprintf(b, "if !m.%s.is_empty() {\n", fieldName)
 			if rustParseType(field) != "" {
-				fmt.Fprintf(b, "result.insert(\"%s\".to_string(), m.%s.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(\",\"));\n", jsonKey, fieldName)
+				fmt.Fprintf(b, "result.insert(%s.to_string(), m.%s.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(\",\"));\n", rustQuote(jsonKey), fieldName)
 			} else {
-				fmt.Fprintf(b, "result.insert(\"%s\".to_string(), m.%s.join(\",\"));\n", jsonKey, fieldName)
+				fmt.Fprintf(b, "result.insert(%s.to_string(), m.%s.join(\",\"));\n", rustQuote(jsonKey), fieldName)
 			}
 			b.WriteString("}\n")
 		} else if field.IsEnum || isNumericType(field.Type) {
 			// For enum and numeric fields, convert to string
 			if field.IsOptional {
 				fmt.Fprintf(b, "if let Some(ref val) = m.%s {\n", fieldName)
-				fmt.Fprintf(b, "result.insert(\"%s\".to_string(), val.to_string());\n", jsonKey)
+				fmt.Fprintf(b, "result.insert(%s.to_string(), val.to_string());\n", rustQuote(jsonKey))
 				b.WriteString("}\n")
 			} else {
 				fmt.Fprintf(b, "if m.%s != Default::default() {\n", fieldName)
-				fmt.Fprintf(b, "result.insert(\"%s\".to_string(), m.%s.to_string());\n", jsonKey, fieldName)
+				fmt.Fprintf(b, "result.insert(%s.to_string(), m.%s.to_string());\n", rustQuote(jsonKey), fieldName)
 				b.WriteString("}\n")
 			}
 		} else if field.Type == "bytes" {
 			if field.IsOptional {
 				fmt.Fprintf(b, "if let Some(ref val) = m.%s {\n", fieldName)
 				fmt.Fprintf(b, "if !val.is_empty() {\n")
-				fmt.Fprintf(b, "result.insert(\"%s\".to_string(), String::from_utf8_lossy(val).to_string());\n", jsonKey)
+				fmt.Fprintf(b, "result.insert(%s.to_string(), String::from_utf8_lossy(val).to_string());\n", rustQuote(jsonKey))
 				b.WriteString("}\n")
 				b.WriteString("}\n")
 			} else {
 				fmt.Fprintf(b, "if !m.%s.is_empty() {\n", fieldName)
-				fmt.Fprintf(b, "result.insert(\"%s\".to_string(), String::from_utf8_lossy(&m.%s).to_string());\n", jsonKey, fieldName)
+				fmt.Fprintf(b, "result.insert(%s.to_string(), String::from_utf8_lossy(&m.%s).to_string());\n", rustQuote(jsonKey), fieldName)
 				b.WriteString("}\n")
 			}
 		} else {
@@ -316,12 +316,12 @@ func generateToMapMethod(b *strings.Builder, msg model.Message, pf model.ProtoFi
 			if field.IsOptional {
 				fmt.Fprintf(b, "if let Some(ref val) = m.%s {\n", fieldName)
 				fmt.Fprintf(b, "if !val.is_empty() {\n")
-				fmt.Fprintf(b, "result.insert(\"%s\".to_string(), val.clone());\n", jsonKey)
+				fmt.Fprintf(b, "result.insert(%s.to_string(), val.clone());\n", rustQuote(jsonKey))
 				b.WriteString("}\n")
 				b.WriteString("}\n")
 			} else {
 				fmt.Fprintf(b, "if !m.%s.is_empty() {\n", fieldName)
-				fmt.Fprintf(b, "result.insert(\"%s\".to_string(), m.%s.clone());\n", jsonKey, fieldName)
+				fmt.Fprintf(b, "result.insert(%s.to_string(), m.%s.clone());\n", rustQuote(jsonKey), fieldName)
 				b.WriteString("}\n")
 			}
 		}

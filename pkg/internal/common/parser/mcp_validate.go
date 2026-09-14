@@ -51,6 +51,21 @@ import (
 //	       Caught only by live verification otherwise: gates and cargo check
 //	       are silent, since the carrier compiles and dispatches fine right up
 //	       until the PermissionDenied at the entitlement check.
+//	MCP-5  a service with HasMcpRpcs and service_c2d / auth_disabled -> fail
+//	       The narrowing half of MCP-4: one of the three annotations must be
+//	       set, but c2d and auth_disabled are not among the ones that work. The
+//	       generated carrier opens a session by extracting a Caller from the
+//	       request's bearer token and scopes every server-computed tool
+//	       predicate in that session from it (mcp_dispatch_gen.go), yet neither
+//	       of these paths runs an authorizer over that header first — a c2d
+//	       service has no authorizer at all, its trust boundary being the unix
+//	       socket's file permissions. The carrier would therefore hand every
+//	       tool call an identity the client asserted in a token nothing
+//	       verified, for the life of the session. Unlike the unary wrapper,
+//	       which answers None where nothing was verified, the carrier has no
+//	       "no identity" answer available: it requires a caller. So the shape
+//	       is refused here rather than generated into a session that either
+//	       trusts an unverified subject or is unauthenticated by construction.
 
 // mcpToolNameRe is the MCP tool-name convention the default (snake_case of the
 // RPC name) satisfies by construction, and the override must satisfy by hand.
@@ -91,7 +106,21 @@ func validateMcpAnnotations(fds []*FileDescriptor) error {
 						"service_c2d annotation; the generated MCP session carrier's auth model "+
 						"follows the hosting service's, so with none set it mints no entitlement "+
 						"grant and no token can ever call it. Add option (spec.service_c2s) = {} "+
-						"(or service_s2s / service_c2d) to the service",
+						"(or service_s2s) to the service; service_c2d is rejected separately by "+
+						"MCP-5 below",
+					fd.Package, svc.Name))
+			}
+
+			// MCP-5.
+			if svc.HasMcpRpcs && (svc.IsC2D || svc.AuthDisabled) {
+				errs = append(errs, fmt.Sprintf(
+					"%s.%s: declares an RPC_PRINCIPAL_MCP rpc on a service_c2d/auth_disabled "+
+						"service; the generated MCP session carrier extracts the session's Caller "+
+						"from the request's bearer token and scopes every tool call in that session "+
+						"from it, but neither path runs an authorizer over that header first (a c2d "+
+						"service has no authorizer at all — its boundary is the socket's file "+
+						"permissions), so the caller would be whatever subject the client asserted. "+
+						"Host the MCP rpcs on a service_c2s or service_s2s service instead",
 					fd.Package, svc.Name))
 			}
 

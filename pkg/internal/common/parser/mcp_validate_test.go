@@ -334,3 +334,69 @@ service Surface {
 		t.Fatalf("an MCP-only service with service_s2s must generate: %v", err)
 	}
 }
+
+// MCP-5: service_c2d is an annotation MCP-4 accepts and MCP-5 then refuses. The
+// carrier scopes a whole session's tool calls to a Caller taken from a bearer
+// token, and a c2d service runs no authorizer over that token at all.
+func TestValidateMcpRefusesMcpServiceOnC2D(t *testing.T) {
+	skipIfNoProtoc(t)
+
+	p := rpcParser(t, `
+service Surface {
+  option (spec.service_c2d) = {socket_path: "/run/surface.sock"};
+
+  rpc GetTicket(Ping) returns (Ping) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_MCP};
+  }
+}
+`)
+	err := ValidateMcpAnnotations(p)
+	if err == nil {
+		t.Fatal("an MCP rpc on a service_c2d service must fail generation")
+	}
+	if !strings.Contains(err.Error(), "service_c2d/auth_disabled service") {
+		t.Fatalf("refusal must name the offending auth model, got: %v", err)
+	}
+}
+
+// MCP-5 (auth_disabled half): no service-level auth_disabled annotation exists
+// in spec.proto today, so ServiceDescriptor.AuthDisabled has no proto that can
+// set it. Drive the file-list form directly to pin that the field is part of
+// the rule, for whenever one does.
+func TestValidateMcpRefusesMcpServiceWithAuthDisabled(t *testing.T) {
+	fds := []*FileDescriptor{{
+		Package: "rpctest",
+		Services: []ServiceDescriptor{{
+			Name:         "Surface",
+			HasMcpRpcs:   true,
+			IsC2S:        true,
+			AuthDisabled: true,
+		}},
+	}}
+	err := validateMcpAnnotations(fds)
+	if err == nil {
+		t.Fatal("an MCP rpc on an auth_disabled service must fail generation")
+	}
+	if !strings.Contains(err.Error(), "service_c2d/auth_disabled service") {
+		t.Fatalf("refusal must name the offending auth model, got: %v", err)
+	}
+}
+
+// MCP-5 (control): service_c2s — the other shape MCP-4 accepts — stays
+// generatable. MCP-5 narrows MCP-4, it does not replace it.
+func TestValidateMcpAcceptsMcpServiceWithC2SAuthModel(t *testing.T) {
+	skipIfNoProtoc(t)
+
+	p := rpcParser(t, `
+service Surface {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  rpc GetTicket(Ping) returns (Ping) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_MCP};
+  }
+}
+`)
+	if err := ValidateMcpAnnotations(p); err != nil {
+		t.Fatalf("an MCP-only service with service_c2s must generate: %v", err)
+	}
+}

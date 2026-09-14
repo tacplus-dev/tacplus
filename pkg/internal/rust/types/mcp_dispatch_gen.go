@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
+	"unicode"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
@@ -260,7 +260,7 @@ func (es *rustEgressSanitizer) mcpRequiredScalarArgs(fullType, servicePkg string
 		switch mcpScalarJSONType(f.Type) {
 		case "string":
 			v := "mcp-test-" + f.Name
-			out = append(out, rustMcpScalarArg{Field: f.Name, JSON: strconv.Quote(v), Debug: strconv.Quote(v)})
+			out = append(out, rustMcpScalarArg{Field: f.Name, JSON: rustQuote(v), Debug: rustQuote(v)})
 		case "integer":
 			out = append(out, rustMcpScalarArg{Field: f.Name, JSON: "1", Debug: "1"})
 		case "number":
@@ -468,7 +468,7 @@ pub static %[2]s: &[%[1]sMcpTool] = &[
         description: %s,
         input_schema: %s,
     },
-`, serviceName, strconv.Quote(t.ToolName), strconv.Quote(t.Description), strconv.Quote(t.Schema))
+`, serviceName, rustQuote(t.ToolName), rustQuote(t.Description), rustQuote(t.Schema))
 	}
 	b.WriteString("];\n")
 	return b.String()
@@ -528,7 +528,7 @@ impl %[1]s {
 	var arms strings.Builder
 	for _, t := range tools {
 		fmt.Fprintf(&arms, `            %s => self.%s(arguments).await,
-`, strconv.Quote(t.ToolName), rustMcpDispatchFnName(t))
+`, rustQuote(t.ToolName), rustMcpDispatchFnName(t))
 	}
 
 	fmt.Fprintf(&b, `
@@ -588,7 +588,7 @@ impl rmcp::ServerHandler for %[1]s {
         }
     }
 }
-`, surface, arms.String(), strconv.Quote(rustMcpInstructions))
+`, surface, arms.String(), rustQuote(rustMcpInstructions))
 
 	return b.String()
 }
@@ -648,7 +648,7 @@ func rustMcpToolDispatch(serviceName string, t rustMcpTool) string {
                 "%[2]s is set by the server from %[4]s; it is not a tool argument",
             ));
         }
-`, f.marker, f.field, strconv.Quote(f.field), f.why)
+`, f.marker, f.field, rustQuote(f.field), f.why)
 	}
 
 	b.WriteString("        let caller: Option<&servicemanager::auth::Caller> = Some(&self.caller);\n")
@@ -1059,7 +1059,7 @@ mod %[1]s_mcp_tests {
             tools.iter().any(|t| t.name == %[1]s),
             "%[2]s is declared RPC_PRINCIPAL_MCP but is not published"
         );
-`, strconv.Quote(t.ToolName), t.ToolName)
+`, rustQuote(t.ToolName), t.ToolName)
 	}
 	b.WriteString("    }\n")
 
@@ -1081,7 +1081,7 @@ func rustMcpToolTests(surface string, t rustMcpTool) string {
 	if drivable {
 		var args []string
 		for _, a := range t.RequiredScalars {
-			args = append(args, fmt.Sprintf("%s: %s", strconv.Quote(a.Field), a.JSON))
+			args = append(args, fmt.Sprintf("%s: %s", rustQuote(a.Field), a.JSON))
 		}
 		argsJSON := "{" + strings.Join(args, ", ") + "}"
 
@@ -1102,7 +1102,7 @@ func rustMcpToolTests(surface string, t rustMcpTool) string {
             "the tool call did not reach its typed handler: {}",
             reported.message()
         );
-`, t.ToolName, surface, strconv.Quote(argsJSON), rustMcpDispatchFnName(t))
+`, t.ToolName, surface, rustQuote(argsJSON), rustMcpDispatchFnName(t))
 
 		for _, a := range t.RequiredScalars {
 			fmt.Fprintf(&b, `        assert!(
@@ -1110,7 +1110,7 @@ func rustMcpToolTests(surface string, t rustMcpTool) string {
             "the handler did not receive %[2]s: {}",
             reported.message()
         );
-`, strconv.Quote(a.Debug), a.Field)
+`, rustQuote(a.Debug), a.Field)
 		}
 		if t.PrincipalField != "" {
 			fmt.Fprintf(&b, `        // (spec.principal): stamped by the dispatch from the verified caller,
@@ -1159,8 +1159,37 @@ func rustMcpToolTests(surface string, t rustMcpTool) string {
             refused.message()
         );
     }
-`, t.ToolName, surface, f.field, strconv.Quote(f.field), f.marker, rustMcpDispatchFnName(t))
+`, t.ToolName, surface, f.field, rustQuote(f.field), f.marker, rustMcpDispatchFnName(t))
 	}
 
+	return b.String()
+}
+
+// rustQuote renders s as a Rust string literal, quotes included.
+//
+// Not strconv.Quote: Go writes a non-printable rune as a bare \uXXXX, which is
+// not Rust escape syntax — rustc rejects "a b" with "incorrect unicode
+// escape sequence". Rust spells it \u{a0}. The tool name, description and
+// schema this quotes are proto-derived text, so a doc comment carrying a
+// non-breaking space (or any other non-printable rune) would otherwise emit
+// Rust that does not compile. Java's javaQuote exists for the same reason,
+// with UTF-16 surrogate pairs in place of the braces.
+//
+// Escaping the whole non-printable class, rather than only what Rust's grammar
+// forces, also keeps invisible format characters — bidi overrides above all,
+// which rustc denies outright inside a literal — out of the generated source.
+func rustQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		if r > 0x7e && !unicode.IsPrint(r) {
+			fmt.Fprintf(&b, `\u{%x}`, r)
+			continue
+		}
+		// Everything a Rust literal escapes below U+007F is already rustStringEscape's
+		// table; printable Unicode above it embeds as itself, Rust source being UTF-8.
+		b.WriteString(rustStringEscape(string(r)))
+	}
+	b.WriteByte('"')
 	return b.String()
 }

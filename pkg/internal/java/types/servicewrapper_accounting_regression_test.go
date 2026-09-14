@@ -3,6 +3,7 @@
 package types
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -371,7 +372,15 @@ func TestJavaMixedAuthServiceKeepsProtectedMethodsAuthorized(t *testing.T) {
 	}
 }
 
-func TestJavaStreamPreflightUsesRootNamespaceGate(t *testing.T) {
+// A client- or bidi-streaming method with a target_namespace_field authorizes
+// every message against that message's own namespace value, downstream of the
+// stream-open preflight. The preflight is therefore token-only — "is this a
+// valid identity at all" — which is exactly what ServiceManager's
+// setAuthenticateFunc wiring documents for these methods. checkAuthenticate("/")
+// is not that: it routes to authenticateAtOrBelow("/"), which admits only a
+// caller sitting exactly at "/", so every real caller was denied at stream open
+// before the per-message check could ever run.
+func TestJavaStreamPreflightAuthenticatesTokenOnly(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		method *parser.MethodInfo
@@ -423,11 +432,15 @@ func TestJavaStreamPreflightUsesRootNamespaceGate(t *testing.T) {
 				nil,
 			)
 
-			if !strings.Contains(rendered, `checkAuthenticate("/");`) {
-				t.Fatalf("Java stream preflight must use root namespace authentication gate:\n%s", rendered)
+			if !strings.Contains(rendered, "callerIdentity = checkAuthenticate();") {
+				t.Fatalf("Java stream preflight must authenticate token-only:\n%s", rendered)
 			}
-			if strings.Contains(rendered, "checkAuthenticate();") {
-				t.Fatalf("Java stream preflight must not use token-only checkAuthenticate():\n%s", rendered)
+			if strings.Contains(rendered, `checkAuthenticate("/")`) {
+				t.Fatalf("Java stream preflight must not gate on the \"/\" namespace:\n%s", rendered)
+			}
+			// The real namespace comparison still happens per message.
+			if !strings.Contains(rendered, fmt.Sprintf(`checkAuth("ContractApi/%s", value);`, tc.method.Name)) {
+				t.Fatalf("per-message target namespace authorization missing:\n%s", rendered)
 			}
 		})
 	}

@@ -2471,7 +2471,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			authCheckNoReq = fmt.Sprintf(`        // Check authentication before per-message target namespace authorization
         java.util.Map<String, String> callerIdentity;
         try {
-            callerIdentity = checkAuthenticate("/");
+            callerIdentity = checkAuthenticate();
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return new StreamObserver<%s>() {
@@ -2587,7 +2587,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			authCheckNoReq = fmt.Sprintf(`        // Check authentication before per-message target namespace authorization
         java.util.Map<String, String> callerIdentity;
         try {
-            callerIdentity = checkAuthenticate("/");
+            callerIdentity = checkAuthenticate();
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return new StreamObserver<%s>() {

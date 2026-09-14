@@ -475,6 +475,108 @@ message Foo {
 }
 `,
 		},
+		{
+			// A single-line option that is fully closed on its own line but carries a
+			// trailing // comment must not be mistaken for an unterminated multi-line
+			// block — doing so silently skipped every following line to EOF.
+			name: "single-line option with trailing comment keeps following content",
+			input: `syntax = "proto3";
+package foo;
+
+option (spec.service) = {name: "foo"};  // trailing comment
+
+message Foo {
+  string name = 1;
+}
+
+service Bar {
+  rpc Do(Foo) returns (Foo);
+}
+`,
+			expected: `syntax = "proto3";
+package foo;
+
+message Foo {
+  string name = 1;
+}
+
+service Bar {
+  rpc Do(Foo) returns (Foo);
+}
+`,
+		},
+		{
+			// Same ambiguity, but a later genuine block ends in }; — the skip used to
+			// stop there, dropping the content in between instead of running to EOF.
+			name: "single-line option with trailing comment does not swallow up to a later block",
+			input: `syntax = "proto3";
+package foo;
+
+option (spec.service) = {name: "foo"};  // trailing comment
+
+message Keep {
+  string a = 1;
+}
+
+message Other {
+  option (spec.thing) = {
+    a: "b"
+  };
+  string b = 1;
+}
+`,
+			expected: `syntax = "proto3";
+package foo;
+
+message Keep {
+  string a = 1;
+}
+
+message Other {
+  string b = 1;
+}
+`,
+		},
+		{
+			name: "multi-line option block with trailing comment on closing line",
+			input: `message Foo {
+  option (spec.state) = {
+    name: "x"
+  };  // closing comment
+  string a = 1;
+}
+`,
+			expected: `message Foo {
+  string a = 1;
+}
+`,
+		},
+		{
+			name: "multi-line option block with }; inside opening line comment",
+			input: `message Foo {
+  option (spec.state) = {  // shape: {...};
+    name: "x"
+  };
+  string a = 1;
+}
+`,
+			expected: `message Foo {
+  string a = 1;
+}
+`,
+		},
+		{
+			name: "single-line option with }; inside a string literal and trailing comment",
+			input: `option (spec.string_const) = {name: "X", value: "};"};  // literal brace
+message Foo {
+  string a = 1;
+}
+`,
+			expected: `message Foo {
+  string a = 1;
+}
+`,
+		},
 	}
 
 	for _, tt := range tests {

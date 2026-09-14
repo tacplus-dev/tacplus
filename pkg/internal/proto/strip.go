@@ -31,12 +31,15 @@ func StripSpecOptions(content string) string {
 		// Remove file/message/service-level option (spec.*) lines.
 		// These can be single-line or multi-line (with { ... } blocks).
 		if strings.HasPrefix(trimmed, "option (spec.") {
-			// Check if this is a multi-line option block (ends with { but not };)
-			if strings.Contains(trimmed, "{") && !strings.HasSuffix(trimmed, "};") {
+			// Check if this is a multi-line option block (opens { without closing };).
+			// A trailing // comment must not count toward the terminator, otherwise a
+			// fully closed single-line option would be mistaken for an unterminated
+			// block and every following line silently skipped.
+			if strings.Contains(trimmed, "{") && !optionBlockCloses(trimmed) {
 				// Skip until we find the closing };
 				i++
 				for i < len(lines) {
-					if strings.HasSuffix(strings.TrimSpace(lines[i]), "};") {
+					if optionBlockCloses(strings.TrimSpace(lines[i])) {
 						i++
 						break
 					}
@@ -73,6 +76,14 @@ func StripSpecOptions(content string) string {
 		stripped = removeSpecImport(stripped)
 	}
 	return stripped
+}
+
+// optionBlockCloses reports whether a trimmed option line terminates its
+// { ... } block, ignoring any trailing // line comment. stripProtoLineComment
+// is quote-aware, so a "//" or "};" inside a string literal is not mistaken
+// for a comment or a terminator.
+func optionBlockCloses(trimmed string) bool {
+	return strings.HasSuffix(stripProtoLineComment(trimmed), "};")
 }
 
 func contentNeedsSpecProto(content string) bool {

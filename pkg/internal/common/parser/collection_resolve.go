@@ -18,20 +18,16 @@ import (
 // the message index (collection.BuildMessageIndex over the parsed files).
 //
 // collectionMessageIndex lazily builds and caches a fully-qualified message
-// index across all parsed files, for collection tier resolution. Best-effort: a
-// file that fails to convert is skipped, leaving an affected method's tier
-// underived rather than failing the parse. Cached because ConvertToProtoInfo is
-// called once per service file but the index is global.
+// index across all parsed files, for collection tier resolution. Cached
+// because ConvertToProtoInfo is called once per service file but the index is
+// global.
 func (p *DescriptorParser) collectionMessageIndex() map[string]*model.Message {
 	if p.collIndexBuilt {
 		return p.collIndex
 	}
 	var files []model.ProtoFile
 	for path := range p.GetAllFiles() {
-		pf, err := p.ConvertToProtoFile(path)
-		if err != nil {
-			continue
-		}
+		pf, _ := p.ConvertToProtoFile(path)
 		files = append(files, pf)
 	}
 	p.collIndex = collection.BuildMessageIndex(files)

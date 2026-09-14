@@ -177,59 +177,95 @@ func TestRustHealthReporterWrapsCheckerAndClassifiesFirstPublish(t *testing.T) {
 	}
 }
 
-// F-1 pin (generator side): the auth_any_user wrapper still emits the
-// enforce_at_or_below("/") floor — the verification fix lives behind
-// check_caller_at_or_below, not in changed namespace semantics.
-func TestRustAuthAnyUserWrapperEmitsEnforceAtOrBelow(t *testing.T) {
-	rendered := mustGenerateRustGRPCWrapper(
-		t,
-		&parser.ServiceInfo{Name: "ContractApi"},
-		&parser.MethodInfo{
-			Name:           "PublicRead",
-			InputType:      "ContractRequest",
-			OutputType:     "ContractResponse",
-			FullInputType:  "contractclient.ContractRequest",
-			FullOutputType: "contractclient.ContractResponse",
-			AuthAnyUser:    true,
+// auth_any_user means "any authenticated user can call this RPC". The optional
+// target_namespace_field on such a method is an authored FIXED namespace
+// literal, not a request field name; with none authored there is nothing to
+// compare against, so the gate is authentication alone. The former "/" floor
+// gated on is_at_or_below(caller, "/"), true only for a caller sitting exactly
+// at "/" — every real caller denied.
+func TestRustAuthAnyUserWrapperGate(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		targetNamespaceField string
+		wantCall             string
+		notWant              string
+	}{
+		{
+			name:     "no target namespace field authenticates only",
+			wantCall: "self.enforce_authenticated(&request).await?;",
+			notWant:  "self.enforce_at_or_below(",
 		},
-		"contractclient",
-		"contract",
-		map[string]string{},
-		"contract",
-		map[string]service.AccountingInfo{},
-		proto.SkippedTraceTypes{},
-		nil,
-	)
+		{
+			name:                 "declared literal keeps the fixed namespace gate",
+			targetNamespaceField: "/tenants/acme",
+			wantCall:             `self.enforce_at_or_below(&request, "/tenants/acme").await?;`,
+			notWant:              "self.enforce_authenticated(",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rendered := mustGenerateRustGRPCWrapper(
+				t,
+				&parser.ServiceInfo{Name: "ContractApi"},
+				&parser.MethodInfo{
+					Name:                 "PublicRead",
+					InputType:            "ContractRequest",
+					OutputType:           "ContractResponse",
+					FullInputType:        "contractclient.ContractRequest",
+					FullOutputType:       "contractclient.ContractResponse",
+					AuthAnyUser:          true,
+					TargetNamespaceField: tc.targetNamespaceField,
+				},
+				"contractclient",
+				"contract",
+				map[string]string{},
+				"contract",
+				map[string]service.AccountingInfo{},
+				proto.SkippedTraceTypes{},
+				nil,
+			)
 
-	if !strings.Contains(rendered, `self.enforce_at_or_below(&request, "/").await?;`) {
-		t.Fatalf("auth_any_user wrapper missing enforce_at_or_below floor:\n%s", rendered)
-	}
-	if strings.Contains(rendered, "authenticate_method") {
-		t.Fatalf("auth_any_user wrapper must not use token-only authenticate_method:\n%s", rendered)
+			if !strings.Contains(rendered, tc.wantCall) {
+				t.Fatalf("auth_any_user wrapper missing %q:\n%s", tc.wantCall, rendered)
+			}
+			if strings.Contains(rendered, tc.notWant) {
+				t.Fatalf("auth_any_user wrapper must not contain %q:\n%s", tc.notWant, rendered)
+			}
+		})
 	}
 }
 
-func TestRustServiceWrapperDeletesTokenOnlyAuthAnyUserHelper(t *testing.T) {
+// F-1 pin: dropping the namespace check for a bare auth_any_user method must not
+// weaken TOKEN verification. The authenticate path has to reach the same
+// verify_bearer gate (kid lookup, signature, expiry, token class, audience) that
+// check_caller_at_or_below uses — otherwise a forged token would reach the handler.
+func TestRustAuthAnyUserAuthenticatePathVerifiesToken(t *testing.T) {
 	tmpl, err := loadTemplate("servicewrapper.rs.tmpl")
 	if err != nil {
 		t.Fatalf("loadTemplate servicewrapper.rs.tmpl: %v", err)
 	}
-	for _, forbidden := range []string{
-		"async fn authenticate(&self, authorization: Option<&str>)",
-		"async fn authenticate_method",
-		".authenticate(authorization).await",
-	} {
-		if strings.Contains(tmpl, forbidden) {
-			t.Fatalf("Rust servicewrapper template must not expose token-only auth_any_user helper %q:\n%s", forbidden, tmpl)
-		}
+	if !strings.Contains(tmpl, "a.authenticate(authorization).await") {
+		t.Fatalf("enforce_authenticated must delegate to the Authorizer trait's authenticate:\n%s", tmpl)
 	}
 
 	managerTmpl, err := loadTemplate("service_manager.rs.tmpl")
 	if err != nil {
 		t.Fatalf("loadTemplate service_manager.rs.tmpl: %v", err)
 	}
-	if strings.Contains(managerTmpl, ".authenticate_grpc(authorization)") {
-		t.Fatalf("Rust service manager adapter must route auth_any_user through check_at_or_below, not authenticate_grpc")
+	if !strings.Contains(managerTmpl, ".authenticate_caller(authorization)") {
+		t.Fatalf("Rust service manager adapter must route auth_any_user authentication through authenticate_caller")
+	}
+
+	authorizerTmpl := loadRustLibTemplate(t, "rust/chassis/grpcserver/src/authorizer.rs.tmpl")
+	acStart := strings.Index(authorizerTmpl, "pub fn authenticate_caller")
+	if acStart < 0 {
+		t.Fatalf("authorizer template missing authenticate_caller")
+	}
+	acBody := authorizerTmpl[acStart:]
+	if end := strings.Index(acBody[1:], "\n    pub "); end > 0 {
+		acBody = acBody[:end+1]
+	}
+	if !strings.Contains(acBody, "self.verify_bearer(authorization)") {
+		t.Fatalf("authenticate_caller must verify the bearer token:\n%s", acBody)
 	}
 }
 
@@ -263,7 +299,7 @@ func TestRustNoopTraceDoesNotSkipAuth(t *testing.T) {
 				FullOutputType: "contractclient.ContractResponse",
 				AuthAnyUser:    true,
 			},
-			authCall: "self.enforce_at_or_below(",
+			authCall: "self.enforce_authenticated(",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

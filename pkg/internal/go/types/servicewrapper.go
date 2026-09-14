@@ -821,9 +821,22 @@ func generateGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, ser
 	}`
 	}
 
+	// On an auth_any_user method target_namespace_field is not a request field
+	// name but an authored FIXED namespace literal. Unset means no namespace
+	// check at all — "any authenticated user can call this RPC". Defaulting it
+	// to "/" would gate on IsAtOrBelow(callerNamespace, "/"), which is true only
+	// for a caller whose own namespace is exactly "/" — i.e. it would deny every
+	// real caller, the inverse of the annotation.
 	authAnyUserTarget := strings.TrimSpace(method.TargetNamespaceField)
-	if authAnyUserTarget == "" {
-		authAnyUserTarget = "/"
+	authAnyUserCall := func(ctxExpr string) string {
+		if authAnyUserTarget == "" {
+			return fmt.Sprintf("p.authenticate(%s)", ctxExpr)
+		}
+		return fmt.Sprintf("p.authenticateAtOrBelow(%s, %q)", ctxExpr, authAnyUserTarget)
+	}
+	authAnyUserComment := "// Authenticate (auth_any_user: any authenticated caller)"
+	if authAnyUserTarget != "" {
+		authAnyUserComment = "// Authenticate (auth_any_user: fixed namespace target)"
 	}
 
 	// Build optional authorize block
@@ -834,12 +847,12 @@ if err := p.authenticate(%s); err != nil {
 }`
 	if !skipAuth {
 		if authAnyUser {
-			// auth_any_user: verify token signature + audience and ensure the
-			// caller is at-or-above the fixed target namespace.
+			// auth_any_user: verify token signature + audience, and — only when a
+			// fixed target namespace was authored — that the caller is at-or-above it.
 			authBlock = fmt.Sprintf(`
-if err := p.authenticateAtOrBelow(%%s, %q); err != nil {
+if err := %s; err != nil {
 	return %%s
-}`, authAnyUserTarget)
+}`, authAnyUserCall("%s"))
 		} else {
 			authBlock = fmt.Sprintf(`
 if err := p.authorize(%%s, %s, %%s); err != nil {
@@ -1324,11 +1337,11 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 		if !skipAuth {
 			if authAnyUser {
 				pageAuth = fmt.Sprintf(`
-	// Authenticate (auth_any_user: fixed namespace target)
-	if err := p.authenticateAtOrBelow(ctx, %q); err != nil {
+	%s
+	if err := %s; err != nil {
 		return nil, err
 	}
-`, authAnyUserTarget)
+`, authAnyUserComment, authAnyUserCall("ctx"))
 			} else {
 				pageAuth = fmt.Sprintf(`
 	// Authorize
@@ -1445,9 +1458,9 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 		var innerAuth string
 		if authAnyUser {
 			innerAuth = fmt.Sprintf(`
-		if err := p.authenticateAtOrBelow(ctx, %q); err != nil {
+		if err := %s; err != nil {
 			return nil, err
-		}`, authAnyUserTarget)
+		}`, authAnyUserCall("ctx"))
 		} else {
 			innerAuth = fmt.Sprintf(`
 		if err := p.authorize(ctx, %s, req); err != nil {
@@ -1494,11 +1507,11 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 	} else if !skipAuth {
 		if authAnyUser {
 			unaryAuth = fmt.Sprintf(`
-	// Authenticate (auth_any_user: fixed namespace target)
-	if err := p.authenticateAtOrBelow(ctx, %q); err != nil {
+	%s
+	if err := %s; err != nil {
 		return nil, err
 	}
-`, authAnyUserTarget)
+`, authAnyUserComment, authAnyUserCall("ctx"))
 		} else {
 			unaryAuth = fmt.Sprintf(`
 	// Authorize

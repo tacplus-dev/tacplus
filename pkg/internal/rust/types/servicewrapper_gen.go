@@ -934,11 +934,17 @@ func rustAuthLine(svc *parser.ServiceInfo, method *parser.MethodInfo, fullMethod
 		// an empty map, never something the caller asserted in a header.
 		base = "// c2d/auth_disabled: no authorization check\n        let " + rustCallerIdentityVar + ": std::collections::HashMap<String, String> = std::collections::HashMap::new();"
 	} else if method.AuthAnyUser {
+		// On auth_any_user methods target_namespace_field is an authored fixed
+		// namespace literal, not a request field name. Unset means no namespace
+		// check at all — "any authenticated user can call this RPC". A "/" default
+		// would gate on is_at_or_below(caller, "/"), true only for a caller sitting
+		// exactly at "/", denying every real caller.
 		targetNamespace := strings.TrimSpace(method.TargetNamespaceField)
 		if targetNamespace == "" {
-			targetNamespace = "/"
+			base = fmt.Sprintf("let %s = self.enforce_authenticated(&request).await?;", rustCallerIdentityVar)
+		} else {
+			base = fmt.Sprintf("let %s = self.enforce_at_or_below(&request, %q).await?;", rustCallerIdentityVar, targetNamespace)
 		}
-		base = fmt.Sprintf("let %s = self.enforce_at_or_below(&request, %q).await?;", rustCallerIdentityVar, targetNamespace)
 	} else {
 		base = fmt.Sprintf("let %s = self.authorize_method(\"%s\", &request).await?;", rustCallerIdentityVar, fullMethod)
 	}

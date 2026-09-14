@@ -351,11 +351,13 @@ func TestJavaMixedAuthServiceKeepsProtectedMethodsAuthorized(t *testing.T) {
 	if strings.Contains(readBlock, "checkAuthenticate();") {
 		t.Fatalf("protected Read used auth_any_user authentication only:\n%s", readBlock)
 	}
-	if !strings.Contains(watchBlock, `checkAuthenticate("/")`) {
-		t.Fatalf("auth_any_user Watch did not use root-scoped authentication:\n%s", watchBlock)
+	// Watch is auth_any_user with no target_namespace_field: any authenticated
+	// caller may call it, so the gate is authentication with no namespace check.
+	if !strings.Contains(watchBlock, "checkAuthenticate();") {
+		t.Fatalf("auth_any_user Watch did not authenticate:\n%s", watchBlock)
 	}
-	if strings.Contains(rendered, "checkAuthenticate();") {
-		t.Fatalf("generated Java wrapper must not call token-only checkAuthenticate():\n%s", rendered)
+	if strings.Contains(watchBlock, `checkAuthenticate("`) {
+		t.Fatalf("auth_any_user Watch with no target_namespace_field must not gate on a namespace:\n%s", watchBlock)
 	}
 	for _, want := range []string{
 		"if (auth == null)",

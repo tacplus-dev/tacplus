@@ -118,7 +118,7 @@ func TestTypeScriptServiceWrapperAuthWiringRendersMetadataAndMethodPolicies(t *t
 		"await this.authorize('/demo.DemoService/Tail', call.metadata, call.request);",
 		"await this.authorize('/demo.DemoService/Upload', call.metadata, null);",
 		"await this.authorize('/demo.DemoService/Chat', stream.metadata, null);",
-		"await this.authenticate(call.metadata, \"/\");",
+		"await this.authenticate(call.metadata);",
 		"call.emit('error', this.toGrpcError(err));",
 		"stream.emit('error', this.toGrpcError(err));",
 		"stream.emit('error', this.toGrpcErrorWithCode(err, grpc.status.INTERNAL));",

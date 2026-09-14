@@ -1325,9 +1325,19 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 	// not by the host's STRATUM_* vocabulary. Qualify the hosted surface's name so the
 	// trait's package, not the host's, is what the symbol is derived from.
 	authMethod := javaMethodAuthKey(servicePackage, serviceName, method.Name, parentDir)
-	authAnyUserTarget := strings.TrimSpace(method.TargetNamespaceField)
-	if authAnyUserTarget == "" {
-		authAnyUserTarget = "/"
+	// On auth_any_user methods target_namespace_field is an authored fixed
+	// namespace literal, not a request field name. Unset means no namespace check
+	// at all — "any authenticated user can call this RPC" — so the gate is the
+	// no-arg checkAuthenticate(). A "/" default would gate on
+	// isAtOrBelow(callerNamespace, "/"), true only for a caller sitting exactly at
+	// "/", denying every real caller.
+	authAnyUserCall := "checkAuthenticate()"
+	if target := strings.TrimSpace(method.TargetNamespaceField); target != "" {
+		authAnyUserCall = fmt.Sprintf("checkAuthenticate(%q)", target)
+	}
+	authAnyUserComment := "// Check authentication (auth_any_user: any authenticated caller)"
+	if strings.TrimSpace(method.TargetNamespaceField) != "" {
+		authAnyUserComment = "// Check authentication (auth_any_user: fixed namespace target)"
 	}
 
 	// Authorization check (before validation). auth_disabled methods emit NO check —
@@ -1338,14 +1348,14 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		// Nothing verifies a caller here, so accounting records carry no identity.
 		authCheck = `        java.util.Map<String, String> callerIdentity = java.util.Collections.emptyMap();`
 	} else if authAnyUser {
-		authCheck = fmt.Sprintf(`        // Check authentication (auth_any_user: fixed namespace target)
+		authCheck = fmt.Sprintf(`        %s
         java.util.Map<String, String> callerIdentity;
         try {
-            callerIdentity = checkAuthenticate(%q);
+            callerIdentity = %s;
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return;
-        }`, authAnyUserTarget)
+        }`, authAnyUserComment, authAnyUserCall)
 	} else {
 		authCheck = fmt.Sprintf(`        // Check authorization
         java.util.Map<String, String> callerIdentity;
@@ -1396,14 +1406,14 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			// Auth runs unconditionally: noop skips the handler but not auth.
 			traceAuthCheck = fmt.Sprintf(`            boolean isTracing = !request.getTraceId().isEmpty();
             boolean isNoop = isTracing && request.getNoop();
-            // Check authentication (auth_any_user: fixed namespace target)
+            %s
             java.util.Map<String, String> callerIdentity;
             try {
-                callerIdentity = checkAuthenticate(%q);
+                callerIdentity = %s;
             } catch (ProtoException e) {
                 responseObserver.onError(toGrpcError(e));
                 return;
-            }`, authAnyUserTarget)
+            }`, authAnyUserComment, authAnyUserCall)
 		} else {
 			// Auth runs unconditionally: noop skips the handler but not auth.
 			traceAuthCheck = fmt.Sprintf(`            boolean isTracing = !request.getTraceId().isEmpty();
@@ -2445,10 +2455,10 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			// Nothing verifies a caller here, so accounting records carry no identity.
 			authCheckNoReq = `        java.util.Map<String, String> callerIdentity = java.util.Collections.emptyMap();`
 		} else if authAnyUser {
-			authCheckNoReq = fmt.Sprintf(`        // Check authentication (auth_any_user: fixed namespace target)
+			authCheckNoReq = fmt.Sprintf(`        %s
         java.util.Map<String, String> callerIdentity;
         try {
-            callerIdentity = checkAuthenticate(%q);
+            callerIdentity = %s;
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return new StreamObserver<%s>() {
@@ -2456,7 +2466,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
                 @Override public void onError(Throwable t) {}
                 @Override public void onCompleted() {}
             };
-        }`, authAnyUserTarget, inputType, inputType)
+        }`, authAnyUserComment, authAnyUserCall, inputType, inputType)
 		} else if needsStreamMessageAuth {
 			authCheckNoReq = fmt.Sprintf(`        // Check authentication before per-message target namespace authorization
         java.util.Map<String, String> callerIdentity;
@@ -2561,10 +2571,10 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			// Nothing verifies a caller here, so accounting records carry no identity.
 			authCheckNoReq = `        java.util.Map<String, String> callerIdentity = java.util.Collections.emptyMap();`
 		} else if authAnyUser {
-			authCheckNoReq = fmt.Sprintf(`        // Check authentication (auth_any_user: fixed namespace target)
+			authCheckNoReq = fmt.Sprintf(`        %s
         java.util.Map<String, String> callerIdentity;
         try {
-            callerIdentity = checkAuthenticate(%q);
+            callerIdentity = %s;
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return new StreamObserver<%s>() {
@@ -2572,7 +2582,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
                 @Override public void onError(Throwable t) {}
                 @Override public void onCompleted() {}
             };
-        }`, authAnyUserTarget, inputType, inputType)
+        }`, authAnyUserComment, authAnyUserCall, inputType, inputType)
 		} else if needsStreamMessageAuth {
 			authCheckNoReq = fmt.Sprintf(`        // Check authentication before per-message target namespace authorization
         java.util.Map<String, String> callerIdentity;

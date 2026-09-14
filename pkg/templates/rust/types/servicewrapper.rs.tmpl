@@ -50,6 +50,10 @@ pub trait Authorizer: Send + Sync + 'static {
     /// must equal or be a path-segment ancestor of `target_namespace`. Used by methods
     /// annotated with `target_namespace_field` for tenant-scoped operations.
     async fn check_at_or_below(&self, authorization: Option<&str>, target_namespace: &str) -> Result<std::collections::HashMap<String, String>, tonic::Status>;
+    /// Verifies token signature, audience and expiry only — no entitlement check
+    /// and no namespace check. Used by `auth_any_user` methods that declare no
+    /// fixed target namespace: any authenticated caller may call them.
+    async fn authenticate(&self, authorization: Option<&str>) -> Result<std::collections::HashMap<String, String>, tonic::Status>;
 }
 
 /// ValidationWrapper wraps a {{.ServiceName}}Handler with authorization and validation.
@@ -88,7 +92,8 @@ impl ValidationWrapper {
 
     /// Sets the authentication function for services that use auth_any_user.
     /// Uses the same authorizer slot; auth_any_user RPC bodies call
-    /// `check_at_or_below` with their fixed namespace target.
+    /// `authenticate`, or `check_at_or_below` when they declare a fixed
+    /// namespace target.
     pub async fn set_authenticate_func(&self, auth: Option<Arc<dyn Authorizer>>) {
         self.set_authorize_func(auth).await;
     }
@@ -183,6 +188,25 @@ impl ValidationWrapper {
                     .get("authorization")
                     .and_then(|v| v.to_str().ok());
                 a.check_at_or_below(authorization, target_namespace).await
+            }
+            None => Err(tonic::Status::unauthenticated(
+                "authorizer not wired (build/SM bug) — auth is mandatory and cannot be disabled")),
+        }
+    }
+
+    /// Authenticate only: any caller holding a valid token is admitted. Fail-closed:
+    /// a None authorizer rejects. Used by `auth_any_user` methods with no fixed
+    /// target namespace — there is no namespace to compare against, so gating on
+    /// one would deny every caller not sitting exactly at "/".
+    #[allow(dead_code)]
+    async fn enforce_authenticated<T>(&self, req: &tonic::Request<T>) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
+        let auth = self.authorizer.read().await;
+        match *auth {
+            Some(ref a) => {
+                let authorization = req.metadata()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok());
+                a.authenticate(authorization).await
             }
             None => Err(tonic::Status::unauthenticated(
                 "authorizer not wired (build/SM bug) — auth is mandatory and cannot be disabled")),

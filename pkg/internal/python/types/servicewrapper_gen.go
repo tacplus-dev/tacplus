@@ -614,11 +614,17 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 	authCallWithReq := ""
 	if !authDisabled {
 		if authAnyUser {
+			// On auth_any_user methods target_namespace_field is an authored fixed
+			// namespace literal, not a request field name. Unset means no namespace
+			// check at all — "any authenticated user can call this RPC". A "/"
+			// default would gate on is_at_or_below(caller, "/"), true only for a
+			// caller sitting exactly at "/", denying every real caller.
 			targetNamespace := strings.TrimSpace(method.TargetNamespaceField)
 			if targetNamespace == "" {
-				targetNamespace = "/"
+				authCallNoReq = "self._authenticate(context)"
+			} else {
+				authCallNoReq = fmt.Sprintf("self._authenticate(context, %q)", targetNamespace)
 			}
-			authCallNoReq = fmt.Sprintf("self._authenticate(context, %q)", targetNamespace)
 			authCallWithReq = authCallNoReq
 		} else {
 			authCallNoReq = fmt.Sprintf("self._authorize(context, '%s')", fullMethodPath)

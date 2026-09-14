@@ -2097,6 +2097,16 @@ impl {{.WrapperModPath}}::Authorizer for AuthorizerAdapter {
                 _ => tonic::Status::permission_denied(e.message),
             })
     }
+
+    async fn authenticate(&self, authorization: Option<&str>) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
+        self.authorizer
+            .authenticate_caller(authorization)
+            .map(|tw| GrpcAuthorizer::identity_claims(&tw))
+            .map_err(|e| match e.code {
+                16 => tonic::Status::unauthenticated(e.message),
+                _ => tonic::Status::permission_denied(e.message),
+            })
+    }
 }
 {{- end}}
 {{- end}}

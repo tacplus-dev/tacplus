@@ -246,9 +246,13 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
     }
 {{- end}}
 
-    /** Check authentication at the root namespace. Fail-closed if not wired. */
+    /**
+     * Check authentication only — token signature/audience, no namespace check.
+     * Used by auth_any_user methods that declare no fixed target namespace.
+     * Fail-closed if not wired.
+     */
     private java.util.Map<String, String> checkAuthenticate() throws ProtoException {
-        return checkAuthenticate("/");
+        return checkAuthenticate(null);
     }
 
     /** Check authentication and enforce a fixed namespace target. */

@@ -277,6 +277,27 @@ func TestAuthenticateAtOrBelowNamespaceRule(t *testing.T) {
 	}
 }
 
+// auth_any_user with no authored target_namespace_field admits ANY authenticated
+// caller: the generated wrapper calls Authenticate, not AuthenticateAtOrBelow.
+// This pins why — AuthenticateAtOrBelow(ctx, "/") is IsAtOrBelow(caller, "/"),
+// true only for a caller sitting exactly at "/", so a "/" default would reject
+// every real caller and invert the annotation.
+func TestAuthenticateAdmitsNonRootNamespaceCaller(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+
+	tenant := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("service").SetSubject("caller-svc").SetNamespace("/tenants/acme")
+	})
+
+	if err := a.Authenticate(bearerCtx(tenant)); err != nil {
+		t.Fatalf("auth_any_user must admit any authenticated caller, got: %v", err)
+	}
+	if err := a.AuthenticateAtOrBelow(bearerCtx(tenant), "/"); err == nil {
+		t.Fatal("a root target rejects every non-root caller; that is why the auth_any_user default must not be \"/\"")
+	}
+}
+
 // Authenticate (used by EnforcingUnaryInterceptor / AuthEnforcingRegistrar)
 // rejects wrong-audience tokens — the specific gap that allowed kernel-audience
 // tokens on the eventbus TypedService publish path.

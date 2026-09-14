@@ -11,14 +11,21 @@ import (
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
 )
 
-func TestGoAuthAnyUserUnaryUsesFixedNamespaceGate(t *testing.T) {
+// auth_any_user means "any authenticated user can call this RPC". The optional
+// target_namespace_field on such a method is an authored FIXED namespace
+// literal, not a request field name. With no literal there is no namespace to
+// compare against, so the gate is plain authentication; defaulting the target to
+// "/" instead would make IsAtOrBelow(callerNamespace, "/") the gate, which is
+// true only for a caller sitting exactly at "/" — every real caller denied.
+func TestGoAuthAnyUserUnaryGate(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		method     *parser.MethodInfo
-		wantTarget string
+		name     string
+		method   *parser.MethodInfo
+		wantCall string
+		notWant  string
 	}{
 		{
-			name: "plain unary defaults root",
+			name: "no target namespace field authenticates only",
 			method: &parser.MethodInfo{
 				Name:           "Read",
 				InputType:      "PlainRequest",
@@ -27,10 +34,11 @@ func TestGoAuthAnyUserUnaryUsesFixedNamespaceGate(t *testing.T) {
 				FullOutputType: "contractclient.PlainResponse",
 				AuthAnyUser:    true,
 			},
-			wantTarget: "/",
+			wantCall: `p.authenticate(ctx)`,
+			notWant:  `p.authenticateAtOrBelow(`,
 		},
 		{
-			name: "trace unary uses declared literal",
+			name: "declared literal keeps the fixed namespace gate",
 			method: &parser.MethodInfo{
 				Name:                 "TraceRead",
 				InputType:            "ContractRequest",
@@ -40,7 +48,8 @@ func TestGoAuthAnyUserUnaryUsesFixedNamespaceGate(t *testing.T) {
 				AuthAnyUser:          true,
 				TargetNamespaceField: "/tenants/acme",
 			},
-			wantTarget: "/tenants/acme",
+			wantCall: `p.authenticateAtOrBelow(ctx, "/tenants/acme")`,
+			notWant:  `p.authenticate(ctx)`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,14 +65,39 @@ func TestGoAuthAnyUserUnaryUsesFixedNamespaceGate(t *testing.T) {
 				nil,
 			)
 
-			want := `p.authenticateAtOrBelow(ctx, "` + tc.wantTarget + `")`
-			if !strings.Contains(rendered, want) {
-				t.Fatalf("Go auth_any_user unary wrapper missing fixed namespace gate %q:\n%s", want, rendered)
+			if !strings.Contains(rendered, tc.wantCall) {
+				t.Fatalf("Go auth_any_user unary wrapper missing %q:\n%s", tc.wantCall, rendered)
 			}
-			if strings.Contains(rendered, "p.authenticate(ctx)") {
-				t.Fatalf("Go auth_any_user unary wrapper must not use token-only authentication:\n%s", rendered)
+			if strings.Contains(rendered, tc.notWant) {
+				t.Fatalf("Go auth_any_user unary wrapper must not contain %q:\n%s", tc.notWant, rendered)
 			}
 		})
+	}
+}
+
+// The PAGE surface builds its auth block independently of the unary one; pin the
+// same rule there.
+func TestGoAuthAnyUserPageWithoutTargetAuthenticatesOnly(t *testing.T) {
+	method := pageMethod()
+	method.AuthAnyUser = true
+
+	rendered := generateGRPCWrapper(
+		&parser.ServiceInfo{Name: "Catalog", IsS2S: true, Methods: []*parser.MethodInfo{method}},
+		method,
+		"catalog",
+		"services",
+		"",
+		map[string]service.AccountingInfo{},
+		map[string]string{},
+		proto.SkippedTraceTypes{},
+		nil,
+	)
+
+	if !strings.Contains(rendered, "p.authenticate(ctx)") {
+		t.Fatalf("Go auth_any_user PAGE wrapper with no target_namespace_field must authenticate only:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "p.authenticateAtOrBelow(") {
+		t.Fatalf("Go auth_any_user PAGE wrapper with no target_namespace_field must not gate on a namespace:\n%s", rendered)
 	}
 }
 

@@ -503,7 +503,14 @@ impl Authorizer {
     /// handler-provided additional_services). Fail-closed: missing, invalid, or
     /// wrong-audience tokens are rejected.
     pub fn authenticate(&self, authorization: Option<&str>) -> Result<()> {
-        self.verify_bearer(authorization).map(|_| ())
+        self.authenticate_caller(authorization).map(|_| ())
+    }
+
+    /// Same gate as `authenticate`, returning the VERIFIED token so a caller that
+    /// must attribute the call (accounting identity) reads claims the authorizer
+    /// itself checked — never something the caller wrote into a header.
+    pub fn authenticate_caller(&self, authorization: Option<&str>) -> Result<token::Token> {
+        self.verify_bearer(authorization)
     }
 
     /// Cleans up resources. Safe to call multiple times.

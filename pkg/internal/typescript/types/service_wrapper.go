@@ -569,9 +569,14 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 			return ""
 		}
 		if authAnyUser {
+			// On auth_any_user methods target_namespace_field is an authored fixed
+			// namespace literal, not a request field name. Unset means no namespace
+			// check at all — "any authenticated user can call this RPC". A "/"
+			// default would gate on isAtOrBelow(caller, "/"), true only for a caller
+			// sitting exactly at "/", denying every real caller.
 			targetNamespace := strings.TrimSpace(method.TargetNamespaceField)
 			if targetNamespace == "" {
-				targetNamespace = "/"
+				return fmt.Sprintf("await this.authenticate(%s);", metadataExpr)
 			}
 			return fmt.Sprintf("await this.authenticate(%s, %q);", metadataExpr, targetNamespace)
 		}

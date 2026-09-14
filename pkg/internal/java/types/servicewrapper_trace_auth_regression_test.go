@@ -87,7 +87,7 @@ func TestJavaUnaryTraceNoopDoesNotSkipAuthenticate(t *testing.T) {
 	if strings.Contains(rendered, "if (!isNoop)") {
 		t.Fatalf("auth must not be gated on isNoop — noop skips the handler but not auth:\n%s", rendered)
 	}
-	authIdx := strings.Index(rendered, `checkAuthenticate("/");`)
+	authIdx := strings.Index(rendered, "checkAuthenticate();")
 	noopIdx := strings.Index(rendered, "if (isNoop)")
 	if authIdx < 0 {
 		t.Fatalf("trace-aware auth_any_user wrapper missing checkAuthenticate call:\n%s", rendered)

@@ -720,17 +720,21 @@ func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOpti
 	} else if method.ServerStreaming {
 		// Server streaming — validate request, call, return stream
 		validateInput := goValidateRef(method.FullInputType, method.InputType, servicePackage)
-		return fmt.Sprintf(`// %s calls %s.%s (server streaming).
-func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOption) (grpc.ServerStreamingClient[%s], error) {
-	%s
-
+		var inputVal string
+		if validateInput != "" {
+			inputVal = fmt.Sprintf(`
 	// Validate request before sending.
 	if err := %s(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("validation failed: %%v", err))
 	}
-
+`, validateInput)
+		}
+		return fmt.Sprintf(`// %s calls %s.%s (server streaming).
+func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOption) (grpc.ServerStreamingClient[%s], error) {
+	%s
+%s
 	return c.client.%s(ctx, req, opts...)
-}`, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, auth, validateInput, method.Name), nil
+}`, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, auth, inputVal, method.Name), nil
 	} else if method.ClientStreaming {
 		// Client streaming — call, return stream sender. Auth is stream-open
 		// scoped (the `auth` block below attaches the token to the stream

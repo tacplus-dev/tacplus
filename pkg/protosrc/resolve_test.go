@@ -376,3 +376,59 @@ func TestCachedRepoConcurrent(t *testing.T) {
 		t.Fatalf("cache worktree is corrupt: %v\n%s", err, out)
 	}
 }
+
+// TestCachedRepoLatestTracksDefaultBranch pins what tag "latest" means: the
+// remote's default branch (what origin/HEAD points at), not whichever branch
+// the remote happens to advertise first. The cache is refreshed twice because
+// only the second call takes the fetch path — the first clones, and a fresh
+// clone lands on the default branch regardless.
+func TestCachedRepoLatestTracksDefaultBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	// Origin with two branches; the non-default one sorts first.
+	origin := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"checkout", "-q", "-b", "aaa-feature"},
+		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "feature"},
+		{"checkout", "-q", "main"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = origin
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	want := revParse(t, origin, "main")
+	feature := revParse(t, origin, "aaa-feature")
+
+	t.Setenv("HOME", t.TempDir())
+
+	for i := 1; i <= 2; i++ {
+		res, err := cachedRepo(origin, "latest")
+		if err != nil {
+			t.Fatalf("cachedRepo (call %d): %v", i, err)
+		}
+		got := revParse(t, res.Dir, "HEAD")
+		if got == feature {
+			t.Fatalf("call %d: checked out aaa-feature (%s); want default branch main (%s)", i, feature, want)
+		}
+		if got != want {
+			t.Fatalf("call %d: HEAD is %s; want main (%s)", i, got, want)
+		}
+	}
+}
+
+func revParse(t *testing.T, dir, ref string) string {
+	t.Helper()
+	cmd := exec.Command("git", "rev-parse", ref)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse %s in %s: %v", ref, dir, err)
+	}
+	return strings.TrimSpace(string(out))
+}

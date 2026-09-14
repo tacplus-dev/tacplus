@@ -216,9 +216,16 @@ func cachedRepo(url string, tag string) (*Result, error) {
 // fetchAndCheckout fetches from origin and checks out the requested tag/ref.
 func fetchAndCheckout(dir string, tag string, auth []string) error {
 	if tag == "" || tag == "latest" {
-		// Fetch and checkout origin/HEAD
-		if err := gitIn(dir, auth, "fetch", "origin"); err != nil {
-			return fmt.Errorf("git fetch failed: %w", err)
+		// Fetch exactly the ref the remote's HEAD points at — its default
+		// branch, which is what a plain "git clone" checks out and what
+		// "latest" means here. A bare "git fetch origin" instead writes every
+		// advertised branch into FETCH_HEAD; once the cache sits on a detached
+		// HEAD (which it does from the first checkout onwards) none of those
+		// lines is marked for-merge, so "checkout FETCH_HEAD" takes the first
+		// one listed — an arbitrary branch, not the default. Fetching the one
+		// symbolic ref leaves FETCH_HEAD unambiguous.
+		if err := gitIn(dir, auth, "fetch", "origin", "HEAD"); err != nil {
+			return fmt.Errorf("git fetch origin HEAD failed: %w", err)
 		}
 		if err := gitIn(dir, auth, "checkout", "FETCH_HEAD"); err != nil {
 			return fmt.Errorf("git checkout FETCH_HEAD failed: %w", err)

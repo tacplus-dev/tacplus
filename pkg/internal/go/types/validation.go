@@ -1144,7 +1144,8 @@ func Validate%sWithDepth(m *%s, depth int) error {
 				"record", "record_key", "record_owner",
 				"subscribe",
 				"identity_namespace", "identity_subject",
-				"identity_spiffe_subject", "identity_spiffe_resource":
+				"identity_spiffe_subject", "identity_spiffe_resource",
+				"principal", "store_principal", "namespace", "store_namespace":
 
 				// Non-validation annotations — used by other code generators (statedb, constants, etc.)
 				// Silently skip: these do not produce validation code.

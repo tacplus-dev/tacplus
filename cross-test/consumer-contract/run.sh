@@ -561,7 +561,6 @@ assert_fixture_coverage() {
     'service FixtureStoreEntryStoreService'
     'rpc Put\(FixtureStoreEntry\)'
     'rpc List\(trace\.TraceRequest\)'
-    'message FixtureEventNodeNode'
     'message FixtureHealth'
     'service FixtureTokenMint'
     'rpc TokenMint\(tokenrequest\.TokenMintRequest\)'
@@ -727,9 +726,9 @@ assert_eventbus_subscriber_meta_wiring() {
     go|rust|java)
       if [[ -d "$output/proto" ]]; then
         require_generated_pattern "$output/proto" 'message EventBusRecordMeta \{ bytes key = 1; string topic = 2; int32 partition = 3; int64 offset = 4; google\.protobuf\.Timestamp timestamp = 5;' "generated EventBus proto does not define metadata with the documented wire fields"
-        require_generated_pattern "$output/proto" 'rpc SubscribeTo[A-Za-z0-9]+\(trace\.TraceRequest\) returns \(stream [A-Za-z0-9]+SubscribeRecord\);' "generated topic Subscribe RPC does not stream a metadata-bearing envelope"
+        require_generated_pattern "$output/proto" 'rpc SubscribeTo[A-Za-z0-9]+\(stream eventbus_support\.SubscribeRequest\) returns \(stream [A-Za-z0-9]+SubscribeRecord\);' "generated topic Subscribe RPC does not stream a metadata-bearing envelope"
         require_generated_pattern "$output/proto" 'message [A-Za-z0-9]+SubscribeRecord \{ EventBusRecordMeta meta = 1; [A-Za-z0-9_.]+ payload = 2;' "generated topic Subscribe envelope does not expose meta field 1 and typed payload field 2"
-        if rg -n 'rpc SubscribeTo[A-Za-z0-9]+\(trace\.TraceRequest\) returns \(stream FixtureEvent\);' "$output/proto" >/dev/null; then
+        if rg -n 'rpc SubscribeTo[A-Za-z0-9]+\(stream eventbus_support\.SubscribeRequest\) returns \(stream FixtureEvent\);' "$output/proto" >/dev/null; then
           die "generated topic Subscribe RPC still streams the bare fixture event payload"
         fi
       fi

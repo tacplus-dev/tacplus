@@ -6,6 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
+
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 )
 
@@ -229,5 +233,46 @@ func TestGoValidationQuotesRequiredIfEqValue(t *testing.T) {
 	}
 	if strings.Contains(rendered, `== "a" || Pwned()`) {
 		t.Fatalf("required_if_eq value broke out of the generated literal:\n%s", rendered)
+	}
+}
+
+// principal/store_principal/namespace/store_namespace are non-validation
+// FieldOption annotations (sys/spec.proto 60083-60088) consumed by the MCP
+// dispatch and RecordMap egress-sanitizer generators, not this validator —
+// generateValidationHelpers must treat them the same as identity_namespace
+// and friends (silently skip) rather than warn that it has no template for
+// them. consumer-build-go's "warning/error output found" gate turns that
+// warning into a hard generation failure for any message carrying one.
+func TestGoValidationSkipsPrincipalNamespaceAnnotationsSilently(t *testing.T) {
+	core, logs := observer.New(zapcore.WarnLevel)
+	restore := zap.L()
+	zap.ReplaceGlobals(zap.New(core))
+	defer zap.ReplaceGlobals(restore)
+
+	msg := model.Message{
+		Name: "AuditCaller",
+		Fields: []model.Field{
+			{Name: "principal_field", Type: "string", Annotations: map[string]model.AnnotationValue{
+				"principal": {Type: model.AnnotationTypeBool, BoolValue: true},
+			}},
+			{Name: "store_principal_field", Type: "string", Annotations: map[string]model.AnnotationValue{
+				"store_principal": {Type: model.AnnotationTypeBool, BoolValue: true},
+			}},
+			{Name: "namespace_field", Type: "string", Annotations: map[string]model.AnnotationValue{
+				"namespace": {Type: model.AnnotationTypeBool, BoolValue: true},
+			}},
+			{Name: "store_namespace_field", Type: "string", Annotations: map[string]model.AnnotationValue{
+				"store_namespace": {Type: model.AnnotationTypeBool, BoolValue: true},
+			}},
+		},
+	}
+
+	var b strings.Builder
+	if err := generateValidationHelpers(&b, msg); err != nil {
+		t.Fatalf("generateValidationHelpers: %v", err)
+	}
+
+	if got := logs.Len(); got != 0 {
+		t.Fatalf("expected no warnings, got %d: %v", got, logs.All())
 	}
 }

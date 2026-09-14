@@ -1035,10 +1035,21 @@ public final class TokenWrapper {
         int sDerLen = sLen + (sPad ? 1 : 0);
         int seqLen = 2 + rDerLen + 2 + sDerLen;
 
-        byte[] der = new byte[2 + seqLen];
-        der[0] = 0x30;
-        der[1] = (byte) seqLen;
-        int off = 2;
+        // Emit the DER length in the same two forms derToJws parses: short form
+        // below 128, long form above. ES512 is the only algorithm that reaches
+        // the long form — P-521's keyBytes is 66 and r/s each encode to at most
+        // 66 content bytes (a 66-byte value's top byte is 0x01, so it never
+        // takes the sign-padding byte), so seqLen tops out at 2+66+2+66 = 136
+        // and one length byte is always enough. ES256 (seqLen <= 70) and ES384
+        // (seqLen <= 102) stay in the short form.
+        boolean seqLenLong = seqLen > 127;
+        byte[] der = new byte[2 + (seqLenLong ? 1 : 0) + seqLen];
+        int off = 0;
+        der[off++] = 0x30;
+        if (seqLenLong) {
+            der[off++] = (byte) 0x81; // one length byte follows
+        }
+        der[off++] = (byte) seqLen;
         // r INTEGER
         der[off++] = 0x02;
         der[off++] = (byte) rDerLen;

@@ -937,6 +937,7 @@ import (
 	grpcserver "gitlab.com/example/tacplus/consumer/contractclient/model/chassis/grpcserver"
 	"gitlab.com/example/tacplus/consumer/contractclient/model/chassis/collection"
 	"gitlab.com/example/tacplus/consumer/contractclient/model/chassis/servicemanager"
+	wrapperToken "gitlab.com/example/tacplus/consumer/contractclient/model/chassis/token"
 	s2sm "gitlab.com/example/tacplus/consumer/contractclient/model/s2sm"
 	auditserver "gitlab.com/example/tacplus/consumer/contractclient/model/s2sm/grpc/servers/services/contractclient"
 	server "gitlab.com/example/tacplus/consumer/contractclient/model/s2sm/grpc/servers/contract/contractclient"
@@ -1350,12 +1351,12 @@ func TestGoBothHandwrittenConsumerCompiles(t *testing.T) {
 	grpcSrv := grpc.NewServer()
 	defer grpcSrv.Stop()
 	apiWrapper := server.NewContractApi(serviceHandler{})
-	apiWrapper.SetAuthorizeFunc(func(context.Context, string, any) error { return nil })
+	apiWrapper.SetAuthorizeFunc(func(context.Context, string, any) (*wrapperToken.TokenWrapper, error) { return nil, nil })
 	if err := apiWrapper.RegisterServices(grpcSrv); err != nil {
 		t.Fatalf("register api wrapper: %v", err)
 	}
 	s2sWrapper := server.NewContractS2S(s2sServiceHandler{})
-	s2sWrapper.SetAuthorizeFunc(func(context.Context, string, any) error { return nil })
+	s2sWrapper.SetAuthorizeFunc(func(context.Context, string, any) (*wrapperToken.TokenWrapper, error) { return nil, nil })
 	if err := s2sWrapper.RegisterServices(grpcSrv); err != nil {
 		t.Fatalf("register s2s wrapper: %v", err)
 	}
@@ -1485,9 +1486,9 @@ func TestGoWireStreamValidation(t *testing.T) {
 	lis := bufconn.Listen(1024 * 1024)
 	grpcSrv := grpc.NewServer()
 	apiWrapper := server.NewContractApi(streamValidationHandler{})
-	apiWrapper.SetAuthorizeFunc(func(context.Context, string, any) error { return nil })
-	apiWrapper.SetAuthenticateFunc(func(context.Context) error { return nil })
-	apiWrapper.SetAuthenticateAtOrBelowFunc(func(context.Context, string) error { return nil })
+	apiWrapper.SetAuthorizeFunc(func(context.Context, string, any) (*wrapperToken.TokenWrapper, error) { return nil, nil })
+	apiWrapper.SetAuthenticateFunc(func(context.Context) (*wrapperToken.TokenWrapper, error) { return nil, nil })
+	apiWrapper.SetAuthenticateAtOrBelowFunc(func(context.Context, string) (*wrapperToken.TokenWrapper, error) { return nil, nil })
 	if err := apiWrapper.RegisterServices(grpcSrv); err != nil {
 		t.Fatalf("register api wrapper: %v", err)
 	}
@@ -1602,9 +1603,9 @@ func TestGoWireEgressRedactionFailClosed(t *testing.T) {
 	lis := bufconn.Listen(1024 * 1024)
 	grpcSrv := grpc.NewServer()
 	apiWrapper := server.NewContractApi(egressRedactionHandler{})
-	apiWrapper.SetAuthorizeFunc(func(context.Context, string, any) error { return nil })
-	apiWrapper.SetAuthenticateFunc(func(context.Context) error { return nil })
-	apiWrapper.SetAuthenticateAtOrBelowFunc(func(context.Context, string) error { return nil })
+	apiWrapper.SetAuthorizeFunc(func(context.Context, string, any) (*wrapperToken.TokenWrapper, error) { return nil, nil })
+	apiWrapper.SetAuthenticateFunc(func(context.Context) (*wrapperToken.TokenWrapper, error) { return nil, nil })
+	apiWrapper.SetAuthenticateAtOrBelowFunc(func(context.Context, string) (*wrapperToken.TokenWrapper, error) { return nil, nil })
 	apiWrapper.SetAnonymizeHmacKey([]byte("per-deployment-key"))
 	if err := apiWrapper.RegisterServices(grpcSrv); err != nil {
 		t.Fatalf("register api wrapper: %v", err)
@@ -1713,48 +1714,48 @@ func TestGoBothRuntimeSmokePublicRead(t *testing.T) {
 		listEventsCalls: &listEventsCalls,
 		watchCalls:      &watchCalls,
 	})
-	apiWrapper.SetAuthorizeFunc(func(ctx context.Context, _ string, req any) error {
+	apiWrapper.SetAuthorizeFunc(func(ctx context.Context, _ string, req any) (*wrapperToken.TokenWrapper, error) {
 		authorizeCalls++
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok || len(md.Get("authorization")) == 0 {
-			return status.Error(codes.Unauthenticated, "missing authorization header")
+			return nil, status.Error(codes.Unauthenticated, "missing authorization header")
 		}
 		if got := md.Get("authorization")[0]; got != "Bearer token" {
-			return status.Errorf(codes.Unauthenticated, "unexpected authorization header %q", got)
+			return nil, status.Errorf(codes.Unauthenticated, "unexpected authorization header %q", got)
 		}
 		typed, ok := req.(*types.ContractRequest)
 		if !ok || typed == nil {
-			return status.Error(codes.Internal, "authorize did not receive the request message")
+			return nil, status.Error(codes.Internal, "authorize did not receive the request message")
 		}
 		if typed.GetTenantNamespace() != "tenant.alpha" {
-			return status.Error(codes.PermissionDenied, "caller namespace is not at-or-above target")
+			return nil, status.Error(codes.PermissionDenied, "caller namespace is not at-or-above target")
 		}
-		return nil
+		return nil, nil
 	})
-	apiWrapper.SetAuthenticateFunc(func(ctx context.Context) error {
+	apiWrapper.SetAuthenticateFunc(func(ctx context.Context) (*wrapperToken.TokenWrapper, error) {
 		authenticateCalls++
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok || len(md.Get("authorization")) == 0 {
-			return status.Error(codes.Unauthenticated, "missing authorization header")
+			return nil, status.Error(codes.Unauthenticated, "missing authorization header")
 		}
 		if got := md.Get("authorization")[0]; got != "Bearer token" {
-			return status.Errorf(codes.Unauthenticated, "unexpected authorization header %q", got)
+			return nil, status.Errorf(codes.Unauthenticated, "unexpected authorization header %q", got)
 		}
-		return nil
+		return nil, nil
 	})
-	apiWrapper.SetAuthenticateAtOrBelowFunc(func(ctx context.Context, targetNamespace string) error {
+	apiWrapper.SetAuthenticateAtOrBelowFunc(func(ctx context.Context, targetNamespace string) (*wrapperToken.TokenWrapper, error) {
 		authenticateCalls++
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok || len(md.Get("authorization")) == 0 {
-			return status.Error(codes.Unauthenticated, "missing authorization header")
+			return nil, status.Error(codes.Unauthenticated, "missing authorization header")
 		}
 		if got := md.Get("authorization")[0]; got != "Bearer token" {
-			return status.Errorf(codes.Unauthenticated, "unexpected authorization header %q", got)
+			return nil, status.Errorf(codes.Unauthenticated, "unexpected authorization header %q", got)
 		}
 		if targetNamespace != "/" && targetNamespace != "" {
-			return status.Errorf(codes.PermissionDenied, "unexpected target namespace %q", targetNamespace)
+			return nil, status.Errorf(codes.PermissionDenied, "unexpected target namespace %q", targetNamespace)
 		}
-		return nil
+		return nil, nil
 	})
 	if err := apiWrapper.RegisterServices(grpcSrv); err != nil {
 		t.Fatalf("register api wrapper: %v", err)

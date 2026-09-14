@@ -49,6 +49,7 @@ healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"{{.ModuleBasePath}}/chassis/grpcconfig"
 	"{{.ModuleBasePath}}/chassis/service_im"
 	"{{.ModuleBasePath}}/chassis/servicemanager"
+	wrapperToken "{{.ModuleBasePath}}/chassis/token"
 	{{if .HasDiskStores}}
 	"{{.ModuleBasePath}}/chassis/diskstore"
 	diskstores "{{.ModuleBasePath}}/{{.SmPrefix}}/diskstore"
@@ -145,9 +146,9 @@ s2sConnections map[string]*serviceconnection.ServiceConnection
 smbAuthorityConn *serviceconnection.ServiceConnection
 {{end}}
 auth             grpcserver.Authorizer
-authorizeFunc    func(ctx context.Context, fullMethod string, req any) error
-authenticateFunc func(ctx context.Context) error
-authenticateAtOrBelowFunc func(ctx context.Context, targetNamespace string) error
+authorizeFunc    func(ctx context.Context, fullMethod string, req any) (*wrapperToken.TokenWrapper, error)
+authenticateFunc func(ctx context.Context) (*wrapperToken.TokenWrapper, error)
+authenticateAtOrBelowFunc func(ctx context.Context, targetNamespace string) (*wrapperToken.TokenWrapper, error)
 {{if .HasTimeseriesProjections}}
 tsInsertFunc {{.ProjectionPkgAlias}}.TimeseriesInsertFunc
 {{end}}
@@ -597,7 +598,8 @@ return sm.identity.GetToken
 // Always available — services that disable auth in proto simply won't call it,
 // but it remains available for ad-hoc use in hand-written code (e.g. a store S2S).
 func (sm *ServiceManager) Authorize(ctx context.Context, fullMethod string, req any) error {
-return sm.authorizeFunc(ctx, fullMethod, req)
+_, err := sm.authorizeFunc(ctx, fullMethod, req)
+return err
 }
 
 // Authorizer returns the underlying Authorizer for direct access to

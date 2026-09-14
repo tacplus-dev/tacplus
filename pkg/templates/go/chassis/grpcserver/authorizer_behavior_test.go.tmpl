@@ -111,7 +111,7 @@ func TestAuthorizerAcceptsValidServiceToken(t *testing.T) {
 	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
 
 	tok := signedToken(t, key, serviceToken("caller-svc"))
-	if err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
+	if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
 		t.Fatalf("valid service token must be authorized, got: %v", err)
 	}
 }
@@ -124,7 +124,7 @@ func TestAuthorizerRejectsServiceNotInAuthServices(t *testing.T) {
 	a.SetMethodAuth(testMethodKey, []string{"allowed-svc"})
 
 	tok := signedToken(t, key, serviceToken("other-svc"))
-	if err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
+	if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
 		t.Fatal("service not in auth_services must be denied")
 	}
 }
@@ -142,7 +142,7 @@ func TestAuthorizerAlternationPatternIsFullyAnchored(t *testing.T) {
 		a := authorizerWithKeys(t, jwkForKey(t, key))
 		a.SetMethodAuth(testMethodKey, []string{"billing|payments"})
 		tok := signedToken(t, key, serviceToken(caller))
-		if err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
+		if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
 			t.Fatalf("caller %q exactly matches an alternation branch and must be authorized, got: %v", caller, err)
 		}
 	}
@@ -151,7 +151,7 @@ func TestAuthorizerAlternationPatternIsFullyAnchored(t *testing.T) {
 		a := authorizerWithKeys(t, jwkForKey(t, key))
 		a.SetMethodAuth(testMethodKey, []string{"billing|payments"})
 		tok := signedToken(t, key, serviceToken(caller))
-		if err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
+		if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
 			t.Fatalf("caller %q only partially matches an alternation branch and must be denied", caller)
 		}
 	}
@@ -173,7 +173,7 @@ func TestAuthorizerRejectsExpiredToken(t *testing.T) {
 	if err := tok.Sign(key); err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	if err := a.Authorize(bearerCtx(tok.GetBase64()), testMethod, nil); err == nil {
+	if _, err := a.Authorize(bearerCtx(tok.GetBase64()), testMethod, nil); err == nil {
 		t.Fatal("expired token must be rejected")
 	}
 }
@@ -194,7 +194,7 @@ func TestAuthorizerRejectsWrongAudience(t *testing.T) {
 	if err := tok.Sign(key); err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	if err := a.Authorize(bearerCtx(tok.GetBase64()), testMethod, nil); err == nil {
+	if _, err := a.Authorize(bearerCtx(tok.GetBase64()), testMethod, nil); err == nil {
 		t.Fatal("wrong audience must be rejected")
 	}
 }
@@ -208,7 +208,7 @@ func TestAuthorizerRejectsUnknownKid(t *testing.T) {
 	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
 
 	tok := signedToken(t, key, serviceToken("caller-svc"))
-	if err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
+	if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
 		t.Fatal("token with an unknown signing key must be rejected")
 	}
 }
@@ -235,7 +235,7 @@ func TestAuthorizerRejectsTamperedSignature(t *testing.T) {
 	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
 
 	tok := signedToken(t, realKey, serviceToken("caller-svc"))
-	if err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
+	if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
 		t.Fatal("token verified against a mismatched public key must be rejected")
 	}
 }
@@ -249,7 +249,7 @@ func TestAuthorizerRejectsUserTokenMissingEntitlements(t *testing.T) {
 	tok := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
 		tok.SetSubType("user").SetSubject("someone@example.com")
 	})
-	if err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
+	if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
 		t.Fatal("user token missing service_entitlements must be denied")
 	}
 }
@@ -264,7 +264,7 @@ func TestAuthenticateAtOrBelowNamespaceRule(t *testing.T) {
 	above := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
 		tok.SetSubType("service").SetSubject("caller-svc").SetNamespace("/a")
 	})
-	if err := a.AuthenticateAtOrBelow(bearerCtx(above), "/a/b"); err != nil {
+	if _, err := a.AuthenticateAtOrBelow(bearerCtx(above), "/a/b"); err != nil {
 		t.Fatalf("caller at-or-above target must be allowed, got: %v", err)
 	}
 
@@ -272,7 +272,7 @@ func TestAuthenticateAtOrBelowNamespaceRule(t *testing.T) {
 	below := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
 		tok.SetSubType("service").SetSubject("caller-svc").SetNamespace("/a/b")
 	})
-	if err := a.AuthenticateAtOrBelow(bearerCtx(below), "/a"); err == nil {
+	if _, err := a.AuthenticateAtOrBelow(bearerCtx(below), "/a"); err == nil {
 		t.Fatal("caller below the target namespace must be denied")
 	}
 }
@@ -290,10 +290,10 @@ func TestAuthenticateAdmitsNonRootNamespaceCaller(t *testing.T) {
 		tok.SetSubType("service").SetSubject("caller-svc").SetNamespace("/tenants/acme")
 	})
 
-	if err := a.Authenticate(bearerCtx(tenant)); err != nil {
+	if _, err := a.Authenticate(bearerCtx(tenant)); err != nil {
 		t.Fatalf("auth_any_user must admit any authenticated caller, got: %v", err)
 	}
-	if err := a.AuthenticateAtOrBelow(bearerCtx(tenant), "/"); err == nil {
+	if _, err := a.AuthenticateAtOrBelow(bearerCtx(tenant), "/"); err == nil {
 		t.Fatal("a root target rejects every non-root caller; that is why the auth_any_user default must not be \"/\"")
 	}
 }
@@ -310,7 +310,7 @@ func TestAuthenticateRejectsWrongAudience(t *testing.T) {
 		tok.SetAudience("kernel")
 	}
 	tok := signedToken(t, key, wrongAud)
-	if err := a.Authenticate(bearerCtx(tok)); err == nil {
+	if _, err := a.Authenticate(bearerCtx(tok)); err == nil {
 		t.Fatal("wrong-audience token must be rejected by Authenticate")
 	}
 }
@@ -321,7 +321,7 @@ func TestAuthenticateAcceptsCorrectAudience(t *testing.T) {
 	a := authorizerWithKeys(t, jwkForKey(t, key))
 
 	tok := signedToken(t, key, serviceToken("caller-svc"))
-	if err := a.Authenticate(bearerCtx(tok)); err != nil {
+	if _, err := a.Authenticate(bearerCtx(tok)); err != nil {
 		t.Fatalf("correct-audience token must pass Authenticate, got: %v", err)
 	}
 }
@@ -332,7 +332,7 @@ func TestAuthenticateRejectsMissingToken(t *testing.T) {
 	a := authorizerWithKeys(t, jwkForKey(t, key))
 
 	ctx := context.Background()
-	if err := a.Authenticate(ctx); err == nil {
+	if _, err := a.Authenticate(ctx); err == nil {
 		t.Fatal("missing token must be rejected by Authenticate")
 	}
 }
@@ -360,18 +360,18 @@ func TestAuthorizerKeepsPerServicePolicyForSameNamedRpc(t *testing.T) {
 	betaTok := signedToken(t, key, serviceToken("beta-caller"))
 
 	// Each caller is authorized for its OWN service's Get.
-	if err := a.Authorize(bearerCtx(alphaTok), alphaMethod, nil); err != nil {
+	if _, err := a.Authorize(bearerCtx(alphaTok), alphaMethod, nil); err != nil {
 		t.Fatalf("alpha-caller must be authorized for %s, got: %v", alphaMethod, err)
 	}
-	if err := a.Authorize(bearerCtx(betaTok), betaMethod, nil); err != nil {
+	if _, err := a.Authorize(bearerCtx(betaTok), betaMethod, nil); err != nil {
 		t.Fatalf("beta-caller must be authorized for %s, got: %v", betaMethod, err)
 	}
 
 	// And is denied on the OTHER service's identically named Get.
-	if err := a.Authorize(bearerCtx(alphaTok), betaMethod, nil); err == nil {
+	if _, err := a.Authorize(bearerCtx(alphaTok), betaMethod, nil); err == nil {
 		t.Fatalf("alpha-caller must be denied for %s: auth_services do not cross services", betaMethod)
 	}
-	if err := a.Authorize(bearerCtx(betaTok), alphaMethod, nil); err == nil {
+	if _, err := a.Authorize(bearerCtx(betaTok), alphaMethod, nil); err == nil {
 		t.Fatalf("beta-caller must be denied for %s: auth_services do not cross services", alphaMethod)
 	}
 }
@@ -402,7 +402,7 @@ func TestAuthorizerKeepsPerServiceTargetNamespaceFieldForSameNamedRpc(t *testing
 	// A nil request would fail alpha's field lookup; beta's Get, carrying no
 	// registration of its own, must authorize on auth_services alone.
 	tok := signedToken(t, key, serviceToken("caller-svc"))
-	if err := a.Authorize(bearerCtx(tok), betaMethod, nil); err != nil {
+	if _, err := a.Authorize(bearerCtx(tok), betaMethod, nil); err != nil {
 		t.Fatalf("beta.BetaService/Get must not inherit alpha's target_namespace_field, got: %v", err)
 	}
 }

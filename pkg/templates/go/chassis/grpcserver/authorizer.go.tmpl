@@ -28,14 +28,17 @@ import (
 // Token signatures are verified against JWKs published by TokenExchanger.
 // Authorization is deterministic: a valid token with matching aud grants access.
 type Authorizer interface {
-	Authorize(ctx context.Context, fullMethod string, req any) error
+	// Each of the three checks returns the token it verified, so the caller
+	// identity the generated wrapper hands the handler comes from the same
+	// verification that just ran. On error the token is nil.
+	Authorize(ctx context.Context, fullMethod string, req any) (*tokenlib.TokenWrapper, error)
 	// Authenticate verifies token signature, audience, and expiry without
 	// checking entitlements. Used for auth_any_user services.
-	Authenticate(ctx context.Context) error
+	Authenticate(ctx context.Context) (*tokenlib.TokenWrapper, error)
 	// AuthenticateAtOrBelow verifies token authenticity and requires the token
 	// namespace to be at-or-above targetNamespace. Empty targetNamespace defaults
 	// to the root namespace "/".
-	AuthenticateAtOrBelow(ctx context.Context, targetNamespace string) error
+	AuthenticateAtOrBelow(ctx context.Context, targetNamespace string) (*tokenlib.TokenWrapper, error)
 	// SetMethodAuth registers explicit service-caller patterns for a method.
 	// methodKey is the SERVICE-QUALIFIED method identifier "pkg.Service/Method",
 	// not the bare RPC name — one process may host several services, and two of
@@ -246,13 +249,13 @@ func (a *authorizer) JwkCache() *JwkCache {
 
 // Authorize checks if the request is authorized by verifying the token signature,
 // audience, and service_entitlements claim.
-func (a *authorizer) Authorize(ctx context.Context, fullMethod string, req any) error {
+func (a *authorizer) Authorize(ctx context.Context, fullMethod string, req any) (*tokenlib.TokenWrapper, error) {
 	tw, err := a.verifyBearer(ctx)
 	if err != nil {
 		zap.L().Debug("Token verification failed",
 			zap.String("method", fullMethod),
 			zap.Error(err))
-		return err
+		return nil, err
 	}
 
 	// S2S path: service/workload tokens carry structured identity claims
@@ -265,12 +268,12 @@ func (a *authorizer) Authorize(ctx context.Context, fullMethod string, req any) 
 		methodKey := qualifiedMethodKey(fullMethod)
 		servicePath, err := tw.ServicePath()
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		allowed, ok := a.methodAuthPatterns[methodKey]
 		if !ok {
-			return protoerrors.NewErrPermissionDenied(nil,
+			return nil, protoerrors.NewErrPermissionDenied(nil,
 				"no auth_services policy configured for service caller %q on %q", servicePath, methodName)
 		}
 		matched := false
@@ -281,15 +284,15 @@ func (a *authorizer) Authorize(ctx context.Context, fullMethod string, req any) 
 			}
 		}
 		if !matched {
-			return protoerrors.NewErrPermissionDenied(nil,
+			return nil, protoerrors.NewErrPermissionDenied(nil,
 				"service %q not authorized for %q", servicePath, methodName)
 		}
 
 		// Level-or-below check (applies to S2S too when target_namespace_field is set).
 		if err := a.checkTargetNamespace(methodKey, tw.GetNamespace(), req); err != nil {
-			return err
+			return nil, err
 		}
-		return nil
+		return tw, nil
 	}
 
 	// C2S path: user tokens carry service_entitlements with exact RPC grants.
@@ -301,18 +304,18 @@ func (a *authorizer) Authorize(ctx context.Context, fullMethod string, req any) 
 			zap.String("method", fullMethod),
 			zap.String("sub", tw.GetSubject()),
 			zap.String("aud", tw.GetAudience()))
-		return protoerrors.NewErrPermissionDenied(nil, "token missing service_entitlements claim")
+		return nil, protoerrors.NewErrPermissionDenied(nil, "token missing service_entitlements claim")
 	}
 	if err := a.authorizeByServiceEntitlements(te, fullMethod); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Level-or-below check: caller's namespace must be at or above the target namespace
 	// named by the method's target_namespace_field annotation.
 	if err := a.checkTargetNamespace(methodKey, tw.GetNamespace(), req); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return tw, nil
 }
 
 // checkTargetNamespace enforces the level-or-below rule for methods annotated
@@ -462,29 +465,32 @@ func (a *authorizer) verifyBearer(ctx context.Context) (*tokenlib.TokenWrapper, 
 
 // Authenticate verifies token signature, audience, and expiry without
 // checking entitlements. Used for auth_any_user services.
-func (a *authorizer) Authenticate(ctx context.Context) error {
-	_, err := a.verifyBearer(ctx)
+func (a *authorizer) Authenticate(ctx context.Context) (*tokenlib.TokenWrapper, error) {
+	tw, err := a.verifyBearer(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// Token is valid (signature + aud). Allow for both S2S and C2S tokens.
 	// S2S tokens (sub set): authorized by valid token with correct audience.
 	// C2S tokens (auth_any_user): valid user token, no entitlement check needed.
-	return err
+	return tw, nil
 }
 
 // AuthenticateAtOrBelow verifies token authenticity and enforces the universal
 // namespace rule against a fixed target namespace.
-func (a *authorizer) AuthenticateAtOrBelow(ctx context.Context, targetNamespace string) error {
+func (a *authorizer) AuthenticateAtOrBelow(ctx context.Context, targetNamespace string) (*tokenlib.TokenWrapper, error) {
 	tw, err := a.verifyBearer(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if targetNamespace == "" {
 		targetNamespace = "/"
 	}
 	if !IsAtOrBelow(tw.GetNamespace(), targetNamespace) {
-		return protoerrors.NewErrPermissionDenied(nil,
+		return nil, protoerrors.NewErrPermissionDenied(nil,
 			"caller namespace %q is not at-or-above target %q", tw.GetNamespace(), targetNamespace)
 	}
-	return nil
+	return tw, nil
 }
 
 // EnforcingUnaryInterceptor returns a unary interceptor that verifies token
@@ -492,7 +498,7 @@ func (a *authorizer) AuthenticateAtOrBelow(ctx context.Context, targetNamespace 
 // wrong-audience tokens are rejected before the handler runs.
 func (a *authorizer) EnforcingUnaryInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if err := a.Authenticate(ctx); err != nil {
+		if _, err := a.Authenticate(ctx); err != nil {
 			return nil, err
 		}
 		return handler(ctx, req)
@@ -503,7 +509,7 @@ func (a *authorizer) EnforcingUnaryInterceptor() grpc.UnaryServerInterceptor {
 // signature and audience on every call.
 func (a *authorizer) EnforcingStreamInterceptor() grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		if err := a.Authenticate(ss.Context()); err != nil {
+		if _, err := a.Authenticate(ss.Context()); err != nil {
 			return err
 		}
 		return handler(srv, ss)
@@ -534,7 +540,7 @@ func (r *authEnforcingRegistrar) RegisterService(desc *grpc.ServiceDesc, impl an
 		wrapped.Methods[i] = grpc.MethodDesc{
 			MethodName: m.MethodName,
 			Handler: func(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
-				if err := r.auth.Authenticate(ctx); err != nil {
+				if _, err := r.auth.Authenticate(ctx); err != nil {
 					return nil, err
 				}
 				return orig(srv, ctx, dec, interceptor)
@@ -547,7 +553,7 @@ func (r *authEnforcingRegistrar) RegisterService(desc *grpc.ServiceDesc, impl an
 		wrapped.Streams[i] = grpc.StreamDesc{
 			StreamName:    s.StreamName,
 			Handler: func(srv any, stream grpc.ServerStream) error {
-				if err := r.auth.Authenticate(stream.Context()); err != nil {
+				if _, err := r.auth.Authenticate(stream.Context()); err != nil {
 					return err
 				}
 				return orig(srv, stream)

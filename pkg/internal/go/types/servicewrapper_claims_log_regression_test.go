@@ -16,14 +16,13 @@ import (
 // payload, which carries entitlements and custom claims.
 func TestGoRpcDebugLogDoesNotDumpClaims(t *testing.T) {
 	rendered := generateGRPCWrapper(
-		&parser.ServiceInfo{Name: "ContractApi", AuthDisabled: true},
+		&parser.ServiceInfo{Name: "ContractApi"},
 		&parser.MethodInfo{
-			Name:           "PublicRead",
+			Name:           "Read",
 			InputType:      "ContractRequest",
 			OutputType:     "ContractResponse",
 			FullInputType:  "contractclient.ContractRequest",
 			FullOutputType: "contractclient.ContractResponse",
-			AuthDisabled:   true,
 		},
 		"contractclient",
 		"contract",
@@ -36,15 +35,15 @@ func TestGoRpcDebugLogDoesNotDumpClaims(t *testing.T) {
 
 	for _, forbidden := range []string{
 		`zap.Any("claims"`,
-		"tok.Proto().Payload)",
+		"authTok.Proto().Payload)",
 	} {
 		if strings.Contains(rendered, forbidden) {
 			t.Fatalf("Go wrapper debug log must not dump full JWT claims (%q):\n%s", forbidden, rendered)
 		}
 	}
 	for _, want := range []string{
-		`zap.String("sub", tok.GetSubject())`,
-		`zap.String("aud", tok.GetAudience())`,
+		`zap.String("sub", authTok.GetSubject())`,
+		`zap.String("aud", authTok.GetAudience())`,
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("Go wrapper debug log missing non-sensitive identifier %q:\n%s", want, rendered)

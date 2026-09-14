@@ -29,6 +29,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,12 +44,13 @@ import (
 	am "gitlab.com/example/tacplus/consumer/contractclient/model/chassis/am"
 	"gitlab.com/example/tacplus/consumer/contractclient/model/chassis/collection"
 	"gitlab.com/example/tacplus/consumer/contractclient/model/chassis/servicemanager"
+	wrapperToken "gitlab.com/example/tacplus/consumer/contractclient/model/chassis/token"
 	server "gitlab.com/example/tacplus/consumer/contractclient/model/s2sm/grpc/servers/contract/contractclient"
 	auditserver "gitlab.com/example/tacplus/consumer/contractclient/model/s2sm/grpc/servers/services/contractclient"
 	types "gitlab.com/example/tacplus/consumer/contractclient/model/types/contract/contractclient"
+	audittypes "gitlab.com/example/tacplus/consumer/contractclient/model/types/services/contractclient"
 	accounting_pb "gitlab.com/example/tacplus/consumer/contractclient/model/types/sys/accounting"
 	trace_pb "gitlab.com/example/tacplus/consumer/contractclient/model/types/sys/trace"
-	audittypes "gitlab.com/example/tacplus/consumer/contractclient/model/types/services/contractclient"
 	"golang.org/x/net/websocket"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -59,6 +61,38 @@ import (
 )
 
 const bearerToken = "Bearer token"
+
+// The identity the auth funcs verify. Every authenticated RPC must hand the
+// handler a caller carrying exactly this subject: the generated wrapper builds
+// the caller from the token the auth check returned, so a nil caller (or a
+// different subject) on an authenticated RPC means that plumbing is broken.
+const (
+	fixtureIssuer   = "https://tokenexchanger.example.org"
+	fixtureSubject  = "spiffe://example.org/ns/contract/sa/fixture-caller"
+	fixtureAudience = "contractclient"
+)
+
+// verifiedToken is what the fixture's auth funcs return on success, standing in
+// for the token a real Authorizer verifies off the bearer header.
+var verifiedToken = mustFixtureToken()
+
+func mustFixtureToken() *wrapperToken.TokenWrapper {
+	part := func(v any) string {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			panic(err)
+		}
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
+	jwt := part(map[string]string{"alg": "EdDSA", "kid": "fixture-kid"}) + "." +
+		part(map[string]string{"iss": fixtureIssuer, "sub": fixtureSubject, "aud": fixtureAudience}) + "." +
+		base64.RawURLEncoding.EncodeToString([]byte("fixture-signature"))
+	tok, err := wrapperToken.ParseToken(jwt)
+	if err != nil {
+		panic(err)
+	}
+	return tok
+}
 
 // stats is the observable server-side state. Consumers fetch it via
 // /fixture/stats to assert handler-reached counts (e.g. an unauthenticated
@@ -112,6 +146,28 @@ func (s *stats) bump(field *int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	*field++
+}
+
+// requireCaller records a violation unless the handler received the caller the
+// auth check verified. This is the runtime half of the "verified identity
+// reaches the handler" contract — a wrapper that rebuilt the caller from
+// anything other than the auth call's own result would trip it.
+func (s *stats) requireCaller(rpc string, caller *servicemanager.Caller) {
+	if caller == nil {
+		s.violation("%s: handler received a nil caller on an authenticated rpc", rpc)
+		return
+	}
+	if got := caller.Token().GetSubject(); got != fixtureSubject {
+		s.violation("%s: handler caller subject %q, want %q", rpc, got, fixtureSubject)
+	}
+}
+
+// requireNoCaller is the inverse: an auth-disabled rpc verifies no token, so
+// its handler must see no caller at all.
+func (s *stats) requireNoCaller(rpc string, caller *servicemanager.Caller) {
+	if caller != nil {
+		s.violation("%s: handler received a caller on an auth-disabled rpc", rpc)
+	}
 }
 
 func (s *stats) violation(format string, args ...any) {
@@ -193,29 +249,33 @@ func watchSource(event *types.ContractEvent) *collection.WatchSource[types.Contr
 
 type apiHandler struct{ s *stats }
 
-func (h apiHandler) GetContract(context.Context, *servicemanager.Caller, *types.ContractRequest) (*types.ContractResponse, error) {
+func (h apiHandler) GetContract(_ context.Context, caller *servicemanager.Caller, _ *types.ContractRequest) (*types.ContractResponse, error) {
 	h.s.bump(&h.s.ReadCalls)
+	h.s.requireCaller("GetContract", caller)
 	return validResponse(), nil
 }
 
-func (h apiHandler) GetPublicContract(_ context.Context, _ *servicemanager.Caller, req *types.ContractRequest) (*types.ContractResponse, error) {
+func (h apiHandler) GetPublicContract(_ context.Context, caller *servicemanager.Caller, req *types.ContractRequest) (*types.ContractResponse, error) {
 	h.s.bump(&h.s.PublicReadCalls)
+	h.s.requireNoCaller("GetPublicContract", caller)
 	if req.GetItemId() == "bad-response" {
 		return &types.ContractResponse{Accepted: true}, nil
 	}
 	return validResponse(), nil
 }
 
-func (h apiHandler) ListEvents(_ *servicemanager.Caller, req *types.ContractRequest) (iter.Seq2[*types.ContractEvent, error], error) {
+func (h apiHandler) ListEvents(caller *servicemanager.Caller, req *types.ContractRequest) (iter.Seq2[*types.ContractEvent, error], error) {
 	h.s.bump(&h.s.ListEventsCalls)
+	h.s.requireCaller("ListEvents", caller)
 	if req.GetItemId() == "bad-event" {
 		return singleEventSeq(invalidEvent()), nil
 	}
 	return singleEventSeq(validEvent()), nil
 }
 
-func (h apiHandler) ListEventsPaged(_ context.Context, _ *servicemanager.Caller, _ *types.ContractPageRequest, page collection.PageParams) (collection.Page[*types.ContractEvent], error) {
+func (h apiHandler) ListEventsPaged(_ context.Context, caller *servicemanager.Caller, _ *types.ContractPageRequest, page collection.PageParams) (collection.Page[*types.ContractEvent], error) {
 	h.s.bump(&h.s.PagedCalls)
+	h.s.requireCaller("ListEventsPaged", caller)
 	// TWO keyset pages (PC-C-3): the first call (nil After) returns event-1 plus
 	// a resume cursor, forcing auto-pagers through the token-CONTINUATION branch
 	// — a second fetch with a NON-EMPTY decoded token — before the second page
@@ -236,15 +296,17 @@ func (h apiHandler) ListEventsPaged(_ context.Context, _ *servicemanager.Caller,
 	}, nil
 }
 
-func (h apiHandler) Watch(_ *servicemanager.Caller, req *types.ContractWatchRequest) (*collection.WatchSource[types.ContractEvent, types.ContractWatchChange], error) {
+func (h apiHandler) Watch(caller *servicemanager.Caller, req *types.ContractWatchRequest) (*collection.WatchSource[types.ContractEvent, types.ContractWatchChange], error) {
 	h.s.bump(&h.s.WatchCalls)
+	h.s.requireCaller("Watch", caller)
 	if req.GetItemId() == "bad-event" {
 		return watchSource(invalidEvent()), nil
 	}
 	return watchSource(validEvent()), nil
 }
 
-func (h apiHandler) SendEvents(_ *servicemanager.Caller, stream grpc.ClientStreamingServer[types.ContractEvent, types.ContractResponse]) error {
+func (h apiHandler) SendEvents(caller *servicemanager.Caller, stream grpc.ClientStreamingServer[types.ContractEvent, types.ContractResponse]) error {
+	h.s.requireCaller("SendEvents", caller)
 	for {
 		if _, err := stream.Recv(); err == io.EOF {
 			return stream.SendAndClose(validResponse())
@@ -254,7 +316,8 @@ func (h apiHandler) SendEvents(_ *servicemanager.Caller, stream grpc.ClientStrea
 	}
 }
 
-func (h apiHandler) AssistEvents(_ *servicemanager.Caller, stream grpc.BidiStreamingServer[types.ContractEvent, types.ContractEvent]) error {
+func (h apiHandler) AssistEvents(caller *servicemanager.Caller, stream grpc.BidiStreamingServer[types.ContractEvent, types.ContractEvent]) error {
+	h.s.requireCaller("AssistEvents", caller)
 	for {
 		if _, err := stream.Recv(); err == io.EOF {
 			return nil
@@ -276,23 +339,26 @@ func (h unwiredHandler) GetContract(context.Context, *servicemanager.Caller, *ty
 	return validResponse(), nil
 }
 
-type auditHandler struct{}
+type auditHandler struct{ s *stats }
 
-func (auditHandler) ExecuteAudit(_ context.Context, _ *servicemanager.Caller, req *audittypes.AuditRequest) (*audittypes.AuditResponse, error) {
+func (h auditHandler) ExecuteAudit(_ context.Context, caller *servicemanager.Caller, req *audittypes.AuditRequest) (*audittypes.AuditResponse, error) {
+	h.s.requireNoCaller("ExecuteAudit", caller)
 	if req.GetItemId() == "err" {
 		return nil, status.Error(codes.Internal, "audit unary failed")
 	}
 	return &audittypes.AuditResponse{ResultId: "audit-result"}, nil
 }
 
-func (auditHandler) GenerateAuditEvents(_ *servicemanager.Caller, req *audittypes.AuditRequest, stream grpc.ServerStreamingServer[audittypes.AuditEvent]) error {
+func (h auditHandler) GenerateAuditEvents(caller *servicemanager.Caller, req *audittypes.AuditRequest, stream grpc.ServerStreamingServer[audittypes.AuditEvent]) error {
+	h.s.requireNoCaller("GenerateAuditEvents", caller)
 	if req.GetItemId() == "err" {
 		return status.Error(codes.Internal, "audit stream failed")
 	}
 	return stream.Send(&audittypes.AuditEvent{EventId: "audit-event"})
 }
 
-func (auditHandler) SendAuditEvents(_ *servicemanager.Caller, stream grpc.ClientStreamingServer[audittypes.AuditEvent, audittypes.AuditResponse]) error {
+func (h auditHandler) SendAuditEvents(caller *servicemanager.Caller, stream grpc.ClientStreamingServer[audittypes.AuditEvent, audittypes.AuditResponse]) error {
+	h.s.requireNoCaller("SendAuditEvents", caller)
 	for {
 		event, err := stream.Recv()
 		if err == io.EOF {
@@ -307,7 +373,8 @@ func (auditHandler) SendAuditEvents(_ *servicemanager.Caller, stream grpc.Client
 	}
 }
 
-func (auditHandler) AssistAuditEvents(_ *servicemanager.Caller, stream grpc.BidiStreamingServer[audittypes.AuditEvent, audittypes.AuditEvent]) error {
+func (h auditHandler) AssistAuditEvents(caller *servicemanager.Caller, stream grpc.BidiStreamingServer[audittypes.AuditEvent, audittypes.AuditEvent]) error {
+	h.s.requireNoCaller("AssistAuditEvents", caller)
 	for {
 		event, err := stream.Recv()
 		if err == io.EOF {
@@ -338,38 +405,43 @@ func requireBearer(ctx context.Context) error {
 	return nil
 }
 
+// Each auth func returns the token it verified; the wrapper turns that token
+// into the caller it hands the handler.
 func wireAuth(wrapper interface {
-	SetAuthorizeFunc(func(context.Context, string, any) error)
-	SetAuthenticateFunc(func(context.Context) error)
-	SetAuthenticateAtOrBelowFunc(func(context.Context, string) error)
+	SetAuthorizeFunc(func(context.Context, string, any) (*wrapperToken.TokenWrapper, error))
+	SetAuthenticateFunc(func(context.Context) (*wrapperToken.TokenWrapper, error))
+	SetAuthenticateAtOrBelowFunc(func(context.Context, string) (*wrapperToken.TokenWrapper, error))
 }, s *stats) {
-	wrapper.SetAuthorizeFunc(func(ctx context.Context, _ string, req any) error {
+	wrapper.SetAuthorizeFunc(func(ctx context.Context, _ string, req any) (*wrapperToken.TokenWrapper, error) {
 		s.bump(&s.AuthorizeCalls)
 		if err := requireBearer(ctx); err != nil {
-			return err
+			return nil, err
 		}
 		typed, ok := req.(*types.ContractRequest)
 		if !ok || typed == nil {
-			return status.Error(codes.Internal, "authorize did not receive the request message")
+			return nil, status.Error(codes.Internal, "authorize did not receive the request message")
 		}
 		if typed.GetTenantNamespace() != "tenant.alpha" {
-			return status.Error(codes.PermissionDenied, "caller namespace is not at-or-above target")
+			return nil, status.Error(codes.PermissionDenied, "caller namespace is not at-or-above target")
 		}
-		return nil
+		return verifiedToken, nil
 	})
-	wrapper.SetAuthenticateFunc(func(ctx context.Context) error {
-		s.bump(&s.AuthenticateCalls)
-		return requireBearer(ctx)
-	})
-	wrapper.SetAuthenticateAtOrBelowFunc(func(ctx context.Context, targetNamespace string) error {
+	wrapper.SetAuthenticateFunc(func(ctx context.Context) (*wrapperToken.TokenWrapper, error) {
 		s.bump(&s.AuthenticateCalls)
 		if err := requireBearer(ctx); err != nil {
-			return err
+			return nil, err
+		}
+		return verifiedToken, nil
+	})
+	wrapper.SetAuthenticateAtOrBelowFunc(func(ctx context.Context, targetNamespace string) (*wrapperToken.TokenWrapper, error) {
+		s.bump(&s.AuthenticateCalls)
+		if err := requireBearer(ctx); err != nil {
+			return nil, err
 		}
 		if targetNamespace != "/" && targetNamespace != "" {
-			return status.Errorf(codes.PermissionDenied, "unexpected target namespace %q", targetNamespace)
+			return nil, status.Errorf(codes.PermissionDenied, "unexpected target namespace %q", targetNamespace)
 		}
-		return nil
+		return verifiedToken, nil
 	})
 }
 
@@ -701,7 +773,7 @@ func main() {
 	if err := apiWrapper.RegisterServices(grpcSrv); err != nil {
 		fatal("register api wrapper: %v", err)
 	}
-	auditWrapper := auditserver.NewContractAuditApi(auditHandler{})
+	auditWrapper := auditserver.NewContractAuditApi(auditHandler{s: s})
 	auditWrapper.SetEmitter(am.NewEmitter("runtime-smoke-fixture", accountingSink{s: s}))
 	auditWrapper.SetTracePublisher(func(_ context.Context, event *trace_pb.TraceEvent) {
 		s.recordTrace(event)

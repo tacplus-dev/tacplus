@@ -18,6 +18,7 @@ import (
 	"time"
 
 	types "{{.TypesModulePath}}"
+	wrapperToken "{{.TokenLibPath}}"
 {{- if .HasHandler}}
 
 	"go.uber.org/zap"
@@ -57,9 +58,9 @@ type {{.ServerName}} struct {
 	types.Unimplemented{{.ServiceName}}Server
 	handler          {{.ServiceName}}Handler
 	mu               sync.RWMutex
-	authorizeFunc    func(ctx context.Context, fullMethod string, req any) error
-	authenticateFunc func(ctx context.Context) error
-	authenticateAtOrBelowFunc func(ctx context.Context, targetNamespace string) error
+	authorizeFunc    func(ctx context.Context, fullMethod string, req any) (*wrapperToken.TokenWrapper, error)
+	authenticateFunc func(ctx context.Context) (*wrapperToken.TokenWrapper, error)
+	authenticateAtOrBelowFunc func(ctx context.Context, targetNamespace string) (*wrapperToken.TokenWrapper, error)
 	emitter          *am.Emitter
 	instanceId       string
 	tracePublish     func(ctx context.Context, event *trace_pb.TraceEvent)
@@ -136,9 +137,9 @@ type {{.ServerName}} struct {
 	types.Unimplemented{{.ServiceName}}Server
 	grpcService      types.{{.ServiceName}}Server
 	mu               sync.RWMutex
-	authorizeFunc    func(ctx context.Context, fullMethod string, req any) error
-	authenticateFunc func(ctx context.Context) error
-	authenticateAtOrBelowFunc func(ctx context.Context, targetNamespace string) error
+	authorizeFunc    func(ctx context.Context, fullMethod string, req any) (*wrapperToken.TokenWrapper, error)
+	authenticateFunc func(ctx context.Context) (*wrapperToken.TokenWrapper, error)
+	authenticateAtOrBelowFunc func(ctx context.Context, targetNamespace string) (*wrapperToken.TokenWrapper, error)
 	instanceId       string
 	tracePublish     func(ctx context.Context, event *trace_pb.TraceEvent)
 	anonymizeHmacKey []byte
@@ -194,8 +195,9 @@ func (p *{{.ServerName}}) publishTrace(ctx context.Context, event *trace_pb.Trac
 }
 {{- end}}
 
-// SetAuthorizeFunc sets the authorization function.
-func (p *{{.ServerName}}) SetAuthorizeFunc(f func(ctx context.Context, fullMethod string, req any) error) {
+// SetAuthorizeFunc sets the authorization function. It returns the token the
+// check verified, which becomes the caller identity handed to the handler.
+func (p *{{.ServerName}}) SetAuthorizeFunc(f func(ctx context.Context, fullMethod string, req any) (*wrapperToken.TokenWrapper, error)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.authorizeFunc = f
@@ -203,7 +205,7 @@ func (p *{{.ServerName}}) SetAuthorizeFunc(f func(ctx context.Context, fullMetho
 
 // SetAuthenticateFunc sets the authentication-only function used to verify a
 // stream token before per-message namespace authorization.
-func (p *{{.ServerName}}) SetAuthenticateFunc(f func(ctx context.Context) error) {
+func (p *{{.ServerName}}) SetAuthenticateFunc(f func(ctx context.Context) (*wrapperToken.TokenWrapper, error)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.authenticateFunc = f
@@ -211,7 +213,7 @@ func (p *{{.ServerName}}) SetAuthenticateFunc(f func(ctx context.Context) error)
 
 // SetAuthenticateAtOrBelowFunc sets the authentication + fixed namespace check
 // function used by auth_any_user methods.
-func (p *{{.ServerName}}) SetAuthenticateAtOrBelowFunc(f func(ctx context.Context, targetNamespace string) error) {
+func (p *{{.ServerName}}) SetAuthenticateAtOrBelowFunc(f func(ctx context.Context, targetNamespace string) (*wrapperToken.TokenWrapper, error)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.authenticateAtOrBelowFunc = f
@@ -228,12 +230,14 @@ func (p *{{.ServerName}}) HasAuthorizer() bool {
 // func was wired, every (non-auth_disabled) RPC is rejected. auth_disabled
 // methods skip this call entirely (by annotation), so reaching here with a nil
 // func means a token-auth method was left unwired — that must never silently pass.
-func (p *{{.ServerName}}) authorize(ctx context.Context, fullMethod string, req any) error {
+// It returns the verified token so the caller identity the handler receives
+// comes from this very check rather than a second, independent lookup.
+func (p *{{.ServerName}}) authorize(ctx context.Context, fullMethod string, req any) (*wrapperToken.TokenWrapper, error) {
 	p.mu.RLock()
 	f := p.authorizeFunc
 	p.mu.RUnlock()
 	if f == nil {
-		return fmt.Errorf("authorizer not configured for %q — auth is mandatory and cannot be disabled", fullMethod)
+		return nil, fmt.Errorf("authorizer not configured for %q — auth is mandatory and cannot be disabled", fullMethod)
 	}
 	return f(ctx, fullMethod, req)
 }
@@ -241,24 +245,24 @@ func (p *{{.ServerName}}) authorize(ctx context.Context, fullMethod string, req 
 // authenticate checks token signature, audience, and expiry only. It is used as
 // a stream-open preflight before per-message namespace authorization.
 // Fail-closed: a nil authenticate func rejects rather than allows.
-func (p *{{.ServerName}}) authenticate(ctx context.Context) error {
+func (p *{{.ServerName}}) authenticate(ctx context.Context) (*wrapperToken.TokenWrapper, error) {
 	p.mu.RLock()
 	f := p.authenticateFunc
 	p.mu.RUnlock()
 	if f == nil {
-		return fmt.Errorf("authenticator not configured — auth is mandatory and cannot be disabled")
+		return nil, fmt.Errorf("authenticator not configured — auth is mandatory and cannot be disabled")
 	}
 	return f(ctx)
 }
 
 // authenticateAtOrBelow checks token signature/audience and then enforces a
 // fixed namespace target. Empty targetNamespace defaults to "/" in the authorizer.
-func (p *{{.ServerName}}) authenticateAtOrBelow(ctx context.Context, targetNamespace string) error {
+func (p *{{.ServerName}}) authenticateAtOrBelow(ctx context.Context, targetNamespace string) (*wrapperToken.TokenWrapper, error) {
 	p.mu.RLock()
 	f := p.authenticateAtOrBelowFunc
 	p.mu.RUnlock()
 	if f == nil {
-		return fmt.Errorf("authenticator not configured — auth is mandatory and cannot be disabled")
+		return nil, fmt.Errorf("authenticator not configured — auth is mandatory and cannot be disabled")
 	}
 	return f(ctx, targetNamespace)
 }

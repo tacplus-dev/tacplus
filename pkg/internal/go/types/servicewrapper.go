@@ -420,6 +420,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		TypesModulePath          string
 		GrpcStubsImportPath      string
 		ServiceManagerImportPath string
+		TokenLibPath             string
 		AmLibPath                string
 		AccountingMethodPath     string
 		ServicesPath             string
@@ -441,6 +442,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		TypesModulePath:          typesModulePath,
 		GrpcStubsImportPath:      grpcStubsImportPath,
 		ServiceManagerImportPath: serviceManagerImportPath,
+		TokenLibPath:             svc.Config.ModuleBasePath + "/chassis/token",
 		AmLibPath:                amLibPath,
 		AccountingMethodPath:     accountingMethodPath,
 		ServicesPath:             servicesPath,
@@ -840,9 +842,13 @@ func generateGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, ser
 	}
 
 	// Build optional authorize block
+	// Every auth check binds the token it verified to authTok; callerExtractFor
+	// below builds the caller from that same token. Reading the identity back out
+	// of the context instead would read a key nothing on this path ever writes.
 	var authBlock string
 	authenticateOnlyBlock := `
-if err := p.authenticate(%s); err != nil {
+authTok, err := p.authenticate(%s)
+if err != nil {
 	return %s
 }`
 	if !skipAuth {
@@ -850,36 +856,52 @@ if err := p.authenticate(%s); err != nil {
 			// auth_any_user: verify token signature + audience, and — only when a
 			// fixed target namespace was authored — that the caller is at-or-above it.
 			authBlock = fmt.Sprintf(`
-if err := %s; err != nil {
+authTok, err := %s
+if err != nil {
 	return %%s
 }`, authAnyUserCall("%s"))
 		} else {
 			authBlock = fmt.Sprintf(`
-if err := p.authorize(%%s, %s, %%s); err != nil {
+authTok, err := p.authorize(%%s, %s, %%s)
+if err != nil {
 	return %%s
 }`, fullMethodConstant)
 		}
 	}
 
-	// Caller extraction block — always extract, nil if no token.
+	// Caller extraction block — the caller is the token the auth check that just
+	// ran verified (authTok). On a skipAuth method nothing was verified, so there
+	// is no caller at all, which is the documented contract ("nil only when auth
+	// is disabled").
 	// Logs only non-sensitive token identifiers (sub, aud) at DEBUG — never the
 	// full claims payload, which carries entitlements and custom claims.
-	callerBlock := `
-// Extract caller identity and request ID from context
+	callerExtractFor := func(ctxExpr string) string {
+		if skipAuth {
+			return fmt.Sprintf(`
+// No caller identity: auth is disabled for this method, so no token was verified.
 requestID := servicemanager.RequestIDFromContext(%s)
 var caller *servicemanager.Caller
-if tok := servicemanager.TokenFromContext(%s); tok != nil {
-	caller = servicemanager.NewCaller(tok, requestID)
+zap.L().Debug("rpc (no token)",
+	zap.String("method", %s),
+	zap.String("request_id", requestID))`, ctxExpr, fullMethodConstant)
+		}
+		return fmt.Sprintf(`
+// Caller identity is the token the auth check above verified.
+requestID := servicemanager.RequestIDFromContext(%s)
+var caller *servicemanager.Caller
+if authTok != nil {
+	caller = servicemanager.NewCaller(authTok, requestID)
 	zap.L().Debug("rpc",
 		zap.String("method", %s),
 		zap.String("request_id", requestID),
-		zap.String("sub", tok.GetSubject()),
-		zap.String("aud", tok.GetAudience()))
+		zap.String("sub", authTok.GetSubject()),
+		zap.String("aud", authTok.GetAudience()))
 } else {
 	zap.L().Debug("rpc (no token)",
 		zap.String("method", %s),
 		zap.String("request_id", requestID))
-}`
+}`, ctxExpr, fullMethodConstant, fullMethodConstant)
+	}
 
 	// Streaming accounting block — emits after handler completes
 	var streamAccountingBlock string
@@ -913,7 +935,7 @@ if tok := servicemanager.TokenFromContext(%s); tok != nil {
 	needsStreamMessageAuth := method.ClientStreaming && method.TargetNamespaceField != "" && !skipAuth && !authAnyUser
 	streamMessageAuthorize := "nil"
 	if needsStreamMessageAuth {
-		streamMessageAuthorize = fmt.Sprintf("func(req *%s) error { return p.authorize(stream.Context(), %s, req) }", goInput, fullMethodConstant)
+		streamMessageAuthorize = fmt.Sprintf("func(req *%s) error { _, err := p.authorize(stream.Context(), %s, req); return err }", goInput, fullMethodConstant)
 	}
 
 	clientStreamArg := "stream"
@@ -937,7 +959,7 @@ if tok := servicemanager.TokenFromContext(%s); tok != nil {
 				checks += fmt.Sprintf(authBlock, "stream.Context()", "nil", "err")
 			}
 		}
-		callerExtract := fmt.Sprintf(callerBlock, "stream.Context()", "stream.Context()", fullMethodConstant, fullMethodConstant)
+		callerExtract := callerExtractFor("stream.Context()")
 
 		// The generated MCP session carrier has no handler method to delegate to:
 		// the whole session is generated (mcp_dispatch_gen.go). It authorizes and
@@ -984,7 +1006,7 @@ if tok := servicemanager.TokenFromContext(%s); tok != nil {
 				checks += fmt.Sprintf(authBlock, "stream.Context()", "req", "err")
 			}
 		}
-		callerExtract := fmt.Sprintf(callerBlock, "stream.Context()", "stream.Context()", fullMethodConstant, fullMethodConstant)
+		callerExtract := callerExtractFor("stream.Context()")
 		handlerSlice := fmt.Sprintf("p.handler.%s(caller, req)", method.Name)
 		if handlerEmpty {
 			handlerSlice = fmt.Sprintf("p.handler.%s(caller)", method.Name)
@@ -1046,7 +1068,7 @@ if tok := servicemanager.TokenFromContext(%s); tok != nil {
 				checks += fmt.Sprintf(authBlock, "stream.Context()", "req", "err")
 			}
 		}
-		callerExtract := fmt.Sprintf(callerBlock, "stream.Context()", "stream.Context()", fullMethodConstant, fullMethodConstant)
+		callerExtract := callerExtractFor("stream.Context()")
 		oneof := strutil.ToPascalCase(method.Resolved.WatchOneOf)
 		change := goWatchType(method.Resolved.WatchChangeType, servicePackage)
 		hubVar := "{{.ServerName}}WatchHub" + method.Name
@@ -1205,7 +1227,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 				checks += fmt.Sprintf(authBlock, "stream.Context()", "req", "err")
 			}
 		}
-		callerExtract := fmt.Sprintf(callerBlock, "stream.Context()", "stream.Context()", fullMethodConstant, fullMethodConstant)
+		callerExtract := callerExtractFor("stream.Context()")
 		handlerSeq := fmt.Sprintf("p.handler.%s(caller, req)", method.Name)
 		if handlerEmpty {
 			handlerSeq = fmt.Sprintf("p.handler.%s(caller)", method.Name)
@@ -1280,7 +1302,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 				checks += fmt.Sprintf(authBlock, "stream.Context()", "req", "err")
 			}
 		}
-		callerExtract := fmt.Sprintf(callerBlock, "stream.Context()", "stream.Context()", fullMethodConstant, fullMethodConstant)
+		callerExtract := callerExtractFor("stream.Context()")
 		handlerCall := fmt.Sprintf("p.handler.%s(caller, req, %s)", method.Name, serverStreamArg)
 		if handlerEmpty {
 			handlerCall = fmt.Sprintf("p.handler.%s(caller, %s)", method.Name, serverStreamArg)
@@ -1310,7 +1332,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 				checks += fmt.Sprintf(authBlock, "stream.Context()", "nil", "err")
 			}
 		}
-		callerExtract := fmt.Sprintf(callerBlock, "stream.Context()", "stream.Context()", fullMethodConstant, fullMethodConstant)
+		callerExtract := callerExtractFor("stream.Context()")
 		if hasAccounting {
 			return fmt.Sprintf(`// %s implements %s.%s (client streaming)
 	func (p *{{.ServerName}}) %s(stream grpc.ClientStreamingServer[%s, %s]) error {%s%s
@@ -1338,21 +1360,23 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 			if authAnyUser {
 				pageAuth = fmt.Sprintf(`
 	%s
-	if err := %s; err != nil {
+	authTok, err := %s
+	if err != nil {
 		return nil, err
 	}
 `, authAnyUserComment, authAnyUserCall("ctx"))
 			} else {
 				pageAuth = fmt.Sprintf(`
 	// Authorize
-	if err := p.authorize(ctx, %s, req); err != nil {
+	authTok, err := p.authorize(ctx, %s, req)
+	if err != nil {
 		return nil, err
 	}
 `, fullMethodConstant)
 			}
 		}
 
-		callerExtract := fmt.Sprintf(callerBlock, "ctx", "ctx", fullMethodConstant, fullMethodConstant)
+		callerExtract := callerExtractFor("ctx")
 
 		var inputValidation string
 		if validateInput != "" {
@@ -1458,12 +1482,14 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 		var innerAuth string
 		if authAnyUser {
 			innerAuth = fmt.Sprintf(`
-		if err := %s; err != nil {
+		authTok, err := %s
+		if err != nil {
 			return nil, err
 		}`, authAnyUserCall("ctx"))
 		} else {
 			innerAuth = fmt.Sprintf(`
-		if err := p.authorize(ctx, %s, req); err != nil {
+		authTok, err := p.authorize(ctx, %s, req)
+		if err != nil {
 			return nil, err
 		}`, fullMethodConstant)
 		}
@@ -1508,21 +1534,23 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 		if authAnyUser {
 			unaryAuth = fmt.Sprintf(`
 	%s
-	if err := %s; err != nil {
+	authTok, err := %s
+	if err != nil {
 		return nil, err
 	}
 `, authAnyUserComment, authAnyUserCall("ctx"))
 		} else {
 			unaryAuth = fmt.Sprintf(`
 	// Authorize
-	if err := p.authorize(ctx, %s, req); err != nil {
+	authTok, err := p.authorize(ctx, %s, req)
+	if err != nil {
 		return nil, err
 	}
 `, fullMethodConstant)
 		}
 	}
 
-	callerExtract := fmt.Sprintf(callerBlock, "ctx", "ctx", fullMethodConstant, fullMethodConstant)
+	callerExtract := callerExtractFor("ctx")
 
 	// Egress data entitlement for unary responses (e.g. RecordMap Sample<T>): a
 	// sanitizable response type is sanitized whole; an injected envelope

@@ -87,19 +87,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 			if !isGrpc && !hasState {
 				continue
 			}
-			anyUser := service.AuthAnyUser
-			// A service with no RPCs registers nothing, and its wrapper emits no
-			// register-method-auth function; see the Go generator for the
-			// ServiceManager call this would otherwise dangle.
-			hasMethodAuth := len(service.Methods) > 0 && len(service.AuthServices) > 0
-			for _, m := range service.Methods {
-				if m.AuthAnyUser {
-					anyUser = true
-				}
-				if len(m.AuthServices) > 0 {
-					hasMethodAuth = true
-				}
-			}
+			anyUser, hasMethodAuth := derivePyServiceAuthFlags(service)
 			servicesInfo = append(servicesInfo, ServiceInfo{
 				ProtoFile:     relPath,
 				PackageName:   packageName,
@@ -124,6 +112,42 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 	})
 
 	return servicesInfo, err
+}
+
+// derivePyServiceAuthFlags derives a service's auth_any_user and HasMethodAuth
+// flags from its own annotation plus its methods'.
+//
+// hasMethodAuth answers one question only: will generateServiceWrapper emit a
+// register_method_auth function for this service? service_manager.py.tmpl calls
+// that function whenever the flag is set and never calls it when it is not, so
+// the conditions below must mirror the methodAuthLines conditions in
+// generateServiceWrapper exactly.
+func derivePyServiceAuthFlags(desc parser.ServiceDescriptor) (anyUser bool, hasMethodAuth bool) {
+	anyUser = desc.AuthAnyUser
+	// A service with no RPCs registers nothing, and its wrapper emits no
+	// register-method-auth function; see the Go generator for the
+	// ServiceManager call this would otherwise dangle.
+	hasMethodAuth = len(desc.Methods) > 0 && len(desc.AuthServices) > 0
+	for _, m := range desc.Methods {
+		if m.AuthAnyUser {
+			anyUser = true
+		}
+		if len(m.AuthServices) > 0 {
+			hasMethodAuth = true
+		}
+		// Mirrors the set_method_target_namespace_field condition in
+		// generateServiceWrapper: an auth_any_user method uses
+		// target_namespace_field as a fixed namespace literal in its own gate
+		// and registers nothing, so only an ordinary method sets the flag.
+		// Without this the C2S shape (target_namespace_field, no auth_services
+		// anywhere) left the flag false while the wrapper registered the field,
+		// so the ServiceManager never called register_method_auth and the
+		// authorizer's level-or-below check silently had nothing to enforce.
+		if m.TargetNamespaceField != "" && !m.AuthAnyUser {
+			hasMethodAuth = true
+		}
+	}
+	return anyUser, hasMethodAuth
 }
 
 // generateServiceWrappers generates servicewrapper.py for each service in the types directory.

@@ -1362,6 +1362,49 @@ func filterGrpcAnnotated(config *tactype.Config, servicesInfo []ServiceInfo) ([]
 	return result, nil
 }
 
+// deriveGoServiceAuthFlags derives a service's auth_any_user and
+// HasMethodAuth flags from its own annotation plus its methods'.
+//
+// auth_any_user: true if the service or ANY non-MCP method has it (the service
+// needs authenticate-at-or-below wiring).
+//
+// hasMethodAuth answers one question only: will generateServiceWrapper emit a
+// Register<Svc>MethodAuth function for this service? The ServiceManager
+// template calls that function whenever the flag is set, so the conditions
+// below must mirror the methodAuthLines conditions in servicewrapper.go
+// exactly — a flag set for a method the wrapper writes no line for makes the
+// generated ServiceManager call a function that was never defined.
+func deriveGoServiceAuthFlags(service parser.ServiceDescriptor) (anyUser bool, hasMethodAuth bool) {
+	anyUser = service.AuthAnyUser
+	// A service with no RPCs registers nothing: the wrapper emits
+	// Register<Svc>MethodAuth only when it produced at least one
+	// SetMethodAuth line, so claiming HasMethodAuth here would make the
+	// ServiceManager call a function that was never generated.
+	hasMethodAuth = len(service.Methods) > 0 && len(service.AuthServices) > 0
+	for _, m := range service.Methods {
+		// An MCP tool has no generated gRPC wrapper, so it contributes
+		// nothing to the wrapper's auth surface — no per-method auth
+		// registration, no service-level any-user widening.
+		if m.IsMcp {
+			continue
+		}
+		if m.AuthAnyUser {
+			anyUser = true
+		}
+		if len(m.AuthServices) > 0 {
+			hasMethodAuth = true
+		}
+		// Mirrors the SetMethodTargetNamespaceField condition in
+		// servicewrapper.go: an auth_any_user method uses
+		// target_namespace_field as a fixed namespace literal in its own gate
+		// and registers nothing, so it must not set the flag here.
+		if m.TargetNamespaceField != "" && !m.AuthAnyUser {
+			hasMethodAuth = true
+		}
+	}
+	return anyUser, hasMethodAuth
+}
+
 // generateGrpcCode runs protoc-gen-go-grpc to generate gRPC service stubs.
 // gRPC stubs are placed in the services/ subdirectory alongside wrappers.
 // Uses comprehensive M= flags so protoc-gen-go-grpc generates correct imports natively.
@@ -1613,32 +1656,7 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 			dirNameForInfo = dirPackageName
 		}
 		for _, service := range fileDesc.Services {
-			// Derive service-level auth flags from method-level annotations.
-			// auth_any_user: true if ANY method has it (service needs authenticate-at-or-below wiring).
-			// auth_disabled: true if service-level OR ALL methods have it.
-			anyUser := service.AuthAnyUser
-			// A service with no RPCs registers nothing: the wrapper emits
-			// Register<Svc>MethodAuth only when it produced at least one
-			// SetMethodAuth line, so claiming HasMethodAuth here would make the
-			// ServiceManager call a function that was never generated.
-			hasMethodAuth := len(service.Methods) > 0 && len(service.AuthServices) > 0
-			for _, m := range service.Methods {
-				// An MCP tool has no generated gRPC wrapper, so it contributes
-				// nothing to the wrapper's auth surface — no per-method auth
-				// registration, no service-level any-user widening.
-				if m.IsMcp {
-					continue
-				}
-				if m.AuthAnyUser {
-					anyUser = true
-				}
-				if len(m.AuthServices) > 0 {
-					hasMethodAuth = true
-				}
-				if m.TargetNamespaceField != "" {
-					hasMethodAuth = true
-				}
-			}
+			anyUser, hasMethodAuth := deriveGoServiceAuthFlags(service)
 			servicesInfo = append(servicesInfo, ServiceInfo{
 				ProtoFile:       protoFileForInfo,
 				PackageName:     packageName,

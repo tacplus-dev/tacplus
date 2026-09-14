@@ -690,12 +690,12 @@ assert_service_manager_auth_wiring() {
     java)
       require_generated_pattern "$output" 'new Authorizer\(' "Java service manager does not create the generated authorizer"
       require_generated_pattern "$output" 'registerMethodAuth\(authorizer\)' "Java service manager does not register method auth metadata"
-      require_generated_pattern "$output" 'setMethodTargetNamespaceField\("GetContract", "tenant_namespace"\)' "Java service wrapper does not register target namespace metadata"
+      require_generated_pattern "$output" 'setMethodTargetNamespaceField\("ContractApi/GetContract", "tenant_namespace"\)' "Java service wrapper does not register target namespace metadata"
       ;;
     python)
       require_generated_pattern "$output/s2sm" 'Authorizer\(' "Python service manager does not create the generated authorizer"
       require_generated_pattern "$output/s2sm" 'register_method_auth\(authorizer\)' "Python service manager does not register method auth metadata"
-      require_generated_pattern "$output/s2sm" 'set_method_target_namespace_field\("GetContract", "tenant_namespace"\)' "Python service wrapper does not register target namespace metadata"
+      require_generated_pattern "$output/s2sm" 'set_method_target_namespace_field\("contractclient\.ContractApi/GetContract", "tenant_namespace"\)' "Python service wrapper does not register target namespace metadata"
       require_generated_pattern "$output/s2sm" 'set_authorize_func\(' "Python service manager does not wire authorizer callbacks"
       require_generated_pattern "$output/s2sm" 'set_authenticate_func\(' "Python service manager does not wire authenticator callbacks"
       require_generated_pattern "$output/s2sm" 'has_authorizer\(\)' "Python service manager does not assert authorizer startup wiring"
@@ -703,7 +703,7 @@ assert_service_manager_auth_wiring() {
     typescript)
       require_generated_pattern "$output/s2sm" 'new Authorizer\(' "TypeScript service manager does not create the generated authorizer"
       require_generated_pattern "$output/s2sm" 'registerMethodAuth\(authorizer\)' "TypeScript service manager does not register method auth metadata"
-      require_generated_pattern "$output/s2sm" 'setMethodTargetNamespaceField\("GetContract", "tenant_namespace"\)' "TypeScript service wrapper does not register target namespace metadata"
+      require_generated_pattern "$output/s2sm" 'setMethodTargetNamespaceField\("contractclient\.ContractApi/GetContract", "tenant_namespace"\)' "TypeScript service wrapper does not register target namespace metadata"
       require_generated_pattern "$output/s2sm" 'authorizer\.authorize\(metadata, fullMethod, req\)' "TypeScript service manager does not pass requests to the authorizer"
       require_generated_pattern "$output/s2sm" 'setAuthenticateFunc\(' "TypeScript service manager does not wire authenticator callbacks"
       require_generated_pattern "$output/s2sm" 'hasAuthorizer\(\)' "TypeScript service manager does not assert authorizer startup wiring"

@@ -207,6 +207,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 
 			case "assert_max_size":
 				if annotationValue.Type == model.AnnotationTypeInt {
+					presenceGuarded := false
 					if field.IsMap {
 						fmt.Fprintf(b, "// Validate %s (assert_max_size: %d)\n", javaFieldName, annotationValue.IntValue)
 						fmt.Fprintf(b, "if (msg.%s().size() > %d) {\n", getterName+"Map", annotationValue.IntValue)
@@ -217,6 +218,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 						fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s exceeds max size of %d, got: %%d\", msg.%s()));\n", javaFieldName, annotationValue.IntValue, getterName+"Count")
 					} else {
 						fmt.Fprintf(b, "// Validate %s (assert_max_size: %d bytes)\n", javaFieldName, annotationValue.IntValue)
+						presenceGuarded = javaOpenOptionalPresenceGuard(b, field, javaFieldName)
 						if field.Type == "bytes" {
 							fmt.Fprintf(b, "if (msg.%s().size() > %d) {\n", getterName, annotationValue.IntValue)
 							fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s exceeds max size of %d bytes, got: %%d\", msg.%s().size()));\n", javaFieldName, annotationValue.IntValue, getterName)
@@ -226,10 +228,14 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 						}
 					}
 					b.WriteString("}\n")
+					if presenceGuarded {
+						b.WriteString("}\n")
+					}
 				}
 
 			case "assert_min_size":
 				if annotationValue.Type == model.AnnotationTypeInt {
+					presenceGuarded := false
 					if field.IsMap {
 						fmt.Fprintf(b, "// Validate %s (assert_min_size: %d)\n", javaFieldName, annotationValue.IntValue)
 						fmt.Fprintf(b, "if (msg.%s().size() < %d) {\n", getterName+"Map", annotationValue.IntValue)
@@ -240,6 +246,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 						fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s below min size of %d, got: %%d\", msg.%s()));\n", javaFieldName, annotationValue.IntValue, getterName+"Count")
 					} else {
 						fmt.Fprintf(b, "// Validate %s (assert_min_size: %d bytes)\n", javaFieldName, annotationValue.IntValue)
+						presenceGuarded = javaOpenOptionalPresenceGuard(b, field, javaFieldName)
 						if field.Type == "bytes" {
 							fmt.Fprintf(b, "if (msg.%s().size() < %d) {\n", getterName, annotationValue.IntValue)
 							fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s below min size of %d bytes, got: %%d\", msg.%s().size()));\n", javaFieldName, annotationValue.IntValue, getterName)
@@ -249,6 +256,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 						}
 					}
 					b.WriteString("}\n")
+					if presenceGuarded {
+						b.WriteString("}\n")
+					}
 				}
 
 			case "assert_net_port":
@@ -256,9 +266,13 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 					return fmt.Errorf("assert_net_port annotation on field %s.%s requires a scalar numeric field", msg.Name, javaFieldName)
 				}
 				fmt.Fprintf(b, "// Validate %s (assert_net_port)\n", javaFieldName)
+				presenceGuarded := javaOpenOptionalPresenceGuard(b, field, javaFieldName)
 				fmt.Fprintf(b, "if (msg.%s() < 0 || msg.%s() > 65535) {\n", getterName, getterName)
 				fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be a valid port number (0-65535), got: %%d\", msg.%s()));\n", javaFieldName, getterName)
 				b.WriteString("}\n")
+				if presenceGuarded {
+					b.WriteString("}\n")
+				}
 
 			case "assert_ipaddr_type":
 				if field.Type != "string" {
@@ -276,14 +290,22 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 					switch annotationValue.EnumValue {
 					case "DURATION_TYPE_POSITIVE":
 						fmt.Fprintf(b, "// Validate %s (assert_duration: POSITIVE)\n", javaFieldName)
+						presenceGuarded := javaOpenOptionalPresenceGuard(b, field, javaFieldName)
 						fmt.Fprintf(b, "if (msg.%s() <= 0) {\n", getterName)
 						fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be positive (> 0), got: %%d\", msg.%s()));\n", javaFieldName, getterName)
 						b.WriteString("}\n")
+						if presenceGuarded {
+							b.WriteString("}\n")
+						}
 					case "DURATION_TYPE_NON_NEGATIVE":
 						fmt.Fprintf(b, "// Validate %s (assert_duration: NON_NEGATIVE)\n", javaFieldName)
+						presenceGuarded := javaOpenOptionalPresenceGuard(b, field, javaFieldName)
 						fmt.Fprintf(b, "if (msg.%s() < 0) {\n", getterName)
 						fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be non-negative (>= 0), got: %%d\", msg.%s()));\n", javaFieldName, getterName)
 						b.WriteString("}\n")
+						if presenceGuarded {
+							b.WriteString("}\n")
+						}
 					}
 				}
 
@@ -293,9 +315,13 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 						return fmt.Errorf("assert_duration_min annotation on field %s.%s requires a scalar numeric field", msg.Name, javaFieldName)
 					}
 					fmt.Fprintf(b, "// Validate %s (assert_duration_min: %d)\n", javaFieldName, annotationValue.IntValue)
+					presenceGuarded := javaOpenOptionalPresenceGuard(b, field, javaFieldName)
 					fmt.Fprintf(b, "if (msg.%s() < %s) {\n", getterName, formatIntLiteral(annotationValue.IntValue, field.Type))
 					fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be >= %d, got: %%d\", msg.%s()));\n", javaFieldName, annotationValue.IntValue, getterName)
 					b.WriteString("}\n")
+					if presenceGuarded {
+						b.WriteString("}\n")
+					}
 				}
 
 			case "assert_duration_max":
@@ -304,9 +330,13 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 						return fmt.Errorf("assert_duration_max annotation on field %s.%s requires a scalar numeric field", msg.Name, javaFieldName)
 					}
 					fmt.Fprintf(b, "// Validate %s (assert_duration_max: %d)\n", javaFieldName, annotationValue.IntValue)
+					presenceGuarded := javaOpenOptionalPresenceGuard(b, field, javaFieldName)
 					fmt.Fprintf(b, "if (msg.%s() > %s) {\n", getterName, formatIntLiteral(annotationValue.IntValue, field.Type))
 					fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be <= %d, got: %%d\", msg.%s()));\n", javaFieldName, annotationValue.IntValue, getterName)
 					b.WriteString("}\n")
+					if presenceGuarded {
+						b.WriteString("}\n")
+					}
 				}
 
 			case "assert_gt":
@@ -319,9 +349,13 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 						valueExpr = fmt.Sprintf("msg.%s().getNumber()", getterName)
 					}
 					fmt.Fprintf(b, "// Validate %s (assert_gt: %d)\n", javaFieldName, annotationValue.IntValue)
+					presenceGuarded := javaOpenOptionalPresenceGuard(b, field, javaFieldName)
 					fmt.Fprintf(b, "if (%s <= %s) {\n", valueExpr, formatIntLiteral(annotationValue.IntValue, field.Type))
 					fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be > %d, got: %%s\", msg.%s()));\n", javaFieldName, annotationValue.IntValue, getterName)
 					b.WriteString("}\n")
+					if presenceGuarded {
+						b.WriteString("}\n")
+					}
 				}
 
 			case "assert_ge":
@@ -334,9 +368,13 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 						valueExpr = fmt.Sprintf("msg.%s().getNumber()", getterName)
 					}
 					fmt.Fprintf(b, "// Validate %s (assert_ge: %d)\n", javaFieldName, annotationValue.IntValue)
+					presenceGuarded := javaOpenOptionalPresenceGuard(b, field, javaFieldName)
 					fmt.Fprintf(b, "if (%s < %s) {\n", valueExpr, formatIntLiteral(annotationValue.IntValue, field.Type))
 					fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be >= %d, got: %%s\", msg.%s()));\n", javaFieldName, annotationValue.IntValue, getterName)
 					b.WriteString("}\n")
+					if presenceGuarded {
+						b.WriteString("}\n")
+					}
 				}
 
 			case "assert_lt":
@@ -349,9 +387,13 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 						valueExpr = fmt.Sprintf("msg.%s().getNumber()", getterName)
 					}
 					fmt.Fprintf(b, "// Validate %s (assert_lt: %d)\n", javaFieldName, annotationValue.IntValue)
+					presenceGuarded := javaOpenOptionalPresenceGuard(b, field, javaFieldName)
 					fmt.Fprintf(b, "if (%s >= %s) {\n", valueExpr, formatIntLiteral(annotationValue.IntValue, field.Type))
 					fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be < %d, got: %%s\", msg.%s()));\n", javaFieldName, annotationValue.IntValue, getterName)
 					b.WriteString("}\n")
+					if presenceGuarded {
+						b.WriteString("}\n")
+					}
 				}
 
 			case "assert_le":
@@ -364,9 +406,13 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 						valueExpr = fmt.Sprintf("msg.%s().getNumber()", getterName)
 					}
 					fmt.Fprintf(b, "// Validate %s (assert_le: %d)\n", javaFieldName, annotationValue.IntValue)
+					presenceGuarded := javaOpenOptionalPresenceGuard(b, field, javaFieldName)
 					fmt.Fprintf(b, "if (%s > %s) {\n", valueExpr, formatIntLiteral(annotationValue.IntValue, field.Type))
 					fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be <= %d, got: %%s\", msg.%s()));\n", javaFieldName, annotationValue.IntValue, getterName)
 					b.WriteString("}\n")
+					if presenceGuarded {
+						b.WriteString("}\n")
+					}
 				}
 
 			case "assert_semver":

@@ -296,6 +296,24 @@ func javaRequiredZeroCheck(field model.Field, javaFieldName, getterName string) 
 	}
 }
 
+// javaOpenOptionalPresenceGuard opens `if (msg.has<Field>()) {` for a proto3
+// optional field and reports whether it wrote anything, so the caller closes the
+// brace it opened. A proto3 `optional` scalar reads back as the type default
+// when absent, so a bound check emitted against the bare getter (min size,
+// numeric comparison, port/duration range) fires on a field the caller
+// legitimately omitted — Java rejected requests Go and Rust accept, because
+// those render the field as a pointer / Option and test presence first.
+// assert_numeric, assert_float and assert_enum_defined already emit this guard
+// themselves; presence-independent checks (assert_required and the
+// required_if_* family) must keep firing on an absent field and are not guarded.
+func javaOpenOptionalPresenceGuard(b *strings.Builder, field model.Field, javaFieldName string) bool {
+	if !field.IsOptional || field.IsRepeated || field.IsMap {
+		return false
+	}
+	fmt.Fprintf(b, "if (msg.has%s()) {\n", upperFirst(javaFieldName))
+	return true
+}
+
 // javaSiblingGetter returns the getter name for a sibling field referenced by a
 // conditional-requirement annotation (e.g. "enable_tls" -> "getEnableTls").
 func javaSiblingGetter(siblingName string) string {

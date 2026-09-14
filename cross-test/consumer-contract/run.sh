@@ -4190,8 +4190,9 @@ struct RecordingAccountingSink {
     events: Arc<std::sync::Mutex<Vec<AccountingEvent>>>,
 }
 
+#[tonic::async_trait]
 impl am::Sink for RecordingAccountingSink {
-    fn emit(&self, event: &AccountingEvent) {
+    async fn emit(&self, event: &AccountingEvent) {
         self.events.lock().expect("accounting lock").push(event.clone());
     }
 }
@@ -4910,22 +4911,27 @@ impl TestAuthorizer {
 
 #[tonic::async_trait]
 impl contractclient_model::s2sm::internal::grpc::servers::contract::contractclient::contract_api::Authorizer for TestAuthorizer {
-    async fn authorize(&self, _full_method: &str, authorization: Option<&str>) -> Result<(), tonic::Status> {
+    async fn authorize(&self, _full_method: &str, authorization: Option<&str>) -> Result<HashMap<String, String>, tonic::Status> {
         self.authorize_calls.fetch_add(1, Ordering::SeqCst);
         Self::require_token(authorization)?;
         if self.reject_authorize.load(Ordering::SeqCst) {
             return Err(tonic::Status::unauthenticated("missing authorization header"));
         }
-        Ok(())
+        Ok(HashMap::new())
     }
 
-    async fn check_at_or_below(&self, authorization: Option<&str>, target_namespace: &str) -> Result<(), tonic::Status> {
+    async fn check_at_or_below(&self, authorization: Option<&str>, target_namespace: &str) -> Result<HashMap<String, String>, tonic::Status> {
         self.namespace_calls.fetch_add(1, Ordering::SeqCst);
         Self::require_token(authorization)?;
         if target_namespace != "/" && target_namespace != "" && target_namespace != "tenant.alpha" {
             return Err(tonic::Status::permission_denied("caller namespace is not at-or-above target"));
         }
-        Ok(())
+        Ok(HashMap::new())
+    }
+
+    async fn authenticate(&self, authorization: Option<&str>) -> Result<HashMap<String, String>, tonic::Status> {
+        Self::require_token(authorization)?;
+        Ok(HashMap::new())
     }
 }
 
@@ -5353,6 +5359,7 @@ EOF
 write_rust_c2d_consumer() {
   local main_rs="$1"
   cat > "$main_rs" <<'EOF'
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -5432,7 +5439,7 @@ impl ContractDaemonAuthorizer for DenyAllAuthorizer {
         &self,
         _full_method: &str,
         _authorization: Option<&str>,
-    ) -> Result<(), tonic::Status> {
+    ) -> Result<HashMap<String, String>, tonic::Status> {
         Err(tonic::Status::unauthenticated("deny-all authorizer"))
     }
 
@@ -5440,7 +5447,14 @@ impl ContractDaemonAuthorizer for DenyAllAuthorizer {
         &self,
         _authorization: Option<&str>,
         _target_namespace: &str,
-    ) -> Result<(), tonic::Status> {
+    ) -> Result<HashMap<String, String>, tonic::Status> {
+        Err(tonic::Status::unauthenticated("deny-all authorizer"))
+    }
+
+    async fn authenticate(
+        &self,
+        _authorization: Option<&str>,
+    ) -> Result<HashMap<String, String>, tonic::Status> {
         Err(tonic::Status::unauthenticated("deny-all authorizer"))
     }
 }

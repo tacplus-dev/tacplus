@@ -245,6 +245,11 @@ prepare_client_only_proto() {
   # instances via health); reuse the canonical minimal ServiceHealth fixture.
   mkdir -p "$dst/platform"
   cp "$PROTO_SRC/platform/health.proto" "$dst/platform/health.proto"
+  # The canonical fixture routes ServiceHealth at the "contractfixtures" service,
+  # which lives under services/ and is NOT part of a client-only tree. Retarget
+  # the routing label at the only service this tree loads (package contractclient)
+  # so ValidateRoutingLabels resolves it.
+  perl -pi -e 's/label: \["contractfixtures"\]/label: ["contractclient"]/' "$dst/platform/health.proto"
   cat > "$dst/registry.yaml" <<'EOF'
 # Managed by tacplus — do not edit IDs manually.
 services:
@@ -299,17 +304,17 @@ message ContractEvent {
 // C2S service so full-client targets (python/typescript) generate and exercise
 // their C2S/W2S/REST *client* surfaces positively (PAR-3) — the handwritten
 // consumers reference contract_api_client. Mirrors the canonical full-contract
-// ContractApi shape (entitled default + method-level auth_disabled override).
+// ContractApi shape (entitled default + a public-no-auth method override).
 service ContractApi {
   option (spec.service_c2s) = {auth_entitled_users: true};
 
   rpc GetContract(ContractRequest) returns (ContractResponse) {
-    option (spec.method_c2s) = {target_namespace_field: "tenant_namespace"};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ENTITLED_USERS], target_namespace_field: "tenant_namespace"};
     option (spec.rest_method) = {methods: [REST_METHOD_GET]};
   }
 
   rpc GetPublicContract(ContractRequest) returns (ContractResponse) {
-    option (spec.method_c2s) = {auth_disabled: true};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
     option (spec.rest_path) = "contract/public-read";
   }
 }

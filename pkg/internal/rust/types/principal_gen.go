@@ -105,18 +105,39 @@ func rustActorResolve(local, method, indent string) string {
 // rustRequestPrincipalBlock renders the (spec.principal) stamp-or-refuse check.
 // Empty is stamped from the caller, equal passes, different is refused: a forged
 // principal is never silently overwritten.
-func rustRequestPrincipalBlock(field, method string) string {
+//
+// reqVar names the owned request binding in scope and indent its column — the
+// two things that differ between RPC shapes. The check itself does not: a PAGE
+// request, a WATCH request and a unary one are all one message bound to one
+// caller, so there is one renderer, not one per shape.
+func rustRequestPrincipalBlock(field, method, reqVar, indent string) string {
 	return fmt.Sprintf(`
-        // (spec.principal) %s: bind the field to the authenticated caller.
-%s        let mut req = req;
-        if req.%s.is_empty() {
-            req.%s = __principal;
-        } else if req.%s != __principal {
-            return Err(tonic::Status::invalid_argument(
-                "%s does not match the authenticated caller"));
-        }
-        let req = req;
-`, field, rustPrincipalResolve("__principal", method, "        "), field, field, field, field)
+%[1]s// (spec.principal) %[2]s: bind the field to the authenticated caller.
+%[4]s%[1]slet mut %[3]s = %[3]s;
+%[1]sif %[3]s.%[2]s.is_empty() {
+%[1]s    %[3]s.%[2]s = __principal;
+%[1]s} else if %[3]s.%[2]s != __principal {
+%[1]s    return Err(tonic::Status::invalid_argument(
+%[1]s        "%[2]s does not match the authenticated caller"));
+%[1]s}
+%[1]slet %[3]s = %[3]s;
+`, indent, field, reqVar, rustPrincipalResolve("__principal", method, indent))
+}
+
+// rustStreamPrincipalStmts renders the per-message half of the same check, for
+// the request streams where there is no single request to stamp. The resolve
+// (rustPrincipalResolve) runs once before the stream is wrapped; these
+// statements run on EVERY inbound message, so message N cannot name a principal
+// message N-1 did not.
+func rustStreamPrincipalStmts(field, msgVar, indent string) string {
+	return fmt.Sprintf(`%[1]s// (spec.principal) %[2]s: bind the field to the authenticated caller.
+%[1]sif %[3]s.%[2]s.is_empty() {
+%[1]s    %[3]s.%[2]s = __principal.clone();
+%[1]s} else if %[3]s.%[2]s != __principal {
+%[1]s    return Err(tonic::Status::invalid_argument(
+%[1]s        "%[2]s does not match the authenticated caller"));
+%[1]s}
+`, indent, field, msgVar)
 }
 
 // rustResponsePrincipalFilterBlock renders the (spec.store_principal) egress

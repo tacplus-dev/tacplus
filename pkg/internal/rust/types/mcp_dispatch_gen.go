@@ -665,10 +665,10 @@ func rustMcpToolDispatch(serviceName string, t rustMcpTool) string {
 `, t.InputType)
 		b.WriteString(rustServerRequestValidationBlock("req", t.Method.FullInputType))
 		if t.PrincipalField != "" {
-			b.WriteString(rustRequestPrincipalBlock(t.PrincipalField, t.Method.Name))
+			b.WriteString(rustRequestPrincipalBlock(t.PrincipalField, t.Method.Name, "req", "        "))
 		}
 		if t.NamespaceField != "" {
-			b.WriteString(rustRequestNamespaceBlock(t.NamespaceField, t.Method.Name))
+			b.WriteString(rustRequestNamespaceBlock(t.NamespaceField, t.Method.Name, "req", "        "))
 		}
 		fmt.Fprintf(&b, "        let resp = self.handler.%s(caller, req).await?;\n", methodSnake)
 	}
@@ -952,7 +952,7 @@ func generateRustMcpCarrierWrapper(svc *parser.ServiceInfo, method *parser.Metho
 	inputType, outputType := resolveRustTypeQualified(method, servicePkg, crossPkgTypes)
 	fullMethod := fmt.Sprintf("/%s/%s.%s/%s", parentDir, servicePkg, svc.Name, method.Name)
 	authLine := rustAuthLine(svc, method, fullMethod)
-	requestStreamBlock := rustValidatedRequestStreamBlock(inputType, method.FullInputType, "")
+	requestStreamBlock := rustValidatedRequestStreamBlock(inputType, method.FullInputType, "", "", "", method.Name)
 	streamType := fmt.Sprintf(responseStreamFmt, outputType)
 
 	return fmt.Sprintf(`    type %[1]sStream = %[2]s;

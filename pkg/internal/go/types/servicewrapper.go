@@ -938,14 +938,26 @@ if authTok != nil {
 		streamMessageAuthorize = fmt.Sprintf("func(req *%s) error { _, err := p.authorize(stream.Context(), %s, req); return err }", goInput, fullMethodConstant)
 	}
 
+	// (spec.principal)/(spec.namespace) on a request STREAM. The claim is a
+	// property of the call and cannot change mid-stream, but the check runs on
+	// EVERY inbound message: a request stream is not one request, and message N
+	// naming a principal message N-1 did not is the same forgery the unary
+	// check refuses. Recv() applies it before the handler ever sees the message.
+	streamMessageScope := "nil"
+	if method.ClientStreaming && !handlerEmpty {
+		if b := goRequestScopeBlocks(san, method, servicePackage, "req", "\t\t", "return"); b != "" {
+			streamMessageScope = fmt.Sprintf("func(req *%s) error {\n%s\t\treturn nil\n\t}", goInput, b)
+		}
+	}
+
 	clientStreamArg := "stream"
-	if validateInput != "" || (validateOutput != "" && !emptyOutput) || needsStreamMessageAuth {
-		clientStreamArg = fmt.Sprintf("{{.ServerName}}ValidatingClientStreamingServer[%s, %s]{ClientStreamingServer: stream, authorizeReq: %s, validateReq: %s, validateRes: %s}", goInput, goOutput, streamMessageAuthorize, validationFuncOrNil(validateInput), validationFuncOrNil(validateOutput))
+	if validateInput != "" || (validateOutput != "" && !emptyOutput) || needsStreamMessageAuth || streamMessageScope != "nil" {
+		clientStreamArg = fmt.Sprintf("{{.ServerName}}ValidatingClientStreamingServer[%s, %s]{ClientStreamingServer: stream, authorizeReq: %s, scopeReq: %s, validateReq: %s, validateRes: %s}", goInput, goOutput, streamMessageAuthorize, streamMessageScope, validationFuncOrNil(validateInput), validationFuncOrNil(validateOutput))
 	}
 
 	bidiStreamArg := "stream"
-	if validateInput != "" || validateOutput != "" || needsStreamMessageAuth {
-		bidiStreamArg = fmt.Sprintf("{{.ServerName}}ValidatingBidiStreamingServer[%s, %s]{BidiStreamingServer: stream, authorizeReq: %s, validateReq: %s, validateRes: %s}", goInput, goOutput, streamMessageAuthorize, validationFuncOrNil(validateInput), validationFuncOrNil(validateOutput))
+	if validateInput != "" || validateOutput != "" || needsStreamMessageAuth || streamMessageScope != "nil" {
+		bidiStreamArg = fmt.Sprintf("{{.ServerName}}ValidatingBidiStreamingServer[%s, %s]{BidiStreamingServer: stream, authorizeReq: %s, scopeReq: %s, validateReq: %s, validateRes: %s}", goInput, goOutput, streamMessageAuthorize, streamMessageScope, validationFuncOrNil(validateInput), validationFuncOrNil(validateOutput))
 	}
 
 	if method.ClientStreaming && method.ServerStreaming {
@@ -1007,6 +1019,7 @@ if authTok != nil {
 			}
 		}
 		callerExtract := callerExtractFor("stream.Context()")
+		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return")
 		handlerSlice := fmt.Sprintf("p.handler.%s(caller, req)", method.Name)
 		if handlerEmpty {
 			handlerSlice = fmt.Sprintf("p.handler.%s(caller)", method.Name)
@@ -1069,6 +1082,7 @@ if authTok != nil {
 			}
 		}
 		callerExtract := callerExtractFor("stream.Context()")
+		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return")
 		oneof := strutil.ToPascalCase(method.Resolved.WatchOneOf)
 		change := goWatchType(method.Resolved.WatchChangeType, servicePackage)
 		hubVar := "{{.ServerName}}WatchHub" + method.Name
@@ -1228,6 +1242,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 			}
 		}
 		callerExtract := callerExtractFor("stream.Context()")
+		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return")
 		handlerSeq := fmt.Sprintf("p.handler.%s(caller, req)", method.Name)
 		if handlerEmpty {
 			handlerSeq = fmt.Sprintf("p.handler.%s(caller)", method.Name)
@@ -1303,6 +1318,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 			}
 		}
 		callerExtract := callerExtractFor("stream.Context()")
+		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return")
 		handlerCall := fmt.Sprintf("p.handler.%s(caller, req, %s)", method.Name, serverStreamArg)
 		if handlerEmpty {
 			handlerCall = fmt.Sprintf("p.handler.%s(caller, %s)", method.Name, serverStreamArg)
@@ -1377,6 +1393,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 		}
 
 		callerExtract := callerExtractFor("ctx")
+		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return nil,")
 
 		var inputValidation string
 		if validateInput != "" {
@@ -1551,6 +1568,7 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 	}
 
 	callerExtract := callerExtractFor("ctx")
+	callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return nil,")
 
 	// Egress data entitlement for unary responses (e.g. RecordMap Sample<T>): a
 	// sanitizable response type is sanitized whole; an injected envelope

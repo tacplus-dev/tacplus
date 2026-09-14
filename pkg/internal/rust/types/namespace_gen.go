@@ -93,18 +93,34 @@ func rustNamespaceResolve(local, method, indent string) string {
 // rustRequestNamespaceBlock renders the (spec.namespace) stamp-or-refuse check.
 // Empty is stamped from the caller, equal passes, different is refused: a forged
 // namespace is never silently overwritten.
-func rustRequestNamespaceBlock(field, method string) string {
+//
+// reqVar and indent carry the same meaning as on rustRequestPrincipalBlock: the
+// binding to stamp and the column to stamp it at.
+func rustRequestNamespaceBlock(field, method, reqVar, indent string) string {
 	return fmt.Sprintf(`
-        // (spec.namespace) %s: bind the field to the caller's namespace claim.
-%s        let mut req = req;
-        if req.%s.is_empty() {
-            req.%s = __namespace;
-        } else if req.%s != __namespace {
-            return Err(tonic::Status::invalid_argument(
-                "%s does not match the authenticated caller's namespace"));
-        }
-        let req = req;
-`, field, rustNamespaceResolve("__namespace", method, "        "), field, field, field, field)
+%[1]s// (spec.namespace) %[2]s: bind the field to the caller's namespace claim.
+%[4]s%[1]slet mut %[3]s = %[3]s;
+%[1]sif %[3]s.%[2]s.is_empty() {
+%[1]s    %[3]s.%[2]s = __namespace;
+%[1]s} else if %[3]s.%[2]s != __namespace {
+%[1]s    return Err(tonic::Status::invalid_argument(
+%[1]s        "%[2]s does not match the authenticated caller's namespace"));
+%[1]s}
+%[1]slet %[3]s = %[3]s;
+`, indent, field, reqVar, rustNamespaceResolve("__namespace", method, indent))
+}
+
+// rustStreamNamespaceStmts is the per-message half, run on every inbound
+// message of a request stream. See rustStreamPrincipalStmts.
+func rustStreamNamespaceStmts(field, msgVar, indent string) string {
+	return fmt.Sprintf(`%[1]s// (spec.namespace) %[2]s: bind the field to the caller's namespace claim.
+%[1]sif %[3]s.%[2]s.is_empty() {
+%[1]s    %[3]s.%[2]s = __namespace.clone();
+%[1]s} else if %[3]s.%[2]s != __namespace {
+%[1]s    return Err(tonic::Status::invalid_argument(
+%[1]s        "%[2]s does not match the authenticated caller's namespace"));
+%[1]s}
+`, indent, field, msgVar)
 }
 
 // rustResponseNamespaceFilterBlock renders the (spec.store_namespace) egress

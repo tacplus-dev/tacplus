@@ -15,7 +15,7 @@ import (
 // three arms must be present — a stamp with no refusal arm silently launders a
 // forged namespace into the handler.
 func TestRustRequestNamespaceBlockStampsAcceptsRefuses(t *testing.T) {
-	got := rustRequestNamespaceBlock("namespace", "CreateThing")
+	got := rustRequestNamespaceBlock("namespace", "CreateThing", "req", "        ")
 	for _, want := range []string{
 		"c.namespace()",
 		"if req.namespace.is_empty() {",

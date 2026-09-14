@@ -291,6 +291,16 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
         void validate(T value) throws ProtoException;
     }
 
+    /**
+     * Transforms one inbound request-stream message. Unlike MessageValidator it
+     * RETURNS a message: the (spec.principal)/(spec.namespace) stamp rebinds the
+     * request, and protobuf messages are immutable, so the stamped message has
+     * to replace the one the client sent.
+     */
+    private interface MessageScoper<T> {
+        T scope(T value) throws ProtoException;
+    }
+
     private static ProtoException responseValidationError(Throwable t) {
         String message = t.getMessage() == null ? "response validation failed" : "response validation failed: " + t.getMessage();
         return new ProtoException(ProtoException.INTERNAL, message, t);
@@ -301,6 +311,53 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
             @Override public void onNext(T value) {}
             @Override public void onError(Throwable t) {}
             @Override public void onCompleted() {}
+        };
+    }
+
+    /**
+     * Applies the per-message (spec.principal)/(spec.namespace) stamp-or-refuse
+     * to a request stream and hands the STAMPED message on.
+     *
+     * Per message, not once at stream open: a request stream is not one
+     * request, and a later message naming a principal an earlier one did not is
+     * exactly the forgery the unary check refuses.
+     */
+    private static <T> StreamObserver<T> scopingRequestObserver(
+            StreamObserver<T> delegate,
+            MessageScoper<T> scoper,
+            StreamObserver<?> responseObserver) {
+        if (scoper == null) {
+            return delegate;
+        }
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        return new StreamObserver<T>() {
+            @Override
+            public void onNext(T value) {
+                if (closed.get()) {
+                    return;
+                }
+                try {
+                    delegate.onNext(scoper.scope(value));
+                } catch (Throwable t) {
+                    if (closed.compareAndSet(false, true)) {
+                        responseObserver.onError(toGrpcError(t));
+                    }
+                }
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                if (closed.compareAndSet(false, true)) {
+                    delegate.onError(t);
+                }
+            }
+
+            @Override
+            public void onCompleted() {
+                if (!closed.get()) {
+                    delegate.onCompleted();
+                }
+            }
         };
     }
 

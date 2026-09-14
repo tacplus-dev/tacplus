@@ -1000,7 +1000,10 @@ func rustServerResponseValidationBlock(varName, fullType string) string {
 `, varName)
 }
 
-func rustValidatedRequestStreamBlock(inputType, fullInputType, targetNamespaceField string) string {
+func rustValidatedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, methodName string) string {
+	if principalField != "" || namespaceField != "" {
+		return rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, methodName)
+	}
 	requestStream := fmt.Sprintf(requestStreamFmt, inputType)
 	fieldSnake := ""
 	if targetNamespaceField != "" {
@@ -1066,6 +1069,88 @@ func rustValidatedRequestStreamBlock(inputType, fullInputType, targetNamespaceFi
 `, requestStream)
 }
 
+// rustScopedRequestStreamBlock is the request-stream wrapper for a stream whose
+// message type declares (spec.principal)/(spec.namespace).
+//
+// The caller's claim is resolved ONCE, before the stream is wrapped — it is a
+// property of the call, not of a message, and it cannot change mid-stream. The
+// stamp-or-refuse then runs on EVERY inbound message: a request stream is not
+// one request, and message N naming a principal message N-1 did not is exactly
+// the forgery the unary check refuses.
+func rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, methodName string) string {
+	requestStream := fmt.Sprintf(requestStreamFmt, inputType)
+	var resolve string
+	if principalField != "" {
+		resolve += rustPrincipalResolve("__principal", methodName, "        ")
+	}
+	if namespaceField != "" {
+		resolve += rustNamespaceResolve("__namespace", methodName, "        ")
+	}
+
+	fieldSnake := ""
+	if targetNamespaceField != "" {
+		fieldSnake = strutil.ToSnakeCase(targetNamespaceField)
+	}
+
+	// The per-message body, at the column its closure puts it in: 16 spaces
+	// inside the async block the target_namespace_field variant needs, 12 in
+	// the plain one.
+	body := func(indent string) string {
+		var out string
+		if principalField != "" {
+			out += rustStreamPrincipalStmts(principalField, "msg", indent)
+		}
+		if namespaceField != "" {
+			out += rustStreamNamespaceStmts(namespaceField, "msg", indent)
+		}
+		if rustW2SCanValidate(fullInputType) {
+			out += fmt.Sprintf(`%[1]smsg.validate()
+%[1]s    .map_err(|e| tonic::Status::invalid_argument(format!("validation failed: {}", e)))?;
+`, indent)
+		}
+		return out
+	}
+
+	if fieldSnake != "" {
+		// The claims are cloned into each message's async block: it is `move`,
+		// so it consumes what it captures, and there is one per message.
+		var claimClones string
+		if principalField != "" {
+			claimClones += "            let __principal = __principal.clone();\n"
+		}
+		if namespaceField != "" {
+			claimClones += "            let __namespace = __namespace.clone();\n"
+		}
+		return fmt.Sprintf(`
+%s        let (metadata, extensions, stream) = request.into_parts();
+        let authorization = metadata
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.to_string());
+        let wrapper = self.clone();
+        let stream = stream.then(move |item| {
+            let authorization = authorization.clone();
+            let wrapper = wrapper.clone();
+%s            async move {
+                let mut msg = item?;
+                wrapper.enforce_at_or_below_authorization(authorization.as_deref(), &msg.%s).await?;
+%s                Ok(msg)
+            }
+        });
+        let request = tonic::Request::from_parts(metadata, extensions, Box::pin(stream) as %s);
+`, resolve, claimClones, fieldSnake, body("                "), requestStream)
+	}
+
+	return fmt.Sprintf(`
+%s        let (metadata, extensions, stream) = request.into_parts();
+        let stream = stream.map(move |item| -> Result<%s, tonic::Status> {
+            let mut msg = item?;
+%s            Ok(msg)
+        });
+        let request = tonic::Request::from_parts(metadata, extensions, Box::pin(stream) as %s);
+`, resolve, inputType, body("            "), requestStream)
+}
+
 func rustValidatedResponseStreamReturn(methodName, fullOutputType string) string {
 	if !rustW2SCanValidate(fullOutputType) {
 		return `        Ok(response)
@@ -1127,6 +1212,16 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 
 	emptyInput := method.FullInputType == "google.protobuf.Empty"
 	handlerEmpty := emptyInput || method.FullInputType == "trace.TraceRequest"
+
+	// (spec.principal)/(spec.namespace) on the REQUEST. Resolved once here
+	// because the marker is a property of the request message, not of the RPC
+	// shape: every branch below has to bind the field to the verified caller,
+	// and the contract in spec.proto carves out no shape.
+	reqPrincipal, reqNamespace := "", ""
+	if !handlerEmpty {
+		reqPrincipal = san.requestPrincipalField(method.FullInputType, servicePackage)
+		reqNamespace = san.requestNamespaceField(method.FullInputType, servicePackage)
+	}
 
 	// (spec.owner_default) rides the REQUEST-VALIDATION seam, immediately after
 	// the (spec.principal) stamp, because that is the only point where both
@@ -1238,13 +1333,29 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 			streamAccountingBlock = buildRustAccountingBlock(method, grpcName, svc.Name, accountingMap)
 		}
 		serverStreamInputValidation := rustServerRequestValidationBlock("request.get_ref()", method.FullInputType)
+		// (spec.principal)/(spec.namespace) on a server-streaming request. The
+		// request is still a single message on these shapes, so this is the unary
+		// check verbatim — but every server-stream emit consumes `request` inline
+		// where the handler is called, so the owned binding the check stamps has
+		// to be hoisted out first and the handler handed that instead.
+		serverStreamReqExpr := "request.into_inner()"
+		if !method.ClientStreaming && (reqPrincipal != "" || reqNamespace != "") {
+			serverStreamInputValidation += "\n        let req = request.into_inner();\n"
+			if reqPrincipal != "" {
+				serverStreamInputValidation += rustRequestPrincipalBlock(reqPrincipal, method.Name, "req", "        ")
+			}
+			if reqNamespace != "" {
+				serverStreamInputValidation += rustRequestNamespaceBlock(reqNamespace, method.Name, "req", "        ")
+			}
+			serverStreamReqExpr = "req"
+		}
 		streamTargetNamespaceField := ""
 		if method.ClientStreaming && method.TargetNamespaceField != "" &&
 			!method.AuthAnyUser &&
 			!(method.AuthDisabled || svc.AuthDisabled || svc.IsC2D) {
 			streamTargetNamespaceField = method.TargetNamespaceField
 		}
-		requestStreamBlock := rustValidatedRequestStreamBlock(inputType, method.FullInputType, streamTargetNamespaceField)
+		requestStreamBlock := rustValidatedRequestStreamBlock(inputType, method.FullInputType, streamTargetNamespaceField, reqPrincipal, reqNamespace, method.Name)
 		streamResponseReturn := rustValidatedResponseStreamReturn(method.Name, method.FullOutputType)
 		unaryStreamResponseValidation := rustServerResponseValidationBlock("response.get_ref()", method.FullOutputType)
 
@@ -1252,7 +1363,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 		// returns a materialized Vec; chunk it into the stream (tonic/tokio apply
 		// backpressure). Output validation, if any, runs per item.
 		if !method.ClientStreaming && method.ServerStreaming && method.IsTier2SnapshotCollection() {
-			tier2HandlerCall := fmt.Sprintf("self.handler.%s(caller.as_ref(), request.into_inner()).await", methodSnake)
+			tier2HandlerCall := fmt.Sprintf("self.handler.%s(caller.as_ref(), %s).await", methodSnake, serverStreamReqExpr)
 			if handlerEmpty {
 				tier2HandlerCall = fmt.Sprintf("self.handler.%s(caller.as_ref()).await", methodSnake)
 			}
@@ -1428,7 +1539,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         let caller: Option<servicemanager::auth::Caller> = None;
         tracing::debug!(method = "%s", request_id = %%request_id, "rpc");
 %s
-        let req_msg = request.into_inner();
+        let req_msg = %s;
         let from_revision = req_msg.from_revision;
 %s
         let resume_revision = if from_revision == 0 { source.revision } else { from_revision };
@@ -1473,6 +1584,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(tonic::Response::new(Box::pin(stream) as Self::%sStream))
     }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation+watchPre+accountingSetup,
+				serverStreamReqExpr,
 				sourceBinding, fieldName, changeType,
 				itemSan, outputType, method.Resolved.WatchOneOf, oneofPath, validateEnvelope, sendClosed,
 				sendErr,
@@ -1484,7 +1596,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 
 		// Streaming methods - extract caller, delegate to handler
 		if !method.ClientStreaming && method.ServerStreaming {
-			handlerCall := fmt.Sprintf("self.handler.%s(caller.as_ref(), request.into_inner()).await", methodSnake)
+			handlerCall := fmt.Sprintf("self.handler.%s(caller.as_ref(), %s).await", methodSnake, serverStreamReqExpr)
 			if handlerEmpty {
 				handlerCall = fmt.Sprintf("self.handler.%s(caller.as_ref()).await", methodSnake)
 			}
@@ -1644,12 +1756,12 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         req.validate().map_err(|e| tonic::Status::invalid_argument(format!("validation failed: {}", e)))?;
 `
 		// (spec.principal): stamp or refuse before the handler sees the request.
-		if pf := san.requestPrincipalField(method.FullInputType, servicePackage); pf != "" {
-			validationBlock += rustRequestPrincipalBlock(pf, method.Name)
+		if reqPrincipal != "" {
+			validationBlock += rustRequestPrincipalBlock(reqPrincipal, method.Name, "req", "        ")
 		}
 		// (spec.namespace): the same stamp or refuse, bound to the namespace claim.
-		if nf := san.requestNamespaceField(method.FullInputType, servicePackage); nf != "" {
-			validationBlock += rustRequestNamespaceBlock(nf, method.Name)
+		if reqNamespace != "" {
+			validationBlock += rustRequestNamespaceBlock(reqNamespace, method.Name, "req", "        ")
 		}
 		// (spec.owner_default): refuse the owner's own contradicted access,
 		// after the stamp has bound the request principal to the caller.
@@ -1668,6 +1780,15 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         // Validate request before decoding the page token or invoking the handler.
         req.validate().map_err(|e| tonic::Status::invalid_argument(format!("validation failed: {}", e)))?;
 `
+		// (spec.principal)/(spec.namespace): stamp or refuse before the page
+		// token is decoded, so the window the handler is asked for is already
+		// the caller's own.
+		if reqPrincipal != "" {
+			pageValidation += rustRequestPrincipalBlock(reqPrincipal, method.Name, "req", "        ")
+		}
+		if reqNamespace != "" {
+			pageValidation += rustRequestNamespaceBlock(reqNamespace, method.Name, "req", "        ")
+		}
 		totalBlock := ""
 		if method.Resolved.PageHasTotal {
 			totalBlock = `

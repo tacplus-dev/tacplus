@@ -1500,6 +1500,13 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             %s.validate%s(request);
 `, inputHelpers, method.InputType)
 	}
+	// (spec.principal)/(spec.namespace) on the request of a server-streaming
+	// shape. The request is still a single message on Tier-2, Tier-3, WATCH and
+	// plain server-streaming, so this is the unary check verbatim; only the
+	// seam differs.
+	if !handlerEmpty {
+		streamInputValidation += javaRequestScopePins(san, method.FullInputType, servicePackage, "request", method.Name, "            ")
+	}
 	streamResponseObserver := "responseObserver"
 	if outputHelpers != "" && !emptyOutput {
 		streamResponseObserver = fmt.Sprintf("validatingResponseObserver(responseObserver, value -> %s.validate%s(value))", outputHelpers, method.OutputType)
@@ -1514,6 +1521,16 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 	}
 	needsStreamMessageAuth := method.ClientStreaming && method.TargetNamespaceField != "" && !authDisabled && !authAnyUser
 	clientStreamInputObserver := func(handlerObserverExpr, responseObserverExpr string) string {
+		// (spec.principal)/(spec.namespace) on a request STREAM: per message,
+		// not once at stream open. Wrapped CLOSEST to the handler, so the
+		// message the handler receives is the stamped one and the per-message
+		// auth + validation above still see the message as the client wrote it.
+		if !handlerEmpty {
+			if g := javaRequestScopePins(san, method.FullInputType, servicePackage, "__scoped", method.Name, "                    "); g != "" {
+				handlerObserverExpr = fmt.Sprintf("scopingRequestObserver(%s, value -> {\n                %s __scoped = value;\n%s                return __scoped;\n            }, %s)",
+					handlerObserverExpr, inputType, g, responseObserverExpr)
+			}
+		}
 		if !needsStreamMessageAuth && (inputHelpers == "" || handlerEmpty) {
 			return handlerObserverExpr
 		}
@@ -1540,6 +1557,12 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			pageInputValidation = fmt.Sprintf(`
             // Validate request before decoding the page token or invoking the handler.
             %s.validate%s(request);`, inputHelpers, method.InputType)
+		}
+		// (spec.principal)/(spec.namespace): stamp or refuse before the page
+		// token is decoded, so the window the handler is asked for is already
+		// the caller's own.
+		if g := javaRequestScopePins(san, method.FullInputType, servicePackage, "request", method.Name, "            "); g != "" {
+			pageInputValidation += "\n" + g
 		}
 		pageOutputValidation := ""
 		if outputHelpers != "" {
@@ -1717,6 +1740,15 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			// client-triggerable process halt, so the pin lands with it.
 			nrf, nf := san.predicateNamespaceField(method.FullInputType, servicePackage)
 			if g := javaPredicateNamespacePin(nrf, nf, "request", method.Name, "            ", recordPlaneS2S); g != "" {
+				inputValidation += "\n" + g
+			}
+		}
+		// (spec.principal)/(spec.namespace) on the request itself. Unlike the
+		// two pins above this is not gated on the record plane or on c2s: the
+		// marker is a statement about the REQUEST, and its contract in
+		// spec.proto is unqualified.
+		if !handlerEmpty {
+			if g := javaRequestScopePins(san, method.FullInputType, servicePackage, "request", method.Name, "            "); g != "" {
 				inputValidation += "\n" + g
 			}
 		}

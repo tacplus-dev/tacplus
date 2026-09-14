@@ -290,6 +290,10 @@ func (s {{.ServerName}}ValidatingServerStreamingServer[T]) Send(msg *T) error {
 type {{.ServerName}}ValidatingClientStreamingServer[Req, Res any] struct {
 	grpc.ClientStreamingServer[Req, Res]
 	authorizeReq func(*Req) error
+	// scopeReq is the per-message (spec.principal)/(spec.namespace) stamp-or-refuse.
+	// A request stream is not one request: the check runs on every inbound
+	// message, so a later one cannot name a principal an earlier one did not.
+	scopeReq func(*Req) error
 	validateReq func(*Req) error
 	validateRes func(*Res) error
 }
@@ -301,6 +305,11 @@ func (s {{.ServerName}}ValidatingClientStreamingServer[Req, Res]) Recv() (*Req, 
 	}
 	if s.authorizeReq != nil {
 		if err := s.authorizeReq(msg); err != nil {
+			return nil, err
+		}
+	}
+	if s.scopeReq != nil {
+		if err := s.scopeReq(msg); err != nil {
 			return nil, err
 		}
 	}
@@ -324,6 +333,10 @@ func (s {{.ServerName}}ValidatingClientStreamingServer[Req, Res]) SendAndClose(m
 type {{.ServerName}}ValidatingBidiStreamingServer[Req, Res any] struct {
 	grpc.BidiStreamingServer[Req, Res]
 	authorizeReq func(*Req) error
+	// scopeReq is the per-message (spec.principal)/(spec.namespace) stamp-or-refuse.
+	// A request stream is not one request: the check runs on every inbound
+	// message, so a later one cannot name a principal an earlier one did not.
+	scopeReq func(*Req) error
 	validateReq func(*Req) error
 	validateRes func(*Res) error
 }
@@ -335,6 +348,11 @@ func (s {{.ServerName}}ValidatingBidiStreamingServer[Req, Res]) Recv() (*Req, er
 	}
 	if s.authorizeReq != nil {
 		if err := s.authorizeReq(msg); err != nil {
+			return nil, err
+		}
+	}
+	if s.scopeReq != nil {
+		if err := s.scopeReq(msg); err != nil {
 			return nil, err
 		}
 	}

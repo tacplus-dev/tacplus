@@ -62,7 +62,12 @@ public sealed class C2SClient : IDisposable
         {
             var callCredentials = CallCredentials.FromInterceptor(async (context, metadata) =>
             {
-                var token = await tokenProvider(CancellationToken.None).ConfigureAwait(false);
+                // context.CancellationToken is the cancellation token of the RPC
+                // being called, so cancelling or timing out the call also cancels
+                // a token acquisition that is still in flight. Passing
+                // CancellationToken.None here would leave the provider running —
+                // and the call waiting on it — past the caller's cancellation.
+                var token = await tokenProvider(context.CancellationToken).ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(token))
                 {
                     metadata.Add("authorization", $"Bearer {token}");

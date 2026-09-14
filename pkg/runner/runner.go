@@ -554,6 +554,31 @@ func goModuleBasePath(pkg, cwd, outDir, outputName string) string {
 // derived package/module/crate identifier and selfPackage in every target.
 var pkgSegmentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// javaReservedWords are the Java keywords, boolean/null literals, and the lone
+// underscore — none of which may appear as a package-name segment.
+//
+// Java is the only target that needs this check: canonicalPkgToNative emits the
+// canonical pkg VERBATIM as the Java package root (`com.example.foo` + `.model`),
+// so every segment lands in a `package …;` declaration in every generated file.
+// The other targets use only the LAST segment and always suffix it
+// (`foo-model`, `foo_model`, `FooModel`), or — for Go — use the segments as
+// import-path elements, which are plain strings; none of those can collide with
+// a reserved word. Do not add speculative per-language lists here for paths that
+// cannot produce a bare reserved identifier.
+var javaReservedWords = map[string]bool{
+	"abstract": true, "assert": true, "boolean": true, "break": true, "byte": true,
+	"case": true, "catch": true, "char": true, "class": true, "const": true,
+	"continue": true, "default": true, "do": true, "double": true, "else": true,
+	"enum": true, "extends": true, "final": true, "finally": true, "float": true,
+	"for": true, "goto": true, "if": true, "implements": true, "import": true,
+	"instanceof": true, "int": true, "interface": true, "long": true, "native": true,
+	"new": true, "package": true, "private": true, "protected": true, "public": true,
+	"return": true, "short": true, "static": true, "strictfp": true, "super": true,
+	"switch": true, "synchronized": true, "this": true, "throw": true, "throws": true,
+	"transient": true, "try": true, "void": true, "volatile": true, "while": true,
+	"true": true, "false": true, "null": true, "_": true,
+}
+
 // validateCanonicalPkg checks that the canonical pkg from tacplus.yaml produces
 // valid identifiers for the target language before generation begins. It rejects
 // empty segments (leading/trailing/consecutive dots) and any segment that is not
@@ -568,6 +593,14 @@ func validateCanonicalPkg(canonical, lang string) error {
 		if !pkgSegmentRe.MatchString(seg) {
 			return fmt.Errorf("tacplus.yaml pkg %q has invalid segment %q for %s generation: each segment must be a valid identifier (letters, digits, underscores; not starting with a digit). Hyphens are not allowed — e.g. use %q instead of %q",
 				canonical, seg, lang, strings.ReplaceAll(seg, "-", ""), seg)
+		}
+		// A segment that is a valid identifier can still be a Java reserved word.
+		// Java emits the canonical pkg verbatim into `package …;`, so e.g.
+		// `com.example.class` compiles to nothing — javac rejects every generated
+		// file. Fail here rather than after the whole tree has been written.
+		if lang == "java" && javaReservedWords[seg] {
+			return fmt.Errorf("tacplus.yaml pkg %q has segment %q, which is a Java reserved word and cannot appear in a package declaration; rename the segment (e.g. %q)",
+				canonical, seg, seg+"_")
 		}
 	}
 	return nil

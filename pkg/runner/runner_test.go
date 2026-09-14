@@ -166,6 +166,19 @@ func Test_validateCanonicalPkg(t *testing.T) {
 		{"leading dot", ".com.example.identity", "rust", true},
 		{"consecutive dots", "com..example", "go", true},
 		{"space in segment", "com.example.my service", "typescript", true},
+		// Java emits the canonical pkg verbatim into `package …;`, so a segment
+		// that is a Java reserved word makes javac reject every generated file.
+		{"java reserved word segment", "com.example.class", "java", true},
+		{"java reserved word literal segment", "com.example.null", "java", true},
+		{"java reserved lone underscore segment", "com.example._", "java", true},
+		// Every other target uses only the last segment and always suffixes it
+		// (foo-model / foo_model / FooModel), or — Go — uses the segments as
+		// import-path strings, so a reserved word never becomes a bare identifier.
+		{"java reserved word is fine for rust", "com.example.class", "rust", false},
+		{"java reserved word is fine for go", "com.example.class", "go", false},
+		// Java contextual keywords (record, sealed, var, yield) remain legal
+		// package segments and must not be rejected.
+		{"java contextual keyword allowed", "com.example.record", "java", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

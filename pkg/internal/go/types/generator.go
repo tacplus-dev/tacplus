@@ -3,7 +3,9 @@
 package types
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +24,35 @@ import (
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
 	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
 )
+
+// injectGoPackage adds an `option go_package` line to a generated proto file
+// that does not already carry one, reporting whether the file exists at all.
+//
+// The generated/*.proto files are written conditionally (e.g.
+// GenerateTenantConfig writes nothing when no service declares a tenant config
+// slice), so a missing file is a normal outcome and reports exists=false. Any
+// OTHER I/O failure is fatal: swallowing it would either drop the file from the
+// protoc compilation list or leave it without a go_package, surfacing later as
+// a misleading protoc/import failure instead of naming the real cause here.
+func injectGoPackage(path, protoPackage, goPackage string) (bool, error) {
+	content, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to read generated proto %s: %w", path, err)
+	}
+	if strings.Contains(string(content), "go_package") {
+		return true, nil
+	}
+	modified := strings.Replace(string(content),
+		"package "+protoPackage+";",
+		fmt.Sprintf("package %s;\noption go_package = %q;", protoPackage, goPackage), 1)
+	if err := os.WriteFile(path, []byte(modified), 0644); err != nil {
+		return false, fmt.Errorf("failed to inject go_package into %s: %w", path, err)
+	}
+	return true, nil
+}
 
 // Generate generates Go code from proto files
 // Implements a multi-pass build system:
@@ -230,16 +261,12 @@ func Generate(config *tactype.Config) error {
 	// OpaEval is now appended to the source vservices proto (no separate generated file).
 	for _, gp := range genProtos {
 		genPath := filepath.Join(tempProtoDir, gp.file)
-		if _, err := os.Stat(genPath); err == nil {
+		exists, err := injectGoPackage(genPath, gp.protoPackage, gp.goPackage)
+		if err != nil {
+			return err
+		}
+		if exists {
 			protoFilePaths = append(protoFilePaths, gp.file)
-			if content, err := os.ReadFile(genPath); err == nil {
-				if !strings.Contains(string(content), "go_package") {
-					modified := strings.Replace(string(content),
-						"package "+gp.protoPackage+";",
-						fmt.Sprintf("package %s;\noption go_package = \"%s\";", gp.protoPackage, gp.goPackage), 1)
-					os.WriteFile(genPath, []byte(modified), 0644)
-				}
-			}
 		}
 	}
 
@@ -261,31 +288,23 @@ func Generate(config *tactype.Config) error {
 	// to the compilation list. Must happen after GenerateTenantConfig since that
 	// call overwrites any previously-injected go_package.
 	tenantConfigPath := filepath.Join(tempProtoDir, "generated/tenant_config.proto")
-	if content, err := os.ReadFile(tenantConfigPath); err == nil {
-		if !strings.Contains(string(content), "go_package") {
-			goPackage := fmt.Sprintf("%s/types/generated/tenant_config", config.ModuleBasePath)
-			modified := strings.Replace(string(content),
-				"package tenant_config;",
-				fmt.Sprintf("package tenant_config;\noption go_package = %q;", goPackage), 1)
-			_ = os.WriteFile(tenantConfigPath, []byte(modified), 0644)
-		}
-		if !slices.Contains(protoFilePaths, "generated/tenant_config.proto") {
-			protoFilePaths = append(protoFilePaths, "generated/tenant_config.proto")
-		}
+	exists, err := injectGoPackage(tenantConfigPath, "tenant_config",
+		fmt.Sprintf("%s/types/generated/tenant_config", config.ModuleBasePath))
+	if err != nil {
+		return err
+	}
+	if exists && !slices.Contains(protoFilePaths, "generated/tenant_config.proto") {
+		protoFilePaths = append(protoFilePaths, "generated/tenant_config.proto")
 	}
 	// Same for the freshly-written project_config.proto.
 	projectConfigPath := filepath.Join(tempProtoDir, "generated/project_config.proto")
-	if content, err := os.ReadFile(projectConfigPath); err == nil {
-		if !strings.Contains(string(content), "go_package") {
-			goPackage := fmt.Sprintf("%s/types/generated/project_config", config.ModuleBasePath)
-			modified := strings.Replace(string(content),
-				"package project_config;",
-				fmt.Sprintf("package project_config;\noption go_package = %q;", goPackage), 1)
-			_ = os.WriteFile(projectConfigPath, []byte(modified), 0644)
-		}
-		if !slices.Contains(protoFilePaths, "generated/project_config.proto") {
-			protoFilePaths = append(protoFilePaths, "generated/project_config.proto")
-		}
+	exists, err = injectGoPackage(projectConfigPath, "project_config",
+		fmt.Sprintf("%s/types/generated/project_config", config.ModuleBasePath))
+	if err != nil {
+		return err
+	}
+	if exists && !slices.Contains(protoFilePaths, "generated/project_config.proto") {
+		protoFilePaths = append(protoFilePaths, "generated/project_config.proto")
 	}
 	if err := proto.ResolveStatesFromProto(config, config.FlatProtoDir); err != nil {
 		return err

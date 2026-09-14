@@ -301,3 +301,32 @@ func TestRenderC2SClientRejectsBearerTokenOverPlaintext(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderC2SClientTokenProviderHonorsCallCancellation pins that the bearer
+// token is fetched with the RPC's own cancellation token, not
+// CancellationToken.None. Grpc.Core.AuthInterceptorContext exposes
+// CancellationToken as "the cancellation token of the RPC being called"; passing
+// None instead leaves a blocked token provider (and the call waiting on it)
+// running after the caller cancels or the deadline expires. As with the other
+// C2SClient tests here, there is no C# execution harness in this repo, so the
+// contract is asserted on the emitted source.
+func TestRenderC2SClientTokenProviderHonorsCallCancellation(t *testing.T) {
+	out, err := executeCSharpTemplate("C2SClient.cs.tmpl", c2sClientTemplateData{
+		PackageName: "MyTacplus",
+		Services: []c2dServiceTemplateData{
+			{MethodName: "WithContractApi", ClientType: "Contractclient.ContractApi.ContractApiClient"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("render C2SClient: %v", err)
+	}
+	s := string(out)
+
+	want := "await tokenProvider(context.CancellationToken).ConfigureAwait(false)"
+	if !strings.Contains(s, want) {
+		t.Fatalf("C2SClient.cs does not thread the per-call cancellation token into the token provider (missing %q)\n%s", want, s)
+	}
+	if strings.Contains(s, "tokenProvider(CancellationToken.None)") {
+		t.Errorf("C2SClient.cs still acquires the bearer token with CancellationToken.None\n%s", s)
+	}
+}

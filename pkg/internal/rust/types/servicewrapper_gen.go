@@ -342,10 +342,22 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 			return err
 		}
 		// Replace hardcoded None caller with token extraction so handlers
-		// receive the authenticated Caller from the bearer token.
-		wrapper = strings.ReplaceAll(wrapper,
-			"let caller: Option<servicemanager::auth::Caller> = None;",
-			rustCallerExtraction)
+		// receive the authenticated Caller from the bearer token — but only
+		// where rustAuthLine actually ran an authorizer over that same header
+		// first. rustCallerExtraction re-parses the raw authorization header
+		// with token::Token::parse, which base64-decodes and checks nothing;
+		// on an authorized path the signature was already verified, so the
+		// re-parse is safe, while on the auth_disabled/c2d path nothing
+		// verified it and the handler would receive a caller whose subject the
+		// client chose. Leave the placeholder None there — the same answer
+		// rustAuthLine already gives the accounting identity in that branch,
+		// and the contract the handler trait documents ("None when
+		// disable_auth = true").
+		if !rustCallerUnverified(targetService, method) {
+			wrapper = strings.ReplaceAll(wrapper,
+				"let caller: Option<servicemanager::auth::Caller> = None;",
+				rustCallerExtraction)
+		}
 		grpcWrappers.WriteString(wrapper)
 		grpcWrappers.WriteString("\n")
 
@@ -917,6 +929,16 @@ const rustCallerExtraction = `let caller: Option<servicemanager::auth::Caller> =
             .and_then(|t| token::Token::parse(t).ok())
             .map(|t| servicemanager::auth::Caller::new(t, request_id.clone()));`
 
+// rustCallerUnverified reports whether rustAuthLine emits no authorizer call
+// for this method, so nothing verifies the request's authorization header.
+// Both the accounting identity (inside rustAuthLine) and the handler-facing
+// caller (the rustCallerExtraction splice) must answer "no identity" for the
+// same methods — the two disagreeing is how a client-asserted token reached a
+// handler on a path nothing authenticated.
+func rustCallerUnverified(svc *parser.ServiceInfo, method *parser.MethodInfo) bool {
+	return method.AuthDisabled || svc.AuthDisabled || svc.IsC2D
+}
+
 // rustAuthLine returns the Rust authorization call for a gRPC method.
 // auth_disabled → no auth check; auth_any_user → fixed namespace at-or-below; default → full authorize.
 // When target_namespace_field is set on a non-client-streaming method, also emit a
@@ -929,7 +951,7 @@ func rustAuthLine(svc *parser.ServiceInfo, method *parser.MethodInfo, fullMethod
 	// gate must not apply — a c2d wrapper has no authorizer and would otherwise
 	// fail closed ("authorizer not configured — auth is mandatory"), breaking the
 	// daemon's own control plane (e.g. a client daemon's DaemonControl/HookReceiver).
-	if method.AuthDisabled || svc.AuthDisabled || svc.IsC2D {
+	if rustCallerUnverified(svc, method) {
 		// Nothing verified a caller here, so accounting records carry no identity —
 		// an empty map, never something the caller asserted in a header.
 		base = "// c2d/auth_disabled: no authorization check\n        let " + rustCallerIdentityVar + ": std::collections::HashMap<String, String> = std::collections::HashMap::new();"

@@ -205,6 +205,9 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateAuthAnnotations(dp); err != nil {
 		return err
 	}
+	if err := parser.ValidateAuthServicePatterns(dp); err != nil {
+		return err
+	}
 	if err := parser.ValidateSpiffeIdentityAnnotations(dp); err != nil {
 		return err
 	}

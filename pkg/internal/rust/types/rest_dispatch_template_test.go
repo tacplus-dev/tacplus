@@ -155,3 +155,52 @@ func renderRustRestDispatchForTest(t *testing.T, data restDispatchData) string {
 	}
 	return buf.String()
 }
+
+// Every REST error body carries runtime strings — gRPC status messages, serde
+// decode errors, validate() messages that echo the caller's own field values.
+// Hand-building {"error":"..."} with format! lets a caller who can steer any of
+// those close the JSON string and append fields of their own, so the template
+// must route all of them through error_body, which serializes the message.
+func TestRustRestDispatchEscapesErrorBodies(t *testing.T) {
+	out := renderRustRestDispatchForTest(t, restDispatchData{
+		HasStreaming: true,
+		UnaryArms: []dispatchArm{
+			{
+				GrpcPath:       "/contract.ContractApi/GetAudit",
+				ServiceID:      "contract",
+				MethodSnake:    "get_audit",
+				ClientPath:     "contract::contract_api_client::ContractApiClient",
+				FromJsonPath:   "contract::get_audit_request_from_json",
+				ToJsonPath:     "contract::get_audit_response_to_json",
+				ValidateInput:  true,
+				ValidateOutput: true,
+			},
+		},
+		StreamArms: []dispatchArm{
+			{
+				GrpcPath:       "/contract.ContractApi/WatchAudit",
+				ServiceID:      "contract",
+				MethodSnake:    "watch_audit",
+				ClientPath:     "contract::contract_api_client::ContractApiClient",
+				FromJsonPath:   "contract::watch_audit_request_from_json",
+				ToJsonPath:     "contract::watch_audit_event_to_json",
+				ValidateInput:  true,
+				ValidateOutput: true,
+			},
+		},
+	})
+
+	if strings.Contains(out, `\"error\":\"`) {
+		t.Fatalf("REST dispatch must not hand-build JSON error bodies:\n%s", out)
+	}
+	for _, want := range []string{
+		`fn error_body(message: impl std::fmt::Display) -> String {`,
+		`serde_json::json!({ "error": message.to_string() }).to_string()`,
+		`(http_code, error_body(status.message()))`,
+		`.data(error_body(message))`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("rendered REST dispatch missing %q:\n%s", want, out)
+		}
+	}
+}

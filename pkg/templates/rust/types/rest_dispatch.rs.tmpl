@@ -60,8 +60,14 @@ fn json_req<T: serde::de::DeserializeOwned + Default>(body: &[u8]) -> Result<T, 
         return Ok(T::default());
     }
     serde_json::from_slice(body).map_err(|e| {
-        (StatusCode::BAD_REQUEST, format!("{{\"error\":\"invalid request body: {}\"}}", e))
+        (StatusCode::BAD_REQUEST, error_body(format!("invalid request body: {}", e)))
     })
+}
+
+/// Build a JSON error body, escaping the message so it cannot break out of the
+/// JSON string or inject additional fields.
+fn error_body(message: impl std::fmt::Display) -> String {
+    serde_json::json!({ "error": message.to_string() }).to_string()
 }
 
 /// Convert a gRPC status to an HTTP error tuple.
@@ -77,12 +83,12 @@ pub fn grpc_err(status: tonic::Status) -> (StatusCode, String) {
         tonic::Code::ResourceExhausted => StatusCode::TOO_MANY_REQUESTS,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    (http_code, format!("{{\"error\":\"{}\"}}", status.message()))
+    (http_code, error_body(status.message()))
 }
 
 <<- if .HasStreaming >>
 fn sse_error(message: impl std::fmt::Display) -> Event {
-    Event::default().event("error").data(format!("{{\"error\":\"{}\"}}", message))
+    Event::default().event("error").data(error_body(message))
 }
 <<- end >>
 
@@ -164,9 +170,9 @@ pub async fn dispatch(
                 .map_err(grpc_err)?;
 <<- end >>
 <<- else >>
-            let req = << .FromJsonPath >>(body).map_err(|e| (StatusCode::BAD_REQUEST, format!("{{\"error\":\"invalid request body: {}\"}}", e)))?;
+            let req = << .FromJsonPath >>(body).map_err(|e| (StatusCode::BAD_REQUEST, error_body(format!("invalid request body: {}", e))))?;
 <<- if .ValidateInput >>
-            req.validate().map_err(|e| (StatusCode::BAD_REQUEST, format!("{{\"error\":\"request validation failed: {}\"}}", e)))?;
+            req.validate().map_err(|e| (StatusCode::BAD_REQUEST, error_body(format!("request validation failed: {}", e))))?;
 <<- end >>
 <<- if .ClientStreaming >>
             << if .IsEmptyOutput >>let _ =<< else >>let resp =<< end >> << .ClientPath >>::new(channel)
@@ -185,18 +191,18 @@ pub async fn dispatch(
 <<- else >>
             let resp = resp.into_inner();
 <<- if .ValidateOutput >>
-            resp.validate().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{{\"error\":\"response validation failed: {}\"}}", e)))?;
+            resp.validate().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_body(format!("response validation failed: {}", e))))?;
 <<- end >>
             let bytes = << .ToJsonPath >>(&resp)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{{\"error\":\"failed to serialize response: {}\"}}", e)))?;
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_body(format!("failed to serialize response: {}", e))))?;
             String::from_utf8(bytes)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{{\"error\":\"failed to encode response: {}\"}}", e)))
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_body(format!("failed to encode response: {}", e))))
 <<- end >>
         }
 <<- end >>
         _ => Err((
             StatusCode::NOT_IMPLEMENTED,
-            format!("{{\"error\":\"unknown gRPC path: {}\"}}", grpc_path),
+            error_body(format!("unknown gRPC path: {}", grpc_path)),
         )),
     }
 }
@@ -232,11 +238,11 @@ pub async fn dispatch_stream(
 <<- else >>
             let req = match << .FromJsonPath >>(body) {
                 Ok(r) => r,
-                Err(e) => return (StatusCode::BAD_REQUEST, format!("{{\"error\":\"invalid request body: {}\"}}", e)).into_response(),
+                Err(e) => return (StatusCode::BAD_REQUEST, error_body(format!("invalid request body: {}", e))).into_response(),
             };
 <<- if .ValidateInput >>
             if let Err(e) = req.validate() {
-                return (StatusCode::BAD_REQUEST, format!("{{\"error\":\"request validation failed: {}\"}}", e)).into_response();
+                return (StatusCode::BAD_REQUEST, error_body(format!("request validation failed: {}", e))).into_response();
             }
 <<- end >>
 <<- if .ClientStreaming >>
@@ -291,7 +297,7 @@ pub async fn dispatch_stream(
 <<- end >>
         _ => (
             StatusCode::NOT_IMPLEMENTED,
-            format!("{{\"error\":\"unknown streaming gRPC path: {}\"}}", grpc_path),
+            error_body(format!("unknown streaming gRPC path: {}", grpc_path)),
         ).into_response(),
     }
 }
@@ -308,7 +314,7 @@ fn json_response<T: serde::Serialize>(value: &T) -> axum::response::Response {
         ).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("{{\"error\":\"failed to serialize response: {}\"}}", e),
+            error_body(format!("failed to serialize response: {}", e)),
         ).into_response(),
     }
 }

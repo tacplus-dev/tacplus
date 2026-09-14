@@ -213,12 +213,7 @@ func defaultAnnotationToPython(annKey string, annVal model.AnnotationValue) (pyt
 	case "default_int":
 		return "int", fmt.Sprintf("%d", annVal.IntValue)
 	case "default_float":
-		s := fmt.Sprintf("%g", annVal.FloatValue)
-		// Ensure the literal contains a decimal point for clarity
-		if !strings.Contains(s, ".") {
-			s = s + ".0"
-		}
-		return "float", s
+		return "float", pyFloatLiteral(annVal.FloatValue)
 	case "default_bool":
 		if annVal.BoolValue {
 			return "bool", "True"

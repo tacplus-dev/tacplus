@@ -358,7 +358,7 @@ func Generate(config *tactype.Config) error {
 	// service wrappers (accounting). Must happen before writeLibTemplates.
 	_, svcRPCs, vsEntries, err := proto.ScanAndGenerateConfigHolder(config.InputDir, absInputDir)
 	if err != nil {
-		zap.L().Warn("Failed to scan service RPCs", zap.Error(err))
+		return fmt.Errorf("failed to generate generated/*.proto: %w", err)
 	}
 
 	// Write library templates BEFORE service wrappers because writeLibTemplates

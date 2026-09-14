@@ -3,6 +3,7 @@
 package model
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -268,6 +269,45 @@ type Field struct {
 	ParamKey            string                     // Explicit enum value for FromMap generation, e.g., "TOKEN_PARAM_KEY_CLIENT_ID"
 	JsonKey             string                     // Override JSON key for serialization (from spec.json_key)
 	JsonAliases         []string                   // Additional keys accepted during deserialization (from spec.json_aliases)
+}
+
+// ElementMaxSizeBytes returns the per-element byte bound declared by
+// (spec.assert_element_max_size) on f, or 0 when the annotation is absent. The
+// annotation bounds each element of a repeated string/bytes field and each
+// VALUE of a map with a string/bytes value type; map keys are not covered.
+// Callers that emit validation MUST call ValidateElementMaxSize first so a
+// misapplied annotation is a generation error rather than a silent no-op.
+func (f *Field) ElementMaxSizeBytes() int64 {
+	ann, ok := f.Annotations["assert_element_max_size"]
+	if !ok || ann.Type != AnnotationTypeInt || ann.IntValue <= 0 {
+		return 0
+	}
+	return ann.IntValue
+}
+
+// ValidateElementMaxSize reports a misapplied (spec.assert_element_max_size):
+// the annotation is only meaningful on a repeated field of type string/bytes or
+// on a map whose value type is string/bytes. msgName names the owning message
+// for the error text.
+func (f *Field) ValidateElementMaxSize(msgName string) error {
+	ann, ok := f.Annotations["assert_element_max_size"]
+	if !ok {
+		return nil
+	}
+	if ann.Type != AnnotationTypeInt {
+		return fmt.Errorf("assert_element_max_size annotation on field %s.%s must be an integer value", msgName, f.Name)
+	}
+	switch {
+	case f.IsMap:
+		if f.MapValueType == "string" || f.MapValueType == "bytes" {
+			return nil
+		}
+	case f.IsRepeated:
+		if f.Type == "string" || f.Type == "bytes" {
+			return nil
+		}
+	}
+	return fmt.Errorf("assert_element_max_size annotation on field %s.%s requires a repeated string/bytes field or a map with a string/bytes value type", msgName, f.Name)
 }
 
 // ParamMapConfig represents the generate_from_params message option

@@ -1083,6 +1083,15 @@ func Validate%sWithDepth(m *%s, depth int) error {
 `, goFieldName, annotationValue.IntValue, goFieldName, annotationValue.IntValue, errFunc, goFieldName, annotationValue.IntValue, goFieldName)
 				}
 
+			case "assert_element_max_size":
+				// Per-element byte bound. The emission lives in the per-element
+				// loop below, which applies this bound in place of the default
+				// one it already enforces on every repeated/map string/bytes
+				// element; here we only reject a misapplied annotation.
+				if err := field.ValidateElementMaxSize(msg.Name); err != nil {
+					return err
+				}
+
 			case "assert_min_size":
 				// Generate minimum size validation for string/bytes/repeated/map fields
 				if annotationValue.Type != model.AnnotationTypeInt {
@@ -1194,16 +1203,23 @@ func Validate%sWithDepth(m *%s, depth int) error {
 		errFunc := "protoerrors.NewErrMissingInvalidData"
 		defaultSize := collection.DefaultScalarBytes
 
+		// An explicit (spec.assert_element_max_size) replaces the default bound
+		// for repeated elements and map values; map keys keep the default.
+		elemSize, elemLabel := defaultSize, "default max size"
+		if bound := field.ElementMaxSizeBytes(); bound > 0 {
+			elemSize, elemLabel = bound, "assert_element_max_size"
+		}
+
 		if field.IsRepeated && (field.Type == "string" || field.Type == "bytes") {
 			hasValidations = true
-			fmt.Fprintf(b, `	// Validate %s elements (default max size: %d bytes)
+			fmt.Fprintf(b, `	// Validate %s elements (%s: %d bytes)
 	for i, val := range m.%s {
 		if len(val) > %d {
 			return %s(nil, "field %s[%%d] exceeds max size of %d bytes, got: %%d", i, len(val))
 		}
 	}
 
-`, goFieldName, defaultSize, goFieldName, defaultSize, errFunc, goFieldName, defaultSize)
+`, goFieldName, elemLabel, elemSize, goFieldName, elemSize, errFunc, goFieldName, elemSize)
 		}
 
 		if field.IsMap {
@@ -1220,14 +1236,14 @@ func Validate%sWithDepth(m *%s, depth int) error {
 			}
 			if field.MapValueType == "string" || field.MapValueType == "bytes" {
 				hasValidations = true
-				fmt.Fprintf(b, `	// Validate %s values (default max size: %d bytes)
+				fmt.Fprintf(b, `	// Validate %s values (%s: %d bytes)
 	for key, val := range m.%s {
 		if len(val) > %d {
 			return %s(nil, "field %s[%%v] exceeds max size of %d bytes, got: %%d", key, len(val))
 		}
 	}
 
-`, goFieldName, defaultSize, goFieldName, defaultSize, errFunc, goFieldName, defaultSize)
+`, goFieldName, elemLabel, elemSize, goFieldName, elemSize, errFunc, goFieldName, elemSize)
 			}
 		}
 	}

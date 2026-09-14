@@ -237,11 +237,19 @@ func generateMessageValidation(b *strings.Builder, msg model.Message, enums []mo
 			rustFieldName := escapeRustKeyword(strutil.ToSnakeCase(field.Name))
 			defaultSize := collection.DefaultScalarBytes
 
+			// An explicit (spec.assert_element_max_size) replaces the default
+			// bound for repeated elements and map values; map keys keep the
+			// default.
+			elemSize, elemLabel := defaultSize, "default max size"
+			if bound := field.ElementMaxSizeBytes(); bound > 0 {
+				elemSize, elemLabel = bound, "assert_element_max_size"
+			}
+
 			if field.IsRepeated && (field.Type == "string" || field.Type == "bytes") {
-				fmt.Fprintf(&vb, "// Validate %s elements (default max size: %d bytes)\n", rustFieldName, defaultSize)
+				fmt.Fprintf(&vb, "// Validate %s elements (%s: %d bytes)\n", rustFieldName, elemLabel, elemSize)
 				fmt.Fprintf(&vb, "for (i, val) in self.%s.iter().enumerate() {\n", rustFieldName)
-				fmt.Fprintf(&vb, "if val.len() > %d {\n", defaultSize)
-				fmt.Fprintf(&vb, "return Err(format!(\"field %s[{}] exceeds max size of %d bytes, got: {}\", i, val.len()));\n", rustFieldName, defaultSize)
+				fmt.Fprintf(&vb, "if val.len() > %d {\n", elemSize)
+				fmt.Fprintf(&vb, "return Err(format!(\"field %s[{}] exceeds max size of %d bytes, got: {}\", i, val.len()));\n", rustFieldName, elemSize)
 				vb.WriteString("}\n")
 				vb.WriteString("}\n")
 			}
@@ -256,10 +264,10 @@ func generateMessageValidation(b *strings.Builder, msg model.Message, enums []mo
 					vb.WriteString("}\n")
 				}
 				if field.MapValueType == "string" || field.MapValueType == "bytes" {
-					fmt.Fprintf(&vb, "// Validate %s values (default max size: %d bytes)\n", rustFieldName, defaultSize)
+					fmt.Fprintf(&vb, "// Validate %s values (%s: %d bytes)\n", rustFieldName, elemLabel, elemSize)
 					fmt.Fprintf(&vb, "for (key, val) in self.%s.iter() {\n", rustFieldName)
-					fmt.Fprintf(&vb, "if val.len() > %d {\n", defaultSize)
-					fmt.Fprintf(&vb, "return Err(format!(\"field %s[{:?}] exceeds max size of %d bytes, got: {}\", key, val.len()));\n", rustFieldName, defaultSize)
+					fmt.Fprintf(&vb, "if val.len() > %d {\n", elemSize)
+					fmt.Fprintf(&vb, "return Err(format!(\"field %s[{:?}] exceeds max size of %d bytes, got: {}\", key, val.len()));\n", rustFieldName, elemSize)
 					vb.WriteString("}\n")
 					vb.WriteString("}\n")
 				}
@@ -780,6 +788,16 @@ func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Me
 					fmt.Fprintf(b, "return Err(format!(\"field %s exceeds max size of %d, got: {}\", self.%s.len()));\n", rustFieldName, annotationValue.IntValue, rustFieldName)
 					b.WriteString("}\n")
 				}
+			}
+
+		case "assert_element_max_size":
+			// Per-element byte bound. The emission lives in the per-element
+			// loop in generateMessageValidation, which applies this bound in
+			// place of the default one it already enforces on every
+			// repeated/map string/bytes element; here we only reject a
+			// misapplied annotation.
+			if err := field.ValidateElementMaxSize(msg.Name); err != nil {
+				return err
 			}
 
 		case "assert_min_size":

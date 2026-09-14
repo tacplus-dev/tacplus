@@ -233,6 +233,15 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 					}
 				}
 
+			case "assert_element_max_size":
+				// Per-element byte bound. The emission lives in the per-element
+				// loop below, which applies this bound in place of the default
+				// one it already enforces on every repeated/map string/bytes
+				// element; here we only reject a misapplied annotation.
+				if err := field.ValidateElementMaxSize(msg.Name); err != nil {
+					return err
+				}
+
 			case "assert_min_size":
 				if annotationValue.Type == model.AnnotationTypeInt {
 					presenceGuarded := false
@@ -573,20 +582,27 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 		getterName := "get" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
 		defaultSize := collection.DefaultScalarBytes
 
+		// An explicit (spec.assert_element_max_size) replaces the default bound
+		// for repeated elements and map values; map keys keep the default.
+		elemSize, elemLabel := defaultSize, "default max size"
+		if bound := field.ElementMaxSizeBytes(); bound > 0 {
+			elemSize, elemLabel = bound, "assert_element_max_size"
+		}
+
 		if field.IsRepeated && field.Type == "string" {
 			hasValidations = true
-			fmt.Fprintf(b, "// Validate %s elements (default max size: %d bytes)\n", javaFieldName, defaultSize)
+			fmt.Fprintf(b, "// Validate %s elements (%s: %d bytes)\n", javaFieldName, elemLabel, elemSize)
 			fmt.Fprintf(b, "for (String val : msg.%s()) {\n", getterName+"List")
-			fmt.Fprintf(b, "if (val.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > %d) {\n", defaultSize)
-			fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s element exceeds max size of %d bytes, got: %%d\", val.getBytes(java.nio.charset.StandardCharsets.UTF_8).length));\n", javaFieldName, defaultSize)
+			fmt.Fprintf(b, "if (val.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > %d) {\n", elemSize)
+			fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s element exceeds max size of %d bytes, got: %%d\", val.getBytes(java.nio.charset.StandardCharsets.UTF_8).length));\n", javaFieldName, elemSize)
 			b.WriteString("}\n")
 			b.WriteString("}\n")
 		} else if field.IsRepeated && field.Type == "bytes" {
 			hasValidations = true
-			fmt.Fprintf(b, "// Validate %s elements (default max size: %d bytes)\n", javaFieldName, defaultSize)
+			fmt.Fprintf(b, "// Validate %s elements (%s: %d bytes)\n", javaFieldName, elemLabel, elemSize)
 			fmt.Fprintf(b, "for (com.google.protobuf.ByteString val : msg.%s()) {\n", getterName+"List")
-			fmt.Fprintf(b, "if (val.size() > %d) {\n", defaultSize)
-			fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s element exceeds max size of %d bytes, got: %%d\", val.size()));\n", javaFieldName, defaultSize)
+			fmt.Fprintf(b, "if (val.size() > %d) {\n", elemSize)
+			fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s element exceeds max size of %d bytes, got: %%d\", val.size()));\n", javaFieldName, elemSize)
 			b.WriteString("}\n")
 			b.WriteString("}\n")
 		}
@@ -603,18 +619,18 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 			}
 			if field.MapValueType == "string" {
 				hasValidations = true
-				fmt.Fprintf(b, "// Validate %s values (default max size: %d bytes)\n", javaFieldName, defaultSize)
+				fmt.Fprintf(b, "// Validate %s values (%s: %d bytes)\n", javaFieldName, elemLabel, elemSize)
 				fmt.Fprintf(b, "for (String val : msg.%s().values()) {\n", getterName+"Map")
-				fmt.Fprintf(b, "if (val.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > %d) {\n", defaultSize)
-				fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s value exceeds max size of %d bytes, got: %%d\", val.getBytes(java.nio.charset.StandardCharsets.UTF_8).length));\n", javaFieldName, defaultSize)
+				fmt.Fprintf(b, "if (val.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > %d) {\n", elemSize)
+				fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s value exceeds max size of %d bytes, got: %%d\", val.getBytes(java.nio.charset.StandardCharsets.UTF_8).length));\n", javaFieldName, elemSize)
 				b.WriteString("}\n")
 				b.WriteString("}\n")
 			} else if field.MapValueType == "bytes" {
 				hasValidations = true
-				fmt.Fprintf(b, "// Validate %s values (default max size: %d bytes)\n", javaFieldName, defaultSize)
+				fmt.Fprintf(b, "// Validate %s values (%s: %d bytes)\n", javaFieldName, elemLabel, elemSize)
 				fmt.Fprintf(b, "for (com.google.protobuf.ByteString val : msg.%s().values()) {\n", getterName+"Map")
-				fmt.Fprintf(b, "if (val.size() > %d) {\n", defaultSize)
-				fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s value exceeds max size of %d bytes, got: %%d\", val.size()));\n", javaFieldName, defaultSize)
+				fmt.Fprintf(b, "if (val.size() > %d) {\n", elemSize)
+				fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s value exceeds max size of %d bytes, got: %%d\", val.size()));\n", javaFieldName, elemSize)
 				b.WriteString("}\n")
 				b.WriteString("}\n")
 			}

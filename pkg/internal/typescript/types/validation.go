@@ -690,6 +690,15 @@ export function %s(m: %s | undefined, depth = 0): void {
 `, fieldName, annotationValue.IntValue, fieldName, fieldName, annotationValue.IntValue, fieldName, annotationValue.IntValue, fieldName)
 				}
 
+			case "assert_element_max_size":
+				// Per-element byte bound. The emission lives in the per-element
+				// loop below, which applies this bound in place of the default
+				// one it already enforces on every repeated/map string/bytes
+				// element; here we only reject a misapplied annotation.
+				if err := field.ValidateElementMaxSize(msg.Name); err != nil {
+					return err
+				}
+
 			case "assert_min_size":
 				// Generate minimum size validation for string/bytes/repeated/map fields
 				if annotationValue.Type != model.AnnotationTypeInt {
@@ -838,9 +847,16 @@ export function %s(m: %s | undefined, depth = 0): void {
 		fieldName := upperSnakeCaseToCamelCase(field.Name)
 		defaultSize := collection.DefaultScalarBytes
 
+		// An explicit (spec.assert_element_max_size) replaces the default bound
+		// for repeated elements and map values; map keys keep the default.
+		elemSize, elemLabel := defaultSize, "default max size"
+		if bound := field.ElementMaxSizeBytes(); bound > 0 {
+			elemSize, elemLabel = bound, "assert_element_max_size"
+		}
+
 		if field.IsRepeated && field.Type == "string" {
 			hasValidations = true
-			fmt.Fprintf(b, `	// Validate %s elements (default max size: %d bytes)
+			fmt.Fprintf(b, `	// Validate %s elements (%s: %d bytes)
 	if (m.%s) {
 		for (let i = 0; i < m.%s.length; i++) {
 			const val = m.%s[i];
@@ -850,10 +866,10 @@ export function %s(m: %s | undefined, depth = 0): void {
 		}
 	}
 
-`, fieldName, defaultSize, fieldName, fieldName, fieldName, defaultSize, fieldName, defaultSize)
+`, fieldName, elemLabel, elemSize, fieldName, fieldName, fieldName, elemSize, fieldName, elemSize)
 		} else if field.IsRepeated && field.Type == "bytes" {
 			hasValidations = true
-			fmt.Fprintf(b, `	// Validate %s elements (default max size: %d bytes)
+			fmt.Fprintf(b, `	// Validate %s elements (%s: %d bytes)
 	if (m.%s) {
 		for (let i = 0; i < m.%s.length; i++) {
 			const val = m.%s[i];
@@ -863,7 +879,7 @@ export function %s(m: %s | undefined, depth = 0): void {
 		}
 	}
 
-`, fieldName, defaultSize, fieldName, fieldName, fieldName, defaultSize, fieldName, defaultSize)
+`, fieldName, elemLabel, elemSize, fieldName, fieldName, fieldName, elemSize, fieldName, elemSize)
 		}
 
 		if field.IsMap {
@@ -882,7 +898,7 @@ export function %s(m: %s | undefined, depth = 0): void {
 			}
 			if field.MapValueType == "string" {
 				hasValidations = true
-				fmt.Fprintf(b, `	// Validate %s values (default max size: %d bytes)
+				fmt.Fprintf(b, `	// Validate %s values (%s: %d bytes)
 	if (m.%s) {
 		for (const val of Object.values(m.%s)) {
 			if (new TextEncoder().encode(val).length > %d) {
@@ -891,10 +907,10 @@ export function %s(m: %s | undefined, depth = 0): void {
 		}
 	}
 
-`, fieldName, defaultSize, fieldName, fieldName, defaultSize, fieldName, defaultSize)
+`, fieldName, elemLabel, elemSize, fieldName, fieldName, elemSize, fieldName, elemSize)
 			} else if field.MapValueType == "bytes" {
 				hasValidations = true
-				fmt.Fprintf(b, `	// Validate %s values (default max size: %d bytes)
+				fmt.Fprintf(b, `	// Validate %s values (%s: %d bytes)
 	if (m.%s) {
 		for (const val of Object.values(m.%s)) {
 			if (val.length > %d) {
@@ -903,7 +919,7 @@ export function %s(m: %s | undefined, depth = 0): void {
 		}
 	}
 
-`, fieldName, defaultSize, fieldName, fieldName, defaultSize, fieldName, defaultSize)
+`, fieldName, elemLabel, elemSize, fieldName, fieldName, elemSize, fieldName, elemSize)
 			}
 		}
 	}

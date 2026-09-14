@@ -1575,6 +1575,20 @@ extend google.protobuf.FieldOptions {
   // For string/bytes: minimum byte length. For repeated/map: minimum element count.
   uint32 assert_min_size = 60052;
 
+  // assert_element_max_size enforces a maximum BYTE LENGTH on each individual
+  // element of a repeated or map field whose element type is string or bytes.
+  // This is distinct from assert_max_size on the same field, which bounds the
+  // element COUNT: a field may carry both.
+  //   repeated string domains = 2 [(spec.assert_max_size) = 32,
+  //                                (spec.assert_element_max_size) = 253];
+  // bounds the field to 32 domains of at most 253 bytes each.
+  // For a map field the bound applies to each VALUE; map keys keep the 32,768
+  // byte default. Only valid on a repeated field of type string/bytes or on a
+  // map with a string/bytes value type — applying it anywhere else is a
+  // generation error. When unset, each element falls back to the 32,768 byte
+  // (32 KB) default the generated validators already enforce.
+  uint32 assert_element_max_size = 60090;
+
   // SQL statement validation: a syntactic sanity check, NOT an injection defense.
   // Checks that a string looks like a single statement of the permitted type: it rejects a
   // few obvious tokens (semicolons, -- and /* comments, backslash escapes) and verifies the

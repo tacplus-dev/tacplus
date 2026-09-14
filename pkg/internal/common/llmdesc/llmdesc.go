@@ -443,15 +443,22 @@ func appendDefaultBoundConstraints(constraints []string, field model.Field, hasE
 		}
 	}
 
+	// (spec.assert_element_max_size) replaces the default per-element bound for
+	// repeated elements and map values; map keys keep the default.
+	elemSize, elemSuffix := collection.DefaultScalarBytes, " (default)"
+	if bound := field.ElementMaxSizeBytes(); bound > 0 {
+		elemSize, elemSuffix = bound, ""
+	}
+
 	if field.IsRepeated && (field.Type == "string" || field.Type == "bytes") {
-		constraints = append(constraints, fmt.Sprintf("maximum element size: %d bytes (default)", collection.DefaultScalarBytes))
+		constraints = append(constraints, fmt.Sprintf("maximum element size: %d bytes%s", elemSize, elemSuffix))
 	}
 	if field.IsMap {
 		if field.MapKeyType == "string" {
 			constraints = append(constraints, fmt.Sprintf("maximum key size: %d bytes (default)", collection.DefaultScalarBytes))
 		}
 		if field.MapValueType == "string" || field.MapValueType == "bytes" {
-			constraints = append(constraints, fmt.Sprintf("maximum value size: %d bytes (default)", collection.DefaultScalarBytes))
+			constraints = append(constraints, fmt.Sprintf("maximum value size: %d bytes%s", elemSize, elemSuffix))
 		}
 	}
 	return constraints
@@ -469,15 +476,24 @@ func appendDefaultConstraintInfos(constraints []ConstraintDescriptor, field mode
 		}
 	}
 
+	// (spec.assert_element_max_size) replaces the default per-element bound for
+	// repeated elements and map values; map keys keep the default.
+	elemSize, elemName, elemIsDefault, elemSource := collection.DefaultScalarBytes, "default_max_element_size", true, "default_bound"
+	valName := "default_max_value_size"
+	if bound := field.ElementMaxSizeBytes(); bound > 0 {
+		elemSize, elemName, elemIsDefault, elemSource = bound, "assert_element_max_size", false, "annotation"
+		valName = "assert_element_max_size"
+	}
+
 	if field.IsRepeated && (field.Type == "string" || field.Type == "bytes") {
-		constraints = append(constraints, intConstraintInfo("default_max_element_size", "element", collection.DefaultScalarBytes, true, "bytes", "default_bound"))
+		constraints = append(constraints, intConstraintInfo(elemName, "element", elemSize, elemIsDefault, "bytes", elemSource))
 	}
 	if field.IsMap {
 		if field.MapKeyType == "string" {
 			constraints = append(constraints, intConstraintInfo("default_max_key_size", "key", collection.DefaultScalarBytes, true, "bytes", "default_bound"))
 		}
 		if field.MapValueType == "string" || field.MapValueType == "bytes" {
-			constraints = append(constraints, intConstraintInfo("default_max_value_size", "value", collection.DefaultScalarBytes, true, "bytes", "default_bound"))
+			constraints = append(constraints, intConstraintInfo(valName, "value", elemSize, elemIsDefault, "bytes", elemSource))
 		}
 	}
 	return constraints

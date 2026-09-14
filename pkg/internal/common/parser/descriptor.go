@@ -2252,6 +2252,10 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 		val := proto.GetExtension(opts, spec.E_AssertMinSize).(uint32)
 		annotations["assert_min_size"] = model.AnnotationValue{Type: model.AnnotationTypeInt, IntValue: int64(val)}
 	}
+	if proto.HasExtension(opts, spec.E_AssertElementMaxSize) {
+		val := proto.GetExtension(opts, spec.E_AssertElementMaxSize).(uint32)
+		annotations["assert_element_max_size"] = model.AnnotationValue{Type: model.AnnotationTypeInt, IntValue: int64(val)}
+	}
 	if proto.HasExtension(opts, spec.E_AssertGt) {
 		val := proto.GetExtension(opts, spec.E_AssertGt).(int64)
 		annotations["assert_gt"] = model.AnnotationValue{Type: model.AnnotationTypeInt, IntValue: val}

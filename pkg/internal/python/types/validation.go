@@ -528,6 +528,15 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 					}
 				}
 
+			case "assert_element_max_size":
+				// Per-element byte bound. The emission lives in the per-element
+				// loop below, which applies this bound in place of the default
+				// one it already enforces on every repeated/map string/bytes
+				// element; here we only reject a misapplied annotation.
+				if err := field.ValidateElementMaxSize(msg.Name); err != nil {
+					return nil, err
+				}
+
 			case "assert_min_size":
 				if annotationValue.Type == model.AnnotationTypeInt {
 					if field.IsRepeated || field.IsMap {
@@ -591,17 +600,24 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 		pyFieldName := strutil.ToSnakeCase(field.Name)
 		defaultSize := collection.DefaultScalarBytes
 
+		// An explicit (spec.assert_element_max_size) replaces the default bound
+		// for repeated elements and map values; map keys keep the default.
+		elemSize, elemLabel := defaultSize, "default max size"
+		if bound := field.ElementMaxSizeBytes(); bound > 0 {
+			elemSize, elemLabel = bound, "assert_element_max_size"
+		}
+
 		var code strings.Builder
 		if field.IsRepeated && field.Type == "string" {
-			pyLinef(&code, 1, "# Validate %s elements (default max size: %d bytes)", pyFieldName, defaultSize)
+			pyLinef(&code, 1, "# Validate %s elements (%s: %d bytes)", pyFieldName, elemLabel, elemSize)
 			pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
-			pyLinef(&code, 2, "if len(val.encode('utf-8')) > %d:", defaultSize)
-			pyLinef(&code, 3, "raise invalid_argument(f\"field %s element exceeds max size of %d bytes, got: {len(val.encode('utf-8'))}\")", pyFieldName, defaultSize)
+			pyLinef(&code, 2, "if len(val.encode('utf-8')) > %d:", elemSize)
+			pyLinef(&code, 3, "raise invalid_argument(f\"field %s element exceeds max size of %d bytes, got: {len(val.encode('utf-8'))}\")", pyFieldName, elemSize)
 		} else if field.IsRepeated && field.Type == "bytes" {
-			pyLinef(&code, 1, "# Validate %s elements (default max size: %d bytes)", pyFieldName, defaultSize)
+			pyLinef(&code, 1, "# Validate %s elements (%s: %d bytes)", pyFieldName, elemLabel, elemSize)
 			pyLinef(&code, 1, "for val in %s:", pyFieldGet("msg", pyFieldName))
-			pyLinef(&code, 2, "if len(val) > %d:", defaultSize)
-			pyLinef(&code, 3, "raise invalid_argument(f\"field %s element exceeds max size of %d bytes, got: {len(val)}\")", pyFieldName, defaultSize)
+			pyLinef(&code, 2, "if len(val) > %d:", elemSize)
+			pyLinef(&code, 3, "raise invalid_argument(f\"field %s element exceeds max size of %d bytes, got: {len(val)}\")", pyFieldName, elemSize)
 		}
 
 		if field.IsMap {
@@ -612,15 +628,15 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 				pyLinef(&code, 3, "raise invalid_argument(f\"field %s key exceeds max size of %d bytes, got: {len(key.encode('utf-8'))}\")", pyFieldName, defaultSize)
 			}
 			if field.MapValueType == "string" {
-				pyLinef(&code, 1, "# Validate %s values (default max size: %d bytes)", pyFieldName, defaultSize)
+				pyLinef(&code, 1, "# Validate %s values (%s: %d bytes)", pyFieldName, elemLabel, elemSize)
 				pyLinef(&code, 1, "for val in %s.values():", pyFieldGet("msg", pyFieldName))
-				pyLinef(&code, 2, "if len(val.encode('utf-8')) > %d:", defaultSize)
-				pyLinef(&code, 3, "raise invalid_argument(f\"field %s value exceeds max size of %d bytes, got: {len(val.encode('utf-8'))}\")", pyFieldName, defaultSize)
+				pyLinef(&code, 2, "if len(val.encode('utf-8')) > %d:", elemSize)
+				pyLinef(&code, 3, "raise invalid_argument(f\"field %s value exceeds max size of %d bytes, got: {len(val.encode('utf-8'))}\")", pyFieldName, elemSize)
 			} else if field.MapValueType == "bytes" {
-				pyLinef(&code, 1, "# Validate %s values (default max size: %d bytes)", pyFieldName, defaultSize)
+				pyLinef(&code, 1, "# Validate %s values (%s: %d bytes)", pyFieldName, elemLabel, elemSize)
 				pyLinef(&code, 1, "for val in %s.values():", pyFieldGet("msg", pyFieldName))
-				pyLinef(&code, 2, "if len(val) > %d:", defaultSize)
-				pyLinef(&code, 3, "raise invalid_argument(f\"field %s value exceeds max size of %d bytes, got: {len(val)}\")", pyFieldName, defaultSize)
+				pyLinef(&code, 2, "if len(val) > %d:", elemSize)
+				pyLinef(&code, 3, "raise invalid_argument(f\"field %s value exceeds max size of %d bytes, got: {len(val)}\")", pyFieldName, elemSize)
 			}
 		}
 

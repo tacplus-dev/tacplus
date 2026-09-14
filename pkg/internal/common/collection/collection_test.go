@@ -278,3 +278,101 @@ func TestItemBytes_SingularStringStillUsesAssertMaxSizeAsByteBound(t *testing.T)
 		t.Fatalf("MaxMessageBytes(singular bounded string) = %d, want 15", got)
 	}
 }
+
+func TestItemBytes_RepeatedStringUsesElementMaxSize(t *testing.T) {
+	// assert_element_max_size is the per-element BYTE bound; assert_max_size on
+	// the same field stays the element COUNT.
+	f := &model.Field{
+		Name: "domains", Type: "string", IsRepeated: true,
+		Annotations: map[string]model.AnnotationValue{
+			"assert_max_size":         {Type: model.AnnotationTypeInt, IntValue: 32},
+			"assert_element_max_size": {Type: model.AnnotationTypeInt, IntValue: 253},
+		},
+	}
+	if got := ItemBytes(f, nil); got != 253 {
+		t.Fatalf("ItemBytes(repeated string, assert_element_max_size=253) = %d, want 253", got)
+	}
+
+	// Whole-field bound: 32 elements x (253 + 2 tag + 5 len) = 8320.
+	m := msg("M", *f)
+	const want = 32 * (253 + 2 + 5)
+	if got := MaxMessageBytes(m, "p", map[string]*model.Message{"p.M": m}); got != want {
+		t.Fatalf("MaxMessageBytes(repeated string x32 @253B) = %d, want %d", got, want)
+	}
+}
+
+func TestItemBytes_MapValueUsesElementMaxSize(t *testing.T) {
+	f := &model.Field{
+		Name: "labels", Type: "string", IsMap: true,
+		MapKeyType: "string", MapValueType: "string",
+		Annotations: map[string]model.AnnotationValue{
+			"assert_max_size":         {Type: model.AnnotationTypeInt, IntValue: 4},
+			"assert_element_max_size": {Type: model.AnnotationTypeInt, IntValue: 64},
+		},
+	}
+	// key keeps the unbounded-string default; the value takes the declared bound.
+	if got := ItemBytes(f, nil); got != DefaultScalarBytes+64 {
+		t.Fatalf("ItemBytes(map<string,string>, assert_element_max_size=64) = %d, want %d", got, DefaultScalarBytes+64)
+	}
+}
+
+func TestItemBytes_ElementMaxSizeAbsentStillFallsBackToDefault(t *testing.T) {
+	f := &model.Field{
+		Name: "tags", Type: "string", IsRepeated: true,
+		Annotations: map[string]model.AnnotationValue{
+			"assert_max_size": {Type: model.AnnotationTypeInt, IntValue: 8},
+		},
+	}
+	if got := ItemBytes(f, nil); got != DefaultScalarBytes {
+		t.Fatalf("ItemBytes(no element bound) = %d, want %d", got, DefaultScalarBytes)
+	}
+}
+
+// TestTierFor_ProviderInfoWithElementMaxSize pins the oauth Auth.ListProviders
+// shape that motivated the annotation: a PUBLIC_NO_AUTH SNAPSHOT of 16
+// ProviderInfo items. Without a per-element bound each of the 32 domains is
+// sized at the 32 KB unbounded default and the method routes to Tier 2, which
+// its anonymous trust ceiling forbids. Only ProviderInfo's declared fields are
+// modelled here; the generator additionally injects trace_id/noop, so the
+// end-to-end item size is larger than the number asserted below (and still
+// Tier 1).
+func TestTierFor_ProviderInfoWithElementMaxSize(t *testing.T) {
+	domains := func(withElementBound bool) model.Field {
+		ann := map[string]model.AnnotationValue{
+			"assert_max_size": {Type: model.AnnotationTypeInt, IntValue: 32},
+		}
+		if withElementBound {
+			ann["assert_element_max_size"] = model.AnnotationValue{Type: model.AnnotationTypeInt, IntValue: 253}
+		}
+		return model.Field{Name: "domains", Type: "string", IsRepeated: true, Annotations: ann}
+	}
+	providerInfo := func(withElementBound bool) *model.Message {
+		return msg("ProviderInfo",
+			model.Field{Name: "name", Type: "string", Annotations: map[string]model.AnnotationValue{
+				"assert_max_size": {Type: model.AnnotationTypeInt, IntValue: 128},
+			}},
+			domains(withElementBound),
+			model.Field{Name: "provider_index", Type: "int32"},
+		)
+	}
+
+	bounded := providerInfo(true)
+	// name 128+7=135, domains 32x(253+7)=8320, provider_index 5+7=12.
+	const wantItem = 135 + 8320 + 12
+	gotItem := MaxMessageBytes(bounded, "oauth", map[string]*model.Message{"oauth.ProviderInfo": bounded})
+	if gotItem != wantItem {
+		t.Fatalf("ProviderInfo itemBytes = %d, want %d", gotItem, wantItem)
+	}
+	if tier := TierFor(16, gotItem); tier != TierInline {
+		t.Fatalf("TierFor(16, %d) = %d, want TierInline", gotItem, tier)
+	}
+	if total := int64(16) * gotItem; total > InlineLimit {
+		t.Fatalf("16 x %d = %d exceeds InlineLimit %d", gotItem, total, InlineLimit)
+	}
+
+	unbounded := providerInfo(false)
+	gotUnbounded := MaxMessageBytes(unbounded, "oauth", map[string]*model.Message{"oauth.ProviderInfo": unbounded})
+	if tier := TierFor(16, gotUnbounded); tier != TierStream {
+		t.Fatalf("without the element bound TierFor(16, %d) = %d, want TierStream", gotUnbounded, tier)
+	}
+}

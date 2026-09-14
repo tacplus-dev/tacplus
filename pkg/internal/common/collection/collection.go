@@ -244,6 +244,14 @@ func elementMaxBytes(f *model.Field, index map[string]*model.Message, visiting m
 }
 
 func scalarStringBytes(f *model.Field) int64 {
+	// On a repeated/map field, assert_max_size is an element COUNT, not a
+	// per-element byte length (see spec.proto and the runtime validator, which
+	// only checks len(field) for these). fieldMaxBytes already consumes it as
+	// the count; nothing bounds an individual element's length, so an element
+	// falls back to the unbounded-string default.
+	if f.IsRepeated || f.IsMap {
+		return DefaultScalarBytes
+	}
 	var bound int64
 	for _, name := range []string{"assert_max_size"} {
 		ann, ok := f.Annotations[name]

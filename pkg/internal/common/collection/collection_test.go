@@ -238,3 +238,43 @@ func TestBuildMessageIndex(t *testing.T) {
 		t.Fatalf("bare-name fallback must keep the first-seen message (p.A)")
 	}
 }
+
+func TestItemBytes_RepeatedStringIgnoresCountAnnotationAsByteBound(t *testing.T) {
+	// assert_max_size on a repeated/map field is an ELEMENT COUNT, not a
+	// per-element byte length (see pkg/proto/sys/spec.proto and the runtime
+	// validator). Sizing an element with it under-counts the worst case, since
+	// nothing bounds an individual string's length inside the repeated field.
+	f := &model.Field{
+		Name: "tags", Type: "string", IsRepeated: true,
+		Annotations: map[string]model.AnnotationValue{
+			"assert_max_size": {Type: model.AnnotationTypeInt, IntValue: 8},
+		},
+	}
+	if got := ItemBytes(f, nil); got != DefaultScalarBytes {
+		t.Fatalf("ItemBytes(repeated string, assert_max_size=8) = %d, want %d", got, DefaultScalarBytes)
+	}
+
+	// Whole-field bound: 8 elements x (32768 + 2 tag + 5 len) = 262200, not
+	// 8 x (8 + 7) = 120.
+	m := msg("M", *f)
+	const want = 8 * (DefaultScalarBytes + 2 + 5)
+	if got := MaxMessageBytes(m, "p", map[string]*model.Message{"p.M": m}); got != want {
+		t.Fatalf("MaxMessageBytes(repeated string x8) = %d, want %d", got, want)
+	}
+}
+
+func TestItemBytes_SingularStringStillUsesAssertMaxSizeAsByteBound(t *testing.T) {
+	f := &model.Field{
+		Name: "name", Type: "string",
+		Annotations: map[string]model.AnnotationValue{
+			"assert_max_size": {Type: model.AnnotationTypeInt, IntValue: 8},
+		},
+	}
+	if got := ItemBytes(f, nil); got != 8 {
+		t.Fatalf("ItemBytes(singular string, assert_max_size=8) = %d, want 8", got)
+	}
+	m := msg("M", *f)
+	if got := MaxMessageBytes(m, "p", map[string]*model.Message{"p.M": m}); got != 15 {
+		t.Fatalf("MaxMessageBytes(singular bounded string) = %d, want 15", got)
+	}
+}

@@ -6391,6 +6391,7 @@ import com.gitlab.example.tacplus.consumer.contractclient.model.chassis.grpcserv
 import com.gitlab.example.tacplus.consumer.contractclient.model.chassis.am.AccountingManager;
 import com.gitlab.example.tacplus.consumer.contractclient.model.chassis.collection.CollectionRuntime;
 import com.gitlab.example.tacplus.consumer.contractclient.model.chassis.servicemanager.Caller;
+import com.gitlab.example.tacplus.consumer.contractclient.model.chassis.token.TokenWrapper;
 import com.gitlab.example.tacplus.consumer.contractclient.model.s2sm.internal.grpc.servers.contract.contractclient.ContractApi;
 import com.gitlab.example.tacplus.consumer.contractclient.model.s2sm.internal.grpc.servers.services.contractclient.ContractAuditApi;
 import com.gitlab.example.tacplus.consumer.contractclient.model.s2sm.subscribe.ContractfixturesFixtureStateEventsSubscriber;
@@ -6681,7 +6682,7 @@ public final class Consumer {
     }
 
     @Override
-    public void authorize(String fullMethod, Object request) throws ProtoException {
+    public TokenWrapper authorize(String fullMethod, Object request) throws ProtoException {
       authorizeCalls.incrementAndGet();
       if (rejectAll) {
         throw ProtoException.newErrUnauthorized(null, "missing authorization header");
@@ -6693,6 +6694,7 @@ public final class Consumer {
       if (!"tenant.alpha".equals(typed.getTenantNamespace())) {
         throw ProtoException.newErrPermissionDenied(null, "caller namespace is not at-or-above target");
       }
+      return TokenWrapper.create();
     }
   }
 
@@ -7334,9 +7336,10 @@ public final class Consumer {
 
       wrapper.setAuthenticateFunc((ContractApi.Authenticator) (targetNamespace) -> {
         authenticateCalls.incrementAndGet();
-        if (!targetNamespace.isEmpty() && !"/".equals(targetNamespace)) {
+        if (targetNamespace != null && !targetNamespace.isEmpty() && !"/".equals(targetNamespace)) {
           throw ProtoException.newErrPermissionDenied(null, "unexpected target namespace " + targetNamespace);
         }
+        return java.util.Map.of();
       });
       List<Contractclient.ContractWatchEvent> events = collectWatch(authApi, validWatchRequest());
       if (events.size() != 2
@@ -7871,7 +7874,7 @@ public final class Consumer {
     runJavaDiskstoreFailClosedRead();
 
     ContractApi wrapper = new ContractApi(new ApiHandler(), Authorizer.create());
-    wrapper.setAuthenticateFunc((ContractApi.Authenticator) (_targetNamespace) -> {});
+    wrapper.setAuthenticateFunc((ContractApi.Authenticator) (_targetNamespace) -> java.util.Map.of());
   }
 
   // RED-1 executed evidence (Java leg): the generated sanitize transform is
@@ -7981,7 +7984,7 @@ public final class Consumer {
     TestAuthorizer authorizer = new TestAuthorizer();
     authorizer.setRejectAll(false);
     ContractApi wrapper = new ContractApi(handler, authorizer);
-    wrapper.setAuthenticateFunc((ContractApi.Authenticator) (targetNamespace) -> {});
+    wrapper.setAuthenticateFunc((ContractApi.Authenticator) (targetNamespace) -> java.util.Map.of());
     wrapper.setAnonymizeHmacKey("per-deployment-key".getBytes(java.nio.charset.StandardCharsets.UTF_8));
     String serverName = InProcessServerBuilder.generateName();
     Server server = InProcessServerBuilder.forName(serverName)

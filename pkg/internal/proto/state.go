@@ -56,21 +56,28 @@ func findDeclClosingBrace(text, keyword, name string) int {
 		}
 		braceStart += afterName
 
-		// Track brace depth to find the matching closing brace
-		depth := 1
-		for i := braceStart + 1; i < len(text); i++ {
-			switch text[i] {
-			case '{':
-				depth++
-			case '}':
-				depth--
-				if depth == 0 {
-					return i
-				}
+		return findMatchingCloseBrace(text, braceStart)
+	}
+}
+
+// findMatchingCloseBrace returns the byte offset of the "}" that closes the
+// "{" at openBrace, tracking brace depth so nested braces in the body (e.g. a
+// multi-line option literal) don't end the walk early. Returns -1 if
+// unbalanced.
+func findMatchingCloseBrace(text string, openBrace int) int {
+	depth := 1
+	for i := openBrace + 1; i < len(text); i++ {
+		switch text[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i
 			}
 		}
-		return -1
 	}
+	return -1
 }
 
 // AppendStateServiceToProtos appends strongly-typed state service definitions

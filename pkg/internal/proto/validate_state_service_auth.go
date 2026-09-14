@@ -97,10 +97,14 @@ func validateGeneratedServiceAuth(protoDir string, re *regexp.Regexp, kind strin
 			if authExempt[filepath.ToSlash(rel)+"/"+svcName] {
 				continue
 			}
-			// Body runs from the opening brace to the service's closing brace.
+			// Body runs from the opening brace to the service's closing brace,
+			// found by brace-depth tracking rather than the first unindented
+			// "}" — an option literal in the body can itself contain nested
+			// braces, and a plain string search would stop at the first one.
 			body := text[m[1]:]
-			if end := strings.Index(body, "\n}"); end >= 0 {
-				body = body[:end]
+			openBrace := m[1] - 1
+			if end := findMatchingCloseBrace(text, openBrace); end >= 0 {
+				body = text[m[1]:end]
 			}
 			if c2sServiceRe.MatchString(body) {
 				continue

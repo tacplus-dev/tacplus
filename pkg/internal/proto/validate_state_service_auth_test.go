@@ -199,3 +199,28 @@ service ThingStoreService {
 		t.Fatalf("opa eval validator must ignore a store sentinel, got: %v", err)
 	}
 }
+
+// The body scan must find the service's own closing brace by depth, not the
+// first unindented "}" — a multi-line option literal earlier in the body ends
+// with one of its own, and stopping there would truncate the body before a
+// later, real auth_services declaration and misreport a passing service as a
+// violation.
+func TestValidateGeneratedServiceAuthHandlesNestedBraceInOption(t *testing.T) {
+	dir := t.TempDir()
+	writeStateSvcProto(t, dir, "svc/thing.proto", `syntax = "proto3";
+package thing;
+
+// tacplus:generated-service state
+service ThingStateService {
+	option (spec.custom) = {
+foo: "bar"
+};
+	option (spec.service_s2s) = {auth_services: ["thing"]};
+	rpc GetConfig(Empty) returns (Empty);
+}
+`)
+
+	if err := ValidateGeneratedStateServiceAuth(dir, nil); err != nil {
+		t.Fatalf("ValidateGeneratedStateServiceAuth: %v", err)
+	}
+}

@@ -151,6 +151,22 @@ type traitPlane struct {
 // can be added later — Create<T>Query is the lifecycle's only entry point, so a
 // row predicate pinned there is carried by every call made against the handle.
 //
+// ALSO NOT built here, for the same reason: the SOFT-DELETE DEFAULT EXCLUSION.
+// Open/Refine carry include_deleted (see the emission below), and false — the
+// default — means "exclude rows whose (spec.deleted_flag) field is true". That
+// exclusion is a query→execution decision, and this generator emits no
+// execution: the plane's handler is an INTERFACE (<Service>Handler, emitted by
+// the per-language service-wrapper generators) whose bodies the hosting service
+// writes. Stratum generates its own bodies from its own proto scan
+// (platform/services/stratum/codegen RecordMapImplGenerator, which builds the
+// handle→filter registry and the per-type match<T>/list<T>/watch<T>), so the
+// exclusion belongs there, gated on the flag this generator now emits. The
+// generated egress row filters that DO drop rows in the wrapper
+// ((spec.store_principal), rust/types/principal_gen.go) cannot host it: they see
+// only the response and the request in hand, and for List/Sample/Watch/Count
+// that request is a bare handle — the flag was fixed at Create, in state only
+// the handler holds. Count has no rows to drop at all.
+//
 // Like AppendStoreServiceToProtos, this runs on EVERY service's codegen so the
 // injected service is visible in every proto view (a peer declaring a
 // grpc_s2s_client against the trait's S2S half needs to see it). The injection
@@ -439,22 +455,50 @@ enum RecordChangeType {
 
 		// OpenQuery request: initial predicate (if the type is filterable) plus the
 		// standing flag (one-time snapshot vs living query). Refine narrows it in place.
+		//
+		// include_deleted is the SOFT-DELETE ESCAPE HATCH, and it lives on exactly
+		// these two messages because they are the only two that establish a
+		// predicate: every later call in the lifecycle carries only the handle
+		// (QueryHandle / query_id), so the flag is fixed once at Create and
+		// replaced wholesale at Update, exactly like the filter it rides with.
+		// Sample/List/Count/Watch/SubscribeCount need no flag of their own — they
+		// would have nowhere to put one that the store could honor without
+		// contradicting the handle it was given.
+		//
+		// FALSE — the proto3 default, and the default a caller gets by saying
+		// nothing — EXCLUDES rows whose (spec.deleted_flag) field is true. That is
+		// the decision's "excludes ... by default": a caller must ask for deleted
+		// rows, for audit and citation cases, and Get-by-key returns them either
+		// way. The exclusion itself is not generated here; see the
+		// include_deleted note in the package doc comment above for who enforces
+		// it and why it cannot be this generator.
+		//
+		// Emitted for EVERY record type, including one declaring no
+		// (spec.deleted_flag) field. Such a type has no soft-delete state and so
+		// nothing to exclude, which makes the flag inert rather than wrong, and a
+		// uniform query-plane shape is worth more than eliding one bool: the fleet
+		// annotation pass adds markers to existing records AFTER this lands, and a
+		// conditional field would silently renumber a live message the moment a
+		// record gained its marker.
 		if hasFilter {
 			sb.WriteString(fmt.Sprintf(`
 message Open%[1]sQueryRequest {
   %[1]sFilter filter = 1;
   bool standing = 2;
+  bool include_deleted = 3;
 }
 
 message Refine%[1]sRequest {
   string query_id = 1;
   %[1]sFilter filter = 2;
+  bool include_deleted = 3;
 }
 `, r.typeName))
 		} else {
 			sb.WriteString(fmt.Sprintf(`
 message Open%[1]sQueryRequest {
   bool standing = 1;
+  bool include_deleted = 2;
 }
 `, r.typeName))
 		}

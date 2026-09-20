@@ -138,6 +138,7 @@ option (spec.trait) = {
 		`message OpenAgentEventQueryRequest {`,
 		`AgentEventFilter filter = 1;`,
 		`bool standing = 2;`,
+		`bool include_deleted = 3;`,
 		`message RefineAgentEventRequest {`,
 		`AgentEventFilter filter = 2;`,
 		// sample (seeded) + list (paged)

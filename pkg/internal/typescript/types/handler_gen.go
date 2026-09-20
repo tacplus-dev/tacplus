@@ -37,8 +37,11 @@ type tsGrpcServiceEntry struct {
 	ConfigStateGroupAccessor string // "services"
 	ConfigStateAccessor      string // "configState"
 	HasConfigState           bool
-	AuthDisabled             bool
-	AuthAnyUser              bool
+	// ConfigDefaultsFn is the imported alias of the generated configDefaults
+	// helper for this service's Config, e.g. "opaConfigDefaults".
+	ConfigDefaultsFn string // "opaConfigDefaults"
+	AuthDisabled     bool
+	AuthAnyUser      bool
 	// HasAccounting is true when this wrapper's generated class defines
 	// setEmitter (i.e. it ended up with at least one accounted RPC, post Q2's
 	// self-publish exclusion — see accounting_exclusion.go). setEmitter is NOT
@@ -46,6 +49,13 @@ type tsGrpcServiceEntry struct {
 	// {{if .HasAccounting}}, same as Java), so the ServiceManager wiring loop
 	// must guard setEmitter(...) calls on this.
 	HasAccounting bool
+}
+
+// tsConfigDefaultsImport is one deduplicated `import { configDefaults as <alias> }`
+// line for the service_manager template.
+type tsConfigDefaultsImport struct {
+	Alias      string // "opaConfigDefaults"
+	ImportPath string // "../types/services/opa/index.js"
 }
 
 // tsSubscriptionEntry holds per-subscription data for handler and service_manager templates.
@@ -111,6 +121,7 @@ type tsSmTemplateData struct {
 	TokenExchangerPackage string
 	MintServiceName       string
 	DefaultAudience       string
+	ConfigDefaultsImports []tsConfigDefaultsImport
 	GrpcServices          []tsGrpcServiceEntry
 	Subscriptions         []tsSubscriptionEntry
 	TargetServices        []tsTargetServiceEntry
@@ -143,6 +154,8 @@ func tsClientTargets(clientSvcs []service.ServiceInfo) []tsTargetServiceEntry {
 // be nil).
 func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, hasAccountingByService map[string]bool, clientSvcs ...[]service.ServiceInfo) (tsSmTemplateData, error) {
 	var grpcSvcs []tsGrpcServiceEntry
+	var configDefaultsImports []tsConfigDefaultsImport
+	seenConfigDefaults := make(map[string]bool)
 	configStates, err := stateproto.ConfigStateAccessors(config, config.FlatProtoDir)
 	if err != nil {
 		return tsSmTemplateData{}, err
@@ -164,11 +177,25 @@ func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, h
 		}
 		configStateGroupAccessor := ""
 		configStateAccessor := ""
+		configDefaultsFn := ""
 		hasConfigState := false
 		if stateInfo, ok := configStates[configPkg]; ok {
 			configStateGroupAccessor = filepath.ToSlash(filepath.Dir(stateInfo.ProtoFile))
 			configStateAccessor = strutil.ToLowerCamelCase(stateInfo.StateName)
 			hasConfigState = true
+			// Kernel seeds config state from the deploy bundle, which carries only
+			// what the operator was given -- a field the bundle omits arrives at
+			// the proto3 zero, not defaulted. Apply the generated configDefaults
+			// on the delivery path, as Go/Rust/Java already do.
+			configDefaultsFn = strutil.ToLowerCamelCase(configPkg) + "ConfigDefaults"
+			if !seenConfigDefaults[configDefaultsFn] {
+				seenConfigDefaults[configDefaultsFn] = true
+				configDefaultsImports = append(configDefaultsImports, tsConfigDefaultsImport{
+					Alias: configDefaultsFn,
+					ImportPath: fmt.Sprintf("../%s/index.js", filepath.ToSlash(
+						typescriptModuleDirForPackageOrDir(config.OutputDir, configPkg, filepath.Dir(stateInfo.ProtoFile)))),
+				})
+			}
 		}
 
 		grpcSvcs = append(grpcSvcs, tsGrpcServiceEntry{
@@ -184,6 +211,7 @@ func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, h
 			ConfigStateGroupAccessor: configStateGroupAccessor,
 			ConfigStateAccessor:      configStateAccessor,
 			HasConfigState:           hasConfigState,
+			ConfigDefaultsFn:         configDefaultsFn,
 			AuthDisabled:             svc.AuthDisabled,
 			AuthAnyUser:              svc.AuthAnyUser,
 			HasAccounting:            hasAccountingByService[svc.ServiceName],
@@ -371,6 +399,7 @@ func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, h
 		TokenExchangerPackage:       texPkg,
 		MintServiceName:             mintServiceName,
 		DefaultAudience:             defaultAudience,
+		ConfigDefaultsImports:       configDefaultsImports,
 		GrpcServices:                grpcSvcs,
 		Subscriptions:               subs,
 		TargetServices:              targetSvcs,

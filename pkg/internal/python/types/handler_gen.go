@@ -35,9 +35,19 @@ type pyGrpcServiceEntry struct {
 	ConfigStateGroupAccessor string // "services"
 	ConfigStateAccessor      string // "config_state"
 	HasConfigState           bool
-	AuthDisabled             bool
-	AuthAnyUser              bool
-	HasMethodAuth            bool
+	// ConfigDefaultsFn is the imported alias of the generated config_defaults
+	// helper for this service's Config, e.g. "opa_config_defaults".
+	ConfigDefaultsFn string // "opa_config_defaults"
+	AuthDisabled     bool
+	AuthAnyUser      bool
+	HasMethodAuth    bool
+}
+
+// pyConfigDefaultsImport is one deduplicated `from <module> import config_defaults
+// as <alias>` line for the service_manager template.
+type pyConfigDefaultsImport struct {
+	Alias      string // "opa_config_defaults"
+	ImportFrom string // "svc.types.services.opa.helpers"
 }
 
 // pySubscriptionEntry holds per-subscription data for handler and service_manager templates.
@@ -98,6 +108,7 @@ type pySmTemplateData struct {
 	AccountingEventTypeName     string // "AccountingRecord"
 	AccountingEventImportFrom   string // e.g. "svc.types.vservices.accountingrecord"
 	AccountingEventPbModule     string // "accountingrecord_pb2"
+	ConfigDefaultsImports       []pyConfigDefaultsImport
 	GrpcServices                []pyGrpcServiceEntry
 	Subscriptions               []pySubscriptionEntry
 	TargetServices              []pyTargetServiceEntry
@@ -125,6 +136,8 @@ func pythonClientTargets(clientSvcs []service.ServiceInfo) []pyTargetServiceEntr
 // svcs are server services; clientSvcs are S2S client services (may be nil).
 func buildPySmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, protoDir string, clientSvcs ...[]service.ServiceInfo) (pySmTemplateData, error) {
 	var grpcSvcs []pyGrpcServiceEntry
+	var configDefaultsImports []pyConfigDefaultsImport
+	seenConfigDefaults := make(map[string]bool)
 	configStates, err := stateproto.ConfigStateAccessors(config, config.FlatProtoDir)
 	if err != nil {
 		return pySmTemplateData{}, err
@@ -149,11 +162,26 @@ func buildPySmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, p
 		}
 		configStateGroupAccessor := ""
 		configStateAccessor := ""
+		configDefaultsFn := ""
 		hasConfigState := false
 		if stateInfo, ok := configStates[configPkg]; ok {
 			configStateGroupAccessor = pyPath(filepath.Dir(stateInfo.ProtoFile))
 			configStateAccessor = strutil.ToSnakeCase(stateInfo.StateName)
 			hasConfigState = true
+			// Kernel seeds config state from the deploy bundle, which carries only
+			// what the operator was given -- a field the bundle omits arrives at
+			// the proto3 zero, not defaulted. Apply the generated config_defaults
+			// on the delivery path, as Go/Rust/Java already do.
+			configDefaultsFn = pyModuleName(configPkg) + "_config_defaults"
+			if !seenConfigDefaults[configDefaultsFn] {
+				seenConfigDefaults[configDefaultsFn] = true
+				configDefaultsImports = append(configDefaultsImports, pyConfigDefaultsImport{
+					Alias: configDefaultsFn,
+					ImportFrom: pyJoinDotted(config.PythonPackageBase, "types",
+						pyProtoImportPath(filepath.Dir(stateInfo.ProtoFile), stateInfo.Package, stateInfo.ProtoFile),
+						"helpers"),
+				})
+			}
 		}
 
 		grpcSvcs = append(grpcSvcs, pyGrpcServiceEntry{
@@ -167,6 +195,7 @@ func buildPySmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, p
 			ConfigStateGroupAccessor: configStateGroupAccessor,
 			ConfigStateAccessor:      configStateAccessor,
 			HasConfigState:           hasConfigState,
+			ConfigDefaultsFn:         configDefaultsFn,
 			AuthDisabled:             svc.AuthDisabled,
 			AuthAnyUser:              svc.AuthAnyUser,
 			HasMethodAuth:            svc.HasMethodAuth,
@@ -343,6 +372,7 @@ func buildPySmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, p
 		AccountingEventTypeName:     accountingEventTypeName,
 		AccountingEventImportFrom:   accountingEventImportFrom,
 		AccountingEventPbModule:     accountingEventPbModule,
+		ConfigDefaultsImports:       configDefaultsImports,
 		GrpcServices:                grpcSvcs,
 		Subscriptions:               subs,
 		TargetServices:              targetSvcs,

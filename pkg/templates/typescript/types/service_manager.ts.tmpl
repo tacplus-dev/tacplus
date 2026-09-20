@@ -68,6 +68,9 @@ import { GrpcClients } from './internal/grpc/clients/grpc_clients.js';
 import { {{.WrapperClassName}} as {{.WrapperVarName}}Class } from '{{.WrapperImportPath}}';
 {{- end}}
 {{- end}}
+{{- range .ConfigDefaultsImports}}
+import { configDefaults as {{.Alias}} } from '{{.ImportPath}}';
+{{- end}}
 
 export { type Handler } from './handler.js';
 
@@ -867,8 +870,14 @@ export class ServiceManager {
       {
         const configAccessor = this._stateClients.{{.ConfigStateGroupAccessor}}().{{.ConfigStateAccessor}}().config();
         const initialConfig = await configAccessor.fetch();
+        // Apply the proto-declared field defaults. Kernel seeds config state from
+        // the deploy bundle, which carries only what the operator was given -- a
+        // field the bundle omits arrives at the proto3 zero, not defaulted.
+        {{.ConfigDefaultsFn}}(initialConfig);
         await handler.{{.HandleConfigName}}(initialConfig);
         configAccessor.onChange((nextConfig) => {
+          // Same on hot-reload: a pushed config is defaulted before delivery.
+          {{.ConfigDefaultsFn}}(nextConfig);
           this.trackTask('{{.HandleConfigName}} config update', handler.{{.HandleConfigName}}(nextConfig));
         });
       }

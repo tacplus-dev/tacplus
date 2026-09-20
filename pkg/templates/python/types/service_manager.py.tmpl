@@ -47,6 +47,9 @@ from .subscribe.{{.ModuleName}} import Subscriber as {{.SubscriberAlias}}Subscri
 {{- if .HasStates}}
 from .internal.state.state_clients import StateClients
 {{- end}}
+{{- range .ConfigDefaultsImports}}
+from {{.ImportFrom}} import config_defaults as {{.Alias}}
+{{- end}}
 {{- if .HasGrpcS2SClients}}
 from .internal.grpc.clients.grpc_clients import GrpcClients
 {{- end}}
@@ -455,9 +458,15 @@ class ServiceManager:
     {{- if .HasConfigState}}
         config_accessor = self._state_clients.{{.ConfigStateGroupAccessor}}().{{.ConfigStateAccessor}}().config()
         initial_config = await config_accessor.fetch()
+        # Apply the proto-declared field defaults. Kernel seeds config state from
+        # the deploy bundle, which carries only what the operator was given -- a
+        # field the bundle omits arrives at the proto3 zero, not defaulted.
+        {{.ConfigDefaultsFn}}(initial_config)
         await handler.{{.HandleConfigName}}(initial_config)
 
         def _on_{{.HandleConfigName}}_change(next_config) -> None:
+            # Same on hot-reload: a pushed config is defaulted before delivery.
+            {{.ConfigDefaultsFn}}(next_config)
             self._create_task(self._apply_config_update(
                 handler.{{.HandleConfigName}},
                 next_config,

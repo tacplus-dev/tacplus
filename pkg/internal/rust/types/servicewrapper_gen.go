@@ -299,37 +299,11 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 			return fmt.Errorf("%s.%s takes %s, whose field %q carries (spec.store_epoch), but the stamp is generated for Java service wrappers only; a Rust host of this write would leave the store epoch unstamped",
 				targetService.Name, method.Name, method.FullInputType, f)
 		}
-		// (spec.store_principal) is enforced on the unary and PAGE egress seams.
-		// A genuinely streaming method (WATCH) carrying such rows would return
-		// them unfiltered — there is no per-item egress hook on that path — so
-		// refuse to generate rather than under-enforce silently.
-		if method.StreamingType() != "unary" {
-			// Resolved is the computed COLLECTION view and is nil for a method
-			// that declares no collection at all — a plain server-streaming RPC
-			// such as oauth's Session.*. Only the WATCH item type comes from it
-			// here; PAGE is excluded below because generateRustGRPCWrapper's PAGE
-			// branch now generates the same egress filter the unary branch does
-			// (over method.FullOutputType, which is already the first candidate).
-			candidates := []string{method.FullOutputType}
-			if method.Resolved != nil {
-				candidates = append(candidates, method.Resolved.WatchItemType)
-			}
-			for _, t := range candidates {
-				if t == "" {
-					continue
-				}
-				if san.storePrincipalField(t, info.Package) != "" || len(san.principalListFields(t, info.Package)) > 0 {
-					return fmt.Errorf("%s.%s returns %s, which carries (spec.store_principal), on a %s path; the principal read filter is generated for unary and page responses only",
-						targetService.Name, method.Name, t, method.StreamingType())
-				}
-				// Same seam, same limit: (spec.store_namespace) is mandatory on
-				// every record, so a Rust stream over record rows would return
-				// them with no tenant boundary at all.
-				if san.storeNamespaceField(t, info.Package) != "" || len(san.namespaceListFields(t, info.Package)) > 0 {
-					return fmt.Errorf("%s.%s returns %s, which carries (spec.store_namespace), on a %s path; the namespace read filter is generated for unary and page responses only",
-						targetService.Name, method.Name, t, method.StreamingType())
-				}
-			}
+		// (spec.store_principal)/(spec.store_namespace) on a streaming path: see
+		// rustStreamEgressRefusal (watch_egress_gen.go). WATCH has a per-frame
+		// hook; every other streaming shape over pinned rows is refused.
+		if err := rustStreamEgressRefusal(targetService.Name, method, san, info.Package); err != nil {
+			return err
 		}
 		if method.IsWatchCollection() {
 			_, changeType := rustWatchTypes(method, info.Package, info.CrossPackageTypes)
@@ -1466,6 +1440,18 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 				changeSan = "\n                        let mut change = change;\n" + rustEgressEnvelopeStmts(fs, "change", "                        ")
 			}
 			watchPre := rustEgressSanitizePreamble(watchTargets)
+			// (spec.store_principal)/(spec.store_namespace): the per-frame egress
+			// guard, resolved once before the producer task is spawned and applied
+			// ahead of sanitization on every snapshot_item and delta. See
+			// watch_egress_gen.go. The shape check already ran at service level;
+			// this call cannot fail for a method that reached generation.
+			watchEgress, err := san.watchEgress(svc.Name, method.Name, method.Resolved.WatchItemType, method.Resolved.WatchChangeType, servicePackage)
+			if err != nil {
+				return "", err
+			}
+			watchPre += rustWatchEgressPreamble(watchEgress, method.Name)
+			itemSan = rustWatchEgressGuardStmts(watchEgress.Item, "item", method.Name, "                            ") + itemSan
+			changeSan = rustWatchEgressGuardStmts(watchEgress.Change, "change", method.Name, "                        ") + changeSan
 			accountingSetup := ""
 			sendClosed := "return;"
 			sendErr := `let _ = tx.send(Err(err)).await;

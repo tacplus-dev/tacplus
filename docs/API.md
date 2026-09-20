@@ -344,6 +344,17 @@ envelope framing, replay-ring lookup, relist behavior, teardown, and flow
 control. The replay ring lives in a shared per-language collection runtime lib,
 keyed by scope and bounded by `replay_depth`.
 
+The wrapper also owns the egress row filters on this seam, exactly as on the
+unary and PAGE seams (Rust and Java): every `snapshot_item` and every `delta`
+is checked before it is sent — a row whose `(spec.store_principal)` field is
+not the caller's is skipped, and a row whose `(spec.store_namespace)` field is
+not the caller's tenant trips the abort backstop. `snapshot_done` carries no
+row and is always sent. The `delta` may be the row itself or an envelope with
+one level of singular message fields around it; a pinned row inside a
+repeated, map or oneof field of the delta fails generation, as does a pinned
+row on any non-WATCH streaming shape (Tier-2/Tier-3 SNAPSHOT, plain server
+streams), which have no per-item hook.
+
 ### PAGE Contract
 
 A PAGE proto method is an ordinary **unary** RPC. The request carries the filter

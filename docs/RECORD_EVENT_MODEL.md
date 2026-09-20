@@ -20,9 +20,22 @@ a rebuild.
 > (option 60067, 2026-08-25, PLAN.md acceptance item 3): it bundled a pure typed
 > conversion together with a **retention policy** and with eventbus delivery, and
 > those are now three separate declarations. The conversion is
-> **`spec.transformation`**; retention is **`(spec.record).retention`**; delivery is
-> the `record`/`event` producer surface and the topic it synthesizes. Neither the
-> transformation nor the delivery declaration requires the other to generate.
+> **`spec.transformation`**; the store lifecycle is **`(spec.record).residency`**
+> (below); delivery is the `record`/`event` producer surface and the topic it
+> synthesizes. Neither the transformation nor the delivery declaration requires
+> the other to generate.
+>
+> **2026-09-20 (record lifecycle collapse):** the `Residency` enum (HOT/WARM/COLD),
+> `RetentionPolicy`/`(spec.record).retention`, `(spec.archive)`, `cold_store`/
+> `graph_store` and `(spec.ejectionable)` were all retired in favor of a single
+> `(spec.record).residency{idle_seconds, deleted_max_age_seconds}` (two clocks, no
+> enum — see `pkg/proto/sys/spec.proto:709` for the full model) plus a new
+> field-level `(spec.deleted_flag)` soft-delete marker. `idle_seconds` ages a
+> record out of memory on no read/write; `deleted_max_age_seconds` purges a
+> flagged-deleted row that many seconds after the flag was set. Both fields reuse
+> the old `retention`'s field numbers 1/2, so an old proto still saying
+> `retention: {window: ...}` fails to compile rather than silently discarding the
+> setting.
 
 ## Mental model
 
@@ -50,8 +63,8 @@ Message-level:
 | Annotation | Meaning |
 |---|---|
 | `event { c2s{…}? , s2s{…}? }` | eventbus **topic + publish RPC**. ≥1 producer surface required. |
-| `record { key, owner, c2s{…}? , s2s{…}? , retention{…}? }` | **DELIVERY.** **is-an `event`** + stored in `record_store` + projectable. `key` = id field (default: `event_id`), `owner` = ownership field, `retention` = the store-neutral row retention policy (`retention.timestamp_field` is required on every stratum-stored record). |
-| `transformation {…}` | **TRANSFORMATION.** A pure typed conversion of this message into a derived row type. Requires **no** `record`, **no** topic, **no** subscription — and carries **no** retention (a pure function has no lifetime). |
+| `record { key, owner, c2s{…}? , s2s{…}? , residency{…}? }` | **DELIVERY.** **is-an `event`** + stored in `record_store` + projectable. `key` = id field (default: `event_id`), `owner` = ownership field, `residency` = the store's lifecycle as two clocks — `idle_seconds` (memory eviction on no read/write) and `deleted_max_age_seconds` (purge this long after `(spec.deleted_flag)` was set). Unset residency is a live platform default (`parser.DefaultResidencyIdleSeconds`/`DefaultResidencyDeletedMaxAgeSeconds`), never "never". |
+| `transformation {…}` | **TRANSFORMATION.** A pure typed conversion of this message into a derived row type. Requires **no** `record`, **no** topic, **no** subscription — and carries **no** residency (a pure function has no lifetime). |
 
 Field-level (on a `record` message's fields):
 
@@ -59,6 +72,7 @@ Field-level (on a `record` message's fields):
 |---|---|
 | `query_field { op: EQ\|RANGE }` | expose this field as a typed filter criterion in the `query` trait's plane (`<T>Filter`). |
 | `redact { mode: DROP\|PSEUDONYMIZE\|MAY_REDACT\|MAY_ANONYMIZE }` | field is **egress-redactable** (data entitlement): stored raw, sanitized at `Get<T>Sample`/`List<T>`/`Watch<T>` per caller. DROP/PSEUDONYMIZE always apply; MAY_* are caller-decided. Generates `Sanitize<T>` + `<T>Entitlement`. |
+| `(spec.deleted_flag) = true` | marks this record's **soft-delete state**: exactly one non-repeated `bool` field per record type (`ValidateDeletedFlagAnnotations`). The query plane excludes flagged-deleted rows by default (`include_deleted` opt-in, below); the row is purged `residency.deleted_max_age_seconds` after the flag was set. A record type with no marked field has nothing for the plane to exclude and `include_deleted` is inert on it. |
 
 Service-level (once per service):
 
@@ -189,7 +203,16 @@ declaration requires the other to generate.
 
   Only the **RPC names** are verb-governed; the request/response **messages** still
   carry the query vocabulary (`Open…QueryRequest`, `Refine…Request`, `Sample…`,
-  `Pull…`). A query is either a **one-time snapshot** or **long-lived / living** (new
+  `Pull…`). `Open<T>QueryRequest` and `Refine<T>Request` (only the two that install
+  or replace a predicate) additionally carry a **`bool include_deleted`**: unset,
+  the plane excludes rows with `(spec.deleted_flag)` set; `true` opts back in. It
+  has nowhere to go on `Sample`/`Pull`/`Count`/`Watch` — those take only the
+  already-opened handle, which is where the flag was recorded. tacplus generates
+  only the field; the exclusion itself is enforced by whoever implements the
+  handler (stratum, today — see "tacplus knows the typed query and its shape, not
+  the query→execution transform" below).
+
+  A query is either a **one-time snapshot** or **long-lived / living** (new
   matching records auto-join). Ops run server-side. `Update<T>Query` replaces the
   predicate outright — nothing compares the new predicate against the old, so a caller
   entitled to create is equally free to widen it; authorization is per-RPC-method, not

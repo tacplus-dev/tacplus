@@ -1100,8 +1100,8 @@ The authoritative, exhaustive contract is in
 | Annotation | Meaning |
 |------------|---------|
 | `(spec.event) = {c2s?, s2s?}` | eventbus topic + publish RPC (at least one producer surface required) |
-| `(spec.record) = {key, owner, c2s?, s2s?, retention?, min_group_size?}` | **delivery**: an `event` that is also stored in `record_store` and is projectable — `key` is the id field, `owner` the ownership field, `retention` the store-neutral row retention policy (`{timestamp_field, duration_seconds}`; required by stratum for every record it stores), `min_group_size` the smallest result size the record's size-only query surfaces will disclose (see below) |
-| `(spec.transformation) = {…}` | **transformation**: a pure typed conversion of this message into a derived row type. Needs no `record`, no topic and no subscription, and carries no retention — declaring a transformation and declaring delivery are independent |
+| `(spec.record) = {key, owner, c2s?, s2s?, residency?, min_group_size?}` | **delivery**: an `event` that is also stored in `record_store` and is projectable — `key` is the id field, `owner` the ownership field, `residency` the store's lifecycle as two clocks (`{idle_seconds, deleted_max_age_seconds}`; unset falls back to a live platform default, never "never"), `min_group_size` the smallest result size the record's size-only query surfaces will disclose (see below) |
+| `(spec.transformation) = {…}` | **transformation**: a pure typed conversion of this message into a derived row type. Needs no `record`, no topic and no subscription, and carries no residency — declaring a transformation and declaring delivery are independent |
 
 **Field-level (on a `record` message's fields):**
 
@@ -1109,6 +1109,7 @@ The authoritative, exhaustive contract is in
 |------------|---------|
 | `(spec.query_field) = {op: EQ\|RANGE}` | expose the field as a typed filter in the `query` trait's record query plane |
 | `(spec.redact) = {mode: DROP\|PSEUDONYMIZE\|MAY_REDACT\|MAY_ANONYMIZE}` | marks a field for **data entitlement** (see below). DROP/PSEUDONYMIZE always apply (hard floor); MAY_REDACT/MAY_ANONYMIZE let the caller decide at egress. Valid on scalars, message-typed fields (redact clears the whole sub-message), and repeated fields; ANONYMIZE requires string/bytes |
+| `(spec.deleted_flag) = true` | marks this record type's soft-delete `bool` field (exactly one per record type). The query plane's `Open<T>QueryRequest`/`Refine<T>Request` carry `include_deleted` (default false: flagged-deleted rows excluded); the row is purged `residency.deleted_max_age_seconds` after the flag was set |
 
 #### Data entitlement (egress redaction)
 

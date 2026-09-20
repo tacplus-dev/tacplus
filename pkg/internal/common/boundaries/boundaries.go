@@ -529,9 +529,15 @@ func FindTraceEventPublisherData(p *parser.DescriptorParser, protoDir string, pr
 
 // SubscriptionResolution holds the resolved type and directory for a subscription source.
 type SubscriptionResolution struct {
-	TypeFqn   string // e.g. "sensor.SensorEvent"
-	ProtoDir  string // e.g. "common", "services"
-	Residency string // (spec.record).residency of TypeFqn, "" when it declares none
+	TypeFqn  string // e.g. "sensor.SensorEvent"
+	ProtoDir string // e.g. "common", "services"
+	// IsRecord is true when TypeFqn is a (spec.record) — a stored record type,
+	// not merely an event. Every record type's rows land in a NODE-LOCAL store
+	// (one in-memory map per type with a disk leg beneath it, checkpointed per
+	// pod), so a node's copy is only complete if that node receives every
+	// record. That is what selects a per-INSTANCE consumer group for the topic;
+	// see the java generator's javaSubscriptionEntry.PerInstanceConsumerGroup.
+	IsRecord bool
 	// StoreEpochField is the name of TypeFqn's (spec.store_epoch) field, "" when
 	// it declares none. A record has no write RPC — it reaches a store on the
 	// store's EventBus subscription — so the subscription dispatch is the seam
@@ -561,7 +567,7 @@ func ResolveSubscriptionSource(p *parser.DescriptorParser, flatDir string, sd Su
 						return SubscriptionResolution{
 							TypeFqn:         field.Type,
 							ProtoDir:        protoDir,
-							Residency:       recordResidency(p, field.Type),
+							IsRecord:        recordIsRecord(p, field.Type),
 							StoreEpochField: recordStoreEpochField(p, field.Type),
 						}
 					}
@@ -572,18 +578,16 @@ func ResolveSubscriptionSource(p *parser.DescriptorParser, flatDir string, sd Su
 	return SubscriptionResolution{}
 }
 
-// recordResidency returns the (spec.record).residency window declared by the
-// message named by typeFqn (e.g. "accountingrecord.AccountingRecord"), or "" when
-// the type is not found or declares no residency block.
+// recordIsRecord reports whether the message named by typeFqn (e.g.
+// "accountingrecord.AccountingRecord") carries (spec.record), i.e. whether the
+// topic delivers a STORED record rather than a plain event.
 //
-// This is a lookup, not a second opinion: the block's well-formedness is enforced
-// once, at parse time, by parser.ValidateResidencyAnnotations. It reads the same
-// annotation that parser.residencyPolicyEntry populates, through the same
-// msg.Annotations["record_residency"] key the validator uses, so there is one
-// definition of "this record is warm" rather than one per consumer.
-func recordResidency(p *parser.DescriptorParser, typeFqn string) string {
+// This is a lookup, not a second opinion, and it is the single definition of
+// "this topic feeds a node-local store" rather than one per consumer. It reads
+// the same msg.Annotations["record"] key every other record consumer reads.
+func recordIsRecord(p *parser.DescriptorParser, typeFqn string) bool {
 	if typeFqn == "" {
-		return ""
+		return false
 	}
 	for _, fd := range p.GetAllFiles() {
 		if fd.Package == "" || !strings.HasPrefix(typeFqn, fd.Package+".") {
@@ -594,20 +598,17 @@ func recordResidency(p *parser.DescriptorParser, typeFqn string) string {
 			if fd.Package+"."+msg.Name != typeFqn {
 				continue
 			}
-			if r := msg.Annotations["record_residency"].RecordResidency; r != nil {
-				return r.Window
-			}
-			return ""
+			return msg.Annotations["record"].BoolValue
 		}
 	}
-	return ""
+	return false
 }
 
 // recordStoreEpochField returns the name of the (spec.store_epoch) field declared
 // by the message named by typeFqn, or "" when the type is not found or declares
 // none.
 //
-// Same shape as recordResidency, and for the same reason: a lookup, not a second
+// Same shape as recordIsRecord, and for the same reason: a lookup, not a second
 // opinion. The field's well-formedness (int64, non-repeated, RANGE-queryable) is
 // enforced once at parse time by parser.ValidateResidencyAnnotations.
 func recordStoreEpochField(p *parser.DescriptorParser, typeFqn string) string {

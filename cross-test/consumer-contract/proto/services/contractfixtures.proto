@@ -17,14 +17,13 @@ option (spec.vservice) = {
 
 message FixtureEvent {
   // DELIVERY. A record implies an event and must declare its producer surface
-  // (s2s here). retention is delivery-side state: how long the delivered rows are
-  // kept. It lives here, never on the transformation below — see
-  // (spec.record).retention in sys/spec.proto.
+  // (s2s here). The row lifecycle is (spec.record).residency's two clocks and
+  // lives here, never on the transformation below — a pure typed conversion has
+  // no lifetime. This fixture leaves both clocks at the platform default.
   option (spec.record) = {
     key: "event_id"
     owner: "spiffe_id"
     s2s: {auth_services: ["*"]}
-    retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
   };
   // TRANSFORMATION. A pure typed conversion FixtureEvent -> FixtureEventRecord.
   // Exercises the transformation + TimeseriesGroupCounts + TimeseriesQuery
@@ -81,7 +80,6 @@ message FixtureAudit {
     key: "audit_id"
     owner: "spiffe_id"
     s2s: {auth_services: ["*"]}
-    retention: {timestamp_field: "recorded_at_ms" duration_seconds: 7776000}
   };
 
   string audit_id = 1 [(spec.assert_required) = true];

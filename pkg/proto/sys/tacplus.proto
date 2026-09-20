@@ -313,9 +313,8 @@ message TypeInfo {
   // Hosting service labels from (spec.service_store).label.
   repeated string service_store_label = 22;
 
-  reserved 23;  // timeseries_retention — retention is delivery-side state and
-                // now lives on record_retention (from (spec.record).retention),
-                // never on a transformation or its compile target. 2026-08-25.
+  reserved 23;  // timeseries_retention — a transformation's compile target has no
+                // lifetime of its own. Retired 2026-08-25.
   // Store-neutral dedup policy for a standalone (spec.timeseries_type) table, from
   // its .dedup. Unset = append-only (no dedup) — the standalone-table default.
   DedupPolicyInfo timeseries_dedup = 24;
@@ -325,11 +324,11 @@ message TypeInfo {
   // field by (spec.redact). UNSPECIFIED = no message-level default.
   spec.RedactMode data_entitlement_default = 25;
 
-  // record_retention from (spec.record).retention: the store-neutral row
-  // retention policy for this record's stored rows. Unset = indefinite.
-  // Retention is DELIVERY-side state — a transformation is a pure conversion and
-  // carries none.
-  RetentionPolicyInfo record_retention = 26;
+  reserved 26;  // record_retention — mirrored the retired (spec.record).retention.
+                // Retired 2026-09-20 with the HOT/WARM/COLD residency model: a
+                // record's lifecycle is now (spec.record).residency's two clocks
+                // (idle_seconds, deleted_max_age_seconds), not a second window
+                // measured from a business timestamp field.
 }
 
 // TransformationFieldInfo describes a single field in a transformation.
@@ -343,14 +342,6 @@ message TransformationFieldInfo {
   spec.CardinalityHint cardinality_hint = 6;
 }
 
-// RetentionPolicyInfo is the registry mirror of spec.RetentionPolicy — the
-// store-neutral row retention policy. A downstream materializer renders this
-// into an engine-specific TTL/eviction rule.
-message RetentionPolicyInfo {
-  string timestamp_field = 1;   // row field the retention age is measured from
-  int64 duration_seconds = 2;   // retain this long after timestamp_field; 0 = indefinite
-}
-
 // DedupPolicyInfo is the registry mirror of spec.DedupPolicy — the store-neutral
 // row identity + duplicate-resolution policy. A downstream materializer maps this
 // onto an engine's merge/dedup mechanism.
@@ -362,8 +353,8 @@ message DedupPolicyInfo {
 
 // TransformationInfo describes a derived row type produced by a pure typed
 // conversion of a source message. Store-neutral: dedup and cardinality_hint are
-// semantic intent, not backend DDL. It carries NO retention — retention is
-// delivery-side state and lives on TypeInfo.record_retention.
+// semantic intent, not backend DDL. It carries no lifetime: a pure typed
+// conversion has none.
 message TransformationInfo {
   string name = 1;
   reserved 2, 3, 6;

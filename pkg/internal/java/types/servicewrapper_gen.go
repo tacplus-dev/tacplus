@@ -2959,8 +2959,8 @@ func javaStoreEpochStamp(field, valueExpr, indent string) string {
 // javaStoreEpochUnenforceable reports why the (spec.store_epoch) stamp cannot be
 // generated for a method that carries an epoch-bearing request, or "" when it
 // can. A write the wrapper cannot stamp must fail generation rather than reach a
-// handler with an unstamped epoch — an unstamped store epoch is a row the
-// residency window measures as infinitely old.
+// handler with an unstamped epoch — an unstamped store epoch is a row the purge
+// measures as infinitely old.
 func javaStoreEpochUnenforceable(method *parser.MethodInfo, san *javaEgressSanitizer, servicePackage string) string {
 	if san.storeEpochField(method.FullInputType, servicePackage) == "" {
 		return ""

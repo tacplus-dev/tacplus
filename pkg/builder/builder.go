@@ -229,7 +229,7 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateResidencyAnnotations(dp); err != nil {
 		return err
 	}
-	if err := parser.ValidateEjectionableAnnotations(dp); err != nil {
+	if err := parser.ValidateDeletedFlagAnnotations(dp); err != nil {
 		return err
 	}
 	if err := parser.ValidateMcpAnnotations(dp); err != nil {

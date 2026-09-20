@@ -133,8 +133,8 @@ func TestJavaStoreEpoch_UndeclaredEmitsNoStamp(t *testing.T) {
 }
 
 // A write whose epoch the wrapper cannot stamp must FAIL generation rather than
-// reach a handler with an unstamped epoch — a row the residency window would
-// measure as infinitely old. Same fail-closed stance
+// reach a handler with an unstamped epoch — a row the purge would measure as
+// infinitely old. Same fail-closed stance
 // javaMinGroupSizeUnenforceable takes for the shapes its guard cannot reach.
 func TestJavaStoreEpoch_UnstampableShapeIsAGenerationError(t *testing.T) {
 	san := storeEpochSanitizer()

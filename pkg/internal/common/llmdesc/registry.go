@@ -22,10 +22,6 @@ type RegistryTypeInfo struct {
 	// EventDB
 	RecordKey   string // event key field from (spec.record).key
 	RecordOwner string // owner field from (spec.record).owner
-	// RecordRetention is the DELIVERY-side row retention policy from
-	// (spec.record).retention (nil = indefinite). It is deliberately not on a
-	// transformation: a pure typed conversion has no lifetime.
-	RecordRetention *model.RetentionPolicyEntry
 	// Transformations declared on this message, from (spec.transformation).
 	Transformations []model.TransformationEntry
 	// timeseries_type is the generator-internal compile target a transformation
@@ -93,9 +89,6 @@ func CollectRegistryTypes(allFiles []model.ProtoFile) []RegistryTypeInfo {
 				}
 				if ann, ok := msg.Annotations["record_owner"]; ok && ann.StringValue != "" {
 					rti.RecordOwner = ann.StringValue
-				}
-				if ann, ok := msg.Annotations["record_retention"]; ok && ann.RecordRetention != nil {
-					rti.RecordRetention = ann.RecordRetention
 				}
 				// Transformation annotations
 				if ann, ok := msg.Annotations["transformation"]; ok {

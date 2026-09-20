@@ -87,7 +87,6 @@ message ProbeEvent {
     key: "probe_id"
     owner: "spiffe_id"
     s2s: {auth_services: ["*"]}
-    retention: {timestamp_field: "timestamp_ms" duration_seconds: 60}
   };
 
   string probe_id = 1;

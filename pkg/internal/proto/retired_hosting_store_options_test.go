@@ -14,7 +14,7 @@ import (
 
 // The hosting-store options are gone from sys/spec.proto: graph_projection
 // (60066, graph store support removed) and timeseries_projection (60067, split
-// into spec.transformation + (spec.record).retention). PLAN item 12 asks for a
+// into spec.transformation). PLAN item 12 asks for a
 // control proving they cannot come back.
 //
 // There is no generator-level "no-hosting-store validator" and (per

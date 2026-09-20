@@ -180,20 +180,13 @@ const (
 	DedupLatestByVersion TimeseriesDedupStrategy = 1 // keep latest row per key by version_field
 )
 
-// RetentionPolicyEntry is the store-neutral row retention policy.
-type RetentionPolicyEntry struct {
-	TimestampField  string // row field the retention age is measured from
-	DurationSeconds int64  // retain this long after TimestampField; 0 = indefinite
-	Forever         bool   // rows are never aged out; the EXPLICIT spelling of an absent policy
-}
-
-// ResidencyPolicyEntry is a record type's memory-residency window: how long its
-// rows stay resident in MEMORY, measured from the (spec.store_epoch) field.
-// Distinct from RetentionPolicyEntry, which DELETES rows and measures from the
-// author's business timestamp.
+// ResidencyPolicyEntry is a record type's lifecycle, as two clocks. Both fields
+// are 0 when the author left them unset, which means "apply the platform
+// default" (parser.DefaultResidencyIdleSeconds,
+// parser.DefaultResidencyDeletedMaxAgeSeconds) — never "never".
 type ResidencyPolicyEntry struct {
-	Window        string // "RESIDENCY_UNSPECIFIED" | "RESIDENCY_HOT" | "RESIDENCY_WARM" | "RESIDENCY_COLD"
-	WindowSeconds int64  // WARM only; 0 = use the configured default
+	IdleSeconds          int64 // no read and no write for this long -> evicted from memory
+	DeletedMaxAgeSeconds int64 // flagged deleted AND older than this -> purged at the next sweep
 }
 
 // DedupPolicyEntry is the store-neutral duplicate-resolution policy.
@@ -214,8 +207,9 @@ type TransformationFieldEntry struct {
 
 // TransformationEntry represents a pure typed conversion of a source message into
 // a derived row type. Dedup is semantic intent; a downstream materializer renders
-// the concrete backend schema. It carries NO retention — retention is
-// delivery-side state and lives on the record annotation.
+// the concrete backend schema. It carries no lifetime of its own: a pure typed
+// conversion has none, and the record's lifecycle lives on
+// (spec.record).residency.
 type TransformationEntry struct {
 	Name   string // derived row type name (e.g. "SessionRecord")
 	When   string // oneof variant that triggers this row
@@ -240,8 +234,7 @@ type AnnotationValue struct {
 	EventPublishEntries    []EventBusBindingEntry       // For event_publish annotations
 	EventWatchEntries      []EventBusBindingEntry       // For event_watch annotations
 	TransformationEntries  []TransformationEntry        // For transformation annotations
-	RecordRetention        *RetentionPolicyEntry        // For (spec.record).retention (store-neutral)
-	RecordResidency        *ResidencyPolicyEntry        // For (spec.record).residency (memory-residency window)
+	RecordResidency        *ResidencyPolicyEntry        // For (spec.record).residency (the two lifecycle clocks)
 	TimeseriesDedup        *DedupPolicyEntry            // For timeseries_type dedup (store-neutral)
 }
 

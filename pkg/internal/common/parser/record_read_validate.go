@@ -337,8 +337,8 @@ func validateRecordReadC2S(reader, fqn string, use *RecordReadC2S, grant *record
 	}
 
 	// The SCOPE. C2S_SCOPE_NAMESPACE is declared in the enum but not implemented,
-	// and says so — the same stance RESIDENCY_COLD takes, so the value cannot be
-	// invented a second time with a different meaning while it waits.
+	// and says so, so the value cannot be invented a second time with a different
+	// meaning while it waits.
 	switch use.Scope {
 	case "C2S_SCOPE_PRINCIPAL":
 		errs = append(errs, validateC2SPrincipalScope(reader, fqn, msg)...)

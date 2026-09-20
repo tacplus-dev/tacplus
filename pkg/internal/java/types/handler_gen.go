@@ -77,13 +77,17 @@ type javaSubscriptionEntry struct {
 	TypeOuterClass    string // e.g. "Aegis"
 	ClassName         string // e.g. "AegisEventStreamSubscriber"
 	TargetService     string // e.g. "eventbus" — service_id to resolve via ServiceHealthState
-	// PerInstanceConsumerGroup is true when the topic's record type declares
-	// (spec.record).residency = RESIDENCY_WARM. A warm record's rows land in a
-	// NODE-LOCAL store, so a node's copy is only complete if that node receives
-	// every record. Under the shared service-label group the broker hands each record
-	// to exactly one instance, which is right for the cluster-wide in-memory map
-	// and wrong for a node-local one. A per-instance group makes the broker fan
-	// the topic out to every instance instead of splitting it.
+	// PerInstanceConsumerGroup is true when the topic delivers a (spec.record).
+	// A record's rows land in a NODE-LOCAL store — one in-memory map per type
+	// with a disk leg beneath it, checkpointed per pod — so a node's copy is only
+	// complete if that node receives every record. Under the shared service-label
+	// group the broker hands each record to exactly one instance, which splits a
+	// node-local store. A per-instance group makes the broker fan the topic out to
+	// every instance instead.
+	//
+	// It was RESIDENCY_WARM that selected this until 2026-09-20. The preset enum
+	// is gone and every record type now has the disk leg only WARM types had, so
+	// the condition is simply "is it a record".
 	PerInstanceConsumerGroup bool
 	// StoreEpochFieldPascal is the PascalCase stem of the source record's
 	// (spec.store_epoch) field ("" when it declares none), e.g. "StoreEpochMs".
@@ -112,25 +116,25 @@ type javaDiskStoreRuntimeEntry struct {
 
 // javaSmTemplateData holds the data passed to Handler.java.tmpl and ServiceManager.java.tmpl.
 type javaSmTemplateData struct {
-	PackageBase            string
-	ChassisBase               string
-	TypesBase              string
-	SmPrefix               string
-	ServiceLabel           string
-	HasGrpc                bool
-	HasStates              bool
-	HasGrpcS2SClients      bool
-	HasServiceHealthState  bool
+	PackageBase           string
+	ChassisBase           string
+	TypesBase             string
+	SmPrefix              string
+	ServiceLabel          string
+	HasGrpc               bool
+	HasStates             bool
+	HasGrpcS2SClients     bool
+	HasServiceHealthState bool
 	HasSysState           bool
-	HasAutoTls             bool
-	AutoTlsKeyType         string
-	HasSmb                 bool // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
-	SmbAuthorityServiceID  string
-	HasSubscriptions       bool
-	// HasWarmSubscriptions is true when any subscription sets
+	HasAutoTls            bool
+	AutoTlsKeyType        string
+	HasSmb                bool // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
+	SmbAuthorityServiceID string
+	HasSubscriptions      bool
+	// HasRecordSubscriptions is true when any subscription sets
 	// PerInstanceConsumerGroup; it gates the one helper those subscriptions need,
 	// so a service with none generates byte-identical to before.
-	HasWarmSubscriptions   bool
+	HasRecordSubscriptions bool
 	HasPublishers          bool
 	HealthStateProtoDir    string // e.g. "services/identity"
 	HealthStateJavaPkg     string // e.g. "services.identity" (Java package path)
@@ -378,17 +382,17 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 			ClassName:         className,
 			TargetService:     targetService,
 
-			PerInstanceConsumerGroup: sub.SourceResidency == "RESIDENCY_WARM",
+			PerInstanceConsumerGroup: sub.SourceIsRecord,
 
 			StoreEpochFieldPascal: javaPascalField(sub.SourceStoreEpochField),
 			StoreEpochField:       sub.SourceStoreEpochField,
 		})
 	}
 
-	hasWarmSubscriptions := false
+	hasRecordSubscriptions := false
 	for _, sub := range subs {
 		if sub.PerInstanceConsumerGroup {
-			hasWarmSubscriptions = true
+			hasRecordSubscriptions = true
 			break
 		}
 	}
@@ -437,7 +441,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 
 	return javaSmTemplateData{
 		PackageBase:            packageBase,
-		ChassisBase:               packageBase + ".chassis",
+		ChassisBase:            packageBase + ".chassis",
 		TypesBase:              packageBase + ".types",
 		SmPrefix:               config.GetSmPrefix(),
 		ServiceLabel:           config.ServiceLabel(),
@@ -445,13 +449,13 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		HasStates:              len(config.States) > 0 || config.AllStates,
 		HasGrpcS2SClients:      len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
 		HasServiceHealthState:  hasServiceHealthState,
-		HasSysState:           hasSysState,
+		HasSysState:            hasSysState,
 		HasAutoTls:             config.HasAutoTls(),
 		AutoTlsKeyType:         config.AutoTlsKeyType(),
 		HasSmb:                 hasSmb,
 		SmbAuthorityServiceID:  smbAuthorityServiceID,
 		HasSubscriptions:       len(subs) > 0,
-		HasWarmSubscriptions:   hasWarmSubscriptions,
+		HasRecordSubscriptions: hasRecordSubscriptions,
 		HasPublishers:          hasPublishers,
 		HealthStateProtoDir:    healthStateProtoDir,
 		HealthStateJavaPkg:     strings.ReplaceAll(healthStateProtoDir, "/", "."),

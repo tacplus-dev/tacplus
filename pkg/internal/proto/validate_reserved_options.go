@@ -21,7 +21,7 @@ import (
 // against the reserved declarations in sys/spec.proto so it cannot drift.
 var reservedSpecOptionFields = map[string]string{
 	"engine":          "store-neutral dedup: {strategy: ... version_field: ...}",
-	"ttl":             "store-neutral retention: {timestamp_field: ... duration_seconds: ...}",
+	"ttl":             "(removed — a transformation is a pure conversion and has no lifetime; a record's lifecycle is (spec.record).residency)",
 	"low_cardinality": "cardinality_hint: CARDINALITY_LOW",
 	"codec":           "(removed — store decides encodings)",
 	"default_expr":    "(removed — store decides defaults)",
@@ -32,12 +32,15 @@ var reservedSpecOptionFields = map[string]string{
 // global table above without false-positiving on the option that still uses them.
 // Keyed by the spec option name the block opens with.
 //
-// retention is the case this exists for: it is reserved on Transformation and on
-// TimeseriesTypeAnnotation (a transformation is a pure typed conversion and has no
-// lifetime) but ACTIVE on RecordAnnotation, where delivery-side retention lives.
+// retention is the case this exists for. It is NAME-reserved on Transformation and
+// on TimeseriesTypeAnnotation, so protoc discards it there silently and tacplus
+// has to fail on it itself. On RecordAnnotation the field number is reserved but
+// the NAME deliberately is not (see sys/spec.proto), which makes protoc reject
+// `retention:` in a (spec.record) block outright — a hard parse error needs no
+// entry here, and putting one in would claim a name spec.proto does not reserve.
 var reservedSpecOptionFieldsByOption = map[string]map[string]string{
-	"transformation":  {"retention": "(spec.record).retention — retention is delivery-side state, not transformation state"},
-	"timeseries_type": {"retention": "(spec.record).retention — retention is delivery-side state, not transformation state"},
+	"transformation":  {"retention": "(removed — a pure typed conversion has no lifetime; a record's lifecycle is (spec.record).residency)"},
+	"timeseries_type": {"retention": "(removed — a compile target of a pure typed conversion has no lifetime; a record's lifecycle is (spec.record).residency)"},
 }
 
 func reservedFieldRe(name string) *regexp.Regexp {

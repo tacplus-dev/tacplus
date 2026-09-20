@@ -22,7 +22,7 @@ import (
 // representation for a stream, and one optional string that only means something
 // on this principal.
 //
-// This validator is shaped like ValidateEjectionableAnnotations: deterministic
+// This validator is shaped like ValidateDeletedFlagAnnotations: deterministic
 // file ordering, errors accumulated, one aggregated error under a header.
 //
 //	MCP-1  RPC_PRINCIPAL_MCP with stream on the request or response -> fail
@@ -33,7 +33,7 @@ import (
 //	       know about CollectionMode at all. A handler is free to drive a Watch
 //	       internally and fold it into one response.
 //	MCP-2  mcp_tool_name on an rpc that is not RPC_PRINCIPAL_MCP     -> fail
-//	       Nothing reads it there. Same posture as ejectionable EJ-4: an
+//	       Nothing reads it there. Same posture as residency VAL-4: an
 //	       annotation no generator consults is a lie about the contract, not a
 //	       harmless extra.
 //	MCP-3  mcp_tool_name that is not snake_case                      -> fail

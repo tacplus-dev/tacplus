@@ -172,7 +172,6 @@ import "sys/spec.proto";
 message SessionEvent {
   option (spec.record) = {
     key: "event_id", owner: "spiffe_id", s2s: {}
-    retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
   };
   option (spec.transformation) = {
     name: "SessionRow"

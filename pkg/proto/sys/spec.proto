@@ -680,22 +680,19 @@ message RecordAnnotation {
   // s2s, when present, exposes the record's publish RPC to internal services.
   // It is the PRODUCER surface only; the consumer surface is s2s_subscribe.
   MethodS2SAnnotation s2s = 4;
-  // retention is the store-neutral row retention policy for this record's
-  // stored rows (unset = indefinite).
-  //
-  // Retention is DELIVERY-side state, not transformation state. A
-  // (spec.transformation) is a pure typed conversion A -> B; a pure function has
-  // no lifetime, so a retention window cannot live on it. It lives here, on the
-  // declaration that says this message is stored and delivered — the same place
-  // key/owner/producer-surface live. A downstream materializer (e.g. stratum's
-  // EventStoreGenerator) reads it from here to render the concrete eviction rule.
-  //
-  // Example:
-  //   option (spec.record) = {
-  //     key: "event_id" owner: "spiffe_id" s2s: {auth_services: ["*"]}
-  //     retention: {timestamp_field: "timestamp_ms" duration_seconds: 7776000}
-  //   };
-  RetentionPolicy retention = 5;
+  reserved 5;  // retention — a second lifecycle clock measuring from the author's
+               // business timestamp, retired 2026-09-20 with the HOT/WARM/COLD
+               // residency model. One clock remains: residency (field 7) ages a
+               // row out of memory, and a row flagged deleted is purged at
+               // deleted_max_age_seconds. There is no separate row-deletion
+               // window measured from a business field.
+               //
+               // The NAME is deliberately not reserved. protoc silently DISCARDS
+               // a reserved-name field in an option literal (the whole reason
+               // proto.ValidateReservedSpecOptionFields exists), while an
+               // unknown one is a hard parse error — so a fleet proto still
+               // saying `retention: {...}` fails loudly instead of generating
+               // with its intent dropped.
 
   // min_group_size is the smallest result size this record's size-only query
   // surfaces will disclose. 0 / unset = no guard (additive, like owner_default).
@@ -709,34 +706,43 @@ message RecordAnnotation {
   // crossed that line.
   int32 min_group_size = 6;
 
-  // residency is how long this record type's rows stay resident in MEMORY.
+  // residency is this record type's lifecycle, as two numbers.
+  //
+  //   idle_seconds            no read and no write for this long -> the row
+  //                           leaves MEMORY and lives on disk only. The next
+  //                           touch reloads it; nothing is lost.
+  //   deleted_max_age_seconds flagged deleted (see (spec.deleted_flag)) AND
+  //                           older than this -> the row is purged at the next
+  //                           sweep. Gone, not tiered.
   //
   // It is a data-lifecycle property of the type inside ONE store, not a choice
   // of backing store: field 50024 (cold_store) was retired above because
-  // "tiering is internal to the store service", and that ruling stands. There is
-  // still exactly one record store. This names the WINDOW, and hot/warm/cold are
-  // presets of it.
+  // "tiering is internal to the store service", and that ruling stands. Tiering
+  // is a CONSEQUENCE of these two clocks, never a declared class — which is why
+  // the HOT/WARM/COLD preset enum is gone. There is no "never leaves memory";
+  // long-lived, config-shaped data just carries a long idle_seconds.
   //
-  // Unset = RESIDENCY_HOT, which is what every record does today. Additive, the
-  // same way min_group_size and owner_default are.
+  // Both numbers are per type and both always have a value: 0/unset means "apply
+  // the platform default" (see parser.DefaultResidencyIdleSeconds and
+  // parser.DefaultResidencyDeletedMaxAgeSeconds), never "never". Unset is
+  // therefore additive in the same way min_group_size and owner_default are.
   //
-  // Residency is NOT retention. Retention (field 5) DELETES rows and measures
-  // from the author's business timestamp; residency EVICTS rows from memory and
-  // measures from the store epoch (the (spec.store_epoch) field, stamped by the
-  // wrapper on every write). Eviction is cache maintenance: a warm row evicted
-  // from memory is still complete and queryable on disk.
+  // The idle clock lives ONLY in memory: a read never restamps
+  // (spec.store_epoch), never writes the event log, never touches disk.
+  // store_epoch keeps its own meaning — last WRITE, durable — and is what
+  // deleted_max_age_seconds measures the delete from.
   //
   // Example:
   //   option (spec.record) = {
   //     key: "accounting_id" owner: "spiffe_id"
-  //     residency: {window: RESIDENCY_WARM}
+  //     residency: {idle_seconds: 3600 deleted_max_age_seconds: 2592000}
   //   };
   ResidencyPolicy residency = 7;
 
   // mutability is whether this record type's rows may be changed after they are
-  // written. It is an ATTRIBUTE, orthogonal to residency: immutable-warm
-  // (accounting) and mutable-warm are both legitimate, and so is either with
-  // RESIDENCY_HOT.
+  // written. It is an ATTRIBUTE, orthogonal to residency: an immutable type
+  // (accounting) and a mutable one are both legitimate under any pair of
+  // residency clocks.
   //
   // Unset = MUTABILITY_CRUD, which is what every record does today.
   //
@@ -902,42 +908,39 @@ message RecordAnnotation {
   MethodS2SAnnotation c2s_read = 11;
 }
 
-// Residency is the memory-residency window preset for a stored record type.
-// The presets are the whole vocabulary; there is no free-form third axis.
-enum Residency {
-  // Unspecified = RESIDENCY_HOT. Absence must keep meaning today's behaviour,
-  // or every record proto in the fleet changes meaning on the P1 upgrade.
-  RESIDENCY_UNSPECIFIED = 0;
-
-  // HOT: in memory forever, or until deleted. Window = unbounded.
-  RESIDENCY_HOT = 1;
-
-  // WARM: in memory for a window; complete and queryable on disk beneath it.
-  // Window = ResidencyPolicy.window_seconds, or the configured default when
-  // that is 0. Rows are evicted from memory at window age and served from disk
-  // thereafter; a write returns the row to the window.
-  RESIDENCY_WARM = 2;
-
-  // COLD: RESERVED, NOT IMPLEMENTED. Semantics would be window = 0 — straight
-  // to disk, never resident — if a high-volume need ever appears. Declaring it
-  // FAILS GENERATION (see ValidateResidencyAnnotations). The value exists so the
-  // refusal can be explicit instead of the declaration being a typo nobody
-  // catches.
-  RESIDENCY_COLD = 3;
-}
-
-// ResidencyPolicy states a record type's memory-residency window.
+// ResidencyPolicy states a record type's lifecycle as two clocks. It replaced
+// the HOT/WARM/COLD preset enum on 2026-09-20: tiering is a consequence of the
+// clocks, not a declared class, and there is no "never leaves memory".
+//
+// Both fields: 0/unset means APPLY THE PLATFORM DEFAULT, never "never". The
+// defaults are parser.DefaultResidencyIdleSeconds and
+// parser.DefaultResidencyDeletedMaxAgeSeconds.
 message ResidencyPolicy {
-  // window is the preset. Required when residency is declared at all;
-  // RESIDENCY_UNSPECIFIED inside a present ResidencyPolicy is a generation
-  // error, not a silent HOT (an author who wrote the block meant something).
-  Residency window = 1;
+  // Field numbers 1 and 2 are REUSED, not reserved: they held the retired
+  // window / window_seconds preset pair. This message is a compile-time
+  // annotation — no wire data of it is ever persisted — and an unknown field
+  // name is a hard protoc error where a reserved one is silently discarded, so
+  // reuse is what makes a proto still saying `residency: {window: ...}` fail
+  // loudly rather than generate with its intent dropped.
 
-  // window_seconds overrides the configured default window. WARM ONLY:
-  // set on HOT or COLD it is a knob nothing reads, and generation REJECTS it
-  // rather than accept an intent tacplus does not honour.
-  // 0 = use the configured default.
-  int64 window_seconds = 2;
+  // idle_seconds is how long a row may go with NO read and NO write before it is
+  // evicted from memory. It lives on disk beneath, complete and queryable, and
+  // the next touch reloads it — eviction is cache maintenance, never data loss.
+  //
+  // A read that counts is a Get by key and every row actually RETURNED by List
+  // or Watch. A Count, a Subscribe…Count, and a row that merely matches a
+  // predicate do not, or a dashboard counting a dataset would keep it resident.
+  int64 idle_seconds = 1;
+
+  // deleted_max_age_seconds is how long a row flagged deleted (see
+  // (spec.deleted_flag)) survives after the delete write. Measured from that
+  // write's (spec.store_epoch). Past it the row is DEAD: never loaded into
+  // memory again, removed by the next sweep, not tiered and not readable.
+  //
+  // A record type that declares no (spec.deleted_flag) field has nothing for
+  // this clock to measure; it is carried anyway rather than refused, because a
+  // type that later gains the marker should not also have to gain a number.
+  int64 deleted_max_age_seconds = 2;
 }
 
 // Mutability is whether a stored record type's rows may change after write.
@@ -952,34 +955,6 @@ enum Mutability {
   // the type and the generated wrapper refuses to host one. Its disk slices are
   // pure appends — sealed, checksummable units.
   MUTABILITY_APPEND_ONLY = 2;
-}
-
-// Ejectionable is whether ONE ROW may be evicted from memory when its residency
-// window expires. It is the per-row gate on the window (spec.record).residency
-// declares for the whole type.
-//
-// It is an ATTRIBUTE, orthogonal to residency, exactly as Mutability is: the
-// type says HOW LONG rows stay resident, each row says WHETHER the window
-// applies to it at all. Both axes are needed because a single warm record type
-// legitimately holds rows that must not leave memory (a mailbox's undelivered
-// message) alongside rows that may (one already retrieved).
-//
-// Unset = EJECTIONABLE_NEVER, which is HOT's safe default: a row nobody marked
-// stays in memory. Absence must keep meaning today's behaviour, and the safe
-// direction for a marker an author forgets is "keep the row", never "drop it".
-enum Ejectionable {
-  // Unspecified = EJECTIONABLE_NEVER. The row is never evicted.
-  EJECTIONABLE_UNSPECIFIED = 0;
-
-  // NEVER: the residency window does not apply to this row. It stays resident
-  // for as long as the type's rows are retained at all. The explicit spelling
-  // of an absent value, the same way RetentionPolicy.forever is.
-  EJECTIONABLE_NEVER = 1;
-
-  // WINDOW: the residency window applies to this row as declared — it is
-  // evicted from memory once its (spec.store_epoch) is older than the window,
-  // and served from disk thereafter.
-  EJECTIONABLE_WINDOW = 2;
 }
 
 // EventAnnotation marks a message as an EventBus event: tacplus generates a topic
@@ -1007,22 +982,6 @@ enum CardinalityHint {
   CARDINALITY_UNSPECIFIED = 0;
   CARDINALITY_LOW = 1;   // few distinct values; was low_cardinality=true
   CARDINALITY_HIGH = 2;  // many distinct values
-}
-
-// RetentionPolicy is a store-neutral statement of how long rows are retained.
-// A downstream materializer renders this into an engine-specific TTL/eviction
-// rule; tacplus carries only the semantic intent (which field, how long).
-message RetentionPolicy {
-  string timestamp_field = 1;   // row field the retention age is measured from
-  int64 duration_seconds = 2;   // retain this long after timestamp_field; 0 = indefinite
-
-  // forever declares that this record type's rows are never aged out. It is the
-  // EXPLICIT spelling of what an absent retention block means implicitly, and it
-  // exists so an append-only "forever" dataset can be refused a retention knob —
-  // you cannot refuse a knob on the grounds that another knob is absent.
-  // forever:true with duration_seconds > 0 is a contradiction and fails
-  // generation (ValidateResidencyAnnotations).
-  bool forever = 3;
 }
 
 // DedupStrategy is a store-neutral statement of how duplicate rows are resolved.
@@ -1875,10 +1834,11 @@ extend google.protobuf.FieldOptions {
   // Example: int64 first_seen_ms = 5 [(spec.timeseries) = true];
   bool timeseries = 60055;
 
-  // archive marks this field for projection into cold storage.
-  // When true, this field is included in the cold-storage schema.
-  // Example: bytes raw_payload = 20 [(spec.archive) = true];
-  bool archive = 60056;
+  // 60056 retired (spec.archive — marked a field for projection into cold
+  // storage). Retired 2026-09-20 with the HOT/WARM/COLD residency model: there
+  // is no cold tier to project into. A record type's rows live in memory for
+  // (spec.record).residency.idle_seconds and on disk beneath it, whole; nothing
+  // selects a subset of columns for a second store.
 
   // 60057 retired (spec.sql — a raw named SQL query embedded in the contract).
   // Removed as a store-coupling boundary violation: tacplus is store-neutral and
@@ -2000,16 +1960,18 @@ extend google.protobuf.FieldOptions {
   // all) and does not drop the record. A producer that sets the field is not
   // erroring, it is writing into a slot the store owns.
   //
-  // The store epoch is what the residency window is measured against, and the
-  // predicate a two-leg query would partition on: memory serves
-  // epoch >= now - window, the disk leg gets epoch < now - window bolted onto
-  // the filter. It is therefore also a RANGE query criterion in the generated
-  // filter, so the field carries (spec.query_field) = {op: QUERY_OP_RANGE}.
+  // The store epoch is the row's last WRITE, durable, and it is what
+  // (spec.record).residency.deleted_max_age_seconds measures a delete from, plus
+  // the predicate a sweep or a restore orders on. It is therefore also a RANGE
+  // query criterion in the generated filter, so the field carries
+  // (spec.query_field) = {op: QUERY_OP_RANGE}.
   //
-  // NOT (spec.epoch_expiration) (above, statedb per-entry TTL) and NOT
-  // (spec.record).retention.timestamp_field (the author's business timestamp,
-  // which retention measures from). Three different clocks; only this one is
-  // store-owned.
+  // It is NOT the residency clock. residency.idle_seconds runs on reads AND
+  // writes and lives only in memory: a read never restamps this field, never
+  // writes the event log, never touches disk.
+  //
+  // NOT (spec.epoch_expiration) either (above, statedb per-entry TTL). Different
+  // clocks; only this one is store-owned and durable.
   bool store_epoch = 60086;
 
   // ----- Namespace isolation annotations (the generated tenant backstop) -----
@@ -2059,35 +2021,34 @@ extend google.protobuf.FieldOptions {
   // Example: string namespace = 5 [(spec.store_namespace) = true];
   bool store_namespace = 60088;
 
-  // ----- Residency: the per-row gate on the type's eviction window -----
+  // 60089 retired (spec.ejectionable — the per-row gate on the type's eviction
+  // window). Declared and validated, never consumed by any generator, and
+  // subsumed on 2026-09-20 by (spec.record).residency.idle_seconds: a row that
+  // is read or written stays resident, and one that is not ages out. There is no
+  // per-row exemption from the idle clock because there is no row that never
+  // leaves memory.
 
-  // ejectionable: this RECORD field carries the row's own answer to "does the
-  // residency window apply to me?". The field must be of type spec.Ejectionable
-  // and a record declares at most one; ValidateEjectionableAnnotations refuses
-  // anything else.
+  // deleted_flag: this RECORD bool field records the row's SOFT-DELETE state.
   //
   // A marker, like (spec.store_epoch) and (spec.store_namespace) above: the
-  // annotation owns the LOCATION and nothing else. (spec.record).residency
-  // declares the window for the TYPE; this names the field whose per-row value
-  // decides whether that window is consulted for a given row. The two are
-  // orthogonal the same way mutability is orthogonal to residency.
+  // annotation owns the LOCATION and nothing else. Deletion is an ordinary
+  // republish that sets the flag — the row's last write. The row is still in
+  // memory for its idle window, still on disk, still fetchable by key.
   //
-  // UNSET IS NEVER-EVICT. An EJECTIONABLE_UNSPECIFIED row is not evicted, which
-  // is exactly what RESIDENCY_HOT means and exactly what every record does
-  // today. So this is additive: a record that declares no ejectionable field
-  // keeps today's behaviour, and a record that declares one keeps it for every
-  // row that leaves the field at zero. The safe direction for a marker an
-  // author forgets is "keep the row"; the fail-silent alternative would drop
-  // data.
+  // The generated query plane EXCLUDES flagged-true rows from List / Watch /
+  // Count / Sample by default; the query message gains include_deleted for audit
+  // and citation cases, and Get by key always returns the row, deleted or not,
+  // until it is purged. A flagged row older than
+  // (spec.record).residency.deleted_max_age_seconds is purged at the next sweep.
   //
-  // Only meaningful on a record that declares (spec.record).residency — there
-  // is no window to gate otherwise, and declaring the gate anyway is a
-  // GENERATION ERROR rather than an inert annotation, the same posture
-  // ValidateResidencyAnnotations VAL-6 takes for a residency nothing reads.
+  // EXACTLY ONE such field per record message, or none: a record with no
+  // soft-delete marker (an append-only type, say) is valid and nothing is
+  // excluded from its queries. ValidateDeletedFlagAnnotations refuses anything
+  // else — a non-record message, a non-bool field, or two marked fields.
   //
   // Example:
-  //   spec.Ejectionable ejectionable = 6 [(spec.ejectionable) = true];
-  bool ejectionable = 60089;
+  //   bool deleted = 7 [(spec.deleted_flag) = true];
+  bool deleted_flag = 60091;
 }
 
 // QueryOp is the match kind for a (spec.query_field) record filter criterion.
@@ -2484,8 +2445,8 @@ enum C2SScope {
   // it must be written down and can never be what absence means.
   //
   // DECLARED BUT NOT IMPLEMENTED in v1: generation fails with an explicit
-  // "declared but not implemented" error, the same stance RESIDENCY_COLD takes.
-  // The value exists so it cannot be invented twice with two meanings.
+  // "declared but not implemented" error. The value exists so it cannot be
+  // invented twice with two meanings.
   C2S_SCOPE_NAMESPACE = 2;
 }
 

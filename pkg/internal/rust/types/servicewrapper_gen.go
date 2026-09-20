@@ -293,8 +293,8 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 		}
 		// (spec.store_epoch) is stamped in the generated Java service wrapper
 		// only. A Rust host would reach its handler with an unstamped epoch — a
-		// row the residency window measures as infinitely old — so refuse to
-		// generate rather than write the wrong clock silently.
+		// row the purge measures as infinitely old — so refuse to generate
+		// rather than write the wrong clock silently.
 		if f := rustStoreEpochField(method.FullInputType, san, info.Package); f != "" {
 			return fmt.Errorf("%s.%s takes %s, whose field %q carries (spec.store_epoch), but the stamp is generated for Java service wrappers only; a Rust host of this write would leave the store epoch unstamped",
 				targetService.Name, method.Name, method.FullInputType, f)

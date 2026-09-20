@@ -1876,16 +1876,6 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 					StringValue: val.GetOwner(),
 				}
 			}
-			// retention is DELIVERY-side state: it belongs to the declaration that
-			// says this message is stored and delivered, never to a transformation
-			// (a pure typed conversion has no lifetime).
-			if r := retentionPolicyEntry(val.GetRetention()); r != nil {
-				annotations["record_retention"] = model.AnnotationValue{
-					Type:            model.AnnotationTypeBool,
-					BoolValue:       true,
-					RecordRetention: r,
-				}
-			}
 			// min_group_size is the smallest result size this record's size-only
 			// query surfaces disclose. Carried unconditionally when declared —
 			// including a negative value, which ValidateMinGroupSizeAnnotations
@@ -1896,16 +1886,15 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 					IntValue: int64(val.GetMinGroupSize()),
 				}
 			}
-			// residency is the memory-residency WINDOW; retention above is row
-			// DELETION. Two clocks, deliberately (see the field comments in
-			// spec.proto). Carried whenever the block is PRESENT — including a
-			// RESIDENCY_UNSPECIFIED window and a RESIDENCY_COLD one, both of
+			// residency is the record type's two lifecycle clocks (idle ->
+			// evicted from memory, deleted-and-aged -> purged). Carried whenever
+			// the block is PRESENT, values and all — including a negative one,
 			// which ValidateResidencyAnnotations rejects at generation time
-			// rather than being silently dropped here into today's HOT default.
+			// rather than being silently dropped here.
 			if r := residencyPolicyEntry(val.GetResidency()); r != nil {
 				annotations["record_residency"] = model.AnnotationValue{
-					Type:            model.AnnotationTypeString,
-					StringValue:     r.Window,
+					Type:            model.AnnotationTypeBool,
+					BoolValue:       true,
 					RecordResidency: r,
 				}
 			}
@@ -2002,8 +1991,8 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 
 	// transformation: declares pure typed conversions of this message into derived
 	// row types. Dedup/cardinality_hint are semantic intent; a downstream
-	// materializer renders the concrete backend schema. No delivery state here —
-	// retention lives on (spec.record).retention.
+	// materializer renders the concrete backend schema. No lifetime here — the
+	// record's lifecycle lives on (spec.record).residency.
 	if proto.HasExtension(opts, spec.E_Transformation) {
 		vals := proto.GetExtension(opts, spec.E_Transformation).([]*spec.Transformation)
 		if len(vals) > 0 {
@@ -2142,11 +2131,11 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 	if proto.HasExtension(opts, spec.E_StoreEpoch) && proto.GetExtension(opts, spec.E_StoreEpoch).(bool) {
 		annotations["store_epoch"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 	}
-	// ejectionable: where the row's per-row gate on the residency window lives.
-	// Same doctrine again — the annotation owns the LOCATION, the row's own value
-	// owns the answer, and an unset value means never evict.
-	if proto.HasExtension(opts, spec.E_Ejectionable) && proto.GetExtension(opts, spec.E_Ejectionable).(bool) {
-		annotations["ejectionable"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	// deleted_flag: where the row's soft-delete state lives. Same doctrine again —
+	// the annotation owns the LOCATION, the row's own value owns the answer, and a
+	// record that declares no marker has no rows to exclude from its queries.
+	if proto.HasExtension(opts, spec.E_DeletedFlag) && proto.GetExtension(opts, spec.E_DeletedFlag).(bool) {
+		annotations["deleted_flag"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 	}
 	// SPIFFE identity annotations (plan D5)
 	if proto.HasExtension(opts, spec.E_IdentityNamespace) && proto.GetExtension(opts, spec.E_IdentityNamespace).(bool) {
@@ -2651,32 +2640,19 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 	return annotations
 }
 
-// retentionPolicyEntry converts a spec.RetentionPolicy into its model form,
-// returning nil when the policy is absent (indefinite retention).
-func retentionPolicyEntry(r *spec.RetentionPolicy) *model.RetentionPolicyEntry {
-	if r == nil {
-		return nil
-	}
-	return &model.RetentionPolicyEntry{
-		TimestampField:  r.GetTimestampField(),
-		DurationSeconds: r.GetDurationSeconds(),
-		Forever:         r.GetForever(),
-	}
-}
-
 // residencyPolicyEntry converts a spec.ResidencyPolicy into its model form,
-// returning nil when the policy is absent (unset = RESIDENCY_HOT, which is what
-// every record does today). A PRESENT block is always carried, window preset and
-// all: an author who wrote the block meant something, and deciding here that an
-// unspecified or unimplemented window is "really" HOT is the fail-silent class
-// ValidateResidencyAnnotations exists to close.
+// returning nil when the block is absent (both clocks take the platform
+// default). A PRESENT block is always carried, values and all: an author who
+// wrote the block meant something, and deciding here that a negative number is
+// "really" the default is the fail-silent class ValidateResidencyAnnotations
+// exists to close.
 func residencyPolicyEntry(r *spec.ResidencyPolicy) *model.ResidencyPolicyEntry {
 	if r == nil {
 		return nil
 	}
 	return &model.ResidencyPolicyEntry{
-		Window:        r.GetWindow().String(),
-		WindowSeconds: r.GetWindowSeconds(),
+		IdleSeconds:          r.GetIdleSeconds(),
+		DeletedMaxAgeSeconds: r.GetDeletedMaxAgeSeconds(),
 	}
 }
 

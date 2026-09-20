@@ -164,10 +164,11 @@ type SubscriptionEntry struct {
 	TargetService   string // broker service_id that hosts the EventBus typed service
 	SourceTypeFqn   string // e.g. "aegis.TopologyEvent" — resolved from proto
 	SourceProtoDir  string // e.g. "services", "common" — proto directory where source was found
-	// SourceResidency is (spec.record).residency of SourceTypeFqn ("" when the
-	// type declares none). RESIDENCY_WARM selects a per-INSTANCE consumer group
-	// for the topic — see javaSubscriptionEntry.PerInstanceConsumerGroup.
-	SourceResidency string
+	// SourceIsRecord is true when SourceTypeFqn carries (spec.record), i.e. the
+	// topic delivers a STORED record. A record's rows land in a node-local store,
+	// so that selects a per-INSTANCE consumer group for the topic — see
+	// javaSubscriptionEntry.PerInstanceConsumerGroup.
+	SourceIsRecord bool
 	// SourceStoreEpochField is SourceTypeFqn's (spec.store_epoch) field name ("" when
 	// the type declares none). A record has no write RPC, so this subscription IS
 	// the write path into the store and the dispatch is where the store's clock is

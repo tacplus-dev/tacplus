@@ -147,7 +147,7 @@ func collectJavaSubscriptions(config *tactype.Config, protoDir string) ([]tactyp
 			TargetService:   sd.BrokerLabel,
 			SourceTypeFqn:   res.TypeFqn,
 			SourceProtoDir:  res.ProtoDir,
-			SourceResidency: res.Residency,
+			SourceIsRecord:  res.IsRecord,
 
 			SourceStoreEpochField: res.StoreEpochField,
 		})

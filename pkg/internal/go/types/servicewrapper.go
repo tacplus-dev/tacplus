@@ -242,8 +242,8 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			}
 			// (spec.store_epoch) is stamped in the generated Java service
 			// wrapper only. A Go host would reach its handler with an unstamped
-			// epoch — a row the residency window measures as infinitely old —
-			// so refuse to generate rather than write the wrong clock silently.
+			// epoch — a row the purge measures as infinitely old — so refuse
+			// to generate rather than write the wrong clock silently.
 			if f := goStoreEpochField(method.FullInputType, san, info.Package); f != "" {
 				return fmt.Errorf("%s.%s takes %s, whose field %q carries (spec.store_epoch), but the stamp is generated for Java service wrappers only; a Go host of this write would leave the store epoch unstamped",
 					service.Name, method.Name, method.FullInputType, f)

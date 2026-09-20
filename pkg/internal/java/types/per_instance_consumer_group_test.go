@@ -21,34 +21,34 @@ func renderJavaSm(t *testing.T, subs []javaSubscriptionEntry) string {
 	if err != nil {
 		t.Fatalf("parse ServiceManager.java.tmpl: %v", err)
 	}
-	warm := false
+	hasRecord := false
 	for _, s := range subs {
 		if s.PerInstanceConsumerGroup {
-			warm = true
+			hasRecord = true
 		}
 	}
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, javaSmTemplateData{
-		PackageBase:          "com.example",
-		ChassisBase:          "com.example.chassis",
-		TypesBase:            "com.example.types",
-		SmPrefix:             "s2sm",
-		ServiceLabel:         "stratum",
-		HasSubscriptions:     len(subs) > 0,
-		HasWarmSubscriptions: warm,
-		Subscriptions:        subs,
+		PackageBase:            "com.example",
+		ChassisBase:            "com.example.chassis",
+		TypesBase:              "com.example.types",
+		SmPrefix:               "s2sm",
+		ServiceLabel:           "stratum",
+		HasSubscriptions:       len(subs) > 0,
+		HasRecordSubscriptions: hasRecord,
+		Subscriptions:          subs,
 	}); err != nil {
 		t.Fatalf("execute ServiceManager.java.tmpl: %v", err)
 	}
 	return buf.String()
 }
 
-// The paired control for BIG GOAL 4 P1's consumer-group split. A warm topic
-// feeds a node-local store, so its subscription must take a per-INSTANCE group
-// (the broker then fans the topic out to every instance); a hot or undeclared
+// The paired control for the consumer-group split. A topic carrying a stored
+// record feeds a node-local store, so its subscription must take a per-INSTANCE
+// group (the broker then fans the topic out to every instance); a plain event
 // topic keeps the shared service-label group it has always had, byte for byte.
-func TestWarmSubscriptionTakesPerInstanceConsumerGroup(t *testing.T) {
-	warm := javaSubscriptionEntry{
+func TestRecordSubscriptionTakesPerInstanceConsumerGroup(t *testing.T) {
+	record := javaSubscriptionEntry{
 		FieldPascal: "Stream", FieldCamel: "stream",
 		HandlerMethodName: "onStreamTasksTaskActivityBusStream",
 		SourcePackage:     "tasks", SourceField: "stream",
@@ -57,7 +57,7 @@ func TestWarmSubscriptionTakesPerInstanceConsumerGroup(t *testing.T) {
 		TargetService:            "eventbus",
 		PerInstanceConsumerGroup: true,
 	}
-	hot := javaSubscriptionEntry{
+	event := javaSubscriptionEntry{
 		FieldPascal: "Stream", FieldCamel: "stream",
 		HandlerMethodName: "onStreamAccountingrecordAccountingRecordBusStream",
 		SourcePackage:     "accountingrecord", SourceField: "stream",
@@ -67,19 +67,19 @@ func TestWarmSubscriptionTakesPerInstanceConsumerGroup(t *testing.T) {
 		PerInstanceConsumerGroup: false,
 	}
 
-	rendered := renderJavaSm(t, []javaSubscriptionEntry{warm, hot})
+	rendered := renderJavaSm(t, []javaSubscriptionEntry{record, event})
 
 	if !strings.Contains(rendered, `String serviceLabel = perInstanceConsumerGroup("stratum");`) {
-		t.Fatal("a RESIDENCY_WARM subscription must subscribe under a per-instance consumer group")
+		t.Fatal("a record subscription must subscribe under a per-instance consumer group")
 	}
 	if !strings.Contains(rendered, `String serviceLabel = "stratum";`) {
-		t.Fatal("a non-warm subscription must keep the shared service-label consumer group")
+		t.Fatal("a plain-event subscription must keep the shared service-label consumer group")
 	}
 	if got := strings.Count(rendered, `String serviceLabel = perInstanceConsumerGroup("stratum");`); got != 1 {
-		t.Fatalf("exactly the warm subscription takes the per-instance group, got %d", got)
+		t.Fatalf("exactly the record subscription takes the per-instance group, got %d", got)
 	}
 	if got := strings.Count(rendered, `String serviceLabel = "stratum";`); got != 1 {
-		t.Fatalf("exactly the non-warm subscription keeps the shared group, got %d", got)
+		t.Fatalf("exactly the plain-event subscription keeps the shared group, got %d", got)
 	}
 	for _, want := range []string{
 		`private static String perInstanceConsumerGroup(String serviceLabel) {`,
@@ -101,10 +101,10 @@ func TestWarmSubscriptionTakesPerInstanceConsumerGroup(t *testing.T) {
 	}
 }
 
-// The other half of the control: a service with no warm subscription renders no
-// trace of the split at all — neither the call site nor the helper — so every
+// The other half of the control: a service with no record subscription renders
+// no trace of the split at all — neither the call site nor the helper — so every
 // existing service generates exactly what it generated before.
-func TestNonWarmServiceRendersNoPerInstanceConsumerGroup(t *testing.T) {
+func TestEventOnlyServiceRendersNoPerInstanceConsumerGroup(t *testing.T) {
 	rendered := renderJavaSm(t, []javaSubscriptionEntry{{
 		FieldPascal: "Stream", FieldCamel: "stream",
 		HandlerMethodName: "onStreamAccountingrecordAccountingRecordBusStream",
@@ -114,10 +114,10 @@ func TestNonWarmServiceRendersNoPerInstanceConsumerGroup(t *testing.T) {
 		TargetService: "eventbus",
 	}})
 	if strings.Contains(rendered, "perInstanceConsumerGroup") {
-		t.Fatal("a service with no RESIDENCY_WARM subscription must not render the per-instance group at all")
+		t.Fatal("a service with no record subscription must not render the per-instance group at all")
 	}
-	// Byte-for-byte, not just "the string appears": the residency branch must
-	// leave a non-warm subscription block spelled exactly as it was, since the
+	// Byte-for-byte, not just "the string appears": the record branch must leave a
+	// plain-event subscription block spelled exactly as it was, since the
 	// determinism and current-generation gates compare whole trees.
 	want := "        {\n" +
 		"            String serviceLabel = \"stratum\";\n" +

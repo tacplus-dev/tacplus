@@ -716,7 +716,6 @@ func BuildTypeInfoProto(t llmdesc.RegistryTypeInfo) *spec.TypeInfo {
 		SchemaJson:        t.SchemaJSON,
 		RecordKey:         t.RecordKey,
 		RecordOwner:       t.RecordOwner,
-		RecordRetention:   retentionPolicyProto(t.RecordRetention),
 		ServiceStore:      t.ServiceStore,
 		ServiceStoreName:  t.ServiceStoreName,
 		ServiceStoreLabel: t.ServiceStoreLabels,
@@ -727,7 +726,7 @@ func BuildTypeInfoProto(t llmdesc.RegistryTypeInfo) *spec.TypeInfo {
 	// (dedup/cardinality_hint). A downstream materializer renders the concrete
 	// backend schema (engine/merge). Where the annotation omits dedup,
 	// defaultTransformationDedup preserves the legacy default losslessly.
-	// Retention is NOT here: it is delivery-side state, carried on record_retention.
+	// No lifetime is here: a pure typed conversion has none.
 	for _, tp := range t.Transformations {
 		tpInfo := &spec.TransformationInfo{
 			Name:  tp.Name,
@@ -763,24 +762,12 @@ func BuildTypeInfoProto(t llmdesc.RegistryTypeInfo) *spec.TypeInfo {
 		ti.TimeseriesTableName = tableName
 		ti.TimeseriesTableSource = t.TimeseriesTableSource
 		// Table dedup is store-neutral intent declared on (spec.timeseries_type).
-		// Unset stays nil (append-only). Retention is never here — it is
-		// delivery-side state on record_retention.
+		// Unset stays nil (append-only). No lifetime is here — a compile target of
+		// a pure typed conversion has none.
 		ti.TimeseriesDedup = dedupPolicyProto(t.TimeseriesDedup)
 	}
 
 	return ti
-}
-
-// retentionPolicyProto converts a model retention entry into its registry proto
-// form, returning nil when retention is unset (indefinite).
-func retentionPolicyProto(r *model.RetentionPolicyEntry) *spec.RetentionPolicyInfo {
-	if r == nil {
-		return nil
-	}
-	return &spec.RetentionPolicyInfo{
-		TimestampField:  r.TimestampField,
-		DurationSeconds: r.DurationSeconds,
-	}
 }
 
 // defaultTransformationDedup resolves the store-neutral dedup policy for a

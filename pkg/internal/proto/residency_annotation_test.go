@@ -15,7 +15,8 @@ import (
 // residency_validate_test.go in the parser package pins each rule at the
 // FileDescriptor level, which is fast and exhaustive but never runs protoc: it
 // would keep passing if spec.proto did not declare residency/mutability/
-// store_epoch at all, or declared them so that no author could spell them.
+// store_epoch/deleted_flag at all, or declared them so that no author could
+// spell them.
 //
 // These tests pin the half that actually matters — a real .proto, run through
 // the real protoc and the real descriptor parser — so the surface itself is
@@ -59,10 +60,11 @@ option (spec.trait) = {
 	return dir
 }
 
-// warmRecordProto is the worked example from the P0(b) design, shrunk to the
-// parts under test: an immutable-warm record with the store-epoch field the
-// window measures against.
-const warmRecordProto = `syntax = "proto3";
+// lifecycleRecordProto is the worked example from the record-lifecycle decision,
+// shrunk to the parts under test: a record declaring both residency clocks, the
+// store-epoch field the purge measures a delete from, and the soft-delete marker
+// the query plane excludes on.
+const lifecycleRecordProto = `syntax = "proto3";
 package tasks;
 
 import "sys/spec.proto";
@@ -73,7 +75,7 @@ message TaskActivity {
     owner: "owner_id"
     s2s: {auth_services: ["*"]}
     mutability: MUTABILITY_APPEND_ONLY
-    residency: {window: RESIDENCY_WARM}
+    residency: {idle_seconds: 3600 deleted_max_age_seconds: 2592000}
   };
   string event_id = 1;
   string owner_id = 2;
@@ -81,12 +83,14 @@ message TaskActivity {
     (spec.store_epoch) = true,
     (spec.query_field) = {op: QUERY_OP_RANGE}
   ];
+  bool deleted = 4 [(spec.deleted_flag) = true];
 }
 `
 
-// coldRecordProto is §8 of the design: cold is EXPRESSIBLE, so that it can be
-// refused explicitly rather than being a typo nobody catches.
-const coldRecordProto = `syntax = "proto3";
+// negativeClockRecordProto is the refusal: a clock cannot run backwards, and 0
+// already means "use the platform default", so a negative number is not a
+// spelling of anything.
+const negativeClockRecordProto = `syntax = "proto3";
 package tasks;
 
 import "sys/spec.proto";
@@ -96,10 +100,30 @@ message TaskActivity {
     key: "event_id"
     owner: "owner_id"
     s2s: {auth_services: ["*"]}
-    residency: {window: RESIDENCY_COLD}
+    residency: {idle_seconds: -1}
   };
   string event_id = 1;
   string owner_id = 2;
+}
+`
+
+// twoMarkersRecordProto is the deleted-flag refusal: a row has exactly one
+// soft-delete state, and which field carries it is not decidable at generation.
+const twoMarkersRecordProto = `syntax = "proto3";
+package tasks;
+
+import "sys/spec.proto";
+
+message TaskActivity {
+  option (spec.record) = {
+    key: "event_id"
+    owner: "owner_id"
+    s2s: {auth_services: ["*"]}
+  };
+  string event_id = 1;
+  string owner_id = 2;
+  bool deleted = 3 [(spec.deleted_flag) = true];
+  bool removed = 4 [(spec.deleted_flag) = true];
 }
 `
 
@@ -110,56 +134,75 @@ func skipWithoutProtoc(t *testing.T) {
 	}
 }
 
-// Paired control for the cold refusal below: the same declaration spelled
-// RESIDENCY_WARM parses and generates clean. Without this leg, the red test
-// would still pass if the fixture failed for some entirely unrelated reason —
-// a mis-typed option name, say, which is exactly the failure that would make
-// the whole annotation surface unspellable while every test stayed green.
-func TestResidencyWarmDeclarationGenerates(t *testing.T) {
+// Paired control for the refusals below: the whole lifecycle surface — two
+// clocks, a store epoch and a soft-delete marker — parses and generates clean.
+// Without this leg, a red test would still pass if the fixture failed for some
+// entirely unrelated reason — a mis-typed option name, say, which is exactly the
+// failure that would make the whole annotation surface unspellable while every
+// test stayed green.
+func TestResidencyLifecycleDeclarationGenerates(t *testing.T) {
 	skipWithoutProtoc(t)
-	dir := residencyFixture(t, warmRecordProto)
+	dir := residencyFixture(t, lifecycleRecordProto)
 	dp, err := parser.NewDescriptorParser(dir)
 	if err != nil {
 		t.Fatalf("NewDescriptorParser: %v", err)
 	}
 	if err := parser.ValidateResidencyAnnotations(dp); err != nil {
-		t.Fatalf("an immutable-warm record with a store_epoch field must generate: %v", err)
+		t.Fatalf("a record declaring both lifecycle clocks must generate: %v", err)
+	}
+	if err := parser.ValidateDeletedFlagAnnotations(dp); err != nil {
+		t.Fatalf("a record declaring one (spec.deleted_flag) field must generate: %v", err)
 	}
 }
 
-// Acceptance item 7, end to end: declaring cold FAILS GENERATION, with the
-// refusal saying "reserved, not implemented" in those words.
-func TestResidencyColdDeclarationFailsGeneration(t *testing.T) {
+// End to end: a negative clock FAILS GENERATION rather than being read as the
+// platform default, which is the fail-silent class this surface closes.
+func TestResidencyNegativeClockFailsGeneration(t *testing.T) {
 	skipWithoutProtoc(t)
-	dir := residencyFixture(t, coldRecordProto)
+	dir := residencyFixture(t, negativeClockRecordProto)
 	dp, err := parser.NewDescriptorParser(dir)
 	if err != nil {
 		t.Fatalf("NewDescriptorParser: %v", err)
 	}
 	err = parser.ValidateResidencyAnnotations(dp)
 	if err == nil {
-		t.Fatal("(spec.record).residency.window = RESIDENCY_COLD must fail generation")
+		t.Fatal("(spec.record).residency.idle_seconds = -1 must fail generation")
 	}
-	for _, want := range []string{
-		"tasks.TaskActivity",
-		"RESIDENCY_COLD",
-		"RESERVED and NOT IMPLEMENTED",
-		"silently store the record hot",
-		"RESIDENCY_WARM",
-		"RESIDENCY_HOT",
-	} {
+	for _, want := range []string{"tasks.TaskActivity", "idle_seconds:-1", "use the platform default"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("cold refusal %q does not contain %q", err.Error(), want)
+			t.Fatalf("refusal %q does not contain %q", err.Error(), want)
 		}
 	}
 }
 
-// The store epoch's LOCATION must survive protoc and reach the model, or the
-// wrapper generators have nothing to stamp. Pins the (spec.store_epoch) field
-// extension itself, independently of any validator that reads it.
-func TestStoreEpochFieldAnnotationReachesTheModel(t *testing.T) {
+// End to end: two (spec.deleted_flag) fields FAIL GENERATION. Pins the field
+// extension itself — a record can spell the marker twice, and the refusal has to
+// come from the validator rather than from protoc.
+func TestDeletedFlagTwoMarkersFailGeneration(t *testing.T) {
 	skipWithoutProtoc(t)
-	dir := residencyFixture(t, warmRecordProto)
+	dir := residencyFixture(t, twoMarkersRecordProto)
+	dp, err := parser.NewDescriptorParser(dir)
+	if err != nil {
+		t.Fatalf("NewDescriptorParser: %v", err)
+	}
+	err = parser.ValidateDeletedFlagAnnotations(dp)
+	if err == nil {
+		t.Fatal("two (spec.deleted_flag) fields must fail generation")
+	}
+	for _, want := range []string{"tasks.TaskActivity", "declares 2 (spec.deleted_flag) fields", "deleted, removed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q does not contain %q", err.Error(), want)
+		}
+	}
+}
+
+// The store epoch's and the soft-delete marker's LOCATIONS must survive protoc
+// and reach the model, or the wrapper generators have nothing to stamp and the
+// query plane has nothing to exclude on. Pins the two field extensions and both
+// residency clocks, independently of any validator that reads them.
+func TestLifecycleAnnotationsReachTheModel(t *testing.T) {
+	skipWithoutProtoc(t)
+	dir := residencyFixture(t, lifecycleRecordProto)
 	dp, err := parser.NewDescriptorParser(dir)
 	if err != nil {
 		t.Fatalf("NewDescriptorParser: %v", err)
@@ -168,24 +211,36 @@ func TestStoreEpochFieldAnnotationReachesTheModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetFileDescriptor: %v", err)
 	}
-	var found []string
+	var epochs []string
+	seen := false
 	for mi := range fd.Messages {
 		msg := &fd.Messages[mi]
 		res := msg.Annotations["record_residency"].RecordResidency
-		if res == nil || res.Window != "RESIDENCY_WARM" {
+		if res == nil {
 			continue
+		}
+		seen = true
+		if res.IdleSeconds != 3600 || res.DeletedMaxAgeSeconds != 2592000 {
+			t.Fatalf("%s: residency clocks did not reach the model: %+v", msg.Name, res)
 		}
 		if msg.Annotations["record_mutability"].StringValue != "MUTABILITY_APPEND_ONLY" {
 			t.Fatalf("%s: mutability did not reach the model: %+v", msg.Name, msg.Annotations["record_mutability"])
 		}
 		for fi := range msg.Fields {
 			if msg.Fields[fi].Annotations["store_epoch"].BoolValue {
-				found = append(found, msg.Fields[fi].Name)
+				epochs = append(epochs, msg.Fields[fi].Name)
 			}
 		}
+		f, ok := parser.DeletedFlagField(msg)
+		if !ok || f.Name != "deleted" {
+			t.Fatalf("%s: (spec.deleted_flag) did not reach the model; got %v/%v", msg.Name, f, ok)
+		}
 	}
-	if len(found) != 1 || found[0] != "store_epoch" {
-		t.Fatalf("(spec.store_epoch) did not reach the model; found %v", found)
+	if !seen {
+		t.Fatal("no record carrying (spec.record).residency reached the model")
+	}
+	if len(epochs) != 1 || epochs[0] != "store_epoch" {
+		t.Fatalf("(spec.store_epoch) did not reach the model; found %v", epochs)
 	}
 }
 
@@ -196,7 +251,7 @@ func TestStoreEpochFieldAnnotationReachesTheModel(t *testing.T) {
 // record_map_append_only_test.go).
 func TestRecordPlaneEmitsNoRowMutationForAppendOnlyRecord(t *testing.T) {
 	skipWithoutProtoc(t)
-	dir := residencyFixture(t, warmRecordProto)
+	dir := residencyFixture(t, lifecycleRecordProto)
 	if err := AppendRecordMapServiceToProtos(dir, dir, ""); err != nil {
 		t.Fatalf("AppendRecordMapServiceToProtos: %v", err)
 	}

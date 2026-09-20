@@ -70,7 +70,7 @@ message Unrelated {
   string description = 3; // mentions ttl: and engine: in prose? only in comment
 }
 message StringCarrier {
-  option (spec.record) = {key: "id" owner: "who" retention: {timestamp_field: "ts" duration_seconds: 60}};
+  option (spec.record) = {key: "id" owner: "who" residency: {idle_seconds: 3600}};
   string id = 1;
   string who = 2;
   string query = 3; // e.g. value might be "SELECT ... TTL ..." at runtime; not proto text
@@ -130,9 +130,11 @@ func TestReservedTableMatchesSpecProto(t *testing.T) {
 	}
 }
 
-// retention is reserved on (spec.transformation) but ACTIVE on (spec.record): the
-// per-option table must reject it in the first and accept it in the second, or the
-// transformation/delivery split leaks back into the transformation silently.
+// retention is NAME-reserved on (spec.transformation), where protoc discards it
+// silently, and only NUMBER-reserved on (spec.record), where protoc rejects it
+// outright. The per-option table must therefore flag the transformation block and
+// leave the record block alone — one mechanism per failure mode, and no false
+// positive claiming a name (spec.record) does not reserve.
 func TestValidateReservedSpecOptionFields_RetentionIsOptionScoped(t *testing.T) {
 	dir := t.TempDir()
 	writeProtoFile(t, dir, "vservices/split.proto", `syntax = "proto3";
@@ -153,7 +155,8 @@ message Ev {
 	if !strings.Contains(err.Error(), "(spec.transformation)") || !strings.Contains(err.Error(), "retention") {
 		t.Fatalf("error should name the transformation option and retention:\n%v", err)
 	}
-	// Exactly one violation: the record's own retention is ACTIVE, not flagged.
+	// Exactly one violation: the record's own retention is protoc's to reject, so
+	// the table deliberately does not cover it.
 	if n := strings.Count(err.Error(), "uses reserved field"); n != 1 {
 		t.Fatalf("expected exactly one violation (transformation only), got %d:\n%v", n, err)
 	}

@@ -619,19 +619,19 @@ public class ServiceManager implements AutoCloseable {
         identity.close();
     }
 
-{{- if .HasWarmSubscriptions}}
+{{- if .HasRecordSubscriptions}}
 
     /**
-     * perInstanceConsumerGroup returns the consumer group for a topic whose record
-     * type declares (spec.record).residency = RESIDENCY_WARM.
+     * perInstanceConsumerGroup returns the consumer group for a topic that delivers
+     * a (spec.record) — a stored record type.
      *
      * <p>Every other topic subscribes under the bare service label, so the broker
      * splits the topic across the service's instances — each record reaches exactly
      * one of them. That is correct when the destination is shared cluster-wide. A
-     * warm record's destination is NODE-LOCAL, and a node-local store is only
-     * complete if that node sees every record, so warm topics must be fanned out
-     * rather than split. Appending the instance's own identity to the label gives
-     * each instance a group of its own, which is what makes the broker fan out.
+     * record's destination is NODE-LOCAL, and a node-local store is only complete
+     * if that node sees every record, so record topics must be fanned out rather
+     * than split. Appending the instance's own identity to the label gives each
+     * instance a group of its own, which is what makes the broker fan out.
      *
      * <p>The identity must be STABLE across restarts, or every restart would
      * abandon a consumer group and re-read the topic from the beginning under a new
@@ -647,7 +647,7 @@ public class ServiceManager implements AutoCloseable {
                 instance = java.net.InetAddress.getLocalHost().getHostName();
             } catch (java.net.UnknownHostException e) {
                 throw new IllegalStateException(
-                        "a RESIDENCY_WARM topic needs a per-instance consumer group, but neither POD_NAME nor a hostname is available", e);
+                        "a record topic needs a per-instance consumer group, but neither POD_NAME nor a hostname is available", e);
             }
         }
         return serviceLabel + "-" + instance;
@@ -1179,7 +1179,7 @@ public class ServiceManager implements AutoCloseable {
 {{- range .Subscriptions}}
         {
 {{- if .PerInstanceConsumerGroup}}
-            // (spec.record).residency = RESIDENCY_WARM on {{.TypeName}}: this topic
+            // {{.TypeName}} is a (spec.record): this topic
             // feeds a NODE-LOCAL store, so this node's copy is only complete if it
             // receives every record. Under the shared service-label group the broker
             // hands each record to exactly ONE instance. A per-instance group makes

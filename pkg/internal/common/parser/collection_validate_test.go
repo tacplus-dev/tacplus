@@ -27,9 +27,14 @@ func itemMsg() *model.Message {
 	}}
 }
 
+// deltaMsg is a conformant WATCH delta. It carries `revision` because every
+// language's wrapper keys the replay ring off one int64 on the delta; a delta
+// without one generates a wrapper that fails to compile, which is why
+// validateWatchRevisionField now refuses it at generation time.
 func deltaMsg() *model.Message {
 	return &model.Message{Name: "Delta", Fields: []model.Field{
 		{Name: "id", Type: "string"},
+		{Name: "revision", Type: "int64"},
 	}}
 }
 

@@ -2302,7 +2302,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
                     __source.scope,
                     __resumeRevision,
                     __source.changes,
-                    change -> change.getRevision());
+                    change -> change.get%s());
             io.grpc.stub.ServerCallStreamObserver<%s> __sco = (io.grpc.stub.ServerCallStreamObserver<%s>) responseObserver;
             StreamObserver<%s> __out = %s;
             final Object __readyLock = new Object();
@@ -2365,7 +2365,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
                 }
             }, "tacplus-watch-%s");
             __watchThread.setDaemon(true);
-            __watchThread.start();`, watchPre, itemType, changeType, watchHandlerCall, fromRevisionExpr, changeType, methodName, outputType, outputType, outputType, streamResponseObserver, outputType, outputType, watchItemExpr, outputType, outputType, watchChangeExpr, watchCompletedAccounting, watchErrorAccounting, methodName)
+            __watchThread.start();`, watchPre, itemType, changeType, watchHandlerCall, fromRevisionExpr, changeType, methodName, javaPascalField(method.Resolved.WatchRevisionField), outputType, outputType, outputType, streamResponseObserver, outputType, outputType, watchItemExpr, outputType, outputType, watchChangeExpr, watchCompletedAccounting, watchErrorAccounting, methodName)
 
 		// Splice the (spec.store_principal) refusal into the send path. Done on
 		// the rendered text rather than as a format verb because the guard is a

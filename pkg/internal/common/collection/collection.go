@@ -30,6 +30,12 @@ const (
 	// is unset. Mirrors the M18 default collection element cap.
 	DefaultReplayDepth uint32 = 1024
 
+	// DefaultWatchRevisionField is the delta field every WATCH is keyed by when
+	// (spec.method_collection).revision_field names none. It is a DEFAULT, not
+	// an assumption: validation proves the field exists and is a singular
+	// int64 before any emitter renders an accessor for it.
+	DefaultWatchRevisionField = "revision"
+
 	// DefaultPageSizeFallback is the PAGE per-page window used when the
 	// annotation omits default_page_size (clamped to the trust ceiling).
 	DefaultPageSizeFallback uint32 = 50
@@ -355,6 +361,13 @@ type Resolved struct {
 	WatchOneOf      string // proto oneof name in the envelope (e.g. "event")
 	WatchItemType   string // FQN of the snapshot_item message (the watched item)
 	WatchChangeType string // FQN of the delta message ({Method}Change)
+	// WatchRevisionField is the proto (snake_case) name of the int64 field on
+	// the delta that carries each change's revision — what the replay ring is
+	// keyed by and what from_revision resumes against. Always populated on
+	// WATCH: DefaultWatchRevisionField unless (spec.method_collection)
+	// .revision_field names another. Each emitter renders it in its own idiom
+	// (prost snake_case, Java/Go getters); none of them may assume "revision".
+	WatchRevisionField string
 	// WatchHasFromRevision is true when the request message carries a
 	// `from_revision` field (the standard {Method}Request), so the wrapper can
 	// resume a watch from a caller-supplied revision. Handle-based watches (e.g.

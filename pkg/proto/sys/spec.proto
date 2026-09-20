@@ -1444,6 +1444,26 @@ message MethodCollection {
   // page_size. Required positive on PAGE; must be <= the trust-tier ceiling.
   // Forbidden on SNAPSHOT/WATCH. PAGE only.
   uint32 default_page_size = 5;
+
+  // revision_field names the int64 field on the WATCH delta message that
+  // carries each change's revision — what the replay ring is keyed by and what
+  // a caller's from_revision resumes against. Optional; defaults to "revision".
+  // WATCH only.
+  //
+  // It exists because the delta is not always a purpose-built envelope. Where
+  // it is (<T>WatchChange { item; revision }) the default is right and nothing
+  // is declared. Where the delta IS the row — an append-only record has no
+  // update or delete frame to distinguish, so the change is the new row — the
+  // row names its own sequence, and that name is the row's to choose:
+  // scottypersonal.ChatEvent carries `seq`, per-owner monotonic, and is
+  // already the keyset ListChatEvents pages over. Forcing a second int64
+  // called `revision` onto such a row would mean two ordering fields that must
+  // agree forever.
+  //
+  // The named field must exist on the delta message and be a singular int64.
+  // Generation fails otherwise — including for the default — rather than
+  // emitting a wrapper that only fails later in cargo/javac/go build.
+  string revision_field = 6;
 }
 
 // ServiceEventAnnotation declares that a state service's topic/queue RPCs

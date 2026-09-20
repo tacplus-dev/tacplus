@@ -127,6 +127,7 @@ func TestRustRequestScope_Watch(t *testing.T) {
 	m.Resolved = &collection.Resolved{
 		Mode: "WATCH", WatchOneOf: "event", WatchItemType: "mail.MailItem",
 		WatchChangeType: "mail.MailItem", ReplayDepth: 64, IdleSecs: 300,
+		WatchRevisionField: "revision",
 	}
 	got := renderRequestScope(t, m)
 	wantRequestScope(t, got, "req")

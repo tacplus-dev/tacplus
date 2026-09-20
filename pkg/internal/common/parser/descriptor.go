@@ -296,6 +296,7 @@ type CollectionDescriptor struct {
 	MaxItems        uint32   // SNAPSHOT item cap (required, positive); 0 on WATCH/PAGE
 	ReplayDepth     uint32   // WATCH replay-ring depth; 0 = use platform default
 	DefaultPageSize uint32   // PAGE per-page window when request omits page_size; 0 = fallback
+	RevisionField   string   // WATCH delta's revision field name; "" = the "revision" default
 }
 
 // NewDescriptorParser creates a DescriptorParser by generating and loading a descriptor set.
@@ -1042,6 +1043,7 @@ func (p *DescriptorParser) parseMethodOptions(method protoreflect.MethodDescript
 				MaxItems:        val.GetMaxItems(),
 				ReplayDepth:     val.GetReplayDepth(),
 				DefaultPageSize: val.GetDefaultPageSize(),
+				RevisionField:   val.GetRevisionField(),
 			}
 			md.Collection = cd
 		}

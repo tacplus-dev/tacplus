@@ -344,6 +344,16 @@ envelope framing, replay-ring lookup, relist behavior, teardown, and flow
 control. The replay ring lives in a shared per-language collection runtime lib,
 keyed by scope and bounded by `replay_depth`.
 
+The ring is ordered by one int64 field on the `delta`, named by
+`(spec.method_collection).revision_field` and defaulting to `revision`. The
+default suits a purpose-built change envelope (`<T>WatchChange { item;
+revision }`); a delta that IS the row — an append-only record has no update or
+delete frame to distinguish — names the sequence the row already carries
+instead, rather than growing a second ordering field that must agree with the
+first forever. The named field must exist and be a singular int64: generation
+fails otherwise, including for the default, rather than emitting a wrapper that
+only fails later in `cargo`/`javac`/`go build`.
+
 The wrapper also owns the egress row filters on this seam, exactly as on the
 unary and PAGE seams (Rust and Java): every `snapshot_item` and every `delta`
 is checked before it is sent — a row whose `(spec.store_principal)` field is

@@ -151,6 +151,9 @@ func watchMethod() *parser.MethodInfo {
 		Resolved: &collection.Resolved{
 			Mode: "WATCH", ReplayDepth: 1024, IdleSecs: 300, OrderBy: []string{"id"},
 			WatchOneOf: "event", WatchItemType: "catalog.Item", WatchChangeType: "catalog.WatchChange",
+			// The resolver always populates this (default "revision"); a
+			// fixture that omitted it would render c.Get() and not compile.
+			WatchRevisionField: "revision",
 		},
 	}
 }
@@ -327,5 +330,24 @@ func TestTier3_NoIdleBackstopReliesOnContext(t *testing.T) {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("Tier-3 cursor must NOT wire the WATCH idle backstop, found %q\n%s", forbidden, got)
 		}
+	}
+}
+
+// A delta that names its own sequence renders that accessor, not the default.
+// This is (spec.method_collection).revision_field reaching the ring: without
+// it, a row-shaped delta such as scottypersonal.ChatEvent (which carries `seq`,
+// not `revision`) generates a wrapper that does not compile.
+func TestWatch_ServerWrapper_HonorsDeclaredRevisionField(t *testing.T) {
+	m := watchMethod()
+	m.Resolved.WatchRevisionField = "seq"
+	svc := &parser.ServiceInfo{Name: "Catalog", IsS2S: true, Methods: []*parser.MethodInfo{m}}
+	got := generateGRPCWrapper(svc, m, "catalog", "services", "",
+		map[string]service.AccountingInfo{}, map[string]string{}, proto.SkippedTraceTypes{}, nil)
+	want := "func(c *types.WatchChange) int64 { return c.GetSeq() }"
+	if !strings.Contains(got, want) {
+		t.Fatalf("WATCH ring must key off the declared revision field.\nwant: %s\ngot:\n%s", want, got)
+	}
+	if strings.Contains(got, "c.GetRevision()") {
+		t.Fatalf("the default accessor must not survive a declared revision_field:\n%s", got)
 	}
 }

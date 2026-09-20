@@ -63,6 +63,7 @@ func rustWatchEgressMethod(itemType, changeType string) *parser.MethodInfo {
 		Resolved: &collection.Resolved{
 			Mode: "WATCH", ReplayDepth: 1000, OrderBy: []string{"revision"},
 			WatchOneOf: "event", WatchItemType: itemType, WatchChangeType: changeType,
+			WatchRevisionField: "revision",
 		},
 	}
 }

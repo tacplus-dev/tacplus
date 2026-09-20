@@ -85,6 +85,7 @@ func callerAuthMethods() []struct {
 		Resolved: &collection.Resolved{
 			Mode: "WATCH", ReplayDepth: 1024, IdleSecs: 300, OrderBy: []string{"id"},
 			WatchOneOf: "event", WatchItemType: "contractclient.Item", WatchChangeType: "contractclient.WatchChange",
+			WatchRevisionField: "revision",
 		},
 	}
 

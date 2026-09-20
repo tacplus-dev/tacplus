@@ -141,6 +141,7 @@ func javaWatchMethod() *parser.MethodInfo {
 		Resolved: &collection.Resolved{
 			Mode: "WATCH", ReplayDepth: 1024, OrderBy: []string{"id"},
 			WatchOneOf: "event", WatchItemType: "catalog.Item", WatchChangeType: "catalog.WatchChange",
+			WatchRevisionField:   "revision",
 			WatchHasFromRevision: true,
 		},
 	}
@@ -290,5 +291,23 @@ func TestJavaPage_Client_ExplicitPageAndAutoPager(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("PAGE client missing %q\ngot:\n%s", want, got)
 		}
+	}
+}
+
+// A delta that names its own sequence renders that getter, not the default.
+// See the Go twin for why this matters (a row-shaped delta such as
+// scottypersonal.ChatEvent carries `seq`, not `revision`).
+func TestJavaWatch_Wrapper_HonorsDeclaredRevisionField(t *testing.T) {
+	m := javaWatchMethod()
+	m.Resolved.WatchRevisionField = "seq"
+	got := generateJavaGRPCWrapper(
+		m, "Catalog", "", "Catalog.WatchReq", "Catalog.WatchEvent",
+		"", "", false, true,
+		map[string]service.AccountingInfo{}, "catalog", "services", map[string]string{}, proto.SkippedTraceTypes{}, nil, nil, nil)
+	if !strings.Contains(got, "change -> change.getSeq())") {
+		t.Fatalf("WATCH ring must key off the declared revision field:\n%s", got)
+	}
+	if strings.Contains(got, "change.getRevision()") {
+		t.Fatalf("the default getter must not survive a declared revision_field:\n%s", got)
 	}
 }

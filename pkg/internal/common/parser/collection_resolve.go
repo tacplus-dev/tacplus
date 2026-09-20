@@ -114,6 +114,13 @@ func resolveOneCollection(svc *ServiceInfo, m *MethodInfo, index map[string]*mod
 				r.WatchChangeType = watchFieldFQN(delta, pkg)
 			}
 		}
+		// The delta's revision field, which the replay ring is keyed by. Always
+		// populated so no emitter has to know the default, and validated (it
+		// exists, it is a singular int64) before generation reaches an emitter.
+		r.WatchRevisionField = c.RevisionField
+		if r.WatchRevisionField == "" {
+			r.WatchRevisionField = collection.DefaultWatchRevisionField
+		}
 		// The wrapper resumes from request.from_revision only when the request
 		// declares that field (the standard {Method}Request). Handle-based watch
 		// requests (RecordMap's QueryHandle) omit it.

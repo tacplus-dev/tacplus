@@ -116,6 +116,9 @@ func rustWatchMethod() *parser.MethodInfo {
 		Resolved: &collection.Resolved{
 			Mode: "WATCH", ReplayDepth: 1024, OrderBy: []string{"id"},
 			WatchOneOf: "event", WatchItemType: "catalog.Item", WatchChangeType: "catalog.WatchChange",
+			// The resolver always populates this (default "revision"); a
+			// fixture that omitted it would render `change.` and not compile.
+			WatchRevisionField: "revision",
 		},
 	}
 }
@@ -274,5 +277,24 @@ func TestRustPage_ClientTemplateDoesNotShadowModelChannel(t *testing.T) {
 	}
 	if !strings.Contains(res.method, "Result<(Vec<Channel>, String, i64), tonic::Status>") {
 		t.Fatalf("PAGE client should keep same-package item type Channel without transport shadowing:\n%s", res.method)
+	}
+}
+
+// A delta that names its own sequence renders that field, not the default.
+// See the Go twin for why this matters (a row-shaped delta such as
+// scottypersonal.ChatEvent carries `seq`, not `revision`).
+func TestRustWatch_Wrapper_HonorsDeclaredRevisionField(t *testing.T) {
+	m := rustWatchMethod()
+	m.Resolved.WatchRevisionField = "seq"
+	got := mustGenerateRustGRPCWrapper(
+		t,
+		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
+		m, "catalog", "services", map[string]string{}, "",
+		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, nil)
+	if !strings.Contains(got, "|change: &WatchChange| change.seq,") {
+		t.Fatalf("WATCH ring must key off the declared revision field:\n%s", got)
+	}
+	if strings.Contains(got, "change.revision,") {
+		t.Fatalf("the default field must not survive a declared revision_field:\n%s", got)
 	}
 }

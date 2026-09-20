@@ -1102,7 +1102,8 @@ if authTok != nil {
 		snapshotSend := fmt.Sprintf("sendWatchEvent(&%s{%s: &%s_SnapshotItem{SnapshotItem: item}})", goOutput, oneof, goOutput)
 		doneSend := fmt.Sprintf("sendWatchEvent(&%s{%s: &%s_SnapshotDone{SnapshotDone: src.Revision}})", goOutput, oneof, goOutput)
 		deltaSend := fmt.Sprintf("sendWatchEvent(&%s{%s: &%s_Delta{Delta: change}})", goOutput, oneof, goOutput)
-		watchCall := fmt.Sprintf("%s.Watch(src.Scope, resumeRev, src.Changes, func(c *%s) int64 { return c.GetRevision() })", hubVar, change)
+		watchCall := fmt.Sprintf("%s.Watch(src.Scope, resumeRev, src.Changes, func(c *%s) int64 { return c.Get%s() })",
+			hubVar, change, toGoFieldName(method.Resolved.WatchRevisionField))
 		// Egress data entitlement: sanitize each snapshot item AND each delta before
 		// send. A sanitizable item/change is sanitized whole (Sanitize<T> clones); an
 		// injected envelope (e.g. <T>WatchChange) is cloned first — delta envelopes

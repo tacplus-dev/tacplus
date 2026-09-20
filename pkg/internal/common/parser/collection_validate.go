@@ -131,6 +131,9 @@ func validateOneCollection(loc string, svc *ServiceDescriptor, m *MethodDescript
 		if c.ReplayDepth != 0 {
 			add("replay_depth is only valid on WATCH, not SNAPSHOT")
 		}
+		if c.RevisionField != "" {
+			add("revision_field is only valid on WATCH, not SNAPSHOT")
+		}
 	case "WATCH":
 		if c.MaxItems != 0 {
 			add("max_items is only valid on SNAPSHOT, not WATCH")
@@ -144,6 +147,9 @@ func validateOneCollection(loc string, svc *ServiceDescriptor, m *MethodDescript
 		}
 		if c.ReplayDepth != 0 {
 			add("replay_depth is only valid on WATCH, not PAGE")
+		}
+		if c.RevisionField != "" {
+			add("revision_field is only valid on WATCH, not PAGE")
 		}
 		if streaming {
 			add("PAGE must be a unary RPC returning the page envelope, not server-streaming")
@@ -186,6 +192,7 @@ func validateOneCollection(loc string, svc *ServiceDescriptor, m *MethodDescript
 					itemBytes = collection.ItemBytes(itemField, index)
 				}
 			}
+			validateWatchRevisionField(outMsg, outputPkg, c.RevisionField, index, add)
 		}
 		validateWatchRequest(m.InputType, index, add)
 	} else if streaming {
@@ -266,6 +273,49 @@ func validateWatchRequest(inputType string, index map[string]*model.Message, add
 	}
 	if fieldByName(inMsg, "from_revision") == nil {
 		add("WATCH request %q must declare explicit int64 from_revision; tacplus does not inject it", inputType)
+	}
+}
+
+// validateWatchRevisionField proves the delta carries the int64 the replay ring
+// will be keyed by, BEFORE any emitter renders an accessor for it.
+//
+// Every language's WATCH wrapper keys its ring off one field of the delta
+// (Rust `change.<f>`, Java `change.get<F>()`, Go `c.Get<F>()`). That name used
+// to be the literal "revision" in all three generators, unchecked: a delta
+// without such a field generated fine and then failed in cargo/javac/go build,
+// pointing at generated code rather than at the proto that caused it. So the
+// name is now declared (revision_field, defaulting to "revision") and checked
+// here, where the error can name the rpc, the message and the fix.
+//
+// declared is the raw annotation value ("" means take the default).
+func validateWatchRevisionField(outMsg *model.Message, outputPkg, declared string, index map[string]*model.Message, add func(string, ...interface{})) {
+	deltaField := fieldByName(outMsg, "delta")
+	if deltaField == nil || !deltaField.IsMessage {
+		return // validateWatchEnvelope has already reported the envelope shape
+	}
+	deltaMsg := resolveFieldMessageInPackage(deltaField, outputPkg, index)
+	if deltaMsg == nil {
+		add("cannot resolve WATCH delta type %q to check its revision field", deltaField.Type)
+		return
+	}
+
+	name := declared
+	if name == "" {
+		name = collection.DefaultWatchRevisionField
+	}
+	f := fieldByName(deltaMsg, name)
+	if f == nil {
+		if declared == "" {
+			add("WATCH delta %q declares no %q field; the replay ring is keyed by one int64 on the delta. Add it, or name the field it already has with (spec.method_collection).revision_field",
+				deltaField.Type, name)
+		} else {
+			add("WATCH revision_field %q does not exist on delta %q", name, deltaField.Type)
+		}
+		return
+	}
+	if f.IsRepeated || f.IsMap || f.IsMessage || f.IsEnum ||
+		(strings.ToLower(f.Type) != "int64" && strings.ToLower(f.ProtoType) != "int64") {
+		add("WATCH revision field %q on delta %q must be a singular int64 (the ring is ordered by it)", name, deltaField.Type)
 	}
 }
 

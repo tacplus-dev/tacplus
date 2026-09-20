@@ -1534,7 +1534,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
             source.scope.clone(),
             resume_revision,
             source.changes,
-            |change: &%s| change.revision,
+            |change: &%s| change.%s,
         ).await;
         let source_revision = source.revision;
         let (tx, rx) = tokio::sync::mpsc::channel(32);
@@ -1571,7 +1571,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         Ok(tonic::Response::new(Box::pin(stream) as Self::%sStream))
     }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation+watchPre+accountingSetup,
 				serverStreamReqExpr,
-				sourceBinding, fieldName, changeType,
+				sourceBinding, fieldName, changeType, prostSnakeName(method.Resolved.WatchRevisionField),
 				itemSan, outputType, method.Resolved.WatchOneOf, oneofPath, validateEnvelope, sendClosed,
 				sendErr,
 				outputType, method.Resolved.WatchOneOf, oneofPath, validateEnvelope, sendClosed,

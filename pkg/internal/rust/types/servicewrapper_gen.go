@@ -1060,7 +1060,7 @@ func rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField
 		resolve += rustPrincipalResolve("__principal", methodName, "        ")
 	}
 	if namespaceField != "" {
-		resolve += rustNamespaceResolve("__namespace", methodName, "        ", false)
+		resolve += rustNamespaceResolve("__namespace", methodName, "        ", false, false)
 	}
 
 	fieldSnake := ""

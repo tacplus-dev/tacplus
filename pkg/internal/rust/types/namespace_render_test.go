@@ -68,19 +68,24 @@ func filterTail(t *testing.T) string {
 }
 
 // runGeneratedFilter compiles the generated filter tail into a standalone binary
-// over one row stamped rowNS, with the caller's namespace bound to callerNS, and
-// returns what the process did.
-func runGeneratedFilter(t *testing.T, callerNS, rowNS string) (stdout string, exitCode int, signaled bool) {
+// over one row stamped rowNS, with the caller's namespace bound to callerNS and
+// its linked claim bound to linked, and returns what the process did.
+func runGeneratedFilter(t *testing.T, callerNS, rowNS string, linked []string) (stdout string, exitCode int, signaled bool) {
 	t.Helper()
 	if _, err := exec.LookPath("rustc"); err != nil {
 		t.Skip("rustc not installed; skipping the executable namespace-crash control")
 	}
 	dir := t.TempDir()
 	src := filepath.Join(dir, "main.rs")
+	linkedLiteral := "vec![]"
+	if len(linked) > 0 {
+		linkedLiteral = `vec!["` + strings.Join(linked, `".to_string(), "`) + `".to_string()]`
+	}
 	program := `struct Row { namespace: String }
 struct Resp { items: Vec<Row> }
 fn main() {
     let __read_namespace = "` + callerNS + `".to_string();
+    let __read_namespace_linked: Vec<String> = ` + linkedLiteral + `;
     let resp = Resp { items: vec![Row { namespace: "` + rowNS + `".to_string() }] };
     let mut resp = resp;
 ` + filterTail(t) + `    println!("SURVIVED {}", resp.items.len());
@@ -114,7 +119,7 @@ fn main() {
 // RED control, executable. A row stamped with another tenant's namespace makes
 // the GENERATED filter kill the process.
 func TestGeneratedNamespaceFilterCrashesOnMismatch(t *testing.T) {
-	stdout, code, signaled := runGeneratedFilter(t, "/acme/team-a", "/globex/team-b")
+	stdout, code, signaled := runGeneratedFilter(t, "/acme/team-a", "/globex/team-b", nil)
 	if !signaled {
 		t.Fatalf("a mismatched namespace must crash the process; got exit code %d, stdout %q", code, stdout)
 	}
@@ -127,7 +132,7 @@ func TestGeneratedNamespaceFilterCrashesOnMismatch(t *testing.T) {
 // with the caller's OWN namespace returns it and exits normally — so the crash
 // above is the mismatch, not the filter being unconditionally fatal.
 func TestGeneratedNamespaceFilterPassesMatchingRow(t *testing.T) {
-	stdout, code, signaled := runGeneratedFilter(t, "/acme/team-a", "/acme/team-a")
+	stdout, code, signaled := runGeneratedFilter(t, "/acme/team-a", "/acme/team-a", nil)
 	if signaled || code != 0 {
 		t.Fatalf("a matching namespace must pass; got exit code %d, stdout %q", code, stdout)
 	}
@@ -141,7 +146,7 @@ func TestGeneratedNamespaceFilterPassesMatchingRow(t *testing.T) {
 // isolation rule deliberately parts from target_namespace_field's level-or-below
 // administrative reach.
 func TestGeneratedNamespaceFilterCrashesOnParentNamespace(t *testing.T) {
-	stdout, _, signaled := runGeneratedFilter(t, "/acme", "/acme/team-a")
+	stdout, _, signaled := runGeneratedFilter(t, "/acme", "/acme/team-a", nil)
 	if !signaled {
 		t.Fatalf("a parent namespace is not a match under the exact-match rule; stdout %q", stdout)
 	}
@@ -187,6 +192,7 @@ func runGatedFilter(t *testing.T, callerNS string, withBeta bool) (stdout string
 struct Resp { items: Vec<Row> }
 fn main() {
     let __read_namespace = "` + callerNS + `".to_string();
+    let __read_namespace_linked: Vec<String> = vec![];
     let resp = Resp { items: ` + rows + ` };
     ` + gatedFilterTail(t) + `    let ids: Vec<&str> = resp.items.iter().map(|r| r.id.as_str()).collect();
     println!("DELIVERED {:?}", ids);
@@ -242,6 +248,28 @@ func TestRustTenantS2S_GatedFilterKeepsSystemPeerFleetWide(t *testing.T) {
 	}
 }
 
+// private-records-scope step 2: a row stamped with a namespace the caller is
+// LINKED to (not its own) survives the filter — the backstop's second, additive
+// acceptance path.
+func TestGeneratedNamespaceFilterPassesLinkedRow(t *testing.T) {
+	stdout, code, signaled := runGeneratedFilter(t, "/tenants/acme", "/tenants/beta", []string{"/tenants/beta"})
+	if signaled || code != 0 {
+		t.Fatalf("a row in a linked namespace must pass; got exit code %d, stdout %q", code, stdout)
+	}
+	if strings.TrimSpace(stdout) != "SURVIVED 1" {
+		t.Fatalf("the linked row must survive the generated filter, got %q", stdout)
+	}
+}
+
+// A namespace NOT in the caller's own or linked set is still a mismatch: the
+// linked claim widens the accepted set, it does not disable the check.
+func TestGeneratedNamespaceFilterCrashesOnUnlinkedRow(t *testing.T) {
+	stdout, _, signaled := runGeneratedFilter(t, "/tenants/acme", "/tenants/gamma", []string{"/tenants/beta"})
+	if !signaled {
+		t.Fatalf("a row in neither the caller's own nor its linked namespaces must still crash; stdout %q", stdout)
+	}
+}
+
 // And the UNGATED (c2s) filter over the identical rows still drops and aborts:
 // the gate is additive, not a weakening of the half that already had a boundary.
 func TestRustNamespaceFilterUngatedHasNoSystemExemption(t *testing.T) {
@@ -249,7 +277,7 @@ func TestRustNamespaceFilterUngatedHasNoSystemExemption(t *testing.T) {
 	if strings.Contains(got, "__ns_pinned") || strings.Contains(got, `starts_with("/system")`) {
 		t.Fatalf("the ungated filter must carry no runtime gate:\n%s", got)
 	}
-	stdout, _, signaled := runGeneratedFilter(t, "/system/services/argus", "/tenants/beta")
+	stdout, _, signaled := runGeneratedFilter(t, "/system/services/argus", "/tenants/beta", nil)
 	if !signaled {
 		t.Fatalf("without the gate a /system caller is pinned like any other; stdout %q", stdout)
 	}

@@ -221,7 +221,7 @@ func rustWatchEgressPreamble(w rustWatchEgress, method string, runtimeGate bool)
 		b.WriteString(rustPrincipalResolve("__read_principal", method, "        "))
 	}
 	if w.needsNamespace() {
-		b.WriteString(rustNamespaceResolve("__read_namespace", method, "        ", runtimeGate))
+		b.WriteString(rustNamespaceResolve("__read_namespace", method, "        ", runtimeGate, true))
 	}
 	return b.String()
 }
@@ -259,11 +259,11 @@ func rustWatchEgressGuardStmts(guards []rustWatchRowGuard, frameVar, method, ind
 		fmt.Fprintf(&b, "\n%s// (spec.store_namespace): hold the frame to the caller's tenant; a foreign row aborts.\n", indent)
 		if g.Path == "" {
 			fmt.Fprintf(&b, "%sif %s {\n%s%s}\n", indent,
-				rustNamespaceDropExpr(fmt.Sprintf("%s.%s != __read_namespace", frameVar, g.Namespace), runtimeGate),
+				rustNamespaceDropExpr(fmt.Sprintf("%[1]s.%[2]s != __read_namespace && !__read_namespace_linked.iter().any(|__ns| __ns == &%[1]s.%[2]s)", frameVar, g.Namespace), runtimeGate),
 				rustNamespaceCrash(method, field, indent+"    "), indent)
 		} else {
 			fmt.Fprintf(&b, "%sif let Some(__row) = %s.%s.as_ref() { if %s {\n%s%s} }\n", indent, frameVar, g.Path,
-				rustNamespaceDropExpr(fmt.Sprintf("__row.%s != __read_namespace", g.Namespace), runtimeGate),
+				rustNamespaceDropExpr(fmt.Sprintf("__row.%[1]s != __read_namespace && !__read_namespace_linked.iter().any(|__ns| __ns == &__row.%[1]s)", g.Namespace), runtimeGate),
 				rustNamespaceCrash(method, field, indent+"    "), indent)
 		}
 	}

@@ -55,8 +55,9 @@ func TestRustPageWrapperAppliesPrincipalAndNamespaceEgressFilter(t *testing.T) {
 	for _, want := range []string{
 		// (spec.store_principal): rows the caller does not own are dropped.
 		"resp.items.retain(|__row| __row.owner == __read_principal);",
-		// (spec.store_namespace): a foreign tenant's row aborts the process.
-		"resp.items.retain(|__row| __row.namespace == __read_namespace);",
+		// (spec.store_namespace): a foreign tenant's row aborts the process,
+		// unless it is in a namespace the caller's token is linked to.
+		"resp.items.retain(|__row| (__row.namespace == __read_namespace || __read_namespace_linked.iter().any(|__ns| __ns == &__row.namespace)));",
 		"std::process::abort();",
 	} {
 		if !strings.Contains(got, want) {
@@ -65,7 +66,7 @@ func TestRustPageWrapperAppliesPrincipalAndNamespaceEgressFilter(t *testing.T) {
 	}
 	// Principal filter runs before namespace, same order as the unary leg.
 	pIdx := strings.Index(got, "resp.items.retain(|__row| __row.owner")
-	nIdx := strings.Index(got, "resp.items.retain(|__row| __row.namespace")
+	nIdx := strings.Index(got, "resp.items.retain(|__row| (__row.namespace")
 	if pIdx == -1 || nIdx == -1 || pIdx > nIdx {
 		t.Fatalf("principal filter must precede namespace filter in the PAGE wrapper:\n%s", got)
 	}
@@ -114,7 +115,7 @@ func TestRustTenantS2S_RecordPlaneEmitsTheRuntimeGate(t *testing.T) {
 		got := renderNamespaceServiceRust(t, m, rustRecordPlaneS2SService())
 		for _, want := range []string{
 			`let __ns_pinned = !__read_namespace.starts_with("/system");`,
-			"resp.items.retain(|__row| !__ns_pinned || __row.namespace == __read_namespace);",
+			"resp.items.retain(|__row| !__ns_pinned || (__row.namespace == __read_namespace || __read_namespace_linked.iter().any(|__ns| __ns == &__row.namespace)));",
 			"std::process::abort();",
 		} {
 			if !strings.Contains(got, want) {
@@ -151,7 +152,7 @@ func TestRustTenantS2S_SharedServiceEmitsNoNamespaceSeam(t *testing.T) {
 func TestRustTenantS2S_C2SHalfHasNoRuntimeGate(t *testing.T) {
 	for _, m := range []*parser.MethodInfo{namespacePageMethodRust(), namespaceUnaryMethodRust()} {
 		got := renderNamespaceServiceRust(t, m, &parser.ServiceInfo{Name: "Catalog", IsC2S: true})
-		if !strings.Contains(got, "resp.items.retain(|__row| __row.namespace == __read_namespace);") {
+		if !strings.Contains(got, "resp.items.retain(|__row| (__row.namespace == __read_namespace || __read_namespace_linked.iter().any(|__ns| __ns == &__row.namespace)));") {
 			t.Fatalf("%s: the c2s wrapper must pin unconditionally:\n%s", m.Name, got)
 		}
 		if strings.Contains(got, "__ns_pinned") || strings.Contains(got, `starts_with("/system")`) {

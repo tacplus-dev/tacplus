@@ -271,15 +271,31 @@ func TestRustMcpCarrierIsNotAHandlerMethodButItsToolsAre(t *testing.T) {
 // wrapper makes for a gRPC rpc it cannot guard apply to an MCP tool too. Before
 // this seam the tool was suppressed entirely and they were skipped for it.
 func TestRustMcpDispatchRefusesAToolItCannotGuard(t *testing.T) {
-	svc, tool, _, _ := rustMcpTestService()
-	tool.MinGroupSize = 5
+	for _, tc := range []struct {
+		name  string
+		mut   func(*parser.MethodInfo)
+		match string
+	}{
+		{"min_group_size", func(m *parser.MethodInfo) { m.MinGroupSize = 5 }, "min_group_size"},
+		// A PAGE collection hands the handler a page window, so dispatch would
+		// render a 2-argument call against a 3-argument handler: uncallable
+		// generated code. Go and Java refuse the same shape.
+		{"method_collection", func(m *parser.MethodInfo) {
+			m.Collection = &parser.CollectionDescriptor{Mode: "PAGE"}
+		}, "declares method_collection"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, tool, _, _ := rustMcpTestService()
+			tc.mut(tool)
 
-	_, err := generateRustMcpDispatch(svc, "ticket", map[string]string{}, rustMcpTestSanitizer())
-	if err == nil {
-		t.Fatal("an MCP tool carrying (spec.min_group_size) generated dispatch with no guard")
-	}
-	if !strings.Contains(err.Error(), "min_group_size") {
-		t.Fatalf("unexpected refusal: %v", err)
+			_, err := generateRustMcpDispatch(svc, "ticket", map[string]string{}, rustMcpTestSanitizer())
+			if err == nil {
+				t.Fatal("an MCP tool this seam cannot guard generated dispatch anyway")
+			}
+			if !strings.Contains(err.Error(), tc.match) {
+				t.Fatalf("unexpected refusal: %v", err)
+			}
+		})
 	}
 }
 

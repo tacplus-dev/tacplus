@@ -143,6 +143,13 @@ func rustMcpTools(svc *parser.ServiceInfo, servicePkg string, crossPkgTypes map[
 // changes that: the tool IS served now, by this code, so the same refusals the
 // wrapper makes for a gRPC rpc apply here, for the same reasons.
 func rustMcpToolGeneratable(svc *parser.ServiceInfo, m *parser.MethodInfo, servicePkg string, san *rustEgressSanitizer) error {
+	// An MCP tool is one question and one answer. A collection-returning rpc has
+	// a handler signature this dispatch cannot call (it takes a cursor or a page
+	// window), and MCP has no frame to carry it in.
+	if m.Collection != nil {
+		return fmt.Errorf("%s.%s is an RPC_PRINCIPAL_MCP rpc but declares method_collection; the generated collection seam hands the handler a cursor or page window, which an MCP tool call has no frame for",
+			svc.Name, m.Name)
+	}
 	// (spec.record).min_group_size is enforced in the generated Java service
 	// wrapper only.
 	if m.MinGroupSize > 0 {

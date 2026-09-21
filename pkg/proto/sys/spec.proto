@@ -906,6 +906,54 @@ message RecordAnnotation {
   //     c2s_read:      {auth_services: ["scotty"]}
   //   };
   MethodS2SAnnotation c2s_read = 11;
+
+  // private marks this record type as belonging to exactly one principal —
+  // "a user's data and nobody else's, ever." Unset = MUTABILITY_CRUD's kind of
+  // default: today's behaviour, where a record's boundary is its tenant
+  // (namespace) and every service auth_services names may see every row in it.
+  //
+  // The FIELD NAME here is deliberately NOT reused for the parsed annotation
+  // key an author-facing check would grep for: it is carried internally as
+  // "record_private" (see descriptor.go), never bare "private" — that string
+  // already names the UNRELATED per-FIELD statedb marker
+  // (spec.private = 50013, "field can never be accessed by other services").
+  // The two guard completely different things at completely different scopes
+  // (a whole record type here, one state field there) and must never be
+  // confused by a validator or a human skimming annotation keys.
+  //
+  // What true means, once the generated pins land (tracked, not yet emitted by
+  // this field alone):
+  //   - The row's owner is stamped from the caller's `sub` at write time,
+  //     never caller-supplied — (spec.store_principal) already does the stamp.
+  //   - Every generated read path (Get, List, Watch, Count, Sample, the
+  //     record-plane readers, the S2S readers) pins owner == caller BEFORE any
+  //     other criterion — a pin the query cannot see, not a filter it can
+  //     widen.
+  //   - No admin or tenant override: a tenant admin's token reads nothing from
+  //     a private record, by generation, not by policy.
+  //   - A service reading on a user's behalf must carry that user's delegated
+  //     token (the `act` claim); its own service identity alone gets
+  //     PERMISSION_DENIED.
+  //
+  // What this field alone already means, checked at generation time
+  // (ValidateRecordPrivateAnnotations): a private record refuses
+  // s2s_subscribe. A subscriber to a record's raw topic is a SERVICE, not a
+  // per-request caller — there is no principal in scope for a stream handler
+  // to pin against, so declaring both is a fleet-wide broadcast of every row
+  // ever written, the exact thing `private` exists to prevent. s2s / s2s_read
+  // / c2s_read stay declarable; their generated pins are the remaining,
+  // not-yet-emitted half of this annotation (decisions/
+  // identity-people-tenant-devices-private-2026-09-21.md §4).
+  //
+  // Example — a record only its own owner may ever read:
+  //   option (spec.record) = {
+  //     key: "rule_id" owner: "spiffe_id"
+  //     s2s:      {auth_services: ["profile"]}
+  //     s2s_read: {auth_services: ["profile"]}
+  //     c2s_read: {auth_services: ["profile"]}
+  //     private: true
+  //   };
+  bool private = 12;
 }
 
 // ResidencyPolicy states a record type's lifecycle as two clocks. It replaced

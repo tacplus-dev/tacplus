@@ -1938,6 +1938,14 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 					StringSliceValue: append([]string(nil), cr.GetAuthServices()...),
 				}
 			}
+			// private: this record type belongs to exactly one principal. Carried
+			// as "record_private" — deliberately NOT "private", which already
+			// names the unrelated per-FIELD statedb marker (spec.private = 50013)
+			// in a field's own Annotations map. Only carried when true; unset
+			// stays today's tenant-boundary-only behaviour.
+			if val.GetPrivate() {
+				annotations["record_private"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+			}
 		}
 	}
 

@@ -220,6 +220,9 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateRecordNamespaceAnnotations(dp); err != nil {
 		return err
 	}
+	if err := parser.ValidateRecordPrivateAnnotations(dp); err != nil {
+		return err
+	}
 	if err := parser.ValidateOwnerDefaultAnnotations(dp); err != nil {
 		return err
 	}

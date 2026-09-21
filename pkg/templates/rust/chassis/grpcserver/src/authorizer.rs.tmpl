@@ -154,6 +154,11 @@ pub struct Authorizer {
     /// auth_services; keyed by the bare name, whichever registered last would
     /// silently overwrite the other and decide authorization for both.
     method_auth_patterns: RwLock<HashMap<String, Vec<regex::Regex>>>,
+    /// Per-method auth_actors policy, keyed exactly as `method_auth_patterns`
+    /// is. Registering nothing is meaningful: `authorize_grpc` rejects any
+    /// token carrying `act` on a method with no entry here, so an rpc that
+    /// declares no auth_actors admits no delegated call at all.
+    method_actor_patterns: RwLock<HashMap<String, Vec<regex::Regex>>>,
 }
 
 /// The service identity baked in at code generation time.
@@ -184,6 +189,7 @@ impl Authorizer {
         Self {
             jwk_cache,
             method_auth_patterns: RwLock::new(HashMap::new()),
+            method_actor_patterns: RwLock::new(HashMap::new()),
         }
     }
 
@@ -193,6 +199,7 @@ impl Authorizer {
         Self {
             jwk_cache: Arc::new(JwkCache::seeded(seed)),
             method_auth_patterns: RwLock::new(HashMap::new()),
+            method_actor_patterns: RwLock::new(HashMap::new()),
         }
     }
 
@@ -218,6 +225,35 @@ impl Authorizer {
             })
             .collect();
         self.method_auth_patterns
+            .write()
+            .unwrap()
+            .insert(method_key.to_string(), compiled);
+    }
+
+    /// Registers the delegate identities allowed to call a method on another
+    /// principal's behalf — the rpc's `(spec.rpc).auth_actors`. Patterns are
+    /// RE2 regexes matched against the token's `act` claim, which kernel mints
+    /// as the delegate's service path: the same shape, and the same anchored
+    /// matching, [`set_method_auth`](Self::set_method_auth) uses for
+    /// auth_services. "*" is shorthand for "any actor".
+    ///
+    /// `method_key` is the service-qualified identifier "pkg.Service/Method"
+    /// produced by [`qualified_method_key`], not the bare RPC name.
+    pub fn set_method_actors(&self, method_key: &str, patterns: &[&str]) {
+        if patterns.is_empty() {
+            return;
+        }
+        let compiled: Vec<regex::Regex> = patterns
+            .iter()
+            .map(|p| {
+                if *p == "*" {
+                    regex::Regex::new(".*").unwrap()
+                } else {
+                    regex::Regex::new(&format!("^(?:{})$", p)).unwrap()
+                }
+            })
+            .collect();
+        self.method_actor_patterns
             .write()
             .unwrap()
             .insert(method_key.to_string(), compiled);
@@ -390,6 +426,31 @@ impl Authorizer {
         _metadata: &HashMap<String, String>,
     ) -> Result<token::Token> {
         let tw = self.verify_bearer(authorization)?;
+
+        // Delegation gate. A token carrying an act claim was minted for one
+        // principal to act on another's behalf, so the rpc must say which
+        // delegates it admits before either the S2S or the C2S path below gets
+        // to speak. A token with no act claim is not a delegated call and is
+        // authorized exactly as it always was. act is already the delegate's
+        // service path (kernel sets it from the delegate's name), so it is
+        // matched directly — Token::service_path() would reject it, since a
+        // delegated user token is not a service token.
+        let act = tw.actor().unwrap_or("").to_string();
+        if !act.is_empty() {
+            let patterns = self.method_actor_patterns.read().unwrap();
+            let allowed = patterns.get(&qualified_method_key(full_method)).ok_or_else(|| {
+                AuthorizerError::permission_denied(format!(
+                    "no auth_actors policy configured for actor \"{}\" on \"{}\"",
+                    act, method
+                ))
+            })?;
+            if !allowed.iter().any(|p| p.is_match(&act)) {
+                return Err(AuthorizerError::permission_denied(format!(
+                    "actor \"{}\" not authorized for \"{}\"",
+                    act, method
+                )));
+            }
+        }
 
         // S2S path: service/workload tokens carry structured identity claims
         // (sub_type, sub, service_name). Authorization is receiver-side via
@@ -915,6 +976,90 @@ mod authorizer_behavior_tests {
             .await
             .err()
             .expect("service not in auth_services must be denied");
+    }
+
+    // -----------------------------------------------------------------
+    // auth_actors: the delegation gate
+    // -----------------------------------------------------------------
+
+    // A service caller that is ALSO acting on another principal's behalf: the
+    // same token service_token mints, plus an act claim naming the delegate.
+    fn delegated_service_token(key: &keys::ImmutableKey, caller: &str, act: &str) -> String {
+        signed_token(key, now_plus(3600), SERVICE_NAME, |tok| {
+            tok.set_sub_type("service").expect("sub_type");
+            tok.set_subject(caller).expect("subject");
+            tok.set_actor(act).expect("act");
+        })
+    }
+
+    // A token with NO act claim is not a delegated call: the auth_actors gate
+    // must not touch it, even on a method that declares actors.
+    #[tokio::test]
+    async fn ignores_auth_actors_when_token_has_no_act() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        a.set_method_auth(METHOD_KEY, &["caller-svc"]);
+        a.set_method_actors(METHOD_KEY, &["some-agent"]);
+        let tok = service_token(&key, "caller-svc");
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+            .await
+            .expect("token with no act claim must be authorized exactly as before");
+    }
+
+    // A token whose act claim matches one of the method's auth_actors patterns
+    // is authorized (the ordinary auth_services check still applies underneath).
+    #[tokio::test]
+    async fn accepts_act_matching_auth_actors() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        a.set_method_auth(METHOD_KEY, &["caller-svc"]);
+        a.set_method_actors(METHOD_KEY, &["mcp/workloads/agent-42"]);
+        let tok = delegated_service_token(&key, "caller-svc", "mcp/workloads/agent-42");
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+            .await
+            .expect("act matching a declared auth_actors pattern must be authorized");
+    }
+
+    // Fail closed: a method that declares NO auth_actors admits no delegated
+    // call at all, however well the caller authenticates otherwise.
+    #[tokio::test]
+    async fn rejects_act_when_no_auth_actors_declared() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        a.set_method_auth(METHOD_KEY, &["caller-svc"]);
+        let tok = delegated_service_token(&key, "caller-svc", "mcp/workloads/agent-42");
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+            .await
+            .err()
+            .expect("a token carrying act must be denied on a method that declares no auth_actors");
+    }
+
+    // An act claim that matches none of the declared patterns is denied.
+    #[tokio::test]
+    async fn rejects_act_not_in_auth_actors() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        a.set_method_auth(METHOD_KEY, &["caller-svc"]);
+        a.set_method_actors(METHOD_KEY, &["allowed-agent"]);
+        let tok = delegated_service_token(&key, "caller-svc", "other-agent");
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+            .await
+            .err()
+            .expect("act not matching any declared auth_actors pattern must be denied");
+    }
+
+    // "*" is the match-any shorthand for auth_actors, exactly as for
+    // auth_services.
+    #[tokio::test]
+    async fn auth_actors_wildcard_matches_any_actor() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        a.set_method_auth(METHOD_KEY, &["caller-svc"]);
+        a.set_method_actors(METHOD_KEY, &["*"]);
+        let tok = delegated_service_token(&key, "caller-svc", "any/old/agent");
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+            .await
+            .expect("auth_actors \"*\" must admit any actor");
     }
 
     // An auth_services pattern containing alternation must still match the

@@ -44,6 +44,11 @@ type Authorizer interface {
 	// not the bare RPC name — one process may host several services, and two of
 	// them may declare the same RPC name with different auth_services.
 	SetMethodAuth(methodKey string, patterns []string)
+	// SetMethodActors registers the delegate identities allowed to call a
+	// method on another principal's behalf — the rpc's (spec.rpc).auth_actors,
+	// matched against the token's act claim. Keyed by the same
+	// service-qualified identifier as SetMethodAuth.
+	SetMethodActors(methodKey string, patterns []string)
 	// SetMethodTargetNamespaceField registers level-or-below target namespace
 	// checks, keyed by the same service-qualified identifier as SetMethodAuth.
 	SetMethodTargetNamespaceField(methodKey, fieldName string)
@@ -181,6 +186,7 @@ var acceptedAudiences = map[string]struct{}{
 type authorizer struct {
 	jwkCache                   *JwkCache
 	methodAuthPatterns         map[string][]*regexp.Regexp
+	methodActorPatterns        map[string][]*regexp.Regexp
 	methodTargetNamespaceField map[string]string
 	logger                     *zap.Logger
 }
@@ -204,6 +210,7 @@ func NewAuthorizer(ctx context.Context, conn grpc.ClientConnInterface) (*authori
 	return &authorizer{
 		jwkCache:                   jwkCache,
 		methodAuthPatterns:         make(map[string][]*regexp.Regexp),
+		methodActorPatterns:        make(map[string][]*regexp.Regexp),
 		methodTargetNamespaceField: make(map[string]string),
 		logger:                     zap.L().Named("authorizer"),
 	}, nil
@@ -242,6 +249,30 @@ func (a *authorizer) SetMethodAuth(methodKey string, patterns []string) {
 	a.methodAuthPatterns[methodKey] = compiled
 }
 
+// SetMethodActors registers the delegate identities allowed to call a method on
+// another principal's behalf — the rpc's (spec.rpc).auth_actors. Patterns are
+// RE2 regexes matched against the token's act claim, which kernel mints as the
+// delegate's service path: the same shape, and the same anchored matching, that
+// SetMethodAuth uses for auth_services. "*" is shorthand for "any actor".
+//
+// Registering nothing is meaningful: Authorize rejects any token carrying act
+// on a method with no entry here, so an rpc that declares no auth_actors admits
+// no delegated call at all.
+func (a *authorizer) SetMethodActors(methodKey string, patterns []string) {
+	if len(patterns) == 0 {
+		return
+	}
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, p := range patterns {
+		if p == "*" {
+			compiled = append(compiled, regexp.MustCompile(".*"))
+		} else {
+			compiled = append(compiled, regexp.MustCompile("^(?:"+p+")$"))
+		}
+	}
+	a.methodActorPatterns[methodKey] = compiled
+}
+
 // JwkCache returns the underlying JWK cache for direct key access.
 func (a *authorizer) JwkCache() *JwkCache {
 	return a.jwkCache
@@ -256,6 +287,34 @@ func (a *authorizer) Authorize(ctx context.Context, fullMethod string, req any) 
 			zap.String("method", fullMethod),
 			zap.Error(err))
 		return nil, err
+	}
+
+	// Delegation gate. A token carrying an act claim was minted for one
+	// principal to act on another's behalf, so the rpc must say which delegates
+	// it admits before either the S2S or the C2S path below gets to speak. A
+	// token with no act claim is not a delegated call and is authorized exactly
+	// as it always was. act is already the delegate's service path (kernel sets
+	// it from the delegate's name), so it is matched directly — tw.ServicePath()
+	// would reject it, since a delegated user token is not a service token.
+	if act := tw.GetAct(); act != "" {
+		methodName := extractMethodName(fullMethod)
+		methodKey := qualifiedMethodKey(fullMethod)
+		allowed, ok := a.methodActorPatterns[methodKey]
+		if !ok {
+			return nil, protoerrors.NewErrPermissionDenied(nil,
+				"no auth_actors policy configured for actor %q on %q", act, methodName)
+		}
+		matched := false
+		for _, p := range allowed {
+			if p.MatchString(act) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return nil, protoerrors.NewErrPermissionDenied(nil,
+				"actor %q not authorized for %q", act, methodName)
+		}
 	}
 
 	// S2S path: service/workload tokens carry structured identity claims

@@ -263,6 +263,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 					rustQualifiedMethodAuthKey(info.Package, targetService.Name, method.Name),
 					strings.Join(quoted, ", ")))
 			}
+			methodAuthLines = append(methodAuthLines, rustMethodActorsLine(info.Package, targetService.Name, method)...)
 			continue
 		}
 		// An MCP tool gets no gRPC method wrapper: no authorize call, no
@@ -350,6 +351,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 				rustQualifiedMethodAuthKey(info.Package, targetService.Name, method.Name),
 				strings.Join(quoted, ", ")))
 		}
+		methodAuthLines = append(methodAuthLines, rustMethodActorsLine(info.Package, targetService.Name, method)...)
 	}
 
 	// Build register_method_auth function.
@@ -2022,6 +2024,25 @@ func rustAppendOnlyRecordOnMethod(method *parser.MethodInfo, san *rustEgressSani
 // authorize_grpc. A bare RPC name would collide across services co-hosted
 // behind one Authorizer. Must stay in lockstep with qualified_method_key in the
 // grpcserver chassis (pkg/templates/rust/chassis/grpcserver/src/authorizer.rs.tmpl).
+// rustMethodActorsLine renders the set_method_actors registration for an rpc's
+// (spec.rpc).auth_actors, or nothing when the rpc declares none. There is no
+// service-level default to fall back to: auth_actors is declared on spec.rpc
+// only. Emitting nothing is what makes the gate fail closed — a missing map
+// entry rejects any token carrying act.
+func rustMethodActorsLine(protoPackage, serviceName string, method *parser.MethodInfo) []string {
+	if len(method.AuthActors) == 0 {
+		return nil
+	}
+	quoted := make([]string, 0, len(method.AuthActors))
+	for _, pattern := range method.AuthActors {
+		quoted = append(quoted, rustQuote(pattern))
+	}
+	return []string{fmt.Sprintf(
+		"    auth.set_method_actors(%q, &[%s]);",
+		rustQualifiedMethodAuthKey(protoPackage, serviceName, method.Name),
+		strings.Join(quoted, ", "))}
+}
+
 func rustQualifiedMethodAuthKey(protoPackage, serviceName, methodName string) string {
 	if protoPackage == "" {
 		return serviceName + "/" + methodName

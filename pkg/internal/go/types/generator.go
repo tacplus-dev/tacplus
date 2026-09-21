@@ -1417,6 +1417,9 @@ func deriveGoServiceAuthFlags(service parser.ServiceDescriptor) (anyUser bool, h
 		if len(m.AuthServices) > 0 {
 			hasMethodAuth = true
 		}
+		if len(m.AuthActors) > 0 {
+			hasMethodAuth = true
+		}
 		// Mirrors the SetMethodTargetNamespaceField condition in
 		// servicewrapper.go: an auth_any_user method uses
 		// target_namespace_field as a fixed namespace literal in its own gate

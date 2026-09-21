@@ -157,6 +157,86 @@ func TestAuthorizerAlternationPatternIsFullyAnchored(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// auth_actors: the delegation gate
+// ---------------------------------------------------------------------------
+
+// delegatedServiceToken is a service caller that is ALSO acting on another
+// principal's behalf: the same token the auth_services tests mint, plus an act
+// claim naming the delegate.
+func delegatedServiceToken(caller, act string) func(*tokenlib.TokenWrapper) {
+	return func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("service").SetSubject(caller).SetAct(act)
+	}
+}
+
+// A token with NO act claim is not a delegated call: the auth_actors gate must
+// not touch it, even on a method that declares actors.
+func TestAuthorizerIgnoresAuthActorsWhenTokenHasNoAct(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
+	a.SetMethodActors(testMethodKey, []string{"some-agent"})
+
+	tok := signedToken(t, key, serviceToken("caller-svc"))
+	if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
+		t.Fatalf("token with no act claim must be authorized exactly as before, got: %v", err)
+	}
+}
+
+// A token whose act claim matches one of the method's auth_actors patterns is
+// authorized (the ordinary auth_services check still applies underneath).
+func TestAuthorizerAcceptsActMatchingAuthActors(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
+	a.SetMethodActors(testMethodKey, []string{"mcp/workloads/agent-42"})
+
+	tok := signedToken(t, key, delegatedServiceToken("caller-svc", "mcp/workloads/agent-42"))
+	if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
+		t.Fatalf("act matching a declared auth_actors pattern must be authorized, got: %v", err)
+	}
+}
+
+// Fail closed: a method that declares NO auth_actors admits no delegated call
+// at all, however well the caller authenticates otherwise.
+func TestAuthorizerRejectsActWhenNoAuthActorsDeclared(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
+
+	tok := signedToken(t, key, delegatedServiceToken("caller-svc", "mcp/workloads/agent-42"))
+	if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
+		t.Fatal("a token carrying act must be denied on a method that declares no auth_actors")
+	}
+}
+
+// An act claim that matches none of the declared patterns is denied.
+func TestAuthorizerRejectsActNotInAuthActors(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
+	a.SetMethodActors(testMethodKey, []string{"allowed-agent"})
+
+	tok := signedToken(t, key, delegatedServiceToken("caller-svc", "other-agent"))
+	if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
+		t.Fatal("act not matching any declared auth_actors pattern must be denied")
+	}
+}
+
+// "*" is the match-any shorthand for auth_actors, exactly as for auth_services.
+func TestAuthorizerAuthActorsWildcardMatchesAnyActor(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
+	a.SetMethodActors(testMethodKey, []string{"*"})
+
+	tok := signedToken(t, key, delegatedServiceToken("caller-svc", "any/old/agent"))
+	if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
+		t.Fatalf("auth_actors \"*\" must admit any actor, got: %v", err)
+	}
+}
+
 // An expired token is rejected even with a valid signature.
 func TestAuthorizerRejectsExpiredToken(t *testing.T) {
 	key := newTestKey(t)

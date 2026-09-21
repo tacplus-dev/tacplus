@@ -194,6 +194,9 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				if len(m.AuthServices) > 0 {
 					hasMethodAuth = true
 				}
+				if len(m.AuthActors) > 0 {
+					hasMethodAuth = true
+				}
 				if m.TargetNamespaceField != "" && !m.AuthAnyUser {
 					hasMethodAuth = true
 				}
@@ -802,6 +805,21 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			}
 			methodAuthLines = append(methodAuthLines, fmt.Sprintf(
 				"        authorizer.setMethodAuth(\"%s\", java.util.List.of(%s));",
+				methodAuthKey, strings.Join(quoted, ", ")))
+		}
+
+		// Register the per-RPC auth_actors patterns. There is no service-level
+		// default to fall back to: auth_actors is declared on spec.rpc only.
+		// The non-empty guard is what makes the gate fail closed — an RPC that
+		// declares nothing registers nothing, and a missing map entry rejects
+		// any token carrying act.
+		if len(method.AuthActors) > 0 {
+			var quoted []string
+			for _, pattern := range method.AuthActors {
+				quoted = append(quoted, fmt.Sprintf("%q", pattern))
+			}
+			methodAuthLines = append(methodAuthLines, fmt.Sprintf(
+				"        authorizer.setMethodActors(\"%s\", java.util.List.of(%s));",
 				methodAuthKey, strings.Join(quoted, ", ")))
 		}
 

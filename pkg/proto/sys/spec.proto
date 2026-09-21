@@ -1356,6 +1356,18 @@ message RpcAnnotation {
   // RPC_PRINCIPAL_MCP — declaring it elsewhere fails generation rather than
   // being silently ignored.
   string mcp_tool_name = 6;
+
+  // auth_actors lists the delegate identities allowed to call this RPC on
+  // another principal's behalf. Entries are matched against the token's `act`
+  // claim — the delegate's service path, the same shape auth_services patterns
+  // already match — as anchored RE2; ["*"] = any actor.
+  //
+  // The gate runs before the auth_services / entitlement checks, and only when
+  // the token actually carries `act`: a token with no `act` claim is authorized
+  // exactly as it is today. A token that DOES carry `act` is rejected unless
+  // this RPC declares auth_actors and one of its patterns matches, so an RPC
+  // that says nothing about delegation admits no delegated call at all.
+  repeated string auth_actors = 7;
 }
 
 // CollectionMode declares how a multi-result read behaves. See docs/API.md.

@@ -1073,6 +1073,7 @@ func CollectRpcProtos(fds []*parser.FileDescriptor) ([]*spec.RpcInfo, error) {
 					ServerStreaming:        m.ServerStreaming,
 					AuthDisabled:           authDisabled,
 					AuthServices:           authServices,
+					AuthActors:             m.AuthActors,
 					AuthEntitledUsers:      svc.AuthEntitledUsers,
 					AuthAnyUser:            authAnyUser,
 					AuthModel:              authModel,

@@ -202,7 +202,7 @@ func deriveServiceAuthFlags(svc parser.ServiceDescriptor) (authAnyUser bool, has
 		if m.AuthAnyUser {
 			authAnyUser = true
 		}
-		if len(m.AuthServices) > 0 || m.TargetNamespaceField != "" {
+		if len(m.AuthServices) > 0 || len(m.AuthActors) > 0 || m.TargetNamespaceField != "" {
 			hasMethodAuth = true
 		}
 	}

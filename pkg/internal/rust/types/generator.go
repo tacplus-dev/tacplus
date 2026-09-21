@@ -819,6 +819,9 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				if len(m.AuthServices) > 0 {
 					hasMethodAuth = true
 				}
+				if len(m.AuthActors) > 0 {
+					hasMethodAuth = true
+				}
 				if service.AuthDisabled || m.AuthDisabled {
 					authExempt = append(authExempt, fmt.Sprintf("/%s.%s/%s", packageName, service.Name, m.Name))
 				}

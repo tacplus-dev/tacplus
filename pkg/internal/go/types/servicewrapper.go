@@ -274,6 +274,21 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 					methodKey, strings.Join(quoted, ", ")))
 			}
 
+			// Register the per-RPC auth_actors patterns. There is no
+			// service-level default to fall back to: auth_actors is declared on
+			// spec.rpc only. The non-empty guard is what makes the gate fail
+			// closed — an RPC that declares nothing registers nothing, and a
+			// missing map entry rejects any token carrying act.
+			if len(method.AuthActors) > 0 {
+				var quoted []string
+				for _, pattern := range method.AuthActors {
+					quoted = append(quoted, fmt.Sprintf("%q", pattern))
+				}
+				methodAuthLines = append(methodAuthLines, fmt.Sprintf(
+					"auth.SetMethodActors(%q, []string{%s})",
+					methodKey, strings.Join(quoted, ", ")))
+			}
+
 			// Register request-field target_namespace_field for level-or-below enforcement.
 			// auth_any_user uses target_namespace_field as a fixed namespace literal instead.
 			if method.TargetNamespaceField != "" && !method.AuthAnyUser {

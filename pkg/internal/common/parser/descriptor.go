@@ -268,6 +268,7 @@ type MethodDescriptor struct {
 	ProofRequires        string                // method-level proof_requires annotation (formal verification precondition)
 	ProofEnsures         string                // method-level proof_ensures annotation (formal verification postcondition)
 	AuthServices         []string              // per-RPC S2S auth_services override (from spec.rpc)
+	AuthActors           []string              // per-RPC auth_actors (from spec.rpc): delegate identities allowed to call on another principal's behalf, matched against the token's act claim
 	AuthDisabled         bool                  // per-RPC auth_disabled (from spec.rpc RPC_FLAG_PUBLIC_NO_AUTH / RPC_FLAG_SELF_AUTHENTICATES)
 	AuthAnyUser          bool                  // per-RPC auth_any_user (from spec.rpc RPC_FLAG_AUTH_ANY_USER)
 	TargetNamespaceField string                // per-RPC target_namespace_field (from spec.rpc); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
@@ -1019,6 +1020,9 @@ func (p *DescriptorParser) parseMethodOptions(method protoreflect.MethodDescript
 			}
 			if svcs := val.GetAuthServices(); len(svcs) > 0 {
 				md.AuthServices = svcs
+			}
+			if actors := val.GetAuthActors(); len(actors) > 0 {
+				md.AuthActors = actors
 			}
 			if f := val.GetTargetNamespaceField(); f != "" {
 				md.TargetNamespaceField = f
@@ -3000,6 +3004,7 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 				AuthDisabled:         method.AuthDisabled,
 				AuthAnyUser:          method.AuthAnyUser,
 				AuthServices:         method.AuthServices,
+				AuthActors:           method.AuthActors,
 				TargetNamespaceField: method.TargetNamespaceField,
 				Collection:           method.Collection,
 				MinGroupSize:         method.MinGroupSize,

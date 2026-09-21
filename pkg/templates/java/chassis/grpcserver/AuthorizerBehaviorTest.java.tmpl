@@ -119,6 +119,45 @@ public class AuthorizerBehaviorTest {
         String otherSvc = signedToken(key, tok -> tok.setSubType("service").setSubject("other-svc"));
         mustReject("service not in auth_services", () -> mismatched.authorizeWithToken(bearer(otherSvc), TEST_METHOD, null));
 
+        // -----------------------------------------------------------------
+        // auth_actors: the delegation gate
+        // -----------------------------------------------------------------
+
+        // A token with NO act claim is not a delegated call: the auth_actors
+        // gate must not touch it, even on a method that declares actors.
+        Authorizer noAct = authorizerWithKeys(jwkForKey(key));
+        noAct.setMethodAuth(TEST_METHOD, List.of("caller-svc"));
+        noAct.setMethodActors(TEST_METHOD, List.of("some-agent"));
+        mustPass("token with no act claim", () -> noAct.authorizeWithToken(bearer(valid), TEST_METHOD, null));
+
+        // A token whose act claim matches one of the method's auth_actors
+        // patterns is authorized (auth_services still applies underneath).
+        Authorizer actorOk = authorizerWithKeys(jwkForKey(key));
+        actorOk.setMethodAuth(TEST_METHOD, List.of("caller-svc"));
+        actorOk.setMethodActors(TEST_METHOD, List.of("mcp/workloads/agent-42"));
+        String delegated = signedToken(key, tok -> tok.setSubType("service").setSubject("caller-svc").setAct("mcp/workloads/agent-42"));
+        mustPass("act matching a declared auth_actors pattern", () -> actorOk.authorizeWithToken(bearer(delegated), TEST_METHOD, null));
+
+        // Fail closed: a method that declares NO auth_actors admits no
+        // delegated call at all, however well the caller authenticates.
+        Authorizer noActors = authorizerWithKeys(jwkForKey(key));
+        noActors.setMethodAuth(TEST_METHOD, List.of("caller-svc"));
+        mustReject("act with no auth_actors declared", () -> noActors.authorizeWithToken(bearer(delegated), TEST_METHOD, null));
+
+        // An act claim that matches none of the declared patterns is denied.
+        Authorizer actorMismatch = authorizerWithKeys(jwkForKey(key));
+        actorMismatch.setMethodAuth(TEST_METHOD, List.of("caller-svc"));
+        actorMismatch.setMethodActors(TEST_METHOD, List.of("allowed-agent"));
+        String otherActor = signedToken(key, tok -> tok.setSubType("service").setSubject("caller-svc").setAct("other-agent"));
+        mustReject("act not in auth_actors", () -> actorMismatch.authorizeWithToken(bearer(otherActor), TEST_METHOD, null));
+
+        // "*" is the match-any shorthand for auth_actors, as for auth_services.
+        Authorizer anyActor = authorizerWithKeys(jwkForKey(key));
+        anyActor.setMethodAuth(TEST_METHOD, List.of("caller-svc"));
+        anyActor.setMethodActors(TEST_METHOD, List.of("*"));
+        String wildcardActor = signedToken(key, tok -> tok.setSubType("service").setSubject("caller-svc").setAct("any/old/agent"));
+        mustPass("auth_actors \"*\" admits any actor", () -> anyActor.authorizeWithToken(bearer(wildcardActor), TEST_METHOD, null));
+
         // An expired token is rejected even with a valid signature.
         String expired;
         {

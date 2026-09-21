@@ -430,6 +430,11 @@ message RpcInfo {
   // Auth policy — inherited from service-level annotation.
   bool auth_disabled = 20;
   repeated string auth_services = 21;
+  // auth_actors: the (spec.rpc).auth_actors patterns this rpc declares — the
+  // delegate identities allowed to call it on another principal's behalf,
+  // matched against the token's `act` claim. Empty means no delegated call is
+  // admitted at all (see spec.proto's RpcAnnotation.auth_actors).
+  repeated string auth_actors = 55;
   bool auth_entitled_users = 22;
   bool auth_any_user = 23;
 

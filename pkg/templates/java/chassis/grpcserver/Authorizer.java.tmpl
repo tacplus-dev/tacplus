@@ -311,6 +311,7 @@ public class Authorizer {
     private final JwkCache jwkCache;
     private final JwkSource jwkSource;
     private final ConcurrentHashMap<String, List<Pattern>> methodAuthPatterns = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, List<Pattern>> methodActorPatterns = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> methodTargetNamespaceField = new ConcurrentHashMap<>();
 
     /**
@@ -367,6 +368,34 @@ public class Authorizer {
             }
         }
         methodAuthPatterns.put(methodKey, compiled);
+    }
+
+    /**
+     * Registers the delegate identities allowed to call a method on another
+     * principal's behalf — the rpc's (spec.rpc).auth_actors. Patterns are RE2
+     * regexes matched against the token's {@code act} claim, which kernel mints
+     * as the delegate's service path: the same shape, and the same whole-string
+     * matching, {@link #setMethodAuth} uses for auth_services. "*" is shorthand
+     * for "any actor".
+     *
+     * <p>Registering nothing is meaningful: authorize() rejects any token
+     * carrying {@code act} on a method with no entry here, so an rpc that
+     * declares no auth_actors admits no delegated call at all.
+     *
+     * <p>{@code methodKey} is the same service-qualified identifier
+     * {@link #setMethodAuth} takes, for the same reason.
+     */
+    public void setMethodActors(String methodKey, List<String> patterns) {
+        if (patterns == null || patterns.isEmpty()) return;
+        List<Pattern> compiled = new ArrayList<>();
+        for (String p : patterns) {
+            if ("*".equals(p)) {
+                compiled.add(Pattern.compile(".*"));
+            } else {
+                compiled.add(Pattern.compile(p));
+            }
+        }
+        methodActorPatterns.put(methodKey, compiled);
     }
 
     /**
@@ -451,6 +480,35 @@ public class Authorizer {
      */
     public TokenWrapper authorizeWithToken(String authHeader, String fullMethod, Object request) throws ProtoException {
         TokenWrapper tw = verifyBearer(authHeader);
+
+        // Delegation gate. A token carrying an act claim was minted for one
+        // principal to act on another's behalf, so the rpc must say which
+        // delegates it admits before either the S2S or the C2S path below gets
+        // to speak. A token with no act claim is not a delegated call and is
+        // authorized exactly as it always was. act is already the delegate's
+        // service path (kernel sets it from the delegate's name), so it is
+        // matched directly — tw.servicePath() would reject it, since a
+        // delegated user token is not a service token.
+        String act = tw.getAct();
+        if (act != null && !act.isEmpty()) {
+            String actorMethodName = extractMethodName(fullMethod);
+            List<Pattern> allowedActors = methodActorPatterns.get(fullMethod);
+            if (allowedActors == null) {
+                throw ProtoException.newErrPermissionDenied(null,
+                        "no auth_actors policy configured for actor \"" + act + "\" on \"" + actorMethodName + "\"");
+            }
+            boolean actorMatched = false;
+            for (Pattern p : allowedActors) {
+                if (p.matcher(act).matches()) {
+                    actorMatched = true;
+                    break;
+                }
+            }
+            if (!actorMatched) {
+                throw ProtoException.newErrPermissionDenied(null,
+                        "actor \"" + act + "\" not authorized for \"" + actorMethodName + "\"");
+            }
+        }
 
         // S2S path: service/workload tokens carry structured identity claims
         // (sub_type, sub, service_name). Authorization is receiver-side via

@@ -63,6 +63,7 @@ enum JwtPayloadType {
   JWT_PAYLOAD_TYPE_PARENT_JTI = 26 [(spec.json_return_value) = "parent_jti"];  // parent_jti - jti of the token this was minted from (OT/RT→AT→ST lineage chain)
   JWT_PAYLOAD_TYPE_CAPABILITY = 27 [(spec.json_return_value) = "capability"];  // capability - P2S access level ("RO"|"RW"); RW satisfies RO. Set on client (formerly "pipeline") P2S tokens.
   JWT_PAYLOAD_TYPE_ACT = 28 [(spec.json_return_value) = "act"];  // act - Actor: the delegate/agent identity presenting a delegated-user token (RFC 8693 "act", flattened to a single string - this cluster's grants are not chained). Set only by kernel's delegated-mint path (Piece B); absent on ordinary user and plain service tokens. Never copied from request claims.
+  JWT_PAYLOAD_TYPE_LINKED = 29 [(spec.json_return_value) = "linked"];  // linked - Additional namespaces this token's caller is linked to, beyond its own `namespace` claim (comma-delimited, same shape as profiles/entitlements). The generated namespace backstop accepts a row whose namespace matches `namespace` OR any entry here. Set by kernel; never copied from request claims.
 }
 
 // GrantType represents OAuth 2.0 grant types

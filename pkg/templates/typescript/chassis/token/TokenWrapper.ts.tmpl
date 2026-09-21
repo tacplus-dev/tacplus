@@ -339,6 +339,7 @@ export class TokenWrapper {
   static readonly CLAIM_ACT = 'act';
   static readonly CLAIM_PROFILES = 'profiles';
   static readonly CLAIM_ENTITLEMENTS = 'entitlements';
+  static readonly CLAIM_LINKED = 'linked';
   static readonly CLAIM_SERVICE_NAME = 'service_name';
   static readonly CLAIM_INSTANCE_ID = 'instance_id';
 
@@ -437,6 +438,16 @@ export class TokenWrapper {
   /** Sets entitlements as a comma-delimited string. */
   setEntitlements(entitlements: string[]): TokenWrapper {
     return this.setListField('entitlements', entitlements);
+  }
+
+  /** Returns the linked namespaces as a string array (comma-delimited in payload). */
+  getLinked(): string[] {
+    return this.getListField('linked');
+  }
+
+  /** Sets the linked namespaces as a comma-delimited string. */
+  setLinked(linked: string[]): TokenWrapper {
+    return this.setListField('linked', linked);
   }
 
   /** Sets a payload field as a comma-delimited string from an array. */

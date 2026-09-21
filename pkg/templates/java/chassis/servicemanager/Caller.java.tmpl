@@ -5,6 +5,8 @@
 
 package {{.ChassisBase}}.servicemanager;
 
+import java.util.List;
+
 /**
  * Caller represents the authenticated caller of a gRPC method.
  *
@@ -64,6 +66,18 @@ public final class Caller {
      */
     public String getSubject() {
         return tokenPayload == null ? "" : Auth.claimFromPayload(tokenPayload, "sub");
+    }
+
+    /**
+     * Returns the caller's linked claim — additional namespaces this token's
+     * caller is linked to, beyond {@link #getNamespace()}. Empty when the
+     * token carries no linked claim.
+     *
+     * <p>The generated namespace backstop accepts a row whose namespace
+     * matches {@link #getNamespace()} OR any entry here.
+     */
+    public List<String> getLinked() {
+        return tokenPayload == null ? List.of() : Auth.splitClaim(Auth.claimFromPayload(tokenPayload, "linked"));
     }
 
     /**

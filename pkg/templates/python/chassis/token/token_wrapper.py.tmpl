@@ -76,6 +76,7 @@ _PAYLOAD_AZP = "azp"
 _PAYLOAD_ACT = "act"
 _PAYLOAD_PROFILES = "profiles"
 _PAYLOAD_ENTITLEMENTS = "entitlements"
+_PAYLOAD_LINKED = "linked"
 _PAYLOAD_SERVICE_NAME = "service_name"
 _PAYLOAD_SERVICE_ENTITLEMENTS = JwtPayloadTypeHelper.to_string(token_pb2.JWT_PAYLOAD_TYPE_SERVICE_ENTITLEMENTS)
 
@@ -510,6 +511,14 @@ class TokenWrapper:
     def set_entitlements(self, entitlements: list) -> "TokenWrapper":
         """Set entitlements as a comma-delimited string."""
         return self.set_list_field(_PAYLOAD_ENTITLEMENTS, entitlements)
+
+    def get_linked(self) -> list:
+        """Return the linked namespaces as a list (comma-delimited in payload)."""
+        return self.get_list_field(_PAYLOAD_LINKED)
+
+    def set_linked(self, linked: list) -> "TokenWrapper":
+        """Set the linked namespaces as a comma-delimited string."""
+        return self.set_list_field(_PAYLOAD_LINKED, linked)
 
     def get_service_entitlements(self) -> Optional[dict]:
         """Return the service_entitlements claim as a dict (typed TokenEntitlements)."""

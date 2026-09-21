@@ -9,6 +9,7 @@ import "sys/key.proto";
 import "sys/spec.proto";
 import "sys/token.proto";
 import "sys/x509.proto";
+import "generated/entitlements.proto";
 import "google/protobuf/struct.proto";
 
 option java_outer_classname = "Tokenrequest";
@@ -161,6 +162,54 @@ message MintDelegatedTokenRequest {
 message MintDelegatedTokenResponse {
   // token is the minted short-lived access token. No refresh/offline
   // companion — re-mint per use from the same grant_id.
+  token.Token token = 1;
+}
+
+// MintDelegateOfflineTokenRequest is the input for runtime delegation (C2S).
+// The user's own identity is the caller's bearer token; only the delegate to
+// bind the Offline Token to, and an optional narrowing scope, are carried here.
+message MintDelegateOfflineTokenRequest {
+  // delegate_name is the Delegate.name of the agent this OT is minted for. It
+  // becomes the token's act claim. Paired with delegate_namespace: the name
+  // alone does not identify a delegate.
+  string delegate_name = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 512];
+  // delegate_namespace is the Delegate.tenant_namespace completing the
+  // (name, namespace) key. Empty means the /system delegate of that name.
+  string delegate_namespace = 2 [(spec.assert_max_size) = 512];
+  // scope narrows the delegation below the platform default. Unset means the
+  // platform default; every later mint intersects fresh OPA output with this,
+  // so it can only ever narrow, never widen.
+  entitlements.TokenEntitlements scope = 3;
+  string trace_id = 200;
+  bool noop = 201;
+}
+
+// MintDelegateOfflineTokenResponse returns ONLY the one-time code. The Offline
+// Token itself is withheld and never transits the user's client; the delegate
+// obtains it via RedeemDelegateOfflineToken.
+message MintDelegateOfflineTokenResponse {
+  // code is the short-lived, single-use redemption code the user hands to the
+  // delegate. Opaque; kernel holds the minted OT against it.
+  string code = 1 [(spec.assert_required) = true, (spec.assert_min_size) = 64, (spec.assert_max_size) = 128];
+  // expires_at_ms is when the code stops being redeemable, epoch milliseconds.
+  int64 expires_at_ms = 2 [(spec.assert_ge) = 0];
+}
+
+// RedeemDelegateOfflineTokenRequest is the input for a delegate redeeming a
+// one-time code (S2S). The delegate's own identity is verified from its S2S
+// bearer token, not carried here — kernel requires it to equal the withheld
+// token's act claim.
+message RedeemDelegateOfflineTokenRequest {
+  string code = 1 [(spec.assert_required) = true, (spec.assert_min_size) = 64, (spec.assert_max_size) = 128];
+  string trace_id = 200;
+  bool noop = 201;
+}
+
+// RedeemDelegateOfflineTokenResponse releases the Offline Token to the delegate.
+message RedeemDelegateOfflineTokenResponse {
+  // token is the delegate-bound OT (token_use = TOKEN_USE_OFFLINE, sub = user,
+  // act = delegate). The delegate mints AT/ST from it via the existing
+  // Mint.MintToken exchange; every derived token carries act.
   token.Token token = 1;
 }
 

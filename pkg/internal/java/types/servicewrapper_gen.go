@@ -1605,11 +1605,13 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		// filtering here (not after the page is assembled) is what keeps
 		// next_page_token and total_count describing the rows actually shown.
 		pagePrincipal := ""
+		pagePrincipalPrivate := false
 		pageSrcExpr := "__page.items"
 		if isC2S {
 			pagePrincipal = san.principalField(method.Resolved.PageItemType, servicePackage)
+			pagePrincipalPrivate = san.isRecordPrivate(method.Resolved.PageItemType, servicePackage)
 		}
-		pageFilter := javaPrincipalPageFilter(pagePrincipal, itemType, method.Name, "            ")
+		pageFilter := javaPrincipalPageFilter(pagePrincipal, itemType, method.Name, "            ", pagePrincipalPrivate)
 		if pageFilter != "" {
 			pageSrcExpr = "__ownedItems"
 		}
@@ -2300,9 +2302,14 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			// As on the predicate seam: the principal guard is a statement about
 			// a user, so it stays c2s-only.
 			if isC2S {
-				watchPrincipalGuard = san.javaPrincipalWatchGuard(method.FullOutputType, servicePackage, "                ")
+				var watchPrincipalPrivate bool
+				watchPrincipalGuard, watchPrincipalPrivate = san.javaPrincipalWatchGuard(method.FullOutputType, servicePackage, method.Name, "                ")
 				if watchPrincipalGuard != "" {
-					watchPre = javaPrincipalResolve(method.Name, "            ") + watchPre
+					if watchPrincipalPrivate {
+						watchPre = javaPrivatePrincipalResolve(method.Name, "            ") + watchPre
+					} else {
+						watchPre = javaPrincipalResolve(method.Name, "            ") + watchPre
+					}
 				}
 			}
 			// (spec.store_namespace) on a watched stream: same splice, and an

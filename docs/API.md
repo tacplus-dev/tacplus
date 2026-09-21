@@ -365,6 +365,14 @@ repeated, map or oneof field of the delta fails generation, as does a pinned
 row on any non-WATCH streaming shape (Tier-2/Tier-3 SNAPSHOT, plain server
 streams), which have no per-item hook.
 
+Which languages may host a pinned read is language-dependent: Java and Rust
+render the egress filter above on every record-bearing seam (unary, PAGE, and
+WATCH's per-item hook), so they may generate a service wrapper for a
+`store_namespace`/`store_principal`-annotated response. Go renders no such
+filter on any seam, so generation refuses outright for a Go c2s or
+record-plane-s2s method whose response carries a pinned row, rather than
+emitting a wrapper that under-enforces tenant isolation.
+
 ### PAGE Contract
 
 A PAGE proto method is an ordinary **unary** RPC. The request carries the filter

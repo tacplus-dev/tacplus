@@ -116,6 +116,18 @@ func TestCollectionValidate_UnannotatedUnaryRepeatedResponseFails(t *testing.T) 
 	assertHasError(t, errs, "Tier-1 collection reads must declare method_collection")
 }
 
+// A write's receipt can legitimately be shaped like a single-repeated-field
+// response (e.g. the ids a Delete removed) without being an undeclared
+// collection read; only a read verb should trigger the heuristic.
+func TestCollectionValidate_UnannotatedUnaryRepeatedResponseOnDeleteIsNotFlagged(t *testing.T) {
+	var errs []string
+	validateMissingCollectionAnnotation(c2sAuthSvc(), &MethodDescriptor{
+		Name:       "DeleteFoo",
+		OutputType: "ListFooResponse",
+	}, baseIndex(), &errs)
+	assertNoErrors(t, errs)
+}
+
 func TestValidateMethodCollectionsFailsUnannotatedUnaryRepeatedResponse(t *testing.T) {
 	dp := &DescriptorParser{descriptors: map[string]*FileDescriptor{
 		"catalog.proto": {

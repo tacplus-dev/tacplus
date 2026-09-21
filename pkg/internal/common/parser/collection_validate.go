@@ -6,6 +6,7 @@ import (
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/collection"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/verbs"
 )
 
 // ValidateMethodCollections enforces the method_collection rules at generation
@@ -88,6 +89,20 @@ func validateMissingCollectionAnnotation(svc *ServiceDescriptor, m *MethodDescri
 		return
 	}
 	if outMsg == nil {
+		return
+	}
+	// A single-repeated-field response is only a suspected undeclared collection
+	// READ. The same shape is ordinary for a write's receipt (e.g. a Delete
+	// returning the ids it removed) — classify the verb and skip those rather
+	// than flagging every write whose response happens to echo back a list.
+	// An unclassifiable name (Classify error) falls through to the existing
+	// behavior: better a false positive an author can annotate away than a
+	// silently unchecked write.
+	if c, err := verbs.Classify(verbs.MethodShape{
+		Name:            m.Name,
+		ClientStreaming: m.ClientStreaming,
+		ServerStreaming: m.ServerStreaming,
+	}); err == nil && c.Access != verbs.AccessRead {
 		return
 	}
 	repeated := repeatedFields(outMsg)

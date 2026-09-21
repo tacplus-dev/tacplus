@@ -119,6 +119,12 @@ function buildChannelCreds(cfg: Config, identity: IdentityManager): grpc.Channel
   return creds;
 }
 
+function configFetchTimeoutSeconds(cfg: Config): number {
+  const raw = (cfg as any).configFetchTimeoutSeconds ?? (cfg as any).config_fetch_timeout_seconds ?? 0;
+  const seconds = Number(raw);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : 30;
+}
+
 function shutdownTimeoutMs(cfg: Config): number {
   const raw = (cfg as any).shutdownTimeoutSeconds ?? (cfg as any).shutdown_timeout_seconds ?? 0;
   const seconds = Number(raw);
@@ -232,6 +238,9 @@ export class ServiceManager {
 {{- end}}
 {{- end}}
 {{- if .HasStates}}
+      // Bound the generated singleton fetch's validate-retry loop with the boot
+      // config, which already has its proto defaults applied.
+      this._stateClients.setConfigFetchTimeoutSeconds(configFetchTimeoutSeconds(cfg));
       this._stateClients.setChannelProvider(new ChannelProvider(stateStoreConn), () => this.getToken());
 {{- end}}
   }

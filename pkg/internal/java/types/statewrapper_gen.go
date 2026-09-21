@@ -29,6 +29,11 @@ type javaSingletonBoundary struct {
 	FieldPascal string // PascalCase: "Roster"
 	TypeName    string // Simple: "TeamRoster"
 	JavaType    string // Qualified: "Baseball.TeamRoster"
+	// ValidateRef is the generated validator, fully qualified:
+	// "com.example.types.baseball.Helpers.validateTeamRoster". Empty while the
+	// boundary is collected for an own-package type; filled in once the types
+	// package is known.
+	ValidateRef string
 	IsPersisted bool
 }
 
@@ -100,7 +105,10 @@ type javaStateWrapperData struct {
 	// eventbus_support proto (PublishResponse/SubscribeRequest), populated
 	// only when Topics is non-empty.
 	EventBusSupportOuterClass string
-	Imports                   []string
+	// ProtoExceptionFQN is the generated validator's exception type, imported
+	// only when the client has singleton boundaries (their fetch catches it).
+	ProtoExceptionFQN string
+	Imports           []string
 	Singletons                []javaSingletonBoundary
 	Collections               []javaCollectionBoundary
 	Topics                    []javaTopicBoundary
@@ -122,6 +130,9 @@ type javaGeneratedStateClient struct {
 	ClientFQN     string // fully qualified StateClient class
 	Group         string // "services"
 	Boundaries    []boundaries.BoundaryData
+	// HasSingletons is true when the client exposes a singleton boundary — only
+	// those carry the fetch validate-retry bound.
+	HasSingletons bool
 }
 
 // javaGroupStateClientsData is the template data for the group StateClients.
@@ -422,11 +433,20 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 				MaxEntries: boundaries.CollectionSafetyLimit(field),
 			})
 		} else {
+			// Cross-package types validate through their OWN package's Helpers;
+			// own-package ones are filled in below, once typesPackage is known.
+			validateRef := ""
+			if parts := strings.SplitN(field.Type, ".", 2); len(parts) == 2 && parts[0] != fileDesc.Package {
+				crossPkg := parts[0]
+				crossDir := resolveProtoDir(dp, crossPkg)
+				validateRef = fmt.Sprintf("%s.types.%s.%s.Helpers.validate%s", basePackage, crossDir, crossPkg, typeName)
+			}
 			singletons = append(singletons, javaSingletonBoundary{
 				FieldName:   strutil.ToLowerCamelCase(field.Name),
 				FieldPascal: strutil.ToPascalCase(field.Name),
 				TypeName:    typeName,
 				JavaType:    javaType,
+				ValidateRef: validateRef,
 				IsPersisted: field.Annotations["persistence"].BoolValue,
 			})
 		}
@@ -468,6 +488,12 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 	typesPackage := typesImportPath[:strings.LastIndex(typesImportPath, ".")]
 	grpcServiceFQN := typesPackage + "." + stateServiceName + "Grpc"
 
+	for i := range singletons {
+		if singletons[i].ValidateRef == "" {
+			singletons[i].ValidateRef = typesPackage + ".Helpers.validate" + singletons[i].TypeName
+		}
+	}
+
 	data := javaStateWrapperData{
 		Header:                    header.GeneratedHeader(consts.LangJava, svc.ProtoFile),
 		Package:                   javaPackage,
@@ -477,6 +503,7 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 		GrpcServiceFQN:            grpcServiceFQN,
 		TraceFQN:                  basePackage + ".types.sys.trace.Trace",
 		IdentityManagerFQN:        basePackage + ".chassis.service_im.IdentityManager",
+		ProtoExceptionFQN:         basePackage + ".types.sys.errors.ProtoException",
 		EventBusSupportOuterClass: eventBusSupportOuterClass,
 		Imports:                   imports,
 		Singletons:                singletons,
@@ -509,6 +536,7 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 		ClientFQN:     clientFQN,
 		Group:         javaStateTopGroup(svc.ParentDir),
 		Boundaries:    bds,
+		HasSingletons: len(singletons) > 0,
 	}, nil
 }
 

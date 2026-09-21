@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, {{if .Singletons}}AtomicU64, {{end}}Ordering},
     Arc,
     RwLock,
 };
@@ -94,6 +94,9 @@ struct {{.StateRootName}}ClientInner {
     token_provider: Option<TokenProvider>,
     closed: AtomicBool,
     close_notify: tokio::sync::Notify,
+{{- if .Singletons}}
+    config_fetch_timeout_secs: AtomicU64,
+{{- end}}
 {{- if $hasWatches}}
     watch_statuses: RwLock<HashMap<String, WatchStatus>>,
     watch_status_listener: RwLock<Option<WatchStatusListener>>,
@@ -139,6 +142,9 @@ impl {{.StateRootName}}Client {
             token_provider,
             closed: AtomicBool::new(false),
             close_notify: tokio::sync::Notify::new(),
+{{- if .Singletons}}
+            config_fetch_timeout_secs: AtomicU64::new(30),
+{{- end}}
 {{- if $hasWatches}}
             watch_statuses: RwLock::new(HashMap::new()),
             watch_status_listener: RwLock::new(None),
@@ -178,7 +184,15 @@ impl {{.StateRootName}}Client {
     pub fn close(&self) {
         self.inner.close();
     }
-
+{{if .Singletons}}
+    /// Sets the bound on a singleton fetch's validate-retry loop
+    /// (sys.grpcconfig.Config.config_fetch_timeout_seconds).
+    pub fn set_config_fetch_timeout_secs(&self, secs: u64) {
+        self.inner
+            .config_fetch_timeout_secs
+            .store(if secs == 0 { 30 } else { secs }, Ordering::SeqCst);
+    }
+{{end}}
 {{- if $hasWatches}}
     pub fn set_watch_status_listener(&self, listener: Option<WatchStatusListener>) {
         *self.inner.watch_status_listener.write().unwrap() = listener;
@@ -456,7 +470,30 @@ impl {{.StateRootName}}ClientInner {
             _ = tokio::time::sleep(Self::watch_retry_delay(attempt)) => !self.is_closed(),
         }
     }
+{{if .Singletons}}
+    /// Bounds a singleton fetch's validate-retry loop.
+    fn config_fetch_timeout(&self) -> std::time::Duration {
+        let secs = self.config_fetch_timeout_secs.load(Ordering::SeqCst);
+        std::time::Duration::from_secs(if secs == 0 { 30 } else { secs })
+    }
 
+    /// Waits the watch-restart backoff for `attempt`, clamped to what is left of
+    /// the fetch budget. Returns false when the budget is spent or the client closed.
+    async fn sleep_before_fetch_retry(&self, attempt: u32, deadline: tokio::time::Instant) -> bool {
+        if self.is_closed() {
+            return false;
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        let delay = Self::watch_retry_delay(attempt).min(remaining);
+        tokio::select! {
+            _ = self.close_notify.notified() => false,
+            _ = tokio::time::sleep(delay) => !self.is_closed(),
+        }
+    }
+{{end}}
 {{- range .Singletons}}
     /// Watch loop for {{.TypeName}} — reconnects on stream errors.
     async fn watch_{{.FieldName}}_loop(&self) {
@@ -896,17 +933,42 @@ impl {{$.StateRootName}}{{.FieldPascal}}Accessor {
     }
 
     /// Fetches the authoritative {{.TypeName}} from the state service (Get RPC).
+    ///
+    /// A singleton Get can race the state authority's own convergence and return
+    /// a value that has not been fully seeded yet — the wire carries no "found"
+    /// bit to tell that apart. Retries with the watch-restart backoff for as long
+    /// as the fetched value fails its own generated validation, bounded by
+    /// config_fetch_timeout_seconds, and returns the validation failure once that
+    /// budget is spent rather than handing back a value it knows is invalid.
     pub async fn fetch(&self) -> Result<{{.TypeName}}, tonic::Status> {
-        let req = self.inner.authorized_request(Default::default()).await?;
-        let mut stub = {{$.StateServiceClientType}}::new(self.inner.channel.clone());
-        let response = stub.get_{{.FieldName}}(req).await?;
-        let value = response.into_inner();
-        // Update the local cache with the fetched value.
-        {
-            let mut state = self.inner.state.write().unwrap();
-            state.{{.FieldName}}_cache = Some(value.clone());
+        let timeout = self.inner.config_fetch_timeout();
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut attempt = 0u32;
+        loop {
+            let req = self.inner.authorized_request(Default::default()).await?;
+            let mut stub = {{$.StateServiceClientType}}::new(self.inner.channel.clone());
+            let response = stub.get_{{.FieldName}}(req).await?;
+            let value = response.into_inner();
+            match value.validate() {
+                Ok(()) => {
+                    // Update the local cache with the fetched value.
+                    {
+                        let mut state = self.inner.state.write().unwrap();
+                        state.{{.FieldName}}_cache = Some(value.clone());
+                    }
+                    return Ok(value);
+                }
+                Err(e) => {
+                    if !self.inner.sleep_before_fetch_retry(attempt, deadline).await {
+                        return Err(tonic::Status::failed_precondition(format!(
+                            "get_{{.FieldName}}: state value still failed validation after {:?}: {}",
+                            timeout, e
+                        )));
+                    }
+                    attempt += 1;
+                }
+            }
         }
-        Ok(value)
     }
 
     /// Registers a callback that fires when {{.TypeName}} is updated via Watch.

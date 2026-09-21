@@ -27,6 +27,10 @@ import java.util.logging.Logger;
 {{- end}}
 import io.grpc.CallCredentials;
 import io.grpc.Channel;
+{{- if .Singletons}}
+import io.grpc.Status;
+import {{.ProtoExceptionFQN}};
+{{- end}}
 {{- if $hasWatches}}
 import io.grpc.stub.ClientCallStreamObserver;
 import io.grpc.stub.ClientResponseObserver;
@@ -52,6 +56,9 @@ public class StateClient implements AutoCloseable {
 
 {{- end}}
     private final Object cacheLock = new Object();
+{{- if .Singletons}}
+    private volatile long configFetchTimeoutSeconds = 30L;
+{{- end}}
     private {{.StateServiceName}}Grpc.{{.StateServiceName}}BlockingStub stateStub;
 {{- if $needsAsyncStub}}
     private {{.StateServiceName}}Grpc.{{.StateServiceName}}Stub stateAsyncStub;
@@ -266,7 +273,35 @@ public class StateClient implements AutoCloseable {
         }
         return delay;
     }
+{{if .Singletons}}
+    /**
+     * Sets the bound on a singleton fetch's validate-retry loop
+     * (sys.grpcconfig.Config.config_fetch_timeout_seconds).
+     */
+    public void setConfigFetchTimeoutSeconds(long seconds) {
+        this.configFetchTimeoutSeconds = seconds > 0 ? seconds : 30L;
+    }
 
+    /**
+     * Waits the watch-restart backoff for {@code attempt}, clamped to what is left
+     * of the fetch budget. Returns false when the budget is spent or the wait was
+     * interrupted.
+     */
+    private boolean sleepBeforeFetchRetry(int attempt, long deadlineNanos) {
+        long remainingMillis = (deadlineNanos - System.nanoTime()) / 1_000_000L;
+        if (remainingMillis <= 0) {
+            return false;
+        }
+        long delay = Math.min(watchRetryDelayMillis(attempt), remainingMillis);
+        try {
+            Thread.sleep(delay);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        return true;
+    }
+{{end}}
     private void scheduleWatchRestart(String watchName, int attempt, Runnable startFn) {
         if (closed.get()) {
             return;
@@ -344,6 +379,44 @@ public class StateClient implements AutoCloseable {
     public {{.JavaType}} get{{.FieldPascal}}() {
         synchronized (cacheLock) {
             return this.{{.FieldName}};
+        }
+    }
+
+    /**
+     * One-shot Get RPC: fetches the authoritative {{.TypeName}} from the state service.
+     * Requires setChannel() to have been called.
+     *
+     * <p>A singleton Get can race the state authority's own convergence and return a
+     * value that has not been fully seeded yet — the wire carries no "found" bit to
+     * tell that apart. Retries with the watch-restart backoff for as long as the
+     * fetched value fails its own generated validation, bounded by
+     * config_fetch_timeout_seconds, and throws once that budget is spent rather than
+     * returning a value it knows is invalid.</p>
+     */
+    public {{.JavaType}} fetch{{.FieldPascal}}() {
+        if (stateStub == null) {
+            throw new IllegalStateException("stateStub not initialized - call setChannel() first");
+        }
+        long timeoutSeconds = this.configFetchTimeoutSeconds;
+        long deadlineNanos = System.nanoTime() + timeoutSeconds * 1_000_000_000L;
+        for (int attempt = 0; ; attempt++) {
+            {{.JavaType}} value = stateStub.get{{.FieldPascal}}(Trace.TraceRequest.getDefaultInstance());
+            try {
+                {{.ValidateRef}}(value);
+            } catch (ProtoException cause) {
+                if (!sleepBeforeFetchRetry(attempt, deadlineNanos)) {
+                    throw Status.FAILED_PRECONDITION
+                            .withDescription("Get{{.FieldPascal}}: state value still failed validation after "
+                                    + timeoutSeconds + "s: " + cause.getMessage())
+                            .withCause(cause)
+                            .asRuntimeException();
+                }
+                continue;
+            }
+            synchronized (cacheLock) {
+                this.{{.FieldName}} = value;
+            }
+            return value;
         }
     }
 
@@ -958,6 +1031,14 @@ public class StateClient implements AutoCloseable {
          */
         public {{.JavaType}} get() {
             return parent.get{{.FieldPascal}}();
+        }
+
+        /**
+         * Fetches the authoritative {{.TypeName}} from the state service, retrying
+         * while the fetched value fails its own generated validation.
+         */
+        public {{.JavaType}} fetch() {
+            return parent.fetch{{.FieldPascal}}();
         }
 
         /**

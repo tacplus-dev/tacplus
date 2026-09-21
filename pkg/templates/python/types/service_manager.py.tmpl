@@ -81,6 +81,9 @@ class ServiceManager:
         self._tasks: set[asyncio.Task] = set()
     {{- if .HasStates}}
         self._state_clients = StateClients()
+        # Bound the generated singleton fetch's validate-retry loop with the boot
+        # config, which already has its proto defaults applied.
+        self._state_clients.set_config_fetch_timeout_seconds(config.config_fetch_timeout_seconds)
         self._state_clients.set_channel(bootstrap.conn(), self.token_provider())
 {{- end}}
 {{- if .HasGrpcS2SClients}}

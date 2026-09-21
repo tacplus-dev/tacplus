@@ -514,6 +514,17 @@ func generateRustRegistry(config *tactype.Config, clients []rustGeneratedStateCl
 	return nil
 }
 
+// rustClientHasSingletons reports whether a generated state client exposes any
+// singleton boundary — only those carry the fetch validate-retry bound.
+func rustClientHasSingletons(c rustGeneratedStateClient) bool {
+	for _, b := range c.Boundaries {
+		if b.GraphType == "singleton" {
+			return true
+		}
+	}
+	return false
+}
+
 // generateRustStateClientAggregators creates group-level and root-level StateClients
 // aggregator structs, mirroring how generateRustGrpcClientAggregators works for GrpcClients.
 // Group level: sm/internal/state/{group}/states.rs — holds one field per service
@@ -585,6 +596,18 @@ func generateRustStateClientAggregators(config *tactype.Config, clients []rustGe
 		}
 		buf.WriteString("    }\n\n")
 
+		buf.WriteString("    /// Sets the singleton-fetch validate-retry bound on every state client in this group.\n")
+		buf.WriteString("    #[allow(unused_variables)]\n")
+		buf.WriteString("    pub fn set_config_fetch_timeout_secs(&self, secs: u64) {\n")
+		for _, c := range groupClients {
+			if !rustClientHasSingletons(c) {
+				continue
+			}
+			fieldName := strutil.ToSnakeCase(c.StateRootName)
+			buf.WriteString(fmt.Sprintf("        self.%s.set_config_fetch_timeout_secs(secs);\n", fieldName))
+		}
+		buf.WriteString("    }\n\n")
+
 		// Accessor methods
 		for _, c := range groupClients {
 			fieldName := strutil.ToSnakeCase(c.StateRootName)
@@ -641,6 +664,13 @@ func generateRustStateClientAggregators(config *tactype.Config, clients []rustGe
 	buf.WriteString("    pub fn close(&self) {\n")
 	for _, group := range groupOrder {
 		buf.WriteString(fmt.Sprintf("        self.%s.close();\n", group))
+	}
+	buf.WriteString("    }\n\n")
+
+	buf.WriteString("    /// Sets the singleton-fetch validate-retry bound on every state client group.\n")
+	buf.WriteString("    pub fn set_config_fetch_timeout_secs(&self, secs: u64) {\n")
+	for _, group := range groupOrder {
+		buf.WriteString(fmt.Sprintf("        self.%s.set_config_fetch_timeout_secs(secs);\n", group))
 	}
 	buf.WriteString("    }\n\n")
 

@@ -32,7 +32,6 @@ import {{.WrapperPackage}}.{{.ServerClassName}};
 {{- range .GrpcServices}}
 {{- if .HasConfigState}}
 import {{.ConfigImport}};
-import {{$.TypesBase}}.services.{{.ConfigPackageName}}.{{.ConfigStateStub}};
 {{- end}}
 {{- end}}
 {{- end}}
@@ -282,6 +281,9 @@ public class ServiceManager implements AutoCloseable {
 {{- end}}
 {{- if .HasStates}}
         this.stateClients = new StateClients();
+        // Bound the generated singleton fetch's validate-retry loop with the boot
+        // config, which already has its proto defaults applied.
+        this.stateClients.setConfigFetchTimeoutSeconds(config.getConfigFetchTimeoutSeconds());
         this.stateClients.setChannel(stateStoreConn.conn(), identity.callCredentialsForAudience("{{.StateStoreServiceID}}"));
 {{- end}}
 {{- if .HasGrpcS2SClients}}
@@ -797,10 +799,11 @@ public class ServiceManager implements AutoCloseable {
         // state store's per-(peer, method) polling rate limit at startup.
 {{- range .ConfigFetches}}
         {
-            var configStub = {{.ConfigStateStub}}.newBlockingStub(stateStoreConn.conn())
-                    .withCallCredentials(identity.callCredentials());
-            {{.ConfigType}} typedConfig = configStub.getConfig(
-                    Trace.TraceRequest.getDefaultInstance());
+            var configAccessor = stateClients.{{.ConfigStateGroupAccessor}}().{{.ConfigStateAccessor}}().config();
+            // The generated fetch retries while the value fails its own validation:
+            // a singleton Get can race the state authority's own convergence and
+            // hand back a config that has not been fully seeded yet.
+            {{.ConfigType}} typedConfig = configAccessor.fetch();
             typedConfig = {{$.TypesBase}}.services.{{.ConfigPackageName}}.Helpers.configDefaults(typedConfig).build();
             {{.ConfigType}} envCfg = {{$.TypesBase}}.services.{{.ConfigPackageName}}.Helpers.configFromEnvVar(
                     System.getenv()).build();
@@ -808,7 +811,6 @@ public class ServiceManager implements AutoCloseable {
 {{- range .HandleConfigNames}}
             handler.{{.}}(typedConfig);
 {{- end}}
-            var configAccessor = stateClients.{{.ConfigStateGroupAccessor}}().{{.ConfigStateAccessor}}().config();
             configAccessor.onChange(nextConfig -> {
                 {{.ConfigType}} nextTypedConfig;
                 try {
@@ -1199,7 +1201,7 @@ public class ServiceManager implements AutoCloseable {
                 while (!Thread.currentThread().isInterrupted()) {
                     try {
                         subscriber.subscribe((event, meta) -> {
-{{- if .StoreEpochFieldPascal}}
+{{- if and .StoreEpochFieldPascal (not .RoutingOnly)}}
                             // (spec.store_epoch) {{.StoreEpochField}}: a record has no write RPC —
                             // it reaches this store on this subscription — so this dispatch is the
                             // write path and the store's clock is stamped here, over whatever

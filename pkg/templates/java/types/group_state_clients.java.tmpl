@@ -21,6 +21,17 @@ public class StateClients implements AutoCloseable {
 {{- end}}
     }
 
+    /**
+     * Sets the singleton-fetch validate-retry bound on every state client in this group.
+     */
+    public void setConfigFetchTimeoutSeconds(long seconds) {
+{{- range .Clients}}
+{{- if .HasSingletons}}
+        this.{{.FieldName}}.setConfigFetchTimeoutSeconds(seconds);
+{{- end}}
+{{- end}}
+    }
+
     @Override
     public void close() {
 {{- range .Clients}}

@@ -622,6 +622,9 @@ impl ServiceManager {
             }
         };
         let state_clients = StateClients::new(conn, Some(tp.clone())).await?;
+        // Bound the generated singleton fetch's validate-retry loop with the
+        // boot config, which already has its proto defaults applied above.
+        state_clients.set_config_fetch_timeout_secs(cfg.config_fetch_timeout_seconds as u64);
 {{- end}}
 	{{- if .HasS2SClients}}
 	        // Create token provider factory for audience-scoped S2S auth.

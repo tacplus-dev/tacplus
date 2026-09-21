@@ -93,6 +93,17 @@ type tsGeneratedStateClient struct {
 	Boundaries    []boundaries.BoundaryData
 }
 
+// tsClientHasSingletons reports whether a generated state client exposes any
+// singleton boundary — only those carry the fetch validate-retry bound.
+func tsClientHasSingletons(c tsGeneratedStateClient) bool {
+	for _, b := range c.Boundaries {
+		if b.GraphType == "singleton" {
+			return true
+		}
+	}
+	return false
+}
+
 // generateStateClientWrappers generates typed state client wrappers for TypeScript.
 // It scans inputDir independently for service_state annotations rather than relying
 // on detectServicesForWrapper, which skips proto files without gRPC service definitions.
@@ -512,6 +523,17 @@ func generateTSStateClientAggregators(config *tactype.Config, clients []tsGenera
 		}
 		buf.WriteString("  }\n\n")
 
+		buf.WriteString("  /** Sets the singleton-fetch validate-retry bound on every state client in this group. */\n")
+		buf.WriteString("  setConfigFetchTimeoutSeconds(seconds: number): void {\n")
+		for _, c := range groupClients {
+			if !tsClientHasSingletons(c) {
+				continue
+			}
+			fieldName := strutil.ToLowerCamelCase(c.StateRootName)
+			buf.WriteString(fmt.Sprintf("    this._%s.setConfigFetchTimeoutSeconds(seconds);\n", fieldName))
+		}
+		buf.WriteString("  }\n\n")
+
 		buf.WriteString("  close(): void {\n")
 		for _, c := range groupClients {
 			fieldName := strutil.ToLowerCamelCase(c.StateRootName)
@@ -567,6 +589,13 @@ func generateTSStateClientAggregators(config *tactype.Config, clients []tsGenera
 	buf.WriteString("  setChannelProvider(channelProvider: ChannelProvider, tokenProvider?: () => Promise<string>): void {\n")
 	for _, group := range groupOrder {
 		buf.WriteString(fmt.Sprintf("    this._%s.setChannelProvider(channelProvider, tokenProvider);\n", group))
+	}
+	buf.WriteString("  }\n\n")
+
+	buf.WriteString("  /** Sets the singleton-fetch validate-retry bound on every state client group. */\n")
+	buf.WriteString("  setConfigFetchTimeoutSeconds(seconds: number): void {\n")
+	for _, group := range groupOrder {
+		buf.WriteString(fmt.Sprintf("    this._%s.setConfigFetchTimeoutSeconds(seconds);\n", group))
 	}
 	buf.WriteString("  }\n\n")
 

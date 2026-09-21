@@ -190,6 +190,19 @@ message Config {
   // Default: 8444. Set to 0 to disable the plaintext health probe listener.
   int32 health_probe_port = 20 [(spec.default_int) = 8444];
 
+  // ============================================================================
+  // State Client — Startup Config Read
+  // ============================================================================
+
+  // config_fetch_timeout_seconds bounds the generated state-singleton startup
+  // fetch. A singleton Get can race the state authority's own convergence and
+  // return a value that has not been fully seeded yet; the generated fetch()
+  // retries with the watch-restart backoff for as long as the fetched value
+  // fails its own generated validate<T>, and fails loudly once this budget is
+  // spent rather than handing the caller a value it already knows is invalid.
+  // Must be positive. Default: 30 seconds.
+  int64 config_fetch_timeout_seconds = 21 [(spec.assert_duration) = DURATION_TYPE_POSITIVE, (spec.default_int) = 30];
+
 }
 
 // ============================================================================

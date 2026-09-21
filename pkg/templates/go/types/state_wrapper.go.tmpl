@@ -19,6 +19,9 @@ package {{.PackageName}}
 
 import (
 	"context"
+{{- if $hasSingletons}}
+	"fmt"
+{{- end}}
 {{- if or $hasSingletons $hasCollections $hasStateImports}}
 	"math/rand"
 {{- end}}
@@ -300,6 +303,40 @@ func (c *{{.ClientTypeName}}) sleepBeforeWatchRetry(attempt int) bool {
 	timer := time.NewTimer(c.watchRetryDelay(attempt))
 	defer timer.Stop()
 	select {
+	case <-c.ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+{{end}}
+{{if .Singletons}}
+// configFetchTimeout bounds a singleton Fetch's validate-retry loop.
+func (c *{{.ClientTypeName}}) configFetchTimeout() time.Duration {
+	secs := c.sc.Config().GetConfigFetchTimeoutSeconds()
+	if secs <= 0 {
+		secs = 30
+	}
+	return time.Duration(secs) * time.Second
+}
+
+// sleepBeforeFetchRetry waits the watch-restart backoff for attempt, clamped to
+// what is left of the fetch budget. It reports false when the budget is spent
+// or either context ends.
+func (c *{{.ClientTypeName}}) sleepBeforeFetchRetry(ctx context.Context, attempt int, deadline time.Time) bool {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return false
+	}
+	delay := c.watchRetryDelay(attempt)
+	if delay > remaining {
+		delay = remaining
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
 	case <-c.ctx.Done():
 		return false
 	case <-timer.C:
@@ -608,8 +645,29 @@ func (w *{{$s.FieldName}}Wrapper) Get() *{{TypeRef $s.GoType $s.IsCrossPackage}}
 	return proto.Clone(w.parent.cached{{$s.FieldName}}).(*{{TypeRef $s.GoType $s.IsCrossPackage}})
 }
 // Fetch retrieves the authoritative {{$s.TypeName}} from the state service.
+//
+// A singleton Get can race the state authority's own convergence and return a
+// value that has not been fully seeded yet — the wire carries no "found" bit to
+// tell that apart. Fetch retries with the watch-restart backoff for as long as
+// the fetched value fails its own generated validation, bounded by
+// config_fetch_timeout_seconds, and returns the validation error once that
+// budget is spent rather than handing back a value it knows is invalid.
 func (w *{{$s.FieldName}}Wrapper) Fetch(ctx context.Context) (*{{TypeRef $s.GoType $s.IsCrossPackage}}, error) {
-	return w.parent.stateStub.Get{{$s.FieldName}}(ctx, &trace_pb.TraceRequest{})
+	timeout := w.parent.configFetchTimeout()
+	deadline := time.Now().Add(timeout)
+	for attempt := 0; ; attempt++ {
+		value, err := w.parent.stateStub.Get{{$s.FieldName}}(ctx, &trace_pb.TraceRequest{})
+		if err != nil {
+			return nil, err
+		}
+		validateErr := {{ValidateRef $s.GoType $s.IsCrossPackage}}(value)
+		if validateErr == nil {
+			return value, nil
+		}
+		if !w.parent.sleepBeforeFetchRetry(ctx, attempt, deadline) {
+			return nil, fmt.Errorf("Get{{$s.FieldName}}: state value still failed validation after %s: %w", timeout, validateErr)
+		}
+	}
 }
 {{if not $.ReadOnly}}
 // Set updates the {{$s.TypeName}} via the state service. Returns the previous value.

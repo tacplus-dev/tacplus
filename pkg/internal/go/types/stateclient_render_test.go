@@ -25,11 +25,10 @@ func TestStateWrapperHasNoLockMachineryRender(t *testing.T) {
 			GoType:    "Config",
 		}},
 	})
-	if strings.Contains(readOnly, "\"fmt\"") {
-		t.Fatalf("read-only state wrapper imported fmt without locked accessors:\n%s", readOnly)
-	}
-	if strings.Contains(readOnly, "fmt.") {
-		t.Fatalf("read-only state wrapper unexpectedly rendered fmt usage:\n%s", readOnly)
+	// fmt has exactly one user left: the singleton Fetch's validate-retry timeout
+	// error. Any second use would mean the removed locked accessors came back.
+	if got := strings.Count(readOnly, "fmt."); got != 1 {
+		t.Fatalf("read-only state wrapper has %d fmt uses, want exactly 1 (the singleton Fetch timeout error):\n%s", got, readOnly)
 	}
 	for _, expected := range []string{
 		"type WatchStatus struct",
@@ -66,8 +65,26 @@ func TestStateWrapperHasNoLockMachineryRender(t *testing.T) {
 			t.Fatalf("writable state wrapper still contains removed lock machinery %q:\n%s", banned, writable)
 		}
 	}
-	if strings.Contains(writable, "\"fmt\"") {
-		t.Fatalf("writable state wrapper imported fmt (only the removed locked accessors needed it):\n%s", writable)
+	if got := strings.Count(writable, "fmt."); got != 1 {
+		t.Fatalf("writable state wrapper has %d fmt uses, want exactly 1 (the singleton Fetch timeout error):\n%s", got, writable)
+	}
+
+	// The singleton Fetch retries while the fetched value fails its own generated
+	// validation, bounded by config_fetch_timeout_seconds — see
+	// decisions/state-singleton-startup-retry-2026-09-20.md.
+	for _, expected := range []string{
+		"func (c *StateClient) configFetchTimeout() time.Duration {",
+		"c.sc.Config().GetConfigFetchTimeoutSeconds()",
+		"func (c *StateClient) sleepBeforeFetchRetry(ctx context.Context, attempt int, deadline time.Time) bool {",
+		"delay := c.watchRetryDelay(attempt)",
+		"timeout := w.parent.configFetchTimeout()",
+		"validateErr := types.ValidateConfig(value)",
+		"if !w.parent.sleepBeforeFetchRetry(ctx, attempt, deadline) {",
+		"return nil, fmt.Errorf(\"GetConfig: state value still failed validation after %s: %w\", timeout, validateErr)",
+	} {
+		if !strings.Contains(writable, expected) {
+			t.Fatalf("writable state wrapper missing singleton fetch retry surface %q:\n%s", expected, writable)
+		}
 	}
 }
 

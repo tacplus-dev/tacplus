@@ -64,6 +64,45 @@ func TestPythonStateWrapperWatchLifecycleRenders(t *testing.T) {
 	}
 }
 
+// The singleton fetch retries while the fetched value fails its own generated
+// validation, bounded by config_fetch_timeout_seconds — see
+// decisions/state-singleton-startup-retry-2026-09-20.md.
+func TestPythonStateWrapperSingletonFetchRetriesOnValidationFailure(t *testing.T) {
+	rendered := renderPyStateWrapperForTest(t, pyStateWrapperData{
+		Header:               "# generated for test",
+		PackageName:          "demo",
+		PbImportFrom:         "......types.services.demo",
+		TraceImportFrom:      "......types.sys.trace",
+		ExceptionsImportFrom: pyExceptionsImportFrom("......"),
+		StateRootName:        "DemoState",
+		StateServiceName:     "DemoStateService",
+		Singletons: []pySingletonBoundary{{
+			FieldName:   "config",
+			FieldPascal: "Config",
+			TypeName:    "Config",
+			ValidateRef: "pb_helpers.validate_config",
+		}},
+	})
+
+	for _, expected := range []string{
+		"from ......types.services.demo import helpers as pb_helpers",
+		"self._config_fetch_timeout_seconds = 30",
+		"def set_config_fetch_timeout_seconds(self, seconds: int) -> None:",
+		"async def _sleep_before_fetch_retry(self, attempt: int, deadline: float) -> bool:",
+		"remaining = deadline - time.monotonic()",
+		"await asyncio.sleep(min(self._watch_retry_delay(attempt), remaining))",
+		"timeout = self._config_fetch_timeout_seconds",
+		"deadline = time.monotonic() + timeout",
+		"pb_helpers.validate_config(value)",
+		"if not await self._sleep_before_fetch_retry(attempt, deadline):",
+		"CODE_FAILED_PRECONDITION,",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Python state wrapper missing singleton fetch retry surface %q:\n%s", expected, rendered)
+		}
+	}
+}
+
 func TestPythonStateClientAggregatorsUseWrapperClientClassNames(t *testing.T) {
 	outputDir := t.TempDir()
 	err := generatePyStateClientAggregators(&tactype.Config{
@@ -89,6 +128,7 @@ func TestPythonStateClientAggregatorsUseWrapperClientClassNames(t *testing.T) {
 		"from .demo_config.state import DemoConfigStateClient",
 		"self._demo_config_state = DemoConfigStateClient()",
 		"self._demo_config_state.set_channel(channel, token_provider)",
+		"def set_config_fetch_timeout_seconds(self, seconds: int) -> None:",
 		"await self._demo_config_state.close()",
 		"def demo_config_state(self) -> DemoConfigStateClient:",
 	} {

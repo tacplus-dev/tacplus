@@ -160,12 +160,53 @@ func TestTypeScriptServiceManagerWiresStateClients(t *testing.T) {
 
 	for _, expected := range []string{
 		"private readonly _stateClients = new StateClients();",
+		"this._stateClients.setConfigFetchTimeoutSeconds(configFetchTimeoutSeconds(cfg));",
 		"this._stateClients.setChannelProvider(new ChannelProvider(stateStoreConn), () => this.getToken());",
 		"this._stateClients.close();",
 		"stateClients(): StateClients { return this._stateClients; }",
 	} {
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("rendered TypeScript service manager missing %q:\n%s", expected, rendered)
+		}
+	}
+}
+
+// The singleton fetch retries while the fetched value fails its own generated
+// validation, bounded by config_fetch_timeout_seconds — see
+// decisions/state-singleton-startup-retry-2026-09-20.md.
+func TestTypeScriptStateWrapperSingletonFetchRetriesOnValidationFailure(t *testing.T) {
+	rendered := renderTSStateWrapperForTest(t, tsStateWrapperData{
+		Header:               "// generated for test",
+		TypesImport:          "../../types/services/demo/index.js",
+		TraceImport:          "../../../types/sys/trace/index.js",
+		ServiceManagerImport: "../../../chassis/servicemanager/index.js",
+		ProtoPackage:         "demo",
+		StateRootName:        "DemoState",
+		StateServiceName:     "DemoStateService",
+		Singletons: []tsSingletonBoundary{{
+			FieldName:   "config",
+			FieldPascal: "Config",
+			TypeName:    "Config",
+			TypePrefix:  "types",
+		}},
+	})
+
+	for _, expected := range []string{
+		"function failedPreconditionError(message: string): Error & { code?: number } {",
+		"err.code = grpc.status.FAILED_PRECONDITION;",
+		"private _configFetchTimeoutSeconds = 30;",
+		"private watchRetryDelayMillis(attempt: number): number {",
+		"setConfigFetchTimeoutSeconds(seconds: number): void {",
+		"private async sleepBeforeFetchRetry(attempt: number, deadlineMillis: number): Promise<boolean> {",
+		"const delay = Math.min(this.watchRetryDelayMillis(attempt), remaining);",
+		"const timeoutSeconds = this._configFetchTimeoutSeconds;",
+		"const deadlineMillis = Date.now() + timeoutSeconds * 1000;",
+		"types.validateConfig(value);",
+		"if (!(await this.sleepBeforeFetchRetry(attempt, deadlineMillis))) {",
+		"throw failedPreconditionError(",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered TypeScript state wrapper missing singleton fetch retry surface %q:\n%s", expected, rendered)
 		}
 	}
 }

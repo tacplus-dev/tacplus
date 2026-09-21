@@ -27,6 +27,7 @@ type pySingletonBoundary struct {
 	ProtoFieldName string // raw snake_case proto field: "roster"
 	FieldPascal    string // PascalCase: "Roster"
 	TypeName       string // PascalCase message type: "TeamRoster"
+	ValidateRef    string // generated validator call: "pb_helpers.validate_team_roster"
 	IsPersisted    bool
 }
 
@@ -96,6 +97,17 @@ type pyGeneratedStateClient struct {
 	StateRootName string // PascalCase state root: "Ca", "Cluster"
 	Group         string // e.g. "services"
 	Boundaries    []boundaries.BoundaryData
+}
+
+// pyClientHasSingletons reports whether a generated state client exposes any
+// singleton boundary — only those carry the fetch validate-retry bound.
+func pyClientHasSingletons(c pyGeneratedStateClient) bool {
+	for _, b := range c.Boundaries {
+		if b.GraphType == "singleton" {
+			return true
+		}
+	}
+	return false
 }
 
 // generatePyStateClientWrappers generates typed state client wrappers for Python.
@@ -311,6 +323,7 @@ func generatePyStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc *p
 				ProtoFieldName: strutil.ToSnakeCase(field.Name),
 				FieldPascal:    fieldPascal,
 				TypeName:       typeName,
+				ValidateRef:    "pb_helpers.validate_" + strutil.ToSnakeCase(typeName),
 				IsPersisted:    field.Annotations["persistence"].BoolValue,
 			})
 		}
@@ -503,6 +516,17 @@ func generatePyStateClientAggregators(config *tactype.Config, clients []pyGenera
 		}
 		buf.WriteString("\n")
 
+		buf.WriteString("    def set_config_fetch_timeout_seconds(self, seconds: int) -> None:\n")
+		buf.WriteString("        \"\"\"Sets the singleton-fetch validate-retry bound on every state client in this group.\"\"\"\n")
+		for _, c := range groupClients {
+			if !pyClientHasSingletons(c) {
+				continue
+			}
+			fieldName := strutil.ToSnakeCase(c.StateRootName)
+			buf.WriteString(fmt.Sprintf("        self._%s.set_config_fetch_timeout_seconds(seconds)\n", fieldName))
+		}
+		buf.WriteString("\n")
+
 		buf.WriteString("    async def close(self) -> None:\n")
 		buf.WriteString("        \"\"\"Stops all state watch tasks.\"\"\"\n")
 		for _, c := range groupClients {
@@ -557,6 +581,13 @@ func generatePyStateClientAggregators(config *tactype.Config, clients []pyGenera
 	buf.WriteString("        \"\"\"Wires every state client to the shared state-store channel.\"\"\"\n")
 	for _, group := range groupOrder {
 		buf.WriteString(fmt.Sprintf("        self._%s.set_channel(channel, token_provider)\n", group))
+	}
+	buf.WriteString("\n")
+
+	buf.WriteString("    def set_config_fetch_timeout_seconds(self, seconds: int) -> None:\n")
+	buf.WriteString("        \"\"\"Sets the singleton-fetch validate-retry bound on every state client group.\"\"\"\n")
+	for _, group := range groupOrder {
+		buf.WriteString(fmt.Sprintf("        self._%s.set_config_fetch_timeout_seconds(seconds)\n", group))
 	}
 	buf.WriteString("\n")
 

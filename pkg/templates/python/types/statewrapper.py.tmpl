@@ -21,10 +21,13 @@ import time
 from typing import Any, Awaitable, Callable, Optional
 
 from {{.PbImportFrom}} import {{.PackageName}}_pb2 as pb
+{{- if .Singletons}}
+from {{.PbImportFrom}} import helpers as pb_helpers
+{{- end}}
 {{- if $hasWatches}}
 from {{.PbImportFrom}} import {{.PackageName}}_pb2_grpc as pb_grpc
 from {{.TraceImportFrom}} import trace_pb2
-from {{.ExceptionsImportFrom}}.exceptions import unauthenticated
+from {{.ExceptionsImportFrom}}.exceptions import CODE_FAILED_PRECONDITION, ProtoError, unauthenticated
 
 logger = logging.getLogger(__name__)
 {{- end}}
@@ -97,6 +100,9 @@ class {{.StateRootName}}Client:
         self._watch_statuses: dict[str, WatchStatus] = {}
         self._watch_status_listener: Optional[Callable[[WatchStatus], None]] = None
         self._closed = False
+{{- end}}
+{{- if .Singletons}}
+        self._config_fetch_timeout_seconds = 30
 {{- end}}
 {{- if and (not .Singletons) (not .Collections) (not .StateImports)}}
         pass
@@ -194,10 +200,28 @@ class {{.StateRootName}}Client:
             raise unauthenticated("auth token is empty")
         return [("authorization", f"Bearer {token}")]
 
-    async def _sleep_before_watch_retry(self, attempt: int) -> None:
+    def _watch_retry_delay(self, attempt: int) -> float:
         delay = min(2 ** min(attempt, 5), 30)
-        delay += random.uniform(0, min(delay * 0.2, 1.0))
-        await asyncio.sleep(delay)
+        return delay + random.uniform(0, min(delay * 0.2, 1.0))
+
+    async def _sleep_before_watch_retry(self, attempt: int) -> None:
+        await asyncio.sleep(self._watch_retry_delay(attempt))
+{{- if .Singletons}}
+
+    def set_config_fetch_timeout_seconds(self, seconds: int) -> None:
+        """Sets the bound on a singleton fetch's validate-retry loop
+        (sys.grpcconfig.Config.config_fetch_timeout_seconds)."""
+        self._config_fetch_timeout_seconds = seconds if seconds > 0 else 30
+
+    async def _sleep_before_fetch_retry(self, attempt: int, deadline: float) -> bool:
+        """Waits the watch-restart backoff for attempt, clamped to what is left of
+        the fetch budget. Returns False when the budget is spent."""
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(min(self._watch_retry_delay(attempt), remaining))
+        return True
+{{- end}}
 
 {{- range .Singletons}}
     async def _watch_{{.FieldName}}(self) -> None:
@@ -346,13 +370,35 @@ class {{.StateRootName}}Client:
         return copy.deepcopy(self._{{.FieldName}})
 
     async def fetch_{{.FieldName}}(self) -> pb.{{.TypeName}}:
-        """Fetches the authoritative {{.TypeName}} from the state service."""
-        value = await self._ensure_stub().Get{{.FieldPascal}}(
-            trace_pb2.TraceRequest(),
-            metadata=await self._metadata(),
-        )
-        self._{{.FieldName}} = copy.deepcopy(value)
-        return copy.deepcopy(value)
+        """Fetches the authoritative {{.TypeName}} from the state service.
+
+        A singleton Get can race the state authority's own convergence and return
+        a value that has not been fully seeded yet -- the wire carries no "found"
+        bit to tell that apart. Retries with the watch-restart backoff for as long
+        as the fetched value fails its own generated validation, bounded by
+        config_fetch_timeout_seconds, and raises once that budget is spent rather
+        than returning a value it knows is invalid.
+        """
+        timeout = self._config_fetch_timeout_seconds
+        deadline = time.monotonic() + timeout
+        attempt = 0
+        while True:
+            value = await self._ensure_stub().Get{{.FieldPascal}}(
+                trace_pb2.TraceRequest(),
+                metadata=await self._metadata(),
+            )
+            try:
+                {{.ValidateRef}}(value)
+            except Exception as cause:
+                if not await self._sleep_before_fetch_retry(attempt, deadline):
+                    raise ProtoError(
+                        CODE_FAILED_PRECONDITION,
+                        f"Get{{.FieldPascal}}: state value still failed validation after {timeout}s: {cause}",
+                    ) from cause
+                attempt += 1
+                continue
+            self._{{.FieldName}} = copy.deepcopy(value)
+            return copy.deepcopy(value)
 {{if not $.ReadOnly}}
     def set_{{.FieldName}}(self, value: pb.{{.TypeName}}) -> None:
         """Stores the {{.TypeName}}."""

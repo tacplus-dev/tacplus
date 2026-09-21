@@ -21,6 +21,12 @@ function unauthenticatedError(message: string): Error & { code?: number } {
     return err;
 }
 
+function failedPreconditionError(message: string): Error & { code?: number } {
+    const err = new Error(message) as Error & { code?: number };
+    err.code = grpc.status.FAILED_PRECONDITION;
+    return err;
+}
+
 export interface WatchStatus {
     watchName: string;
     received: boolean;
@@ -73,6 +79,9 @@ export class {{.StateRootName}}Client {
     private _watchStatuses: Map<string, WatchStatus> = new Map();
     private _watchStatusListener: ((status: WatchStatus) => void) | null = null;
     private _closed = false;
+{{- end}}
+{{- if .Singletons}}
+    private _configFetchTimeoutSeconds = 30;
 {{- end}}
 
     constructor() {
@@ -199,6 +208,35 @@ export class {{.StateRootName}}Client {
         return metadata;
     }
 
+    private watchRetryDelayMillis(attempt: number): number {
+        const baseDelay = Math.min(2 ** Math.min(attempt, 5) * 1000, 30000);
+        const jitter = Math.floor(Math.random() * Math.min(baseDelay * 0.2, 1000));
+        return baseDelay + jitter;
+    }
+{{if .Singletons}}
+    /** Sets the bound on a singleton fetch's validate-retry loop
+     * (sys.grpcconfig.Config.config_fetch_timeout_seconds). */
+    setConfigFetchTimeoutSeconds(seconds: number): void {
+        this._configFetchTimeoutSeconds = seconds > 0 ? seconds : 30;
+    }
+
+    /** Waits the watch-restart backoff for attempt, clamped to what is left of the
+     * fetch budget. Resolves false when the budget is spent or the client closed. */
+    private async sleepBeforeFetchRetry(attempt: number, deadlineMillis: number): Promise<boolean> {
+        if (this._closed) return false;
+        const remaining = deadlineMillis - Date.now();
+        if (remaining <= 0) return false;
+        const delay = Math.min(this.watchRetryDelayMillis(attempt), remaining);
+        await new Promise<void>((resolve) => {
+            const timer = setTimeout(() => {
+                this._watchTimers.delete(timer);
+                resolve();
+            }, delay);
+            this._watchTimers.add(timer);
+        });
+        return !this._closed;
+    }
+{{end}}
     private scheduleWatchRetry(
         watchName: string,
         received: boolean,
@@ -207,9 +245,7 @@ export class {{.StateRootName}}Client {
         err?: unknown,
     ): void {
         if (this._closed) return;
-        const baseDelay = Math.min(2 ** Math.min(attempt, 5) * 1000, 30000);
-        const jitter = Math.floor(Math.random() * Math.min(baseDelay * 0.2, 1000));
-        const delay = baseDelay + jitter;
+        const delay = this.watchRetryDelayMillis(attempt);
         if (err) {
             console.warn(`${watchName} watch failed; reconnecting in ${delay}ms:`, err);
         } else {
@@ -393,31 +429,55 @@ export class {{.StateRootName}}Client {
         return this._{{.FieldName}} ? { ...this._{{.FieldName}} } : null;
     }
 
+    /**
+     * Fetches the authoritative {{.TypeName}} from the state service.
+     *
+     * A singleton Get can race the state authority's own convergence and return a
+     * value that has not been fully seeded yet — the wire carries no "found" bit
+     * to tell that apart. Retries with the watch-restart backoff for as long as
+     * the fetched value fails its own generated validation, bounded by
+     * config_fetch_timeout_seconds, and rejects once that budget is spent rather
+     * than returning a value it knows is invalid.
+     */
     async fetch{{.FieldPascal}}(): Promise<{{.TypePrefix}}.{{.TypeName}}> {
-        const request = create(traceWatchTypes.TraceRequestSchema, {});
-        const metadata = await this.metadata();
-        const value = await new Promise<{{.TypePrefix}}.{{.TypeName}}>((resolve, reject) => {
-            this.channel().makeUnaryRequest<traceWatchTypes.TraceRequest, {{.TypePrefix}}.{{.TypeName}}>(
-                '/{{$.ProtoPackage}}.{{$.StateServiceName}}/Get{{.FieldPascal}}',
-                (msg) => Buffer.from(toBinary(traceWatchTypes.TraceRequestSchema, msg)),
-                (buf) => fromBinary({{.TypePrefix}}.{{.TypeName}}Schema, new Uint8Array(buf)),
-                request,
-                metadata,
-                (err, response) => {
-                    if (err) {
-                        reject(err);
-                        return;
-                    }
-                    if (!response) {
-                        reject(new Error('{{$.StateRootName}}.{{.FieldPascal}} fetch returned no response'));
-                        return;
-                    }
-                    resolve(response);
-                },
-            );
-        });
-        this._{{.FieldName}} = { ...value };
-        return { ...value };
+        const timeoutSeconds = this._configFetchTimeoutSeconds;
+        const deadlineMillis = Date.now() + timeoutSeconds * 1000;
+        for (let attempt = 0; ; attempt++) {
+            const request = create(traceWatchTypes.TraceRequestSchema, {});
+            const metadata = await this.metadata();
+            const value = await new Promise<{{.TypePrefix}}.{{.TypeName}}>((resolve, reject) => {
+                this.channel().makeUnaryRequest<traceWatchTypes.TraceRequest, {{.TypePrefix}}.{{.TypeName}}>(
+                    '/{{$.ProtoPackage}}.{{$.StateServiceName}}/Get{{.FieldPascal}}',
+                    (msg) => Buffer.from(toBinary(traceWatchTypes.TraceRequestSchema, msg)),
+                    (buf) => fromBinary({{.TypePrefix}}.{{.TypeName}}Schema, new Uint8Array(buf)),
+                    request,
+                    metadata,
+                    (err, response) => {
+                        if (err) {
+                            reject(err);
+                            return;
+                        }
+                        if (!response) {
+                            reject(new Error('{{$.StateRootName}}.{{.FieldPascal}} fetch returned no response'));
+                            return;
+                        }
+                        resolve(response);
+                    },
+                );
+            });
+            try {
+                {{.TypePrefix}}.validate{{.TypeName}}(value);
+            } catch (cause) {
+                if (!(await this.sleepBeforeFetchRetry(attempt, deadlineMillis))) {
+                    throw failedPreconditionError(
+                        `Get{{.FieldPascal}}: state value still failed validation after ${timeoutSeconds}s: ${cause}`,
+                    );
+                }
+                continue;
+            }
+            this._{{.FieldName}} = { ...value };
+            return { ...value };
+        }
     }
 {{if not $.ReadOnly}}
     set{{.FieldPascal}}(value: {{.TypePrefix}}.{{.TypeName}}): void {

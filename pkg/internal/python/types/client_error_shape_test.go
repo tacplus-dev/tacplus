@@ -93,7 +93,7 @@ func TestPythonStateClientRaisesStructuredUnauthenticated(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"from ......types.sys.errors.exceptions import unauthenticated",
+		"from ......types.sys.errors.exceptions import CODE_FAILED_PRECONDITION, ProtoError, unauthenticated",
 		`raise unauthenticated(f"auth token: {cause}") from cause`,
 		`raise unauthenticated("auth token is empty")`,
 	} {

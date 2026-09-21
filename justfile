@@ -87,37 +87,53 @@ determinism-typescript:
 determinism-java:
   {{lock}} bash cross-test/determinism/run.sh --language java
 
-# Assert the host protoc matches the pin above. Run as the first step of
-# `gates`; run it by hand after any toolchain upgrade.
+# Assert the host protoc is no newer than the pin above. Run as the first
+# step of `gates`; run it by hand after any toolchain upgrade.
+#
+# This is a CEILING, not an equality: protoc gencode declares a MINIMUM
+# protobuf runtime version, and the runtime refuses gencode newer than
+# itself, so any protoc <= protoc_version is safe (CI's base image uses
+# 28.3, well under the ceiling, and is fine). Only a protoc newer than the
+# pin is dangerous - confirmed 2026-09-21: protoc 36.2 gencode throws
+# ExceptionInInitializerError against the pinned 4.36.0 runtime.
 protoc-check:
   #!/usr/bin/env bash
   set -uo pipefail
   if ! command -v protoc >/dev/null 2>&1; then
-    echo "protoc-check: protoc not found on PATH (expected libprotoc {{protoc_version}})" >&2
+    echo "protoc-check: protoc not found on PATH (expected libprotoc <= {{protoc_version}})" >&2
     exit 1
   fi
   actual="$(protoc --version | awk '{print $2}')"
-  if [[ "$actual" != "{{protoc_version}}" ]]; then
+  IFS='.' read -r actual_major actual_minor _ <<< "$actual"
+  IFS='.' read -r pin_major pin_minor _ <<< "{{protoc_version}}"
+  if (( actual_major > pin_major || (actual_major == pin_major && actual_minor > pin_minor) )); then
     {
-      echo "protoc-check: host protoc is ${actual}, expected {{protoc_version}}."
+      echo "protoc-check: host protoc is ${actual}, which is NEWER than the pinned ceiling {{protoc_version}}."
       echo "  protoc gencode declares a minimum protobuf runtime version, and every"
-      echo "  protobuf-java pin in this repo is matched to protoc {{protoc_version}}."
+      echo "  protobuf-java pin in this repo is matched to protoc {{protoc_version}}. The"
+      echo "  runtime refuses gencode newer than itself, so a protoc above the pin"
+      echo "  produces gencode the pinned runtime cannot load."
       echo "  A mismatch does NOT surface as a version error: it surfaces as a Java"
       echo "  ExceptionInInitializerError from the protobuf runtime check, several"
       echo "  layers below anything that names a version."
-      echo "  Fix: install protoc {{protoc_version}}, or - if you are deliberately"
-      echo "  moving the toolchain - update protoc_version in justfile AND every"
-      echo "  protobuf-java pin listed in the comment beside it."
+      echo "  Fix: install protoc {{protoc_version}} or older, or - if you are"
+      echo "  deliberately moving the toolchain - update protoc_version in justfile"
+      echo "  AND every protobuf-java pin listed in the comment beside it."
     } >&2
     exit 1
   fi
-  echo "protoc-check: libprotoc ${actual} (pinned {{protoc_version}})"
+  echo "protoc-check: libprotoc ${actual} (pinned ceiling {{protoc_version}})"
 
 # Run the mandatory gate set (soundness, test, current-generation,
 # determinism, cert-stream) and report a trustworthy overall pass/fail.
 # A naive `for g in ...; do just "$g"; done` loop whose last command per
 # iteration is `echo` always exits 0 regardless of what failed inside —
 # do not write that pattern again; this recipe exists so nobody has to.
+#
+# Runs against the HOST toolchain, so it starts with protoc-check. If your
+# host protoc is newer than the pinned ceiling and no older build is
+# installable, use `just gates-container` instead: it runs these same gates
+# inside the CI base image, whose protoc is pinned well under the ceiling.
 gates:
   #!/usr/bin/env bash
   set -uo pipefail
@@ -147,6 +163,36 @@ gates:
   done
   echo "=== OVERALL fail=$fail ==="
   exit $fail
+
+# Run `just gates` inside the CI base image instead of against the host
+# toolchain. Use this when the host protoc fails protoc-check and no
+# acceptable protoc is installable (e.g. brew only offers a version newer
+# than the pinned ceiling): the image pins protoc 28.3, well under it.
+# This is the same image CI's test jobs run in
+# ($CI_REGISTRY_IMAGE/tacplus-base:${BASE_VERSION}-amd64, built from
+# Dockerfile.base), built locally rather than pulled from the registry.
+# The first run builds the base image and takes a long time.
+gates-container:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd {{justfile_directory()}}
+  # The base image carries protoc/Go/Java/Rust/Node but not `just` (CI invokes
+  # the gate scripts directly). `gates` is a just recipe that calls further
+  # just recipes, so add just in a thin layer on top rather than at runtime.
+  docker build -f Dockerfile.base -t tacplus-base:gates-local-base .
+  docker build -t tacplus-base:gates-local - <<'DOCKERFILE'
+  FROM tacplus-base:gates-local-base
+  ARG JUST_VERSION=1.58.0
+  RUN ARCH=$(dpkg --print-architecture) \
+      && if [ "$ARCH" = "arm64" ]; then JUST_ARCH="aarch64"; else JUST_ARCH="x86_64"; fi \
+      && curl -fsSL --retry 30 --retry-delay 5 \
+         "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-${JUST_ARCH}-unknown-linux-musl.tar.gz" \
+         | tar -C /usr/local/bin -xz just \
+      && just --version
+  DOCKERFILE
+  # WORKDIR in the image is /workspace; CI's executor checks the repo out into
+  # the job workspace the same way, so bind-mount this checkout there.
+  docker run --rm -v "$PWD:/workspace" -w /workspace tacplus-base:gates-local just gates
 
 # Behavioral coverage of the generated TLS/SMB cert-stream loops.
 cert-stream: cert-stream-go cert-stream-java cert-stream-rust

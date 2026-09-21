@@ -110,9 +110,15 @@ func TestTracePublisherTemplatesRetryEventBusResolutionAndLogDrops(t *testing.T)
 
 func TestGoServiceManagerSubscriptionCallbacksArePerTopicWithMeta(t *testing.T) {
 	text := readTemplateForTest(t, "../../../templates/go/types/service_manager.go.tmpl")
+	// The event type is branched on .RoutingOnly: a subscriber named in the
+	// source type's s2s_subscribe.routing_only_services takes the narrow
+	// <T>RoutingEnvelope instead of <T> (see spec.proto). The callback seam
+	// itself — per-topic, meta-carrying — is unchanged either way, and that is
+	// what this pin is about.
+	const eventType = "*{{.TypePkgAlias}}.{{if .RoutingOnly}}{{.EnvelopeTypeName}}{{else}}{{.TypeName}}{{end}}"
 	required := []string{
-		"{{.HandlerFuncFieldName}} func(ctx context.Context, event *{{.TypePkgAlias}}.{{.TypeName}}, meta *eb_pb.RecordMeta) error",
-		"func (sm *ServiceManager) {{.HandlerFuncSetterName}}(fn func(ctx context.Context, event *{{.TypePkgAlias}}.{{.TypeName}}, meta *eb_pb.RecordMeta) error)",
+		"{{.HandlerFuncFieldName}} func(ctx context.Context, event " + eventType + ", meta *eb_pb.RecordMeta) error",
+		"func (sm *ServiceManager) {{.HandlerFuncSetterName}}(fn func(ctx context.Context, event " + eventType + ", meta *eb_pb.RecordMeta) error)",
 		"if sm.{{.HandlerFuncFieldName}} != nil {",
 		"sm.{{.HandlerFuncFieldName}}(ctx, event, meta)",
 	}

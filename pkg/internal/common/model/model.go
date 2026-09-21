@@ -139,6 +139,12 @@ type SubscriptionEntry struct {
 type EventBusMethodS2S struct {
 	AuthServices []string
 	AuthDisabled bool
+	// RoutingOnlyServices is the subset of AuthServices whose generated
+	// subscriber Handler takes the synthesized <T>RoutingEnvelope instead of the
+	// full <T>. Only meaningful on the s2s_subscribe half; empty everywhere else.
+	// It grants nothing — see spec.proto's routing_only_services comment, which
+	// is also where the "typed boundary, not a memory guarantee" caveat lives.
+	RoutingOnlyServices []string
 }
 
 // EventBusMethodC2S represents standard C2S method auth carried by an

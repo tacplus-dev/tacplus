@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/tools/imports"
 
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/boundaries"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/eventbus"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/header"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
@@ -39,6 +40,17 @@ type goSubscriberTemplateData struct {
 	// replaying the same dead token. Empty in sys-only mode, where the chassis
 	// identity manager is not generated at all.
 	ServiceIMImport string // e.g. "module/tacplus/chassis/service_im"
+
+	// RoutingOnly is the owner-declared narrowing: this service is named in the
+	// source type's s2s_subscribe.routing_only_services, so Handler takes
+	// EnvelopeTypeName instead of TypeName and the dispatch projects the three
+	// fields below into it. The full TypeName is still decoded off the wire
+	// first — a typed boundary, not a memory one (see spec.proto).
+	RoutingOnly          bool
+	EnvelopeTypeName     string // e.g. "SensorEventRoutingEnvelope"
+	KeyFieldPascal       string // e.g. "DeliveryId"  -> envelope delivery_id
+	PrincipalFieldPascal string // e.g. "Recipient"   -> envelope recipient
+	NamespaceFieldPascal string // e.g. "Namespace"   -> envelope namespace
 }
 
 // generateGoSubscribers generates per-topic subscriber packages for event-bus
@@ -118,6 +130,12 @@ func generateGoSubscribers(config *tactype.Config) error {
 			GrpcService:     subService,
 			GrpcMethod:      subMethod,
 			ServiceIMImport: serviceIMImport,
+
+			RoutingOnly:          sub.RoutingOnly,
+			EnvelopeTypeName:     typeName + boundaries.RoutingEnvelopeSuffix,
+			KeyFieldPascal:       strutil.ToPascalCase(sub.SourceKeyField),
+			PrincipalFieldPascal: strutil.ToPascalCase(sub.SourceStorePrincipalField),
+			NamespaceFieldPascal: strutil.ToPascalCase(sub.SourceStoreNamespaceField),
 		}
 
 		outDir := filepath.Join(config.OutputDir, "subscribe", sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)

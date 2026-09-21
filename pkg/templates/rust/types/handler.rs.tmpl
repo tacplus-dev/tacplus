@@ -27,7 +27,7 @@ use crate::types::sys::x509::x509::X509Cert;
 {{- end}}
 {{- if .HasSubscriptions}}
 {{- range .Subscriptions}}
-use crate::types::{{.TypeProtoDir}}::{{.TypePackage}}::{{.TypeName}};
+use crate::types::{{.TypeProtoDir}}::{{.TypePackage}}::{{if .RoutingOnly}}{{.EnvelopeTypeName}}{{else}}{{.TypeName}}{{end}};
 {{- end}}
 use crate::types::generated::eventbus_support::eventbus_support::RecordMeta;
 {{- end}}
@@ -83,9 +83,18 @@ pub trait Handler: Send + Sync + 'static {
 {{- if .HasSubscriptions}}
 
 {{- range .Subscriptions}}
+{{- if .RoutingOnly}}
+    /// Called for each {{.TypeName}} received from the
+    /// {{.SourcePackage}}.{{.FieldSnake}} event-bus topic, projected to its
+    /// routing envelope: this service is named in {{.TypeName}}'s
+    /// s2s_subscribe.routing_only_services, so the body is not in the argument
+    /// type. A typed boundary, not a memory one — see spec.proto.
+    async fn {{.HandlerMethodName}}(&self, event: {{.EnvelopeTypeName}}, meta: RecordMeta) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+{{- else}}
     /// Called for each {{.TypeName}} received from
     /// the {{.SourcePackage}}.{{.FieldSnake}} event-bus topic.
     async fn {{.HandlerMethodName}}(&self, event: {{.TypeName}}, meta: RecordMeta) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+{{- end}}
 {{- end}}
 {{- end}}
 

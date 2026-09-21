@@ -52,6 +52,15 @@ message ContractActor {
     topic_ref: "contractfixtures.FixtureState.events"
     method_s2s: {auth_services: ["*"]}
   };
+  // ROUTING-ONLY ARM. FixtureRouted's owner names contractclient in
+  // s2s_subscribe.routing_only_services, so this watch's generated Handler takes
+  // FixtureRoutedRoutingEnvelope {delivery_id, recipient, namespace} and not
+  // FixtureRouted. The events watch above is the paired control: same actor,
+  // same generated service manager, full message, unchanged.
+  option (spec.event_watch) = {
+    topic_ref: "contractfixtures.FixtureState.routed"
+    method_s2s: {auth_services: ["*"]}
+  };
 }
 
 enum ContractChangeType {

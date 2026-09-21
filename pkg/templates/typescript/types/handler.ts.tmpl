@@ -15,7 +15,7 @@ export {
 {{- end}}
 {{- if .HasSubscriptions}}
 {{- range .Subscriptions}}
-import { type {{.TypeName}} as {{.TypeAlias}} } from '{{.TypeImportPath}}';
+import { type {{if .RoutingOnly}}{{.RoutingEnvelopeName}}{{else}}{{.TypeName}}{{end}} as {{.TypeAlias}} } from '{{.TypeImportPath}}';
 {{- end}}
 {{- end}}
 
@@ -51,11 +51,22 @@ export interface Handler {
 {{- if .HasSubscriptions}}
 
 {{- range .Subscriptions}}
+{{- if .RoutingOnly}}
+  /**
+   * Called for each {{.TypeName}} received from the
+   * {{.SourcePackage}}.{{.SourceField}} event-bus topic, projected to its
+   * routing envelope: this service is named in {{.TypeName}}'s
+   * s2s_subscribe.routing_only_services, so the body is not in the argument
+   * type. A typed boundary, not a memory one — see spec.proto.
+   */
+  {{.HandlerMethodName}}(event: {{.TypeAlias}}, meta: SubscriptionMeta): Promise<void>;
+{{- else}}
   /**
    * Called for each event received from
    * the {{.SourcePackage}}.{{.SourceField}} event-bus topic.
    */
   {{.HandlerMethodName}}(event: {{.TypeAlias}}, meta: SubscriptionMeta): Promise<void>;
+{{- end}}
 {{- end}}
 {{- end}}
 

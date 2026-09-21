@@ -283,13 +283,16 @@ func TestJavaSubscriberDecodesRecordMetaEnvelope(t *testing.T) {
 		"MethodDescriptor<byte[], byte[]>",
 		"DecodedRecord decoded = decodeSubscribeRecord(response);",
 		"{{.TypeOuterClass}}.{{.TypeName}}.parseFrom(envelope.payload)",
+		// The parsed message is handed to DecodedRecord directly, or through
+		// projectRoutingEnvelope when the subscriber is routing-only (see
+		// spec.proto's routing_only_services). Either way it is parsed here.
 		"decodeRecordMeta(envelope.meta)",
 		"public final String topic;",
 		"public final int partition;",
 		"topic = new String(value, java.nio.charset.StandardCharsets.UTF_8);",
 		"partition = (int) readVarint(data, cursor);",
 		"timestamp = decodeTimestampMillis(value);",
-		"new DecodedRecord({{.TypeOuterClass}}.{{.TypeName}}.parseFrom(data),",
+		"{{.TypeOuterClass}}.{{.TypeName}}.parseFrom(data){{end}},",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("Java subscriber must decode metadata-bearing EventBus subscribe envelopes; missing %q", want)

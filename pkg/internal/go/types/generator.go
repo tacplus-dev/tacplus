@@ -196,6 +196,9 @@ func Generate(config *tactype.Config) error {
 	if err := proto.AppendEventBusWrappersToProtos(tempProtoDir, flatProtoDir); err != nil {
 		return fmt.Errorf("failed to append eventbus topic wrappers to protos: %w", err)
 	}
+	if err := proto.AppendRoutingEnvelopesToProtos(tempProtoDir, flatProtoDir); err != nil {
+		return fmt.Errorf("failed to append routing envelopes to protos: %w", err)
+	}
 	if proto.NeedsEventBusSupportProto(tempProtoDir) {
 		eventBusProto, err := proto.EnsureEventBusSupportProto(tempProtoDir, proto.EventBusSupportProtoOptions{
 			GoPackage: fmt.Sprintf("%s/types/generated/eventbus_support", config.ModuleBasePath),
@@ -2050,14 +2053,18 @@ func collectSubscriptions(config *tactype.Config, protoDir string) ([]tactype.Su
 	result := make([]tactype.SubscriptionEntry, 0, len(subs))
 	for _, sd := range subs {
 		res := boundaries.ResolveSubscriptionSource(p, protoDir, sd)
-		result = append(result, tactype.SubscriptionEntry{
+		entry := tactype.SubscriptionEntry{
 			SourcePackage:   sd.SourcePackage,
 			SourceStateRoot: sd.SourceStateRoot,
 			SourceField:     sd.SourceField,
 			TargetService:   sd.BrokerLabel,
 			SourceTypeFqn:   res.TypeFqn,
 			SourceProtoDir:  res.ProtoDir,
-		})
+		}
+		if err := boundaries.ApplyRoutingEnvelope(p, config.SelfPackage, &entry); err != nil {
+			return nil, err
+		}
+		result = append(result, entry)
 		if sd.Origin == "store_derived" {
 			zap.L().Info("Auto-derived store subscription",
 				zap.String("source", sd.Source),

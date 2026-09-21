@@ -180,10 +180,32 @@ class Subscriber:
                 # surface epoch MILLISECONDS, matching java's
                 # seconds*1000 + nanos/1e6 (NEW-27).
                 ts_millis = meta.timestamp.seconds * 1000 + meta.timestamp.nanos // 1_000_000
+{{- if .RoutingOnly}}
+                # Project the routing envelope and drop the decoded body: this
+                # service is named in {{.TypeName}}'s
+                # s2s_subscribe.routing_only_services, so the handler is called
+                # with {{.EnvelopeTypeName}} — {delivery_id, recipient,
+                # namespace} — and never sees record.payload.
+                #
+                # A TYPED boundary, not a memory one: the full {{.TypeName}}
+                # still arrives on the wire and is still decoded above. See
+                # spec.proto's routing_only_services comment.
+                envelope = event_pb.{{.EnvelopeTypeName}}(
+                    delivery_id=record.payload.{{.KeyField}},
+                    recipient=record.payload.{{.PrincipalField}},
+                    namespace=record.payload.{{.NamespaceField}},
+                )
+                record.ClearField("payload")
+                await handler(
+                    envelope,
+                    RecordMeta(offset=meta.offset, timestamp=ts_millis, key=meta.key),
+                )
+{{- else}}
                 await handler(
                     record.payload,
                     RecordMeta(offset=meta.offset, timestamp=ts_millis, key=meta.key),
                 )
+{{- end}}
             except Exception as e:
                 logger.error("%s.%s handler error: %s", "{{.SourcePackage}}", "{{.SourceField}}", e)
 

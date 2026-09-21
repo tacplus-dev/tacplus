@@ -57,14 +57,18 @@ func collectSubscriptions(config *tactype.Config, protoDir string) ([]tactype.Su
 	result := make([]tactype.SubscriptionEntry, 0, len(subs))
 	for _, sd := range subs {
 		res := boundaries.ResolveSubscriptionSource(p, protoDir, sd)
-		result = append(result, tactype.SubscriptionEntry{
+		entry := tactype.SubscriptionEntry{
 			SourcePackage:   sd.SourcePackage,
 			SourceStateRoot: sd.SourceStateRoot,
 			SourceField:     sd.SourceField,
 			TargetService:   sd.BrokerLabel,
 			SourceTypeFqn:   res.TypeFqn,
 			SourceProtoDir:  res.ProtoDir,
-		})
+		}
+		if err := boundaries.ApplyRoutingEnvelope(p, config.SelfPackage, &entry); err != nil {
+			return nil, err
+		}
+		result = append(result, entry)
 		if sd.Origin == "store_derived" {
 			zap.L().Info("Auto-derived store subscription",
 				zap.String("source", sd.Source),
@@ -145,6 +149,12 @@ func generateSubscribers(config *tactype.Config) error {
 			TypeName:        typeName,
 			GrpcService:     subService,
 			GrpcMethod:      subMethod,
+
+			RoutingOnly:         sub.RoutingOnly,
+			EnvelopeTypeName:    typeName + boundaries.RoutingEnvelopeSuffix,
+			KeyFieldSnake:       strutil.ToSnakeCase(sub.SourceKeyField),
+			PrincipalFieldSnake: strutil.ToSnakeCase(sub.SourceStorePrincipalField),
+			NamespaceFieldSnake: strutil.ToSnakeCase(sub.SourceStoreNamespaceField),
 		}
 
 		var buf bytes.Buffer
@@ -181,5 +191,16 @@ type subscriberTemplateData struct {
 	TypeName        string // e.g. "TopologyEvent"
 	GrpcService     string // e.g. "alpha.SharedEventBusStateService" (per-topic; see EVENTBUS-PUBLISH-API-SPLIT.md)
 	GrpcMethod      string // e.g. "SubscribeToEventStream"
+
+	// RoutingOnly is the owner-declared narrowing: this service is named in the
+	// source type's s2s_subscribe.routing_only_services, so Handler takes
+	// EnvelopeTypeName and the dispatch projects the three fields below into it.
+	// The full TypeName is still decoded off the wire first — a typed boundary,
+	// not a memory one (see spec.proto).
+	RoutingOnly        bool
+	EnvelopeTypeName   string // e.g. "SensorEventRoutingEnvelope"
+	KeyFieldSnake      string // source field -> envelope delivery_id
+	PrincipalFieldSnake string // source field -> envelope recipient
+	NamespaceFieldSnake string // source field -> envelope namespace
 }
 

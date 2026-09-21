@@ -69,7 +69,7 @@ public interface Handler {
      * @param event typed event payload
      * @param meta subscription record metadata
      */
-    default void {{.HandlerMethodName}}({{.TypeOuterClass}}.{{.TypeName}} event, SubscriptionMeta meta) throws Exception {
+    default void {{.HandlerMethodName}}({{.TypeOuterClass}}.{{if .RoutingOnly}}{{.EnvelopeTypeName}}{{else}}{{.TypeName}}{{end}} event, SubscriptionMeta meta) throws Exception {
         handleEventStreamMessage("{{.SourcePackage}}.{{.SourceField}}", event, meta);
     }
 {{- end}}

@@ -26,8 +26,21 @@ import (
 var _ = grpcproto.Name
 var _ = encoding.GetCodec("proto")
 
+{{- if .RoutingOnly}}
+// Handler is called for each received {{.TypeName}}, projected to its routing
+// envelope. This service is named in {{.TypeName}}'s
+// s2s_subscribe.routing_only_services, so the handler is typed for
+// {{.EnvelopeTypeName}} — {delivery_id, recipient, namespace} — and cannot be
+// written against the message body.
+//
+// A TYPED boundary, not a memory one: the full {{.TypeName}} still arrives on
+// the wire and is still decoded below before the three fields are projected out
+// of it. See spec.proto's routing_only_services comment.
+type Handler func(ctx context.Context, event *source.{{.EnvelopeTypeName}}, meta *eb.RecordMeta) error
+{{- else}}
 // Handler is called for each received {{.TypeName}}.
 type Handler func(ctx context.Context, event *source.{{.TypeName}}, meta *eb.RecordMeta) error
+{{- end}}
 
 // Option configures subscriber behavior.
 type Option func(*options)
@@ -269,9 +282,23 @@ func (s *Subscriber) subscribeOnce(
 		}
 
 		if rec.Payload != nil {
+{{- if .RoutingOnly}}
+			// Project the routing envelope and drop the decoded body: the handler
+			// is typed for {{.EnvelopeTypeName}} and never sees rec.Payload.
+			envelope := &source.{{.EnvelopeTypeName}}{
+				DeliveryId: rec.Payload.Get{{.KeyFieldPascal}}(),
+				Recipient:  rec.Payload.Get{{.PrincipalFieldPascal}}(),
+				Namespace:  rec.Payload.Get{{.NamespaceFieldPascal}}(),
+			}
+			rec.Payload = nil
+			if err := handler(ctx, envelope, rec.Meta); err != nil {
+				return fmt.Errorf("handler: %w", err)
+			}
+{{- else}}
 			if err := handler(ctx, rec.Payload, rec.Meta); err != nil {
 				return fmt.Errorf("handler: %w", err)
 			}
+{{- end}}
 		}
 	}
 }

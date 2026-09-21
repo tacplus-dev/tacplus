@@ -40,6 +40,17 @@ type pySubscriberTemplateData struct {
 	EnvelopeName string // e.g. "AegisStateEventStreamSubscribeRecord"
 	GrpcService  string // e.g. "alpha.SharedEventBusStateService" (per-topic; see EVENTBUS-PUBLISH-API-SPLIT.md)
 	GrpcMethod   string // e.g. "SubscribeToEventStream"
+
+	// RoutingOnly is the owner-declared narrowing: this service is named in the
+	// source type's s2s_subscribe.routing_only_services, so the handler is
+	// called with EnvelopeTypeName and the dispatch projects the three fields
+	// below into it. The full TypeName is still decoded off the wire first — a
+	// typed boundary, not a memory one (see spec.proto).
+	RoutingOnly      bool
+	EnvelopeTypeName string // e.g. "SensorEventRoutingEnvelope"
+	KeyField         string // source field -> envelope delivery_id
+	PrincipalField   string // source field -> envelope recipient
+	NamespaceField   string // source field -> envelope namespace
 }
 
 type pySubscriptionEventInfo struct {
@@ -127,13 +138,17 @@ func collectPySubscriptions(config *tactype.Config, protoDir string) ([]tactype.
 	result := make([]tactype.SubscriptionEntry, 0, len(subs))
 	for _, sd := range subs {
 		res := boundaries.ResolveSubscriptionSource(p, protoDir, sd)
-		result = append(result, tactype.SubscriptionEntry{
+		entry := tactype.SubscriptionEntry{
 			SourcePackage:   sd.SourcePackage,
 			SourceStateRoot: sd.SourceStateRoot,
 			SourceField:     sd.SourceField,
 			SourceTypeFqn:   res.TypeFqn,
 			SourceProtoDir:  res.ProtoDir,
-		})
+		}
+		if err := boundaries.ApplyRoutingEnvelope(p, config.SelfPackage, &entry); err != nil {
+			return nil, err
+		}
+		result = append(result, entry)
 		if sd.Origin == "store_derived" {
 			zap.L().Info("Auto-derived store subscription",
 				zap.String("source", sd.Source),
@@ -189,6 +204,12 @@ func generatePySubscribers(config *tactype.Config, protoDir string) error {
 			EnvelopeName:         strutil.ToPascalCase(sub.SourceStateRoot) + fieldPascal + "SubscribeRecord",
 			GrpcService:          subService,
 			GrpcMethod:           subMethod,
+
+			RoutingOnly:      sub.RoutingOnly,
+			EnvelopeTypeName: event.TypeName + boundaries.RoutingEnvelopeSuffix,
+			KeyField:         sub.SourceKeyField,
+			PrincipalField:   sub.SourceStorePrincipalField,
+			NamespaceField:   sub.SourceStoreNamespaceField,
 		}
 
 		var buf bytes.Buffer

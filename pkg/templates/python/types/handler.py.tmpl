@@ -13,7 +13,7 @@ from typing import Any, TYPE_CHECKING
 {{- if .HasSubscriptions}}
 if TYPE_CHECKING:
 {{- range .Subscriptions}}
-    from {{.TypeImportFrom}}.{{.TypePbModule}} import {{.TypeName}} as {{.TypeAlias}}
+    from {{.TypeImportFrom}}.{{.TypePbModule}} import {{if .RoutingOnly}}{{.EnvelopeTypeName}}{{else}}{{.TypeName}}{{end}} as {{.TypeAlias}}
 {{- end}}
 {{- end}}
 
@@ -54,8 +54,16 @@ class Handler(ABC):
 
     @abstractmethod
     async def {{.HandlerMethodName}}(self, event: "{{.TypeAlias}}", meta: "SubscriptionMeta") -> None:
+{{- if .RoutingOnly}}
+        """Called for each {{.TypeName}} received from the
+        {{.SourcePackage}}.{{.SourceField}} event-bus topic, projected to its
+        routing envelope: this service is named in {{.TypeName}}'s
+        s2s_subscribe.routing_only_services, so the body is not in the
+        argument type. A typed boundary, not a memory one — see spec.proto."""
+{{- else}}
         """Called for each event received from
         the {{.SourcePackage}}.{{.SourceField}} event-bus topic."""
+{{- end}}
         ...
 {{- end}}
 {{- end}}

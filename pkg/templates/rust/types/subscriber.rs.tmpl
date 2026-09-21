@@ -22,7 +22,29 @@ use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
 use tonic::transport::Channel;
 
 use crate::types::{{.TypeProtoDir}}::{{.TypePackage}}::{{.TypeName}};
+{{- if .RoutingOnly}}
+use crate::types::{{.TypeProtoDir}}::{{.TypePackage}}::{{.EnvelopeTypeName}};
+{{- end}}
 use crate::types::generated::eventbus_support::eventbus_support::{RecordMeta, SubscribeRequest};
+
+{{- if .RoutingOnly}}
+
+/// Handler is called for each received {{.TypeName}}, projected to its routing
+/// envelope. This service is named in {{.TypeName}}'s
+/// s2s_subscribe.routing_only_services, so the handler is typed for
+/// {{.EnvelopeTypeName}} — {delivery_id, recipient, namespace} — and cannot be
+/// written against the message body.
+///
+/// A TYPED boundary, not a memory one: the full {{.TypeName}} still arrives on
+/// the wire and is still decoded below before the three fields are projected out
+/// of it. See spec.proto's routing_only_services comment.
+pub type Handler = Arc<
+    dyn Fn({{.EnvelopeTypeName}}, RecordMeta) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>,
+        > + Send
+        + Sync,
+>;
+{{- else}}
 
 /// Handler is called for each received {{.TypeName}}.
 pub type Handler = Arc<
@@ -31,6 +53,7 @@ pub type Handler = Arc<
         > + Send
         + Sync,
 >;
+{{- end}}
 
 /// TokenSource returns a fresh audience-scoped bearer token for authenticating
 /// the Subscribe stream with EventBus. It is invoked once per (re)connect
@@ -272,7 +295,21 @@ impl Subscriber {
                         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
                             format!("decode subscribe record: {}", e).into()
                         })?;
+{{- if .RoutingOnly}}
+                    // Project the routing envelope and drop the decoded body:
+                    // the handler is typed for {{.EnvelopeTypeName}} and never
+                    // sees `payload`.
+                    let envelope = {{.EnvelopeTypeName}} {
+                        delivery_id: payload.{{.KeyFieldSnake}}.clone(),
+                        recipient: payload.{{.PrincipalFieldSnake}}.clone(),
+                        namespace: payload.{{.NamespaceFieldSnake}}.clone(),
+                        ..Default::default()
+                    };
+                    drop(payload);
+                    if let Err(e) = handler(envelope, meta).await {
+{{- else}}
                     if let Err(e) = handler(payload, meta).await {
+{{- end}}
                         tracing::error!(
                             error = %e,
                             "{{.SourcePackage}}.{{.SourceField}} handler error"

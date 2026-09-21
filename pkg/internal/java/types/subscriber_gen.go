@@ -37,6 +37,17 @@ type javaSubscriberTemplateData struct {
 	// loop to drop a rejected credential so the retry re-mints instead of
 	// replaying the same dead token.
 	IdentityManagerFQN string // "com.example.chassis.service_im.IdentityManager"
+
+	// RoutingOnly is the owner-declared narrowing: this service is named in the
+	// source type's s2s_subscribe.routing_only_services, so Handler takes
+	// EnvelopeTypeName and the dispatch projects the three fields below into it.
+	// The full TypeName is still parsed off the wire first — a typed boundary,
+	// not a memory one (see spec.proto).
+	RoutingOnly          bool
+	EnvelopeTypeName     string // e.g. "SensorEventRoutingEnvelope"
+	KeyFieldPascal       string // source field -> envelope delivery_id
+	PrincipalFieldPascal string // source field -> envelope recipient
+	NamespaceFieldPascal string // source field -> envelope namespace
 }
 
 type javaSubscriptionEventInfo struct {
@@ -140,7 +151,7 @@ func collectJavaSubscriptions(config *tactype.Config, protoDir string) ([]tactyp
 	result := make([]tactype.SubscriptionEntry, 0, len(subs))
 	for _, sd := range subs {
 		res := boundaries.ResolveSubscriptionSource(p, protoDir, sd)
-		result = append(result, tactype.SubscriptionEntry{
+		entry := tactype.SubscriptionEntry{
 			SourcePackage:   sd.SourcePackage,
 			SourceStateRoot: sd.SourceStateRoot,
 			SourceField:     sd.SourceField,
@@ -150,7 +161,11 @@ func collectJavaSubscriptions(config *tactype.Config, protoDir string) ([]tactyp
 			SourceIsRecord:  res.IsRecord,
 
 			SourceStoreEpochField: res.StoreEpochField,
-		})
+		}
+		if err := boundaries.ApplyRoutingEnvelope(p, config.SelfPackage, &entry); err != nil {
+			return nil, err
+		}
+		result = append(result, entry)
 		if sd.Origin == "store_derived" {
 			zap.L().Info("Auto-derived store subscription",
 				zap.String("source", sd.Source),
@@ -208,6 +223,12 @@ func generateJavaSubscribers(config *tactype.Config, protoDir string) error {
 
 			IdentityManagerFQN: strings.TrimSuffix(config.JavaPackageBase, ".types") +
 				".chassis.service_im.IdentityManager",
+
+			RoutingOnly:          sub.RoutingOnly,
+			EnvelopeTypeName:     event.TypeName + boundaries.RoutingEnvelopeSuffix,
+			KeyFieldPascal:       javaPascalField(sub.SourceKeyField),
+			PrincipalFieldPascal: javaPascalField(sub.SourceStorePrincipalField),
+			NamespaceFieldPascal: javaPascalField(sub.SourceStoreNamespaceField),
 		}
 
 		var buf bytes.Buffer

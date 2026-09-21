@@ -742,6 +742,9 @@ func Generate(config *tactype.Config) error {
 	if err := proto.AppendEventBusWrappersToProtos(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to append eventbus topic wrappers to protos: %w", err)
 	}
+	if err := proto.AppendRoutingEnvelopesToProtos(protoDir, config.FlatProtoDir); err != nil {
+		return fmt.Errorf("failed to append routing envelopes to protos: %w", err)
+	}
 	if proto.NeedsEventBusSupportProto(protoDir) {
 		if _, err := proto.EnsureEventBusSupportProto(protoDir, proto.EventBusSupportProtoOptions{}); err != nil {
 			return fmt.Errorf("failed to generate eventbus support proto: %w", err)

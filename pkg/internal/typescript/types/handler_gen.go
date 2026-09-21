@@ -71,6 +71,11 @@ type tsSubscriptionEntry struct {
 	ModuleName        string // e.g. "aegis_event_stream" — subscriber module filename
 	SubscriberAlias   string // e.g. "AegisEventStream" — unique subscriber import alias
 	TargetService     string // e.g. "eventbus" — service_id to resolve via ServiceHealthState
+	// RoutingOnly / RoutingEnvelopeName mirror tactype.SubscriptionEntry: the
+	// handler method takes the narrow envelope when this service is named in the
+	// source type's s2s_subscribe.routing_only_services.
+	RoutingOnly         bool
+	RoutingEnvelopeName string // e.g. "TopologyEventRoutingEnvelope"
 }
 
 // tsTargetServiceEntry describes a target service that needs a ServiceConnection.
@@ -276,6 +281,9 @@ func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, h
 			ModuleName:        topicSnake,
 			SubscriberAlias:   subscriberAlias,
 			TargetService:     "eventbus",
+
+			RoutingOnly:         sub.RoutingOnly,
+			RoutingEnvelopeName: event.TypeName + boundaries.RoutingEnvelopeSuffix,
 		})
 	}
 

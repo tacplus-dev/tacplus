@@ -98,6 +98,13 @@ type javaSubscriptionEntry struct {
 	StoreEpochFieldPascal string
 	// StoreEpochField is the same field's proto name, for the emitted comment.
 	StoreEpochField string
+	// RoutingOnly / EnvelopeTypeName mirror tactype.SubscriptionEntry: the
+	// Handler method takes the narrow envelope when this service is named in the
+	// source type's s2s_subscribe.routing_only_services. The store-epoch stamp
+	// above is skipped with it — an envelope has no epoch field to stamp, and a
+	// routing-only consumer is by construction not the record's store.
+	RoutingOnly      bool
+	EnvelopeTypeName string // e.g. "TopologyEventRoutingEnvelope"
 }
 
 // javaTargetServiceEntry describes a unique target service for ServiceConnection creation.
@@ -386,6 +393,9 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 
 			StoreEpochFieldPascal: javaPascalField(sub.SourceStoreEpochField),
 			StoreEpochField:       sub.SourceStoreEpochField,
+
+			RoutingOnly:      sub.RoutingOnly,
+			EnvelopeTypeName: event.TypeName + boundaries.RoutingEnvelopeSuffix,
 		})
 	}
 

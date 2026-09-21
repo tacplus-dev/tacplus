@@ -37,6 +37,18 @@ type tsSubscriberTemplateData struct {
 	TypeImportPath     string // relative import path to the generated type index
 	GrpcService        string // e.g. "alpha.SharedEventBusStateService" (per-topic; see EVENTBUS-PUBLISH-API-SPLIT.md)
 	GrpcMethod         string // e.g. "SubscribeToEventStream"
+
+	// RoutingOnly is the owner-declared narrowing: this service is named in the
+	// source type's s2s_subscribe.routing_only_services, so Handler takes
+	// RoutingEnvelopeName and the dispatch projects the three fields below into
+	// it. The full TypeName is still decoded off the wire first — a typed
+	// boundary, not a memory one (see spec.proto).
+	RoutingOnly           bool
+	RoutingEnvelopeName   string // e.g. "SensorEventRoutingEnvelope"
+	RoutingEnvelopeSchema string // e.g. "SensorEventRoutingEnvelopeSchema"
+	KeyFieldCamel         string // source field -> envelope deliveryId
+	PrincipalFieldCamel   string // source field -> envelope recipient
+	NamespaceFieldCamel   string // source field -> envelope namespace
 }
 
 type tsSubscriptionEventInfo struct {
@@ -108,13 +120,17 @@ func collectTsSubscriptions(config *tactype.Config, protoDir string) ([]tactype.
 	result := make([]tactype.SubscriptionEntry, 0, len(subs))
 	for _, sd := range subs {
 		res := boundaries.ResolveSubscriptionSource(p, protoDir, sd)
-		result = append(result, tactype.SubscriptionEntry{
+		entry := tactype.SubscriptionEntry{
 			SourcePackage:   sd.SourcePackage,
 			SourceStateRoot: sd.SourceStateRoot,
 			SourceField:     sd.SourceField,
 			SourceTypeFqn:   res.TypeFqn,
 			SourceProtoDir:  res.ProtoDir,
-		})
+		}
+		if err := boundaries.ApplyRoutingEnvelope(p, config.SelfPackage, &entry); err != nil {
+			return nil, err
+		}
+		result = append(result, entry)
 		if sd.Origin == "store_derived" {
 			zap.L().Info("Auto-derived store subscription",
 				zap.String("source", sd.Source),
@@ -159,10 +175,10 @@ func generateTsSubscribers(config *tactype.Config) error {
 			sub.SourcePackage, sub.SourceStateRoot, sub.SourceField)
 
 		data := tsSubscriberTemplateData{
-			SourcePackage:   sub.SourcePackage,
-			SourceStateRoot: sub.SourceStateRoot,
-			SourceField:     sub.SourceField,
-			FieldPascal:     fieldPascal,
+			SourcePackage:      sub.SourcePackage,
+			SourceStateRoot:    sub.SourceStateRoot,
+			SourceField:        sub.SourceField,
+			FieldPascal:        fieldPascal,
 			TypeName:           event.TypeName,
 			TypeSchemaName:     event.TypeName + "Schema",
 			EnvelopeName:       strutil.ToPascalCase(sub.SourceStateRoot) + fieldPascal + "SubscribeRecord",
@@ -170,6 +186,13 @@ func generateTsSubscribers(config *tactype.Config) error {
 			TypeImportPath:     tsRelativeModuleImport(filepath.Join(config.GetSmPrefix(), "subscribe"), event.ModuleDir),
 			GrpcService:        subService,
 			GrpcMethod:         subMethod,
+
+			RoutingOnly:           sub.RoutingOnly,
+			RoutingEnvelopeName:   event.TypeName + boundaries.RoutingEnvelopeSuffix,
+			RoutingEnvelopeSchema: event.TypeName + boundaries.RoutingEnvelopeSuffix + "Schema",
+			KeyFieldCamel:         strutil.ToLowerCamelCase(sub.SourceKeyField),
+			PrincipalFieldCamel:   strutil.ToLowerCamelCase(sub.SourceStorePrincipalField),
+			NamespaceFieldCamel:   strutil.ToLowerCamelCase(sub.SourceStoreNamespaceField),
 		}
 
 		var buf bytes.Buffer

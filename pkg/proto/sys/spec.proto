@@ -1221,6 +1221,42 @@ message MethodS2SAnnotation {
   // bootstrap token-minting RPCs where callers authenticate via
   // credentials in the request body (cred pair JWT), not via bearer token.
   bool auth_disabled = 2;
+
+  // routing_only_services narrows the TYPE a named subscriber's generated
+  // handler receives. Only meaningful on s2s_subscribe (the consumer half of a
+  // record/event surface); ignored everywhere else.
+  //
+  // Listing a service here GRANTS it nothing. Authorization stays auth_services'
+  // job alone; this field only narrows what an already-authorized subscriber's
+  // generated code is typed to see. auth_services keeps its existing meaning
+  // unchanged, and a subscriber not listed here keeps receiving the full
+  // message exactly as before (this is additive).
+  //
+  // For a listed subscriber, tacplus synthesizes
+  //
+  //   message <T>RoutingEnvelope {
+  //     string delivery_id = 1;  // <T>'s (spec.record).key field
+  //     string recipient   = 2;  // <T>'s (spec.store_principal) field
+  //     string namespace   = 3;  // <T>'s (spec.store_namespace) field
+  //   }
+  //
+  // and that subscriber's generated Handler takes <T>RoutingEnvelope instead of
+  // <T>. Generation FAILS for a type flagged here that declares no
+  // (spec.store_principal) field (and likewise no (spec.record).key or
+  // (spec.store_namespace) field, or one of the three that is not a string):
+  // an envelope with an empty recipient is a routing table nobody can route
+  // with, so it is refused rather than emitted.
+  //
+  // WHAT THIS IS NOT. This is a TYPED boundary, not a memory guarantee. The
+  // FULL message body still arrives on the wire and is still fully decoded
+  // inside the subscriber's process; the generated dispatch projects the three
+  // fields out and drops the decoded message immediately afterwards. The body
+  // is therefore still reachable from a heap dump, a debugger, or anything that
+  // logs the decode buffer. What this field delivers is that the subscriber's
+  // own handler CANNOT be written against the body, because its argument type
+  // does not have one. Narrowing the wire itself is a separate, broker-side
+  // change and is not what this field does.
+  repeated string routing_only_services = 3;
 }
 
 // MethodC2SAnnotation overrides service-level defaults for a single C2S RPC.

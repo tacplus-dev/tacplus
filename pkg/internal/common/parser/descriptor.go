@@ -1628,8 +1628,9 @@ func methodS2SEntry(m *spec.MethodS2SAnnotation) *model.EventBusMethodS2S {
 		return nil
 	}
 	return &model.EventBusMethodS2S{
-		AuthServices: append([]string(nil), m.GetAuthServices()...),
-		AuthDisabled: m.GetAuthDisabled(),
+		AuthServices:        append([]string(nil), m.GetAuthServices()...),
+		AuthDisabled:        m.GetAuthDisabled(),
+		RoutingOnlyServices: append([]string(nil), m.GetRoutingOnlyServices()...),
 	}
 }
 

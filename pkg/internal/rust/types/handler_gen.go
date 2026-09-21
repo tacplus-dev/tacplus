@@ -196,6 +196,11 @@ type subscriptionEntry struct {
 	TypePackage       string // e.g. "sensor" — package where the type is defined
 	TypeName          string // e.g. "TopologyEvent"
 	TargetService     string // e.g. "eventbus" — service_id to resolve via ServiceHealthState
+	// RoutingOnly / EnvelopeTypeName mirror tactype.SubscriptionEntry: the trait
+	// method takes the narrow envelope when this service is named in the source
+	// type's s2s_subscribe.routing_only_services.
+	RoutingOnly      bool
+	EnvelopeTypeName string // e.g. "TopologyEventRoutingEnvelope"
 }
 
 // buildSMTemplateData constructs the template data for handler.rs and service_manager.rs.
@@ -455,6 +460,8 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			TypePackage:       typePkg,
 			TypeName:          typeName,
 			TargetService:     targetService,
+			RoutingOnly:       sub.RoutingOnly,
+			EnvelopeTypeName:  typeName + boundaries.RoutingEnvelopeSuffix,
 		})
 	}
 

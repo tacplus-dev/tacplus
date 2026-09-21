@@ -65,6 +65,11 @@ type pySubscriptionEntry struct {
 	TypePbModule      string // e.g. "claude_sensor_pb2"
 	ModuleName        string // e.g. "aegis_event_stream" — subscriber module filename
 	TargetService     string // e.g. "eventbus" — service_id to resolve via ServiceHealthState
+	// RoutingOnly / EnvelopeTypeName mirror tactype.SubscriptionEntry: the
+	// abstract handler method is annotated with the narrow envelope when this
+	// service is named in the source type's s2s_subscribe.routing_only_services.
+	RoutingOnly      bool
+	EnvelopeTypeName string // e.g. "TopologyEventRoutingEnvelope"
 }
 
 // pyTargetServiceEntry describes a target service that needs a ServiceConnection.
@@ -280,6 +285,8 @@ func buildPySmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, p
 			TypePbModule:      event.TypePbModule,
 			ModuleName:        topicSnake,
 			TargetService:     "eventbus",
+			RoutingOnly:       sub.RoutingOnly,
+			EnvelopeTypeName:  event.TypeName + boundaries.RoutingEnvelopeSuffix,
 		})
 	}
 

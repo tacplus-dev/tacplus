@@ -174,6 +174,24 @@ type SubscriptionEntry struct {
 	// the write path into the store and the dispatch is where the store's clock is
 	// stamped — see spec.proto's store_epoch comment.
 	SourceStoreEpochField string
+	// RoutingOnly is true when THIS service (Config.SelfPackage) is named in the
+	// source type's s2s_subscribe.routing_only_services — the OWNER-declared,
+	// additive narrowing. The generated Handler then takes the synthesized
+	// <T>RoutingEnvelope instead of the full <T>, and the generated dispatch
+	// projects the three fields below into it.
+	//
+	// A typed boundary, not a memory one: the full body still arrives and is
+	// still decoded in-process. See spec.proto's routing_only_services comment.
+	RoutingOnly bool
+	// SourceKeyField, SourceStorePrincipalField and SourceStoreNamespaceField are
+	// SourceTypeFqn's (spec.record).key, (spec.store_principal) and
+	// (spec.store_namespace) field names — the envelope's delivery_id, recipient
+	// and namespace slots respectively. Populated only when RoutingOnly; all
+	// three are guaranteed non-empty then (boundaries.ResolveRoutingEnvelope
+	// refuses generation otherwise).
+	SourceKeyField            string
+	SourceStorePrincipalField string
+	SourceStoreNamespaceField string
 }
 
 // GetSmPrefix returns the service-manager directory prefix ("s2sm", "c2sm", "c2dm", or "w2sm").

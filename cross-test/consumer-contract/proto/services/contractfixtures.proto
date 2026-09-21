@@ -89,6 +89,39 @@ message FixtureAudit {
   string namespace = 5 [(spec.store_namespace) = true];
 }
 
+// ROUTING-ONLY CONSUMER (owner-declared envelope scoping). FixtureRouted's
+// s2s_subscribe names contractclient (the actor this fixture tree generates) in
+// routing_only_services, so its subscriber Handler for FixtureState.routed takes the
+// synthesized FixtureRoutedRoutingEnvelope {delivery_id, recipient, namespace}
+// instead of FixtureRouted — the body (payload) is not in the handler's type.
+//
+// PAIRED CONTROL: FixtureEvent above is subscribed by the same service and is
+// NOT flagged, so its handler keeps taking the full FixtureEvent. The two
+// subscriptions in one generated service manager are the proof that the
+// narrowing is per-topic and additive.
+//
+// A typed boundary, not a memory one: the full FixtureRouted still arrives on
+// the wire and is still decoded before the three fields are projected out.
+message FixtureRouted {
+  option (spec.record) = {
+    key: "delivery_id"
+    owner: "spiffe_id"
+    s2s: {auth_services: ["*"]}
+    s2s_subscribe: {
+      auth_services: ["contractclient"]
+      routing_only_services: ["contractclient"]
+    }
+  };
+
+  string delivery_id = 1 [(spec.assert_required) = true];
+  string recipient = 2 [(spec.store_principal) = true];
+  string namespace = 3 [(spec.store_namespace) = true];
+  string spiffe_id = 4 [(spec.identity_spiffe_subject) = true];
+  // The body the routing-only subscriber must not be able to reach.
+  string payload = 5;
+  int64 delivered_at_ms = 6 [(spec.query_field) = {op: QUERY_OP_RANGE}];
+}
+
 // A nested sub-message reached through FixtureEvent.contact — proves recursive
 // data entitlement redacts a sub-message field (phone) while preserving its
 // siblings (label). Not a record; redaction is valid on any returned message.
@@ -107,8 +140,14 @@ message FixtureState {
   option (spec.subscribe) = {
     source: "contractfixtures.FixtureState.events"
   };
+  option (spec.subscribe) = {
+    source: "contractfixtures.FixtureState.routed"
+  };
 
   repeated FixtureEvent events = 1 [
+    (spec.topic) = true
+  ];
+  repeated FixtureRouted routed = 2 [
     (spec.topic) = true
   ];
 }

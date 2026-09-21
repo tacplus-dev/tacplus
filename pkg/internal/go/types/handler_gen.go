@@ -189,6 +189,13 @@ type SubscriptionTemplateEntry struct {
 	EventBusImport           string // e.g. "module/tacplus/types/sys/eventbus"
 	HasTimeseriesProjections bool   // source event has timeseries_type projections
 	TargetService            string // e.g. "eventbus" — service_id to resolve via ServiceHealthState
+	// RoutingOnly / EnvelopeTypeName mirror tactype.SubscriptionEntry: this
+	// service is named in the source type's s2s_subscribe.routing_only_services,
+	// so the chassis hands the callback the narrow envelope. The trace-publish
+	// and projection legs are skipped with it — neither has anything to read out
+	// of an envelope that carries no trace id and no body.
+	RoutingOnly      bool
+	EnvelopeTypeName string // e.g. "TopologyEventRoutingEnvelope"
 }
 
 // DiskStoreRuntimeEntry holds per-store data for ServiceManager-owned redo logs.
@@ -557,6 +564,8 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			EventBusImport:           config.ModuleBasePath + "/types/generated/eventbus_support",
 			HasTimeseriesProjections: hasTimeseries,
 			TargetService:            targetService,
+			RoutingOnly:              sub.RoutingOnly,
+			EnvelopeTypeName:         typeName + boundaries.RoutingEnvelopeSuffix,
 		})
 	}
 

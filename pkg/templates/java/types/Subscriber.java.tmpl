@@ -60,11 +60,29 @@ public class {{.ClassName}} {
         }
     }
 
+{{- if .RoutingOnly}}
+    /**
+     * Handler is called for each received {{.TypeName}}, projected to its routing
+     * envelope. This service is named in {{.TypeName}}'s
+     * s2s_subscribe.routing_only_services, so the handler is typed for
+     * {{.EnvelopeTypeName}} — {delivery_id, recipient, namespace} — and cannot be
+     * written against the message body.
+     *
+     * <p>A TYPED boundary, not a memory one: the full {{.TypeName}} still arrives
+     * on the wire and is still parsed below before the three fields are projected
+     * out of it. See spec.proto's routing_only_services comment.
+     */
+    @FunctionalInterface
+    public interface Handler {
+        void handle({{.TypeOuterClass}}.{{.EnvelopeTypeName}} event, RecordMeta meta) throws Exception;
+    }
+{{- else}}
     /** Handler is called for each received event. */
     @FunctionalInterface
     public interface Handler {
         void handle({{.TypeOuterClass}}.{{.TypeName}} event, RecordMeta meta) throws Exception;
     }
+{{- end}}
 
     /**
      * Creates a subscriber for the {{.SourceField}} topic.
@@ -240,12 +258,27 @@ public class {{.ClassName}} {
         Envelope envelope = tryDecodeEnvelope(data);
         if (envelope != null) {
             return new DecodedRecord(
-                    {{.TypeOuterClass}}.{{.TypeName}}.parseFrom(envelope.payload),
+                    {{if .RoutingOnly}}projectRoutingEnvelope({{.TypeOuterClass}}.{{.TypeName}}.parseFrom(envelope.payload)){{else}}{{.TypeOuterClass}}.{{.TypeName}}.parseFrom(envelope.payload){{end}},
                     decodeRecordMeta(envelope.meta));
         }
-        return new DecodedRecord({{.TypeOuterClass}}.{{.TypeName}}.parseFrom(data),
+        return new DecodedRecord({{if .RoutingOnly}}projectRoutingEnvelope({{.TypeOuterClass}}.{{.TypeName}}.parseFrom(data)){{else}}{{.TypeOuterClass}}.{{.TypeName}}.parseFrom(data){{end}},
                 new RecordMeta(0, 0, new byte[0], "", 0));
     }
+{{- if .RoutingOnly}}
+
+    /**
+     * Projects the three routing fields out of a fully parsed {{.TypeName}} and
+     * drops the rest. The parsed message is local to this method and never
+     * reaches DecodedRecord or the handler.
+     */
+    private static {{.TypeOuterClass}}.{{.EnvelopeTypeName}} projectRoutingEnvelope({{.TypeOuterClass}}.{{.TypeName}} event) {
+        return {{.TypeOuterClass}}.{{.EnvelopeTypeName}}.newBuilder()
+                .setDeliveryId(event.get{{.KeyFieldPascal}}())
+                .setRecipient(event.get{{.PrincipalFieldPascal}}())
+                .setNamespace(event.get{{.NamespaceFieldPascal}}())
+                .build();
+    }
+{{- end}}
 
     private static RecordMeta decodeRecordMeta(byte[] data) {
         byte[] key = new byte[0];
@@ -438,10 +471,10 @@ public class {{.ClassName}} {
     }
 
     private static class DecodedRecord {
-        final {{.TypeOuterClass}}.{{.TypeName}} event;
+        final {{.TypeOuterClass}}.{{if .RoutingOnly}}{{.EnvelopeTypeName}}{{else}}{{.TypeName}}{{end}} event;
         final RecordMeta meta;
 
-        DecodedRecord({{.TypeOuterClass}}.{{.TypeName}} event, RecordMeta meta) {
+        DecodedRecord({{.TypeOuterClass}}.{{if .RoutingOnly}}{{.EnvelopeTypeName}}{{else}}{{.TypeName}}{{end}} event, RecordMeta meta) {
             this.event = event;
             this.meta = meta;
         }

@@ -156,7 +156,7 @@ tsInsertFunc {{.ProjectionPkgAlias}}.TimeseriesInsertFunc
 {{range .Subscriptions}}
 // {{.HandlerFuncFieldName}} is an optional callback invoked for each
 // {{.SourcePackage}}.{{.SourceField}} event before the standard projection pipeline.
-{{.HandlerFuncFieldName}} func(ctx context.Context, event *{{.TypePkgAlias}}.{{.TypeName}}, meta *eb_pb.RecordMeta) error
+{{.HandlerFuncFieldName}} func(ctx context.Context, event *{{.TypePkgAlias}}.{{if .RoutingOnly}}{{.EnvelopeTypeName}}{{else}}{{.TypeName}}{{end}}, meta *eb_pb.RecordMeta) error
 {{end}}
 {{end}}
 }
@@ -628,7 +628,7 @@ sm.tsInsertFunc = fn
 // {{.HandlerFuncSetterName}} sets a custom handler called for each
 // {{.SourcePackage}}.{{.SourceField}} event received from EventBus before the
 // standard timeseries projection pipeline. Set before Run().
-func (sm *ServiceManager) {{.HandlerFuncSetterName}}(fn func(ctx context.Context, event *{{.TypePkgAlias}}.{{.TypeName}}, meta *eb_pb.RecordMeta) error) {
+func (sm *ServiceManager) {{.HandlerFuncSetterName}}(fn func(ctx context.Context, event *{{.TypePkgAlias}}.{{if .RoutingOnly}}{{.EnvelopeTypeName}}{{else}}{{.TypeName}}{{end}}, meta *eb_pb.RecordMeta) error) {
 sm.{{.HandlerFuncFieldName}} = fn
 }
 {{end}}
@@ -1353,6 +1353,20 @@ zap.Error(err), zap.Duration("retry_in", backoff))
 } else {
 backoff = minSubBackoff
 sub := {{.SubPkgAlias}}.New(subConn, "{{$.ServiceLabel}}")
+{{- if .RoutingOnly}}
+// Routing-only subscriber: the generated Handler takes
+// {{.TypePkgAlias}}.{{.EnvelopeTypeName}}, so neither the trace-publish leg
+// (no trace id on an envelope) nor the projection pipeline (no body to
+// project) has anything to read. Both are omitted rather than stubbed.
+if err := sub.Subscribe(subCtx, func(ctx context.Context, event *{{.TypePkgAlias}}.{{.EnvelopeTypeName}}, meta *eb_pb.RecordMeta) error {
+if sm.{{.HandlerFuncFieldName}} != nil {
+return sm.{{.HandlerFuncFieldName}}(ctx, event, meta)
+}
+return nil
+}, {{.SubPkgAlias}}.WithEarliest()); err != nil && subCtx.Err() == nil {
+zap.L().Error("subscription {{.SourcePackage}}.{{.SourceField}} ended, re-resolving {{.TargetService}}", zap.Error(err))
+}
+{{- else}}
 if err := sub.Subscribe(subCtx, func(ctx context.Context, event *{{.TypePkgAlias}}.{{.TypeName}}, meta *eb_pb.RecordMeta) error {
 if event.GetTraceId() != "" && !event.GetNoop() {
 tracePublish(ctx, &trace_pb.TraceEvent{
@@ -1374,6 +1388,7 @@ return {{.TypePkgAlias}}.Handle{{.TypeName}}(ctx, event, {{- if $.HasTimeseriesP
 }, {{.SubPkgAlias}}.WithEarliest()); err != nil && subCtx.Err() == nil {
 zap.L().Error("subscription {{.SourcePackage}}.{{.SourceField}} ended, re-resolving {{.TargetService}}", zap.Error(err))
 }
+{{- end}}
 // Close the per-attempt channel before re-resolving a fresh one.
 if closer, ok := subConn.(interface{ Close() error }); ok {
 closer.Close()

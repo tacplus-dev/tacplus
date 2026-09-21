@@ -11,11 +11,31 @@
  */
 
 import * as grpc from '@grpc/grpc-js';
+{{- if .RoutingOnly}}
+import { create, fromBinary } from '@bufbuild/protobuf';
+// {{.TypeName}} itself is deliberately NOT imported: nothing in this module is
+// typed for it any more, which is the whole point of the narrowing.
+import { type {{.RoutingEnvelopeName}}, {{.RoutingEnvelopeSchema}}, {{.EnvelopeSchemaName}} } from '{{.TypeImportPath}}';
+
+/**
+ * Handler is called for each received {{.TypeName}}, projected to its routing
+ * envelope. This service is named in {{.TypeName}}'s
+ * s2s_subscribe.routing_only_services, so the handler is typed for
+ * {{.RoutingEnvelopeName}} — {deliveryId, recipient, namespace} — and cannot be
+ * written against the message body.
+ *
+ * A TYPED boundary, not a memory one: the full {{.TypeName}} still arrives on
+ * the wire and is still decoded below before the three fields are projected out
+ * of it. See spec.proto's routing_only_services comment.
+ */
+export type Handler = (event: {{.RoutingEnvelopeName}}, meta: RecordMeta) => Promise<void>;
+{{- else}}
 import { fromBinary } from '@bufbuild/protobuf';
 import { type {{.TypeName}}, {{.EnvelopeSchemaName}} } from '{{.TypeImportPath}}';
 
 /** Handler is called for each received {{.TypeName}}. */
 export type Handler = (event: {{.TypeName}}, meta: RecordMeta) => Promise<void>;
+{{- end}}
 
 /**
  * RecordMeta carries per-record metadata from the event-bus.
@@ -180,7 +200,19 @@ export class Subscriber {
             timestamp: ts ? ts.seconds * 1000n + BigInt(Math.floor(ts.nanos / 1_000_000)) : 0n,
             key: record.meta?.key ?? new Uint8Array(0),
           };
+{{- if .RoutingOnly}}
+          // Project the routing envelope and drop the decoded body: the handler
+          // is typed for {{.RoutingEnvelopeName}} and never sees record.payload.
+          const envelope: {{.RoutingEnvelopeName}} = create({{.RoutingEnvelopeSchema}}, {
+            deliveryId: record.payload.{{.KeyFieldCamel}},
+            recipient: record.payload.{{.PrincipalFieldCamel}},
+            namespace: record.payload.{{.NamespaceFieldCamel}},
+          });
+          record.payload = undefined;
+          await handler(envelope, meta);
+{{- else}}
           await handler(record.payload, meta);
+{{- end}}
         })().then(
           () => {
             if (!failed) stream.resume();

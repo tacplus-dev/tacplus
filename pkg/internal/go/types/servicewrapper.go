@@ -269,6 +269,18 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 						service.Name, method.Name, t, annotation)
 				}
 			}
+			// (spec.record).private pins a row to exactly one owner on every
+			// read path, with no admin/tenant/plain-s2s exception — unlike
+			// store_namespace/store_principal above, there is no surface where
+			// serving a private record unpinned is legitimate. The pin itself
+			// is not generated for any language yet (tracked separately), so
+			// today a Go host of ANY private record read — c2s or s2s, record
+			// plane or not — would serve every owner's rows to every caller.
+			// Refuse unconditionally rather than ship that silently.
+			if t := goPrivateEgressRows(method, san, info.Package); t != "" {
+				return fmt.Errorf("%s.%s returns %s, which carries (spec.record).private = true; the owner pin is not generated for any language yet, so hosting this read would serve every owner's rows to every caller",
+					service.Name, method.Name, t)
+			}
 			grpcWrappers.WriteString(generateGRPCWrapper(service, method, info.Package, svc.ParentDir, svc.GrpcName, accountingMap, info.CrossPackageTypes, skippedTraceTypes, san))
 			grpcWrappers.WriteString("\n")
 
@@ -1845,6 +1857,55 @@ func goPinnedEgressRows(method *parser.MethodInfo, san *egressSanitizer, service
 		}
 	}
 	return "", ""
+}
+
+// goPrivateEgressRows names the egress type carrying a caller-owned
+// ((spec.record).private) row a method returns, or "" when it returns none.
+// Unlike store_namespace/store_principal, private is a MESSAGE-level
+// annotation — declared on the record type itself, not a field within it —
+// so this checks each reachable type's own record_private annotation
+// directly rather than scanning its fields, and also checks each repeated
+// record-bearing field's ITEM type the same way (mirroring mcpRowFields'
+// walk, but for a message-level rather than field-level marker).
+func goPrivateEgressRows(method *parser.MethodInfo, san *egressSanitizer, servicePackage string) string {
+	if san == nil {
+		return ""
+	}
+	egressTypes := []string{method.FullOutputType}
+	if method.Resolved != nil {
+		egressTypes = append(egressTypes, method.Resolved.PageItemType, method.Resolved.WatchItemType, method.Resolved.WatchChangeType)
+	}
+	for _, t := range egressTypes {
+		if t == "" {
+			continue
+		}
+		pkg, name := splitEgressFQN(t, servicePackage)
+		msg, ok := san.msgs[pkg+"\x00"+name]
+		if !ok {
+			continue
+		}
+		if msg.Annotations["record_private"].BoolValue {
+			return t
+		}
+		for i := range msg.Fields {
+			f := &msg.Fields[i]
+			if !f.IsRepeated || !f.IsMessage || f.IsMap {
+				continue
+			}
+			itemPkg := f.TypePackage
+			if itemPkg == "" {
+				itemPkg = pkg
+			}
+			item, ok := san.msgs[itemPkg+"\x00"+f.Type]
+			if !ok {
+				continue
+			}
+			if item.Annotations["record_private"].BoolValue {
+				return itemPkg + "." + f.Type
+			}
+		}
+	}
+	return ""
 }
 
 // qualifiedMethodAuthKey builds the SERVICE-QUALIFIED method identifier that

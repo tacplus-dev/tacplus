@@ -114,6 +114,46 @@ func rustPrincipalResolve(local, method, indent string) string {
 `, indent, local, indent, indent, indent, indent, method)
 }
 
+// rustPrivatePrincipalResolve renders the local a (spec.record).private pin
+// binds against. Unlike rustPrincipalResolve's plain caller.subject(), a
+// private record read behind a delegated S2S call must pin against the
+// DELEGATE (the `act` claim), not the calling service's own subject — the
+// service is not the row's owner, whoever it is acting for is. A service/
+// workload token carrying no act claim has no delegate to pin to at all and
+// is refused outright (permission_denied, not unauthenticated: the caller IS
+// authenticated, it simply cannot read a private record on its own behalf).
+// The chassis Authorizer's auth_actors gate (authorizer.rs.tmpl) has already
+// decided whether this act may call the method at all by the time this
+// resolve runs; this only decides which identity the pin compares rows
+// against.
+func rustPrivatePrincipalResolve(local, method, indent string) string {
+	return fmt.Sprintf(`%[1]slet %[2]s = caller.as_ref()
+%[1]s    .ok_or_else(|| tonic::Status::unauthenticated("%[3]s requires an authenticated caller"))?;
+%[1]slet %[2]s = match %[2]s.token().sub_type().unwrap_or("") {
+%[1]s    "service" | "workload" => %[2]s.token().actor()
+%[1]s        .filter(|s| !s.is_empty())
+%[1]s        .map(|s| s.to_string())
+%[1]s        .ok_or_else(|| tonic::Status::permission_denied("%[3]s reads a private record and requires a delegated caller identity (act claim)"))?,
+%[1]s    _ => %[2]s.token().subject()
+%[1]s        .filter(|s| !s.is_empty())
+%[1]s        .map(|s| s.to_string())
+%[1]s        .ok_or_else(|| tonic::Status::unauthenticated("%[3]s requires an authenticated caller"))?,
+%[1]s};
+`, indent, local, method)
+}
+
+// anyPrincipalFieldPrivate reports whether any field in the list is a
+// (spec.record).private row — the resolve function for the whole block (they
+// share one __read_principal binding) must be the private-aware one if so.
+func anyPrincipalFieldPrivate(fields []rustPrincipalListField) bool {
+	for _, f := range fields {
+		if f.Private {
+			return true
+		}
+	}
+	return false
+}
+
 // rustActorResolve renders the local that binds the `act` (actor) claim off
 // the caller's token, when present. Unlike rustPrincipalResolve, an absent
 // actor is the ORDINARY case (an un-delegated call) — this never errors, it
@@ -175,7 +215,11 @@ func rustStreamPrincipalStmts(field, msgVar, indent string) string {
 // filtering (rustPrincipalCrash).
 func rustResponsePrincipalFilterBlock(fields []rustPrincipalListField, method string) string {
 	out := "\n            // (spec.store_principal): filter rows to the caller's principal.\n"
-	out += rustPrincipalResolve("__read_principal", method, "            ")
+	if anyPrincipalFieldPrivate(fields) {
+		out += rustPrivatePrincipalResolve("__read_principal", method, "            ")
+	} else {
+		out += rustPrincipalResolve("__read_principal", method, "            ")
+	}
 	out += "            let mut resp = resp;\n"
 	for _, f := range fields {
 		if !f.Private {

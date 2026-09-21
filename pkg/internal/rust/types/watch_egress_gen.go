@@ -130,6 +130,18 @@ func (w rustWatchEgress) needsPrincipal() bool {
 	return false
 }
 
+// needsPrivatePrincipal reports whether any principal-pinned guard is also a
+// (spec.record).private row — the resolve for the whole preamble (they share
+// one __read_principal binding) must be the private-aware one if so.
+func (w rustWatchEgress) needsPrivatePrincipal() bool {
+	for _, g := range append(append([]rustWatchRowGuard{}, w.Item...), w.Change...) {
+		if g.Principal != "" && g.Private {
+			return true
+		}
+	}
+	return false
+}
+
 func (w rustWatchEgress) needsNamespace() bool {
 	for _, g := range append(append([]rustWatchRowGuard{}, w.Item...), w.Change...) {
 		if g.Namespace != "" {
@@ -220,7 +232,11 @@ func rustWatchEgressPreamble(w rustWatchEgress, method string, runtimeGate bool)
 	b.WriteString("        // egress backstop the unary and PAGE seams apply, resolved once here and\n")
 	b.WriteString("        // applied to every snapshot_item and delta inside the producer task.\n")
 	if w.needsPrincipal() {
-		b.WriteString(rustPrincipalResolve("__read_principal", method, "        "))
+		if w.needsPrivatePrincipal() {
+			b.WriteString(rustPrivatePrincipalResolve("__read_principal", method, "        "))
+		} else {
+			b.WriteString(rustPrincipalResolve("__read_principal", method, "        "))
+		}
 	}
 	if w.needsNamespace() {
 		b.WriteString(rustNamespaceResolve("__read_namespace", method, "        ", runtimeGate, true))

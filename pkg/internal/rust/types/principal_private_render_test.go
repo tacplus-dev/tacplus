@@ -145,6 +145,39 @@ func TestGeneratedNonPrivatePrincipalFilterDropsMismatchWithoutCrash(t *testing.
 	}
 }
 
+// rustPrivatePrincipalResolve must pin a delegated S2S call against the
+// ACT claim, never the calling service's own subject, and must refuse
+// outright (not fall back to subject()) when no act is present.
+func TestRustPrivatePrincipalResolvePinsActNotSubjectForServiceCallers(t *testing.T) {
+	got := rustPrivatePrincipalResolve("__read_principal", "GetThing", "            ")
+	for _, want := range []string{
+		`"service" | "workload" =>`,
+		"token().actor()",
+		"permission_denied",
+		"token().subject()",
+		"unauthenticated",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rustPrivatePrincipalResolve is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// The unary/PAGE filter block must select the private-aware resolve only
+// when the block actually contains a private field — a plain store_principal
+// method must keep today's simple subject()-only resolve, never gain a new
+// permission_denied refusal path it didn't have before.
+func TestRustResponsePrincipalFilterBlockPicksResolveByPrivacy(t *testing.T) {
+	plain := rustResponsePrincipalFilterBlock([]rustPrincipalListField{{Field: "items", ItemField: "owner"}}, "ListThings")
+	if strings.Contains(plain, "permission_denied") {
+		t.Fatalf("a plain store_principal filter must not gain the private permission_denied refusal:\n%s", plain)
+	}
+	private := rustResponsePrincipalFilterBlock([]rustPrincipalListField{{Field: "items", ItemField: "owner", Private: true}}, "ListThings")
+	if !strings.Contains(private, "permission_denied") {
+		t.Fatalf("a private filter must use the delegate-aware resolve:\n%s", private)
+	}
+}
+
 // The WATCH seam's principal guard must take the same fork: private aborts,
 // plain store_principal keeps its existing silent `continue`.
 func TestRustWatchEgressGuardStmtsPrivateAbortsPlainContinues(t *testing.T) {
@@ -162,5 +195,19 @@ func TestRustWatchEgressGuardStmtsPrivateAbortsPlainContinues(t *testing.T) {
 	}
 	if strings.Contains(private, "continue;") {
 		t.Fatalf("a private record's WATCH principal guard must not silently continue past a mismatch:\n%s", private)
+	}
+}
+
+// The WATCH preamble must resolve __read_principal via the delegate-aware
+// path when any pinned guard is private, and the plain subject()-only path
+// otherwise — same fork as the unary/PAGE filter block.
+func TestRustWatchEgressPreamblePicksResolveByPrivacy(t *testing.T) {
+	plain := rustWatchEgressPreamble(rustWatchEgress{Item: []rustWatchRowGuard{{Principal: "owner"}}}, "Watch", false)
+	if strings.Contains(plain, "permission_denied") {
+		t.Fatalf("a plain store_principal WATCH preamble must not gain the private permission_denied refusal:\n%s", plain)
+	}
+	private := rustWatchEgressPreamble(rustWatchEgress{Item: []rustWatchRowGuard{{Principal: "owner", Private: true}}}, "Watch", false)
+	if !strings.Contains(private, "permission_denied") {
+		t.Fatalf("a private WATCH preamble must use the delegate-aware resolve:\n%s", private)
 	}
 }

@@ -209,6 +209,13 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	var methodAuthLines []string
 	for _, service := range targetServices {
 		handlerInterface.WriteString(generateGoHandlerInterface(service, info.Package))
+		// The peer half of a record query plane, whoever hosts it — Java's own
+		// emission gate for the (spec.store_namespace)/(spec.store_principal)
+		// egress seams (java/types/servicewrapper_gen.go), copied rather than
+		// tightened. A plain s2s service returning record rows is legitimate:
+		// Java emits no row filter there either, so refusing it here would be a
+		// generation-time regression, not a boundary.
+		recordPlaneS2S := !service.IsC2S && service.SynthesizedKind == parser.SynthesizedKindRecordMap
 		for _, method := range service.Methods {
 			// An RPC_PRINCIPAL_MCP rpc is a tool, not a gRPC call: it gets no
 			// method on the wrapper and no per-method auth registration. The
@@ -247,6 +254,20 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			if f := goStoreEpochField(method.FullInputType, san, info.Package); f != "" {
 				return fmt.Errorf("%s.%s takes %s, whose field %q carries (spec.store_epoch), but the stamp is generated for Java service wrappers only; a Go host of this write would leave the store epoch unstamped",
 					service.Name, method.Name, method.FullInputType, f)
+			}
+			// (spec.store_namespace) / (spec.store_principal) filter the rows
+			// leaving a read down to the caller's own. That filter is generated
+			// for Java and Rust service wrappers only — the Go wrapper renders
+			// none on any seam — so a Go host of a record-bearing read would
+			// serve every tenant's rows to every authenticated caller. Refuse
+			// to generate rather than ship the leak silently. The MCP dispatch
+			// is not covered here: it renders the filter itself
+			// (goMcpRowFilterBlock), and an MCP rpc never reaches this loop.
+			if service.IsC2S || recordPlaneS2S {
+				if annotation, t := goPinnedEgressRows(method, san, info.Package); annotation != "" {
+					return fmt.Errorf("%s.%s returns %s, which carries (spec.%s); the egress row filter is generated for Java and Rust service wrappers only, so a Go host of this read would return every tenant's rows",
+						service.Name, method.Name, t, annotation)
+				}
 			}
 			grpcWrappers.WriteString(generateGRPCWrapper(service, method, info.Package, svc.ParentDir, svc.GrpcName, accountingMap, info.CrossPackageTypes, skippedTraceTypes, san))
 			grpcWrappers.WriteString("\n")
@@ -1791,6 +1812,39 @@ func goAppendOnlyRecordOnMethod(method *parser.MethodInfo, san *egressSanitizer,
 		}
 	}
 	return ""
+}
+
+// goPinnedEgressRows names the caller-pinned rows a method returns: the
+// annotation ("store_namespace" or "store_principal") and the egress type
+// carrying it, or "", "" when the method returns none. The Go wrapper renders
+// NO egress row filter on any of its seams — the filter is generated for Java
+// and Rust service wrappers only — so this exists purely so a Go host of a
+// record-bearing read fails generation instead of returning every tenant's
+// rows. It answers off the same index helpers the generated MCP dispatch
+// filters with: mcpRowFields for repeated rows, annotatedStringField for a
+// row-shaped type.
+func goPinnedEgressRows(method *parser.MethodInfo, san *egressSanitizer, servicePackage string) (string, string) {
+	if san == nil {
+		return "", ""
+	}
+	// Resolved is the computed COLLECTION view and is nil for a method that
+	// declares no collection at all, so the page/watch types are reachable only
+	// through it.
+	egressTypes := []string{method.FullOutputType}
+	if method.Resolved != nil {
+		egressTypes = append(egressTypes, method.Resolved.PageItemType, method.Resolved.WatchItemType, method.Resolved.WatchChangeType)
+	}
+	for _, t := range egressTypes {
+		if t == "" {
+			continue
+		}
+		for _, annotation := range []string{"store_namespace", "store_principal"} {
+			if len(san.mcpRowFields(t, servicePackage, annotation)) > 0 || san.annotatedStringField(t, servicePackage, annotation) != "" {
+				return annotation, t
+			}
+		}
+	}
+	return "", ""
 }
 
 // qualifiedMethodAuthKey builds the SERVICE-QUALIFIED method identifier that

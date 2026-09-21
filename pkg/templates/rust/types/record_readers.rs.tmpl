@@ -55,15 +55,25 @@ impl<'a> {{.StructName}}<'a> {
     /// The key is an EQ criterion on `{{.FilterType}}` because the record
     /// declares `(spec.record).s2s_read`; that is what folds a record's key into
     /// its filter (no record declares `(spec.query_field)` on its own key).
+{{- if .HasDeletedFlag}}
+    ///
+    /// `include_deleted` is the soft-delete escape hatch: false — the default the
+    /// plane applies when nothing is said — excludes rows whose
+    /// `(spec.deleted_flag)` field is true, so a citation that must resolve to a
+    /// deleted-but-not-yet-purged row asks for it explicitly.
+{{- end}}
     pub async fn get(
         &self,
         {{.KeyField}}: {{if .KeyIsString}}&str{{else}}{{.KeyRustType}}{{end}},
+        {{- if .HasDeletedFlag}}
+        include_deleted: bool,
+        {{- end}}
     ) -> Result<Option<{{.RecordName}}>, tonic::Status> {
         let filter = {{.FilterType}} {
             {{.KeyField}}: Some({{.KeyField}}{{if .KeyIsString}}.to_string(){{end}}),
             ..Default::default()
         };
-        let (items, _, _) = self.query_page(Some(filter), 1, String::new()).await?;
+        let (items, _, _) = self.query_page(Some(filter), 1, String::new(){{if .HasDeletedFlag}}, include_deleted{{end}}).await?;
         Ok(items.into_iter().next())
     }
 {{- end}}
@@ -84,13 +94,22 @@ impl<'a> {{.StructName}}<'a> {
     /// paged once, and released. Paging through a large result with a stable
     /// snapshot is a living-query concern the plane models with `Watch<T>`, and
     /// this method deliberately does not pretend to offer it.
+{{- if .HasDeletedFlag}}
+    ///
+    /// `include_deleted` is the soft-delete escape hatch: false — the default the
+    /// plane applies when nothing is said — excludes rows whose
+    /// `(spec.deleted_flag)` field is true.
+{{- end}}
     pub async fn list(
         &self,
         filter: Option<{{.FilterType}}>,
         page_size: i32,
         page_token: impl Into<String>,
+        {{- if .HasDeletedFlag}}
+        include_deleted: bool,
+        {{- end}}
     ) -> Result<(Vec<{{.RecordName}}>, String, i64), tonic::Status> {
-        self.query_page(filter, page_size, page_token.into()).await
+        self.query_page(filter, page_size, page_token.into(){{if .HasDeletedFlag}}, include_deleted{{end}}).await
     }
 
     /// The full Create -> List -> Delete lifecycle, with the handle released on
@@ -106,12 +125,18 @@ impl<'a> {{.StructName}}<'a> {
         filter: Option<{{.FilterType}}>,
         page_size: i32,
         page_token: String,
+        {{- if .HasDeletedFlag}}
+        include_deleted: bool,
+        {{- end}}
     ) -> Result<(Vec<{{.RecordName}}>, String, i64), tonic::Status> {
         let handle = self
             .client
             .{{.CreateFn}}({{.OpenReqType}} {
                 filter,
                 standing: false,
+                {{- if .HasDeletedFlag}}
+                include_deleted,
+                {{- end}}
                 ..Default::default()
             })
             .await?

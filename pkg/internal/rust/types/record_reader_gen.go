@@ -30,27 +30,28 @@ import (
 // handle is never Deleted when the List between them fails leaks a server-side
 // query per failed read. The generated reader closes the handle on both paths.
 type recordReaderEntry struct {
-	FnName        string // SM method, e.g. "message_record_reader"
-	StructName    string // reader type, e.g. "MessageRecordReader"
-	RecordFQN     string // e.g. "messaging.Message"
-	RecordName    string // e.g. "Message"
-	RecordPath    string // Rust path to the record type
-	QueryPath     string // Rust path to the plane's generated query module
-	HostAccessor  string // GrpcClients accessor for the plane host, e.g. "stratum"
-	ClientFn      string // client accessor on the host, e.g. "record_map_client"
-	KeyField      string // record key field name, e.g. "delivery_id"
-	KeyRustType   string // Rust type of the key field, e.g. "String"
-	KeyIsString   bool
-	CreateFn      string // e.g. "create_message_query"
-	ListFn        string // e.g. "list_message_page"
-	DeleteFn      string // e.g. "delete_message_query"
-	FilterType    string // e.g. "MessageFilter"
-	OpenReqType   string // e.g. "OpenMessageQueryRequest"
-	PullReqType   string // e.g. "PullMessageRequest"
-	HandleType    string // "QueryHandle"
-	HasKeyFilter  bool   // whether the key reached <T>Filter (point read is possible)
-	ClientModPath string // module path under internal/grpc/clients, e.g. "vservices::query::record_map"
-	ClientStruct  string // e.g. "RecordMapGrpcClient"
+	FnName         string // SM method, e.g. "message_record_reader"
+	StructName     string // reader type, e.g. "MessageRecordReader"
+	RecordFQN      string // e.g. "messaging.Message"
+	RecordName     string // e.g. "Message"
+	RecordPath     string // Rust path to the record type
+	QueryPath      string // Rust path to the plane's generated query module
+	HostAccessor   string // GrpcClients accessor for the plane host, e.g. "stratum"
+	ClientFn       string // client accessor on the host, e.g. "record_map_client"
+	KeyField       string // record key field name, e.g. "delivery_id"
+	KeyRustType    string // Rust type of the key field, e.g. "String"
+	KeyIsString    bool
+	CreateFn       string // e.g. "create_message_query"
+	ListFn         string // e.g. "list_message_page"
+	DeleteFn       string // e.g. "delete_message_query"
+	FilterType     string // e.g. "MessageFilter"
+	OpenReqType    string // e.g. "OpenMessageQueryRequest"
+	PullReqType    string // e.g. "PullMessageRequest"
+	HandleType     string // "QueryHandle"
+	HasKeyFilter   bool   // whether the key reached <T>Filter (point read is possible)
+	HasDeletedFlag bool   // whether the record declares (spec.deleted_flag), so reads can opt into flagged rows
+	ClientModPath  string // module path under internal/grpc/clients, e.g. "vservices::query::record_map"
+	ClientStruct   string // e.g. "RecordMapGrpcClient"
 }
 
 // recordReaderFile is the template data for record_readers.rs: the readers plus
@@ -196,30 +197,35 @@ func collectRecordReaders(config *tactype.Config, protoDir string) ([]recordRead
 			key = k.StringValue
 		}
 		keyRust, isString, hasKey := recordKeyRustType(rec, key)
+		// Open<T>QueryRequest carries include_deleted for every record, but only a
+		// record with a (spec.deleted_flag) field has rows the flag can include, so
+		// only such a reader exposes the parameter.
+		_, hasDeletedFlag := parser.DeletedFlagField(rec)
 		name := rec.Name
 		snake := strutil.ToSnakeCase(name)
 		entries = append(entries, recordReaderEntry{
-			FnName:        snake + "_record_reader",
-			StructName:    name + "RecordReader",
-			RecordFQN:     fqn,
-			RecordName:    name,
-			RecordPath:    rustModulePath(recPath, recFd.Package) + "::" + name,
-			QueryPath:     queryPath,
-			HostAccessor:  hostAccessor,
-			ClientFn:      clientFn,
-			KeyField:      key,
-			KeyRustType:   keyRust,
-			KeyIsString:   isString,
-			CreateFn:      "create_" + snake + "_query",
-			ListFn:        "list_" + snake + "_page",
-			DeleteFn:      "delete_" + snake + "_query",
-			FilterType:    name + "Filter",
-			OpenReqType:   "Open" + name + "QueryRequest",
-			PullReqType:   "Pull" + name + "Request",
-			HandleType:    "QueryHandle",
-			HasKeyFilter:  hasKey,
-			ClientModPath: clientModPath,
-			ClientStruct:  traitFd.Trait.S2SService + "GrpcClient",
+			FnName:         snake + "_record_reader",
+			StructName:     name + "RecordReader",
+			RecordFQN:      fqn,
+			RecordName:     name,
+			RecordPath:     rustModulePath(recPath, recFd.Package) + "::" + name,
+			QueryPath:      queryPath,
+			HostAccessor:   hostAccessor,
+			ClientFn:       clientFn,
+			KeyField:       key,
+			KeyRustType:    keyRust,
+			KeyIsString:    isString,
+			CreateFn:       "create_" + snake + "_query",
+			ListFn:         "list_" + snake + "_page",
+			DeleteFn:       "delete_" + snake + "_query",
+			FilterType:     name + "Filter",
+			OpenReqType:    "Open" + name + "QueryRequest",
+			PullReqType:    "Pull" + name + "Request",
+			HandleType:     "QueryHandle",
+			HasKeyFilter:   hasKey,
+			HasDeletedFlag: hasDeletedFlag,
+			ClientModPath:  clientModPath,
+			ClientStruct:   traitFd.Trait.S2SService + "GrpcClient",
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].RecordFQN < entries[j].RecordFQN })

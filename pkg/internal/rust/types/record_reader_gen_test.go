@@ -156,3 +156,54 @@ func TestRecordKeyRustType(t *testing.T) {
 		}
 	}
 }
+
+// A record with (spec.deleted_flag) gets the soft-delete escape hatch: false —
+// the plane's default — excludes flagged rows, so a caller that must see one
+// (an audit list, a citation resolving to a deleted-but-not-yet-purged row) has
+// to ask. The flag is set ON Open<T>QueryRequest rather than left defaulted,
+// which is the only call in the lifecycle that establishes a predicate.
+func TestRecordReaderThreadsIncludeDeleted(t *testing.T) {
+	e := messageReaderEntry()
+	e.HasDeletedFlag = true
+	out := renderRecordReaders(t, messageReaderFile(e))
+
+	for _, want := range []string{
+		// get(), list() and query_page() each take it,
+		"        delivery_id: &str,\n        include_deleted: bool,\n",
+		"        page_token: impl Into<String>,\n        include_deleted: bool,\n",
+		"        page_token: String,\n        include_deleted: bool,\n",
+		// each passes it on,
+		"self.query_page(Some(filter), 1, String::new(), include_deleted)",
+		"self.query_page(filter, page_size, page_token.into(), include_deleted)",
+		// and it lands on the request that installs the predicate.
+		"OpenMessageQueryRequest {\n                filter,\n                standing: false,\n                include_deleted,\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("generated reader missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// Without the marker the record has no soft-delete state, so there is nothing to
+// include and the reader's API is exactly what it was before the flag existed.
+// This is what makes the generator change additive: every record_read reader in
+// the fleet today renders unchanged.
+func TestRecordReaderWithoutDeletedFlagIsUnchanged(t *testing.T) {
+	out := renderRecordReaders(t, messageReaderFile(messageReaderEntry()))
+
+	if strings.Contains(out, "include_deleted") {
+		t.Errorf("a record with no (spec.deleted_flag) must not mention include_deleted:\n%s", out)
+	}
+	for _, want := range []string{
+		"        delivery_id: &str,\n    ) -> Result<Option<Message>, tonic::Status> {",
+		"        page_token: impl Into<String>,\n    ) -> Result<(Vec<Message>, String, i64), tonic::Status> {",
+		"        page_token: String,\n    ) -> Result<(Vec<Message>, String, i64), tonic::Status> {",
+		"self.query_page(Some(filter), 1, String::new()).await?",
+		"self.query_page(filter, page_size, page_token.into()).await\n",
+		"OpenMessageQueryRequest {\n                filter,\n                standing: false,\n                ..Default::default()\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("unflagged reader's API changed; missing %q:\n%s", want, out)
+		}
+	}
+}

@@ -936,13 +936,19 @@ message RecordAnnotation {
   //     PERMISSION_DENIED.
   //
   // What this field alone already means, checked at generation time
-  // (ValidateRecordPrivateAnnotations): a private record refuses
-  // s2s_subscribe. A subscriber to a record's raw topic is a SERVICE, not a
-  // per-request caller — there is no principal in scope for a stream handler
-  // to pin against, so declaring both is a fleet-wide broadcast of every row
-  // ever written, the exact thing `private` exists to prevent. s2s / s2s_read
-  // / c2s_read stay declarable; their generated pins are the remaining,
-  // not-yet-emitted half of this annotation (decisions/
+  // (ValidateRecordPrivateAnnotations):
+  //   - the record MUST also declare (spec.store_principal) on the field
+  //     holding its owner — that is what the generated pin will bind to, and
+  //     a private record naming no such field has nothing to pin, the same
+  //     "record nobody remembered to annotate" failure (spec.store_namespace)
+  //     already refuses for the weaker tenant boundary.
+  //   - the record refuses s2s_subscribe. A subscriber to a record's raw
+  //     topic is a SERVICE, not a per-request caller — there is no principal
+  //     in scope for a stream handler to pin against, so declaring both is a
+  //     fleet-wide broadcast of every row ever written, the exact thing
+  //     `private` exists to prevent.
+  // s2s / s2s_read / c2s_read stay declarable; their generated pins are the
+  // remaining, not-yet-emitted half of this annotation (decisions/
   // identity-people-tenant-devices-private-2026-09-21.md §4).
   //
   // Example — a record only its own owner may ever read:

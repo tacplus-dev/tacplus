@@ -137,6 +137,8 @@ function callSharedConstruct(fn: string, args: string[]): string {
       return userSpiffeId(args[0], args[1], args[2]);
     case 'namespace_spiffe_id':
       return namespaceSpiffeId(args[0], args[1]);
+    case 'tenant_spiffe_id':
+      return tenantSpiffeId(args[0], args[1]);
     default:
       throw new Error(`unsupported shared construct: ${fn}`);
   }

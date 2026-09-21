@@ -93,6 +93,17 @@ export function normalizeSegment(seg: string): string {
   return seg;
 }
 
+// normalizeTenantSegment validates a tenant label. It is normalizeSegment with a
+// single carve-out: "people" is the platform's identity tenant, a deliberate
+// reserved namespace, so it is legal as a tenant name. Every other reserved tag
+// stays rejected.
+function normalizeTenantSegment(tenant: string): string {
+  if (tenant === PEOPLE_SEGMENT) {
+    return tenant;
+  }
+  return normalizeSegment(tenant);
+}
+
 // normalizeTrustDomain validates the URI authority. It must be a non-empty
 // value with no scheme and no "/", query, fragment, backslash, whitespace, or
 // encoded separators.
@@ -170,7 +181,7 @@ function validateNamespaceSegments(segs: string[]): void {
       }
       break;
     case TENANTS_SEGMENT:
-      if (segs.length >= 2 && RESERVED_TAGS.has(segs[1])) {
+      if (segs.length >= 2 && segs[1] !== PEOPLE_SEGMENT && RESERVED_TAGS.has(segs[1])) {
         throw new Error(`spiffe: reserved tag "${segs[1]}" cannot be a tenant name`);
       }
       if (segs.length >= 3) {
@@ -277,7 +288,7 @@ export function workloadSpiffeId(parentSpiffeId: string, workloadName: string): 
 // tenantSpiffeId: spiffe://<td>/tenants/<tenant>.
 export function tenantSpiffeId(trustDomain: string, tenant: string): string {
   const base = authority(trustDomain);
-  const t = normalizeSegment(tenant);
+  const t = normalizeTenantSegment(tenant);
   return base + '/' + TENANTS_SEGMENT + '/' + t;
 }
 

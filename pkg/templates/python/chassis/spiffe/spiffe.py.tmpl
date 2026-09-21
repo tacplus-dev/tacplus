@@ -107,6 +107,18 @@ def normalize_segment(seg: str) -> str:
     return seg
 
 
+def _normalize_tenant_segment(tenant: str) -> str:
+    """Validate a tenant label.
+
+    This is normalize_segment with a single carve-out: "people" is the
+    platform's identity tenant, a deliberate reserved namespace, so it is legal
+    as a tenant name. Every other reserved tag stays rejected.
+    """
+    if tenant == PEOPLE_SEGMENT:
+        return tenant
+    return normalize_segment(tenant)
+
+
 def normalize_trust_domain(value: str) -> str:
     """Validate the URI authority.
 
@@ -177,7 +189,7 @@ def _validate_namespace_segments(segs: List[str]) -> None:
                     f"spiffe: reserved tag {s!r} not allowed as a /system location segment"
                 )
     elif segs[0] == TENANTS_SEGMENT:
-        if len(segs) >= 2 and segs[1] in _RESERVED_TAGS:
+        if len(segs) >= 2 and segs[1] != PEOPLE_SEGMENT and segs[1] in _RESERVED_TAGS:
             raise ValueError(f"spiffe: reserved tag {segs[1]!r} cannot be a tenant name")
         if len(segs) >= 3:
             if segs[2] != WORKSPACES_SEGMENT:
@@ -274,7 +286,7 @@ def workload_spiffe_id(parent_spiffe_id: str, workload_name: str) -> str:
 def tenant_spiffe_id(trust_domain: str, tenant: str) -> str:
     """spiffe://<td>/tenants/<tenant>."""
     base = _authority(trust_domain)
-    t = normalize_segment(tenant)
+    t = _normalize_tenant_segment(tenant)
     return base + "/" + TENANTS_SEGMENT + "/" + t
 
 

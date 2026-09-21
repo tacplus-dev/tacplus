@@ -98,6 +98,17 @@ func NormalizeSegment(seg string) (string, error) {
 	return seg, nil
 }
 
+// normalizeTenantSegment validates a tenant label. It is NormalizeSegment with a
+// single carve-out: "people" is the platform's identity tenant, a deliberate reserved
+// namespace, so it is legal as a tenant name. Every other reserved tag stays
+// rejected.
+func normalizeTenantSegment(tenant string) (string, error) {
+	if tenant == PeopleSegment {
+		return tenant, nil
+	}
+	return NormalizeSegment(tenant)
+}
+
 // NormalizeTrustDomain validates the URI authority. It must be a non-empty value
 // with no scheme and no "/", query, fragment, backslash, whitespace, or encoded
 // separators.
@@ -126,8 +137,9 @@ func NormalizeTrustDomain(value string) (string, error) {
 // Valid shapes: "/" (root); "/system" or "/system/<loc>..."; "/tenants" or
 // "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/people" or
 // "/people/<person>". A reserved tag is rejected as a tenant/location/workspace/
-// person name, the workspaces tag is the only structural tag permitted under a
-// tenant, and nothing at all may follow a person.
+// person name — except "people", which is the platform's identity tenant and is
+// legal as a tenant name — the workspaces tag is the only structural tag
+// permitted under a tenant, and nothing at all may follow a person.
 func NormalizeNamespace(namespace string) (string, error) {
 	ns := strings.TrimSpace(namespace)
 	if ns == "" {
@@ -175,7 +187,7 @@ func validateNamespaceSegments(segs []string) error {
 			}
 		}
 	case TenantsSegment:
-		if len(segs) >= 2 && reservedTags[segs[1]] {
+		if len(segs) >= 2 && segs[1] != PeopleSegment && reservedTags[segs[1]] {
 			return fmt.Errorf("spiffe: reserved tag %q cannot be a tenant name", segs[1])
 		}
 		if len(segs) >= 3 {
@@ -294,7 +306,7 @@ func TenantSpiffeID(trustDomain, tenant string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	t, err := NormalizeSegment(tenant)
+	t, err := normalizeTenantSegment(tenant)
 	if err != nil {
 		return "", err
 	}

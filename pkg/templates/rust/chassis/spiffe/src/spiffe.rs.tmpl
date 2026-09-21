@@ -133,6 +133,17 @@ pub fn normalize_segment(seg: &str) -> Result<String> {
     Ok(seg.to_string())
 }
 
+/// Validates a tenant label. This is `normalize_segment` with a single
+/// carve-out: "people" is the platform's identity tenant, a deliberate reserved
+/// namespace, so it is legal as a tenant name. Every other reserved tag stays
+/// rejected.
+fn normalize_tenant_segment(tenant: &str) -> Result<String> {
+    if tenant == PEOPLE_SEGMENT {
+        return Ok(tenant.to_string());
+    }
+    normalize_segment(tenant)
+}
+
 /// Validates the URI authority. It must be a non-empty value with no scheme and
 /// no "/", query, fragment, backslash, whitespace, or encoded separators.
 pub fn normalize_trust_domain(value: &str) -> Result<String> {
@@ -212,7 +223,7 @@ fn validate_namespace_segments(segs: &[&str]) -> Result<()> {
             }
         }
         TENANTS_SEGMENT => {
-            if segs.len() >= 2 && is_reserved_tag(segs[1]) {
+            if segs.len() >= 2 && segs[1] != PEOPLE_SEGMENT && is_reserved_tag(segs[1]) {
                 return err(format!(
                     "spiffe: reserved tag {:?} cannot be a tenant name",
                     segs[1]
@@ -337,7 +348,7 @@ pub fn workload_spiffe_id(parent_spiffe_id: &str, workload_name: &str) -> Result
 /// `spiffe://<td>/tenants/<tenant>`.
 pub fn tenant_spiffe_id(trust_domain: &str, tenant: &str) -> Result<String> {
     let base = authority(trust_domain)?;
-    let t = normalize_segment(tenant)?;
+    let t = normalize_tenant_segment(tenant)?;
     Ok(format!("{}/{}/{}", base, TENANTS_SEGMENT, t))
 }
 
@@ -806,6 +817,7 @@ mod tests {
             "credential_spiffe_id" => credential_spiffe_id(arg(0), arg(1), arg(2), arg(3)),
             "user_spiffe_id" => user_spiffe_id(arg(0), arg(1), arg(2)),
             "namespace_spiffe_id" => namespace_spiffe_id(arg(0), arg(1)),
+            "tenant_spiffe_id" => tenant_spiffe_id(arg(0), arg(1)),
             other => Err(SpiffeError(format!("unsupported shared construct: {}", other))),
         }
     }

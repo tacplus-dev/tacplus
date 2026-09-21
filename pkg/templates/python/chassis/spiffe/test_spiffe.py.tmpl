@@ -65,6 +65,8 @@ def call_shared_construct(fn: str, args: list[str]) -> str:
         return user_spiffe_id(args[0], args[1], args[2])
     if fn == "namespace_spiffe_id":
         return namespace_spiffe_id(args[0], args[1])
+    if fn == "tenant_spiffe_id":
+        return tenant_spiffe_id(args[0], args[1])
     raise ValueError(f"unsupported shared construct: {fn}")
 
 

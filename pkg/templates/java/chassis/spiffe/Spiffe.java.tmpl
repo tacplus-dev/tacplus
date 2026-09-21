@@ -126,6 +126,19 @@ public final class Spiffe {
     }
 
     /**
+     * Validates a tenant label. This is {@link #normalizeSegment} with a single
+     * carve-out: "people" is the platform's identity tenant, a deliberate reserved
+     * namespace, so it is legal as a tenant name. Every other reserved tag stays
+     * rejected.
+     */
+    private static String normalizeTenantSegment(String tenant) {
+        if (PEOPLE_SEGMENT.equals(tenant)) {
+            return tenant;
+        }
+        return normalizeSegment(tenant);
+    }
+
+    /**
      * Validates the URI authority. It must be a non-empty value with no scheme and
      * no "/", query, fragment, backslash, whitespace, or encoded separators.
      */
@@ -198,7 +211,7 @@ public final class Spiffe {
                 }
                 break;
             case TENANTS_SEGMENT:
-                if (segs.length >= 2 && RESERVED_TAGS.contains(segs[1])) {
+                if (segs.length >= 2 && !segs[1].equals(PEOPLE_SEGMENT) && RESERVED_TAGS.contains(segs[1])) {
                     throw new IllegalArgumentException(
                             "spiffe: reserved tag \"" + segs[1] + "\" cannot be a tenant name");
                 }
@@ -339,7 +352,7 @@ public final class Spiffe {
     /** {@code spiffe://<td>/tenants/<tenant>}. */
     public static String tenantSpiffeId(String trustDomain, String tenant) {
         String base = authority(trustDomain);
-        String t = normalizeSegment(tenant);
+        String t = normalizeTenantSegment(tenant);
         return base + "/" + TENANTS_SEGMENT + "/" + t;
     }
 

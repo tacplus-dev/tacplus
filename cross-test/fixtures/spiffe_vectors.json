@@ -133,10 +133,17 @@
     { "fn": "credential_spiffe_id", "args": ["example.com", "/tenants/acme", "cred-pair", "cred/pair"] },
     { "fn": "user_spiffe_id", "args": ["example.com", "/tenants/acme", "issuer/user"] },
     { "fn": "namespace_spiffe_id", "args": ["example.com", "/tenants/acme/data"] },
-    { "fn": "namespace_spiffe_id", "args": ["example.com", "/tenants/system"] }
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/tenants/system"] },
+    { "fn": "tenant_spiffe_id", "args": ["example.com", "system"] },
+    { "fn": "tenant_spiffe_id", "args": ["example.com", "data"] },
+    { "fn": "tenant_spiffe_id", "args": ["example.com", "tenants"] }
   ],
   "valid_construct": [
-    { "fn": "namespace_spiffe_id", "args": ["example.com", "/system/aws/acct1"], "expect": "spiffe://example.com/system/aws/acct1" }
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/system/aws/acct1"], "expect": "spiffe://example.com/system/aws/acct1" },
+    { "_comment": "\"people\" is the platform identity tenant - the one reserved tag that is legal as a tenant name. Every other reserved tag stays rejected (see invalid_construct /tenants/system).",
+      "fn": "tenant_spiffe_id", "args": ["example.com", "people"], "expect": "spiffe://example.com/tenants/people" },
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/tenants/people"], "expect": "spiffe://example.com/tenants/people" },
+    { "fn": "user_spiffe_id", "args": ["example.com", "/tenants/people", "jody"], "expect": "spiffe://example.com/tenants/people/users/jody" }
   ],
   "opaque_segment": {
     "spec": "base32_lower_nopad(SHA256(utf8(kind) || 0x1F || utf8(NFC(value)))[:20]); 32 chars [a-z2-7]; kind domain-separates",

@@ -39,8 +39,8 @@ message TokenMintRequest {
 
 // MintServiceTokenRequest is the input for service-token minting.
 //
-// Credential proof: exactly one of input_token, cloud_proof, or
-// kubernetes_token authenticates the caller. The kernel groups these into a
+// Credential proof: exactly one of input_token, cloud_proof, kubernetes_token,
+// or external_oidc_token authenticates the caller. The kernel groups these into a
 // oneof (credential_proof) and routes on the discriminator; clients may set a
 // single flat field — proto3 oneof membership is a property of the parsing
 // descriptor, so a flat field at the same tag/wire type is decoded into the
@@ -59,6 +59,14 @@ message MintServiceTokenRequest {
   // (namespace, service account) to a Delegate. Tag 8 matches the kernel's
   // credential_proof oneof so a flat field here is wire-compatible.
   string kubernetes_token = 8;
+  // external_oidc_token is an OIDC ID token minted natively by tenant-owned CI
+  // (e.g. a GitHub Actions OIDC token or a GitLab CI ID token), presented so
+  // that CI may act as a tenant-scoped service. The kernel verifies the token
+  // against the tenant's enrolled-issuer list (KernelTenantConfig) and maps the
+  // verified issuer plus claims to an enrolled config via a Delegate matcher.
+  // Tag 9 matches the kernel's credential_proof oneof so a flat field here is
+  // wire-compatible.
+  string external_oidc_token = 9;
   string trace_id = 200;
   bool noop = 201;
 }

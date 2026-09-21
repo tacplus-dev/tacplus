@@ -351,19 +351,27 @@ func javaPredicateNamespacePin(reqField, namespace, valueExpr, method, indent st
 	}
 	body = fmt.Sprintf(`%[1]sif (!%[2]s.get%[3]s().has%[4]s() || %[2]s.get%[3]s().get%[4]s().isEmpty()) {
 %[1]s    %[2]s = %[2]s.toBuilder().set%[3]s(%[2]s.get%[3]s().toBuilder().set%[4]s(__queryNamespace)).build();
-%[1]s} else if (!__queryNamespace.equals(%[2]s.get%[3]s().get%[4]s())) {
-%[1]s    throw new ProtoException(ProtoException.INVALID_ARGUMENT, "%[5]s names a tenant other than the caller's; the tenant boundary is not the predicate's to choose");
+%[1]s} else if (!__queryNamespace.equals(%[2]s.get%[3]s().get%[4]s()) && !__queryNamespaceLinked.contains(%[2]s.get%[3]s().get%[4]s())) {
+%[1]s    throw new ProtoException(ProtoException.INVALID_ARGUMENT, "%[5]s names a tenant the caller neither owns nor is linked to; the tenant boundary is not the predicate's to choose");
 %[1]s}
 `, pinIndent, valueExpr, rf, nf, reqField+"."+namespace)
 	return fmt.Sprintf(`%[1]s// (spec.store_namespace) on the query predicate: pin the tenant before the
 %[1]s// store is asked. EXACT match against the caller's namespace claim, never the
 %[1]s// level-or-below containment the administrative rule uses.
-%[1]s// Unset -> stamped; equal -> accepted; different -> refused, which is what
-%[1]s// keeps the aborting egress backstop unreachable from outside the process.
+%[1]s// Unset -> stamped; the caller's own or a namespace it is LINKED to ->
+%[1]s// accepted; anything else -> refused, which is what keeps the aborting egress
+%[1]s// backstop unreachable from outside the process.
 %[1]svar __nsTok = Auth.verifiedTokenFromContext();
 %[1]sfinal String __queryNamespace = __nsTok == null ? null : __nsTok.getNamespace();
 %[1]sif (__queryNamespace == null || __queryNamespace.isEmpty()) {
 %[1]s    throw new ProtoException(ProtoException.PERMISSION_DENIED, "%[2]s queries rows held to a tenant and the caller presented no verified namespace claim");
 %[1]s}
+%[1]s// A linked claim widens which tenant the predicate may NAME, exactly as it
+%[1]s// widens which tenant a row may be ACCEPTED from on the egress side (see
+%[1]s// javaNamespaceAcceptsExpr) — the two must agree, or a linked caller's query
+%[1]s// would be answered and then aborted on the way out. The UNSET branch still
+%[1]s// stamps the caller's OWN namespace: a linked tenant is only ever reached by
+%[1]s// naming it, never by default.
+%[1]sfinal java.util.List<String> __queryNamespaceLinked = Auth.callerLinkedFromContext();
 `, indent, method) + gateOpen + body + gateClose
 }

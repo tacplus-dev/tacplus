@@ -1060,7 +1060,7 @@ func rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField
 		resolve += rustPrincipalResolve("__principal", methodName, "        ")
 	}
 	if namespaceField != "" {
-		resolve += rustNamespaceResolve("__namespace", methodName, "        ")
+		resolve += rustNamespaceResolve("__namespace", methodName, "        ", false)
 	}
 
 	fieldSnake := ""
@@ -1183,6 +1183,22 @@ func rustTypeHasTraceFields(fullType, servicePackage, parentDir string, crossPkg
 func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, grpcName string, accountingMap map[string]service.AccountingInfo, skippedTraceTypes proto.SkippedTraceTypes, san *rustEgressSanitizer) (string, error) {
 	methodSnake := prostSnakeName(method.Name)
 	fullMethod := fmt.Sprintf("/%s/%s.%s/%s", parentDir, servicePackage, svc.Name, method.Name)
+
+	// The peer half of a record query plane, whoever hosts it. It is the one
+	// s2s surface whose caller can be either a /system peer (fleet-wide, as
+	// always) or a per-tenant peer (pinned), so it is the one s2s surface that
+	// carries the (spec.store_namespace) seams under a runtime gate. Every
+	// other s2s wrapper generates exactly what it generated before.
+	//
+	// The host's own option (spec.service).tenant_owned is deliberately NOT a
+	// condition here. The tenant boundary belongs to the CALLER: a
+	// /tenants/<t>/services/<svc> peer reading through a SHARED host must still
+	// be pinned to <t>'s rows. Gating on the host would emit no pin at all on
+	// exactly that path — a fleet-wide read for a tenant caller, backwards from
+	// the boundary this seam exists to enforce. The pin itself is already
+	// caller-keyed at runtime (__ns_pinned reads the request's own token claim),
+	// so emitting it unconditionally here costs /system peers nothing.
+	recordPlaneS2S := !svc.IsC2S && svc.SynthesizedKind == parser.SynthesizedKindRecordMap
 	inputType, outputType := resolveRustTypeQualified(method, servicePackage, crossPkgTypes)
 	authLine := rustAuthLine(svc, method, fullMethod)
 
@@ -1451,9 +1467,9 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 			if err != nil {
 				return "", err
 			}
-			watchPre += rustWatchEgressPreamble(watchEgress, method.Name)
-			itemSan = rustWatchEgressGuardStmts(watchEgress.Item, "item", method.Name, "                            ") + itemSan
-			changeSan = rustWatchEgressGuardStmts(watchEgress.Change, "change", method.Name, "                        ") + changeSan
+			watchPre += rustWatchEgressPreamble(watchEgress, method.Name, recordPlaneS2S)
+			itemSan = rustWatchEgressGuardStmts(watchEgress.Item, "item", method.Name, "                            ", recordPlaneS2S) + itemSan
+			changeSan = rustWatchEgressGuardStmts(watchEgress.Change, "change", method.Name, "                        ", recordPlaneS2S) + changeSan
 			accountingSetup := ""
 			sendClosed := "return;"
 			sendErr := `let _ = tx.send(Err(err)).await;
@@ -1807,8 +1823,8 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 		if lf := san.principalListFields(method.FullOutputType, servicePackage); len(lf) > 0 {
 			pageEgressFilter += rustResponsePrincipalFilterBlock(lf, method.Name)
 		}
-		if lf := san.namespaceListFields(method.FullOutputType, servicePackage); len(lf) > 0 {
-			pageEgressFilter += rustResponseNamespaceFilterBlock(lf, method.Name)
+		if lf := san.namespaceListFields(method.FullOutputType, servicePackage); (svc.IsC2S || recordPlaneS2S) && len(lf) > 0 {
+			pageEgressFilter += rustResponseNamespaceFilterBlock(lf, method.Name, recordPlaneS2S)
 		}
 		responseValidationBlock = pageEgressFilter + responseValidationBlock
 		pageBody := fmt.Sprintf(`    async fn %s(
@@ -1869,8 +1885,8 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	// egress seam. Runs after the principal filter is spliced in, so it is the
 	// OUTERMOST of the two — the tenant boundary is checked over exactly the
 	// rows that would otherwise be returned.
-	if lf := san.namespaceListFields(method.FullOutputType, servicePackage); len(lf) > 0 {
-		responseValidationBlock = rustResponseNamespaceFilterBlock(lf, method.Name) + responseValidationBlock
+	if lf := san.namespaceListFields(method.FullOutputType, servicePackage); (svc.IsC2S || recordPlaneS2S) && len(lf) > 0 {
+		responseValidationBlock = rustResponseNamespaceFilterBlock(lf, method.Name, recordPlaneS2S) + responseValidationBlock
 	}
 
 	// Unary methods - authorize, extract caller, validate, delegate to handler

@@ -684,7 +684,10 @@ func rustMcpToolDispatch(serviceName string, t rustMcpTool) string {
 		b.WriteString(rustResponsePrincipalFilterBlock(t.StorePrincipalRows, t.Method.Name))
 	}
 	if len(t.StoreNamespaceRows) > 0 {
-		b.WriteString(rustResponseNamespaceFilterBlock(t.StoreNamespaceRows, t.Method.Name))
+		// Never gated: the synthesized RecordMap plane emits only
+		// RPC_PRINCIPAL_SERVICE rpcs, never RPC_PRINCIPAL_MCP, so an MCP tool
+		// can never be the record plane.
+		b.WriteString(rustResponseNamespaceFilterBlock(t.StoreNamespaceRows, t.Method.Name, false))
 	}
 	b.WriteString(`        serde_json::to_value(&resp)
             .map_err(|e| tonic::Status::internal(format!("could not encode the result: {}", e)))

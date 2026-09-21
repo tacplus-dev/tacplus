@@ -205,7 +205,11 @@ func (es *rustEgressSanitizer) watchRowPins(fullType, servicePkg string) (rustWa
 // caller's principal and namespace, to be spliced before the producer task is
 // spawned. Fail-closed like the unary seam: an unauthenticated caller, or one
 // with no namespace claim, cannot open a watch over pinned rows.
-func rustWatchEgressPreamble(w rustWatchEgress, method string) string {
+// runtimeGate is the s2s record plane's gate, threaded through exactly as the
+// unary and PAGE seams thread it: it adds __ns_pinned to the namespace binding,
+// which the per-frame guards below branch on so a /system peer keeps its
+// fleet-wide read.
+func rustWatchEgressPreamble(w rustWatchEgress, method string, runtimeGate bool) string {
 	if !w.pinned() {
 		return ""
 	}
@@ -217,7 +221,7 @@ func rustWatchEgressPreamble(w rustWatchEgress, method string) string {
 		b.WriteString(rustPrincipalResolve("__read_principal", method, "        "))
 	}
 	if w.needsNamespace() {
-		b.WriteString(rustNamespaceResolve("__read_namespace", method, "        "))
+		b.WriteString(rustNamespaceResolve("__read_namespace", method, "        ", runtimeGate))
 	}
 	return b.String()
 }
@@ -226,7 +230,7 @@ func rustWatchEgressPreamble(w rustWatchEgress, method string) string {
 // variable (`item` or `change`) inside the producer loop. A principal
 // mismatch `continue`s the enclosing `while let` (the frame is never sent); a
 // namespace mismatch aborts.
-func rustWatchEgressGuardStmts(guards []rustWatchRowGuard, frameVar, method, indent string) string {
+func rustWatchEgressGuardStmts(guards []rustWatchRowGuard, frameVar, method, indent string, runtimeGate bool) string {
 	if len(guards) == 0 {
 		return ""
 	}
@@ -254,9 +258,13 @@ func rustWatchEgressGuardStmts(guards []rustWatchRowGuard, frameVar, method, ind
 		}
 		fmt.Fprintf(&b, "\n%s// (spec.store_namespace): hold the frame to the caller's tenant; a foreign row aborts.\n", indent)
 		if g.Path == "" {
-			fmt.Fprintf(&b, "%sif %s.%s != __read_namespace {\n%s%s}\n", indent, frameVar, g.Namespace, rustNamespaceCrash(method, field, indent+"    "), indent)
+			fmt.Fprintf(&b, "%sif %s {\n%s%s}\n", indent,
+				rustNamespaceDropExpr(fmt.Sprintf("%s.%s != __read_namespace", frameVar, g.Namespace), runtimeGate),
+				rustNamespaceCrash(method, field, indent+"    "), indent)
 		} else {
-			fmt.Fprintf(&b, "%sif let Some(__row) = %s.%s.as_ref() { if __row.%s != __read_namespace {\n%s%s} }\n", indent, frameVar, g.Path, g.Namespace, rustNamespaceCrash(method, field, indent+"    "), indent)
+			fmt.Fprintf(&b, "%sif let Some(__row) = %s.%s.as_ref() { if %s {\n%s%s} }\n", indent, frameVar, g.Path,
+				rustNamespaceDropExpr(fmt.Sprintf("__row.%s != __read_namespace", g.Namespace), runtimeGate),
+				rustNamespaceCrash(method, field, indent+"    "), indent)
 		}
 	}
 	return b.String()

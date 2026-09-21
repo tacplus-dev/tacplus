@@ -215,3 +215,40 @@ func TestRustNonWatchStreamOverPinnedRowsStillRefused(t *testing.T) {
 		t.Fatal("pinned WATCH with an unwalkable delta must be refused through the same entry point")
 	}
 }
+
+// The WATCH seam carries the same runtime gate the unary and PAGE seams carry
+// on the s2s record plane: the guard is emitted, and __ns_pinned decides per
+// request whether it fires, so a /system peer keeps its fleet-wide watch.
+func TestRustWatchWrapperRecordPlaneS2SCarriesTheRuntimeGate(t *testing.T) {
+	got, err := generateRustGRPCWrapper(
+		&parser.ServiceInfo{Name: "Catalog", IsS2S: true, SynthesizedKind: parser.SynthesizedKindRecordMap},
+		rustWatchEgressMethod("catalog.Item", "catalog.WatchChange"),
+		"catalog", "services", map[string]string{}, "",
+		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, rustWatchEgressTestSanitizer())
+	if err != nil {
+		t.Fatalf("the s2s record plane's WATCH must generate: %v", err)
+	}
+	for _, want := range []string{
+		`let __ns_pinned = !__read_namespace.starts_with("/system");`,
+		"if __ns_pinned && item.namespace != __read_namespace {",
+		"if let Some(__row) = change.item.as_ref() { if __ns_pinned && __row.namespace != __read_namespace {",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("the record-plane WATCH must carry %q:\n%s", want, got)
+		}
+	}
+}
+
+// The c2s half of the same seam pins unconditionally.
+func TestRustWatchWrapperC2SHasNoRuntimeGate(t *testing.T) {
+	got, err := rustWatchEgressGenerate(t, rustWatchEgressMethod("catalog.Item", "catalog.WatchChange"))
+	if err != nil {
+		t.Fatalf("c2s WATCH must generate: %v", err)
+	}
+	if strings.Contains(got, "__ns_pinned") {
+		t.Fatalf("the c2s WATCH must carry no runtime gate:\n%s", got)
+	}
+	if !strings.Contains(got, "if item.namespace != __read_namespace {") {
+		t.Fatalf("the c2s WATCH must pin unconditionally:\n%s", got)
+	}
+}

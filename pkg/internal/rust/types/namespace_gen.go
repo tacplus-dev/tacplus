@@ -81,13 +81,50 @@ func (es *rustEgressSanitizer) namespaceListFields(fullType, servicePkg string) 
 // namespace claim. `caller` is the Option<Caller> the unary wrapper already
 // extracted. Fail-closed: no caller, or a caller with no namespace claim, is a
 // refusal, not an empty filter.
-func rustNamespaceResolve(local, method, indent string) string {
-	return fmt.Sprintf(`%slet %s = caller.as_ref()
+//
+// runtimeGate renders the s2s record-plane form as well: the same binding, plus
+// __ns_pinned, which is what every filter below is guarded on so a /system peer
+// keeps its fleet-wide read. On the c2s half there is nothing to decide at
+// runtime and no __ns_pinned is emitted.
+func rustNamespaceResolve(local, method, indent string, runtimeGate bool) string {
+	out := fmt.Sprintf(`%slet %s = caller.as_ref()
 %s    .and_then(|c| c.namespace())
 %s    .filter(|s| !s.is_empty())
 %s    .map(|s| s.to_string())
 %s    .ok_or_else(|| tonic::Status::unauthenticated("%s requires an authenticated caller carrying a namespace claim"))?;
 `, indent, local, indent, indent, indent, indent, method)
+	if runtimeGate {
+		out += fmt.Sprintf(`%[1]s// This is the s2s record read plane, so WHICH of the two reads the caller gets
+%[1]s// is decided here, per request, by the caller's own identity — never by which
+%[1]s// service hosts the plane: a /system peer keeps the fleet-wide read this plane
+%[1]s// has always served; a /tenants/<t> peer is pinned to its own tenant and to
+%[1]s// nothing else.
+%[1]slet __ns_pinned = !%[2]s.starts_with("/system");
+`, indent, local)
+	}
+	return out
+}
+
+// rustNamespaceKeepExpr is the row KEEP test the retain()-shaped filters branch
+// on: the plain match on the c2s half, and the match OR-ed with "not pinned" on
+// the s2s record plane's half. The keep test, not the drop test, is what carries
+// the gate here: an unpinned (/system) caller keeps every row, so retain() drops
+// nothing and nothing downstream changes shape.
+func rustNamespaceKeepExpr(keep string, runtimeGate bool) string {
+	if runtimeGate {
+		return "!__ns_pinned || " + keep
+	}
+	return keep
+}
+
+// rustNamespaceDropExpr is the same gate over a DROP test — the watch seam's
+// guards fire on a mismatch rather than retaining a match. Twin of Java's
+// javaNamespaceGuardExpr.
+func rustNamespaceDropExpr(mismatch string, runtimeGate bool) string {
+	if runtimeGate {
+		return "__ns_pinned && " + mismatch
+	}
+	return mismatch
 }
 
 // rustRequestNamespaceBlock renders the (spec.namespace) stamp-or-refuse check.
@@ -107,7 +144,7 @@ func rustRequestNamespaceBlock(field, method, reqVar, indent string) string {
 %[1]s        "%[2]s does not match the authenticated caller's namespace"));
 %[1]s}
 %[1]slet %[3]s = %[3]s;
-`, indent, field, reqVar, rustNamespaceResolve("__namespace", method, indent))
+`, indent, field, reqVar, rustNamespaceResolve("__namespace", method, indent, false))
 }
 
 // rustStreamNamespaceStmts is the per-message half, run on every inbound
@@ -126,16 +163,18 @@ func rustStreamNamespaceStmts(field, msgVar, indent string) string {
 // rustResponseNamespaceFilterBlock renders the (spec.store_namespace) egress
 // filter: rows stamped with another tenant's namespace never leave the process,
 // and having had to drop one aborts.
-func rustResponseNamespaceFilterBlock(fields []rustNamespaceListField, method string) string {
+func rustResponseNamespaceFilterBlock(fields []rustNamespaceListField, method string, runtimeGate bool) string {
 	out := "\n            // (spec.store_namespace): hold the rows to the caller's tenant.\n"
-	out += rustNamespaceResolve("__read_namespace", method, "            ")
+	out += rustNamespaceResolve("__read_namespace", method, "            ", runtimeGate)
 	out += "            let mut resp = resp;\n"
 	for _, f := range fields {
 		out += fmt.Sprintf(`            let __ns_before = resp.%[1]s.len();
-            resp.%[1]s.retain(|__row| __row.%[2]s == __read_namespace);
+            resp.%[1]s.retain(|__row| %[2]s);
             if resp.%[1]s.len() != __ns_before {
 %[3]s            }
-`, f.Field, f.ItemField, rustNamespaceCrash(method, f.Field, "                "))
+`, f.Field,
+			rustNamespaceKeepExpr(fmt.Sprintf("__row.%s == __read_namespace", f.ItemField), runtimeGate),
+			rustNamespaceCrash(method, f.Field, "                "))
 	}
 	return out
 }

@@ -34,7 +34,7 @@ func TestRustRequestNamespaceBlockStampsAcceptsRefuses(t *testing.T) {
 // is what the decision explicitly rejected: reaching the comparison at all means
 // the store's own query already returned another tenant's row.
 func TestRustNamespaceFilterAbortsOnMismatch(t *testing.T) {
-	got := rustResponseNamespaceFilterBlock([]rustNamespaceListField{{Field: "items", ItemField: "namespace"}}, "ListThings")
+	got := rustResponseNamespaceFilterBlock([]rustNamespaceListField{{Field: "items", ItemField: "namespace"}}, "ListThings", false)
 	if !strings.Contains(got, "std::process::abort();") {
 		t.Fatalf("the namespace egress filter must abort the process on a mismatch:\n%s", got)
 	}
@@ -58,7 +58,7 @@ func TestRustNamespaceFilterAbortsOnMismatch(t *testing.T) {
 // tonic Caller would drag the whole chassis into a single-file rustc build.
 func filterTail(t *testing.T) string {
 	t.Helper()
-	block := rustResponseNamespaceFilterBlock([]rustNamespaceListField{{Field: "items", ItemField: "namespace"}}, "ListThings")
+	block := rustResponseNamespaceFilterBlock([]rustNamespaceListField{{Field: "items", ItemField: "namespace"}}, "ListThings", false)
 	const marker = "let mut resp = resp;\n"
 	i := strings.Index(block, marker)
 	if i < 0 {
@@ -144,5 +144,113 @@ func TestGeneratedNamespaceFilterCrashesOnParentNamespace(t *testing.T) {
 	stdout, _, signaled := runGeneratedFilter(t, "/acme", "/acme/team-a")
 	if !signaled {
 		t.Fatalf("a parent namespace is not a match under the exact-match rule; stdout %q", stdout)
+	}
+}
+
+// THE TWO-TENANT ARMS, executable, for the s2s record plane's runtime gate.
+//
+// The property is the one the gate exists for: a /tenants/<t> peer reading the
+// record plane sees its own rows and never another tenant's, while a /system
+// peer reading the SAME generated code keeps the fleet-wide read the plane was
+// built to serve. Render-only assertions cannot tell those two apart.
+
+// gatedFilterTail returns the generator's gated filter from the __ns_pinned
+// binding on. Everything returned is VERBATIM generator output — the gate, the
+// retain and the abort. Only the caller-resolution `?` chain above it is
+// dropped, because binding a real tonic Caller would drag the whole chassis in.
+func gatedFilterTail(t *testing.T) string {
+	t.Helper()
+	block := rustResponseNamespaceFilterBlock([]rustNamespaceListField{{Field: "items", ItemField: "namespace"}}, "ListThings", true)
+	const marker = "let __ns_pinned = "
+	i := strings.Index(block, marker)
+	if i < 0 {
+		t.Fatalf("the gated filter has no %q to split on:\n%s", marker, block)
+	}
+	return block[i:]
+}
+
+// runGatedFilter compiles the gated filter tail over an acme row plus, when
+// withBeta, a second row belonging to another tenant, and reports what the
+// process did.
+func runGatedFilter(t *testing.T, callerNS string, withBeta bool) (stdout string, exitCode int, signaled bool) {
+	t.Helper()
+	if _, err := exec.LookPath("rustc"); err != nil {
+		t.Skip("rustc not installed; skipping the executable two-tenant control")
+	}
+	rows := `vec![Row { namespace: "/tenants/acme".to_string(), id: "r-acme".to_string() }]`
+	if withBeta {
+		rows = `vec![Row { namespace: "/tenants/acme".to_string(), id: "r-acme".to_string() }, Row { namespace: "/tenants/beta".to_string(), id: "r-beta".to_string() }]`
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "main.rs")
+	program := `struct Row { namespace: String, id: String }
+struct Resp { items: Vec<Row> }
+fn main() {
+    let __read_namespace = "` + callerNS + `".to_string();
+    let resp = Resp { items: ` + rows + ` };
+    ` + gatedFilterTail(t) + `    let ids: Vec<&str> = resp.items.iter().map(|r| r.id.as_str()).collect();
+    println!("DELIVERED {:?}", ids);
+}
+`
+	if err := os.WriteFile(src, []byte(program), 0o644); err != nil {
+		t.Fatalf("write main.rs: %v", err)
+	}
+	bin := filepath.Join(dir, "filter")
+	if out, err := exec.Command("rustc", "-o", bin, src).CombinedOutput(); err != nil {
+		t.Fatalf("rustc on the gated filter failed: %v\n%s\n--- program ---\n%s", err, out, program)
+	}
+	var sb strings.Builder
+	run := exec.Command(bin)
+	run.Stdout = &sb
+	err := run.Run()
+	if err == nil {
+		return sb.String(), 0, false
+	}
+	ee, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("running the gated filter: %v", err)
+	}
+	return sb.String(), ee.ExitCode(), ee.ExitCode() < 0
+}
+
+// A /tenants/<t> peer is PINNED: its own rows are delivered, and a foreign
+// tenant's row reaching the backstop kills the process exactly as on the c2s
+// half — the gate does not soften the boundary, it only decides who has one.
+func TestRustTenantS2S_GatedFilterPinsATenantCaller(t *testing.T) {
+	stdout, code, _ := runGatedFilter(t, "/tenants/acme", false)
+	if code != 0 || !strings.Contains(stdout, `DELIVERED ["r-acme"]`) {
+		t.Fatalf("a tenant caller must still receive its OWN rows: exit %d, stdout %q", code, stdout)
+	}
+	stdout, code, signaled := runGatedFilter(t, "/tenants/acme", true)
+	if !signaled {
+		t.Fatalf("a /tenants/beta row must not be delivered to a /tenants/acme caller; exit %d, stdout %q", code, stdout)
+	}
+	if strings.Contains(stdout, "DELIVERED") {
+		t.Fatalf("a /tenants/beta row leaked to a /tenants/acme caller: %q", stdout)
+	}
+}
+
+// The regression control the gate exists FOR: the /system peer reading the same
+// generated code keeps every row, fleet-wide, and the abort stays unreachable.
+func TestRustTenantS2S_GatedFilterKeepsSystemPeerFleetWide(t *testing.T) {
+	stdout, code, signaled := runGatedFilter(t, "/system/services/argus", true)
+	if signaled || code != 0 {
+		t.Fatalf("a /system peer must keep its fleet-wide read: exit %d, stdout %q", code, stdout)
+	}
+	if !strings.Contains(stdout, `DELIVERED ["r-acme", "r-beta"]`) {
+		t.Fatalf("a /system peer must see both tenants' rows, got %q", stdout)
+	}
+}
+
+// And the UNGATED (c2s) filter over the identical rows still drops and aborts:
+// the gate is additive, not a weakening of the half that already had a boundary.
+func TestRustNamespaceFilterUngatedHasNoSystemExemption(t *testing.T) {
+	got := rustResponseNamespaceFilterBlock([]rustNamespaceListField{{Field: "items", ItemField: "namespace"}}, "ListThings", false)
+	if strings.Contains(got, "__ns_pinned") || strings.Contains(got, `starts_with("/system")`) {
+		t.Fatalf("the ungated filter must carry no runtime gate:\n%s", got)
+	}
+	stdout, _, signaled := runGeneratedFilter(t, "/system/services/argus", "/tenants/beta")
+	if !signaled {
+		t.Fatalf("without the gate a /system caller is pinned like any other; stdout %q", stdout)
 	}
 }

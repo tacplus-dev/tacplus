@@ -50,6 +50,7 @@ class Token {
 class Auth {
     static String caller = "";
     static String callerNamespaceFromContext() { return caller; }
+    static java.util.List<String> callerLinkedFromContext() { return java.util.Collections.emptyList(); }
     static Token verifiedTokenFromContext() { return caller.isEmpty() ? null : new Token(caller); }
 }
 

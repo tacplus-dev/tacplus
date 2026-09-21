@@ -132,6 +132,11 @@ func javaNamespaceResolve(method, indent string, runtimeGate bool) string {
 %[1]sif (__rowNamespace.isEmpty()) {
 %[1]s    throw new ProtoException(ProtoException.PERMISSION_DENIED, "%[2]s returns rows owned by a namespace and the caller presented no verified namespace claim");
 %[1]s}
+%[1]s// A linked claim widens which namespaces a row may be accepted from, on top
+%[1]s// of the caller's own — see javaNamespaceAcceptsExpr. This is a READ seam
+%[1]s// (this function is only ever called ahead of an egress filter, never ahead
+%[1]s// of a request-stamp), so the widening always applies here.
+%[1]sfinal java.util.List<String> __rowNamespaceLinked = Auth.callerLinkedFromContext();
 `, indent, method)
 	if runtimeGate {
 		out += fmt.Sprintf(`%[1]s// This is the s2s record read plane, so WHICH of the two reads the caller gets
@@ -143,6 +148,17 @@ func javaNamespaceResolve(method, indent string, runtimeGate bool) string {
 `, indent)
 	}
 	return out
+}
+
+// javaNamespaceAcceptsExpr is the row-acceptance test shared by all four egress
+// filters below (unary, page, and the watch guard's two shapes): a row is
+// accepted if its namespace exactly matches the caller's own namespace claim,
+// OR is named by one of the caller's `linked` claims — one change point for
+// all four call sites rather than four copies of the OR. candidate names the
+// Java expression for the row's namespace value in scope at the call site
+// (already dereferenced, e.g. "__nfb.getItems(__ni).getNamespace()").
+func javaNamespaceAcceptsExpr(candidate string) string {
+	return fmt.Sprintf("(__rowNamespace.equals(%[1]s) || __rowNamespaceLinked.contains(%[1]s))", candidate)
 }
 
 // javaNamespaceGuardExpr is the row comparison the filters branch on: the plain
@@ -178,7 +194,7 @@ func javaNamespaceUnaryFilter(fields []javaNamespaceListField, outputType, metho
 		p := javaPascalField(f.Field)
 		fmt.Fprintf(&b, "%[1]sfor (int __ni = __nfb.get%[2]sCount() - 1; __ni >= 0; __ni--) {\n", indent, p)
 		fmt.Fprintf(&b, "%[1]s    if (%[2]s) {\n", indent,
-			javaNamespaceGuardExpr(fmt.Sprintf("!__rowNamespace.equals(__nfb.get%s(__ni).get%s())", p, javaPascalField(f.ItemField)), runtimeGate))
+			javaNamespaceGuardExpr("!"+javaNamespaceAcceptsExpr(fmt.Sprintf("__nfb.get%s(__ni).get%s()", p, javaPascalField(f.ItemField))), runtimeGate))
 		fmt.Fprintf(&b, "%[1]s        __nfb.remove%[2]s(__ni);\n", indent, p)
 		b.WriteString(javaNamespaceCrash(method, "rows in "+f.Field, indent+"        "))
 		fmt.Fprintf(&b, "%s    }\n%s}\n", indent, indent)
@@ -197,7 +213,7 @@ func javaNamespacePageFilter(namespace, itemType, srcExpr, method, indent string
 	// The keep test, not the drop test, is what carries the runtime gate here:
 	// an unpinned (/system) caller keeps every row, so __tenantItems is still
 	// the list the page is assembled from and nothing downstream changes shape.
-	keep := fmt.Sprintf("__rowNamespace.equals(__nrow.get%s())", javaPascalField(namespace))
+	keep := javaNamespaceAcceptsExpr(fmt.Sprintf("__nrow.get%s()", javaPascalField(namespace)))
 	if runtimeGate {
 		keep = "!__nsPinned || " + keep
 	}
@@ -233,7 +249,7 @@ func (es *javaEgressSanitizer) javaNamespaceWatchGuard(eventType, servicePackage
 		p := javaPascalField(f.Name)
 		if ns := es.namespaceField(ft, servicePackage); ns != "" {
 			fmt.Fprintf(&b, "%[1]sif (%[2]s) {\n", indent,
-				javaNamespaceGuardExpr(fmt.Sprintf("__event.has%[1]s() && !__rowNamespace.equals(__event.get%[1]s().get%[2]s())", p, javaPascalField(ns)), runtimeGate))
+				javaNamespaceGuardExpr(fmt.Sprintf("__event.has%[1]s() && !%[2]s", p, javaNamespaceAcceptsExpr(fmt.Sprintf("__event.get%[1]s().get%[2]s()", p, javaPascalField(ns)))), runtimeGate))
 			b.WriteString(javaNamespaceCrash(method, "a watch event", indent+"    "))
 			fmt.Fprintf(&b, "%s}\n", indent)
 			continue
@@ -254,8 +270,8 @@ func (es *javaEgressSanitizer) javaNamespaceWatchGuard(eventType, servicePackage
 			}
 			np := javaPascalField(nf.Name)
 			fmt.Fprintf(&b, "%[1]sif (%[2]s) {\n", indent,
-				javaNamespaceGuardExpr(fmt.Sprintf("__event.has%[1]s() && __event.get%[1]s().has%[2]s() && !__rowNamespace.equals(__event.get%[1]s().get%[2]s().get%[3]s())",
-					p, np, javaPascalField(ns)), runtimeGate))
+				javaNamespaceGuardExpr(fmt.Sprintf("__event.has%[1]s() && __event.get%[1]s().has%[2]s() && !%[3]s",
+					p, np, javaNamespaceAcceptsExpr(fmt.Sprintf("__event.get%[1]s().get%[2]s().get%[3]s()", p, np, javaPascalField(ns)))), runtimeGate))
 			b.WriteString(javaNamespaceCrash(method, "a watch event", indent+"    "))
 			fmt.Fprintf(&b, "%s}\n", indent)
 		}

@@ -108,6 +108,7 @@ type rustWatchRowGuard struct {
 	Path      string
 	Principal string
 	Namespace string
+	Private   bool // the row type also declares (spec.record).private
 }
 
 // rustWatchEgress is the resolved guard set for one WATCH method.
@@ -197,6 +198,7 @@ func (es *rustEgressSanitizer) watchRowPins(fullType, servicePkg string) (rustWa
 	g := rustWatchRowGuard{
 		Principal: es.storePrincipalField(fullType, servicePkg),
 		Namespace: es.storeNamespaceField(fullType, servicePkg),
+		Private:   es.isRecordPrivate(fullType, servicePkg),
 	}
 	return g, g.Principal != "" || g.Namespace != ""
 }
@@ -241,11 +243,29 @@ func rustWatchEgressGuardStmts(guards []rustWatchRowGuard, frameVar, method, ind
 		if g.Principal == "" {
 			continue
 		}
-		fmt.Fprintf(&b, "\n%s// (spec.store_principal): a frame carrying a row the caller does not own is never sent.\n", indent)
+		field := frameVar
+		if g.Path != "" {
+			field = frameVar + "." + g.Path
+		}
+		if !g.Private {
+			fmt.Fprintf(&b, "\n%s// (spec.store_principal): a frame carrying a row the caller does not own is never sent.\n", indent)
+			if g.Path == "" {
+				fmt.Fprintf(&b, "%sif %s.%s != __read_principal { continue; }\n", indent, frameVar, g.Principal)
+			} else {
+				fmt.Fprintf(&b, "%sif let Some(__row) = %s.%s.as_ref() { if __row.%s != __read_principal { continue; } }\n", indent, frameVar, g.Path, g.Principal)
+			}
+			continue
+		}
+		// (spec.record).private: a mismatch here means the store's own query
+		// already leaked another owner's row, same posture as the namespace
+		// guard below — abort, don't silently drop the frame.
+		fmt.Fprintf(&b, "\n%s// (spec.record).private: a frame carrying a row the caller does not own aborts.\n", indent)
 		if g.Path == "" {
-			fmt.Fprintf(&b, "%sif %s.%s != __read_principal { continue; }\n", indent, frameVar, g.Principal)
+			fmt.Fprintf(&b, "%sif %s.%s != __read_principal {\n%s%s}\n", indent, frameVar, g.Principal,
+				rustPrincipalCrash(method, field, indent+"    "), indent)
 		} else {
-			fmt.Fprintf(&b, "%sif let Some(__row) = %s.%s.as_ref() { if __row.%s != __read_principal { continue; } }\n", indent, frameVar, g.Path, g.Principal)
+			fmt.Fprintf(&b, "%sif let Some(__row) = %s.%s.as_ref() { if __row.%s != __read_principal {\n%s%s} }\n", indent, frameVar, g.Path, g.Principal,
+				rustPrincipalCrash(method, field, indent+"    "), indent)
 		}
 	}
 	for _, g := range guards {

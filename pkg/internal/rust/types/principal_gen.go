@@ -16,6 +16,7 @@ import "fmt"
 type rustPrincipalListField struct {
 	Field     string // snake_case response field holding the rows
 	ItemField string // snake_case principal field on the row type
+	Private   bool   // the row type also declares (spec.record).private
 }
 
 // requestPrincipalField returns the snake_case name of fullType's
@@ -48,6 +49,25 @@ func (es *rustEgressSanitizer) annotatedStringField(fullType, servicePkg, annota
 	return ""
 }
 
+// isRecordPrivate reports whether fullType itself declares
+// (spec.record).private = true. Unlike store_principal/store_namespace this
+// is a MESSAGE-level annotation, not a field one (see Go's goPrivateEgressRows,
+// which this mirrors) — a private record's guarantee is stronger than a plain
+// (spec.store_principal) field's soft filter: a mismatch aborts the process
+// instead of silently dropping the row (rustPrincipalCrash), because reaching
+// a foreign owner's row here means the store's own query already leaked it.
+func (es *rustEgressSanitizer) isRecordPrivate(fullType, servicePkg string) bool {
+	if es == nil || fullType == "" {
+		return false
+	}
+	pkg, name := splitRustEgressFQN(fullType, servicePkg)
+	msg, ok := es.msgs[pkg+"\x00"+name]
+	if !ok {
+		return false
+	}
+	return msg.Annotations["record_private"].BoolValue
+}
+
 // principalListFields returns the repeated record fields of fullType whose item
 // type declares (spec.store_principal) — the rows the wrapper must filter to the
 // caller before the response leaves the process.
@@ -69,11 +89,16 @@ func (es *rustEgressSanitizer) principalListFields(fullType, servicePkg string) 
 		if fpkg == "" {
 			fpkg = pkg
 		}
-		itemField := es.storePrincipalField(fpkg+"."+f.Type, servicePkg)
+		itemFullType := fpkg + "." + f.Type
+		itemField := es.storePrincipalField(itemFullType, servicePkg)
 		if itemField == "" {
 			continue
 		}
-		out = append(out, rustPrincipalListField{Field: prostSnakeName(f.Name), ItemField: itemField})
+		out = append(out, rustPrincipalListField{
+			Field:     prostSnakeName(f.Name),
+			ItemField: itemField,
+			Private:   es.isRecordPrivate(itemFullType, servicePkg),
+		})
 	}
 	return out
 }
@@ -141,13 +166,36 @@ func rustStreamPrincipalStmts(field, msgVar, indent string) string {
 }
 
 // rustResponsePrincipalFilterBlock renders the (spec.store_principal) egress
-// filter: rows the caller does not own never leave the process.
+// filter. A plain store_principal field is a soft filter: rows the caller
+// does not own are dropped and the call proceeds. A field on a
+// (spec.record).private row is stronger — ValidateRecordPrivateAnnotations
+// already requires it to be store_principal-annotated, and reaching a foreign
+// owner's row here means the store's own query is leaking, the same posture
+// (spec.store_namespace) already takes, so the process aborts instead of
+// filtering (rustPrincipalCrash).
 func rustResponsePrincipalFilterBlock(fields []rustPrincipalListField, method string) string {
 	out := "\n            // (spec.store_principal): filter rows to the caller's principal.\n"
 	out += rustPrincipalResolve("__read_principal", method, "            ")
 	out += "            let mut resp = resp;\n"
 	for _, f := range fields {
-		out += fmt.Sprintf("            resp.%s.retain(|__row| __row.%s == __read_principal);\n", f.Field, f.ItemField)
+		if !f.Private {
+			out += fmt.Sprintf("            resp.%s.retain(|__row| __row.%s == __read_principal);\n", f.Field, f.ItemField)
+			continue
+		}
+		out += fmt.Sprintf(`            let __priv_before = resp.%[1]s.len();
+            resp.%[1]s.retain(|__row| __row.%[2]s == __read_principal);
+            if resp.%[1]s.len() != __priv_before {
+%[3]s            }
+`, f.Field, f.ItemField, rustPrincipalCrash(method, f.Field, "                "))
 	}
 	return out
+}
+
+// rustPrincipalCrash renders the abort taken when a (spec.record).private
+// row's owner did not match the caller — see rustNamespaceCrash, the same
+// doctrine applied to the principal seam.
+func rustPrincipalCrash(method, field, indent string) string {
+	return fmt.Sprintf(`%[1]seprintln!("FATAL: (spec.record).private backstop fired: %[2]s returned rows in %[3]s owned by a principal other than the caller's; the store's own query is leaking across owners");
+%[1]sstd::process::abort();
+`, indent, method, field)
 }

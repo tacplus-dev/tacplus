@@ -127,15 +127,23 @@ RUN curl -fsSL --retry 30 --retry-delay 5 https://deb.nodesource.com/setup_24.x 
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Eclipse Temurin JDK 21 (not available in trixie default repos)
+# Install Eclipse Temurin JDK 25 (not available in trixie default repos)
 RUN curl -fsSL --retry 30 --retry-delay 5 https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /usr/share/keyrings/adoptium.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb trixie main" > /etc/apt/sources.list.d/adoptium.list \
-    && apt-get update && apt-get install -y --no-install-recommends temurin-21-jdk \
+    && apt-get update && apt-get install -y --no-install-recommends temurin-25-jdk \
     && rm -rf /var/lib/apt/lists/*
 
-# Set JAVA_HOME to Temurin 21
-RUN ln -s /usr/lib/jvm/temurin-21-jdk-* /usr/lib/jvm/temurin-21
-ENV JAVA_HOME=/usr/lib/jvm/temurin-21
+# Set JAVA_HOME to Temurin 25
+RUN ln -s /usr/lib/jvm/temurin-25-jdk-* /usr/lib/jvm/temurin-25
+ENV JAVA_HOME=/usr/lib/jvm/temurin-25
+
+# Maven's own bundled guava calls a terminally-deprecated sun.misc.Unsafe method under
+# JDK 25, which --sun-misc-unsafe-memory-access=allow (needed for protobuf-java/netty,
+# set per-invocation by cross-test scripts) turns from an error into a WARNING on stderr —
+# cross-test gates that assert a clean compile log then fail on Maven's own warning, not
+# generated code. Set once here for every mvn invocation in the image rather than in each
+# of the 7+ cross-test call sites.
+ENV MAVEN_OPTS=--sun-misc-unsafe-memory-access=allow
 
 # Install Go runtime (needed for goimports during type generation)
 RUN ARCH=$(dpkg --print-architecture) \
@@ -145,7 +153,7 @@ RUN ARCH=$(dpkg --print-architecture) \
 # Install Python tools (twine/build for packaging, black for formatting)
 # --ignore-installed works around trixie shipping python3-packaging via apt with no
 # RECORD file, which pip otherwise refuses to uninstall when a newer packaging is pulled in.
-RUN pip3 install --break-system-packages --no-cache-dir --ignore-installed twine build black
+RUN pip3 install --break-system-packages --no-cache-dir --ignore-installed twine build black grpcio-tools
 
 # Install OpenJML (Java formal verification)
 # OpenJML bundles an x86-64 JDK. On ARM containers (Apple Silicon), install

@@ -11,7 +11,7 @@ variables:
   GONOSUMCHECK: "gitlab.com/secondstarcavalier/*"
   CGO_ENABLED: "0"
   # Bump and retag to trigger a base image rebuild.
-  BASE_VERSION: "6"
+  BASE_VERSION: "7"
 
 .parse-version: &parse-version
   - |

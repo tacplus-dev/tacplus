@@ -4,12 +4,16 @@ package types
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/collection"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
 )
 
 // The Java MCP dispatch seam. An RPC_PRINCIPAL_MCP rpc is not gRPC-callable
@@ -495,5 +499,64 @@ func TestJavaMcpPageToolSchemaStatesTheWindow(t *testing.T) {
 	}
 	if pt, _ := props["page_token"].(map[string]any); pt == nil {
 		t.Fatalf("page_token is not a tool argument:\n%s", tools[0].Schema)
+	}
+}
+
+// An auto-exposed rpc keeps its gRPC surface, so it reaches the wrapper's
+// handler-declaration collection point — but it is still a tool, and the
+// generated gate already renders a recording stub for every tool. Collecting it
+// as a NON-tool declaration too gave the gate's StubHandler two overrides of the
+// same method, which does not compile. The non-tool sibling must still get its
+// throwing stub.
+func TestJavaMcpGateStubDeclaresEachToolOnce(t *testing.T) {
+	outputDir := t.TempDir()
+	wrapperDir := filepath.Join(outputDir, "src", "main", "java", "com", "example", "s2sm", "internal", "grpc", "servers", "svc", "ticket")
+	typesDir := filepath.Join(outputDir, "src", "main", "java", "com", "example", "types", "svc", "ticket", "types")
+	svc := ServiceInfo{
+		ProtoFile:      "svc/ticket.proto",
+		PackageName:    "ticket",
+		ServiceName:    "TicketApi",
+		GrpcName:       "ticket",
+		IsGrpc:         true,
+		IsC2S:          true,
+		OutputDir:      wrapperDir,
+		TypesOutputDir: typesDir,
+		ParentDir:      "svc",
+		Config:         &tactype.Config{OutputDir: outputDir, JavaPackageBase: "com.example"},
+	}
+
+	// The auto-exposed tool: gRPC-callable AND published as a tool.
+	target := javaMcpTestService()
+	auto := target.Methods[0]
+	auto.IsMcp = false
+	auto.IsAutoMcp = true
+	// Leave the second method declared-MCP only, so the service covers both
+	// kinds of tool, and GetTicket as the non-tool control.
+	info := &parser.ProtoInfo{Package: "ticket", Services: []*parser.ServiceInfo{target}}
+
+	if _, err := generateServiceWrapper(svc, info, nil, proto.SkippedTraceTypes{}, javaMcpTestSanitizer()); err != nil {
+		t.Fatalf("generateServiceWrapper: %v", err)
+	}
+	gateBytes, err := os.ReadFile(filepath.Join(wrapperDir, "TicketApiMcpTest.java"))
+	if err != nil {
+		t.Fatalf("read generated MCP gate: %v", err)
+	}
+	gate := string(gateBytes)
+
+	// Exactly one declaration of the auto-exposed tool's handler method, and it
+	// is the recording stub, not the throwing one.
+	if n := strings.Count(gate, "getTicketBrief(Caller caller"); n != 1 {
+		t.Fatalf("the auto-exposed tool is declared %d times in the gate's stub, want 1:\n%s", n, gate)
+	}
+	if n := strings.Count(gate, "getTicketRoster(Caller caller"); n != 1 {
+		t.Fatalf("the declared-MCP tool is declared %d times in the gate's stub, want 1:\n%s", n, gate)
+	}
+	// The non-tool sibling still gets its throwing stub, so a misrouted dispatch
+	// still fails loudly.
+	if n := strings.Count(gate, "getTicket(Caller caller"); n != 1 {
+		t.Fatalf("the non-tool rpc is declared %d times in the gate's stub, want 1:\n%s", n, gate)
+	}
+	if !strings.Contains(gate, "throw new IllegalStateException") {
+		t.Fatalf("the gate's stub has no throwing stub for the non-tool rpc:\n%s", gate)
 	}
 }

@@ -809,7 +809,16 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		if method != mcpCarrier {
 			decl := generateJavaHandlerMethod(method, inputType, outputType, crossPkgOuterClasses)
 			handlerInterface.WriteString(decl)
-			nonToolHandlerDecls = append(nonToolHandlerDecls, decl)
+			// An auto-exposed rpc reaches here because it KEEPS its gRPC surface
+			// (unlike a declared RPC_PRINCIPAL_MCP rpc, which continued above) —
+			// but it is still a tool, and the generated MCP self-test already
+			// renders a recording stub for every tool. Recording it here too
+			// would give the stub two overrides of the same method, which does
+			// not compile. Only an rpc that is not a tool at all belongs in the
+			// throwing-stub list.
+			if !method.IsMcpTool() {
+				nonToolHandlerDecls = append(nonToolHandlerDecls, decl)
+			}
 		}
 		effectiveAuthAnyUser := method.AuthAnyUser
 		grpcMethods.WriteString(generateJavaGRPCWrapperSurface(method, serviceName, svc.GrpcName, inputType, outputType, inputHelpers, outputHelpers, effectiveAuthAnyUser, method.AuthDisabled || svc.AuthDisabled || svc.IsC2D, accountingMap, info.Package, svc.ParentDir, info.CrossPackageTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses, svc.IsC2S, recordPlaneS2S))

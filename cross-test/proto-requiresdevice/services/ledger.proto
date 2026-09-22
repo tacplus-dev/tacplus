@@ -1,0 +1,41 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// The CALLER-side half of the (spec.rpc).requires_device fixture.
+//
+// ledger is not generated as a server in this build (vault is the self package);
+// it is here so vault holds a generated S2S CLIENT to a guarded rpc. That is what
+// emits the caller-side helpers — the request-hash helper and the metadata-attach
+// helper — which are otherwise compiled by no gate at all. The hash helper the
+// caller computes and the hash the server gate recomputes must be the same
+// function; this fixture makes both ends exist in one compiled tree.
+
+syntax = "proto3";
+
+package ledger;
+
+import "sys/spec.proto";
+
+service LedgerService {
+  option (spec.service_s2s) = {label: "LedgerService"};
+
+  // A second guarded rpc, in a third package. vault calls it.
+  rpc DeleteEntry(DeleteEntryRequest) returns (DeleteEntryResponse) {
+    option (spec.rpc) = {
+      principal: RPC_PRINCIPAL_SERVICE,
+      auth_services: ["*"],
+      requires_device: true
+    };
+  }
+}
+
+message DeleteEntryRequest {
+  // entry_id names the ledger entry to delete.
+  string entry_id = 1 [(spec.assert_required) = true];
+
+  // sequence pins the entry's sequence number.
+  int64 sequence = 2 [(spec.assert_numeric) = {ge: 0}];
+}
+
+message DeleteEntryResponse {
+  // deleted is true when the entry is gone.
+  bool deleted = 1;
+}

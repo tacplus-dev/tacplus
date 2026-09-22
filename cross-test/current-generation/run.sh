@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PROTO_SRC="$ROOT_DIR/cross-test/proto"
 HEALTHONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-healthonly"
 C2SONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-c2sonly"
+REQUIRESDEVICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-requiresdevice"
 WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/current-generation}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
@@ -133,6 +134,19 @@ write_healthonly_config() {
 language: "$language"
 pkg: "com.gitlab.example.dummy.healthonly"
 src: "$HEALTHONLY_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
+write_requiresdevice_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.vault"
+src: "$REQUIRESDEVICE_PROTO_SRC"
 output-dir: "tacplus"
 EOF
 }
@@ -1250,6 +1264,77 @@ assert_healthonly_output() {
   assert_no_legacy_fixture_output "$output"
 }
 
+# assert_requiresdevice_output checks that the (spec.rpc).requires_device gate was
+# actually GENERATED, not merely that a tree with the annotation in it compiled.
+# Every one of these has failed at least once during development in at least one
+# language, and each failure compiled:
+#   - the wrapper hashing the request AFTER consuming it,
+#   - the broker call naming the unqualified method,
+#   - the caller-side hash helper resolving to a function that was never emitted,
+#   - the broker's S2S client not being auto-injected at all.
+# The ungated sibling rpc (GetSecret) is here for the same reason: a gate spliced
+# onto every unary method instead of the declared one also compiles.
+assert_requiresdevice_output() {
+  local output="$1"
+  local language="$2"
+  local wrapper="" client="" sm="" broker_client=""
+
+  case "$language" in
+    go)
+      wrapper="$(find "$output" -type f -path '*/servers/services/vault/service.go' -print -quit)"
+      client="$(find "$output" -type f -path '*/clients/services/ledger/service.go' -print -quit)"
+      sm="$(find "$output" -type f -path '*/s2sm/s2sm.go' -print -quit)"
+      broker_client="$(find "$output" -type f -path '*/clients/services/devicemint/*.go' -print -quit)"
+      ;;
+    java)
+      wrapper="$(find "$output" -type f -path '*/servers/services/vault/VaultService.java' -print -quit)"
+      client="$(find "$output" -type f -name 'LedgerServiceGrpcClient.java' -print -quit)"
+      sm="$(find "$output" -type f -path '*/s2sm/ServiceManager.java' -print -quit)"
+      broker_client="$(find "$output" -type f -name 'DeviceMintGrpcClient.java' -print -quit)"
+      ;;
+    rust)
+      wrapper="$(find "$output" -type f -path '*/servers/services/vault/service.rs' -print -quit)"
+      client="$(find "$output" -type f -path '*/clients/services/ledger/service.rs' -print -quit)"
+      sm="$(find "$output" -type f -path '*/s2sm/mod.rs' -print -quit)"
+      broker_client="$(find "$output" -type f -path '*/clients/services/devicemint/*.rs' -print -quit)"
+      ;;
+    *)
+      die "requires-device fixture: unsupported language: $language"
+      ;;
+  esac
+
+  [[ -n "$wrapper" ]] || die "requires-device fixture ($language): generated vault server wrapper not found under $output"
+  [[ -n "$client" ]] || die "requires-device fixture ($language): generated ledger client not found under $output"
+  [[ -n "$sm" ]] || die "requires-device fixture ($language): generated service manager not found under $output"
+  # The broker's S2S client is DERIVED from the annotation — no
+  # (spec.grpc_s2s_client) names devicemint anywhere in proto-requiresdevice/.
+  [[ -n "$broker_client" ]] || die "requires-device fixture ($language): the approval broker's S2S client was not auto-injected (no generated devicemint client under $output)"
+
+  # The gate is on the declared rpc, keyed by the WIRE-qualified method, and on
+  # that rpc only. Match the broker CALL SITE, not the bare method key: the key
+  # also appears in the per-method auth table for every rpc, gated or not.
+  local gate_re='roker_?[Aa]pproval\(.*vault\.VaultService/'
+  local gates
+  gates="$(grep -cE "$gate_re" "$wrapper" || true)"
+  [[ "$gates" == "1" ]] \
+    || die "requires-device fixture ($language): expected exactly one approval gate call site in $wrapper, found $gates (one gate is DeleteSecret's; more means it was spliced onto ungated methods too, none means it was not generated)"
+  grep -qE "${gate_re}DeleteSecret" "$wrapper" \
+    || die "requires-device fixture ($language): the approval gate in $wrapper does not name the wire-qualified vault.VaultService/DeleteSecret"
+
+  # The service manager reaches the broker over the generated client.
+  grep -q 'BrokerPendingApproval\|broker_pending_approval' "$sm" \
+    || die "requires-device fixture ($language): the service manager does not call the approval broker ($sm)"
+
+  # The caller-side half: the hash a proposer computes comes from the SAME
+  # canonicalization the server gate recomputes.
+  grep -qi 'DeleteEntryApprovalHash\|delete_entry_approval_hash' "$client" \
+    || die "requires-device fixture ($language): the caller-side request-hash helper is missing from $client"
+  grep -qi 'DeleteEntryWithApproval\|delete_entry_with_approval' "$client" \
+    || die "requires-device fixture ($language): the caller-side approval-attach helper is missing from $client"
+
+  assert_no_legacy_fixture_output "$output"
+}
+
 for language in "${languages[@]}"; do
   dir="$WORK_ROOT/$language"
   log="$WORK_ROOT/$language.log"
@@ -1603,6 +1688,37 @@ if [[ -d "$HEALTHONLY_PROTO_SRC" ]]; then
     echo "==> Compiling $language health-only fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/healthonly"
     echo "    PASS $language health-only"
+  done
+fi
+
+# requires-device fixture: the ONLY place (spec.rpc).requires_device is generated
+# and compiled by a standing gate. cross-test/proto declares no (spec.service), so
+# it is a types-only build and emits none of the three surfaces the gate lands on
+# (server wrapper, service manager, S2S clients) — the annotation would generate
+# nothing there. This set is a full service build instead: vault is the self
+# package and hosts the guarded rpc, devicemint is the authoritative
+# (spec.token_minter) hosting the broker in a DIFFERENT package (all three
+# backends refuse a self-hosting minter), and ledger is a third package vault
+# holds a client to, so the caller-side helpers are compiled too. All three
+# languages, because all three implement the gate independently.
+if [[ -d "$REQUIRESDEVICE_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/requiresdevice-$language"
+    log="$WORK_ROOT/requiresdevice-$language.log"
+    rm -rf "$dir"
+    write_requiresdevice_config "$dir" "$language"
+
+    echo "==> Generating $language requires-device fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$REQUIRESDEVICE_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language requires-device generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_requiresdevice_output "$output_root" "$language"
+    echo "==> Compiling $language requires-device fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/vault"
+    echo "    PASS $language requires-device"
   done
 fi
 

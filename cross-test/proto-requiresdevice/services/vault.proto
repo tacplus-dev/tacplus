@@ -1,0 +1,100 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// The guarded half of the (spec.rpc).requires_device fixture.
+//
+// Why this fixture exists: cross-test/proto is a TYPES-ONLY build (it declares no
+// (spec.service)), so it emits no server wrapper, no service manager and no S2S
+// clients — the three places the requires_device gate lands. Adding the annotation
+// there would generate nothing. This set is a full service build, in the same
+// shape as proto-c2sonly and proto-healthonly, so the gate is generated and
+// compiled by the standing gate in all three languages.
+//
+// vault is the SELF package (tacplus.yaml pkg ends in .vault), so VaultService is
+// the server. devicemint is a different package, so it is reached over a generated
+// S2S client — auto-injected by DeriveApprovalBrokerClient, with no
+// (spec.grpc_s2s_client) declared for IT: that auto-injection is part of what
+// this fixture pins.
+
+syntax = "proto3";
+
+package vault;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "vault"};
+
+// vault is also a CALLER of a guarded rpc (ledger.LedgerService/DeleteEntry), so
+// this build compiles the caller-side generated helpers too. The broker client is
+// NOT declared here: it is auto-injected from the requires_device annotation below.
+option (spec.grpc_s2s_client) = {service: "ledger.LedgerService"};
+
+service VaultService {
+  option (spec.service_s2s) = {label: "VaultService"};
+
+  // Ungated unary rpc. Present so the generated wrapper proves the gate is
+  // PER-METHOD: this method must come out with no approval check at all.
+  rpc GetSecret(GetSecretRequest) returns (GetSecretResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+
+  // The gated rpc. Destroying key material is exactly the irreversible act that
+  // must be approved on a device the person holds, not merely by a session that
+  // is the person.
+  rpc DeleteSecret(DeleteSecretRequest) returns (DeleteSecretResponse) {
+    option (spec.rpc) = {
+      principal: RPC_PRINCIPAL_SERVICE,
+      auth_services: ["*"],
+      requires_device: true
+    };
+  }
+}
+
+message GetSecretRequest {
+  // secret_id names the secret.
+  string secret_id = 1 [(spec.assert_required) = true];
+}
+
+message GetSecretResponse {
+  // secret_id echoes the request.
+  string secret_id = 1;
+
+  // generation is the secret's current generation.
+  int32 generation = 2;
+}
+
+// DeleteSecretRequest is the message the approval hash is computed over. It
+// deliberately carries a scalar, a repeated scalar and a nested message so the
+// canonicalization walk (ascending field number, unpacked repeated, recursion)
+// is exercised by generated code rather than only by unit tests. It reaches NO
+// map field: a map anywhere in a guarded request is a generation error, because
+// map iteration order is not canonical across languages.
+message DeleteSecretRequest {
+  // secret_id names the secret to delete.
+  string secret_id = 1 [(spec.assert_required) = true];
+
+  // generation pins the generation being destroyed.
+  int32 generation = 2 [(spec.assert_numeric) = {ge: 0}];
+
+  // shards names the storage shards to delete from, in order.
+  repeated string shards = 3 [(spec.assert_max_size) = 64];
+
+  // scope narrows the delete.
+  DeleteScope scope = 4;
+}
+
+// DeleteScope is a nested message inside the hashed request, so the generated
+// canonicalization recurses.
+message DeleteScope {
+  // region is the storage region.
+  string region = 1 [(spec.assert_required) = true];
+
+  // include_backups also deletes backups.
+  bool include_backups = 2;
+}
+
+message DeleteSecretResponse {
+  // deleted is true when the secret is gone.
+  bool deleted = 1;
+
+  // deleted_at is the epoch-seconds of the delete.
+  int64 deleted_at = 2;
+}

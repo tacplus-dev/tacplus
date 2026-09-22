@@ -161,7 +161,7 @@ type %[7]sReportingHandler struct {
 	}
 
 	// The tool set is published.
-	fmt.Fprintf(&b, `// Test%[1]sMcpToolSetIsPublished: every RPC_PRINCIPAL_MCP rpc reaches the
+	fmt.Fprintf(&b, `// Test%[1]sMcpToolSetIsPublished: every MCP tool of this service reaches the
 // published tool set, with a schema the SDK will serve.
 func Test%[1]sMcpToolSetIsPublished(t *testing.T) {
 	tools := %[1]sMcpTools()
@@ -183,13 +183,13 @@ func Test%[1]sMcpToolSetIsPublished(t *testing.T) {
 	}
 `, strconv.Quote(t.ToolName), t.ToolName)
 	}
-	// A non-MCP rpc in the same service must not be published.
+	// An rpc of the same service that is not a tool must not be published.
 	for _, m := range svc.Methods {
-		if m.IsMcp || m == carrier {
+		if m.IsMcpTool() || m == carrier {
 			continue
 		}
 		fmt.Fprintf(&b, `	if _, ok := byName[%[1]s]; ok {
-		t.Fatalf("%[2]s is not an RPC_PRINCIPAL_MCP rpc but was published as a tool")
+		t.Fatalf("%[2]s is not an MCP tool but was published as one")
 	}
 `, strconv.Quote(strutil.ToSnakeCase(m.Name)), m.Name)
 	}

@@ -238,7 +238,7 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateDeletedFlagAnnotations(dp); err != nil {
 		return err
 	}
-	if err := parser.ValidateMcpAnnotations(dp); err != nil {
+	if err := parser.ValidateMcpAnnotations(dp, b.config.Language); err != nil {
 		return err
 	}
 	if err := parser.ValidateRecordReadAnnotations(dp); err != nil {

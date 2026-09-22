@@ -161,7 +161,7 @@ func javaMcpTools(svc *parser.ServiceInfo, servicePackage, outerClassName string
 	crossPkgOuterClasses, crossPkgHelpers map[string]string, san *javaEgressSanitizer) ([]javaMcpTool, error) {
 	var tools []javaMcpTool
 	for _, m := range svc.Methods {
-		if !m.IsMcp {
+		if !m.IsMcpTool() {
 			continue
 		}
 		if err := javaMcpToolGeneratable(svc, m, servicePackage, san); err != nil {

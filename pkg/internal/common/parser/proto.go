@@ -65,7 +65,8 @@ type MethodInfo struct {
 	Class                *verbs.Classification // resolved verb/pattern/access (archive/RPC_PATTERNS_AND_VERBS_PLAN.md §2). Set by ClassifyMethods; nil if classification failed (see ClassifyMethods for the reported error).
 	MinGroupSize         int32                 // method-level (spec.min_group_size): the smallest result size this size-only RPC discloses; 0 when the record declares no threshold
 	IsMcp                bool                  // mirrors MethodDescriptor.IsMcp: the rpc declares principal RPC_PRINCIPAL_MCP, so it is an MCP tool and gets no generated gRPC surface
-	McpToolName          string                // mirrors MethodDescriptor.McpToolName: the resolved tool name this rpc publishes under; empty unless IsMcp
+	IsAutoMcp            bool                  // mirrors MethodDescriptor.IsAutoMcp: the rpc is a user RPC of a c2s service, so it is an MCP tool AND keeps its gRPC surface
+	McpToolName          string                // mirrors MethodDescriptor.McpToolName: the resolved tool name this rpc publishes under; empty unless IsMcp or IsAutoMcp
 	Comment              string                // leading comment from proto source; the MCP tool description (decision doc section 8: no second hand-authored description)
 }
 
@@ -106,6 +107,12 @@ func ParseProtoFile(filePath string) (*ProtoInfo, error) {
 	// Use descriptor parser to extract service information
 	return parser.ConvertToProtoInfo(filePath)
 }
+
+// IsMcpTool reports whether this rpc is published as an MCP tool — declared
+// (RPC_PRINCIPAL_MCP) or auto-exposed. See MethodDescriptor.IsMcpTool: a site
+// asking "does this rpc produce a tool" uses this; a site asking "is this rpc
+// suppressed from the gRPC/REST surface" keeps using IsMcp.
+func (m *MethodInfo) IsMcpTool() bool { return m.IsMcp || m.IsAutoMcp }
 
 // StreamingType returns a string describing the streaming type
 func (m *MethodInfo) StreamingType() string {

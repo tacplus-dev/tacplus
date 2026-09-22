@@ -71,11 +71,11 @@ const McpResponseFrameMaxBytes = 4000000
 // so the call sites read alike.
 func AppendMcpCarrierRpcsToProtos(tempProtoDir, inputDir string) ([]string, error) {
 	_ = inputDir
-	// Cheap text pre-check before the descriptor parse. A tree with no MCP rpc
-	// has no carrier to inject, and this injector must not be the first thing to
-	// insist such a tree parses — every proto set that generated before MCP
-	// existed still has to reach protoc exactly as it did.
-	if hasMcp, err := protoDirDeclaresMcpPrincipal(tempProtoDir); err != nil {
+	// Cheap text pre-check before the descriptor parse. A tree with no rpc that
+	// could be a tool has no carrier to inject, and this injector must not be
+	// the first thing to insist such a tree parses — every proto set that
+	// generated before MCP existed still has to reach protoc exactly as it did.
+	if hasMcp, err := protoDirMayDeclareMcpTools(tempProtoDir); err != nil {
 		return nil, err
 	} else if !hasMcp {
 		return nil, nil
@@ -166,10 +166,12 @@ func AppendMcpCarrierRpcsToProtos(tempProtoDir, inputDir string) ([]string, erro
 	return modified, nil
 }
 
-// protoDirDeclaresMcpPrincipal reports whether any proto under dir mentions
-// RPC_PRINCIPAL_MCP. Textual on purpose: it is a gate on doing the real work,
-// not the decision about which service gets a carrier (that is the descriptor's).
-func protoDirDeclaresMcpPrincipal(dir string) (bool, error) {
+// protoDirMayDeclareMcpTools reports whether any proto under dir mentions
+// RPC_PRINCIPAL_MCP or spec.service_c2s — a declared tool, or a service whose
+// user RPCs are auto-exposed as tools. Textual on purpose: it is a gate on
+// doing the real work, not the decision about which service gets a carrier
+// (that is the descriptor's).
+func protoDirMayDeclareMcpTools(dir string) (bool, error) {
 	found := false
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || found || !strings.HasSuffix(path, ".proto") {
@@ -186,7 +188,7 @@ func protoDirDeclaresMcpPrincipal(dir string) (bool, error) {
 		if err != nil {
 			return err
 		}
-		if bytes.Contains(content, []byte("RPC_PRINCIPAL_MCP")) {
+		if bytes.Contains(content, []byte("RPC_PRINCIPAL_MCP")) || bytes.Contains(content, []byte("spec.service_c2s")) {
 			found = true
 		}
 		return nil

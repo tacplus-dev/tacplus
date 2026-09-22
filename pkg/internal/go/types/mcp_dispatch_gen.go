@@ -140,7 +140,7 @@ func goMcpCarrierMethod(svc *parser.ServiceInfo) *parser.MethodInfo {
 func goMcpTools(svc *parser.ServiceInfo, servicePackage string, san *egressSanitizer) ([]goMcpTool, error) {
 	var tools []goMcpTool
 	for _, m := range svc.Methods {
-		if !m.IsMcp {
+		if !m.IsMcpTool() {
 			continue
 		}
 		if err := goMcpToolGeneratable(svc, m, servicePackage, san); err != nil {
@@ -559,7 +559,7 @@ func generateGoMcpDispatch(svc *parser.ServiceInfo, p goMcpFileParams, san *egre
 func goMcpUsedPackages(svc *parser.ServiceInfo, servicePackage string) map[string]bool {
 	used := map[string]bool{}
 	for _, m := range svc.Methods {
-		if !m.IsMcp && m.Name != parser.McpCarrierRpcName(svc.Name) {
+		if !m.IsMcpTool() && m.Name != parser.McpCarrierRpcName(svc.Name) {
 			continue
 		}
 		for _, fullType := range []string{m.FullInputType, m.FullOutputType} {

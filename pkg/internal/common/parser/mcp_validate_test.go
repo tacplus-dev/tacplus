@@ -205,7 +205,7 @@ service Surface {
   }
 }
 `)
-	if err := ValidateMcpAnnotations(p); err != nil {
+	if err := ValidateMcpAnnotations(p, "go"); err != nil {
 		t.Fatalf("a unary MCP tool must generate: %v", err)
 	}
 }
@@ -237,7 +237,7 @@ service Surface {
   }
 }
 `)
-			err := ValidateMcpAnnotations(p)
+			err := ValidateMcpAnnotations(p, "go")
 			if err == nil {
 				t.Fatal("a streaming RPC_PRINCIPAL_MCP rpc must fail generation")
 			}
@@ -263,7 +263,7 @@ service Surface {
   }
 }
 `)
-	err := ValidateMcpAnnotations(p)
+	err := ValidateMcpAnnotations(p, "go")
 	if err == nil {
 		t.Fatal("mcp_tool_name on a non-MCP rpc must fail generation")
 	}
@@ -285,7 +285,7 @@ service Surface {
   }
 }
 `)
-	err := ValidateMcpAnnotations(p)
+	err := ValidateMcpAnnotations(p, "go")
 	if err == nil {
 		t.Fatal("a non-snake_case mcp_tool_name must fail generation")
 	}
@@ -307,7 +307,7 @@ service Surface {
   }
 }
 `)
-	err := ValidateMcpAnnotations(p)
+	err := ValidateMcpAnnotations(p, "go")
 	if err == nil {
 		t.Fatal("an MCP-only service with no service auth annotation must fail generation")
 	}
@@ -330,7 +330,7 @@ service Surface {
   }
 }
 `)
-	if err := ValidateMcpAnnotations(p); err != nil {
+	if err := ValidateMcpAnnotations(p, "go"); err != nil {
 		t.Fatalf("an MCP-only service with service_s2s must generate: %v", err)
 	}
 }
@@ -350,7 +350,7 @@ service Surface {
   }
 }
 `)
-	err := ValidateMcpAnnotations(p)
+	err := ValidateMcpAnnotations(p, "go")
 	if err == nil {
 		t.Fatal("an MCP rpc on a service_c2d service must fail generation")
 	}
@@ -373,7 +373,7 @@ func TestValidateMcpRefusesMcpServiceWithAuthDisabled(t *testing.T) {
 			AuthDisabled: true,
 		}},
 	}}
-	err := validateMcpAnnotations(fds)
+	err := validateMcpAnnotations(fds, "go")
 	if err == nil {
 		t.Fatal("an MCP rpc on an auth_disabled service must fail generation")
 	}
@@ -396,7 +396,7 @@ service Surface {
   }
 }
 `)
-	if err := ValidateMcpAnnotations(p); err != nil {
+	if err := ValidateMcpAnnotations(p, "go"); err != nil {
 		t.Fatalf("an MCP-only service with service_c2s must generate: %v", err)
 	}
 }

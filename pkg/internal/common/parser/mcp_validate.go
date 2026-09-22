@@ -11,11 +11,14 @@ import (
 	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
 )
 
-// The generation end of principal: RPC_PRINCIPAL_MCP.
+// The generation end of MCP tool exposure.
 //
-// An MCP-principal rpc declares a tool, not a gRPC call. tacplus generates its
-// schema and a handler interface method; it maps the tool to no gRPC RPC of its
-// own. Authorization is untouched — flags / auth_services /
+// There are two ways an rpc becomes a tool. An MCP-principal rpc DECLARES one:
+// tacplus generates its schema and a handler interface method, and maps the
+// tool to no gRPC RPC of its own. A user RPC of a c2s service is AUTO-EXPOSED
+// as one (MethodDescriptor.IsAutoMcp): it keeps its gRPC call surface and the
+// tool shares the handler the wrapper already calls. The rules below say which
+// of the two they bind on. Authorization is untouched — flags / auth_services /
 // target_namespace_field mean the same thing against the Caller an MCP session
 // captured at handshake as they do against a gRPC caller — so there is nothing
 // MCP-specific to validate there. What IS new is a wire format with no
@@ -32,8 +35,9 @@ import (
 //	       WATCH case (stream-shaped by construction) without tacplus needing to
 //	       know about CollectionMode at all. A handler is free to drive a Watch
 //	       internally and fold it into one response.
-//	MCP-2  mcp_tool_name on an rpc that is not RPC_PRINCIPAL_MCP     -> fail
-//	       Nothing reads it there. Same posture as residency VAL-4: an
+//	MCP-2  mcp_tool_name on an rpc that publishes no tool            -> fail
+//	       Nothing reads it there — on an auto-exposed rpc it IS read and
+//	       names the published tool, so only a non-tool is refused. Same posture as residency VAL-4: an
 //	       annotation no generator consults is a lie about the contract, not a
 //	       harmless extra.
 //	MCP-3  mcp_tool_name that is not snake_case                      -> fail
@@ -66,14 +70,41 @@ import (
 //	       "no identity" answer available: it requires a caller. So the shape
 //	       is refused here rather than generated into a session that either
 //	       trusts an unverified subject or is unauthenticated by construction.
+//	MCP-6  a service owning tools, generated for a language whose server
+//	       surface has no MCP backend                                -> fail
+//	       Carrier injection is a proto-text operation and so is
+//	       language-blind: a service hosted in a language with no MCP
+//	       dispatch generator would get an injected Broker<Service>McpSession
+//	       rpc, a generated handler stub for it, and no dispatch at all — an
+//	       empty MCP transport handed to the author to implement by hand,
+//	       with every tool the service owns silently unserved. Go, Java and
+//	       Rust have the backend; Python and TypeScript generate a service
+//	       wrapper (so they can host) and have none. Swift and C# generate no
+//	       wrapper at all — they cannot host, so they are not gated. Under
+//	       auto-exposure this stopped being a corner: every c2s service owns
+//	       tools, so a Python or TypeScript HOST of one has to say so loudly
+//	       rather than generate a hole.
 
 // mcpToolNameRe is the MCP tool-name convention the default (snake_case of the
 // RPC name) satisfies by construction, and the override must satisfy by hand.
 var mcpToolNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// ValidateMcpAnnotations enforces the invariants principal: RPC_PRINCIPAL_MCP
-// needs in order to be generatable.
-func ValidateMcpAnnotations(dp *DescriptorParser) error {
+// mcpBackendLanguages are the generation targets with an MCP dispatch backend.
+// A service owning tools is generatable for these and, per MCP-6, refused for a
+// server-capable language outside the set.
+var mcpBackendLanguages = map[string]bool{"go": true, "java": true, "rust": true}
+
+// mcpHostLanguages are the generation targets that emit a service wrapper and
+// can therefore HOST a service rather than only call one. Only these are gated
+// by MCP-6: a client-only target (swift, csharp) never serves a tool, so it has
+// no hole to fall into.
+var mcpHostLanguages = map[string]bool{"go": true, "java": true, "rust": true, "python": true, "typescript": true}
+
+// ValidateMcpAnnotations enforces the invariants MCP tool exposure needs in
+// order to be generatable. language is the tacplus.yaml language of the
+// generation being validated; it reaches here for MCP-6 and may be "" when the
+// caller has no language in hand, which skips that rule alone.
+func ValidateMcpAnnotations(dp *DescriptorParser, language string) error {
 	if dp == nil {
 		return nil
 	}
@@ -88,12 +119,12 @@ func ValidateMcpAnnotations(dp *DescriptorParser) error {
 	for _, path := range paths {
 		fds = append(fds, all[path])
 	}
-	return validateMcpAnnotations(fds)
+	return validateMcpAnnotations(fds, language)
 }
 
 // validateMcpAnnotations is the file-list form of ValidateMcpAnnotations; fds
 // must already be in a deterministic order so the error text is stable.
-func validateMcpAnnotations(fds []*FileDescriptor) error {
+func validateMcpAnnotations(fds []*FileDescriptor, language string) error {
 	var errs []string
 	for _, fd := range fds {
 		for si := range fd.Services {
@@ -122,6 +153,18 @@ func validateMcpAnnotations(fds []*FileDescriptor) error {
 						"permissions), so the caller would be whatever subject the client asserted. "+
 						"Host the MCP rpcs on a service_c2s or service_s2s service instead",
 					fd.Package, svc.Name))
+			}
+
+			// MCP-6.
+			if svc.HasMcpRpcs && language != "" && mcpHostLanguages[language] && !mcpBackendLanguages[language] {
+				errs = append(errs, fmt.Sprintf(
+					"%s.%s: owns MCP tools but is being generated for language %q, which has no MCP "+
+						"dispatch backend; the session carrier would be injected into the proto and "+
+						"stubbed on the handler with nothing to serve the tools it carries. Generate "+
+						"this service's server surface in go, java or rust, or take the tools off it "+
+						"(a service_c2s service auto-exposes its user RPCs, so that means moving the "+
+						"rpcs, not annotating them)",
+					fd.Package, svc.Name, language))
 			}
 
 			for mi := range svc.Methods {
@@ -154,11 +197,11 @@ func validateMcpAnnotations(fds []*FileDescriptor) error {
 				}
 
 				// MCP-2.
-				if !isMcp {
+				if !m.IsMcpTool() {
 					errs = append(errs, fmt.Sprintf(
-						"%s.%s/%s: declares mcp_tool_name %q but principal is %s; nothing reads a tool "+
-							"name on an rpc that is not RPC_PRINCIPAL_MCP. Drop it, or declare the rpc "+
-							"as an MCP tool",
+						"%s.%s/%s: declares mcp_tool_name %q but the rpc publishes no tool (principal "+
+							"is %s and it is not an auto-exposed user RPC of a c2s service); nothing "+
+							"reads a tool name there. Drop it, or declare the rpc as an MCP tool",
 						fd.Package, svc.Name, m.Name, override, m.Rpc.Principal))
 					continue
 				}

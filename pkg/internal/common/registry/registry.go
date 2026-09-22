@@ -1088,7 +1088,7 @@ func CollectRpcProtos(fds []*parser.FileDescriptor) ([]*spec.RpcInfo, error) {
 					HttpAliasPath:          m.HttpAliasPath,
 					TenantScope:            recordPlaneTenantScope(svc, authModel),
 					Surfaces:               rpcSurfaceInfos(svc, m, grpcPath, authServices, authDisabled, authAnyUser),
-					Mcp:                    m.IsMcp,
+					Mcp:                    m.IsMcpTool(),
 					McpToolName:            m.McpToolName,
 					// The session-carrying MCP transport is an ordinary rpc by
 					// the time it gets here — tacplus injected its declaration

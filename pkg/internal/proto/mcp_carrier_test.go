@@ -82,11 +82,11 @@ message GetTicketResponse {
 }
 
 service Scotty {
-  option (spec.service_c2s) = {auth_entitled_users: true};
+  option (spec.service_s2s) = {auth_services: ["*"]};
 
   // GetTicket returns one ticket.
   rpc GetTicket(GetTicketRequest) returns (GetTicketResponse) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
   }
 }
 `
@@ -157,7 +157,10 @@ func TestAppendMcpCarrierRpcsInjectsDeclaration(t *testing.T) {
 	}
 }
 
-// A service with no MCP rpc is left byte-for-byte alone.
+// A service that owns no tool is left byte-for-byte alone. Since auto-exposure
+// that means an s2s service: a c2s one owns tools by construction, which
+// TestAppendMcpCarrierRpcsInjectsForAutoExposedC2SService is the paired control
+// for.
 func TestAppendMcpCarrierRpcsSkipsServiceWithoutMcpRpcs(t *testing.T) {
 	protoDir := mcpCarrierProtoDir(t, mcpCarrierControlProto)
 
@@ -244,5 +247,47 @@ func TestMcpResponseFrameBoundMatchesProto(t *testing.T) {
 	if declared != McpResponseFrameMaxBytes {
 		t.Fatalf("McpResponseFrameMaxBytes = %d, but sys/mcp.proto declares %d; the generated MCP transport would bound frames at the wrong size",
 			McpResponseFrameMaxBytes, declared)
+	}
+}
+
+// The auto-exposure half of the control above: a c2s service declaring no
+// RPC_PRINCIPAL_MCP rpc at all still gets the carrier, because its user RPCs
+// are tools. Before auto-exposure this exact proto was the "no carrier" case.
+const mcpCarrierAutoExposedProto = `syntax = "proto3";
+
+package scotty;
+
+import "sys/spec.proto";
+
+message GetTicketRequest {
+  string id = 1;
+}
+
+message GetTicketResponse {
+  string body = 1;
+}
+
+service Scotty {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  // GetTicket returns one ticket.
+  rpc GetTicket(GetTicketRequest) returns (GetTicketResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER};
+  }
+}
+`
+
+func TestAppendMcpCarrierRpcsInjectsForAutoExposedC2SService(t *testing.T) {
+	protoDir := mcpCarrierProtoDir(t, mcpCarrierAutoExposedProto)
+
+	modified, err := AppendMcpCarrierRpcsToProtos(protoDir, protoDir)
+	if err != nil {
+		t.Fatalf("AppendMcpCarrierRpcsToProtos: %v", err)
+	}
+	if len(modified) != 1 || modified[0] != "services/scotty.proto" {
+		t.Fatalf("modified = %v, want [services/scotty.proto]", modified)
+	}
+	if got := mcpCarrierServiceProto(t, protoDir); !strings.Contains(got, parser.McpCarrierRpcName("Scotty")) {
+		t.Errorf("carrier not injected into the auto-exposed c2s service:\n%s", got)
 	}
 }

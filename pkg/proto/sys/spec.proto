@@ -1362,12 +1362,18 @@ enum RpcPrincipal {
   // RPC_PRINCIPAL_MCP: this RPC is declared as an MCP tool rather than a gRPC
   // call. tacplus generates the tool schema and a handler interface method the
   // service implements by hand; it maps the tool to no gRPC RPC of its own.
-  // Being a value of this enum rather than a flag is what makes "MCP tool" and
-  // "gRPC call" 1:1 exclusive by construction: an rpc block holds one principal,
-  // so a service wanting both surfaces for related functionality declares two
-  // rpcs. Authorization is unchanged — flags / auth_services /
-  // target_namespace_field mean the same thing against whatever Caller the MCP
-  // session captured at handshake as they do against a gRPC caller.
+  // Being a value of this enum rather than a flag is what keeps a DECLARED tool
+  // from also being a gRPC call: an rpc block holds one principal.
+  //
+  // It is NOT how most tools come to exist. Every user RPC of a service_c2s
+  // service — not RPC_PRINCIPAL_SERVICE, minus RPC_FLAG_PUBLIC_NO_AUTH and
+  // RPC_FLAG_SELF_AUTHENTICATES — is published as a tool automatically, with no
+  // annotation asking for one and with its gRPC call, REST route and
+  // entitlement grant intact. Declare this principal only for a tool that has
+  // no gRPC rpc of its own. Authorization is unchanged either way — flags /
+  // auth_services / target_namespace_field mean the same thing against whatever
+  // Caller the MCP session captured at handshake as they do against a gRPC
+  // caller.
   //
   // Streaming is a hard generation failure on this principal: the tool-call wire
   // format has no representation for a stream. A handler is free to drive a

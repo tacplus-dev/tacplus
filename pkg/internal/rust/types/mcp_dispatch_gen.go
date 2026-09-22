@@ -100,7 +100,7 @@ func rustMcpCarrierMethod(svc *parser.ServiceInfo) *parser.MethodInfo {
 func rustMcpTools(svc *parser.ServiceInfo, servicePkg string, crossPkgTypes map[string]string, san *rustEgressSanitizer) ([]rustMcpTool, error) {
 	var tools []rustMcpTool
 	for _, m := range svc.Methods {
-		if !m.IsMcp {
+		if !m.IsMcpTool() {
 			continue
 		}
 		if err := rustMcpToolGeneratable(svc, m, servicePkg, san); err != nil {
@@ -560,10 +560,11 @@ impl %[1]s {
 }
 
 impl rmcp::ServerHandler for %[1]s {
-    fn get_info(&self) -> rmcp::model::ServerInfo {
-        // Built from Default rather than a struct literal: rmcp::model::ServerInfo
-        // is #[non_exhaustive], so a literal does not compile outside rmcp.
-        let mut info = rmcp::model::ServerInfo::default();
+    fn get_info(&self) -> rmcp::model::ServerConfig {
+        // Built from Default rather than a struct literal:
+        // rmcp::model::ServerConfig is #[non_exhaustive], so a literal does not
+        // compile outside rmcp. (ServerInfo is the deprecated alias of it.)
+        let mut info = rmcp::model::ServerConfig::default();
         info.capabilities = rmcp::model::ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(%[3]s.to_string());
         info
@@ -1034,7 +1035,7 @@ mod %[1]s_mcp_tests {
 		if m == mcpCarrier {
 			continue
 		}
-		if !m.IsMcp {
+		if !m.IsMcpTool() {
 			b.WriteString("    " + generateRustHandlerStubMethod(m, servicePkg, serviceName, crossPkgTypes))
 			b.WriteString("\n")
 			continue
@@ -1057,8 +1058,9 @@ mod %[1]s_mcp_tests {
 
 	// The tool set is published.
 	fmt.Fprintf(&b, `
-    /// Every RPC_PRINCIPAL_MCP rpc reaches the published tool set, with a
-    /// schema rmcp can serve.
+    /// Every tool this service publishes — declared RPC_PRINCIPAL_MCP or
+    /// auto-exposed user rpc — reaches the published tool set, with a schema
+    /// rmcp can serve.
     #[test]
     fn the_mcp_tool_set_is_published() {
         let tools = %[1]s::tools();
@@ -1067,7 +1069,7 @@ mod %[1]s_mcp_tests {
 	for _, t := range tools {
 		fmt.Fprintf(&b, `        assert!(
             tools.iter().any(|t| t.name == %[1]s),
-            "%[2]s is declared RPC_PRINCIPAL_MCP but is not published"
+            "%[2]s is an MCP tool of this service but is not published"
         );
 `, rustQuote(t.ToolName), t.ToolName)
 	}

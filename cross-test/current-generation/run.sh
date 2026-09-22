@@ -1453,14 +1453,36 @@ PLANE_PY
   # namespace backstop on GetVaultRow and GetVaultRowPage. A principal MISMATCH
   # drops the row and proceeds, so it contributes no abort — only the namespace
   # pin and the private-owner pin abort.
-  for pair in "$api:6" "$records:2"; do
+  #
+  # Rust adds 3 more in the SAME file: EgressVaultApi is a service_c2s service,
+  # so its user RPCs are auto-exposed as MCP tools, and Rust emits that tool
+  # dispatch into the wrapper file rather than beside it. The tool call serves
+  # the row itself, so each dispatch seam carries the same backstop its gRPC
+  # twin does — call_get_vault_row_summary (namespace) and
+  # call_get_vault_secret_material (namespace + private owner). GetVaultStatus
+  # is auto-exposed too and adds none, because its response carries no pinned
+  # row; ListVaultRowsPaged and WatchVaultRows are not tools at all (a PAGE or
+  # WATCH read has no tool-call frame), which is why this is +3 and not +6.
+  local api_aborts=6
+  if [[ "$language" == "rust" ]]; then
+    api_aborts=9
+  fi
+  for pair in "$api:$api_aborts" "$records:2"; do
     local f="${pair%:*}" want="${pair##*:}"
     n="$(grep -cE "$abort_re" "$f" || true)"
     [[ "$n" == "$want" ]] \
       || die "record-egress fixture ($language): expected $want egress backstop aborts in $f, found $n (fewer means a seam lost its filter; more means it was spliced onto a method whose response carries no pinned row)"
   done
 
-  for pair in "$api:4" "$records:2"; do
+  # Rust's +2 is the same auto-exposed MCP tool dispatch the abort count above
+  # explains: the two seams that resolve a namespace (call_get_vault_row_summary,
+  # call_get_vault_secret_material) resolve it with the same linked widening
+  # their gRPC twins do.
+  local api_linked=4
+  if [[ "$language" == "rust" ]]; then
+    api_linked=6
+  fi
+  for pair in "$api:$api_linked" "$records:2"; do
     local f="${pair%:*}" want="${pair##*:}"
     n="$(grep -cE "$linked_re" "$f" || true)"
     [[ "$n" == "$want" ]] \
@@ -1472,8 +1494,15 @@ PLANE_PY
   # owner that would match a row by accident. It lands on the hand-written c2s
   # rpc only — the generated record reader never carries a private type, because
   # its data path is the peer-facing read the plane no longer emits for one.
-  local want_act
-  for pair in "$api:1" "$records:0"; do
+  # Rust's +1 is the auto-exposed MCP tool dispatch again: the tool that serves
+  # the private record refuses a delegated caller with no act claim exactly as
+  # its gRPC twin does, so a tool call cannot reach the row by a path the rpc
+  # would have closed.
+  local want_act api_act=1
+  if [[ "$language" == "rust" ]]; then
+    api_act=2
+  fi
+  for pair in "$api:$api_act" "$records:0"; do
     local f="${pair%:*}"
     want_act="${pair##*:}"
     n="$(grep -c 'reads a private record and requires a delegated caller identity (act claim)' "$f" || true)"

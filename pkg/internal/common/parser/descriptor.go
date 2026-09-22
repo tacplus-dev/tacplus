@@ -186,10 +186,12 @@ type ServiceDescriptor struct {
 	// c2d-only build demand a token minter.
 	SynthesizedKind string
 
-	// HasMcpRpcs is true when at least one method declares principal
-	// RPC_PRINCIPAL_MCP. The session-carrying MCP transport is a consequence of
-	// that fact, never a separate opt-in, so this is the whole input to "does
-	// this service need one".
+	// HasMcpRpcs is true when at least one method is an MCP tool — either
+	// because it declares principal RPC_PRINCIPAL_MCP, or because it is a user
+	// RPC of a c2s service and is therefore auto-exposed (MethodDescriptor.
+	// IsAutoMcp). The session-carrying MCP transport is a consequence of that
+	// fact, never a separate opt-in, so this is the whole input to "does this
+	// service need one".
 	HasMcpRpcs bool
 	// McpExposure is the derived exposure of that transport: the most-permissive
 	// exposure declared across this service's MCP methods, so one EXTERNAL tool
@@ -277,7 +279,8 @@ type MethodDescriptor struct {
 	Rpc                  *RpcDescriptor        // method-level spec.rpc (call surface); nil when absent
 	MinGroupSize         int32                 // method-level (spec.min_group_size), stamped by the record-map injector onto a record's size-only RPCs; 0 when absent
 	IsMcp                bool                  // derived: spec.rpc declares principal RPC_PRINCIPAL_MCP — this RPC is an MCP tool, not a gRPC call
-	McpToolName          string                // derived: the tool name this RPC publishes under (snake_case of Name, or the mcp_tool_name override); empty unless IsMcp
+	IsAutoMcp            bool                  // derived: this RPC is a user RPC of a c2s service, so it is an MCP tool AND keeps its gRPC call surface (mcpAutoExposed)
+	McpToolName          string                // derived: the tool name this RPC publishes under (snake_case of Name, or the mcp_tool_name override); empty unless IsMcp or IsAutoMcp
 }
 
 // RpcDescriptor carries a method's spec.rpc annotation: the two independent
@@ -840,12 +843,26 @@ func (p *DescriptorParser) parseServiceDescriptor(sd protoreflect.ServiceDescrip
 			md.HttpBody = "*"
 		}
 
+		// Auto-exposure: a user RPC of a c2s service is an MCP tool without any
+		// annotation asking for one. Resolved here, next to IsMcp, so exactly one
+		// place answers "is this rpc a tool" and every generator and the registry
+		// read the same bit. Unlike IsMcp this is additive — the rpc keeps its
+		// gRPC call surface, its REST route and its entitlement grant, and the
+		// tool shares the handler method the gRPC wrapper already calls.
+		if !md.IsMcp && mcpAutoExposed(&svc, &md) {
+			md.IsAutoMcp = true
+			md.McpToolName = md.Rpc.GetMcpToolNameOverride()
+			if md.McpToolName == "" {
+				md.McpToolName = strutil.ToSnakeCase(md.Name)
+			}
+		}
+
 		svc.Methods = append(svc.Methods, md)
 
 		// Derived, not declared: §9 of the MCP design. EXTERNAL wins because the
 		// carrier has to be reachable from wherever its most-exposed tool is
 		// called.
-		if md.IsMcp {
+		if md.IsMcpTool() {
 			svc.HasMcpRpcs = true
 			if md.Rpc != nil && md.Rpc.Exposure == spec.RpcExposure_RPC_EXPOSURE_EXTERNAL {
 				svc.McpExposure = spec.RpcExposure_RPC_EXPOSURE_EXTERNAL
@@ -854,6 +871,71 @@ func (p *DescriptorParser) parseServiceDescriptor(sd protoreflect.ServiceDescrip
 	}
 
 	return svc
+}
+
+// IsMcpTool reports whether this rpc is published as an MCP tool — either
+// declared (RPC_PRINCIPAL_MCP) or auto-exposed as a user RPC of a c2s service.
+// The two differ in what ELSE the rpc is: a declared tool maps to no gRPC call
+// at all, an auto-exposed one keeps its full gRPC surface. Every site that asks
+// "does this rpc produce a tool" must use this; every site that asks "is this
+// rpc suppressed from the gRPC/REST surface" must keep using IsMcp.
+func (m *MethodDescriptor) IsMcpTool() bool { return m.IsMcp || m.IsAutoMcp }
+
+// GetMcpToolNameOverride returns the declared mcp_tool_name, or "" when the rpc
+// carries no spec.rpc at all — which is the common case for an auto-exposed
+// user RPC.
+func (r *RpcDescriptor) GetMcpToolNameOverride() string {
+	if r == nil {
+		return ""
+	}
+	return r.McpToolName
+}
+
+// mcpAutoExposed reports whether m is a "user RPC" of svc, and therefore an MCP
+// tool with no annotation asking for one.
+//
+// The predicate (decision of 2026-09-22): an rpc on a (spec.service_c2s)
+// service that is not RPC_PRINCIPAL_SERVICE, minus RPC_FLAG_PUBLIC_NO_AUTH and
+// RPC_FLAG_SELF_AUTHENTICATES. There is deliberately no opt-out annotation —
+// catalogue size is the MCP proxy's progressive-disclosure problem, not a
+// filter to configure here. A token-minting or no-auth endpoint is never a
+// tool: the first mints credentials, the second has no caller identity to scope
+// a tool call by.
+//
+// Two shapes are excluded rather than refused, because auto-exposure is not a
+// request the author made:
+//
+//   - streaming, on either side. A tool call is one request and one response,
+//     and the generated session carrier is itself a bidi rpc on its own service
+//     — so refusing here would make every c2s service with a streaming rpc
+//     (the carrier included) ungeneratable. An author who writes
+//     RPC_PRINCIPAL_MCP on a streaming rpc still gets MCP-1's hard refusal,
+//     because there the tool WAS asked for.
+//   - method_collection. Same reasoning, and see the per-language
+//     *McpToolGeneratable guards, which keep refusing a DECLARED tool that
+//     carries one. Auto-exposing collection reads is phase 2 of this decision.
+//
+// A service that is auth_disabled is excluded for the reason MCP-5 gives: the
+// carrier scopes every tool call by a Caller no authorizer verified.
+func mcpAutoExposed(svc *ServiceDescriptor, m *MethodDescriptor) bool {
+	if !svc.IsC2S || svc.AuthDisabled {
+		return false
+	}
+	if m.ClientStreaming || m.ServerStreaming || m.Collection != nil {
+		return false
+	}
+	if m.Rpc == nil {
+		// The common case fleet-wide: no (spec.rpc) at all, user-facing purely
+		// by the service's auth_entitled_users.
+		return true
+	}
+	if m.Rpc.Principal == spec.RpcPrincipal_RPC_PRINCIPAL_SERVICE {
+		return false
+	}
+	// md.AuthDisabled is set from exactly RPC_FLAG_PUBLIC_NO_AUTH and
+	// RPC_FLAG_SELF_AUTHENTICATES (parseMethodOptions), which is the pair the
+	// decision names.
+	return !m.AuthDisabled
 }
 
 // parseServiceOptions extracts service-level options (service_s2s, service_c2s, etc.)
@@ -3021,6 +3103,7 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 				Collection:           method.Collection,
 				MinGroupSize:         method.MinGroupSize,
 				IsMcp:                method.IsMcp,
+				IsAutoMcp:            method.IsAutoMcp,
 				McpToolName:          method.McpToolName,
 				Comment:              method.Comment,
 			}

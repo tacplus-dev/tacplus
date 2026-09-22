@@ -218,7 +218,7 @@ func javaMcpTestThrowingStub(decl string) string {
 func javaMcpTestToolSetCase(svc *parser.ServiceInfo, tools []javaMcpTool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `
-    /** The published tool set is exactly this service's RPC_PRINCIPAL_MCP rpcs. */
+    /** The published tool set is exactly this service’s MCP tools. */
     private static void toolSetIsPublished() {
         java.util.List<McpSchema.Tool> published = %s.tools();
         check(published.size() == %d, "the tool set has %d tools, got " + published.size());
@@ -246,13 +246,13 @@ func javaMcpTestToolSetCase(svc *parser.ServiceInfo, tools []javaMcpTool) string
 		}
 		b.WriteString("        }\n")
 	}
-	// The paired control: a non-MCP rpc in the SAME service reaches neither the
-	// tool table nor the dispatch router.
+	// The paired control: an rpc of the SAME service that is not a tool reaches
+	// neither the tool table nor the dispatch router.
 	for _, m := range svc.Methods {
-		if m.IsMcp || m.Name == parser.McpCarrierRpcName(svc.Name) {
+		if m.IsMcpTool() || m.Name == parser.McpCarrierRpcName(svc.Name) {
 			continue
 		}
-		fmt.Fprintf(&b, `        check(!byName.containsKey(%s), "the non-MCP rpc %s is not published as a tool");
+		fmt.Fprintf(&b, `        check(!byName.containsKey(%s), "the non-tool rpc %s is not published as a tool");
 `, javaQuote(strutil.ToSnakeCase(m.Name)), m.Name)
 	}
 	b.WriteString("    }\n")

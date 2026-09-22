@@ -860,14 +860,58 @@ service RestrictedAPI {
 }
 ```
 
-`RPC_PRINCIPAL_MCP` is the third value on the same axis: the rpc declares an **MCP
-tool**, not a gRPC call. tacplus generates its schema and a handler interface
-method the service implements by hand, and maps it to no gRPC RPC of its own —
-what the handler body does (call its own RPC, call another service, fold a Watch
-into one snapshot, nothing) is ordinary application code. Because `principal`
-holds one value, "MCP tool" and "gRPC call" are mutually exclusive by
-construction: a service wanting both surfaces for related functionality declares
-two rpcs.
+### Every user RPC is also an MCP tool
+
+**An rpc on a `(spec.service_c2s)` service is published as an MCP tool
+automatically.** No annotation asks for it. The predicate is:
+
+> a c2s rpc that is not `RPC_PRINCIPAL_SERVICE`, minus `RPC_FLAG_PUBLIC_NO_AUTH`
+> and `RPC_FLAG_SELF_AUTHENTICATES`
+
+— that is, an rpc whose caller is an authenticated human. An rpc with **no
+`(spec.rpc)` at all**, user-facing only by the service's `auth_entitled_users`,
+is the common case and is auto-exposed like any other. Token-minting
+(`RPC_FLAG_SELF_AUTHENTICATES`) and public no-auth endpoints never are: the
+first mints credentials, the second has no caller identity to scope a tool call
+by.
+
+There is deliberately **no opt-out annotation**. A service's whole user surface
+is its tool catalogue, and catalogue size is the MCP proxy's
+progressive-disclosure problem, not a filter configured here.
+
+Auto-exposure is **additive**. The rpc keeps its gRPC call, its REST route, its
+verb classification and its entitlement grant, and the tool shares the handler
+method the generated service wrapper already calls — so a service author writes
+nothing extra, and the tool cannot drift from the call.
+
+Two shapes are excluded from auto-exposure rather than refused, because
+auto-exposure is not a request the author made:
+
+- **streaming**, on either side — a tool call is one request and one response,
+  and the generated session carrier is itself a bidi rpc on its own service;
+- **`(spec.method_collection)`** — the generated collection seam hands the
+  handler a cursor or page window that a tool call has no frame for. Exposing a
+  paged read as a `page_size`/`page_token` tool is a separate, later change.
+
+Declaring `RPC_PRINCIPAL_MCP` on either shape is still a hard generation
+failure, because there the tool *was* asked for.
+
+Because carrier injection is a proto-text operation it is language-blind, so
+tacplus refuses (**MCP-6**) to generate a service that owns tools for a language
+that emits a service wrapper but has no MCP dispatch backend — today Python and
+TypeScript. Go, Java and Rust have the backend. Swift and C# emit no wrapper at
+all, cannot host, and are not gated.
+
+### `RPC_PRINCIPAL_MCP`: a tool with no gRPC twin
+
+`RPC_PRINCIPAL_MCP` remains, for the tool that has no rpc of its own: the rpc
+declares an **MCP tool** and nothing else. tacplus generates its schema and a
+handler interface method the service implements by hand, and maps it to no gRPC
+RPC — what the handler body does (call its own RPC, call another service, fold a
+Watch into one snapshot, nothing) is ordinary application code. Because
+`principal` holds one value, such a tool is never *also* a gRPC call; a service
+wanting both surfaces for related functionality declares two rpcs, or — far more
+often now — just writes the user RPC and lets auto-exposure publish it.
 
 ```protobuf
 service Tickets {
@@ -898,15 +942,20 @@ Everything else is reuse, deliberately:
 - **The tool name and description come from the rpc itself** — name = the RPC
   name in snake_case (`GetTicketBrief` -> `get_ticket_brief`), description = the
   rpc's own leading `//` doc comment — so there is no second description to drift
-  from the real one. `mcp_tool_name` overrides only the name, for the rare RPC
-  whose name makes a bad tool name; it must be snake_case, and declaring it on an
-  rpc that is not `RPC_PRINCIPAL_MCP` fails generation rather than being ignored.
+  from the real one. This is true of an auto-exposed user RPC too: its doc
+  comment is what the model reads to decide whether to call it, so a c2s rpc
+  worth calling is worth a sentence. `mcp_tool_name` overrides only the name, for
+  the rare RPC whose name makes a bad tool name; it must be snake_case, and
+  declaring it on an rpc that publishes no tool at all fails generation rather
+  than being ignored.
 - **Streaming is a hard generation failure**, unconditionally: a tool call has no
   wire representation for a stream. A handler may drive a `Watch` internally and
   fold it into one response.
-- **The session-carrying transport is never declared.** A service having at least
-  one `RPC_PRINCIPAL_MCP` rpc is what generates it; its exposure is the
-  most-permissive `exposure` across those rpcs. The registry records both as
+- **The session-carrying transport is never declared.** A service owning at least
+  one tool — declared or auto-exposed — is what generates it; its exposure is the
+  most-permissive `exposure` across those rpcs. Under auto-exposure that means in
+  practice every c2s service gets a carrier, an MCP SDK dependency and an
+  entitlement grant for it. The registry records both as
   `ServiceInfo.mcp` and `ServiceInfo.mcp_exposure`.
 
   The transport itself is one extra rpc on that service,

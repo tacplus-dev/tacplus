@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/verbs"
 )
@@ -21,23 +20,16 @@ import (
 // applies to every method shape — unary, PAGE, streaming alike — instead of the
 // unary-only egress seam (spec.store_principal) has to use.
 
-// ownerDefaultRights is a type's declared owner rights.
-type ownerDefaultRights struct {
-	Type  string // simple message name, for the refusal message
-	Read  bool
-	Write bool
-}
-
 // ownerDefaultTypes returns the owner_default-bearing message types a method
 // touches: the request or response type itself, and any message-typed field of
 // either at depth 1. Depth 1 is the whole of it — a record type is named
 // directly or wrapped in a request/response envelope, and a deeper scan would
 // start refusing methods that merely mention the type in passing.
-func (es *rustEgressSanitizer) ownerDefaultTypes(method *parser.MethodInfo, servicePkg string) []ownerDefaultRights {
+func (es *rustEgressSanitizer) ownerDefaultTypes(method *parser.MethodInfo, servicePkg string) []parser.OwnerDefaultRights {
 	if es == nil || method == nil {
 		return nil
 	}
-	found := map[string]ownerDefaultRights{}
+	found := map[string]parser.OwnerDefaultRights{}
 	for _, root := range []string{method.FullInputType, method.FullOutputType} {
 		if root == "" || root == "google.protobuf.Empty" {
 			continue
@@ -47,7 +39,7 @@ func (es *rustEgressSanitizer) ownerDefaultTypes(method *parser.MethodInfo, serv
 		if !ok {
 			continue
 		}
-		if r, ok := ownerDefaultOf(msg.Annotations, name); ok {
+		if r, ok := parser.OwnerDefaultOf(msg.Annotations, name); ok {
 			found[name] = r
 		}
 		for _, f := range msg.Fields {
@@ -62,7 +54,7 @@ func (es *rustEgressSanitizer) ownerDefaultTypes(method *parser.MethodInfo, serv
 			if !ok {
 				continue
 			}
-			if r, ok := ownerDefaultOf(fmsg.Annotations, f.Type); ok {
+			if r, ok := parser.OwnerDefaultOf(fmsg.Annotations, f.Type); ok {
 				found[f.Type] = r
 			}
 		}
@@ -75,25 +67,11 @@ func (es *rustEgressSanitizer) ownerDefaultTypes(method *parser.MethodInfo, serv
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	out := make([]ownerDefaultRights, 0, len(names))
+	out := make([]parser.OwnerDefaultRights, 0, len(names))
 	for _, n := range names {
 		out = append(out, found[n])
 	}
 	return out
-}
-
-// ownerDefaultOf reads the annotations parseMessageAnnotations recorded for a
-// (spec.owner_default) declaration. Presence is its own marker, so an explicit
-// {read: true, write: true} is distinguishable from no declaration at all.
-func ownerDefaultOf(annotations map[string]model.AnnotationValue, name string) (ownerDefaultRights, bool) {
-	if _, ok := annotations["owner_default"]; !ok {
-		return ownerDefaultRights{}, false
-	}
-	return ownerDefaultRights{
-		Type:  name,
-		Read:  annotations["owner_default_read"].BoolValue,
-		Write: annotations["owner_default_write"].BoolValue,
-	}, true
 }
 
 // rustPrincipalScopeLocal renders the local binding the caller's grant-carried

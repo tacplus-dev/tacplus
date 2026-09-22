@@ -249,6 +249,26 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 				return fmt.Errorf("%s.%s takes %s, whose field %q carries (spec.store_epoch), but the stamp is generated for Java service wrappers only; a Go host of this write would leave the store epoch unstamped",
 					service.Name, method.Name, method.FullInputType, f)
 			}
+			// (spec.owner_default): what the row's OWNER may do with its own
+			// rows. The guard rides the request-validation seam, immediately
+			// after the (spec.principal) stamp, because that is the only point
+			// where both halves of the comparison exist — the authenticated
+			// caller and the request's bound principal. A method that would be
+			// refused but has no such seam (streaming, PAGE, or an empty
+			// request) cannot make the comparison, so refuse to generate rather
+			// than under-enforce silently, exactly as the (spec.store_principal)
+			// read filter does for the same shapes. Twin of the Rust wrapper's
+			// check, refusing the same set for the same reasons.
+			ownerDefaultGuard, err := goOwnerDefaultGuard(method, san, info.Package)
+			if err != nil {
+				return err
+			}
+			if ownerDefaultGuard != "" &&
+				(isEmptyType(method.FullInputType) || isTraceRequestType(method.FullInputType) ||
+					method.ClientStreaming || method.ServerStreaming || method.IsPageCollection()) {
+				return fmt.Errorf("%s.%s touches a type declaring (spec.owner_default) that contradicts its access, but its request shape has no validation seam at which the caller can be compared to the row's principal",
+					service.Name, method.Name)
+			}
 			// (spec.store_namespace) / (spec.store_principal) /
 			// (spec.record).private narrow the rows leaving a read down to the
 			// caller's own. The Go wrapper renders that filter on every seam
@@ -1656,6 +1676,13 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 	callerExtract += goPredicatePins(san, method, servicePackage, "\t", "return nil,", svc.IsC2S, goRecordPlaneS2S(svc))
 	callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return nil,")
 	callerExtract += goRequiresDeviceGate(method, svc, servicePackage)
+
+	// (spec.owner_default): refuse the access the row's owner does not hold.
+	// The generation-time refusal for every shape that cannot host this check
+	// has already fired in generateServiceWrapper, so the error is dead here.
+	if g, err := goOwnerDefaultGuard(method, san, servicePackage); err == nil {
+		callerExtract += g
+	}
 
 	// (spec.store_principal)/(spec.store_namespace)/(spec.record).private: rows
 	// the caller does not own, or that belong to another tenant, never leave the

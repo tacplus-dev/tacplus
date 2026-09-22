@@ -5,6 +5,8 @@ package parser
 import (
 	"fmt"
 	"strings"
+
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 )
 
 // ValidateOwnerDefaultAnnotations enforces the one invariant (spec.owner_default)
@@ -41,4 +43,27 @@ func ValidateOwnerDefaultAnnotations(dp *DescriptorParser) error {
 		return fmt.Errorf("owner_default annotation errors:\n  %s", strings.Join(errs, "\n  "))
 	}
 	return nil
+}
+
+// OwnerDefaultRights is a type's declared (spec.owner_default): what the row's
+// OWNER may do with its own rows. It is read identically by every backend that
+// renders the guard, so the reading lives here rather than once per language.
+type OwnerDefaultRights struct {
+	Type  string // simple message name, for the refusal message
+	Read  bool
+	Write bool
+}
+
+// OwnerDefaultOf reads the annotations parseMessageAnnotations recorded for a
+// (spec.owner_default) declaration. Presence is its own marker, so an explicit
+// {read: true, write: true} is distinguishable from no declaration at all.
+func OwnerDefaultOf(annotations map[string]model.AnnotationValue, name string) (OwnerDefaultRights, bool) {
+	if _, ok := annotations["owner_default"]; !ok {
+		return OwnerDefaultRights{}, false
+	}
+	return OwnerDefaultRights{
+		Type:  name,
+		Read:  annotations["owner_default_read"].BoolValue,
+		Write: annotations["owner_default_write"].BoolValue,
+	}, true
 }

@@ -889,12 +889,37 @@ auto-exposure is not a request the author made:
 
 - **streaming**, on either side — a tool call is one request and one response,
   and the generated session carrier is itself a bidi rpc on its own service;
-- **`(spec.method_collection)`** — the generated collection seam hands the
-  handler a cursor or page window that a tool call has no frame for. Exposing a
-  paged read as a `page_size`/`page_token` tool is a separate, later change.
+- **`(spec.method_collection)` in any mode but `PAGE`** — a SNAPSHOT read hands
+  the handler a materialized collection, a cursor or a stream, none of which a
+  tool call has a frame for. `PAGE` **is** auto-exposed; see below.
 
 Declaring `RPC_PRINCIPAL_MCP` on either shape is still a hard generation
 failure, because there the tool *was* asked for.
+
+#### A `PAGE` read is a paged tool
+
+A `COLLECTION_MODE_PAGE` rpc is published as a tool like any other user rpc, and
+the model drives the pager itself — the same way any other client of the gRPC
+call does. Nothing new is annotated and nothing is truncated:
+
+- **`page_size`** and **`page_token`** are already ordinary fields of a PAGE
+  request (collection validation requires them), so they are ordinary tool
+  arguments. The generated schema states the window: `page_size` carries the
+  rpc's resolved `default_page_size` in its description and the trust tier's
+  ceiling as its JSON Schema `maximum`. Both are optional.
+- The result is the page's items plus **`next_page_token`**, exactly the
+  response message the gRPC call returns. An empty `next_page_token` means there
+  is no next page; `total_count` is carried when the response declares it.
+- The dispatch calls the **same three-argument handler** the gRPC PAGE wrapper
+  calls — `(caller, request, PageParams)` — building `PageParams` from the tool
+  call's `page_size`/`page_token` with the same token codec and the same
+  trust-tier clamp. A malformed `page_token` is `INVALID_ARGUMENT`, never a
+  silent reset to page 1, and the `(spec.store_principal)` /
+  `(spec.store_namespace)` egress filters run over the page exactly as they do
+  on the gRPC path.
+
+So a service author who writes a paged read writes nothing else: the page is
+paged on both surfaces, off one handler.
 
 Because carrier injection is a proto-text operation it is language-blind, so
 tacplus refuses (**MCP-6**) to generate a service that owns tools for a language

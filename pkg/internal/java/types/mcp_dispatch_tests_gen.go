@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
@@ -162,6 +163,21 @@ func javaMcpTestToolStubMethod(t javaMcpTool) string {
 	params := "Caller caller, " + t.InputType + " request"
 	record := fmt.Sprintf("            this.lastMethod = %s;\n            this.lastRequest = request.toString();\n",
 		javaQuote(t.Method.Name))
+	if t.Page != nil {
+		// A PAGE tool's handler is the keyset producer the gRPC PAGE wrapper
+		// calls, so the stub declares that signature — and records the window it
+		// was handed, which is what proves the tool call's page_size reached
+		// PageParams rather than being dropped. It answers with an empty page;
+		// the dispatch, not the handler, assembles the response envelope.
+		return fmt.Sprintf(`
+        @Override
+        public CollectionRuntime.Page<%[1]s> %[2]s(Caller caller, %[3]s request, CollectionRuntime.PageParams page) {
+            this.lastMethod = %[4]s;
+            this.lastRequest = request.toString() + " page_limit=" + page.limit;
+            return new CollectionRuntime.Page<>(java.util.List.of(), null, -1L);
+        }
+`, t.Page.ItemType, name, t.InputType, javaQuote(t.Method.Name))
+	}
 	if t.EmptyRequest {
 		params = "Caller caller"
 		record = fmt.Sprintf("            this.lastMethod = %s;\n            this.lastRequest = \"\";\n",
@@ -269,13 +285,16 @@ func javaMcpTestToolCases(svc *parser.ServiceInfo, t javaMcpTool) string {
 	// gets the REFUSAL cases only: there is no one obviously-valid value for a
 	// required enum or nested message, and a generated test that guesses wrong is
 	// a false failure. Same rule Rust's Q7 and Go's Q8 took.
-	if !t.RequestSynthesizable || !t.ResponseSynthesizable {
+	if !javaMcpDrivable(t) {
 		fmt.Fprintf(&b, `
     // "%s" has a required field this seam cannot synthesize a value for, so it
     // carries the refusal cases below and no reaches-its-handler case.
 `, t.ToolName)
 	} else {
 		args := javaMcpTestArgumentMap(t, "")
+		if t.Page != nil {
+			args = javaMcpTestArgumentMap(t, fmt.Sprintf("%q, %d", "page_size", javaMcpTestPageSize))
+		}
 		fmt.Fprintf(&b, `
     /** The "%[1]s" tool call reaches %[2]s.%[3]s — the service's own typed handler method. */
     private static void %[4]sReachesItsTypedHandler() {
@@ -291,6 +310,14 @@ func javaMcpTestToolCases(svc *parser.ServiceInfo, t javaMcpTool) string {
 		for _, s := range t.RequiredScalars {
 			fmt.Fprintf(&b, `        check(stub.lastRequest.contains(%s), "%s decoded %s into the typed request");
 `, javaQuote(s.Match), t.ToolName, s.Field)
+		}
+		if t.Page != nil {
+			// PAGE: the tool call's own page_size reached the handler as the
+			// window of a CollectionRuntime.PageParams — the same three-argument
+			// call the gRPC PAGE wrapper makes.
+			fmt.Fprintf(&b, `        check(stub.lastRequest.contains("page_limit=%[1]d"),
+        "%[2]s passed its page_size to PageParams, got: " + stub.lastRequest);
+`, javaMcpTestPageSize, t.ToolName)
 		}
 		// The stamp: a value the tool call never carried, read back off the request
 		// the handler actually received.
@@ -338,6 +365,22 @@ func javaMcpTestToolCases(svc *parser.ServiceInfo, t javaMcpTool) string {
 // javaMcpTestArgumentMap renders the arguments map for a generated tool call:
 // the required scalars with their synthetic values, plus `extra` when the case
 // is the one that smuggles a server-computed field in.
+// javaMcpTestPageSize is the page_size the generated gate asks a PAGE tool for.
+// Below every resolved default and ceiling, so the clamp passes it through
+// unchanged and the assertion reads the window the tool call actually asked for.
+const javaMcpTestPageSize = 3
+
+// javaMcpDrivable reports whether the gate can synthesize a valid call for this
+// tool AND a response its own validation will accept. A PAGE tool's response is
+// assembled by the dispatch, not by the stub, so the stub cannot fill a required
+// response scalar for it — one of those means the refusal cases only.
+func javaMcpDrivable(t javaMcpTool) bool {
+	if !t.RequestSynthesizable || !t.ResponseSynthesizable {
+		return false
+	}
+	return t.Page == nil || len(t.ResponseRequiredScalars) == 0
+}
+
 func javaMcpTestArgumentMap(t javaMcpTool, extra string) string {
 	var parts []string
 	for _, s := range t.RequiredScalars {
@@ -360,7 +403,7 @@ func javaMcpTestMain(svc *parser.ServiceInfo, tools []javaMcpTool) string {
         mcpSessionServesItsTools();
 `)
 	for _, t := range tools {
-		if t.RequestSynthesizable && t.ResponseSynthesizable {
+		if javaMcpDrivable(t) {
 			fmt.Fprintf(&b, "        %sReachesItsTypedHandler();\n", methodNameLowerCamel(t.Method.Name))
 		}
 		for _, f := range []string{t.PrincipalField, t.NamespaceField} {
@@ -396,7 +439,7 @@ func javaMcpTestMain(svc *parser.ServiceInfo, tools []javaMcpTool) string {
 func javaMcpTestSessionCase(svc *parser.ServiceInfo, tools []javaMcpTool, p javaMcpFileParams) string {
 	var driven *javaMcpTool
 	for i := range tools {
-		if tools[i].RequestSynthesizable && tools[i].ResponseSynthesizable {
+		if javaMcpDrivable(tools[i]) {
 			driven = &tools[i]
 			break
 		}
@@ -499,6 +542,9 @@ func javaMcpTestJSONArgumentLiteral(t javaMcpTool) string {
 	var parts []string
 	for _, s := range t.RequiredScalars {
 		parts = append(parts, javaMcpTestJSONStringLiteral(s.Field)+":"+javaMcpTestJSONValue(s))
+	}
+	if t.Page != nil {
+		parts = append(parts, javaMcpTestJSONStringLiteral("page_size")+":"+strconv.Itoa(javaMcpTestPageSize))
 	}
 	return "{" + strings.Join(parts, ",") + "}"
 }

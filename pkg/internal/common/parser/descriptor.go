@@ -911,9 +911,14 @@ func (r *RpcDescriptor) GetMcpToolNameOverride() string {
 //     (the carrier included) ungeneratable. An author who writes
 //     RPC_PRINCIPAL_MCP on a streaming rpc still gets MCP-1's hard refusal,
 //     because there the tool WAS asked for.
-//   - method_collection. Same reasoning, and see the per-language
-//     *McpToolGeneratable guards, which keep refusing a DECLARED tool that
-//     carries one. Auto-exposing collection reads is phase 2 of this decision.
+//   - method_collection in any mode but PAGE. WATCH is server-streaming, so
+//     the line above already has it; SNAPSHOT is excluded here. A PAGE rpc IS
+//     auto-exposed (phase 2 of this decision): page_size and page_token are
+//     ordinary fields of its request message, so they are ordinary tool
+//     arguments, and the dispatch calls the same three-argument handler the
+//     gRPC PAGE wrapper calls. See the per-language *McpToolGeneratable
+//     guards, which keep refusing a collection tool in the modes this seam
+//     still cannot call.
 //
 // A service that is auth_disabled is excluded for the reason MCP-5 gives: the
 // carrier scopes every tool call by a Caller no authorizer verified.
@@ -921,7 +926,10 @@ func mcpAutoExposed(svc *ServiceDescriptor, m *MethodDescriptor) bool {
 	if !svc.IsC2S || svc.AuthDisabled {
 		return false
 	}
-	if m.ClientStreaming || m.ServerStreaming || m.Collection != nil {
+	if m.ClientStreaming || m.ServerStreaming {
+		return false
+	}
+	if m.Collection != nil && m.Collection.Mode != "PAGE" {
 		return false
 	}
 	if m.Rpc == nil {

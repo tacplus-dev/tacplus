@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/collection"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 )
@@ -277,12 +278,14 @@ func TestRustMcpDispatchRefusesAToolItCannotGuard(t *testing.T) {
 		match string
 	}{
 		{"min_group_size", func(m *parser.MethodInfo) { m.MinGroupSize = 5 }, "min_group_size"},
-		// A PAGE collection hands the handler a page window, so dispatch would
-		// render a 2-argument call against a 3-argument handler: uncallable
-		// generated code. Go and Java refuse the same shape.
+		// A SNAPSHOT collection hands the handler a materialized collection (or
+		// a cursor, or a stream), so dispatch would render a call against a
+		// signature it does not have. PAGE is the one mode a tool call can
+		// drive; every other one is still refused. Go and Java refuse the same
+		// shape.
 		{"method_collection", func(m *parser.MethodInfo) {
-			m.Collection = &parser.CollectionDescriptor{Mode: "PAGE"}
-		}, "declares method_collection"},
+			m.Collection = &parser.CollectionDescriptor{Mode: "SNAPSHOT"}
+		}, "declares method_collection in mode SNAPSHOT"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, tool, _, _ := rustMcpTestService()
@@ -318,5 +321,55 @@ func TestRustMcpDispatchGeneratesItsOwnTests(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated MCP tests are missing %q\ngot:\n%s", want, got)
 		}
+	}
+}
+
+// rustMcpPageTool turns the fixture's tool into a PAGE collection read: the
+// shape phase 2 makes generable. Resolved is what the emitters read, and it is
+// the SAME struct the gRPC PAGE wrapper reads — the bounds below are the
+// wrapper's own, not an MCP-specific budget.
+func rustMcpPageTool(tool *parser.MethodInfo) {
+	tool.Collection = &parser.CollectionDescriptor{Mode: "PAGE", OrderBy: []string{"ticket_id"}, DefaultPageSize: 50}
+	tool.Resolved = &collection.Resolved{
+		Mode:            "PAGE",
+		OrderBy:         []string{"ticket_id"},
+		DefaultPageSize: 50,
+		MaxPageSize:     10000,
+		PageItemType:    "ticket.TicketBrief",
+		PageItemsField:  "items",
+		PageHasTotal:    true,
+	}
+}
+
+// A PAGE rpc published as a tool drives the SAME three-argument handler the
+// gRPC PAGE wrapper drives, with PageParams built from the tool call's own
+// page_size/page_token, and assembles the same envelope (items +
+// next_page_token + total_count).
+func TestRustMcpDispatchDrivesAPageHandler(t *testing.T) {
+	svc, tool, _, _ := rustMcpTestService()
+	rustMcpPageTool(tool)
+
+	got := mustRustMcpDispatch(t, svc)
+
+	for _, want := range []string{
+		"let after = collection::decode_page_token(&req.page_token)?;",
+		"let limit = collection::effective_page_size(req.page_size as i64, 50, 10000);",
+		"let page = self.handler.get_ticket_brief(caller, req, collection::PageParams { limit, after }).await?;",
+		"resp.items = page.items;",
+		"resp.next_page_token = collection::encode_page_token(page.next_after.as_ref());",
+		"if page.total >= 0 {",
+		// The generated gate drives it, and proves the window reached PageParams.
+		`page_size\": 3`,
+		`page: collection::PageParams`,
+		`page_limit=3`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("the paged MCP dispatch is missing %q\ngot:\n%s", want, got)
+		}
+	}
+
+	// The two-argument unary call must NOT be rendered for it.
+	if strings.Contains(got, "self.handler.get_ticket_brief(caller, req).await?") {
+		t.Fatalf("a PAGE tool still renders the two-argument unary handler call:\n%s", got)
 	}
 }

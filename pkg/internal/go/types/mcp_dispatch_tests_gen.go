@@ -78,6 +78,11 @@ func generateGoMcpDispatchTests(svc *parser.ServiceInfo, tools []goMcpTool, p go
 		}
 		fmt.Fprintf(&crossImports, "\n\t%s_pb \"%s\"", pkg, importPath)
 	}
+	if goMcpHasPageTool(tools) {
+		// The PAGE stub handler's own signature names collection.PageParams /
+		// collection.Page; goimports cannot resolve that local package by name.
+		fmt.Fprintf(&crossImports, "\n\t\"%s/chassis/collection\"", p.ModuleBasePath)
+	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `// Copyright (c) 2026 Second Star Cavalier LLC
@@ -151,6 +156,16 @@ type %[7]sReportingHandler struct {
 		if t.EmptyResponse {
 			results = "error"
 			ret = "return status.Error(codes.Internal, " + report + ")"
+		}
+		if t.Page != nil {
+			// A PAGE tool's handler is the keyset producer the gRPC PAGE wrapper
+			// calls, so the stub declares that signature — and reports the window
+			// it was handed, which is what proves the tool call's page_size
+			// reached PageParams rather than being dropped.
+			args += ", page collection.PageParams"
+			report = `"MCP_CALLED " + req.String() + " page_limit=" + strconv.Itoa(page.Limit)`
+			results = "(collection.Page[*" + t.Page.ItemType + "], error)"
+			ret = "return collection.Page[*" + t.Page.ItemType + "]{}, status.Error(codes.Internal, " + report + ")"
 		}
 		fmt.Fprintf(&b, `func (h *%[1]sReportingHandler) %[2]s(%[3]s) %[4]s {
 	_ = ctx
@@ -232,6 +247,15 @@ func Test%[1]sReachesItsTypedHandler(t *testing.T) {
 	}
 `, strconv.Quote(a.Match), a.Field)
 		}
+		if t.Page != nil {
+			fmt.Fprintf(&b, `	// PAGE: the tool call's own page_size reached the handler as the window of
+	// a collection.PageParams — the same three-argument call the gRPC PAGE
+	// wrapper makes.
+	if !strings.Contains(reported, "page_limit=%[1]d") {
+		t.Fatalf("the tool call's page_size did not reach PageParams: %%s", reported)
+	}
+`, goMcpTestPageSize)
+		}
 		if t.PrincipalField != "" {
 			fmt.Fprintf(&b, `	// (spec.principal): stamped by the dispatch from the verified caller, so
 	// the handler sees it without the tool call ever carrying it.
@@ -286,10 +310,15 @@ func Test%[1]sRefusesAClientSupplied%[2]s(t *testing.T) {
 }
 
 // goMcpDrivable reports whether the generated gate can synthesize a valid call
-// for this tool.
+// for this tool. A PAGE tool always is: page_size alone is a valid call.
 func goMcpDrivable(t goMcpTool) bool {
-	return t.EmptyRequest || len(t.RequiredScalars) > 0 || t.PrincipalField != "" || t.NamespaceField != ""
+	return t.EmptyRequest || t.Page != nil || len(t.RequiredScalars) > 0 || t.PrincipalField != "" || t.NamespaceField != ""
 }
+
+// goMcpTestPageSize is the page_size the gate asks a PAGE tool for. Below every
+// resolved default and ceiling, so the clamp passes it through unchanged and the
+// assertion reads the window the tool call actually asked for.
+const goMcpTestPageSize = 3
 
 // goMcpTestArgsJSON is the arguments object the gate calls the tool with: every
 // required scalar, and nothing the server computes.
@@ -297,6 +326,9 @@ func goMcpTestArgsJSON(t goMcpTool) string {
 	var args []string
 	for _, a := range t.RequiredScalars {
 		args = append(args, fmt.Sprintf("%s: %s", strconv.Quote(a.Field), a.JSON))
+	}
+	if t.Page != nil {
+		args = append(args, fmt.Sprintf("%q: %d", "page_size", goMcpTestPageSize))
 	}
 	return "{" + strings.Join(args, ", ") + "}"
 }

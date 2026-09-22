@@ -99,6 +99,23 @@ type goMcpTool struct {
 	// boundary.
 	NamespaceField     string
 	StoreNamespaceRows []goMcpRowField
+
+	// Page is the PAGE-collection window, nil for every other rpc. A PAGE tool
+	// takes page_size/page_token as ordinary arguments and calls the same
+	// three-argument handler the gRPC PAGE wrapper calls.
+	Page *goMcpPage
+}
+
+// goMcpPage is what the dispatch needs to drive a PAGE rpc's handler and
+// assemble its response envelope. Every value here is read off the same
+// collection.Resolved the gRPC PAGE wrapper reads — there is no MCP-specific
+// page bound.
+type goMcpPage struct {
+	ItemsField  string // Pascal-case response field holding the page's items
+	ItemType    string // rendered Go item type (the Page[*T] element)
+	DefaultSize uint32 // page_size when the call omits it
+	MaxSize     uint32 // the trust-tier ceiling page_size is clamped to
+	HasTotal    bool   // the response declares total_count
 }
 
 // goMcpRowField is a repeated record field of a response whose item type
@@ -171,6 +188,7 @@ func goMcpTools(svc *parser.ServiceInfo, servicePackage string, san *egressSanit
 			StorePrincipalRows: san.mcpRowFields(m.FullOutputType, servicePackage, "store_principal"),
 			NamespaceField:     san.annotatedStringField(m.FullInputType, servicePackage, "namespace"),
 			StoreNamespaceRows: san.mcpRowFields(m.FullOutputType, servicePackage, "store_namespace"),
+			Page:               goMcpPageOf(m, servicePackage),
 		})
 	}
 	return tools, nil
@@ -193,9 +211,9 @@ func goMcpToolGeneratable(svc *parser.ServiceInfo, m *parser.MethodInfo, service
 		return fmt.Errorf("%s.%s is an RPC_PRINCIPAL_MCP rpc but is streaming; an MCP tool call is one request and one response, so a streaming rpc cannot be published as a tool",
 			svc.Name, m.Name)
 	}
-	if m.Collection != nil {
-		return fmt.Errorf("%s.%s is an RPC_PRINCIPAL_MCP rpc but declares method_collection; the generated collection seam hands the handler a cursor or page window, which an MCP tool call has no frame for",
-			svc.Name, m.Name)
+	if m.Collection != nil && !m.IsPageCollection() {
+		return fmt.Errorf("%s.%s is an RPC_PRINCIPAL_MCP rpc but declares method_collection in mode %s; only PAGE has a shape a tool call can drive (page_size/page_token in, next_page_token out) — the other modes hand the handler a stream or a materialized collection, which an MCP tool call has no frame for",
+			svc.Name, m.Name, m.Collection.Mode)
 	}
 	// (spec.record).min_group_size is enforced in the generated Java service
 	// wrapper only.
@@ -215,6 +233,23 @@ func goMcpToolGeneratable(svc *parser.ServiceInfo, m *parser.MethodInfo, service
 			svc.Name, m.Name, m.FullInputType, f)
 	}
 	return nil
+}
+
+// goMcpPageOf resolves the PAGE window of a collection rpc, or nil when the rpc
+// is not a PAGE read. The bounds come from collection.Resolved — the same
+// values the gRPC PAGE wrapper renders — so a tool and its gRPC twin clamp
+// page_size identically.
+func goMcpPageOf(m *parser.MethodInfo, servicePackage string) *goMcpPage {
+	if !m.IsPageCollection() {
+		return nil
+	}
+	return &goMcpPage{
+		ItemsField:  strutil.ToPascalCase(m.Resolved.PageItemsField),
+		ItemType:    goWatchType(m.Resolved.PageItemType, servicePackage),
+		DefaultSize: m.Resolved.DefaultPageSize,
+		MaxSize:     m.Resolved.MaxPageSize,
+		HasTotal:    m.Resolved.PageHasTotal,
+	}
 }
 
 // goMcpDescription is the text the model reads to decide whether to call the
@@ -266,12 +301,37 @@ func goMcpInputSchema(m *parser.MethodInfo, servicePackage string, san *egressSa
 			return "", err
 		}
 	}
+	if page := goMcpPageOf(m, servicePackage); page != nil {
+		goMcpAnnotatePageSchema(schema, page)
+	}
 	schema["description"] = goMcpDescription(m)
 	out, err := json.Marshal(schema)
 	if err != nil {
 		return "", fmt.Errorf("marshal input schema: %w", err)
 	}
 	return string(out), nil
+}
+
+// goMcpAnnotatePageSchema tells the model how to drive the two paging fields a
+// PAGE request already declares. They are ordinary fields of the request
+// message, so they are already in the schema; what the message index cannot say
+// is the window's default and its ceiling, which are the wrapper's own resolved
+// bounds. The bound is stated, not invented: it is the same clamp the dispatch
+// applies at runtime, so a model that asks for more is told what it will get
+// rather than silently given less.
+func goMcpAnnotatePageSchema(schema map[string]any, page *goMcpPage) {
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return
+	}
+	if ps, ok := props["page_size"].(map[string]any); ok {
+		ps["description"] = fmt.Sprintf("How many items to return in this page. Optional: %d when omitted, and never more than %d.",
+			page.DefaultSize, page.MaxSize)
+		ps["maximum"] = page.MaxSize
+	}
+	if pt, ok := props["page_token"].(map[string]any); ok {
+		pt["description"] = "The next_page_token returned by the previous call to this tool. Optional: omit it for the first page. An empty next_page_token in the result means there is no next page."
+	}
 }
 
 // annotatedStringField returns the snake_case name of fullType's field carrying
@@ -541,7 +601,7 @@ func generateGoMcpDispatch(svc *parser.ServiceInfo, p goMcpFileParams, san *egre
 	frameOut := goTypeRef(carrier.FullOutputType, carrier.OutputType, p.ServicePackage)
 
 	var b strings.Builder
-	b.WriteString(goMcpFileHeader(svc.Name, p))
+	b.WriteString(goMcpFileHeader(svc.Name, p, goMcpHasPageTool(tools)))
 	b.WriteString(goMcpToolTable(svc.Name, tools))
 	b.WriteString(goMcpSurface(svc.Name, tools))
 	for _, t := range tools {
@@ -573,7 +633,20 @@ func goMcpUsedPackages(svc *parser.ServiceInfo, servicePackage string) map[strin
 	return used
 }
 
-func goMcpFileHeader(serviceName string, p goMcpFileParams) string {
+// goMcpHasPageTool reports whether any tool is a PAGE read, which is what pulls
+// the emitted collection runtime into the dispatch file's imports. goimports
+// cannot resolve that local package by name, so the import is explicit — the
+// same reason the service wrapper imports it explicitly.
+func goMcpHasPageTool(tools []goMcpTool) bool {
+	for _, t := range tools {
+		if t.Page != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func goMcpFileHeader(serviceName string, p goMcpFileParams, hasPage bool) string {
 	var crossImports strings.Builder
 	for pkg, dir := range p.CrossPackageTypes {
 		if dir == "" || !p.used[pkg] || pkg == "google.protobuf" {
@@ -589,6 +662,12 @@ func goMcpFileHeader(serviceName string, p goMcpFileParams) string {
 			importPath = fmt.Sprintf("%s/types/%s/%s", p.ModuleBasePath, dir, pkg)
 		}
 		fmt.Fprintf(&crossImports, "\n\t%s_pb \"%s\"", pkg, importPath)
+	}
+	if hasPage {
+		// A PAGE tool drives the emitted collection runtime (the page_token codec
+		// and the page-size clamp). goimports cannot resolve that local package
+		// by name, so it is imported explicitly, exactly as the wrapper does.
+		fmt.Fprintf(&crossImports, "\n\t\"%s/chassis/collection\"", p.ModuleBasePath)
 	}
 
 	return fmt.Sprintf(`// Copyright (c) 2026 Second Star Cavalier LLC
@@ -843,27 +922,36 @@ func (s *%[5]s) %[1]s(ctx context.Context, arguments json.RawMessage) (*mcp.Call
 		}
 	}
 
-	// The handler call. Same signature and same sanitized context the ordinary
-	// gRPC wrapper hands an ordinary unary rpc.
-	handlerArgs := "sanitizeContext(ctx), s.caller, req"
-	if t.EmptyRequest {
-		handlerArgs = "sanitizeContext(ctx), s.caller"
-	}
-	if t.EmptyResponse {
-		fmt.Fprintf(&b, `	if err := s.handler.%s(%s); err != nil {
+	// PAGE: the same three-argument handler the gRPC PAGE wrapper calls, with
+	// PageParams built from this tool call's own page_size/page_token exactly as
+	// the wrapper builds it from the wire request. The envelope is assembled
+	// here for the same reason: a PAGE handler returns a collection.Page, not
+	// the response message.
+	if t.Page != nil {
+		b.WriteString(goMcpPageDispatch(prefix, t))
+	} else {
+		// The handler call. Same signature and same sanitized context the ordinary
+		// gRPC wrapper hands an ordinary unary rpc.
+		handlerArgs := "sanitizeContext(ctx), s.caller, req"
+		if t.EmptyRequest {
+			handlerArgs = "sanitizeContext(ctx), s.caller"
+		}
+		if t.EmptyResponse {
+			fmt.Fprintf(&b, `	if err := s.handler.%s(%s); err != nil {
 		return %sToolError(err), nil
 	}
 	return %sEmptyToolResult(), nil
 }
 `, t.Method.Name, handlerArgs, prefix, prefix)
-		return b.String()
-	}
+			return b.String()
+		}
 
-	fmt.Fprintf(&b, `	resp, err := s.handler.%s(%s)
+		fmt.Fprintf(&b, `	resp, err := s.handler.%s(%s)
 	if err != nil {
 		return %sToolError(err), nil
 	}
 `, t.Method.Name, handlerArgs, prefix)
+	}
 	if t.ValidateOutput != "" {
 		fmt.Fprintf(&b, `	if err := %s(resp); err != nil {
 		return %sToolError(status.Error(codes.Internal,
@@ -879,6 +967,47 @@ func (s *%[5]s) %[1]s(ctx context.Context, arguments json.RawMessage) (*mcp.Call
 	}
 	fmt.Fprintf(&b, "	return %sToolResult(resp)\n}\n", prefix)
 	return b.String()
+}
+
+// goMcpPageDispatch renders the PAGE window: decode the tool call's page_token,
+// clamp its page_size, call the keyset handler, assemble the response envelope.
+//
+// Every line of it is the gRPC PAGE wrapper's own (servicewrapper.go's PAGE
+// branch), against the same collection runtime and the same resolved bounds —
+// the tool and its gRPC twin are one handler driven two ways, not two paging
+// implementations.
+func goMcpPageDispatch(prefix string, t goMcpTool) string {
+	total := ""
+	if t.Page.HasTotal {
+		total = `
+	// total_count is reported only when the handler computes it (Total >= 0);
+	// a negative Total leaves total_count at 0 = "unknown", not "empty".
+	if page.Total >= 0 {
+		resp.TotalCount = page.Total
+	}`
+	}
+	return fmt.Sprintf(`	// Decode the opaque page_token into a keyset cursor (bad token -> INVALID_ARGUMENT).
+	after, ptErr := collection.DecodePageToken(req.GetPageToken())
+	if ptErr != nil {
+		return %[1]sToolError(ptErr), nil
+	}
+	// Resolve the effective page size: default when unset, clamped to the trust ceiling.
+	limit := collection.EffectivePageSize(int(req.GetPageSize()), %[2]d, %[3]d)
+	page, err := s.handler.%[4]s(sanitizeContext(ctx), s.caller, req, collection.PageParams{Limit: limit, After: after})
+	if err != nil {
+		return %[1]sToolError(err), nil
+	}
+	// Encode the next cursor; an empty token in the result means there is no next page.
+	nextPageToken, encErr := collection.EncodePageToken(page.NextAfter)
+	if encErr != nil {
+		return %[1]sToolError(status.Error(codes.Internal,
+			fmt.Sprintf("page token encode failed: %%v", encErr))), nil
+	}
+	resp := &%[5]s{
+		%[6]s:           page.Items,
+		NextPageToken: nextPageToken,
+	}%[7]s
+`, prefix, t.Page.DefaultSize, t.Page.MaxSize, t.Method.Name, t.OutputType, t.Page.ItemsField, total)
 }
 
 // goMcpRequestScopeBlock renders the stamp-or-refuse check for one

@@ -10,8 +10,9 @@ import (
 // Pins the auto-exposure predicate (decision of 2026-09-22): a user RPC of a
 // c2s service is an MCP tool with no annotation asking for one. The red halves
 // below are the shapes the predicate deliberately does not sweep in —
-// RPC_PRINCIPAL_SERVICE, the two no-auth flags, and the streaming/collection
-// shapes a tool call has no frame for.
+// RPC_PRINCIPAL_SERVICE, the two no-auth flags, and the streaming and
+// non-PAGE-collection shapes a tool call has no frame for. PAGE is swept in:
+// see TestAutoExpose_PageCollectionIsATool.
 
 // autoExposeFile parses one c2s service body and returns its descriptor.
 func autoExposeFile(t *testing.T, serviceBody string) *FileDescriptor {
@@ -144,11 +145,10 @@ func TestAutoExpose_StreamingIsExcludedNotRefused(t *testing.T) {
 	}
 }
 
-// PAGE (and every other method_collection) is excluded for this phase, for the
-// same reason streaming is. The per-language dispatch guards keep refusing a
-// DECLARED tool that carries one — see TestAutoExpose_DeclaredPageToolIsStillRefused
-// in the go/rust/java dispatch packages.
-func TestAutoExpose_PageCollectionIsExcluded(t *testing.T) {
+// PAGE IS auto-exposed (phase 2): page_size and page_token are ordinary fields
+// of a PAGE request, so they are ordinary tool arguments, and the dispatch calls
+// the same three-argument handler the gRPC PAGE wrapper calls.
+func TestAutoExpose_PageCollectionIsATool(t *testing.T) {
 	skipIfNoProtoc(t)
 
 	fd := autoExposeFile(t, `
@@ -158,8 +158,34 @@ func TestAutoExpose_PageCollectionIsExcluded(t *testing.T) {
   }
 `)
 
-	if m := mcpMethod(t, fd, "ListTickets"); m.IsAutoMcp {
-		t.Error("ListTickets: IsAutoMcp = true; a PAGE read is not auto-exposed in phase 1")
+	m := mcpMethod(t, fd, "ListTickets")
+	if !m.IsAutoMcp {
+		t.Error("ListTickets: IsAutoMcp = false; a PAGE read is auto-exposed as a paged tool")
+	}
+	if m.McpToolName != "list_tickets" {
+		t.Errorf("ListTickets: McpToolName = %q, want list_tickets", m.McpToolName)
+	}
+	if !fd.Services[0].HasMcpRpcs {
+		t.Error("Surface: HasMcpRpcs = false; a PAGE tool is still a tool")
+	}
+}
+
+// SNAPSHOT is NOT widened with PAGE. Its handler returns a materialized
+// collection (or a cursor, or a stream), none of which this dispatch can call,
+// and no decision asked for it — so it stays excluded and the per-language
+// dispatch guards keep refusing a DECLARED tool that carries one.
+func TestAutoExpose_SnapshotCollectionIsExcluded(t *testing.T) {
+	skipIfNoProtoc(t)
+
+	fd := autoExposeFile(t, `
+  // List every ticket at once.
+  rpc ListAllTickets(Ping) returns (Ping) {
+    option (spec.method_collection) = {mode: COLLECTION_MODE_SNAPSHOT, order_by: ["m"], max_items: 100};
+  }
+`)
+
+	if m := mcpMethod(t, fd, "ListAllTickets"); m.IsAutoMcp {
+		t.Error("ListAllTickets: IsAutoMcp = true; only PAGE collections are auto-exposed")
 	}
 }
 

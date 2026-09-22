@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/collection"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 )
@@ -225,6 +226,13 @@ func TestGoMcpDispatchRefusesAToolItCannotGuard(t *testing.T) {
 	}{
 		{"streaming", func(m *parser.MethodInfo) { m.ServerStreaming = true }, "is streaming"},
 		{"min_group_size", func(m *parser.MethodInfo) { m.MinGroupSize = 5 }, "(spec.min_group_size)"},
+		// A SNAPSHOT collection hands the handler a materialized collection (or a
+		// cursor, or a stream), so dispatch would render a call against a
+		// signature it does not have. PAGE is the one mode a tool call can
+		// drive; every other one is still refused.
+		{"method_collection", func(m *parser.MethodInfo) {
+			m.Collection = &parser.CollectionDescriptor{Mode: "SNAPSHOT"}
+		}, "declares method_collection in mode SNAPSHOT"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := goMcpTestService()
@@ -266,5 +274,118 @@ func TestGoMcpDispatchGeneratesItsOwnTests(t *testing.T) {
 	// The paired control: the non-MCP sibling is asserted ABSENT from the tool set.
 	if !strings.Contains(rendered, `if _, ok := byName["get_ticket"]; ok {`) {
 		t.Fatalf("the generated gate does not check that a non-MCP rpc stays unpublished:\n%s", rendered)
+	}
+}
+
+// goMcpPageSanitizer is the fixture's message set with the tool's request and
+// response reshaped as a PAGE pair — page_size/page_token in, one repeated items
+// field plus next_page_token/total_count out. Collection validation requires
+// exactly this shape of a PAGE rpc, so the schema the emitter derives is derived
+// from it.
+func goMcpPageSanitizer() *egressSanitizer {
+	return newEgressSanitizer([]model.ProtoFile{{Package: "ticket", Messages: []model.Message{
+		{Name: "GetTicketBriefRequest", Fields: []model.Field{
+			{Name: "ticket_id", Type: "string", Number: 1, Comment: "The ticket to summarize."},
+			{Name: "page_size", Type: "int32", Number: 2},
+			{Name: "page_token", Type: "string", Number: 3},
+		}},
+		{Name: "GetTicketBriefResponse", Fields: []model.Field{
+			{Name: "items", Type: "TicketBrief", Number: 1, IsRepeated: true, IsMessage: true},
+			{Name: "next_page_token", Type: "string", Number: 2},
+			{Name: "total_count", Type: "int64", Number: 3},
+		}},
+		{Name: "TicketBrief", Fields: []model.Field{
+			{Name: "summary", Type: "string", Number: 1},
+		}},
+		{Name: "GetTicketRequest", Fields: []model.Field{
+			{Name: "ticket_id", Type: "string", Number: 1},
+		}},
+		{Name: "GetTicketResponse", Fields: []model.Field{
+			{Name: "body", Type: "string", Number: 1},
+		}},
+	}}})
+}
+
+// goMcpPageTool turns the fixture's tool into a PAGE collection read: the shape
+// phase 2 makes generable. Resolved is what the emitters read, and it is the
+// SAME struct the gRPC PAGE wrapper reads — the bounds below are the wrapper's
+// own, not an MCP-specific budget.
+func goMcpPageTool(m *parser.MethodInfo) {
+	m.Collection = &parser.CollectionDescriptor{Mode: "PAGE", OrderBy: []string{"ticket_id"}, DefaultPageSize: 50}
+	m.Resolved = &collection.Resolved{
+		Mode:            "PAGE",
+		OrderBy:         []string{"ticket_id"},
+		DefaultPageSize: 50,
+		MaxPageSize:     10000,
+		PageItemType:    "ticket.TicketBrief",
+		PageItemsField:  "items",
+		PageHasTotal:    true,
+	}
+}
+
+// A PAGE rpc published as a tool drives the SAME four-argument handler the gRPC
+// PAGE wrapper drives (ctx, caller, req, PageParams), with PageParams built from
+// the tool call's own page_size/page_token, and assembles the same envelope
+// (items + next_page_token + total_count).
+func TestGoMcpDispatchDrivesAPageHandler(t *testing.T) {
+	svc := goMcpTestService()
+	goMcpPageTool(svc.Methods[0])
+
+	rendered, err := generateGoMcpDispatch(svc, goMcpTestParams(), goMcpPageSanitizer())
+	if err != nil {
+		t.Fatalf("generate Go MCP dispatch: %v", err)
+	}
+
+	for _, want := range []string{
+		"after, ptErr := collection.DecodePageToken(req.GetPageToken())",
+		"limit := collection.EffectivePageSize(int(req.GetPageSize()), 50, 10000)",
+		"page, err := s.handler.GetTicketBrief(sanitizeContext(ctx), s.caller, req, collection.PageParams{Limit: limit, After: after})",
+		"nextPageToken, encErr := collection.EncodePageToken(page.NextAfter)",
+		"Items:           page.Items,",
+		"NextPageToken: nextPageToken,",
+		"if page.Total >= 0 {",
+		// The emitted collection runtime is imported explicitly; goimports
+		// cannot resolve that local package by name.
+		`"example.com/mod/chassis/collection"`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("the paged MCP dispatch is missing %q\ngot:\n%s", want, rendered)
+		}
+	}
+
+	// The three-argument unary call must NOT be rendered for it.
+	if strings.Contains(rendered, "s.handler.GetTicketBrief(sanitizeContext(ctx), s.caller, req)\n") {
+		t.Fatalf("a PAGE tool still renders the unary handler call:\n%s", rendered)
+	}
+}
+
+// The tool schema tells the model how to drive the page: the two fields are
+// already there (they are ordinary fields of a PAGE request), and the bound is
+// the wrapper's resolved one, stated rather than invented.
+func TestGoMcpPageToolSchemaStatesTheWindow(t *testing.T) {
+	svc := goMcpTestService()
+	goMcpPageTool(svc.Methods[0])
+
+	tools, err := goMcpTools(svc, "ticket", goMcpPageSanitizer())
+	if err != nil {
+		t.Fatalf("resolve Go MCP tools: %v", err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(tools[0].Schema), &schema); err != nil {
+		t.Fatalf("the emitted tool schema is not JSON: %v\n%s", err, tools[0].Schema)
+	}
+	props, _ := schema["properties"].(map[string]any)
+	ps, _ := props["page_size"].(map[string]any)
+	if ps == nil {
+		t.Fatalf("page_size is not a tool argument:\n%s", tools[0].Schema)
+	}
+	if ps["maximum"] != float64(10000) {
+		t.Fatalf("page_size does not carry the resolved ceiling: %v", ps["maximum"])
+	}
+	if desc, _ := ps["description"].(string); !strings.Contains(desc, "50 when omitted") {
+		t.Fatalf("page_size does not state the default: %q", desc)
+	}
+	if pt, _ := props["page_token"].(map[string]any); pt == nil {
+		t.Fatalf("page_token is not a tool argument:\n%s", tools[0].Schema)
 	}
 }

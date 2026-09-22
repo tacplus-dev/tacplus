@@ -115,6 +115,38 @@ type javaMcpTool struct {
 	// boundary.
 	NamespaceField     string
 	StoreNamespaceRows []javaMcpRowField
+
+	// Page is the PAGE-collection window, nil for every other rpc. A PAGE tool
+	// takes page_size/page_token as ordinary arguments and calls the same
+	// three-argument handler the gRPC PAGE wrapper calls.
+	Page *javaMcpPage
+}
+
+// javaMcpPage is what the dispatch needs to drive a PAGE rpc's handler and
+// assemble its response envelope. Every value here is read off the same
+// collection.Resolved the gRPC PAGE wrapper reads — there is no MCP-specific
+// page bound.
+type javaMcpPage struct {
+	ItemsField  string // Pascal-case response field holding the page's items
+	ItemType    string // rendered Java item type (the Page<Item> element)
+	DefaultSize uint32 // page_size when the call omits it
+	MaxSize     uint32 // the trust-tier ceiling page_size is clamped to
+	HasTotal    bool   // the response declares total_count
+}
+
+// javaMcpPageOf resolves the PAGE window of a collection rpc, or nil when the
+// rpc is not a PAGE read.
+func javaMcpPageOf(m *parser.MethodInfo, outputType string, crossPkgOuterClasses map[string]string) *javaMcpPage {
+	if !m.IsPageCollection() {
+		return nil
+	}
+	return &javaMcpPage{
+		ItemsField:  strutil.ToPascalCase(m.Resolved.PageItemsField),
+		ItemType:    javaWatchTypeRef(m.Resolved.PageItemType, outputType, crossPkgOuterClasses),
+		DefaultSize: m.Resolved.DefaultPageSize,
+		MaxSize:     m.Resolved.MaxPageSize,
+		HasTotal:    m.Resolved.PageHasTotal,
+	}
 }
 
 // javaMcpRowField is a repeated field of a response whose item type declares
@@ -200,6 +232,8 @@ func javaMcpTools(svc *parser.ServiceInfo, servicePackage, outerClassName string
 			StorePrincipalRows:      san.mcpRowFields(m.FullOutputType, servicePackage, "store_principal"),
 			NamespaceField:          san.mcpAnnotatedStringField(m.FullInputType, servicePackage, "namespace"),
 			StoreNamespaceRows:      san.mcpRowFields(m.FullOutputType, servicePackage, "store_namespace"),
+			Page: javaMcpPageOf(m, resolveJavaMethodType(m.FullOutputType, m.OutputType, servicePackage, outerClassName, crossPkgOuterClasses),
+				crossPkgOuterClasses),
 		})
 	}
 	return tools, nil
@@ -228,9 +262,9 @@ func javaMcpToolGeneratable(svc *parser.ServiceInfo, m *parser.MethodInfo, servi
 		return fmt.Errorf("%s.%s is an RPC_PRINCIPAL_MCP rpc but is streaming; an MCP tool call is one request and one response, so a streaming rpc cannot be published as a tool",
 			svc.Name, m.Name)
 	}
-	if m.Collection != nil {
-		return fmt.Errorf("%s.%s is an RPC_PRINCIPAL_MCP rpc but declares method_collection; the generated collection seam hands the handler a cursor or page window, which an MCP tool call has no frame for",
-			svc.Name, m.Name)
+	if m.Collection != nil && !m.IsPageCollection() {
+		return fmt.Errorf("%s.%s is an RPC_PRINCIPAL_MCP rpc but declares method_collection in mode %s; only PAGE has a shape a tool call can drive (page_size/page_token in, next_page_token out) — the other modes hand the handler a stream or a materialized collection, which an MCP tool call has no frame for",
+			svc.Name, m.Name, m.Collection.Mode)
 	}
 	// (spec.record).min_group_size: this seam renders no size-only guard, so a
 	// tool carrying one would be dispatched unguarded even though the gRPC
@@ -308,12 +342,37 @@ func javaMcpInputSchema(m *parser.MethodInfo, servicePackage string, san *javaEg
 			return "", err
 		}
 	}
+	if m.IsPageCollection() {
+		javaMcpAnnotatePageSchema(schema, m.Resolved.DefaultPageSize, m.Resolved.MaxPageSize)
+	}
 	schema["description"] = javaMcpDescription(m)
 	out, err := json.Marshal(schema)
 	if err != nil {
 		return "", fmt.Errorf("marshal input schema: %w", err)
 	}
 	return string(out), nil
+}
+
+// javaMcpAnnotatePageSchema tells the model how to drive the two paging fields a
+// PAGE request already declares. They are ordinary fields of the request
+// message, so they are already in the schema; what the message index cannot say
+// is the window's default and its ceiling, which are the wrapper's own resolved
+// bounds. The bound is stated, not invented: it is the same clamp the dispatch
+// applies at runtime, so a model that asks for more is told what it will get
+// rather than silently given less.
+func javaMcpAnnotatePageSchema(schema map[string]any, defaultSize, maxSize uint32) {
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return
+	}
+	if ps, ok := props["page_size"].(map[string]any); ok {
+		ps["description"] = fmt.Sprintf("How many items to return in this page. Optional: %d when omitted, and never more than %d.",
+			defaultSize, maxSize)
+		ps["maximum"] = maxSize
+	}
+	if pt, ok := props["page_token"].(map[string]any); ok {
+		pt["description"] = "The next_page_token returned by the previous call to this tool. Optional: omit it for the first page. An empty next_page_token in the result means there is no next page."
+	}
 }
 
 // mcpAnnotatedStringField returns the snake_case name of fullType's field
@@ -858,7 +917,19 @@ func javaMcpToolDispatch(serviceName string, t javaMcpTool) string {
 	if t.EmptyRequest {
 		handlerArgs = "caller"
 	}
-	if t.EmptyResponse {
+	if t.Page != nil {
+		// PAGE: the same three-argument handler the gRPC PAGE wrapper calls, with
+		// PageParams built from this tool call's own page_size/page_token exactly
+		// as the wrapper builds it from the wire request. The envelope is
+		// assembled here for the same reason: a PAGE handler returns a
+		// CollectionRuntime.Page, not the response message.
+		b.WriteString(javaMcpPageDispatch(t, ind))
+		if t.OutputHelpers != "" {
+			fmt.Fprintf(&b, "%[1]s%[2]s.validate%[3]s(__resp);\n", ind, t.OutputHelpers, t.Method.OutputType)
+		}
+		b.WriteString(javaMcpRowFilters(t, ind))
+		fmt.Fprintf(&b, "%sreturn toolResult(__resp);\n", ind)
+	} else if t.EmptyResponse {
 		fmt.Fprintf(&b, "%[1]shandler.%[2]s(%[3]s);\n%[1]sreturn emptyToolResult();\n", ind, t.HandlerMethod, handlerArgs)
 	} else {
 		fmt.Fprintf(&b, "%[1]s%[2]s __resp = handler.%[3]s(%[4]s);\n", ind, t.OutputType, t.HandlerMethod, handlerArgs)
@@ -879,6 +950,37 @@ func javaMcpToolDispatch(serviceName string, t javaMcpTool) string {
         }
 `)
 	return b.String()
+}
+
+// javaMcpPageDispatch renders the PAGE window: decode the tool call's
+// page_token, clamp its page_size, call the keyset handler, assemble the
+// response envelope.
+//
+// Every line of it is the gRPC PAGE wrapper's own (servicewrapper_gen.go's PAGE
+// branch), against the same collection runtime and the same resolved bounds —
+// the tool and its gRPC twin are one handler driven two ways, not two paging
+// implementations.
+func javaMcpPageDispatch(t javaMcpTool, ind string) string {
+	total := ""
+	if t.Page.HasTotal {
+		total = fmt.Sprintf(`%[1]s// total_count is reported only when the handler computes it (>= 0); a
+%[1]s// negative total leaves the field at 0 = "unknown", not "empty".
+%[1]sif (__page.total >= 0) {
+%[1]s    __pb.setTotalCount(__page.total);
+%[1]s}
+`, ind)
+	}
+	return fmt.Sprintf(`%[1]s// Decode the opaque page_token into a keyset cursor (bad token -> INVALID_ARGUMENT).
+%[1]sCollectionRuntime.Cursor __after = CollectionRuntime.decodePageToken(__req.getPageToken());
+%[1]s// Resolve the effective page size: default when unset, clamped to the trust ceiling.
+%[1]slong __limit = CollectionRuntime.effectivePageSize(__req.getPageSize(), %[2]dL, %[3]dL);
+%[1]sCollectionRuntime.Page<%[4]s> __page = handler.%[5]s(caller, __req, new CollectionRuntime.PageParams(__limit, __after));
+%[1]s%[6]s.Builder __pb = %[6]s.newBuilder();
+%[1]s__pb.addAll%[7]s(__page.items);
+%[1]s// An empty next_page_token in the result means there is no next page.
+%[1]s__pb.setNextPageToken(CollectionRuntime.encodePageToken(__page.nextAfter));
+%[8]s%[1]s%[6]s __resp = __pb.build();
+`, ind, t.Page.DefaultSize, t.Page.MaxSize, t.Page.ItemType, t.HandlerMethod, t.OutputType, t.Page.ItemsField, total)
 }
 
 // javaMcpRequestScopeBlock renders the stamp-or-refuse check for one

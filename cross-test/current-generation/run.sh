@@ -1454,18 +1454,19 @@ PLANE_PY
   # drops the row and proceeds, so it contributes no abort — only the namespace
   # pin and the private-owner pin abort.
   #
-  # Rust adds 3 more in the SAME file: EgressVaultApi is a service_c2s service,
+  # Rust adds 4 more in the SAME file: EgressVaultApi is a service_c2s service,
   # so its user RPCs are auto-exposed as MCP tools, and Rust emits that tool
   # dispatch into the wrapper file rather than beside it. The tool call serves
   # the row itself, so each dispatch seam carries the same backstop its gRPC
-  # twin does — call_get_vault_row_summary (namespace) and
-  # call_get_vault_secret_material (namespace + private owner). GetVaultStatus
-  # is auto-exposed too and adds none, because its response carries no pinned
-  # row; ListVaultRowsPaged and WatchVaultRows are not tools at all (a PAGE or
-  # WATCH read has no tool-call frame), which is why this is +3 and not +6.
+  # twin does — call_get_vault_row_summary (namespace),
+  # call_get_vault_secret_material (namespace + private owner) and
+  # call_list_vault_rows_paged (namespace, over the page the tool returns).
+  # GetVaultStatus is auto-exposed too and adds none, because its response
+  # carries no pinned row; WatchVaultRows is not a tool at all (a server-
+  # streaming read has no tool-call frame), which is why this is +4 and not +5.
   local api_aborts=6
   if [[ "$language" == "rust" ]]; then
-    api_aborts=9
+    api_aborts=10
   fi
   for pair in "$api:$api_aborts" "$records:2"; do
     local f="${pair%:*}" want="${pair##*:}"
@@ -1474,13 +1475,14 @@ PLANE_PY
       || die "record-egress fixture ($language): expected $want egress backstop aborts in $f, found $n (fewer means a seam lost its filter; more means it was spliced onto a method whose response carries no pinned row)"
   done
 
-  # Rust's +2 is the same auto-exposed MCP tool dispatch the abort count above
-  # explains: the two seams that resolve a namespace (call_get_vault_row_summary,
-  # call_get_vault_secret_material) resolve it with the same linked widening
-  # their gRPC twins do.
+  # Rust's +3 is the same auto-exposed MCP tool dispatch the abort count above
+  # explains: the three seams that resolve a namespace
+  # (call_get_vault_row_summary, call_get_vault_secret_material,
+  # call_list_vault_rows_paged) resolve it with the same linked widening their
+  # gRPC twins do.
   local api_linked=4
   if [[ "$language" == "rust" ]]; then
-    api_linked=6
+    api_linked=7
   fi
   for pair in "$api:$api_linked" "$records:2"; do
     local f="${pair%:*}" want="${pair##*:}"

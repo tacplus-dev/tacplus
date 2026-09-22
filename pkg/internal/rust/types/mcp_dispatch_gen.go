@@ -77,6 +77,38 @@ type rustMcpTool struct {
 	// rows the response carries.
 	NamespaceField     string
 	StoreNamespaceRows []rustNamespaceListField
+
+	// Page is the PAGE-collection window, nil for every other rpc. A PAGE tool
+	// takes page_size/page_token as ordinary arguments and calls the same
+	// three-argument handler the gRPC PAGE wrapper calls.
+	Page *rustMcpPage
+}
+
+// rustMcpPage is what the dispatch needs to drive a PAGE rpc's handler and
+// assemble its response envelope. Every value here is read off the same
+// collection::Resolved the gRPC PAGE wrapper reads — there is no MCP-specific
+// page bound.
+type rustMcpPage struct {
+	ItemsField  string // prost field name of the response's items field
+	ItemType    string // rendered Rust item type (the Page<T> element)
+	DefaultSize uint32 // page_size when the call omits it
+	MaxSize     uint32 // the trust-tier ceiling page_size is clamped to
+	HasTotal    bool   // the response declares total_count
+}
+
+// rustMcpPageOf resolves the PAGE window of a collection rpc, or nil when the
+// rpc is not a PAGE read.
+func rustMcpPageOf(m *parser.MethodInfo, servicePkg string, crossPkgTypes map[string]string) *rustMcpPage {
+	if !m.IsPageCollection() {
+		return nil
+	}
+	return &rustMcpPage{
+		ItemsField:  prostSnakeName(m.Resolved.PageItemsField),
+		ItemType:    rustPageItemType(m, servicePkg, crossPkgTypes),
+		DefaultSize: m.Resolved.DefaultPageSize,
+		MaxSize:     m.Resolved.MaxPageSize,
+		HasTotal:    m.Resolved.PageHasTotal,
+	}
 }
 
 // rustMcpCarrierMethod returns the service's generated session-carrier rpc, or
@@ -129,6 +161,7 @@ func rustMcpTools(svc *parser.ServiceInfo, servicePkg string, crossPkgTypes map[
 			StorePrincipalRows: san.principalListFields(m.FullOutputType, servicePkg),
 			NamespaceField:     san.requestNamespaceField(m.FullInputType, servicePkg),
 			StoreNamespaceRows: san.namespaceListFields(m.FullOutputType, servicePkg),
+			Page:               rustMcpPageOf(m, servicePkg, crossPkgTypes),
 		})
 	}
 	return tools, nil
@@ -146,9 +179,9 @@ func rustMcpToolGeneratable(svc *parser.ServiceInfo, m *parser.MethodInfo, servi
 	// An MCP tool is one question and one answer. A collection-returning rpc has
 	// a handler signature this dispatch cannot call (it takes a cursor or a page
 	// window), and MCP has no frame to carry it in.
-	if m.Collection != nil {
-		return fmt.Errorf("%s.%s is an RPC_PRINCIPAL_MCP rpc but declares method_collection; the generated collection seam hands the handler a cursor or page window, which an MCP tool call has no frame for",
-			svc.Name, m.Name)
+	if m.Collection != nil && !m.IsPageCollection() {
+		return fmt.Errorf("%s.%s is an RPC_PRINCIPAL_MCP rpc but declares method_collection in mode %s; only PAGE has a shape a tool call can drive (page_size/page_token in, next_page_token out) — the other modes hand the handler a stream or a materialized collection, which an MCP tool call has no frame for",
+			svc.Name, m.Name, m.Collection.Mode)
 	}
 	// (spec.record).min_group_size is enforced in the generated Java service
 	// wrapper only.
@@ -219,12 +252,37 @@ func rustMcpInputSchema(m *parser.MethodInfo, servicePkg string, san *rustEgress
 			return "", err
 		}
 	}
+	if m.IsPageCollection() {
+		rustMcpAnnotatePageSchema(schema, m.Resolved.DefaultPageSize, m.Resolved.MaxPageSize)
+	}
 	schema["description"] = rustMcpDescription(m)
 	out, err := json.Marshal(schema)
 	if err != nil {
 		return "", fmt.Errorf("marshal input schema: %w", err)
 	}
 	return string(out), nil
+}
+
+// rustMcpAnnotatePageSchema tells the model how to drive the two paging fields a
+// PAGE request already declares. They are ordinary fields of the request
+// message, so they are already in the schema; what the message index cannot say
+// is the window's default and its ceiling, which are the wrapper's own resolved
+// bounds. The bound is stated, not invented: it is the same clamp the dispatch
+// applies at runtime, so a model that asks for more is told what it will get
+// rather than silently given less.
+func rustMcpAnnotatePageSchema(schema map[string]any, defaultSize, maxSize uint32) {
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return
+	}
+	if ps, ok := props["page_size"].(map[string]any); ok {
+		ps["description"] = fmt.Sprintf("How many items to return in this page. Optional: %d when omitted, and never more than %d.",
+			defaultSize, maxSize)
+		ps["maximum"] = maxSize
+	}
+	if pt, ok := props["page_token"].(map[string]any); ok {
+		pt["description"] = "The next_page_token returned by the previous call to this tool. Optional: omit it for the first page. An empty next_page_token in the result means there is no next page."
+	}
 }
 
 // rustMcpEmptyRequest mirrors the handlerEmpty test the handler-interface
@@ -678,7 +736,11 @@ func rustMcpToolDispatch(serviceName string, t rustMcpTool) string {
 		if t.NamespaceField != "" {
 			b.WriteString(rustRequestNamespaceBlock(t.NamespaceField, t.Method.Name, "req", "        "))
 		}
-		fmt.Fprintf(&b, "        let resp = self.handler.%s(caller, req).await?;\n", methodSnake)
+		if t.Page != nil {
+			b.WriteString(rustMcpPageDispatch(t, methodSnake))
+		} else {
+			fmt.Fprintf(&b, "        let resp = self.handler.%s(caller, req).await?;\n", methodSnake)
+		}
 	}
 	b.WriteString(rustServerResponseValidationBlock("resp", t.Method.FullOutputType))
 	if len(t.StorePrincipalRows) > 0 {
@@ -695,6 +757,36 @@ func rustMcpToolDispatch(serviceName string, t rustMcpTool) string {
     }
 `)
 	return b.String()
+}
+
+// rustMcpPageDispatch renders the PAGE window: decode the tool call's
+// page_token, clamp its page_size, call the keyset handler, assemble the
+// response envelope.
+//
+// Every line of it is the gRPC PAGE wrapper's own (servicewrapper_gen.go's PAGE
+// branch), against the same collection runtime and the same resolved bounds —
+// the tool and its gRPC twin are one handler driven two ways, not two paging
+// implementations.
+func rustMcpPageDispatch(t rustMcpTool, methodSnake string) string {
+	total := ""
+	if t.Page.HasTotal {
+		total = `
+        // total_count is reported only when the handler computes it (>= 0); a
+        // negative total leaves the field at 0 = "unknown", not "empty".
+        if page.total >= 0 {
+            resp.total_count = page.total;
+        }`
+	}
+	return fmt.Sprintf(`        // Decode the opaque page_token into a keyset cursor (bad token -> INVALID_ARGUMENT).
+        let after = collection::decode_page_token(&req.page_token)?;
+        // Resolve the effective page size: default when unset, clamped to the trust ceiling.
+        let limit = collection::effective_page_size(req.page_size as i64, %[1]d, %[2]d);
+        let page = self.handler.%[3]s(caller, req, collection::PageParams { limit, after }).await?;
+        let mut resp = <%[4]s>::default();
+        resp.%[5]s = page.items;
+        // An empty next_page_token in the result means there is no next page.
+        resp.next_page_token = collection::encode_page_token(page.next_after.as_ref());%[6]s
+`, t.Page.DefaultSize, t.Page.MaxSize, methodSnake, t.OutputType, t.Page.ItemsField, total)
 }
 
 // rustMcpTransport renders the carriage: one MCP session over one gRPC bidi
@@ -1049,6 +1141,17 @@ mod %[1]s_mcp_tests {
 `, methodSnake, outputType, m.Name)
 			continue
 		}
+		if m.IsPageCollection() {
+			// A PAGE tool's handler is the keyset producer the gRPC PAGE wrapper
+			// calls, so the stub declares that signature — and reports the window
+			// it was handed, which is what proves the tool call's page_size
+			// reached PageParams rather than being dropped.
+			fmt.Fprintf(&b, `        async fn %s(&self, _caller: Option<&servicemanager::auth::Caller>, req: %s, page: collection::PageParams) -> Result<collection::Page<%s>, tonic::Status> {
+            Err(tonic::Status::internal(format!("MCP_CALLED {:?} page_limit={}", req, page.limit)))
+        }
+`, methodSnake, inputType, rustPageItemType(m, servicePkg, crossPkgTypes))
+			continue
+		}
 		fmt.Fprintf(&b, `        async fn %s(&self, _caller: Option<&servicemanager::auth::Caller>, req: %s) -> Result<%s, tonic::Status> {
             Err(tonic::Status::internal(format!("MCP_CALLED {:?}", req)))
         }
@@ -1083,17 +1186,26 @@ mod %[1]s_mcp_tests {
 	return b.String()
 }
 
+// rustMcpTestPageSize is the page_size the generated gate asks a PAGE tool for.
+// Below every resolved default and ceiling, so the clamp passes it through
+// unchanged and the assertion reads the window the tool call actually asked for.
+const rustMcpTestPageSize = 3
+
 // rustMcpToolTests renders one tool's dispatch tests. A tool whose required
 // arguments cannot be synthesized (a required enum or nested message) gets the
 // refusal test only — there is no obviously-valid call to drive.
 func rustMcpToolTests(surface string, t rustMcpTool) string {
 	var b strings.Builder
 
-	drivable := t.EmptyRequest || len(t.RequiredScalars) > 0 || t.PrincipalField != ""
+	// A PAGE tool is always drivable: page_size alone is a valid call.
+	drivable := t.EmptyRequest || t.Page != nil || len(t.RequiredScalars) > 0 || t.PrincipalField != ""
 	if drivable {
 		var args []string
 		for _, a := range t.RequiredScalars {
 			args = append(args, fmt.Sprintf("%s: %s", rustQuote(a.Field), a.JSON))
+		}
+		if t.Page != nil {
+			args = append(args, fmt.Sprintf("%q: %d", "page_size", rustMcpTestPageSize))
 		}
 		argsJSON := "{" + strings.Join(args, ", ") + "}"
 
@@ -1123,6 +1235,17 @@ func rustMcpToolTests(surface string, t rustMcpTool) string {
             reported.message()
         );
 `, rustQuote(a.Debug), a.Field)
+		}
+		if t.Page != nil {
+			fmt.Fprintf(&b, `        // PAGE: the tool call's own page_size reached the handler as the
+        // window of a collection::PageParams — the same three-argument call
+        // the gRPC PAGE wrapper makes.
+        assert!(
+            reported.message().contains("page_limit=%[1]d"),
+            "the tool call's page_size did not reach PageParams: {}",
+            reported.message()
+        );
+`, rustMcpTestPageSize)
 		}
 		if t.PrincipalField != "" {
 			fmt.Fprintf(&b, `        // (spec.principal): stamped by the dispatch from the verified caller,

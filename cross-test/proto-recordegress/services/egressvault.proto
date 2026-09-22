@@ -34,18 +34,23 @@ option (spec.vservice) = {
   id: 30
 };
 
-// The USE half of each record's c2s_read grant: this service discloses both
-// record types to end users, so tacplus emits the generated client-facing
-// reader (Get<T>/List<T>) over their stored rows. C2S_SCOPE_PRINCIPAL resolves
-// the owning-principal field exactly as the egress row filter resolves it, so
-// the generated reader and the generated filter pin the same field — which is
-// the thing the fixture is here to compile in three languages at once.
+// The USE half of VaultRow's c2s_read grant: this service discloses the
+// TENANT-SCOPED record type to end users, so tacplus emits the generated
+// client-facing reader (Get<T>/List<T>) over its stored rows.
+// C2S_SCOPE_PRINCIPAL resolves the owning-principal field exactly as the egress
+// row filter resolves it, so the generated reader and the generated filter pin
+// the same field — which is the thing the fixture is here to compile in three
+// languages at once.
+//
+// VaultSecretRow, the PRIVATE type, is deliberately NOT here. A private record
+// refuses s2s_read (ValidateRecordPrivateAnnotations), because the record query
+// plane emits no peer-facing read for it at all — and (spec.record_read)'s
+// entire data path, c2s half included, is that peer-facing read. The private
+// row's egress filter is compiled by GetVaultSecretMaterial on EgressVaultApi
+// instead: a hand-written c2s rpc, which is the surface a private record's rows
+// legitimately reach a person through.
 option (spec.record_read) = {
   record: "egressvault.VaultRow"
-  c2s: {scope: C2S_SCOPE_PRINCIPAL exposure: RPC_EXPOSURE_EXTERNAL}
-};
-option (spec.record_read) = {
-  record: "egressvault.VaultSecretRow"
   c2s: {scope: C2S_SCOPE_PRINCIPAL exposure: RPC_EXPOSURE_EXTERNAL}
 };
 
@@ -102,8 +107,6 @@ message VaultSecretRow {
     key: "secret_id"
     owner: "owner"
     s2s: {auth_services: ["*"]}
-    s2s_read: {auth_services: ["*"]}
-    c2s_read: {auth_services: ["egressvault"]}
     private: true
   };
 

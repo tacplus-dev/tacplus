@@ -7,11 +7,12 @@ import (
 	"testing"
 )
 
-// recordPrivateProto is a record store's row type. private/subscribe/ownerField
+// recordPrivateProto is a record store's row type. private/surface/ownerField
 // are spliced in verbatim so the controls below differ in EXACTLY the
-// annotations under test. ownerField lets a control omit (spec.store_principal)
-// entirely to prove it's mandatory on a private record.
-func recordPrivateProto(private, subscribe, ownerField string) string {
+// annotations under test. surface carries the one read/subscribe grant a case
+// is about (s2s_subscribe or s2s_read), and ownerField lets a control omit
+// (spec.store_principal) entirely to prove it's mandatory on a private record.
+func recordPrivateProto(private, surface, ownerField string) string {
 	return `syntax = "proto3";
 
 package privatedemo;
@@ -23,7 +24,7 @@ message RuleNode {
     key: "rule_id"
     owner: "owner_id"
     s2s: {auth_services: ["*"]}
-    ` + subscribe + `
+    ` + surface + `
     ` + private + `
   };
   string rule_id = 1;
@@ -109,5 +110,43 @@ func TestPrivateRecordWithStorePrincipalPassesGeneration(t *testing.T) {
 
 	if err := ValidateRecordPrivateAnnotations(dp); err != nil {
 		t.Fatalf("a private (spec.record) declaring (spec.store_principal) must generate, got: %v", err)
+	}
+}
+
+// Red control. A private record declaring s2s_read must fail generation. The
+// record query plane emits no peer-facing read for a private type (record_map.go
+// skips it when rendering the S2S half), because a peer calls that surface with
+// its own service identity and the owner pin has no caller principal to compare
+// rows against. The grant would therefore authorize nothing — and before the
+// skip landed it authorized every named service to read every principal's rows
+// in the tenant, since the only gate the wrapper generators can apply there is
+// the (spec.store_namespace) tenant backstop.
+func TestPrivateRecordWithS2SReadFailsGeneration(t *testing.T) {
+	dp := writeSurfaceProtoDir(t, recordPrivateProto(`private: true`, `s2s_read: {auth_services: ["profile"]}`, recordPrivateOwnerField))
+
+	err := ValidateRecordPrivateAnnotations(dp)
+	if err == nil {
+		t.Fatal("a private (spec.record) declaring s2s_read must fail generation")
+	}
+	for _, want := range []string{
+		"record private annotation errors",
+		"privatedemo.RuleNode",
+		"s2s_read",
+		"c2s half",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q does not contain %q", err.Error(), want)
+		}
+	}
+}
+
+// Regression guard: a NON-private record declaring s2s_read is untouched. The
+// peer-facing read is the ordinary shape for a tenant-scoped record, where the
+// namespace backstop IS the whole boundary the record claims.
+func TestNonPrivateRecordWithS2SReadPassesGeneration(t *testing.T) {
+	dp := writeSurfaceProtoDir(t, recordPrivateProto(``, `s2s_read: {auth_services: ["profile"]}`, recordPrivateOwnerField))
+
+	if err := ValidateRecordPrivateAnnotations(dp); err != nil {
+		t.Fatalf("a non-private record's s2s_read must not be refused by this check, got: %v", err)
 	}
 }

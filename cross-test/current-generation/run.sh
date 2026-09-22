@@ -1360,14 +1360,18 @@ assert_requiresdevice_output() {
 # a language that drops one seam, or splices the filter onto every method instead
 # of the row-bearing ones, changes a count. Both failures compile.
 #
-#   6 aborts per wrapper   — the (spec.store_namespace)/(spec.record).private
-#                            backstops: unary tenant row, unary private row, the
-#                            PAGE window, and the WATCH seam's snapshot_item and
-#                            delta frames.
-#   4 linked-claim reads   — the `linked` widening, once per namespace resolve.
-#   1 / 2 delegated refusals — the private record's act-claim requirement: once on
-#                            the hand-written unary reader, twice on the generated
-#                            client-facing reader (Get + the page seam).
+#   6 / 2 aborts          — the (spec.store_namespace)/(spec.record).private
+#                            backstops. On the hand-written api: unary tenant
+#                            row, unary private row, the PAGE window, and the
+#                            WATCH seam's snapshot_item and delta frames. On the
+#                            generated record reader: the namespace backstop on
+#                            its two VaultRow seams.
+#   4 / 2 linked-claim reads — the `linked` widening, once per namespace resolve.
+#   1 / 0 delegated refusals — the private record's act-claim requirement, on the
+#                            hand-written unary reader alone. The generated
+#                            client-facing reader carries no private type: its
+#                            data path is the plane's peer-facing read, which is
+#                            not emitted for one (see the plane assertion below).
 assert_recordegress_output() {
   local output="$1"
   local language="$2"
@@ -1401,28 +1405,75 @@ assert_recordegress_output() {
   # The CLIENT-FACING record read plane. It is emitted only because egressvault
   # declares (spec.record_read).c2s, and that declaration was REFUSED for a Go
   # target until the Go egress filters landed — so its presence here is the
-  # closed refusal, not decoration.
+  # closed refusal, not decoration. It covers VaultRow ALONE: the private type
+  # cannot declare the s2s_read grant (spec.record_read) is the use half of.
   [[ -n "$records" ]] || die "record-egress fixture ($language): the generated client-facing record reader is missing under $output (the (spec.record_read).c2s plane was not emitted)"
 
+  # THE PRIVATE RECORD HAS NO PEER-FACING READ. This is the assertion the whole
+  # private/s2s split rests on, and it is made against the emitted PROTO rather
+  # than against any one language's wrapper, because that is where the decision
+  # is taken: record_map.go skips a (spec.record).private type when it renders
+  # the plane's S2S half, so all three backends agree with no per-language check.
+  # The C2S half, which carries the user token the owner pin binds to, must still
+  # carry the same type's full lifecycle — the paired control, so a change that
+  # suppressed the type everywhere fails here too.
+  local plane
+  plane="$(find "$output" -type f -name 'egressquery.proto' -print -quit)"
+  [[ -n "$plane" ]] || die "record-egress fixture ($language): the generated record query plane proto was not found under $output"
+  python3 - "$plane" "$language" <<'PLANE_PY' || die "record-egress fixture ($language): record query plane private/s2s split assertion failed"
+import re, sys
+path, language = sys.argv[1], sys.argv[2]
+text = open(path).read()
+bodies = {}
+for m in re.finditer(r'^service (\w+) \{(.*?)^\}', text, re.S | re.M):
+    bodies[m.group(1)] = m.group(2)
+for want in ("EgressRecordMap", "EgressRecordQuery"):
+    if want not in bodies:
+        sys.exit("record-egress fixture (%s): service %s missing from %s" % (language, want, path))
+s2s = re.findall(r'\brpc (\w+)\(', bodies["EgressRecordMap"])
+c2s = re.findall(r'\brpc (\w+)\(', bodies["EgressRecordQuery"])
+leaked = [r for r in s2s if "VaultSecretRow" in r]
+if leaked:
+    sys.exit("record-egress fixture (%s): the S2S half (EgressRecordMap) emits %d read rpc(s) for the PRIVATE "
+             "record VaultSecretRow (%s); a peer calls that surface with its own service identity, so the owner "
+             "pin has no caller principal and every named service could read every principal's rows"
+             % (language, len(leaked), ", ".join(leaked)))
+if not [r for r in s2s if "VaultRow" in r]:
+    sys.exit("record-egress fixture (%s): the S2S half emits no read rpc for the TENANT-SCOPED record VaultRow; "
+             "the private skip has over-reached" % language)
+if len([r for r in c2s if "VaultSecretRow" in r]) != 8:
+    sys.exit("record-egress fixture (%s): the C2S half (EgressRecordQuery) must keep the private record's full "
+             "8-rpc query lifecycle (it carries a user token for the pin to bind to); found %d"
+             % (language, len([r for r in c2s if "VaultSecretRow" in r])))
+PLANE_PY
+
   local n
-  for pair in "$api:6" "$records:6"; do
+  # api 6: two pinned seams over the private row (GetVaultSecretMaterial) plus
+  # the namespace backstop on each of the four VaultRow seams. records 2: the
+  # namespace backstop on GetVaultRow and GetVaultRowPage. A principal MISMATCH
+  # drops the row and proceeds, so it contributes no abort — only the namespace
+  # pin and the private-owner pin abort.
+  for pair in "$api:6" "$records:2"; do
     local f="${pair%:*}" want="${pair##*:}"
     n="$(grep -cE "$abort_re" "$f" || true)"
     [[ "$n" == "$want" ]] \
       || die "record-egress fixture ($language): expected $want egress backstop aborts in $f, found $n (fewer means a seam lost its filter; more means it was spliced onto a method whose response carries no pinned row)"
   done
 
-  for f in "$api" "$records"; do
+  for pair in "$api:4" "$records:2"; do
+    local f="${pair%:*}" want="${pair##*:}"
     n="$(grep -cE "$linked_re" "$f" || true)"
-    [[ "$n" == "4" ]] \
-      || die "record-egress fixture ($language): expected 4 linked-claim reads in $f, found $n (a namespace resolve without the linked widening refuses a caller the other two languages admit)"
+    [[ "$n" == "$want" ]] \
+      || die "record-egress fixture ($language): expected $want linked-claim reads in $f, found $n (a namespace resolve without the linked widening refuses a caller the other two languages admit)"
   done
 
   # The fourth caller shape: a SERVICE identity reading the private record with
   # no delegated (act) claim is refused, rather than pinned against an empty
-  # owner that would match a row by accident.
+  # owner that would match a row by accident. It lands on the hand-written c2s
+  # rpc only — the generated record reader never carries a private type, because
+  # its data path is the peer-facing read the plane no longer emits for one.
   local want_act
-  for pair in "$api:1" "$records:2"; do
+  for pair in "$api:1" "$records:0"; do
     local f="${pair%:*}"
     want_act="${pair##*:}"
     n="$(grep -c 'reads a private record and requires a delegated caller identity (act claim)' "$f" || true)"
@@ -1437,8 +1488,8 @@ assert_recordegress_output() {
   # outside the process.
   grep -q 'FATAL: (spec.store_namespace) backstop fired' "$api" \
     || die "record-egress fixture ($language): the namespace backstop diagnostic is missing from $api"
-  grep -q 'FATAL: (spec.record).private backstop fired' "$records" \
-    || die "record-egress fixture ($language): the private-owner backstop diagnostic is missing from $records"
+  grep -q 'FATAL: (spec.record).private backstop fired' "$api" \
+    || die "record-egress fixture ($language): the private-owner backstop diagnostic is missing from $api"
 
   # PAIRED CONTROL: GetVaultStatus returns no record rows, so it must carry no
   # filter. Asserted structurally by the exact counts above; asserted by name

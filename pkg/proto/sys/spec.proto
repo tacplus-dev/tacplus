@@ -947,16 +947,25 @@ message RecordAnnotation {
   //     in scope for a stream handler to pin against, so declaring both is a
   //     fleet-wide broadcast of every row ever written, the exact thing
   //     `private` exists to prevent.
-  // s2s / s2s_read / c2s_read stay declarable; their generated pins are the
-  // remaining, not-yet-emitted half of this annotation (decisions/
+  //   - the record refuses s2s_read, for the same reason one surface over. The
+  //     record query plane's S2S half is peer-facing: the caller is a SERVICE
+  //     identity, so there is no principal for the owner pin to bind to and the
+  //     only gate the generated wrapper can apply is the (spec.store_namespace)
+  //     tenant backstop. The plane therefore emits NO peer-facing read RPC for
+  //     a private type (record_map.go), and the grant is refused here rather
+  //     than accepted and authorizing nothing. c2s_read falls with it — the c2s
+  //     reader's data path IS the s2s reader — and so does the matching
+  //     (spec.record_read) on any would-be reader.
+  // s2s stays declarable: that is the WRITE topic, not a read. The read surface
+  // a private record keeps is the plane's C2S half, which carries a user token
+  // — the one identity the owner pin can bind to. That pin is the remaining,
+  // not-yet-emitted half of this annotation (decisions/
   // identity-people-tenant-devices-private-2026-09-21.md §4).
   //
   // Example — a record only its own owner may ever read:
   //   option (spec.record) = {
   //     key: "rule_id" owner: "spiffe_id"
-  //     s2s:      {auth_services: ["profile"]}
-  //     s2s_read: {auth_services: ["profile"]}
-  //     c2s_read: {auth_services: ["profile"]}
+  //     s2s: {auth_services: ["profile"]}
   //     private: true
   //   };
   bool private = 12;

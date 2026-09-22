@@ -67,6 +67,14 @@ type recordType struct {
 	// what it contained. It is what gates keyFilterCriterion below, so the key
 	// becomes an EQ criterion exactly when a reader exists to ask for it.
 	declaresRead bool
+	// private is (spec.record).private: this record type's rows belong to exactly
+	// one principal. It is what suppresses the type's RPCs on the plane's S2S
+	// half (recordMapS2SService) — a peer-facing read has no caller principal to
+	// compare a row's owner against, so there is nothing for the owner pin to be,
+	// and emitting the read would hand every peer the record's audience names
+	// every principal's rows in the tenant. The C2S half keeps every RPC: that
+	// surface carries a user token, which is exactly the identity the pin needs.
+	private bool
 }
 
 // recordFilter is a (spec.query_field) criterion on a record field — a typed
@@ -271,6 +279,7 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 				principal:    principal,
 				readAuth:     readAuth,
 				declaresRead: declaresRead,
+				private:      msg.Annotations["record_private"].BoolValue,
 			})
 		}
 	}
@@ -733,6 +742,24 @@ func recordMapS2SService(plane traitPlane, records []recordType) string {
 	sb.WriteString("\n// tacplus:generated-service " + parser.SynthesizedKindRecordMap + "\nservice " + plane.s2sService + " {\n")
 	sb.WriteString(fmt.Sprintf("  option (spec.service_s2s) = {label: %q};\n", plane.host))
 	for _, r := range records {
+		// A (spec.record).private type gets NO peer-facing read, in any language.
+		// Its whole guarantee is that a row is readable only by the principal who
+		// owns it, and this surface has no principal: a peer calls it with its own
+		// service identity, so the owner pin has nothing to compare a row against
+		// and the only gate the wrapper generators can apply here is the
+		// (spec.store_namespace) tenant backstop. That leaves every service the
+		// record's audience names able to read every principal's rows in the
+		// tenant — the exact disclosure `private` exists to prevent. Skipping the
+		// type here is what makes Go, Java and Rust agree without a per-language
+		// check: the RPCs the wrapper would have to refuse are never emitted.
+		//
+		// Paired control: ValidateRecordPrivateAnnotations refuses a private
+		// record that declares (spec.record).s2s_read, so an author asking for a
+		// peer read on such a type fails at the annotation rather than finding the
+		// grant silently emitted nothing here.
+		if r.private {
+			continue
+		}
 		hasFilter := len(r.filters) > 0
 		// The record's OWN read audience when it declares one, the trait's
 		// otherwise. This one line is the whole of the per-service-per-record-type

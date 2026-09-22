@@ -50,6 +50,24 @@ type javaGrpcServiceEntry struct {
 	// ServiceManager wiring loop must guard setEmitter(...) calls on this,
 	// since not every wrapper has that method.
 	HasAccounting bool
+	// HasRequiresDevice is true when this service's wrapper carries the
+	// (spec.rpc).requires_device gate, so the device-approval check must be
+	// wired into it.
+	HasRequiresDevice bool
+}
+
+// javaApprovalBrokerEntry names the approval-broker RPC the generated
+// (spec.rpc).requires_device check calls, and the generated S2S client seam it
+// goes out over. Everything here is derived from the authoritative
+// (spec.token_minter) declaration — no service, method or package is hardcoded.
+type javaApprovalBrokerEntry struct {
+	Package        string // "kernel"
+	ServiceName    string // "Mint"
+	MethodName     string // "BrokerPendingApproval"
+	CallName       string // the client method: "brokerPendingApproval"
+	GroupAccessor  string // client group accessor on GrpcClients, e.g. "services"
+	ClientAccessor string // typed client accessor, e.g. "mint"
+	JavaTypeFQN    string // outer class FQN, e.g. "com.example.types.services.kernel.Kernel"
 }
 
 // javaConfigFetchEntry groups every config-handler block that reads the same
@@ -173,6 +191,11 @@ type javaSmTemplateData struct {
 	TargetServices         []javaTargetServiceEntry // unique target services for S2S clients
 	DiskStores             []javaDiskStoreRuntimeEntry
 	HasDiskStores          bool
+	// HasApprovalBroker is true when some hosted service carries the
+	// (spec.rpc).requires_device gate, so the ServiceManager builds the check
+	// and wires it into those wrappers.
+	HasApprovalBroker bool
+	ApprovalBroker    javaApprovalBrokerEntry
 }
 
 func javaSmTargetServices(config *tactype.Config, clientSvcs []ServiceInfo) []javaTargetServiceEntry {
@@ -252,6 +275,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 			AuthAnyUser:              svc.AuthAnyUser,
 			HasMethodAuth:            svc.HasMethodAuth,
 			HasAccounting:            hasAccountingByService[svc.ServiceName],
+			HasRequiresDevice:        svc.HasRequiresDevice,
 		})
 	}
 	diskStores, err := collectJavaDiskStoreRuntimeEntries(config, grpcSvcs)
@@ -449,6 +473,55 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		accountingPublisherEntry = *accountingPublisher
 	}
 
+	// (spec.rpc).requires_device: resolve the broker seam only when some hosted
+	// wrapper actually carries the gate. Resolving it unconditionally would make
+	// every build that happens to declare a token minter fail on a proto set
+	// whose minter has no broker RPC.
+	hasApprovalBroker := false
+	for _, e := range grpcSvcs {
+		if e.HasRequiresDevice {
+			hasApprovalBroker = true
+			break
+		}
+	}
+	var approvalBroker javaApprovalBrokerEntry
+	if hasApprovalBroker {
+		broker, err := parser.DiscoverApprovalBroker(config.FlatProtoDir)
+		if err != nil {
+			return javaSmTemplateData{}, err
+		}
+		if broker == nil {
+			return javaSmTemplateData{}, fmt.Errorf("service manager data: a hosted rpc declares (spec.rpc).requires_device, but no authoritative (spec.token_minter) service in this proto set hosts an approval broker; the generated device-approval check has nothing to call")
+		}
+		// The minter cannot be the guarded service. The check goes out over the
+		// generated S2S client to the broker, and no package gets a generated
+		// client to ITSELF — so wiring this would emit a call to an accessor
+		// that does not exist. Refused here, with the reason, rather than
+		// generated into a build that fails in javac with "cannot find symbol".
+		if broker.Package == config.SelfPackage {
+			return javaSmTemplateData{}, fmt.Errorf("%s hosts the approval broker (%s.%s/%s) AND declares a (spec.rpc).requires_device rpc; the generated check calls the broker over a generated S2S client, and a package gets no generated client to itself, so this cannot be wired — move the guarded rpc to another service",
+				config.SelfPackage, broker.Package, broker.ServiceName, broker.MethodName)
+		}
+		brokerProtoFile := broker.Dir + ".proto"
+		brokerGroup := filepath.ToSlash(filepath.Dir(broker.Dir))
+		brokerOuterClass := javaOuterClassForProto(protoDir, "", brokerProtoFile, broker.Package)
+		approvalBroker = javaApprovalBrokerEntry{
+			Package:     broker.Package,
+			ServiceName: broker.ServiceName,
+			MethodName:  broker.MethodName,
+			CallName:    strutil.ToLowerCamelCase(broker.MethodName),
+			// Both accessors are spelled the way the generated client
+			// aggregators spell them (grpcclient_gen.go): the group by its
+			// proto dir, the client by its service name minus a "Service"
+			// suffix.
+			GroupAccessor:  strutil.ToLowerCamelCase(strings.ReplaceAll(brokerGroup, "-", "_")),
+			ClientAccessor: javaGrpcClientAccessorName(broker.ServiceName),
+			// Spelled the way this function already spells a service's config
+			// types import a few dozen lines up: types/<group>/<package>/<OuterClass>.
+			JavaTypeFQN: packageBase + ".types." + strings.ReplaceAll(brokerGroup, "/", ".") + "." + broker.Package + "." + brokerOuterClass,
+		}
+	}
+
 	return javaSmTemplateData{
 		PackageBase:            packageBase,
 		ChassisBase:            packageBase + ".chassis",
@@ -493,6 +566,8 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		TargetServices:         targetServices,
 		DiskStores:             diskStores,
 		HasDiskStores:          len(diskStores) > 0,
+		HasApprovalBroker:      hasApprovalBroker,
+		ApprovalBroker:         approvalBroker,
 	}, nil
 }
 

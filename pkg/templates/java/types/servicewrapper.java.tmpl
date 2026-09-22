@@ -117,6 +117,43 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
             pub.publish(event);
         }
     }
+{{- if .HasRequiresDevice}}
+
+    private volatile Approval.Check approvalCheck;
+
+    /**
+     * Wires the (spec.rpc).requires_device check. The ServiceManager supplies
+     * it because the call goes out over a generated S2S client, which this
+     * wrapper does not hold.
+     */
+    public void setApprovalCheckFunc(Approval.Check check) {
+        this.approvalCheck = check;
+    }
+
+    /**
+     * Runs the device-only approval check for one guarded rpc. The caller's OWN
+     * namespace and subject are reported to the broker — the user this service
+     * is serving, out of the token it has already verified — and the broker
+     * requires that to be the person the approval names.
+     *
+     * <p>Fail-closed twice over: an unwired check refuses every guarded rpc
+     * rather than serving it unguarded, and a guarded rpc with no verified
+     * caller has no user to name, so it is refused too.
+     */
+    private void brokerApproval(String rpcMethod, Approval.Presented presented, byte[] requestHash, Caller caller) {
+        Approval.Check check = this.approvalCheck;
+        if (check == null) {
+            throw new ProtoException(ProtoException.INTERNAL, "device-approval check not configured for \""
+                    + rpcMethod + "\" — (spec.rpc).requires_device cannot be served without it");
+        }
+        if (caller == null) {
+            throw new ProtoException(ProtoException.UNAUTHENTICATED,
+                    "a device-approval rpc requires an authenticated caller");
+        }
+        check.check(rpcMethod, presented.getApprovalId(), requestHash,
+                caller.getNamespace(), caller.getSubject(), presented.getDeviceAssertion());
+    }
+{{- end}}
 {{- if .HasAccounting}}
 
     /** Sets the accounting emitter for this service wrapper. */

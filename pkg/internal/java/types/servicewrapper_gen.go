@@ -45,6 +45,10 @@ type ServiceInfo struct {
 	AuthServices   []string // S2S: allowed caller identities
 	HasMethodAuth  bool     // true if any per-method auth metadata must be registered
 	HostLabel      string   // non-empty for vservices: the SelfPackage of the service that hosts this RPC surface
+	// HasRequiresDevice is true when any gRPC-callable method declares
+	// (spec.rpc).requires_device, so this service's wrapper carries the
+	// device-approval gate and the ServiceManager must wire the check into it.
+	HasRequiresDevice bool
 	// SynthesizedKind is WHICH tacplus-generated surface this is
 	// (parser.SynthesizedKind*), empty for hand-authored services. See the go
 	// generator's field for why the kind, not just the fact, is what matters.
@@ -181,6 +185,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 			// register-method-auth function; see the Go generator for the
 			// ServiceManager call this would otherwise dangle.
 			hasMethodAuth := len(service.Methods) > 0 && len(service.AuthServices) > 0
+			hasRequiresDevice := false
 			for _, m := range service.Methods {
 				// An MCP tool has no generated gRPC wrapper, so it contributes
 				// nothing to the wrapper's auth surface — no per-method auth
@@ -199,6 +204,9 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				}
 				if m.TargetNamespaceField != "" && !m.AuthAnyUser {
 					hasMethodAuth = true
+				}
+				if m.RequiresDevice {
+					hasRequiresDevice = true
 				}
 			}
 			servicesInfo = append(servicesInfo, ServiceInfo{
@@ -222,6 +230,8 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				AuthServices:    service.AuthServices,
 				HasMethodAuth:   hasMethodAuth,
 				HostLabel:       service.HostLabel,
+
+				HasRequiresDevice: hasRequiresDevice,
 			})
 		}
 
@@ -771,6 +781,25 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			return false, fmt.Errorf("%s.%s cannot be generated for a c2s surface because %s",
 				targetService.Name, method.Name, why)
 		}
+		// (spec.rpc).requires_device: the device-only approval gate. Its
+		// preconditions are structural, so a build that cannot meet one of them
+		// fails here rather than generating an RPC the author believes is gated
+		// and is not. Same three refusals the Go backend makes, for the same
+		// reasons.
+		if method.RequiresDevice {
+			if method.AuthDisabled || svc.AuthDisabled || svc.IsC2D {
+				return false, fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its auth is disabled; the check must name the user the caller is serving (caller_namespace/caller_subject), and an rpc with no verified token has no user to name",
+					targetService.Name, method.Name)
+			}
+			if method.ClientStreaming || method.ServerStreaming || method.Collection != nil {
+				return false, fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but it is not a plain unary rpc; an approval covers ONE request's hash, which a stream or a collection window does not have",
+					targetService.Name, method.Name)
+			}
+			if f := javaRequiresDeviceMapField(method.FullInputType, san, info.Package); f != "" {
+				return false, fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its request reaches a map field (%s); map iteration order is not canonical across languages, so the approval hash could not be computed identically on both ends — remove the map or drop the annotation",
+					targetService.Name, method.Name, f)
+			}
+		}
 		// The generated session carrier is served by the wrapper itself
 		// (javaMcpTransport), not by the service: nothing about carrying an MCP
 		// session is the service's to write. Its TOOLS are on this interface;
@@ -879,6 +908,19 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	// Import TokenWrapper for proxy chain check (used when any method has a user_token field)
 	typesImport += fmt.Sprintf("\nimport %s.chassis.token.TokenWrapper;", svc.Config.JavaPackageBase)
 	typesImport += fmt.Sprintf("\nimport %s.chassis.collection.CollectionRuntime;", svc.Config.JavaPackageBase)
+	// The approval chassis is imported only by a wrapper that actually carries
+	// the (spec.rpc).requires_device gate: every other wrapper generates
+	// byte-identical to before.
+	hasRequiresDevice := false
+	for _, m := range targetService.Methods {
+		if !m.IsMcp && m.RequiresDevice {
+			hasRequiresDevice = true
+			break
+		}
+	}
+	if hasRequiresDevice {
+		typesImport += fmt.Sprintf("\nimport %s.chassis.approval.Approval;", svc.Config.JavaPackageBase)
+	}
 
 	// Trace types import for TraceRound
 	traceTypesImport := fmt.Sprintf("import %s.types.sys.trace.Trace;", svc.Config.JavaPackageBase)
@@ -905,6 +947,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		RegisterMethodAuth   string
 		RequiresAuth         bool
 		AuthorizerFQN        string
+		HasRequiresDevice    bool
 	}{
 		Header:               header.GeneratedHeader(consts.LangJava, svc.ProtoFile),
 		FullPackage:          fullPackage,
@@ -925,6 +968,9 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		// mandatory Authorizer. c2d / auth_disabled services are exempt by annotation.
 		RequiresAuth:  (svc.IsS2S || svc.IsC2S) && !svc.AuthDisabled,
 		AuthorizerFQN: svc.Config.JavaPackageBase + ".chassis.grpcserver.Authorizer",
+		// HasRequiresDevice emits the approval-check seam: the ApprovalCheck
+		// interface, its setter and the fail-closed brokerApproval helper.
+		HasRequiresDevice: hasRequiresDevice,
 	}
 
 	t, err := template.New("servicewrapper").Parse(tmpl)
@@ -1843,6 +1889,11 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			handlerCall = fmt.Sprintf("handler.%s(caller)", methodName)
 		}
 
+		// (spec.rpc).requires_device sits between caller extraction and the
+		// handler call, so it is spliced in right after the debug line every
+		// unary shape shares.
+		deviceGate := javaRequiresDeviceGate(method, servicePackage, serviceName)
+
 		// When output is Empty, handler returns void — wrapper constructs the Empty response
 		if emptyOutput {
 			if hasAccounting {
@@ -1854,7 +1905,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             // Extract caller identity and request ID
             String requestId = Auth.requestIdFromContext();
             Caller caller = Auth.callerFromContext();
-            logger.debug("rpc method={} request_id={}", "%s", requestId);
+            logger.debug("rpc method={} request_id={}", "%s", requestId);%s
             long startTime = System.currentTimeMillis();
             try {
                 %s;
@@ -1889,7 +1940,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 `, methodName, inputType, outputType,
 					effectiveAuthCheck,
 					inputValidation, traceAppend,
-					fullMethod,
+					fullMethod, deviceGate,
 					handlerCall,
 					traceResponseErrorAppend,
 					accountingMethodExpr,
@@ -1904,7 +1955,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             // Extract caller identity and request ID
             String requestId = Auth.requestIdFromContext();
             Caller caller = Auth.callerFromContext();
-            logger.debug("rpc method={} request_id={}", "%s", requestId);
+            logger.debug("rpc method={} request_id={}", "%s", requestId);%s
             try {
                 %s;
             } catch (Exception handlerEx) {
@@ -1923,7 +1974,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 `, methodName, inputType, outputType,
 				effectiveAuthCheck,
 				inputValidation, traceAppend,
-				fullMethod,
+				fullMethod, deviceGate,
 				handlerCall,
 				traceResponseErrorAppend,
 				traceResponseAppend)
@@ -1938,7 +1989,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             // Extract caller identity and request ID
             String requestId = Auth.requestIdFromContext();
             Caller caller = Auth.callerFromContext();
-            logger.debug("rpc method={} request_id={}", "%s", requestId);
+            logger.debug("rpc method={} request_id={}", "%s", requestId);%s
             long startTime = System.currentTimeMillis();
 	            %s response;
 	            try {
@@ -1975,7 +2026,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 `, methodName, inputType, outputType,
 				effectiveAuthCheck,
 				inputValidation, traceAppend,
-				fullMethod,
+				fullMethod, deviceGate,
 				outputType, handlerCall,
 				outputValidation,
 				traceResponseErrorAppend,
@@ -1992,7 +2043,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             // Extract caller identity and request ID
             String requestId = Auth.requestIdFromContext();
             Caller caller = Auth.callerFromContext();
-            logger.debug("rpc method={} request_id={}", "%s", requestId);
+            logger.debug("rpc method={} request_id={}", "%s", requestId);%s
             %s response;
             try {
                 response = %s;
@@ -2013,7 +2064,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 `, methodName, inputType, outputType,
 			effectiveAuthCheck,
 			inputValidation, traceAppend,
-			fullMethod,
+			fullMethod, deviceGate,
 			outputType, handlerCall,
 			outputValidation,
 			traceResponseErrorAppend,

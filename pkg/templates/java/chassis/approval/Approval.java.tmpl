@@ -1,0 +1,373 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// CODE GENERATED - DO NOT EDIT
+// Generated runtime support for (spec.rpc).requires_device — the device-only
+// approval check. See looper/decisions/requires-device-hash-transport-2026-09-21.md.
+//
+// Two things live here, and BOTH ends of a requires_device call use these same
+// functions: the generated server check and the generated caller-side helper.
+//
+//  1. requestHash — the canonical hash of a request message. It is NOT
+//     Message.toByteArray(): protobuf wire serialization is not canonical
+//     across languages or even across runs of one language (field ordering,
+//     unknown fields, map iteration order), so relying on a "deterministic
+//     marshal" is a break that passes every same-language test. The algorithm
+//     here is ours, and is the SAME algorithm the Go chassis emits in
+//     chassis/approval/approval.go: populated fields only, in ASCENDING
+//     FIELD-NUMBER order, each encoded under protobuf's own wire types,
+//     recursing into nested messages under the same rule. Repeated fields keep
+//     the request's given order (repeated order is meaningful data). Maps are
+//     refused — map iteration order is exactly the cross-language
+//     nondeterminism this exists to avoid, and the generator refuses to build a
+//     requires_device RPC whose request contains one, so reaching that error
+//     here is a generator bug.
+//
+//     The bytes are compared raw by kernel and never re-derived there, so a
+//     one-byte disagreement between two languages is a silent, total failure of
+//     the feature. Any edit here must be made identically in every other
+//     language's chassis.
+//
+//  2. The two metadata keys. approval_id and device_assertion travel as CALL
+//     METADATA, never as request fields: kernel requires that whatever carries
+//     them is outside the hashed bytes, and metadata is outside the request
+//     message by construction.
+package {{.ChassisBase}}.approval;
+
+import com.google.protobuf.ByteString;
+import com.google.protobuf.CodedOutputStream;
+import com.google.protobuf.Descriptors.FieldDescriptor;
+import com.google.protobuf.Message;
+import io.grpc.Context;
+import io.grpc.Metadata;
+import io.grpc.stub.AbstractStub;
+import io.grpc.stub.MetadataUtils;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Supplier;
+
+import {{.TypesBase}}.sys.errors.ProtoException;
+
+/** Runtime support for (spec.rpc).requires_device. */
+public final class Approval {
+
+    private Approval() {}
+
+    /** Metadata key carrying the pending approval's opaque id. */
+    public static final String METADATA_APPROVAL_ID = "x-tacplus-approval-id";
+
+    /**
+     * Metadata key carrying the serialized WebauthnAssertion. The -bin suffix is
+     * the gRPC convention for a non-UTF8 metadata value; the gRPC runtime
+     * base64s it on the wire and hands it back as raw bytes.
+     */
+    public static final String METADATA_DEVICE_ASSERTION = "x-tacplus-device-assertion-bin";
+
+    private static final Metadata.Key<String> APPROVAL_ID_KEY =
+            Metadata.Key.of(METADATA_APPROVAL_ID, Metadata.ASCII_STRING_MARSHALLER);
+
+    private static final Metadata.Key<byte[]> DEVICE_ASSERTION_KEY =
+            Metadata.Key.of(METADATA_DEVICE_ASSERTION, Metadata.BINARY_BYTE_MARSHALLER);
+
+    /**
+     * Context key carrying the approval id. gRPC-Java, unlike gRPC-Go, does not
+     * put incoming metadata on the Context by itself, so
+     * {@code Authorizer.headerCaptureInterceptor()} copies these two headers in
+     * exactly as it copies {@code authorization}.
+     */
+    public static final Context.Key<String> APPROVAL_ID_CTX_KEY =
+            Context.key(METADATA_APPROVAL_ID);
+
+    /** Context key carrying the serialized WebauthnAssertion. */
+    public static final Context.Key<byte[]> DEVICE_ASSERTION_CTX_KEY =
+            Context.key(METADATA_DEVICE_ASSERTION);
+
+    /**
+     * Context keys for the OUTGOING half, deliberately distinct from the
+     * incoming pair above. A service serving a guarded rpc makes S2S calls of
+     * its own on that same Context; sharing one key would re-attach the
+     * approval it was handed to every one of them, spending a person's tap on
+     * calls they never approved.
+     */
+    private static final Context.Key<String> OUT_APPROVAL_ID_CTX_KEY =
+            Context.key(METADATA_APPROVAL_ID + "-outgoing");
+
+    private static final Context.Key<byte[]> OUT_DEVICE_ASSERTION_CTX_KEY =
+            Context.key(METADATA_DEVICE_ASSERTION + "-outgoing");
+
+    /**
+     * Check runs the (spec.rpc).requires_device check against the approval
+     * broker on the authoritative token minter. The ServiceManager supplies the
+     * implementation because the call goes out over a generated S2S client,
+     * which a wrapper does not hold; it lives here rather than nested in each
+     * wrapper so one ServiceManager can hand the same instance to every gated
+     * wrapper it hosts.
+     */
+    @FunctionalInterface
+    public interface Check {
+        void check(String rpcMethod, String approvalId, byte[] requestHash,
+                String callerNamespace, String callerSubject, byte[] deviceAssertion);
+    }
+
+    /** The approval id and device assertion presented on one incoming call. */
+    public static final class Presented {
+        private final String approvalId;
+        private final byte[] deviceAssertion;
+
+        Presented(String approvalId, byte[] deviceAssertion) {
+            this.approvalId = approvalId;
+            this.deviceAssertion = deviceAssertion;
+        }
+
+        public String getApprovalId() {
+            return approvalId;
+        }
+
+        public byte[] getDeviceAssertion() {
+            return deviceAssertion;
+        }
+    }
+
+    /**
+     * Copies the two approval headers off the incoming call metadata into the
+     * Context. Called by the header-capture interceptor, which is installed on
+     * every generated gRPC server.
+     */
+    public static Context capture(Context ctx, Metadata headers) {
+        return ctx
+                .withValue(APPROVAL_ID_CTX_KEY, headers.get(APPROVAL_ID_KEY))
+                .withValue(DEVICE_ASSERTION_CTX_KEY, headers.get(DEVICE_ASSERTION_KEY));
+    }
+
+    /**
+     * Reads the approval id and the serialized WebauthnAssertion off the
+     * incoming call. Both are mandatory: a requires_device RPC arriving without
+     * them is refused, never served.
+     */
+    public static Presented fromIncomingContext() {
+        String approvalId = APPROVAL_ID_CTX_KEY.get();
+        if (approvalId == null || approvalId.isEmpty()) {
+            throw new ProtoException(ProtoException.UNAUTHENTICATED,
+                    "this rpc requires a device approval, but " + METADATA_APPROVAL_ID + " is absent");
+        }
+        byte[] deviceAssertion = DEVICE_ASSERTION_CTX_KEY.get();
+        if (deviceAssertion == null || deviceAssertion.length == 0) {
+            throw new ProtoException(ProtoException.UNAUTHENTICATED,
+                    "this rpc requires a device approval, but " + METADATA_DEVICE_ASSERTION + " is absent");
+        }
+        return new Presented(approvalId, deviceAssertion);
+    }
+
+    /**
+     * Runs {@code call} with the approval id and the serialized
+     * WebauthnAssertion on the Context, so the outgoing stub attaches them as
+     * call metadata. Callers never construct this metadata by hand, the same
+     * rule that holds for Bearer tokens.
+     */
+    public static <T> T callWithApproval(String approvalId, byte[] deviceAssertion, Supplier<T> call) {
+        Context ctx = Context.current()
+                .withValue(OUT_APPROVAL_ID_CTX_KEY, approvalId)
+                .withValue(OUT_DEVICE_ASSERTION_CTX_KEY, deviceAssertion);
+        Context prev = ctx.attach();
+        try {
+            return call.get();
+        } finally {
+            ctx.detach(prev);
+        }
+    }
+
+    /** The void-returning twin of {@link #callWithApproval}, for an Empty-response rpc. */
+    public static void runWithApproval(String approvalId, byte[] deviceAssertion, Runnable call) {
+        callWithApproval(approvalId, deviceAssertion, () -> {
+            call.run();
+            return null;
+        });
+    }
+
+    /**
+     * Attaches the two approval headers to an outgoing stub when the Context
+     * carries them, and returns the stub untouched when it does not — an
+     * ordinary call through a client that happens to host a guarded rpc adds no
+     * metadata at all.
+     */
+    public static <S extends AbstractStub<S>> S attachOutgoing(S stub) {
+        String approvalId = OUT_APPROVAL_ID_CTX_KEY.get();
+        byte[] deviceAssertion = OUT_DEVICE_ASSERTION_CTX_KEY.get();
+        if (approvalId == null || deviceAssertion == null) {
+            return stub;
+        }
+        Metadata headers = new Metadata();
+        headers.put(APPROVAL_ID_KEY, approvalId);
+        headers.put(DEVICE_ASSERTION_KEY, deviceAssertion);
+        return stub.withInterceptors(MetadataUtils.newAttachHeadersInterceptor(headers));
+    }
+
+    /**
+     * Returns SHA-256 over the canonical bytes of {@code m}: 32 bytes, which is
+     * kernel's only stated constraint on request_hash. Both ends of a
+     * requires_device call compute it through this one function.
+     */
+    public static byte[] requestHash(Message m) {
+        byte[] canonical = canonicalBytes(m);
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(canonical);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("approval: SHA-256 is unavailable", e);
+        }
+    }
+
+    /**
+     * Renders {@code m} under the canonicalization described at the top of this
+     * file. Public so a test can assert on the bytes themselves rather than only
+     * on the digest.
+     */
+    public static byte[] canonicalBytes(Message m) {
+        if (m == null) {
+            throw new IllegalArgumentException("approval: cannot hash a nil request");
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        CodedOutputStream cos = CodedOutputStream.newInstance(out);
+        try {
+            appendMessage(cos, m);
+            cos.flush();
+        } catch (IOException e) {
+            throw new IllegalStateException("approval: canonical encoding failed", e);
+        }
+        return out.toByteArray();
+    }
+
+    /**
+     * Appends {@code msg}'s canonical bytes. getAllFields() visits only
+     * POPULATED fields; the fields are sorted by field number before anything is
+     * written — the ordering is ours, not the runtime's.
+     */
+    private static void appendMessage(CodedOutputStream cos, Message msg) throws IOException {
+        List<Map.Entry<FieldDescriptor, Object>> fields = new ArrayList<>(msg.getAllFields().entrySet());
+        fields.sort(Comparator.comparingInt(e -> e.getKey().getNumber()));
+        for (Map.Entry<FieldDescriptor, Object> f : fields) {
+            appendField(cos, f.getKey(), f.getValue());
+        }
+    }
+
+    /**
+     * Appends one populated field. A repeated field emits one tag+value per
+     * element in the request's given order — never the packed encoding, which
+     * would make the bytes depend on a runtime's packing choice.
+     */
+    private static void appendField(CodedOutputStream cos, FieldDescriptor fd, Object value) throws IOException {
+        if (fd.isMapField()) {
+            throw new IllegalArgumentException("approval: field \"" + fd.getFullName()
+                    + "\" is a map; a requires_device request may not contain one"
+                    + " (generator bug: this build should have been refused)");
+        }
+        if (fd.isRepeated()) {
+            for (Object element : (List<?>) value) {
+                appendSingular(cos, fd, element);
+            }
+            return;
+        }
+        appendSingular(cos, fd, value);
+    }
+
+    /** Appends one value under {@code fd}'s wire type. */
+    private static void appendSingular(CodedOutputStream cos, FieldDescriptor fd, Object value) throws IOException {
+        int num = fd.getNumber();
+        switch (fd.getType()) {
+            case BOOL:
+                writeTag(cos, num, WIRETYPE_VARINT);
+                cos.writeUInt64NoTag(((Boolean) value) ? 1L : 0L);
+                return;
+            case ENUM:
+                writeTag(cos, num, WIRETYPE_VARINT);
+                cos.writeUInt64NoTag(((com.google.protobuf.Descriptors.EnumValueDescriptor) value).getNumber());
+                return;
+            case INT32:
+                writeTag(cos, num, WIRETYPE_VARINT);
+                cos.writeUInt64NoTag((Integer) value);
+                return;
+            case INT64:
+                writeTag(cos, num, WIRETYPE_VARINT);
+                cos.writeUInt64NoTag((Long) value);
+                return;
+            case UINT32:
+                writeTag(cos, num, WIRETYPE_VARINT);
+                cos.writeUInt64NoTag(Integer.toUnsignedLong((Integer) value));
+                return;
+            case UINT64:
+                writeTag(cos, num, WIRETYPE_VARINT);
+                cos.writeUInt64NoTag((Long) value);
+                return;
+            case SINT32:
+                writeTag(cos, num, WIRETYPE_VARINT);
+                cos.writeUInt64NoTag(encodeZigZag((Integer) value));
+                return;
+            case SINT64:
+                writeTag(cos, num, WIRETYPE_VARINT);
+                cos.writeUInt64NoTag(encodeZigZag((Long) value));
+                return;
+            case FIXED32:
+            case SFIXED32:
+                writeTag(cos, num, WIRETYPE_FIXED32);
+                cos.writeFixed32NoTag((Integer) value);
+                return;
+            case FLOAT:
+                writeTag(cos, num, WIRETYPE_FIXED32);
+                cos.writeFixed32NoTag(Float.floatToRawIntBits((Float) value));
+                return;
+            case FIXED64:
+            case SFIXED64:
+                writeTag(cos, num, WIRETYPE_FIXED64);
+                cos.writeFixed64NoTag((Long) value);
+                return;
+            case DOUBLE:
+                writeTag(cos, num, WIRETYPE_FIXED64);
+                cos.writeFixed64NoTag(Double.doubleToRawLongBits((Double) value));
+                return;
+            case STRING:
+                writeTag(cos, num, WIRETYPE_LENGTH_DELIMITED);
+                cos.writeByteArrayNoTag(((String) value).getBytes(StandardCharsets.UTF_8));
+                return;
+            case BYTES:
+                writeTag(cos, num, WIRETYPE_LENGTH_DELIMITED);
+                cos.writeByteArrayNoTag(((ByteString) value).toByteArray());
+                return;
+            case MESSAGE:
+                writeTag(cos, num, WIRETYPE_LENGTH_DELIMITED);
+                cos.writeByteArrayNoTag(canonicalBytes((Message) value));
+                return;
+            case GROUP:
+                throw new IllegalArgumentException("approval: field \"" + fd.getFullName()
+                        + "\" is a proto2 group; a requires_device request may not contain one");
+            default:
+                throw new IllegalArgumentException("approval: field \"" + fd.getFullName()
+                        + "\" has unsupported kind " + fd.getType());
+        }
+    }
+
+    // Protobuf wire types. Spelled out rather than taken from
+    // com.google.protobuf.WireFormat, whose constants and makeTag() are
+    // package-private.
+    private static final int WIRETYPE_VARINT = 0;
+    private static final int WIRETYPE_FIXED64 = 1;
+    private static final int WIRETYPE_LENGTH_DELIMITED = 2;
+    private static final int WIRETYPE_FIXED32 = 5;
+
+    private static void writeTag(CodedOutputStream cos, int number, int wireType) throws IOException {
+        cos.writeUInt32NoTag((number << 3) | wireType);
+    }
+
+    private static long encodeZigZag(int n) {
+        return Integer.toUnsignedLong((n << 1) ^ (n >> 31));
+    }
+
+    private static long encodeZigZag(long n) {
+        return (n << 1) ^ (n >> 63);
+    }
+}

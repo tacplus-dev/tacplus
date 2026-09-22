@@ -2,6 +2,7 @@
 
 package {{.ChassisBase}}.grpcserver;
 
+import {{.ChassisBase}}.approval.Approval;
 import {{.ChassisBase}}.jwk.ImmutableJwk;
 import {{.ChassisBase}}.servicemanager.Auth;
 import {{.ChassisBase}}.token.TokenWrapper;
@@ -189,8 +190,14 @@ public class Authorizer {
                     Metadata headers,
                     ServerCallHandler<ReqT, RespT> next) {
                 String authHeader = headers.get(AUTH_METADATA_KEY);
-                Context ctx = Auth.withVerifiedTokenSlot(Context.current())
-                        .withValue(AUTH_HEADER_CTX_KEY, authHeader);
+                // (spec.rpc).requires_device reads two more headers off the
+                // call. gRPC-Java, unlike gRPC-Go, does not put incoming
+                // metadata on the Context by itself, so they are copied in
+                // here — the one interceptor every generated server installs.
+                Context ctx = Approval.capture(
+                        Auth.withVerifiedTokenSlot(Context.current())
+                                .withValue(AUTH_HEADER_CTX_KEY, authHeader),
+                        headers);
                 return Contexts.interceptCall(ctx, call, headers, next);
             }
         };

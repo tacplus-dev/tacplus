@@ -9,6 +9,9 @@ import {{.TypesBase}}.sys.grpcconfig.Grpcconfig.Config;
 import {{.TypesBase}}.sys.x509.X509;
 import {{.ChassisBase}}.grpcconfig.GrpcConfigLoader;
 import {{.ChassisBase}}.grpcserver.Authorizer;
+{{- if .HasApprovalBroker}}
+import {{.ChassisBase}}.approval.Approval;
+{{- end}}
 import {{.ChassisBase}}.logger.LogbackConfigurator;
 import {{.ChassisBase}}.grpcserver.GrpcServer;
 import {{.ChassisBase}}.grpcserver.ServiceImplementation;
@@ -853,6 +856,40 @@ public class ServiceManager implements AutoCloseable {
         {{.ServerClassName}} {{.WrapperVarName}} = new {{.ServerClassName}}(handler.{{.GetterName}}(){{if not .AuthDisabled}}, authorizer{{end}});
         {{.WrapperVarName}}.setInstanceId(getInstanceId());
         {{.WrapperVarName}}.setAnonymizeHmacKey(config.getAnonymizeHmacKey().toByteArray());
+{{- end}}
+{{- if .HasApprovalBroker}}
+{{- with .ApprovalBroker}}
+
+        // (spec.rpc).requires_device: the generated gate in each wrapper calls
+        // this, which calls {{.Package}}.{{.ServiceName}}/{{.MethodName}} — the approval broker on
+        // the authoritative token minter. The S2S client it goes out over was
+        // auto-injected because this package declares a requires_device rpc; the
+        // author wrote only the boolean. rpcMethod and requestHash are the LIVE
+        // values the gate computed from the request in front of it, never echoed
+        // back out of the approval record.
+        Approval.Check approvalCheck = (rpcMethod, approvalId, requestHash, callerNamespace, callerSubject, deviceAssertion) -> {
+            {{.JavaTypeFQN}}.WebauthnAssertion assertion;
+            try {
+                assertion = {{.JavaTypeFQN}}.WebauthnAssertion.parseFrom(deviceAssertion);
+            } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+                throw {{$.TypesBase}}.sys.errors.ProtoException.newErrUnauthorized(e, "device assertion is not a WebauthnAssertion");
+            }
+            grpcClients.{{.GroupAccessor}}().{{.ClientAccessor}}().{{.CallName}}(
+                    {{.JavaTypeFQN}}.BrokerPendingApprovalRequest.newBuilder()
+                            .setApprovalId(approvalId)
+                            .setRpcMethod(rpcMethod)
+                            .setRequestHash(com.google.protobuf.ByteString.copyFrom(requestHash))
+                            .setCallerNamespace(callerNamespace)
+                            .setCallerSubject(callerSubject)
+                            .setDeviceAssertion(assertion)
+                            .build());
+        };
+{{- end}}
+{{- range .GrpcServices}}
+{{- if .HasRequiresDevice}}
+        {{.WrapperVarName}}.setApprovalCheckFunc(approvalCheck);
+{{- end}}
+{{- end}}
 {{- end}}
 
 {{- if .HasTracePublisher}}

@@ -172,6 +172,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 	neededImports := map[string]struct{}{}
 	hasUnary := false
 	hasAuth := false
+	hasRequiresDevice := false
 	hasCursor := false
 	hasPage := false
 	crossPkgHelpers := make(map[string]string)
@@ -217,6 +218,9 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		if javaGrpcClientAuthRequired(targetService, method) {
 			hasAuth = true
 		}
+		if method.RequiresDevice {
+			hasRequiresDevice = true
+		}
 		inputValidator := javaW2SValidationRef(method.FullInputType, method.InputType, info.Package, crossPkgHelpers)
 		outputValidator := javaW2SValidationRef(method.FullOutputType, method.OutputType, info.Package, crossPkgHelpers)
 		if strings.HasPrefix(inputValidator, "Helpers.") || strings.HasPrefix(outputValidator, "Helpers.") {
@@ -231,6 +235,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		outputValidator := javaW2SValidationRef(method.FullOutputType, method.OutputType, info.Package, crossPkgHelpers)
 		methods.WriteString(generateJavaGrpcClientMethod(targetService, method, inputType, outputType, inputValidator, outputValidator, crossPkgOuterClasses))
 		methods.WriteString("\n")
+		methods.WriteString(javaRequiresDeviceClientHelpers(targetService, method, inputType, outputType))
 	}
 
 	// Build exact imports for the types referenced by method signatures.
@@ -242,6 +247,9 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		importLines[importLine] = struct{}{}
 	}
 	importLines[fmt.Sprintf("import %s.types.sys.errors.ProtoException;", svc.Config.JavaPackageBase)] = struct{}{}
+	if hasRequiresDevice {
+		importLines[fmt.Sprintf("import %s.chassis.approval.Approval;", svc.Config.JavaPackageBase)] = struct{}{}
+	}
 	if hasPage {
 		importLines[fmt.Sprintf("import %s.chassis.collection.CollectionRuntime;", svc.Config.JavaPackageBase)] = struct{}{}
 	}
@@ -278,6 +286,10 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		HasUnary     bool
 		HasAuth      bool
 		HasCursor    bool
+		// HasRequiresDevice makes the blocking stub approval-aware: a guarded
+		// call made through Approval.callWithApproval carries the two metadata
+		// keys, and every other call through this client carries nothing new.
+		HasRequiresDevice bool
 	}{
 		Header:       header.GeneratedHeader(consts.LangJava, svc.ProtoFile),
 		FullPackage:  fullPackage,
@@ -289,6 +301,8 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		HasUnary:     hasUnary,
 		HasAuth:      hasAuth,
 		HasCursor:    hasCursor,
+
+		HasRequiresDevice: hasRequiresDevice,
 	}
 
 	tmplStr, err := loadTemplate("grpcclient.java.tmpl")
@@ -865,9 +879,7 @@ func generateGrpcClientGroupAggregators(config *tactype.Config, wrappers []gener
 			// Derive method name from service name (strip "Service" suffix, lowercase first letter)
 			// to avoid duplicates when multiple services share the same package name
 			// (e.g., BaseballService → baseball(), BaseballStateService → baseballState())
-			methodName := w.ServiceName
-			methodName = strings.TrimSuffix(methodName, "Service")
-			methodName = strings.ToLower(methodName[:1]) + methodName[1:]
+			methodName := javaGrpcClientAccessorName(w.ServiceName)
 			// When there's a class-name collision, prefix method name with package too.
 			if classNameCount[w.ClassName] > 1 {
 				methodName = w.PackageName + strings.ToUpper(methodName[:1]) + methodName[1:]

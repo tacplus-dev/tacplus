@@ -1,0 +1,244 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// CODE GENERATED - DO NOT EDIT
+// The Java half of the (spec.rpc).requires_device cross-language byte-identity
+// contract. Its Go twin is TestApprovalCrossLanguageVector in
+// pkg/internal/java/types/approval_canonical_test.go, which asserts the SAME two
+// constants over the SAME message shape.
+//
+// This matters more than an ordinary chassis test. Kernel compares request_hash
+// RAW and never re-derives it, so if Go and Java disagree by one byte the
+// feature fails silently and totally: every guarded call from a Java service is
+// refused, and nothing in either process says why. A same-language test cannot
+// catch that; only a shared vector can.
+package {{.ChassisBase}}.approval;
+
+import com.google.protobuf.ByteString;
+import com.google.protobuf.DescriptorProtos.DescriptorProto;
+import com.google.protobuf.DescriptorProtos.FieldDescriptorProto;
+import com.google.protobuf.DescriptorProtos.FileDescriptorProto;
+import com.google.protobuf.Descriptors.Descriptor;
+import com.google.protobuf.Descriptors.FileDescriptor;
+import com.google.protobuf.DynamicMessage;
+
+public final class ApprovalCanonicalTest {
+
+    /** The canonical bytes of the shared vector, as the Go chassis renders them. */
+    private static final String VECTOR_CANONICAL_HEX =
+            "0a05616c69636510e807180122040001feff2a036f6e652a0374776f320e0a06736861726473106418c0c4073d0000c03f410000000000c05e4048ff01";
+
+    /** SHA-256 over those bytes — the request_hash both ends put on the wire. */
+    private static final String VECTOR_SHA256_HEX =
+            "be641d5fcad1ae6e58a9d0adeaba0f2755cc9ebc5bc0ada6ad32a5e5d1b868ba";
+
+    private static FieldDescriptorProto field(String name, int number, FieldDescriptorProto.Type type, boolean repeated) {
+        return FieldDescriptorProto.newBuilder()
+                .setName(name)
+                .setNumber(number)
+                .setType(type)
+                .setLabel(repeated
+                        ? FieldDescriptorProto.Label.LABEL_REPEATED
+                        : FieldDescriptorProto.Label.LABEL_OPTIONAL)
+                .build();
+    }
+
+    /**
+     * The message shape the vector is built from, spelled exactly as the Go test
+     * spells it: every wire type the canonicalization has an arm for that a real
+     * request plausibly carries, plus one level of message recursion and a
+     * repeated field whose order is meaningful.
+     */
+    private static Descriptor vectorDescriptorCache;
+
+    private static Descriptor vectorDescriptor() throws Exception {
+        // Memoized: protobuf-java matches a FieldDescriptor to its message by
+        // IDENTITY, so two FileDescriptors built from the same proto are not
+        // interchangeable.
+        if (vectorDescriptorCache != null) {
+            return vectorDescriptorCache;
+        }
+        DescriptorProto nested = DescriptorProto.newBuilder()
+                .setName("Nested")
+                .addField(field("label", 1, FieldDescriptorProto.Type.TYPE_STRING, false))
+                .addField(field("count", 2, FieldDescriptorProto.Type.TYPE_INT32, false))
+                .addField(field("weight", 3, FieldDescriptorProto.Type.TYPE_INT64, false))
+                .build();
+        DescriptorProto vector = DescriptorProto.newBuilder()
+                .setName("Vector")
+                .addField(field("subject", 1, FieldDescriptorProto.Type.TYPE_STRING, false))
+                .addField(field("amount", 2, FieldDescriptorProto.Type.TYPE_INT32, false))
+                .addField(field("dry_run", 3, FieldDescriptorProto.Type.TYPE_BOOL, false))
+                .addField(field("blob", 4, FieldDescriptorProto.Type.TYPE_BYTES, false))
+                .addField(field("tags", 5, FieldDescriptorProto.Type.TYPE_STRING, true))
+                .addField(FieldDescriptorProto.newBuilder()
+                        .setName("nested")
+                        .setNumber(6)
+                        .setType(FieldDescriptorProto.Type.TYPE_MESSAGE)
+                        .setLabel(FieldDescriptorProto.Label.LABEL_OPTIONAL)
+                        .setTypeName(".approvalvector.Nested")
+                        .build())
+                .addField(field("ratio", 7, FieldDescriptorProto.Type.TYPE_FLOAT, false))
+                .addField(field("score", 8, FieldDescriptorProto.Type.TYPE_DOUBLE, false))
+                .addField(field("delta", 9, FieldDescriptorProto.Type.TYPE_SINT32, false))
+                .build();
+        FileDescriptorProto file = FileDescriptorProto.newBuilder()
+                .setName("approvalvector.proto")
+                .setPackage("approvalvector")
+                .setSyntax("proto3")
+                .addMessageType(nested)
+                .addMessageType(vector)
+                .build();
+        FileDescriptor fd = FileDescriptor.buildFrom(file, new FileDescriptor[] {});
+        vectorDescriptorCache = fd.findMessageTypeByName("Vector");
+        return vectorDescriptorCache;
+    }
+
+    private static DynamicMessage vectorMessage() throws Exception {
+        Descriptor md = vectorDescriptor();
+        Descriptor nestedMd = md.findFieldByName("nested").getMessageType();
+        DynamicMessage nested = DynamicMessage.newBuilder(nestedMd)
+                .setField(nestedMd.findFieldByName("label"), "shards")
+                .setField(nestedMd.findFieldByName("count"), 100)
+                .setField(nestedMd.findFieldByName("weight"), 123456L)
+                .build();
+        return DynamicMessage.newBuilder(md)
+                .setField(md.findFieldByName("subject"), "alice")
+                .setField(md.findFieldByName("amount"), 1000)
+                .setField(md.findFieldByName("dry_run"), true)
+                .setField(md.findFieldByName("blob"), ByteString.copyFrom(new byte[] {0x00, 0x01, (byte) 0xfe, (byte) 0xff}))
+                .addRepeatedField(md.findFieldByName("tags"), "one")
+                .addRepeatedField(md.findFieldByName("tags"), "two")
+                .setField(md.findFieldByName("nested"), nested)
+                .setField(md.findFieldByName("ratio"), 1.5f)
+                .setField(md.findFieldByName("score"), 123.0d)
+                .setField(md.findFieldByName("delta"), -128)
+                .build();
+    }
+
+    private static String hex(byte[] b) {
+        StringBuilder sb = new StringBuilder(b.length * 2);
+        for (byte x : b) {
+            sb.append(String.format("%02x", x));
+        }
+        return sb.toString();
+    }
+
+    private static void check(String what, String got, String want) {
+        if (!got.equals(want)) {
+            throw new AssertionError("approval canonicalization drifted from the cross-language vector (" + what + ")\n"
+                    + " got: " + got + "\nwant: " + want);
+        }
+    }
+
+    /**
+     * A message whose field-number order and declaration order disagree must
+     * still canonicalize the same way. Built here by setting the fields in
+     * reverse, which is the one thing a runtime's own iteration order would
+     * make visible.
+     */
+    private static void checkOrderIndependence() throws Exception {
+        Descriptor md = vectorDescriptor();
+        DynamicMessage.Builder b = DynamicMessage.newBuilder(md);
+        b.setField(md.findFieldByName("delta"), -128);
+        b.setField(md.findFieldByName("score"), 123.0d);
+        b.setField(md.findFieldByName("ratio"), 1.5f);
+        Descriptor nestedMd = md.findFieldByName("nested").getMessageType();
+        b.setField(md.findFieldByName("nested"), DynamicMessage.newBuilder(nestedMd)
+                .setField(nestedMd.findFieldByName("weight"), 123456L)
+                .setField(nestedMd.findFieldByName("count"), 100)
+                .setField(nestedMd.findFieldByName("label"), "shards")
+                .build());
+        b.addRepeatedField(md.findFieldByName("tags"), "one");
+        b.addRepeatedField(md.findFieldByName("tags"), "two");
+        b.setField(md.findFieldByName("blob"), ByteString.copyFrom(new byte[] {0x00, 0x01, (byte) 0xfe, (byte) 0xff}));
+        b.setField(md.findFieldByName("dry_run"), true);
+        b.setField(md.findFieldByName("amount"), 1000);
+        b.setField(md.findFieldByName("subject"), "alice");
+        check("reverse-set message", hex(Approval.canonicalBytes(b.build())), VECTOR_CANONICAL_HEX);
+    }
+
+    /**
+     * An unset field contributes nothing, and reversing a repeated field DOES
+     * change the bytes — repeated order is meaningful data, not incidental.
+     */
+    private static void checkSensitivity() throws Exception {
+        Descriptor md = vectorDescriptor();
+        DynamicMessage onlySubject = DynamicMessage.newBuilder(md)
+                .setField(md.findFieldByName("subject"), "alice")
+                .build();
+        check("populated fields only", hex(Approval.canonicalBytes(onlySubject)), "0a05616c696365");
+
+        DynamicMessage reversedTags = vectorMessage().toBuilder()
+                .clearField(md.findFieldByName("tags"))
+                .addRepeatedField(md.findFieldByName("tags"), "two")
+                .addRepeatedField(md.findFieldByName("tags"), "one")
+                .build();
+        if (hex(Approval.canonicalBytes(reversedTags)).equals(VECTOR_CANONICAL_HEX)) {
+            throw new AssertionError("reversing a repeated field left the canonical bytes unchanged;"
+                    + " repeated order is meaningful data and must be inside the hash");
+        }
+    }
+
+    /**
+     * A map field is refused rather than hashed. The generator already refuses to
+     * build a requires_device rpc whose request reaches one, so this is the
+     * second line of the same defence.
+     */
+    private static void checkMapRefusal() throws Exception {
+        DescriptorProto entry = DescriptorProto.newBuilder()
+                .setName("LabelsEntry")
+                .addField(field("key", 1, FieldDescriptorProto.Type.TYPE_STRING, false))
+                .addField(field("value", 2, FieldDescriptorProto.Type.TYPE_STRING, false))
+                .setOptions(com.google.protobuf.DescriptorProtos.MessageOptions.newBuilder().setMapEntry(true))
+                .build();
+        DescriptorProto mapped = DescriptorProto.newBuilder()
+                .setName("Mapped")
+                .addNestedType(entry)
+                .addField(FieldDescriptorProto.newBuilder()
+                        .setName("labels")
+                        .setNumber(1)
+                        .setType(FieldDescriptorProto.Type.TYPE_MESSAGE)
+                        .setLabel(FieldDescriptorProto.Label.LABEL_REPEATED)
+                        .setTypeName(".approvalmap.Mapped.LabelsEntry")
+                        .build())
+                .build();
+        FileDescriptor fd = FileDescriptor.buildFrom(FileDescriptorProto.newBuilder()
+                .setName("approvalmap.proto")
+                .setPackage("approvalmap")
+                .setSyntax("proto3")
+                .addMessageType(mapped)
+                .build(), new FileDescriptor[] {});
+        Descriptor md = fd.findMessageTypeByName("Mapped");
+        com.google.protobuf.Descriptors.FieldDescriptor labels = md.findFieldByName("labels");
+        Descriptor entryMd = labels.getMessageType();
+        DynamicMessage withMap = DynamicMessage.newBuilder(md)
+                .addRepeatedField(labels, DynamicMessage.newBuilder(entryMd)
+                        .setField(entryMd.findFieldByName("key"), "a")
+                        .setField(entryMd.findFieldByName("value"), "b")
+                        .build())
+                .build();
+        try {
+            Approval.canonicalBytes(withMap);
+        } catch (IllegalArgumentException e) {
+            if (e.getMessage() == null || !e.getMessage().contains("is a map")) {
+                throw new AssertionError("map refusal message no longer names the map: " + e.getMessage());
+            }
+            return;
+        }
+        throw new AssertionError("a map-bearing message was hashed; map iteration order is not canonical"
+                + " across languages and must never reach the digest");
+    }
+
+    public static void main(String[] args) throws Exception {
+        DynamicMessage m = vectorMessage();
+        check("canonical bytes", hex(Approval.canonicalBytes(m)), VECTOR_CANONICAL_HEX);
+        check("request hash", hex(Approval.requestHash(m)), VECTOR_SHA256_HEX);
+        if (Approval.requestHash(m).length != 32) {
+            throw new AssertionError("request hash is not 32 bytes");
+        }
+        checkOrderIndependence();
+        checkSensitivity();
+        checkMapRefusal();
+        System.out.println("All approval canonicalization vectors passed.");
+    }
+}

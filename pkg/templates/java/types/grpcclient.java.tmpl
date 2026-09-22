@@ -82,10 +82,19 @@ public class {{.ClientName}} {
 
 {{- if .HasUnary}}
     private {{.ServiceName}}Grpc.{{.ServiceName}}BlockingStub blockingStubWithDeadline() {
+{{- if .HasRequiresDevice}}
+        // This client hosts a (spec.rpc).requires_device rpc, so every call it
+        // makes passes through Approval.attachOutgoing. It adds the approval
+        // metadata only inside Approval.callWithApproval — an ordinary call
+        // carries nothing new.
+        var stub = timeoutMs <= 0 ? blockingStub : blockingStub.withDeadlineAfter(timeoutMs, TimeUnit.MILLISECONDS);
+        return Approval.attachOutgoing(stub);
+{{- else}}
         if (timeoutMs <= 0) {
             return blockingStub;
         }
         return blockingStub.withDeadlineAfter(timeoutMs, TimeUnit.MILLISECONDS);
+{{- end}}
     }
 {{- end}}
 

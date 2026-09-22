@@ -780,6 +780,17 @@ func Generate(config *tactype.Config) error {
 	// explicit (spec.grpc_s2s_client) used to lose the explicit one silently.
 	config.GrpcS2SClients = service.MergeGrpcEntries(config.GrpcS2SClients, virtualClients)
 
+	// (spec.rpc).requires_device auto-injects the client to the approval broker on
+	// the authoritative token minter, unioned in after inference for exactly the
+	// same reason as the derived virtual clients above: the developer writes only
+	// the boolean, and a package that also declares an explicit
+	// (spec.grpc_s2s_client) must not lose it.
+	approvalBrokerClients, err := proto.DeriveApprovalBrokerClient(config.FlatProtoDir, config.SelfPackage)
+	if err != nil {
+		return fmt.Errorf("failed to derive approval-broker client: %w", err)
+	}
+	config.GrpcS2SClients = service.MergeGrpcEntries(config.GrpcS2SClients, approvalBrokerClients)
+
 	// Register generated/ protos as per-package Java modules so protoc compiles them.
 	// Each proto file has its own package (e.g., services, entitlements, accounting_method)
 	// and gets its own module entry keyed by "generated.{package}".

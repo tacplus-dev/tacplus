@@ -250,6 +250,17 @@ func Generate(config *tactype.Config) error {
 	// explicit (spec.grpc_s2s_client) used to lose the explicit one silently.
 	config.GrpcS2SClients = service.MergeGrpcEntries(config.GrpcS2SClients, virtualClients)
 
+	// (spec.rpc).requires_device auto-injects the client to the approval broker on
+	// the authoritative token minter, unioned in after inference for exactly the
+	// same reason as the derived virtual clients above: the developer writes only
+	// the boolean, and a package that also declares an explicit
+	// (spec.grpc_s2s_client) must not lose it.
+	approvalBrokerClients, err := proto.DeriveApprovalBrokerClient(flatProtoDir, config.SelfPackage)
+	if err != nil {
+		return fmt.Errorf("failed to derive approval-broker client: %w", err)
+	}
+	config.GrpcS2SClients = service.MergeGrpcEntries(config.GrpcS2SClients, approvalBrokerClients)
+
 	// Add generated/*.proto files to the compilation list and inject go_package.
 	// They are created after the sys scan above, so we add them explicitly.
 	type genProtoInfo struct {
@@ -1146,10 +1157,14 @@ type ServiceInfo struct {
 	AuthAnyUser   bool     // true when service uses auth_any_user (verified token plus fixed namespace gate)
 	AuthServices  []string // S2S: allowed caller identities (service-level default)
 	HasMethodAuth bool     // true if any per-method auth metadata must be registered
-	IsS2S         bool     // true when this is a service-to-service service
-	IsC2D         bool     // true when this is a client-to-daemon service
-	IsSMB         bool     // true when this service has spec.smb
-	SmbRoot       spec.SmbRoot
+	// HasRequiresDevice is true when any gRPC-callable method declares
+	// (spec.rpc).requires_device, so this service's wrapper carries the
+	// device-approval gate and the ServiceManager must wire the check into it.
+	HasRequiresDevice bool
+	IsS2S             bool // true when this is a service-to-service service
+	IsC2D             bool // true when this is a client-to-daemon service
+	IsSMB             bool // true when this service has spec.smb
+	SmbRoot           spec.SmbRoot
 	// SynthesizedKind is WHICH tacplus-generated surface this is
 	// (parser.SynthesizedKind*), empty for hand-authored services. Carried so the
 	// token-minter gate can tell a generated STATE service (the process must reach
@@ -1434,6 +1449,22 @@ func deriveGoServiceAuthFlags(service parser.ServiceDescriptor) (anyUser bool, h
 	return anyUser, hasMethodAuth
 }
 
+// goServiceHasRequiresDevice reports whether any of a service's gRPC-callable
+// methods declares (spec.rpc).requires_device. An MCP tool is skipped for the
+// same reason it is skipped in deriveGoServiceAuthFlags: it has no generated
+// gRPC wrapper, so it contributes nothing to the wrapper's gate surface.
+func goServiceHasRequiresDevice(service parser.ServiceDescriptor) bool {
+	for _, m := range service.Methods {
+		if m.IsMcp {
+			continue
+		}
+		if m.RequiresDevice {
+			return true
+		}
+	}
+	return false
+}
+
 // generateGrpcCode runs protoc-gen-go-grpc to generate gRPC service stubs.
 // gRPC stubs are placed in the services/ subdirectory alongside wrappers.
 // Uses comprehensive M= flags so protoc-gen-go-grpc generates correct imports natively.
@@ -1687,24 +1718,25 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 		for _, service := range fileDesc.Services {
 			anyUser, hasMethodAuth := deriveGoServiceAuthFlags(service)
 			servicesInfo = append(servicesInfo, ServiceInfo{
-				ProtoFile:       protoFileForInfo,
-				PackageName:     packageName,
-				DirName:         dirNameForInfo,
-				ServiceName:     service.Name,
-				GrpcName:        service.GrpcName,
-				HostLabel:       service.HostLabel,
-				OutputDir:       outputDir,
-				ParentDir:       parentDirForInfo,
-				Config:          config,
-				AuthDisabled:    service.AuthDisabled,
-				AuthAnyUser:     anyUser,
-				AuthServices:    service.AuthServices,
-				HasMethodAuth:   hasMethodAuth,
-				IsS2S:           service.IsS2S,
-				IsC2D:           service.IsC2D,
-				IsSMB:           service.IsSMB,
-				SmbRoot:         service.SmbRoot,
-				SynthesizedKind: service.SynthesizedKind,
+				ProtoFile:         protoFileForInfo,
+				PackageName:       packageName,
+				DirName:           dirNameForInfo,
+				ServiceName:       service.Name,
+				GrpcName:          service.GrpcName,
+				HostLabel:         service.HostLabel,
+				OutputDir:         outputDir,
+				ParentDir:         parentDirForInfo,
+				Config:            config,
+				AuthDisabled:      service.AuthDisabled,
+				AuthAnyUser:       anyUser,
+				AuthServices:      service.AuthServices,
+				HasMethodAuth:     hasMethodAuth,
+				HasRequiresDevice: goServiceHasRequiresDevice(service),
+				IsS2S:             service.IsS2S,
+				IsC2D:             service.IsC2D,
+				IsSMB:             service.IsSMB,
+				SmbRoot:           service.SmbRoot,
+				SynthesizedKind:   service.SynthesizedKind,
 			})
 		}
 	}

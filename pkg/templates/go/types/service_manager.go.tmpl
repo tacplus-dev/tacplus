@@ -35,8 +35,13 @@ healthstate_pb "{{.ModuleBasePath}}/types/{{.HealthStateProtoDir}}"
 host_pb "{{.ModuleBasePath}}/types/sys/host"
 {{end}}
 "go.uber.org/zap"
-{{- if .HasTypedHealth}}
+{{- if or .HasTypedHealth .HasApprovalBroker}}
 "google.golang.org/protobuf/proto"
+{{- end}}
+{{- if .HasApprovalBroker}}
+"google.golang.org/grpc/codes"
+"google.golang.org/grpc/status"
+{{.ApprovalBroker.TypePkgAlias}} "{{.ApprovalBroker.TypePkgImport}}"
 {{- end}}
 
 "google.golang.org/grpc"
@@ -1065,6 +1070,29 @@ tracePublish := func(ctx context.Context, event *trace_pb.TraceEvent) {}
 {{end}}
 
 {{if .HasGrpc}}
+{{- if .HasApprovalBroker}}
+// (spec.rpc).requires_device: the generated gate in each wrapper calls this,
+// which calls {{.ApprovalBroker.Package}}.{{.ApprovalBroker.ServiceName}}/{{.ApprovalBroker.MethodName}} — the approval broker on the
+// authoritative token minter. The S2S client it goes out over was auto-injected
+// because this package declares a requires_device rpc; the author wrote only the
+// boolean. rpc_method and request_hash are the LIVE values the gate computed
+// from the request in front of it, never echoed back out of the approval record.
+approvalCheck := func(ctx context.Context, rpcMethod, approvalID string, requestHash []byte, callerNamespace, callerSubject string, deviceAssertion []byte) error {
+assertion := &{{.ApprovalBroker.TypePkgAlias}}.WebauthnAssertion{}
+if err := proto.Unmarshal(deviceAssertion, assertion); err != nil {
+return status.Errorf(codes.Unauthenticated, "device assertion is not a WebauthnAssertion: %v", err)
+}
+_, err := sm.grpcPkg.Clients().{{.ApprovalBroker.GroupAccessor}}().{{.ApprovalBroker.ClientAccessor}}().{{.ApprovalBroker.MethodName}}(ctx, &{{.ApprovalBroker.TypePkgAlias}}.BrokerPendingApprovalRequest{
+ApprovalId:      approvalID,
+RpcMethod:       rpcMethod,
+RequestHash:     requestHash,
+CallerNamespace: callerNamespace,
+CallerSubject:   callerSubject,
+DeviceAssertion: assertion,
+})
+return err
+}
+{{- end}}
 // Create gRPC server wrappers and register all services.
 // Auth wiring below covers all non-auth_disabled services (C2S and S2S) — Go
 // has no C2S-only gating bug (cf. the Rust generator fix in #32).
@@ -1080,6 +1108,9 @@ return fmt.Errorf("authorizer not wired for {{.ServerType}} (build/SM bug) - man
 {{- end}}
 {{.WrapperVarName}}.SetInstanceId(sm.sc.InstanceID())
 {{.WrapperVarName}}.SetAnonymizeHmacKey(sm.cfg.GetAnonymizeHmacKey())
+{{- if .HasRequiresDevice}}
+{{.WrapperVarName}}.SetApprovalCheckFunc(approvalCheck)
+{{- end}}
 {{- if .HasMethodAuth}}
 {{.WrapperAlias}}.{{.MethodAuthFuncName}}(sm.auth)
 {{- end}}

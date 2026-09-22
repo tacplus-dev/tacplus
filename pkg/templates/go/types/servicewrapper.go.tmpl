@@ -35,6 +35,9 @@ import (
 {{- if .HasWatch}}
 	"{{.CollectionLibImportPath}}"
 {{- end}}
+{{- if .HasRequiresDevice}}
+	"{{.ApprovalLibImportPath}}"
+{{- end}}
 	trace_pb "{{.TraceTypesPath}}"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -65,6 +68,12 @@ type {{.ServerName}} struct {
 	instanceId       string
 	tracePublish     func(ctx context.Context, event *trace_pb.TraceEvent)
 	anonymizeHmacKey []byte
+{{- if .HasRequiresDevice}}
+	// approvalCheckFunc runs the (spec.rpc).requires_device check against the
+	// approval broker on the authoritative token minter. Wired by the
+	// ServiceManager, which owns the generated S2S client.
+	approvalCheckFunc func(ctx context.Context, rpcMethod, approvalID string, requestHash []byte, callerNamespace, callerSubject string, deviceAssertion []byte) error
+{{- end}}
 }
 
 // New{{.ServerName}} creates a wrapper around the given handler implementation.
@@ -192,6 +201,40 @@ func (p *{{.ServerName}}) publishTrace(ctx context.Context, event *trace_pb.Trac
 	if f != nil {
 		f(ctx, event)
 	}
+}
+{{- end}}
+
+{{- if .HasRequiresDevice}}
+
+// SetApprovalCheckFunc wires the (spec.rpc).requires_device check. The
+// ServiceManager supplies it because the call goes out over a generated S2S
+// client, which the wrapper does not hold.
+func (p *{{.ServerName}}) SetApprovalCheckFunc(f func(ctx context.Context, rpcMethod, approvalID string, requestHash []byte, callerNamespace, callerSubject string, deviceAssertion []byte) error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.approvalCheckFunc = f
+}
+
+// brokerApproval runs the device-only approval check for one guarded rpc. The
+// caller's OWN namespace and subject are reported to the broker — the user this
+// service is serving, out of the token it has already verified — and the broker
+// requires that to be the person the approval names.
+//
+// Fail-closed twice over: an unwired check refuses every guarded rpc rather than
+// serving it unguarded, and a guarded rpc with no verified caller has no user to
+// name, so it is refused too.
+func (p *{{.ServerName}}) brokerApproval(ctx context.Context, rpcMethod, approvalID string, requestHash []byte, caller *servicemanager.Caller, deviceAssertion []byte) error {
+	p.mu.RLock()
+	f := p.approvalCheckFunc
+	p.mu.RUnlock()
+	if f == nil {
+		return status.Errorf(codes.Internal, "device-approval check not configured for %q — (spec.rpc).requires_device cannot be served without it", rpcMethod)
+	}
+	if caller == nil {
+		return status.Error(codes.Unauthenticated, "a device-approval rpc requires an authenticated caller")
+	}
+	tok := caller.Token()
+	return f(ctx, rpcMethod, approvalID, requestHash, tok.GetNamespace(), tok.GetSubject(), deviceAssertion)
 }
 {{- end}}
 

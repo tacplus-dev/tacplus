@@ -58,6 +58,7 @@ type MethodInfo struct {
 	AuthAnyUser          bool                  // per-RPC auth_any_user (from spec.rpc RPC_FLAG_AUTH_ANY_USER)
 	AuthServices         []string              // per-RPC S2S auth_services override (from spec.rpc)
 	AuthActors           []string              // per-RPC auth_actors (from spec.rpc): delegate identities allowed to call on another principal's behalf, matched against the token's act claim
+	RequiresDevice       bool                  // per-RPC requires_device (from spec.rpc): the device-only approval check gates this RPC
 	TargetNamespaceField string                // per-RPC target_namespace_field (from spec.rpc); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
 	Collection           *CollectionDescriptor // method-level method_collection (collection-returning read); nil when absent
 	Resolved             *collection.Resolved  // computed codegen view of Collection (mode/tier/bounds); nil when Collection is nil. Set by ResolveCollections.

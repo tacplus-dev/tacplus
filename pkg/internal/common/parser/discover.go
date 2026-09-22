@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // protoDirHasProtos reports whether dir exists and contains at least one .proto
@@ -156,4 +157,53 @@ func ValidateTokenMinters(protoDir string, s2sEnabled bool) error {
 		return fmt.Errorf("an S2S surface is enabled but no authoritative (spec.token_minter) service is declared; the generated ServiceManager cannot obtain an S2S identity")
 	}
 	return nil
+}
+
+// ApprovalBrokerInfo locates the RPC the generated (spec.rpc).requires_device
+// check calls: BrokerPendingApproval on the authoritative (spec.token_minter)
+// service. The minter is where it lives because every service with an S2S
+// identity already holds a generated client to it, so a requires_device RPC
+// needs no new route and no new deployment wiring.
+type ApprovalBrokerInfo struct {
+	Package     string // proto package of the minter, e.g. "kernel"
+	Dir         string // relative dir, e.g. "services/kernel"
+	ServiceName string // proto service name, e.g. "Mint"
+	MethodName  string // the broker RPC, e.g. "BrokerPendingApproval"
+}
+
+// DiscoverApprovalBroker returns the approval-broker RPC on the authoritative
+// token minter, or nil when the proto set declares no such RPC. The method is
+// matched on its SIGNATURE (BrokerPendingApprovalRequest →
+// BrokerPendingApprovalResponse), the same way the minter's own token/x509 RPCs
+// are found, so nothing here depends on a hardcoded service or method name.
+func DiscoverApprovalBroker(protoDir string) (*ApprovalBrokerInfo, error) {
+	minter, err := DiscoverTokenExchangerPackage(protoDir)
+	if err != nil || minter == nil {
+		return nil, err
+	}
+	dp, err := NewDescriptorParser(protoDir)
+	if err != nil {
+		return nil, fmt.Errorf("approval-broker discovery: parse %q: %w", protoDir, err)
+	}
+	for path, fd := range dp.GetAllFiles() {
+		if fd == nil || fd.Package != minter.Package {
+			continue
+		}
+		for _, svc := range fd.Services {
+			if svc.Name != minter.ServiceName {
+				continue
+			}
+			for _, m := range svc.Methods {
+				if methodSignatureMatches(m, "BrokerPendingApprovalRequest", "BrokerPendingApprovalResponse") {
+					return &ApprovalBrokerInfo{
+						Package:     fd.Package,
+						Dir:         strings.TrimSuffix(path, ".proto"),
+						ServiceName: svc.Name,
+						MethodName:  m.Name,
+					}, nil
+				}
+			}
+		}
+	}
+	return nil, nil
 }

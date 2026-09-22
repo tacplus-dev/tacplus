@@ -1458,6 +1458,26 @@ message RpcAnnotation {
   // this RPC declares auth_actors and one of its patterns matches, so an RPC
   // that says nothing about delegation admits no delegated call at all.
   repeated string auth_actors = 7;
+
+  // requires_device declares the DEVICE-ONLY APPROVAL check: this RPC is served
+  // only when the caller presents a pending approval the person consumed with a
+  // WebAuthn assertion from a device linked to them. A browser IdP session, a
+  // delegated agent token and a tenant admin all fail it, however completely
+  // they are the user.
+  //
+  // The generated server check reads `x-tacplus-approval-id` and
+  // `x-tacplus-device-assertion-bin` off the call metadata — never request
+  // fields, so neither is inside the hashed bytes — computes the canonical hash
+  // of the request, and calls the authoritative (spec.token_minter) service's
+  // BrokerPendingApproval. Any failure refuses the RPC: the handler is never
+  // reached. The S2S client for that call is auto-injected into the declaring
+  // package; the author writes only this boolean.
+  //
+  // The proposing half (creating the pending approval) is the caller's own
+  // call, not generated. The caller-side generated helper computes the request
+  // hash with the SAME canonicalization the check uses and attaches the two
+  // metadata keys.
+  bool requires_device = 8;
 }
 
 // CollectionMode declares how a multi-result read behaves. See docs/API.md.

@@ -447,9 +447,13 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 	totalMethods := 0
 	hasValidationMethods := false
 	hasAuthMethods := false
+	hasRequiresDevice := false
 	for _, service := range targetServices {
 		totalMethods += len(service.Methods)
 		for _, m := range service.Methods {
+			if m.RequiresDevice {
+				hasRequiresDevice = true
+			}
 			if !(m.ClientStreaming && m.ServerStreaming) && !m.ClientStreaming {
 				// Server streaming and unary methods use fmt.Sprintf in validation code
 				hasValidationMethods = true
@@ -461,37 +465,41 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 	}
 
 	data := struct {
-		GrpcPackageName     string
-		TypesModulePath     string
-		CrossPackageImports string
-		ServiceName         string
-		ClientName          string
-		GRPCMethods         string
-		HasMethods          bool
-		HasValidation       bool
-		HasBidi             bool
-		HasNonBidi          bool
-		HasClientStreaming  bool
-		HasAuth             bool
-		HasCollectionStream bool
-		HasCollectionCursor bool
-		HasPage             bool
+		GrpcPackageName       string
+		TypesModulePath       string
+		CrossPackageImports   string
+		ServiceName           string
+		ClientName            string
+		GRPCMethods           string
+		HasMethods            bool
+		HasValidation         bool
+		HasBidi               bool
+		HasNonBidi            bool
+		HasClientStreaming    bool
+		HasAuth               bool
+		HasCollectionStream   bool
+		HasCollectionCursor   bool
+		HasPage               bool
+		HasRequiresDevice     bool
+		ApprovalLibImportPath string
 	}{
-		GrpcPackageName:     grpcPkgName,
-		TypesModulePath:     typesModulePath,
-		CrossPackageImports: crossPkgImports.String(),
-		ServiceName:         svc.ServiceName,
-		ClientName:          clientName,
-		GRPCMethods:         replaceClient(grpcMethods.String()),
-		HasMethods:          totalMethods > 0,
-		HasValidation:       hasValidationMethods,
-		HasBidi:             hasBidi,
-		HasNonBidi:          hasNonBidi,
-		HasClientStreaming:  hasClientStreaming,
-		HasAuth:             hasAuthMethods,
-		HasCollectionStream: hasCollectionStream,
-		HasCollectionCursor: hasCollectionCursor,
-		HasPage:             hasPage,
+		GrpcPackageName:       grpcPkgName,
+		TypesModulePath:       typesModulePath,
+		CrossPackageImports:   crossPkgImports.String(),
+		ServiceName:           svc.ServiceName,
+		ClientName:            clientName,
+		GRPCMethods:           replaceClient(grpcMethods.String()),
+		HasMethods:            totalMethods > 0,
+		HasValidation:         hasValidationMethods,
+		HasBidi:               hasBidi,
+		HasNonBidi:            hasNonBidi,
+		HasClientStreaming:    hasClientStreaming,
+		HasAuth:               hasAuthMethods,
+		HasCollectionStream:   hasCollectionStream,
+		HasCollectionCursor:   hasCollectionCursor,
+		HasPage:               hasPage,
+		HasRequiresDevice:     hasRequiresDevice,
+		ApprovalLibImportPath: svc.Config.ModuleBasePath + "/chassis/approval",
 	}
 
 	tmpl, err := loadTemplate("grpcclient.go.tmpl")
@@ -764,6 +772,7 @@ func (c *{{.ClientName}}) %s(ctx context.Context, opts ...grpc.CallOption) (grpc
 	validateOutput := goValidateRef(method.FullOutputType, method.OutputType, servicePackage)
 	retryAuth := authSnippet(authRequired, false)
 	retrySafe := method.IsRetrySafeUnary()
+	deviceHelpers := goRequiresDeviceClientHelpers(svc, method, goInput, goOutput, emptyInput, emptyOutput)
 
 	// Build input validation block (skip for Empty input)
 	var inputValidation string
@@ -788,7 +797,7 @@ func (c *{{.ClientName}}) %s(ctx context.Context, opts ...grpc.CallOption) error
 		return c.client.%s(ctx, &emptypb.Empty{}, opts...)
 	})
 	return err
-}`, method.Name, svc.Name, method.Name, method.Name, retrySafe, retryAuth, method.Name), nil
+}`+deviceHelpers, method.Name, svc.Name, method.Name, method.Name, retrySafe, retryAuth, method.Name), nil
 		}
 		inputVal := ""
 		if inputValidation != "" {
@@ -803,7 +812,7 @@ func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOpti
 		return c.client.%s(ctx, req, opts...)
 	})
 	return err
-}`, method.Name, svc.Name, method.Name, method.Name, goInput, inputVal, retrySafe, retryAuth, method.Name), nil
+}`+deviceHelpers, method.Name, svc.Name, method.Name, method.Name, goInput, inputVal, retrySafe, retryAuth, method.Name), nil
 	}
 
 	// Build output validation block (skip for Empty output)
@@ -835,7 +844,7 @@ func (c *{{.ClientName}}) %s(ctx context.Context, opts ...grpc.CallOption) (*%s,
 	}
 %s
 	return resp, nil
-}`, method.Name, svc.Name, method.Name, method.Name, goOutput, retrySafe, goOutput, retryAuth, method.Name, outputValidation), nil
+}`+deviceHelpers, method.Name, svc.Name, method.Name, method.Name, goOutput, retrySafe, goOutput, retryAuth, method.Name, outputValidation), nil
 	}
 
 	return fmt.Sprintf(`// %s calls %s.%s with optional validation and error mapping.
@@ -851,7 +860,67 @@ func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOpti
 	}
 %s
 	return resp, nil
-}`, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, inputValStr, retrySafe, goOutput, retryAuth, method.Name, outputValidation), nil
+}`+deviceHelpers, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, inputValStr, retrySafe, goOutput, retryAuth, method.Name, outputValidation), nil
+}
+
+// goRequiresDeviceClientHelpers renders the caller-side half of
+// (spec.rpc).requires_device for one unary rpc, or "" when the rpc declares
+// none. Two seams, because the caller owns two distinct steps and tacplus owns
+// neither of them wholly:
+//
+//   - <Method>ApprovalHash gives the caller the request hash it must propose the
+//     pending approval with. It is the SAME shared canonicalization the
+//     server-side check recomputes from the live request, so the two ends cannot
+//     drift; every product hand-rolling this is exactly what it prevents.
+//   - <Method>WithApproval attaches the approval id and the device assertion as
+//     CALL METADATA and makes the ordinary call. Metadata is outside the request
+//     message, which is what keeps both values outside the hashed bytes.
+//
+// Proposing the approval itself (kernel PersonalIdentity.CreatePendingApproval)
+// and obtaining the device assertion are the caller's own business — not
+// generated here, and deliberately so: an approval is proposed by a person, not
+// by a service's client stub.
+func goRequiresDeviceClientHelpers(svc *parser.ServiceInfo, method *parser.MethodInfo, goInput, goOutput string, emptyInput, emptyOutput bool) string {
+	if !method.RequiresDevice {
+		return ""
+	}
+	hashParams := fmt.Sprintf("req *%s", goInput)
+	hashArg := "req"
+	callParams := fmt.Sprintf("ctx context.Context, req *%s, approvalID string, deviceAssertion []byte, opts ...grpc.CallOption", goInput)
+	callArgs := "req, opts..."
+	if emptyInput {
+		hashParams = ""
+		hashArg = "&emptypb.Empty{}"
+		callParams = "ctx context.Context, approvalID string, deviceAssertion []byte, opts ...grpc.CallOption"
+		callArgs = "opts..."
+	}
+	callResult := fmt.Sprintf("(*%s, error)", goOutput)
+	if emptyOutput {
+		callResult = "error"
+	}
+	return fmt.Sprintf(`
+
+// %sApprovalHash is the request_hash a pending approval for this call must be
+// created with. It is computed by the same shared canonicalization the
+// generated server-side (spec.rpc).requires_device check recomputes from the
+// live request, so the proposed approval and the served call cannot disagree
+// about what was approved.
+func (c *{{.ClientName}}) %sApprovalHash(%s) ([]byte, error) {
+	return approval.RequestHash(%s)
+}
+
+// %sWithApproval calls %s.%s carrying a device-only approval: approvalID names
+// the pending approval the person proposed, and deviceAssertion is the
+// serialized WebauthnAssertion of the approving tap. Both ride as call
+// metadata — never as request fields — which is what keeps them outside the
+// hashed request.
+func (c *{{.ClientName}}) %sWithApproval(%s) %s {
+	return c.%s(approval.AttachOutgoing(ctx, approvalID, deviceAssertion), %s)
+}`,
+		method.Name, method.Name, hashParams, hashArg,
+		method.Name, svc.Name, method.Name,
+		method.Name, callParams, callResult,
+		method.Name, callArgs)
 }
 
 // generateGoBidiMethod renders the managed bidi-stream lifecycle wrapper for

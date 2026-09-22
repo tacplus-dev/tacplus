@@ -35,6 +35,9 @@ import (
 	{{- end}}
 
 	types "{{.TypesModulePath}}"
+{{- if .HasRequiresDevice}}
+	"{{.ApprovalLibImportPath}}"
+{{- end}}
 	{{.CrossPackageImports}}
 	"google.golang.org/grpc"
 {{- if .HasNonBidi}}

@@ -118,6 +118,10 @@ type GrpcServiceEntry struct {
 	// HasMethodAuth is true when the wrapper has a RegisterMethodAuth function.
 	HasMethodAuth      bool
 	MethodAuthFuncName string
+	// HasRequiresDevice is true when this service's wrapper carries the
+	// (spec.rpc).requires_device gate, so the device-approval check must be
+	// wired into it.
+	HasRequiresDevice bool
 	// IsFirstConfigUse is true for the first service using this config package.
 	// When false, config fetch uses = instead of := to avoid redeclaration.
 	IsFirstConfigUse bool
@@ -212,16 +216,16 @@ type serviceManagerTemplateData struct {
 	ModuleBasePath           string
 	SmPrefix                 string
 	ServiceManagerImportPath string
-	HasServiceHealthState    bool     // true when the service has RW access to ServiceHealthState
-	HealthStateProtoDir      string   // proto dir containing ServiceHealthState (e.g. "services/identity")
-	HealthStateGroupAccessor string   // root state-client group accessor containing ServiceHealth
-	HasGrpc                  bool     // true when gRPC services are configured
-	HasGrpcServers           bool     // true when gRPC server wrappers are configured
-	HasStates                bool     // true when states are configured
-	HasSysState              bool     // true when any state is from the sys/ proto dir
-	HasGrpcS2SClients        bool     // true when gRPC clients are configured
-	HasSubscriptions         bool     // true when event-bus subscriptions are declared
-	HasPublishers            bool     // true when event-bus publishers are declared and resolvable
+	HasServiceHealthState    bool   // true when the service has RW access to ServiceHealthState
+	HealthStateProtoDir      string // proto dir containing ServiceHealthState (e.g. "services/identity")
+	HealthStateGroupAccessor string // root state-client group accessor containing ServiceHealth
+	HasGrpc                  bool   // true when gRPC services are configured
+	HasGrpcServers           bool   // true when gRPC server wrappers are configured
+	HasStates                bool   // true when states are configured
+	HasSysState              bool   // true when any state is from the sys/ proto dir
+	HasGrpcS2SClients        bool   // true when gRPC clients are configured
+	HasSubscriptions         bool   // true when event-bus subscriptions are declared
+	HasPublishers            bool   // true when event-bus publishers are declared and resolvable
 	// AccountingPublisher is the generator-resolved publisher for the durable
 	// accounting record topic. HasAccountingPublisher is false when the proto
 	// set declares no accounting record (client repos), in which case no
@@ -257,6 +261,25 @@ type serviceManagerTemplateData struct {
 	Publishers               []PublisherTemplateEntry
 	DiskStores               []DiskStoreRuntimeEntry
 	HasDiskStores            bool
+	// HasApprovalBroker is true when some hosted service carries the
+	// (spec.rpc).requires_device gate, so the ServiceManager builds the check
+	// and wires it into those wrappers.
+	HasApprovalBroker bool
+	ApprovalBroker    ApprovalBrokerTemplateEntry
+}
+
+// ApprovalBrokerTemplateEntry names the approval-broker RPC the generated
+// (spec.rpc).requires_device check calls, and the generated S2S client seam it
+// goes out over. Everything here is derived from the authoritative
+// (spec.token_minter) declaration — no service, method or package is hardcoded.
+type ApprovalBrokerTemplateEntry struct {
+	Package        string // "kernel"
+	ServiceName    string // "Mint"
+	MethodName     string // "BrokerPendingApproval"
+	GroupAccessor  string // client group accessor on GrpcClients, e.g. "Services"
+	ClientAccessor string // typed client accessor, e.g. "MintClient"
+	TypePkgAlias   string // import alias for the broker's types package
+	TypePkgImport  string // import path for the broker's types package
 }
 
 // accountingPublisherOrZero returns the zero PublisherTemplateEntry for a nil
@@ -349,6 +372,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			AuthAnyUser:              svc.AuthAnyUser,  // computed: true if ANY method has auth_any_user
 			HasMethodAuth:            svc.HasMethodAuth,
 			MethodAuthFuncName:       "Register" + svc.ServiceName + "MethodAuth",
+			HasRequiresDevice:        svc.HasRequiresDevice,
 			IsFirstConfigUse:         isFirst,
 		})
 	}
@@ -646,6 +670,40 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		tracePublishGrpcPath = tracePublisher.grpcPath
 	}
 
+	// (spec.rpc).requires_device: resolve the broker seam only when some hosted
+	// wrapper actually carries the gate. Resolving it unconditionally would make
+	// every build that happens to declare a token minter fail on a proto set
+	// whose minter has no broker RPC.
+	hasApprovalBroker := false
+	for _, svc := range grpcSvcs {
+		if svc.HasRequiresDevice {
+			hasApprovalBroker = true
+			break
+		}
+	}
+	var approvalBroker ApprovalBrokerTemplateEntry
+	if hasApprovalBroker {
+		broker, err := parser.DiscoverApprovalBroker(config.FlatProtoDir)
+		if err != nil {
+			return serviceManagerTemplateData{}, err
+		}
+		if broker == nil {
+			return serviceManagerTemplateData{}, fmt.Errorf("service manager data: a hosted rpc declares (spec.rpc).requires_device, but no authoritative (spec.token_minter) service in this proto set hosts an approval broker; the generated device-approval check has nothing to call")
+		}
+		brokerGroup := filepath.ToSlash(filepath.Dir(broker.Dir))
+		approvalBroker = ApprovalBrokerTemplateEntry{
+			Package:        broker.Package,
+			ServiceName:    broker.ServiceName,
+			MethodName:     broker.MethodName,
+			GroupAccessor:  goAccessorName(brokerGroup),
+			ClientAccessor: broker.ServiceName + "Client",
+			// A distinct alias: the SM may already import the broker's types
+			// package for its own config state under <pkg>_pb.
+			TypePkgAlias:  "approvalbroker_pb",
+			TypePkgImport: config.TypesImportPath(brokerGroup, broker.Package),
+		}
+	}
+
 	return serviceManagerTemplateData{
 		ServiceLabel:             config.ServiceLabel(),
 		ModuleBasePath:           config.ModuleBasePath,
@@ -692,6 +750,8 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		AccountingPublisher:      accountingPublisherOrZero(accountingPublisher),
 		DiskStores:               diskStores,
 		HasDiskStores:            len(diskStores) > 0,
+		HasApprovalBroker:        hasApprovalBroker,
+		ApprovalBroker:           approvalBroker,
 	}, nil
 }
 

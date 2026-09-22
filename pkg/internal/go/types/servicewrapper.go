@@ -207,6 +207,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	var handlerInterface strings.Builder
 	var grpcWrappers strings.Builder
 	var methodAuthLines []string
+	hasRequiresDevice := false
 	for _, service := range targetServices {
 		handlerInterface.WriteString(generateGoHandlerInterface(service, info.Package))
 		// The peer half of a record query plane, whoever hosts it — Java's own
@@ -280,6 +281,25 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			if t := goPrivateEgressRows(method, san, info.Package); t != "" {
 				return fmt.Errorf("%s.%s returns %s, which carries (spec.record).private = true; the owner pin is not generated for any language yet, so hosting this read would serve every owner's rows to every caller",
 					service.Name, method.Name, t)
+			}
+			// (spec.rpc).requires_device: the device-only approval gate. Its
+			// preconditions are structural, so a build that cannot meet one of
+			// them fails here rather than generating an RPC the author believes
+			// is gated and is not.
+			if method.RequiresDevice {
+				if method.AuthDisabled || service.AuthDisabled || service.IsC2D {
+					return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its auth is disabled; the check must name the user the caller is serving (caller_namespace/caller_subject), and an rpc with no verified token has no user to name",
+						service.Name, method.Name)
+				}
+				if method.ClientStreaming || method.ServerStreaming || method.Collection != nil {
+					return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but it is not a plain unary rpc; an approval covers ONE request's hash, which a stream or a collection window does not have",
+						service.Name, method.Name)
+				}
+				if f := goRequiresDeviceMapField(method.FullInputType, san, info.Package); f != "" {
+					return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its request reaches a map field (%s); map iteration order is not canonical across languages, so the approval hash could not be computed identically on both ends — remove the map or drop the annotation",
+						service.Name, method.Name, f)
+				}
+				hasRequiresDevice = true
 			}
 			grpcWrappers.WriteString(generateGRPCWrapper(service, method, info.Package, svc.ParentDir, svc.GrpcName, accountingMap, info.CrossPackageTypes, skippedTraceTypes, san))
 			grpcWrappers.WriteString("\n")
@@ -454,6 +474,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	// reference the emitted collection runtime lib; import it explicitly since
 	// goimports can't resolve the local package by name.
 	collectionLibImportPath := svc.Config.ModuleBasePath + "/chassis/collection"
+	approvalLibImportPath := svc.Config.ModuleBasePath + "/chassis/approval"
 	hasWatch := false
 	for _, service := range targetServices {
 		for _, m := range service.Methods {
@@ -485,6 +506,8 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		GrpcServerImportPath     string
 		HasWatch                 bool
 		CollectionLibImportPath  string
+		HasRequiresDevice        bool
+		ApprovalLibImportPath    string
 	}{
 		GrpcPackageName:          grpcPkgName,
 		TypesModulePath:          typesModulePath,
@@ -507,6 +530,8 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		GrpcServerImportPath:     svc.Config.ModuleBasePath + "/chassis/grpcserver",
 		HasWatch:                 hasWatch,
 		CollectionLibImportPath:  collectionLibImportPath,
+		HasRequiresDevice:        hasRequiresDevice,
+		ApprovalLibImportPath:    approvalLibImportPath,
 	}
 
 	t, err := template.New("servicewrapper").Parse(tmpl)
@@ -1618,6 +1643,7 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 
 	callerExtract := callerExtractFor("ctx")
 	callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return nil,")
+	callerExtract += goRequiresDeviceGate(method, svc, servicePackage)
 
 	// Egress data entitlement for unary responses (e.g. RecordMap Sample<T>): a
 	// sanitizable response type is sanitized whole; an injected envelope
@@ -1906,6 +1932,83 @@ func goPrivateEgressRows(method *parser.MethodInfo, san *egressSanitizer, servic
 		}
 	}
 	return ""
+}
+
+// goRequiresDeviceGate renders the (spec.rpc).requires_device check for a unary
+// method, or "" when the method declares none. It sits between caller
+// extraction and the handler call — the same seam the auth token is extracted
+// at — because it reads two more metadata keys the same way and needs the caller
+// the auth check just verified.
+//
+// The approval id and the device assertion are metadata, so they are physically
+// outside the request message and therefore outside the hashed bytes, which is
+// kernel's own constraint. The hash comes from the shared chassis
+// canonicalization, the same function the caller-side generated helper calls —
+// not a second implementation that could drift from it.
+func goRequiresDeviceGate(method *parser.MethodInfo, svc *parser.ServiceInfo, servicePackage string) string {
+	if !method.RequiresDevice {
+		return ""
+	}
+	return fmt.Sprintf(`
+	// (spec.rpc).requires_device: the device-only approval gate. Any failure
+	// refuses the rpc — the handler below is never reached.
+	approvalID, deviceAssertion, approvalErr := approval.FromIncomingContext(ctx)
+	if approvalErr != nil {
+		return nil, approvalErr
+	}
+	requestHash, approvalErr := approval.RequestHash(req)
+	if approvalErr != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("device-approval request hash: %%v", approvalErr))
+	}
+	if approvalErr := p.brokerApproval(ctx, %q, approvalID, requestHash, caller, deviceAssertion); approvalErr != nil {
+		return nil, approvalErr
+	}
+`, qualifiedMethodAuthKey(servicePackage, svc.Name, method.Name))
+}
+
+// goRequiresDeviceMapField names the map field reachable from a
+// requires_device RPC's request message, as "Message.field", or "" when the
+// request contains none. The walk recurses because the canonicalization
+// recurses: a map nested three messages down is the same cross-language
+// iteration-order nondeterminism as one at the top level.
+func goRequiresDeviceMapField(fullType string, san *egressSanitizer, servicePackage string) string {
+	if san == nil || fullType == "" {
+		return ""
+	}
+	seen := make(map[string]bool)
+	var walk func(t string) string
+	walk = func(t string) string {
+		pkg, name := splitEgressFQN(t, servicePackage)
+		key := pkg + "\x00" + name
+		if seen[key] {
+			return ""
+		}
+		seen[key] = true
+		msg, ok := san.msgs[key]
+		if !ok {
+			return ""
+		}
+		for i := range msg.Fields {
+			if msg.Fields[i].IsMap {
+				return name + "." + msg.Fields[i].Name
+			}
+		}
+		for i := range msg.Fields {
+			f := &msg.Fields[i]
+			if !f.IsMessage {
+				continue
+			}
+			sub := f.TypePackage
+			if sub == "" {
+				sub = pkg
+			}
+			if hit := walk(sub + "." + f.Type); hit != "" {
+				return hit
+			}
+		}
+		return ""
+	}
+	return walk(fullType)
 }
 
 // qualifiedMethodAuthKey builds the SERVICE-QUALIFIED method identifier that

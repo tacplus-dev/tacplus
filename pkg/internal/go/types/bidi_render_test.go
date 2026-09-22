@@ -122,20 +122,26 @@ func TestOuterGrpcClientTemplateParses(t *testing.T) {
 		HasCollectionStream bool
 		HasCollectionCursor bool
 		HasPage             bool
+		// requires_device: the caller-side approval helpers pull in the chassis
+		// approval package, so the outer template renders one more import.
+		HasRequiresDevice     bool
+		ApprovalLibImportPath string
 	}{
-		GrpcPackageName:     "mysvc",
-		TypesModulePath:     "example.com/types/mysvc",
-		ServiceName:         "MyService",
-		ClientName:          "MyServiceClient",
-		GRPCMethods:         "// methods would go here\n",
-		HasMethods:          true,
-		HasValidation:       false,
-		HasBidi:             true,
-		HasNonBidi:          false,
-		HasClientStreaming:  false,
-		HasAuth:             true,
-		HasCollectionStream: true,
-		HasCollectionCursor: true,
+		GrpcPackageName:       "mysvc",
+		TypesModulePath:       "example.com/types/mysvc",
+		ServiceName:           "MyService",
+		ClientName:            "MyServiceClient",
+		GRPCMethods:           "// methods would go here\n",
+		HasMethods:            true,
+		HasValidation:         false,
+		HasBidi:               true,
+		HasNonBidi:            false,
+		HasClientStreaming:    false,
+		HasAuth:               true,
+		HasCollectionStream:   true,
+		HasCollectionCursor:   true,
+		HasRequiresDevice:     true,
+		ApprovalLibImportPath: "example.com/chassis/approval",
 	}
 	var sb strings.Builder
 	if err := tmpl.Execute(&sb, data); err != nil {

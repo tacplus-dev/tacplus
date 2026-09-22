@@ -271,6 +271,7 @@ type MethodDescriptor struct {
 	AuthActors           []string              // per-RPC auth_actors (from spec.rpc): delegate identities allowed to call on another principal's behalf, matched against the token's act claim
 	AuthDisabled         bool                  // per-RPC auth_disabled (from spec.rpc RPC_FLAG_PUBLIC_NO_AUTH / RPC_FLAG_SELF_AUTHENTICATES)
 	AuthAnyUser          bool                  // per-RPC auth_any_user (from spec.rpc RPC_FLAG_AUTH_ANY_USER)
+	RequiresDevice       bool                  // per-RPC requires_device (from spec.rpc): the device-only approval check gates this RPC
 	TargetNamespaceField string                // per-RPC target_namespace_field (from spec.rpc); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
 	Collection           *CollectionDescriptor // method-level method_collection (collection-returning read); nil when absent
 	Rpc                  *RpcDescriptor        // method-level spec.rpc (call surface); nil when absent
@@ -1024,6 +1025,7 @@ func (p *DescriptorParser) parseMethodOptions(method protoreflect.MethodDescript
 			if actors := val.GetAuthActors(); len(actors) > 0 {
 				md.AuthActors = actors
 			}
+			md.RequiresDevice = val.GetRequiresDevice()
 			if f := val.GetTargetNamespaceField(); f != "" {
 				md.TargetNamespaceField = f
 			}
@@ -3014,6 +3016,7 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 				AuthAnyUser:          method.AuthAnyUser,
 				AuthServices:         method.AuthServices,
 				AuthActors:           method.AuthActors,
+				RequiresDevice:       method.RequiresDevice,
 				TargetNamespaceField: method.TargetNamespaceField,
 				Collection:           method.Collection,
 				MinGroupSize:         method.MinGroupSize,

@@ -1,0 +1,28 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// The (spec.trait) declaration that ASKS FOR the record query plane.
+//
+// Without this file no plane is emitted at all — no host to append to, no service
+// names, no fallback — and (spec.record).s2s_read would be refused as a read
+// audience nothing enforces, which in turn refuses (spec.record_read) and with it
+// the generated client-facing reader this fixture exists to compile.
+//
+// Same shape as testapp's vservices/query.proto: the trait name is the
+// entitlement key AND the audience, the host is the service declaring
+// (spec.record_store), and the two emitted service names are the plane's peer-
+// and client-facing halves. The package is the trait's OWN, not the host's, so
+// the plane's services are hosted vservices — which is what routes them to the
+// host through filterByHostTag rather than through own-package discovery.
+
+syntax = "proto3";
+
+package egressquery;
+
+import "sys/spec.proto";
+
+option (spec.trait) = {
+  name: "egressquery"
+  host: "egressstratum"
+  s2s_service: "EgressRecordMap"
+  c2s_service: "EgressRecordQuery"
+  auth_services: ["egressvault"]
+};

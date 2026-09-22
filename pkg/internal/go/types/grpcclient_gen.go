@@ -386,7 +386,18 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 	usedPkgs := make(map[string]bool)
 	for _, service := range targetServices {
 		for _, method := range service.Methods {
-			for _, fullType := range []string{method.FullInputType, method.FullOutputType} {
+			refs := []string{method.FullInputType, method.FullOutputType}
+			// A collection method also names its ITEM type directly — the PAGE
+			// auto-pager's iter.Seq2 element and the WATCH seam's item/change
+			// types — and that type lives in the RECORD's package, not the
+			// method's, whenever the collection is a record query plane over
+			// records declared elsewhere. Scanning only input/output emitted
+			// `<pkg>_pb.<Item>` with no import for it.
+			if method.Resolved != nil {
+				refs = append(refs, method.Resolved.PageItemType,
+					method.Resolved.WatchItemType, method.Resolved.WatchChangeType)
+			}
+			for _, fullType := range refs {
 				parts := strings.Split(fullType, ".")
 				if len(parts) > 1 {
 					pkg := strings.Join(parts[:len(parts)-1], ".")
@@ -431,7 +442,12 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 			importPath = fmt.Sprintf("%s/types/%s/%s", svc.Config.ModuleBasePath, dir, pkg)
 		}
 		if strings.HasPrefix(dir, "services") {
-			importPath = fmt.Sprintf("%s/types/%s", svc.Config.ModuleBasePath, dir)
+			// Same spelling the service wrapper uses for this case
+			// (servicewrapper.go): the types of a services/ package live under
+			// types/<parentDir>/<package>. The client's copy dropped the
+			// package segment, which was unreachable until a collection method
+			// named an item type from another services/ package.
+			importPath = fmt.Sprintf("%s/types/%s/%s", svc.Config.ModuleBasePath, dir, pkg)
 		}
 		fmt.Fprintf(&crossPkgImports, "\n%s \"%s\"", importAlias, importPath)
 	}

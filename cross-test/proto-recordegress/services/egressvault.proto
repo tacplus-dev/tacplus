@@ -1,0 +1,236 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// The record-egress fixture: the ONLY place the generated (spec.store_namespace)
+// / (spec.store_principal) / (spec.record).private row filters are generated AND
+// COMPILED by a standing gate, in all three server languages.
+//
+// Why this fixture exists: cross-test/proto is a TYPES-ONLY build (it declares no
+// (spec.service)), so it emits no server wrapper at all — the one surface the
+// egress filters land on. cross-test/consumer-contract carries records with these
+// annotations but declares no (spec.trait), so it emits no record query plane and
+// never exercises the s2s half of the filter. This set is a full service build
+// with a trait, so both halves are generated and compiled.
+//
+// egressvault is the SELF package (tacplus.yaml pkg ends in .egressvault). It is
+// three things at once, deliberately:
+//   - the record STORE ((spec.record_store)), so it is the trait's host and the
+//     generated record plane is labeled onto it;
+//   - the owner of two record types, one tenant-scoped and one private;
+//   - a C2S reader of those rows, on the three seams that have a per-item hook.
+//
+// It is NOT a reader on a SNAPSHOT collection or a plain server stream: a pinned
+// row on either is refused by generation in Go (goStreamEgressRefusal) and Rust
+// (rustStreamEgressRefusal) by design, because neither shape has a per-item hook
+// the filter could ride. Putting one here would assert the refusal is a bug.
+
+syntax = "proto3";
+
+package egressvault;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "egressvault"};
+option (spec.vservice) = {
+  name: "egressvault"
+  id: 30
+};
+
+// The USE half of each record's c2s_read grant: this service discloses both
+// record types to end users, so tacplus emits the generated client-facing
+// reader (Get<T>/List<T>) over their stored rows. C2S_SCOPE_PRINCIPAL resolves
+// the owning-principal field exactly as the egress row filter resolves it, so
+// the generated reader and the generated filter pin the same field — which is
+// the thing the fixture is here to compile in three languages at once.
+option (spec.record_read) = {
+  record: "egressvault.VaultRow"
+  c2s: {scope: C2S_SCOPE_PRINCIPAL exposure: RPC_EXPOSURE_EXTERNAL}
+};
+option (spec.record_read) = {
+  record: "egressvault.VaultSecretRow"
+  c2s: {scope: C2S_SCOPE_PRINCIPAL exposure: RPC_EXPOSURE_EXTERNAL}
+};
+
+// VaultRow is the TENANT-SCOPED record: a row belongs to a namespace and to a
+// principal inside it, and any service the record's audience names may read a
+// row whose namespace the caller's token carries (or is linked to).
+//
+// namespace/owner are both EQ-queryable so the generated record plane carries
+// them as <T>Filter criteria — that is what gives the query-predicate pin
+// somewhere to stamp, alongside the egress row filter that backstops it.
+message VaultRow {
+  option (spec.record) = {
+    key: "row_id"
+    owner: "owner"
+    s2s: {auth_services: ["*"]}
+    s2s_read: {auth_services: ["*"]}
+    c2s_read: {auth_services: ["egressvault"]}
+  };
+
+  string row_id = 1 [(spec.assert_required) = true];
+
+  // The tenant boundary. A caller whose namespace claim is neither this value
+  // nor linked to it must never see this row — and if one reaches the egress
+  // seam anyway, the generated backstop aborts the process rather than answer.
+  string namespace = 2 [
+    (spec.assert_required) = true,
+    (spec.query_field) = {op: QUERY_OP_EQ},
+    (spec.store_namespace) = true
+  ];
+
+  // The owning principal inside the tenant. A mismatch here DROPS the row and
+  // proceeds — the deliberate difference from the namespace pin.
+  string owner = 3 [
+    (spec.assert_required) = true,
+    (spec.query_field) = {op: QUERY_OP_EQ},
+    (spec.store_principal) = true
+  ];
+
+  string title = 4;
+  int64 updated_at_ms = 5 [(spec.query_field) = {op: QUERY_OP_RANGE}];
+}
+
+// VaultSecretRow is the PRIVATE record: one principal's rows and nobody else's,
+// ever. It declares no s2s_subscribe (a private record refuses one — a stream
+// handler has no per-request principal to pin against), and its owner field
+// carries (spec.store_principal) because that is what the generated owner pin
+// binds to.
+//
+// This is the record that exercises the fourth caller shape: a SERVICE identity
+// reading it with no delegated (act) claim is refused PERMISSION_DENIED, because
+// there is no user for the pin to be.
+message VaultSecretRow {
+  option (spec.record) = {
+    key: "secret_id"
+    owner: "owner"
+    s2s: {auth_services: ["*"]}
+    s2s_read: {auth_services: ["*"]}
+    c2s_read: {auth_services: ["egressvault"]}
+    private: true
+  };
+
+  string secret_id = 1 [(spec.assert_required) = true];
+
+  string namespace = 2 [
+    (spec.assert_required) = true,
+    (spec.query_field) = {op: QUERY_OP_EQ},
+    (spec.store_namespace) = true
+  ];
+
+  string owner = 3 [
+    (spec.assert_required) = true,
+    (spec.query_field) = {op: QUERY_OP_EQ},
+    (spec.store_principal) = true
+  ];
+
+  string material = 4;
+}
+
+message GetVaultSecretMaterialRequest {
+  string secret_id = 1 [(spec.assert_required) = true];
+}
+
+message GetVaultSecretMaterialResponse {
+  repeated VaultSecretRow secrets = 1 [(spec.assert_max_size) = 100];
+  string as_of = 2;
+}
+
+message GetVaultRowSummaryRequest {
+  string row_id = 1 [(spec.assert_required) = true];
+}
+
+message GetVaultRowSummaryResponse {
+  // Repeated, not singular. The egress row filter rides a repeated row field on
+  // every seam in all three languages; a singular message field carrying a
+  // pinned row is filtered by none of them, so a singular field here would
+  // assert the opposite of what the fixture is for.
+  repeated VaultRow rows = 1 [(spec.assert_max_size) = 100];
+  // A sibling scalar keeps this an ordinary unary response rather than a Tier-1
+  // collection read, which would have to declare (spec.method_collection).
+  string as_of = 2;
+}
+
+// PAGE (keyset pagination) envelope: the response carries exactly one repeated
+// items field plus next_page_token (+ an optional int64 total_count). The PAGE
+// seam is the one where the filter MUST run before the envelope is assembled, or
+// next_page_token / total_count describe rows the caller never received.
+// PAIRED CONTROL. A response that carries no record rows at all. The egress
+// filter must not be spliced onto it: a filter emitted on every method in the
+// service, instead of on the methods whose response actually carries pinned
+// rows, also compiles.
+message VaultStatusRequest {
+  string scope = 1;
+}
+
+message VaultStatusResponse {
+  string scope = 1;
+  int64 row_count = 2;
+}
+
+message VaultPageRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message VaultPageResponse {
+  repeated VaultRow items = 1 [(spec.assert_max_size) = 10000];
+  string next_page_token = 2;
+  int64 total_count = 3;
+}
+
+message VaultWatchRequest {
+  int64 from_revision = 1;
+}
+
+message VaultWatchChange {
+  VaultRow item = 1;
+  int64 revision = 2;
+}
+
+// The WATCH envelope. snapshot_item and delta both carry a single pinned row, so
+// the per-frame guard can walk both; snapshot_done carries none and goes out
+// unfiltered.
+message VaultWatchEvent {
+  oneof event {
+    VaultRow snapshot_item = 1;
+    int64 snapshot_done = 2;
+    VaultWatchChange delta = 3;
+  }
+}
+
+service EgressVaultApi {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  // UNARY seam over a tenant-scoped row.
+  rpc GetVaultRowSummary(GetVaultRowSummaryRequest) returns (GetVaultRowSummaryResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
+  }
+
+  // UNARY seam over a PRIVATE row — the owner pin, and the delegated-identity
+  // refusal when a service calls with no act claim.
+  rpc GetVaultSecretMaterial(GetVaultSecretMaterialRequest) returns (GetVaultSecretMaterialResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
+  }
+
+  // The ungated control: no record rows in the response, so no filter.
+  rpc GetVaultStatus(VaultStatusRequest) returns (VaultStatusResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
+  }
+
+  // PAGE seam.
+  rpc ListVaultRowsPaged(VaultPageRequest) returns (VaultPageResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
+    option (spec.method_collection) = {
+      mode: COLLECTION_MODE_PAGE
+      order_by: "row_id"
+      default_page_size: 50
+    };
+  }
+
+  // WATCH seam.
+  rpc WatchVaultRows(VaultWatchRequest) returns (stream VaultWatchEvent) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
+    option (spec.method_collection) = {
+      mode: COLLECTION_MODE_WATCH
+      order_by: "row_id"
+    };
+  }
+}

@@ -1,0 +1,15 @@
+# Managed by tacplus — do not edit IDs manually.
+services:
+    - name: egressvault
+      id: 1
+    - name: eventbus
+      id: 2
+    - name: egressmint
+      id: 3
+    - name: egressstratum
+      id: 4
+vservices:
+    - name: egressvault
+      field_id: 30
+    - name: egressquery
+      field_id: 31

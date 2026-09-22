@@ -185,7 +185,11 @@ func rustResponseNamespaceFilterBlock(fields []rustNamespaceListField, method st
             if resp.%[1]s.len() != __ns_before {
 %[3]s            }
 `, f.Field,
-			rustNamespaceKeepExpr(fmt.Sprintf("(__row.%[1]s == __read_namespace || __read_namespace_linked.iter().any(|__ns| __ns == &__row.%[1]s))", f.ItemField), runtimeGate),
+			// Unparenthesized: `||` associates, so the gate's `!__ns_pinned || `
+			// prefix means the same either way, and a parenthesized whole closure
+			// body is an `unnecessary_parens` warning rustc emits on every
+			// generated wrapper that carries this filter.
+			rustNamespaceKeepExpr(fmt.Sprintf("__row.%[1]s == __read_namespace || __read_namespace_linked.iter().any(|__ns| __ns == &__row.%[1]s)", f.ItemField), runtimeGate),
 			rustNamespaceCrash(method, f.Field, "                "))
 	}
 	return out

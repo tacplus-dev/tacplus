@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// Minimal EventBus broker for the record-egress fixture set.
+//
+// A (spec.record) synthesizes an eventbus topic carrying the broker tag
+// "eventbus", and BuildTopicRegistry requires a loaded gRPC service with that
+// identity. Same minimal broker the consumer-contract fixture carries, for the
+// same reason: without it the record messages below cannot be loaded at all.
+
+syntax = "proto3";
+
+package eventbus;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "eventbus"};
+
+message EventBusPing {}
+
+service EventBusBroker {
+  option (spec.service_s2s) = {};
+
+  rpc Ping(EventBusPing) returns (EventBusPing) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}

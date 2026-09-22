@@ -6,6 +6,7 @@ PROTO_SRC="$ROOT_DIR/cross-test/proto"
 HEALTHONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-healthonly"
 C2SONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-c2sonly"
 REQUIRESDEVICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-requiresdevice"
+RECORDEGRESS_PROTO_SRC="$ROOT_DIR/cross-test/proto-recordegress"
 WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/current-generation}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
@@ -147,6 +148,19 @@ write_requiresdevice_config() {
 language: "$language"
 pkg: "com.gitlab.example.dummy.vault"
 src: "$REQUIRESDEVICE_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
+write_recordegress_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.egressvault"
+src: "$RECORDEGRESS_PROTO_SRC"
 output-dir: "tacplus"
 EOF
 }
@@ -1335,6 +1349,106 @@ assert_requiresdevice_output() {
   assert_no_legacy_fixture_output "$output"
 }
 
+
+# assert_recordegress_output checks that the record EGRESS ROW FILTERS were
+# actually GENERATED on the seams that carry pinned rows, and NOT on the seam
+# that carries none. Until 04a24db3 the Go wrapper rendered none of them and
+# refused generation outright wherever one was owed, so this fixture is the only
+# place the three languages' filters are generated and COMPILED side by side.
+#
+# The counts are exact and identical in all three languages, which is the point:
+# a language that drops one seam, or splices the filter onto every method instead
+# of the row-bearing ones, changes a count. Both failures compile.
+#
+#   6 aborts per wrapper   — the (spec.store_namespace)/(spec.record).private
+#                            backstops: unary tenant row, unary private row, the
+#                            PAGE window, and the WATCH seam's snapshot_item and
+#                            delta frames.
+#   4 linked-claim reads   — the `linked` widening, once per namespace resolve.
+#   1 / 2 delegated refusals — the private record's act-claim requirement: once on
+#                            the hand-written unary reader, twice on the generated
+#                            client-facing reader (Get + the page seam).
+assert_recordegress_output() {
+  local output="$1"
+  local language="$2"
+  local api="" records="" abort_re="" linked_re=""
+
+  case "$language" in
+    go)
+      api="$(find "$output" -type f -path '*/servers/services/egressvault/egress_vault_api.go' -print -quit)"
+      records="$(find "$output" -type f -path '*/servers/services/egressvault/records.go' -print -quit)"
+      abort_re='os\.Exit\(1\)'
+      linked_re='caller\.Token\(\)\.GetLinked\(\)'
+      ;;
+    java)
+      api="$(find "$output" -type f -name 'EgressVaultApi.java' -print -quit)"
+      records="$(find "$output" -type f -name 'EgressvaultRecords.java' -print -quit)"
+      abort_re='Runtime\.getRuntime\(\)\.halt\(1\)'
+      linked_re='Auth\.callerLinkedFromContext\(\)'
+      ;;
+    rust)
+      api="$(find "$output" -type f -path '*/servers/services/egressvault/egress_vault_api.rs' -print -quit)"
+      records="$(find "$output" -type f -path '*/servers/services/egressvault/records.rs' -print -quit)"
+      abort_re='std::process::abort\(\)'
+      linked_re='caller\.as_ref\(\)\.map\(\|c\| c\.linked\(\)\)'
+      ;;
+    *)
+      die "record-egress fixture: unsupported language: $language"
+      ;;
+  esac
+
+  [[ -n "$api" ]] || die "record-egress fixture ($language): generated EgressVaultApi wrapper not found under $output"
+  # The CLIENT-FACING record read plane. It is emitted only because egressvault
+  # declares (spec.record_read).c2s, and that declaration was REFUSED for a Go
+  # target until the Go egress filters landed — so its presence here is the
+  # closed refusal, not decoration.
+  [[ -n "$records" ]] || die "record-egress fixture ($language): the generated client-facing record reader is missing under $output (the (spec.record_read).c2s plane was not emitted)"
+
+  local n
+  for pair in "$api:6" "$records:6"; do
+    local f="${pair%:*}" want="${pair##*:}"
+    n="$(grep -cE "$abort_re" "$f" || true)"
+    [[ "$n" == "$want" ]] \
+      || die "record-egress fixture ($language): expected $want egress backstop aborts in $f, found $n (fewer means a seam lost its filter; more means it was spliced onto a method whose response carries no pinned row)"
+  done
+
+  for f in "$api" "$records"; do
+    n="$(grep -cE "$linked_re" "$f" || true)"
+    [[ "$n" == "4" ]] \
+      || die "record-egress fixture ($language): expected 4 linked-claim reads in $f, found $n (a namespace resolve without the linked widening refuses a caller the other two languages admit)"
+  done
+
+  # The fourth caller shape: a SERVICE identity reading the private record with
+  # no delegated (act) claim is refused, rather than pinned against an empty
+  # owner that would match a row by accident.
+  local want_act
+  for pair in "$api:1" "$records:2"; do
+    local f="${pair%:*}"
+    want_act="${pair##*:}"
+    n="$(grep -c 'reads a private record and requires a delegated caller identity (act claim)' "$f" || true)"
+    [[ "$n" == "$want_act" ]] \
+      || die "record-egress fixture ($language): expected $want_act delegated-identity refusals in $f, found $n"
+  done
+
+  # The matching and mismatched caller shapes, spelled out: the row is kept when
+  # the caller's namespace matches and the process aborts when it does not. The
+  # operator-facing diagnostic is one contract stated once in three generators —
+  # a language that reworded it has drifted on the only surface observable from
+  # outside the process.
+  grep -q 'FATAL: (spec.store_namespace) backstop fired' "$api" \
+    || die "record-egress fixture ($language): the namespace backstop diagnostic is missing from $api"
+  grep -q 'FATAL: (spec.record).private backstop fired' "$records" \
+    || die "record-egress fixture ($language): the private-owner backstop diagnostic is missing from $records"
+
+  # PAIRED CONTROL: GetVaultStatus returns no record rows, so it must carry no
+  # filter. Asserted structurally by the exact counts above; asserted by name
+  # here so the failure says which method went wrong.
+  grep -q 'GetVaultStatus\|getVaultStatus\|get_vault_status' "$api" \
+    || die "record-egress fixture ($language): the ungated control method is missing from $api"
+
+  assert_no_legacy_fixture_output "$output"
+}
+
 for language in "${languages[@]}"; do
   dir="$WORK_ROOT/$language"
   log="$WORK_ROOT/$language.log"
@@ -1719,6 +1833,44 @@ if [[ -d "$REQUIRESDEVICE_PROTO_SRC" ]]; then
     echo "==> Compiling $language requires-device fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/vault"
     echo "    PASS $language requires-device"
+  done
+fi
+
+
+# record-egress fixture: the ONLY place the (spec.store_namespace) /
+# (spec.store_principal) / (spec.record).private egress ROW FILTERS are generated
+# AND COMPILED by a standing gate. cross-test/proto is types-only, so it emits no
+# server wrapper — the one surface the filters land on; cross-test/consumer-
+# contract carries records with these annotations but no service that discloses
+# them to users, so it never emits a filtered read either. This set is a full
+# service build: egressvault owns a tenant-scoped record and a private one and
+# reads both on the three c2s seams that have a per-item hook (unary, PAGE,
+# WATCH), egressstratum is the (spec.record_store) the trait names as its host,
+# and egressquery is the (spec.trait) whose plane makes (spec.record).s2s_read —
+# and with it (spec.record_read) — legal at all.
+#
+# NOT here, deliberately: a pinned row on a Tier-2/Tier-3 SNAPSHOT or a plain
+# server stream. goStreamEgressRefusal and its Rust twin refuse those by design
+# (no per-item hook to ride), so a fixture that carried one would assert the
+# refusal is a bug.
+if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/recordegress-$language"
+    log="$WORK_ROOT/recordegress-$language.log"
+    rm -rf "$dir"
+    write_recordegress_config "$dir" "$language"
+
+    echo "==> Generating $language record-egress fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$RECORDEGRESS_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language record-egress generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_recordegress_output "$output_root" "$language"
+    echo "==> Compiling $language record-egress fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/egressvault"
+    echo "    PASS $language record-egress"
   done
 fi
 

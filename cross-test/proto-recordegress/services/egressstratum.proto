@@ -1,0 +1,29 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// The full-record store for the record-egress fixture set.
+//
+// Declaring (spec.record_store) makes this service the trait's declared HOST, so
+// the generated record query plane is labeled onto it. It is a package of its own
+// rather than the self package because a record store auto-subscribes to the raw
+// topic of every record it stores, and those subscriber callbacks are
+// hand-written application code that a generate-and-compile fixture has no way to
+// supply. Same separation the consumer-contract fixture uses (contractstratum vs
+// contractfixtures).
+
+syntax = "proto3";
+
+package egressstratum;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "egressstratum"};
+option (spec.record_store) = {};
+
+message StratumPing {}
+
+service EgressStratum {
+  option (spec.service_s2s) = {};
+
+  rpc Ping(StratumPing) returns (StratumPing) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}

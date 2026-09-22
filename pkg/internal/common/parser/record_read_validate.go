@@ -470,21 +470,23 @@ func hasEqStringQueryField(msg *MessageDescriptor, name string) bool {
 // (spec.store_namespace) — on a c2s method returning record rows.
 //
 // Rust has them in rust/types/principal_gen.go and namespace_gen.go; Java has
-// them in java/types/recordprincipal_gen.go and recordnamespace_gen.go, and both
-// are general to any c2s method whose response carries record rows rather than
-// being specific to the record store.
+// them in java/types/recordprincipal_gen.go and recordnamespace_gen.go; Go has
+// them in go/types/recordegress_gen.go. All three are general to any c2s method
+// whose response carries record rows rather than being specific to the record
+// store, and the three are held to one behaviour by
+// pkg/internal/common/record_egress_parity_test.go.
 //
-// GO HAS NEITHER. go/types/servicewrapper.go carries no principal or namespace
-// egress seam at all; the only place the Go generator has one is
-// go/types/mcp_dispatch_gen.go. A Go service declaring (spec.record_read).c2s
-// would therefore ship a client-facing read surface with no row filter and no
-// tenant backstop behind the pin — the one failure this plane exists to make
-// impossible. Refused by name rather than emitted.
+// Go was refused here until the Go filters landed: go/types/servicewrapper.go
+// carried no principal or namespace egress seam at all, so a Go service
+// declaring (spec.record_read).c2s would have shipped a client-facing read
+// surface with no row filter and no tenant backstop behind the pin. That hole is
+// closed, so the refusal is gone with it.
 //
-// This is a PRE-EXISTING hole in the Go generator, not one this plane opens: any
-// Go service today with a c2s RPC returning (spec.record) rows has the same gap.
-// Closing it is real work and belongs to whoever first needs a Go reader.
+// The map stays a map rather than becoming "always allow": the client-only
+// targets (python, typescript, swift, csharp) generate no service wrapper and so
+// carry no filter either, and this plane must keep refusing them by name.
 var recordReadC2SSupportedLanguages = map[string]bool{
+	"go":   true,
 	"rust": true,
 	"java": true,
 }

@@ -199,6 +199,25 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		})
 		collectGrpcClientTypeImport(neededImports, method.FullInputType, info.Package, typesPackage, inputType, crossPkgJavaPackages)
 		collectGrpcClientTypeImport(neededImports, method.FullOutputType, info.Package, typesPackage, outputType, crossPkgJavaPackages)
+		// A collection method also names its ITEM type directly — the PAGE
+		// auto-pager's Iterator element and the WATCH cursor's — and that type
+		// lives in the RECORD's package, not the method's, whenever the
+		// collection is a record query plane over records declared elsewhere.
+		// Collecting only input/output emitted `<Outer>.<Item>` with no import
+		// for <Outer>.
+		if method.Resolved != nil {
+			for _, itemType := range []string{method.Resolved.PageItemType, method.Resolved.WatchItemType, method.Resolved.WatchChangeType} {
+				if itemType == "" {
+					continue
+				}
+				simple := itemType
+				if i := strings.LastIndex(itemType, "."); i >= 0 {
+					simple = itemType[i+1:]
+				}
+				resolved := resolveJavaMethodType(itemType, simple, info.Package, outerClassName, crossPkgOuterClasses)
+				collectGrpcClientTypeImport(neededImports, itemType, info.Package, typesPackage, resolved, crossPkgJavaPackages)
+			}
+		}
 		if !method.ClientStreaming && !method.ServerStreaming {
 			hasUnary = true
 		}
@@ -206,7 +225,12 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		if method.IsTier2SnapshotCollection() || method.IsTier3SnapshotCollection() || method.IsWatchCollection() {
 			hasUnary = true
 		}
-		if method.IsTier3SnapshotCollection() {
+		// The WATCH client returns a CloseableIterator too (see
+		// TestJavaWatch_Client_ReturnsCloseableIterator), so it needs the
+		// interface declared. Only Tier-3 set the flag, so a service with a
+		// WATCH collection client and no Tier-3 one emitted uses of a type it
+		// never declared.
+		if method.IsTier3SnapshotCollection() || method.IsWatchCollection() {
 			hasCursor = true
 		}
 		if method.IsPageCollection() {

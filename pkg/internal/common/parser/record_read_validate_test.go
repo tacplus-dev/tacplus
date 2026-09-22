@@ -371,32 +371,35 @@ func TestRecordReadC2SUnqueryableNamespaceRejected(t *testing.T) {
 	}
 }
 
-// A Go target is refused by name. The Go service wrapper carries neither record
-// egress filter, so the surface would be emitted unguarded — a pre-existing hole
-// in that generator, and one this plane must not walk into silently.
-func TestRecordReadC2SGoTargetRejected(t *testing.T) {
+// The three SERVER languages are accepted and the CLIENT-ONLY ones are refused
+// by name. Go was refused here too until its record egress filters landed; a
+// language that generates no service wrapper still has nowhere to put the pin,
+// so the gate is narrowed rather than removed.
+func TestRecordReadC2SServerLanguagesAcceptedClientOnlyRejected(t *testing.T) {
 	fds := recordReadC2SFds([]string{"reader"}, true, wellFormedC2SFields(), principalScope())
-	for _, lang := range []string{"rust", "java"} {
+	for _, lang := range []string{"go", "rust", "java"} {
 		if err := validateRecordReadC2SLanguageSupport(fds, "reader", lang); err != nil {
 			t.Fatalf("%s carries both egress filters and must be accepted, got: %v", lang, err)
 		}
 	}
-	err := validateRecordReadC2SLanguageSupport(fds, "reader", "go")
-	if err == nil {
-		t.Fatal("expected failure for a Go target declaring (spec.record_read).c2s")
-	}
-	for _, want := range []string{"store_principal", "store_namespace", `"go"`} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error must name %s, got: %v", want, err)
+	for _, lang := range []string{"python", "typescript", "swift", "csharp"} {
+		err := validateRecordReadC2SLanguageSupport(fds, "reader", lang)
+		if err == nil {
+			t.Fatalf("expected failure for client-only target %q declaring (spec.record_read).c2s", lang)
+		}
+		for _, want := range []string{"store_principal", "store_namespace", `"` + lang + `"`} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error must name %s, got: %v", want, err)
+			}
 		}
 	}
-	// A Go service that declares no c2s block is untouched: this is additive.
+	// A client-only target that declares no c2s block is untouched: this is additive.
 	for _, fd := range fds {
 		if fd.Package == "reader" {
 			fd.RecordReads = []RecordRead{{Record: "owner.Row"}}
 		}
 	}
-	if err := validateRecordReadC2SLanguageSupport(fds, "reader", "go"); err != nil {
-		t.Fatalf("an s2s-only reader must build for Go, got: %v", err)
+	if err := validateRecordReadC2SLanguageSupport(fds, "reader", "python"); err != nil {
+		t.Fatalf("an s2s-only reader must build for a client-only target, got: %v", err)
 	}
 }

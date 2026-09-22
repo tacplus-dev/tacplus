@@ -210,13 +210,6 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	hasRequiresDevice := false
 	for _, service := range targetServices {
 		handlerInterface.WriteString(generateGoHandlerInterface(service, info.Package))
-		// The peer half of a record query plane, whoever hosts it — Java's own
-		// emission gate for the (spec.store_namespace)/(spec.store_principal)
-		// egress seams (java/types/servicewrapper_gen.go), copied rather than
-		// tightened. A plain s2s service returning record rows is legitimate:
-		// Java emits no row filter there either, so refusing it here would be a
-		// generation-time regression, not a boundary.
-		recordPlaneS2S := !service.IsC2S && service.SynthesizedKind == parser.SynthesizedKindRecordMap
 		for _, method := range service.Methods {
 			// An RPC_PRINCIPAL_MCP rpc is a tool, not a gRPC call: it gets no
 			// method on the wrapper and no per-method auth registration. The
@@ -256,31 +249,29 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 				return fmt.Errorf("%s.%s takes %s, whose field %q carries (spec.store_epoch), but the stamp is generated for Java service wrappers only; a Go host of this write would leave the store epoch unstamped",
 					service.Name, method.Name, method.FullInputType, f)
 			}
-			// (spec.store_namespace) / (spec.store_principal) filter the rows
-			// leaving a read down to the caller's own. That filter is generated
-			// for Java and Rust service wrappers only — the Go wrapper renders
-			// none on any seam — so a Go host of a record-bearing read would
-			// serve every tenant's rows to every authenticated caller. Refuse
-			// to generate rather than ship the leak silently. The MCP dispatch
-			// is not covered here: it renders the filter itself
+			// (spec.store_namespace) / (spec.store_principal) /
+			// (spec.record).private narrow the rows leaving a read down to the
+			// caller's own. The Go wrapper renders that filter on every seam
+			// Java and Rust render it on — the unary response, the PAGE window,
+			// the WATCH frames and the query predicate (recordegress_gen.go).
+			// The MCP dispatch is not covered here: it renders the filter itself
 			// (goMcpRowFilterBlock), and an MCP rpc never reaches this loop.
-			if service.IsC2S || recordPlaneS2S {
-				if annotation, t := goPinnedEgressRows(method, san, info.Package); annotation != "" {
-					return fmt.Errorf("%s.%s returns %s, which carries (spec.%s); the egress row filter is generated for Java and Rust service wrappers only, so a Go host of this read would return every tenant's rows",
-						service.Name, method.Name, t, annotation)
-				}
+			//
+			// Two things are still refused, and neither is a Go gap:
+			//
+			//	a streaming shape with NO per-item hook (Tier-2/Tier-3 SNAPSHOT,
+			//	    a plain server stream) over pinned rows, and a WATCH delta the
+			//	    per-frame guard cannot walk. Rust refuses exactly this set
+			//	    (rustStreamEgressRefusal) for exactly this reason.
+			//	a (spec.record).private read with NO caller principal to pin to
+			//	    at all — a surface no user token reaches, or a private row
+			//	    whose owner no annotation names. There is no identity for the
+			//	    pin to compare rows against, in any language.
+			if err := goStreamEgressRefusal(service.Name, method, san, info.Package); err != nil {
+				return err
 			}
-			// (spec.record).private pins a row to exactly one owner on every
-			// read path, with no admin/tenant/plain-s2s exception — unlike
-			// store_namespace/store_principal above, there is no surface where
-			// serving a private record unpinned is legitimate. The pin itself
-			// is not generated for any language yet (tracked separately), so
-			// today a Go host of ANY private record read — c2s or s2s, record
-			// plane or not — would serve every owner's rows to every caller.
-			// Refuse unconditionally rather than ship that silently.
-			if t := goPrivateEgressRows(method, san, info.Package); t != "" {
-				return fmt.Errorf("%s.%s returns %s, which carries (spec.record).private = true; the owner pin is not generated for any language yet, so hosting this read would serve every owner's rows to every caller",
-					service.Name, method.Name, t)
+			if why := goPrivatePinUnenforceable(service, method, san, info.Package); why != "" {
+				return fmt.Errorf("%s.%s must not be generated: %s", service.Name, method.Name, why)
 			}
 			// (spec.rpc).requires_device: the device-only approval gate. Its
 			// preconditions are structural, so a build that cannot meet one of
@@ -1155,7 +1146,15 @@ if authTok != nil {
 			}
 		}
 		callerExtract := callerExtractFor("stream.Context()")
+		callerExtract += goPredicatePins(san, method, servicePackage, "\t", "return", svc.IsC2S, goRecordPlaneS2S(svc))
 		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return")
+		// (spec.store_principal)/(spec.store_namespace)/(spec.record).private on
+		// the WATCH seam: resolved once here, applied to every snapshot_item and
+		// every delta inside the producer loop below, before the frame is
+		// sanitized and sent. A shape the guards cannot walk was already refused
+		// (goStreamEgressRefusal), so the error here cannot fire.
+		watchEgressPre, watchItemGuard, watchChangeGuard, _ := goWatchEgressFilter(san, svc, method, servicePackage, "\t", "return")
+		callerExtract += watchEgressPre
 		oneof := strutil.ToPascalCase(method.Resolved.WatchOneOf)
 		change := goWatchType(method.Resolved.WatchChangeType, servicePackage)
 		hubVar := "{{.ServerName}}WatchHub" + method.Name
@@ -1206,6 +1205,10 @@ if authTok != nil {
 		if len(watchTargets) > 0 {
 			callerExtract += egressSanitizePreamble(watchTargets)
 		}
+		// The guards run ahead of the sanitize on both legs: a frame the caller
+		// may not see must not reach the sanitizer at all.
+		itemSan = watchItemGuard + itemSan
+		changeSan = watchChangeGuard + changeSan
 		if hasAccounting {
 			return fmt.Sprintf(`var %s = collection.NewHub[%s](%d, %d)
 
@@ -1467,6 +1470,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 		}
 
 		callerExtract := callerExtractFor("ctx")
+		callerExtract += goPredicatePins(san, method, servicePackage, "\t", "return nil,", svc.IsC2S, goRecordPlaneS2S(svc))
 		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return nil,")
 
 		var inputValidation string
@@ -1491,6 +1495,13 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 			pageItemGoType := goWatchType(method.Resolved.PageItemType, servicePackage)
 			callerExtract += egressSanitizePreamble([]sanTarget{t})
 			pageSan = "\n" + egressSanitizeSliceStmt(t, "page.Items", pageItemGoType, "\t")
+		}
+		// The egress row filters run over the page's items BEFORE it is
+		// assembled — and ahead of the entitlement sanitize — so next_page_token
+		// and total_count describe the rows the caller is actually shown.
+		if pagePre, pageEgress := goPageEgressFilter(san, svc, method, servicePackage, "\t", "return nil,"); pageEgress != "" {
+			callerExtract += pagePre
+			pageSan = "\n" + pageEgress + pageSan
 		}
 
 		totalBlock := ""
@@ -1642,8 +1653,20 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 	}
 
 	callerExtract := callerExtractFor("ctx")
+	callerExtract += goPredicatePins(san, method, servicePackage, "\t", "return nil,", svc.IsC2S, goRecordPlaneS2S(svc))
 	callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return nil,")
 	callerExtract += goRequiresDeviceGate(method, svc, servicePackage)
+
+	// (spec.store_principal)/(spec.store_namespace)/(spec.record).private: rows
+	// the caller does not own, or that belong to another tenant, never leave the
+	// process. The resolves bind next to the caller they read; the filter itself
+	// runs AHEAD of the entitlement sanitize below, for the same reason Java
+	// orders them that way — an unowned row must not reach the sanitizer at all.
+	unaryEgressPre, unaryEgress := "", ""
+	if !emptyOutput {
+		unaryEgressPre, unaryEgress = goUnaryEgressFilter(san, svc, method, servicePackage, "\t", "return nil,")
+		callerExtract += unaryEgressPre
+	}
 
 	// Egress data entitlement for unary responses (e.g. RecordMap Sample<T>): a
 	// sanitizable response type is sanitized whole; an injected envelope
@@ -1664,6 +1687,7 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 			unarySan = egressSanitizeEnvelopeStmts(fs, "resp", "\t")
 		}
 	}
+	unarySan = unaryEgress + unarySan
 
 	// Handler call — sanitize the context and omit Empty/TraceRequest request
 	handlerCall := fmt.Sprintf("p.handler.%s(sanitizeContext(ctx), caller, req)", method.Name)
@@ -1852,41 +1876,10 @@ func goAppendOnlyRecordOnMethod(method *parser.MethodInfo, san *egressSanitizer,
 	return ""
 }
 
-// goPinnedEgressRows names the caller-pinned rows a method returns: the
-// annotation ("store_namespace" or "store_principal") and the egress type
-// carrying it, or "", "" when the method returns none. The Go wrapper renders
-// NO egress row filter on any of its seams — the filter is generated for Java
-// and Rust service wrappers only — so this exists purely so a Go host of a
-// record-bearing read fails generation instead of returning every tenant's
-// rows. It answers off the same index helpers the generated MCP dispatch
-// filters with: mcpRowFields for repeated rows, annotatedStringField for a
-// row-shaped type.
-func goPinnedEgressRows(method *parser.MethodInfo, san *egressSanitizer, servicePackage string) (string, string) {
-	if san == nil {
-		return "", ""
-	}
-	// Resolved is the computed COLLECTION view and is nil for a method that
-	// declares no collection at all, so the page/watch types are reachable only
-	// through it.
-	egressTypes := []string{method.FullOutputType}
-	if method.Resolved != nil {
-		egressTypes = append(egressTypes, method.Resolved.PageItemType, method.Resolved.WatchItemType, method.Resolved.WatchChangeType)
-	}
-	for _, t := range egressTypes {
-		if t == "" {
-			continue
-		}
-		for _, annotation := range []string{"store_namespace", "store_principal"} {
-			if len(san.mcpRowFields(t, servicePackage, annotation)) > 0 || san.annotatedStringField(t, servicePackage, annotation) != "" {
-				return annotation, t
-			}
-		}
-	}
-	return "", ""
-}
-
 // goPrivateEgressRows names the egress type carrying a caller-owned
 // ((spec.record).private) row a method returns, or "" when it returns none.
+// It feeds goPrivatePinUnenforceable, the one generation refusal the owner pin
+// still owes (recordegress_gen.go).
 // Unlike store_namespace/store_principal, private is a MESSAGE-level
 // annotation — declared on the record type itself, not a field within it —
 // so this checks each reachable type's own record_private annotation

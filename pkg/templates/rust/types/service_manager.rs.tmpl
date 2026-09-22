@@ -43,6 +43,11 @@ use internal::state::states::StateClients;
 {{- end}}
 use std::future::Future;
 use std::pin::Pin;
+{{- if .HasApprovalBroker}}
+// (spec.rpc).requires_device: the manager builds the broker call the generated
+// gate in each guarded wrapper runs.
+use approval;
+{{- end}}
 {{- if .HasS2SClients}}
 pub use internal::grpc::clients::grpc_clients::TokenProvider;
 use internal::grpc::clients::grpc_clients::TokenProviderFor;
@@ -1351,6 +1356,45 @@ impl ServiceManager {
         self.start_disk_store_roll_schedulers(handler.clone())?;
 {{- end}}
 
+{{- if .HasApprovalBroker}}
+        // (spec.rpc).requires_device: the generated gate in each wrapper calls
+        // this, which calls {{.ApprovalBroker.Package}}.{{.ApprovalBroker.ServiceName}}/{{.ApprovalBroker.MethodName}} — the approval broker on
+        // the authoritative token minter. The S2S client it goes out over was
+        // auto-injected because this package declares a requires_device rpc;
+        // the author wrote only the boolean. rpc_method and request_hash are
+        // the LIVE values the gate computed from the request in front of it,
+        // never echoed back out of the approval record.
+        let approval_check: approval::Check = {
+            let sm = std::sync::Arc::clone(&self);
+            std::sync::Arc::new(move |req: approval::CheckRequest| {
+                let sm = std::sync::Arc::clone(&sm);
+                Box::pin(async move {
+                    let assertion: {{.ApprovalBroker.TypesModPath}}::WebauthnAssertion =
+                        prost::Message::decode(&req.device_assertion[..]).map_err(|e| {
+                            tonic::Status::unauthenticated(format!(
+                                "device assertion is not a WebauthnAssertion: {}",
+                                e
+                            ))
+                        })?;
+                    sm.s2s()
+                        .{{.ApprovalBroker.TargetAccessor}}()
+                        .{{.ApprovalBroker.ClientAccessor}}()
+                        .{{.ApprovalBroker.MethodFn}}({{.ApprovalBroker.TypesModPath}}::BrokerPendingApprovalRequest {
+                            approval_id: req.approval_id,
+                            rpc_method: req.rpc_method,
+                            request_hash: req.request_hash,
+                            caller_namespace: req.caller_namespace,
+                            caller_subject: req.caller_subject,
+                            device_assertion: Some(assertion),
+                            ..Default::default()
+                        })
+                        .await
+                        .map(|_| ())
+                }) as std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), tonic::Status>> + Send>>
+            })
+        };
+{{- end}}
+
 	        // Wrap handler implementations with validation and register services.
 {{- range .GrpcServices}}
 {{- if .IsGeneratedRecordC2S}}
@@ -1370,6 +1414,9 @@ impl ServiceManager {
 {{- end}}
         {{.WrapperVar}}.set_instance_id(self.instance_id().to_string()).await;
         {{.WrapperVar}}.set_anonymize_hmac_key(self.cfg.anonymize_hmac_key.clone()).await;
+{{- if .HasRequiresDevice}}
+        {{.WrapperVar}}.set_approval_check_func(Some(approval_check.clone())).await;
+{{- end}}
 {{- end}}
 
 {{- if .HasTlsGrpc}}

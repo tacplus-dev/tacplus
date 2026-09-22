@@ -386,6 +386,18 @@ run_rust_spiffe_self_tests() {
     }
   assert_clean_log "$log_dir/rust-collection-test.log"
 
+  # (spec.rpc).requires_device: the approval crate carries the cross-language
+  # canonicalization vector — the GENERATOR's own emitted code, run against the
+  # same pinned canonical bytes and SHA-256 that Go's and Java's tests assert.
+  # Rust generates the canonicalization rather than reflecting over a descriptor,
+  # so this is the only place its bytes are proven equal to the other two.
+  [[ -f "$output/chassis/approval/Cargo.toml" ]] || die "missing generated Rust approval crate"
+  (cd "$output" && cargo test -p approval) >"$log_dir/rust-approval-test.log" 2>&1 || {
+      dump_step_log "$log_dir/rust-approval-test.log"
+      return 1
+    }
+  assert_clean_log "$log_dir/rust-approval-test.log"
+
   # PC-L-7: the diskstore crate's tests (compress/path/snapshot/redolog/
   # schedule) existed in the templates but were never executed by any gate
   # (cargo check only).

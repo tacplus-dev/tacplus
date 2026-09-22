@@ -170,6 +170,12 @@ func processProtoFiles(protocDir, outputDir string) ([]model.ProtoFile, error) {
 		return nil, err
 	}
 
+	// (spec.rpc).requires_device: which messages owe a canonicalization
+	// function. Rust has no runtime reflection, so the approval request hash is
+	// generated rather than walked — see requires_device_gen.go. The plan is
+	// empty, and nothing is emitted, for a proto set declaring no guarded rpc.
+	approvalPlan := buildRustApprovalPlan(parser, protoFiles)
+
 	// Track which subdirectories contain helper files
 	subdirHelpers := make(map[string][]string)
 
@@ -242,6 +248,9 @@ func processProtoFiles(protocDir, outputDir string) ([]model.ProtoFile, error) {
 		writeMerge(&b, pf)
 		if len(pf.Messages) > 0 {
 			writeEnvVar(&b, pf)
+		}
+		if len(pf.Messages) > 0 {
+			writeApprovalCanonical(&b, pf, protoFiles, approvalPlan)
 		}
 
 		// Combine #[cfg(test)] sections into a single test module

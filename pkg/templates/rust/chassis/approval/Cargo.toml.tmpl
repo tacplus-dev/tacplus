@@ -1,0 +1,12 @@
+[package]
+name = "approval"
+version = "1.0.0"
+edition = "2021"
+description = "Generated runtime support for (spec.rpc).requires_device — the device-only approval check"
+
+[dependencies]
+tonic = { workspace = true }
+# The approval hash is SHA-256 over the canonical bytes. Pinned here for the
+# same reason the types crate pins hmac/sha2/hex: generated code is written
+# against this API.
+sha2 = "0.10"

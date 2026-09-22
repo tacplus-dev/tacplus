@@ -1,0 +1,356 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+//
+// CODE GENERATED - DO NOT EDIT
+// Generated runtime support for (spec.rpc).requires_device — the device-only
+// approval check. See looper/decisions/requires-device-hash-transport-2026-09-21.md.
+//
+// This crate carries the TRANSPORT half of the check: the two metadata keys and
+// the reading and attaching of them. The HASH half lives in the generated types
+// crate, as `approval_canonical_<t>` / `approval_request_hash_<t>` beside the
+// message it hashes.
+//
+// That split is Rust's alone, and it is forced: Go and Java canonicalize by
+// runtime reflection, which prost does not have. Generating the walk from the
+// same descriptor the Go and Java chassis read at runtime produces the same
+// bytes — pinned against both by the cross-language vector — but it has to be
+// generated per message, and a per-message function belongs with the message.
+//
+// The approval id and the device assertion travel as CALL METADATA, never as
+// request fields: kernel requires that whatever carries them is outside the
+// hashed bytes, and metadata is outside the request message by construction.
+
+use std::future::Future;
+use std::pin::Pin;
+
+/// The pending approval's opaque id.
+pub const METADATA_APPROVAL_ID: &str = "x-tacplus-approval-id";
+
+/// The serialized WebauthnAssertion. The -bin suffix is the gRPC convention for
+/// a non-UTF8 metadata value; tonic base64s it on the wire and hands it back as
+/// raw bytes.
+pub const METADATA_DEVICE_ASSERTION: &str = "x-tacplus-device-assertion-bin";
+
+/// What the caller presented: the two metadata values a guarded rpc must carry.
+#[derive(Debug, Clone)]
+pub struct Presented {
+    pub approval_id: String,
+    pub device_assertion: Vec<u8>,
+}
+
+/// The ServiceManager-supplied broker call. The wrapper holds one of these and
+/// knows nothing about kernel: the SM owns the generated Mint client, so the
+/// wrapper does not have to be generated against it.
+///
+/// Returning Err refuses the rpc. There is no "allow on error" path — an
+/// unreachable broker is a refusal, not a bypass.
+pub type Check = std::sync::Arc<
+    dyn Fn(
+            CheckRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<(), tonic::Status>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// One broker call's arguments. `rpc_method` is the WIRE-qualified
+/// "pkg.Service/Method" — the value kernel compares against what the approval
+/// was created with, so it must be the spelling every language reports, not any
+/// one language's internal auth key.
+#[derive(Debug, Clone)]
+pub struct CheckRequest {
+    pub rpc_method: String,
+    pub approval_id: String,
+    pub request_hash: Vec<u8>,
+    pub caller_namespace: String,
+    pub caller_subject: String,
+    pub device_assertion: Vec<u8>,
+}
+
+/// Reads the approval id and the serialized WebauthnAssertion off an incoming
+/// call. Both are mandatory: a requires_device rpc arriving without them is
+/// refused, never served.
+pub fn from_metadata(md: &tonic::metadata::MetadataMap) -> Result<Presented, tonic::Status> {
+    let approval_id = md
+        .get(METADATA_APPROVAL_ID)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_string())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            tonic::Status::unauthenticated(format!(
+                "this rpc requires a device approval, but {} is absent",
+                METADATA_APPROVAL_ID
+            ))
+        })?;
+    let device_assertion = md
+        .get_bin(METADATA_DEVICE_ASSERTION)
+        .and_then(|v| v.to_bytes().ok())
+        .map(|b| b.to_vec())
+        .filter(|b| !b.is_empty())
+        .ok_or_else(|| {
+            tonic::Status::unauthenticated(format!(
+                "this rpc requires a device approval, but {} is absent",
+                METADATA_DEVICE_ASSERTION
+            ))
+        })?;
+    Ok(Presented {
+        approval_id,
+        device_assertion,
+    })
+}
+
+/// Puts the approval id and the serialized WebauthnAssertion on an outgoing
+/// call. Callers never construct this metadata by hand, the same rule that
+/// holds for Bearer tokens.
+pub fn attach_outgoing<T>(
+    request: &mut tonic::Request<T>,
+    approval_id: &str,
+    device_assertion: &[u8],
+) -> Result<(), tonic::Status> {
+    let id = approval_id
+        .parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>()
+        .map_err(|_| tonic::Status::invalid_argument("approval id is not a valid metadata value"))?;
+    request.metadata_mut().insert(METADATA_APPROVAL_ID, id);
+    request.metadata_mut().insert_bin(
+        METADATA_DEVICE_ASSERTION,
+        tonic::metadata::MetadataValue::from_bytes(device_assertion),
+    );
+    Ok(())
+}
+
+/// The 32-byte request_hash for already-canonicalized bytes. The per-message
+/// `approval_request_hash_<t>` in the types crate is this same digest over the
+/// bytes its `approval_canonical_<t>` produced; this entry point exists for the
+/// one request shape that has no generated function of its own, an empty
+/// request, whose canonical form is the empty byte string.
+pub fn hash_canonical(canonical: &[u8]) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(canonical).to_vec()
+}
+
+// ---- the cross-language canonicalization vector ----
+//
+// The (spec.rpc).requires_device request hash is compared RAW by kernel and
+// never re-derived there, so a one-byte disagreement between two languages is a
+// silent, total failure of the feature — a refused rpc nobody can explain.
+//
+// This module runs the GENERATOR's own emitted canonicalization over the same
+// logical message Go's and Java's tests build, and asserts the SAME two pinned
+// constants they assert. The primitives and the two functions below are
+// VERBATIM generator output; a Go test (TestRustApprovalChassisRunsTheGenerated-
+// Vector) asserts that, so they cannot be hand-edited into agreement with the
+// constants. Three languages, one set of bytes.
+//
+// Kept unindented because it is copied output: an indented copy would no longer
+// match what the generator emits, which is the whole point of the pairing.
+#[cfg(test)]
+mod canonical_vector {
+
+/// Mirrors what prost generates for the vector shape: plain fields, a singular
+/// message as Option<T>, a repeated field as Vec<T>.
+#[derive(Default)]
+pub struct Nested {
+    label: String,
+    count: i32,
+    weight: i64,
+}
+
+#[derive(Default)]
+pub struct Vector {
+    subject: String,
+    amount: i32,
+    dry_run: bool,
+    blob: Vec<u8>,
+    tags: Vec<String>,
+    nested: Option<Nested>,
+    ratio: f32,
+    score: f64,
+    delta: i32,
+}
+
+// ---- verbatim generator output: the shared wire primitives ----
+
+// ---- (spec.rpc).requires_device canonicalization ----
+//
+// The canonical encoding of a request, which the approval's request_hash is
+// SHA-256 over. It is deliberately NOT prost's own encoder: prost packs
+// repeated scalars and owes no field ordering, and a "deterministic marshal"
+// that agrees with itself while disagreeing with Go and Java is the exact
+// failure this encoding exists to prevent. Populated fields only, ascending
+// field number, protobuf wire types, recursing into nested messages under the
+// same rule. Byte-identical to the Go and Java chassis by construction and by
+// the pinned cross-language vector.
+//
+// Each arm is allow(dead_code): a request tree carrying no float, no fixed and
+// no sint field legitimately uses only some of them, and an unused arm is not a
+// defect to warn about.
+
+#[allow(dead_code)]
+fn approval_put_varint(out: &mut Vec<u8>, mut v: u64) {
+    loop {
+        if v < 0x80 {
+            out.push(v as u8);
+            return;
+        }
+        out.push((v as u8) | 0x80);
+        v >>= 7;
+    }
+}
+
+#[allow(dead_code)]
+fn approval_put_tag(out: &mut Vec<u8>, num: u32, wire: u32) {
+    approval_put_varint(out, ((num as u64) << 3) | (wire as u64));
+}
+
+#[allow(dead_code)]
+fn approval_put_bytes(out: &mut Vec<u8>, num: u32, b: &[u8]) {
+    approval_put_tag(out, num, 2);
+    approval_put_varint(out, b.len() as u64);
+    out.extend_from_slice(b);
+}
+
+#[allow(dead_code)]
+fn approval_put_fixed32(out: &mut Vec<u8>, num: u32, v: u32) {
+    approval_put_tag(out, num, 5);
+    out.extend_from_slice(&v.to_le_bytes());
+}
+
+#[allow(dead_code)]
+fn approval_put_fixed64(out: &mut Vec<u8>, num: u32, v: u64) {
+    approval_put_tag(out, num, 1);
+    out.extend_from_slice(&v.to_le_bytes());
+}
+
+/// Zigzag for sint32/sint64, over u64 arithmetic so a shift of a large
+/// magnitude cannot overflow-panic in a debug build.
+#[allow(dead_code)]
+fn approval_zigzag(v: i64) -> u64 {
+    ((v as u64) << 1) ^ ((v >> 63) as u64)
+}
+// ---- verbatim generator output: the vector's canonicalization ----
+/// approval_canonical_nested appends the canonical bytes of m, as the (spec.rpc).requires_device
+/// approval hash defines them: populated fields only, ascending field number.
+pub fn approval_canonical_nested(m: &Nested, out: &mut Vec<u8>) {
+    if !m.label.is_empty() {
+        approval_put_bytes(out, 1, m.label.as_bytes());
+    }
+    if m.count != 0 {
+        approval_put_tag(out, 2, 0);
+        approval_put_varint(out, (m.count as i64) as u64);
+    }
+    if m.weight != 0 {
+        approval_put_tag(out, 3, 0);
+        approval_put_varint(out, m.weight as u64);
+    }
+}
+
+/// approval_canonical_vector appends the canonical bytes of m, as the (spec.rpc).requires_device
+/// approval hash defines them: populated fields only, ascending field number.
+pub fn approval_canonical_vector(m: &Vector, out: &mut Vec<u8>) {
+    if !m.subject.is_empty() {
+        approval_put_bytes(out, 1, m.subject.as_bytes());
+    }
+    if m.amount != 0 {
+        approval_put_tag(out, 2, 0);
+        approval_put_varint(out, (m.amount as i64) as u64);
+    }
+    if m.dry_run {
+        approval_put_tag(out, 3, 0);
+        approval_put_varint(out, if m.dry_run { 1 } else { 0 });
+    }
+    if !m.blob.is_empty() {
+        approval_put_bytes(out, 4, &m.blob[..]);
+    }
+    for v in m.tags.iter() {
+        approval_put_bytes(out, 5, v.as_bytes());
+    }
+    if let Some(v) = m.nested.as_ref() {
+        let mut sub = Vec::new();
+        approval_canonical_nested(v, &mut sub);
+        approval_put_bytes(out, 6, &sub);
+    }
+    if m.ratio != 0.0 {
+        approval_put_fixed32(out, 7, (m.ratio).to_bits());
+    }
+    if m.score != 0.0 {
+        approval_put_fixed64(out, 8, (m.score).to_bits());
+    }
+    if m.delta != 0 {
+        approval_put_tag(out, 9, 0);
+        approval_put_varint(out, approval_zigzag(m.delta as i64));
+    }
+}
+
+/// approval_request_hash_vector is the 32-byte request_hash a (spec.rpc).requires_device approval
+/// for this request is created with, and the same value the generated server
+/// check recomputes from the live request. Both ends call this one function.
+pub fn approval_request_hash_vector(m: &Vector) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    let mut canonical = Vec::new();
+    approval_canonical_vector(m, &mut canonical);
+    Sha256::digest(&canonical).to_vec()
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{:02x}", x)).collect()
+}
+
+/// The vector's values are deliberately awkward — a negative sint32, a
+/// non-ASCII byte string, two repeated entries whose order is meaningful — so a
+/// language that packs repeated fields, zigzags the wrong way or canonicalizes
+/// NaN differs immediately.
+fn vector() -> Vector {
+    Vector {
+        subject: "alice".to_string(),
+        amount: 1000,
+        dry_run: true,
+        blob: vec![0x00, 0x01, 0xfe, 0xff],
+        tags: vec!["one".to_string(), "two".to_string()],
+        nested: Some(Nested {
+            label: "shards".to_string(),
+            count: 100,
+            weight: 123456,
+        }),
+        ratio: 1.5,
+        score: 123.0,
+        delta: -128,
+    }
+}
+
+#[test]
+fn canonical_bytes_match_the_cross_language_vector() {
+    let mut out = Vec::new();
+    approval_canonical_vector(&vector(), &mut out);
+    assert_eq!(
+        hex(&out),
+        "0a05616c69636510e807180122040001feff2a036f6e652a0374776f320e0a06736861726473106418c0c4073d0000c03f410000000000c05e4048ff01",
+        "canonical bytes drifted from the Go/Java cross-language vector"
+    );
+}
+
+#[test]
+fn request_hash_matches_the_cross_language_vector() {
+    assert_eq!(
+        hex(&approval_request_hash_vector(&vector())),
+        "be641d5fcad1ae6e58a9d0adeaba0f2755cc9ebc5bc0ada6ad32a5e5d1b868ba",
+        "request hash drifted from the Go/Java cross-language vector"
+    );
+}
+
+#[test]
+fn only_populated_fields_are_written() {
+    let mut out = Vec::new();
+    approval_canonical_vector(&Vector::default(), &mut out);
+    assert!(out.is_empty(), "an all-zero message must canonicalize to no bytes");
+}
+
+#[test]
+fn repeated_order_is_significant() {
+    let mut a = Vec::new();
+    let mut v = vector();
+    approval_canonical_vector(&v, &mut a);
+    v.tags.reverse();
+    let mut b = Vec::new();
+    approval_canonical_vector(&v, &mut b);
+    assert_ne!(a, b, "repeated order is meaningful data and must change the bytes");
+}
+
+}

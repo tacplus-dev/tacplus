@@ -81,6 +81,10 @@ type grpcServiceEntry struct {
 	AuthAnyUser bool
 	// HasMethodAuth is true when the wrapper has a register_method_auth function.
 	HasMethodAuth bool
+	// HasRequiresDevice is true when this service's wrapper carries the
+	// (spec.rpc).requires_device gate, so the ServiceManager must hand it the
+	// approval check. A wrapper without one has no seam to wire.
+	HasRequiresDevice bool
 	// AuthExemptPaths are full gRPC paths this service declares auth_disabled.
 	// They must bypass the server's AuthEnforcingLayer, which otherwise rejects
 	// them before the per-method wrapper ever runs.
@@ -176,10 +180,15 @@ type smTemplateData struct {
 	// AccountingPublisher is the generator-resolved publisher for the durable
 	// accounting record topic. nil when the proto set declares no accounting
 	// record (client repos), in which case no emitter is wired at all.
-	AccountingPublisher        *publisherEntry
-	TargetServices             []TargetServiceInfo // per-target-service connection info for typed accessors
-	DiskStores                 []rustDiskStoreRuntimeEntry
-	HasDiskStores              bool
+	AccountingPublisher *publisherEntry
+	TargetServices      []TargetServiceInfo // per-target-service connection info for typed accessors
+	DiskStores          []rustDiskStoreRuntimeEntry
+	HasDiskStores       bool
+	// HasApprovalBroker is true when some hosted service carries the
+	// (spec.rpc).requires_device gate, so the ServiceManager builds the check
+	// and wires it into those wrappers.
+	HasApprovalBroker          bool
+	ApprovalBroker             rustApprovalBrokerEntry
 	KeepaliveTimeSecs          int
 	KeepaliveTimeoutSecs       int
 	KeepalivePermitMinTimeSecs int
@@ -218,6 +227,12 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		snakeName := tonicServiceModuleName(svc.ServiceName)
 		prefix := strings.TrimSuffix(snakeName, "_service")
 		prefixCount[prefix]++
+	}
+
+	// (spec.rpc).requires_device: which hosted services carry the gate.
+	requiresDeviceSvcs, err := rustRequiresDeviceServices(config.FlatProtoDir)
+	if err != nil {
+		return smTemplateData{}, err
 	}
 
 	var grpcSvcs []grpcServiceEntry
@@ -293,6 +308,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			AuthDisabled:             svc.AuthDisabled,
 			AuthAnyUser:              svc.AuthAnyUser,
 			HasMethodAuth:            svc.HasMethodAuth,
+			HasRequiresDevice:        requiresDeviceSvcs[svc.PackageName+"."+svc.ServiceName],
 			AuthExemptPaths:          svc.AuthExemptPaths,
 			IsHosted:                 config.SelfPackage != "" && svc.PackageName != config.SelfPackage,
 			// The one service whose handler the ServiceManager supplies itself.
@@ -537,6 +553,25 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		}
 	}
 
+	// (spec.rpc).requires_device: resolve the broker seam only when some hosted
+	// wrapper actually carries the gate. Resolving it unconditionally would make
+	// every build that happens to declare a token minter fail on a proto set
+	// whose minter has no broker rpc.
+	hasApprovalBroker := false
+	for _, e := range grpcSvcs {
+		if e.HasRequiresDevice {
+			hasApprovalBroker = true
+			break
+		}
+	}
+	var approvalBroker rustApprovalBrokerEntry
+	if hasApprovalBroker {
+		approvalBroker, err = buildRustApprovalBrokerEntry(config.FlatProtoDir, clientServices)
+		if err != nil {
+			return smTemplateData{}, err
+		}
+	}
+
 	return smTemplateData{
 		CrateBasePath:           config.CrateBasePath,
 		CrateBasePathUnderscore: strings.ReplaceAll(config.CrateBasePath, "-", "_"),
@@ -608,6 +643,8 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		TargetServices:             targetServices,
 		DiskStores:                 diskStores,
 		HasDiskStores:              len(diskStores) > 0,
+		HasApprovalBroker:          hasApprovalBroker,
+		ApprovalBroker:             approvalBroker,
 		KeepaliveTimeSecs:          keepaliveconst.TimeSecs,
 		KeepaliveTimeoutSecs:       keepaliveconst.TimeoutSecs,
 		KeepalivePermitMinTimeSecs: keepaliveconst.PermitMinTimeSecs,

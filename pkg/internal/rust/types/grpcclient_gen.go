@@ -12,9 +12,11 @@ import (
 	"go.uber.org/zap"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/header"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/consts"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
 )
 
@@ -25,13 +27,32 @@ func generateGrpcClients(servicesInfo []ServiceInfo, inputDir string, packageToD
 		return fmt.Errorf("failed to create descriptor parser: %w", err)
 	}
 
+	// (spec.rpc).requires_device: the caller-side helper hashes the request
+	// through the generated canonicalization, so a CALLER of a guarded rpc needs
+	// the same "can this request be canonicalized at all" oracle the host uses.
+	// Without it a caller emits a call to a function the types builder declined
+	// to generate, and the failure lands as a missing symbol rather than as the
+	// reason.
+	var allFiles []model.ProtoFile
+	for relPath := range descriptorParser.GetAllFiles() {
+		if proto.IsInfraProto(relPath) {
+			continue
+		}
+		mf, err := descriptorParser.ConvertToProtoFile(relPath)
+		if err != nil {
+			return fmt.Errorf("convert %s for requires_device resolution: %w", relPath, err)
+		}
+		allFiles = append(allFiles, mf)
+	}
+	san := newRustEgressSanitizer(allFiles)
+
 	for _, svc := range servicesInfo {
 		protoInfo, err := descriptorParser.ConvertToProtoInfo(svc.ProtoFile)
 		if err != nil {
 			return fmt.Errorf("failed to parse %s: %w", svc.ProtoFile, err)
 		}
 
-		if err := generateGrpcClient(svc, protoInfo, packageToDirMap); err != nil {
+		if err := generateGrpcClient(svc, protoInfo, packageToDirMap, san); err != nil {
 			return fmt.Errorf("failed to generate gRPC client for %s: %w", svc.ServiceName, err)
 		}
 	}
@@ -253,7 +274,7 @@ func generateRustGrpcClientAggregators(servicesInfo []ServiceInfo) error {
 }
 
 // generateGrpcClient creates the typed gRPC client wrapper Rust file for a service.
-func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMap map[string]string) error {
+func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMap map[string]string, san *rustEgressSanitizer) error {
 	// Output to sm/internal/grpc/clients/{parentDir}/{packageName}/
 	outputDir := filepath.Join(svc.Config.OutputDir, svc.Config.GetSmPrefix(), "internal", "grpc", "clients", svc.ParentDir, svc.PackageName)
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
@@ -313,6 +334,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMa
 	var extraTypes strings.Builder
 	usesOutboundTimeout := false
 	usesUnaryRetry := false
+	hasRequiresDevice := false
 	for _, method := range targetService.Methods {
 		result, err := generateRustGrpcClientMethod(targetService, method, info.Package, info.CrossPackageTypes)
 		if err != nil {
@@ -320,6 +342,26 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMa
 		}
 		methods.WriteString(result.method)
 		methods.WriteString("\n")
+		// (spec.rpc).requires_device: the caller-side half. Rust's generated
+		// client is the seam Java uses too — neither has a separate per-rpc
+		// ServiceManager helper layer the way Go does.
+		if method.RequiresDevice {
+			// The same two refusals the host makes (see servicewrapper_gen.go),
+			// for the same reason and in the caller's own build: a request that
+			// cannot be canonicalized identically in every language has no
+			// approval hash to propose.
+			if f := rustRequiresDeviceMapField(method.FullInputType, san, info.Package); f != "" {
+				return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its request reaches a map field (%s); map iteration order is not canonical across languages, so the approval hash could not be computed identically on both ends — remove the map or drop the annotation",
+					targetService.Name, method.Name, f)
+			}
+			if t := rustRequiresDeviceUnhashableType(method.FullInputType, san, info.Package); t != "" {
+				return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its request reaches %s, whose descriptor this generator cannot resolve; Rust canonicalizes by GENERATED code rather than by reflection, so the field would be silently absent from the Rust hash and present in the Go and Java one",
+					targetService.Name, method.Name, t)
+			}
+			hasRequiresDevice = true
+			in, out := resolveRustTypeQualified(method, info.Package, info.CrossPackageTypes)
+			methods.WriteString(rustRequiresDeviceClientHelpers(targetService, method, in, out, info.Package, svc.ParentDir, info.CrossPackageTypes))
+		}
 		if result.extraType != "" {
 			extraTypes.WriteString(result.extraType)
 			extraTypes.WriteString("\n")
@@ -340,6 +382,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMa
 		ExtraTypes          string
 		UsesOutboundTimeout bool
 		UsesUnaryRetry      bool
+		HasRequiresDevice   bool
 	}{
 		Header:              header.GeneratedHeader(consts.LangRust, svc.ProtoFile),
 		ServiceName:         tonicName,
@@ -350,6 +393,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMa
 		ExtraTypes:          extraTypes.String(),
 		UsesOutboundTimeout: usesOutboundTimeout,
 		UsesUnaryRetry:      usesUnaryRetry,
+		HasRequiresDevice:   hasRequiresDevice,
 	}
 
 	tmplStr, err := loadTemplate("grpcclient.rs.tmpl")

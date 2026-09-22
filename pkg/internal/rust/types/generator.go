@@ -84,6 +84,17 @@ func Generate(config *tactype.Config) error {
 	// explicit (spec.grpc_s2s_client) used to lose the explicit one silently.
 	config.GrpcS2SClients = service.MergeGrpcEntries(config.GrpcS2SClients, virtualClients)
 
+	// (spec.rpc).requires_device needs a client to the approval broker on the
+	// authoritative (spec.token_minter) service. Auto-injected through the same
+	// shared derivation Go and Java use, at the same seam and for the same
+	// reason: the developer writes only the boolean, so the dependency cannot
+	// disagree with the annotation that creates it.
+	approvalBrokerClients, err := proto.DeriveApprovalBrokerClient(config.FlatProtoDir, config.SelfPackage)
+	if err != nil {
+		return fmt.Errorf("failed to derive approval-broker client: %w", err)
+	}
+	config.GrpcS2SClients = service.MergeGrpcEntries(config.GrpcS2SClients, approvalBrokerClients)
+
 	// Inject per-service ConfigState messages into each service's own proto file.
 	feConfigs, err := proto.InjectGrpcConfigState(config.InputDir, protoDir, config.FlatProtoDir)
 	if err != nil {

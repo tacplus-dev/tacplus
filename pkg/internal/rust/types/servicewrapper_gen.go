@@ -238,6 +238,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	}
 	var grpcWrappers, watchFields, watchFieldsInit strings.Builder
 	var methodAuthLines []string
+	hasRequiresDevice := false
 	for _, method := range targetService.Methods {
 		// The session carrier is served by the generated MCP dispatch rather
 		// than by a handler method; it still authorizes exactly as the ordinary
@@ -312,6 +313,30 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 			fmt.Fprintf(&watchFields, "    %s: collection::WatchHub<%s>,\n", fieldName, changeType)
 			fmt.Fprintf(&watchFieldsInit, "            %s: collection::WatchHub::new(%d, %d),\n", fieldName, method.Resolved.ReplayDepth, method.Resolved.IdleSecs)
 		}
+		// (spec.rpc).requires_device: the device-only approval gate. Its
+		// preconditions are structural, so a build that cannot meet one of them
+		// fails here rather than generating an rpc the author believes is gated
+		// and is not. The first three are Go's and Java's, word for word; the
+		// fourth is Rust's own (see rustRequiresDeviceUnhashableType).
+		if method.RequiresDevice {
+			if method.AuthDisabled || targetService.AuthDisabled || targetService.IsC2D {
+				return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its auth is disabled; the check must name the user the caller is serving (caller_namespace/caller_subject), and an rpc with no verified token has no user to name",
+					targetService.Name, method.Name)
+			}
+			if method.ClientStreaming || method.ServerStreaming || method.Collection != nil {
+				return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but it is not a plain unary rpc; an approval covers ONE request's hash, which a stream or a collection window does not have",
+					targetService.Name, method.Name)
+			}
+			if f := rustRequiresDeviceMapField(method.FullInputType, san, info.Package); f != "" {
+				return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its request reaches a map field (%s); map iteration order is not canonical across languages, so the approval hash could not be computed identically on both ends — remove the map or drop the annotation",
+					targetService.Name, method.Name, f)
+			}
+			if t := rustRequiresDeviceUnhashableType(method.FullInputType, san, info.Package); t != "" {
+				return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its request reaches %s, whose descriptor this generator cannot resolve; Rust canonicalizes by GENERATED code rather than by reflection, so the field would be silently absent from the Rust hash and present in the Go and Java one",
+					targetService.Name, method.Name, t)
+			}
+			hasRequiresDevice = true
+		}
 		wrapper, err := generateRustGRPCWrapper(targetService, method, info.Package, svc.ParentDir, info.CrossPackageTypes, svc.GrpcName, accountingMap, skippedTraceTypes, san)
 		if err != nil {
 			return err
@@ -331,7 +356,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 		if !rustCallerUnverified(targetService, method) {
 			wrapper = strings.ReplaceAll(wrapper,
 				"let caller: Option<servicemanager::auth::Caller> = None;",
-				rustCallerExtraction)
+				rustCallerExtraction+rustRequiresDeviceGate(method, targetService, info.Package, svc.ParentDir, info.CrossPackageTypes))
 		}
 		grpcWrappers.WriteString(wrapper)
 		grpcWrappers.WriteString("\n")
@@ -422,6 +447,7 @@ use crate::types::generated::services::services as services_pb;
 		WatchFields          string
 		WatchFieldsInit      string
 		HasAccounting        bool
+		HasRequiresDevice    bool
 		AccountingImports    string
 		RegisterMethodAuth   string
 		McpDispatch          string
@@ -443,6 +469,7 @@ use crate::types::generated::services::services as services_pb;
 		WatchFields:          watchFields.String(),
 		WatchFieldsInit:      watchFieldsInit.String(),
 		HasAccounting:        hasAccounting,
+		HasRequiresDevice:    hasRequiresDevice,
 		AccountingImports:    accountingImports,
 		RegisterMethodAuth:   registerMethodAuth,
 		McpDispatch:          mcpDispatch,

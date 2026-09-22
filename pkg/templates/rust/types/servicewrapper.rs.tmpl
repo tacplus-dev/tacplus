@@ -7,6 +7,12 @@ use tracing;
 use servicemanager;
 #[allow(unused_imports)]
 use collection;
+{{- if .HasRequiresDevice}}
+// (spec.rpc).requires_device: the metadata keys and the broker seam. The
+// request HASH comes from the types crate, beside the message it hashes —
+// prost has no reflection, so the canonicalization is generated per message.
+use approval;
+{{- end}}
 #[allow(unused_imports)]
 use futures::StreamExt;
 {{.AccountingImports}}
@@ -68,6 +74,13 @@ pub struct ValidationWrapper {
     instance_id: Arc<tokio::sync::RwLock<String>>,
     trace_publish: Arc<tokio::sync::RwLock<Option<Arc<dyn Fn(crate::types::sys::trace::TraceEvent) + Send + Sync>>>>,
     anonymize_hmac_key: Arc<tokio::sync::RwLock<Vec<u8>>>,
+{{- if .HasRequiresDevice}}
+    /// The (spec.rpc).requires_device broker call, supplied by the
+    /// ServiceManager. The wrapper holds the seam and not the client: the SM
+    /// owns the generated Mint client, so the wrapper need not be generated
+    /// against kernel.
+    approval_check: Arc<tokio::sync::RwLock<Option<approval::Check>>>,
+{{- end}}
 }
 
 impl ValidationWrapper {
@@ -81,8 +94,55 @@ impl ValidationWrapper {
             instance_id: Arc::new(tokio::sync::RwLock::new(String::new())),
             trace_publish: Arc::new(tokio::sync::RwLock::new(None)),
             anonymize_hmac_key: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+{{- if .HasRequiresDevice}}
+            approval_check: Arc::new(tokio::sync::RwLock::new(None)),
+{{- end}}
         }
     }
+
+{{- if .HasRequiresDevice}}
+
+    /// Wires the (spec.rpc).requires_device broker call. Called by the
+    /// ServiceManager for every wrapper hosting a guarded rpc.
+    pub async fn set_approval_check_func(&self, check: Option<approval::Check>) {
+        *self.approval_check.write().await = check;
+    }
+
+    /// Brokers one device-only approval, or refuses the rpc. Fail-closed twice:
+    /// an unwired check refuses, and a caller the authorizer did not verify
+    /// refuses — the broker is told WHICH user the approval must belong to, and
+    /// a call with no verified identity cannot name one.
+    async fn broker_approval(
+        &self,
+        rpc_method: &str,
+        presented: &approval::Presented,
+        request_hash: Vec<u8>,
+        caller: Option<&servicemanager::auth::Caller>,
+    ) -> Result<(), tonic::Status> {
+        let caller = caller.ok_or_else(|| {
+            tonic::Status::unauthenticated(
+                "this rpc requires a device approval, but the call carries no verified caller",
+            )
+        })?;
+        let check = self.approval_check.read().await.clone().ok_or_else(|| {
+            tonic::Status::internal(
+                "approval check not wired (build/SM bug) — a requires_device rpc cannot be served without it",
+            )
+        })?;
+        check(approval::CheckRequest {
+            rpc_method: rpc_method.to_string(),
+            approval_id: presented.approval_id.clone(),
+            request_hash,
+            // The RAW claims out of the token the authorizer already verified,
+            // exactly as Go reports them: the broker, not the wrapper, decides
+            // whether they name the person the approval belongs to.
+            caller_namespace: caller.namespace().unwrap_or("").to_string(),
+            caller_subject: caller.token().subject().unwrap_or("").to_string(),
+            device_assertion: presented.device_assertion.clone(),
+        })
+        .await
+    }
+{{- end}}
 
     /// Sets the authorization function.
     pub async fn set_authorize_func(&self, auth: Option<Arc<dyn Authorizer>>) {

@@ -690,6 +690,17 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		if broker == nil {
 			return serviceManagerTemplateData{}, fmt.Errorf("service manager data: a hosted rpc declares (spec.rpc).requires_device, but no authoritative (spec.token_minter) service in this proto set hosts an approval broker; the generated device-approval check has nothing to call")
 		}
+		// The minter cannot be the guarded service. The check goes out over the
+		// generated S2S client to the broker, and no package gets a generated
+		// client to ITSELF — DeriveApprovalBrokerClient returns nil for the
+		// minter's own package for exactly that reason. Wiring it anyway emits
+		// a call to a client accessor that does not exist, so the build fails in
+		// `go build` with "undefined: MintClient" and no explanation. Refuse
+		// here, with the reason. Same refusal the Java and Rust backends make.
+		if broker.Package == config.SelfPackage {
+			return serviceManagerTemplateData{}, fmt.Errorf("%s hosts the approval broker (%s.%s/%s) AND declares a (spec.rpc).requires_device rpc; the generated check calls the broker over a generated S2S client, and a package gets no generated client to itself, so this cannot be wired — move the guarded rpc to another service",
+				config.SelfPackage, broker.Package, broker.ServiceName, broker.MethodName)
+		}
 		brokerGroup := filepath.ToSlash(filepath.Dir(broker.Dir))
 		approvalBroker = ApprovalBrokerTemplateEntry{
 			Package:        broker.Package,

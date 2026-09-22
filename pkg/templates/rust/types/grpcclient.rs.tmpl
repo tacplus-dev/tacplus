@@ -5,6 +5,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 {{if .UsesUnaryRetry}}use tokio::time::{sleep, timeout};
+{{end}}{{if .HasRequiresDevice}}// (spec.rpc).requires_device: the caller-side helpers attach the approval id
+// and the device assertion as call metadata, outside the hashed request.
+use approval;
 {{end}}use servicemanager::ChannelProvider;
 {{.ServiceImports}}
 {{.CrossPackageImports}}

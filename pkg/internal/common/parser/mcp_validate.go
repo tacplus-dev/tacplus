@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
 )
@@ -84,6 +85,20 @@ import (
 //	       auto-exposure this stopped being a corner: every c2s service owns
 //	       tools, so a Python or TypeScript HOST of one has to say so loudly
 //	       rather than generate a hole.
+//	MCP-7  an rpc publishing a tool whose leading comment cannot serve as the
+//	       tool's description                                        -> fail
+//	       The description IS the rpc's doc comment — there is no second
+//	       string to fall back on — and it is the only thing a model reads to
+//	       decide whether to call the tool. An undescribed tool is therefore
+//	       not a cosmetic gap: it is a tool the model either never calls or
+//	       calls blind. Under auto-exposure nobody opts an rpc in, so the doc
+//	       comment is the only place its author says what it does, and the
+//	       omission has to be refused at generation rather than published.
+//	       Three shapes fail: no comment, a comment with no letter or digit in
+//	       it, and a comment built entirely of section dividers. The last one
+//	       matters because m.Comment is GetLeadingComments(), so a `// --- Jobs
+//	       -----` heading sitting above an rpc IS that rpc's leading comment
+//	       and would otherwise be published verbatim as its description.
 
 // mcpToolNameRe is the MCP tool-name convention the default (snake_case of the
 // RPC name) satisfies by construction, and the override must satisfy by hand.
@@ -99,6 +114,67 @@ var mcpBackendLanguages = map[string]bool{"go": true, "java": true, "rust": true
 // by MCP-6: a client-only target (swift, csharp) never serves a tool, so it has
 // no hole to fall into.
 var mcpHostLanguages = map[string]bool{"go": true, "java": true, "rust": true, "python": true, "typescript": true}
+
+// McpToolDescription is the text the model reads to decide whether to call the
+// tool: the rpc's own leading comment, flattened to one paragraph. Every
+// language's dispatch generator resolves the description through here, so the
+// string MCP-7 validates is the string that is published.
+//
+// There is deliberately no fallback. Substituting the RPC name for a missing
+// comment — which each generator used to do locally — would make a tool with no
+// description indistinguishable from one with a description that happens to be
+// its name, and would silently mask MCP-7 rather than survive it.
+func McpToolDescription(comment string) string {
+	return strings.Join(strings.Fields(comment), " ")
+}
+
+// mcpRuleChars are the characters the fleet builds section rules out of.
+const mcpRuleChars = "-=*#~_"
+
+// mcpDividerLine reports whether line is a section divider rather than prose:
+// it opens or closes with a run of three or more of the same rule character,
+// which is the shape of `// --- Jobs -----`. Rule characters are all ASCII, so
+// indexing bytes is safe here.
+func mcpDividerLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return false
+	}
+	first := line[0]
+	if strings.IndexByte(mcpRuleChars, first) >= 0 &&
+		len(line)-len(strings.TrimLeft(line, string(first))) >= 3 {
+		return true
+	}
+	last := line[len(line)-1]
+	return strings.IndexByte(mcpRuleChars, last) >= 0 &&
+		len(line)-len(strings.TrimRight(line, string(last))) >= 3
+}
+
+// mcpDescriptionUnusable reports whether comment cannot serve as a tool
+// description. Three shapes cannot: empty or whitespace-only, carrying no
+// letter or digit at all, and built entirely of section-divider lines. A
+// comment mixing a divider line with real prose is usable — only a heading
+// masquerading as a doc comment is refused.
+func mcpDescriptionUnusable(comment string) bool {
+	if strings.TrimSpace(comment) == "" {
+		return true
+	}
+	hasWord := strings.IndexFunc(comment, func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsDigit(r)
+	}) >= 0
+	if !hasWord {
+		return true
+	}
+	for _, line := range strings.Split(comment, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !mcpDividerLine(line) {
+			return false
+		}
+	}
+	return true
+}
 
 // ValidateMcpAnnotations enforces the invariants MCP tool exposure needs in
 // order to be generatable. language is the tacplus.yaml language of the
@@ -169,6 +245,21 @@ func validateMcpAnnotations(fds []*FileDescriptor, language string) error {
 
 			for mi := range svc.Methods {
 				m := &svc.Methods[mi]
+
+				// MCP-7. Ahead of the nil check below: the common
+				// auto-exposed rpc carries no spec.rpc at all, and it is
+				// exactly the rpc whose only description is its comment.
+				if m.IsMcpTool() && mcpDescriptionUnusable(m.Comment) {
+					errs = append(errs, fmt.Sprintf(
+						"%s.%s/%s: publishes MCP tool %q with no usable description; a tool's "+
+							"description is its leading doc comment and nothing else, and it is all "+
+							"a model has to decide whether to call the tool. Write a comment above "+
+							"the rpc saying what it does — a section divider such as "+
+							"`// --- Jobs -----` is the rpc's leading comment too, and does not "+
+							"count as one",
+						fd.Package, svc.Name, m.Name, m.McpToolName))
+				}
+
 				if m.Rpc == nil {
 					continue
 				}

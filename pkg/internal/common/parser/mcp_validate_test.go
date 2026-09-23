@@ -325,6 +325,7 @@ func TestValidateMcpAcceptsMcpServiceWithS2SAuthModel(t *testing.T) {
 service Surface {
   option (spec.service_s2s) = {};
 
+  // Return one ticket by id.
   rpc GetTicket(Ping) returns (Ping) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_MCP};
   }
@@ -391,6 +392,7 @@ func TestValidateMcpAcceptsMcpServiceWithC2SAuthModel(t *testing.T) {
 service Surface {
   option (spec.service_c2s) = {auth_entitled_users: true};
 
+  // Return one ticket by id.
   rpc GetTicket(Ping) returns (Ping) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_MCP};
   }
@@ -398,5 +400,135 @@ service Surface {
 `)
 	if err := ValidateMcpAnnotations(p, "go"); err != nil {
 		t.Fatalf("an MCP-only service with service_c2s must generate: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// MCP-7: a tool's description is its doc comment and nothing else.
+// ---------------------------------------------------------------------------
+
+// The red half. Each of these three shapes reaches the model as a tool it
+// cannot tell anything about, so generation refuses rather than publishes.
+func TestValidateMcpRefusesToolWithNoUsableDescription(t *testing.T) {
+	skipIfNoProtoc(t)
+
+	for _, tc := range []struct {
+		name string
+		rpc  string
+	}{
+		{"NoComment", `
+  rpc GetTicket(Ping) returns (Ping) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_MCP};
+  }`},
+		{"PunctuationOnly", `
+  // ...
+  rpc GetTicket(Ping) returns (Ping) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_MCP};
+  }`},
+		{"SectionDivider", `
+  // --- Jobs -----
+  rpc GetTicket(Ping) returns (Ping) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_MCP};
+  }`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := rpcParser(t, `
+service Surface {
+  option (spec.service_c2s) = {};
+`+tc.rpc+`
+}
+`)
+			err := ValidateMcpAnnotations(p, "go")
+			if err == nil {
+				t.Fatal("a tool with no usable description must fail generation")
+			}
+			if !strings.Contains(err.Error(), "no usable description") {
+				t.Fatalf("refusal must say why, got: %v", err)
+			}
+			if !strings.Contains(err.Error(), "GetTicket") || !strings.Contains(err.Error(), "get_ticket") {
+				t.Fatalf("refusal must name the rpc and the tool it would publish, got: %v", err)
+			}
+		})
+	}
+}
+
+// The green half, and the boundary that keeps MCP-7 from being a nuisance: a
+// real comment passes, and a comment that merely CONTAINS a divider line
+// alongside prose is a real comment.
+func TestValidateMcpAcceptsDescribedTool(t *testing.T) {
+	skipIfNoProtoc(t)
+
+	p := rpcParser(t, `
+service Surface {
+  option (spec.service_c2s) = {};
+
+  // Return one ticket by id.
+  rpc GetTicket(Ping) returns (Ping) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_MCP};
+  }
+
+  // -------------------------------------------------------------------
+  // Close a ticket, releasing whatever it holds.
+  // -------------------------------------------------------------------
+  rpc CloseTicket(Ping) returns (Ping) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_MCP};
+  }
+}
+`)
+	if err := ValidateMcpAnnotations(p, "go"); err != nil {
+		t.Fatalf("a described tool must generate: %v", err)
+	}
+}
+
+// MCP-7 binds on auto-exposed rpcs too, and that is the case it exists for: an
+// rpc nobody opted in, carrying no (spec.rpc) to hang the omission on. An rpc
+// the predicate does NOT auto-expose is not a tool and so is not gated.
+func TestValidateMcp7BindsOnAutoExposedRpcs(t *testing.T) {
+	skipIfNoProtoc(t)
+
+	p := rpcParser(t, `
+service Surface {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  rpc GetTicket(Ping) returns (Ping);
+}
+`)
+	err := ValidateMcpAnnotations(p, "go")
+	if err == nil {
+		t.Fatal("an undescribed auto-exposed user RPC must fail generation")
+	}
+	if !strings.Contains(err.Error(), "GetTicket") || !strings.Contains(err.Error(), "no usable description") {
+		t.Fatalf("MCP-7 did not refuse the auto-exposed rpc: %v", err)
+	}
+
+	// Not a tool, so not gated: a self-authenticating rpc is outside the
+	// auto-exposure predicate however undescribed it is.
+	p = rpcParser(t, `
+service Surface {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  rpc MintToken(Ping) returns (Ping) {
+    option (spec.rpc) = {flags: [RPC_FLAG_SELF_AUTHENTICATES]};
+  }
+}
+`)
+	if err := ValidateMcpAnnotations(p, "go"); err != nil {
+		t.Fatalf("MCP-7 gated an rpc that publishes no tool: %v", err)
+	}
+}
+
+// McpToolDescription is the single resolver every dispatch generator publishes
+// through: it flattens and it does not substitute the RPC name, because a
+// name-fallback would mask MCP-7 rather than survive it.
+func TestMcpToolDescriptionFlattensAndDoesNotFallBack(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"Return one ticket by id.", "Return one ticket by id."},
+		{"Return one ticket\n by id.\n", "Return one ticket by id."},
+		{"", ""},
+		{"   \n  ", ""},
+	} {
+		if got := McpToolDescription(tc.in); got != tc.want {
+			t.Errorf("McpToolDescription(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }

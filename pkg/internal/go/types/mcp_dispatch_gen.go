@@ -175,7 +175,7 @@ func goMcpTools(svc *parser.ServiceInfo, servicePackage string, san *egressSanit
 		tools = append(tools, goMcpTool{
 			Method:             m,
 			ToolName:           m.McpToolName,
-			Description:        goMcpDescription(m),
+			Description:        parser.McpToolDescription(m.Comment),
 			Schema:             schema,
 			InputType:          goTypeRef(m.FullInputType, m.InputType, servicePackage),
 			OutputType:         goTypeRef(m.FullOutputType, m.OutputType, servicePackage),
@@ -257,18 +257,6 @@ func goMcpPageOf(m *parser.MethodInfo, servicePackage string) *goMcpPage {
 	}
 }
 
-// goMcpDescription is the text the model reads to decide whether to call the
-// tool: the rpc's own leading comment, flattened to one paragraph. A tool with
-// no doc comment is published with its name as the description rather than an
-// empty one, which some MCP clients reject.
-func goMcpDescription(m *parser.MethodInfo) string {
-	desc := strings.Join(strings.Fields(m.Comment), " ")
-	if desc == "" {
-		return m.Name
-	}
-	return desc
-}
-
 // goMcpEmptyRequest mirrors the handlerEmpty test the handler-interface renderer
 // uses, so dispatch calls the handler with the parameter list it declares.
 func goMcpEmptyRequest(m *parser.MethodInfo) bool {
@@ -309,7 +297,7 @@ func goMcpInputSchema(m *parser.MethodInfo, servicePackage string, san *egressSa
 	if page := goMcpPageOf(m, servicePackage); page != nil {
 		goMcpAnnotatePageSchema(schema, page)
 	}
-	schema["description"] = goMcpDescription(m)
+	schema["description"] = parser.McpToolDescription(m.Comment)
 	out, err := json.Marshal(schema)
 	if err != nil {
 		return "", fmt.Errorf("marshal input schema: %w", err)

@@ -18,7 +18,7 @@ import (
 // comment carrying one used to emit Rust that rustc refuses with "incorrect
 // unicode escape sequence". These pin the Rust form.
 //
-// The rune here is U+200B, not the audit finding's U+00A0: rustMcpDescription
+// The rune here is U+200B, not the audit finding's U+00A0: parser.McpToolDescription
 // and described() both flatten the comment with strings.Fields, which drops
 // every unicode.IsSpace rune — U+00A0 among them. A zero-width space is not
 // IsSpace, so it survives the flattening and reaches the literal.

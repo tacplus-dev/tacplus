@@ -153,7 +153,7 @@ func rustMcpTools(svc *parser.ServiceInfo, servicePkg string, crossPkgTypes map[
 			RequiredScalars:    scalars,
 			Method:             m,
 			ToolName:           m.McpToolName,
-			Description:        rustMcpDescription(m),
+			Description:        parser.McpToolDescription(m.Comment),
 			Schema:             schema,
 			InputType:          inputType,
 			OutputType:         outputType,
@@ -216,18 +216,6 @@ func rustMcpToolGeneratable(svc *parser.ServiceInfo, m *parser.MethodInfo, servi
 	return nil
 }
 
-// rustMcpDescription is the text the model reads to decide whether to call the
-// tool: the rpc's own leading comment, flattened to one paragraph. A tool with
-// no doc comment is published with its name as the description rather than an
-// empty one, which some MCP clients reject.
-func rustMcpDescription(m *parser.MethodInfo) string {
-	desc := strings.Join(strings.Fields(m.Comment), " ")
-	if desc == "" {
-		return m.Name
-	}
-	return desc
-}
-
 // rustMcpInputSchema builds the tool's argument schema from the rpc's request
 // message.
 //
@@ -260,7 +248,7 @@ func rustMcpInputSchema(m *parser.MethodInfo, servicePkg string, san *rustEgress
 	if m.IsPageCollection() {
 		rustMcpAnnotatePageSchema(schema, m.Resolved.DefaultPageSize, m.Resolved.MaxPageSize)
 	}
-	schema["description"] = rustMcpDescription(m)
+	schema["description"] = parser.McpToolDescription(m.Comment)
 	out, err := json.Marshal(schema)
 	if err != nil {
 		return "", fmt.Errorf("marshal input schema: %w", err)

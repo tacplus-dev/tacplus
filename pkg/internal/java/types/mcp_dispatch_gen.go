@@ -215,7 +215,7 @@ func javaMcpTools(svc *parser.ServiceInfo, servicePackage, outerClassName string
 		tools = append(tools, javaMcpTool{
 			Method:                  m,
 			ToolName:                m.McpToolName,
-			Description:             javaMcpDescription(m),
+			Description:             parser.McpToolDescription(m.Comment),
 			Schema:                  schema,
 			InputType:               resolveJavaMethodType(m.FullInputType, m.InputType, servicePackage, outerClassName, crossPkgOuterClasses),
 			OutputType:              resolveJavaMethodType(m.FullOutputType, m.OutputType, servicePackage, outerClassName, crossPkgOuterClasses),
@@ -298,18 +298,6 @@ func javaMcpStoreEpochField(fullType string, es *javaEgressSanitizer, servicePac
 	return es.storeEpochField(fullType, servicePackage)
 }
 
-// javaMcpDescription is the text the model reads to decide whether to call the
-// tool: the rpc's own leading comment, flattened to one paragraph. A tool with
-// no doc comment is published with its name as the description rather than an
-// empty one, which some MCP clients reject.
-func javaMcpDescription(m *parser.MethodInfo) string {
-	desc := strings.Join(strings.Fields(m.Comment), " ")
-	if desc == "" {
-		return m.Name
-	}
-	return desc
-}
-
 // javaMcpEmptyRequest mirrors the handlerEmpty test generateJavaHandlerMethod
 // uses, so dispatch calls the handler with the parameter list it declares.
 func javaMcpEmptyRequest(m *parser.MethodInfo) bool {
@@ -350,7 +338,7 @@ func javaMcpInputSchema(m *parser.MethodInfo, servicePackage string, san *javaEg
 	if m.IsPageCollection() {
 		javaMcpAnnotatePageSchema(schema, m.Resolved.DefaultPageSize, m.Resolved.MaxPageSize)
 	}
-	schema["description"] = javaMcpDescription(m)
+	schema["description"] = parser.McpToolDescription(m.Comment)
 	out, err := json.Marshal(schema)
 	if err != nil {
 		return "", fmt.Errorf("marshal input schema: %w", err)

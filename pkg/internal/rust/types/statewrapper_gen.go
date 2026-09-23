@@ -26,6 +26,10 @@ type rustSingletonBoundary struct {
 	FieldName   string // snake_case: "roster"
 	FieldPascal string // PascalCase: "Roster"
 	TypeName    string // PascalCase message type: "TeamRoster"
+	// DefaultsFn is the generated proto-defaults function for TypeName:
+	// "team_roster_defaults". writeDefaults emits one per message
+	// unconditionally, so it is always callable through the glob type imports.
+	DefaultsFn string
 }
 
 // rustCollectionBoundary describes a repeated message field in the state root.
@@ -367,6 +371,7 @@ func generateRustStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 				FieldName:   field.Name,
 				FieldPascal: fieldPascal,
 				TypeName:    typeName,
+				DefaultsFn:  strutil.ToSnakeCase(toProstTypeName(typeName)) + "_defaults",
 			})
 		}
 	}

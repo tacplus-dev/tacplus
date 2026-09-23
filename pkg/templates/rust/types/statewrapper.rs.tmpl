@@ -940,6 +940,13 @@ impl {{$.StateRootName}}{{.FieldPascal}}Accessor {
     /// as the fetched value fails its own generated validation, bounded by
     /// config_fetch_timeout_seconds, and returns the validation failure once that
     /// budget is spent rather than handing back a value it knows is invalid.
+    ///
+    /// The wire carries no proto defaults, so this applies the type's generated
+    /// defaults to every fetched value BEFORE validating it. Without that, a
+    /// field the seeded state omits on purpose — because it carries a
+    /// (spec.default_*) — arrives zero-valued and fails its own (spec.assert_*)
+    /// check, and the retry loop burns its whole budget on a value that should
+    /// have passed.
     pub async fn fetch(&self) -> Result<{{.TypeName}}, tonic::Status> {
         let timeout = self.inner.config_fetch_timeout();
         let deadline = tokio::time::Instant::now() + timeout;
@@ -948,7 +955,8 @@ impl {{$.StateRootName}}{{.FieldPascal}}Accessor {
             let req = self.inner.authorized_request(Default::default()).await?;
             let mut stub = {{$.StateServiceClientType}}::new(self.inner.channel.clone());
             let response = stub.get_{{.FieldName}}(req).await?;
-            let value = response.into_inner();
+            let mut value = response.into_inner();
+            {{.DefaultsFn}}(&mut value);
             match value.validate() {
                 Ok(()) => {
                     // Update the local cache with the fetched value.

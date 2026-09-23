@@ -34,6 +34,13 @@ type javaSingletonBoundary struct {
 	// boundary is collected for an own-package type; filled in once the types
 	// package is known.
 	ValidateRef string
+	// DefaultsRef is the generated proto-defaults helper, fully qualified:
+	// "com.example.types.baseball.Helpers.teamRosterDefaults". Empty when the
+	// type's package emits no TypeDefaults section at all (writeTypeDefaults is
+	// gated on hasFieldDefaults), in which case there is nothing to apply and
+	// the fetch path validates the raw value as before. Filled in below, like
+	// ValidateRef, once the types package is known.
+	DefaultsRef string
 }
 
 // javaCollectionBoundary describes a repeated message field in the state root.
@@ -107,14 +114,14 @@ type javaStateWrapperData struct {
 	// only when the client has singleton boundaries (their fetch catches it).
 	ProtoExceptionFQN string
 	Imports           []string
-	Singletons                []javaSingletonBoundary
-	Collections               []javaCollectionBoundary
-	Topics                    []javaTopicBoundary
-	StateImports              []javaStateImportField
-	Commands                  []javaCommandBoundary
-	Views                     []javaViewBoundary
-	ReadOnly                  bool // true for :ro (accessors only, no mutators)
-	WriteOnce                 bool // true for :worm (write-once read-many: set/add but no lock/delete)
+	Singletons        []javaSingletonBoundary
+	Collections       []javaCollectionBoundary
+	Topics            []javaTopicBoundary
+	StateImports      []javaStateImportField
+	Commands          []javaCommandBoundary
+	Views             []javaViewBoundary
+	ReadOnly          bool // true for :ro (accessors only, no mutators)
+	WriteOnce         bool // true for :worm (write-once read-many: set/add but no lock/delete)
 }
 
 // ==================== Aggregator / registry types ====================
@@ -433,10 +440,15 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 			// Cross-package types validate through their OWN package's Helpers;
 			// own-package ones are filled in below, once typesPackage is known.
 			validateRef := ""
+			defaultsRef := ""
 			if parts := strings.SplitN(field.Type, ".", 2); len(parts) == 2 && parts[0] != fileDesc.Package {
 				crossPkg := parts[0]
 				crossDir := resolveProtoDir(dp, crossPkg)
-				validateRef = fmt.Sprintf("%s.types.%s.%s.Helpers.validate%s", basePackage, crossDir, crossPkg, typeName)
+				helpers := fmt.Sprintf("%s.types.%s.%s.Helpers", basePackage, crossDir, crossPkg)
+				validateRef = helpers + ".validate" + typeName
+				if javaPackageHasTypeDefaults(dp, crossPkg) {
+					defaultsRef = helpers + "." + strutil.ToLowerFirst(typeName) + "Defaults"
+				}
 			}
 			singletons = append(singletons, javaSingletonBoundary{
 				FieldName:   strutil.ToLowerCamelCase(field.Name),
@@ -444,6 +456,7 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 				TypeName:    typeName,
 				JavaType:    javaType,
 				ValidateRef: validateRef,
+				DefaultsRef: defaultsRef,
 			})
 		}
 	}
@@ -487,6 +500,9 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 	for i := range singletons {
 		if singletons[i].ValidateRef == "" {
 			singletons[i].ValidateRef = typesPackage + ".Helpers.validate" + singletons[i].TypeName
+			if javaPackageHasTypeDefaults(dp, fileDesc.Package) {
+				singletons[i].DefaultsRef = typesPackage + ".Helpers." + strutil.ToLowerFirst(singletons[i].TypeName) + "Defaults"
+			}
 		}
 	}
 
@@ -717,6 +733,32 @@ func resolveProtoDir(dp *parser.DescriptorParser, pkg string) string {
 		}
 	}
 	return "sys"
+}
+
+// javaPackageHasTypeDefaults reports whether the Helpers class for pkg carries a
+// TypeDefaults section. writeTypeDefaults is gated on hasFieldDefaults, so a
+// package with no field defaults anywhere emits no <type>Defaults methods and
+// the state wrapper must not call one. Paths are visited in sorted order so the
+// answer does not depend on Go map iteration order.
+func javaPackageHasTypeDefaults(dp *parser.DescriptorParser, pkg string) bool {
+	all := dp.GetAllFiles()
+	paths := make([]string, 0, len(all))
+	for path, fd := range all {
+		if fd.Package == pkg {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		pf, err := dp.ConvertToProtoFile(path)
+		if err != nil {
+			continue
+		}
+		if hasFieldDefaults(pf) {
+			return true
+		}
+	}
+	return false
 }
 
 func findJavaMessageInFile(fileDesc *parser.FileDescriptor, typeName string) *parser.MessageDescriptor {

@@ -78,7 +78,10 @@ func TestStateWrapperHasNoLockMachineryRender(t *testing.T) {
 		"func (c *StateClient) sleepBeforeFetchRetry(ctx context.Context, attempt int, deadline time.Time) bool {",
 		"delay := c.watchRetryDelay(attempt)",
 		"timeout := w.parent.configFetchTimeout()",
-		"validateErr := types.ValidateConfig(value)",
+		// Proto defaults are applied to the fetched value BEFORE it is validated;
+		// the wire carries no defaults, so an omitted (spec.default_*) field would
+		// otherwise fail its own (spec.assert_*) check for the whole retry budget.
+		"types.ConfigDefaults(value)\n\t\tvalidateErr := types.ValidateConfig(value)",
 		"if !w.parent.sleepBeforeFetchRetry(ctx, attempt, deadline) {",
 		"return nil, fmt.Errorf(\"GetConfig: state value still failed validation after %s: %w\", timeout, validateErr)",
 	} {
@@ -109,6 +112,12 @@ func renderStateWrapperForTest(t *testing.T, data stateClientData) string {
 				return "Validate" + goType
 			}
 			return "types.Validate" + goType
+		},
+		"DefaultsRef": func(goType string, isCross bool) string {
+			if isCross {
+				return goType + "Defaults"
+			}
+			return "types." + goType + "Defaults"
 		},
 		"LowerFirst": func(s string) string {
 			if len(s) == 0 {

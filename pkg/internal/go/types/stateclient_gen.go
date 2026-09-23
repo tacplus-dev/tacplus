@@ -1223,6 +1223,15 @@ func generateStateWrapper(config *tactype.Config, svc ServiceInfo, stateRoot *pa
 			}
 			return "types.Validate" + goType
 		},
+		// DefaultsRef returns the proto-defaults function call for a type.
+		// Same-package: types.TeamRosterDefaults, cross-package: ballsports_pb.TeamRosterDefaults.
+		// writeDefaults emits one per message unconditionally, so this is always callable.
+		"DefaultsRef": func(goType string, isCross bool) string {
+			if isCross {
+				return goType + "Defaults"
+			}
+			return "types." + goType + "Defaults"
+		},
 		// LowerFirst lowercases the first letter of a string (PascalCase -> camelCase)
 		"LowerFirst": func(s string) string {
 			if len(s) == 0 {
@@ -1640,4 +1649,3 @@ func extractSimpleTypeName(fullType string) string {
 	parts := strings.Split(fullType, ".")
 	return parts[len(parts)-1]
 }
-

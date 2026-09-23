@@ -392,6 +392,12 @@ public class StateClient implements AutoCloseable {
      * fetched value fails its own generated validation, bounded by
      * config_fetch_timeout_seconds, and throws once that budget is spent rather than
      * returning a value it knows is invalid.</p>
+     *
+     * <p>The wire carries no proto defaults, so this applies the type's generated
+     * defaults to every fetched value BEFORE validating it. Without that, a field
+     * the seeded state omits on purpose — because it carries a (spec.default_*) —
+     * arrives zero-valued and fails its own (spec.assert_*) check, and the retry
+     * loop burns its whole budget on a value that should have passed.</p>
      */
     public {{.JavaType}} fetch{{.FieldPascal}}() {
         if (stateStub == null) {
@@ -401,6 +407,9 @@ public class StateClient implements AutoCloseable {
         long deadlineNanos = System.nanoTime() + timeoutSeconds * 1_000_000_000L;
         for (int attempt = 0; ; attempt++) {
             {{.JavaType}} value = stateStub.get{{.FieldPascal}}(Trace.TraceRequest.getDefaultInstance());
+{{- if .DefaultsRef}}
+            value = {{.DefaultsRef}}(value).build();
+{{- end}}
             try {
                 {{.ValidateRef}}(value);
             } catch (ProtoException cause) {

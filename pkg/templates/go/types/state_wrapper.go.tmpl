@@ -652,6 +652,12 @@ func (w *{{$s.FieldName}}Wrapper) Get() *{{TypeRef $s.GoType $s.IsCrossPackage}}
 // the fetched value fails its own generated validation, bounded by
 // config_fetch_timeout_seconds, and returns the validation error once that
 // budget is spent rather than handing back a value it knows is invalid.
+//
+// The wire carries no proto defaults, so Fetch applies this type's generated
+// defaults to every fetched value BEFORE validating it. Without that, a field
+// the seeded state omits on purpose — because it carries a (spec.default_*) —
+// arrives zero-valued and fails its own (spec.assert_*) check, and the retry
+// loop burns its whole budget on a value that should have passed.
 func (w *{{$s.FieldName}}Wrapper) Fetch(ctx context.Context) (*{{TypeRef $s.GoType $s.IsCrossPackage}}, error) {
 	timeout := w.parent.configFetchTimeout()
 	deadline := time.Now().Add(timeout)
@@ -660,6 +666,7 @@ func (w *{{$s.FieldName}}Wrapper) Fetch(ctx context.Context) (*{{TypeRef $s.GoTy
 		if err != nil {
 			return nil, err
 		}
+		{{DefaultsRef $s.GoType $s.IsCrossPackage}}(value)
 		validateErr := {{ValidateRef $s.GoType $s.IsCrossPackage}}(value)
 		if validateErr == nil {
 			return value, nil

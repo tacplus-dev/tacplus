@@ -621,6 +621,12 @@ message ServiceInfo {
   // spiffe://<td>/tenants/<tenant>/services/<name>. Read by the operator, the
   // gateway, and the record-plane store wrapper. Default false.
   bool tenant_owned = 15;
+
+  // pinned_tenant mirrors (spec.service).pinned_tenant: non-empty when the
+  // operator runs exactly ONE instance of this tenant-owned service, in that
+  // tenant, instead of one per configured tenant. Meaningful only when
+  // tenant_owned is true. Read by the operator. Default empty.
+  string pinned_tenant = 16;
 }
 
 // VServiceInfo describes a file-level virtual service identity.

@@ -215,6 +215,7 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 								Mcp:         svc.HasMcpRpcs,
 								McpExposure: svc.McpExposure,
 								TenantOwned: fd.ServiceTenantOwned,
+								PinnedTenant: fd.ServicePinnedTenant,
 							}
 							if svc.EventLabel != "" {
 								si.EventLabel = svc.EventLabel

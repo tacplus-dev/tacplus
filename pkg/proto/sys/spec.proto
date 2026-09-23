@@ -2447,6 +2447,20 @@ message ServiceAnnotation {
   // (route by token namespace), and the record-plane store wrapper (tenant
   // pin on S2S reads). Default false — every service today is shared.
   bool tenant_owned = 8;
+
+  // pinned_tenant pins a tenant-owned service to exactly one tenant. Meaningful
+  // ONLY alongside tenant_owned = true: when set, the operator instantiates
+  // exactly one instance of the service, in that tenant, and does NOT loop over
+  // the configured tenants. Identity is unchanged — the instance is still
+  // spiffe://<td>/tenants/<pinned_tenant>/services/<name>; only the cardinality
+  // changes. This is for a fleet-singleton service that lives in a reserved
+  // tenant (one row per person, not one row per company), where per-tenant
+  // replication would split the rows the service exists to hold. The operator
+  // FAILS reconciliation if the named tenant is not configured: a pin to a
+  // tenant that does not exist is a config error, not an instance to skip
+  // silently. Empty — the default, and what every service today carries —
+  // leaves tenant_owned's per-tenant replication exactly as it is.
+  string pinned_tenant = 9;
 }
 
 // GrpcConfigAnnotation marks a message as a gRPC service's configuration.

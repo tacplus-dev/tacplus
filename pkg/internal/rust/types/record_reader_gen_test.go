@@ -44,11 +44,58 @@ func messageReaderEntry() recordReaderEntry {
 	}
 }
 
-func messageReaderFile(e recordReaderEntry) recordReaderFile {
+func messageReaderFile(entries ...recordReaderEntry) recordReaderFile {
+	seen := map[string]bool{}
+	var clients []recordReaderClient
+	for _, e := range entries {
+		key := e.ClientModPath + "::" + e.ClientStruct
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		clients = append(clients, recordReaderClient{ModPath: e.ClientModPath, Struct: e.ClientStruct})
+	}
 	return recordReaderFile{
-		RecordReaders: []recordReaderEntry{e},
-		QueryPathRoot: e.QueryPath, ClientModPath: e.ClientModPath,
-		ClientStruct: e.ClientStruct, HandleType: e.HandleType,
+		RecordReaders: entries,
+		QueryPathRoot: entries[0].QueryPath, Clients: clients,
+		HandleType: entries[0].HandleType,
+	}
+}
+
+// privateReaderEntry is the SECOND reader shape: a (spec.record).private record,
+// whose data path is the query plane's C2S half rather than its s2s sibling —
+// record_map.go emits no rpcs for a private type on the s2s half at all.
+func privateReaderEntry() recordReaderEntry {
+	return recordReaderEntry{
+		FnName: "secret_record_reader", StructName: "SecretRecordReader",
+		RecordFQN: "messaging.Secret", RecordName: "Secret",
+		RecordPath:   "crate::types::services::messaging::Secret",
+		QueryPath:    "crate::types::vservices::query",
+		HostAccessor: "stratum", ClientFn: "record_query_client",
+		KeyField: "secret_id", KeyRustType: "String", KeyIsString: true,
+		CreateFn: "create_secret_query", ListFn: "list_secret_page",
+		DeleteFn: "delete_secret_query", FilterType: "SecretFilter",
+		OpenReqType: "OpenSecretQueryRequest", PullReqType: "PullSecretRequest",
+		HandleType: "QueryHandle", HasKeyFilter: true,
+		ClientModPath: "vservices::query::record_query", ClientStruct: "RecordQueryGrpcClient",
+	}
+}
+
+// One service may read both kinds, so the file borrows BOTH plane clients and
+// each reader struct holds the one its own record needs. Before the private
+// record's read existed, every reader in a file shared one client type.
+func TestRecordReadersRenderPerRecordPlaneClient(t *testing.T) {
+	out := renderRecordReaders(t, messageReaderFile(messageReaderEntry(), privateReaderEntry()))
+
+	for _, want := range []string{
+		"use super::internal::grpc::clients::vservices::query::record_map::RecordMapGrpcClient;",
+		"use super::internal::grpc::clients::vservices::query::record_query::RecordQueryGrpcClient;",
+		"pub struct MessageRecordReader<'a> {\n    client: &'a RecordMapGrpcClient,",
+		"pub struct SecretRecordReader<'a> {\n    client: &'a RecordQueryGrpcClient,",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("generated readers missing %q:\n%s", want, out)
+		}
 	}
 }
 

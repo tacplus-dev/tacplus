@@ -149,6 +149,30 @@ func DeriveVirtualServiceClients(inputDir, selfPackage string) ([]tactype.GrpcEn
 				zap.String("plane", traitFd.Trait.S2SService),
 				zap.String("host", traitFd.Trait.Host),
 				zap.Strings("records", recordReadNames(serviceDesc.RecordReads)))
+			// A (spec.record).private record is read over the plane's C2S half
+			// instead: record_map.go emits no rpcs for a private type on the s2s
+			// half at all, because a peer calls that surface with its own service
+			// identity and the owner pin would have nothing to compare a row
+			// against. So a reader of a private record needs the SECOND client,
+			// alongside the first — a service reading both kinds dials both.
+			//
+			// Derived only when such a record is actually read: this is a whole
+			// extra generated client, and a reader of ordinary records alone must
+			// keep emitting exactly what it emitted before.
+			//
+			// ValidateRecordReadAnnotations refuses a private record read whose
+			// plane declares no c2s_service, so the name is non-empty here.
+			if readsPrivateRecord(dp, serviceDesc.RecordReads) && traitFd.Trait.C2SService != "" {
+				entries = append(entries, tactype.GrpcEntry{
+					ProtoFile:    traitPath,
+					ServiceName:  traitFd.Trait.C2SService,
+					ProtoPackage: traitFd.Package,
+				})
+				zap.L().Info("derived record query plane C2S client from a private record_read",
+					zap.String("service", selfPackage),
+					zap.String("plane", traitFd.Trait.C2SService),
+					zap.String("host", traitFd.Trait.Host))
+			}
 		}
 	}
 
@@ -248,6 +272,35 @@ func FindAnnotatedSourceFileFromDir(inputDir, annotation string) (relPath, pkg s
 		return "", ""
 	}
 	return findAnnotatedSourceFile(dp, annotation)
+}
+
+// readsPrivateRecord reports whether any of a service's (spec.record_read)
+// declarations names a (spec.record).private record — the one record shape whose
+// data path is the query plane's C2S half rather than its s2s sibling.
+//
+// A record the build cannot resolve is not private here: ValidateRecordReadAnnotations
+// has already refused the build with a message naming it, and guessing would only
+// derive a client for a plane half nothing reads.
+func readsPrivateRecord(dp *parser.DescriptorParser, reads []parser.RecordRead) bool {
+	for _, r := range reads {
+		idx := strings.LastIndex(r.Record, ".")
+		if idx <= 0 {
+			continue
+		}
+		pkg, name := r.Record[:idx], r.Record[idx+1:]
+		for _, fd := range dp.GetAllFiles() {
+			if fd.Package != pkg {
+				continue
+			}
+			for mi := range fd.Messages {
+				msg := &fd.Messages[mi]
+				if msg.Name == name && msg.Annotations["record_private"].BoolValue {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // recordReadNames renders a service's (spec.record_read) declarations as the

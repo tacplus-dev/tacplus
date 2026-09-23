@@ -6,11 +6,18 @@
 //! Typed readers over the STORED ROWS of the (spec.record) types this service
 //! declared `(spec.record_read)` for.
 //!
-//! Each reader wraps the record query plane's S2S half, which is a three-call
+//! Each reader wraps one half of the record query plane, which is a three-call
 //! lifecycle — `Create<T>Query` to install a predicate, `List<T>` to page it,
 //! `Delete<T>Query` to release it. The two questions a reader actually asks are
 //! "give me this row" and "give me the rows matching this", so that is what these
 //! expose.
+//!
+//! WHICH HALF depends on the record. An ordinary record is read over the plane's
+//! S2S half, authorized by this service's peer identity. A `(spec.record).private`
+//! record is read over the C2S half, because the plane emits no rpcs at all for a
+//! private type on the s2s half: a peer calls that surface with its own service
+//! identity, so the owner pin has nothing to compare a row against. The c2s half
+//! carries a delegated user token, which is the identity the pin needs.
 //!
 //! The lifetime of the query handle is the reason this is generated rather than
 //! left to hand-written code. A `Create` whose handle is never `Delete`d leaks a
@@ -19,13 +26,16 @@
 //! releases the handle on both the success and the failure path.
 //!
 //! Reachable only because each record named this service in its own
-//! `(spec.record).s2s_read` grant. That grant and this declaration are two halves
-//! of one paired control, checked at generation time — see
-//! ValidateRecordReadAnnotations.
+//! `(spec.record).s2s_read` grant — or, for a private record, in its
+//! `(spec.record).c2s_read` disclosure grant, which is the only grant such a
+//! record may make. That grant and this declaration are two halves of one paired
+//! control, checked at generation time — see ValidateRecordReadAnnotations.
 
 #[allow(unused_imports)]
 use {{.QueryPathRoot}}::*;
-use super::internal::grpc::clients::{{.ClientModPath}}::{{.ClientStruct}};
+{{- range .Clients}}
+use super::internal::grpc::clients::{{.ModPath}}::{{.Struct}};
+{{- end}}
 {{- range .RecordReaders}}
 use {{.RecordPath}};
 {{- end}}
@@ -36,11 +46,11 @@ use {{.RecordPath}};
 /// Borrows the plane client from the service manager; obtain one with
 /// `sm.{{.FnName}}()`.
 pub struct {{.StructName}}<'a> {
-    client: &'a {{$.ClientStruct}},
+    client: &'a {{.ClientStruct}},
 }
 
 impl<'a> {{.StructName}}<'a> {
-    pub fn new(client: &'a {{$.ClientStruct}}) -> Self {
+    pub fn new(client: &'a {{.ClientStruct}}) -> Self {
         Self { client }
     }
 
@@ -53,8 +63,10 @@ impl<'a> {{.StructName}}<'a> {
     /// is unreachable" without inspecting a status code.
     ///
     /// The key is an EQ criterion on `{{.FilterType}}` because the record
-    /// declares `(spec.record).s2s_read`; that is what folds a record's key into
-    /// its filter (no record declares `(spec.query_field)` on its own key).
+    /// declares `(spec.record).s2s_read`, or is `(spec.record).private` (which is
+    /// forbidden to declare one, and whose c2s read needs the point read all the
+    /// same); that is what folds a record's key into its filter (no record
+    /// declares `(spec.query_field)` on its own key).
 {{- if .HasDeletedFlag}}
     ///
     /// `include_deleted` is the soft-delete escape hatch: false — the default the

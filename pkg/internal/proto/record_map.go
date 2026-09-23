@@ -64,8 +64,9 @@ type recordType struct {
 	// is a declaration that did not mean what it says.
 	readAuth []string
 	// declaresRead records whether the s2s_read BLOCK was present, independent of
-	// what it contained. It is what gates keyFilterCriterion below, so the key
-	// becomes an EQ criterion exactly when a reader exists to ask for it.
+	// what it contained. It is one of the two gates on keyFilterCriterion below
+	// (private is the other), so the key becomes an EQ criterion exactly when a
+	// reader exists to ask for it.
 	declaresRead bool
 	// private is (spec.record).private: this record type's rows belong to exactly
 	// one principal. It is what suppresses the type's RPCs on the plane's S2S
@@ -73,7 +74,11 @@ type recordType struct {
 	// compare a row's owner against, so there is nothing for the owner pin to be,
 	// and emitting the read would hand every peer the record's audience names
 	// every principal's rows in the tenant. The C2S half keeps every RPC: that
-	// surface carries a user token, which is exactly the identity the pin needs.
+	// surface carries a user token, which is exactly the identity the pin needs,
+	// and it is therefore the data path a private record's (spec.record_read).c2s
+	// reader is generated against. It is also the second gate on the key filter
+	// criterion, for the same reason: a private record can never declare the
+	// s2s_read that folds a key in, and its c2s reader still needs a point read.
 	private bool
 }
 
@@ -257,6 +262,9 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 				declaresRead = true
 				readAuth = append([]string(nil), sr.StringSliceValue...)
 			}
+			// private is read BEFORE the key is folded in, for the same reason
+			// declaresRead is: it is the second gate on the key criterion.
+			private := msg.Annotations["record_private"].BoolValue
 			// Point-read-by-key is the read surface's most basic question, and the
 			// plane could not express it before: the key carries no
 			// (spec.query_field) on any record in the fleet, so it never reached
@@ -264,7 +272,15 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 			// reader is declared, which keeps this additive for every record that
 			// declares no s2s_read. Skipped when the author already declared the
 			// key queryable, so the criterion is never emitted twice.
-			if declaresRead {
+			//
+			// A PRIVATE record folds its key in without declaring s2s_read,
+			// because it is forbidden to declare one
+			// (ValidateRecordPrivateAnnotations) and its reader is nonetheless
+			// real: (spec.record_read).c2s at C2S_SCOPE_PRINCIPAL reads it over
+			// the plane's C2S half, which keeps the type's full lifecycle. Gating
+			// the key on s2s_read alone would leave that reader's point read
+			// compiling against a criterion that is never emitted.
+			if declaresRead || private {
 				filters = appendKeyFilterCriterion(filters, key, &msg)
 			}
 			principal := recordPrincipalCriterion(&msg, filters)
@@ -279,7 +295,7 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 				principal:    principal,
 				readAuth:     readAuth,
 				declaresRead: declaresRead,
-				private:      msg.Annotations["record_private"].BoolValue,
+				private:      private,
 			})
 		}
 	}

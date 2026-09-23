@@ -54,13 +54,25 @@ type recordReaderEntry struct {
 	ClientStruct   string // e.g. "RecordMapGrpcClient"
 }
 
+// recordReaderClient is one plane client the file's readers borrow: its module
+// path and struct name, rendered as one `use` line.
+type recordReaderClient struct {
+	ModPath string // module path under internal/grpc/clients, e.g. "vservices::query::record_map"
+	Struct  string // e.g. "RecordMapGrpcClient"
+}
+
 // recordReaderFile is the template data for record_readers.rs: the readers plus
-// the one plane client they all borrow.
+// the plane clients they borrow.
+//
+// TWO CLIENTS, NOT ONE. An ordinary record reads the plane's S2S half; a
+// (spec.record).private record reads its C2S sibling, because record_map.go
+// emits no rpcs at all for a private type on the s2s half. A service reading
+// both kinds therefore borrows both clients, so the import list is a deduplicated
+// set rather than the single client every reader shared before.
 type recordReaderFile struct {
 	RecordReaders []recordReaderEntry
 	QueryPathRoot string // Rust path to the plane's generated query types
-	ClientModPath string // module path under internal/grpc/clients, e.g. "vservices::query::record_map"
-	ClientStruct  string // e.g. "RecordMapGrpcClient"
+	Clients       []recordReaderClient
 	HandleType    string // "QueryHandle"
 }
 
@@ -79,11 +91,26 @@ func generateRecordReaders(config *tactype.Config, entries []recordReaderEntry) 
 	if err != nil {
 		return fmt.Errorf("failed to parse record_readers template: %w", err)
 	}
+	seen := make(map[string]bool, len(entries))
+	var clients []recordReaderClient
+	for _, e := range entries {
+		key := e.ClientModPath + "::" + e.ClientStruct
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		clients = append(clients, recordReaderClient{ModPath: e.ClientModPath, Struct: e.ClientStruct})
+	}
+	sort.Slice(clients, func(i, j int) bool {
+		if clients[i].ModPath != clients[j].ModPath {
+			return clients[i].ModPath < clients[j].ModPath
+		}
+		return clients[i].Struct < clients[j].Struct
+	})
 	data := recordReaderFile{
 		RecordReaders: entries,
 		QueryPathRoot: entries[0].QueryPath,
-		ClientModPath: entries[0].ClientModPath,
-		ClientStruct:  entries[0].ClientStruct,
+		Clients:       clients,
 		HandleType:    entries[0].HandleType,
 	}
 	var buf bytes.Buffer
@@ -174,15 +201,16 @@ func collectRecordReaders(config *tactype.Config, protoDir string) ([]recordRead
 
 	queryPath := rustModulePath(traitPath, traitFd.Package)
 	hostAccessor := strutil.ToSnakeCase(strings.ReplaceAll(traitFd.Trait.Host, "-", "_"))
-	clientFn := strutil.ToSnakeCase(traitFd.Trait.S2SService) + "_client"
 	// The generated client module mirrors the trait proto's own location:
 	// internal/grpc/clients/<parent>/<pkg>/<service_snake>.rs
-	clientModParts := []string{}
-	if mod := rustParentMod(firstPathSegment(traitPath)); mod != "" {
-		clientModParts = append(clientModParts, mod)
+	planeClient := func(service string) (clientFn, clientModPath, clientStruct string) {
+		parts := []string{}
+		if mod := rustParentMod(firstPathSegment(traitPath)); mod != "" {
+			parts = append(parts, mod)
+		}
+		parts = append(parts, traitFd.Package, strutil.ToSnakeCase(service))
+		return strutil.ToSnakeCase(service) + "_client", strings.Join(parts, "::"), service + "GrpcClient"
 	}
-	clientModParts = append(clientModParts, traitFd.Package, strutil.ToSnakeCase(traitFd.Trait.S2SService))
-	clientModPath := strings.Join(clientModParts, "::")
 
 	var entries []recordReaderEntry
 	for _, rr := range self.RecordReads {
@@ -201,6 +229,28 @@ func collectRecordReaders(config *tactype.Config, protoDir string) ([]recordRead
 		// record with a (spec.deleted_flag) field has rows the flag can include, so
 		// only such a reader exposes the parameter.
 		_, hasDeletedFlag := parser.DeletedFlagField(rec)
+		// WHICH HALF OF THE PLANE THIS READER DIALS.
+		//
+		// An ordinary record: the S2S half, authorized by the reading service's
+		// own peer identity against the record's (spec.record).s2s_read grant.
+		//
+		// A (spec.record).private record: the C2S half. record_map.go emits NO
+		// rpcs at all for a private type on the s2s half — a peer calls that
+		// surface with its own service identity, so the owner pin would have
+		// nothing to compare a row against — and keeps the type's full lifecycle
+		// on the c2s half for exactly the opposite reason: that surface carries a
+		// delegated user token, which is the identity the pin needs. A reader
+		// pointed at the s2s half for such a type would compile against methods
+		// that are never emitted.
+		//
+		// ValidateRecordReadAnnotations has already refused a private record read
+		// whose plane declares no c2s_service, so C2SService is non-empty here
+		// whenever it is reached.
+		planeService := traitFd.Trait.S2SService
+		if rec.Annotations["record_private"].BoolValue {
+			planeService = traitFd.Trait.C2SService
+		}
+		clientFn, clientModPath, clientStruct := planeClient(planeService)
 		name := rec.Name
 		snake := strutil.ToSnakeCase(name)
 		entries = append(entries, recordReaderEntry{
@@ -225,7 +275,7 @@ func collectRecordReaders(config *tactype.Config, protoDir string) ([]recordRead
 			HasKeyFilter:   hasKey,
 			HasDeletedFlag: hasDeletedFlag,
 			ClientModPath:  clientModPath,
-			ClientStruct:   traitFd.Trait.S2SService + "GrpcClient",
+			ClientStruct:   clientStruct,
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].RecordFQN < entries[j].RecordFQN })

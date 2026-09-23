@@ -42,15 +42,29 @@ option (spec.vservice) = {
 // the same field — which is the thing the fixture is here to compile in three
 // languages at once.
 //
-// VaultSecretRow, the PRIVATE type, is deliberately NOT here. A private record
-// refuses s2s_read (ValidateRecordPrivateAnnotations), because the record query
-// plane emits no peer-facing read for it at all — and (spec.record_read)'s
-// entire data path, c2s half included, is that peer-facing read. The private
-// row's egress filter is compiled by GetVaultSecretMaterial on EgressVaultApi
-// instead: a hand-written c2s rpc, which is the surface a private record's rows
-// legitimately reach a person through.
 option (spec.record_read) = {
   record: "egressvault.VaultRow"
+  c2s: {scope: C2S_SCOPE_PRINCIPAL exposure: RPC_EXPOSURE_EXTERNAL}
+};
+
+// The PRIVATE type's own c2s read — the one read a (spec.record).private record
+// has, and the reason this fixture carries a private type at all.
+//
+// It declares NO s2s_read half, and cannot: ValidateRecordPrivateAnnotations
+// refuses s2s_read on a private record, because the query plane's peer-facing
+// surface has no caller principal for the owner pin to bind to and
+// record_map.go emits no rpcs for the type there. So this declaration's data
+// path is the plane's C2S service (EgressRecordQuery), which keeps the private
+// type's full 8-rpc lifecycle precisely because it carries the user token the
+// pin needs, and the record's key is folded into VaultSecretRowFilter without
+// the s2s_read that folds every other record's key in.
+//
+// C2S_SCOPE_PRINCIPAL is the only scope this shape admits: the generated
+// handler pins the caller's subject onto the row's (spec.store_principal) field
+// before the store is asked, which is the same field the generated egress row
+// filter backstops the answer against.
+option (spec.record_read) = {
+  record: "egressvault.VaultSecretRow"
   c2s: {scope: C2S_SCOPE_PRINCIPAL exposure: RPC_EXPOSURE_EXTERNAL}
 };
 
@@ -107,6 +121,7 @@ message VaultSecretRow {
     key: "secret_id"
     owner: "owner"
     s2s: {auth_services: ["*"]}
+    c2s_read: {auth_services: ["egressvault"]}
     private: true
   };
 

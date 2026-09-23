@@ -1088,8 +1088,11 @@ impl ServiceManager {
     ///
     /// Generated from `option (spec.record_read) = {record: "{{.RecordFQN}}"}` on
     /// this service's proto, and reachable only because {{.RecordFQN}} names this
-    /// service in its own `(spec.record).s2s_read` grant — the two halves of one
-    /// paired control, checked at generation time.
+    /// service in its own read grant — `(spec.record).s2s_read`, or, for a
+    /// `(spec.record).private` record, the `(spec.record).c2s_read` disclosure
+    /// grant that is the only grant such a record may make. The grant and the
+    /// declaration are the two halves of one paired control, checked at
+    /// generation time.
     ///
     /// This reads the record store, not the record's EventBus topic. The topic
     /// carries the stream as it happens; this answers questions about rows that

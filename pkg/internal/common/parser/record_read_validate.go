@@ -43,7 +43,9 @@ import (
 // second function, because the two pairs share every lookup and because a c2s
 // grant is only meaningful on top of an s2s one — the c2s handler's data path IS
 // the s2s reader, so the pairs cannot be validated independently without one of
-// them accepting a surface that cannot execute.
+// them accepting a surface that cannot execute. The one record shape where that
+// is not so is (spec.record).private, whose c2s handler reads the plane's C2S
+// service instead; see the second bullet below.
 //
 // Four refusals belong to the c2s pair alone, each for a reason the s2s pair does
 // not have:
@@ -53,17 +55,17 @@ import (
 //     any of its users" is not a statement anyone means to make.
 //   - c2s_read WITHOUT s2s_read for the same service is refused, in both
 //     directions, for the reason above: there would be no reader to disclose
-//     through. A (spec.record).private record read at C2S_SCOPE_PRINCIPAL is a
-//     distinct refusal, not an exception: annotation-wise it is the one
-//     legitimate read of a private row (the c2s call carries the caller's
-//     delegated user token under the mandatory owner pin, with no s2s hop to
-//     authorize — see
-//     decisions/private-record-c2s-read-without-s2s-read-2026-09-23.md), but the
-//     generator has no data path for it yet — record_map.go emits no s2s rpcs
-//     for a private type, and a record's key is folded into its filter only
-//     when s2s_read is declared, which a private record can never do — so it is
-//     refused as NOT YET IMPLEMENTED rather than generating code that fails to
-//     compile.
+//     through. THE ONE EXCEPTION is a (spec.record).private record read at
+//     C2S_SCOPE_PRINCIPAL, which is the one legitimate read of a private row
+//     (the c2s call carries the caller's delegated user token under the
+//     mandatory owner pin, with no s2s hop to authorize) and the only read such
+//     a record has at all. A private record is FORBIDDEN to declare s2s_read
+//     (ValidateRecordPrivateAnnotations), so requiring that grant here would
+//     close the one path `private` exists to keep open. Its data path is the
+//     record query plane's C2S service rather than the s2s sibling
+//     record_map.go emits nothing on for a private type, and its key is folded
+//     into its filter without an s2s_read declaration — see
+//     decisions/private-record-c2s-read-without-s2s-read-2026-09-23.md.
 //   - C2S_SCOPE_PRINCIPAL WITH NO RESOLVABLE PRINCIPAL CRITERION is refused
 //     rather than degraded to a tenant-wide read. This is the same stance
 //     javaRecordPrincipalUnenforceable already takes, and it is load-bearing:
@@ -232,27 +234,39 @@ func validateRecordReadAnnotations(fds []*FileDescriptor) error {
 				c2sUsed[rr] = true
 				errs = append(errs, validateRecordReadC2S(reader, rr, decl.C2S, c2sGrants[rr], recordMsg[rr])...)
 			}
-			// A PRIVATE record read through the c2s half is, annotation-wise, the
-			// one legitimate read of a private row: the c2s call carries the
-			// caller's delegated user token, and the owner pin — mandatory on
-			// every private record, enforced by ValidateRecordPrivateAnnotations
-			// — binds the rows to it directly, with no s2s hop to authorize. But
-			// the generator has no data path for this shape yet: the typed
-			// reader's query plane client is the s2s half, which record_map.go
-			// emits no rpcs for on a private type, and the record's key is only
-			// folded into its filter when s2s_read is declared, which a private
-			// record can never do. Refused here — like C2S_SCOPE_NAMESPACE below
-			// — as declared but not implemented, rather than accepted and left to
-			// fail generation or compilation downstream.
+			// A PRIVATE record read through the c2s half is the one legitimate
+			// read of a private row, and the ONLY read such a record has: the
+			// c2s call carries the caller's delegated user token, and the owner
+			// pin — mandatory on every private record, enforced by
+			// ValidateRecordPrivateAnnotations — binds the rows to it directly,
+			// with no s2s hop to authorize. So the s2s_read prerequisite below
+			// is skipped for it rather than refused: a private record can never
+			// declare s2s_read (ValidateRecordPrivateAnnotations refuses that
+			// too), and requiring the one grant the record is forbidden to make
+			// would close the path `private` exists to keep open.
+			//
+			// The generator half is implemented: the typed reader for a private
+			// record targets the record query plane's C2S service (the half
+			// record_map.go emits the full lifecycle for on a private type)
+			// rather than its s2s sibling, and the record's key is folded into
+			// its filter for a private record without an s2s_read declaration.
+			// The c2s block itself is still checked in full by
+			// validateRecordReadC2S above — the disclosure grant, the scope, and
+			// the criteria the scope needs.
 			if recordIsPrivate(recordMsg[rr]) && decl.C2S != nil && decl.C2S.Scope == "C2S_SCOPE_PRINCIPAL" {
-				errs = append(errs, fmt.Sprintf(
-					"%s: (spec.record_read) on private record %q uses c2s scope C2S_SCOPE_PRINCIPAL, which is the one "+
-						"legitimate read of a private row by annotation rules, but the generator's data path for it is "+
-						"declared but NOT IMPLEMENTED: the typed reader still targets the s2s half of the record query "+
-						"plane, which emits no rpcs for a private type, and the record's key is folded into its filter "+
-						"only when (spec.record).s2s_read is declared, which a private record can never do "+
-						"(see decisions/private-record-c2s-read-without-s2s-read-2026-09-23.md)",
-					reader, rr))
+				// The data path is the plane's C2S service by name, so a trait
+				// that declares none leaves this read with nothing to dial. The
+				// s2s half is not a fallback: it emits no rpcs for a private
+				// type at all. Refused here rather than in the per-language
+				// reader generators, where it would be three identical errors
+				// with no annotation named.
+				if !recordQueryPlaneHasC2SService(fds) {
+					errs = append(errs, fmt.Sprintf(
+						"%s: (spec.record_read) names private record %q, but the (spec.trait) hosting the record query plane declares no c2s_service; "+
+							"a private record is read over the plane's C2S half (the s2s half emits no rpcs for a private type), so there is no surface to read it through "+
+							"(add c2s_service to the trait, or drop the read)",
+						reader, rr))
+				}
 				continue
 			}
 			g, ok := grants[rr]
@@ -322,6 +336,29 @@ func validateRecordReadAnnotations(fds []*FileDescriptor) error {
 		return fmt.Errorf("record read annotation errors:\n  %s", strings.Join(errs, "\n  "))
 	}
 	return nil
+}
+
+// recordQueryPlaneHasC2SService reports whether the (spec.trait) that asks for
+// the record query plane also declares the plane's C2S service — the half a
+// (spec.record).private record's read is generated against.
+//
+// Resolved the same way collectRecordQueryPlanes resolves the plane itself, and
+// over the same already-sorted file list, so the two cannot disagree about which
+// trait is the plane.
+func recordQueryPlaneHasC2SService(fds []*FileDescriptor) bool {
+	recordStores := make(map[string]bool)
+	for _, fd := range fds {
+		if fd.RecordStore && fd.ServiceName != "" {
+			recordStores[fd.ServiceName] = true
+		}
+	}
+	for _, fd := range fds {
+		if fd.Trait == nil || fd.Trait.Host == "" || !recordStores[fd.Trait.Host] {
+			continue
+		}
+		return fd.Trait.C2SService != ""
+	}
+	return false
 }
 
 // recordIsPrivate reports whether a record message declares

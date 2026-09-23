@@ -1498,8 +1498,10 @@ assert_recordegress_output() {
   # The CLIENT-FACING record read plane. It is emitted only because egressvault
   # declares (spec.record_read).c2s, and that declaration was REFUSED for a Go
   # target until the Go egress filters landed — so its presence here is the
-  # closed refusal, not decoration. It covers VaultRow ALONE: the private type
-  # cannot declare the s2s_read grant (spec.record_read) is the use half of.
+  # closed refusal, not decoration. It covers BOTH record types: the tenant-scoped
+  # VaultRow, whose read is granted by s2s_read, and the PRIVATE VaultSecretRow,
+  # which is forbidden to declare s2s_read and whose c2s read at
+  # C2S_SCOPE_PRINCIPAL is therefore the only read it has.
   [[ -n "$records" ]] || die "record-egress fixture ($language): the generated client-facing record reader is missing under $output (the (spec.record_read).c2s plane was not emitted)"
 
   # THE PRIVATE RECORD HAS NO PEER-FACING READ. This is the assertion the whole
@@ -1538,14 +1540,31 @@ if len([r for r in c2s if "VaultSecretRow" in r]) != 8:
     sys.exit("record-egress fixture (%s): the C2S half (EgressRecordQuery) must keep the private record's full "
              "8-rpc query lifecycle (it carries a user token for the pin to bind to); found %d"
              % (language, len([r for r in c2s if "VaultSecretRow" in r])))
+# THE PRIVATE RECORD'S KEY IS ON ITS FILTER. A record's key is folded into
+# <T>Filter when it declares (spec.record).s2s_read - and a private record is
+# forbidden to declare one, so the fold is gated on `private` as well. Without
+# it the generated point read compiles against a criterion that is never
+# emitted, which is the second of the two gaps that made this shape
+# unimplementable. Asserted on the emitted proto, like the split above, because
+# that is where the decision is taken.
+filters = dict((m.group(1), m.group(2)) for m in
+               re.finditer(r'^message (\w+Filter) \{(.*?)^\}', text, re.S | re.M))
+for msg, key in (("VaultSecretRowFilter", "secret_id"), ("VaultRowFilter", "row_id")):
+    if msg not in filters:
+        sys.exit("record-egress fixture (%s): %s missing from %s" % (language, msg, path))
+    if not re.search(r'\b%s\s*=' % key, filters[msg]):
+        sys.exit("record-egress fixture (%s): %s carries no %s criterion, so the generated point read by key "
+                 "has no filter field to set" % (language, msg, key))
 PLANE_PY
 
   local n
   # api 6: two pinned seams over the private row (GetVaultSecretMaterial) plus
-  # the namespace backstop on each of the four VaultRow seams. records 2: the
-  # namespace backstop on GetVaultRow and GetVaultRowPage. A principal MISMATCH
-  # drops the row and proceeds, so it contributes no abort — only the namespace
-  # pin and the private-owner pin abort.
+  # the namespace backstop on each of the four VaultRow seams. records 6: the
+  # namespace backstop on each of the four generated seams (GetVaultRow,
+  # GetVaultRowPage, GetVaultSecretRow, GetVaultSecretRowPage) plus the
+  # private-owner backstop on the two that carry the PRIVATE row. A principal
+  # MISMATCH drops the row and proceeds, so it contributes no abort — only the
+  # namespace pin and the private-owner pin abort.
   #
   # Rust adds 4 more in the SAME file: EgressVaultApi is a service_c2s service,
   # so its user RPCs are auto-exposed as MCP tools, and Rust emits that tool
@@ -1561,7 +1580,7 @@ PLANE_PY
   if [[ "$language" == "rust" ]]; then
     api_aborts=10
   fi
-  for pair in "$api:$api_aborts" "$records:2"; do
+  for pair in "$api:$api_aborts" "$records:6"; do
     local f="${pair%:*}" want="${pair##*:}"
     n="$(grep -cE "$abort_re" "$f" || true)"
     [[ "$n" == "$want" ]] \
@@ -1577,7 +1596,7 @@ PLANE_PY
   if [[ "$language" == "rust" ]]; then
     api_linked=7
   fi
-  for pair in "$api:$api_linked" "$records:2"; do
+  for pair in "$api:$api_linked" "$records:4"; do
     local f="${pair%:*}" want="${pair##*:}"
     n="$(grep -cE "$linked_re" "$f" || true)"
     [[ "$n" == "$want" ]] \
@@ -1587,17 +1606,17 @@ PLANE_PY
   # The fourth caller shape: a SERVICE identity reading the private record with
   # no delegated (act) claim is refused, rather than pinned against an empty
   # owner that would match a row by accident. It lands on the hand-written c2s
-  # rpc only — the generated record reader never carries a private type, because
-  # its data path is the peer-facing read the plane no longer emits for one.
-  # Rust's +1 is the auto-exposed MCP tool dispatch again: the tool that serves
-  # the private record refuses a delegated caller with no act claim exactly as
-  # its gRPC twin does, so a tool call cannot reach the row by a path the rpc
-  # would have closed.
+  # rpc AND on the two generated seams over the private row, which is what the
+  # private record's own (spec.record_read).c2s buys: the same refusal, emitted
+  # rather than written. Rust's +1 on the api is the auto-exposed MCP tool
+  # dispatch again: the tool that serves the private record refuses a delegated
+  # caller with no act claim exactly as its gRPC twin does, so a tool call cannot
+  # reach the row by a path the rpc would have closed.
   local want_act api_act=1
   if [[ "$language" == "rust" ]]; then
     api_act=2
   fi
-  for pair in "$api:$api_act" "$records:0"; do
+  for pair in "$api:$api_act" "$records:2"; do
     local f="${pair%:*}"
     want_act="${pair##*:}"
     n="$(grep -c 'reads a private record and requires a delegated caller identity (act claim)' "$f" || true)"
@@ -1614,6 +1633,39 @@ PLANE_PY
     || die "record-egress fixture ($language): the namespace backstop diagnostic is missing from $api"
   grep -q 'FATAL: (spec.record).private backstop fired' "$api" \
     || die "record-egress fixture ($language): the private-owner backstop diagnostic is missing from $api"
+
+  # THE PRIVATE RECORD'S READER DIALS THE OTHER HALF OF THE PLANE. This is the
+  # first of the two gaps that made a private record's c2s read unimplementable:
+  # the typed reader's client was the plane's S2S half for every record, and
+  # record_map.go emits no rpcs there for a private type, so the reader compiled
+  # against methods that do not exist. A private record reads the C2S half, which
+  # keeps the type's full lifecycle because it carries the user token the owner
+  # pin binds to; a tenant-scoped record still reads the S2S half. Asserted in
+  # Rust alone because the typed reader is a Rust surface: Go and Java generate
+  # the wrapper and the Handler interface for this plane, not its data path.
+  if [[ "$language" == "rust" ]]; then
+    local readers
+    readers="$(find "$output" -type f -path '*/s2sm/record_readers.rs' -print -quit)"
+    [[ -n "$readers" ]] || die "record-egress fixture (rust): the typed record readers file was not generated under $output"
+    python3 - "$readers" <<'READERS_PY' || die "record-egress fixture (rust): record reader plane-half assertion failed"
+import re, sys
+path = sys.argv[1]
+text = open(path).read()
+want = {"VaultRowRecordReader": "EgressRecordMapGrpcClient",
+        "VaultSecretRowRecordReader": "EgressRecordQueryGrpcClient"}
+for struct, client in want.items():
+    m = re.search(r"pub struct %s<'a> \{\s*client: &'a (\w+)," % struct, text)
+    if not m:
+        sys.exit("record-egress fixture (rust): %s was not generated in %s" % (struct, path))
+    if m.group(1) != client:
+        sys.exit("record-egress fixture (rust): %s borrows %s, expected %s "
+                 "(a private record reads the plane's C2S half; every other record reads its S2S half)"
+                 % (struct, m.group(1), client))
+for client in set(want.values()):
+    if ("::%s;" % client) not in text:
+        sys.exit("record-egress fixture (rust): %s is used but never imported in %s" % (client, path))
+READERS_PY
+  fi
 
   # PAIRED CONTROL: GetVaultStatus returns no record rows, so it must carry no
   # filter. Asserted structurally by the exact counts above; asserted by name

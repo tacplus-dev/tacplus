@@ -408,12 +408,17 @@ func TestRecordReadC2SServerLanguagesAcceptedClientOnlyRejected(t *testing.T) {
 // The private record's c2s read.
 //
 // A (spec.record).private record may never declare s2s_read — ValidateRecord-
-// PrivateAnnotations refuses it. Annotation-wise, C2S_SCOPE_PRINCIPAL is the one
-// legitimate read of a private row the s2s_read prerequisite would otherwise
-// block: the c2s half reads through the caller's delegated user token under the
-// mandatory owner pin, with no s2s hop to authorize. But the generator has no
-// data path for it yet, so it is refused as declared-but-not-implemented rather
-// than accepted (decisions/private-record-c2s-read-without-s2s-read-2026-09-23.md).
+// PrivateAnnotations refuses it. C2S_SCOPE_PRINCIPAL is the one legitimate read
+// of a private row the s2s_read prerequisite would otherwise block: the c2s half
+// reads through the caller's delegated user token under the mandatory owner pin,
+// with no s2s hop to authorize. It is ACCEPTED — the generator half landed with
+// these tests: a private record's typed reader targets the query plane's C2S
+// service (the half record_map.go emits the full lifecycle for on a private
+// type) instead of its s2s sibling, and the record's key is folded into its
+// filter without an s2s_read declaration. Until then this same shape was refused
+// as declared-but-not-implemented; see
+// decisions/private-record-c2s-read-without-s2s-read-2026-09-23.md and
+// decisions/private-record-c2s-read-not-yet-implemented-2026-09-23.md.
 // ---------------------------------------------------------------------------
 
 // makePrivate turns the fixture record into a private one: sets
@@ -435,27 +440,39 @@ func makePrivate(fds []*FileDescriptor) []*FileDescriptor {
 	return fds
 }
 
-// The shape the annotation rules now permit but the generator cannot execute
-// yet: a private record read at C2S_SCOPE_PRINCIPAL with no s2s_read grant
-// anywhere fails, but for lack of a generator data path, not for the old
-// "no s2s_read" contradiction.
-func TestRecordReadPrivateC2SPrincipalNotImplemented(t *testing.T) {
+// The shape this whole exception exists for: a private record read at
+// C2S_SCOPE_PRINCIPAL, with no s2s_read grant anywhere, is ACCEPTED.
+func TestRecordReadPrivateC2SPrincipalAccepted(t *testing.T) {
 	err := validateRecordReadAnnotations(
 		makePrivate(recordReadC2SFds([]string{"reader"}, true, wellFormedC2SFields(), principalScope())))
-	if err == nil {
-		t.Fatal("expected failure: the generator has no data path for a private record's C2S_SCOPE_PRINCIPAL read yet")
-	}
-	if !strings.Contains(err.Error(), "declared but NOT IMPLEMENTED") {
-		t.Fatalf("error must say the shape is declared and not implemented, got: %v", err)
-	}
-	if strings.Contains(err.Error(), "declares no (spec.record).s2s_read") {
-		t.Fatalf("error must not be the old s2s_read contradiction refusal, got: %v", err)
+	if err != nil {
+		t.Fatalf("a private record's C2S_SCOPE_PRINCIPAL read is the one read it has, and must validate; got: %v", err)
 	}
 }
 
-// The DISCLOSURE grant check runs before the not-implemented refusal, so a
-// missing c2s_read grant is still named specifically rather than folded into
-// the generic not-implemented message.
+// The data path is the plane's C2S service BY NAME. A trait that declares none
+// leaves the read with nothing to dial — the s2s half is not a fallback, since
+// it emits no rpcs for a private type at all — so the shape is refused here
+// rather than three times over in the per-language reader generators.
+func TestRecordReadPrivateC2SWithoutPlaneC2SServiceRejected(t *testing.T) {
+	fds := makePrivate(recordReadC2SFds([]string{"reader"}, true, wellFormedC2SFields(), principalScope()))
+	for _, fd := range fds {
+		if fd.Trait != nil {
+			fd.Trait.C2SService = ""
+		}
+	}
+	err := validateRecordReadAnnotations(fds)
+	if err == nil {
+		t.Fatal("expected failure when the plane's trait declares no c2s_service to read a private record through")
+	}
+	if !strings.Contains(err.Error(), "declares no c2s_service") {
+		t.Fatalf("error must name the missing c2s_service, got: %v", err)
+	}
+}
+
+// The DISCLOSURE grant check runs on the private path too, so a missing
+// c2s_read grant is still refused rather than waved through with the s2s_read
+// prerequisite.
 func TestRecordReadPrivateC2SWithoutDisclosureGrantRejected(t *testing.T) {
 	err := validateRecordReadAnnotations(
 		makePrivate(recordReadC2SFds(nil, false, wellFormedC2SFields(), principalScope())))
@@ -484,7 +501,7 @@ func TestRecordReadPrivateWithoutC2SBlockRejected(t *testing.T) {
 
 // The unimplemented scope is not reachable through the exception either: the
 // skip is C2S_SCOPE_PRINCIPAL's alone, so a private record asking for
-// C2S_SCOPE_NAMESPACE takes both refusals rather than being quietly let through.
+// C2S_SCOPE_NAMESPACE is still refused as not implemented.
 func TestRecordReadPrivateC2SNamespaceScopeRejected(t *testing.T) {
 	err := validateRecordReadAnnotations(makePrivate(recordReadC2SFds([]string{"reader"}, true,
 		wellFormedC2SFields(), &RecordReadC2S{Scope: "C2S_SCOPE_NAMESPACE", Exposure: "RPC_EXPOSURE_EXTERNAL"})))

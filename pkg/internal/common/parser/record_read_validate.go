@@ -53,7 +53,17 @@ import (
 //     any of its users" is not a statement anyone means to make.
 //   - c2s_read WITHOUT s2s_read for the same service is refused, in both
 //     directions, for the reason above: there would be no reader to disclose
-//     through.
+//     through. A (spec.record).private record read at C2S_SCOPE_PRINCIPAL is a
+//     distinct refusal, not an exception: annotation-wise it is the one
+//     legitimate read of a private row (the c2s call carries the caller's
+//     delegated user token under the mandatory owner pin, with no s2s hop to
+//     authorize — see
+//     decisions/private-record-c2s-read-without-s2s-read-2026-09-23.md), but the
+//     generator has no data path for it yet — record_map.go emits no s2s rpcs
+//     for a private type, and a record's key is folded into its filter only
+//     when s2s_read is declared, which a private record can never do — so it is
+//     refused as NOT YET IMPLEMENTED rather than generating code that fails to
+//     compile.
 //   - C2S_SCOPE_PRINCIPAL WITH NO RESOLVABLE PRINCIPAL CRITERION is refused
 //     rather than degraded to a tenant-wide read. This is the same stance
 //     javaRecordPrincipalUnenforceable already takes, and it is load-bearing:
@@ -222,6 +232,29 @@ func validateRecordReadAnnotations(fds []*FileDescriptor) error {
 				c2sUsed[rr] = true
 				errs = append(errs, validateRecordReadC2S(reader, rr, decl.C2S, c2sGrants[rr], recordMsg[rr])...)
 			}
+			// A PRIVATE record read through the c2s half is, annotation-wise, the
+			// one legitimate read of a private row: the c2s call carries the
+			// caller's delegated user token, and the owner pin — mandatory on
+			// every private record, enforced by ValidateRecordPrivateAnnotations
+			// — binds the rows to it directly, with no s2s hop to authorize. But
+			// the generator has no data path for this shape yet: the typed
+			// reader's query plane client is the s2s half, which record_map.go
+			// emits no rpcs for on a private type, and the record's key is only
+			// folded into its filter when s2s_read is declared, which a private
+			// record can never do. Refused here — like C2S_SCOPE_NAMESPACE below
+			// — as declared but not implemented, rather than accepted and left to
+			// fail generation or compilation downstream.
+			if recordIsPrivate(recordMsg[rr]) && decl.C2S != nil && decl.C2S.Scope == "C2S_SCOPE_PRINCIPAL" {
+				errs = append(errs, fmt.Sprintf(
+					"%s: (spec.record_read) on private record %q uses c2s scope C2S_SCOPE_PRINCIPAL, which is the one "+
+						"legitimate read of a private row by annotation rules, but the generator's data path for it is "+
+						"declared but NOT IMPLEMENTED: the typed reader still targets the s2s half of the record query "+
+						"plane, which emits no rpcs for a private type, and the record's key is folded into its filter "+
+						"only when (spec.record).s2s_read is declared, which a private record can never do "+
+						"(see decisions/private-record-c2s-read-without-s2s-read-2026-09-23.md)",
+					reader, rr))
+				continue
+			}
 			g, ok := grants[rr]
 			if !ok {
 				errs = append(errs, fmt.Sprintf(
@@ -289,6 +322,12 @@ func validateRecordReadAnnotations(fds []*FileDescriptor) error {
 		return fmt.Errorf("record read annotation errors:\n  %s", strings.Join(errs, "\n  "))
 	}
 	return nil
+}
+
+// recordIsPrivate reports whether a record message declares
+// (spec.record).private.
+func recordIsPrivate(msg *MessageDescriptor) bool {
+	return msg != nil && msg.Annotations["record_private"].BoolValue
 }
 
 // containsWildcard reports whether an auth_services list carries the "*" entry.

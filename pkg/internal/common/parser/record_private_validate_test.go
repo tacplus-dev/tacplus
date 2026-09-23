@@ -39,24 +39,113 @@ message RuleNode {
 // store_principal tests vary it.
 const recordPrivateOwnerField = `string owner_id = 2 [(spec.store_principal) = true];`
 
-// Red control. A private record declaring s2s_subscribe must fail generation:
-// a subscriber is a service with no per-request caller to pin a row's owner
-// against, so this would broadcast every owner's rows to any authorized peer.
-func TestPrivateRecordWithS2SSubscribeFailsGeneration(t *testing.T) {
-	dp := writeSurfaceProtoDir(t, recordPrivateProto(`private: true`, `s2s_subscribe: {auth_services: ["stratum"]}`, recordPrivateOwnerField))
+// recordStoreProto is a second proto in the same build declaring
+// (spec.record_store), so the s2s_subscribe cases below can name a service that
+// really does resolve to a record store — the one subscriber a private record
+// may authorize.
+const recordStoreProto = `syntax = "proto3";
+
+package privatestore;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "privatestore"};
+option (spec.record_store) = {};
+
+message StorePing {}
+
+service PrivateStore {
+  option (spec.service_s2s) = {};
+
+  rpc Ping(StorePing) returns (StorePing) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}
+`
+
+// Red control. A private record whose s2s_subscribe names a service that is NOT
+// a declared (spec.record_store) must fail generation: such a subscriber is a
+// peer with no per-request caller to pin a row's owner against, so the grant
+// would broadcast every owner's rows to it. `stratum` here is a plain name that
+// resolves to nothing in this build — the store proto is present, and this case
+// still does not name it.
+func TestPrivateRecordWithS2SSubscribeToNonStoreFailsGeneration(t *testing.T) {
+	dp := writeSurfaceProtoDir(t, recordPrivateProto(`private: true`, `s2s_subscribe: {auth_services: ["stratum"]}`, recordPrivateOwnerField), recordStoreProto)
 
 	err := ValidateRecordPrivateAnnotations(dp)
 	if err == nil {
-		t.Fatal("a private (spec.record) declaring s2s_subscribe must fail generation")
+		t.Fatal("a private (spec.record) whose s2s_subscribe names a non-record-store must fail generation")
 	}
 	for _, want := range []string{
 		"record private annotation errors",
 		"privatedemo.RuleNode",
-		"s2s_subscribe",
+		"s2s_subscribe names stratum",
+		"(spec.record_store)",
+		noRecordQueryPlaneHint,
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal %q does not contain %q", err.Error(), want)
 		}
+	}
+}
+
+// Paired positive control, and the scotty profile/people shape: a private record
+// whose s2s_subscribe names ONLY services declaring (spec.record_store)
+// generates. This is the store-ingest grant — without it the store is wired to
+// the record's topic by derivation and then fail-closed-denied on it, so a
+// private record could never legally be persisted at all.
+func TestPrivateRecordWithS2SSubscribeToRecordStorePassesGeneration(t *testing.T) {
+	dp := writeSurfaceProtoDir(t, recordPrivateProto(`private: true`, `s2s_subscribe: {auth_services: ["privatestore"]}`, recordPrivateOwnerField), recordStoreProto)
+
+	if err := ValidateRecordPrivateAnnotations(dp); err != nil {
+		t.Fatalf("a private (spec.record) whose s2s_subscribe names only record stores must generate, got: %v", err)
+	}
+}
+
+// The same grant without the store's proto in the run is refused, with the hint
+// that names the real cause: a record store is resolvable only in a merged
+// application+platform build, and a standalone build sees none. This is the same
+// wrong-generation-scope failure noRecordQueryPlaneHint already explains
+// elsewhere, not a second failure mode.
+func TestPrivateRecordWithS2SSubscribeToStoreOutOfScopeFailsGeneration(t *testing.T) {
+	dp := writeSurfaceProtoDir(t, recordPrivateProto(`private: true`, `s2s_subscribe: {auth_services: ["privatestore"]}`, recordPrivateOwnerField))
+
+	err := ValidateRecordPrivateAnnotations(dp)
+	if err == nil {
+		t.Fatal("a private (spec.record) naming a record store absent from the run must fail generation")
+	}
+	if !strings.Contains(err.Error(), noRecordQueryPlaneHint) {
+		t.Fatalf("refusal %q does not carry the merged-build hint", err.Error())
+	}
+}
+
+// The open grants stay refused unconditionally, even in a build where a real
+// record store IS resolvable and a named grant would pass. "any authenticated
+// service" and "no auth at all" are exactly the fleet-wide broadcast private
+// exists to prevent, so they are not reachable through the store exemption.
+func TestPrivateRecordWithOpenS2SSubscribeFailsGeneration(t *testing.T) {
+	for name, grant := range map[string]string{
+		"wildcard":      `s2s_subscribe: {auth_services: ["*"]}`,
+		"auth_disabled": `s2s_subscribe: {auth_disabled: true}`,
+		"names_nobody":  `s2s_subscribe: {}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dp := writeSurfaceProtoDir(t, recordPrivateProto(`private: true`, grant, recordPrivateOwnerField), recordStoreProto)
+
+			err := ValidateRecordPrivateAnnotations(dp)
+			if err == nil {
+				t.Fatalf("a private (spec.record) declaring %s must fail generation", grant)
+			}
+			for _, want := range []string{
+				"record private annotation errors",
+				"privatedemo.RuleNode",
+				"fleet-wide broadcast",
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("refusal %q does not contain %q", err.Error(), want)
+				}
+			}
+		})
 	}
 }
 

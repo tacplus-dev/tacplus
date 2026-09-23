@@ -131,3 +131,52 @@ func TestCollectMessageSubscriptionsNoSubscribeReturnsNil(t *testing.T) {
 		t.Fatal("expected nil subscriptions for message without subscribe")
 	}
 }
+
+// privateStoreSourceMessage is a record message as the parser hands it to
+// collectStoreSourceFQNs: private is the "record_private" annotation (never bare
+// "private"), and the subscribe grant rides EventPublishEntries[0] of
+// "event_surface". grant nil means the record declares no s2s_subscribe at all.
+func privateStoreSourceMessage(private bool, grant *model.EventBusMethodS2S) parser.MessageDescriptor {
+	anns := map[string]model.AnnotationValue{
+		"record": {StringValue: "secret_id"},
+	}
+	if private {
+		anns["record_private"] = model.AnnotationValue{BoolValue: true}
+	}
+	if grant != nil {
+		anns["event_surface"] = model.AnnotationValue{
+			EventPublishEntries: []model.EventBusBindingEntry{{MethodS2SSubscribe: grant}},
+		}
+	}
+	return parser.MessageDescriptor{Name: "VaultSecretRow", Annotations: anns}
+}
+
+// A PRIVATE record is a store-ingest source only for the stores its
+// s2s_subscribe actually names. Deriving one for a store the grant omits wires
+// that store to a topic it is fail-closed-denied on at runtime — a subscriber
+// that compiles, runs, and silently receives nothing.
+func TestPrivateRecordGrantsStoreOnlyNamedStores(t *testing.T) {
+	granted := &model.EventBusMethodS2S{AuthServices: []string{"egressstratum"}}
+
+	if !privateRecordGrantsStore(privateStoreSourceMessage(true, granted), "egressstratum") {
+		t.Fatal("a private record naming this store must derive an ingest source for it")
+	}
+	if privateRecordGrantsStore(privateStoreSourceMessage(true, granted), "egressvault") {
+		t.Fatal("a private record NOT naming this store must not derive an ingest source for it")
+	}
+	if privateRecordGrantsStore(privateStoreSourceMessage(true, nil), "egressstratum") {
+		t.Fatal("a private record declaring no s2s_subscribe authorizes no store, so derives no ingest source")
+	}
+}
+
+// A NON-private record is unrestricted: every record store in the build ingests
+// it, exactly as before. The grant plays no part in its derivation.
+func TestPrivateRecordGrantsStoreLeavesNonPrivateAlone(t *testing.T) {
+	if !privateRecordGrantsStore(privateStoreSourceMessage(false, nil), "egressstratum") {
+		t.Fatal("a non-private record must remain a source for every store, grant or no grant")
+	}
+	granted := &model.EventBusMethodS2S{AuthServices: []string{"somewhereelse"}}
+	if !privateRecordGrantsStore(privateStoreSourceMessage(false, granted), "egressstratum") {
+		t.Fatal("a non-private record's s2s_subscribe must not narrow which stores ingest it")
+	}
+}

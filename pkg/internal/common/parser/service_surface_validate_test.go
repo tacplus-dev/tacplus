@@ -3,16 +3,19 @@
 package parser
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// writeSurfaceProtoDir writes spec.proto plus the given service proto into a
+// writeSurfaceProtoDir writes spec.proto plus the given service protos into a
 // temp dir and parses it with protoc, so the fixture exercises the real
-// annotation parsing rather than a hand-built descriptor.
-func writeSurfaceProtoDir(t *testing.T, protoText string) *DescriptorParser {
+// annotation parsing rather than a hand-built descriptor. Extra protos land as
+// surface2.proto, surface3.proto, ... for cases whose subject is how one proto
+// resolves against another in the same build.
+func writeSurfaceProtoDir(t *testing.T, protoText string, extraProtoTexts ...string) *DescriptorParser {
 	t.Helper()
 	skipIfNoProtoc(t)
 	dir := t.TempDir()
@@ -28,6 +31,9 @@ func writeSurfaceProtoDir(t *testing.T, protoText string) *DescriptorParser {
 		t.Fatalf("write spec.proto: %v", err)
 	}
 	writeTempProtoFile(t, dir, "surface.proto", protoText)
+	for i, extra := range extraProtoTexts {
+		writeTempProtoFile(t, dir, fmt.Sprintf("surface%d.proto", i+2), extra)
+	}
 	dp, err := NewDescriptorParser(dir)
 	if err != nil {
 		t.Fatalf("NewDescriptorParser: %v", err)

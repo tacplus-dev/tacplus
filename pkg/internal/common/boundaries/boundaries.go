@@ -713,10 +713,14 @@ func DeriveStoreSubscriptions(p *parser.DescriptorParser, selfPackage string) []
 func collectStoreSourceFQNs(p *parser.DescriptorParser, selfPackage string) map[string]bool {
 	isTimeseriesStore := false
 	isRecordStore := false
+	storeServiceName := ""
 	for _, fd := range p.GetAllFiles() {
 		if fd.Package == selfPackage {
 			isTimeseriesStore = isTimeseriesStore || fd.TimeseriesStore
 			isRecordStore = isRecordStore || fd.RecordStore
+			if fd.RecordStore && fd.ServiceName != "" {
+				storeServiceName = fd.ServiceName
+			}
 		}
 	}
 	if !isTimeseriesStore && !isRecordStore {
@@ -731,15 +735,46 @@ func collectStoreSourceFQNs(p *parser.DescriptorParser, selfPackage string) map[
 					sourceFQNs[ann.StringValue] = true
 				}
 			}
-			// For record_store: every type with (spec.record) is a source.
+			// For record_store: every type with (spec.record) is a source,
+			// except a PRIVATE record, which is a source only for the stores
+			// its s2s_subscribe grant actually names (see
+			// ValidateRecordPrivateAnnotations). Deriving an ingest
+			// subscription this store is not granted would wire it to a topic
+			// it is fail-closed-denied on at runtime.
 			if isRecordStore {
-				if _, ok := msg.Annotations["record"]; ok {
+				if _, ok := msg.Annotations["record"]; ok && privateRecordGrantsStore(msg, storeServiceName) {
 					sourceFQNs[fd.Package+"."+msg.Name] = true
 				}
 			}
 		}
 	}
 	return sourceFQNs
+}
+
+// privateRecordGrantsStore reports whether the record-store service named
+// storeService may derive a store-ingest subscription for msg. A non-private
+// record is unrestricted: every store in the build ingests it. A private record
+// is a source only for the stores named in its s2s_subscribe.auth_services —
+// the grant the private-record validator requires it to declare, and the only
+// place a private record says which stores may hold its rows.
+func privateRecordGrantsStore(msg parser.MessageDescriptor, storeService string) bool {
+	if ann, ok := msg.Annotations["record_private"]; !ok || !ann.BoolValue {
+		return true
+	}
+	surface, ok := msg.Annotations["event_surface"]
+	if !ok || len(surface.EventPublishEntries) == 0 {
+		return false
+	}
+	sub := surface.EventPublishEntries[0].MethodS2SSubscribe
+	if sub == nil || storeService == "" {
+		return false
+	}
+	for _, name := range sub.AuthServices {
+		if name == storeService {
+			return true
+		}
+	}
+	return false
 }
 
 func subscriptionDataFromTopic(stateRoot string, topic eventbus.Topic, origin string) SubscriptionData {

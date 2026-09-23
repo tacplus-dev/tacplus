@@ -23,10 +23,9 @@ import (
 
 // rustSingletonBoundary describes a non-repeated message field in the state root.
 type rustSingletonBoundary struct {
-	FieldName    string // snake_case: "roster"
-	FieldPascal  string // PascalCase: "Roster"
-	TypeName     string // PascalCase message type: "TeamRoster"
-	IsPersisted  bool
+	FieldName   string // snake_case: "roster"
+	FieldPascal string // PascalCase: "Roster"
+	TypeName    string // PascalCase message type: "TeamRoster"
 }
 
 // rustCollectionBoundary describes a repeated message field in the state root.
@@ -35,7 +34,6 @@ type rustCollectionBoundary struct {
 	FieldPascal  string // PascalCase: "Players"
 	TypeName     string // PascalCase item type: "Player"
 	KeyFieldName string // snake_case key field: "player_id"
-	IsPersisted  bool
 
 	// MaxEntries is the client-side snapshot safety limit: the field's
 	// (spec.eviction_max_size) when declared, else the shared default.
@@ -361,16 +359,14 @@ func generateRustStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 				FieldPascal:  fieldPascal,
 				TypeName:     typeName,
 				KeyFieldName: keyFieldName,
-				IsPersisted:  field.Annotations["persistence"].BoolValue,
 
 				MaxEntries: boundaries.CollectionSafetyLimit(field),
 			})
 		} else {
 			singletons = append(singletons, rustSingletonBoundary{
-				FieldName:    field.Name,
-				FieldPascal:  fieldPascal,
-				TypeName:     typeName,
-				IsPersisted:  field.Annotations["persistence"].BoolValue,
+				FieldName:   field.Name,
+				FieldPascal: fieldPascal,
+				TypeName:    typeName,
 			})
 		}
 	}

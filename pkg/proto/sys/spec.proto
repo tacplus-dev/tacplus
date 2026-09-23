@@ -1808,8 +1808,14 @@ extend google.protobuf.FieldOptions {
   // shared between collection and singleton uses (e.g. jwk.proto JWK.exp).
   bool epoch_expiration = 50027;
 
-  // persistence marks a graph boundary (singleton, collection, map) for durable storage.
-  // When true, the cluster persists this boundary's data across restarts.
+  // persistence marks a graph boundary (singleton, collection, map) as durable:
+  // the KERNEL state store includes the boundary in its snapshot and rehydrates it
+  // on a cold start. Kernel is the only durable store for flagged boundaries —
+  // services do NOT persist state themselves, and no generated state client in any
+  // language writes the boundary to local disk. tacplus itself implements nothing
+  // here: it carries the flag to registry.json (BoundaryInfo.persistence) for
+  // kernel's codegen to act on. Unrelated to typed disk persistence, which is keyed
+  // off (spec.service_store) and grpcconfig.disk_persistence.
   // Can only be set on message-typed boundary fields.
   // Cannot be set on queues, topics, or priority queues.
   bool persistence = 50028;

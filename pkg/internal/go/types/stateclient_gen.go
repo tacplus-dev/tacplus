@@ -31,7 +31,6 @@ type singletonBoundary struct {
 	TypeName       string // PascalCase message type: "UserProfile", "TeamRoster"
 	GoType         string // Go type: "TeamRoster" or "ballsports_pb.EmployeeSalary"
 	IsCrossPackage bool   // true if type is from another package (don't prefix with types.)
-	IsPersisted    bool   // true if (spec.persistence) = true
 }
 
 // collectionBoundary describes a repeated message field in the state root.
@@ -42,7 +41,6 @@ type collectionBoundary struct {
 	KeyFieldName    string // PascalCase Go field name for indexed key: "PlayerId"
 	KeyGoType       string // Go type for key: "string"
 	IsCrossPackage  bool   // true if type is from another package
-	IsPersisted     bool   // true if (spec.persistence) = true
 	EvictionMaxSize int64  // max entries (from spec.eviction_max_size), 0 = use default
 }
 
@@ -132,7 +130,6 @@ type stateClientData struct {
 // boundaryInfo describes a state boundary for registry generation.
 type boundaryInfo struct {
 	FieldName    string // "Atomic", "Converged", "Roster"
-	Persistence  bool   // true if (spec.persistence) = true
 	IsCollection bool   // true if repeated (collection boundary)
 }
 
@@ -1122,7 +1119,6 @@ func generateStateWrapper(config *tactype.Config, svc ServiceInfo, stateRoot *pa
 				KeyFieldName:    keyFieldName,
 				KeyGoType:       keyGoType,
 				IsCrossPackage:  isCrossPackage,
-				IsPersisted:     field.Annotations["persistence"].BoolValue,
 				EvictionMaxSize: field.Annotations["eviction_max_size"].IntValue,
 			})
 			markCross()
@@ -1133,7 +1129,6 @@ func generateStateWrapper(config *tactype.Config, svc ServiceInfo, stateRoot *pa
 				TypeName:       typeName,
 				GoType:         goType,
 				IsCrossPackage: isCrossPackage,
-				IsPersisted:    field.Annotations["persistence"].BoolValue,
 			})
 			markCross()
 		}
@@ -1279,14 +1274,12 @@ func generateStateWrapper(config *tactype.Config, svc ServiceInfo, stateRoot *pa
 	for _, s := range singletons {
 		boundaries = append(boundaries, boundaryInfo{
 			FieldName:    s.FieldName,
-			Persistence:  s.IsPersisted,
 			IsCollection: false,
 		})
 	}
 	for _, c := range collections {
 		boundaries = append(boundaries, boundaryInfo{
 			FieldName:    c.FieldName,
-			Persistence:  c.IsPersisted,
 			IsCollection: true,
 		})
 	}

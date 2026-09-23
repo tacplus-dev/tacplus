@@ -28,7 +28,6 @@ type pySingletonBoundary struct {
 	FieldPascal    string // PascalCase: "Roster"
 	TypeName       string // PascalCase message type: "TeamRoster"
 	ValidateRef    string // generated validator call: "pb_helpers.validate_team_roster"
-	IsPersisted    bool
 }
 
 // pyCollectionBoundary describes a repeated message field in the state root.
@@ -38,7 +37,6 @@ type pyCollectionBoundary struct {
 	FieldPascal    string // PascalCase: "Players"
 	TypeName       string // PascalCase item type: "Player"
 	KeyFieldName   string // snake_case key field: "player_id"
-	IsPersisted    bool
 
 	// MaxEntries is the client-side snapshot safety limit: the field's
 	// (spec.eviction_max_size) when declared, else the shared default.
@@ -313,7 +311,6 @@ func generatePyStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc *p
 				FieldPascal:    fieldPascal,
 				TypeName:       typeName,
 				KeyFieldName:   strutil.ToSnakeCase(keyFieldName),
-				IsPersisted:    field.Annotations["persistence"].BoolValue,
 
 				MaxEntries: boundaries.CollectionSafetyLimit(field),
 			})
@@ -324,7 +321,6 @@ func generatePyStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc *p
 				FieldPascal:    fieldPascal,
 				TypeName:       typeName,
 				ValidateRef:    "pb_helpers.validate_" + strutil.ToSnakeCase(typeName),
-				IsPersisted:    field.Annotations["persistence"].BoolValue,
 			})
 		}
 	}

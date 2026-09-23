@@ -23,11 +23,10 @@ import (
 
 // tsSingletonBoundary describes a non-repeated message field in the state root.
 type tsSingletonBoundary struct {
-	FieldName    string // camelCase field name: "roster"
-	FieldPascal  string // PascalCase: "Roster"
-	TypeName     string // PascalCase message type: "TeamRoster"
-	TypePrefix   string // import alias: "types" (own package) or "x509Types" (cross-package)
-	IsPersisted  bool
+	FieldName   string // camelCase field name: "roster"
+	FieldPascal string // PascalCase: "Roster"
+	TypeName    string // PascalCase message type: "TeamRoster"
+	TypePrefix  string // import alias: "types" (own package) or "x509Types" (cross-package)
 }
 
 // tsCollectionBoundary describes a repeated message field in the state root.
@@ -37,7 +36,6 @@ type tsCollectionBoundary struct {
 	TypeName     string // PascalCase item type: "Player"
 	TypePrefix   string // import alias: "types" (own package) or "x509Types" (cross-package)
 	KeyFieldName string // camelCase key field: "playerId"
-	IsPersisted  bool
 
 	// MaxEntries is the client-side snapshot safety limit: the field's
 	// (spec.eviction_max_size) when declared, else the shared default.
@@ -329,17 +327,15 @@ func generateTSStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc *p
 				TypeName:     typeName,
 				TypePrefix:   typePrefix,
 				KeyFieldName: keyFieldName,
-				IsPersisted:  field.Annotations["persistence"].BoolValue,
 
 				MaxEntries: boundaries.CollectionSafetyLimit(field),
 			})
 		} else {
 			singletons = append(singletons, tsSingletonBoundary{
-				FieldName:    strutil.ToLowerCamelCase(field.Name),
-				FieldPascal:  fieldPascal,
-				TypeName:     typeName,
-				TypePrefix:   typePrefix,
-				IsPersisted:  field.Annotations["persistence"].BoolValue,
+				FieldName:   strutil.ToLowerCamelCase(field.Name),
+				FieldPascal: fieldPascal,
+				TypeName:    typeName,
+				TypePrefix:  typePrefix,
 			})
 		}
 	}

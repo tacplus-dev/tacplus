@@ -268,7 +268,16 @@ Services own their state. Other services access exported state through declared
 imports and generated read-only accessors, not by manually dialing backing state
 services.
 
+The kernel state store is the only durable store for boundaries flagged with
+`(spec.persistence)`: kernel snapshots them and rehydrates them on a cold start.
+Generated state clients carry no local durability of their own — no state client
+in any language writes a boundary to local disk.
+
 ## Typed Disk Persistence
+
+This section is about `(spec.service_store)` typed disk persistence and
+`grpcconfig.disk_persistence`; it is unrelated to `(spec.persistence)`, which flags
+a state boundary for durability in the kernel state store.
 
 Typed disk persistence is the generated disk analogue of typed HTTP clients:
 code reads and writes proto types with generated serialization and validation,

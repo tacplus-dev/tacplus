@@ -34,7 +34,6 @@ type javaSingletonBoundary struct {
 	// boundary is collected for an own-package type; filled in once the types
 	// package is known.
 	ValidateRef string
-	IsPersisted bool
 }
 
 // javaCollectionBoundary describes a repeated message field in the state root.
@@ -45,7 +44,6 @@ type javaCollectionBoundary struct {
 	JavaType       string // Qualified: "Baseball.Player"
 	KeyFieldName   string // camelCase: "playerId"
 	KeyFieldPascal string // PascalCase: "PlayerId"
-	IsPersisted    bool
 
 	// MaxEntries is the client-side snapshot safety limit: the field's
 	// (spec.eviction_max_size) when declared, else the shared default.
@@ -428,7 +426,6 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 				JavaType:       javaType,
 				KeyFieldName:   keyFieldName,
 				KeyFieldPascal: keyFieldPascal,
-				IsPersisted:    field.Annotations["persistence"].BoolValue,
 
 				MaxEntries: boundaries.CollectionSafetyLimit(field),
 			})
@@ -447,7 +444,6 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 				TypeName:    typeName,
 				JavaType:    javaType,
 				ValidateRef: validateRef,
-				IsPersisted: field.Annotations["persistence"].BoolValue,
 			})
 		}
 	}

@@ -21,15 +21,40 @@ import (
 // canonicalization, the same function the caller-side generated helper calls —
 // not a second implementation that could drift from it.
 func javaRequiresDeviceGate(method *parser.MethodInfo, servicePackage, serviceName string) string {
-	if method == nil || !method.RequiresDevice {
+	if method == nil || !method.HasDeviceGate() {
 		return ""
 	}
-	return fmt.Sprintf(`
+	body := fmt.Sprintf(`
             // (spec.rpc).requires_device: the device-only approval gate. Any
             // failure refuses the rpc — the handler below is never reached.
             Approval.Presented __approval = Approval.fromIncomingContext();
             byte[] __requestHash = Approval.requestHash(request);
             brokerApproval("%s", __approval, __requestHash, caller);`, javaRequiresDeviceRpcMethod(servicePackage, serviceName, method.Name))
+	when := method.RequiresDeviceWhen
+	if when == nil {
+		return body
+	}
+	// (spec.rpc).requires_device_when: the SAME body, reached only when the
+	// named field holds the named value. Every other request is served exactly
+	// as it is without the annotation.
+	return fmt.Sprintf(`
+            // (spec.rpc).requires_device_when: the approval gate below runs only
+            // when %s == %s.
+            if (%s) {%s
+            }`, when.Field, when.Equals, javaRequiresDeviceWhenCondition(when),
+		strings.ReplaceAll(body, "\n            ", "\n                "))
+}
+
+// javaRequiresDeviceWhenCondition is the Java expression the gated field is
+// tested with. An enum is compared by NUMBER through getXxxValue(): the value's
+// name was resolved through the enum descriptor at parse time, so this needs no
+// generated constant's spelling.
+func javaRequiresDeviceWhenCondition(when *parser.RequiresDeviceWhenDescriptor) string {
+	getter := "get" + javaFieldNameUpper(when.Field)
+	if when.IsEnum {
+		return fmt.Sprintf("request.%sValue() == %d", getter, when.EnumNumber)
+	}
+	return fmt.Sprintf("%q.equals(request.%s())", when.Equals, getter)
 }
 
 // javaRequiresDeviceRpcMethod is the rpc_method string the check reports to the
@@ -123,7 +148,7 @@ func javaGrpcClientAccessorName(serviceName string) string {
 // generated here, and deliberately so: an approval is proposed by a person, not
 // by a service's client stub.
 func javaRequiresDeviceClientHelpers(svc *parser.ServiceInfo, method *parser.MethodInfo, inputType, outputType string) string {
-	if method == nil || !method.RequiresDevice {
+	if method == nil || !method.HasDeviceGate() {
 		return ""
 	}
 	name := methodNameLowerCamel(method.Name)

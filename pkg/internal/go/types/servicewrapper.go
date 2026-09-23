@@ -299,18 +299,23 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			// preconditions are structural, so a build that cannot meet one of
 			// them fails here rather than generating an RPC the author believes
 			// is gated and is not.
-			if method.RequiresDevice {
+			//
+			// requires_device_when is the same gate on a narrower set of
+			// requests, so it meets the same preconditions: the check still
+			// hashes the WHOLE request when it fires, and still needs a
+			// verified caller and exactly one request to hash.
+			if method.HasDeviceGate() {
 				if method.AuthDisabled || service.AuthDisabled || service.IsC2D {
-					return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its auth is disabled; the check must name the user the caller is serving (caller_namespace/caller_subject), and an rpc with no verified token has no user to name",
-						service.Name, method.Name)
+					return fmt.Errorf("%s.%s declares (spec.rpc).%s, but its auth is disabled; the check must name the user the caller is serving (caller_namespace/caller_subject), and an rpc with no verified token has no user to name",
+						service.Name, method.Name, method.DeviceGateAnnotation())
 				}
 				if method.ClientStreaming || method.ServerStreaming || method.Collection != nil {
-					return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but it is not a plain unary rpc; an approval covers ONE request's hash, which a stream or a collection window does not have",
-						service.Name, method.Name)
+					return fmt.Errorf("%s.%s declares (spec.rpc).%s, but it is not a plain unary rpc; an approval covers ONE request's hash, which a stream or a collection window does not have",
+						service.Name, method.Name, method.DeviceGateAnnotation())
 				}
 				if f := goRequiresDeviceMapField(method.FullInputType, san, info.Package); f != "" {
-					return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its request reaches a map field (%s); map iteration order is not canonical across languages, so the approval hash could not be computed identically on both ends — remove the map or drop the annotation",
-						service.Name, method.Name, f)
+					return fmt.Errorf("%s.%s declares (spec.rpc).%s, but its request reaches a map field (%s); map iteration order is not canonical across languages, so the approval hash could not be computed identically on both ends — remove the map or drop the annotation",
+						service.Name, method.Name, method.DeviceGateAnnotation(), f)
 				}
 				hasRequiresDevice = true
 			}
@@ -1974,10 +1979,10 @@ func goPrivateEgressRows(method *parser.MethodInfo, san *egressSanitizer, servic
 // canonicalization, the same function the caller-side generated helper calls —
 // not a second implementation that could drift from it.
 func goRequiresDeviceGate(method *parser.MethodInfo, svc *parser.ServiceInfo, servicePackage string) string {
-	if !method.RequiresDevice {
+	if !method.HasDeviceGate() {
 		return ""
 	}
-	return fmt.Sprintf(`
+	body := fmt.Sprintf(`
 	// (spec.rpc).requires_device: the device-only approval gate. Any failure
 	// refuses the rpc — the handler below is never reached.
 	approvalID, deviceAssertion, approvalErr := approval.FromIncomingContext(ctx)
@@ -1992,6 +1997,30 @@ func goRequiresDeviceGate(method *parser.MethodInfo, svc *parser.ServiceInfo, se
 		return nil, approvalErr
 	}
 `, qualifiedMethodAuthKey(servicePackage, svc.Name, method.Name))
+	when := method.RequiresDeviceWhen
+	if when == nil {
+		return body
+	}
+	// (spec.rpc).requires_device_when: the SAME body, reached only when the
+	// named field holds the named value. Every other request is served exactly
+	// as it is without the annotation.
+	return fmt.Sprintf(`
+	// (spec.rpc).requires_device_when: the approval gate below runs only when
+	// %s == %s.
+	if req.%s == %s {%s	}
+`, when.Field, when.Equals, toGoFieldName(when.Field), goRequiresDeviceWhenValue(when),
+		strings.ReplaceAll(body, "\n\t", "\n\t\t"))
+}
+
+// goRequiresDeviceWhenValue is the Go literal the gated field is compared
+// against. An enum is compared by NUMBER: the value's name was resolved through
+// the enum descriptor at parse time, and an untyped integer constant converts to
+// the generated enum type, so this needs no generated constant's spelling.
+func goRequiresDeviceWhenValue(when *parser.RequiresDeviceWhenDescriptor) string {
+	if when.IsEnum {
+		return fmt.Sprintf("%d", when.EnumNumber)
+	}
+	return fmt.Sprintf("%q", when.Equals)
 }
 
 // goRequiresDeviceMapField names the map field reachable from a

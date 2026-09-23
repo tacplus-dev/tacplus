@@ -1469,7 +1469,7 @@ func goServiceHasRequiresDevice(service parser.ServiceDescriptor) bool {
 		if m.IsMcp {
 			continue
 		}
-		if m.RequiresDevice {
+		if m.HasDeviceGate() {
 			return true
 		}
 	}

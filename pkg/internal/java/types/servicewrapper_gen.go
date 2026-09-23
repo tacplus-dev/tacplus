@@ -205,7 +205,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				if m.TargetNamespaceField != "" && !m.AuthAnyUser {
 					hasMethodAuth = true
 				}
-				if m.RequiresDevice {
+				if m.HasDeviceGate() {
 					hasRequiresDevice = true
 				}
 			}
@@ -785,19 +785,20 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		// preconditions are structural, so a build that cannot meet one of them
 		// fails here rather than generating an RPC the author believes is gated
 		// and is not. Same three refusals the Go backend makes, for the same
-		// reasons.
-		if method.RequiresDevice {
+		// reasons, and requires_device_when meets them exactly as
+		// requires_device does — when it fires it hashes the WHOLE request.
+		if method.HasDeviceGate() {
 			if method.AuthDisabled || svc.AuthDisabled || svc.IsC2D {
-				return false, fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its auth is disabled; the check must name the user the caller is serving (caller_namespace/caller_subject), and an rpc with no verified token has no user to name",
-					targetService.Name, method.Name)
+				return false, fmt.Errorf("%s.%s declares (spec.rpc).%s, but its auth is disabled; the check must name the user the caller is serving (caller_namespace/caller_subject), and an rpc with no verified token has no user to name",
+					targetService.Name, method.Name, method.DeviceGateAnnotation())
 			}
 			if method.ClientStreaming || method.ServerStreaming || method.Collection != nil {
-				return false, fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but it is not a plain unary rpc; an approval covers ONE request's hash, which a stream or a collection window does not have",
-					targetService.Name, method.Name)
+				return false, fmt.Errorf("%s.%s declares (spec.rpc).%s, but it is not a plain unary rpc; an approval covers ONE request's hash, which a stream or a collection window does not have",
+					targetService.Name, method.Name, method.DeviceGateAnnotation())
 			}
 			if f := javaRequiresDeviceMapField(method.FullInputType, san, info.Package); f != "" {
-				return false, fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its request reaches a map field (%s); map iteration order is not canonical across languages, so the approval hash could not be computed identically on both ends — remove the map or drop the annotation",
-					targetService.Name, method.Name, f)
+				return false, fmt.Errorf("%s.%s declares (spec.rpc).%s, but its request reaches a map field (%s); map iteration order is not canonical across languages, so the approval hash could not be computed identically on both ends — remove the map or drop the annotation",
+					targetService.Name, method.Name, method.DeviceGateAnnotation(), f)
 			}
 		}
 		// The generated session carrier is served by the wrapper itself
@@ -922,7 +923,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	// byte-identical to before.
 	hasRequiresDevice := false
 	for _, m := range targetService.Methods {
-		if !m.IsMcp && m.RequiresDevice {
+		if !m.IsMcp && m.HasDeviceGate() {
 			hasRequiresDevice = true
 			break
 		}

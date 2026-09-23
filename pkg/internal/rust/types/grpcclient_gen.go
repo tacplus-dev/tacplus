@@ -345,18 +345,18 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMa
 		// (spec.rpc).requires_device: the caller-side half. Rust's generated
 		// client is the seam Java uses too — neither has a separate per-rpc
 		// ServiceManager helper layer the way Go does.
-		if method.RequiresDevice {
+		if method.HasDeviceGate() {
 			// The same two refusals the host makes (see servicewrapper_gen.go),
 			// for the same reason and in the caller's own build: a request that
 			// cannot be canonicalized identically in every language has no
 			// approval hash to propose.
 			if f := rustRequiresDeviceMapField(method.FullInputType, san, info.Package); f != "" {
-				return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its request reaches a map field (%s); map iteration order is not canonical across languages, so the approval hash could not be computed identically on both ends — remove the map or drop the annotation",
-					targetService.Name, method.Name, f)
+				return fmt.Errorf("%s.%s declares (spec.rpc).%s, but its request reaches a map field (%s); map iteration order is not canonical across languages, so the approval hash could not be computed identically on both ends — remove the map or drop the annotation",
+					targetService.Name, method.Name, method.DeviceGateAnnotation(), f)
 			}
 			if t := rustRequiresDeviceUnhashableType(method.FullInputType, san, info.Package); t != "" {
-				return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its request reaches %s, whose descriptor this generator cannot resolve; Rust canonicalizes by GENERATED code rather than by reflection, so the field would be silently absent from the Rust hash and present in the Go and Java one",
-					targetService.Name, method.Name, t)
+				return fmt.Errorf("%s.%s declares (spec.rpc).%s, but its request reaches %s, whose descriptor this generator cannot resolve; Rust canonicalizes by GENERATED code rather than by reflection, so the field would be silently absent from the Rust hash and present in the Go and Java one",
+					targetService.Name, method.Name, method.DeviceGateAnnotation(), t)
 			}
 			hasRequiresDevice = true
 			in, out := resolveRustTypeQualified(method, info.Package, info.CrossPackageTypes)

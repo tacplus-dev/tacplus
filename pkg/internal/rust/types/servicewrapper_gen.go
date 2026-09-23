@@ -320,22 +320,24 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 		// fails here rather than generating an rpc the author believes is gated
 		// and is not. The first three are Go's and Java's, word for word; the
 		// fourth is Rust's own (see rustRequiresDeviceUnhashableType).
-		if method.RequiresDevice {
+		// requires_device_when meets all four exactly as requires_device does —
+		// when it fires it hashes the WHOLE request.
+		if method.HasDeviceGate() {
 			if method.AuthDisabled || targetService.AuthDisabled || targetService.IsC2D {
-				return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its auth is disabled; the check must name the user the caller is serving (caller_namespace/caller_subject), and an rpc with no verified token has no user to name",
-					targetService.Name, method.Name)
+				return fmt.Errorf("%s.%s declares (spec.rpc).%s, but its auth is disabled; the check must name the user the caller is serving (caller_namespace/caller_subject), and an rpc with no verified token has no user to name",
+					targetService.Name, method.Name, method.DeviceGateAnnotation())
 			}
 			if method.ClientStreaming || method.ServerStreaming || method.Collection != nil {
-				return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but it is not a plain unary rpc; an approval covers ONE request's hash, which a stream or a collection window does not have",
-					targetService.Name, method.Name)
+				return fmt.Errorf("%s.%s declares (spec.rpc).%s, but it is not a plain unary rpc; an approval covers ONE request's hash, which a stream or a collection window does not have",
+					targetService.Name, method.Name, method.DeviceGateAnnotation())
 			}
 			if f := rustRequiresDeviceMapField(method.FullInputType, san, info.Package); f != "" {
-				return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its request reaches a map field (%s); map iteration order is not canonical across languages, so the approval hash could not be computed identically on both ends — remove the map or drop the annotation",
-					targetService.Name, method.Name, f)
+				return fmt.Errorf("%s.%s declares (spec.rpc).%s, but its request reaches a map field (%s); map iteration order is not canonical across languages, so the approval hash could not be computed identically on both ends — remove the map or drop the annotation",
+					targetService.Name, method.Name, method.DeviceGateAnnotation(), f)
 			}
 			if t := rustRequiresDeviceUnhashableType(method.FullInputType, san, info.Package); t != "" {
-				return fmt.Errorf("%s.%s declares (spec.rpc).requires_device, but its request reaches %s, whose descriptor this generator cannot resolve; Rust canonicalizes by GENERATED code rather than by reflection, so the field would be silently absent from the Rust hash and present in the Go and Java one",
-					targetService.Name, method.Name, t)
+				return fmt.Errorf("%s.%s declares (spec.rpc).%s, but its request reaches %s, whose descriptor this generator cannot resolve; Rust canonicalizes by GENERATED code rather than by reflection, so the field would be silently absent from the Rust hash and present in the Go and Java one",
+					targetService.Name, method.Name, method.DeviceGateAnnotation(), t)
 			}
 			hasRequiresDevice = true
 		}

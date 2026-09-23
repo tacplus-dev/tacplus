@@ -1349,10 +1349,23 @@ assert_requiresdevice_output() {
   local gate_re='roker_?[Aa]pproval\(.*vault\.VaultService/'
   local gates
   gates="$(grep -cE "$gate_re" "$wrapper" || true)"
-  [[ "$gates" == "1" ]] \
-    || die "requires-device fixture ($language): expected exactly one approval gate call site in $wrapper, found $gates (one gate is DeleteSecret's; more means it was spliced onto ungated methods too, none means it was not generated)"
+  [[ "$gates" == "2" ]] \
+    || die "requires-device fixture ($language): expected exactly two approval gate call sites in $wrapper, found $gates (DeleteSecret's unconditional gate and UpdateSecret's conditional one; more means a gate was spliced onto ungated methods too, fewer means one was not generated)"
   grep -qE "${gate_re}DeleteSecret" "$wrapper" \
     || die "requires-device fixture ($language): the approval gate in $wrapper does not name the wire-qualified vault.VaultService/DeleteSecret"
+  grep -qE "${gate_re}UpdateSecret" "$wrapper" \
+    || die "requires-device fixture ($language): the requires_device_when gate in $wrapper does not name the wire-qualified vault.VaultService/UpdateSecret"
+
+  # (spec.rpc).requires_device_when: the SAME gate body, reached only when the
+  # named field holds the named value. The comparison is by enum NUMBER in every
+  # language (go: req.Effect, java: request.getEffectValue(), rust:
+  # request.get_ref().effect), resolved from the descriptor at generation time.
+  grep -qE '[Ee]ffect(Value\(\))? == 2' "$wrapper" \
+    || die "requires-device fixture ($language): UpdateSecret's gate is not wrapped in the declared condition (effect == UPDATE_EFFECT_DELEGATION) in $wrapper"
+  local conds
+  conds="$(grep -cE '[Ee]ffect(Value\(\))? == 2' "$wrapper" || true)"
+  [[ "$conds" == "1" ]] \
+    || die "requires-device fixture ($language): expected exactly one conditional gate in $wrapper, found $conds"
 
   # The service manager reaches the broker over the generated client.
   grep -q 'BrokerPendingApproval\|broker_pending_approval' "$sm" \

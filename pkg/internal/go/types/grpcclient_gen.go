@@ -467,7 +467,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 	for _, service := range targetServices {
 		totalMethods += len(service.Methods)
 		for _, m := range service.Methods {
-			if m.RequiresDevice {
+			if m.HasDeviceGate() {
 				hasRequiresDevice = true
 			}
 			if !(m.ClientStreaming && m.ServerStreaming) && !m.ClientStreaming {
@@ -897,7 +897,7 @@ func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOpti
 // generated here, and deliberately so: an approval is proposed by a person, not
 // by a service's client stub.
 func goRequiresDeviceClientHelpers(svc *parser.ServiceInfo, method *parser.MethodInfo, goInput, goOutput string, emptyInput, emptyOutput bool) string {
-	if !method.RequiresDevice {
+	if !method.HasDeviceGate() {
 		return ""
 	}
 	hashParams := fmt.Sprintf("req *%s", goInput)

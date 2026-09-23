@@ -110,7 +110,7 @@ func buildRustApprovalPlan(dp *parser.DescriptorParser, files []model.ProtoFile)
 		}
 		for _, svc := range fd.Services {
 			for _, m := range svc.Methods {
-				if !m.RequiresDevice {
+				if !m.HasDeviceGate() {
 					continue
 				}
 				// MethodDescriptor.InputType is already package-qualified
@@ -711,7 +711,7 @@ func rustApprovalTypesModPath(pkg, dir string) string {
 // outside the request message and therefore outside the hashed bytes, which is
 // kernel's own constraint.
 func rustRequiresDeviceGate(method *parser.MethodInfo, svc *parser.ServiceInfo, servicePackage, serviceParentDir string, crossPkgTypes map[string]string) string {
-	if method == nil || !method.RequiresDevice {
+	if method == nil || !method.HasDeviceGate() {
 		return ""
 	}
 	// An Empty request canonicalizes to the empty byte string. The approval is
@@ -721,12 +721,37 @@ func rustRequiresDeviceGate(method *parser.MethodInfo, svc *parser.ServiceInfo, 
 	if method.FullInputType != "google.protobuf.Empty" {
 		hash = rustApprovalHashFnRef(method.FullInputType, servicePackage, serviceParentDir, crossPkgTypes) + "(request.get_ref())"
 	}
-	return fmt.Sprintf(`
+	body := fmt.Sprintf(`
         // (spec.rpc).requires_device: the device-only approval gate. Any
         // failure refuses the rpc — the handler below is never reached.
         let __approval = approval::from_metadata(request.metadata())?;
         let __request_hash = %s;
         self.broker_approval(%q, &__approval, __request_hash, caller.as_ref()).await?;`, hash, rustQualifiedMethodAuthKey(servicePackage, svc.Name, method.Name))
+	when := method.RequiresDeviceWhen
+	if when == nil {
+		return body
+	}
+	// (spec.rpc).requires_device_when: the SAME body, reached only when the
+	// named field holds the named value. Every other request is served exactly
+	// as it is without the annotation.
+	return fmt.Sprintf(`
+        // (spec.rpc).requires_device_when: the approval gate below runs only
+        // when %s == %s.
+        if %s {%s
+        }`, when.Field, when.Equals, rustRequiresDeviceWhenCondition(when),
+		strings.ReplaceAll(body, "\n        ", "\n            "))
+}
+
+// rustRequiresDeviceWhenCondition is the Rust expression the gated field is
+// tested with. prost lowers an enum field to a plain i32, so an enum is compared
+// by NUMBER — the value's name was resolved through the enum descriptor at parse
+// time, so this needs no generated variant's spelling.
+func rustRequiresDeviceWhenCondition(when *parser.RequiresDeviceWhenDescriptor) string {
+	field := escapeRustKeyword(strutil.ToSnakeCase(when.Field))
+	if when.IsEnum {
+		return fmt.Sprintf("request.get_ref().%s == %d", field, when.EnumNumber)
+	}
+	return fmt.Sprintf("request.get_ref().%s == %q", field, when.Equals)
 }
 
 // ---- the ServiceManager seam ----
@@ -764,7 +789,7 @@ func rustRequiresDeviceServices(flatProtoDir string) (map[string]bool, error) {
 		}
 		for _, svc := range fd.Services {
 			for _, m := range svc.Methods {
-				if m.RequiresDevice {
+				if m.HasDeviceGate() {
 					guarded[fd.Package+"."+svc.Name] = true
 				}
 			}
@@ -841,7 +866,7 @@ func buildRustApprovalBrokerEntry(flatProtoDir string, clientServices []ServiceI
 // generated here, and deliberately so: an approval is proposed by a person, not
 // by a service's client stub.
 func rustRequiresDeviceClientHelpers(svc *parser.ServiceInfo, method *parser.MethodInfo, inputType, outputType, servicePkg, serviceParentDir string, crossPkgTypes map[string]string) string {
-	if method == nil || !method.RequiresDevice {
+	if method == nil || !method.HasDeviceGate() {
 		return ""
 	}
 	methodSnake := prostSnakeName(method.Name)

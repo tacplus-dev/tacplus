@@ -48,7 +48,7 @@ func DeriveApprovalBrokerClient(inputDir, selfPackage string) ([]tactype.GrpcEnt
 		}
 		for _, svc := range fd.Services {
 			for _, m := range svc.Methods {
-				if m.RequiresDevice {
+				if m.HasDeviceGate() {
 					guarded = append(guarded, svc.Name+"."+m.Name)
 				}
 			}

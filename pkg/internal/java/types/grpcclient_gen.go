@@ -242,7 +242,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		if javaGrpcClientAuthRequired(targetService, method) {
 			hasAuth = true
 		}
-		if method.RequiresDevice {
+		if method.HasDeviceGate() {
 			hasRequiresDevice = true
 		}
 		inputValidator := javaW2SValidationRef(method.FullInputType, method.InputType, info.Package, crossPkgHelpers)

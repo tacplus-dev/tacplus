@@ -46,6 +46,19 @@ service VaultService {
       requires_device: true
     };
   }
+
+  // The CONDITIONALLY gated rpc: one rpc updates a secret for either reason,
+  // and only a DELEGATION update is a decision about another person. A plain
+  // requires_device here would also gate the self-service update, which is
+  // exactly what requires_device_when exists to avoid. The gate body is the
+  // same one DeleteSecret gets, wrapped in a test of `effect`.
+  rpc UpdateSecret(UpdateSecretRequest) returns (UpdateSecretResponse) {
+    option (spec.rpc) = {
+      principal: RPC_PRINCIPAL_SERVICE,
+      auth_services: ["*"],
+      requires_device_when: {field: "effect", equals: "UPDATE_EFFECT_DELEGATION"}
+    };
+  }
 }
 
 message GetSecretRequest {
@@ -97,4 +110,32 @@ message DeleteSecretResponse {
 
   // deleted_at is the epoch-seconds of the delete.
   int64 deleted_at = 2;
+}
+
+// UpdateEffect is the unified-CRUD discriminator the conditional gate reads.
+// The generated comparison is by NUMBER, resolved from this enum's descriptor
+// at generation time, so no language re-derives the constant's spelling.
+enum UpdateEffect {
+  UPDATE_EFFECT_UNSPECIFIED = 0;
+
+  // UPDATE_EFFECT_OWNER updates the caller's own secret: ungated.
+  UPDATE_EFFECT_OWNER = 1;
+
+  // UPDATE_EFFECT_DELEGATION updates a secret on another person's behalf: gated.
+  UPDATE_EFFECT_DELEGATION = 2;
+}
+
+// UpdateSecretRequest is hashed in full when the gate fires — the condition
+// narrows WHEN the check runs, never WHAT it covers.
+message UpdateSecretRequest {
+  // secret_id names the secret to update.
+  string secret_id = 1 [(spec.assert_required) = true];
+
+  // effect is what kind of update this is.
+  UpdateEffect effect = 2;
+}
+
+message UpdateSecretResponse {
+  // updated_at is the epoch-seconds of the update.
+  int64 updated_at = 1;
 }

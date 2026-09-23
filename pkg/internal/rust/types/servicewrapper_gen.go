@@ -1902,19 +1902,23 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 		responseValidationBlock = unarySan + responseValidationBlock
 	}
 
-	// (spec.store_principal): filter rows the caller does not own out of the
-	// response, before it is validated and returned. Egress-side, like sanitize.
+	// (spec.store_principal) then (spec.store_namespace): filter rows the caller
+	// does not own out of the response, then hold what survives to the caller's
+	// tenant, before the response is validated and returned. Egress-side, like
+	// sanitize. The ORDER is the contract, not an accident: a principal mismatch
+	// DROPS the row and proceeds, a namespace mismatch ABORTS the process, so a
+	// row that fails both must meet the soft filter first. Running namespace
+	// first would halt the process over a row the principal filter would have
+	// dropped silently. Built in one block and spliced once, exactly as the PAGE
+	// seam above and the MCP tool dispatch do, and as Go and Java's unary seams do.
+	var unaryEgressFilter string
 	if lf := san.principalListFields(method.FullOutputType, servicePackage); len(lf) > 0 {
-		responseValidationBlock = rustResponsePrincipalFilterBlock(lf, method.Name) + responseValidationBlock
+		unaryEgressFilter += rustResponsePrincipalFilterBlock(lf, method.Name)
 	}
-
-	// (spec.store_namespace): hold the rows to the caller's tenant on the same
-	// egress seam. Runs after the principal filter is spliced in, so it is the
-	// OUTERMOST of the two — the tenant boundary is checked over exactly the
-	// rows that would otherwise be returned.
 	if lf := san.namespaceListFields(method.FullOutputType, servicePackage); (svc.IsC2S || recordPlaneS2S) && len(lf) > 0 {
-		responseValidationBlock = rustResponseNamespaceFilterBlock(lf, method.Name, recordPlaneS2S) + responseValidationBlock
+		unaryEgressFilter += rustResponseNamespaceFilterBlock(lf, method.Name, recordPlaneS2S)
 	}
+	responseValidationBlock = unaryEgressFilter + responseValidationBlock
 
 	// Unary methods - authorize, extract caller, validate, delegate to handler
 	if hasAccounting {

@@ -244,3 +244,97 @@ func TestRecordPrivateOwnerPinIsIdenticalAcrossLanguages(t *testing.T) {
 		"rust": "func rustPrincipalCrash(",
 	})
 }
+
+// ---------------------------------------------------------------------------
+
+// THE ORDER THE TWO FILTERS RUN IN, on every seam that carries both.
+//
+// A (spec.store_principal) mismatch DROPS the row and the call proceeds; a
+// (spec.store_namespace) mismatch ABORTS the process. So for a row that fails
+// BOTH — a foreign tenant's row that the caller also does not own — the order
+// decides whether the process survives: principal-first drops it quietly,
+// namespace-first halts. Every seam in every language must therefore splice the
+// principal filter BEFORE the namespace filter, and a language whose one seam
+// disagrees with its own other seam is the exact drift this test exists for
+// (Rust's unary seam was that seam, prepending each filter in turn so the
+// namespace block landed outermost while its own PAGE seam appended them in
+// order).
+//
+// Asserted at the SPLICE SITE rather than on the rendered filters, because the
+// filters themselves are identical wherever they run — only the site knows
+// which goes first.
+type egressSpliceSite struct {
+	file      string
+	principal string
+	namespace string
+}
+
+var recordEgressSpliceOrder = map[string]map[string]egressSpliceSite{
+	"unary": {
+		"go": {
+			file:      "../go/types/recordegress_gen.go",
+			principal: `goPrincipalUnaryFilter(principal, "resp", method.Name, indent) +`,
+			namespace: `goNamespaceUnaryFilter(namespace, "resp", method.Name, indent, recordPlaneS2S)`,
+		},
+		"java": {
+			file:      "../java/types/servicewrapper_gen.go",
+			principal: "unaryPrincipal +",
+			namespace: " unaryNamespace +",
+		},
+		"rust": {
+			file:      "../rust/types/servicewrapper_gen.go",
+			principal: "unaryEgressFilter += rustResponsePrincipalFilterBlock(",
+			namespace: "unaryEgressFilter += rustResponseNamespaceFilterBlock(",
+		},
+	},
+	"page": {
+		"go": {
+			file:      "../go/types/recordegress_gen.go",
+			principal: "goPrincipalPageFilter(principal, method.Name, indent, private) +",
+			namespace: "goNamespacePageFilter(namespace, method.Name, indent, recordPlaneS2S)",
+		},
+		"java": {
+			file:      "../java/types/servicewrapper_gen.go",
+			principal: "pageFilter := javaPrincipalPageFilter(",
+			namespace: "pageFilter += nsFilter",
+		},
+		"rust": {
+			file:      "../rust/types/servicewrapper_gen.go",
+			principal: "pageEgressFilter += rustResponsePrincipalFilterBlock(",
+			namespace: "pageEgressFilter += rustResponseNamespaceFilterBlock(",
+		},
+	},
+}
+
+func TestRecordEgressFiltersPrincipalThenNamespaceInEveryLanguage(t *testing.T) {
+	for _, seam := range []string{"unary", "page"} {
+		sites := recordEgressSpliceOrder[seam]
+		if len(sites) != len(recordEgressGenerators) {
+			t.Errorf("%s seam: the splice table covers %d of %d languages; a language with no row is a "+
+				"language nothing checks", seam, len(sites), len(recordEgressGenerators))
+		}
+		for lang, site := range sites {
+			src, err := os.ReadFile(site.file)
+			if err != nil {
+				t.Fatalf("%s/%s: read %s: %v", seam, lang, site.file, err)
+			}
+			text := string(src)
+			pi := strings.Index(text, site.principal)
+			ni := strings.Index(text, site.namespace)
+			if pi < 0 || ni < 0 {
+				t.Errorf("%s/%s: %s no longer splices both egress filters at the site this test knows "+
+					"(principal found=%t, namespace found=%t). The seam was reworked; re-point the table at the "+
+					"new site and re-assert the order, do not delete the row",
+					seam, lang, site.file, pi >= 0, ni >= 0)
+				continue
+			}
+			if pi > ni {
+				t.Errorf("%s/%s: the (spec.store_namespace) filter is spliced BEFORE the "+
+					"(spec.store_principal) filter in %s. A principal mismatch drops the row and proceeds, a "+
+					"namespace mismatch aborts the process — so a row failing both now HALTS this language's "+
+					"%s seam where every other seam in the fleet drops it silently. Principal first, always",
+					seam, lang, site.file, seam)
+			}
+		}
+	}
+}

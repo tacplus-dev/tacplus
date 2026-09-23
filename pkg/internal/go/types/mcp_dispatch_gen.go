@@ -215,10 +215,12 @@ func goMcpToolGeneratable(svc *parser.ServiceInfo, m *parser.MethodInfo, service
 		return fmt.Errorf("%s.%s is an RPC_PRINCIPAL_MCP rpc but declares method_collection in mode %s; only PAGE has a shape a tool call can drive (page_size/page_token in, next_page_token out) — the other modes hand the handler a stream or a materialized collection, which an MCP tool call has no frame for",
 			svc.Name, m.Name, m.Collection.Mode)
 	}
-	// (spec.record).min_group_size is enforced in the generated Java service
-	// wrapper only.
+	// (spec.record).min_group_size: this seam renders no size-only guard, so a
+	// tool carrying one would be dispatched unguarded even though the gRPC
+	// wrapper next door guards it (mingroupsize_gen.go). Java's MCP dispatch
+	// refuses the same shape for the same reason.
 	if m.MinGroupSize > 0 {
-		return fmt.Errorf("%s.%s is an MCP tool carrying (spec.min_group_size) = %d, but the guard is generated for Java service wrappers only; a Go host would dispatch it unguarded",
+		return fmt.Errorf("%s.%s is an MCP tool carrying (spec.min_group_size) = %d, but the generated MCP dispatch renders no size-only guard; publish it as a gRPC rpc or drop the threshold",
 			svc.Name, m.Name, m.MinGroupSize)
 	}
 	// (spec.record).mutability = MUTABILITY_APPEND_ONLY: no language renders a

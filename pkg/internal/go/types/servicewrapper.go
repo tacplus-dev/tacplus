@@ -224,13 +224,14 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			if method.IsMcp {
 				continue
 			}
-			// (spec.record).min_group_size is enforced in the generated Java
-			// service wrapper only. A Go host of a record query plane would serve
-			// the size-only RPCs with no guard at all, so refuse to generate
-			// rather than ship the disclosure silently.
-			if method.MinGroupSize > 0 {
-				return fmt.Errorf("%s.%s carries (spec.min_group_size) = %d, but the guard is generated for Java service wrappers only; a Go host of this record query plane would serve it unguarded",
-					service.Name, method.Name, method.MinGroupSize)
+			// (spec.record).min_group_size: a size-only response over fewer
+			// than the declared number of records is a membership disclosure,
+			// and the wrapper refuses it (mingroupsize_gen.go). A method
+			// carrying a threshold this wrapper cannot guard must fail
+			// generation, not ship the size-only RPC unguarded.
+			if why := goMinGroupSizeUnenforceable(method, san, info.Package); why != "" {
+				return fmt.Errorf("%s.%s carries (spec.min_group_size) = %d but %s",
+					service.Name, method.Name, method.MinGroupSize, why)
 			}
 			// (spec.record).mutability = MUTABILITY_APPEND_ONLY: a row mutation
 			// over a write-once record has no guard to render in ANY language,
@@ -1015,6 +1016,14 @@ if authTok != nil {
 	if validateOutput != "" {
 		serverStreamArg = fmt.Sprintf("{{.ServerName}}ValidatingServerStreamingServer[%s]{ServerStreamingServer: stream, validate: %s}", goOutput, validateOutput)
 	}
+	// (spec.record).min_group_size on a streamed size (Subscribe<T>Count): the
+	// same arithmetic as the unary count, delivered repeatedly. The guard wraps
+	// the validating delegate, so a below-threshold frame fails the stream with
+	// PermissionDenied rather than being withheld — a stream that goes quiet at
+	// exactly N-1 discloses the crossing by silence.
+	if g := goMinGroupSizeStreamGuard(method, san.minGroupSizeField(method.FullOutputType, servicePackage), goOutput); g != "" {
+		serverStreamArg = fmt.Sprintf("{{.ServerName}}GuardedServerStreamingServer[%s]{ServerStreamingServer: %s, guard: %s}", goOutput, serverStreamArg, g)
+	}
 
 	needsStreamMessageAuth := method.ClientStreaming && method.TargetNamespaceField != "" && !skipAuth && !authAnyUser
 	streamMessageAuthorize := "nil"
@@ -1714,7 +1723,10 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 			unarySan = egressSanitizeEnvelopeStmts(fs, "resp", "\t")
 		}
 	}
-	unarySan = unaryEgress + unarySan
+	// (spec.record).min_group_size runs first: the refusal is about the number
+	// itself, so it must precede any transformation of the response.
+	unarySan = goMinGroupSizeGuard(method, san.minGroupSizeField(method.FullOutputType, servicePackage), "resp", "\t") +
+		unaryEgress + unarySan
 
 	// Handler call — sanitize the context and omit Empty/TraceRequest request
 	handlerCall := fmt.Sprintf("p.handler.%s(sanitizeContext(ctx), caller, req)", method.Name)

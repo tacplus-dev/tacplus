@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 )
 
 // ValidateMinGroupSizeAnnotations enforces the two invariants
@@ -108,4 +110,39 @@ func validateMinGroupSizeAnnotations(fds []*FileDescriptor) error {
 		return fmt.Errorf("min_group_size annotation errors:\n  %s", strings.Join(errs, "\n  "))
 	}
 	return nil
+}
+
+// MinGroupSizeField resolves WHICH field of a size-only response carries the
+// size the (spec.record).min_group_size guard compares. The record-map injector
+// stamps the method option onto RPCs returning RecordCount (count) and
+// QueryStats (size); rather than pin those two names in each generator, the
+// field is read off the response message itself — the one scalar integer it
+// carries.
+//
+// "" when the message is nil or carries no single integer field. Each backend
+// turns that into a generation error rather than emitting an unguarded
+// size-only RPC, so the three languages must agree on which field is "the
+// size" — which is why the reading lives here rather than once per language.
+func MinGroupSizeField(msg *model.Message) string {
+	if msg == nil {
+		return ""
+	}
+	found := ""
+	for i := range msg.Fields {
+		f := &msg.Fields[i]
+		if f.IsRepeated || f.IsMap || f.IsMessage || f.IsEnum {
+			continue
+		}
+		switch f.Type {
+		case "int32", "int64", "uint32", "uint64":
+		default:
+			continue
+		}
+		if found != "" {
+			// Two integers: which one is "the size" is not decidable here.
+			return ""
+		}
+		found = f.Name
+	}
+	return found
 }

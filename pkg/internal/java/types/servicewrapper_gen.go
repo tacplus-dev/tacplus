@@ -1285,33 +1285,16 @@ func javaTypeHasTraceFields(fullType, servicePackage, parentDir string, crossPkg
 // "" when the type is unknown or carries no single integer field.
 // generateServiceWrapper turns that into a generation error rather than
 // emitting an unguarded size-only RPC.
+//
+// The CHOICE of field is parser.MinGroupSizeField, shared with the Go and Rust
+// wrappers: three languages guarding three different fields of the same
+// response would be three guards, not one.
 func (es *javaEgressSanitizer) minGroupSizeField(fullType, servicePackage string) string {
 	if es == nil || fullType == "" {
 		return ""
 	}
 	pkg, name := splitJavaEgressFQN(fullType, servicePackage)
-	msg, ok := es.msgs[pkg+"\x00"+name]
-	if !ok {
-		return ""
-	}
-	found := ""
-	for i := range msg.Fields {
-		f := &msg.Fields[i]
-		if f.IsRepeated || f.IsMap || f.IsMessage || f.IsEnum {
-			continue
-		}
-		switch f.Type {
-		case "int32", "int64", "uint32", "uint64":
-		default:
-			continue
-		}
-		if found != "" {
-			// Two integers: which one is "the size" is not decidable here.
-			return ""
-		}
-		found = f.Name
-	}
-	return found
+	return parser.MinGroupSizeField(es.msgs[pkg+"\x00"+name])
 }
 
 // javaMinGroupSizeGuard renders the (spec.record).min_group_size refusal over a

@@ -276,13 +276,14 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 			grpcWrappers.WriteString("\n")
 			continue
 		}
-		// (spec.record).min_group_size is enforced in the generated Java service
-		// wrapper only. A Rust host of a record query plane would serve the
-		// size-only RPCs with no guard at all, so refuse to generate rather than
-		// ship the disclosure silently.
-		if method.MinGroupSize > 0 {
-			return fmt.Errorf("%s.%s carries (spec.min_group_size) = %d, but the guard is generated for Java service wrappers only; a Rust host of this record query plane would serve it unguarded",
-				targetService.Name, method.Name, method.MinGroupSize)
+		// (spec.record).min_group_size: a size-only response over fewer than the
+		// declared number of records is a membership disclosure, and the wrapper
+		// refuses it (mingroupsize_gen.go). A method carrying a threshold this
+		// wrapper cannot guard must fail generation, not ship the size-only RPC
+		// unguarded.
+		if why := rustMinGroupSizeUnenforceable(method, san, info.Package); why != "" {
+			return fmt.Errorf("%s.%s carries (spec.min_group_size) = %d but %s",
+				targetService.Name, method.Name, method.MinGroupSize, why)
 		}
 		// (spec.record).mutability = MUTABILITY_APPEND_ONLY: a row mutation over
 		// a write-once record has no guard to render in ANY language, so hosting
@@ -1657,7 +1658,14 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         });
 `, rustEgressEnvelopeStmts(fs, "msg", "                "), method.Name)
 			}
-			streamResponseReturn = lazySan + streamResponseReturn
+			// (spec.record).min_group_size on a streamed size (Subscribe<T>Count):
+			// the same arithmetic as the unary count, delivered repeatedly. It
+			// runs AHEAD of the sanitize and the per-item validation, so a
+			// below-threshold frame fails the stream with its own
+			// PERMISSION_DENIED rather than being withheld — a stream that goes
+			// quiet at exactly N-1 discloses the crossing by silence.
+			streamResponseReturn = rustMinGroupSizeStreamGuard(method, san.minGroupSizeField(method.FullOutputType, servicePackage)) +
+				lazySan + streamResponseReturn
 			if hasAccounting {
 				return fmt.Sprintf(`    type %sStream = %s;
 
@@ -1918,7 +1926,10 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	if lf := san.namespaceListFields(method.FullOutputType, servicePackage); (svc.IsC2S || recordPlaneS2S) && len(lf) > 0 {
 		unaryEgressFilter += rustResponseNamespaceFilterBlock(lf, method.Name, recordPlaneS2S)
 	}
-	responseValidationBlock = unaryEgressFilter + responseValidationBlock
+	// (spec.record).min_group_size runs first: the refusal is about the number
+	// itself, so it must precede any transformation of the response.
+	responseValidationBlock = rustMinGroupSizeGuard(method, san.minGroupSizeField(method.FullOutputType, servicePackage), "resp", "        ") +
+		unaryEgressFilter + responseValidationBlock
 
 	// Unary methods - authorize, extract caller, validate, delegate to handler
 	if hasAccounting {

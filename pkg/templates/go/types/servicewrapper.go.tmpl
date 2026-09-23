@@ -330,6 +330,25 @@ func (s {{.ServerName}}ValidatingServerStreamingServer[T]) Send(msg *T) error {
 	return s.ServerStreamingServer.Send(msg)
 }
 
+// {{.ServerName}}GuardedServerStreamingServer refuses a frame its guard rejects,
+// carrying the guard's own status code through (a (spec.min_group_size) frame is
+// PermissionDenied, not a validation Internal). Unlike a filtering delegate it
+// withholds nothing: a stream that went quiet at exactly the threshold would
+// disclose the crossing by its silence.
+type {{.ServerName}}GuardedServerStreamingServer[T any] struct {
+	grpc.ServerStreamingServer[T]
+	guard func(*T) error
+}
+
+func (s {{.ServerName}}GuardedServerStreamingServer[T]) Send(msg *T) error {
+	if s.guard != nil {
+		if err := s.guard(msg); err != nil {
+			return err
+		}
+	}
+	return s.ServerStreamingServer.Send(msg)
+}
+
 type {{.ServerName}}ValidatingClientStreamingServer[Req, Res any] struct {
 	grpc.ClientStreamingServer[Req, Res]
 	authorizeReq func(*Req) error

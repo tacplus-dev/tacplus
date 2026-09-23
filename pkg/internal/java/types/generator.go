@@ -1293,6 +1293,17 @@ func Generate(config *tactype.Config) error {
 		}
 	}
 
+	// Generate store-neutral timeseries projection helpers for
+	// (spec.timeseries_type) messages (no-op when there are none). Same placement
+	// as diskstore: after modules + Helpers, while the split protos still carry
+	// spec annotations.
+	{
+		tsSrcDir := filepath.Join(parentDir, "src", "main", "java")
+		if err := generateJavaTimeseriesHelpers(config, protoDir, tsSrcDir); err != nil {
+			return fmt.Errorf("failed to generate timeseries helpers: %w", err)
+		}
+	}
+
 	// Collect event-bus watches from legacy subscribe, explicit event_watch,
 	// and validated store-derived watches.
 	config.Subscriptions, err = collectJavaSubscriptions(config, protoDir)

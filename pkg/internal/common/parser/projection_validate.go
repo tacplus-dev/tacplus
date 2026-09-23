@@ -28,6 +28,7 @@ var projectionAnnotations = []string{
 // its graph/timeseries/extraction emitters and tests land.
 var projectionSupportedLanguages = map[string]bool{
 	"go":   true,
+	"java": true,
 	"rust": true,
 }
 
@@ -45,7 +46,11 @@ var projectionClientOnlyLanguages = map[string]bool{
 
 // ValidateProjectionLanguageSupport fails the build LOUDLY when a record in the
 // SELF service declares a graph / timeseries / extraction projection but the
-// target is a full-service language with no projection generator (java today).
+// target is a full-service language with no projection generator. Go, Java and
+// Rust all emit timeseries projection codegen today, so the list is currently
+// exhaustive of the full-service targets; the check stays because a NEW
+// full-service language must not build a projection record before its emitters
+// land.
 // Fail-loud, never silently emit nothing: a store-hosting language that can't
 // materialize the projection refuses rather than shipping a record surface the
 // annotation was meant to produce. Client-only targets pass — they cannot host a

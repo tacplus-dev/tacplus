@@ -1,0 +1,154 @@
+{{- /* Timeseries typed persistence helpers — generated from (spec.timeseries_type) annotations */ -}}
+{{- /* Store-neutral: each message gets columns / toRow / applyRow */ -}}
+{{.Header}}
+package {{.Package}};
+
+/**
+ * Timeseries typed persistence helpers for {@code {{.TypeName}}}.
+ *
+ * <p>Store-neutral: the column list, the proto-to-row conversion, and the
+ * row-to-proto application. No backend DDL is rendered here — a downstream
+ * materializer renders the concrete schema from the registry's semantic
+ * metadata.
+ */
+public final class {{.ClassName}} {
+
+    private {{.ClassName}}() {
+    }
+
+    /** Returns the ordered column names for the timeseries table. */
+    public static java.util.List<String> columns() {
+        return java.util.Collections.unmodifiableList(java.util.Arrays.asList(
+{{- range $i, $f := .Fields}}
+                {{if $i}}, {{end}}"{{$f.ColumnName}}"
+{{- end}}
+        ));
+    }
+
+    /**
+     * Converts a proto message to an ordered list of column values suitable for
+     * timeseries batch insertion. Column order matches {@link #columns()}.
+     */
+    public static java.util.List<Object> toRow({{.TypeFqn}} msg) {
+        if (msg == null) {
+            return null;
+        }
+        java.util.List<Object> row = new java.util.ArrayList<>({{len .Fields}});
+{{- range .Fields}}
+{{- if eq .Kind "enum"}}
+        row.add(msg.get{{.Accessor}}().name());
+{{- else if eq .Kind "timestamp"}}
+        row.add(msg.has{{.Accessor}}()
+                ? msg.get{{.Accessor}}().getSeconds() * 1000L + msg.get{{.Accessor}}().getNanos() / 1000000L
+                : 0L);
+{{- else if eq .Kind "message"}}
+        row.add(msg.has{{.Accessor}}() ? timeseriesJson(msg.get{{.Accessor}}()) : "");
+{{- else}}
+        row.add(msg.get{{.Accessor}}());
+{{- end}}
+{{- end}}
+        return row;
+    }
+
+    /**
+     * Applies scanned timeseries values to a proto message. Pass the row in the
+     * order {@link #columns()} declares; a value of an unexpected type, or a
+     * column the store did not return, leaves that field at its proto default.
+     */
+    public static {{.TypeFqn}} applyRow(java.util.List<Object> row) {
+        {{.TypeFqn}}.Builder builder = {{.TypeFqn}}.newBuilder();
+        if (row == null) {
+            return builder.build();
+        }
+{{- range $i, $f := .Fields}}
+{{- if eq $f.Kind "enum"}}
+        {
+            Object col = timeseriesColumn(row, {{$i}});
+            if (col instanceof String && !((String) col).isEmpty()) {
+                com.google.protobuf.Descriptors.EnumValueDescriptor value =
+                        {{$f.TypeFqn}}.getDescriptor().findValueByName((String) col);
+                if (value != null) {
+                    builder.set{{$f.Accessor}}({{$f.TypeFqn}}.valueOf(value));
+                }
+            }
+        }
+{{- else if eq $f.Kind "timestamp"}}
+        {
+            Object col = timeseriesColumn(row, {{$i}});
+            if (col instanceof Number) {
+                long millis = ((Number) col).longValue();
+                if (millis != 0L) {
+                    builder.set{{$f.Accessor}}(com.google.protobuf.Timestamp.newBuilder()
+                            .setSeconds(Math.floorDiv(millis, 1000L))
+                            .setNanos((int) (Math.floorMod(millis, 1000L) * 1000000L))
+                            .build());
+                }
+            }
+        }
+{{- else if eq $f.Kind "message"}}
+        {
+            Object col = timeseriesColumn(row, {{$i}});
+            if (col instanceof String && !((String) col).isEmpty()) {
+                {{$f.TypeFqn}}.Builder target = {{$f.TypeFqn}}.newBuilder();
+                try {
+                    com.google.protobuf.util.JsonFormat.parser().merge((String) col, target);
+                    builder.set{{$f.Accessor}}(target.build());
+                } catch (Exception e) {
+                    // A column the projection cannot parse leaves the field at its
+                    // proto default, same as Go's protojson error path.
+                }
+            }
+        }
+{{- else if eq $f.Kind "bool"}}
+        {
+            Object col = timeseriesColumn(row, {{$i}});
+            if (col instanceof Boolean) {
+                builder.set{{$f.Accessor}}((Boolean) col);
+            }
+        }
+{{- else if eq $f.Kind "string"}}
+        {
+            Object col = timeseriesColumn(row, {{$i}});
+            if (col instanceof String) {
+                builder.set{{$f.Accessor}}((String) col);
+            }
+        }
+{{- else if eq $f.Kind "bytes"}}
+        {
+            Object col = timeseriesColumn(row, {{$i}});
+            if (col instanceof com.google.protobuf.ByteString) {
+                builder.set{{$f.Accessor}}((com.google.protobuf.ByteString) col);
+            } else if (col instanceof byte[]) {
+                builder.set{{$f.Accessor}}(com.google.protobuf.ByteString.copyFrom((byte[]) col));
+            }
+        }
+{{- else}}
+        {
+            Object col = timeseriesColumn(row, {{$i}});
+            if (col instanceof Number) {
+                builder.set{{$f.Accessor}}(((Number) col).{{if eq $f.Kind "int"}}intValue{{else if eq $f.Kind "long"}}longValue{{else if eq $f.Kind "float"}}floatValue{{else}}doubleValue{{end}}());
+            }
+        }
+{{- end}}
+{{- end}}
+        return builder.build();
+    }
+{{- if .Fields}}
+
+    /** Reads one column, tolerating a row the store returned short. */
+    private static Object timeseriesColumn(java.util.List<Object> row, int index) {
+        return index < row.size() ? row.get(index) : null;
+    }
+{{- end}}
+{{- if .HasMessageField}}
+
+    /** Renders a nested message column as canonical proto JSON. */
+    private static String timeseriesJson(com.google.protobuf.MessageOrBuilder msg) {
+        try {
+            return com.google.protobuf.util.JsonFormat.printer().print(msg);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+{{- end}}
+}

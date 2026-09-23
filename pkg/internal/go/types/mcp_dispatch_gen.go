@@ -229,9 +229,12 @@ func goMcpToolGeneratable(svc *parser.ServiceInfo, m *parser.MethodInfo, service
 		return fmt.Errorf("%s.%s must not be generated as an MCP tool: it carries %s, which declares (spec.record).mutability = MUTABILITY_APPEND_ONLY; an append-only record's rows are written once",
 			svc.Name, m.Name, t)
 	}
-	// (spec.store_epoch) is stamped in the generated Java service wrapper only.
-	if f := goStoreEpochField(m.FullInputType, san, servicePackage); f != "" {
-		return fmt.Errorf("%s.%s is an MCP tool taking %s, whose field %q carries (spec.store_epoch), but the stamp is generated for Java service wrappers only; a Go host of this write would leave the store epoch unstamped",
+	// (spec.store_epoch): the stamp is rendered by the gRPC wrapper's write
+	// path, not by this seam, so a tool over an epoch-bearing write would leave
+	// the store epoch unstamped. Java's MCP dispatch refuses the same shape for
+	// the same reason.
+	if f := san.storeEpochField(m.FullInputType, servicePackage); f != "" {
+		return fmt.Errorf("%s.%s is an MCP tool taking %s, whose field %q carries (spec.store_epoch), but the stamp is rendered by the gRPC wrapper's write path and not by MCP dispatch; a tool call of this write would leave the store epoch unstamped",
 			svc.Name, m.Name, m.FullInputType, f)
 	}
 	return nil

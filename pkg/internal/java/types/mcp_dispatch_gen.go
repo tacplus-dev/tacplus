@@ -289,8 +289,13 @@ func javaMcpToolGeneratable(svc *parser.ServiceInfo, m *parser.MethodInfo, servi
 }
 
 // javaMcpStoreEpochField returns the request's (spec.store_epoch) field, or "".
+// It reads the same shared lookup the gRPC wrapper's stamp does
+// (parser.StoreEpochField, via storeEpochField) rather than the MCP seam's
+// generic annotation probe: the probe answers on the annotation's PRESENCE, so
+// an explicit `= false` would refuse a tool the wrapper next door would happily
+// serve unstamped-and-unannotated.
 func javaMcpStoreEpochField(fullType string, es *javaEgressSanitizer, servicePackage string) string {
-	return es.mcpAnnotatedStringField(fullType, servicePackage, "store_epoch")
+	return es.storeEpochField(fullType, servicePackage)
 }
 
 // javaMcpDescription is the text the model reads to decide whether to call the

@@ -242,13 +242,14 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 				return fmt.Errorf("%s.%s must not be generated: it carries %s, which declares (spec.record).mutability = MUTABILITY_APPEND_ONLY; an append-only record's rows are written once, so no row-mutating RPC may be hosted for the type",
 					service.Name, method.Name, t)
 			}
-			// (spec.store_epoch) is stamped in the generated Java service
-			// wrapper only. A Go host would reach its handler with an unstamped
-			// epoch — a row the purge measures as infinitely old — so refuse
-			// to generate rather than write the wrong clock silently.
-			if f := goStoreEpochField(method.FullInputType, san, info.Package); f != "" {
-				return fmt.Errorf("%s.%s takes %s, whose field %q carries (spec.store_epoch), but the stamp is generated for Java service wrappers only; a Go host of this write would leave the store epoch unstamped",
-					service.Name, method.Name, method.FullInputType, f)
+			// (spec.store_epoch): the row's last-write clock is the store's,
+			// and the wrapper stamps it before the handler runs
+			// (storeepoch_gen.go). A write whose store epoch this wrapper
+			// cannot stamp must fail generation, not reach a handler with an
+			// unstamped epoch — a row the purge measures as infinitely old.
+			if why := goStoreEpochUnenforceable(method, san, info.Package); why != "" {
+				return fmt.Errorf("%s.%s carries a (spec.store_epoch) field on %s but %s",
+					service.Name, method.Name, method.FullInputType, why)
 			}
 			// (spec.owner_default): what the row's OWNER may do with its own
 			// rows. The guard rides the request-validation seam, immediately
@@ -1682,6 +1683,12 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 	}
 
 	callerExtract := callerExtractFor("ctx")
+	// (spec.store_epoch): stamp or refuse before the handler sees the request,
+	// and ahead of the pins below — Java's relative ordering on its own unary
+	// seam (storeepoch_gen.go explains why this seam and not inputValidation).
+	if !handlerEmpty {
+		callerExtract += goStoreEpochStamp(san.storeEpochField(method.FullInputType, servicePackage), "req", "\t", "return nil,")
+	}
 	callerExtract += goPredicatePins(san, method, servicePackage, "\t", "return nil,", svc.IsC2S, goRecordPlaneS2S(svc))
 	callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return nil,")
 	callerExtract += goRequiresDeviceGate(method, svc, servicePackage)
@@ -1865,27 +1872,6 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 %s%s%s
 	return resp, nil
 }`, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, unaryAuth, callerExtract, inputValidation, handlerCall, traceErrorCopy, unarySan, outputValidation, traceResponseCopy)
-}
-
-// goStoreEpochField returns the name of fullType's (spec.store_epoch) field, or
-// "" when it declares none. The Go wrapper never STAMPS it — the stamp is
-// generated for Java service wrappers only — so this exists purely so a Go host
-// of an epoch-bearing write fails generation instead of writing an unstamped row.
-func goStoreEpochField(fullType string, san *egressSanitizer, servicePackage string) string {
-	if san == nil || fullType == "" {
-		return ""
-	}
-	pkg, name := splitEgressFQN(fullType, servicePackage)
-	msg, ok := san.msgs[pkg+"\x00"+name]
-	if !ok {
-		return ""
-	}
-	for i := range msg.Fields {
-		if msg.Fields[i].Annotations["store_epoch"].BoolValue {
-			return msg.Fields[i].Name
-		}
-	}
-	return ""
 }
 
 // goAppendOnlyRecordOnMethod returns the append-only record type a row-mutating

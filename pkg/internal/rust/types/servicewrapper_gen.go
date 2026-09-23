@@ -294,13 +294,14 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 			return fmt.Errorf("%s.%s must not be generated: it carries %s, which declares (spec.record).mutability = MUTABILITY_APPEND_ONLY; an append-only record's rows are written once, so no row-mutating RPC may be hosted for the type",
 				targetService.Name, method.Name, t)
 		}
-		// (spec.store_epoch) is stamped in the generated Java service wrapper
-		// only. A Rust host would reach its handler with an unstamped epoch — a
-		// row the purge measures as infinitely old — so refuse to generate
-		// rather than write the wrong clock silently.
-		if f := rustStoreEpochField(method.FullInputType, san, info.Package); f != "" {
-			return fmt.Errorf("%s.%s takes %s, whose field %q carries (spec.store_epoch), but the stamp is generated for Java service wrappers only; a Rust host of this write would leave the store epoch unstamped",
-				targetService.Name, method.Name, method.FullInputType, f)
+		// (spec.store_epoch): the row's last-write clock is the store's, and the
+		// wrapper stamps it before the handler runs (storeepoch_gen.go). A write
+		// whose store epoch this wrapper cannot stamp must fail generation, not
+		// reach a handler with an unstamped epoch — a row the purge measures as
+		// infinitely old.
+		if why := rustStoreEpochUnenforceable(method, san, info.Package); why != "" {
+			return fmt.Errorf("%s.%s carries a (spec.store_epoch) field on %s but %s",
+				targetService.Name, method.Name, method.FullInputType, why)
 		}
 		// (spec.store_principal)/(spec.store_namespace) on a streaming path: see
 		// rustStreamEgressRefusal (watch_egress_gen.go). WATCH has a per-frame
@@ -1794,6 +1795,10 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         // Validate request before invoking the handler.
         req.validate().map_err(|e| tonic::Status::invalid_argument(format!("validation failed: {}", e)))?;
 `
+		// (spec.store_epoch): stamp or refuse before the handler sees the
+		// request, and ahead of the pins below — Java's relative ordering on its
+		// own unary seam.
+		validationBlock += rustStoreEpochStamp(san.storeEpochField(method.FullInputType, servicePackage), "req", "        ")
 		// (spec.principal): stamp or refuse before the handler sees the request.
 		if reqPrincipal != "" {
 			validationBlock += rustRequestPrincipalBlock(reqPrincipal, method.Name, "req", "        ")
@@ -2026,27 +2031,6 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 %s
 	        Ok(tonic::Response::new(resp))
 	    }`, methodSnake, inputType, outputType, authBlock, reqMut, fullMethod, validationBlock, traceAppend, respMut, methodSnake, handlerArgs, responseValidationBlock, outputType, traceErrorOnResult, traceCopy), nil
-}
-
-// rustStoreEpochField returns the name of fullType's (spec.store_epoch) field, or
-// "" when it declares none. The Rust wrapper never STAMPS it — the stamp is
-// generated for Java service wrappers only — so this exists purely so a Rust host
-// of an epoch-bearing write fails generation instead of writing an unstamped row.
-func rustStoreEpochField(fullType string, san *rustEgressSanitizer, servicePackage string) string {
-	if san == nil || fullType == "" {
-		return ""
-	}
-	pkg, name := splitRustEgressFQN(fullType, servicePackage)
-	msg, ok := san.msgs[pkg+"\x00"+name]
-	if !ok {
-		return ""
-	}
-	for i := range msg.Fields {
-		if msg.Fields[i].Annotations["store_epoch"].BoolValue {
-			return msg.Fields[i].Name
-		}
-	}
-	return ""
 }
 
 // rustAppendOnlyRecordOnMethod returns the append-only record type a row-mutating

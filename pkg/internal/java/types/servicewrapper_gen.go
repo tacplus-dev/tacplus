@@ -2966,22 +2966,14 @@ func generateGrpcRootAggregator(config *tactype.Config, wrappers []generatedGrpc
 //
 // Well-formedness (int64, non-repeated, RANGE-queryable) is enforced once, at
 // parse time, by parser.ValidateResidencyAnnotations. This is a lookup, not a
-// second opinion.
+// second opinion, and it is the SHARED parser.StoreEpochField so Go, Java and
+// Rust cannot come to stamp three different fields of one request.
 func (es *javaEgressSanitizer) storeEpochField(fullType, servicePackage string) string {
 	if es == nil || fullType == "" {
 		return ""
 	}
 	pkg, name := splitJavaEgressFQN(fullType, servicePackage)
-	msg, ok := es.msgs[pkg+"\x00"+name]
-	if !ok {
-		return ""
-	}
-	for i := range msg.Fields {
-		if msg.Fields[i].Annotations["store_epoch"].BoolValue {
-			return msg.Fields[i].Name
-		}
-	}
-	return ""
+	return parser.StoreEpochField(es.msgs[pkg+"\x00"+name])
 }
 
 // isAppendOnlyRecord reports whether fullType is a record declaring

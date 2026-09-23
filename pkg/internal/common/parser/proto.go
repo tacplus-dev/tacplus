@@ -47,27 +47,28 @@ type MethodInfo struct {
 	OutputType           string
 	ClientStreaming      bool
 	ServerStreaming      bool
-	FullInputType        string                // Fully qualified input type
-	FullOutputType       string                // Fully qualified output type
-	HttpMethod           string                // Primary HTTP method for client generation (first GET if present, else POST)
-	HttpMethods          []string              // All HTTP methods (POST always included, plus rest_method extras)
-	HttpPath             string                // Convention REST path: {ROOT_PATH}/{package}/{MethodName}
-	HttpAliasPath        string                // Additional alias path from rest_path
-	HttpBody             string                // HTTP body ("*" or field name)
-	AuthDisabled         bool                  // per-RPC auth_disabled (from spec.rpc RPC_FLAG_PUBLIC_NO_AUTH / RPC_FLAG_SELF_AUTHENTICATES)
-	AuthAnyUser          bool                  // per-RPC auth_any_user (from spec.rpc RPC_FLAG_AUTH_ANY_USER)
-	AuthServices         []string              // per-RPC S2S auth_services override (from spec.rpc)
-	AuthActors           []string              // per-RPC auth_actors (from spec.rpc): delegate identities allowed to call on another principal's behalf, matched against the token's act claim
-	RequiresDevice       bool                  // per-RPC requires_device (from spec.rpc): the device-only approval check gates this RPC
-	TargetNamespaceField string                // per-RPC target_namespace_field (from spec.rpc); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
-	Collection           *CollectionDescriptor // method-level method_collection (collection-returning read); nil when absent
-	Resolved             *collection.Resolved  // computed codegen view of Collection (mode/tier/bounds); nil when Collection is nil. Set by ResolveCollections.
-	Class                *verbs.Classification // resolved verb/pattern/access (archive/RPC_PATTERNS_AND_VERBS_PLAN.md §2). Set by ClassifyMethods; nil if classification failed (see ClassifyMethods for the reported error).
-	MinGroupSize         int32                 // method-level (spec.min_group_size): the smallest result size this size-only RPC discloses; 0 when the record declares no threshold
-	IsMcp                bool                  // mirrors MethodDescriptor.IsMcp: the rpc declares principal RPC_PRINCIPAL_MCP, so it is an MCP tool and gets no generated gRPC surface
-	IsAutoMcp            bool                  // mirrors MethodDescriptor.IsAutoMcp: the rpc is a user RPC of a c2s service, so it is an MCP tool AND keeps its gRPC surface
-	McpToolName          string                // mirrors MethodDescriptor.McpToolName: the resolved tool name this rpc publishes under; empty unless IsMcp or IsAutoMcp
-	Comment              string                // leading comment from proto source; the MCP tool description (decision doc section 8: no second hand-authored description)
+	FullInputType        string                        // Fully qualified input type
+	FullOutputType       string                        // Fully qualified output type
+	HttpMethod           string                        // Primary HTTP method for client generation (first GET if present, else POST)
+	HttpMethods          []string                      // All HTTP methods (POST always included, plus rest_method extras)
+	HttpPath             string                        // Convention REST path: {ROOT_PATH}/{package}/{MethodName}
+	HttpAliasPath        string                        // Additional alias path from rest_path
+	HttpBody             string                        // HTTP body ("*" or field name)
+	AuthDisabled         bool                          // per-RPC auth_disabled (from spec.rpc RPC_FLAG_PUBLIC_NO_AUTH / RPC_FLAG_SELF_AUTHENTICATES)
+	AuthAnyUser          bool                          // per-RPC auth_any_user (from spec.rpc RPC_FLAG_AUTH_ANY_USER)
+	AuthServices         []string                      // per-RPC S2S auth_services override (from spec.rpc)
+	AuthActors           []string                      // per-RPC auth_actors (from spec.rpc): delegate identities allowed to call on another principal's behalf, matched against the token's act claim
+	RequiresDevice       bool                          // per-RPC requires_device (from spec.rpc): the device-only approval check gates this RPC
+	RequiresDeviceWhen   *RequiresDeviceWhenDescriptor // per-RPC requires_device_when (from spec.rpc): the same check, gated on one request field's value; nil when absent
+	TargetNamespaceField string                        // per-RPC target_namespace_field (from spec.rpc); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
+	Collection           *CollectionDescriptor         // method-level method_collection (collection-returning read); nil when absent
+	Resolved             *collection.Resolved          // computed codegen view of Collection (mode/tier/bounds); nil when Collection is nil. Set by ResolveCollections.
+	Class                *verbs.Classification         // resolved verb/pattern/access (archive/RPC_PATTERNS_AND_VERBS_PLAN.md §2). Set by ClassifyMethods; nil if classification failed (see ClassifyMethods for the reported error).
+	MinGroupSize         int32                         // method-level (spec.min_group_size): the smallest result size this size-only RPC discloses; 0 when the record declares no threshold
+	IsMcp                bool                          // mirrors MethodDescriptor.IsMcp: the rpc declares principal RPC_PRINCIPAL_MCP, so it is an MCP tool and gets no generated gRPC surface
+	IsAutoMcp            bool                          // mirrors MethodDescriptor.IsAutoMcp: the rpc is a user RPC of a c2s service, so it is an MCP tool AND keeps its gRPC surface
+	McpToolName          string                        // mirrors MethodDescriptor.McpToolName: the resolved tool name this rpc publishes under; empty unless IsMcp or IsAutoMcp
+	Comment              string                        // leading comment from proto source; the MCP tool description (decision doc section 8: no second hand-authored description)
 }
 
 // MessageInfo represents a protobuf message

@@ -35,6 +35,12 @@ type DescriptorParser struct {
 
 	collIndex      map[string]*model.Message // cached message index for collection tier resolution (lazy)
 	collIndexBuilt bool                      // true once collIndex has been computed (even if empty)
+
+	// parseErrs collects refusals raised while parsing annotations that can
+	// only be checked against the descriptors (requires_device_when's field and
+	// value). newDescriptorParser returns them instead of a parser, so a proto
+	// set carrying one cannot be generated from at all.
+	parseErrs []string
 }
 
 // FileDescriptor contains parsed information from a proto file
@@ -261,28 +267,29 @@ type MethodDescriptor struct {
 	ServerStreaming      bool
 	InputTypePackage     string
 	OutputTypePackage    string
-	HttpMethod           string                // Primary HTTP method for client generation (GET if in methods, else POST)
-	HttpMethods          []string              // All HTTP methods (POST always included, plus rest_method extras)
-	HttpPath             string                // Convention REST path: {ROOT_PATH}/{package}/{Service}/{MethodName}
-	HttpAliasPath        string                // Additional alias path from rest_path (relative to ROOT_PATH)
-	HttpBody             string                // HTTP body from google.api.http annotation (e.g. "*" or field name)
-	RestPath             string                // raw rest_path annotation value (relative to ROOT_PATH)
-	restMethodExtra      []string              // parsed from rest_method annotation (extra methods beyond POST)
-	ProofRequires        string                // method-level proof_requires annotation (formal verification precondition)
-	ProofEnsures         string                // method-level proof_ensures annotation (formal verification postcondition)
-	AuthServices         []string              // per-RPC S2S auth_services override (from spec.rpc)
-	AuthActors           []string              // per-RPC auth_actors (from spec.rpc): delegate identities allowed to call on another principal's behalf, matched against the token's act claim
-	AuthDisabled         bool                  // per-RPC auth_disabled (from spec.rpc RPC_FLAG_PUBLIC_NO_AUTH / RPC_FLAG_SELF_AUTHENTICATES)
-	AuthAnyUser          bool                  // per-RPC auth_any_user (from spec.rpc RPC_FLAG_AUTH_ANY_USER)
-	MintsCredential      bool                  // per-RPC mints_credential (from spec.rpc RPC_FLAG_MINTS_CREDENTIAL): the response hands back a live credential, so the RPC is never auto-exposed as an MCP tool
-	RequiresDevice       bool                  // per-RPC requires_device (from spec.rpc): the device-only approval check gates this RPC
-	TargetNamespaceField string                // per-RPC target_namespace_field (from spec.rpc); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
-	Collection           *CollectionDescriptor // method-level method_collection (collection-returning read); nil when absent
-	Rpc                  *RpcDescriptor        // method-level spec.rpc (call surface); nil when absent
-	MinGroupSize         int32                 // method-level (spec.min_group_size), stamped by the record-map injector onto a record's size-only RPCs; 0 when absent
-	IsMcp                bool                  // derived: spec.rpc declares principal RPC_PRINCIPAL_MCP — this RPC is an MCP tool, not a gRPC call
-	IsAutoMcp            bool                  // derived: this RPC is a user RPC of a c2s service, so it is an MCP tool AND keeps its gRPC call surface (mcpAutoExposed)
-	McpToolName          string                // derived: the tool name this RPC publishes under (snake_case of Name, or the mcp_tool_name override); empty unless IsMcp or IsAutoMcp
+	HttpMethod           string                        // Primary HTTP method for client generation (GET if in methods, else POST)
+	HttpMethods          []string                      // All HTTP methods (POST always included, plus rest_method extras)
+	HttpPath             string                        // Convention REST path: {ROOT_PATH}/{package}/{Service}/{MethodName}
+	HttpAliasPath        string                        // Additional alias path from rest_path (relative to ROOT_PATH)
+	HttpBody             string                        // HTTP body from google.api.http annotation (e.g. "*" or field name)
+	RestPath             string                        // raw rest_path annotation value (relative to ROOT_PATH)
+	restMethodExtra      []string                      // parsed from rest_method annotation (extra methods beyond POST)
+	ProofRequires        string                        // method-level proof_requires annotation (formal verification precondition)
+	ProofEnsures         string                        // method-level proof_ensures annotation (formal verification postcondition)
+	AuthServices         []string                      // per-RPC S2S auth_services override (from spec.rpc)
+	AuthActors           []string                      // per-RPC auth_actors (from spec.rpc): delegate identities allowed to call on another principal's behalf, matched against the token's act claim
+	AuthDisabled         bool                          // per-RPC auth_disabled (from spec.rpc RPC_FLAG_PUBLIC_NO_AUTH / RPC_FLAG_SELF_AUTHENTICATES)
+	AuthAnyUser          bool                          // per-RPC auth_any_user (from spec.rpc RPC_FLAG_AUTH_ANY_USER)
+	MintsCredential      bool                          // per-RPC mints_credential (from spec.rpc RPC_FLAG_MINTS_CREDENTIAL): the response hands back a live credential, so the RPC is never auto-exposed as an MCP tool
+	RequiresDevice       bool                          // per-RPC requires_device (from spec.rpc): the device-only approval check gates this RPC
+	RequiresDeviceWhen   *RequiresDeviceWhenDescriptor // per-RPC requires_device_when (from spec.rpc): the same check, gated on one request field's value; nil when absent
+	TargetNamespaceField string                        // per-RPC target_namespace_field (from spec.rpc); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
+	Collection           *CollectionDescriptor         // method-level method_collection (collection-returning read); nil when absent
+	Rpc                  *RpcDescriptor                // method-level spec.rpc (call surface); nil when absent
+	MinGroupSize         int32                         // method-level (spec.min_group_size), stamped by the record-map injector onto a record's size-only RPCs; 0 when absent
+	IsMcp                bool                          // derived: spec.rpc declares principal RPC_PRINCIPAL_MCP — this RPC is an MCP tool, not a gRPC call
+	IsAutoMcp            bool                          // derived: this RPC is a user RPC of a c2s service, so it is an MCP tool AND keeps its gRPC call surface (mcpAutoExposed)
+	McpToolName          string                        // derived: the tool name this RPC publishes under (snake_case of Name, or the mcp_tool_name override); empty unless IsMcp or IsAutoMcp
 }
 
 // RpcDescriptor carries a method's spec.rpc annotation: the two independent
@@ -471,6 +478,15 @@ func newDescriptorParser(protoDir string, protoFiles []string) (*DescriptorParse
 		parser.parseFileDescriptor(fd)
 		return true
 	})
+
+	// An annotation refused during parsing fails the whole parse: every
+	// generator reaches the descriptors through here, so there is no entry
+	// point that could go on to emit code for the proto set anyway. RangeFiles
+	// has no defined order, so the messages are sorted to keep the text stable.
+	if len(parser.parseErrs) > 0 {
+		sort.Strings(parser.parseErrs)
+		return nil, fmt.Errorf("%s", strings.Join(parser.parseErrs, "; "))
+	}
 
 	return parser, nil
 }
@@ -1133,6 +1149,20 @@ func (p *DescriptorParser) parseMethodOptions(method protoreflect.MethodDescript
 				md.AuthActors = actors
 			}
 			md.RequiresDevice = val.GetRequiresDevice()
+			// requires_device_when: the same device-approval gate, narrowed to
+			// the requests where one field holds one value. Its field and value
+			// are resolved against the request descriptor HERE, where that
+			// descriptor is in hand, so no generator re-derives them.
+			if when := val.GetRequiresDeviceWhen(); when != nil {
+				if md.RequiresDevice {
+					p.parseErrs = append(p.parseErrs, fmt.Sprintf("%s declares both (spec.rpc).requires_device and (spec.rpc).requires_device_when; declare one or the other, not both — a conditional gate is a narrower requires_device, not an addition to it",
+						method.FullName()))
+				} else if rdw, err := requiresDeviceWhenDescriptor(method, when); err != nil {
+					p.parseErrs = append(p.parseErrs, err.Error())
+				} else {
+					md.RequiresDeviceWhen = rdw
+				}
+			}
 			if f := val.GetTargetNamespaceField(); f != "" {
 				md.TargetNamespaceField = f
 			}
@@ -3124,6 +3154,7 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 				AuthServices:         method.AuthServices,
 				AuthActors:           method.AuthActors,
 				RequiresDevice:       method.RequiresDevice,
+				RequiresDeviceWhen:   method.RequiresDeviceWhen,
 				TargetNamespaceField: method.TargetNamespaceField,
 				Collection:           method.Collection,
 				MinGroupSize:         method.MinGroupSize,

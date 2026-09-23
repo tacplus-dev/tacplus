@@ -1500,6 +1500,35 @@ message RpcAnnotation {
   // hash with the SAME canonicalization the check uses and attaches the two
   // metadata keys.
   bool requires_device = 8;
+
+  // requires_device_when narrows the same DEVICE-ONLY APPROVAL check above to
+  // the requests where ONE named request field holds ONE named value. It exists
+  // for the unified-CRUD shape: an rpc that writes three kinds of row, only one
+  // of which is a decision about another person, where marking the whole rpc
+  // would gate the two that are not.
+  //
+  // It is mutually exclusive with requires_device: a conditional gate is a
+  // narrower requires_device, not an addition to it. Everything else is
+  // identical — when the condition holds, the SAME check runs over the SAME
+  // canonical hash of the WHOLE request, so every structural precondition
+  // (verified caller, plain unary rpc, no map field in the request tree) still
+  // applies to the whole rpc, unconditionally.
+  RequiresDeviceWhen requires_device_when = 9;
+}
+
+// RequiresDeviceWhen is the condition (spec.rpc).requires_device_when gates on.
+// Both halves are resolved at generation time against the rpc's request
+// descriptor: an unknown field, a field that is not a plain string or enum, or
+// an enum value name the enum does not have all fail generation rather than
+// becoming a comparison that is silently never true.
+message RequiresDeviceWhen {
+  // field is a top-level field name on the RPC's request message. It must be a
+  // plain (non-repeated, non-map, no explicit presence) string or enum field.
+  string field = 1;
+  // equals is the value that field must hold for the gate to apply — the enum
+  // value's short name (e.g. "RULE_EFFECT_DELEGATION") for an enum field, or
+  // the literal string for a string field.
+  string equals = 2;
 }
 
 // CollectionMode declares how a multi-result read behaves. See docs/API.md.

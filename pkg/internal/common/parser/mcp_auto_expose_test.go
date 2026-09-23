@@ -125,6 +125,32 @@ func TestAutoExpose_NoAuthFlagsAreNotTools(t *testing.T) {
 	}
 }
 
+// RPC_FLAG_MINTS_CREDENTIAL excludes a user-facing mint rpc — the shape
+// RPC_PRINCIPAL_SERVICE and the no-auth flags both miss. It authenticates and
+// authorizes its caller normally; what disqualifies it is that its response is
+// a live credential.
+func TestAutoExpose_MintsCredentialIsNotATool(t *testing.T) {
+	skipIfNoProtoc(t)
+
+	fd := autoExposeFile(t, `
+  // Mint an offline delegate token for the calling user.
+  rpc MintDelegateOfflineToken(Ping) returns (Ping) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, flags: [RPC_FLAG_AUTH_ANY_USER, RPC_FLAG_MINTS_CREDENTIAL]};
+  }
+`)
+
+	m := mcpMethod(t, fd, "MintDelegateOfflineToken")
+	if m.IsAutoMcp {
+		t.Error("MintDelegateOfflineToken: IsAutoMcp = true, want false for RPC_FLAG_MINTS_CREDENTIAL")
+	}
+	if m.McpToolName != "" {
+		t.Errorf("MintDelegateOfflineToken: McpToolName = %q, want empty", m.McpToolName)
+	}
+	if fd.Services[0].HasMcpRpcs {
+		t.Error("Surface: HasMcpRpcs = true; a credential minter owns no tool")
+	}
+}
+
 // A streaming rpc is excluded rather than refused: auto-exposure is not a
 // request the author made, and the generated session carrier is itself a bidi
 // rpc on its own service — refusing here would make every c2s service that has

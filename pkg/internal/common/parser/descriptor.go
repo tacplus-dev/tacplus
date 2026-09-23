@@ -274,6 +274,7 @@ type MethodDescriptor struct {
 	AuthActors           []string              // per-RPC auth_actors (from spec.rpc): delegate identities allowed to call on another principal's behalf, matched against the token's act claim
 	AuthDisabled         bool                  // per-RPC auth_disabled (from spec.rpc RPC_FLAG_PUBLIC_NO_AUTH / RPC_FLAG_SELF_AUTHENTICATES)
 	AuthAnyUser          bool                  // per-RPC auth_any_user (from spec.rpc RPC_FLAG_AUTH_ANY_USER)
+	MintsCredential      bool                  // per-RPC mints_credential (from spec.rpc RPC_FLAG_MINTS_CREDENTIAL): the response hands back a live credential, so the RPC is never auto-exposed as an MCP tool
 	RequiresDevice       bool                  // per-RPC requires_device (from spec.rpc): the device-only approval check gates this RPC
 	TargetNamespaceField string                // per-RPC target_namespace_field (from spec.rpc); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
 	Collection           *CollectionDescriptor // method-level method_collection (collection-returning read); nil when absent
@@ -901,7 +902,9 @@ func (r *RpcDescriptor) GetMcpToolNameOverride() string {
 // catalogue size is the MCP proxy's progressive-disclosure problem, not a
 // filter to configure here. A token-minting or no-auth endpoint is never a
 // tool: the first mints credentials, the second has no caller identity to scope
-// a tool call by.
+// a tool call by. Both are checked below — the minting one by
+// RPC_FLAG_MINTS_CREDENTIAL, which an author puts on any rpc whose response
+// hands back a live credential.
 //
 // Two shapes are excluded rather than refused, because auto-exposure is not a
 // request the author made:
@@ -939,6 +942,13 @@ func mcpAutoExposed(svc *ServiceDescriptor, m *MethodDescriptor) bool {
 		return true
 	}
 	if m.Rpc.Principal == spec.RpcPrincipal_RPC_PRINCIPAL_SERVICE {
+		return false
+	}
+	// A credential minter is never a tool, whatever its principal. This is its
+	// own check, not part of AuthDisabled: minting is not auth-disabled — it
+	// needs a caller identity to mint against, which is exactly why the
+	// USER-principal mint rpcs reach this far.
+	if m.MintsCredential {
 		return false
 	}
 	// md.AuthDisabled is set from exactly RPC_FLAG_PUBLIC_NO_AUTH and
@@ -1108,6 +1118,12 @@ func (p *DescriptorParser) parseMethodOptions(method protoreflect.MethodDescript
 					md.AuthDisabled = true
 				case spec.RpcFlag_RPC_FLAG_AUTH_ANY_USER:
 					md.AuthAnyUser = true
+				// Not an auth property: the RPC still authenticates and
+				// authorizes its caller exactly as its principal and other
+				// flags say. It only means the response hands back a live
+				// credential, which mcpAutoExposed refuses to make a tool of.
+				case spec.RpcFlag_RPC_FLAG_MINTS_CREDENTIAL:
+					md.MintsCredential = true
 				}
 			}
 			if svcs := val.GetAuthServices(); len(svcs) > 0 {

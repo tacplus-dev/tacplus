@@ -1413,6 +1413,13 @@ enum RpcFlag {
   // the authentication. Distinct from RPC_FLAG_PUBLIC_NO_AUTH: the caller is
   // still authenticated, just not by the token path.
   RPC_FLAG_SELF_AUTHENTICATES = 4;
+  // RPC_FLAG_MINTS_CREDENTIAL: this RPC's response mints or returns a live
+  // credential — a token, a certificate, a delegate grant — so it is never
+  // auto-exposed as an MCP tool, whatever its principal. It carries no
+  // auth/authorizer semantics of its own: a mint RPC's authorization is
+  // already fully expressed by its principal, its other flags and its
+  // auth_services. This flag only affects MCP auto-exposure.
+  RPC_FLAG_MINTS_CREDENTIAL = 5;
 }
 
 // RpcAnnotation declares an RPC's call surface on two independent axes plus a

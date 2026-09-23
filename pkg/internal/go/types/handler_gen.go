@@ -192,7 +192,15 @@ type SubscriptionTemplateEntry struct {
 	TypePkgImport            string // e.g. "module/tacplus/types/services/aegis"
 	EventBusImport           string // e.g. "module/tacplus/types/sys/eventbus"
 	HasTimeseriesProjections bool   // source event has timeseries_type projections
-	TargetService            string // e.g. "eventbus" — service_id to resolve via ServiceHealthState
+	// HasProjections is true when ANY message extracts from the source event —
+	// graph or timeseries. It gates the Handle<Type> dispatch call: that
+	// function is only generated for a source that HAS a projection
+	// (generateEventHandlers), so calling it unconditionally did not compile in
+	// a build whose subscription is over a record with none. The record store's
+	// auto-subscription to every record's raw topic is exactly that case, which
+	// is why this surfaced only once a Go service hosted the record plane.
+	HasProjections bool
+	TargetService  string // e.g. "eventbus" — service_id to resolve via ServiceHealthState
 	// RoutingOnly / EnvelopeTypeName mirror tactype.SubscriptionEntry: this
 	// service is named in the source type's s2s_subscribe.routing_only_services,
 	// so the chassis hands the callback the narrow envelope. The trace-publish
@@ -563,9 +571,11 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		// Determine projection flags by scanning allFiles for messages that
 		// extract from this subscription's source event type.
 		hasTimeseries := false
+		hasProjections := false
 		for _, pf := range allFiles {
 			for _, msg := range pf.Messages {
 				if extractionSourceFQN(msg) == sub.SourceTypeFqn {
+					hasProjections = true
 					if _, ok := msg.Annotations["timeseries_type"]; ok {
 						hasTimeseries = true
 					}
@@ -587,6 +597,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			TypePkgImport:            config.ModuleBasePath + "/types/" + typeProtoDir + "/" + typePkg,
 			EventBusImport:           config.ModuleBasePath + "/types/generated/eventbus_support",
 			HasTimeseriesProjections: hasTimeseries,
+			HasProjections:           hasProjections,
 			TargetService:            targetService,
 			RoutingOnly:              sub.RoutingOnly,
 			EnvelopeTypeName:         typeName + boundaries.RoutingEnvelopeSuffix,

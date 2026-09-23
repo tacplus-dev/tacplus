@@ -1207,6 +1207,20 @@ func rustTypeHasTraceFields(fullType, servicePackage, parentDir string, crossPkg
 	return !strings.HasPrefix(parentDir, "sys")
 }
 
+// rustFromRevisionExpr resolves WHERE the WATCH wrapper's resume point comes
+// from. The request only supplies one when it declares a `from_revision` field
+// (the standard {Method}Request). Handle-based watch requests — the record
+// query plane's QueryHandle — declare none, so the wrapper starts from 0
+// (snapshot + live), exactly as Java's `0L` and Go's `int64(0)` do from the
+// same resolved flag. Reading the field unconditionally did not compile the
+// first time the plane's server was built for a Rust host.
+func rustFromRevisionExpr(method *parser.MethodInfo) string {
+	if method.Resolved != nil && method.Resolved.WatchHasFromRevision {
+		return "req_msg.from_revision"
+	}
+	return "0i64"
+}
+
 // generateRustGRPCWrapper generates a gRPC method wrapper with validation for ValidationWrapper.
 // grpcName is the service's grpc_config name (e.g. "sentinel") used to construct the AccountingMethod.
 func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, grpcName string, accountingMap map[string]service.AccountingInfo, skippedTraceTypes proto.SkippedTraceTypes, san *rustEgressSanitizer) (string, error) {
@@ -1573,7 +1587,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         tracing::debug!(method = "%s", request_id = %%request_id, "rpc");
 %s
         let req_msg = %s;
-        let from_revision = req_msg.from_revision;
+        let from_revision = %s;
 %s
         let resume_revision = if from_revision == 0 { source.revision } else { from_revision };
         let mut snapshot = source.snapshot;
@@ -1617,7 +1631,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(tonic::Response::new(Box::pin(stream) as Self::%sStream))
     }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation+watchPre+accountingSetup,
-				serverStreamReqExpr,
+				serverStreamReqExpr, rustFromRevisionExpr(method),
 				sourceBinding, fieldName, changeType, prostSnakeName(method.Resolved.WatchRevisionField),
 				itemSan, outputType, method.Resolved.WatchOneOf, oneofPath, validateEnvelope, sendClosed,
 				sendErr,

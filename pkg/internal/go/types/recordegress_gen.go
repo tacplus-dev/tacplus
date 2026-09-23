@@ -634,17 +634,28 @@ func goWatchFrameRow(frameVar, path, indent string) (row, openStmt, closeStmt, i
 // predicate, the store would return that tenant's rows, and the filter above
 // would halt — a client-triggerable process halt is strictly worse than no pin.
 
-// predicateAnnotatedField returns (requestFieldName, pinFieldName) for a request
-// carrying a query predicate whose criteria include the named annotation, or two
-// empty strings when it carries none.
-func (es *egressSanitizer) predicateAnnotatedField(fullType, servicePackage, annotation string) (string, string) {
+// goPredicateField describes the query predicate a request carries: which field
+// on the request holds it, its Go type reference (so an ABSENT predicate can be
+// stamped into existence, the way Java's builder path does), which criterion
+// field carries the pin, and whether that criterion is proto3-`optional` (a
+// *string on the Go struct).
+type goPredicateField struct {
+	ReqField    string
+	TypeRef     string
+	PinField    string
+	PinOptional bool
+}
+
+// predicateAnnotatedField describes the query predicate of a request whose
+// criteria include the named annotation, or the zero value when it carries none.
+func (es *egressSanitizer) predicateAnnotatedField(fullType, servicePackage, annotation string) goPredicateField {
 	if es == nil || fullType == "" {
-		return "", ""
+		return goPredicateField{}
 	}
 	pkg, name := splitEgressFQN(fullType, servicePackage)
 	msg, ok := es.msgs[pkg+"\x00"+name]
 	if !ok {
-		return "", ""
+		return goPredicateField{}
 	}
 	for i := range msg.Fields {
 		f := &msg.Fields[i]
@@ -662,21 +673,36 @@ func (es *egressSanitizer) predicateAnnotatedField(fullType, servicePackage, ann
 		for j := range pred.Fields {
 			pf := &pred.Fields[j]
 			if pf.Annotations[annotation].BoolValue && !pf.IsRepeated && !pf.IsMessage {
-				return f.Name, pf.Name
+				return goPredicateField{
+					ReqField:    f.Name,
+					TypeRef:     goTypeRef(fpkg+"."+f.Type, f.Type, servicePackage),
+					PinField:    pf.Name,
+					PinOptional: pf.IsOptional,
+				}
 			}
 		}
 	}
-	return "", ""
+	return goPredicateField{}
 }
 
 // goPredicatePrincipalPin renders the stamp-or-refuse over the request's query
 // predicate: unset -> stamped with the caller's subject; equal -> accepted;
 // different -> INVALID_ARGUMENT, never silently overwritten.
-func goPredicatePrincipalPin(reqField, principal, method, indent, failRet string) string {
-	if reqField == "" || principal == "" {
+func goPredicatePrincipalPin(pred goPredicateField, method, indent, failRet string) string {
+	if pred.ReqField == "" || pred.PinField == "" {
 		return ""
 	}
+	reqField, principal := pred.ReqField, pred.PinField
 	rf, pf := toGoFieldName(reqField), toGoFieldName(principal)
+	stamp := "__queryPrincipal"
+	if pred.PinOptional {
+		// The plane declares its filter fields `optional string`, so the Go
+		// struct field is a *string. Java stamps the same pin through a builder
+		// setter, which takes the value; Go has to take its address. The Get
+		// accessor already reads nil and "" alike, which is exactly Java's
+		// `!hasX() || getX().isEmpty()`.
+		stamp = "&__queryPrincipal"
+	}
 	return fmt.Sprintf(`
 %[1]s// (spec.store_principal) on the query predicate: this plane is per-principal.
 %[1]s// The wrapper — never the handler — pins the predicate to the authenticated
@@ -690,14 +716,20 @@ func goPredicatePrincipalPin(reqField, principal, method, indent, failRet string
 %[1]sif __queryPrincipal == "" {
 %[1]s	%[6]s status.Error(codes.PermissionDenied, "%[2]s queries rows owned by a principal and the caller presented no verified subject")
 %[1]s}
+%[1]s// An ABSENT predicate is stamped into existence rather than left unpinned:
+%[1]s// Java pins through request.get%[3]s(), which is never null, so a request
+%[1]s// that names no predicate at all still reaches the handler pinned.
+%[1]sif req.%[3]s == nil {
+%[1]s	req.%[3]s = &%[8]s{}
+%[1]s}
 %[1]sif __pred := req.Get%[3]s(); __pred != nil {
 %[1]s	if __pred.Get%[4]s() == "" {
-%[1]s		__pred.%[4]s = __queryPrincipal
+%[1]s		__pred.%[4]s = %[7]s
 %[1]s	} else if __pred.Get%[4]s() != __queryPrincipal {
 %[1]s		%[6]s status.Error(codes.InvalidArgument, "%[5]s names a principal other than the caller; the query plane is per-principal and the predicate is not the caller's to choose")
 %[1]s	}
 %[1]s}
-`, indent, method, rf, pf, reqField+"."+principal, failRet)
+`, indent, method, rf, pf, reqField+"."+principal, failRet, stamp, pred.TypeRef)
 }
 
 // goPredicateNamespacePin renders the same stamp-or-refuse for the tenant, with
@@ -707,25 +739,34 @@ func goPredicatePrincipalPin(reqField, principal, method, indent, failRet string
 // linked caller's query would be answered and then aborted on the way out. The
 // UNSET branch still stamps the caller's OWN namespace: a linked tenant is only
 // ever reached by naming it, never by default.
-func goPredicateNamespacePin(reqField, namespace, method, indent, failRet string, runtimeGate bool) string {
-	if reqField == "" || namespace == "" {
+func goPredicateNamespacePin(pred goPredicateField, method, indent, failRet string, runtimeGate bool) string {
+	if pred.ReqField == "" || pred.PinField == "" {
 		return ""
 	}
+	reqField, namespace := pred.ReqField, pred.PinField
 	rf, nf := toGoFieldName(reqField), toGoFieldName(namespace)
+	nsStamp := "__queryNamespace"
+	if pred.PinOptional {
+		nsStamp = "&__queryNamespace"
+	}
 	pinIndent, gateOpen, gateClose := indent, "", ""
 	if runtimeGate {
 		pinIndent = indent + "\t"
 		gateOpen = fmt.Sprintf("%[1]s// A /system peer keeps the fleet-wide read: no pin, predicate untouched.\n%[1]sif !strings.HasPrefix(__queryNamespace, \"/system\") {\n", indent)
 		gateClose = indent + "}\n"
 	}
-	body := fmt.Sprintf(`%[1]sif __pred := req.Get%[2]s(); __pred != nil {
+	body := fmt.Sprintf(`%[1]s// An ABSENT predicate is stamped into existence, as on the principal pin.
+%[1]sif req.%[2]s == nil {
+%[1]s	req.%[2]s = &%[7]s{}
+%[1]s}
+%[1]sif __pred := req.Get%[2]s(); __pred != nil {
 %[1]s	if __pred.Get%[3]s() == "" {
-%[1]s		__pred.%[3]s = __queryNamespace
+%[1]s		__pred.%[3]s = %[6]s
 %[1]s	} else if !__queryNsAccepted(__pred.Get%[3]s()) {
 %[1]s		%[5]s status.Error(codes.InvalidArgument, "%[4]s names a tenant the caller neither owns nor is linked to; the tenant boundary is not the predicate's to choose")
 %[1]s	}
 %[1]s}
-`, pinIndent, rf, nf, reqField+"."+namespace, failRet)
+`, pinIndent, rf, nf, reqField+"."+namespace, failRet, nsStamp, pred.TypeRef)
 	return fmt.Sprintf(`
 %[1]s// (spec.store_namespace) on the query predicate: pin the tenant before the
 %[1]s// store is asked. EXACT match against the caller's namespace claim, never the
@@ -765,11 +806,9 @@ func goPredicatePins(san *egressSanitizer, method *parser.MethodInfo, servicePac
 	}
 	out := ""
 	if isC2S {
-		rf, pf := san.predicateAnnotatedField(method.FullInputType, servicePackage, "store_principal")
-		out += goPredicatePrincipalPin(rf, pf, method.Name, indent, failRet)
+		out += goPredicatePrincipalPin(san.predicateAnnotatedField(method.FullInputType, servicePackage, "store_principal"), method.Name, indent, failRet)
 	}
-	nrf, nf := san.predicateAnnotatedField(method.FullInputType, servicePackage, "store_namespace")
-	out += goPredicateNamespacePin(nrf, nf, method.Name, indent, failRet, recordPlaneS2S)
+	out += goPredicateNamespacePin(san.predicateAnnotatedField(method.FullInputType, servicePackage, "store_namespace"), method.Name, indent, failRet, recordPlaneS2S)
 	return out
 }
 

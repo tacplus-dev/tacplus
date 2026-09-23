@@ -41,3 +41,56 @@ func TestFilterGrpcAnnotated_EmptyFlatProtoDir(t *testing.T) {
 		t.Errorf("expected nil services for empty FlatProtoDir, got %v", got)
 	}
 }
+
+// A hosted VSERVICE — a service defined in another package whose
+// (spec.service_s2s).label names this package as its physical host — gets a
+// server wrapper, exactly as it does in Java and Rust through
+// service.ResolveServerServices. Go resolved only the own-package half until
+// this landed, so a Go host of the record query plane generated clients to its
+// own plane and no server for it: the plane's RPCs were unroutable and the
+// (spec.store_namespace) s2s seam was generated nowhere in a Go build.
+func TestResolveServerServices_HostedVService(t *testing.T) {
+	cfg := &tactype.Config{SelfPackage: "egressstratum"}
+	services := []ServiceInfo{
+		{ProtoFile: "services/egressstratum.proto", PackageName: "egressstratum", ServiceName: "EgressStratum", GrpcName: "egressstratum"},
+		{ProtoFile: "vservices/egressquery.proto", PackageName: "egressquery", ServiceName: "EgressRecordMap", GrpcName: "egressquery", HostLabel: "egressstratum"},
+		{ProtoFile: "vservices/egressquery.proto", PackageName: "egressquery", ServiceName: "EgressRecordQuery", GrpcName: "egressquery", HostLabel: "egressstratum"},
+		// Labeled onto SOMEONE ELSE: not this build's to serve.
+		{ProtoFile: "vservices/otherquery.proto", PackageName: "otherquery", ServiceName: "OtherRecordMap", GrpcName: "otherquery", HostLabel: "someoneelse"},
+		// A vservice with no host label at all.
+		{ProtoFile: "vservices/unhosted.proto", PackageName: "unhosted", ServiceName: "Unhosted", GrpcName: "unhosted"},
+	}
+
+	got, err := resolveServerServices(cfg, services)
+	if err != nil {
+		t.Fatalf("resolveServerServices: %v", err)
+	}
+	var names []string
+	for _, svc := range got {
+		names = append(names, svc.ServiceName)
+	}
+	want := []string{"EgressStratum", "EgressRecordMap", "EgressRecordQuery"}
+	if len(names) != len(want) {
+		t.Fatalf("server services = %v, want %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("server services = %v, want %v", names, want)
+		}
+	}
+}
+
+// The other half of the same rule: a service's OWN package is never resolved
+// through the host tag, so a package that labels itself changes nothing.
+func TestResolveServerServices_OwnPackageIsNotAHostedVService(t *testing.T) {
+	cfg := &tactype.Config{SelfPackage: "egressstratum"}
+	got, err := resolveServerServices(cfg, []ServiceInfo{
+		{ProtoFile: "services/egressstratum.proto", PackageName: "egressstratum", ServiceName: "EgressStratum", GrpcName: "egressstratum", HostLabel: "egressstratum"},
+	})
+	if err != nil {
+		t.Fatalf("resolveServerServices: %v", err)
+	}
+	if len(got) != 1 || got[0].ServiceName != "EgressStratum" {
+		t.Fatalf("own-package service must be resolved exactly once, got %v", got)
+	}
+}

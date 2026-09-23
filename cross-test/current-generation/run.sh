@@ -165,6 +165,25 @@ output-dir: "tacplus"
 EOF
 }
 
+# The same fixture built as the record plane's HOST — the service declaring
+# (spec.record_store), which the trait names in `host`. This is the arrangement
+# every real declaration has: the trait lives in its own package, so the plane's
+# two services are HOSTED VSERVICES and reach the host through the host tag, not
+# through own-package discovery. Go resolved only the own-package half until
+# 2026-09-22, so this build emitted clients to the plane and no server for it.
+write_recordegress_host_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.egressstratum"
+src: "$RECORDEGRESS_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
 assert_no_legacy_fixture_output() {
   local output="$1"
 
@@ -1372,6 +1391,67 @@ assert_requiresdevice_output() {
 #                            client-facing reader carries no private type: its
 #                            data path is the plane's peer-facing read, which is
 #                            not emitted for one (see the plane assertion below).
+# assert_recordegress_host_output checks that the hosted VSERVICE half of server
+# resolution actually produced SERVERS for the record query plane, and that the
+# two seams the plane alone reaches rendered on them: the (spec.store_namespace)
+# tenant backstop with its /system runtime gate on the peer half, and the
+# (spec.store_principal) predicate pin on the client half.
+#
+# A language that resolves only own-package services emits the plane's CLIENTS
+# and no server, which compiles — so presence of the server file is the whole
+# assertion, and the compile step that follows is what proves it is real.
+assert_recordegress_host_output() {
+  local output="$1"
+  local language="$2"
+  local s2s="" c2s=""
+
+  case "$language" in
+    go)
+      s2s="$(find "$output" -type f -path '*/servers/vservices/egressquery/egress_record_map.go' -print -quit)"
+      c2s="$(find "$output" -type f -path '*/servers/vservices/egressquery/egress_record_query.go' -print -quit)"
+      ;;
+    java)
+      s2s="$(find "$output" -type f -path '*/servers/vservices/egressquery/EgressRecordMap.java' -print -quit)"
+      c2s="$(find "$output" -type f -path '*/servers/vservices/egressquery/EgressRecordQuery.java' -print -quit)"
+      ;;
+    rust)
+      s2s="$(find "$output" -type f -path '*/servers/vservices/egressquery/egress_record_map.rs' -print -quit)"
+      c2s="$(find "$output" -type f -path '*/servers/vservices/egressquery/egress_record_query.rs' -print -quit)"
+      ;;
+    *)
+      die "record-egress host fixture: unsupported language: $language"
+      ;;
+  esac
+
+  [[ -n "$s2s" ]] \
+    || die "record-egress host fixture ($language): the record query plane's PEER half was not generated as a server under $output; the host tag half of server resolution is missing, so the plane's rpcs are unroutable from this language"
+  [[ -n "$c2s" ]] \
+    || die "record-egress host fixture ($language): the record query plane's CLIENT-FACING half was not generated as a server under $output"
+
+  # The (spec.store_namespace) s2s seam with its /system runtime gate. It is
+  # reached by no other surface in the fleet, so a language that never hosts the
+  # plane never generates it at all.
+  grep -q 'FATAL: (spec.store_namespace) backstop fired' "$s2s" \
+    || die "record-egress host fixture ($language): the peer half carries no (spec.store_namespace) backstop"
+  grep -q '/system' "$s2s" \
+    || die "record-egress host fixture ($language): the peer half carries no /system runtime gate, so a fleet-wide peer would be pinned to its own tenant"
+
+  # The (spec.store_principal) predicate pin on the client-facing half: the
+  # plane is per-principal and the wrapper, not the handler, pins it.
+  # Go and Java only. RUST RENDERS NO PREDICATE PIN AT ALL on this half — it
+  # carries the egress row filters and nothing that pins the predicate before
+  # the store is asked. That is a Rust gap, not a fixture one; asserting it for
+  # Rust would make this leg fail rather than describe it, exactly as the unary
+  # filter-ORDER divergence is described and not asserted. See
+  # looper/workers/go-hosted-vservice-resolver-questions.md.
+  if [[ "$language" != "rust" ]]; then
+    grep -q 'the query plane is per-principal and the predicate is not the caller'"'"'s to choose' "$c2s" \
+    || die "record-egress host fixture ($language): the client-facing half carries no (spec.store_principal) predicate pin"
+  fi
+
+  assert_no_legacy_fixture_output "$output"
+}
+
 assert_recordegress_output() {
   local output="$1"
   local language="$2"
@@ -1953,6 +2033,34 @@ if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
     echo "==> Compiling $language record-egress fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/egressvault"
     echo "    PASS $language record-egress"
+  done
+
+  # The HOST leg: the same protos built as egressstratum, the (spec.record_store)
+  # the trait names. The plane's two services are defined in the trait's own
+  # package and labeled onto this one, so they are hosted VSERVICES — the half of
+  # server resolution Go did not implement. Generating them as SERVERS is the
+  # assertion; compiling the result is what proves the wrapper is real, and is
+  # how the three latent defects that half had never exercised (a WATCH seam
+  # reading from_revision off a handle that declares none, an `optional string`
+  # predicate pin assigned a bare string, and a Handle<T> projection dispatch
+  # emitted for a source that has none) were found in the first place.
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/recordegress-host-$language"
+    log="$WORK_ROOT/recordegress-host-$language.log"
+    rm -rf "$dir"
+    write_recordegress_host_config "$dir" "$language"
+
+    echo "==> Generating $language record-egress HOST fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$RECORDEGRESS_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language record-egress host generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_recordegress_host_output "$output_root" "$language"
+    echo "==> Compiling $language record-egress HOST fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/egressstratum"
+    echo "    PASS $language record-egress host"
   done
 fi
 

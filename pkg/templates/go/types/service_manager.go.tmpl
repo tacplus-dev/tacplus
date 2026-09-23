@@ -1415,7 +1415,13 @@ if err := sm.{{.HandlerFuncFieldName}}(ctx, event, meta); err != nil {
 return err
 }
 }
+{{- if .HasProjections}}
 return {{.TypePkgAlias}}.Handle{{.TypeName}}(ctx, event, {{- if $.HasTimeseriesProjections}} {{.TypePkgAlias}}.TimeseriesInsertFunc(sm.tsInsertFunc){{else}} nil{{end}})
+{{- else}}
+// No message projects from {{.TypeName}}, so no Handle{{.TypeName}} dispatcher
+// is generated for it. The subscriber's only work is the handler func above.
+return nil
+{{- end}}
 }, {{.SubPkgAlias}}.WithEarliest()); err != nil && subCtx.Err() == nil {
 zap.L().Error("subscription {{.SourcePackage}}.{{.SourceField}} ended, re-resolving {{.TargetService}}", zap.Error(err))
 }

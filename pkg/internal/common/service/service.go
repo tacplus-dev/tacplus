@@ -137,13 +137,28 @@ func ResolveServerServices(config *tactype.Config, servicesInfo []ServiceInfo) [
 	return result
 }
 
+// IsHostedVService reports whether a vservice defined in another package
+// designates pkg as its physical host, via option (spec.service_s2s) =
+// {label: "<pkg>"} on the vservice.
+//
+// It lives here, shared, for the same reason parser.StoreEpochField does: Go
+// resolves its own server set (it carries a ServiceInfo of its own shape and
+// cannot call ResolveServerServices), while Java and Rust come through
+// filterByHostTag below. Two private copies of "is this service mine to host"
+// is two answers that can come to disagree — and they did: Go had no copy at
+// all, so a Go host of a hosted vservice generated clients to the surface and
+// no server for it, silently.
+func IsHostedVService(hostLabel, servicePackage, pkg string) bool {
+	return hostLabel == pkg && servicePackage != pkg
+}
+
 // filterByHostTag returns vservice entries from other packages whose HostLabel matches pkg.
 // These are services defined in vservices/ protos that designate pkg as their host via
 // option (spec.service_s2s) = {label: "<pkg>"}.
 func filterByHostTag(servicesInfo []ServiceInfo, pkg string) []ServiceInfo {
 	var result []ServiceInfo
 	for _, svc := range servicesInfo {
-		if svc.HostLabel == pkg && svc.PackageName != pkg {
+		if IsHostedVService(svc.HostLabel, svc.PackageName, pkg) {
 			result = append(result, svc)
 		}
 	}

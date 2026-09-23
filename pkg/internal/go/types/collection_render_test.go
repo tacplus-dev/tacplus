@@ -154,6 +154,11 @@ func watchMethod() *parser.MethodInfo {
 			// The resolver always populates this (default "revision"); a
 			// fixture that omitted it would render c.Get() and not compile.
 			WatchRevisionField: "revision",
+			// The standard {Method}Request declares from_revision — WATCH
+			// validation requires it (validateWatchRequest). The handle-based
+			// shape that does not is the record plane's QueryHandle; see
+			// TestWatch_ServerWrapper_HandleRequestStartsFromZero.
+			WatchHasFromRevision: true,
 		},
 	}
 }
@@ -186,6 +191,24 @@ func TestWatch_ServerWrapper_EnvelopeAndRing(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("WATCH wrapper missing %q\ngot:\n%s", want, got)
 		}
+	}
+}
+
+// A WATCH whose request is a HANDLE — the record query plane's QueryHandle —
+// carries no from_revision, so the wrapper must start from 0 (snapshot + live)
+// rather than read a field that does not exist. Java renders 0L from the same
+// resolved flag; Go rendered req.GetFromRevision() unconditionally, which did
+// not compile the first time a Go service hosted the plane.
+func TestWatch_ServerWrapper_HandleRequestStartsFromZero(t *testing.T) {
+	method := watchMethod()
+	method.Resolved.WatchHasFromRevision = false
+	got := generateGRPCWrapper(watchService(), method, "catalog", "services", "",
+		map[string]service.AccountingInfo{}, map[string]string{}, proto.SkippedTraceTypes{}, nil)
+	if !strings.Contains(got, "fromRev := int64(0)") {
+		t.Fatalf("handle-based WATCH must resume from 0\ngot:\n%s", got)
+	}
+	if strings.Contains(got, "req.GetFromRevision()") {
+		t.Fatalf("handle-based WATCH must not read from_revision off a request that declares none\ngot:\n%s", got)
 	}
 }
 

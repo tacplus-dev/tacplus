@@ -119,6 +119,11 @@ func rustWatchMethod() *parser.MethodInfo {
 			// The resolver always populates this (default "revision"); a
 			// fixture that omitted it would render `change.` and not compile.
 			WatchRevisionField: "revision",
+			// The standard {Method}Request declares from_revision — WATCH
+			// validation requires it. The handle-based shape that does not is
+			// the record plane's QueryHandle; see
+			// TestRustWatch_Wrapper_HandleRequestStartsFromZero.
+			WatchHasFromRevision: true,
 		},
 	}
 }
@@ -277,6 +282,27 @@ func TestRustPage_ClientTemplateDoesNotShadowModelChannel(t *testing.T) {
 	}
 	if !strings.Contains(res.method, "Result<(Vec<Channel>, String, i64), tonic::Status>") {
 		t.Fatalf("PAGE client should keep same-package item type Channel without transport shadowing:\n%s", res.method)
+	}
+}
+
+// A WATCH whose request is a HANDLE — the record query plane's QueryHandle —
+// carries no from_revision, so the wrapper must start from 0 (snapshot + live)
+// rather than read a field that does not exist. Java renders 0L and Go int64(0)
+// from the same resolved flag; Rust read the field unconditionally, which did
+// not compile the first time the plane's server was built for a Rust host.
+func TestRustWatch_Wrapper_HandleRequestStartsFromZero(t *testing.T) {
+	m := rustWatchMethod()
+	m.Resolved.WatchHasFromRevision = false
+	got := mustGenerateRustGRPCWrapper(
+		t,
+		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
+		m, "catalog", "services", map[string]string{}, "",
+		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, nil)
+	if !strings.Contains(got, "let from_revision = 0i64;") {
+		t.Fatalf("handle-based WATCH must resume from 0\ngot:\n%s", got)
+	}
+	if strings.Contains(got, "req_msg.from_revision") {
+		t.Fatalf("handle-based WATCH must not read from_revision off a request that declares none\ngot:\n%s", got)
 	}
 }
 

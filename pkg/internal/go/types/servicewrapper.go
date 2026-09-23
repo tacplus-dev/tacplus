@@ -1239,6 +1239,16 @@ if authTok != nil {
 		// may not see must not reach the sanitizer at all.
 		itemSan = watchItemGuard + itemSan
 		changeSan = watchChangeGuard + changeSan
+		// The request only supplies a resume point when it declares a
+		// `from_revision` field (the standard {Method}Request). Handle-based
+		// watch requests (the record plane's QueryHandle) omit it — start from 0
+		// (snapshot + live), which is what Java's wrapper does with the same
+		// flag. Reading it off the request unconditionally did not compile the
+		// moment a Go service actually hosted the record query plane.
+		fromRevExpr := "req.GetFromRevision()"
+		if !method.Resolved.WatchHasFromRevision {
+			fromRevExpr = "int64(0)"
+		}
 		if hasAccounting {
 			return fmt.Sprintf(`var %s = collection.NewHub[%s](%d, %d)
 
@@ -1260,7 +1270,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 	}
 %s
 	ctx := stream.Context()
-	fromRev := req.GetFromRevision()
+	fromRev := %s
 	resumeRev := fromRev
 	if fromRev == 0 {
 		for item, serr := range src.Snapshot {
@@ -1291,7 +1301,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 		}
 	}
 	return nil
-}`, hubVar, change, method.Resolved.ReplayDepth, method.Resolved.IdleSecs, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, checks, callerExtract, streamInputValidation, streamAccountingBlock, method.Name, sendWatchEvent, itemSan, snapshotSend, doneSend, watchCall, changeSan, deltaSend)
+}`, hubVar, change, method.Resolved.ReplayDepth, method.Resolved.IdleSecs, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, checks, callerExtract, streamInputValidation, streamAccountingBlock, method.Name, sendWatchEvent, fromRevExpr, itemSan, snapshotSend, doneSend, watchCall, changeSan, deltaSend)
 		}
 		return fmt.Sprintf(`var %s = collection.NewHub[%s](%d, %d)
 
@@ -1303,7 +1313,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 	}
 %s
 	ctx := stream.Context()
-	fromRev := req.GetFromRevision()
+	fromRev := %s
 	resumeRev := fromRev
 	if fromRev == 0 {
 		for item, serr := range src.Snapshot {
@@ -1334,7 +1344,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 		}
 	}
 	return nil
-}`, hubVar, change, method.Resolved.ReplayDepth, method.Resolved.IdleSecs, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, checks, callerExtract, streamInputValidation, method.Name, sendWatchEvent, itemSan, snapshotSend, doneSend, watchCall, changeSan, deltaSend)
+}`, hubVar, change, method.Resolved.ReplayDepth, method.Resolved.IdleSecs, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, checks, callerExtract, streamInputValidation, method.Name, sendWatchEvent, fromRevExpr, itemSan, snapshotSend, doneSend, watchCall, changeSan, deltaSend)
 	} else if method.IsTier3SnapshotCollection() {
 		// Tier-3 SNAPSHOT cursor: handler returns a lazy iter.Seq2 producer; drive
 		// it, sending each item (gRPC-go Send applies flow control). On client

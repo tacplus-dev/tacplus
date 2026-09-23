@@ -92,6 +92,23 @@ func renderRecordEgress(kind string, m *parser.MethodInfo) string {
 		map[string]service.AccountingInfo{}, map[string]string{}, proto.SkippedTraceTypes{}, recordEgressSanitizer())
 }
 
+// optionalPredicateSanitizer is recordEgressSanitizer with the filter's two
+// criteria declared proto3-`optional`, the shape the generated record query
+// plane emits.
+func optionalPredicateSanitizer() *egressSanitizer {
+	san := recordEgressSanitizer()
+	filter := san.msgs["tasks\x00TaskFilter"]
+	for i := range filter.Fields {
+		filter.Fields[i].IsOptional = true
+	}
+	return san
+}
+
+func renderRecordEgressWith(san *egressSanitizer, kind string, m *parser.MethodInfo) string {
+	return generateGRPCWrapper(recordEgressService(kind, m), m, "tasks", "services", "",
+		map[string]service.AccountingInfo{}, map[string]string{}, proto.SkippedTraceTypes{}, san)
+}
+
 func wantAll(t *testing.T, got string, want ...string) {
 	t.Helper()
 	for _, w := range want {
@@ -300,6 +317,38 @@ func TestGoRecordEgress_PredicatePinsAreStampOrRefuse(t *testing.T) {
 	// and the aborting egress backstop becomes client-triggerable.
 	if strings.Index(got, "__pred.Namespace = __queryNamespace") > strings.Index(got, "p.handler.ListTasks(") {
 		t.Fatalf("the predicate pin must precede the handler call\ngot:\n%s", got)
+	}
+}
+
+// The predicate the RECORD PLANE actually emits declares its criteria
+// `optional string` (record_map.go writes `optional %s %s`), so the Go struct
+// field is a *string. Assigning the resolved value straight to it did not
+// compile the first time a Go service hosted the plane. Java stamps the same
+// pin through a builder setter, which is why it never surfaced there.
+func TestGoRecordEgress_OptionalPredicateFieldsAreStampedByAddress(t *testing.T) {
+	got := renderRecordEgressWith(optionalPredicateSanitizer(), "c2s", recordEgressMethod("ListTasks", "ListTasksResponse"))
+	wantAll(t, got,
+		`__pred.Owner = &__queryPrincipal`,
+		`__pred.Namespace = &__queryNamespace`,
+	)
+	// The Get accessors read nil and "" alike, which is exactly Java's
+	// `!hasX() || getX().isEmpty()`, so the stamp-or-refuse test is unchanged.
+	wantAll(t, got, `if __pred.GetOwner() == "" {`, `if __pred.GetNamespace() == "" {`)
+}
+
+// An ABSENT predicate is stamped into existence rather than left unpinned:
+// Java pins through request.getFilter(), which is never null, so a request that
+// names no predicate at all still reaches the handler pinned. Go skipped the
+// whole pin on a nil predicate, which on the record plane is a per-principal
+// query answered with no owner criterion at all.
+func TestGoRecordEgress_AbsentPredicateIsMaterialized(t *testing.T) {
+	got := renderRecordEgress("c2s", recordEgressMethod("ListTasks", "ListTasksResponse"))
+	wantAll(t, got,
+		"if req.Filter == nil {",
+		"req.Filter = &types.TaskFilter{}",
+	)
+	if strings.Index(got, "req.Filter = &types.TaskFilter{}") > strings.Index(got, "p.handler.ListTasks(") {
+		t.Fatalf("the predicate must be materialized before the handler call\ngot:\n%s", got)
 	}
 }
 

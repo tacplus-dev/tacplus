@@ -1254,14 +1254,25 @@ func resolveServerServices(config *tactype.Config, servicesInfo []ServiceInfo) (
 	if config.GrpcServerAll {
 		return filterGrpcAnnotated(config, servicesInfo)
 	}
-	// Auto-discover own-package services when SelfPackage is set — matches
-	// Rust's behavior. Synthetic GrpcServers entries (auto-injected for store
-	// services like timeseries_mutation) are additive so other own-package
-	// services aren't silently dropped.
+	// Auto-discover own-package services, plus HOSTED VSERVICES — services
+	// defined in another package whose (spec.service_s2s).label names this
+	// package as their physical host — when SelfPackage is set. Both halves are
+	// what Java and Rust resolve through service.ResolveServerServices; Go
+	// carries a ServiceInfo of its own shape and so cannot call it, but the
+	// "is this mine to host" question is answered once, by
+	// service.IsHostedVService, rather than re-derived here.
+	//
+	// Synthetic GrpcServers entries (auto-injected for store services like
+	// timeseries_mutation) are additive so other own-package services aren't
+	// silently dropped.
 	var result []ServiceInfo
 	if config.SelfPackage != "" {
 		for _, svc := range servicesInfo {
-			if svc.GrpcName == "" || svc.PackageName != config.SelfPackage || svc.IsC2D {
+			if svc.GrpcName == "" || svc.IsC2D {
+				continue
+			}
+			if svc.PackageName != config.SelfPackage &&
+				!service.IsHostedVService(svc.HostLabel, svc.PackageName, config.SelfPackage) {
 				continue
 			}
 			result = append(result, svc)

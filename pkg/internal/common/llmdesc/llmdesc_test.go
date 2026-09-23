@@ -261,3 +261,60 @@ func TestCollectRegistryTypesResolvesRecordKeyDefault(t *testing.T) {
 		t.Fatalf("declared RecordKey = %q, want trace_id", byName["CustomKeyed"].RecordKey)
 	}
 }
+
+// The store-boundary role markers a registry consumer reads INSTEAD of matching
+// field names. A dispatcher that has to guess which field is the principal by
+// its spelling is one rename away from a half-empty routing envelope, so the
+// descriptor states the role by annotation: store_principal/store_namespace are
+// the field's own bools, record_key is named by the MESSAGE's (spec.record).key.
+func TestBuildTypeDescriptorMarksStoreBoundaryRoles(t *testing.T) {
+	msg := model.Message{
+		Name: "Message",
+		Annotations: map[string]model.AnnotationValue{
+			"record_key": {Type: model.AnnotationTypeString, StringValue: "delivery_id"},
+		},
+		Fields: []model.Field{
+			{Name: "delivery_id", Type: "string"},
+			{
+				Name: "recipient",
+				Type: "string",
+				Annotations: map[string]model.AnnotationValue{
+					"store_principal": {Type: model.AnnotationTypeBool, BoolValue: true},
+				},
+			},
+			{
+				Name: "namespace",
+				Type: "string",
+				Annotations: map[string]model.AnnotationValue{
+					"store_namespace": {Type: model.AnnotationTypeBool, BoolValue: true},
+				},
+			},
+			{Name: "body", Type: "string"},
+		},
+	}
+
+	got := BuildTypeDescriptor(msg, "messaging", nil, nil, map[string]bool{})
+	byName := map[string]FieldDescriptor{}
+	for _, field := range got.Fields {
+		byName[field.Name] = field
+	}
+
+	if !byName["delivery_id"].RecordKey {
+		t.Errorf("delivery_id record_key = false, want true (it is the message's (spec.record).key)")
+	}
+	if !byName["recipient"].StorePrincipal {
+		t.Errorf("recipient store_principal = false, want true")
+	}
+	if !byName["namespace"].StoreNamespace {
+		t.Errorf("namespace store_namespace = false, want true")
+	}
+	for _, name := range []string{"recipient", "namespace", "body"} {
+		if byName[name].RecordKey {
+			t.Errorf("%s record_key = true, want false — only the field named by (spec.record).key carries it", name)
+		}
+	}
+	if byName["body"].StorePrincipal || byName["body"].StoreNamespace {
+		t.Errorf("body store markers = principal %v namespace %v, want both false",
+			byName["body"].StorePrincipal, byName["body"].StoreNamespace)
+	}
+}

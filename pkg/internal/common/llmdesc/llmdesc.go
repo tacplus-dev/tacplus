@@ -37,6 +37,14 @@ type FieldDescriptor struct {
 	// FilterMode is the field's own (spec.query_field) op string ("eq"/"range"),
 	// "" if unannotated (not filterable — the field is absent from <T>Filter).
 	FilterMode string `json:"filter_mode,omitempty"`
+	// Store-boundary role markers. A registry consumer that needs to know which
+	// field is the record's principal, namespace or key reads these rather than
+	// matching field NAMES — a service that spells its principal field anything
+	// but "recipient" is otherwise invisible to a name-matching heuristic, and a
+	// boundary that depends on spelling is not a boundary.
+	StorePrincipal bool `json:"store_principal,omitempty"` // field carries (spec.store_principal)
+	StoreNamespace bool `json:"store_namespace,omitempty"` // field carries (spec.store_namespace)
+	RecordKey      bool `json:"record_key,omitempty"`      // field is named by (spec.record).key
 	// Timeseries column annotations (store-neutral)
 	Timeseries             bool  `json:"timeseries,omitempty"`                  // true if field has (spec.timeseries_column)
 	TimeseriesOrderKey     int   `json:"timeseries_order_key,omitempty"`        // store-neutral sort-key position (1-indexed)
@@ -140,6 +148,18 @@ func BuildTypeDescriptor(msg model.Message, pkg string, msgIdx map[string]Messag
 		}
 		if ann, ok := field.Annotations["quorum_write"]; ok && ann.BoolValue {
 			fd.QuorumWrite = true
+		}
+		// Store-boundary role markers. store_principal/store_namespace are the
+		// field's own bool annotations; the record key is named by the MESSAGE's
+		// (spec.record).key, so it is resolved against msg, not field.
+		if ann, ok := field.Annotations["store_principal"]; ok && ann.BoolValue {
+			fd.StorePrincipal = true
+		}
+		if ann, ok := field.Annotations["store_namespace"]; ok && ann.BoolValue {
+			fd.StoreNamespace = true
+		}
+		if ann, ok := msg.Annotations["record_key"]; ok && ann.StringValue == field.Name {
+			fd.RecordKey = true
 		}
 
 		// Determine type string

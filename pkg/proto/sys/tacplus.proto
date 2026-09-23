@@ -274,6 +274,16 @@ message FieldInfo {
   // UNSPECIFIED = the field carries no (spec.query_field) and is NOT filterable — a
   // record type whose fields are all UNSPECIFIED gets no <T>Filter message at all.
   spec.QueryOp filter_mode = 32;
+  // Store-boundary role markers, so a registry consumer names a field by its
+  // ANNOTATION rather than by matching the field's spelling. A service whose
+  // principal field is not literally "recipient" is invisible to a name-matching
+  // heuristic, and a boundary that depends on spelling is not a boundary.
+  // True when this field carries (spec.store_principal).
+  bool store_principal = 33;
+  // True when this field carries (spec.store_namespace).
+  bool store_namespace = 34;
+  // True when this field is the one named by the message's (spec.record).key.
+  bool record_key = 35;
 }
 
 // TypeInfo describes a protobuf message type in the generated registry.

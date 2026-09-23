@@ -188,8 +188,8 @@ class Subscriber:
                 # namespace} — and never sees record.payload.
                 #
                 # A TYPED boundary, not a memory one: the full {{.TypeName}}
-                # still arrives on the wire and is still decoded above. See
-                # spec.proto's routing_only_services comment.
+                # still arrives on the wire and is still decoded above.
+                # See spec.proto's routing_only_services comment.
                 envelope = event_pb.{{.EnvelopeTypeName}}(
                     delivery_id=record.payload.{{.KeyField}},
                     recipient=record.payload.{{.PrincipalField}},

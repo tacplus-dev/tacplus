@@ -487,6 +487,32 @@ loaded descriptors, but publish/watch bindings attach only to the **current
 actor's own protos** — importing a proto never makes a service (or the broker
 itself) a producer or subscriber.
 
+**Consumer-scoped routing envelope.** `s2s_subscribe` carries, alongside
+`auth_services`, an additive `routing_only_services` list. It is declared by the
+topic **owner** on its own `(spec.record)`/`(spec.event)` — never by the
+subscriber, which cannot be trusted to choose its own blast radius — and names
+the subset of the already-authorized `auth_services` whose generated subscriber
+`Handler` is typed for a synthesized `<T>RoutingEnvelope`
+(`{delivery_id, recipient, namespace}`) instead of the full `<T>`. The three
+slots are projected from the source type's own annotations —
+`(spec.record).key`, `(spec.store_principal)`, `(spec.store_namespace)` — and a
+flagged type that cannot fill all three, or whose slots are not singular
+strings, **fails generation** rather than emitting a half-empty envelope.
+Listing a service grants it nothing; it must still appear in `auth_services`.
+Omitting the field changes nothing: every subscriber not named keeps the full
+type, unchanged.
+
+This is a **type** boundary, not a memory one. The full message still arrives on
+the wire and is still decoded in the subscriber's process; the generated
+dispatch projects the three fields out of it and drops the decoded message.
+Narrowing the wire itself is a broker-side change and is not what this
+annotation does.
+
+The registry carries the same boundary by annotation rather than by field
+spelling: `FieldInfo.store_principal`, `FieldInfo.store_namespace` and
+`FieldInfo.record_key` mark which field plays which role, so a registry consumer
+never has to match on a field being literally named `recipient` or `namespace`.
+
 ## RPC Patterns And Verbs
 
 Every RPC resolves to exactly one pattern from a closed set, with one static

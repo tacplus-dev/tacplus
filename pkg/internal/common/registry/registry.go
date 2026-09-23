@@ -853,6 +853,9 @@ func buildFieldInfoProto(field llmdesc.FieldDescriptor) *spec.FieldInfo {
 		TimeseriesCardinalityHint: spec.CardinalityHint(field.TimeseriesCardinality),
 		DataEntitlementMode:       entitlementModeToProto(field.DataEntitlementMode),
 		FilterMode:                filterModeToProto(field.FilterMode),
+		StorePrincipal:            field.StorePrincipal,
+		StoreNamespace:            field.StoreNamespace,
+		RecordKey:                 field.RecordKey,
 	}
 	if defaultJSON := marshalDefault(field.Default); defaultJSON != "" {
 		fi.DefaultJson = defaultJSON

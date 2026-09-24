@@ -14,6 +14,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PROTO_SRC="$ROOT_DIR/cross-test/proto"
+# The requires-device fixture is the only proto graph in the tree that declares a
+# (spec.service_state) with a plain singleton boundary (ServiceHealth.lock_settings),
+# so it is the only one whose generation reaches the state-singleton emitters at all.
+REQUIRESDEVICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-requiresdevice"
 WORK_ROOT="${TACPLUS_DETERMINISM_WORKDIR:-$ROOT_DIR/target/cross-test/determinism}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
@@ -82,6 +86,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -d "$PROTO_SRC" ]] || die "cross-test proto fixture not found: $PROTO_SRC"
+[[ -d "$REQUIRESDEVICE_PROTO_SRC" ]] || die "requires-device proto fixture not found: $REQUIRESDEVICE_PROTO_SRC"
 
 all_languages=(go rust python typescript java)
 case "$LANG_FILTER" in
@@ -113,13 +118,15 @@ fi
 generate() {
   local language="$1"
   local dir="$2"
+  local proto_src="$3"
+  local pkg="$4"
 
   rm -rf "$dir"
   mkdir -p "$dir/src"
-  cp -R "$PROTO_SRC/." "$dir/src/"
+  cp -R "$proto_src/." "$dir/src/"
   cat > "$dir/tacplus.yaml" <<EOF
 language: "$language"
-pkg: "com.gitlab.example.dummy.proto"
+pkg: "$pkg"
 src: "$dir/src"
 output-dir: "model"
 EOF
@@ -129,22 +136,36 @@ EOF
   fi
 }
 
+# name|proto source|pkg|languages. The base fixture is types-only and generates
+# for every target; requiresdevice is a full service build (it declares servers
+# and S2S clients), so python and typescript — client-only targets — refuse it
+# outright and it runs for the three full-service languages only.
+fixtures=(
+  "base|$PROTO_SRC|com.gitlab.example.dummy.proto|go rust python typescript java"
+  "requiresdevice|$REQUIRESDEVICE_PROTO_SRC|com.gitlab.example.dummy.vault|go java rust"
+)
+
 for language in "${languages[@]}"; do
-  echo "==> $language: generating twice into separate work dirs"
-  dir_a="$WORK_ROOT/$language/a"
-  dir_b="$WORK_ROOT/$language/b"
-  generate "$language" "$dir_a"
-  generate "$language" "$dir_b"
+  for fixture in "${fixtures[@]}"; do
+    IFS='|' read -r fixture_name fixture_src fixture_pkg fixture_langs <<<"$fixture"
+    [[ " $fixture_langs " == *" $language "* ]] || continue
 
-  [[ -d "$dir_a/model" ]] || die "$language: missing model tree in $dir_a"
-  [[ -d "$dir_b/model" ]] || die "$language: missing model tree in $dir_b"
+    echo "==> $language/$fixture_name: generating twice into separate work dirs"
+    dir_a="$WORK_ROOT/$language/$fixture_name/a"
+    dir_b="$WORK_ROOT/$language/$fixture_name/b"
+    generate "$language" "$dir_a" "$fixture_src" "$fixture_pkg"
+    generate "$language" "$dir_b" "$fixture_src" "$fixture_pkg"
 
-  echo "==> $language: asserting byte-identical model trees"
-  if ! diff_out="$(diff -r "$dir_a/model" "$dir_b/model" 2>&1)"; then
-    printf '%s\n' "$diff_out" >&2
-    die "$language generation is NOT deterministic: two runs produced different output"
-  fi
-  echo "    PASS $language (byte-identical)"
+    [[ -d "$dir_a/model" ]] || die "$language/$fixture_name: missing model tree in $dir_a"
+    [[ -d "$dir_b/model" ]] || die "$language/$fixture_name: missing model tree in $dir_b"
+
+    echo "==> $language/$fixture_name: asserting byte-identical model trees"
+    if ! diff_out="$(diff -r "$dir_a/model" "$dir_b/model" 2>&1)"; then
+      printf '%s\n' "$diff_out" >&2
+      die "$language/$fixture_name generation is NOT deterministic: two runs produced different output"
+    fi
+    echo "    PASS $language/$fixture_name (byte-identical)"
+  done
 done
 
 if [[ "$KEEP" != true ]]; then

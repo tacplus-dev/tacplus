@@ -6,6 +6,11 @@ PROTO_SRC="$ROOT_DIR/cross-test/proto"
 HEALTHONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-healthonly"
 C2SONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-c2sonly"
 REQUIRESDEVICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-requiresdevice"
+# testdata/, not a plain directory: the go tool ignores directories named
+# testdata, and this tree is Go source written against the GENERATED module
+# (gitlab.com/example/dummy/vault/...), which `go vet ./...` in this repo cannot
+# resolve. Anywhere else it breaks the repo vet gate.
+SELFTESTS_SRC="$ROOT_DIR/cross-test/current-generation/testdata"
 RECORDEGRESS_PROTO_SRC="$ROOT_DIR/cross-test/proto-recordegress"
 WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/current-generation}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
@@ -1297,6 +1302,106 @@ assert_healthonly_output() {
   assert_no_legacy_fixture_output "$output"
 }
 
+# assert_singleton_fetch_defaults_before_validate reads the ONE generated
+# singleton Fetch in the requires-device fixture and pins the order of the two
+# calls inside it: apply this type's generated defaults, THEN validate. The
+# reverse order is what crash-looped scottyagent (Rust) and stratum-2 (Java) on
+# 2026-09-23 — a singleton field the seeded state omits because it carries a
+# (spec.default_*) arrived zero and failed its own (spec.assert_*), and startup
+# burned the whole config_fetch_timeout on a value that should have passed
+# (fixed in 526feb6f / bba83f49). The ordering lives in five independent
+# per-language templates, so a revert in one language is invisible to the others
+# and to any single-language behavioural test; this is the leg that sees it.
+#
+# $1 file  $2 awk range start regex  $3 awk range end regex  $4 defaults regex  $5 validate regex
+assert_singleton_fetch_defaults_before_validate() {
+  local file="$1" start_re="$2" end_re="$3" defaults_re="$4" validate_re="$5"
+  local body defaults_line validate_line
+
+  body="$(awk "/$start_re/,/$end_re/" "$file")"
+  [[ -n "$body" ]] || die "singleton fetch: could not locate the Fetch body in $file (start: $start_re)"
+
+  defaults_line="$(printf '%s\n' "$body" | grep -nE "$defaults_re" | head -1 | cut -d: -f1)"
+  validate_line="$(printf '%s\n' "$body" | grep -nE "$validate_re" | head -1 | cut -d: -f1)"
+
+  [[ -n "$defaults_line" ]] \
+    || die "singleton fetch: $file does not apply generated defaults in Fetch — this is the exact 2026-09-23 startup crash (526feb6f/bba83f49)"
+  [[ -n "$validate_line" ]] \
+    || die "singleton fetch: $file does not validate the fetched value in Fetch — defaults must not replace validation"
+  [[ "$defaults_line" -lt "$validate_line" ]] \
+    || die "singleton fetch: $file validates BEFORE applying defaults (defaults at body line $defaults_line, validate at $validate_line) — reverts 526feb6f/bba83f49"
+}
+
+# assert_requiresdevice_singleton_state checks that ServiceHealth.lock_settings —
+# the only plain (non-repeated, non-topic) singleton boundary anywhere in
+# cross-test/ — actually generated its state-singleton Fetch, and generated it
+# with defaults applied before validation. Until this fixture carried the field,
+# no generate-and-compile gate in the tree emitted a singleton Fetch at all, so
+# the whole boundary kind was covered only by template render tests.
+assert_requiresdevice_singleton_state() {
+  local output="$1"
+  local language="$2"
+  local state=""
+
+  case "$language" in
+    go)
+      state="$(find "$output" -type f -path '*/state/platform/service_health/state.go' -print -quit)"
+      ;;
+    java)
+      state="$(find "$output" -type f -path '*/state/platform/*/servicehealth/StateClient.java' -print -quit)"
+      ;;
+    rust)
+      state="$(find "$output" -type f -path '*/state/platform/service_health/state.rs' -print -quit)"
+      ;;
+    *)
+      die "requires-device singleton state: unsupported language: $language"
+      ;;
+  esac
+
+  [[ -n "$state" ]] \
+    || die "requires-device fixture ($language): generated ServiceHealth state client not found under $output"
+
+  case "$language" in
+    go)
+      grep -q 'func (w \*LockSettingsWrapper) Fetch(' "$state" \
+        || die "requires-device fixture (go): the lock_settings singleton generated no Fetch in $state"
+      assert_singleton_fetch_defaults_before_validate "$state" \
+        'func \(w \*LockSettingsWrapper\) Fetch\(' '^}' \
+        'LockSettingsDefaults\(value\)' 'ValidateLockSettings\(value\)'
+      ;;
+    rust)
+      grep -q 'pub async fn fetch(&self) -> Result<LockSettings' "$state" \
+        || die "requires-device fixture (rust): the lock_settings singleton generated no fetch in $state"
+      assert_singleton_fetch_defaults_before_validate "$state" \
+        'pub async fn fetch\(&self\) -> Result<LockSettings' '^    \}' \
+        'lock_settings_defaults\(&mut value\)' 'value\.validate\(\)'
+      ;;
+    java)
+      grep -q 'LockSettings fetchLockSettings()' "$state" \
+        || die "requires-device fixture (java): the lock_settings singleton generated no fetch in $state"
+      assert_singleton_fetch_defaults_before_validate "$state" \
+        'public .*LockSettings fetchLockSettings\(' '^    \}' \
+        'lockSettingsDefaults\(' 'validateLockSettings\('
+      ;;
+  esac
+}
+
+# install_go_state_singleton_selftest drops the fixture's hand-written Go
+# self-test into the generated ServiceHealth state package. It has to live IN
+# that package: Fetch's retry loop, its defaults call and the stub it calls are
+# all package-internal, and nothing outside can reach them. `go test ./...` in
+# compile_current_output then runs it as part of the gate.
+install_go_state_singleton_selftest() {
+  local output="$1"
+  local src="$SELFTESTS_SRC/go/requiresdevice_state_singleton_fetch_test.go"
+  local pkg_dir
+
+  [[ -f "$src" ]] || die "missing requires-device Go state-singleton self-test: $src"
+  pkg_dir="$(dirname "$(find "$output" -type f -path '*/state/platform/service_health/state.go' -print -quit)")"
+  [[ -d "$pkg_dir" ]] || die "requires-device fixture (go): generated service_health package not found under $output"
+  cp "$src" "$pkg_dir/"
+}
+
 # assert_requiresdevice_output checks that the (spec.rpc).requires_device gate was
 # actually GENERATED, not merely that a tree with the annotation in it compiled.
 # Every one of these has failed at least once during development in at least one
@@ -2057,6 +2162,10 @@ if [[ -d "$REQUIRESDEVICE_PROTO_SRC" ]]; then
     output_root="$(resolve_output_root "$dir/tacplus")"
     assert_spiffe_soundness "$dir/tacplus"
     assert_requiresdevice_output "$output_root" "$language"
+    assert_requiresdevice_singleton_state "$output_root" "$language"
+    if [[ "$language" == "go" ]]; then
+      install_go_state_singleton_selftest "$output_root"
+    fi
     echo "==> Compiling $language requires-device fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/vault"
     echo "    PASS $language requires-device"

@@ -67,3 +67,31 @@ func TestTonicServiceNames(t *testing.T) {
 		}
 	}
 }
+
+// TestProstEnumVariantKeyword pins the escaping of enum variant names that
+// collide with a Rust keyword. Rust keywords are lowercase, so the only
+// collision a PascalCase variant can hit is "Self", and Rust rejects it as a
+// raw identifier — prost suffixes an underscore rather than emitting r#Self.
+// The generated helpers reference prost's variants by name, so this must match
+// prost-build's sanitize_identifier exactly.
+func TestProstEnumVariantKeyword(t *testing.T) {
+	cases := []struct {
+		protoValue string
+		enumName   string
+		want       string
+	}{
+		{"AUTH_METHOD_SELF", "AuthMethod", "Self_"},
+		// Keyword-looking suffixes that are NOT collisions once cased.
+		{"AUTH_METHOD_TYPE", "AuthMethod", "Type"},
+		{"AUTH_METHOD_MATCH", "AuthMethod", "Match"},
+		{"AUTH_METHOD_MOVE", "AuthMethod", "Move"},
+		// "Self" only escapes when it is the whole variant, not a word in it.
+		{"AUTH_METHOD_SELF_SIGNED", "AuthMethod", "SelfSigned"},
+		{"AUTH_METHOD_PASSWORD", "AuthMethod", "Password"},
+	}
+	for _, tc := range cases {
+		if got := toProstEnumVariant(tc.protoValue, tc.enumName); got != tc.want {
+			t.Errorf("toProstEnumVariant(%q, %q) = %q, want %q", tc.protoValue, tc.enumName, got, tc.want)
+		}
+	}
+}

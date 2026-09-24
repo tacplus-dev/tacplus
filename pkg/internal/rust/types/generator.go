@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"go.uber.org/zap"
@@ -317,6 +318,13 @@ func Generate(config *tactype.Config) error {
 		// but config files contain service-specific fields alongside shared grpcconfig fields.
 		if err := fixSerdeUnknownFields(config.OutputDir); err != nil {
 			return fmt.Errorf("failed to fix serde unknown fields: %w", err)
+		}
+
+		// Fix enum variants named Self. prost renames them to Self_ (Rust
+		// refuses Self as a raw identifier), but protoc-gen-prost-serde still
+		// refers to them as ::Self, which does not compile.
+		if err := fixSerdeSelfVariant(config.OutputDir); err != nil {
+			return fmt.Errorf("failed to fix serde Self variant: %w", err)
 		}
 
 		zap.L().Info("Successfully generated Rust code with protoc-gen-prost")
@@ -1049,6 +1057,47 @@ func fixSerdeUnknownFields(outputDir string) error {
 			}
 			zap.L().Debug("Fixed serde unknown fields", zap.String("file", entry.Name()))
 		}
+	}
+
+	return nil
+}
+
+// serdeSelfVariantRe matches a reference to an enum variant named Self. The
+// trailing (?:[A-Za-z0-9_]) exclusion keeps Self_ and variants that merely
+// start with Self (SelfSigned) untouched.
+var serdeSelfVariantRe = regexp.MustCompile(`::Self([^A-Za-z0-9_])`)
+
+// fixSerdeSelfVariant rewrites ::Self to ::Self_ in protoc-gen-prost-serde
+// output. A proto enum value that reduces to the variant name Self (for
+// example AUTH_METHOD_SELF on enum AuthMethod) is emitted by prost as Self_,
+// because Rust rejects Self as a raw identifier. protoc-gen-prost-serde does
+// not apply that sanitizing and emits ::Self, which fails to compile.
+func fixSerdeSelfVariant(outputDir string) error {
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		return fmt.Errorf("failed to read output directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".serde.rs") {
+			continue
+		}
+
+		filePath := filepath.Join(outputDir, entry.Name())
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return fmt.Errorf("failed to read %s: %w", filePath, err)
+		}
+
+		fixed := serdeSelfVariantRe.ReplaceAll(data, []byte("::Self_$1"))
+		if len(fixed) == len(data) {
+			continue
+		}
+
+		if err := os.WriteFile(filePath, fixed, 0644); err != nil {
+			return fmt.Errorf("failed to write %s: %w", filePath, err)
+		}
+		zap.L().Debug("Fixed serde Self variant", zap.String("file", entry.Name()))
 	}
 
 	return nil

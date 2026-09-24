@@ -32,6 +32,7 @@ enum AuthMethod {
   AUTH_METHOD_SAML = 3 [(spec.json_return_value) = "saml"];
   AUTH_METHOD_LDAP = 4 [(spec.json_return_value) = "ldap"];
   AUTH_METHOD_CERTIFICATE = 5 [(spec.json_return_value) = "certificate"];
+  AUTH_METHOD_SELF = 6 [(spec.json_return_value) = "self"];
 }
 
 // User role

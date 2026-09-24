@@ -273,5 +273,19 @@ func toProstEnumVariant(protoValue string, enumName string) string {
 		}
 	}
 
-	return result.String()
+	return escapeRustVariantKeyword(result.String())
+}
+
+// escapeRustVariantKeyword applies prost's identifier sanitizing to a
+// PascalCase enum variant name. Rust's keywords are lowercase, so the only one
+// a PascalCase variant can collide with is "Self" (from a proto value like
+// AUTH_METHOD_SELF). "Self" is one of the keywords Rust refuses as a raw
+// identifier, so r#Self does not compile and escapeRustKeyword's r# form is
+// wrong here; prost suffixes an underscore instead. See prost-build's
+// sanitize_identifier in src/ident.rs.
+func escapeRustVariantKeyword(variant string) string {
+	if variant == "Self" {
+		return "Self_"
+	}
+	return variant
 }

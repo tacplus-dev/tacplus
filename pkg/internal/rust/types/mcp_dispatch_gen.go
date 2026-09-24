@@ -43,10 +43,14 @@ import (
 // same reason hmac/sha2/hex are pinned in types_cargo.toml.tmpl: these back a
 // generated seam whose code shape is tied to a specific API, so a consumer
 // moving the version independently would break generated code rather than
-// their own. rmcp 3.1.4 is the version proven in production in
-// platform/services/argus.
+// their own. 3.4.1 is the floor: the auto-exposed ServerHandler below uses
+// rmcp::model::ServerConfig (the alias InitializeResult gained in 3.4.1) and
+// InitializeResult::default(), neither of which exists in 3.3.0 or earlier —
+// a consumer lock resolving 3.2/3.3 failed to compile the generated model
+// (scotty/backend, 2026-09-24). Moved from 3.1.4 (the version once proven in
+// platform/services/argus) to match what the emitted code actually needs.
 const (
-	rmcpCrateVersion     = "3.1.4"
+	rmcpCrateVersion     = "3.4.1"
 	schemarsCrateVersion = "1"
 )
 

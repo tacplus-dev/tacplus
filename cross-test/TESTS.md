@@ -34,6 +34,13 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   and asserts an invalid request is rejected `400` without reaching the backend
   while a valid one is forwarded. This is the only in-repo host of a generated
   Rust W2S SERVER surface. Local/manual (`just w2s-validate`); not yet in CI.
+- `mcp-floor-version` (`cross-test/mcp-floor-version/run.sh`): rmcp floor gate
+  for the generated Rust MCP dispatch — generates a service owning one
+  `RPC_PRINCIPAL_MCP` tool, pins `rmcp` to the EXACT version
+  `rmcpCrateVersion` declares (`cargo update --precise`, not `^3.x`
+  resolution), and `cargo build`s the generated crate. Catches a declared floor
+  lower than the API the emitted `ServerHandler::get_info` uses, which shipped
+  once (`63f07a27`). Local/manual (`just mcp-floor-version`); not yet in CI.
 - `runtime-smoke` (`cross-test/runtime-smoke/run.sh`): cross-language runtime
   smoke — a go fixture server built from the generated go servers hosts the
   contract on localhost (C2S gRPC + hand-written W2S HTTP/SSE/WebSocket

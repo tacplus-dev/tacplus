@@ -236,6 +236,12 @@ claims-provenance:
 w2s-validate:
   {{lock}} bash cross-test/w2s-validate/run.sh
 
+# Compiles the generated Rust MCP dispatch against the EXACT rmcp version
+# tacplus declares (rmcpCrateVersion), so a floor lower than the emitted code
+# needs fails here instead of in a consumer.
+mcp-floor-version:
+  {{lock}} bash cross-test/mcp-floor-version/run.sh
+
 # Cross-language serialization-equivalence corpus: one message, encoded once by
 # go into checked-in golden bytes, decoded and value-asserted by all five
 # generated languages. Local/manual — not part of `test`.

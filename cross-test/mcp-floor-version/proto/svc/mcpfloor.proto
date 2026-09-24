@@ -1,0 +1,29 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// rmcp floor-version fixture: a C2S service that owns one RPC_PRINCIPAL_MCP
+// tool, which is the ONLY thing needed to make tacplus emit the generated MCP
+// dispatch seam (mcp_dispatch_gen.go) and put `rmcp` in the crate's Cargo.toml.
+
+syntax = "proto3";
+
+package mcpfloor;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "mcpfloor"};
+
+message GetTicketRequest {
+  string ticket_id = 1 [(spec.assert_required) = true];
+}
+
+message GetTicketResponse {
+  string summary = 1 [(spec.assert_required) = true];
+}
+
+service McpFloorApi {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  // GetTicketBrief summarizes one ticket for a model.
+  rpc GetTicketBrief(GetTicketRequest) returns (GetTicketResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_MCP, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ENTITLED_USERS]};
+  }
+}

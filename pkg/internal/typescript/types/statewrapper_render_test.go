@@ -211,6 +211,36 @@ func TestTypeScriptStateWrapperSingletonFetchRetriesOnValidationFailure(t *testi
 	}
 }
 
+// The singleton fetch must default the fetched value before validating it: the
+// wire carries no proto defaults, so a field omitted because it declares a
+// (spec.default_*) arrives zero-valued and fails its own (spec.assert_*) check
+// for the whole config_fetch_timeout_seconds budget. See the 2026-09-23
+// scottyagent crash and the cross-language pin in
+// pkg/internal/common/state_singleton_fetch_defaults_parity_test.go.
+func TestTypeScriptStateWrapperSingletonFetchDefaultsBeforeValidate(t *testing.T) {
+	rendered := renderTSStateWrapperForTest(t, tsStateWrapperData{
+		Header:               "// generated for test",
+		TypesImport:          "../../types/services/demo/index.js",
+		TraceImport:          "../../../types/sys/trace/index.js",
+		ServiceManagerImport: "../../../chassis/servicemanager/index.js",
+		ProtoPackage:         "demo",
+		StateRootName:        "DemoState",
+		StateServiceName:     "DemoStateService",
+		Singletons: []tsSingletonBoundary{{
+			FieldName:   "config",
+			FieldPascal: "Config",
+			TypeName:    "Config",
+			TypePrefix:  "types",
+			DefaultsFn:  "configDefaults",
+		}},
+	})
+
+	const want = "            types.configDefaults(value);\n            try {\n                types.validateConfig(value);"
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("rendered TypeScript singleton fetch does not apply configDefaults before validate:\n%s", rendered)
+	}
+}
+
 func renderTSStateWrapperForTest(t *testing.T, data tsStateWrapperData) string {
 	t.Helper()
 	tmplStr, err := loadTemplate("statewrapper.ts.tmpl")

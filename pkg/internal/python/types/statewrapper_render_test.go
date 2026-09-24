@@ -103,6 +103,36 @@ func TestPythonStateWrapperSingletonFetchRetriesOnValidationFailure(t *testing.T
 	}
 }
 
+// The singleton fetch must default the fetched value before validating it: the
+// wire carries no proto defaults, so a field omitted because it declares a
+// (spec.default_*) arrives zero-valued and fails its own (spec.assert_*) check
+// for the whole config_fetch_timeout_seconds budget. See the 2026-09-23
+// scottyagent crash and the cross-language pin in
+// pkg/internal/common/state_singleton_fetch_defaults_parity_test.go.
+func TestPythonStateWrapperSingletonFetchDefaultsBeforeValidate(t *testing.T) {
+	rendered := renderPyStateWrapperForTest(t, pyStateWrapperData{
+		Header:               "# generated for test",
+		PackageName:          "demo",
+		PbImportFrom:         "......types.services.demo",
+		TraceImportFrom:      "......types.sys.trace",
+		ExceptionsImportFrom: pyExceptionsImportFrom("......"),
+		StateRootName:        "DemoState",
+		StateServiceName:     "DemoStateService",
+		Singletons: []pySingletonBoundary{{
+			FieldName:   "config",
+			FieldPascal: "Config",
+			TypeName:    "Config",
+			ValidateRef: "pb_helpers.validate_config",
+			DefaultsRef: "pb_helpers.config_defaults",
+		}},
+	})
+
+	const want = "            pb_helpers.config_defaults(value)\n            try:\n                pb_helpers.validate_config(value)"
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("rendered Python singleton fetch does not apply config_defaults before validate:\n%s", rendered)
+	}
+}
+
 func TestPythonStateClientAggregatorsUseWrapperClientClassNames(t *testing.T) {
 	outputDir := t.TempDir()
 	err := generatePyStateClientAggregators(&tactype.Config{

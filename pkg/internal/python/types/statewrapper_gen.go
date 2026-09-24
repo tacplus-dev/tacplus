@@ -28,6 +28,10 @@ type pySingletonBoundary struct {
 	FieldPascal    string // PascalCase: "Roster"
 	TypeName       string // PascalCase message type: "TeamRoster"
 	ValidateRef    string // generated validator call: "pb_helpers.validate_team_roster"
+	// DefaultsRef is the generated proto-defaults call for TypeName:
+	// "pb_helpers.team_roster_defaults". writeDefaults emits one per message
+	// unconditionally, so this is always callable.
+	DefaultsRef string
 }
 
 // pyCollectionBoundary describes a repeated message field in the state root.
@@ -321,6 +325,7 @@ func generatePyStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc *p
 				FieldPascal:    fieldPascal,
 				TypeName:       typeName,
 				ValidateRef:    "pb_helpers.validate_" + strutil.ToSnakeCase(typeName),
+				DefaultsRef:    "pb_helpers." + strutil.ToSnakeCase(typeName) + "_defaults",
 			})
 		}
 	}

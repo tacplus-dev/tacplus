@@ -378,6 +378,12 @@ class {{.StateRootName}}Client:
         as the fetched value fails its own generated validation, bounded by
         config_fetch_timeout_seconds, and raises once that budget is spent rather
         than returning a value it knows is invalid.
+
+        The wire carries no proto defaults, so this applies the type's generated
+        defaults to every fetched value BEFORE validating it. Without that, a field
+        the seeded state omits on purpose -- because it carries a (spec.default_*) --
+        arrives zero-valued and fails its own (spec.assert_*) check, and the retry
+        loop burns its whole budget on a value that should have passed.
         """
         timeout = self._config_fetch_timeout_seconds
         deadline = time.monotonic() + timeout
@@ -387,6 +393,7 @@ class {{.StateRootName}}Client:
                 trace_pb2.TraceRequest(),
                 metadata=await self._metadata(),
             )
+            {{.DefaultsRef}}(value)
             try:
                 {{.ValidateRef}}(value)
             except Exception as cause:

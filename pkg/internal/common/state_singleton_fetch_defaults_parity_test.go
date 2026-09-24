@@ -10,7 +10,8 @@ import (
 )
 
 // The generated state-singleton Fetch must apply the fetched type's proto
-// defaults BEFORE it validates that value — in every server language.
+// defaults BEFORE it validates that value — in every language that generates
+// one, server and client alike.
 //
 // This is a live production crash, not a hypothetical. scottyagent crash-looped
 // on 2026-09-23 with
@@ -70,6 +71,22 @@ func TestStateSingletonFetchAppliesDefaultsBeforeValidateInEveryLanguage(t *test
 			defaults:   "value = {{.DefaultsRef}}(value).build();",
 			validate:   "{{.ValidateRef}}(value);",
 		},
+		{
+			lang:       "python",
+			dir:        "python/types",
+			file:       "statewrapper.py.tmpl",
+			fetchStart: "async def fetch_{{.FieldName}}(self) -> pb.{{.TypeName}}:",
+			defaults:   "{{.DefaultsRef}}(value)",
+			validate:   "{{.ValidateRef}}(value)",
+		},
+		{
+			lang:       "typescript",
+			dir:        "typescript/types",
+			file:       "statewrapper.ts.tmpl",
+			fetchStart: "async fetch{{.FieldPascal}}(): Promise<{{.TypePrefix}}.{{.TypeName}}>",
+			defaults:   "{{.TypePrefix}}.{{.DefaultsFn}}(value);",
+			validate:   "{{.TypePrefix}}.validate{{.TypeName}}(value);",
+		},
 	} {
 		s, err := tmplutil.LoadTemplate(tc.dir, tc.file)
 		if err != nil {
@@ -117,6 +134,8 @@ func TestStateSingletonFetchAppliesDefaultsInsideTheRetryLoop(t *testing.T) {
 		{"go", "go/types", "state_wrapper.go.tmpl", "for attempt := 0; ; attempt++ {", "{{DefaultsRef $s.GoType $s.IsCrossPackage}}(value)"},
 		{"rust", "rust/types", "statewrapper.rs.tmpl", "let mut attempt = 0u32;", "{{.DefaultsFn}}(&mut value);"},
 		{"java", "java/types", "statewrapper.java.tmpl", "for (int attempt = 0; ; attempt++) {", "value = {{.DefaultsRef}}(value).build();"},
+		{"python", "python/types", "statewrapper.py.tmpl", "while True:", "{{.DefaultsRef}}(value)"},
+		{"typescript", "typescript/types", "statewrapper.ts.tmpl", "for (let attempt = 0; ; attempt++) {", "{{.TypePrefix}}.{{.DefaultsFn}}(value);"},
 	} {
 		s, err := tmplutil.LoadTemplate(tc.dir, tc.file)
 		if err != nil {

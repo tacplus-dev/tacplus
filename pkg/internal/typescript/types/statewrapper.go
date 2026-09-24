@@ -27,6 +27,10 @@ type tsSingletonBoundary struct {
 	FieldPascal string // PascalCase: "Roster"
 	TypeName    string // PascalCase message type: "TeamRoster"
 	TypePrefix  string // import alias: "types" (own package) or "x509Types" (cross-package)
+	// DefaultsFn is the generated proto-defaults function for TypeName:
+	// "teamRosterDefaults". writeDefaults emits one per message
+	// unconditionally, so it is always callable through TypePrefix.
+	DefaultsFn string
 }
 
 // tsCollectionBoundary describes a repeated message field in the state root.
@@ -336,6 +340,7 @@ func generateTSStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc *p
 				FieldPascal: fieldPascal,
 				TypeName:    typeName,
 				TypePrefix:  typePrefix,
+				DefaultsFn:  strutil.LcFirst(typeName) + "Defaults",
 			})
 		}
 	}

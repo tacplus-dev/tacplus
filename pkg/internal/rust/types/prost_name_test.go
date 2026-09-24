@@ -95,3 +95,30 @@ func TestProstEnumVariantKeyword(t *testing.T) {
 		}
 	}
 }
+
+// TestProstEnumVariantLeadingDigit pins the handling of enum values whose
+// prefix-stripped name would start with a digit. prost never emits such a
+// variant: strip_enum_prefix only strips when the remainder starts with an
+// uppercase character, so AUTH_METHOD_2FA keeps the enum name (AuthMethod2fa),
+// and sanitize_identifier underscore-prefixes anything that still starts with
+// a digit (_2FA -> _2fa). See prost-build's src/ident.rs.
+func TestProstEnumVariantLeadingDigit(t *testing.T) {
+	cases := []struct {
+		protoValue string
+		enumName   string
+		want       string
+	}{
+		{"AUTH_METHOD_2FA", "AuthMethod", "AuthMethod2fa"},
+		{"AUTH_METHOD_2FA_TOTP", "AuthMethod", "AuthMethod2faTotp"},
+		// No prefix to strip, and the name itself starts with a digit.
+		{"_2FA", "AuthMethod", "_2fa"},
+		// A digit that is not leading does not change anything.
+		{"AUTH_METHOD_V2_TOKEN", "AuthMethod", "V2Token"},
+		{"AUTH_METHOD_OAUTH2", "AuthMethod", "Oauth2"},
+	}
+	for _, tc := range cases {
+		if got := toProstEnumVariant(tc.protoValue, tc.enumName); got != tc.want {
+			t.Errorf("toProstEnumVariant(%q, %q) = %q, want %q", tc.protoValue, tc.enumName, got, tc.want)
+		}
+	}
+}

@@ -260,6 +260,21 @@ func toProstEnumVariant(protoValue string, enumName string) string {
 	}
 
 	valueParts := parts[startIdx:]
+
+	// prost strips the enum-name prefix only when the remainder starts with an
+	// uppercase character (strip_enum_prefix in prost-build's src/ident.rs), so
+	// a value like AUTH_METHOD_2FA keeps the enum name instead of reducing to a
+	// variant that starts with a digit.
+	for _, part := range valueParts {
+		if len(part) == 0 {
+			continue
+		}
+		if part[0] >= '0' && part[0] <= '9' {
+			valueParts = parts
+		}
+		break
+	}
+
 	var result strings.Builder
 
 	for _, part := range valueParts {
@@ -273,7 +288,7 @@ func toProstEnumVariant(protoValue string, enumName string) string {
 		}
 	}
 
-	return escapeRustVariantKeyword(result.String())
+	return escapeRustVariantLeadingDigit(escapeRustVariantKeyword(result.String()))
 }
 
 // escapeRustVariantKeyword applies prost's identifier sanitizing to a
@@ -286,6 +301,19 @@ func toProstEnumVariant(protoValue string, enumName string) string {
 func escapeRustVariantKeyword(variant string) string {
 	if variant == "Self" {
 		return "Self_"
+	}
+	return variant
+}
+
+// escapeRustVariantLeadingDigit applies prost's identifier sanitizing to an
+// enum variant name that starts with a digit (from a proto value like _2FA,
+// whose leading underscore is dropped by the case conversion). Rust
+// identifiers cannot start with a digit, so prost prefixes an underscore.
+// Proto identifiers are ASCII, so an ASCII digit test covers prost's
+// is_numeric check. See prost-build's sanitize_identifier in src/ident.rs.
+func escapeRustVariantLeadingDigit(variant string) string {
+	if len(variant) > 0 && variant[0] >= '0' && variant[0] <= '9' {
+		return "_" + variant
 	}
 	return variant
 }

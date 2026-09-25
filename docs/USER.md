@@ -683,7 +683,7 @@ Views serve two purposes: they expose a single read surface of the same type acr
 
 | Annotation | Effect |
 |------------|--------|
-| `(spec.persistence) = true` | Boundary is durably stored **by the kernel state store**, which snapshots it and rehydrates it on a cold start. Services do not persist state themselves and generated state clients write nothing to local disk. Unrelated to typed disk persistence, which is keyed off `(spec.service_store)`. |
+| `(spec.persistence) = true` | Requests boundary durability. **No store implements it today** — kernel is in-memory coordination and holds no durable user data, and generated state clients write nothing to local disk. On a **kernel-labelled** state root it is a generation error: *durable data belongs in stratum records* (use `(spec.record)` + `(spec.record_store)`). Elsewhere it is accepted and carried descriptively to `registry.json` (`BoundaryInfo.persistence`) for a future store to act on. Unrelated to typed disk persistence, which is keyed off `(spec.service_store)`. |
 | `(spec.eviction_max_size) = 5000` | Bounds the number of entries the generated Go state wrapper will accept for the boundary. |
 | `(spec.epoch_expiration) = true` | An int64 field inside a **collection item** is treated as a Unix epoch expiry timestamp; the state store computes TTL at write time. On a scalar state-root field it is rejected at generation time. On an int64 inside a singleton-only boundary message it is accepted but ignored (documented carve-out — see spec.proto). |
 | `(spec.instance_keyed) = true` | Server composes the entry key from the caller's token claims (`service_id@instance_id`), enforcing per-instance write isolation. |

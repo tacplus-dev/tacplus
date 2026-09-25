@@ -84,10 +84,11 @@ message BoundaryInfo {
 
   reserved 4; // was consistency (spec.ConsistencyModel) — removed; boundaries are convergent
 
-  // True when the boundary is persisted BY KERNEL: the kernel state store includes
-  // it in its snapshot and rehydrates it on a cold start. Services do not persist
-  // state themselves. Descriptive IR only — tacplus carries the (spec.persistence)
-  // flag here for kernel's codegen to act on and implements nothing itself.
+  // True when the boundary carries (spec.persistence). No state store implements
+  // that flag today — kernel is in-memory coordination and holds no durable user
+  // data; durable data belongs in stratum records. Descriptive IR only: tacplus
+  // carries the flag here for a future store that does implement it, and
+  // implements nothing itself. Refused outright on a kernel-labelled state root.
   bool persistence = 5;
 
   // True when the boundary is a collection (repeated field).

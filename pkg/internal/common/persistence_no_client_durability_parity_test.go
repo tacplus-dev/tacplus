@@ -12,23 +12,27 @@ import (
 	"testing"
 )
 
-// (spec.persistence) is KERNEL's durability, and nobody else's.
+// (spec.persistence) is NOBODY's durability today.
 //
-// The annotation flags a graph boundary as durable: the kernel state store
-// snapshots it and rehydrates it on a cold start. tacplus implements none of
-// that. It TRANSPORTS the flag — common/boundaries/boundaries.go reads it once,
-// registry.go carries it into registry.json as BoundaryInfo.persistence, and
-// kernel's codegen acts on it. Every other target is a passive descriptor
-// consumer.
+// The annotation requests that a graph boundary be durable. No store implements
+// it. Kernel — which briefly did, under the 2026-09-23 decision — does not: as of
+// 2026-09-25 kernel is in-memory coordination plus its own identity snapshot and
+// holds no durable user data, and proto/state.go now REFUSES the annotation
+// outright on a kernel-labelled state root ("durable data belongs in stratum
+// records"). tacplus implements nothing either. It TRANSPORTS the flag —
+// common/boundaries/boundaries.go reads it once, registry.go carries it into
+// registry.json as BoundaryInfo.persistence — descriptively, for a future store
+// that does implement it. Every target is a passive descriptor consumer.
 //
 // That makes the claim tacplus must keep mechanically true a NEGATIVE one: no
-// generated state client, in any language, may acquire durability of its own. A
-// state client that wrote a local snapshot would be a second, unsynchronised
-// durable store for a boundary whose single durable store is kernel — and,
-// worse, one the proto author never asked for and cannot see. The decision doc
-// asked for a fail-generation check here; there is no per-target predicate
-// tacplus can evaluate for that (it has no model of which process hosts the
-// state plane), so THIS FILE is the enforceable form of the same claim.
+// generated state client, in any language, may acquire durability of its own, and
+// no emitted surface may name a store that honors the flag. A state client that
+// wrote a local snapshot would be a durable store for the boundary that the proto
+// author never asked for and cannot see; an emitted comment naming kernel as the
+// persister would be a promise no process keeps. The decision doc asked for a
+// fail-generation check for the client half; there is no per-target predicate
+// tacplus can evaluate for it (it has no model of which process hosts the state
+// plane), so THIS FILE is the enforceable form of that half of the claim.
 //
 // WHY SOURCE-LEVEL, AND WHY BOTH HALVES — the same reasoning as
 // store_epoch_parity_test.go and min_group_size_parity_test.go, which this file
@@ -129,9 +133,9 @@ func TestPersistenceStateClientsWriteNoDiskInAnyLanguage(t *testing.T) {
 		for path, src := range scanned {
 			for _, prim := range prims {
 				if strings.Contains(src, prim) {
-					t.Errorf("%s: %s emits %q in the state client. (spec.persistence) is honored by the KERNEL "+
-						"state store and by nothing else — a generated state client that writes a boundary to "+
-						"local disk is a second, unsynchronised durable store the proto author never asked for",
+					t.Errorf("%s: %s emits %q in the state client. (spec.persistence) is honored by no store "+
+						"today — a generated state client that writes a boundary to local disk is a durable "+
+						"store the proto author never asked for and cannot see",
 						lang, path, prim)
 				}
 			}
@@ -146,14 +150,15 @@ func TestPersistenceStateClientsWriteNoDiskInAnyLanguage(t *testing.T) {
 // it reads the flag only to put it on the registry descriptor.
 //
 // proto/state.go also names the annotation, but does not read its value: it is
-// the presence test that REFUSES (spec.persistence) on a queue, topic or
-// priority queue. Presence tests are how the flag is validated; value reads are
-// how a language would start acting on it, which is what must not grow back.
+// the presence test behind the two refusals — (spec.persistence) on a queue,
+// topic or priority queue, and (spec.persistence) on a kernel-labelled state
+// root. Presence tests are how the flag is validated; value reads are how a
+// language would start acting on it, which is what must not grow back.
 func TestPersistenceHasOneValueReadSite(t *testing.T) {
 	const wantValueRead = "../common/boundaries/boundaries.go"
 	allowedNamers := map[string]string{
 		"../common/boundaries/boundaries.go": "reads the value onto the registry descriptor",
-		"../proto/state.go":                  "presence test: refuses the annotation on a queue/topic/priority_queue",
+		"../proto/state.go":                  "presence test: refuses the annotation on a queue/topic/priority_queue and on a kernel-labelled state root",
 	}
 
 	namers := map[string]bool{}
@@ -191,7 +196,7 @@ func TestPersistenceHasOneValueReadSite(t *testing.T) {
 	for path := range namers {
 		if _, ok := allowedNamers[path]; !ok {
 			t.Errorf("%s names Annotations[\"persistence\"], but the only sites allowed to are %v. tacplus "+
-				"implements no persistence: it carries the flag to registry.json for kernel's codegen. A new "+
+				"implements no persistence: it carries the flag to registry.json descriptively. A new "+
 				"reader is a generator starting to act on a flag it does not own",
 				path, allowedNamers)
 		}
@@ -205,7 +210,7 @@ func TestPersistenceHasOneValueReadSite(t *testing.T) {
 	if len(valueReaders) != 1 || !valueReaders[wantValueRead] {
 		t.Errorf("the annotation's VALUE is read by %v; it must be read by exactly one site, %s. Every extra "+
 			"reader the state-client generators once had was dead plumbing no template consumed — the flag's "+
-			"only consumer is kernel, through registry.json",
+			"only consumer is registry.json, and no store reads it from there yet",
 			valueReaders, wantValueRead)
 	}
 }
@@ -231,7 +236,7 @@ func TestPersistenceTemplatesPromiseNoLocalDurability(t *testing.T) {
 		for _, phrase := range forbidden {
 			if strings.Contains(src, phrase) {
 				t.Errorf("%s emits %q. Generated state code makes no durability promise of its own — "+
-					"(spec.persistence) is honored by the kernel state store, and a comment that says "+
+					"(spec.persistence) is honored by no store today, and a comment that says "+
 					"otherwise is the false promise this file exists to catch", path, phrase)
 			}
 		}
@@ -282,7 +287,63 @@ func TestPersistenceRegistryTemplatesStayDescriptive(t *testing.T) {
 		if n := strings.Count(strings.ToLower(src), "persist"); n != wantMentions {
 			t.Errorf("%s: %s mentions persistence %d times, not %d; the registry template declares the field "+
 				"and renders it, and does nothing else with it. A further mention is a helper or accessor "+
-				"acting on a flag whose only implementer is kernel", lang, path, n, wantMentions)
+				"acting on a flag nothing implements", lang, path, n, wantMentions)
+		}
+	}
+}
+
+// NO EMITTED SURFACE, IN ANY LANGUAGE, NAMES A STORE THAT PERSISTS THE FLAG. The
+// 2026-09-23 decision made kernel the durable store for flagged boundaries; the
+// 2026-09-25 reversal removed it, leaving zero implementers. The claim that must
+// now hold across every language at once is that no generated artifact tells a
+// reader otherwise — a doc comment saying "kernel persists this boundary" is a
+// promise no process keeps any more, and it is exactly the sentence the templates
+// would have been given had the 09-23 decision stuck.
+//
+// The scan is line-level co-occurrence of "persist" and "kernel", over the WHOLE
+// template tree rather than this file's state/registry maps: the false claim could
+// be emitted from any template that knows both words (service_manager, the
+// chassis), and templates mention kernel legitimately all over — as a routing
+// label, a token audience, an S2S peer — so only the pairing is forbidden.
+// Generator string literals are covered for the state clients through the same AST
+// scan the disk-write assertion uses.
+func TestNoEmittedSurfaceClaimsAStorePersistsTheFlag(t *testing.T) {
+	claims := func(t *testing.T, where, src string) {
+		t.Helper()
+		for i, line := range strings.Split(src, "\n") {
+			lower := strings.ToLower(line)
+			if strings.Contains(lower, "persist") && strings.Contains(lower, "kernel") {
+				t.Errorf("%s:%d names kernel and persistence together: %q. (spec.persistence) has no "+
+					"implementer — kernel holds no durable user data, and durable data belongs in stratum "+
+					"records; generated code must not tell a reader that kernel will persist a boundary",
+					where, i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+
+	var templates int
+	root := "../../templates"
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".tmpl") {
+			return nil
+		}
+		templates++
+		claims(t, path, readPersistenceFile(t, path))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	if templates == 0 {
+		t.Fatalf("walked %s and found no templates — this test would pass vacuously", root)
+	}
+
+	for lang, srcs := range persistenceStateGenerators {
+		for _, p := range srcs.generators {
+			claims(t, lang+" "+p+" (string literals)", emittedStrings(t, p))
 		}
 	}
 }

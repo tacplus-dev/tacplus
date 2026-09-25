@@ -1294,6 +1294,20 @@ func ValidateStateConsistency(inputDir string) error {
 				continue
 			}
 
+			// Kernel holds no durable user data (decision 2026-09-25): it is
+			// in-memory coordination plus its own identity snapshot, nothing else.
+			// A boundary that needs to survive a cold start is a stratum record, so
+			// (spec.persistence) on a state root routed to kernel is refused below.
+			isKernelLabelled := false
+			if labelAnn, hasLabel := msg.Annotations["service_state_label"]; hasLabel {
+				for _, label := range labelAnn.StringSliceValue {
+					if label == "kernel" {
+						isKernelLabelled = true
+						break
+					}
+				}
+			}
+
 			for _, field := range msg.Fields {
 				// A map field cannot be a state-root boundary — boundaries are named
 				// message types. Reject it loudly (every language) rather than silently
@@ -1468,6 +1482,13 @@ func ValidateStateConsistency(inputDir string) error {
 						errors = append(errors, fmt.Sprintf(
 							"%s: field %s.%s has (spec.persistence) on a queue/topic/priority_queue — "+
 								"persistence cannot be set on queues, topics, or priority queues",
+							relPath, msg.Name, field.Name))
+					}
+					// Rule 3b: persistence cannot be on a kernel-labelled state root.
+					if isKernelLabelled {
+						errors = append(errors, fmt.Sprintf(
+							"%s: field %s.%s has (spec.persistence) on a kernel-labelled state root — "+
+								"durable data belongs in stratum records",
 							relPath, msg.Name, field.Name))
 					}
 				}

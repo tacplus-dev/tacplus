@@ -1844,13 +1844,17 @@ extend google.protobuf.FieldOptions {
   // shared between collection and singleton uses (e.g. jwk.proto JWK.exp).
   bool epoch_expiration = 50027;
 
-  // persistence marks a graph boundary (singleton, collection, map) as durable:
-  // the KERNEL state store includes the boundary in its snapshot and rehydrates it
-  // on a cold start. Kernel is the only durable store for flagged boundaries —
-  // services do NOT persist state themselves, and no generated state client in any
-  // language writes the boundary to local disk. tacplus itself implements nothing
-  // here: it carries the flag to registry.json (BoundaryInfo.persistence) for
-  // kernel's codegen to act on. Unrelated to typed disk persistence, which is keyed
+  // persistence requests that a graph boundary (singleton, collection, map) be
+  // durable. NO STATE STORE IMPLEMENTS IT TODAY. Kernel does not: kernel is
+  // in-memory coordination plus its own identity snapshot, and it holds no durable
+  // user data (decision 2026-09-25, reversing 2026-09-23). No generated state
+  // client in any language writes the boundary to local disk either. tacplus
+  // implements nothing here: it carries the flag to registry.json
+  // (BoundaryInfo.persistence), descriptively, for a future store that does.
+  // Placement validation: setting this on a state root whose
+  // (spec.service_state).label includes "kernel" is a generation ERROR —
+  // durable data belongs in stratum records ((spec.record) + (spec.record_store)),
+  // not in a kernel boundary. Unrelated to typed disk persistence, which is keyed
   // off (spec.service_store) and grpcconfig.disk_persistence.
   // Can only be set on message-typed boundary fields.
   // Cannot be set on queues, topics, or priority queues.

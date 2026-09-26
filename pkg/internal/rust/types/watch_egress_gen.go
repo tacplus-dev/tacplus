@@ -151,6 +151,40 @@ func (w rustWatchEgress) needsNamespace() bool {
 	return false
 }
 
+// dropNamespace returns the guard set with every (spec.store_namespace) pin
+// cleared, and any guard that carried nothing else removed. This is the WATCH
+// seam's form of the `svc.IsC2S || recordPlaneS2S` existence gate the unary and
+// PAGE seams apply before they splice rustResponseNamespaceFilterBlock, and the
+// twin of the same gate around Java's javaNamespaceWatchGuard call site: the
+// namespace comparison is against the AUTHENTICATED CALLER's namespace, which is
+// a tenant boundary on the c2s half and on the s2s RECORD plane (where
+// __ns_pinned decides per caller), and nothing at all on a plain s2s surface —
+// there every peer is a fleet service whose reads were never tenant-scoped, so
+// narrowing them to the peer's own namespace is not a boundary but a break. The
+// WATCH seam is the one place that emitted the guard unconditionally, which made
+// a mismatch on such a surface an abort where its unary sibling emitted no
+// comparison at all.
+//
+// Only the namespace half is gated. (spec.store_principal) stays where it is:
+// the Rust unary, PAGE and WATCH seams all emit it ungated, so the WATCH seam is
+// already consistent with its siblings there.
+func (w rustWatchEgress) dropNamespace() rustWatchEgress {
+	var out rustWatchEgress
+	for _, src := range []struct {
+		in  []rustWatchRowGuard
+		dst *[]rustWatchRowGuard
+	}{{w.Item, &out.Item}, {w.Change, &out.Change}} {
+		for _, g := range src.in {
+			g.Namespace = ""
+			if g.Principal == "" {
+				continue
+			}
+			*src.dst = append(*src.dst, g)
+		}
+	}
+	return out
+}
+
 // watchEgress resolves the guard set for a WATCH method's item and change
 // types. The error is the generation refusal for a shape the guard cannot
 // reach; a nil error with an empty set means the rows carry no pins.
@@ -228,7 +262,17 @@ func rustWatchEgressPreamble(w rustWatchEgress, method string, runtimeGate bool)
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("\n        // (spec.store_principal)/(spec.store_namespace) on the WATCH seam: the same\n")
+	// Name only the pins actually rendered: a surface whose namespace half was
+	// gated off (dropNamespace) must not carry a comment claiming a
+	// (spec.store_namespace) backstop it does not enforce.
+	pins := "(spec.store_principal)/(spec.store_namespace)"
+	switch {
+	case !w.needsNamespace():
+		pins = "(spec.store_principal)"
+	case !w.needsPrincipal():
+		pins = "(spec.store_namespace)"
+	}
+	fmt.Fprintf(&b, "\n        // %s on the WATCH seam: the same\n", pins)
 	b.WriteString("        // egress backstop the unary and PAGE seams apply, resolved once here and\n")
 	b.WriteString("        // applied to every snapshot_item and delta inside the producer task.\n")
 	if w.needsPrincipal() {

@@ -1512,6 +1512,15 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 			if err != nil {
 				return "", err
 			}
+			// (spec.store_namespace) is gated on the WATCH seam exactly as it is on
+			// the unary and PAGE seams above, and as Java gates its own watch guard:
+			// c2s always, s2s only on the record plane. A plain s2s surface gets no
+			// namespace comparison at all — its peers' reads were never tenant-scoped,
+			// and emitting the guard there turned an expected fleet-wide read into an
+			// abort. See rustWatchEgress.dropNamespace.
+			if !svc.IsC2S && !recordPlaneS2S {
+				watchEgress = watchEgress.dropNamespace()
+			}
 			watchPre += rustWatchEgressPreamble(watchEgress, method.Name, recordPlaneS2S)
 			itemSan = rustWatchEgressGuardStmts(watchEgress.Item, "item", method.Name, "                            ", recordPlaneS2S) + itemSan
 			changeSan = rustWatchEgressGuardStmts(watchEgress.Change, "change", method.Name, "                        ", recordPlaneS2S) + changeSan

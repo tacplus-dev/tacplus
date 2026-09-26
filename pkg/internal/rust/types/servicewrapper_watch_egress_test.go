@@ -252,3 +252,84 @@ func TestRustWatchWrapperC2SHasNoRuntimeGate(t *testing.T) {
 		t.Fatalf("the c2s WATCH must pin unconditionally:\n%s", got)
 	}
 }
+
+// A PLAIN s2s surface — neither c2s nor the synthesized record plane — gets no
+// (spec.store_namespace) comparison on its WATCH, exactly as it gets none on its
+// unary and PAGE seams, and exactly as Go's goWatchEgressFilter and Java's
+// javaNamespaceWatchGuard call site already gate their own.
+//
+// The namespace comparison is against the AUTHENTICATED CALLER's namespace. On
+// such a surface every caller is a fleet peer authorized by identity through
+// auth_services, and its reads were never tenant-scoped — so the comparison is
+// not a tenant boundary there, it is a guaranteed mismatch against any row the
+// service legitimately serves. The unary seam has always answered that by
+// emitting no filter; the WATCH seam emitted the guard unconditionally, which
+// turned the SAME read into std::process::abort() the first frame it produced.
+func TestRustWatchWrapperPlainS2SEmitsNoNamespaceGuard(t *testing.T) {
+	got, err := generateRustGRPCWrapper(
+		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
+		rustWatchEgressMethod("catalog.Item", "catalog.WatchChange"),
+		"catalog", "services", map[string]string{}, "",
+		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, rustWatchEgressTestSanitizer())
+	if err != nil {
+		t.Fatalf("a plain s2s WATCH over pinned rows must generate: %v", err)
+	}
+	for _, absent := range []string{
+		"__read_namespace",
+		"(spec.store_namespace)",
+		"std::process::abort();",
+		"__ns_pinned",
+	} {
+		if strings.Contains(got, absent) {
+			t.Fatalf("a plain s2s WATCH must carry no namespace guard, found %q:\n%s", absent, got)
+		}
+	}
+	// The principal guard is untouched by this gate: the Rust unary, PAGE and
+	// WATCH seams all emit (spec.store_principal) ungated, so the WATCH seam
+	// stays consistent with its own siblings.
+	for _, want := range []string{
+		"let __read_principal = caller.as_ref()",
+		"if item.owner != __read_principal { continue; }",
+		"if let Some(__row) = change.item.as_ref() { if __row.owner != __read_principal { continue; } }",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("a plain s2s WATCH must keep the principal guard %q:\n%s", want, got)
+		}
+	}
+}
+
+// The same surface over rows pinned ONLY by namespace resolves nothing at all:
+// the gate must leave no orphaned preamble behind once the namespace half is
+// dropped and no guard remains.
+func TestRustWatchWrapperPlainS2SNamespaceOnlyRowEmitsNothing(t *testing.T) {
+	files := []model.ProtoFile{{Package: "catalog", Messages: []model.Message{
+		{Name: "Item", Fields: []model.Field{
+			{Name: "namespace", Type: "string", Number: 1,
+				Annotations: map[string]model.AnnotationValue{"store_namespace": {Type: model.AnnotationTypeBool, BoolValue: true}}},
+			{Name: "revision", Type: "int64", Number: 2},
+		}},
+		{Name: "WatchChange", Fields: []model.Field{
+			{Name: "item", Type: "Item", Number: 1, IsMessage: true},
+			{Name: "revision", Type: "int64", Number: 2},
+		}},
+	}}}
+	got, err := generateRustGRPCWrapper(
+		&parser.ServiceInfo{Name: "Catalog", IsS2S: true},
+		rustWatchEgressMethod("catalog.Item", "catalog.WatchChange"),
+		"catalog", "services", map[string]string{}, "",
+		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, newRustEgressSanitizer(files))
+	if err != nil {
+		t.Fatalf("a plain s2s WATCH over namespace-only rows must generate: %v", err)
+	}
+	for _, absent := range []string{
+		"__read_namespace",
+		"__read_principal",
+		"(spec.store_namespace)",
+		"(spec.store_principal)",
+		"std::process::abort();",
+	} {
+		if strings.Contains(got, absent) {
+			t.Fatalf("a plain s2s WATCH over namespace-only rows must carry no egress guard, found %q:\n%s", absent, got)
+		}
+	}
+}

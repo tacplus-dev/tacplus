@@ -73,6 +73,40 @@ func renderServiceIMForTest(t *testing.T) string {
 	return string(formatted)
 }
 
+// TestServiceIMInterceptorsRespectExplicitAuthorization guards against the
+// aud=kernel EventBus-publish bug (2026-09-27): a proto package can host RPCs
+// with different physical audiences (e.g. a record's own state-store RPCs,
+// mapped to kernel, alongside that same package's EventBus-publish virtual
+// service, hosted by eventbus) — audienceFromMethod's per-package heuristic
+// cannot distinguish them. Generated call sites that know their real target
+// audience (EventBus/trace/accounting publishers, the ServiceHealthState
+// query) attach their own bearer token before dialing; the blanket
+// Unary/StreamInterceptor must never mint and append a second, heuristic
+// token on top of one already present, or the wrong one can be the one a
+// downstream service honors.
+func TestServiceIMInterceptorsRespectExplicitAuthorization(t *testing.T) {
+	rendered := renderServiceIMForTest(t)
+
+	if !strings.Contains(rendered, "func hasOutgoingAuthorization(ctx context.Context) bool") {
+		t.Fatalf("service_im missing hasOutgoingAuthorization helper:\n%s", rendered)
+	}
+
+	for _, fn := range []string{"UnaryInterceptor", "StreamInterceptor"} {
+		start := strings.Index(rendered, "func (im *IdentityManager) "+fn+"(")
+		if start < 0 {
+			t.Fatalf("service_im missing %s", fn)
+		}
+		end := strings.Index(rendered[start:], "\n}\n")
+		if end < 0 {
+			t.Fatalf("could not find end of %s body", fn)
+		}
+		body := rendered[start : start+end]
+		if !strings.Contains(body, "hasOutgoingAuthorization(ctx)") {
+			t.Fatalf("%s does not check hasOutgoingAuthorization before minting:\n%s", fn, body)
+		}
+	}
+}
+
 // TestServiceIMAudienceMappingsForStatePackages verifies that when
 // AudienceMappings include state-package → state-store entries, the rendered
 // audienceFromMethod switch contains the correct case clauses mapping

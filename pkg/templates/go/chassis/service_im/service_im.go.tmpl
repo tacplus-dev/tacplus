@@ -485,6 +485,25 @@ func (im *IdentityManager) HasAuth() bool {
 	return im.k8sMinter != nil || im.cloudMinter != nil
 }
 
+// hasOutgoingAuthorization reports whether ctx already carries an
+// authorization header. Generated call sites that know their real target
+// audience (EventBus publishers, the accounting/trace publishers, the
+// ServiceHealthState query) attach their own correctly-scoped bearer token
+// before dialing; audienceFromMethod's per-PACKAGE heuristic below is a
+// fallback for hand-written code using ConnToService/ConnToServiceCtx, and
+// must never override an explicit token — a package can host RPCs with
+// different physical audiences (e.g. a record's state-store RPCs going to
+// kernel alongside that same package's EventBus-publish RPC going to
+// eventbus), so the heuristic can be wrong in exactly the cases an explicit
+// token was already supplied to work around it.
+func hasOutgoingAuthorization(ctx context.Context) bool {
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		return false
+	}
+	return len(md.Get("authorization")) > 0
+}
+
 // UnaryInterceptor returns a gRPC unary client interceptor that attaches
 // the service token to every outgoing call. The audience is resolved from
 // the target service's package in the gRPC method path.
@@ -492,6 +511,9 @@ func (im *IdentityManager) UnaryInterceptor() grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{},
 		cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		if im.k8sMinter == nil && im.cloudMinter == nil {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+		if hasOutgoingAuthorization(ctx) {
 			return invoker(ctx, method, req, reply, cc, opts...)
 		}
 		aud := audienceFromMethod(method)
@@ -511,6 +533,9 @@ func (im *IdentityManager) StreamInterceptor() grpc.StreamClientInterceptor {
 	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn,
 		method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 		if im.k8sMinter == nil && im.cloudMinter == nil {
+			return streamer(ctx, desc, cc, method, opts...)
+		}
+		if hasOutgoingAuthorization(ctx) {
 			return streamer(ctx, desc, cc, method, opts...)
 		}
 		aud := audienceFromMethod(method)

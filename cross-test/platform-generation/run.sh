@@ -14,6 +14,11 @@ set -euo pipefail
 # full testapp/build.sh — no docker, no artifact compile, no image push,
 # none of which this gate needs) against the real platform + app proto repos
 # for every service in the fleet, and asserts every one generates cleanly.
+#
+# It never writes into the live platform/testapp checkouts (2026-09-27,
+# scotty fleet-build incident follow-up): a concurrent fleet build reads
+# generated output from those same directories, so this gate copies each
+# service dir into a scratch working copy and generates there instead.
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
@@ -46,18 +51,24 @@ svc_dir() {
   printf '%s' "$PLATFORM_ROOT/services/$svc"
 }
 
-echo "==> generating with platform + app protos (real consumer repos)"
+SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/platform-generation-gate.XXXXXX")"
+trap 'rm -rf "$SCRATCH"' EXIT
+
+echo "==> generating with platform + app protos (real consumer repos, scratch copies)"
 echo "    platform: $PLATFORM_PROTO"
 echo "    app:      $APP_PROTO"
 
 FAILED=""
 for svc in $SVCS; do
-  d="$(svc_dir "$svc")"
-  if [[ ! -d "$d" ]]; then
-    echo "FAIL $svc — no such service directory: $d" >&2
+  live_d="$(svc_dir "$svc")"
+  if [[ ! -d "$live_d" ]]; then
+    echo "FAIL $svc — no such service directory: $live_d" >&2
     FAILED="$FAILED $svc"
     continue
   fi
+
+  d="$SCRATCH/$svc"
+  cp -a "$live_d" "$d"
 
   out="$(grep -E '^output-dir:' "$d/tacplus.yaml" 2>/dev/null | awk '{print $2}')"
   if [[ -n "$out" && "$out" != "." ]]; then

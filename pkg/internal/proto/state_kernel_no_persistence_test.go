@@ -77,6 +77,34 @@ func TestValidateStateConsistencyAcceptsKernelLabelledStateWithoutPersistence(t 
 	}
 }
 
+// DOES NOT FIRE. identity_snapshot: true is the one named exception in the
+// decision this rule implements ("[Kernel] keeps exactly one durable thing:
+// its OWN identity snapshot") — a kernel-labelled root marked as such may
+// carry (spec.persistence). Confirmed against the real fleet shape: kernel's
+// Identity, PrincipalState and ConfigState roots all set this and all carry
+// (spec.persistence) on some fields (platform/proto/services/kernel.proto).
+func TestValidateStateConsistencyAcceptsPersistenceOnIdentitySnapshotState(t *testing.T) {
+	dir := unimplementedStatedbProbeDir(t, kernelIdentitySnapshotProbe(
+		`Item roster = 1 [(spec.persistence) = true];`))
+	if err := ValidateStateConsistency(dir); err != nil {
+		t.Fatalf("(spec.persistence) on an identity_snapshot kernel state root must validate: %v", err)
+	}
+}
+
+// FIRES. identity_snapshot only exempts the root it is set on — a sibling
+// kernel-labelled root without it still gets the ordinary Rule 3b refusal.
+func TestValidateStateConsistencyRejectsPersistenceOnNonIdentitySnapshotKernelState(t *testing.T) {
+	dir := unimplementedStatedbProbeDir(t, kernelPersistenceProbe(`["kernel"]`,
+		`Item roster = 1 [(spec.persistence) = true];`))
+	err := ValidateStateConsistency(dir)
+	if err == nil {
+		t.Fatal("(spec.persistence) on a kernel-labelled root without identity_snapshot must still be refused")
+	}
+	if !strings.Contains(err.Error(), kernelPersistenceRefusal) {
+		t.Fatalf("refusal must name where the data belongs (%q); error = %v", kernelPersistenceRefusal, err)
+	}
+}
+
 func kernelPersistenceProbe(label, field string) string {
 	return `syntax = "proto3";
 package demo;
@@ -89,6 +117,24 @@ message Item {
 
 message DemoState {
   option (spec.service_state) = {name: "DemoState", label: ` + label + `};
+
+  ` + field + `
+}
+`
+}
+
+func kernelIdentitySnapshotProbe(field string) string {
+	return `syntax = "proto3";
+package demo;
+
+import "sys/spec.proto";
+
+message Item {
+  string id = 1;
+}
+
+message DemoState {
+  option (spec.service_state) = {name: "DemoState", label: ["kernel"], identity_snapshot: true};
 
   ` + field + `
 }

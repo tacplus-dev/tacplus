@@ -1863,6 +1863,9 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 			if val.GetRequiresArtifactOnWrite() {
 				annotations["service_state_requires_artifact_on_write"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 			}
+			if val.GetIdentitySnapshot() {
+				annotations["service_state_identity_snapshot"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+			}
 		}
 	}
 

@@ -1879,8 +1879,11 @@ extend google.protobuf.FieldOptions {
   // Placement validation: setting this on a state root whose
   // (spec.service_state).label includes "kernel" is a generation ERROR —
   // durable data belongs in stratum records ((spec.record) + (spec.record_store)),
-  // not in a kernel boundary. Unrelated to typed disk persistence, which is keyed
-  // off (spec.service_store) and grpcconfig.disk_persistence.
+  // not in a kernel boundary — UNLESS that state root also sets
+  // (spec.service_state).identity_snapshot = true, the carve-out for kernel's
+  // own identity snapshot the decision itself names. Unrelated to typed disk
+  // persistence, which is keyed off (spec.service_store) and
+  // grpcconfig.disk_persistence.
   // Can only be set on message-typed boundary fields.
   // Cannot be set on queues, topics, or priority queues.
   bool persistence = 50028;
@@ -2382,6 +2385,15 @@ message StateAnnotation {
   // sentinel, oauth, letsencrypt, operator) must NOT set this — it is only for
   // state that represents user-owned knowledge, not service configuration.
   bool requires_artifact_on_write = 6;
+  // identity_snapshot marks this state root as kernel's OWN identity snapshot
+  // (decision 2026-09-25: "[Kernel] keeps exactly one durable thing: its OWN
+  // identity snapshot — signing keys, CAs, tenant tree, grants, links,
+  // principals") rather than app data parked in a kernel-labelled boundary.
+  // A field on a state root with this set may carry (spec.persistence) even
+  // though (spec.service_state).label includes "kernel" — the one exception
+  // to Rule 3b. Only meaningful on a state root whose label includes
+  // "kernel"; setting it on any other root does nothing.
+  bool identity_snapshot = 7;
 }
 
 // ServiceStoreAnnotation marks a message as a durable key-value store.

@@ -1297,7 +1297,12 @@ func ValidateStateConsistency(inputDir string) error {
 			// Kernel holds no durable user data (decision 2026-09-25): it is
 			// in-memory coordination plus its own identity snapshot, nothing else.
 			// A boundary that needs to survive a cold start is a stratum record, so
-			// (spec.persistence) on a state root routed to kernel is refused below.
+			// (spec.persistence) on a state root routed to kernel is refused below —
+			// unless the root is itself kernel's identity snapshot, the one thing
+			// the decision says kernel does keep durably (signing keys, tenant
+			// tree, grants, links, principals), marked explicitly via
+			// (spec.service_state).identity_snapshot so the carve-out is
+			// greppable rather than inferred from message name or content.
 			isKernelLabelled := false
 			if labelAnn, hasLabel := msg.Annotations["service_state_label"]; hasLabel {
 				for _, label := range labelAnn.StringSliceValue {
@@ -1307,6 +1312,7 @@ func ValidateStateConsistency(inputDir string) error {
 					}
 				}
 			}
+			_, isIdentitySnapshot := msg.Annotations["service_state_identity_snapshot"]
 
 			for _, field := range msg.Fields {
 				// A map field cannot be a state-root boundary — boundaries are named
@@ -1484,8 +1490,9 @@ func ValidateStateConsistency(inputDir string) error {
 								"persistence cannot be set on queues, topics, or priority queues",
 							relPath, msg.Name, field.Name))
 					}
-					// Rule 3b: persistence cannot be on a kernel-labelled state root.
-					if isKernelLabelled {
+					// Rule 3b: persistence cannot be on a kernel-labelled state root,
+					// except kernel's own identity snapshot (identity_snapshot: true).
+					if isKernelLabelled && !isIdentitySnapshot {
 						errors = append(errors, fmt.Sprintf(
 							"%s: field %s.%s has (spec.persistence) on a kernel-labelled state root — "+
 								"durable data belongs in stratum records",

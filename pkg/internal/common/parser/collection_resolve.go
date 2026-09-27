@@ -160,9 +160,11 @@ func watchFieldFQN(f *model.Field, envelopePkg string) string {
 }
 
 // collectionItemBytes returns the per-item max serialized size used for SNAPSHOT
-// tier routing, mirroring the item-resolution rules the validator enforces
-// (see collection_validate.go): a streamed SNAPSHOT's output message IS the
-// item; a unary SNAPSHOT's item is its single repeated field's element. Returns
+// tier routing, sharing the item-resolution rules the validator enforces (see
+// unaryCollectionItemBytes in collection_validate.go): a streamed SNAPSHOT's
+// output message IS the item; a unary SNAPSHOT's item is its single repeated
+// field's element, resolved through that same helper so the tier the validator
+// checks and the tier the emitters render can never disagree. Returns
 // -1 (unresolved) for WATCH — whose tier is not derived from item bytes — and
 // when the item type cannot be resolved.
 func collectionItemBytes(m *MethodInfo, index map[string]*model.Message) int64 {
@@ -178,7 +180,8 @@ func collectionItemBytes(m *MethodInfo, index map[string]*model.Message) int64 {
 	}
 	repeated := repeatedFields(outMsg)
 	if len(repeated) == 1 {
-		return collection.ItemBytes(repeated[0], index)
+		_, itemBytes := unaryCollectionItemBytes(repeated[0], pkgOf(m.FullOutputType), index)
+		return itemBytes
 	}
 	return -1
 }

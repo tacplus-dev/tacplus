@@ -374,3 +374,48 @@ func TestWatch_ServerWrapper_HonorsDeclaredRevisionField(t *testing.T) {
 		t.Fatalf("the default accessor must not survive a declared revision_field:\n%s", got)
 	}
 }
+
+// A UNARY method must never render the Tier-2 collection seam, whatever tier
+// Resolved carries. The Go emitter used to ask a private isTier2SnapshotCollection
+// that omitted the ServerStreaming guard the canonical
+// parser.MethodInfo.IsTier2SnapshotCollection() carries and every other backend
+// uses, so a unary SNAPSHOT that resolved to Tier-2 generated a server-streaming
+// handler seam and wrapper for a unary RPC — code that does not compile. The
+// validator refuses that shape upstream ("declare this method
+// server-streaming"); this pins the emitter's own guard behind it.
+func TestUnarySnapshot_NeverRendersTier2Seam(t *testing.T) {
+	m := &parser.MethodInfo{
+		Name: "ListLinks", InputType: "ListLinksRequest", OutputType: "ListLinksResponse",
+		FullInputType: "catalog.ListLinksRequest", FullOutputType: "catalog.ListLinksResponse",
+		ServerStreaming: false,
+		Collection:      &parser.CollectionDescriptor{Mode: "SNAPSHOT", OrderBy: []string{"id"}, MaxItems: 100},
+		Resolved:        &collection.Resolved{Mode: "SNAPSHOT", Tier: collection.TierStream, MaxItems: 100, OrderBy: []string{"id"}},
+	}
+	if m.IsTier2SnapshotCollection() {
+		t.Fatal("fixture precondition: a unary method must not report as a Tier-2 collection")
+	}
+	svc := &parser.ServiceInfo{Name: "Catalog", IsS2S: true, Methods: []*parser.MethodInfo{m}}
+
+	got := generateGoHandlerInterface(svc, "catalog")
+	want := "ListLinks(ctx context.Context, caller *servicemanager.Caller, req *types.ListLinksRequest) (*types.ListLinksResponse, error)"
+	if !strings.Contains(got, want) {
+		t.Fatalf("unary SNAPSHOT must keep the unary handler seam.\nwant substring: %s\ngot:\n%s", want, got)
+	}
+	if strings.Contains(got, "([]*types.ListLinksResponse, error)") {
+		t.Fatalf("unary SNAPSHOT must not render the Tier-2 collection seam:\n%s", got)
+	}
+
+	wrapper := generateGRPCWrapper(svc, m, "catalog", "services", "",
+		map[string]service.AccountingInfo{}, map[string]string{}, proto.SkippedTraceTypes{}, nil)
+	if strings.Contains(wrapper, "grpc.ServerStreamingServer") {
+		t.Fatalf("unary SNAPSHOT wrapper must not take a server stream:\n%s", wrapper)
+	}
+
+	client, err := generateGrpcClientMethod(svc, m, "catalog", "services")
+	if err != nil {
+		t.Fatalf("client gen error: %v", err)
+	}
+	if strings.Contains(client, "[]*types.ListLinksResponse") {
+		t.Fatalf("unary SNAPSHOT client must not accumulate a stream into a slice:\n%s", client)
+	}
+}

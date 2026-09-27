@@ -226,16 +226,7 @@ func validateOneCollection(loc string, svc *ServiceDescriptor, m *MethodDescript
 			case 0:
 				add("response %q has no repeated field; a unary collection read must return exactly one repeated field", m.OutputType)
 			case 1:
-				if repeated[0].IsMessage {
-					itemMsg = resolveFieldMessageInPackage(repeated[0], outputPkg, index)
-					if itemMsg != nil {
-						itemBytes = collection.MaxMessageBytes(itemMsg, fieldMessagePackage(repeated[0], outputPkg), index)
-					} else {
-						itemBytes = collection.ItemBytes(repeated[0], index)
-					}
-				} else {
-					itemBytes = collection.ItemBytes(repeated[0], index)
-				}
+				itemMsg, itemBytes = unaryCollectionItemBytes(repeated[0], outputPkg, index)
 			default:
 				names := make([]string, len(repeated))
 				for i, f := range repeated {
@@ -486,6 +477,31 @@ func fieldMessagePackage(f *model.Field, parentPkg string) string {
 		return f.TypePackage
 	}
 	return parentPkg
+}
+
+// unaryCollectionItemBytes resolves the item of a unary collection read — the
+// element of the response's single repeated field — and its max serialized size.
+// It returns the item's message definition (nil for a scalar item, or a message
+// the index cannot resolve) so order_by can be validated against the same
+// definition the tier was computed from.
+//
+// The validator and ResolveCollections MUST agree on this number: the validator
+// refuses a unary method whose tier is not Tier-1, and the emitters render the
+// server-streaming Tier-2 seam off the tier ResolveCollections computed. This is
+// the one place that math runs, because when it ran twice the two copies could
+// disagree — collection.ItemBytes resolves a message field by its own
+// TypePackage or bare name only, so a same-package item (which carries no
+// TypePackage) whose bare name collides with another package's message resolved
+// to the wrong definition there while resolving correctly here. A unary method
+// the validator saw as Tier-1 then reached the Go emitter as Tier-2 and
+// generated a server-streaming wrapper for a unary RPC.
+func unaryCollectionItemBytes(f *model.Field, parentPkg string, index map[string]*model.Message) (*model.Message, int64) {
+	if f.IsMessage {
+		if itemMsg := resolveFieldMessageInPackage(f, parentPkg, index); itemMsg != nil {
+			return itemMsg, collection.MaxMessageBytes(itemMsg, fieldMessagePackage(f, parentPkg), index)
+		}
+	}
+	return nil, collection.ItemBytes(f, index)
 }
 
 func resolveFieldMessageInPackage(f *model.Field, parentPkg string, index map[string]*model.Message) *model.Message {

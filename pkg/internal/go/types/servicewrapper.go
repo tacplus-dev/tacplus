@@ -16,7 +16,6 @@ import (
 	"golang.org/x/tools/imports"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/boundaries"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/collection"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/service"
@@ -697,15 +696,6 @@ func goWatchType(fqn, servicePackage string) string {
 	return goTypeRef(fqn, simple, servicePackage)
 }
 
-// isTier2SnapshotCollection reports whether a method is a Tier-2 SNAPSHOT
-// collection read: server-streaming on the wire, but the generated seam is
-// collection-in/collection-out — the handler returns a materialized []*Item and
-// the wrapper chunks it into the stream (WS-1). Tier-1 stays unary and Tier-3
-// (cursor) is WS-2, so both fall through to the existing emit paths.
-func isTier2SnapshotCollection(m *parser.MethodInfo) bool {
-	return m.Resolved != nil && m.Resolved.Mode == "SNAPSHOT" && m.Resolved.Tier == collection.TierStream
-}
-
 // generateGoHandlerInterface generates the Handler interface for a service.
 // The interface has clean method signatures with a *servicemanager.Caller parameter
 // instead of raw gRPC types. Empty request types are omitted — the gRPC contract
@@ -732,7 +722,7 @@ func generateGoHandlerInterface(svc *parser.ServiceInfo, servicePackage string) 
 		if method.ClientStreaming && method.ServerStreaming {
 			fmt.Fprintf(&b, "\t%s(caller *servicemanager.Caller, stream grpc.BidiStreamingServer[%s, %s]) error\n",
 				method.Name, goInput, goOutput)
-		} else if isTier2SnapshotCollection(method) {
+		} else if method.IsTier2SnapshotCollection() {
 			// Tier-2 SNAPSHOT collection: the handler returns a materialized
 			// collection; the generated wrapper chunks it into the server-stream.
 			if handlerEmpty {
@@ -1104,7 +1094,7 @@ if authTok != nil {
 	func (p *{{.ServerName}}) %s(stream grpc.BidiStreamingServer[%s, %s]) error {%s%s
 		return %s
 	}`, method.Name, svc.Name, method.Name, method.Name, goInput, goOutput, checks, callerExtract, handlerCall)
-	} else if isTier2SnapshotCollection(method) {
+	} else if method.IsTier2SnapshotCollection() {
 		// Tier-2 SNAPSHOT collection: the wire is still server-streaming, but the
 		// handler returns a materialized []*Item; the wrapper chunks it into
 		// bounded stream sends (gRPC-go's Send applies flow control). Output

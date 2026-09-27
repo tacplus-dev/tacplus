@@ -134,3 +134,48 @@ func TestResolveCollections_NoAnnotationLeavesNil(t *testing.T) {
 		t.Fatalf("unannotated unary must not retry by default")
 	}
 }
+
+// TestResolveCollections_UnaryItemTierAgreesWithValidator pins the ONE piece of
+// math the validator and the emitters both depend on. The validator refuses a
+// unary SNAPSHOT that does not route to Tier-1 ("declare this method
+// server-streaming"); every emitter renders the Tier-2 server-streaming seam off
+// ResolveCollections's tier. When the two computed item bytes separately they
+// could disagree on a same-package item — which carries no TypePackage, so
+// collection.ItemBytes could only try the bare name, and the bare name in a
+// multi-package index belongs to whichever package was indexed first. A unary
+// ListLinks then passed validation as Tier-1 and reached the Go emitter as
+// Tier-2, generating a server-streaming wrapper for a unary RPC.
+func TestResolveCollections_UnaryItemTierAgreesWithValidator(t *testing.T) {
+	// Two packages define "Link". "a.Link" is indexed first, so the bare name
+	// resolves to it; the response in package "q" means its own "q.Link".
+	otherLink := msgWith("Link", model.Field{Name: "blob", Type: "bytes"})
+	ownLink := msgWith("Link", model.Field{Name: "id", Type: "int64"})
+	resp := msgWith("ListLinksResponse",
+		model.Field{Name: "links", Type: "Link", IsMessage: true, IsRepeated: true})
+	index := map[string]*model.Message{
+		"a.Link":              otherLink,
+		"Link":                otherLink,
+		"q.Link":              ownLink,
+		"q.ListLinksResponse": resp,
+		"ListLinksResponse":   resp,
+	}
+
+	svc := &ServiceInfo{Name: "Blob", IsS2S: true, Methods: []*MethodInfo{{
+		Name: "ListLinks", FullOutputType: "q.ListLinksResponse", ServerStreaming: false,
+		Collection: &CollectionDescriptor{Mode: "SNAPSHOT", OrderBy: []string{"id"}, MaxItems: 100},
+	}}}
+	ResolveCollections([]*ServiceInfo{svc}, index)
+
+	m := svc.Methods[0]
+	if m.Resolved == nil {
+		t.Fatal("Resolved must be set for an annotated method")
+	}
+	// 100 x a two-field int64 item is nowhere near InlineLimit: Tier-1, which is
+	// what the validator computes for the same method and so lets through.
+	if m.Resolved.Tier != collection.TierInline {
+		t.Fatalf("unary SNAPSHOT item resolved to Tier %d, want Tier-1 inline (the tier the validator computes for the same method); the two item-bytes computations have diverged", int(m.Resolved.Tier))
+	}
+	if m.IsTier2SnapshotCollection() {
+		t.Fatalf("a unary method must never report as a Tier-2 SNAPSHOT collection")
+	}
+}

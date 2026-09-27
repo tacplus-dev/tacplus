@@ -358,7 +358,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 				hasClientStreaming = true
 			}
 			// Tier-2/3/WATCH collection clients drain the server stream with io.EOF.
-			if isTier2SnapshotCollection(method) || method.IsTier3SnapshotCollection() || method.IsWatchCollection() {
+			if method.IsTier2SnapshotCollection() || method.IsTier3SnapshotCollection() || method.IsWatchCollection() {
 				hasCollectionStream = true
 			}
 			// Tier-3 cursor and WATCH clients return an iter.Seq2; so does the PAGE
@@ -598,7 +598,7 @@ func generateGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodInfo
 		// Bidirectional streaming — managed lifecycle with reconnection.
 		// See pkg/templates/go/types/grpcclient_bidi.go.tmpl for the body.
 		return generateGoBidiMethod(svc, method, goInput, goOutput, authRequired, goValidateRef(method.FullInputType, method.InputType, servicePackage), goValidateRef(method.FullOutputType, method.OutputType, servicePackage))
-	} else if isTier2SnapshotCollection(method) {
+	} else if method.IsTier2SnapshotCollection() {
 		// Tier-2 SNAPSHOT collection: server-streaming on the wire, but the client
 		// seam returns a materialized collection — drain the stream into a slice.
 		validateInput := goValidateRef(method.FullInputType, method.InputType, servicePackage)

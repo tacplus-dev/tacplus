@@ -228,6 +228,14 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 							if svc.IsSMBAuthority {
 								si.SmbAuthority = true
 							}
+							for _, vg := range svc.VolumeGroups {
+								si.VolumeGroups = append(si.VolumeGroups, &spec.VolumeGroupInfo{
+									Name:             vg.Name,
+									MaxBlobBytes:     vg.MaxBlobBytes,
+									ContentTypes:     append([]string(nil), vg.ContentTypes...),
+									TenantQuotaBytes: vg.TenantQuotaBytes,
+								})
+							}
 							for _, bi := range pn.Boundaries {
 								for _, rpcName := range bi.Rpcs {
 									for _, svcRpc := range si.Rpcs {

@@ -1273,6 +1273,31 @@ message SmbAnnotation {
 message SmbAuthorityAnnotation {
 }
 
+// VolumeGroupAnnotation declares one named volume group in the platform blob
+// store, owned by the service carrying the annotation. A volume group is a set
+// of build-time rules (accepted content types, per-blob size ceiling, per-tenant
+// quota) that the blob store enforces at upload; groups are never created at
+// runtime, so a service that stores blobs MUST declare its group here. The
+// annotation is repeatable: one service may declare several groups. tacplus
+// refuses duplicate group names across the whole fleet and surfaces every
+// declared group in registry.json so the operator can render the blob store's
+// config; tacplus does not implement the blob store.
+message VolumeGroupAnnotation {
+  // name is the volume group's identifier. Must be unique across the whole fleet.
+  string name = 1;
+
+  // max_blob_bytes is the largest single blob this group accepts.
+  uint64 max_blob_bytes = 2;
+
+  // content_types is the allow-list of MIME types this group accepts, e.g.
+  // "application/pdf". Each entry must be a well-formed media type (validated at
+  // build time; the runtime service still checks magic bytes per-upload).
+  repeated string content_types = 3;
+
+  // tenant_quota_bytes is the per-tenant storage quota within this group.
+  uint64 tenant_quota_bytes = 4;
+}
+
 // MethodS2SAnnotation overrides service-level defaults for a single S2S RPC.
 // Only valid on methods within a service_s2s service.
 message MethodS2SAnnotation {
@@ -2744,6 +2769,17 @@ extend google.protobuf.ServiceOptions {
   // consumer service does. Exactly one authority should be annotated.
   // Example: option (spec.smb_authority) = {};
   SmbAuthorityAnnotation smb_authority = 70021;
+
+  // volume_group declares a named blob-store volume group owned by this service
+  // — its accepted content types, per-blob size ceiling and per-tenant quota,
+  // fixed at build time. Repeatable: a service may declare more than one group.
+  // tacplus refuses duplicate group names fleet-wide and emits every group into
+  // registry.json for the operator to render into the blob store's config.
+  // Example: option (spec.volume_group) = {name: "documents",
+  //            max_blob_bytes: 52428800,
+  //            content_types: ["application/pdf", "image/jpeg"],
+  //            tenant_quota_bytes: 53687091200};
+  repeated VolumeGroupAnnotation volume_group = 70022;
 }
 
 extend google.protobuf.MethodOptions {

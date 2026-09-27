@@ -152,6 +152,14 @@ type EnumValueDescriptor struct {
 	JsonValue string // JSON serialization value from json_return_value option
 }
 
+// VolumeGroupInfo is one (spec.volume_group) declaration parsed off a service.
+type VolumeGroupInfo struct {
+	Name             string
+	MaxBlobBytes     uint64
+	ContentTypes     []string
+	TenantQuotaBytes uint64
+}
+
 // ServiceDescriptor contains service information
 type ServiceDescriptor struct {
 	Name              string
@@ -166,16 +174,17 @@ type ServiceDescriptor struct {
 	C2DSocketPath     string   // service_c2d socket_path: unix socket the daemon binds / clients dial (required, no default)
 	IsSMB             bool     // smb annotation present: this service's own instances talk over a black-box peer protocol (SPIFFE plan D7)
 	SmbRoot           spec.SmbRoot
-	IsSMBAuthority    bool     // smb_authority annotation present: this service issues per-SMB CAs + member certs (SPIFFE plan D7)
-	IsTokenMinter     bool     // token_minter annotation present: this service mints service-identity tokens
-	TokenMinterProxy  bool     // token_minter {proxy: true}: the client-reachable (C2S) mint front; bare {} is the authoritative S2S minter
-	Gateway           bool     // derived: IsC2S && !AuthDisabled
-	EventLabel        string   // value from event_label annotation (routing label for event services)
-	HostLabel         string   // value from service_s2s/service_c2s {label: "..."} — the package name of the service that hosts this vservice or trait surface
-	AuthDisabled      bool     // C2S: no token required
-	AuthServices      []string // S2S: service identities allowed to call (service-level default)
-	AuthEntitledUsers bool     // C2S: users with matching entitlements can call
-	AuthAnyUser       bool     // C2S: any authenticated user can call
+	IsSMBAuthority    bool              // smb_authority annotation present: this service issues per-SMB CAs + member certs (SPIFFE plan D7)
+	VolumeGroups      []VolumeGroupInfo // volume_group annotations: blob-store volume groups this service declares (repeatable)
+	IsTokenMinter     bool              // token_minter annotation present: this service mints service-identity tokens
+	TokenMinterProxy  bool              // token_minter {proxy: true}: the client-reachable (C2S) mint front; bare {} is the authoritative S2S minter
+	Gateway           bool              // derived: IsC2S && !AuthDisabled
+	EventLabel        string            // value from event_label annotation (routing label for event services)
+	HostLabel         string            // value from service_s2s/service_c2s {label: "..."} — the package name of the service that hosts this vservice or trait surface
+	AuthDisabled      bool              // C2S: no token required
+	AuthServices      []string          // S2S: service identities allowed to call (service-level default)
+	AuthEntitledUsers bool              // C2S: users with matching entitlements can call
+	AuthAnyUser       bool              // C2S: any authenticated user can call
 	// Synthesized is true for tacplus-generated services (state/store/mutation/
 	// opa_eval), identified by the `// tacplus:generated-service` sentinel comment.
 	// Used to distinguish them from user-defined service_s2s with empty
@@ -1046,6 +1055,24 @@ func (p *DescriptorParser) parseServiceOptions(sd protoreflect.ServiceDescriptor
 	if proto.HasExtension(opts, spec.E_SmbAuthority) {
 		if val := proto.GetExtension(opts, spec.E_SmbAuthority).(*spec.SmbAuthorityAnnotation); val != nil {
 			svc.IsSMBAuthority = true
+		}
+	}
+
+	// volume_group (repeated VolumeGroupAnnotation) — blob-store volume groups
+	// this service owns. Declared at build time only; the operator renders them
+	// into the blob store's config from registry.json. Fleet-wide uniqueness of
+	// the names and media-type syntax are checked by ValidateVolumeGroups.
+	if proto.HasExtension(opts, spec.E_VolumeGroup) {
+		for _, val := range proto.GetExtension(opts, spec.E_VolumeGroup).([]*spec.VolumeGroupAnnotation) {
+			if val == nil {
+				continue
+			}
+			svc.VolumeGroups = append(svc.VolumeGroups, VolumeGroupInfo{
+				Name:             val.GetName(),
+				MaxBlobBytes:     val.GetMaxBlobBytes(),
+				ContentTypes:     append([]string(nil), val.GetContentTypes()...),
+				TenantQuotaBytes: val.GetTenantQuotaBytes(),
+			})
 		}
 	}
 

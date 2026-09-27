@@ -1532,3 +1532,92 @@ func TestTenantScopeIgnoresHostTenantOwned(t *testing.T) {
 		}
 	}
 }
+
+// TestGenerateEmitsVolumeGroups proves registry.json carries every
+// (spec.volume_group) declaration with all four of its fields. registry.json is
+// the only place the operator reads volume groups from when it renders the blob
+// store's config, and a group absent from the config is a group no upload can
+// name, so a drop here is a silent outage for the declaring service.
+func TestGenerateEmitsVolumeGroups(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available, skipping descriptor-backed registry test")
+	}
+
+	dir := t.TempDir()
+	sysDir := filepath.Join(dir, "sys")
+	if err := os.MkdirAll(sysDir, 0o755); err != nil {
+		t.Fatalf("mkdir sys: %v", err)
+	}
+	specProto, err := os.ReadFile(filepath.Join("..", "..", "..", "proto", "sys", "spec.proto"))
+	if err != nil {
+		t.Fatalf("read spec.proto: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sysDir, "spec.proto"), specProto, 0o644); err != nil {
+		t.Fatalf("write spec.proto: %v", err)
+	}
+	svcDir := filepath.Join(dir, "svc")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("mkdir svc: %v", err)
+	}
+	protoText := `syntax = "proto3";
+
+package mydocs;
+
+import "sys/spec.proto";
+
+message Ping { string m = 1; }
+
+service DocService {
+  option (spec.service_s2s) = {auth_services: ["*"], label: "DocService"};
+  option (spec.volume_group) = {
+    name: "documents"
+    max_blob_bytes: 52428800
+    content_types: ["application/pdf", "image/jpeg"]
+    tenant_quota_bytes: 53687091200
+  };
+  rpc Get(Ping) returns (Ping);
+}
+`
+	if err := os.WriteFile(filepath.Join(svcDir, "docs.proto"), []byte(protoText), 0o644); err != nil {
+		t.Fatalf("write proto: %v", err)
+	}
+
+	dp, err := parser.NewDescriptorParser(dir)
+	if err != nil {
+		t.Fatalf("NewDescriptorParser: %v", err)
+	}
+	out := filepath.Join(dir, "out")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatalf("mkdir out: %v", err)
+	}
+
+	err = Generate(Config{
+		OutputDir: out,
+		InputDir:  dir,
+		Language:  "none",
+	}, []model.ProtoFile{{
+		Package: "mydocs",
+		RelPath: "svc/docs.proto",
+	}}, dp)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(out, "registry.json"))
+	if err != nil {
+		t.Fatalf("read registry.json: %v", err)
+	}
+	registryJSON := string(data)
+	for _, want := range []*regexp.Regexp{
+		regexp.MustCompile(`"volume_groups":`),
+		regexp.MustCompile(`"name":\s*"documents"`),
+		// uint64 serializes as a JSON string in protojson.
+		regexp.MustCompile(`"max_blob_bytes":\s*"?52428800"?`),
+		regexp.MustCompile(`"tenant_quota_bytes":\s*"?53687091200"?`),
+		regexp.MustCompile(`"content_types":\s*\[\s*"application/pdf",\s*"image/jpeg"\s*\]`),
+	} {
+		if !want.MatchString(registryJSON) {
+			t.Fatalf("registry.json missing %s:\n%s", want, registryJSON)
+		}
+	}
+}

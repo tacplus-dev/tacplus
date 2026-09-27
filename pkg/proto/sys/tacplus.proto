@@ -628,6 +628,26 @@ message ServiceInfo {
   // tenant, instead of one per configured tenant. Meaningful only when
   // tenant_owned is true. Read by the operator. Default empty.
   string pinned_tenant = 16;
+
+  // volume_groups mirrors this service's (spec.volume_group) declarations: the
+  // blob-store volume groups it owns. Read by the operator to render the blob
+  // store's group config. Group names are unique fleet-wide.
+  repeated VolumeGroupInfo volume_groups = 17;
+}
+
+// VolumeGroupInfo describes one declared blob-store volume group.
+message VolumeGroupInfo {
+  // Volume group identifier, unique across the fleet.
+  string name = 1;
+
+  // Largest single blob this group accepts.
+  uint64 max_blob_bytes = 2;
+
+  // Allow-list of MIME types this group accepts, e.g. "application/pdf".
+  repeated string content_types = 3;
+
+  // Per-tenant storage quota within this group.
+  uint64 tenant_quota_bytes = 4;
 }
 
 // VServiceInfo describes a file-level virtual service identity.

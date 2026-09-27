@@ -250,6 +250,9 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateSmbAuthority(dp); err != nil {
 		return err
 	}
+	if err := parser.ValidateVolumeGroups(dp); err != nil {
+		return err
+	}
 	if err := parser.ValidateRestPathCollisions(dp); err != nil {
 		return err
 	}

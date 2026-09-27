@@ -2128,7 +2128,7 @@ public class ServiceManager implements AutoCloseable {
 
         io.grpc.stub.StreamObserver<{{.TypeOuterClass}}.{{.TypeName}}> outbound = io.grpc.stub.ClientCalls.asyncBidiStreamingCall(
                 ebConn.newCall(method, io.grpc.CallOptions.DEFAULT
-                        .withCallCredentials(identity.callCredentials())),
+                        .withCallCredentials(identity.callCredentialsForAudience("{{.TargetService}}"))),
                 new io.grpc.stub.ClientResponseObserver<{{.TypeOuterClass}}.{{.TypeName}}, com.google.protobuf.Empty>() {
                     @Override public void beforeStart(io.grpc.stub.ClientCallStreamObserver<{{.TypeOuterClass}}.{{.TypeName}}> requestStream) {
                         requestRef.set(requestStream);
@@ -2229,7 +2229,7 @@ public class ServiceManager implements AutoCloseable {
 
         io.grpc.stub.StreamObserver<{{.TypeOuterClass}}.{{.TypeName}}> outbound = io.grpc.stub.ClientCalls.asyncBidiStreamingCall(
                 ebConn.newCall(method, io.grpc.CallOptions.DEFAULT
-                        .withCallCredentials(identity.callCredentials())),
+                        .withCallCredentials(identity.callCredentialsForAudience("{{.TargetService}}"))),
                 new io.grpc.stub.ClientResponseObserver<{{.TypeOuterClass}}.{{.TypeName}}, com.google.protobuf.Empty>() {
                     @Override public void beforeStart(io.grpc.stub.ClientCallStreamObserver<{{.TypeOuterClass}}.{{.TypeName}}> requestStream) {
                         requestRef.set(requestStream);
@@ -2329,7 +2329,7 @@ public class ServiceManager implements AutoCloseable {
 
         io.grpc.stub.StreamObserver<Trace.TraceEvent> outbound = io.grpc.stub.ClientCalls.asyncBidiStreamingCall(
                 ebConn.newCall(method, io.grpc.CallOptions.DEFAULT
-                        .withCallCredentials(identity.callCredentials())),
+                        .withCallCredentials(identity.callCredentialsForAudience("{{.TracePublisherTarget}}"))),
                 new io.grpc.stub.ClientResponseObserver<Trace.TraceEvent, com.google.protobuf.Empty>() {
                     @Override public void beforeStart(io.grpc.stub.ClientCallStreamObserver<Trace.TraceEvent> requestStream) {
                         requestRef.set(requestStream);

@@ -536,7 +536,7 @@ func TestDeclaredClientDependenciesIncludeSurfaceKind(t *testing.T) {
 			GrpcC2SClients:    []string{"gateway.TokenMint"},
 			GrpcW2SClients:    []string{"dashboard.Dashboard"},
 		},
-	})
+	}, nil)
 
 	want := []*spec.ClientDependencyInfo{
 		{
@@ -569,6 +569,69 @@ func TestDeclaredClientDependenciesIncludeSurfaceKind(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("client dependencies = %#v, want %#v", got, want)
+	}
+}
+
+// A (spec.record_read) reader dials the record query plane through a DERIVED
+// client (proto.DeriveVirtualServiceClients) — it never names the plane in its
+// own proto. The registry is what the operator's delegate walk reads to decide
+// which services a reader may delegate to, so the derived dependency must be
+// reported here too; without it letsencrypt's and blobstore's delegates omitted
+// the plane's host and every record read failed token exchange (2026-09-27).
+func TestDeclaredClientDependenciesIncludeDerivedRecordPlane(t *testing.T) {
+	planeFd := &parser.FileDescriptor{
+		Path:    "vservices/query.proto",
+		Package: "query",
+		Trait: &parser.TraitDescriptor{
+			Name:       "query",
+			Host:       "stratum",
+			S2SService: "RecordMap",
+			C2SService: "RecordQuery",
+		},
+	}
+	storeFd := &parser.FileDescriptor{
+		Path:        "services/stratum.proto",
+		Package:     "stratum",
+		ServiceName: "stratum",
+		RecordStore: true,
+	}
+	readerFd := &parser.FileDescriptor{
+		Path:        "services/letsencrypt.proto",
+		Package:     "letsencrypt",
+		RecordReads: []parser.RecordRead{{Record: "stratum.LetsEncryptCert"}},
+	}
+	allFds := []*parser.FileDescriptor{planeFd, storeFd, readerFd}
+
+	got := declaredClientDependencies([]*parser.FileDescriptor{readerFd}, allFds)
+	want := []*spec.ClientDependencyInfo{
+		{
+			SourcePackage: "letsencrypt",
+			SurfaceKind:   "s2s",
+			Service:       "query.RecordMap",
+			TargetPackage: "query",
+			TargetService: "RecordMap",
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("record reader client dependencies = %#v, want %#v", got, want)
+	}
+
+	// A service that reads no record gains nothing.
+	plainFd := &parser.FileDescriptor{Path: "services/plain.proto", Package: "plain"}
+	if deps := declaredClientDependencies([]*parser.FileDescriptor{plainFd}, allFds); len(deps) != 0 {
+		t.Fatalf("non-reader client dependencies = %#v, want none", deps)
+	}
+
+	// Declared explicitly AND derived is still one dependency.
+	bothFd := &parser.FileDescriptor{
+		Path:           "services/both.proto",
+		Package:        "both",
+		GrpcS2SClients: []string{"query.RecordMap"},
+		RecordReads:    []parser.RecordRead{{Record: "stratum.LetsEncryptCert"}},
+	}
+	deps := declaredClientDependencies([]*parser.FileDescriptor{bothFd}, allFds)
+	if len(deps) != 1 {
+		t.Fatalf("explicit + derived plane dependency = %#v, want exactly one", deps)
 	}
 }
 

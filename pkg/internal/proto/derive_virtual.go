@@ -110,39 +110,29 @@ func DeriveVirtualServiceClients(inputDir, selfPackage string) ([]tactype.GrpcEn
 	// same service. Nothing is emitted when the reader declares no record_read,
 	// so this is a no-op for every service in the fleet that predates the field.
 	if len(serviceDesc.RecordReads) > 0 {
-		var traitFd *parser.FileDescriptor
-		var traitPath string
-		recordStores := make(map[string]bool)
+		var all []*parser.FileDescriptor
 		for _, fd := range dp.GetAllFiles() {
-			if fd.RecordStore && fd.ServiceName != "" {
-				recordStores[fd.ServiceName] = true
-			}
+			all = append(all, fd)
 		}
-		var paths []string
-		for rp := range dp.GetAllFiles() {
-			paths = append(paths, rp)
-		}
-		sort.Strings(paths)
-		for _, rp := range paths {
-			fd := dp.GetAllFiles()[rp]
-			if fd.Trait == nil || fd.Trait.Host == "" || fd.Trait.S2SService == "" {
-				continue
-			}
-			if !recordStores[fd.Trait.Host] {
-				continue
-			}
-			traitFd = fd
-			traitPath = rp
-			break
-		}
+		traitFd := FindRecordPlaneTrait(all)
 		// No plane to name. ValidateRecordReadAnnotations has already refused this
 		// build with a message that says so; returning an error here too would
 		// only replace that message with a worse one.
 		if traitFd != nil {
+			traitPath := traitFd.Path
 			entries = append(entries, tactype.GrpcEntry{
 				ProtoFile:    traitPath,
 				ServiceName:  traitFd.Trait.S2SService,
 				ProtoPackage: traitFd.Package,
+				// The plane's proto package ("query") is NOT a service: the RPCs are
+				// served by the trait's host ("stratum"). TargetService is what every
+				// language's client generator and audience mapper reads to route and
+				// to mint against the PHYSICAL host rather than the path package —
+				// the same field the opa/graph/timeseries virtual clients above set.
+				// Without it Go and Java mint aud=query for /query.RecordMap/... and
+				// the token authority refuses the exchange, since no delegate is
+				// authorized for a service named "query".
+				TargetService: traitFd.Trait.Host,
 			})
 			zap.L().Info("derived record query plane client from record_read",
 				zap.String("service", selfPackage),
@@ -164,9 +154,10 @@ func DeriveVirtualServiceClients(inputDir, selfPackage string) ([]tactype.GrpcEn
 			// plane declares no c2s_service, so the name is non-empty here.
 			if readsPrivateRecord(dp, serviceDesc.RecordReads) && traitFd.Trait.C2SService != "" {
 				entries = append(entries, tactype.GrpcEntry{
-					ProtoFile:    traitPath,
-					ServiceName:  traitFd.Trait.C2SService,
-					ProtoPackage: traitFd.Package,
+					ProtoFile:     traitPath,
+					ServiceName:   traitFd.Trait.C2SService,
+					ProtoPackage:  traitFd.Package,
+					TargetService: traitFd.Trait.Host,
 				})
 				zap.L().Info("derived record query plane C2S client from a private record_read",
 					zap.String("service", selfPackage),
@@ -177,6 +168,40 @@ func DeriveVirtualServiceClients(inputDir, selfPackage string) ([]tactype.GrpcEn
 	}
 
 	return entries, nil
+}
+
+// FindRecordPlaneTrait returns the (spec.trait) whose host is a (spec.record_store)
+// — the record query plane every (spec.record_read) in a proto set resolves to.
+// Returns nil when the set declares no such trait.
+//
+// Shared with the registry emitter so the derived client and the registry node's
+// client_dependencies entry for a record reader name the same plane, package and
+// host from ONE lookup. Two independently-maintained resolutions of "which plane
+// does a record read call" is exactly the shape that let the registry omit the
+// dependency the chassis was already dialing.
+//
+// Sorted by proto path so a map-ordered caller cannot pick a different trait
+// between runs.
+func FindRecordPlaneTrait(fds []*parser.FileDescriptor) *parser.FileDescriptor {
+	recordStores := make(map[string]bool)
+	for _, fd := range fds {
+		if fd.RecordStore && fd.ServiceName != "" {
+			recordStores[fd.ServiceName] = true
+		}
+	}
+	sorted := make([]*parser.FileDescriptor, len(fds))
+	copy(sorted, fds)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
+	for _, fd := range sorted {
+		if fd.Trait == nil || fd.Trait.Host == "" || fd.Trait.S2SService == "" {
+			continue
+		}
+		if !recordStores[fd.Trait.Host] {
+			continue
+		}
+		return fd
+	}
+	return nil
 }
 
 // findAnnotatedSourceFile returns the first non-infra proto file that contains

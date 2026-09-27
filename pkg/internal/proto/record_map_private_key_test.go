@@ -210,3 +210,50 @@ option (spec.record_read) = {record: "vault.PlainRow"};
 		}
 	}
 }
+
+// A record-read client must name the plane's HOST as its target service, not
+// the plane's proto package. The package ("query") is a path segment, not a
+// service identity: Go's and Java's audienceFromMethod fall through to the path
+// package when no mapping names it, so the reader mints aud=query for
+// /query.RecordMap/... and the token authority refuses the exchange — the
+// letsencrypt/blobstore record-read PermissionDenied (2026-09-27). Rust already
+// routed to the host via the surface's host_label; TargetService is what makes
+// all three agree.
+func TestRecordReadClientTargetsThePlaneHost(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available")
+	}
+	dir := privateKeyFixture(t)
+	writeProto(t, dir, "reader.proto", `syntax = "proto3";
+
+package reader;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "reader"};
+option (spec.record_read) = {record: "vault.PlainRow"};
+option (spec.record_read) = {
+  record: "vault.SecretRow"
+  c2s: {scope: C2S_SCOPE_PRINCIPAL exposure: RPC_EXPOSURE_EXTERNAL}
+};
+`)
+
+	entries, err := DeriveVirtualServiceClients(dir, "reader")
+	if err != nil {
+		t.Fatalf("DeriveVirtualServiceClients: %v", err)
+	}
+	seen := map[string]string{}
+	for _, e := range entries {
+		seen[e.ServiceName] = e.TargetService
+	}
+	// Both halves of the plane are served by the trait's host.
+	for _, name := range []string{"RecordMap", "RecordQuery"} {
+		got, ok := seen[name]
+		if !ok {
+			t.Fatalf("no %s client was derived, got %+v", name, entries)
+		}
+		if got != "stratum" {
+			t.Errorf("%s client TargetService = %q, want the trait host %q", name, got, "stratum")
+		}
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"text/template"
@@ -138,7 +139,7 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 				protoPackages := declaredProtoPackages(entry.fds)
 				pn.ProtoPackages = protoPackages
 				pn.Vservices = declaredVServices(entry.fds)
-				pn.ClientDependencies = declaredClientDependencies(entry.fds)
+				pn.ClientDependencies = declaredClientDependencies(entry.fds, allFds)
 				eventPublishes, err := CollectEventPublishProtos(entry.fds, allFds)
 				if err != nil {
 					return nil, fmt.Errorf("collecting event_publish metadata for %s: %w", node.fullPath, err)
@@ -630,9 +631,30 @@ func declaredVServices(fds []*parser.FileDescriptor) []*spec.VServiceInfo {
 	return out
 }
 
-func declaredClientDependencies(fds []*parser.FileDescriptor) []*spec.ClientDependencyInfo {
+// declaredClientDependencies renders a leaf's client dependencies. fds are the
+// leaf's own descriptors; allFds is the whole proto set, needed to resolve the
+// record query plane a (spec.record_read) dials (the plane is declared in the
+// trait's file, not the reader's).
+func declaredClientDependencies(fds, allFds []*parser.FileDescriptor) []*spec.ClientDependencyInfo {
 	var out []*spec.ClientDependencyInfo
+	// A (spec.record_read) names records, never the plane that serves them; the
+	// client is DERIVED (proto.DeriveVirtualServiceClients). The registry is what
+	// the operator's delegate walk reads to decide which services a reader may
+	// delegate to, so a derived client that never appears here leaves the reader
+	// unauthorized for the plane's host at runtime — the letsencrypt/blobstore
+	// record-read PermissionDenied. Resolved through the SAME helper the client
+	// derivation uses so the two cannot disagree about which plane that is.
+	recordPlane := proto.FindRecordPlaneTrait(allFds)
 	for _, fd := range fds {
+		if recordPlane != nil && len(fd.RecordReads) > 0 {
+			// Not when the reader ALSO declares the plane explicitly: the derivation
+			// unions rather than replaces there too (MergeGrpcEntries), and one
+			// dependency must appear once.
+			ref := recordPlane.Package + "." + recordPlane.Trait.S2SService
+			if !slices.Contains(fd.GrpcS2SClients, ref) {
+				out = append(out, clientDependencyInfos(fd.Package, "s2s", []string{ref})...)
+			}
+		}
 		if fd.AllGrpcS2SClients {
 			out = append(out, &spec.ClientDependencyInfo{
 				SourcePackage: fd.Package,

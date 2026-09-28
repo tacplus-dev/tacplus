@@ -100,6 +100,13 @@ type goMcpTool struct {
 	NamespaceField     string
 	StoreNamespaceRows []goMcpRowField
 
+	// OwnerDefaultGuard is the (spec.owner_default) refusal rendered by the same
+	// helper the gRPC wrapper calls, "" when nothing is declared or nothing is
+	// contradicted. It rides the request-validation seam, immediately after the
+	// (spec.principal)/(spec.namespace) stamps, for the reason stated there:
+	// that is the only point at which both halves of the comparison exist.
+	OwnerDefaultGuard string
+
 	// Page is the PAGE-collection window, nil for every other rpc. A PAGE tool
 	// takes page_size/page_token as ordinary arguments and calls the same
 	// three-argument handler the gRPC PAGE wrapper calls.
@@ -167,6 +174,10 @@ func goMcpTools(svc *parser.ServiceInfo, servicePackage string, san *egressSanit
 		if err != nil {
 			return nil, fmt.Errorf("%s.%s: %w", svc.Name, m.Name, err)
 		}
+		ownerDefaultGuard, err := goOwnerDefaultGuard(m, san, servicePackage, "s.caller", goMcpOwnerDefaultDeny(svc.Name))
+		if err != nil {
+			return nil, fmt.Errorf("%s.%s: %w", svc.Name, m.Name, err)
+		}
 		empty := goMcpEmptyRequest(m)
 		var scalars []goMcpScalarArg
 		if !empty {
@@ -188,6 +199,7 @@ func goMcpTools(svc *parser.ServiceInfo, servicePackage string, san *egressSanit
 			StorePrincipalRows: san.mcpRowFields(m.FullOutputType, servicePackage, "store_principal"),
 			NamespaceField:     san.annotatedStringField(m.FullInputType, servicePackage, "namespace"),
 			StoreNamespaceRows: san.mcpRowFields(m.FullOutputType, servicePackage, "store_namespace"),
+			OwnerDefaultGuard:  ownerDefaultGuard,
 			Page:               goMcpPageOf(m, servicePackage),
 		})
 	}
@@ -237,7 +249,33 @@ func goMcpToolGeneratable(svc *parser.ServiceInfo, m *parser.MethodInfo, service
 		return fmt.Errorf("%s.%s is an MCP tool taking %s, whose field %q carries (spec.store_epoch), but the stamp is rendered by the gRPC wrapper's write path and not by MCP dispatch; a tool call of this write would leave the store epoch unstamped",
 			svc.Name, m.Name, m.FullInputType, f)
 	}
+	// (spec.owner_default): the same decision the gRPC wrapper makes, from the
+	// same helper — an MCP rpc IS verb-classified (ClassifyMethods runs over
+	// every method of every service with no IsMcp gate), so a tool has the
+	// read/write access the owner rights are compared against exactly as its
+	// gRPC twin does. goMcpToolDispatch renders the guard next to the
+	// (spec.principal) stamp, so what is refused here is only what that guard
+	// cannot be rendered against: a request shape with no validation seam at
+	// which the caller can be compared to the row's principal. That is the same
+	// set generateServiceWrapper refuses, less the streaming and non-PAGE
+	// collection shapes this seam has already refused above.
+	guard, err := goOwnerDefaultGuard(m, san, servicePackage, "s.caller", goMcpOwnerDefaultDeny(svc.Name))
+	if err != nil {
+		return fmt.Errorf("%s.%s must not be generated as an MCP tool: %w", svc.Name, m.Name, err)
+	}
+	if guard != "" && (goMcpEmptyRequest(m) || m.IsPageCollection()) {
+		return fmt.Errorf("%s.%s is an MCP tool touching a type whose (spec.owner_default) contradicts its access, but its request shape has no validation seam at which the caller can be compared to the row's principal",
+			svc.Name, m.Name)
+	}
 	return nil
+}
+
+// goMcpOwnerDefaultDeny is this seam's refusal statement, which the shared
+// owner_default guard renders its message into. An MCP dispatch reports a denial
+// as a tool error rather than as a transport error, the way every other refusal
+// in this file does.
+func goMcpOwnerDefaultDeny(serviceName string) string {
+	return "\t\treturn " + goMcpPrefix(serviceName) + "ToolError(status.Error(codes.PermissionDenied, %s)), nil\n"
 }
 
 // goMcpPageOf resolves the PAGE window of a collection rpc, or nil when the rpc
@@ -913,6 +951,10 @@ func (s *%[5]s) %[1]s(ctx context.Context, arguments json.RawMessage) (*mcp.Call
 			b.WriteString(goMcpRequestScopeBlock(prefix, t.Method.Name, t.NamespaceField,
 				"namespace", "GetNamespace", "an authenticated caller carrying a namespace claim", "the authenticated caller's namespace"))
 		}
+		// (spec.owner_default): refuse the access the row's owner does not hold,
+		// from the gRPC wrapper's own helper and in the wrapper's own order —
+		// after the stamps, because the comparison needs the bound principal.
+		b.WriteString(t.OwnerDefaultGuard)
 	}
 
 	// PAGE: the same three-argument handler the gRPC PAGE wrapper calls, with

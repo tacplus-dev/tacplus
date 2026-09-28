@@ -260,7 +260,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			// than under-enforce silently, exactly as the (spec.store_principal)
 			// read filter does for the same shapes. Twin of the Rust wrapper's
 			// check, refusing the same set for the same reasons.
-			ownerDefaultGuard, err := goOwnerDefaultGuard(method, san, info.Package)
+			ownerDefaultGuard, err := goOwnerDefaultGuard(method, san, info.Package, "caller", goOwnerDefaultGrpcDeny)
 			if err != nil {
 				return err
 			}
@@ -1701,7 +1701,7 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 	// (spec.owner_default): refuse the access the row's owner does not hold.
 	// The generation-time refusal for every shape that cannot host this check
 	// has already fired in generateServiceWrapper, so the error is dead here.
-	if g, err := goOwnerDefaultGuard(method, san, servicePackage); err == nil {
+	if g, err := goOwnerDefaultGuard(method, san, servicePackage, "caller", goOwnerDefaultGrpcDeny); err == nil {
 		callerExtract += g
 	}
 

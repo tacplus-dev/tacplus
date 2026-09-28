@@ -5,6 +5,7 @@ package types
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
@@ -83,17 +84,21 @@ func (es *egressSanitizer) ownerDefaultTypes(method *parser.MethodInfo, serviceP
 // auth path. Absent, empty, UNSPECIFIED or SELF_ONLY is fail-closed to self —
 // the caller may act only as its own principal — which is what scopes an
 // owner_default refusal to the owner instead of to everybody.
-func goPrincipalScopeLocal(indent string) string {
+func goPrincipalScopeLocal(indent, callerExpr string) string {
 	return fmt.Sprintf(`%[1]s// (spec.principal_scope): the width of the caller's authority over principals.
 %[1]s__principalScope := ""
-%[1]sif caller != nil {
-%[1]s	__principalScope = caller.Token().GetServiceEntitlements().GetPrincipalScope()
+%[1]sif %[2]s != nil {
+%[1]s	__principalScope = %[2]s.Token().GetServiceEntitlements().GetPrincipalScope()
 %[1]s}
 %[1]s__scopeIsSelf := __principalScope == "" ||
 %[1]s	__principalScope == "PRINCIPAL_SCOPE_SELF_ONLY" ||
 %[1]s	__principalScope == "PRINCIPAL_SCOPE_UNSPECIFIED"
-`, indent)
+`, indent, callerExpr)
 }
+
+// goOwnerDefaultGrpcDeny is the gRPC wrapper's own refusal statement, which a
+// unary handler returns as (nil, status).
+const goOwnerDefaultGrpcDeny = "\t\treturn nil, status.Error(codes.PermissionDenied, %s)\n"
 
 // goOwnerDefaultGuard renders the refusal the wrapper emits when the method's
 // access contradicts the owner rights of a type it touches, or "" when nothing
@@ -119,7 +124,12 @@ func goPrincipalScopeLocal(indent string) string {
 // matching how the principal read filter refuses to under-enforce. So is a write
 // refusal on a request that carries no (spec.principal) field: without one the
 // wrapper cannot tell whose row is being written and must not guess.
-func goOwnerDefaultGuard(method *parser.MethodInfo, san *egressSanitizer, servicePkg string) (string, error) {
+// callerExpr is the expression naming the verified Caller at the seam being
+// rendered ("caller" in the gRPC wrapper, "s.caller" in MCP dispatch), and
+// denyFmt is that seam's own refusal statement with one %s for the quoted
+// message. Everything else — which accesses are refused, and what the refusal is
+// scoped by — is the same decision at both seams, which is why both call this.
+func goOwnerDefaultGuard(method *parser.MethodInfo, san *egressSanitizer, servicePkg, callerExpr, denyFmt string) (string, error) {
 	rights := san.ownerDefaultTypes(method, servicePkg)
 	if len(rights) == 0 {
 		return "", nil
@@ -143,8 +153,7 @@ func goOwnerDefaultGuard(method *parser.MethodInfo, san *egressSanitizer, servic
 		return "", nil
 	}
 	named := strings.Join(refused, ", ")
-	deny := fmt.Sprintf(`		return nil, status.Error(codes.PermissionDenied, "%s: (spec.owner_default) on %s denies the owner this operation")
-`, method.Name, named)
+	deny := fmt.Sprintf(denyFmt, strconv.Quote(fmt.Sprintf("%s: (spec.owner_default) on %s denies the owner this operation", method.Name, named)))
 
 	if method.Class.Access == verbs.AccessRead {
 		// A read the owner may not make. There is no row principal to compare:
@@ -154,7 +163,7 @@ func goOwnerDefaultGuard(method *parser.MethodInfo, san *egressSanitizer, servic
 	// (spec.owner_default): %s forbids this access for the row owner.
 %s	if __scopeIsSelf {
 %s	}
-`, named, goPrincipalScopeLocal("\t"), deny), nil
+`, named, goPrincipalScopeLocal("\t", callerExpr), deny), nil
 	}
 
 	pf := san.annotatedStringField(method.FullInputType, servicePkg, "principal")
@@ -162,15 +171,15 @@ func goOwnerDefaultGuard(method *parser.MethodInfo, san *egressSanitizer, servic
 		return "", fmt.Errorf("%s writes a type declaring (spec.owner_default) with write:false, but %s carries no (spec.principal) field naming the principal being written, so the wrapper cannot tell the owner's write from anyone else's", method.Name, method.FullInputType)
 	}
 	return fmt.Sprintf(`
-	// (spec.owner_default): %s forbids this access for the row owner.
-	// req.%s is the row's principal — (spec.principal) bound it to the
+	// (spec.owner_default): %[1]s forbids this access for the row owner.
+	// req.%[2]s is the row's principal — (spec.principal) bound it to the
 	// authenticated subject just above — so an equal subject is the owner
 	// writing its own row. A wider (spec.principal_scope) is not.
-%s	__odCaller := ""
-	if caller != nil {
-		__odCaller = caller.Token().GetSubject()
+%[3]s	__odCaller := ""
+	if %[4]s != nil {
+		__odCaller = %[4]s.Token().GetSubject()
 	}
-	if __scopeIsSelf && req.%s == __odCaller {
-%s	}
-`, named, toGoFieldName(pf), goPrincipalScopeLocal("\t"), toGoFieldName(pf), deny), nil
+	if __scopeIsSelf && req.%[2]s == __odCaller {
+%[5]s	}
+`, named, toGoFieldName(pf), goPrincipalScopeLocal("\t", callerExpr), callerExpr, deny), nil
 }

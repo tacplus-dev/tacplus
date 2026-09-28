@@ -10,6 +10,7 @@ import (
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/collection"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
 	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/verbs"
 )
 
 // The Go MCP dispatch seam. An RPC_PRINCIPAL_MCP rpc is not gRPC-callable
@@ -387,5 +388,155 @@ func TestGoMcpPageToolSchemaStatesTheWindow(t *testing.T) {
 	}
 	if pt, _ := props["page_token"].(map[string]any); pt == nil {
 		t.Fatalf("page_token is not a tool argument:\n%s", tools[0].Schema)
+	}
+}
+
+// (spec.owner_default) on the MCP path. An MCP rpc IS verb-classified — nothing
+// gates ClassifyMethods on IsMcp — so this seam makes the SAME decision the gRPC
+// wrapper makes, from the same helper: CREATE is exempt, a permitted access
+// emits nothing, and a contradicted one renders the wrapper's own guard. Before
+// this the seam rendered nothing at all, so a contradicted write was served as a
+// tool while its gRPC twin was refused.
+
+// goMcpOwnerDefaultSanitizer indexes a Note row whose owner may read but not
+// write it, plus the two request shapes the tool reaches it through.
+func goMcpOwnerDefaultSanitizer() *egressSanitizer {
+	ann := map[string]model.AnnotationValue{
+		"owner_default":       {Type: model.AnnotationTypeBool, BoolValue: true},
+		"owner_default_read":  {Type: model.AnnotationTypeBool, BoolValue: true},
+		"owner_default_write": {Type: model.AnnotationTypeBool, BoolValue: false},
+	}
+	principal := map[string]model.AnnotationValue{"principal": {Type: model.AnnotationTypeBool, BoolValue: true}}
+	storePrincipal := map[string]model.AnnotationValue{"store_principal": {Type: model.AnnotationTypeBool, BoolValue: true}}
+	return newEgressSanitizer([]model.ProtoFile{{Package: "note", Messages: []model.Message{
+		{Name: "Note", Annotations: ann, Fields: []model.Field{
+			{Name: "note_id", Type: "string", Number: 1},
+			{Name: "owner", Type: "string", Number: 2, Annotations: storePrincipal},
+		}},
+		{Name: "NoteRequest", Fields: []model.Field{
+			{Name: "note_id", Type: "string", Number: 1},
+			{Name: "owner", Type: "string", Number: 2, Annotations: principal},
+		}},
+		{Name: "BareNoteRequest", Fields: []model.Field{
+			{Name: "note_id", Type: "string", Number: 1},
+		}},
+		{Name: "NoteResponse", Fields: []model.Field{
+			{Name: "note", Type: "Note", Number: 1, IsMessage: true},
+		}},
+	}}})
+}
+
+// goMcpOwnerDefaultService publishes one MCP tool over the Note row, plus the
+// carrier the synthesizer would have injected for it.
+func goMcpOwnerDefaultService(name string, class *verbs.Classification, input string) *parser.ServiceInfo {
+	tool := &parser.MethodInfo{
+		Name:           name,
+		InputType:      input,
+		OutputType:     "NoteResponse",
+		FullInputType:  "note." + input,
+		FullOutputType: "note.NoteResponse",
+		IsMcp:          true,
+		McpToolName:    "the_tool",
+		Comment:        name + " touches a row whose owner rights are declared.",
+		Class:          class,
+	}
+	carrier := &parser.MethodInfo{
+		Name:            parser.McpCarrierRpcName("Notes"),
+		InputType:       "McpRequest",
+		OutputType:      "McpResponse",
+		FullInputType:   "mcp.McpRequest",
+		FullOutputType:  "mcp.McpResponse",
+		ClientStreaming: true,
+		ServerStreaming: true,
+	}
+	return &parser.ServiceInfo{
+		Name:       "Notes",
+		HasMcpRpcs: true,
+		Methods:    []*parser.MethodInfo{tool, carrier},
+	}
+}
+
+func goMcpOwnerDefaultRender(svc *parser.ServiceInfo) (string, error) {
+	p := goMcpTestParams()
+	p.PackageName = "note"
+	p.ServicePackage = "note"
+	p.TypesModulePath = "example.com/mod/types/svc/note"
+	return generateGoMcpDispatch(svc, p, goMcpOwnerDefaultSanitizer())
+}
+
+// A CREATE is exempt by construction — a row that does not exist yet has no
+// owner for the option to speak about — and so is a READ the owner holds.
+func TestGoMcpDispatchGeneratesAnExemptOwnerDefaultTool(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		class *verbs.Classification
+	}{
+		{"CreateNote", &verbs.Classification{Verb: "Create", Pattern: verbs.PatternCreate, Access: verbs.AccessWrite}},
+		{"GetNote", &verbs.Classification{Verb: "Get", Pattern: verbs.PatternGet, Access: verbs.AccessRead}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rendered, err := goMcpOwnerDefaultRender(goMcpOwnerDefaultService(tc.name, tc.class, "NoteRequest"))
+			if err != nil {
+				t.Fatalf("an MCP tool exempt from (spec.owner_default) was refused generation: %v", err)
+			}
+			if !strings.Contains(rendered, "func (s *NotesMcpSurface) call"+tc.name+"(") {
+				t.Fatalf("no dispatch was emitted for the tool:\n%s", rendered)
+			}
+			if strings.Contains(rendered, "spec.owner_default") {
+				t.Fatalf("%s emitted an owner_default refusal it is exempt from:\n%s", tc.name, rendered)
+			}
+		})
+	}
+}
+
+// An UPDATE of a {write:false} type is what the option governs, and the MCP
+// dispatch renders the wrapper's own guard for it rather than serving the tool
+// unguarded: scoped to the owner, at the request-validation seam.
+func TestGoMcpDispatchGuardsAContradictedOwnerDefaultWrite(t *testing.T) {
+	rendered, err := goMcpOwnerDefaultRender(goMcpOwnerDefaultService("UpdateNote",
+		&verbs.Classification{Verb: "Update", Pattern: verbs.PatternUpdate, Access: verbs.AccessWrite}, "NoteRequest"))
+	if err != nil {
+		t.Fatalf("generate Go MCP dispatch: %v", err)
+	}
+	for _, want := range []string{
+		`s.caller.Token().GetServiceEntitlements().GetPrincipalScope()`,
+		`if __scopeIsSelf && req.Owner == __odCaller {`,
+		`notesMcpToolError(status.Error(codes.PermissionDenied, "UpdateNote: (spec.owner_default) on Note (write) denies the owner this operation")), nil`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("MCP dispatch missing the owner_default guard %q:\n%s", want, rendered)
+		}
+	}
+	// The guard belongs after the (spec.principal) stamp — that is the only point
+	// at which both halves of the comparison exist — and before the handler call.
+	stamp := strings.Index(rendered, "req.Owner = __principal")
+	guard := strings.Index(rendered, "if __scopeIsSelf && req.Owner == __odCaller {")
+	call := strings.Index(rendered, "s.handler.UpdateNote(sanitizeContext(ctx), s.caller, req)")
+	if stamp < 0 || call < 0 || stamp > guard || guard > call {
+		t.Fatalf("the guard is not at the request-validation seam (stamp=%d guard=%d call=%d):\n%s", stamp, guard, call, rendered)
+	}
+}
+
+// The refusals that remain are the ones the guard genuinely cannot be rendered
+// for: a verb that did not classify at all, and a write whose request names no
+// principal to compare the caller against.
+func TestGoMcpDispatchRefusesAnUnenforceableOwnerDefault(t *testing.T) {
+	update := &verbs.Classification{Verb: "Update", Pattern: verbs.PatternUpdate, Access: verbs.AccessWrite}
+	for _, tc := range []struct {
+		name  string
+		class *verbs.Classification
+		input string
+		match string
+	}{
+		{"unclassified", nil, "NoteRequest", "did not classify"},
+		{"no request principal", update, "BareNoteRequest", "(spec.principal)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := goMcpOwnerDefaultRender(goMcpOwnerDefaultService("UpdateNote", tc.class, tc.input)); err == nil {
+				t.Fatal("an MCP tool whose (spec.owner_default) cannot be enforced generated dispatch anyway")
+			} else if !strings.Contains(err.Error(), tc.match) {
+				t.Fatalf("unexpected refusal: %v", err)
+			}
+		})
 	}
 }

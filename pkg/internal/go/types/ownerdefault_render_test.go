@@ -111,7 +111,7 @@ func TestGoOwnerDefault_PermittedReadEmitsNothing(t *testing.T) {
 func TestGoOwnerDefault_WriteWithoutRequestPrincipalIsAGenerationError(t *testing.T) {
 	_, err := goOwnerDefaultGuard(
 		goOwnerDefaultMethod("UpdateTask", verbs.PatternUpdate, verbs.AccessWrite, "BareUpdateRequest"),
-		goOwnerDefaultSanitizer(), "tasks")
+		goOwnerDefaultSanitizer(), "tasks", "caller", goOwnerDefaultGrpcDeny)
 	if err == nil {
 		t.Fatal("expected a generation error for a write refusal with no (spec.principal) field to compare against")
 	}
@@ -124,7 +124,7 @@ func TestGoOwnerDefault_WriteWithoutRequestPrincipalIsAGenerationError(t *testin
 func TestGoOwnerDefault_UnclassifiedVerbIsAGenerationError(t *testing.T) {
 	m := goOwnerDefaultMethod("UpdateTask", verbs.PatternUpdate, verbs.AccessWrite, "UpdateTaskRequest")
 	m.Class = nil
-	if _, err := goOwnerDefaultGuard(m, goOwnerDefaultSanitizer(), "tasks"); err == nil {
+	if _, err := goOwnerDefaultGuard(m, goOwnerDefaultSanitizer(), "tasks", "caller", goOwnerDefaultGrpcDeny); err == nil {
 		t.Fatal("expected a generation error for an unclassified verb touching an owner_default type")
 	}
 }

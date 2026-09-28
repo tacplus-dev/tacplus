@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
 )
 
 // residency_validate_test.go in the parser package pins each rule at the

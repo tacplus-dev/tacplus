@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
 )
 
 // forbiddenAnnotationRune reports why r may not appear in an annotation string,

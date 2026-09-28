@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/tmplutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/tmplutil"
 )
 
 // An outgoing S2S call's bearer token must be minted for the service that

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
 )
 
 // The Python emitter's assert_required switch listed "string" and four integer

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
 )
 
 // deletedField is a well-formed (spec.deleted_flag) field: a non-repeated bool.

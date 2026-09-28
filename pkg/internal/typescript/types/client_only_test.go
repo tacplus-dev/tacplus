@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/packages"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/packages"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
 )
 
 func TestTypeScriptClientOnlyRejectsExplicitServiceSurfaces(t *testing.T) {

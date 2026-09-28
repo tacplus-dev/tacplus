@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 func TestWriteLibTemplatesAlwaysWritesGrpcServer(t *testing.T) {

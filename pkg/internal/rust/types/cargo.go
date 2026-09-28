@@ -12,10 +12,10 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/packages"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/tmplutil"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/packages"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/tmplutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 // cargoLibCrate describes a workspace lib crate to add as a dependency.

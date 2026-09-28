@@ -8,7 +8,7 @@ import (
 	"testing"
 	"text/template"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 // The owner-declared routing envelope is one boundary with five renderings, and

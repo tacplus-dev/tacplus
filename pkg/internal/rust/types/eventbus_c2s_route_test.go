@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	protogen "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
+	protogen "gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
 )
 
 func TestRecordC2SEmitsPhysicalEventBusRoute(t *testing.T) {

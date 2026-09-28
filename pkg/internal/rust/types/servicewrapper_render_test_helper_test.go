@@ -5,9 +5,9 @@ package types
 import (
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/service"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/service"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
 )
 
 // mustGenerateRustGRPCWrapper renders one method wrapper for a test and fails

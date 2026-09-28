@@ -2,7 +2,7 @@
 # Layers the tacplus binary on top of the pre-built base image.
 # Base image contains all build tools — this just adds the binary.
 
-ARG BASE_IMAGE=registry.gitlab.com/secondstarcavalier/schematic/tacplus/tacplus-base:latest
+ARG BASE_IMAGE=registry.gitlab.com/seabeam/schematic/tacplus/tacplus-base:latest
 FROM ${BASE_IMAGE}
 
 ARG BUILD_DATE

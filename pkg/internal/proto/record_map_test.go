@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
 )
 
 // Protoc-free pin for the record-key check (NEW-16): the descriptor-backed test

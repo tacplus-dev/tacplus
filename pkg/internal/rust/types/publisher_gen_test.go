@@ -5,7 +5,7 @@ package types
 import (
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/eventbus"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/eventbus"
 )
 
 func TestExplicitPublisherEntryUsesCanonicalPath(t *testing.T) {

@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"strings"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
 )
 
 // The MCP dispatch seam (BIG GOAL 8 Phase 0, Java).
@@ -642,7 +642,7 @@ func javaMcpFileHeader(serviceName string, p javaMcpFileParams) string {
 //
 // IMPORTANT FOR AGENTS: Do NOT modify this generated code.
 // If changes are needed, update the tacplus compiler at:
-// gitlab.com/secondstarcavalier/schematic/tacplus
+// gitlab.com/seabeam/schematic/tacplus
 //
 // Source: %[5]s
 

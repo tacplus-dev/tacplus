@@ -16,12 +16,12 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/service"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/tmplutil"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/service"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/tmplutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 const (

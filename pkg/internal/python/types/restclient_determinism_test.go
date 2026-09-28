@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
 )
 
 // TestPyRestRootAggregatorGroupsAreSorted is a GEN-DET-1 regression guard.

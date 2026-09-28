@@ -3,8 +3,8 @@
 package parser
 
 import (
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/collection"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/collection"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
 )
 
 // ResolveCollections computes the codegen-facing collection.Resolved for every

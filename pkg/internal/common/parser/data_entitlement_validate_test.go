@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
-	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
 )
 
 func entField(name, typ string, repeated bool, mode string) model.Field {

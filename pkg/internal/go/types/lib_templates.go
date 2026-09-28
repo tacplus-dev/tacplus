@@ -13,14 +13,14 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/boundaries"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/keepaliveconst"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
-	commonspiffe "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/spiffe"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/boundaries"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/keepaliveconst"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	commonspiffe "gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/spiffe"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 // amServiceRPC is the per-service RPC-enum accessor data the am.go.tmpl

@@ -16,8 +16,8 @@ import (
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
-	pkgproto "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/proto"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	pkgproto "gitlab.com/seabeam/schematic/tacplus/pkg/proto"
 )
 
 // ServiceEntry is a single service entry in the registry.

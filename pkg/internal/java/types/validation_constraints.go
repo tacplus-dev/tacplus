@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
 )
 
 func writeJavaEnumDefinedValidation(b *strings.Builder, msg model.Message, field model.Field, javaFieldName, getterName string) error {

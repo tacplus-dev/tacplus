@@ -5,8 +5,8 @@ package proto
 import (
 	"regexp"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
 )
 
 // Match any same-line prefix with no slash (so inline `{ option` matches but `// option` does not) so a commented-out

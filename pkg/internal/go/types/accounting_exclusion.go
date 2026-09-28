@@ -5,8 +5,8 @@ package types
 import (
 	"strings"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/eventbus"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/service"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/eventbus"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/service"
 )
 
 // accountingSelfPublishRPC returns the proto package, service and RPC that

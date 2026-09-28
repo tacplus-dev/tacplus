@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
 )
 
 // The Go (spec.store_namespace) / (spec.store_principal) / (spec.record).private

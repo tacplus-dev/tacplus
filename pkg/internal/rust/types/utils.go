@@ -9,9 +9,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/header"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/consts"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
 )
 
 // generateRustUtils generates the utils/ directory with mod.rs, utils.rs, and validation.rs

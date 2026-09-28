@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/tacplusyaml"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/tacplusyaml"
 )
 
 func TestEffectiveSources(t *testing.T) {

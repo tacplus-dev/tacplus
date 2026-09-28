@@ -7,10 +7,10 @@ import (
 	"io/fs"
 	"strings"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/tmplutil"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/tmplutil"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 // rustKeywords is the set of Rust reserved keywords that must be escaped with r# prefix.

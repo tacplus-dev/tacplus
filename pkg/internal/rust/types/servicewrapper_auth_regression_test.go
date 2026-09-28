@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/service"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/service"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 // loadRustLibTemplate reads a template from outside the rust/types subtree

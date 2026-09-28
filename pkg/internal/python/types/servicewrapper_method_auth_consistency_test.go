@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/service"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/service"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
 )
 
 // service_manager.py calls <wrapper>.register_method_auth(authorizer) whenever

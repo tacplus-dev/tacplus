@@ -10,11 +10,11 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
-	protogen "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
-	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	protogen "gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
 )
 
 // ServiceInfo holds information about a detected service for wrapper generation.

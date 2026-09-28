@@ -5,7 +5,7 @@ package types
 import (
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
 )
 
 // The dispatch end of auto-exposure: an rpc marked IsAutoMcp by the parser

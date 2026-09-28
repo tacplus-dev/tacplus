@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/tmplutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/tmplutil"
 )
 
 // The generated state-singleton Fetch must apply the fetched type's proto

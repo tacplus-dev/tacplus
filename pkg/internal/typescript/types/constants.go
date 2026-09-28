@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
 )
 
 // NOTE: generateConstants has been consolidated into writeConstants() in parser.go

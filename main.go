@@ -2,7 +2,7 @@
 
 package main
 
-import "gitlab.com/secondstarcavalier/schematic/tacplus/cmd"
+import "gitlab.com/seabeam/schematic/tacplus/cmd"
 
 func main() {
 	cmd.Execute()

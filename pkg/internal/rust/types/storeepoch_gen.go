@@ -5,7 +5,7 @@ package types
 import (
 	"fmt"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
 )
 
 // The Rust (spec.store_epoch) stamp — the third implementation of the seam Java

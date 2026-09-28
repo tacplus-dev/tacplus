@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/collection"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/verbs"
-	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/collection"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/verbs"
+	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
 )
 
 // ProtoInfo holds parsed information from a proto file

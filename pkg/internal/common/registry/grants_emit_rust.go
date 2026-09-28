@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
+	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
 )
 
 func init() { registerGrantsEmitter("rust", emitRustGrantsHelper) }

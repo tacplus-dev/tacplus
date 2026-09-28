@@ -6,5 +6,5 @@ var (
 	// commit hash; a local or unstamped build reads "local".
 	GitSha      = "local"
 	BuildID     = "local"
-	ProjectPath = "secondstarcavalier/schematic/tacplus"
+	ProjectPath = "seabeam/schematic/tacplus"
 )

@@ -14,15 +14,15 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/buildinfo"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/boundaries"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/eventbus"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/keepaliveconst"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/service"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
-	stateproto "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/buildinfo"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/boundaries"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/eventbus"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/keepaliveconst"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/service"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	stateproto "gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
 )
 
 // grpcServiceEntry holds per-service data for handler and service_manager templates.

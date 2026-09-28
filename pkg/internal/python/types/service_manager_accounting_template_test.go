@@ -11,7 +11,7 @@ import (
 	"testing"
 	"text/template"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/tmplutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/tmplutil"
 )
 
 // pyCompileCheck fails the test if src is not syntactically valid Python.

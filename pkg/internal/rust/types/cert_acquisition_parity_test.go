@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 // T8b: Rust obtains its serving cert solely from the auto-TLS cert stream (no

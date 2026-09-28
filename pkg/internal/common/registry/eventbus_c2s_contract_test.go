@@ -8,10 +8,10 @@ import (
 	"sort"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
-	protogen "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
-	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	protogen "gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
+	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 

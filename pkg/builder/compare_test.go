@@ -17,7 +17,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
 )
 
 // depsConfig mirrors the structure of dependencies.yaml for test loading.
@@ -291,8 +291,8 @@ func buildVerifyGo(t *testing.T, outDir string) {
 	}
 
 	goEnv := []string{
-		"GONOSUMDB=gitlab.com/secondstarcavalier/*",
-		"GOPRIVATE=gitlab.com/secondstarcavalier/*",
+		"GONOSUMDB=gitlab.com/seabeam/*",
+		"GOPRIVATE=gitlab.com/seabeam/*",
 	}
 	runBuildCmd(t, outDir, goEnv, "go", "mod", "tidy")
 	runBuildCmd(t, outDir, goEnv, "go", "build", "./...")

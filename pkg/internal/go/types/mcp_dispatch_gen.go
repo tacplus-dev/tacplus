@@ -15,10 +15,10 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/tools/imports"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
 )
 
 // The MCP dispatch seam (BIG GOAL 8 Phase 0, Go).
@@ -710,7 +710,7 @@ func goMcpFileHeader(serviceName string, p goMcpFileParams, hasPage bool) string
 //
 // IMPORTANT FOR AGENTS: Do NOT modify this generated code.
 // If changes are needed, update the tacplus compiler at:
-// gitlab.com/secondstarcavalier/schematic/tacplus
+// gitlab.com/seabeam/schematic/tacplus
 //
 // %[1]s declares at least one (spec.rpc) principal: RPC_PRINCIPAL_MCP rpc, so
 // tacplus generates its whole Model Context Protocol termination here: the tool

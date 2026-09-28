@@ -7,8 +7,8 @@ stages:
   - release
 
 variables:
-  GOPRIVATE: "gitlab.com/secondstarcavalier/*"
-  GONOSUMCHECK: "gitlab.com/secondstarcavalier/*"
+  GOPRIVATE: "gitlab.com/seabeam/*"
+  GONOSUMCHECK: "gitlab.com/seabeam/*"
   CGO_ENABLED: "0"
   # Bump and retag to trigger a base image rebuild.
   BASE_VERSION: "7"
@@ -302,7 +302,7 @@ build:
     - *parse-version
     - go generate ./pkg/internal/proto/spec/...
     - |
-      LDFLAGS="-w -s -X gitlab.com/secondstarcavalier/schematic/tacplus/pkg/buildinfo.Version=${VERSION} -X gitlab.com/secondstarcavalier/schematic/tacplus/pkg/buildinfo.GitSha=${CI_COMMIT_SHORT_SHA} -X gitlab.com/secondstarcavalier/schematic/tacplus/pkg/buildinfo.BuildID=${CI_COMMIT_SHA} -X gitlab.com/secondstarcavalier/schematic/tacplus/pkg/buildinfo.ProjectPath=${CI_PROJECT_PATH} -X gitlab.com/secondstarcavalier/schematic/tacplus/pkg/buildinfo.ContainerImage=${CI_REGISTRY_IMAGE}/tacplus-${MAJOR}-${MINOR}:${PATCH}"
+      LDFLAGS="-w -s -X gitlab.com/seabeam/schematic/tacplus/pkg/buildinfo.Version=${VERSION} -X gitlab.com/seabeam/schematic/tacplus/pkg/buildinfo.GitSha=${CI_COMMIT_SHORT_SHA} -X gitlab.com/seabeam/schematic/tacplus/pkg/buildinfo.BuildID=${CI_COMMIT_SHA} -X gitlab.com/seabeam/schematic/tacplus/pkg/buildinfo.ProjectPath=${CI_PROJECT_PATH} -X gitlab.com/seabeam/schematic/tacplus/pkg/buildinfo.ContainerImage=${CI_REGISTRY_IMAGE}/tacplus-${MAJOR}-${MINOR}:${PATCH}"
       for target in linux/amd64 linux/arm64; do
         GOOS="${target%/*}"
         GOARCH="${target#*/}"

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 // NEW-21 leg (c), rust parity. Found while closing the go/java legs: the rust

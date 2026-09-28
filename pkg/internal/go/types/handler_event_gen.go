@@ -12,12 +12,12 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/tools/imports"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/header"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/tmplutil"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/consts"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/tmplutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 // handlerTemplateData holds data for the extraction_handler.go.tmpl template.

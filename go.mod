@@ -1,10 +1,10 @@
-module gitlab.com/secondstarcavalier/schematic/tacplus
+module gitlab.com/seabeam/schematic/tacplus
 
 go 1.25.0
 
 require (
 	github.com/spf13/cobra v1.10.2
-	gitlab.com/secondstarcavalier/schematic/tacplus/templates v0.0.0-00010101000000-000000000000
+	gitlab.com/seabeam/schematic/tacplus/templates v0.0.0-00010101000000-000000000000
 	go.uber.org/zap v1.27.1
 	golang.org/x/mod v0.33.0
 	golang.org/x/tools v0.42.0
@@ -35,4 +35,4 @@ require (
 	golang.org/x/sync v0.20.0 // indirect
 )
 
-replace gitlab.com/secondstarcavalier/schematic/tacplus/templates => ./pkg/templates
+replace gitlab.com/seabeam/schematic/tacplus/templates => ./pkg/templates

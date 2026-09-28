@@ -5,7 +5,7 @@ package registry
 import (
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/llmdesc"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/llmdesc"
 )
 
 // NEW-20 residue: pin the timeseries table name at its CALL SITE.

@@ -11,11 +11,11 @@ import (
 	"strings"
 	"text/template"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/header"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/packages"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/consts"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/packages"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
 )
 
 // GoServerGenerator generates an example Go gRPC server that wraps with lib

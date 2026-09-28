@@ -1,3 +1,3 @@
-module gitlab.com/secondstarcavalier/schematic/tacplus/templates
+module gitlab.com/seabeam/schematic/tacplus/templates
 
 go 1.24.0

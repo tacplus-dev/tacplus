@@ -9,7 +9,7 @@ import (
 	"testing"
 	"text/template"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
 )
 
 func TestTypeScriptStateWrapperWatchLifecycleRenders(t *testing.T) {

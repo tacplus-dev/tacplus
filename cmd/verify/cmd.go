@@ -10,8 +10,8 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/tacplusyaml"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/verification"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/tacplusyaml"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/verification"
 )
 
 var rootCmd = &cobra.Command{

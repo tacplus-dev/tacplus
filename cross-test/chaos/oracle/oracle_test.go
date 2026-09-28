@@ -3,7 +3,7 @@ package oracle
 import (
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/cross-test/chaos/node"
+	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/node"
 )
 
 func TestWatchOraclePassesOnGaplessStream(t *testing.T) {

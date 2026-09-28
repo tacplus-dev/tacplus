@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/verbs"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/verbs"
 )
 
 // The generation end of (spec.record).mutability = MUTABILITY_APPEND_ONLY.

@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
+	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
 )
 
 // grantsEmitter renders the generated entitlement-grant helper for one language

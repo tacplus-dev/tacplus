@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/verbs"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/verbs"
 )
 
 // canonicalTraitVerbs are the governed verbs the record query plane's expansion

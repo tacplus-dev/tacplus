@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/tactype"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/projectfile"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/tacplusyaml"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/projectfile"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/tacplusyaml"
 )
 
 func TestResolveProtoTag(t *testing.T) {

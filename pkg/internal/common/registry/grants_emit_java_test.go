@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
+	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
 )
 
 func TestEmitJavaGrantsHelper(t *testing.T) {

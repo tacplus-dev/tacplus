@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
 )
 
 // pyModuleName normalizes a proto filename/package segment into a Python module

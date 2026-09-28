@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
+	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
 )
 
 // The generation end of MCP tool exposure.

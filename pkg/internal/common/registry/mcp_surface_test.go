@@ -5,8 +5,8 @@ package registry
 import (
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
-	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
 )
 
 // mcpSurfaceFds is one c2s service carrying an MCP tool and, as the paired

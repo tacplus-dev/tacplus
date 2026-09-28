@@ -12,9 +12,9 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	approvalchassis "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/go/types/testdata/approvalchassis"
-	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	approvalchassis "gitlab.com/seabeam/schematic/tacplus/pkg/internal/go/types/testdata/approvalchassis"
+	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 // The approval canonicalization is emitted into every generated project as a

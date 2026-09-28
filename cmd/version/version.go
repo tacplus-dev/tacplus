@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/buildinfo"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/buildinfo"
 )
 
 func GetCmd() *cobra.Command {

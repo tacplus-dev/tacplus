@@ -8,7 +8,7 @@ import (
 	"testing"
 	"text/template"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 func TestRustServiceManagerMutexLockBlocksAreStatementTerminated(t *testing.T) {

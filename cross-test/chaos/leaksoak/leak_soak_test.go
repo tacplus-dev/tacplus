@@ -28,8 +28,8 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/cross-test/chaos/node"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/cross-test/chaos/oracle"
+	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/node"
+	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/oracle"
 )
 
 // The generated module's identity. tacplus derives the "self" service from the

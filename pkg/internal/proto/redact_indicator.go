@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
 )
 
 // The injected companion field number is parser.RedactIndicatorFieldBase + the

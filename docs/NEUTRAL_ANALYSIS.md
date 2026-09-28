@@ -9,7 +9,7 @@ For downstream tacplus consumers, the common neutral-analysis contract is
 `CONSUMER_NEUTRAL_ANALYSIS.md`. Consumer repositories might not have that file
 on disk, so reviewers must read the canonical repository copy:
 
-https://gitlab.com/secondstarcavalier/schematic/tacplus/-/blob/main/docs/CONSUMER_NEUTRAL_ANALYSIS.md
+https://gitlab.com/seabeam/schematic/tacplus/-/blob/main/docs/CONSUMER_NEUTRAL_ANALYSIS.md
 
 When reviewing tacplus itself, read that same downstream-consumer contract and
 verify that tacplus actually gives consumers generated surfaces that let them
@@ -56,7 +56,7 @@ Read these first:
 - `roadmap/README.md`
 - `docs/API.md`
 - `docs/CONSUMER_NEUTRAL_ANALYSIS.md`, or the canonical repository copy at
-  https://gitlab.com/secondstarcavalier/schematic/tacplus/-/blob/main/docs/CONSUMER_NEUTRAL_ANALYSIS.md
+  https://gitlab.com/seabeam/schematic/tacplus/-/blob/main/docs/CONSUMER_NEUTRAL_ANALYSIS.md
 - `docs/DEVELOPMENT.md`
 - local `todo/OPEN_FINDINGS.md`, when present — the working ledger of known,
   unfixed findings

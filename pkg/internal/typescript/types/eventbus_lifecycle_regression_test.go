@@ -8,7 +8,7 @@ import (
 	"testing"
 	"text/template"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 // Pin tests for the TypeScript event-bus / trace-publisher lifecycle and the

@@ -4,8 +4,8 @@
 package types
 
 import (
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/header"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/consts"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
 )
 
 // errorsGoTmplBody contains the template body for errors.go.tmpl (without copyright header)

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	spec "gitlab.com/secondstarcavalier/schematic/tacplus/target/proto/spec/sys"
+	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
 )
 
 // WriteReport generates a human-readable verification-report.md in the output directory.

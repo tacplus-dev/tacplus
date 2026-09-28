@@ -15,7 +15,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/tacplusyaml"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/tacplusyaml"
 )
 
 const hashFileName = ".hash.json"

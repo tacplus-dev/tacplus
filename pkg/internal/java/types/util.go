@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/strutil"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
 )
 
 // extractJavaOuterClassName reads a proto file and returns the java_outer_classname option value.

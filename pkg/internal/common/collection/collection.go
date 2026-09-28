@@ -12,7 +12,7 @@ package collection
 import (
 	"strings"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
 )
 
 // Platform constants (see docs/API.md "Default constants"). Initial cuts —

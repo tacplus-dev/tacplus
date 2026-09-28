@@ -10,15 +10,15 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	buildcmd "gitlab.com/secondstarcavalier/schematic/tacplus/cmd/build"
-	registrycmd "gitlab.com/secondstarcavalier/schematic/tacplus/cmd/registry"
-	upgradecmd "gitlab.com/secondstarcavalier/schematic/tacplus/cmd/upgrade"
-	validatecmd "gitlab.com/secondstarcavalier/schematic/tacplus/cmd/validate"
-	verifycmd "gitlab.com/secondstarcavalier/schematic/tacplus/cmd/verify"
-	versioncmd "gitlab.com/secondstarcavalier/schematic/tacplus/cmd/version"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/buildinfo"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/runner"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/tacplusyaml"
+	buildcmd "gitlab.com/seabeam/schematic/tacplus/cmd/build"
+	registrycmd "gitlab.com/seabeam/schematic/tacplus/cmd/registry"
+	upgradecmd "gitlab.com/seabeam/schematic/tacplus/cmd/upgrade"
+	validatecmd "gitlab.com/seabeam/schematic/tacplus/cmd/validate"
+	verifycmd "gitlab.com/seabeam/schematic/tacplus/cmd/verify"
+	versioncmd "gitlab.com/seabeam/schematic/tacplus/cmd/version"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/buildinfo"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/runner"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/tacplusyaml"
 )
 
 var rootCmd = &cobra.Command{

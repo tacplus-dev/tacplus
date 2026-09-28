@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 // generateExceptions generates a Python exceptions module that uses error.Error proto

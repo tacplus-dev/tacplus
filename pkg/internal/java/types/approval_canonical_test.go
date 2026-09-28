@@ -7,14 +7,14 @@ import (
 	"strings"
 	"testing"
 
-	approval "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/go/types/testdata/approvalchassis"
+	approval "gitlab.com/seabeam/schematic/tacplus/pkg/internal/go/types/testdata/approvalchassis"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 // The (spec.rpc).requires_device request hash is compared RAW by kernel and

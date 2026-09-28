@@ -7,8 +7,8 @@ import (
 	"testing"
 	"text/template"
 
-	tacproto "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/proto"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/templates"
+	tacproto "gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
+	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
 
 func readJavaTemplate(t *testing.T, path string) string {

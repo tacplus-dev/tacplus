@@ -2,7 +2,7 @@
 
 package proto
 
-import "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/registry"
+import "gitlab.com/seabeam/schematic/tacplus/pkg/registry"
 
 // Type aliases so internal callers don't need to change their imports.
 type ServiceRegistry = registry.Registry

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"text/template"
 
-	commonparser "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/parser"
+	commonparser "gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
 )
 
 // TestBidiTemplateRenders verifies the bidi lifecycle template loads,

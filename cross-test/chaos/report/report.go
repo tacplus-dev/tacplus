@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/cross-test/chaos/node"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/cross-test/chaos/oracle"
+	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/node"
+	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/oracle"
 )
 
 // Report is the full run result.

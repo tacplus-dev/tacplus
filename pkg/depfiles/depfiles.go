@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/version"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/version"
 )
 
 // UpdateLevel represents the semver component that changed.

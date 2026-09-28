@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"testing"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
 )
 
 // TestDefaultFloatAnnotationLiteral guards against %g's exponential notation

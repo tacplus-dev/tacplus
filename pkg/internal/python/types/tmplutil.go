@@ -2,7 +2,7 @@
 
 package types
 
-import "gitlab.com/secondstarcavalier/schematic/tacplus/pkg/internal/common/tmplutil"
+import "gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/tmplutil"
 
 // loadTemplate loads a template from the embedded templates filesystem for Python.
 //

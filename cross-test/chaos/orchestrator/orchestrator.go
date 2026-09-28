@@ -10,11 +10,11 @@ import (
 	"math/rand"
 	"time"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/cross-test/chaos/fault"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/cross-test/chaos/node"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/cross-test/chaos/oracle"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/cross-test/chaos/profile"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/cross-test/chaos/report"
+	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/fault"
+	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/node"
+	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/oracle"
+	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/profile"
+	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/report"
 )
 
 // Mesh is the deployed synthetic node mesh.

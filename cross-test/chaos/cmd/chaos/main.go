@@ -14,8 +14,8 @@ import (
 	"fmt"
 	"os"
 
-	"gitlab.com/secondstarcavalier/schematic/tacplus/cross-test/chaos/orchestrator"
-	"gitlab.com/secondstarcavalier/schematic/tacplus/cross-test/chaos/profile"
+	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/orchestrator"
+	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/profile"
 )
 
 func main() {

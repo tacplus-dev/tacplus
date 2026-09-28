@@ -82,6 +82,13 @@ type rustMcpTool struct {
 	NamespaceField     string
 	StoreNamespaceRows []rustNamespaceListField
 
+	// OwnerDefaultGuard is the (spec.owner_default) refusal rendered by the same
+	// helper the gRPC wrapper calls, "" when nothing is declared or nothing is
+	// contradicted. It rides the request-validation seam, immediately after the
+	// (spec.principal) stamp, for the reason stated there: that is the only
+	// point at which both halves of the comparison exist.
+	OwnerDefaultGuard string
+
 	// Page is the PAGE-collection window, nil for every other rpc. A PAGE tool
 	// takes page_size/page_token as ordinary arguments and calls the same
 	// three-argument handler the gRPC PAGE wrapper calls.
@@ -152,6 +159,10 @@ func rustMcpTools(svc *parser.ServiceInfo, servicePkg string, crossPkgTypes map[
 		if !empty {
 			scalars = san.mcpRequiredScalarArgs(m.FullInputType, servicePkg)
 		}
+		ownerDefaultGuard, err := rustOwnerDefaultGuard(m, san, servicePkg)
+		if err != nil {
+			return nil, fmt.Errorf("%s.%s: %w", svc.Name, m.Name, err)
+		}
 		tools = append(tools, rustMcpTool{
 			EmptyRequest:       empty,
 			RequiredScalars:    scalars,
@@ -165,6 +176,7 @@ func rustMcpTools(svc *parser.ServiceInfo, servicePkg string, crossPkgTypes map[
 			StorePrincipalRows: san.principalListFields(m.FullOutputType, servicePkg),
 			NamespaceField:     san.requestNamespaceField(m.FullInputType, servicePkg),
 			StoreNamespaceRows: san.namespaceListFields(m.FullOutputType, servicePkg),
+			OwnerDefaultGuard:  ownerDefaultGuard,
 			Page:               rustMcpPageOf(m, servicePkg, crossPkgTypes),
 		})
 	}
@@ -209,13 +221,24 @@ func rustMcpToolGeneratable(svc *parser.ServiceInfo, m *parser.MethodInfo, servi
 		return fmt.Errorf("%s.%s is an MCP tool taking %s, whose field %q carries (spec.store_epoch), but the stamp is rendered by the gRPC wrapper's write path and not by MCP dispatch; a tool call of this write would leave the store epoch unstamped",
 			svc.Name, m.Name, m.FullInputType, f)
 	}
-	// (spec.owner_default) rides the verb classification, and an MCP rpc is
-	// deliberately not verb-classified (registry.go): it publishes a tool, not a
-	// call, so it has no rpc_verb. There is therefore no read/write access to
-	// compare the owner's rights against, and no seam at which to refuse.
-	if len(san.ownerDefaultTypes(m, servicePkg)) > 0 {
-		return fmt.Errorf("%s.%s is an MCP tool touching a type that declares (spec.owner_default), but an MCP rpc carries no verb classification, so its read/write access is unknown and the owner default cannot be enforced",
-			svc.Name, m.Name)
+	// (spec.owner_default): the same decision the gRPC wrapper makes, from the
+	// same helper. An MCP rpc IS verb-classified — ClassifyMethods runs over
+	// every method of every service with no IsMcp gate, and the classification
+	// is name/shape-driven, so a tool has the read/write access the owner rights
+	// are compared against exactly as its gRPC twin does. (What registry.json
+	// omits for a tool entry is the rpc_verb/category FIELDS — an MCP entry is
+	// not a gRPC call — not MethodInfo.Class.) rustMcpToolDispatch renders the
+	// guard next to the (spec.principal) stamp, so what is refused here is only
+	// what that guard cannot be rendered against: a request shape with no
+	// validation seam at which the caller can be compared to the row's
+	// principal, which is the same set servicewrapper_gen.go refuses.
+	guard, err := rustOwnerDefaultGuard(m, san, servicePkg)
+	if err != nil {
+		return fmt.Errorf("%s.%s must not be generated as an MCP tool: %w", svc.Name, m.Name, err)
+	}
+	if guard != "" && (rustMcpEmptyRequest(m) || m.StreamingType() != "unary" || m.IsPageCollection()) {
+		return fmt.Errorf("%s.%s is an MCP tool touching a type whose (spec.owner_default) contradicts its access, but its %s request shape has no validation seam at which the caller can be compared to the row's principal",
+			svc.Name, m.Name, m.StreamingType())
 	}
 	return nil
 }
@@ -733,6 +756,7 @@ func rustMcpToolDispatch(serviceName string, t rustMcpTool) string {
 		if t.NamespaceField != "" {
 			b.WriteString(rustRequestNamespaceBlock(t.NamespaceField, t.Method.Name, "req", "        "))
 		}
+		b.WriteString(t.OwnerDefaultGuard)
 		if t.Page != nil {
 			b.WriteString(rustMcpPageDispatch(t, methodSnake))
 		} else {

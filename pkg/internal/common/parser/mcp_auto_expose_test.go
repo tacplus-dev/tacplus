@@ -242,6 +242,41 @@ func TestAutoExpose_DeclaredMcpToolIsUnchanged(t *testing.T) {
 	}
 }
 
+// A device-gated rpc is excluded: the MCP dispatch calls the handler without
+// running the device-approval gate the gRPC wrapper runs, so exposing it would
+// let a tool call skip the approval the annotation asks for. Both spellings of
+// the gate are covered, and on both the rpc keeps its gRPC surface.
+func TestAutoExpose_DeviceGatedRpcIsNotATool(t *testing.T) {
+	skipIfNoProtoc(t)
+
+	for _, tc := range []struct{ name, option string }{
+		{"requires_device", `{principal: RPC_PRINCIPAL_USER, requires_device: true}`},
+		{"requires_device_when", `{principal: RPC_PRINCIPAL_USER, requires_device_when: {field: "m", equals: "x"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fd := autoExposeFile(t, `
+  // Create a rule that needs the owner's device to approve it.
+  rpc CreateRule(Ping) returns (Ping) {
+    option (spec.rpc) = `+tc.option+`;
+  }
+`)
+			m := mcpMethod(t, fd, "CreateRule")
+			if !m.HasDeviceGate() {
+				t.Fatalf("CreateRule: HasDeviceGate() = false; the fixture lost its %s", tc.name)
+			}
+			if m.IsAutoMcp {
+				t.Errorf("CreateRule: IsAutoMcp = true; a %s rpc must not be a tool", tc.name)
+			}
+			if m.HttpPath == "" {
+				t.Error("CreateRule: HttpPath is empty; exclusion must not take the gRPC/REST surface")
+			}
+			if fd.Services[0].HasMcpRpcs {
+				t.Errorf("Surface: HasMcpRpcs = true; a service whose only rpc carries %s owns no tool", tc.name)
+			}
+		})
+	}
+}
+
 // An s2s service auto-exposes nothing: the predicate is c2s-only.
 func TestAutoExpose_S2SServiceOwnsNoTools(t *testing.T) {
 	skipIfNoProtoc(t)

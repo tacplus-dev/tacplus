@@ -517,6 +517,37 @@ service Surface {
 	}
 }
 
+// MCP-8: a declared tool carrying the device gate. The MCP dispatch runs no
+// device check, so the annotation would be a promise nothing keeps.
+func TestValidateMcpRefusesDeclaredToolWithDeviceGate(t *testing.T) {
+	skipIfNoProtoc(t)
+
+	for _, tc := range []struct{ name, option string }{
+		{"requires_device", `{principal: RPC_PRINCIPAL_MCP, requires_device: true}`},
+		{"requires_device_when", `{principal: RPC_PRINCIPAL_MCP, requires_device_when: {field: "m", equals: "x"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := rpcParser(t, `
+service Surface {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  // Create a rule that needs the owner's device to approve it.
+  rpc CreateRule(Ping) returns (Ping) {
+    option (spec.rpc) = `+tc.option+`;
+  }
+}
+`)
+			err := ValidateMcpAnnotations(p, "go")
+			if err == nil {
+				t.Fatalf("a declared RPC_PRINCIPAL_MCP tool carrying %s must fail generation", tc.name)
+			}
+			if !strings.Contains(err.Error(), "CreateRule") || !strings.Contains(err.Error(), "RPC_PRINCIPAL_MCP and "+tc.name+";") {
+				t.Fatalf("MCP-8 refusal must name the rpc and the annotation %s, got: %v", tc.name, err)
+			}
+		})
+	}
+}
+
 // McpToolDescription is the single resolver every dispatch generator publishes
 // through: it flattens and it does not substitute the RPC name, because a
 // name-fallback would mask MCP-7 rather than survive it.

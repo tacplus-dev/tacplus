@@ -948,6 +948,11 @@ func (r *RpcDescriptor) GetMcpToolNameOverride() string {
 //     gRPC PAGE wrapper calls. See the per-language *McpToolGeneratable
 //     guards, which keep refusing a collection tool in the modes this seam
 //     still cannot call.
+//   - a device gate (requires_device / requires_device_when, HasDeviceGate).
+//     No language's MCP dispatch runs the device-approval check the gRPC
+//     wrapper runs, so as a tool the rpc would execute with no approval at
+//     all. A DECLARED RPC_PRINCIPAL_MCP tool carrying the gate is refused by
+//     MCP-8 instead, because there the tool was asked for.
 //
 // A service that is auth_disabled is excluded for the reason MCP-5 gives: the
 // carrier scopes every tool call by a Caller no authorizer verified.
@@ -974,6 +979,9 @@ func mcpAutoExposed(svc *ServiceDescriptor, m *MethodDescriptor) bool {
 	// needs a caller identity to mint against, which is exactly why the
 	// USER-principal mint rpcs reach this far.
 	if m.MintsCredential {
+		return false
+	}
+	if m.HasDeviceGate() {
 		return false
 	}
 	// md.AuthDisabled is set from exactly RPC_FLAG_PUBLIC_NO_AUTH and

@@ -99,6 +99,12 @@ import (
 //	       matters because m.Comment is GetLeadingComments(), so a `// --- Jobs
 //	       -----` heading sitting above an rpc IS that rpc's leading comment
 //	       and would otherwise be published verbatim as its description.
+//	MCP-8  RPC_PRINCIPAL_MCP with requires_device / requires_device_when -> fail
+//	       No language's MCP dispatch runs the device-approval gate, so the
+//	       tool would execute with no approval — the annotation a promise
+//	       nothing keeps. An auto-exposed rpc carrying the gate is excluded by
+//	       mcpAutoExposed rather than refused, because nobody asked for that
+//	       tool; a declared one was asked for, so it fails loudly here.
 
 // mcpToolNameRe is the MCP tool-name convention the default (snake_case of the
 // RPC name) satisfies by construction, and the override must satisfy by hand.
@@ -280,6 +286,20 @@ func validateMcpAnnotations(fds []*FileDescriptor, language string) error {
 							"handler may drive a Watch internally and fold it into one response — or "+
 							"declare it under RPC_PRINCIPAL_USER/RPC_PRINCIPAL_SERVICE instead",
 						fd.Package, svc.Name, m.Name, strings.Join(sides, " and ")))
+				}
+
+				// MCP-8.
+				if isMcp && m.HasDeviceGate() {
+					annotation := "requires_device"
+					if m.RequiresDeviceWhen != nil {
+						annotation = "requires_device_when"
+					}
+					errs = append(errs, fmt.Sprintf(
+						"%s.%s/%s: declares principal RPC_PRINCIPAL_MCP and %s; the MCP tool dispatch "+
+							"runs no device-approval gate, so the tool would execute without the approval "+
+							"the annotation asks for. Declare the rpc under RPC_PRINCIPAL_USER, where the "+
+							"gRPC wrapper runs the gate, or drop the annotation",
+						fd.Package, svc.Name, m.Name, annotation))
 				}
 
 				override := m.Rpc.McpToolName

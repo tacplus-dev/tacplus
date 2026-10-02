@@ -39,7 +39,7 @@ enum JwtPayloadType {
   JWT_PAYLOAD_TYPE_TOKEN_USE = 11 [(spec.json_return_value) = "token_use"];  // token_use - Token purpose (refresh/access/service)
   JWT_PAYLOAD_TYPE_SUB_TYPE = 12 [(spec.json_return_value) = "sub_type"];  // sub_type - Principal kind: service | workload | user | client | external (the prior "pipeline" kind maps to client and is removed)
   JWT_PAYLOAD_TYPE_PRINCIPAL = 13 [(spec.json_return_value) = "principal"];  // principal - Caller identity
-  JWT_PAYLOAD_TYPE_AZP = 14 [(spec.json_return_value) = "azp"];  // azp - Authorized-party / attestation context (spec.Azp enum: kernel | oauth | saml | cloud-auth). Set by kernel from trusted context, never copied from request claims; NOT part of subject identity
+  JWT_PAYLOAD_TYPE_AZP = 14 [(spec.json_return_value) = "azp"];  // azp - Authorized-party / attestation context (spec.Azp enum: kernel | oauth | cloud-auth). Set by kernel from trusted context, never copied from request claims; NOT part of subject identity
   JWT_PAYLOAD_TYPE_PROFILES = 15 [(spec.json_return_value) = "profiles"];  // profiles - Entitlement profiles (comma-delimited)
   JWT_PAYLOAD_TYPE_ENTITLEMENTS = 16 [(spec.json_return_value) = "entitlements"];  // entitlements - Entitlements (comma-delimited)
   JWT_PAYLOAD_TYPE_NBF = 17 [(spec.json_return_value) = "nbf"];  // nbf - Not Before
@@ -165,8 +165,8 @@ enum TokenType {
   TOKEN_TYPE_UNDEFINED = 0;
   // TokenTypeJwt represents a JWT token
   TOKEN_TYPE_JWT = 1;
-  // TokenTypeSaml represents a SAML token
-  TOKEN_TYPE_SAML = 2;
+  reserved 2; // was TOKEN_TYPE_SAML — SAML removed from the product (D29 amendment 2)
+  reserved "TOKEN_TYPE_SAML";
   // TokenTypeSsh represents an SSH token
   TOKEN_TYPE_SSH = 3;
 }

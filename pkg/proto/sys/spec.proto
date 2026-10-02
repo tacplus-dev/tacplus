@@ -302,8 +302,8 @@ enum Azp {
   // oauth: user attested via an OAuth broker; kernel maps the broker's
   // authenticated S2S identity to this value at MintUserToken.
   AZP_OAUTH = 2;
-  // saml: user attested via a SAML broker; mapped by kernel as for oauth.
-  AZP_SAML = 3;
+  reserved 3; // was AZP_SAML — SAML removed from the product (D29 amendment 2)
+  reserved "AZP_SAML";
   // cloud-auth: reserved for the future cloud-auth attestation broker. No
   // runtime mints this except tests until that broker exists (D4).
   AZP_CLOUD_AUTH = 4;

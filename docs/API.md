@@ -549,7 +549,7 @@ synonyms fold to canonicals and are rejected:
   `Send`/`Publish`/`Subscribe`/`Broker`. Stateful vs stateless rule:
   `Create`/`Delete` for stored resources; `Mint`/`Revoke` for self-contained
   credentials (a JWT is `MintToken`, never `CreateSession`). Protocol-mandated
-  URL paths (OAuth/OIDC/SAML) live on `rest_path`/`acs_path`; the *name*
+  URL paths (OAuth/OIDC) live on `rest_path`; the *name*
   conforms to the registry.
 - **AI/Agent (7)**: Generate, Embed, Classify, Rank, Assist, Guard, Evaluate —
   all under the `AGENT` entitlement scope. Fold rules: Summarize/Translate/
@@ -627,7 +627,7 @@ stripped), so the same service matches in any cloud/account/az/cluster.
 **Token claims.** The SPIFFE ID is *derived* from claims, never carried as a
 claim: `namespace` is the authorization-tree path; `sub` is the stable
 principal id (not a URI); `sub_type` ∈ {service, workload, user, client,
-external}; `azp` is the attestation context (kernel/oauth/saml/cloud-auth) —
+external}; `azp` is the attestation context (kernel/oauth/cloud-auth) —
 attestation is never encoded in the subject path, so the same human in the
 same tenant role has the same subject regardless of login method.
 `/tenants/<t>/users/<u>` is a tenant-scoped role, not the global human; the

@@ -76,7 +76,7 @@ message MintServiceTokenRequest {
 // namespace the resulting token may carry.
 enum AuthBrokerKind {
   AUTH_BROKER_KIND_UNSPECIFIED = 0;
-  // An IdP assertion the broker has already validated (oauth, saml). Kernel
+  // An IdP assertion the broker has already validated (oauth). Kernel
   // trusts the broker's attestation — today's behaviour, unchanged.
   AUTH_BROKER_KIND_IDP = 1;
   // Possession of a personal principal's device key. Kernel verifies the
@@ -149,10 +149,10 @@ message ExternalTokenMintResponse {
   token.Token token = 1;
   // dst_url is the destination URL to forward to (empty = provider default).
   string dst_url = 2 [(spec.assert_max_size) = 2048];
-  // auth_type indicates the credential format (JWT vs SAML).
+  // auth_type indicates the credential format.
   token.TokenType auth_type = 3;
-  // saml_assertion is the SAML assertion when auth_type = TOKEN_TYPE_SAML.
-  string saml_assertion = 4 [(spec.assert_max_size) = 65536];
+  reserved 4; // was saml_assertion — SAML removed from the product (D29 amendment 2)
+  reserved "saml_assertion";
 }
 
 // MintDelegatedTokenRequest is the input for standing-delegation (Grant) token

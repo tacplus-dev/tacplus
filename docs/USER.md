@@ -1363,7 +1363,6 @@ language-appropriate implementations of:
 | `httpclient` | Typed HTTP client (CA/mTLS, timeouts, retry) with proto-validated responses |
 | `diskstore` | Durable disk-backed snapshot store (UC1 self-persistence) |
 | `collection` | Keyset-pagination (PAGE) collection helpers |
-| `saml` | SAML request/response assertion helpers |
 | `ip` | IP address parsing and validation helpers |
 | `tags` | Kubernetes-style tag sets and selectors |
 | `am` | Typed accounting event helpers and claim projection support |

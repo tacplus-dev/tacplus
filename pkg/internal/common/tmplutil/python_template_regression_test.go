@@ -40,23 +40,6 @@ func TestPythonRuntimeTemplatesMatchProtoShapes(t *testing.T) {
 			message: "Python x509 package exports must not expose stale cert-pair wrappers",
 		},
 		{
-			path: "pkg/templates/python/chassis/saml/saml_assertion.py.tmpl",
-			want: []string{
-				"key.private_key()",
-			},
-			forbid: []string{
-				"key.get_private_key()",
-			},
-			message: "Python SAML signing must use the generated ImmutableKey API",
-		},
-		{
-			path: "pkg/templates/python/chassis/saml/saml_metadata.py.tmpl",
-			want: []string{
-				"from __future__ import annotations",
-			},
-			message: "Python SAML metadata uses PEP 604 annotations and must work under the declared Python 3.8+ floor",
-		},
-		{
 			path: "pkg/templates/python/chassis/token/token_wrapper.py.tmpl",
 			want: []string{
 				"from __future__ import annotations",

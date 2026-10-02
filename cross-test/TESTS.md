@@ -130,18 +130,6 @@ leftover `.building` snapshot plus `.temp` tail. The Rust diskstore template
 contains the same test and should be exercised with `cargo test -p diskstore`
 when runtime-testing generated Rust library crates.
 
-Generated Go SAML library tests sign a local response, verify it with expected
-issuer/audience/recipient/request context, and assert that non-`Success` status
-and multiple-assertion responses are rejected at runtime.
-Generated Rust SAML library tests cover the same status and multiple-assertion
-runtime rejection paths and should be exercised with `cargo test -p saml` when
-runtime-testing generated Rust library crates.
-The `current-generation` gate now also runs the generated Java SAML runtime
-probe. It creates a local EC P-256 key and self-signed cert fixture, feeds them
-through the generated key/x509 wrappers, signs and verifies a generated SAML
-response, then asserts non-`Success` status and multiple-assertion responses
-fail; it also asserts an assertion missing `NotOnOrAfter` is not time-valid.
-
 ## Consumer Contract
 
 ```bash

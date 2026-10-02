@@ -502,7 +502,7 @@ func ScanAndGenerateConfigHolder(sourceProtoDir string, dirs ...string) ([]GrpcC
 	for _, e := range entries {
 		// Derive field name from the service name (from spec.grpc_config service_name),
 		// so that protobuf Java accessors match the backend codegen.
-		// e.g. service_name "saml" → "saml_config" (even if proto package is "samlsvc").
+		// e.g. service_name "oauth" → "oauth_config" (even if proto package is "oauthsvc").
 		fieldName := strings.ReplaceAll(e.ServiceName, "-", "_") + "_config"
 		cfgBuf.WriteString(fmt.Sprintf("  %s %s = %d;\n", e.ConfigType, fieldName, e.FieldID))
 	}
@@ -1046,7 +1046,7 @@ func InjectGrpcConfigState(sourceProtoDir, tempProtoDir, flatProtoDir string) ([
 			}
 
 			// Prefer the explicit service_name from grpc_config annotation
-			// (e.g. {service_name: "saml"}) over the package/identity name.
+			// (e.g. {service_name: "oauth"}) over the package/identity name.
 			// This ensures registry lookups match ScanAndGenerateConfigHolder.
 			serviceName := ann.StringValue
 			if serviceName == "" {

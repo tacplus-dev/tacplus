@@ -29,7 +29,7 @@ enum AuthMethod {
   AUTH_METHOD_UNDEFINED = 0;
   AUTH_METHOD_PASSWORD = 1 [(spec.json_return_value) = "password"];
   AUTH_METHOD_OAUTH = 2 [(spec.json_return_value) = "oauth"];
-  AUTH_METHOD_SAML = 3 [(spec.json_return_value) = "saml"];
+  reserved 3;
   AUTH_METHOD_LDAP = 4 [(spec.json_return_value) = "ldap"];
   AUTH_METHOD_CERTIFICATE = 5 [(spec.json_return_value) = "certificate"];
   AUTH_METHOD_SELF = 6 [(spec.json_return_value) = "self"];

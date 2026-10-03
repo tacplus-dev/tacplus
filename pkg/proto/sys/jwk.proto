@@ -152,5 +152,5 @@ message OpenIdConfiguration {
 
 // PATH_WELL_KNOWN_OPENID is the path for OpenID Connect discovery endpoint.
 // This endpoint provides metadata about the Hermes service's OpenID Connect configuration.
-// Full path example: "/api/v1/.well-known/openid-configuration"
+// Full path example: "/.well-known/openid-configuration"
 option (spec.string_const) = { name: "PATH_WELL_KNOWN_OPENID", value: ".well-known/openid-configuration" };

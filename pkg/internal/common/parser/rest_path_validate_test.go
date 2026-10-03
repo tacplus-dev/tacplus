@@ -8,7 +8,7 @@ import (
 )
 
 // T10: the convention REST path must mirror the gRPC + entitlement-grant
-// identity by including the service segment: {root}/{package}/{service}/{method}.
+// identity by including the service segment: /{package}/{service}/{method}.
 func TestConventionRestPathIncludesServiceSegment(t *testing.T) {
 	skipIfNoProtoc(t)
 
@@ -54,7 +54,7 @@ func TestValidateRestPathCollisionsAllowsServiceDisambiguation(t *testing.T) {
 					Methods: []MethodDescriptor{{
 						Name:        "Get",
 						HttpMethods: []string{"POST"},
-						HttpPath:    "/api/v1/shop/Catalog/Get",
+						HttpPath:    "/shop/Catalog/Get",
 					}},
 				},
 				{
@@ -63,7 +63,7 @@ func TestValidateRestPathCollisionsAllowsServiceDisambiguation(t *testing.T) {
 					Methods: []MethodDescriptor{{
 						Name:        "Get",
 						HttpMethods: []string{"POST"},
-						HttpPath:    "/api/v1/shop/Orders/Get",
+						HttpPath:    "/shop/Orders/Get",
 					}},
 				},
 			},
@@ -86,7 +86,7 @@ func TestValidateRestPathCollisionsDetectsCollision(t *testing.T) {
 					Methods: []MethodDescriptor{{
 						Name:        "Get",
 						HttpMethods: []string{"POST"},
-						HttpPath:    "/api/v1/shop/dup",
+						HttpPath:    "/shop/dup",
 					}},
 				},
 				{
@@ -95,7 +95,7 @@ func TestValidateRestPathCollisionsDetectsCollision(t *testing.T) {
 					Methods: []MethodDescriptor{{
 						Name:        "Fetch",
 						HttpMethods: []string{"POST"},
-						HttpPath:    "/api/v1/shop/dup",
+						HttpPath:    "/shop/dup",
 					}},
 				},
 			},
@@ -122,13 +122,36 @@ func TestValidateRestPathCollisionsDistinguishesHTTPMethod(t *testing.T) {
 				Name:  "Catalog",
 				IsC2S: true,
 				Methods: []MethodDescriptor{
-					{Name: "A", HttpMethods: []string{"GET"}, HttpPath: "/api/v1/shop/x"},
-					{Name: "B", HttpMethods: []string{"POST"}, HttpPath: "/api/v1/shop/x"},
+					{Name: "A", HttpMethods: []string{"GET"}, HttpPath: "/shop/x"},
+					{Name: "B", HttpMethods: []string{"POST"}, HttpPath: "/shop/x"},
 				},
 			}},
 		},
 	}}
 	if err := ValidateRestPathCollisions(dp); err != nil {
 		t.Fatalf("distinct HTTP methods on the same path must not collide, got: %v", err)
+	}
+}
+
+// D23: REST paths sit at the origin root. A tree with no root constant yields
+// /{package}/{Service}/{Rpc} and a rest_path alias of /{rest_path}.
+func TestRestPathsAreOriginRooted(t *testing.T) {
+	skipIfNoProtoc(t)
+
+	fd := mcpFile(t, `
+service Surface {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+  rpc ListJwks(Ping) returns (Ping) {
+    option (spec.rest_path) = ".well-known/jwks.json";
+  }
+}
+`)
+
+	m := mcpMethod(t, fd, "ListJwks")
+	if m.HttpPath != "/rpctest/Surface/ListJwks" {
+		t.Errorf("HttpPath = %q, want %q", m.HttpPath, "/rpctest/Surface/ListJwks")
+	}
+	if m.HttpAliasPath != "/.well-known/jwks.json" {
+		t.Errorf("HttpAliasPath = %q, want %q", m.HttpAliasPath, "/.well-known/jwks.json")
 	}
 }

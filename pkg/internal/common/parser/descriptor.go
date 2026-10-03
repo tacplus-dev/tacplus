@@ -27,11 +27,10 @@ import (
 // DescriptorParser uses protobuf descriptors to extract complete type information
 // This replaces all regex-based proto parsing with accurate descriptor-based parsing
 type DescriptorParser struct {
-	files        *protoregistry.Files
-	protoDir     string
-	descriptors  map[string]*FileDescriptor
-	rawFiles     map[string]*descriptorpb.FileDescriptorProto // raw protos keyed by path, for SourceCodeInfo
-	restRootPath string                                       // resolved REST_ROOT_PATH constant
+	files       *protoregistry.Files
+	protoDir    string
+	descriptors map[string]*FileDescriptor
+	rawFiles    map[string]*descriptorpb.FileDescriptorProto // raw protos keyed by path, for SourceCodeInfo
 
 	collIndex      map[string]*model.Message // cached message index for collection tier resolution (lazy)
 	collIndexBuilt bool                      // true once collIndex has been computed (even if empty)
@@ -464,24 +463,6 @@ func newDescriptorParser(protoDir string, protoFiles []string) (*DescriptorParse
 		rawFiles:    rawFiles,
 	}
 
-	// Pre-resolve REST_ROOT_PATH from file-level constants before parsing services.
-	// This avoids ordering issues since all proto descriptors are already loaded.
-	files.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
-		opts, ok := fd.Options().(*descriptorpb.FileOptions)
-		if !ok || opts == nil {
-			return true
-		}
-		if proto.HasExtension(opts, spec.E_StringConst) {
-			for _, sc := range proto.GetExtension(opts, spec.E_StringConst).([]*spec.StringConst) {
-				if sc.GetName() == "REST_ROOT_PATH" {
-					parser.restRootPath = sc.GetValue()
-					return false // found it, stop
-				}
-			}
-		}
-		return true
-	})
-
 	// Parse all files into our descriptor format
 	files.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
 		parser.parseFileDescriptor(fd)
@@ -811,9 +792,9 @@ func (p *DescriptorParser) parseServiceDescriptor(sd protoreflect.ServiceDescrip
 
 		// Convention-based REST paths for gateway-exposed gRPC services.
 		// Every RPC on an annotated service gets a convention path:
-		//   {REST_ROOT_PATH}/{package}/{MethodName}
+		//   /{package}/{Service}/{MethodName}
 		// POST is always present. Additional methods come from rest_method.
-		// rest_path creates an additive alias (relative to REST_ROOT_PATH).
+		// rest_path creates an additive alias at the origin root (/{rest_path}).
 		//
 		// An RPC_PRINCIPAL_MCP rpc is deliberately excluded: it declares a tool,
 		// not a call, and the MCP design (§5) is that tacplus maps it to no gRPC
@@ -850,11 +831,11 @@ func (p *DescriptorParser) parseServiceDescriptor(sd protoreflect.ServiceDescrip
 			// collision-free when one package hosts >=2 gateway/C2S services that
 			// share a method name (T10). svc.GrpcName is the package; svc.Name is
 			// the service.
-			md.HttpPath = fmt.Sprintf("%s/%s/%s/%s", p.restRootPath, svc.GrpcName, svc.Name, md.Name)
+			md.HttpPath = fmt.Sprintf("/%s/%s/%s", svc.GrpcName, svc.Name, md.Name)
 
-			// rest_path adds an alias route (relative to REST_ROOT_PATH)
+			// rest_path adds an alias route at the origin root
 			if md.RestPath != "" {
-				md.HttpAliasPath = fmt.Sprintf("%s/%s", p.restRootPath, md.RestPath)
+				md.HttpAliasPath = "/" + md.RestPath
 			}
 
 			md.HttpBody = "*"
@@ -866,7 +847,7 @@ func (p *DescriptorParser) parseServiceDescriptor(sd protoreflect.ServiceDescrip
 		if svc.EventLabel != "" && svc.Gateway && strings.HasPrefix(md.Name, "Publish") && len(md.HttpMethods) == 0 {
 			md.HttpMethods = []string{"POST"}
 			md.HttpMethod = "POST"
-			md.HttpPath = fmt.Sprintf("%s/%s/%s", p.restRootPath, svc.EventLabel, md.Name)
+			md.HttpPath = fmt.Sprintf("/%s/%s", svc.EventLabel, md.Name)
 			md.HttpBody = "*"
 		}
 
@@ -1342,11 +1323,6 @@ func typeNameBase(name string) string {
 	}
 	parts := strings.Split(name, ".")
 	return parts[len(parts)-1]
-}
-
-// RestRootPath returns the resolved REST_ROOT_PATH constant from the proto tree.
-func (p *DescriptorParser) RestRootPath() string {
-	return p.restRootPath
 }
 
 // parseFileConstants extracts file-level constants from custom options

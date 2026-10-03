@@ -2801,11 +2801,11 @@ extend google.protobuf.MethodOptions {
   RestMethods rest_method = 80009;
 
   // rest_path adds an additional alias REST route for this method.
-  // The path is relative to REST_ROOT_PATH (defined in gateway.proto).
-  // The convention path ({ROOT_PATH}/{package}/{MethodName}) is always
+  // The path is relative to the origin root.
+  // The convention path (/{package}/{Service}/{MethodName}) is always
   // present; rest_path creates a second route with the same HTTP methods.
   // Example: option (spec.rest_path) = ".well-known/openid-configuration";
-  //          → adds route at /api/v1/.well-known/openid-configuration
+  //          → adds route at /.well-known/openid-configuration
   string rest_path = 80008;
 
   // proof_requires declares a precondition on an RPC method.

@@ -9,8 +9,6 @@ package catalog;
 
 import "sys/spec.proto";
 
-option (spec.string_const) = {name: "REST_ROOT_PATH", value: "/api/v1"};
-
 message GetItemRequest {
   // owner must be a well-formed email address. A REST request carrying
   // anything else must be rejected by the dispatcher before it reaches the

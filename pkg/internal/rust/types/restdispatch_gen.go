@@ -54,7 +54,6 @@ type routeEntry struct {
 // restDispatchData is the template data for rest_dispatch.rs.tmpl.
 type restDispatchData struct {
 	Header             string
-	RestRootPath       string
 	HasStreaming       bool
 	HasClientStreaming bool
 	UnaryArms          []dispatchArm
@@ -295,7 +294,6 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 		if err != nil {
 			return fmt.Errorf("scanning vservice RPCs for REST routes: %w", err)
 		}
-		restRoot := descriptorParser.RestRootPath()
 		for _, vs := range vsEntries {
 			for i, rpc := range vs.RPCs {
 				clientStreaming := strings.HasPrefix(rpc, "Publish")
@@ -321,7 +319,7 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 				}
 				route := vs.Routes[i]
 				grpcPath := fmt.Sprintf("/%s/%s", route.Service, route.Method)
-				httpPath := fmt.Sprintf("%s/%s/%s", restRoot, vs.Name, rpc)
+				httpPath := fmt.Sprintf("/%s/%s", vs.Name, rpc)
 				routes = append(routes, routeEntry{
 					HttpPath:           httpPath,
 					GrpcPath:           grpcPath,
@@ -350,7 +348,6 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 
 	data := restDispatchData{
 		Header:             header.GeneratedHeader(consts.LangRust, "rest_dispatch"),
-		RestRootPath:       descriptorParser.RestRootPath(),
 		HasStreaming:       hasStreaming,
 		HasClientStreaming: hasClientStreaming,
 		UnaryArms:          unaryArms,

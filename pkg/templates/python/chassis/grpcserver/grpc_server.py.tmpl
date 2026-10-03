@@ -63,7 +63,7 @@ class ServiceImplementation(ABC):
 
         Args:
             app: The HTTP app to register endpoints with
-            api_prefix: The API prefix (e.g., "/api/v1")
+            api_prefix: The API prefix ("" serves at the origin root)
 
         Raises:
             Exception: If registration fails

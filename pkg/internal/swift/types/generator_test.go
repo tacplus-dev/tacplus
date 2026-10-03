@@ -121,7 +121,7 @@ func TestW2SMethodDataStreaming(t *testing.T) {
 		OutputType:      "ContractEvent",
 		FullInputType:   ".contractclient.ContractRequest",
 		FullOutputType:  ".contractclient.ContractEvent",
-		HttpPath:        "/api/v1/contractclient/ContractApi/ListEvents",
+		HttpPath:        "/contractclient/ContractApi/ListEvents",
 		HttpMethod:      "POST",
 	}
 	got, err := w2sMethodData(svc, target, serverStreaming, "contractclient")
@@ -168,8 +168,8 @@ func TestW2SMethodDataStreaming(t *testing.T) {
 		name   string
 		method *parser.MethodInfo
 	}{
-		{"client-streaming", &parser.MethodInfo{Name: "SendEvents", ClientStreaming: true, HttpPath: "/api/v1/x"}},
-		{"bidi", &parser.MethodInfo{Name: "AssistEvents", ClientStreaming: true, ServerStreaming: true, HttpPath: "/api/v1/x"}},
+		{"client-streaming", &parser.MethodInfo{Name: "SendEvents", ClientStreaming: true, HttpPath: "/x"}},
+		{"bidi", &parser.MethodInfo{Name: "AssistEvents", ClientStreaming: true, ServerStreaming: true, HttpPath: "/x"}},
 	} {
 		got, err := w2sMethodData(svc, target, tt.method, "contractclient")
 		if err != nil {

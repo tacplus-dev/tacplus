@@ -9,9 +9,9 @@ import (
 	"text/template"
 )
 
-// rest_dispatch.rs.tmpl drops RestRootPath, HttpPath, GrpcPath and ServiceID
-// between the quotes of Rust string literals. All four are derived from proto
-// annotations ((spec.rest), (spec.service), the REST_ROOT_PATH string const),
+// rest_dispatch.rs.tmpl drops HttpPath, GrpcPath and ServiceID between the
+// quotes of Rust string literals. All three are derived from proto annotations
+// ((spec.rest), (spec.service)),
 // so a proto author can put a double quote or a backslash in any of them. These
 // pin that the generator escapes them instead of emitting broken Rust.
 
@@ -19,7 +19,6 @@ import (
 // proto-annotation-derived strings. Indentation anchors the ROUTES-table
 // entries so the prefixes do not match the RouteInfo struct declaration.
 var escapedLiteralSites = []string{
-	"pub const REST_ROOT_PATH: &str = ",
 	"\n        http_path: ",
 	"\n        grpc_path: ",
 	"\n        service_id: ",
@@ -32,8 +31,7 @@ var escapedLiteralSites = []string{
 func hostileRestDispatchData() (restDispatchData, string) {
 	const hostile = `/v1/a"b\c`
 	return restDispatchData{
-		Header:       "// generated",
-		RestRootPath: hostile,
+		Header: "// generated",
 		Routes: []routeEntry{{
 			HttpPath:           hostile,
 			GrpcPath:           hostile,

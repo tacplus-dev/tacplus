@@ -15,12 +15,6 @@ use futures::stream;
 #[allow(unused_imports)]
 use serde_json;
 
-<<- if .RestRootPath >>
-
-/// Base path for all REST endpoints, from the REST_ROOT_PATH string constant.
-pub const REST_ROOT_PATH: &str = "<< rustStr .RestRootPath >>";
-<<- end >>
-
 /// Result type for REST→gRPC dispatch: JSON string on success, HTTP error on failure.
 pub type DispatchResult = Result<String, (StatusCode, String)>;
 

@@ -231,9 +231,9 @@ func TestCollectRpcProtosIncludesNamespaceAuthMetadata(t *testing.T) {
 							InputType:            "TenantRequest",
 							OutputType:           "TenantResponse",
 							TargetNamespaceField: "tenant_namespace",
-							HttpPath:             "/api/v1/identity/GetTenant",
+							HttpPath:             "/identity/GetTenant",
 							HttpMethods:          []string{"POST", "GET"},
-							HttpAliasPath:        "/api/v1/tenants/current",
+							HttpAliasPath:        "/tenants/current",
 						},
 					},
 				},
@@ -306,11 +306,11 @@ func TestCollectRpcProtosIncludesNamespaceAuthMetadata(t *testing.T) {
 	if w2s == nil {
 		t.Fatalf("missing w2s surface in %#v", entitled.Surfaces)
 	}
-	if w2s.Transport != "grpc_over_rest" || w2s.AuthModel != "w2s" || w2s.HttpPath != "/api/v1/identity/GetTenant" {
+	if w2s.Transport != "grpc_over_rest" || w2s.AuthModel != "w2s" || w2s.HttpPath != "/identity/GetTenant" {
 		t.Fatalf("w2s surface transport/auth/path = (%q, %q, %q), want grpc_over_rest/w2s/route",
 			w2s.Transport, w2s.AuthModel, w2s.HttpPath)
 	}
-	if !reflect.DeepEqual(w2s.HttpMethods, []string{"POST", "GET"}) || w2s.HttpAliasPath != "/api/v1/tenants/current" {
+	if !reflect.DeepEqual(w2s.HttpMethods, []string{"POST", "GET"}) || w2s.HttpAliasPath != "/tenants/current" {
 		t.Fatalf("w2s http metadata = (%#v, %q), want POST+GET and alias", w2s.HttpMethods, w2s.HttpAliasPath)
 	}
 	if !w2s.AuthEntitledUsers || w2s.SubjectNamespaceSource != "token.namespace" || w2s.TargetNamespaceSource != "request.field" || w2s.TargetNamespaceField != "tenant_namespace" {

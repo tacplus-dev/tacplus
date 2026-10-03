@@ -32,7 +32,7 @@ func mcpSurfaceFds() []*parser.FileDescriptor {
 							Name:        "GetTicket",
 							InputType:   "GetTicketRequest",
 							OutputType:  "GetTicketResponse",
-							HttpPath:    "/api/v1/scotty/Scotty/GetTicket",
+							HttpPath:    "/scotty/Scotty/GetTicket",
 							HttpMethods: []string{"POST"},
 						},
 					},

@@ -37,7 +37,7 @@ func renderW2SFixture(t *testing.T) string {
 				MethodName:      "GetContract",
 				SwiftMethodName: "getContract",
 				HTTPMethod:      "POST",
-				HTTPPath:        "/api/v1/contractclient/ContractApi/GetContract",
+				HTTPPath:        "/contractclient/ContractApi/GetContract",
 				AuthRequired:    true,
 				InputType:       "Contractclient_ContractRequest",
 				OutputType:      "Contractclient_ContractResponse",
@@ -46,7 +46,7 @@ func renderW2SFixture(t *testing.T) string {
 				MethodName:      "ListEvents",
 				SwiftMethodName: "listEvents",
 				HTTPMethod:      "POST",
-				HTTPPath:        "/api/v1/contractclient/ContractApi/ListEvents",
+				HTTPPath:        "/contractclient/ContractApi/ListEvents",
 				AuthRequired:    true,
 				InputType:       "Contractclient_ContractRequest",
 				OutputType:      "Contractclient_ContractEvent",
@@ -87,7 +87,7 @@ func TestSwiftW2SStreamingRendering(t *testing.T) {
 	for _, want := range []string{
 		"public func listEvents(_ request: Contractclient_ContractRequest) async throws -> AsyncThrowingStream<Contractclient_ContractEvent, Error>",
 		"try await self.client.invokeStream(",
-		`path: "/api/v1/contractclient/ContractApi/ListEvents"`,
+		`path: "/contractclient/ContractApi/ListEvents"`,
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("rendered Swift W2S client missing server-streaming marker %q", want)

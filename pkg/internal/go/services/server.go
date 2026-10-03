@@ -477,7 +477,7 @@ func Run() {
 		}
 	}
 
-	restBaseURL := fmt.Sprintf("http://localhost:%d/api/v1", restPort)
+	restBaseURL := fmt.Sprintf("http://localhost:%d", restPort)
 	grpcFailures := 0
 	httpFailures := 0
 
@@ -1012,9 +1012,9 @@ Once the server is running, you can test it using:
 grpcurl -cacert ./ca.pem localhost:8443 {{.ProtoInfo.Package}}.ServiceName/MethodName
 ` + "```" + `
 
-**REST** (https://localhost:8443/api/v1):
+**REST** (https://localhost:8443):
 ` + "```bash" + `
-curl --cacert ./ca.pem -X POST https://localhost:8443/api/v1/servicename/methodname \
+curl --cacert ./ca.pem -X POST https://localhost:8443/servicename/methodname \
   -H "Content-Type: application/json" \
   -d '{"field": "value"}'
 ` + "```" + `
@@ -1066,8 +1066,8 @@ proto_config:
   listen_address: ":8443"
 
   # API prefix for REST endpoints
-  # Example: "/api/v1" results in REST at "/api/v1/..."
-  api_prefix: "/api/v1"
+  # Empty serves REST at the origin root
+  api_prefix: ""
 
   # TLS configuration (required)
   # All protocols use the same port through ALPN negotiation.

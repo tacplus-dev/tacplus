@@ -426,8 +426,8 @@ message RpcInfo {
   // Full gRPC method path, e.g. "/policy.PolicyService/GetApiCatalog".
   string grpc_path = 13;
 
-  // HTTP REST convention path, e.g. "/api/v1/identity/IdentityService/ListProviders".
-  // Always present for gateway-exposed RPCs: {REST_ROOT_PATH}/{package}/{Service}/{MethodName}.
+  // HTTP REST convention path, e.g. "/identity/IdentityService/ListProviders".
+  // Always present for gateway-exposed RPCs: /{package}/{Service}/{MethodName}.
   // The service segment mirrors the gRPC + entitlement-grant identity so routes
   // stay collision-free when a package hosts multiple services sharing a method.
   string http_path = 15;
@@ -436,8 +436,8 @@ message RpcInfo {
   // Additional methods come from spec.rest_method (e.g. ["POST", "GET"]).
   repeated string http_methods = 17;
 
-  // HTTP alias path from spec.rest_path, relative to REST_ROOT_PATH.
-  // When present, creates an additional route (e.g. "/api/v1/.well-known/openid-configuration").
+  // HTTP alias path from spec.rest_path, at the origin root.
+  // When present, creates an additional route (e.g. "/.well-known/openid-configuration").
   // Same http_methods apply to the alias.
   string http_alias_path = 18;
 

@@ -9,6 +9,9 @@ fn test_{{.LowerEnumName}}_from_str_valid() {
 {{- range .ValidValues}}
 assert!({{$.EnumName}}::from_str("{{.FriendlyName}}").is_ok());
 assert_eq!({{$.EnumName}}::from_str("{{.FriendlyName}}").unwrap(), {{$.EnumName}}::{{.VariantName}});
+{{- if .HasAlias}}
+assert_eq!({{$.EnumName}}::from_str("{{.Alias}}").unwrap(), {{$.EnumName}}::{{.VariantName}});
+{{- end}}
 {{- end}}
 }
 #[test]

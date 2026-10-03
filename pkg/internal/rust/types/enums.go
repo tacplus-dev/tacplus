@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
 	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/tmplutil"
 	"gitlab.com/seabeam/schematic/tacplus/templates"
 )
@@ -18,8 +19,8 @@ type rustEnumValueData struct {
 	VariantName  string // prost variant name (PascalCase)
 	DisplayName  string // display name (json value or lower name)
 	FriendlyName string // friendly name for test assertions
-	HasJsonAlias bool   // whether there's an alternate JSON alias
-	JsonAlias    string // normalized JSON alias
+	HasAlias     bool   // whether Go's friendly name differs from LowerName
+	Alias        string // Go's friendly name, normalized (also accepted by FromStr)
 }
 
 // rustEnumTemplateData holds pre-computed data for the enums template.
@@ -116,20 +117,15 @@ func generateEnumImpl(b *strings.Builder, enum model.Enum) error {
 
 		friendlyName := displayName
 
-		hasJsonAlias := false
-		jsonAlias := ""
-		if v.JsonValue != "" && strings.ToLower(v.JsonValue) != lowerName {
-			hasJsonAlias = true
-			jsonAlias = strings.ToLower(strings.ReplaceAll(v.JsonValue, "_", "-"))
-		}
+		alias := goEnumFriendlyAlias(enum, v)
 
 		validValues = append(validValues, rustEnumValueData{
 			LowerName:    lowerName,
 			VariantName:  variantName,
 			DisplayName:  displayName,
 			FriendlyName: friendlyName,
-			HasJsonAlias: hasJsonAlias,
-			JsonAlias:    jsonAlias,
+			HasAlias:     alias != lowerName,
+			Alias:        alias,
 		})
 	}
 
@@ -176,11 +172,15 @@ func writeEnumTestContent(b *strings.Builder, enum model.Enum) {
 			displayName = v.JsonValue
 		}
 
+		alias := goEnumFriendlyAlias(enum, v)
+
 		validValues = append(validValues, rustEnumValueData{
 			LowerName:    lowerName,
 			VariantName:  variantName,
 			DisplayName:  displayName,
 			FriendlyName: displayName,
+			HasAlias:     alias != lowerName,
+			Alias:        alias,
 		})
 	}
 
@@ -221,6 +221,21 @@ func writeEnumTestContent(b *strings.Builder, enum model.Enum) {
 	}
 
 	b.Write(result)
+}
+
+// goEnumFriendlyAlias returns the string Go's generated <Enum>ToString emits for
+// a value, normalized the way FromStr normalizes its input (lowercase, hyphens).
+// It mirrors enumFriendlyString in pkg/internal/go/types/enums.go: the JSON value
+// when annotated, otherwise the value name with the enum-name prefix stripped
+// (PROFILE_GATE -> "gate"). FromStr accepts it so a value a Go writer produced
+// parses in Rust.
+func goEnumFriendlyAlias(enum model.Enum, value model.EnumValue) string {
+	name := value.JsonValue
+	if name == "" {
+		prefix := strings.ToUpper(strutil.ToSnakeCase(enum.Name) + "_")
+		name = strings.TrimPrefix(value.Name, prefix)
+	}
+	return strings.ToLower(strings.ReplaceAll(name, "_", "-"))
 }
 
 // toProsto converts proto enum value names to prost's Rust variant names

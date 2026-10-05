@@ -28,6 +28,13 @@ const DEFAULT_AUDIENCE: &str = "{{.DefaultAudience}}";
 const K8S_TOKEN_FILE_ENV: &str = "KERNEL_K8S_TOKEN_FILE";
 const RECONNECT_POLL: Duration = Duration::from_secs(30);
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+{{- if .MintExternalServiceTokenMethod }}
+/// Lifetime requested for an external-audience token. The token minter
+/// rejects anything longer.
+const EXTERNAL_TOKEN_LIFETIME_SECS: i64 = 600;
+/// Timeout for a single external-audience mint RPC.
+const EXTERNAL_MINT_TIMEOUT: Duration = Duration::from_secs(10);
+{{- end }}
 
 /// Returned when a service identity is requested in a build that declares no
 /// token exchanger, so no service token can ever be minted.
@@ -51,6 +58,9 @@ impl std::error::Error for TokenMinterNotConfigured {}
 /// IdentityManager handles service identity: bootstrap, token caching, and renewal.
 /// The channel is provided by the ServiceManager — IM does not manage its own connections.
 pub struct IdentityManager {
+{{- if .MintExternalServiceTokenMethod }}
+    channel: Channel,
+{{- end }}
     k8s_minter: Option<Arc<RwLock<KubernetesTokenMinter>>>,
     cloud_minter: Option<Arc<RwLock<CloudTokenMinter>>>,
     instance_id: String,
@@ -129,6 +139,9 @@ impl IdentityManager {
         }
 
         Ok(Self {
+{{- if .MintExternalServiceTokenMethod }}
+            channel,
+{{- end }}
             k8s_minter,
             cloud_minter,
             instance_id,
@@ -156,6 +169,37 @@ impl IdentityManager {
             return m.read().await.get_token_for(audience).await;
         }
         Err("no token source configured".into())
+    }
+
+    /// Mints a NEW kernel-signed token for an off-cluster audience on every
+    /// call: sub = this service's SPIFFE ID, aud = `audience`, ES256, a fresh
+    /// jti, exp at most 600 seconds out. Never cached — an external verifier
+    /// (e.g. workload identity federation) rejects a replayed jti.
+    pub async fn token_for_external(&self, audience: &str) -> Result<String, Box<dyn std::error::Error>> {
+{{- if .MintExternalServiceTokenMethod }}
+        let input_token = self.get_token().await?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
+        let mut client = {{.CrateBasePathUnderscore}}_types::services::{{.TokenExchangerPackage}}::{{.TokenExchangerPackage}}::{{.MintClientModule}}::{{.MintClientType}}::new(self.channel.clone());
+        let resp = tokio::time::timeout(
+            EXTERNAL_MINT_TIMEOUT,
+            client.{{.MintExternalServiceTokenMethod}}(tonic::Request::new(
+                {{.CrateBasePathUnderscore}}_types::sys::tokenrequest::MintExternalServiceTokenRequest {
+                    input_token,
+                    aud: audience.to_string(),
+                    exp: now + EXTERNAL_TOKEN_LIFETIME_SECS,
+                    ..Default::default()
+                },
+            )),
+        )
+        .await
+        .map_err(|_| "external token mint timed out")?
+        .map_err(|e| format!("external token mint: {}", e))?;
+        let token = resp.into_inner().access_token.ok_or("external token mint response missing access_token")?;
+        Ok(token.base64)
+{{- else }}
+        let _ = audience;
+        Err("IM: the token minter declares no MintExternalServiceTokenRequest RPC".into())
+{{- end }}
     }
 
     /// Returns true if authentication is configured.

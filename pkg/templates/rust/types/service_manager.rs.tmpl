@@ -969,6 +969,13 @@ impl ServiceManager {
         self.identity.get_token_for(audience).await
     }
 
+    /// Returns a NEW kernel-signed token for an off-cluster audience (e.g.
+    /// `https://api.anthropic.com`) on every call: sub = this service's SPIFFE
+    /// ID, ES256, a fresh jti, exp at most 600 seconds out. Do not cache it.
+    pub async fn token_for_external(&self, audience: &str) -> Result<String, Box<dyn std::error::Error>> {
+        self.identity.token_for_external(audience).await
+    }
+
     /// Returns an audience-scoped token-provider closure backed by the identity
     /// manager. Suitable for constructing a custom subscriber — the returned
     /// closure is compatible with [`subscribe`] module `TokenSource` types.

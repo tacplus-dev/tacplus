@@ -63,6 +63,14 @@ public class IdentityManager implements AutoCloseable {
     // unreachable for too long so the pod is restarted and gets a fresh connection.
     private static final int RECONNECT_POLL_MS    = 30_000;          // check every 30s
     private static final int RECONNECT_TIMEOUT_MS = 5 * 60 * 1_000; // crash after 5 min
+{{- if .MintExternalServiceTokenMethod}}
+
+    // Lifetime requested for an external-audience token; the token minter
+    // rejects anything longer.
+    private static final long EXTERNAL_TOKEN_LIFETIME_SECS = 600;
+    // Timeout for a single external-audience mint RPC.
+    private static final long EXTERNAL_MINT_TIMEOUT_SECS = 10;
+{{- end}}
 
     private final KubernetesMinter k8sMinter;
     private final CloudMinter cloudMinter;
@@ -366,6 +374,39 @@ public class IdentityManager implements AutoCloseable {
                 throw retry;
             }
         }
+    }
+
+    /**
+     * Mints a NEW kernel-signed token for an off-cluster audience on every call:
+     * sub = this service's SPIFFE ID, aud = {@code audience}, ES256, a fresh jti,
+     * exp at most 600 seconds out. Never cached — an external verifier (e.g.
+     * workload identity federation) rejects a replayed jti.
+     */
+    public String tokenForExternal(String audience) throws Exception {
+{{- if .MintExternalServiceTokenMethod}}
+        String inputToken = getToken();
+        ManagedChannel ch;
+        synchronized (channelLock) {
+            ch = bareChannel;
+        }
+        if (ch == null) {
+            throw new IllegalStateException("IM: token authority channel not initialized");
+        }
+        var resp = {{.TypesBase}}.services.{{.TokenExchangerPackage}}.{{.MintServiceName}}Grpc.newBlockingStub(ch)
+                .withDeadlineAfter(EXTERNAL_MINT_TIMEOUT_SECS, java.util.concurrent.TimeUnit.SECONDS)
+                .{{.MintExternalServiceTokenMethod}}({{.TypesBase}}.{{.TokenRequestPackage}}.{{.TokenRequestOuterClass}}.MintExternalServiceTokenRequest.newBuilder()
+                        .setInputToken(inputToken)
+                        .setAud(audience)
+                        .setExp(java.time.Instant.now().getEpochSecond() + EXTERNAL_TOKEN_LIFETIME_SECS)
+                        .build());
+        String token = resp.getAccessToken().getBase64();
+        if (token.isEmpty()) {
+            throw new IllegalStateException("IM: external token mint response missing access_token");
+        }
+        return token;
+{{- else}}
+        throw new UnsupportedOperationException("IM: the token minter declares no MintExternalServiceTokenRequest RPC");
+{{- end}}
     }
 
     /** Returns true if authentication is configured. */

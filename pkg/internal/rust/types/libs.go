@@ -96,6 +96,12 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		}
 		mintServiceTokenMethod = strutil.ToSnakeCase(info.MintServiceTokenMethod)
 	}
+	// Optional: empty when the minter declares no external-audience mint, and
+	// the generated token_for_external then reports that instead of minting.
+	mintExternalServiceTokenMethod := ""
+	if hasTokenExchanger && info.MintExternalServiceTokenMethod != "" {
+		mintExternalServiceTokenMethod = strutil.ToSnakeCase(info.MintExternalServiceTokenMethod)
+	}
 
 	// client_im exchanger — prefers the gateway C2S proxy. Defaults to the
 	// authoritative values if no client-reachable mint is found.
@@ -152,15 +158,17 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 
 	// Template data
 	data := struct {
-		CrateBasePath              string
-		CrateBasePathUnderscore    string
-		TokenExchangerPackage      string // authoritative (S2S) mint package — used by service_im
-		MintServiceName            string // proto service name, e.g. "Mint"
-		MintClientModule           string // Rust module name, e.g. "mint_client"
-		MintClientType             string // Rust type name, e.g. "MintClient"
-		MintServiceTokenMethod     string // Rust method name for MintServiceTokenRequest exchange
-		HasTokenExchanger          bool
-		DefaultAudience            string
+		CrateBasePath           string
+		CrateBasePathUnderscore string
+		TokenExchangerPackage   string // authoritative (S2S) mint package — used by service_im
+		MintServiceName         string // proto service name, e.g. "Mint"
+		MintClientModule        string // Rust module name, e.g. "mint_client"
+		MintClientType          string // Rust type name, e.g. "MintClient"
+		MintServiceTokenMethod  string // Rust method name for MintServiceTokenRequest exchange
+		// Rust method name for MintExternalServiceTokenRequest; empty if undeclared.
+		MintExternalServiceTokenMethod string
+		HasTokenExchanger              bool
+		DefaultAudience                string
 		// Client-facing (C2S-reachable) mint — used by client_im. May differ from
 		// the authoritative one (e.g. a gateway Mint proxy vs the S2S Mint).
 		ClientTokenExchangerPackage string
@@ -177,28 +185,29 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		KeepaliveTimeoutSecs        int
 		KeepalivePermitMinTimeSecs  int
 	}{
-		CrateBasePath:               config.CrateBasePath,
-		CrateBasePathUnderscore:     strings.ReplaceAll(config.CrateBasePath, "-", "_"),
-		TokenExchangerPackage:       texPkg,
-		MintServiceName:             mintServiceName,
-		MintClientModule:            mintClientModule,
-		MintClientType:              mintClientType,
-		MintServiceTokenMethod:      mintServiceTokenMethod,
-		HasTokenExchanger:           hasTokenExchanger,
-		DefaultAudience:             defaultAudience,
-		ClientTokenExchangerPackage: clientTexPkg,
-		ClientMintClientModule:      clientMintClientModule,
-		ClientMintClientType:        clientMintClientType,
-		ClientTokenMintMethod:       clientTokenMintMethod,
-		HasClientTokenExchanger:     hasClientTokenExchanger,
-		ServiceRPCs:                 svcRPCInfos,
-		HasAccountingRecord:         hasAccountingRecord,
-		ServiceLabel:                config.ServiceLabel(),
-		AcceptedAudiences:           acceptedAudiences,
-		Spiffe:                      commonspiffe.TemplateData(),
-		KeepaliveTimeSecs:           keepaliveconst.TimeSecs,
-		KeepaliveTimeoutSecs:        keepaliveconst.TimeoutSecs,
-		KeepalivePermitMinTimeSecs:  keepaliveconst.PermitMinTimeSecs,
+		CrateBasePath:                  config.CrateBasePath,
+		CrateBasePathUnderscore:        strings.ReplaceAll(config.CrateBasePath, "-", "_"),
+		TokenExchangerPackage:          texPkg,
+		MintServiceName:                mintServiceName,
+		MintClientModule:               mintClientModule,
+		MintClientType:                 mintClientType,
+		MintServiceTokenMethod:         mintServiceTokenMethod,
+		MintExternalServiceTokenMethod: mintExternalServiceTokenMethod,
+		HasTokenExchanger:              hasTokenExchanger,
+		DefaultAudience:                defaultAudience,
+		ClientTokenExchangerPackage:    clientTexPkg,
+		ClientMintClientModule:         clientMintClientModule,
+		ClientMintClientType:           clientMintClientType,
+		ClientTokenMintMethod:          clientTokenMintMethod,
+		HasClientTokenExchanger:        hasClientTokenExchanger,
+		ServiceRPCs:                    svcRPCInfos,
+		HasAccountingRecord:            hasAccountingRecord,
+		ServiceLabel:                   config.ServiceLabel(),
+		AcceptedAudiences:              acceptedAudiences,
+		Spiffe:                         commonspiffe.TemplateData(),
+		KeepaliveTimeSecs:              keepaliveconst.TimeSecs,
+		KeepaliveTimeoutSecs:           keepaliveconst.TimeoutSecs,
+		KeepalivePermitMinTimeSecs:     keepaliveconst.PermitMinTimeSecs,
 	}
 
 	langFS, err := fs.Sub(templates.FS, "rust/chassis")

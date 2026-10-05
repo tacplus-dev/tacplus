@@ -39,8 +39,11 @@ type TokenExchangerInfo struct {
 	ServiceName            string // proto service name, e.g. "Mint"
 	TokenMintMethod        string // RPC accepting TokenMintRequest and returning TokenMintResponse
 	MintServiceTokenMethod string // RPC accepting MintServiceTokenRequest and returning TokenMintResponse
-	X509MintMethod         string // RPC accepting X509MintRequest and returning X509CertChain
-	IsProxy                bool   // true for the client-reachable C2S front (token_minter {proxy: true})
+	// RPC accepting MintExternalServiceTokenRequest and returning
+	// TokenMintResponse. Optional: empty when the minter declares none.
+	MintExternalServiceTokenMethod string
+	X509MintMethod                 string // RPC accepting X509MintRequest and returning X509CertChain
+	IsProxy                        bool   // true for the client-reachable C2S front (token_minter {proxy: true})
 }
 
 // scanTokenMinters parses protoDir via the descriptor model and returns every

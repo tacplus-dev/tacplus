@@ -155,6 +155,25 @@ message ExternalTokenMintResponse {
   reserved "saml_assertion";
 }
 
+// MintExternalServiceTokenRequest is the input for minting a service's OWN
+// identity token for an off-cluster audience (e.g. a workload identity
+// federation jwt-bearer assertion). The token minter answers with
+// TokenMintResponse.access_token: sub = the caller's SPIFFE ID, aud = aud,
+// iss = the fleet issuer, signed ES256, a fresh jti on every call, and an exp
+// no more than 600 seconds out. Callers must not cache or reuse the result.
+message MintExternalServiceTokenRequest {
+  // input_token is the caller's kernel-signed service token (the
+  // self-authenticating credential, as on MintServiceToken's exchange path).
+  string input_token = 1;
+  // aud is the external audience, e.g. "https://api.anthropic.com".
+  string aud = 2;
+  // exp is the requested expiry (Unix seconds); the minter rejects a value
+  // more than 600 seconds out.
+  int64 exp = 3;
+  string trace_id = 200;
+  bool noop = 201;
+}
+
 // MintDelegatedTokenRequest is the input for standing-delegation (Grant) token
 // minting. The delegate's own identity is verified from its S2S bearer token
 // (Authorization header), not carried in the request — only the Grant id it

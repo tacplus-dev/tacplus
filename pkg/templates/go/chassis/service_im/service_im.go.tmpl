@@ -66,6 +66,12 @@ const k8sTokenFileEnv = "KERNEL_K8S_TOKEN_FILE"
 
 // exchangeTimeout is the maximum time for a single token exchange RPC.
 const exchangeTimeout = 10 * time.Second
+{{- if .MintExternalServiceTokenMethod}}
+
+// externalTokenLifetime is the lifetime requested for an external-audience
+// token. The token minter rejects anything longer.
+const externalTokenLifetime = 600 * time.Second
+{{- end}}
 
 // tokenEntry holds a cached token and its expiry for a specific audience.
 type tokenEntry struct {
@@ -447,6 +453,43 @@ func (im *IdentityManager) getTokenForOnce(audience string) (string, error) {
 		return im.cloudMinter.getTokenFor(audience)
 	}
 	return "", fmt.Errorf("no token source configured")
+}
+
+// TokenForExternal mints a NEW kernel-signed token for an off-cluster audience
+// on every call: sub = this service's SPIFFE ID, aud = audience, ES256, a fresh
+// jti, exp at most 600 seconds out. Never cached — an external verifier (e.g.
+// workload identity federation) rejects a replayed jti.
+func (im *IdentityManager) TokenForExternal(audience string) (string, error) {
+{{- if .MintExternalServiceTokenMethod}}
+	inputToken, err := im.GetToken()
+	if err != nil {
+		return "", err
+	}
+	im.connMu.Lock()
+	conn := im.conn
+	im.connMu.Unlock()
+	if conn == nil {
+		return "", fmt.Errorf("token authority connection not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), exchangeTimeout)
+	defer cancel()
+	resp, err := cluster_svc_pb.New{{.MintServiceName}}Client(conn).{{.MintExternalServiceTokenMethod}}(ctx, &common_pb.MintExternalServiceTokenRequest{
+		InputToken: inputToken,
+		Aud:        audience,
+		Exp:        time.Now().Add(externalTokenLifetime).Unix(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("external token mint (%s): %w", audience, err)
+	}
+	token := resp.GetAccessToken().GetBase64()
+	if token == "" {
+		return "", fmt.Errorf("external token mint (%s): response missing access_token", audience)
+	}
+	return token, nil
+{{- else}}
+	_ = audience
+	return "", fmt.Errorf("im: the token minter declares no MintExternalServiceTokenRequest RPC")
+{{- end}}
 }
 
 // RefreshToken forces a token refresh by clearing the cached token.

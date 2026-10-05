@@ -84,6 +84,7 @@ func TestDiscoverTokenMinter_RecordsExchangeMethodNames(t *testing.T) {
 	dir := tokenMinterDir(t, `
 message TokenMintRequest {}
 message MintServiceTokenRequest {}
+message MintExternalServiceTokenRequest {}
 message TokenMintResponse {}
 message X509MintRequest {}
 message X509CertChain {}
@@ -91,6 +92,7 @@ message X509CertChain {}
 service AuthMint {
   option (spec.token_minter) = {};
   rpc MintServiceToken(MintServiceTokenRequest) returns (TokenMintResponse);
+  rpc MintExternalServiceToken(MintExternalServiceTokenRequest) returns (TokenMintResponse);
   rpc MintX509Cert(X509MintRequest) returns (X509CertChain);
 }
 
@@ -110,6 +112,9 @@ service ProxyMint {
 	if auth.MintServiceTokenMethod != "MintServiceToken" {
 		t.Errorf("authoritative MintServiceTokenMethod = %q, want MintServiceToken", auth.MintServiceTokenMethod)
 	}
+	if auth.MintExternalServiceTokenMethod != "MintExternalServiceToken" {
+		t.Errorf("authoritative MintExternalServiceTokenMethod = %q, want MintExternalServiceToken", auth.MintExternalServiceTokenMethod)
+	}
 	if auth.X509MintMethod != "MintX509Cert" {
 		t.Errorf("authoritative X509MintMethod = %q, want MintX509Cert", auth.X509MintMethod)
 	}
@@ -123,6 +128,9 @@ service ProxyMint {
 	}
 	if client.TokenMintMethod != "MintToken" {
 		t.Errorf("client TokenMintMethod = %q, want MintToken", client.TokenMintMethod)
+	}
+	if client.MintExternalServiceTokenMethod != "" {
+		t.Errorf("client MintExternalServiceTokenMethod = %q, want empty (ProxyMint declares none)", client.MintExternalServiceTokenMethod)
 	}
 }
 

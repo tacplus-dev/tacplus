@@ -46,6 +46,7 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 	texPkg := ""
 	texOuterClass := ""
 	mintServiceName := ""
+	mintExternalServiceTokenMethod := ""
 	hasTokenExchanger := false
 	info, err := parser.DiscoverTokenExchangerPackage(config.AnnotatedProtoDir)
 	if err != nil {
@@ -55,6 +56,9 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		texPkg = info.Package
 		texOuterClass = strings.ToUpper(info.Package[:1]) + info.Package[1:]
 		mintServiceName = info.ServiceName
+		if info.MintExternalServiceTokenMethod != "" {
+			mintExternalServiceTokenMethod = strutil.ToLowerCamelCase(info.MintExternalServiceTokenMethod)
+		}
 		hasTokenExchanger = true
 	}
 	defaultAudience := config.ServiceLabel()
@@ -147,51 +151,54 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 
 	// Template data
 	data := struct {
-		PackageBase                string
-		InterfacesBase             string
-		ChassisBase                string
-		TypesBase                  string
-		HasTokenExchanger          bool
-		TokenExchangerPackage      string // proto package name for token mint service
-		TokenExchangerOuterClass   string // Java outer class for token mint service proto
-		TokenRequestPackage        string // proto package for unified TokenMintRequest (sys/tokenrequest)
-		TokenRequestOuterClass     string // Java outer class for TokenMintRequest proto
-		MintServiceName            string // proto service name, e.g. "Mint"
-		DefaultAudience            string
-		AudienceMappings           []audienceMapping
-		ServiceLabel               string   // service identity baked into Authorizer
-		AcceptedAudiences          []string // every `aud` the Authorizer accepts: own label + hosted traits
-		Spiffe                     commonspiffe.TemplateGrammar
-		KeepaliveTimeSecs          int
-		KeepaliveTimeoutSecs       int
-		KeepalivePermitMinTimeSecs int
-		HasAccountingRecord        bool   // proto set declares accountingrecord.AccountingRecord
-		AccountingRecordTypeImport string // e.g. "com.example.types.vservices.accountingrecord.Accountingrecord"
-		AccountingRecordJavaType   string // e.g. "Accountingrecord.AccountingRecord"
-		ServiceRPCs                []javaAmServiceRPC
+		PackageBase              string
+		InterfacesBase           string
+		ChassisBase              string
+		TypesBase                string
+		HasTokenExchanger        bool
+		TokenExchangerPackage    string // proto package name for token mint service
+		TokenExchangerOuterClass string // Java outer class for token mint service proto
+		TokenRequestPackage      string // proto package for unified TokenMintRequest (sys/tokenrequest)
+		TokenRequestOuterClass   string // Java outer class for TokenMintRequest proto
+		MintServiceName          string // proto service name, e.g. "Mint"
+		// Java stub method for MintExternalServiceTokenRequest; empty if undeclared.
+		MintExternalServiceTokenMethod string
+		DefaultAudience                string
+		AudienceMappings               []audienceMapping
+		ServiceLabel                   string   // service identity baked into Authorizer
+		AcceptedAudiences              []string // every `aud` the Authorizer accepts: own label + hosted traits
+		Spiffe                         commonspiffe.TemplateGrammar
+		KeepaliveTimeSecs              int
+		KeepaliveTimeoutSecs           int
+		KeepalivePermitMinTimeSecs     int
+		HasAccountingRecord            bool   // proto set declares accountingrecord.AccountingRecord
+		AccountingRecordTypeImport     string // e.g. "com.example.types.vservices.accountingrecord.Accountingrecord"
+		AccountingRecordJavaType       string // e.g. "Accountingrecord.AccountingRecord"
+		ServiceRPCs                    []javaAmServiceRPC
 	}{
-		PackageBase:                packageBase,
-		InterfacesBase:             config.Lang.Java.JavaImportBase(),
-		ChassisBase:                packageBase + ".chassis",
-		TypesBase:                  packageBase + ".types",
-		HasTokenExchanger:          hasTokenExchanger,
-		TokenExchangerPackage:      texPkg,
-		TokenExchangerOuterClass:   texOuterClass,
-		TokenRequestPackage:        "sys.tokenrequest",
-		TokenRequestOuterClass:     "Tokenrequest",
-		MintServiceName:            mintServiceName,
-		DefaultAudience:            defaultAudience,
-		AudienceMappings:           audienceMappings,
-		ServiceLabel:               config.ServiceLabel(),
-		AcceptedAudiences:          acceptedAudiences,
-		Spiffe:                     commonspiffe.TemplateData(),
-		KeepaliveTimeSecs:          keepaliveconst.TimeSecs,
-		KeepaliveTimeoutSecs:       keepaliveconst.TimeoutSecs,
-		KeepalivePermitMinTimeSecs: keepaliveconst.PermitMinTimeSecs,
-		HasAccountingRecord:        hasAccountingRecord,
-		AccountingRecordTypeImport: accountingRecordTypeImport,
-		AccountingRecordJavaType:   accountingRecordJavaType,
-		ServiceRPCs:                serviceRPCs,
+		PackageBase:                    packageBase,
+		InterfacesBase:                 config.Lang.Java.JavaImportBase(),
+		ChassisBase:                    packageBase + ".chassis",
+		TypesBase:                      packageBase + ".types",
+		HasTokenExchanger:              hasTokenExchanger,
+		TokenExchangerPackage:          texPkg,
+		TokenExchangerOuterClass:       texOuterClass,
+		TokenRequestPackage:            "sys.tokenrequest",
+		TokenRequestOuterClass:         "Tokenrequest",
+		MintServiceName:                mintServiceName,
+		MintExternalServiceTokenMethod: mintExternalServiceTokenMethod,
+		DefaultAudience:                defaultAudience,
+		AudienceMappings:               audienceMappings,
+		ServiceLabel:                   config.ServiceLabel(),
+		AcceptedAudiences:              acceptedAudiences,
+		Spiffe:                         commonspiffe.TemplateData(),
+		KeepaliveTimeSecs:              keepaliveconst.TimeSecs,
+		KeepaliveTimeoutSecs:           keepaliveconst.TimeoutSecs,
+		KeepalivePermitMinTimeSecs:     keepaliveconst.PermitMinTimeSecs,
+		HasAccountingRecord:            hasAccountingRecord,
+		AccountingRecordTypeImport:     accountingRecordTypeImport,
+		AccountingRecordJavaType:       accountingRecordJavaType,
+		ServiceRPCs:                    serviceRPCs,
 	}
 
 	langFS, err := fs.Sub(templates.FS, "java/chassis")

@@ -525,6 +525,15 @@ public class ServiceManager implements AutoCloseable {
     }
 
     /**
+     * Returns a NEW kernel-signed token for an off-cluster audience (e.g.
+     * "https://api.anthropic.com") on every call: sub = this service's SPIFFE ID,
+     * ES256, a fresh jti, exp at most 600 seconds out. Do not cache it.
+     */
+    public String tokenForExternal(String audience) throws Exception {
+        return identity.tokenForExternal(audience);
+    }
+
+    /**
      * Returns a token provider function for authenticated gRPC calls.
      * Returns a Supplier that yields the current bearer token.
      */

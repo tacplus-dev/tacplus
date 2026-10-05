@@ -1277,15 +1277,16 @@ func (p *DescriptorParser) TokenMinters() []TokenExchangerInfo {
 			if !svc.IsTokenMinter {
 				continue
 			}
-			tokenMintMethod, mintServiceTokenMethod, x509MintMethod := tokenMinterRPCMethods(svc.Methods)
+			tokenMintMethod, mintServiceTokenMethod, mintExternalServiceTokenMethod, x509MintMethod := tokenMinterRPCMethods(svc.Methods)
 			out = append(out, TokenExchangerInfo{
-				Package:                fd.Package,
-				Dir:                    dir,
-				ServiceName:            svc.Name,
-				TokenMintMethod:        tokenMintMethod,
-				MintServiceTokenMethod: mintServiceTokenMethod,
-				X509MintMethod:         x509MintMethod,
-				IsProxy:                svc.TokenMinterProxy,
+				Package:                        fd.Package,
+				Dir:                            dir,
+				ServiceName:                    svc.Name,
+				TokenMintMethod:                tokenMintMethod,
+				MintServiceTokenMethod:         mintServiceTokenMethod,
+				MintExternalServiceTokenMethod: mintExternalServiceTokenMethod,
+				X509MintMethod:                 x509MintMethod,
+				IsProxy:                        svc.TokenMinterProxy,
 			})
 		}
 	}
@@ -1298,18 +1299,20 @@ func (p *DescriptorParser) TokenMinters() []TokenExchangerInfo {
 	return out
 }
 
-func tokenMinterRPCMethods(methods []MethodDescriptor) (tokenMint string, mintServiceToken string, x509Mint string) {
+func tokenMinterRPCMethods(methods []MethodDescriptor) (tokenMint string, mintServiceToken string, mintExternalServiceToken string, x509Mint string) {
 	for _, m := range methods {
 		switch {
 		case methodSignatureMatches(m, "TokenMintRequest", "TokenMintResponse"):
 			tokenMint = m.Name
 		case methodSignatureMatches(m, "MintServiceTokenRequest", "TokenMintResponse"):
 			mintServiceToken = m.Name
+		case methodSignatureMatches(m, "MintExternalServiceTokenRequest", "TokenMintResponse"):
+			mintExternalServiceToken = m.Name
 		case methodSignatureMatches(m, "X509MintRequest", "X509CertChain"):
 			x509Mint = m.Name
 		}
 	}
-	return tokenMint, mintServiceToken, x509Mint
+	return tokenMint, mintServiceToken, mintExternalServiceToken, x509Mint
 }
 
 func methodSignatureMatches(m MethodDescriptor, inputBase string, outputBase string) bool {

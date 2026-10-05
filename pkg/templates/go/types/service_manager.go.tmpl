@@ -756,6 +756,14 @@ func (sm *ServiceManager) TokenForService(audience string) (string, error) {
 return sm.identity.GetTokenFor(audience)
 }
 
+// TokenForExternal returns a NEW kernel-signed token for an off-cluster
+// audience (e.g. "https://api.anthropic.com") on every call: sub = this
+// service's SPIFFE ID, ES256, a fresh jti, exp at most 600 seconds out. Do not
+// cache it.
+func (sm *ServiceManager) TokenForExternal(audience string) (string, error) {
+return sm.identity.TokenForExternal(audience)
+}
+
 // Close releases all resources held by the ServiceManager.
 // Use this when not calling Run(), e.g. in gateway or other custom entrypoints.
 func (sm *ServiceManager) Close() {

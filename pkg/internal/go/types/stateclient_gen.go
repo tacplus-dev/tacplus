@@ -484,39 +484,42 @@ func generateIdentityManager(config *tactype.Config) error {
 	}
 
 	data := struct {
-		GrpcconfigTypesPath        string
-		StateServiceTypesPath      string
-		CommonTypesPath            string
-		CloudIdentityTypesPath     string
-		CloudVendorTypesPath       string
-		KeyTypesPath               string
-		KeyLibPath                 string
-		TokenLibPath               string
-		TokenTypesPath             string
-		X509LibPath                string
-		ServiceAudience            string
-		MintServiceName            string
-		AudienceMappings           []audienceMapping
-		KeepaliveTimeSecs          int
-		KeepaliveTimeoutSecs       int
-		KeepalivePermitMinTimeSecs int
+		GrpcconfigTypesPath    string
+		StateServiceTypesPath  string
+		CommonTypesPath        string
+		CloudIdentityTypesPath string
+		CloudVendorTypesPath   string
+		KeyTypesPath           string
+		KeyLibPath             string
+		TokenLibPath           string
+		TokenTypesPath         string
+		X509LibPath            string
+		ServiceAudience        string
+		MintServiceName        string
+		// RPC accepting MintExternalServiceTokenRequest; empty if undeclared.
+		MintExternalServiceTokenMethod string
+		AudienceMappings               []audienceMapping
+		KeepaliveTimeSecs              int
+		KeepaliveTimeoutSecs           int
+		KeepalivePermitMinTimeSecs     int
 	}{
-		GrpcconfigTypesPath:        fmt.Sprintf("%s/types/sys/grpcconfig", config.ModuleBasePath),
-		StateServiceTypesPath:      fmt.Sprintf("%s/types/%s", config.ModuleBasePath, texInfo.Dir),
-		CommonTypesPath:            fmt.Sprintf("%s/types/sys/tokenrequest", config.ModuleBasePath),
-		CloudIdentityTypesPath:     fmt.Sprintf("%s/types/sys/cloudidentity", config.ModuleBasePath),
-		CloudVendorTypesPath:       fmt.Sprintf("%s/types/sys/cloudvendor", config.ModuleBasePath),
-		KeyTypesPath:               fmt.Sprintf("%s/types/sys/key", config.ModuleBasePath),
-		KeyLibPath:                 fmt.Sprintf("%s/chassis/key", config.ModuleBasePath),
-		TokenLibPath:               fmt.Sprintf("%s/chassis/token", config.ModuleBasePath),
-		TokenTypesPath:             fmt.Sprintf("%s/types/sys/token", config.ModuleBasePath),
-		X509LibPath:                fmt.Sprintf("%s/chassis/x509", config.ModuleBasePath),
-		ServiceAudience:            texInfo.Package,
-		MintServiceName:            texInfo.ServiceName,
-		AudienceMappings:           audienceMappings,
-		KeepaliveTimeSecs:          keepaliveconst.TimeSecs,
-		KeepaliveTimeoutSecs:       keepaliveconst.TimeoutSecs,
-		KeepalivePermitMinTimeSecs: keepaliveconst.PermitMinTimeSecs,
+		GrpcconfigTypesPath:            fmt.Sprintf("%s/types/sys/grpcconfig", config.ModuleBasePath),
+		StateServiceTypesPath:          fmt.Sprintf("%s/types/%s", config.ModuleBasePath, texInfo.Dir),
+		CommonTypesPath:                fmt.Sprintf("%s/types/sys/tokenrequest", config.ModuleBasePath),
+		CloudIdentityTypesPath:         fmt.Sprintf("%s/types/sys/cloudidentity", config.ModuleBasePath),
+		CloudVendorTypesPath:           fmt.Sprintf("%s/types/sys/cloudvendor", config.ModuleBasePath),
+		KeyTypesPath:                   fmt.Sprintf("%s/types/sys/key", config.ModuleBasePath),
+		KeyLibPath:                     fmt.Sprintf("%s/chassis/key", config.ModuleBasePath),
+		TokenLibPath:                   fmt.Sprintf("%s/chassis/token", config.ModuleBasePath),
+		TokenTypesPath:                 fmt.Sprintf("%s/types/sys/token", config.ModuleBasePath),
+		X509LibPath:                    fmt.Sprintf("%s/chassis/x509", config.ModuleBasePath),
+		ServiceAudience:                texInfo.Package,
+		MintServiceName:                texInfo.ServiceName,
+		MintExternalServiceTokenMethod: texInfo.MintExternalServiceTokenMethod,
+		AudienceMappings:               audienceMappings,
+		KeepaliveTimeSecs:              keepaliveconst.TimeSecs,
+		KeepaliveTimeoutSecs:           keepaliveconst.TimeoutSecs,
+		KeepalivePermitMinTimeSecs:     keepaliveconst.PermitMinTimeSecs,
 	}
 
 	var buf bytes.Buffer
@@ -603,6 +606,11 @@ func (im *IdentityManager) GetTokenFor(audience string) (string, error) {
 
 func (im *IdentityManager) RefreshToken() error {
 	return errNoTokenSource
+}
+
+func (im *IdentityManager) TokenForExternal(audience string) (string, error) {
+	_ = audience
+	return "", errNoTokenSource
 }
 
 func (im *IdentityManager) InstanceId() string {

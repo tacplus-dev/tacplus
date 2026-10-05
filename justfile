@@ -18,6 +18,7 @@ lock := "bash scripts/with-tree-lock.sh"
 # must move in lockstep with this value:
 #   cross-test/current-generation/run.sh  write_java_compile_pom()
 #   cross-test/cert-stream/run.sh         write_java_compile_pom()
+#   cross-test/external-token/testdata/pom.xml
 #   cross-test/consumer-contract/run.sh   (pom heredoc)
 #   cross-test/server-runtime/fixture/java/pom.xml
 #   cross-test/wire-corpus/decoder/java/pom.xml
@@ -205,6 +206,19 @@ cert-stream-java:
 
 cert-stream-rust:
   {{lock}} bash cross-test/cert-stream/run.sh --language rust
+
+# Behavioral coverage of the generated external-audience token accessor
+# (token_for_external): a fresh token minted per call, never cached.
+external-token: external-token-go external-token-java external-token-rust
+
+external-token-go:
+  {{lock}} bash cross-test/external-token/run.sh --language go
+
+external-token-java:
+  {{lock}} bash cross-test/external-token/run.sh --language java
+
+external-token-rust:
+  {{lock}} bash cross-test/external-token/run.sh --language rust
 
 # Generation gate against the REAL platform + app proto repos (not the
 # cross-test/proto fixtures every other gate uses). This is the check that

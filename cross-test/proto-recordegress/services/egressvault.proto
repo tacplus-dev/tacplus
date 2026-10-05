@@ -183,6 +183,15 @@ message VaultStatusResponse {
   int64 row_count = 2;
 }
 
+// The user-AND-listed-service rpc's request and response (CreateVaultNote).
+message CreateVaultNoteRequest {
+  string note = 1;
+}
+
+message CreateVaultNoteResponse {
+  string note_id = 1;
+}
+
 message VaultPageRequest {
   int32 page_size = 1;
   string page_token = 2;
@@ -231,6 +240,15 @@ service EgressVaultApi {
   // The ungated control: no record rows in the response, so no filter.
   rpc GetVaultStatus(VaultStatusRequest) returns (VaultStatusResponse) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
+  }
+
+  // The user-AND-listed-service shape: entitled users call it exactly as any
+  // other c2s rpc, and the service identities in auth_services call it too,
+  // with a service token on the same surface. Nothing else is admitted — a
+  // service not listed is refused. No record rows in the response, so no
+  // egress filter; it is here for the authorizer, not the row filters.
+  rpc CreateVaultNote(CreateVaultNoteRequest) returns (CreateVaultNoteResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ENTITLED_USERS], auth_services: ["notary"]};
   }
 
   // PAGE seam.

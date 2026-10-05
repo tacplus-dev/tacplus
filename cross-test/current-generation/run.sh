@@ -371,6 +371,18 @@ run_java_generated_self_tests() {
       return 1
     }
   fi
+  # The record-egress fixture's user-and-listed-service self-test, copied in by
+  # install_user_and_listed_service_selftest (which dies if it cannot), so it is
+  # present exactly in that fixture's build.
+  local uls_test uls_class
+  uls_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/UserAndListedServiceTest.java' -print -quit)"
+  if [[ -n "$uls_test" ]]; then
+    uls_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$uls_test").$(basename "$uls_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$uls_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+  fi
   assert_clean_log "$test_log"
 }
 
@@ -947,6 +959,53 @@ install_go_state_singleton_selftest() {
   pkg_dir="$(dirname "$(find "$output" -type f -path '*/state/platform/service_health/state.go' -print -quit)")"
   [[ -d "$pkg_dir" ]] || die "requires-device fixture (go): generated service_health package not found under $output"
   cp "$src" "$pkg_dir/"
+}
+
+# install_user_and_listed_service_selftest pins the user-AND-listed-service rpc
+# (EgressVaultApi/CreateVaultNote: entitled users plus auth_services ["notary"]).
+# It asserts the generated wrapper authorizes the rpc through the Authorizer and
+# registers its auth_services, then drops the hand-written test that drives those
+# same two calls into the generated grpcserver chassis, where it can reach the
+# fixture's real grant catalog. compile_current_output then runs it as part of the
+# gate: `go test ./...` (go), `cargo test -p grpcserver` (rust), and
+# run_java_generated_self_tests (java).
+install_user_and_listed_service_selftest() {
+  local output="$1"
+  local language="$2"
+  local api dest
+
+  case "$language" in
+    go)
+      api="$(find "$output" -type f -path '*/servers/services/egressvault/egress_vault_api.go' -print -quit)"
+      [[ -n "$api" ]] || die "record-egress fixture (go): generated EgressVaultApi wrapper not found under $output"
+      grep -qF 'p.authorize(ctx, "/services"+types.EgressVaultApi_CreateVaultNote_FullMethodName, req)' "$api" \
+        || die "record-egress fixture (go): CreateVaultNote is not authorized through the Authorizer in $api"
+      grep -qF 'auth.SetMethodAuth("egressvault.EgressVaultApi/CreateVaultNote", []string{"notary"})' "$api" \
+        || die "record-egress fixture (go): CreateVaultNote's auth_services were not registered in $api"
+      cp "$SELFTESTS_SRC/go/user_and_listed_service_test.go" "$output/chassis/grpcserver/"
+      ;;
+    java)
+      api="$(find "$output" -type f -path '*/servers/services/egressvault/EgressVaultApi.java' -print -quit)"
+      [[ -n "$api" ]] || die "record-egress fixture (java): generated EgressVaultApi wrapper not found under $output"
+      grep -qF 'callerIdentity = checkAuth("EgressVaultApi/CreateVaultNote", request);' "$api" \
+        || die "record-egress fixture (java): CreateVaultNote is not authorized through the Authorizer in $api"
+      grep -qF 'authorizer.setMethodAuth("EgressVaultApi/CreateVaultNote", java.util.List.of("notary"));' "$api" \
+        || die "record-egress fixture (java): CreateVaultNote's auth_services were not registered in $api"
+      dest="$(dirname "$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/AuthorizerBehaviorTest.java' -print -quit)")"
+      [[ -d "$dest" ]] || die "record-egress fixture (java): generated chassis/grpcserver package not found under $output"
+      cp "$SELFTESTS_SRC/java/UserAndListedServiceTest.java" "$dest/"
+      ;;
+    rust)
+      api="$(find "$output" -type f -path '*/servers/services/egressvault/egress_vault_api.rs' -print -quit)"
+      [[ -n "$api" ]] || die "record-egress fixture (rust): generated EgressVaultApi wrapper not found under $output"
+      grep -qF 'self.authorize_method("/services/egressvault.EgressVaultApi/CreateVaultNote", &request)' "$api" \
+        || die "record-egress fixture (rust): CreateVaultNote is not authorized through the Authorizer in $api"
+      grep -qF 'auth.set_method_auth("egressvault.EgressVaultApi/CreateVaultNote", &["notary"]);' "$api" \
+        || die "record-egress fixture (rust): CreateVaultNote's auth_services were not registered in $api"
+      mkdir -p "$output/chassis/grpcserver/tests"
+      cp "$SELFTESTS_SRC/rust/user_and_listed_service_test.rs" "$output/chassis/grpcserver/tests/"
+      ;;
+  esac
 }
 
 # assert_requiresdevice_output checks that the (spec.rpc).requires_device gate was
@@ -1751,6 +1810,7 @@ if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
     output_root="$(resolve_output_root "$dir/tacplus")"
     assert_spiffe_soundness "$dir/tacplus"
     assert_recordegress_output "$output_root" "$language"
+    install_user_and_listed_service_selftest "$output_root" "$language"
     echo "==> Compiling $language record-egress fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/egressvault"
     echo "    PASS $language record-egress"

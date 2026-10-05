@@ -860,6 +860,30 @@ service RestrictedAPI {
 }
 ```
 
+**One rpc for users AND listed services.** `auth_services` on a user rpc of a
+`service_c2s` service adds those service identities to the users it already
+admits. It is still one rpc on one surface, with one handler:
+
+```protobuf
+service Chat {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  // Entitled users post as today; the "scotty" service may post too.
+  rpc CreateChatMessage(Req) returns (Resp) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, flags: [RPC_FLAG_AUTH_ENTITLED_USERS], auth_services: ["scotty"]};
+  }
+}
+```
+
+A user token is authorized by its entitlements, a service token by
+`auth_services` (matched against the token's location-agnostic service path, so
+`"scotty"` matches every tenant's `scotty`), and an unlisted service is refused.
+The calling service declares `option (spec.grpc_s2s_client) = {service:
+"pkg.Chat"};` and uses the generated client. The handler's `Caller` is the
+verified token's identity, so `(spec.principal)` / `(spec.namespace)` request
+fields bind to the service's SPIFFE ID and its namespace, never to a value the
+caller chose.
+
 ### Every user RPC is also an MCP tool
 
 **An rpc on a `(spec.service_c2s)` service is published as an MCP tool

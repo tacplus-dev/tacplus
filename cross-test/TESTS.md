@@ -27,6 +27,13 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
 - `smb` (`cross-test/smb/run.sh`) and `cert-stream`
   (`cross-test/cert-stream/run.sh`): service-mesh-boundary and certificate-stream
   runtime gates for Go, Java, and Rust. Run in the nightly matrix.
+- `external-token` (`cross-test/external-token/run.sh`): behavioral gate for the
+  generated external-audience token accessor (`token_for_external` /
+  `TokenForExternal` / `tokenForExternal`) in Go, Java, and Rust. A mock token
+  minter signs ES256 tokens; two calls must reach it twice and return distinct
+  jtis, each requested with the caller's own kernel token, the given aud, and
+  an exp no more than 600 s out. Local/manual (`just external-token`); not yet
+  in CI.
 - `w2s-validate` (`cross-test/w2s-validate/run.sh`): W2S request (ingress)
   validation gate for Rust — generates a service whose C2S backend has an
   `assert_*` request constraint, hosts the REAL generated

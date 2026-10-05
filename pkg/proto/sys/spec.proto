@@ -1466,9 +1466,15 @@ message RpcAnnotation {
   repeated RpcFlag flags = 3;
 
   // auth_services lists the service identities allowed to call this RPC.
-  // ["*"] = any authenticated service. Only meaningful when principal is
-  // RPC_PRINCIPAL_SERVICE. Per-RPC: two RPCs of one service may legitimately
-  // admit different callers.
+  // ["*"] = any authenticated service. Per-RPC: two RPCs of one service may
+  // legitimately admit different callers.
+  //
+  // On an RPC_PRINCIPAL_USER rpc of a service_c2s service it ADDS the listed
+  // service identities to the users the rpc already admits: a user token is
+  // still authorized by its entitlements, a service token by these patterns,
+  // and a service not listed is refused. This is how one rpc is "c2s for
+  // users + s2s for these services"; the handler's Caller is whichever
+  // identity the verified token names.
   repeated string auth_services = 4;
 
   // target_namespace_field names the request field whose string value carries

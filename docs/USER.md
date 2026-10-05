@@ -947,9 +947,10 @@ paged on both surfaces, off one handler.
 
 Because carrier injection is a proto-text operation it is language-blind, so
 tacplus refuses (**MCP-6**) to generate a service that owns tools for a language
-that emits a service wrapper but has no MCP dispatch backend — today Python and
-TypeScript. Go, Java and Rust have the backend. Swift and C# emit no wrapper at
-all, cannot host, and are not gated.
+that emits a service wrapper but has no MCP dispatch backend — today Python.
+Go, Java and Rust have the backend. TypeScript, Swift and C# are client-only:
+they emit no wrapper at all, cannot host, and are not gated — a TypeScript client
+of a tool-owning service (the webapp) generates normally.
 
 ### `RPC_PRINCIPAL_MCP`: a tool with no gRPC twin
 

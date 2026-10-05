@@ -329,7 +329,9 @@ func TestAutoExpose_McpToolNameOverride(t *testing.T) {
 }
 
 // MCP-6: a language that generates a service wrapper but has no MCP dispatch
-// backend must not silently host a service that owns tools.
+// backend must not silently host a service that owns tools. A client-only
+// target (typescript, swift, csharp) hosts nothing, so it is not gated: the
+// webapp is generated in typescript against every c2s service in the fleet.
 func TestAutoExpose_Mcp6LanguageGate(t *testing.T) {
 	skipIfNoProtoc(t)
 
@@ -338,12 +340,12 @@ func TestAutoExpose_Mcp6LanguageGate(t *testing.T) {
   rpc GetTicket(Ping) returns (Ping);
 `)
 
-	for _, lang := range []string{"go", "java", "rust", "swift", "csharp", ""} {
+	for _, lang := range []string{"go", "java", "rust", "typescript", "swift", "csharp", ""} {
 		if err := validateMcpAnnotations([]*FileDescriptor{fd}, lang); err != nil {
 			t.Errorf("language %q: unexpected MCP-6 failure: %v", lang, err)
 		}
 	}
-	for _, lang := range []string{"python", "typescript"} {
+	for _, lang := range []string{"python"} {
 		err := validateMcpAnnotations([]*FileDescriptor{fd}, lang)
 		if err == nil {
 			t.Errorf("language %q: a host with no MCP backend was accepted", lang)

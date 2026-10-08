@@ -153,8 +153,7 @@ func generateFromMapClass(msg model.Message, pf model.ProtoFile, baseDir, subdir
 
 		fmt.Fprintf(&b, "case %s:\n", field.ParamKey)
 
-		javaFieldName := toJavaFieldName(field.Name)
-		setterName := "set" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+		setterName := "set" + javaFieldNameUpper(field.Name)
 
 		// Check if field is an enum type
 		isEnum := field.IsEnum || isEnumType(field.Type, pf.Enums)
@@ -167,7 +166,7 @@ func generateFromMapClass(msg model.Message, pf model.ProtoFile, baseDir, subdir
 				b.WriteString("for (String part : parts) {\n")
 				b.WriteString("try {\n")
 				fmt.Fprintf(&b, "builder.add%s(%s.%s.valueOf(part.toUpperCase().replace('-', '_')));\n",
-					strings.ToUpper(javaFieldName[:1])+javaFieldName[1:], outerClassName, field.Type)
+					javaFieldNameUpper(field.Name), outerClassName, field.Type)
 				b.WriteString("} catch (IllegalArgumentException e) {\n")
 				b.WriteString("// Ignore invalid enum values\n")
 				b.WriteString("}\n")
@@ -175,7 +174,7 @@ func generateFromMapClass(msg model.Message, pf model.ProtoFile, baseDir, subdir
 			} else {
 				// For repeated string fields
 				fmt.Fprintf(&b, "builder.addAll%s(Arrays.asList(value.split(\",\")));\n",
-					strings.ToUpper(javaFieldName[:1])+javaFieldName[1:])
+					javaFieldNameUpper(field.Name))
 			}
 			b.WriteString("}\n")
 		} else if isEnum {
@@ -240,8 +239,7 @@ func generateFromMapClass(msg model.Message, pf model.ProtoFile, baseDir, subdir
 			continue // Skip if enum value doesn't have json_return_value
 		}
 
-		javaFieldName := toJavaFieldName(field.Name)
-		getterName := "get" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+		getterName := "get" + javaFieldNameUpper(field.Name)
 
 		// Check if field is an enum type
 		isEnum := field.IsEnum || isEnumType(field.Type, pf.Enums)
@@ -265,19 +263,19 @@ func generateFromMapClass(msg model.Message, pf model.ProtoFile, baseDir, subdir
 			// For enum fields, convert to lowercase with hyphens
 			// Use UNRECOGNIZED as the sentinel value for protobuf enums
 			fmt.Fprintf(&b, "if (m.has%s() && m.%s() != %s.%s.UNRECOGNIZED) {\n",
-				strings.ToUpper(javaFieldName[:1])+javaFieldName[1:], getterName,
+				javaFieldNameUpper(field.Name), getterName,
 				outerClassName, field.Type)
 			fmt.Fprintf(&b, "result.put(\"%s\", m.%s().name().toLowerCase().replace('_', '-'));\n", jsonKey, getterName)
 			b.WriteString("}\n")
 		} else if strings.Contains(field.Type, "int") || strings.Contains(field.Type, "double") || strings.Contains(field.Type, "float") { // proto scalar type names (int32, int64, sint32, double, float)
 			// For numeric fields, convert to string
-			fmt.Fprintf(&b, "if (m.has%s()) {\n", strings.ToUpper(javaFieldName[:1])+javaFieldName[1:])
+			fmt.Fprintf(&b, "if (m.has%s()) {\n", javaFieldNameUpper(field.Name))
 			fmt.Fprintf(&b, "result.put(\"%s\", String.valueOf(m.%s()));\n", jsonKey, getterName)
 			b.WriteString("}\n")
 		} else {
 			// For string fields
 			fmt.Fprintf(&b, "if (m.has%s() && !m.%s().isEmpty()) {\n",
-				strings.ToUpper(javaFieldName[:1])+javaFieldName[1:], getterName)
+				javaFieldNameUpper(field.Name), getterName)
 			fmt.Fprintf(&b, "result.put(\"%s\", m.%s());\n", jsonKey, getterName)
 			b.WriteString("}\n")
 		}

@@ -25,7 +25,7 @@ func writeJavaEnumDefinedValidation(b *strings.Builder, msg model.Message, field
 		b.WriteString("}\n")
 		b.WriteString("}\n")
 	} else if field.IsOptional {
-		fmt.Fprintf(b, "if (msg.has%s()) {\n", upperFirst(javaFieldName))
+		fmt.Fprintf(b, "if (msg.has%s()) {\n", javaFieldNameUpper(field.Name))
 		fmt.Fprintf(b, "if (msg.%s() == 0) {\n", valueGetter)
 		writeJavaValidationThrow(b, fmt.Sprintf("field %s must be defined", javaFieldName))
 		b.WriteString("}\n")
@@ -60,7 +60,7 @@ func writeJavaNumericConstraintValidation(b *strings.Builder, msg model.Message,
 		return nil
 	}
 	if field.IsOptional {
-		fmt.Fprintf(b, "if (msg.has%s()) {\n", upperFirst(javaFieldName))
+		fmt.Fprintf(b, "if (msg.has%s()) {\n", javaFieldNameUpper(field.Name))
 		fmt.Fprintf(b, "long val = msg.%s();\n", getterName)
 		writeJavaNumericConstraintChecks(b, javaFieldName, "val", "", constraint)
 		b.WriteString("}\n")
@@ -147,7 +147,7 @@ func writeJavaFloatConstraintValidation(b *strings.Builder, msg model.Message, f
 		return nil
 	}
 	if field.IsOptional {
-		fmt.Fprintf(b, "if (msg.has%s()) {\n", upperFirst(javaFieldName))
+		fmt.Fprintf(b, "if (msg.has%s()) {\n", javaFieldNameUpper(field.Name))
 		fmt.Fprintf(b, "double val = msg.%s();\n", getterName)
 		writeJavaFloatConstraintChecks(b, javaFieldName, "val", "", constraint, epsilon)
 		b.WriteString("}\n")
@@ -263,13 +263,6 @@ func javaDoubleMessageList(values []float64) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
-func upperFirst(s string) string {
-	if s == "" {
-		return s
-	}
-	return strings.ToUpper(s[:1]) + s[1:]
-}
-
 // javaRequiredZeroCheck returns the Java expression that tests whether a field is
 // at its zero value. It drives the whole requirement family — assert_required plus
 // the conditional required_if_true / required_if_false / required_if_eq — and
@@ -282,7 +275,7 @@ func javaRequiredZeroCheck(field model.Field, javaFieldName, getterName string) 
 	case field.IsRepeated:
 		return fmt.Sprintf("msg.%sCount() == 0", getterName)
 	case field.IsOptional || field.IsMessage:
-		return fmt.Sprintf("!msg.has%s()", upperFirst(javaFieldName))
+		return fmt.Sprintf("!msg.has%s()", javaFieldNameUpper(field.Name))
 	case field.Type == "string" || field.Type == "bytes":
 		return fmt.Sprintf("msg.%s().isEmpty()", getterName)
 	case field.Type == "bool":
@@ -310,14 +303,14 @@ func javaOpenOptionalPresenceGuard(b *strings.Builder, field model.Field, javaFi
 	if !field.IsOptional || field.IsRepeated || field.IsMap {
 		return false
 	}
-	fmt.Fprintf(b, "if (msg.has%s()) {\n", upperFirst(javaFieldName))
+	fmt.Fprintf(b, "if (msg.has%s()) {\n", javaFieldNameUpper(field.Name))
 	return true
 }
 
 // javaSiblingGetter returns the getter name for a sibling field referenced by a
 // conditional-requirement annotation (e.g. "enable_tls" -> "getEnableTls").
 func javaSiblingGetter(siblingName string) string {
-	return "get" + upperFirst(toJavaFieldName(siblingName))
+	return "get" + javaFieldNameUpper(siblingName)
 }
 
 // writeJavaRequiredIfBool emits the required_if_true / required_if_false

@@ -25,11 +25,23 @@ type helpersTemplateData struct {
 	PackagePath string
 	Imports     string
 	Body        string
+	Part        int    // HelpersPart<Part>; zero for Helpers itself
+	Extends     string // superclass in the HelpersPart chain, if any
 }
+
+// helpersClassBudget bounds the generated source bytes of one Helpers class.
+// Every method a class declares or calls costs entries in its constant pool,
+// which the JVM caps at 65,535; a package with hundreds of messages (the query
+// vservice) overflows one class. Over budget, the body is split into a chain
+// HelpersPart1 <- ... <- HelpersPartN <- Helpers, so Helpers.x() still resolves
+// (static methods are inherited) and no call site changes. The budget keeps
+// each class at a small fraction of the limit.
+const helpersClassBudget = 512 << 10
 
 // generateHelpers generates a single consolidated Helpers.java file containing all
 // static helper methods: enum helpers, constants, serialization, validation, map helpers,
-// and type defaults.
+// and type defaults. Over helpersClassBudget the methods move to HelpersPart<N>
+// classes that Helpers extends.
 func generateHelpers(pf model.ProtoFile, baseDir, subdir, outerClassName string, config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, vsEntries []proto.VServiceEntry) error {
 	outputDir := filepath.Join(baseDir, subdir)
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
@@ -139,30 +151,56 @@ func generateHelpers(pf model.ProtoFile, baseDir, subdir, outerClassName string,
 		writeEnvVar(&body, pf, outerClassName, config)
 	}
 
+	// The filesystem and scope sections share private members across their
+	// methods, so each must stay whole in one class if the body is split.
+	var shared strings.Builder
+
 	// Generate filesystem helpers (directoryFromFileSystem / directoryToFileSystem)
 	if proto.EmitsFilesystemHelpers(pf.RelPath, pf.Package) {
-		writeFilesystemHelpers(&body, outerClassName)
+		writeFilesystemHelpers(&shared, outerClassName)
 	}
 
 	// Generate scopeToEntitlements for the entitlements package.
 	if proto.EmitsEntitlementHelpers(pf.RelPath, pf.Package) && len(svcRPCs) > 0 {
-		body.WriteString("// ============ Scope ============\n")
-		writeScopeToEntitlements(&body, svcRPCs, vsEntries)
+		shared.WriteString("// ============ Scope ============\n")
+		writeScopeToEntitlements(&shared, svcRPCs, vsEntries)
 	}
 
 	data := helpersTemplateData{
 		Header:      strings.TrimSuffix(header.GeneratedHeader(consts.LangJava, pf.RelPath), "\n"),
 		PackagePath: packagePath,
 		Imports:     imports.String(),
-		Body:        body.String(),
+		Body:        body.String() + shared.String(),
 	}
 
-	// Load and execute template
+	if len(data.Body) > helpersClassBudget {
+		units := javaClassMembers(body.String())
+		if shared.Len() > 0 {
+			units = append(units, shared.String())
+		}
+		for i, partBody := range packHelpersParts(units, helpersClassBudget) {
+			part := data
+			part.Part = i + 1
+			part.Body = partBody
+			if err := writeHelpersFile(part, "helpers_part.java.tmpl", filepath.Join(outputDir, fmt.Sprintf("HelpersPart%d.java", part.Part))); err != nil {
+				return err
+			}
+			data.Extends = fmt.Sprintf("HelpersPart%d", part.Part)
+		}
+		data.Imports = ""
+		data.Body = ""
+	}
+
+	return writeHelpersFile(data, "helpers.java.tmpl", filepath.Join(outputDir, "Helpers.java"))
+}
+
+// writeHelpersFile renders one Helpers class template to outputPath.
+func writeHelpersFile(data helpersTemplateData, templateName, outputPath string) error {
 	typeFS, err := fs.Sub(templates.FS, "java/types")
 	if err != nil {
 		return fmt.Errorf("failed to create sub filesystem: %w", err)
 	}
-	content, err := fs.ReadFile(typeFS, "helpers.java.tmpl")
+	content, err := fs.ReadFile(typeFS, templateName)
 	if err != nil {
 		return fmt.Errorf("failed to read helpers template: %w", err)
 	}
@@ -176,8 +214,81 @@ func generateHelpers(pf model.ProtoFile, baseDir, subdir, outerClassName string,
 		return fmt.Errorf("failed to execute helpers template: %w", err)
 	}
 
-	outputPath := filepath.Join(outputDir, "Helpers.java")
 	return os.WriteFile(outputPath, []byte(result.String()), 0644)
+}
+
+// javaClassMembers splits generated class-body source into its top-level
+// members (each method or field with its leading comments), in order. It tracks
+// brace depth outside comments and string/char literals; a member ends on the
+// first line that finishes at depth 0 with '}' or ';'.
+func javaClassMembers(src string) []string {
+	var members []string
+	depth, start, inComment := 0, 0, false
+	for lineStart := 0; lineStart < len(src); {
+		lineEnd := len(src)
+		if nl := strings.IndexByte(src[lineStart:], '\n'); nl >= 0 {
+			lineEnd = lineStart + nl + 1
+		}
+		var last byte
+		for i := lineStart; i < lineEnd; i++ {
+			c := src[i]
+			switch {
+			case inComment:
+				if c == '*' && i+1 < lineEnd && src[i+1] == '/' {
+					inComment = false
+					i++
+				}
+				continue
+			case c == '/' && i+1 < lineEnd && src[i+1] == '/':
+				i = lineEnd
+				continue
+			case c == '/' && i+1 < lineEnd && src[i+1] == '*':
+				inComment = true
+				i++
+				continue
+			case c == '"' || c == '\'':
+				for i++; i < lineEnd && src[i] != c; i++ {
+					if src[i] == '\\' {
+						i++
+					}
+				}
+			case c == '{':
+				depth++
+			case c == '}':
+				depth--
+			}
+			if c != ' ' && c != '\t' && c != '\r' && c != '\n' {
+				last = c
+			}
+		}
+		lineStart = lineEnd
+		if depth == 0 && !inComment && (last == '}' || last == ';') {
+			members = append(members, src[start:lineEnd])
+			start = lineEnd
+		}
+	}
+	if start < len(src) {
+		members = append(members, src[start:])
+	}
+	return members
+}
+
+// packHelpersParts concatenates members in order into class bodies of at most
+// budget bytes each; a single member larger than budget gets a body of its own.
+func packHelpersParts(members []string, budget int) []string {
+	var parts []string
+	var cur strings.Builder
+	for _, m := range members {
+		if cur.Len() > 0 && cur.Len()+len(m) > budget {
+			parts = append(parts, cur.String())
+			cur.Reset()
+		}
+		cur.WriteString(m)
+	}
+	if cur.Len() > 0 {
+		parts = append(parts, cur.String())
+	}
+	return parts
 }
 
 // writeEnumHelpers writes enum helper static methods into the Helpers class
@@ -1191,8 +1302,7 @@ func writeFromMapMethods(b *strings.Builder, msg model.Message, pf model.ProtoFi
 
 		fmt.Fprintf(b, "case %s -> {\n", field.ParamKey)
 
-		javaFieldName := toJavaFieldName(field.Name)
-		setterName := "set" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+		setterName := "set" + javaFieldNameUpper(field.Name)
 
 		isEnum := field.IsEnum || isEnumType(field.Type, pf.Enums)
 
@@ -1203,14 +1313,14 @@ func writeFromMapMethods(b *strings.Builder, msg model.Message, pf model.ProtoFi
 				b.WriteString("for (String part : parts) {\n")
 				b.WriteString("try {\n")
 				fmt.Fprintf(b, "builder.add%s(%s.%s.valueOf(part.toUpperCase().replace('-', '_')));\n",
-					strings.ToUpper(javaFieldName[:1])+javaFieldName[1:], outerClassName, field.Type)
+					javaFieldNameUpper(field.Name), outerClassName, field.Type)
 				b.WriteString("} catch (IllegalArgumentException e) {\n")
 				b.WriteString("// Ignore invalid enum values\n")
 				b.WriteString("}\n")
 				b.WriteString("}\n")
 			} else {
 				fmt.Fprintf(b, "builder.addAll%s(Arrays.asList(value.split(\",\")));\n",
-					strings.ToUpper(javaFieldName[:1])+javaFieldName[1:])
+					javaFieldNameUpper(field.Name))
 			}
 			b.WriteString("}\n")
 		} else if isEnum {
@@ -1268,8 +1378,7 @@ func writeFromMapMethods(b *strings.Builder, msg model.Message, pf model.ProtoFi
 			continue
 		}
 
-		javaFieldName := toJavaFieldName(field.Name)
-		getterName := "get" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+		getterName := "get" + javaFieldNameUpper(field.Name)
 
 		isEnum := field.IsEnum || isEnumType(field.Type, pf.Enums)
 
@@ -1286,17 +1395,17 @@ func writeFromMapMethods(b *strings.Builder, msg model.Message, pf model.ProtoFi
 			b.WriteString("}\n")
 		} else if isEnum {
 			fmt.Fprintf(b, "if (m.has%s() && m.%s() != %s.%s.UNRECOGNIZED) {\n",
-				strings.ToUpper(javaFieldName[:1])+javaFieldName[1:], getterName,
+				javaFieldNameUpper(field.Name), getterName,
 				outerClassName, field.Type)
 			fmt.Fprintf(b, "result.put(\"%s\", m.%s().name().toLowerCase().replace('_', '-'));\n", jsonKey, getterName)
 			b.WriteString("}\n")
 		} else if strings.Contains(field.Type, "int") || strings.Contains(field.Type, "double") || strings.Contains(field.Type, "float") { // proto scalar type names (int32, int64, sint32, double, float)
-			fmt.Fprintf(b, "if (m.has%s()) {\n", strings.ToUpper(javaFieldName[:1])+javaFieldName[1:])
+			fmt.Fprintf(b, "if (m.has%s()) {\n", javaFieldNameUpper(field.Name))
 			fmt.Fprintf(b, "result.put(\"%s\", String.valueOf(m.%s()));\n", jsonKey, getterName)
 			b.WriteString("}\n")
 		} else {
 			fmt.Fprintf(b, "if (m.has%s() && !m.%s().isEmpty()) {\n",
-				strings.ToUpper(javaFieldName[:1])+javaFieldName[1:], getterName)
+				javaFieldNameUpper(field.Name), getterName)
 			fmt.Fprintf(b, "result.put(\"%s\", m.%s());\n", jsonKey, getterName)
 			b.WriteString("}\n")
 		}
@@ -1723,7 +1832,7 @@ func writeMerge(b *strings.Builder, pf model.ProtoFile, outerClassName string) {
 			fmt.Fprintf(b, "switch (src.%s()) {\n", caseGetter)
 			for _, f := range fields {
 				enumValue := strings.ToUpper(f.Name)
-				fieldPascal := strutil.ToCamelCase(f.Name)
+				fieldPascal := javaFieldNameUpper(f.Name)
 				fmt.Fprintf(b, "case %s: builder.set%s(src.get%s()); break;\n",
 					enumValue, fieldPascal, fieldPascal)
 			}

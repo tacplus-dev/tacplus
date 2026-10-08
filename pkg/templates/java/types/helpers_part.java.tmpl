@@ -1,0 +1,13 @@
+{{.Header}}
+package {{.PackagePath}};
+{{.Imports}}import static {{.PackagePath}}.Helpers.*;
+
+/**
+* HelpersPart{{.Part}} holds a slice of this package's Helpers methods. Call them
+* through Helpers: they are split across a class chain only to keep each class
+* under the JVM's constant pool limit.
+*/
+public class HelpersPart{{.Part}}{{if .Extends}} extends {{.Extends}}{{end}} {
+HelpersPart{{.Part}}() {}
+{{.Body}}
+}

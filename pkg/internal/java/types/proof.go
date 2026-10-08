@@ -152,7 +152,7 @@ func buildJbmcProofMessage(msg model.Message, outerClassName string) jbmcProofMe
 		}
 
 		javaFieldName := toJavaFieldName(field.Name)
-		setterName := "set" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+		setterName := "set" + javaFieldNameUpper(field.Name)
 		pf := jbmcProofField{
 			JavaFieldName: javaFieldName,
 			SetterName:    setterName,

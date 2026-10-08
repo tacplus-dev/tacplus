@@ -67,7 +67,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 				continue
 			}
 			javaFieldName := toJavaFieldName(field.Name)
-			getterName := "get" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+			getterName := "get" + javaFieldNameUpper(field.Name)
 			for _, annotationName := range model.SortedAnnotationNames(field.Annotations) {
 				annotationValue := field.Annotations[annotationName]
 				if annotationValue.Type == model.AnnotationTypeBool && !annotationValue.BoolValue {
@@ -97,7 +97,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 		}
 
 		javaFieldName := toJavaFieldName(field.Name)
-		getterName := "get" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+		getterName := "get" + javaFieldNameUpper(field.Name)
 
 		for _, annotationName := range model.SortedAnnotationNames(field.Annotations) {
 			annotationValue := field.Annotations[annotationName]
@@ -557,7 +557,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 		}
 
 		javaFieldName := toJavaFieldName(field.Name)
-		getterName := "get" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+		getterName := "get" + javaFieldNameUpper(field.Name)
 		defaultCount := collection.DefaultCollCount
 
 		hasValidations = true
@@ -579,7 +579,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 		}
 
 		javaFieldName := toJavaFieldName(field.Name)
-		getterName := "get" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+		getterName := "get" + javaFieldNameUpper(field.Name)
 		defaultSize := collection.DefaultScalarBytes
 
 		// An explicit (spec.assert_element_max_size) replaces the default bound
@@ -653,7 +653,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 		}
 
 		javaFieldName := toJavaFieldName(field.Name)
-		getterName := "get" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+		getterName := "get" + javaFieldNameUpper(field.Name)
 		defaultSize := collection.DefaultScalarBytes
 
 		hasValidations = true
@@ -670,7 +670,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 
 	for _, field := range msg.Fields {
 		javaFieldName := toJavaFieldName(field.Name)
-		getterName := "get" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+		getterName := "get" + javaFieldNameUpper(field.Name)
 
 		if field.MapValueIsEnum {
 			hasValidations = true
@@ -697,7 +697,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 			b.WriteString("}\n")
 			b.WriteString("}\n")
 		} else if field.IsOptional {
-			hasGetter := "has" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+			hasGetter := "has" + javaFieldNameUpper(field.Name)
 			fmt.Fprintf(b, "if (msg.%s() && msg.%s().name().equals(\"UNRECOGNIZED\")) {\n", hasGetter, getterName)
 			fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,\"field %s has unknown enum value\");\n", javaFieldName)
 			b.WriteString("}\n")
@@ -710,7 +710,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 
 	for _, field := range msg.Fields {
 		javaFieldName := toJavaFieldName(field.Name)
-		getterName := "get" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+		getterName := "get" + javaFieldNameUpper(field.Name)
 
 		if field.MapValueIsMessage {
 			validateRef := msgValidationFunc(field.MapValueType, field.MapValueTypePackage, crossHelpers)
@@ -744,7 +744,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 			b.WriteString("}\n")
 		} else {
 			b.WriteString("\n")
-			hasGetter := "has" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+			hasGetter := "has" + javaFieldNameUpper(field.Name)
 			fmt.Fprintf(b, "if (msg.%s()) {\n", hasGetter)
 			fmt.Fprintf(b, "%s(msg.%s(), depth + 1);\n", validateRef, getterName)
 			b.WriteString("}\n")
@@ -914,16 +914,38 @@ func toJavaFieldName(s string) string {
 	return b.String()
 }
 
+// protobufJavaReservedNames are the PascalCase field names protobuf-java
+// suffixes with "_" because their accessors would collide with methods inherited
+// from Object, MessageLite or MessageOrBuilder: a field `class` gets getClass_(),
+// setClass_(), hasClass_(). Mirrors kForbiddenWordList in protoc's
+// java/names.cc (checked against protoc 36.2).
+var protobufJavaReservedNames = map[string]bool{
+	"Class":                     true,
+	"DefaultInstanceForType":    true,
+	"ParserForType":             true,
+	"SerializedSize":            true,
+	"AllFields":                 true,
+	"DescriptorForType":         true,
+	"InitializationErrorString": true,
+	"UnknownFields":             true,
+	"CachedSize":                true,
+}
+
 // javaFieldNameUpper is toJavaFieldName with a capitalized first letter — the
 // PascalCase stem protobuf-java uses to form get/set/has/add/put accessors
-// (getFoo, setFoo, hasFoo). Use this (not strutil.ToCamelCase) for any generated
-// reference to a protobuf accessor, so the digit-boundary rule is honored.
+// (getFoo, setFoo, hasFoo), including its "_" suffix on reserved names. Use this
+// (not strutil.ToCamelCase) for any generated reference to a protobuf accessor,
+// so the digit-boundary and reserved-name rules are honored.
 func javaFieldNameUpper(s string) string {
 	n := toJavaFieldName(s)
 	if n == "" {
 		return n
 	}
-	return strings.ToUpper(n[:1]) + n[1:]
+	n = strings.ToUpper(n[:1]) + n[1:]
+	if protobufJavaReservedNames[n] {
+		n += "_"
+	}
+	return n
 }
 
 // writeJmlSpecs emits JML formal verification specs as Java comments
@@ -940,8 +962,7 @@ func writeJmlSpecs(b *strings.Builder, msg model.Message) {
 			continue
 		}
 
-		javaFieldName := toJavaFieldName(field.Name)
-		getterName := "get" + strings.ToUpper(javaFieldName[:1]) + javaFieldName[1:]
+		getterName := "get" + javaFieldNameUpper(field.Name)
 
 		for _, annotationName := range model.SortedAnnotationNames(field.Annotations) {
 			annotationValue := field.Annotations[annotationName]

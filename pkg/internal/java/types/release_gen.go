@@ -217,11 +217,7 @@ func hasJavaAnn(f model.Field, ann string) bool { _, ok := f.Annotations[ann]; r
 // javaPascalField returns the PascalCase form of a proto field name used in
 // getX/setX/clearX/revealX accessors (matches the getter convention in validation.go).
 func javaPascalField(name string) string {
-	jfn := toJavaFieldName(name)
-	if jfn == "" {
-		return jfn
-	}
-	return strings.ToUpper(jfn[:1]) + jfn[1:]
+	return javaFieldNameUpper(name)
 }
 
 // generateJavaHmacHelpers emits exactly the HMAC primitives the sanitize code used.

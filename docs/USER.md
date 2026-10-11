@@ -1223,6 +1223,7 @@ The authoritative, exhaustive contract is in
 | `(spec.event) = {c2s?, s2s?}` | eventbus topic + publish RPC (at least one producer surface required) |
 | `(spec.record) = {key, owner, c2s?, s2s?, residency?, min_group_size?}` | **delivery**: an `event` that is also stored in `record_store` and is projectable — `key` is the id field, `owner` the ownership field, `residency` the store's lifecycle as two clocks (`{idle_seconds, deleted_max_age_seconds}`; unset falls back to a live platform default, never "never"), `min_group_size` the smallest result size the record's size-only query surfaces will disclose (see below) |
 | `(spec.transformation) = {…}` | **transformation**: a pure typed conversion of this message into a derived row type. Needs no `record`, no topic and no subscription, and carries no residency — declaring a transformation and declaring delivery are independent |
+| `(spec.public_view) = true` | **public view**: every field declares `(spec.visibility)`; tacplus generates `<T>Public` (the SHOW fields only) and the conversion to it — see below |
 
 **Field-level (on a `record` message's fields):**
 
@@ -1230,6 +1231,7 @@ The authoritative, exhaustive contract is in
 |------------|---------|
 | `(spec.query_field) = {op: EQ\|RANGE}` | expose the field as a typed filter in the `query` trait's record query plane |
 | `(spec.redact) = {mode: DROP\|PSEUDONYMIZE\|MAY_REDACT\|MAY_ANONYMIZE}` | marks a field for **data entitlement** (see below). DROP/PSEUDONYMIZE always apply (hard floor); MAY_REDACT/MAY_ANONYMIZE let the caller decide at egress. Valid on scalars, message-typed fields (redact clears the whole sub-message), and repeated fields; ANONYMIZE requires string/bytes |
+| `(spec.visibility) = VISIBILITY_SHOW\|VISIBILITY_BACKGROUND` | on a field of a `public_view` message: SHOW may be rendered outside the company, BACKGROUND never leaves it (see below) |
 | `(spec.deleted_flag) = true` | marks this record type's soft-delete `bool` field (exactly one per record type). The query plane's `Open<T>QueryRequest`/`Refine<T>Request` carry `include_deleted` (default false: flagged-deleted rows excluded); the row is purged `residency.deleted_max_age_seconds` after the flag was set |
 
 #### Data entitlement (egress redaction)
@@ -1294,6 +1296,39 @@ additive, so a record that does not declare it gets exactly the plane it got bef
   does everywhere else. Enforcement is generated for **Java** service wrappers only; the
   Go and Rust wrapper generators fail the build on a stamped method rather than serve a
   size-only RPC unguarded.
+
+#### Public view (SHOW / BACKGROUND fields)
+
+`(spec.public_view) = true` marks a message whose fields split between what may be
+shown outside the company (a prospect's page) and what never leaves it. Example:
+
+```protobuf
+message Prospect {
+  option (spec.public_view) = true;
+  string company_name = 1 [(spec.visibility) = VISIBILITY_SHOW];
+  string deal_notes   = 2 [(spec.visibility) = VISIBILITY_BACKGROUND];
+  Contact champion    = 3 [(spec.visibility) = VISIBILITY_SHOW]; // Contact is itself public_view
+}
+```
+
+- **No default.** Every field of a `public_view` message must declare a visibility;
+  an unannotated field fails generation, so a new field forces a decision.
+- **Generated surface.** `<T>Public` (proto, so every language gets the type) holds the
+  SHOW fields at their own names and numbers; a SHOW field typed as another
+  `public_view` message becomes `<Sub>Public`. The conversion parses T's bytes as
+  `<T>Public` with unknown fields discarded: Go `<T>ToPublic`, Java `to<T>Public`,
+  Rust/Python `<t>_to_public`, TypeScript `<t>ToPublic`. Swift and C# generate no
+  message helpers and get the type only. `<T>Public` carries no injected trace fields.
+- **What a renderer is handed.** Only `<T>Public`. T's own read paths (state, record
+  plane, MCP, REST, events) are authenticated company surfaces and return T whole —
+  BACKGROUND means "never leaves the company", not "never leaves the service".
+- **Generation-time errors.** A SHOW field (singular, repeated or map value) typed as
+  a message that is not a top-level `public_view` message; a SHOW oneof member;
+  `(spec.visibility)` outside a `public_view` message; either annotation on a nested
+  declaration; a declared message named `<T>Public`; and any RPC callable without a
+  caller token (`RPC_FLAG_PUBLIC_NO_AUTH`, `RPC_FLAG_SELF_AUTHENTICATES`, C2S
+  `auth_disabled`, `service_c2d`) whose request or response reaches a `public_view`
+  message.
 
 **Service-level (once per service):**
 

@@ -266,6 +266,8 @@ func generateGoHelpers(pf model.ProtoFile, baseDir, subdir string, config *tacty
 		if err := generateEntitlementBuilders(&b, pf, resolver); err != nil {
 			return err
 		}
+		// <T>ToPublic for (spec.public_view) messages: T parsed as its SHOW-only <T>Public.
+		generatePublicViewHelpers(&b, pf)
 
 		// Add validation helper functions as needed
 		// Validation helpers are now in utils package, no need to generate them inline

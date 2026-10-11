@@ -1956,6 +1956,12 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 		}
 	}
 
+	// public_view: the message's fields are split SHOW / BACKGROUND by
+	// (spec.visibility); tacplus generates <T>Public and <T>ToPublic from it.
+	if proto.HasExtension(opts, spec.E_PublicView) && proto.GetExtension(opts, spec.E_PublicView).(bool) {
+		annotations["public_view"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
+
 	// data_entitlement: message(type)-level default data-entitlement transform for
 	// the message's eligible fields. Recorded whenever present (even an empty {})
 	// so ValidateDataEntitlementAnnotations can reject an invalid mode loudly.
@@ -2325,6 +2331,20 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 	// record that declares no marker has no rows to exclude from its queries.
 	if proto.HasExtension(opts, spec.E_DeletedFlag) && proto.GetExtension(opts, spec.E_DeletedFlag).(bool) {
 		annotations["deleted_flag"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
+	// visibility: SHOW / BACKGROUND side of a public_view message's field.
+	// Recorded whenever PRESENT (an unspecified value as "") so
+	// ValidatePublicViewAnnotations rejects it loudly rather than reading it as
+	// absent.
+	if proto.HasExtension(opts, spec.E_Visibility) {
+		v := ""
+		switch proto.GetExtension(opts, spec.E_Visibility).(spec.Visibility) {
+		case spec.Visibility_VISIBILITY_SHOW:
+			v = "show"
+		case spec.Visibility_VISIBILITY_BACKGROUND:
+			v = "background"
+		}
+		annotations["visibility"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringValue: v}
 	}
 	// SPIFFE identity annotations (plan D5)
 	if proto.HasExtension(opts, spec.E_IdentityNamespace) && proto.GetExtension(opts, spec.E_IdentityNamespace).(bool) {

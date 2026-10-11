@@ -524,6 +524,7 @@ func writeSerializationAndValidation(b *strings.Builder, pf model.ProtoFile) err
 			return err
 		}
 	}
+	writePublicView(b, pf)
 
 	// Generate validation functions
 	b.WriteString("// ============================================================\n")

@@ -597,6 +597,22 @@ extend google.protobuf.MessageOptions {
   //
   // Example: option (spec.owner_default) = {read: true, write: false};
   OwnerDefault owner_default = 60080;
+
+  // public_view marks a message whose fields are split between what may be
+  // shown outside the company and what never leaves it (e.g. a prospect record
+  // rendered to a prospect's page). Every field of such a message must declare
+  // (spec.visibility) — there is no default; an unannotated field fails
+  // generation. tacplus generates, as proto, the message "<T>Public" holding
+  // only the VISIBILITY_SHOW fields (same names and numbers; a SHOW field typed
+  // as another public_view message becomes "<Sub>Public"), and the conversion
+  // that parses T through it, discarding everything else: Go <T>ToPublic, Java
+  // to<T>Public, Rust and Python <t>_to_public, TypeScript <t>ToPublic (Swift and
+  // C# emit no message helpers and get the type only). <T>Public is the only
+  // thing a renderer is handed; no RPC callable without a caller token
+  // (RPC_FLAG_PUBLIC_NO_AUTH, auth_disabled, service_c2d) may carry T itself.
+  //
+  // Example: option (spec.public_view) = true;
+  bool public_view = 60093;
 }
 
 // PrincipalScope is how wide a caller's authority over PRINCIPALS is. It rides
@@ -2266,6 +2282,23 @@ extend google.protobuf.FieldOptions {
   // Example:
   //   bool deleted = 7 [(spec.deleted_flag) = true];
   bool deleted_flag = 60091;
+
+  // visibility: on a field of a (spec.public_view) message, whether the field
+  // may be rendered outside the company (VISIBILITY_SHOW) or never leaves it
+  // (VISIBILITY_BACKGROUND). Required on every field of a public_view message
+  // and refused on any other message. Only SHOW fields appear in the generated
+  // <T>Public; a BACKGROUND field is absent from it by construction.
+  //
+  // Example:
+  //   string notes = 4 [(spec.visibility) = VISIBILITY_BACKGROUND];
+  Visibility visibility = 60092;
+}
+
+// Visibility is the (spec.visibility) value of a public_view message's field.
+enum Visibility {
+  VISIBILITY_UNSPECIFIED = 0;  // invalid — the annotation must name a side
+  VISIBILITY_SHOW = 1;         // may be rendered on the record's public page
+  VISIBILITY_BACKGROUND = 2;   // never leaves the company; absent from <T>Public
 }
 
 // QueryOp is the match kind for a (spec.query_field) record filter criterion.

@@ -235,6 +235,7 @@ func processProtoFiles(protocDir, outputDir string) ([]model.ProtoFile, error) {
 				return nil, fmt.Errorf("writeRelease %s: %w", pf.RelPath, err)
 			}
 		}
+		writePublicView(&b, pf)
 		if len(pf.Messages) > 0 {
 			writeProofHarnesses(&b, pf)
 		}

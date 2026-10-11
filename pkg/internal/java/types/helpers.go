@@ -120,6 +120,8 @@ func generateHelpers(pf model.ProtoFile, baseDir, subdir, outerClassName string,
 		}
 	}
 
+	writePublicView(&body, pf, outerClassName)
+
 	if len(pf.Messages) > 0 {
 		hasParamMap := false
 		for _, msg := range pf.Messages {

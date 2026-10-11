@@ -338,6 +338,10 @@ func Generate(config *tactype.Config) error {
 	if err := proto.InjectRedactIndicatorFields(tempProtoDir, flatProtoDir); err != nil {
 		return fmt.Errorf("failed to inject redact indicator fields: %w", err)
 	}
+	// <T>Public for every (spec.public_view) message: its SHOW fields only.
+	if err := proto.AppendPublicViewMessagesToProtos(tempProtoDir); err != nil {
+		return fmt.Errorf("failed to append public view messages: %w", err)
+	}
 	// Generate the parallel <T>Entitlement proto messages (native compilation then
 	// produces the entitlement types in every language).
 	if err := proto.AppendEntitlementMessagesToProtos(tempProtoDir, flatProtoDir); err != nil {

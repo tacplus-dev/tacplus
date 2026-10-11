@@ -80,8 +80,22 @@ func InjectTraceFields(tempProtoDir, inputDir string) (SkippedTraceTypes, error)
 		}
 		eventBusRPCMessages := eventBusTraceRPCMessages(relPath, fileDesc)
 
+		// A generated <T>Public holds T's VISIBILITY_SHOW fields and nothing
+		// else: a trace_id there would be copied from T by <T>ToPublic and handed
+		// to the renderer. Recorded as skipped so nothing reads trace fields off it.
+		publicViews := map[string]bool{}
+		for _, msg := range fileDesc.Messages {
+			if msg.Annotations["public_view"].BoolValue {
+				publicViews[msg.Name+parser.PublicViewSuffix] = true
+			}
+		}
+
 		for _, msg := range fileDesc.Messages {
 			if isEventBusWireValueMessage(msg.Name) {
+				continue
+			}
+			if publicViews[msg.Name] {
+				skipped[fileDesc.Package+"."+msg.Name] = true
 				continue
 			}
 			if eventBusRPCMessages != nil {

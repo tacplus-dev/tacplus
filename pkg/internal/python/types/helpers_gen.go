@@ -206,6 +206,7 @@ func processProtoFiles(protocDir, outputDir string) ([]model.ProtoFile, error) {
 				return nil, fmt.Errorf("failed to write serialization for %s: %w", pf.RelPath, err)
 			}
 		}
+		writePublicView(&b, pf, protoFilename)
 		if len(pf.Messages) > 0 {
 			if err := writeValidation(&b, pf); err != nil {
 				return nil, fmt.Errorf("failed to write validation for %s: %w", pf.RelPath, err)

@@ -113,6 +113,13 @@ pub struct RouteInfo {
     pub server_streaming: bool,
     pub client_streaming: bool,
     pub target_namespace_field: Option<&'static str>,
+    /// (spec.rest_browser).form_body: the route also accepts an
+    /// application/x-www-form-urlencoded body. See `form_body_to_json`.
+    pub form_body: bool,
+    /// (spec.rest_browser).redirect_field, as the key it carries in the route's
+    /// JSON response (its proto3 JSON name). When set, the route answers 303
+    /// to that field's URL instead of JSON. See `redirect_response`.
+    pub redirect_field: Option<&'static str>,
 }
 
 /// All REST routes, generated from proto annotations at compile time.
@@ -130,9 +137,75 @@ pub static ROUTES: &[RouteInfo] = &[
         server_streaming: << .ServerStreaming >>,
         client_streaming: << .ClientStreaming >>,
         target_namespace_field: << .TargetNamespace >>,
+        form_body: << .FormBody >>,
+        redirect_field: << .RedirectField >>,
     },
 <<- end >>
 ];
+
+/// Turn a `form_body` route's application/x-www-form-urlencoded request body
+/// into the JSON object the JSON request path takes: each pair becomes one
+/// string, keyed by proto field name, and a field left out is left unset. Any
+/// other route or content type returns the body unchanged, so a JSON request
+/// to a form route is served exactly as before. A key sent more than once is
+/// refused instead of letting one copy win.
+pub async fn form_body_to_json(
+    route: &RouteInfo,
+    content_type: Option<&axum::http::HeaderValue>,
+    body: Vec<u8>,
+) -> Result<Vec<u8>, (StatusCode, String)> {
+    use axum::extract::FromRequest;
+
+    let is_form = content_type
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .is_some_and(|m| m.trim().eq_ignore_ascii_case("application/x-www-form-urlencoded"));
+    if !route.form_body || !is_form {
+        return Ok(body);
+    }
+    let request = axum::http::Request::post(route.http_path)
+        .header(axum::http::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(axum::body::Body::from(body))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_body(format!("failed to read form body: {}", e))))?;
+    let axum::Form(pairs) = axum::Form::<Vec<(String, String)>>::from_request(request, &())
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, error_body(format!("invalid form body: {}", e))))?;
+    let mut fields = serde_json::Map::with_capacity(pairs.len());
+    for (key, value) in pairs {
+        if fields.contains_key(&key) {
+            return Err((StatusCode::BAD_REQUEST, error_body(format!("invalid form body: field {} sent more than once", key))));
+        }
+        fields.insert(key, serde_json::Value::String(value));
+    }
+    serde_json::to_vec(&fields)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, error_body(format!("failed to encode form body: {}", e))))
+}
+
+/// Answer a `redirect_field` route with 303 See Other to the URL its JSON
+/// response carries in that field, with Cache-Control: no-store, in place of
+/// the JSON body. None for any other route, so the caller answers JSON as
+/// before. A response without a usable URL in the field is a backend fault.
+pub fn redirect_response(route: &RouteInfo, response_json: &str) -> Option<Response> {
+    let field = route.redirect_field?;
+    let location = serde_json::from_str::<serde_json::Value>(response_json)
+        .ok()
+        .and_then(|v| v.get(field).and_then(|l| l.as_str()).map(str::to_owned))
+        .filter(|l| !l.is_empty())
+        .and_then(|l| axum::http::HeaderValue::from_str(&l).ok());
+    let Some(location) = location else {
+        return Some((
+            StatusCode::BAD_GATEWAY,
+            error_body(format!("response carries no redirect URL in {}", field)),
+        ).into_response());
+    };
+    Some((
+        StatusCode::SEE_OTHER,
+        [
+            (axum::http::header::LOCATION, location),
+            (axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store")),
+        ],
+    ).into_response())
+}
 
 /// Dispatch a unary REST→gRPC call via a RestDispatcher.
 ///

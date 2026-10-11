@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
 )
 
 func TestRustRestDispatchValidatesUnaryResponseBeforeJson(t *testing.T) {
@@ -198,6 +200,47 @@ func TestRustRestDispatchEscapesErrorBodies(t *testing.T) {
 		`serde_json::json!({ "error": message.to_string() }).to_string()`,
 		`(http_code, error_body(status.message()))`,
 		`.data(error_body(message))`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("rendered REST dispatch missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// (spec.rest_browser) reaches ROUTES as form_body / redirect_field, and a
+// route that does not declare it carries the JSON-only defaults.
+func TestRustRestDispatchEmitsRestBrowserRouteFields(t *testing.T) {
+	browser := &parser.MethodInfo{RestBrowser: &parser.RestBrowserDescriptor{FormBody: true, RedirectField: "redirect_url", RedirectJSONName: "redirectUrl"}}
+	plain := &parser.MethodInfo{}
+	route := func(path string, m *parser.MethodInfo) routeEntry {
+		return routeEntry{
+			HttpPath:           path,
+			GrpcPath:           path,
+			ServiceID:          "signin",
+			EntitlementService: "None",
+			HttpMethodsLiteral: `"POST"`,
+			AuthPolicy:         "NoAuth",
+			EntitlementScopes:  "&[]",
+			CapabilityScope:    "None",
+			TargetNamespace:    "None",
+			FormBody:           restFormBody(m),
+			RedirectField:      restRedirectField(m),
+		}
+	}
+	out := renderRustRestDispatchForTest(t, restDispatchData{
+		Routes: []routeEntry{route("/signin/Signin/BrokerCallback", browser), route("/signin/Signin/GetThing", plain)},
+	})
+
+	for _, want := range []string{
+		"\n    pub form_body: bool,",
+		"\n    pub redirect_field: Option<&'static str>,",
+		"http_path: \"/signin/Signin/BrokerCallback\",\n        grpc_path: \"/signin/Signin/BrokerCallback\",",
+		"target_namespace_field: None,\n        form_body: true,\n        redirect_field: Some(\"redirectUrl\"),\n    },\n    RouteInfo {\n        http_path: \"/signin/Signin/GetThing\"",
+		"target_namespace_field: None,\n        form_body: false,\n        redirect_field: None,\n    },\n];",
+		"pub async fn form_body_to_json(",
+		"pub fn redirect_response(route: &RouteInfo, response_json: &str) -> Option<Response> {",
+		"StatusCode::SEE_OTHER",
+		"axum::http::HeaderValue::from_static(\"no-store\")",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("rendered REST dispatch missing %q:\n%s", want, out)

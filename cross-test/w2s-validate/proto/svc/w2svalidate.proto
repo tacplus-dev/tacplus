@@ -11,6 +11,7 @@ import "sys/spec.proto";
 
 option (spec.service) = {name: "w2svalidate", rest_dispatch: true};
 option (spec.grpc_c2s_client) = {service: "catalog.CatalogService"};
+option (spec.grpc_c2s_client) = {service: "signin.SigninService"};
 
 message Ping { string m = 1; }
 

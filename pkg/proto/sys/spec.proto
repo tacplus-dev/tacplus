@@ -2737,6 +2737,22 @@ message RestMethods {
   repeated RestMethod methods = 1;
 }
 
+// RestBrowser makes an RPC's REST route usable as a browser form target, such
+// as the callback an identity provider form-posts to (Sign in with Apple's
+// response_mode=form_post). Only on an RPC with a REST route; unary only.
+message RestBrowser {
+  // form_body accepts an application/x-www-form-urlencoded request body. Each
+  // pair is read as a JSON string value keyed by proto field name, so it fills
+  // the request's string fields. A JSON body is still accepted. A key sent
+  // twice is refused.
+  bool form_body = 1;
+
+  // redirect_field names a singular string field of the response. The route
+  // answers 303 See Other with Location set to that field's value and
+  // Cache-Control: no-store, instead of the JSON response body.
+  string redirect_field = 2;
+}
+
 extend google.protobuf.ServiceOptions {
   // event_label is the routing label for gateway-exposed event services.
   // Set by tacplus on generated state services that have spec.service_event.
@@ -2845,6 +2861,11 @@ extend google.protobuf.MethodOptions {
   // by the record-map injector onto every size-only RPC of a record declaring
   // (spec.record).min_group_size. Not hand-written on any RPC.
   int32 min_group_size = 80016;
+
+  // rest_browser makes this RPC's REST route a browser form target: a
+  // form-urlencoded request body, and a 303 redirect instead of a JSON answer.
+  // Example: option (spec.rest_browser) = {form_body: true, redirect_field: "redirect_url"};
+  RestBrowser rest_browser = 80017;
 
 }
 

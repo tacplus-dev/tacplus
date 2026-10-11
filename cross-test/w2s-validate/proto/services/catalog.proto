@@ -26,6 +26,7 @@ message GetItemResponse {
 service CatalogService {
   option (spec.service_c2s) = {auth_entitled_users: true};
 
+  // GetItem returns the item owned by the given owner.
   rpc GetItem(GetItemRequest) returns (GetItemResponse) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
   }

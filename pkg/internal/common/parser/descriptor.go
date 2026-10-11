@@ -292,6 +292,7 @@ type MethodDescriptor struct {
 	RequiresDevice       bool                          // per-RPC requires_device (from spec.rpc): the device-only approval check gates this RPC
 	RequiresDeviceWhen   *RequiresDeviceWhenDescriptor // per-RPC requires_device_when (from spec.rpc): the same check, gated on one request field's value; nil when absent
 	TargetNamespaceField string                        // per-RPC target_namespace_field (from spec.rpc); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
+	RestBrowser          *RestBrowserDescriptor        // method-level rest_browser (browser form target: form body / redirect); nil when absent
 	Collection           *CollectionDescriptor         // method-level method_collection (collection-returning read); nil when absent
 	Rpc                  *RpcDescriptor                // method-level spec.rpc (call surface); nil when absent
 	MinGroupSize         int32                         // method-level (spec.min_group_size), stamped by the record-map injector onto a record's size-only RPCs; 0 when absent
@@ -851,6 +852,14 @@ func (p *DescriptorParser) parseServiceDescriptor(sd protoreflect.ServiceDescrip
 			md.HttpBody = "*"
 		}
 
+		// rest_browser only changes how a REST route reads its body and answers;
+		// on an rpc with no REST route it would silently do nothing. Only a c2s
+		// rpc's route is exposed (the gateway skips s2s ones).
+		if md.RestBrowser != nil && (!svc.IsC2S || md.HttpPath == "") {
+			p.parseErrs = append(p.parseErrs, fmt.Sprintf("%s declares (spec.rest_browser), but it has no REST route; only an rpc of a gateway-exposed (c2s) service gets one",
+				method.FullName()))
+		}
+
 		// Auto-exposure: a user RPC of a c2s service is an MCP tool without any
 		// annotation asking for one. Resolved here, next to IsMcp, so exactly one
 		// place answers "is this rpc a tool" and every generator and the registry
@@ -1106,6 +1115,17 @@ func (p *DescriptorParser) parseMethodOptions(method protoreflect.MethodDescript
 	// rest_path (string) — additive alias path relative to ROOT_PATH
 	if proto.HasExtension(opts, spec.E_RestPath) {
 		md.RestPath = proto.GetExtension(opts, spec.E_RestPath).(string)
+	}
+
+	// rest_browser (RestBrowser) — the REST route is a browser form target.
+	// Resolved against the request/response descriptors HERE, where they are in
+	// hand, so no generator re-derives the redirect field.
+	if proto.HasExtension(opts, spec.E_RestBrowser) {
+		if rb, err := restBrowserDescriptor(method, proto.GetExtension(opts, spec.E_RestBrowser).(*spec.RestBrowser)); err != nil {
+			p.parseErrs = append(p.parseErrs, err.Error())
+		} else {
+			md.RestBrowser = rb
+		}
 	}
 
 	// proof_requires (string) — formal verification precondition
@@ -3173,6 +3193,7 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 				RequiresDevice:       method.RequiresDevice,
 				RequiresDeviceWhen:   method.RequiresDeviceWhen,
 				TargetNamespaceField: method.TargetNamespaceField,
+				RestBrowser:          method.RestBrowser,
 				Collection:           method.Collection,
 				MinGroupSize:         method.MinGroupSize,
 				IsMcp:                method.IsMcp,

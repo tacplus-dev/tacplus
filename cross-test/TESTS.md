@@ -39,7 +39,10 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   `assert_*` request constraint, hosts the REAL generated
   `rest_dispatch::dispatch` / `dispatch_stream` against a real tonic backend,
   and asserts an invalid request is rejected `400` without reaching the backend
-  while a valid one is forwarded. This is the only in-repo host of a generated
+  while a valid one is forwarded. It also drives a `(spec.rest_browser)` route
+  through `form_body_to_json` / `dispatch` / `redirect_response`: the form body
+  decodes into the request, and the answer is a 303 to the response's field.
+  This is the only in-repo host of a generated
   Rust W2S SERVER surface. Local/manual (`just w2s-validate`); not yet in CI.
 - `mcp-floor-version` (`cross-test/mcp-floor-version/run.sh`): rmcp floor gate
   for the generated Rust MCP dispatch — generates a service owning one

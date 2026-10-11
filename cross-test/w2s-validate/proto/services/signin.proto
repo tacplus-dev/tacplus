@@ -1,0 +1,33 @@
+// Copyright (c) 2026 Second Star Cavalier LLC
+// REST browser-form fixture backend: a C2S service whose callback rpc is a
+// browser form target ((spec.rest_browser)), the shape an identity provider's
+// form_post callback needs. The generated Rust REST dispatch must decode its
+// form body and answer it with a 303.
+
+syntax = "proto3";
+
+package signin;
+
+import "sys/spec.proto";
+
+message FormCallbackRequest {
+  string code = 1;
+  string state = 2;
+  string id_token = 3;
+  string user = 4;
+}
+
+message FormCallbackResponse {
+  string redirect_url = 1;
+}
+
+service SigninService {
+  option (spec.service_c2s) = {};
+
+  // BrokerFormCallback receives the provider's form post and names where the
+  // browser goes next.
+  rpc BrokerFormCallback(FormCallbackRequest) returns (FormCallbackResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
+    option (spec.rest_browser) = {form_body: true, redirect_field: "redirect_url"};
+  }
+}

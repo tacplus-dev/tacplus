@@ -21,6 +21,7 @@ use crate::types::services::catalog::catalog_service_server::{
     CatalogService, CatalogServiceServer,
 };
 use crate::types::services::catalog::{GetItemRequest, GetItemResponse};
+use crate::types::sys::mcp::mcp::{McpRequest, McpResponse};
 
 const UNARY_PATH: &str = "/catalog.CatalogService/GetItem";
 const STREAM_PATH: &str = "/catalog.CatalogService/WatchItems";
@@ -61,6 +62,18 @@ impl CatalogService for RecordingBackend {
             ..Default::default()
         })];
         Ok(tonic::Response::new(futures::stream::iter(items)))
+    }
+
+    // Generated for every c2s service with an MCP-exposed rpc; the fixture
+    // never opens an MCP session.
+    type BrokerCatalogServiceMcpSessionStream =
+        futures::stream::Empty<Result<McpResponse, tonic::Status>>;
+
+    async fn broker_catalog_service_mcp_session(
+        &self,
+        _request: tonic::Request<tonic::Streaming<McpRequest>>,
+    ) -> Result<tonic::Response<Self::BrokerCatalogServiceMcpSessionStream>, tonic::Status> {
+        Err(tonic::Status::unimplemented("no MCP session in this fixture"))
     }
 }
 

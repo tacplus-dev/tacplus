@@ -49,6 +49,8 @@ type routeEntry struct {
 	ServerStreaming    bool
 	ClientStreaming    bool
 	TargetNamespace    string // Rust Option<&str> literal: "None" or "Some(\"field\")"
+	FormBody           bool   // (spec.rest_browser).form_body
+	RedirectField      string // Rust Option<&str> literal: "None" or the redirect field's JSON key
 }
 
 // restDispatchData is the template data for rest_dispatch.rs.tmpl.
@@ -209,6 +211,8 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 				ServerStreaming:    method.ServerStreaming,
 				ClientStreaming:    method.ClientStreaming,
 				TargetNamespace:    rustOptionString(method.TargetNamespaceField),
+				FormBody:           restFormBody(method),
+				RedirectField:      restRedirectField(method),
 			})
 
 			if method.HttpAliasPath != "" {
@@ -224,6 +228,8 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 					ServerStreaming:    method.ServerStreaming,
 					ClientStreaming:    method.ClientStreaming,
 					TargetNamespace:    rustOptionString(method.TargetNamespaceField),
+					FormBody:           restFormBody(method),
+					RedirectField:      restRedirectField(method),
 				})
 			}
 
@@ -332,6 +338,7 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 					ServerStreaming:    serverStreaming, // Publish=client-streaming(unary path), Subscribe=server-streaming
 					ClientStreaming:    clientStreaming,
 					TargetNamespace:    "None",
+					RedirectField:      "None",
 				})
 			}
 		}
@@ -426,6 +433,8 @@ func collectRoutesForService(dp *parser.DescriptorParser, svc ServiceInfo, pkgTo
 			ServerStreaming:    method.ServerStreaming,
 			ClientStreaming:    method.ClientStreaming,
 			TargetNamespace:    rustOptionString(method.TargetNamespaceField),
+			FormBody:           restFormBody(method),
+			RedirectField:      restRedirectField(method),
 		})
 		if method.HttpAliasPath != "" {
 			*routes = append(*routes, routeEntry{
@@ -440,6 +449,8 @@ func collectRoutesForService(dp *parser.DescriptorParser, svc ServiceInfo, pkgTo
 				ServerStreaming:    method.ServerStreaming,
 				ClientStreaming:    method.ClientStreaming,
 				TargetNamespace:    rustOptionString(method.TargetNamespaceField),
+				FormBody:           restFormBody(method),
+				RedirectField:      restRedirectField(method),
 			})
 		}
 	}
@@ -495,9 +506,24 @@ func collectProxyAuthDisabledRoutes(dp *parser.DescriptorParser, svc ServiceInfo
 			ServerStreaming:    method.ServerStreaming,
 			ClientStreaming:    method.ClientStreaming,
 			TargetNamespace:    "None",
+			RedirectField:      "None",
 		})
 	}
 	return nil
+}
+
+// restFormBody reports whether the method's REST route accepts a form body.
+func restFormBody(method *parser.MethodInfo) bool {
+	return method.RestBrowser != nil && method.RestBrowser.FormBody
+}
+
+// restRedirectField is the Rust Option<&str> literal for the JSON key the
+// method's REST route redirects to; "None" when it answers JSON.
+func restRedirectField(method *parser.MethodInfo) string {
+	if method.RestBrowser == nil {
+		return "None"
+	}
+	return rustOptionString(method.RestBrowser.RedirectJSONName)
 }
 
 // buildPkgToDirMap builds a mapping from proto package name to its parent directory.

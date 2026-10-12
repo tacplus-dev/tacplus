@@ -6,6 +6,15 @@
 // Re-export all gRPC-over-REST client classes for direct access.
 export * from './internal/grpc_over_rest/grpc_over_rest.js';
 import { W2SClients } from './internal/grpc_over_rest/grpc_over_rest.js';
+{{- if .MintTokenMethod}}
+import { create } from '@bufbuild/protobuf';
+import {
+  TokenMintRequestSchema,
+  type TokenMintRequest,
+  type TokenMintResponse,
+} from '../types/sys/tokenrequest/index.js';
+import { TokenPurpose } from '../types/sys/token/index.js';
+{{- end}}
 
 /**
  * Bootstrap config injected by the gateway into the HTML page.
@@ -60,6 +69,183 @@ function w2sHttpStatusToCode(status: number): number {
     default: return 2;   // UNKNOWN
   }
 }
+
+{{- if .MintTokenMethod}}
+
+/** Storage key under which MintTokenProvider persists the refresh token. */
+export const W2S_REFRESH_TOKEN_KEY = 'w2sm.refresh_token';
+
+/** localStorage-compatible storage; `window.localStorage` satisfies it. */
+export interface TokenStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+/** The client-reachable token mint; the generated W2S MintClient satisfies it. */
+export interface TokenMinter {
+  {{.MintTokenMethod}}(request: TokenMintRequest): Promise<TokenMintResponse>;
+}
+
+/** How far before expiry to proactively refresh (50% of TTL). */
+const MINT_REFRESH_RATIO = 0.5;
+/** Minimum time before expiry to trigger refresh (30s floor). */
+const MINT_MIN_REFRESH_BUFFER_SECS = 30;
+
+interface MintedToken {
+  token: string;
+  expiresAt: number;
+  /** When to proactively refresh (50% of TTL from issue time). */
+  refreshAt: number;
+}
+
+function mintedTokenUsable(entry: MintedToken | undefined, nowSecs: number): entry is MintedToken {
+  return entry !== undefined && nowSecs < entry.refreshAt && nowSecs < entry.expiresAt;
+}
+
+/**
+ * Builds a cache entry from a minted token's JWT and payload claims, with a
+ * proactive-refresh point at 50% of TTL (parity with ClientIdentityManager).
+ */
+function mintedToken(jwt: string, payload: { [k: string]: string }): MintedToken {
+  const nowSecs = Math.floor(Date.now() / 1000);
+  const expParsed = Number(payload['exp']);
+  const expSecs = Number.isFinite(expParsed) && expParsed > 0 ? Math.trunc(expParsed) : 0;
+  const ttlSecs = expSecs > nowSecs ? expSecs - nowSecs : 3600;
+  const refreshOffsetSecs = ttlSecs <= MINT_MIN_REFRESH_BUFFER_SECS
+    ? 0
+    : Math.min(Math.trunc(ttlSecs * MINT_REFRESH_RATIO), ttlSecs - MINT_MIN_REFRESH_BUFFER_SECS);
+  return { token: jwt, expiresAt: nowSecs + ttlSecs, refreshAt: nowSecs + refreshOffsetSecs };
+}
+
+/**
+ * MintTokenProvider is the browser counterpart of ClientIdentityManager: it
+ * follows the same token-authority chain, refresh -> access (empty aud) ->
+ * service-specific (aud = service), over the W2S mint client instead of grpc-js.
+ *
+ * The refresh token lives in the injected storage under W2S_REFRESH_TOKEN_KEY,
+ * so a reloaded page restores the session. The access token and per-service
+ * tokens are cached in memory until their proactive-refresh point. When no
+ * access token is cached, refresh -> access and access -> service are batched
+ * into one mint call. A mint refused with UNAUTHENTICATED clears the stored
+ * refresh token (the session has ended).
+ *
+ * Pass `provider` to the ServiceManager:
+ *   const tokens = new MintTokenProvider(sm.grpc().gateway().mint_client(), localStorage);
+ *   const authed = new ServiceManager(config, tokens.provider);
+ */
+export class MintTokenProvider {
+  private readonly mint: TokenMinter;
+  private readonly storage: TokenStorage;
+  /** Refresh token the cached tokens below were minted from. */
+  private cachedFor: string | null = null;
+  private accessToken: MintedToken | undefined;
+  /** Service-specific tokens, keyed by audience. */
+  private tokens = new Map<string, MintedToken>();
+
+  constructor(mint: TokenMinter, storage: TokenStorage) {
+    this.mint = mint;
+    this.storage = storage;
+  }
+
+  /** TokenProvider for the ServiceManager: the token for the target service. */
+  readonly provider: TokenProvider = (service?: string) => this.getTokenFor(service ?? '');
+
+  /** Persists a refresh token (e.g. from sign-in) and drops tokens minted from a previous one. */
+  setRefreshToken(token: string): void {
+    this.storage.setItem(W2S_REFRESH_TOKEN_KEY, token);
+    this.resetCache(token);
+  }
+
+  /** Returns the stored refresh token, if any. */
+  getRefreshToken(): string | null {
+    return this.storage.getItem(W2S_REFRESH_TOKEN_KEY);
+  }
+
+  /** Returns true if a refresh token is stored. */
+  hasRefreshToken(): boolean {
+    return this.getRefreshToken() !== null;
+  }
+
+  /** Removes the stored refresh token and all minted tokens (sign out). */
+  clear(): void {
+    this.storage.removeItem(W2S_REFRESH_TOKEN_KEY);
+    this.resetCache(null);
+  }
+
+  /**
+   * Returns a token for `audience`, minting if needed. An empty `audience`
+   * returns the access token itself. Throws W2SError(UNAUTHENTICATED) when no
+   * refresh token is stored.
+   */
+  async getTokenFor(audience: string): Promise<string> {
+    const refresh = this.getRefreshToken();
+    if (refresh === null) {
+      throw new W2SError(W2S_UNAUTHENTICATED, 'w2sm: no refresh token — sign in first');
+    }
+    // Another tab or a sign-in replaced the stored refresh token.
+    if (refresh !== this.cachedFor) this.resetCache(refresh);
+
+    const nowSecs = Math.floor(Date.now() / 1000);
+    if (!audience) {
+      if (mintedTokenUsable(this.accessToken, nowSecs)) return this.accessToken.token;
+      const { access } = await this.mintCall(refresh, []);
+      this.accessToken = access;
+      return access.token;
+    }
+
+    const cached = this.tokens.get(audience);
+    if (mintedTokenUsable(cached, nowSecs)) return cached.token;
+
+    // Fast path: a valid access token is cached — mint just the service token.
+    // Otherwise get access + service in one batch call from the refresh token.
+    const input = mintedTokenUsable(this.accessToken, nowSecs) ? this.accessToken.token : refresh;
+    const { access, services } = await this.mintCall(input, [audience]);
+    if (input === refresh) this.accessToken = access;
+    const entry = services[0];
+    if (!entry) throw new Error('w2sm: mint response missing service token');
+    this.tokens.set(audience, entry);
+    return entry.token;
+  }
+
+  private resetCache(refresh: string | null): void {
+    this.cachedFor = refresh;
+    this.accessToken = undefined;
+    this.tokens.clear();
+  }
+
+  /**
+   * Calls the mint once. Returns the access-token entry plus one entry per
+   * requested service audience (in request order).
+   */
+  private async mintCall(
+    inputToken: string,
+    serviceAuds: string[],
+  ): Promise<{ access: MintedToken; services: MintedToken[] }> {
+    let resp: TokenMintResponse;
+    try {
+      resp = await this.mint.{{.MintTokenMethod}}(create(TokenMintRequestSchema, {
+        inputToken,
+        tokenPurpose: TokenPurpose.ACCESS,
+        serviceAuds,
+      }));
+    } catch (e) {
+      if (e instanceof W2SError && e.code === W2S_UNAUTHENTICATED) {
+        // Refresh token is invalid — the session has ended.
+        this.clear();
+      }
+      throw e;
+    }
+    if (!resp.accessToken) {
+      throw new Error('w2sm: mint response missing access_token');
+    }
+    return {
+      access: mintedToken(resp.accessToken.base64, resp.accessToken.payload),
+      services: resp.serviceTokens.map((st) => mintedToken(st.base64, st.payload)),
+    };
+  }
+}
+{{- end}}
 
 /**
  * RestTransport implementation using the browser Fetch API.

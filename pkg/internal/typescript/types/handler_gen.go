@@ -678,9 +678,25 @@ func warnNoW2SClients(config *tactype.Config, w2sServices []service.ServiceInfo)
 	zap.L().Warn(fmt.Sprintf("pkg %s declares no grpc_w2s_client edges; no w2sm/ generated", config.SelfPackage))
 }
 
+// w2sMintTokenMethod returns the W2S client method (lowerCamel) that mints from
+// the client-reachable token minter, or "" when that minter is not one of the
+// package's W2S client targets — then w2sm emits no MintTokenProvider.
+func w2sMintTokenMethod(w2sServices []service.ServiceInfo, minter *parser.TokenExchangerInfo) string {
+	if minter == nil || minter.TokenMintMethod == "" {
+		return ""
+	}
+	for _, svc := range w2sServices {
+		if svc.PackageName == minter.Package && svc.ServiceName == minter.ServiceName {
+			return strutil.ToLowerCamelCase(minter.TokenMintMethod)
+		}
+	}
+	return ""
+}
+
 // generateW2SServiceManager generates the w2sm/ entry point — a lightweight
 // browser-only ServiceManager with FetchTransport and window.__SCHEMATIC__ config.
-func generateW2SServiceManager(config *tactype.Config) error {
+// mintTokenMethod is w2sMintTokenMethod's result.
+func generateW2SServiceManager(config *tactype.Config, mintTokenMethod string) error {
 	tmplContent, err := loadTemplate("w2sm.ts.tmpl")
 	if err != nil {
 		return fmt.Errorf("failed to load w2sm.ts template: %w", err)
@@ -691,8 +707,14 @@ func generateW2SServiceManager(config *tactype.Config) error {
 		return fmt.Errorf("failed to parse w2sm.ts template: %w", err)
 	}
 
+	data := struct {
+		MintTokenMethod string
+	}{
+		MintTokenMethod: mintTokenMethod,
+	}
+
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, nil); err != nil {
+	if err := tmpl.Execute(&buf, data); err != nil {
 		return fmt.Errorf("failed to execute w2sm.ts template: %w", err)
 	}
 

@@ -618,6 +618,14 @@ func Generate(config *tactype.Config) error {
 		}
 	}
 
+	// Discover the client-reachable (C2S) token minter before the w2sm block:
+	// w2sm emits MintTokenProvider when that minter is one of its W2S clients.
+	// Must run before StripSpecOptionsFromDir removes (spec.token_minter).
+	clientMintExchangerInfo, err := parser.DiscoverClientTokenExchangerPackage(protoSrcDir)
+	if err != nil {
+		return fmt.Errorf("failed to discover client token exchanger package: %w", err)
+	}
+
 	// Generate w2sm (web-to-service) gRPC-over-REST client wrappers
 	var w2sServices []service.ServiceInfo
 	if len(servicesInfo) > 0 {
@@ -630,7 +638,7 @@ func Generate(config *tactype.Config) error {
 				config.SmPrefix = origPrefix
 				return fmt.Errorf("failed to generate w2s gRPC-over-REST clients: %w", err)
 			}
-			if err := generateW2SServiceManager(config); err != nil {
+			if err := generateW2SServiceManager(config, w2sMintTokenMethod(w2sServices, clientMintExchangerInfo)); err != nil {
 				config.SmPrefix = origPrefix
 				return fmt.Errorf("failed to generate w2sm entry point: %w", err)
 			}
@@ -657,10 +665,6 @@ func Generate(config *tactype.Config) error {
 	mintExchangerInfo, err := parser.DiscoverTokenExchangerPackage(config.AnnotatedProtoDir)
 	if err != nil {
 		return fmt.Errorf("failed to discover token exchanger package: %w", err)
-	}
-	clientMintExchangerInfo, err := parser.DiscoverClientTokenExchangerPackage(config.AnnotatedProtoDir)
-	if err != nil {
-		return fmt.Errorf("failed to discover client token exchanger package: %w", err)
 	}
 
 	// Full-client target: no service runtime is emitted. Server services never

@@ -189,7 +189,9 @@ export class FetchTransport {
   }
 
   private absoluteWebSocketUrl(url: string): string {
-    const httpUrl = this.absoluteHttpUrl(url);
+    // An empty gatewayUrl (same origin) leaves httpUrl relative; WebSocket
+    // needs an absolute URL, so resolve it against the page location.
+    const httpUrl = new URL(this.absoluteHttpUrl(url), (globalThis as any).location?.href).href;
     if (httpUrl.startsWith('https://')) return `wss://${httpUrl.slice('https://'.length)}`;
     if (httpUrl.startsWith('http://')) return `ws://${httpUrl.slice('http://'.length)}`;
     if (/^wss?:\/\//.test(httpUrl)) return httpUrl;
@@ -201,7 +203,8 @@ export class FetchTransport {
  * ServiceManager provides typed gRPC-over-REST clients for web-to-service
  * communication. Unlike s2sm, w2sm has no health reporting, state clients,
  * or server lifecycle — it is a lightweight browser-only manager that reads
- * its config from `window.__TACPLUS__` (injected by the gateway).
+ * its config from `window.__SCHEMATIC__` (injected by the gateway). An empty
+ * gatewayUrl means same origin: requests use relative URLs.
  */
 export class ServiceManager {
   private readonly config: BootstrapConfig;
@@ -210,12 +213,12 @@ export class ServiceManager {
 
   /**
    * Creates a W2S ServiceManager.
-   * @param config  Bootstrap config (defaults to window.__TACPLUS__)
+   * @param config  Bootstrap config (defaults to window.__SCHEMATIC__)
    */
   constructor(config?: BootstrapConfig, tokenProvider?: TokenProvider) {
-    this.config = config ?? (globalThis as any).__TACPLUS__;
-    if (!this.config?.gatewayUrl) {
-      throw new Error('w2sm: no bootstrap config — expected window.__TACPLUS__.gatewayUrl');
+    this.config = config ?? (globalThis as any).__SCHEMATIC__;
+    if (typeof this.config?.gatewayUrl !== 'string') {
+      throw new Error('w2sm: no bootstrap config — expected window.__SCHEMATIC__.gatewayUrl (empty string = same origin)');
     }
     this.transportInstance = new FetchTransport(
       this.config.gatewayUrl,

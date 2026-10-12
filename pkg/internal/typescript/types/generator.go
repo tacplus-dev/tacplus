@@ -619,8 +619,9 @@ func Generate(config *tactype.Config) error {
 	}
 
 	// Generate w2sm (web-to-service) gRPC-over-REST client wrappers
+	var w2sServices []service.ServiceInfo
 	if len(servicesInfo) > 0 {
-		w2sServices := service.ResolveW2SClientServices(config, servicesInfo)
+		w2sServices = service.ResolveW2SClientServices(config, servicesInfo)
 		if len(w2sServices) > 0 {
 			origPrefix := config.SmPrefix
 			config.SmPrefix = "w2sm"
@@ -636,6 +637,7 @@ func Generate(config *tactype.Config) error {
 			config.SmPrefix = origPrefix
 		}
 	}
+	warnNoW2SClients(config, w2sServices)
 
 	// Collect event-bus watches from legacy subscribe, explicit event_watch,
 	// and validated store-derived watches.

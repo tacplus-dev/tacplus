@@ -52,11 +52,13 @@ func TestRustHealthReporterStatusSinkBridgesHealthToGrpc(t *testing.T) {
 		}
 	}
 
-	// The sink wiring must come AFTER the bootstrap SERVING flip.
-	idxBootstrap := strings.Index(sm, `grpc_health.set_service_status("", tonic_health::ServingStatus::Serving).await;`)
+	// The sink feeds readiness, and readiness is driven from bootstrap onward
+	// by drive_readiness (which also requires the s2s channels to be up) —
+	// so the sink must be wired before the driver is started.
 	idxSink := strings.Index(sm, "health_reporter.set_status_sink(")
-	if idxBootstrap < 0 || idxSink < 0 || idxSink < idxBootstrap {
-		t.Fatalf("StatusSink must be wired after bootstrap SERVING flip (bootstrap=%d sink=%d)", idxBootstrap, idxSink)
+	idxDrive := strings.Index(sm, "self.spawn_owned(self.clone().drive_readiness(")
+	if idxSink < 0 || idxDrive < 0 || idxDrive < idxSink {
+		t.Fatalf("StatusSink must be wired before readiness is driven (sink=%d drive=%d)", idxSink, idxDrive)
 	}
 }
 

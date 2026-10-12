@@ -191,9 +191,9 @@ func TestRustSubscriberSendsBearerTokenAndOuterLoopBacksOff(t *testing.T) {
 		`im.get_token_for("eventbus")`,
 		"subscribe::aegis_event_stream::TokenSource",
 		"sub_token_source.clone(),",
-		"let mut outer_backoff = SUB_MIN_BACKOFF;",
+		"let mut outer_backoff = servicemanager::RECONNECT_INITIAL_BACKOFF;",
 		"tokio::time::sleep(outer_backoff)",
-		"outer_backoff = std::cmp::min(outer_backoff * 2, SUB_MAX_BACKOFF);",
+		"outer_backoff = servicemanager::next_reconnect_backoff(outer_backoff);",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("Rust ServiceManager subscription wiring missing %q:\n%s", want, rendered)
@@ -203,7 +203,7 @@ func TestRustSubscriberSendsBearerTokenAndOuterLoopBacksOff(t *testing.T) {
 	// The backoff sleep must sit between subscribe() ending and the next
 	// resolve, and the per-reconnect re-resolution of the eventbus instance
 	// must stay inside the loop (that behavior is correct — do not hoist it).
-	loopIdx := strings.Index(rendered, "let mut outer_backoff = SUB_MIN_BACKOFF;")
+	loopIdx := strings.Index(rendered, "let mut outer_backoff = servicemanager::RECONNECT_INITIAL_BACKOFF;")
 	resolveIdx := strings.Index(rendered[loopIdx:], `sub_sm.resolve_service("eventbus")`)
 	subscribeIdx := strings.Index(rendered[loopIdx:], "subscriber.subscribe(handler_fn.clone())")
 	sleepIdx := strings.Index(rendered[loopIdx:], "tokio::time::sleep(outer_backoff)")

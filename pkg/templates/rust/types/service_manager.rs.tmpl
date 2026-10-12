@@ -1229,18 +1229,18 @@ impl ServiceManager {
 
 {{- if .HasServiceHealthState}}
     /// Resolves a service endpoint by querying ServiceHealthState for healthy instances.
-    /// Retries with exponential backoff until a healthy instance is reachable.
+    /// Retries with exponential backoff (servicemanager::RECONNECT_INITIAL_BACKOFF
+    /// doubling to RECONNECT_MAX_BACKOFF) until a healthy instance is reachable.
     /// Never returns an error — retries indefinitely so callers never need to handle failure.
     pub async fn resolve_service(&self, service_name: &str) -> Channel {
-        let mut backoff = std::time::Duration::from_secs(2);
-        let max_backoff = std::time::Duration::from_secs(30);
+        let mut backoff = servicemanager::RECONNECT_INITIAL_BACKOFF;
         loop {
             let conn = match self.state_store_conn.conn().await {
                 Some(c) => c,
                 None => {
                     tracing::warn!(service = service_name, retry_in = ?backoff, "No state-store connection for service resolution, retrying");
                     tokio::time::sleep(backoff).await;
-                    if backoff < max_backoff { backoff = std::cmp::min(backoff * 2, max_backoff); }
+                    backoff = servicemanager::next_reconnect_backoff(backoff);
                     continue;
                 }
             };
@@ -1249,7 +1249,7 @@ impl ServiceManager {
                 Err(e) => {
                     tracing::warn!(service = service_name, error = %e, retry_in = ?backoff, "Failed to get token for service resolution, retrying");
                     tokio::time::sleep(backoff).await;
-                    if backoff < max_backoff { backoff = std::cmp::min(backoff * 2, max_backoff); }
+                    backoff = servicemanager::next_reconnect_backoff(backoff);
                     continue;
                 }
             };
@@ -1263,7 +1263,7 @@ impl ServiceManager {
                 Err(_) => {
                     tracing::warn!(service = service_name, retry_in = ?backoff, "Invalid token metadata for service resolution, retrying");
                     tokio::time::sleep(backoff).await;
-                    if backoff < max_backoff { backoff = std::cmp::min(backoff * 2, max_backoff); }
+                    backoff = servicemanager::next_reconnect_backoff(backoff);
                     continue;
                 }
             };
@@ -1319,11 +1319,68 @@ impl ServiceManager {
                 }
             }
             tokio::time::sleep(backoff).await;
-            if backoff < max_backoff {
-                backoff = std::cmp::min(backoff * 2, max_backoff);
-            }
+            backoff = servicemanager::next_reconnect_backoff(backoff);
         }
     }
+{{- if or .HasTlsGrpc (not .HasC2DGrpc)}}
+
+    /// Owns the gRPC health endpoint (k8s readiness) once bootstrap is done.
+    ///
+    /// SERVING requires both: the last effective health status was not
+    /// UNHEALTHY (`health_ok`, fed by the HealthReporter status sink), and every
+    /// required s2s channel is up — each event-bus subscription channel
+    /// (`streams`){{if .S2STargetsRequired}} and each explicitly declared s2s target{{end}}.
+    /// Reporting Ready while those channels were still being dialed put pods in
+    /// rotation that could not do their job for minutes after a peer restart.
+    ///
+    /// Only readiness is gated. The status published to ServiceHealthState is
+    /// not: peers resolve each other through it, so gating it on dependencies
+    /// would deadlock any two services that depend on each other.
+    async fn drive_readiness(
+        self: Arc<Self>,
+        grpc_health: tonic_health::server::HealthReporter,
+        health_ok: Arc<std::sync::atomic::AtomicBool>,
+        streams: Vec<(String, Arc<std::sync::atomic::AtomicBool>)>,
+    ) {
+        const READINESS_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+        let required = servicemanager::RequiredChannels::new(
+            vec![
+{{- if .S2STargetsRequired}}
+{{- range .TargetServices}}
+{{- if eq .ServiceID $.StateStoreServiceID}}
+                self.state_store_conn.clone(),
+{{- else}}
+                self.{{.AccessorName}}_conn.clone(),
+{{- end}}
+{{- end}}
+{{- end}}
+            ],
+            streams,
+        );
+        let mut interval = tokio::time::interval(READINESS_CHECK_INTERVAL);
+        let mut serving: Option<bool> = None;
+        loop {
+            interval.tick().await;
+            let down = required.first_down().await;
+            let ready = health_ok.load(std::sync::atomic::Ordering::Relaxed) && down.is_none();
+            if serving == Some(ready) {
+                continue;
+            }
+            serving = Some(ready);
+            let status = if ready {
+                info!("readiness: SERVING");
+                tonic_health::ServingStatus::Serving
+            } else {
+                match &down {
+                    Some(channel) => tracing::warn!(channel = %channel, "readiness: NOT_SERVING, required s2s channel is down"),
+                    None => tracing::warn!("readiness: NOT_SERVING, health status is UNHEALTHY"),
+                }
+                tonic_health::ServingStatus::NotServing
+            };
+            grpc_health.set_service_status("", status).await;
+        }
+    }
+{{- end}}
 {{- end}}
 
     /// Releases all resources. Use when not calling run().
@@ -1851,11 +1908,15 @@ impl ServiceManager {
         // Subscriptions run in background tasks and retry independently; they never block run().
         let (sub_cancel_tx, _sub_cancel_rx) = tokio::sync::watch::channel(false);
         let mut sub_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+        // One up-flag per subscription channel; readiness requires all of them.
+        let mut sub_up: Vec<(String, Arc<std::sync::atomic::AtomicBool>)> = Vec::new();
 {{- range .Subscriptions}}
         {
             let sub_sm = self.clone();
             let sub_handler = handler.clone();
             let mut cancel_rx = sub_cancel_tx.subscribe();
+            let up = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            sub_up.push(("{{.SourcePackage}}.{{.FieldSnake}} subscription ({{.TargetService}})".to_string(), up.clone()));
             sub_handles.push(tokio::spawn(async move {
                 let handler_fn: subscribe::{{.SubscriberMod}}::Handler = {
                     let h = sub_handler;
@@ -1879,9 +1940,7 @@ impl ServiceManager {
                 // Capped backoff for the outer resolve→subscribe loop:
                 // subscribe() returns only on non-retryable errors, so
                 // re-resolving immediately would hot-spin at RPC rate.
-                const SUB_MIN_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
-                const SUB_MAX_BACKOFF: std::time::Duration = std::time::Duration::from_secs(30);
-                let mut outer_backoff = SUB_MIN_BACKOFF;
+                let mut outer_backoff = servicemanager::RECONNECT_INITIAL_BACKOFF;
                 loop {
                     // resolve_service retries internally until a healthy instance is reachable.
                     // It never returns an error — it returns Channel directly.
@@ -1893,6 +1952,7 @@ impl ServiceManager {
                         }
                         conn = sub_sm.resolve_service("{{.TargetService}}") => conn,
                     };
+                    up.store(true, std::sync::atomic::Ordering::Relaxed);
                     let subscriber = subscribe::{{.SubscriberMod}}::Subscriber::new(
                         sub_conn,
                         "{{$.ServiceLabel}}",
@@ -1909,9 +1969,10 @@ impl ServiceManager {
                             tracing::warn!("{{.SourcePackage}}.{{.FieldSnake}} subscription ended, reconnecting");
                         }
                     }
+                    up.store(false, std::sync::atomic::Ordering::Relaxed);
                     // A subscription that ran for a while was healthy — reset the backoff.
                     if sub_started.elapsed() >= std::time::Duration::from_secs(60) {
-                        outer_backoff = SUB_MIN_BACKOFF;
+                        outer_backoff = servicemanager::RECONNECT_INITIAL_BACKOFF;
                     }
                     tokio::select! {
                         biased;
@@ -1921,7 +1982,7 @@ impl ServiceManager {
                         }
                         _ = tokio::time::sleep(outer_backoff) => {}
                     }
-                    outer_backoff = std::cmp::min(outer_backoff * 2, SUB_MAX_BACKOFF);
+                    outer_backoff = servicemanager::next_reconnect_backoff(outer_backoff);
                 }
             }));
         }
@@ -1961,13 +2022,13 @@ impl ServiceManager {
 
 {{- if .HasTlsGrpc}}
         // Bootstrap complete (first health publish{{if .HasAutoTls}} + TLS cert{{end}}{{if .HasSmb}} + SMB member cert{{end}}):
-        // advertise SERVING on the gRPC health endpoint so k8s readiness probes pass.
-        grpc_health.set_service_status("", tonic_health::ServingStatus::Serving).await;
-
+        // advertise SERVING on the gRPC health endpoint so k8s readiness probes pass
+        // — once the required s2s channels are up too (see drive_readiness).
 {{- if .HasServiceHealthState}}
-        // Bridge ongoing health evaluation to the gRPC health endpoint: a handler
-        // reporting UNHEALTHY flips the endpoint to NOT_SERVING so k8s removes the
-        // pod from load-balancer rotation. Recovery flips it back to SERVING.
+        //
+        // Ongoing health evaluation feeds readiness: a handler reporting
+        // UNHEALTHY flips the endpoint to NOT_SERVING so k8s removes the pod
+        // from load-balancer rotation. Recovery flips it back to SERVING.
         //
         // Credential health is a chassis FLOOR, not a service concern: a service
         // must not be able to report itself healthy while its credentials are
@@ -1978,20 +2039,20 @@ impl ServiceManager {
             service_im::credentials_degraded()
         }));
 
+        let health_ok = Arc::new(std::sync::atomic::AtomicBool::new(true));
         {
-            let grpc_health_sink = grpc_health.clone();
+            let health_ok = health_ok.clone();
             health_reporter.set_status_sink(std::sync::Arc::new(move |status: InstanceStatus| {
-                let gh = grpc_health_sink.clone();
-                let serving = if status == InstanceStatus::Unhealthy {
-                    tonic_health::ServingStatus::NotServing
-                } else {
-                    tonic_health::ServingStatus::Serving
-                };
-                tokio::spawn(async move {
-                    gh.set_service_status("", serving).await;
-                });
+                health_ok.store(status != InstanceStatus::Unhealthy, std::sync::atomic::Ordering::Relaxed);
             }));
         }
+        self.spawn_owned(self.clone().drive_readiness(
+            grpc_health.clone(),
+            health_ok,
+            {{if .HasSubscriptions}}sub_up{{else}}Vec::new(){{end}},
+        ));
+{{- else}}
+        grpc_health.set_service_status("", tonic_health::ServingStatus::Serving).await;
 {{- end}}
 
         // Serve until shutdown signal (SIGINT or SIGTERM).
@@ -2020,25 +2081,24 @@ impl ServiceManager {
         let grpc_health_svc = tonic_health::pb::health_server::HealthServer::new(
             tonic_health::server::HealthService::from_health_reporter(self.grpc_health.clone()),
         );
-        // Health-only path: bootstrap already completed, flip to SERVING immediately.
-        grpc_health.set_service_status("", tonic_health::ServingStatus::Serving).await;
-
+        // Health-only path: bootstrap already completed, flip to SERVING as soon as
+        // the required s2s channels are up (see drive_readiness).
 {{- if .HasServiceHealthState}}
-        // Bridge ongoing health evaluation to the gRPC health endpoint (health-only server).
+        // Ongoing health evaluation feeds readiness (health-only server).
+        let health_ok = Arc::new(std::sync::atomic::AtomicBool::new(true));
         {
-            let grpc_health_sink = grpc_health.clone();
+            let health_ok = health_ok.clone();
             health_reporter.set_status_sink(std::sync::Arc::new(move |status: InstanceStatus| {
-                let gh = grpc_health_sink.clone();
-                let serving = if status == InstanceStatus::Unhealthy {
-                    tonic_health::ServingStatus::NotServing
-                } else {
-                    tonic_health::ServingStatus::Serving
-                };
-                tokio::spawn(async move {
-                    gh.set_service_status("", serving).await;
-                });
+                health_ok.store(status != InstanceStatus::Unhealthy, std::sync::atomic::Ordering::Relaxed);
             }));
         }
+        self.spawn_owned(self.clone().drive_readiness(
+            grpc_health.clone(),
+            health_ok,
+            {{if .HasSubscriptions}}sub_up{{else}}Vec::new(){{end}},
+        ));
+{{- else}}
+        grpc_health.set_service_status("", tonic_health::ServingStatus::Serving).await;
 {{- end}}
 
         let listen_addr = match self.cfg.listen_address.as_ref() {
@@ -2275,8 +2335,7 @@ async fn resolve_eventbus(
     tls_config: tonic::transport::ClientTlsConfig,
 ) -> Result<Channel, Box<dyn std::error::Error + Send + Sync>> {
     let conn = state_store_conn.ok_or("no state-store connection for EventBus broker resolution")?;
-    let mut backoff = std::time::Duration::from_secs(2);
-    let max_backoff = std::time::Duration::from_secs(30);
+    let mut backoff = servicemanager::RECONNECT_INITIAL_BACKOFF;
     loop {
         let token = identity.get_token().await
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
@@ -2328,7 +2387,7 @@ async fn resolve_eventbus(
             }
         }
         tokio::time::sleep(backoff).await;
-        backoff = std::cmp::min(backoff * 2, max_backoff);
+        backoff = servicemanager::next_reconnect_backoff(backoff);
     }
 }
 
@@ -2343,9 +2402,7 @@ async fn resolve_eventbus_for_publisher(
     identity: Arc<IdentityManager>,
     tls_config: tonic::transport::ClientTlsConfig,
 ) -> Channel {
-    const MIN_BACKOFF: std::time::Duration = std::time::Duration::from_secs(3);
-    const MAX_BACKOFF: std::time::Duration = std::time::Duration::from_secs(30);
-    let mut backoff = MIN_BACKOFF;
+    let mut backoff = servicemanager::RECONNECT_INITIAL_BACKOFF;
 
     loop {
         match resolve_eventbus(target_service, state_store_conn.clone(), identity.clone(), tls_config.clone()).await {
@@ -2359,7 +2416,7 @@ async fn resolve_eventbus_for_publisher(
                     "publisher failed to resolve EventBus broker, retrying"
                 );
                 tokio::time::sleep(backoff).await;
-                backoff = std::cmp::min(backoff * 2, MAX_BACKOFF);
+                backoff = servicemanager::next_reconnect_backoff(backoff);
             }
         }
     }
@@ -2378,9 +2435,7 @@ async fn {{.LoopFn}}(
     token_provider: TokenProvider,
     mut rx: tokio::sync::mpsc::Receiver<{{.EventTypeName}}>,
 ) {
-    const MIN_BACKOFF: std::time::Duration = std::time::Duration::from_secs(3);
-    const MAX_BACKOFF: std::time::Duration = std::time::Duration::from_secs(30);
-    let mut backoff = MIN_BACKOFF;
+    let mut backoff = servicemanager::RECONNECT_INITIAL_BACKOFF;
     let mut pending: Option<{{.EventTypeName}}> = None;
 
     loop {
@@ -2402,7 +2457,7 @@ async fn {{.LoopFn}}(
         match {{.StreamFn}}(&channel, &token_provider, pending.as_ref().expect("pending event")).await {
             Ok(()) => {
                 pending = None;
-                backoff = MIN_BACKOFF;
+                backoff = servicemanager::RECONNECT_INITIAL_BACKOFF;
             }
             Err(e) => {
                 tracing::warn!(
@@ -2411,7 +2466,7 @@ async fn {{.LoopFn}}(
                     "{{.Label}} stream failed, reconnecting"
                 );
                 tokio::time::sleep(backoff).await;
-                backoff = std::cmp::min(backoff * 2, MAX_BACKOFF);
+                backoff = servicemanager::next_reconnect_backoff(backoff);
             }
         }
     }

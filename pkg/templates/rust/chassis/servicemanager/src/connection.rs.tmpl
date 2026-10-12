@@ -256,6 +256,27 @@ impl ServiceConnection {
         None
     }
 
+    /// Reports whether an RPC to this service has somewhere to go: at least
+    /// one endpoint is dialed and currently healthy. Unlike `conn()`, which
+    /// falls back to any dialed channel, this is what readiness gates on.
+    pub async fn is_available(&self) -> bool {
+        let ep_list = self.endpoints.read().await;
+        for ec in ep_list.iter() {
+            let conn = ec.read().await;
+            if conn.channel.is_some() && conn.is_healthy().await {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn set_endpoint_health_for_test(&self, status: InstanceStatus) {
+        for ec in self.endpoints.read().await.iter() {
+            ec.read().await.update_health_from_state(status as i32, 0).await;
+        }
+    }
+
     /// Reconciles endpoints from ServiceHealthState data.
     ///
     /// Called by the health poller for dynamic connections. Eagerly connects

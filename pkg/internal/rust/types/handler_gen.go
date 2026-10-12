@@ -146,6 +146,7 @@ type smTemplateData struct {
 	HasStates               bool
 	HasSysState             bool
 	HasS2SClients           bool
+	S2STargetsRequired      bool // s2s targets listed explicitly (grpc_s2s_clients) gate readiness; s2s_client_all targets do not
 	HasServiceHealthState   bool
 	HasAutoTls              bool
 	AutoTlsKeyType          string
@@ -588,6 +589,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		HasStates:               len(config.States) > 0 || config.AllStates,
 		HasSysState:             hasSysState,
 		HasS2SClients:           len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
+		S2STargetsRequired:      len(config.GrpcS2SClients) > 0 && !config.GrpcS2SClientAll,
 		HasServiceHealthState:   hasServiceHealthState,
 		// Every TLS gRPC service obtains its server cert via auto-TLS
 		// bidi stream (single canonical cert path). The HasAutoTls gate in the

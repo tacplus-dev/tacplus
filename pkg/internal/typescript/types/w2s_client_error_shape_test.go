@@ -23,7 +23,7 @@ func TestTypeScriptW2STransportThrowsUnauthenticatedCode(t *testing.T) {
 		"export class W2SError extends Error {",
 		"public readonly code: number;",
 		"const W2S_UNAUTHENTICATED = 16;",
-		"private async requireAuthHeader(): Promise<string> {",
+		"private async requireAuthHeader(service?: string): Promise<string> {",
 		"throw new W2SError(W2S_UNAUTHENTICATED, 'w2sm: authenticated request requires a token provider');",
 		"throw new W2SError(W2S_UNAUTHENTICATED, 'w2sm: token provider returned an empty token');",
 	} {
@@ -34,7 +34,7 @@ func TestTypeScriptW2STransportThrowsUnauthenticatedCode(t *testing.T) {
 
 	// Every authenticated route must go through requireAuthHeader — the unary
 	// JSON path plus both SSE stream paths.
-	if got := strings.Count(tmpl, "headers.Authorization = await this.requireAuthHeader();"); got != 3 {
+	if got := strings.Count(tmpl, "headers.Authorization = await this.requireAuthHeader(opts?.service);"); got != 3 {
 		t.Errorf("expected all 3 authenticated FetchTransport routes to use requireAuthHeader, found %d", got)
 	}
 
@@ -51,7 +51,7 @@ func TestTypeScriptW2STransportThrowsUnauthenticatedCode(t *testing.T) {
 	// authHeader() keeps its `string | undefined` shape: it is part of the
 	// RestTransport interface the generated W2S clients consume
 	// (grpc_over_rest_gen.go:384).
-	if !strings.Contains(tmpl, "async authHeader(): Promise<string | undefined> {") {
+	if !strings.Contains(tmpl, "async authHeader(service?: string): Promise<string | undefined> {") {
 		t.Error("authHeader() must keep its RestTransport-interface signature")
 	}
 }

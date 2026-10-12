@@ -16,26 +16,50 @@ export interface BootstrapConfig {
   connectTimeoutMs?: number;
 }
 
-export type TokenProvider = () => string | undefined | Promise<string | undefined>;
+/**
+ * Supplies the bearer token for a request. Receives the target service name
+ * (the gateway requires aud == route service), parity with Go's
+ * TokenProviderFor(service). A zero-argument provider still satisfies this type.
+ */
+export type TokenProvider = (service?: string) => string | undefined | Promise<string | undefined>;
 
 /**
  * Error carrying a gRPC status code so a caller can tell an auth failure from
  * any other transport failure. Mirrors the python W2S client, which raises
- * ProtoError with the same codes (UNAUTHENTICATED = 16).
+ * ProtoError with the same codes (UNAUTHENTICATED = 16). `status` is the HTTP
+ * status of the gateway response, undefined when no response was received.
  */
 export class W2SError extends Error {
   public readonly code: number;
+  public readonly status?: number;
 
-  constructor(code: number, message: string) {
+  constructor(code: number, message: string, status?: number) {
     super(message);
     this.name = 'W2SError';
     this.code = code;
+    this.status = status;
     Object.setPrototypeOf(this, W2SError.prototype);
   }
 }
 
 /** gRPC UNAUTHENTICATED, matching grpc.status.UNAUTHENTICATED used by the gRPC clients. */
 const W2S_UNAUTHENTICATED = 16;
+
+/** Maps a gateway HTTP status to a gRPC code (parity with Go's w2sHTTPStatusToError). */
+function w2sHttpStatusToCode(status: number): number {
+  switch (status) {
+    case 400: return 3;  // INVALID_ARGUMENT
+    case 401: return 16; // UNAUTHENTICATED
+    case 403: return 7;  // PERMISSION_DENIED
+    case 404: return 5;  // NOT_FOUND
+    case 409: return 6;  // ALREADY_EXISTS
+    case 429: return 8;  // RESOURCE_EXHAUSTED
+    case 501: return 12; // UNIMPLEMENTED
+    case 503: return 14; // UNAVAILABLE
+    case 504: return 4;  // DEADLINE_EXCEEDED
+    default: return 2;   // UNKNOWN
+  }
+}
 
 /**
  * RestTransport implementation using the browser Fetch API.
@@ -52,9 +76,9 @@ export class FetchTransport {
     this.connectTimeoutMs = connectTimeoutMs;
   }
 
-  async authHeader(): Promise<string | undefined> {
+  async authHeader(service?: string): Promise<string | undefined> {
     if (!this.tokenProvider) return undefined;
-    const token = await this.tokenProvider();
+    const token = await this.tokenProvider(service);
     if (!token) return undefined;
     return `Bearer ${token}`;
   }
@@ -66,18 +90,18 @@ export class FetchTransport {
    * keeps its `string | undefined` shape because it is part of the RestTransport
    * interface the generated W2S clients consume.
    */
-  private async requireAuthHeader(): Promise<string> {
+  private async requireAuthHeader(service?: string): Promise<string> {
     if (!this.tokenProvider) {
       throw new W2SError(W2S_UNAUTHENTICATED, 'w2sm: authenticated request requires a token provider');
     }
-    const token = await this.tokenProvider();
+    const token = await this.tokenProvider(service);
     if (!token) {
       throw new W2SError(W2S_UNAUTHENTICATED, 'w2sm: token provider returned an empty token');
     }
     return `Bearer ${token}`;
   }
 
-  async requestJson(method: string, url: string, body: unknown, opts?: { auth?: boolean; signal?: AbortSignal }): Promise<unknown> {
+  async requestJson(method: string, url: string, body: unknown, opts?: { auth?: boolean; signal?: AbortSignal; service?: string }): Promise<unknown> {
     const headers: Record<string, string> = {};
     const upperMethod = method.toUpperCase();
     const init: RequestInit = {
@@ -94,35 +118,39 @@ export class FetchTransport {
       init.body = JSON.stringify(body);
     }
     if (opts?.auth !== false) {
-      headers.Authorization = await this.requireAuthHeader();
+      headers.Authorization = await this.requireAuthHeader(opts?.service);
     }
     const resp = await fetch(this.absoluteHttpUrl(url), init);
     if (!resp.ok) {
-      throw new Error(`gRPC-over-REST error: ${resp.status} ${resp.statusText}`);
+      throw new W2SError(
+        w2sHttpStatusToCode(resp.status),
+        `gRPC-over-REST error: ${resp.status} ${resp.statusText}`,
+        resp.status,
+      );
     }
     const text = await resp.text();
     return text.trim() ? JSON.parse(text) : {};
   }
 
-  async postJson(url: string, body: unknown, opts?: { auth?: boolean; signal?: AbortSignal }): Promise<unknown> {
+  async postJson(url: string, body: unknown, opts?: { auth?: boolean; signal?: AbortSignal; service?: string }): Promise<unknown> {
     return this.requestJson('POST', url, body, opts);
   }
 
-  async getStream(url: string, opts?: { signal?: AbortSignal; auth?: boolean }): Promise<Response> {
+  async getStream(url: string, opts?: { signal?: AbortSignal; auth?: boolean; service?: string }): Promise<Response> {
     const headers: Record<string, string> = { Accept: 'text/event-stream' };
     if (opts?.auth !== false) {
-      headers.Authorization = await this.requireAuthHeader();
+      headers.Authorization = await this.requireAuthHeader(opts?.service);
     }
     return fetch(this.absoluteHttpUrl(url), { signal: opts?.signal, headers });
   }
 
-  async postStream(url: string, body: unknown, opts?: { signal?: AbortSignal; auth?: boolean }): Promise<Response> {
+  async postStream(url: string, body: unknown, opts?: { signal?: AbortSignal; auth?: boolean; service?: string }): Promise<Response> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
     };
     if (opts?.auth !== false) {
-      headers.Authorization = await this.requireAuthHeader();
+      headers.Authorization = await this.requireAuthHeader(opts?.service);
     }
     return fetch(this.absoluteHttpUrl(url), {
       method: 'POST',

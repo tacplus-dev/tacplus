@@ -292,6 +292,16 @@ export function tenantSpiffeId(trustDomain: string, tenant: string): string {
   return base + '/' + TENANTS_SEGMENT + '/' + t;
 }
 
+// tenantServiceSpiffeId: spiffe://<td>/tenants/<tenant>/services/<service>.
+export function tenantServiceSpiffeId(
+  trustDomain: string,
+  tenant: string,
+  serviceLabel: string,
+): string {
+  const svc = normalizeSegment(serviceLabel);
+  return tenantSpiffeId(trustDomain, tenant) + '/' + SERVICES_SEGMENT + '/' + svc;
+}
+
 // workspaceSpiffeId: spiffe://<td>/tenants/<tenant>/workspaces/<ws...>.
 export function workspaceSpiffeId(
   trustDomain: string,

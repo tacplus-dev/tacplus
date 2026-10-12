@@ -20,6 +20,7 @@ import {
   serviceSpiffeId,
   workloadSpiffeId,
   tenantSpiffeId,
+  tenantServiceSpiffeId,
   workspaceSpiffeId,
   namespaceSpiffeId,
   userSpiffeId,
@@ -277,8 +278,19 @@ function testOpaqueSegmentUnavailable(): void {
   mustThrow('opaque.unavailable.client', () => opaqueSegment('client', 'x'));
 }
 
+function testTenantServiceSpiffeId(): void {
+  // A tenant-owned service composes tenantSpiffeId + /services/<svc>, and
+  // parses back as a service identity.
+  const id = tenantServiceSpiffeId('example.org', 'acme', 'billing');
+  eq('tenantService.construct', id, tenantSpiffeId('example.org', 'acme') + '/services/billing');
+  eq('tenantService.subjectKind', parseSpiffeId(id).subjectKind, 'service');
+  eq('tenantService.roundTrip', reconstruct(parseSpiffeId(id)), id);
+  mustThrow('tenantService.emptyService', () => tenantServiceSpiffeId('example.org', 'acme', ''));
+}
+
 testSharedFixtureVectors();
 testOpaqueSegmentUnavailable();
+testTenantServiceSpiffeId();
 
 if (failures === 0) {
   console.log(`PASS: all ${checks} SPIFFE vector checks passed`);

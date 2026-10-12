@@ -399,7 +399,7 @@ func generateGrpcOverRestClient(svc ServiceInfo, info *parser.ProtoInfo, fileDes
 		buf.WriteString("    getStream(url: string, opts?: W2STransportOptions): Promise<Response>;\n")
 		buf.WriteString("    postStream(url: string, body: unknown, opts?: W2STransportOptions): Promise<Response>;\n")
 		buf.WriteString("    openWebSocket?(url: string, opts?: W2STransportOptions): Promise<WebSocket>;\n")
-		buf.WriteString("    authHeader?(): Promise<string | undefined>;\n")
+		buf.WriteString("    authHeader?(service?: string): Promise<string | undefined>;\n")
 		buf.WriteString("}\n\n")
 		buf.WriteString("export interface W2STransportOptions {\n")
 		buf.WriteString("    signal?: AbortSignal;\n")
@@ -1136,7 +1136,7 @@ func tsW2SClientHelpers(serviceName string, hasWebSocketMethods bool) string {
         if (!this.transport.authHeader) {
             throw new Error('W2S authenticated WebSocket frames require RestTransport.authHeader()');
         }
-        const header = await this.transport.authHeader();
+        const header = await this.transport.authHeader('` + serviceName + `');
         if (!header) {
             throw new Error('W2S authenticated WebSocket frames require a bearer token');
         }

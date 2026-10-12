@@ -70,6 +70,33 @@ function w2sHttpStatusToCode(status: number): number {
   }
 }
 
+/** True for a non-OK gRPC status code (1 CANCELLED .. 16 UNAUTHENTICATED). */
+function w2sIsGrpcCode(code: unknown): code is number {
+  return typeof code === 'number' && Number.isInteger(code) && code >= 1 && code <= 16;
+}
+
+/**
+ * Resolves the gRPC code of a failed gateway response. An HTTP status cannot
+ * carry every gRPC code (FAILED_PRECONDITION, ABORTED, ... all arrive as 500),
+ * so the code the gateway carries wins: the `grpc-status` response header, else
+ * a numeric `code` field in the JSON error body, else the HTTP status mapping.
+ */
+function w2sResponseCode(resp: Response, body: string): number {
+  const header = resp.headers.get('grpc-status')?.trim();
+  if (header && /^\d+$/.test(header) && w2sIsGrpcCode(Number(header))) {
+    return Number(header);
+  }
+  try {
+    const code = (JSON.parse(body) as { code?: unknown } | null)?.code;
+    if (w2sIsGrpcCode(code)) {
+      return code;
+    }
+  } catch {
+    // Non-JSON error body: fall back to the HTTP status.
+  }
+  return w2sHttpStatusToCode(resp.status);
+}
+
 {{- if .MintTokenMethod}}
 
 /** Storage key under which MintTokenProvider persists the refresh token. */
@@ -308,8 +335,9 @@ export class FetchTransport {
     }
     const resp = await fetch(this.absoluteHttpUrl(url), init);
     if (!resp.ok) {
+      const errorBody = await resp.text().catch(() => '');
       throw new W2SError(
-        w2sHttpStatusToCode(resp.status),
+        w2sResponseCode(resp, errorBody),
         `gRPC-over-REST error: ${resp.status} ${resp.statusText}`,
         resp.status,
       );

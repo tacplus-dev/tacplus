@@ -66,7 +66,7 @@ func TestTypeScriptW2STransportErrorCarriesStatusAndCode(t *testing.T) {
 		"case 503: return 14; // UNAVAILABLE",
 		"case 504: return 4;  // DEADLINE_EXCEEDED",
 		"default: return 2;   // UNKNOWN",
-		"throw new W2SError(\n        w2sHttpStatusToCode(resp.status),\n        `gRPC-over-REST error: ${resp.status} ${resp.statusText}`,\n        resp.status,\n      );",
+		"throw new W2SError(\n        w2sResponseCode(resp, errorBody),\n        `gRPC-over-REST error: ${resp.status} ${resp.statusText}`,\n        resp.status,\n      );",
 	} {
 		if !strings.Contains(tmpl, want) {
 			t.Errorf("w2sm.ts.tmpl missing %q", want)
@@ -74,6 +74,36 @@ func TestTypeScriptW2STransportErrorCarriesStatusAndCode(t *testing.T) {
 	}
 	if strings.Contains(tmpl, "throw new Error(`gRPC-over-REST error:") {
 		t.Error("w2sm.ts.tmpl still throws an untyped transport error")
+	}
+}
+
+// The gateway answers every gRPC code it does not map (FAILED_PRECONDITION,
+// ABORTED, INTERNAL, ...) with HTTP 500, so the HTTP mapping alone reported a
+// FAILED_PRECONDITION as UNKNOWN. The code the gateway carries must win: the
+// grpc-status header, else a numeric `code` in the JSON error body, else the
+// HTTP status mapping.
+func TestTypeScriptW2STransportErrorPrefersCarriedGrpcCode(t *testing.T) {
+	tmpl, err := loadTemplate("w2sm.ts.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate: %v", err)
+	}
+
+	for _, want := range []string{
+		"return typeof code === 'number' && Number.isInteger(code) && code >= 1 && code <= 16;",
+		"const header = resp.headers.get('grpc-status')?.trim();",
+		"const code = (JSON.parse(body) as { code?: unknown } | null)?.code;",
+		"  return w2sHttpStatusToCode(resp.status);\n}",
+		"const errorBody = await resp.text().catch(() => '');",
+	} {
+		if !strings.Contains(tmpl, want) {
+			t.Errorf("w2sm.ts.tmpl missing %q", want)
+		}
+	}
+	header := strings.Index(tmpl, "resp.headers.get('grpc-status')")
+	body := strings.Index(tmpl, "JSON.parse(body)")
+	fallback := strings.Index(tmpl, "  return w2sHttpStatusToCode(resp.status);")
+	if !(header < body && body < fallback) {
+		t.Error("w2sResponseCode must try the grpc-status header, then the JSON body code, then the HTTP mapping")
 	}
 }
 

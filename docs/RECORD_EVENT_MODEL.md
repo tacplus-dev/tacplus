@@ -1,7 +1,7 @@
 # Record / Event / Store / Projection model (annotation contract)
 
 This is the authoritative tacplus contract for the data plane shared by **eventbus**
-and **stratum**. Both are generic, app-agnostic services: their hand-written code
+and **the record store**. Both are generic, app-agnostic services: their hand-written code
 names no vservice; everything vservice-specific is generated from the annotations
 below. `mv <vservice>.proto .off` makes the vservice disappear everywhere with only
 a rebuild.
@@ -43,14 +43,14 @@ a rebuild.
   are external clients (C2S, via gateway) and/or internal services (S2S, e.g. the
   `*-proxy` services). The producer surface is **declared, never defaulted** — an
   internal-only event is S2S and is not exposed C2S.
-- A **record** *is* an event that is additionally **stored in full** (stratum) and
+- A **record** *is* an event that is additionally **stored in full** (the record store) and
   is **projectable**. `records ⊂ events`: every record is an event; not every event
   is a record (e.g. a trace event is event-only).
-- **stratum** holds the full records. A **projection** is an offshoot derived from a
+- **The record store** holds the full records. A **projection** is an offshoot derived from a
   record; since the boneyard there is no separate service that hosts one.
 
 ```
-producer ─[event]→ eventbus ──→ stratum   stores the full record
+producer ─[event]→ eventbus ──→ the record store   stores the full record
 ```
 
 Both producer paths are identical downstream: `client → gateway → eventbus → …`
@@ -78,7 +78,7 @@ Service-level (once per service):
 
 | Annotation | Service |
 |---|---|
-| `record_store {}` | stratum (the full-record store) |
+| `record_store {}` | the full-record store |
 
 On a stored event you write only `record` (it implies `event`). You never write the
 derived output types or their markers.
@@ -131,7 +131,7 @@ declaration requires the other to generate.
 
   option (spec.trait) = {
     name: "query"             // entitlement key AND the audience callers authenticate against
-    host: "stratum"           // the physical implementor — it is what declares (spec.record_store)
+    host: "recordstore"           // the physical implementor — it is what declares (spec.record_store)
     s2s_service: "RecordMap"  // the emitted peer-facing service
     c2s_service: "RecordQuery" // the emitted client-facing service
     auth_services: ["argus"]  // peer identities allowed onto the S2S half
@@ -156,12 +156,12 @@ declaration requires the other to generate.
   `RecordMap` (`spec.service_s2s`), reached by a peer and authorized by peer identity
   through the trait's declared `auth_services`; and `RecordQuery` (`spec.service_c2s`
   + `auth_entitled_users`), reached with a user token and authorized by that token's
-  entitlements. Both carry `(spec.service_*).label = "stratum"`: the **host is whom
+  entitlements. Both carry `(spec.service_*).label = "recordstore"`: the **host is whom
   the gateway dials, the trait is the audience the caller's token is checked
   against** (`routeIdentityForService`). Pinning the audience to the host would
   re-couple every client to the implementor.
 
-- **Implemented severally, by stratum alone.** `query` has exactly one implementor
+- **Implemented severally, by the record store alone.** `query` has exactly one implementor
   today — not joint or ensemble hosting; timedb and graphdb went to the boneyard
   2026-08-25 and took their query planes with them. A second implementor is
   expressible and would need no client change (the audience is the contract, not the
@@ -209,7 +209,7 @@ declaration requires the other to generate.
   has nowhere to go on `Sample`/`Pull`/`Count`/`Watch` — those take only the
   already-opened handle, which is where the flag was recorded. tacplus generates
   only the field; the exclusion itself is enforced by whoever implements the
-  handler (stratum, today — see "tacplus knows the typed query and its shape, not
+  handler (the record store, today — see "tacplus knows the typed query and its shape, not
   the query→execution transform" below).
 
   A query is either a **one-time snapshot** or **long-lived / living** (new
@@ -217,7 +217,7 @@ declaration requires the other to generate.
   predicate outright — nothing compares the new predicate against the old, so a caller
   entitled to create is equally free to widen it; authorization is per-RPC-method, not
   per-filter. **The caller that created a handle owns it** and closes it with
-  `Delete<T>Query`; stratum holds the per-caller set, and no intermediary owns handle
+  `Delete<T>Query`; the record store holds the per-caller set, and no intermediary owns handle
   lifecycle or cleanup on the caller's behalf.
 
   Three ops return record data — **`Get<T>Sample`, `List<T>`, and `Watch<T>`** (each
@@ -244,7 +244,7 @@ declaration requires the other to generate.
     the wrapper supplies the per-deployment ANONYMIZE secret from config
     (`grpcconfig.Config.anonymize_hmac_key`) — **mechanism in tacplus, policy in
     OPA**. The caller passes no redaction knobs. The seam is per-hop, so a future
-    two-stage path (stratum→an intermediary→user) can reuse it unchanged.
+    two-stage path (the record store→an intermediary→user) can reuse it unchanged.
   - **Minimum group size** is generated from the message-level
     `(spec.record).min_group_size = N` — a k-anonymity floor on the surfaces that return a
     size and **no rows**. The record-map injector stamps `option (spec.min_group_size) = N`
@@ -268,7 +268,7 @@ declaration requires the other to generate.
     makes a paged read return counts without rows has crossed that line.
 - Combining records of **multiple types** into one working set is done **service-side**
   — the caller opens several single-type queries and aggregates the already-redacted
-  results in its own memory; stratum holds no cross-type sets.
+  results in its own memory; the record store holds no cross-type sets.
 
 ## Validations (tacplus errors)
 
@@ -303,7 +303,7 @@ declaration requires the other to generate.
 
 ## Implementation neutrality
 
-The contract names no backing store. stratum's distribution/compute (currently
+The contract names no backing store. The record store's distribution/compute (currently
 in-memory + a distributed executor; later a unified "fast-store" tier and python3
 transformers) is an implementation detail, never present in proto/tacplus. Do not introduce impl names (engine names, vendors, internal
 codenames) into annotations or generated output.

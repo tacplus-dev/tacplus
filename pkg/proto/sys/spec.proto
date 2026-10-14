@@ -124,7 +124,7 @@ extend google.protobuf.FileOptions {
   // Example: option (spec.vservice) = {id: 30, name: "telemetry"};
   VServiceAnnotation vservice = 50022;
 
-  // record_store marks this service as the full-record store (stratum). Tiering
+  // record_store marks this service as the full-record store. Tiering
   // (hot/cold) is internal to the service. tacplus auto-derives EventBus
   // subscriptions for the record types it stores (currently spec.record).
   // Example: option (spec.record_store) = {};
@@ -173,7 +173,7 @@ extend google.protobuf.FileOptions {
   // Example: option (spec.record_read) = {record: "messaging.Message"};
   // Example, with the client-facing half:
   //   option (spec.record_read) = {
-  //     record: "scotty.ScottyActivity"
+  //     record: "assistant.AssistantActivity"
   //     c2s: {scope: C2S_SCOPE_PRINCIPAL, exposure: RPC_EXPOSURE_EXTERNAL}
   //   };
   repeated RecordRead record_read = 50026;
@@ -460,7 +460,7 @@ extend google.protobuf.MessageOptions {
   // 60046 retired (graph_type — graph store support removed 2026-08-25).
 
   // record marks this message as a stored record (an event held in full by the
-  // record_store, stratum) and makes it projectable. key = unique id field,
+  // record_store, the record store) and makes it projectable. key = unique id field,
   // owner = ownership/identity field. A record implies event.
   // Example:
   //   option (spec.record) = {key: "event_id", owner: "spiffe_id"};
@@ -685,7 +685,7 @@ message EventWatchAnnotation {
 }
 
 // RecordAnnotation marks a message as a stored record: an event held in full by
-// the record_store (stratum) and projectable to timeseries stores. A record
+// the record_store service and projectable to timeseries stores. A record
 // IS an event (it flows through eventbus); every record declares a key field
 // (unique identifier) and an owner field (ownership/identity).
 message RecordAnnotation {
@@ -801,7 +801,7 @@ message RecordAnnotation {
   //   option (spec.record) = {
   //     key: "accounting_id" owner: "spiffe_id"
   //     s2s: {auth_services: ["*"]}              // anyone may publish
-  //     s2s_subscribe: {auth_services: ["stratum"]}  // only the store may read
+  //     s2s_subscribe: {auth_services: ["recordstore"]}  // only the store may read
   //   };
   MethodS2SAnnotation s2s_subscribe = 9;
 
@@ -822,7 +822,7 @@ message RecordAnnotation {
   // list, so authorizing one service to read one record type authorized it to read
   // EVERY record type in the fleet. That is precisely what
   // decisions/mcp-generation-and-service-owned-data-2026-08-31.md §2 rules out —
-  // "Stratum grants entitlements per service, per record type, INDEPENDENTLY" —
+  // "The record store grants entitlements per service, per record type, INDEPENDENTLY" —
   // and it is why that document's §1 calls the shared `query` trait superseded.
   // The trait-wide list stays as the fallback for records that declare nothing,
   // so this is additive exactly the way s2s_subscribe, min_group_size and
@@ -858,7 +858,7 @@ message RecordAnnotation {
   //   option (spec.record) = {
   //     key: "delivery_id" owner: "spiffe_id"
   //     s2s: {auth_services: ["messaging"]}
-  //     s2s_subscribe: {auth_services: ["stratum"]}
+  //     s2s_subscribe: {auth_services: ["recordstore"]}
   //     s2s_read: {auth_services: ["messaging"]}
   //   };
   //
@@ -920,10 +920,10 @@ message RecordAnnotation {
   // Example — a record its producer also shows to its users:
   //   option (spec.record) = {
   //     key: "activity_id" owner: "spiffe_id"
-  //     s2s:           {auth_services: ["scotty"]}
-  //     s2s_subscribe: {auth_services: ["stratum"]}
-  //     s2s_read:      {auth_services: ["scotty"]}
-  //     c2s_read:      {auth_services: ["scotty"]}
+  //     s2s:           {auth_services: ["assistant"]}
+  //     s2s_subscribe: {auth_services: ["recordstore"]}
+  //     s2s_read:      {auth_services: ["assistant"]}
+  //     c2s_read:      {auth_services: ["assistant"]}
   //   };
   MethodS2SAnnotation c2s_read = 11;
 
@@ -1195,7 +1195,7 @@ message ServiceS2SAnnotation {
 
   // label is the routing label for the physical service that hosts this S2S
   // interface. Used for vservice routing tables where the interface is defined
-  // in a vservice proto but hosted by a physical service (e.g. "stratum").
+  // in a vservice proto but hosted by a physical service (e.g. "recordstore").
   string label = 3;
 }
 
@@ -1904,7 +1904,7 @@ extend google.protobuf.FieldOptions {
   // (BoundaryInfo.persistence), descriptively, for a future store that does.
   // Placement validation: setting this on a state root whose
   // (spec.service_state).label includes "kernel" is a generation ERROR —
-  // durable data belongs in stratum records ((spec.record) + (spec.record_store)),
+  // durable data belongs in stored records ((spec.record) + (spec.record_store)),
   // not in a kernel boundary — UNLESS that state root also sets
   // (spec.service_state).identity_snapshot = true, the carve-out for kernel's
   // own identity snapshot the decision itself names. Unrelated to typed disk
@@ -2459,7 +2459,7 @@ message ServiceStoreAnnotation {
 // topics that carry its projection sources; no mutation service is generated.
 message TimeseriesStoreAnnotation {}
 
-// RecordStoreAnnotation marks a service proto as the full-record store (stratum).
+// RecordStoreAnnotation marks a service proto as the full-record store.
 // Services with this annotation auto-subscribe to EventBus topics that publish
 // the record types they store (currently spec.record). Hot/cold tiering is
 // internal to the service.
@@ -2800,7 +2800,7 @@ extend google.protobuf.ServiceOptions {
   // Only authenticated service identities can call these RPCs; which ones is
   // declared per-RPC on spec.rpc.
   // Example: option (spec.service_s2s) = {};
-  // Example: option (spec.service_s2s) = {label: "stratum"};
+  // Example: option (spec.service_s2s) = {label: "recordstore"};
   ServiceS2SAnnotation service_s2s = 70013;
 
   // service_c2s declares a client-to-service gRPC service.

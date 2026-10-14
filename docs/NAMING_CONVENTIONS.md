@@ -206,8 +206,9 @@ recoverable from their names. String-typed enums use mixed casing.
 **Rule.** A comment on a general mechanism names the mechanism. Reach for a
 specific service name only when the text is genuinely about that service.
 
-**Why.** "stratum" appears in six comments describing generic behaviour, which
-tells a reader the mechanism is stratum-specific when it is not.
+**Why.** A concrete service name appeared in six comments describing generic
+behaviour, which tells a reader the mechanism is specific to that service when
+it is not.
 
 **Cost:** trivial. **Generated output:** none.
 

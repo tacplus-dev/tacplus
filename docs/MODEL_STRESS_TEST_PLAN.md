@@ -33,21 +33,21 @@ There are **two distinct tests** with different scopes, and they should **share 
 (orchestrator, chaos engine, invariant-oracle framework, report format) parameterized by *what
 pods to deploy* and *which invariants apply*:
 
-- **Profile A — Compiler/Model (this document, lives in `schematic/tacplus`).** Tests the
+- **Profile A — Compiler/Model (this document, lives in `tacplus`).** Tests the
   **tacplus-generated `model` itself**, consumer-agnostic: synthetic multi-language nodes +
   *stubbed rivets* (test token/JWK signer, in-memory state source), with no
   consumer-specific identity service or concrete state backend. Proves the generated model is
   correct, resilient, and at cross-language parity independent of any deployment.
-- **Profile B — System/Deployment (future Schematic todo).** Tests a real Schematic service
+- **Profile B — System/Deployment (future platform todo).** Tests a real platform service
   stack end-to-end under the same chaos: the reusable services and their real identity, state,
   policy, gateway, and eventing paths. It is **not** tacplus's to own, but it should live at the
-  Schematic group level rather than in a consumer repo. See the Schematic group-level todo at
+  platform group level rather than in a consumer repo. See the platform group-level todo at
   `todo/SYSTEM_STRESS_TEST_PLAN.md`.
 
 So the **orchestrator, chaos engine, oracle framework, and report must be built reusable**
-(deployment-profile is an input, not hardcoded), so future Schematic system profiles can point
+(deployment-profile is an input, not hardcoded), so future platform system profiles can point
 them at a real service stack without reimplementing the chaos/verification machinery. That
-reusable harness is part of the same Schematic direction as the reusable service move: the
+reusable harness is part of the same platform direction as the reusable service move: the
 chaos/orchestration engine is a consumer-agnostic platform component, while deployment profiles
 supply concrete custom types, vservices, services, and invariants.
 
@@ -186,7 +186,7 @@ Maintaining 5 node apps + orchestrator + K8s harness is real ongoing cost. Grow 
 
 - **Profile-A rivets** — **DECIDED: synthetic/stubbed rivets** (test token/JWK signer,
   in-memory deterministic state source, test mTLS CA; no consumer identity/state/policy services).
-  The future Schematic system profile supplies the real reusable service stack.
+  The future platform system profile supplies the real reusable service stack.
   Resolved 2026-06-07.
 - **`kind`/`k3d` vs cloud node** for v1 — plan assumes **`kind`** first, cloud for big soak.
 - **Location** — plan assumes **`cross-test/chaos/` in-repo**; own repo if it grows heavy.

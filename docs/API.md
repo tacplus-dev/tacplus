@@ -271,7 +271,7 @@ services.
 No state store implements `(spec.persistence)` today. Kernel does not: kernel is
 in-memory coordination plus its own identity snapshot, and holds no durable user
 data. Setting the annotation on a state root whose `(spec.service_state).label`
-includes `kernel` is a generation error — *durable data belongs in stratum
+includes `kernel` is a generation error — *durable data belongs in the record store
 records*. On any other state root the annotation is accepted and carried
 descriptively into `registry.json` (`BoundaryInfo.persistence`) for a future store
 that implements it; it produces no durability behavior on its own. Generated state

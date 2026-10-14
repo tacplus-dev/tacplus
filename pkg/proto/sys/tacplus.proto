@@ -87,7 +87,7 @@ message BoundaryInfo {
 
   // True when the boundary carries (spec.persistence). No state store implements
   // that flag today — kernel is in-memory coordination and holds no durable user
-  // data; durable data belongs in stratum records. Descriptive IR only: tacplus
+  // data; durable data belongs in stored records. Descriptive IR only: tacplus
   // carries the flag here for a future store that does implement it, and
   // implements nothing itself. Refused outright on a kernel-labelled state root.
   bool persistence = 5;

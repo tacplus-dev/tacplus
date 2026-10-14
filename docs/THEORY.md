@@ -109,7 +109,7 @@ This enforces a single-writer model. Services communicate state changes through 
 
 ## Services, Vservices, And Traits
 
-A **service** is a long-lived deployable unit such as stratum, eventbus, or kernel.
+A **service** is a long-lived deployable unit such as the record store, eventbus, or kernel.
 It is a process: something that is built, deployed, and dialed.
 
 A **vservice** and a **trait** are both tacplus-declared, service-implemented
@@ -141,7 +141,7 @@ implementor** — the host label is only whom the gateway dials, while the calle
 token is checked against the trait name — so a second implementor of the same trait
 needs no client change.
 
-The `query` trait is the worked example: `name: "query"`, `host: "stratum"`, and the
+The `query` trait is the worked example: `name: "query"`, `host: "recordstore"`, and the
 record query plane emitted onto both caller surfaces from it. Note the honest limit —
 `query` has exactly one implementor today, so the second-implementor property is
 expressible but unproven. See

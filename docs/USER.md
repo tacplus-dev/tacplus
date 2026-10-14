@@ -705,7 +705,7 @@ Views serve two purposes: they expose a single read surface of the same type acr
 
 | Annotation | Effect |
 |------------|--------|
-| `(spec.persistence) = true` | Requests boundary durability. **No store implements it today** — kernel is in-memory coordination and holds no durable user data, and generated state clients write nothing to local disk. On a **kernel-labelled** state root it is a generation error: *durable data belongs in stratum records* (use `(spec.record)` + `(spec.record_store)`). Elsewhere it is accepted and carried descriptively to `registry.json` (`BoundaryInfo.persistence`) for a future store to act on. Unrelated to typed disk persistence, which is keyed off `(spec.service_store)`. |
+| `(spec.persistence) = true` | Requests boundary durability. **No store implements it today** — kernel is in-memory coordination and holds no durable user data, and generated state clients write nothing to local disk. On a **kernel-labelled** state root it is a generation error: *durable data belongs in stored records* (use `(spec.record)` + `(spec.record_store)`). Elsewhere it is accepted and carried descriptively to `registry.json` (`BoundaryInfo.persistence`) for a future store to act on. Unrelated to typed disk persistence, which is keyed off `(spec.service_store)`. |
 | `(spec.eviction_max_size) = 5000` | Bounds the number of entries the generated Go state wrapper will accept for the boundary. |
 | `(spec.epoch_expiration) = true` | An int64 field inside a **collection item** is treated as a Unix epoch expiry timestamp; the state store computes TTL at write time. On a scalar state-root field it is rejected at generation time. On an int64 inside a singleton-only boundary message it is accepted but ignored (documented carve-out — see spec.proto). |
 | `(spec.instance_keyed) = true` | Server composes the entry key from the caller's token claims (`service_id@instance_id`), enforcing per-instance write isolation. |
@@ -793,7 +793,7 @@ option (spec.vservice) = {id: 30, name: "telemetry"};   // a DATA contract
 ```protobuf
 option (spec.trait) = {                                     // an RPC contract
   name: "query"              // entitlement key AND the audience callers authenticate against
-  host: "stratum"            // routing label of the physical implementor
+  host: "recordstore"            // routing label of the physical implementor
   s2s_service: "RecordMap"   // emitted peer-facing service name
   c2s_service: "RecordQuery" // emitted client-facing service name
   auth_services: ["argus"]   // peer identities allowed onto the S2S half
@@ -809,7 +809,7 @@ file that declares no trait.
 
 Everything the surface needs is in the declaration rather than in generator source:
 delete the file and the surface is not generated at all. `query` is the shipped
-example — it asks stratum for the record query plane; see
+example — it asks the record store for the record query plane; see
 [`RECORD_EVENT_MODEL.md`](RECORD_EVENT_MODEL.md).
 
 ---
@@ -825,8 +825,8 @@ service InternalAdmin {
   option (spec.service_s2s) = {};
 }
 
-service StratumHosted {
-  option (spec.service_s2s) = {label: "stratum"};
+service RecordStoreHosted {
+  option (spec.service_s2s) = {label: "recordstore"};
 }
 ```
 
@@ -838,9 +838,9 @@ service Dashboard {
   option (spec.service_c2s) = {auth_entitled_users: true};
 }
 
-// A trait's client-facing surface: dialed at stratum, entitled against the trait
+// A trait's client-facing surface: dialed at the record store, entitled against the trait
 service RecordQuery {
-  option (spec.service_c2s) = {auth_entitled_users: true, label: "stratum"};
+  option (spec.service_c2s) = {auth_entitled_users: true, label: "recordstore"};
 }
 ```
 
@@ -890,16 +890,16 @@ admits. It is still one rpc on one surface, with one handler:
 service Chat {
   option (spec.service_c2s) = {auth_entitled_users: true};
 
-  // Entitled users post as today; the "scotty" service may post too.
+  // Entitled users post as today; the "assistant" service may post too.
   rpc CreateChatMessage(Req) returns (Resp) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, flags: [RPC_FLAG_AUTH_ENTITLED_USERS], auth_services: ["scotty"]};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, flags: [RPC_FLAG_AUTH_ENTITLED_USERS], auth_services: ["assistant"]};
   }
 }
 ```
 
 A user token is authorized by its entitlements, a service token by
 `auth_services` (matched against the token's location-agnostic service path, so
-`"scotty"` matches every tenant's `scotty`), and an unlisted service is refused.
+`"assistant"` matches every tenant's `assistant`), and an unlisted service is refused.
 The calling service declares `option (spec.grpc_s2s_client) = {service:
 "pkg.Chat"};` and uses the generated client. The handler's `Caller` is the
 verified token's identity, so `(spec.principal)` / `(spec.namespace)` request
@@ -1334,7 +1334,7 @@ message Prospect {
 
 | Annotation | Service |
 |------------|---------|
-| `(spec.record_store) = {}` | stratum — the full-record store |
+| `(spec.record_store) = {}` | the full-record store |
 
 Example — a stored, projectable record:
 

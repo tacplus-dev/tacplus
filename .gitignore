@@ -165,3 +165,6 @@ cross-toolchain/
 # Tree-exclusion lock (scripts/with-tree-lock.sh); present only while a
 # generate/build/gate run holds it.
 /.tacplus-tree.lock/
+
+# Example project build output (just example)
+example/target/

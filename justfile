@@ -58,6 +58,11 @@ soundness:
 vet:
   go vet ./...
 
+# End-to-end example: generate, build and run the Go server + TypeScript client
+# in example/. See example/README.md.
+example:
+  bash example/run.sh
+
 current-generation:
   {{lock}} bash cross-test/current-generation/run.sh
 

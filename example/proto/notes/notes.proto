@@ -1,0 +1,89 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+//
+// The example service: notes, scoped to a tenant namespace.
+//
+// What you write is this file. What you get is in example/README.md.
+
+syntax = "proto3";
+
+package notesapi;
+
+import "sys/spec.proto";
+
+// The service identity used across the mesh.
+option (spec.service) = {name: "notes"};
+
+message Note {
+  string id = 1 [(spec.assert_required) = true, (spec.indexed) = true];
+  string tenant_namespace = 2 [(spec.assert_required) = true];
+  string text = 3 [(spec.assert_required) = true, (spec.assert_max_size) = 1024];
+}
+
+message CreateNoteRequest {
+  string tenant_namespace = 1 [(spec.assert_required) = true, (spec.assert_min_size) = 1];
+  string text = 2 [(spec.assert_required) = true, (spec.assert_min_size) = 1, (spec.assert_max_size) = 1024];
+}
+
+message CreateNoteResponse {
+  Note note = 1;
+}
+
+message GetNoteRequest {
+  string tenant_namespace = 1 [(spec.assert_required) = true, (spec.assert_min_size) = 1];
+  string id = 2 [(spec.assert_required) = true];
+}
+
+message GetNoteResponse {
+  Note note = 1;
+}
+
+// A PAGE collection request: the filter fields plus page_size and page_token.
+message ListNotesRequest {
+  string tenant_namespace = 1 [(spec.assert_required) = true, (spec.assert_min_size) = 1];
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+// A PAGE collection response: one repeated items field plus next_page_token.
+message ListNotesResponse {
+  repeated Note items = 1 [(spec.assert_max_size) = 1000];
+  string next_page_token = 2;
+  int64 total_count = 3;
+}
+
+// A client-to-service API: called by authenticated users through the API
+// gateway. Every user rpc on it is also published as an MCP tool.
+service NotesApi {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  // Create a note in the caller's tenant namespace and return it with its new id.
+  rpc CreateNote(CreateNoteRequest) returns (CreateNoteResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ENTITLED_USERS], target_namespace_field: "tenant_namespace"};
+  }
+
+  // Fetch one note by id. NOT_FOUND if the id is unknown in this tenant namespace.
+  rpc GetNote(GetNoteRequest) returns (GetNoteResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ENTITLED_USERS], target_namespace_field: "tenant_namespace"};
+  }
+
+  // List the notes in the tenant namespace, ordered by id, one page at a time.
+  rpc ListNotes(ListNotesRequest) returns (ListNotesResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ENTITLED_USERS], target_namespace_field: "tenant_namespace"};
+    option (spec.method_collection) = {
+      mode: COLLECTION_MODE_PAGE
+      order_by: "id"
+      default_page_size: 50
+    };
+  }
+}
+
+// A state root: a named partition of distributed state. tacplus generates the
+// state service (Get/Set/Watch/Delete), typed accessors and watch streams for
+// it; the state store that backs it is a platform service, so this example
+// declares it and shows what is generated rather than running it.
+message NotesState {
+  option (spec.service_state) = {name: "NotesState", label: ["notesapi"], export: true};
+
+  repeated Note notes = 1 [(spec.indexed) = true];
+}

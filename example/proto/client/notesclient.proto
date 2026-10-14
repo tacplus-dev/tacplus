@@ -1,0 +1,15 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+//
+// The client's own identity. Full-client targets (TypeScript here) emit C2S
+// clients for the dependencies the HOSTED package declares, so the TypeScript
+// build hosts this package and gets a client of NotesApi.
+
+syntax = "proto3";
+
+package notesclient;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "notesclient"};
+option (spec.grpc_c2s_client) = {service: "notesapi.NotesApi"};

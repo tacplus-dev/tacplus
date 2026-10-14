@@ -8,7 +8,7 @@ package oracle
 import (
 	"fmt"
 
-	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/node"
+	"github.com/tacplus-dev/tacplus/cross-test/chaos/node"
 )
 
 // Verdict is the result of an oracle evaluation.

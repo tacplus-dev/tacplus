@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 )
 
 // These tests pin the service_store uniqueness rule: two service_store-annotated

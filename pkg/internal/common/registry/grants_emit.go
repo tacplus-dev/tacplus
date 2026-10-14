@@ -2,8 +2,8 @@ package registry
 
 import (
 	"fmt"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 	"go/format"
 	"os"
 	"path/filepath"
@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
+	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
 
 // grantsEmitter renders the generated entitlement-grant helper for one language

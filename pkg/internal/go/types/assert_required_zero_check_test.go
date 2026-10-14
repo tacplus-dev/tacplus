@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 )
 
 // (spec.assert_required) is documented as "must not be empty/zero value" for

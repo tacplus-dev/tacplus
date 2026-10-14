@@ -4,7 +4,7 @@
 package parser
 
 import (
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 )
 
 // StoreEpochField resolves WHICH field of a message carries the row's store

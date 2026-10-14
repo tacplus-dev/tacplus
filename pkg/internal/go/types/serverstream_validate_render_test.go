@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
 // A plain server-streaming method (no collection descriptor) whose input type has

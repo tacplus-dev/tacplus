@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	commonspiffe "gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/spiffe"
+	commonspiffe "github.com/tacplus-dev/tacplus/pkg/internal/common/spiffe"
 )
 
 // spiffeSegmentRe uses the same grammar data rendered into generated sys/spiffe.

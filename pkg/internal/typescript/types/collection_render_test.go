@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/collection"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/service"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/collection"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
 )
 
 // WS-1 TypeScript: a Tier-2 SNAPSHOT collection is server-streaming on the wire

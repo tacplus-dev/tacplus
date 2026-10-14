@@ -12,11 +12,11 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 // generateGrpcClients generates typed gRPC client wrappers for each gRPC service.

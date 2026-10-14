@@ -5,7 +5,7 @@ import (
 
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
+	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
 
 // spec.proto declares a family of statedb tuning annotations — replica counts and

@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/tacplusyaml"
+	"github.com/tacplus-dev/tacplus/pkg/tacplusyaml"
 )
 
 func TestEffectiveSources(t *testing.T) {

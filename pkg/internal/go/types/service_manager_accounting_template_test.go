@@ -5,7 +5,7 @@ package types
 
 import (
 	"bytes"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"go/format"
 	"strings"
 	"testing"

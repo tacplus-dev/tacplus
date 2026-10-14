@@ -20,7 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/buildinfo"
+	"github.com/tacplus-dev/tacplus/pkg/buildinfo"
 )
 
 const (

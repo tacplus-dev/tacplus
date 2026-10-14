@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 	"go.uber.org/zap"
 )
 

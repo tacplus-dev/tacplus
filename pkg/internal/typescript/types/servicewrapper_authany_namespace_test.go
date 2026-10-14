@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/service"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
 )
 
 // See the Python/Go twins: auth_any_user with no authored fixed namespace

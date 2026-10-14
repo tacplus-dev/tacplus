@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 )
 
 // isIntegerType checks if a field type is an integer type

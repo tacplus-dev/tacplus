@@ -6,8 +6,8 @@ package parser
 import (
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 )
 
 // RedactIndicatorFieldBase is the base proto field number for the companion

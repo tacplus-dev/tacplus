@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/tmplutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil"
 )
 
 // PC-L-12 residual (b). A renewal-keypair generation failure inside a cert

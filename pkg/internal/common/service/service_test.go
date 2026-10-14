@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	protogen "gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	protogen "github.com/tacplus-dev/tacplus/pkg/internal/proto"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 func makeServices() []ServiceInfo {

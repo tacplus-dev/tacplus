@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 // recordReadPlane is the trait plane every test in this file emits against. Its

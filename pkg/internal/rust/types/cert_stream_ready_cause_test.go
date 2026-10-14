@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/templates"
+	"github.com/tacplus-dev/tacplus/templates"
 )
 
 // PC-L-4: the rust auto-TLS ready channel used to be a bare

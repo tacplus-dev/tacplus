@@ -6,8 +6,8 @@ package types
 import (
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/boundaries"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 func TestBuildServiceManagerDataDisambiguatesWrapperAliases(t *testing.T) {
@@ -58,7 +58,7 @@ func TestGoPublisherEntryUsesDeclaredBrokerPath(t *testing.T) {
 	}
 	entry := goPublisherEntryFromData(cfg, boundaries.EventPublisherData{
 		TopicRef:          "contractfixtures.FixtureState.events",
-		BrokerLabel:         "contractfixtures",
+		BrokerLabel:       "contractfixtures",
 		EventTypeFQN:      "contractfixtures.FixtureEvent",
 		EventTypeName:     "FixtureEvent",
 		RPCStem:           "ContractfixturesFixtureStateEvents",

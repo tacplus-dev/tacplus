@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/templates"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/templates"
 )
 
 // The (spec.rpc).requires_device request hash is compared RAW by kernel and

@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
 // Java twin of the Go/Rust egress-sanitize emit support (RED-1): the generated

@@ -17,8 +17,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/collection"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/collection"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 )
 
 // requiredZeroCheck returns the Go expression to check if a field is at its zero

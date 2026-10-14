@@ -13,10 +13,10 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/eventbus"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 // GrpcConfigEntry represents a single grpc_config annotation discovered

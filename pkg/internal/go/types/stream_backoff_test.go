@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/templates"
+	"github.com/tacplus-dev/tacplus/templates"
 )
 
 // The cluster streams (Log, Subscribe, WatchJwks) must reset their reconnect

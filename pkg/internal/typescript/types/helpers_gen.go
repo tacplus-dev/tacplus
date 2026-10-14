@@ -11,14 +11,14 @@ import (
 	"sort"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/tmplutil"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
-	"gitlab.com/seabeam/schematic/tacplus/templates"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
+	"github.com/tacplus-dev/tacplus/pkg/internal/proto"
+	"github.com/tacplus-dev/tacplus/templates"
 )
 
 // isIntegerType checks if a field type is an integer type

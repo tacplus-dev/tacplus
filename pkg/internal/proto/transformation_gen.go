@@ -11,8 +11,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
 // GenerateTransformationMessages scans all proto files for spec.transformation

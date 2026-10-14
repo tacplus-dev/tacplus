@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 // TestRustRestRootAggregatorGroupsAreSorted is a GEN-DET-1 regression guard.

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/tmplutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil"
 )
 
 // funcBody returns the template text from the first occurrence of start up to

@@ -6,7 +6,7 @@ package parser
 import (
 	"testing"
 
-	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
+	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
 
 // Pins the spec.rpc method option: principal and exposure land as the declared

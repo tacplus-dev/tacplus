@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/llmdesc"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/llmdesc"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 )
 
 // Golden cross-check: what the registry emits for a record field's filterability

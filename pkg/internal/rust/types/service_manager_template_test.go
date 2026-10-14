@@ -5,12 +5,12 @@ package types
 
 import (
 	"fmt"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"strings"
 	"testing"
 	"text/template"
 
-	"gitlab.com/seabeam/schematic/tacplus/templates"
+	"github.com/tacplus-dev/tacplus/templates"
 )
 
 func TestRustServiceManagerMutexLockBlocksAreStatementTerminated(t *testing.T) {

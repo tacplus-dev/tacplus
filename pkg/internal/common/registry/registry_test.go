@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/llmdesc"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/verbs"
-	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/llmdesc"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/verbs"
+	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )

@@ -8,7 +8,7 @@ import (
 
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
+	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
 
 // RestBrowserDescriptor carries a method's (spec.rest_browser): its REST route

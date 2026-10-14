@@ -11,8 +11,8 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/service"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 // The gateway (platform/services/gateway spa.rs init_bootstrap("")) injects

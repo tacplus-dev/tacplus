@@ -11,15 +11,15 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	buildcmd "gitlab.com/seabeam/schematic/tacplus/cmd/build"
-	registrycmd "gitlab.com/seabeam/schematic/tacplus/cmd/registry"
-	upgradecmd "gitlab.com/seabeam/schematic/tacplus/cmd/upgrade"
-	validatecmd "gitlab.com/seabeam/schematic/tacplus/cmd/validate"
-	verifycmd "gitlab.com/seabeam/schematic/tacplus/cmd/verify"
-	versioncmd "gitlab.com/seabeam/schematic/tacplus/cmd/version"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/buildinfo"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/runner"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/tacplusyaml"
+	buildcmd "github.com/tacplus-dev/tacplus/cmd/build"
+	registrycmd "github.com/tacplus-dev/tacplus/cmd/registry"
+	upgradecmd "github.com/tacplus-dev/tacplus/cmd/upgrade"
+	validatecmd "github.com/tacplus-dev/tacplus/cmd/validate"
+	verifycmd "github.com/tacplus-dev/tacplus/cmd/verify"
+	versioncmd "github.com/tacplus-dev/tacplus/cmd/version"
+	"github.com/tacplus-dev/tacplus/pkg/buildinfo"
+	"github.com/tacplus-dev/tacplus/pkg/runner"
+	"github.com/tacplus-dev/tacplus/pkg/tacplusyaml"
 )
 
 var rootCmd = &cobra.Command{

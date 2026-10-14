@@ -18,7 +18,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 // depsConfig mirrors the structure of dependencies.yaml for test loading.
@@ -386,7 +386,7 @@ func buildVerifyRust(t *testing.T, outDir string) {
 type cmpFileEntry struct {
 	rel        string
 	normalized string
-	inSys     bool
+	inSys      bool
 }
 
 func compareOutputs(t *testing.T, dirA, dirB string) (onlyA, onlyB, libOnlyA, libOnlyB []string) {

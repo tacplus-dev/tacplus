@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
 // AppendPublicViewMessagesToProtos appends, to each proto file that declares a

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
+	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 )
 
 func TestGenerateMetaData(t *testing.T) {

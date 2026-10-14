@@ -6,8 +6,8 @@ package parser
 import (
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/collection"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/collection"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 )
 
 // ResolveCollections is where the per-method codegen view (mode/tier/bounds) is

@@ -3,7 +3,7 @@
 
 package types
 
-import "gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/tmplutil"
+import "github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil"
 
 // loadTemplate loads a template from the embedded templates filesystem for TypeScript.
 //

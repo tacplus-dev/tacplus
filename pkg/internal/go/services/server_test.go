@@ -6,7 +6,7 @@ package services
 import (
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
 func TestGetMessageByNameRejectsCrossPackageSimpleNameCollision(t *testing.T) {

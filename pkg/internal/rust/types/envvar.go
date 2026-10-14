@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 )
 
 // buildCrossPackageMapRust maps proto package names to fully-qualified Rust crate module paths.

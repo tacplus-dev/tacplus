@@ -260,10 +260,10 @@ func TestGeneratedHeader_ContainsAgentWarning(t *testing.T) {
 	}
 }
 
-func TestGeneratedHeader_ContainsGitlabRef(t *testing.T) {
+func TestGeneratedHeader_ContainsRepoRef(t *testing.T) {
 	h := GeneratedHeader("go", "test.proto")
-	if !strings.Contains(h, "gitlab.com") {
-		t.Error("full header should contain gitlab reference for tacplus source")
+	if !strings.Contains(h, "github.com/tacplus-dev/tacplus") {
+		t.Error("full header should point at the tacplus repository")
 	}
 }
 

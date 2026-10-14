@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/templates"
+	"github.com/tacplus-dev/tacplus/templates"
 )
 
 // GrpcServer used to build a verify-nothing test-mode Authorizer in applyConfig

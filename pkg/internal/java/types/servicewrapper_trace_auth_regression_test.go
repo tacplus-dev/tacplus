@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/service"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
+	"github.com/tacplus-dev/tacplus/pkg/internal/proto"
 )
 
 // TCG-001 (Java): a trace request with noop=true must NOT bypass token

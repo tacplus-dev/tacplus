@@ -4,13 +4,13 @@
 package types
 
 import (
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"io/fs"
 	"strings"
 	"testing"
 	"text/template"
 
-	"gitlab.com/seabeam/schematic/tacplus/templates"
+	"github.com/tacplus-dev/tacplus/templates"
 )
 
 // Pin tests for the TypeScript event-bus / trace-publisher lifecycle and the

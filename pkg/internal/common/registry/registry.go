@@ -18,16 +18,16 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"gitlab.com/seabeam/schematic/tacplus/docs"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/boundaries"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/eventbus"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/llmdesc"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/verbs"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
-	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
+	"github.com/tacplus-dev/tacplus/docs"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/llmdesc"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/verbs"
+	"github.com/tacplus-dev/tacplus/pkg/internal/proto"
+	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
 
 // Config holds the parameters needed for registry generation.
@@ -207,15 +207,15 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 							}
 							seenServices[serviceKey] = true
 							si := &spec.ServiceInfo{
-								Name:        svc.Name,
-								Description: svc.Comment,
-								Package:     fd.Package,
-								GrpcService: serviceKey,
-								Rpcs:        serviceRpcs,
-								HostLabel:   svc.HostLabel,
-								Mcp:         svc.HasMcpRpcs,
-								McpExposure: svc.McpExposure,
-								TenantOwned: fd.ServiceTenantOwned,
+								Name:         svc.Name,
+								Description:  svc.Comment,
+								Package:      fd.Package,
+								GrpcService:  serviceKey,
+								Rpcs:         serviceRpcs,
+								HostLabel:    svc.HostLabel,
+								Mcp:          svc.HasMcpRpcs,
+								McpExposure:  svc.McpExposure,
+								TenantOwned:  fd.ServiceTenantOwned,
 								PinnedTenant: fd.ServicePinnedTenant,
 							}
 							if svc.EventLabel != "" {

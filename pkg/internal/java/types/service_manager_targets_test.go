@@ -6,7 +6,7 @@ package types
 import (
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 func TestJavaServiceManagerTargetsFollowGeneratedGrpcClients(t *testing.T) {

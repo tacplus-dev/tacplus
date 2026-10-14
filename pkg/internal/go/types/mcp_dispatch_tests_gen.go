@@ -5,16 +5,16 @@ package types
 
 import (
 	"fmt"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 	"go/format"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 	"go.uber.org/zap"
 	"golang.org/x/tools/imports"
 )

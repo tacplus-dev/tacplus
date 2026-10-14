@@ -14,14 +14,14 @@ import (
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/builder"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/depfiles"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/gittag"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/projectfile"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/protosrc"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/tacplusyaml"
+	"github.com/tacplus-dev/tacplus/pkg/builder"
+	"github.com/tacplus-dev/tacplus/pkg/depfiles"
+	"github.com/tacplus-dev/tacplus/pkg/gittag"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/projectfile"
+	"github.com/tacplus-dev/tacplus/pkg/protosrc"
+	"github.com/tacplus-dev/tacplus/pkg/tacplusyaml"
 )
 
 // Params holds the inputs for Build.

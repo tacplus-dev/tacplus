@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 )
 
 type tsClientIdentity struct {

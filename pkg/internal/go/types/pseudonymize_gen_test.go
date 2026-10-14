@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 )
 
 // TestFormatAnonymizeWireVectors pins the format-preserving surrogates to exact

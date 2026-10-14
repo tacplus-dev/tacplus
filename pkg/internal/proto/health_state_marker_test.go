@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 // Regression for OF-4: a user state coincidentally named "ServiceHealth" must

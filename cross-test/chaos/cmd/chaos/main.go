@@ -14,8 +14,8 @@ import (
 	"fmt"
 	"os"
 
-	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/orchestrator"
-	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/profile"
+	"github.com/tacplus-dev/tacplus/cross-test/chaos/orchestrator"
+	"github.com/tacplus-dev/tacplus/cross-test/chaos/profile"
 )
 
 func main() {

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 )
 
 // generateFilesystemHelpers writes a filesystem_helpers.py file with

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"text/template"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
+	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 )
 
 // copyright holds the free-form header text from tacplus.yaml (header:), split

@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/tacplusyaml"
+	"github.com/tacplus-dev/tacplus/pkg/tacplusyaml"
 )
 
 // The build cache skips generation entirely when .hash.json matches a freshly

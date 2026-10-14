@@ -12,8 +12,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/packages"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/packages"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 // createRootPyprojectToml creates a root pyproject.toml file for all generated Python packages

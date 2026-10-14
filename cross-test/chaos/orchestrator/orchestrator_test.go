@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/profile"
+	"github.com/tacplus-dev/tacplus/cross-test/chaos/profile"
 )
 
 // runResult wraps a report so tests can introspect verdicts.

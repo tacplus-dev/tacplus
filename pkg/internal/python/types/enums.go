@@ -8,9 +8,9 @@ import (
 	"io/fs"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/tmplutil"
-	"gitlab.com/seabeam/schematic/tacplus/templates"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil"
+	"github.com/tacplus-dev/tacplus/templates"
 )
 
 // pyEnumValueData holds pre-computed data for a single enum value.

@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 )
 
 // ValidateRecordPrivateAnnotations enforces the three invariants

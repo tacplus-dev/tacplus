@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
 
 func entField(name, typ string, repeated bool, mode string) model.Field {
@@ -82,11 +82,11 @@ func TestValidateDataEntitlementMessageLevelDefault(t *testing.T) {
 // modeless annotation is rejected rather than silently dropped).
 func TestRedactModeString(t *testing.T) {
 	cases := map[spec.RedactMode]string{
-		spec.RedactMode_REDACT_MODE_DROP:         "drop",
-		spec.RedactMode_REDACT_MODE_PSEUDONYMIZE: "pseudonymize",
-		spec.RedactMode_REDACT_MODE_MAY_REDACT:   "may_redact",
+		spec.RedactMode_REDACT_MODE_DROP:          "drop",
+		spec.RedactMode_REDACT_MODE_PSEUDONYMIZE:  "pseudonymize",
+		spec.RedactMode_REDACT_MODE_MAY_REDACT:    "may_redact",
 		spec.RedactMode_REDACT_MODE_MAY_ANONYMIZE: "may_anonymize",
-		spec.RedactMode_REDACT_MODE_UNSPECIFIED:  "",
+		spec.RedactMode_REDACT_MODE_UNSPECIFIED:   "",
 	}
 	for m, want := range cases {
 		got := redactModeString(m)

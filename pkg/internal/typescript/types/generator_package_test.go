@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/packages"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/packages"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 func writeTypeScriptTestDependencies(t *testing.T, dir string) {
@@ -461,7 +461,7 @@ func TestTypeScriptModuleDirForPackageUsesGeneratedPackageHeader(t *testing.T) {
 	}
 
 	for pkg, want := range map[string]string{
-		"telemetry":       "types/vservices/claude-sensor",
+		"telemetry":          "types/vservices/claude-sensor",
 		"gitlabconnectorsvc": "types/services/gitlab-connector",
 		"grpcconfig":         "types/sys/grpcconfig",
 	} {

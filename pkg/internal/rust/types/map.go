@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 )
 
 // convertParamKeyToRustVariant converts a SCREAMING_SNAKE_CASE param_key to PascalCase Rust enum variant

@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 )
 
 // projectionAnnotations are the message-level markers that make a record a graph

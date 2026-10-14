@@ -6,8 +6,8 @@ package build
 import (
 	"github.com/spf13/cobra"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/runner"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/tacplusyaml"
+	"github.com/tacplus-dev/tacplus/pkg/runner"
+	"github.com/tacplus-dev/tacplus/pkg/tacplusyaml"
 )
 
 var (

@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/verbs"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/verbs"
 )
 
 // The owner_default seam. (spec.owner_default) on a row type says what the

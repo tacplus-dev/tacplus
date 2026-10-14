@@ -6,8 +6,8 @@ package types
 import (
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/eventbus"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/service"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
 )
 
 // accountingTopicFixture is the topic tacplus synthesizes from

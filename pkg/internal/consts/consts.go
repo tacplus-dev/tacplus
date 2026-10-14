@@ -27,7 +27,7 @@ func HeaderLines() []string {
 		"",
 		"IMPORTANT FOR AGENTS: Do NOT modify this generated code.",
 		"If changes are needed, update the tacplus compiler at:",
-		"gitlab.com/seabeam/schematic/tacplus",
+		"github.com/tacplus-dev/tacplus",
 		"",
 		"PUBLIC SURFACE CONTRACT:",
 		"Generated raw transport clients and internal wiring are tacplus implementation details.",

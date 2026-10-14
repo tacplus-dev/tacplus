@@ -4,13 +4,13 @@
 package types
 
 import (
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"strings"
 	"testing"
 	"text/template"
 
-	tacproto "gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
-	"gitlab.com/seabeam/schematic/tacplus/templates"
+	tacproto "github.com/tacplus-dev/tacplus/pkg/internal/proto"
+	"github.com/tacplus-dev/tacplus/templates"
 )
 
 func readJavaTemplate(t *testing.T, path string) string {

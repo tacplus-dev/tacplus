@@ -1,6 +1,6 @@
 # Local development recipes.
 
-pkg := "gitlab.com/seabeam/schematic/tacplus/pkg/buildinfo"
+pkg := "github.com/tacplus-dev/tacplus/pkg/buildinfo"
 
 # Every recipe below that regenerates or compiles writes this checkout's shared
 # target/ and generated-sources/ trees. Several background jobs run these

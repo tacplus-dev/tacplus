@@ -6,7 +6,7 @@ package types
 import (
 	"bytes"
 	"fmt"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -15,10 +15,10 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	commonspiffe "gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/spiffe"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
-	"gitlab.com/seabeam/schematic/tacplus/templates"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	commonspiffe "github.com/tacplus-dev/tacplus/pkg/internal/common/spiffe"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/templates"
 )
 
 // writeLibTemplates processes the embedded TypeScript library templates and writes them

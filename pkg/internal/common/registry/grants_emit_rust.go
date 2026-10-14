@@ -2,15 +2,15 @@ package registry
 
 import (
 	"fmt"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
-	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
+	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
 
 func init() { registerGrantsEmitter("rust", emitRustGrantsHelper) }

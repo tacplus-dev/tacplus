@@ -6,7 +6,7 @@ package types
 import (
 	"fmt"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
 // The Rust (spec.record).min_group_size guard — the third implementation of the

@@ -5,12 +5,12 @@ package types
 
 import (
 	"bytes"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"strings"
 	"testing"
 	"text/template"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
 func renderRecordReaders(t *testing.T, data recordReaderFile) string {

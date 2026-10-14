@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 )
 
 func timeseriesMsg(fieldAnn map[string]model.AnnotationValue, dedupKeyFields []string) model.ProtoFile {

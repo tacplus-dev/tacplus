@@ -6,7 +6,7 @@ package types
 import (
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/eventbus"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
 )
 
 func TestExplicitPublisherEntryUsesCanonicalPath(t *testing.T) {
@@ -51,9 +51,9 @@ func TestPublisherEntryUsesDeclaredBrokerTag(t *testing.T) {
 			Message: "TraceEventBus",
 			Field:   "trace_events",
 		},
-		EventBusLabel:  "events",
-		EventTypeFQN: "trace.TraceEvent",
-		RPCStem:      "TelemetryTraceEventBusTraceEvents",
+		EventBusLabel: "events",
+		EventTypeFQN:  "trace.TraceEvent",
+		RPCStem:       "TelemetryTraceEventBusTraceEvents",
 	}
 
 	entry := publisherEntryForTopic(

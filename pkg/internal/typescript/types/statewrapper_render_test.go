@@ -4,14 +4,14 @@
 package types
 
 import (
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"text/template"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 func TestTypeScriptStateWrapperWatchLifecycleRenders(t *testing.T) {

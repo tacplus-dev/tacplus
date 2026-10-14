@@ -5,12 +5,12 @@ package proto
 
 import (
 	"bytes"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"strings"
 	"testing"
 	"text/template"
 
-	"gitlab.com/seabeam/schematic/tacplus/templates"
+	"github.com/tacplus-dev/tacplus/templates"
 )
 
 // The owner-declared routing envelope is one boundary with five renderings, and

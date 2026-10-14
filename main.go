@@ -3,7 +3,7 @@
 
 package main
 
-import "gitlab.com/seabeam/schematic/tacplus/cmd"
+import "github.com/tacplus-dev/tacplus/cmd"
 
 func main() {
 	cmd.Execute()

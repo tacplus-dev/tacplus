@@ -14,7 +14,7 @@ import (
 
 	"go.uber.org/zap"
 
-	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
+	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
 
 // jbmcResultRe matches JBMC's per-harness status line.

@@ -9,9 +9,9 @@ import (
 	"sort"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 )
 
 const EventBusLabel = "eventbus"
@@ -32,7 +32,7 @@ type Topic struct {
 	Ref           TopicRef
 	ProtoFile     string
 	EventTypeFQN  string
-	EventBusLabel   string
+	EventBusLabel string
 	Export        bool
 	RPCStem       string
 	LegacyRPCStem string
@@ -139,7 +139,7 @@ func BuildTopicRegistry(fds []*parser.FileDescriptor) (*TopicRegistry, error) {
 					Ref:           ref,
 					ProtoFile:     fd.Path,
 					EventTypeFQN:  field.Type,
-					EventBusLabel:   labelAnn.StringValue,
+					EventBusLabel: labelAnn.StringValue,
 					Export:        export,
 					RPCStem:       topicRPCStem(ref, true),
 					LegacyRPCStem: topicRPCStem(ref, false),

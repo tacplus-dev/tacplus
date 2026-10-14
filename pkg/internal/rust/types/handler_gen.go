@@ -6,7 +6,7 @@ package types
 import (
 	"bytes"
 	"fmt"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,15 +16,15 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/buildinfo"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/boundaries"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/eventbus"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/keepaliveconst"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/service"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
-	stateproto "gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/buildinfo"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/keepaliveconst"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
+	stateproto "github.com/tacplus-dev/tacplus/pkg/internal/proto"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 // grpcServiceEntry holds per-service data for handler and service_manager templates.

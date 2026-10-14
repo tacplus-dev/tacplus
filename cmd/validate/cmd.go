@@ -11,8 +11,8 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/protovalidate"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/registry"
+	"github.com/tacplus-dev/tacplus/pkg/protovalidate"
+	"github.com/tacplus-dev/tacplus/pkg/registry"
 )
 
 var (

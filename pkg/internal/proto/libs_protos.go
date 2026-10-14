@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	pkgproto "gitlab.com/seabeam/schematic/tacplus/pkg/proto"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	pkgproto "github.com/tacplus-dev/tacplus/pkg/proto"
 	"go.uber.org/zap"
 )
 

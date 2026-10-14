@@ -14,10 +14,10 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	commonspiffe "gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/spiffe"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
-	"gitlab.com/seabeam/schematic/tacplus/templates"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	commonspiffe "github.com/tacplus-dev/tacplus/pkg/internal/common/spiffe"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/templates"
 )
 
 // writeLibTemplates processes the embedded Python library templates and writes them
@@ -80,15 +80,15 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 
 	// Template data
 	data := struct {
-		PythonPackageBase           string
-		HasTokenExchanger           bool
-		TokenExchangerPackage       string // proto package name for token mint service
-		MintServiceName             string // proto service name, e.g. "Mint"
-		DefaultAudience             string
-		BootstrapServiceID          string
-		ServiceLabel                string   // service identity baked into Authorizer
-		AcceptedAudiences           []string // every `aud` the Authorizer accepts: own label + hosted traits
-		ClientOnly                  bool
+		PythonPackageBase       string
+		HasTokenExchanger       bool
+		TokenExchangerPackage   string // proto package name for token mint service
+		MintServiceName         string // proto service name, e.g. "Mint"
+		DefaultAudience         string
+		BootstrapServiceID      string
+		ServiceLabel            string   // service identity baked into Authorizer
+		AcceptedAudiences       []string // every `aud` the Authorizer accepts: own label + hosted traits
+		ClientOnly              bool
 		HasClientTokenExchanger bool
 		ClientMintGrpcModule    string // full dotted python module for the C2S mint grpc stub
 		ClientMintServiceName   string // C2S mint proto service name (stub = Name+"Stub")

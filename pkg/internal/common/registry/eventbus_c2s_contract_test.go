@@ -9,10 +9,10 @@ import (
 	"sort"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	protogen "gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
-	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	protogen "github.com/tacplus-dev/tacplus/pkg/internal/proto"
+	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 

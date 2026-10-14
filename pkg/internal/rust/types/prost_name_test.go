@@ -3,7 +3,7 @@ package types
 import (
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 )
 
 // TestProstSnakeNameDigitAcronym pins the digit-acronym behavior that prost/heck

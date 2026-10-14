@@ -4,14 +4,14 @@
 package types
 
 import (
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"go/parser"
 	"go/token"
 	"strings"
 	"testing"
 	"text/template"
 
-	commonparser "gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	commonparser "github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
 // TestBidiTemplateRenders verifies the bidi lifecycle template loads,

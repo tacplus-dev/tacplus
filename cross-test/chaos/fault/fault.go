@@ -8,7 +8,7 @@ import (
 	"math/rand"
 	"time"
 
-	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/node"
+	"github.com/tacplus-dev/tacplus/cross-test/chaos/node"
 )
 
 // Target is the surface a fault acts on: one node plus its rivets. The

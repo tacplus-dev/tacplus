@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
 func rustSanitizeAnn(mode string) map[string]model.AnnotationValue {
@@ -68,7 +68,7 @@ func TestRustSanitize_RepeatedMessageElementWise(t *testing.T) {
 	generateRustSanitize(&b, parser.BuildEntitlementTree(&files[0].Messages[0], "demo", r), &rustSanitizeNeeds{})
 	got := b.String()
 	for _, want := range []string{
-		"out.contacts = Vec::new();", // whole-list clear
+		"out.contacts = Vec::new();",                     // whole-list clear
 		"if ent.map(|e| e.contacts).unwrap_or(0) != 3 {", // fail-closed: cleared unless RAW-granted
 		"let sub = ent.and_then(|e| e.contacts_sub.as_ref());",
 		"for v in out.contacts.iter_mut() {",

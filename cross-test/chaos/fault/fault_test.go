@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/node"
+	"github.com/tacplus-dev/tacplus/cross-test/chaos/node"
 )
 
 func newTarget() *Target {

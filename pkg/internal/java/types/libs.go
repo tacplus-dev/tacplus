@@ -14,13 +14,13 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/keepaliveconst"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	commonspiffe "gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/spiffe"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
-	stateproto "gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
-	"gitlab.com/seabeam/schematic/tacplus/templates"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/keepaliveconst"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	commonspiffe "github.com/tacplus-dev/tacplus/pkg/internal/common/spiffe"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
+	stateproto "github.com/tacplus-dev/tacplus/pkg/internal/proto"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/templates"
 )
 
 // javaAmServiceRPC is the per-service RPC-enum accessor data

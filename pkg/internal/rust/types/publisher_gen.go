@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/boundaries"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/eventbus"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 // publisherEntry holds per-topic data for the service_manager template's
@@ -139,7 +139,7 @@ func publisherEntryForTopic(topic eventbus.Topic, prefix, rpcStem, eventTypePath
 		// boundaries.go is the other — and switching only that one left the rust
 		// publisher still emitting the flat name into s2sm/mod.rs while every
 		// gate stayed green. See control/EVENTBUS-PUBLISH-API-SPLIT.md.
-		PublishPath:   eventbus.PerTopicPublishPath(topic.Ref),
+		PublishPath: eventbus.PerTopicPublishPath(topic.Ref),
 	}
 }
 

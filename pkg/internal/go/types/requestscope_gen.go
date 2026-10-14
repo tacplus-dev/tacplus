@@ -6,7 +6,7 @@ package types
 import (
 	"fmt"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
 // The request half of the principal seam on the PLAIN gRPC wrapper.

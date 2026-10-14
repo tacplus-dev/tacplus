@@ -6,7 +6,7 @@ package types
 import (
 	"fmt"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/packages"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/packages"
 )
 
 func typeScriptDependencyVersion(pkgName string) (string, error) {

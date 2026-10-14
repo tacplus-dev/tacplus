@@ -12,7 +12,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/packages"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/packages"
 )
 
 // VersionFetcher fetches latest stable versions from package registries

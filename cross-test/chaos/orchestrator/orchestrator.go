@@ -10,11 +10,11 @@ import (
 	"math/rand"
 	"time"
 
-	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/fault"
-	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/node"
-	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/oracle"
-	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/profile"
-	"gitlab.com/seabeam/schematic/tacplus/cross-test/chaos/report"
+	"github.com/tacplus-dev/tacplus/cross-test/chaos/fault"
+	"github.com/tacplus-dev/tacplus/cross-test/chaos/node"
+	"github.com/tacplus-dev/tacplus/cross-test/chaos/oracle"
+	"github.com/tacplus-dev/tacplus/cross-test/chaos/profile"
+	"github.com/tacplus-dev/tacplus/cross-test/chaos/report"
 )
 
 // Mesh is the deployed synthetic node mesh.

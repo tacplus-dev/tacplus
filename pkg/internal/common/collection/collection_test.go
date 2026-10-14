@@ -6,7 +6,7 @@ package collection
 import (
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 )
 
 // This package is the single source of truth for collection tier math, trust

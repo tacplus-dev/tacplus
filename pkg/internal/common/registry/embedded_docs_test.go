@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/docs"
+	"github.com/tacplus-dev/tacplus/docs"
 )
 
 // CC-6: USER.md and THEORY.md claimed registry.json carries "architectural norms

@@ -6,7 +6,7 @@ package types
 import (
 	"bytes"
 	"fmt"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"go/format"
 	"os"
 	"path/filepath"
@@ -15,8 +15,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 // restClientMessageEntry represents a single message type in a per-type HTTP client.

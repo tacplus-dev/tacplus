@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/boundaries"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 func TestJavaPublisherEntryUsesDeclaredBrokerMethod(t *testing.T) {
@@ -20,7 +20,7 @@ func TestJavaPublisherEntryUsesDeclaredBrokerMethod(t *testing.T) {
 	}
 	entry := javaPublisherEntryFromData(cfg, "", boundaries.EventPublisherData{
 		TopicRef:          "contractfixtures.FixtureState.events",
-		BrokerLabel:         "contractfixtures",
+		BrokerLabel:       "contractfixtures",
 		EventTypeFQN:      "contractfixtures.FixtureEvent",
 		EventTypeName:     "FixtureEvent",
 		RPCStem:           "ContractfixturesFixtureStateEvents",

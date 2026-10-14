@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 )
 
 // This is the language-agnostic reference implementation of the generated

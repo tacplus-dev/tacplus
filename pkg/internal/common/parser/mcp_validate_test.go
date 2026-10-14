@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
+	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
 
 // Pins principal: RPC_PRINCIPAL_MCP end to end through the parser: the new enum

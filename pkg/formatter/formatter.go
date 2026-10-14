@@ -13,7 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/codefile"
+	"github.com/tacplus-dev/tacplus/pkg/codefile"
 )
 
 const timeout = 2 * time.Minute

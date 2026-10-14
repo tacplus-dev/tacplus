@@ -4,7 +4,7 @@
 package parser
 
 import (
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/verbs"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/verbs"
 )
 
 // methodShape adapts a MethodInfo into the primitive shape the verb classifier

@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	spec "gitlab.com/seabeam/schematic/tacplus/target/proto/spec/sys"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
 
 // The session-carrying MCP transport, synthesized as a real proto rpc.

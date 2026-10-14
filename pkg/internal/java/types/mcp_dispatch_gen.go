@@ -6,18 +6,18 @@ package types
 import (
 	"encoding/json"
 	"fmt"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/model"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/strutil"
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/proto"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/proto"
 )
 
 // The MCP dispatch seam (BIG GOAL 8 Phase 0, Java).
@@ -645,7 +645,7 @@ func javaMcpFileHeader(serviceName string, p javaMcpFileParams) string {
 //
 // IMPORTANT FOR AGENTS: Do NOT modify this generated code.
 // If changes are needed, update the tacplus compiler at:
-// gitlab.com/seabeam/schematic/tacplus
+// github.com/tacplus-dev/tacplus
 //
 // Source: %[5]s
 

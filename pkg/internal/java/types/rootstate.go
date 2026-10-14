@@ -6,9 +6,8 @@ package types
 import (
 	"strings"
 
-	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
-
 
 // findMessageInParser searches for a message by package and type name across all parsed files.
 func findMessageInParser(dp *parser.DescriptorParser, pkg, typeName string) *parser.MessageDescriptor {

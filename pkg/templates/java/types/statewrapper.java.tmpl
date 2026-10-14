@@ -393,6 +393,11 @@ public class StateClient implements AutoCloseable {
      * config_fetch_timeout_seconds, and throws once that budget is spent rather than
      * returning a value it knows is invalid.</p>
      *
+     * <p>The Get itself is retried while the state service answers UNAVAILABLE
+     * (a kernel roll or restart refusing connections), on the chassis reconnect
+     * backoff and with no bound: the service waits for the kernel to answer. Any
+     * other status is thrown immediately.</p>
+     *
      * <p>The wire carries no proto defaults, so this applies the type's generated
      * defaults to every fetched value BEFORE validating it. Without that, a field
      * the seeded state omits on purpose — because it carries a (spec.default_*) —
@@ -406,7 +411,9 @@ public class StateClient implements AutoCloseable {
         long timeoutSeconds = this.configFetchTimeoutSeconds;
         long deadlineNanos = System.nanoTime() + timeoutSeconds * 1_000_000_000L;
         for (int attempt = 0; ; attempt++) {
-            {{.JavaType}} value = stateStub.get{{.FieldPascal}}(Trace.TraceRequest.getDefaultInstance());
+            {{.JavaType}} value = {{$.BackoffFQN}}.retryWhileUnavailable(
+                    () -> stateStub.get{{.FieldPascal}}(Trace.TraceRequest.getDefaultInstance()),
+                    {{$.BackoffFQN}}.THREAD_SLEEPER);
 {{- if .DefaultsRef}}
             value = {{.DefaultsRef}}(value).build();
 {{- end}}

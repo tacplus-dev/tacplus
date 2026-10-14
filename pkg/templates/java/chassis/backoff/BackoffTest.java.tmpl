@@ -1,0 +1,84 @@
+package {{.ChassisBase}}.backoff;
+
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+
+// Pins the Java reconnect backoff to the Rust chassis (backoff.rs): 500ms first
+// step, doubling, 30s cap. And pins retryWhileUnavailable, which the generated
+// singleton state fetch wraps its Get in (stratum defect #8): UNAVAILABLE is
+// retried until the call answers, every other status is rethrown at once.
+public class BackoffTest {
+    private static int failures = 0;
+
+    private static void check(String name, boolean ok) {
+        if (!ok) {
+            System.err.println("FAIL: " + name);
+            failures++;
+        }
+    }
+
+    public static void main(String[] args) {
+        List<Long> schedule = new ArrayList<>();
+        Duration d = Backoff.RECONNECT_INITIAL_BACKOFF;
+        schedule.add(d.toMillis());
+        for (int i = 0; i < 8; i++) {
+            d = Backoff.nextReconnectBackoff(d);
+            schedule.add(d.toMillis());
+        }
+        check("schedule doubles from 500ms to the 30s cap, got " + schedule,
+                schedule.equals(Arrays.asList(500L, 1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L, 30_000L, 30_000L)));
+        check("never exceeds cap", Backoff.nextReconnectBackoff(Backoff.RECONNECT_MAX_BACKOFF)
+                .equals(Backoff.RECONNECT_MAX_BACKOFF));
+
+        // UNAVAILABLE for 8 attempts (past the cap), then the call answers.
+        List<Duration> slept = new ArrayList<>();
+        AtomicInteger calls = new AtomicInteger();
+        String got = Backoff.retryWhileUnavailable(() -> {
+            if (calls.incrementAndGet() <= 8) {
+                throw Status.UNAVAILABLE.withDescription("Connection refused").asRuntimeException();
+            }
+            return "config";
+        }, slept::add);
+        check("returns the value once the call answers, got " + got, "config".equals(got));
+        check("called 9 times, got " + calls.get(), calls.get() == 9);
+        List<Long> sleptMillis = new ArrayList<>();
+        for (Duration s : slept) {
+            sleptMillis.add(s.toMillis());
+        }
+        check("slept the reconnect schedule between attempts, got " + sleptMillis,
+                sleptMillis.equals(Arrays.asList(500L, 1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L, 30_000L)));
+
+        // Any other status is fatal: rethrown on the first attempt, no sleep. The
+        // sleeper aborts the loop if it is ever reached, so a regression that
+        // retried this status fails here instead of spinning forever.
+        slept.clear();
+        calls.set(0);
+        try {
+            Backoff.retryWhileUnavailable(() -> {
+                calls.incrementAndGet();
+                throw Status.PERMISSION_DENIED.asRuntimeException();
+            }, delay -> {
+                slept.add(delay);
+                throw new InterruptedException("PERMISSION_DENIED must not be retried");
+            });
+            check("PERMISSION_DENIED did not throw", false);
+        } catch (StatusRuntimeException e) {
+            check("rethrows PERMISSION_DENIED, got " + e.getStatus().getCode(),
+                    e.getStatus().getCode() == Status.Code.PERMISSION_DENIED);
+        }
+        check("PERMISSION_DENIED called once, got " + calls.get(), calls.get() == 1);
+        check("PERMISSION_DENIED never slept, got " + slept, slept.isEmpty());
+        Thread.interrupted();
+
+        if (failures > 0) {
+            System.err.println(failures + " Backoff check(s) FAILED");
+            System.exit(1);
+        }
+        System.out.println("BackoffTest: all checks passed");
+    }
+}

@@ -107,6 +107,9 @@ type javaStateWrapperData struct {
 	// to invalidate a REJECTED credential so the retry re-mints instead of
 	// replaying a token the authority no longer accepts.
 	IdentityManagerFQN string // "com.example.chassis.service_im.IdentityManager"
+	// BackoffFQN is the chassis reconnect backoff; the singleton fetch retries
+	// its Get through it while the state service answers UNAVAILABLE.
+	BackoffFQN string // "com.example.chassis.backoff.Backoff"
 	// EventBusSupportOuterClass is the generated Java outer class for the
 	// eventbus_support proto (PublishResponse/SubscribeRequest), populated
 	// only when Topics is non-empty.
@@ -516,6 +519,7 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 		GrpcServiceFQN:            grpcServiceFQN,
 		TraceFQN:                  basePackage + ".types.sys.trace.Trace",
 		IdentityManagerFQN:        basePackage + ".chassis.service_im.IdentityManager",
+		BackoffFQN:                basePackage + ".chassis.backoff.Backoff",
 		ProtoExceptionFQN:         basePackage + ".types.sys.errors.ProtoException",
 		EventBusSupportOuterClass: eventBusSupportOuterClass,
 		Imports:                   imports,

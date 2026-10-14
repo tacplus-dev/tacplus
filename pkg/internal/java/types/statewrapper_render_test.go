@@ -160,6 +160,42 @@ func TestStateWrapperSingletonFetchDefaultsBeforeValidate(t *testing.T) {
 	}
 }
 
+// Stratum defect #8: a kernel roll between ServiceManager.create() and run()
+// made the singleton Get fail with UNAVAILABLE (connection refused), which
+// escaped fetch<Field>() on the first attempt and exited the service. The Get
+// must go through the chassis backoff, which retries UNAVAILABLE (0.5s doubling
+// to 30s, until the kernel answers) and rethrows every other status at once.
+// The retry behaviour itself is pinned by chassis/backoff/BackoffTest.java.
+func TestStateWrapperSingletonFetchRetriesUnavailableWithChassisBackoff(t *testing.T) {
+	rendered := renderJavaStateWrapperForTest(t, javaStateWrapperData{
+		Header:           "// generated for test",
+		Package:          "com.example.tacplus.s2sm.internal.state.services.demo.config",
+		OuterClassName:   "Demo",
+		StateRootName:    "DemoConfigState",
+		StateServiceName: "DemoConfigStateService",
+		GrpcServiceFQN:   "com.example.tacplus.types.services.demo.DemoConfigStateServiceGrpc",
+		TraceFQN:         "com.example.tacplus.types.sys.trace.Trace",
+		BackoffFQN:       "com.example.tacplus.chassis.backoff.Backoff",
+		Singletons: []javaSingletonBoundary{{
+			FieldName:   "config",
+			FieldPascal: "Config",
+			TypeName:    "Config",
+			JavaType:    "Demo.Config",
+			ValidateRef: "com.example.tacplus.types.services.demo.Helpers.validateConfig",
+		}},
+	})
+
+	const want = "Demo.Config value = com.example.tacplus.chassis.backoff.Backoff.retryWhileUnavailable(\n" +
+		"                    () -> stateStub.getConfig(Trace.TraceRequest.getDefaultInstance()),\n" +
+		"                    com.example.tacplus.chassis.backoff.Backoff.THREAD_SLEEPER);"
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("singleton fetch does not route its Get through the chassis UNAVAILABLE backoff:\n%s", rendered)
+	}
+	if strings.Count(rendered, "stateStub.getConfig(") != 1 {
+		t.Fatalf("singleton fetch has a Get call outside the chassis backoff:\n%s", rendered)
+	}
+}
+
 func renderJavaStateWrapperForTest(t *testing.T, data javaStateWrapperData) string {
 	t.Helper()
 	tmplStr, err := loadTemplate("statewrapper.java.tmpl")

@@ -4,6 +4,7 @@
 package upgrade
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -19,17 +20,20 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-
 	"github.com/tacplus-dev/tacplus/pkg/buildinfo"
 )
 
 const (
-	upgradeProjectID   = "81965435"
+	upgradeRepo        = "tacplus-dev/tacplus"
+	checksumsAsset     = "checksums.txt"
 	upgradeHTTPTimeout = 30 * time.Second
 )
 
-// upgradeAPIBase is a var rather than a const so tests can point it at a fake server.
-var upgradeAPIBase = "https://gitlab.com/api/v4"
+// Vars rather than consts so tests can point them at a fake server.
+var (
+	upgradeAPIBase      = "https://api.github.com"
+	upgradeDownloadBase = "https://github.com"
+)
 
 var upgradeVersion string
 
@@ -38,30 +42,32 @@ var upgradeHTTPClient = &http.Client{
 	CheckRedirect: stripTokenOnCrossHostRedirect,
 }
 
-// stripTokenOnCrossHostRedirect removes the PRIVATE-TOKEN header when a redirect
-// points at a host other than the one originally requested. Go strips Authorization
-// and Cookie on cross-host redirects itself, but knows nothing about GitLab's custom
-// auth header, so it would otherwise be forwarded verbatim to the redirect target.
-// The comparison is an exact host match: GitLab redirects package downloads to signed
-// object-storage URLs that need no token anyway, so there is nothing to gain from a
-// looser "same registered domain" rule.
+// stripTokenOnCrossHostRedirect removes the Authorization header when a
+// redirect points at a host other than the one originally requested. GitHub
+// redirects release downloads to object storage, which needs no token. Go
+// strips Authorization on cross-domain redirects itself; this makes the rule
+// an exact host match and keeps it in one visible place.
 func stripTokenOnCrossHostRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return fmt.Errorf("stopped after 10 redirects")
 	}
 	if len(via) > 0 && req.URL.Host != via[0].URL.Host {
-		req.Header.Del("PRIVATE-TOKEN")
+		req.Header.Del("Authorization")
 	}
 	return nil
 }
 
-// gitlabGet issues an authenticated GET against the GitLab API.
-func gitlabGet(url, token string) (*http.Response, error) {
+// httpGet issues a GET, with a bearer token when one is configured. Public
+// releases need none; GITHUB_TOKEN raises the API rate limit and is required
+// while the repository is private.
+func httpGet(url, token string) (*http.Response, error) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("PRIVATE-TOKEN", token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	return upgradeHTTPClient.Do(req)
 }
 
@@ -70,7 +76,8 @@ func GetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "upgrade",
 		Short: "Upgrade tacplus to the latest patch release",
-		Long: `Download and replace the running tacplus binary.
+		Long: `Download and replace the running tacplus binary from the GitHub releases of
+` + upgradeRepo + `.
 
 By default, upgrades to the latest patch release on the current MAJOR.MINOR
 version line (e.g. if running v1.1.2, installs the latest v1.1.x).
@@ -85,13 +92,8 @@ Version selection:
   --version 1.1     Latest patch for major.minor 1.1
   --version 1.1.3   Exact release v1.1.3
 
-Authentication is read from (in order):
-  1. GITLAB_TOKEN or PRIVATE_TOKEN environment variable
-  2. ~/.netrc entry for gitlab.com:
-
-       machine gitlab.com
-       login <username>
-       password <your-pat>`,
+Every download is verified against the release's checksums.txt before the
+running binary is replaced. GITHUB_TOKEN is used when set.`,
 		RunE: runUpgrade,
 	}
 	cmd.Flags().StringVarP(&upgradeVersion, "version", "v", "", "version to install: MAJOR.MINOR or MAJOR.MINOR.PATCH")
@@ -99,10 +101,7 @@ Authentication is read from (in order):
 }
 
 func runUpgrade(_ *cobra.Command, _ []string) error {
-	token := gitlabToken()
-	if token == "" {
-		return fmt.Errorf("no GitLab token found — set GITLAB_TOKEN or add a ~/.netrc entry for gitlab.com")
-	}
+	token := os.Getenv("GITHUB_TOKEN")
 
 	releases, err := fetchReleases(token)
 	if err != nil {
@@ -134,14 +133,9 @@ func runUpgrade(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	pkg := fmt.Sprintf("tacplus-%d-%d", mm[0], mm[1])
-	pkgVersion := strconv.Itoa(patch)
-	downloadURL := fmt.Sprintf("%s/projects/%s/packages/generic/%s/%s/%s",
-		upgradeAPIBase, upgradeProjectID, pkg, pkgVersion, binName)
-
 	fmt.Printf("Installing tacplus %s (%s)...\n", tag, binName)
 
-	wantSHA256, err := fetchPackageSHA256(token, pkg, pkgVersion, binName)
+	wantSHA256, err := fetchChecksum(token, tag, binName)
 	if err != nil {
 		return fmt.Errorf("looking up checksum for %s: %w", binName, err)
 	}
@@ -155,7 +149,7 @@ func runUpgrade(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("resolving symlinks: %w", err)
 	}
 
-	if err := downloadReplace(downloadURL, token, current, wantSHA256); err != nil {
+	if err := downloadReplace(assetURL(tag, binName), token, current, wantSHA256); err != nil {
 		return err
 	}
 
@@ -178,17 +172,14 @@ func resolveReleaseTag(releases []string, version string) (string, error) {
 			return "", fmt.Errorf("invalid version %q: use MAJOR.MINOR or MAJOR.MINOR.PATCH", version)
 		}
 	}
-
-	// Default: latest patch for the running binary's MAJOR.MINOR.
 	mm := currentMajorMinor()
 	if mm == "" {
-		// Dev build — upgrade to absolute latest.
 		return releases[0], nil
 	}
 	return latestPatchFor(releases, mm)
 }
 
-// latestPatchFor returns the newest release whose tag starts with vMAJOR.MINOR.
+// latestPatchFor returns the first (newest) release tag on the given MAJOR.MINOR line.
 func latestPatchFor(releases []string, majorMinor string) (string, error) {
 	prefix := "v" + strings.TrimPrefix(majorMinor, "v") + "."
 	for _, tag := range releases {
@@ -199,7 +190,8 @@ func latestPatchFor(releases []string, majorMinor string) (string, error) {
 	return "", fmt.Errorf("no release found matching %s.x", majorMinor)
 }
 
-// currentMajorMinor parses buildinfo.Version and returns "MAJOR.MINOR", or "" if unparseable.
+// currentMajorMinor returns the MAJOR.MINOR of the running binary, or "" when
+// it is a local build with no version.
 func currentMajorMinor() string {
 	bare := strings.TrimPrefix(buildinfo.Version, "v")
 	parts := strings.Split(bare, ".")
@@ -215,7 +207,7 @@ func currentMajorMinor() string {
 	return parts[0] + "." + parts[1]
 }
 
-// checkNewerLine prints a stderr notice if any release has a higher MAJOR.MINOR than target.
+// checkNewerLine prints a notice when a newer MAJOR.MINOR line exists than target's.
 func checkNewerLine(releases []string, target string) {
 	targetMM := parseMajorMinor(target)
 	if targetMM == nil {
@@ -236,7 +228,6 @@ func checkNewerLine(releases []string, target string) {
 	}
 }
 
-// parseMajorMinor parses a tag like "v1.1.3" -> [major, minor]. Returns nil if unparseable.
 func parseMajorMinor(tag string) []int {
 	bare := strings.TrimPrefix(tag, "v")
 	parts := strings.Split(bare, ".")
@@ -254,7 +245,6 @@ func parseMajorMinor(tag string) []int {
 	return []int{major, minor}
 }
 
-// parsePatch parses the patch number from a tag like "v1.1.3".
 func parsePatch(tag string) (int, error) {
 	bare := strings.TrimPrefix(tag, "v")
 	parts := strings.Split(bare, ".")
@@ -264,110 +254,79 @@ func parsePatch(tag string) (int, error) {
 	return strconv.Atoi(parts[2])
 }
 
-// fetchReleases returns all release tag names sorted newest-first.
+// fetchReleases returns the published (non-draft) release tags, newest first,
+// as the GitHub releases API orders them.
 func fetchReleases(token string) ([]string, error) {
-	resp, err := gitlabGet(fmt.Sprintf("%s/projects/%s/releases?per_page=100", upgradeAPIBase, upgradeProjectID), token)
+	resp, err := httpGet(fmt.Sprintf("%s/repos/%s/releases?per_page=100", upgradeAPIBase, upgradeRepo), token)
 	if err != nil {
-		return nil, fmt.Errorf("fetching releases: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("fetching releases: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var items []struct {
 		TagName string `json:"tag_name"`
+		Draft   bool   `json:"draft"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
 		return nil, fmt.Errorf("parsing releases: %w", err)
 	}
 
-	tags := make([]string, len(items))
-	for i, item := range items {
-		tags[i] = item.TagName
+	tags := make([]string, 0, len(items))
+	for _, item := range items {
+		if !item.Draft {
+			tags = append(tags, item.TagName)
+		}
 	}
 	return tags, nil
 }
 
-// fetchPackageSHA256 returns the SHA-256 GitLab computed for the named file of a
-// generic package, using the Packages API:
-//
-//	GET /projects/:id/packages?package_type=generic&package_name=&package_version=
-//	GET /projects/:id/packages/:package_id/package_files
-//
-// A failure to obtain the checksum is a hard error — an unverified binary is never
-// installed.
-func fetchPackageSHA256(token, pkg, version, fileName string) (string, error) {
-	listURL := fmt.Sprintf("%s/projects/%s/packages?package_type=generic&package_name=%s&package_version=%s",
-		upgradeAPIBase, upgradeProjectID, url.QueryEscape(pkg), url.QueryEscape(version))
-
-	var packages []struct {
-		ID      int    `json:"id"`
-		Name    string `json:"name"`
-		Version string `json:"version"`
-	}
-	if err := getJSON(listURL, token, &packages); err != nil {
-		return "", err
-	}
-
-	pkgID := 0
-	for _, p := range packages {
-		if p.Name == pkg && p.Version == version {
-			pkgID = p.ID
-			break
-		}
-	}
-	if pkgID == 0 {
-		return "", fmt.Errorf("generic package %s version %s not found", pkg, version)
-	}
-
-	filesURL := fmt.Sprintf("%s/projects/%s/packages/%d/package_files", upgradeAPIBase, upgradeProjectID, pkgID)
-	var files []struct {
-		FileName   string `json:"file_name"`
-		FileSHA256 string `json:"file_sha256"`
-	}
-	if err := getJSON(filesURL, token, &files); err != nil {
-		return "", err
-	}
-
-	for _, f := range files {
-		if f.FileName != fileName {
-			continue
-		}
-		if f.FileSHA256 == "" {
-			return "", fmt.Errorf("GitLab reported no sha256 for %s", fileName)
-		}
-		return f.FileSHA256, nil
-	}
-	return "", fmt.Errorf("file %s not found in package %s version %s", fileName, pkg, version)
+// assetURL is the download URL of one asset of a release.
+func assetURL(tag, name string) string {
+	return fmt.Sprintf("%s/%s/releases/download/%s/%s",
+		upgradeDownloadBase, upgradeRepo, url.PathEscape(tag), url.PathEscape(name))
 }
 
-// getJSON performs an authenticated GET and decodes a JSON response body into out.
-func getJSON(url, token string, out any) error {
-	resp, err := gitlabGet(url, token)
+// fetchChecksum returns the SHA-256 recorded for fileName in the release's
+// checksums.txt (sha256sum format: "<hex>  <name>" per line). A failure to
+// obtain the checksum is a hard error — an unverified binary is never installed.
+func fetchChecksum(token, tag, fileName string) (string, error) {
+	resp, err := httpGet(assetURL(tag, checksumsAsset), token)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("GET %s: HTTP %d: %s", url, resp.StatusCode, strings.TrimSpace(string(body)))
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("parsing response from %s: %w", url, err)
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == fileName {
+			return fields[0], nil
+		}
 	}
-	return nil
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("reading %s: %w", checksumsAsset, err)
+	}
+	return "", fmt.Errorf("%s has no entry for %s", checksumsAsset, fileName)
 }
 
-// platformBinary returns the binary filename for the current OS/arch.
+// platformBinary returns the release asset name for the running OS/arch.
 func platformBinary(major, minor, patch int) (string, error) {
 	var suffix string
 	switch runtime.GOOS + "/" + runtime.GOARCH {
 	case "darwin/arm64":
 		suffix = "darwin-arm64"
+	case "darwin/amd64":
+		suffix = "darwin-amd64"
 	case "linux/amd64":
 		suffix = "linux-amd64"
 	case "linux/arm64":
@@ -387,7 +346,7 @@ func platformBinary(major, minor, patch int) (string, error) {
 // are locked) the verified file is left at dest+".new.exe" instead.
 func downloadReplace(downloadURL, token, dest, wantSHA256 string) error {
 	fmt.Printf("Downloading from %s\n", downloadURL)
-	resp, err := gitlabGet(downloadURL, token)
+	resp, err := httpGet(downloadURL, token)
 	if err != nil {
 		return fmt.Errorf("downloading binary: %w", err)
 	}
@@ -438,41 +397,4 @@ func downloadReplace(downloadURL, token, dest, wantSHA256 string) error {
 		return fmt.Errorf("replacing binary: %w", err)
 	}
 	return nil
-}
-
-// gitlabToken returns a GitLab PAT from env or ~/.netrc.
-func gitlabToken() string {
-	if t := os.Getenv("GITLAB_TOKEN"); t != "" {
-		return t
-	}
-	if t := os.Getenv("PRIVATE_TOKEN"); t != "" {
-		return t
-	}
-	return netrcPassword("gitlab.com")
-}
-
-// netrcPassword parses ~/.netrc and returns the password for the given machine.
-func netrcPassword(machine string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	data, err := os.ReadFile(filepath.Join(home, ".netrc"))
-	if err != nil {
-		return ""
-	}
-	toks := strings.Fields(string(data))
-	for i := 0; i+1 < len(toks); i++ {
-		if toks[i] == "machine" && toks[i+1] == machine {
-			for j := i + 2; j+1 < len(toks); j++ {
-				if toks[j] == "machine" {
-					break
-				}
-				if toks[j] == "password" {
-					return toks[j+1]
-				}
-			}
-		}
-	}
-	return ""
 }

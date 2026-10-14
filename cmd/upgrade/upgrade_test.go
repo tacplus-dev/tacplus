@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,52 +17,30 @@ import (
 
 const testToken = "test-token-abc"
 
-// fakeGitLab serves the Packages API endpoints and the generic package download
-// for a single file whose contents are body.
-func fakeGitLab(t *testing.T, pkg, version, fileName string, body []byte, sha256Hex string) *httptest.Server {
+// fakeGitHub serves the releases API and the release-asset downloads for one
+// release tag holding checksums.txt and a single binary whose contents are body.
+func fakeGitHub(t *testing.T, tag, fileName string, body []byte, sha256Hex string) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
-
-	mux.HandleFunc("/projects/"+upgradeProjectID+"/packages", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("PRIVATE-TOKEN") != testToken {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		q := r.URL.Query()
-		if q.Get("package_type") != "generic" || q.Get("package_name") != pkg || q.Get("package_version") != version {
-			fmt.Fprint(w, `[]`)
-			return
-		}
-		fmt.Fprintf(w, `[{"id":42,"name":%q,"version":%q,"package_type":"generic"}]`, pkg, version)
+	mux.HandleFunc("/repos/"+upgradeRepo+"/releases", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `[{"tag_name":%q,"draft":false},{"tag_name":"v0.0.1","draft":true}]`, tag)
 	})
-
-	mux.HandleFunc("/projects/"+upgradeProjectID+"/packages/42/package_files", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("PRIVATE-TOKEN") != testToken {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		fmt.Fprintf(w, `[{"file_name":"other-file","file_sha256":"deadbeef"},{"file_name":%q,"file_sha256":%q}]`, fileName, sha256Hex)
+	mux.HandleFunc("/"+upgradeRepo+"/releases/download/"+tag+"/"+checksumsAsset, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "deadbeef  other-file\n%s  %s\n", sha256Hex, fileName)
 	})
-
-	mux.HandleFunc("/projects/"+upgradeProjectID+"/packages/generic/"+pkg+"/"+version+"/"+fileName,
-		func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("PRIVATE-TOKEN") != testToken {
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			w.Write(body)
-		})
-
+	mux.HandleFunc("/"+upgradeRepo+"/releases/download/"+tag+"/"+fileName, func(w http.ResponseWriter, r *http.Request) {
+		w.Write(body)
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
 }
 
-func withAPIBase(t *testing.T, base string) {
+func withServer(t *testing.T, base string) {
 	t.Helper()
-	old := upgradeAPIBase
-	upgradeAPIBase = base
-	t.Cleanup(func() { upgradeAPIBase = old })
+	oldAPI, oldDL := upgradeAPIBase, upgradeDownloadBase
+	upgradeAPIBase, upgradeDownloadBase = base, base
+	t.Cleanup(func() { upgradeAPIBase, upgradeDownloadBase = oldAPI, oldDL })
 }
 
 func hashOf(b []byte) string {
@@ -71,7 +48,7 @@ func hashOf(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// tempFiles returns the names of files in dir left behind by a download attempt.
+// leftoverTemps returns the names of files in dir left behind by a download attempt.
 func leftoverTemps(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -87,53 +64,54 @@ func leftoverTemps(t *testing.T, dir string) []string {
 	return out
 }
 
-func TestFetchPackageSHA256(t *testing.T) {
+func TestFetchReleases_SkipsDrafts(t *testing.T) {
+	srv := fakeGitHub(t, "v1.1.3", "tacplus-1-1-3-linux-amd64", []byte("x"), hashOf([]byte("x")))
+	withServer(t, srv.URL)
+
+	tags, err := fetchReleases("")
+	if err != nil {
+		t.Fatalf("fetchReleases: %v", err)
+	}
+	if len(tags) != 1 || tags[0] != "v1.1.3" {
+		t.Fatalf("tags = %v, want [v1.1.3] (drafts excluded)", tags)
+	}
+}
+
+func TestFetchChecksum(t *testing.T) {
 	body := []byte("new binary contents")
 	want := hashOf(body)
-	srv := fakeGitLab(t, "tacplus-1-1", "3", "tacplus-1-1-3-linux-amd64", body, want)
-	withAPIBase(t, srv.URL)
+	srv := fakeGitHub(t, "v1.1.3", "tacplus-1-1-3-linux-amd64", body, want)
+	withServer(t, srv.URL)
 
-	got, err := fetchPackageSHA256(testToken, "tacplus-1-1", "3", "tacplus-1-1-3-linux-amd64")
+	got, err := fetchChecksum("", "v1.1.3", "tacplus-1-1-3-linux-amd64")
 	if err != nil {
-		t.Fatalf("fetchPackageSHA256: %v", err)
+		t.Fatalf("fetchChecksum: %v", err)
 	}
 	if got != want {
 		t.Fatalf("sha256 = %q, want %q", got, want)
 	}
 }
 
-func TestFetchPackageSHA256_PackageNotFound(t *testing.T) {
-	srv := fakeGitLab(t, "tacplus-1-1", "3", "tacplus-1-1-3-linux-amd64", []byte("x"), hashOf([]byte("x")))
-	withAPIBase(t, srv.URL)
+func TestFetchChecksum_ReleaseNotFound(t *testing.T) {
+	srv := fakeGitHub(t, "v1.1.3", "tacplus-1-1-3-linux-amd64", []byte("x"), hashOf([]byte("x")))
+	withServer(t, srv.URL)
 
-	// Version 9 is not published: the list endpoint returns an empty array.
-	if _, err := fetchPackageSHA256(testToken, "tacplus-1-1", "9", "tacplus-1-1-9-linux-amd64"); err == nil {
-		t.Fatal("expected an error for a missing package version")
-	} else if !strings.Contains(err.Error(), "not found") {
+	// v1.1.9 is not published: its checksums.txt does not exist.
+	if _, err := fetchChecksum("", "v1.1.9", "tacplus-1-1-9-linux-amd64"); err == nil {
+		t.Fatal("expected an error for a missing release")
+	} else if !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestFetchPackageSHA256_FileNotInPackage(t *testing.T) {
+func TestFetchChecksum_FileNotInRelease(t *testing.T) {
 	body := []byte("x")
-	srv := fakeGitLab(t, "tacplus-1-1", "3", "tacplus-1-1-3-linux-amd64", body, hashOf(body))
-	withAPIBase(t, srv.URL)
+	srv := fakeGitHub(t, "v1.1.3", "tacplus-1-1-3-linux-amd64", body, hashOf(body))
+	withServer(t, srv.URL)
 
-	if _, err := fetchPackageSHA256(testToken, "tacplus-1-1", "3", "tacplus-1-1-3-darwin-arm64"); err == nil {
-		t.Fatal("expected an error for a file absent from the package")
-	}
-}
-
-func TestFetchPackageSHA256_HTTPError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "404 Project Not Found", http.StatusNotFound)
-	}))
-	defer srv.Close()
-	withAPIBase(t, srv.URL)
-
-	if _, err := fetchPackageSHA256(testToken, "tacplus-1-1", "3", "tacplus-1-1-3-linux-amd64"); err == nil {
-		t.Fatal("expected an error when the API returns 404")
-	} else if !strings.Contains(err.Error(), "HTTP 404") {
+	if _, err := fetchChecksum("", "v1.1.3", "tacplus-1-1-3-darwin-arm64"); err == nil {
+		t.Fatal("expected an error for a file absent from checksums.txt")
+	} else if !strings.Contains(err.Error(), "no entry") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -141,8 +119,8 @@ func TestFetchPackageSHA256_HTTPError(t *testing.T) {
 func TestDownloadReplace_ChecksumMatches(t *testing.T) {
 	body := []byte("new binary contents")
 	sum := hashOf(body)
-	srv := fakeGitLab(t, "tacplus-1-1", "3", "tacplus-1-1-3-linux-amd64", body, sum)
-	withAPIBase(t, srv.URL)
+	srv := fakeGitHub(t, "v1.1.3", "tacplus-1-1-3-linux-amd64", body, sum)
+	withServer(t, srv.URL)
 
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "tacplus")
@@ -150,8 +128,7 @@ func TestDownloadReplace_ChecksumMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dl := srv.URL + "/projects/" + upgradeProjectID + "/packages/generic/tacplus-1-1/3/tacplus-1-1-3-linux-amd64"
-	if err := downloadReplace(dl, testToken, dest, sum); err != nil {
+	if err := downloadReplace(assetURL("v1.1.3", "tacplus-1-1-3-linux-amd64"), testToken, dest, sum); err != nil {
 		t.Fatalf("downloadReplace: %v", err)
 	}
 
@@ -170,8 +147,8 @@ func TestDownloadReplace_ChecksumMatches(t *testing.T) {
 func TestDownloadReplace_ChecksumMismatch(t *testing.T) {
 	body := []byte("tampered binary")
 	// The server hands out a checksum for different content than it serves.
-	srv := fakeGitLab(t, "tacplus-1-1", "3", "tacplus-1-1-3-linux-amd64", body, hashOf([]byte("the real binary")))
-	withAPIBase(t, srv.URL)
+	srv := fakeGitHub(t, "v1.1.3", "tacplus-1-1-3-linux-amd64", body, hashOf([]byte("the real binary")))
+	withServer(t, srv.URL)
 
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "tacplus")
@@ -179,8 +156,7 @@ func TestDownloadReplace_ChecksumMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dl := srv.URL + "/projects/" + upgradeProjectID + "/packages/generic/tacplus-1-1/3/tacplus-1-1-3-linux-amd64"
-	err := downloadReplace(dl, testToken, dest, hashOf([]byte("the real binary")))
+	err := downloadReplace(assetURL("v1.1.3", "tacplus-1-1-3-linux-amd64"), testToken, dest, hashOf([]byte("the real binary")))
 	if err == nil {
 		t.Fatal("expected a checksum mismatch error")
 	}
@@ -203,13 +179,13 @@ func TestDownloadReplace_ChecksumMismatch(t *testing.T) {
 func TestDownloadReplace_LookupFailureNeverDownloads(t *testing.T) {
 	// The checksum lookup 404s, so runUpgrade's caller never reaches the download.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/packages/generic/") {
+		if strings.HasSuffix(r.URL.Path, "-linux-amd64") {
 			t.Errorf("download endpoint hit despite a failed checksum lookup: %s", r.URL.Path)
 		}
 		http.Error(w, "404 Not Found", http.StatusNotFound)
 	}))
 	defer srv.Close()
-	withAPIBase(t, srv.URL)
+	withServer(t, srv.URL)
 
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "tacplus")
@@ -217,7 +193,7 @@ func TestDownloadReplace_LookupFailureNeverDownloads(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sum, err := fetchPackageSHA256(testToken, "tacplus-1-1", "3", "tacplus-1-1-3-linux-amd64")
+	sum, err := fetchChecksum("", "v1.1.3", "tacplus-1-1-3-linux-amd64")
 	if err == nil {
 		t.Fatalf("expected lookup failure, got sum %q", sum)
 	}
@@ -231,11 +207,11 @@ func TestDownloadReplace_LookupFailureNeverDownloads(t *testing.T) {
 	}
 }
 
-func TestRedirect_CrossHostStripsPrivateToken(t *testing.T) {
+func TestRedirect_CrossHostStripsToken(t *testing.T) {
 	var seen string
 	var sawHeader bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen, sawHeader = r.Header.Get("PRIVATE-TOKEN"), true
+		seen, sawHeader = r.Header.Get("Authorization"), true
 		w.Write([]byte("payload"))
 	}))
 	defer target.Close()
@@ -245,9 +221,9 @@ func TestRedirect_CrossHostStripsPrivateToken(t *testing.T) {
 	}))
 	defer origin.Close()
 
-	resp, err := gitlabGet(origin.URL+"/download", testToken)
+	resp, err := httpGet(origin.URL+"/download", testToken)
 	if err != nil {
-		t.Fatalf("gitlabGet: %v", err)
+		t.Fatalf("httpGet: %v", err)
 	}
 	resp.Body.Close()
 
@@ -255,11 +231,11 @@ func TestRedirect_CrossHostStripsPrivateToken(t *testing.T) {
 		t.Fatal("redirect target was never reached")
 	}
 	if seen != "" {
-		t.Fatalf("PRIVATE-TOKEN leaked to a different host: %q", seen)
+		t.Fatalf("Authorization leaked to a different host: %q", seen)
 	}
 }
 
-func TestRedirect_SameHostKeepsPrivateToken(t *testing.T) {
+func TestRedirect_SameHostKeepsToken(t *testing.T) {
 	var seen string
 	var sawHeader bool
 	mux := http.NewServeMux()
@@ -267,42 +243,51 @@ func TestRedirect_SameHostKeepsPrivateToken(t *testing.T) {
 		http.Redirect(w, r, "/download-real", http.StatusFound)
 	})
 	mux.HandleFunc("/download-real", func(w http.ResponseWriter, r *http.Request) {
-		seen, sawHeader = r.Header.Get("PRIVATE-TOKEN"), true
+		seen, sawHeader = r.Header.Get("Authorization"), true
 		w.Write([]byte("payload"))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	resp, err := gitlabGet(srv.URL+"/download", testToken)
+	resp, err := httpGet(srv.URL+"/download", testToken)
 	if err != nil {
-		t.Fatalf("gitlabGet: %v", err)
+		t.Fatalf("httpGet: %v", err)
 	}
 	resp.Body.Close()
 
 	if !sawHeader {
 		t.Fatal("redirect target was never reached")
 	}
-	if seen != testToken {
-		t.Fatalf("PRIVATE-TOKEN = %q on a same-host redirect, want it preserved", seen)
+	if seen != "Bearer "+testToken {
+		t.Fatalf("Authorization = %q on a same-host redirect, want it preserved", seen)
 	}
 }
 
-func TestFetchPackageSHA256_EscapesQueryParams(t *testing.T) {
-	// Guard against a package name containing characters that would otherwise
-	// corrupt the query string.
-	var gotName string
-	mux := http.NewServeMux()
-	mux.HandleFunc("/projects/"+upgradeProjectID+"/packages", func(w http.ResponseWriter, r *http.Request) {
-		gotName = r.URL.Query().Get("package_name")
-		fmt.Fprint(w, `[]`)
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-	withAPIBase(t, srv.URL)
+func TestAssetURL_EscapesPathSegments(t *testing.T) {
+	got := assetURL("v1.1.3", "tacplus 1.1.3?linux")
+	if strings.Contains(got, " ") || strings.Contains(got, "?") {
+		t.Fatalf("asset name was not path-escaped: %s", got)
+	}
+}
 
-	name := "tacplus&evil=1"
-	_, _ = fetchPackageSHA256(testToken, name, "3", "f")
-	if gotName != name {
-		t.Fatalf("package_name = %q, want %q (escaped as %q)", gotName, name, url.QueryEscape(name))
+func TestResolveReleaseTag(t *testing.T) {
+	releases := []string{"v2.0.1", "v2.0.0", "v1.1.3", "v1.1.2"}
+	cases := []struct{ version, want string }{
+		{"1.1", "v1.1.3"},
+		{"v1.1", "v1.1.3"},
+		{"1.1.2", "v1.1.2"},
+		{"2.0", "v2.0.1"},
+	}
+	for _, c := range cases {
+		got, err := resolveReleaseTag(releases, c.version)
+		if err != nil || got != c.want {
+			t.Errorf("resolveReleaseTag(%q) = %q, %v; want %q", c.version, got, err, c.want)
+		}
+	}
+	if _, err := resolveReleaseTag(releases, "3.0"); err == nil {
+		t.Error("expected an error for a line with no release")
+	}
+	if _, err := resolveReleaseTag(releases, "1"); err == nil {
+		t.Error("expected an error for a malformed version")
 	}
 }

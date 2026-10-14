@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package verbs is the finite, governed RPC verb registry and the exhaustive
-// method-pattern classifier (see archive/RPC_PATTERNS_AND_VERBS_PLAN.md §2–§3).
+// method-pattern classifier (see the archived RPC_PATTERNS_AND_VERBS_PLAN plan §2–§3).
 //
 // The verb set is CLOSED: every RPC must be named Verb<Noun> (PascalCase, verb
 // first) where Verb is one of the registered canonical verbs. Synonyms fold to

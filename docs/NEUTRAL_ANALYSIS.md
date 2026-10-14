@@ -62,7 +62,7 @@ Read these first:
   unfixed findings
 - `docs/THEORY.md`
 - `docs/USER.md`
-- `archive/GENERATED_CODE_ISSUES.md` — the closed historical TCG fix ledger
+- `the archived GENERATED_CODE_ISSUES plan` — the closed historical TCG fix ledger
   (background evidence only; the active ledger is `todo/OPEN_FINDINGS.md`)
 
 Use `docs/API.md` and the annotated proto model as the generated API contract.

@@ -1,0 +1,41 @@
+name: Release
+
+# On a version tag (v1.2.3): build the tacplus binary for every supported
+# platform, write checksums.txt, and publish a GitHub release. `tacplus upgrade`
+# reads exactly this layout.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain
+      - run: just generate
+      - name: Build binaries
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          IFS=. read -r MAJOR MINOR PATCH <<< "$VERSION"
+          PKG=github.com/tacplus-dev/tacplus/pkg/buildinfo
+          LDFLAGS="-w -s -X ${PKG}.Version=${VERSION} -X ${PKG}.GitSha=${GITHUB_SHA::8} -X ${PKG}.BuildID=${GITHUB_SHA} -X ${PKG}.ProjectPath=${GITHUB_REPOSITORY}"
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            GOOS="${target%/*}"; GOARCH="${target#*/}"; EXT=""
+            [[ "$GOOS" == windows ]] && EXT=.exe
+            OUT="dist/tacplus-${MAJOR}-${MINOR}-${PATCH}-${GOOS}-${GOARCH}${EXT}"
+            echo "building $OUT"
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags="$LDFLAGS" -o "$OUT" .
+          done
+          (cd dist && sha256sum -- * > checksums.txt && cat checksums.txt)
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes

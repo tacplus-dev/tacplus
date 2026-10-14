@@ -11,7 +11,7 @@ import (
 )
 
 // This is the language-agnostic reference implementation of the generated
-// entitlement-grant helper (archive/RPC_PATTERNS_AND_VERBS_PLAN.md §5.1). Tacplus generates
+// entitlement-grant helper (the archived RPC_PATTERNS_AND_VERBS_PLAN plan §5.1). Tacplus generates
 // an equivalent helper in every full language plus the grant data in
 // registry.json; this Go reference defines the contract those generators must
 // match and is exercised by entitlement_test.go.

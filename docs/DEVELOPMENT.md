@@ -30,7 +30,7 @@ contracts, see [API.md](API.md). For the conceptual model, see
 ## Development Setup
 
 ```bash
-git clone <tacplus-repo>
+git clone https://github.com/tacplus-dev/tacplus
 cd tacplus
 go mod download
 just install       # Build and install to GOPATH/bin

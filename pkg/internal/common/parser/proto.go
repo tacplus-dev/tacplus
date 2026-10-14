@@ -65,7 +65,7 @@ type MethodInfo struct {
 	RestBrowser          *RestBrowserDescriptor        // method-level rest_browser (browser form target: form body / redirect); nil when absent
 	Collection           *CollectionDescriptor         // method-level method_collection (collection-returning read); nil when absent
 	Resolved             *collection.Resolved          // computed codegen view of Collection (mode/tier/bounds); nil when Collection is nil. Set by ResolveCollections.
-	Class                *verbs.Classification         // resolved verb/pattern/access (archive/RPC_PATTERNS_AND_VERBS_PLAN.md §2). Set by ClassifyMethods; nil if classification failed (see ClassifyMethods for the reported error).
+	Class                *verbs.Classification         // resolved verb/pattern/access (the archived RPC_PATTERNS_AND_VERBS_PLAN plan §2). Set by ClassifyMethods; nil if classification failed (see ClassifyMethods for the reported error).
 	MinGroupSize         int32                         // method-level (spec.min_group_size): the smallest result size this size-only RPC discloses; 0 when the record declares no threshold
 	IsMcp                bool                          // mirrors MethodDescriptor.IsMcp: the rpc declares principal RPC_PRINCIPAL_MCP, so it is an MCP tool and gets no generated gRPC surface
 	IsAutoMcp            bool                          // mirrors MethodDescriptor.IsAutoMcp: the rpc is a user RPC of a c2s service, so it is an MCP tool AND keeps its gRPC surface

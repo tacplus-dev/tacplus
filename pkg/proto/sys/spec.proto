@@ -1597,7 +1597,7 @@ enum CollectionMode {
   // PAGE: a client-driven, resumable, windowed GET (unary). The caller pages
   // through a finite set with an opaque keyset page_token over order_by; each
   // page is bounded by page_size (capped at the trust-tier ceiling). Forbids
-  // max_items/replay_depth. See archive/RPC_PATTERNS_AND_VERBS_PLAN.md §4.
+  // max_items/replay_depth. See the archived RPC_PATTERNS_AND_VERBS_PLAN plan §4.
   COLLECTION_MODE_PAGE = 3;
 }
 

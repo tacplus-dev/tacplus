@@ -5,7 +5,7 @@ package verbs
 
 import "strings"
 
-// Scope is the closed entitlement-scope taxonomy (archive/RPC_PATTERNS_AND_VERBS_PLAN.md
+// Scope is the closed entitlement-scope taxonomy (the archived RPC_PATTERNS_AND_VERBS_PLAN plan
 // §5). A grant carries a scope; the generated authorizer looks up the call's
 // Classification and admits the call when the granted scope is one that admits
 // the method. This adds "grant any WATCH / any PAGE / any AGENT op to service S"
@@ -39,7 +39,7 @@ func (c Classification) ScopesAdmitting() []Scope {
 	// Each method is admitted by ANY plus exactly one primary capability,
 	// using the same precedence as CapabilityScope. WATCH and PAGE are their
 	// own grant classes — they are NOT also admitted by READ_ANY (conservative
-	// default per archive/RPC_PATTERNS_AND_VERBS_PLAN.md §5: WATCH/PAGE require their own
+	// default per the archived RPC_PATTERNS_AND_VERBS_PLAN plan §5: WATCH/PAGE require their own
 	// grant because they are operationally different from bounded reads).
 	switch {
 	case c.Class == ClassAgent:

@@ -3281,7 +3281,7 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 	info.CrossPackageTypes = crossPackageTypes
 	info.CrossPackageFiles = crossPackageFiles
 
-	// Classify every RPC into a verb/pattern/access (archive/RPC_PATTERNS_AND_VERBS_PLAN.md
+	// Classify every RPC into a verb/pattern/access (the archived RPC_PATTERNS_AND_VERBS_PLAN plan
 	// §2-§3) and attach it for entitlements. This is the EnforceVerbs gate:
 	// unclassified generated RPC surfaces would otherwise omit entitlement
 	// metadata or fall back to broad ANY grants.

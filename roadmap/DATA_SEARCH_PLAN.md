@@ -105,7 +105,7 @@ argus stops emitting backend SQL for it (`timeseries_group_counts.go:44–53`).
 **There is no generated graph query surface.** A former
 `AppendGraphQueryServiceToProtos` / `graph_query.go` (a `service_s2s` paged List)
 was **removed** during the store-materialization decoupling — see
-`archive/STORE_MATERIALIZATION_DECOUPLING_PLAN.md:21, 170, 233`. Today a
+`the archived STORE_MATERIALIZATION_DECOUPLING_PLAN plan:21, 170, 233`. Today a
 `graph_store` proto receives only its projected node types; the fixture
 (`cross-test/consumer-contract/proto/services/contractgraphdb.proto`) declares
 `option (spec.graph_store) = {}` and has no query RPC. So the graphdb delta in

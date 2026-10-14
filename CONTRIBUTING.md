@@ -26,8 +26,7 @@ code-generation patterns and the parity rules between language backends.
    language (Go, Java, Rust) is added to all three, or the gap is documented
    in `docs/KNOWN_TEST_GAPS.md`.
 3. Generated code must stay deterministic. `just determinism` checks it.
-4. Run `just test` before pushing; CI runs the full gate set on the pull
-   request.
+XX   request.
 5. Keep commits focused and describe *why* in the message.
 
 ## License

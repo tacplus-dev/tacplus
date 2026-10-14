@@ -1,9 +1,6 @@
 # TACPlus Base Image
 # Contains all build tools and language runtimes needed by tacplus.
-# Rebuilt by bumping BASE_VERSION in .gitlab-ci.yml: the base-image job runs on
-# version tags and main, and SKIPS the build when an image for that BASE_VERSION
-# already exists in the registry. Editing this file alone therefore does NOT
-# trigger a rebuild — bump BASE_VERSION with it.
+# Build locally with: docker build -f Dockerfile.base -t tacplus-base .
 # The release Dockerfile layers the tacplus binary on top of this image.
 
 # =============================================================================

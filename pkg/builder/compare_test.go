@@ -291,12 +291,8 @@ func buildVerifyGo(t *testing.T, outDir string) {
 		t.Fatalf("write go.mod: %v", err)
 	}
 
-	goEnv := []string{
-		"GONOSUMDB=gitlab.com/seabeam/*",
-		"GOPRIVATE=gitlab.com/seabeam/*",
-	}
-	runBuildCmd(t, outDir, goEnv, "go", "mod", "tidy")
-	runBuildCmd(t, outDir, goEnv, "go", "build", "./...")
+	runBuildCmd(t, outDir, nil, "go", "mod", "tidy")
+	runBuildCmd(t, outDir, nil, "go", "build", "./...")
 }
 
 // buildVerifyJava runs mvn compile on the generated Maven project.

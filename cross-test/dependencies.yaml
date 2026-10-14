@@ -1,5 +1,3 @@
-registry:
-    gitlab_project_id: "79479556"
 tools:
     go: "1.23"
     java: "17"

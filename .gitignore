@@ -90,7 +90,6 @@ test-output/
 *.out
 
 # CI/CD artifacts (local)
-.gitlab-ci-local/
 
 # Docker
 
@@ -157,7 +156,7 @@ tmp/
 # Claude Code
 .claude/
 
-# macOS SDK for cross-compilation (uploaded to GitLab package registry)
+# macOS SDK for cross-compilation
 cross-toolchain/
 
 # Built soundness matrix binary (source lives in cmd/soundness/)

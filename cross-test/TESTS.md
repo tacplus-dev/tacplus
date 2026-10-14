@@ -1,6 +1,6 @@
 # Cross-Test Suite
 
-The cross-test suite has these gates (see `.gitlab-ci.yml` and
+The cross-test suite has these gates (see the CI workflow and
 `cross-test/nightly-matrix.sh` for exactly where each runs):
 
 LED-2 status: the three mechanical phases of cross-language runtime evidence are

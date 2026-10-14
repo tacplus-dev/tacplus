@@ -2,7 +2,8 @@
 # Layers the tacplus binary on top of the pre-built base image.
 # Base image contains all build tools — this just adds the binary.
 
-ARG BASE_IMAGE=registry.gitlab.com/seabeam/schematic/tacplus/tacplus-base:latest
+# Build the base first: docker build -f Dockerfile.base -t tacplus-base .
+ARG BASE_IMAGE=tacplus-base:latest
 FROM ${BASE_IMAGE}
 
 ARG BUILD_DATE
@@ -19,8 +20,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
 
 ARG TARGETARCH
 COPY bin/tacplus-linux-${TARGETARCH} /usr/local/bin/tacplus
-COPY bin/launcher-linux-${TARGETARCH} /usr/local/bin/launcher
-RUN chmod +x /usr/local/bin/tacplus /usr/local/bin/launcher \
+RUN chmod +x /usr/local/bin/tacplus \
     && tacplus --help > /dev/null
 
 CMD ["tacplus", "--help"]

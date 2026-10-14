@@ -1,5 +1,4 @@
 registry:
-    gitlab_project_id: "79479556"
     imports:
         java: com.example.proto.interfaces
 tools:

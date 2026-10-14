@@ -878,10 +878,10 @@ func goMcpDispatchFnName(t goMcpTool) string {
 // against the same Caller — which is the point of reusing the markers rather
 // than inventing an MCP-specific owner predicate.
 //
-// Go's gRPC wrapper renders no principal/namespace block today (the seam is
-// generated for Java and Rust only), so unlike Rust's dispatch this cannot drop
-// in the wrapper's own emitted blocks; the renderers below are Go's first, and
-// exist for this seam. They read the same annotations and enforce the same rule.
+// The gRPC wrapper's own principal/namespace blocks (requestscope_gen.go)
+// are rendered against the wrapper's variables, so this dispatch keeps its own
+// renderers for the tool-call shape. They read the same annotations and
+// enforce the same rule.
 func goMcpToolDispatch(serviceName string, t goMcpTool) string {
 	prefix := goMcpPrefix(serviceName)
 	surface := serviceName + "McpSurface"

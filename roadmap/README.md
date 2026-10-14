@@ -5,6 +5,10 @@ tacplus behavior yet. Current behavior lives in [../docs/](../docs/).
 
 ## Future Tracks
 
+- [Language parity: Rust versus Go and Java](LANGUAGE_PARITY.md) — the
+  2026-10-14 survey of what Rust generates that Go and Java do not (readiness
+  gating, W2S server dispatch, typed record readers, the generated record-plane
+  handler, MCP follow-ups), what the others have instead, and a closing order.
 - [`.tac` sugar format](TAC_SUGAR_FORMAT_PLAN.md) — a lossless keyword dialect
   over annotated `.proto`: five block keywords (`config`/`state`/`s2s`/`c2s`/`c2d`)
   plus a schema-driven bare-`spec`-option rule, transpiled to `.proto` in front of

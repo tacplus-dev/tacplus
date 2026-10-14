@@ -119,7 +119,7 @@ func (e *VerifyError) Error() string { return "auth denied: " + e.Reason }
 // the required namespace and entitlement. It MUST fail closed: a tampered,
 // expired, wrong-namespace, or unentitled token is denied even if the issuer is
 // currently down. This is the negative oracle surface
-// (archive/MODEL_STRESS_TEST_PLAN.md §2 / fault menu token-expiry row).
+// (docs/MODEL_STRESS_TEST_PLAN.md §2 / fault menu token-expiry row).
 func (id *Identity) Verify(t Token, requireNamespace string, requireEntitled bool) error {
 	id.mu.RLock()
 	defer id.mu.RUnlock()

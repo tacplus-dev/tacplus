@@ -1,5 +1,5 @@
 // Package oracle holds the deterministic invariant oracles that drive the
-// harness verdict (archive/MODEL_STRESS_TEST_PLAN.md §2). Randomness drives the
+// harness verdict (docs/MODEL_STRESS_TEST_PLAN.md §2). Randomness drives the
 // fault schedule; these oracles decide pass/fail. A pure "it returned and
 // didn't error" check would pass green even with dropped deltas or fail-open
 // auth — these oracles exist precisely to catch those.

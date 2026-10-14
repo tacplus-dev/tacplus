@@ -83,7 +83,7 @@ type StateConfig struct {
 	// state source silently fails to append every Nth change to the replay ring
 	// while still advancing the revision counter. A correct WATCH stream is
 	// gapless; this produces a gap that the WATCH oracle must catch. This is the
-	// Phase-1 acceptance lever (archive/MODEL_STRESS_TEST_PLAN.md §9.1): with the
+	// Phase-1 acceptance lever (docs/MODEL_STRESS_TEST_PLAN.md §9.1): with the
 	// bug on, the harness must go RED.
 	DropDeltaBug bool
 
@@ -129,7 +129,7 @@ func NewStateSource(cfg StateConfig) *StateSource {
 
 // transform is the deterministic echo-with-transform used everywhere so the
 // oracle can recompute the expected value from (revision, key) alone. Catches
-// validation drift / wrong-bytes binding (archive/MODEL_STRESS_TEST_PLAN.md §2).
+// validation drift / wrong-bytes binding (docs/MODEL_STRESS_TEST_PLAN.md §2).
 func transform(revision int64, key string) string {
 	return fmt.Sprintf("%s@r%d", key, revision)
 }

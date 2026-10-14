@@ -7,7 +7,6 @@
 tacplus
 tacplus-*
 tacplus/
-launcher/launcher
 dist/
 bin/
 helper
@@ -78,7 +77,6 @@ __pycache__/
 # Temporary files
 tmp/
 temp/
-todo/
 *.tmp
 
 # Build artifacts

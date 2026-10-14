@@ -1,7 +1,7 @@
 // Package orchestrator spins up the synthetic multi-language node mesh from a
 // deployment profile, drives seeded load, injects faults per a schedule, runs
 // the deterministic oracles, and emits a report
-// (archive/MODEL_STRESS_TEST_PLAN.md §6). It is the shared harness entry point; the
+// (docs/MODEL_STRESS_TEST_PLAN.md §6). It is the shared harness entry point; the
 // profile is its only deployment-specific input.
 package orchestrator
 

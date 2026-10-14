@@ -1,7 +1,7 @@
 # Model Stress / Resilience / Interop Harness — Profile A
 
 Implements the **Profile A** (Compiler/Model) harness from
-`archive/MODEL_STRESS_TEST_PLAN.md`: a reusable chaos/soak skeleton that exercises
+`docs/MODEL_STRESS_TEST_PLAN.md`: a reusable chaos/soak skeleton that exercises
 the tacplus-generated **`model`** runtime under failure, consumer-agnostic,
 against **stubbed rivets** (test token/JWK signer + in-memory deterministic
 state source). No kernel, no state store, no consumer identity/state service.

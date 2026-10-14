@@ -587,7 +587,7 @@ observed behavior.
 ### Runtime Chaos Testing Principles
 
 The chaos/soak harness skeleton lives at `cross-test/chaos/` (Phase 1; design
-genealogy in `../archive/MODEL_STRESS_TEST_PLAN.md`, later phases in
+genealogy in `../docs/MODEL_STRESS_TEST_PLAN.md`, later phases in
 `../roadmap/README.md`). Principles that outlive any one harness:
 
 - **Randomness drives the schedule; deterministic oracles drive the verdict.**

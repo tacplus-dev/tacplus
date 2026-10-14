@@ -22,7 +22,7 @@ const (
 
 // Phase is the ServiceManager lifecycle phase. Readiness is the generated
 // unified gate Ready = cert ∧ config ∧ first-health
-// (archive/MODEL_STRESS_TEST_PLAN.md §6).
+// (docs/MODEL_STRESS_TEST_PLAN.md §6).
 type Phase int
 
 const (
@@ -48,7 +48,7 @@ func (p Phase) String() string {
 }
 
 // Resources is a point-in-time scrape of a node's resource counters, the input
-// to the leak oracle's trend analysis (archive/MODEL_STRESS_TEST_PLAN.md §5.3).
+// to the leak oracle's trend analysis (docs/MODEL_STRESS_TEST_PLAN.md §5.3).
 type Resources struct {
 	Goroutines int64 // open watch streams + in-flight tasks
 	OpenFDs    int64 // open peer connections

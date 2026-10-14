@@ -1,5 +1,5 @@
 # Profile A — tacplus-generated model under chaos, with stubbed rivets.
-# (archive/MODEL_STRESS_TEST_PLAN.md §1a / §10). The harness is reusable: this
+# (docs/MODEL_STRESS_TEST_PLAN.md §1a / §10). The harness is reusable: this
 # file is the deployment-profile INPUT. A future Profile B (Schematic system)
 # would supply a different file with kind=system pointing the same machinery at
 # a real service stack.

@@ -1,5 +1,5 @@
 // Package fault is the chaos/fault engine: a fault-menu abstraction plus
-// concrete faults from archive/MODEL_STRESS_TEST_PLAN.md §4. It is deployment-
+// concrete faults from docs/MODEL_STRESS_TEST_PLAN.md §4. It is deployment-
 // agnostic — faults act on a Target interface so the same engine drives both
 // the Profile A synthetic mesh and a future Profile B real stack.
 package fault

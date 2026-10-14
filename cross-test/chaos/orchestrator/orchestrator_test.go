@@ -51,7 +51,7 @@ func TestHealthyProfilePasses(t *testing.T) {
 }
 
 // TestPhase1Acceptance_Coll1BugTurnsWatchOracleRed is THE Phase-1 acceptance
-// bar (archive/MODEL_STRESS_TEST_PLAN.md §9.1): re-introduce the COLL-1 dropped-
+// bar (docs/MODEL_STRESS_TEST_PLAN.md §9.1): re-introduce the COLL-1 dropped-
 // delta bug behind a flag and confirm the harness's WATCH oracle goes RED. If
 // the harness can't catch a bug we KNOW exists, it isn't yet a test.
 func TestPhase1Acceptance_Coll1BugTurnsWatchOracleRed(t *testing.T) {

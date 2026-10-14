@@ -2,7 +2,7 @@
 //
 // The harness (orchestrator, fault engine, oracle framework, report) is built
 // reusable: deployment-profile is an INPUT, not hardcoded
-// (archive/MODEL_STRESS_TEST_PLAN.md §1a). This package describes Profile A —
+// (docs/MODEL_STRESS_TEST_PLAN.md §1a). This package describes Profile A —
 // the tacplus-generated model with stubbed rivets (test token/JWK signer,
 // in-memory state source, no kernel/state store). A future Profile B
 // (Schematic system/deployment) would supply a different profile pointing the
@@ -78,7 +78,7 @@ func (p *Profile) Validate() error {
 }
 
 // DefaultProfileA returns the baked-in Profile A defaults (the recommended
-// defaults from archive/MODEL_STRESS_TEST_PLAN.md §10: synthetic rivets, kind in
+// defaults from docs/MODEL_STRESS_TEST_PLAN.md §10: synthetic rivets, kind in
 // for Phase 1, all model invariants on).
 func DefaultProfileA() *Profile {
 	return &Profile{

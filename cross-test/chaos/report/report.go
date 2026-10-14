@@ -1,4 +1,4 @@
-// Package report renders the harness report (archive/MODEL_STRESS_TEST_PLAN.md §7):
+// Package report renders the harness report (docs/MODEL_STRESS_TEST_PLAN.md §7):
 // interop matrix, recovery-time distribution, invariant violations, resource
 // trends, injected-fault log vs unexpected-failure log, overall verdict + seed.
 package report

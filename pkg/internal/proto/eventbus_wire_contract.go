@@ -36,6 +36,8 @@ import (
 // so the comparison needs no cross-repo fetch: both artifacts are on disk at
 // generation time. Any drift in a field's name, number or type fails the build.
 
+// canonicalEventBusPackage is a well-known name, not a proto-declared one:
+// see docs/USER.md "Well-Known Names" and https://github.com/tacplus-dev/tacplus/issues/1.
 const (
 	canonicalEventBusPackage = "eventbus"
 	supportEventBusPackage   = "eventbus_support"

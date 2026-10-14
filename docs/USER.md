@@ -1527,3 +1527,17 @@ async fn handle_request(&self, req: MyRequest) -> Result<MyResponse, ProtoError>
 ```
 
 The same pattern applies in Java, TypeScript, and Python. Omitting the `trace_id` on any downstream call breaks the trace chain for that span.
+
+## Well-Known Names (Conventions)
+
+Three names from the platform tacplus was first built for are, for now,
+expected by the generator itself rather than declared in the proto graph.
+They are conventions: a proto set that follows them generates correctly, one
+that does not will not get the behavior described. Replacing each with a
+proto-declared equivalent is tracked in [https://github.com/tacplus-dev/tacplus/issues/1](https://github.com/tacplus-dev/tacplus/issues/1).
+
+| Name | Where it is expected | What it means |
+|------|---------------------|---------------|
+| `eventbus` (proto package) | EventBus wire-contract gate (`pkg/internal/proto/eventbus_wire_contract.go`) | The canonical EventBus proto is found by its package name. The gate compares the synthesized `eventbus_support.proto` against it and fails generation on any field-level drift. If no package named `eventbus` is in the build inputs, the gate has nothing to compare against and is skipped. |
+| `"kernel"` (value of `(spec.service_state).label`) | State placement rules (`pkg/internal/proto/state.go`) | A state root carrying this label is a kernel boundary: `(spec.persistence)` on any of its fields is a generation error unless the root also sets `identity_snapshot = true` (Rule 3b, see the `spec.service_state` reference above). Other label values carry no generator meaning. |
+| `AZP_KERNEL` (enum `spec.Azp`) | Token claims (`pkg/proto/sys/spec.proto`) | The authorized-party value for tokens minted from trusted internal context by the platform's token service. The name reflects the first platform's service name; the meaning is "internal mint", not a dependency on a service called kernel. |

@@ -299,6 +299,9 @@ enum PathType {
 enum Azp {
   AZP_UNSPECIFIED = 0;
   // kernel: minted by kernel from trusted internal context (service/bootstrap).
+  // The name is a well-known convention from the first platform, not a
+  // dependency on a service called kernel: see docs/USER.md "Well-Known
+  // Names" and https://github.com/tacplus-dev/tacplus/issues/1.
   AZP_KERNEL = 1;
   // oauth: user attested via an OAuth broker; kernel maps the broker's
   // authenticated S2S identity to this value at MintUserToken.

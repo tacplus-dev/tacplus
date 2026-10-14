@@ -1307,6 +1307,8 @@ func ValidateStateConsistency(inputDir string) error {
 			isKernelLabelled := false
 			if labelAnn, hasLabel := msg.Annotations["service_state_label"]; hasLabel {
 				for _, label := range labelAnn.StringSliceValue {
+					// "kernel" is a well-known label, not a proto-declared role: see
+					// docs/USER.md "Well-Known Names" and https://github.com/tacplus-dev/tacplus/issues/1.
 					if label == "kernel" {
 						isKernelLabelled = true
 						break

@@ -1,10 +1,13 @@
-# Copyright (c) 2026 Second Star Cavalier LLC
+# Copyright (c) 2026 Seabeam LLC
+# SPDX-License-Identifier: Apache-2.0
 
 [package]
 name = "httpclient"
 version = "1.0.0"
 edition = "2021"
-authors = ["Second Star Cavalier LLC"]
+{{- if .Author}}
+authors = [{{printf "%q" .Author}}]
+{{- end}}
 description = "Typed HTTP client with retry logic, TLS/mTLS support, and proto error handling"
 license = "Proprietary"
 

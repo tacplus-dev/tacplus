@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
@@ -344,14 +345,14 @@ func TestTypeScriptHelpersUseServiceStateModuleRouting(t *testing.T) {
 		Package: "argus",
 		Imports: []model.Import{{
 			Path:    "vservices/claude-sensor.proto",
-			Package: "claudesensor",
+			Package: "telemetry",
 		}},
 		Messages: []model.Message{{
 			Name: "GetDashboardRequest",
 			Fields: []model.Field{{
 				Name:        "range",
 				Type:        "EventTimeRange",
-				TypePackage: "claudesensor",
+				TypePackage: "telemetry",
 				IsMessage:   true,
 			}},
 		}, {
@@ -363,7 +364,7 @@ func TestTypeScriptHelpersUseServiceStateModuleRouting(t *testing.T) {
 	}
 	vpf := model.ProtoFile{
 		RelPath: "vservices/claude-sensor.proto",
-		Package: "claudesensor",
+		Package: "telemetry",
 		Messages: []model.Message{{
 			Name: "EventTimeRange",
 		}, {
@@ -442,7 +443,7 @@ func TestTypeScriptModuleDirForPackageUsesGeneratedPackageHeader(t *testing.T) {
 	outputDir := t.TempDir()
 
 	files := map[string]string{
-		"types/vservices/claude-sensor/claude-sensor_pb.ts": `// @generated from file vservices/claude-sensor.proto (package claudesensor, syntax proto3)
+		"types/vservices/claude-sensor/claude-sensor_pb.ts": `// @generated from file vservices/claude-sensor.proto (package telemetry, syntax proto3)
 `,
 		"types/services/gitlab-connector/gitlab-connector_pb.ts": `// @generated from file services/gitlab-connector.proto (package gitlabconnectorsvc, syntax proto3)
 `,
@@ -460,7 +461,7 @@ func TestTypeScriptModuleDirForPackageUsesGeneratedPackageHeader(t *testing.T) {
 	}
 
 	for pkg, want := range map[string]string{
-		"claudesensor":       "types/vservices/claude-sensor",
+		"telemetry":       "types/vservices/claude-sensor",
 		"gitlabconnectorsvc": "types/services/gitlab-connector",
 		"grpcconfig":         "types/sys/grpcconfig",
 	} {

@@ -257,7 +257,8 @@ services:
       id: 1
 EOF
   cat > "$dst/contract/contract.proto" <<'EOF'
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 syntax = "proto3";
 
@@ -338,7 +339,8 @@ EOF
   # have landed (D-4).
   if [[ "$language" == python || "$language" == typescript ]]; then
   cat > "$dst/contract/mintfront.proto" <<'EOF'
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 syntax = "proto3";
 

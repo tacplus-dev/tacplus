@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 Second Star Cavalier LLC
+# Copyright (c) 2026 Seabeam LLC
+# SPDX-License-Identifier: Apache-2.0
 #
 # Behavioral W2S request-validation fixture for the generated Rust REST
 # dispatch module.

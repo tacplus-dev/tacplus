@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 //
 // Runtime coverage for (spec.rest_browser) in the generated Rust REST dispatch
 // module: a browser form target (an identity provider's form_post callback)

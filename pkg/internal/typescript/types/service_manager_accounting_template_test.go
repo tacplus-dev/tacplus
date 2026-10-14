@@ -1,9 +1,11 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"bytes"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,7 +72,7 @@ func TestTypeScriptAccountingPublisherWiresEventBusSinkOnEveryAccountedWrapper(t
 	if err != nil {
 		t.Fatalf("loadTemplate service_manager.ts.tmpl: %v", err)
 	}
-	tmpl, err := template.New("service_manager").Parse(tmplStr)
+	tmpl, err := template.New("service_manager").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse service_manager template: %v", err)
 	}
@@ -177,7 +179,7 @@ func TestTypeScriptServiceManagerOmitsAccountingWiringWithoutPublisher(t *testin
 	if err != nil {
 		t.Fatalf("loadTemplate service_manager.ts.tmpl: %v", err)
 	}
-	tmpl, err := template.New("service_manager").Parse(tmplStr)
+	tmpl, err := template.New("service_manager").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse service_manager template: %v", err)
 	}
@@ -233,7 +235,7 @@ func TestTypeScriptAccountingManagerEventBusSinkRendersValidTypeScript(t *testin
 	if err != nil {
 		t.Fatalf("loadTemplate AccountingManager.ts.tmpl: %v", err)
 	}
-	tmpl, err := template.New("accounting_manager").Parse(tmplStr)
+	tmpl, err := template.New("accounting_manager").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse AccountingManager template: %v", err)
 	}
@@ -295,7 +297,7 @@ func TestTypeScriptAccountingManagerOmitsEventBusSinkWithoutRecord(t *testing.T)
 	if err != nil {
 		t.Fatalf("loadTemplate AccountingManager.ts.tmpl: %v", err)
 	}
-	tmpl, err := template.New("accounting_manager").Parse(tmplStr)
+	tmpl, err := template.New("accounting_manager").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse AccountingManager template: %v", err)
 	}

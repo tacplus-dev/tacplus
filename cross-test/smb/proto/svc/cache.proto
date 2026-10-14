@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 // SMB fixture: a Service Mesh Blackbox service (SPIFFE plan D7). Its own
 // instances talk over a black-box peer protocol, so it opts in
 // with (spec.smb) and obtains a per-SMB CA + member cert from the designated

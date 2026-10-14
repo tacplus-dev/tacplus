@@ -1,9 +1,11 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"bytes"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"strings"
 	"testing"
 	"text/template"
@@ -17,7 +19,7 @@ func renderJavaSm(t *testing.T, subs []javaSubscriptionEntry) string {
 	if err != nil {
 		t.Fatalf("load ServiceManager.java.tmpl: %v", err)
 	}
-	tmpl, err := template.New("servicemanager").Parse(src)
+	tmpl, err := template.New("servicemanager").Funcs(header.Funcs()).Parse(src)
 	if err != nil {
 		t.Fatalf("parse ServiceManager.java.tmpl: %v", err)
 	}

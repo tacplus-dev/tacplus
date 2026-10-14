@@ -1,9 +1,11 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"bytes"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"strings"
 	"testing"
 	"text/template"
@@ -17,7 +19,7 @@ func renderRecordReaders(t *testing.T, data recordReaderFile) string {
 	if err != nil {
 		t.Fatalf("loadTemplate: %v", err)
 	}
-	tmpl, err := template.New("recordreaders").Parse(tmplContent)
+	tmpl, err := template.New("recordreaders").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

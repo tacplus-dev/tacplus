@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
@@ -262,7 +263,7 @@ func generateJavaW2SClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 	if err != nil {
 		return fmt.Errorf("failed to load w2sclient template: %w", err)
 	}
-	tmpl, err := template.New("w2sclient").Parse(tmplStr)
+	tmpl, err := template.New("w2sclient").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		return fmt.Errorf("failed to parse w2sclient template: %w", err)
 	}
@@ -614,7 +615,7 @@ func generateJavaW2SClientAggregator(config *tactype.Config, clients []generated
 	if err != nil {
 		return fmt.Errorf("failed to load w2sclient root template: %w", err)
 	}
-	tmpl, err := template.New("w2sclient_root").Parse(tmplStr)
+	tmpl, err := template.New("w2sclient_root").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		return fmt.Errorf("failed to parse w2sclient root template: %w", err)
 	}
@@ -646,7 +647,7 @@ func generateW2SServiceManager(config *tactype.Config) error {
 		return fmt.Errorf("failed to load w2sm service_manager template: %w", err)
 	}
 
-	tmpl, err := template.New("w2sservicemanager").Parse(tmplContent)
+	tmpl, err := template.New("w2sservicemanager").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse w2sm service_manager template: %w", err)
 	}

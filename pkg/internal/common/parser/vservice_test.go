@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package parser
 
@@ -14,13 +15,13 @@ func TestParseVService(t *testing.T) {
 	copySpecProto(t, dir)
 	content := `syntax = "proto3";
 
-package claudesensor;
+package telemetry;
 
 import "sys/spec.proto";
 
 option (spec.vservice) = {
   id: 30
-  name: "claudesensor"
+  name: "telemetry"
 };
 
 message Ping { string m = 1; }
@@ -34,8 +35,8 @@ message Ping { string m = 1; }
 	if err != nil {
 		t.Fatalf("GetFileDescriptor: %v", err)
 	}
-	if fd.VServiceName != "claudesensor" {
-		t.Errorf("VServiceName = %q, want claudesensor", fd.VServiceName)
+	if fd.VServiceName != "telemetry" {
+		t.Errorf("VServiceName = %q, want telemetry", fd.VServiceName)
 	}
 	if fd.VServiceID != 30 {
 		t.Errorf("VServiceID = %d, want 30", fd.VServiceID)

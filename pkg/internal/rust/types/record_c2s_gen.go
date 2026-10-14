@@ -1,10 +1,12 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"bytes"
 	"fmt"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"os"
 	"path/filepath"
 	"sort"
@@ -267,7 +269,7 @@ func generateRecordC2SPlane(config *tactype.Config, data *recordC2SFile) error {
 	if err != nil {
 		return fmt.Errorf("failed to load record_c2s template: %w", err)
 	}
-	tmpl, err := template.New("recordc2s").Parse(tmplContent)
+	tmpl, err := template.New("recordc2s").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse record_c2s template: %w", err)
 	}

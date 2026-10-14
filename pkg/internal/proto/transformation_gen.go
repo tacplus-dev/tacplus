@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package proto
 
@@ -229,7 +230,7 @@ func resolveFieldType(fieldPath string, msg parser.MessageDescriptor, fd *parser
 	}
 
 	// Find the message type of the oneof field.
-	// Type may be package-qualified (e.g. "claudesensor.ToolUseEvent") — strip prefix.
+	// Type may be package-qualified (e.g. "telemetry.ToolUseEvent") — strip prefix.
 	typeName := oneofField.Type
 	if idx := strings.LastIndex(typeName, "."); idx >= 0 {
 		typeName = typeName[idx+1:]

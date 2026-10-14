@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 // The (spec.trait) declaration that ASKS FOR the record query plane.
 //
 // Without this file no plane is emitted at all — no host to append to, no service

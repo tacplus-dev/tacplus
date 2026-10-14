@@ -10,7 +10,9 @@
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run build"
   },
-  "author": "Second Star Cavalier LLC",
+{{- if .Author}}
+  "author": {{printf "%q" .Author}},
+{{- end}}
   "license": "PROPRIETARY",
   "dependencies": {
     "@bufbuild/protobuf": "{{.BufbuildProtobuf}}",

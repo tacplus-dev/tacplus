@@ -1,8 +1,10 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"strings"
 	"testing"
 	"text/template"
@@ -164,7 +166,7 @@ func renderJavaStateWrapperForTest(t *testing.T, data javaStateWrapperData) stri
 	if err != nil {
 		t.Fatalf("loadTemplate: %v", err)
 	}
-	tmpl, err := template.New("statewrapper").Parse(tmplStr)
+	tmpl, err := template.New("statewrapper").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse state wrapper template: %v", err)
 	}

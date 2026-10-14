@@ -1,10 +1,12 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"bytes"
 	"fmt"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,7 +185,7 @@ func generateJavaSubscribers(config *tactype.Config, protoDir string) error {
 		return fmt.Errorf("failed to load subscriber template: %w", err)
 	}
 
-	tmpl, err := template.New("subscriber").Parse(tmplContent)
+	tmpl, err := template.New("subscriber").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse subscriber template: %w", err)
 	}

@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // Package verbs is the finite, governed RPC verb registry and the exhaustive
 // method-pattern classifier (see archive/RPC_PATTERNS_AND_VERBS_PLAN.md §2–§3).

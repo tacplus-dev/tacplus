@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
@@ -11,23 +12,23 @@ import (
 func TestExplicitPublisherEntryUsesCanonicalPath(t *testing.T) {
 	topic := eventbus.Topic{
 		Ref: eventbus.TopicRef{
-			Raw:     "claudesensor.TraceEventBus.trace_events",
-			Package: "claudesensor",
+			Raw:     "telemetry.TraceEventBus.trace_events",
+			Package: "telemetry",
 			Message: "TraceEventBus",
 			Field:   "trace_events",
 		},
 		EventTypeFQN: "trace.TraceEvent",
-		RPCStem:      "ClaudesensorTraceEventBusTraceEvents",
+		RPCStem:      "TelemetryTraceEventBusTraceEvents",
 	}
 
 	entry := publisherEntryForTopic(
 		topic,
-		"claudesensor_trace_event_bus_trace_events",
+		"telemetry_trace_event_bus_trace_events",
 		topic.RPCStem,
 		"crate::types::sys::trace::TraceEvent",
 	)
 
-	if entry.FnName != "create_claudesensor_trace_event_bus_trace_events_publisher" {
+	if entry.FnName != "create_telemetry_trace_event_bus_trace_events_publisher" {
 		t.Fatalf("unexpected helper name %q", entry.FnName)
 	}
 	if entry.EventTypeFQN != "trace.TraceEvent" {
@@ -37,7 +38,7 @@ func TestExplicitPublisherEntryUsesCanonicalPath(t *testing.T) {
 	// "/eventbus.EventBusTypedService/Publish<Stem>" that used to be asserted
 	// here is declared in no proto in the tree, so only a client hardcoding it
 	// could reach the broker. See control/EVENTBUS-PUBLISH-API-SPLIT.md.
-	if entry.PublishPath != "/claudesensor.TraceEventBusStateService/PublishToTraceEvents" {
+	if entry.PublishPath != "/telemetry.TraceEventBusStateService/PublishToTraceEvents" {
 		t.Fatalf("unexpected canonical publish path %q", entry.PublishPath)
 	}
 }
@@ -45,19 +46,19 @@ func TestExplicitPublisherEntryUsesCanonicalPath(t *testing.T) {
 func TestPublisherEntryUsesDeclaredBrokerTag(t *testing.T) {
 	topic := eventbus.Topic{
 		Ref: eventbus.TopicRef{
-			Raw:     "claudesensor.TraceEventBus.trace_events",
-			Package: "claudesensor",
+			Raw:     "telemetry.TraceEventBus.trace_events",
+			Package: "telemetry",
 			Message: "TraceEventBus",
 			Field:   "trace_events",
 		},
 		EventBusLabel:  "events",
 		EventTypeFQN: "trace.TraceEvent",
-		RPCStem:      "ClaudesensorTraceEventBusTraceEvents",
+		RPCStem:      "TelemetryTraceEventBusTraceEvents",
 	}
 
 	entry := publisherEntryForTopic(
 		topic,
-		"claudesensor_trace_event_bus_trace_events",
+		"telemetry_trace_event_bus_trace_events",
 		topic.RPCStem,
 		"crate::types::sys::trace::TraceEvent",
 	)
@@ -70,7 +71,7 @@ func TestPublisherEntryUsesDeclaredBrokerTag(t *testing.T) {
 	// regardless of which broker hosts it, and the proto is what makes the name
 	// reachable. The tag still selects the broker, which is what TargetService
 	// above asserts — that is the routing decision, not the method name.
-	if entry.PublishPath != "/claudesensor.TraceEventBusStateService/PublishToTraceEvents" {
+	if entry.PublishPath != "/telemetry.TraceEventBusStateService/PublishToTraceEvents" {
 		t.Fatalf("unexpected canonical publish path %q", entry.PublishPath)
 	}
 }

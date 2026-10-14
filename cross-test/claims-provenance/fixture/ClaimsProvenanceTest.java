@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 //
 // F11: identity claims must come from a VERIFIED token, never from a raw
 // base64 decode of whatever bearer the caller sent.

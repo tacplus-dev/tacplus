@@ -1,8 +1,10 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"strings"
 	"testing"
 	"text/template"
@@ -199,7 +201,7 @@ func TestRustApprovalWrapperSeamIsGated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read servicewrapper template: %v", err)
 	}
-	tmpl, err := template.New("servicewrapper").Parse(string(raw))
+	tmpl, err := template.New("servicewrapper").Funcs(header.Funcs()).Parse(string(raw))
 	if err != nil {
 		t.Fatalf("parse servicewrapper template: %v", err)
 	}

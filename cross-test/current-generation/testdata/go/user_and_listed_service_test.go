@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 //
 // Gate self-test for the record-egress fixture. NOT generated: run.sh copies this
 // file into the generated chassis/grpcserver package before `go test ./...`. It

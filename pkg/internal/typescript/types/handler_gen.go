@@ -1,10 +1,12 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"bytes"
 	"fmt"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -527,7 +529,7 @@ func generateTsHandlerInterface(config *tactype.Config, svcs []service.ServiceIn
 		return fmt.Errorf("failed to load handler template: %w", err)
 	}
 
-	tmpl, err := template.New("handler").Parse(tmplContent)
+	tmpl, err := template.New("handler").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse handler template: %w", err)
 	}
@@ -562,7 +564,7 @@ func generateTsServiceManager(config *tactype.Config, svcs []service.ServiceInfo
 		return fmt.Errorf("failed to load service_manager template: %w", err)
 	}
 
-	tmpl, err := template.New("servicemanager").Parse(tmplContent)
+	tmpl, err := template.New("servicemanager").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse service_manager template: %w", err)
 	}
@@ -598,7 +600,7 @@ func generateC2SServiceManager(config *tactype.Config, clientSvcs []service.Serv
 		return fmt.Errorf("failed to load c2sm.ts template: %w", err)
 	}
 
-	tmpl, err := template.New("c2sm").Parse(tmplContent)
+	tmpl, err := template.New("c2sm").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse c2sm.ts template: %w", err)
 	}
@@ -637,7 +639,7 @@ func generateC2DServiceManager(config *tactype.Config, clientSvcs []service.Serv
 		return fmt.Errorf("failed to load c2dm.ts template: %w", err)
 	}
 
-	tmpl, err := template.New("c2dm").Parse(tmplContent)
+	tmpl, err := template.New("c2dm").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse c2dm.ts template: %w", err)
 	}
@@ -702,7 +704,7 @@ func generateW2SServiceManager(config *tactype.Config, mintTokenMethod string) e
 		return fmt.Errorf("failed to load w2sm.ts template: %w", err)
 	}
 
-	tmpl, err := template.New("w2sm").Parse(tmplContent)
+	tmpl, err := template.New("w2sm").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse w2sm.ts template: %w", err)
 	}

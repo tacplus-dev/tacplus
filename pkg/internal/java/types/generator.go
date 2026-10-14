@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
@@ -118,7 +119,7 @@ func copyProtoWithJavaPackage(srcPath, dstPath, relPath string, config *tactype.
 	// For hyphenated filenames: always set explicitly since protoc can't handle hyphens.
 	// For non-hyphenated filenames: set only when the derived outer class (CamelCase of stem)
 	// would collide with a message, service, or enum name inside the file.
-	// e.g. claude-sensor.proto (package claudesensor) → "Claudesensor"
+	// e.g. claude-sensor.proto (package telemetry) → "Telemetry"
 	// e.g. argus.proto with "service Argus" → "ArgusOuterClass"
 	filenameStem := strings.TrimSuffix(filepath.Base(relPath), ".proto")
 	if len(protoPackage) > 0 {

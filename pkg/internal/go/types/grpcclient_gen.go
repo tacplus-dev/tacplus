@@ -1,10 +1,12 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"bytes"
 	"fmt"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"go/format"
 	"os"
 	"path/filepath"
@@ -203,7 +205,7 @@ func generateGrpcClientGroupFiles(config *tactype.Config, clients []generatedGrp
 		if err != nil {
 			return fmt.Errorf("failed to load grpcclient group template: %w", err)
 		}
-		tmpl, err := template.New("grpcclient_group").Funcs(funcMap).Parse(tmplStr)
+		tmpl, err := template.New("grpcclient_group").Funcs(funcMap).Funcs(header.Funcs()).Parse(tmplStr)
 		if err != nil {
 			return fmt.Errorf("failed to parse grpcclient group template: %w", err)
 		}
@@ -281,7 +283,7 @@ func generateGrpcClientRoot(config *tactype.Config, clients []generatedGrpcClien
 	if err != nil {
 		return fmt.Errorf("failed to load grpcclient root template: %w", err)
 	}
-	tmpl, err := template.New("grpcclient_root").Funcs(funcMap).Parse(tmplStr)
+	tmpl, err := template.New("grpcclient_root").Funcs(funcMap).Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		return fmt.Errorf("failed to parse grpcclient root template: %w", err)
 	}
@@ -523,7 +525,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		return fmt.Errorf("failed to load grpcclient template: %w", err)
 	}
 
-	t, err := template.New("grpcclient").Parse(tmpl)
+	t, err := template.New("grpcclient").Funcs(header.Funcs()).Parse(tmpl)
 	if err != nil {
 		return fmt.Errorf("failed to parse template: %w", err)
 	}
@@ -953,7 +955,7 @@ func generateGoBidiMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, go
 		return "", fmt.Errorf("failed to load go bidi template: %w", err)
 	}
 
-	t, err := template.New("grpcclient_bidi").Parse(tmplStr)
+	t, err := template.New("grpcclient_bidi").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse go bidi template: %w", err)
 	}

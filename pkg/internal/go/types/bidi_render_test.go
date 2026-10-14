@@ -1,8 +1,10 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"go/parser"
 	"go/token"
 	"strings"
@@ -20,7 +22,7 @@ func TestBidiTemplateRenders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTemplate: %v", err)
 	}
-	tmpl, err := template.New("bidi").Parse(tmplStr)
+	tmpl, err := template.New("bidi").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -102,7 +104,7 @@ func TestOuterGrpcClientTemplateParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTemplate: %v", err)
 	}
-	tmpl, err := template.New("grpc").Parse(tmplStr)
+	tmpl, err := template.New("grpc").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

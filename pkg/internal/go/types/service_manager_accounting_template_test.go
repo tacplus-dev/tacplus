@@ -1,9 +1,11 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"bytes"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"go/format"
 	"strings"
 	"testing"
@@ -21,18 +23,18 @@ func TestGoAccountingPublisherWiresEventBusSinkOnEveryWrapper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTemplate service_manager.go.tmpl: %v", err)
 	}
-	tmpl, err := template.New("service_manager").Parse(tmplStr)
+	tmpl, err := template.New("service_manager").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse service_manager template: %v", err)
 	}
 	data := serviceManagerTemplateData{
-		ServiceLabel:          "demo",
-		ModuleBasePath:        "example.com/demo/model",
-		HasServiceHealthState: true,
+		ServiceLabel:             "demo",
+		ModuleBasePath:           "example.com/demo/model",
+		HasServiceHealthState:    true,
 		HealthStateProtoDir:      "services/demo",
 		HealthStateGroupAccessor: "State",
-		HasGrpc:               true,
-		HasGrpcServers:        true,
+		HasGrpc:                  true,
+		HasGrpcServers:           true,
 		GrpcServices: []GrpcServiceEntry{
 			{
 				GetterName:      "GetDemoGrpcImpl",
@@ -106,18 +108,18 @@ func TestGoServiceManagerOmitsAccountingWiringWithoutPublisher(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTemplate service_manager.go.tmpl: %v", err)
 	}
-	tmpl, err := template.New("service_manager").Parse(tmplStr)
+	tmpl, err := template.New("service_manager").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse service_manager template: %v", err)
 	}
 	data := serviceManagerTemplateData{
-		ServiceLabel:          "demo",
-		ModuleBasePath:        "example.com/demo/model",
-		HasServiceHealthState: true,
+		ServiceLabel:             "demo",
+		ModuleBasePath:           "example.com/demo/model",
+		HasServiceHealthState:    true,
 		HealthStateProtoDir:      "services/demo",
 		HealthStateGroupAccessor: "State",
-		HasGrpc:               true,
-		HasGrpcServers:        true,
+		HasGrpc:                  true,
+		HasGrpcServers:           true,
 		GrpcServices: []GrpcServiceEntry{
 			{
 				GetterName:      "GetDemoGrpcImpl",

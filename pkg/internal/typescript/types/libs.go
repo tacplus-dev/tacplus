@@ -1,10 +1,12 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"bytes"
 	"fmt"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -94,13 +96,14 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 		DefaultAudience       string
 		ServiceLabel          string   // service identity baked into Authorizer
 		AcceptedAudiences     []string // every `aud` the Authorizer accepts: own label + hosted traits
-		BufbuildProtobuf      string // @bufbuild/protobuf version from dependencies.yaml
+		BufbuildProtobuf      string   // @bufbuild/protobuf version from dependencies.yaml
 		ClientOnly            bool
 		// Client-reachable (C2S) mint — used by client_im.
 		HasClientTokenExchanger     bool
 		ClientTokenExchangerPackage string // C2S mint proto package name
 		ClientMintServiceName       string // C2S mint proto service name
 		ClientTokenMintMethod       string // C2S TokenMint RPC name
+		Author                      string // first line of the configured header; manifests omit author when empty
 		Spiffe                      commonspiffe.TemplateGrammar
 	}{
 		TsPackageBase:               config.TsPackageBase,
@@ -119,6 +122,7 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 		ClientTokenExchangerPackage: clientTexPkg,
 		ClientMintServiceName:       clientMintServiceName,
 		ClientTokenMintMethod:       clientTokenMintMethod,
+		Author:                      header.Author(),
 		Spiffe:                      commonspiffe.TemplateData(),
 	}
 

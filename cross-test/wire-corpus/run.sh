@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 Second Star Cavalier LLC
+# Copyright (c) 2026 Seabeam LLC
+# SPDX-License-Identifier: Apache-2.0
 #
 # Cross-language SERIALIZATION-EQUIVALENCE gate (LED-2 phase 2).
 #

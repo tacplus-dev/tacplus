@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
@@ -147,7 +148,7 @@ func generateRustStateClientWrappers(config *tactype.Config, inputDir string) er
 			// Use the proto package name directly. Only fall back to the
 			// filename stem (from ServiceProtoParts) when the package is
 			// qualified (e.g. "services.sentinel" → "sentinel"), because
-			// a simple package like "claudesensor" is already correct and
+			// a simple package like "telemetry" is already correct and
 			// overriding it with the filename stem "claude-sensor" would
 			// produce an invalid Rust identifier.
 			packageName := fileDesc.Package

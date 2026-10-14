@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // ============================================================================
 // DO NOT MODIFY THIS FILE
@@ -120,7 +121,7 @@ extend google.protobuf.FileOptions {
   // physical service (identified by the service_event label). vservice identity
   // enables entitlement-based C2S authorization: aud targets the physical host
   // while entitlements are checked against the vservice name.
-  // Example: option (spec.vservice) = {id: 30, name: "claudesensor"};
+  // Example: option (spec.vservice) = {id: 30, name: "telemetry"};
   VServiceAnnotation vservice = 50022;
 
   // record_store marks this service as the full-record store (stratum). Tiering
@@ -450,7 +451,7 @@ extend google.protobuf.MessageOptions {
   // Only valid on messages with option (spec.service_state).
   // Each entry references a topic field on another service's state root.
   // Example:
-  //   option (spec.subscribe) = {source: "claudesensor.AgenticCodeEventBus.event_stream"};
+  //   option (spec.subscribe) = {source: "telemetry.AgenticCodeEventBus.event_stream"};
   repeated SubscriptionAnnotation subscribe = 60045;
 
   // 60046 retired (graph_type — graph store support removed 2026-08-25).
@@ -658,7 +659,7 @@ message OwnerDefault {
 // an event-bus topic from another service's state root.
 message SubscriptionAnnotation {
   // source is the fully-qualified topic reference: "package.StateRoot.field_name"
-  // e.g., "claudesensor.AgenticCodeEventBus.event_stream"
+  // e.g., "telemetry.AgenticCodeEventBus.event_stream"
   string source = 1;
 }
 
@@ -2474,7 +2475,7 @@ message ServiceHealthAnnotation {}
 // but are authorized separately. The id is a stable field number for TokenEntitlements
 // (use range 30+ to avoid collision with physical service IDs).
 message VServiceAnnotation {
-  // name is the canonical vservice name used as the entitlement key (e.g., "claudesensor").
+  // name is the canonical vservice name used as the entitlement key (e.g., "telemetry").
   string name = 1;
   // id is the stable field number in TokenEntitlements for this vservice.
   int32 id = 2;

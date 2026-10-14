@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 //
 // The typescript leg of the serialization-equivalence corpus (LED-2 phase 2).
 // Decodes the checked-in golden bytes with the GENERATED CorpusRecord schema

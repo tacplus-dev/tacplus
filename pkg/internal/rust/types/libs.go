@@ -1,10 +1,12 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"bytes"
 	"fmt"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -184,6 +186,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		KeepaliveTimeSecs           int
 		KeepaliveTimeoutSecs        int
 		KeepalivePermitMinTimeSecs  int
+		Author                      string // first line of the configured header; manifests omit authors when empty
 	}{
 		CrateBasePath:                  config.CrateBasePath,
 		CrateBasePathUnderscore:        strings.ReplaceAll(config.CrateBasePath, "-", "_"),
@@ -208,6 +211,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		KeepaliveTimeSecs:              keepaliveconst.TimeSecs,
 		KeepaliveTimeoutSecs:           keepaliveconst.TimeoutSecs,
 		KeepalivePermitMinTimeSecs:     keepaliveconst.PermitMinTimeSecs,
+		Author:                         header.Author(),
 	}
 
 	langFS, err := fs.Sub(templates.FS, "rust/chassis")

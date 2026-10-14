@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 // The CALLER-side half of the (spec.rpc).requires_device fixture.
 //
 // ledger is not generated as a server in this build (vault is the self package);

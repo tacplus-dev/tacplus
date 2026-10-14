@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // server-runtime RUST fixture server: hosts the REAL generated ContractApi
 // ValidationWrapper (s2sm/internal/grpc/servers/contract/contractclient/

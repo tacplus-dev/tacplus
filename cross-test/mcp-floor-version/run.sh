@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 Second Star Cavalier LLC
+# Copyright (c) 2026 Seabeam LLC
+# SPDX-License-Identifier: Apache-2.0
 #
 # rmcp floor-version gate for the generated Rust MCP dispatch seam.
 #

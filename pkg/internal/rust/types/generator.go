@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
@@ -795,7 +796,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 
 		// Place servicewrapper.rs in sm/internal/grpc/servers/{parentDir}/{packageName}/
 		// Only use ServiceProtoParts when the package is qualified (e.g. "services.sentinel"),
-		// not when it's a simple name like "claudesensor" which would be wrongly
+		// not when it's a simple name like "telemetry" which would be wrongly
 		// overridden by the hyphenated filename stem "claude-sensor".
 		actualPkg := packageName
 		if strings.Contains(packageName, ".") {

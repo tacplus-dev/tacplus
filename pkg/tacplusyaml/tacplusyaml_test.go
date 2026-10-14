@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package tacplusyaml
 
@@ -464,6 +465,16 @@ func TestReadFiles(t *testing.T) {
 }
 
 func TestMergeConfigs(t *testing.T) {
+	t.Run("header: overlay wins when non-empty, base kept otherwise", func(t *testing.T) {
+		base := &Config{Language: "go", Header: "Copyright (c) 2026 Base Inc\nSPDX-License-Identifier: Apache-2.0"}
+		if got := MergeConfigs(base, &Config{}).Header; got != base.Header {
+			t.Errorf("Header = %q, want base header", got)
+		}
+		if got := MergeConfigs(base, &Config{Header: "Copyright (c) 2026 Overlay Inc"}).Header; got != "Copyright (c) 2026 Overlay Inc" {
+			t.Errorf("Header = %q, want overlay header", got)
+		}
+	})
+
 	t.Run("strings: overlay wins when non-empty", func(t *testing.T) {
 		base := &Config{Language: "go", Src: "base-src", Pkg: "base-pkg"}
 		overlay := &Config{Src: "overlay-src"}

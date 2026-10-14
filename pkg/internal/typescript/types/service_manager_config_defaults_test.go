@@ -1,9 +1,11 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"bytes"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"strings"
 	"testing"
 	"text/template"
@@ -52,7 +54,7 @@ func renderTsSm(t *testing.T, data tsSmTemplateData) string {
 	if err != nil {
 		t.Fatalf("loadTemplate service_manager.ts.tmpl: %v", err)
 	}
-	tmpl, err := template.New("service_manager").Parse(tmplStr)
+	tmpl, err := template.New("service_manager").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse service_manager template: %v", err)
 	}

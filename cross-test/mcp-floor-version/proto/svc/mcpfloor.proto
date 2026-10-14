@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 // rmcp floor-version fixture: a C2S service that owns one RPC_PRINCIPAL_MCP
 // tool, which is the ONLY thing needed to make tacplus emit the generated MCP
 // dispatch seam (mcp_dispatch_gen.go) and put `rmcp` in the crate's Cargo.toml.

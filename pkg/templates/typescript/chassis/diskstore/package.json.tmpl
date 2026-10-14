@@ -18,7 +18,9 @@
     "protobuf",
     "typescript"
   ],
-  "author": "Second Star Cavalier LLC",
+{{- if .Author}}
+  "author": {{printf "%q" .Author}},
+{{- end}}
   "license": "PROPRIETARY",
   "dependencies": {
     "compressjs": "^1.0.3"

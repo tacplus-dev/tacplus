@@ -787,7 +787,7 @@ entitlement key, plus an optional `id` — the stable `TokenEntitlements` field
 number for that contract):
 
 ```protobuf
-option (spec.vservice) = {id: 30, name: "claudesensor"};   // a DATA contract
+option (spec.vservice) = {id: 30, name: "telemetry"};   // a DATA contract
 ```
 
 ```protobuf

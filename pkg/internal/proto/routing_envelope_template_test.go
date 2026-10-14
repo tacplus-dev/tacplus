@@ -1,9 +1,11 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package proto
 
 import (
 	"bytes"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"strings"
 	"testing"
 	"text/template"
@@ -152,7 +154,7 @@ func renderRoutingTemplate(t *testing.T, path string, routingOnly bool) string {
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	tmpl, err := template.New("t").Parse(string(body))
+	tmpl, err := template.New("t").Funcs(header.Funcs()).Parse(string(body))
 	if err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}

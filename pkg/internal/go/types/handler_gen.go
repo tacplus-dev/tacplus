@@ -1,10 +1,12 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"bytes"
 	"fmt"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"go/format"
 	"os"
 	"os/exec"
@@ -50,7 +52,7 @@ func generateHandlerInterfaces(config *tactype.Config, svcs []ServiceInfo, allFi
 		return fmt.Errorf("failed to load handler template: %w", err)
 	}
 
-	tmpl, err := template.New("handler").Parse(tmplContent)
+	tmpl, err := template.New("handler").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse handler template: %w", err)
 	}
@@ -883,7 +885,7 @@ func generateServiceManager(config *tactype.Config, svcs []ServiceInfo, allFiles
 		return fmt.Errorf("failed to load service_manager.go template: %w", err)
 	}
 
-	tmpl, err := template.New("servicemanager").Parse(tmplContent)
+	tmpl, err := template.New("servicemanager").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse service_manager.go template: %w", err)
 	}
@@ -934,7 +936,7 @@ func generateServiceManagerIdentityErrorTest(data any, outputDir string) error {
 		return fmt.Errorf("failed to load service_manager_identity_error_test.go template: %w", err)
 	}
 
-	tmpl, err := template.New("servicemanageridentityerrortest").Parse(tmplContent)
+	tmpl, err := template.New("servicemanageridentityerrortest").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse service_manager_identity_error_test.go template: %w", err)
 	}
@@ -966,7 +968,7 @@ func generateC2SServiceManager(config *tactype.Config, clients []generatedGrpcCl
 		return fmt.Errorf("failed to load c2sm.go template: %w", err)
 	}
 
-	tmpl, err := template.New("c2sm").Parse(tmplContent)
+	tmpl, err := template.New("c2sm").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse c2sm.go template: %w", err)
 	}
@@ -1010,7 +1012,7 @@ func generateC2DServiceManager(config *tactype.Config, clients []generatedGrpcCl
 		return fmt.Errorf("failed to load c2dm.go template: %w", err)
 	}
 
-	tmpl, err := template.New("c2dm").Parse(tmplContent)
+	tmpl, err := template.New("c2dm").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse c2dm.go template: %w", err)
 	}
@@ -1054,7 +1056,7 @@ func generateGrpcAggregator(config *tactype.Config, hasClients bool) error {
 		return fmt.Errorf("failed to load grpc_aggregator template: %w", err)
 	}
 
-	tmpl, err := template.New("grpcaggregator").Parse(tmplContent)
+	tmpl, err := template.New("grpcaggregator").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse grpc_aggregator template: %w", err)
 	}

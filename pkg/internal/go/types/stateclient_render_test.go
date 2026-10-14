@@ -1,8 +1,10 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"go/format"
 	"strings"
 	"testing"
@@ -126,7 +128,7 @@ func renderStateWrapperForTest(t *testing.T, data stateClientData) string {
 			return strings.ToLower(s[:1]) + s[1:]
 		},
 	}
-	tmpl, err := template.New("stateclient").Funcs(funcMap).Parse(tmplStr)
+	tmpl, err := template.New("stateclient").Funcs(funcMap).Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse state wrapper template: %v", err)
 	}

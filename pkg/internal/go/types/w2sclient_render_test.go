@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
@@ -74,7 +75,7 @@ func TestW2SClientTemplateRendersAllTransports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTemplate: %v", err)
 	}
-	tmpl, err := template.New("w2sclient").Parse(tmplStr)
+	tmpl, err := template.New("w2sclient").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -197,7 +198,7 @@ func TestW2SRootTemplatesRender(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTemplate w2s clients: %v", err)
 	}
-	tmpl, err := template.New("w2s_clients").Parse(tmplStr)
+	tmpl, err := template.New("w2s_clients").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse w2s clients: %v", err)
 	}

@@ -478,7 +478,7 @@ canonical format, parsed from the right so dotted packages work:
 
 ```text
 <proto-package>.<topic-message>.<topic-field>
-e.g. claudesensor.AgenticCodeEventBus.event_stream
+e.g. telemetry.AgenticCodeEventBus.event_stream
 ```
 
 Full-service generation validates every `topic_ref` before emitting code: it must match the

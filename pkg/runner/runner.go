@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package runner
 
@@ -16,6 +17,7 @@ import (
 	"gitlab.com/seabeam/schematic/tacplus/pkg/builder"
 	"gitlab.com/seabeam/schematic/tacplus/pkg/depfiles"
 	"gitlab.com/seabeam/schematic/tacplus/pkg/gittag"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/tactype"
 	"gitlab.com/seabeam/schematic/tacplus/pkg/projectfile"
 	"gitlab.com/seabeam/schematic/tacplus/pkg/protosrc"
@@ -193,6 +195,11 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 			return nil, err
 		}
 	}
+	headerText := ""
+	if cfg != nil {
+		headerText = cfg.Header
+	}
+	header.SetCopyright(headerText)
 	if cfg != nil {
 		yamlPkg = cfg.Pkg
 		// clients.*.enabled is obsolete. Generation is a function of the proto

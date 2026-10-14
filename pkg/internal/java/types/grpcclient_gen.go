@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
@@ -34,7 +35,7 @@ type generatedGrpcClientJava struct {
 	ParentDir   string // e.g. "services"
 	FullPackage string // e.g. "com.example.wrappers.grpcclients.services.baseball"
 	ProtoFile   string
-	HostLabel     string
+	HostLabel   string
 }
 
 // generateGrpcClients generates typed gRPC client wrappers for each gRPC service.
@@ -69,7 +70,7 @@ func generateGrpcClients(config *tactype.Config, servicesInfo []ServiceInfo, inp
 			ParentDir:   strings.Split(normalizedRelPath, string(filepath.Separator))[0],
 			FullPackage: fullPackage,
 			ProtoFile:   svc.ProtoFile,
-			HostLabel:     svc.HostLabel,
+			HostLabel:   svc.HostLabel,
 		})
 	}
 

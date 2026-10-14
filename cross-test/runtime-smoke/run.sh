@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 Second Star Cavalier LLC
+# Copyright (c) 2026 Seabeam LLC
+# SPDX-License-Identifier: Apache-2.0
 #
 # Cross-language runtime smoke: a GO fixture server built from the generated
 # go servers (canonical consumer-contract proto) hosts C2S gRPC + W2S

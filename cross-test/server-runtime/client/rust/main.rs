@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // server-runtime RUST client driver (LED-2 phase 3): the GENERATED RUST C2S
 // CLIENT (c2sm/internal/grpc/clients/contract/contractclient/contract_api.rs),

@@ -1,8 +1,10 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"go/format"
 	"strings"
 	"testing"
@@ -38,7 +40,7 @@ func renderServiceIMForTest(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("loadChassisTemplate: %v", err)
 	}
-	tmpl, err := template.New("service_im").Parse(tmplStr)
+	tmpl, err := template.New("service_im").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse service_im template: %v", err)
 	}
@@ -118,7 +120,7 @@ func TestServiceIMAudienceMappingsForStatePackages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadChassisTemplate: %v", err)
 	}
-	tmpl, err := template.New("service_im").Parse(tmplStr)
+	tmpl, err := template.New("service_im").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse service_im template: %v", err)
 	}
@@ -180,7 +182,7 @@ func TestServiceManagerLibRendersValidGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTemplate: %v", err)
 	}
-	tmpl, err := template.New("smlib").Parse(tmplStr)
+	tmpl, err := template.New("smlib").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse servicemanager_lib template: %v", err)
 	}

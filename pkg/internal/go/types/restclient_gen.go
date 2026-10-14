@@ -1,10 +1,12 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"bytes"
 	"fmt"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"go/format"
 	"os"
 	"path/filepath"
@@ -81,7 +83,7 @@ func generateRestClients(config *tactype.Config, packages []model.ProtoFile) ([]
 			return nil, fmt.Errorf("failed to load restclient template: %w", err)
 		}
 
-		t, err := template.New("restclient").Parse(tmplStr)
+		t, err := template.New("restclient").Funcs(header.Funcs()).Parse(tmplStr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse restclient template: %w", err)
 		}
@@ -201,7 +203,7 @@ func generateRestClientGroupFiles(config *tactype.Config, clients []generatedRes
 		if err != nil {
 			return fmt.Errorf("failed to load restclient group template: %w", err)
 		}
-		tmpl, err := template.New("restclient_group").Parse(tmplStr)
+		tmpl, err := template.New("restclient_group").Funcs(header.Funcs()).Parse(tmplStr)
 		if err != nil {
 			return fmt.Errorf("failed to parse restclient group template: %w", err)
 		}
@@ -276,7 +278,7 @@ func generateRestClientRoot(config *tactype.Config, clients []generatedRestClien
 	if err != nil {
 		return fmt.Errorf("failed to load restclient root template: %w", err)
 	}
-	tmpl, err := template.New("restclient_root").Funcs(funcMap).Parse(tmplStr)
+	tmpl, err := template.New("restclient_root").Funcs(funcMap).Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		return fmt.Errorf("failed to parse restclient root template: %w", err)
 	}

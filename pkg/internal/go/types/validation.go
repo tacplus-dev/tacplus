@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // This file is the Go validation emitter: it generates the per-type
 // Validate<Type> functions (assert_* constraint checks, default

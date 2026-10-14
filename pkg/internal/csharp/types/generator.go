@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // Package types generates a C# (.NET) client-lite package from proto files.
 // tacplus emits a .csproj manifest, stripped proto import closure, and thin C2D

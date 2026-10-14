@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // Package registry provides stable ID assignment for services and vservices.
 // Both share the same ID space (1-99) since they are assigned as field numbers

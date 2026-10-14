@@ -1,8 +1,10 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -414,7 +416,7 @@ print("ok")
 // EnvelopeName (which renders broken python) fails here, not at runtime.
 func TestPythonSubscriberDecodesEnvelopeAndSurfacesRecordMeta(t *testing.T) {
 	tmplStr := readPythonTemplate(t, "python/types/subscriber.py.tmpl")
-	tmpl, err := template.New("subscriber").Parse(tmplStr)
+	tmpl, err := template.New("subscriber").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse subscriber template: %v", err)
 	}

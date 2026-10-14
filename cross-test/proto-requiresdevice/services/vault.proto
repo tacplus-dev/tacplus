@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 // The guarded half of the (spec.rpc).requires_device fixture.
 //
 // Why this fixture exists: cross-test/proto is a TYPES-ONLY build (it declares no

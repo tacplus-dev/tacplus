@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // server-runtime driver: the GENERATED GO C2S CLIENT, pointed at a generated
 // JAVA or RUST server hosted by this gate's fixtures. Every assertion below is

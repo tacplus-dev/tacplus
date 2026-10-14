@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package proto
 
@@ -106,10 +107,10 @@ var (
 
 // VServiceEntry represents a vservice with exported topic RPCs.
 type VServiceEntry struct {
-	Name      string   // entitlement key (e.g. "claudesensor")
+	Name      string   // entitlement key (e.g. "telemetry")
 	FieldID   int32    // stable field number for TokenEntitlements
 	HostLabel string   // physical service tag (e.g. "eventbus")
-	RPCs      []string // generated RPC names (e.g. "PublishClaudesensorAgenticCodeEventBusEventStream")
+	RPCs      []string // generated RPC names (e.g. "PublishTelemetryAgenticCodeEventBusEventStream")
 	// Routes carries the per-topic wire coordinates for each entry in RPCs,
 	// index-aligned. RPCs holds the flat historical names, which are still the
 	// entitlement keys; Routes holds what a caller must actually dial. Anything

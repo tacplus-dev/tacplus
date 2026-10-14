@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package proto
 
@@ -17,7 +18,7 @@ import (
 func TestAcceptedAudiencesForHostIncludesNonTopicTrait(t *testing.T) {
 	entries := []VServiceEntry{
 		{Name: "query", FieldID: 40, HostLabel: "stratum"}, // trait: RPCs, no topics
-		{Name: "claudesensor", FieldID: 30, HostLabel: "events", RPCs: []string{"PublishX"}},
+		{Name: "telemetry", FieldID: 30, HostLabel: "events", RPCs: []string{"PublishX"}},
 	}
 
 	got := AcceptedAudiencesForHost("stratum", entries, nil)
@@ -26,8 +27,8 @@ func TestAcceptedAudiencesForHostIncludesNonTopicTrait(t *testing.T) {
 		t.Fatalf("AcceptedAudiencesForHost(stratum) = %#v, want %#v", got, want)
 	}
 
-	if got := AcceptedAudiencesForHost("events", entries, nil); !reflect.DeepEqual(got, []string{"events", "claudesensor"}) {
-		t.Fatalf("AcceptedAudiencesForHost(events) = %#v, want [events claudesensor]", got)
+	if got := AcceptedAudiencesForHost("events", entries, nil); !reflect.DeepEqual(got, []string{"events", "telemetry"}) {
+		t.Fatalf("AcceptedAudiencesForHost(events) = %#v, want [events telemetry]", got)
 	}
 	if got := AcceptedAudiencesForHost("gateway", entries, nil); !reflect.DeepEqual(got, []string{"gateway"}) {
 		t.Fatalf("AcceptedAudiencesForHost(gateway) = %#v, want [gateway]", got)

@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // Command sysrename performs the case-preserving, whole-token rename of the
 // reserved embedded namespace `libs` -> `sys` (SYS_RENAME_PLAN Phase 1). It is

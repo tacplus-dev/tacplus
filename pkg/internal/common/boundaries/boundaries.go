@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // Package boundaries provides shared boundary collection logic used by all
 // language generators. It extracts boundary metadata from proto file
@@ -19,12 +20,12 @@ import (
 // EventPublisherData is language-neutral metadata for a validated event_publish
 // binding declared by the current actor.
 type EventPublisherData struct {
-	TopicRef          string // e.g. "claudesensor.TraceEventBus.trace_events"
+	TopicRef          string // e.g. "telemetry.TraceEventBus.trace_events"
 	BrokerLabel       string // service_id of the broker backing this topic
 	EventTypeFQN      string // e.g. "trace.TraceEvent"
 	EventTypeName     string // e.g. "TraceEvent"
-	RPCStem           string // e.g. "ClaudesensorTraceEventBusTraceEvents"
-	PublishStreamName string // e.g. "PublishClaudesensorTraceEventBusTraceEvents"
+	RPCStem           string // e.g. "TelemetryTraceEventBusTraceEvents"
+	PublishStreamName string // e.g. "PublishTelemetryTraceEventBusTraceEvents"
 	PublishFullMethod string // broker-qualified EventBus typed service method
 	PublishPath       string // broker-qualified gRPC path for the publish stream
 }
@@ -310,9 +311,9 @@ func detectConfig(msg *parser.MessageDescriptor, fd *parser.FileDescriptor) bool
 // SubscriptionData is the language-neutral metadata for a single event-bus subscription.
 type SubscriptionData struct {
 	StateRoot       string // owning state root, e.g. "DgraphState"
-	Source          string // raw source ref, e.g. "claudesensor.AgenticCodeEventBus.event_stream"
+	Source          string // raw source ref, e.g. "telemetry.AgenticCodeEventBus.event_stream"
 	BrokerLabel     string // service_id of the broker backing this topic
-	SourcePackage   string // parsed package, e.g. "claudesensor"
+	SourcePackage   string // parsed package, e.g. "telemetry"
 	SourceStateRoot string // parsed topic message, e.g. "AgenticCodeEventBus"
 	SourceField     string // parsed field name, e.g. "event_stream"
 	Origin          string // "subscribe", "event_watch", or "store_derived"

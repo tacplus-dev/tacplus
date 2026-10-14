@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package registry
 
@@ -24,14 +25,14 @@ func TestScanRegistryNamesResolvesEmbeddedGeneratedImports(t *testing.T) {
 	}
 	const content = `syntax = "proto3";
 
-package claudesensor;
+package telemetry;
 
 import "sys/spec.proto";
 import "sys/trace.proto";
 
 option (spec.vservice) = {
   id: 42
-  name: "claudesensor"
+  name: "telemetry"
 };
 
 message TraceCarrier {
@@ -46,7 +47,7 @@ message TraceCarrier {
 	if err != nil {
 		t.Fatalf("ScanRegistryNames: %v", err)
 	}
-	want := []string{"claudesensor"}
+	want := []string{"telemetry"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ScanRegistryNames() vservices = %#v, want %#v", got, want)
 	}

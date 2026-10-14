@@ -1,9 +1,12 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"fmt"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -25,5 +28,5 @@ func generateExceptions(outputDir, subdir string) error {
 		return fmt.Errorf("failed to read exceptions template: %w", err)
 	}
 
-	return os.WriteFile(exceptionsPath, content, 0644)
+	return os.WriteFile(exceptionsPath, append([]byte(header.Copyright(consts.LangPython)), content...), 0644)
 }

@@ -1,10 +1,13 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"encoding/json"
 	"fmt"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/consts"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -105,7 +108,7 @@ var tsGeneratedPackageRe = regexp.MustCompile(`@generated from file [^(]+\s+\(pa
 // typescriptModuleDirForPackage resolves a proto package to the generated TypeScript
 // module directory, relative to outputDir. It reads the generated _pb.ts headers
 // because package names do not always match proto file slugs (for example
-// vservices/claude-sensor.proto has package claudesensor).
+// vservices/claude-sensor.proto has package telemetry).
 func typescriptModuleDirForPackage(outputDir, packageName string) (string, bool) {
 	if outputDir == "" || packageName == "" {
 		return "", false
@@ -999,7 +1002,7 @@ func copyUtilsDirectory(outputDir string) error {
 		return fmt.Errorf("failed to load errors.ts template: %w", err)
 	}
 	dstFile := filepath.Join(errorsDir, "errors.ts")
-	if err := os.WriteFile(dstFile, []byte(errorsContent), 0644); err != nil {
+	if err := os.WriteFile(dstFile, []byte(header.Copyright(consts.LangTypeScript)+errorsContent), 0644); err != nil {
 		return fmt.Errorf("failed to write errors.ts: %w", err)
 	}
 

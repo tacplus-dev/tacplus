@@ -565,7 +565,7 @@ rules (genealogy in `../archive/EVENTBUS_PUBSUB_MODEL_PLAN.md`):
   property of where the derived RPC is hosted, and a parallel vocabulary would
   turn every future auth change into an annotation migration.
 - Generated RPC stems are package-qualified
-  (e.g. `PublishClaudesensorAgenticCodeEventBusEventStream`) so two packages'
+  (e.g. `PublishTelemetryAgenticCodeEventBusEventStream`) so two packages'
   same-named topics cannot collide; registry guards reject duplicate canonical
   identities; store-derived subscription sugar fails on ambiguous event-type
   matches rather than guessing.
@@ -688,4 +688,4 @@ When a bug is found, a corresponding test (unit, integration, or system) must be
 
 ## License
 
-Copyright (c) 2026 Second Star Cavalier LLC All rights reserved.
+Copyright (c) 2026 Seabeam LLC. Licensed under the Apache License, Version 2.0; see [LICENSE](../LICENSE).

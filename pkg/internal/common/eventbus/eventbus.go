@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package eventbus
 
@@ -278,8 +279,8 @@ func topicRPCStem(ref TopicRef, includePackage bool) string {
 }
 
 // RPCStemForTopicParts returns the canonical package-qualified RPC suffix for a
-// topic, e.g. claudesensor.AgenticCodeEventBus.event_stream becomes
-// ClaudesensorAgenticCodeEventBusEventStream.
+// topic, e.g. telemetry.AgenticCodeEventBus.event_stream becomes
+// TelemetryAgenticCodeEventBusEventStream.
 func RPCStemForTopicParts(protoPackage, topicMessage, topicField string) string {
 	parts := []string{}
 	if protoPackage != "" {

@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // Package accounting defines the typed event system that replaces unstructured
 // text logging. Every event is a proto message with a known schema. Events flow
@@ -260,7 +261,7 @@ message CommandExecuted {
 }
 
 // =============================================================================
-// Agent Telemetry — subsumes SensorEvent from blueclaude
+// Agent Telemetry — subsumes the earlier SensorEvent
 // =============================================================================
 
 // ToolUsed records an AI agent's use of a tool. [INFO]

@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // server-runtime JAVA client driver (LED-2 phase 3): the GENERATED JAVA C2S
 // CLIENT (c2sm/.../contract/contractclient/ContractApiGrpcClient.java), dialed

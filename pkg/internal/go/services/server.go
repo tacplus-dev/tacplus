@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package services
 
@@ -346,7 +347,7 @@ func (g *GoServerGenerator) generateInternalService() error {
 		importBlock = fmt.Sprintf("\tpb %q\n\tsvc %q", g.TypesModule, g.ServicesModule)
 	}
 
-	content := fmt.Sprintf(`// Copyright (c) 2026 Second Star Cavalier LLC
+	content := header.Copyright(consts.LangGo) + fmt.Sprintf(`
 // Generated service implementation example
 
 package server

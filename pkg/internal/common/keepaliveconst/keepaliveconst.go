@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // Package keepaliveconst defines the platform-wide gRPC keepalive constants.
 // These are the single source of truth that all language generators inject

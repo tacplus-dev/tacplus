@@ -2,7 +2,9 @@
 name = "logger"
 version = "1.0.0"
 edition = "2021"
-authors = ["Second Star Cavalier LLC"]
+{{- if .Author}}
+authors = [{{printf "%q" .Author}}]
+{{- end}}
 
 [dependencies]
 tracing = { workspace = true }

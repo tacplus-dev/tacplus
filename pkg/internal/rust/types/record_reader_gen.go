@@ -1,10 +1,12 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"bytes"
 	"fmt"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"os"
 	"path/filepath"
 	"sort"
@@ -87,7 +89,7 @@ func generateRecordReaders(config *tactype.Config, entries []recordReaderEntry) 
 	if err != nil {
 		return fmt.Errorf("failed to load record_readers template: %w", err)
 	}
-	tmpl, err := template.New("recordreaders").Parse(tmplContent)
+	tmpl, err := template.New("recordreaders").Funcs(header.Funcs()).Parse(tmplContent)
 	if err != nil {
 		return fmt.Errorf("failed to parse record_readers template: %w", err)
 	}

@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // Leak-soak driver: copied into a freshly generated Go model and run there, so
 // the resource counters it prints come from a REAL generated ServiceManager

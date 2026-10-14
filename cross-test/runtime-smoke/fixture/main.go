@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // Runtime-smoke fixture server: hosts the generated go servers for the
 // consumer-contract fixture so python/typescript generated CLIENTS can

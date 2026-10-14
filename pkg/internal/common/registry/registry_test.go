@@ -1091,20 +1091,20 @@ func TestGenerateEmitsVServiceIdentityAndHostTag(t *testing.T) {
 	}
 	protoText := `syntax = "proto3";
 
-package claudesensor;
+package telemetry;
 
 import "sys/spec.proto";
 
-option (spec.vservice) = {id: 30, name: "claudesensor"};
+option (spec.vservice) = {id: 30, name: "telemetry"};
 
 message Ping { string m = 1; }
 
-service ClaudeSensorApi {
+service TelemetryApi {
   option (spec.service_s2s) = {auth_services: ["*"], label: "sensorhost"};
   rpc GetPing(Ping) returns (Ping);
 }
 `
-	if err := os.WriteFile(filepath.Join(vsvcDir, "claudesensor.proto"), []byte(protoText), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(vsvcDir, "telemetry.proto"), []byte(protoText), 0o644); err != nil {
 		t.Fatalf("write vservice proto: %v", err)
 	}
 
@@ -1121,8 +1121,8 @@ service ClaudeSensorApi {
 		InputDir:  dir,
 		Language:  "none",
 	}, []model.ProtoFile{{
-		Package: "claudesensor",
-		RelPath: "vservices/claudesensor.proto",
+		Package: "telemetry",
+		RelPath: "vservices/telemetry.proto",
 	}}, dp)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -1136,16 +1136,16 @@ service ClaudeSensorApi {
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(data, &root); err != nil {
 		t.Fatalf("unmarshal registry.json: %v", err)
 	}
-	leaf := findPackageNode(&root, "vservices/claudesensor")
+	leaf := findPackageNode(&root, "vservices/telemetry")
 	if leaf == nil {
-		t.Fatalf("missing vservices/claudesensor leaf in registry: %s", data)
+		t.Fatalf("missing vservices/telemetry leaf in registry: %s", data)
 	}
 	if len(leaf.Vservices) != 1 {
-		t.Fatalf("vservices = %#v, want one claudesensor entry", leaf.Vservices)
+		t.Fatalf("vservices = %#v, want one telemetry entry", leaf.Vservices)
 	}
 	vsvc := leaf.Vservices[0]
-	if vsvc.Name != "claudesensor" || vsvc.Id != 30 || vsvc.Package != "claudesensor" {
-		t.Fatalf("vservice = (%q, %d, %q), want (claudesensor, 30, claudesensor)",
+	if vsvc.Name != "telemetry" || vsvc.Id != 30 || vsvc.Package != "telemetry" {
+		t.Fatalf("vservice = (%q, %d, %q), want (telemetry, 30, telemetry)",
 			vsvc.Name, vsvc.Id, vsvc.Package)
 	}
 	if len(leaf.Services) != 1 {
@@ -1310,8 +1310,8 @@ func TestCollectEntitlementGrantsIncludesGeneratedEventBusTopicMethods(t *testin
 		// caller never invokes cannot authorize it.
 		eventTopicGrantMethod("eventbus", "AgenticCodeEventBusStateService", "PublishToEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWrite}, verbs.ScopeWrite),
 		eventTopicGrantMethod("eventbus", "AgenticCodeEventBusStateService", "SubscribeToEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWatch}, verbs.ScopeWatch),
-		eventTopicGrantMethod("claudesensor", "AgenticCodeEventBusStateService", "PublishToEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWrite}, verbs.ScopeWrite),
-		eventTopicGrantMethod("claudesensor", "AgenticCodeEventBusStateService", "SubscribeToEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWatch}, verbs.ScopeWatch),
+		eventTopicGrantMethod("telemetry", "AgenticCodeEventBusStateService", "PublishToEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWrite}, verbs.ScopeWrite),
+		eventTopicGrantMethod("telemetry", "AgenticCodeEventBusStateService", "SubscribeToEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWatch}, verbs.ScopeWatch),
 	}
 
 	byToken := entitlementGrantMap(collectEntitlementGrants(root, methods...))
@@ -1321,11 +1321,11 @@ func TestCollectEntitlementGrantsIncludesGeneratedEventBusTopicMethods(t *testin
 		"EVENTBUS_ANY",
 		"EVENTBUS_WRITE_ANY",
 		"EVENTBUS_WATCH_ANY",
-		"CLAUDESENSOR_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_PUBLISH_TO_EVENT_STREAM",
-		"CLAUDESENSOR_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_SUBSCRIBE_TO_EVENT_STREAM",
-		"CLAUDESENSOR_ANY",
-		"CLAUDESENSOR_WRITE_ANY",
-		"CLAUDESENSOR_WATCH_ANY",
+		"TELEMETRY_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_PUBLISH_TO_EVENT_STREAM",
+		"TELEMETRY_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_SUBSCRIBE_TO_EVENT_STREAM",
+		"TELEMETRY_ANY",
+		"TELEMETRY_WRITE_ANY",
+		"TELEMETRY_WATCH_ANY",
 	} {
 		if byToken[want] == nil {
 			t.Fatalf("collectEntitlementGrants missing generated EventBus grant %s; got %#v", want, byToken)
@@ -1339,9 +1339,9 @@ func TestCollectEntitlementGrantsIncludesGeneratedEventBusTopicMethods(t *testin
 	if !reflect.DeepEqual(byToken["EVENTBUS_ANY"].ExpandsTo, wantEventBusAny) {
 		t.Fatalf("EVENTBUS_ANY expands_to = %#v, want %#v", byToken["EVENTBUS_ANY"].ExpandsTo, wantEventBusAny)
 	}
-	wantClaudeWrite := []string{"CLAUDESENSOR_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_PUBLISH_TO_EVENT_STREAM"}
-	if !reflect.DeepEqual(byToken["CLAUDESENSOR_WRITE_ANY"].ExpandsTo, wantClaudeWrite) {
-		t.Fatalf("CLAUDESENSOR_WRITE_ANY expands_to = %#v, want %#v", byToken["CLAUDESENSOR_WRITE_ANY"].ExpandsTo, wantClaudeWrite)
+	wantClaudeWrite := []string{"TELEMETRY_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_PUBLISH_TO_EVENT_STREAM"}
+	if !reflect.DeepEqual(byToken["TELEMETRY_WRITE_ANY"].ExpandsTo, wantClaudeWrite) {
+		t.Fatalf("TELEMETRY_WRITE_ANY expands_to = %#v, want %#v", byToken["TELEMETRY_WRITE_ANY"].ExpandsTo, wantClaudeWrite)
 	}
 }
 

@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package proto
 
@@ -50,14 +51,14 @@ service EventBusTypedService {
 	}
 	const content = `syntax = "proto3";
 
-package claudesensor;
+package telemetry;
 
 import "sys/spec.proto";
 import "services/events.proto";
 
 option (spec.vservice) = {
   id: 30
-  name: "claudesensor"
+  name: "telemetry"
 };
 
 message AgenticCodeEvent {
@@ -91,19 +92,19 @@ message AgenticCodeEventBus {
 		t.Fatalf("ScanVServiceRPCs: %v", err)
 	}
 	want := []VServiceEntry{{
-		Name:    "claudesensor",
+		Name:    "telemetry",
 		FieldID: 30,
 		HostLabel: "events",
 		RPCs: []string{
-			"PublishClaudesensorAgenticCodeEventBusEventStream",
-			"SubscribeClaudesensorAgenticCodeEventBusEventStream",
+			"PublishTelemetryAgenticCodeEventBusEventStream",
+			"SubscribeTelemetryAgenticCodeEventBusEventStream",
 		},
 		// Index-aligned with RPCs. These are what a caller dials; RPCs stay the
 		// flat historical names because they are also the entitlement keys and
 		// the published REST path segments.
 		Routes: []VServiceRoute{
-			{Service: "claudesensor.AgenticCodeEventBusStateService", Method: "PublishToEventStream"},
-			{Service: "claudesensor.AgenticCodeEventBusStateService", Method: "SubscribeToEventStream"},
+			{Service: "telemetry.AgenticCodeEventBusStateService", Method: "PublishToEventStream"},
+			{Service: "telemetry.AgenticCodeEventBusStateService", Method: "SubscribeToEventStream"},
 		},
 	}}
 	if !reflect.DeepEqual(got, want) {

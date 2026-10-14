@@ -1,4 +1,5 @@
-# Copyright (c) 2026 Second Star Cavalier LLC
+# Copyright (c) 2026 Seabeam LLC
+# SPDX-License-Identifier: Apache-2.0
 #
 # Runtime smoke: the generated python CLIENT surfaces against the live go
 # fixture server (cross-test/runtime-smoke/fixture). Ports arrive via env:

@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 //
 // Runtime coverage for W2S REQUEST (ingress) validation in the generated Rust
 // REST dispatch module. A real tonic backend serves the generated

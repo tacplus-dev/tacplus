@@ -1,9 +1,11 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 package types
 
 import (
 	"fmt"
+	"gitlab.com/seabeam/schematic/tacplus/pkg/internal/common/header"
 	"strings"
 	"testing"
 	"text/template"
@@ -90,12 +92,12 @@ func TestRustDiskStoreSchedulerAcceptsAsyncSnapshots(t *testing.T) {
 func TestRustServiceManagerRendersTracePublisherAlias(t *testing.T) {
 	rendered := renderRustServiceManagerForTest(t, smTemplateData{
 		ServiceLabel:     "gateway",
-		TracePublisherFn: "create_claudesensor_trace_event_bus_trace_events_publisher",
+		TracePublisherFn: "create_telemetry_trace_event_bus_trace_events_publisher",
 		Publishers: []publisherEntry{{
-			FnName:        "create_claudesensor_trace_event_bus_trace_events_publisher",
-			LoopFn:        "claudesensor_trace_event_bus_trace_events_publish_loop",
-			VarPrefix:     "claudesensor_trace_event_bus_trace_events",
-			Label:         "claudesensor.TraceEventBus.trace_events publisher",
+			FnName:        "create_telemetry_trace_event_bus_trace_events_publisher",
+			LoopFn:        "telemetry_trace_event_bus_trace_events_publish_loop",
+			VarPrefix:     "telemetry_trace_event_bus_trace_events",
+			Label:         "telemetry.TraceEventBus.trace_events publisher",
 			TargetService: "eventbus",
 			EventTypeName: "TraceEvent",
 			EventTypePath: "crate::types::sys::trace::TraceEvent",
@@ -105,7 +107,7 @@ func TestRustServiceManagerRendersTracePublisherAlias(t *testing.T) {
 
 	for _, want := range []string{
 		"pub async fn create_trace_publisher(&self)",
-		"self.create_claudesensor_trace_event_bus_trace_events_publisher().await",
+		"self.create_telemetry_trace_event_bus_trace_events_publisher().await",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered Rust ServiceManager missing trace publisher alias marker %q:\n%s", want, rendered)
@@ -181,8 +183,8 @@ func TestRustServiceManagerBootstrapPinsTrustDomain(t *testing.T) {
 // layer before reaching the handler. Without this, handler-provided routes
 // accept any-audience tokens (the same hole fixed in go/java by e429f147).
 // This test pin-checks:
-//   1. The template applies AuthEnforcingLayer to the server before add_routes.
-//   2. No code path calls add_routes(additional_routes) without the layer.
+//  1. The template applies AuthEnforcingLayer to the server before add_routes.
+//  2. No code path calls add_routes(additional_routes) without the layer.
 func TestRustServiceManagerEnforcesAuthOnAdditionalServices(t *testing.T) {
 	tmpl, err := loadTemplate("service_manager.rs.tmpl")
 	if err != nil {
@@ -264,7 +266,7 @@ func renderRustServiceManagerForTest(t *testing.T, data smTemplateData) string {
 	if err != nil {
 		t.Fatalf("loadTemplate: %v", err)
 	}
-	tmpl, err := template.New("servicemanager").Parse(tmplStr)
+	tmpl, err := template.New("servicemanager").Funcs(header.Funcs()).Parse(tmplStr)
 	if err != nil {
 		t.Fatalf("parse service_manager template: %v", err)
 	}

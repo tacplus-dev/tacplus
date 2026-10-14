@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 // Minimal ServiceHealth state root used by the wire-corpus serialization
 // fixture; C2S client generation injects ServiceHealthState.
 

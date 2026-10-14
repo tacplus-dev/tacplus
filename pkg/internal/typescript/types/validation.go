@@ -1,4 +1,5 @@
-// Copyright (c) 2026 Second Star Cavalier LLC
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
 
 // TypeScript validation emission: per-message validate functions, assert_*
 // constraint checks, default collection/scalar size bounds, oneof scalar

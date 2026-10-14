@@ -2,15 +2,9 @@
 
 This directory holds plans and design tracks for work that is not current
 tacplus behavior yet. Current behavior lives in [../docs/](../docs/).
-Historical plans, implementation reviews, and completed workstream evidence live
-in [../archive/](../archive/).
 
 ## Future Tracks
 
-- [Open-sourcing tacplus](OPEN_SOURCE.md) — the brief for taking tacplus
-  public: the day-one claim, blockers in order (IP and headers, fresh history,
-  an example project), the code scrub, packaging, decisions only Jody can make,
-  and a verification checklist. Schematic stays closed.
 - [`.tac` sugar format](TAC_SUGAR_FORMAT_PLAN.md) — a lossless keyword dialect
   over annotated `.proto`: five block keywords (`config`/`state`/`s2s`/`c2s`/`c2d`)
   plus a schema-driven bare-`spec`-option rule, transpiled to `.proto` in front of

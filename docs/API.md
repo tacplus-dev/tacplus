@@ -565,7 +565,7 @@ service semantic output lands in the build artifact `registry.json` `RpcInfo`
 non-canonical verbs, folded synonyms, noun-first names, and
 verb/pattern/cardinality mismatches fail generation before registry,
 entitlement, or REST metadata can be emitted. Full design genealogy:
-`../archive/RPC_PATTERNS_AND_VERBS_PLAN.md`.
+the archived RPC_PATTERNS_AND_VERBS_PLAN (not in this repository).
 
 ## Auth And Namespace Policy
 
@@ -635,7 +635,7 @@ person is correlated only via the stable IDP `sub`. External tokens are
 rejected by generated internal auth.
 
 Full design rationale and decision record:
-`../archive/SPIFFE_IDENTITY_NORMALIZATION_PLAN.md`.
+the archived SPIFFE_IDENTITY_NORMALIZATION_PLAN (not in this repository).
 
 ## Validation And Errors
 

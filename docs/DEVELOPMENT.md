@@ -522,7 +522,7 @@ backtracking engines.
 
 Build-time invariants the generator and gates must hold (contract in
 `API.md` → SPIFFE Identity; genealogy in
-`../archive/SPIFFE_IDENTITY_NORMALIZATION_PLAN.md`):
+the archived SPIFFE_IDENTITY_NORMALIZATION_PLAN (not in this repository)):
 
 - No raw `spiffe://` construction, splitting, or prefix comparison outside the
   generated `sys/spiffe` (and its tests). All identity work goes through the
@@ -549,7 +549,7 @@ Build-time invariants the generator and gates must hold (contract in
 ### EventBus Model Rules
 
 The user-facing contract is in `API.md` → EventBus Topics. Generator-side
-rules (genealogy in `../archive/EVENTBUS_PUBSUB_MODEL_PLAN.md`):
+rules (genealogy in the archived EVENTBUS_PUBSUB_MODEL_PLAN (not in this repository)):
 
 - Canonical topic identity is `<proto-package>.<topic-message>.<topic-field>`,
   stored as structured metadata after validation — never carried around as an
@@ -573,7 +573,7 @@ rules (genealogy in `../archive/EVENTBUS_PUBSUB_MODEL_PLAN.md`):
 ### Verb Drift Is An Audit Norm, Not A Gate
 
 One method = one static verb = one access kind. The build gate (`EnforceVerbs`,
-implemented under archived `../archive/MVP_PLAN.md` WS-G12) enforces naming,
+implemented under archived the archived MVP_PLAN (not in this repository) WS-G12) enforces naming,
 registry membership, and verb↔pattern agreement at descriptor construction from
 the compiler-read dictionary
 `pkg/internal/common/verbs/registry.json`; it cannot see *runtime* drift — a

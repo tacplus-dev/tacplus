@@ -22,7 +22,7 @@ Read these before forming findings:
   proxy code, state access code, persistence code, and transport/client code.
 - tacplus `docs/THEORY.md`, `docs/API.md`, `docs/USER.md`, and
   `docs/API.md` (RPC Patterns And Verbs; genealogy
-  `../archive/RPC_PATTERNS_AND_VERBS_PLAN.md`).
+  the archived RPC_PATTERNS_AND_VERBS_PLAN (not in this repository)).
 - CI/build logs for the consumer, especially failures after a tacplus version
   change.
 

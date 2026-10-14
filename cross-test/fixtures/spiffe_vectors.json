@@ -1,5 +1,5 @@
 {
-  "_comment": "Canonical SPIFFE identity test corpus (plan: archive/SPIFFE_IDENTITY_NORMALIZATION_PLAN.md, Validation And Test Vectors). Single source of truth: every generated language's sys/spiffe test asserts THIS corpus, so identity construction/parse/comparison is byte-identical across Go, Rust, Python, TypeScript, and Java. The Go reference test (pkg/templates/go/sys/spiffe/spiffe_test.go.tmpl) is the executable mirror of this file.",
+  "_comment": "Canonical SPIFFE identity test corpus (plan: the archived SPIFFE_IDENTITY_NORMALIZATION_PLAN, Validation And Test Vectors). Single source of truth: every generated language's sys/spiffe test asserts THIS corpus, so identity construction/parse/comparison is byte-identical across Go, Rust, Python, TypeScript, and Java. The Go reference test (pkg/templates/go/sys/spiffe/spiffe_test.go.tmpl) is the executable mirror of this file.",
   "scheme_version": "v1",
   "construction": {
     "service": {

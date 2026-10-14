@@ -1,0 +1,18 @@
+# gitleaks configuration. Every match below is code that assembles PEM text at
+# runtime, or a redaction/security test fixture that must contain a token-shaped
+# string to prove it gets redacted. Re-run: gitleaks git . && gitleaks dir .
+[extend]
+useDefault = true
+
+[allowlist]
+description = "PEM assembly in generated service managers, and redaction test fixtures"
+paths = [
+  '''pkg/templates/(typescript|python|rust)/types/service_manager\.(ts|py|rs)\.tmpl''',
+  '''pkg/templates/rust/chassis/logger/src/redact\.rs\.tmpl''',
+  '''pkg/templates/go/chassis/logger/logger_security_test\.go\.tmpl''',
+  '''pkg/templates/python/chassis/logger/test_security\.py\.tmpl''',
+  '''pkg/templates/java/chassis/logger/LogbackConfiguratorSecurityTest\.java\.tmpl''',
+  '''pkg/templates/java/chassis/grpcconfig/RedactionInstalledTest\.java\.tmpl''',
+  '''pkg/templates/go/chassis/collection/page_behavior_test\.go\.tmpl''',
+  '''^target/''',
+]

@@ -36,8 +36,7 @@ type goRestDispatchArm struct {
 	ValidateOutput string
 }
 
-// goRestDispatchRoute is one route table entry. RedirectField is the key the
-// Go ToJSON helpers emit, which is the proto field name.
+// goRestDispatchRoute is one route table entry.
 type goRestDispatchRoute struct {
 	HttpPath             string
 	GrpcPath             string
@@ -51,7 +50,8 @@ type goRestDispatchRoute struct {
 	ClientStreaming      bool
 	TargetNamespaceField string
 	FormBody             bool
-	RedirectField        string
+	RedirectField        string // the proto3 JSON name, the canonical key across languages
+	RedirectFieldProto   string // the proto field name, which the Go ToJSON helpers emit
 }
 
 type goRestDispatchImport struct {
@@ -108,19 +108,19 @@ func generateGoRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, 
 		if a.IsEmptyInput {
 			imports["emptypb"] = wellKnownGoType["Empty"].importPath
 		} else {
-			pkg, typeName := goRestDispatchSplitType(a.InputType, pkgToDir)
+			pkg := goRestDispatchTypePackage(a.InputType, pkgToDir)
 			alias := goRestDispatchTypesImport(config, imports, pkg, pkgToDir)
-			arm.FromJSON = alias + "." + typeName + "FromJSON"
+			arm.FromJSON = alias + "." + a.InputSimpleName + "FromJSON"
 			if a.ValidateInput {
-				arm.ValidateInput = alias + ".Validate" + typeName
+				arm.ValidateInput = alias + ".Validate" + a.InputSimpleName
 			}
 		}
 		if !a.IsEmptyOutput {
-			pkg, typeName := goRestDispatchSplitType(a.OutputType, pkgToDir)
+			pkg := goRestDispatchTypePackage(a.OutputType, pkgToDir)
 			alias := goRestDispatchTypesImport(config, imports, pkg, pkgToDir)
-			arm.ToJSON = alias + "." + typeName + "ToJSON"
+			arm.ToJSON = alias + "." + a.OutputSimpleName + "ToJSON"
 			if a.ValidateOutput {
-				arm.ValidateOutput = alias + ".Validate" + typeName
+				arm.ValidateOutput = alias + ".Validate" + a.OutputSimpleName
 			}
 		}
 		if a.ServerStreaming {
@@ -143,7 +143,8 @@ func generateGoRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, 
 			ClientStreaming:      r.ClientStreaming,
 			TargetNamespaceField: r.TargetNamespaceField,
 			FormBody:             r.FormBody,
-			RedirectField:        r.RedirectField,
+			RedirectField:        r.RedirectJSONName,
+			RedirectFieldProto:   r.RedirectField,
 		})
 	}
 	aliases := make([]string, 0, len(imports))
@@ -226,21 +227,8 @@ func goRestDispatchTypesImport(config *tactype.Config, imports map[string]string
 	return alias
 }
 
-// goRestDispatchSplitType splits a fully-qualified proto type into its package
-// (the longest known package prefix) and its Go type name, with nested
-// messages joined by "_" as protoc-gen-go names them.
-func goRestDispatchSplitType(fullType string, pkgToDir map[string]string) (pkg, typeName string) {
-	fullType = strings.TrimPrefix(fullType, ".")
-	for candidate := range pkgToDir {
-		if strings.HasPrefix(fullType, candidate+".") && len(candidate) > len(pkg) {
-			pkg = candidate
-		}
-	}
-	if pkg == "" {
-		if dot := strings.LastIndex(fullType, "."); dot >= 0 {
-			pkg = fullType[:dot]
-		}
-	}
-	typeName = strings.TrimPrefix(fullType, pkg+".")
-	return pkg, strings.ReplaceAll(typeName, ".", "_")
+// goRestDispatchTypePackage is the proto package of a fully-qualified type:
+// the longest known package prefix, so a dotted package resolves whole.
+func goRestDispatchTypePackage(fullType string, pkgToDir map[string]string) string {
+	return restdispatch.TypePackage(fullType, pkgToDir)
 }

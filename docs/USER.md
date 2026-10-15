@@ -442,7 +442,8 @@ rpc BrokerFormPostCallback(FormPostCallbackRequest) returns (FormPostCallbackRes
 Both are emitted into the generated route table (Rust
 `rest_dispatch::RouteInfo` `form_body` / `redirect_field`, Go
 `restdispatch.RouteInfo` `FormBody` / `RedirectField`, Java
-`RestDispatch.RouteInfo` `formBody` / `redirectField`) and carried out by its
+`RestDispatch.RouteInfo` `formBody` / `redirectField`; the redirect field is
+spelled as its proto3 JSON name in all three) and carried out by its
 `form_body_to_json` and `redirect_response` (Rust), `FormBodyToJSON` and
 `RedirectResponse` (Go) or `formBodyToJson` and `redirectResponse` (Java),
 which a REST host calls. Generation refuses the option on a streaming RPC, on

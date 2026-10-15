@@ -94,15 +94,16 @@ func TestJavaRestDispatchEmptyInputSkipsDecodeAndValidation(t *testing.T) {
 func TestJavaRestDispatchRouteTableLiterals(t *testing.T) {
 	out := renderJavaRestDispatchForTest(t, javaRestDispatchData{
 		Routes: []javaRestDispatchRoute{{
-			HttpPath:          "/signin/Signin/Call\"back\n",
-			GrpcPath:          "/signin.Signin/Callback",
-			ServiceID:         "signin",
-			HttpMethods:       []string{"POST", "GET"},
-			AuthPolicy:        "NO_AUTH",
-			EntitlementScopes: []string{"ANY", "READ"},
-			CapabilityScope:   "READ",
-			FormBody:          true,
-			RedirectField:     "redirect_url",
+			HttpPath:           "/signin/Signin/Call\"back\n",
+			GrpcPath:           "/signin.Signin/Callback",
+			ServiceID:          "signin",
+			HttpMethods:        []string{"POST", "GET"},
+			AuthPolicy:         "NO_AUTH",
+			EntitlementScopes:  []string{"ANY", "READ"},
+			CapabilityScope:    "READ",
+			FormBody:           true,
+			RedirectField:      "redirectUrl",
+			RedirectFieldProto: "redirect_url",
 		}},
 	})
 	for _, want := range []string{
@@ -110,6 +111,7 @@ func TestJavaRestDispatchRouteTableLiterals(t *testing.T) {
 		`List.of("POST", "GET"),`,
 		`AuthPolicy.NO_AUTH,`,
 		`List.of("ANY", "READ"),`,
+		`"redirectUrl",`,
 		`"redirect_url")`,
 	} {
 		if !strings.Contains(out, want) {

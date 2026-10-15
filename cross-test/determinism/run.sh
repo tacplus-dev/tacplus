@@ -13,6 +13,9 @@ set -euo pipefail
 # `diff -r` and must match exactly, INCLUDING .hash.json and registry.json.
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=../lib/tree-guard.sh
+source "$ROOT_DIR/cross-test/lib/tree-guard.sh"
+tree_guard_begin "$ROOT_DIR"
 PROTO_SRC="$ROOT_DIR/cross-test/proto"
 # The requires-device fixture is the only proto graph in the tree that declares a
 # (spec.service_state) with a plain singleton boundary (ServiceHealth.lock_settings),
@@ -172,4 +175,5 @@ if [[ "$KEEP" != true ]]; then
   rm -rf "$WORK_ROOT"
 fi
 
+tree_guard_end
 echo "==> Determinism gate passed"

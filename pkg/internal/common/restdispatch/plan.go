@@ -69,19 +69,21 @@ type Route struct {
 // Arm is one dispatchable method: a unary or server-streaming REST route whose
 // request the generated dispatcher decodes, validates and forwards over gRPC.
 type Arm struct {
-	GrpcPath        string
-	ServiceID       string
-	PackageName     string // proto package of the service
-	ServiceName     string
-	ServiceDir      string // the service's own parent dir, see PkgToDirFor
-	MethodName      string
-	InputType       string // fully-qualified proto input type
-	OutputType      string // fully-qualified proto output type
-	IsEmptyInput    bool
-	IsEmptyOutput   bool
-	ValidateInput   bool
-	ValidateOutput  bool
-	ServerStreaming bool
+	GrpcPath         string
+	ServiceID        string
+	PackageName      string // proto package of the service
+	ServiceName      string
+	ServiceDir       string // the service's own parent dir, see PkgToDirFor
+	MethodName       string
+	InputType        string // fully-qualified proto input type
+	OutputType       string // fully-qualified proto output type
+	InputSimpleName  string // the parser's simple input type name, as the other generators key helpers by
+	OutputSimpleName string
+	IsEmptyInput     bool
+	IsEmptyOutput    bool
+	ValidateInput    bool
+	ValidateOutput   bool
+	ServerStreaming  bool
 }
 
 // Plan is the resolved route table and dispatch arms, in emission order.
@@ -249,20 +251,30 @@ func Collect(dp *parser.DescriptorParser, config *tactype.Config, services []Ser
 			}
 			isEmptyInput := method.FullInputType == "google.protobuf.Empty"
 			isEmptyOutput := method.FullOutputType == "google.protobuf.Empty"
+			// The dispatchers decode and encode with the generated per-message
+			// helpers, which exist for user messages and not for the protobuf
+			// runtime's well-known types; Empty is the one well-known type they
+			// special-case, and only as a unary response. Refuse the rest here,
+			// once, rather than emit a plane that does not compile.
+			if err := dispatchableShape(grpcPath, method, isEmptyInput, isEmptyOutput); err != nil {
+				return nil, err
+			}
 			plan.Arms = append(plan.Arms, Arm{
-				GrpcPath:        grpcPath,
-				ServiceID:       serviceID,
-				PackageName:     svc.PackageName,
-				ServiceName:     svc.ServiceName,
-				ServiceDir:      svc.ParentDir,
-				MethodName:      method.Name,
-				InputType:       method.FullInputType,
-				OutputType:      method.FullOutputType,
-				IsEmptyInput:    isEmptyInput,
-				IsEmptyOutput:   isEmptyOutput,
-				ValidateInput:   !isEmptyInput && CanValidate(method.FullInputType),
-				ValidateOutput:  !isEmptyOutput && CanValidate(method.FullOutputType),
-				ServerStreaming: method.ServerStreaming,
+				GrpcPath:         grpcPath,
+				ServiceID:        serviceID,
+				PackageName:      svc.PackageName,
+				ServiceName:      svc.ServiceName,
+				ServiceDir:       svc.ParentDir,
+				MethodName:       method.Name,
+				InputType:        method.FullInputType,
+				OutputType:       method.FullOutputType,
+				InputSimpleName:  method.InputType,
+				OutputSimpleName: method.OutputType,
+				IsEmptyInput:     isEmptyInput,
+				IsEmptyOutput:    isEmptyOutput,
+				ValidateInput:    !isEmptyInput && CanValidate(method.FullInputType),
+				ValidateOutput:   !isEmptyOutput && CanValidate(method.FullOutputType),
+				ServerStreaming:  method.ServerStreaming,
 			})
 		}
 	}
@@ -417,6 +429,23 @@ func collectProxyAuthDisabledRoutes(dp *parser.DescriptorParser, svc Service, pl
 	return nil
 }
 
+// dispatchableShape refuses a REST-dispatchable method whose request or
+// response the generated dispatchers cannot encode: a google.protobuf.* type
+// other than Empty (no generated JSON helpers exist for the runtime's
+// well-known types), or Empty as a server-streaming response (there is no
+// JSON to stream).
+func dispatchableShape(grpcPath string, method *parser.MethodInfo, isEmptyInput, isEmptyOutput bool) error {
+	for _, t := range []struct{ leg, fullType string }{{"request", method.FullInputType}, {"response", method.FullOutputType}} {
+		if strings.HasPrefix(strings.TrimPrefix(t.fullType, "."), "google.protobuf.") && !CanValidate(t.fullType) && t.fullType != "google.protobuf.Empty" {
+			return fmt.Errorf("%s: REST dispatch cannot encode a %s of well-known type %s; wrap it in a message of your own", grpcPath, t.leg, t.fullType)
+		}
+	}
+	if method.ServerStreaming && isEmptyOutput {
+		return fmt.Errorf("%s: REST dispatch cannot stream google.protobuf.Empty responses; declare a response message", grpcPath)
+	}
+	return nil
+}
+
 // RouteIdentity resolves the two identities a route carries: ServiceID, the
 // physical service the gateway dials, and EntitlementService, the audience it
 // checks the caller's token against (empty when it is ServiceID's own).
@@ -466,6 +495,25 @@ func AuthPolicy(svc *parser.ServiceInfo, method *parser.MethodInfo) string {
 		return AuthAnyUser
 	}
 	return AuthEntitled
+}
+
+// TypePackage is the proto package of a fully-qualified type: the longest
+// known package among the keys of known, so a dotted package resolves whole;
+// everything before the last dot when the package is unknown.
+func TypePackage[V any](fullType string, known map[string]V) string {
+	fullType = strings.TrimPrefix(fullType, ".")
+	pkg := ""
+	for candidate := range known {
+		if strings.HasPrefix(fullType, candidate+".") && len(candidate) > len(pkg) {
+			pkg = candidate
+		}
+	}
+	if pkg == "" {
+		if dot := strings.LastIndex(fullType, "."); dot >= 0 {
+			pkg = fullType[:dot]
+		}
+	}
+	return pkg
 }
 
 // CanValidate reports whether a message type has a generated validator: user

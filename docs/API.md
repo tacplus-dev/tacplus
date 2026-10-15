@@ -207,10 +207,20 @@ All three languages plan the same route table and dispatch arms from one
 shared planner (`pkg/internal/common/restdispatch`): which routes exist, what
 each dials, whom it entitles callers against, and which methods can be
 dispatched at all are decided once, and each language renders only its own
-client, JSON and validator names. One spelling differs by design: a
-`(spec.rest_browser)` `redirect_field` is carried as the key the language's
-JSON encoder emits, the proto3 JSON name in Rust (`redirectUrl`) and the proto
-field name in Go and Java (`redirect_url`).
+client, JSON and validator names. A `(spec.rest_browser)` `redirect_field` is
+carried in every language's route table as its proto3 JSON name
+(`redirectUrl`); because the Go and Java JSON helpers emit the proto field
+name (`redirect_url`), their route entries also carry that spelling and the
+redirect lookup accepts either. A redirect URL that is not a valid HTTP header
+value (control or non-ASCII bytes) is answered `502` in all three languages,
+never written into `Location`.
+
+The planner refuses, at generation time, a dispatchable route whose request
+or response is a `google.protobuf.*` well-known type other than `Empty`, and a
+server-streaming route whose response is `Empty`: the dispatchers encode and
+decode with the generated per-message helpers, which do not exist for the
+protobuf runtime's types, and there is nothing to stream for `Empty`. Wrap
+such a payload in a message of your own.
 
 Auth-disabled methods skip token lookup and authorization but still validate
 messages. Auth-enabled methods must not reach the handler without a valid token

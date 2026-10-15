@@ -5,6 +5,7 @@ package restdispatch
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
@@ -151,5 +152,35 @@ func TestCanValidateSkipsWellKnownTypes(t *testing.T) {
 		if got := CanValidate(fullType); got != want {
 			t.Errorf("CanValidate(%q) = %v, want %v", fullType, got, want)
 		}
+	}
+}
+
+func TestDispatchableShapeRefusesWhatTheDispatchersCannotEncode(t *testing.T) {
+	cases := []struct {
+		name    string
+		method  parser.MethodInfo
+		wantErr string
+	}{
+		{"user messages", parser.MethodInfo{FullInputType: "a.Req", FullOutputType: "a.Resp"}, ""},
+		{"empty unary response", parser.MethodInfo{FullInputType: "a.Req", FullOutputType: "google.protobuf.Empty"}, ""},
+		{"empty request", parser.MethodInfo{FullInputType: "google.protobuf.Empty", FullOutputType: "a.Resp", ServerStreaming: true}, ""},
+		{"well-known request", parser.MethodInfo{FullInputType: "google.protobuf.Timestamp", FullOutputType: "a.Resp"}, "request of well-known type google.protobuf.Timestamp"},
+		{"well-known response", parser.MethodInfo{FullInputType: "a.Req", FullOutputType: "google.protobuf.Struct"}, "response of well-known type google.protobuf.Struct"},
+		{"empty streamed response", parser.MethodInfo{FullInputType: "a.Req", FullOutputType: "google.protobuf.Empty", ServerStreaming: true}, "cannot stream google.protobuf.Empty"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := tc.method
+			err := dispatchableShape("/a.S/M", &m, m.FullInputType == "google.protobuf.Empty", m.FullOutputType == "google.protobuf.Empty")
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected refusal: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("got %v, want an error containing %q", err, tc.wantErr)
+			}
+		})
 	}
 }

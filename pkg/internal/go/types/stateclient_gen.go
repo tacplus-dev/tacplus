@@ -179,7 +179,7 @@ func generateStateClientLib(config *tactype.Config) error {
 	if texInfo.X509MintMethod == "" {
 		return fmt.Errorf("token minter %s.%s must define an RPC accepting X509MintRequest and returning X509CertChain", texInfo.Package, texInfo.ServiceName)
 	}
-	stateServiceTypesPath := fmt.Sprintf("%s/types/%s", config.ModuleBasePath, texInfo.Dir)
+	stateServiceTypesPath := exchangerTypesPath(config, texInfo)
 
 	jwkTypesPath := fmt.Sprintf("%s/types/sys/jwk", config.ModuleBasePath)
 	jwkLibPath := fmt.Sprintf("%s/chassis/jwk", config.ModuleBasePath)
@@ -507,7 +507,7 @@ func generateIdentityManager(config *tactype.Config) error {
 		KeepalivePermitMinTimeSecs     int
 	}{
 		GrpcconfigTypesPath:            fmt.Sprintf("%s/types/sys/grpcconfig", config.ModuleBasePath),
-		StateServiceTypesPath:          fmt.Sprintf("%s/types/%s", config.ModuleBasePath, texInfo.Dir),
+		StateServiceTypesPath:          exchangerTypesPath(config, texInfo),
 		CommonTypesPath:                fmt.Sprintf("%s/types/sys/tokenrequest", config.ModuleBasePath),
 		CloudIdentityTypesPath:         fmt.Sprintf("%s/types/sys/cloudidentity", config.ModuleBasePath),
 		CloudVendorTypesPath:           fmt.Sprintf("%s/types/sys/cloudvendor", config.ModuleBasePath),
@@ -768,7 +768,7 @@ func generateClientIdentityManager(config *tactype.Config) error {
 			return fmt.Errorf("client token minter %s.%s must define an RPC accepting TokenMintRequest and returning TokenMintResponse", clientInfo.Package, clientInfo.ServiceName)
 		}
 		hasClientTokenExchanger = true
-		clientMintTypesPath = fmt.Sprintf("%s/types/%s", config.ModuleBasePath, clientInfo.Dir)
+		clientMintTypesPath = exchangerTypesPath(config, clientInfo)
 		clientMintServiceName = clientInfo.ServiceName
 		clientTokenMintMethod = clientInfo.TokenMintMethod
 	}
@@ -1659,4 +1659,16 @@ func findPackageDir(dp *parser.DescriptorParser, pkg string) string {
 func extractSimpleTypeName(fullType string) string {
 	parts := strings.Split(fullType, ".")
 	return parts[len(parts)-1]
+}
+
+// exchangerTypesPath is the import path of a token exchanger's generated types
+// package. Types are emitted by proto PACKAGE under the proto file's
+// directory, so the file's own name does not take part: a minter declared in
+// services/authority.proto with package "mint" lives at types/services/mint.
+func exchangerTypesPath(config *tactype.Config, info *parser.TokenExchangerInfo) string {
+	parentDir := filepath.Dir(info.Dir)
+	if parentDir == "." {
+		parentDir = info.Package
+	}
+	return config.TypesImportPath(parentDir, info.Package)
 }

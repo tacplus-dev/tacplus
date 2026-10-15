@@ -153,10 +153,13 @@ type RouteInfo struct {
 	// FormBody is (spec.rest_browser).form_body: the route also accepts an
 	// application/x-www-form-urlencoded body. See FormBodyToJSON.
 	FormBody bool
-	// RedirectField is (spec.rest_browser).redirect_field, as the key it
-	// carries in the route's JSON response. When set, the route answers 303 to
-	// that field's URL instead of JSON. See RedirectResponse.
+	// RedirectField is (spec.rest_browser).redirect_field as its proto3 JSON
+	// name, the key every language's route table carries. When set, the route
+	// answers 303 to that field's URL instead of JSON. See RedirectResponse.
 	RedirectField string
+	// RedirectFieldProto is the same field's proto name, the key the Go ToJSON
+	// helpers emit; RedirectResponse accepts either spelling.
+	RedirectFieldProto string
 }
 
 // Routes is every REST route, generated from proto annotations.
@@ -176,6 +179,7 @@ var Routes = []RouteInfo{
 		TargetNamespaceField: {{goStr .TargetNamespaceField}},
 		FormBody:             {{.FormBody}},
 		RedirectField:        {{goStr .RedirectField}},
+		RedirectFieldProto:   {{goStr .RedirectFieldProto}},
 	},
 {{- end}}
 }
@@ -185,22 +189,31 @@ var Routes = []RouteInfo{
 // becomes one string, keyed by proto field name, and a field left out is left
 // unset. Any other route or content type returns the body unchanged, so a JSON
 // request to a form route is served exactly as before. A key sent more than
-// once is refused instead of letting one copy win.
+// once is refused instead of letting one copy win. Pairs are split on "&"
+// only, as the Rust and Java planes do; a ";" is value content.
 func FormBodyToJSON(route *RouteInfo, contentType string, body []byte) ([]byte, *HTTPError) {
 	mediaType, _, _ := mime.ParseMediaType(contentType)
 	if !route.FormBody || !strings.EqualFold(mediaType, "application/x-www-form-urlencoded") {
 		return body, nil
 	}
-	pairs, err := url.ParseQuery(string(body))
-	if err != nil {
-		return nil, httpError(http.StatusBadRequest, fmt.Sprintf("invalid form body: %v", err))
-	}
-	fields := make(map[string]string, len(pairs))
-	for key, values := range pairs {
-		if len(values) > 1 {
+	fields := make(map[string]string)
+	for _, pair := range strings.Split(string(body), "&") {
+		if pair == "" {
+			continue
+		}
+		rawKey, rawValue, _ := strings.Cut(pair, "=")
+		key, err := url.QueryUnescape(rawKey)
+		if err != nil {
+			return nil, httpError(http.StatusBadRequest, fmt.Sprintf("invalid form body: %v", err))
+		}
+		value, err := url.QueryUnescape(rawValue)
+		if err != nil {
+			return nil, httpError(http.StatusBadRequest, fmt.Sprintf("invalid form body: %v", err))
+		}
+		if _, dup := fields[key]; dup {
 			return nil, httpError(http.StatusBadRequest, fmt.Sprintf("invalid form body: field %s sent more than once", key))
 		}
-		fields[key] = values[0]
+		fields[key] = value
 	}
 	encoded, err := json.Marshal(fields)
 	if err != nil {
@@ -213,7 +226,8 @@ func FormBodyToJSON(route *RouteInfo, contentType string, body []byte) ([]byte, 
 // its JSON response carries in that field, with Cache-Control: no-store, in
 // place of the JSON body, and reports true. It reports false without writing
 // for any other route, so the caller answers JSON as before. A response
-// without a usable URL in the field is a backend fault.
+// without a usable URL in the field, or with one that is not a valid header
+// value, is a backend fault.
 func RedirectResponse(route *RouteInfo, responseJSON string, w http.ResponseWriter) bool {
 	if route.RedirectField == "" {
 		return false
@@ -221,15 +235,31 @@ func RedirectResponse(route *RouteInfo, responseJSON string, w http.ResponseWrit
 	var fields map[string]json.RawMessage
 	var location string
 	if err := json.Unmarshal([]byte(responseJSON), &fields); err == nil {
-		_ = json.Unmarshal(fields[route.RedirectField], &location)
+		raw, ok := fields[route.RedirectField]
+		if !ok {
+			raw = fields[route.RedirectFieldProto]
+		}
+		_ = json.Unmarshal(raw, &location)
 	}
-	if location == "" {
+	if location == "" || !validHeaderValue(location) {
 		httpError(http.StatusBadGateway, fmt.Sprintf("response carries no redirect URL in %s", route.RedirectField)).Write(w)
 		return true
 	}
 	w.Header().Set("Location", location)
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusSeeOther)
+	return true
+}
+
+// validHeaderValue reports whether s may be sent as an HTTP header value: no
+// control characters and no bytes outside visible ASCII, the same test the
+// Rust plane applies before answering a redirect.
+func validHeaderValue(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c > 0x7e {
+			return false
+		}
+	}
 	return true
 }
 
@@ -321,14 +351,15 @@ func DispatchStream(ctx context.Context, dispatcher Dispatcher, grpcPath string,
 			GrpcErr(err).Write(w)
 			return
 		}
-		// The backend's answer to the request itself (a status before any
-		// message) is an HTTP error, not an event on an open stream.
-		msg, err := stream.Recv()
-		if err != nil && !errors.Is(err, io.EOF) {
+		// The backend's answer to the request itself (a status before it
+		// sends headers) is an HTTP error; once headers arrive the stream is
+		// open and a later status is an SSE error event, as in the Rust plane.
+		if _, err := stream.Header(); err != nil {
 			GrpcErr(err).Write(w)
 			return
 		}
 		sse := newSSEWriter(w)
+		msg, err := stream.Recv()
 		for err == nil {
 {{- if .ValidateOutput}}
 			if verr := {{.ValidateOutput}}(msg); verr != nil {

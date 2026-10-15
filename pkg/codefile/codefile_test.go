@@ -4,6 +4,7 @@
 package codefile
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -432,8 +433,8 @@ Foo.B,
 `
 	want := `export function values(): Foo[] {
   return [
-  Foo.A,
-  Foo.B,
+    Foo.A,
+    Foo.B,
 ];}
 `
 	got := IndentCode(TypeScript, input)
@@ -483,8 +484,8 @@ throw new Error('invalid');
 `
 	want := `export function fooValues(): Foo[] {
   return [
-  Foo.A,
-  Foo.B,
+    Foo.A,
+    Foo.B,
 ];}
 export function parseFoo(s: string): Foo {
   if (!s) {
@@ -514,4 +515,43 @@ func containsAt(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// A multi-line argument list or array literal is a continuation of its
+// statement: the lines inside the open parenthesis keep one extra level, and
+// the line that closes it returns to the statement's indent. Before this, the
+// brace-only pass flattened every continuation line to the block's indent.
+func TestIndentCodeKeepsContinuationLinesInsideParentheses(t *testing.T) {
+	raw := strings.Join([]string{
+		"class A {",
+		"public static final List<R> ROUTES = List.of(",
+		"new R(",
+		"\"a\",",
+		"\"b\")",
+		");",
+		"void m() {",
+		"call(",
+		"x,",
+		"y);",
+		"}",
+		"}",
+	}, "\n")
+	want := strings.Join([]string{
+		"class A {",
+		"    public static final List<R> ROUTES = List.of(",
+		"        new R(",
+		"            \"a\",",
+		"            \"b\")",
+		"    );",
+		"    void m() {",
+		"        call(",
+		"            x,",
+		"            y);",
+		"    }",
+		"}",
+		"",
+	}, "\n")
+	if got := IndentCode(Java, raw); got != want {
+		t.Fatalf("IndentCode continuation indent wrong:\n got:\n%s\nwant:\n%s", got, want)
+	}
 }

@@ -25,6 +25,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=../lib/tree-guard.sh
+source "$ROOT_DIR/cross-test/lib/tree-guard.sh"
+tree_guard_begin "$ROOT_DIR"
 PROTO_SRC="$ROOT_DIR/cross-test/w2s-validate/proto"
 TESTDATA="$ROOT_DIR/cross-test/w2s-validate/testdata"
 # shellcheck source=../lib/java-compile.sh
@@ -168,3 +171,4 @@ for language in $LANGUAGES; do
     *) die "unsupported language: $language" ;;
   esac
 done
+tree_guard_end

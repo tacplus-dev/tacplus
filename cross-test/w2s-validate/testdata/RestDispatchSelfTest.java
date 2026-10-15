@@ -97,7 +97,9 @@ public class RestDispatchSelfTest {
         public void brokerFormCallback(Signin.FormCallbackRequest request, StreamObserver<Signin.FormCallbackResponse> observer) {
             last.set(request);
             Signin.FormCallbackResponse.Builder response = Signin.FormCallbackResponse.newBuilder();
-            if (!"no-redirect".equals(request.getState())) {
+            if ("bad-redirect".equals(request.getState())) {
+                response.setRedirectUrl("https://app.example/\r\nSet-Cookie: x=1");
+            } else if (!"no-redirect".equals(request.getState())) {
                 response.setRedirectUrl(REDIRECT_URL);
             }
             observer.onNext(response.build());
@@ -219,8 +221,10 @@ public class RestDispatchSelfTest {
     private static void testRoutesCarryTheAnnotation() {
         RestDispatch.RouteInfo form = route(FORM_PATH);
         check(form.formBody, "rest_browser form_body not emitted into ROUTES");
-        // The Java Helpers spell redirect_url as its proto field name.
-        check("redirect_url".equals(form.redirectField), "rest_browser redirect_field = " + form.redirectField + ", want redirect_url");
+        // The route table carries the proto3 JSON name in every language; the
+        // Java Helpers emit the proto field name, which the lookup also accepts.
+        check("redirectUrl".equals(form.redirectField) && "redirect_url".equals(form.redirectFieldProto),
+            "rest_browser redirect_field = " + form.redirectField + " / " + form.redirectFieldProto + ", want redirectUrl / redirect_url");
         check(form.authPolicy == RestDispatch.AuthPolicy.NO_AUTH, "RPC_FLAG_PUBLIC_NO_AUTH must plan NO_AUTH");
 
         RestDispatch.RouteInfo jsonOnly = route(UNARY_PATH);
@@ -294,6 +298,14 @@ public class RestDispatchSelfTest {
         }
     }
 
+    private static void testRedirectWithAnInvalidHeaderValueIsABackendFault() throws Exception {
+        try (Backend b = new Backend(new RecordingSignin())) {
+            Recorder rec = post(b.dispatcher, FORM, "state=bad-redirect");
+            check(rec.status == 502, "a redirect URL that is not a header value must be a 502: " + rec.status + " " + rec.body);
+            check(!rec.headers.containsKey("Location"), "a 502 must not carry a Location");
+        }
+    }
+
     private static void testJsonRouteAnswersJson() {
         Recorder rec = new Recorder();
         check(!RestDispatch.redirectResponse(route(UNARY_PATH), "{\"owner\":\"a@b.example\"}", rec),
@@ -310,6 +322,7 @@ public class RestDispatchSelfTest {
         testFormBodyIgnoresAFieldTheRequestLacks(); ran.add("form body unknown field");
         testJsonBodyIsUnchanged(); ran.add("JSON body unchanged");
         testRedirectWithoutAUrlIsABackendFault(); ran.add("redirect without URL");
+        testRedirectWithAnInvalidHeaderValueIsABackendFault(); ran.add("redirect with invalid header value");
         testJsonRouteAnswersJson(); ran.add("JSON route answers JSON");
         if (failures > 0) {
             System.err.println("RestDispatchSelfTest: " + failures + " failure(s) across " + ran);

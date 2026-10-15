@@ -153,16 +153,18 @@ public final class RestDispatch {
         /** (spec.rest_browser).form_body: the route also accepts an application/x-www-form-urlencoded body. See formBodyToJson. */
         public final boolean formBody;
         /**
-         * (spec.rest_browser).redirect_field, as the key it carries in the
-         * route's JSON response. When non-empty, the route answers 303 to that
-         * field's URL instead of JSON. See redirectResponse.
+         * (spec.rest_browser).redirect_field as its proto3 JSON name, the key
+         * every language's route table carries. When non-empty, the route
+         * answers 303 to that field's URL instead of JSON. See redirectResponse.
          */
         public final String redirectField;
+        /** The same field's proto name, the key the Java Helpers emit; redirectResponse accepts either spelling. */
+        public final String redirectFieldProto;
 
         RouteInfo(String httpPath, String grpcPath, String serviceId, String entitlementService,
                 List<String> httpMethods, AuthPolicy authPolicy, List<String> entitlementScopes,
                 String capabilityScope, boolean serverStreaming, boolean clientStreaming,
-                String targetNamespaceField, boolean formBody, String redirectField) {
+                String targetNamespaceField, boolean formBody, String redirectField, String redirectFieldProto) {
             this.httpPath = httpPath;
             this.grpcPath = grpcPath;
             this.serviceId = serviceId;
@@ -176,6 +178,7 @@ public final class RestDispatch {
             this.targetNamespaceField = targetNamespaceField;
             this.formBody = formBody;
             this.redirectField = redirectField;
+            this.redirectFieldProto = redirectFieldProto;
         }
     }
 
@@ -195,7 +198,8 @@ public final class RestDispatch {
             {{$r.ClientStreaming}},
             {{javaStr $r.TargetNamespaceField}},
             {{$r.FormBody}},
-            {{javaStr $r.RedirectField}})
+            {{javaStr $r.RedirectField}},
+            {{javaStr $r.RedirectFieldProto}})
 {{- end}}
     );
 
@@ -239,7 +243,8 @@ public final class RestDispatch {
      * response carries in that field, with Cache-Control: no-store, in place
      * of the JSON body, and returns true. Returns false without writing for
      * any other route, so the caller answers JSON as before. A response
-     * without a usable URL in the field is a backend fault.
+     * without a usable URL in the field, or with one that is not a valid
+     * header value, is a backend fault.
      */
     public static boolean redirectResponse(RouteInfo route, String responseJson, HttpResponse w) {
         if (route.redirectField == null || route.redirectField.isEmpty()) {
@@ -249,7 +254,11 @@ public final class RestDispatch {
         try {
             JsonElement parsed = JsonParser.parseString(responseJson);
             if (parsed.isJsonObject()) {
-                JsonElement field = parsed.getAsJsonObject().get(route.redirectField);
+                JsonObject object = parsed.getAsJsonObject();
+                JsonElement field = object.get(route.redirectField);
+                if (field == null) {
+                    field = object.get(route.redirectFieldProto);
+                }
                 if (field != null && field.isJsonPrimitive()) {
                     location = field.getAsString();
                 }
@@ -257,7 +266,7 @@ public final class RestDispatch {
         } catch (RuntimeException e) {
             location = "";
         }
-        if (location.isEmpty()) {
+        if (location.isEmpty() || !validHeaderValue(location)) {
             httpError(502, "response carries no redirect URL in " + route.redirectField).write(w);
             return true;
         }
@@ -265,6 +274,21 @@ public final class RestDispatch {
         w.header("Cache-Control", "no-store");
         w.status(303);
         w.flush();
+        return true;
+    }
+
+    /**
+     * Whether s may be sent as an HTTP header value: no control characters and
+     * no characters outside visible ASCII, the same test the Rust plane applies
+     * before answering a redirect.
+     */
+    static boolean validHeaderValue(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < 0x20 || c > 0x7e) {
+                return false;
+            }
+        }
         return true;
     }
 
@@ -345,6 +369,13 @@ public final class RestDispatch {
      * "error" event for a message that fails validation or encoding or for a
      * stream the backend ends with a status. A request that is refused before
      * the stream opens is answered with its HTTP status instead.
+     *
+     * <p>Cancellation: the backend call runs under the caller's
+     * {@link io.grpc.Context}. A host that wants to stop the stream when the
+     * client disconnects runs this inside a {@code Context.CancellableContext}
+     * (or a {@code withDeadline} context) and cancels it; the blocking
+     * iterator then ends with a CANCELLED status, reported as the final
+     * error event, and the backend stream is cancelled with it.
      */
     public static void dispatchStream(Dispatcher dispatcher, String grpcPath, String body, String requestId, HttpResponse w) {
         switch (grpcPath) {

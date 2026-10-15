@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -38,8 +39,7 @@ type javaRestDispatchArm struct {
 }
 
 // javaRestDispatchRoute is one route table entry. AuthPolicy is the Java enum
-// constant; RedirectField is the key the Java Helpers emit, which is the
-// proto field name.
+// constant.
 type javaRestDispatchRoute struct {
 	HttpPath             string
 	GrpcPath             string
@@ -53,7 +53,8 @@ type javaRestDispatchRoute struct {
 	ClientStreaming      bool
 	TargetNamespaceField string
 	FormBody             bool
-	RedirectField        string
+	RedirectField        string // the proto3 JSON name, the canonical key across languages
+	RedirectFieldProto   string // the proto field name, which the Java Helpers emit
 }
 
 type javaRestDispatchData struct {
@@ -98,11 +99,22 @@ func generateJavaRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo
 	}
 
 	// Java type references are file-based (the outer class comes from the
-	// proto file), so map each proto package to the file that declares it.
+	// proto file), so map each proto package to the file that declares it. The
+	// Java generators assume one proto file per package, named after it
+	// (<dir>/<pkg>.proto, see the cross-package Helpers resolution in the
+	// service wrapper); prefer that file, and otherwise the first in path
+	// order, so the choice is deterministic.
 	pkgToFile := make(map[string]string)
-	for path, desc := range dp.GetAllFiles() {
-		if _, exists := pkgToFile[desc.Package]; !exists {
-			pkgToFile[desc.Package] = path
+	paths := make([]string, 0)
+	for path := range dp.GetAllFiles() {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		pkg := dp.GetAllFiles()[path].Package
+		canonical := strings.TrimSuffix(filepath.Base(path), ".proto") == pkg
+		if _, exists := pkgToFile[pkg]; !exists || canonical {
+			pkgToFile[pkg] = path
 		}
 	}
 	for _, svc := range servicesInfo {
@@ -130,23 +142,23 @@ func generateJavaRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo
 			IsEmptyOutput: a.IsEmptyOutput,
 		}
 		if !a.IsEmptyInput {
-			pkg, typeName := javaRestDispatchSplitType(a.InputType, pkgToFile)
+			pkg := restdispatch.TypePackage(a.InputType, pkgToFile)
 			outer := javaTypesOuterForProto(config, protoDir, pkgToFile[pkg], pkg)
 			helpers := typesPackage(pkg) + ".Helpers"
-			arm.ReqType = outer + "." + typeName
-			arm.FromJson = helpers + "." + strutil.ToLowerFirst(strings.ReplaceAll(typeName, ".", "")) + "FromJson"
+			arm.ReqType = outer + "." + a.InputSimpleName
+			arm.FromJson = helpers + "." + strutil.ToLowerFirst(a.InputSimpleName) + "FromJson"
 			if a.ValidateInput {
-				arm.ValidateInput = helpers + ".validate" + strings.ReplaceAll(typeName, ".", "")
+				arm.ValidateInput = helpers + ".validate" + a.InputSimpleName
 			}
 		}
 		if !a.IsEmptyOutput {
-			pkg, typeName := javaRestDispatchSplitType(a.OutputType, pkgToFile)
+			pkg := restdispatch.TypePackage(a.OutputType, pkgToFile)
 			outer := javaTypesOuterForProto(config, protoDir, pkgToFile[pkg], pkg)
 			helpers := typesPackage(pkg) + ".Helpers"
-			arm.RespType = outer + "." + typeName
-			arm.ToJson = helpers + "." + strutil.ToLowerFirst(strings.ReplaceAll(typeName, ".", "")) + "ToJson"
+			arm.RespType = outer + "." + a.OutputSimpleName
+			arm.ToJson = helpers + "." + strutil.ToLowerFirst(a.OutputSimpleName) + "ToJson"
 			if a.ValidateOutput {
-				arm.ValidateOutput = helpers + ".validate" + strings.ReplaceAll(typeName, ".", "")
+				arm.ValidateOutput = helpers + ".validate" + a.OutputSimpleName
 			}
 		}
 		if a.ServerStreaming {
@@ -169,7 +181,8 @@ func generateJavaRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo
 			ClientStreaming:      r.ClientStreaming,
 			TargetNamespaceField: r.TargetNamespaceField,
 			FormBody:             r.FormBody,
-			RedirectField:        r.RedirectField,
+			RedirectField:        r.RedirectJSONName,
+			RedirectFieldProto:   r.RedirectField,
 		})
 	}
 
@@ -252,21 +265,4 @@ func javaStringLiteral(value string) string {
 	}
 	b.WriteByte('"')
 	return b.String()
-}
-
-// javaRestDispatchSplitType splits a fully-qualified proto type into its
-// package (the longest known package prefix) and its Java nested type path.
-func javaRestDispatchSplitType(fullType string, pkgToFile map[string]string) (pkg, typeName string) {
-	fullType = strings.TrimPrefix(fullType, ".")
-	for candidate := range pkgToFile {
-		if strings.HasPrefix(fullType, candidate+".") && len(candidate) > len(pkg) {
-			pkg = candidate
-		}
-	}
-	if pkg == "" {
-		if dot := strings.LastIndex(fullType, "."); dot >= 0 {
-			pkg = fullType[:dot]
-		}
-	}
-	return pkg, strings.TrimPrefix(fullType, pkg+".")
 }

@@ -206,6 +206,12 @@ func IndentCode(lang Language, raw string) string {
 	var buf strings.Builder
 	buf.Grow(len(raw) + len(raw)/4) // rough estimate: +25% for indentation
 	depth := 0
+	// parens counts the "(" and "[" left open by earlier lines. A line inside
+	// them is a continuation (an argument list, an array literal) and keeps one
+	// extra level per open group, so a multi-line call does not flatten to the
+	// statement's indent; a line that starts by closing a group sits one level
+	// out, so the ")" that ends the call returns to the statement.
+	parens := 0
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -239,11 +245,19 @@ func IndentCode(lang Language, raw string) string {
 		}
 
 		// Write indent + line
-		for j := 0; j < depth; j++ {
+		continuation := parens
+		if continuation > 0 && (trimmed[0] == ')' || trimmed[0] == ']') {
+			continuation--
+		}
+		for j := 0; j < depth+continuation; j++ {
 			buf.WriteString(cfg.indent)
 		}
 		buf.WriteString(trimmed)
 		buf.WriteByte('\n')
+		parens += strings.Count(trimmed, "(") + strings.Count(trimmed, "[") - strings.Count(trimmed, ")") - strings.Count(trimmed, "]")
+		if parens < 0 {
+			parens = 0
+		}
 
 		if net > 0 {
 			// Net opening: increase depth after writing

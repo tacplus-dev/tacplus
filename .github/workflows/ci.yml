@@ -58,3 +58,30 @@ jobs:
       - run: just current-generation-go
       - run: just determinism-go
       - run: just w2s-validate-go
+
+  w2s-validate-java:
+    name: Java W2S dispatch gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Install protoc-gen-grpc-java
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same plugin and version the gates container carries (Dockerfile.base).
+          GRPC_JAVA_VERSION=1.79.0
+          case "$(uname -m)" in
+            x86_64) GRPC_ARCH=linux-x86_64 ;;
+            aarch64|arm64) GRPC_ARCH=linux-aarch_64 ;;
+          esac
+          curl -fsSL --retry 5 -o "$HOME/.local/bin/protoc-gen-grpc-java" \
+            "https://repo1.maven.org/maven2/io/grpc/protoc-gen-grpc-java/${GRPC_JAVA_VERSION}/protoc-gen-grpc-java-${GRPC_JAVA_VERSION}-${GRPC_ARCH}.exe"
+          chmod +x "$HOME/.local/bin/protoc-gen-grpc-java"
+      - run: just w2s-validate-java

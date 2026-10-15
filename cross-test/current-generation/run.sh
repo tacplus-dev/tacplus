@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=../lib/tree-guard.sh
+source "$ROOT_DIR/cross-test/lib/tree-guard.sh"
+tree_guard_begin "$ROOT_DIR"
 # shellcheck source=../lib/java-compile.sh
 source "$ROOT_DIR/cross-test/lib/java-compile.sh"
 PROTO_SRC="$ROOT_DIR/cross-test/proto"
@@ -1742,4 +1745,5 @@ if [[ "$KEEP" != true ]]; then
   rm -rf "$WORK_ROOT"
 fi
 
+tree_guard_end
 echo "==> Current cross-test generation and compile passed"

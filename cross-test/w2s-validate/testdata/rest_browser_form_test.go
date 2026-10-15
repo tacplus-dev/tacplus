@@ -48,6 +48,9 @@ func (s *recordingSignin) BrokerFormCallback(_ context.Context, req *signin.Form
 	if req.GetState() == "no-redirect" {
 		return &signin.FormCallbackResponse{}, nil
 	}
+	if req.GetState() == "bad-redirect" {
+		return &signin.FormCallbackResponse{RedirectUrl: "https://app.example/\r\nSet-Cookie: x=1"}, nil
+	}
 	return &signin.FormCallbackResponse{RedirectUrl: redirectURL}, nil
 }
 
@@ -115,9 +118,10 @@ func TestGoRestBrowserRoutesCarryTheAnnotation(t *testing.T) {
 	if !form.FormBody {
 		t.Fatal("rest_browser form_body not emitted into Routes")
 	}
-	// The Go JSON helpers spell redirect_url as its proto field name.
-	if form.RedirectField != "redirect_url" {
-		t.Fatalf("rest_browser redirect_field = %q, want redirect_url", form.RedirectField)
+	// The route table carries the proto3 JSON name in every language; the Go
+	// JSON helpers emit the proto field name, which the lookup also accepts.
+	if form.RedirectField != "redirectUrl" || form.RedirectFieldProto != "redirect_url" {
+		t.Fatalf("rest_browser redirect_field = %q / %q, want redirectUrl / redirect_url", form.RedirectField, form.RedirectFieldProto)
 	}
 
 	jsonOnly := route(t, jsonOnlyPath)
@@ -217,6 +221,18 @@ func TestGoRestBrowserRedirectWithoutAURLIsABackendFault(t *testing.T) {
 	rec := post(t, dispatcher, formType, []byte("state=no-redirect"))
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("a redirect response without a URL must be a 502: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Location") != "" {
+		t.Fatal("a 502 must not carry a Location")
+	}
+}
+
+func TestGoRestBrowserRedirectWithAnInvalidHeaderValueIsABackendFault(t *testing.T) {
+	dispatcher, _ := startSignin(t)
+
+	rec := post(t, dispatcher, formType, []byte("state=bad-redirect"))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("a redirect URL that is not a header value must be a 502: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec.Header().Get("Location") != "" {
 		t.Fatal("a 502 must not carry a Location")

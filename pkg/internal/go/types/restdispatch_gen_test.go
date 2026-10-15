@@ -103,15 +103,16 @@ func TestGoRestDispatchEmptyInputSkipsDecodeAndValidation(t *testing.T) {
 func TestGoRestDispatchRouteTableLiterals(t *testing.T) {
 	out := renderGoRestDispatchForTest(t, goRestDispatchData{
 		Routes: []goRestDispatchRoute{{
-			HttpPath:          `/signin/Signin/Call"back`,
-			GrpcPath:          "/signin.Signin/Callback",
-			ServiceID:         "signin",
-			HttpMethods:       []string{"POST", "GET"},
-			AuthPolicy:        "NoAuth",
-			EntitlementScopes: []string{"ANY", "READ"},
-			CapabilityScope:   "READ",
-			FormBody:          true,
-			RedirectField:     "redirect_url",
+			HttpPath:           `/signin/Signin/Call"back`,
+			GrpcPath:           "/signin.Signin/Callback",
+			ServiceID:          "signin",
+			HttpMethods:        []string{"POST", "GET"},
+			AuthPolicy:         "NoAuth",
+			EntitlementScopes:  []string{"ANY", "READ"},
+			CapabilityScope:    "READ",
+			FormBody:           true,
+			RedirectField:      "redirectUrl",
+			RedirectFieldProto: "redirect_url",
 		}},
 	})
 	for _, want := range []string{
@@ -122,7 +123,8 @@ func TestGoRestDispatchRouteTableLiterals(t *testing.T) {
 		`EntitlementService:   "",`,
 		`TargetNamespaceField: "",`,
 		`FormBody:             true,`,
-		`RedirectField:        "redirect_url",`,
+		`RedirectField:        "redirectUrl",`,
+		`RedirectFieldProto:   "redirect_url",`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("route table is missing %q:\n%s", want, out)

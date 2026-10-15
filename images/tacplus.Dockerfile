@@ -8,8 +8,13 @@ FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS tacplus
 ARG VERSION=0.0.0
 ARG VCS_REF=local
 ARG PROTOC_VERSION=36.0
+ARG PROTOC_GEN_GO_VERSION=1.36.11
+ARG PROTOC_GEN_GO_GRPC_VERSION=1.6.0
 ARG TARGETARCH
 ARG BUILDARCH
+# go generate for the spec package runs protoc with the Go plugins, natively.
+RUN go install "google.golang.org/protobuf/cmd/protoc-gen-go@v${PROTOC_GEN_GO_VERSION}" \
+    && go install "google.golang.org/grpc/cmd/protoc-gen-go-grpc@v${PROTOC_GEN_GO_GRPC_VERSION}"
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/* \
     && case "$BUILDARCH" in arm64) A=aarch_64 ;; *) A=x86_64 ;; esac \
@@ -33,3 +38,6 @@ LABEL org.opencontainers.image.title="tacplus" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}"
 COPY --from=tacplus /out/tacplus /usr/local/bin/tacplus
+# The smoke test ships in the image so a pulled image can prove itself:
+# `docker run --rm <image> tacplus-smoke`.
+COPY images/smoke.sh /usr/local/bin/tacplus-smoke

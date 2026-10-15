@@ -165,10 +165,10 @@ jobs:
             VCS_REF=${{ github.sha }}
           tags: ${{ steps.tags.outputs.tags }}
       - name: Smoke test
-        run: docker run --rm "$NS/tacplus:main-${GITHUB_SHA::7}" bash /dev/stdin < images/smoke.sh
+        run: docker run --rm "$NS/tacplus:main-${GITHUB_SHA::7}" tacplus-smoke
         if: github.ref_type != 'tag'
       - name: Smoke test (release)
-        run: docker run --rm "$NS/tacplus:${GITHUB_REF_NAME#v}" bash /dev/stdin < images/smoke.sh
+        run: docker run --rm "$NS/tacplus:${GITHUB_REF_NAME#v}" tacplus-smoke
         if: github.ref_type == 'tag'
       - name: Prune old main-<sha> images
         uses: actions/delete-package-versions@v5

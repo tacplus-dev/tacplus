@@ -404,6 +404,19 @@ run_java_generated_self_tests() {
     grep -q '^OwnerDefaultTest: all checks passed$' "$test_log" \
       || die "owner-default fixture (java): OwnerDefaultTest did not report its checks passed"
   fi
+  # The main fixture's extraction self-test, copied in by
+  # install_extraction_selftest, so it is present exactly in that build.
+  local ex_test ex_class
+  ex_test="$(find "$output/src/main/java" -type f -path '*/types/common2/user/ExtractionTest.java' -print -quit)"
+  if [[ -n "$ex_test" ]]; then
+    ex_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$ex_test").$(basename "$ex_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$ex_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q '^ExtractionTest: all checks passed$' "$test_log" \
+      || die "main fixture (java): ExtractionTest did not report its checks passed"
+  fi
   assert_clean_log "$test_log"
 }
 
@@ -926,6 +939,48 @@ assert_ownerdefault_output() {
     || die "owner-default fixture ($language): the refusal is not on UpdateDesk in $api"
 }
 
+# assert_extraction_output checks that the main fixture's FixtureProbe
+# transformation produced its extraction helpers in every language. Absence
+# compiles: Java emitted none until 2026-10-15 and the fixture still built.
+assert_extraction_output() {
+  local output="$1"
+  local language="$2"
+  local file=""
+
+  case "$language" in
+    go)
+      file="$(find "$output" -type f -path '*/common2/user/extraction_project_fixture_probe.go' -print -quit)"
+      [[ -n "$file" ]] || die "main fixture (go): extraction_project_fixture_probe.go not generated under $output"
+      grep -qF 'FixtureProbeRow: ExtractFixtureProbeRowFromFixtureProbe(event),' "$file" \
+        || die "main fixture (go): FixtureProbeToProjections does not extract FixtureProbeRow in $file"
+      ;;
+    java)
+      file="$(find "$output" -type f -path '*/common2/user/FixtureProbeProjections.java' -print -quit)"
+      [[ -n "$file" ]] || die "main fixture (java): FixtureProbeProjections.java not generated under $output"
+      grep -qF 'return new FixtureProbeProjections(extractFixtureProbeRowFromFixtureProbe(event));' "$file" \
+        || die "main fixture (java): fixtureProbeToProjections does not extract FixtureProbeRow in $file"
+      ;;
+    rust)
+      file="$(find "$output" -type f -path '*/common2/user/extraction_project_fixture_probe.rs' -print -quit)"
+      [[ -n "$file" ]] || die "main fixture (rust): extraction_project_fixture_probe.rs not generated under $output"
+      grep -qF 'fixture_probe_row: extract_fixture_probe_row_from_fixture_probe(event),' "$file" \
+        || die "main fixture (rust): fixture_probe_to_projections does not extract FixtureProbeRow in $file"
+      ;;
+  esac
+}
+
+# install_extraction_selftest copies the Java runtime self-test into the
+# generated common2/user types package, beside FixtureProbeProjections.
+install_extraction_selftest() {
+  local output="$1"
+  local language="$2"
+  [[ "$language" == "java" ]] || return 0
+  local dest
+  dest="$(dirname "$(find "$output/src/main/java" -type f -path '*/types/common2/user/FixtureProbeProjections.java' -print -quit)")"
+  [[ -d "$dest" ]] || die "main fixture (java): generated common2/user types package not found under $output"
+  cp "$SELFTESTS_SRC/java/ExtractionTest.java" "$dest/"
+}
+
 # install_ownerdefault_selftest copies the Java runtime self-test into the
 # generated chassis/grpcserver package (it reads the package-private
 # Authorizer.SERVICE_NAME). Go and Rust get the compile leg and the output
@@ -1377,6 +1432,8 @@ for language in "${languages[@]}"; do
   assert_no_legacy_fixture_output "$dir/tacplus"
   assert_spiffe_soundness "$dir/tacplus"
   assert_current_output "$output_root" "$language" "$dir/tacplus"
+  assert_extraction_output "$output_root" "$language"
+  install_extraction_selftest "$output_root" "$language"
   echo "==> Compiling $language cross-test fixture"
   compile_current_output "$output_root" "$language" "$dir/tacplus"
   echo "    PASS $language"

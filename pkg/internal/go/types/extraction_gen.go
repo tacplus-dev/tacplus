@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/tools/imports"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/extraction"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
@@ -64,263 +65,112 @@ type projectionEntry struct {
 // After generating individual Extract<Projection>From<Source> functions, it groups
 // all projections by source event type and generates a Project<Source> function
 // that returns a <Source>Projections struct containing all projection results.
+// The projections and their field mappings come from the shared planner
+// (common/extraction), which Java and Rust render from too.
 func generateExtractionHelpers(allFiles []model.ProtoFile, typesOutputDir string) error {
-	// Track projections grouped by source FQN for generating projection groups.
-	// Key: source FQN (e.g. "sensor.SensorEvent"), Value: list of projection names.
-	type projGroupKey struct {
-		sourceFQN string
-		projPkg   string // package of the projection messages
+	groups, err := extraction.Plan(allFiles)
+	if err != nil {
+		return err
 	}
-	type projGroupInfo struct {
-		pf              model.ProtoFile // proto file of the projection messages
-		sourceType      string          // e.g. "SensorEvent"
-		sourceQualifier string          // "" or "sensor."
-		projections     []string        // projection type names
-	}
-	projGroups := make(map[projGroupKey]*projGroupInfo)
-	var projGroupOrder []projGroupKey
 
-	for _, pf := range allFiles {
-		if strings.HasPrefix(pf.RelPath, "google/") {
-			continue
-		}
-		for _, msg := range pf.Messages {
-			sourceFQN := extractionSourceFQN(msg)
-			if sourceFQN == "" {
-				continue
-			}
-
-			sourceMsg, sourcePf, ok := findMessageByFQN(allFiles, sourceFQN)
-			if !ok {
-				return fmt.Errorf("extraction source %q for projection %s.%s not found", sourceFQN, pf.Package, msg.Name)
-			}
-
-			data, err := buildExtractionTemplateData(msg, pf.Package, sourceMsg, sourcePf.Package, allFiles)
-			if err != nil {
-				return fmt.Errorf("failed to build extraction data for %s.%s: %w", pf.Package, msg.Name, err)
-			}
-
-			if err := writeExtractionFile(pf, data, typesOutputDir); err != nil {
-				return fmt.Errorf("failed to generate extraction helpers for %s.%s: %w", pf.Package, msg.Name, err)
+	for _, g := range groups {
+		var entries []projectionEntry
+		var sourceQualifier string
+		for _, p := range g.Projections {
+			data := buildExtractionTemplateData(p, g)
+			sourceQualifier = data.SourceQualifier
+			if err := writeExtractionFile(p.File, data, typesOutputDir); err != nil {
+				return fmt.Errorf("failed to generate extraction helpers for %s.%s: %w", p.File.Package, p.Message.Name, err)
 			}
 			zap.L().Debug("Generated extraction helpers",
-				zap.String("projection", msg.Name),
-				zap.String("source", sourceFQN),
-				zap.String("package", pf.Package))
-
-			// Track for projection group generation.
-			key := projGroupKey{sourceFQN: sourceFQN, projPkg: pf.Package}
-			if g, ok := projGroups[key]; ok {
-				g.projections = append(g.projections, msg.Name)
-			} else {
-				projGroups[key] = &projGroupInfo{
-					pf:              pf,
-					sourceType:      sourceMsg.Name,
-					sourceQualifier: data.SourceQualifier,
-					projections:     []string{msg.Name},
-				}
-				projGroupOrder = append(projGroupOrder, key)
-			}
+				zap.String("projection", p.Message.Name),
+				zap.String("source", g.SourceFile.Package+"."+g.Source.Name),
+				zap.String("package", p.File.Package))
+			entries = append(entries, projectionEntry{TypeName: p.Message.Name})
 		}
-	}
 
-	// Generate projection group files for source events with multiple projections.
-	for _, key := range projGroupOrder {
-		g := projGroups[key]
-		entries := make([]projectionEntry, len(g.projections))
-		for i, name := range g.projections {
-			entries[i] = projectionEntry{TypeName: name}
-		}
+		// Generate the projection group file for the source event.
 		groupData := projectionGroupData{
-			SourceType:      g.sourceType,
-			SourceQualifier: g.sourceQualifier,
+			SourceType:      g.Source.Name,
+			SourceQualifier: sourceQualifier,
 			Projections:     entries,
 		}
-		if err := writeProjectionGroupFile(g.pf, groupData, typesOutputDir); err != nil {
-			return fmt.Errorf("failed to generate projection group for %s: %w", key.sourceFQN, err)
+		if err := writeProjectionGroupFile(g.File(), groupData, typesOutputDir); err != nil {
+			return fmt.Errorf("failed to generate projection group for %s.%s: %w", g.SourceFile.Package, g.Source.Name, err)
 		}
 		zap.L().Debug("Generated projection group",
-			zap.String("source", key.sourceFQN),
-			zap.Int("projections", len(g.projections)))
+			zap.String("source", g.SourceFile.Package+"."+g.Source.Name),
+			zap.Int("projections", len(g.Projections)))
 	}
 
 	return nil
 }
 
-// extractionSourceFQN returns the source event FQN from the
-// timeseries_type.source annotation. Returns "" if it is not set.
-func extractionSourceFQN(msg model.Message) string {
-	if ann, ok := msg.Annotations["timeseries_table_source"]; ok && ann.StringValue != "" {
-		return ann.StringValue
-	}
-	return ""
-}
-
-// findMessageByFQN locates a message by fully-qualified name (pkg.MessageName).
-func findMessageByFQN(allFiles []model.ProtoFile, fqn string) (model.Message, model.ProtoFile, bool) {
-	parts := strings.SplitN(fqn, ".", 2)
-	if len(parts) != 2 {
-		return model.Message{}, model.ProtoFile{}, false
-	}
-	pkg, name := parts[0], parts[1]
-	for _, pf := range allFiles {
-		if pf.Package != pkg {
-			continue
-		}
-		for _, msg := range pf.Messages {
-			if msg.Name == name {
-				return msg, pf, true
-			}
-		}
-	}
-	return model.Message{}, model.ProtoFile{}, false
-}
-
-// findFieldByName finds a field by name in a message.
-func findFieldByName(msg model.Message, name string) (model.Field, bool) {
-	for _, f := range msg.Fields {
-		if f.Name == name {
-			return f, true
-		}
-	}
-	return model.Field{}, false
-}
-
-// buildExtractionTemplateData converts a projection message and its source into
-// template-ready data for the extraction helpers template.
-func buildExtractionTemplateData(
-	projMsg model.Message,
-	projPkg string,
-	sourceMsg model.Message,
-	sourcePkg string,
-	allFiles []model.ProtoFile,
-) (extractionTemplateData, error) {
+// buildExtractionTemplateData converts a planned projection into template-ready
+// data for the extraction helpers template.
+func buildExtractionTemplateData(p extraction.Projection, g extraction.Group) extractionTemplateData {
 	sourceQualifier := ""
-	if sourcePkg != projPkg {
-		sourceQualifier = sourcePkg + "."
+	if g.SourceFile.Package != p.File.Package {
+		sourceQualifier = g.SourceFile.Package + "."
 	}
 
 	data := extractionTemplateData{
-		ProjectionType:  projMsg.Name,
-		SourceType:      sourceMsg.Name,
+		ProjectionType:  p.Message.Name,
+		SourceType:      g.Source.Name,
 		SourceQualifier: sourceQualifier,
 	}
 
-	// Collect fields and detect oneof usage.
-	type fieldMapping struct {
-		projField    model.Field
-		sourceExpr   string
-		oneofVariant string // first segment if dot notation, "" if top-level
-		innerField   string // second segment if dot notation
-	}
-
-	var mappings []fieldMapping
-	oneofVariants := make(map[string]bool)
-
-	for _, f := range projMsg.Fields {
-		gs, ok := f.Annotations["projection_source"]
-		if !ok || gs.StringValue == "" {
-			continue
-		}
-
-		fm := fieldMapping{
-			projField:  f,
-			sourceExpr: gs.StringValue,
-		}
-
-		parts := strings.SplitN(gs.StringValue, ".", 2)
-		if len(parts) == 2 {
-			fm.oneofVariant = parts[0]
-			fm.innerField = parts[1]
-			oneofVariants[parts[0]] = true
-		}
-
-		mappings = append(mappings, fm)
+	var fields []extractionFieldData
+	for _, f := range p.Fields {
+		fields = append(fields, extractionFieldData{
+			GoFieldName: toGoFieldName(f.Projection.Name),
+			ValueExpr:   buildValueExpr("event", f),
+		})
 	}
 
 	// Determine extraction pattern:
 	// - timeseries_type with oneof refs → unconditional with oneof groups
 	// - no oneof refs → simple struct literal
-	hasOneof := len(oneofVariants) > 0
-
-	if hasOneof {
-		// Unconditional with oneof groups (timeseries pattern).
-		data.HasOneofGroups = true
-
-		// Collect top-level fields.
-		for _, fm := range mappings {
-			if fm.oneofVariant != "" {
-				continue
-			}
-			data.TopLevelFields = append(data.TopLevelFields, extractionFieldData{
-				GoFieldName: toGoFieldName(fm.projField.Name),
-				ValueExpr:   buildValueExpr("event", fm.sourceExpr, fm.projField, sourceMsg, sourcePkg, allFiles),
-			})
-		}
-
-		// Group oneof fields by variant.
-		groupMap := make(map[string]*extractionOneofGroup)
-		var groupOrder []string
-		for _, fm := range mappings {
-			if fm.oneofVariant == "" {
-				continue
-			}
-			g, ok := groupMap[fm.oneofVariant]
-			if !ok {
-				varName := toLowerCamel(fm.oneofVariant)
-				g = &extractionOneofGroup{
-					VariantPascal: toGoFieldName(fm.oneofVariant),
-					VarName:       varName,
-				}
-				groupMap[fm.oneofVariant] = g
-				groupOrder = append(groupOrder, fm.oneofVariant)
-			}
-			g.Fields = append(g.Fields, extractionFieldData{
-				GoFieldName: toGoFieldName(fm.projField.Name),
-				ValueExpr:   g.VarName + "." + toGoFieldName(fm.innerField),
-			})
-		}
-		for _, variant := range groupOrder {
-			data.OneofGroups = append(data.OneofGroups, *groupMap[variant])
-		}
-	} else {
-		// Simple extraction — all fields are top-level.
-		for _, fm := range mappings {
-			data.Fields = append(data.Fields, extractionFieldData{
-				GoFieldName: toGoFieldName(fm.projField.Name),
-				ValueExpr:   buildValueExpr("event", fm.sourceExpr, fm.projField, sourceMsg, sourcePkg, allFiles),
-			})
-		}
+	if len(p.Variants) == 0 {
+		data.Fields = fields
+		return data
 	}
 
-	return data, nil
+	// Unconditional with oneof groups (timeseries pattern).
+	data.HasOneofGroups = true
+	data.TopLevelFields = fields
+	for _, v := range p.Variants {
+		varName := toLowerCamel(v.Name)
+		group := extractionOneofGroup{
+			VariantPascal: toGoFieldName(v.Name),
+			VarName:       varName,
+		}
+		for _, f := range v.Fields {
+			group.Fields = append(group.Fields, extractionFieldData{
+				GoFieldName: toGoFieldName(f.Projection.Name),
+				ValueExpr:   varName + "." + toGoFieldName(f.SourceName),
+			})
+		}
+		data.OneofGroups = append(data.OneofGroups, group)
+	}
+	return data
 }
 
-// buildValueExpr builds the Go expression for accessing a source field value.
-// receiver is "event" or "payload" or a local variable name.
-// fieldName is the field name on the receiver's message type.
-// projField is the projection field (to detect type mismatches).
-func buildValueExpr(
-	receiver string,
-	fieldName string,
-	projField model.Field,
-	sourceMsg model.Message,
-	sourcePkg string,
-	allFiles []model.ProtoFile,
-) string {
-	accessor := receiver + "." + toGoFieldName(fieldName)
+// buildValueExpr builds the Go expression for accessing a source field value
+// on receiver ("event"), casting where the projection and source field types
+// differ.
+func buildValueExpr(receiver string, f extraction.Field) string {
+	accessor := receiver + "." + toGoFieldName(f.SourceName)
 
-	// Resolve the source field to check for type mismatches.
-	sourceField, found := findFieldByName(sourceMsg, fieldName)
-	if !found {
-		// Field not found in source — might be in a nested message.
-		// Fall through and return the accessor as-is.
+	// A field the source does not declare is returned as-is; it fails to compile
+	// naming the field.
+	if !f.Resolved {
 		return accessor
 	}
 
 	// Handle type mismatches between projection and source.
-	if needsCast(projField, sourceField) {
-		goType := protoTypeToGoType(projField.Type)
+	if needsCast(f.Projection, f.Source) {
+		goType := protoTypeToGoType(f.Projection.Type)
 		return goType + "(" + accessor + ")"
 	}
 

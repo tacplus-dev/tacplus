@@ -1326,6 +1326,11 @@ func Generate(config *tactype.Config) error {
 		if err := generateJavaTimeseriesHelpers(config, protoDir, tsSrcDir); err != nil {
 			return fmt.Errorf("failed to generate timeseries helpers: %w", err)
 		}
+		// Extract<Projection>From<Source> / <source>ToProjections for messages
+		// with a (spec.timeseries_type).source, beside the timeseries helpers.
+		if err := generateJavaExtractionHelpers(config, allParsedFiles, protoDir, tsSrcDir); err != nil {
+			return fmt.Errorf("failed to generate extraction helpers: %w", err)
+		}
 	}
 
 	// Collect event-bus watches from legacy subscribe, explicit event_watch,

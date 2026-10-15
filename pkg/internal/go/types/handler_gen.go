@@ -20,6 +20,7 @@ import (
 	"github.com/tacplus-dev/tacplus/pkg/buildinfo"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/extraction"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
@@ -612,7 +613,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		hasProjections := false
 		for _, pf := range allFiles {
 			for _, msg := range pf.Messages {
-				if extractionSourceFQN(msg) == sub.SourceTypeFqn {
+				if extraction.SourceFQN(msg) == sub.SourceTypeFqn {
 					hasProjections = true
 					if _, ok := msg.Annotations["timeseries_type"]; ok {
 						hasTimeseries = true

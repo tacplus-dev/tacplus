@@ -23,7 +23,7 @@ func TestGenerateRustExtractionHelpersFailsWhenSourceMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("generateRustExtractionHelpers succeeded with a missing source message")
 	}
-	if !strings.Contains(err.Error(), `Rust extraction source "events.MetricEvent" for projection projection.MetricProjection not found`) {
+	if !strings.Contains(err.Error(), `extraction source "events.MetricEvent" for projection projection.MetricProjection not found`) {
 		t.Fatalf("generateRustExtractionHelpers error = %v, want missing source context", err)
 	}
 }

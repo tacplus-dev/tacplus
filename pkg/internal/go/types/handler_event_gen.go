@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/tools/imports"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/extraction"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
@@ -59,12 +60,12 @@ func generateEventHandlers(allFiles []model.ProtoFile, typesOutputDir string) er
 			continue
 		}
 		for _, msg := range pf.Messages {
-			sourceFQN := extractionSourceFQN(msg)
+			sourceFQN := extraction.SourceFQN(msg)
 			if sourceFQN == "" {
 				continue
 			}
 
-			sourceMsg, sourcePf, ok := findMessageByFQN(allFiles, sourceFQN)
+			sourceMsg, sourcePf, ok := extraction.FindMessage(allFiles, sourceFQN)
 			if !ok {
 				continue
 			}

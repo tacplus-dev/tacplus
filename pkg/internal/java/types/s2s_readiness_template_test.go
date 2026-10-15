@@ -24,6 +24,7 @@ func renderJavaReadinessSM(t *testing.T, healthState, s2sTargetsRequired bool) s
 		SmPrefix:              "s2sm",
 		ServiceLabel:          "scotty",
 		HasGrpc:               true,
+		HasTlsGrpc:            true,
 		HasGrpcS2SClients:     true,
 		HasServiceHealthState: healthState,
 		StateStoreServiceID:   "statestore",

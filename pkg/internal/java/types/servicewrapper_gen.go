@@ -37,10 +37,11 @@ type ServiceInfo struct {
 	// carries a synthesized MCP session carrier RPC and needs a wrapper, a
 	// Handler entry and a ServiceManager mount like any other gRPC service.
 	HasMcp         bool
-	IsS2S          bool // true if service has service_s2s annotation
-	IsC2S          bool // true if service has service_c2s annotation
-	IsC2D          bool // true if service has service_c2d annotation
-	IsSMB          bool // true if service has smb annotation
+	IsS2S          bool   // true if service has service_s2s annotation
+	IsC2S          bool   // true if service has service_c2s annotation
+	IsC2D          bool   // true if service has service_c2d annotation
+	C2DSocketPath  string // service_c2d socket_path: unix socket the daemon binds (required, no default)
+	IsSMB          bool   // true if service has smb annotation
 	SmbRoot        spec.SmbRoot
 	OutputDir      string
 	TypesOutputDir string // Output dir for the types package (for outer class name detection)
@@ -227,6 +228,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				SynthesizedKind: service.SynthesizedKind,
 				IsC2S:           service.IsC2S,
 				IsC2D:           service.IsC2D,
+				C2DSocketPath:   service.C2DSocketPath,
 				IsSMB:           service.IsSMB,
 				SmbRoot:         service.SmbRoot,
 				OutputDir:       outputDir,
@@ -379,6 +381,19 @@ func filterGrpcAnnotated(servicesInfo []ServiceInfo) []ServiceInfo {
 	var result []ServiceInfo
 	for _, svc := range servicesInfo {
 		if !svc.IsC2D && grpcProtos[svc.ProtoFile] {
+			result = append(result, svc)
+		}
+	}
+	return result
+}
+
+// resolveC2DServerServices returns the own-package service_c2d services the
+// ServiceManager hosts on its c2d socket server (see
+// service.ResolveC2DServerServices, which Rust resolves through).
+func resolveC2DServerServices(config *tactype.Config, servicesInfo []ServiceInfo) []ServiceInfo {
+	var result []ServiceInfo
+	for _, svc := range servicesInfo {
+		if service.IsC2DServer(svc.IsC2D, svc.IsGrpc, svc.PackageName, config.SelfPackage) {
 			result = append(result, svc)
 		}
 	}

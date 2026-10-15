@@ -1171,7 +1171,12 @@ return err
 // Auth wiring below covers all non-auth_disabled services (C2S and S2S) — Go
 // has no C2S-only gating bug (cf. the Rust generator fix in #32).
 {{range .GrpcServices}}
+{{- if .IsGeneratedRecordC2S}}
+// The client-facing record read plane's handler is GENERATED, not supplied.
+{{.WrapperVarName}} := {{.WrapperAlias}}.{{.ConstructorName}}(&{{.GeneratedImplStruct}}{sm: sm})
+{{- else}}
 {{.WrapperVarName}} := {{.WrapperAlias}}.{{.ConstructorName}}(h.{{.GetterName}}())
+{{- end}}
 {{- if not .AuthDisabled}}
 {{.WrapperVarName}}.SetAuthorizeFunc(sm.authorizeFunc)
 {{.WrapperVarName}}.SetAuthenticateFunc(sm.authenticateFunc)

@@ -41,12 +41,20 @@ import {{.TypeImport}};
  */
 public interface Handler {
 {{- range .GrpcServices}}
+{{- if .IsGeneratedRecordC2S}}
+    // {{.ServiceName}} is the client-facing record read plane. Its handler is
+    // GENERATED ({{.GeneratedImplClass}}) and bound by the ServiceManager, so
+    // there is deliberately no getter here: the tenant pin and the row scope in
+    // those bodies are the authorization, not a default an implementation may
+    // replace.
+{{- else}}
     /**
      * Returns the handler implementation for {{.ServiceName}}.
      * The returned handler is wrapped with validation and authorization
      * by generated code before being registered with the gRPC server.
      */
     {{.HandlerType}} {{.GetterName}}();
+{{- end}}
 
 {{- if .HasConfigState}}
     /**

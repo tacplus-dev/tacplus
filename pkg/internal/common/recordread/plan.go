@@ -18,6 +18,7 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 )
 
 // Reader is one (spec.record_read) declaration, resolved.
@@ -192,4 +193,162 @@ func ScalarKeyType(msg *parser.MessageDescriptor, key string) (string, bool) {
 		return "", false
 	}
 	return "", false
+}
+
+// C2SMethod is one record type's pair of generated client-facing RPCs on the
+// synthesized <Svc>Records service: Get<T> (point read by key) and
+// Get<T>Page (paged read of the caller's own rows).
+type C2SMethod struct {
+	RecordName   string // "ScottyActivity"
+	RecordFQN    string // "scotty.ScottyActivity"
+	KeyField     string // proto name of the record key, e.g. "activity_id"
+	KeyProtoType string // proto scalar type of the key
+	PrincipalPin string // <T>Filter field pinned to the caller's subject
+	NamespacePin string // <T>Filter field pinned to the caller's namespace
+	// Criteria are the <T>Filter fields the client may supply, copied straight
+	// through from its <T>ReadFilter: every EQ/RANGE (spec.query_field) except
+	// the two pinned fields (a RANGE field contributes <f>_from and <f>_to),
+	// plus the record key. Recomputed from the same annotations the injector
+	// used rather than plumbed across generators, so a criterion cannot appear
+	// on one side and not the other.
+	Criteria []string
+}
+
+// C2SPlane is the generated handler's plan for the client-facing record read
+// plane: the synthesized service and one method pair per (spec.record_read).c2s.
+type C2SPlane struct {
+	ServiceName  string // "ScottyRecords"
+	SelfPackage  string
+	SelfRelPath  string
+	SelfFile     *parser.FileDescriptor
+	TraitPackage string
+	TraitRelPath string
+	Methods      []C2SMethod
+}
+
+// CollectC2SPlane resolves selfPackage's (spec.record_read).c2s declarations,
+// or returns nil when it declares none, which is every service that predates
+// the field. Unresolvable declarations were refused by
+// ValidateRecordReadAnnotations already and are skipped here.
+func CollectC2SPlane(dp *parser.DescriptorParser, selfPackage string) *C2SPlane {
+	all := dp.GetAllFiles()
+	paths := make([]string, 0, len(all))
+	for rp := range all {
+		paths = append(paths, rp)
+	}
+	sort.Strings(paths)
+
+	var self *parser.FileDescriptor
+	var selfPath string
+	for _, rp := range paths {
+		fd := all[rp]
+		if fd.ServiceName != "" && fd.Package == selfPackage {
+			self, selfPath = fd, rp
+			break
+		}
+	}
+	if self == nil {
+		return nil
+	}
+	var decls []parser.RecordRead
+	for _, rr := range self.RecordReads {
+		if rr.C2S != nil {
+			decls = append(decls, rr)
+		}
+	}
+	if len(decls) == 0 {
+		return nil
+	}
+	sort.Slice(decls, func(i, j int) bool { return decls[i].Record < decls[j].Record })
+
+	recordStores := make(map[string]bool)
+	for _, fd := range all {
+		if fd.RecordStore && fd.ServiceName != "" {
+			recordStores[fd.ServiceName] = true
+		}
+	}
+	var trait *parser.FileDescriptor
+	var traitPath string
+	for _, rp := range paths {
+		fd := all[rp]
+		if fd.Trait == nil || fd.Trait.Host == "" || fd.Trait.S2SService == "" {
+			continue
+		}
+		if recordStores[fd.Trait.Host] {
+			trait, traitPath = fd, rp
+			break
+		}
+	}
+	if trait == nil {
+		return nil
+	}
+
+	plane := &C2SPlane{
+		ServiceName:  strutil.ToPascalCase(self.ServiceName) + "Records",
+		SelfPackage:  selfPackage,
+		SelfRelPath:  selfPath,
+		SelfFile:     self,
+		TraitPackage: trait.Package,
+		TraitRelPath: traitPath,
+	}
+	for _, decl := range decls {
+		rec, _, _ := FindRecord(dp, decl.Record)
+		if rec == nil {
+			continue
+		}
+		key := model.DefaultRecordKeyField
+		if k, ok := rec.Annotations["record_key"]; ok && k.StringValue != "" {
+			key = k.StringValue
+		}
+		keyType, _ := ScalarKeyType(rec, key)
+		principal, namespace := "", ""
+		for i := range rec.Fields {
+			f := &rec.Fields[i]
+			if principal == "" && f.Annotations["store_principal"].BoolValue {
+				principal = f.Name
+			}
+			if namespace == "" && f.Annotations["store_namespace"].BoolValue {
+				namespace = f.Name
+			}
+		}
+		if principal == "" {
+			principal = rec.Annotations["record_owner"].StringValue
+		}
+		var criteria []string
+		haveKey := false
+		for i := range rec.Fields {
+			f := &rec.Fields[i]
+			if f.Name == principal || f.Name == namespace {
+				continue
+			}
+			qf, ok := f.Annotations["query_field"]
+			if !ok {
+				continue
+			}
+			if f.Name == key {
+				haveKey = true
+			}
+			if qf.StringValue == "range" {
+				criteria = append(criteria, f.Name+"_from", f.Name+"_to")
+				continue
+			}
+			criteria = append(criteria, f.Name)
+		}
+		if !haveKey && key != principal && key != namespace {
+			criteria = append(criteria, key)
+		}
+		plane.Methods = append(plane.Methods, C2SMethod{
+			RecordName:   rec.Name,
+			RecordFQN:    decl.Record,
+			KeyField:     key,
+			KeyProtoType: keyType,
+			PrincipalPin: principal,
+			NamespacePin: namespace,
+			Criteria:     criteria,
+		})
+	}
+	if len(plane.Methods) == 0 {
+		return nil
+	}
+	return plane
 }

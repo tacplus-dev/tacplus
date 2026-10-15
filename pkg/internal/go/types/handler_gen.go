@@ -115,6 +115,12 @@ type GrpcServiceEntry struct {
 	HasConfigState           bool
 	// AuthDisabled skips SetAuthorizeFunc on this service's server wrapper.
 	AuthDisabled bool
+	// IsGeneratedRecordC2S marks the synthesized <Svc>Records surface, whose
+	// handler is GENERATED (s2sm/record_c2s.go) rather than written: the
+	// Handler interface carries no getter for it and the ServiceManager binds
+	// GeneratedImplStruct itself.
+	IsGeneratedRecordC2S bool
+	GeneratedImplStruct  string // "EgressvaultRecordsGeneratedHandler"
 	// AuthAnyUser wires the fixed-namespace authenticate-at-or-below path.
 	AuthAnyUser bool
 	// HasMethodAuth is true when the wrapper has a RegisterMethodAuth function.
@@ -242,30 +248,31 @@ type serviceManagerTemplateData struct {
 	// emitter is wired at all.
 	HasAccountingPublisher   bool
 	AccountingPublisher      PublisherTemplateEntry
-	HasAutoTls               bool     // true when any state has auto_tls enabled
-	AutoTlsKeyType           string   // key algorithm: "ed25519" or "ecdsa"
-	HasSmb                   bool     // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
-	SmbAuthorityServiceID    string   // service_id of the declared (spec.smb_authority) service
-	HasTimeseriesProjections bool     // true when any subscription has timeseries projections
-	ProjectionPkgAlias       string   // alias for source event package (e.g. "sensor_pb")
-	ProjectionPkgImport      string   // import path for source event package
-	HasTypedHealth           bool     // true when the service's package declares a service_health message
-	TypedHealthType          string   // e.g. "TimeseriesStoreHealth"
-	TypedHealthPkgAlias      string   // e.g. "graphstore_pb"
-	TypedHealthPkgImport     string   // e.g. "module/types/services/graphstore"
-	TacplusVersion           string   // e.g. "v1.2.71"
-	TacplusGitSha            string   // git SHA of tacplus binary source
-	ProtoSourceVersion       string   // git tag of proto source dir, e.g. "v1.2.80-main.80"
-	ProtoSourceGitSha        string   // git SHA of proto source dir
-	HasTracePublisher        bool     // true when actor declares trace.TraceEvent event_publish
-	TracePublisherTopicRef   string   // canonical topic_ref for trace publisher
-	TracePublisherTarget     string   // broker service_id for trace publisher
-	TracePublishStreamName   string   // canonical EventBus publish stream name
-	TracePublishGrpcPath     string   // canonical gRPC path for trace publish stream
-	S2STargetServices        []string // unique service IDs for S2S client ServiceConnections
-	S2STargetsRequired       bool     // s2s targets listed explicitly (grpc_s2s_clients) gate readiness; s2s_client_all targets do not
+	HasAutoTls               bool                  // true when any state has auto_tls enabled
+	AutoTlsKeyType           string                // key algorithm: "ed25519" or "ecdsa"
+	HasSmb                   bool                  // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
+	SmbAuthorityServiceID    string                // service_id of the declared (spec.smb_authority) service
+	HasTimeseriesProjections bool                  // true when any subscription has timeseries projections
+	ProjectionPkgAlias       string                // alias for source event package (e.g. "sensor_pb")
+	ProjectionPkgImport      string                // import path for source event package
+	HasTypedHealth           bool                  // true when the service's package declares a service_health message
+	TypedHealthType          string                // e.g. "TimeseriesStoreHealth"
+	TypedHealthPkgAlias      string                // e.g. "graphstore_pb"
+	TypedHealthPkgImport     string                // e.g. "module/types/services/graphstore"
+	TacplusVersion           string                // e.g. "v1.2.71"
+	TacplusGitSha            string                // git SHA of tacplus binary source
+	ProtoSourceVersion       string                // git tag of proto source dir, e.g. "v1.2.80-main.80"
+	ProtoSourceGitSha        string                // git SHA of proto source dir
+	HasTracePublisher        bool                  // true when actor declares trace.TraceEvent event_publish
+	TracePublisherTopicRef   string                // canonical topic_ref for trace publisher
+	TracePublisherTarget     string                // broker service_id for trace publisher
+	TracePublishStreamName   string                // canonical EventBus publish stream name
+	TracePublishGrpcPath     string                // canonical gRPC path for trace publish stream
+	S2STargetServices        []string              // unique service IDs for S2S client ServiceConnections
+	S2STargetsRequired       bool                  // s2s targets listed explicitly (grpc_s2s_clients) gate readiness; s2s_client_all targets do not
 	RecordReaders            []goRecordReaderEntry // model-driven (spec.record_read) typed readers over stored record rows
 	HasRecordReaders         bool
+	RecordC2S                *goRecordC2SFile // generated handler for the client-facing record read plane, nil when none
 	GrpcServices             []GrpcServiceEntry
 	WrapperImports           []WrapperImport // deduplicated wrapper imports
 	TypeImports              []WrapperImport // deduplicated type imports (for config)
@@ -387,6 +394,8 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			MethodAuthFuncName:       "Register" + svc.ServiceName + "MethodAuth",
 			HasRequiresDevice:        svc.HasRequiresDevice,
 			IsFirstConfigUse:         isFirst,
+			IsGeneratedRecordC2S:     svc.SynthesizedKind == parser.SynthesizedKindRecordC2S,
+			GeneratedImplStruct:      svc.ServiceName + "GeneratedHandler",
 		})
 	}
 	disambiguateWrapperImportAliases(grpcSvcs)
@@ -679,6 +688,10 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 	if err != nil {
 		return serviceManagerTemplateData{}, err
 	}
+	recordC2S, err := collectGoRecordC2SPlane(config, config.AnnotatedProtoDir)
+	if err != nil {
+		return serviceManagerTemplateData{}, err
+	}
 	hasTracePublisher := tracePublisher != nil && hasServiceHealthState
 	tracePublisherTopicRef := ""
 	tracePublisherTarget := ""
@@ -775,6 +788,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		S2STargetsRequired:       len(config.GrpcS2SClients) > 0 && !config.GrpcS2SClientAll,
 		RecordReaders:            recordReaders,
 		HasRecordReaders:         len(recordReaders) > 0,
+		RecordC2S:                recordC2S,
 		GrpcServices:             grpcSvcs,
 		WrapperImports:           wrapperImports,
 		TypeImports:              typeImports,
@@ -933,6 +947,11 @@ func generateServiceManager(config *tactype.Config, svcs []ServiceInfo, allFiles
 	// The SM exposes an accessor per (spec.record_read); write the readers
 	// beside it, or the accessor names a type that does not exist.
 	if err := generateGoRecordReaders(config, config.AnnotatedProtoDir, data.RecordReaders); err != nil {
+		return err
+	}
+	// Same contract for the client-facing plane's generated handler: the SM
+	// binds it only when it exists, so write it here.
+	if err := generateGoRecordC2SPlane(config, data.RecordC2S); err != nil {
 		return err
 	}
 	return nil

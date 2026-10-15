@@ -41,11 +41,17 @@ type javaGrpcServiceEntry struct {
 	WrapperVarName           string // "wrapperIdentity"
 	ConfigStateGroupAccessor string // "services"
 	ConfigStateAccessor      string // "identityConfigState"
-	ConfigStateStub          string // "IdentityConfigStateServiceGrpc"
-	HasConfigState           bool   // true when {ServiceName}ConfigState exists in config.States
-	AuthDisabled             bool   // C2S: no token required
-	AuthAnyUser              bool   // C2S: any authenticated user can call
-	HasMethodAuth            bool   // true if wrapper has registerMethodAuth method
+	// IsGeneratedRecordC2S marks the synthesized <Svc>Records surface, whose
+	// handler is GENERATED (<Svc>RecordsGeneratedHandler.java) rather than
+	// written: the Handler interface carries no getter for it and the
+	// ServiceManager binds GeneratedImplClass itself.
+	IsGeneratedRecordC2S bool
+	GeneratedImplClass   string // "EgressvaultRecordsGeneratedHandler"
+	ConfigStateStub      string // "IdentityConfigStateServiceGrpc"
+	HasConfigState       bool   // true when {ServiceName}ConfigState exists in config.States
+	AuthDisabled         bool   // C2S: no token required
+	AuthAnyUser          bool   // C2S: any authenticated user can call
+	HasMethodAuth        bool   // true if wrapper has registerMethodAuth method
 	// HasAccounting is true when this wrapper's generated class defines
 	// setEmitter (i.e. it ended up with at least one accounted RPC, post Q2's
 	// self-publish exclusion — see accounting_exclusion.go). The
@@ -194,6 +200,7 @@ type javaSmTemplateData struct {
 	S2STargetsRequired     bool                     // s2s targets listed explicitly (grpc_s2s_clients) gate readiness; s2s_client_all targets do not
 	RecordReaders          []javaRecordReaderEntry  // model-driven (spec.record_read) typed readers over stored record rows
 	HasRecordReaders       bool
+	RecordC2S              *javaRecordC2SFile // generated handler for the client-facing record read plane, nil when none
 	DiskStores             []javaDiskStoreRuntimeEntry
 	HasDiskStores          bool
 	// HasApprovalBroker is true when some hosted service carries the
@@ -272,6 +279,8 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 			ConfigPackageName:        configPkg,
 			ServerClassName:          svc.ServiceName,
 			WrapperVarName:           "wrapper" + prefix,
+			IsGeneratedRecordC2S:     svc.SynthesizedKind == parser.SynthesizedKindRecordC2S,
+			GeneratedImplClass:       svc.ServiceName + "GeneratedHandler",
 			ConfigStateGroupAccessor: configStateGroupAccessor,
 			ConfigStateAccessor:      configStateAccessor,
 			ConfigStateStub:          configStateName + "ServiceGrpc",
@@ -453,6 +462,10 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 	if err != nil {
 		return javaSmTemplateData{}, err
 	}
+	recordC2S, err := collectJavaRecordC2SPlane(config, config.AnnotatedProtoDir)
+	if err != nil {
+		return javaSmTemplateData{}, err
+	}
 	tracePublisher, err := detectTracePublisherTemplateData(config)
 	if err != nil {
 		return javaSmTemplateData{}, err
@@ -576,6 +589,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		S2STargetsRequired:     len(config.GrpcS2SClients) > 0 && !config.GrpcS2SClientAll,
 		RecordReaders:          recordReaders,
 		HasRecordReaders:       len(recordReaders) > 0,
+		RecordC2S:              recordC2S,
 		DiskStores:             diskStores,
 		HasDiskStores:          len(diskStores) > 0,
 		HasApprovalBroker:      hasApprovalBroker,
@@ -828,6 +842,9 @@ func generateJavaServiceManager(config *tactype.Config, svcs []ServiceInfo, clie
 	// The SM exposes an accessor per (spec.record_read); write the readers
 	// beside it, or the accessor names a class that does not exist.
 	if err := generateJavaRecordReaders(config, data.RecordReaders); err != nil {
+		return err
+	}
+	if err := generateJavaRecordC2SPlane(config, data.RecordC2S); err != nil {
 		return err
 	}
 	return nil

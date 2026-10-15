@@ -888,7 +888,7 @@ public class ServiceManager implements AutoCloseable {
         // Create gRPC server wrappers. Token-auth wrappers take the Authorizer at
         // construction (mandatory); auth_disabled / c2d wrappers take none.
 {{- range .GrpcServices}}
-        {{.ServerClassName}} {{.WrapperVarName}} = new {{.ServerClassName}}(handler.{{.GetterName}}(){{if not .AuthDisabled}}, authorizer{{end}});
+        {{.ServerClassName}} {{.WrapperVarName}} = new {{.ServerClassName}}({{if .IsGeneratedRecordC2S}}new {{.GeneratedImplClass}}(this){{else}}handler.{{.GetterName}}(){{end}}{{if not .AuthDisabled}}, authorizer{{end}});
         {{.WrapperVarName}}.setInstanceId(getInstanceId());
         {{.WrapperVarName}}.setAnonymizeHmacKey(config.getAnonymizeHmacKey().toByteArray());
 {{- end}}

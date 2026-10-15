@@ -1374,6 +1374,25 @@ PLANE_PY
     grep -A1 'type VaultSecretRowRecordReader struct {' "$go_readers" | grep -q 'EgressRecordQueryClient' \
       || die "record-egress fixture (go): VaultSecretRowRecordReader must read the plane's C2S half (EgressRecordQueryClient)"
   fi
+  # The generated handler behind the client-facing plane: the author writes
+  # nothing for EgressvaultRecords. Go and Java emit it like Rust (2026-10-14),
+  # and their Handler aggregate carries no getter for it.
+  if [[ "$language" == "go" ]]; then
+    local go_c2s
+    go_c2s="$(find "$output" -type f -path '*/s2sm/record_c2s.go' -print -quit)"
+    [[ -n "$go_c2s" ]] || die "record-egress fixture (go): the generated record read plane handler was not generated under $output"
+    grep -q 'func (g \*EgressvaultRecordsGeneratedHandler) GetVaultSecretRowPage(' "$go_c2s" \
+      || die "record-egress fixture (go): the generated plane handler lacks GetVaultSecretRowPage"
+    ! grep -q 'EgressvaultRecordsGrpcImpl()' "$(dirname "$go_c2s")/handler.go" \
+      || die "record-egress fixture (go): the author's Handler must not carry a getter for the generated record read plane"
+  fi
+  if [[ "$language" == "java" ]]; then
+    local java_c2s
+    java_c2s="$(find "$output" -type f -path '*/s2sm/EgressvaultRecordsGeneratedHandler.java' -print -quit)"
+    [[ -n "$java_c2s" ]] || die "record-egress fixture (java): EgressvaultRecordsGeneratedHandler.java was not generated under $output"
+    ! grep -q 'getEgressvaultRecordsGrpcImpl()' "$(dirname "$java_c2s")/Handler.java" \
+      || die "record-egress fixture (java): the author's Handler must not carry a getter for the generated record read plane"
+  fi
   if [[ "$language" == "java" ]]; then
     local java_reader
     java_reader="$(find "$output" -type f -path '*/s2sm/VaultRowRecordReader.java' -print -quit)"

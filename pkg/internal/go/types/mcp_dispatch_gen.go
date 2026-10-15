@@ -826,15 +826,38 @@ func (s *%[1]s) mcpServer() *mcp.Server {
 	tools := %[2]sMcpTools()
 `, surface, serviceName, strconv.Quote(serviceName), strconv.Quote(goMcpServerVersion))
 
-	for i, t := range tools {
+	for i := range tools {
 		fmt.Fprintf(&b, `	srv.AddTool(tools[%d], func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		return s.%s(ctx, req.Params.Arguments)
+		return s.Call(ctx, tools[%d].Name, req.Params.Arguments)
 	})
-`, i, goMcpDispatchFnName(t))
+`, i, i)
 	}
 
 	fmt.Fprintf(&b, `	return srv
 }
+
+// Call dispatches a tool call by name without an MCP session.
+//
+// An in-process caller (a service acting as its own MCP client, e.g. an agentic
+// loop dispatching its own tool calls) has no session and must not fabricate
+// one just to reach %[1]s's tool logic. This is the session-free entry point:
+// the tools/call handlers registered by mcpServer are thin wrappers around it,
+// so such a caller reuses the generated argument decode, validation and
+// caller-scoping instead of re-deriving it by hand.
+func (s *%[2]s) Call(ctx context.Context, name string, arguments json.RawMessage) (*mcp.CallToolResult, error) {
+	switch name {
+`, serviceName, surface)
+	for _, t := range tools {
+		fmt.Fprintf(&b, `	case %s:
+		return s.%s(ctx, arguments)
+`, strconv.Quote(t.ToolName), goMcpDispatchFnName(t))
+	}
+	fmt.Fprintf(&b, `	default:
+		return nil, status.Error(codes.NotFound, fmt.Sprintf("unknown tool %%q", name))
+	}
+}
+`)
+	fmt.Fprintf(&b, `
 
 // %[1]sArgumentNames is the set of argument names a tool call actually carried.
 // Dispatch consults it BEFORE decoding, so naming a server-computed field is a

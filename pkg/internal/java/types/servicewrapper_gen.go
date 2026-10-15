@@ -27,11 +27,16 @@ import (
 
 // ServiceInfo represents a service that needs a wrapper generated.
 type ServiceInfo struct {
-	ProtoFile      string
-	PackageName    string
-	ServiceName    string
-	GrpcName       string // service identity for routing (package name)
-	IsGrpc         bool
+	ProtoFile   string
+	PackageName string
+	ServiceName string
+	GrpcName    string // service identity for routing (package name)
+	IsGrpc      bool
+	// HasMcp is true when the service publishes MCP tools. An MCP-only service
+	// (no service_s2s/service_c2s/service_c2d, so IsGrpc is false) still
+	// carries a synthesized MCP session carrier RPC and needs a wrapper, a
+	// Handler entry and a ServiceManager mount like any other gRPC service.
+	HasMcp         bool
 	IsS2S          bool // true if service has service_s2s annotation
 	IsC2S          bool // true if service has service_c2s annotation
 	IsC2D          bool // true if service has service_c2d annotation
@@ -112,7 +117,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 		// or any message has service_state
 		hasGrpc := false
 		for _, svc := range fileDesc.Services {
-			if svc.GrpcName != "" {
+			if svc.GrpcName != "" || svc.HasMcpRpcs {
 				hasGrpc = true
 			}
 		}
@@ -152,7 +157,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 			// gRPC services carry a transport service annotation.
 			// State services (StateService, WatchService) are in files with service_state messages.
 			isGrpc := service.GrpcName != ""
-			if !isGrpc && !hasState {
+			if !isGrpc && !hasState && !service.HasMcpRpcs {
 				continue
 			}
 
@@ -216,6 +221,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				ServiceName:     service.Name,
 				GrpcName:        service.GrpcName,
 				IsGrpc:          isGrpc,
+				HasMcp:          service.HasMcpRpcs,
 				IsS2S:           service.IsS2S,
 				SynthesizedKind: service.SynthesizedKind,
 				IsC2S:           service.IsC2S,
@@ -283,7 +289,9 @@ func resolveServerServices(config *tactype.Config, servicesInfo []ServiceInfo) [
 		var result []ServiceInfo
 		// Include own-package S2S/C2S gRPC services (the service's own hosted endpoints)
 		for _, svc := range servicesInfo {
-			if svc.PackageName == config.SelfPackage && svc.IsGrpc && (svc.IsS2S || svc.IsC2S) {
+			// An MCP-only service (IsGrpc false) still carries a synthesized
+			// session carrier RPC to host; mount it like any other gRPC service.
+			if svc.PackageName == config.SelfPackage && ((svc.IsGrpc && (svc.IsS2S || svc.IsC2S)) || svc.HasMcp) {
 				result = append(result, svc)
 			}
 		}
@@ -362,7 +370,7 @@ func resolveRestClientServices(config *tactype.Config, servicesInfo []ServiceInf
 func filterGrpcAnnotated(servicesInfo []ServiceInfo) []ServiceInfo {
 	grpcProtos := make(map[string]bool)
 	for _, svc := range servicesInfo {
-		if svc.IsGrpc && !svc.IsC2D {
+		if (svc.IsGrpc || svc.HasMcp) && !svc.IsC2D {
 			grpcProtos[svc.ProtoFile] = true
 		}
 	}
@@ -452,8 +460,9 @@ func generateServiceWrappers(config *tactype.Config, servicesInfo []ServiceInfo,
 		}
 		hasAccountingByService[svc.ServiceName] = hasAccounting
 
-		// Track for aggregator generation (only gRPC services)
-		if svc.IsGrpc {
+		// Track for aggregator generation (only gRPC services, including an
+		// MCP-only service whose single gRPC surface is the session carrier)
+		if svc.IsGrpc || svc.HasMcp {
 			className := serverClassName(svc.ServiceName)
 			// Determine parentDir group
 			normalizedRelPath := strings.TrimPrefix(svc.ProtoFile, "tacplus"+string(filepath.Separator))
@@ -560,7 +569,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	svcName, svcFileName := proto.ServiceProtoParts(svc.ProtoFile)
 	isFlatServiceProto := svcName == svcFileName
 
-	isStateService := !svc.IsGrpc
+	isStateService := !svc.IsGrpc && !svc.HasMcp
 
 	if isStateService {
 		// For state services, read the outer class from the state watch proto itself

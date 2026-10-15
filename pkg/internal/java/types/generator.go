@@ -1329,7 +1329,9 @@ func Generate(config *tactype.Config) error {
 				grpcSvcs = explicit
 			} else {
 				for _, svc := range serverServices {
-					if svc.IsGrpc {
+					// An MCP-only service (IsGrpc false) still carries a
+					// synthesized session carrier RPC to mount.
+					if svc.IsGrpc || svc.HasMcp {
 						grpcSvcs = append(grpcSvcs, svc)
 					}
 				}

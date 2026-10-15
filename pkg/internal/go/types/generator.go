@@ -525,7 +525,7 @@ func Generate(config *tactype.Config) error {
 				grpcSvcs = explicit
 			} else {
 				for _, svc := range serverServices {
-					if svc.GrpcName != "" {
+					if svc.GrpcName != "" || svc.HasMcp {
 						grpcSvcs = append(grpcSvcs, svc)
 					}
 				}
@@ -1147,11 +1147,16 @@ func generateProtoCode(config *tactype.Config, protoFiles []string, tempProtoDir
 
 // ServiceInfo holds information about a generated gRPC service
 type ServiceInfo struct {
-	ProtoFile     string
-	PackageName   string // Go package name from proto declaration (e.g. "ironmaiden")
-	DirName       string // Directory name from proto package (e.g. "ironmaiden"); used in import paths
-	ServiceName   string
-	GrpcName      string // service identity used for routing (defaults to proto package)
+	ProtoFile   string
+	PackageName string // Go package name from proto declaration (e.g. "ironmaiden")
+	DirName     string // Directory name from proto package (e.g. "ironmaiden"); used in import paths
+	ServiceName string
+	GrpcName    string // service identity used for routing (defaults to proto package)
+	// HasMcp is true when the service publishes MCP tools. An MCP-only service
+	// (no service_s2s/service_c2s/service_c2d, so GrpcName is empty) still
+	// carries a synthesized MCP session carrier RPC and needs a wrapper, a
+	// Handler entry and a ServiceManager mount like any other gRPC service.
+	HasMcp        bool
 	HostLabel     string // physical service hosting this virtual service, from service_s2s tag
 	OutputDir     string
 	ParentDir     string
@@ -1273,7 +1278,9 @@ func resolveServerServices(config *tactype.Config, servicesInfo []ServiceInfo) (
 	var result []ServiceInfo
 	if config.SelfPackage != "" {
 		for _, svc := range servicesInfo {
-			if svc.GrpcName == "" || svc.IsC2D {
+			// An MCP-only service has no GrpcName but a synthesized session
+			// carrier RPC to host; mount it like any other gRPC service.
+			if (svc.GrpcName == "" && !svc.HasMcp) || svc.IsC2D {
 				continue
 			}
 			if svc.PackageName != config.SelfPackage &&
@@ -1739,6 +1746,7 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 				DirName:           dirNameForInfo,
 				ServiceName:       service.Name,
 				GrpcName:          service.GrpcName,
+				HasMcp:            service.HasMcpRpcs,
 				HostLabel:         service.HostLabel,
 				OutputDir:         outputDir,
 				ParentDir:         parentDirForInfo,

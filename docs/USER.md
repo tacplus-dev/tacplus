@@ -1098,6 +1098,11 @@ Everything else is reuse, deliberately:
     `(spec.store_namespace)` rows out of the response, and frames the typed
     result. A tool failure is a `CallToolResult` with `IsError`, not a JSON-RPC
     protocol error, so the model can read and correct its own call.
+  - `<Service>McpSurface.Call(ctx, name, arguments)` — the session-free entry
+    point. An in-process caller (a service acting as its own MCP client, e.g.
+    an agentic loop dispatching its own tool calls) reuses the generated
+    argument decode, validation and caller-scoping through it; the `tools/call`
+    handlers are thin wrappers around it.
   - `serve<Service>McpSession(...)` and an `mcp.Transport` over the gRPC bidi
     stream — one complete JSON-RPC frame per stream message, bounded at
     `mcp.McpResponse.payload`'s `(spec.assert_max_size)`.
@@ -1123,7 +1128,9 @@ Everything else is reuse, deliberately:
     each built from the generated JSON Schema, omitting the same server-computed
     fields.
   - `<Service>Mcp.Surface` — the per-session surface, bound to one verified
-    `Caller`. It holds the caller as a FIELD rather than reading it off the gRPC
+    `Caller`. Its `call(name, arguments)` is the session-free entry point an
+    in-process caller uses; the `tools/call` handlers are thin wrappers
+    around it. It holds the caller as a FIELD rather than reading it off the gRPC
     `Context`, because the SDK dispatches a tool call on its own scheduler
     thread where `Auth.callerFromContext()` is not in scope. A `tools/call`
     decodes into the rpc's own protobuf request with `JsonFormat.parser()`

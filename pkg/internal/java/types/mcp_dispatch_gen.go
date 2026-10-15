@@ -790,18 +790,43 @@ func javaMcpSurface(serviceName string, tools []javaMcpTool) string {
             java.util.List<McpSchema.Tool> published = tools();
             return java.util.List.of(
 `, serviceName)
-	for i, t := range tools {
+	for i := range tools {
 		sep := ","
 		if i == len(tools)-1 {
 			sep = ""
 		}
 		fmt.Fprintf(&b, `                McpServerFeatures.SyncToolSpecification.builder()
                     .tool(published.get(%d))
-                    .callHandler((exchange, request) -> %s(request))
+                    .callHandler((exchange, request) -> call(request.name(), request.arguments()))
                     .build()%s
-`, i, javaMcpDispatchMethodName(t), sep)
+`, i, sep)
 	}
 	b.WriteString(`            );
+        }
+
+        /**
+        * call dispatches a tool call by name without an MCP session.
+        *
+        * <p>An in-process caller (a service acting as its own MCP client, e.g. an
+        * agentic loop dispatching its own tool calls) has no session and must not
+        * fabricate one just to reach the tool logic. This is the session-free
+        * entry point: the tools/call handlers registered by toolSpecifications are
+        * thin wrappers around it, so such a caller reuses the generated argument
+        * decode, validation and caller-scoping instead of re-deriving it by hand.
+        */
+        public McpSchema.CallToolResult call(String name, java.util.Map<String, Object> arguments) {
+            McpSchema.CallToolRequest request = new McpSchema.CallToolRequest(
+                    name, arguments == null ? java.util.Map.of() : arguments);
+            switch (name) {
+`)
+	for _, t := range tools {
+		fmt.Fprintf(&b, `                case %s:
+                    return %s(request);
+`, strconv.Quote(t.ToolName), javaMcpDispatchMethodName(t))
+	}
+	b.WriteString(`                default:
+                    return toolError("unknown tool \"" + name + "\"");
+            }
         }
 
         /**

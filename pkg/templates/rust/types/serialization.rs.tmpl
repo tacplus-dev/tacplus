@@ -3,8 +3,15 @@
 /// Normalizes enum string values to i32 in a JSON Value tree for {{.TypeName}}.
 /// Converts canonical proto enum names (e.g., "LEVEL_DEBUG") and friendly
 /// names to their i32 representation before serde deserialization.
+{{- if .Aliases}}
+/// First reads each (spec.json_aliases) key as its field's own key; an alias
+/// never overrides the field's key when both are present.
+{{- end}}
 pub fn normalize_{{.SnakeName}}_enums(v: &mut serde_json::Value) {
 if let Some(obj) = v.as_object_mut() {
+{{- range .Aliases}}
+if let Some(val) = obj.remove("{{.Alias}}") { obj.entry("{{.Canonical}}").or_insert(val); }
+{{- end}}
 {{- range .EnumFields}}
 {{- if .IsRepeated}}
 { let key = if obj.contains_key("{{.CamelName}}") { "{{.CamelName}}" } else { "{{.FieldName}}" };
@@ -59,6 +66,9 @@ if let Some(val) = obj.get_mut(key) {
 /// Reverse of normalize_{{.SnakeName}}_enums — converts integer enum values to API-friendly
 /// string names (using json_return_value when set, e.g., 1 → "user" for Role).
 pub fn stringify_{{.SnakeName}}_enums(v: &mut serde_json::Value) {
+{{- if not (or .EnumFields .MessageFields)}}
+let _ = v; // only (spec.json_aliases) here: nothing to write back
+{{- else}}
 if let Some(obj) = v.as_object_mut() {
 {{- range .EnumFields}}
 {{- if .IsRepeated}}
@@ -103,6 +113,7 @@ if let Some(val) = obj.get_mut(key) {
 {{- end}}
 {{- end}}
 }
+{{- end}}
 }
 {{- end}}
 /// Converts {{.TypeName}} to JSON bytes.

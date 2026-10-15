@@ -747,10 +747,8 @@ func Generate(config *tactype.Config) error {
 	if err := proto.AppendRoutingEnvelopesToProtos(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to append routing envelopes to protos: %w", err)
 	}
-	if proto.NeedsEventBusSupportProto(protoDir) {
-		if _, err := proto.EnsureEventBusSupportProto(protoDir, proto.EventBusSupportProtoOptions{}); err != nil {
-			return fmt.Errorf("failed to generate eventbus support proto: %w", err)
-		}
+	if _, err := proto.PrepareEventBusSupportProto(protoDir, proto.EventBusSupportProtoOptions{}, config.FlatProtoDir); err != nil {
+		return err
 	}
 
 	// Generate virtual service protos into generated/.
@@ -937,12 +935,8 @@ func Generate(config *tactype.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to inject gRPC config state: %w", err)
 	}
-	if err := proto.ResolveStatesFromProto(config, config.FlatProtoDir); err != nil {
+	if err := proto.ResolveServiceStates(config, feConfigs); err != nil {
 		return err
-	}
-	proto.InjectConfigStates(config, feConfigs)
-	if err := proto.InjectHealthState(config, config.FlatProtoDir); err != nil {
-		return fmt.Errorf("failed to inject health state: %w", err)
 	}
 
 	// Generate TenantConfig proto from (spec.config_slice) tenant-scope annotations.
@@ -1329,6 +1323,11 @@ func Generate(config *tactype.Config) error {
 		tsSrcDir := filepath.Join(parentDir, "src", "main", "java")
 		if err := generateJavaTimeseriesHelpers(config, protoDir, tsSrcDir); err != nil {
 			return fmt.Errorf("failed to generate timeseries helpers: %w", err)
+		}
+		// Extract<Projection>From<Source> / <source>ToProjections for messages
+		// with a (spec.timeseries_type).source, beside the timeseries helpers.
+		if err := generateJavaExtractionHelpers(config, allParsedFiles, protoDir, tsSrcDir); err != nil {
+			return fmt.Errorf("failed to generate extraction helpers: %w", err)
 		}
 	}
 

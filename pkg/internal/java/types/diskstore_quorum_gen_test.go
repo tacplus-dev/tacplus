@@ -9,78 +9,13 @@ import (
 	"testing"
 	"text/template"
 
-	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
-	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/templates"
 )
 
 // (spec.quorum_write) was parsed, described and registered but no generated line
-// ever enforced it. These tests pin the enforcement: the floor read off the
-// store's fields, and the gate emitted into DiskStores only for a store that
-// declared one.
-
-func quorumField(name string, quorum bool, minDurableCopies int) parser.FieldDescriptor {
-	ann := map[string]model.AnnotationValue{}
-	if quorum {
-		ann["quorum_write"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
-	}
-	if minDurableCopies > 0 {
-		ann["min_durable_copies"] = model.AnnotationValue{
-			Type: model.AnnotationTypeInt, IntValue: int64(minDurableCopies)}
-	}
-	return parser.FieldDescriptor{Name: name, Type: "string", Annotations: ann}
-}
-
-func TestStoreQuorumDefaultsToTwoWhenUndeclared(t *testing.T) {
-	msg := &parser.MessageDescriptor{
-		Name:   "CredPair",
-		Fields: []parser.FieldDescriptor{quorumField("client_secret", true, 0)},
-	}
-	quorum, min := storeQuorum(msg)
-	if !quorum {
-		t.Fatal("a field declaring quorum_write must gate the store")
-	}
-	if min != 2 {
-		t.Fatalf("quorum_write with no min_durable_copies must default to 2, got %d", min)
-	}
-}
-
-func TestStoreQuorumHonoursTheDeclaredSingleNodeFloor(t *testing.T) {
-	msg := &parser.MessageDescriptor{
-		Name:   "CredPair",
-		Fields: []parser.FieldDescriptor{quorumField("client_secret", true, 1)},
-	}
-	quorum, min := storeQuorum(msg)
-	if !quorum || min != 1 {
-		t.Fatalf("min_durable_copies:1 is the deliberate single-node setting, got quorum=%v min=%d", quorum, min)
-	}
-}
-
-// A row is written whole, so the strictest declared floor is the one the write
-// has to clear; taking the first or the last would let a 3-copy field ship under
-// a 2-copy gate depending on field order.
-func TestStoreQuorumTakesTheStrictestFloor(t *testing.T) {
-	msg := &parser.MessageDescriptor{
-		Name: "CredPair",
-		Fields: []parser.FieldDescriptor{
-			quorumField("client_secret", true, 3),
-			quorumField("refresh_token", true, 2),
-		},
-	}
-	if _, min := storeQuorum(msg); min != 3 {
-		t.Fatalf("strictest floor must govern, got %d", min)
-	}
-}
-
-func TestStoreQuorumIsAbsentWithoutTheAnnotation(t *testing.T) {
-	msg := &parser.MessageDescriptor{
-		Name:   "CredPair",
-		Fields: []parser.FieldDescriptor{quorumField("client_secret", false, 0)},
-	}
-	if quorum, min := storeQuorum(msg); quorum || min != 0 {
-		t.Fatalf("a store declaring no quorum_write must get no gate, got quorum=%v min=%d", quorum, min)
-	}
-}
+// ever enforced it. These tests pin the gate emitted into DiskStores only for a
+// store that declared one; the floor read off the store's fields is pinned by
+// parser.StoreQuorum's tests.
 
 func renderDiskStoresForTest(t *testing.T, stores []javaDiskStore) string {
 	t.Helper()

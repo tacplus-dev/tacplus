@@ -505,3 +505,26 @@ func eventBusDeclsIn(protoDir string, relPaths []string, pkg string) (eventBusDe
 	}
 	return out, nil
 }
+
+// PrepareEventBusSupportProto synthesizes generated/eventbus_support.proto in
+// protoDir when the tree publishes or subscribes to a topic, and fails
+// generation if it has drifted from the canonical eventbus proto in
+// sourceProtoDir (ValidateEventBusSupportWireContract). It returns the support
+// proto's relative path, or "" when the tree needs none.
+//
+// The full-service generators (Go, Java, Rust) call this one function, so none
+// of them can compile a support proto the drift check has not seen; Java
+// synthesized it without the check until 2026-10-15.
+func PrepareEventBusSupportProto(protoDir string, opts EventBusSupportProtoOptions, sourceProtoDir string) (string, error) {
+	if !NeedsEventBusSupportProto(protoDir) {
+		return "", nil
+	}
+	relPath, err := EnsureEventBusSupportProto(protoDir, opts)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate eventbus support proto: %w", err)
+	}
+	if err := ValidateEventBusSupportWireContract(protoDir, relPath, sourceProtoDir); err != nil {
+		return "", err
+	}
+	return relPath, nil
+}

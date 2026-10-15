@@ -36,7 +36,7 @@ type rustEnumTemplateData struct {
 }
 
 // toProstEnumName converts proto enum name to prost's PascalCase format
-// Example: ALPNProtocol -> AlpnProtocol, X509KeyUsage -> X509KeyUsage
+// Example: ALPNProtocol -> AlpnProtocol, X509KeyUsage -> X509KeyUsage, TypeID -> TypeId
 func toProstEnumName(protoName string) string {
 	var result strings.Builder
 	i := 0
@@ -66,6 +66,13 @@ func toProstEnumName(protoName string) string {
 					result.WriteByte(protoName[k] - 'A' + 'a') // Middle letters to lowercase
 				}
 				i = j - 1 // Position at last uppercase (which starts next word)
+			} else if numUppercase >= 2 && j == len(protoName) {
+				// A trailing acronym is one word to prost (heck): TypeID -> TypeId.
+				result.WriteByte(protoName[i])
+				for k := i + 1; k < j; k++ {
+					result.WriteByte(protoName[k] - 'A' + 'a')
+				}
+				i = j
 			} else {
 				// Not an acronym pattern, just write the character
 				result.WriteByte(ch)

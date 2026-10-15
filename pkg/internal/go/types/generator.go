@@ -201,19 +201,14 @@ func Generate(config *tactype.Config) error {
 	if err := proto.AppendRoutingEnvelopesToProtos(tempProtoDir, flatProtoDir); err != nil {
 		return fmt.Errorf("failed to append routing envelopes to protos: %w", err)
 	}
-	if proto.NeedsEventBusSupportProto(tempProtoDir) {
-		eventBusProto, err := proto.EnsureEventBusSupportProto(tempProtoDir, proto.EventBusSupportProtoOptions{
-			GoPackage: fmt.Sprintf("%s/types/generated/eventbus_support", config.ModuleBasePath),
-		})
-		if err != nil {
-			return fmt.Errorf("failed to generate eventbus support proto: %w", err)
-		}
-		if err := proto.ValidateEventBusSupportWireContract(tempProtoDir, eventBusProto, flatProtoDir); err != nil {
-			return err
-		}
-		if eventBusProto != "" && !slices.Contains(protoFilePaths, eventBusProto) {
-			protoFilePaths = append(protoFilePaths, eventBusProto)
-		}
+	eventBusProto, err := proto.PrepareEventBusSupportProto(tempProtoDir, proto.EventBusSupportProtoOptions{
+		GoPackage: fmt.Sprintf("%s/types/generated/eventbus_support", config.ModuleBasePath),
+	}, flatProtoDir)
+	if err != nil {
+		return err
+	}
+	if eventBusProto != "" && !slices.Contains(protoFilePaths, eventBusProto) {
+		protoFilePaths = append(protoFilePaths, eventBusProto)
 	}
 
 	// Generate virtual service protos into generated/.
@@ -322,15 +317,8 @@ func Generate(config *tactype.Config) error {
 	if exists && !slices.Contains(protoFilePaths, "generated/project_config.proto") {
 		protoFilePaths = append(protoFilePaths, "generated/project_config.proto")
 	}
-	if err := proto.ResolveStatesFromProto(config, config.FlatProtoDir); err != nil {
+	if err := proto.ResolveServiceStates(config, feConfigs); err != nil {
 		return err
-	}
-	proto.InjectConfigStates(config, feConfigs)
-	if err := proto.InjectTenantConfigSubscriptions(config, config.FlatProtoDir, feConfigs); err != nil {
-		return fmt.Errorf("failed to inject tenant config subscriptions: %w", err)
-	}
-	if err := proto.InjectHealthState(config, config.FlatProtoDir); err != nil {
-		return fmt.Errorf("failed to inject health state: %w", err)
 	}
 
 	// Append state/store service definitions BEFORE trace injection so that

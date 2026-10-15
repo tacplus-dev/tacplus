@@ -108,7 +108,7 @@ func TestJavaDistinguishesTlsHandlerRejectionFromGiveUp(t *testing.T) {
 		t.Errorf("java no longer reports the give-up cause %q", giveUpMsg)
 	}
 
-	classifier := "private static boolean isPermanentIdentityInitError(Throwable t) {"
+	classifier := "static boolean isPermanentIdentityInitError(Throwable t) {"
 	i := strings.Index(s, classifier)
 	if i < 0 {
 		t.Fatal("isPermanentIdentityInitError not found — the permanent-init classifier was renamed")

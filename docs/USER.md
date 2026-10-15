@@ -741,7 +741,9 @@ tacplus generates Put/Get/Delete/List RPCs.
 
 ### Quorum Writes
 
-Fields annotated with `(spec.quorum_write) = true` require writes to be acked by 2+ nodes. On a single-node cluster, writes succeed immediately. Valid on fields within `service_state` or `service_store` messages.
+Fields annotated with `(spec.quorum_write) = true` require a write to be durable on `(spec.min_durable_copies)` distinct nodes (default 2) before it is acked. Below that floor the write is refused with FAILED_PRECONDITION, never degraded; a single-node development tree declares `min_durable_copies: 1`. Valid on fields within `service_state` or `service_store` messages.
+
+For a `service_store`, the generated disk helpers carry the store's floor (the strictest declared on any of its fields, since a row is written whole) and a gate the store's write path calls with the number of durable copies it can reach: `MinDurableCopies<Type>` / `Require<Type>Quorum(n)` (Go), `MIN_DURABLE_COPIES_<TYPE>` / `require<Type>Quorum(n)` (Java), `MIN_DURABLE_COPIES_<TYPE>` / `require_<type>_quorum(n)` (Rust). A store whose rows are partitioned across a cluster narrows its disk-log roll baseline to its own rows by implementing `diskstore.LocalRows` (Go, Java), or by overriding `Handler::<store>_local_rows` (Rust).
 
 ### Commands
 

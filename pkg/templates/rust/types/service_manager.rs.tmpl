@@ -1050,7 +1050,15 @@ impl ServiceManager {
                             match h.{{.HandlerGetter}}().list(None).await {
                                 Ok(response) => {
                                     match diskstore_stores::snapshot_{{.StoreName}}(&response.items) {
-                                        Ok(records) => records,
+                                        // The baseline is LOCALITY-SCOPED when the store
+                                        // says it is partitioned: list(None) is the whole
+                                        // cluster's rows, and a node whose baseline claims
+                                        // rows it does not own breaks the partial-log
+                                        // invariant recovery resolves staleness with.
+                                        Ok(records) => diskstore::local_records(
+                                            h.{{.StoreName}}_local_rows().as_deref(),
+                                            records,
+                                        ),
                                         Err(err) => {
                                             tracing::warn!(
                                                 store = "{{.StoreName}}",

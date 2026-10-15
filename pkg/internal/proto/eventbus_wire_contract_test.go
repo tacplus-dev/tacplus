@@ -461,3 +461,33 @@ message SubscribeRequest {
 		t.Fatalf("a support proto that declares no BackpressurePolicy must pass: %v", err)
 	}
 }
+
+// PrepareEventBusSupportProto is the one synthesize-then-check sequence the Go,
+// Java and Rust generators run. A tree that publishes to a topic gets the
+// support proto and the drift check together: against a canonical eventbus
+// that matches it returns the support proto, against one that has drifted it
+// fails generation, and a tree with no topic gets neither.
+func TestPrepareEventBusSupportProtoChecksWhatItSynthesizes(t *testing.T) {
+	topicTree := func(t *testing.T) string {
+		t.Helper()
+		dir := t.TempDir()
+		writeProto(t, dir, "services/pub.proto", "syntax = \"proto3\";\npackage pub;\n// publishes via (spec.topic)\n")
+		return dir
+	}
+
+	source := writeCanonicalEventBusTree(t, canonicalEventBusFixture)
+	rel, err := PrepareEventBusSupportProto(topicTree(t), EventBusSupportProtoOptions{}, source)
+	if err != nil || rel != EventBusSupportProtoPath {
+		t.Fatalf("a matching canonical eventbus must pass and return the support proto, got %q, %v", rel, err)
+	}
+
+	drifted := strings.Replace(canonicalEventBusFixture, "int64 offset = 2 [(spec.assert_ge) = 0];", "string offset = 2;", 1)
+	_, err = PrepareEventBusSupportProto(topicTree(t), EventBusSupportProtoOptions{}, writeCanonicalEventBusTree(t, drifted))
+	if err == nil || !strings.Contains(err.Error(), "PublishResponse") {
+		t.Fatalf("a canonical PublishResponse that drifted from the synthesized one must fail generation, got %v", err)
+	}
+
+	if rel, err := PrepareEventBusSupportProto(t.TempDir(), EventBusSupportProtoOptions{}, source); err != nil || rel != "" {
+		t.Fatalf("a tree with no topic needs no support proto, got %q, %v", rel, err)
+	}
+}

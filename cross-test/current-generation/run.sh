@@ -18,6 +18,7 @@ REQUIRESDEVICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-requiresdevice"
 SELFTESTS_SRC="$ROOT_DIR/cross-test/current-generation/testdata"
 RECORDEGRESS_PROTO_SRC="$ROOT_DIR/cross-test/proto-recordegress"
 OWNERDEFAULT_PROTO_SRC="$ROOT_DIR/cross-test/proto-ownerdefault"
+QUORUMWRITE_PROTO_SRC="$ROOT_DIR/cross-test/proto-quorumwrite"
 WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/current-generation}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
@@ -185,6 +186,19 @@ write_ownerdefault_config() {
 language: "$language"
 pkg: "com.gitlab.example.dummy.ownerdesk"
 src: "$OWNERDEFAULT_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
+write_quorumwrite_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.quorumvault"
+src: "$QUORUMWRITE_PROTO_SRC"
 output-dir: "tacplus"
 EOF
 }
@@ -404,6 +418,32 @@ run_java_generated_self_tests() {
     grep -q '^OwnerDefaultTest: all checks passed$' "$test_log" \
       || die "owner-default fixture (java): OwnerDefaultTest did not report its checks passed"
   fi
+  # The generated startup-classifier self-test (NEW-21), emitted beside every
+  # ServiceManager.java, so present exactly in the service fixtures' builds.
+  local id_test id_class
+  id_test="$(find "$output/src/main/java" -type f -name 'ServiceManagerIdentityErrorTest.java' -print -quit)"
+  if [[ -n "$id_test" ]]; then
+    id_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$id_test").$(basename "$id_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$id_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q '^ServiceManagerIdentityErrorTest: all checks passed$' "$test_log" \
+      || die "java: ServiceManagerIdentityErrorTest did not report its checks passed"
+  fi
+  # The main fixture's extraction self-test, copied in by
+  # install_extraction_selftest, so it is present exactly in that build.
+  local ex_test ex_class
+  ex_test="$(find "$output/src/main/java" -type f -path '*/types/common2/user/ExtractionTest.java' -print -quit)"
+  if [[ -n "$ex_test" ]]; then
+    ex_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$ex_test").$(basename "$ex_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$ex_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q '^ExtractionTest: all checks passed$' "$test_log" \
+      || die "main fixture (java): ExtractionTest did not report its checks passed"
+  fi
   assert_clean_log "$test_log"
 }
 
@@ -460,6 +500,16 @@ run_rust_spiffe_self_tests() {
       return 1
     }
   assert_clean_log "$log_dir/rust-grpcserver-test.log"
+
+  # The main fixture's JSON-key self-test, copied in by
+  # install_json_key_selftest, so it is present exactly in that build.
+  if [[ -f "$output/tests/json_key_test.rs" ]]; then
+    (cd "$output" && cargo test --test json_key_test) >"$log_dir/rust-json-key-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-json-key-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-json-key-test.log"
+  fi
 
   # PC-C-2: the collection crate's page-token codec tests pin the
   # cross-language byte-identity vectors (shared verbatim with the go and java
@@ -926,6 +976,105 @@ assert_ownerdefault_output() {
     || die "owner-default fixture ($language): the refusal is not on UpdateDesk in $api"
 }
 
+# assert_extraction_output checks that the main fixture's FixtureProbe
+# transformation produced its extraction helpers in every language. Absence
+# compiles: Java emitted none until 2026-10-15 and the fixture still built.
+assert_extraction_output() {
+  local output="$1"
+  local language="$2"
+  local file=""
+
+  case "$language" in
+    go)
+      file="$(find "$output" -type f -path '*/common2/user/extraction_project_fixture_probe.go' -print -quit)"
+      [[ -n "$file" ]] || die "main fixture (go): extraction_project_fixture_probe.go not generated under $output"
+      grep -qF 'FixtureProbeRow: ExtractFixtureProbeRowFromFixtureProbe(event),' "$file" \
+        || die "main fixture (go): FixtureProbeToProjections does not extract FixtureProbeRow in $file"
+      ;;
+    java)
+      file="$(find "$output" -type f -path '*/common2/user/FixtureProbeProjections.java' -print -quit)"
+      [[ -n "$file" ]] || die "main fixture (java): FixtureProbeProjections.java not generated under $output"
+      grep -qF 'return new FixtureProbeProjections(extractFixtureProbeRowFromFixtureProbe(event));' "$file" \
+        || die "main fixture (java): fixtureProbeToProjections does not extract FixtureProbeRow in $file"
+      ;;
+    rust)
+      file="$(find "$output" -type f -path '*/common2/user/extraction_project_fixture_probe.rs' -print -quit)"
+      [[ -n "$file" ]] || die "main fixture (rust): extraction_project_fixture_probe.rs not generated under $output"
+      grep -qF 'fixture_probe_row: extract_fixture_probe_row_from_fixture_probe(event),' "$file" \
+        || die "main fixture (rust): fixture_probe_to_projections does not extract FixtureProbeRow in $file"
+      ;;
+  esac
+}
+
+# install_json_key_selftest copies the Rust runtime self-test for
+# common2.JsonKeyProbe into the generated crate's tests/ directory.
+install_json_key_selftest() {
+  local output="$1"
+  local language="$2"
+  [[ "$language" == "rust" ]] || return 0
+  [[ -f "$output/Cargo.toml" ]] || die "main fixture (rust): generated crate not found under $output"
+  mkdir -p "$output/tests"
+  cp "$SELFTESTS_SRC/rust/json_key_test.rs" "$output/tests/"
+}
+
+# install_extraction_selftest copies the Java runtime self-test into the
+# generated common2/user types package, beside FixtureProbeProjections.
+install_extraction_selftest() {
+  local output="$1"
+  local language="$2"
+  [[ "$language" == "java" ]] || return 0
+  local dest
+  dest="$(dirname "$(find "$output/src/main/java" -type f -path '*/types/common2/user/FixtureProbeProjections.java' -print -quit)")"
+  [[ -d "$dest" ]] || die "main fixture (java): generated common2/user types package not found under $output"
+  cp "$SELFTESTS_SRC/java/ExtractionTest.java" "$dest/"
+}
+
+# assert_quorumwrite_output checks that the (spec.quorum_write) gate was
+# GENERATED for quorumvault.CredPair with the strictest declared floor, 3, in
+# every language. Absence compiles: before 2026-10-15 only Java emitted it. Go and
+# Java host CredPairStoreService, so their roll baseline must also go through the
+# LocalRows seam. Rust does not host a synthesized store service at all (see
+# roadmap/LANGUAGE_PARITY.md), so it has no roll scheduler to assert here.
+assert_quorumwrite_output() {
+  local output="$1"
+  local language="$2"
+  local stores="" sm=""
+
+  case "$language" in
+    go)
+      stores="$(find "$output" -type f -path '*/s2sm/diskstore/diskstore.go' -print -quit)"
+      [[ -n "$stores" ]] || die "quorum-write fixture (go): s2sm/diskstore/diskstore.go not generated under $output"
+      grep -qF 'const MinDurableCopiesCredPair = 3' "$stores" \
+        || die "quorum-write fixture (go): CredPair's floor is not the strictest declared (3) in $stores"
+      grep -qF 'return diskstore.RequireQuorum("cred_pair", durableCopies, MinDurableCopiesCredPair)' "$stores" \
+        || die "quorum-write fixture (go): RequireCredPairQuorum does not call the chassis gate in $stores"
+      sm="$(find "$output" -type f -path '*/s2sm/s2sm.go' -print -quit)"
+      grep -qF 'return diskstore.LocalRecords(store, records)' "$sm" \
+        || die "quorum-write fixture (go): the CredPair roll baseline is not narrowed through LocalRows in $sm"
+      cp "$SELFTESTS_SRC/go/quorum_write_test.go" "$(dirname "$stores")/"
+      ;;
+    java)
+      stores="$(find "$output" -type f -path '*/chassis/diskstore/stores/DiskStores.java' -print -quit)"
+      [[ -n "$stores" ]] || die "quorum-write fixture (java): DiskStores.java not generated under $output"
+      grep -qF 'public static final int MIN_DURABLE_COPIES_CRED_PAIR = 3;' "$stores" \
+        || die "quorum-write fixture (java): CredPair's floor is not the strictest declared (3) in $stores"
+      grep -qF 'QuorumGate.require("cred_pair", durableCopies, MIN_DURABLE_COPIES_CRED_PAIR);' "$stores" \
+        || die "quorum-write fixture (java): requireCredPairQuorum does not call the chassis gate in $stores"
+      sm="$(find "$output" -type f -path '*/s2sm/ServiceManager.java' -print -quit)"
+      grep -qF 'if (store instanceof LocalRows) {' "$sm" \
+        || die "quorum-write fixture (java): the CredPair roll baseline is not narrowed through LocalRows in $sm"
+      ;;
+    rust)
+      stores="$(find "$output" -type f -path '*/s2sm/diskstore_stores/mod.rs' -print -quit)"
+      [[ -n "$stores" ]] || die "quorum-write fixture (rust): s2sm/diskstore_stores/mod.rs not generated under $output"
+      grep -qF 'pub const MIN_DURABLE_COPIES_CRED_PAIR: u32 = 3;' "$stores" \
+        || die "quorum-write fixture (rust): CredPair's floor is not the strictest declared (3) in $stores"
+      grep -qF 'diskstore::require_quorum("cred_pair", durable_copies, MIN_DURABLE_COPIES_CRED_PAIR)' "$stores" \
+        || die "quorum-write fixture (rust): require_cred_pair_quorum does not call the chassis gate in $stores"
+      ;;
+  esac
+}
+
 # install_ownerdefault_selftest copies the Java runtime self-test into the
 # generated chassis/grpcserver package (it reads the package-private
 # Authorizer.SERVICE_NAME). Go and Rust get the compile leg and the output
@@ -1377,6 +1526,9 @@ for language in "${languages[@]}"; do
   assert_no_legacy_fixture_output "$dir/tacplus"
   assert_spiffe_soundness "$dir/tacplus"
   assert_current_output "$output_root" "$language" "$dir/tacplus"
+  assert_extraction_output "$output_root" "$language"
+  install_extraction_selftest "$output_root" "$language"
+  install_json_key_selftest "$output_root" "$language"
   echo "==> Compiling $language cross-test fixture"
   compile_current_output "$output_root" "$language" "$dir/tacplus"
   echo "    PASS $language"
@@ -1844,6 +1996,31 @@ if [[ -d "$OWNERDEFAULT_PROTO_SRC" ]]; then
     echo "==> Compiling $language owner-default fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/ownerdesk"
     echo "    PASS $language owner-default"
+  done
+fi
+
+# quorum-write fixture: the only full service build hosting a keyed
+# (spec.service_store), so the only place the generated quorum write gate and the
+# disk-store roll scheduler are compiled. Go also runs quorum_write_test.go
+# against the generated RequireCredPairQuorum.
+if [[ -d "$QUORUMWRITE_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/quorumwrite-$language"
+    log="$WORK_ROOT/quorumwrite-$language.log"
+    rm -rf "$dir"
+    write_quorumwrite_config "$dir" "$language"
+
+    echo "==> Generating $language quorum-write fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$QUORUMWRITE_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language quorum-write generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_quorumwrite_output "$output_root" "$language"
+    echo "==> Compiling $language quorum-write fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/quorumvault"
+    echo "    PASS $language quorum-write"
   done
 fi
 

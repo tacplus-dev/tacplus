@@ -9,6 +9,7 @@ package sm
 
 import (
 "context"
+"crypto"
 "errors"
 "fmt"
 "os"
@@ -113,8 +114,8 @@ smbcert_pb "{{.ModuleBasePath}}/types/sys/smbcert"
 {{end}}
 {{if or .HasAutoTls .HasSmb}}
 key_pb "{{.ModuleBasePath}}/types/sys/key"
-x509_pb "{{.ModuleBasePath}}/types/sys/x509"
 {{end}}
+x509_pb "{{.ModuleBasePath}}/types/sys/x509"
 )
 
 // ServiceManager holds the infrastructure state created during New().
@@ -622,6 +623,22 @@ func (sm *ServiceManager) Conn() grpc.ClientConnInterface {
 return sm.sc.Conn()
 }
 
+// InstanceID returns the server-assigned instance ID.
+func (sm *ServiceManager) InstanceID() string {
+return sm.identity.InstanceId()
+}
+
+// TLSCertChain returns the current auto-TLS certificate chain — the first
+// delivery, then each accepted renewal — or nil when the service has none.
+func (sm *ServiceManager) TLSCertChain() *x509_pb.X509CertChain {
+return sm.sc.TLSCertChain()
+}
+
+// TLSPrivateKey returns the private key matching TLSCertChain, or nil.
+func (sm *ServiceManager) TLSPrivateKey() crypto.PrivateKey {
+return sm.sc.TLSPrivateKey()
+}
+
 {{if .HasTimeseriesProjections}}
 // SetTimeseriesInsertFunc sets the timeseries store insert callback.
 // Call before Run(). The service manager passes this to HandleXxx for timeseries projections.
@@ -974,7 +991,8 @@ func (sm *ServiceManager) startDiskStoreRollSchedulers(h Handler) error {
 		storeLog := log
 		sm.tasks.Go(func(ctx context.Context) {
 			_ = diskstore.RunRollScheduler(ctx, storeLog, interval, nodeID+"/{{.StoreName}}", func() []*diskstore.Record {
-				resp, err := h.{{.HandlerGetter}}().List(nil)
+				store := h.{{.HandlerGetter}}()
+				resp, err := store.List(ctx, nil)
 				if err != nil {
 					zap.L().Warn("diskstore snapshot failed; roll will retry on next interval",
 						zap.String("store", "{{.StoreName}}"),
@@ -988,7 +1006,11 @@ func (sm *ServiceManager) startDiskStoreRollSchedulers(h Handler) error {
 						zap.Error(err))
 					return nil
 				}
-				return records
+				// The baseline is LOCALITY-SCOPED when the store says it is
+				// partitioned: List is the whole cluster's rows, and a node
+				// whose baseline claims rows it does not own breaks the
+				// partial-log invariant recovery resolves staleness with.
+				return diskstore.LocalRecords(store, records)
 			})
 		})
 	}

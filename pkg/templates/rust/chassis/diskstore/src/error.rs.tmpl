@@ -46,6 +46,24 @@ impl DiskStoreError {
         Self::new(3, format!("validation failed: {}", msg.into()))
     }
 
+    /// The write could not reach its declared durability floor (code 9: FAILED_PRECONDITION).
+    ///
+    /// This is a REFUSAL, not a degrade. A store declaring
+    /// `(spec.quorum_write)` states that a value is only written once it is
+    /// durable on `(spec.min_durable_copies)` distinct nodes; below that the
+    /// write is rejected before any local effect rather than acked locally and
+    /// hoped about, because a cluster that has lost members is otherwise
+    /// indistinguishable from a single-node development tree.
+    pub fn below_quorum(store: &str, durable_copies: u32, min_durable_copies: u32) -> Self {
+        Self::new(
+            9,
+            format!(
+                "store {}: write needs {} durable copies, cluster can supply {}",
+                store, min_durable_copies, durable_copies
+            ),
+        )
+    }
+
     /// Serialize/deserialize failure (code 13: INTERNAL).
     pub fn codec(msg: impl Into<String>) -> Self {
         Self::new(13, format!("codec error: {}", msg.into()))

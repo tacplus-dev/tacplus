@@ -8,12 +8,11 @@ import (
 	"testing"
 )
 
-// NEW-21 leg (a), java side. The classifier is a private method of the
-// per-service generated ServiceManager, and the java self-test harness only runs
-// chassis-level test classes (cross-test/current-generation/run.sh:259), so
-// there is nowhere to execute it the way the go leg does. Pin the shape instead:
-// the trust-domain branch must be TYPED (the substring seam is what NEW-21
-// removed) and must walk the cause chain, since the exception arrives wrapped.
+// NEW-21 leg (a), java side. The generated ServiceManagerIdentityErrorTest
+// executes the classifier in every service fixture current-generation builds;
+// this pins the shape as well: the trust-domain branch must be TYPED (the
+// substring seam is what NEW-21 removed) and must walk the cause chain, since
+// the exception arrives wrapped.
 func TestJavaServiceManagerClassifiesMissingTrustDomainByType(t *testing.T) {
 	rendered := readJavaTemplate(t, "java/types/ServiceManager.java.tmpl")
 

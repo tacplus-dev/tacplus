@@ -1,0 +1,46 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+
+package diskstore
+
+import (
+	"errors"
+	"testing"
+)
+
+// The gate is a refusal, not a degrade: below the floor it is
+// FAILED_PRECONDITION; at or above it the write proceeds.
+func TestRequireQuorumRefusesBelowTheFloor(t *testing.T) {
+	err := RequireQuorum("cred_pair", 1, 2)
+	var dse *DiskStoreError
+	if !errors.As(err, &dse) || dse.Code != 9 {
+		t.Fatalf("1 of 2 durable copies must be FAILED_PRECONDITION, got %v", err)
+	}
+	if want := "store cred_pair: write needs 2 durable copies, cluster can supply 1"; dse.Message != want {
+		t.Fatalf("message = %q, want %q", dse.Message, want)
+	}
+	if err := RequireQuorum("cred_pair", 2, 2); err != nil {
+		t.Fatalf("2 of 2 durable copies must pass, got %v", err)
+	}
+	if err := RequireQuorum("cred_pair", 1, 1); err != nil {
+		t.Fatalf("min_durable_copies 1 is the legal single-node setting, got %v", err)
+	}
+}
+
+type partitionedStore struct{ local map[string]bool }
+
+func (p partitionedStore) IsLocalRow(key string) bool { return p.local[key] }
+
+// A partitioned store narrows the roll baseline to its own rows; any other
+// store keeps the whole-store baseline.
+func TestLocalRecordsNarrowsOnlyForAPartitionedStore(t *testing.T) {
+	records := []*Record{ {Key: "a"}, {Key: "b"}, {Key: "c"} }
+
+	scoped := LocalRecords(partitionedStore{local: map[string]bool{"a": true, "c": true}}, records)
+	if len(scoped) != 2 || scoped[0].Key != "a" || scoped[1].Key != "c" {
+		t.Fatalf("partitioned baseline = %v, want a and c", scoped)
+	}
+	if whole := LocalRecords(struct{}{}, records); len(whole) != 3 {
+		t.Fatalf("a store without LocalRows must keep every row, got %d", len(whole))
+	}
+}

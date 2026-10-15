@@ -91,15 +91,7 @@ func generateJavaTimeseriesHelpers(config *tactype.Config, protoDir, srcDir stri
 	// Proto package -> declaring file, for cross-package enum/message resolution.
 	// Same role as Rust's protoByPkg; Java needs it to build the foreign type's
 	// Java package and outer class.
-	fileByPkg := make(map[string]string, len(all))
-	for relPath, fd := range all {
-		if fd.Package == "" {
-			continue
-		}
-		if prev, ok := fileByPkg[fd.Package]; !ok || relPath < prev {
-			fileByPkg[fd.Package] = relPath
-		}
-	}
+	fileByPkg := javaProtoFileByPackage(all)
 
 	relPaths := make([]string, 0, len(all))
 	for relPath := range all {

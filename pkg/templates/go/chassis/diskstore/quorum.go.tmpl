@@ -1,0 +1,63 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+
+package diskstore
+
+// RequireQuorum is the write gate for a store declaring (spec.quorum_write):
+// it refuses the write unless durableCopies reaches minDurableCopies.
+//
+// The generated per-store Require<Type>Quorum calls it with the store's
+// declared floor; the store's write path calls that with the number of distinct
+// nodes that will hold the value durably — only the store knows that number.
+// Below the floor the write is REFUSED (FAILED_PRECONDITION) before any local
+// effect. It is deliberately not a degrade-to-whatever-the-cluster-has: a
+// production cluster that has lost members looks identical to a one-node
+// development tree, so an implicit degrade removes the guarantee exactly where
+// it was needed. A single node is a legal configuration, declared as
+// min_durable_copies: 1.
+//
+// What counts as a "durable copy" is the store's own statement — for an
+// in-memory replicated store it is the synchronous replica count, for a
+// disk-backed one it is the number of logs the record has been fsync'd to. This
+// gate compares the two numbers; it does not decide what they mean.
+func RequireQuorum(store string, durableCopies, minDurableCopies int) error {
+	if durableCopies < minDurableCopies {
+		return ErrBelowQuorum(store, durableCopies, minDurableCopies)
+	}
+	return nil
+}
+
+// LocalRows is implemented by a service_store whose rows are PARTITIONED across
+// a cluster, to narrow the roll baseline to the rows this node is responsible
+// for.
+//
+// A redo log is single-writer, single-process, on the service's own volume —
+// so in a clustered service each node owns a PARTIAL log, and recovery is the
+// union of the reachable nodes' logs. The roll baseline has to keep that
+// invariant: List(nil) returns the whole cluster's rows, so an unnarrowed
+// baseline makes every node's log claim keys it does not own and never will
+// again, and the union can no longer resolve staleness by ownership.
+//
+// A store that does not implement it keeps the whole-store baseline, which is
+// correct for a single-process store.
+type LocalRows interface {
+	// IsLocalRow reports whether key is a row this node currently owns or
+	// backs up, i.e. one that belongs in this node's roll baseline.
+	IsLocalRow(key string) bool
+}
+
+// LocalRecords narrows records to the rows store reports as local when it
+// implements LocalRows, and returns records unchanged otherwise.
+func LocalRecords(store any, records []*Record) []*Record {
+	local, ok := store.(LocalRows)
+	if !ok {
+		return records
+	}
+	scoped := make([]*Record, 0, len(records))
+	for _, rec := range records {
+		if local.IsLocalRow(rec.Key) {
+			scoped = append(scoped, rec)
+		}
+	}
+	return scoped
+}

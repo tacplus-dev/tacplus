@@ -236,8 +236,11 @@ func TestGoServiceManagerRendersDiskStoreRollSchedulers(t *testing.T) {
 		"func (sm *ServiceManager) startDiskStoreRollSchedulers(h Handler) error",
 		"interval := sm.diskStoreLogs.rollInterval",
 		"diskstore.RunRollScheduler(ctx, storeLog, interval, nodeID+\"/cred_pair\"",
-		"h.GetCredPairStoreGrpcImpl().List(nil)",
+		"store := h.GetCredPairStoreGrpcImpl()",
+		"resp, err := store.List(ctx, nil)",
 		"diskstores.SnapshotCredPair(resp.GetItems())",
+		// The roll baseline is narrowed through the chassis LocalRows seam.
+		"return diskstore.LocalRecords(store, records)",
 		"if err := sm.startDiskStoreRollSchedulers(h); err != nil",
 	} {
 		if !strings.Contains(rendered, want) {
@@ -259,4 +262,34 @@ func readTemplateForTest(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(text)
+}
+
+// Java (getInstanceId, getTlsCertChain, getTlsPrivateKey) and Rust
+// (instance_id, tls_cert_chain_*, tls_private_key_*) expose the instance id and
+// the current auto-TLS material on every ServiceManager, nil/None without
+// auto-TLS. Go now does too, auto-TLS or not, so the accessors render — and
+// their x509_pb / crypto imports resolve — with no auto-TLS declared.
+func TestGoServiceManagerExposesInstanceIDAndTLSMaterial(t *testing.T) {
+	tmplStr, err := loadTemplate("service_manager.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate service_manager.go.tmpl: %v", err)
+	}
+	tmpl := template.Must(template.New("service_manager").Funcs(header.Funcs()).Parse(tmplStr))
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, serviceManagerTemplateData{ServiceLabel: "demo", ModuleBasePath: "example.com/demo/model", SmPrefix: "s2sm"}); err != nil {
+		t.Fatalf("execute service_manager template: %v", err)
+	}
+	if _, err := format.Source(out.Bytes()); err != nil {
+		t.Fatalf("rendered go service manager is not valid Go syntax: %v\n%s", err, out.String())
+	}
+	for _, want := range []string{
+		"func (sm *ServiceManager) InstanceID() string {\nreturn sm.identity.InstanceId()",
+		"func (sm *ServiceManager) TLSCertChain() *x509_pb.X509CertChain {\nreturn sm.sc.TLSCertChain()",
+		"func (sm *ServiceManager) TLSPrivateKey() crypto.PrivateKey {\nreturn sm.sc.TLSPrivateKey()",
+		`x509_pb "example.com/demo/model/types/sys/x509"`,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("rendered go service manager missing %q", want)
+		}
+	}
 }

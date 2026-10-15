@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"text/template"
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/extraction"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
@@ -81,258 +81,107 @@ func generateRustExtractionHelpers(allFiles []model.ProtoFile, outputDir string)
 		return fmt.Errorf("failed to parse extraction project template: %w", err)
 	}
 
-	// Track projections grouped by source FQN for generating projection groups.
-	type projGroupKey struct {
-		sourceFQN string
-		projPkg   string
+	groups, err := extraction.Plan(allFiles)
+	if err != nil {
+		return err
 	}
-	type projGroupInfo struct {
-		pf              model.ProtoFile
-		sourceType      string
-		sourceQualifier string
-		projections     []string
-	}
-	projGroups := make(map[projGroupKey]*projGroupInfo)
-	var projGroupOrder []projGroupKey
 
-	for _, pf := range allFiles {
-		if strings.HasPrefix(pf.RelPath, "google/") {
-			continue
-		}
-		for _, msg := range pf.Messages {
-			sourceFQN := rustExtractionSourceFQN(msg)
-			if sourceFQN == "" {
-				continue
-			}
-
-			sourceMsg, sourcePf, ok := rustFindMessageByFQN(allFiles, sourceFQN)
-			if !ok {
-				return fmt.Errorf("Rust extraction source %q for projection %s.%s not found", sourceFQN, pf.Package, msg.Name)
-			}
-
-			data, err := buildRustExtractionTemplateData(msg, pf.Package, sourceMsg, sourcePf.Package, allFiles)
-			if err != nil {
-				return fmt.Errorf("failed to build Rust extraction data for %s.%s: %w", pf.Package, msg.Name, err)
-			}
-
-			if err := writeRustExtractionFile(pf, data, extractionTmpl, outputDir); err != nil {
-				return fmt.Errorf("failed to generate Rust extraction helpers for %s.%s: %w", pf.Package, msg.Name, err)
+	for _, g := range groups {
+		var entries []rustProjectionEntry
+		var sourceQualifier string
+		for _, p := range g.Projections {
+			data := buildRustExtractionTemplateData(p, g)
+			sourceQualifier = data.SourceQualifier
+			if err := writeRustExtractionFile(p.File, data, extractionTmpl, outputDir); err != nil {
+				return fmt.Errorf("failed to generate Rust extraction helpers for %s.%s: %w", p.File.Package, p.Message.Name, err)
 			}
 			zap.L().Debug("Generated Rust extraction helpers",
-				zap.String("projection", msg.Name),
-				zap.String("source", sourceFQN),
-				zap.String("package", pf.Package))
-
-			// Track for projection group generation.
-			key := projGroupKey{sourceFQN: sourceFQN, projPkg: pf.Package}
-			if g, ok := projGroups[key]; ok {
-				g.projections = append(g.projections, msg.Name)
-			} else {
-				projGroups[key] = &projGroupInfo{
-					pf:              pf,
-					sourceType:      sourceMsg.Name,
-					sourceQualifier: data.SourceQualifier,
-					projections:     []string{msg.Name},
-				}
-				projGroupOrder = append(projGroupOrder, key)
-			}
+				zap.String("projection", p.Message.Name),
+				zap.String("source", g.SourceFile.Package+"."+g.Source.Name),
+				zap.String("package", p.File.Package))
+			entries = append(entries, rustProjectionEntry{
+				TypeName:  p.Message.Name,
+				SnakeName: strutil.ToSnakeCase(p.Message.Name),
+			})
 		}
-	}
 
-	// Generate projection group files.
-	for _, key := range projGroupOrder {
-		g := projGroups[key]
-		entries := make([]rustProjectionEntry, len(g.projections))
-		for i, name := range g.projections {
-			entries[i] = rustProjectionEntry{
-				TypeName:  name,
-				SnakeName: strutil.ToSnakeCase(name),
-			}
-		}
+		// Generate the projection group file.
 		groupData := rustProjectionGroupData{
-			SourceType:      g.sourceType,
-			SnakeSource:     strutil.ToSnakeCase(g.sourceType),
-			SourceQualifier: g.sourceQualifier,
+			SourceType:      g.Source.Name,
+			SnakeSource:     strutil.ToSnakeCase(g.Source.Name),
+			SourceQualifier: sourceQualifier,
 			Projections:     entries,
 		}
-		if err := writeRustProjectionGroupFile(g.pf, groupData, projectTmpl, outputDir); err != nil {
-			return fmt.Errorf("failed to generate Rust projection group for %s: %w", key.sourceFQN, err)
+		if err := writeRustProjectionGroupFile(g.File(), groupData, projectTmpl, outputDir); err != nil {
+			return fmt.Errorf("failed to generate Rust projection group for %s.%s: %w", g.SourceFile.Package, g.Source.Name, err)
 		}
 		zap.L().Debug("Generated Rust projection group",
-			zap.String("source", key.sourceFQN),
-			zap.Int("projections", len(g.projections)))
+			zap.String("source", g.SourceFile.Package+"."+g.Source.Name),
+			zap.Int("projections", len(g.Projections)))
 	}
 
 	return nil
 }
 
-// rustExtractionSourceFQN returns the source event FQN from the
-// timeseries_type.source annotation. Returns "" if it is not set.
-func rustExtractionSourceFQN(msg model.Message) string {
-	if ann, ok := msg.Annotations["timeseries_table_source"]; ok && ann.StringValue != "" {
-		return ann.StringValue
-	}
-	return ""
-}
-
-// rustFindMessageByFQN locates a message by fully-qualified name (pkg.MessageName).
-func rustFindMessageByFQN(allFiles []model.ProtoFile, fqn string) (model.Message, model.ProtoFile, bool) {
-	parts := strings.SplitN(fqn, ".", 2)
-	if len(parts) != 2 {
-		return model.Message{}, model.ProtoFile{}, false
-	}
-	pkg, name := parts[0], parts[1]
-	for _, pf := range allFiles {
-		if pf.Package != pkg {
-			continue
-		}
-		for _, msg := range pf.Messages {
-			if msg.Name == name {
-				return msg, pf, true
-			}
-		}
-	}
-	return model.Message{}, model.ProtoFile{}, false
-}
-
-// rustFindFieldByName finds a field by name in a message.
-func rustFindFieldByName(msg model.Message, name string) (model.Field, bool) {
-	for _, f := range msg.Fields {
-		if f.Name == name {
-			return f, true
-		}
-	}
-	return model.Field{}, false
-}
-
-// buildRustExtractionTemplateData converts a projection message and its source into
+// buildRustExtractionTemplateData converts a planned projection into
 // template-ready data for the Rust extraction helpers template.
-func buildRustExtractionTemplateData(
-	projMsg model.Message,
-	projPkg string,
-	sourceMsg model.Message,
-	sourcePkg string,
-	allFiles []model.ProtoFile,
-) (rustExtractionTemplateData, error) {
+func buildRustExtractionTemplateData(p extraction.Projection, g extraction.Group) rustExtractionTemplateData {
 	sourceQualifier := ""
-	if sourcePkg != projPkg {
-		sourceQualifier = sourcePkg + "::"
+	if g.SourceFile.Package != p.File.Package {
+		sourceQualifier = g.SourceFile.Package + "::"
 	}
-
-	// Build the prost-generated oneof enum path: <snake_source_type>::Payload
-	payloadEnumPath := strutil.ToSnakeCase(sourceMsg.Name) + "::Payload"
 
 	data := rustExtractionTemplateData{
-		ProjectionType:  projMsg.Name,
-		SnakeProjection: strutil.ToSnakeCase(projMsg.Name),
-		SourceType:      sourceMsg.Name,
-		SnakeSource:     strutil.ToSnakeCase(sourceMsg.Name),
+		ProjectionType:  p.Message.Name,
+		SnakeProjection: strutil.ToSnakeCase(p.Message.Name),
+		SourceType:      g.Source.Name,
+		SnakeSource:     strutil.ToSnakeCase(g.Source.Name),
 		SourceQualifier: sourceQualifier,
-		PayloadEnumPath: payloadEnumPath,
+		// The prost-generated oneof enum path: <snake_source_type>::Payload
+		PayloadEnumPath: strutil.ToSnakeCase(g.Source.Name) + "::Payload",
 	}
 
-	// Collect fields and detect oneof usage.
-	type fieldMapping struct {
-		projField    model.Field
-		sourceExpr   string
-		oneofVariant string // first segment if dot notation, "" if top-level
-		innerField   string // second segment if dot notation
+	var fields []rustExtractionFieldData
+	for _, f := range p.Fields {
+		fields = append(fields, rustExtractionFieldData{
+			RustFieldName: f.Projection.Name,
+			ValueExpr:     buildRustValueExpr("event", f),
+		})
 	}
-
-	var mappings []fieldMapping
-	oneofVariants := make(map[string]bool)
-
-	for _, f := range projMsg.Fields {
-		gs, ok := f.Annotations["projection_source"]
-		if !ok || gs.StringValue == "" {
-			continue
-		}
-
-		fm := fieldMapping{
-			projField:  f,
-			sourceExpr: gs.StringValue,
-		}
-
-		parts := strings.SplitN(gs.StringValue, ".", 2)
-		if len(parts) == 2 {
-			fm.oneofVariant = parts[0]
-			fm.innerField = parts[1]
-			oneofVariants[parts[0]] = true
-		}
-
-		mappings = append(mappings, fm)
-	}
-
-	hasOneof := len(oneofVariants) > 0
-
-	if hasOneof {
-		// Unconditional with oneof groups (timeseries pattern).
-		data.HasOneofGroups = true
-
-		for _, fm := range mappings {
-			if fm.oneofVariant != "" {
-				continue
-			}
-			data.TopLevelFields = append(data.TopLevelFields, rustExtractionFieldData{
-				RustFieldName: fm.projField.Name,
-				ValueExpr:     buildRustValueExpr("event", fm.sourceExpr, fm.projField, sourceMsg),
-			})
-		}
-
-		// Group oneof fields by variant.
-		groupMap := make(map[string]*rustExtractionOneofGroup)
-		var groupOrder []string
-		for _, fm := range mappings {
-			if fm.oneofVariant == "" {
-				continue
-			}
-			g, ok := groupMap[fm.oneofVariant]
-			if !ok {
-				g = &rustExtractionOneofGroup{
-					VariantPascal: strutil.ToPascalCase(fm.oneofVariant),
-					VarName:       fm.oneofVariant,
-				}
-				groupMap[fm.oneofVariant] = g
-				groupOrder = append(groupOrder, fm.oneofVariant)
-			}
-			g.Fields = append(g.Fields, rustExtractionFieldData{
-				RustFieldName: fm.projField.Name,
-				ValueExpr:     buildRustValueExpr(fm.oneofVariant, fm.innerField, fm.projField, sourceMsg),
-			})
-		}
-		for _, variant := range groupOrder {
-			data.OneofGroups = append(data.OneofGroups, *groupMap[variant])
-		}
-	} else {
+	if len(p.Variants) == 0 {
 		// Simple extraction — all fields are top-level.
-		for _, fm := range mappings {
-			data.Fields = append(data.Fields, rustExtractionFieldData{
-				RustFieldName: fm.projField.Name,
-				ValueExpr:     buildRustValueExpr("event", fm.sourceExpr, fm.projField, sourceMsg),
-			})
-		}
+		data.Fields = fields
+		return data
 	}
 
-	return data, nil
+	// Unconditional with oneof groups (timeseries pattern).
+	data.HasOneofGroups = true
+	data.TopLevelFields = fields
+	for _, v := range p.Variants {
+		group := rustExtractionOneofGroup{
+			VariantPascal: strutil.ToPascalCase(v.Name),
+			VarName:       v.Name,
+		}
+		for _, f := range v.Fields {
+			group.Fields = append(group.Fields, rustExtractionFieldData{
+				RustFieldName: f.Projection.Name,
+				ValueExpr:     buildRustValueExpr(v.Name, f),
+			})
+		}
+		data.OneofGroups = append(data.OneofGroups, group)
+	}
+	return data
 }
 
-// buildRustValueExpr builds the Rust expression for accessing a source field value.
-// receiver is "event" or "payload" or a local variable name.
-// fieldName is the field name on the receiver's message type.
-func buildRustValueExpr(
-	receiver string,
-	fieldName string,
-	projField model.Field,
-	sourceMsg model.Message,
-) string {
-	accessor := receiver + "." + fieldName
+// buildRustValueExpr builds the Rust expression for reading a source field on
+// receiver ("event", or the bound oneof variant).
+func buildRustValueExpr(receiver string, f extraction.Field) string {
+	accessor := receiver + "." + f.SourceName
+	projField := f.Projection
 
-	// Resolve the source field to check for type.
-	sourceField, found := rustFindFieldByName(sourceMsg, fieldName)
-
-	// Handle type mismatches — enum source to scalar projection.
-	if found && sourceField.IsEnum && !projField.IsEnum && !projField.IsMessage {
-		// Enum i32 maps to i32 projection — no cast needed in Rust (prost enums are i32).
+	// Enum source to scalar projection: prost enums are i32, so no cast and no
+	// clone.
+	if f.Resolved && f.Source.IsEnum && !projField.IsEnum && !projField.IsMessage {
 		return accessor
 	}
 

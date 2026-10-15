@@ -31,6 +31,15 @@ type diskStore struct {
 	// SnapshotOnly is true when the store has no store_key field: emit UC1
 	// snapshot save/load only (no UC2 redo log — a whole-object singleton).
 	SnapshotOnly bool
+
+	// QuorumWrite is true when any field of the store declares
+	// (spec.quorum_write): emit the generated write gate.
+	QuorumWrite bool
+	// MinDurableCopies is the declared (spec.min_durable_copies) floor the gate
+	// enforces. Only meaningful when QuorumWrite.
+	MinDurableCopies int
+	// ConstName is the SCREAMING_SNAKE store name, for the emitted constant.
+	ConstName string
 }
 
 type diskStoreData struct {
@@ -85,13 +94,17 @@ func generateDiskStore(config *tactype.Config, servicesInfo []ServiceInfo, input
 			fqn := fd.Package + "." + msg.Name
 			toJSON := resolveToJsonPath(fqn, pkgToDir, cratePrefix)
 			fromJSON := resolveFromJsonPath(fqn, pkgToDir, cratePrefix)
+			quorumWrite, minDurableCopies := parser.StoreQuorum(&msg)
 			stores = append(stores, diskStore{
-				StoreName:    prostSnakeName(msg.Name),
-				TypePath:     modulePathOf(toJSON) + "::" + msg.Name,
-				ToJsonPath:   toJSON,
-				FromJsonPath: fromJSON,
-				KeyField:     keyField,
-				SnapshotOnly: snapshotOnly,
+				StoreName:        prostSnakeName(msg.Name),
+				TypePath:         modulePathOf(toJSON) + "::" + msg.Name,
+				ToJsonPath:       toJSON,
+				FromJsonPath:     fromJSON,
+				KeyField:         keyField,
+				SnapshotOnly:     snapshotOnly,
+				QuorumWrite:      quorumWrite,
+				MinDurableCopies: minDurableCopies,
+				ConstName:        strings.ToUpper(prostSnakeName(msg.Name)),
 			})
 		}
 	}

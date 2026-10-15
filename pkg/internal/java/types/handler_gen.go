@@ -865,6 +865,9 @@ func generateJavaServiceManager(config *tactype.Config, svcs []ServiceInfo, clie
 	}
 
 	zap.L().Info("Generated Java service_manager", zap.String("path", outputPath))
+	if err := generateJavaServiceManagerIdentityErrorTest(data, outputDir); err != nil {
+		return err
+	}
 	// The SM exposes an accessor per (spec.record_read); write the readers
 	// beside it, or the accessor names a class that does not exist.
 	if err := generateJavaRecordReaders(config, data.RecordReaders); err != nil {
@@ -872,6 +875,31 @@ func generateJavaServiceManager(config *tactype.Config, svcs []ServiceInfo, clie
 	}
 	if err := generateJavaRecordC2SPlane(config, data.RecordC2S); err != nil {
 		return err
+	}
+	return nil
+}
+
+// generateJavaServiceManagerIdentityErrorTest emits the self-test for the
+// startup error classifier beside ServiceManager.java, as Go emits
+// s2sm_identity_error_test.go: isPermanentIdentityInitError is package-private,
+// so only a class in the same package can execute it, and current-generation
+// runs it for every service fixture (NEW-21).
+func generateJavaServiceManagerIdentityErrorTest(data any, outputDir string) error {
+	tmplContent, err := loadTemplate("ServiceManagerIdentityErrorTest.java.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to load ServiceManagerIdentityErrorTest template: %w", err)
+	}
+	tmpl, err := template.New("servicemanageridentityerrortest").Funcs(header.Funcs()).Parse(tmplContent)
+	if err != nil {
+		return fmt.Errorf("failed to parse ServiceManagerIdentityErrorTest template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute ServiceManagerIdentityErrorTest template: %w", err)
+	}
+	outputPath := filepath.Join(outputDir, "ServiceManagerIdentityErrorTest.java")
+	if err := os.WriteFile(outputPath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write ServiceManagerIdentityErrorTest.java: %w", err)
 	}
 	return nil
 }

@@ -18,7 +18,7 @@ import (
 // rustEnumFieldInfo describes an enum field for serialization normalization.
 type rustEnumFieldInfo struct {
 	FieldName    string // proto/json field name (e.g., "token_purpose")
-	CamelName    string // lowerCamelCase variant (e.g., "tokenPurpose") for proto3 JSON compatibility
+	CamelName    string // the key pbjson writes: lowerCamelCase (e.g., "tokenPurpose"), or the (spec.json_key)
 	EnumTypeName string // Rust enum type, possibly with crate path (e.g., "Level" or "crate::sys::logger::logger::Level")
 	IsRepeated   bool
 }
@@ -26,20 +26,54 @@ type rustEnumFieldInfo struct {
 // rustMessageFieldInfo describes a sub-message field that needs recursive enum normalization.
 type rustMessageFieldInfo struct {
 	FieldName   string // proto/json field name (e.g., "logger")
-	CamelName   string // lowerCamelCase variant (e.g., "logger") for proto3 JSON compatibility
+	CamelName   string // the key pbjson writes: lowerCamelCase (e.g., "logger"), or the (spec.json_key)
 	NormalizeFn string // e.g., "normalize_logger_config_enums"
 	StringifyFn string // e.g., "stringify_logger_config_enums"
 	IsRepeated  bool
 	CratePath   string // fully qualified crate path for cross-package (e.g., "crate::sys::logger::logger"), empty for same-package
 }
 
+// rustJsonAlias is one (spec.json_aliases) key, read as the field's own key.
+type rustJsonAlias struct {
+	Alias     string
+	Canonical string // the field's json_key, or its proto name (pbjson reads both)
+}
+
 // rustSerializationData holds pre-computed data for the serialization template.
 type rustSerializationData struct {
 	TypeName           string
 	SnakeName          string
-	NeedsNormalization bool // true if there are enum or message fields needing normalization
+	NeedsNormalization bool // true if there are enum, alias or message fields needing normalization
 	EnumFields         []rustEnumFieldInfo
 	MessageFields      []rustMessageFieldInfo
+	// Aliases are renamed to their field's key before deserialization, as Go's
+	// FromJSON does (an alias never overrides the canonical key).
+	Aliases []rustJsonAlias
+}
+
+// rustJsonKey is the key pbjson writes a field under: its (spec.json_key),
+// which injectJsonNameForJsonKey made its json_name, or lowerCamelCase.
+func rustJsonKey(field model.Field) string {
+	if field.JsonKey != "" {
+		return field.JsonKey
+	}
+	return strutil.ToLowerCamelCase(field.Name)
+}
+
+// rustJsonAliases lists msg's (spec.json_aliases) keys with the key each is
+// read as.
+func rustJsonAliases(msg model.Message) []rustJsonAlias {
+	var aliases []rustJsonAlias
+	for _, field := range msg.Fields {
+		canonical := field.Name
+		if field.JsonKey != "" {
+			canonical = field.JsonKey
+		}
+		for _, alias := range field.JsonAliases {
+			aliases = append(aliases, rustJsonAlias{Alias: alias, Canonical: canonical})
+		}
+	}
+	return aliases
 }
 
 // writeSerialization writes serialization functions to the shared builder.
@@ -98,8 +132,8 @@ fn normalize_yaml_numbers(v: &mut serde_json::Value) {
 }
 
 // collectEnumInfo walks a message's fields to find enum and message fields
-// that need normalization. For cross-package message fields, it recursively
-// checks if the sub-message has any enum fields (at any depth).
+// that need normalization. For message fields, it recursively checks if the
+// sub-message has any enum or (spec.json_aliases) field (at any depth).
 func collectEnumInfo(msg model.Message, currentPkg string, protoByPkg map[string]model.ProtoFile, visited map[string]bool) ([]rustEnumFieldInfo, []rustMessageFieldInfo) {
 	var enumFields []rustEnumFieldInfo
 	var messageFields []rustMessageFieldInfo
@@ -127,7 +161,7 @@ func collectEnumInfo(msg model.Message, currentPkg string, protoByPkg map[string
 						field.TypePackage+"::"+enumTypeName)
 				}
 			}
-			camelName := strutil.ToLowerCamelCase(field.Name)
+			camelName := rustJsonKey(field)
 			enumFields = append(enumFields, rustEnumFieldInfo{
 				FieldName:    field.Name,
 				CamelName:    camelName,
@@ -154,7 +188,7 @@ func collectEnumInfo(msg model.Message, currentPkg string, protoByPkg map[string
 			}
 
 			subEnums, subMsgs := collectEnumInfo(*subMsg, pkg, protoByPkg, visited)
-			if len(subEnums) > 0 || len(subMsgs) > 0 {
+			if len(subEnums) > 0 || len(subMsgs) > 0 || len(rustJsonAliases(*subMsg)) > 0 {
 				subTypeName := toProstTypeName(subMsg.Name)
 				subSnake := strutil.ToSnakeCase(subTypeName)
 
@@ -168,7 +202,7 @@ func collectEnumInfo(msg model.Message, currentPkg string, protoByPkg map[string
 					}
 				}
 
-				camelName := strutil.ToLowerCamelCase(field.Name)
+				camelName := rustJsonKey(field)
 				messageFields = append(messageFields, rustMessageFieldInfo{
 					FieldName:   field.Name,
 					CamelName:   camelName,
@@ -204,13 +238,15 @@ func generateMessageSerialization(b *strings.Builder, msg model.Message, current
 	// Collect enum field info for normalization
 	visited := map[string]bool{currentPf.Package + "." + msg.Name: true}
 	enumFields, messageFields := collectEnumInfo(msg, currentPf.Package, protoByPkg, visited)
+	aliases := rustJsonAliases(msg)
 
 	data := rustSerializationData{
 		TypeName:           typeName,
 		SnakeName:          strutil.ToSnakeCase(typeName),
-		NeedsNormalization: len(enumFields) > 0 || len(messageFields) > 0,
+		NeedsNormalization: len(enumFields) > 0 || len(messageFields) > 0 || len(aliases) > 0,
 		EnumFields:         enumFields,
 		MessageFields:      messageFields,
+		Aliases:            aliases,
 	}
 
 	typeFS, err := fs.Sub(templates.FS, "rust/types")

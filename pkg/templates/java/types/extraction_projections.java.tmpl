@@ -1,0 +1,58 @@
+{{- /* Extraction helpers — generated from (spec.timeseries_type).source annotations */ -}}
+{{- /* One class per source message and projection package: Go's extraction_*.go and extraction_project_*.go */ -}}
+{{.Header}}
+package {{.Package}};
+
+/**
+ * Every projection this package extracts from a {@code {{.SourceType}}}.
+ * A field is {@code null} when the event does not carry what its projection
+ * needs.
+ */
+public final class {{.ClassName}} {
+{{- range .Projections}}
+    public final {{.TypeFqn}} {{.FieldName}};
+{{- end}}
+
+    private {{.ClassName}}({{range $i, $p := .Projections}}{{if $i}}, {{end}}{{$p.TypeFqn}} {{$p.FieldName}}{{end}}) {
+{{- range .Projections}}
+        this.{{.FieldName}} = {{.FieldName}};
+{{- end}}
+    }
+
+    /** Extracts every projection type from a {@code {{.SourceType}}}; {@code null} for a {@code null} event. */
+    public static {{.ClassName}} {{.ToProjectionsMethod}}({{.SourceFqn}} event) {
+        if (event == null) {
+            return null;
+        }
+        return new {{.ClassName}}({{range $i, $p := .Projections}}{{if $i}}, {{end}}{{$p.ExtractMethod}}(event){{end}});
+    }
+{{- range .Projections}}
+
+    /** Extracts a {@code {{.TypeName}}} from a {@code {{$.SourceType}}}. */
+    public static {{.TypeFqn}} {{.ExtractMethod}}({{$.SourceFqn}} event) {
+        if (event == null) {
+            return null;
+        }
+        {{.TypeFqn}}.Builder msg = {{.TypeFqn}}.newBuilder();
+{{- range .Fields}}
+        {{.Statement}}
+{{- end}}
+{{- if .Variants}}
+        boolean matched = false;
+{{- range .Variants}}
+        if (event.has{{.Accessor}}()) {
+            var {{.VarName}} = event.get{{.Accessor}}();
+{{- range .Fields}}
+            {{.Statement}}
+{{- end}}
+            matched = true;
+        }
+{{- end}}
+        if (!matched) {
+            return null;
+        }
+{{- end}}
+        return msg.build();
+    }
+{{- end}}
+}

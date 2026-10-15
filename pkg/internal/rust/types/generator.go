@@ -41,20 +41,18 @@ func Generate(config *tactype.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to copy proto directory: %w", err)
 	}
+	// (spec.json_key) is pbjson's json_name; see injectJsonNameForJsonKey.
+	if err := injectJsonNameForJsonKey(protoDir); err != nil {
+		return err
+	}
 	if err := proto.AppendEventBusWrappersToProtos(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to append eventbus topic wrappers to protos: %w", err)
 	}
 	if err := proto.AppendRoutingEnvelopesToProtos(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to append routing envelopes to protos: %w", err)
 	}
-	if proto.NeedsEventBusSupportProto(protoDir) {
-		eventBusProto, err := proto.EnsureEventBusSupportProto(protoDir, proto.EventBusSupportProtoOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to generate eventbus support proto: %w", err)
-		}
-		if err := proto.ValidateEventBusSupportWireContract(protoDir, eventBusProto, config.FlatProtoDir); err != nil {
-			return err
-		}
+	if _, err := proto.PrepareEventBusSupportProto(protoDir, proto.EventBusSupportProtoOptions{}, config.FlatProtoDir); err != nil {
+		return err
 	}
 
 	// Generate virtual service protos into generated/.
@@ -102,12 +100,8 @@ func Generate(config *tactype.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to inject gRPC server config state: %w", err)
 	}
-	if err := proto.ResolveStatesFromProto(config, config.FlatProtoDir); err != nil {
+	if err := proto.ResolveServiceStates(config, feConfigs); err != nil {
 		return err
-	}
-	proto.InjectConfigStates(config, feConfigs)
-	if err := proto.InjectHealthState(config, config.FlatProtoDir); err != nil {
-		return fmt.Errorf("failed to inject health state: %w", err)
 	}
 
 	// Generate TenantConfig proto from (spec.config_slice) tenant-scope annotations.
@@ -193,6 +187,11 @@ func Generate(config *tactype.Config) error {
 	}
 	if err := proto.SwapEmptyInputs(protoDir); err != nil {
 		return fmt.Errorf("failed to swap empty inputs to TraceRequest: %w", err)
+	}
+	// TypeID / <Svc>RpcId enums, after every synthetic message and service is
+	// in place — the same point Go and Java inject them.
+	if err := proto.InjectRegistryEnums(protoDir); err != nil {
+		return fmt.Errorf("failed to inject registry enums into protos: %w", err)
 	}
 
 	// protoDir now has injected services + annotations (not yet stripped)

@@ -98,6 +98,17 @@ pub trait Handler: Send + Sync + 'static {
 {{- end}}
 {{- end}}
 
+{{- range .DiskStores}}
+
+    /// Narrows the {{.StoreName}} roll baseline to the rows this node owns or
+    /// backs up, for a store whose rows are PARTITIONED across a cluster
+    /// (see `diskstore::LocalRows`). The default, `None`, keeps the whole-store
+    /// baseline, which is correct for a single-process store.
+    fn {{.StoreName}}_local_rows(&self) -> Option<Arc<dyn diskstore::LocalRows>> {
+        None
+    }
+{{- end}}
+
 {{- if .HasAutoTls}}
 	    /// Called when the certificate stream delivers a new TLS certificate (initial + renewals).
 	    /// cert_chain: signed leaf cert + intermediate CA.

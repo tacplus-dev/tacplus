@@ -974,7 +974,8 @@ func (sm *ServiceManager) startDiskStoreRollSchedulers(h Handler) error {
 		storeLog := log
 		sm.tasks.Go(func(ctx context.Context) {
 			_ = diskstore.RunRollScheduler(ctx, storeLog, interval, nodeID+"/{{.StoreName}}", func() []*diskstore.Record {
-				resp, err := h.{{.HandlerGetter}}().List(nil)
+				store := h.{{.HandlerGetter}}()
+				resp, err := store.List(ctx, nil)
 				if err != nil {
 					zap.L().Warn("diskstore snapshot failed; roll will retry on next interval",
 						zap.String("store", "{{.StoreName}}"),
@@ -988,7 +989,11 @@ func (sm *ServiceManager) startDiskStoreRollSchedulers(h Handler) error {
 						zap.Error(err))
 					return nil
 				}
-				return records
+				// The baseline is LOCALITY-SCOPED when the store says it is
+				// partitioned: List is the whole cluster's rows, and a node
+				// whose baseline claims rows it does not own breaks the
+				// partial-log invariant recovery resolves staleness with.
+				return diskstore.LocalRecords(store, records)
 			})
 		})
 	}

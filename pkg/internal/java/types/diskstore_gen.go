@@ -49,38 +49,6 @@ type javaDiskStore struct {
 	ConstName string
 }
 
-// defaultMinDurableCopies is the floor a (spec.quorum_write) field carries when
-// it declares no (spec.min_durable_copies) of its own — spec.proto's documented
-// "Default 2 when unset".
-const defaultMinDurableCopies = 2
-
-// storeQuorum reads a store's write gate off its fields: whether any field
-// declares (spec.quorum_write), and the floor to enforce.
-//
-// A store row is written whole, so when several fields declare a floor the
-// STRICTEST one governs — a per-field floor would need a per-field write, which
-// no store surface has.
-func storeQuorum(msg *parser.MessageDescriptor) (bool, int) {
-	quorum := false
-	min := 0
-	for i := range msg.Fields {
-		field := &msg.Fields[i]
-		qw, ok := field.Annotations["quorum_write"]
-		if !ok || !qw.BoolValue {
-			continue
-		}
-		quorum = true
-		floor := defaultMinDurableCopies
-		if mdc, ok := field.Annotations["min_durable_copies"]; ok {
-			floor = int(mdc.IntValue)
-		}
-		if floor > min {
-			min = floor
-		}
-	}
-	return quorum, min
-}
-
 type javaDiskStoreData struct {
 	Header      string
 	Package     string // package of the generated DiskStores class
@@ -137,7 +105,7 @@ func generateJavaDiskStore(config *tactype.Config, protoDir, srcDir string) erro
 			if !snapshotOnly {
 				keyGetter = "get" + strutil.ToPascalCase(keyField)
 			}
-			quorumWrite, minDurableCopies := storeQuorum(&fd.Messages[msgIdx])
+			quorumWrite, minDurableCopies := parser.StoreQuorum(&fd.Messages[msgIdx])
 			lower := strutil.ToLowerFirst(msg.Name)
 			stores = append(stores, javaDiskStore{
 				StoreName:        strutil.ToSnakeCase(msg.Name),

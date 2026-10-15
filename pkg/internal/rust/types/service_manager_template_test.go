@@ -62,6 +62,8 @@ func TestRustServiceManagerRendersDiskStoreRollSchedulers(t *testing.T) {
 		`let scheduler_node_id = format!("{}/cred_pair", node_id);`,
 		"h.get_cred_pair_store_grpc_impl().list(None).await",
 		"diskstore_stores::snapshot_cred_pair(&response.items)",
+		// The roll baseline is narrowed through the Handler's LocalRows seam.
+		"Ok(records) => diskstore::local_records(\n                                            h.cred_pair_local_rows().as_deref(),",
 		"self.start_disk_store_roll_schedulers(handler.clone())?;",
 	} {
 		if !strings.Contains(rendered, want) {

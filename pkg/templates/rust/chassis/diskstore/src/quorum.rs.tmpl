@@ -1,0 +1,93 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+
+//! The write gate for a store declaring `(spec.quorum_write)`, and the
+//! locality seam for a partitioned store's roll baseline.
+
+use crate::error::{DiskStoreError, Result};
+use crate::redolog::Record;
+
+/// Refuses the write unless `durable_copies` reaches `min_durable_copies`.
+///
+/// The generated per-store `require_<store>_quorum` calls it with the store's
+/// declared floor; the store's write path calls that with the number of
+/// distinct nodes that will hold the value durably — only the store knows that
+/// number. Below the floor the write is REFUSED (FAILED_PRECONDITION) before any
+/// local effect. It is deliberately not a degrade-to-whatever-the-cluster-has:
+/// a production cluster that has lost members looks identical to a one-node
+/// development tree, so an implicit degrade removes the guarantee exactly where
+/// it was needed. A single node is a legal configuration, declared as
+/// `min_durable_copies: 1`.
+///
+/// What counts as a "durable copy" is the store's own statement — for an
+/// in-memory replicated store it is the synchronous replica count, for a
+/// disk-backed one it is the number of logs the record has been fsync'd to.
+/// This gate compares the two numbers; it does not decide what they mean.
+pub fn require_quorum(store: &str, durable_copies: u32, min_durable_copies: u32) -> Result<()> {
+    if durable_copies < min_durable_copies {
+        return Err(DiskStoreError::below_quorum(store, durable_copies, min_durable_copies));
+    }
+    Ok(())
+}
+
+/// Implemented for a `service_store` whose rows are PARTITIONED across a
+/// cluster, to narrow the roll baseline to the rows this node is responsible
+/// for.
+///
+/// A redo log is single-writer, single-process, on the service's own volume —
+/// so in a clustered service each node owns a PARTIAL log, and recovery is the
+/// union of the reachable nodes' logs. The roll baseline has to keep that
+/// invariant: `list(None)` returns the whole cluster's rows, so an unnarrowed
+/// baseline makes every node's log claim keys it does not own and never will
+/// again, and the union can no longer resolve staleness by ownership.
+///
+/// The generated `Handler` offers it per store through
+/// `<store>_local_rows()`; a store that returns `None` (the default) keeps the
+/// whole-store baseline, which is correct for a single-process store.
+pub trait LocalRows: Send + Sync {
+    /// True when `key` is a row this node currently owns or backs up, i.e. one
+    /// that belongs in this node's roll baseline.
+    fn is_local_row(&self, key: &str) -> bool;
+}
+
+/// Narrows `records` to the rows `local` reports as this node's, or returns
+/// them unchanged when the store is not partitioned.
+pub fn local_records(local: Option<&dyn LocalRows>, records: Vec<Record>) -> Vec<Record> {
+    match local {
+        Some(local) => records.into_iter().filter(|rec| local.is_local_row(&rec.key)).collect(),
+        None => records,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refuses_below_the_floor() {
+        let err = require_quorum("cred_pair", 1, 2).unwrap_err();
+        assert_eq!(err.code, 9);
+        assert_eq!(err.message, "store cred_pair: write needs 2 durable copies, cluster can supply 1");
+        assert!(require_quorum("cred_pair", 2, 2).is_ok());
+        assert!(require_quorum("cred_pair", 1, 1).is_ok());
+    }
+
+    struct Partitioned;
+    impl LocalRows for Partitioned {
+        fn is_local_row(&self, key: &str) -> bool {
+            key != "b"
+        }
+    }
+
+    fn rec(key: &str) -> Record {
+        Record { key: key.to_string(), deleted: false, metadata: None, payload: None }
+    }
+
+    #[test]
+    fn narrows_only_a_partitioned_store() {
+        let records = vec![rec("a"), rec("b"), rec("c")];
+        let scoped = local_records(Some(&Partitioned), records.clone());
+        assert_eq!(scoped.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(), vec!["a", "c"]);
+        assert_eq!(local_records(None, records).len(), 3);
+    }
+}

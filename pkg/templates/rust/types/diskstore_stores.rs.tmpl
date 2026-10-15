@@ -6,7 +6,22 @@
 // (always on) runs on read.
 
 use std::path::Path;
-{{range .Stores}}
+{{range .Stores}}{{if .QuorumWrite}}
+/// Distinct nodes that must hold a {{.StoreName}} value durably before the
+/// write is acked — the store's declared (spec.min_durable_copies).
+pub const MIN_DURABLE_COPIES_{{.ConstName}}: u32 = {{.MinDurableCopies}};
+
+/// Refuses a {{.StoreName}} write that cannot reach
+/// [`MIN_DURABLE_COPIES_{{.ConstName}}`] durable copies.
+///
+/// Called by the store's write path with the number of distinct nodes that will
+/// hold the value durably — only the store knows that number. Below the floor
+/// this returns FAILED_PRECONDITION BEFORE any local effect, rather than
+/// writing locally and calling it a success.
+pub fn require_{{.StoreName}}_quorum(durable_copies: u32) -> diskstore::Result<()> {
+    diskstore::require_quorum("{{.StoreName}}", durable_copies, MIN_DURABLE_COPIES_{{.ConstName}})
+}
+{{end}}
 /// Atomically save the latest {{.StoreName}} snapshot (UC1).
 pub fn save_{{.StoreName}}(
     base: &Path,

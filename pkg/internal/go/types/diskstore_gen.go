@@ -37,6 +37,13 @@ type diskStoreEntry struct {
 	// SnapshotOnly is true when the store has no store_key field: emit UC1
 	// snapshot Save/Load only (no UC2 redo log — a whole-object singleton).
 	SnapshotOnly bool
+
+	// QuorumWrite is true when any field of the store declares
+	// (spec.quorum_write): emit the generated write gate.
+	QuorumWrite bool
+	// MinDurableCopies is the declared (spec.min_durable_copies) floor the gate
+	// enforces. Only meaningful when QuorumWrite.
+	MinDurableCopies int
 }
 
 // diskStoreImport tracks a unique types-package import for the generated module.
@@ -108,15 +115,18 @@ func generateDiskStore(config *tactype.Config, inputDir string) error {
 				imports = append(imports, diskStoreImport{Alias: alias, Path: importPath})
 			}
 
+			quorumWrite, minDurableCopies := parser.StoreQuorum(&fd.Messages[i])
 			stores = append(stores, diskStoreEntry{
-				StoreName:    strutil.ToSnakeCase(msg.Name),
-				TypeName:     msg.Name,
-				GoType:       alias + "." + msg.Name,
-				ToJSON:       alias + "." + msg.Name + "ToJSON",
-				FromJSON:     alias + "." + msg.Name + "FromJSON",
-				Validate:     alias + ".Validate" + msg.Name,
-				KeyField:     keyField,
-				SnapshotOnly: snapshotOnly,
+				StoreName:        strutil.ToSnakeCase(msg.Name),
+				TypeName:         msg.Name,
+				GoType:           alias + "." + msg.Name,
+				ToJSON:           alias + "." + msg.Name + "ToJSON",
+				FromJSON:         alias + "." + msg.Name + "FromJSON",
+				Validate:         alias + ".Validate" + msg.Name,
+				KeyField:         keyField,
+				SnapshotOnly:     snapshotOnly,
+				QuorumWrite:      quorumWrite,
+				MinDurableCopies: minDurableCopies,
 			})
 		}
 	}

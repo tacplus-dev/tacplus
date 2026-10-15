@@ -18,7 +18,23 @@ import (
 	{{.Alias}} "{{.Path}}"
 {{- end}}
 )
-{{range .Stores}}
+{{range .Stores}}{{if .QuorumWrite}}
+// MinDurableCopies{{.TypeName}} is how many distinct nodes must hold a
+// {{.StoreName}} value durably before the write is acked — the store's declared
+// (spec.min_durable_copies).
+const MinDurableCopies{{.TypeName}} = {{.MinDurableCopies}}
+
+// Require{{.TypeName}}Quorum refuses a {{.StoreName}} write that cannot reach
+// MinDurableCopies{{.TypeName}} durable copies.
+//
+// Called by the store's write path with the number of distinct nodes that will
+// hold the value durably — only the store knows that number. Below the floor it
+// returns FAILED_PRECONDITION BEFORE any local effect, rather than writing
+// locally and calling it a success.
+func Require{{.TypeName}}Quorum(durableCopies int) error {
+	return diskstore.RequireQuorum("{{.StoreName}}", durableCopies, MinDurableCopies{{.TypeName}})
+}
+{{end}}
 // Save{{.TypeName}} atomically saves the latest {{.StoreName}} snapshot (UC1).
 func Save{{.TypeName}}(base, ns string, msg *{{.GoType}}, opts diskstore.SnapshotOpts) error {
 	b, err := {{.ToJSON}}(msg)

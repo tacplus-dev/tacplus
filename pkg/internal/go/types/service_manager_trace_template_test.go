@@ -236,8 +236,11 @@ func TestGoServiceManagerRendersDiskStoreRollSchedulers(t *testing.T) {
 		"func (sm *ServiceManager) startDiskStoreRollSchedulers(h Handler) error",
 		"interval := sm.diskStoreLogs.rollInterval",
 		"diskstore.RunRollScheduler(ctx, storeLog, interval, nodeID+\"/cred_pair\"",
-		"h.GetCredPairStoreGrpcImpl().List(nil)",
+		"store := h.GetCredPairStoreGrpcImpl()",
+		"resp, err := store.List(ctx, nil)",
 		"diskstores.SnapshotCredPair(resp.GetItems())",
+		// The roll baseline is narrowed through the chassis LocalRows seam.
+		"return diskstore.LocalRecords(store, records)",
 		"if err := sm.startDiskStoreRollSchedulers(h); err != nil",
 	} {
 		if !strings.Contains(rendered, want) {

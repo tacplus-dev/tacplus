@@ -82,3 +82,66 @@ func TestValidateMinDurableCopiesAnnotationsRejectsWithoutQuorumWrite(t *testing
 		t.Fatalf("refusal must name the missing requirement, got: %v", err)
 	}
 }
+
+func quorumField(name string, quorum bool, minDurableCopies int) FieldDescriptor {
+	ann := map[string]model.AnnotationValue{}
+	if quorum {
+		ann["quorum_write"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
+	if minDurableCopies > 0 {
+		ann["min_durable_copies"] = model.AnnotationValue{
+			Type: model.AnnotationTypeInt, IntValue: int64(minDurableCopies)}
+	}
+	return FieldDescriptor{Name: name, Type: "string", Annotations: ann}
+}
+
+func TestStoreQuorumDefaultsToTwoWhenUndeclared(t *testing.T) {
+	msg := &MessageDescriptor{
+		Name:   "CredPair",
+		Fields: []FieldDescriptor{quorumField("client_secret", true, 0)},
+	}
+	quorum, min := StoreQuorum(msg)
+	if !quorum {
+		t.Fatal("a field declaring quorum_write must gate the store")
+	}
+	if min != 2 {
+		t.Fatalf("quorum_write with no min_durable_copies must default to 2, got %d", min)
+	}
+}
+
+func TestStoreQuorumHonoursTheDeclaredSingleNodeFloor(t *testing.T) {
+	msg := &MessageDescriptor{
+		Name:   "CredPair",
+		Fields: []FieldDescriptor{quorumField("client_secret", true, 1)},
+	}
+	quorum, min := StoreQuorum(msg)
+	if !quorum || min != 1 {
+		t.Fatalf("min_durable_copies:1 is the deliberate single-node setting, got quorum=%v min=%d", quorum, min)
+	}
+}
+
+// A row is written whole, so the strictest declared floor is the one the write
+// has to clear; taking the first or the last would let a 3-copy field ship under
+// a 2-copy gate depending on field order.
+func TestStoreQuorumTakesTheStrictestFloor(t *testing.T) {
+	msg := &MessageDescriptor{
+		Name: "CredPair",
+		Fields: []FieldDescriptor{
+			quorumField("client_secret", true, 3),
+			quorumField("refresh_token", true, 2),
+		},
+	}
+	if _, min := StoreQuorum(msg); min != 3 {
+		t.Fatalf("strictest floor must govern, got %d", min)
+	}
+}
+
+func TestStoreQuorumIsAbsentWithoutTheAnnotation(t *testing.T) {
+	msg := &MessageDescriptor{
+		Name:   "CredPair",
+		Fields: []FieldDescriptor{quorumField("client_secret", false, 0)},
+	}
+	if quorum, min := StoreQuorum(msg); quorum || min != 0 {
+		t.Fatalf("a store declaring no quorum_write must get no gate, got quorum=%v min=%d", quorum, min)
+	}
+}

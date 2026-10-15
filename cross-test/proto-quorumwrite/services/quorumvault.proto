@@ -1,0 +1,53 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// The (spec.quorum_write) fixture.
+//
+// Why this fixture exists: the quorum write gate is emitted into the per-store
+// disk-persistence helpers, which only a FULL service build hosting a keyed
+// (spec.service_store) generates, and no other fixture declares one. quorumvault
+// is the SELF package (tacplus.yaml pkg ends in .quorumvault), so it hosts
+// CredPairStoreService and gets the gate in all three languages:
+//   - client_secret declares quorum_write with no floor: the default, 2,
+//   - refresh_token declares quorum_write with min_durable_copies 3,
+// so the store's floor is the STRICTEST, 3 — a row is written whole.
+// label is the PAIRED CONTROL: no quorum_write, so it raises no floor.
+
+syntax = "proto3";
+
+package quorumvault;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "quorumvault"};
+
+// VaultService is the package's own server, which the store's label routes to.
+service VaultService {
+  option (spec.service_s2s) = {label: "VaultService"};
+
+  rpc GetVaultStatus(GetVaultStatusRequest) returns (GetVaultStatusResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}
+
+message GetVaultStatusRequest {}
+
+message GetVaultStatusResponse {
+  // ready reports whether the vault is serving.
+  bool ready = 1;
+}
+
+message CredPair {
+  option (spec.service_store) = {label: ["quorumvault"]};
+
+  // client_id keys the row.
+  string client_id = 1 [(spec.assert_required) = true, (spec.store_key) = true];
+
+  // client_secret must be durable on the default floor before it is acked.
+  string client_secret = 2 [(spec.quorum_write) = true];
+
+  // refresh_token raises the floor to three copies.
+  string refresh_token = 3 [(spec.quorum_write) = true, (spec.min_durable_copies) = 3];
+
+  // label carries no durability requirement.
+  string label = 4;
+}

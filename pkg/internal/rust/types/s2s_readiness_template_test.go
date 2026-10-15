@@ -155,3 +155,57 @@ func TestRustS2SReconnectBackoffStartsAtHalfSecond(t *testing.T) {
 		t.Fatalf("resolve_service must not start at 2s any more")
 	}
 }
+
+// After readiness was gated on required s2s channels, every scotty pod on an
+// idle dev fleet flipped NOT_SERVING for 5-6s every 1-2 minutes: readiness
+// followed one shared per-endpoint flag that the latency pinger and the 5s
+// fleet health poll both overwrote, so one timed-out ping or one stale/
+// UNHEALTHY report took the pod out of its Service. Readiness now reads both
+// inputs debounced, and names the one that flipped it.
+func TestRustReadinessDebouncesHealthInputs(t *testing.T) {
+	read := func(name string) string {
+		t.Helper()
+		src, err := templates.FS.ReadFile("rust/chassis/servicemanager/src/" + name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		return string(src)
+	}
+
+	endpoint := read("endpoint.rs.tmpl")
+	for _, want := range []string{
+		"pub const PING_TIMEOUT: Duration = Duration::from_secs(5);",
+		"pub const PING_FAILURES_BEFORE_DOWN: u32 = 3;",
+		"pub const PING_DOWN_AFTER: Duration = Duration::from_secs(30);",
+		"pub const FLEET_DOWN_AFTER: Duration = Duration::from_secs(30);",
+		"tokio::time::timeout(PING_TIMEOUT, client.ping(TraceRequest::default()))",
+		"self.readiness.write().await.record_ping(false, Instant::now());",
+		"self.readiness.write().await.record_ping(result.is_ok(), Instant::now());",
+		"self.readiness.write().await.record_fleet(healthy, Instant::now());",
+		"fn single_ping_failure_does_not_take_endpoint_down()",
+		"fn fleet_blip_shorter_than_window_never_goes_down()",
+	} {
+		if !strings.Contains(endpoint, want) {
+			t.Fatalf("endpoint chassis missing %q", want)
+		}
+	}
+
+	connection := read("connection.rs.tmpl")
+	if !strings.Contains(connection, "const PING_INTERVAL_SECS: u64 = 10;") {
+		t.Fatalf("ping interval must be 10s so 3 failures fit the 30s readiness window")
+	}
+	avail := fnBody(t, connection, "pub async fn unavailable_input(&self)")
+	if !strings.Contains(avail, "conn.readiness_down_input().await") || strings.Contains(avail, "is_healthy()") {
+		t.Fatalf("readiness must use the debounced inputs, not the raw routing flag:\n%s", avail)
+	}
+
+	drive := fnBody(t, renderS2SReadinessSM(t, true), "async fn drive_readiness(")
+	for _, want := range []string{
+		`tracing::debug!(input = %held_down_by, serving = ready, "readiness flipped");`,
+		`Some((channel, input)) => tracing::warn!(channel = %channel, input = %input,`,
+	} {
+		if !strings.Contains(drive, want) {
+			t.Fatalf("drive_readiness missing %q:\n%s", want, drive)
+		}
+	}
+}

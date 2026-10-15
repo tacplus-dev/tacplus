@@ -13,12 +13,88 @@ use tonic::transport::Channel;
 use {{.CrateBasePathUnderscore}}_types::sys::grpcconfig::grpcconfig::cluster_service_client::ClusterServiceClient;
 use {{.CrateBasePathUnderscore}}_types::sys::trace::trace::TraceRequest;
 
+/// Per-call deadline on a latency ping. `ClusterService.Ping` answers with a
+/// constant and the round trip is milliseconds in-cluster, so a ping that has
+/// not answered in 5s is a stalled connection (peer restarting, dead-but-open
+/// socket), not a slow peer. Kept below `PING_INTERVAL` so a hung ping never
+/// delays the next one.
+pub const PING_TIMEOUT: Duration = Duration::from_secs(5);
+/// Consecutive failed pings after which readiness counts the endpoint down.
+pub const PING_FAILURES_BEFORE_DOWN: u32 = 3;
+/// How long an endpoint may go without a successful ping, while failing,
+/// before readiness counts it down.
+pub const PING_DOWN_AFTER: Duration = Duration::from_secs(30);
+/// How long the fleet health plane must keep reporting an endpoint as not
+/// HEALTHY/DEGRADED before readiness counts it down. Reports go stale or
+/// unhealthy for a few seconds at a time (a missed health publish around a
+/// kernel roll, a lagging ServiceHealth watch) on an otherwise idle fleet.
+pub const FLEET_DOWN_AFTER: Duration = Duration::from_secs(30);
+
+/// Readiness view of an endpoint's two health inputs, the latency pinger and
+/// the fleet health plane. Each is debounced: a single bad ping or report does
+/// not take the endpoint down, and the first good one brings it back.
+///
+/// Routing does not use this; it follows `EndpointConn::is_healthy`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReadinessInputs {
+    /// Failed pings since the last successful one.
+    ping_failures: u32,
+    /// When the last ping succeeded (the dial, before the first ping).
+    ping_ok_at: Instant,
+    /// Whether the last fleet health report was HEALTHY or DEGRADED. True
+    /// until a report arrives: endpoints that get no reports (static channels)
+    /// are judged by pings alone.
+    fleet_ok: bool,
+    /// When the fleet health plane last reported HEALTHY or DEGRADED. `None`
+    /// until it has, so a peer that is still STARTING is down at once.
+    fleet_ok_at: Option<Instant>,
+}
+
+impl ReadinessInputs {
+    pub(crate) fn new(now: Instant) -> Self {
+        Self { ping_failures: 0, ping_ok_at: now, fleet_ok: true, fleet_ok_at: None }
+    }
+
+    pub(crate) fn record_ping(&mut self, ok: bool, now: Instant) {
+        if ok {
+            self.ping_failures = 0;
+            self.ping_ok_at = now;
+        } else {
+            self.ping_failures = self.ping_failures.saturating_add(1);
+        }
+    }
+
+    pub(crate) fn record_fleet(&mut self, ok: bool, now: Instant) {
+        self.fleet_ok = ok;
+        if ok {
+            self.fleet_ok_at = Some(now);
+        }
+    }
+
+    /// Names the input that has this endpoint down at `now`, or `None` when
+    /// both are up.
+    pub(crate) fn down_input(&self, now: Instant) -> Option<&'static str> {
+        if self.ping_failures >= PING_FAILURES_BEFORE_DOWN
+            || (self.ping_failures > 0 && now.saturating_duration_since(self.ping_ok_at) >= PING_DOWN_AFTER)
+        {
+            return Some("ping");
+        }
+        if !self.fleet_ok
+            && self.fleet_ok_at.map_or(true, |at| now.saturating_duration_since(at) >= FLEET_DOWN_AFTER)
+        {
+            return Some("fleet health");
+        }
+        None
+    }
+}
+
 /// Per-endpoint gRPC connection with latency tracking.
 pub struct EndpointConn {
     pub target: String,
     pub channel: Option<Channel>,
     latency: Arc<RwLock<Duration>>,
     healthy: Arc<RwLock<bool>>,
+    readiness: Arc<RwLock<ReadinessInputs>>,
 }
 
 impl EndpointConn {
@@ -29,6 +105,7 @@ impl EndpointConn {
             channel: None,
             latency: Arc::new(RwLock::new(Duration::MAX)),
             healthy: Arc::new(RwLock::new(false)),
+            readiness: Arc::new(RwLock::new(ReadinessInputs::new(Instant::now()))),
         }
     }
 
@@ -80,22 +157,19 @@ impl EndpointConn {
         // is shared with indefinite state-watch streams), so a health probe that
         // wants to fail fast has to say so itself. Matches the go chassis, which
         // has always used a per-call ping timeout rather than a channel one.
-        let result = match tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            client.ping(TraceRequest::default()),
-        )
-        .await
-        {
+        let result = match tokio::time::timeout(PING_TIMEOUT, client.ping(TraceRequest::default())).await {
             Ok(r) => r,
             Err(_) => {
                 tracing::warn!(endpoint = %self.target, "Ping timed out, marking endpoint unhealthy");
                 *self.latency.write().await = Duration::MAX;
                 *self.healthy.write().await = false;
+                self.readiness.write().await.record_ping(false, Instant::now());
                 return Err("ping timed out".into());
             }
         };
         let rtt = start.elapsed();
 
+        self.readiness.write().await.record_ping(result.is_ok(), Instant::now());
         let mut latency = self.latency.write().await;
         let mut healthy = self.healthy.write().await;
         match result {
@@ -124,6 +198,13 @@ impl EndpointConn {
         *self.healthy.read().await
     }
 
+    /// Names the health input that has this endpoint down for readiness
+    /// ("ping" or "fleet health"), or `None` when it is up. Debounced; see
+    /// `ReadinessInputs`.
+    pub async fn readiness_down_input(&self) -> Option<&'static str> {
+        self.readiness.read().await.down_input(Instant::now())
+    }
+
     /// Returns the last measured latency.
     pub async fn get_latency(&self) -> Duration {
         *self.latency.read().await
@@ -136,8 +217,122 @@ impl EndpointConn {
         let healthy = status == InstanceStatus::Healthy as i32
             || status == InstanceStatus::Degraded as i32;
         *self.healthy.write().await = healthy;
+        self.readiness.write().await.record_fleet(healthy, Instant::now());
         if latency_us > 0 {
             *self.latency.write().await = Duration::from_micros(latency_us as u64);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const S: Duration = Duration::from_secs(1);
+
+    /// Inputs as they stand once the fleet plane has reported HEALTHY.
+    fn up(t0: Instant) -> ReadinessInputs {
+        let mut r = ReadinessInputs::new(t0);
+        r.record_fleet(true, t0);
+        r
+    }
+
+    #[test]
+    fn single_ping_failure_does_not_take_endpoint_down() {
+        let t0 = Instant::now();
+        let mut r = up(t0);
+        r.record_ping(false, t0 + 10 * S);
+        assert_eq!(r.down_input(t0 + 15 * S), None);
+    }
+
+    #[test]
+    fn three_consecutive_ping_failures_take_endpoint_down() {
+        let t0 = Instant::now();
+        let mut r = up(t0);
+        r.record_ping(true, t0 + 10 * S);
+        r.record_ping(false, t0 + 11 * S);
+        r.record_ping(false, t0 + 12 * S);
+        assert_eq!(r.down_input(t0 + 12 * S), None, "two failures is still up");
+        r.record_ping(false, t0 + 13 * S);
+        assert_eq!(r.down_input(t0 + 13 * S), Some("ping"));
+    }
+
+    #[test]
+    fn thirty_seconds_without_ping_success_takes_endpoint_down() {
+        let t0 = Instant::now();
+        let mut r = up(t0);
+        r.record_ping(false, t0 + 5 * S);
+        assert_eq!(r.down_input(t0 + 29 * S), None);
+        assert_eq!(r.down_input(t0 + 30 * S), Some("ping"));
+    }
+
+    #[test]
+    fn no_pings_at_all_is_not_down() {
+        // Dynamic pools never ping; age alone must not take them down.
+        let t0 = Instant::now();
+        assert_eq!(up(t0).down_input(t0 + 3600 * S), None);
+    }
+
+    #[test]
+    fn first_ping_success_recovers() {
+        let t0 = Instant::now();
+        let mut r = up(t0);
+        for i in 1..=5 {
+            r.record_ping(false, t0 + i * 10 * S);
+        }
+        assert_eq!(r.down_input(t0 + 50 * S), Some("ping"));
+        r.record_ping(true, t0 + 60 * S);
+        assert_eq!(r.down_input(t0 + 60 * S), None);
+        r.record_ping(false, t0 + 70 * S);
+        assert_eq!(r.down_input(t0 + 70 * S), None, "failure count restarts after a success");
+    }
+
+    #[test]
+    fn fleet_unhealthy_must_persist_thirty_seconds() {
+        let t0 = Instant::now();
+        let mut r = up(t0);
+        // The health poller re-reports every 5s.
+        for i in 1..=5 {
+            r.record_fleet(false, t0 + i * 5 * S);
+            assert_eq!(r.down_input(t0 + i * 5 * S), None, "{}s after last HEALTHY", i * 5);
+        }
+        r.record_fleet(false, t0 + 30 * S);
+        assert_eq!(r.down_input(t0 + 30 * S), Some("fleet health"));
+    }
+
+    #[test]
+    fn fleet_blip_shorter_than_window_never_goes_down() {
+        // The dev symptom: one UNHEALTHY/stale report between HEALTHY ones.
+        let t0 = Instant::now();
+        let mut r = up(t0);
+        r.record_fleet(false, t0 + 5 * S);
+        assert_eq!(r.down_input(t0 + 6 * S), None);
+        r.record_fleet(true, t0 + 10 * S);
+        assert_eq!(r.down_input(t0 + 45 * S), None);
+    }
+
+    #[test]
+    fn fleet_recovers_on_first_healthy_report() {
+        let t0 = Instant::now();
+        let mut r = up(t0);
+        r.record_fleet(false, t0 + 5 * S);
+        assert_eq!(r.down_input(t0 + 40 * S), Some("fleet health"));
+        r.record_fleet(true, t0 + 40 * S);
+        assert_eq!(r.down_input(t0 + 40 * S), None);
+    }
+
+    #[test]
+    fn peer_never_reported_healthy_is_down_at_once() {
+        // A newly dialed peer still STARTING gets no grace period.
+        let t0 = Instant::now();
+        let mut r = ReadinessInputs::new(t0);
+        r.record_fleet(false, t0);
+        assert_eq!(r.down_input(t0), Some("fleet health"));
+    }
+
+    #[test]
+    fn no_fleet_reports_is_judged_by_pings_alone() {
+        let t0 = Instant::now();
+        assert_eq!(ReadinessInputs::new(t0).down_input(t0 + 3600 * S), None);
     }
 }

@@ -7,9 +7,10 @@
 //! RequiredChannels — the s2s channels a service must have up before it may
 //! report Ready.
 //!
-//! Two kinds: ServiceConnection pools (up while one endpoint is dialed and
-//! healthy) and channels the caller manages itself, such as an event-bus
-//! subscription, which report through a shared flag.
+//! Two kinds: ServiceConnection pools (up while one endpoint is dialed and up
+//! by its debounced ping and fleet-health inputs) and channels the caller
+//! manages itself, such as an event-bus subscription, which report through a
+//! shared flag.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -29,18 +30,19 @@ impl RequiredChannels {
         Self { pools, streams }
     }
 
-    /// Returns the name of the first required channel that is down, or `None`
-    /// when every required channel is up.
-    pub async fn first_down(&self) -> Option<String> {
+    /// Returns the first required channel that is down and the input that
+    /// has it down ("no endpoints", "ping", "fleet health" or "stream"), or
+    /// `None` when every required channel is up.
+    pub async fn first_down(&self) -> Option<(String, &'static str)> {
         for pool in &self.pools {
-            if !pool.is_available().await {
-                return Some(pool.service_id().to_string());
+            if let Some(input) = pool.unavailable_input().await {
+                return Some((pool.service_id().to_string(), input));
             }
         }
         self.streams
             .iter()
             .find(|(_, up)| !up.load(Ordering::Relaxed))
-            .map(|(name, _)| name.clone())
+            .map(|(name, _)| (name.clone(), "stream"))
     }
 }
 
@@ -86,14 +88,18 @@ mod tests {
     async fn pool_with_no_endpoints_is_down() {
         let empty = Arc::new(ServiceConnection::new_dynamic("eventbus", verifier()));
         let required = RequiredChannels::new(vec![empty], Vec::new());
-        assert_eq!(required.first_down().await.as_deref(), Some("eventbus"));
+        assert_eq!(required.first_down().await, Some(("eventbus".to_string(), "no endpoints")));
     }
 
     #[tokio::test]
     async fn pool_follows_endpoint_health() {
         let sc = pool("identity", InstanceStatus::Starting).await;
         let required = RequiredChannels::new(vec![sc.clone()], Vec::new());
-        assert_eq!(required.first_down().await.as_deref(), Some("identity"), "STARTING peer is not up");
+        assert_eq!(
+            required.first_down().await,
+            Some(("identity".to_string(), "fleet health")),
+            "STARTING peer that was never HEALTHY is not up"
+        );
 
         sc.set_endpoint_health_for_test(InstanceStatus::Healthy).await;
         assert_eq!(required.first_down().await, None, "HEALTHY peer is up");
@@ -101,8 +107,10 @@ mod tests {
         sc.set_endpoint_health_for_test(InstanceStatus::Degraded).await;
         assert_eq!(required.first_down().await, None, "DEGRADED peer still serves");
 
+        // Debounced: one UNHEALTHY report right after a good one does not take
+        // the channel down (endpoint::tests cover the 30s window itself).
         sc.set_endpoint_health_for_test(InstanceStatus::Unhealthy).await;
-        assert_eq!(required.first_down().await.as_deref(), Some("identity"), "UNHEALTHY peer is down");
+        assert_eq!(required.first_down().await, None, "a fresh UNHEALTHY report is not yet down");
     }
 
     #[tokio::test]
@@ -112,12 +120,13 @@ mod tests {
             vec![pool("identity", InstanceStatus::Healthy).await],
             vec![("events subscription".to_string(), up.clone())],
         );
-        assert_eq!(required.first_down().await.as_deref(), Some("events subscription"));
+        let down = Some(("events subscription".to_string(), "stream"));
+        assert_eq!(required.first_down().await, down);
 
         up.store(true, Ordering::Relaxed);
         assert_eq!(required.first_down().await, None);
 
         up.store(false, Ordering::Relaxed);
-        assert_eq!(required.first_down().await.as_deref(), Some("events subscription"));
+        assert_eq!(required.first_down().await, down);
     }
 }

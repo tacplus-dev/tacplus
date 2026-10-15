@@ -27,8 +27,12 @@ use {{.CrateBasePathUnderscore}}_types::sys::host::host::Host;
 
 /// Minimum relative improvement required to switch active endpoints.
 const REBALANCE_THRESHOLD: f64 = 0.3;
-/// Default interval between latency pings (static mode).
-const PING_INTERVAL_SECS: u64 = 30;
+/// Default interval between latency pings (static mode). Pings also feed
+/// readiness, which counts an endpoint down after
+/// `PING_FAILURES_BEFORE_DOWN` failures in a row: at 10s that is about 30s,
+/// matching `PING_DOWN_AFTER`. At 30s, three failures took 90s, and the
+/// 30s-without-success rule fired on the first one.
+const PING_INTERVAL_SECS: u64 = 10;
 /// Default interval for re-evaluating the active connection (static mode).
 const REBALANCE_INTERVAL_SECS: u64 = 30;
 
@@ -257,18 +261,28 @@ impl ServiceConnection {
         None
     }
 
-    /// Reports whether an RPC to this service has somewhere to go: at least
-    /// one endpoint is dialed and currently healthy. Unlike `conn()`, which
-    /// falls back to any dialed channel, this is what readiness gates on.
-    pub async fn is_available(&self) -> bool {
+    /// Reports why an RPC to this service has nowhere to go, or `None` when at
+    /// least one endpoint is dialed and up. This is what readiness gates on.
+    ///
+    /// The reason names the input: "no endpoints", or the debounced input
+    /// ("ping" or "fleet health", see `EndpointConn::readiness_down_input`)
+    /// holding the first dialed endpoint down.
+    pub async fn unavailable_input(&self) -> Option<&'static str> {
         let ep_list = self.endpoints.read().await;
+        let mut first_down = None;
         for ec in ep_list.iter() {
             let conn = ec.read().await;
-            if conn.channel.is_some() && conn.is_healthy().await {
-                return true;
+            if conn.channel.is_none() {
+                continue;
+            }
+            match conn.readiness_down_input().await {
+                None => return None,
+                Some(input) => {
+                    first_down.get_or_insert(input);
+                }
             }
         }
-        false
+        Some(first_down.unwrap_or("no endpoints"))
     }
 
     #[cfg(test)]

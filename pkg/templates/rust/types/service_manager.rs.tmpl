@@ -1425,20 +1425,30 @@ impl ServiceManager {
         );
         let mut interval = tokio::time::interval(READINESS_CHECK_INTERVAL);
         let mut serving: Option<bool> = None;
+        // The input holding readiness down ("<channel> <input>" or "health
+        // status"), so the flip back to SERVING can name what recovered.
+        let mut held_down_by = String::from("startup");
         loop {
             interval.tick().await;
             let down = required.first_down().await;
             let ready = health_ok.load(std::sync::atomic::Ordering::Relaxed) && down.is_none();
+            if !ready {
+                held_down_by = match &down {
+                    Some((channel, input)) => format!("{} {}", channel, input),
+                    None => "health status".to_string(),
+                };
+            }
             if serving == Some(ready) {
                 continue;
             }
             serving = Some(ready);
+            tracing::debug!(input = %held_down_by, serving = ready, "readiness flipped");
             let status = if ready {
                 info!("readiness: SERVING");
                 tonic_health::ServingStatus::Serving
             } else {
                 match &down {
-                    Some(channel) => tracing::warn!(channel = %channel, "readiness: NOT_SERVING, required s2s channel is down"),
+                    Some((channel, input)) => tracing::warn!(channel = %channel, input = %input, "readiness: NOT_SERVING, required s2s channel is down"),
                     None => tracing::warn!("readiness: NOT_SERVING, health status is UNHEALTHY"),
                 }
                 tonic_health::ServingStatus::NotServing

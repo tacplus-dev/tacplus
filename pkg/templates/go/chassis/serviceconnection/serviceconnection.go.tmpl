@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	healthreport_pb "{{.ModuleBasePath}}/types/sys/healthreport"
 	host_pb "{{.ModuleBasePath}}/types/sys/host"
@@ -33,6 +34,11 @@ const (
 // rebalanceThreshold is the minimum relative improvement required to switch active endpoints.
 const rebalanceThreshold = 0.3
 
+// fleetDownAfter is how long the fleet health plane must keep reporting an
+// endpoint as not HEALTHY/DEGRADED before readiness counts it down. Reports go
+// stale or unhealthy for a few seconds at a time on an idle fleet.
+const fleetDownAfter = 30 * time.Second
+
 // ---------------------------------------------------------------------------
 // endpointConn -- per-endpoint gRPC connection with health tracking
 // ---------------------------------------------------------------------------
@@ -44,6 +50,7 @@ type endpointConn struct {
 	status    InstanceStatus
 	latencyUs int64 // p50 from health report
 	errorRate float64
+	fleetOkAt time.Time // last HEALTHY/DEGRADED report; zero until one arrives
 	mu        sync.RWMutex
 }
 
@@ -86,6 +93,32 @@ func (ec *endpointConn) updateHealth(h *healthreport_pb.ServiceInstanceHealth) {
 	ec.status = h.Status
 	ec.latencyUs = h.P50LatencyUs
 	ec.errorRate = h.ErrorRate
+	if h.Status == StatusHealthy || h.Status == StatusDegraded {
+		ec.fleetOkAt = time.Now()
+	}
+}
+
+// absent records a fleet health snapshot that left this endpoint out. It is not
+// routed to while absent. Returns true once readiness counts it down, when it
+// should be closed; until then it stays in the pool so one missed snapshot does
+// not empty the pool.
+func (ec *endpointConn) absent(now time.Time) bool {
+	ec.mu.Lock()
+	ec.status = StatusUnhealthy
+	ec.mu.Unlock()
+	return !ec.availableAt(now)
+}
+
+// availableAt reports whether readiness counts this endpoint up at now: it is
+// routable, or the fleet plane reported it HEALTHY/DEGRADED within
+// fleetDownAfter. Routing uses isRoutable alone.
+func (ec *endpointConn) availableAt(now time.Time) bool {
+	ec.mu.RLock()
+	defer ec.mu.RUnlock()
+	if ec.status == StatusHealthy || ec.status == StatusDegraded {
+		return true
+	}
+	return !ec.fleetOkAt.IsZero() && now.Sub(ec.fleetOkAt) < fleetDownAfter
 }
 
 // isRoutable returns true if this endpoint should receive new requests.
@@ -207,8 +240,9 @@ func (sc *ServiceConnection) Conn() grpc.ClientConnInterface {
 func (sc *ServiceConnection) IsAvailable() bool {
 	sc.mu.RLock()
 	defer sc.mu.RUnlock()
+	now := time.Now()
 	for _, ec := range sc.endpoints {
-		if ec.isConnected() && ec.isRoutable() {
+		if ec.isConnected() && ec.availableAt(now) {
 			return true
 		}
 	}
@@ -242,14 +276,18 @@ func (sc *ServiceConnection) ReconcileFromHealth(instances []*healthreport_pb.Se
 	var kept []*endpointConn
 	var toClose []*endpointConn
 
+	now := time.Now()
 	for _, ec := range sc.endpoints {
 		if h, ok := incoming[ec.target]; ok {
 			// Still present -- update health
 			ec.updateHealth(h)
 			kept = append(kept, ec)
-		} else {
-			// Removed
+		} else if ec.absent(now) {
+			// Removed for the whole fleet window
 			toClose = append(toClose, ec)
+		} else {
+			// Left out of this snapshot only; close once the fleet window passes
+			kept = append(kept, ec)
 		}
 	}
 

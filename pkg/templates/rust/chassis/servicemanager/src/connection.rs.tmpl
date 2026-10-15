@@ -326,9 +326,11 @@ impl ServiceConnection {
                 conn.update_health_from_state(h.status, h.p50_latency_us).await;
                 drop(conn);
                 kept.push(ec);
-            } else {
-                let target = ec.read().await.target.clone();
+            } else if ec.read().await.absent().await {
                 info!(service = %self.service_id, target = %target, "closing removed endpoint");
+            } else {
+                // Left out of this snapshot only; close once the fleet window passes.
+                kept.push(ec);
             }
         }
 

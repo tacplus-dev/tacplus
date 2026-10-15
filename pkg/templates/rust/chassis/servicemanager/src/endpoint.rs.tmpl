@@ -86,6 +86,15 @@ impl ReadinessInputs {
         }
         None
     }
+
+    /// Records a fleet health snapshot that left this endpoint out. Returns
+    /// `true` once readiness counts the endpoint down, when it should be
+    /// closed. Until then it stays in the pool, out of routing, so one missed
+    /// snapshot does not empty the pool.
+    pub(crate) fn absent(&mut self, now: Instant) -> bool {
+        self.record_fleet(false, now);
+        self.down_input(now).is_some()
+    }
 }
 
 /// Per-endpoint gRPC connection with latency tracking.
@@ -203,6 +212,13 @@ impl EndpointConn {
     /// `ReadinessInputs`.
     pub async fn readiness_down_input(&self) -> Option<&'static str> {
         self.readiness.read().await.down_input(Instant::now())
+    }
+
+    /// Records a fleet health snapshot that left this endpoint out, and
+    /// returns `true` when it should be closed. See `ReadinessInputs::absent`.
+    pub async fn absent(&self) -> bool {
+        *self.healthy.write().await = false;
+        self.readiness.write().await.absent(Instant::now())
     }
 
     /// Returns the last measured latency.
@@ -328,6 +344,21 @@ mod tests {
         let mut r = ReadinessInputs::new(t0);
         r.record_fleet(false, t0);
         assert_eq!(r.down_input(t0), Some("fleet health"));
+    }
+
+    #[test]
+    fn peer_absent_from_snapshots_is_closed_after_the_fleet_window() {
+        let t0 = Instant::now();
+        let mut r = up(t0);
+        assert!(!r.absent(t0 + 5 * S), "one missed snapshot keeps the peer");
+        assert!(!r.absent(t0 + 29 * S));
+        assert!(r.absent(t0 + 30 * S), "absent for the whole window closes it");
+    }
+
+    #[test]
+    fn peer_never_reported_healthy_is_closed_at_once_when_absent() {
+        let t0 = Instant::now();
+        assert!(ReadinessInputs::new(t0).absent(t0));
     }
 
     #[test]

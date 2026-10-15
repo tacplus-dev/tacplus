@@ -9,6 +9,7 @@ package serviceconnection
 import (
 	"sync/atomic"
 	"testing"
+	"time"
 
 	healthreport_pb "{{.ModuleBasePath}}/types/sys/healthreport"
 	"google.golang.org/grpc"
@@ -54,13 +55,44 @@ func TestPoolFollowsEndpointHealth(t *testing.T) {
 	}{
 		{StatusHealthy, true},
 		{StatusDegraded, true},
-		{StatusUnhealthy, false},
+		{StatusUnhealthy, true},
 	}
 	for _, c := range cases {
 		sc.endpoints[0].updateHealth(&healthreport_pb.ServiceInstanceHealth{Status: c.status})
 		if _, down := required.FirstDown(); down == c.up {
 			t.Fatalf("status %v: up = %v, want %v", c.status, !down, c.up)
 		}
+	}
+	// A single UNHEALTHY report right after HEALTHY is inside the fleet window,
+	// so it is still up. Only a window with no HEALTHY/DEGRADED report takes it down.
+	sc.endpoints[0].fleetOkAt = time.Now().Add(-fleetDownAfter)
+	if name, down := required.FirstDown(); !down || name != "identity" {
+		t.Fatalf("UNHEALTHY for the whole fleet window must be down, got (%q, %v)", name, down)
+	}
+}
+
+func TestPeerMissingFromOneSnapshotStaysUp(t *testing.T) {
+	sc := pool(t, "identity", StatusHealthy)
+	required := NewRequiredChannels([]*ServiceConnection{sc}, nil)
+	sc.ReconcileFromHealth(nil)
+	if name, down := required.FirstDown(); down {
+		t.Fatalf("one missed snapshot must not take %q down", name)
+	}
+}
+
+func TestAbsentPeerIsClosedAfterTheFleetWindow(t *testing.T) {
+	ec := newEndpointConn("127.0.0.1:1")
+	ec.updateHealth(&healthreport_pb.ServiceInstanceHealth{Status: StatusHealthy})
+	now := time.Now()
+	if ec.absent(now) {
+		t.Fatal("absent right after HEALTHY must keep the peer")
+	}
+	ec.fleetOkAt = now.Add(-fleetDownAfter)
+	if !ec.absent(now) {
+		t.Fatal("absent for the whole fleet window must close the peer")
+	}
+	if fresh := newEndpointConn("127.0.0.1:2"); !fresh.absent(now) {
+		t.Fatal("a peer never reported HEALTHY must close at once")
 	}
 }
 

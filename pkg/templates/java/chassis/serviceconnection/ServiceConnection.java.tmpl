@@ -267,8 +267,9 @@ public class ServiceConnection implements AutoCloseable {
     public boolean isAvailable() {
         lock.readLock().lock();
         try {
+            long now = System.nanoTime();
             for (EndpointConn ec : endpoints) {
-                if (ec.isConnected() && ec.isRoutable()) {
+                if (ec.isConnected() && ec.isAvailable(now)) {
                     return true;
                 }
             }
@@ -280,10 +281,11 @@ public class ServiceConnection implements AutoCloseable {
 
     /** Test hook: reports every endpoint of this pool with {@code status}. */
     void setEndpointHealthForTest(InstanceStatus status) {
+        ServiceInstanceHealth h = ServiceInstanceHealth.newBuilder().setStatus(status).build();
         lock.writeLock().lock();
         try {
             for (EndpointConn ec : endpoints) {
-                ec.status = status;
+                ec.updateHealth(h);
             }
         } finally {
             lock.writeLock().unlock();
@@ -321,8 +323,12 @@ public class ServiceConnection implements AutoCloseable {
                 if (h != null) {
                     ec.updateHealth(h);
                     kept.add(ec);
-                } else {
+                } else if (ec.absent(System.nanoTime())) {
+                    // Removed for the whole fleet window
                     toClose.add(ec);
+                } else {
+                    // Left out of this snapshot only; close once the fleet window passes
+                    kept.add(ec);
                 }
             }
 
@@ -789,13 +795,22 @@ public class ServiceConnection implements AutoCloseable {
     // EndpointConn -- per-endpoint gRPC connection with health tracking
     // -----------------------------------------------------------------------
 
-    private static class EndpointConn {
+    static class EndpointConn {
+        /**
+         * How long the fleet health plane must keep reporting an endpoint as not
+         * HEALTHY/DEGRADED before readiness counts it down. Reports go stale or
+         * unhealthy for a few seconds at a time on an idle fleet.
+         */
+        static final long FLEET_DOWN_AFTER_NANOS = TimeUnit.SECONDS.toNanos(30);
+
         final String target;
         ManagedChannel channel;
         boolean callerSupplied;
         InstanceStatus status = InstanceStatus.INSTANCE_STATUS_STARTING;
         long latencyUs = Long.MAX_VALUE;
         double errorRate;
+        /** When the fleet plane last reported HEALTHY or DEGRADED; null until it has. */
+        private Long fleetOkAtNanos;
         private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
         EndpointConn(String target) {
@@ -847,10 +862,48 @@ public class ServiceConnection implements AutoCloseable {
             lock.writeLock().lock();
             try {
                 this.status = h.getStatus();
+                if (status == InstanceStatus.INSTANCE_STATUS_HEALTHY
+                        || status == InstanceStatus.INSTANCE_STATUS_DEGRADED) {
+                    fleetOkAtNanos = System.nanoTime();
+                }
                 this.latencyUs = h.getP50LatencyUs();
                 this.errorRate = h.getErrorRate();
             } finally {
                 lock.writeLock().unlock();
+            }
+        }
+
+        /**
+         * Records a fleet health snapshot that left this endpoint out. It is not
+         * routed to while absent. Returns true once readiness counts it down,
+         * when it should be closed; until then it stays in the pool so one missed
+         * snapshot does not empty the pool.
+         */
+        boolean absent(long nowNanos) {
+            lock.writeLock().lock();
+            try {
+                this.status = InstanceStatus.INSTANCE_STATUS_UNHEALTHY;
+            } finally {
+                lock.writeLock().unlock();
+            }
+            return !isAvailable(nowNanos);
+        }
+
+        /**
+         * Reports whether readiness counts this endpoint up at {@code nowNanos}:
+         * it is routable, or the fleet plane reported it HEALTHY/DEGRADED within
+         * {@link #FLEET_DOWN_AFTER_NANOS}. Routing uses {@link #isRoutable()} alone.
+         */
+        boolean isAvailable(long nowNanos) {
+            lock.readLock().lock();
+            try {
+                if (status == InstanceStatus.INSTANCE_STATUS_HEALTHY
+                        || status == InstanceStatus.INSTANCE_STATUS_DEGRADED) {
+                    return true;
+                }
+                return fleetOkAtNanos != null && nowNanos - fleetOkAtNanos < FLEET_DOWN_AFTER_NANOS;
+            } finally {
+                lock.readLock().unlock();
             }
         }
 

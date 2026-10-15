@@ -2,10 +2,12 @@ package {{.ChassisBase}}.serviceconnection;
 
 import {{.TypesBase}}.sys.x509.X509;
 import {{.TypesBase}}.sys.healthreport.Healthreport.InstanceStatus;
+import {{.TypesBase}}.sys.healthreport.Healthreport.ServiceInstanceHealth;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 // Pins NEW-18 / NEW-21: service-mesh channels are fail-CLOSED and fail-FAST.
@@ -45,6 +47,7 @@ public class ServiceConnectionTest {
 
         checkBackoff();
         checkReadiness();
+        checkAbsence();
 
         if (failures > 0) {
             System.err.println(failures + " ServiceConnection check(s) FAILED");
@@ -72,6 +75,18 @@ public class ServiceConnectionTest {
         expect(ReconnectBackoff.next(ReconnectBackoff.MAX_MS) == ReconnectBackoff.MAX_MS, "backoff(cap) must stay at cap");
     }
 
+    /** An endpoint left out of a snapshot is kept until the fleet window passes. */
+    private static void checkAbsence() {
+        ServiceConnection.EndpointConn fresh = new ServiceConnection.EndpointConn("127.0.0.1:2");
+        expect(fresh.absent(System.nanoTime()), "a peer never reported HEALTHY must close at once");
+
+        ServiceConnection.EndpointConn peer = new ServiceConnection.EndpointConn("127.0.0.1:3");
+        peer.updateHealth(ServiceInstanceHealth.newBuilder().setStatus(InstanceStatus.INSTANCE_STATUS_HEALTHY).build());
+        long now = System.nanoTime();
+        expect(!peer.absent(now), "one missed snapshot keeps the peer");
+        expect(peer.absent(now + TimeUnit.SECONDS.toNanos(30)), "absent for the whole fleet window closes it");
+    }
+
     /** Readiness requires every pool to have a routable endpoint and every stream flag to be up. */
     private static void checkReadiness() {
         expect(new RequiredChannels(List.of(), List.of()).firstDown().isEmpty(), "nothing required must be ready");
@@ -91,8 +106,9 @@ public class ServiceConnectionTest {
             sc.setEndpointHealthForTest(InstanceStatus.INSTANCE_STATUS_DEGRADED);
             expect(required.firstDown().isEmpty(), "DEGRADED peer still serves");
             sc.setEndpointHealthForTest(InstanceStatus.INSTANCE_STATUS_UNHEALTHY);
-            expect(required.firstDown().orElse("").equals("identity"), "UNHEALTHY peer must be down");
+            expect(required.firstDown().isEmpty(), "a fresh UNHEALTHY report is inside the fleet window");
 
+            sc.setEndpointHealthForTest(InstanceStatus.INSTANCE_STATUS_HEALTHY);
             sc.setEndpointHealthForTest(InstanceStatus.INSTANCE_STATUS_HEALTHY);
             AtomicBoolean up = new AtomicBoolean(false);
             RequiredChannels withStream = new RequiredChannels(List.of(sc),

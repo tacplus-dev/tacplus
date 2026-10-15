@@ -114,6 +114,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn peer_missing_from_one_snapshot_stays_up() {
+        // The fleet health snapshot can omit a peer for one poll. Dropping it
+        // at once empties the pool, and readiness counts an empty pool down.
+        let sc = pool("identity", InstanceStatus::Healthy).await;
+        let required = RequiredChannels::new(vec![sc.clone()], Vec::new());
+        sc.reconcile_from_health(&[]).await;
+        assert_eq!(required.first_down().await, None, "one missed snapshot is not down");
+    }
+
+    #[tokio::test]
     async fn stream_follows_its_flag() {
         let up = Arc::new(AtomicBool::new(false));
         let required = RequiredChannels::new(

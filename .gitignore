@@ -168,3 +168,6 @@ cross-toolchain/
 
 # Example project build output (just example)
 example/target/
+
+# example/server go.sum is produced by example/run.sh against the generated model
+example/server/go.sum

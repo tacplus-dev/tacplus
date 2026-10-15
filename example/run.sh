@@ -41,19 +41,10 @@ go 1.23
 MOD
 
 echo "==> Building Go server"
-mkdir -p "$OUT/go/server"
-cp "$EX/server/main.go" "$OUT/go/server/main.go"
-cat > "$OUT/go/server/go.mod" <<'MOD'
-module example.com/notesapi/server
-
-go 1.23
-
-require example.com/notesapi v0.0.0
-
-replace example.com/notesapi => ..
-MOD
+# example/server is its own module (so the root module's `go vet ./...` does
+# not compile it); its go.mod points at the generated model in target/go.
 (cd "$OUT/go" && go mod tidy) > "$OUT/go/tidy.log" 2>&1 || { cat "$OUT/go/tidy.log"; exit 1; }
-(cd "$OUT/go/server" && go mod tidy && go build -o "$OUT/notes-server" .) > "$OUT/go/server-build.log" 2>&1 || { cat "$OUT/go/server-build.log"; exit 1; }
+(cd "$EX/server" && go mod tidy && go build -o "$OUT/notes-server" .) > "$OUT/go/server-build.log" 2>&1 || { cat "$OUT/go/server-build.log"; exit 1; }
 
 echo "==> Generating TypeScript model"
 write_config "$OUT/ts" typescript com.example.notesclient

@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       issue:
-        description: Issue number to take (default: the oldest open fix-request not in progress)
+        description: "Issue number to take (default: the oldest open fix-request not in progress)"
         required: false
 
 permissions:

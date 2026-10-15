@@ -121,6 +121,8 @@ const MINT_MIN_REFRESH_BUFFER_SECS = 30;
 
 interface MintedToken {
   token: string;
+  /** Claims the mint returned alongside the JWT. */
+  claims: { [k: string]: string };
   expiresAt: number;
   /** When to proactively refresh (50% of TTL from issue time). */
   refreshAt: number;
@@ -142,7 +144,16 @@ function mintedToken(jwt: string, payload: { [k: string]: string }): MintedToken
   const refreshOffsetSecs = ttlSecs <= MINT_MIN_REFRESH_BUFFER_SECS
     ? 0
     : Math.min(Math.trunc(ttlSecs * MINT_REFRESH_RATIO), ttlSecs - MINT_MIN_REFRESH_BUFFER_SECS);
-  return { token: jwt, expiresAt: nowSecs + ttlSecs, refreshAt: nowSecs + refreshOffsetSecs };
+  return { token: jwt, claims: payload, expiresAt: nowSecs + ttlSecs, refreshAt: nowSecs + refreshOffsetSecs };
+}
+
+/** Optional MintTokenProvider hooks. */
+export interface MintTokenProviderOptions {
+  /**
+   * Called when the mint refuses with UNAUTHENTICATED, after the provider has
+   * cleared its refresh token and before it throws W2SError(UNAUTHENTICATED).
+   */
+  onSessionEnded?: () => void;
 }
 
 /**
@@ -155,7 +166,7 @@ function mintedToken(jwt: string, payload: { [k: string]: string }): MintedToken
  * tokens are cached in memory until their proactive-refresh point. When no
  * access token is cached, refresh -> access and access -> service are batched
  * into one mint call. A mint refused with UNAUTHENTICATED clears the stored
- * refresh token (the session has ended).
+ * refresh token (the session has ended) and calls `options.onSessionEnded`.
  *
  * Pass `provider` to the ServiceManager:
  *   const tokens = new MintTokenProvider(sm.grpc().gateway().mint_client(), localStorage);
@@ -164,15 +175,17 @@ function mintedToken(jwt: string, payload: { [k: string]: string }): MintedToken
 export class MintTokenProvider {
   private readonly mint: TokenMinter;
   private readonly storage: TokenStorage;
+  private readonly options: MintTokenProviderOptions;
   /** Refresh token the cached tokens below were minted from. */
   private cachedFor: string | null = null;
   private accessToken: MintedToken | undefined;
   /** Service-specific tokens, keyed by audience. */
   private tokens = new Map<string, MintedToken>();
 
-  constructor(mint: TokenMinter, storage: TokenStorage) {
+  constructor(mint: TokenMinter, storage: TokenStorage, options: MintTokenProviderOptions = {}) {
     this.mint = mint;
     this.storage = storage;
+    this.options = options;
   }
 
   /** TokenProvider for the ServiceManager: the token for the target service. */
@@ -192,6 +205,24 @@ export class MintTokenProvider {
   /** Returns true if a refresh token is stored. */
   hasRefreshToken(): boolean {
     return this.getRefreshToken() !== null;
+  }
+
+  /**
+   * Returns the cached access token if it is unexpired and was minted from the
+   * stored refresh token; does not mint.
+   */
+  getAccessToken(): string | undefined {
+    return this.currentAccessToken()?.token;
+  }
+
+  /** Returns the claims of the token getAccessToken() returns. */
+  getAccessClaims(): { [k: string]: string } | undefined {
+    return this.currentAccessToken()?.claims;
+  }
+
+  private currentAccessToken(): MintedToken | undefined {
+    if (this.accessToken === undefined || this.getRefreshToken() !== this.cachedFor) return undefined;
+    return Math.floor(Date.now() / 1000) < this.accessToken.expiresAt ? this.accessToken : undefined;
   }
 
   /** Removes the stored refresh token and all minted tokens (sign out). */
@@ -260,6 +291,7 @@ export class MintTokenProvider {
       if (e instanceof W2SError && e.code === W2S_UNAUTHENTICATED) {
         // Refresh token is invalid — the session has ended.
         this.clear();
+        this.options.onSessionEnded?.();
       }
       throw e;
     }

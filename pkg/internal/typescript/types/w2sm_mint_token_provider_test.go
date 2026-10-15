@@ -68,7 +68,8 @@ func TestTypeScriptW2SMintTokenProviderRender(t *testing.T) {
 			"export interface TokenStorage {",
 			"  mintToken(request: TokenMintRequest): Promise<TokenMintResponse>;",
 			"export class MintTokenProvider {",
-			"  constructor(mint: TokenMinter, storage: TokenStorage) {",
+			"  constructor(mint: TokenMinter, storage: TokenStorage, options: MintTokenProviderOptions = {}) {",
+			"  onSessionEnded?: () => void;",
 			"  readonly provider: TokenProvider = (service?: string) => this.getTokenFor(service ?? '');",
 			// refresh -> access (empty aud) -> service-specific, batched like ClientIdentityManager.
 			"resp = await this.mint.mintToken(create(TokenMintRequestSchema, {\n        inputToken,\n        tokenPurpose: TokenPurpose.ACCESS,\n        serviceAuds,\n      }));",
@@ -77,6 +78,12 @@ func TestTypeScriptW2SMintTokenProviderRender(t *testing.T) {
 			// A refused refresh ends the session.
 			"if (e instanceof W2SError && e.code === W2S_UNAUTHENTICATED) {",
 			"this.storage.removeItem(W2S_REFRESH_TOKEN_KEY);",
+			// Session end hook runs after the provider clears itself, before the throw.
+			"        this.clear();\n        this.options.onSessionEnded?.();\n      }\n      throw e;",
+			// Sync read of the current access token and its mint-returned claims.
+			"  getAccessToken(): string | undefined {",
+			"  getAccessClaims(): { [k: string]: string } | undefined {",
+			"return { token: jwt, claims: payload, expiresAt: nowSecs + ttlSecs, refreshAt: nowSecs + refreshOffsetSecs };",
 		} {
 			if !strings.Contains(out, want) {
 				t.Errorf("w2sm/index.ts missing %q", want)

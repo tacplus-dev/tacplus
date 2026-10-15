@@ -2989,6 +2989,39 @@ func TestEventBusSubscriberDeliversNonZeroRecordMeta(t *testing.T) {
 	}
 }
 
+// TestFixtureEventRecordDispatchHandsTheTypedRow EXECUTES the generated record
+// dispatch the ServiceManager runs on every subscribed FixtureEvent:
+// HandleFixtureEvent passes the FixtureEventRecord projection, typed, to its
+// insert callback before it returns (synchronous), writes nothing on a
+// trace-round noop event, and fails the delivery with the callback's error.
+func TestFixtureEventRecordDispatchHandsTheTypedRow(t *testing.T) {
+	ctx := context.Background()
+	event := &contractfixtures_pb.FixtureEvent{EventId: "evt-dispatch", TenantNamespace: "tenant-a", TimestampMs: 1700000000123}
+	var rows []*contractfixtures_pb.FixtureEventRecord
+	insert := func(_ context.Context, row *contractfixtures_pb.FixtureEventRecord) error {
+		rows = append(rows, row)
+		return nil
+	}
+	if err := contractfixtures_pb.HandleFixtureEvent(ctx, event, insert); err != nil {
+		t.Fatalf("HandleFixtureEvent: %v", err)
+	}
+	if len(rows) != 1 || rows[0].GetEventId() != "evt-dispatch" || rows[0].GetTenantNamespace() != "tenant-a" || rows[0].GetTimestampMs() != 1700000000123 {
+		t.Fatalf("typed rows = %v, want one FixtureEventRecord{evt-dispatch, tenant-a, 1700000000123}", rows)
+	}
+
+	rows = nil
+	noop := &contractfixtures_pb.FixtureEvent{EventId: "evt-noop", Noop: true}
+	if err := contractfixtures_pb.HandleFixtureEvent(ctx, noop, insert); err != nil || len(rows) != 0 {
+		t.Fatalf("a trace-round noop event must write no row: err %v rows %v", err, rows)
+	}
+
+	storeDown := errors.New("store down")
+	err := contractfixtures_pb.HandleFixtureEvent(ctx, event, func(context.Context, *contractfixtures_pb.FixtureEventRecord) error { return storeDown })
+	if !errors.Is(err, storeDown) {
+		t.Fatalf("HandleFixtureEvent error = %v, want the insert callback's error", err)
+	}
+}
+
 // TestFixtureEventRedactionSanitize EXECUTES the generated data-entitlement
 // transform (redact runtime evidence, NEW-8): DROP clears the field, PSEUDONYMIZE
 // tokenizes it, and the injected <field>_redacted indicators are set — real
@@ -3597,6 +3630,7 @@ fn main() {
         run_collection_watch_runtime_contract().await;
         run_c2s_validation_smoke().await;
         run_eventbus_subscriber_metadata_smoke().await;
+        run_record_dispatch_smoke().await;
         run_w2s_http_validation_smoke().await;
         run_w2s_chat_smoke().await;
         run_red1_sanitize_vector();
@@ -4463,6 +4497,48 @@ async fn run_eventbus_subscriber_metadata_smoke() {
         req.start_from,
         Some(contractclient_model::types::generated::eventbus_support::eventbus_support::subscribe_request::StartFrom::Earliest(true))
     ));
+}
+
+// Executes the generated record dispatch the ServiceManager awaits on every
+// subscribed FixtureEvent: handle_fixture_event awaits the FixtureEventRecord
+// projection's insert with its typed FixtureEventRecordRow, writes nothing on a
+// trace-round noop event, and fails the delivery with the insert's error.
+async fn run_record_dispatch_smoke() {
+    use contractclient_model::types::services::contractfixtures::{
+        handle_fixture_event, FixtureEventRecordInsert, FixtureEventRecordRow,
+    };
+    let rows = Arc::new(std::sync::Mutex::new(Vec::<FixtureEventRecordRow>::new()));
+    let sink = rows.clone();
+    let insert: FixtureEventRecordInsert = Arc::new(move |row| {
+        let sink = sink.clone();
+        Box::pin(async move {
+            sink.lock().expect("rust dispatch rows lock").push(row);
+            Ok(())
+        })
+    });
+    let event = FixtureEvent {
+        event_id: "evt-dispatch".to_string(),
+        tenant_namespace: "tenant-a".to_string(),
+        timestamp_ms: 1_700_000_000_123,
+        ..Default::default()
+    };
+    handle_fixture_event(&event, Some(&insert)).await.expect("rust record dispatch");
+    {
+        let got = rows.lock().expect("rust dispatch rows lock");
+        assert_eq!(got.len(), 1, "rust record dispatch rows = {:?}", *got);
+        assert_eq!(got[0].event_id, "evt-dispatch", "rust dispatch row = {:?}", got[0]);
+        assert_eq!(got[0].tenant_namespace, "tenant-a", "rust dispatch row = {:?}", got[0]);
+        assert_eq!(got[0].timestamp_ms, 1_700_000_000_123, "rust dispatch row = {:?}", got[0]);
+    }
+
+    rows.lock().expect("rust dispatch rows lock").clear();
+    let noop = FixtureEvent { event_id: "evt-noop".to_string(), noop: true, ..Default::default() };
+    handle_fixture_event(&noop, Some(&insert)).await.expect("rust noop dispatch");
+    assert!(rows.lock().expect("rust dispatch rows lock").is_empty(), "a trace-round noop event must write no row");
+
+    let failing: FixtureEventRecordInsert = Arc::new(|_row| Box::pin(async { Err("store down".into()) }));
+    let err = handle_fixture_event(&event, Some(&failing)).await.expect_err("rust dispatch must fail with the insert");
+    assert_eq!(err.to_string(), "store down");
 }
 
 fn encode_subscribe_envelope_for_test(meta: &RecordMeta, event: &FixtureEvent) -> Vec<u8> {
@@ -6213,6 +6289,14 @@ write_java_compile_pom() {
       <artifactId>javax.annotation-api</artifactId>
       <version>1.3.2</version>
     </dependency>
+    <!-- Generated MCP dispatch (every c2s service with a user rpc) is written
+         against the official MCP Java SDK, as cross-test/lib/java-compile.sh
+         declares it; without it no Java leg of this fixture compiled. -->
+    <dependency>
+      <groupId>io.modelcontextprotocol.sdk</groupId>
+      <artifactId>mcp</artifactId>
+      <version>2.0.1</version>
+    </dependency>
   </dependencies>
 </project>
 EOF
@@ -7490,6 +7574,45 @@ public final class Consumer {
     }
   }
 
+  // Executes the generated record dispatch the ServiceManager calls on every
+  // subscribed FixtureEvent: handleFixtureEvent passes the FixtureEventRecord
+  // projection, typed, to its insert before it returns (synchronous), writes
+  // nothing on a trace-round noop event, and fails the delivery with the
+  // insert's exception.
+  private static void runJavaRecordDispatchSmoke() throws Exception {
+    var event = com.gitlab.example.tacplus.consumer.contractclient.model.types.services.contractfixtures.Contractfixtures.FixtureEvent.newBuilder()
+        .setEventId("evt-dispatch")
+        .setTenantNamespace("tenant-a")
+        .setTimestampMs(1_700_000_000_123L)
+        .build();
+    var rows = new java.util.ArrayList<com.gitlab.example.tacplus.consumer.contractclient.model.types.services.contractfixtures.Contractfixtures.FixtureEventRecord>();
+    com.gitlab.example.tacplus.consumer.contractclient.model.types.services.contractfixtures.FixtureEventProjections.FixtureEventRecordInsert insert = rows::add;
+    com.gitlab.example.tacplus.consumer.contractclient.model.types.services.contractfixtures.FixtureEventProjections.handleFixtureEvent(event, insert);
+    if (rows.size() != 1
+        || !"evt-dispatch".equals(rows.get(0).getEventId())
+        || !"tenant-a".equals(rows.get(0).getTenantNamespace())
+        || rows.get(0).getTimestampMs() != 1_700_000_000_123L) {
+      throw new IllegalStateException("Java record dispatch rows = " + rows);
+    }
+
+    rows.clear();
+    com.gitlab.example.tacplus.consumer.contractclient.model.types.services.contractfixtures.FixtureEventProjections.handleFixtureEvent(
+        event.toBuilder().setNoop(true).build(), insert);
+    if (!rows.isEmpty()) {
+      throw new IllegalStateException("a trace-round noop event must write no row, got " + rows);
+    }
+
+    try {
+      com.gitlab.example.tacplus.consumer.contractclient.model.types.services.contractfixtures.FixtureEventProjections.handleFixtureEvent(
+          event, row -> { throw new IllegalStateException("store down"); });
+      throw new AssertionError("Java record dispatch swallowed the insert's exception");
+    } catch (IllegalStateException e) {
+      if (!"store down".equals(e.getMessage())) {
+        throw e;
+      }
+    }
+  }
+
   private static void runJavaEventBusSubscriberMetadataSmoke() throws Exception {
     Contractfixtures.EventBusRecordMeta recordMeta = Contractfixtures.EventBusRecordMeta.newBuilder()
         .setKey(ByteString.copyFromUtf8("fixture-key"))
@@ -7874,6 +7997,7 @@ public final class Consumer {
     runJavaCollectionWatchRuntimeContract();
     runJavaC2SValidationSmoke(req);
     runJavaEventBusSubscriberMetadataSmoke();
+    runJavaRecordDispatchSmoke();
     runJavaW2SChatSmoke();
     runJavaW2SFailClosedSmoke(req);
     runJavaRed1SanitizeVector();

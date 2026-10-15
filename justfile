@@ -160,7 +160,7 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
-  for g in soundness test current-generation determinism cert-stream claims-provenance; do
+  for g in soundness test current-generation determinism cert-stream claims-provenance w2s-validate; do
     echo "=== $g ==="
     just "$g"
     rc=$?
@@ -254,6 +254,12 @@ claims-provenance:
 # Rust REST dispatch module.
 w2s-validate:
   {{lock}} bash cross-test/w2s-validate/run.sh
+
+w2s-validate-go:
+  {{lock}} bash cross-test/w2s-validate/run.sh --language go
+
+w2s-validate-rust:
+  {{lock}} bash cross-test/w2s-validate/run.sh --language rust
 
 # Compiles the generated Rust MCP dispatch against the EXACT rmcp version
 # tacplus declares (rmcpCrateVersion), so a floor lower than the emitted code

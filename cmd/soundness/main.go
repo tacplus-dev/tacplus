@@ -660,7 +660,7 @@ var emittedManifestProbes = []struct {
 		// broker tag and "EventBusTypedService". Any new site that tries trips
 		// this, whether or not anyone remembered to list it here.
 		name: "REST dispatch routes to the per-topic path",
-		file: "pkg/internal/rust/types/restdispatch_gen.go",
+		file: "pkg/internal/common/restdispatch/plan.go",
 		patterns: []string{
 			"vs.Routes",
 			"route.Service",

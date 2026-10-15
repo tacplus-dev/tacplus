@@ -8,9 +8,6 @@ use tonic::transport::Channel;
 use axum::response::sse::{Event, Sse};
 use futures::StreamExt;
 <<- end >>
-<<- if .HasClientStreaming >>
-use futures::stream;
-<<- end >>
 
 #[allow(unused_imports)]
 use serde_json;
@@ -225,33 +222,19 @@ pub async fn dispatch(
             let auth = dispatcher.auth_header("<< rustStr .ServiceID >>").await;
             let auth_ref = auth.as_deref();
 <<- if .IsEmptyInput >>
-<<- if .ClientStreaming >>
-            << if .IsEmptyOutput >>let _ =<< else >>let resp =<< end >> << .ClientPath >>::new(channel)
-                .<< .MethodSnake >>(with_metadata(stream::once(futures::future::ready(())), auth_ref, request_id))
-                .await
-                .map_err(grpc_err)?;
-<<- else >>
             << if .IsEmptyOutput >>let _ =<< else >>let resp =<< end >> << .ClientPath >>::new(channel)
                 .<< .MethodSnake >>(with_metadata((), auth_ref, request_id))
                 .await
                 .map_err(grpc_err)?;
-<<- end >>
 <<- else >>
             let req = << .FromJsonPath >>(body).map_err(|e| (StatusCode::BAD_REQUEST, error_body(format!("invalid request body: {}", e))))?;
 <<- if .ValidateInput >>
             req.validate().map_err(|e| (StatusCode::BAD_REQUEST, error_body(format!("request validation failed: {}", e))))?;
 <<- end >>
-<<- if .ClientStreaming >>
-            << if .IsEmptyOutput >>let _ =<< else >>let resp =<< end >> << .ClientPath >>::new(channel)
-                .<< .MethodSnake >>(with_metadata(stream::once(futures::future::ready(req)), auth_ref, request_id))
-                .await
-                .map_err(grpc_err)?;
-<<- else >>
             << if .IsEmptyOutput >>let _ =<< else >>let resp =<< end >> << .ClientPath >>::new(channel)
                 .<< .MethodSnake >>(with_metadata(req, auth_ref, request_id))
                 .await
                 .map_err(grpc_err)?;
-<<- end >>
 <<- end >>
 <<- if .IsEmptyOutput >>
             Ok("{}".to_string())
@@ -295,13 +278,8 @@ pub async fn dispatch_stream(
             let auth = dispatcher.auth_header("<< rustStr .ServiceID >>").await;
             let auth_ref = auth.as_deref();
 <<- if .IsEmptyInput >>
-<<- if .ClientStreaming >>
-            let stream = match << .ClientPath >>::new(channel)
-                .<< .MethodSnake >>(with_metadata(stream::once(futures::future::ready(())), auth_ref, request_id))
-<<- else >>
             let stream = match << .ClientPath >>::new(channel)
                 .<< .MethodSnake >>(with_metadata((), auth_ref, request_id))
-<<- end >>
 <<- else >>
             let req = match << .FromJsonPath >>(body) {
                 Ok(r) => r,
@@ -312,13 +290,8 @@ pub async fn dispatch_stream(
                 return (StatusCode::BAD_REQUEST, error_body(format!("request validation failed: {}", e))).into_response();
             }
 <<- end >>
-<<- if .ClientStreaming >>
-            let stream = match << .ClientPath >>::new(channel)
-                .<< .MethodSnake >>(with_metadata(stream::once(futures::future::ready(req)), auth_ref, request_id))
-<<- else >>
             let stream = match << .ClientPath >>::new(channel)
                 .<< .MethodSnake >>(with_metadata(req, auth_ref, request_id))
-<<- end >>
 <<- end >>
                 .await
             {

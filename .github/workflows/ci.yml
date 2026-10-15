@@ -57,3 +57,4 @@ jobs:
       - uses: ./.github/actions/toolchain
       - run: just current-generation-go
       - run: just determinism-go
+      - run: just w2s-validate-go

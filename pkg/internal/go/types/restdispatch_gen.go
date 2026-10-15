@@ -1,0 +1,246 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+
+package types
+
+import (
+	"bytes"
+	"fmt"
+	"go/format"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"text/template"
+
+	"go.uber.org/zap"
+
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/restdispatch"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
+)
+
+// goRestDispatchArm is one dispatchable method rendered as Go references.
+type goRestDispatchArm struct {
+	GrpcPath       string
+	ServiceID      string
+	MethodName     string // protoc-gen-go-grpc client method, e.g. "GetItem"
+	IsEmptyInput   bool
+	IsEmptyOutput  bool
+	NewClient      string // "catalog_pb.NewCatalogServiceClient"
+	FromJSON       string // "catalog_pb.GetItemRequestFromJSON"
+	ToJSON         string // "catalog_pb.GetItemResponseToJSON"
+	ValidateInput  string // "catalog_pb.ValidateGetItemRequest", "" when the type has no validator
+	ValidateOutput string
+}
+
+// goRestDispatchRoute is one route table entry. RedirectField is the key the
+// Go ToJSON helpers emit, which is the proto field name.
+type goRestDispatchRoute struct {
+	HttpPath             string
+	GrpcPath             string
+	ServiceID            string
+	EntitlementService   string
+	HttpMethods          []string
+	AuthPolicy           string
+	EntitlementScopes    []string
+	CapabilityScope      string
+	ServerStreaming      bool
+	ClientStreaming      bool
+	TargetNamespaceField string
+	FormBody             bool
+	RedirectField        string
+}
+
+type goRestDispatchImport struct {
+	Alias string
+	Path  string
+}
+
+type goRestDispatchData struct {
+	Imports    []goRestDispatchImport
+	Routes     []goRestDispatchRoute
+	UnaryArms  []goRestDispatchArm
+	StreamArms []goRestDispatchArm
+}
+
+// generateGoRestDispatch renders the REST -> gRPC dispatch plane for a
+// (spec.service).rest_dispatch build, under <sm>/rest_dispatch/. Which routes
+// and arms exist is decided by the shared planner; this maps them to the
+// generated Go client, JSON and validator names.
+func generateGoRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, protoDir string) error {
+	dp, err := parser.NewDescriptorParser(protoDir)
+	if err != nil {
+		return fmt.Errorf("failed to create descriptor parser: %w", err)
+	}
+	services := make([]restdispatch.Service, 0, len(servicesInfo))
+	for _, svc := range servicesInfo {
+		services = append(services, restdispatch.Service{
+			ProtoFile:   svc.ProtoFile,
+			PackageName: svc.PackageName,
+			ServiceName: svc.ServiceName,
+			ParentDir:   svc.ParentDir,
+			IsS2S:       svc.IsS2S,
+			EventLabel:  svc.EventLabel,
+			HostLabel:   svc.HostLabel,
+		})
+	}
+	plan, err := restdispatch.Collect(dp, config, services, protoDir)
+	if err != nil {
+		return err
+	}
+
+	data := goRestDispatchData{}
+	imports := map[string]string{}
+	for _, a := range plan.Arms {
+		pkgToDir := plan.PkgToDirFor(a)
+		svcAlias := goRestDispatchTypesImport(config, imports, a.PackageName, pkgToDir)
+		arm := goRestDispatchArm{
+			GrpcPath:      a.GrpcPath,
+			ServiceID:     a.ServiceID,
+			MethodName:    a.MethodName,
+			IsEmptyInput:  a.IsEmptyInput,
+			IsEmptyOutput: a.IsEmptyOutput,
+			NewClient:     svcAlias + ".New" + a.ServiceName + "Client",
+		}
+		if a.IsEmptyInput {
+			imports["emptypb"] = wellKnownGoType["Empty"].importPath
+		} else {
+			pkg, typeName := goRestDispatchSplitType(a.InputType, pkgToDir)
+			alias := goRestDispatchTypesImport(config, imports, pkg, pkgToDir)
+			arm.FromJSON = alias + "." + typeName + "FromJSON"
+			if a.ValidateInput {
+				arm.ValidateInput = alias + ".Validate" + typeName
+			}
+		}
+		if !a.IsEmptyOutput {
+			pkg, typeName := goRestDispatchSplitType(a.OutputType, pkgToDir)
+			alias := goRestDispatchTypesImport(config, imports, pkg, pkgToDir)
+			arm.ToJSON = alias + "." + typeName + "ToJSON"
+			if a.ValidateOutput {
+				arm.ValidateOutput = alias + ".Validate" + typeName
+			}
+		}
+		if a.ServerStreaming {
+			data.StreamArms = append(data.StreamArms, arm)
+		} else {
+			data.UnaryArms = append(data.UnaryArms, arm)
+		}
+	}
+	for _, r := range plan.Routes {
+		data.Routes = append(data.Routes, goRestDispatchRoute{
+			HttpPath:             r.HttpPath,
+			GrpcPath:             r.GrpcPath,
+			ServiceID:            r.ServiceID,
+			EntitlementService:   r.EntitlementService,
+			HttpMethods:          r.HttpMethods,
+			AuthPolicy:           r.AuthPolicy,
+			EntitlementScopes:    r.EntitlementScopes,
+			CapabilityScope:      r.CapabilityScope,
+			ServerStreaming:      r.ServerStreaming,
+			ClientStreaming:      r.ClientStreaming,
+			TargetNamespaceField: r.TargetNamespaceField,
+			FormBody:             r.FormBody,
+			RedirectField:        r.RedirectField,
+		})
+	}
+	aliases := make([]string, 0, len(imports))
+	for alias := range imports {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	for _, alias := range aliases {
+		data.Imports = append(data.Imports, goRestDispatchImport{Alias: alias, Path: imports[alias]})
+	}
+
+	outputDir := filepath.Join(config.OutputDir, config.GetSmPrefix(), "rest_dispatch")
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create rest_dispatch directory: %w", err)
+	}
+	outputPath := filepath.Join(outputDir, "rest_dispatch.go")
+	zap.L().Info("Generating REST dispatch plane",
+		zap.String("path", outputPath),
+		zap.Int("unaryArms", len(data.UnaryArms)),
+		zap.Int("streamArms", len(data.StreamArms)),
+		zap.Int("routes", len(data.Routes)),
+		zap.Bool("isGateway", config.IsGateway),
+	)
+	rendered, err := renderGoRestDispatch(data)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(outputPath, rendered, 0644)
+}
+
+// renderGoRestDispatch renders rest_dispatch.go from its template data.
+func renderGoRestDispatch(data goRestDispatchData) ([]byte, error) {
+	tmplStr, err := loadTemplate("rest_dispatch.go.tmpl")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load rest_dispatch template: %w", err)
+	}
+	funcs := template.FuncMap{
+		"goStr": strconv.Quote,
+		"goStrSlice": func(values []string) string {
+			if len(values) == 0 {
+				return "nil"
+			}
+			quoted := make([]string, len(values))
+			for i, v := range values {
+				quoted[i] = strconv.Quote(v)
+			}
+			return "[]string{" + strings.Join(quoted, ", ") + "}"
+		},
+	}
+	tmpl, err := template.New("rest_dispatch").Funcs(funcs).Funcs(header.Funcs()).Parse(tmplStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse rest_dispatch template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return nil, fmt.Errorf("failed to execute rest_dispatch template: %w", err)
+	}
+	formatted, err := format.Source(buf.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("failed to format rest_dispatch.go: %w\n%s", err, buf.String())
+	}
+	return formatted, nil
+}
+
+// goRestDispatchTypesImport records the types import for a proto package and
+// returns its alias, "<pkg>_pb" as the service wrappers spell it.
+func goRestDispatchTypesImport(config *tactype.Config, imports map[string]string, pkg string, pkgToDir map[string]string) string {
+	alias := strings.ReplaceAll(pkg, ".", "_") + "_pb"
+	dir := pkgToDir[pkg]
+	var importPath string
+	switch {
+	case strings.HasPrefix(dir, "services"):
+		importPath = fmt.Sprintf("%s/types/%s/%s", config.ModuleBasePath, dir, pkg)
+	case filepath.Base(dir) == pkg:
+		importPath = fmt.Sprintf("%s/types/%s", config.ModuleBasePath, dir)
+	default:
+		importPath = fmt.Sprintf("%s/types/%s/%s", config.ModuleBasePath, dir, pkg)
+	}
+	imports[alias] = importPath
+	return alias
+}
+
+// goRestDispatchSplitType splits a fully-qualified proto type into its package
+// (the longest known package prefix) and its Go type name, with nested
+// messages joined by "_" as protoc-gen-go names them.
+func goRestDispatchSplitType(fullType string, pkgToDir map[string]string) (pkg, typeName string) {
+	fullType = strings.TrimPrefix(fullType, ".")
+	for candidate := range pkgToDir {
+		if strings.HasPrefix(fullType, candidate+".") && len(candidate) > len(pkg) {
+			pkg = candidate
+		}
+	}
+	if pkg == "" {
+		if dot := strings.LastIndex(fullType, "."); dot >= 0 {
+			pkg = fullType[:dot]
+		}
+	}
+	typeName = strings.TrimPrefix(fullType, pkg+".")
+	return pkg, strings.ReplaceAll(typeName, ".", "_")
+}

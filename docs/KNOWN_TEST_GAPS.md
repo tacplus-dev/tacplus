@@ -197,10 +197,11 @@ format for per-rule coverage.
 
 **Status:** the REST leg is now closed; the gRPC-proxy leg is not.
 
-W2S request (ingress) validation in the generated Rust REST dispatch is wired
-and pinned: `cross-test/w2s-validate` hosts the real generated
-`rest_dispatch::dispatch` / `dispatch_stream` against a real tonic backend and
-proves an `assert_email` violation is rejected `400` without reaching the
+W2S request (ingress) validation in the generated REST dispatch is wired and
+pinned in Rust and Go: `cross-test/w2s-validate` hosts the real generated
+`rest_dispatch::dispatch` / `dispatch_stream` (Rust) and
+`restdispatch.Dispatch` / `DispatchStream` (Go) against a real gRPC backend
+and proves an `assert_email` violation is rejected `400` without reaching the
 backend, with a valid request as the negative control.
 
 `proxy_dispatch::validate_request(grpc_path, proto_bytes)` is a different seam:

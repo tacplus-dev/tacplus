@@ -15,6 +15,7 @@ import (
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/verbs"
 	"github.com/tacplus-dev/tacplus/pkg/internal/proto"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
@@ -193,10 +194,15 @@ func TestRustAsciiOnlyQuotedArraysAreUnchanged(t *testing.T) {
 	if got, want := formatHttpMethods([]string{"POST", "GET"}), `"POST", "GET"`; got != want {
 		t.Errorf("formatHttpMethods = %s, want %s", got, want)
 	}
-	scopes, _, err := routeCapabilityMetadataFromShape("GetTicket", false, false, "")
+	class, err := verbs.Classify(verbs.MethodShape{Name: "GetTicket"})
 	if err != nil {
-		t.Fatalf("routeCapabilityMetadataFromShape: %v", err)
+		t.Fatalf("verbs.Classify: %v", err)
 	}
+	var names []string
+	for _, scope := range class.ScopesAdmitting() {
+		names = append(names, string(scope))
+	}
+	scopes := rustStrSlice(names)
 	if !strings.HasPrefix(scopes, "&[") || !strings.HasSuffix(scopes, "]") {
 		t.Errorf("capability scope array is not a Rust slice literal: %s", scopes)
 	}

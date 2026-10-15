@@ -19,6 +19,7 @@ import (
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/restdispatch"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
 	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 	"github.com/tacplus-dev/tacplus/pkg/internal/proto"
@@ -711,6 +712,23 @@ func Generate(config *tactype.Config) error {
 		}
 	}
 
+	// Generate the REST -> gRPC dispatch plane for a (spec.service).rest_dispatch
+	// build. The gateway and rest_dispatch options sit on the self package's
+	// proto, not in tacplus.yaml.
+	if config.SelfPackage != "" && len(servicesInfo) > 0 {
+		dp, err := parser.NewDescriptorParser(tempProtoDir)
+		if err != nil {
+			return fmt.Errorf("failed to create descriptor parser for REST dispatch: %w", err)
+		}
+		config.IsGateway, config.HasRestDispatch = restdispatch.Detect(dp, config.SelfPackage)
+		if config.HasRestDispatch {
+			zap.L().Info("Generating Go REST dispatch", zap.Bool("isGateway", config.IsGateway))
+			if err := generateGoRestDispatch(config, servicesInfo, tempProtoDir); err != nil {
+				return fmt.Errorf("failed to generate REST dispatch: %w", err)
+			}
+		}
+	}
+
 	// Generate per-service_store typed disk-persistence helpers (UC1 snapshot +
 	// UC2 redo log), wired to the generated ToJSON/FromJSON/Validate. No-op when
 	// there are no service_store types.
@@ -1158,6 +1176,7 @@ type ServiceInfo struct {
 	// Handler entry and a ServiceManager mount like any other gRPC service.
 	HasMcp        bool
 	HostLabel     string // physical service hosting this virtual service, from service_s2s tag
+	EventLabel    string // physical service routing label from spec.event_label
 	OutputDir     string
 	ParentDir     string
 	Config        *tactype.Config
@@ -1748,6 +1767,7 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 				GrpcName:          service.GrpcName,
 				HasMcp:            service.HasMcpRpcs,
 				HostLabel:         service.HostLabel,
+				EventLabel:        service.EventLabel,
 				OutputDir:         outputDir,
 				ParentDir:         parentDirForInfo,
 				Config:            config,

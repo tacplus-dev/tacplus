@@ -439,11 +439,13 @@ rpc BrokerFormPostCallback(FormPostCallbackRequest) returns (FormPostCallbackRes
   answers `303 See Other` with `Location` set to that field and
   `Cache-Control: no-store`, instead of JSON.
 
-Both are emitted into the Rust `rest_dispatch::RouteInfo` (`form_body`,
-`redirect_field`) and carried out by its `form_body_to_json` and
-`redirect_response`, which a REST host calls. Generation refuses the option on
-a streaming RPC, on an RPC with no c2s REST route, and when `redirect_field` is
-missing from the response or is not a singular string.
+Both are emitted into the generated route table (Rust
+`rest_dispatch::RouteInfo` `form_body` / `redirect_field`, Go
+`restdispatch.RouteInfo` `FormBody` / `RedirectField`) and carried out by its
+`form_body_to_json` and `redirect_response` (Rust) or `FormBodyToJSON` and
+`RedirectResponse` (Go), which a REST host calls. Generation refuses the
+option on a streaming RPC, on an RPC with no c2s REST route, and when
+`redirect_field` is missing from the response or is not a singular string.
 
 ---
 

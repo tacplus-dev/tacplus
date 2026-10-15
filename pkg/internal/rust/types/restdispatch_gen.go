@@ -14,27 +14,25 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/restdispatch"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
-	"github.com/tacplus-dev/tacplus/pkg/internal/common/verbs"
 	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
-	internalproto "github.com/tacplus-dev/tacplus/pkg/internal/proto"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 // dispatchArm holds resolved data for a single dispatch match arm.
 type dispatchArm struct {
-	GrpcPath        string // e.g., "/identity.IdentityService/GetUser"
-	ServiceID       string // e.g., "identity" — target service for channel/auth resolution
-	MethodSnake     string // e.g., "get_user"
-	IsEmptyInput    bool
-	IsEmptyOutput   bool
-	ValidateInput   bool
-	ValidateOutput  bool
-	ClientStreaming bool
-	ClientPath      string // fully-qualified Rust tonic client path
-	FromJsonPath    string // fully-qualified Rust from_json function path
-	ToJsonPath      string // fully-qualified Rust to_json function path
+	GrpcPath       string // e.g., "/identity.IdentityService/GetUser"
+	ServiceID      string // e.g., "identity" — target service for channel/auth resolution
+	MethodSnake    string // e.g., "get_user"
+	IsEmptyInput   bool
+	IsEmptyOutput  bool
+	ValidateInput  bool
+	ValidateOutput bool
+	ClientPath     string // fully-qualified Rust tonic client path
+	FromJsonPath   string // fully-qualified Rust from_json function path
+	ToJsonPath     string // fully-qualified Rust to_json function path
 }
 
 // routeEntry holds data for one entry in the ROUTES static table.
@@ -56,12 +54,11 @@ type routeEntry struct {
 
 // restDispatchData is the template data for rest_dispatch.rs.tmpl.
 type restDispatchData struct {
-	Header             string
-	HasStreaming       bool
-	HasClientStreaming bool
-	UnaryArms          []dispatchArm
-	StreamArms         []dispatchArm
-	Routes             []routeEntry
+	Header       string
+	HasStreaming bool
+	UnaryArms    []dispatchArm
+	StreamArms   []dispatchArm
+	Routes       []routeEntry
 }
 
 // proxyDispatchArm holds resolved data for a single proxy dispatch match arm.
@@ -85,24 +82,21 @@ type proxyDispatchData struct {
 
 // generateRestDispatch generates the REST→gRPC dispatch module for services with
 // rest_dispatch annotation. Replaces the standalone rest-dispatch-gen crate.
+// Which routes and arms exist is decided by the shared planner
+// (pkg/internal/common/restdispatch); this renders them as Rust.
 func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, inputDir string) error {
 	descriptorParser, err := parser.NewDescriptorParser(inputDir)
 	if err != nil {
 		return fmt.Errorf("failed to create descriptor parser: %w", err)
 	}
 
-	// Build package → parentDir mapping for Rust path resolution.
-	// Includes ALL proto packages (not just services) so cross-package type
-	// references (e.g., tokenrequest.TokenMintRequest) resolve correctly.
-	pkgToDir := buildPkgToDirMap(servicesInfo)
-	for path, desc := range descriptorParser.GetAllFiles() {
-		if _, exists := pkgToDir[desc.Package]; !exists {
-			dir := filepath.Dir(path)
-			if dir == "." {
-				dir = ""
-			}
-			pkgToDir[desc.Package] = dir
-		}
+	services := make([]restdispatch.Service, 0, len(servicesInfo))
+	for _, svc := range servicesInfo {
+		services = append(services, planService(svc))
+	}
+	plan, err := restdispatch.Collect(descriptorParser, config, services, inputDir)
+	if err != nil {
+		return err
 	}
 
 	// The REST dispatch module lives inside the tacplus crate, so all type
@@ -111,256 +105,38 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 
 	var unaryArms []dispatchArm
 	var streamArms []dispatchArm
-	var routes []routeEntry
-
-	// Resolve the client-reachable (C2S proxy) token minter from the
-	// (spec.token_minter) {proxy: true} declaration instead of the hardcoded
-	// gateway/Mint pair (OF-3): the gateway mint front is whichever service
-	// declares it, so renaming the service no longer silently drops its
-	// special-cased dispatch.
-	var proxyMinter *parser.TokenExchangerInfo
-	for _, m := range descriptorParser.TokenMinters() {
-		if m.IsProxy {
-			mm := m
-			proxyMinter = &mm
-			break
+	for _, a := range plan.Arms {
+		pkgToDir := plan.PkgToDirFor(a)
+		arm := dispatchArm{
+			GrpcPath:       a.GrpcPath,
+			ServiceID:      a.ServiceID,
+			MethodSnake:    prostSnakeName(a.MethodName),
+			IsEmptyInput:   a.IsEmptyInput,
+			IsEmptyOutput:  a.IsEmptyOutput,
+			ValidateInput:  a.ValidateInput,
+			ValidateOutput: a.ValidateOutput,
+			ClientPath:     resolveClientPath(a.ServiceName, a.PackageName, pkgToDir, cratePrefix),
+			FromJsonPath:   resolveFromJsonPath(a.InputType, pkgToDir, cratePrefix),
+			ToJsonPath:     resolveToJsonPath(a.OutputType, pkgToDir, cratePrefix),
+		}
+		if a.ServerStreaming {
+			streamArms = append(streamArms, arm)
+		} else {
+			unaryArms = append(unaryArms, arm)
 		}
 	}
 
-	for _, svc := range servicesInfo {
-		// S2S services aren't exposed through REST. But the gateway's generic
-		// gRPC proxy still needs the auth policy of any auth_disabled methods it
-		// proxies (e.g. the token minter's MintClientToken / MintServiceToken /
-		// TokenMint), or it defaults them to Entitled and rejects the
-		// unauthenticated bootstrap calls those methods are designed to accept.
-		// Emit proxy-only ROUTES (no HTTP path, NoAuth) for those, then skip REST.
-		if svc.IsS2S {
-			if config.IsGateway {
-				if err := collectProxyAuthDisabledRoutes(descriptorParser, svc, &routes); err != nil {
-					return fmt.Errorf("collecting S2S auth-disabled proxy routes for %s: %w", svc.ServiceName, err)
-				}
-			}
-			continue
-		}
-
-		// In gateway mode, skip the declared C2S proxy minter service (handled
-		// specially in rest_handler), keyed off (spec.token_minter) not a literal.
-		if config.IsGateway && proxyMinter != nil && svc.PackageName == proxyMinter.Package && svc.ServiceName == proxyMinter.ServiceName {
-			// Still collect routes for the minter (needed for ROUTES table and handler).
-			if err := collectRoutesForService(descriptorParser, svc, pkgToDir, cratePrefix, &routes); err != nil {
-				return fmt.Errorf("collecting minter routes for %s: %w", svc.ServiceName, err)
-			}
-			continue
-		}
-
-		protoInfo, err := descriptorParser.ConvertToProtoInfo(svc.ProtoFile)
-		if err != nil {
-			return fmt.Errorf("parsing proto for dispatch %s: %w", svc.ProtoFile, err)
-		}
-
-		var targetService *parser.ServiceInfo
-		for i := range protoInfo.Services {
-			if protoInfo.Services[i].Name == svc.ServiceName {
-				targetService = protoInfo.Services[i]
-				break
-			}
-		}
-		if targetService == nil {
-			continue
-		}
-
-		// Resolved once per service: which physical service the gateway dials,
-		// and which audience it entitles callers against. The two differ for
-		// trait-hosted and event-labelled C2S surfaces.
-		traitName := ""
-		if svc.EventLabel == "" && svc.HostLabel != "" {
-			hostFd, err := descriptorParser.GetFileDescriptor(svc.ProtoFile)
-			if err != nil {
-				return fmt.Errorf("resolving trait identity for host-labelled service %s: %w", svc.ServiceName, err)
-			}
-			traitName = hostFd.VServiceName
-		}
-		serviceID, entitlementService, err := routeIdentityForService(svc, traitName)
-		if err != nil {
-			return err
-		}
-
-		for _, method := range targetService.Methods {
-			if method.HttpPath == "" {
-				continue
-			}
-
-			grpcPath := fmt.Sprintf("/%s.%s/%s", svc.PackageName, svc.ServiceName, method.Name)
-
-			// Build route entries for ALL methods (including bidi/client-streaming)
-			// so the gRPC proxy can look up auth policy for non-REST-dispatchable RPCs.
-			authPolicy := resolveAuthPolicy(targetService, method)
-			methodsLiteral := formatHttpMethods(method.HttpMethods)
-			scopesLiteral, capabilityLiteral, err := routeCapabilityMetadata(method)
-			if err != nil {
-				return fmt.Errorf("resolving REST route capability metadata for %s.%s/%s: %w", svc.PackageName, svc.ServiceName, method.Name, err)
-			}
-			routes = append(routes, routeEntry{
-				HttpPath:           method.HttpPath,
-				GrpcPath:           grpcPath,
-				ServiceID:          serviceID,
-				EntitlementService: entitlementService,
-				HttpMethodsLiteral: methodsLiteral,
-				AuthPolicy:         authPolicy,
-				EntitlementScopes:  scopesLiteral,
-				CapabilityScope:    capabilityLiteral,
-				ServerStreaming:    method.ServerStreaming,
-				ClientStreaming:    method.ClientStreaming,
-				TargetNamespace:    rustOptionString(method.TargetNamespaceField),
-				FormBody:           restFormBody(method),
-				RedirectField:      restRedirectField(method),
-			})
-
-			if method.HttpAliasPath != "" {
-				routes = append(routes, routeEntry{
-					HttpPath:           method.HttpAliasPath,
-					GrpcPath:           grpcPath,
-					ServiceID:          serviceID,
-					EntitlementService: entitlementService,
-					HttpMethodsLiteral: methodsLiteral,
-					AuthPolicy:         authPolicy,
-					EntitlementScopes:  scopesLiteral,
-					CapabilityScope:    capabilityLiteral,
-					ServerStreaming:    method.ServerStreaming,
-					ClientStreaming:    method.ClientStreaming,
-					TargetNamespace:    rustOptionString(method.TargetNamespaceField),
-					FormBody:           restFormBody(method),
-					RedirectField:      restRedirectField(method),
-				})
-			}
-
-			// Client-streaming and bidi RPCs can't be dispatched as REST.
-			if method.ClientStreaming {
-				continue
-			}
-
-			methodSnake := prostSnakeName(method.Name)
-			isEmptyInput := method.FullInputType == "google.protobuf.Empty"
-			isEmptyOutput := method.FullOutputType == "google.protobuf.Empty"
-
-			// Use the service's own ParentDir for its package to handle packages
-			// that span both services/ and vservices/ (e.g. "stratum"). Without
-			// this override pkgToDir["stratum"] would resolve to "services" even
-			// when the service being dispatched lives in vservices/.
-			svcPkgToDir := pkgToDir
-			if pkgToDir[svc.PackageName] != svc.ParentDir {
-				svcPkgToDir = make(map[string]string, len(pkgToDir))
-				for k, v := range pkgToDir {
-					svcPkgToDir[k] = v
-				}
-				svcPkgToDir[svc.PackageName] = svc.ParentDir
-			}
-
-			arm := dispatchArm{
-				GrpcPath:        grpcPath,
-				ServiceID:       serviceID,
-				MethodSnake:     methodSnake,
-				IsEmptyInput:    isEmptyInput,
-				IsEmptyOutput:   isEmptyOutput,
-				ValidateInput:   !isEmptyInput && rustW2SCanValidate(method.FullInputType),
-				ValidateOutput:  !isEmptyOutput && rustW2SCanValidate(method.FullOutputType),
-				ClientStreaming: method.ClientStreaming,
-				ClientPath:      resolveClientPath(svc.ServiceName, svc.PackageName, svcPkgToDir, cratePrefix),
-				FromJsonPath:    resolveFromJsonPath(method.FullInputType, svcPkgToDir, cratePrefix),
-				ToJsonPath:      resolveToJsonPath(method.FullOutputType, svcPkgToDir, cratePrefix),
-			}
-
-			if method.ServerStreaming {
-				streamArms = append(streamArms, arm)
-			} else {
-				unaryArms = append(unaryArms, arm)
-			}
-		}
-	}
-
-	// Add vservice route entries for exported topics (gateway only).
-	if config.IsGateway {
-		// REST dispatch route discovery must fail generation if it cannot
-		// complete: a swallowed error here silently drops gateway routes for
-		// exported topics (OF-1), so the gateway would generate without the
-		// routes it is supposed to expose.
-		registryDir := ""
-		if config.InputDir != "" {
-			registryPath := filepath.Join(config.InputDir, "registry.yaml")
-			if _, err := os.Stat(registryPath); err == nil {
-				registryDir = config.InputDir
-			} else if err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("checking service registry for vservice route discovery: %w", err)
-			}
-		}
-		vsReg, err := internalproto.LoadServiceRegistry(registryDir)
-		if err != nil {
-			return fmt.Errorf("loading service registry for vservice route discovery: %w", err)
-		}
-		vsEntries, err := internalproto.ScanVServiceRPCs(inputDir, vsReg)
-		if err != nil {
-			return fmt.Errorf("scanning vservice RPCs for REST routes: %w", err)
-		}
-		for _, vs := range vsEntries {
-			for i, rpc := range vs.RPCs {
-				clientStreaming := strings.HasPrefix(rpc, "Publish")
-				serverStreaming := !strings.HasPrefix(rpc, "Publish")
-				scopesLiteral, capabilityLiteral, err := routeCapabilityMetadataFromShape(rpc, clientStreaming, serverStreaming, "")
-				if err != nil {
-					return fmt.Errorf("resolving vservice route capability metadata for %s/%s: %w", vs.Name, rpc, err)
-				}
-				// The gRPC path comes from Routes, never from HostLabel + rpc.
-				// This is the gateway's REST -> gRPC table: the browser-facing
-				// way into eventbus. It was the THIRD place building this path,
-				// and the last one still composing the flat broker-qualified
-				// name from a host tag plus the RPC stem, after publishers and
-				// subscribers had moved — which would have made every
-				// REST-initiated publish dispatch to a method the broker is
-				// about to stop serving.
-				//
-				// The HTTP path deliberately keeps the flat rpc name: it is a
-				// published URL and the entitlement key, so renaming it is a
-				// separate, breaking decision from fixing the wire.
-				if i >= len(vs.Routes) {
-					return fmt.Errorf("vservice %s: no per-topic route for RPC %s (Routes and RPCs must stay index-aligned)", vs.Name, rpc)
-				}
-				route := vs.Routes[i]
-				grpcPath := fmt.Sprintf("/%s/%s", route.Service, route.Method)
-				httpPath := fmt.Sprintf("/%s/%s", vs.Name, rpc)
-				routes = append(routes, routeEntry{
-					HttpPath:           httpPath,
-					GrpcPath:           grpcPath,
-					ServiceID:          vs.HostLabel,
-					EntitlementService: fmt.Sprintf("Some(\"%s\")", vs.Name),
-					HttpMethodsLiteral: `"POST"`,
-					AuthPolicy:         "Entitled",
-					EntitlementScopes:  scopesLiteral,
-					CapabilityScope:    capabilityLiteral,
-					ServerStreaming:    serverStreaming, // Publish=client-streaming(unary path), Subscribe=server-streaming
-					ClientStreaming:    clientStreaming,
-					TargetNamespace:    "None",
-					RedirectField:      "None",
-				})
-			}
-		}
-	}
-
-	hasStreaming := len(streamArms) > 0
-	hasClientStreaming := false
-	for _, arm := range append(unaryArms, streamArms...) {
-		if arm.ClientStreaming {
-			hasClientStreaming = true
-			break
-		}
+	routes := make([]routeEntry, 0, len(plan.Routes))
+	for _, r := range plan.Routes {
+		routes = append(routes, rustRouteEntry(r))
 	}
 
 	data := restDispatchData{
-		Header:             header.GeneratedHeader(consts.LangRust, "rest_dispatch"),
-		HasStreaming:       hasStreaming,
-		HasClientStreaming: hasClientStreaming,
-		UnaryArms:          unaryArms,
-		StreamArms:         streamArms,
-		Routes:             routes,
+		Header:       header.GeneratedHeader(consts.LangRust, "rest_dispatch"),
+		HasStreaming: len(streamArms) > 0,
+		UnaryArms:    unaryArms,
+		StreamArms:   streamArms,
+		Routes:       routes,
 	}
 
 	// Render template
@@ -396,135 +172,47 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 	return nil
 }
 
-// collectRoutesForService collects route entries for a service without building dispatch arms.
-// Used for gateway.Mint which needs routes in the ROUTES table but dispatch is handled specially.
-func collectRoutesForService(dp *parser.DescriptorParser, svc ServiceInfo, pkgToDir map[string]string, cratePrefix string, routes *[]routeEntry) error {
-	protoInfo, err := dp.ConvertToProtoInfo(svc.ProtoFile)
-	if err != nil {
-		return err
+// planService is the slice of a Rust ServiceInfo the shared planner reads.
+func planService(svc ServiceInfo) restdispatch.Service {
+	return restdispatch.Service{
+		ProtoFile:   svc.ProtoFile,
+		PackageName: svc.PackageName,
+		ServiceName: svc.ServiceName,
+		ParentDir:   svc.ParentDir,
+		IsS2S:       svc.IsS2S,
+		EventLabel:  svc.EventLabel,
+		HostLabel:   svc.HostLabel,
 	}
-	var targetService *parser.ServiceInfo
-	for i := range protoInfo.Services {
-		if protoInfo.Services[i].Name == svc.ServiceName {
-			targetService = protoInfo.Services[i]
-			break
-		}
-	}
-	if targetService == nil {
-		return nil
-	}
-	for _, method := range targetService.Methods {
-		if method.HttpPath == "" {
-			continue
-		}
-		grpcPath := fmt.Sprintf("/%s.%s/%s", svc.PackageName, svc.ServiceName, method.Name)
-		scopesLiteral, capabilityLiteral, err := routeCapabilityMetadata(method)
-		if err != nil {
-			return fmt.Errorf("resolving REST route capability metadata for %s.%s/%s: %w", svc.PackageName, svc.ServiceName, method.Name, err)
-		}
-		*routes = append(*routes, routeEntry{
-			HttpPath:           method.HttpPath,
-			GrpcPath:           grpcPath,
-			ServiceID:          svc.PackageName,
-			EntitlementService: "None",
-			HttpMethodsLiteral: formatHttpMethods(method.HttpMethods),
-			AuthPolicy:         resolveAuthPolicy(targetService, method),
-			EntitlementScopes:  scopesLiteral,
-			CapabilityScope:    capabilityLiteral,
-			ServerStreaming:    method.ServerStreaming,
-			ClientStreaming:    method.ClientStreaming,
-			TargetNamespace:    rustOptionString(method.TargetNamespaceField),
-			FormBody:           restFormBody(method),
-			RedirectField:      restRedirectField(method),
-		})
-		if method.HttpAliasPath != "" {
-			*routes = append(*routes, routeEntry{
-				HttpPath:           method.HttpAliasPath,
-				GrpcPath:           grpcPath,
-				ServiceID:          svc.PackageName,
-				EntitlementService: "None",
-				HttpMethodsLiteral: formatHttpMethods(method.HttpMethods),
-				AuthPolicy:         resolveAuthPolicy(targetService, method),
-				EntitlementScopes:  scopesLiteral,
-				CapabilityScope:    capabilityLiteral,
-				ServerStreaming:    method.ServerStreaming,
-				ClientStreaming:    method.ClientStreaming,
-				TargetNamespace:    rustOptionString(method.TargetNamespaceField),
-				FormBody:           restFormBody(method),
-				RedirectField:      restRedirectField(method),
-			})
-		}
-	}
-	return nil
 }
 
-// collectProxyAuthDisabledRoutes adds proxy-only ROUTES entries (no HTTP path,
-// NoAuth) for an S2S service's auth_disabled methods. The gateway's generic gRPC
-// proxy looks up the inbound grpc_path in ROUTES to decide auth; without an
-// entry it defaults to Entitled. auth_disabled methods (e.g. the token minter's
-// MintClientToken / MintServiceToken / TokenMint) authenticate via credentials
-// in the request body and are designed to be reachable without a bearer, so the
-// proxy must treat them as NoAuth. Non-auth_disabled S2S methods are NOT added —
-// they stay at the proxy's Entitled default and the S2S backend authorizer fails
-// closed for C2S callers, so nothing service-private is exposed. HTTP path is
-// empty: these are gRPC-proxy-only routes, never matched as REST.
-func collectProxyAuthDisabledRoutes(dp *parser.DescriptorParser, svc ServiceInfo, routes *[]routeEntry) error {
-	// Enumerate the S2S service's methods from the RAW descriptor rather than
-	// ConvertToProtoInfo. The gateway's gRPC proxy only needs each auth_disabled
-	// method's identity + streaming flags to emit a NoAuth proxy route (no HTTP
-	// path, no entitlement). ConvertToProtoInfo would run the verb/pattern
-	// classification (EnforceVerbs) gate over EVERY method of the service — a
-	// C2S/REST concern that must never be enforced on S2S surfaces such as the
-	// record store's Open/Pull/Count/Sample/Refine/Close query verbs, which are
-	// gRPC-only and never REST-exposed.
-	fileDesc, err := dp.GetFileDescriptor(svc.ProtoFile)
-	if err != nil {
-		return err
+// rustRouteEntry renders one planned route as the ROUTES table literals.
+func rustRouteEntry(r restdispatch.Route) routeEntry {
+	return routeEntry{
+		HttpPath:           r.HttpPath,
+		GrpcPath:           r.GrpcPath,
+		ServiceID:          r.ServiceID,
+		EntitlementService: rustOptionString(r.EntitlementService),
+		HttpMethodsLiteral: formatHttpMethods(r.HttpMethods),
+		AuthPolicy:         r.AuthPolicy,
+		EntitlementScopes:  rustStrSlice(r.EntitlementScopes),
+		CapabilityScope:    rustOptionString(r.CapabilityScope),
+		ServerStreaming:    r.ServerStreaming,
+		ClientStreaming:    r.ClientStreaming,
+		TargetNamespace:    rustOptionString(r.TargetNamespaceField),
+		FormBody:           r.FormBody,
+		RedirectField:      rustOptionString(r.RedirectJSONName),
 	}
-	var targetService *parser.ServiceDescriptor
-	for i := range fileDesc.Services {
-		if fileDesc.Services[i].Name == svc.ServiceName {
-			targetService = &fileDesc.Services[i]
-			break
-		}
-	}
-	if targetService == nil {
-		return nil
-	}
-	for _, method := range targetService.Methods {
-		if !method.AuthDisabled {
-			continue
-		}
-		*routes = append(*routes, routeEntry{
-			HttpPath:           "",
-			GrpcPath:           fmt.Sprintf("/%s.%s/%s", svc.PackageName, svc.ServiceName, method.Name),
-			ServiceID:          svc.PackageName,
-			EntitlementService: "None",
-			HttpMethodsLiteral: "",
-			AuthPolicy:         "NoAuth",
-			EntitlementScopes:  "&[]",
-			CapabilityScope:    "None",
-			ServerStreaming:    method.ServerStreaming,
-			ClientStreaming:    method.ClientStreaming,
-			TargetNamespace:    "None",
-			RedirectField:      "None",
-		})
-	}
-	return nil
 }
 
 // restFormBody reports whether the method's REST route accepts a form body.
 func restFormBody(method *parser.MethodInfo) bool {
-	return method.RestBrowser != nil && method.RestBrowser.FormBody
+	return restdispatch.FormBody(method)
 }
 
 // restRedirectField is the Rust Option<&str> literal for the JSON key the
 // method's REST route redirects to; "None" when it answers JSON.
 func restRedirectField(method *parser.MethodInfo) string {
-	if method.RestBrowser == nil {
-		return "None"
-	}
-	return rustOptionString(method.RestBrowser.RedirectJSONName)
+	return rustOptionString(restdispatch.RedirectJSONName(method))
 }
 
 // buildPkgToDirMap builds a mapping from proto package name to its parent directory.
@@ -591,62 +279,11 @@ func resolveToJsonPath(protoFQN string, pkgToDir map[string]string, cratePrefix 
 	return prostSnakeName(typeName) + "_to_json"
 }
 
-// resolveAuthPolicy determines the AuthPolicy for a specific RPC method.
-// Method-level annotations take precedence over service-level defaults.
-func resolveAuthPolicy(svc *parser.ServiceInfo, method *parser.MethodInfo) string {
-	// Method-level overrides first.
-	if method.AuthDisabled {
-		return "NoAuth"
-	}
-	if method.AuthAnyUser {
-		return "AnyUser"
-	}
-	// Fall back to service-level defaults.
-	if svc.AuthDisabled {
-		return "NoAuth"
-	}
-	if svc.AuthAnyUser {
-		return "AnyUser"
-	}
-	return "Entitled"
-}
-
-func collectionMode(method *parser.MethodInfo) string {
-	if method == nil || method.Collection == nil {
-		return ""
-	}
-	return method.Collection.Mode
-}
-
-func routeCapabilityMetadata(method *parser.MethodInfo) (scopesLiteral, capabilityLiteral string, err error) {
-	if method == nil || method.Class == nil {
-		name := ""
-		if method != nil {
-			name = method.Name
-		}
-		return "", "", fmt.Errorf("method %q has no resolved verb classification", name)
-	}
-	return routeCapabilityMetadataFromClass(*method.Class), rustOptionString(string(method.Class.CapabilityScope())), nil
-}
-
-func routeCapabilityMetadataFromShape(methodName string, clientStreaming, serverStreaming bool, collectionMode string) (scopesLiteral, capabilityLiteral string, err error) {
-	class, err := verbs.Classify(verbs.MethodShape{
-		Name:            methodName,
-		ClientStreaming: clientStreaming,
-		ServerStreaming: serverStreaming,
-		CollectionMode:  collectionMode,
-	})
-	if err != nil {
-		return "", "", err
-	}
-	return routeCapabilityMetadataFromClass(class), rustOptionString(string(class.CapabilityScope())), nil
-}
-
-func routeCapabilityMetadataFromClass(class verbs.Classification) string {
-	scopes := class.ScopesAdmitting()
-	quoted := make([]string, 0, len(scopes))
-	for _, scope := range scopes {
-		quoted = append(quoted, rustQuote(string(scope)))
+// rustStrSlice formats strings as a Rust static slice literal, e.g. `&["ANY", "READ"]`.
+func rustStrSlice(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, v := range values {
+		quoted = append(quoted, rustQuote(v))
 	}
 	return "&[" + strings.Join(quoted, ", ") + "]"
 }
@@ -869,34 +506,12 @@ func generateProxyDispatch(config *tactype.Config, servicesInfo []ServiceInfo, i
 
 // routeIdentityForService resolves the two identities a ROUTES entry carries:
 // ServiceID, the physical service the gateway dials, and EntitlementService,
-// the audience it checks the caller's token against.
-//
-// An event-labelled C2S service is declared in the client's contract package
-// but physically served by the event broker. Its event label is the physical
-// ServiceID, while its package remains the entitlement audience. EventLabel
-// takes precedence over HostLabel if both are present because spec.event_label
-// explicitly defines the gateway's physical service_id.
-//
-// For an ordinary C2S service the surface, the host and the audience are all
-// the same name, so ServiceID is the proto package and EntitlementService is
-// None (the gateway falls back to the ServiceID's own entitlements).
-//
-// A trait-hosted C2S surface splits them: (spec.service_c2s).label names the
-// implementor that serves the RPCs, while the audience stays the TRAIT name.
-// The audience is the contract, not the concrete service — pinning it to the
-// host would re-couple every client to the implementor, so a second implementor
-// of the same trait would force every client's token to be re-issued. This is
-// the same pair the hosted-vservice topic routes already emit
-// (ServiceID = vs.HostLabel, EntitlementService = vs.Name).
+// the audience it checks the caller's token against, as a Rust Option literal.
+// The rules live in the shared planner (restdispatch.RouteIdentity).
 func routeIdentityForService(svc ServiceInfo, traitName string) (serviceID, entitlementService string, err error) {
-	if svc.EventLabel != "" {
-		return svc.EventLabel, fmt.Sprintf("Some(%s)", rustQuote(svc.PackageName)), nil
+	serviceID, audience, err := restdispatch.RouteIdentity(planService(svc), traitName)
+	if err != nil {
+		return "", "", err
 	}
-	if svc.HostLabel == "" {
-		return svc.PackageName, "None", nil
-	}
-	if traitName == "" {
-		return "", "", fmt.Errorf("service %s.%s declares (spec.service_c2s).label %q but its proto declares no (spec.trait).name to entitle callers against", svc.PackageName, svc.ServiceName, svc.HostLabel)
-	}
-	return svc.HostLabel, fmt.Sprintf("Some(%s)", rustQuote(traitName)), nil
+	return serviceID, rustOptionString(audience), nil
 }

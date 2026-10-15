@@ -14,7 +14,7 @@ the commit history since August.
 | Capability | Rust | Go | Java | Evidence |
 |------------|------|----|------|----------|
 | ~~**S2S readiness gating and reconnect backoff.**~~ **Closed 2026-10-14**: Go (`chassis/serviceconnection/readiness.go`, `backoff.go`, `driveReadiness` in the ServiceManager) and Java (`RequiredChannels`, `ReconnectBackoff`, `driveReadiness`) now gate readiness on required s2s channels and share one backoff; see `docs/API.md`, Readiness and reconnects. | | | | |
-| **Generated W2S REST/SSE server dispatch.** `rest_dispatch.rs` with per-route `RouteInfo`, request and response validation on the unary and SSE legs, `form_body` and `redirect_field` handling. | `restdispatch_gen.go`, `rest_dispatch.rs.tmpl` | No generated REST server; the REST surface is the gateway's translation atop gRPC | Same as Go | `form_body` / `redirect_field` appear only in the Rust generator; the `w2s-validate` cross-test exists only for Rust |
+| ~~**Generated W2S REST/SSE server dispatch.**~~ **Go closed 2026-10-14**: Go generates `s2sm/rest_dispatch/rest_dispatch.go` (`Routes`, `Dispatch`, `DispatchStream`, `FormBodyToJSON`, `RedirectResponse`) from the same shared planner (`pkg/internal/common/restdispatch`) the Rust module now renders from; the `w2s-validate` cross-test drives both. Java still routes REST via the gateway. | `restdispatch_gen.go`, `rest_dispatch.rs.tmpl` | `restdispatch_gen.go`, `rest_dispatch.go.tmpl` | No generated REST server; the REST surface is the gateway's translation atop gRPC | Java is the remaining port |
 | ~~**Typed record readers.**~~ **Closed 2026-10-14**: Go (`s2sm/record_readers.go`, `sm.<Record>RecordReader()`) and Java (`<Record>RecordReader.java`, `sm.<record>RecordReader()`) generate the same readers from one shared planner (`pkg/internal/common/recordread`), each dialing the plane half its record needs; the record-egress gate asserts both. | | | | |
 | ~~**Generated handler for the client-facing record read plane**~~ **Closed 2026-10-14**: Go (`s2sm/record_c2s.go`) and Java (`<Svc>RecordsGeneratedHandler.java`) generate the `<Svc>Records` handler from the shared plan, bind it in the ServiceManager, and drop its getter from the author's Handler, as Rust does. | | | | |
 | ~~**MCP follow-ups after the shared termination.**~~ **Closed 2026-10-14**: Go and Java mount MCP-only services (a `HasMcp` service with no `service_*` annotation gets a wrapper, a Handler entry and a ServiceManager mount), expose a session-free `Call` / `call` on the generated surface, and were already registering the carrier's own auth policy, which is now pinned by tests in both. | | | | |
@@ -45,8 +45,8 @@ the commit history since August.
 
 ## Test coverage asymmetries
 
-- `w2s-validate` (W2S server dispatch) exists only for Rust, because only Rust
-  hosts one.
+- `w2s-validate` (W2S server dispatch) runs for Rust and Go, which host one;
+  Java does not.
 - `server-runtime` hosts Java and Rust servers driven by the Go client; the Go
   server runtime is covered by `runtime-smoke` (Python and TypeScript clients).
 - `docs/KNOWN_TEST_GAPS.md` lists the gates that are green without exercising
@@ -65,6 +65,6 @@ the commit history since August.
 4. **MCP follow-ups.** Decide first whether Go and Java services will host
    MCP-only tools at all; if yes, port the three Rust commits.
 5. **W2S REST server dispatch.** Decided 2026-10-14 (Jody): this is a real
-   parity gap, not by design. Port the Rust dispatch to Go first, then Java
-   (estimate two to three days each). Deferred for now; it is the only open
-   port besides Go formal verification.
+   parity gap, not by design. Go port landed 2026-10-14 on a shared planner;
+   Java is next (estimate two to three days). It is the only open port
+   besides Go formal verification.

@@ -188,21 +188,32 @@ REST/SSE translation. `google.protobuf.*` well-known responses such as
 `Empty` carry no tacplus `assert_*` constraints, so generated wrappers pass
 them through without a validation call.
 
-**W2S REST/SSE egress validation scope**: the Rust W2S server dispatch
-(`rest_dispatch.rs.tmpl`) validates both unary responses and SSE stream items
-before sending. Go and Java W2S servers validate outbound messages through
-their gRPC wrapper pipeline (the REST surface is implemented as a translation
-layer atop gRPC, so gRPC egress validation covers it). Python and TypeScript
-are client-only targets and do not host a W2S server.
+**W2S REST/SSE egress validation scope**: the generated W2S server dispatch
+(Rust `rest_dispatch.rs.tmpl`, Go `rest_dispatch.go.tmpl`) validates both
+unary responses and SSE stream items before sending. The Java W2S server
+validates outbound messages through its gRPC wrapper pipeline (the REST
+surface is implemented as a translation layer atop gRPC, so gRPC egress
+validation covers it). Python and TypeScript are client-only targets and do
+not host a W2S server.
 
-**W2S REST/SSE ingress validation scope**: the Rust W2S server dispatch
-(`rest_dispatch.rs.tmpl`) validates the decoded request on both the unary and
-the SSE leg before forwarding it to the backend gRPC service, rejecting a
-failure as `400` with `request validation failed`. As with egress, requests
-whose input type is `google.protobuf.*` (including `Empty`) carry no tacplus
-`assert_*` constraints and are forwarded without a validation call. Go and Java
-W2S servers validate inbound messages through their gRPC wrapper pipeline.
-Python and TypeScript are client-only targets and do not host a W2S server.
+**W2S REST/SSE ingress validation scope**: the generated W2S server dispatch
+(Rust `rest_dispatch.rs.tmpl`, Go `rest_dispatch.go.tmpl`) validates the
+decoded request on both the unary and the SSE leg before forwarding it to the
+backend gRPC service, rejecting a failure as `400` with `request validation
+failed`. As with egress, requests whose input type is `google.protobuf.*`
+(including `Empty`) carry no tacplus `assert_*` constraints and are forwarded
+without a validation call. The Java W2S server validates inbound messages
+through its gRPC wrapper pipeline. Python and TypeScript are client-only
+targets and do not host a W2S server.
+
+Both languages plan the same route table and dispatch arms from one shared
+planner (`pkg/internal/common/restdispatch`): which routes exist, what each
+dials, whom it entitles callers against, and which methods can be dispatched
+at all are decided once, and each language renders only its own client, JSON
+and validator names. One spelling differs by design: a `(spec.rest_browser)`
+`redirect_field` is carried as the key the language's JSON encoder emits, the
+proto3 JSON name in Rust (`redirectUrl`) and the proto field name in Go
+(`redirect_url`).
 
 Auth-disabled methods skip token lookup and authorization but still validate
 messages. Auth-enabled methods must not reach the handler without a valid token

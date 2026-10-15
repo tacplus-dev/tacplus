@@ -18,3 +18,39 @@ pub fn {{.SnakeSource}}_to_projections(event: &{{.SourceQualifier}}{{.SourceType
 {{- end}}
     }
 }
+{{- range .Projections}}
+
+/// Receives each [`{{.TypeName}}Row`] a dispatched [`{{$.SourceType}}`] yields.
+/// Async: the dispatch awaits the returned future before the next event is
+/// handled, and an `Err` fails that delivery.
+pub type {{.TypeName}}Insert = std::sync::Arc<
+    dyn Fn({{.TypeName}}Row) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>>
+        + Send
+        + Sync,
+>;
+{{- end}}
+
+/// Dispatches a [`{{.SourceType}}`] to its timeseries projections: each
+/// projection the event yields is passed, as its typed row, to that
+/// projection's insert callback and awaited. `None` skips its projection.
+pub async fn handle_{{.SnakeSource}}(
+    event: &{{.SourceQualifier}}{{.SourceType}},
+{{- range .Projections}}
+    insert_{{.SnakeName}}: Option<&{{.TypeName}}Insert>,
+{{- end}}
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+{{- if .HasNoop}}
+    // Trace round: the pipeline runs, no row is written.
+    if event.noop {
+        return Ok(());
+    }
+{{- end}}
+{{- range .Projections}}
+    if let Some(insert) = insert_{{.SnakeName}} {
+        if let Some(row) = extract_{{.SnakeName}}_from_{{$.SnakeSource}}(event) {
+            insert({{.TypeName}}Row::from_proto(&row)).await?;
+        }
+    }
+{{- end}}
+    Ok(())
+}

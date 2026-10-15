@@ -19,7 +19,9 @@ import (
 	"github.com/tacplus-dev/tacplus/pkg/buildinfo"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/extraction"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/keepaliveconst"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
@@ -170,10 +172,12 @@ type smTemplateData struct {
 	GrpcServices            []grpcServiceEntry
 	ConfigFetches           []rustConfigFetchEntry
 	Subscriptions           []subscriptionEntry
-	Publishers              []publisherEntry // model-driven EventBus topic publishers (own (spec.service_event) topics)
-	HasPublishers           bool
-	RecordReaders           []recordReaderEntry // model-driven (spec.record_read) typed readers over stored record rows
-	HasRecordReaders        bool
+	// TimeseriesInserts are every subscription's insert callbacks, once each.
+	TimeseriesInserts []rustTimeseriesInsertEntry
+	Publishers        []publisherEntry // model-driven EventBus topic publishers (own (spec.service_event) topics)
+	HasPublishers     bool
+	RecordReaders     []recordReaderEntry // model-driven (spec.record_read) typed readers over stored record rows
+	HasRecordReaders  bool
 	// RecordC2S is the generated handler for the client-facing record read plane,
 	// nil unless this service declares (spec.record_read).c2s.
 	RecordC2S *recordC2SFile
@@ -214,11 +218,28 @@ type subscriptionEntry struct {
 	// type's s2s_subscribe.routing_only_services.
 	RoutingOnly      bool
 	EnvelopeTypeName string // e.g. "TopologyEventRoutingEnvelope"
+	// DispatchFn is the source's async record dispatch,
+	// "crate::types::<dir>::<pkg>::handle_<source>" ("" when nothing projects
+	// from it), awaited after the Handler method with Inserts in its parameter
+	// order.
+	DispatchFn string
+	Inserts    []rustTimeseriesInsertEntry
+}
+
+// rustTimeseriesInsertEntry is one typed timeseries insert callback the
+// service manager holds: one per projection, shared by every subscription to
+// its source. Go's TimeseriesInsertEntry.
+type rustTimeseriesInsertEntry struct {
+	TypeName   string // projection message, e.g. "SensorReading"
+	ModPath    string // its types module, e.g. "crate::types::services::sensor"
+	FieldName  string // e.g. "insert_sensor_reading"
+	SetterName string // e.g. "set_sensor_reading_insert"
 }
 
 // buildSMTemplateData constructs the template data for handler.rs and service_manager.rs.
 // clientServices are the resolved S2S client ServiceInfo entries (from grpcclient_gen).
-func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, clientServices []ServiceInfo) (smTemplateData, error) {
+// allFiles feeds the record dispatch of each subscription (may be nil when there are none).
+func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, clientServices []ServiceInfo, allFiles []model.ProtoFile) (smTemplateData, error) {
 	configStates, err := stateproto.ConfigStateAccessors(config, config.FlatProtoDir)
 	if err != nil {
 		return smTemplateData{}, err
@@ -446,7 +467,13 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		}
 	}
 
+	projectionGroups, err := extraction.Plan(allFiles)
+	if err != nil {
+		return smTemplateData{}, err
+	}
 	var subs []subscriptionEntry
+	var timeseriesInserts []rustTimeseriesInsertEntry
+	seenInsert := make(map[string]bool)
 	for _, sub := range config.Subscriptions {
 		// Extract the type name and package from the fully-qualified proto name.
 		typeName := sub.SourceTypeFqn
@@ -470,6 +497,30 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		if targetService == "" {
 			targetService = eventbus.EventBusLabel
 		}
+		group, dispatched, err := extraction.Dispatched(projectionGroups, sub.SourceTypeFqn)
+		if err != nil {
+			return smTemplateData{}, err
+		}
+		dispatchFn := ""
+		var inserts []rustTimeseriesInsertEntry
+		if dispatched {
+			modPath := "crate::types::" + typeProtoDir + "::" + typePkg
+			dispatchFn = modPath + "::" + rustRecordDispatchFn(group)
+			for _, p := range group.Projections {
+				snake := strutil.ToSnakeCase(p.Message.Name)
+				ins := rustTimeseriesInsertEntry{
+					TypeName:   p.Message.Name,
+					ModPath:    modPath,
+					FieldName:  "insert_" + snake,
+					SetterName: "set_" + snake + "_insert",
+				}
+				inserts = append(inserts, ins)
+				if !seenInsert[ins.FieldName] {
+					seenInsert[ins.FieldName] = true
+					timeseriesInserts = append(timeseriesInserts, ins)
+				}
+			}
+		}
 		subs = append(subs, subscriptionEntry{
 			FieldSnake:        sub.SourceField,
 			HandlerMethodName: handlerMethod,
@@ -482,6 +533,8 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			TargetService:     targetService,
 			RoutingOnly:       sub.RoutingOnly,
 			EnvelopeTypeName:  typeName + boundaries.RoutingEnvelopeSuffix,
+			DispatchFn:        dispatchFn,
+			Inserts:           inserts,
 		})
 	}
 
@@ -637,6 +690,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		GrpcServices:               grpcSvcs,
 		ConfigFetches:              rustConfigFetches(grpcSvcs),
 		Subscriptions:              subs,
+		TimeseriesInserts:          timeseriesInserts,
 		Publishers:                 publishers,
 		HasPublishers:              len(publishers) > 0,
 		RecordReaders:              recordReaders,
@@ -810,7 +864,7 @@ func detectOwnPackageMcpRpcs(config *tactype.Config) (bool, error) {
 }
 
 // generateHandlerInterface generates handler.rs in the sm/ directory.
-func generateHandlerInterface(config *tactype.Config, svcs []service.ServiceInfo, clientServices []ServiceInfo) error {
+func generateHandlerInterface(config *tactype.Config, svcs []service.ServiceInfo, clientServices []ServiceInfo, allFiles []model.ProtoFile) error {
 	tmplContent, err := loadTemplate("handler.rs.tmpl")
 	if err != nil {
 		return fmt.Errorf("failed to load handler template: %w", err)
@@ -821,7 +875,7 @@ func generateHandlerInterface(config *tactype.Config, svcs []service.ServiceInfo
 		return fmt.Errorf("failed to parse handler template: %w", err)
 	}
 
-	data, err := buildSMTemplateData(config, svcs, clientServices)
+	data, err := buildSMTemplateData(config, svcs, clientServices, allFiles)
 	if err != nil {
 		return fmt.Errorf("failed to build handler template data: %w", err)
 	}
@@ -845,7 +899,7 @@ func generateHandlerInterface(config *tactype.Config, svcs []service.ServiceInfo
 }
 
 // generateServiceManagerSM generates service_manager.rs in the sm/ directory.
-func generateServiceManagerSM(config *tactype.Config, svcs []service.ServiceInfo, clientServices []ServiceInfo) error {
+func generateServiceManagerSM(config *tactype.Config, svcs []service.ServiceInfo, clientServices []ServiceInfo, allFiles []model.ProtoFile) error {
 	tmplContent, err := loadTemplate("service_manager.rs.tmpl")
 	if err != nil {
 		return fmt.Errorf("failed to load service_manager template: %w", err)
@@ -856,7 +910,7 @@ func generateServiceManagerSM(config *tactype.Config, svcs []service.ServiceInfo
 		return fmt.Errorf("failed to parse service_manager template: %w", err)
 	}
 
-	data, err := buildSMTemplateData(config, svcs, clientServices)
+	data, err := buildSMTemplateData(config, svcs, clientServices, allFiles)
 	if err != nil {
 		return fmt.Errorf("failed to build service manager template data: %w", err)
 	}

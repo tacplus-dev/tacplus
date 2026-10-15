@@ -612,10 +612,10 @@ func Generate(config *tactype.Config) error {
 				}
 			}
 			zap.L().Info("Generating Rust handler interface and service_manager")
-			if err := generateHandlerInterface(config, grpcSvcs, clientServices); err != nil {
+			if err := generateHandlerInterface(config, grpcSvcs, clientServices, allParsedFiles); err != nil {
 				return fmt.Errorf("failed to generate handler interface: %w", err)
 			}
-			if err := generateServiceManagerSM(config, grpcSvcs, clientServices); err != nil {
+			if err := generateServiceManagerSM(config, grpcSvcs, clientServices, allParsedFiles); err != nil {
 				return fmt.Errorf("failed to generate service_manager: %w", err)
 			}
 		}

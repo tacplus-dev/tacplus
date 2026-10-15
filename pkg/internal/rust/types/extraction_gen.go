@@ -51,6 +51,7 @@ type rustProjectionGroupData struct {
 	SourceType      string // e.g., "SensorEvent"
 	SnakeSource     string // e.g., "sensor_event"
 	SourceQualifier string // "" if same package
+	HasNoop         bool   // the source carries the injected trace-round noop
 	Projections     []rustProjectionEntry
 }
 
@@ -110,6 +111,7 @@ func generateRustExtractionHelpers(allFiles []model.ProtoFile, outputDir string)
 			SourceType:      g.Source.Name,
 			SnakeSource:     strutil.ToSnakeCase(g.Source.Name),
 			SourceQualifier: sourceQualifier,
+			HasNoop:         g.SourceHasNoop(),
 			Projections:     entries,
 		}
 		if err := writeRustProjectionGroupFile(g.File(), groupData, projectTmpl, outputDir); err != nil {
@@ -125,6 +127,12 @@ func generateRustExtractionHelpers(allFiles []model.ProtoFile, outputDir string)
 
 // buildRustExtractionTemplateData converts a planned projection into
 // template-ready data for the Rust extraction helpers template.
+// rustRecordDispatchFn is the async handle_<source> a group's
+// extraction_project_<source>.rs declares, Go's Handle<Source>.
+func rustRecordDispatchFn(g extraction.Group) string {
+	return "handle_" + strutil.ToSnakeCase(g.Source.Name)
+}
+
 func buildRustExtractionTemplateData(p extraction.Projection, g extraction.Group) rustExtractionTemplateData {
 	sourceQualifier := ""
 	if g.SourceFile.Package != p.File.Package {

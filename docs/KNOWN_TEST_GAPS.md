@@ -219,6 +219,32 @@ harness than the REST fixture, which needs no proxy at all.
 
 ---
 
+## C2D-1 — the C2D server runs through its generated mount, not through `Run`
+
+**Status:** Go and Java covered up to the ServiceManager's mount function;
+Rust's `C2dServer` has no runtime test.
+
+`cross-test/c2d-server` (`just c2d-server`) generates a c2d-only daemon,
+compiles the whole generated model, hosts the generated wrapper through the
+same generated function the ServiceManager mounts it with (Go `newC2DServer`,
+Java `ServiceManager.newC2DServer`) on the declared socket, and calls it over
+the socket through the generated c2dm client: a tokenless valid call, request
+and response validation, server streaming, the 0600 mode, stale-socket
+removal and cleanup. Proven by reverting: dropping the c2d auth skip from the
+Go wrapper, or widening the chmod in either chassis, turns it red.
+
+What it does not run is the `Run()` / `run()` line that calls that mount:
+`Run` needs a live cluster (config, identity, state store) that no in-repo
+fixture provides, so that line is pinned by the gate's grep and by the mixed
+TLS + c2d render tests (`c2d_server_render_test.go` under go/types and
+java/types), not executed. Rust's `C2dServer` is exercised by neither.
+
+**To close:** a ServiceManager harness that can boot `Run` against a fake
+cluster, or a Rust leg in `cross-test/c2d-server` that hosts the generated
+`C2dServer` the same way.
+
+---
+
 ## How to close one of these
 
 Two things make a fix real here, and only the second is usually skipped:

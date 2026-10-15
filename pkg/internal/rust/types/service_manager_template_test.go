@@ -59,11 +59,15 @@ func TestRustServiceManagerRendersDiskStoreRollSchedulers(t *testing.T) {
 		"diskstore_stores::open_cred_pair_log(",
 		"fn start_disk_store_roll_schedulers(",
 		"diskstore::run_roll_scheduler(",
-		`let scheduler_node_id = format!("{}/cred_pair", node_id);`,
+		// start_disk_store_roll_schedulers spawns the per-store scheduler,
+		// which is a public fn so the quorum-write gate can run it.
+		"self.spawn_owned(run_cred_pair_roll_scheduler(",
+		`format!("{}/cred_pair", node_id),`,
+		"pub async fn run_cred_pair_roll_scheduler(",
 		"h.get_cred_pair_store_grpc_impl().list(None).await",
 		"diskstore_stores::snapshot_cred_pair(&response.items)",
 		// The roll baseline is narrowed through the Handler's LocalRows seam.
-		"Ok(records) => diskstore::local_records(\n                                            h.cred_pair_local_rows().as_deref(),",
+		"Ok(records) => diskstore::local_records(\n                                h.cred_pair_local_rows().as_deref(),",
 		"self.start_disk_store_roll_schedulers(handler.clone())?;",
 	} {
 		if !strings.Contains(rendered, want) {

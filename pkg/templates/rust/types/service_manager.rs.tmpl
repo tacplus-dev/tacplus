@@ -61,9 +61,6 @@ use healthreporter::{HealthChecker, HealthPublisher, HealthReporter, MetricsProv
 {{- end}}
 
 use crate::types::sys::trace::TraceRound;
-{{- if .HasDiskStores}}
-use crate::{{.SmPrefix}}::diskstore_stores;
-{{- end}}
 {{- if and .HasServiceHealthState .HasPublishers}}
 use crate::types::generated::eventbus_support::eventbus_support::PublishResponse;
 {{- range .Publishers}}
@@ -416,6 +413,71 @@ fn open_disk_store_logs(cfg: &Config) -> Result<Option<Arc<DiskStoreLogs>>, Box<
 {{- end}}
     })))
 }
+{{- range .DiskStores}}
+
+/// The {{.StoreName}} roll scheduler `run()` spawns when
+/// grpcconfig.disk_persistence is set: every `interval` (first roll staggered
+/// by `node_id`) it reads the store's rows through the Handler's
+/// `{{.HandlerGetter}}()` — the same handler the ServiceManager serves as the
+/// store service — and rolls them into `log` as the new baseline. Runs until
+/// its task is dropped.
+pub async fn run_{{.StoreName}}_roll_scheduler(
+    handler: Arc<dyn Handler>,
+    log: Arc<diskstore::RedoLog>,
+    interval: std::time::Duration,
+    node_id: String,
+) {
+    if let Err(err) = diskstore::run_roll_scheduler(
+        log.as_ref(),
+        interval,
+        &node_id,
+        move || {
+            let h = handler.clone();
+            async move {
+                match h.{{.HandlerGetter}}().list(None).await {
+                    Ok(response) => {
+                        match diskstore_stores::snapshot_{{.StoreName}}(&response.items) {
+                            // The baseline is LOCALITY-SCOPED when the store
+                            // says it is partitioned: list(None) is the whole
+                            // cluster's rows, and a node whose baseline claims
+                            // rows it does not own breaks the partial-log
+                            // invariant recovery resolves staleness with.
+                            Ok(records) => diskstore::local_records(
+                                h.{{.StoreName}}_local_rows().as_deref(),
+                                records,
+                            ),
+                            Err(err) => {
+                                tracing::warn!(
+                                    store = "{{.StoreName}}",
+                                    error = %err,
+                                    "diskstore snapshot encode failed; roll will retry on next interval"
+                                );
+                                Vec::new()
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            store = "{{.StoreName}}",
+                            error = %err,
+                            "diskstore snapshot failed; roll will retry on next interval"
+                        );
+                        Vec::new()
+                    }
+                }
+            }
+        },
+    )
+    .await
+    {
+        tracing::warn!(
+            store = "{{.StoreName}}",
+            error = %err,
+            "diskstore roll scheduler stopped"
+        );
+    }
+}
+{{- end}}
 {{- end}}
 
 const MAX_INIT_RETRIES: u32 = 30;
@@ -1035,62 +1097,12 @@ impl ServiceManager {
             node_id = "{{.ServiceLabel}}".to_string();
         }
 {{- range .DiskStores}}
-        {
-            let log = logs.{{.LogField}}.clone();
-            let handler_for_roll = handler.clone();
-            let scheduler_node_id = format!("{}/{{.StoreName}}", node_id);
-            self.spawn_owned(async move {
-                if let Err(err) = diskstore::run_roll_scheduler(
-                    log.as_ref(),
-                    interval,
-                    &scheduler_node_id,
-                    move || {
-                        let h = handler_for_roll.clone();
-                        async move {
-                            match h.{{.HandlerGetter}}().list(None).await {
-                                Ok(response) => {
-                                    match diskstore_stores::snapshot_{{.StoreName}}(&response.items) {
-                                        // The baseline is LOCALITY-SCOPED when the store
-                                        // says it is partitioned: list(None) is the whole
-                                        // cluster's rows, and a node whose baseline claims
-                                        // rows it does not own breaks the partial-log
-                                        // invariant recovery resolves staleness with.
-                                        Ok(records) => diskstore::local_records(
-                                            h.{{.StoreName}}_local_rows().as_deref(),
-                                            records,
-                                        ),
-                                        Err(err) => {
-                                            tracing::warn!(
-                                                store = "{{.StoreName}}",
-                                                error = %err,
-                                                "diskstore snapshot encode failed; roll will retry on next interval"
-                                            );
-                                            Vec::new()
-                                        }
-                                    }
-                                }
-                                Err(err) => {
-                                    tracing::warn!(
-                                        store = "{{.StoreName}}",
-                                        error = %err,
-                                        "diskstore snapshot failed; roll will retry on next interval"
-                                    );
-                                    Vec::new()
-                                }
-                            }
-                        }
-                    },
-                )
-                .await
-                {
-                    tracing::warn!(
-                        store = "{{.StoreName}}",
-                        error = %err,
-                        "diskstore roll scheduler stopped"
-                    );
-                }
-            });
-        }
+        self.spawn_owned(run_{{.StoreName}}_roll_scheduler(
+            handler.clone(),
+            logs.{{.LogField}}.clone(),
+            interval,
+            format!("{}/{{.StoreName}}", node_id),
+        ));
 {{- end}}
         Ok(())
     }

@@ -511,6 +511,16 @@ run_rust_spiffe_self_tests() {
     assert_clean_log "$log_dir/rust-json-key-test.log"
   fi
 
+  # The quorum-write fixture's hosted store service + roll scheduler self-test,
+  # copied in by assert_quorumwrite_output, so it is present exactly in that build.
+  if [[ -f "$output/tests/store_roll_test.rs" ]]; then
+    (cd "$output" && cargo test --test store_roll_test) >"$log_dir/rust-store-roll-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-store-roll-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-store-roll-test.log"
+  fi
+
   # PC-C-2: the collection crate's page-token codec tests pin the
   # cross-language byte-identity vectors (shared verbatim with the go and java
   # codec tests). Never previously executed by any gate (cargo check only).
@@ -1031,10 +1041,11 @@ install_extraction_selftest() {
 
 # assert_quorumwrite_output checks that the (spec.quorum_write) gate was
 # GENERATED for quorumvault.CredPair with the strictest declared floor, 3, in
-# every language. Absence compiles: before 2026-10-15 only Java emitted it. Go and
-# Java host CredPairStoreService, so their roll baseline must also go through the
-# LocalRows seam. Rust does not host a synthesized store service at all (see
-# roadmap/LANGUAGE_PARITY.md), so it has no roll scheduler to assert here.
+# every language. Absence compiles: before 2026-10-15 only Java emitted it. All
+# three host CredPairStoreService, so each roll baseline must also go through the
+# LocalRows seam. Rust hosted no synthesized store service until 2026-10-15 (the
+# shared own-package filter dropped it), and that compiled too; Rust also runs
+# store_roll_test.rs against the hosted store service and its roll scheduler.
 assert_quorumwrite_output() {
   local output="$1"
   local language="$2"
@@ -1071,6 +1082,13 @@ assert_quorumwrite_output() {
         || die "quorum-write fixture (rust): CredPair's floor is not the strictest declared (3) in $stores"
       grep -qF 'diskstore::require_quorum("cred_pair", durable_copies, MIN_DURABLE_COPIES_CRED_PAIR)' "$stores" \
         || die "quorum-write fixture (rust): require_cred_pair_quorum does not call the chassis gate in $stores"
+      sm="$(find "$output" -type f -path '*/s2sm/mod.rs' -print -quit)"
+      grep -qF 'fn cred_pair_store_grpc_impl(&self)' "$(dirname "$sm")/handler.rs" \
+        || die "quorum-write fixture (rust): the Handler has no CredPairStoreService getter; the store service is not hosted"
+      grep -qF 'self.spawn_owned(run_cred_pair_roll_scheduler(' "$sm" \
+        || die "quorum-write fixture (rust): the ServiceManager does not spawn the cred_pair roll scheduler in $sm"
+      mkdir -p "$output/tests"
+      cp "$SELFTESTS_SRC/rust/store_roll_test.rs" "$output/tests/"
       ;;
   esac
 }
@@ -2002,7 +2020,7 @@ fi
 # quorum-write fixture: the only full service build hosting a keyed
 # (spec.service_store), so the only place the generated quorum write gate and the
 # disk-store roll scheduler are compiled. Go also runs quorum_write_test.go
-# against the generated RequireCredPairQuorum.
+# against the generated RequireCredPairQuorum; Rust runs store_roll_test.rs.
 if [[ -d "$QUORUMWRITE_PROTO_SRC" ]]; then
   for language in "${languages[@]}"; do
     dir="$WORK_ROOT/quorumwrite-$language"

@@ -37,75 +37,13 @@ type handlerTimeseriesEntry struct {
 	TableName string // e.g., "sensor_timeseries" — from timeseries_type.name or snake_case(TypeName)
 }
 
-// generateEventHandlers generates store-agnostic event handlers for all source
-// event types that have timeseries_type projections.
+// generateEventHandlers generates store-agnostic event handlers for every
+// group of projections the shared planner (common/extraction) finds: one
+// Handle<Source> per source and projection package.
 func generateEventHandlers(allFiles []model.ProtoFile, typesOutputDir string) error {
-	// Group projections by source FQN and package.
-	type handlerKey struct {
-		sourceFQN string
-		projPkg   string
-	}
-	type handlerInfo struct {
-		pf              model.ProtoFile
-		sourceType      string
-		sourceQualifier string
-		hasNoop         bool
-		tsEntries       []handlerTimeseriesEntry
-	}
-	handlers := make(map[handlerKey]*handlerInfo)
-	var handlerOrder []handlerKey
-
-	for _, pf := range allFiles {
-		if strings.HasPrefix(pf.RelPath, "google/") {
-			continue
-		}
-		for _, msg := range pf.Messages {
-			sourceFQN := extraction.SourceFQN(msg)
-			if sourceFQN == "" {
-				continue
-			}
-
-			sourceMsg, sourcePf, ok := extraction.FindMessage(allFiles, sourceFQN)
-			if !ok {
-				continue
-			}
-
-			key := handlerKey{sourceFQN: sourceFQN, projPkg: pf.Package}
-			h, exists := handlers[key]
-			if !exists {
-				sourceQualifier := ""
-				if sourcePf.Package != pf.Package {
-					sourceQualifier = sourcePf.Package + "."
-				}
-				// Check if source message has a noop field (field 201) for trace round support.
-				hasNoop := false
-				for _, f := range sourceMsg.Fields {
-					if f.Number == 201 && f.Name == "noop" {
-						hasNoop = true
-						break
-					}
-				}
-				h = &handlerInfo{
-					pf:              pf,
-					sourceType:      sourceMsg.Name,
-					sourceQualifier: sourceQualifier,
-					hasNoop:         hasNoop,
-				}
-				handlers[key] = h
-				handlerOrder = append(handlerOrder, key)
-			}
-
-			if _, isTsTable := msg.Annotations["timeseries_type"]; isTsTable {
-				tableName := strutil.ToSnakeCase(msg.Name)
-				if ann, ok := msg.Annotations["timeseries_table_name"]; ok && ann.StringValue != "" {
-					tableName = ann.StringValue
-				}
-				h.tsEntries = append(h.tsEntries, handlerTimeseriesEntry{
-					TypeName:  msg.Name,
-					TableName: tableName,
-				})
-			}
-		}
+	groups, err := extraction.Plan(allFiles)
+	if err != nil {
+		return err
 	}
 
 	// Generate handler files. TimeseriesInsertFunc is package-scoped (it does
@@ -115,29 +53,38 @@ func generateEventHandlers(allFiles []model.ProtoFile, typesOutputDir string) er
 	// per handler file would redeclare the type as soon as a package has two
 	// source types with timeseries projections.
 	supportPkgs := make(map[string]model.ProtoFile)
-	for _, key := range handlerOrder {
-		h := handlers[key]
-		if len(h.tsEntries) == 0 {
-			continue
+	for _, g := range groups {
+		pf := g.File()
+		sourceQualifier := ""
+		if g.SourceFile.Package != pf.Package {
+			sourceQualifier = g.SourceFile.Package + "."
 		}
-
 		data := handlerTemplateData{
-			SourceType:            h.sourceType,
-			SourceQualifier:       h.sourceQualifier,
-			HasTimeseries:         len(h.tsEntries) > 0,
-			HasNoop:               h.hasNoop,
-			TimeseriesProjections: h.tsEntries,
+			SourceType:      g.Source.Name,
+			SourceQualifier: sourceQualifier,
+			HasTimeseries:   true,
+			HasNoop:         g.SourceHasNoop(),
+		}
+		for _, p := range g.Projections {
+			tableName := strutil.ToSnakeCase(p.Message.Name)
+			if ann, ok := p.Message.Annotations["timeseries_table_name"]; ok && ann.StringValue != "" {
+				tableName = ann.StringValue
+			}
+			data.TimeseriesProjections = append(data.TimeseriesProjections, handlerTimeseriesEntry{
+				TypeName:  p.Message.Name,
+				TableName: tableName,
+			})
 		}
 
-		if err := writeEventHandlerFile(h.pf, data, typesOutputDir); err != nil {
-			return fmt.Errorf("failed to generate event handler for %s: %w", key.sourceFQN, err)
+		if err := writeEventHandlerFile(pf, data, typesOutputDir); err != nil {
+			return fmt.Errorf("failed to generate event handler for %s.%s: %w", g.SourceFile.Package, g.Source.Name, err)
 		}
 		zap.L().Debug("Generated event handler",
-			zap.String("source", key.sourceFQN),
-			zap.Int("timeseries", len(h.tsEntries)))
+			zap.String("source", g.SourceFile.Package+"."+g.Source.Name),
+			zap.Int("timeseries", len(data.TimeseriesProjections)))
 
-		if _, exists := supportPkgs[eventHandlerOutputDir(h.pf, typesOutputDir)]; !exists {
-			supportPkgs[eventHandlerOutputDir(h.pf, typesOutputDir)] = h.pf
+		if _, exists := supportPkgs[eventHandlerOutputDir(pf, typesOutputDir)]; !exists {
+			supportPkgs[eventHandlerOutputDir(pf, typesOutputDir)] = pf
 		}
 	}
 

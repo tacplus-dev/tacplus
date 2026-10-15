@@ -571,6 +571,10 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		})
 	}
 
+	projectionGroups, err := extraction.Plan(allFiles)
+	if err != nil {
+		return serviceManagerTemplateData{}, err
+	}
 	var subEntries []SubscriptionTemplateEntry
 	for _, sub := range config.Subscriptions {
 		parts := strings.Split(sub.SourceField, "_")
@@ -608,20 +612,13 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			targetService = eventbus.EventBusLabel
 		}
 
-		// Determine projection flags by scanning allFiles for messages that
-		// extract from this subscription's source event type.
-		hasTimeseries := false
-		hasProjections := false
-		for _, pf := range allFiles {
-			for _, msg := range pf.Messages {
-				if extraction.SourceFQN(msg) == sub.SourceTypeFqn {
-					hasProjections = true
-					if _, ok := msg.Annotations["timeseries_type"]; ok {
-						hasTimeseries = true
-					}
-				}
-			}
+		// Every projection is a timeseries table, so a source with a
+		// dispatch group has both flags.
+		_, hasProjections, err := extraction.Dispatched(projectionGroups, sub.SourceTypeFqn)
+		if err != nil {
+			return serviceManagerTemplateData{}, err
 		}
+		hasTimeseries := hasProjections
 
 		subEntries = append(subEntries, SubscriptionTemplateEntry{
 			FieldPascal:              fieldPascal,

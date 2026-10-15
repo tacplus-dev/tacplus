@@ -39,6 +39,12 @@ func IsTraceField(name string, number int) bool {
 		(name == noopFieldName && number == noopFieldNumber)
 }
 
+// IsNoopField reports whether a message field is the injected noop flag: the
+// trace-round dry run, on which the record dispatch writes no rows.
+func IsNoopField(name string, number int) bool {
+	return name == noopFieldName && number == noopFieldNumber
+}
+
 // TraceFieldsProto is the proto-syntax field definitions for trace fields.
 // Used by InjectTraceFields and AppendStateServiceToProtos so auto-appended
 // message types carry trace fields without needing a second injection pass.

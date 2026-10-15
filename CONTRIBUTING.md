@@ -26,12 +26,18 @@ area, a reproduction (the smallest proto plus `tacplus.yaml`, or a fixture
 under `cross-test/`), expected and actual behaviour, and the gate that should
 have caught it.
 
-The **nightly fixes** job (`.github/workflows/nightly-fixes.yml`, also
-runnable on demand for one issue) takes the oldest open `fix-request`,
-reproduces it with a failing test, fixes it in the generator, runs the gates
-and opens a pull request that closes the issue. A request it cannot reproduce
-gets a comment and the `needs-repro` label instead of a guess. Review and
-merge of that pull request is a human's.
+The **fix looper** takes the oldest open `fix-request`, clones the repository
+fresh, reproduces the defect with a failing test, fixes it in the generator,
+runs the gates and opens a pull request that closes the issue. A request it
+cannot reproduce gets a comment and the `needs-repro` label instead of a
+guess. Review and merge of that pull request is a human's.
+
+Today it runs locally: `scripts/fix-looper/run.sh install` puts a launchd
+agent on a developer's machine that runs every 24 hours under that
+developer's own Claude login, and `scripts/fix-looper/run.sh notify [N]`
+makes it run now (for issue N). `.github/workflows/nightly-fixes.yml` is the
+same job as a GitHub Action, on demand only until the repository has an
+`ANTHROPIC_API_KEY` secret.
 
 ## Making a change
 

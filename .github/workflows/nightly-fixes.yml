@@ -8,12 +8,14 @@ name: Nightly fixes
 # the issue. A request it cannot reproduce gets a comment and the
 # needs-repro label instead of a guess.
 #
-# Needs the repository secret ANTHROPIC_API_KEY. Nothing runs when there is no
-# open fix-request to take.
+# Needs the repository secret ANTHROPIC_API_KEY, which is not set yet: until it
+# is, the same job runs locally under a developer's own Claude login
+# (scripts/fix-looper/run.sh, every 24 hours via launchd, and on
+# `run.sh notify`). This workflow is therefore on demand only; add a schedule
+# trigger when the secret exists. Nothing runs when there is no open
+# fix-request to take.
 
 on:
-  schedule:
-    - cron: "41 7 * * *"
   workflow_dispatch:
     inputs:
       issue:

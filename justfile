@@ -252,6 +252,10 @@ claims-provenance:
 
 # Behavioral coverage of W2S request (ingress) validation in the generated
 # Rust REST dispatch module.
+# The local fix looper (see CONTRIBUTING.md, Requesting a fix).
+fix-looper *ARGS:
+  bash scripts/fix-looper/run.sh {{ARGS}}
+
 w2s-validate:
   {{lock}} bash cross-test/w2s-validate/run.sh
 

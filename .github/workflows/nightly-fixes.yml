@@ -97,8 +97,13 @@ jobs:
                why, ending with `Co-Authored-By: Claude <noreply@anthropic.com>`, push it, and open a pull
                request against main whose body starts with `Fixes #${{ needs.pick.outputs.issue }}`,
                describes the reproduction, the fix and the gates you ran with their last lines, and
-               anything you could not verify. Then remove the nightly:in-progress label from the issue
-               and add nightly:pr-open.
+               anything you could not verify.
+            5. Backport: for every branch release/MAJOR.MINOR whose .0 tag is less than twelve months old,
+               cherry-pick the fix and its test onto fix/issue-${{ needs.pick.outputs.issue }}-MAJOR.MINOR
+               from that branch, run the gates, push, and open a pull request against that release branch
+               whose body starts with `Backport of #<main PR> for #${{ needs.pick.outputs.issue }}`. A patch
+               is fixes only; carry nothing else over. Then remove the nightly:in-progress label from the
+               issue and add nightly:pr-open.
             Never push to main. Never touch secrets. If the gates need a toolchain this runner lacks
             (Rust, Java), say so in the PR and leave the nightly gates container to run them.
           claude_args: |

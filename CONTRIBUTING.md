@@ -39,6 +39,13 @@ makes it run now (for issue N). `.github/workflows/nightly-fixes.yml` is the
 same job as a GitHub Action, on demand only until the repository has an
 `ANTHROPIC_API_KEY` secret.
 
+## Versions, patches and backports
+
+`docs/VERSIONING.md` is the policy: consumers pin major.minor; a patch is
+fixes only; features come in on a minor; fixes are backported to every minor
+released within the last twelve months, on its `release/MAJOR.MINOR` branch.
+A change that adds or alters a generated surface is a minor, however small.
+
 ## Making a change
 
 1. Open an issue first: a **Fix request** for a defect, a plain issue for

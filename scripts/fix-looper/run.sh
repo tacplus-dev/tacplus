@@ -137,9 +137,14 @@ Rules, in order:
    \`Co-Authored-By: Claude <noreply@anthropic.com>\`, push the branch
    (\`git push -u origin fix/issue-$ISSUE\`), and open a pull request against main
    (\`gh pr create\`) whose body starts with \`Fixes #$ISSUE\`, describes the reproduction, the fix and
-   the gates you ran with their last lines verbatim, and anything you could not verify. Then remove
-   the nightly:in-progress label from the issue and add nightly:pr-open.
-Never push to main. Never commit secrets. Stop when the pull request is open.
+   the gates you ran with their last lines verbatim, and anything you could not verify.
+5. Backport: for every branch named release/MAJOR.MINOR whose .0 tag is less than twelve months old
+   (\`git branch -r\`, \`git tag\`), cherry-pick the fix and its test onto a branch
+   fix/issue-$ISSUE-MAJOR.MINOR from that release branch, run the gates there, push, and open a pull
+   request against that release branch whose body starts with \`Backport of #<main PR> for #$ISSUE\`.
+   A patch release is fixes only; carry nothing else over. Then remove the nightly:in-progress label
+   from the issue and add nightly:pr-open.
+Never push to main or to a release branch. Never commit secrets. Stop when the pull requests are open.
 PR
 
 log "running claude (timeout ${CLAUDE_TIMEOUT}s)"

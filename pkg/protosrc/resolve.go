@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 
 	"go.uber.org/zap"
 )
@@ -126,7 +125,7 @@ func repoSlug(url string) string {
 // same path, or run a fetch while the other is mid-checkout. The lock file
 // sits beside the cache directory rather than inside it, so it is unaffected
 // by git clone creating (or a failed clone removing) the directory itself.
-// Unix-only, which is all tacplus — a developer/CI build tool — runs on.
+// The lock primitive is per platform (lock_unix.go, lock_windows.go).
 func lockCache(dir string) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create cache parent: %w", err)
@@ -135,12 +134,12 @@ func lockCache(dir string) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open cache lock: %w", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := lockFile(f); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("failed to lock cache %q: %w", dir, err)
 	}
 	return func() {
-		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		unlockFile(f)
 		f.Close()
 	}, nil
 }

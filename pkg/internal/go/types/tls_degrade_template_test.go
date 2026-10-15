@@ -24,7 +24,7 @@ func TestGoSMTemplateTLSDegradeSeam(t *testing.T) {
 		"func (sm *ServiceManager) reportTLSDegraded(reason string)",
 		"func (sm *ServiceManager) onTLSDegraded(fn func(reason string))",
 		`sm.reportTLSDegraded("renewed TLS private key unparseable: " + err.Error())`,
-		`sm.reportTLSDegraded("TLS renewal stream gave up before first delivery: " + err.Error())`,
+		`degrade("TLS renewal stream gave up before first delivery: " + err.Error())`,
 		"hr.SetStatus(healthreporter.StatusDegraded)",
 	} {
 		if !strings.Contains(s, want) {

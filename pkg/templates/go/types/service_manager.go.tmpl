@@ -1319,25 +1319,7 @@ tlsCertStreamLoop(taskCtx, func() grpc.ClientConnInterface { return sm.sc.Conn()
 // first-delivery signal in the background and log a failure. The service keeps
 // serving on the initial X509Mint cert until it expires (PC-L-1).
 sm.tasks.Go(func(taskCtx context.Context) {
-select {
-case err := <-tlsReadyCh:
-if err != nil {
-// Two very different faults arrive on this channel and they must not
-// be reported with the same words. errTlsFirstCertFatal means the
-// authority DID deliver a certificate and this service's own handler
-// refused it — an operator told "the stream gave up before first
-// delivery" would go and debug the authority or the network, which is
-// the wrong half of the system. The give-up case is the other one.
-if errors.Is(err, errTlsFirstCertFatal) {
-zap.L().Error("handler rejected the first renewed TLS certificate; renewal stream stopped, serving on the initial X509Mint certificate until it expires", zap.Error(err))
-sm.reportTLSDegraded("TLS handler rejected the first renewed certificate: " + err.Error())
-} else {
-zap.L().Error("TLS cert renewal stream failed before first delivery; serving on the initial X509Mint certificate until it expires", zap.Error(err))
-sm.reportTLSDegraded("TLS renewal stream gave up before first delivery: " + err.Error())
-}
-}
-case <-taskCtx.Done():
-}
+drainTLSFirstDelivery(taskCtx, tlsReadyCh, sm.reportTLSDegraded)
 })
 {{end}}
 
@@ -2031,6 +2013,35 @@ return nil
 // It is wrapped onto readyCh, and Run's background drain marks the instance
 // DEGRADED and keeps serving the boot certificate until it expires (PC-L-1).
 var errTlsFirstCertFatal = fmt.Errorf("handler rejected first TLS certificate delivery")
+
+// drainTLSFirstDelivery is Run's background consumer of the TLS renewal
+// stream's first-delivery signal: it waits for the outcome on readyCh and, on a
+// failure, reports the instance DEGRADED through degrade. It is a function, not
+// inline in Run, so the cert-stream gate can drive it with the signal a real
+// tlsCertStreamLoop sends (PC-L-2b).
+//
+// Two very different faults arrive on this channel and they must not be
+// reported with the same words. errTlsFirstCertFatal means the authority DID
+// deliver a certificate and this service's own handler refused it — an operator
+// told "the stream gave up before first delivery" would go and debug the
+// authority or the network, which is the wrong half of the system. The give-up
+// case is the other one.
+func drainTLSFirstDelivery(ctx context.Context, readyCh <-chan error, degrade func(string)) {
+select {
+case err := <-readyCh:
+if err == nil {
+return
+}
+if errors.Is(err, errTlsFirstCertFatal) {
+zap.L().Error("handler rejected the first renewed TLS certificate; renewal stream stopped, serving on the initial X509Mint certificate until it expires", zap.Error(err))
+degrade("TLS handler rejected the first renewed certificate: " + err.Error())
+} else {
+zap.L().Error("TLS cert renewal stream failed before first delivery; serving on the initial X509Mint certificate until it expires", zap.Error(err))
+degrade("TLS renewal stream gave up before first delivery: " + err.Error())
+}
+case <-ctx.Done():
+}
+}
 
 // tlsCertStreamLoop manages the bidi TLS certificate stream.
 // It retries with backoff on disconnection. The outcome of the first cert

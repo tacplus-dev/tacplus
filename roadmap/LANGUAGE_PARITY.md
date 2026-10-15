@@ -99,9 +99,10 @@ formal verification, the W2S REST dispatch plane.
 | `jwkview` | in Authorizer | package | in Authorizer | NOT A GAP | survey above |
 | gateway `proxy_dispatch::validate_request` | yes | no | no | excluded (W2S plane) | `rust/types/restdispatch_gen.go` |
 
-KNOWN_TEST_GAPS entries that are per-language asymmetries: PC-L-2b (Go only:
+KNOWN_TEST_GAPS entries that are per-language asymmetries: ~~PC-L-2b (Go only:
 give-up DEGRADED reason unpinned; still open 2026-10-15, needs a harness hosting
-`Run()`), PC-L-9 (still open 2026-10-15: a Java and a Rust leak soak are each a
+`Run()`)~~ **closed 2026-10-15** (Run's drain is now `drainTLSFirstDelivery`,
+driven by the cert-stream fixture), PC-L-9 (still open 2026-10-15: a Java and a Rust leak soak are each a
 new harness on the scale of `cross-test/chaos/leaksoak`; leak soak hosts only the Go
 ServiceManager; Java and Rust teardown are unmeasured), ~~NEW-21 (Go now emits
 `service_manager_identity_error_test.go.tmpl`; Java's classifier is still

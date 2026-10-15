@@ -34,10 +34,10 @@ func TestGoTLSFirstDeliveryDrainNamesItsCause(t *testing.T) {
 		`readyCh <- fmt.Errorf("%w: %w", errTlsFirstCertFatal, err)`,
 		// ...and the drain must branch on it.
 		"if errors.Is(err, errTlsFirstCertFatal) {",
-		`sm.reportTLSDegraded("TLS handler rejected the first renewed certificate: " + err.Error())`,
+		`degrade("TLS handler rejected the first renewed certificate: " + err.Error())`,
 		// The give-up wording stays put — go is the reference for the
 		// cross-language parity pin in pkg/internal/common.
-		`sm.reportTLSDegraded("TLS renewal stream gave up before first delivery: " + err.Error())`,
+		`degrade("TLS renewal stream gave up before first delivery: " + err.Error())`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("go SM template missing first-delivery cause discrimination:\n%s", want)

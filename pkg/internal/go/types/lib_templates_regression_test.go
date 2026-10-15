@@ -450,7 +450,7 @@ func TestGoCertStreamsFollowSharedContractMarkers(t *testing.T) {
 	// PC-L-1 pin: the first-delivery outcome of the renewal stream must be drained
 	// in a BACKGROUND task (log-only), never silently dropped. The drain is the
 	// one permitted receive on tlsReadyCh before Listen.
-	backgroundDrain := "sm.tasks.Go(func(taskCtx context.Context) {\nselect {\ncase err := <-tlsReadyCh:"
+	backgroundDrain := "sm.tasks.Go(func(taskCtx context.Context) {\ndrainTLSFirstDelivery(taskCtx, tlsReadyCh, sm.reportTLSDegraded)\n})"
 	if !strings.Contains(tmpl[startIdx:listenIdx], backgroundDrain) {
 		t.Fatalf("Go service manager must drain tlsReadyCh in a background task so a terminal renewal failure is logged, not dropped (PC-L-1)")
 	}

@@ -93,22 +93,19 @@ unsplit, as PC-L-3 did.
 
 ---
 
-## PC-L-2b — Go cert-stream give-up path's DEGRADED reason is unpinned
+## PC-L-2b — Go cert-stream give-up path's DEGRADED reason — CLOSED
 
-**Status:** the retry-target-swap leg (PC-L-2) and the renewal-time `degrade`
-seam (PC-L-1's key-mismatch and handler-rejection reasons) are both now
-covered by `cert_stream_behavior_test.go`. One path through the same
-DEGRADED-marking machinery is not: give-up-before-first-delivery.
-
-That path never calls `degrade(reason string)` directly — it sends a wrapped
-error on `readyCh`, and `Run()`'s background drain does the DEGRADED marking,
-discriminating the reason by testing the error against sentinels like
-`errTlsFirstCertFatal`. `Run()` sits above the `cert-stream` fixture used by
-this test file, so it isn't drivable from here without a different harness.
-
-**To close:** a test hosting `Run()` itself (or the smallest slice of it that
-performs the sentinel discrimination) that drives the give-up-before-first-
-delivery path and asserts which DEGRADED reason gets reported.
+**Status (2026-10-15):** closed. Run()'s background drain of the TLS stream's
+first-delivery signal is now `drainTLSFirstDelivery(ctx, readyCh, degrade)` in
+the Go ServiceManager template (Run starts it with `sm.reportTLSDegraded`), so
+the cert-stream fixture drives the exact code Run runs.
+`TestGoTlsCertStreamRetryExhaustion` "give-up is reported DEGRADED as a
+give-up" runs a real `tlsCertStreamLoop` to exhaustion (budget 3) into the
+drain and asserts exactly one degrade call starting "TLS renewal stream gave up
+before first delivery: " and carrying the give-up error; "first handler failure
+is fatal" feeds the handler-rejection signal through the same drain and asserts
+the handler wording. Proven red: with the give-up branch's degrade call removed
+the subtest fails ("the give-up was never reported DEGRADED").
 
 ---
 

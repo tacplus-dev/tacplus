@@ -133,6 +133,10 @@ func TestToProstEnumNameMatchesProst(t *testing.T) {
 		"TypeID":             "TypeId",
 		"HTTP":               "Http",
 		"BackpressurePolicy": "BackpressurePolicy",
+		"ContractS2SRpcId":   "ContractS2sRpcId",
+		"C2SScope":           "C2sScope",
+		"HTTP2Server":        "Http2Server",
+		"Ipv4Address":        "Ipv4Address",
 	} {
 		if got := toProstEnumName(in); got != want {
 			t.Errorf("toProstEnumName(%q) = %q, want %q", in, got, want)

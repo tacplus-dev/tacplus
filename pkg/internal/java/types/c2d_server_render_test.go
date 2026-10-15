@@ -73,7 +73,7 @@ func TestJavaServeC2DStandaloneOnlyForClusterFreeC2DOnlyBuild(t *testing.T) {
 	}
 	hosts := func(cfg *tactype.Config, s []ServiceInfo) bool {
 		t.Helper()
-		data, err := buildJavaSmTemplateData(cfg, s, nil, "", nil)
+		data, err := buildJavaSmTemplateData(cfg, s, nil, "", nil, nil)
 		if err != nil {
 			t.Fatalf("buildJavaSmTemplateData: %v", err)
 		}

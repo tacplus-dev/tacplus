@@ -22,7 +22,7 @@ func TestRustServeC2DStandaloneOnlyForClusterFreeC2DOnlyBuild(t *testing.T) {
 	}
 	hosts := func(cfg *tactype.Config, s []service.ServiceInfo) bool {
 		t.Helper()
-		data, err := buildSMTemplateData(cfg, s, nil)
+		data, err := buildSMTemplateData(cfg, s, nil, nil)
 		if err != nil {
 			t.Fatalf("buildSMTemplateData: %v", err)
 		}

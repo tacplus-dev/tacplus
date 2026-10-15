@@ -770,6 +770,41 @@ accompanied by a non-`classified` `verb_status`, as described above. Consumers
 should read the generated fields (and `verb_status`) rather than inventing a
 second classifier.
 
+### Record Dispatch To Timeseries Projections
+
+A subscription to a source that has `(spec.timeseries_type)` projections (a
+`(spec.transformation)` of a record, or a message naming it in
+`timeseries_type.source`) runs a generated record dispatch on every delivered
+event, after the subscription's own handler: each projection the event yields is
+extracted and handed, **typed**, to that projection's insert callback, which the
+service author registers on the ServiceManager before `run`. A source with the
+injected trace-round `noop` set writes no row; a projection whose callback is
+unset is skipped; a callback's failure fails that delivery. One callback per
+projection, shared by every subscription to its source.
+
+| Language | Registration | Callback | Dispatch |
+|----------|--------------|----------|----------|
+| Go | `sm.Set<P>InsertFunc(fn)` | `func(ctx context.Context, row *<P>) error`, synchronous | `Handle<Source>(ctx, event, insert<P>...)` |
+| Java | `sm.set<P>Insert(fn)` | `<Source>Projections.<P>Insert`: `void insert(<P> row) throws Exception`, synchronous | `<Source>Projections.handle<Source>(event, insert<P>...)` |
+| Rust | `sm.set_<p>_insert(\|row\| async move { .. })` on the owned manager | `<P>Insert`: `Fn(<P>Row) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn Error + Send + Sync>>> + Send>>`, asynchronous | `handle_<source>(&event, insert_<p>...).await` |
+
+`<P>` is the projection message. Go and Java pass the extracted projection
+message itself; their column list and ordered row stay available as
+`<P>TimeseriesColumns` / `<P>ToTimeseriesRow` (Go) and `Timeseries<P>.columns` /
+`toRow` (Java). Rust passes the generated flattened `<P>Row`, the struct its
+timeseries helpers already define for batch insertion.
+
+The shapes differ on purpose; parity is in capability, not in shape. Go and Java
+run the callback synchronously on the subscription's delivery goroutine or
+thread: the next event waits for it, with nothing else to schedule. The Rust
+service runs on tokio, where a blocking callback would stall the executor, so its
+callback returns a future that the subscription awaits; delivery order is the same
+as in Go and Java. No language is made to adopt another's shape.
+
+The dispatch is generated beside the projections and called through the source's
+own package, so a subscribed source with a projection declared in another package
+fails generation instead of being silently left out of the dispatch.
+
 ## Parity
 
 A generated API is complete only when behavior is equivalent across the

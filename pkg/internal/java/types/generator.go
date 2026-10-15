@@ -1367,10 +1367,10 @@ func Generate(config *tactype.Config) error {
 			}
 		}
 		zap.L().Info("Generating Java handler interface and service_manager")
-		if err := generateJavaHandlerInterface(config, grpcSvcs, clientServices, protoDir, hasAccountingByService); err != nil {
+		if err := generateJavaHandlerInterface(config, grpcSvcs, clientServices, protoDir, hasAccountingByService, allParsedFiles); err != nil {
 			return fmt.Errorf("failed to generate handler interface: %w", err)
 		}
-		if err := generateJavaServiceManager(config, grpcSvcs, clientServices, protoDir, hasAccountingByService); err != nil {
+		if err := generateJavaServiceManager(config, grpcSvcs, clientServices, protoDir, hasAccountingByService, allParsedFiles); err != nil {
 			return fmt.Errorf("failed to generate service_manager: %w", err)
 		}
 	}

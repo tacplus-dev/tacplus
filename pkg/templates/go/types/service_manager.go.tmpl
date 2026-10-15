@@ -157,8 +157,8 @@ auth             grpcserver.Authorizer
 authorizeFunc    func(ctx context.Context, fullMethod string, req any) (*wrapperToken.TokenWrapper, error)
 authenticateFunc func(ctx context.Context) (*wrapperToken.TokenWrapper, error)
 authenticateAtOrBelowFunc func(ctx context.Context, targetNamespace string) (*wrapperToken.TokenWrapper, error)
-{{if .HasTimeseriesProjections}}
-tsInsertFunc {{.ProjectionPkgAlias}}.TimeseriesInsertFunc
+{{range .TimeseriesInserts}}
+{{.FieldName}} func(ctx context.Context, row *{{.TypePkgAlias}}.{{.TypeName}}) error
 {{end}}
 {{if .HasSubscriptions}}
 {{range .Subscriptions}}
@@ -639,11 +639,14 @@ func (sm *ServiceManager) TLSPrivateKey() crypto.PrivateKey {
 return sm.sc.TLSPrivateKey()
 }
 
-{{if .HasTimeseriesProjections}}
-// SetTimeseriesInsertFunc sets the timeseries store insert callback.
-// Call before Run(). The service manager passes this to HandleXxx for timeseries projections.
-func (sm *ServiceManager) SetTimeseriesInsertFunc(fn {{.ProjectionPkgAlias}}.TimeseriesInsertFunc) {
-sm.tsInsertFunc = fn
+{{range .TimeseriesInserts}}
+// {{.SetterName}} sets the insert callback for the {{.TypeName}} timeseries
+// projection: every subscribed event that yields a {{.TypeName}} row is passed
+// to fn, typed. Synchronous: fn runs on the subscription's delivery goroutine,
+// and the next event is not handled until it returns; an error fails that
+// delivery. Call before Run().
+func (sm *ServiceManager) {{.SetterName}}(fn func(ctx context.Context, row *{{.TypePkgAlias}}.{{.TypeName}}) error) {
+sm.{{.FieldName}} = fn
 }
 {{end}}
 
@@ -1595,7 +1598,7 @@ return err
 }
 }
 {{- if .HasProjections}}
-return {{.TypePkgAlias}}.Handle{{.TypeName}}(ctx, event, {{- if $.HasTimeseriesProjections}} {{.TypePkgAlias}}.TimeseriesInsertFunc(sm.tsInsertFunc){{else}} nil{{end}})
+return {{.TypePkgAlias}}.Handle{{.TypeName}}(ctx, event{{range .Inserts}}, sm.{{.FieldName}}{{end}})
 {{- else}}
 // No message projects from {{.TypeName}}, so no Handle{{.TypeName}} dispatcher
 // is generated for it. The subscriber's only work is the handler func above.

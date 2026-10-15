@@ -28,6 +28,43 @@ public final class {{.ClassName}} {
     }
 {{- range .Projections}}
 
+    /**
+     * Receives each {@code {{.TypeName}}} row a dispatched {@code {{$.SourceType}}}
+     * yields. Synchronous: the dispatch waits for it to return, and a thrown
+     * exception fails that delivery.
+     */
+    @FunctionalInterface
+    public interface {{.TypeName}}Insert {
+        void insert({{.TypeFqn}} row) throws Exception;
+    }
+{{- end}}
+
+    /**
+     * Dispatches a {@code {{.SourceType}}} to its timeseries projections: each
+     * projection the event yields is passed, typed, to that projection's insert
+     * callback. A {@code null} callback skips its projection.
+     */
+    public static void {{.HandleMethod}}({{.SourceFqn}} event{{range .Projections}}, {{.TypeName}}Insert insert{{.TypeName}}{{end}}) throws Exception {
+        if (event == null) {
+            return;
+        }
+{{- if .HasNoop}}
+        // Trace round: the pipeline runs, no row is written.
+        if (event.getNoop()) {
+            return;
+        }
+{{- end}}
+{{- range .Projections}}
+        if (insert{{.TypeName}} != null) {
+            {{.TypeFqn}} row = {{.ExtractMethod}}(event);
+            if (row != null) {
+                insert{{.TypeName}}.insert(row);
+            }
+        }
+{{- end}}
+    }
+{{- range .Projections}}
+
     /** Extracts a {@code {{.TypeName}}} from a {@code {{$.SourceType}}}. */
     public static {{.TypeFqn}} {{.ExtractMethod}}({{$.SourceFqn}} event) {
         if (event == null) {

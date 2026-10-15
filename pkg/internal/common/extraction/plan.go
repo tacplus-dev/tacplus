@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/proto"
 )
 
 // Field is one projection field and the source field that feeds it.
@@ -59,6 +60,43 @@ type Group struct {
 // File is the proto file of the group's first projection, which places the
 // group's generated output.
 func (g Group) File() model.ProtoFile { return g.Projections[0].File }
+
+// SourceHasNoop reports whether the source carries the injected trace-round
+// noop flag. The record dispatch generated from a group skips an event with
+// it set: the pipeline runs, no row is written.
+func (g Group) SourceHasNoop() bool {
+	for _, f := range g.Source.Fields {
+		if proto.IsNoopField(f.Name, f.Number) {
+			return true
+		}
+	}
+	return false
+}
+
+// Dispatched returns the group a subscription to sourceFQN hands every
+// delivered event to, and false when nothing projects from that source.
+//
+// Every projection of a source is a (spec.timeseries_type) table, so the
+// group is the set of typed rows one event yields. Each language generates the
+// group's dispatch beside its projections and the service manager calls it
+// through the source's own package, so a projection of a subscribed source
+// declared in another package is refused here, at generation, instead of being
+// silently left out of the dispatch.
+func Dispatched(groups []Group, sourceFQN string) (Group, bool, error) {
+	var found Group
+	ok := false
+	for _, g := range groups {
+		if g.SourceFile.Package+"."+g.Source.Name != sourceFQN {
+			continue
+		}
+		if g.File().Package != g.SourceFile.Package {
+			return Group{}, false, fmt.Errorf("projection %s.%s of subscribed source %s is declared outside the source's package; the record dispatch only covers projections in package %s",
+				g.File().Package, g.Projections[0].Message.Name, sourceFQN, g.SourceFile.Package)
+		}
+		found, ok = g, true
+	}
+	return found, ok, nil
+}
 
 // SourceFQN returns the source message FQN a projection declares through
 // (spec.timeseries_type).source, or "" when it declares none.

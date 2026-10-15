@@ -103,3 +103,65 @@ func TestPlanFailsWhenSourceMissing(t *testing.T) {
 		t.Fatalf("Plan error = %v, want the missing source named", err)
 	}
 }
+
+// dispatchFiles is one source, events.Event, with a projection in its own
+// package and, when foreign is set, a second one declared in package proj.
+func dispatchFiles(foreign bool) []model.ProtoFile {
+	from := map[string]model.AnnotationValue{"timeseries_table_source": {StringValue: "events.Event"}}
+	files := []model.ProtoFile{{
+		Package: "events",
+		RelPath: "events/events.proto",
+		Messages: []model.Message{
+			{Name: "Event", Fields: []model.Field{
+				{Name: "id", Type: "string", Number: 1},
+				{Name: "noop", Type: "bool", Number: 201},
+			}},
+			{Name: "Row", Annotations: from},
+			{Name: "Other", Fields: []model.Field{{Name: "noop", Type: "bool", Number: 7}}},
+			{Name: "OtherRow", Annotations: map[string]model.AnnotationValue{"timeseries_table_source": {StringValue: "events.Other"}}},
+		},
+	}}
+	if foreign {
+		files = append(files, model.ProtoFile{
+			Package:  "proj",
+			RelPath:  "proj/proj.proto",
+			Messages: []model.Message{{Name: "ForeignRow", Annotations: from}},
+		})
+	}
+	return files
+}
+
+// The dispatch a subscription runs is the source's own-package group; the noop
+// skip keys on the injected field (noop = 201), not on the name alone.
+func TestDispatchedFindsTheSourceGroupAndItsNoop(t *testing.T) {
+	groups, err := Plan(dispatchFiles(false))
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	g, ok, err := Dispatched(groups, "events.Event")
+	if err != nil || !ok {
+		t.Fatalf("Dispatched(events.Event) = %v, %v", ok, err)
+	}
+	if len(g.Projections) != 1 || g.Projections[0].Message.Name != "Row" || !g.SourceHasNoop() {
+		t.Fatalf("group = %+v, noop %v; want Row with the injected noop", g.Projections, g.SourceHasNoop())
+	}
+	other, ok, err := Dispatched(groups, "events.Other")
+	if err != nil || !ok || other.SourceHasNoop() {
+		t.Fatalf("events.Other: ok %v err %v noop %v; a noop field at another number is the author's own", ok, err, other.SourceHasNoop())
+	}
+	if _, ok, err := Dispatched(groups, "events.Missing"); ok || err != nil {
+		t.Fatalf("a source nothing projects from has no dispatch: ok %v err %v", ok, err)
+	}
+}
+
+// A subscribed source projected from another package is refused, not dropped.
+func TestDispatchedRefusesAProjectionOutsideTheSourcePackage(t *testing.T) {
+	groups, err := Plan(dispatchFiles(true))
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	_, _, err = Dispatched(groups, "events.Event")
+	if err == nil || !strings.Contains(err.Error(), "projection proj.ForeignRow of subscribed source events.Event is declared outside the source's package") {
+		t.Fatalf("Dispatched error = %v, want the foreign projection named", err)
+	}
+}

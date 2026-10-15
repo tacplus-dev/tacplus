@@ -193,28 +193,30 @@ func sanitizeGoImportAlias(raw string) string {
 
 // SubscriptionTemplateEntry holds the data for a single subscription in the template.
 type SubscriptionTemplateEntry struct {
-	FieldPascal              string // e.g. "EventStream"
-	HandlerMethodName        string // e.g. "OnEventStream" or "OnEventStreamAegis" (disambiguated)
-	SourcePackage            string // e.g. "aegis"
-	SourceField              string // e.g. "event_stream"
-	TypeName                 string // e.g. "TopologyEvent"
-	HandlerFuncFieldName     string // e.g. "onEventStreamFunc"
-	HandlerFuncSetterName    string // e.g. "SetOnEventStreamFunc"
-	SubPkgAlias              string // e.g. "event_stream_sub"
-	SubPkgImport             string // e.g. "module/tacplus/subscribe/aegis/event_stream"
-	TypePkgAlias             string // e.g. "aegis_pb"
-	TypePkgImport            string // e.g. "module/tacplus/types/services/aegis"
-	EventBusImport           string // e.g. "module/tacplus/types/sys/eventbus"
-	HasTimeseriesProjections bool   // source event has timeseries_type projections
-	// HasProjections is true when ANY message extracts from the source event —
-	// graph or timeseries. It gates the Handle<Type> dispatch call: that
+	FieldPascal           string // e.g. "EventStream"
+	HandlerMethodName     string // e.g. "OnEventStream" or "OnEventStreamAegis" (disambiguated)
+	SourcePackage         string // e.g. "aegis"
+	SourceField           string // e.g. "event_stream"
+	TypeName              string // e.g. "TopologyEvent"
+	HandlerFuncFieldName  string // e.g. "onEventStreamFunc"
+	HandlerFuncSetterName string // e.g. "SetOnEventStreamFunc"
+	SubPkgAlias           string // e.g. "event_stream_sub"
+	SubPkgImport          string // e.g. "module/tacplus/subscribe/aegis/event_stream"
+	TypePkgAlias          string // e.g. "aegis_pb"
+	TypePkgImport         string // e.g. "module/tacplus/types/services/aegis"
+	EventBusImport        string // e.g. "module/tacplus/types/sys/eventbus"
+	// HasProjections is true when ANY message extracts from the source event
+	// (every projection is a timeseries table). It gates the Handle<Type> dispatch call: that
 	// function is only generated for a source that HAS a projection
 	// (generateEventHandlers), so calling it unconditionally did not compile in
 	// a build whose subscription is over a record with none. The record store's
 	// auto-subscription to every record's raw topic is exactly that case, which
 	// is why this surfaced only once a Go service hosted the record plane.
 	HasProjections bool
-	TargetService  string // e.g. "eventbus" — service_id to resolve via ServiceHealthState
+	// Inserts are the insert callbacks Handle<Type> takes, in its parameter
+	// order: one per timeseries projection of the source.
+	Inserts       []TimeseriesInsertEntry
+	TargetService string // e.g. "eventbus" — service_id to resolve via ServiceHealthState
 	// RoutingOnly / EnvelopeTypeName mirror tactype.SubscriptionEntry: this
 	// service is named in the source type's s2s_subscribe.routing_only_services,
 	// so the chassis hands the callback the narrow envelope. The trace-publish
@@ -222,6 +224,16 @@ type SubscriptionTemplateEntry struct {
 	// of an envelope that carries no trace id and no body.
 	RoutingOnly      bool
 	EnvelopeTypeName string // e.g. "TopologyEventRoutingEnvelope"
+}
+
+// TimeseriesInsertEntry is one typed timeseries insert callback the service
+// manager holds and hands to Handle<Source>: one per projection, shared by
+// every subscription to its source.
+type TimeseriesInsertEntry struct {
+	TypeName     string // projection message, e.g. "SensorTimeseries"
+	TypePkgAlias string // its package alias (the source's), e.g. "sensor_pb"
+	FieldName    string // e.g. "insertSensorTimeseriesFunc"
+	SetterName   string // e.g. "SetSensorTimeseriesInsertFunc"
 }
 
 // DiskStoreRuntimeEntry holds per-store data for ServiceManager-owned redo logs.
@@ -256,41 +268,39 @@ type serviceManagerTemplateData struct {
 	// accounting record topic. HasAccountingPublisher is false when the proto
 	// set declares no accounting record (client repos), in which case no
 	// emitter is wired at all.
-	HasAccountingPublisher   bool
-	AccountingPublisher      PublisherTemplateEntry
-	HasAutoTls               bool                  // true when any state has auto_tls enabled
-	AutoTlsKeyType           string                // key algorithm: "ed25519" or "ecdsa"
-	HasSmb                   bool                  // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
-	SmbAuthorityServiceID    string                // service_id of the declared (spec.smb_authority) service
-	HasTimeseriesProjections bool                  // true when any subscription has timeseries projections
-	ProjectionPkgAlias       string                // alias for source event package (e.g. "sensor_pb")
-	ProjectionPkgImport      string                // import path for source event package
-	HasTypedHealth           bool                  // true when the service's package declares a service_health message
-	TypedHealthType          string                // e.g. "TimeseriesStoreHealth"
-	TypedHealthPkgAlias      string                // e.g. "graphstore_pb"
-	TypedHealthPkgImport     string                // e.g. "module/types/services/graphstore"
-	TacplusVersion           string                // e.g. "v1.2.71"
-	TacplusGitSha            string                // git SHA of tacplus binary source
-	ProtoSourceVersion       string                // git tag of proto source dir, e.g. "v1.2.80-main.80"
-	ProtoSourceGitSha        string                // git SHA of proto source dir
-	HasTracePublisher        bool                  // true when actor declares trace.TraceEvent event_publish
-	TracePublisherTopicRef   string                // canonical topic_ref for trace publisher
-	TracePublisherTarget     string                // broker service_id for trace publisher
-	TracePublishStreamName   string                // canonical EventBus publish stream name
-	TracePublishGrpcPath     string                // canonical gRPC path for trace publish stream
-	S2STargetServices        []string              // unique service IDs for S2S client ServiceConnections
-	S2STargetsRequired       bool                  // s2s targets listed explicitly (grpc_s2s_clients) gate readiness; s2s_client_all targets do not
-	RecordReaders            []goRecordReaderEntry // model-driven (spec.record_read) typed readers over stored record rows
-	HasRecordReaders         bool
-	RecordC2S                *goRecordC2SFile // generated handler for the client-facing record read plane, nil when none
-	GrpcServices             []GrpcServiceEntry
-	WrapperImports           []WrapperImport // deduplicated wrapper imports
-	TypeImports              []WrapperImport // deduplicated type imports (for config)
-	Subscriptions            []SubscriptionTemplateEntry
-	PublisherTypeImports     []WrapperImport
-	Publishers               []PublisherTemplateEntry
-	DiskStores               []DiskStoreRuntimeEntry
-	HasDiskStores            bool
+	HasAccountingPublisher bool
+	AccountingPublisher    PublisherTemplateEntry
+	HasAutoTls             bool                    // true when any state has auto_tls enabled
+	AutoTlsKeyType         string                  // key algorithm: "ed25519" or "ecdsa"
+	HasSmb                 bool                    // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
+	SmbAuthorityServiceID  string                  // service_id of the declared (spec.smb_authority) service
+	TimeseriesInserts      []TimeseriesInsertEntry // every subscription's insert callbacks, once each
+	HasTypedHealth         bool                    // true when the service's package declares a service_health message
+	TypedHealthType        string                  // e.g. "TimeseriesStoreHealth"
+	TypedHealthPkgAlias    string                  // e.g. "graphstore_pb"
+	TypedHealthPkgImport   string                  // e.g. "module/types/services/graphstore"
+	TacplusVersion         string                  // e.g. "v1.2.71"
+	TacplusGitSha          string                  // git SHA of tacplus binary source
+	ProtoSourceVersion     string                  // git tag of proto source dir, e.g. "v1.2.80-main.80"
+	ProtoSourceGitSha      string                  // git SHA of proto source dir
+	HasTracePublisher      bool                    // true when actor declares trace.TraceEvent event_publish
+	TracePublisherTopicRef string                  // canonical topic_ref for trace publisher
+	TracePublisherTarget   string                  // broker service_id for trace publisher
+	TracePublishStreamName string                  // canonical EventBus publish stream name
+	TracePublishGrpcPath   string                  // canonical gRPC path for trace publish stream
+	S2STargetServices      []string                // unique service IDs for S2S client ServiceConnections
+	S2STargetsRequired     bool                    // s2s targets listed explicitly (grpc_s2s_clients) gate readiness; s2s_client_all targets do not
+	RecordReaders          []goRecordReaderEntry   // model-driven (spec.record_read) typed readers over stored record rows
+	HasRecordReaders       bool
+	RecordC2S              *goRecordC2SFile // generated handler for the client-facing record read plane, nil when none
+	GrpcServices           []GrpcServiceEntry
+	WrapperImports         []WrapperImport // deduplicated wrapper imports
+	TypeImports            []WrapperImport // deduplicated type imports (for config)
+	Subscriptions          []SubscriptionTemplateEntry
+	PublisherTypeImports   []WrapperImport
+	Publishers             []PublisherTemplateEntry
+	DiskStores             []DiskStoreRuntimeEntry
+	HasDiskStores          bool
 	// HasApprovalBroker is true when some hosted service carries the
 	// (spec.rpc).requires_device gate, so the ServiceManager builds the check
 	// and wires it into those wrappers.
@@ -571,6 +581,10 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		})
 	}
 
+	projectionGroups, err := extraction.Plan(allFiles)
+	if err != nil {
+		return serviceManagerTemplateData{}, err
+	}
 	var subEntries []SubscriptionTemplateEntry
 	for _, sub := range config.Subscriptions {
 		parts := strings.Split(sub.SourceField, "_")
@@ -608,53 +622,52 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			targetService = eventbus.EventBusLabel
 		}
 
-		// Determine projection flags by scanning allFiles for messages that
-		// extract from this subscription's source event type.
-		hasTimeseries := false
-		hasProjections := false
-		for _, pf := range allFiles {
-			for _, msg := range pf.Messages {
-				if extraction.SourceFQN(msg) == sub.SourceTypeFqn {
-					hasProjections = true
-					if _, ok := msg.Annotations["timeseries_type"]; ok {
-						hasTimeseries = true
-					}
-				}
+		group, hasProjections, err := extraction.Dispatched(projectionGroups, sub.SourceTypeFqn)
+		if err != nil {
+			return serviceManagerTemplateData{}, err
+		}
+		var inserts []TimeseriesInsertEntry
+		if hasProjections {
+			for _, p := range group.Projections {
+				inserts = append(inserts, TimeseriesInsertEntry{
+					TypeName:     p.Message.Name,
+					TypePkgAlias: typePkg + "_pb",
+					FieldName:    "insert" + p.Message.Name + "Func",
+					SetterName:   "Set" + p.Message.Name + "InsertFunc",
+				})
 			}
 		}
 
 		subEntries = append(subEntries, SubscriptionTemplateEntry{
-			FieldPascal:              fieldPascal,
-			HandlerMethodName:        handlerMethod,
-			SourcePackage:            sub.SourcePackage,
-			SourceField:              sub.SourceField,
-			TypeName:                 typeName,
-			HandlerFuncFieldName:     strutil.ToLowerFirst(handlerMethod) + "Func",
-			HandlerFuncSetterName:    "Set" + handlerMethod + "Func",
-			SubPkgAlias:              strings.ToLower(topicPascal) + "_sub",
-			SubPkgImport:             config.ModuleBasePath + "/subscribe/" + sub.SourcePackage + "/" + sub.SourceStateRoot + "/" + sub.SourceField,
-			TypePkgAlias:             typePkg + "_pb",
-			TypePkgImport:            config.ModuleBasePath + "/types/" + typeProtoDir + "/" + typePkg,
-			EventBusImport:           config.ModuleBasePath + "/types/generated/eventbus_support",
-			HasTimeseriesProjections: hasTimeseries,
-			HasProjections:           hasProjections,
-			TargetService:            targetService,
-			RoutingOnly:              sub.RoutingOnly,
-			EnvelopeTypeName:         typeName + boundaries.RoutingEnvelopeSuffix,
+			FieldPascal:           fieldPascal,
+			HandlerMethodName:     handlerMethod,
+			SourcePackage:         sub.SourcePackage,
+			SourceField:           sub.SourceField,
+			TypeName:              typeName,
+			HandlerFuncFieldName:  strutil.ToLowerFirst(handlerMethod) + "Func",
+			HandlerFuncSetterName: "Set" + handlerMethod + "Func",
+			SubPkgAlias:           strings.ToLower(topicPascal) + "_sub",
+			SubPkgImport:          config.ModuleBasePath + "/subscribe/" + sub.SourcePackage + "/" + sub.SourceStateRoot + "/" + sub.SourceField,
+			TypePkgAlias:          typePkg + "_pb",
+			TypePkgImport:         config.ModuleBasePath + "/types/" + typeProtoDir + "/" + typePkg,
+			EventBusImport:        config.ModuleBasePath + "/types/generated/eventbus_support",
+			HasProjections:        hasProjections,
+			Inserts:               inserts,
+			TargetService:         targetService,
+			RoutingOnly:           sub.RoutingOnly,
+			EnvelopeTypeName:      typeName + boundaries.RoutingEnvelopeSuffix,
 		})
 	}
 
-	// Compute top-level projection flags across all subscriptions.
-	hasAnyTimeseries := false
-	projPkgAlias := ""
-	projPkgImport := ""
+	// Two subscriptions to one source share its insert callbacks.
+	var timeseriesInserts []TimeseriesInsertEntry
+	seenInsert := make(map[string]bool)
 	for _, se := range subEntries {
-		if se.HasTimeseriesProjections {
-			hasAnyTimeseries = true
-		}
-		if se.HasTimeseriesProjections && projPkgAlias == "" {
-			projPkgAlias = se.TypePkgAlias
-			projPkgImport = se.TypePkgImport
+		for _, ins := range se.Inserts {
+			if !seenInsert[ins.FieldName] {
+				seenInsert[ins.FieldName] = true
+				timeseriesInserts = append(timeseriesInserts, ins)
+			}
 		}
 	}
 
@@ -797,9 +810,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		AutoTlsKeyType:           config.AutoTlsKeyType(),
 		HasSmb:                   hasSmb,
 		SmbAuthorityServiceID:    smbAuthorityServiceID,
-		HasTimeseriesProjections: hasAnyTimeseries,
-		ProjectionPkgAlias:       projPkgAlias,
-		ProjectionPkgImport:      projPkgImport,
+		TimeseriesInserts:        timeseriesInserts,
 		HasTypedHealth:           hasTypedHealth,
 		TypedHealthType:          typedHealthType,
 		TypedHealthPkgAlias:      typedHealthPkgAlias,

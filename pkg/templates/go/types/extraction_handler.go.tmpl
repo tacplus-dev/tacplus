@@ -1,13 +1,10 @@
 {{- /* Store-agnostic event handler — dispatches a source event to all its projections */ -}}
 {{- /* Generated from (spec.timeseries_type).source annotations */ -}}
-{{- /* TimeseriesInsertFunc is package-scoped, not per-source-type: it is declared */ -}}
-{{- /* once per package in extraction_handler_support.go, not repeated here — a */ -}}
-{{- /* second handler file in the same package would otherwise redeclare it. */ -}}
 
-// Handle{{.SourceType}} dispatches a {{.SourceType}} to all projection handlers.
-// It calls tsInsert for timeseries projections.
-// The callback may be nil — projections for a nil callback are skipped.
-func Handle{{.SourceType}}(ctx context.Context, event *{{.SourceQualifier}}{{.SourceType}}, tsInsert TimeseriesInsertFunc) error {
+// Handle{{.SourceType}} dispatches a {{.SourceType}} to its timeseries projections:
+// each projection the event yields is passed, typed, to that projection's
+// insert callback. A nil callback skips its projection.
+func Handle{{.SourceType}}(ctx context.Context, event *{{.SourceQualifier}}{{.SourceType}}{{range .TimeseriesProjections}}, insert{{.TypeName}} func(ctx context.Context, row *{{.TypeName}}) error{{end}}) error {
 	if event == nil {
 		return nil
 	}
@@ -21,12 +18,10 @@ func Handle{{.SourceType}}(ctx context.Context, event *{{.SourceQualifier}}{{.So
 
 {{- range .TimeseriesProjections}}
 
-	// {{.TypeName}} — timeseries projection (table: {{.TableName}}).
-	if tsInsert != nil {
+	// {{.TypeName}} — timeseries projection.
+	if insert{{.TypeName}} != nil {
 		if row := Extract{{.TypeName}}From{{$.SourceType}}(event); row != nil {
-			cols := {{.TypeName}}TimeseriesColumns()
-			vals := {{.TypeName}}ToTimeseriesRow(row)
-			if err := tsInsert(ctx, "{{.TableName}}", cols, vals); err != nil {
+			if err := insert{{.TypeName}}(ctx, row); err != nil {
 				return fmt.Errorf("insert {{.TypeName}}: %w", err)
 			}
 		}

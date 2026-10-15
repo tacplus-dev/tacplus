@@ -150,6 +150,9 @@ public class ServiceManager implements AutoCloseable {
     private volatile boolean closing = false;
     /** The mandatory Authorizer, built in start(). Null before then. */
     private volatile Authorizer authorizer;
+{{- range .TimeseriesInserts}}
+    private volatile {{.InterfaceType}} {{.FieldName}};
+{{- end}}
     // TLS-degrade seam (PC-L-1): renewal give-up / parse failures report here so
     // the health plane (when wired) marks the instance DEGRADED instead of the
     // service silently running to certificate expiry. Unconditional so it compiles
@@ -494,6 +497,20 @@ public class ServiceManager implements AutoCloseable {
                 serving ? HealthCheckResponse.ServingStatus.SERVING
                         : HealthCheckResponse.ServingStatus.NOT_SERVING);
     }
+
+{{- range .TimeseriesInserts}}
+
+    /**
+     * Sets the insert callback for the {@code {{.TypeName}}} timeseries projection:
+     * every subscribed event that yields a {@code {{.TypeName}}} row is passed to
+     * {@code fn}, typed. Synchronous: {@code fn} runs on the subscription's
+     * delivery thread, and the next event is not handled until it returns; a
+     * thrown exception fails that delivery. Call before {@code run()}.
+     */
+    public void {{.SetterName}}({{.InterfaceType}} fn) {
+        this.{{.FieldName}} = fn;
+    }
+{{- end}}
 
 {{- if .HasDiskStores}}
     /** Returns ServiceManager-owned redo-log handles for generated service_store stores. */
@@ -1393,6 +1410,9 @@ public class ServiceManager implements AutoCloseable {
 {{- end}}
                             handler.{{.HandlerMethodName}}(event,
                                     new Handler.SubscriptionMeta(meta.offset, meta.timestamp, meta.key, meta.topic, meta.partition));
+{{- if and .DispatchMethod (not .RoutingOnly)}}
+                            {{.DispatchMethod}}(event{{range .Inserts}}, {{.FieldName}}{{end}});
+{{- end}}
                         });
                         return;
                     } catch (InterruptedException e) {

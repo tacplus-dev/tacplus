@@ -320,6 +320,9 @@ pub struct ServiceManager {
     /// init so the plaintext probe can bind immediately. Shared with the TLS
     /// server in run() via HealthService::from_health_reporter().
     grpc_health: tonic_health::server::HealthReporter,
+{{- range .TimeseriesInserts}}
+    {{.FieldName}}: Option<{{.ModPath}}::{{.TypeName}}Insert>,
+{{- end}}
 {{- if .HasDiskStores}}
 	    disk_store_logs: Option<Arc<DiskStoreLogs>>,
 {{- end}}
@@ -908,6 +911,9 @@ impl ServiceManager {
             tasks,
             tls_degrade,
             grpc_health,
+{{- range .TimeseriesInserts}}
+            {{.FieldName}}: None,
+{{- end}}
 {{- if .HasTlsGrpc}}
             authorizer,
 {{- end}}
@@ -941,6 +947,26 @@ impl ServiceManager {
 {{- end}}
         })
     }
+{{- range .TimeseriesInserts}}
+
+    /// Sets the insert callback for the `{{.TypeName}}` timeseries projection:
+    /// every subscribed event that yields a `{{.TypeName}}` row is passed to `f`
+    /// as its typed [`{{.ModPath}}::{{.TypeName}}Row`]. Async: the subscription
+    /// awaits the returned future before it handles the next event, so `f`
+    /// must not block the executor; an `Err` fails that delivery. Call before
+    /// `run()`.
+    pub fn {{.SetterName}}<F, Fut>(&mut self, f: F)
+    where
+        F: Fn({{.ModPath}}::{{.TypeName}}Row) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
+    {
+        let insert: {{.ModPath}}::{{.TypeName}}Insert = Arc::new(move |row| {
+            Box::pin(f(row))
+                as std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>>
+        });
+        self.{{.FieldName}} = Some(insert);
+    }
+{{- end}}
 
     /// Returns the raw gRPC connection to the state store.
     pub async fn conn(&self) -> Option<Channel> {
@@ -1996,11 +2022,24 @@ impl ServiceManager {
             sub_handles.push(tokio::spawn(async move {
                 let handler_fn: subscribe::{{.SubscriberMod}}::Handler = {
                     let h = sub_handler;
+{{- if and .DispatchFn (not .RoutingOnly)}}
+                    let dispatch_sm = sub_sm.clone();
+                    std::sync::Arc::new(move |event, meta| {
+                        let h = h.clone();
+                        let sm = dispatch_sm.clone();
+                        Box::pin(async move {
+                            h.{{.HandlerMethodName}}(event.clone(), meta).await?;
+                            {{.DispatchFn}}(&event{{range .Inserts}}, sm.{{.FieldName}}.as_ref(){{end}}).await
+                        })
+                            as std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>>
+                    })
+{{- else}}
                     std::sync::Arc::new(move |event, meta| {
                         let h = h.clone();
                         Box::pin(async move { h.{{.HandlerMethodName}}(event, meta).await })
                             as std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>>
                     })
+{{- end}}
                 };
                 // Audience-scoped bearer token for the Subscribe stream, minted
                 // fresh by the subscriber on every (re)connect attempt.

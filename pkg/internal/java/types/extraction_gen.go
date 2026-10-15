@@ -32,6 +32,8 @@ type javaExtractionTemplateData struct {
 	SourceType          string
 	SourceFqn           string // fully-qualified Java type of the source message
 	ToProjectionsMethod string // "<source>ToProjections"
+	HandleMethod        string // "handle<Source>": the record dispatch, Go's Handle<Source>
+	HasNoop             bool   // the source carries the injected trace-round noop
 	Projections         []javaExtractionProjection
 }
 
@@ -97,6 +99,8 @@ func generateJavaExtractionHelpers(config *tactype.Config, allFiles []model.Prot
 			SourceType:          g.Source.Name,
 			SourceFqn:           javaTimeseriesTypeFqn(config, dp, fileByPkg, protoDir, srcDir, g.SourceFile.Package+"."+g.Source.Name),
 			ToProjectionsMethod: strutil.ToLowerFirst(g.Source.Name) + "ToProjections",
+			HandleMethod:        javaRecordDispatchMethod(g),
+			HasNoop:             g.SourceHasNoop(),
 		}
 		for _, p := range g.Projections {
 			proj := javaExtractionProjection{
@@ -125,6 +129,20 @@ func generateJavaExtractionHelpers(config *tactype.Config, allFiles []model.Prot
 		}
 	}
 	return nil
+}
+
+// javaProjectionsClass is the fully-qualified <Source>Projections class a
+// group renders into; the service manager names its dispatch and insert types
+// through it.
+func javaProjectionsClass(config *tactype.Config, g extraction.Group) string {
+	file := g.File()
+	return javaTimeseriesPackage(config, file.RelPath, file.Package) + "." + g.Source.Name + "Projections"
+}
+
+// javaRecordDispatchMethod is the static handle<Source> a group's
+// <Source>Projections class declares.
+func javaRecordDispatchMethod(g extraction.Group) string {
+	return "handle" + g.Source.Name
 }
 
 // javaExtractionStatement copies one source field on receiver into the

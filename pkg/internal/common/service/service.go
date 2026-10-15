@@ -481,30 +481,67 @@ func ResolveW2SClientServices(config *tactype.Config, servicesInfo []ServiceInfo
 }
 
 // ResolveC2DServerServices returns own-package service_c2d services that should
-// get a generated daemon SERVER surface (Handler trait + ValidationWrapper),
-// served on a local unix socket — not on the s2s gRPC port.
+// get a generated daemon SERVER surface (Handler + ValidationWrapper), served on
+// a local unix socket — not on the s2s gRPC port.
 //
 // ResolveServerServices/filterByPackage deliberately exclude c2d from the normal
-// server set (c2d must never be registered on the gRPC listener, and most
-// language ServiceManagers don't host a c2d socket server). This is the additive
-// set for backends whose ServiceManager DOES host a c2d socket server (currently
-// Rust: HasC2DGrpc → C2dServer). Without it, an own-package daemon (e.g. the
-// client daemon) gets a c2d client + raw tonic server traits but no generated
-// ValidationWrapper, which regressed daemon hosting.
+// server set (c2d must never be registered on the gRPC listener). This is the
+// additive set the Rust, Go and Java ServiceManagers host on their c2d socket
+// server. Without it, an own-package daemon (e.g. the client daemon) gets a c2d
+// client + raw server stubs but no generated ValidationWrapper, which regressed
+// daemon hosting.
 func ResolveC2DServerServices(config *tactype.Config, servicesInfo []ServiceInfo) []ServiceInfo {
 	var result []ServiceInfo
 	for _, svc := range servicesInfo {
-		if !svc.IsC2D || !svc.IsGrpc {
-			continue
+		if IsC2DServer(svc.IsC2D, svc.IsGrpc, svc.PackageName, config.SelfPackage) {
+			result = append(result, svc)
 		}
-		// Own-package only: a daemon hosts its OWN c2d services. (SelfPackage
-		// empty ⇒ single-package generation, include all c2d.)
-		if config.SelfPackage != "" && svc.PackageName != config.SelfPackage {
-			continue
-		}
-		result = append(result, svc)
 	}
 	return result
+}
+
+// IsC2DServer reports whether a service is a service_c2d service this build
+// hosts on its c2d socket server: own-package only, since a daemon hosts its
+// OWN c2d services (selfPackage empty means single-package generation, which
+// includes all of them).
+//
+// It lives here, shared, for the same reason IsHostedVService does: Go and Java
+// carry a ServiceInfo of their own shape and cannot call
+// ResolveC2DServerServices, and "is this c2d service mine to host" must have
+// one answer in every language.
+func IsC2DServer(isC2D, isGrpc bool, servicePackage, selfPackage string) bool {
+	if !isC2D || !isGrpc {
+		return false
+	}
+	return selfPackage == "" || servicePackage == selfPackage
+}
+
+// C2DSocket is one hosted service_c2d service and the socket_path it declares.
+type C2DSocket struct {
+	ServiceName string
+	SocketPath  string
+}
+
+// HostedC2DSocketPath returns the one unix socket a ServiceManager binds for
+// the service_c2d services it hosts. socket_path is required (a shared default
+// would collide between daemons), and every hosted c2d service must declare
+// the same one: a ServiceManager runs a single c2d server, so a service
+// declaring a different path would be served somewhere its clients never dial.
+func HostedC2DSocketPath(sockets []C2DSocket) (string, error) {
+	path := ""
+	for _, s := range sockets {
+		if s.SocketPath == "" {
+			return "", fmt.Errorf("service %s: service_c2d requires socket_path (no default — a shared default socket would collide)", s.ServiceName)
+		}
+		if path == "" {
+			path = s.SocketPath
+			continue
+		}
+		if s.SocketPath != path {
+			return "", fmt.Errorf("service %s: service_c2d socket_path %q differs from %q declared by another hosted c2d service; one ServiceManager hosts its c2d services on one socket", s.ServiceName, s.SocketPath, path)
+		}
+	}
+	return path, nil
 }
 
 // ResolveC2DClientServices returns the services that should get c2d

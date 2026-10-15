@@ -276,9 +276,9 @@ declaration requires the other to generate.
 - a **negative `(spec.record).min_group_size`**, or a threshold declared into a fleet
   where no `(spec.trait)` hosts a record query plane — a guard that can never refuse, and
   a guard with no guarded surface behind it (`ValidateMinGroupSizeAnnotations` in
-  `pkg/internal/common/parser/min_group_size_validate.go`). The Go and Rust service-wrapper
-  generators additionally fail on any method carrying the stamped option, since the guard
-  is generated for Java wrappers only;
+  `pkg/internal/common/parser/min_group_size_validate.go`). Each service-wrapper generator
+  (Go, Java, Rust) additionally fails on a stamped method whose guard it cannot render:
+  a client-streaming rpc, or a response with no single integer size field;
 - a **store whose source type resolves to no EventBus topic** — the generated
   store would subscribe to nothing and never ingest a row. This is the paired
   control for the transformation/delivery split: a transformation alone is fine

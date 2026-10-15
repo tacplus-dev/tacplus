@@ -1300,8 +1300,8 @@ additive, so a record that does not declare it gets exactly the plane it got bef
   threshold declared into a fleet where no `(spec.trait)` hosts a record query plane (no
   trait whose host declares `(spec.record_store)`) — a threshold with no guarded surface
   behind it is decoration, and an unread annotation fails generation here the same way it
-  does everywhere else. Enforcement is generated for **Java** service wrappers only; the
-  Go and Rust wrapper generators fail the build on a stamped method rather than serve a
+  does everywhere else. Enforcement is generated for **Go, Java and Rust** service wrappers; each generator
+  fails the build on a stamped method whose guard it cannot render rather than serve a
   size-only RPC unguarded.
 
 #### Public view (SHOW / BACKGROUND fields)

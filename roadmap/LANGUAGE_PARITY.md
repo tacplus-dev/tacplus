@@ -24,10 +24,10 @@ the commit history since August.
 
 | Capability | Who has it | Who lacks it | Note |
 |------------|-----------|--------------|------|
-| `jwkview` chassis: watch client for signing-key views | Go | Java, Rust | Listed as "go only" in `docs/USER.md` |
-| Formal verification harnesses (`assert_invariant`, `tacplus verify`) | Rust (kani), Java (JBMC) | Go | By design so far; Go has no model-checker backend |
-| `(spec.record).min_group_size` enforcement in the service wrapper | Java | Go, Rust refuse generation on a stamped method instead of serving it unguarded | Documented in `docs/USER.md`; the refusal is the honest alternative, not a silent gap |
-| Per-type REST CRUD clients | Java, Rust (`restclient_crud_gen.go`) | Go emits per-service REST clients (`restclient_gen.go`) | Different shape, not necessarily missing capability; worth a one-hour check |
+| `jwkview` chassis: in-memory signing-key view | Go, as a separate package | Java and Rust keep the same key map inside their Authorizer (`with_seeded_jwks` in Rust) | **Not a gap.** Packaging differs, the capability does not. |
+| Formal verification harnesses (`assert_invariant`, `tacplus verify`) | Rust (kani), Java (JBMC) | Go | By design: Go has no model-checker backend, and an earlier attempt was not successful (Jody, 2026-10-14). Stays open by decision. |
+| `(spec.record).min_group_size` enforcement in the service wrapper | All three (Go `mingroupsize_gen.go`, Rust `mingroupsize_gen.go`, Java) | nobody | **Not a gap.** The survey repeated a stale doc sentence; the Q3 port of 2026-09-22 gave Go and Rust the guard. Docs corrected 2026-10-14. |
+| Per-type REST CRUD clients | All three | nobody | **Not a gap.** Go's `restclient_gen.go` emits the same per-type clients; only the file name differed. |
 
 ## Closed since August (parity reached, for the record)
 

@@ -492,6 +492,11 @@ func Generate(config *tactype.Config) error {
 		if err != nil {
 			return fmt.Errorf("failed to resolve gRPC server services: %w", err)
 		}
+		// Additively include own-package c2d daemon services: the ServiceManager
+		// hosts them on a local unix-socket c2d server (HasC2DGrpc), never on the
+		// TLS gRPC listener. resolveServerServices filters c2d out, so add them
+		// back here so the daemon server surface (wrapper + Handler) is generated.
+		serverServices = append(serverServices, resolveC2DServerServices(config, servicesInfo)...)
 		if len(serverServices) > 0 {
 			if _, err := generateServiceWrappers(config, serverServices, tempProtoDir, accountingMap, skippedTraceTypes); err != nil {
 				return fmt.Errorf("failed to generate service wrappers: %w", err)
@@ -524,6 +529,13 @@ func Generate(config *tactype.Config) error {
 			explicit := filterExplicitGrpcServices(config, serverServices)
 			if len(explicit) > 0 {
 				grpcSvcs = explicit
+				// c2d services are never listed in GrpcServers; they are hosted
+				// on the c2d socket server whatever the explicit TLS set is.
+				for _, svc := range serverServices {
+					if svc.IsC2D {
+						grpcSvcs = append(grpcSvcs, svc)
+					}
+				}
 			} else {
 				for _, svc := range serverServices {
 					if svc.GrpcName != "" || svc.HasMcp {
@@ -1190,9 +1202,10 @@ type ServiceInfo struct {
 	// (spec.rpc).requires_device, so this service's wrapper carries the
 	// device-approval gate and the ServiceManager must wire the check into it.
 	HasRequiresDevice bool
-	IsS2S             bool // true when this is a service-to-service service
-	IsC2D             bool // true when this is a client-to-daemon service
-	IsSMB             bool // true when this service has spec.smb
+	IsS2S             bool   // true when this is a service-to-service service
+	IsC2D             bool   // true when this is a client-to-daemon service
+	C2DSocketPath     string // service_c2d socket_path: unix socket the daemon binds (required, no default)
+	IsSMB             bool   // true when this service has spec.smb
 	SmbRoot           spec.SmbRoot
 	// SynthesizedKind is WHICH tacplus-generated surface this is
 	// (parser.SynthesizedKind*), empty for hand-authored services. Carried so the
@@ -1369,6 +1382,19 @@ func resolveC2DClientServices(config *tactype.Config, servicesInfo []ServiceInfo
 			continue
 		}
 		if config.SelfPackage == "" || svc.PackageName == config.SelfPackage {
+			result = append(result, svc)
+		}
+	}
+	return result
+}
+
+// resolveC2DServerServices returns the own-package service_c2d services the
+// ServiceManager hosts on its c2d socket server (see
+// service.ResolveC2DServerServices, which Java and Rust resolve through).
+func resolveC2DServerServices(config *tactype.Config, servicesInfo []ServiceInfo) []ServiceInfo {
+	var result []ServiceInfo
+	for _, svc := range servicesInfo {
+		if service.IsC2DServer(svc.IsC2D, svc.GrpcName != "", svc.PackageName, config.SelfPackage) {
 			result = append(result, svc)
 		}
 	}
@@ -1778,6 +1804,7 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 				HasRequiresDevice: goServiceHasRequiresDevice(service),
 				IsS2S:             service.IsS2S,
 				IsC2D:             service.IsC2D,
+				C2DSocketPath:     service.C2DSocketPath,
 				IsSMB:             service.IsSMB,
 				SmbRoot:           service.SmbRoot,
 				SynthesizedKind:   service.SynthesizedKind,

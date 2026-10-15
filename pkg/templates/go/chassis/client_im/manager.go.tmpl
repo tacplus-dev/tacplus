@@ -28,8 +28,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+{{- if .HasClientTokenExchanger }}
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+{{- end }}
 
 	tokenrequest_pb "{{.TokenRequestTypesPath}}"
 	token_pb "{{.TokenTypesPath}}"

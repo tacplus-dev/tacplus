@@ -1181,6 +1181,11 @@ func Generate(config *tactype.Config) error {
 	}
 	// Generate service wrappers — only for gRPC server services
 	serverServices := resolveServerServices(config, servicesInfo)
+	// Additively include own-package c2d daemon services: the ServiceManager
+	// hosts them on a local unix-socket c2d server (HasC2DGrpc), never on the
+	// TLS gRPC listener. resolveServerServices filters c2d out, so add them back
+	// here so the daemon server surface (wrapper + Handler) is generated.
+	serverServices = append(serverServices, resolveC2DServerServices(config, servicesInfo)...)
 	// hasAccountingByService (ServiceName -> bool) records, per wrapper, whether
 	// it ended up with accounting wired in (post Q2-exclusion) — i.e. whether it
 	// defines setEmitter. ServiceManager's wiring loop must only call setEmitter
@@ -1345,6 +1350,13 @@ func Generate(config *tactype.Config) error {
 			explicit := filterExplicitGrpcServicesJava(config, serverServices)
 			if len(explicit) > 0 {
 				grpcSvcs = explicit
+				// c2d services are never listed in GrpcServers; they are hosted
+				// on the c2d socket server whatever the explicit TLS set is.
+				for _, svc := range serverServices {
+					if svc.IsC2D {
+						grpcSvcs = append(grpcSvcs, svc)
+					}
+				}
 			} else {
 				for _, svc := range serverServices {
 					// An MCP-only service (IsGrpc false) still carries a

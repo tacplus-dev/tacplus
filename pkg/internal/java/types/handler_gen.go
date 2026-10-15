@@ -20,6 +20,7 @@ import (
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 	stateproto "github.com/tacplus-dev/tacplus/pkg/internal/proto"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
@@ -62,6 +63,10 @@ type javaGrpcServiceEntry struct {
 	// (spec.rpc).requires_device gate, so the device-approval check must be
 	// wired into it.
 	HasRequiresDevice bool
+	// IsC2D marks a service_c2d service: hosted on the c2d unix-socket server,
+	// never on the TLS gRPC listener, and with no token auth wired (the socket
+	// permissions are the boundary).
+	IsC2D bool
 }
 
 // javaApprovalBrokerEntry names the approval-broker RPC the generated
@@ -155,6 +160,9 @@ type javaSmTemplateData struct {
 	SmPrefix              string
 	ServiceLabel          string
 	HasGrpc               bool
+	HasTlsGrpc            bool   // true when non-c2d gRPC services exist (need the TLS server)
+	HasC2DGrpc            bool   // true when service_c2d services are hosted on the c2d socket server
+	C2DSocketPath         string // service_c2d socket_path the daemon binds (required, no default)
 	HasStates             bool
 	HasGrpcS2SClients     bool
 	HasServiceHealthState bool
@@ -286,6 +294,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 			ConfigStateStub:          configStateName + "ServiceGrpc",
 			HasConfigState:           hasConfigState,
 			AuthDisabled:             svc.AuthDisabled,
+			IsC2D:                    svc.IsC2D,
 			AuthAnyUser:              svc.AuthAnyUser,
 			HasMethodAuth:            svc.HasMethodAuth,
 			HasAccounting:            hasAccountingByService[svc.ServiceName],
@@ -293,6 +302,20 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		})
 	}
 	diskStores, err := collectJavaDiskStoreRuntimeEntries(config, grpcSvcs)
+	if err != nil {
+		return javaSmTemplateData{}, err
+	}
+
+	hasTlsGrpc := false
+	var c2dSockets []service.C2DSocket
+	for _, svc := range svcs {
+		if svc.IsC2D {
+			c2dSockets = append(c2dSockets, service.C2DSocket{ServiceName: svc.ServiceName, SocketPath: svc.C2DSocketPath})
+		} else {
+			hasTlsGrpc = true
+		}
+	}
+	c2dSocketPath, err := service.HostedC2DSocketPath(c2dSockets)
 	if err != nil {
 		return javaSmTemplateData{}, err
 	}
@@ -551,6 +574,9 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		SmPrefix:               config.GetSmPrefix(),
 		ServiceLabel:           config.ServiceLabel(),
 		HasGrpc:                len(svcs) > 0,
+		HasTlsGrpc:             hasTlsGrpc,
+		HasC2DGrpc:             len(c2dSockets) > 0,
+		C2DSocketPath:          c2dSocketPath,
 		HasStates:              len(config.States) > 0 || config.AllStates,
 		HasGrpcS2SClients:      len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
 		HasServiceHealthState:  hasServiceHealthState,

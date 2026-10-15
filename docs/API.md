@@ -248,15 +248,24 @@ The lite client targets (`swift`, `csharp`) emit C2D, C2S, and W2S clients
 streaming methods neither can carry are emitted as unavailable stubs);
 the full-client targets (`python`, `typescript`) additionally emit REST clients.
 
-**C2D server auth-skip scope**: Rust is the only target that hosts a generated
-C2D server wrapper (`C2dServer` in `service_manager.rs.tmpl`). That wrapper
-skips token authentication by design: the auth boundary is the socket permission
-(filesystem ACL / named-pipe DACL), not a bearer token. It still validates
-request/response constraints and runs the full handler pipeline; only the
-token-lookup and authorization steps are bypassed, via the `IsC2D` flag on the
-service descriptor. Go and Java emit C2D clients only — `IsC2D` is excluded from
-their server resolution paths by design, since no Go or Java service declares
-`service_c2d` as a server. Python and TypeScript are client-only targets.
+**C2D server auth-skip scope**: Rust, Go and Java host a generated C2D server
+for the package's own `service_c2d` services, mounted by the generated
+ServiceManager on the declared `socket_path` (Unix domain socket; required, no
+default): `C2dServer` in `service_manager.rs.tmpl`, `grpcserver.C2DServer`
+(`newC2DServer` in the Go ServiceManager) and `grpcserver.C2DServer`
+(`ServiceManager.newC2DServer` in Java). The services are hosted on that socket
+only, never on the TLS gRPC listener; a service with no other gRPC surface
+starts no TLS server at all. Every hosted `service_c2d` service must declare the
+same `socket_path`, since one ServiceManager runs one c2d server. The server
+removes a stale socket file, binds, and sets the socket file to owner-only
+(0600); if it cannot, it refuses to serve. The wrapper skips token
+authentication by design: the auth boundary is the socket permission
+(filesystem ACL), not a bearer token. It still validates request/response
+constraints and runs the full handler pipeline; only the token-lookup and
+authorization steps are bypassed, via the `IsC2D` flag on the service
+descriptor, and the ServiceManager wires no authorizer into a c2d wrapper. A
+Go or Java c2d server that fails to start ends `Run`/`run` with the error; the
+Rust ServiceManager logs it. Python and TypeScript are client-only targets.
 
 ### Client Send Contract
 

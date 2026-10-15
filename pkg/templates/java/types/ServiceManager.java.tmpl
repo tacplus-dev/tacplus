@@ -14,6 +14,9 @@ import {{.ChassisBase}}.approval.Approval;
 {{- end}}
 import {{.ChassisBase}}.logger.LogbackConfigurator;
 import {{.ChassisBase}}.grpcserver.GrpcServer;
+{{- if .HasC2DGrpc}}
+import {{.ChassisBase}}.grpcserver.C2DServer;
+{{- end}}
 import {{.ChassisBase}}.grpcserver.ServiceImplementation;
 import {{.ChassisBase}}.service_im.IdentityManager;
 {{- if .HasDiskStores}}
@@ -794,6 +797,29 @@ public class ServiceManager implements AutoCloseable {
     }
 
 {{- end}}
+{{- if .HasC2DGrpc}}
+
+    /**
+     * Hosts the service_c2d wrappers on the declared socket_path
+     * (spec.service_c2d.socket_path — required, no default, which would collide
+     * between daemons). The wrappers skip token auth: the socket's owner-only
+     * permissions are the boundary, not a bearer token.
+     */
+    static C2DServer newC2DServer(io.grpc.BindableService... services) {
+        return new C2DServer("{{.C2DSocketPath}}", new ServiceImplementation() {
+            @Override
+            public void registerServices(ServerBuilder<?> grpcServerBuilder) {
+                for (io.grpc.BindableService svc : services) {
+                    grpcServerBuilder.addService(svc);
+                }
+            }
+
+            @Override
+            public void registerRESTEndpoints(Javalin app, String apiPrefix) {
+            }
+        });
+    }
+{{- end}}
     /**
      * Starts the service lifecycle with the given handler.
      *
@@ -880,7 +906,7 @@ public class ServiceManager implements AutoCloseable {
         this.authorizer = authorizer;
         // Register per-method auth_services patterns from proto annotations.
 {{- range .GrpcServices}}
-{{- if .HasMethodAuth}}
+{{- if and .HasMethodAuth (not .IsC2D)}}
         {{.ServerClassName}}.registerMethodAuth(authorizer);
 {{- end}}
 {{- end}}
@@ -888,7 +914,7 @@ public class ServiceManager implements AutoCloseable {
         // Create gRPC server wrappers. Token-auth wrappers take the Authorizer at
         // construction (mandatory); auth_disabled / c2d wrappers take none.
 {{- range .GrpcServices}}
-        {{.ServerClassName}} {{.WrapperVarName}} = new {{.ServerClassName}}({{if .IsGeneratedRecordC2S}}new {{.GeneratedImplClass}}(this){{else}}handler.{{.GetterName}}(){{end}}{{if not .AuthDisabled}}, authorizer{{end}});
+        {{.ServerClassName}} {{.WrapperVarName}} = new {{.ServerClassName}}({{if .IsGeneratedRecordC2S}}new {{.GeneratedImplClass}}(this){{else}}handler.{{.GetterName}}(){{end}}{{if not (or .AuthDisabled .IsC2D)}}, authorizer{{end}});
         {{.WrapperVarName}}.setInstanceId(getInstanceId());
         {{.WrapperVarName}}.setAnonymizeHmacKey(config.getAnonymizeHmacKey().toByteArray());
 {{- end}}
@@ -986,7 +1012,7 @@ public class ServiceManager implements AutoCloseable {
         // uses it with a fixed namespace target; target_namespace streaming
         // methods use it token-only at stream open before per-message authorize.
 {{- range .GrpcServices}}
-{{- if not .AuthDisabled}}
+{{- if not (or .AuthDisabled .IsC2D)}}
         {{.WrapperVarName}}.setAuthenticateFunc(({{.ServerClassName}}.Authenticator) targetNamespace -> {
             String authHeader = Authorizer.AUTH_HEADER_CTX_KEY.get();
             if (authHeader == null) {
@@ -1000,11 +1026,27 @@ public class ServiceManager implements AutoCloseable {
 {{- end}}
 {{- end}}
 
+{{- if .HasC2DGrpc}}
+
+        // c2d services run on a separate unix socket server, started below.
+        C2DServer c2dSrv = newC2DServer(new io.grpc.BindableService[] {
+{{- range .GrpcServices}}
+{{- if .IsC2D}}
+                {{.WrapperVarName}},
+{{- end}}
+{{- end}}
+        });
+{{- end}}
+{{- if .HasTlsGrpc}}
+
+        // c2d services are excluded — they run on the c2d socket server.
         ServiceImplementation multiImpl = new ServiceImplementation() {
             @Override
             public void registerServices(ServerBuilder<?> grpcServerBuilder) throws Exception {
 {{- range .GrpcServices}}
+{{- if not .IsC2D}}
                 grpcServerBuilder.addService({{.WrapperVarName}});
+{{- end}}
 {{- end}}
                 for (io.grpc.ServerServiceDefinition svc : handler.additionalServices()) {
                     grpcServerBuilder.addService(io.grpc.ServerInterceptors.intercept(
@@ -1038,6 +1080,7 @@ public class ServiceManager implements AutoCloseable {
         srv.setCertDegradeReporter(this::reportTLSDegraded);
 
         // Start listening after readiness below.
+{{- end}}
 {{- else}}
         // No tacplus-managed gRPC services — start a TLS server that still supports
         // additionalServices() so hand-registered services (e.g., Admin, TraceSession)
@@ -1164,7 +1207,7 @@ public class ServiceManager implements AutoCloseable {
 {{- end}}
 {{- end}}
 
-{{- if .HasGrpc}}
+{{- if .HasTlsGrpc}}
         startManagedThread("grpc-server", false, () -> {
             try {
                 srv.listen();
@@ -1174,6 +1217,9 @@ public class ServiceManager implements AutoCloseable {
                 }
             }
         });
+{{- else if .HasC2DGrpc}}
+        // c2d-only service — no TLS server. The c2d socket server below is its
+        // only listener.
 {{- else}}
         startManagedThread("health-server", false, () -> {
             try {
@@ -1184,6 +1230,12 @@ public class ServiceManager implements AutoCloseable {
                 }
             }
         });
+{{- end}}
+{{- if .HasC2DGrpc}}
+        // Start the c2d unix socket server for local daemon IPC services. No
+        // TLS, no token auth — the socket's owner-only permissions guard
+        // access. A socket that cannot be bound or locked down fails run().
+        c2dSrv.start();
 {{- end}}
 
 {{- if .HasAutoTls}}
@@ -1246,15 +1298,17 @@ public class ServiceManager implements AutoCloseable {
         AtomicBoolean healthOk = new AtomicBoolean(true);
         healthReporter.setStatusSink(effectiveStatus ->
                 healthOk.set(effectiveStatus != InstanceStatus.INSTANCE_STATUS_UNHEALTHY));
-        GrpcServer readyCtl = {{if .HasGrpc}}srv{{else}}healthSrv{{end}};
+{{- if or .HasTlsGrpc (not .HasC2DGrpc)}}
+        GrpcServer readyCtl = {{if .HasTlsGrpc}}srv{{else}}healthSrv{{end}};
         startManagedThread("readiness", true,
                 () -> driveReadiness(readyCtl, healthOk, {{if .HasSubscriptions}}readinessStreams{{else}}java.util.List.of(){{end}}));
+{{- end}}
 {{- else}}
         // Bootstrap complete (serving + first health publish{{if .HasAutoTls}} + TLS cert{{end}}{{if .HasSmb}} + SMB member cert{{end}}):
         // advertise SERVING on the gRPC health endpoint so k8s readiness probes pass.
-{{- if .HasGrpc}}
+{{- if .HasTlsGrpc}}
         srv.setReady(true);
-{{- else}}
+{{- else if not .HasC2DGrpc}}
         healthSrv.setReady(true);
 {{- end}}
 {{- end}}
@@ -1366,10 +1420,13 @@ public class ServiceManager implements AutoCloseable {
         healthReporter.close();
 {{- end}}
 
-{{- if .HasGrpc}}
+{{- if .HasTlsGrpc}}
         srv.shutdown();
-{{- else}}
+{{- else if not .HasC2DGrpc}}
         healthSrv.shutdown();
+{{- end}}
+{{- if .HasC2DGrpc}}
+        c2dSrv.shutdown();
 {{- end}}
 
         handler.shutdown();

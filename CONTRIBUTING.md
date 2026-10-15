@@ -17,10 +17,26 @@ just gates-container  # the same, inside the base image
 `docs/DEVELOPMENT.md` is the compiler developer guide: architecture, the model,
 code-generation patterns and the parity rules between language backends.
 
+## Requesting a fix
+
+A fix request is a GitHub issue filed with the **Fix request** template and
+nothing else: not a chat message, not a note in another repository, not a
+request to an agent working elsewhere. The template asks for the commit, the
+area, a reproduction (the smallest proto plus `tacplus.yaml`, or a fixture
+under `cross-test/`), expected and actual behaviour, and the gate that should
+have caught it.
+
+The **nightly fixes** job (`.github/workflows/nightly-fixes.yml`, also
+runnable on demand for one issue) takes the oldest open `fix-request`,
+reproduces it with a failing test, fixes it in the generator, runs the gates
+and opens a pull request that closes the issue. A request it cannot reproduce
+gets a comment and the `needs-repro` label instead of a guess. Review and
+merge of that pull request is a human's.
+
 ## Making a change
 
-1. Open an issue first for anything larger than a bug fix, so the design can
-   be discussed before the code exists.
+1. Open an issue first: a **Fix request** for a defect, a plain issue for
+   anything larger, so the design can be discussed before the code exists.
 2. Every bug fix comes with a test that fails without it. Generator changes
    must keep the language backends at parity: a feature added to one server
    language (Go, Java, Rust) is added to all three, or the gap is documented

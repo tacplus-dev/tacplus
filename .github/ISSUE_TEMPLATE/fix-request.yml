@@ -1,0 +1,67 @@
+name: Fix request
+description: Report a defect in tacplus or in the code it generates. This is the only intake for fixes.
+title: "<language or area>: <one line>"
+labels: ["fix-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A fix request is picked up by the nightly job, which reproduces it with a failing test,
+        fixes it in the generator (never in generated output), runs the gates, and opens a pull
+        request that references this issue. Give it what a reproduction needs.
+  - type: input
+    id: commit
+    attributes:
+      label: tacplus commit
+      description: The main commit (or release) the defect was seen on.
+      placeholder: "44407b0"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Go (generator, chassis or generated code)
+        - Java (generator, chassis or generated code)
+        - Rust (generator, chassis or generated code)
+        - TypeScript / Python / Swift / C# client targets
+        - Proto spec / annotations / validation rules
+        - Cross-tests, gates, CI
+        - Docs
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: The smallest proto (with its (spec.*) annotations) and tacplus.yaml that shows it, plus the command. A fixture under cross-test/ you can point at is best.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: What the generated code, gate or generator should have done.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: What happened instead. Paste the error, log lines or the wrong generated code verbatim.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: gate
+    attributes:
+      label: Which gate should have caught it
+      description: Name the gate (just recipe) or cross-test that was green while this was wrong, if any. A green that exercises nothing is a second defect.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Where it was seen (fleet, service, consumer), what it blocked, anything you already tried. Do not paste secrets, tokens or certificates.

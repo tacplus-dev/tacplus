@@ -1,0 +1,111 @@
+name: Nightly fixes
+
+# The only way a fix reaches tacplus is a GitHub issue filed with the
+# "Fix request" template (label fix-request). This job runs nightly, and on
+# demand for one issue, and hands the oldest open request to Claude Code: it
+# reproduces the defect with a failing test, fixes it in the generator (never
+# in generated output), runs the gates, and opens a pull request that closes
+# the issue. A request it cannot reproduce gets a comment and the
+# needs-repro label instead of a guess.
+#
+# Needs the repository secret ANTHROPIC_API_KEY. Nothing runs when there is no
+# open fix-request to take.
+
+on:
+  schedule:
+    - cron: "41 7 * * *"
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number to take (default: the oldest open fix-request not in progress)
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+concurrency:
+  group: nightly-fixes
+  cancel-in-progress: false
+
+jobs:
+  pick:
+    name: Pick a fix request
+    runs-on: ubuntu-latest
+    outputs:
+      issue: ${{ steps.pick.outputs.issue }}
+    steps:
+      - name: Pick the issue
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED: ${{ github.event.inputs.issue }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${REQUESTED:-}" ]]; then
+            echo "issue=$REQUESTED" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Oldest open fix-request that is not already in progress.
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label fix-request \
+                --json number,labels,createdAt --jq \
+                '[.[] | select(all(.labels[].name; . != "nightly:in-progress" and . != "needs-repro"))] | sort_by(.createdAt) | .[0].number // empty')
+          echo "issue=${n}" >> "$GITHUB_OUTPUT"
+          [[ -n "$n" ]] && echo "taking #$n" || echo "no open fix-request to take"
+
+  fix:
+    name: Reproduce, fix, open a PR
+    needs: pick
+    if: needs.pick.outputs.issue != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/toolchain
+      - name: Mark the issue in progress
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue edit "${{ needs.pick.outputs.issue }}" --repo "$GITHUB_REPOSITORY" --add-label nightly:in-progress
+      - name: Claude Code
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        with:
+          prompt: |
+            You are the nightly fix job for tacplus, a proto-to-multi-language code generator.
+            Take GitHub issue #${{ needs.pick.outputs.issue }} in ${{ github.repository }} (read it with `gh issue view`).
+
+            Rules, in order:
+            1. Reproduce first. Turn the issue's reproduction into a test that fails on main: a unit test
+               under pkg/, or a cross-test fixture leg under cross-test/ when the defect is in generated
+               runtime behaviour. If you cannot reproduce it, do not guess: comment on the issue with what
+               you tried and what you need, add the label needs-repro, remove nightly:in-progress, and stop.
+            2. Fix it in the generator or its templates, never by editing generated output. Keep the
+               Rust, Go and Java backends at parity: a fix to one server language is applied to all three
+               where the same defect exists. Surgical changes only; match the existing style; no hacks.
+            3. Verify: `go vet ./...`, `just test` (soundness + unit tests), and every gate the change can
+               affect: `just current-generation-go`, `just determinism-go`; `just current-generation-java`
+               when Java changed; `just w2s-validate-go` / `just c2d-server-go` when those planes changed.
+               A green test that does not exercise the defect is not evidence: ask what would have failed.
+            4. Commit on a branch named fix/issue-${{ needs.pick.outputs.issue }} with a message that says
+               why, ending with `Co-Authored-By: Claude <noreply@anthropic.com>`, push it, and open a pull
+               request against main whose body starts with `Fixes #${{ needs.pick.outputs.issue }}`,
+               describes the reproduction, the fix and the gates you ran with their last lines, and
+               anything you could not verify. Then remove the nightly:in-progress label from the issue
+               and add nightly:pr-open.
+            Never push to main. Never touch secrets. If the gates need a toolchain this runner lacks
+            (Rust, Java), say so in the PR and leave the nightly gates container to run them.
+          claude_args: |
+            --max-turns 200
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+      - name: Release the issue if the job died
+        if: failure() || cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue comment "${{ needs.pick.outputs.issue }}" --repo "$GITHUB_REPOSITORY" --body "Nightly fix job failed before opening a pull request: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh issue edit "${{ needs.pick.outputs.issue }}" --repo "$GITHUB_REPOSITORY" --remove-label nightly:in-progress

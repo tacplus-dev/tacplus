@@ -54,7 +54,7 @@ case "${1:-}" in
   <key>StartInterval</key><integer>86400</integer>
   <key>WatchPaths</key><array><string>$TRIGGER</string></array>
   <key>EnvironmentVariables</key><dict>
-    <key>PATH</key><string>${PROTOC28:+$PROTOC28/bin:}$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PATH</key><string>${PROTOC28:+$PROTOC28/bin:}$HOME/.local/bin:$HOME/go/bin:/usr/local/go/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>HOME</key><string>$HOME</string>
   </dict>
   <key>StandardOutPath</key><string>$HOME_DIR/launchd.out.log</string>

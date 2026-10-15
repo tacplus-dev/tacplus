@@ -264,7 +264,8 @@ w2s-validate-rust:
 w2s-validate-java:
   {{lock}} bash cross-test/w2s-validate/run.sh --language java
 
-# Behavioral coverage of the generated Go and Java C2D server: hosts it on its
+# Behavioral coverage of the generated Go, Java and Rust C2D server: starts a
+# cluster-less daemon through the generated standalone host entry on its
 # declared unix socket and calls it through the generated c2dm client.
 c2d-server:
   {{lock}} bash cross-test/c2d-server/run.sh
@@ -274,6 +275,9 @@ c2d-server-go:
 
 c2d-server-java:
   {{lock}} bash cross-test/c2d-server/run.sh --language java
+
+c2d-server-rust:
+  {{lock}} bash cross-test/c2d-server/run.sh --language rust
 
 # Compiles the generated Rust MCP dispatch against the EXACT rmcp version
 # tacplus declares (rmcpCrateVersion), so a floor lower than the emitted code

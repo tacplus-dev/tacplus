@@ -29,6 +29,10 @@ import {{.TypeImport}};
  *
  * <p>Construct your Handler using the accessors on ServiceManager
  * (e.g. sm.stateClients(), sm.grpcClients()), then pass it to sm.run(handler).
+{{- if .HostsC2DStandalone}}
+ * A local daemon with no cluster passes it to
+ * ServiceManager.serveC2DStandalone instead.
+{{- end}}
  *
  * <p>Generated code handles all infrastructure concerns:
  * <ul>

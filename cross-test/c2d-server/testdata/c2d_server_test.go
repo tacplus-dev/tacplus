@@ -1,11 +1,12 @@
 // Copyright (c) 2026 Seabeam LLC
 // SPDX-License-Identifier: Apache-2.0
 //
-// Runtime coverage for the generated Go C2D server. It lives in the generated
-// s2sm package so it can call newC2DServer, the same generated function
-// ServiceManager.Run mounts the service_c2d wrappers with, and hosts the
-// generated LocalDaemon wrapper on the fixture's declared socket_path. Calls
-// go over the real Unix socket, through the generated c2dm client.
+// Runtime coverage for the generated Go standalone C2D host. It is an EXTERNAL
+// test of the generated s2sm package (package sm_test), so it reaches the
+// daemon only the way a cluster-less daemon's main does: it implements the
+// generated Handler and calls the exported sm.ServeC2DStandalone, with no
+// config, no identity and no state store anywhere in the process. Calls go
+// over the real Unix socket, through the generated c2dm client.
 //
 // What each assertion would catch:
 //   - a valid call succeeds with NO token and NO authorizer wired: a wrapper
@@ -13,14 +14,16 @@
 //     configured") instead;
 //   - an invalid request sent on the raw stub (the c2dm client validates
 //     before sending, so it would never reach the server) is InvalidArgument
-//     and never reaches the handler: the wrapper still validates;
+//     and never reaches the handler: the standalone host serves the generated
+//     wrapper, not the bare handler;
 //   - a handler response that breaks its constraints is Internal: the full
 //     handler pipeline runs, not just the request half;
 //   - the socket file is a socket, mode 0600, and replaced a stale file left
 //     at the path: the access boundary and the stale-socket removal;
-//   - the socket file is gone after shutdown.
+//   - cancelling the context ends ServeC2DStandalone with nil, the socket file
+//     is gone, and Handler.Shutdown ran exactly once, after the drain.
 
-package sm
+package sm_test
 
 import (
 	"context"
@@ -37,6 +40,7 @@ import (
 
 	c2dm "example.com/c2dserver/model/c2dm"
 	"example.com/c2dserver/model/chassis/servicemanager"
+	sm "example.com/c2dserver/model/s2sm"
 	c2dserver_fe "example.com/c2dserver/model/s2sm/grpc/servers/svc/c2dserver"
 	types "example.com/c2dserver/model/types/svc/c2dserver"
 )
@@ -44,9 +48,17 @@ import (
 const socketPath = "/tmp/tacplus-c2d-server-check/daemon.sock"
 
 type recordingDaemon struct {
-	unaryHits  atomic.Int32
-	streamHits atomic.Int32
+	unaryHits     atomic.Int32
+	streamHits    atomic.Int32
+	shutdownCalls atomic.Int32
 }
+
+// The generated Handler: the c2d getter and Shutdown, nothing cluster-bound.
+var _ sm.Handler = (*recordingDaemon)(nil)
+
+func (d *recordingDaemon) LocalDaemonGrpcImpl() c2dserver_fe.LocalDaemonHandler { return d }
+
+func (d *recordingDaemon) Shutdown(context.Context) { d.shutdownCalls.Add(1) }
 
 func (d *recordingDaemon) GetLocal(_ context.Context, caller *servicemanager.Caller, req *types.LocalRequest) (*types.LocalResponse, error) {
 	d.unaryHits.Add(1)
@@ -69,7 +81,7 @@ func (d *recordingDaemon) GenerateLocalEvents(_ *servicemanager.Caller, req *typ
 	return nil
 }
 
-func TestGeneratedC2DServerOverSocket(t *testing.T) {
+func TestGeneratedC2DStandaloneHostOverSocket(t *testing.T) {
 	// A stale file at the socket path, as a crashed daemon leaves behind.
 	if err := os.MkdirAll("/tmp/tacplus-c2d-server-check", 0o755); err != nil {
 		t.Fatal(err)
@@ -83,41 +95,37 @@ func TestGeneratedC2DServerOverSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	daemon := &recordingDaemon{}
-	srv := newC2DServer(c2dserver_fe.NewLocalDaemon(daemon))
-	if srv.SocketPath() != socketPath {
-		t.Fatalf("generated c2d server socket = %q, want the declared socket_path %q", srv.SocketPath(), socketPath)
+	// A daemon passes the generated constant for the declared socket_path.
+	if sm.C2DSocketPath != socketPath {
+		t.Fatalf("sm.C2DSocketPath = %q, want the declared socket_path %q", sm.C2DSocketPath, socketPath)
 	}
-
+	daemon := &recordingDaemon{}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.Serve(ctx) }()
+	go func() { serveErr <- sm.ServeC2DStandalone(ctx, sm.C2DSocketPath, daemon) }()
 
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer dialCancel()
-	var client *c2dm.ServiceManager
+	// Ready once the stale file has been replaced by a socket AND the socket is
+	// locked down: the chassis listens first and chmods after, so the mode is
+	// only final a moment after the file appears. A host that never restricts
+	// it fails here at the deadline.
 	for {
 		info, err := os.Stat(socketPath)
-		if err == nil && info.Mode()&os.ModeSocket != 0 {
+		if err == nil && info.Mode()&os.ModeSocket != 0 && info.Mode().Perm() == 0o600 {
 			break
 		}
 		select {
 		case err := <-serveErr:
-			t.Fatalf("c2d server exited before listening: %v", err)
+			t.Fatalf("standalone c2d host exited before listening: %v", err)
 		case <-dialCtx.Done():
-			t.Fatalf("c2d socket never appeared at %s", socketPath)
+			t.Fatalf("no owner-only (0600) c2d socket at %s (last stat: %v, %v); the socket ACL is the c2d auth boundary", socketPath, info, err)
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	info, err := os.Stat(socketPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("c2d socket mode = %o, want 0600 (the socket ACL is the c2d auth boundary)", perm)
-	}
 
-	client, err = c2dm.Dial(dialCtx, socketPath)
+	client, err := c2dm.Dial(dialCtx, socketPath)
 	if err != nil {
 		t.Fatalf("dial c2d socket: %v", err)
 	}
@@ -188,17 +196,25 @@ func TestGeneratedC2DServerOverSocket(t *testing.T) {
 		t.Fatalf("stream handler hits = %d, want 1", got)
 	}
 
-	// Shutdown: Serve returns cleanly and removes the socket file.
+	if got := daemon.shutdownCalls.Load(); got != 0 {
+		t.Fatalf("Handler.Shutdown ran while serving (calls = %d)", got)
+	}
+
+	// Shutdown: the entry returns cleanly, removes the socket file and calls
+	// Handler.Shutdown once.
 	cancel()
 	select {
 	case err := <-serveErr:
 		if err != nil {
-			t.Fatalf("c2d server returned %v on shutdown", err)
+			t.Fatalf("standalone c2d host returned %v on shutdown", err)
 		}
 	case <-time.After(35 * time.Second):
-		t.Fatal("c2d server did not stop after its context was cancelled")
+		t.Fatal("standalone c2d host did not stop after its context was cancelled")
 	}
 	if _, err := os.Stat(socketPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("socket file still present after shutdown (stat err = %v)", err)
+	}
+	if got := daemon.shutdownCalls.Load(); got != 1 {
+		t.Fatalf("Handler.Shutdown calls after shutdown = %d, want 1", got)
 	}
 }

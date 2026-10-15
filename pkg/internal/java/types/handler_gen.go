@@ -163,6 +163,7 @@ type javaSmTemplateData struct {
 	HasTlsGrpc            bool   // true when non-c2d gRPC services exist (need the TLS server)
 	HasC2DGrpc            bool   // true when service_c2d services are hosted on the c2d socket server
 	C2DSocketPath         string // service_c2d socket_path the daemon binds (required, no default)
+	HostsC2DStandalone    bool   // emit serveC2DStandalone: c2d is the whole surface and nothing needs the cluster (service.HostsC2DStandalone)
 	HasStates             bool
 	HasGrpcS2SClients     bool
 	HasServiceHealthState bool
@@ -620,6 +621,16 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		HasDiskStores:          len(diskStores) > 0,
 		HasApprovalBroker:      hasApprovalBroker,
 		ApprovalBroker:         approvalBroker,
+		HostsC2DStandalone: service.HostsC2DStandalone(service.C2DHostShape{
+			HostsC2D:       len(c2dSockets) > 0,
+			HostsNonC2D:    hasTlsGrpc,
+			States:         len(config.States) > 0 || config.AllStates,
+			S2SClients:     len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
+			Subscriptions:  len(subs) > 0,
+			RecordReaders:  len(recordReaders) > 0,
+			DiskStores:     len(diskStores) > 0,
+			ApprovalBroker: hasApprovalBroker,
+		}),
 	}, nil
 }
 

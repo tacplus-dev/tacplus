@@ -267,6 +267,30 @@ descriptor, and the ServiceManager wires no authorizer into a c2d wrapper. A
 Go or Java c2d server that fails to start ends `Run`/`run` with the error; the
 Rust ServiceManager logs it. Python and TypeScript are client-only targets.
 
+**C2D standalone host**: a local daemon has no cluster, so it cannot call
+`New`/`create`/`new()` (config load, identity manager, state store) or `Run`.
+For a build whose every hosted service is `service_c2d` and that declares
+nothing cluster-bound (no state, S2S client, subscription, record reader, disk
+store or `requires_device` gate), the generated ServiceManager package also
+emits a standalone host entry: Go `sm.ServeC2DStandalone(ctx, socketPath, h)`,
+Java `ServiceManager.serveC2DStandalone(socketPath, handler, stop)`, Rust
+`ServiceManager::serve_c2d_standalone(socket_path, handler, shutdown)`. It
+builds the generated wrappers from the generated `Handler` and serves them
+through the same c2d mount `Run` uses, so the validation, the auth skip and the
+0600 fail-closed socket are identical; it loads no config, mints no identity,
+opens no state store and starts no TLS server. It serves until the context is
+cancelled (Go), the `stop` future completes (Java) or the `shutdown` future
+resolves (Rust), drains in-flight RPCs, removes the socket and then calls the
+handler's shutdown (bounded at 30 s in Go and Rust); a socket that cannot be
+bound or locked down is returned (thrown in Java) without calling it. A daemon
+passes the generated constant for the declared path (Go `sm.C2DSocketPath`,
+Java `ServiceManager.C2D_SOCKET_PATH`, Rust `s2sm::C2D_SOCKET_PATH`, which
+`Run` also serves on and clients dial); a test passes its own path so it never
+takes over the socket of a daemon running on the same host. The decision is
+one shared rule (`service.HostsC2DStandalone`); every other shape keeps
+`New` + `Run` only, including a c2d-only daemon that also reads state or calls
+a peer, because that daemon needs the cluster `Run` brings up.
+
 ### Client Send Contract
 
 Generated clients validate before sending. Auth scope depends on the call

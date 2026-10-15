@@ -225,29 +225,35 @@ harness than the REST fixture, which needs no proxy at all.
 
 ---
 
-## C2D-1 — the C2D server runs through its generated mount, not through `Run`
+## C2D-1 — the C2D server runs through its standalone host, not through `Run`
 
-**Status:** Go and Java covered up to the ServiceManager's mount function;
-Rust's `C2dServer` has no runtime test.
+**Status:** Go, Java and Rust covered up to the c2d mount `Run` shares with the
+standalone host; `Run`'s own call of that mount is not executed.
 
-`cross-test/c2d-server` (`just c2d-server`) generates a c2d-only daemon,
-compiles the whole generated model, hosts the generated wrapper through the
-same generated function the ServiceManager mounts it with (Go `newC2DServer`,
-Java `ServiceManager.newC2DServer`) on the declared socket, and calls it over
-the socket through the generated c2dm client: a tokenless valid call, request
-and response validation, server streaming, the 0600 mode, stale-socket
-removal and cleanup. Proven by reverting: dropping the c2d auth skip from the
-Go wrapper, or widening the chmod in either chassis, turns it red.
+`cross-test/c2d-server` (`just c2d-server`) generates a c2d-only, cluster-free
+daemon, compiles the whole generated model, and starts it through the
+generated standalone host entry (Go `sm.ServeC2DStandalone`, Java
+`ServiceManager.serveC2DStandalone`, Rust `ServiceManager::serve_c2d_standalone`)
+from code outside the generated packages, exactly as a cluster-less daemon's
+main does, on the declared socket (the generated `C2DSocketPath` /
+`C2D_SOCKET_PATH`). It calls it over the socket through the generated c2dm
+client: a tokenless valid call, request and response validation, server
+streaming, the 0600 mode, stale-socket removal, and on stop the drain, socket
+cleanup and exactly one handler shutdown. Proven by reverting, 2026-10-15:
+dropping unary request validation from the Go, Java or Rust wrapper generator,
+or dropping the handler shutdown call from any of the three entries, turns
+the matching leg red. Earlier (2026-10-14): dropping the c2d auth skip from
+the Go wrapper, or widening the chmod in either Go or Java chassis, turned it
+red.
 
-What it does not run is the `Run()` / `run()` line that calls that mount:
-`Run` needs a live cluster (config, identity, state store) that no in-repo
-fixture provides, so that line is pinned by the gate's grep and by the mixed
-TLS + c2d render tests (`c2d_server_render_test.go` under go/types and
-java/types), not executed. Rust's `C2dServer` is exercised by neither.
+What it does not run is the `Run()` / `run()` line that mounts the same
+server on `C2DSocketPath`: `Run` needs a live cluster (config, identity, state
+store) that no in-repo fixture provides, so that line is pinned by the gate's
+grep and by the mixed TLS + c2d render tests (`c2d_server_render_test.go`
+under go/types and java/types), not executed.
 
 **To close:** a ServiceManager harness that can boot `Run` against a fake
-cluster, or a Rust leg in `cross-test/c2d-server` that hosts the generated
-`C2dServer` the same way.
+cluster.
 
 ---
 

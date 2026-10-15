@@ -37,13 +37,22 @@ impl C2dServer {
         self
     }
 
-    /// Start serving on the Unix socket. Blocks until shutdown.
+    /// Start serving on the Unix socket. Blocks until the task is dropped.
+    pub async fn serve(self) -> Result<(), Box<dyn std::error::Error>> {
+        self.serve_with_shutdown(std::future::pending()).await
+    }
+
+    /// Start serving on the Unix socket. Returns once `shutdown` resolves and
+    /// in-flight RPCs have drained; the socket file is removed on return.
     ///
     /// Removes any stale socket file before binding, then restricts the socket
     /// file itself to owner-only (0o600). c2d has no token auth, so these
     /// filesystem permissions are the access boundary — if the chmod fails the
     /// server refuses to serve rather than expose an unauthenticated socket.
-    pub async fn serve(mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn serve_with_shutdown<F>(mut self, shutdown: F) -> Result<(), Box<dyn std::error::Error>>
+    where
+        F: std::future::Future<Output = ()>,
+    {
         let router = self.router.take().ok_or("no router configured")?;
 
         // Remove stale socket file.
@@ -81,7 +90,7 @@ impl C2dServer {
 
         let incoming = tokio_stream::wrappers::UnixListenerStream::new(uds);
         router
-            .serve_with_incoming(incoming)
+            .serve_with_incoming_shutdown(incoming, shutdown)
             .await?;
 
         Ok(())

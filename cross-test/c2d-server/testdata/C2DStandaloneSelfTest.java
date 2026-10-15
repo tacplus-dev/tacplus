@@ -1,29 +1,33 @@
 // Copyright (c) 2026 Seabeam LLC
 // SPDX-License-Identifier: Apache-2.0
 //
-// Runtime coverage for the generated Java C2D server, in the main()-style the
-// other generated Java self-tests use. It lives in the generated s2sm package
-// so it can call ServiceManager.newC2DServer, the same generated method
-// ServiceManager.run mounts the service_c2d wrappers with, and hosts the
-// generated LocalDaemon wrapper on the fixture's declared socket_path. Calls
-// go over the real Unix socket, through the generated c2dm client.
+// Runtime coverage for the generated Java standalone C2D host, in the
+// main()-style the other generated Java self-tests use. It lives OUTSIDE the
+// generated model packages and reaches the daemon only the way a cluster-less
+// daemon's main does: it implements the generated s2sm Handler and calls the
+// public ServiceManager.serveC2DStandalone, with no config, no identity and no
+// state store anywhere in the process. Calls go over the real Unix socket,
+// through the generated c2dm client.
 //
 // What each check would catch:
 //   - a valid call succeeds with NO token and NO authorizer: a c2d wrapper
 //     that demanded token auth could not serve it;
 //   - an invalid request sent on the raw stub (the c2dm client validates
 //     before sending, so it would never reach the server) is INVALID_ARGUMENT
-//     and never reaches the handler: the wrapper still validates;
+//     and never reaches the handler: the standalone host serves the generated
+//     wrapper, not the bare handler;
 //   - a handler response that breaks its constraints is INTERNAL: the full
 //     handler pipeline runs, not just the request half;
 //   - the socket file is mode 0600 and replaced a stale file left at the
 //     path: the access boundary and the stale-socket removal;
-//   - the socket file is gone after shutdown.
+//   - completing the stop future ends serveC2DStandalone normally, the socket
+//     file is gone, and Handler.shutdown ran exactly once, after the drain.
 
-package com.example.c2dserver.model.s2sm;
+package com.example.c2dserver.daemon;
 
-import com.example.c2dserver.model.chassis.grpcserver.C2DServer;
 import com.example.c2dserver.model.chassis.servicemanager.Caller;
+import com.example.c2dserver.model.s2sm.Handler;
+import com.example.c2dserver.model.s2sm.ServiceManager;
 import com.example.c2dserver.model.s2sm.internal.grpc.servers.svc.c2dserver.LocalDaemon;
 import com.example.c2dserver.model.types.svc.c2dserver.C2dserver;
 import com.example.c2dserver.model.types.svc.c2dserver.LocalDaemonGrpc;
@@ -42,12 +46,13 @@ import java.nio.file.Paths;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-public class C2DServerSelfTest {
+public class C2DStandaloneSelfTest {
     private static final String SOCKET_PATH = "/tmp/tacplus-c2d-server-check/daemon.sock";
     private static int failures = 0;
 
@@ -58,9 +63,21 @@ public class C2DServerSelfTest {
         }
     }
 
-    static final class RecordingDaemon implements LocalDaemon.LocalDaemonHandler {
+    static final class RecordingDaemon implements Handler, LocalDaemon.LocalDaemonHandler {
         final AtomicInteger unaryHits = new AtomicInteger();
         final AtomicInteger streamHits = new AtomicInteger();
+        final AtomicInteger shutdownCalls = new AtomicInteger();
+
+        // The generated Handler: the c2d getter and shutdown, nothing cluster-bound.
+        @Override
+        public LocalDaemon.LocalDaemonHandler getLocalDaemonGrpcImpl() {
+            return this;
+        }
+
+        @Override
+        public void shutdown() {
+            shutdownCalls.incrementAndGet();
+        }
 
         @Override
         public C2dserver.LocalResponse getLocal(Caller caller, C2dserver.LocalRequest request) {
@@ -99,11 +116,38 @@ public class C2DServerSelfTest {
         Files.deleteIfExists(socket);
         Files.writeString(socket, "stale");
 
+        // A daemon passes the generated constant for the declared socket_path.
+        check(ServiceManager.C2D_SOCKET_PATH.equals(SOCKET_PATH),
+                "ServiceManager.C2D_SOCKET_PATH = " + ServiceManager.C2D_SOCKET_PATH + ", want the declared socket_path " + SOCKET_PATH);
         RecordingDaemon daemon = new RecordingDaemon();
-        C2DServer srv = ServiceManager.newC2DServer(new LocalDaemon(daemon));
-        check(srv.socketPath().equals(SOCKET_PATH),
-                "generated c2d server socket = " + srv.socketPath() + ", want the declared socket_path " + SOCKET_PATH);
-        srv.start();
+        CompletableFuture<Void> stop = new CompletableFuture<>();
+        AtomicReference<Throwable> serveErr = new AtomicReference<>();
+        Thread host = new Thread(() -> {
+            try {
+                ServiceManager.serveC2DStandalone(ServiceManager.C2D_SOCKET_PATH, daemon, stop);
+            } catch (Throwable t) {
+                serveErr.set(t);
+            }
+        }, "c2d-standalone-host");
+        host.start();
+        // Ready once the stale regular file has been replaced by the socket AND
+        // the socket is locked down: the chassis binds first and chmods after,
+        // so the mode is only final a moment after the file appears. A host
+        // that never restricts it fails here at the deadline.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!(Files.exists(socket) && !Files.isRegularFile(socket)
+                && PosixFilePermissions.toString(Files.getPosixFilePermissions(socket)).equals("rw-------"))) {
+            if (!host.isAlive()) {
+                System.err.println("FAIL: standalone c2d host exited before listening: " + serveErr.get());
+                System.exit(1);
+            }
+            if (System.nanoTime() > deadline) {
+                System.err.println("FAIL: no owner-only (rw-------) c2d socket at " + SOCKET_PATH
+                        + (Files.exists(socket) ? " (mode " + PosixFilePermissions.toString(Files.getPosixFilePermissions(socket)) + ")" : ""));
+                System.exit(1);
+            }
+            Thread.sleep(20);
+        }
 
         String perms = PosixFilePermissions.toString(Files.getPosixFilePermissions(socket));
         check(perms.equals("rw-------"), "c2d socket mode = " + perms + ", want rw------- (the socket ACL is the c2d auth boundary)");
@@ -160,15 +204,22 @@ public class C2DServerSelfTest {
             clientGroup.shutdownGracefully();
         }
 
-        // Shutdown: the socket file is removed.
-        srv.shutdown();
+        check(daemon.shutdownCalls.get() == 0, "Handler.shutdown ran while serving (calls = " + daemon.shutdownCalls.get() + ")");
+
+        // Shutdown: the entry returns normally, removes the socket file and
+        // calls Handler.shutdown once.
+        stop.complete(null);
+        host.join(TimeUnit.SECONDS.toMillis(40));
+        check(!host.isAlive(), "standalone c2d host did not stop after its stop future completed");
+        check(serveErr.get() == null, "standalone c2d host failed: " + serveErr.get());
         check(!Files.exists(socket), "socket file still present after shutdown");
+        check(daemon.shutdownCalls.get() == 1, "Handler.shutdown calls after shutdown = " + daemon.shutdownCalls.get() + ", want 1");
 
         if (failures > 0) {
-            System.err.println(failures + " C2D server check(s) failed");
+            System.err.println(failures + " C2D standalone host check(s) failed");
             System.exit(1);
         }
-        System.out.println("C2D server self-test passed");
+        System.out.println("C2D standalone host self-test passed");
         System.exit(0);
     }
 }

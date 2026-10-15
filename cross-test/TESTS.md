@@ -45,15 +45,17 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   This is the only in-repo host of a generated
   Rust W2S SERVER surface. Local/manual (`just w2s-validate`); not yet in CI.
 - `c2d-server` (`cross-test/c2d-server/run.sh`): behavioral gate for the
-  generated Go and Java C2D server. Generates a c2d-only daemon, compiles the
-  whole generated model, hosts the generated wrapper through the ServiceManager's
-  own mount (`newC2DServer`) on the declared socket, and calls it over the
-  socket through the generated c2dm client: a tokenless valid call succeeds,
-  invalid requests and constraint-breaking responses are rejected server-side,
-  server streaming works, the socket is 0600, a stale file at the path is
-  replaced, and the socket is removed on shutdown. Does not run `Run()` itself
-  or Rust (`docs/KNOWN_TEST_GAPS.md` C2D-1). Local (`just c2d-server`, part of
-  `just gates`); not yet in CI.
+  generated Go, Java and Rust standalone C2D host. Generates a c2d-only,
+  cluster-free daemon, compiles the whole generated model, starts it through
+  the generated standalone entry (`ServeC2DStandalone` /
+  `serveC2DStandalone` / `serve_c2d_standalone`) from code outside the
+  generated packages on the declared socket, and calls it over the socket
+  through the generated c2dm client: a tokenless valid call succeeds, invalid
+  requests and constraint-breaking responses are rejected server-side, server
+  streaming works, the socket is 0600, a stale file at the path is replaced,
+  and on stop the socket is removed and the handler's shutdown runs once.
+  Does not run `Run()` itself (`docs/KNOWN_TEST_GAPS.md` C2D-1). Local
+  (`just c2d-server`, part of `just gates`); not yet in CI.
 - `mcp-floor-version` (`cross-test/mcp-floor-version/run.sh`): rmcp floor gate
   for the generated Rust MCP dispatch — generates a service owning one
   `RPC_PRINCIPAL_MCP` tool, pins `rmcp` to the EXACT version

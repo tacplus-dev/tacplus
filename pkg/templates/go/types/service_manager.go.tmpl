@@ -948,12 +948,50 @@ auth grpcserver.Authorizer
 
 {{- if .HasC2DGrpc}}
 
-// newC2DServer hosts the service_c2d wrappers on the declared socket_path
+// C2DSocketPath is the unix socket this build's service_c2d services declare
 // (spec.service_c2d.socket_path — required, no default, which would collide
-// between daemons). The wrappers skip token auth: the socket's owner-only
-// permissions are the boundary, not a bearer token.
-func newC2DServer(impls ...grpcserver.ServiceImplementation) *grpcserver.C2DServer {
-return grpcserver.NewC2DServer("{{.C2DSocketPath}}", &multiWrapper{impls: impls})
+// between daemons). Run serves on it; clients dial it.
+const C2DSocketPath = "{{.C2DSocketPath}}"
+
+// newC2DServer hosts the service_c2d wrappers on socketPath. The wrappers skip
+// token auth: the socket's owner-only permissions are the boundary, not a
+// bearer token.
+func newC2DServer(socketPath string, impls ...grpcserver.ServiceImplementation) *grpcserver.C2DServer {
+return grpcserver.NewC2DServer(socketPath, &multiWrapper{impls: impls})
+}
+{{- end}}
+{{- if .HostsC2DStandalone}}
+
+// c2dStandaloneShutdownTimeout bounds h.Shutdown in ServeC2DStandalone, which
+// has no config to read shutdown_timeout_seconds from.
+const c2dStandaloneShutdownTimeout = 30 * time.Second
+
+// ServeC2DStandalone hosts this build's service_c2d services on socketPath with
+// NO cluster: no config load, no identity manager, no state store, no TLS
+// server. It is the generated c2d server and the generated wrappers
+// (request/response validation, the c2d token-auth skip) and nothing else, for
+// a local daemon that cannot call New. It is emitted only because every
+// service this build hosts is service_c2d and nothing in it needs the cluster;
+// New and Run stay for running the same daemon in one.
+//
+// A daemon passes C2DSocketPath, the declared socket; a test passes its own
+// so it never takes over the socket of a daemon already running on the host.
+// It serves until ctx is cancelled, drains in-flight RPCs, removes the socket
+// and then calls h.Shutdown. A socket that cannot be bound or locked down to
+// owner-only is returned as an error, without calling h.Shutdown.
+func ServeC2DStandalone(ctx context.Context, socketPath string, h Handler) error {
+srv := newC2DServer(socketPath,
+{{- range .GrpcServices}}
+{{.WrapperAlias}}.{{.ConstructorName}}(h.{{.GetterName}}()),
+{{- end}}
+)
+if err := srv.Serve(ctx); err != nil {
+return fmt.Errorf("c2d server: %w", err)
+}
+shutdownCtx, cancel := context.WithTimeout(context.Background(), c2dStandaloneShutdownTimeout)
+defer cancel()
+h.Shutdown(shutdownCtx)
+return nil
 }
 {{- end}}
 
@@ -1416,7 +1454,7 @@ sm.tasks.Go(func(taskCtx context.Context) { errCh <- healthOnlySrv.Listen(taskCt
 {{if .HasC2DGrpc}}
 // Start the c2d unix socket server for local daemon IPC services. No TLS, no
 // token auth — the socket's owner-only permissions guard access.
-c2dSrv := newC2DServer(
+c2dSrv := newC2DServer(C2DSocketPath,
 {{- range .GrpcServices}}
 {{- if .IsC2D}}
 {{.WrapperVarName}},

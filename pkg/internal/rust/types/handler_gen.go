@@ -145,6 +145,7 @@ type smTemplateData struct {
 	HasMcpGrpc              bool // true when any service is an MCP-only carrier (needs the same authorizer wiring as C2S)
 	HasC2DGrpc              bool
 	C2DSocketPath           string // service_c2d socket_path the daemon binds (required, no default)
+	HostsC2DStandalone      bool   // emit serve_c2d_standalone: c2d is the whole surface and nothing needs the cluster (service.HostsC2DStandalone)
 	HasStates               bool
 	HasSysState             bool
 	HasS2SClients           bool
@@ -652,6 +653,18 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		KeepaliveTimeSecs:          keepaliveconst.TimeSecs,
 		KeepaliveTimeoutSecs:       keepaliveconst.TimeoutSecs,
 		KeepalivePermitMinTimeSecs: keepaliveconst.PermitMinTimeSecs,
+		// An MCP-only service has no GrpcServices entry (see HasAutoTls above)
+		// but still serves on the TLS listener, so it counts as non-c2d here.
+		HostsC2DStandalone: service.HostsC2DStandalone(service.C2DHostShape{
+			HostsC2D:       hasC2DGrpc,
+			HostsNonC2D:    hasTlsGrpc || hasMcpRpcs,
+			States:         len(config.States) > 0 || config.AllStates,
+			S2SClients:     len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
+			Subscriptions:  len(config.Subscriptions) > 0,
+			RecordReaders:  len(recordReaders) > 0,
+			DiskStores:     len(diskStores) > 0,
+			ApprovalBroker: hasApprovalBroker,
+		}),
 	}, nil
 }
 

@@ -27,6 +27,9 @@ x509_pb "{{.ModuleBasePath}}/types/sys/x509"
 // Construct your Handler in main.go using the accessors on ServiceManager
 // (e.g. sm.StateClients(), sm.GrpcClients(), sm.Authorize()), then pass it
 // to sm.Run(h).
+{{- if .HostsC2DStandalone}}
+// A local daemon with no cluster passes it to ServeC2DStandalone instead.
+{{- end}}
 //
 // Generated code handles all infrastructure concerns:
 //   - Loading bootstrap and runtime config (TLS, listen address, logger)

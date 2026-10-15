@@ -19,6 +19,7 @@ the commit history since August.
 | ~~**Generated handler for the client-facing record read plane**~~ **Closed 2026-10-14**: Go (`s2sm/record_c2s.go`) and Java (`<Svc>RecordsGeneratedHandler.java`) generate the `<Svc>Records` handler from the shared plan, bind it in the ServiceManager, and drop its getter from the author's Handler, as Rust does. | | | | |
 | ~~**MCP follow-ups after the shared termination.**~~ **Closed 2026-10-14**: Go and Java mount MCP-only services (a `HasMcp` service with no `service_*` annotation gets a wrapper, a Handler entry and a ServiceManager mount), expose a session-free `Call` / `call` on the generated surface, and were already registering the carrier's own auth policy, which is now pinned by tests in both. | | | | |
 | ~~**C2D server hosting.**~~ **Closed 2026-10-14**: Go (`chassis/grpcserver/c2d.go`: `C2DServer`, mounted by `newC2DServer` in the ServiceManager) and Java (`chassis/grpcserver/C2DServer.java`, mounted by `ServiceManager.newC2DServer`) host the package's own `service_c2d` services on the declared `socket_path` (owner-only, fail-closed), off the TLS listener and with no token auth, as Rust's `C2dServer` does; the wrapper set and the socket-path rule are shared (`service.IsC2DServer`, `service.HostedC2DSocketPath`). The `c2d-server` cross-test hosts both over a real socket through the generated c2dm client; see `docs/API.md`, C2D server auth-skip scope, and `docs/KNOWN_TEST_GAPS.md` C2D-1 for what it does not run. | | | | |
+| ~~**C2D standalone host (cluster-less daemon).**~~ **Closed 2026-10-15**: all three emit a standalone entry for a c2d-only, cluster-free build, decided by one shared rule (`service.HostsC2DStandalone`): Go `sm.ServeC2DStandalone(ctx, socketPath, h)`, Java `ServiceManager.serveC2DStandalone(socketPath, handler, stop)`, Rust `ServiceManager::serve_c2d_standalone(socket_path, handler, shutdown)`, each through the same c2d mount `Run` uses (`newC2DServer` / `new_c2d_server`, now taking the path, with the declared one exported as `C2DSocketPath` / `C2D_SOCKET_PATH`). Rust's `C2dServer` gained `serve_with_shutdown` for it. The `c2d-server` cross-test starts all three through the entry from outside the generated packages; see `docs/API.md`, C2D standalone host. | | | | |
 
 ## Go or Java has it, the others do not
 
@@ -46,8 +47,9 @@ the commit history since August.
 ## Test coverage asymmetries
 
 - `w2s-validate` (W2S server dispatch) runs for Rust, Go and Java.
-- `c2d-server` (C2D server hosting) runs for Go and Java; Rust's `C2dServer`
-  has no runtime gate (`docs/KNOWN_TEST_GAPS.md` C2D-1).
+- `c2d-server` (C2D server hosting) runs for Go, Java and Rust, through the
+  standalone host entry; `Run`'s own c2d line is still not executed
+  (`docs/KNOWN_TEST_GAPS.md` C2D-1).
 - `server-runtime` hosts Java and Rust servers driven by the Go client; the Go
   server runtime is covered by `runtime-smoke` (Python and TypeScript clients).
 - `docs/KNOWN_TEST_GAPS.md` lists the gates that are green without exercising

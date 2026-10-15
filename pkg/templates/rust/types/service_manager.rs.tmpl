@@ -2002,24 +2002,14 @@ impl ServiceManager {
         // No TLS, no auth — filesystem permissions guard access.
         #[cfg(unix)]
         {
-            // Socket path is declared per-service via spec.service_c2d.socket_path
-            // (required — no default, which would collide between daemons).
-            let socket_path = std::path::PathBuf::from("{{.C2DSocketPath}}");
-            // Build tonic Routes from c2d service implementations.
-            let c2d_routes = tonic::service::Routes::new(tonic_health::server::health_reporter().1)
+            let c2d_server = new_c2d_server(
+                C2D_SOCKET_PATH,
 {{- range .GrpcServices}}
 {{- if .IsC2D}}
-                .add_service(
-                    {{.TypesBasePath}}::{{.ServerModName}}::{{.ServerType}}::new(
-                        {{.WrapperVar}}.clone(),
-                    ),
-                )
+                {{.WrapperVar}}.clone(),
 {{- end}}
 {{- end}}
-            ;
-            let c2d_router = tonic::transport::Server::builder()
-                .add_routes(c2d_routes);
-            let c2d_server = C2dServer::new(socket_path).router(c2d_router);
+            );
             self.spawn_owned(async move {
                 if let Err(e) = c2d_server.serve().await {
                     tracing::error!(error = %e, "c2d server failed");
@@ -2189,6 +2179,81 @@ impl ServiceManager {
         Ok(())
     }
 }
+{{- if .HostsC2DStandalone}}
+
+/// Bounds `handler.shutdown()` in `serve_c2d_standalone`, which has no config to
+/// read shutdown_timeout_seconds from.
+#[cfg(unix)]
+const C2D_STANDALONE_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+impl ServiceManager {
+    /// Hosts this build's service_c2d services on `socket_path` with NO cluster:
+    /// no config load, no identity manager, no state store, no TLS server. It is
+    /// the generated c2d server and the generated wrappers (request/response
+    /// validation, the c2d token-auth skip) and nothing else, for a local daemon
+    /// that cannot call `new()`. It is emitted only because every service this
+    /// build hosts is service_c2d and nothing in it needs the cluster; `new()`
+    /// and `run()` stay for running the same daemon in one.
+    ///
+    /// A daemon passes `C2D_SOCKET_PATH`, the declared socket; a test passes its
+    /// own so it never takes over the socket of a daemon already running on the
+    /// host. Serves until `shutdown` resolves, drains in-flight RPCs, removes the
+    /// socket and then calls `handler.shutdown()`. A socket that cannot be bound
+    /// or locked down to owner-only is returned as an error, without calling
+    /// `handler.shutdown()`.
+    #[cfg(unix)]
+    pub async fn serve_c2d_standalone<F>(
+        socket_path: &str,
+        handler: Arc<dyn Handler>,
+        shutdown: F,
+    ) -> Result<(), Box<dyn std::error::Error>>
+    where
+        F: std::future::Future<Output = ()>,
+    {
+        new_c2d_server(
+            socket_path,
+{{- range .GrpcServices}}
+            {{.WrapperModPath}}::ValidationWrapper::new(handler.{{.GetterName}}()),
+{{- end}}
+        )
+        .serve_with_shutdown(shutdown)
+        .await?;
+        if tokio::time::timeout(C2D_STANDALONE_SHUTDOWN_TIMEOUT, handler.shutdown()).await.is_err() {
+            tracing::warn!(timeout_secs = C2D_STANDALONE_SHUTDOWN_TIMEOUT.as_secs(), "Shutdown timeout expired");
+        }
+        Ok(())
+    }
+}
+{{- end}}
+{{- if .HasC2DGrpc}}
+
+/// The unix socket this build's service_c2d services declare
+/// (spec.service_c2d.socket_path — required, no default, which would collide
+/// between daemons). `run()` serves on it; clients dial it.
+pub const C2D_SOCKET_PATH: &str = "{{.C2DSocketPath}}";
+
+/// Hosts the service_c2d wrappers on `socket_path`. The wrappers skip token
+/// auth: the socket's owner-only permissions are the boundary, not a bearer
+/// token.
+#[cfg(unix)]
+fn new_c2d_server(
+    socket_path: &str,
+{{- range .GrpcServices}}
+{{- if .IsC2D}}
+    {{.WrapperVar}}: {{.WrapperModPath}}::ValidationWrapper,
+{{- end}}
+{{- end}}
+) -> C2dServer {
+    let c2d_routes = tonic::service::Routes::new(tonic_health::server::health_reporter().1)
+{{- range .GrpcServices}}
+{{- if .IsC2D}}
+        .add_service({{.TypesBasePath}}::{{.ServerModName}}::{{.ServerType}}::new({{.WrapperVar}}))
+{{- end}}
+{{- end}}
+        ;
+    C2dServer::new(socket_path).router(tonic::transport::Server::builder().add_routes(c2d_routes))
+}
+{{- end}}
 {{- if or .HasC2SGrpc .HasS2SGrpc .HasMcpGrpc}}
 
 /// Bridges the grpcserver Authorizer to per-service ValidationWrapper Authorizer traits.

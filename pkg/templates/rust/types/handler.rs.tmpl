@@ -37,6 +37,10 @@ use crate::types::generated::eventbus_support::eventbus_support::RecordMeta;
 /// Construct your Handler in main.rs using the accessors on ServiceManager
 /// (e.g. sm.state_clients(), sm.grpc_clients(), sm.authorize()), then pass it
 /// to sm.run(handler).
+{{- if .HostsC2DStandalone}}
+/// A local daemon with no cluster passes it to
+/// `ServiceManager::serve_c2d_standalone` instead.
+{{- end}}
 ///
 /// Generated code handles all infrastructure concerns:
 ///   - Loading bootstrap and runtime config (TLS, listen address, logger)

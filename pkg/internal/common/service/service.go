@@ -544,6 +544,37 @@ func HostedC2DSocketPath(sockets []C2DSocket) (string, error) {
 	return path, nil
 }
 
+// C2DHostShape is the build shape the standalone c2d host decision reads. Each
+// language fills it from the flags its ServiceManager data already computes.
+type C2DHostShape struct {
+	HostsC2D    bool // hosts its own service_c2d services
+	HostsNonC2D bool // hosts any service on the TLS gRPC listener (S2S, C2S, W2S, MCP)
+	// Cluster-bound features. Each one is wired from what New() loads (config,
+	// identity, state store); publishers, accounting, trace, SMB and auto-TLS
+	// all ride on a state, so they are covered by States.
+	States         bool
+	S2SClients     bool
+	Subscriptions  bool
+	RecordReaders  bool
+	DiskStores     bool
+	ApprovalBroker bool
+}
+
+// HostsC2DStandalone reports whether the generated ServiceManager also gets the
+// standalone c2d host entry: a local daemon that serves its service_c2d
+// services through the generated c2d server and wrappers with no cluster at
+// all (no config load, identity manager, state store or TLS server). That is
+// only sound when the c2d services are the whole server surface AND nothing in
+// the build needs the cluster. Any other shape keeps New + Run alone: a c2d
+// daemon that also reads state or calls a peer needs the cluster Run brings up,
+// so there is one answer for every shape and nothing to guess.
+func HostsC2DStandalone(s C2DHostShape) bool {
+	if !s.HostsC2D || s.HostsNonC2D {
+		return false
+	}
+	return !(s.States || s.S2SClients || s.Subscriptions || s.RecordReaders || s.DiskStores || s.ApprovalBroker)
+}
+
 // ResolveC2DClientServices returns the services that should get c2d
 // (client-to-daemon) gRPC client helpers generated.
 func ResolveC2DClientServices(config *tactype.Config, servicesInfo []ServiceInfo) []ServiceInfo {

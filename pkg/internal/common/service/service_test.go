@@ -702,3 +702,23 @@ func TestExplicitS2SClientSurvivesRecordReadDerivation(t *testing.T) {
 		}
 	}
 }
+
+func TestHostsC2DStandaloneOnlyForAClusterFreeC2DOnlyBuild(t *testing.T) {
+	if !HostsC2DStandalone(C2DHostShape{HostsC2D: true}) {
+		t.Fatal("a build whose whole surface is service_c2d and that needs no cluster must get the standalone host")
+	}
+	for name, s := range map[string]C2DHostShape{
+		"no c2d":          {},
+		"tls services":    {HostsC2D: true, HostsNonC2D: true},
+		"states":          {HostsC2D: true, States: true},
+		"s2s clients":     {HostsC2D: true, S2SClients: true},
+		"subscriptions":   {HostsC2D: true, Subscriptions: true},
+		"record readers":  {HostsC2D: true, RecordReaders: true},
+		"disk stores":     {HostsC2D: true, DiskStores: true},
+		"approval broker": {HostsC2D: true, ApprovalBroker: true},
+	} {
+		if HostsC2DStandalone(s) {
+			t.Errorf("%s: got the standalone host; a build that needs the cluster keeps Run only", name)
+		}
+	}
+}

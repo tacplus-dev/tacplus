@@ -802,13 +802,19 @@ public class ServiceManager implements AutoCloseable {
 {{- if .HasC2DGrpc}}
 
     /**
-     * Hosts the service_c2d wrappers on the declared socket_path
+     * The unix socket this build's service_c2d services declare
      * (spec.service_c2d.socket_path — required, no default, which would collide
-     * between daemons). The wrappers skip token auth: the socket's owner-only
-     * permissions are the boundary, not a bearer token.
+     * between daemons). run() serves on it; clients dial it.
      */
-    static C2DServer newC2DServer(io.grpc.BindableService... services) {
-        return new C2DServer("{{.C2DSocketPath}}", new ServiceImplementation() {
+    public static final String C2D_SOCKET_PATH = "{{.C2DSocketPath}}";
+
+    /**
+     * Hosts the service_c2d wrappers on socketPath. The wrappers skip token
+     * auth: the socket's owner-only permissions are the boundary, not a bearer
+     * token.
+     */
+    static C2DServer newC2DServer(String socketPath, io.grpc.BindableService... services) {
+        return new C2DServer(socketPath, new ServiceImplementation() {
             @Override
             public void registerServices(ServerBuilder<?> grpcServerBuilder) {
                 for (io.grpc.BindableService svc : services) {
@@ -820,6 +826,39 @@ public class ServiceManager implements AutoCloseable {
             public void registerRESTEndpoints(Javalin app, String apiPrefix) {
             }
         });
+    }
+{{- end}}
+{{- if .HostsC2DStandalone}}
+
+    /**
+     * Hosts this build's service_c2d services on socketPath with NO cluster: no
+     * config load, no identity manager, no state store, no TLS server. It is the
+     * generated c2d server and the generated wrappers (request/response
+     * validation, the c2d token-auth skip) and nothing else, for a local daemon
+     * that cannot call {@link #create}. It is emitted only because every service
+     * this build hosts is service_c2d and nothing in it needs the cluster;
+     * create and run stay for running the same daemon in one.
+     *
+     * <p>A daemon passes {@link #C2D_SOCKET_PATH}, the declared socket; a test
+     * passes its own so it never takes over the socket of a daemon already
+     * running on the host. Serves until {@code stop} completes, drains
+     * in-flight RPCs, removes the socket and then calls
+     * {@code handler.shutdown()}. A socket that cannot be bound or locked down
+     * to owner-only throws, without calling {@code handler.shutdown()}.
+     */
+    public static void serveC2DStandalone(String socketPath, Handler handler, java.util.concurrent.Future<?> stop) throws Exception {
+        C2DServer c2dSrv = newC2DServer(socketPath, new io.grpc.BindableService[] {
+{{- range .GrpcServices}}
+                new {{.ServerClassName}}(handler.{{.GetterName}}()),
+{{- end}}
+            });
+        c2dSrv.start();
+        try {
+            stop.get();
+        } finally {
+            c2dSrv.shutdown();
+        }
+        handler.shutdown();
     }
 {{- end}}
     /**
@@ -1031,7 +1070,7 @@ public class ServiceManager implements AutoCloseable {
 {{- if .HasC2DGrpc}}
 
         // c2d services run on a separate unix socket server, started below.
-        C2DServer c2dSrv = newC2DServer(new io.grpc.BindableService[] {
+        C2DServer c2dSrv = newC2DServer(C2D_SOCKET_PATH, new io.grpc.BindableService[] {
 {{- range .GrpcServices}}
 {{- if .IsC2D}}
                 {{.WrapperVarName}},

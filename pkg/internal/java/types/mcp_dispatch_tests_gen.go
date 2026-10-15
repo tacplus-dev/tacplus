@@ -294,6 +294,8 @@ func javaMcpTestToolCases(svc *parser.ServiceInfo, t javaMcpTool) string {
     // "%s" has a required field this seam cannot synthesize a value for, so it
     // carries the refusal cases below and no reaches-its-handler case.
 `, t.ToolName)
+	} else if t.OwnerDefaultGuard != "" {
+		b.WriteString(javaMcpTestOwnerDefaultCases(svc, t))
 	} else {
 		args := javaMcpTestArgumentMap(t, "")
 		if t.Page != nil {
@@ -366,6 +368,41 @@ func javaMcpTestToolCases(svc *parser.ServiceInfo, t javaMcpTool) string {
 	return b.String()
 }
 
+// javaMcpTestOwnerDefaultCases renders the two cases of a tool whose
+// (spec.owner_default) guard refuses its access: the gate's self-scoped caller
+// is the row's owner and is refused before the handler, and the paired control —
+// the same call from a caller whose grant carries a wider
+// (spec.principal_scope) — reaches the handler. Without the control a guard that
+// refused every caller would pass.
+func javaMcpTestOwnerDefaultCases(svc *parser.ServiceInfo, t javaMcpTool) string {
+	return fmt.Sprintf(`
+    /** The "%[1]s" call from the row's own self-scoped principal is refused by (spec.owner_default). */
+    private static void %[2]sRefusesTheRowOwner() {
+        StubHandler stub = new StubHandler();
+        %[3]s.Surface surface = new %[3]s.Surface(stub, testCaller());
+        McpSchema.CallToolResult result = surface.%[4]s(
+        new McpSchema.CallToolRequest(%[5]s, %[6]s, null));
+        check(isError(result), "%[1]s refused the row owner");
+        check(resultText(result).contains("(spec.owner_default)"),
+        "%[1]s said why it refused, got: " + resultText(result));
+        check(stub.lastMethod.isEmpty(), "%[1]s never reached the handler, but it saw: " + stub.lastMethod);
+    }
+
+    /** The same "%[1]s" call from a caller granted a wider (spec.principal_scope) reaches %[7]s. */
+    private static void %[2]sAdmitsAWiderPrincipalScope() {
+        StubHandler stub = new StubHandler();
+        Caller wide = new Caller("{\"sub\":\"%[8]s\",\"namespace\":\"%[9]s\","
+                + "\"service_entitlements\":{\"principal_scope\":\"PRINCIPAL_SCOPE_ANY\"}}", "mcp-test-request");
+        %[3]s.Surface surface = new %[3]s.Surface(stub, wide);
+        McpSchema.CallToolResult result = surface.%[4]s(
+        new McpSchema.CallToolRequest(%[5]s, %[6]s, null));
+        check(!isError(result), "%[1]s admitted a caller with a wider principal scope, got: " + resultText(result));
+        check("%[7]s".equals(stub.lastMethod), "%[1]s reached %[7]s, got: " + stub.lastMethod);
+    }
+`, t.ToolName, methodNameLowerCamel(t.Method.Name), javaMcpClassName(svc.Name), javaMcpDispatchMethodName(t),
+		javaQuote(t.ToolName), javaMcpTestArgumentMap(t, ""), t.Method.Name, javaMcpTestSubject, javaMcpTestNamespace)
+}
+
 // javaMcpTestArgumentMap renders the arguments map for a generated tool call:
 // the required scalars with their synthetic values, plus `extra` when the case
 // is the one that smuggles a server-computed field in.
@@ -407,7 +444,9 @@ func javaMcpTestMain(svc *parser.ServiceInfo, tools []javaMcpTool) string {
         mcpSessionServesItsTools();
 `)
 	for _, t := range tools {
-		if javaMcpDrivable(t) {
+		if javaMcpDrivable(t) && t.OwnerDefaultGuard != "" {
+			fmt.Fprintf(&b, "        %[1]sRefusesTheRowOwner();\n        %[1]sAdmitsAWiderPrincipalScope();\n", methodNameLowerCamel(t.Method.Name))
+		} else if javaMcpDrivable(t) {
 			fmt.Fprintf(&b, "        %sReachesItsTypedHandler();\n", methodNameLowerCamel(t.Method.Name))
 		}
 		for _, f := range []string{t.PrincipalField, t.NamespaceField} {
@@ -443,7 +482,9 @@ func javaMcpTestMain(svc *parser.ServiceInfo, tools []javaMcpTool) string {
 func javaMcpTestSessionCase(svc *parser.ServiceInfo, tools []javaMcpTool, p javaMcpFileParams) string {
 	var driven *javaMcpTool
 	for i := range tools {
-		if javaMcpDrivable(tools[i]) {
+		// A tool its (spec.owner_default) guard refuses for this session's
+		// self-scoped caller cannot be the one whose call reaches the handler.
+		if javaMcpDrivable(tools[i]) && tools[i].OwnerDefaultGuard == "" {
 			driven = &tools[i]
 			break
 		}

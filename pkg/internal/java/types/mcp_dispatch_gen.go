@@ -118,6 +118,10 @@ type javaMcpTool struct {
 	// boundary.
 	NamespaceField     string
 	StoreNamespaceRows []javaMcpRowField
+	// OwnerDefaultGuard is the (spec.owner_default) refusal rendered by the same
+	// helper the gRPC wrapper uses, "" when the tool touches no such type or
+	// its access contradicts nothing.
+	OwnerDefaultGuard string
 
 	// Page is the PAGE-collection window, nil for every other rpc. A PAGE tool
 	// takes page_size/page_token as ordinary arguments and calls the same
@@ -206,6 +210,10 @@ func javaMcpTools(svc *parser.ServiceInfo, servicePackage, outerClassName string
 		if err != nil {
 			return nil, fmt.Errorf("%s.%s: %w", svc.Name, m.Name, err)
 		}
+		ownerDefaultGuard, err := javaOwnerDefaultGuard(m, san, servicePackage, javaOwnerDefaultMcpSeam("                "), "                ")
+		if err != nil {
+			return nil, fmt.Errorf("%s.%s: %w", svc.Name, m.Name, err)
+		}
 		empty := javaMcpEmptyRequest(m)
 		scalars, reqOK := []javaMcpScalarArg(nil), true
 		if !empty {
@@ -235,6 +243,7 @@ func javaMcpTools(svc *parser.ServiceInfo, servicePackage, outerClassName string
 			StorePrincipalRows:      san.mcpRowFields(m.FullOutputType, servicePackage, "store_principal"),
 			NamespaceField:          san.mcpAnnotatedStringField(m.FullInputType, servicePackage, "namespace"),
 			StoreNamespaceRows:      san.mcpRowFields(m.FullOutputType, servicePackage, "store_namespace"),
+			OwnerDefaultGuard:       ownerDefaultGuard,
 			Page: javaMcpPageOf(m, resolveJavaMethodType(m.FullOutputType, m.OutputType, servicePackage, outerClassName, crossPkgOuterClasses),
 				crossPkgOuterClasses),
 		})
@@ -287,6 +296,20 @@ func javaMcpToolGeneratable(svc *parser.ServiceInfo, m *parser.MethodInfo, servi
 	if f := javaMcpStoreEpochField(m.FullInputType, san, servicePackage); f != "" {
 		return fmt.Errorf("%s.%s is an MCP tool taking %s, whose field %q carries (spec.store_epoch), but the stamp is rendered by the gRPC wrapper's write path and not by MCP dispatch; a tool call of this write would leave the store epoch unstamped",
 			svc.Name, m.Name, m.FullInputType, f)
+	}
+	// (spec.owner_default): the same decision the gRPC wrapper makes, from the
+	// same helper. javaMcpToolDispatch renders the guard next to the
+	// (spec.principal) stamp, so what is refused here is only what that guard
+	// cannot be rendered against: a request shape with no validation seam at
+	// which the caller can be compared to the row's principal. Go's MCP
+	// dispatch refuses the same set.
+	guard, err := javaOwnerDefaultGuard(m, san, servicePackage, javaOwnerDefaultMcpSeam(""), "")
+	if err != nil {
+		return fmt.Errorf("%s.%s must not be generated as an MCP tool: %w", svc.Name, m.Name, err)
+	}
+	if guard != "" && (javaMcpEmptyRequest(m) || m.IsPageCollection()) {
+		return fmt.Errorf("%s.%s is an MCP tool touching a type whose (spec.owner_default) contradicts its access, but its request shape has no validation seam at which the caller can be compared to the row's principal",
+			svc.Name, m.Name)
 	}
 	return nil
 }
@@ -930,6 +953,10 @@ func javaMcpToolDispatch(serviceName string, t javaMcpTool) string {
 			b.WriteString(javaMcpRequestScopeBlock(t, t.NamespaceField, "namespace", "getNamespace",
 				"an authenticated caller carrying a namespace claim", "the authenticated caller's namespace", ind))
 		}
+		// (spec.owner_default): refuse the access the row's owner does not hold,
+		// from the gRPC wrapper's own helper and in the wrapper's own order —
+		// after the stamps, because the comparison needs the bound principal.
+		b.WriteString(t.OwnerDefaultGuard)
 	}
 
 	// The handler call. Same signature the ordinary gRPC wrapper hands an

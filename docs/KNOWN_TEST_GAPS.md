@@ -156,8 +156,14 @@ whose `find` patterns matched nothing and printed SKIP on every run.
 
 ## NEW-21 — empty-trust-domain classifier is pinned by existence only
 
-**Status:** the typed seam is fixed in both languages. The classifier side has no
-behavioural test.
+**Status (2026-10-15):** closed for Go and Java, open for Rust. Go emits
+`s2sm_identity_error_test.go` and Java now emits `ServiceManagerIdentityErrorTest`
+beside every ServiceManager; `current-generation` runs both in each service
+fixture (permanent, wrapped, text-only and transient cases). Rust's
+`is_permanent_identity_init_error` (missing token minter only, top-level
+downcast) still has no behavioural test: no gate runs the generated model
+crate's unit tests, so a `#[cfg(test)]` module there would be green without
+running. The history below is the original finding.
 
 `isPermanentIdentityInitError` exists in the go and java ServiceManager templates
 and is referenced from the retry path. The only tests are template regression

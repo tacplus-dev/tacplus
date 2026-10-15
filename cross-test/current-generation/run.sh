@@ -418,6 +418,19 @@ run_java_generated_self_tests() {
     grep -q '^OwnerDefaultTest: all checks passed$' "$test_log" \
       || die "owner-default fixture (java): OwnerDefaultTest did not report its checks passed"
   fi
+  # The generated startup-classifier self-test (NEW-21), emitted beside every
+  # ServiceManager.java, so present exactly in the service fixtures' builds.
+  local id_test id_class
+  id_test="$(find "$output/src/main/java" -type f -name 'ServiceManagerIdentityErrorTest.java' -print -quit)"
+  if [[ -n "$id_test" ]]; then
+    id_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$id_test").$(basename "$id_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$id_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q '^ServiceManagerIdentityErrorTest: all checks passed$' "$test_log" \
+      || die "java: ServiceManagerIdentityErrorTest did not report its checks passed"
+  fi
   # The main fixture's extraction self-test, copied in by
   # install_extraction_selftest, so it is present exactly in that build.
   local ex_test ex_class

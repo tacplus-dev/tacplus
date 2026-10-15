@@ -101,7 +101,10 @@ formal verification, the W2S REST dispatch plane.
 
 KNOWN_TEST_GAPS entries that are per-language asymmetries: PC-L-2b (Go only:
 give-up DEGRADED reason unpinned), PC-L-9 (leak soak hosts only the Go
-ServiceManager; Java and Rust teardown are unmeasured), NEW-21 (Go now emits
+ServiceManager; Java and Rust teardown are unmeasured), ~~NEW-21 (Go now emits
 `service_manager_identity_error_test.go.tmpl`; Java's classifier is still
-pinned by string only, Rust not mentioned), PC-W-5 (Rust-only seam). PC-L-3b,
+pinned by string only, Rust not mentioned)~~ **Java closed 2026-10-15**
+(generated `ServiceManagerIdentityErrorTest`, run by `current-generation` in
+every service fixture; Rust still open, see `docs/KNOWN_TEST_GAPS.md` NEW-21),
+PC-W-5 (Rust-only seam). PC-L-3b,
 SEC-2 and NEW-46 are not language-specific.

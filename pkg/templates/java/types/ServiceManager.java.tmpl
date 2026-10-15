@@ -403,7 +403,9 @@ public class ServiceManager implements AutoCloseable {
         }
     }
 
-    private static boolean isPermanentIdentityInitError(Throwable t) {
+    // Package-private for ServiceManagerIdentityErrorTest, the generated self-test
+    // that executes it (NEW-21).
+    static boolean isPermanentIdentityInitError(Throwable t) {
         for (Throwable cur = t; cur != null; cur = cur.getCause()) {
             // A missing spiffe_trust_domain is a permanent misconfiguration: mesh
             // channels are fail-closed and cannot pin identity without it, so fail

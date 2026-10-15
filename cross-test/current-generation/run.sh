@@ -19,6 +19,7 @@ SELFTESTS_SRC="$ROOT_DIR/cross-test/current-generation/testdata"
 RECORDEGRESS_PROTO_SRC="$ROOT_DIR/cross-test/proto-recordegress"
 OWNERDEFAULT_PROTO_SRC="$ROOT_DIR/cross-test/proto-ownerdefault"
 QUORUMWRITE_PROTO_SRC="$ROOT_DIR/cross-test/proto-quorumwrite"
+TENANTSLICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-tenantslice"
 WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/current-generation}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
@@ -199,6 +200,19 @@ write_quorumwrite_config() {
 language: "$language"
 pkg: "com.gitlab.example.dummy.quorumvault"
 src: "$QUORUMWRITE_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
+write_tenantslice_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.ledger"
+src: "$TENANTSLICE_PROTO_SRC"
 output-dir: "tacplus"
 EOF
 }
@@ -1091,6 +1105,24 @@ assert_quorumwrite_output() {
       cp "$SELFTESTS_SRC/rust/store_roll_test.rs" "$output/tests/"
       ;;
   esac
+}
+
+# assert_tenantslice_output checks that ledger, whose only per-service config is
+# its slice of the GENERATED tenant_config.TenantConfig, is subscribed to the
+# owner's TenancyConfigState: the generated state client must exist. Its absence
+# compiles: until 2026-10-15 the subscription step saw only the TenantConfig stub
+# and emitted no subscription in any language.
+assert_tenantslice_output() {
+  local output="$1"
+  local language="$2"
+  local client=""
+
+  case "$language" in
+    go) client="$(find "$output" -type f -path '*/s2sm/state/services/tenancy_config_state/state.go' -print -quit)" ;;
+    java) client="$(find "$output" -type f -path '*/s2sm/internal/state/services/tenancy/tenancyconfigstate/StateClient.java' -print -quit)" ;;
+    rust) client="$(find "$output" -type f -path '*/s2sm/internal/state/services/tenancy_config_state/state.rs' -print -quit)" ;;
+  esac
+  [[ -n "$client" ]] || die "tenant-slice fixture ($language): ledger is not subscribed to TenancyConfigState (no generated state client under $output)"
 }
 
 # install_ownerdefault_selftest copies the Java runtime self-test into the
@@ -2039,6 +2071,30 @@ if [[ -d "$QUORUMWRITE_PROTO_SRC" ]]; then
     echo "==> Compiling $language quorum-write fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/quorumvault"
     echo "    PASS $language quorum-write"
+  done
+fi
+
+# tenant-slice fixture: the only build whose per-service config reaches it
+# solely through the generated tenant_config.TenantConfig, so the only place the
+# auto-subscription to that slice is asserted and compiled.
+if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/tenantslice-$language"
+    log="$WORK_ROOT/tenantslice-$language.log"
+    rm -rf "$dir"
+    write_tenantslice_config "$dir" "$language"
+
+    echo "==> Generating $language tenant-slice fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTSLICE_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language tenant-slice generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_tenantslice_output "$output_root" "$language"
+    echo "==> Compiling $language tenant-slice fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/ledger"
+    echo "    PASS $language tenant-slice"
   done
 fi
 

@@ -1,0 +1,42 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// The generated-TenantConfig subscription fixture.
+//
+// Why this fixture exists: ledger declares a tenant-scope (spec.config_slice),
+// so the generator folds it into the GENERATED tenant_config.TenantConfig, and
+// tenancy's runtime Config holds a TenantConfig per tenant. ledger is the SELF
+// package, so its build must subscribe read-only to TenancyConfigState to see
+// its slice. No hand-annotated (spec.per_service_config) message exists here:
+// until 2026-10-15 the subscription step saw only the TenantConfig STUB in the
+// flattened proto tree and emitted no subscription, in every language.
+
+syntax = "proto3";
+
+package ledger;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "ledger"};
+
+service LedgerService {
+  option (spec.service_s2s) = {label: "LedgerService"};
+
+  rpc GetLedgerStatus(GetLedgerStatusRequest) returns (GetLedgerStatusResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}
+
+message GetLedgerStatusRequest {}
+
+message GetLedgerStatusResponse {
+  // ready reports whether the ledger is serving.
+  bool ready = 1;
+}
+
+// LedgerTenantConfig is ledger's slice of each tenant's configuration.
+message LedgerTenantConfig {
+  option (spec.config_slice) = {scope: CONFIG_SLICE_SCOPE_TENANT, service_name: "ledger"};
+
+  // currency is the tenant's book currency.
+  string currency = 1;
+}

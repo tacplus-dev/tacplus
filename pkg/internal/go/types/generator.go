@@ -322,15 +322,8 @@ func Generate(config *tactype.Config) error {
 	if exists && !slices.Contains(protoFilePaths, "generated/project_config.proto") {
 		protoFilePaths = append(protoFilePaths, "generated/project_config.proto")
 	}
-	if err := proto.ResolveStatesFromProto(config, config.FlatProtoDir); err != nil {
+	if err := proto.ResolveServiceStates(config, feConfigs); err != nil {
 		return err
-	}
-	proto.InjectConfigStates(config, feConfigs)
-	if err := proto.InjectTenantConfigSubscriptions(config, config.FlatProtoDir, feConfigs); err != nil {
-		return fmt.Errorf("failed to inject tenant config subscriptions: %w", err)
-	}
-	if err := proto.InjectHealthState(config, config.FlatProtoDir); err != nil {
-		return fmt.Errorf("failed to inject health state: %w", err)
 	}
 
 	// Append state/store service definitions BEFORE trace injection so that

@@ -937,12 +937,8 @@ func Generate(config *tactype.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to inject gRPC config state: %w", err)
 	}
-	if err := proto.ResolveStatesFromProto(config, config.FlatProtoDir); err != nil {
+	if err := proto.ResolveServiceStates(config, feConfigs); err != nil {
 		return err
-	}
-	proto.InjectConfigStates(config, feConfigs)
-	if err := proto.InjectHealthState(config, config.FlatProtoDir); err != nil {
-		return fmt.Errorf("failed to inject health state: %w", err)
 	}
 
 	// Generate TenantConfig proto from (spec.config_slice) tenant-scope annotations.

@@ -1656,6 +1656,28 @@ func InjectConfigStates(config *tactype.Config, entries []GrpcConfigEntry) {
 	}
 }
 
+// ResolveServiceStates derives config.States for a full-service build: the
+// proto-declared states (ResolveStatesFromProto), the service's own ConfigState
+// and ServiceConfigState (InjectConfigStates), the read-only subscription to
+// each per-service config slice another grpc_config service owns for this one
+// (InjectTenantConfigSubscriptions), and ServiceHealth (InjectHealthState).
+// The Go, Java and Rust generators call this one sequence so a service gets the
+// same state set whichever language hosts it; entries is the result of
+// InjectGrpcConfigState.
+func ResolveServiceStates(config *tactype.Config, entries []GrpcConfigEntry) error {
+	if err := ResolveStatesFromProto(config, config.FlatProtoDir); err != nil {
+		return err
+	}
+	InjectConfigStates(config, entries)
+	if err := InjectTenantConfigSubscriptions(config, config.FlatProtoDir, entries); err != nil {
+		return fmt.Errorf("failed to inject tenant config subscriptions: %w", err)
+	}
+	if err := InjectHealthState(config, config.FlatProtoDir); err != nil {
+		return fmt.Errorf("failed to inject health state: %w", err)
+	}
+	return nil
+}
+
 // InjectTenantConfigSubscriptions automatically subscribes each service to its
 // own per-service config slice. It scans all proto messages for the
 // (spec.per_service_config) annotation. For each such message M (e.g. TenantConfig):

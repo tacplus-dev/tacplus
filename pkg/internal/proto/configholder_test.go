@@ -487,3 +487,86 @@ func TestInjectTenantConfigSubscriptionsPropagatesParserError(t *testing.T) {
 		t.Fatalf("expected no states to be injected on failure, got %v", config.States)
 	}
 }
+
+// ResolveServiceStates is the one state-derivation sequence the Go, Java and
+// Rust generators run. A service named by a field of another grpc_config
+// service's (spec.per_service_config) message must come out subscribed,
+// read-only, to that owner's ConfigState; a service the message does not name
+// must not. Before the shared sequence only the Go generator ran the
+// subscription step, so a Java or Rust service silently missed its slice.
+func TestResolveServiceStatesSubscribesNamedServiceToItsConfigSlice(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available")
+	}
+	dir := t.TempDir()
+	// The full sys tree: ResolveServiceStates also injects ServiceHealth.
+	if err := CopySysProtos(dir); err != nil {
+		t.Fatalf("CopySysProtos: %v", err)
+	}
+	if err := writeMinimalGeneratedStubs([]string{dir}); err != nil {
+		t.Fatalf("writeMinimalGeneratedStubs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "registry.yaml"),
+		[]byte("services:\n  - name: audit\n    id: 5\n  - name: gateway\n    id: 6\n  - name: billing\n    id: 7\n"), 0o644); err != nil {
+		t.Fatalf("write registry.yaml: %v", err)
+	}
+	writeProto(t, dir, "audit.proto", `syntax = "proto3";
+package audit;
+import "sys/spec.proto";
+option (spec.service) = {name: "audit", store: true};
+message GatewaySlice { string route = 1; }
+message Slices {
+  option (spec.per_service_config) = true;
+  GatewaySlice gateway = 1;
+}
+message AuditConfig {
+  option (spec.grpc_config) = {service_name: "audit"};
+  map<string, Slices> tenants = 1;
+}
+`)
+	writeProto(t, dir, "health.proto", `syntax = "proto3";
+package health;
+import "sys/healthreport.proto";
+import "sys/spec.proto";
+message ServiceHealth {
+  option (spec.service_state) = {name: "ServiceHealth", label: ["state-store"], export: true};
+  repeated healthreport.ServiceInstanceHealth instances = 1 [(spec.instance_keyed) = true, (spec.assert_max_size) = 10000];
+}
+`)
+	entries, err := InjectGrpcConfigState(dir, dir, dir)
+	if err != nil {
+		t.Fatalf("InjectGrpcConfigState: %v", err)
+	}
+	owner := ConfigStateRootName("audit")
+
+	for _, tc := range []struct {
+		self       string
+		subscribed bool
+	}{
+		{self: "gateway", subscribed: true},
+		{self: "billing", subscribed: false},
+	} {
+		config := &tactype.Config{SelfPackage: tc.self, FlatProtoDir: dir}
+		if err := ResolveServiceStates(config, entries); err != nil {
+			t.Fatalf("%s: ResolveServiceStates: %v", tc.self, err)
+		}
+		var got *tactype.StateEntry
+		for i := range config.States {
+			if config.States[i].MessageName == owner {
+				got = &config.States[i]
+			}
+		}
+		if !tc.subscribed {
+			if got != nil {
+				t.Fatalf("%s is not named by the per_service_config message but was subscribed: %+v", tc.self, *got)
+			}
+			continue
+		}
+		if got == nil {
+			t.Fatalf("%s: no subscription to %s in %+v", tc.self, owner, config.States)
+		}
+		if got.AccessMode != tactype.AccessRO || got.ProtoFile != "audit.proto" {
+			t.Fatalf("%s: subscription must be read-only on audit.proto, got %+v", tc.self, *got)
+		}
+	}
+}

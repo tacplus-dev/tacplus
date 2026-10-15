@@ -14,7 +14,9 @@ import (
 "os"
 "os/signal"
 "sync"
+{{- if or .HasServiceHealthState .HasSubscriptions}}
 "sync/atomic"
+{{- end}}
 "syscall"
 "time"
 {{if or .HasAutoTls .HasSmb}}
@@ -64,9 +66,8 @@ healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"{{.ModuleBasePath}}/chassis/healthreporter"
 	wrapperSpiffe "{{.ModuleBasePath}}/chassis/spiffe"
 {{end}}
-{{if or .HasGrpcS2SClients .HasSmb .HasServiceHealthState .HasTracePublisher .HasPublishers .HasAccountingPublisher}}
+// Unconditional: tracePublishLoop (always emitted) backs off with it.
 "{{.ModuleBasePath}}/chassis/serviceconnection"
-{{end}}
 {{if .HasGrpc}}
 {{- range .WrapperImports}}
 {{.Alias}} "{{.ImportPath}}"
@@ -928,6 +929,17 @@ additionalRegistrar AdditionalServiceRegistrar
 auth grpcserver.Authorizer
 }
 
+{{- if .HasC2DGrpc}}
+
+// newC2DServer hosts the service_c2d wrappers on the declared socket_path
+// (spec.service_c2d.socket_path — required, no default, which would collide
+// between daemons). The wrappers skip token auth: the socket's owner-only
+// permissions are the boundary, not a bearer token.
+func newC2DServer(impls ...grpcserver.ServiceImplementation) *grpcserver.C2DServer {
+return grpcserver.NewC2DServer("{{.C2DSocketPath}}", &multiWrapper{impls: impls})
+}
+{{- end}}
+
 func (m *multiWrapper) RegisterServices(grpcServer *grpc.Server) error {
 for _, impl := range m.impls {
 if err := impl.RegisterServices(grpcServer); err != nil {
@@ -1169,7 +1181,8 @@ return err
 {{- end}}
 // Create gRPC server wrappers and register all services.
 // Auth wiring below covers all non-auth_disabled services (C2S and S2S) — Go
-// has no C2S-only gating bug (cf. the Rust generator fix in #32).
+// has no C2S-only gating bug (cf. the Rust generator fix in #32). c2d services
+// are excluded (local-socket IPC, no token auth).
 {{range .GrpcServices}}
 {{- if .IsGeneratedRecordC2S}}
 // The client-facing record read plane's handler is GENERATED, not supplied.
@@ -1177,7 +1190,7 @@ return err
 {{- else}}
 {{.WrapperVarName}} := {{.WrapperAlias}}.{{.ConstructorName}}(h.{{.GetterName}}())
 {{- end}}
-{{- if not .AuthDisabled}}
+{{- if not (or .AuthDisabled .IsC2D)}}
 {{.WrapperVarName}}.SetAuthorizeFunc(sm.authorizeFunc)
 {{.WrapperVarName}}.SetAuthenticateFunc(sm.authenticateFunc)
 {{.WrapperVarName}}.SetAuthenticateAtOrBelowFunc(sm.authenticateAtOrBelowFunc)
@@ -1190,7 +1203,7 @@ return fmt.Errorf("authorizer not wired for {{.ServerType}} (build/SM bug) - man
 {{- if .HasRequiresDevice}}
 {{.WrapperVarName}}.SetApprovalCheckFunc(approvalCheck)
 {{- end}}
-{{- if .HasMethodAuth}}
+{{- if and .HasMethodAuth (not .IsC2D)}}
 {{.WrapperAlias}}.{{.MethodAuthFuncName}}(sm.auth)
 {{- end}}
 {{end}}
@@ -1225,10 +1238,14 @@ accountingEmitter := am.NewEmitter(accountingSourceID, am.NewEventBusSink(accoun
 {{- end}}
 {{end}}
 
+{{if .HasTlsGrpc}}
+// c2d services are excluded — they run on a separate unix socket server.
 mw := &multiWrapper{
 impls: []grpcserver.ServiceImplementation{
 {{- range .GrpcServices}}
+{{- if not .IsC2D}}
 {{.WrapperVarName}},
+{{- end}}
 {{- end}}
 },
 auth: sm.auth,
@@ -1246,6 +1263,7 @@ return fmt.Errorf("grpcserver: %w", err)
 // hot-reload without a restart (PC-L-10).
 srv.SetCertProvider(sm.sc.TLSCertMaterial)
 srv.SetCertDegradeReporter(sm.reportTLSDegraded)
+{{end}}
 {{end}}
 
 {{if .HasAutoTls}}
@@ -1335,7 +1353,7 @@ readinessStreams := []serviceconnection.RequiredStream{
 // to SERVING once bootstrap completes (see driveReadiness). It stays NOT_SERVING
 // until then so k8s readiness probes reflect actual readiness.
 var healthCtl *grpcserver.GrpcServer
-{{if .HasGrpc}}
+{{if .HasTlsGrpc}}
 // Start serving BEFORE publishing HEALTHY so peers that route to the
 // advertised endpoint never hit connection refused.
 healthCtl = srv
@@ -1343,6 +1361,10 @@ errCh := make(chan error, 1)
 sm.tasks.Go(func(taskCtx context.Context) {
 errCh <- srv.Listen(taskCtx)
 })
+{{else if .HasC2DGrpc}}
+// c2d-only service — no TLS server. The c2d socket server below is its only
+// listener.
+errCh := make(chan error, 1)
 {{else}}
 // No tacplus-managed business gRPC services.
 // If handler implements AdditionalServiceRegistrar, start a full gRPC server.
@@ -1368,6 +1390,29 @@ healthOnlySrv.SetCertDegradeReporter(sm.reportTLSDegraded)
 healthCtl = healthOnlySrv
 sm.tasks.Go(func(taskCtx context.Context) { errCh <- healthOnlySrv.Listen(taskCtx) })
 }
+{{end}}
+{{if .HasC2DGrpc}}
+// Start the c2d unix socket server for local daemon IPC services. No TLS, no
+// token auth — the socket's owner-only permissions guard access.
+c2dSrv := newC2DServer(
+{{- range .GrpcServices}}
+{{- if .IsC2D}}
+{{.WrapperVarName}},
+{{- end}}
+{{- end}}
+)
+sm.tasks.Go(func(taskCtx context.Context) {
+if err := c2dSrv.Serve(taskCtx); err != nil {
+zap.L().Error("c2d server failed", zap.Error(err))
+// A daemon whose socket never came up must not keep running as if it
+// served; end Run like a failed TLS listener does. Non-blocking: if errCh
+// already holds an error, Run is returning that one.
+select {
+case errCh <- fmt.Errorf("c2d server: %w", err):
+default:
+}
+}
+})
 {{end}}
 
 {{if .HasServiceHealthState}}

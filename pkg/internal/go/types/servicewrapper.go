@@ -853,12 +853,9 @@ func generateGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, ser
 	validateInput := goValidateRef(method.FullInputType, method.InputType, servicePackage)
 	validateOutput := goValidateRef(method.FullOutputType, method.OutputType, servicePackage)
 
-	// svc.IsC2D is intentionally inert here: Go never resolves a C2D service as a
-	// server, so no C2D service reaches this function. Both resolveServerServices
-	// and filterGrpcAnnotated in generator.go skip IsC2D services by design.
-	// Rust is the only target that hosts a generated C2D server wrapper -- see
-	// docs/API.md "C2D server auth-skip scope". The disjunct is kept so it stays
-	// correct if that exclusion ever changes; it is not dead code to be cleaned.
+	// c2d services skip token auth: the ServiceManager hosts them on its c2d
+	// unix-socket server, whose owner-only permissions are the boundary (see
+	// docs/API.md "C2D server auth-skip scope"). Validation still runs.
 	skipAuth := method.AuthDisabled || svc.AuthDisabled || svc.IsC2D
 	authAnyUser := method.AuthAnyUser
 

@@ -35,6 +35,7 @@ func TestGoAccountingPublisherWiresEventBusSinkOnEveryWrapper(t *testing.T) {
 		HealthStateGroupAccessor: "State",
 		HasGrpc:                  true,
 		HasGrpcServers:           true,
+		HasTlsGrpc:               true,
 		GrpcServices: []GrpcServiceEntry{
 			{
 				GetterName:      "GetDemoGrpcImpl",
@@ -120,6 +121,7 @@ func TestGoServiceManagerOmitsAccountingWiringWithoutPublisher(t *testing.T) {
 		HealthStateGroupAccessor: "State",
 		HasGrpc:                  true,
 		HasGrpcServers:           true,
+		HasTlsGrpc:               true,
 		GrpcServices: []GrpcServiceEntry{
 			{
 				GetterName:      "GetDemoGrpcImpl",

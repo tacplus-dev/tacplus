@@ -22,6 +22,7 @@ import (
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 	stateproto "github.com/tacplus-dev/tacplus/pkg/internal/proto"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
@@ -115,6 +116,10 @@ type GrpcServiceEntry struct {
 	HasConfigState           bool
 	// AuthDisabled skips SetAuthorizeFunc on this service's server wrapper.
 	AuthDisabled bool
+	// IsC2D marks a service_c2d service: hosted on the c2d unix-socket server,
+	// never on the TLS gRPC listener, and with no token auth wired (the socket
+	// permissions are the boundary).
+	IsC2D bool
 	// IsGeneratedRecordC2S marks the synthesized <Svc>Records surface, whose
 	// handler is GENERATED (s2sm/record_c2s.go) rather than written: the
 	// Handler interface carries no getter for it and the ServiceManager binds
@@ -237,6 +242,9 @@ type serviceManagerTemplateData struct {
 	HealthStateGroupAccessor string // root state-client group accessor containing ServiceHealth
 	HasGrpc                  bool   // true when gRPC services are configured
 	HasGrpcServers           bool   // true when gRPC server wrappers are configured
+	HasTlsGrpc               bool   // true when non-c2d gRPC services exist (need the TLS server)
+	HasC2DGrpc               bool   // true when service_c2d services are hosted on the c2d socket server
+	C2DSocketPath            string // service_c2d socket_path the daemon binds (required, no default)
 	HasStates                bool   // true when states are configured
 	HasSysState              bool   // true when any state is from the sys/ proto dir
 	HasGrpcS2SClients        bool   // true when gRPC clients are configured
@@ -389,7 +397,8 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			ConfigStateAccessor:      configStateAccessor,
 			HasConfigState:           hasConfigState,
 			AuthDisabled:             svc.AuthDisabled, // computed from service+method level
-			AuthAnyUser:              svc.AuthAnyUser,  // computed: true if ANY method has auth_any_user
+			IsC2D:                    svc.IsC2D,
+			AuthAnyUser:              svc.AuthAnyUser, // computed: true if ANY method has auth_any_user
 			HasMethodAuth:            svc.HasMethodAuth,
 			MethodAuthFuncName:       "Register" + svc.ServiceName + "MethodAuth",
 			HasRequiresDevice:        svc.HasRequiresDevice,
@@ -399,6 +408,21 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		})
 	}
 	disambiguateWrapperImportAliases(grpcSvcs)
+
+	hasTlsGrpc := false
+	var c2dSockets []service.C2DSocket
+	for _, svc := range svcs {
+		if svc.IsC2D {
+			c2dSockets = append(c2dSockets, service.C2DSocket{ServiceName: svc.ServiceName, SocketPath: svc.C2DSocketPath})
+		} else {
+			hasTlsGrpc = true
+		}
+	}
+	c2dSocketPath, err := service.HostedC2DSocketPath(c2dSockets)
+	if err != nil {
+		return serviceManagerTemplateData{}, err
+	}
+
 	diskStores, err := collectDiskStoreRuntimeEntries(config, grpcSvcs)
 	if err != nil {
 		return serviceManagerTemplateData{}, err
@@ -759,6 +783,9 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		HealthStateGroupAccessor: healthStateGroupAccessor,
 		HasGrpc:                  len(svcs) > 0,
 		HasGrpcServers:           len(svcs) > 0,
+		HasTlsGrpc:               hasTlsGrpc,
+		HasC2DGrpc:               len(c2dSockets) > 0,
+		C2DSocketPath:            c2dSocketPath,
 		HasStates:                len(config.States) > 0 || config.AllStates,
 		HasSysState:              hasSysState,
 		HasGrpcS2SClients:        len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,

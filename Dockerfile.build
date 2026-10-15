@@ -1,11 +1,10 @@
-# TACPlus Build Image
-# Everything a fleet build needs (sonar/backend/build.sh,
-# schematic/scripts/build-fleet.sh), so a CI host only has to run gitlab-runner.
-# The docker daemon is NOT in the image: jobs use the runner's mounted
-# /var/run/docker.sock.
+# tacplus build image
+# Everything a service build needs (tacplus plus the per-language toolchains),
+# so a CI host only has to run the job. The docker daemon is NOT in the image:
+# jobs that build containers use the runner's mounted /var/run/docker.sock.
 #
-# Published by the build-image job in .gitlab-ci.yml as
-#   registry.github.com/tacplus-dev/tacplus/build:<git sha> and :latest
+# Published by a build-image job as
+#   ghcr.io/tacplus-dev/tacplus/build:<git sha> and :latest
 #
 # Separate from Dockerfile.base on purpose: the base image is the cross-test
 # image and pins JDK 25 / Go 1.25 / protoc 28.3 / Node 24, which the fleet build
@@ -89,7 +88,7 @@ COPY --from=fetch /opt/protoc/include /usr/local/include
 
 WORKDIR /src
 COPY . .
-# Same generate + ldflags as the build job in .gitlab-ci.yml (Version stays the
+# Same generate + ldflags as the release build (Version stays the
 # 0.0.0 dev default on main).
 RUN go generate ./pkg/internal/proto/spec/... \
     && CGO_ENABLED=0 go build -trimpath \

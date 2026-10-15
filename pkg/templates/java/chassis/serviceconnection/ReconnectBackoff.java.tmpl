@@ -6,27 +6,27 @@
 
 package {{.ChassisBase}}.serviceconnection;
 
+import {{.ChassisBase}}.backoff.Backoff;
+import java.time.Duration;
+
 /**
- * Reconnect backoff for s2s channels.
- *
- * <p>Short first step, doubling to a 30s cap. The loops this replaces started
- * at 2-3s, so after a peer restart they were already sleeping 30s between
- * dials by the time the peer came back, and the service sat disconnected for
- * 1-2 minutes after its dependency was up again.
+ * Reconnect backoff for s2s channels, in milliseconds, over the one schedule
+ * the chassis defines in {@link Backoff}: short first step, doubling to a 30s
+ * cap. The loops this replaces started at 2-3s, so after a peer restart they
+ * were already sleeping 30s between dials by the time the peer came back, and
+ * the service sat disconnected for 1-2 minutes after its dependency was up
+ * again.
  */
 public final class ReconnectBackoff {
     /** Delay before the first reconnect retry. */
-    public static final long INITIAL_MS = 500;
+    public static final long INITIAL_MS = Backoff.RECONNECT_INITIAL_BACKOFF.toMillis();
     /** Upper bound on the delay between reconnect retries. */
-    public static final long MAX_MS = 30_000;
+    public static final long MAX_MS = Backoff.RECONNECT_MAX_BACKOFF.toMillis();
 
     private ReconnectBackoff() {}
 
     /** Returns the delay to use after {@code currentMs}: doubled, capped at {@link #MAX_MS}. */
     public static long next(long currentMs) {
-        if (currentMs >= MAX_MS / 2) {
-            return MAX_MS;
-        }
-        return currentMs * 2;
+        return Backoff.nextReconnectBackoff(Duration.ofMillis(currentMs)).toMillis();
     }
 }

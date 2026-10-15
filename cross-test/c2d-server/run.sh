@@ -37,7 +37,7 @@ done
 TACPLUS_BIN="${TACPLUS_BIN:-$ROOT_DIR/target/tacplus-c2d-server-check}"
 if [[ ! -x "$TACPLUS_BIN" || -z "${TACPLUS_BIN_PREBUILT:-}" ]]; then
   echo "==> Building tacplus binary"
-  (cd "$ROOT_DIR" && go build -o "$TACPLUS_BIN" .)
+  (cd "$ROOT_DIR" && go generate ./pkg/internal/proto/spec/... && go build -o "$TACPLUS_BIN" .)
 fi
 
 WORK="$(mktemp -d)"

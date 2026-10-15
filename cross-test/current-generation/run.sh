@@ -515,6 +515,20 @@ run_rust_spiffe_self_tests() {
     }
   assert_clean_log "$log_dir/rust-grpcserver-test.log"
 
+  # NEW-21: the model crate's own unit tests, which include the generated
+  # ServiceManager's startup error classifier (identity_error_tests). Nothing ran
+  # them before (cargo check only), so the run must also prove they are there.
+  # Only a service build has a ServiceManager (the main fixture is not one).
+  if [[ -f "$output/s2sm/mod.rs" ]] && grep -qF 'fn is_permanent_identity_init_error' "$output/s2sm/mod.rs"; then
+    (cd "$output" && cargo test --lib) >"$log_dir/rust-model-lib-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-model-lib-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-model-lib-test.log"
+    grep -qF 'identity_error_tests::missing_token_minter_is_permanent ... ok' "$log_dir/rust-model-lib-test.log" \
+      || die "NEW-21: the generated ServiceManager's identity_error_tests did not run (log: $log_dir/rust-model-lib-test.log)"
+  fi
+
   # The main fixture's JSON-key self-test, copied in by
   # install_json_key_selftest, so it is present exactly in that build.
   if [[ -f "$output/tests/json_key_test.rs" ]]; then

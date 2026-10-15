@@ -151,16 +151,22 @@ whose `find` patterns matched nothing and printed SKIP on every run.
 
 ---
 
-## NEW-21 — empty-trust-domain classifier is pinned by existence only
+## NEW-21 — empty-trust-domain classifier is pinned by existence only — CLOSED (Go, Java, Rust)
 
-**Status (2026-10-15):** closed for Go and Java, open for Rust. Go emits
-`s2sm_identity_error_test.go` and Java now emits `ServiceManagerIdentityErrorTest`
-beside every ServiceManager; `current-generation` runs both in each service
-fixture (permanent, wrapped, text-only and transient cases). Rust's
-`is_permanent_identity_init_error` (missing token minter only, top-level
-downcast) still has no behavioural test: no gate runs the generated model
-crate's unit tests, so a `#[cfg(test)]` module there would be green without
-running. The history below is the original finding.
+**Status (2026-10-15):** closed in all three. Go emits
+`s2sm_identity_error_test.go` and Java `ServiceManagerIdentityErrorTest` beside
+every ServiceManager; Rust's ServiceManager now carries
+`#[cfg(test)] mod identity_error_tests` over the real
+`is_permanent_identity_init_error` (the boxed `TokenMinterNotConfigured` the
+retry loop sees is permanent; an error with the same text is not; transient
+failures stay retryable), and `current-generation` runs `cargo test --lib` on
+the generated model crate in every Rust service fixture and fails unless
+`identity_error_tests::missing_token_minter_is_permanent ... ok` is in the log,
+so the gate cannot pass by running zero tests. Rust has no trust-domain case:
+an empty trust domain is refused by `SpiffeServerCertVerifier::new` before the
+retry loop. Proven red: with the downcast replaced by a message match,
+`the_same_text_is_not_the_typed_error` fails. The history below is the
+original finding.
 
 `isPermanentIdentityInitError` exists in the go and java ServiceManager templates
 and is referenced from the retry path. The only tests are template regression

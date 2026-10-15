@@ -108,6 +108,7 @@ ServiceManager; Java and Rust teardown are unmeasured), ~~NEW-21 (Go now emits
 `service_manager_identity_error_test.go.tmpl`; Java's classifier is still
 pinned by string only, Rust not mentioned)~~ **Java closed 2026-10-15**
 (generated `ServiceManagerIdentityErrorTest`, run by `current-generation` in
-every service fixture; Rust still open, see `docs/KNOWN_TEST_GAPS.md` NEW-21),
+every service fixture; **Rust closed 2026-10-15**: generated `identity_error_tests`
+run by `cargo test --lib` on the model crate in every Rust service fixture),
 PC-W-5 (Rust-only seam). PC-L-3b,
 SEC-2 and NEW-46 are not language-specific.

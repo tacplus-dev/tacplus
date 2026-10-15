@@ -489,6 +489,52 @@ fn is_permanent_identity_init_error(err: &(dyn std::error::Error + 'static)) -> 
     err.downcast_ref::<service_im::TokenMinterNotConfigured>().is_some()
 }
 
+// The startup loop retries identity init up to MAX_INIT_RETRIES times with
+// backoff; is_permanent_identity_init_error is the only thing that stops it
+// retrying a failure that cannot heal. Dropping the typed check, or swapping it
+// for a message match, compiles and generates identically and only shows up as
+// a service that hangs on a bad build (NEW-21). current-generation runs these
+// with `cargo test --lib` in every Rust service fixture. (An empty trust domain
+// never reaches this loop in Rust: the SPIFFE verifier refuses it first.)
+#[cfg(test)]
+mod identity_error_tests {
+    use super::is_permanent_identity_init_error;
+
+    #[test]
+    fn missing_token_minter_is_permanent() {
+        // As the loop sees it: IdentityManager::new's boxed error.
+        let err: Box<dyn std::error::Error> = Box::new(service_im::TokenMinterNotConfigured);
+        assert!(
+            is_permanent_identity_init_error(err.as_ref()),
+            "a missing token minter cannot heal by retrying"
+        );
+    }
+
+    #[test]
+    fn the_same_text_is_not_the_typed_error() {
+        let err: Box<dyn std::error::Error> = service_im::TokenMinterNotConfigured.to_string().into();
+        assert!(
+            !is_permanent_identity_init_error(err.as_ref()),
+            "classification must be by type (downcast), not by message text"
+        );
+    }
+
+    #[test]
+    fn transient_failures_stay_retryable() {
+        for msg in [
+            "connection refused",
+            "context deadline exceeded",
+            "status: Unavailable, message: \"no healthy upstream\"",
+        ] {
+            let err: Box<dyn std::error::Error> = msg.into();
+            assert!(
+                !is_permanent_identity_init_error(err.as_ref()),
+                "transient init error {msg:?} must stay retryable"
+            );
+        }
+    }
+}
+
 impl ServiceManager {
     /// Creates a ServiceManager: loads config, creates the identity manager
     /// and state-store connection pool, and auto-obtains TLS cert.

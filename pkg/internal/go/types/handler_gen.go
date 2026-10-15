@@ -263,6 +263,7 @@ type serviceManagerTemplateData struct {
 	TracePublishStreamName   string   // canonical EventBus publish stream name
 	TracePublishGrpcPath     string   // canonical gRPC path for trace publish stream
 	S2STargetServices        []string // unique service IDs for S2S client ServiceConnections
+	S2STargetsRequired       bool     // s2s targets listed explicitly (grpc_s2s_clients) gate readiness; s2s_client_all targets do not
 	GrpcServices             []GrpcServiceEntry
 	WrapperImports           []WrapperImport // deduplicated wrapper imports
 	TypeImports              []WrapperImport // deduplicated type imports (for config)
@@ -764,6 +765,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		TracePublishStreamName:   tracePublishStreamName,
 		TracePublishGrpcPath:     tracePublishGrpcPath,
 		S2STargetServices:        s2sTargetServices,
+		S2STargetsRequired:       len(config.GrpcS2SClients) > 0 && !config.GrpcS2SClientAll,
 		GrpcServices:             grpcSvcs,
 		WrapperImports:           wrapperImports,
 		TypeImports:              typeImports,

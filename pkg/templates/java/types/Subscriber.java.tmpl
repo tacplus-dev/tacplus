@@ -120,12 +120,23 @@ public class {{.ClassName}} {
         subscribe(handler, true, false, -1);
     }
 
+    private volatile java.util.concurrent.atomic.AtomicBoolean upFlag;
+
+    /**
+     * Readiness hook: the flag is set while a subscription stream is open and
+     * cleared when it ends, so the ServiceManager can gate Ready on it.
+     */
+    public void setUpFlag(java.util.concurrent.atomic.AtomicBoolean up) {
+        this.upFlag = up;
+    }
+
     /**
      * Subscribe with explicit start position.
      */
     public void subscribe(Handler handler, boolean earliest, boolean latest, long offset) throws InterruptedException {
         long backoff = MIN_BACKOFF_MS;
         Channel channel = null;
+        final java.util.concurrent.atomic.AtomicBoolean up = this.upFlag;
 
         while (!Thread.currentThread().isInterrupted()) {
             try {
@@ -137,7 +148,12 @@ public class {{.ClassName}} {
                     ((io.grpc.ManagedChannel) channel).shutdownNow();
                 }
                 channel = next;
-                subscribeOnce(channel, handler, earliest, latest, offset);
+                if (up != null) up.set(true);
+                try {
+                    subscribeOnce(channel, handler, earliest, latest, offset);
+                } finally {
+                    if (up != null) up.set(false);
+                }
                 // Stream ended cleanly — reconnect.
                 backoff = MIN_BACKOFF_MS;
             } catch (InterruptedException e) {

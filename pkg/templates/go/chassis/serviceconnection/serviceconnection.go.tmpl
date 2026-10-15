@@ -201,6 +201,20 @@ func (sc *ServiceConnection) Conn() grpc.ClientConnInterface {
 	return nil
 }
 
+// IsAvailable reports whether an RPC to this service has somewhere to go: at
+// least one endpoint is dialed and currently routable. Unlike Conn(), which
+// returns only the selected active endpoint, this is what readiness gates on.
+func (sc *ServiceConnection) IsAvailable() bool {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	for _, ec := range sc.endpoints {
+		if ec.isConnected() && ec.isRoutable() {
+			return true
+		}
+	}
+	return false
+}
+
 // ReconcileFromHealth updates the pool's endpoints from a set of health reports.
 // New endpoints are connected; removed endpoints are closed; existing
 // endpoints have their health updated.

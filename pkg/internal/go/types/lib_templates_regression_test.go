@@ -115,11 +115,16 @@ func TestGoHealthReporterStatusSinkBridgesHealthToGrpc(t *testing.T) {
 		}
 	}
 
-	// The sink wiring must come AFTER the bootstrap SetReady(true).
-	idxBootstrap := strings.Index(sm, "healthCtl.SetReady(true)")
+	// The sink feeds healthOK, which driveReadiness (started right after the
+	// sink is wired, once bootstrap completed) combines with the required s2s
+	// channels to flip the gRPC health endpoint.
 	idxSink := strings.Index(sm, "hr.SetStatusSink(")
-	if idxBootstrap < 0 || idxSink < 0 || idxSink < idxBootstrap {
-		t.Fatalf("StatusSink must be wired after bootstrap SetReady(true) (bootstrap=%d sink=%d)", idxBootstrap, idxSink)
+	idxDrive := strings.Index(sm, "sm.driveReadiness(taskCtx, healthCtl, healthOK,")
+	if idxSink < 0 || idxDrive < 0 || idxDrive < idxSink {
+		t.Fatalf("StatusSink must be wired before driveReadiness starts (sink=%d drive=%d)", idxSink, idxDrive)
+	}
+	if !strings.Contains(sm, "healthOK.Store(status != healthreporter.StatusUnhealthy)") {
+		t.Fatalf("StatusSink must feed readiness through healthOK")
 	}
 }
 

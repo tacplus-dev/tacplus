@@ -14,6 +14,7 @@ import (
 "os"
 "os/signal"
 "sync"
+"sync/atomic"
 "syscall"
 "time"
 {{if or .HasAutoTls .HasSmb}}
@@ -63,7 +64,7 @@ healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"{{.ModuleBasePath}}/chassis/healthreporter"
 	wrapperSpiffe "{{.ModuleBasePath}}/chassis/spiffe"
 {{end}}
-{{if or .HasGrpcS2SClients .HasSmb}}
+{{if or .HasGrpcS2SClients .HasSmb .HasServiceHealthState .HasTracePublisher .HasPublishers .HasAccountingPublisher}}
 "{{.ModuleBasePath}}/chassis/serviceconnection"
 {{end}}
 {{if .HasGrpc}}
@@ -641,10 +642,11 @@ sm.{{.HandlerFuncFieldName}} = fn
 
 {{if .HasServiceHealthState}}
 // resolveServiceCtx resolves a service endpoint by querying ServiceHealthState for
-// healthy instances. Retries with exponential backoff until found or ctx is cancelled.
+// healthy instances. Retries with exponential backoff
+// (serviceconnection.ReconnectInitialBackoff doubling to ReconnectMaxBackoff)
+// until found or ctx is cancelled.
 func (sm *ServiceManager) resolveServiceCtx(ctx context.Context, serviceName string) (grpc.ClientConnInterface, error) {
-backoff := 2 * time.Second
-maxBackoff := 30 * time.Second
+backoff := serviceconnection.ReconnectInitialBackoff
 for {
 conn := sm.sc.Conn()
 if conn == nil {
@@ -688,11 +690,55 @@ return nil, sm.ctx.Err()
 case <-ctx.Done():
 return nil, fmt.Errorf("service %q not available: %w", serviceName, ctx.Err())
 }
-if backoff < maxBackoff {
-backoff *= 2
-if backoff > maxBackoff {
-backoff = maxBackoff
+backoff = serviceconnection.NextReconnectBackoff(backoff)
 }
+}
+
+// driveReadiness owns the gRPC health endpoint (k8s readiness) once bootstrap
+// is done.
+//
+// SERVING requires both: the last effective health status was not UNHEALTHY
+// (healthOK, fed by the HealthReporter status sink), and every required s2s
+// channel is up — each event-bus subscription channel (streams){{if .S2STargetsRequired}} and each
+// explicitly declared s2s target{{end}}. Reporting Ready while those channels were still
+// being dialed put pods in rotation that could not do their job for minutes
+// after a peer restart.
+//
+// Only readiness is gated. The status published to ServiceHealthState is not:
+// peers resolve each other through it, so gating it on dependencies would
+// deadlock any two services that depend on each other.
+func (sm *ServiceManager) driveReadiness(ctx context.Context, healthCtl *grpcserver.GrpcServer, healthOK *atomic.Bool, streams []serviceconnection.RequiredStream) {
+const readinessCheckInterval = time.Second
+required := serviceconnection.NewRequiredChannels([]*serviceconnection.ServiceConnection{
+{{- if .S2STargetsRequired}}
+{{- range .S2STargetServices}}
+sm.s2sConnections["{{.}}"],
+{{- end}}
+{{- end}}
+}, streams)
+ticker := time.NewTicker(readinessCheckInterval)
+defer ticker.Stop()
+var serving *bool
+for {
+down, isDown := required.FirstDown()
+ready := healthOK.Load() && !isDown
+if serving == nil || *serving != ready {
+state := ready
+serving = &state
+switch {
+case ready:
+zap.L().Info("readiness: SERVING")
+case isDown:
+zap.L().Warn("readiness: NOT_SERVING, required s2s channel is down", zap.String("channel", down))
+default:
+zap.L().Warn("readiness: NOT_SERVING, health status is UNHEALTHY")
+}
+healthCtl.SetReady(ready)
+}
+select {
+case <-ticker.C:
+case <-ctx.Done():
+return
 }
 }
 }
@@ -1249,8 +1295,19 @@ return sm.ctx.Err()
 }
 {{end}}
 
+{{if .HasSubscriptions}}
+// One up-flag per subscription channel; readiness requires all of them.
+{{- range .Subscriptions}}
+up_{{.HandlerFuncFieldName}} := new(atomic.Bool)
+{{- end}}
+readinessStreams := []serviceconnection.RequiredStream{
+{{- range .Subscriptions}}
+{Name: "{{.SourcePackage}}.{{.SourceField}} subscription ({{.TargetService}})", Up: up_{{.HandlerFuncFieldName}}},
+{{- end}}
+}
+{{end}}
 // healthCtl is the gRPC server whose grpc.health.v1 readiness status is flipped
-// to SERVING once bootstrap completes (see SetReady below). It stays NOT_SERVING
+// to SERVING once bootstrap completes (see driveReadiness). It stays NOT_SERVING
 // until then so k8s readiness probes reflect actual readiness.
 var healthCtl *grpcserver.GrpcServer
 {{if .HasGrpc}}
@@ -1331,22 +1388,25 @@ if err != nil {
 return fmt.Errorf("first health publish: %w", err)
 }
 // Bootstrap complete (serving + first health publish): advertise SERVING on
-// the gRPC health endpoint so k8s readiness probes pass.
-if healthCtl != nil {
-healthCtl.SetReady(true)
-}
+// the gRPC health endpoint so k8s readiness probes pass — once the required
+// s2s channels are up too (see driveReadiness).
 // Credential health is a chassis FLOOR, not a service concern: a service must
 // not be able to report itself healthy while its credentials are being rejected
 // and re-minting is not helping. Readiness previously stayed Ready through a
 // total auth outage because the probe only asked whether the process listened.
 hr.SetDegradedProbe(service_im.CredentialsDegraded)
 
-// Bridge ongoing health evaluation to the gRPC health endpoint: a handler
-// reporting UNHEALTHY flips the endpoint to NOT_SERVING so k8s removes the
-// pod from load-balancer rotation. Recovery flips it back to SERVING.
-if healthCtl != nil {
+// Ongoing health evaluation feeds readiness: a handler reporting UNHEALTHY
+// flips the endpoint to NOT_SERVING so k8s removes the pod from load-balancer
+// rotation. Recovery flips it back to SERVING.
+healthOK := new(atomic.Bool)
+healthOK.Store(true)
 hr.SetStatusSink(func(status healthreporter.InstanceStatus) {
-	healthCtl.SetReady(status != healthreporter.StatusUnhealthy)
+	healthOK.Store(status != healthreporter.StatusUnhealthy)
+})
+if healthCtl != nil {
+sm.tasks.Go(func(taskCtx context.Context) {
+sm.driveReadiness(taskCtx, healthCtl, healthOK, {{if .HasSubscriptions}}readinessStreams{{else}}nil{{end}})
 })
 }
 case err := <-errCh:
@@ -1377,9 +1437,7 @@ var subWg sync.WaitGroup
 subWg.Add(1)
 sm.tasks.Go(func(_ context.Context) {
 defer subWg.Done()
-const minSubBackoff = 2 * time.Second
-const maxSubBackoff = 30 * time.Second
-backoff := minSubBackoff
+backoff := serviceconnection.ReconnectInitialBackoff
 for subCtx.Err() == nil {
 // Re-resolve a healthy {{.TargetService}} instance on every attempt.
 subConn, err := sm.resolveServiceCtx(subCtx, "{{.TargetService}}")
@@ -1390,7 +1448,8 @@ return
 zap.L().Warn("failed to resolve {{.TargetService}} service for subscription, retrying",
 zap.Error(err), zap.Duration("retry_in", backoff))
 } else {
-backoff = minSubBackoff
+backoff = serviceconnection.ReconnectInitialBackoff
+up_{{.HandlerFuncFieldName}}.Store(true)
 sub := {{.SubPkgAlias}}.New(subConn, "{{$.ServiceLabel}}")
 {{- if .RoutingOnly}}
 // Routing-only subscriber: the generated Handler takes
@@ -1434,6 +1493,7 @@ return nil
 zap.L().Error("subscription {{.SourcePackage}}.{{.SourceField}} ended, re-resolving {{.TargetService}}", zap.Error(err))
 }
 {{- end}}
+up_{{.HandlerFuncFieldName}}.Store(false)
 // Close the per-attempt channel before re-resolving a fresh one.
 if closer, ok := subConn.(interface{ Close() error }); ok {
 closer.Close()
@@ -1447,12 +1507,7 @@ case <-time.After(backoff):
 case <-subCtx.Done():
 return
 }
-if backoff < maxSubBackoff {
-backoff *= 2
-if backoff > maxSubBackoff {
-backoff = maxSubBackoff
-}
-}
+backoff = serviceconnection.NextReconnectBackoff(backoff)
 }
 })
 }
@@ -1588,9 +1643,7 @@ func (*tracePublishAck) Unmarshal([]byte) error    { return nil }
 // pending until the publish stream acknowledges it; later trace events may still
 // be dropped at enqueue time when the bounded queue is full.
 func tracePublishLoop(ctx context.Context, resolve func(context.Context) (grpc.ClientConnInterface, error), tp func() (string, error), ch <-chan *trace_pb.TraceEvent) {
-const minBackoff = 3 * time.Second
-const maxBackoff = 30 * time.Second
-backoff := minBackoff
+backoff := serviceconnection.ReconnectInitialBackoff
 var pending *trace_pb.TraceEvent
 
 for ctx.Err() == nil {
@@ -1617,12 +1670,7 @@ case <-time.After(backoff):
 case <-ctx.Done():
 return
 }
-if backoff < maxBackoff {
-backoff *= 2
-if backoff > maxBackoff {
-backoff = maxBackoff
-}
-}
+backoff = serviceconnection.NextReconnectBackoff(backoff)
 continue
 }
 if err := tracePublishStream(ctx, conn, tp, pending); err != nil {
@@ -1636,16 +1684,11 @@ case <-time.After(backoff):
 case <-ctx.Done():
 return
 }
-if backoff < maxBackoff {
-backoff *= 2
-if backoff > maxBackoff {
-backoff = maxBackoff
-}
-}
+backoff = serviceconnection.NextReconnectBackoff(backoff)
 continue
 }
 pending = nil
-backoff = minBackoff
+backoff = serviceconnection.ReconnectInitialBackoff
 }
 }
 
@@ -1693,9 +1736,7 @@ return nil
 // pending until the broker acknowledges it, so stream/re-resolution failures do
 // not discard already accepted business events.
 func {{.LoopName}}(ctx context.Context, resolve func(context.Context) (grpc.ClientConnInterface, error), tp func() (string, error), ch <-chan *{{.TypePkgAlias}}.{{.EventTypeName}}) {
-const minBackoff = 3 * time.Second
-const maxBackoff = 30 * time.Second
-backoff := minBackoff
+backoff := serviceconnection.ReconnectInitialBackoff
 var pending *{{.TypePkgAlias}}.{{.EventTypeName}}
 
 for ctx.Err() == nil {
@@ -1724,12 +1765,7 @@ case <-time.After(backoff):
 case <-ctx.Done():
 return
 }
-if backoff < maxBackoff {
-backoff *= 2
-if backoff > maxBackoff {
-backoff = maxBackoff
-}
-}
+backoff = serviceconnection.NextReconnectBackoff(backoff)
 continue
 }
 if err := {{.StreamName}}(ctx, conn, tp, pending); err != nil {
@@ -1744,16 +1780,11 @@ case <-time.After(backoff):
 case <-ctx.Done():
 return
 }
-if backoff < maxBackoff {
-backoff *= 2
-if backoff > maxBackoff {
-backoff = maxBackoff
-}
-}
+backoff = serviceconnection.NextReconnectBackoff(backoff)
 continue
 }
 pending = nil
-backoff = minBackoff
+backoff = serviceconnection.ReconnectInitialBackoff
 }
 }
 
@@ -1805,9 +1836,7 @@ return nil
 // the durable-sink send contract (EventBusSink.Emit) is what makes this the
 // non-dropping path, not this loop.
 func {{.LoopName}}(ctx context.Context, resolve func(context.Context) (grpc.ClientConnInterface, error), tp func() (string, error), ch <-chan *{{.TypePkgAlias}}.{{.EventTypeName}}) {
-const minBackoff = 3 * time.Second
-const maxBackoff = 30 * time.Second
-backoff := minBackoff
+backoff := serviceconnection.ReconnectInitialBackoff
 var pending *{{.TypePkgAlias}}.{{.EventTypeName}}
 
 for ctx.Err() == nil {
@@ -1836,12 +1865,7 @@ case <-time.After(backoff):
 case <-ctx.Done():
 return
 }
-if backoff < maxBackoff {
-backoff *= 2
-if backoff > maxBackoff {
-backoff = maxBackoff
-}
-}
+backoff = serviceconnection.NextReconnectBackoff(backoff)
 continue
 }
 if err := {{.StreamName}}(ctx, conn, tp, pending); err != nil {
@@ -1856,16 +1880,11 @@ case <-time.After(backoff):
 case <-ctx.Done():
 return
 }
-if backoff < maxBackoff {
-backoff *= 2
-if backoff > maxBackoff {
-backoff = maxBackoff
-}
-}
+backoff = serviceconnection.NextReconnectBackoff(backoff)
 continue
 }
 pending = nil
-backoff = minBackoff
+backoff = serviceconnection.ReconnectInitialBackoff
 }
 }
 

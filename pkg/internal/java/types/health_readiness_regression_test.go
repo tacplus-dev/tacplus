@@ -146,23 +146,24 @@ func TestJavaHealthReporterStatusSinkBridgesHealthToGrpc(t *testing.T) {
 		}
 	}
 
-	// The ServiceManager must wire the StatusSink to flip the gRPC health endpoint.
+	// The ServiceManager must wire the StatusSink into readiness: the sink
+	// feeds healthOk, and driveReadiness (started right after, once bootstrap
+	// completed) combines it with the required s2s channels to flip the gRPC
+	// health endpoint.
 	sm := readJavaTemplate(t, "java/types/ServiceManager.java.tmpl")
 	for _, want := range []string{
 		"healthReporter.setStatusSink(",
-		"INSTANCE_STATUS_UNHEALTHY",
-		"setReady(serving);",
+		"healthOk.set(effectiveStatus != InstanceStatus.INSTANCE_STATUS_UNHEALTHY)",
+		"readyCtl.setReady(ready);",
 	} {
 		if !strings.Contains(sm, want) {
 			t.Fatalf("Java ServiceManager must wire StatusSink to gRPC health; missing %q", want)
 		}
 	}
-
-	// The sink wiring must come AFTER the initial setReady(true) bootstrap.
-	idxBootstrap := strings.Index(sm, "srv.setReady(true);")
 	idxSink := strings.Index(sm, "healthReporter.setStatusSink(")
-	if idxBootstrap < 0 || idxSink < 0 || idxSink < idxBootstrap {
-		t.Fatalf("StatusSink must be wired after bootstrap setReady(true) (bootstrap=%d sink=%d)", idxBootstrap, idxSink)
+	idxDrive := strings.Index(sm, "driveReadiness(readyCtl, healthOk,")
+	if idxSink < 0 || idxDrive < 0 || idxDrive < idxSink {
+		t.Fatalf("StatusSink must be wired before driveReadiness starts (sink=%d drive=%d)", idxSink, idxDrive)
 	}
 }
 

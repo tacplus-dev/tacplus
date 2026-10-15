@@ -669,6 +669,13 @@ write_java_compile_pom() {
       <artifactId>javax.annotation-api</artifactId>
       <version>1.3.2</version>
     </dependency>
+    <!-- Generated MCP dispatch (every c2s service with a user rpc) is written
+         against the official MCP Java SDK; see pkg/internal/java/types/mcp_dispatch_gen.go. -->
+    <dependency>
+      <groupId>io.modelcontextprotocol.sdk</groupId>
+      <artifactId>mcp</artifactId>
+      <version>2.0.1</version>
+    </dependency>
   </dependencies>
 </project>
 EOF

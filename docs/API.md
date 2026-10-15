@@ -98,6 +98,18 @@ Startup attempts use bounded exponential backoff with a shutdown escape. If the
 attempt budget is exhausted before first delivery, startup fails loudly.
 Shutdown or cancellation exits without reporting a false startup success.
 
+**Readiness and reconnects (Go, Java, Rust).** The gRPC health endpoint that
+Kubernetes readiness probes read starts NOT_SERVING and flips to SERVING only
+when bootstrap has completed, the last effective health status is not
+UNHEALTHY, and every required s2s channel is up: each event-bus subscription
+the service declares, and each s2s target listed explicitly through
+`grpc_s2s_client` (targets discovered through `s2s_client_all` do not gate).
+It flips back to NOT_SERVING while any of them is down. Only readiness is
+gated; the status published to ServiceHealthState is not, since peers resolve
+each other through it. Every s2s reconnect loop (service resolution,
+subscriptions, publishers) backs off from 500ms doubling to a 30s cap, from
+one shared chassis constant per language.
+
 Required failure behavior:
 
 | Case | Generated behavior |

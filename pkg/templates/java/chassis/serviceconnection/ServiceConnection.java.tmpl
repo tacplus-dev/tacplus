@@ -260,6 +260,37 @@ public class ServiceConnection implements AutoCloseable {
     }
 
     /**
+     * Reports whether an RPC to this service has somewhere to go: at least one
+     * endpoint is dialed and currently routable. Unlike {@link #conn()}, which
+     * falls back to any connected channel, this is what readiness gates on.
+     */
+    public boolean isAvailable() {
+        lock.readLock().lock();
+        try {
+            for (EndpointConn ec : endpoints) {
+                if (ec.isConnected() && ec.isRoutable()) {
+                    return true;
+                }
+            }
+            return false;
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /** Test hook: reports every endpoint of this pool with {@code status}. */
+    void setEndpointHealthForTest(InstanceStatus status) {
+        lock.writeLock().lock();
+        try {
+            for (EndpointConn ec : endpoints) {
+                ec.status = status;
+            }
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
      * Reconciles endpoints from a set of health reports for this service.
      * Called by the health poller for dynamic connections. Eagerly connects
      * to new endpoints, drops removed ones, and reselects the active endpoint.

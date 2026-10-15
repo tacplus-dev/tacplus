@@ -45,6 +45,8 @@ import {{.PackageBase}}.{{.SmPrefix}}.internal.state.StateClients;
 import {{.PackageBase}}.{{.SmPrefix}}.internal.grpc.clients.GrpcClients;
 {{- end}}
 import {{.ChassisBase}}.serviceconnection.ServiceConnection;
+import {{.ChassisBase}}.serviceconnection.ReconnectBackoff;
+import {{.ChassisBase}}.serviceconnection.RequiredChannels;
 import io.grpc.ManagedChannel;
 import io.grpc.Server;
 import io.grpc.health.v1.HealthCheckResponse;
@@ -99,6 +101,7 @@ import java.util.concurrent.BlockingQueue;
 {{- end}}
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 {{- if .HasAutoTls}}
@@ -1199,6 +1202,31 @@ public class ServiceManager implements AutoCloseable {
         }
 {{- end}}
 
+{{- if .HasSubscriptions}}
+        // One up-flag per subscription channel; readiness requires all of them.
+{{- range .Subscriptions}}
+        AtomicBoolean up_{{.HandlerMethodName}} = new AtomicBoolean(false);
+{{- end}}
+        java.util.List<RequiredChannels.RequiredStream> readinessStreams = java.util.List.of(
+{{- range $i, $s := .Subscriptions}}{{if $i}},{{end}}
+                new RequiredChannels.RequiredStream("{{$s.SourcePackage}}.{{$s.SourceField}} subscription ({{$s.TargetService}})", up_{{$s.HandlerMethodName}})
+{{- end}});
+{{- end}}
+{{- if .HasServiceHealthState}}
+        // Bootstrap complete (serving + first health publish{{if .HasAutoTls}} + TLS cert{{end}}{{if .HasSmb}} + SMB member cert{{end}}):
+        // advertise SERVING on the gRPC health endpoint so k8s readiness probes pass
+        // — once the required s2s channels are up too (see driveReadiness).
+        //
+        // Ongoing health evaluation feeds readiness: a handler reporting
+        // UNHEALTHY flips the endpoint to NOT_SERVING so k8s removes the pod
+        // from load-balancer rotation. Recovery flips it back to SERVING.
+        AtomicBoolean healthOk = new AtomicBoolean(true);
+        healthReporter.setStatusSink(effectiveStatus ->
+                healthOk.set(effectiveStatus != InstanceStatus.INSTANCE_STATUS_UNHEALTHY));
+        GrpcServer readyCtl = {{if .HasGrpc}}srv{{else}}healthSrv{{end}};
+        startManagedThread("readiness", true,
+                () -> driveReadiness(readyCtl, healthOk, {{if .HasSubscriptions}}readinessStreams{{else}}java.util.List.of(){{end}}));
+{{- else}}
         // Bootstrap complete (serving + first health publish{{if .HasAutoTls}} + TLS cert{{end}}{{if .HasSmb}} + SMB member cert{{end}}):
         // advertise SERVING on the gRPC health endpoint so k8s readiness probes pass.
 {{- if .HasGrpc}}
@@ -1206,19 +1234,6 @@ public class ServiceManager implements AutoCloseable {
 {{- else}}
         healthSrv.setReady(true);
 {{- end}}
-
-{{- if .HasServiceHealthState}}
-        // Bridge ongoing health evaluation to the gRPC health endpoint: a handler
-        // reporting UNHEALTHY flips the endpoint to NOT_SERVING so k8s removes the
-        // pod from load-balancer rotation. Recovery flips it back to SERVING.
-        healthReporter.setStatusSink(effectiveStatus -> {
-            boolean serving = effectiveStatus != InstanceStatus.INSTANCE_STATUS_UNHEALTHY;
-{{- if .HasGrpc}}
-            srv.setReady(serving);
-{{- else}}
-            healthSrv.setReady(serving);
-{{- end}}
-        });
 {{- end}}
 
 {{- if .HasSubscriptions}}
@@ -1243,7 +1258,9 @@ public class ServiceManager implements AutoCloseable {
                     () -> resolveService("{{.TargetService}}"),
                     () -> identity.callCredentialsForAudience("{{.TargetService}}"),
                     serviceLabel);
+            subscriber.setUpFlag(up_{{.HandlerMethodName}});
             Thread t = startManagedThread("sub-{{.SourcePackage}}-{{.SourceField}}", true, () -> {
+                long subBackoff = ReconnectBackoff.INITIAL_MS;
                 while (!Thread.currentThread().isInterrupted()) {
                     try {
                         subscriber.subscribe((event, meta) -> {
@@ -1267,11 +1284,12 @@ public class ServiceManager implements AutoCloseable {
                         if (Thread.currentThread().isInterrupted()) {
                             return;
                         }
-                        LOG.severe("{{.SourcePackage}}.{{.SourceField}} subscription error, re-resolving target: " + e.getMessage());
-                        try { Thread.sleep(2000); } catch (InterruptedException ie) {
+                        LOG.severe("{{.SourcePackage}}.{{.SourceField}} subscription error, re-resolving target in " + subBackoff + "ms: " + e.getMessage());
+                        try { Thread.sleep(subBackoff); } catch (InterruptedException ie) {
                             Thread.currentThread().interrupt();
                             return;
                         }
+                        subBackoff = ReconnectBackoff.next(subBackoff);
                     }
                 }
             });
@@ -2037,8 +2055,7 @@ public class ServiceManager implements AutoCloseable {
      * Use this to obtain a channel for building custom subscribers or ad-hoc S2S calls.
      */
     public io.grpc.ManagedChannel resolveService(String serviceName) {
-        long backoff = 2000;
-        final long maxBackoff = 30000;
+        long backoff = ReconnectBackoff.INITIAL_MS;
         while (true) {
             try {
                 var stub = ServiceHealthStateServiceGrpc.newBlockingStub(stateStoreConn.conn())
@@ -2065,8 +2082,51 @@ public class ServiceManager implements AutoCloseable {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException("interrupted while resolving " + serviceName);
             }
-            if (backoff < maxBackoff) {
-                backoff = Math.min(backoff * 2, maxBackoff);
+            backoff = ReconnectBackoff.next(backoff);
+        }
+    }
+
+    /**
+     * Owns the gRPC health endpoint (k8s readiness) once bootstrap is done.
+     *
+     * <p>SERVING requires both: the last effective health status was not
+     * UNHEALTHY ({@code healthOk}, fed by the HealthReporter status sink), and
+     * every required s2s channel is up — each event-bus subscription channel
+     * ({@code streams}){{if .S2STargetsRequired}} and each explicitly declared s2s target{{end}}.
+     * Reporting Ready while those channels were still being dialed put pods in
+     * rotation that could not do their job for minutes after a peer restart.
+     *
+     * <p>Only readiness is gated. The status published to ServiceHealthState is
+     * not: peers resolve each other through it, so gating it on dependencies
+     * would deadlock any two services that depend on each other.
+     */
+    private void driveReadiness(GrpcServer readyCtl, AtomicBoolean healthOk, java.util.List<RequiredChannels.RequiredStream> streams) {
+        final long readinessCheckIntervalMs = 1000;
+        RequiredChannels required = new RequiredChannels(java.util.List.of(
+{{- if .S2STargetsRequired}}
+{{- range $i, $t := .TargetServices}}{{if $i}},{{end}}
+                {{if eq $t.ServiceID $.StateStoreServiceID}}stateStoreConn{{else}}{{$t.FieldName}}{{end}}
+{{- end}}
+{{- end}}
+        ), streams);
+        Boolean serving = null;
+        while (!Thread.currentThread().isInterrupted()) {
+            java.util.Optional<String> down = required.firstDown();
+            boolean ready = healthOk.get() && down.isEmpty();
+            if (serving == null || serving != ready) {
+                serving = ready;
+                if (ready) {
+                    LOG.info("readiness: SERVING");
+                } else if (down.isPresent()) {
+                    LOG.warning("readiness: NOT_SERVING, required s2s channel is down: " + down.get());
+                } else {
+                    LOG.warning("readiness: NOT_SERVING, health status is UNHEALTHY");
+                }
+                readyCtl.setReady(ready);
+            }
+            try { Thread.sleep(readinessCheckIntervalMs); } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return;
             }
         }
     }
@@ -2090,8 +2150,7 @@ public class ServiceManager implements AutoCloseable {
 {{- if .HasPublishers}}
 {{- range .Publishers}}
     private void {{.ResolveLoopName}}(BlockingQueue<{{.TypeOuterClass}}.{{.TypeName}}> queue) {
-        long backoff = 3000;
-        final long maxBackoff = 30000;
+        long backoff = ReconnectBackoff.INITIAL_MS;
         {{.TypeOuterClass}}.{{.TypeName}} pending = null;
 
         while (!Thread.currentThread().isInterrupted()) {
@@ -2105,16 +2164,14 @@ public class ServiceManager implements AutoCloseable {
                 io.grpc.Channel ebConn = resolveService("{{.TargetService}}");
                 {{.StreamName}}(ebConn, pending);
                 pending = null;
-                backoff = 3000;
+                backoff = ReconnectBackoff.INITIAL_MS;
             } catch (Exception e) {
                 LOG.warning("publisher {{.Label}} publish attempt failed for broker {{.TargetService}}, retrying in " + backoff + "ms: " + e.getMessage());
                 try { Thread.sleep(backoff); } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     return;
                 }
-                if (backoff < maxBackoff) {
-                    backoff = Math.min(backoff * 2, maxBackoff);
-                }
+                backoff = ReconnectBackoff.next(backoff);
             }
         }
     }
@@ -2191,8 +2248,7 @@ public class ServiceManager implements AutoCloseable {
     // non-dropping; this loop just makes sure an accepted record is retried
     // until it is durably published.
     private void {{.ResolveLoopName}}(BlockingQueue<{{.TypeOuterClass}}.{{.TypeName}}> queue) {
-        long backoff = 3000;
-        final long maxBackoff = 30000;
+        long backoff = ReconnectBackoff.INITIAL_MS;
         {{.TypeOuterClass}}.{{.TypeName}} pending = null;
 
         while (!Thread.currentThread().isInterrupted()) {
@@ -2206,16 +2262,14 @@ public class ServiceManager implements AutoCloseable {
                 io.grpc.Channel ebConn = resolveService("{{.TargetService}}");
                 {{.StreamName}}(ebConn, pending);
                 pending = null;
-                backoff = 3000;
+                backoff = ReconnectBackoff.INITIAL_MS;
             } catch (Exception e) {
                 LOG.warning("accounting publisher {{.Label}} publish attempt failed for broker {{.TargetService}}, retrying in " + backoff + "ms: " + e.getMessage());
                 try { Thread.sleep(backoff); } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     return;
                 }
-                if (backoff < maxBackoff) {
-                    backoff = Math.min(backoff * 2, maxBackoff);
-                }
+                backoff = ReconnectBackoff.next(backoff);
             }
         }
     }
@@ -2288,8 +2342,7 @@ public class ServiceManager implements AutoCloseable {
      * of leaving wrappers with a publisher queue that nobody drains.
      */
     private void tracePublishResolveLoop(BlockingQueue<Trace.TraceEvent> queue) {
-        long backoff = 3000;
-        final long maxBackoff = 30000;
+        long backoff = ReconnectBackoff.INITIAL_MS;
         Trace.TraceEvent pending = null;
 
         while (!Thread.currentThread().isInterrupted()) {
@@ -2303,16 +2356,14 @@ public class ServiceManager implements AutoCloseable {
                 io.grpc.Channel ebConn = resolveService("{{.TracePublisherTarget}}");
                 tracePublishStream(ebConn, pending);
                 pending = null;
-                backoff = 3000;
+                backoff = ReconnectBackoff.INITIAL_MS;
             } catch (Exception e) {
                 LOG.warning("trace publisher: publish attempt failed for broker {{.TracePublisherTarget}}, retrying in " + backoff + "ms: " + e.getMessage());
                 try { Thread.sleep(backoff); } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     return;
                 }
-                if (backoff < maxBackoff) {
-                    backoff = Math.min(backoff * 2, maxBackoff);
-                }
+                backoff = ReconnectBackoff.next(backoff);
             }
         }
     }

@@ -1,8 +1,12 @@
 package {{.ChassisBase}}.serviceconnection;
 
 import {{.TypesBase}}.sys.x509.X509;
+import {{.TypesBase}}.sys.healthreport.Healthreport.InstanceStatus;
+import io.grpc.ManagedChannel;
+import io.grpc.ManagedChannelBuilder;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 // Pins NEW-18 / NEW-21: service-mesh channels are fail-CLOSED and fail-FAST.
 // channelFactory refuses an empty/absent trust domain at CONSTRUCTION time (not
@@ -39,10 +43,67 @@ public class ServiceConnectionTest {
             failures++;
         }
 
+        checkBackoff();
+        checkReadiness();
+
         if (failures > 0) {
             System.err.println(failures + " ServiceConnection check(s) FAILED");
             System.exit(1);
         }
         System.out.println("ServiceConnectionTest: all checks passed");
+    }
+
+    private static void expect(boolean ok, String what) {
+        if (!ok) {
+            System.err.println("FAIL: " + what);
+            failures++;
+        }
+    }
+
+    /** Reconnect backoff doubles from 500ms to a 30s cap and never exceeds it. */
+    private static void checkBackoff() {
+        long[] want = {500, 1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000};
+        long d = ReconnectBackoff.INITIAL_MS;
+        for (int i = 0; i < want.length; i++) {
+            expect(d == want[i], "backoff step " + i + " = " + d + "ms, want " + want[i] + "ms");
+            d = ReconnectBackoff.next(d);
+        }
+        expect(ReconnectBackoff.next(Long.MAX_VALUE) == ReconnectBackoff.MAX_MS, "backoff(max) must cap");
+        expect(ReconnectBackoff.next(ReconnectBackoff.MAX_MS) == ReconnectBackoff.MAX_MS, "backoff(cap) must stay at cap");
+    }
+
+    /** Readiness requires every pool to have a routable endpoint and every stream flag to be up. */
+    private static void checkReadiness() {
+        expect(new RequiredChannels(List.of(), List.of()).firstDown().isEmpty(), "nothing required must be ready");
+
+        ServiceConnection empty = new ServiceConnection("eventbus", (id, target) -> null);
+        expect(new RequiredChannels(List.of(empty), List.of()).firstDown().orElse("").equals("eventbus"),
+                "a pool with no endpoints must be down");
+
+        ManagedChannel channel = ManagedChannelBuilder.forAddress("127.0.0.1", 1).usePlaintext().build();
+        try {
+            ServiceConnection sc = ServiceConnection.fromChannel("identity", channel);
+            RequiredChannels required = new RequiredChannels(List.of(sc), List.of());
+            sc.setEndpointHealthForTest(InstanceStatus.INSTANCE_STATUS_STARTING);
+            expect(required.firstDown().orElse("").equals("identity"), "STARTING peer must be down");
+            sc.setEndpointHealthForTest(InstanceStatus.INSTANCE_STATUS_HEALTHY);
+            expect(required.firstDown().isEmpty(), "HEALTHY peer must be up");
+            sc.setEndpointHealthForTest(InstanceStatus.INSTANCE_STATUS_DEGRADED);
+            expect(required.firstDown().isEmpty(), "DEGRADED peer still serves");
+            sc.setEndpointHealthForTest(InstanceStatus.INSTANCE_STATUS_UNHEALTHY);
+            expect(required.firstDown().orElse("").equals("identity"), "UNHEALTHY peer must be down");
+
+            sc.setEndpointHealthForTest(InstanceStatus.INSTANCE_STATUS_HEALTHY);
+            AtomicBoolean up = new AtomicBoolean(false);
+            RequiredChannels withStream = new RequiredChannels(List.of(sc),
+                    List.of(new RequiredChannels.RequiredStream("events subscription", up)));
+            expect(withStream.firstDown().orElse("").equals("events subscription"), "stream flag false must be down");
+            up.set(true);
+            expect(withStream.firstDown().isEmpty(), "stream flag true must be up");
+            up.set(false);
+            expect(withStream.firstDown().isPresent(), "stream flag false again must be down");
+        } finally {
+            channel.shutdownNow();
+        }
     }
 }

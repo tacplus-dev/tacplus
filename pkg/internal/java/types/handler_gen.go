@@ -191,6 +191,7 @@ type javaSmTemplateData struct {
 	HasAccountingPublisher bool
 	AccountingPublisher    javaPublisherEntry
 	TargetServices         []javaTargetServiceEntry // unique target services for S2S clients
+	S2STargetsRequired     bool                     // s2s targets listed explicitly (grpc_s2s_clients) gate readiness; s2s_client_all targets do not
 	DiskStores             []javaDiskStoreRuntimeEntry
 	HasDiskStores          bool
 	// HasApprovalBroker is true when some hosted service carries the
@@ -566,6 +567,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		HasAccountingPublisher: hasAccountingPublisher,
 		AccountingPublisher:    accountingPublisherEntry,
 		TargetServices:         targetServices,
+		S2STargetsRequired:     len(config.GrpcS2SClients) > 0 && !config.GrpcS2SClientAll,
 		DiskStores:             diskStores,
 		HasDiskStores:          len(diskStores) > 0,
 		HasApprovalBroker:      hasApprovalBroker,

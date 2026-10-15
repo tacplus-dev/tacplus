@@ -19,6 +19,8 @@ import (
 	"github.com/tacplus-dev/tacplus/pkg/buildinfo"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/extraction"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
@@ -129,6 +131,11 @@ type javaSubscriptionEntry struct {
 	StoreEpochFieldPascal string
 	// StoreEpochField is the same field's proto name, for the emitted comment.
 	StoreEpochField string
+	// DispatchMethod is the source's record dispatch,
+	// "<pkg>.<Source>Projections.handle<Source>" ("" when nothing projects from
+	// it), called after the Handler method with Inserts in its parameter order.
+	DispatchMethod string
+	Inserts        []javaTimeseriesInsertEntry
 	// RoutingOnly / EnvelopeTypeName mirror tactype.SubscriptionEntry: the
 	// Handler method takes the narrow envelope when this service is named in the
 	// source type's s2s_subscribe.routing_only_services. The store-epoch stamp
@@ -177,6 +184,8 @@ type javaSmTemplateData struct {
 	// PerInstanceConsumerGroup; it gates the one helper those subscriptions need,
 	// so a service with none generates byte-identical to before.
 	HasRecordSubscriptions bool
+	// TimeseriesInserts are every subscription's insert callbacks, once each.
+	TimeseriesInserts      []javaTimeseriesInsertEntry
 	HasPublishers          bool
 	HealthStateProtoDir    string // e.g. "services/identity"
 	HealthStateJavaPkg     string // e.g. "services.identity" (Java package path)
@@ -233,8 +242,19 @@ func javaSmTargetServices(config *tactype.Config, clientSvcs []ServiceInfo) []ja
 	return result
 }
 
-// buildJavaSmTemplateData constructs the template data.
-func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientSvcs []ServiceInfo, protoDir string, hasAccountingByService map[string]bool) (javaSmTemplateData, error) {
+// javaTimeseriesInsertEntry is one typed timeseries insert callback the
+// service manager holds: one per projection, shared by every subscription to
+// its source. Go's TimeseriesInsertEntry.
+type javaTimeseriesInsertEntry struct {
+	TypeName      string // projection message, e.g. "SensorReading"
+	InterfaceType string // "<pkg>.<Source>Projections.<Projection>Insert"
+	FieldName     string // e.g. "insertSensorReading"
+	SetterName    string // e.g. "setSensorReadingInsert"
+}
+
+// buildJavaSmTemplateData constructs the template data. allFiles feeds the
+// record dispatch of each subscription (may be nil when there are none).
+func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientSvcs []ServiceInfo, protoDir string, hasAccountingByService map[string]bool, allFiles []model.ProtoFile) (javaSmTemplateData, error) {
 	packageBase := config.JavaPackageBase
 	configStates, err := stateproto.ConfigStateAccessors(config, config.FlatProtoDir)
 	if err != nil {
@@ -425,8 +445,37 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 	// removed is a hazard for every hand-written impl of the trait, so the shorter
 	// unique-case name is not worth it.
 
+	projectionGroups, err := extraction.Plan(allFiles)
+	if err != nil {
+		return javaSmTemplateData{}, err
+	}
 	var subs []javaSubscriptionEntry
+	var timeseriesInserts []javaTimeseriesInsertEntry
+	seenInsert := make(map[string]bool)
 	for _, sub := range config.Subscriptions {
+		group, dispatched, err := extraction.Dispatched(projectionGroups, sub.SourceTypeFqn)
+		if err != nil {
+			return javaSmTemplateData{}, err
+		}
+		dispatchMethod := ""
+		var inserts []javaTimeseriesInsertEntry
+		if dispatched {
+			projections := javaProjectionsClass(config, group)
+			dispatchMethod = projections + "." + javaRecordDispatchMethod(group)
+			for _, p := range group.Projections {
+				ins := javaTimeseriesInsertEntry{
+					TypeName:      p.Message.Name,
+					InterfaceType: projections + "." + p.Message.Name + "Insert",
+					FieldName:     "insert" + p.Message.Name,
+					SetterName:    "set" + p.Message.Name + "Insert",
+				}
+				inserts = append(inserts, ins)
+				if !seenInsert[ins.FieldName] {
+					seenInsert[ins.FieldName] = true
+					timeseriesInserts = append(timeseriesInserts, ins)
+				}
+			}
+		}
 		event := resolveJavaSubscriptionEvent(config, protoDir, sub)
 		fieldPascal := strutil.ToPascalCase(sub.SourceField)
 		fieldCamel := strings.ToLower(fieldPascal[:1]) + fieldPascal[1:]
@@ -455,6 +504,9 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 
 			StoreEpochFieldPascal: javaPascalField(sub.SourceStoreEpochField),
 			StoreEpochField:       sub.SourceStoreEpochField,
+
+			DispatchMethod: dispatchMethod,
+			Inserts:        inserts,
 
 			RoutingOnly:      sub.RoutingOnly,
 			EnvelopeTypeName: event.TypeName + boundaries.RoutingEnvelopeSuffix,
@@ -588,6 +640,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		SmbAuthorityServiceID:  smbAuthorityServiceID,
 		HasSubscriptions:       len(subs) > 0,
 		HasRecordSubscriptions: hasRecordSubscriptions,
+		TimeseriesInserts:      timeseriesInserts,
 		HasPublishers:          hasPublishers,
 		HealthStateProtoDir:    healthStateProtoDir,
 		HealthStateJavaPkg:     strings.ReplaceAll(healthStateProtoDir, "/", "."),
@@ -808,7 +861,7 @@ func javaTypesPackageForProto(packageBase, protoFile, protoPackage string, decla
 }
 
 // generateJavaHandlerInterface generates Handler.java in the sm/ directory.
-func generateJavaHandlerInterface(config *tactype.Config, svcs []ServiceInfo, clientSvcs []ServiceInfo, protoDir string, hasAccountingByService map[string]bool) error {
+func generateJavaHandlerInterface(config *tactype.Config, svcs []ServiceInfo, clientSvcs []ServiceInfo, protoDir string, hasAccountingByService map[string]bool, allFiles []model.ProtoFile) error {
 	tmplContent, err := loadTemplate("Handler.java.tmpl")
 	if err != nil {
 		return fmt.Errorf("failed to load handler template: %w", err)
@@ -819,7 +872,7 @@ func generateJavaHandlerInterface(config *tactype.Config, svcs []ServiceInfo, cl
 		return fmt.Errorf("failed to parse handler template: %w", err)
 	}
 
-	data, err := buildJavaSmTemplateData(config, svcs, clientSvcs, protoDir, hasAccountingByService)
+	data, err := buildJavaSmTemplateData(config, svcs, clientSvcs, protoDir, hasAccountingByService, allFiles)
 	if err != nil {
 		return fmt.Errorf("failed to build handler template data: %w", err)
 	}
@@ -844,7 +897,7 @@ func generateJavaHandlerInterface(config *tactype.Config, svcs []ServiceInfo, cl
 }
 
 // generateJavaServiceManager generates ServiceManager.java in the sm/ directory.
-func generateJavaServiceManager(config *tactype.Config, svcs []ServiceInfo, clientSvcs []ServiceInfo, protoDir string, hasAccountingByService map[string]bool) error {
+func generateJavaServiceManager(config *tactype.Config, svcs []ServiceInfo, clientSvcs []ServiceInfo, protoDir string, hasAccountingByService map[string]bool, allFiles []model.ProtoFile) error {
 	tmplContent, err := loadTemplate("ServiceManager.java.tmpl")
 	if err != nil {
 		return fmt.Errorf("failed to load service_manager template: %w", err)
@@ -855,7 +908,7 @@ func generateJavaServiceManager(config *tactype.Config, svcs []ServiceInfo, clie
 		return fmt.Errorf("failed to parse service_manager template: %w", err)
 	}
 
-	data, err := buildJavaSmTemplateData(config, svcs, clientSvcs, protoDir, hasAccountingByService)
+	data, err := buildJavaSmTemplateData(config, svcs, clientSvcs, protoDir, hasAccountingByService, allFiles)
 	if err != nil {
 		return fmt.Errorf("failed to build service manager template data: %w", err)
 	}

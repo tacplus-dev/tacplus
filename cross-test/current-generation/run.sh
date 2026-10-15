@@ -1361,6 +1361,30 @@ PLANE_PY
   # pin binds to; a tenant-scoped record still reads the S2S half. Asserted in
   # Rust alone because the typed reader is a Rust surface: Go and Java generate
   # the wrapper and the Handler interface for this plane, not its data path.
+  # The typed record readers over the two records' stored rows, one per
+  # (spec.record_read), each borrowing the plane half its record needs: the
+  # S2S half for the tenant-scoped VaultRow, the C2S half for the private
+  # VaultSecretRow. Go and Java emit the same readers as Rust (2026-10-14).
+  if [[ "$language" == "go" ]]; then
+    local go_readers
+    go_readers="$(find "$output" -type f -path '*/s2sm/record_readers.go' -print -quit)"
+    [[ -n "$go_readers" ]] || die "record-egress fixture (go): the typed record readers file was not generated under $output"
+    grep -q 'type VaultRowRecordReader struct {' "$go_readers" && grep -A1 'type VaultRowRecordReader struct {' "$go_readers" | grep -q 'EgressRecordMapClient' \
+      || die "record-egress fixture (go): VaultRowRecordReader must read the plane's S2S half (EgressRecordMapClient)"
+    grep -A1 'type VaultSecretRowRecordReader struct {' "$go_readers" | grep -q 'EgressRecordQueryClient' \
+      || die "record-egress fixture (go): VaultSecretRowRecordReader must read the plane's C2S half (EgressRecordQueryClient)"
+  fi
+  if [[ "$language" == "java" ]]; then
+    local java_reader
+    java_reader="$(find "$output" -type f -path '*/s2sm/VaultRowRecordReader.java' -print -quit)"
+    [[ -n "$java_reader" ]] || die "record-egress fixture (java): VaultRowRecordReader.java was not generated under $output"
+    grep -q 'EgressRecordMapGrpcClient client;' "$java_reader" \
+      || die "record-egress fixture (java): VaultRowRecordReader must read the plane's S2S half (EgressRecordMapGrpcClient)"
+    java_reader="$(find "$output" -type f -path '*/s2sm/VaultSecretRowRecordReader.java' -print -quit)"
+    [[ -n "$java_reader" ]] || die "record-egress fixture (java): VaultSecretRowRecordReader.java was not generated under $output"
+    grep -q 'EgressRecordQueryGrpcClient client;' "$java_reader" \
+      || die "record-egress fixture (java): VaultSecretRowRecordReader must read the plane's C2S half (EgressRecordQueryGrpcClient)"
+  fi
   if [[ "$language" == "rust" ]]; then
     local readers
     readers="$(find "$output" -type f -path '*/s2sm/record_readers.rs' -print -quit)"

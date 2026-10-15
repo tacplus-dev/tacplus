@@ -264,6 +264,8 @@ type serviceManagerTemplateData struct {
 	TracePublishGrpcPath     string   // canonical gRPC path for trace publish stream
 	S2STargetServices        []string // unique service IDs for S2S client ServiceConnections
 	S2STargetsRequired       bool     // s2s targets listed explicitly (grpc_s2s_clients) gate readiness; s2s_client_all targets do not
+	RecordReaders            []goRecordReaderEntry // model-driven (spec.record_read) typed readers over stored record rows
+	HasRecordReaders         bool
 	GrpcServices             []GrpcServiceEntry
 	WrapperImports           []WrapperImport // deduplicated wrapper imports
 	TypeImports              []WrapperImport // deduplicated type imports (for config)
@@ -672,6 +674,11 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 	if err != nil {
 		return serviceManagerTemplateData{}, err
 	}
+
+	recordReaders, err := collectGoRecordReaders(config, config.AnnotatedProtoDir)
+	if err != nil {
+		return serviceManagerTemplateData{}, err
+	}
 	hasTracePublisher := tracePublisher != nil && hasServiceHealthState
 	tracePublisherTopicRef := ""
 	tracePublisherTarget := ""
@@ -766,6 +773,8 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		TracePublishGrpcPath:     tracePublishGrpcPath,
 		S2STargetServices:        s2sTargetServices,
 		S2STargetsRequired:       len(config.GrpcS2SClients) > 0 && !config.GrpcS2SClientAll,
+		RecordReaders:            recordReaders,
+		HasRecordReaders:         len(recordReaders) > 0,
 		GrpcServices:             grpcSvcs,
 		WrapperImports:           wrapperImports,
 		TypeImports:              typeImports,
@@ -919,6 +928,11 @@ func generateServiceManager(config *tactype.Config, svcs []ServiceInfo, allFiles
 	zap.L().Info("Generated service-manager package", zap.String("path", outputPath))
 
 	if err := generateServiceManagerIdentityErrorTest(data, outputDir); err != nil {
+		return err
+	}
+	// The SM exposes an accessor per (spec.record_read); write the readers
+	// beside it, or the accessor names a type that does not exist.
+	if err := generateGoRecordReaders(config, config.AnnotatedProtoDir, data.RecordReaders); err != nil {
 		return err
 	}
 	return nil

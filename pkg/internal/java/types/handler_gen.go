@@ -192,6 +192,8 @@ type javaSmTemplateData struct {
 	AccountingPublisher    javaPublisherEntry
 	TargetServices         []javaTargetServiceEntry // unique target services for S2S clients
 	S2STargetsRequired     bool                     // s2s targets listed explicitly (grpc_s2s_clients) gate readiness; s2s_client_all targets do not
+	RecordReaders          []javaRecordReaderEntry  // model-driven (spec.record_read) typed readers over stored record rows
+	HasRecordReaders       bool
 	DiskStores             []javaDiskStoreRuntimeEntry
 	HasDiskStores          bool
 	// HasApprovalBroker is true when some hosted service carries the
@@ -447,6 +449,10 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 	}
 
 	targetServices := javaSmTargetServices(config, clientSvcs)
+	recordReaders, err := collectJavaRecordReaders(config, config.AnnotatedProtoDir)
+	if err != nil {
+		return javaSmTemplateData{}, err
+	}
 	tracePublisher, err := detectTracePublisherTemplateData(config)
 	if err != nil {
 		return javaSmTemplateData{}, err
@@ -568,6 +574,8 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		AccountingPublisher:    accountingPublisherEntry,
 		TargetServices:         targetServices,
 		S2STargetsRequired:     len(config.GrpcS2SClients) > 0 && !config.GrpcS2SClientAll,
+		RecordReaders:          recordReaders,
+		HasRecordReaders:       len(recordReaders) > 0,
 		DiskStores:             diskStores,
 		HasDiskStores:          len(diskStores) > 0,
 		HasApprovalBroker:      hasApprovalBroker,
@@ -817,6 +825,11 @@ func generateJavaServiceManager(config *tactype.Config, svcs []ServiceInfo, clie
 	}
 
 	zap.L().Info("Generated Java service_manager", zap.String("path", outputPath))
+	// The SM exposes an accessor per (spec.record_read); write the readers
+	// beside it, or the accessor names a class that does not exist.
+	if err := generateJavaRecordReaders(config, data.RecordReaders); err != nil {
+		return err
+	}
 	return nil
 }
 

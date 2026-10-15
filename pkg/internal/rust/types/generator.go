@@ -41,6 +41,10 @@ func Generate(config *tactype.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to copy proto directory: %w", err)
 	}
+	// (spec.json_key) is pbjson's json_name; see injectJsonNameForJsonKey.
+	if err := injectJsonNameForJsonKey(protoDir); err != nil {
+		return err
+	}
 	if err := proto.AppendEventBusWrappersToProtos(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to append eventbus topic wrappers to protos: %w", err)
 	}

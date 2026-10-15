@@ -342,3 +342,40 @@ message FixtureProbe {
   int64 observed_at_ms = 2 [(spec.assert_gt) = 0];
   string kind = 3 [(spec.assert_max_size) = 64];
 }
+
+// ============================================================================
+// JSON KEYS — (spec.json_key) and (spec.json_aliases)
+// ============================================================================
+//
+// JsonKeyProbe pins the JSON wire names every language's ToJSON / FromJSON
+// helpers honour: reset_at is written as "reset", level as "lvl", and
+// callback_url is also read from "callbackUrl" and "cb". JsonKeyInner carries
+// an alias one message down, so a nested alias is read too.
+
+enum JsonKeyLevel {
+  JSON_KEY_LEVEL_UNSPECIFIED = 0;
+  JSON_KEY_LEVEL_HIGH = 1;
+}
+
+message JsonKeyInner {
+  // note is also read from "memo".
+  string note = 1 [(spec.json_aliases) = "memo", (spec.assert_max_size) = 64];
+}
+
+message JsonKeyProbe {
+  // reset_at is written as "reset".
+  int64 reset_at = 1 [(spec.json_key) = "reset"];
+
+  // callback_url is also read from "callbackUrl" and "cb".
+  string callback_url = 2 [
+    (spec.json_aliases) = "callbackUrl",
+    (spec.json_aliases) = "cb",
+    (spec.assert_max_size) = 256
+  ];
+
+  // level is written as "lvl".
+  JsonKeyLevel level = 3 [(spec.json_key) = "lvl"];
+
+  // inner carries a nested alias.
+  JsonKeyInner inner = 4;
+}

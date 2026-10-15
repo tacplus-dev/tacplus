@@ -488,6 +488,16 @@ run_rust_spiffe_self_tests() {
     }
   assert_clean_log "$log_dir/rust-grpcserver-test.log"
 
+  # The main fixture's JSON-key self-test, copied in by
+  # install_json_key_selftest, so it is present exactly in that build.
+  if [[ -f "$output/tests/json_key_test.rs" ]]; then
+    (cd "$output" && cargo test --test json_key_test) >"$log_dir/rust-json-key-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-json-key-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-json-key-test.log"
+  fi
+
   # PC-C-2: the collection crate's page-token codec tests pin the
   # cross-language byte-identity vectors (shared verbatim with the go and java
   # codec tests). Never previously executed by any gate (cargo check only).
@@ -981,6 +991,17 @@ assert_extraction_output() {
         || die "main fixture (rust): fixture_probe_to_projections does not extract FixtureProbeRow in $file"
       ;;
   esac
+}
+
+# install_json_key_selftest copies the Rust runtime self-test for
+# common2.JsonKeyProbe into the generated crate's tests/ directory.
+install_json_key_selftest() {
+  local output="$1"
+  local language="$2"
+  [[ "$language" == "rust" ]] || return 0
+  [[ -f "$output/Cargo.toml" ]] || die "main fixture (rust): generated crate not found under $output"
+  mkdir -p "$output/tests"
+  cp "$SELFTESTS_SRC/rust/json_key_test.rs" "$output/tests/"
 }
 
 # install_extraction_selftest copies the Java runtime self-test into the
@@ -1494,6 +1515,7 @@ for language in "${languages[@]}"; do
   assert_current_output "$output_root" "$language" "$dir/tacplus"
   assert_extraction_output "$output_root" "$language"
   install_extraction_selftest "$output_root" "$language"
+  install_json_key_selftest "$output_root" "$language"
   echo "==> Compiling $language cross-test fixture"
   compile_current_output "$output_root" "$language" "$dir/tacplus"
   echo "    PASS $language"

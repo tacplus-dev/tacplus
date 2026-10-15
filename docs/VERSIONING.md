@@ -57,5 +57,14 @@ Tags on the `tacplus` image follow the version policy:
 | `latest` | the newest release |
 | `main-<sha>` | an unreleased build of `main` |
 
-`base` and `build` are tagged by the date or pin set that produced them, and
-`latest`.
+`base` and `build` are tagged `<yyyymmdd>-<sha>` and `latest`.
+
+The definitions are `images/base.Dockerfile`, `images/build.Dockerfile` and
+`images/tacplus.Dockerfile`; `images/smoke.sh` is run inside every pushed
+tacplus image. `.github/workflows/images.yml` builds and pushes them for
+linux/amd64 and linux/arm64 on every push to `main` and every release tag,
+rebuilding `base` and `build` only when their file changed (or weekly for
+`base`, or on demand). `just images` builds the set natively for one machine.
+The first release tag is `v2.0.0`: the public tacplus-dev/tacplus line is a
+new major over the private v1.2.x line it was forked from (new module path,
+regenerated consumers).

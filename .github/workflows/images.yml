@@ -1,0 +1,179 @@
+name: Images
+
+# The three-layer image set from docs/VERSIONING.md: base (runtimes), build
+# (base + every build tool), tacplus (build + the binary). Each layer is
+# rebuilt only when its definition changed, on demand, or (base) weekly, and
+# pushed to ghcr.io for linux/amd64 and linux/arm64. The tacplus image is
+# rebuilt on every push to main (main-<sha>) and every release tag
+# (X.Y.Z, X.Y, X, latest).
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: "Lowest layer to rebuild (everything above it rebuilds too)"
+        type: choice
+        options: [tacplus, build, base]
+        default: tacplus
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NS: ghcr.io/${{ github.repository }}
+
+jobs:
+  plan:
+    name: Which layers
+    runs-on: ubuntu-latest
+    outputs:
+      base: ${{ steps.plan.outputs.base }}
+      build: ${{ steps.plan.outputs.build }}
+      stamp: ${{ steps.plan.outputs.stamp }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=false; build=false
+          case "${{ github.event_name }}" in
+            schedule) base=true ;;
+            workflow_dispatch)
+              [[ "${{ github.event.inputs.rebuild }}" == base ]] && base=true
+              [[ "${{ github.event.inputs.rebuild }}" != tacplus ]] && build=true ;;
+            push)
+              changed="$(git diff --name-only HEAD~1 HEAD 2>/dev/null || true)"
+              grep -q '^images/base.Dockerfile$' <<<"$changed" && base=true
+              grep -q '^images/build.Dockerfile$' <<<"$changed" && build=true ;;
+          esac
+          [[ $base == true ]] && build=true
+          # First publish: build everything when the build image does not exist yet.
+          if ! docker manifest inspect "$NS/build:latest" >/dev/null 2>&1; then base=true; build=true; fi
+          { echo "base=$base"; echo "build=$build"; echo "stamp=$(date -u +%Y%m%d)-${GITHUB_SHA::7}"; } >> "$GITHUB_OUTPUT"
+          echo "base=$base build=$build"
+        env:
+          DOCKER_CONFIG: /tmp/docker-anon
+
+  base:
+    name: base
+    needs: plan
+    if: needs.plan.outputs.base == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/base.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.NS }}/base:${{ needs.plan.outputs.stamp }}
+            ${{ env.NS }}/base:latest
+          cache-from: type=registry,ref=${{ env.NS }}/base:buildcache
+          cache-to: type=registry,ref=${{ env.NS }}/base:buildcache,mode=max
+
+  build:
+    name: build
+    needs: [plan, base]
+    if: always() && needs.plan.outputs.build == 'true' && (needs.base.result == 'success' || needs.base.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/build.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ env.NS }}/base:latest
+          tags: |
+            ${{ env.NS }}/build:${{ needs.plan.outputs.stamp }}
+            ${{ env.NS }}/build:latest
+          cache-from: type=registry,ref=${{ env.NS }}/build:buildcache
+          cache-to: type=registry,ref=${{ env.NS }}/build:buildcache,mode=max
+
+  tacplus:
+    name: tacplus
+    needs: [plan, base, build]
+    if: always() && needs.plan.result == 'success' && (needs.base.result == 'success' || needs.base.result == 'skipped') && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tags from the version policy
+        id: tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF_TYPE}" == tag && "$ref" == v* ]]; then
+            v="${ref#v}"; IFS=. read -r MA MI _ <<<"$v"
+            tags="$NS/tacplus:$v,$NS/tacplus:$MA.$MI,$NS/tacplus:$MA,$NS/tacplus:latest"
+            version="$v"
+          else
+            tags="$NS/tacplus:main-${GITHUB_SHA::7},$NS/tacplus:main"
+            version="0.0.0"
+          fi
+          { echo "tags=$tags"; echo "version=$version"; } >> "$GITHUB_OUTPUT"; echo "$tags"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/tacplus.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            BUILD_IMAGE=${{ env.NS }}/build:latest
+            VERSION=${{ steps.tags.outputs.version }}
+            VCS_REF=${{ github.sha }}
+          tags: ${{ steps.tags.outputs.tags }}
+      - name: Smoke test
+        run: docker run --rm "$NS/tacplus:main-${GITHUB_SHA::7}" bash /dev/stdin < images/smoke.sh
+        if: github.ref_type != 'tag'
+      - name: Smoke test (release)
+        run: docker run --rm "$NS/tacplus:${GITHUB_REF_NAME#v}" bash /dev/stdin < images/smoke.sh
+        if: github.ref_type == 'tag'
+      - name: Prune old main-<sha> images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: tacplus/tacplus
+          package-type: container
+          min-versions-to-keep: 20
+          ignore-versions: '^(latest|main|\d+(\.\d+){0,2})$'

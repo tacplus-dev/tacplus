@@ -5,6 +5,7 @@ package types
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,11 @@ import (
 )
 
 func TestGenerateRecordC2SPublishClientArtifact(t *testing.T) {
+	// A full Generate needs the protoc-gen-swift protoc plugin, which the Go-only
+	// CI runners do not carry; the nightly gates container does.
+	if _, err := exec.LookPath("protoc-gen-swift"); err != nil && os.Getenv("PROTOC_SWIFT_BINARY") == "" {
+		t.Skip("protoc-gen-swift not on PATH")
+	}
 	outputDir := filepath.Join(t.TempDir(), "swift")
 	cfg := &tactype.Config{
 		Language:         "swift",

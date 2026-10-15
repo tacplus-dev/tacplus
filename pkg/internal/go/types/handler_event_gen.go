@@ -26,15 +26,13 @@ import (
 type handlerTemplateData struct {
 	SourceType            string // e.g., "SensorEvent"
 	SourceQualifier       string // "" if same package, "sensor." if different
-	HasTimeseries         bool   // true when at least one timeseries projection exists
 	HasNoop               bool   // true when source message has a noop field (field 201)
 	TimeseriesProjections []handlerTimeseriesEntry
 }
 
 // handlerTimeseriesEntry is a timeseries projection in the handler.
 type handlerTimeseriesEntry struct {
-	TypeName  string // e.g., "SensorTimeseries"
-	TableName string // e.g., "sensor_timeseries" — from timeseries_type.name or snake_case(TypeName)
+	TypeName string // e.g., "SensorTimeseries"
 }
 
 // generateEventHandlers generates store-agnostic event handlers for every
@@ -46,13 +44,6 @@ func generateEventHandlers(allFiles []model.ProtoFile, typesOutputDir string) er
 		return err
 	}
 
-	// Generate handler files. TimeseriesInsertFunc is package-scoped (it does
-	// not depend on SourceType), so it is NOT declared per handler file —
-	// every package that gets at least one handler here also gets exactly one
-	// extraction_handler_support.go declaring it once (below). Declaring it
-	// per handler file would redeclare the type as soon as a package has two
-	// source types with timeseries projections.
-	supportPkgs := make(map[string]model.ProtoFile)
 	for _, g := range groups {
 		pf := g.File()
 		sourceQualifier := ""
@@ -62,18 +53,10 @@ func generateEventHandlers(allFiles []model.ProtoFile, typesOutputDir string) er
 		data := handlerTemplateData{
 			SourceType:      g.Source.Name,
 			SourceQualifier: sourceQualifier,
-			HasTimeseries:   true,
 			HasNoop:         g.SourceHasNoop(),
 		}
 		for _, p := range g.Projections {
-			tableName := strutil.ToSnakeCase(p.Message.Name)
-			if ann, ok := p.Message.Annotations["timeseries_table_name"]; ok && ann.StringValue != "" {
-				tableName = ann.StringValue
-			}
-			data.TimeseriesProjections = append(data.TimeseriesProjections, handlerTimeseriesEntry{
-				TypeName:  p.Message.Name,
-				TableName: tableName,
-			})
+			data.TimeseriesProjections = append(data.TimeseriesProjections, handlerTimeseriesEntry{TypeName: p.Message.Name})
 		}
 
 		if err := writeEventHandlerFile(pf, data, typesOutputDir); err != nil {
@@ -82,23 +65,13 @@ func generateEventHandlers(allFiles []model.ProtoFile, typesOutputDir string) er
 		zap.L().Debug("Generated event handler",
 			zap.String("source", g.SourceFile.Package+"."+g.Source.Name),
 			zap.Int("timeseries", len(data.TimeseriesProjections)))
-
-		if _, exists := supportPkgs[eventHandlerOutputDir(pf, typesOutputDir)]; !exists {
-			supportPkgs[eventHandlerOutputDir(pf, typesOutputDir)] = pf
-		}
-	}
-
-	for outputDir, pf := range supportPkgs {
-		if err := writeEventHandlerSupportFile(pf, outputDir); err != nil {
-			return fmt.Errorf("failed to generate event handler support file for package %s: %w", pf.Package, err)
-		}
 	}
 
 	return nil
 }
 
 // eventHandlerOutputDir returns the directory writeEventHandlerFile writes
-// SourceType's handler into, for grouping handlers by output package.
+// SourceType's handler into.
 func eventHandlerOutputDir(pf model.ProtoFile, typesOutputDir string) string {
 	parentDir := filepath.Dir(pf.RelPath)
 	var subdir string
@@ -108,37 +81,6 @@ func eventHandlerOutputDir(pf model.ProtoFile, typesOutputDir string) string {
 		subdir = filepath.Join(parentDir, pf.Package)
 	}
 	return filepath.Join(typesOutputDir, "golang", subdir)
-}
-
-// writeEventHandlerSupportFile writes the single, package-scoped
-// TimeseriesInsertFunc declaration shared by every extraction_handler_*.go
-// file in outputDir's package.
-func writeEventHandlerSupportFile(pf model.ProtoFile, outputDir string) error {
-	outputPath := filepath.Join(outputDir, "extraction_handler_support.go")
-
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
-	}
-
-	var b strings.Builder
-	b.WriteString(header.SimpleHeader(consts.LangGo))
-	fmt.Fprintf(&b, "package %s\n\n", pf.Package)
-	b.WriteString("import \"context\"\n\n")
-	b.WriteString("// TimeseriesInsertFunc inserts a timeseries row into the timeseries store.\n")
-	b.WriteString("// tableName is the target table, columns is the ordered column names, row is the ordered values.\n")
-	b.WriteString("type TimeseriesInsertFunc func(ctx context.Context, tableName string, columns []string, row []interface{}) error\n")
-
-	formatted, err := imports.Process(outputPath, []byte(b.String()), &imports.Options{
-		Comments:  true,
-		TabIndent: true,
-		TabWidth:  8,
-	})
-	if err != nil {
-		zap.L().Warn("goimports failed, writing unformatted", zap.String("path", outputPath), zap.Error(err))
-		formatted = []byte(b.String())
-	}
-
-	return os.WriteFile(outputPath, formatted, 0644)
 }
 
 // writeEventHandlerFile renders the handler template and writes it.

@@ -46,8 +46,7 @@ impl DiskStoreError {
         Self::new(3, format!("validation failed: {}", msg.into()))
     }
 
-    /// The write could not reach its declared durability floor (code 9:
-    /// FAILED_PRECONDITION).
+    /// The write could not reach its declared durability floor (code 9: FAILED_PRECONDITION).
     ///
     /// This is a REFUSAL, not a degrade. A store declaring
     /// `(spec.quorum_write)` states that a value is only written once it is

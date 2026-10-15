@@ -64,6 +64,7 @@ the commit history since August.
    host side.
 4. **MCP follow-ups.** Decide first whether Go and Java services will host
    MCP-only tools at all; if yes, port the three Rust commits.
-5. **W2S REST server dispatch.** Only if a Go or Java service needs to host
-   REST directly instead of behind the gateway; otherwise document the
-   difference as by design, next to C2D.
+5. **W2S REST server dispatch.** Decided 2026-10-14 (Jody): this is a real
+   parity gap, not by design. Port the Rust dispatch to Go first, then Java
+   (estimate two to three days each). Deferred for now; it is the only open
+   port besides Go formal verification.

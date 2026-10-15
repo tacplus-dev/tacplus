@@ -36,7 +36,9 @@ type rustEnumTemplateData struct {
 }
 
 // toProstEnumName converts proto enum name to prost's PascalCase format
-// Example: ALPNProtocol -> AlpnProtocol, X509KeyUsage -> X509KeyUsage, TypeID -> TypeId
+// Example: ALPNProtocol -> AlpnProtocol, X509KeyUsage -> X509KeyUsage, TypeID -> TypeId,
+// ContractS2SRpcId -> ContractS2sRpcId (a digit inside a capital run does not
+// end the word, so the S after it is lowercased as heck does)
 func toProstEnumName(protoName string) string {
 	var result strings.Builder
 	i := 0
@@ -50,8 +52,13 @@ func toProstEnumName(protoName string) string {
 			// Pattern: XXXXYz where X are uppercase, Y is uppercase, z is lowercase
 			// We want: XxxxYz (first X uppercase, middle X's lowercase, Y stays as start of next word)
 			j := i
-			for j < len(protoName) && protoName[j] >= 'A' && protoName[j] <= 'Z' {
+			for j < len(protoName) && (protoName[j] >= 'A' && protoName[j] <= 'Z' || protoName[j] >= '0' && protoName[j] <= '9') {
 				j++
+			}
+			// A run ending in digits ends before them: the digits trail the
+			// word (X509 stays one word with Key after it).
+			for j > i+1 && protoName[j-1] >= '0' && protoName[j-1] <= '9' {
+				j--
 			}
 
 			// j now points to first non-uppercase character (or end of string)
@@ -63,14 +70,14 @@ func toProstEnumName(protoName string) string {
 				// Keep last uppercase letter as-is (it starts the next word)
 				result.WriteByte(protoName[i]) // First letter stays uppercase
 				for k := i + 1; k < j-1; k++ {
-					result.WriteByte(protoName[k] - 'A' + 'a') // Middle letters to lowercase
+					result.WriteByte(toLowerASCII(protoName[k])) // Middle letters to lowercase
 				}
 				i = j - 1 // Position at last uppercase (which starts next word)
 			} else if numUppercase >= 2 && j == len(protoName) {
 				// A trailing acronym is one word to prost (heck): TypeID -> TypeId.
 				result.WriteByte(protoName[i])
 				for k := i + 1; k < j; k++ {
-					result.WriteByte(protoName[k] - 'A' + 'a')
+					result.WriteByte(toLowerASCII(protoName[k]))
 				}
 				i = j
 			} else {
@@ -86,6 +93,13 @@ func toProstEnumName(protoName string) string {
 	}
 
 	return result.String()
+}
+
+func toLowerASCII(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c - 'A' + 'a'
+	}
+	return c
 }
 
 // writeEnumHelpers writes enum helper implementations to the shared builder

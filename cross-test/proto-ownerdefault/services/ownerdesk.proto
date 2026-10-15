@@ -1,0 +1,92 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// The (spec.owner_default) fixture.
+//
+// Why this fixture exists: owner_default is enforced by the generated service
+// WRAPPER, and cross-test/proto is a types-only build that emits none. This set is
+// a full service build, so the guard is generated and compiled by the standing
+// gate in all three languages, each from its own generator.
+//
+// Desk is a row its owner may READ but not WRITE. ownerdesk is the SELF package
+// (tacplus.yaml pkg ends in .ownerdesk), so DeskService is the server:
+//   - UpdateDesk is a write the owner may not make: refused for the owner,
+//     compared against the request's (spec.principal) field.
+//   - CreateDesk is a write too, but CREATE has no prior owner: no guard.
+//   - GetDesk is a read the owner may make: no guard.
+
+syntax = "proto3";
+
+package ownerdesk;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "ownerdesk"};
+
+service DeskService {
+  option (spec.service_s2s) = {label: "DeskService"};
+
+  rpc CreateDesk(CreateDeskRequest) returns (CreateDeskResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+
+  rpc UpdateDesk(UpdateDeskRequest) returns (UpdateDeskResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+
+  rpc GetDesk(GetDeskRequest) returns (GetDeskResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}
+
+// Desk is the owned row. Its owner may read it but not change it once made.
+message Desk {
+  option (spec.owner_default) = {read: true, write: false};
+
+  // desk_id names the desk.
+  string desk_id = 1;
+
+  // owner is the principal that owns the row.
+  string owner = 2 [(spec.store_principal) = true];
+
+  // label is the desk's display label.
+  string label = 3;
+}
+
+message CreateDeskRequest {
+  // owner is bound to the authenticated caller by the wrapper.
+  string owner = 1 [(spec.principal) = true];
+
+  // label is the new desk's label.
+  string label = 2;
+}
+
+message CreateDeskResponse {
+  // desk is the created row.
+  Desk desk = 1;
+}
+
+message UpdateDeskRequest {
+  // desk_id names the desk to change.
+  string desk_id = 1 [(spec.assert_required) = true];
+
+  // owner is the row's principal, bound to the authenticated caller.
+  string owner = 2 [(spec.principal) = true];
+
+  // label is the new label.
+  string label = 3;
+}
+
+message UpdateDeskResponse {
+  // desk is the changed row.
+  Desk desk = 1;
+}
+
+message GetDeskRequest {
+  // desk_id names the desk to read.
+  string desk_id = 1 [(spec.assert_required) = true];
+}
+
+message GetDeskResponse {
+  // desk is the row.
+  Desk desk = 1;
+}

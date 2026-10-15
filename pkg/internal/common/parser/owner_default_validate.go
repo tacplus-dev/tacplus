@@ -5,9 +5,11 @@ package parser
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/verbs"
 )
 
 // ValidateOwnerDefaultAnnotations enforces the one invariant (spec.owner_default)
@@ -67,4 +69,102 @@ func OwnerDefaultOf(annotations map[string]model.AnnotationValue, name string) (
 		Read:  annotations["owner_default_read"].BoolValue,
 		Write: annotations["owner_default_write"].BoolValue,
 	}, true
+}
+
+// OwnerDefaultPlan is what a method's (spec.owner_default) guard refuses,
+// decided once for every backend that renders it. The Go and Rust wrappers
+// carry the same decision inline (go/types/ownerdefault_gen.go,
+// rust/types/ownerdefault_gen.go); Java reads it from here.
+type OwnerDefaultPlan struct {
+	// Refused names each touched type whose owner right the method's access
+	// contradicts, e.g. "Task (write)". Empty means nothing is refused and no
+	// guard is rendered.
+	Refused string
+	// Read is true when the refused access is a read. A read has no row
+	// principal to compare: the (spec.store_principal) read filter has already
+	// narrowed the rows to the caller, so a self-scoped caller IS the owner. A
+	// write is compared against the request's (spec.principal) field.
+	Read bool
+}
+
+// PlanOwnerDefault decides the (spec.owner_default) refusal for one method.
+//
+// The types consulted are the request and response types themselves and any
+// message-typed field of either at depth 1: a record type is named directly or
+// wrapped in a request/response envelope, and a deeper scan would start
+// refusing methods that merely mention the type in passing. lookup resolves a
+// message by proto package and simple name.
+//
+// CREATE is exempt: it brings a row into existence, so there is no prior owner
+// for the type's owner rights to speak about. A method that touches such a
+// type but whose verb did not classify cannot be judged either way, so that is
+// an error rather than a silent pass.
+func PlanOwnerDefault(method *MethodInfo, servicePkg string, lookup func(pkg, name string) (*model.Message, bool)) (OwnerDefaultPlan, error) {
+	if method == nil {
+		return OwnerDefaultPlan{}, nil
+	}
+	found := map[string]OwnerDefaultRights{}
+	for _, root := range []string{method.FullInputType, method.FullOutputType} {
+		if root == "" || root == "google.protobuf.Empty" {
+			continue
+		}
+		pkg, name := servicePkg, root
+		if i := strings.LastIndex(root, "."); i >= 0 {
+			pkg, name = root[:i], root[i+1:]
+		}
+		msg, ok := lookup(pkg, name)
+		if !ok {
+			continue
+		}
+		if r, ok := OwnerDefaultOf(msg.Annotations, name); ok {
+			found[name] = r
+		}
+		for _, f := range msg.Fields {
+			if !f.IsMessage || f.IsMap {
+				continue
+			}
+			fpkg := f.TypePackage
+			if fpkg == "" {
+				fpkg = pkg
+			}
+			fmsg, ok := lookup(fpkg, f.Type)
+			if !ok {
+				continue
+			}
+			if r, ok := OwnerDefaultOf(fmsg.Annotations, f.Type); ok {
+				found[f.Type] = r
+			}
+		}
+	}
+	if len(found) == 0 {
+		return OwnerDefaultPlan{}, nil
+	}
+	if method.Class == nil {
+		return OwnerDefaultPlan{}, fmt.Errorf("%s touches a type declaring (spec.owner_default) but its verb did not classify, so its read/write access is unknown and the owner default cannot be enforced", method.Name)
+	}
+	if method.Class.Pattern == verbs.PatternCreate {
+		return OwnerDefaultPlan{}, nil
+	}
+	names := make([]string, 0, len(found))
+	for n := range found {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var refused []string
+	for _, n := range names {
+		r := found[n]
+		switch {
+		case method.Class.Access == verbs.AccessWrite && !r.Write:
+			refused = append(refused, fmt.Sprintf("%s (write)", r.Type))
+		case method.Class.Access == verbs.AccessRead && !r.Read:
+			refused = append(refused, fmt.Sprintf("%s (read)", r.Type))
+		}
+	}
+	if len(refused) == 0 {
+		return OwnerDefaultPlan{}, nil
+	}
+	return OwnerDefaultPlan{
+		Refused: strings.Join(refused, ", "),
+		Read:    method.Class.Access == verbs.AccessRead,
+	}, nil
 }

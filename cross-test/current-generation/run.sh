@@ -17,6 +17,7 @@ REQUIRESDEVICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-requiresdevice"
 # resolve. Anywhere else it breaks the repo vet gate.
 SELFTESTS_SRC="$ROOT_DIR/cross-test/current-generation/testdata"
 RECORDEGRESS_PROTO_SRC="$ROOT_DIR/cross-test/proto-recordegress"
+OWNERDEFAULT_PROTO_SRC="$ROOT_DIR/cross-test/proto-ownerdefault"
 WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/current-generation}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
@@ -171,6 +172,19 @@ write_recordegress_config() {
 language: "$language"
 pkg: "com.gitlab.example.dummy.egressvault"
 src: "$RECORDEGRESS_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
+write_ownerdefault_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.ownerdesk"
+src: "$OWNERDEFAULT_PROTO_SRC"
 output-dir: "tacplus"
 EOF
 }
@@ -375,6 +389,20 @@ run_java_generated_self_tests() {
       dump_step_log "$test_log"
       return 1
     }
+  fi
+  # The owner-default fixture's self-test, copied in by
+  # install_ownerdefault_selftest (which dies if it cannot), so it is present
+  # exactly in that fixture's build.
+  local od_test od_class
+  od_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/OwnerDefaultTest.java' -print -quit)"
+  if [[ -n "$od_test" ]]; then
+    od_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$od_test").$(basename "$od_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$od_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q '^OwnerDefaultTest: all checks passed$' "$test_log" \
+      || die "owner-default fixture (java): OwnerDefaultTest did not report its checks passed"
   fi
   assert_clean_log "$test_log"
 }
@@ -859,6 +887,57 @@ install_user_and_listed_service_selftest() {
       cp "$SELFTESTS_SRC/rust/user_and_listed_service_test.rs" "$output/chassis/grpcserver/tests/"
       ;;
   esac
+}
+
+# assert_ownerdefault_output checks that the (spec.owner_default) guard was
+# GENERATED where it belongs and nowhere else. Absence compiles: before Java's
+# port its wrapper ignored the annotation and the fixture still built. So each
+# language must carry the refusal on UpdateDesk (a write the owner may not make),
+# scoped by the request's (spec.principal) field and the caller's
+# (spec.principal_scope), and exactly once: CreateDesk (no prior owner) and
+# GetDesk (a read the owner holds) carry none.
+assert_ownerdefault_output() {
+  local output="$1"
+  local language="$2"
+  local api cond
+  case "$language" in
+    go)
+      api="$(find "$output" -type f -path '*/servers/services/ownerdesk/desk_service.go' -print -quit)"
+      cond='if __scopeIsSelf && req.Owner == __odCaller {'
+      ;;
+    java)
+      api="$(find "$output" -type f -path '*/servers/services/ownerdesk/DeskService.java' -print -quit)"
+      cond='if (__scopeIsSelf && request.getOwner().equals(__odCaller)) {'
+      ;;
+    rust)
+      api="$(find "$output" -type f -path '*/servers/services/ownerdesk/desk_service.rs' -print -quit)"
+      cond='if __scope_is_self && req.owner == __od_caller {'
+      ;;
+    *) return 0 ;;
+  esac
+  [[ -n "$api" ]] || die "owner-default fixture ($language): generated DeskService wrapper not found under $output"
+  grep -qF "$cond" "$api" \
+    || die "owner-default fixture ($language): UpdateDesk's refusal is not scoped by the owner comparison in $api"
+  local n
+  n="$(grep -c 'denies the owner this operation' "$api" || true)"
+  [[ "$n" == 1 ]] \
+    || die "owner-default fixture ($language): want exactly one owner_default refusal (UpdateDesk), found $n in $api"
+  grep -qF 'UpdateDesk: (spec.owner_default) on Desk (write) denies the owner this operation' "$api" \
+    || die "owner-default fixture ($language): the refusal is not on UpdateDesk in $api"
+}
+
+# install_ownerdefault_selftest copies the Java runtime self-test into the
+# generated chassis/grpcserver package (it reads the package-private
+# Authorizer.SERVICE_NAME). Go and Rust get the compile leg and the output
+# assertion above; their guards are pinned by their own render tests.
+install_ownerdefault_selftest() {
+  local output="$1"
+  local language="$2"
+  [[ "$language" == "java" ]] || return 0
+  local dest
+  dest="$(dirname "$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/AuthorizerBehaviorTest.java' -print -quit)")"
+  [[ -d "$dest" ]] || die "owner-default fixture (java): generated chassis/grpcserver package not found under $output"
+  cp "$SELFTESTS_SRC/java/OwnerDefaultTest.java" "$dest/"
 }
 
 # assert_requiresdevice_output checks that the (spec.rpc).requires_device gate was
@@ -1738,6 +1817,33 @@ if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
     echo "==> Compiling $language record-egress HOST fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/egressstratum"
     echo "    PASS $language record-egress host"
+  done
+fi
+
+# owner-default fixture: the ONLY place (spec.owner_default) is generated and
+# compiled by a standing gate. cross-test/proto is types-only, so it emits no
+# server wrapper — the one surface the guard lands on. All three languages,
+# because all three render the guard from their own generator; Java's
+# OwnerDefaultTest additionally drives the real wrapper over real signed tokens.
+if [[ -d "$OWNERDEFAULT_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/ownerdefault-$language"
+    log="$WORK_ROOT/ownerdefault-$language.log"
+    rm -rf "$dir"
+    write_ownerdefault_config "$dir" "$language"
+
+    echo "==> Generating $language owner-default fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$OWNERDEFAULT_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language owner-default generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_ownerdefault_output "$output_root" "$language"
+    install_ownerdefault_selftest "$output_root" "$language"
+    echo "==> Compiling $language owner-default fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/ownerdesk"
+    echo "    PASS $language owner-default"
   done
 fi
 

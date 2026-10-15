@@ -802,6 +802,16 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			return false, fmt.Errorf("%s.%s carries a (spec.store_epoch) field on %s but %s",
 				targetService.Name, method.Name, method.FullInputType, why)
 		}
+		// (spec.owner_default): what the row's OWNER may do with its own rows.
+		// A method that would be refused but has no seam at which the caller can
+		// be compared to the row's principal must fail generation, not ship
+		// under-enforced — the same set the Go and Rust wrappers refuse.
+		if why, err := javaOwnerDefaultUnhostable(method, san, info.Package); err != nil {
+			return false, fmt.Errorf("%s.%s: %w", targetService.Name, method.Name, err)
+		} else if why != "" {
+			return false, fmt.Errorf("%s.%s touches a type declaring (spec.owner_default) that contradicts its access, but %s",
+				targetService.Name, method.Name, why)
+		}
 		// A c2s read over record rows the wrapper cannot narrow to the caller
 		// must fail generation, not ship an unfiltered read plane.
 		if why := javaRecordPrincipalUnenforceable(method, san, info.Package, svc.IsC2S); why != "" {
@@ -1835,6 +1845,13 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		// spec.proto is unqualified.
 		if !handlerEmpty {
 			if g := javaRequestScopePins(san, method.FullInputType, servicePackage, "request", method.Name, "            "); g != "" {
+				inputValidation += "\n" + g
+			}
+			// (spec.owner_default): refuse the access the row's owner does not
+			// hold, after the stamp above because the comparison needs the bound
+			// principal. Every shape that cannot host this check was refused at
+			// generation (javaOwnerDefaultUnhostable), so the error is dead here.
+			if g, err := javaOwnerDefaultGuard(method, san, servicePackage, javaOwnerDefaultGrpcSeam("            "), "            "); err == nil && g != "" {
 				inputValidation += "\n" + g
 			}
 		}

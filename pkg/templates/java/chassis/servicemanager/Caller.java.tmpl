@@ -6,6 +6,9 @@
 
 package {{.ChassisBase}}.servicemanager;
 
+import {{.TypesBase}}.sys.token.Helpers;
+import {{.TypesBase}}.sys.token.TokenOuterClass;
+
 import java.util.List;
 
 /**
@@ -79,6 +82,38 @@ public final class Caller {
      */
     public List<String> getLinked() {
         return tokenPayload == null ? List.of() : Auth.splitClaim(Auth.claimFromPayload(tokenPayload, "linked"));
+    }
+
+    /**
+     * Returns the caller's (spec.principal_scope): how wide its authority over
+     * principals is, read from the OPA-stamped service_entitlements claim the
+     * egress data grants also ride. Empty when the token carries no such claim
+     * or it does not parse — which every consumer treats as self-only, the
+     * fail-closed answer.
+     *
+     * <p>The Caller-bound twin of {@code TokenWrapper.getServiceEntitlements()
+     * .getPrincipalScope()}, for the generated MCP dispatch, which holds the
+     * caller as a VALUE rather than reading it off the gRPC Context.
+     */
+    public String getPrincipalScope() {
+        if (tokenPayload == null || tokenPayload.isEmpty()) return "";
+        try {
+            com.google.gson.JsonElement se = com.google.gson.JsonParser.parseString(tokenPayload)
+                    .getAsJsonObject()
+                    .get(Helpers.jwtPayloadTypeToString(TokenOuterClass.JwtPayloadType.JWT_PAYLOAD_TYPE_SERVICE_ENTITLEMENTS));
+            if (se == null || se.isJsonNull()) return "";
+            com.google.gson.JsonObject bag = se.isJsonPrimitive()
+                    ? com.google.gson.JsonParser.parseString(se.getAsString()).getAsJsonObject()
+                    : se.getAsJsonObject();
+            // The bag is the proto3 JSON of TokenEntitlements, which a JSON
+            // printer writes as principalScope and a parser accepts as either
+            // name. Read it by name rather than through the typed message: a
+            // types-only build carries a TokenEntitlements stub without it.
+            com.google.gson.JsonElement scope = bag.has("principalScope") ? bag.get("principalScope") : bag.get("principal_scope");
+            return scope == null || !scope.isJsonPrimitive() ? "" : scope.getAsString();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     /**

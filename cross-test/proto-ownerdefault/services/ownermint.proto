@@ -1,0 +1,35 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// The authoritative (spec.token_minter) of the (spec.owner_default) fixture.
+// A full service build needs one in a package other than the self package; the
+// fixture's subject is ownerdesk.proto, and this file is only what makes the
+// generated service manager build.
+
+syntax = "proto3";
+
+package ownermint;
+
+import "sys/spec.proto";
+import "sys/tokenrequest.proto";
+import "sys/x509.proto";
+
+service OwnerMint {
+  option (spec.service_s2s) = {label: "OwnerMint"};
+  option (spec.token_minter) = {};
+
+  // Self-mint, the ordinary minter surface the generated bootstrap exchanger targets.
+  rpc MintServiceToken(tokenrequest.MintServiceTokenRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES]};
+  }
+
+  // Token exchange, required of the client-side minter surface.
+  rpc MintToken(tokenrequest.TokenMintRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES]};
+  }
+
+  // Cert mint, the other surface the generated servicemanager requires of the
+  // authoritative minter.
+  rpc MintX509Cert(tokenrequest.X509MintRequest) returns (x509.X509CertChain) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES]};
+  }
+}

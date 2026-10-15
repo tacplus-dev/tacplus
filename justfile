@@ -261,6 +261,9 @@ w2s-validate-go:
 w2s-validate-rust:
   {{lock}} bash cross-test/w2s-validate/run.sh --language rust
 
+w2s-validate-java:
+  {{lock}} bash cross-test/w2s-validate/run.sh --language java
+
 # Compiles the generated Rust MCP dispatch against the EXACT rmcp version
 # tacplus declares (rmcpCrateVersion), so a floor lower than the emitted code
 # needs fails here instead of in a consumer.

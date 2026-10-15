@@ -18,6 +18,7 @@ import (
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/registry"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/restdispatch"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
@@ -1276,6 +1277,23 @@ func Generate(config *tactype.Config) error {
 		zap.L().Info("Generating Java REST client wrappers", zap.Int("count", len(restClientServices)))
 		if err := generateRestClients(config, restClientServices, protoDir); err != nil {
 			return fmt.Errorf("failed to generate REST clients: %w", err)
+		}
+	}
+
+	// Generate the REST -> gRPC dispatch plane for a (spec.service).rest_dispatch
+	// build. The gateway and rest_dispatch options sit on the self package's
+	// proto, not in tacplus.yaml.
+	if config.SelfPackage != "" && len(servicesInfo) > 0 {
+		dp, err := parser.NewDescriptorParser(protoDir)
+		if err != nil {
+			return fmt.Errorf("failed to create descriptor parser for REST dispatch: %w", err)
+		}
+		config.IsGateway, config.HasRestDispatch = restdispatch.Detect(dp, config.SelfPackage)
+		if config.HasRestDispatch {
+			zap.L().Info("Generating Java REST dispatch", zap.Bool("isGateway", config.IsGateway))
+			if err := generateJavaRestDispatch(config, servicesInfo, protoDir); err != nil {
+				return fmt.Errorf("failed to generate REST dispatch: %w", err)
+			}
 		}
 	}
 

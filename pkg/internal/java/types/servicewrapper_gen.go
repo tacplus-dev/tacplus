@@ -51,6 +51,7 @@ type ServiceInfo struct {
 	AuthServices   []string // S2S: allowed caller identities
 	HasMethodAuth  bool     // true if any per-method auth metadata must be registered
 	HostLabel      string   // non-empty for vservices: the SelfPackage of the service that hosts this RPC surface
+	EventLabel     string   // physical service routing label from spec.event_label
 	// HasRequiresDevice is true when any gRPC-callable method declares
 	// (spec.rpc).requires_device, so this service's wrapper carries the
 	// device-approval gate and the ServiceManager must wire the check into it.
@@ -237,6 +238,7 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				AuthServices:    service.AuthServices,
 				HasMethodAuth:   hasMethodAuth,
 				HostLabel:       service.HostLabel,
+				EventLabel:      service.EventLabel,
 
 				HasRequiresDevice: hasRequiresDevice,
 			})

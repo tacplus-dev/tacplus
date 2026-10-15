@@ -188,6 +188,11 @@ func Generate(config *tactype.Config) error {
 	if err := proto.SwapEmptyInputs(protoDir); err != nil {
 		return fmt.Errorf("failed to swap empty inputs to TraceRequest: %w", err)
 	}
+	// TypeID / <Svc>RpcId enums, after every synthetic message and service is
+	// in place — the same point Go and Java inject them.
+	if err := proto.InjectRegistryEnums(protoDir); err != nil {
+		return fmt.Errorf("failed to inject registry enums into protos: %w", err)
+	}
 
 	// protoDir now has injected services + annotations (not yet stripped)
 

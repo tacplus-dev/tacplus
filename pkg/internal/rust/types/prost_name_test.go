@@ -122,3 +122,20 @@ func TestProstEnumVariantLeadingDigit(t *testing.T) {
 		}
 	}
 }
+
+// The enum helpers name the prost enum type, so they must spell it as prost
+// (heck) does. A trailing acronym is one word: the injected TypeID enum is
+// TypeId, and a helper written against "TypeID" does not compile.
+func TestToProstEnumNameMatchesProst(t *testing.T) {
+	for in, want := range map[string]string{
+		"ALPNProtocol":       "AlpnProtocol",
+		"X509KeyUsage":       "X509KeyUsage",
+		"TypeID":             "TypeId",
+		"HTTP":               "Http",
+		"BackpressurePolicy": "BackpressurePolicy",
+	} {
+		if got := toProstEnumName(in); got != want {
+			t.Errorf("toProstEnumName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

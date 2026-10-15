@@ -747,10 +747,8 @@ func Generate(config *tactype.Config) error {
 	if err := proto.AppendRoutingEnvelopesToProtos(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to append routing envelopes to protos: %w", err)
 	}
-	if proto.NeedsEventBusSupportProto(protoDir) {
-		if _, err := proto.EnsureEventBusSupportProto(protoDir, proto.EventBusSupportProtoOptions{}); err != nil {
-			return fmt.Errorf("failed to generate eventbus support proto: %w", err)
-		}
+	if _, err := proto.PrepareEventBusSupportProto(protoDir, proto.EventBusSupportProtoOptions{}, config.FlatProtoDir); err != nil {
+		return err
 	}
 
 	// Generate virtual service protos into generated/.

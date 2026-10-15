@@ -201,19 +201,14 @@ func Generate(config *tactype.Config) error {
 	if err := proto.AppendRoutingEnvelopesToProtos(tempProtoDir, flatProtoDir); err != nil {
 		return fmt.Errorf("failed to append routing envelopes to protos: %w", err)
 	}
-	if proto.NeedsEventBusSupportProto(tempProtoDir) {
-		eventBusProto, err := proto.EnsureEventBusSupportProto(tempProtoDir, proto.EventBusSupportProtoOptions{
-			GoPackage: fmt.Sprintf("%s/types/generated/eventbus_support", config.ModuleBasePath),
-		})
-		if err != nil {
-			return fmt.Errorf("failed to generate eventbus support proto: %w", err)
-		}
-		if err := proto.ValidateEventBusSupportWireContract(tempProtoDir, eventBusProto, flatProtoDir); err != nil {
-			return err
-		}
-		if eventBusProto != "" && !slices.Contains(protoFilePaths, eventBusProto) {
-			protoFilePaths = append(protoFilePaths, eventBusProto)
-		}
+	eventBusProto, err := proto.PrepareEventBusSupportProto(tempProtoDir, proto.EventBusSupportProtoOptions{
+		GoPackage: fmt.Sprintf("%s/types/generated/eventbus_support", config.ModuleBasePath),
+	}, flatProtoDir)
+	if err != nil {
+		return err
+	}
+	if eventBusProto != "" && !slices.Contains(protoFilePaths, eventBusProto) {
+		protoFilePaths = append(protoFilePaths, eventBusProto)
 	}
 
 	// Generate virtual service protos into generated/.

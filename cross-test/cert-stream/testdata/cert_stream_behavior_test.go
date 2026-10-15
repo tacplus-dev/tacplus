@@ -437,6 +437,14 @@ func TestGoTlsCertStreamBehavior(t *testing.T) {
 		if !errors.Is(ready, errTlsFirstCertFatal) {
 			t.Fatalf("ready signal = %v, want it wrapped with errTlsFirstCertFatal so Run can name the cause", ready)
 		}
+		// And Run's drain, given that signal, names the handler (PC-L-2b).
+		readyCh := make(chan error, 1)
+		readyCh <- ready
+		var reasons []string
+		drainTLSFirstDelivery(context.Background(), readyCh, func(r string) { reasons = append(reasons, r) })
+		if len(reasons) != 1 || !strings.HasPrefix(reasons[0], "TLS handler rejected the first renewed certificate: ") {
+			t.Fatalf("degrade calls = %q, want exactly one naming this service's handler as the fault", reasons)
+		}
 	})
 
 	t.Run("renewal handler failure keeps loop nonfatal", func(t *testing.T) {
@@ -888,6 +896,45 @@ func TestGoTlsCertStreamRetryExhaustion(t *testing.T) {
 			t.Fatalf("ready signal = %v, want the give-up error naming 3 attempts", ready)
 		}
 		waitLoopExit(t, done, "TLS retry exhaustion")
+	})
+
+	// PC-L-2b: the give-up error reaches Run's background drain, which must
+	// report the instance DEGRADED as a give-up: not as a handler rejection
+	// (that points the operator at the wrong half of the system) and not
+	// silently. Driven with the signal a real loop sends after spending its
+	// budget, through the same drainTLSFirstDelivery Run starts.
+	t.Run("give-up is reported DEGRADED as a give-up", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		readyCh := make(chan error, 1)
+		loopDone := make(chan struct{})
+		go func() {
+			defer close(loopDone)
+			tlsCertStreamLoop(ctx, func() grpc.ClientConnInterface { return nil }, "certstream", &recordingHandler{}, func() (string, error) { return "token", nil }, nil, func(string) {}, readyCh, 3)
+		}()
+		reasons := make(chan string, 2)
+		drainDone := make(chan struct{})
+		go func() {
+			defer close(drainDone)
+			drainTLSFirstDelivery(ctx, readyCh, func(r string) { reasons <- r })
+		}()
+
+		select {
+		case r := <-reasons:
+			if !strings.HasPrefix(r, "TLS renewal stream gave up before first delivery: ") {
+				t.Fatalf("degrade reason = %q, want it to report the stream giving up", r)
+			}
+			if !strings.Contains(r, "after 3 attempts") {
+				t.Fatalf("degrade reason = %q, want it to carry the give-up error", r)
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatal("the give-up was never reported DEGRADED")
+		}
+		waitLoopExit(t, drainDone, "TLS first-delivery drain")
+		waitLoopExit(t, loopDone, "TLS retry exhaustion")
+		if len(reasons) != 0 {
+			t.Fatalf("extra degrade call %q, want exactly one", <-reasons)
+		}
 	})
 
 	t.Run("default budget is not the injected one", func(t *testing.T) {

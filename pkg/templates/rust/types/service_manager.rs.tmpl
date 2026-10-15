@@ -61,9 +61,6 @@ use healthreporter::{HealthChecker, HealthPublisher, HealthReporter, MetricsProv
 {{- end}}
 
 use crate::types::sys::trace::TraceRound;
-{{- if .HasDiskStores}}
-use crate::{{.SmPrefix}}::diskstore_stores;
-{{- end}}
 {{- if and .HasServiceHealthState .HasPublishers}}
 use crate::types::generated::eventbus_support::eventbus_support::PublishResponse;
 {{- range .Publishers}}
@@ -416,6 +413,71 @@ fn open_disk_store_logs(cfg: &Config) -> Result<Option<Arc<DiskStoreLogs>>, Box<
 {{- end}}
     })))
 }
+{{- range .DiskStores}}
+
+/// The {{.StoreName}} roll scheduler `run()` spawns when
+/// grpcconfig.disk_persistence is set: every `interval` (first roll staggered
+/// by `node_id`) it reads the store's rows through the Handler's
+/// `{{.HandlerGetter}}()` — the same handler the ServiceManager serves as the
+/// store service — and rolls them into `log` as the new baseline. Runs until
+/// its task is dropped.
+pub async fn run_{{.StoreName}}_roll_scheduler(
+    handler: Arc<dyn Handler>,
+    log: Arc<diskstore::RedoLog>,
+    interval: std::time::Duration,
+    node_id: String,
+) {
+    if let Err(err) = diskstore::run_roll_scheduler(
+        log.as_ref(),
+        interval,
+        &node_id,
+        move || {
+            let h = handler.clone();
+            async move {
+                match h.{{.HandlerGetter}}().list(None).await {
+                    Ok(response) => {
+                        match diskstore_stores::snapshot_{{.StoreName}}(&response.items) {
+                            // The baseline is LOCALITY-SCOPED when the store
+                            // says it is partitioned: list(None) is the whole
+                            // cluster's rows, and a node whose baseline claims
+                            // rows it does not own breaks the partial-log
+                            // invariant recovery resolves staleness with.
+                            Ok(records) => diskstore::local_records(
+                                h.{{.StoreName}}_local_rows().as_deref(),
+                                records,
+                            ),
+                            Err(err) => {
+                                tracing::warn!(
+                                    store = "{{.StoreName}}",
+                                    error = %err,
+                                    "diskstore snapshot encode failed; roll will retry on next interval"
+                                );
+                                Vec::new()
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            store = "{{.StoreName}}",
+                            error = %err,
+                            "diskstore snapshot failed; roll will retry on next interval"
+                        );
+                        Vec::new()
+                    }
+                }
+            }
+        },
+    )
+    .await
+    {
+        tracing::warn!(
+            store = "{{.StoreName}}",
+            error = %err,
+            "diskstore roll scheduler stopped"
+        );
+    }
+}
+{{- end}}
 {{- end}}
 
 const MAX_INIT_RETRIES: u32 = 30;
@@ -425,6 +487,52 @@ fn is_permanent_identity_init_error(err: &(dyn std::error::Error + 'static)) -> 
     // identity chassis refuses at construction. Classified by TYPE (downcast),
     // not by message-substring matching (NEW-21 leg b).
     err.downcast_ref::<service_im::TokenMinterNotConfigured>().is_some()
+}
+
+// The startup loop retries identity init up to MAX_INIT_RETRIES times with
+// backoff; is_permanent_identity_init_error is the only thing that stops it
+// retrying a failure that cannot heal. Dropping the typed check, or swapping it
+// for a message match, compiles and generates identically and only shows up as
+// a service that hangs on a bad build (NEW-21). current-generation runs these
+// with `cargo test --lib` in every Rust service fixture. (An empty trust domain
+// never reaches this loop in Rust: the SPIFFE verifier refuses it first.)
+#[cfg(test)]
+mod identity_error_tests {
+    use super::is_permanent_identity_init_error;
+
+    #[test]
+    fn missing_token_minter_is_permanent() {
+        // As the loop sees it: IdentityManager::new's boxed error.
+        let err: Box<dyn std::error::Error> = Box::new(service_im::TokenMinterNotConfigured);
+        assert!(
+            is_permanent_identity_init_error(err.as_ref()),
+            "a missing token minter cannot heal by retrying"
+        );
+    }
+
+    #[test]
+    fn the_same_text_is_not_the_typed_error() {
+        let err: Box<dyn std::error::Error> = service_im::TokenMinterNotConfigured.to_string().into();
+        assert!(
+            !is_permanent_identity_init_error(err.as_ref()),
+            "classification must be by type (downcast), not by message text"
+        );
+    }
+
+    #[test]
+    fn transient_failures_stay_retryable() {
+        for msg in [
+            "connection refused",
+            "context deadline exceeded",
+            "status: Unavailable, message: \"no healthy upstream\"",
+        ] {
+            let err: Box<dyn std::error::Error> = msg.into();
+            assert!(
+                !is_permanent_identity_init_error(err.as_ref()),
+                "transient init error {msg:?} must stay retryable"
+            );
+        }
+    }
 }
 
 impl ServiceManager {
@@ -1035,62 +1143,12 @@ impl ServiceManager {
             node_id = "{{.ServiceLabel}}".to_string();
         }
 {{- range .DiskStores}}
-        {
-            let log = logs.{{.LogField}}.clone();
-            let handler_for_roll = handler.clone();
-            let scheduler_node_id = format!("{}/{{.StoreName}}", node_id);
-            self.spawn_owned(async move {
-                if let Err(err) = diskstore::run_roll_scheduler(
-                    log.as_ref(),
-                    interval,
-                    &scheduler_node_id,
-                    move || {
-                        let h = handler_for_roll.clone();
-                        async move {
-                            match h.{{.HandlerGetter}}().list(None).await {
-                                Ok(response) => {
-                                    match diskstore_stores::snapshot_{{.StoreName}}(&response.items) {
-                                        // The baseline is LOCALITY-SCOPED when the store
-                                        // says it is partitioned: list(None) is the whole
-                                        // cluster's rows, and a node whose baseline claims
-                                        // rows it does not own breaks the partial-log
-                                        // invariant recovery resolves staleness with.
-                                        Ok(records) => diskstore::local_records(
-                                            h.{{.StoreName}}_local_rows().as_deref(),
-                                            records,
-                                        ),
-                                        Err(err) => {
-                                            tracing::warn!(
-                                                store = "{{.StoreName}}",
-                                                error = %err,
-                                                "diskstore snapshot encode failed; roll will retry on next interval"
-                                            );
-                                            Vec::new()
-                                        }
-                                    }
-                                }
-                                Err(err) => {
-                                    tracing::warn!(
-                                        store = "{{.StoreName}}",
-                                        error = %err,
-                                        "diskstore snapshot failed; roll will retry on next interval"
-                                    );
-                                    Vec::new()
-                                }
-                            }
-                        }
-                    },
-                )
-                .await
-                {
-                    tracing::warn!(
-                        store = "{{.StoreName}}",
-                        error = %err,
-                        "diskstore roll scheduler stopped"
-                    );
-                }
-            });
-        }
+        self.spawn_owned(run_{{.StoreName}}_roll_scheduler(
+            handler.clone(),
+            logs.{{.LogField}}.clone(),
+            interval,
+            format!("{}/{{.StoreName}}", node_id),
+        ));
 {{- end}}
         Ok(())
     }

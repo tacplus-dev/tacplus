@@ -19,6 +19,7 @@ SELFTESTS_SRC="$ROOT_DIR/cross-test/current-generation/testdata"
 RECORDEGRESS_PROTO_SRC="$ROOT_DIR/cross-test/proto-recordegress"
 OWNERDEFAULT_PROTO_SRC="$ROOT_DIR/cross-test/proto-ownerdefault"
 QUORUMWRITE_PROTO_SRC="$ROOT_DIR/cross-test/proto-quorumwrite"
+TENANTSLICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-tenantslice"
 WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/current-generation}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
@@ -199,6 +200,19 @@ write_quorumwrite_config() {
 language: "$language"
 pkg: "com.gitlab.example.dummy.quorumvault"
 src: "$QUORUMWRITE_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
+write_tenantslice_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.ledger"
+src: "$TENANTSLICE_PROTO_SRC"
 output-dir: "tacplus"
 EOF
 }
@@ -501,6 +515,20 @@ run_rust_spiffe_self_tests() {
     }
   assert_clean_log "$log_dir/rust-grpcserver-test.log"
 
+  # NEW-21: the model crate's own unit tests, which include the generated
+  # ServiceManager's startup error classifier (identity_error_tests). Nothing ran
+  # them before (cargo check only), so the run must also prove they are there.
+  # Only a service build has a ServiceManager (the main fixture is not one).
+  if [[ -f "$output/s2sm/mod.rs" ]] && grep -qF 'fn is_permanent_identity_init_error' "$output/s2sm/mod.rs"; then
+    (cd "$output" && cargo test --lib) >"$log_dir/rust-model-lib-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-model-lib-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-model-lib-test.log"
+    grep -qF 'identity_error_tests::missing_token_minter_is_permanent ... ok' "$log_dir/rust-model-lib-test.log" \
+      || die "NEW-21: the generated ServiceManager's identity_error_tests did not run (log: $log_dir/rust-model-lib-test.log)"
+  fi
+
   # The main fixture's JSON-key self-test, copied in by
   # install_json_key_selftest, so it is present exactly in that build.
   if [[ -f "$output/tests/json_key_test.rs" ]]; then
@@ -509,6 +537,16 @@ run_rust_spiffe_self_tests() {
         return 1
       }
     assert_clean_log "$log_dir/rust-json-key-test.log"
+  fi
+
+  # The quorum-write fixture's hosted store service + roll scheduler self-test,
+  # copied in by assert_quorumwrite_output, so it is present exactly in that build.
+  if [[ -f "$output/tests/store_roll_test.rs" ]]; then
+    (cd "$output" && cargo test --test store_roll_test) >"$log_dir/rust-store-roll-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-store-roll-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-store-roll-test.log"
   fi
 
   # PC-C-2: the collection crate's page-token codec tests pin the
@@ -1031,10 +1069,11 @@ install_extraction_selftest() {
 
 # assert_quorumwrite_output checks that the (spec.quorum_write) gate was
 # GENERATED for quorumvault.CredPair with the strictest declared floor, 3, in
-# every language. Absence compiles: before 2026-10-15 only Java emitted it. Go and
-# Java host CredPairStoreService, so their roll baseline must also go through the
-# LocalRows seam. Rust does not host a synthesized store service at all (see
-# roadmap/LANGUAGE_PARITY.md), so it has no roll scheduler to assert here.
+# every language. Absence compiles: before 2026-10-15 only Java emitted it. All
+# three host CredPairStoreService, so each roll baseline must also go through the
+# LocalRows seam. Rust hosted no synthesized store service until 2026-10-15 (the
+# shared own-package filter dropped it), and that compiled too; Rust also runs
+# store_roll_test.rs against the hosted store service and its roll scheduler.
 assert_quorumwrite_output() {
   local output="$1"
   local language="$2"
@@ -1071,8 +1110,33 @@ assert_quorumwrite_output() {
         || die "quorum-write fixture (rust): CredPair's floor is not the strictest declared (3) in $stores"
       grep -qF 'diskstore::require_quorum("cred_pair", durable_copies, MIN_DURABLE_COPIES_CRED_PAIR)' "$stores" \
         || die "quorum-write fixture (rust): require_cred_pair_quorum does not call the chassis gate in $stores"
+      sm="$(find "$output" -type f -path '*/s2sm/mod.rs' -print -quit)"
+      grep -qF 'fn cred_pair_store_grpc_impl(&self)' "$(dirname "$sm")/handler.rs" \
+        || die "quorum-write fixture (rust): the Handler has no CredPairStoreService getter; the store service is not hosted"
+      grep -qF 'self.spawn_owned(run_cred_pair_roll_scheduler(' "$sm" \
+        || die "quorum-write fixture (rust): the ServiceManager does not spawn the cred_pair roll scheduler in $sm"
+      mkdir -p "$output/tests"
+      cp "$SELFTESTS_SRC/rust/store_roll_test.rs" "$output/tests/"
       ;;
   esac
+}
+
+# assert_tenantslice_output checks that ledger, whose only per-service config is
+# its slice of the GENERATED tenant_config.TenantConfig, is subscribed to the
+# owner's TenancyConfigState: the generated state client must exist. Its absence
+# compiles: until 2026-10-15 the subscription step saw only the TenantConfig stub
+# and emitted no subscription in any language.
+assert_tenantslice_output() {
+  local output="$1"
+  local language="$2"
+  local client=""
+
+  case "$language" in
+    go) client="$(find "$output" -type f -path '*/s2sm/state/services/tenancy_config_state/state.go' -print -quit)" ;;
+    java) client="$(find "$output" -type f -path '*/s2sm/internal/state/services/tenancy/tenancyconfigstate/StateClient.java' -print -quit)" ;;
+    rust) client="$(find "$output" -type f -path '*/s2sm/internal/state/services/tenancy_config_state/state.rs' -print -quit)" ;;
+  esac
+  [[ -n "$client" ]] || die "tenant-slice fixture ($language): ledger is not subscribed to TenancyConfigState (no generated state client under $output)"
 }
 
 # install_ownerdefault_selftest copies the Java runtime self-test into the
@@ -2002,7 +2066,7 @@ fi
 # quorum-write fixture: the only full service build hosting a keyed
 # (spec.service_store), so the only place the generated quorum write gate and the
 # disk-store roll scheduler are compiled. Go also runs quorum_write_test.go
-# against the generated RequireCredPairQuorum.
+# against the generated RequireCredPairQuorum; Rust runs store_roll_test.rs.
 if [[ -d "$QUORUMWRITE_PROTO_SRC" ]]; then
   for language in "${languages[@]}"; do
     dir="$WORK_ROOT/quorumwrite-$language"
@@ -2021,6 +2085,30 @@ if [[ -d "$QUORUMWRITE_PROTO_SRC" ]]; then
     echo "==> Compiling $language quorum-write fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/quorumvault"
     echo "    PASS $language quorum-write"
+  done
+fi
+
+# tenant-slice fixture: the only build whose per-service config reaches it
+# solely through the generated tenant_config.TenantConfig, so the only place the
+# auto-subscription to that slice is asserted and compiled.
+if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/tenantslice-$language"
+    log="$WORK_ROOT/tenantslice-$language.log"
+    rm -rf "$dir"
+    write_tenantslice_config "$dir" "$language"
+
+    echo "==> Generating $language tenant-slice fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTSLICE_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language tenant-slice generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_tenantslice_output "$output_root" "$language"
+    echo "==> Compiling $language tenant-slice fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/ledger"
+    echo "    PASS $language tenant-slice"
   done
 fi
 

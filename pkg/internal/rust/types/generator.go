@@ -104,15 +104,8 @@ func Generate(config *tactype.Config) error {
 		return err
 	}
 
-	// Generate TenantConfig proto from (spec.config_slice) tenant-scope annotations.
-	// Must run before protoc so the generated/tenant_config.proto stub is replaced
-	// with the full aggregate message including all per-service slice fields.
-	if err := proto.GenerateTenantConfig(config.InputDir, config.FlatProtoDir, protoDir); err != nil {
-		return fmt.Errorf("failed to generate tenant_config.proto: %w", err)
-	}
-	if err := proto.GenerateProjectConfig(config.InputDir, config.FlatProtoDir, protoDir); err != nil {
-		return fmt.Errorf("failed to generate project_config.proto: %w", err)
-	}
+	// generated/tenant_config.proto and project_config.proto are already the real
+	// aggregates: CopyAndPrepareProtoDir, which built protoDir, generates them.
 
 	// Append state/store service definitions BEFORE trace injection so that
 	// auto-appended message types (LeaderRecord, EventBus envelopes, etc.)

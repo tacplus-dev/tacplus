@@ -93,22 +93,19 @@ unsplit, as PC-L-3 did.
 
 ---
 
-## PC-L-2b — Go cert-stream give-up path's DEGRADED reason is unpinned
+## PC-L-2b — Go cert-stream give-up path's DEGRADED reason — CLOSED
 
-**Status:** the retry-target-swap leg (PC-L-2) and the renewal-time `degrade`
-seam (PC-L-1's key-mismatch and handler-rejection reasons) are both now
-covered by `cert_stream_behavior_test.go`. One path through the same
-DEGRADED-marking machinery is not: give-up-before-first-delivery.
-
-That path never calls `degrade(reason string)` directly — it sends a wrapped
-error on `readyCh`, and `Run()`'s background drain does the DEGRADED marking,
-discriminating the reason by testing the error against sentinels like
-`errTlsFirstCertFatal`. `Run()` sits above the `cert-stream` fixture used by
-this test file, so it isn't drivable from here without a different harness.
-
-**To close:** a test hosting `Run()` itself (or the smallest slice of it that
-performs the sentinel discrimination) that drives the give-up-before-first-
-delivery path and asserts which DEGRADED reason gets reported.
+**Status (2026-10-15):** closed. Run()'s background drain of the TLS stream's
+first-delivery signal is now `drainTLSFirstDelivery(ctx, readyCh, degrade)` in
+the Go ServiceManager template (Run starts it with `sm.reportTLSDegraded`), so
+the cert-stream fixture drives the exact code Run runs.
+`TestGoTlsCertStreamRetryExhaustion` "give-up is reported DEGRADED as a
+give-up" runs a real `tlsCertStreamLoop` to exhaustion (budget 3) into the
+drain and asserts exactly one degrade call starting "TLS renewal stream gave up
+before first delivery: " and carrying the give-up error; "first handler failure
+is fatal" feeds the handler-rejection signal through the same drain and asserts
+the handler wording. Proven red: with the give-up branch's degrade call removed
+the subtest fails ("the give-up was never reported DEGRADED").
 
 ---
 
@@ -154,16 +151,22 @@ whose `find` patterns matched nothing and printed SKIP on every run.
 
 ---
 
-## NEW-21 — empty-trust-domain classifier is pinned by existence only
+## NEW-21 — empty-trust-domain classifier is pinned by existence only — CLOSED (Go, Java, Rust)
 
-**Status (2026-10-15):** closed for Go and Java, open for Rust. Go emits
-`s2sm_identity_error_test.go` and Java now emits `ServiceManagerIdentityErrorTest`
-beside every ServiceManager; `current-generation` runs both in each service
-fixture (permanent, wrapped, text-only and transient cases). Rust's
-`is_permanent_identity_init_error` (missing token minter only, top-level
-downcast) still has no behavioural test: no gate runs the generated model
-crate's unit tests, so a `#[cfg(test)]` module there would be green without
-running. The history below is the original finding.
+**Status (2026-10-15):** closed in all three. Go emits
+`s2sm_identity_error_test.go` and Java `ServiceManagerIdentityErrorTest` beside
+every ServiceManager; Rust's ServiceManager now carries
+`#[cfg(test)] mod identity_error_tests` over the real
+`is_permanent_identity_init_error` (the boxed `TokenMinterNotConfigured` the
+retry loop sees is permanent; an error with the same text is not; transient
+failures stay retryable), and `current-generation` runs `cargo test --lib` on
+the generated model crate in every Rust service fixture and fails unless
+`identity_error_tests::missing_token_minter_is_permanent ... ok` is in the log,
+so the gate cannot pass by running zero tests. Rust has no trust-domain case:
+an empty trust domain is refused by `SpiffeServerCertVerifier::new` before the
+retry loop. Proven red: with the downcast replaced by a message match,
+`the_same_text_is_not_the_typed_error` fails. The history below is the
+original finding.
 
 `isPermanentIdentityInitError` exists in the go and java ServiceManager templates
 and is referenced from the retry path. The only tests are template regression

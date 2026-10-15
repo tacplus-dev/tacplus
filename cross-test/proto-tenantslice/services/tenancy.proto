@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// The OWNER of the per-tenant configuration in the generated-TenantConfig
+// subscription fixture: its runtime Config carries one generated
+// tenant_config.TenantConfig per tenant. It declares no per_service_config
+// message of its own; the only one in this fixture is the GENERATED
+// TenantConfig.
+
+syntax = "proto3";
+
+package tenancy;
+
+import "sys/spec.proto";
+import "generated/tenant_config.proto";
+
+// tenancy is also the fixture's state store: config state needs one.
+option (spec.service) = {name: "tenancy", store: true};
+
+service TenancyService {
+  option (spec.service_s2s) = {label: "TenancyService"};
+
+  rpc GetTenancyStatus(GetTenancyStatusRequest) returns (GetTenancyStatusResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}
+
+message GetTenancyStatusRequest {}
+
+message GetTenancyStatusResponse {
+  // ready reports whether tenancy is serving.
+  bool ready = 1;
+}
+
+message TenancyConfig {
+  option (spec.grpc_config) = {service_name: "tenancy"};
+
+  // tenants is each tenant's aggregate configuration, keyed by tenant id.
+  map<string, tenant_config.TenantConfig> tenants = 1 [(spec.assert_max_size) = 1000];
+}

@@ -494,6 +494,70 @@ func TestInjectTenantConfigSubscriptionsPropagatesParserError(t *testing.T) {
 // read-only, to that owner's ConfigState; a service the message does not name
 // must not. Before the shared sequence only the Go generator ran the
 // subscription step, so a Java or Rust service silently missed its slice.
+// The GENERATED tenant_config.TenantConfig is a per_service_config message like
+// any hand-annotated one, so a service with a tenant-scope (spec.config_slice) is
+// subscribed to the grpc_config owner whose Config holds TenantConfig. The
+// subscription step parses the flattened proto tree, which CopyAndPrepareProtoDir
+// builds; until 2026-10-15 that tree carried only the TenantConfig STUB, so this
+// subscription was never emitted in any language. Here the only per-service
+// config message is the generated one.
+func TestResolveServiceStatesSubscribesToGeneratedTenantConfigSlice(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available")
+	}
+	src := t.TempDir()
+	writeProto(t, src, "services/audit.proto", `syntax = "proto3";
+package audit;
+import "sys/spec.proto";
+import "generated/tenant_config.proto";
+option (spec.service) = {name: "audit", store: true};
+message AuditConfig {
+  option (spec.grpc_config) = {service_name: "audit"};
+  map<string, tenant_config.TenantConfig> tenants = 1 [(spec.assert_max_size) = 100];
+}
+`)
+	writeProto(t, src, "services/gateway.proto", `syntax = "proto3";
+package gateway;
+import "sys/spec.proto";
+option (spec.service) = {name: "gateway"};
+message GatewayTenantConfig {
+  option (spec.config_slice) = {scope: CONFIG_SLICE_SCOPE_TENANT, service_name: "gateway"};
+  string route = 1;
+}
+`)
+	writeProto(t, src, "platform/health.proto", `syntax = "proto3";
+package health;
+import "sys/healthreport.proto";
+import "sys/spec.proto";
+message ServiceHealth {
+  option (spec.service_state) = {name: "ServiceHealth", label: ["audit"], export: true};
+  repeated healthreport.ServiceInstanceHealth instances = 1 [(spec.instance_keyed) = true, (spec.assert_max_size) = 10000];
+}
+`)
+	flat, err := CopyAndPrepareProtoDir(src, t.TempDir())
+	if err != nil {
+		t.Fatalf("CopyAndPrepareProtoDir: %v", err)
+	}
+	entries, err := InjectGrpcConfigState(src, flat, flat)
+	if err != nil {
+		t.Fatalf("InjectGrpcConfigState: %v", err)
+	}
+	config := &tactype.Config{SelfPackage: "gateway", FlatProtoDir: flat}
+	if err := ResolveServiceStates(config, entries); err != nil {
+		t.Fatalf("ResolveServiceStates: %v", err)
+	}
+	owner := ConfigStateRootName("audit")
+	for _, st := range config.States {
+		if st.MessageName == owner {
+			if st.AccessMode != tactype.AccessRO {
+				t.Fatalf("subscription to %s must be read-only, got %+v", owner, st)
+			}
+			return
+		}
+	}
+	t.Fatalf("gateway is named by the generated TenantConfig but was not subscribed to %s: %+v", owner, config.States)
+}
+
 func TestResolveServiceStatesSubscribesNamedServiceToItsConfigSlice(t *testing.T) {
 	if _, err := exec.LookPath("protoc"); err != nil {
 		t.Skip("protoc not available")

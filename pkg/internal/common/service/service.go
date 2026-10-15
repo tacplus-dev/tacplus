@@ -168,9 +168,10 @@ func filterByHostTag(servicesInfo []ServiceInfo, pkg string) []ServiceInfo {
 
 // filterByPackage returns user-defined gRPC services from proto files whose
 // package matches pkg. Used for server auto-inference from proto annotations.
-// tacplus-synthesized services (state/store/mutation/opa_eval, marked
+// tacplus-synthesized services (state/mutation/opa_eval, marked
 // Synthesized via the `// tacplus:generated-service` sentinel) are excluded —
-// they are hosted via their own generated wiring. User-defined services are
+// they are hosted via their own generated wiring (the record read plane and
+// the store service are the two exceptions below). User-defined services are
 // kept even when service_s2s has no auth_services (e.g. ConnectorStatus); the
 // old "S2S && empty auth_services" heuristic wrongly dropped those.
 func filterByPackage(servicesInfo []ServiceInfo, pkg string) []ServiceInfo {
@@ -189,7 +190,7 @@ func filterByPackage(servicesInfo []ServiceInfo, pkg string) []ServiceInfo {
 		if svc.IsC2D {
 			continue
 		}
-		// Exclude tacplus-generated state/store/mutation/opa services.
+		// Exclude tacplus-generated state/mutation/opa services.
 		//
 		// EXCEPT the client-facing record read plane. <Svc>Records is synthesized
 		// like the others, but unlike them it is served by the READING SERVICE's
@@ -203,7 +204,14 @@ func filterByPackage(servicesInfo []ServiceInfo, pkg string) []ServiceInfo {
 		// wrapper, the registration and the grant catalog entry all come from the
 		// ordinary path, which is exactly what makes gate 1 fall out of generation
 		// rather than being built.
-		if svc.Synthesized && svc.SynthesizedKind != parser.SynthesizedKindRecordC2S {
+		//
+		// EXCEPT, too, the <Msg>StoreService of an own-package keyed
+		// (spec.service_store). Go and Java host it in the declaring package's
+		// server like any other own-package service, and the disk-store roll
+		// scheduler reads its rows through the Handler getter that hosting
+		// gives it; excluded here, a Rust service declaring one had neither.
+		if svc.Synthesized && svc.SynthesizedKind != parser.SynthesizedKindRecordC2S &&
+			svc.SynthesizedKind != parser.SynthesizedKindStore {
 			continue
 		}
 		result = append(result, svc)

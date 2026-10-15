@@ -377,6 +377,26 @@ func TestResolveServerServices_KeepsUserS2SWithEmptyAuth_DropsSynthesized(t *tes
 	}
 }
 
+// The <Msg>StoreService of an own-package (spec.service_store) is hosted like
+// any own-package service — as Go and Java host it — so the Rust Handler gets
+// its getter and the ServiceManager its roll scheduler. A synthesized STATE
+// service in the same package is still not this filter's to host.
+func TestResolveServerServices_HostsOwnPackageStoreService(t *testing.T) {
+	config := &tactype.Config{Language: "rust", SelfPackage: "quorumvault"}
+	services := []ServiceInfo{
+		{ProtoFile: "services/quorumvault.proto", PackageName: "quorumvault", ServiceName: "VaultService", GrpcName: "quorumvault", IsGrpc: true, IsS2S: true},
+		{ProtoFile: "services/quorumvault.proto", PackageName: "quorumvault", ServiceName: "CredPairStoreService", GrpcName: "quorumvault", IsGrpc: true, IsS2S: true, Synthesized: true, SynthesizedKind: parser.SynthesizedKindStore},
+		{ProtoFile: "services/quorumvault.proto", PackageName: "quorumvault", ServiceName: "VaultStateStateService", GrpcName: "quorumvault", IsGrpc: true, IsS2S: true, Synthesized: true, SynthesizedKind: parser.SynthesizedKindState},
+	}
+	var names []string
+	for _, s := range ResolveServerServices(config, services) {
+		names = append(names, s.ServiceName)
+	}
+	if len(names) != 2 || names[0] != "VaultService" || names[1] != "CredPairStoreService" {
+		t.Fatalf("want [VaultService CredPairStoreService] (store hosted, state not), got %v", names)
+	}
+}
+
 // A category-A MCP-only service (no service_s2s/service_c2s/service_c2d, so
 // IsGrpc is false) must still get a server wrapper generated: that's the only
 // path that reaches mcp_dispatch_gen.go. filterByPackage previously dropped

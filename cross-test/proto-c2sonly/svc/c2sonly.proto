@@ -13,8 +13,8 @@
 // helpers (NEW-47), each an unconditional chassis reference the inline source
 // did not declare.
 //
-// NOT a c2d-only daemon: c2d services are filtered out of serverServices
-// (generator.go:1198), so such a build emits c2dm/ and no sm/ at all.
+// NOT a c2d-only daemon: that shape (an sm/ whose only listener is the c2d
+// socket server) is cross-test/c2d-server's fixture.
 
 syntax = "proto3";
 

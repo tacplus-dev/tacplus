@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// C2D server cross-test fixture: a daemon whose whole server surface is one
+// service_c2d service, the shape of a local client daemon. The generated
+// ServiceManager hosts it on the declared socket_path with no TLS server and
+// no token auth; cross-test/c2d-server/run.sh hosts it and calls it over the
+// socket through the generated c2dm client.
+
+syntax = "proto3";
+
+package c2dserver;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "c2dserver"};
+
+message LocalRequest {
+  string item_id = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 3
+  ];
+  int32 count = 2;
+}
+
+message LocalResponse {
+  string result_id = 1 [(spec.assert_required) = true];
+}
+
+message LocalEvent {
+  string item_id = 1 [(spec.assert_required) = true];
+  int32 seq = 2;
+}
+
+service LocalDaemon {
+  option (spec.service_c2d) = {socket_path: "/tmp/tacplus-c2d-server-check/daemon.sock"};
+
+  rpc GetLocal(LocalRequest) returns (LocalResponse);
+  rpc GenerateLocalEvents(LocalRequest) returns (stream LocalEvent);
+}

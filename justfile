@@ -160,7 +160,7 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
-  for g in soundness test current-generation determinism cert-stream claims-provenance w2s-validate; do
+  for g in soundness test current-generation determinism cert-stream claims-provenance w2s-validate c2d-server; do
     echo "=== $g ==="
     just "$g"
     rc=$?
@@ -263,6 +263,17 @@ w2s-validate-rust:
 
 w2s-validate-java:
   {{lock}} bash cross-test/w2s-validate/run.sh --language java
+
+# Behavioral coverage of the generated Go and Java C2D server: hosts it on its
+# declared unix socket and calls it through the generated c2dm client.
+c2d-server:
+  {{lock}} bash cross-test/c2d-server/run.sh
+
+c2d-server-go:
+  {{lock}} bash cross-test/c2d-server/run.sh --language go
+
+c2d-server-java:
+  {{lock}} bash cross-test/c2d-server/run.sh --language java
 
 # Compiles the generated Rust MCP dispatch against the EXACT rmcp version
 # tacplus declares (rmcpCrateVersion), so a floor lower than the emitted code

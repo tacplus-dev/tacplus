@@ -131,7 +131,10 @@ jobs:
           cache-from: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }}
           cache-to: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }},mode=max
       - name: Record digest
-        run: mkdir -p /tmp/digests && touch "/tmp/digests/${{ steps.push.outputs.digest }}"
+        run: |
+          mkdir -p /tmp/digests
+          d="${{ steps.push.outputs.digest }}"
+          touch "/tmp/digests/${d#sha256:}"
       - uses: actions/upload-artifact@v4
         with:
           name: build-digest-${{ matrix.arch }}
@@ -167,7 +170,7 @@ jobs:
   tacplus:
     name: tacplus (${{ matrix.arch }})
     needs: [plan, base, build, build-manifest]
-    if: always() && needs.plan.result == 'success' && (needs.base.result == 'success' || needs.base.result == 'skipped') && (needs.build-manifest.result == 'success' || needs.build-manifest.result == 'skipped')
+    if: always() && needs.plan.result == 'success' && (needs.base.result == 'success' || needs.base.result == 'skipped') && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.build-manifest.result == 'success' || needs.build-manifest.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -210,7 +213,10 @@ jobs:
         if: matrix.arch == 'amd64'
         run: docker run --rm "$NS/tacplus@${{ steps.push.outputs.digest }}" tacplus-smoke
       - name: Record digest
-        run: mkdir -p /tmp/digests && touch "/tmp/digests/${{ steps.push.outputs.digest }}"
+        run: |
+          mkdir -p /tmp/digests
+          d="${{ steps.push.outputs.digest }}"
+          touch "/tmp/digests/${d#sha256:}"
       - uses: actions/upload-artifact@v4
         with:
           name: tacplus-digest-${{ matrix.arch }}

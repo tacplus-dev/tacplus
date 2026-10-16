@@ -31,6 +31,7 @@ import (
 type egressSanitizer struct {
 	resolver *parser.MessageResolver
 	msgs     map[string]*model.Message // key: pkg + "\x00" + name
+	enums    map[string]*model.Enum    // key: pkg + "\x00" + name
 }
 
 // newEgressSanitizer builds the emit-time oracle over all parsed proto files.
@@ -38,11 +39,15 @@ func newEgressSanitizer(allFiles []model.ProtoFile) *egressSanitizer {
 	es := &egressSanitizer{
 		resolver: parser.NewMessageResolver(allFiles),
 		msgs:     make(map[string]*model.Message),
+		enums:    make(map[string]*model.Enum),
 	}
 	for fi := range allFiles {
 		pf := &allFiles[fi]
 		for mi := range pf.Messages {
 			es.msgs[pf.Package+"\x00"+pf.Messages[mi].Name] = &pf.Messages[mi]
+		}
+		for ei := range pf.Enums {
+			es.enums[pf.Package+"\x00"+pf.Enums[ei].Name] = &pf.Enums[ei]
 		}
 	}
 	return es

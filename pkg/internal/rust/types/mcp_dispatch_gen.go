@@ -324,7 +324,8 @@ type rustMcpScalarArg struct {
 	Debug string
 }
 
-// mcpRequiredScalarArgs returns the request's required scalar fields. A request
+// mcpRequiredScalarArgs returns the request's required scalar fields, plus a
+// defined value for each singular enum the validator refuses at zero. A request
 // whose required set is not entirely scalar returns nil: the generated dispatch
 // test synthesizes arguments, and there is no one obviously-valid value for a
 // required enum or nested message.
@@ -337,6 +338,19 @@ func (es *rustEgressSanitizer) mcpRequiredScalarArgs(fullType, servicePkg string
 	var out []rustMcpScalarArg
 	for i := range msg.Fields {
 		f := &msg.Fields[i]
+		// An omitted enum decodes to its zero value, which assert_enum_defined
+		// refuses. A repeated or optional enum has no such refusal: its empty
+		// state is valid, so it needs no synthesized value.
+		if a, ok := f.Annotations["assert_enum_defined"]; ok && a.BoolValue && f.IsEnum && !f.IsRepeated && !f.IsOptional {
+			value, ok := es.mcpDefinedEnumValue(f, pkg)
+			if !ok {
+				return nil
+			}
+			// The handler's Debug renders the enum by its prost variant name.
+			out = append(out, rustMcpScalarArg{Field: f.Name, JSON: rustQuote(value.Name),
+				Debug: fmt.Sprintf("%s: %s", f.Name, toProstEnumVariant(value.Name, f.Type))})
+			continue
+		}
 		if a, ok := f.Annotations["assert_required"]; !ok || !a.BoolValue {
 			continue
 		}
@@ -358,6 +372,26 @@ func (es *rustEgressSanitizer) mcpRequiredScalarArgs(fullType, servicePkg string
 		}
 	}
 	return out
+}
+
+// mcpDefinedEnumValue returns the first declared non-zero value of an enum
+// field's type: the value an assert_enum_defined field must carry to pass
+// validation. The second result is false when the enum declares no such value.
+func (es *rustEgressSanitizer) mcpDefinedEnumValue(f *model.Field, msgPkg string) (model.EnumValue, bool) {
+	pkg := f.TypePackage
+	if pkg == "" {
+		pkg = msgPkg
+	}
+	en, ok := es.enums[pkg+"\x00"+f.Type]
+	if !ok {
+		return model.EnumValue{}, false
+	}
+	for _, v := range en.Values {
+		if v.Number != 0 {
+			return v, true
+		}
+	}
+	return model.EnumValue{}, false
 }
 
 // mcpMessageSchema renders one message as a JSON Schema object. visiting breaks

@@ -318,6 +318,34 @@ func TestJavaMcpDispatchIsEmptyWithoutAnMcpRpc(t *testing.T) {
 	}
 }
 
+// A tool whose request carries an assert_enum_defined field the caller never
+// sets: the validator refuses the zero value an omitted enum decodes to, so the
+// generated gate must synthesize a defined value or its call never reaches the
+// handler.
+func TestJavaMcpDispatchSynthesizesADefinedValueForAnEnumDefinedField(t *testing.T) {
+	san := javaMcpTestSanitizer()
+	request := san.msgs["ticket\x00GetTicketBriefRequest"]
+	request.Fields = append(request.Fields, model.Field{Name: "mode", Type: "TicketMode", Number: 4, IsEnum: true,
+		Annotations: map[string]model.AnnotationValue{"assert_enum_defined": {BoolValue: true}}})
+	san.enums["ticket\x00TicketMode"] = &model.Enum{Name: "TicketMode", Values: []model.EnumValue{
+		{Name: "TICKET_MODE_UNSPECIFIED", Number: 0},
+		{Name: "TICKET_MODE_READ", Number: 1},
+	}}
+	tools, err := javaMcpTools(javaMcpTestService(), "ticket", "Ticket",
+		map[string]string{"mcp": "Mcp"}, map[string]string{}, san)
+	if err != nil {
+		t.Fatalf("resolve Java MCP tools: %v", err)
+	}
+	rendered := generateJavaMcpDispatchTest(javaMcpTestService(), tools, javaMcpTestFileParams())
+
+	if !strings.Contains(rendered, `"mode", "TICKET_MODE_READ"`) {
+		t.Fatalf("the generated gate does not send a defined value for the enum-defined field:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, `stub.lastRequest.contains("TICKET_MODE_READ")`) {
+		t.Fatalf("the generated gate does not read the enum back off the handler's request:\n%s", rendered)
+	}
+}
+
 func TestJavaMcpDispatchGeneratesItsOwnGate(t *testing.T) {
 	rendered := generateJavaMcpDispatchTest(javaMcpTestService(), javaMcpResolvedTools(t), javaMcpTestFileParams())
 

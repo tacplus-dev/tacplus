@@ -45,9 +45,11 @@ rebuilt and pulled:
 |---|---|---|
 | `ghcr.io/tacplus-dev/tacplus/base` | OS, protoc, and the language runtimes (Go, JDK, Rust, Node, Swift) | on a schedule, or when a runtime pin changes |
 | `ghcr.io/tacplus-dev/tacplus/build` | `base` plus every build-time tool: the protoc plugins, Maven, the cargo plugins, just, jq, the docker CLI, gcloud | when a tool pin changes |
-| `ghcr.io/tacplus-dev/tacplus/tacplus` | `build` plus the tacplus binary | every push to `main` and every release |
+| `ghcr.io/tacplus-dev/tacplus/tacplus` | exactly what `tacplus build` shells out to: git, protoc and the plugins, Node (protoc-gen-es), gofmt, and the binary; a few hundred MB; what a generate step pulls | every push to `main` and every release |
+| `ghcr.io/tacplus-dev/tacplus/tacplus-build` | `build` plus the tacplus binary, for a build that generates and compiles in one container | every push to `main` and every release |
 
-Tags on the `tacplus` image follow the version policy:
+Tags on the `tacplus` and `tacplus-build` images follow the version policy
+(both always carry the same binary at the same tag):
 
 | tag | meaning |
 |---|---|
@@ -60,8 +62,8 @@ Tags on the `tacplus` image follow the version policy:
 `base` and `build` are tagged `<yyyymmdd>-<sha>` and `latest`.
 
 The definitions are `images/base.Dockerfile`, `images/build.Dockerfile` and
-`images/tacplus.Dockerfile`; `images/smoke.sh` is run inside every pushed
-tacplus image. `.github/workflows/images.yml` builds and pushes them for
+`images/tacplus.Dockerfile` (targets `slim` and `full`); `images/smoke.sh` is
+run inside every pushed image as `tacplus-smoke`. `.github/workflows/images.yml` builds and pushes them for
 linux/amd64 and linux/arm64 on every push to `main` and every release tag,
 rebuilding `base` and `build` only when their file changed (or weekly for
 `base`, or on demand). `just images` builds the set natively for one machine.

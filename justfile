@@ -258,8 +258,10 @@ claims-provenance:
 images:
   docker build -f images/base.Dockerfile -t tacplus-local/base:latest .
   docker build -f images/build.Dockerfile --build-arg BASE_IMAGE=tacplus-local/base:latest -t tacplus-local/build:latest .
-  docker build -f images/tacplus.Dockerfile --build-arg BUILD_IMAGE=tacplus-local/build:latest --build-arg VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo 0.0.0) --build-arg VCS_REF=$(git rev-parse --short=7 HEAD) -t tacplus-local/tacplus:latest .
+  docker build -f images/tacplus.Dockerfile --target slim --build-arg BUILD_IMAGE=tacplus-local/build:latest --build-arg VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo 0.0.0) --build-arg VCS_REF=$(git rev-parse --short=7 HEAD) -t tacplus-local/tacplus:latest .
+  docker build -f images/tacplus.Dockerfile --target full --build-arg BUILD_IMAGE=tacplus-local/build:latest --build-arg VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo 0.0.0) --build-arg VCS_REF=$(git rev-parse --short=7 HEAD) -t tacplus-local/tacplus-build:latest .
   docker run --rm tacplus-local/tacplus:latest tacplus-smoke
+  docker run --rm tacplus-local/tacplus-build:latest tacplus-smoke
 
 # The local fix looper (see CONTRIBUTING.md, Requesting a fix).
 fix-looper *ARGS:

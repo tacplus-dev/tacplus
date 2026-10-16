@@ -1,6 +1,15 @@
-# tacplus image: the build image plus the tacplus binary for one commit or
-# release. Rebuilt on every push to main and every release; tagged by the
-# version policy in docs/VERSIONING.md (X.Y.Z, X.Y, X, latest, main-<sha>).
+# tacplus images: the binary for one commit or release, in two shapes.
+#
+#   tacplus        slim: everything `tacplus build` shells out to and nothing
+#                  more: git, protoc and the plugins, Node (protoc-gen-es is
+#                  JavaScript), gofmt (the Go generator runs it) and the
+#                  binary. What a generate step pulls.
+#   tacplus-build  full: the build image (runtimes plus tools) and the binary,
+#                  for a build that generates and compiles in one container.
+#
+# Both are tagged by the version policy in docs/VERSIONING.md. The tools in
+# the slim image are copied out of the build image, so there is one source of
+# truth for their versions. Build with --target slim or --target full.
 ARG BUILD_IMAGE=ghcr.io/tacplus-dev/tacplus/build:latest
 ARG GO_VERSION=1.25
 
@@ -29,15 +38,39 @@ RUN go generate ./pkg/internal/proto/spec/... \
        -ldflags="-w -s -X ${PKG}.Version=${VERSION} -X ${PKG}.GitSha=${VCS_REF} -X ${PKG}.BuildID=${VCS_REF} -X ${PKG}.ProjectPath=tacplus-dev/tacplus" \
        -o /out/tacplus .
 
-FROM ${BUILD_IMAGE}
+FROM ${BUILD_IMAGE} AS tools
+
+FROM debian:trixie-slim AS slim
 ARG VERSION=0.0.0
 ARG VCS_REF=local
 LABEL org.opencontainers.image.title="tacplus" \
-      org.opencontainers.image.description="tacplus build image plus the tacplus binary" \
+      org.opencontainers.image.description="tacplus with exactly what generation needs: git, protoc and its plugins, Node, gofmt" \
+      org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}"
+RUN apt-get update && apt-get install -y --no-install-recommends bash ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=tools /usr/local/bin/protoc /usr/local/bin/protoc-gen-go /usr/local/bin/protoc-gen-go-grpc \
+                  /usr/local/bin/protoc-gen-grpc-java /usr/local/bin/protoc-gen-prost /usr/local/bin/protoc-gen-tonic \
+                  /usr/local/bin/protoc-gen-prost-serde /usr/local/bin/protoc-gen-prost-crate /usr/local/bin/
+COPY --from=tools /usr/local/include /usr/local/include
+COPY --from=tools /usr/local/bin/node /usr/local/bin/node
+COPY --from=tools /usr/local/lib/node_modules/@bufbuild /usr/local/lib/node_modules/@bufbuild
+COPY --from=tools /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+RUN ln -s ../lib/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es /usr/local/bin/protoc-gen-es
+COPY --from=tacplus /out/tacplus /usr/local/bin/tacplus
+COPY images/smoke.sh /usr/local/bin/tacplus-smoke
+ENV TACPLUS_IMAGE=slim
+WORKDIR /workspace
+
+FROM ${BUILD_IMAGE} AS full
+ARG VERSION=0.0.0
+ARG VCS_REF=local
+LABEL org.opencontainers.image.title="tacplus-build" \
+      org.opencontainers.image.description="tacplus build image (runtimes and tools) plus the tacplus binary" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}"
 COPY --from=tacplus /out/tacplus /usr/local/bin/tacplus
-# The smoke test ships in the image so a pulled image can prove itself:
-# `docker run --rm <image> tacplus-smoke`.
 COPY images/smoke.sh /usr/local/bin/tacplus-smoke
+ENV TACPLUS_IMAGE=full

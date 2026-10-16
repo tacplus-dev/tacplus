@@ -198,29 +198,46 @@ jobs:
         run: |
           if [[ "${GITHUB_REF_TYPE}" == tag && "${GITHUB_REF_NAME}" == v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0"; fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
-      - id: push
+      - name: tacplus (slim)
+        id: slim
         uses: docker/build-push-action@v6
         with:
           context: .
           file: images/tacplus.Dockerfile
+          target: slim
           platforms: linux/${{ matrix.arch }}
           build-args: |
             BUILD_IMAGE=${{ env.NS }}/build:latest
             VERSION=${{ steps.v.outputs.version }}
             VCS_REF=${{ github.sha }}
           outputs: type=image,name=${{ env.NS }}/tacplus,push-by-digest=true,name-canonical=true,push=true
+      - name: tacplus-build (full)
+        id: full
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/tacplus.Dockerfile
+          target: full
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            BUILD_IMAGE=${{ env.NS }}/build:latest
+            VERSION=${{ steps.v.outputs.version }}
+            VCS_REF=${{ github.sha }}
+          outputs: type=image,name=${{ env.NS }}/tacplus-build,push-by-digest=true,name-canonical=true,push=true
       - name: Smoke test (this architecture)
         if: matrix.arch == 'amd64'
-        run: docker run --rm "$NS/tacplus@${{ steps.push.outputs.digest }}" tacplus-smoke
-      - name: Record digest
         run: |
-          mkdir -p /tmp/digests
-          d="${{ steps.push.outputs.digest }}"
-          touch "/tmp/digests/${d#sha256:}"
+          docker run --rm "$NS/tacplus@${{ steps.slim.outputs.digest }}" tacplus-smoke
+          docker run --rm "$NS/tacplus-build@${{ steps.full.outputs.digest }}" tacplus-smoke
+      - name: Record digests
+        run: |
+          mkdir -p /tmp/digests/tacplus /tmp/digests/tacplus-build
+          s="${{ steps.slim.outputs.digest }}"; touch "/tmp/digests/tacplus/${s#sha256:}"
+          f="${{ steps.full.outputs.digest }}"; touch "/tmp/digests/tacplus-build/${f#sha256:}"
       - uses: actions/upload-artifact@v4
         with:
           name: tacplus-digest-${{ matrix.arch }}
-          path: /tmp/digests/*
+          path: /tmp/digests/**
           if-no-files-found: error
 
   tacplus-manifest:
@@ -247,23 +264,31 @@ jobs:
           set -euo pipefail
           if [[ "${GITHUB_REF_TYPE}" == tag && "${GITHUB_REF_NAME}" == v* ]]; then
             v="${GITHUB_REF_NAME#v}"; IFS=. read -r MA MI _ <<<"$v"
-            tags="-t $NS/tacplus:$v -t $NS/tacplus:$MA.$MI -t $NS/tacplus:$MA -t $NS/tacplus:latest"
+            echo "list=$v $MA.$MI $MA latest" >> "$GITHUB_OUTPUT"
           else
-            tags="-t $NS/tacplus:main-${GITHUB_SHA::7} -t $NS/tacplus:main"
+            echo "list=main-${GITHUB_SHA::7} main" >> "$GITHUB_OUTPUT"
           fi
-          echo "tags=$tags" >> "$GITHUB_OUTPUT"; echo "$tags"
       - name: Create the multi-arch tags
         working-directory: /tmp/digests
         run: |
           set -euo pipefail
-          refs=(); for d in *; do refs+=("$NS/tacplus@sha256:$d"); done
-          # shellcheck disable=SC2086
-          docker buildx imagetools create ${{ steps.tags.outputs.tags }} "${refs[@]}"
-          docker buildx imagetools inspect "$NS/tacplus:main" 2>/dev/null || true
-      - name: Prune old main-<sha> images
+          for image in tacplus tacplus-build; do
+            refs=(); for d in "$image"/*; do refs+=("$NS/$image@sha256:$(basename "$d")"); done
+            tags=(); for t in ${{ steps.tags.outputs.list }}; do tags+=(-t "$NS/$image:$t"); done
+            docker buildx imagetools create "${tags[@]}" "${refs[@]}"
+            docker buildx imagetools inspect "$NS/$image:${{ github.ref_type == 'tag' && 'latest' || 'main' }}"
+          done
+      - name: Prune old main-<sha> images (tacplus)
         uses: actions/delete-package-versions@v5
         with:
           package-name: tacplus/tacplus
+          package-type: container
+          min-versions-to-keep: 20
+          ignore-versions: '^(latest|main|\d+(\.\d+){0,2})$'
+      - name: Prune old main-<sha> images (tacplus-build)
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: tacplus/tacplus-build
           package-type: container
           min-versions-to-keep: 20
           ignore-versions: '^(latest|main|\d+(\.\d+){0,2})$'

@@ -279,6 +279,45 @@ func TestGoMcpDispatchGeneratesItsOwnTests(t *testing.T) {
 	}
 }
 
+// A tool whose request carries an assert_enum_defined field the caller never
+// sets: the validator refuses the zero value an omitted enum decodes to, so the
+// generated gate must synthesize a defined value or its call never reaches the
+// handler. The paired required string stays the synthesized control.
+func TestGoMcpDispatchSynthesizesADefinedValueForAnEnumDefinedField(t *testing.T) {
+	enumDefined := map[string]model.AnnotationValue{"assert_enum_defined": {BoolValue: true}}
+	san := newEgressSanitizer([]model.ProtoFile{{Package: "ticket",
+		Enums: []model.Enum{{Name: "TicketMode", Values: []model.EnumValue{
+			{Name: "TICKET_MODE_UNSPECIFIED", Number: 0},
+			{Name: "TICKET_MODE_READ", Number: 1},
+		}}},
+		Messages: []model.Message{
+			{Name: "GetTicketBriefRequest", Fields: []model.Field{
+				{Name: "ticket_id", Type: "string", Number: 1,
+					Annotations: map[string]model.AnnotationValue{"assert_required": {BoolValue: true}}},
+				{Name: "mode", Type: "TicketMode", Number: 2, IsEnum: true, Annotations: enumDefined},
+			}},
+			{Name: "GetTicketBriefResponse", Fields: []model.Field{
+				{Name: "summary", Type: "string", Number: 1},
+			}},
+			{Name: "GetTicketRequest", Fields: []model.Field{
+				{Name: "ticket_id", Type: "string", Number: 1},
+			}},
+			{Name: "GetTicketResponse", Fields: []model.Field{
+				{Name: "body", Type: "string", Number: 1},
+			}},
+		}}})
+	svc := goMcpTestService()
+	tools, err := goMcpTools(svc, "ticket", san)
+	if err != nil {
+		t.Fatalf("resolve MCP tools: %v", err)
+	}
+	rendered := generateGoMcpDispatchTests(svc, tools, goMcpTestParams())
+
+	if !strings.Contains(rendered, `\"mode\": \"TICKET_MODE_READ\"`) {
+		t.Fatalf("the generated gate does not send a defined value for the enum-defined field:\n%s", rendered)
+	}
+}
+
 // goMcpPageSanitizer is the fixture's message set with the tool's request and
 // response reshaped as a PAGE pair — page_size/page_token in, one repeated items
 // field plus next_page_token/total_count out. Collection validation requires

@@ -424,7 +424,8 @@ func (es *egressSanitizer) mcpRowFields(fullType, servicePackage, annotation str
 	return out
 }
 
-// mcpRequiredScalarArgs returns the request's required scalar fields. A request
+// mcpRequiredScalarArgs returns the request's required scalar fields, plus a
+// defined value for each singular enum the validator refuses at zero. A request
 // whose required set is not entirely scalar returns nil: the generated dispatch
 // test synthesizes arguments, and there is no one obviously-valid value for a
 // required enum or nested message.
@@ -440,6 +441,17 @@ func (es *egressSanitizer) mcpRequiredScalarArgs(fullType, servicePackage string
 	var out []goMcpScalarArg
 	for i := range msg.Fields {
 		f := &msg.Fields[i]
+		// An omitted enum decodes to its zero value, which assert_enum_defined
+		// refuses. A repeated or optional enum has no such refusal: its empty
+		// state is valid, so it needs no synthesized value.
+		if a, ok := f.Annotations["assert_enum_defined"]; ok && a.BoolValue && f.IsEnum && !f.IsRepeated && !f.IsOptional {
+			value := es.mcpDefinedEnumName(f, pkg)
+			if value == "" {
+				return nil
+			}
+			out = append(out, goMcpScalarArg{Field: f.Name, JSON: strconv.Quote(value), Match: value})
+			continue
+		}
 		if a, ok := f.Annotations["assert_required"]; !ok || !a.BoolValue {
 			continue
 		}
@@ -461,6 +473,26 @@ func (es *egressSanitizer) mcpRequiredScalarArgs(fullType, servicePackage string
 		}
 	}
 	return out
+}
+
+// mcpDefinedEnumName returns the wire name of the first declared non-zero value
+// of an enum field's type: the value an assert_enum_defined field must carry to
+// pass validation. Empty when the enum declares no such value.
+func (es *egressSanitizer) mcpDefinedEnumName(f *model.Field, msgPkg string) string {
+	pkg := f.TypePackage
+	if pkg == "" {
+		pkg = msgPkg
+	}
+	en, ok := es.enums[pkg+"\x00"+f.Type]
+	if !ok {
+		return ""
+	}
+	for _, v := range en.Values {
+		if v.Number != 0 {
+			return v.Name
+		}
+	}
+	return ""
 }
 
 // mcpMessageSchema renders one message as a JSON Schema object. visiting breaks

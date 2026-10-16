@@ -326,6 +326,47 @@ func TestRustMcpDispatchGeneratesItsOwnTests(t *testing.T) {
 	}
 }
 
+// A tool whose request carries an assert_enum_defined field the caller never
+// sets: the validator refuses the zero value an omitted enum decodes to, so the
+// generated gate must synthesize a defined value or its call never reaches the
+// handler.
+func TestRustMcpDispatchSynthesizesADefinedValueForAnEnumDefinedField(t *testing.T) {
+	enumDefined := map[string]model.AnnotationValue{"assert_enum_defined": {BoolValue: true}}
+	san := newRustEgressSanitizer([]model.ProtoFile{{Package: "ticket",
+		Enums: []model.Enum{{Name: "TicketMode", Values: []model.EnumValue{
+			{Name: "TICKET_MODE_UNSPECIFIED", Number: 0},
+			{Name: "TICKET_MODE_READ", Number: 1},
+		}}},
+		Messages: []model.Message{
+			{Name: "GetTicketBriefRequest", Fields: []model.Field{
+				{Name: "ticket_id", Type: "string", Number: 1,
+					Annotations: map[string]model.AnnotationValue{"assert_required": {BoolValue: true}}},
+				{Name: "mode", Type: "TicketMode", Number: 2, IsEnum: true, Annotations: enumDefined},
+			}},
+			{Name: "GetTicketBriefResponse", Fields: []model.Field{
+				{Name: "summary", Type: "string", Number: 1},
+			}},
+			{Name: "GetTicketRequest", Fields: []model.Field{
+				{Name: "ticket_id", Type: "string", Number: 1},
+			}},
+			{Name: "GetTicketResponse", Fields: []model.Field{
+				{Name: "body", Type: "string", Number: 1},
+			}},
+		}}})
+	svc, _, _, _ := rustMcpTestService()
+	got, err := generateRustMcpDispatch(svc, "ticket", map[string]string{}, san)
+	if err != nil {
+		t.Fatalf("generateRustMcpDispatch(%s): %v", svc.Name, err)
+	}
+
+	// The wire form is the value's name; the handler's Debug shows its prost variant.
+	for _, want := range []string{`\"mode\": \"TICKET_MODE_READ\"`, `"mode: Read"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("the generated gate does not send a defined value for the enum-defined field (want %s)\ngot:\n%s", want, got)
+		}
+	}
+}
+
 // rustMcpPageTool turns the fixture's tool into a PAGE collection read: the
 // shape phase 2 makes generable. Resolved is what the emitters read, and it is
 // the SAME struct the gRPC PAGE wrapper reads — the bounds below are the

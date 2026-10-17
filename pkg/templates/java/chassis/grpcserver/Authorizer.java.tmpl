@@ -4,6 +4,7 @@
 package {{.ChassisBase}}.grpcserver;
 
 import {{.ChassisBase}}.approval.Approval;
+import {{.ChassisBase}}.backoff.Backoff;
 import {{.ChassisBase}}.jwk.ImmutableJwk;
 import {{.ChassisBase}}.servicemanager.Auth;
 import {{.ChassisBase}}.token.TokenWrapper;
@@ -21,11 +22,16 @@ import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 import io.grpc.Context;
@@ -88,6 +94,11 @@ class JwkCache {
  * channel. This is the default for every consumer service; the generated
  * ServiceManager wires it automatically from the state-store ServiceConnection.
  *
+ * <p>A failed or completed watch is re-subscribed on the chassis reconnect
+ * schedule ({@link Backoff}: 0.5s doubling to 30s, reset by a delivered view),
+ * forever, as go's watchView does: an immediate re-watch spins against an
+ * authority that is rolling, and this is the fail-closed key feed.
+ *
  * <p>The key authority can instead supply a local Authorizer.JwkSource backed
  * by its in-process key state.
  */
@@ -95,6 +106,12 @@ class RemoteJwkSource implements Authorizer.JwkSource {
     private static final Logger logger = LoggerFactory.getLogger(RemoteJwkSource.class);
     private final ManagedChannel channel;
     private volatile boolean active = false;
+    private final ScheduledExecutorService rewatch = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "jwk-view-rewatch");
+        t.setDaemon(true);
+        return t;
+    });
+    private Duration backoff = Backoff.RECONNECT_INITIAL_BACKOFF;
 
     RemoteJwkSource(ManagedChannel channel) {
         this.channel = java.util.Objects.requireNonNull(channel, "channel must not be null");
@@ -109,13 +126,33 @@ class RemoteJwkSource implements Authorizer.JwkSource {
     @Override
     public void stop() {
         active = false;
+        rewatch.shutdownNow();
+    }
+
+    private synchronized void scheduleRewatch(JwkVerifyingKeysViewServiceGrpc.JwkVerifyingKeysViewServiceStub stub,
+            Authorizer.JwkSink sink) {
+        Duration delay = backoff;
+        backoff = Backoff.nextReconnectBackoff(backoff);
+        try {
+            rewatch.schedule(() -> watch(stub, sink), delay.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException stopped) {
+            // stop() raced the error: nothing to reconnect.
+        }
+    }
+
+    private synchronized void resetBackoff() {
+        backoff = Backoff.RECONNECT_INITIAL_BACKOFF;
     }
 
     private void watch(JwkVerifyingKeysViewServiceGrpc.JwkVerifyingKeysViewServiceStub stub,
             Authorizer.JwkSink sink) {
+        if (!active) {
+            return;
+        }
         stub.watch(Trace.TraceRequest.getDefaultInstance(), new StreamObserver<Jwkview.JwkViewResponse>() {
             @Override
             public void onNext(Jwkview.JwkViewResponse resp) {
+                resetBackoff();
                 sink.update(resp.getEntriesMap());
             }
 
@@ -123,7 +160,7 @@ class RemoteJwkSource implements Authorizer.JwkSource {
             public void onError(Throwable t) {
                 if (active) {
                     logger.warn("JWK view watch error, reconnecting: {}", t.getMessage());
-                    watch(stub, sink);
+                    scheduleRewatch(stub, sink);
                 }
             }
 
@@ -131,7 +168,7 @@ class RemoteJwkSource implements Authorizer.JwkSource {
             public void onCompleted() {
                 if (active) {
                     logger.info("JWK view watch completed, reconnecting");
-                    watch(stub, sink);
+                    scheduleRewatch(stub, sink);
                 }
             }
         });

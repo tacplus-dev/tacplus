@@ -4,13 +4,15 @@
 #
 # fix-looper: the local form of the nightly fix job.
 #
-# Fix requests reach tacplus only as GitHub issues filed with the Fix request
-# template (label fix-request). This script takes the oldest open one, clones
-# the repository fresh, hands the issue to Claude Code running under the
-# user's own login (no separate API key), and expects it to reproduce the
-# defect with a failing test, fix it in the generator, run the gates, push a
-# branch and open a pull request that closes the issue. A request it cannot
-# reproduce gets a comment and the needs-repro label instead of a guess.
+# Requests reach tacplus only as GitHub issues (Fix request or Feature
+# request templates). This script takes the oldest open one, clones the
+# repository fresh, and hands it to Claude Code running under the user's own
+# login (no separate API key). Claude triages it first: a bug is reproduced
+# with a failing test, fixed in the generator, gated, opened as a pull
+# request against main and backported to every supported release branch; a
+# feature gets a written review with a recommendation and the needs-decision
+# label, and is only built once Jody labels it feature:approved (main only,
+# never backported). A bug it cannot reproduce gets needs-repro.
 #
 #   run.sh                 take the oldest open fix-request (what launchd runs daily)
 #   run.sh --issue N       take issue N now
@@ -92,8 +94,11 @@ fi
 mkdir "$LOCK"; echo $$ > "$LOCK/pid"; trap 'rm -rf "$LOCK"' EXIT
 
 if [[ -z "$ISSUE" ]]; then
-  ISSUE="$(gh issue list --repo "$REPO" --state open --label fix-request --json number,labels,createdAt --jq \
-    '[.[] | select(all(.labels[].name; . != "nightly:in-progress" and . != "needs-repro" and . != "nightly:pr-open"))] | sort_by(.createdAt) | .[0].number // empty')"
+  # Oldest open request of either kind that is waiting on the looper: a fix
+  # request, a feature request not yet reviewed, or a feature Jody approved.
+  ISSUE="$(gh issue list --repo "$REPO" --state open --search 'label:fix-request,feature-request,feature:approved' \
+    --json number,labels,createdAt --jq \
+    '[.[] | select(all(.labels[].name; . != "nightly:in-progress" and . != "needs-repro" and . != "nightly:pr-open" and . != "needs-decision"))] | sort_by(.createdAt) | .[0].number // empty')"
 fi
 if [[ -z "$ISSUE" ]]; then log "no open fix-request to take"; exit 0; fi
 
@@ -118,11 +123,42 @@ You are the fix looper for tacplus, a proto-to-multi-language code generator. Yo
 clone of $REPO on branch fix/issue-$ISSUE. Take GitHub issue #$ISSUE (read it with \`gh issue view $ISSUE --repo $REPO\`).
 
 Rules, in order:
-1. Reproduce first. Turn the issue's reproduction into a test that fails on main: a unit test under
+Step 0, triage. Decide what the issue is before touching code, whatever label the reporter chose:
+- BUG: tacplus, its generated code, or a gate does something other than what it documents or plainly
+  intends (wrong output, a crash, a compile failure in generated code, a gate that passes while the
+  behaviour is wrong). A bug changes no generated surface, annotation, CLI flag or option.
+- FEATURE: anything that adds or changes a generated surface, an annotation, a CLI command or flag,
+  an option, a supported language or platform, including closing a parity gap by adding a surface to
+  one language. Features ship only on a minor, never in a patch (docs/VERSIONING.md).
+If the label is wrong, fix it: a bug gets fix-request, a feature gets feature-request.
+
+If it is a FEATURE and the issue is not labeled feature:approved, do NOT change code. Post one comment
+on the issue headed "Feature review (fix looper)" with these sections, each a few sentences, grounded
+in the repository (cite files, docs/API.md, docs/USER.md, roadmap/LANGUAGE_PARITY.md,
+docs/KNOWN_TEST_GAPS.md, docs/VERSIONING.md):
+  1. What is asked, in one paragraph.
+  2. Does it address a gap: what tacplus does today, where it falls short, which languages, and
+     whether any doc already promises it.
+  3. Should tacplus do it: is it proto-to-code generation, generated AAA or transport, or a chassis
+     concern (inside tacplus's scope), or does it belong in a consumer, the platform, or a
+     separate tool. Note any conflict with tacplus's rules: generated code is never hand-edited, AAA
+     is generated, reachability is not authorization, parity is in capability not in shape.
+  4. Cost: languages and generated surfaces touched, gates and fixtures needed, whether it is a
+     breaking change (a major) or additive (a minor).
+  5. Alternatives, including doing nothing.
+  6. Recommendation: one of ACCEPT for the next minor, ACCEPT later, DECLINE, or NEEDS INFORMATION,
+     with the reason in two or three sentences.
+Then add the label needs-decision, remove nightly:in-progress, and stop. Jody decides: he adds
+feature:approved to accept or closes the issue to decline.
+
+If it is a FEATURE labeled feature:approved, implement it on main only, as below, but never backport it.
+If it is a BUG, fix it as below and backport it.
+
+1. Reproduce first (bugs). Turn the issue's reproduction into a test that fails on main: a unit test under
    pkg/, or a cross-test fixture leg under cross-test/ when the defect is in generated runtime
    behaviour. If you cannot reproduce it, do not guess: comment on the issue with what you tried
    and what you need (\`gh issue comment\`), add the label needs-repro and remove nightly:in-progress
-   (\`gh issue edit\`), and stop.
+   (\`gh issue edit\`), and stop. For an approved feature, write the tests that define it first.
 2. Fix it in the generator or its templates, never by editing generated output. Keep the Rust, Go
    and Java backends at parity: a fix to one server language is applied to all three where the
    same defect exists. Parity is in capability, not in shape: do not add complexity to one language
@@ -136,15 +172,17 @@ Rules, in order:
 4. Commit with a message that says why, ending with
    \`Co-Authored-By: Claude <noreply@anthropic.com>\`, push the branch
    (\`git push -u origin fix/issue-$ISSUE\`), and open a pull request against main
-   (\`gh pr create\`) whose body starts with \`Fixes #$ISSUE\`, describes the reproduction, the fix and
-   the gates you ran with their last lines verbatim, and anything you could not verify.
-5. Backport: for every branch named release/MAJOR.MINOR whose .0 tag is less than twelve months old
-   (\`git branch -r\`, \`git tag\`), cherry-pick the fix and its test onto a branch
-   fix/issue-$ISSUE-MAJOR.MINOR from that release branch, run the gates there, push, and open a pull
-   request against that release branch whose body starts with \`Backport of #<main PR> for #$ISSUE\`.
-   A patch release is fixes only; carry nothing else over. Then remove the nightly:in-progress label
-   from the issue and add nightly:pr-open.
-Never push to main or to a release branch. Never commit secrets. Stop when the pull requests are open.
+   (\`gh pr create\`) whose body starts with \`Fixes #$ISSUE\`, says BUG or FEATURE, describes the
+   reproduction, the fix and the gates you ran with their last lines verbatim, and anything you
+   could not verify.
+5. Backport (bugs only, never features): for every branch named release/MAJOR.MINOR whose .0 tag is
+   less than twelve months old (\`git branch -r\`, \`git tag\`), cherry-pick the fix and its test onto a
+   branch fix/issue-$ISSUE-MAJOR.MINOR from that release branch, run the gates there, push, and open
+   a pull request against that release branch whose body starts with
+   \`Backport of #<main PR> for #$ISSUE\`. A patch release is fixes only; carry nothing else over.
+   Then remove the nightly:in-progress label from the issue and add nightly:pr-open.
+Never push to main or to a release branch. Never commit secrets. Stop when the pull requests (or the
+feature review) are posted.
 PR
 
 log "running claude (timeout ${CLAUDE_TIMEOUT}s)"
@@ -158,9 +196,9 @@ rm -rf "$RUN/tacplus/target/cross-test"
 if gh pr list --repo "$REPO" --head "fix/issue-$ISSUE" --json number --jq '.[0].number' | grep -q .; then
   log "pull request open for #$ISSUE"; exit 0
 fi
-if gh issue view "$ISSUE" --repo "$REPO" --json labels --jq '.labels[].name' | grep -qx needs-repro; then
-  log "#$ISSUE marked needs-repro"; exit 0
-fi
+labels="$(gh issue view "$ISSUE" --repo "$REPO" --json labels --jq '.labels[].name')"
+if grep -qx needs-repro <<<"$labels"; then log "#$ISSUE marked needs-repro"; exit 0; fi
+if grep -qx needs-decision <<<"$labels"; then log "#$ISSUE is a feature; review posted, waiting on Jody"; exit 0; fi
 log "no pull request and no needs-repro; releasing the issue"
 release
 exit 1

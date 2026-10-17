@@ -1,5 +1,5 @@
 name: Fix request
-description: Report a defect in tacplus or in the code it generates. This is the only intake for fixes.
+description: Report a defect in tacplus or in the code it generates. New behaviour goes in a Feature request.
 title: "<language or area>: <one line>"
 labels: ["fix-request"]
 body:

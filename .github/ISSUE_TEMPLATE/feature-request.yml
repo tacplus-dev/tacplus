@@ -1,0 +1,42 @@
+name: Feature request
+description: Ask for something tacplus does not do yet. It is reviewed, with a recommendation, before anything is built.
+title: "<area>: <one line>"
+labels: ["feature-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A feature request is never built straight away. The fix looper writes a review on the issue
+        (does it address a gap, should tacplus do it, cost, alternatives, a recommendation) and labels
+        it needs-decision. It is built only after it is approved, on main, for the next minor release:
+        features never go into a patch (docs/VERSIONING.md). Defects go in a Fix request instead.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do and what stops you today. Lead with the problem, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What tacplus should do, e.g. the annotation, generated surface, CLI flag or option, and which languages.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Example
+      description: The proto (with its (spec.*) annotations) and the generated code or behaviour you would expect.
+      render: shell
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Today's workaround
+      description: What you do now without it, and what that costs.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Who needs it and by when. Do not paste secrets, tokens or certificates.

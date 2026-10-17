@@ -51,9 +51,9 @@ jobs:
             echo "issue=$REQUESTED" >> "$GITHUB_OUTPUT"; exit 0
           fi
           # Oldest open fix-request that is not already in progress.
-          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label fix-request \
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'label:fix-request,feature-request,feature:approved' \
                 --json number,labels,createdAt --jq \
-                '[.[] | select(all(.labels[].name; . != "nightly:in-progress" and . != "needs-repro"))] | sort_by(.createdAt) | .[0].number // empty')
+                '[.[] | select(all(.labels[].name; . != "nightly:in-progress" and . != "needs-repro" and . != "nightly:pr-open" and . != "needs-decision"))] | sort_by(.createdAt) | .[0].number // empty')
           echo "issue=${n}" >> "$GITHUB_OUTPUT"
           [[ -n "$n" ]] && echo "taking #$n" || echo "no open fix-request to take"
 
@@ -88,28 +88,53 @@ jobs:
             Take GitHub issue #${{ needs.pick.outputs.issue }} in ${{ github.repository }} (read it with `gh issue view`).
 
             Rules, in order:
-            1. Reproduce first. Turn the issue's reproduction into a test that fails on main: a unit test
-               under pkg/, or a cross-test fixture leg under cross-test/ when the defect is in generated
-               runtime behaviour. If you cannot reproduce it, do not guess: comment on the issue with what
-               you tried and what you need, add the label needs-repro, remove nightly:in-progress, and stop.
-            2. Fix it in the generator or its templates, never by editing generated output. Keep the
-               Rust, Go and Java backends at parity: a fix to one server language is applied to all three
-               where the same defect exists. Surgical changes only; match the existing style; no hacks.
-            3. Verify: `go vet ./...`, `just test` (soundness + unit tests), and every gate the change can
-               affect: `just current-generation-go`, `just determinism-go`; `just current-generation-java`
-               when Java changed; `just w2s-validate-go` / `just c2d-server-go` when those planes changed.
-               A green test that does not exercise the defect is not evidence: ask what would have failed.
-            4. Commit on a branch named fix/issue-${{ needs.pick.outputs.issue }} with a message that says
-               why, ending with `Co-Authored-By: Claude <noreply@anthropic.com>`, push it, and open a pull
-               request against main whose body starts with `Fixes #${{ needs.pick.outputs.issue }}`,
-               describes the reproduction, the fix and the gates you ran with their last lines, and
-               anything you could not verify.
-            5. Backport: for every branch release/MAJOR.MINOR whose .0 tag is less than twelve months old,
-               cherry-pick the fix and its test onto fix/issue-${{ needs.pick.outputs.issue }}-MAJOR.MINOR
-               from that branch, run the gates, push, and open a pull request against that release branch
-               whose body starts with `Backport of #<main PR> for #${{ needs.pick.outputs.issue }}`. A patch
-               is fixes only; carry nothing else over. Then remove the nightly:in-progress label from the
-               issue and add nightly:pr-open.
+            Step 0, triage. Decide what the issue is before touching code, whatever label the reporter chose:
+            - BUG: tacplus, its generated code, or a gate does something other than what it documents or plainly
+              intends (wrong output, a crash, a compile failure in generated code, a gate that passes while the
+              behaviour is wrong). A bug changes no generated surface, annotation, CLI flag or option.
+            - FEATURE: anything that adds or changes a generated surface, an annotation, a CLI command or flag,
+              an option, a supported language or platform, including closing a parity gap by adding a surface to
+              one language. Features ship only on a minor, never in a patch (docs/VERSIONING.md).
+            If the label is wrong, fix it: a bug gets fix-request, a feature gets feature-request.
+
+            If it is a FEATURE and the issue is not labeled feature:approved, do NOT change code. Post one comment
+            on the issue headed "Feature review (fix looper)" with these sections, each a few sentences, grounded
+            in the repository (cite files, docs/API.md, docs/USER.md, roadmap/LANGUAGE_PARITY.md,
+            docs/KNOWN_TEST_GAPS.md, docs/VERSIONING.md):
+              1. What is asked, in one paragraph.
+              2. Does it address a gap: what tacplus does today, where it falls short, which languages, and
+                 whether any doc already promises it.
+              3. Should tacplus do it: is it proto-to-code generation, generated AAA or transport, or a chassis
+                 concern (inside tacplus's scope), or does it belong in a consumer, the platform, or a
+                 separate tool. Note any conflict with tacplus's rules: generated code is never hand-edited, AAA
+                 is generated, reachability is not authorization, parity is in capability not in shape.
+              4. Cost: languages and generated surfaces touched, gates and fixtures needed, whether it is a
+                 breaking change (a major) or additive (a minor).
+              5. Alternatives, including doing nothing.
+              6. Recommendation: one of ACCEPT for the next minor, ACCEPT later, DECLINE, or NEEDS INFORMATION,
+                 with the reason in two or three sentences.
+            Then add the label needs-decision, remove nightly:in-progress, and stop. Jody decides: he adds
+            feature:approved to accept or closes the issue to decline.
+
+            If it is a FEATURE labeled feature:approved, implement it on main only, as below, but never backport it.
+            If it is a BUG, fix it as below and backport it.
+
+            1. Reproduce first (bugs): a test that fails on main. If you cannot, comment with what you tried,
+               add needs-repro, remove nightly:in-progress, and stop. For an approved feature, write the
+               tests that define it first.
+            2. Fix it in the generator or its templates, never generated output; keep Rust, Go and Java at
+               parity in capability, not in shape. Surgical; no hacks.
+            3. Verify: `go vet ./...`, `just test`, and every gate the change can affect. A green test that
+               does not exercise the defect is not evidence.
+            4. Commit on fix/issue-${{ needs.pick.outputs.issue }} ending with
+               `Co-Authored-By: Claude <noreply@anthropic.com>`, push, and open a pull request against main
+               whose body starts with `Fixes #${{ needs.pick.outputs.issue }}`, says BUG or FEATURE, and
+               lists the gates with their last lines and anything unverified.
+            5. Backport (bugs only): for every release/MAJOR.MINOR branch whose .0 tag is less than twelve
+               months old, cherry-pick onto fix/issue-${{ needs.pick.outputs.issue }}-MAJOR.MINOR from that
+               branch, run the gates, push, and open a pull request against it whose body starts with
+               `Backport of #<main PR> for #${{ needs.pick.outputs.issue }}`. Then remove
+               nightly:in-progress and add nightly:pr-open.
             Never push to main. Never touch secrets. If the gates need a toolchain this runner lacks
             (Rust, Java), say so in the PR and leave the nightly gates container to run them.
           claude_args: |

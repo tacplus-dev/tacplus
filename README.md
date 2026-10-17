@@ -71,12 +71,29 @@ the compiler.
 
 ## Install
 
+Release binaries for Linux, macOS and Windows (amd64 and arm64) are on
+[GitHub Releases](https://github.com/tacplus-dev/tacplus/releases), each with
+`checksums.txt`. Once installed, `tacplus upgrade` keeps it on the newest
+patch of its MAJOR.MINOR line (`GITHUB_TOKEN` raises the API rate limit).
+
+The container image carries tacplus and every protoc plugin it drives, so a
+build can run it as its own generate step:
+
 ```bash
-go install github.com/tacplus-dev/tacplus@latest
+docker run --rm -v "$PWD:/w" -w /w ghcr.io/tacplus-dev/tacplus/tacplus:2.0 tacplus build
 ```
 
-Generation also needs `protoc` on your PATH, plus Node for TypeScript targets.
-`just protoc-check` tells you whether your `protoc` is in the supported range.
+From source, with Go, `just` and `protoc` (`just protoc-check` tells you
+whether your `protoc` is in the supported range):
+
+```bash
+just install
+```
+
+`go install github.com/tacplus-dev/tacplus@latest` does not work: the
+compiled spec package is generated at build time, not committed.
+
+Documentation: [tacplus.dev](https://tacplus.dev).
 
 ## The example
 

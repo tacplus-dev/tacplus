@@ -10,10 +10,28 @@ import {{.ChassisBase}}.token.TokenWrapper;
 import {{.TypesBase}}.sys.errors.ProtoException;
 import {{.TypesBase}}.sys.jwk.JwkOuterClass;
 import {{.TypesBase}}.sys.key.KeyOuterClass;
+import {{.TypesBase}}.sys.jwkview.JwkVerifyingKeysViewServiceGrpc;
+import {{.TypesBase}}.sys.jwkview.Jwkview;
+import {{.TypesBase}}.sys.trace.Trace;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import io.grpc.ManagedChannel;
+import io.grpc.ManagedChannelBuilder;
+import io.grpc.Server;
+import io.grpc.Status;
+import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import io.grpc.stub.StreamObserver;
+import org.slf4j.LoggerFactory;
 
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 // Behavioral self-test for the REAL generated Authorizer (PC-W-1, Java leg —
 // mirrors go/chassis/grpcserver/authorizer_behavior_test.go.tmpl): mints real
@@ -296,10 +314,83 @@ public class AuthorizerBehaviorTest {
                 () -> bareKeyed.authorizeWithToken(bearer(alphaTok), "BetaService/Get", null));
         }
 
+        checkRemoteJwkSourceBackoff(jwkForKey(key));
+
         if (failures > 0) {
             System.err.println(failures + " Authorizer behavior check(s) FAILED");
             System.exit(1);
         }
         System.out.println("AuthorizerBehaviorTest: all checks passed");
+    }
+
+    // The remote JWK watch against a key authority that is rolling (every Watch
+    // fails UNAVAILABLE) re-subscribes on the Backoff schedule (0.5s, 1s, 2s, ...),
+    // not in a hot loop; it keeps retrying until the authority serves again, and
+    // stop() ends it.
+    private static void checkRemoteJwkSourceBackoff(JwkOuterClass.Jwk jwk) throws Exception {
+        AtomicInteger watches = new AtomicInteger();
+        AtomicBoolean serving = new AtomicBoolean(false);
+        AtomicReference<StreamObserver<Jwkview.JwkViewResponse>> served = new AtomicReference<>();
+        Server server = NettyServerBuilder.forPort(0)
+            .addService(new JwkVerifyingKeysViewServiceGrpc.JwkVerifyingKeysViewServiceImplBase() {
+                @Override
+                public void watch(Trace.TraceRequest request, StreamObserver<Jwkview.JwkViewResponse> out) {
+                    watches.incrementAndGet();
+                    if (serving.get()) {
+                        served.set(out);
+                        out.onNext(Jwkview.JwkViewResponse.newBuilder().putEntries(jwk.getKid(), jwk).build());
+                    } else {
+                        out.onError(Status.UNAVAILABLE.withDescription("authority rolling").asRuntimeException());
+                    }
+                }
+            })
+            .build()
+            .start();
+        ManagedChannel channel = ManagedChannelBuilder.forAddress("127.0.0.1", server.getPort()).usePlaintext().build();
+        CountDownLatch delivered = new CountDownLatch(1);
+        Authorizer.JwkSource source = Authorizer.remoteSource(channel);
+        // Every failed attempt logs the expected "reconnecting" WARN; keep it out of
+        // the gate's clean-log check.
+        Logger sourceLogger = (Logger) LoggerFactory.getLogger(RemoteJwkSource.class);
+        Level sourceLevel = sourceLogger.getLevel();
+        sourceLogger.setLevel(Level.ERROR);
+        try {
+            source.start(entries -> {
+                if (entries.containsKey(jwk.getKid())) {
+                    delivered.countDown();
+                }
+            });
+
+            // Attempts at ~0s, 0.5s, 1.5s; the next is not due until ~3.5s.
+            Thread.sleep(2_500);
+            int failing = watches.get();
+            if (failing < 2 || failing > 4) {
+                System.err.println("FAIL: JWK watch made " + failing
+                    + " attempts in 2.5s against a rolling authority, want 2..4 (backoff 0.5s doubling)");
+                failures++;
+            }
+
+            serving.set(true);
+            if (!delivered.await(10, TimeUnit.SECONDS)) {
+                System.err.println("FAIL: JWK watch did not reconnect once the authority served again");
+                failures++;
+                return;
+            }
+
+            // After stop(), the stream dropping again must not re-subscribe.
+            source.stop();
+            int atStop = watches.get();
+            served.get().onError(Status.UNAVAILABLE.withDescription("authority rolling").asRuntimeException());
+            Thread.sleep(1_000);
+            if (watches.get() != atStop) {
+                System.err.println("FAIL: JWK watch re-subscribed after stop()");
+                failures++;
+            }
+        } finally {
+            source.stop();
+            channel.shutdownNow();
+            server.shutdownNow();
+            sourceLogger.setLevel(sourceLevel);
+        }
     }
 }

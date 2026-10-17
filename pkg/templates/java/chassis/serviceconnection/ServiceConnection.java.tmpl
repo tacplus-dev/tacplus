@@ -239,7 +239,12 @@ public class ServiceConnection implements AutoCloseable {
 
     /**
      * Returns the best available gRPC channel for this service.
-     * Returns null if no healthy endpoint is available.
+     *
+     * <p>A static pool that is still open always returns its active channel,
+     * even while it is CONNECTING or TRANSIENT_FAILURE (e.g. the peer is
+     * rolling): its endpoints are fixed and the channel reconnects on its own,
+     * so an RPC on it fails UNAVAILABLE, which callers retry. A dynamic pool
+     * returns null if no healthy endpoint is available.
      */
     public ManagedChannel conn() {
         lock.readLock().lock();
@@ -252,6 +257,12 @@ public class ServiceConnection implements AutoCloseable {
                 if (ec.isConnected()) {
                     return ec.channel;
                 }
+            }
+            // Static pool: hand back the reconnecting channel instead of a null
+            // that callers holding the channel cannot recover from.
+            if (scheduler != null && active != null && active.channel != null
+                    && active.channel.getState(false) != ConnectivityState.SHUTDOWN) {
+                return active.channel;
             }
             return null;
         } finally {

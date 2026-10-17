@@ -2,10 +2,15 @@ package {{.ChassisBase}}.serviceconnection;
 
 import {{.TypesBase}}.sys.x509.X509;
 import {{.TypesBase}}.sys.healthreport.Healthreport.InstanceStatus;
+import {{.TypesBase}}.sys.host.HostOuterClass;
+import io.grpc.ConnectivityState;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.Server;
+import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 // Pins NEW-18 / NEW-21: service-mesh channels are fail-CLOSED and fail-FAST.
@@ -30,7 +35,7 @@ public class ServiceConnectionTest {
         }
     }
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         List<X509.X509Cert> cas = new ArrayList<>();
 
         mustThrow("empty trust domain", () -> ServiceConnection.channelFactory(cas, ""));
@@ -45,6 +50,7 @@ public class ServiceConnectionTest {
 
         checkBackoff();
         checkReadiness();
+        checkStaticConnWhileReconnecting();
 
         if (failures > 0) {
             System.err.println(failures + " ServiceConnection check(s) FAILED");
@@ -105,5 +111,42 @@ public class ServiceConnectionTest {
         } finally {
             channel.shutdownNow();
         }
+    }
+
+    /**
+     * A static pool whose peer is down (the kernel rolling) still hands out its
+     * channel from conn(): callers snapshot it (new Authorizer(remoteSource(conn())))
+     * and a null there killed startup. A closed pool returns null.
+     */
+    private static void checkStaticConnWhileReconnecting() throws Exception {
+        Server server = NettyServerBuilder.forPort(0).build().start();
+        HostOuterClass.Host host = HostOuterClass.Host.newBuilder()
+                .setHost("127.0.0.1").setPort(server.getPort()).build();
+        ServiceConnection sc = ServiceConnection.newStatic("statestore", List.of(host),
+                (id, target) -> ManagedChannelBuilder.forTarget(target).usePlaintext().build());
+        try {
+            ManagedChannel channel = sc.conn();
+            expect(channel != null, "static pool conn() must be non-null while READY");
+            if (channel == null) {
+                return;
+            }
+
+            server.shutdownNow().awaitTermination(5, TimeUnit.SECONDS);
+            ConnectivityState state = channel.getState(true);
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (state != ConnectivityState.CONNECTING && state != ConnectivityState.TRANSIENT_FAILURE
+                    && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+                state = channel.getState(true);
+            }
+            expect(state == ConnectivityState.CONNECTING || state == ConnectivityState.TRANSIENT_FAILURE,
+                    "static pool channel never left READY/IDLE after its peer went down (state " + state + ")");
+            expect(sc.conn() == channel,
+                    "static pool conn() must return its channel while " + state + ", got " + sc.conn());
+        } finally {
+            sc.close();
+            server.shutdownNow();
+        }
+        expect(sc.conn() == null, "closed static pool conn() must be null");
     }
 }

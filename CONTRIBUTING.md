@@ -76,7 +76,8 @@ direct pushes), and a patch release is a `v2.0.N` tag on that branch.
    language (Go, Java, Rust) is added to all three, or the gap is documented
    in `docs/KNOWN_TEST_GAPS.md`.
 3. Generated code must stay deterministic. `just determinism` checks it.
-XX   request.
+4. Run `just test` before pushing; CI runs the full gate set on the pull
+   request.
 5. Keep commits focused and describe *why* in the message.
 
 ## License

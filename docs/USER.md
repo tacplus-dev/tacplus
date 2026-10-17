@@ -10,18 +10,19 @@ Reference for developers using tacplus to build services — writing proto files
 2. [tacplus.yaml Reference](#tacplusyaml-reference)
 3. [CLI Commands](#cli-commands)
 4. [Annotation Reference](#annotation-reference)
-4. [Conditional Requirements](#conditional-requirements)
-5. [Formal Verification Annotations](#formal-verification-annotations)
-6. [REST Method Control](#rest-method-control)
-7. [Governed RPC Verbs](#governed-rpc-verbs)
-8. [State System](#state-system)
-9. [Auth System](#auth-system)
-10. [Store Service Annotations](#store-service-annotations)
-11. [Projection Annotations](#projection-annotations)
-12. [registry.json and the Semantic IR](#registryjson-and-the-semantic-ir)
-13. [Generated Libraries](#generated-libraries)
-14. [Service Lifecycle](#service-lifecycle)
-15. [Distributed Tracing](#distributed-tracing)
+5. [Conditional Requirements](#conditional-requirements)
+6. [Formal Verification Annotations](#formal-verification-annotations)
+7. [REST Method Control](#rest-method-control)
+8. [Governed RPC Verbs](#governed-rpc-verbs)
+9. [Tags](#tags)
+10. [State System](#state-system)
+11. [Auth System](#auth-system)
+12. [Record / Event / Store / Projection Annotations](#record--event--store--projection-annotations)
+13. [registry.json and the Semantic IR](#registryjson-and-the-semantic-ir)
+14. [Generated Libraries](#generated-libraries)
+15. [Service Lifecycle](#service-lifecycle)
+16. [Distributed Tracing](#distributed-tracing)
+17. [Well-Known Names (Conventions)](#well-known-names-conventions)
 
 ---
 
@@ -251,6 +252,7 @@ tacplus build -c tacplus-base.yaml -c tacplus-overrides.yaml
 ```
 
 Merge rules:
+
 - **Strings**: overlay wins if non-empty
 - **Lists**: overlay replaces entirely if non-empty
 
@@ -636,6 +638,7 @@ field routes the state to its backing store services. The `export` flag makes th
 for read-only import by other services.
 
 tacplus generates:
+
 - A **gRPC state service** with Get/Set/Watch/Delete RPCs for every boundary
 - **state boundary bindings** for each boundary field
 - **Typed client wrappers** so other services access state through generated accessors
@@ -1379,6 +1382,7 @@ for by a `(spec.trait)` declaration, not by the `record_store` annotation alone:
 tacplus generates a canonical `registry.json` that acts as the normalized semantic model of the service.
 
 `registry.json` includes, in normalized form:
+
 - Services, methods, types
 - State roots and views
 - Labels and ownership relationships
@@ -1404,6 +1408,7 @@ in `entitlement_grants.expands_to` before making an authorization decision.
 ### Runtime Discovery
 
 When served from a well-known REST endpoint (e.g., by an API gateway), `registry.json` makes the semantic model available at both:
+
 - **Build time** — for generation, linting, testing, docs, and analysis
 - **Runtime** — for discovery, tooling, agents, and system introspection
 

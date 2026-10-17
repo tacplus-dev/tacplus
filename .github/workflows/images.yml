@@ -1,7 +1,8 @@
 name: Images
 
-# The three-layer image set from docs/VERSIONING.md: base (runtimes), build
-# (base + every build tool), tacplus (build + the binary). Each layer is
+# The image set from docs/VERSIONING.md: base (every SDK), build (base +
+# every tool; the image the gates run in), tacplus (the binary + every protoc
+# plugin; what a consumer's generate step pulls). Each layer is
 # rebuilt only when its definition changed, on demand, or (base) weekly, and
 # pushed to ghcr.io for linux/amd64 and linux/arm64. The tacplus image is
 # rebuilt on every push to main (main-<sha>) and every release tag
@@ -130,6 +131,9 @@ jobs:
           outputs: type=image,name=${{ env.NS }}/build,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }}
           cache-to: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }},mode=max
+      - name: Smoke test (this architecture)
+        if: matrix.arch == 'amd64'
+        run: docker run --rm "$NS/build@${{ steps.push.outputs.digest }}" tacplus-smoke
       - name: Record digest
         run: |
           mkdir -p /tmp/digests
@@ -198,46 +202,29 @@ jobs:
         run: |
           if [[ "${GITHUB_REF_TYPE}" == tag && "${GITHUB_REF_NAME}" == v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0"; fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
-      - name: tacplus (slim)
-        id: slim
+      - id: push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: images/tacplus.Dockerfile
-          target: slim
           platforms: linux/${{ matrix.arch }}
           build-args: |
             BUILD_IMAGE=${{ env.NS }}/build:latest
             VERSION=${{ steps.v.outputs.version }}
             VCS_REF=${{ github.sha }}
           outputs: type=image,name=${{ env.NS }}/tacplus,push-by-digest=true,name-canonical=true,push=true
-      - name: tacplus-build (full)
-        id: full
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: images/tacplus.Dockerfile
-          target: full
-          platforms: linux/${{ matrix.arch }}
-          build-args: |
-            BUILD_IMAGE=${{ env.NS }}/build:latest
-            VERSION=${{ steps.v.outputs.version }}
-            VCS_REF=${{ github.sha }}
-          outputs: type=image,name=${{ env.NS }}/tacplus-build,push-by-digest=true,name-canonical=true,push=true
       - name: Smoke test (this architecture)
         if: matrix.arch == 'amd64'
+        run: docker run --rm "$NS/tacplus@${{ steps.push.outputs.digest }}" tacplus-smoke
+      - name: Record digest
         run: |
-          docker run --rm "$NS/tacplus@${{ steps.slim.outputs.digest }}" tacplus-smoke
-          docker run --rm "$NS/tacplus-build@${{ steps.full.outputs.digest }}" tacplus-smoke
-      - name: Record digests
-        run: |
-          mkdir -p /tmp/digests/tacplus /tmp/digests/tacplus-build
-          s="${{ steps.slim.outputs.digest }}"; touch "/tmp/digests/tacplus/${s#sha256:}"
-          f="${{ steps.full.outputs.digest }}"; touch "/tmp/digests/tacplus-build/${f#sha256:}"
+          mkdir -p /tmp/digests
+          d="${{ steps.push.outputs.digest }}"
+          touch "/tmp/digests/${d#sha256:}"
       - uses: actions/upload-artifact@v4
         with:
           name: tacplus-digest-${{ matrix.arch }}
-          path: /tmp/digests/**
+          path: /tmp/digests/*
           if-no-files-found: error
 
   tacplus-manifest:
@@ -272,23 +259,14 @@ jobs:
         working-directory: /tmp/digests
         run: |
           set -euo pipefail
-          for image in tacplus tacplus-build; do
-            refs=(); for d in "$image"/*; do refs+=("$NS/$image@sha256:$(basename "$d")"); done
-            tags=(); for t in ${{ steps.tags.outputs.list }}; do tags+=(-t "$NS/$image:$t"); done
-            docker buildx imagetools create "${tags[@]}" "${refs[@]}"
-            docker buildx imagetools inspect "$NS/$image:${{ github.ref_type == 'tag' && 'latest' || 'main' }}"
-          done
-      - name: Prune old main-<sha> images (tacplus)
+          refs=(); for d in *; do refs+=("$NS/tacplus@sha256:$d"); done
+          tags=(); for t in ${{ steps.tags.outputs.list }}; do tags+=(-t "$NS/tacplus:$t"); done
+          docker buildx imagetools create "${tags[@]}" "${refs[@]}"
+          docker buildx imagetools inspect "$NS/tacplus:${{ github.ref_type == 'tag' && 'latest' || 'main' }}"
+      - name: Prune old main-<sha> images
         uses: actions/delete-package-versions@v5
         with:
           package-name: tacplus/tacplus
-          package-type: container
-          min-versions-to-keep: 20
-          ignore-versions: '^(latest|main|\d+(\.\d+){0,2})$'
-      - name: Prune old main-<sha> images (tacplus-build)
-        uses: actions/delete-package-versions@v5
-        with:
-          package-name: tacplus/tacplus-build
           package-type: container
           min-versions-to-keep: 20
           ignore-versions: '^(latest|main|\d+(\.\d+){0,2})$'

@@ -8,15 +8,25 @@ on:
 
 permissions:
   contents: read
+  packages: read
+
+# Every job but the secrets scan runs inside the tacplus build image
+# (images/build.Dockerfile): the one image that carries every SDK and tool
+# tacplus is built and tested with. Nothing is installed on the runner.
 
 jobs:
   test:
     name: Unit tests and soundness
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    container:
+      image: ghcr.io/tacplus-dev/tacplus/build:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/toolchain
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: just protoc-check
       - run: just generate
       - run: just vet
@@ -43,18 +53,28 @@ jobs:
     name: Example (Go server, TypeScript client)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    container:
+      image: ghcr.io/tacplus-dev/tacplus/build:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/toolchain
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: just example
 
   cross-test-go:
     name: Go cross-test gates
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    container:
+      image: ghcr.io/tacplus-dev/tacplus/build:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/toolchain
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: just current-generation-go
       - run: just determinism-go
       - run: just w2s-validate-go
@@ -63,25 +83,12 @@ jobs:
     name: Java W2S dispatch gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    container:
+      image: ghcr.io/tacplus-dev/tacplus/build:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/toolchain
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "25"
-          cache: maven
-      - name: Install protoc-gen-grpc-java
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Same plugin and version the gates container carries (Dockerfile.base).
-          GRPC_JAVA_VERSION=1.79.0
-          case "$(uname -m)" in
-            x86_64) GRPC_ARCH=linux-x86_64 ;;
-            aarch64|arm64) GRPC_ARCH=linux-aarch_64 ;;
-          esac
-          curl -fsSL --retry 5 -o "$HOME/.local/bin/protoc-gen-grpc-java" \
-            "https://repo1.maven.org/maven2/io/grpc/protoc-gen-grpc-java/${GRPC_JAVA_VERSION}/protoc-gen-grpc-java-${GRPC_JAVA_VERSION}-${GRPC_ARCH}.exe"
-          chmod +x "$HOME/.local/bin/protoc-gen-grpc-java"
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: just w2s-validate-java

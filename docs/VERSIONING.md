@@ -38,18 +38,23 @@ release-branch pull request carries only the fix and its test.
 
 ## Images
 
-Three images, each `FROM` the one before it so only the changed layer is
-rebuilt and pulled:
+Three images. `build` is `FROM base`; `tacplus` copies its tools out of
+`build` onto a slim OS, so a consumer pulls a few hundred megabytes, not the
+SDKs:
 
 | image | contents | rebuilt when |
 |---|---|---|
-| `ghcr.io/tacplus-dev/tacplus/base` | OS, protoc, and the language runtimes (Go, JDK, Rust, Node, Swift) | on a schedule, or when a runtime pin changes |
-| `ghcr.io/tacplus-dev/tacplus/build` | `base` plus every build-time tool: the protoc plugins, Maven, the cargo plugins, just, jq, the docker CLI, gcloud | when a tool pin changes |
-| `ghcr.io/tacplus-dev/tacplus/tacplus` | exactly what `tacplus build` shells out to: git, protoc and the plugins, Node (protoc-gen-es), gofmt, and the binary; a few hundred MB; what a generate step pulls | every push to `main` and every release |
-| `ghcr.io/tacplus-dev/tacplus/tacplus-build` | `build` plus the tacplus binary, for a build that generates and compiles in one container | every push to `main` and every release |
+| `ghcr.io/tacplus-dev/tacplus/base` | OS and every SDK tacplus is built and tested with: Go, Java (JDK, Maven), Rust, Python, Node (TypeScript), Swift, .NET | on a schedule, or when an SDK pin changes |
+| `ghcr.io/tacplus-dev/tacplus/build` | `base` plus every tool: protoc and every plugin, grpcio-tools, JBMC and OpenJML, just, the docker CLI, gcloud. The one image the gates run in: CI, the nightly gates, `just gates-container`. Not for consumers. | when a tool pin changes |
+| `ghcr.io/tacplus-dev/tacplus/tacplus` | the tacplus binary and the protoc plugins for every language that needs its own (Go, Java, TypeScript, Rust, Swift, Python); C# needs none, its generated project runs Grpc.Tools from NuGet | every push to `main` and every release |
 
-Tags on the `tacplus` and `tacplus-build` images follow the version policy
-(both always carry the same binary at the same tag):
+A consumer's build does not start `FROM` the tacplus image. It runs it as its
+own step (`tacplus build`, writing the generated model) and compiles the
+result in its own builder image, so a new tacplus patch is picked up by the
+generate step pulling `tacplus:X.Y` again, without rebuilding the consumer's
+image.
+
+Tags on the `tacplus` image follow the version policy:
 
 | tag | meaning |
 |---|---|
@@ -62,8 +67,8 @@ Tags on the `tacplus` and `tacplus-build` images follow the version policy
 `base` and `build` are tagged `<yyyymmdd>-<sha>` and `latest`.
 
 The definitions are `images/base.Dockerfile`, `images/build.Dockerfile` and
-`images/tacplus.Dockerfile` (targets `slim` and `full`); `images/smoke.sh` is
-run inside every pushed image as `tacplus-smoke`. `.github/workflows/images.yml` builds and pushes them for
+`images/tacplus.Dockerfile`; `images/smoke.sh` ships in the build and
+tacplus images as `tacplus-smoke` and runs inside every pushed image. `.github/workflows/images.yml` builds and pushes them for
 linux/amd64 and linux/arm64 on every push to `main` and every release tag,
 rebuilding `base` and `build` only when their file changed (or weekly for
 `base`, or on demand). `just images` builds the set natively for one machine.

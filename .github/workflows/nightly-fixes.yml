@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: write
+  packages: read
   pull-requests: write
   issues: write
   id-token: write
@@ -62,11 +63,16 @@ jobs:
     if: needs.pick.outputs.issue != ''
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    container:
+      image: ghcr.io/tacplus-dev/tacplus/build:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: ./.github/actions/toolchain
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Mark the issue in progress
         env:
           GH_TOKEN: ${{ github.token }}

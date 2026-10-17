@@ -170,35 +170,19 @@ gates:
   echo "=== OVERALL fail=$fail ==="
   exit $fail
 
-# Run `just gates` inside the CI base image instead of against the host
-# toolchain. Use this when the host protoc fails protoc-check and no
-# acceptable protoc is installable (e.g. brew only offers a version newer
-# than the pinned ceiling): the image pins protoc 28.3, well under it.
-# This is the same image CI's test jobs run in
-# ($CI_REGISTRY_IMAGE/tacplus-base:${BASE_VERSION}-amd64, built from
-# Dockerfile.base), built locally rather than pulled from the registry.
-# The first run builds the base image and takes a long time.
+# Run `just gates` inside the tacplus build image instead of against the
+# host toolchain: every SDK and tool at the pinned versions, with no host
+# installs. This is the image CI and the nightly gates run in.
 gates-container:
   #!/usr/bin/env bash
   set -euo pipefail
   cd {{justfile_directory()}}
-  # The base image carries protoc/Go/Java/Rust/Node but not `just` (CI invokes
-  # the gate scripts directly). `gates` is a just recipe that calls further
-  # just recipes, so add just in a thin layer on top rather than at runtime.
-  docker build -f Dockerfile.base -t tacplus-base:gates-local-base .
-  docker build -t tacplus-base:gates-local - <<'DOCKERFILE'
-  FROM tacplus-base:gates-local-base
-  ARG JUST_VERSION=1.58.0
-  RUN ARCH=$(dpkg --print-architecture) \
-      && if [ "$ARCH" = "arm64" ]; then JUST_ARCH="aarch64"; else JUST_ARCH="x86_64"; fi \
-      && curl -fsSL --retry 30 --retry-delay 5 \
-         "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-${JUST_ARCH}-unknown-linux-musl.tar.gz" \
-         | tar -C /usr/local/bin -xz just \
-      && just --version
-  DOCKERFILE
-  # WORKDIR in the image is /workspace; CI's executor checks the repo out into
-  # the job workspace the same way, so bind-mount this checkout there.
-  docker run --rm -v "$PWD:/workspace" -w /workspace tacplus-base:gates-local just gates
+  # The full gate set inside the tacplus build image, as the nightly gates
+  # run it. TACPLUS_BUILD_IMAGE=tacplus-local/build:latest uses the one
+  # `just images` built instead of the published one.
+  image="${TACPLUS_BUILD_IMAGE:-ghcr.io/tacplus-dev/tacplus/build:latest}"
+  docker run --rm -v "$PWD:/workspace" -w /workspace "$image" \
+    bash -c 'git config --global --add safe.directory /workspace && just gates'
 
 # Behavioral coverage of the generated TLS/SMB cert-stream loops.
 cert-stream: cert-stream-go cert-stream-java cert-stream-rust
@@ -252,16 +236,17 @@ claims-provenance:
 
 # Behavioral coverage of W2S request (ingress) validation in the generated
 # Rust REST dispatch module.
-# The three-layer image set (docs/VERSIONING.md, Images), built natively for
-# this machine's architecture and tagged tacplus-local/*. CI builds and pushes
-# the multi-arch set to ghcr.io (.github/workflows/images.yml).
+# The image set (docs/VERSIONING.md, Images), built natively for this
+# machine's architecture and tagged tacplus-local/*: base (every SDK), build
+# (base + every tool; what the gates run in) and tacplus (the binary + every
+# protoc plugin). CI builds and pushes the multi-arch set to ghcr.io
+# (.github/workflows/images.yml).
 images:
   docker build -f images/base.Dockerfile -t tacplus-local/base:latest .
   docker build -f images/build.Dockerfile --build-arg BASE_IMAGE=tacplus-local/base:latest -t tacplus-local/build:latest .
-  docker build -f images/tacplus.Dockerfile --target slim --build-arg BUILD_IMAGE=tacplus-local/build:latest --build-arg VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo 0.0.0) --build-arg VCS_REF=$(git rev-parse --short=7 HEAD) -t tacplus-local/tacplus:latest .
-  docker build -f images/tacplus.Dockerfile --target full --build-arg BUILD_IMAGE=tacplus-local/build:latest --build-arg VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo 0.0.0) --build-arg VCS_REF=$(git rev-parse --short=7 HEAD) -t tacplus-local/tacplus-build:latest .
+  docker build -f images/tacplus.Dockerfile --build-arg BUILD_IMAGE=tacplus-local/build:latest --build-arg VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo 0.0.0) --build-arg VCS_REF=$(git rev-parse --short=7 HEAD) -t tacplus-local/tacplus:latest .
+  docker run --rm tacplus-local/build:latest tacplus-smoke
   docker run --rm tacplus-local/tacplus:latest tacplus-smoke
-  docker run --rm tacplus-local/tacplus-build:latest tacplus-smoke
 
 # The local fix looper (see CONTRIBUTING.md, Requesting a fix).
 fix-looper *ARGS:

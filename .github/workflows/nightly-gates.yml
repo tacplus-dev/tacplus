@@ -1,9 +1,7 @@
 name: Nightly gates
 
-# The full mandatory gate set (soundness, unit tests, current-generation and
-# determinism for every language, cert-stream, claims-provenance) needs Java,
-# Rust, Node and Python toolchains as well as Go. It runs inside the base image
-# built from Dockerfile.base, exactly as `just gates-container` does locally.
+# The full mandatory gate set runs inside the published tacplus build image
+# (images/build.Dockerfile), exactly as `just gates-container` does locally.
 
 on:
   schedule:
@@ -12,13 +10,25 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   gates:
-    name: just gates-container
+    name: just gates (build image)
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
-      - uses: extractions/setup-just@v2
-      - run: just gates-container
+      - name: Free runner disk
+        run: |
+          # The Rust legs build a cargo target per fixture; the runner's
+          # preinstalled toolchains are not used here.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache /usr/local/share/boost
+          sudo docker system prune -af >/dev/null 2>&1 || true
+          df -h / | tail -1
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/tacplus-dev/tacplus/build:latest bash -c 'git config --global --add safe.directory /workspace && just gates'

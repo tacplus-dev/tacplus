@@ -1,15 +1,10 @@
-# tacplus images: the binary for one commit or release, in two shapes.
-#
-#   tacplus        slim: everything `tacplus build` shells out to and nothing
-#                  more: git, protoc and the plugins, Node (protoc-gen-es is
-#                  JavaScript), gofmt (the Go generator runs it) and the
-#                  binary. What a generate step pulls.
-#   tacplus-build  full: the build image (runtimes plus tools) and the binary,
-#                  for a build that generates and compiles in one container.
-#
-# Both are tagged by the version policy in docs/VERSIONING.md. The tools in
-# the slim image are copied out of the build image, so there is one source of
-# truth for their versions. Build with --target slim or --target full.
+# tacplus image: the tacplus binary and exactly what `tacplus build` shells
+# out to: git, protoc and the plugin for every language that needs its own
+# (Go, Java, TypeScript via Node, Rust, Swift, and Python's grpcio-tools),
+# and gofmt. C# needs nothing here: the generated project runs Grpc.Tools
+# from NuGet in the consumer's own dotnet build. The plugins are copied out
+# of the build image, so their versions have one source. Tagged by the
+# version policy in docs/VERSIONING.md (X.Y.Z, X.Y, X, latest, main-<sha>).
 ARG BUILD_IMAGE=ghcr.io/tacplus-dev/tacplus/build:latest
 ARG GO_VERSION=1.25
 
@@ -40,37 +35,30 @@ RUN go generate ./pkg/internal/proto/spec/... \
 
 FROM ${BUILD_IMAGE} AS tools
 
-FROM debian:trixie-slim AS slim
+FROM debian:trixie-slim
 ARG VERSION=0.0.0
 ARG VCS_REF=local
 LABEL org.opencontainers.image.title="tacplus" \
-      org.opencontainers.image.description="tacplus with exactly what generation needs: git, protoc and its plugins, Node, gofmt" \
+      org.opencontainers.image.description="tacplus and the protoc plugins for every target language" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}"
-RUN apt-get update && apt-get install -y --no-install-recommends bash ca-certificates git \
+RUN apt-get update && apt-get install -y --no-install-recommends bash ca-certificates git libcurl4 libxml2 python3 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=tools /usr/local/bin/protoc /usr/local/bin/protoc-gen-go /usr/local/bin/protoc-gen-go-grpc \
                   /usr/local/bin/protoc-gen-grpc-java /usr/local/bin/protoc-gen-prost /usr/local/bin/protoc-gen-tonic \
-                  /usr/local/bin/protoc-gen-prost-serde /usr/local/bin/protoc-gen-prost-crate /usr/local/bin/
+                  /usr/local/bin/protoc-gen-prost-serde /usr/local/bin/protoc-gen-prost-crate \
+                  /usr/local/bin/protoc-gen-swift /usr/local/bin/protoc-gen-grpc-swift-2 /usr/local/bin/
 COPY --from=tools /usr/local/include /usr/local/include
 COPY --from=tools /usr/local/bin/node /usr/local/bin/node
 COPY --from=tools /usr/local/lib/node_modules/@bufbuild /usr/local/lib/node_modules/@bufbuild
 COPY --from=tools /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+COPY --from=tools /opt/swift-runtime /opt/swift-runtime
+COPY --from=tools /opt/venv /opt/venv
 RUN ln -s ../lib/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es /usr/local/bin/protoc-gen-es
 COPY --from=tacplus /out/tacplus /usr/local/bin/tacplus
 COPY images/smoke.sh /usr/local/bin/tacplus-smoke
-ENV TACPLUS_IMAGE=slim
+ENV PATH="/opt/venv/bin:${PATH}" \
+    LD_LIBRARY_PATH="/opt/swift-runtime/lib" \
+    TACPLUS_IMAGE=slim
 WORKDIR /workspace
-
-FROM ${BUILD_IMAGE} AS full
-ARG VERSION=0.0.0
-ARG VCS_REF=local
-LABEL org.opencontainers.image.title="tacplus-build" \
-      org.opencontainers.image.description="tacplus build image (runtimes and tools) plus the tacplus binary" \
-      org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus" \
-      org.opencontainers.image.version="${VERSION}" \
-      org.opencontainers.image.revision="${VCS_REF}"
-COPY --from=tacplus /out/tacplus /usr/local/bin/tacplus
-COPY images/smoke.sh /usr/local/bin/tacplus-smoke
-ENV TACPLUS_IMAGE=full

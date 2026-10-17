@@ -10,14 +10,20 @@ on:
 
 permissions:
   contents: write
+  packages: read
 
 jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    container:
+      image: ghcr.io/tacplus-dev/tacplus/build:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/toolchain
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: just generate
       - name: Build binaries
         run: |

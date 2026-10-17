@@ -4,8 +4,10 @@
 
 You need Go (the version in `go.mod`), `just`, and `protoc` at or below the
 version pinned in the `justfile` (`just protoc-check` tells you). The
-cross-language gates additionally need Java 17, Rust, Node and Python; the
-`Dockerfile.base` image carries all of them.
+cross-language gates additionally need Java, Rust, Node, Python, Swift and
+.NET. The tacplus build image (`ghcr.io/tacplus-dev/tacplus/build`,
+`images/build.Dockerfile`) carries all of them, and `just gates-container`
+runs the gates inside it.
 
 ```bash
 just install          # builds and installs the tacplus binary

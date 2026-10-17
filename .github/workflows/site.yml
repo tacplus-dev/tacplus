@@ -1,0 +1,75 @@
+name: Site
+
+# Builds tacplus.dev (site/, MkDocs + Material) and deploys it to GitHub
+# Pages. `just site` runs cmd/sitegen first, which stages the published
+# repository documents and generates the annotation reference from
+# pkg/proto/sys/spec.proto, so a change to any of those redeploys the site.
+# The custom domain is the repository's Pages setting; site/docs/CNAME
+# records it in the published output as well.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/**"
+      - "pkg/proto/sys/spec.proto"
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
+      - "CODE_OF_CONDUCT.md"
+      - "example/**"
+      - "cmd/sitegen/**"
+      - "justfile"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time; a newer push waits rather than cancelling one
+# that is already publishing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    # The build image carries Go, protoc, python3 and just (see ci.yml).
+    container:
+      image: ghcr.io/tacplus-dev/tacplus/build:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # The generator's tests check the reference against the compiled spec
+      # package, which `just generate` writes.
+      - run: just generate
+      - run: go test ./cmd/sitegen
+      - run: just site
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site/build
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

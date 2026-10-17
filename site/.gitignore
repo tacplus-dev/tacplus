@@ -1,0 +1,8 @@
+# mkdocs build output (just site)
+/build/
+# Written by cmd/sitegen on every build: the staged repository documents and
+# the annotation reference generated from pkg/proto/sys/spec.proto. The
+# repository files are the only source.
+/docs/guide/
+/docs/project/
+/docs/reference/

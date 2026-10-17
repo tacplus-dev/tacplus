@@ -1,0 +1,143 @@
+# tacplus.dev. Build with `just site` (output in site/build), preview with
+# `just site-serve`. Both run cmd/sitegen first: it stages the user-facing
+# repository documents and generates the annotation reference into docs/
+# (git-ignored). Run mkdocs from the repository root: the snippet includes
+# below (example/...) resolve against it.
+site_name: tacplus
+site_url: https://tacplus.dev/
+site_description: >-
+  tacplus compiles annotated Protocol Buffer definitions into complete,
+  validated, authorized services for Go, Rust and Java, and clients for
+  TypeScript, Python, Swift and C#.
+site_author: Seabeam LLC
+copyright: Copyright &copy; 2026 Seabeam LLC &middot; Apache License 2.0
+repo_url: https://github.com/tacplus-dev/tacplus
+repo_name: tacplus-dev/tacplus
+# Most pages are staged from elsewhere in the repository, so an edit link
+# computed from docs/ would point at the wrong file. No edit links.
+edit_uri: ""
+
+docs_dir: docs
+site_dir: build
+strict: true
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+theme:
+  name: material
+  language: en
+  favicon: assets/favicon.svg
+  icon:
+    logo: material/code-braces
+    repo: fontawesome/brands/github
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to system preference
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.follow
+
+extra_css:
+  - assets/extra.css
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/tacplus-dev/tacplus
+      name: tacplus on GitHub
+
+plugins:
+  - search
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      # GitHub-compatible heading ids, so the anchors the repository
+      # documents link to on GitHub resolve on the site too.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.snippets:
+      base_path: [!relative $config_dir/..]
+      check_paths: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Install: install.md
+      - Quick start: quickstart.md
+      - Languages: languages.md
+  - Guide:
+      - Theory: guide/theory.md
+      - User guide: guide/user-guide.md
+      - Generated API: guide/generated-api.md
+  - Reference:
+      - reference/annotations/index.md
+      - File options: reference/annotations/file.md
+      - Service options: reference/annotations/service.md
+      - Method options: reference/annotations/method.md
+      - Message options: reference/annotations/message.md
+      - Field options: reference/annotations/field.md
+      - Enum value options: reference/annotations/enum-value.md
+      - Option types: reference/annotations/types.md
+  - Project:
+      - Versioning: project/versioning.md
+      - Contributing: project/contributing.md
+      - Security: project/security.md
+      - Code of conduct: project/code-of-conduct.md
+      - Releases: https://github.com/tacplus-dev/tacplus/releases

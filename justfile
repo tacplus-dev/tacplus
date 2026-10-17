@@ -63,6 +63,31 @@ vet:
 example:
   bash example/run.sh
 
+# The tacplus.dev site (site/, MkDocs + Material). cmd/sitegen stages the
+# published repository documents and generates the annotation reference from
+# pkg/proto/sys/spec.proto into site/docs (git-ignored), then MkDocs builds
+# into site/build. Needs protoc and python3; the pinned toolchain from
+# site/requirements.txt is installed into site/.venv on first use.
+site: site-venv
+  go run ./cmd/sitegen
+  site/.venv/bin/mkdocs build --strict -f site/mkdocs.yml
+
+# Local preview at http://127.0.0.1:8000 with live reload of site/docs. An
+# edit to a repository document (docs/*.md, CONTRIBUTING.md, ...) or to
+# spec.proto shows up after re-running this recipe.
+site-serve: site-venv
+  go run ./cmd/sitegen
+  site/.venv/bin/mkdocs serve --strict -f site/mkdocs.yml
+
+site-venv:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [[ ! -x site/.venv/bin/mkdocs || site/requirements.txt -nt site/.venv/.installed ]]; then
+    python3 -m venv site/.venv
+    site/.venv/bin/pip install --quiet -r site/requirements.txt
+    touch site/.venv/.installed
+  fi
+
 current-generation:
   {{lock}} bash cross-test/current-generation/run.sh
 

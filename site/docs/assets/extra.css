@@ -1,0 +1,107 @@
+/* tacplus.dev palette: deep navy primary, teal accent. */
+:root,
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #16324f;
+  --md-primary-fg-color--light: #2a4d73;
+  --md-primary-fg-color--dark: #0d2036;
+  --md-primary-bg-color: #ffffff;
+  --md-primary-bg-color--light: rgba(255, 255, 255, 0.7);
+  --md-accent-fg-color: #0e8f80;
+  --md-accent-fg-color--transparent: rgba(14, 143, 128, 0.1);
+  --md-typeset-a-color: #1d5c96;
+  --tp-hero-bg: linear-gradient(135deg, #16324f 0%, #1d4a6e 55%, #0e7c70 100%);
+  --tp-ok: #0e8f80;
+  --tp-partial: #b7791f;
+  --tp-no: #9aa5b1;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 212;
+  --md-primary-fg-color: #12263c;
+  --md-primary-fg-color--light: #1f3c5c;
+  --md-primary-fg-color--dark: #0a1726;
+  --md-accent-fg-color: #2ec4b6;
+  --md-accent-fg-color--transparent: rgba(46, 196, 182, 0.1);
+  --md-typeset-a-color: #7cc0ff;
+  --tp-hero-bg: linear-gradient(135deg, #0f2137 0%, #15324f 55%, #0f5a54 100%);
+  --tp-ok: #2ec4b6;
+  --tp-partial: #e0a84a;
+  --tp-no: #66717d;
+}
+
+/* Landing page hero. */
+.tp-hero {
+  background: var(--tp-hero-bg);
+  color: #f2f6fa;
+  border-radius: 0.6rem;
+  padding: 2.4rem 2rem 2rem;
+  margin: 0 0 2rem;
+}
+.tp-hero h1 {
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 2.6rem;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.6rem;
+}
+.tp-hero .tp-tagline {
+  font-size: 1.15rem;
+  font-weight: 500;
+  color: #ffffff;
+  margin: 0 0 0.8rem;
+}
+.tp-hero p {
+  color: #dbe5ee;
+  max-width: 46rem;
+}
+.tp-hero .md-button {
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.6);
+  margin: 0.4rem 0.4rem 0 0;
+}
+.tp-hero .md-button:hover {
+  background-color: rgba(255, 255, 255, 0.12);
+  border-color: #ffffff;
+  color: #ffffff;
+}
+.tp-hero .md-button--primary {
+  background-color: #2ec4b6;
+  border-color: #2ec4b6;
+  color: #0d2036;
+}
+.tp-hero .md-button--primary:hover {
+  background-color: #5ad6ca;
+  border-color: #5ad6ca;
+  color: #0d2036;
+}
+.tp-hero a:not(.md-button) {
+  color: #ffffff;
+  text-decoration: underline;
+}
+
+/* Language matrix marks. */
+.tp-ok { color: var(--tp-ok); }
+.tp-partial { color: var(--tp-partial); }
+.tp-no { color: var(--tp-no); }
+.md-typeset .tp-matrix table:not([class]) {
+  display: table;
+  width: 100%;
+  font-size: 0.72rem;
+}
+.md-typeset .tp-matrix table th,
+.md-typeset .tp-matrix table td { padding: 0.55em 0.6em; }
+.md-typeset .tp-matrix table td:first-child { min-width: 11rem; }
+.md-typeset .tp-matrix table td,
+.md-typeset .tp-matrix table th { text-align: center; }
+.md-typeset .tp-matrix table td:first-child,
+.md-typeset .tp-matrix table th:first-child { text-align: left; }
+
+@media screen and (max-width: 44.9375em) {
+  .tp-hero { padding: 1.6rem 1.1rem 1.4rem; border-radius: 0; margin: 0 -0.8rem 1.5rem; }
+  .tp-hero h1 { font-size: 2rem; }
+}
+
+/* Two-up card grids on the landing page. */
+.md-typeset .grid.tp-two {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+}

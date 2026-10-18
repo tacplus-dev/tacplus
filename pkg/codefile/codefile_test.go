@@ -555,3 +555,126 @@ func TestIndentCodeKeepsContinuationLinesInsideParentheses(t *testing.T) {
 		t.Fatalf("IndentCode continuation indent wrong:\n got:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestIndentCodeRustCharAndStringLiterals(t *testing.T) {
+	// Braces, parens and brackets inside char or string literals and line
+	// comments are not code. Counting them left the depth one level deeper
+	// after every generated from_bytes helper (b'{' on an if line), so the
+	// indent grew with each helper until helpers.rs held millions of spaces.
+	input := `pub fn from_bytes(data: &[u8]) -> Result<Msg, String> {
+let trimmed = data.iter().copied().collect::<Vec<_>>();
+if trimmed[0] == b'{' || trimmed[0] == b'[' {
+if let Ok(msg) = from_json(data) {
+return Ok(msg);
+}
+}
+let s = "open { and ( in a string";
+let c = '}';
+// a comment with { and (
+Ok(Msg::default())
+}
+pub fn next(data: &[u8]) -> Result<Msg, String> {
+Ok(Msg::default())
+}
+`
+	want := `pub fn from_bytes(data: &[u8]) -> Result<Msg, String> {
+    let trimmed = data.iter().copied().collect::<Vec<_>>();
+    if trimmed[0] == b'{' || trimmed[0] == b'[' {
+        if let Ok(msg) = from_json(data) {
+            return Ok(msg);
+        }
+    }
+    let s = "open { and ( in a string";
+    let c = '}';
+    // a comment with { and (
+    Ok(Msg::default())
+}
+pub fn next(data: &[u8]) -> Result<Msg, String> {
+    Ok(Msg::default())
+}
+`
+	if got := IndentCode(Rust, input); got != want {
+		t.Fatalf("IndentCode(Rust) literal handling wrong:\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestIndentCodeRustLifetimeIsNotCharLiteral(t *testing.T) {
+	// The quote in 'a is a lifetime, not the start of a char literal, so the
+	// braces after it still count.
+	input := `fn first<'a>(xs: &'a [u8]) -> Option<&'a u8> {
+if let Some(x) = xs.first() {
+return Some(x);
+}
+None
+}
+`
+	want := `fn first<'a>(xs: &'a [u8]) -> Option<&'a u8> {
+    if let Some(x) = xs.first() {
+        return Some(x);
+    }
+    None
+}
+`
+	if got := IndentCode(Rust, input); got != want {
+		t.Fatalf("IndentCode(Rust) lifetime handling wrong:\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestIndentCodeBracesInLiteralsJavaAndTypeScript(t *testing.T) {
+	javaInput := `class A {
+String s = "}";
+char c = '{';
+void m() {
+call("(");
+}
+}
+`
+	javaWant := `class A {
+    String s = "}";
+    char c = '{';
+    void m() {
+        call("(");
+    }
+}
+`
+	if got := IndentCode(Java, javaInput); got != javaWant {
+		t.Fatalf("IndentCode(Java) literal handling wrong:\n got:\n%s\nwant:\n%s", got, javaWant)
+	}
+	tsInput := "export function f(): string {\nconst a = '{';\nconst b = `}`;\nreturn a + b;\n}\n"
+	tsWant := "export function f(): string {\n  const a = '{';\n  const b = `}`;\n  return a + b;\n}\n"
+	if got := IndentCode(TypeScript, tsInput); got != tsWant {
+		t.Fatalf("IndentCode(TypeScript) literal handling wrong:\n got:\n%s\nwant:\n%s", got, tsWant)
+	}
+}
+
+func TestIndentCodeJavadocIsNotCode(t *testing.T) {
+	// Javadoc prose is not code: an unclosed [ or ( in a comment must not leave
+	// the continuation depth raised for the rest of the file.
+	input := `class A {
+/**
+* <code>int32 n = 2 [(.spec.assert_numeric) = { ... }</code>
+*/
+int getN();
+/* open ( comment
+still a comment } */
+void m() {
+call();
+}
+}
+`
+	want := `class A {
+    /**
+    * <code>int32 n = 2 [(.spec.assert_numeric) = { ... }</code>
+    */
+    int getN();
+    /* open ( comment
+    still a comment } */
+    void m() {
+        call();
+    }
+}
+`
+	if got := IndentCode(Java, input); got != want {
+		t.Fatalf("IndentCode(Java) comment handling wrong:\n got:\n%s\nwant:\n%s", got, want)
+	}
+}

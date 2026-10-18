@@ -778,6 +778,11 @@ assert_current_output() {
     rust)
       find "$output" -type f -name 'inventory.rs' -print -quit | grep -q . || die "missing Rust inventory output"
       find "$output" -type f -name 'analytics.rs' -print -quit | grep -q . || die "missing Rust analytics output"
+      # The indenter once carried depth across helpers until helpers.rs held
+      # gigabytes of leading spaces (issue #11). No generated line may carry more
+      # than 200 of them.
+      deep="$(find "$output" -type f -name '*.rs' -exec awk 'match($0, /[^ ]/) > 201 { print FILENAME ":" FNR; exit }' {} +)"
+      [[ -z "$deep" ]] || die "Rust output carries more than 200 leading spaces at: $deep"
       ;;
     typescript)
       find "$output" -type f -name 'inventory_pb.ts' -print -quit | grep -q . || die "missing TypeScript inventory output"

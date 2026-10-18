@@ -212,6 +212,8 @@ func IndentCode(lang Language, raw string) string {
 	// statement's indent; a line that starts by closing a group sits one level
 	// out, so the ")" that ends the call returns to the statement.
 	parens := 0
+	// inComment is set while a /* block comment, such as Javadoc, is open.
+	inComment := false
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -224,9 +226,10 @@ func IndentCode(lang Language, raw string) string {
 			continue
 		}
 
-		// Count all braces on the line
-		openCount := strings.Count(trimmed, "{")
-		closeCount := strings.Count(trimmed, "}")
+		// Count the braces on the line's code, not inside its literals or comments
+		code := codeOnly(lang, trimmed, &inComment)
+		openCount := strings.Count(code, "{")
+		closeCount := strings.Count(code, "}")
 		net := openCount - closeCount
 
 		if net < 0 {
@@ -254,7 +257,7 @@ func IndentCode(lang Language, raw string) string {
 		}
 		buf.WriteString(trimmed)
 		buf.WriteByte('\n')
-		parens += strings.Count(trimmed, "(") + strings.Count(trimmed, "[") - strings.Count(trimmed, ")") - strings.Count(trimmed, "]")
+		parens += strings.Count(code, "(") + strings.Count(code, "[") - strings.Count(code, ")") - strings.Count(code, "]")
 		if parens < 0 {
 			parens = 0
 		}
@@ -269,6 +272,79 @@ func IndentCode(lang Language, raw string) string {
 	}
 
 	return buf.String()
+}
+
+// codeOnly returns line without the contents of its string and char literals
+// and without its comments, so that brace and bracket counting sees only code.
+// A /* block comment may run across lines: inComment carries that state from
+// one line to the next. The delimiters are dropped too; only the counts are used.
+func codeOnly(lang Language, line string, inComment *bool) string {
+	var b strings.Builder
+	for i := 0; i < len(line); i++ {
+		if *inComment {
+			if line[i] == '*' && i+1 < len(line) && line[i+1] == '/' {
+				*inComment = false
+				i++
+			}
+			continue
+		}
+		if line[i] == '/' && i+1 < len(line) && line[i+1] == '/' {
+			break
+		}
+		if line[i] == '/' && i+1 < len(line) && line[i+1] == '*' {
+			*inComment = true
+			i++
+			continue
+		}
+		if end := literalEnd(lang, line, i); end > i {
+			i = end
+			continue
+		}
+		b.WriteByte(line[i])
+	}
+	return b.String()
+}
+
+// literalEnd returns the index of the last byte of the literal that opens at
+// line[i], or -1 when no literal opens there. A string left open at the end of
+// the line runs to the end of the line.
+func literalEnd(lang Language, line string, i int) int {
+	quote := line[i]
+	switch {
+	case quote == '"':
+	case quote == '\'' && lang == Rust:
+		return rustCharEnd(line, i)
+	case quote == '\'':
+	case quote == '`' && lang == TypeScript:
+	default:
+		return -1
+	}
+	for j := i + 1; j < len(line); j++ {
+		switch line[j] {
+		case '\\':
+			j++
+		case quote:
+			return j
+		}
+	}
+	return len(line) - 1
+}
+
+// rustCharEnd returns the index of the closing quote of the Rust char literal
+// that opens at line[i], or -1 when the quote opens a lifetime or label.
+func rustCharEnd(line string, i int) int {
+	if i+2 < len(line) && line[i+1] != '\\' && line[i+2] == '\'' {
+		return i + 2
+	}
+	if i+1 < len(line) && line[i+1] == '\\' {
+		// Escapes run to 10 bytes at most, as in '\u{10FFFF}'.
+		for j := i + 3; j < len(line) && j <= i+10; j++ {
+			if line[j] == '\'' {
+				return j
+			}
+		}
+	}
+	return -1
 }
 
 // writeLine handles auto-indent/dedent for brace lines, then writes the line.

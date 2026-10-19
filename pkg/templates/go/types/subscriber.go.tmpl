@@ -166,6 +166,9 @@ func (s *Subscriber) Subscribe(ctx context.Context, handler Handler, opts ...Opt
 	consecutiveFailures := 0
 
 	for {
+{{- if .ServiceIMImport}}
+		seen := service_im.CredentialGeneration()
+{{- end}}
 		err := s.subscribeOnce(ctx, fullMethod, sd, req, handler)
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -208,7 +211,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, handler Handler, opts ...Opt
 				// a rejection (see service_im.IsCredentialRejection) — that
 				// credential was understood and refused, so re-minting the same
 				// identity would loop. Mirrors rust's and java's subscribers.
-				service_im.NoteIfCredentialRejection(err)
+				service_im.NoteIfCredentialRejection(err, seen)
 {{- end}}
 				zap.L().Error("{{.SourcePackage}}.{{.SourceField}} subscription auth error, retrying",
 					zap.String("consumer_group", s.consumerGroup),

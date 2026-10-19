@@ -48,16 +48,16 @@ func TestGoSubscriberInvalidatesRejectedCredential(t *testing.T) {
 	if !strings.Contains(rendered, `service_im "example.com/project/tacplus/chassis/service_im"`) {
 		t.Fatalf("subscriber must import the chassis identity manager:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "service_im.NoteIfCredentialRejection(err)") {
+	if !strings.Contains(rendered, "service_im.NoteIfCredentialRejection(err, seen)") {
 		t.Fatalf("subscriber reconnect loop must call "+
-			"service_im.NoteIfCredentialRejection(err) so a rejected credential is "+
+			"service_im.NoteIfCredentialRejection(err, seen) so a rejected credential is "+
 			"re-minted instead of replayed:\n%s", rendered)
 	}
 
 	// It belongs on the auth arm of the retry path, before the backoff sleep —
 	// not after it.
 	authIdx := strings.Index(rendered, "case codes.PermissionDenied, codes.Unauthenticated:")
-	noteIdx := strings.Index(rendered, "service_im.NoteIfCredentialRejection(err)")
+	noteIdx := strings.Index(rendered, "service_im.NoteIfCredentialRejection(err, seen)")
 	sleepIdx := strings.Index(rendered, "case <-time.After(sleep):")
 	if authIdx < 0 || sleepIdx < 0 || noteIdx < authIdx || noteIdx > sleepIdx {
 		t.Fatalf("NoteIfCredentialRejection must sit on the auth-error arm, before the "+
@@ -128,14 +128,14 @@ func TestGoTlsCertStreamReportsCredentialOutcome(t *testing.T) {
 		t.Fatalf("a delivered TLS cert proves the credential was accepted and must "+
 			"clear the degraded counter:\n%s", loop)
 	}
-	if !strings.Contains(loop, "service_im.NoteIfCredentialRejection(err)") {
+	if !strings.Contains(loop, "service_im.NoteIfCredentialRejection(err, seen)") {
 		t.Fatalf("tlsCertStreamLoop must drop a rejected credential before retrying:\n%s", loop)
 	}
 
 	// The rejection note belongs on the retry path only — after the
 	// ctx-cancelled / first-cert-fatal arm that returns.
 	fatalIdx := strings.Index(loop, "err == errTlsFirstCertFatal")
-	noteIdx := strings.Index(loop, "service_im.NoteIfCredentialRejection(err)")
+	noteIdx := strings.Index(loop, "service_im.NoteIfCredentialRejection(err, seen)")
 	if fatalIdx < 0 || noteIdx < fatalIdx {
 		t.Fatal("NoteIfCredentialRejection must sit after the errTlsFirstCertFatal " +
 			"arm, on the retry path only")
@@ -152,7 +152,8 @@ func TestGoCredentialDegradedFloorStaysWired(t *testing.T) {
 	for _, want := range []string{
 		"const degradedAfter = 3",
 		"func CredentialsDegraded() bool",
-		"func NoteIfCredentialRejection(err error)",
+		"func NoteIfCredentialRejection(err error, seen uint64) bool",
+		"func CredentialGeneration() uint64",
 		"func NoteCredentialAccepted()",
 		"RegisterCredentialInvalidator(func() {",
 	} {

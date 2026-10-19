@@ -186,6 +186,7 @@ impl Subscriber {
         let mut backoff = MIN_BACKOFF;
 
         loop {
+            let seen = service_im::credential_generation();
             match self.subscribe_once(&handler, &opts).await {
                 Ok(()) => {
                     tracing::warn!("{{.SourcePackage}}.{{.SourceField}} subscription stream ended, reconnecting in {}ms", MIN_BACKOFF.as_millis());
@@ -222,7 +223,7 @@ impl Subscriber {
                             // authority restart invalidates a token that has NOT
                             // expired.
                             tonic::Code::Unauthenticated | tonic::Code::PermissionDenied => {
-                                service_im::note_if_credential_rejection(&e.to_string()).await;
+                                service_im::note_if_credential_rejection(&e.to_string(), seen).await;
                                 tracing::error!(
                                     error = %e,
                                     "{{.SourcePackage}}.{{.SourceField}} subscription auth error, retrying"

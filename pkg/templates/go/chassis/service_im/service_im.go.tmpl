@@ -1655,9 +1655,10 @@ func randomDuration(max time.Duration) time.Duration {
 // fifteen-minute outage that only ended when each pod was deleted by hand.
 
 var (
-	authRecoveryMu   sync.Mutex
-	authInvalidator  func()
-	consecutiveRejects atomic.Int64
+	authRecoveryMu       sync.Mutex
+	authInvalidator      func()
+	consecutiveRejects   atomic.Int64
+	credentialGeneration atomic.Uint64
 )
 
 // degradedAfter is the number of rejections in a row before the service reports
@@ -1695,9 +1696,23 @@ func IsCredentialRejection(err error) bool {
 		strings.Contains(msg, "token validation failed")
 }
 
+// CredentialGeneration returns the generation a call must read BEFORE it is
+// sent, and pass back to NoteIfCredentialRejection if the call is rejected.
+func CredentialGeneration() uint64 {
+	return credentialGeneration.Load()
+}
+
 // NoteCredentialRejection drops the cached credentials so the next call
-// re-mints. Idempotent, and safe to call on every failed attempt.
-func NoteCredentialRejection() {
+// re-mints. seen is the generation the rejected call read before it was sent.
+// Only the first rejection of a generation counts and invalidates: several
+// loops on one identity that were all sent the same stale token would otherwise
+// each count as a failed re-mint. A rejection whose generation has already moved
+// on is a token another loop's re-mint replaced, so it is dropped here and the
+// next call reads the new generation.
+func NoteCredentialRejection(seen uint64) {
+	if !credentialGeneration.CompareAndSwap(seen, seen+1) {
+		return
+	}
 	consecutiveRejects.Add(1)
 	authRecoveryMu.Lock()
 	f := authInvalidator
@@ -1715,9 +1730,9 @@ func NoteCredentialAccepted() {
 
 // NoteIfCredentialRejection invalidates when the error looks like a rejection.
 // Returns true when it did.
-func NoteIfCredentialRejection(err error) bool {
+func NoteIfCredentialRejection(err error, seen uint64) bool {
 	if IsCredentialRejection(err) {
-		NoteCredentialRejection()
+		NoteCredentialRejection(seen)
 		return true
 	}
 	return false

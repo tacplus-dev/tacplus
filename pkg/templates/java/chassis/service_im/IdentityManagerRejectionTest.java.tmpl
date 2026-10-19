@@ -1,0 +1,67 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// CODE GENERATED - DO NOT EDIT
+
+package {{.ChassisBase}}.service_im;
+
+/**
+ * Self-test for rejection counting: several loops on one identity that were all
+ * sent the same stale token count as one failed re-mint, and each later re-mint
+ * cycle that fails counts again.
+ */
+public final class IdentityManagerRejectionTest {
+
+    private static int failures = 0;
+
+    private static void check(boolean ok, String message) {
+        if (!ok) {
+            System.err.println("FAIL: " + message);
+            failures++;
+        }
+    }
+
+    private static RuntimeException unauthenticated() {
+        return new RuntimeException("UNAUTHENTICATED: does not have valid authentication credentials");
+    }
+
+    /** One call that reads the generation before it is sent and is rejected. */
+    private static void rejectedAttempt() {
+        IdentityManager.noteIfCredentialRejection(unauthenticated(), IdentityManager.credentialGeneration());
+    }
+
+    private static void threeLoopsOnOneStaleTokenCountOnce() {
+        IdentityManager.noteCredentialAccepted();
+        int seen = IdentityManager.credentialGeneration();
+        IdentityManager.noteIfCredentialRejection(unauthenticated(), seen);
+        IdentityManager.noteIfCredentialRejection(unauthenticated(), seen);
+        IdentityManager.noteIfCredentialRejection(unauthenticated(), seen);
+        check(!IdentityManager.credentialsDegraded(),
+                "three loops rejected on one stale token degraded the service; want one failed re-mint");
+
+        rejectedAttempt();
+        rejectedAttempt();
+        check(IdentityManager.credentialsDegraded(),
+                "two later failed re-mint cycles did not degrade the service");
+        IdentityManager.noteCredentialAccepted();
+    }
+
+    private static void acceptedCredentialClearsDegraded() {
+        IdentityManager.noteCredentialAccepted();
+        for (int i = 0; i < 3; i++) {
+            rejectedAttempt();
+        }
+        check(IdentityManager.credentialsDegraded(), "three failed re-mint cycles did not degrade the service");
+        IdentityManager.noteCredentialAccepted();
+        check(!IdentityManager.credentialsDegraded(), "an accepted credential did not clear the degraded state");
+    }
+
+    public static void main(String[] args) {
+        threeLoopsOnOneStaleTokenCountOnce();
+        acceptedCredentialClearsDegraded();
+        if (failures > 0) {
+            System.err.println(failures + " failure(s)");
+            System.exit(1);
+        }
+        System.out.println("IdentityManagerRejectionTest: ok");
+    }
+}

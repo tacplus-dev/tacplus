@@ -1620,6 +1620,7 @@ public class ServiceManager implements AutoCloseable {
         }
         int attempt = 0;
         while (true) {
+            final int seen = {{.ChassisBase}}.service_im.IdentityManager.credentialGeneration();
             try {
                 runTlsCertStream(sm, stateStoreConn, identity, readyLatch);
                 return;
@@ -1635,7 +1636,7 @@ public class ServiceManager implements AutoCloseable {
                 // this stream renews the serving certificate, so a stuck
                 // credential costs the service its TLS as well as its
                 // authentication. Mirrors rust's tls_cert_stream_loop.
-                {{.ChassisBase}}.service_im.IdentityManager.noteIfCredentialRejection(e);
+                {{.ChassisBase}}.service_im.IdentityManager.noteIfCredentialRejection(e, seen);
                 attempt++;
                 if (readyLatch.getCount() > 0) {
                     // First cert never delivered — retry with backoff instead of failing.
@@ -1931,6 +1932,7 @@ public class ServiceManager implements AutoCloseable {
 	            AtomicReference<Exception> readyError) {
         int attempt = 0;
         while (true) {
+            final int seen = {{.ChassisBase}}.service_im.IdentityManager.credentialGeneration();
 	            try {
 	                runSmbCertStream(sm, smbAuthorityConn, identity, readyLatch);
                 return;
@@ -1946,7 +1948,7 @@ public class ServiceManager implements AutoCloseable {
                 // forever presenting the SAME cached token and never re-mints, so
                 // the member never rejoins its peer mesh. Mirrors
                 // tlsCertStreamLoop above.
-                {{.ChassisBase}}.service_im.IdentityManager.noteIfCredentialRejection(e);
+                {{.ChassisBase}}.service_im.IdentityManager.noteIfCredentialRejection(e, seen);
                 attempt++;
                 if (readyLatch.getCount() > 0) {
                     // First member cert never delivered — retry with backoff.

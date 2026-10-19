@@ -502,6 +502,7 @@ impl {{.StateRootName}}ClientInner {
             if self.is_closed() {
                 return;
             }
+            let seen = service_im::credential_generation();
             let made_progress = match self.start_{{.FieldName}}_watch().await {
                 Ok(made_progress) => {
                     if self.is_closed() {
@@ -521,7 +522,7 @@ impl {{.StateRootName}}ClientInner {
                     // this loop presents the same dead token forever. The cache
                     // is keyed on expiry, and an authority restart invalidates a
                     // token that has NOT expired.
-                    service_im::note_if_credential_rejection(&reason).await;
+                    service_im::note_if_credential_rejection(&reason, seen).await;
                     self.record_watch_retrying("Watch{{.FieldPascal}}", false, attempt.saturating_add(1), reason.clone(), Some(reason));
                     tracing::error!(error = %e, "{{$.StateRootName}}.{{.FieldName}} watch failed, retrying");
                     false
@@ -632,6 +633,7 @@ impl {{.StateRootName}}ClientInner {
             if self.is_closed() {
                 return;
             }
+            let seen = service_im::credential_generation();
             let made_progress = match self.start_{{.FieldName}}_watch().await {
                 Ok(made_progress) => {
                     if self.is_closed() {
@@ -651,7 +653,7 @@ impl {{.StateRootName}}ClientInner {
                     // this loop presents the same dead token forever. The cache
                     // is keyed on expiry, and an authority restart invalidates a
                     // token that has NOT expired.
-                    service_im::note_if_credential_rejection(&reason).await;
+                    service_im::note_if_credential_rejection(&reason, seen).await;
                     self.record_watch_retrying("Watch{{.FieldPascal}}", false, attempt.saturating_add(1), reason.clone(), Some(reason));
                     tracing::error!(error = %e, "{{$.StateRootName}}.{{.FieldName}} watch failed, retrying");
                     false
@@ -801,6 +803,7 @@ impl {{.StateRootName}}ClientInner {
             if self.is_closed() {
                 return;
             }
+            let seen = service_im::credential_generation();
             let made_progress = match self.start_{{.FieldName}}_watch().await {
                 Ok(made_progress) => {
                     if self.is_closed() {
@@ -822,7 +825,7 @@ impl {{.StateRootName}}ClientInner {
                     // kernel traffic is imported state kept presenting a dead
                     // token — the exact pre-fix behaviour — unless some other loop
                     // in the process happened to notice.
-                    service_im::note_if_credential_rejection(&reason).await;
+                    service_im::note_if_credential_rejection(&reason, seen).await;
                     self.record_watch_retrying("Watch{{.FieldPascal}}", false, attempt.saturating_add(1), reason.clone(), Some(reason));
                     tracing::error!(error = %e, "{{$.StateRootName}}.{{.FieldName}} state-import watch failed, retrying");
                     false

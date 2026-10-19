@@ -218,6 +218,11 @@ cert-stream-rust:
 subscriber-clean-close:
   {{lock}} bash cross-test/subscriber-clean-close/run.sh
 
+# Behavioral coverage of the generated Java static pool's latency: a slow READY
+# endpoint must be shed for a fast one after a ping, as the Go and Rust chassis do.
+endpoint-latency:
+  {{lock}} bash cross-test/endpoint-latency/run.sh
+
 # Behavioral coverage of the generated external-audience token accessor
 # (token_for_external): a fresh token minted per call, never cached.
 external-token: external-token-go external-token-java external-token-rust

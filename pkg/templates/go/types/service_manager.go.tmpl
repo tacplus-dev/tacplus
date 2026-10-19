@@ -705,7 +705,7 @@ zap.Error(err),
 zap.Duration("retry_in", backoff))
 }
 select {
-case <-time.After(backoff):
+case <-time.After(serviceconnection.JitterReconnectBackoff(backoff)):
 case <-sm.ctx.Done():
 return nil, sm.ctx.Err()
 case <-ctx.Done():
@@ -1618,7 +1618,7 @@ return
 }
 }
 select {
-case <-time.After(backoff):
+case <-time.After(serviceconnection.JitterReconnectBackoff(backoff)):
 case <-subCtx.Done():
 return
 }
@@ -1781,7 +1781,7 @@ return
 zap.L().Warn("trace publisher: failed to resolve broker, retrying",
 zap.Error(err), zap.Duration("backoff", backoff))
 select {
-case <-time.After(backoff):
+case <-time.After(serviceconnection.JitterReconnectBackoff(backoff)):
 case <-ctx.Done():
 return
 }
@@ -1795,7 +1795,7 @@ return
 zap.L().Warn("trace publish stream failed, reconnecting",
 zap.Error(err), zap.Duration("backoff", backoff))
 select {
-case <-time.After(backoff):
+case <-time.After(serviceconnection.JitterReconnectBackoff(backoff)):
 case <-ctx.Done():
 return
 }
@@ -1876,7 +1876,7 @@ zap.String("publisher", "{{.Label}}"),
 zap.String("service", "{{.TargetService}}"),
 zap.Error(err), zap.Duration("backoff", backoff))
 select {
-case <-time.After(backoff):
+case <-time.After(serviceconnection.JitterReconnectBackoff(backoff)):
 case <-ctx.Done():
 return
 }
@@ -1891,7 +1891,7 @@ zap.L().Warn("EventBus publisher stream failed, reconnecting",
 zap.String("publisher", "{{.Label}}"),
 zap.Error(err), zap.Duration("backoff", backoff))
 select {
-case <-time.After(backoff):
+case <-time.After(serviceconnection.JitterReconnectBackoff(backoff)):
 case <-ctx.Done():
 return
 }
@@ -1976,7 +1976,7 @@ zap.String("publisher", "{{.Label}}"),
 zap.String("service", "{{.TargetService}}"),
 zap.Error(err), zap.Duration("backoff", backoff))
 select {
-case <-time.After(backoff):
+case <-time.After(serviceconnection.JitterReconnectBackoff(backoff)):
 case <-ctx.Done():
 return
 }
@@ -1991,7 +1991,7 @@ zap.L().Warn("accounting EventBus publisher stream failed, reconnecting",
 zap.String("publisher", "{{.Label}}"),
 zap.Error(err), zap.Duration("backoff", backoff))
 select {
-case <-time.After(backoff):
+case <-time.After(serviceconnection.JitterReconnectBackoff(backoff)):
 case <-ctx.Done():
 return
 }

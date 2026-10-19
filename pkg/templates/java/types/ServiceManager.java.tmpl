@@ -1423,7 +1423,7 @@ public class ServiceManager implements AutoCloseable {
                             return;
                         }
                         LOG.severe("{{.SourcePackage}}.{{.SourceField}} subscription error, re-resolving target in " + subBackoff + "ms: " + e.getMessage());
-                        try { Thread.sleep(subBackoff); } catch (InterruptedException ie) {
+                        try { Thread.sleep(ReconnectBackoff.jitterMs(subBackoff)); } catch (InterruptedException ie) {
                             Thread.currentThread().interrupt();
                             return;
                         }
@@ -2221,7 +2221,7 @@ public class ServiceManager implements AutoCloseable {
                 LOG.warning("Failed to query ServiceHealthState for " + serviceName + ": " + e.getMessage()
                         + ", retrying in " + backoff + "ms");
             }
-            try { Thread.sleep(backoff); } catch (InterruptedException ie) {
+            try { Thread.sleep(ReconnectBackoff.jitterMs(backoff)); } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException("interrupted while resolving " + serviceName);
             }
@@ -2310,7 +2310,7 @@ public class ServiceManager implements AutoCloseable {
                 backoff = ReconnectBackoff.INITIAL_MS;
             } catch (Exception e) {
                 LOG.warning("publisher {{.Label}} publish attempt failed for broker {{.TargetService}}, retrying in " + backoff + "ms: " + e.getMessage());
-                try { Thread.sleep(backoff); } catch (InterruptedException ie) {
+                try { Thread.sleep(ReconnectBackoff.jitterMs(backoff)); } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     return;
                 }
@@ -2408,7 +2408,7 @@ public class ServiceManager implements AutoCloseable {
                 backoff = ReconnectBackoff.INITIAL_MS;
             } catch (Exception e) {
                 LOG.warning("accounting publisher {{.Label}} publish attempt failed for broker {{.TargetService}}, retrying in " + backoff + "ms: " + e.getMessage());
-                try { Thread.sleep(backoff); } catch (InterruptedException ie) {
+                try { Thread.sleep(ReconnectBackoff.jitterMs(backoff)); } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     return;
                 }
@@ -2502,7 +2502,7 @@ public class ServiceManager implements AutoCloseable {
                 backoff = ReconnectBackoff.INITIAL_MS;
             } catch (Exception e) {
                 LOG.warning("trace publisher: publish attempt failed for broker {{.TracePublisherTarget}}, retrying in " + backoff + "ms: " + e.getMessage());
-                try { Thread.sleep(backoff); } catch (InterruptedException ie) {
+                try { Thread.sleep(ReconnectBackoff.jitterMs(backoff)); } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     return;
                 }

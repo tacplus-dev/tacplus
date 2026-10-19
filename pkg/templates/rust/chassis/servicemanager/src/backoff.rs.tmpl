@@ -11,6 +11,8 @@
 //! by the time the peer came back, and the service sat disconnected for 1-2
 //! minutes after its dependency was up again.
 
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
 use std::time::Duration;
 
 /// Delay before the first reconnect retry.
@@ -22,6 +24,19 @@ pub const RECONNECT_MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// `RECONNECT_MAX_BACKOFF`.
 pub fn next_reconnect_backoff(current: Duration) -> Duration {
     std::cmp::min(current.saturating_mul(2), RECONNECT_MAX_BACKOFF)
+}
+
+/// Returns the delay to sleep for a reconnect step whose schedule value is
+/// `current`: `current` plus up to a quarter of it. Clients that lost the same
+/// peer at the same instant share one schedule, so without this they all dial
+/// again at the same instants.
+pub fn jitter_reconnect_backoff(current: Duration) -> Duration {
+    jitter_reconnect_backoff_with(current, RandomState::new().build_hasher().finish())
+}
+
+fn jitter_reconnect_backoff_with(current: Duration, random: u64) -> Duration {
+    let span_nanos = (current / 4).as_nanos() as u64 + 1;
+    current + Duration::from_nanos(random % span_nanos)
 }
 
 #[cfg(test)]
@@ -42,5 +57,19 @@ mod tests {
     fn never_exceeds_cap() {
         assert_eq!(next_reconnect_backoff(Duration::MAX), RECONNECT_MAX_BACKOFF);
         assert_eq!(next_reconnect_backoff(RECONNECT_MAX_BACKOFF), RECONNECT_MAX_BACKOFF);
+    }
+
+    // Clients that lost the same peer at the same instant share one schedule.
+    // With no jitter, 40 of them sleep the same delay on every step.
+    #[test]
+    fn jitter_spreads_clients_at_same_step() {
+        let step = next_reconnect_backoff(RECONNECT_INITIAL_BACKOFF);
+        let mut seen = std::collections::HashSet::new();
+        for client in 0..40u64 {
+            let delay = jitter_reconnect_backoff_with(step, client.wrapping_mul(2_654_435_761));
+            assert!(delay >= step && delay <= step + step / 4, "delay {delay:?} outside [{step:?}, {:?}]", step + step / 4);
+            seen.insert(delay);
+        }
+        assert!(seen.len() > 1, "40 clients at one step all sleep {step:?}");
     }
 }

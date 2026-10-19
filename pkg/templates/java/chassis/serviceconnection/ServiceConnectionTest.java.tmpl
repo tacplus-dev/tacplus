@@ -2,6 +2,7 @@ package {{.ChassisBase}}.serviceconnection;
 
 import {{.TypesBase}}.sys.x509.X509;
 import {{.TypesBase}}.sys.healthreport.Healthreport.InstanceStatus;
+import {{.TypesBase}}.sys.healthreport.Healthreport.ServiceInstanceHealth;
 import {{.TypesBase}}.sys.host.HostOuterClass;
 import io.grpc.ConnectivityState;
 import io.grpc.ManagedChannel;
@@ -52,6 +53,7 @@ public class ServiceConnectionTest {
         checkBackoff();
         checkReadiness();
         checkStaticConnWhileReconnecting();
+        checkReconcileGrace();
 
         if (failures > 0) {
             System.err.println(failures + " ServiceConnection check(s) FAILED");
@@ -151,5 +153,39 @@ public class ServiceConnectionTest {
             server.shutdownNow();
         }
         expect(sc.conn() == null, "closed static pool conn() must be null");
+    }
+
+    /**
+     * A snapshot that omits a dialed endpoint keeps it pooled and ready. Only
+     * ABSENT_POLLS_BEFORE_CLOSE snapshots in a row close it, and a return resets the count.
+     */
+    private static void checkReconcileGrace() throws Exception {
+        Server server = NettyServerBuilder.forPort(0).build().start();
+        try {
+            HostOuterClass.Host host = HostOuterClass.Host.newBuilder()
+                    .setHost("127.0.0.1").setPort(server.getPort()).build();
+            ServiceInstanceHealth report = ServiceInstanceHealth.newBuilder()
+                    .setServiceId("identity").setGrpcEndpoint(host)
+                    .setStatus(InstanceStatus.INSTANCE_STATUS_HEALTHY).build();
+            ServiceConnection sc = new ServiceConnection("identity",
+                    (id, target) -> ManagedChannelBuilder.forTarget(target).usePlaintext().build());
+            sc.reconcileFromHealth(List.of(report));
+            expect(sc.isAvailable(), "dialed endpoint must be ready");
+
+            for (int i = 1; i < ServiceConnection.ABSENT_POLLS_BEFORE_CLOSE; i++) {
+                sc.reconcileFromHealth(List.of());
+            }
+            expect(sc.isAvailable(), "endpoint absent for fewer than the grace snapshots must stay ready");
+
+            sc.reconcileFromHealth(List.of(report));
+            expect(sc.isAvailable(), "endpoint that returns must stay ready");
+
+            for (int i = 0; i < ServiceConnection.ABSENT_POLLS_BEFORE_CLOSE; i++) {
+                sc.reconcileFromHealth(List.of());
+            }
+            expect(!sc.isAvailable(), "endpoint absent for the grace snapshots in a row must be closed");
+        } finally {
+            server.shutdownNow();
+        }
     }
 }

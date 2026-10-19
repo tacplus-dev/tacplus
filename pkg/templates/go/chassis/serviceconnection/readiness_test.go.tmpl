@@ -12,6 +12,7 @@ import (
 	"time"
 
 	healthreport_pb "{{.ModuleBasePath}}/types/sys/healthreport"
+	host_pb "{{.ModuleBasePath}}/types/sys/host"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -115,5 +116,59 @@ func TestStreamFollowsItsFlag(t *testing.T) {
 	up.Store(false)
 	if _, down := required.FirstDown(); !down {
 		t.Fatal("flag false again must be down")
+	}
+}
+
+// snapshot is a health snapshot from the state store holding the pool()
+// endpoint (127.0.0.1:1) with status.
+func snapshot(status InstanceStatus) []*healthreport_pb.ServiceInstanceHealth {
+	report := &healthreport_pb.ServiceInstanceHealth{
+		Status:       status,
+		GrpcEndpoint: &host_pb.Host{Host: "127.0.0.1", Port: 1},
+	}
+	return []*healthreport_pb.ServiceInstanceHealth{report}
+}
+
+func TestEndpointMissedOneSnapshotStaysPooled(t *testing.T) {
+	sc := pool(t, "identity", StatusHealthy)
+	ec := sc.endpoints[0]
+	required := NewRequiredChannels([]*ServiceConnection{sc}, nil)
+
+	sc.ReconcileFromHealth(nil)
+	if len(sc.endpoints) != 1 || sc.endpoints[0] != ec {
+		t.Fatalf("one missed snapshot dropped the endpoint: %d endpoints", len(sc.endpoints))
+	}
+	if name, down := required.FirstDown(); down {
+		t.Fatalf("one missed snapshot took %q down", name)
+	}
+
+	sc.ReconcileFromHealth(snapshot(StatusHealthy))
+	if len(sc.endpoints) != 1 || sc.endpoints[0] != ec {
+		t.Fatal("endpoint replaced when it reappeared; it must be kept, not redialed")
+	}
+}
+
+func TestEndpointClosedAfterAbsentSnapshots(t *testing.T) {
+	sc := pool(t, "identity", StatusHealthy)
+	for i := 1; i < absentPollsBeforeClose; i++ {
+		sc.ReconcileFromHealth(nil)
+		if len(sc.endpoints) != 1 {
+			t.Fatalf("closed after %d absent snapshots, want %d", i, absentPollsBeforeClose)
+		}
+	}
+	sc.ReconcileFromHealth(nil)
+	if len(sc.endpoints) != 0 {
+		t.Fatalf("still pooled after %d absent snapshots", absentPollsBeforeClose)
+	}
+}
+
+func TestAbsentCountRestartsWhenEndpointReturns(t *testing.T) {
+	sc := pool(t, "identity", StatusHealthy)
+	for i := 0; i < 2*absentPollsBeforeClose; i++ {
+		sc.ReconcileFromHealth(nil)
+		sc.ReconcileFromHealth(snapshot(StatusHealthy))
+	}
+	if len(sc.endpoints) != 1 {
+		t.Fatalf("alternating miss and return closed the endpoint: %d endpoints", len(sc.endpoints))
 	}
 }

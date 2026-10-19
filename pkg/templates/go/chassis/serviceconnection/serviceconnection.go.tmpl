@@ -39,6 +39,12 @@ const rebalanceThreshold = 0.3
 // stale or UNHEALTHY for a few seconds at a time on an otherwise idle fleet.
 const fleetDownAfter = 30 * time.Second
 
+// absentPollsBeforeClose is how many health snapshots in a row must omit an
+// endpoint before the pool closes it. The poller runs every 5s, so this is the
+// same 30s as fleetDownAfter: one missed or partial snapshot keeps the
+// connection, and readiness, through it.
+const absentPollsBeforeClose = 6
+
 // ---------------------------------------------------------------------------
 // endpointConn -- per-endpoint gRPC connection with health tracking
 // ---------------------------------------------------------------------------
@@ -54,7 +60,9 @@ type endpointConn struct {
 	// not use it.
 	fleetOK   bool      // last report was HEALTHY or DEGRADED
 	fleetOKAt time.Time // when a HEALTHY or DEGRADED report last arrived
-	mu        sync.RWMutex
+	// absentPolls counts the health snapshots in a row that omitted this endpoint.
+	absentPolls int
+	mu          sync.RWMutex
 }
 
 func newEndpointConn(target string) *endpointConn {
@@ -274,11 +282,18 @@ func (sc *ServiceConnection) ReconcileFromHealth(instances []*healthreport_pb.Se
 	for _, ec := range sc.endpoints {
 		if h, ok := incoming[ec.target]; ok {
 			// Still present -- update health
+			ec.absentPolls = 0
 			ec.updateHealth(h)
 			kept = append(kept, ec)
 		} else {
-			// Removed
-			toClose = append(toClose, ec)
+			// Absent. Kept, with its last health, until absentPollsBeforeClose
+			// snapshots in a row omit it.
+			ec.absentPolls++
+			if ec.absentPolls >= absentPollsBeforeClose {
+				toClose = append(toClose, ec)
+			} else {
+				kept = append(kept, ec)
+			}
 		}
 	}
 

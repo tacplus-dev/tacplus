@@ -83,6 +83,11 @@ public class ServiceConnection implements AutoCloseable {
     private static final int PING_FAILURES_BEFORE_DOWN = 3;
     /** How long the fleet health plane must go without a HEALTHY or DEGRADED report before readiness counts an endpoint down. */
     private static final Duration FLEET_DOWN_AFTER = Duration.ofSeconds(30);
+    /**
+     * Consecutive health snapshots that must omit an endpoint before the pool closes it. The poller
+     * runs every 5s, so this is the same 30s as FLEET_DOWN_AFTER: one missed snapshot keeps it.
+     */
+    static final int ABSENT_POLLS_BEFORE_CLOSE = 6;
     private static final long REBALANCE_INTERVAL_MS = 30_000;
 
     private final String serviceId;
@@ -342,10 +347,18 @@ public class ServiceConnection implements AutoCloseable {
             for (EndpointConn ec : endpoints) {
                 ServiceInstanceHealth h = incoming.get(ec.target);
                 if (h != null) {
+                    ec.absentPolls = 0;
                     ec.updateHealth(h);
                     kept.add(ec);
                 } else {
-                    toClose.add(ec);
+                    // Absent. Kept, with its last health, until ABSENT_POLLS_BEFORE_CLOSE
+                    // snapshots in a row omit it.
+                    ec.absentPolls++;
+                    if (ec.absentPolls >= ABSENT_POLLS_BEFORE_CLOSE) {
+                        toClose.add(ec);
+                    } else {
+                        kept.add(ec);
+                    }
                 }
             }
 
@@ -407,7 +420,7 @@ public class ServiceConnection implements AutoCloseable {
             }
 
             if (best == null) {
-                if (active != null) {
+                if (active != null && !endpoints.isEmpty()) {
                     LOG.warning("ServiceConnection(" + serviceId + "): no routable endpoints");
                 }
                 return;
@@ -824,6 +837,7 @@ public class ServiceConnection implements AutoCloseable {
         boolean fleetOk = true;   // last fleet report was HEALTHY or DEGRADED; true until one arrives
         Instant fleetOkAt;        // when a HEALTHY or DEGRADED fleet report last arrived; null until one has
         int pingFailures;         // failed pings since the last successful one
+        int absentPolls;          // health snapshots in a row that omitted this endpoint; guarded by the pool lock
         private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
         EndpointConn(String target) {

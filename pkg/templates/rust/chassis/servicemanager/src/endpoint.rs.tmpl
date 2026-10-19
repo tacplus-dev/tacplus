@@ -95,6 +95,8 @@ pub struct EndpointConn {
     latency: Arc<RwLock<Duration>>,
     healthy: Arc<RwLock<bool>>,
     readiness: Arc<RwLock<ReadinessInputs>>,
+    /// Consecutive health snapshots that omitted this endpoint. Pool membership only.
+    pub(crate) absent_polls: u32,
 }
 
 impl EndpointConn {
@@ -106,6 +108,7 @@ impl EndpointConn {
             latency: Arc::new(RwLock::new(Duration::MAX)),
             healthy: Arc::new(RwLock::new(false)),
             readiness: Arc::new(RwLock::new(ReadinessInputs::new(Instant::now()))),
+            absent_polls: 0,
         }
     }
 

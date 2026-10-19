@@ -19,10 +19,12 @@ import io.grpc.netty.shaded.io.netty.handler.ssl.SslContext;
 import io.grpc.netty.shaded.io.netty.handler.ssl.SslContextBuilder;
 import io.grpc.netty.shaded.io.netty.handler.ssl.SslProvider;
 import {{.ChassisBase}}.spiffe.Spiffe;
+import {{.TypesBase}}.sys.grpcconfig.ClusterServiceGrpc;
 import {{.TypesBase}}.sys.grpcconfig.Grpcconfig.Config;
 import {{.TypesBase}}.sys.healthreport.Healthreport.InstanceStatus;
 import {{.TypesBase}}.sys.healthreport.Healthreport.ServiceInstanceHealth;
 import {{.TypesBase}}.sys.host.HostOuterClass;
+import {{.TypesBase}}.sys.trace.Trace.TraceRequest;
 import {{.TypesBase}}.sys.x509.X509;
 
 import javax.net.ssl.TrustManager;
@@ -79,6 +81,8 @@ public class ServiceConnection implements AutoCloseable {
     /** Minimum relative improvement required to switch active endpoints (hysteresis). */
     private static final double REBALANCE_THRESHOLD = 0.3;
     private static final long PING_INTERVAL_MS = 30_000;
+    /** Per-call deadline for a Ping RPC, as the Go and Rust chassis use. */
+    private static final long PING_TIMEOUT_MS = 5_000;
     /** Consecutive failed pings after which readiness counts an endpoint down. */
     private static final int PING_FAILURES_BEFORE_DOWN = 3;
     /** How long the fleet health plane must go without a HEALTHY or DEGRADED report before readiness counts an endpoint down. */
@@ -853,7 +857,6 @@ public class ServiceConnection implements AutoCloseable {
             lock.writeLock().lock();
             try {
                 this.status = InstanceStatus.INSTANCE_STATUS_HEALTHY;
-                this.latencyUs = 1;
             } finally {
                 lock.writeLock().unlock();
             }
@@ -902,33 +905,28 @@ public class ServiceConnection implements AutoCloseable {
         }
 
         /**
-         * Static-mode ping: trigger channel state probing and refresh local
-         * latency/health from observed connectivity. We do not require an
-         * RPC round-trip here; the ConnectivityState gives us a cheap signal
-         * that the static endpoint is reachable.
+         * Static-mode ping: a ClusterService.Ping round trip refreshes latency
+         * and health, as the Go and Rust chassis do. The channel state alone
+         * says nothing about latency, so a slow READY peer would never be shed.
          */
         void ping() {
             if (channel == null) return;
             long start = System.nanoTime();
             try {
-                ConnectivityState state = channel.getState(true);
+                ClusterServiceGrpc.newBlockingStub(channel)
+                        .withDeadlineAfter(PING_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                        .ping(TraceRequest.getDefaultInstance());
                 long rttNanos = System.nanoTime() - start;
                 lock.writeLock().lock();
                 try {
-                    if (state == ConnectivityState.READY || state == ConnectivityState.IDLE) {
-                        long rttUs = Math.max(1, rttNanos / 1_000);
-                        if (latencyUs == Long.MAX_VALUE) {
-                            latencyUs = rttUs;
-                        } else {
-                            latencyUs = (long) (latencyUs * 0.7 + rttUs * 0.3);
-                        }
-                        status = InstanceStatus.INSTANCE_STATUS_HEALTHY;
-                        pingFailures = 0;
+                    long rttUs = Math.max(1, rttNanos / 1_000);
+                    if (latencyUs == Long.MAX_VALUE) {
+                        latencyUs = rttUs;
                     } else {
-                        status = InstanceStatus.INSTANCE_STATUS_UNHEALTHY;
-                        latencyUs = Long.MAX_VALUE;
-                        pingFailures++;
+                        latencyUs = (long) (latencyUs * 0.7 + rttUs * 0.3);
                     }
+                    status = InstanceStatus.INSTANCE_STATUS_HEALTHY;
+                    pingFailures = 0;
                 } finally {
                     lock.writeLock().unlock();
                 }

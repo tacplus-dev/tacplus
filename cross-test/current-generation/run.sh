@@ -20,6 +20,7 @@ RECORDEGRESS_PROTO_SRC="$ROOT_DIR/cross-test/proto-recordegress"
 OWNERDEFAULT_PROTO_SRC="$ROOT_DIR/cross-test/proto-ownerdefault"
 QUORUMWRITE_PROTO_SRC="$ROOT_DIR/cross-test/proto-quorumwrite"
 TENANTSLICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-tenantslice"
+EPOCHLOAD_PROTO_SRC="$ROOT_DIR/cross-test/proto-epochload"
 WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/current-generation}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
@@ -200,6 +201,19 @@ write_quorumwrite_config() {
 language: "$language"
 pkg: "com.gitlab.example.dummy.quorumvault"
 src: "$QUORUMWRITE_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
+write_epochload_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.epochload"
+src: "$EPOCHLOAD_PROTO_SRC"
 output-dir: "tacplus"
 EOF
 }
@@ -445,6 +459,19 @@ run_java_generated_self_tests() {
     grep -q '^ServiceManagerIdentityErrorTest: all checks passed$' "$test_log" \
       || die "java: ServiceManagerIdentityErrorTest did not report its checks passed"
   fi
+  # The epoch-load fixture's self-test, copied in by assert_epochload_output, so
+  # it is present exactly in that build.
+  local el_test el_class
+  el_test="$(find "$output/src/main/java" -type f -name 'EpochLoadTest.java' -print -quit)"
+  if [[ -n "$el_test" ]]; then
+    el_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$el_test").$(basename "$el_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$el_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q '^EpochLoadTest: all checks passed$' "$test_log" \
+      || die "epoch-load fixture (java): EpochLoadTest did not report its checks passed"
+  fi
   # The main fixture's extraction self-test, copied in by
   # install_extraction_selftest, so it is present exactly in that build.
   local ex_test ex_class
@@ -547,6 +574,16 @@ run_rust_spiffe_self_tests() {
         return 1
       }
     assert_clean_log "$log_dir/rust-store-roll-test.log"
+  fi
+
+  # The epoch-load fixture's disk-loader self-test, copied in by
+  # assert_epochload_output, so it is present exactly in that build.
+  if [[ -f "$output/tests/epoch_load_test.rs" ]]; then
+    (cd "$output" && cargo test --test epoch_load_test) >"$log_dir/rust-epoch-load-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-epoch-load-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-epoch-load-test.log"
   fi
 
   # PC-C-2: the collection crate's page-token codec tests pin the
@@ -1151,6 +1188,43 @@ assert_tenantslice_output() {
     rust) client="$(find "$output" -type f -path '*/s2sm/internal/state/services/tenancy_config_state/state.rs' -print -quit)" ;;
   esac
   [[ -n "$client" ]] || die "tenant-slice fixture ($language): ledger is not subscribed to TenancyConfigState (no generated state client under $output)"
+}
+
+# assert_epochload_output checks that the (spec.epoch_expiration) value is
+# GENERATED into the store's disk loader, which is the path under test. Absence
+# compiles: a loader that drops the validator entirely would pass every compile
+# leg and still never see the defect.
+assert_epochload_output() {
+  local output="$1"
+  local language="$2"
+  local stores=""
+
+  case "$language" in
+    go)
+      stores="$(find "$output" -type f -path '*/s2sm/diskstore/diskstore.go' -print -quit)"
+      [[ -n "$stores" ]] || die "epoch-load fixture (go): s2sm/diskstore/diskstore.go not generated under $output"
+      grep -qF 'func LoadLease(base, ns string)' "$stores" \
+        || die "epoch-load fixture (go): LoadLease is not generated in $stores"
+      grep -qF 'if err := epochload_pb.ValidateLeaseAtRest(msg); err != nil {' "$stores" \
+        || die "epoch-load fixture (go): LoadLease does not run the at-rest validator in $stores"
+      cp "$SELFTESTS_SRC/go/epoch_load_test.go" "$(dirname "$stores")/"
+      ;;
+    java)
+      stores="$(find "$output" -type f -path '*/chassis/diskstore/stores/DiskStores.java' -print -quit)"
+      [[ -n "$stores" ]] || die "epoch-load fixture (java): DiskStores.java not generated under $output"
+      grep -qF 'Helpers.validateLeaseAtRest(msg);' "$stores" \
+        || die "epoch-load fixture (java): loadLease does not run the at-rest validator in $stores"
+      cp "$SELFTESTS_SRC/java/EpochLoadTest.java" "$(dirname "$stores")/"
+      ;;
+    rust)
+      stores="$(find "$output" -type f -path '*/s2sm/diskstore_stores/mod.rs' -print -quit)"
+      [[ -n "$stores" ]] || die "epoch-load fixture (rust): s2sm/diskstore_stores/mod.rs not generated under $output"
+      grep -qF 'msg.validate_at_rest()' "$stores" \
+        || die "epoch-load fixture (rust): load_lease does not run the at-rest validator in $stores"
+      mkdir -p "$output/tests"
+      cp "$SELFTESTS_SRC/rust/epoch_load_test.rs" "$output/tests/"
+      ;;
+  esac
 }
 
 # install_ownerdefault_selftest copies the Java runtime self-test into the
@@ -2099,6 +2173,30 @@ if [[ -d "$QUORUMWRITE_PROTO_SRC" ]]; then
     echo "==> Compiling $language quorum-write fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/quorumvault"
     echo "    PASS $language quorum-write"
+  done
+fi
+
+# epoch-load fixture: a keyed store whose row carries an (spec.epoch_expiration)
+# value. The generated disk loader must accept that row after its exp has
+# passed, and must keep rejecting a non-time violation.
+if [[ -d "$EPOCHLOAD_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/epochload-$language"
+    log="$WORK_ROOT/epochload-$language.log"
+    rm -rf "$dir"
+    write_epochload_config "$dir" "$language"
+
+    echo "==> Generating $language epoch-load fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$EPOCHLOAD_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language epoch-load generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_epochload_output "$output_root" "$language"
+    echo "==> Compiling $language epoch-load fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/epochload"
+    echo "    PASS $language epoch-load"
   done
 fi
 

@@ -34,7 +34,7 @@ func TestRustConditionalRequirementZeroCheckIsTypeCorrect(t *testing.T) {
 		if len(f.Annotations) == 0 {
 			continue
 		}
-		if err := generateFieldValidation(&b, f, msg, nil); err != nil {
+		if err := generateFieldValidation(&b, f, msg, nil, false); err != nil {
 			t.Fatalf("generateFieldValidation(%s): %v", f.Name, err)
 		}
 	}

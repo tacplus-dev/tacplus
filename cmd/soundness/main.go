@@ -950,10 +950,10 @@ var fieldKindProbes = []struct {
 	{
 		name: "message-nesting-depth-guard",
 		patterns: map[string][]string{
-			"go":         {"Validate%sWithDepth", "depth > 24", "depth+1"},
-			"java":       {"validate%sDepth", "depth > 24", "depth + 1"},
+			"go":         {"Validate%s%sWithDepth", "depth > 24", "depth+1"},
+			"java":       {"validate%s%sDepth", "depth > 24", "depth + 1"},
 			"python":     {"_depth > 24", "_depth + 1"},
-			"rust":       {"validate_with_depth", "depth > 24", "depth + 1"},
+			"rust":       {"_with_depth", "depth > 24", "depth + 1"},
 			"typescript": {"depth = 0", "depth > 24", "depth + 1"},
 		},
 	},

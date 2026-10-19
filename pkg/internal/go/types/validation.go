@@ -49,18 +49,34 @@ func requiredZeroCheck(field model.Field, goFieldName string) string {
 	}
 }
 
-// generateValidationHelpers generates Validate functions for message types
+// generateValidationHelpers generates Validate functions for message types: the
+// strict validator, and the at-rest variant (ValidateXAtRest) that runs over
+// stored state on disk load.
 func generateValidationHelpers(b *strings.Builder, msg model.Message) error {
-	// Always generate a Validate function, even if no annotations
-	fmt.Fprintf(b, `// Validate%s validates all fields in %s according to their annotations.
-// Returns a BlueErr if validation fails, or nil if all validations pass.
-func Validate%s(m *%s) error {
-	return Validate%sWithDepth(m, 0)
+	if err := writeValidateFuncs(b, msg, false); err != nil {
+		return err
+	}
+	return writeValidateFuncs(b, msg, true)
 }
 
-// Validate%sWithDepth validates %s and carries nested-message depth across
+// writeValidateFuncs writes one validator family. The at-rest variant is the same
+// validator without the time-relative assertions, because a stored value ages.
+// Only the strict variant emits the shared in/not_in helpers.
+func writeValidateFuncs(b *strings.Builder, msg model.Message, atRest bool) error {
+	suffix := ""
+	if atRest {
+		suffix = "AtRest"
+	}
+	// Always generate a Validate function, even if no annotations
+	fmt.Fprintf(b, `// Validate%[1]s%[3]s validates all fields in %[1]s according to their annotations.
+// Returns a BlueErr if validation fails, or nil if all validations pass.
+func Validate%[1]s%[3]s(m *%[1]s) error {
+	return Validate%[1]s%[3]sWithDepth(m, 0)
+}
+
+// Validate%[1]s%[3]sWithDepth validates %[1]s and carries nested-message depth across
 // generated package boundaries.
-func Validate%sWithDepth(m *%s, depth int) error {
+func Validate%[1]s%[3]sWithDepth(m *%[1]s, depth int) error {
 	if m == nil {
 		return nil
 	}
@@ -68,7 +84,10 @@ func Validate%sWithDepth(m *%s, depth int) error {
 		return protoerrors.NewErrMissingInvalidData(nil, "message nesting exceeds max depth of 24")
 	}
 
-`, msg.Name, msg.Name, msg.Name, msg.Name, msg.Name, msg.Name, msg.Name, msg.Name, msg.Name)
+`, msg.Name, msg.Name, suffix)
+	if atRest {
+		b.WriteString("\t// Time-relative assertions (epoch_expiration) are not re-checked: a stored value ages.\n\n")
+	}
 
 	// Generate validation code for each field with annotations
 	hasValidations := false
@@ -86,9 +105,9 @@ func Validate%sWithDepth(m *%s, depth int) error {
 		case "anypb", "structpb", "timestamppb", "durationpb", "emptypb", "fieldmaskpb", "wrapperspb":
 			return ""
 		case "":
-			return fmt.Sprintf("Validate%sWithDepth", typeName)
+			return fmt.Sprintf("Validate%s%sWithDepth", typeName, suffix)
 		default:
-			return fmt.Sprintf("%s.Validate%sWithDepth", typePackage, typeName)
+			return fmt.Sprintf("%s.Validate%s%sWithDepth", typePackage, typeName, suffix)
 		}
 	}
 	enumNameMapRef := func(typeName, typePackage string) string {
@@ -970,6 +989,9 @@ func Validate%sWithDepth(m *%s, depth int) error {
 				}
 
 			case "epoch_expiration":
+				if atRest {
+					break
+				}
 				errFunc := "protoerrors.NewErrMissingInvalidData"
 				fmt.Fprintf(b, `	// Validate %s (epoch_expiration)
 	if m.%s != 0 {
@@ -1427,6 +1449,10 @@ func Validate%sWithDepth(m *%s, depth int) error {
 }
 
 `)
+
+	if atRest {
+		return nil
+	}
 
 	// Generate helper functions for "in" and "not_in" checks. Sort the keys of
 	// each map below — these loops emit top-level func definitions, which gofmt

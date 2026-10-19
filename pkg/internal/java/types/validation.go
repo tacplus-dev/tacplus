@@ -25,17 +25,28 @@ func writeValidation(b *strings.Builder, pf model.ProtoFile, outerClassName stri
 	return nil
 }
 
-// writeMessageValidation writes a validate method for a single message
+// writeMessageValidation writes the validate methods for a single message: the
+// strict validator, and the at-rest variant (validate<Type>AtRest) that runs over
+// stored state on disk load.
 func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassName string, crossHelpers map[string]string) error {
+	// Emit JML formal verification specs as Java comments before the strict method
+	writeJmlSpecs(b, msg)
+	if err := writeValidateMethods(b, msg, outerClassName, crossHelpers, ""); err != nil {
+		return err
+	}
+	return writeValidateMethods(b, msg, outerClassName, crossHelpers, "AtRest")
+}
+
+// writeValidateMethods writes one validator family. suffix is "" for the strict
+// validator and "AtRest" for the at-rest one, which is the same validator without
+// the time-relative assertions: a stored value ages.
+func writeValidateMethods(b *strings.Builder, msg model.Message, outerClassName string, crossHelpers map[string]string, suffix string) error {
 	fullTypeName := outerClassName + "." + msg.Name
 
-	// Emit JML formal verification specs as Java comments before the method
-	writeJmlSpecs(b, msg)
-
-	fmt.Fprintf(b, "public static void validate%s(%s msg) throws ProtoException {\n", msg.Name, fullTypeName)
-	fmt.Fprintf(b, "validate%sDepth(msg, 0);\n", msg.Name)
+	fmt.Fprintf(b, "public static void validate%s%s(%s msg) throws ProtoException {\n", msg.Name, suffix, fullTypeName)
+	fmt.Fprintf(b, "validate%s%sDepth(msg, 0);\n", msg.Name, suffix)
 	b.WriteString("}\n")
-	fmt.Fprintf(b, "public static void validate%sDepth(%s msg, int depth) throws ProtoException {\n", msg.Name, fullTypeName)
+	fmt.Fprintf(b, "public static void validate%s%sDepth(%s msg, int depth) throws ProtoException {\n", msg.Name, suffix, fullTypeName)
 	b.WriteString("if (msg == null) {\n")
 	b.WriteString("return;\n")
 	b.WriteString("}\n")
@@ -519,6 +530,9 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 				// (writeJmlSpecs); no runtime constraint, matching the Go emitter.
 
 			case "epoch_expiration":
+				if suffix != "" {
+					break
+				}
 				fmt.Fprintf(b, "// Validate %s (epoch_expiration)\n", javaFieldName)
 				fmt.Fprintf(b, "if (msg.%s() != 0) {\n", getterName)
 				fmt.Fprintf(b, "long now = System.currentTimeMillis() / 1000;\n")
@@ -714,7 +728,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 		getterName := "get" + javaFieldNameUpper(field.Name)
 
 		if field.MapValueIsMessage {
-			validateRef := msgValidationFunc(field.MapValueType, field.MapValueTypePackage, crossHelpers)
+			validateRef := msgValidationFunc(field.MapValueType, field.MapValueTypePackage, crossHelpers, suffix)
 			if validateRef == "" {
 				continue
 			}
@@ -730,7 +744,7 @@ func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassNam
 			continue
 		}
 
-		validateRef := msgValidationFunc(field.Type, field.TypePackage, crossHelpers)
+		validateRef := msgValidationFunc(field.Type, field.TypePackage, crossHelpers, suffix)
 		if validateRef == "" {
 			continue
 		}

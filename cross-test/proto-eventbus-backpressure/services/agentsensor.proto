@@ -1,0 +1,53 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+//
+// Fixture for the Java backpressure self-tests in cross-test/current-generation.
+// AgentState is store-hosted and carries a topic, so its generated StateClient
+// has the subscribeToEvents iterator. AgentUploadApi is a client-streaming W2S
+// surface, so its generated client carries the WebSocket listener.
+
+syntax = "proto3";
+
+package agentsensor;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "agentsensor", store: true};
+
+message AgentEvent {
+  option (spec.event) = {s2s: {auth_services: ["agentsensor"]}};
+
+  string id = 1 [(spec.assert_required) = true];
+  bytes body = 2;
+}
+
+message AgentState {
+  option (spec.service_state) = {
+    name: "AgentState"
+    export: true
+  };
+
+  repeated AgentEvent events = 1 [
+    (spec.topic) = true
+  ];
+}
+
+option (spec.grpc_w2s_client) = {service: "agentsensor.AgentApi"};
+
+service AgentApi {
+  option (spec.service_c2s) = {};
+
+  // Ping echoes an agent event back to the caller.
+  rpc Ping(AgentEvent) returns (AgentEvent) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, auth_services: ["*"]};
+  }
+}
+
+service AgentUploadApi {
+  option (spec.service_c2s) = {};
+
+  // SendEvents uploads a stream of agent events and returns one summary.
+  rpc SendEvents(stream AgentEvent) returns (AgentEvent) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, auth_services: ["*"]};
+  }
+}

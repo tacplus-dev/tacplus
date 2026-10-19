@@ -47,13 +47,13 @@ impl RequiredChannels {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::spiffe::{build_root_store, SpiffeServerCertVerifier};
     use {{.CrateBasePathUnderscore}}_types::sys::healthreport::healthreport::InstanceStatus;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn verifier() -> Arc<dyn rustls::client::danger::ServerCertVerifier> {
+    pub(crate) fn verifier() -> Arc<dyn rustls::client::danger::ServerCertVerifier> {
         let signing_key = key::keys::generate_ec_p256_key().expect("generate p256 key");
         let chain = x509::ImmutableCertChain::for_self_signing(signing_key);
         let exp = SystemTime::now()

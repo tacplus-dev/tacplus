@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	libBase64 "encoding/base64"
+	"regexp"
 	"testing"
 	"time"
 
@@ -155,6 +156,96 @@ func TestAuthorizerAlternationPatternIsFullyAnchored(t *testing.T) {
 		if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err == nil {
 			t.Fatalf("caller %q only partially matches an alternation branch and must be denied", caller)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// auth_services: workloads (ephemeral pigeons) are not service callers
+// ---------------------------------------------------------------------------
+
+// pigeonSubject is the SPIFFE id MintWorkload gives an ephemeral pigeon minted
+// under the beagle service; its service path is beagle/workloads/pigeon-<run_id>.
+const pigeonSubject = "spiffe://example.com/system/aws/az1/cluster1/services/beagle/workloads/pigeon-01arz3ndektsv4rrffq69g5fav"
+
+func workloadToken(sub string) func(*tokenlib.TokenWrapper) {
+	return func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("workload").SetSubject(sub)
+	}
+}
+
+// "*" admits service callers only. A pigeon workload minted under an
+// otherwise-admitted service must be denied by "*", while the service itself
+// stays admitted.
+func TestAuthorizerStarDoesNotAdmitWorkload(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(testMethodKey, []string{"*"})
+
+	pigeon := signedToken(t, key, workloadToken(pigeonSubject))
+	if _, err := a.Authorize(bearerCtx(pigeon), testMethod, nil); err == nil {
+		t.Fatal(`"*" must not admit a workload subject`)
+	}
+
+	svc := signedToken(t, key, serviceToken("beagle"))
+	if _, err := a.Authorize(bearerCtx(svc), testMethod, nil); err != nil {
+		t.Fatalf(`"*" must still admit a service subject, got: %v`, err)
+	}
+}
+
+// A workload is admitted by a pattern that names /workloads/ explicitly.
+func TestAuthorizerNamedWorkloadPatternAdmitsWorkload(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(testMethodKey, []string{"beagle/workloads/pigeon-[a-z0-9]+"})
+
+	pigeon := signedToken(t, key, workloadToken(pigeonSubject))
+	if _, err := a.Authorize(bearerCtx(pigeon), testMethod, nil); err != nil {
+		t.Fatalf("named workload pattern must admit the pigeon, got: %v", err)
+	}
+}
+
+// PigeonServicePath admits every pigeon and nothing else: not the parent
+// service, not another workload kind, not a pigeon run id with uppercase.
+func TestPigeonServicePathMatchesPigeonsOnly(t *testing.T) {
+	re := regexp.MustCompile("^(?:" + PigeonServicePath + ")$")
+	for _, p := range []string{"beagle/workloads/pigeon-01arz3ndektsv4rrffq69g5fav", "llmproxy/workloads/pigeon-0000"} {
+		if !re.MatchString(p) {
+			t.Errorf("PigeonServicePath must match %q", p)
+		}
+	}
+	for _, p := range []string{"beagle", "beagle/workloads/agent-42", "beagle/workloads/pigeon-01ARZ3", "beagle/extra/workloads/pigeon-01arz3"} {
+		if re.MatchString(p) {
+			t.Errorf("PigeonServicePath must not match %q", p)
+		}
+	}
+}
+
+// PigeonServicePathFor scopes the pattern to one parent service, and quotes the
+// parent so a dot in the name is literal.
+func TestPigeonServicePathForScopesToParent(t *testing.T) {
+	re := regexp.MustCompile("^(?:" + PigeonServicePathFor("beagle") + ")$")
+	if !re.MatchString("beagle/workloads/pigeon-01arz3ndektsv4rrffq69g5fav") {
+		t.Error("PigeonServicePathFor(beagle) must match a beagle pigeon")
+	}
+	if re.MatchString("llmproxy/workloads/pigeon-01arz3ndektsv4rrffq69g5fav") {
+		t.Error("PigeonServicePathFor(beagle) must not match another parent's pigeon")
+	}
+	dotted := regexp.MustCompile("^(?:" + PigeonServicePathFor("a.b") + ")$")
+	if dotted.MatchString("axb/workloads/pigeon-01arz3") {
+		t.Error("PigeonServicePathFor must quote the parent: a.b must not match axb")
+	}
+}
+
+// PigeonServicePath used as an auth_services pattern admits a pigeon workload
+// end to end, through the same Authorize path a generated wrapper uses.
+func TestAuthorizerPigeonServicePathAdmitsPigeon(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(testMethodKey, []string{PigeonServicePath})
+
+	pigeon := signedToken(t, key, workloadToken(pigeonSubject))
+	if _, err := a.Authorize(bearerCtx(pigeon), testMethod, nil); err != nil {
+		t.Fatalf("PigeonServicePath must admit a pigeon, got: %v", err)
 	}
 }
 

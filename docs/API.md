@@ -685,7 +685,9 @@ emits as the X509 URI SAN and what the generated go/rust/java peer verifiers
 require (parsed via sys/spiffe; `SubjectKind == Service`, trust domain equal,
 service label equal). S2S `auth_services` checks match on the
 location-agnostic `service_path()` (the bare service label, location tiers
-stripped), so the same service matches in any cloud/account/az/cluster.
+stripped), so the same service matches in any cloud/account/az/cluster. A `"*"`
+pattern admits service subjects only; a workload subject matches only a pattern
+that names `/workloads/` (see `PIGEON_SERVICE_PATH` in docs/USER.md).
 
 **Token claims.** The SPIFFE ID is *derived* from claims, never carried as a
 claim: `namespace` is the authorization-tree path; `sub` is the stable

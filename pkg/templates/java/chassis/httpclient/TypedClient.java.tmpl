@@ -116,11 +116,13 @@ public class TypedClient {
         int maxAttempts = maxAttemptsForMethod("GET", retryConfig);
 
         ProtoException lastError = new ProtoException(ProtoException.INTERNAL, "Request failed: no attempts made");
+        long retryAfterMs = 0;
 
         for (int attempt = 0; attempt < maxAttempts; attempt++) {
             if (attempt > 0) {
-                // Calculate backoff and wait
-                long backoffMs = calculateBackoffMs(retryConfig, attempt - 1);
+                // Calculate backoff and wait; a Retry-After from the peer is a floor
+                long backoffMs = Math.max(calculateBackoffMs(retryConfig, attempt - 1), retryAfterMs);
+                retryAfterMs = 0;
                 log.debug("Retrying GET {}, attempt {}/{} after {}ms", url, attempt + 1, maxAttempts, backoffMs);
                 try {
                     Thread.sleep(backoffMs);
@@ -158,6 +160,7 @@ public class TypedClient {
                     lastError = statusCodeToException(response.statusCode());
 
                     if (shouldRetry && attempt < maxAttempts - 1) {
+                        retryAfterMs = parseRetryAfterMs(response.headers().firstValue("Retry-After").orElse(""));
                         continue;
                     }
                     throw lastError;
@@ -391,6 +394,19 @@ public class TypedClient {
                 .addRetryableStatusCodes(503)
                 .addRetryableStatusCodes(504)
                 .build();
+    }
+
+    /**
+     * Reads a Retry-After header given as delta-seconds. Returns 0 when the header
+     * is absent, negative or not a number of seconds.
+     */
+    private static long parseRetryAfterMs(String value) {
+        try {
+            long secs = Long.parseLong(value.trim());
+            return secs <= 0 ? 0 : Math.min(secs, Long.MAX_VALUE / 1000) * 1000;
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     /**

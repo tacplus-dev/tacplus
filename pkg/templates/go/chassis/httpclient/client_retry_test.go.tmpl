@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+
+package httpclient
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// A 429 carries Retry-After: the peer is asking callers to wait. A GET that
+// receives one must not be sent again before that delay, so a 30 s Retry-After
+// under a 2 s caller deadline is one request, not the four the backoff schedule
+// would otherwise send within about a second (issue #36).
+func TestDoGetDoesNotResendBeforeRetryAfter(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := DoGet(ctx, srv.Client(), srv.URL, func(b []byte) (*string, error) { return nil, nil }, defaultRetryConfig())
+	if err == nil {
+		t.Fatal("DoGet against a 429 must return an error")
+	}
+	if got := hits.Load(); got != 1 {
+		t.Errorf("GET sent %d times inside the 2 s deadline; Retry-After: 30 must hold the retry back, want 1", got)
+	}
+}
+
+// Without Retry-After the retry schedule is unchanged: a 503 is still retried
+// until the attempts run out.
+func TestDoGetStillRetriesWithoutRetryAfter(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	_, err := DoGet(context.Background(), srv.Client(), srv.URL, func(b []byte) (*string, error) { return nil, nil }, defaultRetryConfig())
+	if err == nil {
+		t.Fatal("DoGet against a 503 must return an error")
+	}
+	if got := hits.Load(); got != 4 {
+		t.Errorf("GET sent %d times; a 503 without Retry-After keeps the schedule of 4 attempts, want 4", got)
+	}
+}

@@ -2728,6 +2728,7 @@ async fn tls_cert_stream_loop(
     let mut init_attempts: u32 = 0;
     loop {
         let waiting_for_first = ready_tx.is_some();
+        let seen = service_im::credential_generation();
         let retry = match run_tls_cert_stream(
             conn.clone(), &service_label, &instance_id, &handler_slot,
             token_provider.clone(), &mut ready_tx,
@@ -2767,7 +2768,7 @@ async fn tls_cert_stream_loop(
         // stream renews the serving certificate, so a stuck credential costs the
         // service its TLS as well as its authentication.
         if let Some(reason) = retry.as_deref() {
-            service_im::note_if_credential_rejection(reason).await;
+            service_im::note_if_credential_rejection(reason, seen).await;
         }
         if waiting_for_first && ready_tx.is_some() {
             init_attempts += 1;
@@ -3051,6 +3052,7 @@ async fn smb_cert_stream_loop(
     let mut init_attempts: u32 = 0;
     loop {
         let waiting_for_first = ready_tx.is_some();
+        let seen = service_im::credential_generation();
         let retry = match run_smb_cert_stream(
             conn.clone(), &service_label, &instance_id, &handler,
             token_provider.clone(), &mut ready_tx,
@@ -3083,7 +3085,7 @@ async fn smb_cert_stream_loop(
         // the SAME cached token and never re-mints, so the member never rejoins
         // its peer mesh. Mirrors tls_cert_stream_loop above.
         if let Some(reason) = retry.as_deref() {
-            service_im::note_if_credential_rejection(reason).await;
+            service_im::note_if_credential_rejection(reason, seen).await;
         }
         if waiting_for_first && ready_tx.is_some() {
             init_attempts += 1;

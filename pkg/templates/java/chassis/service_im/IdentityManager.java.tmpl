@@ -537,8 +537,6 @@ public class IdentityManager implements AutoCloseable {
             new java.util.concurrent.atomic.AtomicInteger(0);
     private static final java.util.concurrent.atomic.AtomicInteger REJECTION_GENERATION =
             new java.util.concurrent.atomic.AtomicInteger(1);
-    private static final java.util.concurrent.atomic.AtomicInteger LAST_COUNTED_GENERATION =
-            new java.util.concurrent.atomic.AtomicInteger(0);
 
     /**
      * Rejections in a row before the service reports itself unhealthy.
@@ -579,17 +577,29 @@ public class IdentityManager implements AutoCloseable {
                 || m.contains("token validation failed");
     }
 
-    /** Drops the cached credentials so the next call re-mints. */
-    public static void noteCredentialRejection() {
-        // Count rejected GENERATIONS, not rejections: a service runs several
-        // loops on one identity, and an authority restart fails them all with
-        // the SAME stale token. Counting raw rejections would cross the
-        // threshold on the first restart.
-        int gen = REJECTION_GENERATION.get();
-        if (LAST_COUNTED_GENERATION.getAndSet(gen) != gen) {
-            CONSECUTIVE_REJECTIONS.incrementAndGet();
+    /**
+     * The credential generation a call must read BEFORE it is sent, and pass
+     * back to {@link #noteIfCredentialRejection} if the call is rejected.
+     */
+    public static int credentialGeneration() {
+        return REJECTION_GENERATION.get();
+    }
+
+    /**
+     * Drops the cached credentials so the next call re-mints. {@code seen} is the
+     * generation the rejected call read before it was sent.
+     *
+     * Only the first rejection of a generation counts and invalidates: a service
+     * runs several loops on one identity, and an authority restart fails them all
+     * with the SAME stale token. A rejection whose generation has already moved on
+     * is a token another loop's re-mint replaced, so it is dropped here and the
+     * next call reads the new generation.
+     */
+    public static void noteCredentialRejection(int seen) {
+        if (!REJECTION_GENERATION.compareAndSet(seen, seen + 1)) {
+            return;
         }
-        REJECTION_GENERATION.incrementAndGet();
+        CONSECUTIVE_REJECTIONS.incrementAndGet();
 
         Runnable r;
         synchronized (AUTH_RECOVERY_LOCK) {
@@ -602,9 +612,9 @@ public class IdentityManager implements AutoCloseable {
     }
 
     /** Invalidates when the error looks like a rejection. Returns true if it did. */
-    public static boolean noteIfCredentialRejection(Throwable t) {
+    public static boolean noteIfCredentialRejection(Throwable t, int seen) {
         if (isCredentialRejection(t)) {
-            noteCredentialRejection();
+            noteCredentialRejection(seen);
             return true;
         }
         return false;

@@ -14,5 +14,5 @@ pub mod cloud_minter;
 pub mod cloud_detect;
 pub mod aws_sigv4;
 
-pub use auth_recovery::{credentials_degraded, is_credential_rejection, note_credential_accepted, note_credential_rejection, note_if_credential_rejection};
+pub use auth_recovery::{credential_generation, credentials_degraded, is_credential_rejection, note_credential_accepted, note_credential_rejection, note_if_credential_rejection};
 pub use manager::{IdentityManager, TokenMinterNotConfigured};

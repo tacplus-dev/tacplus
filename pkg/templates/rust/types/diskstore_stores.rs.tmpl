@@ -40,7 +40,7 @@ pub fn load_{{.StoreName}}(base: &Path, ns: &str) -> diskstore::Result<Option<{{
     match diskstore::read_snapshot(&path)? {
         Some(bytes) => {
             let msg = {{.FromJsonPath}}(&bytes).map_err(|e| diskstore::DiskStoreError::codec(e))?;
-            msg.validate().map_err(|e| diskstore::DiskStoreError::validation_failed(e))?;
+            msg.validate_at_rest().map_err(|e| diskstore::DiskStoreError::validation_failed(e))?;
             Ok(Some(msg))
         }
         None => Ok(None),
@@ -101,7 +101,7 @@ pub fn decode_{{.StoreName}}(rec: &diskstore::Record) -> diskstore::Result<Optio
     let bytes =
         serde_json::to_vec(payload).map_err(|e| diskstore::DiskStoreError::codec(e.to_string()))?;
     let msg = {{.FromJsonPath}}(&bytes).map_err(|e| diskstore::DiskStoreError::codec(e))?;
-    msg.validate().map_err(|e| diskstore::DiskStoreError::validation_failed(e))?;
+    msg.validate_at_rest().map_err(|e| diskstore::DiskStoreError::validation_failed(e))?;
     Ok(Some(msg))
 }
 {{end}}{{end}}

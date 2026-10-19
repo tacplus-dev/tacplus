@@ -31,7 +31,7 @@ func TestRustAssertRequiredZeroCheckIsTypeCorrect(t *testing.T) {
 
 	var b strings.Builder
 	for _, f := range fields {
-		if err := generateFieldValidation(&b, f, msg, nil); err != nil {
+		if err := generateFieldValidation(&b, f, msg, nil, false); err != nil {
 			t.Fatalf("generateFieldValidation(%s): %v", f.Name, err)
 		}
 	}

@@ -32,7 +32,7 @@ type javaDiskStore struct {
 	HelpersFqn string // fully-qualified Helpers class, e.g. com...types.sys.foo.Helpers
 	ToJsonFn   string // Helpers method name, e.g. verifyingKeyToJson
 	FromJsonFn string // Helpers method name, e.g. verifyingKeyFromJson
-	ValidateFn string // Helpers method name, e.g. validateVerifyingKey
+	ValidateFn string // Helpers at-rest method name, e.g. validateVerifyingKeyAtRest
 	KeyGetter  string // getter for the collection_index (store_key) field, e.g. getKid
 
 	// SnapshotOnly is true when the store has no store_key field: emit UC1
@@ -114,7 +114,7 @@ func generateJavaDiskStore(config *tactype.Config, protoDir, srcDir string) erro
 				HelpersFqn:       typesPackage + ".Helpers",
 				ToJsonFn:         lower + "ToJson",
 				FromJsonFn:       lower + "FromJson",
-				ValidateFn:       "validate" + msg.Name,
+				ValidateFn:       "validate" + msg.Name + "AtRest",
 				KeyGetter:        keyGetter,
 				SnapshotOnly:     snapshotOnly,
 				ConstName:        strings.ToUpper(strutil.ToSnakeCase(msg.Name)),

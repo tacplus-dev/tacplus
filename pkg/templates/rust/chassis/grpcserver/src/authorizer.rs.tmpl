@@ -12,7 +12,7 @@
 //! - **JwkCache** — watches JWK verifying keys, provides key lookup
 //! - **Authorizer** — composes JwkCache with a service name for standard S2S/C2S auth policy
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
@@ -145,6 +145,16 @@ impl JwkCache {
 ///
 /// For custom auth policies (e.g. gateway proxy where aud != service_name),
 /// use `jwk_cache()` directly.
+/// Matches the service path of any ephemeral pigeon workload,
+/// `<service>/workloads/pigeon-<run_id>`. A workload is admitted only by a
+/// pattern that names `/workloads/`, so "*" never admits one.
+pub const PIGEON_SERVICE_PATH: &str = "[^/]+/workloads/pigeon-[a-z0-9]+";
+
+/// `PIGEON_SERVICE_PATH` scoped to the pigeons minted under one parent service.
+pub fn pigeon_service_path_for(service: &str) -> String {
+    format!("{}/workloads/pigeon-[a-z0-9]+", regex::escape(service))
+}
+
 pub struct Authorizer {
     jwk_cache: Arc<JwkCache>,
     /// Per-method auth_services policy, keyed by the SERVICE-QUALIFIED method
@@ -155,6 +165,8 @@ pub struct Authorizer {
     /// auth_services; keyed by the bare name, whichever registered last would
     /// silently overwrite the other and decide authorization for both.
     method_auth_patterns: RwLock<HashMap<String, Vec<regex::Regex>>>,
+    /// Methods whose auth_services names "*": admits service callers only.
+    method_auth_any_service: RwLock<HashSet<String>>,
     /// Per-method auth_actors policy, keyed exactly as `method_auth_patterns`
     /// is. Registering nothing is meaningful: `authorize_grpc` rejects any
     /// token carrying `act` on a method with no entry here, so an rpc that
@@ -190,6 +202,7 @@ impl Authorizer {
         Self {
             jwk_cache,
             method_auth_patterns: RwLock::new(HashMap::new()),
+            method_auth_any_service: RwLock::new(HashSet::new()),
             method_actor_patterns: RwLock::new(HashMap::new()),
         }
     }
@@ -200,6 +213,7 @@ impl Authorizer {
         Self {
             jwk_cache: Arc::new(JwkCache::seeded(seed)),
             method_auth_patterns: RwLock::new(HashMap::new()),
+            method_auth_any_service: RwLock::new(HashSet::new()),
             method_actor_patterns: RwLock::new(HashMap::new()),
         }
     }
@@ -207,7 +221,9 @@ impl Authorizer {
     /// Registers allowed caller patterns for a method. Patterns are RE2 regexes
     /// matched against the LOCATION-AGNOSTIC service path from
     /// `Token::service_path()` (e.g. `mcp` or `mcp/workloads/agent-42`).
-    /// "*" is shorthand for "match any caller".
+    /// "*" is shorthand for "any service caller": it admits service subjects
+    /// only. A workload subject is admitted only by a pattern that names
+    /// `/workloads/` itself.
     ///
     /// `method_key` is the service-qualified identifier "pkg.Service/Method"
     /// produced by [`qualified_method_key`], not the bare RPC name.
@@ -215,13 +231,15 @@ impl Authorizer {
         if patterns.is_empty() {
             return;
         }
+        let mut any_service = false;
         let compiled: Vec<regex::Regex> = patterns
             .iter()
-            .map(|p| {
+            .filter_map(|p| {
                 if *p == "*" {
-                    regex::Regex::new(".*").unwrap()
+                    any_service = true;
+                    None
                 } else {
-                    regex::Regex::new(&format!("^(?:{})$", p)).unwrap()
+                    Some(regex::Regex::new(&format!("^(?:{})$", p)).unwrap())
                 }
             })
             .collect();
@@ -229,6 +247,12 @@ impl Authorizer {
             .write()
             .unwrap()
             .insert(method_key.to_string(), compiled);
+        let mut any = self.method_auth_any_service.write().unwrap();
+        if any_service {
+            any.insert(method_key.to_string());
+        } else {
+            any.remove(method_key);
+        }
     }
 
     /// Registers the delegate identities allowed to call a method on another
@@ -470,7 +494,9 @@ impl Authorizer {
                     service_path, method
                 ))
             })?;
-            let matched = allowed.iter().any(|p| p.is_match(&service_path));
+            let any_service = sub_type == "service"
+                && self.method_auth_any_service.read().unwrap().contains(&qualified_method_key(full_method));
+            let matched = any_service || allowed.iter().any(|p| p.is_match(&service_path));
             if !matched {
                 return Err(AuthorizerError::permission_denied(format!(
                     "service \"{}\" not authorized for \"{}\"",
@@ -977,6 +1003,86 @@ mod authorizer_behavior_tests {
             .await
             .err()
             .expect("service not in auth_services must be denied");
+    }
+
+    // -----------------------------------------------------------------
+    // auth_services: workloads (ephemeral pigeons) are not service callers
+    // -----------------------------------------------------------------
+
+    // The SPIFFE id MintWorkload gives a pigeon minted under beagle; its
+    // service path is beagle/workloads/pigeon-<run_id>.
+    const PIGEON_SUBJECT: &str = "spiffe://example.com/system/aws/az1/cluster1/services/beagle/workloads/pigeon-01arz3ndektsv4rrffq69g5fav";
+
+    fn workload_token(key: &keys::ImmutableKey, sub: &str) -> String {
+        signed_token(key, now_plus(3600), SERVICE_NAME, |tok| {
+            tok.set_sub_type("workload").expect("sub_type");
+            tok.set_subject(sub).expect("subject");
+        })
+    }
+
+    // "*" admits service callers only: a pigeon minted under an otherwise
+    // admitted service is denied, and the service itself stays admitted.
+    #[tokio::test]
+    async fn star_does_not_admit_workload() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        a.set_method_auth(METHOD_KEY, &["*"]);
+        let pigeon = workload_token(&key, PIGEON_SUBJECT);
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&pigeon), &empty_md())
+            .await
+            .err()
+            .expect("\"*\" must not admit a workload subject");
+        let svc = service_token(&key, "beagle");
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&svc), &empty_md())
+            .await
+            .expect("\"*\" must still admit a service subject");
+    }
+
+    // A workload is admitted by a pattern that names /workloads/ explicitly.
+    #[tokio::test]
+    async fn named_workload_pattern_admits_workload() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        a.set_method_auth(METHOD_KEY, &["beagle/workloads/pigeon-[a-z0-9]+"]);
+        let pigeon = workload_token(&key, PIGEON_SUBJECT);
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&pigeon), &empty_md())
+            .await
+            .expect("named workload pattern must admit the pigeon");
+    }
+
+    // PIGEON_SERVICE_PATH used as an auth_services pattern admits a pigeon.
+    #[tokio::test]
+    async fn pigeon_service_path_admits_pigeon() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        a.set_method_auth(METHOD_KEY, &[PIGEON_SERVICE_PATH]);
+        let pigeon = workload_token(&key, PIGEON_SUBJECT);
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&pigeon), &empty_md())
+            .await
+            .expect("PIGEON_SERVICE_PATH must admit a pigeon");
+    }
+
+    // PIGEON_SERVICE_PATH admits every pigeon and nothing else.
+    #[test]
+    fn pigeon_service_path_matches_pigeons_only() {
+        let re = regex::Regex::new(&format!("^(?:{})$", PIGEON_SERVICE_PATH)).unwrap();
+        for p in ["beagle/workloads/pigeon-01arz3ndektsv4rrffq69g5fav", "llmproxy/workloads/pigeon-0000"] {
+            assert!(re.is_match(p), "PIGEON_SERVICE_PATH must match {p}");
+        }
+        for p in ["beagle", "beagle/workloads/agent-42", "beagle/workloads/pigeon-01ARZ3", "beagle/extra/workloads/pigeon-01arz3"] {
+            assert!(!re.is_match(p), "PIGEON_SERVICE_PATH must not match {p}");
+        }
+    }
+
+    // pigeon_service_path_for scopes to one parent and quotes it, so a dot in
+    // the name is literal.
+    #[test]
+    fn pigeon_service_path_for_scopes_to_parent() {
+        let re = regex::Regex::new(&format!("^(?:{})$", pigeon_service_path_for("beagle"))).unwrap();
+        assert!(re.is_match("beagle/workloads/pigeon-01arz3ndektsv4rrffq69g5fav"));
+        assert!(!re.is_match("llmproxy/workloads/pigeon-01arz3ndektsv4rrffq69g5fav"));
+        let dotted = regex::Regex::new(&format!("^(?:{})$", pigeon_service_path_for("a.b"))).unwrap();
+        assert!(!dotted.is_match("axb/workloads/pigeon-01arz3"));
     }
 
     // -----------------------------------------------------------------

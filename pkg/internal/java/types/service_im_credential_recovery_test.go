@@ -113,7 +113,7 @@ func TestJavaSubscriberInvalidatesRejectedCredential(t *testing.T) {
 	}
 	// It belongs on the retry path, before the sleep — not after it.
 	noteIdx := strings.Index(sub, ".noteIfCredentialRejection(e, seen);")
-	sleepIdx := strings.Index(sub, "Thread.sleep(backoff);")
+	sleepIdx := strings.Index(sub, "Thread.sleep({{$.ReconnectBackoffFQN}}.jitterMs(backoff));")
 	if sleepIdx < 0 || noteIdx > sleepIdx {
 		t.Fatal("noteIfCredentialRejection must run before the backoff sleep")
 	}

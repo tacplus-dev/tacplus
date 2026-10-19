@@ -194,7 +194,7 @@ func TestRustSubscriberSendsBearerTokenAndOuterLoopBacksOff(t *testing.T) {
 		"subscribe::aegis_event_stream::TokenSource",
 		"sub_token_source.clone(),",
 		"let mut outer_backoff = servicemanager::RECONNECT_INITIAL_BACKOFF;",
-		"tokio::time::sleep(outer_backoff)",
+		"tokio::time::sleep(servicemanager::jitter_reconnect_backoff(outer_backoff))",
 		"outer_backoff = servicemanager::next_reconnect_backoff(outer_backoff);",
 	} {
 		if !strings.Contains(rendered, want) {
@@ -208,7 +208,7 @@ func TestRustSubscriberSendsBearerTokenAndOuterLoopBacksOff(t *testing.T) {
 	loopIdx := strings.Index(rendered, "let mut outer_backoff = servicemanager::RECONNECT_INITIAL_BACKOFF;")
 	resolveIdx := strings.Index(rendered[loopIdx:], `sub_sm.resolve_service("eventbus")`)
 	subscribeIdx := strings.Index(rendered[loopIdx:], "subscriber.subscribe(handler_fn.clone())")
-	sleepIdx := strings.Index(rendered[loopIdx:], "tokio::time::sleep(outer_backoff)")
+	sleepIdx := strings.Index(rendered[loopIdx:], "tokio::time::sleep(servicemanager::jitter_reconnect_backoff(outer_backoff))")
 	if resolveIdx < 0 || subscribeIdx < 0 || sleepIdx < 0 ||
 		!(resolveIdx < subscribeIdx && subscribeIdx < sleepIdx) {
 		t.Fatalf("outer loop must resolve, subscribe, then back off before re-resolving:\n%s", rendered)

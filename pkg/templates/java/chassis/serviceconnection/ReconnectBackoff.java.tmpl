@@ -29,4 +29,9 @@ public final class ReconnectBackoff {
     public static long next(long currentMs) {
         return Backoff.nextReconnectBackoff(Duration.ofMillis(currentMs)).toMillis();
     }
+
+    /** Returns the milliseconds to sleep for a schedule step of {@code currentMs}: plus up to a quarter. */
+    public static long jitterMs(long currentMs) {
+        return Backoff.jitter(Duration.ofMillis(currentMs)).toMillis();
+    }
 }

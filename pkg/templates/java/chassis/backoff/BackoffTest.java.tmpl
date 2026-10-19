@@ -9,7 +9,9 @@ import io.grpc.StatusRuntimeException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 // Pins the Java reconnect backoff to the Rust chassis (backoff.rs): 500ms first
@@ -54,8 +56,29 @@ public class BackoffTest {
         for (Duration s : slept) {
             sleptMillis.add(s.toMillis());
         }
-        check("slept the reconnect schedule between attempts, got " + sleptMillis,
-                sleptMillis.equals(Arrays.asList(500L, 1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L, 30_000L)));
+        List<Long> schedule8 = Arrays.asList(500L, 1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L, 30_000L);
+        boolean inBand = sleptMillis.size() == schedule8.size();
+        for (int i = 0; inBand && i < schedule8.size(); i++) {
+            long step = schedule8.get(i);
+            inBand = sleptMillis.get(i) >= step && sleptMillis.get(i) <= step + step / 4;
+        }
+        check("slept the reconnect schedule (plus up to a quarter) between attempts, got " + sleptMillis, inBand);
+
+        // 40 clients lose the same peer at the same instant. On the second step
+        // they must not all sleep the same delay, or they dial together.
+        Set<Long> secondStep = new HashSet<>();
+        for (int client = 0; client < 40; client++) {
+            List<Duration> clientSlept = new ArrayList<>();
+            AtomicInteger clientCalls = new AtomicInteger();
+            Backoff.retryWhileUnavailable(() -> {
+                if (clientCalls.incrementAndGet() <= 2) {
+                    throw Status.UNAVAILABLE.withDescription("Connection refused").asRuntimeException();
+                }
+                return "config";
+            }, clientSlept::add);
+            secondStep.add(clientSlept.get(1).toMillis());
+        }
+        check("40 clients at one step must not all sleep the same delay, got " + secondStep, secondStep.size() > 1);
 
         // Any other status is fatal: rethrown on the first attempt, no sleep. The
         // sleeper aborts the loop if it is ever reached, so a regression that

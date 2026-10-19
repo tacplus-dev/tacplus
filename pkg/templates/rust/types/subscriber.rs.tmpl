@@ -190,7 +190,7 @@ impl Subscriber {
             match self.subscribe_once(&handler, &opts).await {
                 Ok(()) => {
                     tracing::warn!("{{.SourcePackage}}.{{.SourceField}} subscription stream ended, reconnecting in {}ms", MIN_BACKOFF.as_millis());
-                    tokio::time::sleep(MIN_BACKOFF).await;
+                    tokio::time::sleep(servicemanager::jitter_reconnect_backoff(MIN_BACKOFF)).await;
                     backoff = MIN_BACKOFF;
                 }
                 Err(e) => {
@@ -237,7 +237,7 @@ impl Subscriber {
                         backoff_ms = backoff.as_millis(),
                         "{{.SourcePackage}}.{{.SourceField}} subscription failed, retrying"
                     );
-                    tokio::time::sleep(backoff).await;
+                    tokio::time::sleep(servicemanager::jitter_reconnect_backoff(backoff)).await;
                     backoff = std::cmp::min(backoff * 2, MAX_BACKOFF);
                 }
             }

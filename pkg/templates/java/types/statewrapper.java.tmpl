@@ -661,8 +661,18 @@ public class StateClient implements AutoCloseable {
         }
         final java.util.concurrent.BlockingQueue<Object> queue = new java.util.concurrent.LinkedBlockingQueue<>();
         final Object done = new Object();
+        final java.util.concurrent.atomic.AtomicReference<io.grpc.stub.ClientCallStreamObserver<{{$.EventBusSupportOuterClass}}.SubscribeRequest>> flow = new java.util.concurrent.atomic.AtomicReference<>();
         io.grpc.stub.StreamObserver<{{$.EventBusSupportOuterClass}}.SubscribeRequest> outbound = stateAsyncStub.subscribeTo{{.FieldPascal}}(
-                new io.grpc.stub.StreamObserver<{{.SubscribeRecordType}}>() {
+                new io.grpc.stub.ClientResponseObserver<{{$.EventBusSupportOuterClass}}.SubscribeRequest, {{.SubscribeRecordType}}>() {
+                    @Override
+                    public void beforeStart(io.grpc.stub.ClientCallStreamObserver<{{$.EventBusSupportOuterClass}}.SubscribeRequest> requestStream) {
+                        // Backpressure: one record is requested up front and the
+                        // next only when the consumer takes the last one, so the
+                        // broker is paced by consumption rather than by the wire.
+                        requestStream.disableAutoRequestWithInitial(1);
+                        flow.set(requestStream);
+                    }
+
                     @Override
                     public void onNext({{.SubscribeRecordType}} value) {
                         queue.add(value);
@@ -714,6 +724,7 @@ public class StateClient implements AutoCloseable {
                 }
                 {{.SubscribeRecordType}} value = ({{.SubscribeRecordType}}) next;
                 next = null;
+                flow.get().request(1);
                 return value;
             }
         };

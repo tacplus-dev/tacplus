@@ -1,0 +1,8 @@
+# Managed by tacplus — do not edit IDs manually.
+services:
+    - name: agentsensor
+      id: 1
+    - name: egressmint
+      id: 2
+    - name: eventbus
+      id: 3

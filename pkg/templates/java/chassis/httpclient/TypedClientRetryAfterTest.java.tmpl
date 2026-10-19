@@ -1,0 +1,54 @@
+package {{.ChassisBase}}.httpclient;
+
+import {{.TypesBase}}.sys.httpclient.Httpclient.HttpClientConfig;
+import com.sun.net.httpserver.HttpServer;
+import java.net.InetSocketAddress;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+// A 429 carries Retry-After: the peer is asking callers to wait. A GET that
+// receives one must not be sent again before that delay, so a 30 s Retry-After
+// under a 2 s caller deadline is one request, not the four the backoff schedule
+// would otherwise send within about a second (issue #36).
+public class TypedClientRetryAfterTest {
+    public static void main(String[] args) throws Exception {
+        AtomicInteger hits = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            hits.incrementAndGet();
+            exchange.getResponseHeaders().add("Retry-After", "30");
+            exchange.sendResponseHeaders(429, -1);
+            exchange.close();
+        });
+        server.start();
+        try {
+            TypedClient client = new TypedClient(HttpClientConfig.getDefaultInstance());
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/";
+            CompletableFuture<Object> call = new CompletableFuture<>();
+            Thread worker = new Thread(() -> {
+                try {
+                    call.complete(client.doGet(url, body -> body));
+                } catch (Exception e) {
+                    call.completeExceptionally(e);
+                }
+            });
+            // The worker sleeps out the Retry-After on a fixed build; it must not hold the JVM open.
+            worker.setDaemon(true);
+            worker.start();
+            try {
+                call.get(2, TimeUnit.SECONDS);
+            } catch (Exception expected) {
+                // The 429 surfaces as an error, or the deadline elapses first; the count decides.
+            }
+            if (hits.get() != 1) {
+                System.err.println("FAIL: GET sent " + hits.get()
+                        + " times inside the 2 s deadline; Retry-After: 30 must hold the retry back, want 1");
+                System.exit(1);
+            }
+            System.out.println("TypedClientRetryAfterTest: all checks passed");
+        } finally {
+            server.stop(0);
+        }
+    }
+}

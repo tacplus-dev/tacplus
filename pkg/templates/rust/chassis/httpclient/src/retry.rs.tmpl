@@ -9,6 +9,16 @@
 use {{.CrateBasePathUnderscore}}_types::sys::httpclient::RetryConfig as ProtoRetryConfig;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// Reads a Retry-After header given as delta-seconds. Returns zero when the value
+/// is not a whole number of seconds.
+pub fn parse_retry_after(value: &str) -> Duration {
+    value
+        .trim()
+        .parse::<u64>()
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::ZERO)
+}
+
 /// Retry configuration wrapping proto config
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
@@ -171,6 +181,15 @@ mod tests {
         assert_eq!(config.max_backoff, Duration::from_millis(10000));
         assert_eq!(config.backoff_multiplier, 3.0);
         assert_eq!(config.retryable_status_codes, vec![429, 503]);
+    }
+
+    #[test]
+    fn test_parse_retry_after_delta_seconds() {
+        assert_eq!(parse_retry_after("30"), Duration::from_secs(30));
+        assert_eq!(parse_retry_after(" 5 "), Duration::from_secs(5));
+        assert_eq!(parse_retry_after("0"), Duration::ZERO);
+        assert_eq!(parse_retry_after("-1"), Duration::ZERO);
+        assert_eq!(parse_retry_after("Wed, 21 Oct 2015 07:28:00 GMT"), Duration::ZERO);
     }
 
     #[test]

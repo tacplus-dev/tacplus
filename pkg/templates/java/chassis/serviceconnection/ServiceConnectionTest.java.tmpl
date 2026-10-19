@@ -8,6 +8,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -97,7 +98,9 @@ public class ServiceConnectionTest {
             sc.setEndpointHealthForTest(InstanceStatus.INSTANCE_STATUS_DEGRADED);
             expect(required.firstDown().isEmpty(), "DEGRADED peer still serves");
             sc.setEndpointHealthForTest(InstanceStatus.INSTANCE_STATUS_UNHEALTHY);
-            expect(required.firstDown().orElse("").equals("identity"), "UNHEALTHY peer must be down");
+            expect(required.firstDown().isEmpty(), "one UNHEALTHY report must not take the peer down");
+            expect(sc.isAvailableAt(Instant.now().plusSeconds(10)), "UNHEALTHY inside the 30s window must stay up");
+            expect(!sc.isAvailableAt(Instant.now().plusSeconds(31)), "UNHEALTHY past the 30s window must be down");
 
             sc.setEndpointHealthForTest(InstanceStatus.INSTANCE_STATUS_HEALTHY);
             AtomicBoolean up = new AtomicBoolean(false);

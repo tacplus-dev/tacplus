@@ -37,6 +37,8 @@ func TestStateWrapperTopicBoundaryUsesTopicRPCsNotWatchRPCs(t *testing.T) {
 		"stateAsyncStub.publishToEventStream(",
 		"EventbusSupport.PublishResponse publishToEventStream(Demo.SensorEvent value)",
 		"stateAsyncStub.subscribeToEventStream(",
+		"requestStream.disableAutoRequestWithInitial(1);",
+		"flow.get().request(1);",
 		"outbound.onNext(EventbusSupport.SubscribeRequest.getDefaultInstance());",
 		"public java.util.Iterator<Demo.DemoEventBusEventStreamSubscribeRecord> subscribeToEventStreamRecords()",
 		"final java.util.Iterator<Demo.DemoEventBusEventStreamSubscribeRecord> records = subscribeToEventStreamRecords();",
@@ -53,8 +55,6 @@ func TestStateWrapperTopicBoundaryUsesTopicRPCsNotWatchRPCs(t *testing.T) {
 		"stateStub.subscribeToEventStream(",
 		"watchEventStream",
 		"startWatchEventStream",
-		"ClientCallStreamObserver",
-		"ClientResponseObserver",
 	} {
 		if strings.Contains(rendered, unexpected) {
 			t.Fatalf("topic-only state wrapper rendered unexpected/dead contract %q:\n%s", unexpected, rendered)

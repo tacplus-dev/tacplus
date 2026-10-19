@@ -446,9 +446,11 @@ public class {{.ClientName}} {
         private final AtomicBoolean closed = new AtomicBoolean(false);
         private final StringBuilder partial = new StringBuilder();
         private volatile Throwable error;
+        private volatile WebSocket socket;
 
         @Override
         public void onOpen(WebSocket webSocket) {
+            this.socket = webSocket;
             webSocket.request(1);
         }
 
@@ -458,8 +460,11 @@ public class {{.ClientName}} {
             if (last) {
                 messages.offer(partial.toString());
                 partial.setLength(0);
+            } else {
+                // Fragments of one message are read through; a complete message
+                // is requested only once the consumer has taken the last one.
+                webSocket.request(1);
             }
-            webSocket.request(1);
             return CompletableFuture.completedFuture(null);
         }
 
@@ -478,7 +483,7 @@ public class {{.ClientName}} {
         String nextText(Duration timeout) {
             try {
                 String text = messages.poll(timeout.toMillis(), TimeUnit.MILLISECONDS);
-                if (text != null) return text;
+                if (text != null) return delivered(text);
                 if (error != null) {
                     throw new ProtoException(ProtoException.UNAVAILABLE, "W2S WebSocket receive failed: " + error.getMessage(), error);
                 }
@@ -491,7 +496,15 @@ public class {{.ClientName}} {
         }
 
         String pollText() {
-            return messages.poll();
+            String text = messages.poll();
+            return text == null ? null : delivered(text);
+        }
+
+        // Requests the next complete message only after the consumer has taken
+        // this one, so the listener holds at most one undelivered message.
+        private String delivered(String text) {
+            socket.request(1);
+            return text;
         }
 
         boolean isClosed() {

@@ -1,0 +1,49 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// The (spec.epoch_expiration) load fixture.
+//
+// Why this fixture exists: the generated disk loaders (DiskStores.load*, the
+// per-store Load/Decode helpers) re-run the full validator over stored state.
+// epoch_expiration is a write-time assertion (a future epoch, within a year).
+// A value written while valid must still load after its exp has passed, or a
+// service cannot restart once any stored record ages out. Lease is the store;
+// Expiry carries the epoch; lease_id is the paired control: a non-time
+// assertion that must still fail the load.
+
+syntax = "proto3";
+
+package epochload;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "epochload"};
+
+// LeaseService is the package's own server, which the store's label routes to.
+service LeaseService {
+  option (spec.service_s2s) = {label: "LeaseService"};
+
+  rpc Ping(PingRequest) returns (PingResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}
+
+message PingRequest {}
+
+message PingResponse {
+  // ready reports whether the lease service is serving.
+  bool ready = 1;
+}
+
+message Expiry {
+  // exp is the lease's Unix expiry. It is checked when written, not when read back.
+  int64 exp = 1 [(spec.epoch_expiration) = true];
+}
+
+message Lease {
+  option (spec.service_store) = {label: ["epochload"]};
+
+  // lease_id keys the row and must be present on load.
+  string lease_id = 1 [(spec.assert_required) = true, (spec.store_key) = true];
+
+  Expiry expiry = 2;
+}

@@ -36,6 +36,7 @@ type validatorUsage struct {
 // rustValidationTemplateData holds data for the validation template.
 type rustValidationTemplateData struct {
 	TypeName       string
+	Fn             string // "validate" or "validate_at_rest"
 	HasValidations bool
 	ValidationCode []string // Pre-computed validation code lines
 }
@@ -157,8 +158,24 @@ func trackValidatorUsage(msg model.Message, usage *validatorUsage) {
 	}
 }
 
+// generateMessageValidation writes the validate methods for a single message: the
+// strict validator, and the at-rest variant (validate_at_rest) that runs over
+// stored state on disk load.
 func generateMessageValidation(b *strings.Builder, msg model.Message, enums []model.Enum) error {
+	if err := writeMessageValidationFns(b, msg, enums, false); err != nil {
+		return err
+	}
+	return writeMessageValidationFns(b, msg, enums, true)
+}
+
+// writeMessageValidationFns writes one validator family. The at-rest variant is the
+// same validator without the time-relative assertions, because a stored value ages.
+func writeMessageValidationFns(b *strings.Builder, msg model.Message, enums []model.Enum, atRest bool) error {
 	typeName := toProstTypeName(msg.Name)
+	fnName := "validate"
+	if atRest {
+		fnName = "validate_at_rest"
+	}
 
 	// Check if there are any validations needed.
 	hasValidations := false
@@ -203,7 +220,7 @@ func generateMessageValidation(b *strings.Builder, msg model.Message, enums []mo
 			if len(field.Annotations) == 0 {
 				continue
 			}
-			if err := generateFieldValidation(&vb, field, msg, enums); err != nil {
+			if err := generateFieldValidation(&vb, field, msg, enums, atRest); err != nil {
 				return err
 			}
 		}
@@ -356,7 +373,7 @@ func generateMessageValidation(b *strings.Builder, msg model.Message, enums []mo
 				}
 				fmt.Fprintf(&vb, "// Validate %s message values\n", rustFieldName)
 				fmt.Fprintf(&vb, "for (key, val) in self.%s.iter() {\n", rustFieldName)
-				fmt.Fprintf(&vb, "val.validate_with_depth(depth + 1).map_err(|e| format!(\"field %s[{:?}] validation failed: {}\", key, e))?;\n", rustFieldName)
+				fmt.Fprintf(&vb, "val.%s_with_depth(depth + 1).map_err(|e| format!(\"field %s[{:?}] validation failed: {}\", key, e))?;\n", fnName, rustFieldName)
 				vb.WriteString("}\n")
 				continue
 			}
@@ -373,17 +390,17 @@ func generateMessageValidation(b *strings.Builder, msg model.Message, enums []mo
 				enumName := strutil.ToCamelCase(field.OneOfName)
 				variantName := strutil.ToCamelCase(field.Name)
 				fmt.Fprintf(&vb, "if let Some(%s::%s::%s(val)) = &self.%s {\n", moduleName, enumName, variantName, groupField)
-				fmt.Fprintf(&vb, "val.validate_with_depth(depth + 1).map_err(|e| format!(\"field %s validation failed: {}\", e))?;\n", rustFieldName)
+				fmt.Fprintf(&vb, "val.%s_with_depth(depth + 1).map_err(|e| format!(\"field %s validation failed: {}\", e))?;\n", fnName, rustFieldName)
 				vb.WriteString("}\n")
 			} else if field.IsRepeated {
 				vb.WriteString("s\n")
 				fmt.Fprintf(&vb, "for (i, val) in self.%s.iter().enumerate() {\n", rustFieldName)
-				fmt.Fprintf(&vb, "val.validate_with_depth(depth + 1).map_err(|e| format!(\"field %s[{}] validation failed: {}\", i, e))?;\n", rustFieldName)
+				fmt.Fprintf(&vb, "val.%s_with_depth(depth + 1).map_err(|e| format!(\"field %s[{}] validation failed: {}\", i, e))?;\n", fnName, rustFieldName)
 				vb.WriteString("}\n")
 			} else {
 				vb.WriteString("\n")
 				fmt.Fprintf(&vb, "if let Some(val) = &self.%s {\n", rustFieldName)
-				fmt.Fprintf(&vb, "val.validate_with_depth(depth + 1).map_err(|e| format!(\"field %s validation failed: {}\", e))?;\n", rustFieldName)
+				fmt.Fprintf(&vb, "val.%s_with_depth(depth + 1).map_err(|e| format!(\"field %s validation failed: {}\", e))?;\n", fnName, rustFieldName)
 				vb.WriteString("}\n")
 			}
 		}
@@ -397,6 +414,7 @@ func generateMessageValidation(b *strings.Builder, msg model.Message, enums []mo
 
 	data := rustValidationTemplateData{
 		TypeName:       typeName,
+		Fn:             fnName,
 		HasValidations: hasValidations,
 		ValidationCode: validationCode,
 	}
@@ -457,7 +475,7 @@ func writeRustOneofScalarMaxSize(b *strings.Builder, msg model.Message, field mo
 }
 
 // generateFieldValidation generates validation code for a single field's annotations
-func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Message, _enums []model.Enum) error {
+func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Message, _enums []model.Enum, atRest bool) error {
 	rustFieldName := escapeRustKeyword(strutil.ToSnakeCase(field.Name))
 
 	for _, annotationName := range model.SortedAnnotationNames(field.Annotations) {
@@ -713,6 +731,9 @@ func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Me
 			}
 
 		case "epoch_expiration":
+			if atRest {
+				break
+			}
 			fmt.Fprintf(b, "// Validate %s (epoch_expiration)\n", rustFieldName)
 			fmt.Fprintf(b, "if self.%s != 0 {\n", rustFieldName)
 			b.WriteString("let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;\n")

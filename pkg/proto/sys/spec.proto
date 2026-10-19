@@ -1888,6 +1888,7 @@ extend google.protobuf.FieldOptions {
   // epoch_expiration marks an int64 field as a Unix epoch expiration timestamp (seconds).
   // Collections only: 0 = no expiration; > 0 must be future and within 1 year.
   // TTL = epoch - now at write time; the state store auto-removes the entry on expiry.
+  // The check runs on write and on the wire, not on a disk load: stored data ages.
   // Placement validation: a scalar state-root field carrying this annotation is
   // REJECTED at generation time. CARVE-OUT (accepted-and-ignored, not validated):
   // an int64 inside a message used only as a SINGLETON boundary — detecting that

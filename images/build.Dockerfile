@@ -45,12 +45,12 @@ RUN case "$TARGETARCH" in \
        "https://repo1.maven.org/maven2/io/grpc/protoc-gen-grpc-java/${GRPC_JAVA_VERSION}/protoc-gen-grpc-java-${GRPC_JAVA_VERSION}-linux-${PROTOC_ARCH}.exe" \
     && chmod +x /opt/protoc/bin/protoc /opt/protoc/bin/protoc-gen-grpc-java \
     && mkdir -p /opt/just \
-    && curl -fsSL --retry 30 --retry-delay 5 \
+    && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/just.tar.gz \
        "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-${JUST_ARCH}-unknown-linux-musl.tar.gz" \
-       | tar -xz -C /opt/just just \
-    && curl -fsSL --retry 30 --retry-delay 5 \
+    && tar -xz -C /opt/just -f /tmp/just.tar.gz just && rm /tmp/just.tar.gz \
+    && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/gcloud.tar.gz \
        "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-${GCLOUD_VERSION}-linux-${GCLOUD_ARCH}.tar.gz" \
-       | tar -xz -C /opt
+    && tar -xz -C /opt -f /tmp/gcloud.tar.gz && rm /tmp/gcloud.tar.gz
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS go-tools
 ARG TARGETARCH

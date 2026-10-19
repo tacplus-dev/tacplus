@@ -35,6 +35,10 @@ const REBALANCE_THRESHOLD: f64 = 0.3;
 const PING_INTERVAL_SECS: u64 = 10;
 /// Default interval for re-evaluating the active connection (static mode).
 const REBALANCE_INTERVAL_SECS: u64 = 30;
+/// Consecutive health snapshots that must omit an endpoint before the pool closes it.
+/// The poller runs every 5s, so this is the same 30s as `FLEET_DOWN_AFTER`: one missed
+/// snapshot keeps the endpoint, and readiness, through it.
+const ABSENT_POLLS_BEFORE_CLOSE: u32 = 6;
 
 /// A managed connection pool to a single target service.
 ///
@@ -322,13 +326,23 @@ impl ServiceConnection {
             let target = ec.read().await.target.clone();
             if let Some(h) = incoming.get(&target) {
                 // Update health from state
-                let conn = ec.read().await;
+                let mut conn = ec.write().await;
+                conn.absent_polls = 0;
                 conn.update_health_from_state(h.status, h.p50_latency_us).await;
                 drop(conn);
                 kept.push(ec);
             } else {
-                let target = ec.read().await.target.clone();
-                info!(service = %self.service_id, target = %target, "closing removed endpoint");
+                // Absent. Kept, with its last health, until ABSENT_POLLS_BEFORE_CLOSE
+                // snapshots in a row omit it.
+                let mut conn = ec.write().await;
+                conn.absent_polls += 1;
+                if conn.absent_polls < ABSENT_POLLS_BEFORE_CLOSE {
+                    drop(conn);
+                    kept.push(ec);
+                } else {
+                    drop(conn);
+                    info!(service = %self.service_id, target = %target, "closing removed endpoint");
+                }
             }
         }
 
@@ -452,5 +466,66 @@ impl ChannelProvider {
             }),
             ChannelProviderSource::Static(channel) => Ok(channel.clone()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::readiness::tests::verifier;
+    use {{.CrateBasePathUnderscore}}_types::sys::host::host::Host;
+
+    /// A pool with one dialed endpoint at 127.0.0.1:1, reported HEALTHY.
+    async fn pool() -> ServiceConnection {
+        let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
+        let mut ec = EndpointConn::new("127.0.0.1:1".to_string());
+        ec.channel = Some(channel);
+        ec.update_health_from_state(InstanceStatus::Healthy as i32, 0).await;
+        let sc = ServiceConnection::new_dynamic("identity", verifier());
+        sc.endpoints.write().await.push(Arc::new(RwLock::new(ec)));
+        sc
+    }
+
+    fn snapshot(status: InstanceStatus) -> ServiceInstanceHealth {
+        ServiceInstanceHealth {
+            service_id: "identity".to_string(),
+            grpc_endpoint: Some(Host { host: "127.0.0.1".to_string(), port: 1, ..Default::default() }),
+            status: status as i32,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn endpoint_missed_one_snapshot_stays_pooled() {
+        let sc = pool().await;
+        sc.reconcile_from_health(&[]).await;
+        assert_eq!(sc.endpoints.read().await.len(), 1, "one missed snapshot dropped the endpoint");
+        assert_eq!(sc.unavailable_input().await, None, "one missed snapshot took the pool down");
+
+        let back = snapshot(InstanceStatus::Healthy);
+        sc.reconcile_from_health(&[&back]).await;
+        assert_eq!(sc.endpoints.read().await.len(), 1, "endpoint must be kept when it reappears");
+    }
+
+    #[tokio::test]
+    async fn endpoint_closed_after_absent_snapshots() {
+        let sc = pool().await;
+        for i in 1..ABSENT_POLLS_BEFORE_CLOSE {
+            sc.reconcile_from_health(&[]).await;
+            assert_eq!(sc.endpoints.read().await.len(), 1, "closed after {i} absent snapshots");
+        }
+        sc.reconcile_from_health(&[]).await;
+        assert!(sc.endpoints.read().await.is_empty(), "still pooled after {ABSENT_POLLS_BEFORE_CLOSE} absent snapshots");
+    }
+
+    #[tokio::test]
+    async fn absent_count_restarts_when_endpoint_returns() {
+        let sc = pool().await;
+        let back = snapshot(InstanceStatus::Healthy);
+        for _ in 0..2 * ABSENT_POLLS_BEFORE_CLOSE {
+            sc.reconcile_from_health(&[]).await;
+            sc.reconcile_from_health(&[&back]).await;
+        }
+        assert_eq!(sc.endpoints.read().await.len(), 1, "alternating miss and return closed the endpoint");
     }
 }

@@ -212,6 +212,12 @@ cert-stream-java:
 cert-stream-rust:
   {{lock}} bash cross-test/cert-stream/run.sh --language rust
 
+# Behavioral coverage of the generated Java subscriber's backoff on a clean
+# stream close: a peer that ends every stream with OK must not drive a tight
+# re-resolve loop.
+subscriber-clean-close:
+  {{lock}} bash cross-test/subscriber-clean-close/run.sh
+
 # Behavioral coverage of the generated external-audience token accessor
 # (token_for_external): a fresh token minted per call, never cached.
 external-token: external-token-go external-token-java external-token-rust

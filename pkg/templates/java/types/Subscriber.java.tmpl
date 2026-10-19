@@ -155,7 +155,10 @@ public class {{.ClassName}} {
                 } finally {
                     if (up != null) up.set(false);
                 }
-                // Stream ended cleanly — reconnect.
+                // Stream ended cleanly — reconnect after the minimum backoff. A
+                // peer that closes every stream with OK must not turn this loop
+                // into a re-resolve per RPC round trip (matches Go and Rust).
+                Thread.sleep({{$.ReconnectBackoffFQN}}.jitterMs(MIN_BACKOFF_MS));
                 backoff = MIN_BACKOFF_MS;
             } catch (InterruptedException e) {
                 throw e;

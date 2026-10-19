@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	healthreport_pb "{{.ModuleBasePath}}/types/sys/healthreport"
 	host_pb "{{.ModuleBasePath}}/types/sys/host"
@@ -33,6 +34,11 @@ const (
 // rebalanceThreshold is the minimum relative improvement required to switch active endpoints.
 const rebalanceThreshold = 0.3
 
+// fleetDownAfter is how long the fleet health plane must go without reporting
+// an endpoint HEALTHY or DEGRADED before readiness counts it down. Reports go
+// stale or UNHEALTHY for a few seconds at a time on an otherwise idle fleet.
+const fleetDownAfter = 30 * time.Second
+
 // ---------------------------------------------------------------------------
 // endpointConn -- per-endpoint gRPC connection with health tracking
 // ---------------------------------------------------------------------------
@@ -44,6 +50,10 @@ type endpointConn struct {
 	status    InstanceStatus
 	latencyUs int64 // p50 from health report
 	errorRate float64
+	// Readiness view of the fleet health input; see readinessUp. Routing does
+	// not use it.
+	fleetOK   bool      // last report was HEALTHY or DEGRADED
+	fleetOKAt time.Time // when a HEALTHY or DEGRADED report last arrived
 	mu        sync.RWMutex
 }
 
@@ -86,6 +96,23 @@ func (ec *endpointConn) updateHealth(h *healthreport_pb.ServiceInstanceHealth) {
 	ec.status = h.Status
 	ec.latencyUs = h.P50LatencyUs
 	ec.errorRate = h.ErrorRate
+	ec.fleetOK = h.Status == StatusHealthy || h.Status == StatusDegraded
+	if ec.fleetOK {
+		ec.fleetOKAt = time.Now()
+	}
+}
+
+// readinessUp reports whether this endpoint counts as up for readiness. A
+// report that is not HEALTHY or DEGRADED takes it down only after fleetDownAfter
+// without one that is, and the first HEALTHY or DEGRADED report brings it back.
+// An endpoint that has never been HEALTHY or DEGRADED is down at once.
+func (ec *endpointConn) readinessUp(now time.Time) bool {
+	ec.mu.RLock()
+	defer ec.mu.RUnlock()
+	if ec.fleetOK {
+		return true
+	}
+	return !ec.fleetOKAt.IsZero() && now.Sub(ec.fleetOKAt) < fleetDownAfter
 }
 
 // isRoutable returns true if this endpoint should receive new requests.
@@ -202,13 +229,15 @@ func (sc *ServiceConnection) Conn() grpc.ClientConnInterface {
 }
 
 // IsAvailable reports whether an RPC to this service has somewhere to go: at
-// least one endpoint is dialed and currently routable. Unlike Conn(), which
-// returns only the selected active endpoint, this is what readiness gates on.
+// least one endpoint is dialed and up for readiness (debounced, see
+// endpointConn.readinessUp). Unlike Conn(), which returns only the selected
+// active endpoint, this is what readiness gates on.
 func (sc *ServiceConnection) IsAvailable() bool {
 	sc.mu.RLock()
 	defer sc.mu.RUnlock()
+	now := time.Now()
 	for _, ec := range sc.endpoints {
-		if ec.isConnected() && ec.isRoutable() {
+		if ec.isConnected() && ec.readinessUp(now) {
 			return true
 		}
 	}

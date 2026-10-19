@@ -34,6 +34,8 @@ import java.security.KeyStore;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
@@ -77,6 +79,10 @@ public class ServiceConnection implements AutoCloseable {
     /** Minimum relative improvement required to switch active endpoints (hysteresis). */
     private static final double REBALANCE_THRESHOLD = 0.3;
     private static final long PING_INTERVAL_MS = 30_000;
+    /** Consecutive failed pings after which readiness counts an endpoint down. */
+    private static final int PING_FAILURES_BEFORE_DOWN = 3;
+    /** How long the fleet health plane must go without a HEALTHY or DEGRADED report before readiness counts an endpoint down. */
+    private static final Duration FLEET_DOWN_AFTER = Duration.ofSeconds(30);
     private static final long REBALANCE_INTERVAL_MS = 30_000;
 
     private final String serviceId;
@@ -272,14 +278,20 @@ public class ServiceConnection implements AutoCloseable {
 
     /**
      * Reports whether an RPC to this service has somewhere to go: at least one
-     * endpoint is dialed and currently routable. Unlike {@link #conn()}, which
-     * falls back to any connected channel, this is what readiness gates on.
+     * endpoint is dialed and up for readiness (debounced, see
+     * {@link EndpointConn#readinessUp}). Unlike {@link #conn()}, which falls
+     * back to any connected channel, this is what readiness gates on.
      */
     public boolean isAvailable() {
+        return isAvailableAt(Instant.now());
+    }
+
+    /** {@link #isAvailable()} as of {@code now}; the debounce windows are measured from it. */
+    boolean isAvailableAt(Instant now) {
         lock.readLock().lock();
         try {
             for (EndpointConn ec : endpoints) {
-                if (ec.isConnected() && ec.isRoutable()) {
+                if (ec.isConnected() && ec.readinessUp(now)) {
                     return true;
                 }
             }
@@ -294,7 +306,7 @@ public class ServiceConnection implements AutoCloseable {
         lock.writeLock().lock();
         try {
             for (EndpointConn ec : endpoints) {
-                ec.status = status;
+                ec.updateHealth(ServiceInstanceHealth.newBuilder().setStatus(status).build());
             }
         } finally {
             lock.writeLock().unlock();
@@ -807,6 +819,11 @@ public class ServiceConnection implements AutoCloseable {
         InstanceStatus status = InstanceStatus.INSTANCE_STATUS_STARTING;
         long latencyUs = Long.MAX_VALUE;
         double errorRate;
+        // Readiness view of the two health inputs; see readinessUp. Routing does
+        // not use these.
+        boolean fleetOk = true;   // last fleet report was HEALTHY or DEGRADED; true until one arrives
+        Instant fleetOkAt;        // when a HEALTHY or DEGRADED fleet report last arrived; null until one has
+        int pingFailures;         // failed pings since the last successful one
         private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
         EndpointConn(String target) {
@@ -860,6 +877,11 @@ public class ServiceConnection implements AutoCloseable {
                 this.status = h.getStatus();
                 this.latencyUs = h.getP50LatencyUs();
                 this.errorRate = h.getErrorRate();
+                this.fleetOk = status == InstanceStatus.INSTANCE_STATUS_HEALTHY
+                        || status == InstanceStatus.INSTANCE_STATUS_DEGRADED;
+                if (fleetOk) {
+                    this.fleetOkAt = Instant.now();
+                }
             } finally {
                 lock.writeLock().unlock();
             }
@@ -887,9 +909,11 @@ public class ServiceConnection implements AutoCloseable {
                             latencyUs = (long) (latencyUs * 0.7 + rttUs * 0.3);
                         }
                         status = InstanceStatus.INSTANCE_STATUS_HEALTHY;
+                        pingFailures = 0;
                     } else {
                         status = InstanceStatus.INSTANCE_STATUS_UNHEALTHY;
                         latencyUs = Long.MAX_VALUE;
+                        pingFailures++;
                     }
                 } finally {
                     lock.writeLock().unlock();
@@ -899,9 +923,30 @@ public class ServiceConnection implements AutoCloseable {
                 try {
                     status = InstanceStatus.INSTANCE_STATUS_UNHEALTHY;
                     latencyUs = Long.MAX_VALUE;
+                    pingFailures++;
                 } finally {
                     lock.writeLock().unlock();
                 }
+            }
+        }
+
+        /**
+         * Readiness view of this endpoint at {@code now}. Debounced like the Rust
+         * and Go chassis: a fleet report that is not HEALTHY or DEGRADED takes the
+         * endpoint down only after FLEET_DOWN_AFTER without one that is, and the
+         * first HEALTHY or DEGRADED report brings it back. Pings count it down
+         * after PING_FAILURES_BEFORE_DOWN failures in a row. Pings run every
+         * PING_INTERVAL_MS, so a time window alone would count one missed ping
+         * as down; the failure count is the window here.
+         */
+        boolean readinessUp(Instant now) {
+            lock.readLock().lock();
+            try {
+                boolean fleetUp = fleetOk
+                        || (fleetOkAt != null && Duration.between(fleetOkAt, now).compareTo(FLEET_DOWN_AFTER) < 0);
+                return fleetUp && pingFailures < PING_FAILURES_BEFORE_DOWN;
+            } finally {
+                lock.readLock().unlock();
             }
         }
 

@@ -9,6 +9,7 @@ package serviceconnection
 import (
 	"sync/atomic"
 	"testing"
+	"time"
 
 	healthreport_pb "{{.ModuleBasePath}}/types/sys/healthreport"
 	"google.golang.org/grpc"
@@ -54,13 +55,47 @@ func TestPoolFollowsEndpointHealth(t *testing.T) {
 	}{
 		{StatusHealthy, true},
 		{StatusDegraded, true},
-		{StatusUnhealthy, false},
 	}
 	for _, c := range cases {
 		sc.endpoints[0].updateHealth(&healthreport_pb.ServiceInstanceHealth{Status: c.status})
 		if _, down := required.FirstDown(); down == c.up {
 			t.Fatalf("status %v: up = %v, want %v", c.status, !down, c.up)
 		}
+	}
+}
+
+func TestSingleUnhealthyReportDoesNotTakeChannelDown(t *testing.T) {
+	sc := pool(t, "identity", StatusHealthy)
+	required := NewRequiredChannels([]*ServiceConnection{sc}, nil)
+	sc.endpoints[0].updateHealth(&healthreport_pb.ServiceInstanceHealth{Status: StatusUnhealthy})
+	if name, down := required.FirstDown(); down {
+		t.Fatalf("one UNHEALTHY report must not take %q down", name)
+	}
+	sc.endpoints[0].updateHealth(&healthreport_pb.ServiceInstanceHealth{Status: StatusHealthy})
+	if _, down := required.FirstDown(); down {
+		t.Fatal("HEALTHY report must keep the channel up")
+	}
+}
+
+func TestUnhealthyMustPersistFleetDownAfter(t *testing.T) {
+	sc := pool(t, "identity", StatusHealthy)
+	required := NewRequiredChannels([]*ServiceConnection{sc}, nil)
+	ec := sc.endpoints[0]
+	ec.updateHealth(&healthreport_pb.ServiceInstanceHealth{Status: StatusUnhealthy})
+
+	// Pretend the last HEALTHY report was just inside the window.
+	ec.mu.Lock()
+	ec.fleetOKAt = time.Now().Add(-fleetDownAfter + time.Second)
+	ec.mu.Unlock()
+	if _, down := required.FirstDown(); down {
+		t.Fatal("UNHEALTHY inside the window must stay up")
+	}
+
+	ec.mu.Lock()
+	ec.fleetOKAt = time.Now().Add(-fleetDownAfter)
+	ec.mu.Unlock()
+	if name, down := required.FirstDown(); !down || name != "identity" {
+		t.Fatalf("UNHEALTHY past the window must be down, got (%q, %v)", name, down)
 	}
 }
 

@@ -31,7 +31,7 @@ type diskStoreEntry struct {
 	GoType    string // qualified Go type, e.g. "mint_pb.VerifyingKey"
 	ToJSON    string // qualified ToJSON fn, e.g. "mint_pb.VerifyingKeyToJSON"
 	FromJSON  string // qualified FromJSON fn, e.g. "mint_pb.VerifyingKeyFromJSON"
-	Validate  string // qualified Validate fn, e.g. "mint_pb.ValidateVerifyingKey"
+	Validate  string // qualified at-rest Validate fn, e.g. "mint_pb.ValidateVerifyingKeyAtRest"
 	KeyField  string // PascalCase Go field name of the collection_index (store_key)
 
 	// SnapshotOnly is true when the store has no store_key field: emit UC1
@@ -122,7 +122,7 @@ func generateDiskStore(config *tactype.Config, inputDir string) error {
 				GoType:           alias + "." + msg.Name,
 				ToJSON:           alias + "." + msg.Name + "ToJSON",
 				FromJSON:         alias + "." + msg.Name + "FromJSON",
-				Validate:         alias + ".Validate" + msg.Name,
+				Validate:         alias + ".Validate" + msg.Name + "AtRest",
 				KeyField:         keyField,
 				SnapshotOnly:     snapshotOnly,
 				QuorumWrite:      quorumWrite,

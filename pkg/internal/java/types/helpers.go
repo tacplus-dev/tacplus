@@ -506,11 +506,11 @@ func msgToJsonFunc(field model.Field, crossHelpers map[string]string) string {
 
 // msgValidationFunc returns the validate method for a message field,
 // fully qualifying cross-package generated Helpers when available.
-func msgValidationFunc(typeName, typePackage string, crossHelpers map[string]string) string {
+func msgValidationFunc(typeName, typePackage string, crossHelpers map[string]string, suffix string) string {
 	if typeName == "" || isWellKnownTypePackage(typePackage) {
 		return ""
 	}
-	f := "validate" + typeName + "Depth"
+	f := "validate" + typeName + suffix + "Depth"
 	if typePackage == "" {
 		return f
 	}

@@ -273,10 +273,19 @@ func (ps *GrpcServer) Listen(ctx context.Context) error {
 	// which rejects clients pinging every {{.KeepaliveTimeSecs}}s with GOAWAY too_many_pings.
 	// PermitWithoutStream=true allows pings when there are no active streams,
 	// which is exactly the idle-subscriber case (partition hides in silence otherwise).
-	// Value from keepaliveconst; config override is accepted if stricter.
+	// Value from keepaliveconst; a config override is accepted only up to
+	// keepaliveconst.TimeSecs (the interval generated clients ping at). A larger
+	// minimum makes the server GOAWAY those clients with too_many_pings, so it is
+	// replaced by the permit minimum and logged.
 	keepaliveMinTime := time.Duration({{.KeepalivePermitMinTimeSecs}}) * time.Second
-	if ps.config.KeepaliveMinTimeSeconds > 0 {
-		keepaliveMinTime = time.Duration(ps.config.KeepaliveMinTimeSeconds) * time.Second
+	if override := ps.config.KeepaliveMinTimeSeconds; override > 0 {
+		if override <= {{.KeepaliveTimeSecs}} {
+			keepaliveMinTime = time.Duration(override) * time.Second
+		} else {
+			zap.L().Warn("keepalive_min_time_seconds exceeds the client ping interval; using the platform minimum",
+				zap.Int64("configured", override),
+				zap.Int64("applied", {{.KeepalivePermitMinTimeSecs}}))
+		}
 	}
 	opts = append(opts, grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 		MinTime:             keepaliveMinTime,

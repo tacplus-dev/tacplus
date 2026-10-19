@@ -6,7 +6,10 @@
 
 package serviceconnection
 
-import "time"
+import (
+	"math/rand"
+	"time"
+)
 
 // Reconnect backoff for s2s channels.
 //
@@ -28,4 +31,12 @@ func NextReconnectBackoff(current time.Duration) time.Duration {
 		return ReconnectMaxBackoff
 	}
 	return current * 2
+}
+
+// JitterReconnectBackoff returns the delay to sleep for a reconnect step whose
+// schedule value is d: d plus up to a quarter of d. Clients that lost the same
+// peer at the same instant share one schedule, so without this they all dial
+// again at the same instants.
+func JitterReconnectBackoff(d time.Duration) time.Duration {
+	return d + time.Duration(rand.Int63n(int64(d)/4+1))
 }

@@ -9,6 +9,7 @@ package {{.ChassisBase}}.backoff;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import java.time.Duration;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Supplier;
 
 /**
@@ -45,6 +46,15 @@ public final class Backoff {
     }
 
     /**
+     * Returns the delay to sleep for a reconnect step whose schedule value is {@code delay}: {@code delay}
+     * plus up to a quarter of it. Clients that lost the same peer at the same instant share one schedule,
+     * so without this they all dial again at the same instants.
+     */
+    public static Duration jitter(Duration delay) {
+        return delay.plusMillis(ThreadLocalRandom.current().nextLong(delay.toMillis() / 4 + 1));
+    }
+
+    /**
      * Runs {@code call} until it does not fail with UNAVAILABLE, sleeping the
      * reconnect schedule between attempts. There is no attempt bound: the peer
      * is retried for as long as it refuses connections. Every other status is
@@ -62,7 +72,7 @@ public final class Backoff {
                     throw e;
                 }
                 try {
-                    sleeper.sleep(delay);
+                    sleeper.sleep(jitter(delay));
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     throw e;

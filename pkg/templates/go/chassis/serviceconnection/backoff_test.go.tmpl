@@ -33,3 +33,20 @@ func TestBackoffNeverExceedsCap(t *testing.T) {
 		t.Fatalf("NextReconnectBackoff(cap) = %v, want %v", got, ReconnectMaxBackoff)
 	}
 }
+
+// Clients that lost the same peer at the same instant share one schedule. With
+// no jitter, 40 of them sleep the same delay on every step and dial together.
+func TestBackoffJitterSpreadsClientsAtSameStep(t *testing.T) {
+	step := NextReconnectBackoff(ReconnectInitialBackoff)
+	seen := make(map[time.Duration]bool)
+	for i := 0; i < 40; i++ {
+		d := JitterReconnectBackoff(step)
+		if d < step || d > step+step/4 {
+			t.Fatalf("JitterReconnectBackoff(%v) = %v, want within [%v, %v]", step, d, step, step+step/4)
+		}
+		seen[d] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("40 clients at one step all sleep %v, want a spread", step)
+	}
+}

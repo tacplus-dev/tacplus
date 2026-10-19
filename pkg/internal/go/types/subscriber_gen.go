@@ -42,6 +42,10 @@ type goSubscriberTemplateData struct {
 	// identity manager is not generated at all.
 	ServiceIMImport string // e.g. "module/tacplus/chassis/service_im"
 
+	// ServiceConnectionImport is the chassis reconnect backoff, used by the
+	// reconnect loop to jitter its retry delay.
+	ServiceConnectionImport string // e.g. "module/tacplus/chassis/serviceconnection"
+
 	// RoutingOnly is the owner-declared narrowing: this service is named in the
 	// source type's s2s_subscribe.routing_only_services, so Handler takes
 	// EnvelopeTypeName instead of TypeName and the dispatch projects the three
@@ -131,6 +135,8 @@ func generateGoSubscribers(config *tactype.Config) error {
 			GrpcService:     subService,
 			GrpcMethod:      subMethod,
 			ServiceIMImport: serviceIMImport,
+
+			ServiceConnectionImport: config.ModuleBasePath + "/chassis/serviceconnection",
 
 			RoutingOnly:          sub.RoutingOnly,
 			EnvelopeTypeName:     typeName + boundaries.RoutingEnvelopeSuffix,

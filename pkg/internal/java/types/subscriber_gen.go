@@ -40,6 +40,10 @@ type javaSubscriberTemplateData struct {
 	// replaying the same dead token.
 	IdentityManagerFQN string // "com.example.chassis.service_im.IdentityManager"
 
+	// ReconnectBackoffFQN is the chassis ReconnectBackoff, used by the reconnect
+	// loop to jitter its retry delay so clients that lost one peer do not retry in step.
+	ReconnectBackoffFQN string // "com.example.chassis.serviceconnection.ReconnectBackoff"
+
 	// RoutingOnly is the owner-declared narrowing: this service is named in the
 	// source type's s2s_subscribe.routing_only_services, so Handler takes
 	// EnvelopeTypeName and the dispatch projects the three fields below into it.
@@ -225,6 +229,8 @@ func generateJavaSubscribers(config *tactype.Config, protoDir string) error {
 
 			IdentityManagerFQN: strings.TrimSuffix(config.JavaPackageBase, ".types") +
 				".chassis.service_im.IdentityManager",
+			ReconnectBackoffFQN: strings.TrimSuffix(config.JavaPackageBase, ".types") +
+				".chassis.serviceconnection.ReconnectBackoff",
 
 			RoutingOnly:          sub.RoutingOnly,
 			EnvelopeTypeName:     event.TypeName + boundaries.RoutingEnvelopeSuffix,

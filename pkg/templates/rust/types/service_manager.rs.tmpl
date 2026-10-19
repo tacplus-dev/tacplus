@@ -1331,7 +1331,7 @@ impl ServiceManager {
                 Some(c) => c,
                 None => {
                     tracing::warn!(service = service_name, retry_in = ?backoff, "No state-store connection for service resolution, retrying");
-                    tokio::time::sleep(backoff).await;
+                    tokio::time::sleep(servicemanager::jitter_reconnect_backoff(backoff)).await;
                     backoff = servicemanager::next_reconnect_backoff(backoff);
                     continue;
                 }
@@ -1340,7 +1340,7 @@ impl ServiceManager {
                 Ok(t) => t,
                 Err(e) => {
                     tracing::warn!(service = service_name, error = %e, retry_in = ?backoff, "Failed to get token for service resolution, retrying");
-                    tokio::time::sleep(backoff).await;
+                    tokio::time::sleep(servicemanager::jitter_reconnect_backoff(backoff)).await;
                     backoff = servicemanager::next_reconnect_backoff(backoff);
                     continue;
                 }
@@ -1354,7 +1354,7 @@ impl ServiceManager {
                 Ok(m) => m,
                 Err(_) => {
                     tracing::warn!(service = service_name, retry_in = ?backoff, "Invalid token metadata for service resolution, retrying");
-                    tokio::time::sleep(backoff).await;
+                    tokio::time::sleep(servicemanager::jitter_reconnect_backoff(backoff)).await;
                     backoff = servicemanager::next_reconnect_backoff(backoff);
                     continue;
                 }
@@ -1410,7 +1410,7 @@ impl ServiceManager {
                     );
                 }
             }
-            tokio::time::sleep(backoff).await;
+            tokio::time::sleep(servicemanager::jitter_reconnect_backoff(backoff)).await;
             backoff = servicemanager::next_reconnect_backoff(backoff);
         }
     }
@@ -2095,7 +2095,7 @@ impl ServiceManager {
                             tracing::info!("{{.SourcePackage}}.{{.FieldSnake}} subscription cancelled");
                             return;
                         }
-                        _ = tokio::time::sleep(outer_backoff) => {}
+                        _ = tokio::time::sleep(servicemanager::jitter_reconnect_backoff(outer_backoff)) => {}
                     }
                     outer_backoff = servicemanager::next_reconnect_backoff(outer_backoff);
                 }
@@ -2566,7 +2566,7 @@ async fn resolve_eventbus(
                 );
             }
         }
-        tokio::time::sleep(backoff).await;
+        tokio::time::sleep(servicemanager::jitter_reconnect_backoff(backoff)).await;
         backoff = servicemanager::next_reconnect_backoff(backoff);
     }
 }
@@ -2595,7 +2595,7 @@ async fn resolve_eventbus_for_publisher(
                     backoff_ms = backoff.as_millis(),
                     "publisher failed to resolve EventBus broker, retrying"
                 );
-                tokio::time::sleep(backoff).await;
+                tokio::time::sleep(servicemanager::jitter_reconnect_backoff(backoff)).await;
                 backoff = servicemanager::next_reconnect_backoff(backoff);
             }
         }
@@ -2645,7 +2645,7 @@ async fn {{.LoopFn}}(
                     backoff_ms = backoff.as_millis(),
                     "{{.Label}} stream failed, reconnecting"
                 );
-                tokio::time::sleep(backoff).await;
+                tokio::time::sleep(servicemanager::jitter_reconnect_backoff(backoff)).await;
                 backoff = servicemanager::next_reconnect_backoff(backoff);
             }
         }

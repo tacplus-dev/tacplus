@@ -50,9 +50,9 @@ RUN case "$TARGETARCH" in \
       arm64) P=debian12-aarch64; F="swift-${SWIFT_VERSION}-RELEASE-debian12-aarch64" ;; \
       *) echo "unsupported TARGETARCH '$TARGETARCH'" >&2; exit 1 ;; \
     esac \
-    && curl -fsSL --retry 30 --retry-delay 5 \
+    && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/swift.tar.gz \
        "https://download.swift.org/swift-${SWIFT_VERSION}-release/${P}/swift-${SWIFT_VERSION}-RELEASE/${F}.tar.gz" \
-       | tar -xz --strip-components=1 -C / \
+    && tar -xz --strip-components=1 -C / -f /tmp/swift.tar.gz && rm /tmp/swift.tar.gz \
     && swift --version
 # .NET SDK (the generated C# clients target net8.0).
 RUN curl -fsSL --retry 30 --retry-delay 5 -o /tmp/dotnet-install.sh https://dot.net/v1/dotnet-install.sh \

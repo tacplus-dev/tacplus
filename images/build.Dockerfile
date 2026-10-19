@@ -54,16 +54,16 @@ RUN case "$TARGETARCH" in \
        "https://repo1.maven.org/maven2/io/grpc/protoc-gen-grpc-java/${GRPC_JAVA_VERSION}/protoc-gen-grpc-java-${GRPC_JAVA_VERSION}-linux-${PROTOC_ARCH}.exe" \
     && chmod +x /opt/protoc/bin/protoc /opt/protoc/bin/protoc-gen-grpc-java \
     && mkdir -p /opt/just \
-    && curl -fsSL --retry 30 --retry-delay 5 \
+    && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/just.tar.gz \
        "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-${JUST_ARCH}-unknown-linux-musl.tar.gz" \
-       | tar -xz -C /opt/just just \
+    && tar -xz -C /opt/just -f /tmp/just.tar.gz just && rm /tmp/just.tar.gz \
     && mkdir -p /opt/gh \
-    && curl -fsSL --retry 30 --retry-delay 5 \
+    && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/gh.tar.gz \
        "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz" \
-       | tar -xz --strip-components=2 -C /opt/gh "gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" \
-    && curl -fsSL --retry 30 --retry-delay 5 \
+    && tar -xz --strip-components=2 -C /opt/gh -f /tmp/gh.tar.gz "gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" && rm /tmp/gh.tar.gz \
+    && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/gcloud.tar.gz \
        "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-${GCLOUD_VERSION}-linux-${GCLOUD_ARCH}.tar.gz" \
-       | tar -xz -C /opt \
+    && tar -xz -C /opt -f /tmp/gcloud.tar.gz && rm /tmp/gcloud.tar.gz \
     && mkdir -p /opt/openjml \
     && curl -fsSL --retry 30 --retry-delay 5 -o /tmp/openjml.zip \
        "https://github.com/OpenJML/OpenJML/releases/download/${OPENJML_VERSION}/openjml-ubuntu-latest-${OPENJML_VERSION}.zip" \

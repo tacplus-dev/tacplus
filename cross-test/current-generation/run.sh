@@ -675,6 +675,9 @@ compile_current_output() {
       rm -rf "$compile_dir"
       mkdir -p "$compile_dir"
       write_java_compile_pom "$compile_dir/pom.xml" "$output"
+      if [[ -n "$(find "$output/src/main/java" -type f -name GcsArchiveSink.java -print -quit)" ]]; then
+        add_java_gcs_archive_dependency "$compile_dir/pom.xml"
+      fi
       local java_env
       java_env="$(java_home_env)"
       if [[ -n "$java_env" ]]; then
@@ -1107,6 +1110,12 @@ assert_quorumwrite_output() {
       sm="$(find "$output" -type f -path '*/s2sm/ServiceManager.java' -print -quit)"
       grep -qF 'if (store instanceof LocalRows) {' "$sm" \
         || die "quorum-write fixture (java): the CredPair roll baseline is not narrowed through LocalRows in $sm"
+      # The fixture pins the GCS SDK, so the archive sink is emitted and the
+      # ServiceManager builds it. No archive is configured at runtime in this fixture.
+      [[ -n "$(find "$output" -type f -path '*/chassis/diskstore/GcsArchiveSink.java' -print -quit)" ]] \
+        || die "quorum-write fixture (java): GcsArchiveSink.java not generated under $output"
+      grep -qF 'return new GcsArchiveSink(bucket);' "$sm" \
+        || die "quorum-write fixture (java): the ServiceManager does not construct GcsArchiveSink in $sm"
       ;;
     rust)
       stores="$(find "$output" -type f -path '*/s2sm/diskstore_stores/mod.rs' -print -quit)"

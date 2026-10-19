@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * UC2 — append-only redo log (WAL) with periodic compaction.
@@ -82,8 +83,14 @@ public final class RedoLog implements AutoCloseable {
     private final int archiveCount;
     private final Codec archiveCodec;
     private final Object lock = new Object();
+    // Serializes roll() and checkpoint(): a checkpoint's redo position must be
+    // read in the same critical section as its snapshot, so no roll can land
+    // between the two. Held across the snapshot, which takes the store's lock; no
+    // path takes rollLock while holding that store lock, so the order is safe.
+    private final Object rollLock = new Object();
     private OutputStream writer;
     private Path writerTarget;
+    private ArchiveShipper shipper;
 
     private RedoLog(Path active, int archiveCount, Codec archiveCodec) {
         this.active = active;
@@ -139,8 +146,21 @@ public final class RedoLog implements AutoCloseable {
      * under a brief write-block, then atomically swap the new file in and
      * archive the old one (compressed at rest). The final rename is the commit
      * point.
+     *
+     * <p>With an attached {@link ArchiveShipper} the old active is not archived
+     * locally: it is queued as the next segment and removed once the archive holds
+     * it.
      */
     public void roll(List<Record> snapshot) {
+        synchronized (rollLock) {
+            if (shipper != null) {
+                resolveShipper();
+            }
+            rollLocked(snapshot);
+        }
+    }
+
+    private void rollLocked(List<Record> snapshot) {
         Path tempPath = FsUtil.sibling(active, ".temp");
         Path building = FsUtil.sibling(active, ".building");
 
@@ -173,10 +193,14 @@ public final class RedoLog implements AutoCloseable {
                 Files.write(building, tempBytes, StandardOpenOption.APPEND);
                 fsync(building);
 
-                // Archive the old active (compressed at rest), then promote.
-                FsUtil.rotateArchives(active, archiveCount);
-                if (archiveCount > 0 && archiveCodec != Codec.NONE) {
-                    compressInPlace(FsUtil.archiveName(active, 1), archiveCodec);
+                if (shipper == null) {
+                    // Archive the old active (compressed at rest), then promote.
+                    FsUtil.rotateArchives(active, archiveCount);
+                    if (archiveCount > 0 && archiveCodec != Codec.NONE) {
+                        compressInPlace(FsUtil.archiveName(active, 1), archiveCodec);
+                    }
+                } else {
+                    shipRolledSegment();
                 }
                 FsUtil.promote(building, active);
 
@@ -189,6 +213,87 @@ public final class RedoLog implements AutoCloseable {
                 throw DiskStoreException.io(e.getMessage(), e);
             }
         }
+    }
+
+    /**
+     * Ship this log to {@code shipper}'s archive. Pending segments and checkpoints
+     * a previous process left behind are re-queued first. Attach before the first
+     * roll so every roll is shipped.
+     */
+    public void attachShipper(ArchiveShipper shipper) {
+        Path dir = active.getParent();
+        String name = active.getFileName().toString();
+        List<Path> pending = new ArrayList<>();
+        try (java.util.stream.Stream<Path> files = Files.list(dir)) {
+            files.filter(p -> {
+                String f = p.getFileName().toString();
+                return f.startsWith(name + ArchiveShipper.SEGMENT_TAG)
+                        || f.startsWith(name + ArchiveShipper.CHECKPOINT_TAG);
+            }).sorted().forEach(pending::add);
+        } catch (IOException e) {
+            throw DiskStoreException.io(e.getMessage(), e);
+        }
+        for (Path file : pending) {
+            shipper.recover(file);
+        }
+        this.shipper = shipper;
+    }
+
+    /**
+     * Ship a checkpoint: the full store state as of now, recorded under the redo
+     * position it covers (the newest segment rolled). A restore loads the newest
+     * checkpoint and replays the segments shipped after it. Requires an attached
+     * {@link ArchiveShipper}. If {@code snapshot} throws, nothing is shipped.
+     */
+    public void checkpoint(Supplier<List<Record>> snapshot) {
+        if (shipper == null) {
+            throw new IllegalStateException("checkpoint requires an archive; attachShipper first");
+        }
+        byte[] data;
+        long position;
+        synchronized (rollLock) {
+            resolveShipper();
+            position = shipper.position();
+            StringBuilder buf = new StringBuilder();
+            for (Record rec : snapshot.get()) {
+                buf.append(encode(rec)).append('\n');
+            }
+            data = buf.toString().getBytes(StandardCharsets.UTF_8);
+        }
+        Path file = ArchiveShipper.checkpointPending(active, position);
+        FsUtil.atomicWrite(file, data, 0);
+        shipper.enqueueCheckpoint(file, position);
+    }
+
+    /** Objects this log has yet to ship to its archive; 0 when no archive is attached. */
+    public long shipPending() {
+        return shipper == null ? 0 : shipper.pending();
+    }
+
+    /** Failed upload attempts to this log's archive; 0 when no archive is attached. */
+    public long shipFailures() {
+        return shipper == null ? 0 : shipper.failures();
+    }
+
+    private void resolveShipper() {
+        try {
+            shipper.resolve();
+        } catch (IOException e) {
+            throw DiskStoreException.io(e.getMessage(), e);
+        }
+    }
+
+    // Caller holds rollLock and lock. The old active is the segment: it holds every
+    // append since the previous roll. It is moved out of the active position and
+    // queued, and stays on disk until the archive holds it.
+    private void shipRolledSegment() throws IOException {
+        if (!Files.exists(active)) {
+            return;
+        }
+        long seq = shipper.allocateSeq();
+        Path segment = ArchiveShipper.segmentPending(active, seq);
+        Files.move(active, segment);
+        shipper.enqueueSegment(segment, seq);
     }
 
     /**
@@ -236,6 +341,9 @@ public final class RedoLog implements AutoCloseable {
     public void close() {
         synchronized (lock) {
             closeWriter();
+        }
+        if (shipper != null) {
+            shipper.close();
         }
     }
 

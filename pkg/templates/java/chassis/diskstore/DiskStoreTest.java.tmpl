@@ -336,7 +336,218 @@ public class DiskStoreTest {
         }
     }
 
+    // ---- Archive: ship segments and checkpoints, restore from the sink ----
+
+    private static boolean awaitDrained(ArchiveShipper shipper) throws InterruptedException {
+        for (int i = 0; i < 600; i++) {
+            if (shipper.pending() == 0) {
+                return true;
+            }
+            Thread.sleep(100);
+        }
+        return false;
+    }
+
+    private static boolean awaitFailures(ArchiveShipper shipper, long want) throws InterruptedException {
+        for (int i = 0; i < 100; i++) {
+            if (shipper.failures() >= want) {
+                return true;
+            }
+            Thread.sleep(100);
+        }
+        return false;
+    }
+
+    private static int countPending(Path dir) throws IOException {
+        try (var files = Files.list(dir)) {
+            return (int) files.filter(p -> p.getFileName().toString().contains(".segment-")
+                    || p.getFileName().toString().contains(".checkpoint-")).count();
+        }
+    }
+
+    private static void put(RedoLog log, java.util.Map<String, String> live, String key, String payload) {
+        log.append(RedoLog.Record.upsert(key, payload));
+        live.put(key, payload);
+    }
+
+    private static void del(RedoLog log, java.util.Map<String, String> live, String key) {
+        log.append(RedoLog.Record.tombstone(key));
+        live.remove(key);
+    }
+
+    private static List<RedoLog.Record> snapshotOf(java.util.Map<String, String> live) {
+        List<RedoLog.Record> recs = new ArrayList<>();
+        for (java.util.Map.Entry<String, String> e : live.entrySet()) {
+            recs.add(RedoLog.Record.upsert(e.getKey(), e.getValue()));
+        }
+        return recs;
+    }
+
+    // A rolled segment stays on local disk until the sink holds it.
+    private static void testSegmentKeptUntilUploaded() throws Exception {
+        Path dir = Files.createTempDirectory("ds-ship-");
+        try {
+            Path base = dir.resolve("data");
+            MemSink sink = new MemSink();
+            sink.failPuts.set(Integer.MAX_VALUE);
+            RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.NONE);
+            ArchiveShipper shipper = new ArchiveShipper(sink, "tenant", "node-a", "verifying_keys", Codec.NONE, 1);
+            log.attachShipper(shipper);
+            try {
+                log.append(RedoLog.Record.upsert("a", "{\"v\":1}"));
+                log.roll(RedoLog.dedupFile(log.activePath()));
+                check(awaitFailures(shipper, 1), "a failing upload should be retried, not dropped");
+                check(shipper.pending() == 1, "the unshipped segment must stay queued, got " + shipper.pending());
+                check(countPending(dir.resolve("data").resolve("drpepper")) == 1,
+                        "the unshipped segment must stay on local disk");
+                check(sink.list("").isEmpty(), "nothing reaches the sink while uploads fail");
+
+                sink.failPuts.set(0);
+                check(awaitDrained(shipper), "the queue should drain once the sink recovers");
+                check(countPending(dir.resolve("data").resolve("drpepper")) == 0,
+                        "a shipped segment must be removed locally");
+                check(sink.list("tenant/node-a/verifying_keys/segments/").size() == 1,
+                        "the archive should hold exactly one segment");
+            } finally {
+                log.close();
+                shipper.close();
+            }
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    // Appends never wait on the shipper: they complete while every upload is failing.
+    private static void testAppendsDoNotWaitForUploads() throws Exception {
+        Path dir = Files.createTempDirectory("ds-noblock-");
+        try {
+            Path base = dir.resolve("data");
+            MemSink sink = new MemSink();
+            sink.failPuts.set(Integer.MAX_VALUE);
+            RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.NONE);
+            ArchiveShipper shipper = new ArchiveShipper(sink, "", "node-a", "verifying_keys", Codec.NONE, 1);
+            log.attachShipper(shipper);
+            try {
+                log.append(RedoLog.Record.upsert("seed", "{\"v\":0}"));
+                log.roll(RedoLog.dedupFile(log.activePath()));
+                check(awaitFailures(shipper, 1), "the seeded segment's upload should be failing");
+
+                Thread writer = new Thread(() -> {
+                    for (int i = 0; i < 100; i++) {
+                        log.append(RedoLog.Record.upsert("k" + i, "{\"v\":" + i + "}"));
+                    }
+                });
+                writer.start();
+                writer.join(20_000L);
+                check(!writer.isAlive(), "appends must not wait on a failing upload");
+
+                sink.failPuts.set(0);
+                check(awaitDrained(shipper), "the queue should drain once the sink recovers");
+            } finally {
+                log.close();
+                shipper.close();
+            }
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    // Checkpoint, then updates and a delete, then roll: restore from the sink
+    // into an empty store reproduces the live store exactly.
+    private static void testArchiveRestoreReproducesStore() throws Exception {
+        Path dir = Files.createTempDirectory("ds-archive-");
+        try {
+            Path base = dir.resolve("data");
+            MemSink sink = new MemSink();
+            ArchiveShipper shipper = new ArchiveShipper(sink, "tenant", "node-a", "verifying_keys", Codec.GZ, 1);
+            RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.GZ);
+            log.attachShipper(shipper);
+            java.util.Map<String, String> live = new java.util.LinkedHashMap<>();
+            try {
+                put(log, live, "a", "{\"v\":1}");
+                put(log, live, "b", "{\"v\":1}");
+                log.roll(snapshotOf(live));
+                log.checkpoint(() -> snapshotOf(live));
+
+                put(log, live, "a", "{\"v\":2}");
+                del(log, live, "b");
+                put(log, live, "c", "{\"v\":3}");
+                log.roll(snapshotOf(live));
+
+                put(log, live, "d", "{\"v\":4}");
+                del(log, live, "a");
+                log.roll(snapshotOf(live));
+                check(awaitDrained(shipper), "every roll should reach the sink");
+            } finally {
+                log.close();
+                shipper.close();
+            }
+
+            deleteRecursive(base);
+            java.util.Map<String, String> restored = new java.util.LinkedHashMap<>();
+            ArchiveRestore.restore(sink, "tenant", "node-a", "verifying_keys", rec -> {
+                if (rec.deleted) {
+                    restored.remove(rec.key);
+                } else {
+                    restored.put(rec.key, rec.payload);
+                }
+            });
+            check(restored.equals(live),
+                    "restore must reproduce the live store: got " + restored + " want " + live);
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    // Restore refuses a chain with a missing segment instead of restoring part of it.
+    private static void testRestoreRejectsMissingSegment() throws Exception {
+        MemSink sink = new MemSink();
+        String root = ArchiveShipper.storeRoot("", "node-a", "verifying_keys");
+        sink.put(root + ArchiveShipper.SEGMENTS + "/" + ArchiveShipper.pad(2),
+                "{\"key\":\"a\",\"deleted\":false,\"payload\":{\"v\":1}}\n".getBytes(StandardCharsets.UTF_8));
+        try {
+            ArchiveRestore.restore(sink, "", "node-a", "verifying_keys", rec -> { });
+            check(false, "a chain missing segment 1 must not restore");
+        } catch (DiskStoreException expected) {
+            // good
+        }
+        check(ArchiveRestore.restore(new MemSink(), "", "node-a", "verifying_keys", rec -> { }) == 0,
+                "an empty archive restores nothing");
+    }
+
     // ---- helpers ----
+
+    /** In-memory ArchiveSink. The first failPuts uploads throw, as an unreachable bucket would. */
+    private static final class MemSink implements ArchiveSink {
+        final java.util.Map<String, byte[]> objects = new java.util.concurrent.ConcurrentHashMap<>();
+        final java.util.concurrent.atomic.AtomicInteger failPuts = new java.util.concurrent.atomic.AtomicInteger();
+
+        @Override
+        public void put(String name, byte[] data) throws IOException {
+            if (failPuts.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
+                throw new IOException("sink unreachable");
+            }
+            objects.put(name, data.clone());
+        }
+
+        @Override
+        public byte[] get(String name) {
+            byte[] data = objects.get(name);
+            return data == null ? null : data.clone();
+        }
+
+        @Override
+        public List<String> list(String prefix) {
+            List<String> names = new ArrayList<>();
+            for (String name : objects.keySet()) {
+                if (name.startsWith(prefix)) {
+                    names.add(name);
+                }
+            }
+            java.util.Collections.sort(names);
+            return names;
+        }
+    }
 
     private static final class CollectInserter implements RedoLog.Inserter {
         final List<RedoLog.Record> recs = new ArrayList<>();
@@ -363,7 +574,7 @@ public class DiskStoreTest {
         }
     }
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws Exception {
         // Codec
         testCodecRoundtripNone();
         testCodecRoundtripGz();
@@ -394,6 +605,15 @@ public class DiskStoreTest {
         testAtomicWriteAndRead();
         testRotateArchivesChain();
         testDeleteNamespace();
+
+        // Archive. Two tests fail uploads on purpose; the shipper's WARNING for each
+        // would be noise in the gate's log, so the shipper's logger is silenced here.
+        java.util.logging.Logger.getLogger(ArchiveShipper.class.getName())
+                .setLevel(java.util.logging.Level.OFF);
+        testSegmentKeptUntilUploaded();
+        testAppendsDoNotWaitForUploads();
+        testArchiveRestoreReproducesStore();
+        testRestoreRejectsMissingSegment();
 
         if (failures > 0) {
             System.err.println(failures + " DiskStore check(s) FAILED");

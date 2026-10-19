@@ -260,6 +260,26 @@ cluster.
 
 ---
 
+## DS-1 — the GCS archive sink is compiled, never run against a bucket
+
+**Status:** open.
+
+`GcsArchiveSink` (Java, emitted only for a project that pins
+`com.google.cloud:google-cloud-storage`) is compiled by the `current-generation`
+`proto-quorumwrite` leg and its emission is asserted there. Nothing runs it. The
+`DiskStoreTest` self-test exercises the shipping, retry and restore chain against
+an in-memory `ArchiveSink`, so the chain is covered; the GCS calls (object create,
+get, prefix list, ambient credentials) are not, and no gate has a bucket or
+emulator to talk to.
+
+To close it: a gate leg that points `archive.gcs_bucket` at a GCS emulator (or a
+disposable test bucket behind a CI secret), ships one store through a real roll
+and checkpoint, and restores it into an empty store. The ServiceManager's archive
+wiring (`openDiskStoreLogs`, `attachArchive`) is in the same position: compiled
+and grep-asserted, not run with `archive` set.
+
+---
+
 ## How to close one of these
 
 Two things make a fix real here, and only the second is usually skipped:

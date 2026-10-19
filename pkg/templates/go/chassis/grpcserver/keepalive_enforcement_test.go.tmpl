@@ -1,0 +1,132 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// CODE GENERATED - DO NOT EDIT
+
+// Keepalive enforcement regression (issue #28): a server whose config overrides
+// keepalive_min_time_seconds above the platform ping interval must still permit
+// generated clients' keepalive pings. A larger enforced minimum makes grpc-go
+// count every {{.KeepaliveTimeSecs}} s ping as too frequent, and after the
+// third strike the server GOAWAYs the client with too_many_pings.
+
+package grpcserver
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	stdx509 "crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"net"
+	"strconv"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
+
+	pb "{{.ModuleBasePath}}/types/sys/grpcconfig"
+	hostpb "{{.ModuleBasePath}}/types/sys/host"
+	x509_pb "{{.ModuleBasePath}}/types/sys/x509"
+	x509wrapper "{{.ModuleBasePath}}/chassis/x509"
+)
+
+// keepaliveTestOverrideSecs is a config override above the platform ping
+// interval ({{.KeepaliveTimeSecs}} s), which the server must not enforce.
+const keepaliveTestOverrideSecs = 60
+
+// keepaliveTestWindow covers the fourth ping ({{.KeepaliveTimeSecs}} s apart),
+// the first one that GOAWAYs a server enforcing a 60 s minimum.
+const keepaliveTestWindow = 140 * time.Second
+
+type keepaliveNoServices struct{}
+
+func (keepaliveNoServices) RegisterServices(*grpc.Server) error { return nil }
+
+func keepaliveTestCert(t *testing.T) (*x509_pb.X509CertChain, ed25519.PrivateKey) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	tmpl := &stdx509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "keepalive-test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := stdx509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	cert, err := x509wrapper.NewX509Cert(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	if err != nil {
+		t.Fatalf("NewX509Cert: %v", err)
+	}
+	return &x509_pb.X509CertChain{Chain: []*x509_pb.X509Cert{cert}}, priv
+}
+
+func keepaliveTestPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// TestKeepaliveOverrideDoesNotGOAWAYGeneratedClient runs the real GrpcServer
+// with an oversized keepalive override and a client that pings with the same
+// parameters as the generated clients. The connection must stay READY.
+func TestKeepaliveOverrideDoesNotGOAWAYGeneratedClient(t *testing.T) {
+	cert, key := keepaliveTestCert(t)
+	port := keepaliveTestPort(t)
+	cfg := &pb.Config{
+		ListenAddress:           &hostpb.Host{Host: "127.0.0.1", Port: int32(port)},
+		KeepaliveMinTimeSeconds: keepaliveTestOverrideSecs,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ps, err := New(ctx, cfg, nil, cert, key, keepaliveNoServices{}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	go func() { _ = ps.Listen(ctx) }()
+
+	// The certificate identity is not under test; keepalive is.
+	conn, err := grpc.NewClient("127.0.0.1:"+strconv.Itoa(port),
+		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                {{.KeepaliveTimeSecs}} * time.Second,
+			Timeout:             {{.KeepaliveTimeoutSecs}} * time.Second,
+			PermitWithoutStream: true,
+		}))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer conn.Close()
+
+	readyCtx, cancelReady := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelReady()
+	conn.Connect()
+	for state := conn.GetState(); state != connectivity.Ready; state = conn.GetState() {
+		if !conn.WaitForStateChange(readyCtx, state) {
+			t.Fatalf("client never reached READY (state %s)", state)
+		}
+	}
+
+	// No RPCs are in flight, so only keepalive pings cross the connection.
+	// Any state change from READY means the server dropped the connection.
+	windowCtx, cancelWindow := context.WithTimeout(context.Background(), keepaliveTestWindow)
+	defer cancelWindow()
+	if conn.WaitForStateChange(windowCtx, connectivity.Ready) {
+		t.Fatalf("connection left READY (now %s) while idle: server enforced a keepalive minimum above the client ping interval", conn.GetState())
+	}
+}

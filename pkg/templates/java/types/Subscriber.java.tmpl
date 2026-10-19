@@ -139,6 +139,7 @@ public class {{.ClassName}} {
         final java.util.concurrent.atomic.AtomicBoolean up = this.upFlag;
 
         while (!Thread.currentThread().isInterrupted()) {
+            final int seen = {{$.IdentityManagerFQN}}.credentialGeneration();
             try {
                 // Re-resolve the target on every (re)connect attempt: if the
                 // previous instance was rescheduled, the supplier yields a
@@ -176,7 +177,7 @@ public class {{.ClassName}} {
                 // a rejection (see IdentityManager.isCredentialRejection) — that
                 // credential was understood and refused, so re-minting the same
                 // identity would loop. Mirrors rust's subscriber.
-                {{$.IdentityManagerFQN}}.noteIfCredentialRejection(e);
+                {{$.IdentityManagerFQN}}.noteIfCredentialRejection(e, seen);
                 Level level = (code == Status.Code.UNAUTHENTICATED || code == Status.Code.PERMISSION_DENIED)
                         ? Level.SEVERE : Level.WARNING;
                 LOG.log(level, "{{.SourcePackage}}.{{.SourceField}} subscription failed (gRPC status="

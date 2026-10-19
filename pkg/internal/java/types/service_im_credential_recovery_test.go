@@ -106,13 +106,13 @@ func TestIdentityManagerReconnectTimeoutParityWithRust(t *testing.T) {
 func TestJavaSubscriberInvalidatesRejectedCredential(t *testing.T) {
 	sub := readJavaTemplate(t, "java/types/Subscriber.java.tmpl")
 
-	if !strings.Contains(sub, "{{$.IdentityManagerFQN}}.noteIfCredentialRejection(e);") {
+	if !strings.Contains(sub, "{{$.IdentityManagerFQN}}.noteIfCredentialRejection(e, seen);") {
 		t.Fatalf("Subscriber reconnect loop must call "+
-			"IdentityManager.noteIfCredentialRejection(e) so a rejected credential "+
+			"IdentityManager.noteIfCredentialRejection(e, seen) so a rejected credential "+
 			"is re-minted instead of replayed:\n%s", sub)
 	}
 	// It belongs on the retry path, before the sleep — not after it.
-	noteIdx := strings.Index(sub, ".noteIfCredentialRejection(e);")
+	noteIdx := strings.Index(sub, ".noteIfCredentialRejection(e, seen);")
 	sleepIdx := strings.Index(sub, "Thread.sleep(backoff);")
 	if sleepIdx < 0 || noteIdx > sleepIdx {
 		t.Fatal("noteIfCredentialRejection must run before the backoff sleep")
@@ -134,7 +134,7 @@ func TestJavaSubscriberInvalidatesRejectedCredential(t *testing.T) {
 func TestJavaTlsCertStreamReportsCredentialOutcome(t *testing.T) {
 	sm := readJavaTemplate(t, "java/types/ServiceManager.java.tmpl")
 
-	if !strings.Contains(sm, "{{.ChassisBase}}.service_im.IdentityManager.noteIfCredentialRejection(e);") {
+	if !strings.Contains(sm, "{{.ChassisBase}}.service_im.IdentityManager.noteIfCredentialRejection(e, seen);") {
 		t.Fatal("tlsCertStreamLoop must drop a rejected credential before retrying")
 	}
 	if !strings.Contains(sm, "{{.ChassisBase}}.service_im.IdentityManager.noteCredentialAccepted();") {
@@ -147,7 +147,7 @@ func TestJavaTlsCertStreamReportsCredentialOutcome(t *testing.T) {
 	if loopIdx < 0 {
 		t.Fatal("ServiceManager missing tlsCertStreamLoop")
 	}
-	noteIdx := strings.Index(sm[loopIdx:], ".noteIfCredentialRejection(e);")
+	noteIdx := strings.Index(sm[loopIdx:], ".noteIfCredentialRejection(e, seen);")
 	fatalIdx := strings.Index(sm[loopIdx:], "if (e instanceof FatalTlsHandlerException) {")
 	if noteIdx < 0 || fatalIdx < 0 || noteIdx < fatalIdx {
 		t.Fatal("noteIfCredentialRejection must sit after the FatalTlsHandlerException " +
@@ -162,7 +162,7 @@ func TestJavaCredentialDegradedFloorStaysWired(t *testing.T) {
 	for _, want := range []string{
 		"private static final int DEGRADED_AFTER = 3;",
 		"public static boolean credentialsDegraded()",
-		"public static boolean noteIfCredentialRejection(Throwable t)",
+		"public static boolean noteIfCredentialRejection(Throwable t, int seen)",
 		"public static void noteCredentialAccepted()",
 	} {
 		if !strings.Contains(im, want) {

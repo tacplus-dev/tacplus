@@ -802,6 +802,7 @@ public class StateClient implements AutoCloseable {
         recordWatchHealthy("Watch{{.FieldPascal}}", false);
         AtomicBoolean received = new AtomicBoolean(false);
         AtomicReference<ClientCallStreamObserver<Trace.TraceRequest>> callRef = new AtomicReference<>();
+        final int seen = {{$.IdentityManagerFQN}}.credentialGeneration();
         try {
             stateAsyncStub.watch{{.FieldPascal}}(
                     Trace.TraceRequest.getDefaultInstance(),
@@ -834,7 +835,7 @@ public class StateClient implements AutoCloseable {
                             // until the 30s poll happens to notice: the cache is
                             // keyed on expiry, and an authority restart
                             // invalidates a token that has NOT expired.
-                            {{$.IdentityManagerFQN}}.noteIfCredentialRejection(t);
+                            {{$.IdentityManagerFQN}}.noteIfCredentialRejection(t, seen);
                             recordWatchRetrying("Watch{{.FieldPascal}}", received.get(), nextAttempt, t.getMessage(), t);
                             LOG.warning("Watch{{.FieldPascal}} stream failed; retrying: " + t.getMessage());
                             scheduleWatchRestart("Watch{{.FieldPascal}}", nextAttempt, () -> startWatch{{.FieldPascal}}(nextAttempt));
@@ -869,6 +870,7 @@ public class StateClient implements AutoCloseable {
         recordWatchHealthy("Watch{{.FieldPascal}}", false);
         AtomicBoolean received = new AtomicBoolean(false);
         AtomicReference<ClientCallStreamObserver<Trace.TraceRequest>> callRef = new AtomicReference<>();
+        final int seen = {{$.IdentityManagerFQN}}.credentialGeneration();
         try {
             stateAsyncStub.watch{{.FieldPascal}}(
                     Trace.TraceRequest.getDefaultInstance(),
@@ -907,7 +909,7 @@ public class StateClient implements AutoCloseable {
                             // until the 30s poll happens to notice: the cache is
                             // keyed on expiry, and an authority restart
                             // invalidates a token that has NOT expired.
-                            {{$.IdentityManagerFQN}}.noteIfCredentialRejection(t);
+                            {{$.IdentityManagerFQN}}.noteIfCredentialRejection(t, seen);
                             recordWatchRetrying("Watch{{.FieldPascal}}", received.get(), nextAttempt, t.getMessage(), t);
                             LOG.warning("Watch{{.FieldPascal}} stream failed; retrying: " + t.getMessage());
                             scheduleWatchRestart("Watch{{.FieldPascal}}", nextAttempt, () -> startWatch{{.FieldPascal}}(nextAttempt));

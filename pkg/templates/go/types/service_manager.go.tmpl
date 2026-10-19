@@ -2105,6 +2105,7 @@ maxInitRetries = certStreamMaxInitRetries
 }
 initAttempts := 0
 for {
+seen := service_im.CredentialGeneration()
 delivered, err := runTlsCertStream(ctx, connProvider, serviceLabel, h, tp, store, degrade, readyCh)
 if delivered {
 readyCh = nil
@@ -2123,7 +2124,7 @@ return
 // A rejected credential must invalidate the token cache here too: this
 // stream renews the serving certificate, so a stuck credential costs the
 // service its TLS as well as its authentication.
-service_im.NoteIfCredentialRejection(err)
+service_im.NoteIfCredentialRejection(err, seen)
 delay := 5 * time.Second
 if readyCh != nil {
 initAttempts++
@@ -2303,6 +2304,7 @@ var errSmbFirstCertFatal = fmt.Errorf("handler rejected first SMB member cert de
 func smbCertStreamLoop(ctx context.Context, connProvider func() grpc.ClientConnInterface, serviceLabel string, h Handler, tp func() (string, error), readyCh chan<- error) {
 initAttempts := 0
 for {
+seen := service_im.CredentialGeneration()
 delivered, err := runSmbCertStream(ctx, connProvider, serviceLabel, h, tp, readyCh)
 if delivered {
 readyCh = nil
@@ -2321,7 +2323,7 @@ return
 // this an UNAUTHENTICATED ManageSmbCert stream retries forever presenting
 // the SAME cached token and never re-mints, so the member never rejoins
 // its peer mesh. Mirrors tlsCertStreamLoop above.
-service_im.NoteIfCredentialRejection(err)
+service_im.NoteIfCredentialRejection(err, seen)
 delay := 5 * time.Second
 if readyCh != nil {
 initAttempts++

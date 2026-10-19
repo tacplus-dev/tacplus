@@ -351,6 +351,7 @@ func (c *{{$.ClientTypeName}}) watch{{$s.FieldName}}Loop() {
 		if c.ctx.Err() != nil {
 			return
 		}
+		seen := service_im.CredentialGeneration()
 		stream, err := c.stateStub.Watch{{$s.FieldName}}(c.ctx, &trace_pb.TraceRequest{})
 		if err != nil {
 			if c.ctx.Err() == nil {
@@ -360,7 +361,7 @@ func (c *{{$.ClientTypeName}}) watch{{$s.FieldName}}Loop() {
 				// loop presents the same dead token forever: the cache is keyed on
 				// expiry, and an authority restart invalidates a token that has
 				// NOT expired.
-				service_im.NoteIfCredentialRejection(err)
+				service_im.NoteIfCredentialRejection(err, seen)
 				c.recordWatchRetrying("Watch{{$s.FieldName}}", false, attempt+1, err.Error(), err)
 			}
 			if !c.sleepBeforeWatchRetry(attempt) {
@@ -370,7 +371,7 @@ func (c *{{$.ClientTypeName}}) watch{{$s.FieldName}}Loop() {
 			continue
 		}
 		c.recordWatchHealthy("Watch{{$s.FieldName}}", false)
-		received := c.receive{{$s.FieldName}}Updates(stream)
+		received := c.receive{{$s.FieldName}}Updates(stream, seen)
 		if c.ctx.Err() == nil {
 			c.recordWatchRetrying("Watch{{$s.FieldName}}", received, attempt+1, "stream ended", nil)
 		}
@@ -385,7 +386,7 @@ func (c *{{$.ClientTypeName}}) watch{{$s.FieldName}}Loop() {
 	}
 }
 
-func (c *{{$.ClientTypeName}}) receive{{$s.FieldName}}Updates(stream types.{{$.StateServiceName}}_Watch{{$s.FieldName}}Client) bool {
+func (c *{{$.ClientTypeName}}) receive{{$s.FieldName}}Updates(stream types.{{$.StateServiceName}}_Watch{{$s.FieldName}}Client, seen uint64) bool {
 	received := false
 	for {
 		msg, err := stream.Recv()
@@ -398,7 +399,7 @@ func (c *{{$.ClientTypeName}}) receive{{$s.FieldName}}Updates(stream types.{{$.S
 				// written, so the server's UNAUTHENTICATED arrives on the
 				// first Recv. Classifying only the start error left the
 				// cache never invalidated on the one path that matters.
-				service_im.NoteIfCredentialRejection(err)
+				service_im.NoteIfCredentialRejection(err, seen)
 			}
 			return received
 		}
@@ -425,6 +426,7 @@ func (c *{{$.ClientTypeName}}) watch{{$c.FieldName}}Loop() {
 		if c.ctx.Err() != nil {
 			return
 		}
+		seen := service_im.CredentialGeneration()
 		stream, err := c.stateStub.Watch{{$c.FieldName}}(c.ctx, &trace_pb.TraceRequest{})
 		if err != nil {
 			if c.ctx.Err() == nil {
@@ -434,7 +436,7 @@ func (c *{{$.ClientTypeName}}) watch{{$c.FieldName}}Loop() {
 				// loop presents the same dead token forever: the cache is keyed on
 				// expiry, and an authority restart invalidates a token that has
 				// NOT expired.
-				service_im.NoteIfCredentialRejection(err)
+				service_im.NoteIfCredentialRejection(err, seen)
 				c.recordWatchRetrying("Watch{{$c.FieldName}}", false, attempt+1, err.Error(), err)
 			}
 			if !c.sleepBeforeWatchRetry(attempt) {
@@ -444,7 +446,7 @@ func (c *{{$.ClientTypeName}}) watch{{$c.FieldName}}Loop() {
 			continue
 		}
 		c.recordWatchHealthy("Watch{{$c.FieldName}}", false)
-		received := c.receive{{$c.FieldName}}Updates(stream)
+		received := c.receive{{$c.FieldName}}Updates(stream, seen)
 		if c.ctx.Err() == nil {
 			c.recordWatchRetrying("Watch{{$c.FieldName}}", received, attempt+1, "stream ended", nil)
 		}
@@ -459,7 +461,7 @@ func (c *{{$.ClientTypeName}}) watch{{$c.FieldName}}Loop() {
 	}
 }
 
-func (c *{{$.ClientTypeName}}) receive{{$c.FieldName}}Updates(stream types.{{$.StateServiceName}}_Watch{{$c.FieldName}}Client) bool {
+func (c *{{$.ClientTypeName}}) receive{{$c.FieldName}}Updates(stream types.{{$.StateServiceName}}_Watch{{$c.FieldName}}Client, seen uint64) bool {
 	{{- if $c.EvictionMaxSize}}
 	const maxEntries{{$c.FieldName}} = {{$c.EvictionMaxSize}}
 	{{- else}}
@@ -477,7 +479,7 @@ func (c *{{$.ClientTypeName}}) receive{{$c.FieldName}}Updates(stream types.{{$.S
 				// written, so the server's UNAUTHENTICATED arrives on the
 				// first Recv. Classifying only the start error left the
 				// cache never invalidated on the one path that matters.
-				service_im.NoteIfCredentialRejection(err)
+				service_im.NoteIfCredentialRejection(err, seen)
 			}
 			return received
 		}
@@ -510,6 +512,7 @@ func (c *{{$.ClientTypeName}}) watch{{$s.FieldName}}Loop() {
 		if c.ctx.Err() != nil {
 			return
 		}
+		seen := service_im.CredentialGeneration()
 		stream, err := c.stateStub.Watch{{$s.FieldName}}(c.ctx, &trace_pb.TraceRequest{})
 		if err != nil {
 			if c.ctx.Err() == nil {
@@ -519,7 +522,7 @@ func (c *{{$.ClientTypeName}}) watch{{$s.FieldName}}Loop() {
 				// loop presents the same dead token forever: the cache is keyed on
 				// expiry, and an authority restart invalidates a token that has
 				// NOT expired.
-				service_im.NoteIfCredentialRejection(err)
+				service_im.NoteIfCredentialRejection(err, seen)
 				c.recordWatchRetrying("Watch{{$s.FieldName}}", false, attempt+1, err.Error(), err)
 			}
 			if !c.sleepBeforeWatchRetry(attempt) {
@@ -529,7 +532,7 @@ func (c *{{$.ClientTypeName}}) watch{{$s.FieldName}}Loop() {
 			continue
 		}
 		c.recordWatchHealthy("Watch{{$s.FieldName}}", false)
-		received := c.receive{{$s.FieldName}}Updates(stream)
+		received := c.receive{{$s.FieldName}}Updates(stream, seen)
 		if c.ctx.Err() == nil {
 			c.recordWatchRetrying("Watch{{$s.FieldName}}", received, attempt+1, "stream ended", nil)
 		}
@@ -544,7 +547,7 @@ func (c *{{$.ClientTypeName}}) watch{{$s.FieldName}}Loop() {
 	}
 }
 
-func (c *{{$.ClientTypeName}}) receive{{$s.FieldName}}Updates(stream types.{{$.StateServiceName}}_Watch{{$s.FieldName}}Client) bool {
+func (c *{{$.ClientTypeName}}) receive{{$s.FieldName}}Updates(stream types.{{$.StateServiceName}}_Watch{{$s.FieldName}}Client, seen uint64) bool {
 	received := false
 	for {
 		msg, err := stream.Recv()
@@ -557,7 +560,7 @@ func (c *{{$.ClientTypeName}}) receive{{$s.FieldName}}Updates(stream types.{{$.S
 				// written, so the server's UNAUTHENTICATED arrives on the
 				// first Recv. Classifying only the start error left the
 				// cache never invalidated on the one path that matters.
-				service_im.NoteIfCredentialRejection(err)
+				service_im.NoteIfCredentialRejection(err, seen)
 			}
 			return received
 		}

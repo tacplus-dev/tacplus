@@ -135,7 +135,7 @@ class RemoteJwkSource implements Authorizer.JwkSource {
         Duration delay = backoff;
         backoff = Backoff.nextReconnectBackoff(backoff);
         try {
-            rewatch.schedule(() -> watch(stub, sink), delay.toMillis(), TimeUnit.MILLISECONDS);
+            rewatch.schedule(() -> watch(stub, sink), Backoff.jitter(delay).toMillis(), TimeUnit.MILLISECONDS);
         } catch (RejectedExecutionException stopped) {
             // stop() raced the error: nothing to reconnect.
         }

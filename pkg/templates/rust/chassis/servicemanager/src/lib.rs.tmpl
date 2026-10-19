@@ -16,5 +16,7 @@ pub mod readiness;
 pub use connection::{ServiceConnection, ChannelProvider};
 pub use auth::TokenFromContext;
 pub use spiffe::SpiffeServerCertVerifier;
-pub use backoff::{next_reconnect_backoff, RECONNECT_INITIAL_BACKOFF, RECONNECT_MAX_BACKOFF};
+pub use backoff::{
+    jitter_reconnect_backoff, next_reconnect_backoff, RECONNECT_INITIAL_BACKOFF, RECONNECT_MAX_BACKOFF,
+};
 pub use readiness::RequiredChannels;

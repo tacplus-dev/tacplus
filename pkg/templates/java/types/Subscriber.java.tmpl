@@ -182,7 +182,7 @@ public class {{.ClassName}} {
                         ? Level.SEVERE : Level.WARNING;
                 LOG.log(level, "{{.SourcePackage}}.{{.SourceField}} subscription failed (gRPC status="
                         + code + "), retrying in " + backoff + "ms: " + e.getMessage());
-                Thread.sleep(backoff);
+                Thread.sleep({{$.ReconnectBackoffFQN}}.jitterMs(backoff));
                 backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
             }
         }

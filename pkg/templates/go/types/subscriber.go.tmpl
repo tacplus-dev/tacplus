@@ -17,6 +17,7 @@ import (
 
 	source "{{.TypeImport}}"
 	eb "{{.EventBusImport}}"
+	"{{.ServiceConnectionImport}}"
 {{- if .ServiceIMImport}}
 	service_im "{{.ServiceIMImport}}"
 {{- end}}
@@ -181,7 +182,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, handler Handler, opts ...Opt
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(minBackoff):
+			case <-time.After(serviceconnection.JitterReconnectBackoff(minBackoff)):
 			}
 			backoff = minBackoff
 			consecutiveFailures = 0
@@ -229,7 +230,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, handler Handler, opts ...Opt
 			return err
 		}
 
-		sleep := backoff
+		sleep := serviceconnection.JitterReconnectBackoff(backoff)
 		backoff = time.Duration(math.Min(float64(backoff*2), float64(maxBackoff)))
 
 		zap.L().Warn("{{.SourcePackage}}.{{.SourceField}} subscription error, retrying",

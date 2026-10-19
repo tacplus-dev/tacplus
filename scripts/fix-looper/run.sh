@@ -156,9 +156,14 @@ If it is a BUG, fix it as below and backport it.
 
 1. Reproduce first (bugs). Turn the issue's reproduction into a test that fails on main: a unit test under
    pkg/, or a cross-test fixture leg under cross-test/ when the defect is in generated runtime
-   behaviour. If you cannot reproduce it, do not guess: comment on the issue with what you tried
-   and what you need (\`gh issue comment\`), add the label needs-repro and remove nightly:in-progress
-   (\`gh issue edit\`), and stop. For an approved feature, write the tests that define it first.
+   behaviour. Building that test is part of the job, including a new fixture leg or a fault-injection
+   test (added latency, a restarted or slowed peer, a long-running connection) when the issue needs one;
+   you have hours, so "the reproduction is larger than one pass" is not a reason to stop. Only after a
+   genuine attempt — the test is written and run and does not fail on main, or it cannot be built for a
+   stated reason — comment on the issue with what you built, its output and what you need
+   (\`gh issue comment\`), add the label needs-repro and remove nightly:in-progress (\`gh issue edit\`),
+   and stop. Never mark needs-repro from reading code alone. For an approved feature, write the tests
+   that define it first.
 2. Fix it in the generator or its templates, never by editing generated output. Keep the Rust, Go
    and Java backends at parity: a fix to one server language is applied to all three where the
    same defect exists. Parity is in capability, not in shape: do not add complexity to one language
@@ -193,7 +198,7 @@ timeout "$CLAUDE_TIMEOUT" claude --print --permission-mode acceptEdits \
 log "claude exited rc=$rc"
 rm -rf "$RUN/tacplus/target/cross-test"
 
-if gh pr list --repo "$REPO" --head "fix/issue-$ISSUE" --json number --jq '.[0].number' | grep -q .; then
+if gh pr list --repo "$REPO" --state all --head "fix/issue-$ISSUE" --json number --jq '.[0].number' | grep -q .; then
   log "pull request open for #$ISSUE"; exit 0
 fi
 labels="$(gh issue view "$ISSUE" --repo "$REPO" --json labels --jq '.labels[].name')"

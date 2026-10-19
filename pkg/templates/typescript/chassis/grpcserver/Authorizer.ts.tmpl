@@ -164,6 +164,16 @@ export class JwkCache {
 // Authorizer
 // ============================================================================
 
+// Matches the service path of any ephemeral pigeon workload,
+// <service>/workloads/pigeon-<run_id>. A workload is admitted only by a pattern
+// that names /workloads/, so "*" never admits one.
+export const PIGEON_SERVICE_PATH = '[^/]+/workloads/pigeon-[a-z0-9]+';
+
+// PIGEON_SERVICE_PATH scoped to the pigeons minted under one parent service.
+export function pigeonServicePathFor(service: string): string {
+  return `${service.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/workloads/pigeon-[a-z0-9]+`;
+}
+
 export class Authorizer {
   private static readonly SERVICE_NAME = "{{.ServiceLabel}}";
   /**
@@ -175,6 +185,7 @@ export class Authorizer {
   private static readonly ACCEPTED_AUDIENCES: ReadonlySet<string> = new Set([{{range $i, $a := .AcceptedAudiences}}{{if $i}}, {{end}}"{{$a}}"{{end}}]);
   private _jwkCache: JwkCache;
   private _methodAuthPatterns: Map<string, RegExp[]>;
+  private _methodAuthAnyService: Set<string>;
   private _methodTargetNamespaceFields: Map<string, string>;
 
   /**
@@ -190,6 +201,7 @@ export class Authorizer {
   constructor(jwkClient?: any) {
     this._jwkCache = new JwkCache();
     this._methodAuthPatterns = new Map();
+    this._methodAuthAnyService = new Set();
     this._methodTargetNamespaceFields = new Map();
 
     if (jwkClient) {
@@ -203,7 +215,9 @@ export class Authorizer {
   }
 
   /**
-   * Registers allowed caller patterns for a method. "*" matches any service caller.
+   * Registers allowed caller patterns for a method. "*" matches any service caller:
+   * it admits service subjects only. A workload is admitted only by a pattern that
+   * names /workloads/ itself.
    *
    * `methodKey` is the SERVICE-QUALIFIED identifier "pkg.Service/Method" that
    * `qualifiedMethodKey` derives from the incoming full gRPC method, never the
@@ -216,8 +230,13 @@ export class Authorizer {
     if (patterns.length === 0) return;
     this._methodAuthPatterns.set(
       methodKey,
-      patterns.map((p) => new RegExp(p === '*' ? '.*' : `^(?:${p})$`)),
+      patterns.filter((p) => p !== '*').map((p) => new RegExp(`^(?:${p})$`)),
     );
+    if (patterns.includes('*')) {
+      this._methodAuthAnyService.add(methodKey);
+    } else {
+      this._methodAuthAnyService.delete(methodKey);
+    }
   }
 
   /**
@@ -334,7 +353,9 @@ export class Authorizer {
       if (!allowed) {
         throw AuthError.permissionDenied(`no auth_services policy configured for service caller "${servicePath}" on "${methodName}"`);
       }
-      if (!allowed.some((p) => p.test(servicePath))) {
+      const matched = (subType === 'service' && this._methodAuthAnyService.has(methodKey))
+        || allowed.some((p) => p.test(servicePath));
+      if (!matched) {
         throw AuthError.permissionDenied(`service "${servicePath}" not authorized for "${methodName}"`);
       }
       // Level-or-below check (applies to S2S too when target_namespace_field is set).

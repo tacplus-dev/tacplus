@@ -32,6 +32,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 // Behavioral self-test for the REAL generated Authorizer (PC-W-1, Java leg —
 // mirrors go/chassis/grpcserver/authorizer_behavior_test.go.tmpl): mints real
@@ -106,6 +107,13 @@ public class AuthorizerBehaviorTest {
         }
     }
 
+    private static void checkPattern(String name, String pattern, String input, boolean want) {
+        if (Pattern.compile(pattern).matcher(input).matches() != want) {
+            System.err.println("FAIL: " + name + ": " + input + " want " + want);
+            failures++;
+        }
+    }
+
     private static void mustReject(String name, ThrowingRunnable r) {
         try {
             r.run();
@@ -137,6 +145,43 @@ public class AuthorizerBehaviorTest {
         mismatched.setMethodAuth(TEST_METHOD, List.of("allowed-svc"));
         String otherSvc = signedToken(key, tok -> tok.setSubType("service").setSubject("other-svc"));
         mustReject("service not in auth_services", () -> mismatched.authorizeWithToken(bearer(otherSvc), TEST_METHOD, null));
+
+        // ---- auth_services: workloads (ephemeral pigeons) are not service callers ----
+        // The SPIFFE id MintWorkload gives a pigeon minted under beagle; its
+        // service path is beagle/workloads/pigeon-<run_id>.
+        String pigeonSub = "spiffe://example.com/system/aws/az1/cluster1/services/beagle/workloads/pigeon-01arz3ndektsv4rrffq69g5fav";
+        String pigeon = signedToken(key, tok -> tok.setSubType("workload").setSubject(pigeonSub));
+        Authorizer star = authorizerWithKeys(jwkForKey(key));
+        star.setMethodAuth(TEST_METHOD, List.of("*"));
+        mustReject("\"*\" must not admit a workload subject", () -> star.authorizeWithToken(bearer(pigeon), TEST_METHOD, null));
+        String beagleSvc = signedToken(key, tok -> tok.setSubType("service").setSubject("beagle"));
+        mustPass("\"*\" still admits a service subject", () -> star.authorizeWithToken(bearer(beagleSvc), TEST_METHOD, null));
+
+        Authorizer named = authorizerWithKeys(jwkForKey(key));
+        named.setMethodAuth(TEST_METHOD, List.of("beagle/workloads/pigeon-[a-z0-9]+"));
+        mustPass("named workload pattern admits the pigeon", () -> named.authorizeWithToken(bearer(pigeon), TEST_METHOD, null));
+
+        Authorizer pigeonPath = authorizerWithKeys(jwkForKey(key));
+        pigeonPath.setMethodAuth(TEST_METHOD, List.of(Authorizer.PIGEON_SERVICE_PATH));
+        mustPass("PIGEON_SERVICE_PATH admits a pigeon", () -> pigeonPath.authorizeWithToken(bearer(pigeon), TEST_METHOD, null));
+
+        // PIGEON_SERVICE_PATH matches pigeons only; pigeonServicePathFor scopes
+        // to one parent and quotes it.
+        checkPattern("PIGEON_SERVICE_PATH matches a pigeon", Authorizer.PIGEON_SERVICE_PATH,
+            "beagle/workloads/pigeon-01arz3ndektsv4rrffq69g5fav", true);
+        checkPattern("PIGEON_SERVICE_PATH matches another parent's pigeon", Authorizer.PIGEON_SERVICE_PATH,
+            "llmproxy/workloads/pigeon-0000", true);
+        checkPattern("PIGEON_SERVICE_PATH rejects the parent service", Authorizer.PIGEON_SERVICE_PATH, "beagle", false);
+        checkPattern("PIGEON_SERVICE_PATH rejects a non-pigeon workload", Authorizer.PIGEON_SERVICE_PATH,
+            "beagle/workloads/agent-42", false);
+        checkPattern("PIGEON_SERVICE_PATH rejects an uppercase run id", Authorizer.PIGEON_SERVICE_PATH,
+            "beagle/workloads/pigeon-01ARZ3", false);
+        checkPattern("pigeonServicePathFor matches its parent's pigeon", Authorizer.pigeonServicePathFor("beagle"),
+            "beagle/workloads/pigeon-01arz3ndektsv4rrffq69g5fav", true);
+        checkPattern("pigeonServicePathFor rejects another parent", Authorizer.pigeonServicePathFor("beagle"),
+            "llmproxy/workloads/pigeon-01arz3ndektsv4rrffq69g5fav", false);
+        checkPattern("pigeonServicePathFor quotes a dot", Authorizer.pigeonServicePathFor("a.b"),
+            "axb/workloads/pigeon-01arz3", false);
 
         // -----------------------------------------------------------------
         // auth_actors: the delegation gate

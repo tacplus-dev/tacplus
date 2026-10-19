@@ -907,6 +907,13 @@ service Chat {
 A user token is authorized by its entitlements, a service token by
 `auth_services` (matched against the token's location-agnostic service path, so
 `"assistant"` matches every tenant's `assistant`), and an unlisted service is refused.
+`"*"` admits service callers only. An ephemeral workload (a pigeon, minted as
+`<service>/workloads/pigeon-<run_id>`) is admitted only by a pattern that names
+`/workloads/`. Each generated server language exports the pattern for any pigeon,
+`PIGEON_SERVICE_PATH` (Go `PigeonServicePath`, Rust/Python/Java/TypeScript
+`PIGEON_SERVICE_PATH`), and a function that scopes it to one parent service:
+`PigeonServicePathFor(service)` in Go, `pigeon_service_path_for(service)` in Rust and
+Python, `pigeonServicePathFor(service)` in Java and TypeScript.
 The calling service declares `option (spec.grpc_s2s_client) = {service:
 "pkg.Chat"};` and uses the generated client. The handler's `Caller` is the
 verified token's identity, so `(spec.principal)` / `(spec.namespace)` request

@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -190,6 +191,18 @@ public class Authorizer {
     private static final Logger logger = LoggerFactory.getLogger(Authorizer.class);
 
     /** Context key carrying the Authorization header value from the gRPC interceptor. */
+    /**
+     * Matches the service path of any ephemeral pigeon workload,
+     * {@code <service>/workloads/pigeon-<run_id>}. A workload is admitted only by a
+     * pattern that names {@code /workloads/}, so {@code "*"} never admits one.
+     */
+    public static final String PIGEON_SERVICE_PATH = "[^/]+/workloads/pigeon-[a-z0-9]+";
+
+    /** {@link #PIGEON_SERVICE_PATH} scoped to the pigeons minted under one parent service. */
+    public static String pigeonServicePathFor(String service) {
+        return Pattern.quote(service) + "/workloads/pigeon-[a-z0-9]+";
+    }
+
     public static final Context.Key<String> AUTH_HEADER_CTX_KEY =
             Context.key("authorization-header");
 
@@ -356,6 +369,8 @@ public class Authorizer {
     private final JwkCache jwkCache;
     private final JwkSource jwkSource;
     private final ConcurrentHashMap<String, List<Pattern>> methodAuthPatterns = new ConcurrentHashMap<>();
+    /** Methods whose auth_services names "*": admits service callers only. */
+    private final Set<String> methodAuthAnyService = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<String, List<Pattern>> methodActorPatterns = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> methodTargetNamespaceField = new ConcurrentHashMap<>();
 
@@ -390,7 +405,9 @@ public class Authorizer {
     /**
      * Registers allowed caller patterns for a method. Patterns are RE2 regexes
      * matched against the LOCATION-AGNOSTIC service path from
-     * {@code TokenWrapper.servicePath()}. "*" is shorthand for "match any caller".
+     * {@code TokenWrapper.servicePath()}. "*" is shorthand for "any service caller":
+     * it admits service subjects only. A workload is admitted only by a pattern that
+     * names {@code /workloads/} itself.
      *
      * <p>{@code methodKey} is the SERVICE-QUALIFIED method identifier the
      * generated wrapper hands to {@link #authorize}: "Service/PutNodes", or
@@ -405,14 +422,20 @@ public class Authorizer {
     public void setMethodAuth(String methodKey, List<String> patterns) {
         if (patterns == null || patterns.isEmpty()) return;
         List<Pattern> compiled = new ArrayList<>();
+        boolean anyService = false;
         for (String p : patterns) {
             if ("*".equals(p)) {
-                compiled.add(Pattern.compile(".*"));
+                anyService = true;
             } else {
                 compiled.add(Pattern.compile(p));
             }
         }
         methodAuthPatterns.put(methodKey, compiled);
+        if (anyService) {
+            methodAuthAnyService.add(methodKey);
+        } else {
+            methodAuthAnyService.remove(methodKey);
+        }
     }
 
     /**
@@ -579,7 +602,7 @@ public class Authorizer {
                 throw ProtoException.newErrPermissionDenied(null,
                         "no auth_services policy configured for service caller \"" + servicePath + "\" on \"" + methodName + "\"");
             }
-            boolean matched = false;
+            boolean matched = "service".equals(subType) && methodAuthAnyService.contains(fullMethod);
             for (Pattern p : allowed) {
                 if (p.matcher(servicePath).matches()) {
                     matched = true;

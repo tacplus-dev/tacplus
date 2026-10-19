@@ -17,6 +17,7 @@ REQUIRESDEVICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-requiresdevice"
 # resolve. Anywhere else it breaks the repo vet gate.
 SELFTESTS_SRC="$ROOT_DIR/cross-test/current-generation/testdata"
 RECORDEGRESS_PROTO_SRC="$ROOT_DIR/cross-test/proto-recordegress"
+EVENTBUS_BACKPRESSURE_PROTO_SRC="$ROOT_DIR/cross-test/proto-eventbus-backpressure"
 OWNERDEFAULT_PROTO_SRC="$ROOT_DIR/cross-test/proto-ownerdefault"
 QUORUMWRITE_PROTO_SRC="$ROOT_DIR/cross-test/proto-quorumwrite"
 TENANTSLICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-tenantslice"
@@ -175,6 +176,19 @@ write_recordegress_config() {
 language: "$language"
 pkg: "com.gitlab.example.dummy.egressvault"
 src: "$RECORDEGRESS_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
+write_eventbus_backpressure_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.agentsensor"
+src: "$EVENTBUS_BACKPRESSURE_PROTO_SRC"
 output-dir: "tacplus"
 EOF
 }
@@ -485,6 +499,21 @@ run_java_generated_self_tests() {
     grep -q '^ExtractionTest: all checks passed$' "$test_log" \
       || die "main fixture (java): ExtractionTest did not report its checks passed"
   fi
+  # The event-bus backpressure fixture's self-tests, copied in by
+  # install_backpressure_selftests, so they are present exactly in that build.
+  local bp_name bp_test bp_class
+  for bp_name in SubscribeBackpressureTest W2SBackpressureTest; do
+    bp_test="$(find "$output/src/main/java" -type f -name "$bp_name.java" -print -quit)"
+    if [[ -n "$bp_test" ]]; then
+      bp_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$bp_test").$bp_name"
+      "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$bp_class" >>"$test_log" 2>&1 || {
+        dump_step_log "$test_log"
+        return 1
+      }
+      grep -q "^$bp_name: all checks passed\$" "$test_log" \
+        || die "event-bus backpressure fixture (java): $bp_name did not report its checks passed"
+    fi
+  done
   assert_clean_log "$test_log"
 }
 
@@ -1098,6 +1127,21 @@ install_json_key_selftest() {
   [[ -f "$output/Cargo.toml" ]] || die "main fixture (rust): generated crate not found under $output"
   mkdir -p "$output/tests"
   cp "$SELFTESTS_SRC/rust/json_key_test.rs" "$output/tests/"
+}
+
+# install_backpressure_selftests copies the two Java backpressure self-tests into
+# the generated packages they drive: the subscribe test beside the AgentState
+# StateClient (its topic iterator), the W2S test beside the AgentUploadApi W2S
+# client (its WebSocket listener).
+install_backpressure_selftests() {
+  local output="$1"
+  local state_client w2s_client
+  state_client="$(find "$output/src/main/java" -type f -path '*/s2sm/internal/state/services/agentsensor/agentstate/StateClient.java' -print -quit)"
+  [[ -n "$state_client" ]] || die "event-bus backpressure fixture (java): AgentState StateClient not generated under $output"
+  cp "$SELFTESTS_SRC/java/SubscribeBackpressureTest.java" "$(dirname "$state_client")/"
+  w2s_client="$(find "$output/src/main/java" -type f -path '*/w2sm/internal/grpc_over_rest/services/agentsensor/AgentUploadApiW2SClient.java' -print -quit)"
+  [[ -n "$w2s_client" ]] || die "event-bus backpressure fixture (java): AgentUploadApi W2S client not generated under $output"
+  cp "$SELFTESTS_SRC/java/W2SBackpressureTest.java" "$(dirname "$w2s_client")/"
 }
 
 # install_extraction_selftest copies the Java runtime self-test into the
@@ -2121,6 +2165,33 @@ if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
     echo "==> Compiling $language record-egress HOST fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/egressstratum"
     echo "    PASS $language record-egress host"
+  done
+fi
+
+# event-bus backpressure fixture: the ONLY place a store-hosted state's topic
+# iterator (the generated AgentState StateClient) and a client-streaming W2S
+# WebSocket listener are compiled and driven by a standing gate. Java only: both
+# self-tests pin Java runtime code, and no other language emits these surfaces
+# with the same defect.
+if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    [[ "$language" == java ]] || continue
+    dir="$WORK_ROOT/eventbus-backpressure-$language"
+    log="$WORK_ROOT/eventbus-backpressure-$language.log"
+    rm -rf "$dir"
+    write_eventbus_backpressure_config "$dir" "$language"
+
+    echo "==> Generating $language event-bus backpressure fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$EVENTBUS_BACKPRESSURE_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language event-bus backpressure generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    install_backpressure_selftests "$output_root"
+    echo "==> Compiling $language event-bus backpressure fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
+    echo "    PASS $language event-bus backpressure"
   done
 fi
 

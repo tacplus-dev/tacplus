@@ -7,11 +7,12 @@
 //! and provides type-safe methods with retry logic for GET, POST, and mutations.
 
 use crate::error::{status_code_to_error, ClientError, Result};
-use crate::retry::RetryConfig;
+use crate::retry::{parse_retry_after, RetryConfig};
 
 const MAX_RESPONSE_BODY_BYTES: usize = 100 * 1024 * 1024; // 100 MB
 use {{.CrateBasePathUnderscore}}_types::sys::httpclient::HttpClientConfig as ProtoHttpClientConfig;
 use reqwest::Method;
+use std::time::Duration;
 
 /// TypedClient wraps the base HTTP client and provides type-safe methods with retry logic.
 /// Each method accepts full URLs, allowing the client to be reused for any endpoint.
@@ -72,10 +73,13 @@ impl TypedClient {
     {
         let max_attempts = max_attempts_for_method("GET", retry_config);
         let mut last_error = None;
+        let mut retry_after = Duration::ZERO;
 
         for attempt in 0..max_attempts {
             if attempt > 0 {
-                let backoff = retry_config.calculate_backoff(attempt - 1);
+                // A Retry-After from the peer is a floor under the backoff
+                let backoff = retry_config.calculate_backoff(attempt - 1).max(retry_after);
+                retry_after = Duration::ZERO;
                 log::debug!(
                     "retrying GET {}, attempt {}/{} after {:?}",
                     url,
@@ -92,6 +96,12 @@ impl TypedClient {
                 Ok(response) => {
                     let status = response.status();
                     let status_code = status.as_u16();
+                    let response_retry_after = response
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|value| value.to_str().ok())
+                        .map(parse_retry_after)
+                        .unwrap_or(Duration::ZERO);
 
                     match response.bytes().await {
                         Ok(body) => {
@@ -120,6 +130,7 @@ impl TypedClient {
 
                                 if should_retry && attempt < max_attempts - 1 {
                                     last_error = Some(error);
+                                    retry_after = response_retry_after;
                                     continue;
                                 }
                                 return Err(error);
@@ -460,5 +471,42 @@ mod tests {
 
         let client = result.unwrap();
         assert_eq!(client.retry_config().max_retries, 3);
+    }
+
+    // A 429 carries Retry-After: the peer is asking callers to wait. A GET that
+    // receives one must not be sent again before that delay (issue #36).
+    #[tokio::test]
+    async fn test_do_get_does_not_resend_before_retry_after() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = hits.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                server_hits.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 4096];
+                let _ = socket.read(&mut buf).await;
+                let _ = socket
+                    .write_all(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 30\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await;
+            }
+        });
+
+        let client = TypedClient::new(None).unwrap();
+        let _ = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.do_get(&url, |_: &[u8]| Ok::<(), ClientError>(())),
+        )
+        .await;
+
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "GET sent again inside the 2 s deadline; Retry-After: 30 must hold the retry back"
+        );
     }
 }

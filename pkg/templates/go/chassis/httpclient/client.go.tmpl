@@ -16,6 +16,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -236,12 +237,17 @@ func DoGet[T any](
 	retryConfig *httpclientProto.RetryConfig,
 ) (*T, error) {
 	var lastErr error
+	var retryAfter time.Duration
 	maxAttempts := maxAttemptsForMethod(http.MethodGet, retryConfig)
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
-			// Calculate backoff and wait
+			// Calculate backoff and wait; a Retry-After from the peer is a floor
 			backoff := calculateBackoffDuration(retryConfig, attempt-1)
+			if retryAfter > backoff {
+				backoff = retryAfter
+			}
+			retryAfter = 0
 			zap.L().Debug(fmt.Sprintf("retrying GET %s, attempt %d/%d after %v", url, attempt+1, maxAttempts, backoff))
 			select {
 			case <-ctx.Done():
@@ -290,6 +296,7 @@ func DoGet[T any](
 			lastErr = statusCodeToError(resp.StatusCode)
 
 			if shouldRetry && attempt < maxAttempts-1 {
+				retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
 				continue
 			}
 			return nil, lastErr
@@ -518,6 +525,19 @@ func maxAttemptsForMethod(method string, retryConfig *httpclientProto.RetryConfi
 	default:
 		return 1
 	}
+}
+
+// parseRetryAfter reads a Retry-After header given as delta-seconds. It returns
+// zero when the header is absent, negative or not a number of seconds.
+func parseRetryAfter(value string) time.Duration {
+	secs, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || secs <= 0 {
+		return 0
+	}
+	if secs > int64(math.MaxInt64/time.Second) {
+		secs = int64(math.MaxInt64 / time.Second)
+	}
+	return time.Duration(secs) * time.Second
 }
 
 // isRetryableStatus checks if a status code is in the retryable list

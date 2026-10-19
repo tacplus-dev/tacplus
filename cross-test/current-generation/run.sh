@@ -434,6 +434,18 @@ run_java_generated_self_tests() {
       return 1
     }
   fi
+  # The HTTP client's Retry-After self-test (issue #36), emitted beside
+  # TypedClient.java for every java build, so it runs in every java build.
+  local rh_test rh_class
+  rh_test="$(find "$output/src/main/java" -type f -path '*/chassis/httpclient/TypedClientRetryAfterTest.java' -print -quit)"
+  [[ -n "$rh_test" ]] || die "java: TypedClientRetryAfterTest not generated under $output"
+  rh_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$rh_test").$(basename "$rh_test" .java)"
+  "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$rh_class" >>"$test_log" 2>&1 || {
+    dump_step_log "$test_log"
+    return 1
+  }
+  grep -q '^TypedClientRetryAfterTest: all checks passed$' "$test_log" \
+    || die "java: TypedClientRetryAfterTest did not report its checks passed"
   # The record-egress fixture's user-and-listed-service self-test, copied in by
   # install_user_and_listed_service_selftest (which dies if it cannot), so it is
   # present exactly in that fixture's build.
@@ -527,6 +539,15 @@ run_rust_spiffe_self_tests() {
       return 1
     }
   assert_clean_log "$log_dir/rust-spiffe-test.log"
+
+  # Issue #36: the httpclient crate's GET retry tests, including the Retry-After
+  # hold-back against a live local server.
+  [[ -f "$output/chassis/httpclient/Cargo.toml" ]] || die "missing generated Rust httpclient crate"
+  (cd "$output" && cargo test -p httpclient) >"$log_dir/rust-httpclient-test.log" 2>&1 || {
+      dump_step_log "$log_dir/rust-httpclient-test.log"
+      return 1
+    }
+  assert_clean_log "$log_dir/rust-httpclient-test.log"
 
   # SEC-1: the x509 crate's tests pin verify_service_name (the SPIFFE identity
   # pin behind ServiceNameServerVerifier) with certs minted by the crate's own

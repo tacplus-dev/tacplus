@@ -106,8 +106,10 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		// token-mint exchangers) than the generic chassis walker supplies, and
 		// client_im is emitted only for client builds. They are emitted by
 		// dedicated generators (generateIdentityManager /
-		// generateClientIdentityManager), so skip them here.
-		if base == "service_im.go.tmpl" || strings.HasPrefix(path, "client_im/") {
+		// generateClientIdentityManager), so skip them here. The identity
+		// manager's self-test is emitted alongside service_im.go for the same
+		// reason: copied by the walker it would land in builds with no service_im.go.
+		if base == "service_im.go.tmpl" || base == "service_im_test.go.tmpl" || strings.HasPrefix(path, "client_im/") {
 			return nil
 		}
 

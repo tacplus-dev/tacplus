@@ -545,8 +545,26 @@ func generateIdentityManager(config *tactype.Config) error {
 	if err := os.WriteFile(outputPath, formatted, 0644); err != nil {
 		return fmt.Errorf("failed to write service_im.go: %w", err)
 	}
+	if err := writeIdentityManagerTest(outputDir); err != nil {
+		return err
+	}
 
 	zap.L().Info("Generated service identity manager", zap.String("path", outputPath))
+	return nil
+}
+
+// writeIdentityManagerTest copies the credential-recovery self-test next to the
+// identity manager it exercises. It is emitted here, not by the generic chassis
+// walker, so it only lands in builds that have a service_im.go to test.
+func writeIdentityManagerTest(outputDir string) error {
+	content, err := loadChassisTemplate("service_im/service_im_test.go.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to load service_im test template: %w", err)
+	}
+	outputPath := filepath.Join(outputDir, "service_im_test.go")
+	if err := os.WriteFile(outputPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write service_im_test.go: %w", err)
+	}
 	return nil
 }
 
@@ -656,7 +674,10 @@ func (im *IdentityManager) Close() {}
 // floor reads: a build whose calls are rejected over and over still has to stop
 // reporting itself Ready.
 
-var consecutiveRejects atomic.Int64
+var (
+	consecutiveRejects   atomic.Int64
+	credentialGeneration atomic.Uint64
+)
 
 // degradedAfter is the number of rejections in a row before the service reports
 // itself unhealthy. Same threshold and same reasoning as the token-exchanger
@@ -687,13 +708,24 @@ func NoteCredentialAccepted() {
 	consecutiveRejects.Store(0)
 }
 
+// CredentialGeneration returns the generation a call must read BEFORE it is
+// sent, and pass back to NoteIfCredentialRejection if the call is rejected.
+func CredentialGeneration() uint64 {
+	return credentialGeneration.Load()
+}
+
 // NoteIfCredentialRejection records a rejection when the error looks like one.
 // Returns true when it did. There is no cached credential to drop in this
-// variant, so unlike the token-exchanger one it only counts.
-func NoteIfCredentialRejection(err error) bool {
+// variant, so unlike the token-exchanger one it only counts. seen is the
+// generation the rejected call read; the first rejection of a generation counts
+// and the rest of that generation's rejections are coalesced, as in the
+// token-exchanger variant.
+func NoteIfCredentialRejection(err error, seen uint64) bool {
 	if IsCredentialRejection(err) {
-		consecutiveRejects.Add(1)
-		zap.L().Warn("credential was rejected and this build has no token minter — nothing can re-mint it")
+		if credentialGeneration.CompareAndSwap(seen, seen+1) {
+			consecutiveRejects.Add(1)
+			zap.L().Warn("credential was rejected and this build has no token minter — nothing can re-mint it")
+		}
 		return true
 	}
 	return false
@@ -720,6 +752,9 @@ func CredentialsDegraded() bool {
 	outputPath := filepath.Join(outputDir, "service_im.go")
 	if err := os.WriteFile(outputPath, formatted, 0644); err != nil {
 		return fmt.Errorf("failed to write service_im.go: %w", err)
+	}
+	if err := writeIdentityManagerTest(outputDir); err != nil {
+		return err
 	}
 	zap.L().Info("Generated no-minter service identity manager", zap.String("path", outputPath))
 	return nil

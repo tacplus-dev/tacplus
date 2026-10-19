@@ -70,7 +70,6 @@ static CONSECUTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUs
 /// Bumped every time the cache is dropped, so concurrent reporters that all saw
 /// the same stale token are counted once between re-mints.
 static GENERATION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
-static LAST_COUNTED_GEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Rejections in a row before the service reports itself unhealthy.
 ///
@@ -97,25 +96,28 @@ pub fn note_credential_accepted() {
     CONSECUTIVE.store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// The credential generation a call must read BEFORE it is sent, and pass back
+/// to `note_credential_rejection` if the call is rejected.
+pub fn credential_generation() -> usize {
+    GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Drops the cached credentials so the next call re-mints.
 ///
-/// Safe to call on every failed attempt: invalidation is idempotent, and a
-/// re-mint is one exchange against the authority that the retry was going to
-/// make anyway.
-pub async fn note_credential_rejection() {
-    // Count REJECTED GENERATIONS, not rejections.
-    //
-    // A service runs several loops on one identity — every state watch plus the
-    // TLS cert stream. When the authority restarts they all fail at once with
-    // the SAME stale token, so counting raw rejections crossed the threshold on
-    // the first restart and flapped readiness for the routine case the
-    // threshold exists to absorb. Coalescing on the generation makes "3" mean
-    // three distinct re-mint cycles failed, which is what the threshold claims.
-    let gen = GENERATION.load(std::sync::atomic::Ordering::Relaxed);
-    if LAST_COUNTED_GEN.swap(gen, std::sync::atomic::Ordering::Relaxed) != gen {
-        CONSECUTIVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+/// `seen` is the generation the rejected call read before it was sent. Only the
+/// first rejection of a generation counts and invalidates: several loops on one
+/// identity that were all sent the same stale token would otherwise each count
+/// as a failed re-mint. A rejection whose generation has already moved on is a
+/// token that was replaced by another loop's re-mint, so it is dropped here and
+/// the next call reads the new generation.
+pub async fn note_credential_rejection(seen: usize) {
+    if GENERATION
+        .compare_exchange(seen, seen + 1, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst)
+        .is_err()
+    {
+        return;
     }
-    GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    CONSECUTIVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     let f = { slot().lock().await.clone() };
     if let Some(f) = f {
@@ -126,9 +128,9 @@ pub async fn note_credential_rejection() {
 
 /// Calls `note_credential_rejection` when the error looks like a rejection.
 /// Returns true when it did, so callers can log or count it.
-pub async fn note_if_credential_rejection(err: &str) -> bool {
+pub async fn note_if_credential_rejection(err: &str, seen: usize) -> bool {
     if is_credential_rejection(err) {
-        note_credential_rejection().await;
+        note_credential_rejection(seen).await;
         return true;
     }
     false
@@ -159,6 +161,13 @@ mod tests {
         assert!(!is_credential_rejection("deadline has elapsed"));
     }
 
+    /// A call reports the generation it read before it was sent, as the real
+    /// call sites do. Each re-mint cycle bumps the generation, so a call that
+    /// reads it afresh is a new attempt.
+    async fn rejected_attempt() {
+        note_credential_rejection(credential_generation()).await;
+    }
+
     #[tokio::test]
     async fn degrades_only_after_repeated_rejections_and_clears_on_acceptance() {
         let _guard = TEST_LOCK.lock().await;
@@ -167,14 +176,14 @@ mod tests {
 
         // One rejection is the NORMAL authority-restart case: re-mint and carry
         // on. Flapping readiness for it would be worse than the problem.
-        note_credential_rejection().await;
+        rejected_attempt().await;
         assert!(!credentials_degraded());
-        note_credential_rejection().await;
+        rejected_attempt().await;
         assert!(!credentials_degraded());
 
         // Repeated failures mean re-minting is not helping — that is the state
         // that used to persist until a human deleted the pod.
-        note_credential_rejection().await;
+        rejected_attempt().await;
         assert!(credentials_degraded());
 
         note_credential_accepted();
@@ -189,20 +198,21 @@ mod tests {
         let _guard = TEST_LOCK.lock().await;
         note_credential_accepted();
 
-        let gen_before = GENERATION.load(std::sync::atomic::Ordering::Relaxed);
-        // Three loops report the same generation before any re-mint completes.
-        LAST_COUNTED_GEN.store(gen_before.wrapping_sub(1), std::sync::atomic::Ordering::Relaxed);
-        GENERATION.store(gen_before, std::sync::atomic::Ordering::Relaxed);
-        note_credential_rejection().await;
-        GENERATION.store(gen_before, std::sync::atomic::Ordering::Relaxed);
-        note_credential_rejection().await;
-        GENERATION.store(gen_before, std::sync::atomic::Ordering::Relaxed);
-        note_credential_rejection().await;
+        // Three loops read the generation before any of them is rejected.
+        let seen = credential_generation();
+        note_credential_rejection(seen).await;
+        note_credential_rejection(seen).await;
+        note_credential_rejection(seen).await;
 
         assert!(
             !credentials_degraded(),
             "one stale token rejected by three loops is ONE failed generation"
         );
+
+        // The next attempt reads the new generation, so it counts again.
+        rejected_attempt().await;
+        rejected_attempt().await;
+        assert!(credentials_degraded(), "two later re-mint cycles that failed must degrade");
         note_credential_accepted();
     }
 
@@ -219,10 +229,10 @@ mod tests {
         }))
         .await;
 
-        assert!(!note_if_credential_rejection("transport error").await);
+        assert!(!note_if_credential_rejection("transport error", credential_generation()).await);
         assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
 
-        assert!(note_if_credential_rejection("UNAUTHENTICATED: bad token").await);
+        assert!(note_if_credential_rejection("UNAUTHENTICATED: bad token", credential_generation()).await);
         assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

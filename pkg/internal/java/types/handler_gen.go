@@ -221,6 +221,9 @@ type javaSmTemplateData struct {
 	RecordC2S              *javaRecordC2SFile // generated handler for the client-facing record read plane, nil when none
 	DiskStores             []javaDiskStoreRuntimeEntry
 	HasDiskStores          bool
+	// HasGcsArchive is true when the project pins the GCS SDK, so GcsArchiveSink is
+	// in the chassis and the ServiceManager may construct it.
+	HasGcsArchive bool
 	// HasApprovalBroker is true when some hosted service carries the
 	// (spec.rpc).requires_device gate, so the ServiceManager builds the check
 	// and wires it into those wrappers.
@@ -323,6 +326,10 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		})
 	}
 	diskStores, err := collectJavaDiskStoreRuntimeEntries(config, grpcSvcs)
+	if err != nil {
+		return javaSmTemplateData{}, err
+	}
+	gcsArchive, err := javaGcsArchiveEnabled(config)
 	if err != nil {
 		return javaSmTemplateData{}, err
 	}
@@ -672,6 +679,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		RecordC2S:              recordC2S,
 		DiskStores:             diskStores,
 		HasDiskStores:          len(diskStores) > 0,
+		HasGcsArchive:          gcsArchive,
 		HasApprovalBroker:      hasApprovalBroker,
 		ApprovalBroker:         approvalBroker,
 		HostsC2DStandalone: service.HostsC2DStandalone(service.C2DHostShape{

@@ -58,20 +58,35 @@ public final class RollSchedule {
      */
     public static ScheduledExecutorService runRollScheduler(
             RedoLog log, Duration interval, String nodeId, Supplier<List<RedoLog.Record>> snapshot) {
+        return schedule("roll", interval, nodeId, () -> log.roll(snapshot.get()));
+    }
+
+    /**
+     * Schedule the periodic checkpoint for an archived redo log: the full store
+     * state, recorded under the redo position it covers. Staggered on its own
+     * per-node offset so it never lands on the roll. A checkpoint whose snapshot
+     * fails is not shipped; it retries on the next interval.
+     */
+    public static ScheduledExecutorService runCheckpointScheduler(
+            RedoLog log, Duration interval, String nodeId, Supplier<List<RedoLog.Record>> snapshot) {
+        return schedule("checkpoint", interval, nodeId + "/checkpoint", () -> log.checkpoint(snapshot));
+    }
+
+    private static ScheduledExecutorService schedule(String what, Duration interval, String key, Runnable task) {
         ThreadFactory tf = r -> {
-            Thread t = new Thread(r, "diskstore-roll-" + nodeId);
+            Thread t = new Thread(r, "diskstore-" + what + "-" + key);
             t.setDaemon(true);
             return t;
         };
         ScheduledExecutorService exec = Executors.newSingleThreadScheduledExecutor(tf);
-        long offsetMs = rollOffset(nodeId, interval).toMillis();
+        long offsetMs = rollOffset(key, interval).toMillis();
         long periodMs = Math.max(interval.toMillis(), 1);
         ScheduledFuture<?> unused = exec.scheduleAtFixedRate(() -> {
             try {
-                log.roll(snapshot.get());
+                task.run();
             } catch (RuntimeException e) {
                 LOG.log(Level.WARNING,
-                        "diskstore roll failed for " + nodeId + "; retrying on next interval", e);
+                        "diskstore " + what + " failed for " + key + "; retrying on next interval", e);
             }
         }, offsetMs, periodMs, TimeUnit.MILLISECONDS);
         return exec;

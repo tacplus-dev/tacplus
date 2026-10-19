@@ -20,6 +20,11 @@ import {{.ChassisBase}}.grpcserver.C2DServer;
 import {{.ChassisBase}}.grpcserver.ServiceImplementation;
 import {{.ChassisBase}}.service_im.IdentityManager;
 {{- if .HasDiskStores}}
+import {{.ChassisBase}}.diskstore.ArchiveShipper;
+import {{.ChassisBase}}.diskstore.ArchiveSink;
+{{- if .HasGcsArchive}}
+import {{.ChassisBase}}.diskstore.GcsArchiveSink;
+{{- end}}
 import {{.ChassisBase}}.diskstore.Codec;
 import {{.ChassisBase}}.diskstore.LocalRows;
 import {{.ChassisBase}}.diskstore.RedoLog;
@@ -215,17 +220,19 @@ public class ServiceManager implements AutoCloseable {
 	    /** ServiceManager-owned redo-log handles for generated service_store stores. */
 	    public static final class DiskStoreLogs implements AutoCloseable {
 	        private final Duration rollInterval;
+	        private final Duration checkpointInterval;
 	{{- range .DiskStores}}
 	        private final RedoLog {{.LogField}};
 	{{- end}}
 
 	        private DiskStoreLogs(
-	                Duration rollInterval{{if .DiskStores}},{{end}}
+	                Duration rollInterval, Duration checkpointInterval{{if .DiskStores}},{{end}}
 	{{- range $i, $store := .DiskStores}}
 	                {{if $i}}, {{end}}RedoLog {{$store.LogField}}
 	{{- end}}
 	        ) {
 	            this.rollInterval = rollInterval;
+	            this.checkpointInterval = checkpointInterval;
 	{{- range .DiskStores}}
 	            this.{{.LogField}} = {{.LogField}};
 	{{- end}}
@@ -244,10 +251,10 @@ public class ServiceManager implements AutoCloseable {
         }
     }
 
-	    private static DiskStoreLogs openDiskStoreLogs(Config config) {
+	    private static DiskStoreLogs openDiskStoreLogs(Config config, String member) {
 	        if (!config.hasDiskPersistence()) {
 	            return new DiskStoreLogs(
-	                    Duration.ZERO{{if .DiskStores}},{{end}}
+	                    Duration.ZERO, Duration.ZERO{{if .DiskStores}},{{end}}
 	{{- range $i, $store := .DiskStores}}
 	                    {{if $i}}, {{end}}null
 	{{- end}}
@@ -266,13 +273,48 @@ public class ServiceManager implements AutoCloseable {
 	        Path base = Path.of(persistence.getDir());
 	        int archiveCount = persistence.getArchiveCount() > 0 ? persistence.getArchiveCount() : 3;
 	        Codec codec = Codec.fromProtoInt(persistence.getCompressionValue());
+	        ArchiveSink archive = null;
+	        String archivePrefix = "";
+	        Duration checkpointInterval = Duration.ZERO;
+	        if (persistence.hasArchive()) {
+	            var archiveConfig = persistence.getArchive();
+	            if (archiveConfig.getGcsBucket().isEmpty()) {
+	                throw new IllegalArgumentException(
+	                        "grpcconfig.disk_persistence.archive.gcs_bucket is required when the archive is set");
+	            }
+	            archive = openArchiveSink(archiveConfig.getGcsBucket());
+	            archivePrefix = archiveConfig.getPrefix();
+	            long checkpointSeconds = archiveConfig.getCheckpointIntervalSeconds();
+	            checkpointInterval = Duration.ofSeconds(checkpointSeconds > 0 ? checkpointSeconds : 86400);
+	        }
 	        return new DiskStoreLogs(
-	                rollInterval{{if .DiskStores}},{{end}}
+	                rollInterval, checkpointInterval{{if .DiskStores}},{{end}}
 	{{- range $i, $store := .DiskStores}}
-	                {{if $i}}, {{end}}DiskStores.open{{$store.MethodName}}Log(base, StorePath.ROOT_TENANT, archiveCount, codec)
+	                {{if $i}}, {{end}}attachArchive(DiskStores.open{{$store.MethodName}}Log(base, StorePath.ROOT_TENANT, archiveCount, codec),
+	                        archive, archivePrefix, member, "{{$store.StoreName}}", codec)
 	{{- end}}
         );
     }
+
+	    /** The GCS archive sink for grpcconfig.disk_persistence.archive.gcs_bucket. */
+	    private static ArchiveSink openArchiveSink(String bucket) {
+{{- if .HasGcsArchive}}
+	        return new GcsArchiveSink(bucket);
+{{- else}}
+	        throw new IllegalStateException(
+	                "grpcconfig.disk_persistence.archive is set, but this build has no archive sink: "
+	                + "pin com.google.cloud:google-cloud-storage in dependencies.yaml");
+{{- end}}
+	    }
+
+	    /** Ships the store's redo log to the archive when one is configured. */
+	    private static RedoLog attachArchive(
+	            RedoLog log, ArchiveSink archive, String prefix, String member, String store, Codec codec) {
+	        if (archive != null) {
+	            log.attachShipper(new ArchiveShipper(archive, prefix, member, store, codec));
+	        }
+	        return log;
+	    }
 {{- end}}
 
     private ServiceManager(
@@ -289,7 +331,7 @@ public class ServiceManager implements AutoCloseable {
         this.healthManager = healthManager;
         this.earlyHealthProbeServer = earlyHealthProbeServer;
 {{- if .HasDiskStores}}
-        this.diskStoreLogs = openDiskStoreLogs(config);
+        this.diskStoreLogs = openDiskStoreLogs(config, getInstanceId());
 {{- end}}
 {{- if .HasStates}}
         this.stateClients = new StateClients();
@@ -780,36 +822,45 @@ public class ServiceManager implements AutoCloseable {
         java.util.List<ScheduledExecutorService> schedulers = new java.util.ArrayList<>();
 {{- range .DiskStores}}
         if (diskStoreLogs.{{.LogField}} != null) {
-	            schedulers.add(RollSchedule.runRollScheduler(
-	                    diskStoreLogs.{{.LogField}},
-	                    diskStoreLogs.rollInterval,
-	                    nodeId + "/{{.StoreName}}",
-                    () -> {
-                        try {
-                            var store = handler.{{.HandlerGetter}}();
-                            var response = store.list(null);
-                            var records = DiskStores.snapshot{{.MethodName}}(response.getItemsList());
-                            // The baseline is LOCALITY-SCOPED when the store says it is
-                            // partitioned: list(null) is the whole cluster's rows, and a
-                            // node whose baseline claims rows it does not own breaks the
-                            // partial-log invariant recovery resolves staleness with.
-                            if (store instanceof LocalRows) {
-                                LocalRows local = (LocalRows) store;
-                                java.util.List<RedoLog.Record> scoped = new java.util.ArrayList<>();
-                                for (RedoLog.Record rec : records) {
-                                    if (local.isLocalRow(rec.key)) {
-                                        scoped.add(rec);
-                                    }
-                                }
-                                return scoped;
+            java.util.function.Supplier<java.util.List<RedoLog.Record>> snapshot = () -> {
+                try {
+                    var store = handler.{{.HandlerGetter}}();
+                    var response = store.list(null);
+                    var records = DiskStores.snapshot{{.MethodName}}(response.getItemsList());
+                    // The baseline is LOCALITY-SCOPED when the store says it is
+                    // partitioned: list(null) is the whole cluster's rows, and a
+                    // node whose baseline claims rows it does not own breaks the
+                    // partial-log invariant recovery resolves staleness with.
+                    if (store instanceof LocalRows) {
+                        LocalRows local = (LocalRows) store;
+                        java.util.List<RedoLog.Record> scoped = new java.util.ArrayList<>();
+                        for (RedoLog.Record rec : records) {
+                            if (local.isLocalRow(rec.key)) {
+                                scoped.add(rec);
                             }
-                            return records;
-                        } catch (Exception e) {
-                            LOG.warning("diskstore snapshot failed for {{.StoreName}}; roll will retry on next interval: "
-                                    + e.getMessage());
-                            return java.util.Collections.emptyList();
                         }
-                    }));
+                        return scoped;
+                    }
+                    return records;
+                } catch (Exception e) {
+                    // Never ship an empty snapshot in place of an unreadable one: a roll
+                    // or checkpoint that wrote it would drop the whole store.
+                    throw new IllegalStateException(
+                            "diskstore snapshot failed for {{.StoreName}}; retried on the next interval", e);
+                }
+            };
+            schedulers.add(RollSchedule.runRollScheduler(
+                    diskStoreLogs.{{.LogField}},
+                    diskStoreLogs.rollInterval,
+                    nodeId + "/{{.StoreName}}",
+                    snapshot));
+            if (!diskStoreLogs.checkpointInterval.isZero()) {
+                schedulers.add(RollSchedule.runCheckpointScheduler(
+                        diskStoreLogs.{{.LogField}},
+                        diskStoreLogs.checkpointInterval,
+                        nodeId + "/{{.StoreName}}",
+                        snapshot));
+            }
         }
 {{- end}}
         return schedulers;

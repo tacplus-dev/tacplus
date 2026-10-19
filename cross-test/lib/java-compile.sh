@@ -19,6 +19,27 @@ java_home_env() {
   fi
 }
 
+# GCS_ARCHIVE_SDK_VERSION is the com.google.cloud:google-cloud-storage pin of
+# cross-test/proto-quorumwrite/dependencies.yaml. A build that pins the SDK emits
+# GcsArchiveSink, which compiles only with the SDK on the classpath. The pom
+# carries it only for such a build, so no other gate downloads it.
+GCS_ARCHIVE_SDK_VERSION="2.75.0"
+
+add_java_gcs_archive_dependency() {
+  local pom="$1"
+  python3 -c '
+import sys
+pom, version = sys.argv[1], sys.argv[2]
+text = open(pom).read()
+if text.count("</dependencies>") != 1:
+    sys.exit("expected exactly one </dependencies> in " + pom)
+dep = ("  <dependency>\n    <groupId>com.google.cloud</groupId>\n"
+       "    <artifactId>google-cloud-storage</artifactId>\n"
+       "    <version>" + version + "</version>\n  </dependency>\n  ")
+open(pom, "w").write(text.replace("</dependencies>", dep + "</dependencies>"))
+' "$pom" "$GCS_ARCHIVE_SDK_VERSION"
+}
+
 write_java_compile_pom() {
   local pom="$1"
   local source_dir="$2"

@@ -138,6 +138,10 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		return fmt.Errorf("failed to resolve accounting publisher for chassis am templates: %w", err)
 	}
 	hasAccountingRecord := accountingPublisher != nil
+	gcsArchive, err := javaGcsArchiveEnabled(config)
+	if err != nil {
+		return err
+	}
 	accountingRecordTypeImport := ""
 	accountingRecordJavaType := ""
 	if accountingPublisher != nil {
@@ -223,6 +227,11 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		// only for client builds. It is rendered by writeClientIdentityManager,
 		// so skip it here.
 		if strings.HasPrefix(path, "client_im/") {
+			return nil
+		}
+		// GcsArchiveSink imports the Google Cloud Storage SDK, so it is written only
+		// for a project that pins that SDK in dependencies.yaml.
+		if path == "diskstore/GcsArchiveSink.java.tmpl" && !gcsArchive {
 			return nil
 		}
 

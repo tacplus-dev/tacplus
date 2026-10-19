@@ -21,6 +21,12 @@ the commit history since August.
 | ~~**C2D server hosting.**~~ **Closed 2026-10-14**: Go (`chassis/grpcserver/c2d.go`: `C2DServer`, mounted by `newC2DServer` in the ServiceManager) and Java (`chassis/grpcserver/C2DServer.java`, mounted by `ServiceManager.newC2DServer`) host the package's own `service_c2d` services on the declared `socket_path` (owner-only, fail-closed), off the TLS listener and with no token auth, as Rust's `C2dServer` does; the wrapper set and the socket-path rule are shared (`service.IsC2DServer`, `service.HostedC2DSocketPath`). The `c2d-server` cross-test hosts both over a real socket through the generated c2dm client; see `docs/API.md`, C2D server auth-skip scope, and `docs/KNOWN_TEST_GAPS.md` C2D-1 for what it does not run. | | | | |
 | ~~**C2D standalone host (cluster-less daemon).**~~ **Closed 2026-10-15**: all three emit a standalone entry for a c2d-only, cluster-free build, decided by one shared rule (`service.HostsC2DStandalone`): Go `sm.ServeC2DStandalone(ctx, socketPath, h)`, Java `ServiceManager.serveC2DStandalone(socketPath, handler, stop)`, Rust `ServiceManager::serve_c2d_standalone(socket_path, handler, shutdown)`, each through the same c2d mount `Run` uses (`newC2DServer` / `new_c2d_server`, now taking the path, with the declared one exported as `C2DSocketPath` / `C2D_SOCKET_PATH`). Rust's `C2dServer` gained `serve_with_shutdown` for it. The `c2d-server` cross-test starts all three through the entry from outside the generated packages; see `docs/API.md`, C2D standalone host. | | | | |
 
+## Java has it, the others do not
+
+| Capability | Who has it | Who lacks it | Note |
+|------------|-----------|--------------|------|
+| Archive of the disk-persistence redo log to an object store, with restore (`grpcconfig.disk_persistence.archive`, issue #15) | Java (`chassis/diskstore`: `ArchiveShipper`, `ArchiveRestore`, `GcsArchiveSink`) | Go, Rust, Python, TypeScript | Java first, as the consumer is a Java service. The other languages ignore the field. Each needs its own sink and restore before it is at parity; see `docs/API.md`, Archive to an object store. |
+
 ## Go or Java has it, the others do not
 
 | Capability | Who has it | Who lacks it | Note |

@@ -374,6 +374,43 @@ schedulers. This setting is not hot-reloaded; service code should append through
 the ServiceManager-owned handles and should not run its own backup loop for
 generated stores.
 
+### Archive to an object store (Java)
+
+Set `grpcconfig.disk_persistence.archive` to ship each writer's redo log to an
+object store and restore from it after losing the local volume. Java only; Go,
+Rust, Python and TypeScript ignore the field (see `roadmap/LANGUAGE_PARITY.md`).
+
+- **Segments.** Each roll queues the rolled redo log as a segment. The local
+  file is removed only after the archive holds it, so a failing upload never
+  loses a segment. Uploads run FIFO on a daemon thread, retry with backoff (at
+  most five minutes), and never block an append.
+- **Checkpoints.** Every `archive.checkpoint_interval_seconds` (default 86400)
+  the full store state is shipped as a checkpoint, recorded under the redo
+  position it covers: the newest segment rolled at that moment. The position and
+  the snapshot are read under the same lock as a roll, so no roll can split them.
+- **Layout.** Objects live under `<prefix>/<member>/<store>/segments/<seq>` and
+  `<prefix>/<member>/<store>/checkpoints/<seq>`, with `seq` zero-padded to twenty
+  digits so names sort in roll order. `member` is the writer's instance id, so
+  several writers ship independently.
+- **Restore.** `ArchiveRestore.restore(sink, prefix, member, store, inserter)`
+  loads the newest checkpoint, then replays every segment shipped after its
+  position, in order, into an empty store. Records are deduplicated across the
+  chain, last write wins, so a delete after the checkpoint arrives as a tombstone
+  for the consumer's `Inserter` to honour. A missing segment is an error, never a
+  partial restore. Restore must name the writer's original `member`.
+- **Recovery point.** A write is in the archive only once its roll has shipped.
+  Writes made since the last roll are lost with the volume, so the worst case is
+  one `roll_interval_seconds` (default 86400). Shorten the roll interval to
+  narrow it.
+- **Credentials.** The archive sink is Google Cloud Storage, authenticated as the
+  workload's ambient identity (Application Default Credentials). No key is read
+  from config. The sink is compiled in only when the project pins
+  `com.google.cloud:google-cloud-storage` in `dependencies.yaml`; a service that
+  sets `archive` in a build without that pin fails at startup.
+- **Observability.** A failed upload logs a `WARNING` with the object name and
+  retry delay. `RedoLog.shipPending()` (objects not yet shipped, the lag) and
+  `RedoLog.shipFailures()` (failed attempts) report the same numbers to code.
+
 ## Collection RPCs
 
 Collection-returning RPCs are explicit. A multi-result read declares a

@@ -50,4 +50,31 @@ message DiskPersistenceConfig {
   // compression for rolled/archived files + snapshots; the live append tail
   // stays uncompressed.
   Compression compression = 5 [(spec.assert_enum_defined) = true];
+
+  // archive, when set, ships rolled redo segments and daily checkpoints to an
+  // object store and makes them restorable (Java only; other languages ignore
+  // it). Unset keeps the local-only behaviour.
+  ArchiveConfig archive = 6;
+}
+
+// ArchiveConfig configures shipping the redo log to an object store. Writes
+// are acknowledged locally; shipping is asynchronous and never blocks an
+// append. Credentials are the workload's ambient identity (Google Cloud
+// Application Default Credentials), never a key in this config.
+message ArchiveConfig {
+  // gcs_bucket is the Google Cloud Storage bucket the archive is written to.
+  string gcs_bucket = 1;
+
+  // prefix namespaces the archive inside the bucket. Each writer's objects
+  // live under <prefix>/<member>/<store>/, so several members ship
+  // independently.
+  string prefix = 2 [(spec.assert_max_size) = 1024];
+
+  // checkpoint_interval_seconds is how often a full checkpoint (the complete
+  // store state, recording the redo position it covers) is shipped. A restore
+  // loads the newest checkpoint and replays the segments shipped after it.
+  int64 checkpoint_interval_seconds = 3 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.default_int) = 86400
+  ];
 }

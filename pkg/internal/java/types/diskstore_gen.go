@@ -4,7 +4,9 @@
 package types
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,6 +15,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/depfiles"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
@@ -165,4 +168,27 @@ func generateJavaDiskStore(config *tactype.Config, protoDir, srcDir string) erro
 		zap.Int("stores", len(stores)),
 		zap.String("path", outputPath))
 	return nil
+}
+
+// javaGcsArchiveSDK is the Google Cloud Storage client a project pins to ship its
+// redo archive to GCS. Pinning it in dependencies.yaml compiles GcsArchiveSink
+// into the chassis; without the pin the chassis carries no SDK import, so a
+// consumer that does not use GCS does not need the jar.
+const javaGcsArchiveSDK = "com.google.cloud:google-cloud-storage"
+
+// javaGcsArchiveEnabled reports whether the project's dependencies.yaml pins the
+// GCS SDK for Java. No dependencies.yaml means no pin.
+func javaGcsArchiveEnabled(config *tactype.Config) (bool, error) {
+	if config.DepsYAMLPath == "" {
+		return false, nil
+	}
+	deps, err := depfiles.LoadDepsConfig(config.DepsYAMLPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to read dependencies.yaml for the archive sink: %w", err)
+	}
+	_, ok := depfiles.GetDepsMapForLang(deps, "java")[javaGcsArchiveSDK]
+	return ok, nil
 }

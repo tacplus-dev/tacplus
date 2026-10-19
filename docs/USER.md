@@ -748,6 +748,8 @@ Fields annotated with `(spec.quorum_write) = true` require a write to be durable
 
 For a `service_store`, the generated disk helpers carry the store's floor (the strictest declared on any of its fields, since a row is written whole) and a gate the store's write path calls with the number of durable copies it can reach: `MinDurableCopies<Type>` / `Require<Type>Quorum(n)` (Go), `MIN_DURABLE_COPIES_<TYPE>` / `require<Type>Quorum(n)` (Java), `MIN_DURABLE_COPIES_<TYPE>` / `require_<type>_quorum(n)` (Rust). A store whose rows are partitioned across a cluster narrows its disk-log roll baseline to its own rows by implementing `diskstore.LocalRows` (Go, Java), or by overriding `Handler::<store>_local_rows` (Rust).
 
+Java can also ship the redo log to a Google Cloud Storage bucket: set `grpcconfig.disk_persistence.archive` (`gcs_bucket`, `prefix`, `checkpoint_interval_seconds`) and pin `com.google.cloud:google-cloud-storage` in `dependencies.yaml`. Restore uses `ArchiveRestore.restore`. See `docs/API.md`, Archive to an object store.
+
 ### Commands
 
 Fields annotated with `(spec.command) = true` become mutation RPCs on the state service. The field type is the request message; the response is always `google.protobuf.Empty`. Use `boundary_callers` to restrict which services can invoke the command cross-namespace.

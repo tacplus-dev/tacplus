@@ -331,9 +331,9 @@ func TestTypeScriptAuthorizerAnchorsWholeAuthServicesPattern(t *testing.T) {
 	}
 	rendered := string(renderedBytes)
 
-	// Lift setMethodAuth's pattern-compilation expression: "patterns.map(" up to
+	// Lift setMethodAuth's pattern-compilation expression: "patterns.filter(" up to
 	// the end of the enclosing statement.
-	const exprStart = "patterns.map("
+	const exprStart = "patterns.filter("
 	i := strings.Index(rendered, exprStart)
 	if i < 0 {
 		t.Fatalf("Authorizer.ts.tmpl no longer compiles auth_services patterns via %q", exprStart)
@@ -355,6 +355,43 @@ func TestTypeScriptAuthorizerAnchorsWholeAuthServicesPattern(t *testing.T) {
 		"for (const c of ['evil-payments', 'billing-but-not-really']) { if (match(c)) { console.log('partial match accepted: ' + c); process.exit(1); } }\n"
 	if out, err := exec.Command(node, "-e", script).CombinedOutput(); err != nil {
 		t.Fatalf("auth_services pattern %s is not fully anchored under ECMAScript: %v\n%s", compileExpr, err, out)
+	}
+}
+
+// pigeonServicePathFor is the generated helper that scopes PIGEON_SERVICE_PATH
+// to one parent service. The parent is a regex, so it must be quoted: a dot in
+// the name is literal and must not match any other character. This lifts the
+// function verbatim out of the template and runs it under node, which is what
+// decides the pattern at runtime.
+func TestTypeScriptPigeonServicePathForQuotesParent(t *testing.T) {
+	renderedBytes, err := fs.ReadFile(templates.FS, "typescript/chassis/grpcserver/Authorizer.ts.tmpl")
+	if err != nil {
+		t.Fatalf("load Authorizer.ts.tmpl: %v", err)
+	}
+	rendered := string(renderedBytes)
+
+	const fnStart = "export function pigeonServicePathFor(service: string): string {"
+	i := strings.Index(rendered, fnStart)
+	if i < 0 {
+		t.Fatalf("Authorizer.ts.tmpl no longer declares pigeonServicePathFor")
+	}
+	j := strings.Index(rendered[i:], "\n}\n")
+	if j < 0 {
+		t.Fatalf("could not find the end of pigeonServicePathFor")
+	}
+	// Strip the TypeScript annotations so node can evaluate the declaration.
+	fn := strings.Replace(rendered[i:i+j+3], "(service: string): string", "(service)", 1)
+
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node binary found; skipping ECMAScript semantics check")
+	}
+	script := fn + "\n" +
+		"const scoped = new RegExp('^(?:' + pigeonServicePathFor('a.b') + ')$');\n" +
+		"if (!scoped.test('a.b/workloads/pigeon-01arz3')) { console.log('scoped parent did not match its own pigeon'); process.exit(1); }\n" +
+		"if (scoped.test('axb/workloads/pigeon-01arz3')) { console.log('parent dot was not quoted'); process.exit(1); }\n"
+	if out, err := exec.Command(node, "-e", script).CombinedOutput(); err != nil {
+		t.Fatalf("pigeonServicePathFor does not quote its parent under ECMAScript: %v\n%s", err, out)
 	}
 }
 

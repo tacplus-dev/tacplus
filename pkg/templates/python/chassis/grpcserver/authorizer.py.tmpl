@@ -18,7 +18,7 @@ import json
 import logging
 import re
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from ..token import TokenWrapper
 from ..jwk import ImmutableJwk
@@ -118,6 +118,17 @@ class JwkCache:
 # Authorizer
 # ============================================================================
 
+# Matches the service path of any ephemeral pigeon workload,
+# <service>/workloads/pigeon-<run_id>. A workload is admitted only by a pattern
+# that names /workloads/, so "*" never admits one.
+PIGEON_SERVICE_PATH = "[^/]+/workloads/pigeon-[a-z0-9]+"
+
+
+def pigeon_service_path_for(service: str) -> str:
+    """PIGEON_SERVICE_PATH scoped to the pigeons minted under one parent service."""
+    return re.escape(service) + "/workloads/pigeon-[a-z0-9]+"
+
+
 class Authorizer:
     """
     Token-based authorizer for service requests.
@@ -154,6 +165,8 @@ class Authorizer:
         # auth_services. Keyed by the bare name, whichever registered last
         # would silently overwrite the other and decide authorization for both.
         self._method_auth_patterns: Dict[str, List[re.Pattern]] = {}
+        # Methods whose auth_services names "*": they admit service callers only.
+        self._method_auth_any_service: Set[str] = set()
         self._method_target_namespace_field: Dict[str, str] = {}
 
         logger.info(
@@ -166,7 +179,9 @@ class Authorizer:
         """
         Registers allowed caller patterns for a method. Patterns are RE2 regexes
         matched against the location-agnostic service path from
-        TokenWrapper.service_path(). "*" is shorthand for "match any caller".
+        TokenWrapper.service_path(). "*" is shorthand for "any service caller": it
+        admits service subjects only. A workload is admitted only by a pattern
+        that names /workloads/ itself.
 
         method_key is the service-qualified identifier "pkg.Service/Method"
         that _qualified_method_key derives from the incoming full gRPC method,
@@ -175,12 +190,17 @@ class Authorizer:
         if not patterns:
             return
         compiled = []
+        any_service = False
         for p in patterns:
             if p == "*":
-                compiled.append(re.compile(".*"))
+                any_service = True
             else:
                 compiled.append(re.compile(p))
         self._method_auth_patterns[method_key] = compiled
+        if any_service:
+            self._method_auth_any_service.add(method_key)
+        else:
+            self._method_auth_any_service.discard(method_key)
 
     def set_method_target_namespace_field(self, method_key: str, field_name: str) -> None:
         """
@@ -311,7 +331,9 @@ class Authorizer:
                 raise permission_denied(
                     f'no auth_services policy configured for service caller "{service_path}" on "{method_name}"'
                 )
-            matched = any(p.fullmatch(service_path) for p in allowed)
+            matched = (sub_type == "service" and method_key in self._method_auth_any_service) or any(
+                p.fullmatch(service_path) for p in allowed
+            )
             if not matched:
                 raise permission_denied(
                     f'service "{service_path}" not authorized for "{method_name}"'

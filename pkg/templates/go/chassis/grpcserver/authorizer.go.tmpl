@@ -25,6 +25,17 @@ import (
 	trace_pb "{{.ModuleBasePath}}/types/sys/trace"
 )
 
+// PigeonServicePath is an auth_services pattern matching the service path of any
+// ephemeral pigeon workload, <service>/workloads/pigeon-<run_id>. A workload is
+// admitted only by a pattern that names /workloads/, so "*" never admits one.
+const PigeonServicePath = "[^/]+/workloads/pigeon-[a-z0-9]+"
+
+// PigeonServicePathFor is PigeonServicePath scoped to the pigeons minted under
+// one parent service.
+func PigeonServicePathFor(service string) string {
+	return regexp.QuoteMeta(service) + "/workloads/pigeon-[a-z0-9]+"
+}
+
 // Authorizer performs authentication and authorization for service requests.
 // Token signatures are verified against JWKs published by TokenExchanger.
 // Authorization is deterministic: a valid token with matching aud grants access.
@@ -187,6 +198,7 @@ var acceptedAudiences = map[string]struct{}{
 type authorizer struct {
 	jwkCache                   *JwkCache
 	methodAuthPatterns         map[string][]*regexp.Regexp
+	methodAuthAnyService       map[string]bool
 	methodActorPatterns        map[string][]*regexp.Regexp
 	methodTargetNamespaceField map[string]string
 	logger                     *zap.Logger
@@ -211,6 +223,7 @@ func NewAuthorizer(ctx context.Context, conn grpc.ClientConnInterface) (*authori
 	return &authorizer{
 		jwkCache:                   jwkCache,
 		methodAuthPatterns:         make(map[string][]*regexp.Regexp),
+		methodAuthAnyService:       make(map[string]bool),
 		methodActorPatterns:        make(map[string][]*regexp.Regexp),
 		methodTargetNamespaceField: make(map[string]string),
 		logger:                     zap.L().Named("authorizer"),
@@ -231,7 +244,8 @@ func (a *authorizer) SetMethodTargetNamespaceField(methodKey, fieldName string) 
 
 // SetMethodAuth registers allowed caller patterns for a method. Patterns are RE2 regexes
 // matched against the service path (SPIFFE URI minus the deployment prefix).
-// "*" is shorthand for "match any caller".
+// "*" is shorthand for "any service caller": it admits service subjects only. A
+// workload subject is admitted only by a pattern that names /workloads/ itself.
 // methodKey is the service-qualified identifier "pkg.Service/Method" that
 // qualifiedMethodKey derives from the incoming full gRPC method; registering a
 // bare RPC name here would collide across co-hosted services.
@@ -240,14 +254,16 @@ func (a *authorizer) SetMethodAuth(methodKey string, patterns []string) {
 		return
 	}
 	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	anyService := false
 	for _, p := range patterns {
 		if p == "*" {
-			compiled = append(compiled, regexp.MustCompile(".*"))
+			anyService = true
 		} else {
 			compiled = append(compiled, regexp.MustCompile("^(?:"+p+")$"))
 		}
 	}
 	a.methodAuthPatterns[methodKey] = compiled
+	a.methodAuthAnyService[methodKey] = anyService
 }
 
 // SetMethodActors registers the delegate identities allowed to call a method on
@@ -336,7 +352,7 @@ func (a *authorizer) Authorize(ctx context.Context, fullMethod string, req any) 
 			return nil, protoerrors.NewErrPermissionDenied(nil,
 				"no auth_services policy configured for service caller %q on %q", servicePath, methodName)
 		}
-		matched := false
+		matched := a.methodAuthAnyService[methodKey] && subType == "service"
 		for _, p := range allowed {
 			if p.MatchString(servicePath) {
 				matched = true

@@ -43,23 +43,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          # Full history and tags: a release tag diffs against the previous release tag.
+          fetch-depth: 0
       - id: plan
         shell: bash
         run: |
           set -euo pipefail
-          base=false; build=false
-          case "${{ github.event_name }}" in
-            schedule) base=true ;;
-            workflow_dispatch)
-              [[ "${{ github.event.inputs.rebuild }}" == base ]] && base=true
-              [[ "${{ github.event.inputs.rebuild }}" != tacplus ]] && build=true ;;
-            push)
-              changed="$(git diff --name-only HEAD~1 HEAD 2>/dev/null || true)"
-              grep -q '^images/base.Dockerfile$' <<<"$changed" && base=true
-              grep -q '^images/build.Dockerfile$' <<<"$changed" && build=true ;;
-          esac
-          [[ $base == true ]] && build=true
+          plan="$(scripts/images-plan.sh "${{ github.event_name }}" "$GITHUB_REF_TYPE" "${{ github.event.inputs.rebuild }}")"
+          read -r base build <<<"$plan"
           # First publish: build everything when the build image does not exist yet.
           if ! docker manifest inspect "$NS/build:latest" >/dev/null 2>&1; then base=true; build=true; fi
           { echo "base=$base"; echo "build=$build"; echo "stamp=$(date -u +%Y%m%d)-${GITHUB_SHA::7}"; } >> "$GITHUB_OUTPUT"

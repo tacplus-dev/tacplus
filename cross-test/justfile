@@ -93,6 +93,14 @@ server-runtime-client-java:
 server-runtime-client-rust:
     bash {{root}}/server-runtime/run.sh --client rust
 
+# Outbound-deadline regression for the generated RUST server (issue #38): a
+# three-hop chain of real generated servers and clients on loopback. The leaf
+# must receive a grpc-timeout no larger than the root's budget, and its handler
+# must stop by the root's deadline. Cargo-bound, so it is standalone and NOT
+# part of `just test`.
+outbound-deadline-rust:
+    bash {{root}}/outbound-deadline/run.sh
+
 # Cross-language SERIALIZATION-EQUIVALENCE coverage: one message, encoded once
 # by go into a checked-in golden byte corpus, decoded and value-asserted by all
 # five generated languages. Needs go + maven + cargo + python + node

@@ -63,9 +63,20 @@ impl {{.ClientName}} {
         self
     }
 {{if .UsesOutboundTimeout}}
+    /// The timeout for one outbound attempt: the client's own timeout, clamped
+    /// to the inbound caller's remaining budget when the call is made from a
+    /// handler. A caller's deadline is never widened by a hop's own timeout.
+    fn outbound_timeout(&self) -> Option<Duration> {
+        let own = (!self.timeout.is_zero()).then_some(self.timeout);
+        match (own, servicemanager::deadline::remaining()) {
+            (Some(own), Some(left)) => Some(own.min(left)),
+            (own, left) => own.or(left),
+        }
+    }
+
     fn apply_outbound_timeout<T>(&self, req: &mut tonic::Request<T>) {
-        if !self.timeout.is_zero() {
-            req.set_timeout(self.timeout);
+        if let Some(timeout) = self.outbound_timeout() {
+            req.set_timeout(timeout);
         }
     }
 {{end}}{{if .UsesUnaryRetry}}
@@ -95,12 +106,11 @@ impl {{.ClientName}} {
     {
         let max_retries = if retry_safe { self.max_retries } else { 0 };
         for attempt in 0..=max_retries {
-            let result = if self.timeout.is_zero() {
-                op().await
-            } else {
-                timeout(self.timeout, op())
+            let result = match self.outbound_timeout() {
+                None => op().await,
+                Some(limit) => timeout(limit, op())
                     .await
-                    .map_err(|_| tonic::Status::deadline_exceeded("outbound unary call timed out"))?
+                    .map_err(|_| tonic::Status::deadline_exceeded("outbound unary call timed out"))?,
             };
             match result {
                 Ok(value) => return Ok(value),

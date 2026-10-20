@@ -1,0 +1,33 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// External-token fixture authority. Each language's behavioral test supplies a
+// mock implementation; this proto only declares the minter shape tacplus reads.
+
+syntax = "proto3";
+
+package authority;
+
+import "sys/spec.proto";
+import "sys/tokenrequest.proto";
+import "sys/x509.proto";
+
+service TokenMintService {
+  option (spec.service_s2s) = {};
+  option (spec.token_minter) = {};
+
+  rpc TokenMint(tokenrequest.TokenMintRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
+  }
+
+  rpc MintServiceToken(tokenrequest.MintServiceTokenRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
+  }
+
+  rpc MintExternalServiceToken(tokenrequest.MintExternalServiceTokenRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
+  }
+
+  rpc X509Mint(tokenrequest.X509MintRequest) returns (x509.X509CertChain) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
+  }
+}

@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// External-token fixture caller: an ordinary S2S service whose generated
+// service manager carries token_for_external.
+
+syntax = "proto3";
+
+package externaltoken;
+
+import "sys/spec.proto";
+
+message Ping { string m = 1; }
+
+service CallerService {
+  option (spec.service_s2s) = {label: "CallerService"};
+  rpc Get(Ping) returns (Ping) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}

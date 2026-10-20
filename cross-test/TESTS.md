@@ -92,6 +92,14 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   the trait. Local/manual (`just -f cross-test/justfile server-runtime`, or
   `server-runtime-clients` for the client half alone); not in CI, not in
   `just test`, not in the nightly matrix.
+- `keepalive-rust` (`cross-test/keepalive-rust/run.sh`): keepalive regression
+  for the generated RUST server (issue #29). The Rust server applies no HTTP/2
+  permit policy, unlike Go and Java. A generated Rust C2S client pings every
+  `keepaliveconst.TimeSecs` while idle, dialled through a counting proxy; the
+  gate asserts ONE connection survives a 600 s idle hold (no GOAWAY, no redial)
+  and then serves a second call. A control run (`TACPLUS_KEEPALIVE_CUT_AFTER_SECS`)
+  severs connections and must fail. Local/manual (`just -f cross-test/justfile
+  keepalive-rust`); about 11 minutes, so not in `just test` or the nightly matrix.
 - `wire-corpus` (`cross-test/wire-corpus/run.sh`): cross-language
   SERIALIZATION-EQUIVALENCE gate. One `CorpusRecord` message is encoded ONCE by
   go, deterministically, into checked-in golden bytes

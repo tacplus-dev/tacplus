@@ -427,7 +427,7 @@ TypeScript have neither (see `roadmap/LANGUAGE_PARITY.md`).
 - **`AppendLog.readLines(base, relPath)`** returns every complete line in order,
   each without its terminator, with no dedup. An absent file reads as no lines.
   A trailing fragment with no terminator (a crash mid-append) is not a line and
-  is dropped.
+  is dropped; the next `append` removes it before writing.
 - **`PlainFile.readAll`, `PlainFile.exists`, `PlainFile.list`** read a whole
   file, test for its presence, and list a directory's entries, sorted. A missing
   file in `readAll` is `NOT_FOUND`; a missing directory in `list` is empty.

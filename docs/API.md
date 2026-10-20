@@ -411,6 +411,30 @@ Rust, Python and TypeScript ignore the field (see `roadmap/LANGUAGE_PARITY.md`).
   retry delay. `RedoLog.shipPending()` (objects not yet shipped, the lag) and
   `RedoLog.shipFailures()` (failed attempts) report the same numbers to code.
 
+### Append-only history and plain file reads (Java)
+
+A redo log is keyed and deduplicated on read, so it is the wrong primitive for a
+full history such as a daily tombstone file. Java also exposes the primitives
+for files that are neither snapshots nor redo logs. Go, Rust, Python and
+TypeScript have neither (see `roadmap/LANGUAGE_PARITY.md`).
+
+- **`AppendLog.append(base, relPath, line, mode)`** writes `line` verbatim
+  followed by one `\n`, creating `relPath`'s parent directories and the file
+  itself. It fsyncs before returning. `relPath` is the caller's path: there is no
+  store namespace segment and no forced `.log` suffix. `mode` is the Unix
+  permission applied on create (`0` leaves the default). A `line` containing
+  `\n` is rejected as `INVALID_ARGUMENT`.
+- **`AppendLog.readLines(base, relPath)`** returns every complete line in order,
+  each without its terminator, with no dedup. An absent file reads as no lines.
+  A trailing fragment with no terminator (a crash mid-append) is not a line and
+  is dropped.
+- **`PlainFile.readAll`, `PlainFile.exists`, `PlainFile.list`** read a whole
+  file, test for its presence, and list a directory's entries, sorted. A missing
+  file in `readAll` is `NOT_FOUND`; a missing directory in `list` is empty.
+- All paths are relative to `base`. An absolute path, or one that resolves
+  outside `base`, is rejected as `INVALID_ARGUMENT`.
+- Errors are `DiskStoreException`: `io` for I/O failures.
+
 ## Collection RPCs
 
 Collection-returning RPCs are explicit. A multi-result read declares a

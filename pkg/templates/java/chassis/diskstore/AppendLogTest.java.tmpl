@@ -1,0 +1,234 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// CODE GENERATED - DO NOT EDIT
+
+package {{.ChassisBase}}.diskstore;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+
+/**
+ * Behavioral self-test for the append-only history log ({@link AppendLog}) and
+ * the plain-file reads ({@link PlainFile}): verbatim lines in order with no
+ * dedup, caller-chosen paths with directory creation, path containment, and
+ * concurrent appends.
+ *
+ * <p>Run as a plain main-method self-test by the cross-test gates, like
+ * {@code DiskStoreTest}.
+ */
+public class AppendLogTest {
+    private static int failures = 0;
+
+    private static void check(boolean ok, String message) {
+        if (!ok) {
+            System.err.println("FAIL: " + message);
+            failures++;
+        }
+    }
+
+    private static byte[] bytes(String s) {
+        return s.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static String str(byte[] b) {
+        return new String(b, StandardCharsets.UTF_8);
+    }
+
+    private static Path tempBase() throws IOException {
+        return Files.createTempDirectory("appendlog-");
+    }
+
+    private static void expectInvalid(Runnable call, String message) {
+        try {
+            call.run();
+            check(false, message + ": expected DiskStoreException");
+        } catch (DiskStoreException e) {
+            check(e.getCode() == DiskStoreException.INVALID_ARGUMENT, message + ": code " + e.getCode());
+        }
+    }
+
+    // ---- AppendLog ----
+
+    private static void testAppendReadsBackLinesInOrderVerbatim() throws IOException {
+        Path base = tempBase();
+        String rel = "tombstones/2026-10-20.jsonl";
+        AppendLog.append(base, rel, bytes("{\"k\":\"a\",\"v\":1}"), 0);
+        AppendLog.append(base, rel, bytes("{\"k\":\"b\",\"v\":\"\\n escaped\"}"), 0);
+        AppendLog.append(base, rel, bytes("{\"k\":\"c\",\"v\":\"café\"}"), 0);
+
+        List<byte[]> got = AppendLog.readLines(base, rel);
+        check(got.size() == 3, "readLines: want 3 lines, got " + got.size());
+        if (got.size() == 3) {
+            check(str(got.get(0)).equals("{\"k\":\"a\",\"v\":1}"), "line 0 verbatim: " + str(got.get(0)));
+            check(str(got.get(1)).equals("{\"k\":\"b\",\"v\":\"\\n escaped\"}"), "line 1 verbatim: " + str(got.get(1)));
+            check(str(got.get(2)).equals("{\"k\":\"c\",\"v\":\"café\"}"), "line 2 verbatim: " + str(got.get(2)));
+        }
+    }
+
+    private static void testReadBackDoesNotDedup() throws IOException {
+        Path base = tempBase();
+        String rel = "history.jsonl";
+        AppendLog.append(base, rel, bytes("same"), 0);
+        AppendLog.append(base, rel, bytes("same"), 0);
+        AppendLog.append(base, rel, bytes("other"), 0);
+        check(AppendLog.readLines(base, rel).size() == 3, "history keeps every append, duplicates included");
+    }
+
+    private static void testCreatesDirectoriesAndNoForcedSuffix() throws IOException {
+        Path base = tempBase();
+        String rel = "tombstones/2026-10-20.jsonl";
+        AppendLog.append(base, rel, bytes("x"), 0);
+        Path want = base.resolve("tombstones").resolve("2026-10-20.jsonl");
+        check(Files.isRegularFile(want), "file created at caller-chosen path " + want);
+        check(Files.readAllBytes(want).length == 2, "one line written with its terminator");
+    }
+
+    private static void testAbsentLogReadsEmpty() throws IOException {
+        Path base = tempBase();
+        check(AppendLog.readLines(base, "never/written.jsonl").isEmpty(), "absent log reads as no lines");
+    }
+
+    private static void testRejectsLineWithNewline() throws IOException {
+        Path base = tempBase();
+        String rel = "history.jsonl";
+        AppendLog.append(base, rel, bytes("first"), 0);
+        expectInvalid(() -> AppendLog.append(base, rel, bytes("two\nlines"), 0), "embedded newline");
+        List<byte[]> got = AppendLog.readLines(base, rel);
+        check(got.size() == 1 && str(got.get(0)).equals("first"), "rejected append leaves the log unchanged");
+    }
+
+    private static void testRejectsPathEscapingBase() throws IOException {
+        Path base = tempBase();
+        expectInvalid(() -> AppendLog.append(base, "../escape.jsonl", bytes("x"), 0), "dot-dot escape");
+        expectInvalid(() -> AppendLog.append(base, "a/../../escape.jsonl", bytes("x"), 0), "nested dot-dot escape");
+        expectInvalid(() -> AppendLog.append(base, "/etc/passwd", bytes("x"), 0), "absolute path");
+        expectInvalid(() -> AppendLog.append(base, "", bytes("x"), 0), "empty path");
+        expectInvalid(() -> AppendLog.readLines(base, "../escape.jsonl"), "read dot-dot escape");
+    }
+
+    private static void testTornTailIsNotALine() throws IOException {
+        // A crash between write and fsync can leave a partial line with no
+        // terminator. That append never returned, so the read ignores it.
+        Path base = tempBase();
+        String rel = "history.jsonl";
+        AppendLog.append(base, rel, bytes("complete"), 0);
+        Files.write(base.resolve(rel), bytes("torn"),
+                java.nio.file.StandardOpenOption.APPEND);
+        List<byte[]> got = AppendLog.readLines(base, rel);
+        check(got.size() == 1 && str(got.get(0)).equals("complete"),
+                "unterminated tail is dropped, got " + got.size() + " lines");
+    }
+
+    private static void testModeAppliedOnCreate() throws IOException {
+        Path base = tempBase();
+        String rel = "private/history.jsonl";
+        AppendLog.append(base, rel, bytes("secret"), 0600);
+        Path path = base.resolve(rel);
+        try {
+            String perms = java.nio.file.attribute.PosixFilePermissions.toString(
+                    Files.getPosixFilePermissions(path));
+            check(perms.equals("rw-------"), "mode 0600 applied on create, got " + perms);
+        } catch (UnsupportedOperationException notPosix) {
+            // Non-POSIX filesystem: mode is best-effort.
+        }
+    }
+
+    private static void testConcurrentAppendsStayWholeAndComplete() throws Exception {
+        Path base = tempBase();
+        String rel = "concurrent.jsonl";
+        int threads = 4;
+        int perThread = 200;
+        AtomicReference<Throwable> error = new AtomicReference<>();
+        List<Thread> workers = new ArrayList<>();
+        for (int t = 0; t < threads; t++) {
+            final int id = t;
+            Thread th = new Thread(() -> {
+                try {
+                    for (int i = 0; i < perThread; i++) {
+                        AppendLog.append(base, rel, bytes("t" + id + "-" + i + "-payload"), 0);
+                    }
+                } catch (Throwable e) {
+                    error.compareAndSet(null, e);
+                }
+            });
+            workers.add(th);
+            th.start();
+        }
+        for (Thread th : workers) {
+            th.join();
+        }
+        check(error.get() == null, "concurrent append threw: " + error.get());
+        List<byte[]> got = AppendLog.readLines(base, rel);
+        check(got.size() == threads * perThread, "concurrent appends: want " + (threads * perThread)
+                + " lines, got " + got.size());
+        for (byte[] line : got) {
+            check(str(line).matches("t\\d-\\d+-payload"), "line torn or interleaved: " + str(line));
+        }
+    }
+
+    // ---- PlainFile ----
+
+    private static void testPlainFileReadAndExists() throws IOException {
+        Path base = tempBase();
+        String rel = "checkpoint/current";
+        check(!PlainFile.exists(base, rel), "absent file does not exist");
+        AppendLog.append(base, rel, bytes("pointer"), 0);
+        check(PlainFile.exists(base, rel), "written file exists");
+        check(str(PlainFile.readAll(base, rel)).equals("pointer\n"),
+                "readAll returns the file's exact bytes");
+    }
+
+    private static void testPlainFileReadAbsentIsNotFound() throws IOException {
+        Path base = tempBase();
+        try {
+            PlainFile.readAll(base, "missing");
+            check(false, "readAll of an absent file: expected DiskStoreException");
+        } catch (DiskStoreException e) {
+            check(e.getCode() == DiskStoreException.NOT_FOUND, "absent readAll is NOT_FOUND, got " + e.getCode());
+        }
+    }
+
+    private static void testPlainFileListIsSortedAndAbsentIsEmpty() throws IOException {
+        Path base = tempBase();
+        AppendLog.append(base, "archive/b.jsonl", bytes("x"), 0);
+        AppendLog.append(base, "archive/a.jsonl", bytes("x"), 0);
+        AppendLog.append(base, "archive/c.jsonl", bytes("x"), 0);
+        check(PlainFile.list(base, "archive").equals(List.of("a.jsonl", "b.jsonl", "c.jsonl")),
+                "list returns sorted entry names");
+        check(PlainFile.list(base, "no-such-dir").isEmpty(), "absent directory lists as empty");
+    }
+
+    private static void testPlainFileRejectsEscape() throws IOException {
+        Path base = tempBase();
+        expectInvalid(() -> PlainFile.exists(base, "../outside"), "exists escape");
+        expectInvalid(() -> PlainFile.list(base, "/"), "list absolute");
+    }
+
+    public static void main(String[] args) throws Exception {
+        testAppendReadsBackLinesInOrderVerbatim();
+        testReadBackDoesNotDedup();
+        testCreatesDirectoriesAndNoForcedSuffix();
+        testAbsentLogReadsEmpty();
+        testRejectsLineWithNewline();
+        testRejectsPathEscapingBase();
+        testTornTailIsNotALine();
+        testModeAppliedOnCreate();
+        testConcurrentAppendsStayWholeAndComplete();
+
+        testPlainFileReadAndExists();
+        testPlainFileReadAbsentIsNotFound();
+        testPlainFileListIsSortedAndAbsentIsEmpty();
+        testPlainFileRejectsEscape();
+
+        if (failures > 0) {
+            System.err.println(failures + " AppendLog check(s) FAILED");
+            System.exit(1);
+        }
+        System.out.println("AppendLogTest: all checks passed");
+    }
+}

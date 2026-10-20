@@ -171,7 +171,7 @@ public final class FsUtil {
         return path.resolveSibling(path.getFileName().toString() + suffix);
     }
 
-    private static void applyMode(Path path, int mode) throws IOException {
+    static void applyMode(Path path, int mode) throws IOException {
         if (mode == 0) {
             return;
         }
@@ -196,7 +196,7 @@ public final class FsUtil {
         return sb.toString();
     }
 
-    private static void syncDir(Path dir) {
+    static void syncDir(Path dir) {
         // Best-effort directory fsync; not all platforms permit opening a
         // directory as a channel.
         try (FileChannel ch = FileChannel.open(dir)) {

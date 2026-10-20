@@ -254,10 +254,3 @@ jobs:
           tags=(); for t in ${{ steps.tags.outputs.list }}; do tags+=(-t "$NS/tacplus:$t"); done
           docker buildx imagetools create "${tags[@]}" "${refs[@]}"
           docker buildx imagetools inspect "$NS/tacplus:${{ github.ref_type == 'tag' && 'latest' || 'main' }}"
-      - name: Prune old main-<sha> images
-        uses: actions/delete-package-versions@v5
-        with:
-          package-name: tacplus/tacplus
-          package-type: container
-          min-versions-to-keep: 20
-          ignore-versions: '^(latest|main|\d+(\.\d+){0,2})$'

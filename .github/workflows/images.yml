@@ -251,10 +251,3 @@ jobs:
           # shellcheck disable=SC2086
           docker buildx imagetools create ${{ steps.tags.outputs.tags }} "${refs[@]}"
           docker buildx imagetools inspect "$NS/tacplus:main" 2>/dev/null || true
-      - name: Prune old main-<sha> images
-        uses: actions/delete-package-versions@v5
-        with:
-          package-name: tacplus/tacplus
-          package-type: container
-          min-versions-to-keep: 20
-          ignore-versions: '^(latest|main|\d+(\.\d+){0,2})$'

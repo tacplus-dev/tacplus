@@ -337,11 +337,11 @@ class ServiceManager:
     def _create_accounting_emitter(self):
         """Creates the accounting emitter for {{.AccountingPublisherTopicRef}}.
 
-        Never holds an RPC (issue #34): the queue is the spool. EventBusSink
-        drops and counts a record only when the queue is full; it never waits
-        on the publisher.
+        Non-dropping (item 9's ruling): the sink blocks on a bounded queue
+        instead of discarding records like the best-effort trace publisher
+        above — a missing accounting row is worse than a slow RPC.
         """
-        queue: asyncio.Queue = asyncio.Queue(maxsize=4096)
+        queue: asyncio.Queue = asyncio.Queue(maxsize=1024)
         self._create_task(self._accounting_publish_resolve_loop(queue))
         sink = EventBusSink(queue, self.instance_id)
         return Emitter(self.instance_id, sink)

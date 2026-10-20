@@ -5,17 +5,13 @@ package types
 
 import (
 	"bytes"
-	"context"
-	"encoding/json"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"text/template"
-	"time"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil"
 )
@@ -64,7 +60,7 @@ func tsSyntaxCheck(t *testing.T, src, name string) {
 // TestTypeScriptAccountingPublisherWiresEventBusSinkOnEveryAccountedWrapper
 // renders service_manager.ts.tmpl with an accounting publisher resolved and
 // asserts:
-//   - the emitter is built from the EventBusSink spool, not the
+//   - the emitter is built from the non-dropping EventBusSink, not the
 //     drop-on-full trace publisher pattern
 //   - setEmitter is called only for wrappers with HasAccounting true (TS's
 //     setEmitter is gated per-service like Java, unlike Go/Rust/Python's
@@ -163,6 +159,11 @@ func TestTypeScriptAccountingPublisherWiresEventBusSinkOnEveryAccountedWrapper(t
 		t.Fatalf("setEmitter must be wired after setInstanceId and before registerServices:\n%s", rendered)
 	}
 
+	// Non-dropping: the accounting queue must never discard a record.
+	if strings.Contains(rendered, "dropping accounting") {
+		t.Fatalf("accounting publisher must never drop accounting records (item 9's ruling):\n%s", rendered)
+	}
+
 	tsSyntaxCheck(t, rendered, "service_manager.ts")
 }
 
@@ -227,7 +228,7 @@ func TestTypeScriptServiceManagerOmitsAccountingWiringWithoutPublisher(t *testin
 
 // TestTypeScriptAccountingManagerEventBusSinkRendersValidTypeScript renders
 // AccountingManager.ts.tmpl with HasAccountingRecord true and asserts the
-// EventBusSink/methodLabel seam is present, never blocks, and syntactically
+// EventBusSink/methodLabel seam is present, non-dropping, and syntactically
 // valid TypeScript.
 func TestTypeScriptAccountingManagerEventBusSinkRendersValidTypeScript(t *testing.T) {
 	tmplStr, err := tmplutil.LoadTemplate("typescript/chassis/am", "AccountingManager.ts.tmpl")
@@ -280,9 +281,9 @@ func TestTypeScriptAccountingManagerEventBusSinkRendersValidTypeScript(t *testin
 		}
 	}
 
-	// Bounded spool: the drop-and-count path replaces the unbounded queue.
-	if !strings.Contains(rendered, "accounting spool full; record dropped") {
-		t.Fatalf("EventBusSink must drop and count once its spool is full (issue #34):\n%s", rendered)
+	// Non-dropping: the sink must never give up and discard the record.
+	if strings.Contains(rendered, "dropping accounting") {
+		t.Fatalf("EventBusSink must never drop accounting records (item 9's ruling):\n%s", rendered)
 	}
 
 	tsSyntaxCheck(t, rendered, "AccountingManager.ts")
@@ -319,105 +320,4 @@ func TestTypeScriptAccountingManagerOmitsEventBusSinkWithoutRecord(t *testing.T)
 	}
 
 	tsSyntaxCheck(t, rendered, "AccountingManager_no_record.ts")
-}
-
-// tsEventBusSinkDriver imports the rendered AccountingManager.ts, fills a
-// four-slot publisher queue that nothing drains (an event-bus outage), then
-// emits fifty records. It prints what the queue held, in order, and how many
-// records the sink counted as dropped.
-const tsEventBusSinkDriver = `import { EventBusSink } from './chassis/am/AccountingManager.ts';
-
-const DEPTH = 4;
-const EMITS = 50;
-
-const queue: any[] = [];
-const sink = new EventBusSink(queue, 'test-1', () => {}, DEPTH);
-for (let i = 0; i < EMITS; i++) {
-  sink.emit({
-    timestampMs: 1n,
-    sourceId: 'test',
-    requestId: 'r' + i,
-    identity: {},
-    level: 2,
-    event: { case: 'rpcCompleted', value: { method: undefined, durationMs: 1n } },
-  } as any);
-}
-console.log(JSON.stringify({ held: queue.map((r) => r.requestId), dropped: (sink as any).dropped }));
-`
-
-// TestTypeScriptEventBusSinkBoundsPublisherQueueWhenBlocked renders the real
-// AccountingManager.ts.tmpl and drives its EventBusSink with the publisher
-// blocked. The queue must stop at its depth, the surplus must be dropped and
-// counted, and the records that were held must replay in emit order. Before the
-// spool the queue grew without bound and nothing was ever dropped.
-func TestTypeScriptEventBusSinkBoundsPublisherQueueWhenBlocked(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("no node on PATH; skipping EventBusSink behaviour check")
-	}
-	tmplStr, err := tmplutil.LoadTemplate("typescript/chassis/am", "AccountingManager.ts.tmpl")
-	if err != nil {
-		t.Fatalf("loadTemplate AccountingManager.ts.tmpl: %v", err)
-	}
-	tmpl, err := template.New("accounting_manager").Funcs(header.Funcs()).Parse(tmplStr)
-	if err != nil {
-		t.Fatalf("parse AccountingManager template: %v", err)
-	}
-	data := struct {
-		HasAccountingRecord        bool
-		AccountingRecordImportPath string
-		ServiceRPCs                []struct{ FieldName string }
-	}{
-		HasAccountingRecord:        true,
-		AccountingRecordImportPath: "../../types/vservices/accountingrecord/index.js",
-	}
-	var rendered bytes.Buffer
-	if err := tmpl.Execute(&rendered, data); err != nil {
-		t.Fatalf("execute AccountingManager template: %v", err)
-	}
-
-	dir := t.TempDir()
-	stubs := map[string]string{
-		"package.json": `{"type": "module"}`,
-		"node_modules/@bufbuild/protobuf/package.json": `{"name": "@bufbuild/protobuf", "type": "module", "main": "index.js"}`,
-		"node_modules/@bufbuild/protobuf/index.js":     "export function create(_schema, init) { return init; }\n",
-		"types/vservices/accountingrecord/index.js":    "export const AccountingRecordSchema = {};\n",
-		"chassis/am/AccountingManager.ts":              rendered.String(),
-		"driver.ts":                                    tsEventBusSinkDriver,
-	}
-	for name, content := range stubs {
-		path := filepath.Join(dir, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("mkdir for %s: %v", name, err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, node, filepath.Join(dir, "driver.ts"))
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if ctx.Err() != nil {
-		t.Fatalf("driver did not finish within 30s")
-	}
-	if err != nil {
-		t.Fatalf("driver failed: %v", err)
-	}
-
-	var got struct {
-		Held    []string `json:"held"`
-		Dropped int      `json:"dropped"`
-	}
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("parse driver output %q: %v", out, err)
-	}
-	if want := []string{"r0", "r1", "r2", "r3"}; !reflect.DeepEqual(got.Held, want) {
-		t.Fatalf("publisher queue held %v, want %v: the spool must hold its depth and replay in emit order", got.Held, want)
-	}
-	if got.Dropped != 46 {
-		t.Fatalf("dropped %d records, want 46: records past a full spool must be dropped and counted", got.Dropped)
-	}
 }

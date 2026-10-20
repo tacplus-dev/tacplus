@@ -100,6 +100,12 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   and then serves a second call. A control run (`TACPLUS_KEEPALIVE_CUT_AFTER_SECS`)
   severs connections and must fail. Local/manual (`just -f cross-test/justfile
   keepalive-rust`); about 11 minutes, so not in `just test` or the nightly matrix.
+- `outbound-deadline` (`cross-test/outbound-deadline/run.sh`): outbound deadline
+  regression for the generated RUST server (issue #38). A three-hop chain of
+  generated servers and clients (root 5 s -> mid -> leaf) on loopback. The leaf
+  must receive a `grpc-timeout` no larger than the root's budget, and its
+  handler must stop by the root's deadline. Local/manual (`just -f
+  cross-test/justfile outbound-deadline-rust`); cargo-bound, so not in `just test`.
 - `wire-corpus` (`cross-test/wire-corpus/run.sh`): cross-language
   SERIALIZATION-EQUIVALENCE gate. One `CorpusRecord` message is encoded ONCE by
   go, deterministically, into checked-in golden bytes

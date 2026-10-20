@@ -152,6 +152,8 @@ Then add the label needs-decision, remove nightly:in-progress, and stop. Jody de
 feature:approved to accept or closes the issue to decline.
 
 If it is a FEATURE labeled feature:approved, implement it on main only, as below, but never backport it.
+An issue labeled feature:approved is never backported, even if you triage it as a BUG: it builds on a feature
+that exists only on main (a parity follow-up is the common case), so a release branch does not have its base.
 If it is a BUG, fix it as below and backport it.
 
 1. Reproduce first (bugs). Turn the issue's reproduction into a test that fails on main: a unit test under

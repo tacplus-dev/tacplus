@@ -223,6 +223,20 @@ subscriber-clean-close:
 endpoint-latency:
   {{lock}} bash cross-test/endpoint-latency/run.sh
 
+# Fault-injection coverage of the generated unary client retry path (issue #57):
+# retries are jittered, capped by a retry budget, and never start past the
+# caller's deadline.
+unary-retry: unary-retry-go unary-retry-java unary-retry-rust
+
+unary-retry-go:
+  {{lock}} bash cross-test/unary-retry/run.sh --language go
+
+unary-retry-java:
+  {{lock}} bash cross-test/unary-retry/run.sh --language java
+
+unary-retry-rust:
+  {{lock}} bash cross-test/unary-retry/run.sh --language rust
+
 # Behavioral coverage of the generated external-audience token accessor
 # (token_for_external): a fresh token minted per call, never cached.
 external-token: external-token-go external-token-java external-token-rust

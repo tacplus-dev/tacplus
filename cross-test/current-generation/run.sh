@@ -9,6 +9,7 @@ tree_guard_begin "$ROOT_DIR"
 source "$ROOT_DIR/cross-test/lib/java-compile.sh"
 PROTO_SRC="$ROOT_DIR/cross-test/proto"
 HEALTHONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-healthonly"
+ZERORPC_PROTO_SRC="$ROOT_DIR/cross-test/proto-zerorpc"
 C2SONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-c2sonly"
 REQUIRESDEVICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-requiresdevice"
 # testdata/, not a plain directory: the go tool ignores directories named
@@ -150,6 +151,19 @@ write_healthonly_config() {
 language: "$language"
 pkg: "com.gitlab.example.dummy.healthonly"
 src: "$HEALTHONLY_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
+write_zerorpc_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.zerorpc"
+src: "$ZERORPC_PROTO_SRC"
 output-dir: "tacplus"
 EOF
 }
@@ -916,6 +930,28 @@ assert_healthonly_output() {
       [[ -f "$sm" ]] || die "health-only fixture: s2sm/mod.rs not found under $output"
       grep -q 'health-only gRPC server listening' "$sm" \
         || die "health-only fixture: 'health-only gRPC server listening' not found in $sm (wrong template branch?)"
+      ;;
+  esac
+
+  assert_no_legacy_fixture_output "$output"
+}
+
+# assert_zerorpc_output checks the zero-rpc fixture took the health-only branch
+# with its auto-TLS items declared, the shape whose absence broke the s2sm build.
+assert_zerorpc_output() {
+  local output="$1"
+  local language="$2"
+
+  case "$language" in
+    rust)
+      local sm="$output/s2sm/mod.rs"
+      [[ -f "$sm" ]] || die "zero-rpc fixture: s2sm/mod.rs not found under $output"
+      grep -q 'health-only gRPC server listening' "$sm" \
+        || die "zero-rpc fixture: 'health-only gRPC server listening' not found in $sm (wrong template branch?)"
+      grep -rq 'fn reloading_tls_incoming' "$output/s2sm" \
+        || die "zero-rpc fixture: reloading_tls_incoming is not declared under $output/s2sm"
+      grep -rq 'tls_server_certified_key' "$output/s2sm" \
+        || die "zero-rpc fixture: tls_server_certified_key is not declared under $output/s2sm"
       ;;
   esac
 
@@ -2075,6 +2111,34 @@ if [[ -d "$HEALTHONLY_PROTO_SRC" ]]; then
     echo "==> Compiling $language health-only fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/healthonly"
     echo "    PASS $language health-only"
+  done
+fi
+
+# zero-rpc fixture: a service with a state and an s2s client edge, no gRPC
+# service, and no auto_tls on any state. Its service manager takes the
+# health-only run() branch, which binds a TLS listener and so needs the auto-TLS
+# items (HasAutoTls) even though no state declares auto_tls. Before that
+# widening the generated s2sm did not compile (E0425/E0609). Rust only: the
+# branch is in service_manager.rs.tmpl.
+if [[ -d "$ZERORPC_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    [[ "$language" == "rust" ]] || continue
+    dir="$WORK_ROOT/zerorpc-$language"
+    log="$WORK_ROOT/zerorpc-$language.log"
+    rm -rf "$dir"
+    write_zerorpc_config "$dir" "$language"
+
+    echo "==> Generating $language zero-rpc fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$ZERORPC_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language zero-rpc generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_zerorpc_output "$output_root" "$language"
+    echo "==> Compiling $language zero-rpc fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/zerorpc"
+    echo "    PASS $language zero-rpc"
   done
 fi
 

@@ -6,6 +6,8 @@ package types
 import (
 	"fmt"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
+	protogen "github.com/tacplus-dev/tacplus/pkg/internal/proto"
+	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 	"strings"
 	"testing"
 	"text/template"
@@ -381,5 +383,41 @@ func TestRustServiceManagerOmitsAccountingEmitterWithoutRecord(t *testing.T) {
 		if strings.Contains(rendered, unwanted) {
 			t.Fatalf("ServiceManager must not reference %q when the proto set declares no accounting record:\n%s", unwanted, rendered)
 		}
+	}
+}
+
+// A build with no TLS gRPC service (zero rpcs, or only c2d or smb) still gets
+// the service manager, and its health-only run() branch binds a TLS listener
+// through reloading_tls_incoming and tls_server_certified_key. Both are gated on
+// HasAutoTls, so the data must enable the auto-TLS path for every service
+// manager, not only for a state with auto_tls. Without it the generated s2sm
+// does not compile (E0425/E0609). Cross-test: cross-test/proto-zerorpc.
+func TestRustServiceManagerHealthOnlyEnablesAutoTls(t *testing.T) {
+	dir := t.TempDir()
+	if err := protogen.CopySysProtos(dir); err != nil {
+		t.Fatalf("CopySysProtos: %v", err)
+	}
+	if _, _, _, err := protogen.ScanAndGenerateConfigHolder(dir, dir); err != nil {
+		t.Fatalf("ScanAndGenerateConfigHolder: %v", err)
+	}
+	cfg := &tactype.Config{
+		CrateBasePath:     "beagle-model",
+		SelfPackage:       "beagle",
+		FlatProtoDir:      dir,
+		AnnotatedProtoDir: dir,
+		States:            []tactype.StateEntry{{MessageName: "PingState"}},
+	}
+	data, err := buildSMTemplateData(cfg, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildSMTemplateData: %v", err)
+	}
+	if data.HasTlsGrpc {
+		t.Fatal("zero-rpc build must take the health-only branch, not the TLS gRPC branch")
+	}
+	if !data.HasAutoTls {
+		t.Fatal("health-only run() binds a TLS listener, so HasAutoTls must be true for a zero-rpc service manager")
+	}
+	if data.AutoTlsKeyType != "ecdsa" {
+		t.Fatalf("AutoTlsKeyType = %q, want the ecdsa default for the health-only TLS listener", data.AutoTlsKeyType)
 	}
 }

@@ -1,0 +1,31 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// The upstream service that the zero-rpc fixture calls over s2s. It carries the
+// config store for the proto set. It is declared in its own package, because a
+// package may not match its directory.
+
+syntax = "proto3";
+
+package upstreamllm;
+
+import "sys/spec.proto";
+import "sys/tokenrequest.proto";
+import "sys/x509.proto";
+
+option (spec.service) = {name: "llmproxy", config_store: true};
+
+message CompleteRequest {
+  string prompt = 1;
+}
+
+message CompleteResponse {
+  string text = 1;
+}
+
+service LlmProxy {
+  option (spec.service_s2s) = {};
+
+  rpc Generate(CompleteRequest) returns (CompleteResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}

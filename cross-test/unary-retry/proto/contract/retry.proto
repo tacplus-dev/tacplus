@@ -1,0 +1,30 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// Unary-retry fixture: a declared S2S client whose ListPings is a bounded
+// SNAPSHOT read, so the generated client retries it. The server behind it is
+// scripted by each language's behavior test.
+
+syntax = "proto3";
+
+package unaryretry;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "unaryretry"};
+option (spec.grpc_s2s_client) = {service: "unaryretry.RetryService"};
+
+message Ping { string m = 1; }
+
+message PingList { repeated Ping items = 1 [(spec.assert_max_size) = 10]; }
+
+service RetryService {
+  option (spec.service_s2s) = {label: "RetryService"};
+  rpc ListPings(Ping) returns (PingList) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+    option (spec.method_collection) = {
+      mode: COLLECTION_MODE_SNAPSHOT
+      order_by: "m"
+      max_items: 10
+    };
+  }
+}

@@ -27,11 +27,14 @@ import (
 {{- if .HasCollectionCursor}}
 	"iter"
 {{- end}}
-	{{- if .HasBidi}}
+	{{- if or .HasBidi .HasNonBidi}}
 		"sync"
 	{{- end}}
 	{{- if or .HasBidi .HasNonBidi}}
 		"time"
+	{{- end}}
+	{{- if .HasNonBidi}}
+		mrand "math/rand"
 	{{- end}}
 
 	types "{{.TypesModulePath}}"
@@ -71,6 +74,7 @@ type {{.ClientName}} struct {
 	timeout       time.Duration
 	maxRetries    int
 	retryBackoff  time.Duration
+	retries       *{{.ClientName}}RetryBudget
 {{- end}}
 }
 
@@ -85,6 +89,7 @@ func New{{.ClientName}}(conn grpc.ClientConnInterface, tokenProvider func() (str
 		timeout:       30 * time.Second,
 		maxRetries:    2,
 		retryBackoff:  100 * time.Millisecond,
+		retries:       new{{.ClientName}}RetryBudget(),
 {{- end}}
 	}
 }
@@ -118,6 +123,38 @@ func (c *{{.ClientName}}) withOutboundTimeout(ctx context.Context) (context.Cont
 	return context.WithTimeout(ctx, c.timeout)
 }
 
+// {{.ClientName}}RetryBudget is a token bucket that caps the unary retries of one
+// client. It starts with 10 tokens, a retry spends one, and each successful call
+// refills 0.1. During an outage the retried traffic is therefore bounded instead
+// of multiplying the load on a peer that is already failing.
+type {{.ClientName}}RetryBudget struct {
+	mu     sync.Mutex
+	tokens float64
+}
+
+func new{{.ClientName}}RetryBudget() *{{.ClientName}}RetryBudget {
+	return &{{.ClientName}}RetryBudget{tokens: 10}
+}
+
+func (b *{{.ClientName}}RetryBudget) spend() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+
+func (b *{{.ClientName}}RetryBudget) refill() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.tokens = min(b.tokens+0.1, 10)
+}
+
+// outboundBackoff returns the exponential wait for an attempt, capped at 2s, with
+// equal jitter: a wait between half and all of that value. Callers that fail
+// together therefore spread their retries instead of retrying in lockstep.
 func (c *{{.ClientName}}) outboundBackoff(attempt int) time.Duration {
 	backoff := c.retryBackoff
 	if backoff <= 0 {
@@ -126,10 +163,11 @@ func (c *{{.ClientName}}) outboundBackoff(attempt int) time.Duration {
 	for i := 0; i < attempt; i++ {
 		backoff *= 2
 		if backoff > 2*time.Second {
-			return 2 * time.Second
+			backoff = 2 * time.Second
+			break
 		}
 	}
-	return backoff
+	return backoff/2 + time.Duration(mrand.Int63n(int64(backoff)/2+1))
 }
 
 func (c *{{.ClientName}}) shouldRetryOutbound(err error) bool {
@@ -148,12 +186,22 @@ func {{.ClientName}}UnaryWithRetry[T any](c *{{.ClientName}}, ctx context.Contex
 		value, err := op(callCtx)
 		cancel()
 		if err == nil {
+			c.retries.refill()
 			return value, nil
 		}
 		if !retrySafe || attempt >= c.maxRetries || !c.shouldRetryOutbound(err) {
 			return zero, err
 		}
-		timer := time.NewTimer(c.outboundBackoff(attempt))
+		wait := c.outboundBackoff(attempt)
+		// A retry the caller's deadline cannot cover would be cut off in the
+		// backoff sleep, so the caller gets the failure it already has instead.
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= wait {
+			return zero, err
+		}
+		if !c.retries.spend() {
+			return zero, err
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

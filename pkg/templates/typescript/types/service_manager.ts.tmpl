@@ -685,9 +685,13 @@ export class ServiceManager {
   private createAccountingEmitter(): Emitter {
     // Topic: {{.AccountingPublisherTopicRef}}.
     //
-    // Never holds an RPC (issue #34): this queue is the spool. EventBusSink.emit
-    // (chassis/am) never waits; it drops and counts a record only when the queue
-    // is at its spool depth.
+    // NON-DROPPING (item 9's ruling): unlike the trace publisher above, this
+    // queue never rejects a push. EventBusSink.emit (chassis/am) is a
+    // synchronous void call from the generated wrapper's emitAccounting, so
+    // it cannot itself await backpressure the way Go/Rust/Java/Python's
+    // blocking/awaited bounded-queue send does; instead the queue keeps
+    // accepting past `maxQueueWarn` and only logs a warning, so an
+    // accounting record is never silently discarded.
     const queue: {{.AccountingEventTypeName}}[] = [];
     const signal = this.abortController.signal;
     let waiter: { resolve: () => void; reject: (err: Error) => void } | null = null;

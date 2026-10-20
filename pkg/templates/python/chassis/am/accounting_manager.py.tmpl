@@ -321,19 +321,16 @@ class EventBusSink:
     Emitter's typed event dict into the stored AccountingRecord and hands it
     to the generated per-topic publisher's queue.
 
-    SEND CONTRACT — NEVER HOLDS THE RPC (issue #34). Emit hands the record to
-    the bounded queue, which is the spool: the publish stream drains it, in
-    order, once the event bus is reachable, so an outage costs the RPC nothing
-    and the records written during it replay. A record is dropped only when the
-    spool is full, and each drop is counted and logged at ERROR with the
-    running total.
+    SEND CONTRACT — BLOCKING, NOT DROPPING (item 9's ruling). Unlike
+    LoggerSink or the trace publisher (best-effort, drops on a full queue),
+    this sink retries until the bounded queue accepts the record: a silently
+    missing accounting row is worse than a slow RPC.
     """
 
     def __init__(self, queue: Any, source_id: str) -> None:
         self._queue = queue
         self._source_id = source_id
         self._seq = itertools.count(1)
-        self._dropped = 0
 
     def _next_accounting_id(self, timestamp_ms: int) -> str:
         return f"{self._source_id}-{timestamp_ms:013d}-{next(self._seq):012d}"
@@ -374,13 +371,14 @@ class EventBusSink:
 
     def emit(self, event: Dict[str, Any]) -> None:
         record = self._flatten(event)
-        try:
-            self._queue.put_nowait(record)
-        except asyncio.QueueFull:
-            self._dropped += 1
-            logger.error(
-                "accounting spool full; record dropped: %s dropped_total=%d",
-                record.accounting_id,
-                self._dropped,
-            )
+        while True:
+            try:
+                self._queue.put_nowait(record)
+                return
+            except asyncio.QueueFull:
+                logger.warning(
+                    "accounting publisher queue full, blocking until drained: %s",
+                    record.accounting_id,
+                )
+                time.sleep(0.01)
 {{- end}}

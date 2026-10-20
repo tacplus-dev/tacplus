@@ -5,13 +5,17 @@ package types
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"text/template"
+	"time"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil"
 )
@@ -192,7 +196,7 @@ func TestPythonServiceManagerOmitsAccountingWiringWithoutPublisher(t *testing.T)
 
 // TestPythonAccountingManagerEventBusSinkRendersValidPython renders
 // accounting_manager.py.tmpl with HasAccountingRecord true and asserts the
-// EventBusSink/method_label seam is present, non-dropping, and syntactically
+// EventBusSink/method_label seam is present, never blocks, and syntactically
 // valid Python.
 func TestPythonAccountingManagerEventBusSinkRendersValidPython(t *testing.T) {
 	tmplStr, err := tmplutil.LoadTemplate("python/chassis/am", "accounting_manager.py.tmpl")
@@ -236,16 +240,16 @@ func TestPythonAccountingManagerEventBusSinkRendersValidPython(t *testing.T) {
 		"if method.demo_service:",
 		"return _rpc_short_name(services_pb.DemoServiceRPCs.Name(method.demo_service))",
 		"except asyncio.QueueFull:",
-		"time.sleep(0.01)",
+		"accounting spool full; record dropped: %s dropped_total=%d",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered accounting_manager missing marker %q:\n%s", want, rendered)
 		}
 	}
 
-	// Non-dropping: the sink must retry, never give up and discard the record.
-	if strings.Contains(rendered, "dropping accounting") {
-		t.Fatalf("EventBusSink must never drop accounting records (item 9's ruling):\n%s", rendered)
+	// Never blocks: emit must not wait on a full queue.
+	if strings.Contains(rendered, "time.sleep(") {
+		t.Fatalf("EventBusSink.emit must never wait on the publisher (issue #34):\n%s", rendered)
 	}
 
 	pyCompileCheck(t, rendered, "accounting_manager.py")
@@ -282,4 +286,119 @@ func TestPythonAccountingManagerOmitsEventBusSinkWithoutRecord(t *testing.T) {
 	}
 
 	pyCompileCheck(t, rendered, "accounting_manager_no_record.py")
+}
+
+// pyEventBusSinkDriver imports the rendered accounting_manager.py from argv[1],
+// fills a four-slot publisher queue that nothing drains (an event-bus outage),
+// then emits fifty records. It prints what the queue held, in order, and how
+// many records the sink counted as dropped.
+const pyEventBusSinkDriver = `import asyncio
+import json
+import sys
+
+sys.path.insert(0, sys.argv[1])
+import accounting_manager as am
+
+DEPTH = 4
+EMITS = 50
+
+queue = asyncio.Queue(maxsize=DEPTH)
+sink = am.EventBusSink(queue, "test-1")
+for i in range(EMITS):
+    sink.emit({
+        "timestamp_ms": 1,
+        "source_id": "test",
+        "request_id": "r%d" % i,
+        "identity": {},
+        "level": 2,
+        "rpc_completed": {"method": None, "duration_ms": 1},
+    })
+held = []
+while not queue.empty():
+    held.append(queue.get_nowait().request_id)
+print(json.dumps({"held": held, "dropped": sink._dropped}))
+`
+
+// TestPythonEventBusSinkNeverHoldsEmitWhenPublisherBlocked renders the real
+// accounting_manager.py.tmpl and drives its EventBusSink with the publisher
+// blocked. Each emit must return; once the queue is full the surplus records
+// are dropped and counted, and the records that were held replay in emit order.
+// Before the spool, emit slept in a loop until the queue drained, so the driver
+// never finished and the timeout fails the test.
+func TestPythonEventBusSinkNeverHoldsEmitWhenPublisherBlocked(t *testing.T) {
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("no python3 on PATH; skipping EventBusSink behaviour check")
+	}
+	tmplStr, err := tmplutil.LoadTemplate("python/chassis/am", "accounting_manager.py.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate accounting_manager.py.tmpl: %v", err)
+	}
+	tmpl, err := template.New("accounting_manager").Funcs(header.Funcs()).Parse(tmplStr)
+	if err != nil {
+		t.Fatalf("parse accounting_manager template: %v", err)
+	}
+	data := struct {
+		HasAccountingRecord        bool
+		AccountingRecordImportFrom string
+		AccountingRecordPbModule   string
+		ServicesImportFrom         string
+		ServicesPbModule           string
+		ServiceRPCs                []struct{ FieldName, EnumName string }
+	}{
+		HasAccountingRecord:        true,
+		AccountingRecordImportFrom: "stub",
+		AccountingRecordPbModule:   "accountingrecord_pb2",
+		ServicesImportFrom:         "stub",
+		ServicesPbModule:           "services_pb2",
+	}
+	var rendered bytes.Buffer
+	if err := tmpl.Execute(&rendered, data); err != nil {
+		t.Fatalf("execute accounting_manager template: %v", err)
+	}
+
+	dir := t.TempDir()
+	stubs := map[string]string{
+		"grpc.py":              "",
+		"stub/__init__.py":     "",
+		"stub/services_pb2.py": "",
+		"stub/accountingrecord_pb2.py": "class AccountingRecord:\n" +
+			"    def __init__(self, **kwargs):\n" +
+			"        self.__dict__.update(kwargs)\n",
+		"accounting_manager.py": rendered.String(),
+		"driver.py":             pyEventBusSinkDriver,
+	}
+	for name, content := range stubs {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir for %s: %v", name, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, py, "-I", filepath.Join(dir, "driver.py"), dir).Output()
+	if ctx.Err() != nil {
+		t.Fatalf("EventBusSink.emit did not return while the publisher was blocked: the driver ran past %v", 10*time.Second)
+	}
+	if err != nil {
+		t.Fatalf("driver failed: %v", err)
+	}
+
+	var got struct {
+		Held    []string `json:"held"`
+		Dropped int      `json:"dropped"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("parse driver output %q: %v", out, err)
+	}
+	if want := []string{"r0", "r1", "r2", "r3"}; !reflect.DeepEqual(got.Held, want) {
+		t.Fatalf("publisher queue held %v, want %v: the spool must replay the first records in emit order", got.Held, want)
+	}
+	if got.Dropped != 46 {
+		t.Fatalf("dropped %d records, want 46: records past a full spool must be dropped and counted", got.Dropped)
+	}
 }

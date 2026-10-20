@@ -152,10 +152,16 @@ impl ContractApiHandler for Handler {
 //   the rust twin of the java fixture's `Authorizer.create()`: real JWT
 //   verification, no verifying keys wired, so the fail-closed leg is rejected
 //   by generated auth code rather than by a fixture stand-in.
-// - `check_at_or_below` (auth_any_user -- ListEvents / ListEventsPaged) is a
-//   fixture check on the opaque bearer, mirroring the java fixture's
-//   `setAuthenticateFunc`: that token is not a JWT and could never verify, so
-//   both fixtures short-circuit this seam identically.
+// - `check_at_or_below` (level-or-below, with a target namespace) is a fixture
+//   check on the opaque bearer, mirroring the java fixture's `setAuthenticateFunc`.
+//   That token is not a JWT and could never verify, so both fixtures
+//   short-circuit this seam identically.
+// - `authenticate` (auth_any_user with no target namespace -- ListEvents /
+//   ListEventsPaged) takes the same opaque-bearer short-circuit with an empty
+//   target namespace, as the java fixture's Authenticator does for that call.
+//
+// Each method maps the verified token's claims to the trait's claims map the
+// same way the generated ServiceManager's AuthorizerAdapter does.
 struct FixtureAuthorizer {
     authorizer: GrpcAuthorizer,
 }
@@ -175,7 +181,7 @@ impl Authorizer for FixtureAuthorizer {
         &self,
         full_method: &str,
         authorization: Option<&str>,
-    ) -> Result<(), tonic::Status> {
+    ) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
         // Same shape as the generated AuthorizerAdapter: derive the bare method
         // name from the full gRPC path and map the authorizer's code back onto
         // a tonic Status.
@@ -183,6 +189,7 @@ impl Authorizer for FixtureAuthorizer {
         self.authorizer
             .authorize_grpc(full_method, method, authorization, &std::collections::HashMap::new())
             .await
+            .map(|tw| GrpcAuthorizer::identity_claims(&tw))
             .map_err(|e| match e.code {
                 16 => tonic::Status::unauthenticated(e.message),
                 _ => tonic::Status::permission_denied(e.message),
@@ -193,7 +200,7 @@ impl Authorizer for FixtureAuthorizer {
         &self,
         authorization: Option<&str>,
         target_namespace: &str,
-    ) -> Result<(), tonic::Status> {
+    ) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
         if authorization != Some(BEARER) {
             return Err(tonic::Status::unauthenticated("unexpected authorization header"));
         }
@@ -203,7 +210,14 @@ impl Authorizer for FixtureAuthorizer {
                 target_namespace
             )));
         }
-        Ok(())
+        Ok(std::collections::HashMap::new())
+    }
+
+    async fn authenticate(
+        &self,
+        authorization: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
+        self.check_at_or_below(authorization, "").await
     }
 }
 

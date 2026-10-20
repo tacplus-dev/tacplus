@@ -1784,13 +1784,13 @@ impl ServiceManager {
                 .add_service(grpc_health_svc)
 {{- range .GrpcServices}}
 {{- if not .IsC2D}}
-                .add_service(
+                .add_service(servicemanager::deadline::InboundDeadline::new(
                     {{.TypesBasePath}}::{{.ServerModName}}::{{.ServerType}}::new(
                         {{.WrapperVar}}.clone(),
                     )
                     .max_decoding_message_size(max_recv_msg_size)
                     .max_encoding_message_size(max_send_msg_size),
-                )
+                ))
 {{- end}}
 {{- end}}
         } else {
@@ -1798,13 +1798,13 @@ impl ServiceManager {
                 .add_service(grpc_health_svc)
 {{- range .GrpcServices}}
 {{- if not .IsC2D}}
-                .add_service(
+                .add_service(servicemanager::deadline::InboundDeadline::new(
                     {{.TypesBasePath}}::{{.ServerModName}}::{{.ServerType}}::new(
                         {{.WrapperVar}}.clone(),
                     )
                     .max_decoding_message_size(max_recv_msg_size)
                     .max_encoding_message_size(max_send_msg_size),
-                )
+                ))
 {{- end}}
 {{- end}}
         };
@@ -2358,7 +2358,7 @@ fn new_c2d_server(
     let c2d_routes = tonic::service::Routes::new(tonic_health::server::health_reporter().1)
 {{- range .GrpcServices}}
 {{- if .IsC2D}}
-        .add_service({{.TypesBasePath}}::{{.ServerModName}}::{{.ServerType}}::new({{.WrapperVar}}))
+        .add_service(servicemanager::deadline::InboundDeadline::new({{.TypesBasePath}}::{{.ServerModName}}::{{.ServerType}}::new({{.WrapperVar}})))
 {{- end}}
 {{- end}}
         ;

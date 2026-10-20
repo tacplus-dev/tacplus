@@ -46,6 +46,8 @@ case "${1:-}" in
     # left in the file for that run to pick up.
     mkdir -p "$HOME_DIR"; printf '%s\n' "${2:-}" > "$TRIGGER"; log "notified (issue: ${2:-oldest})"; exit 0 ;;
   install)
+    # Java gates need a JDK; Homebrew's openjdk is keg-only (not in /opt/homebrew/bin), so find its bin dir.
+    JDK_BIN=""; for d in /opt/homebrew/opt/openjdk/bin /usr/local/opt/openjdk/bin; do [ -x "$d/java" ] && { JDK_BIN="$d"; break; }; done
     mkdir -p "$(dirname "$PLIST")" "$HOME_DIR"
     cat > "$PLIST" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
@@ -56,7 +58,7 @@ case "${1:-}" in
   <key>StartInterval</key><integer>86400</integer>
   <key>WatchPaths</key><array><string>$TRIGGER</string></array>
   <key>EnvironmentVariables</key><dict>
-    <key>PATH</key><string>${PROTOC28:+$PROTOC28/bin:}$HOME/.local/bin:$HOME/go/bin:/usr/local/go/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PATH</key><string>${PROTOC28:+$PROTOC28/bin:}$HOME/.local/bin:$HOME/.cargo/bin:$HOME/go/bin:/usr/local/go/bin:${JDK_BIN:+$JDK_BIN:}/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>HOME</key><string>$HOME</string>
   </dict>
   <key>StandardOutPath</key><string>$HOME_DIR/launchd.out.log</string>
@@ -115,7 +117,13 @@ release() {
 
 gh repo clone "$REPO" "$RUN/tacplus" -- --quiet
 cd "$RUN/tacplus"
-git checkout -q -b "fix/issue-$ISSUE"
+# Resume a previous run's pushed branch instead of starting over (a run can push and then stop).
+if git ls-remote --exit-code --heads origin "fix/issue-$ISSUE" >/dev/null 2>&1; then
+  git fetch -q origin "fix/issue-$ISSUE" && git checkout -q -b "fix/issue-$ISSUE" FETCH_HEAD
+  log "resuming the pushed branch fix/issue-$ISSUE"
+else
+  git checkout -q -b "fix/issue-$ISSUE"
+fi
 
 PROMPT="$RUN/prompt.md"
 cat > "$PROMPT" <<PR
@@ -175,7 +183,10 @@ If it is a BUG, fix it as below and backport it.
    changed; \`just current-generation-rust\` when Rust changed; \`just w2s-validate\` / \`just c2d-server\`
    when those planes changed. Run \`rm -rf target/cross-test\` after each gate. Several gates run longer than
    your shell tool's 10-minute limit: start each one detached (\`nohup just <gate> > /tmp/<gate>.log 2>&1 &\`)
-   and poll its log with short foreground checks until it prints its final line; never rely on one long wait. A green test that does
+   and poll its log with short foreground checks until it prints its final line; never rely on one long wait.
+   You run non-interactively: ending your reply ends the run. Never end a turn while a gate is still running
+   or before the pull request is open — keep polling with tool calls until the gate exits.
+   If the branch already exists on origin you are resuming a previous run: read its commits and finish it. A green test that does
    not exercise the defect is not evidence: ask what would have failed. Never run \`git stash\` while
    a gate runs.
 4. Commit with a message that says why, ending with

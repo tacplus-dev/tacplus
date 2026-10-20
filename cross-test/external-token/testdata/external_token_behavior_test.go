@@ -2,6 +2,7 @@ package service_im
 
 import (
 	"context"
+	"errors"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -214,5 +215,106 @@ func TestGoTokenForExternalMintsAFreshES256TokenOnEveryCall(t *testing.T) {
 		if req.GetExp() <= before || req.GetExp() > after+extMaxLifetime {
 			t.Fatalf("requested exp %d must be within 600 s", req.GetExp())
 		}
+	}
+}
+
+// bootstrapKernel is the token authority for the bootstrap arm. The first
+// refresh exchange must present the bootstrap token, each renewal must present
+// the refresh token the previous exchange returned, and the third refresh token
+// has been revoked. Service tokens expire one second out, so every call to the
+// minter re-exchanges.
+type bootstrapKernel struct {
+	authority_pb.UnimplementedTokenMintServiceServer
+
+	mu            sync.Mutex
+	refreshInputs []string
+}
+
+func (k *bootstrapKernel) MintServiceToken(_ context.Context, req *common_pb.MintServiceTokenRequest) (*common_pb.TokenMintResponse, error) {
+	if req.GetTokenPurpose() == token_pb.TokenPurpose_TOKEN_PURPOSE_REFRESH {
+		k.mu.Lock()
+		k.refreshInputs = append(k.refreshInputs, req.GetInputToken())
+		k.mu.Unlock()
+		switch req.GetInputToken() {
+		case "bootstrap-token":
+			return &common_pb.TokenMintResponse{AccessToken: &token_pb.Token{Base64: "access-1"}, RefreshToken: &token_pb.Token{Base64: "refresh-1"}}, nil
+		case "refresh-1":
+			return &common_pb.TokenMintResponse{AccessToken: &token_pb.Token{Base64: "access-2"}, RefreshToken: &token_pb.Token{Base64: "refresh-2"}}, nil
+		case "refresh-2":
+			return nil, status.Error(codes.PermissionDenied, "workload revoked")
+		}
+		return nil, status.Errorf(codes.InvalidArgument, "unexpected refresh input %q", req.GetInputToken())
+	}
+	var n string
+	switch req.GetInputToken() {
+	case "access-1":
+		n = "1"
+	case "access-2":
+		n = "2"
+	default:
+		return nil, status.Errorf(codes.Unauthenticated, "phase 2 presented %q", req.GetInputToken())
+	}
+	exp := strconv.FormatInt(time.Now().Add(time.Second).Unix(), 10)
+	return &common_pb.TokenMintResponse{AccessToken: &token_pb.Token{Base64: "service-token-" + n, Payload: map[string]string{"exp": exp}}}, nil
+}
+
+func TestGoBootstrapTokenIsExchangedOnceAndRenewedFromTheRefreshToken(t *testing.T) {
+	bootstrapFile := filepath.Join(t.TempDir(), "bootstrap")
+	if err := os.WriteFile(bootstrapFile, []byte("bootstrap-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	kernel := &bootstrapKernel{}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	authority_pb.RegisterTokenMintServiceServer(server, kernel)
+	go func() { _ = server.Serve(lis) }()
+	defer server.Stop()
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	minter, err := newBootstrapTokenMinter(bootstrapFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	minter.setConn(conn)
+	im := &IdentityManager{conn: conn, k8sMinter: minter}
+
+	first, err := im.GetTokenFor(extAudience)
+	if err != nil {
+		t.Fatalf("bootstrap exchange: %v", err)
+	}
+	if first != "service-token-1" {
+		t.Fatalf("bootstrap exchange returned %q", first)
+	}
+	if _, err := os.Stat(bootstrapFile); !os.IsNotExist(err) {
+		t.Fatalf("the bootstrap token file must be removed once read; stat err = %v", err)
+	}
+
+	second, err := im.GetTokenFor(extAudience)
+	if err != nil {
+		t.Fatalf("renewal after expiry: %v", err)
+	}
+	if second != "service-token-2" {
+		t.Fatalf("renewal returned %q", second)
+	}
+
+	_, err = im.GetTokenFor(extAudience)
+	if !errors.Is(err, ErrWorkloadRevoked) {
+		t.Fatalf("a revoked workload must fail with ErrWorkloadRevoked, got %v", err)
+	}
+
+	kernel.mu.Lock()
+	defer kernel.mu.Unlock()
+	want := []string{"bootstrap-token", "refresh-1", "refresh-2"}
+	if strings.Join(kernel.refreshInputs, ",") != strings.Join(want, ",") {
+		t.Fatalf("refresh exchanges presented %v, want %v", kernel.refreshInputs, want)
 	}
 }

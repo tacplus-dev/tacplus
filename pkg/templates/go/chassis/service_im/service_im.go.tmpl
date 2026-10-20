@@ -65,6 +65,12 @@ const defaultAudience = "{{.ServiceAudience}}"
 // bootstrap path; the static cred_pair (private_key) bootstrap arm has been removed.
 const k8sTokenFileEnv = "KERNEL_K8S_TOKEN_FILE"
 
+// bootstrapTokenFileEnv names the env var pointing at a bootstrap token file that
+// a parent workload wrote for this process (WorkloadMint). The token is exchanged
+// once for a refresh + access pair; renewal then runs from the retained refresh
+// token, so the file is read once and removed.
+const bootstrapTokenFileEnv = "KERNEL_BOOTSTRAP_TOKEN_FILE"
+
 // exchangeTimeout is the maximum time for a single token exchange RPC.
 const exchangeTimeout = 10 * time.Second
 {{- if .MintExternalServiceTokenMethod}}
@@ -179,6 +185,12 @@ var ErrMissingTrustDomain = errors.New("im: spiffe_trust_domain is required for 
 // same thing in every build.
 var ErrTokenMinterNotConfigured = errors.New("im: service token minter is not configured")
 
+// ErrWorkloadRevoked is returned when the token authority denies this workload's
+// bootstrap or refresh credential with PERMISSION_DENIED: the workload was
+// revoked, or its bootstrap token was already spent. Retrying cannot succeed, so
+// callers stop at once; the ServiceManager startup loop classifies it permanent.
+var ErrWorkloadRevoked = errors.New("im: workload revoked by the token authority")
+
 // New creates an IdentityManager: dials a bare connection to the cluster,
 // detects auth method (Kubernetes projected-token or cloud), and performs
 // initial token exchange.
@@ -281,10 +293,28 @@ func New(ctx context.Context, cfg *grpcconfig_pb.Config) (*IdentityManager, erro
 	// file is the in-cluster bootstrap path. Otherwise cloud-native identity is
 	// attempted. The static cred_pair (private_key) bootstrap arm has been
 	// removed; cfg.PrivateKey is no longer read.
+	bootstrapTokenFile := os.Getenv(bootstrapTokenFileEnv)
 	k8sTokenFile := os.Getenv(k8sTokenFileEnv)
 
 	// Detect auth method and perform initial token exchange.
-	if k8sTokenFile != "" {
+	if bootstrapTokenFile != "" {
+		zap.L().Info("IdentityManager: bootstrap token file configured — exchanging it for a refresh token",
+			zap.String("bootstrap_token_file", bootstrapTokenFile))
+		minter, err := newBootstrapTokenMinter(bootstrapTokenFile)
+		if err != nil {
+			im.conn.Close()
+			imCancel()
+			return nil, fmt.Errorf("im: bootstrap token minter: %w", err)
+		}
+		minter.setConn(im.conn)
+		im.k8sMinter = minter
+		if err := imInitialExchangeWithRetry(imCtx, im.GetToken); err != nil {
+			im.conn.Close()
+			imCancel()
+			return nil, fmt.Errorf("im: initial bootstrap token exchange: %w", err)
+		}
+		zap.L().Info("IdentityManager: initial bootstrap token exchange successful")
+	} else if k8sTokenFile != "" {
 		zap.L().Info("IdentityManager: kubernetes token file configured — using projected-token auth",
 			zap.String("token_file", k8sTokenFile))
 		minter, err := newK8sTokenMinter(k8sTokenFile)
@@ -393,6 +423,9 @@ func imInitialExchangeWithRetry(ctx context.Context, exchange func() (string, er
 		if err == nil {
 			return nil
 		}
+		if errors.Is(err, ErrWorkloadRevoked) {
+			return err
+		}
 		elapsed := time.Since(start)
 		if time.Now().After(deadline) {
 			zap.L().Error("IdentityManager: initial token exchange timed out",
@@ -436,6 +469,9 @@ func (im *IdentityManager) GetTokenFor(audience string) (string, error) {
 		return token, nil
 	}
 	if im.k8sMinter == nil && im.cloudMinter == nil {
+		return "", err
+	}
+	if errors.Is(err, ErrWorkloadRevoked) {
 		return "", err
 	}
 	if rotateErr := im.rotateAuthorityConn(); rotateErr != nil {
@@ -630,8 +666,16 @@ func (im *IdentityManager) Close() {
 // The token file is re-read on every exchange because the kubelet rotates
 // projected tokens in place (~600s TTL); only the exchanged per-audience
 // service tokens are cached.
+//
+// A bootstrap-mode minter (newBootstrapTokenMinter) runs the same Phase 2 but
+// presents a credential it holds in Phase 1 instead: the bootstrap token until
+// the first exchange, then the refresh token that exchange returned. Renewal
+// never re-reads anything from disk.
 type k8sTokenMinter struct {
 	tokenFile    string
+	bootstrap    bool                   // Phase 1 presents credential instead of reading tokenFile
+	phase1Mu     sync.Mutex             // serialises Phase 1; guards credential
+	credential   string                 // bootstrap mode: the credential Phase 1 presents
 	mu           sync.Mutex
 	tokens       map[string]*tokenEntry // per-audience token cache
 	refreshLocks map[string]*sync.Mutex // per-audience refresh lock
@@ -646,6 +690,34 @@ func newK8sTokenMinter(tokenFile string) (*k8sTokenMinter, error) {
 	}
 	return &k8sTokenMinter{
 		tokenFile:    tokenFile,
+		tokens:       make(map[string]*tokenEntry),
+		refreshLocks: make(map[string]*sync.Mutex),
+	}, nil
+}
+
+// newBootstrapTokenMinter creates a bootstrap-mode k8sTokenMinter from the bootstrap
+// token file a parent workload wrote. The file is read and removed here: the
+// token is consumed by the first exchange, and a failed first exchange retries
+// with the same in-memory token.
+func newBootstrapTokenMinter(bootstrapFile string) (*k8sTokenMinter, error) {
+	if bootstrapFile == "" {
+		return nil, fmt.Errorf("bootstrap token file path is empty")
+	}
+	raw, err := os.ReadFile(bootstrapFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading bootstrap token file %s: %w", bootstrapFile, err)
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return nil, fmt.Errorf("bootstrap token file %s is empty", bootstrapFile)
+	}
+	if err := os.Remove(bootstrapFile); err != nil {
+		zap.L().Warn("IdentityManager: could not remove bootstrap token file",
+			zap.String("bootstrap_token_file", bootstrapFile), zap.Error(err))
+	}
+	return &k8sTokenMinter{
+		bootstrap:    true,
+		credential:   token,
 		tokens:       make(map[string]*tokenEntry),
 		refreshLocks: make(map[string]*sync.Mutex),
 	}, nil
@@ -715,34 +787,74 @@ func (tm *k8sTokenMinter) invalidate() {
 	tm.tokens = make(map[string]*tokenEntry)
 }
 
-// doExchange performs the full token exchange for one audience.
-// Phase 1: bootstrap (projected k8s token → refresh + access token).
-// Phase 2: exchange access token for audience-specific token.
-func (tm *k8sTokenMinter) doExchange(audience string) (string, error) {
-	// 1. Re-read the projected token from disk (rotated in place by kubelet).
+// phase1Request builds the Phase 1 request. A projected-token minter re-reads the
+// token file; a bootstrap-mode minter presents the credential it holds.
+func (tm *k8sTokenMinter) phase1Request() (*common_pb.MintServiceTokenRequest, error) {
+	if tm.bootstrap {
+		return &common_pb.MintServiceTokenRequest{
+			InputToken:   tm.credential,
+			TokenPurpose: token_pb.TokenPurpose_TOKEN_PURPOSE_REFRESH,
+		}, nil
+	}
+	// Re-read the projected token from disk (rotated in place by kubelet).
 	raw, err := os.ReadFile(tm.tokenFile)
 	if err != nil {
-		return "", fmt.Errorf("reading kubernetes token file %s: %w", tm.tokenFile, err)
+		return nil, fmt.Errorf("reading kubernetes token file %s: %w", tm.tokenFile, err)
 	}
 	k8sToken := strings.TrimSpace(string(raw))
 	if k8sToken == "" {
-		return "", fmt.Errorf("kubernetes token file %s is empty", tm.tokenFile)
+		return nil, fmt.Errorf("kubernetes token file %s is empty", tm.tokenFile)
 	}
+	return &common_pb.MintServiceTokenRequest{
+		KubernetesToken: k8sToken,
+		TokenPurpose:    token_pb.TokenPurpose_TOKEN_PURPOSE_REFRESH,
+	}, nil
+}
 
+// exchangeForAccess performs Phase 1: presents the Phase 1 credential and returns
+// the refresh + access pair. Serialised, so two exchanges never present the same
+// refresh token to an authority that rotates them. In bootstrap mode the refresh
+// token returned becomes the credential for the next renewal.
+func (tm *k8sTokenMinter) exchangeForAccess(exchClient cluster_svc_pb.{{.MintServiceName}}Client) (*common_pb.TokenMintResponse, error) {
+	tm.phase1Mu.Lock()
+	defer tm.phase1Mu.Unlock()
+
+	req, err := tm.phase1Request()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), exchangeTimeout)
+	defer cancel()
+	resp, err := exchClient.MintServiceToken(ctx, req)
+	if err != nil {
+		if tm.bootstrap && status.Code(err) == codes.PermissionDenied {
+			return nil, fmt.Errorf("%w: %v", ErrWorkloadRevoked, err)
+		}
+		return nil, fmt.Errorf("token exchange phase 1 (bootstrap): %w", err)
+	}
+	if tm.bootstrap {
+		refresh := resp.GetRefreshToken().GetBase64()
+		if refresh == "" {
+			return nil, fmt.Errorf("bootstrap response missing refresh_token")
+		}
+		tm.credential = refresh
+	}
+	return resp, nil
+}
+
+// doExchange performs the full token exchange for one audience.
+// Phase 1: bootstrap (projected k8s token, or the bootstrap/refresh token → refresh + access token).
+// Phase 2: exchange access token for audience-specific token.
+func (tm *k8sTokenMinter) doExchange(audience string) (string, error) {
 	exchClient := tm.exchangeClient()
 	if exchClient == nil {
 		return "", fmt.Errorf("token exchange client not initialized")
 	}
 
-	// 2. Phase 1: Bootstrap — exchange projected token for refresh + access tokens.
-	exchCtx1, cancel1 := context.WithTimeout(context.Background(), exchangeTimeout)
-	defer cancel1()
-	bootstrapResp, err := exchClient.MintServiceToken(exchCtx1, &common_pb.MintServiceTokenRequest{
-		KubernetesToken: k8sToken,
-		TokenPurpose:    token_pb.TokenPurpose_TOKEN_PURPOSE_REFRESH,
-	})
+	// 1. Phase 1: Bootstrap — exchange the Phase 1 credential for refresh + access tokens.
+	bootstrapResp, err := tm.exchangeForAccess(exchClient)
 	if err != nil {
-		return "", fmt.Errorf("token exchange phase 1 (bootstrap): %w", err)
+		return "", err
 	}
 	accessToken := bootstrapResp.GetAccessToken().GetBase64()
 
@@ -755,7 +867,7 @@ func (tm *k8sTokenMinter) doExchange(audience string) (string, error) {
 		}
 	}
 
-	// 3. Phase 2: Exchange access token for an audience-specific token.
+	// 2. Phase 2: Exchange access token for an audience-specific token.
 	exchCtx2, cancel2 := context.WithTimeout(context.Background(), exchangeTimeout)
 	defer cancel2()
 	serviceResp, err := exchClient.MintServiceToken(exchCtx2, &common_pb.MintServiceTokenRequest{

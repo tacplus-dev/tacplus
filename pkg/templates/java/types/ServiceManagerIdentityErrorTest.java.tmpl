@@ -44,6 +44,12 @@ public final class ServiceManagerIdentityErrorTest {
         check(ServiceManager.isPermanentIdentityInitError(new RuntimeException("identity", noMinter)),
             "a wrapped TokenMinterNotConfiguredException must be classified permanent");
 
+        Throwable revoked = new IdentityManager.WorkloadRevokedException("workload revoked");
+        check(ServiceManager.isPermanentIdentityInitError(revoked),
+            "WorkloadRevokedException must be classified permanent: a revoked workload cannot renew");
+        check(ServiceManager.isPermanentIdentityInitError(new RuntimeException("identity", revoked)),
+            "a wrapped WorkloadRevokedException must be classified permanent");
+
         // Typed, not textual: an untyped error carrying the same text is not the sentinel.
         check(!ServiceManager.isPermanentIdentityInitError(new IllegalArgumentException(trustDomain.getMessage())),
             "trust-domain classification must be by type, not by message text");

@@ -13,11 +13,15 @@ import {{.TypesBase}}.services.{{.TokenExchangerPackage}}.{{.MintServiceName}}Gr
 {{end}}
 
 import io.grpc.ManagedChannel;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Logger;
 
 /**
  * Kubernetes projected-token exchange: read projected SA token → service token.
@@ -29,8 +33,13 @@ import java.util.concurrent.TimeUnit;
  * token file is re-read on every exchange because the kubelet rotates projected
  * tokens in place (~600s TTL); only the exchanged per-audience service tokens are
  * cached.
+ *
+ * <p>A bootstrap-mode minter ({@link #bootstrap}) runs the same Phase 2 but presents
+ * a credential it holds in Phase 1: the bootstrap token until the first exchange,
+ * then the refresh token that exchange returned. Nothing is re-read from disk.
  */
 public class KubernetesMinter {
+    private static final Logger LOG = Logger.getLogger(KubernetesMinter.class.getName());
     private static final int TOKEN_REFRESH_BUFFER_SECS = 60;
     private static final int EXCHANGE_TIMEOUT_SECS = 10;
     private static final int MAX_TOKEN_CACHE_ENTRIES = 1000;
@@ -45,18 +54,55 @@ public class KubernetesMinter {
     }
 
     private final String tokenFile;
+    private final boolean bootstrap;
     private final String defaultAudience;
+    // Serialises Phase 1 and guards credential: two exchanges must never present
+    // the same refresh token to an authority that rotates them.
+    private final Object phase1Lock = new Object();
+    // Bootstrap mode only: the credential Phase 1 presents.
+    private String credential;
     private volatile ManagedChannel channel;
     private final ConcurrentHashMap<String, TokenEntry> tokens = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Object> refreshLocks = new ConcurrentHashMap<>();
     private volatile String instanceId = "";
 
     public KubernetesMinter(String tokenFile, String defaultAudience) {
+        this(requireTokenFile(tokenFile), false, null, defaultAudience);
+    }
+
+    private KubernetesMinter(String tokenFile, boolean bootstrap, String credential, String defaultAudience) {
+        this.tokenFile = tokenFile;
+        this.bootstrap = bootstrap;
+        this.credential = credential;
+        this.defaultAudience = defaultAudience;
+    }
+
+    private static String requireTokenFile(String tokenFile) {
         if (tokenFile == null || tokenFile.isEmpty()) {
             throw new IllegalArgumentException("kubernetes token file path is empty");
         }
-        this.tokenFile = tokenFile;
-        this.defaultAudience = defaultAudience;
+        return tokenFile;
+    }
+
+    /**
+     * Creates a bootstrap-mode minter from the bootstrap token file a parent workload
+     * wrote. The file is read and removed here: the token is consumed by the first
+     * exchange, and a failed first exchange retries with the same in-memory token.
+     */
+    public static KubernetesMinter bootstrap(String bootstrapTokenFile, String defaultAudience) throws IOException {
+        if (bootstrapTokenFile == null || bootstrapTokenFile.isEmpty()) {
+            throw new IllegalArgumentException("bootstrap token file path is empty");
+        }
+        String token = new String(Files.readAllBytes(Paths.get(bootstrapTokenFile))).trim();
+        if (token.isEmpty()) {
+            throw new IllegalStateException("bootstrap token file " + bootstrapTokenFile + " is empty");
+        }
+        try {
+            Files.deleteIfExists(Paths.get(bootstrapTokenFile));
+        } catch (IOException e) {
+            LOG.warning("IM: could not remove bootstrap token file " + bootstrapTokenFile + ": " + e.getMessage());
+        }
+        return new KubernetesMinter(null, true, token, defaultAudience);
     }
 
     public void setChannel(ManagedChannel channel) {
@@ -105,39 +151,54 @@ public class KubernetesMinter {
 {{if .HasTokenExchanger}}
         if (channel == null) throw new IllegalStateException("token exchange channel not set");
 
-        // 1. Re-read the projected token from disk (rotated in place by kubelet).
-        String k8sToken = new String(Files.readAllBytes(Paths.get(tokenFile))).trim();
-        if (k8sToken.isEmpty()) {
-            throw new IllegalStateException("kubernetes token file " + tokenFile + " is empty");
-        }
-
         long now = System.currentTimeMillis() / 1000;
         var stub = {{.MintServiceName}}Grpc.newBlockingStub(channel)
                 .withDeadlineAfter(EXCHANGE_TIMEOUT_SECS, TimeUnit.SECONDS);
 
-        // 2. Phase 1: bootstrap — projected k8s token → refresh + access tokens
-        var bootstrapResp = stub.mintServiceToken(MintServiceTokenRequest.newBuilder()
-                .setKubernetesToken(k8sToken)
-                .setTokenPurpose(TokenPurpose.TOKEN_PURPOSE_REFRESH)
-                .build());
-        String accessToken = bootstrapResp.getAccessToken().getBase64();
+        // 1. Phase 1: bootstrap — projected k8s token, or the bootstrap/refresh token → refresh + access tokens
+        String accessToken;
+        synchronized (phase1Lock) {
+            var request = MintServiceTokenRequest.newBuilder()
+                    .setTokenPurpose(TokenPurpose.TOKEN_PURPOSE_REFRESH);
+            if (bootstrap) {
+                request.setInputToken(credential);
+            } else {
+                request.setKubernetesToken(readProjectedToken());
+            }
+            try {
+                var bootstrapResp = stub.mintServiceToken(request.build());
+                accessToken = bootstrapResp.getAccessToken().getBase64();
+                if (bootstrap) {
+                    if (!bootstrapResp.hasRefreshToken()) {
+                        throw new IllegalStateException("bootstrap response missing refresh_token");
+                    }
+                    credential = bootstrapResp.getRefreshToken().getBase64();
+                }
 
-        // Parse instance_id from the refresh token (server assigns it on bootstrap).
-        if (bootstrapResp.hasRefreshToken()) {
-            String idStr = bootstrapResp.getRefreshToken().getPayloadMap().get("instance_id");
-            if (idStr != null) {
-                instanceId = idStr;
+                // Parse instance_id from the refresh token (server assigns it on bootstrap).
+                if (bootstrapResp.hasRefreshToken()) {
+                    String idStr = bootstrapResp.getRefreshToken().getPayloadMap().get("instance_id");
+                    if (idStr != null) {
+                        instanceId = idStr;
+                    }
+                }
+            } catch (StatusRuntimeException e) {
+                if (bootstrap && e.getStatus().getCode() == Status.Code.PERMISSION_DENIED) {
+                    throw new IdentityManager.WorkloadRevokedException(
+                            "token authority denied the bootstrap or refresh credential: " + e.getStatus().getDescription());
+                }
+                throw e;
             }
         }
 
-        // 3. Phase 2: access token + aud → service-specific token
+        // 2. Phase 2: access token + aud → service-specific token
         var serviceResp = stub.mintServiceToken(MintServiceTokenRequest.newBuilder()
                 .setInputToken(accessToken)
                 .setAud(audience)
                 .setTokenPurpose(TokenPurpose.TOKEN_PURPOSE_SERVICE)
                 .build());
 
-        // 4. Cache per-audience
+        // 3. Cache per-audience
         var svcToken = serviceResp.getAccessToken();
         String serviceToken = svcToken.getBase64();
         long tokenExp = now + 3600; // fallback 1h
@@ -158,6 +219,15 @@ public class KubernetesMinter {
 {{else}}
         throw new IdentityManager.TokenMinterNotConfiguredException("service token minter is not configured");
 {{end}}
+    }
+
+    /** Re-reads the projected token from disk (rotated in place by kubelet). */
+    private String readProjectedToken() throws IOException {
+        String k8sToken = new String(Files.readAllBytes(Paths.get(tokenFile))).trim();
+        if (k8sToken.isEmpty()) {
+            throw new IllegalStateException("kubernetes token file " + tokenFile + " is empty");
+        }
+        return k8sToken;
     }
 
     /** Evicts expired and oldest entries when the cache reaches its size limit. */

@@ -27,6 +27,11 @@ const DEFAULT_AUDIENCE: &str = "{{.DefaultAudience}}";
 /// file is readable, the service authenticates to the token authority with the
 /// projected token. This is the in-cluster bootstrap path.
 const K8S_TOKEN_FILE_ENV: &str = "KERNEL_K8S_TOKEN_FILE";
+/// Env var naming a bootstrap token file a parent workload wrote for this process
+/// (WorkloadMint). Read once at startup and exchanged for a refresh + access pair;
+/// renewal then runs from the retained refresh token. Takes precedence over
+/// `KERNEL_K8S_TOKEN_FILE`.
+const BOOTSTRAP_TOKEN_FILE_ENV: &str = "KERNEL_BOOTSTRAP_TOKEN_FILE";
 const RECONNECT_POLL: Duration = Duration::from_secs(30);
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 {{- if .MintExternalServiceTokenMethod }}
@@ -56,6 +61,21 @@ impl std::fmt::Display for TokenMinterNotConfigured {
 
 impl std::error::Error for TokenMinterNotConfigured {}
 
+/// Returned when the token authority denies this workload's bootstrap or refresh
+/// credential with PERMISSION_DENIED: the workload was revoked, or its bootstrap
+/// token was already spent. Retrying cannot succeed, so the identity manager stops
+/// at once and the ServiceManager startup loop classifies it permanent by downcast.
+#[derive(Debug)]
+pub struct WorkloadRevoked;
+
+impl std::fmt::Display for WorkloadRevoked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "IM: workload revoked by the token authority")
+    }
+}
+
+impl std::error::Error for WorkloadRevoked {}
+
 /// IdentityManager handles service identity: bootstrap, token caching, and renewal.
 /// The channel is provided by the ServiceManager — IM does not manage its own connections.
 pub struct IdentityManager {
@@ -82,9 +102,21 @@ impl IdentityManager {
         // file is the in-cluster bootstrap path. Otherwise cloud-native identity
         // is attempted. The static cred_pair (`private_key`) bootstrap arm has
         // been removed; `config.private_key` is no longer read.
+        let bootstrap_token_file = std::env::var(BOOTSTRAP_TOKEN_FILE_ENV).ok().filter(|p| !p.is_empty());
         let k8s_token_file = std::env::var(K8S_TOKEN_FILE_ENV).ok().filter(|p| !p.is_empty());
 
-        if let Some(ref token_file) = k8s_token_file {
+        if let Some(ref bootstrap_file) = bootstrap_token_file {
+            if !HAS_TOKEN_EXCHANGER {
+                return Err(Box::new(TokenMinterNotConfigured));
+            }
+            info!(bootstrap_file = %bootstrap_file, "IM: bootstrap token file configured — exchanging it for a refresh token");
+            let m = KubernetesTokenMinter::new_bootstrap(bootstrap_file, DEFAULT_AUDIENCE)?;
+            m.set_channel(channel.clone()).await;
+            let tok = im_initial_exchange_with_retry(|| m.get_token()).await?;
+            info!(token_length = tok.len(), "IM: initial bootstrap token exchange successful");
+            instance_id = m.instance_id().await;
+            k8s_minter = Some(Arc::new(RwLock::new(m)));
+        } else if let Some(ref token_file) = k8s_token_file {
             if !HAS_TOKEN_EXCHANGER {
                 return Err(Box::new(TokenMinterNotConfigured));
             }
@@ -254,6 +286,10 @@ fn start_health_monitor(
                     }
                 }
                 Err(e) => {
+                    if e.is::<WorkloadRevoked>() {
+                        error!(error = %e, "IM: workload revoked; exiting");
+                        std::process::exit(1);
+                    }
                     let first = first_failure.get_or_insert_with(Instant::now);
                     let elapsed = first.elapsed();
                     if elapsed >= RECONNECT_TIMEOUT {
@@ -295,6 +331,7 @@ where
         attempt += 1;
         match exchange().await {
             Ok(tok) => return Ok(tok),
+            Err(e) if e.is::<WorkloadRevoked>() => return Err(e),
             Err(e) => {
                 let elapsed_s = start.elapsed().as_secs();
                 if Instant::now() >= deadline {

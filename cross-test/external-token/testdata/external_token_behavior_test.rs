@@ -144,8 +144,123 @@ fn decode_segment(segment: &str) -> serde_json::Value {
     serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segment).expect("base64url segment")).expect("json segment")
 }
 
+/// Serialises the tests that set the process-wide identity env vars: each test
+/// builds an IdentityManager, which reads them, so they must not interleave.
+static IDENTITY_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+/// Kernel stand-in for the bootstrap arm. The first refresh exchange must present
+/// the bootstrap token, each renewal the refresh token the previous exchange
+/// returned, and the third refresh token has been revoked. Service tokens expire
+/// one second out, so every call to the identity manager re-exchanges.
+struct BootstrapKernel {
+    refresh_inputs: Mutex<Vec<String>>,
+}
+
+#[tonic::async_trait]
+impl TokenMintService for BootstrapKernel {
+    async fn token_mint(
+        &self,
+        _request: tonic::Request<TokenMintRequest>,
+    ) -> Result<tonic::Response<TokenMintResponse>, tonic::Status> {
+        Err(tonic::Status::unimplemented("token_mint is not part of this fixture"))
+    }
+
+    async fn x509_mint(
+        &self,
+        _request: tonic::Request<X509MintRequest>,
+    ) -> Result<tonic::Response<X509CertChain>, tonic::Status> {
+        Err(tonic::Status::unimplemented("x509_mint is not part of this fixture"))
+    }
+
+    async fn mint_service_token(
+        &self,
+        request: tonic::Request<MintServiceTokenRequest>,
+    ) -> Result<tonic::Response<TokenMintResponse>, tonic::Status> {
+        let req = request.into_inner();
+        if req.token_purpose == TokenPurpose::Refresh as i32 {
+            self.refresh_inputs.lock().unwrap().push(req.input_token.clone());
+            let (access, refresh) = match req.input_token.as_str() {
+                "bootstrap-token" => ("access-1", "refresh-1"),
+                "refresh-1" => ("access-2", "refresh-2"),
+                "refresh-2" => return Err(tonic::Status::permission_denied("workload revoked")),
+                other => return Err(tonic::Status::invalid_argument(format!("unexpected refresh input {other}"))),
+            };
+            return Ok(tonic::Response::new(TokenMintResponse {
+                access_token: Some(token(access.to_string(), &[])),
+                refresh_token: Some(token(refresh.to_string(), &[])),
+                ..Default::default()
+            }));
+        }
+        let n = match req.input_token.as_str() {
+            "access-1" => 1,
+            "access-2" => 2,
+            other => return Err(tonic::Status::unauthenticated(format!("phase 2 presented {other}"))),
+        };
+        let exp = (now_secs() + 1).to_string();
+        Ok(tonic::Response::new(TokenMintResponse {
+            access_token: Some(token(format!("service-token-{n}"), &[("exp", exp)])),
+            ..Default::default()
+        }))
+    }
+
+    async fn mint_external_service_token(
+        &self,
+        _request: tonic::Request<MintExternalServiceTokenRequest>,
+    ) -> Result<tonic::Response<TokenMintResponse>, tonic::Status> {
+        Err(tonic::Status::unimplemented("mint_external_service_token is not part of this fixture"))
+    }
+}
+
+#[tokio::test]
+async fn rust_bootstrap_token_is_exchanged_once_and_renewed_from_the_refresh_token() {
+    let _env = IDENTITY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::remove_var("KERNEL_K8S_TOKEN_FILE");
+    let dir = std::env::temp_dir().join(format!("bootstrap-token-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let bootstrap_file = dir.join("bootstrap");
+    std::fs::write(&bootstrap_file, "bootstrap-token").unwrap();
+    std::env::set_var("KERNEL_BOOTSTRAP_TOKEN_FILE", &bootstrap_file);
+
+    let kernel = Arc::new(BootstrapKernel { refresh_inputs: Mutex::new(Vec::new()) });
+    let addr = reserve_local_addr();
+    let server = tokio::spawn(
+        Server::builder()
+            .add_service(TokenMintServiceServer::from_arc(kernel.clone()))
+            .serve(addr),
+    );
+    let channel = connect_plain_channel(addr).await;
+
+    let identity = IdentityManager::new(channel, &Config::default())
+        .await
+        .expect("identity manager bootstraps from the bootstrap token");
+    assert!(!bootstrap_file.exists(), "the bootstrap token file is removed once read");
+
+    let renewed = identity.get_token_for(EXTERNAL_AUD).await.expect("renewal from the refresh token");
+    assert_eq!(renewed, "service-token-2");
+
+    let revoked = identity
+        .get_token_for(EXTERNAL_AUD)
+        .await
+        .expect_err("a revoked workload must not renew");
+    assert!(
+        revoked.downcast_ref::<service_im::WorkloadRevoked>().is_some(),
+        "revocation must be the typed permanent error, got: {revoked}"
+    );
+
+    assert_eq!(
+        *kernel.refresh_inputs.lock().unwrap(),
+        vec!["bootstrap-token", "refresh-1", "refresh-2"],
+        "each refresh exchange presents the credential the previous one returned"
+    );
+
+    std::env::remove_var("KERNEL_BOOTSTRAP_TOKEN_FILE");
+    server.abort();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[tokio::test]
 async fn rust_token_for_external_mints_a_fresh_es256_token_on_every_call() {
+    let _env = IDENTITY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("external-token-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let k8s_token_file = dir.join("token");

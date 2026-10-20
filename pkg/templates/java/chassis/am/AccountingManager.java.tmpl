@@ -350,33 +350,41 @@ public final class AccountingManager {
      * stored {@code AccountingRecord} and hands it to the generated
      * per-topic publisher's queue.
      *
-     * <p>SEND CONTRACT — BLOCKING, NOT DROPPING. Unlike the best-effort trace
-     * publisher (which enqueues with a non-blocking offer() and drops on a
-     * full queue), this sink blocks on the queue put, retrying until either
-     * the record is accepted or the ServiceManager signals shutdown. A full
-     * queue therefore parks the emitting RPC's completion path until the
-     * publisher drains, rather than discarding a record. Accounting is an
-     * audit trail: a silently missing row is worse than a slow RPC. The only
-     * record this sink can lose is one emitted after the service is shutting
-     * down, and that path logs at ERROR.
+     * <p>SEND CONTRACT — NEVER HOLDS THE RPC. emit() hands the record to a
+     * bounded spool and returns; it never waits on the publisher. A drain
+     * thread moves spooled records, in order, into the per-topic publisher
+     * queue as it drains. So an event-bus outage costs the RPC nothing, and the
+     * records written during the outage are replayed to the bus when it is
+     * reachable again. Accounting is an audit trail, so a record is dropped
+     * only when the spool itself is full. Every drop is counted and logged at
+     * ERROR with the running total. A record emitted after shutdown is dropped
+     * and logged too.
      */
     public static final class EventBusSink implements Sink {
         private static final Logger logger = LoggerFactory.getLogger("accounting");
 
+        // SPOOL_DEPTH bounds the records held while the publisher queue is full
+        // or the event bus is unreachable. Package-private so the self-test can
+        // size its overflow from it.
+        static final int SPOOL_DEPTH = 4096;
+
         private final java.util.concurrent.BlockingQueue<{{.AccountingRecordJavaType}}> queue;
+        private final java.util.concurrent.BlockingQueue<{{.AccountingRecordJavaType}}> spool =
+                new java.util.concurrent.LinkedBlockingQueue<>(SPOOL_DEPTH);
         private final String sourceId;
         // stopped reports true when the owning ServiceManager is shutting
-        // down. emit() polls it between blocking offer() attempts so a full
-        // queue blocks the caller instead of dropping, while still giving up
-        // once there is no publish loop left to drain it.
+        // down. The drain thread exits on it, and emit() refuses records once
+        // it is set.
         private final java.util.function.BooleanSupplier stopped;
         private final java.util.concurrent.atomic.AtomicLong seq = new java.util.concurrent.atomic.AtomicLong();
+        private final java.util.concurrent.atomic.AtomicLong dropped = new java.util.concurrent.atomic.AtomicLong();
 
         /**
          * Creates a sink that publishes through the given per-topic publisher
          * queue. sourceId is the emitting process ("{service_id}-{instance_id}"),
          * used to make accounting_id unique across instances. stopped is the
-         * ServiceManager's shutdown signal.
+         * ServiceManager's shutdown signal. The drain thread starts here and is
+         * a daemon.
          */
         public EventBusSink(java.util.concurrent.BlockingQueue<{{.AccountingRecordJavaType}}> queue,
                              String sourceId,
@@ -384,6 +392,45 @@ public final class AccountingManager {
             this.queue = queue;
             this.sourceId = sourceId;
             this.stopped = stopped;
+            Thread drainer = new Thread(this::drain, "accounting-spool");
+            drainer.setDaemon(true);
+            drainer.start();
+        }
+
+        // Moves spooled records into the publisher queue, one at a time, so the
+        // spool replays in emit order. It holds at most one record in hand. It
+        // exits on shutdown, dropping whatever is still spooled and logging the
+        // count.
+        private void drain() {
+            try {
+                while (!stopped.getAsBoolean()) {
+                    {{.AccountingRecordJavaType}} record = spool.poll(250, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    if (record == null) {
+                        continue;
+                    }
+                    while (!queue.offer(record, 250, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                        if (stopped.getAsBoolean()) {
+                            dropOnShutdown(record);
+                            return;
+                        }
+                    }
+                }
+                dropOnShutdown(null);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                dropOnShutdown(null);
+            }
+        }
+
+        // Counts and logs every record the drain thread still owns: the one in
+        // hand, if any, and everything left in the spool.
+        private void dropOnShutdown({{.AccountingRecordJavaType}} inHand) {
+            long n = spool.size() + (inHand != null ? 1 : 0);
+            if (n == 0) {
+                return;
+            }
+            long total = dropped.addAndGet(n);
+            logger.error("accounting publisher closed; records dropped dropped={} dropped_total={}", n, total);
         }
 
         // Mints the record key. accounting_id is assert_required, so it has
@@ -436,24 +483,22 @@ public final class AccountingManager {
         }
 
         /**
-         * Flattens event and blocks until the publisher accepts it, or until
-         * the service is shutting down.
+         * Flattens event and spools it without waiting on the publisher. A
+         * record is dropped only when the service is shutting down or the spool
+         * is full, and either drop is logged at ERROR.
          */
         @Override
         public void emit(Accounting.Event event) {
             {{.AccountingRecordJavaType}} record = flatten(event);
-            try {
-                while (!stopped.getAsBoolean()) {
-                    if (queue.offer(record, 250, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-                        return;
-                    }
-                }
+            if (stopped.getAsBoolean()) {
                 // The publish loop is gone, which only happens on shutdown.
                 // Loud, because this is the one lossy path.
                 logger.error("accounting publisher closed; record dropped accounting_id={}", record.getAccountingId());
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                logger.error("accounting publisher interrupted; record dropped accounting_id={}", record.getAccountingId());
+                return;
+            }
+            if (!spool.offer(record)) {
+                long total = dropped.incrementAndGet();
+                logger.error("accounting spool full; record dropped accounting_id={} dropped_total={}", record.getAccountingId(), total);
             }
         }
     }

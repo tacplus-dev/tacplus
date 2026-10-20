@@ -486,19 +486,30 @@ func generateIdentityManager(config *tactype.Config) error {
 		}
 	}
 
+	// The template routes these virtual packages to the service's own audience.
+	// An explicit mapping for the same package wins, so it is left out here: a
+	// duplicate case is a compile error in the generated service_im.go.
+	var defaultAudiencePackages []string
+	for _, pkg := range []string{"grpcconfig", "jwkview", "entitlementview", "healthreport"} {
+		if !mappingSeen[pkg] {
+			defaultAudiencePackages = append(defaultAudiencePackages, pkg)
+		}
+	}
+
 	data := struct {
-		GrpcconfigTypesPath    string
-		StateServiceTypesPath  string
-		CommonTypesPath        string
-		CloudIdentityTypesPath string
-		CloudVendorTypesPath   string
-		KeyTypesPath           string
-		KeyLibPath             string
-		TokenLibPath           string
-		TokenTypesPath         string
-		X509LibPath            string
-		ServiceAudience        string
-		MintServiceName        string
+		DefaultAudiencePackages []string
+		GrpcconfigTypesPath     string
+		StateServiceTypesPath   string
+		CommonTypesPath         string
+		CloudIdentityTypesPath  string
+		CloudVendorTypesPath    string
+		KeyTypesPath            string
+		KeyLibPath              string
+		TokenLibPath            string
+		TokenTypesPath          string
+		X509LibPath             string
+		ServiceAudience         string
+		MintServiceName         string
 		// RPC accepting MintExternalServiceTokenRequest; empty if undeclared.
 		MintExternalServiceTokenMethod string
 		AudienceMappings               []audienceMapping
@@ -506,6 +517,7 @@ func generateIdentityManager(config *tactype.Config) error {
 		KeepaliveTimeoutSecs           int
 		KeepalivePermitMinTimeSecs     int
 	}{
+		DefaultAudiencePackages:        defaultAudiencePackages,
 		GrpcconfigTypesPath:            fmt.Sprintf("%s/types/sys/grpcconfig", config.ModuleBasePath),
 		StateServiceTypesPath:          exchangerTypesPath(config, texInfo),
 		CommonTypesPath:                fmt.Sprintf("%s/types/sys/tokenrequest", config.ModuleBasePath),

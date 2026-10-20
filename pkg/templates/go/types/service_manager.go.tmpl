@@ -1280,10 +1280,9 @@ return fmt.Errorf("authorizer not wired for {{.ServerType}} (build/SM bug) - man
 // accounted RPC; without this the slot is nil and accounting produces
 // neither a record nor a log line.
 //
-// The channel send is BLOCKING, not select-with-default like the trace
-// publisher above — see EventBusSink's send contract in chassis/am. The
-// queue is deeper than the trace queue for the same reason: a brief
-// publisher stall should absorb, not drop.
+// The sink never waits on this queue: it spools records and a drain goroutine
+// feeds the queue, so the queue depth is not what bounds an outage — see
+// EventBusSink's send contract in chassis/am.
 const accountingQueueDepth = 1024
 accountingCh := make(chan *{{.AccountingPublisher.TypePkgAlias}}.{{.AccountingPublisher.EventTypeName}}, accountingQueueDepth)
 sm.tasks.Go(func(taskCtx context.Context) {

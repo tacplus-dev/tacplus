@@ -1,0 +1,36 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// The accounting record the accounting-sink fixture publishes. The generated
+// EventBusSink flattens accounting.Event into this message; the fixture's
+// self-tests drive that sink with the eventbus publisher blocked (issue #34).
+syntax = "proto3";
+
+package accountingrecord;
+
+import "sys/accounting.proto";
+import "sys/spec.proto";
+
+option (spec.vservice) = {
+  name: "accountingrecord"
+  id: 40
+};
+
+message AccountingRecord {
+  option (spec.record) = {
+    key: "accounting_id"
+    owner: "spiffe_id"
+    s2s: {auth_services: ["*"]}
+  };
+
+  string accounting_id = 1 [(spec.assert_required) = true];
+  string spiffe_id = 2 [(spec.identity_spiffe_subject) = true];
+  string request_id = 3;
+  string source_id = 4;
+  int64 timestamp_ms = 5 [(spec.query_field) = {op: QUERY_OP_RANGE}];
+  accounting.EventLevel level = 6;
+  string method = 7 [(spec.query_field) = {op: QUERY_OP_EQ}];
+  int32 code = 8;
+  int64 duration_ms = 9;
+  string principal_sub = 10;
+  string namespace = 11 [(spec.store_namespace) = true];
+}

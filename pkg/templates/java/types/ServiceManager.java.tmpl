@@ -1093,11 +1093,10 @@ public class ServiceManager implements AutoCloseable {
         // every accounted RPC; without this the field is null and accounting
         // produces neither a record nor a log line.
         //
-        // The queue send is BLOCKING, not the offer()-and-drop used by the
-        // trace publisher above — see AccountingManager.EventBusSink's send
-        // contract in chassis/am. The queue is deeper than the trace queue
-        // for the same reason: a brief publisher stall should absorb, not
-        // drop.
+        // The sink never waits on this queue: it spools records and a drain
+        // thread feeds the queue, so the queue depth is not what bounds an
+        // outage — see AccountingManager.EventBusSink's send contract in
+        // chassis/am.
         {
             BlockingQueue<{{.TypeOuterClass}}.{{.TypeName}}> accountingQueue = new ArrayBlockingQueue<>(1024);
             startManagedThread(
@@ -2437,10 +2436,10 @@ public class ServiceManager implements AutoCloseable {
     // {{.ResolveLoopName}}/{{.StreamName}} drain the durable accounting
     // record queue into EventBus. A record stays "pending" until the broker
     // acknowledges it, so stream/re-resolution failures do not discard an
-    // already-enqueued record — the queue send being BLOCKING
-    // (AccountingManager.EventBusSink.emit) is what makes THAT step
-    // non-dropping; this loop just makes sure an accepted record is retried
-    // until it is durably published.
+    // already-enqueued record — the EventBusSink spool (which replays into
+    // this queue, in order) is what keeps a record through an outage; this
+    // loop just makes sure an accepted record is retried until it is durably
+    // published.
     private void {{.ResolveLoopName}}(BlockingQueue<{{.TypeOuterClass}}.{{.TypeName}}> queue) {
         long backoff = ReconnectBackoff.INITIAL_MS;
         {{.TypeOuterClass}}.{{.TypeName}} pending = null;

@@ -614,6 +614,11 @@ var ErrMissingTrustDomain = errors.New("im: spiffe_trust_domain is required for 
 // ever be minted. TYPED so the ServiceManager startup loop classifies it as a
 // PERMANENT failure with errors.Is instead of matching the message (NEW-21).
 var ErrTokenMinterNotConfigured = errors.New("im: service token minter is not configured")
+
+// ErrWorkloadRevoked mirrors the same sentinel in the token-exchanger variant: this
+// build mints no workload credential, so it never returns it, but the generated
+// ServiceManager classifies against it in every build (NEW-21).
+var ErrWorkloadRevoked = errors.New("im: workload revoked by the token authority")
 var errNoTokenSource = errors.New("no token source configured")
 
 type IdentityManager struct {

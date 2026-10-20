@@ -489,7 +489,12 @@ fn is_permanent_identity_init_error(err: &(dyn std::error::Error + 'static)) -> 
     // A build with no token exchanger can never mint a service token, so the
     // identity chassis refuses at construction. Classified by TYPE (downcast),
     // not by message-substring matching (NEW-21 leg b).
-    err.downcast_ref::<service_im::TokenMinterNotConfigured>().is_some()
+    if err.downcast_ref::<service_im::TokenMinterNotConfigured>().is_some() {
+        return true;
+    }
+    // A workload the token authority revoked (or whose bootstrap token it refused)
+    // cannot renew: retrying the identity init can never succeed.
+    err.downcast_ref::<service_im::WorkloadRevoked>().is_some()
 }
 
 // The startup loop retries identity init up to MAX_INIT_RETRIES times with
@@ -510,6 +515,15 @@ mod identity_error_tests {
         assert!(
             is_permanent_identity_init_error(err.as_ref()),
             "a missing token minter cannot heal by retrying"
+        );
+    }
+
+    #[test]
+    fn workload_revoked_is_permanent() {
+        let err: Box<dyn std::error::Error> = Box::new(service_im::WorkloadRevoked);
+        assert!(
+            is_permanent_identity_init_error(err.as_ref()),
+            "a revoked workload cannot heal by retrying"
         );
     }
 

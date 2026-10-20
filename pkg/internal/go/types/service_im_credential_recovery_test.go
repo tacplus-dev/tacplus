@@ -162,8 +162,16 @@ func TestGoCredentialDegradedFloorStaysWired(t *testing.T) {
 		}
 	}
 	// PermissionDenied must not classify as a rejection — re-minting the same
-	// identity would loop forever against a real authorization refusal.
-	if strings.Contains(im, "codes.PermissionDenied") {
+	// identity would loop forever against a real authorization refusal. Only the
+	// body of IsCredentialRejection is checked: the bootstrap arm classifies
+	// PermissionDenied as a permanent workload revocation elsewhere in the file.
+	start := strings.Index(im, "func IsCredentialRejection(")
+	if start < 0 {
+		t.Fatal("service_im lost IsCredentialRejection")
+	}
+	body := im[start:]
+	body = body[:strings.Index(body, "\n}\n")]
+	if strings.Contains(body, "codes.PermissionDenied") {
 		t.Fatal("IsCredentialRejection must not treat PermissionDenied as a rejection")
 	}
 

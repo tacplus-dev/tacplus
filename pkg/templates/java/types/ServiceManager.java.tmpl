@@ -465,6 +465,11 @@ public class ServiceManager implements AutoCloseable {
             if (cur instanceof IdentityManager.TokenMinterNotConfiguredException) {
                 return true;
             }
+            // A workload the token authority revoked (or whose bootstrap token it
+            // refused) cannot renew: retrying the identity init can never succeed.
+            if (cur instanceof IdentityManager.WorkloadRevokedException) {
+                return true;
+            }
 {{- if .HasAutoTls}}
             // A handler that refuses a valid first certificate will refuse its
             // successor too — the rejection is local and deterministic. Without

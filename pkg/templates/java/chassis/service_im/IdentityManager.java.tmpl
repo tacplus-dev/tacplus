@@ -50,6 +50,20 @@ public class IdentityManager implements AutoCloseable {
         }
     }
 
+    /**
+     * Thrown when the token authority denies this workload's bootstrap or refresh
+     * credential with PERMISSION_DENIED: the workload was revoked, or its bootstrap
+     * token was already spent. Permanent: retrying cannot succeed, so the identity
+     * manager stops at once and the ServiceManager startup loop classifies it by type.
+     */
+    public static final class WorkloadRevokedException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+
+        public WorkloadRevokedException(String message) {
+            super(message);
+        }
+    }
+
     private static final boolean HAS_TOKEN_EXCHANGER = {{if .HasTokenExchanger}}true{{else}}false{{end}};
     private static final String DEFAULT_AUDIENCE = "{{.DefaultAudience}}";
 
@@ -59,6 +73,12 @@ public class IdentityManager implements AutoCloseable {
     // This is the in-cluster bootstrap path; the static cred_pair (private_key)
     // bootstrap arm has been removed.
     private static final String K8S_TOKEN_FILE_ENV = "KERNEL_K8S_TOKEN_FILE";
+
+    // Env var naming a bootstrap token file a parent workload wrote for this process
+    // (WorkloadMint). Read once at startup and exchanged for a refresh + access pair;
+    // renewal then runs from the retained refresh token. Takes precedence over
+    // KERNEL_K8S_TOKEN_FILE.
+    private static final String BOOTSTRAP_TOKEN_FILE_ENV = "KERNEL_BOOTSTRAP_TOKEN_FILE";
 
     // Mid-run reconnect parameters: retry indefinitely but crash if token authority is
     // unreachable for too long so the pod is restarted and gets a fresh connection.
@@ -171,9 +191,17 @@ public class IdentityManager implements AutoCloseable {
         // file is the in-cluster bootstrap path. Otherwise cloud-native identity
         // is attempted. The static cred_pair (private_key) bootstrap arm has been
         // removed; config.getPrivateKey() is no longer read.
+        String bootstrapTokenFile = System.getenv(BOOTSTRAP_TOKEN_FILE_ENV);
         String k8sTokenFile = System.getenv(K8S_TOKEN_FILE_ENV);
 
-        if (k8sTokenFile != null && !k8sTokenFile.isEmpty()) {
+        if (bootstrapTokenFile != null && !bootstrapTokenFile.isEmpty()) {
+            if (!HAS_TOKEN_EXCHANGER) {
+                throw new TokenMinterNotConfiguredException("IM: service token minter is not configured");
+            }
+            LOG.info("IM: bootstrap token file configured — exchanging it for a refresh token: " + bootstrapTokenFile);
+            k8sMinter = KubernetesMinter.bootstrap(bootstrapTokenFile, DEFAULT_AUDIENCE);
+            k8sMinter.setChannel(bareChannel);
+        } else if (k8sTokenFile != null && !k8sTokenFile.isEmpty()) {
             if (!HAS_TOKEN_EXCHANGER) {
                 throw new TokenMinterNotConfiguredException("IM: service token minter is not configured");
             }
@@ -298,6 +326,9 @@ public class IdentityManager implements AutoCloseable {
                         LOG.info("IM: token-authority connection restored after " +
                                 (System.currentTimeMillis() - prev) / 1000 + "s");
                     }
+                } catch (WorkloadRevokedException e) {
+                    LOG.severe("IM: workload revoked by the token authority — crashing so pod can be restarted: " + e.getMessage());
+                    System.exit(1);
                 } catch (Exception e) {
                     long now = System.currentTimeMillis();
                     long first = firstFailureMs.compareAndExchange(0, now);
@@ -335,6 +366,9 @@ public class IdentityManager implements AutoCloseable {
                 exchange.get();
                 return; // success
             } catch (Exception e) {
+                if (e instanceof WorkloadRevokedException) {
+                    throw e;
+                }
                 attempt++;
                 long remaining = deadline - System.currentTimeMillis();
                 if (remaining <= 0) {
@@ -365,7 +399,8 @@ public class IdentityManager implements AutoCloseable {
         try {
             return getTokenForOnce(audience);
         } catch (Exception first) {
-            if (!hasAuth() || !rotateAuthorityChannel(first)) {
+            // A revoked workload is refused by the authority, not reached through a bad endpoint.
+            if (first instanceof WorkloadRevokedException || !hasAuth() || !rotateAuthorityChannel(first)) {
                 throw first;
             }
             try {

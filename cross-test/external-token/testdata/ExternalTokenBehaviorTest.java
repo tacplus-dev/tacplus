@@ -1,7 +1,9 @@
 package com.example.externaltoken.model.chassis.service_im;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.externaltoken.model.types.services.authority.TokenMintServiceGrpc;
@@ -116,6 +118,61 @@ class ExternalTokenBehaviorTest {
         }
     }
 
+    /**
+     * Token authority for the bootstrap arm. The first refresh exchange must
+     * present the bootstrap token, each renewal the refresh token the previous
+     * exchange returned, and the third refresh token has been revoked. Service
+     * tokens expire one second out, so every call to the minter re-exchanges.
+     */
+    private static final class BootstrapKernel extends TokenMintServiceGrpc.TokenMintServiceImplBase {
+        final List<String> refreshInputs = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void mintServiceToken(MintServiceTokenRequest req, StreamObserver<TokenMintResponse> out) {
+            if (req.getTokenPurpose() == TokenPurpose.TOKEN_PURPOSE_REFRESH) {
+                refreshInputs.add(req.getInputToken());
+                String access;
+                String refresh;
+                switch (req.getInputToken()) {
+                    case "bootstrap-token":
+                        access = "access-1";
+                        refresh = "refresh-1";
+                        break;
+                    case "refresh-1":
+                        access = "access-2";
+                        refresh = "refresh-2";
+                        break;
+                    case "refresh-2":
+                        out.onError(Status.PERMISSION_DENIED.withDescription("workload revoked").asRuntimeException());
+                        return;
+                    default:
+                        out.onError(Status.INVALID_ARGUMENT.withDescription("unexpected refresh input").asRuntimeException());
+                        return;
+                }
+                out.onNext(TokenMintResponse.newBuilder()
+                        .setAccessToken(Token.newBuilder().setBase64(access))
+                        .setRefreshToken(Token.newBuilder().setBase64(refresh))
+                        .build());
+                out.onCompleted();
+                return;
+            }
+            String n;
+            if (req.getInputToken().equals("access-1")) {
+                n = "1";
+            } else if (req.getInputToken().equals("access-2")) {
+                n = "2";
+            } else {
+                out.onError(Status.UNAUTHENTICATED.withDescription("phase 2 presented an unknown token").asRuntimeException());
+                return;
+            }
+            String exp = Long.toString(Instant.now().getEpochSecond() + 1);
+            out.onNext(TokenMintResponse.newBuilder()
+                    .setAccessToken(Token.newBuilder().setBase64("service-token-" + n).putPayload("exp", exp))
+                    .build());
+            out.onCompleted();
+        }
+    }
+
     private static JsonObject decodeSegment(String segment) {
         return JsonParser.parseString(new String(B64D.decode(segment), StandardCharsets.UTF_8)).getAsJsonObject();
     }
@@ -179,6 +236,36 @@ class ExternalTokenBehaviorTest {
             channel.shutdownNow();
             server.shutdownNow();
             Files.deleteIfExists(tokenFile);
+        }
+    }
+
+    @Test
+    void bootstrapTokenIsExchangedOnceAndRenewedFromTheRefreshToken() throws Exception {
+        Path bootstrapFile = Files.createTempFile("bootstrap", ".token");
+        Files.writeString(bootstrapFile, "bootstrap-token");
+
+        BootstrapKernel kernel = new BootstrapKernel();
+        Server server = NettyServerBuilder.forAddress(new InetSocketAddress("127.0.0.1", 0))
+                .addService(kernel)
+                .build()
+                .start();
+        ManagedChannel channel = NettyChannelBuilder.forAddress("127.0.0.1", server.getPort()).usePlaintext().build();
+        try {
+            KubernetesMinter minter = KubernetesMinter.bootstrap(bootstrapFile.toString(), "authority");
+            minter.setChannel(channel);
+
+            assertEquals("service-token-1", minter.getTokenFor(AUDIENCE), "bootstrap exchange");
+            assertFalse(Files.exists(bootstrapFile), "the bootstrap token file is removed once read");
+            assertEquals("service-token-2", minter.getTokenFor(AUDIENCE), "renewal after expiry");
+            assertThrows(IdentityManager.WorkloadRevokedException.class, () -> minter.getTokenFor(AUDIENCE),
+                    "a revoked workload must not renew");
+
+            assertEquals(List.of("bootstrap-token", "refresh-1", "refresh-2"), kernel.refreshInputs,
+                    "each refresh exchange presents the credential the previous one returned");
+        } finally {
+            channel.shutdownNow();
+            server.shutdownNow();
+            Files.deleteIfExists(bootstrapFile);
         }
     }
 }

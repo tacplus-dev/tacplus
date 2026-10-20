@@ -70,6 +70,9 @@ func TestIsPermanentIdentityInitErrorClassifiesMissingTokenMinter(t *testing.T) 
 		t.Error("missing-minter classification must be by typed sentinel (errors.Is), not by " +
 			"message text; a substring match re-introduces the NEW-21 seam")
 	}
+	if !isPermanentIdentityInitError(fmt.Errorf("identity: %w", service_im.ErrWorkloadRevoked)) {
+		t.Error("a revoked workload cannot heal by retrying; ErrWorkloadRevoked must be classified permanent")
+	}
 }
 
 // The converse half: a genuinely transient failure must stay retryable, or the

@@ -329,6 +329,11 @@ func isPermanentIdentityInitError(err error) bool {
 	// A build with no token exchanger has no way to mint a service token, so the
 	// identity chassis refuses at construction. Same rule: classify by typed
 	// sentinel (errors.Is), not by message-substring matching (NEW-21 leg b).
+	// A workload the token authority revoked (or whose bootstrap token it refused)
+	// cannot renew: retrying the identity init can never succeed.
+	if errors.Is(err, service_im.ErrWorkloadRevoked) {
+		return true
+	}
 	return errors.Is(err, service_im.ErrTokenMinterNotConfigured)
 }
 

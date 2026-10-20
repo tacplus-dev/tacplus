@@ -15,12 +15,14 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tonic::transport::Channel;
 
 use {{.CrateBasePathUnderscore}}_types::services::{{.TokenExchangerPackage}}::{{.TokenExchangerPackage}}::{{.MintClientModule}}::{{.MintClientType}};
 use {{.CrateBasePathUnderscore}}_types::sys::tokenrequest::MintServiceTokenRequest;
 use {{.CrateBasePathUnderscore}}_types::sys::token::token::TokenPurpose;
+
+use crate::manager::WorkloadRevoked;
 
 /// How far before expiry to refresh the cached service token.
 const TOKEN_REFRESH_BUFFER_SECS: u64 = 60;
@@ -46,8 +48,19 @@ struct TokenEntry {
 /// access→service exchange as the CredPair minter. The file is re-read on every
 /// exchange because the kubelet rotates projected tokens in place (~600s TTL);
 /// only the exchanged per-audience platform service tokens are cached.
+///
+/// A bootstrap-mode minter (`new_bootstrap`, env `KERNEL_BOOTSTRAP_TOKEN_FILE`)
+/// runs the same Phase 2 but presents a credential it holds in Phase 1: the
+/// bootstrap token until the first exchange, then the refresh token that
+/// exchange returned. Nothing is re-read from disk.
 pub struct KubernetesTokenMinter {
     token_file: String,
+    bootstrap: bool,
+    /// Serialises Phase 1 and guards `credential`: two exchanges must never
+    /// present the same refresh token to an authority that rotates them.
+    phase1: Mutex<()>,
+    /// Bootstrap mode only: the credential Phase 1 presents.
+    credential: RwLock<String>,
     default_audience: String,
     channel: RwLock<Option<Channel>>,
     tokens: RwLock<HashMap<String, TokenEntry>>,
@@ -62,6 +75,38 @@ impl KubernetesTokenMinter {
         }
         Ok(Self {
             token_file: token_file.to_string(),
+            bootstrap: false,
+            phase1: Mutex::new(()),
+            credential: RwLock::new(String::new()),
+            default_audience: default_audience.to_string(),
+            channel: RwLock::new(None),
+            tokens: RwLock::new(HashMap::new()),
+            instance_id: RwLock::new(String::new()),
+        })
+    }
+
+    /// Creates a bootstrap-mode minter from the bootstrap token file a parent
+    /// workload wrote. The file is read and removed here: the token is consumed
+    /// by the first exchange, and a failed first exchange retries with the same
+    /// in-memory token.
+    pub fn new_bootstrap(bootstrap_file: &str, default_audience: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        if bootstrap_file.is_empty() {
+            return Err("bootstrap token file path is empty".into());
+        }
+        let raw = std::fs::read_to_string(bootstrap_file)
+            .map_err(|e| format!("reading bootstrap token file {}: {}", bootstrap_file, e))?;
+        let token = raw.trim().to_string();
+        if token.is_empty() {
+            return Err(format!("bootstrap token file {} is empty", bootstrap_file).into());
+        }
+        if let Err(e) = std::fs::remove_file(bootstrap_file) {
+            tracing::warn!(bootstrap_file = %bootstrap_file, error = %e, "IM: could not remove bootstrap token file");
+        }
+        Ok(Self {
+            token_file: String::new(),
+            bootstrap: true,
+            phase1: Mutex::new(()),
+            credential: RwLock::new(token),
             default_audience: default_audience.to_string(),
             channel: RwLock::new(None),
             tokens: RwLock::new(HashMap::new()),
@@ -105,46 +150,17 @@ impl KubernetesTokenMinter {
     }
 
     /// Performs the full token exchange for the given audience.
-    /// Phase 1: bootstrap (projected k8s token → refresh + access token).
+    /// Phase 1: bootstrap (projected k8s token, or the bootstrap/refresh token → refresh + access token).
     /// Phase 2: exchange access token for audience-specific token.
     async fn do_exchange(&self, audience: &str) -> Result<String, Box<dyn std::error::Error>> {
-        // 1. Re-read the projected token from disk (rotated in place by kubelet).
-        let raw = std::fs::read_to_string(&self.token_file)
-            .map_err(|e| format!("reading kubernetes token file {}: {}", self.token_file, e))?;
-        let k8s_token = raw.trim().to_string();
-        if k8s_token.is_empty() {
-            return Err(format!("kubernetes token file {} is empty", self.token_file).into());
-        }
-
         let channel = self.channel.read().await;
         let ch = channel.as_ref().ok_or("token exchange client not initialized")?;
         let mut client = {{.MintClientType}}::new(ch.clone());
 
-        // 2. Phase 1: bootstrap — projected k8s token → refresh + access tokens.
-        let bootstrap_resp = tokio::time::timeout(
-            Duration::from_secs(EXCHANGE_TIMEOUT_SECS),
-            client.{{.MintServiceTokenMethod}}(tonic::Request::new(MintServiceTokenRequest {
-                kubernetes_token: k8s_token,
-                token_purpose: TokenPurpose::Refresh as i32,
-                ..Default::default()
-            })),
-        )
-        .await
-        .map_err(|_| "token exchange phase 1 timed out")?
-        .map_err(|e| format!("token exchange phase 1: {}", e))?;
-        let bootstrap = bootstrap_resp.into_inner();
+        // 1. Phase 1: bootstrap — exchange the Phase 1 credential for refresh + access tokens.
+        let access_token = self.exchange_for_access(ch).await?;
 
-        let access_token_proto = bootstrap.access_token.as_ref()
-            .ok_or("bootstrap response missing access_token")?;
-        let access_token = access_token_proto.base64.clone();
-
-        if let Some(id) = extract_instance_id(access_token_proto)
-            .or_else(|| bootstrap.refresh_token.as_ref().and_then(extract_instance_id))
-        {
-            *self.instance_id.write().await = id;
-        }
-
-        // 3. Phase 2: access token + aud → audience-specific token.
+        // 2. Phase 2: access token + aud → audience-specific token.
         let service_resp = tokio::time::timeout(
             Duration::from_secs(EXCHANGE_TIMEOUT_SECS),
             client.{{.MintServiceTokenMethod}}(tonic::Request::new(MintServiceTokenRequest {
@@ -159,7 +175,7 @@ impl KubernetesTokenMinter {
         .map_err(|e| format!("token exchange phase 2: {}", e))?;
         let svc_inner = service_resp.into_inner();
 
-        // 4. Cache service token and parse expiry.
+        // 3. Cache service token and parse expiry.
         let svc_token = svc_inner.access_token.as_ref()
             .ok_or("service response missing access_token")?;
         let service_token = svc_token.base64.clone();
@@ -177,6 +193,68 @@ impl KubernetesTokenMinter {
             exp: new_exp,
         });
         Ok(service_token)
+    }
+
+    /// Phase 1: presents the Phase 1 credential and returns the access token. The
+    /// lock is held across the call, so the credential read here is the one the
+    /// previous exchange stored. A bootstrap-mode minter keeps the refresh token
+    /// the authority returns as its credential for the next renewal.
+    async fn exchange_for_access(&self, ch: &Channel) -> Result<String, Box<dyn std::error::Error>> {
+        let _phase1 = self.phase1.lock().await;
+        let mut client = {{.MintClientType}}::new(ch.clone());
+
+        let request = if self.bootstrap {
+            MintServiceTokenRequest {
+                input_token: self.credential.read().await.clone(),
+                token_purpose: TokenPurpose::Refresh as i32,
+                ..Default::default()
+            }
+        } else {
+            // Re-read the projected token from disk (rotated in place by kubelet).
+            let raw = std::fs::read_to_string(&self.token_file)
+                .map_err(|e| format!("reading kubernetes token file {}: {}", self.token_file, e))?;
+            let k8s_token = raw.trim().to_string();
+            if k8s_token.is_empty() {
+                return Err(format!("kubernetes token file {} is empty", self.token_file).into());
+            }
+            MintServiceTokenRequest {
+                kubernetes_token: k8s_token,
+                token_purpose: TokenPurpose::Refresh as i32,
+                ..Default::default()
+            }
+        };
+
+        let bootstrap_resp = match tokio::time::timeout(
+            Duration::from_secs(EXCHANGE_TIMEOUT_SECS),
+            client.{{.MintServiceTokenMethod}}(tonic::Request::new(request)),
+        )
+        .await
+        {
+            Err(_) => return Err("token exchange phase 1 timed out".into()),
+            Ok(Err(status)) if self.bootstrap && status.code() == tonic::Code::PermissionDenied => {
+                return Err(Box::new(WorkloadRevoked));
+            }
+            Ok(Err(status)) => return Err(format!("token exchange phase 1: {}", status).into()),
+            Ok(Ok(resp)) => resp.into_inner(),
+        };
+
+        let access_token_proto = bootstrap_resp.access_token.as_ref()
+            .ok_or("bootstrap response missing access_token")?;
+        let access_token = access_token_proto.base64.clone();
+
+        if self.bootstrap {
+            let refresh = bootstrap_resp.refresh_token.as_ref()
+                .ok_or("bootstrap response missing refresh_token")?;
+            *self.credential.write().await = refresh.base64.clone();
+        }
+
+        if let Some(id) = extract_instance_id(access_token_proto)
+            .or_else(|| bootstrap_resp.refresh_token.as_ref().and_then(extract_instance_id))
+        {
+            *self.instance_id.write().await = id;
+        }
+
+        Ok(access_token)
     }
 }
 
@@ -232,6 +310,12 @@ impl KubernetesTokenMinter {
     /// Creates a KubernetesTokenMinter from a projected token-file path.
     pub fn new(token_file: &str, default_audience: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let _ = (token_file, default_audience);
+        Err(Box::new(crate::manager::TokenMinterNotConfigured))
+    }
+
+    /// Creates a bootstrap-mode KubernetesTokenMinter from a bootstrap token file.
+    pub fn new_bootstrap(bootstrap_file: &str, default_audience: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let _ = (bootstrap_file, default_audience);
         Err(Box::new(crate::manager::TokenMinterNotConfigured))
     }
 

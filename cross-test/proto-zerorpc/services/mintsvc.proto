@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// The token minter for the zero-rpc fixture set. The fixture has an s2s client
+// edge, so a build with an S2S surface and no (spec.token_minter) is refused:
+// the generated ServiceManager would have no way to obtain an S2S identity.
+// Declared in its OWN package so the self service reaches it over a generated
+// client.
+
+syntax = "proto3";
+
+package mintsvc;
+
+import "sys/spec.proto";
+import "sys/tokenrequest.proto";
+import "sys/x509.proto";
+
+option (spec.service) = {name: "mintsvc"};
+
+service MintSvc {
+  option (spec.service_s2s) = {};
+  option (spec.token_minter) = {};
+
+  rpc TokenMint(tokenrequest.TokenMintRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
+  }
+
+  rpc MintServiceToken(tokenrequest.MintServiceTokenRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
+  }
+
+  rpc X509Mint(tokenrequest.X509MintRequest) returns (x509.X509CertChain) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
+  }
+}

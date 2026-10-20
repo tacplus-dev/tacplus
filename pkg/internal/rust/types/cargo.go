@@ -138,7 +138,10 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 	if err != nil {
 		return err
 	}
-	hasAutoTls := config.HasAutoTls() || hasServiceWrappers
+	// A state makes the service manager, and its health-only run() binds a TLS
+	// listener even with no TLS gRPC service (see handler_gen.go HasAutoTls), so
+	// a state alone also needs the cert crates.
+	hasAutoTls := config.HasAutoTls() || hasServiceWrappers || len(config.States) > 0
 
 	if hasServiceWrappers || hasGrpcClients {
 		for dep := range serviceDeps {
@@ -223,7 +226,7 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 	// keypair, so the cert crates (p256/ed25519/rand) must be in Cargo.toml even
 	// when the service has no TLS gRPC of its own (SPIFFE plan D7).
 	autoTlsKeyType := config.AutoTlsKeyType()
-	if autoTlsKeyType == "" && (hasServiceWrappers || hasSmb) {
+	if autoTlsKeyType == "" && (hasServiceWrappers || hasSmb || len(config.States) > 0) {
 		autoTlsKeyType = "ecdsa"
 	}
 	data := cargoWorkspaceData{

@@ -1,0 +1,35 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+// Zero-rpc cross-test fixture: a service with a state and an s2s client edge,
+// but no gRPC service and no auto_tls on any state.
+//
+// Without auto_tls, HasAutoTls used to stay false, so the health-only run()
+// branch in pkg/templates/rust/types/service_manager.rs.tmpl referenced
+// reloading_tls_incoming and tls_server_certified_key without declaring them
+// and the generated s2sm did not compile (E0425/E0609). The s2s client edge
+// (upstreamllm.LlmProxy, services/llmproxy.proto) makes the build need an
+// S2S identity, so services/mintsvc.proto supplies the token minter.
+
+syntax = "proto3";
+
+package zerorpc;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "zerorpc", store: true};
+option (spec.grpc_s2s_client) = {service: "upstreamllm.LlmProxy"};
+
+// PingState is the sole state root. There are intentionally no gRPC service
+// declarations (no spec.service_s2s, no spec.service_c2d), so:
+//   HasTlsGrpc = false
+//   HasC2DGrpc = false
+//   HasAutoTls = true (the zero-rpc widening; no state declares auto_tls)
+message PingState {
+  option (spec.service_state) = {
+    name:  "PingState",
+    label: ["zerorpc"]
+  };
+
+  // ping is a simple marker field used by the handler under test.
+  string ping = 1;
+}

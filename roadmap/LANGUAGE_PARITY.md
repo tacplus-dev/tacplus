@@ -25,6 +25,7 @@ the commit history since August.
 
 | Capability | Who has it | Who lacks it | Note |
 |------------|-----------|--------------|------|
+| Append-only history log (`AppendLog`: verbatim lines, no dedup) and plain file reads (`PlainFile`: read whole file, exists, list dir), issue #25 | Java (`chassis/diskstore`: `AppendLog`, `PlainFile`) | Go, Rust, Python, TypeScript | Java first, as the consumer is a Java service. Each other language needs the same two primitives before it is at parity; see `docs/API.md`, Append-only history and plain file reads. |
 | Archive of the disk-persistence redo log to an object store, with restore (`grpcconfig.disk_persistence.archive`, issue #15) | Java (`chassis/diskstore`: `ArchiveShipper`, `ArchiveRestore`, `GcsArchiveSink`) | Go, Rust, Python, TypeScript | Java first, as the consumer is a Java service. The other languages ignore the field. Each needs its own sink and restore before it is at parity; see `docs/API.md`, Archive to an object store. |
 
 ## Go or Java has it, the others do not

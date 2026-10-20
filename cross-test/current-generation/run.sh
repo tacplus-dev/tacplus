@@ -437,7 +437,7 @@ run_java_generated_self_tests() {
 
   : >"$test_log"
   local pattern source_file package_name class_name
-  for pattern in '*/chassis/spiffe/SpiffeVectorsTest.java' '*/chassis/x509/ImmutableCertChainTest.java' '*/chassis/grpcserver/AuthorizerBehaviorTest.java' '*/chassis/collection/CollectionRuntimeTest.java' '*/chassis/approval/ApprovalCanonicalTest.java' '*/chassis/grpcconfig/ConfigDefaultsTest.java' '*/chassis/grpcconfig/RedactionInstalledTest.java' '*/chassis/logger/LogbackConfiguratorSecurityTest.java' '*/chassis/diskstore/DiskStoreTest.java' '*/chassis/backoff/BackoffTest.java' '*/chassis/service_im/IdentityManagerRejectionTest.java'; do
+  for pattern in '*/chassis/spiffe/SpiffeVectorsTest.java' '*/chassis/x509/ImmutableCertChainTest.java' '*/chassis/grpcserver/AuthorizerBehaviorTest.java' '*/chassis/collection/CollectionRuntimeTest.java' '*/chassis/approval/ApprovalCanonicalTest.java' '*/chassis/grpcconfig/ConfigDefaultsTest.java' '*/chassis/grpcconfig/RedactionInstalledTest.java' '*/chassis/logger/LogbackConfiguratorSecurityTest.java' '*/chassis/diskstore/DiskStoreTest.java' '*/chassis/diskstore/AppendLogTest.java' '*/chassis/backoff/BackoffTest.java' '*/chassis/service_im/IdentityManagerRejectionTest.java'; do
     source_file="$(find "$output/src/main/java" -type f -path "$pattern" -print -quit)"
     [[ -n "$source_file" ]] || die "missing generated Java self-test source: $pattern"
     package_name="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$source_file")"

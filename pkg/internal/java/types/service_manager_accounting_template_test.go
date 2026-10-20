@@ -10,7 +10,7 @@ import (
 
 // TestJavaAccountingPublisherWiresEventBusSinkOnEveryWrapper renders
 // ServiceManager.java.tmpl with an accounting publisher resolved and asserts:
-//   - the emitter is built from a blocking EventBusSink, not a drop-on-full one
+//   - the emitter is built from an EventBusSink that spools, never a drop-on-full one
 //   - setEmitter is called on every gRPC wrapper, in the same block as
 //     setTracePublisher
 //   - the accounting queue/publish-loop methods are generated

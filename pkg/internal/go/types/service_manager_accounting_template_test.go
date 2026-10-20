@@ -14,7 +14,7 @@ import (
 
 // TestGoAccountingPublisherWiresEventBusSinkOnEveryWrapper renders
 // service_manager.go.tmpl with an accounting publisher resolved and asserts:
-//   - the emitter is built from a blocking EventBusSink, not a drop-on-full one
+//   - the emitter is built from an EventBusSink that spools, never a drop-on-full one
 //   - SetEmitter is called on every gRPC wrapper, in the same block as SetTracePublisher
 //   - the accounting queue/publish-loop functions are generated
 //   - the rendered output is syntactically valid Go

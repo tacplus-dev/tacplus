@@ -420,21 +420,27 @@ func MethodLabel(method *accounting_method_pb.AccountingMethod) string {
 // accounting_pb.Event oneof envelope into the flat, stored AccountingRecord
 // and hands it to the generated per-topic publisher's queue.
 //
-// SEND CONTRACT — BLOCKING, NOT DROPPING. Unlike the best-effort trace
-// publisher (which enqueues with a non-blocking send and drops on a full
-// queue), this sink blocks on the channel send. A full queue therefore parks
-// the emitting RPC's completion path until the publisher drains, rather than
-// discarding a record. Accounting is an audit trail: a silently missing row
-// is worse than a slow RPC. The only record this sink can lose is one emitted
-// after the service is shutting down, and that path logs at ERROR.
+// accountingSpoolDepth bounds the records an EventBusSink holds while the
+// publisher queue is full or the event bus is unreachable.
+const accountingSpoolDepth = 4096
+
+// SEND CONTRACT — NEVER HOLDS THE RPC. Emit hands the record to a bounded
+// spool and returns; it never waits on the publisher. A drain goroutine moves
+// spooled records, in order, into the per-topic publisher queue as it drains.
+// So an event-bus outage costs the RPC nothing, and the records written during
+// the outage are replayed to the bus when it is reachable again. Accounting is
+// an audit trail, so a record is dropped only when the spool itself is full;
+// every drop is counted and logged at ERROR with the running total. A record
+// emitted after the service is shutting down is also dropped, and logged.
 type EventBusSink struct {
 	tx       chan<- *accountingrecord_pb.AccountingRecord
+	spool    chan *accountingrecord_pb.AccountingRecord
 	sourceID string
-	// stop is closed when the owning ServiceManager is shutting down. Emit
-	// selects on it so a full queue blocks the caller instead of dropping,
-	// while still giving up once there is no publish loop left to drain it.
-	stop <-chan struct{}
-	seq  atomic.Uint64
+	// stop is closed when the owning ServiceManager is shutting down. The drain
+	// goroutine exits on it, and Emit refuses records once it is closed.
+	stop    <-chan struct{}
+	seq     atomic.Uint64
+	dropped atomic.Uint64
 }
 
 // NewEventBusSink creates a sink that publishes through the given per-topic
@@ -442,7 +448,49 @@ type EventBusSink struct {
 // used to make accounting_id unique across instances. stop is the
 // ServiceManager's shutdown signal.
 func NewEventBusSink(tx chan<- *accountingrecord_pb.AccountingRecord, sourceID string, stop <-chan struct{}) *EventBusSink {
-	return &EventBusSink{tx: tx, sourceID: sourceID, stop: stop}
+	s := &EventBusSink{
+		tx:       tx,
+		spool:    make(chan *accountingrecord_pb.AccountingRecord, accountingSpoolDepth),
+		sourceID: sourceID,
+		stop:     stop,
+	}
+	go s.drain()
+	return s
+}
+
+// drain moves spooled records into the publisher queue, one at a time, so the
+// spool replays in emit order. It holds at most one record in hand, and it exits
+// on shutdown, dropping whatever is still spooled and logging the count.
+func (s *EventBusSink) drain() {
+	for {
+		select {
+		case <-s.stop:
+			s.dropOnShutdown(nil)
+			return
+		case record := <-s.spool:
+			select {
+			case s.tx <- record:
+			case <-s.stop:
+				s.dropOnShutdown(record)
+				return
+			}
+		}
+	}
+}
+
+// dropOnShutdown counts and logs every record the drain goroutine still owns:
+// the one in hand, if any, and everything left in the spool.
+func (s *EventBusSink) dropOnShutdown(inHand *accountingrecord_pb.AccountingRecord) {
+	n := uint64(len(s.spool))
+	if inHand != nil {
+		n++
+	}
+	if n == 0 {
+		return
+	}
+	total := s.dropped.Add(n)
+	zap.L().Error("accounting publisher closed; records dropped",
+		zap.Uint64("dropped", n), zap.Uint64("dropped_total", total))
 }
 
 // nextAccountingID mints the record key. accounting_id is assert_required, so
@@ -488,19 +536,28 @@ func (s *EventBusSink) flatten(event *accounting_pb.Event) *accountingrecord_pb.
 	}
 }
 
-// Emit flattens event and blocks until the publisher accepts it, or until the
-// service is shutting down.
+// Emit flattens event and spools it without waiting on the publisher. It returns
+// an error only when the record is dropped: the service is shutting down, or the
+// spool is full.
 func (s *EventBusSink) Emit(_ context.Context, event *accounting_pb.Event) error {
 	record := s.flatten(event)
 	select {
-	case s.tx <- record:
-		return nil
 	case <-s.stop:
 		// The publish loop is gone, which only happens on shutdown. Loud,
 		// because this is the one lossy path.
 		zap.L().Error("accounting publisher closed; record dropped",
 			zap.String("accounting_id", record.AccountingId))
 		return fmt.Errorf("accounting publisher closed; record dropped")
+	default:
+	}
+	select {
+	case s.spool <- record:
+		return nil
+	default:
+		total := s.dropped.Add(1)
+		zap.L().Error("accounting spool full; record dropped",
+			zap.String("accounting_id", record.AccountingId), zap.Uint64("dropped_total", total))
+		return fmt.Errorf("accounting spool full; record dropped")
 	}
 }
 {{- end}}

@@ -173,6 +173,58 @@ func TestServiceIMAudienceMappingsForStatePackages(t *testing.T) {
 	}
 }
 
+// A state package named like a hard-coded virtual package (grpcconfig) must not
+// emit a second case for it: a duplicate case is a compile error in the generated
+// service_im.go. The explicit mapping wins, so the package routes to the state store.
+func TestServiceIMAudienceMappingForHardcodedPackageIsNotDuplicated(t *testing.T) {
+	tmplStr, err := loadChassisTemplate("service_im/service_im.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadChassisTemplate: %v", err)
+	}
+	tmpl, err := template.New("service_im").Funcs(header.Funcs()).Parse(tmplStr)
+	if err != nil {
+		t.Fatalf("parse service_im template: %v", err)
+	}
+	data := map[string]any{
+		"GrpcconfigTypesPath":        "example.com/p/tacplus/types/sys/grpcconfig",
+		"StateServiceTypesPath":      "example.com/p/tacplus/types/services/kernel",
+		"CommonTypesPath":            "example.com/p/tacplus/types/sys/tokenrequest",
+		"CloudIdentityTypesPath":     "example.com/p/tacplus/types/sys/cloudidentity",
+		"CloudVendorTypesPath":       "example.com/p/tacplus/types/sys/cloudvendor",
+		"KeyTypesPath":               "example.com/p/tacplus/types/sys/key",
+		"KeyLibPath":                 "example.com/p/tacplus/chassis/key",
+		"TokenLibPath":               "example.com/p/tacplus/chassis/token",
+		"TokenTypesPath":             "example.com/p/tacplus/types/sys/token",
+		"X509LibPath":                "example.com/p/tacplus/chassis/x509",
+		"ServiceAudience":            "eventbus",
+		"MintServiceName":            "Kernel",
+		"KeepaliveTimeSecs":          30,
+		"KeepaliveTimeoutSecs":       10,
+		"KeepalivePermitMinTimeSecs": 10,
+		"DefaultAudiencePackages":    []string{"jwkview", "entitlementview", "healthreport"},
+		"AudienceMappings": []map[string]string{
+			{"Package": "grpcconfig", "Audience": "kernel"},
+		},
+	}
+	var out strings.Builder
+	if err := tmpl.Execute(&out, data); err != nil {
+		t.Fatalf("execute service_im template: %v", err)
+	}
+	rendered := out.String()
+	cases := 0
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "case ") && strings.Contains(line, `"grpcconfig"`) {
+			cases++
+		}
+	}
+	if cases != 1 {
+		t.Fatalf("rendered service_im.go has %d case lines for grpcconfig, want 1 (duplicate case is a compile error)", cases)
+	}
+	if !strings.Contains(rendered, `return "kernel"`) {
+		t.Errorf("grpcconfig mapping did not render its audience")
+	}
+}
+
 // TestServiceManagerLibRendersValidGo syntax-checks the rendered
 // servicemanager_lib.go — including the per-service ServiceDialOpts / spiffeTLSDialOpt
 // helpers (H1 mesh-pinning parity) — so a broken template edit fails here rather

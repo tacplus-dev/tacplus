@@ -118,8 +118,10 @@ func audienceFromMethod(method string) string {
 	if idx := strings.IndexByte(method, '.'); idx > 0 {
 		pkg := method[:idx]
 		switch pkg {
-		case "grpcconfig", "jwkview", "entitlementview", "healthreport":
+{{- if .DefaultAudiencePackages}}
+		case {{range $i, $p := .DefaultAudiencePackages}}{{if $i}}, {{end}}"{{$p}}"{{end}}:
 			return defaultAudience
+{{- end}}
 {{- range .AudienceMappings}}
 		// Virtual service: {{.Package}} is hosted by {{.Audience}}.
 		case "{{.Package}}":

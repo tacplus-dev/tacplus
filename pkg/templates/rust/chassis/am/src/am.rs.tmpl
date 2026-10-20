@@ -25,10 +25,9 @@ use {{.CrateBasePathUnderscore}}_types::vservices::accountingrecord::accountingr
 /// Sink is the backend that receives accounting events.
 /// Implementations: LoggerSink (tracing), EventBusSink (durable, via EventBus).
 ///
-/// `emit` is async because the durable sink must not drop: it hands the record
-/// to a bounded queue with a BLOCKING send, so a backed-up accounting pipeline
-/// applies backpressure to the RPC that produced the record instead of silently
-/// losing it. A synchronous trait could only offer try-send-and-drop.
+/// `emit` is async so a sink can await its backend. The durable sink does not
+/// await the event bus: it spools the record and returns, so a slow or
+/// unreachable bus never holds the RPC that produced the record.
 #[tonic::async_trait]
 pub trait Sink: Send + Sync + 'static {
     async fn emit(&self, event: &Event);
@@ -375,28 +374,56 @@ pub fn method_label(method: &AccountingMethod) -> String {
 /// `accounting::Event` oneof envelope into the flat, stored `AccountingRecord`
 /// and hands it to the generated per-topic publisher's queue.
 ///
-/// SEND CONTRACT — BLOCKING, NOT DROPPING. Unlike the best-effort trace and
-/// business-record publishers (which `try_send` and log on a full queue), this
-/// sink awaits `Sender::send`. A full queue therefore parks the emitting RPC's
-/// completion path until the publisher drains, rather than discarding a record.
-/// Accounting is an audit trail: a silently missing row is worse than a slow
-/// RPC. The only record this sink can lose is one emitted after the receiver is
-/// gone (process shutdown), and that path logs at ERROR.
+/// SEND CONTRACT — NEVER HOLDS THE RPC. emit() hands the record to a bounded
+/// spool with `try_send` and returns; it never awaits the publisher. A task
+/// spawned by `new` moves spooled records, in order, into the per-topic
+/// publisher queue as it drains. So an event-bus outage costs the RPC nothing,
+/// and the records written during the outage are replayed to the bus when it is
+/// reachable again. Accounting is an audit trail, so a record is dropped only
+/// when the spool itself is full. Every drop is counted and logged at ERROR with
+/// the running total. A record emitted after shutdown is dropped and logged too.
 pub struct EventBusSink {
-    tx: tokio::sync::mpsc::Sender<AccountingRecord>,
+    spool: tokio::sync::mpsc::Sender<AccountingRecord>,
     source_id: String,
     seq: std::sync::atomic::AtomicU64,
+    dropped: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
+
+/// Depth of the spool an EventBusSink holds records in while the publisher queue
+/// is full or the event bus is unreachable.
+const SPOOL_DEPTH: usize = 4096;
 
 impl EventBusSink {
     /// Creates a sink that publishes through the given per-topic publisher queue.
     /// `source_id` is the emitting process ("{service_id}-{instance_id}"), used
-    /// to make accounting_id unique across instances.
+    /// to make accounting_id unique across instances. Must be called inside a
+    /// tokio runtime: it spawns the drain task.
     pub fn new(tx: tokio::sync::mpsc::Sender<AccountingRecord>, source_id: String) -> Self {
+        let (spool, mut spooled) = tokio::sync::mpsc::channel::<AccountingRecord>(SPOOL_DEPTH);
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let dropped_in_drain = dropped.clone();
+        // Moves spooled records into the publisher queue, one at a time, so the
+        // spool replays in emit order. The task ends when the publisher queue is
+        // gone, which only happens on shutdown: it counts what it still holds.
+        tokio::spawn(async move {
+            while let Some(record) = spooled.recv().await {
+                if tx.send(record).await.is_err() {
+                    spooled.close();
+                    let mut lost: u64 = 1;
+                    while spooled.recv().await.is_some() {
+                        lost += 1;
+                    }
+                    let total = dropped_in_drain.fetch_add(lost, std::sync::atomic::Ordering::Relaxed) + lost;
+                    tracing::error!(lost, dropped_total = total, "accounting publisher closed; records dropped");
+                    return;
+                }
+            }
+        });
         Self {
-            tx,
+            spool,
             source_id,
             seq: std::sync::atomic::AtomicU64::new(0),
+            dropped,
         }
     }
 
@@ -454,13 +481,24 @@ impl Sink for EventBusSink {
     async fn emit(&self, event: &Event) {
         let record = self.flatten(event);
         let accounting_id = record.accounting_id.clone();
-        if self.tx.send(record).await.is_err() {
-            // Receiver dropped — the publish loop is gone, which only happens
-            // on shutdown. Loud, because this is the one lossy path.
-            tracing::error!(
-                accounting_id = %accounting_id,
-                "accounting publisher closed; record dropped"
-            );
+        match self.spool.try_send(record) {
+            Ok(()) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                let total = self.dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                tracing::error!(
+                    accounting_id = %accounting_id,
+                    dropped_total = total,
+                    "accounting spool full; record dropped"
+                );
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                // The drain task is gone, which only happens on shutdown. Loud,
+                // because this is the one lossy path.
+                tracing::error!(
+                    accounting_id = %accounting_id,
+                    "accounting publisher closed; record dropped"
+                );
+            }
         }
     }
 }

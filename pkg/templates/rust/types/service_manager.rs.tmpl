@@ -1673,8 +1673,8 @@ impl ServiceManager {
         // accounted RPC; without this the slot is None and accounting produces
         // neither a record nor a log line.
         //
-        // The sink's send is BLOCKING, not try-send-and-drop, unlike the trace
-        // publisher above — see EventBusSink's send contract in chassis/am.
+        // The sink spools records and never awaits the publisher, so an outage
+        // does not hold the RPC — see EventBusSink's send contract in chassis/am.
         {
             let accounting_tx = self.create_accounting_publisher_sender().await;
             let source_id = format!("{}-{}", "{{.ServiceLabel}}", self.instance_id());

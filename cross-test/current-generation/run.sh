@@ -18,6 +18,7 @@ REQUIRESDEVICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-requiresdevice"
 SELFTESTS_SRC="$ROOT_DIR/cross-test/current-generation/testdata"
 RECORDEGRESS_PROTO_SRC="$ROOT_DIR/cross-test/proto-recordegress"
 EVENTBUS_BACKPRESSURE_PROTO_SRC="$ROOT_DIR/cross-test/proto-eventbus-backpressure"
+ACCOUNTING_SINK_PROTO_SRC="$ROOT_DIR/cross-test/proto-accounting-sink"
 OWNERDEFAULT_PROTO_SRC="$ROOT_DIR/cross-test/proto-ownerdefault"
 QUORUMWRITE_PROTO_SRC="$ROOT_DIR/cross-test/proto-quorumwrite"
 TENANTSLICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-tenantslice"
@@ -189,6 +190,19 @@ write_eventbus_backpressure_config() {
 language: "$language"
 pkg: "com.gitlab.example.dummy.agentsensor"
 src: "$EVENTBUS_BACKPRESSURE_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
+write_accounting_sink_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.agentsensor"
+src: "$ACCOUNTING_SINK_PROTO_SRC"
 output-dir: "tacplus"
 EOF
 }
@@ -511,10 +525,11 @@ run_java_generated_self_tests() {
     grep -q '^ExtractionTest: all checks passed$' "$test_log" \
       || die "main fixture (java): ExtractionTest did not report its checks passed"
   fi
-  # The event-bus backpressure fixture's self-tests, copied in by
-  # install_backpressure_selftests, so they are present exactly in that build.
+  # The event-bus backpressure and accounting-sink fixtures' self-tests, copied in by
+  # install_backpressure_selftests and install_accounting_sink_selftests, so they are
+  # present exactly in those builds.
   local bp_name bp_test bp_class
-  for bp_name in SubscribeBackpressureTest W2SBackpressureTest; do
+  for bp_name in SubscribeBackpressureTest W2SBackpressureTest AccountingSinkSpoolTest; do
     bp_test="$(find "$output/src/main/java" -type f -name "$bp_name.java" -print -quit)"
     if [[ -n "$bp_test" ]]; then
       bp_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$bp_test").$bp_name"
@@ -523,7 +538,7 @@ run_java_generated_self_tests() {
         return 1
       }
       grep -q "^$bp_name: all checks passed\$" "$test_log" \
-        || die "event-bus backpressure fixture (java): $bp_name did not report its checks passed"
+        || die "fixture self-test (java): $bp_name did not report its checks passed"
     fi
   done
   assert_clean_log "$test_log"
@@ -591,6 +606,17 @@ run_rust_spiffe_self_tests() {
       return 1
     }
   assert_clean_log "$log_dir/rust-grpcserver-test.log"
+
+  # Issue #34: the accounting sink's spool self-test, installed only in the
+  # accounting-sink fixture (tests/accounting_sink_spool.rs). Nothing else in the
+  # gate runs the am crate's tests.
+  if [[ -f "$output/chassis/am/tests/accounting_sink_spool.rs" ]]; then
+    (cd "$output" && cargo test -p am) >"$log_dir/rust-am-test.log" 2>&1 || {
+      dump_step_log "$log_dir/rust-am-test.log"
+      return 1
+    }
+    assert_clean_log "$log_dir/rust-am-test.log"
+  fi
 
   # NEW-21: the model crate's own unit tests, which include the generated
   # ServiceManager's startup error classifier (identity_error_tests). Nothing ran
@@ -1163,6 +1189,53 @@ install_backpressure_selftests() {
   w2s_client="$(find "$output/src/main/java" -type f -path '*/w2sm/internal/grpc_over_rest/services/agentsensor/AgentUploadApiW2SClient.java' -print -quit)"
   [[ -n "$w2s_client" ]] || die "event-bus backpressure fixture (java): AgentUploadApi W2S client not generated under $output"
   cp "$SELFTESTS_SRC/java/W2SBackpressureTest.java" "$(dirname "$w2s_client")/"
+}
+
+# assert_accounting_sink_output checks that the generated durable accounting sink
+# spools, in every language. The spool-full drop message is the marker: the blocking
+# sink it replaced never logs one.
+assert_accounting_sink_output() {
+  local output="$1"
+  local language="$2"
+  local sink=""
+
+  case "$language" in
+    go) sink="$(find "$output" -type f -path '*/chassis/am/am.go' -print -quit)" ;;
+    java) sink="$(find "$output/src/main/java" -type f -path '*/chassis/am/AccountingManager.java' -print -quit)" ;;
+    rust) sink="$(find "$output" -type f -path '*/chassis/am/src/am.rs' -print -quit)" ;;
+  esac
+  [[ -n "$sink" ]] || die "accounting-sink fixture ($language): generated EventBusSink not found under $output"
+  grep -qF 'accounting spool full; record dropped' "$sink" \
+    || die "accounting-sink fixture ($language): EventBusSink does not spool in $sink"
+}
+
+# install_accounting_sink_selftests drops the hand-written self-test for the durable
+# accounting sink into the generated chassis/am package. compile_current_output then
+# runs it: `go test ./...` (go), run_java_generated_self_tests (java) and
+# `cargo test -p am` (rust).
+install_accounting_sink_selftests() {
+  local output="$1"
+  local language="$2"
+  local am=""
+
+  case "$language" in
+    go)
+      am="$(find "$output" -type f -path '*/chassis/am/am.go' -print -quit)"
+      [[ -n "$am" ]] || die "accounting-sink fixture (go): generated chassis/am package not found under $output"
+      cp "$SELFTESTS_SRC/go/accounting_sink_spool_test.go" "$(dirname "$am")/"
+      ;;
+    java)
+      am="$(find "$output/src/main/java" -type f -path '*/chassis/am/AccountingManager.java' -print -quit)"
+      [[ -n "$am" ]] || die "accounting-sink fixture (java): generated chassis/am package not found under $output"
+      cp "$SELFTESTS_SRC/java/AccountingSinkSpoolTest.java" "$(dirname "$am")/"
+      ;;
+    rust)
+      am="$(find "$output" -type f -path '*/chassis/am/Cargo.toml' -print -quit)"
+      [[ -n "$am" ]] || die "accounting-sink fixture (rust): generated chassis/am crate not found under $output"
+      mkdir -p "$(dirname "$am")/tests"
+      cp "$SELFTESTS_SRC/rust/accounting_sink_spool.rs" "$(dirname "$am")/tests/accounting_sink_spool.rs"
+      ;;
+  esac
 }
 
 # install_extraction_selftest copies the Java runtime self-test into the
@@ -2213,6 +2286,33 @@ if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
     echo "==> Compiling $language event-bus backpressure fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
     echo "    PASS $language event-bus backpressure"
+  done
+fi
+
+# accounting-sink fixture (issue #34): the only place a platform accounting record is
+# declared, so the only place the generated durable accounting sink (EventBusSink) is
+# compiled and driven by a standing gate. The self-tests block the event-bus publisher
+# and check that an RPC completion never waits on it, that records replay in order
+# once it resumes, and that a full spool drops and counts. All three languages.
+if [[ -d "$ACCOUNTING_SINK_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/accountingsink-$language"
+    log="$WORK_ROOT/accountingsink-$language.log"
+    rm -rf "$dir"
+    write_accounting_sink_config "$dir" "$language"
+
+    echo "==> Generating $language accounting-sink fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$ACCOUNTING_SINK_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language accounting-sink generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_accounting_sink_output "$output_root" "$language"
+    install_accounting_sink_selftests "$output_root" "$language"
+    echo "==> Compiling $language accounting-sink fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
+    echo "    PASS $language accounting sink"
   done
 fi
 

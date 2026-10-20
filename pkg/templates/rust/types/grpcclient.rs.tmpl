@@ -2,9 +2,10 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-{{if .UsesUnaryRetry}}use tokio::time::{sleep, timeout};
+{{if .UsesUnaryRetry}}use rand::Rng;
+use tokio::time::{sleep, timeout};
 {{end}}{{if .HasRequiresDevice}}// (spec.rpc).requires_device: the caller-side helpers attach the approval id
 // and the device assertion as call metadata, outside the hashed request.
 use approval;
@@ -32,6 +33,7 @@ pub struct {{.ClientName}} {
     timeout: Duration,
     max_retries: usize,
     retry_backoff: Duration,
+    retry_tokens: Mutex<f64>,
 }
 
 impl {{.ClientName}} {
@@ -45,6 +47,7 @@ impl {{.ClientName}} {
             timeout: Duration::from_secs(30),
             max_retries: 2,
             retry_backoff: Duration::from_millis(100),
+            retry_tokens: Mutex::new(10.0),
         }
     }
 
@@ -87,6 +90,24 @@ impl {{.ClientName}} {
         )
     }
 
+    /// Spends one token of the retry budget. The budget starts with 10 tokens and
+    /// refills 0.1 per successful call, so a sustained outage cannot multiply load.
+    fn spend_retry_token(&self) -> bool {
+        let mut tokens = self.retry_tokens.lock().unwrap();
+        if *tokens < 1.0 {
+            return false;
+        }
+        *tokens -= 1.0;
+        true
+    }
+
+    fn refill_retry_token(&self) {
+        let mut tokens = self.retry_tokens.lock().unwrap();
+        *tokens = (*tokens + 0.1).min(10.0);
+    }
+
+    /// Equal jitter: a wait between half and all of the capped exponential value, so
+    /// callers that failed together spread their retries instead of retrying in lockstep.
     fn outbound_backoff(&self, attempt: usize) -> Duration {
         let mut backoff = if self.retry_backoff.is_zero() {
             Duration::from_millis(100)
@@ -96,7 +117,8 @@ impl {{.ClientName}} {
         for _ in 0..attempt {
             backoff = std::cmp::min(backoff * 2, Duration::from_secs(2));
         }
-        backoff
+        let nanos = backoff.as_nanos() as u64;
+        Duration::from_nanos(nanos / 2 + rand::thread_rng().gen_range(0..=nanos / 2))
     }
 
     async fn unary_with_retry<T, F, Fut>(&self, retry_safe: bool, mut op: F) -> Result<T, tonic::Status>
@@ -113,8 +135,14 @@ impl {{.ClientName}} {
                     .map_err(|_| tonic::Status::deadline_exceeded("outbound unary call timed out"))?,
             };
             match result {
-                Ok(value) => return Ok(value),
+                Ok(value) => {
+                    self.refill_retry_token();
+                    return Ok(value);
+                }
                 Err(status) if attempt < max_retries && Self::should_retry_outbound(&status) => {
+                    if !self.spend_retry_token() {
+                        return Err(status);
+                    }
                     sleep(self.outbound_backoff(attempt)).await;
                 }
                 Err(status) => return Err(status),

@@ -330,30 +330,26 @@ function nextAccountingId(sourceId: string, timestampMs: number): string {
  * per-topic publisher's queue (built by service_manager.ts.tmpl's
  * createAccountingEmitter, mirroring createTracePublisher).
  *
- * SEND CONTRACT — NON-DROPPING (item 9's ruling). Unlike LoggerSink or the
- * trace publisher (best-effort, drops the event when the queue is full),
- * this sink never discards a record: a missing accounting row is worse than
- * a slow RPC. Go/Rust/Java/Python enforce this with a literal blocking (or
- * awaited) bounded-queue send, which has no synchronous equivalent in
- * Node's single-threaded event loop — Sink.emit is a synchronous void call
- * from the generated wrapper's emitAccounting (see design doc Piece B: "no
- * per-method codegen changes" to the existing emit call sites), so it cannot
- * itself await backpressure. Instead the queue never rejects a push: past
- * `maxQueueWarn` it keeps accepting and only logs a warning, so nothing is
- * ever silently dropped, while the publish loop below drains it as fast as
- * EventBus allows.
+ * SEND CONTRACT — NEVER HOLDS THE RPC (issue #34). Sink.emit is a synchronous
+ * void call from the generated wrapper's emitAccounting, and Node's event loop
+ * has no way to block on the publisher, so emit never waits. The queue is the
+ * spool: the publish loop below drains it, in order, as fast as EventBus
+ * allows, and while the bus is down the records wait there and replay when it
+ * returns. A record is dropped only when the spool is full, and each drop is
+ * counted and logged at ERROR with the running total.
  */
 export class EventBusSink implements Sink {
   private readonly queue: AccountingRecord[];
   private readonly sourceId: string;
-  private readonly maxQueueWarn: number;
+  private readonly spoolDepth: number;
   private readonly wake: () => void;
+  private dropped = 0;
 
-  constructor(queue: AccountingRecord[], sourceId: string, wake: () => void, maxQueueWarn = 1024) {
+  constructor(queue: AccountingRecord[], sourceId: string, wake: () => void, spoolDepth = 4096) {
     this.queue = queue;
     this.sourceId = sourceId;
     this.wake = wake;
-    this.maxQueueWarn = maxQueueWarn;
+    this.spoolDepth = spoolDepth;
   }
 
   private flatten(event: Event): AccountingRecord {
@@ -401,8 +397,10 @@ export class EventBusSink implements Sink {
 
   emit(event: Event): void {
     const record = this.flatten(event);
-    if (this.queue.length >= this.maxQueueWarn) {
-      console.warn(`accounting publisher queue over ${this.maxQueueWarn}, still enqueuing (never dropping): ${record.accountingId}`);
+    if (this.queue.length >= this.spoolDepth) {
+      this.dropped += 1;
+      console.error(`accounting spool full; record dropped: ${record.accountingId} dropped_total=${this.dropped}`);
+      return;
     }
     this.queue.push(record);
     this.wake();

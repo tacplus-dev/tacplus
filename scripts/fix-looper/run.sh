@@ -171,7 +171,9 @@ If it is a BUG, fix it as below and backport it.
 3. Verify: \`go vet ./...\`, \`just test\`, and every gate the change can affect:
    \`just current-generation-go\`, \`just determinism-go\`; \`just current-generation-java\` when Java
    changed; \`just current-generation-rust\` when Rust changed; \`just w2s-validate\` / \`just c2d-server\`
-   when those planes changed. Run \`rm -rf target/cross-test\` after each gate. A green test that does
+   when those planes changed. Run \`rm -rf target/cross-test\` after each gate. Several gates run longer than
+   your shell tool's 10-minute limit: start each one detached (\`nohup just <gate> > /tmp/<gate>.log 2>&1 &\`)
+   and poll its log with short foreground checks until it prints its final line; never rely on one long wait. A green test that does
    not exercise the defect is not evidence: ask what would have failed. Never run \`git stash\` while
    a gate runs.
 4. Commit with a message that says why, ending with

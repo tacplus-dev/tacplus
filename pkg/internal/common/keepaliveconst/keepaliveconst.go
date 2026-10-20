@@ -21,8 +21,10 @@ const (
 	// declaring the connection dead and triggering the reconnect loop.
 	TimeoutSecs = 10
 
-	// PermitMinTimeSecs is the minimum interval the generated server enforces
-	// between client pings. Must be ≤ TimeSecs; set to 10s so any client
-	// pinging every 30s is well within the allowed range.
+	// PermitMinTimeSecs is the minimum interval the generated Go and Java
+	// servers enforce between client pings. The generated Rust server applies
+	// no permit policy (tonic and h2 expose none), so it does not enforce this
+	// value. Must be ≤ TimeSecs; set to 10s so any client pinging every 30s is
+	// well within the allowed range.
 	PermitMinTimeSecs = 10
 )

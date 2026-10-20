@@ -70,7 +70,9 @@ public final class AppendLog {
                     Files.createDirectories(dir);
                 }
                 try (FileChannel ch = FileChannel.open(path,
-                        StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND)) {
+                        StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+                    dropTornTail(ch);
+                    ch.position(ch.size());
                     ByteBuffer buf = ByteBuffer.wrap(framed);
                     while (buf.hasRemaining()) {
                         ch.write(buf);
@@ -86,6 +88,26 @@ public final class AppendLog {
             } catch (IOException e) {
                 throw DiskStoreException.io(e.getMessage(), e);
             }
+        }
+    }
+
+    // A crash mid-append can leave an unterminated tail. readLines drops it, so
+    // the next append drops it too; otherwise its line would be glued onto the
+    // torn bytes.
+    private static void dropTornTail(FileChannel ch) throws IOException {
+        long keep = ch.size();
+        long size = keep;
+        ByteBuffer last = ByteBuffer.allocate(1);
+        while (keep > 0) {
+            last.clear();
+            ch.read(last, keep - 1);
+            if (last.get(0) == '\n') {
+                break;
+            }
+            keep--;
+        }
+        if (keep != size) {
+            ch.truncate(keep);
         }
     }
 

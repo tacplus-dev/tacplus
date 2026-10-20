@@ -124,6 +124,20 @@ public class AppendLogTest {
                 "unterminated tail is dropped, got " + got.size() + " lines");
     }
 
+    private static void testAppendAfterTornTailKeepsNewLine() throws IOException {
+        // The restarted process appends after the torn tail. The torn bytes are
+        // not a line, so the new line must read back whole, not glued onto them.
+        Path base = tempBase();
+        String rel = "history.jsonl";
+        AppendLog.append(base, rel, bytes("complete"), 0);
+        Files.write(base.resolve(rel), bytes("torn"),
+                java.nio.file.StandardOpenOption.APPEND);
+        AppendLog.append(base, rel, bytes("next"), 0);
+        List<byte[]> got = AppendLog.readLines(base, rel);
+        check(got.size() == 2 && str(got.get(0)).equals("complete") && str(got.get(1)).equals("next"),
+                "append after torn tail, got " + got.size() + " lines");
+    }
+
     private static void testModeAppliedOnCreate() throws IOException {
         Path base = tempBase();
         String rel = "private/history.jsonl";
@@ -217,6 +231,7 @@ public class AppendLogTest {
         testRejectsLineWithNewline();
         testRejectsPathEscapingBase();
         testTornTailIsNotALine();
+        testAppendAfterTornTailKeepsNewLine();
         testModeAppliedOnCreate();
         testConcurrentAppendsStayWholeAndComplete();
 

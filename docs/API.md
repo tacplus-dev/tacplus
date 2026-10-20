@@ -760,12 +760,11 @@ requires it. Request handlers are responsible for propagating non-empty
 `trace_id` fields into downstream requests they create.
 
 Durable accounting (an `accountingrecord.AccountingRecord` event-bus topic)
-never holds an RPC in Go, Java or Rust. The sink hands each record to a bounded
-in-process spool of 4096 records and returns; a drain replays the spool, in
-order, into the event-bus publisher as it drains. A record is dropped only when
-the spool is full or the service is shutting down, and each drop is logged at
-ERROR with a running total. Python and TypeScript have not moved to the spool
-yet and still block the RPC on a full publisher queue (issue #34).
+never holds an RPC in Go, Java, Rust, Python or TypeScript. The sink hands each
+record to a bounded in-process spool of 4096 records and returns; the publisher
+replays the spool, in order, as the event bus drains it. A record is dropped only
+when the spool is full or (Go, Java, Rust) the service is shutting down, and each
+drop is logged at ERROR with a running total (issue #34).
 
 `registry.json` is the machine-readable semantic IR. Service-local generators
 must read `registry.json`, not parse proto files directly, when they need

@@ -1,0 +1,115 @@
+name: Nightly security
+
+# Nightly dependency, secret and image sweep for main and every release/*
+# branch (issue #62). Every scanner step fails the job when it finds something
+# or cannot run, so a green run means the scanners ran. Logs carry public
+# advisory IDs and redacted secret matches only. Static analysis and the
+# agentic review are not in this workflow yet.
+
+on:
+  schedule:
+    - cron: "41 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  refs:
+    name: Release lines
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      refs: ${{ steps.refs.outputs.refs }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: List main and release/* branches
+        id: refs
+        run: |
+          set -euo pipefail
+          branches=$(git ls-remote --heads origin 'refs/heads/release/*' | sed 's#.*refs/heads/##')
+          refs=$( { echo main; echo "$branches"; } | sed '/^$/d' | jq -R . | jq -sc .)
+          echo "refs=$refs" >> "$GITHUB_OUTPUT"
+          echo "$refs"
+
+  dependencies:
+    name: Dependencies (${{ matrix.ref }})
+    needs: refs
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: ${{ fromJSON(needs.refs.outputs.refs) }}
+    container:
+      image: ghcr.io/tacplus-dev/tacplus/build:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install scanners
+        run: |
+          set -euo pipefail
+          go install github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.7.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Go modules, Java poms and other lockfiles (osv-scanner)
+        # --all-vulns: without it osv-scanner hides vulnerabilities whose code
+        # is not called, and exits 0 on them. Reads go.mod and pom.xml directly,
+        # so no module is built (example/server needs generated code to build).
+        run: osv-scanner scan source -r --all-vulns .
+
+  secrets:
+    name: Secrets (full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          VERSION=8.30.1
+          curl -fsSL --retry 5 -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
+      # git mode walks every ref in the fetched history, not only HEAD, so
+      # release/* branches are covered.
+      - run: gitleaks git --no-banner --redact .
+
+  images:
+    name: Published images
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan latest and each release line with Trivy
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          images=(
+            ghcr.io/tacplus-dev/tacplus/base:latest
+            ghcr.io/tacplus-dev/tacplus/build:latest
+            ghcr.io/tacplus-dev/tacplus/tacplus:latest
+          )
+          while IFS= read -r minor; do
+            images+=("ghcr.io/tacplus-dev/tacplus/tacplus:${minor#release/}")
+          done < <(git ls-remote --heads origin 'refs/heads/release/*' | sed 's#.*refs/heads/##')
+          # --ignore-unfixed: a CVE with no fixed package is not something a
+          # rebuild can clear, so it does not fail the run.
+          fail=0
+          for img in "${images[@]}"; do
+            echo "=== trivy: $img ==="
+            docker run --rm -e TRIVY_USERNAME -e TRIVY_PASSWORD aquasec/trivy:0.76.0 \
+              image --image-src remote --exit-code 1 --severity HIGH,CRITICAL \
+              --ignore-unfixed --scanners vuln "$img" || fail=1
+          done
+          echo "=== scanned ${#images[@]} image(s), fail=$fail ==="
+          exit $fail

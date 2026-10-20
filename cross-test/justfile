@@ -93,6 +93,13 @@ server-runtime-client-java:
 server-runtime-client-rust:
     bash {{root}}/server-runtime/run.sh --client rust
 
+# Keepalive regression for the generated RUST server (issue #29): a generated
+# rust client pinging every keepaliveconst.TimeSecs holds one connection for
+# 600 s of idle pings. Slow and cargo-bound, so it is standalone and NOT part
+# of `just test`.
+keepalive-rust:
+    bash {{root}}/keepalive-rust/run.sh
+
 # Cross-language SERIALIZATION-EQUIVALENCE coverage: one message, encoded once
 # by go into a checked-in golden byte corpus, decoded and value-asserted by all
 # five generated languages. Needs go + maven + cargo + python + node

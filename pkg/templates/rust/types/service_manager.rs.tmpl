@@ -1592,6 +1592,10 @@ impl ServiceManager {
         // Create gRPC server with config-driven resource limits. TLS is applied
         // by `reloading_tls_incoming` below so the live listener uses renewed
         // auto-TLS certs without rebuilding the tonic server.
+        // No keepalive permit policy: tonic and h2 expose none, so this server
+        // does not enforce keepaliveconst.PermitMinTimeSecs (Go and Java do).
+        // Clients pinging every keepaliveconst.TimeSecs are served; see
+        // cross-test/keepalive-rust.
         let server = tonic::transport::Server::builder()
             .concurrency_limit_per_connection(
                 if self.cfg.max_concurrent_streams > 0 { self.cfg.max_concurrent_streams as usize } else { 100 }

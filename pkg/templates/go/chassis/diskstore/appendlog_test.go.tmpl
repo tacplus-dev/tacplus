@@ -1,0 +1,156 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+
+package diskstore
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+)
+
+func TestAppendLogRoundTripKeepsEveryLineInOrder(t *testing.T) {
+	base := t.TempDir()
+	const rel = "history/events.jsonl"
+	var log AppendLog
+	for _, line := range []string{`{"k":"a","v":1}`, `{"k":"b","v":"\\n escaped"}`, `{"k":"c","v":"café"}`, "same", "same"} {
+		if err := log.Append(base, rel, []byte(line), 0); err != nil {
+			t.Fatalf("append %q: %v", line, err)
+		}
+	}
+	got, err := log.ReadLines(base, rel)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	want := []string{`{"k":"a","v":1}`, `{"k":"b","v":"\\n escaped"}`, `{"k":"c","v":"café"}`, "same", "same"}
+	if len(got) != len(want) {
+		t.Fatalf("read %d lines, want %d: history must keep duplicates", len(got), len(want))
+	}
+	for i := range want {
+		if string(got[i]) != want[i] {
+			t.Fatalf("line %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestAppendLogAbsentFileReadsAsNoLines(t *testing.T) {
+	got, err := AppendLog{}.ReadLines(t.TempDir(), "never/written.jsonl")
+	if err != nil {
+		t.Fatalf("read absent: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("absent log read as %d lines, want 0", len(got))
+	}
+}
+
+func TestAppendLogRejectsEmbeddedNewlineAndEscapingPaths(t *testing.T) {
+	base := t.TempDir()
+	var log AppendLog
+	if err := log.Append(base, "a.jsonl", []byte("first"), 0); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := log.Append(base, "a.jsonl", []byte("two\nlines"), 0); err == nil {
+		t.Fatalf("a line with a newline was accepted")
+	}
+	for _, rel := range []string{"", "../escape.jsonl", "a/../../escape.jsonl", "/etc/passwd", "."} {
+		if err := log.Append(base, rel, []byte("x"), 0); err == nil {
+			t.Fatalf("append accepted path %q", rel)
+		}
+		if _, err := log.ReadLines(base, rel); err == nil {
+			t.Fatalf("read accepted path %q", rel)
+		}
+	}
+	got, err := log.ReadLines(base, "a.jsonl")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(got) != 1 || string(got[0]) != "first" {
+		t.Fatalf("rejected append changed the log: %q", got)
+	}
+}
+
+func TestAppendLogDropsTornTailThenAppendsCleanly(t *testing.T) {
+	base := t.TempDir()
+	const rel = "torn/log.jsonl"
+	var log AppendLog
+	if err := log.Append(base, rel, []byte("complete"), 0); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	// A crash mid-append leaves an unterminated fragment on disk.
+	f, err := os.OpenFile(filepath.Join(base, rel), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := f.WriteString(`{"partial`); err != nil {
+		t.Fatalf("write torn tail: %v", err)
+	}
+	f.Close()
+
+	got, err := log.ReadLines(base, rel)
+	if err != nil {
+		t.Fatalf("read torn: %v", err)
+	}
+	if len(got) != 1 || string(got[0]) != "complete" {
+		t.Fatalf("torn tail read as %q, want only the complete line", got)
+	}
+	if err := log.Append(base, rel, []byte("next"), 0); err != nil {
+		t.Fatalf("append after torn tail: %v", err)
+	}
+	got, err = log.ReadLines(base, rel)
+	if err != nil {
+		t.Fatalf("read after append: %v", err)
+	}
+	if len(got) != 2 || string(got[1]) != "next" {
+		t.Fatalf("append after a torn tail glued onto it: %q", got)
+	}
+}
+
+func TestAppendLogCreatesFileWithRequestedMode(t *testing.T) {
+	base := t.TempDir()
+	const rel = "secret.jsonl"
+	if err := (AppendLog{}).Append(base, rel, []byte("secret"), 0o600); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(base, rel))
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("created mode %o, want 600", perm)
+	}
+}
+
+func TestAppendLogConcurrentAppendsStayWholeLines(t *testing.T) {
+	base := t.TempDir()
+	const rel = "concurrent.jsonl"
+	const writers, each = 8, 50
+	var wg sync.WaitGroup
+	for w := 0; w < writers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < each; i++ {
+				line := []byte(fmt.Sprintf("w%d-%d-%s", w, i, bytes.Repeat([]byte("p"), 256)))
+				if err := (AppendLog{}).Append(base, rel, line, 0); err != nil {
+					t.Errorf("append: %v", err)
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	got, err := AppendLog{}.ReadLines(base, rel)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(got) != writers*each {
+		t.Fatalf("read %d lines, want %d", len(got), writers*each)
+	}
+	for _, line := range got {
+		if !bytes.HasSuffix(line, bytes.Repeat([]byte("p"), 256)) {
+			t.Fatalf("interleaved line: %q", line)
+		}
+	}
+}

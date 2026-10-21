@@ -543,7 +543,7 @@ run_java_generated_self_tests() {
   # install_backpressure_selftests and install_accounting_sink_selftests, so they are
   # present exactly in those builds.
   local bp_name bp_test bp_class
-  for bp_name in SubscribeBackpressureTest W2SBackpressureTest AccountingSinkSpoolTest; do
+  for bp_name in SubscribeBackpressureTest W2SBackpressureTest AccountingSinkSpoolTest AccountingSinkDurableTest; do
     bp_test="$(find "$output/src/main/java" -type f -name "$bp_name.java" -print -quit)"
     if [[ -n "$bp_test" ]]; then
       bp_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$bp_test").$bp_name"
@@ -1259,17 +1259,20 @@ install_accounting_sink_selftests() {
       am="$(find "$output" -type f -path '*/chassis/am/am.go' -print -quit)"
       [[ -n "$am" ]] || die "accounting-sink fixture (go): generated chassis/am package not found under $output"
       cp "$SELFTESTS_SRC/go/accounting_sink_spool_test.go" "$(dirname "$am")/"
+      cp "$SELFTESTS_SRC/go/accounting_sink_durable_test.go" "$(dirname "$am")/"
       ;;
     java)
       am="$(find "$output/src/main/java" -type f -path '*/chassis/am/AccountingManager.java' -print -quit)"
       [[ -n "$am" ]] || die "accounting-sink fixture (java): generated chassis/am package not found under $output"
       cp "$SELFTESTS_SRC/java/AccountingSinkSpoolTest.java" "$(dirname "$am")/"
+      cp "$SELFTESTS_SRC/java/AccountingSinkDurableTest.java" "$(dirname "$am")/"
       ;;
     rust)
       am="$(find "$output" -type f -path '*/chassis/am/Cargo.toml' -print -quit)"
       [[ -n "$am" ]] || die "accounting-sink fixture (rust): generated chassis/am crate not found under $output"
       mkdir -p "$(dirname "$am")/tests"
       cp "$SELFTESTS_SRC/rust/accounting_sink_spool.rs" "$(dirname "$am")/tests/accounting_sink_spool.rs"
+      cp "$SELFTESTS_SRC/rust/accounting_sink_durable.rs" "$(dirname "$am")/tests/accounting_sink_durable.rs"
       ;;
   esac
 }

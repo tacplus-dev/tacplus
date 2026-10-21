@@ -20,6 +20,7 @@
 //! (JSON + newline framing); validation on read is **always on** (we own the
 //! data we write, so invalid-on-read is a bug).
 
+pub mod appendlog;
 pub mod compress;
 pub mod error;
 pub mod fsutil;
@@ -29,6 +30,7 @@ pub mod redolog;
 pub mod schedule;
 pub mod snapshot;
 
+pub use appendlog::AppendLog;
 pub use compress::Codec;
 pub use error::{DiskStoreError, Result};
 pub use path::{delete_namespace, ns_dir, ns_segments, store_path, ROOT_TENANT};

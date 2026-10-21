@@ -6,6 +6,12 @@
 
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+{{- if .HasAccountingRecord}}
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
+use diskstore::{fsutil::atomic_write, AppendLog, DiskStoreError};
+use prost::Message as _;
+{{- end}}
 
 use {{.CrateBasePathUnderscore}}_types::sys::accounting::accounting::{
     self as accounting_pb, event, Diagnostic, EndpointHealthChanged, ErrorContext, Event,
@@ -375,13 +381,22 @@ pub fn method_label(method: &AccountingMethod) -> String {
 /// and hands it to the generated per-topic publisher's queue.
 ///
 /// SEND CONTRACT — NEVER HOLDS THE RPC. emit() hands the record to a bounded
-/// spool with `try_send` and returns; it never awaits the publisher. A task
-/// spawned by `new` moves spooled records, in order, into the per-topic
-/// publisher queue as it drains. So an event-bus outage costs the RPC nothing,
-/// and the records written during the outage are replayed to the bus when it is
-/// reachable again. Accounting is an audit trail, so a record is dropped only
-/// when the spool itself is full. Every drop is counted and logged at ERROR with
-/// the running total. A record emitted after shutdown is dropped and logged too.
+/// spool with `try_send` and returns; it never awaits the publisher or the disk.
+/// A task spawned by the constructor moves spooled records, in order, into the
+/// per-topic publisher queue as it drains. So an event-bus outage costs the RPC
+/// nothing, and the records written during the outage are replayed to the bus
+/// when it is reachable again.
+///
+/// The spool is memory-only (`new`) or durable (`new_durable`). A durable spool
+/// is an append-only log on disk: the task appends each record before it is
+/// queued for the publisher, and the cursor advances as the publisher acknowledges
+/// records (`ack`). A restart replays every record not yet acknowledged, in order.
+/// A record emitted but not yet appended when the process dies is lost; that
+/// window is the time between emit() and the task's append.
+///
+/// Accounting is an audit trail, so a record is dropped only when the spool itself
+/// is full. Every drop is counted and logged at ERROR with the running total. A
+/// record emitted after shutdown is dropped and logged too.
 pub struct EventBusSink {
     spool: tokio::sync::mpsc::Sender<AccountingRecord>,
     source_id: String,
@@ -393,11 +408,23 @@ pub struct EventBusSink {
 /// is full or the event bus is unreachable.
 const SPOOL_DEPTH: usize = 4096;
 
+/// Bound on the durable spool on disk. Records past it are dropped and counted.
+const SPOOL_BYTES: u64 = 64 << 20;
+
+/// How many acknowledged records may pass before the cursor is written. A crash
+/// republishes at most this many records the bus has already acknowledged: delivery
+/// is at-least-once, and consumers deduplicate on accounting_id.
+const CURSOR_EVERY: usize = 64;
+
+/// The durable spool's files, relative to grpcconfig.disk_persistence.dir.
+const SPOOL_LOG: &str = "accounting-spool/records.log";
+const SPOOL_CURSOR: &str = "accounting-spool/cursor";
+
 impl EventBusSink {
-    /// Creates a sink that publishes through the given per-topic publisher queue.
-    /// `source_id` is the emitting process ("{service_id}-{instance_id}"), used
-    /// to make accounting_id unique across instances. Must be called inside a
-    /// tokio runtime: it spawns the drain task.
+    /// Creates a memory-only sink that publishes through the given per-topic
+    /// publisher queue. `source_id` is the emitting process
+    /// ("{service_id}-{instance_id}"), used to make accounting_id unique across
+    /// instances. Must be called inside a tokio runtime: it spawns the drain task.
     pub fn new(tx: tokio::sync::mpsc::Sender<AccountingRecord>, source_id: String) -> Self {
         let (spool, mut spooled) = tokio::sync::mpsc::channel::<AccountingRecord>(SPOOL_DEPTH);
         let dropped = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -425,6 +452,105 @@ impl EventBusSink {
             seq: std::sync::atomic::AtomicU64::new(0),
             dropped,
         }
+    }
+
+    /// Creates a sink whose spool is the append-only log under `dir`
+    /// (grpcconfig.disk_persistence.dir). Records the publisher has not
+    /// acknowledged are replayed first, in order. `acked` carries one signal per
+    /// record the publisher acknowledges, in order: the publish loop sends it. Must
+    /// be called inside a tokio runtime.
+    pub fn new_durable(
+        tx: tokio::sync::mpsc::Sender<AccountingRecord>,
+        source_id: String,
+        dir: &std::path::Path,
+        acked: tokio::sync::mpsc::UnboundedReceiver<()>,
+    ) -> Result<Self, DiskStoreError> {
+        Self::with_spool_bytes(tx, source_id, dir, SPOOL_BYTES, acked)
+    }
+
+    /// As `new_durable`, with the on-disk bound given explicitly. Records past
+    /// `spool_bytes` are dropped and counted.
+    pub fn with_spool_bytes(
+        tx: tokio::sync::mpsc::Sender<AccountingRecord>,
+        source_id: String,
+        dir: &std::path::Path,
+        spool_bytes: u64,
+        mut acked: tokio::sync::mpsc::UnboundedReceiver<()>,
+    ) -> Result<Self, DiskStoreError> {
+        let (mut disk, mut pending) = DiskSpool::open(dir, spool_bytes)?;
+        let (spool, mut spooled) = tokio::sync::mpsc::channel::<AccountingRecord>(SPOOL_DEPTH);
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let dropped_in_task = dropped.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    Some(()) = acked.recv() => {
+                        if let Err(e) = disk.ack() {
+                            tracing::error!(error = %e, "accounting spool cursor not written; records may be republished");
+                        }
+                    }
+                    Some(record) = spooled.recv() => {
+                        match disk.append(&record) {
+                            Ok(()) => pending.push_back(record),
+                            Err(e) => {
+                                let total = dropped_in_task.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                                tracing::error!(
+                                    accounting_id = %record.accounting_id,
+                                    error = %e,
+                                    dropped_total = total,
+                                    "accounting record dropped; spool write failed"
+                                );
+                            }
+                        }
+                    }
+                    permit = tx.reserve(), if !pending.is_empty() => match permit {
+                        Ok(permit) => {
+                            if let Some(record) = pending.pop_front() {
+                                permit.send(record);
+                            }
+                        }
+                        Err(_) => {
+                            // The publisher queue is gone, which only happens on
+                            // shutdown. Records in the log stay for replay; records
+                            // still in the spool are counted.
+                            spooled.close();
+                            let mut lost: u64 = 0;
+                            while spooled.recv().await.is_some() {
+                                lost += 1;
+                            }
+                            if lost > 0 {
+                                let total = dropped_in_task.fetch_add(lost, std::sync::atomic::Ordering::Relaxed) + lost;
+                                tracing::error!(lost, dropped_total = total, "accounting publisher closed; records dropped");
+                            }
+                            if let Err(e) = disk.flush() {
+                                tracing::error!(error = %e, "accounting spool cursor not written at shutdown; records may be republished");
+                            }
+                            tracing::info!(records = pending.len(), "accounting spool closed; unpublished records kept on disk for replay");
+                            return;
+                        }
+                    },
+                    else => {
+                        if let Err(e) = disk.flush() {
+                            tracing::error!(error = %e, "accounting spool cursor not written at shutdown; records may be republished");
+                        }
+                        return;
+                    }
+                }
+            }
+        });
+        Ok(Self {
+            spool,
+            source_id,
+            seq: std::sync::atomic::AtomicU64::new(0),
+            dropped,
+        })
+    }
+
+    /// The running total of records this sink has dropped: spool full, a failed
+    /// spool write, or the publisher closed.
+    pub fn dropped_total(&self) -> u64 {
+        self.dropped.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Mints the record key. accounting_id is assert_required, so it has to be
@@ -474,6 +600,139 @@ impl EventBusSink {
             ..Default::default()
         }
     }
+}
+
+/// DiskSpool is the durable spool: an append-only log of the records since its last
+/// compaction, one base64-encoded AccountingRecord per line, and a cursor counting
+/// how many of them the publisher has acknowledged. Only the spool task touches it.
+struct DiskSpool {
+    dir: std::path::PathBuf,
+    spool_bytes: u64,
+    /// Records the publisher has acknowledged: the cursor.
+    acked: usize,
+    /// The cursor as last written.
+    saved: usize,
+    /// Records in the log.
+    total: usize,
+    /// Bytes in the log.
+    size: u64,
+}
+
+impl DiskSpool {
+    /// Opens the spool under `dir` and returns the records the publisher had not
+    /// acknowledged, in order.
+    fn open(
+        dir: &std::path::Path,
+        spool_bytes: u64,
+    ) -> Result<(Self, std::collections::VecDeque<AccountingRecord>), DiskStoreError> {
+        let cursor = read_cursor(dir)?;
+        let lines = AppendLog::read_lines(dir, SPOOL_LOG)?;
+        if cursor > lines.len() {
+            return Err(DiskStoreError::invalid_data(format!(
+                "accounting spool cursor {cursor} is past its {} records in {}",
+                lines.len(),
+                dir.display()
+            )));
+        }
+        let mut size: u64 = 0;
+        let mut pending = std::collections::VecDeque::new();
+        for (i, line) in lines.iter().enumerate() {
+            size += line.len() as u64 + 1;
+            if i < cursor {
+                continue;
+            }
+            let record = decode_record(line).map_err(|e| {
+                DiskStoreError::invalid_data(format!("accounting spool record {i} in {}: {e}", dir.display()))
+            })?;
+            pending.push_back(record);
+        }
+        let spool = Self {
+            dir: dir.to_path_buf(),
+            spool_bytes,
+            acked: cursor,
+            saved: cursor,
+            total: lines.len(),
+            size,
+        };
+        Ok((spool, pending))
+    }
+
+    /// Writes one record to the log. It fails without writing when the record would
+    /// take the spool past its bound.
+    fn append(&mut self, record: &AccountingRecord) -> Result<(), DiskStoreError> {
+        let line = BASE64_STANDARD.encode(record.encode_to_vec());
+        let line_len = line.len() as u64 + 1;
+        if self.size + line_len > self.spool_bytes {
+            return Err(DiskStoreError::invalid_data("accounting spool full"));
+        }
+        AppendLog::append(&self.dir, SPOOL_LOG, line.as_bytes(), 0o600)?;
+        self.total += 1;
+        self.size += line_len;
+        Ok(())
+    }
+
+    /// Advances the cursor past one acknowledged record. When every record in the log
+    /// has been acknowledged, the log is removed. The cursor goes back to zero first,
+    /// so a crash between the two steps republishes records the bus already has
+    /// rather than losing one.
+    fn ack(&mut self) -> Result<(), DiskStoreError> {
+        self.acked += 1;
+        if self.acked == self.total {
+            if let Err(e) = self.save_cursor(0) {
+                self.acked -= 1;
+                return Err(e);
+            }
+            self.acked = 0;
+            self.total = 0;
+            self.size = 0;
+            return match std::fs::remove_file(self.dir.join(SPOOL_LOG)) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(io_err(e)),
+            };
+        }
+        if self.acked - self.saved >= CURSOR_EVERY {
+            self.save_cursor(self.acked)?;
+        }
+        Ok(())
+    }
+
+    /// Writes the cursor if it has moved since it was last written.
+    fn flush(&mut self) -> Result<(), DiskStoreError> {
+        if self.acked != self.saved {
+            self.save_cursor(self.acked)?;
+        }
+        Ok(())
+    }
+
+    fn save_cursor(&mut self, n: usize) -> Result<(), DiskStoreError> {
+        std::fs::create_dir_all(self.dir.join("accounting-spool")).map_err(io_err)?;
+        atomic_write(&self.dir.join(SPOOL_CURSOR), format!("{n}\n").as_bytes(), 0o600)?;
+        self.saved = n;
+        Ok(())
+    }
+}
+
+/// Returns the cursor under `dir`, zero if none was written.
+fn read_cursor(dir: &std::path::Path) -> Result<usize, DiskStoreError> {
+    let raw = match std::fs::read_to_string(dir.join(SPOOL_CURSOR)) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(io_err(e)),
+    };
+    raw.trim()
+        .parse::<usize>()
+        .map_err(|_| DiskStoreError::invalid_data(format!("accounting spool cursor {:?} is not a count", raw.trim())))
+}
+
+/// Decodes one log line: base64 of the record's proto encoding.
+fn decode_record(line: &[u8]) -> Result<AccountingRecord, String> {
+    let raw = BASE64_STANDARD.decode(line).map_err(|e| e.to_string())?;
+    AccountingRecord::decode(raw.as_slice()).map_err(|e| e.to_string())
+}
+
+fn io_err(e: std::io::Error) -> DiskStoreError {
+    DiskStoreError::io(e.to_string())
 }
 
 #[tonic::async_trait]

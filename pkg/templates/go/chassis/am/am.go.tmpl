@@ -21,6 +21,12 @@ import (
 	"runtime"
 	"strings"
 	{{if .HasAccountingRecord}}
+	"encoding/base64"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	{{end}}
 	"time"
@@ -28,11 +34,15 @@ import (
 	accounting_pb "{{.ModuleBasePath}}/types/sys/accounting"
 	accounting_method_pb "{{.ModuleBasePath}}/types/generated/accounting_method"
 	{{if .HasAccountingRecord}}
+	"{{.ModuleBasePath}}/chassis/diskstore"
 	accountingrecord_pb "{{.ModuleBasePath}}/types/vservices/accountingrecord"
 	{{end}}
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	{{if .HasAccountingRecord}}
+	"google.golang.org/protobuf/proto"
+	{{end}}
 )
 
 // ---------------------------------------------------------------------------
@@ -416,22 +426,51 @@ func MethodLabel(method *accounting_method_pb.AccountingMethod) string {
 // publishes it onto the accounting topic.
 // ---------------------------------------------------------------------------
 
+// accountingSpoolDepth bounds the records an EventBusSink holds in memory
+// between Emit and the spool goroutine.
+const accountingSpoolDepth = 4096
+
+// accountingSpoolBytes bounds the durable spool on disk. Records past it are
+// dropped and counted. A var only so the self-test can shrink it.
+var accountingSpoolBytes int64 = 64 << 20
+
+// accountingCursorEvery is how many acknowledged records may pass before the
+// cursor is written. A crash republishes at most this many records the bus has
+// already acknowledged: delivery is at-least-once, and consumers deduplicate on
+// accounting_id.
+const accountingCursorEvery = 64
+
+// The durable spool's files, relative to grpcconfig.disk_persistence.dir.
+const (
+	accountingSpoolLog    = "accounting-spool/records.log"
+	accountingSpoolCursor = "accounting-spool/cursor"
+)
+
+// errAccountingSpoolFull is the reason a record is dropped when the durable
+// spool would exceed accountingSpoolBytes.
+var errAccountingSpoolFull = errors.New("accounting spool full")
+
 // EventBusSink is the durable accounting backend. It flattens the emit-time
 // accounting_pb.Event oneof envelope into the flat, stored AccountingRecord
 // and hands it to the generated per-topic publisher's queue.
 //
-// accountingSpoolDepth bounds the records an EventBusSink holds while the
-// publisher queue is full or the event bus is unreachable.
-const accountingSpoolDepth = 4096
-
 // SEND CONTRACT — NEVER HOLDS THE RPC. Emit hands the record to a bounded
-// spool and returns; it never waits on the publisher. A drain goroutine moves
-// spooled records, in order, into the per-topic publisher queue as it drains.
-// So an event-bus outage costs the RPC nothing, and the records written during
-// the outage are replayed to the bus when it is reachable again. Accounting is
-// an audit trail, so a record is dropped only when the spool itself is full;
-// every drop is counted and logged at ERROR with the running total. A record
-// emitted after the service is shutting down is also dropped, and logged.
+// queue and returns; it never waits on the publisher or on the disk. A spool
+// goroutine moves records, in order, into the per-topic publisher queue as it
+// drains. So an event-bus outage costs the RPC nothing, and the records written
+// during the outage are replayed to the bus when it is reachable again.
+//
+// The spool is memory-only (NewEventBusSink) or durable (NewDurableEventBusSink).
+// A durable spool is an append-only log on disk: the spool goroutine appends each
+// record before it is queued for the publisher, and the cursor advances as the
+// publisher acknowledges records (Ack). A restart replays every record not yet
+// acknowledged, in order. A record that was emitted but not yet appended when the
+// process dies is lost; that window is the time between Emit and the spool
+// goroutine's append.
+//
+// Accounting is an audit trail, so a record is dropped only when the spool itself
+// is full; every drop is counted and logged at ERROR with the running total. A
+// record emitted after the service is shutting down is also dropped, and logged.
 type EventBusSink struct {
 	tx       chan<- *accountingrecord_pb.AccountingRecord
 	spool    chan *accountingrecord_pb.AccountingRecord
@@ -441,12 +480,16 @@ type EventBusSink struct {
 	stop    <-chan struct{}
 	seq     atomic.Uint64
 	dropped atomic.Uint64
+	// disk is the durable spool, nil for the memory spool. acks carries one
+	// signal per record the publisher has acknowledged, in order.
+	disk *accountingDiskSpool
+	acks chan struct{}
 }
 
-// NewEventBusSink creates a sink that publishes through the given per-topic
-// publisher queue. sourceID is the emitting process ("{service_id}-{instance_id}"),
-// used to make accounting_id unique across instances. stop is the
-// ServiceManager's shutdown signal.
+// NewEventBusSink creates a memory-only sink that publishes through the given
+// per-topic publisher queue. sourceID is the emitting process
+// ("{service_id}-{instance_id}"), used to make accounting_id unique across
+// instances. stop is the ServiceManager's shutdown signal.
 func NewEventBusSink(tx chan<- *accountingrecord_pb.AccountingRecord, sourceID string, stop <-chan struct{}) *EventBusSink {
 	s := &EventBusSink{
 		tx:       tx,
@@ -456,6 +499,40 @@ func NewEventBusSink(tx chan<- *accountingrecord_pb.AccountingRecord, sourceID s
 	}
 	go s.drain()
 	return s
+}
+
+// NewDurableEventBusSink creates a sink whose spool is the append-only log under
+// dir (grpcconfig.disk_persistence.dir). Records the publisher has not
+// acknowledged are replayed first, in order. An error means the spool could not be
+// opened, and the sink is not created.
+func NewDurableEventBusSink(tx chan<- *accountingrecord_pb.AccountingRecord, sourceID string, stop <-chan struct{}, dir string) (*EventBusSink, error) {
+	disk, pending, err := openAccountingDiskSpool(dir)
+	if err != nil {
+		return nil, err
+	}
+	s := &EventBusSink{
+		tx:       tx,
+		spool:    make(chan *accountingrecord_pb.AccountingRecord, accountingSpoolDepth),
+		sourceID: sourceID,
+		stop:     stop,
+		disk:     disk,
+		acks:     make(chan struct{}),
+	}
+	go s.drainDurable(pending)
+	return s, nil
+}
+
+// Ack records that the publisher has acknowledged the oldest record it was handed
+// and not yet acknowledged. The generated publish loop calls it once per
+// acknowledged record, in order. It does nothing for a memory-only sink.
+func (s *EventBusSink) Ack() {
+	if s.disk == nil {
+		return
+	}
+	select {
+	case s.acks <- struct{}{}:
+	case <-s.stop:
+	}
 }
 
 // drain moves spooled records into the publisher queue, one at a time, so the
@@ -491,6 +568,227 @@ func (s *EventBusSink) dropOnShutdown(inHand *accountingrecord_pb.AccountingReco
 	total := s.dropped.Add(n)
 	zap.L().Error("accounting publisher closed; records dropped",
 		zap.Uint64("dropped", n), zap.Uint64("dropped_total", total))
+}
+
+// drainDurable is the durable spool loop. It owns the log: it appends each record
+// before the record is queued for the publisher, and it advances the cursor as the
+// publisher acknowledges records. queue holds the records not yet handed to the
+// publisher, in order; it starts with the records the log held unacknowledged at open.
+func (s *EventBusSink) drainDurable(queue []*accountingrecord_pb.AccountingRecord) {
+	for {
+		var out chan<- *accountingrecord_pb.AccountingRecord
+		var next *accountingrecord_pb.AccountingRecord
+		if len(queue) > 0 {
+			out, next = s.tx, queue[0]
+		}
+		select {
+		case <-s.stop:
+			s.shutdownDurable(len(queue))
+			return
+		case record := <-s.spool:
+			if err := s.disk.append(record); err != nil {
+				s.dropRecord(record, err)
+				continue
+			}
+			queue = append(queue, record)
+		case out <- next:
+			queue[0] = nil
+			queue = queue[1:]
+		case <-s.acks:
+			if err := s.disk.ack(); err != nil {
+				zap.L().Error("accounting spool cursor not written; records may be republished",
+					zap.Error(err))
+			}
+		}
+	}
+}
+
+// shutdownDurable persists the cursor and counts the records that never reached the
+// log. Records already in the log are kept for replay on the next start.
+func (s *EventBusSink) shutdownDurable(pending int) {
+	if err := s.disk.flush(); err != nil {
+		zap.L().Error("accounting spool cursor not written at shutdown; records may be republished",
+			zap.Error(err))
+	}
+	if n := uint64(len(s.spool)); n > 0 {
+		total := s.dropped.Add(n)
+		zap.L().Error("accounting publisher closed; records dropped",
+			zap.Uint64("dropped", n), zap.Uint64("dropped_total", total))
+	}
+	zap.L().Info("accounting spool closed; unpublished records kept on disk for replay",
+		zap.Int("records", pending))
+}
+
+// dropRecord counts and logs a record the durable spool could not keep.
+func (s *EventBusSink) dropRecord(record *accountingrecord_pb.AccountingRecord, err error) {
+	total := s.dropped.Add(1)
+	zap.L().Error("accounting record dropped",
+		zap.String("accounting_id", record.AccountingId), zap.Error(err),
+		zap.Uint64("dropped_total", total))
+}
+
+// accountingDiskSpool is the durable spool: an append-only log of the records
+// since its last compaction, one base64-encoded AccountingRecord per line, and a
+// cursor counting how many of them the publisher has acknowledged. Only the spool
+// goroutine touches it.
+type accountingDiskSpool struct {
+	dir   string
+	acked int   // records the publisher has acknowledged: the cursor
+	saved int   // the cursor as last written
+	total int   // records in the log
+	size  int64 // bytes in the log
+}
+
+// openAccountingDiskSpool opens the spool under dir and returns the records the
+// publisher had not acknowledged, in order.
+func openAccountingDiskSpool(dir string) (*accountingDiskSpool, []*accountingrecord_pb.AccountingRecord, error) {
+	cursor, err := readAccountingCursor(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	lines, err := diskstore.AppendLog{}.ReadLines(dir, accountingSpoolLog)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read accounting spool: %w", err)
+	}
+	if cursor > len(lines) {
+		return nil, nil, fmt.Errorf("accounting spool cursor %d is past its %d records in %s", cursor, len(lines), dir)
+	}
+	d := &accountingDiskSpool{dir: dir, acked: cursor, saved: cursor, total: len(lines)}
+	var pending []*accountingrecord_pb.AccountingRecord
+	for i, line := range lines {
+		d.size += int64(len(line)) + 1
+		if i < cursor {
+			continue
+		}
+		record, err := decodeAccountingRecord(line)
+		if err != nil {
+			return nil, nil, fmt.Errorf("accounting spool record %d in %s: %w", i, dir, err)
+		}
+		pending = append(pending, record)
+	}
+	return d, pending, nil
+}
+
+// append writes one record to the log. It fails without writing when the record
+// would take the spool past accountingSpoolBytes.
+func (d *accountingDiskSpool) append(record *accountingrecord_pb.AccountingRecord) error {
+	line, err := encodeAccountingRecord(record)
+	if err != nil {
+		return err
+	}
+	if d.size+int64(len(line))+1 > accountingSpoolBytes {
+		return errAccountingSpoolFull
+	}
+	if err := (diskstore.AppendLog{}).Append(d.dir, accountingSpoolLog, line, 0o600); err != nil {
+		return err
+	}
+	d.total++
+	d.size += int64(len(line)) + 1
+	return nil
+}
+
+// ack advances the cursor past one acknowledged record. When every record in the
+// log has been acknowledged, the log is removed. The cursor goes back to zero
+// first, so a crash between the two steps republishes records the bus already has
+// rather than losing one.
+func (d *accountingDiskSpool) ack() error {
+	d.acked++
+	if d.acked == d.total {
+		if err := d.saveCursor(0); err != nil {
+			d.acked--
+			return err
+		}
+		d.acked, d.total, d.size = 0, 0, 0
+		if err := os.Remove(filepath.Join(d.dir, accountingSpoolLog)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("remove accounting spool log: %w", err)
+		}
+		return nil
+	}
+	if d.acked-d.saved >= accountingCursorEvery {
+		return d.saveCursor(d.acked)
+	}
+	return nil
+}
+
+// flush writes the cursor if it has moved since it was last written.
+func (d *accountingDiskSpool) flush() error {
+	if d.acked == d.saved {
+		return nil
+	}
+	return d.saveCursor(d.acked)
+}
+
+// saveCursor writes the cursor atomically: a fsynced temp file renamed over the
+// cursor, then the directory fsynced so the rename is durable.
+func (d *accountingDiskSpool) saveCursor(n int) error {
+	path := filepath.Join(d.dir, accountingSpoolCursor)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(strconv.Itoa(n) + "\n"); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	if dir, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+	d.saved = n
+	return nil
+}
+
+// readAccountingCursor returns the cursor under dir, zero if none was written.
+func readAccountingCursor(dir string) (int, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, accountingSpoolCursor))
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read accounting spool cursor: %w", err)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("accounting spool cursor %q is not a count", raw)
+	}
+	return n, nil
+}
+
+// encodeAccountingRecord renders a record as one log line: base64 of its proto
+// encoding, which never contains a newline.
+func encodeAccountingRecord(record *accountingrecord_pb.AccountingRecord) ([]byte, error) {
+	raw, err := proto.Marshal(record)
+	if err != nil {
+		return nil, fmt.Errorf("encode accounting record: %w", err)
+	}
+	return []byte(base64.StdEncoding.EncodeToString(raw)), nil
+}
+
+// decodeAccountingRecord is the inverse of encodeAccountingRecord.
+func decodeAccountingRecord(line []byte) (*accountingrecord_pb.AccountingRecord, error) {
+	raw, err := base64.StdEncoding.DecodeString(string(line))
+	if err != nil {
+		return nil, err
+	}
+	record := &accountingrecord_pb.AccountingRecord{}
+	if err := proto.Unmarshal(raw, record); err != nil {
+		return nil, err
+	}
+	return record, nil
 }
 
 // nextAccountingID mints the record key. accounting_id is assert_required, so

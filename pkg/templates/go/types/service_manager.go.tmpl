@@ -1287,19 +1287,30 @@ return fmt.Errorf("authorizer not wired for {{.ServerType}} (build/SM bug) - man
 //
 // The sink never waits on this queue: it spools records and a drain goroutine
 // feeds the queue, so the queue depth is not what bounds an outage — see
-// EventBusSink's send contract in chassis/am.
+// EventBusSink's send contract in chassis/am. With grpcconfig.disk_persistence
+// set the spool is durable: it survives a restart and replays in order.
 const accountingQueueDepth = 1024
 accountingCh := make(chan *{{.AccountingPublisher.TypePkgAlias}}.{{.AccountingPublisher.EventTypeName}}, accountingQueueDepth)
+accountingSourceID := "{{.ServiceLabel}}" + "-" + sm.sc.InstanceID()
+var accountingSink *am.EventBusSink
+if dir := sm.cfg.GetDiskPersistence().GetDir(); dir != "" {
+durable, err := am.NewDurableEventBusSink(accountingCh, accountingSourceID, sm.ctx.Done(), dir)
+if err != nil {
+return fmt.Errorf("accounting spool: %w", err)
+}
+accountingSink = durable
+} else {
+accountingSink = am.NewEventBusSink(accountingCh, accountingSourceID, sm.ctx.Done())
+}
 sm.tasks.Go(func(taskCtx context.Context) {
 {{.AccountingPublisher.LoopName}}(taskCtx,
 func(ctx context.Context) (grpc.ClientConnInterface, error) {
 return sm.resolveServiceCtx(ctx, "{{.AccountingPublisher.TargetService}}")
 },
 func() (string, error) { return sm.identity.GetTokenFor("{{.AccountingPublisher.TargetService}}") },
-accountingCh)
+accountingCh, accountingSink.Ack)
 })
-accountingSourceID := "{{.ServiceLabel}}" + "-" + sm.sc.InstanceID()
-accountingEmitter := am.NewEmitter(accountingSourceID, am.NewEventBusSink(accountingCh, accountingSourceID, sm.ctx.Done()))
+accountingEmitter := am.NewEmitter(accountingSourceID, accountingSink)
 {{- range .GrpcServices}}
 {{.WrapperVarName}}.SetEmitter(accountingEmitter)
 {{- end}}
@@ -1953,8 +1964,9 @@ return nil
 // Each record stays pending until the broker acknowledges it, so
 // stream/re-resolution failures do not discard already-accepted records —
 // the durable-sink send contract (EventBusSink.Emit) is what makes this the
-// non-dropping path, not this loop.
-func {{.LoopName}}(ctx context.Context, resolve func(context.Context) (grpc.ClientConnInterface, error), tp func() (string, error), ch <-chan *{{.TypePkgAlias}}.{{.EventTypeName}}) {
+// non-dropping path, not this loop. onAck is called once per acknowledged
+// record, in order, so a durable spool can advance its cursor.
+func {{.LoopName}}(ctx context.Context, resolve func(context.Context) (grpc.ClientConnInterface, error), tp func() (string, error), ch <-chan *{{.TypePkgAlias}}.{{.EventTypeName}}, onAck func()) {
 backoff := serviceconnection.ReconnectInitialBackoff
 var pending *{{.TypePkgAlias}}.{{.EventTypeName}}
 
@@ -2003,6 +2015,7 @@ backoff = serviceconnection.NextReconnectBackoff(backoff)
 continue
 }
 pending = nil
+onAck()
 backoff = serviceconnection.ReconnectInitialBackoff
 }
 }

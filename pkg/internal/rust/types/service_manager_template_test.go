@@ -348,9 +348,11 @@ func TestRustServiceManagerWiresAccountingEmitter(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"async fn create_accounting_publisher_sender(&self) -> tokio::sync::mpsc::Sender<AccountingRecord>",
-		"let accounting_tx = self.create_accounting_publisher_sender().await;",
-		"am::EventBusSink::new(accounting_tx, source_id)",
+		"on_ack: Option<tokio::sync::mpsc::UnboundedSender<()>>,",
+		"async fn create_accounting_publisher_sender(",
+		"let accounting_tx = self.create_accounting_publisher_sender(Some(ack_tx)).await;",
+		"am::EventBusSink::new(accounting_tx, source_id.clone())",
+		"am::EventBusSink::new_durable(accounting_tx, source_id.clone(), std::path::Path::new(&persistence.dir), ack_rx)?",
 		"am::Emitter::new(",
 		"wrapper_tasks.set_emitter(Some(emitter.clone())).await;",
 	} {

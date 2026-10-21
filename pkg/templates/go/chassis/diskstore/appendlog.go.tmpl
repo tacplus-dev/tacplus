@@ -1,0 +1,152 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+
+package diskstore
+
+// Append-only history log: a caller-chosen file under a base directory that keeps
+// every line, in order, with no dedup. The Go twin of the Java AppendLog (see
+// docs/API.md, Append-only history and plain file reads).
+//
+// Unlike the redo log, the file is not keyed and carries no envelope. Each line is
+// written verbatim followed by one newline, so the file is newline-delimited data
+// the caller already owns.
+
+import (
+	"bytes"
+	"errors"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+)
+
+// appendLogMu serializes appends from this process, so two writers cannot
+// interleave their bytes in one file.
+var appendLogMu sync.Mutex
+
+// AppendLog is the append-only history log. It has no state: the file is the
+// caller's path under base.
+type AppendLog struct{}
+
+// Append writes line verbatim as one line of base/relPath, creating the file and
+// its parent directories if absent, and fsyncs before returning. mode is the Unix
+// permission applied when the file is created; 0 leaves the default. An existing
+// file keeps its permissions. A line containing a newline is rejected.
+func (AppendLog) Append(base, relPath string, line []byte, mode os.FileMode) error {
+	path, err := appendLogPath(base, relPath)
+	if err != nil {
+		return err
+	}
+	if bytes.IndexByte(line, '\n') >= 0 {
+		return ErrInvalidData("append line contains a newline")
+	}
+	framed := append(append(make([]byte, 0, len(line)+1), line...), '\n')
+
+	appendLogMu.Lock()
+	defer appendLogMu.Unlock()
+	dir := filepath.Dir(path)
+	_, statErr := os.Stat(path)
+	created := errors.Is(statErr, fs.ErrNotExist)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return wrapIOError(err)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return wrapIOError(err)
+	}
+	if err := appendLogDropTornTail(f); err != nil {
+		f.Close()
+		return wrapIOError(err)
+	}
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		f.Close()
+		return wrapIOError(err)
+	}
+	if _, err := f.Write(framed); err != nil {
+		f.Close()
+		return wrapIOError(err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return wrapIOError(err)
+	}
+	if err := f.Close(); err != nil {
+		return wrapIOError(err)
+	}
+	if created {
+		if mode != 0 {
+			if err := os.Chmod(path, mode); err != nil {
+				return wrapIOError(err)
+			}
+		}
+		syncDir(dir)
+	}
+	return nil
+}
+
+// ReadLines returns every complete line of base/relPath, in the order appended,
+// each without its terminator. Lines are not deduplicated. An absent file reads
+// as no lines. A trailing fragment with no terminator (a crash mid-append) is not
+// a line and is dropped.
+func (AppendLog) ReadLines(base, relPath string) ([][]byte, error) {
+	path, err := appendLogPath(base, relPath)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, wrapIOError(err)
+	}
+	var lines [][]byte
+	for {
+		i := bytes.IndexByte(data, '\n')
+		if i < 0 {
+			return lines, nil
+		}
+		lines = append(lines, data[:i:i])
+		data = data[i+1:]
+	}
+}
+
+// appendLogDropTornTail truncates an unterminated tail left by a crash
+// mid-append. ReadLines drops it, so the next append must drop it too, or its
+// line would be glued onto the torn bytes.
+func appendLogDropTornTail(f *os.File) error {
+	size, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
+	keep := size
+	one := make([]byte, 1)
+	for keep > 0 {
+		if _, err := f.ReadAt(one, keep-1); err != nil {
+			return err
+		}
+		if one[0] == '\n' {
+			break
+		}
+		keep--
+	}
+	if keep != size {
+		return f.Truncate(keep)
+	}
+	return nil
+}
+
+// appendLogPath resolves relPath under base. An empty or absolute path, or one
+// that escapes base, is rejected.
+func appendLogPath(base, relPath string) (string, error) {
+	if relPath == "" || filepath.IsAbs(relPath) {
+		return "", ErrInvalidData("append log path must be relative and non-empty")
+	}
+	clean := filepath.Clean(relPath)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", ErrInvalidData("append log path escapes its base directory")
+	}
+	return filepath.Join(base, clean), nil
+}

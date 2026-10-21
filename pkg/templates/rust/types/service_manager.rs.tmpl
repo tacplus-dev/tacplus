@@ -1252,6 +1252,7 @@ impl ServiceManager {
                 {{.VarPrefix}}_tls_config,
                 {{.VarPrefix}}_tp,
                 {{.VarPrefix}}_rx,
+                None,
             ).await;
         });
         let tx = Arc::new({{.VarPrefix}}_tx);
@@ -1282,7 +1283,10 @@ impl ServiceManager {
     /// the Sender and awaits `send`, applying backpressure to the emitting RPC
     /// instead. The queue is deeper than the trace queue for the same reason —
     /// a brief publisher stall should absorb, not stall callers.
-    async fn create_accounting_publisher_sender(&self) -> tokio::sync::mpsc::Sender<{{.EventTypeName}}> {
+    async fn create_accounting_publisher_sender(
+        &self,
+        on_ack: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    ) -> tokio::sync::mpsc::Sender<{{.EventTypeName}}> {
         const ACCOUNTING_QUEUE_DEPTH: usize = 1024;
         let ({{.VarPrefix}}_tx, {{.VarPrefix}}_rx) =
             tokio::sync::mpsc::channel::<{{.EventTypeName}}>(ACCOUNTING_QUEUE_DEPTH);
@@ -1307,6 +1311,7 @@ impl ServiceManager {
                 {{.VarPrefix}}_tls_config,
                 {{.VarPrefix}}_tp,
                 {{.VarPrefix}}_rx,
+                on_ack,
             ).await;
         });
         {{.VarPrefix}}_tx
@@ -1690,12 +1695,18 @@ impl ServiceManager {
         // The sink spools records and never awaits the publisher, so an outage
         // does not hold the RPC — see EventBusSink's send contract in chassis/am.
         {
-            let accounting_tx = self.create_accounting_publisher_sender().await;
+            let (ack_tx, ack_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+            let accounting_tx = self.create_accounting_publisher_sender(Some(ack_tx)).await;
             let source_id = format!("{}-{}", "{{.ServiceLabel}}", self.instance_id());
-            let emitter = Arc::new(am::Emitter::new(
-                source_id.clone(),
-                Box::new(am::EventBusSink::new(accounting_tx, source_id)),
-            ));
+            // With grpcconfig.disk_persistence set the spool is durable: it survives a
+            // restart and replays in order.
+            let sink = match self.cfg.disk_persistence.as_ref() {
+                Some(persistence) if !persistence.dir.is_empty() => {
+                    am::EventBusSink::new_durable(accounting_tx, source_id.clone(), std::path::Path::new(&persistence.dir), ack_rx)?
+                }
+                _ => am::EventBusSink::new(accounting_tx, source_id.clone()),
+            };
+            let emitter = Arc::new(am::Emitter::new(source_id, Box::new(sink)));
 {{- range .GrpcServices}}
             {{.WrapperVar}}.set_emitter(Some(emitter.clone())).await;
 {{- end}}
@@ -2632,6 +2643,7 @@ async fn {{.LoopFn}}(
     tls_config: tonic::transport::ClientTlsConfig,
     token_provider: TokenProvider,
     mut rx: tokio::sync::mpsc::Receiver<{{.EventTypeName}}>,
+    on_ack: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 ) {
     let mut backoff = servicemanager::RECONNECT_INITIAL_BACKOFF;
     let mut pending: Option<{{.EventTypeName}}> = None;
@@ -2655,6 +2667,10 @@ async fn {{.LoopFn}}(
         match {{.StreamFn}}(&channel, &token_provider, pending.as_ref().expect("pending event")).await {
             Ok(()) => {
                 pending = None;
+                // The sink's cursor advances per acknowledged record, in order.
+                if let Some(on_ack) = &on_ack {
+                    let _ = on_ack.send(());
+                }
                 backoff = servicemanager::RECONNECT_INITIAL_BACKOFF;
             }
             Err(e) => {

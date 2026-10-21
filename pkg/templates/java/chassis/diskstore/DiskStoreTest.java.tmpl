@@ -11,6 +11,10 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 /**
  * Behavioral self-test for the diskstore chassis (PC-L-8): codec round-trip,
@@ -199,6 +203,58 @@ public class DiskStoreTest {
                         "restore after roll should yield 2 records, got " + c.recs.size());
                 check(Files.exists(base.resolve("drpepper").resolve("verifying_keys.log.bak.1")),
                         "archive .bak.1 should exist after roll");
+            } finally {
+                log.close();
+            }
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    // A write that lands while the roll scheduler is taking its snapshot must
+    // survive a local restore. The write comes from another thread, mid-snapshot.
+    // Only a snapshot read after the redirect keeps it: before the redirect the
+    // write goes to the old active log, which the new baseline leaves out.
+    private static void testRollSchedulerKeepsConcurrentAppend() throws Exception {
+        Path dir = Files.createTempDirectory("ds-roll-race-");
+        try {
+            Path base = dir.resolve("data");
+            RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 2, Codec.GZ);
+            try {
+                log.append(RedoLog.Record.upsert("a", "{\"v\":1}"));
+                AtomicBoolean injected = new AtomicBoolean();
+                Supplier<List<RedoLog.Record>> snapshot = () -> {
+                    List<RedoLog.Record> snap = RedoLog.dedupFile(log.activePath());
+                    if (injected.compareAndSet(false, true)) {
+                        Thread writer = new Thread(() -> log.append(RedoLog.Record.upsert("b", "{\"v\":9}")));
+                        writer.start();
+                        try {
+                            writer.join();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                    return snap;
+                };
+                ScheduledExecutorService sched =
+                        RollSchedule.runRollScheduler(log, Duration.ofSeconds(1), "node-0", snapshot);
+                try {
+                    Path archive = base.resolve("drpepper").resolve("verifying_keys.log.bak.1");
+                    long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
+                    while (!Files.exists(archive) && System.nanoTime() < deadline) {
+                        Thread.sleep(50);
+                    }
+                } finally {
+                    sched.shutdown();
+                    sched.awaitTermination(20, TimeUnit.SECONDS);
+                }
+                check(injected.get(), "the roll scheduler should have taken a snapshot");
+
+                CollectInserter c = new CollectInserter();
+                log.restore(c);
+                check(c.recs.stream().anyMatch(r -> r.key.equals("b")),
+                        "a write made during the roll snapshot must survive a local restore, got "
+                                + c.recs.size() + " record(s)");
             } finally {
                 log.close();
             }
@@ -599,6 +655,7 @@ public class DiskStoreTest {
 
         // RollSchedule
         testRollOffsetDeterministicAndInRange();
+        testRollSchedulerKeepsConcurrentAppend();
 
         // FsUtil
         testArchiveNameFormat();

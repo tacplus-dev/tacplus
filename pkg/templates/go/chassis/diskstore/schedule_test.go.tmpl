@@ -4,6 +4,9 @@
 package diskstore
 
 import (
+	"context"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -21,5 +24,68 @@ func TestRollOffsetDeterministicAndInRange(t *testing.T) {
 	}
 	if a == c {
 		t.Fatalf("offsets for different nodes should (very likely) differ")
+	}
+}
+
+// A write that lands while the roll scheduler is taking its snapshot must survive
+// a local restore. The write comes from another goroutine, mid-snapshot. Only a
+// snapshot read after the redirect keeps it: before the redirect the write goes
+// to the old active log, which the new baseline leaves out.
+func TestRollSchedulerKeepsConcurrentAppend(t *testing.T) {
+	dir := t.TempDir()
+	log, err := OpenRedoLog(dir, "/drpepper", "verifying_keys", 2, CodecGz)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer log.Close()
+	if err := log.Append(rec("a", 1)); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	var injected atomic.Bool
+	snapshot := func() []*Record {
+		snap, err := DedupFile(log.ActivePath())
+		if err != nil {
+			t.Errorf("dedup: %v", err)
+		}
+		if injected.CompareAndSwap(false, true) {
+			done := make(chan error, 1)
+			go func() { done <- log.Append(rec("b", 9)) }()
+			if err := <-done; err != nil {
+				t.Errorf("append during snapshot: %v", err)
+			}
+		}
+		return snap
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	schedulerDone := make(chan struct{})
+	go func() {
+		defer close(schedulerDone)
+		_ = RunRollScheduler(ctx, log, time.Second, "node-0", snapshot)
+	}()
+	archive := filepath.Join(dir, "drpepper", "verifying_keys.log.bak.1")
+	deadline := time.Now().Add(20 * time.Second)
+	for !fileExists(archive) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-schedulerDone
+
+	if !injected.Load() {
+		t.Fatalf("the roll scheduler should have taken a snapshot")
+	}
+	c := &collectInserter{}
+	if _, err := log.Restore(c); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	found := false
+	for _, r := range c.recs {
+		if r.Key == "b" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a write made during the roll snapshot must survive a local restore, got %d record(s)", len(c.recs))
 	}
 }

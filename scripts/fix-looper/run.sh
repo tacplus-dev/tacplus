@@ -23,6 +23,14 @@
 # State and logs live under ~/.tacplus-fix-looper. One run at a time.
 set -euo pipefail
 
+# Run from a private copy: bash reads a script as it executes, so a git pull that rewrites this file during a
+# multi-hour run corrupts the running process (10-20: "syntax error near unexpected token" after #70's run).
+if [ -z "${FIX_LOOPER_RUNNING_COPY:-}" ]; then
+  copy="$(mktemp -t fix-looper-run.XXXXXX)"
+  cp "${BASH_SOURCE[0]}" "$copy"
+  FIX_LOOPER_RUNNING_COPY="$copy" FIX_LOOPER_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")" exec bash "$copy" "$@"
+fi
+
 REPO="${FIX_LOOPER_REPO:-tacplus-dev/tacplus}"
 HOME_DIR="${FIX_LOOPER_HOME:-$HOME/.tacplus-fix-looper}"
 RUNS="$HOME_DIR/runs"
@@ -38,7 +46,7 @@ log() { printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 die() { log "FATAL $*" >&2; exit 2; }
 need() { command -v "$1" >/dev/null 2>&1 || die "required tool not found: $1"; }
 
-SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+SELF="${FIX_LOOPER_SELF}"
 
 case "${1:-}" in
   notify)
@@ -93,7 +101,7 @@ if [[ -d "$LOCK" ]]; then
   if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then log "a run is already in progress (pid $pid)"; exit 0; fi
   rm -rf "$LOCK"
 fi
-mkdir "$LOCK"; echo $$ > "$LOCK/pid"; trap 'rm -rf "$LOCK"' EXIT
+mkdir "$LOCK"; echo $$ > "$LOCK/pid"; trap 'rm -rf "$LOCK" "$FIX_LOOPER_RUNNING_COPY"' EXIT
 
 if [[ -z "$ISSUE" ]]; then
   # Oldest open request of either kind that is waiting on the looper: a fix

@@ -58,7 +58,7 @@ public final class RollSchedule {
      */
     public static ScheduledExecutorService runRollScheduler(
             RedoLog log, Duration interval, String nodeId, Supplier<List<RedoLog.Record>> snapshot) {
-        return schedule("roll", interval, nodeId, () -> log.roll(snapshot.get()));
+        return schedule("roll", interval, nodeId, () -> log.rollFrom(snapshot));
     }
 
     /**

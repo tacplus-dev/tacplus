@@ -10,6 +10,10 @@ import {{.TypesBase}}.sys.accounting.Accounting;
 import {{.TypesBase}}.generated.accounting_method.AccountingMethodOuterClass.AccountingMethod;
 {{- if .HasAccountingRecord}}
 import {{.AccountingRecordTypeImport}};
+import {{.ChassisBase}}.diskstore.AppendLog;
+import {{.ChassisBase}}.diskstore.DiskStoreException;
+import {{.ChassisBase}}.diskstore.FsUtil;
+import {{.ChassisBase}}.diskstore.PlainFile;
 {{- end}}
 
 import io.grpc.Status;
@@ -18,6 +22,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.BlockingQueue;
 
 /**
  * AccountingManager — runtime library for emitting typed accounting events.
@@ -351,26 +356,57 @@ public final class AccountingManager {
      * per-topic publisher's queue.
      *
      * <p>SEND CONTRACT — NEVER HOLDS THE RPC. emit() hands the record to a
-     * bounded spool and returns; it never waits on the publisher. A drain
-     * thread moves spooled records, in order, into the per-topic publisher
-     * queue as it drains. So an event-bus outage costs the RPC nothing, and the
-     * records written during the outage are replayed to the bus when it is
-     * reachable again. Accounting is an audit trail, so a record is dropped
-     * only when the spool itself is full. Every drop is counted and logged at
-     * ERROR with the running total. A record emitted after shutdown is dropped
-     * and logged too.
+     * bounded spool and returns; it never waits on the publisher or the disk.
+     * A drain thread moves spooled records, in order, into the per-topic
+     * publisher queue as it drains. So an event-bus outage costs the RPC
+     * nothing, and the records written during the outage are replayed to the
+     * bus when it is reachable again.
+     *
+     * <p>The spool is memory-only ({@code new EventBusSink}) or durable
+     * ({@link #durable}). A durable spool is an append-only log on disk
+     * ({@link AppendLog}): the drain thread appends each record before it is
+     * queued for the publisher, and the cursor advances as the publisher
+     * acknowledges records ({@link #ack}). A restart replays every record not
+     * yet acknowledged, in order. A record emitted but not yet appended when the
+     * process dies is lost; that window is the time between emit() and the
+     * drain thread's append.
+     *
+     * <p>Accounting is an audit trail, so a record is dropped only when the
+     * spool itself is full. Every drop is counted and logged at ERROR with the
+     * running total. A record emitted after shutdown is dropped and logged too.
      */
     public static final class EventBusSink implements Sink {
         private static final Logger logger = LoggerFactory.getLogger("accounting");
 
-        // SPOOL_DEPTH bounds the records held while the publisher queue is full
-        // or the event bus is unreachable. Package-private so the self-test can
-        // size its overflow from it.
+        // SPOOL_DEPTH bounds the records held in memory between emit() and the
+        // drain thread. Package-private so the self-test can size its overflow
+        // from it.
         static final int SPOOL_DEPTH = 4096;
 
-        private final java.util.concurrent.BlockingQueue<{{.AccountingRecordJavaType}}> queue;
-        private final java.util.concurrent.BlockingQueue<{{.AccountingRecordJavaType}}> spool =
+        // SPOOL_BYTES bounds the durable spool on disk. Records past it are
+        // dropped and counted. Package-private so the self-test can shrink it.
+        static long SPOOL_BYTES = 64L << 20;
+
+        // CURSOR_EVERY is how many acknowledged records may pass before the
+        // cursor is written. A crash republishes at most this many records the
+        // bus has already acknowledged: delivery is at-least-once, and consumers
+        // deduplicate on accounting_id.
+        static final int CURSOR_EVERY = 64;
+
+        // The durable spool's files, relative to grpcconfig.disk_persistence.dir.
+        static final String SPOOL_LOG = "accounting-spool/records.log";
+        static final String SPOOL_CURSOR = "accounting-spool/cursor";
+
+        private final BlockingQueue<{{.AccountingRecordJavaType}}> queue;
+        private final BlockingQueue<{{.AccountingRecordJavaType}}> spool =
                 new java.util.concurrent.LinkedBlockingQueue<>(SPOOL_DEPTH);
+        // acks carries one signal per record the publisher has acknowledged.
+        private final BlockingQueue<Boolean> acks = new java.util.concurrent.LinkedBlockingQueue<>();
+        // pending is the durable spool's records not yet handed to the
+        // publisher, in order. Only the drain thread touches it.
+        private final java.util.ArrayDeque<{{.AccountingRecordJavaType}}> pending = new java.util.ArrayDeque<>();
+        // disk is nil for the memory spool.
+        private final DiskSpool disk;
         private final String sourceId;
         // stopped reports true when the owning ServiceManager is shutting
         // down. The drain thread exits on it, and emit() refuses records once
@@ -380,21 +416,70 @@ public final class AccountingManager {
         private final java.util.concurrent.atomic.AtomicLong dropped = new java.util.concurrent.atomic.AtomicLong();
 
         /**
-         * Creates a sink that publishes through the given per-topic publisher
-         * queue. sourceId is the emitting process ("{service_id}-{instance_id}"),
-         * used to make accounting_id unique across instances. stopped is the
-         * ServiceManager's shutdown signal. The drain thread starts here and is
-         * a daemon.
+         * Creates a memory-only sink that publishes through the given per-topic
+         * publisher queue. sourceId is the emitting process
+         * ("{service_id}-{instance_id}"), used to make accounting_id unique
+         * across instances. stopped is the ServiceManager's shutdown signal. The
+         * drain thread starts here and is a daemon.
          */
-        public EventBusSink(java.util.concurrent.BlockingQueue<{{.AccountingRecordJavaType}}> queue,
+        public EventBusSink(BlockingQueue<{{.AccountingRecordJavaType}}> queue,
                              String sourceId,
                              java.util.function.BooleanSupplier stopped) {
             this.queue = queue;
             this.sourceId = sourceId;
             this.stopped = stopped;
-            Thread drainer = new Thread(this::drain, "accounting-spool");
+            this.disk = null;
+            startDrainer(this::drain);
+        }
+
+        private EventBusSink(BlockingQueue<{{.AccountingRecordJavaType}}> queue,
+                             String sourceId,
+                             java.util.function.BooleanSupplier stopped,
+                             DiskSpool disk) throws java.io.IOException {
+            this.queue = queue;
+            this.sourceId = sourceId;
+            this.stopped = stopped;
+            this.disk = disk;
+            for (byte[] line : disk.pendingLines()) {
+                pending.addLast(decode(line));
+            }
+            startDrainer(this::drainDurable);
+        }
+
+        /**
+         * Creates a durable sink whose spool is the append-only log under
+         * {@code dir} (grpcconfig.disk_persistence.dir). Records the publisher
+         * has not acknowledged are replayed first, in order.
+         *
+         * @throws DiskStoreException if the spool cannot be opened or holds a
+         *     record that cannot be decoded
+         */
+        public static EventBusSink durable(BlockingQueue<{{.AccountingRecordJavaType}}> queue,
+                                           String sourceId,
+                                           java.util.function.BooleanSupplier stopped,
+                                           java.nio.file.Path dir) {
+            try {
+                return new EventBusSink(queue, sourceId, stopped, new DiskSpool(dir));
+            } catch (java.io.IOException e) {
+                throw DiskStoreException.invalidData("accounting spool record cannot be decoded in " + dir + ": " + e.getMessage());
+            }
+        }
+
+        private void startDrainer(Runnable body) {
+            Thread drainer = new Thread(body, "accounting-spool");
             drainer.setDaemon(true);
             drainer.start();
+        }
+
+        /**
+         * Records that the publisher acknowledged the oldest record it was handed
+         * and not yet acknowledged. The publish loop calls it once per
+         * acknowledged record, in order. It does nothing for a memory-only sink.
+         */
+        public void ack() {
+            if (disk != null) {
+                acks.add(Boolean.TRUE);
+            }
         }
 
         // Moves spooled records into the publisher queue, one at a time, so the
@@ -422,6 +507,77 @@ public final class AccountingManager {
             }
         }
 
+        // The durable drain loop. It owns the log: it appends each record before
+        // the record is queued for the publisher, and it advances the cursor as
+        // the publisher acknowledges records.
+        private void drainDurable() {
+            try {
+                while (!stopped.getAsBoolean()) {
+                    for ({{.AccountingRecordJavaType}} record = spool.poll(); record != null; record = spool.poll()) {
+                        persist(record);
+                    }
+                    while (acks.poll() != null) {
+                        ackOne();
+                    }
+                    {{.AccountingRecordJavaType}} next = pending.peekFirst();
+                    if (next != null) {
+                        if (queue.offer(next, 50, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                            pending.pollFirst();
+                        }
+                    } else {
+                        {{.AccountingRecordJavaType}} record = spool.poll(50, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        if (record != null) {
+                            persist(record);
+                        }
+                    }
+                }
+                shutdownDurable();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                shutdownDurable();
+            }
+        }
+
+        // Appends one record to the log and queues it for the publisher. A record
+        // the log cannot keep is dropped and counted.
+        private void persist({{.AccountingRecordJavaType}} record) {
+            try {
+                disk.append(encode(record));
+                pending.addLast(record);
+            } catch (DiskStoreException e) {
+                long total = dropped.incrementAndGet();
+                logger.error("accounting record dropped; spool write failed accounting_id={} reason={} dropped_total={}",
+                        record.getAccountingId(), e.getMessage(), total);
+            }
+        }
+
+        private void ackOne() {
+            try {
+                disk.ack();
+            } catch (DiskStoreException e) {
+                logger.error("accounting spool cursor not written; records may be republished: {}", e.getMessage());
+            }
+        }
+
+        // Persists the cursor and counts the records that never reached the log.
+        // Records already in the log are kept for replay on the next start.
+        private void shutdownDurable() {
+            while (acks.poll() != null) {
+                ackOne();
+            }
+            try {
+                disk.flush();
+            } catch (DiskStoreException e) {
+                logger.error("accounting spool cursor not written at shutdown; records may be republished: {}", e.getMessage());
+            }
+            long n = spool.size();
+            if (n > 0) {
+                long total = dropped.addAndGet(n);
+                logger.error("accounting publisher closed; records dropped dropped={} dropped_total={}", n, total);
+            }
+            logger.info("accounting spool closed; unpublished records kept on disk for replay records={}", pending.size());
+        }
+
         // Counts and logs every record the drain thread still owns: the one in
         // hand, if any, and everything left in the spool.
         private void dropOnShutdown({{.AccountingRecordJavaType}} inHand) {
@@ -431,6 +587,26 @@ public final class AccountingManager {
             }
             long total = dropped.addAndGet(n);
             logger.error("accounting publisher closed; records dropped dropped={} dropped_total={}", n, total);
+        }
+
+        private static byte[] encode({{.AccountingRecordJavaType}} record) {
+            return java.util.Base64.getEncoder().encode(record.toByteArray());
+        }
+
+        private static {{.AccountingRecordJavaType}} decode(byte[] line) throws java.io.IOException {
+            byte[] raw;
+            try {
+                raw = java.util.Base64.getDecoder().decode(line);
+            } catch (IllegalArgumentException e) {
+                throw new java.io.IOException("not base64: " + e.getMessage(), e);
+            }
+            return {{.AccountingRecordJavaType}}.parseFrom(raw);
+        }
+
+        // droppedCount is the running total of dropped records. Package-private
+        // so the self-test can check that every record is delivered or counted.
+        long droppedCount() {
+            return dropped.get();
         }
 
         // Mints the record key. accounting_id is assert_required, so it has
@@ -499,6 +675,115 @@ public final class AccountingManager {
             if (!spool.offer(record)) {
                 long total = dropped.incrementAndGet();
                 logger.error("accounting spool full; record dropped accounting_id={} dropped_total={}", record.getAccountingId(), total);
+            }
+        }
+
+        // DiskSpool is the durable spool: an append-only log of the records since
+        // its last compaction, one base64-encoded record per line, and a cursor
+        // counting how many of them the publisher has acknowledged. Only the
+        // drain thread touches it after construction.
+        private static final class DiskSpool {
+            private final java.nio.file.Path dir;
+            private final java.util.List<byte[]> unacked;
+            private int acked;   // records the publisher has acknowledged: the cursor
+            private int saved;   // the cursor as last written
+            private int total;   // records in the log
+            private long size;   // bytes in the log
+
+            DiskSpool(java.nio.file.Path dir) {
+                this.dir = dir;
+                this.acked = readCursor(dir);
+                this.saved = acked;
+                java.util.List<byte[]> lines = AppendLog.readLines(dir, SPOOL_LOG);
+                if (acked > lines.size()) {
+                    throw DiskStoreException.invalidData("accounting spool cursor " + acked + " is past its "
+                            + lines.size() + " records in " + dir);
+                }
+                this.total = lines.size();
+                this.unacked = new java.util.ArrayList<>(lines.subList(acked, lines.size()));
+                for (byte[] line : lines) {
+                    size += line.length + 1L;
+                }
+            }
+
+            // pendingLines returns the lines the publisher had not acknowledged, in order.
+            java.util.List<byte[]> pendingLines() {
+                return unacked;
+            }
+
+            // append writes one record line to the log. It fails without writing
+            // when the record would take the spool past SPOOL_BYTES.
+            void append(byte[] line) {
+                if (size + line.length + 1L > SPOOL_BYTES) {
+                    throw DiskStoreException.invalidData("accounting spool full");
+                }
+                AppendLog.append(dir, SPOOL_LOG, line, 0600);
+                total++;
+                size += line.length + 1L;
+            }
+
+            // ack advances the cursor past one acknowledged record. When every
+            // record in the log has been acknowledged, the log is removed. The
+            // cursor goes back to zero first, so a crash between the two steps
+            // republishes records the bus already has rather than losing one.
+            void ack() {
+                acked++;
+                if (acked == total) {
+                    try {
+                        writeCursor(dir, 0);
+                    } catch (DiskStoreException e) {
+                        acked--;
+                        throw e;
+                    }
+                    saved = 0;
+                    acked = 0;
+                    total = 0;
+                    size = 0;
+                    try {
+                        java.nio.file.Files.deleteIfExists(dir.resolve(SPOOL_LOG));
+                    } catch (java.io.IOException e) {
+                        throw DiskStoreException.io("remove accounting spool log: " + e.getMessage(), e);
+                    }
+                    return;
+                }
+                if (acked - saved >= CURSOR_EVERY) {
+                    writeCursor(dir, acked);
+                    saved = acked;
+                }
+            }
+
+            // flush writes the cursor if it has moved since it was last written.
+            void flush() {
+                if (acked != saved) {
+                    writeCursor(dir, acked);
+                    saved = acked;
+                }
+            }
+
+            private static int readCursor(java.nio.file.Path dir) {
+                if (!PlainFile.exists(dir, SPOOL_CURSOR)) {
+                    return 0;
+                }
+                String raw = new String(PlainFile.readAll(dir, SPOOL_CURSOR), java.nio.charset.StandardCharsets.UTF_8).trim();
+                try {
+                    int n = Integer.parseInt(raw);
+                    if (n < 0) {
+                        throw new NumberFormatException(raw);
+                    }
+                    return n;
+                } catch (NumberFormatException e) {
+                    throw DiskStoreException.invalidData("accounting spool cursor \"" + raw + "\" is not a count");
+                }
+            }
+
+            // writeCursor writes the cursor atomically (see FsUtil.atomicWrite).
+            private static void writeCursor(java.nio.file.Path dir, int n) {
+                try {
+                    java.nio.file.Files.createDirectories(dir.resolve("accounting-spool"));
+                } catch (java.io.IOException e) {
+                    throw DiskStoreException.io("create accounting spool dir: " + e.getMessage(), e);
+                }
+                FsUtil.atomicWrite(dir.resolve(SPOOL_CURSOR), (n + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8), 0600);
             }
         }
     }

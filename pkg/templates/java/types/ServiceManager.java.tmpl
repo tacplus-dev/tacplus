@@ -1104,14 +1104,22 @@ public class ServiceManager implements AutoCloseable {
         // chassis/am.
         {
             BlockingQueue<{{.TypeOuterClass}}.{{.TypeName}}> accountingQueue = new ArrayBlockingQueue<>(1024);
+            String accountingSourceId = "{{$.ServiceLabel}}" + "-" + getInstanceId();
+            // With grpcconfig.disk_persistence set the spool is durable: it survives
+            // a restart and replays in order.
+            final AccountingManager.EventBusSink accountingSink;
+            if (config.hasDiskPersistence() && !config.getDiskPersistence().getDir().isEmpty()) {
+                accountingSink = AccountingManager.EventBusSink.durable(accountingQueue, accountingSourceId,
+                        () -> closing, java.nio.file.Paths.get(config.getDiskPersistence().getDir()));
+            } else {
+                accountingSink = new AccountingManager.EventBusSink(accountingQueue, accountingSourceId, () -> closing);
+            }
             startManagedThread(
                     "{{.ThreadName}}",
                     true,
-                    () -> {{.ResolveLoopName}}(accountingQueue));
-            String accountingSourceId = "{{$.ServiceLabel}}" + "-" + getInstanceId();
+                    () -> {{.ResolveLoopName}}(accountingQueue, accountingSink::ack));
             AccountingManager.Emitter accountingEmitter = new AccountingManager.Emitter(
-                    accountingSourceId,
-                    new AccountingManager.EventBusSink(accountingQueue, accountingSourceId, () -> closing));
+                    accountingSourceId, accountingSink);
 {{- range $.GrpcServices}}
 {{- if .HasAccounting}}
             {{.WrapperVarName}}.setEmitter(accountingEmitter);
@@ -2444,8 +2452,9 @@ public class ServiceManager implements AutoCloseable {
     // already-enqueued record — the EventBusSink spool (which replays into
     // this queue, in order) is what keeps a record through an outage; this
     // loop just makes sure an accepted record is retried until it is durably
-    // published.
-    private void {{.ResolveLoopName}}(BlockingQueue<{{.TypeOuterClass}}.{{.TypeName}}> queue) {
+    // published. onAck runs once per acknowledged record, in order, so a durable
+    // spool can advance its cursor.
+    private void {{.ResolveLoopName}}(BlockingQueue<{{.TypeOuterClass}}.{{.TypeName}}> queue, Runnable onAck) {
         long backoff = ReconnectBackoff.INITIAL_MS;
         {{.TypeOuterClass}}.{{.TypeName}} pending = null;
 
@@ -2460,6 +2469,7 @@ public class ServiceManager implements AutoCloseable {
                 io.grpc.Channel ebConn = resolveService("{{.TargetService}}");
                 {{.StreamName}}(ebConn, pending);
                 pending = null;
+                onAck.run();
                 backoff = ReconnectBackoff.INITIAL_MS;
             } catch (Exception e) {
                 LOG.warning("accounting publisher {{.Label}} publish attempt failed for broker {{.TargetService}}, retrying in " + backoff + "ms: " + e.getMessage());

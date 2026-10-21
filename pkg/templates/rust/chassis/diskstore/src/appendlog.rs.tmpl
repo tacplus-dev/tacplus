@@ -1,0 +1,231 @@
+// Copyright (c) 2026 Seabeam LLC
+// SPDX-License-Identifier: Apache-2.0
+
+//! Append-only history log: a caller-chosen file under a base directory that
+//! keeps every line, in order, with no dedup. The Rust twin of the Java
+//! `AppendLog` (see docs/API.md, Append-only history and plain file reads).
+//!
+//! Unlike the redo log, the file is not keyed and carries no envelope. Each line
+//! is written verbatim followed by one newline, so the file is newline-delimited
+//! data the caller already owns.
+
+use crate::error::{DiskStoreError, Result};
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
+
+/// Serializes appends from this process, so two writers cannot interleave their
+/// bytes in one file.
+static APPEND_LOCK: Mutex<()> = Mutex::new(());
+
+/// The append-only history log. It has no state: the file is the caller's path
+/// under `base`.
+pub struct AppendLog;
+
+impl AppendLog {
+    /// Appends `line` verbatim as one line of `base/rel`, creating the file and
+    /// its parent directories if absent, and fsyncs before returning. `mode` is
+    /// the Unix permission applied when the file is created; 0 leaves the default.
+    /// An existing file keeps its permissions. A line containing a newline is
+    /// rejected.
+    pub fn append(base: &Path, rel: &str, line: &[u8], mode: u32) -> Result<()> {
+        let path = resolve(base, rel)?;
+        if line.contains(&b'\n') {
+            return Err(DiskStoreError::invalid_data("append line contains a newline"));
+        }
+        let mut framed = Vec::with_capacity(line.len() + 1);
+        framed.extend_from_slice(line);
+        framed.push(b'\n');
+
+        let _guard = APPEND_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let created = !path.exists();
+        let dir = path.parent().map(Path::to_path_buf);
+        if let Some(dir) = &dir {
+            fs::create_dir_all(dir).map_err(io_err)?;
+        }
+        let mut f = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(io_err)?;
+        drop_torn_tail(&mut f)?;
+        f.seek(SeekFrom::End(0)).map_err(io_err)?;
+        f.write_all(&framed).map_err(io_err)?;
+        f.sync_all().map_err(io_err)?;
+        drop(f);
+        if created {
+            apply_mode(&path, mode)?;
+            if let Some(dir) = &dir {
+                sync_dir(dir);
+            }
+        }
+        Ok(())
+    }
+
+    /// Every complete line of `base/rel`, in the order appended, each without its
+    /// terminator. Lines are not deduplicated. An absent file reads as no lines. A
+    /// trailing fragment with no terminator (a crash mid-append) is not a line and
+    /// is dropped.
+    pub fn read_lines(base: &Path, rel: &str) -> Result<Vec<Vec<u8>>> {
+        let path = resolve(base, rel)?;
+        let data = match fs::read(&path) {
+            Ok(data) => data,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(io_err(e)),
+        };
+        let mut lines = Vec::new();
+        let mut start = 0;
+        for (i, b) in data.iter().enumerate() {
+            if *b == b'\n' {
+                lines.push(data[start..i].to_vec());
+                start = i + 1;
+            }
+        }
+        Ok(lines)
+    }
+}
+
+fn io_err(e: std::io::Error) -> DiskStoreError {
+    DiskStoreError::io(e.to_string())
+}
+
+/// Truncates an unterminated tail left by a crash mid-append. `read_lines` drops
+/// it, so the next append must drop it too, or its line would be glued onto the
+/// torn bytes.
+fn drop_torn_tail(f: &mut fs::File) -> Result<()> {
+    let size = f.metadata().map_err(io_err)?.len();
+    let mut keep = size;
+    let mut one = [0u8; 1];
+    while keep > 0 {
+        f.seek(SeekFrom::Start(keep - 1)).map_err(io_err)?;
+        f.read_exact(&mut one).map_err(io_err)?;
+        if one[0] == b'\n' {
+            break;
+        }
+        keep -= 1;
+    }
+    if keep != size {
+        f.set_len(keep).map_err(io_err)?;
+    }
+    Ok(())
+}
+
+/// Resolves `rel` under `base`. An empty or absolute path, or one that escapes
+/// `base`, is rejected.
+fn resolve(base: &Path, rel: &str) -> Result<PathBuf> {
+    let p = Path::new(rel);
+    if rel.is_empty() || p.is_absolute() {
+        return Err(DiskStoreError::invalid_data("append log path must be relative and non-empty"));
+    }
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            Component::Normal(c) => out.push(c),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    return Err(DiskStoreError::invalid_data("append log path escapes its base directory"));
+                }
+            }
+            _ => return Err(DiskStoreError::invalid_data("append log path escapes its base directory")),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        return Err(DiskStoreError::invalid_data("append log path must name a file"));
+    }
+    Ok(base.join(out))
+}
+
+#[cfg(unix)]
+fn apply_mode(path: &Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    if mode != 0 {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(io_err)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn apply_mode(_path: &Path, _mode: u32) -> Result<()> {
+    Ok(())
+}
+
+// Best-effort, matching the fsutil sync_dir: the rename-free append needs the
+// directory entry durable only for a freshly created file.
+#[cfg(unix)]
+fn sync_dir(dir: &Path) {
+    if let Ok(d) = fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn round_trip_keeps_every_line_in_order() {
+        let base = tempdir().unwrap();
+        let rel = "history/events.jsonl";
+        let lines: [&[u8]; 5] = [br#"{"k":"a","v":1}"#, br#"{"k":"b","v":"\\n escaped"}"#, "café".as_bytes(), b"same", b"same"];
+        for line in lines {
+            AppendLog::append(base.path(), rel, line, 0).unwrap();
+        }
+        let got = AppendLog::read_lines(base.path(), rel).unwrap();
+        assert_eq!(got.len(), lines.len(), "history must keep duplicates");
+        for (g, w) in got.iter().zip(lines.iter()) {
+            assert_eq!(g.as_slice(), *w);
+        }
+    }
+
+    #[test]
+    fn absent_file_reads_as_no_lines() {
+        let base = tempdir().unwrap();
+        assert!(AppendLog::read_lines(base.path(), "never/written.jsonl").unwrap().is_empty());
+    }
+
+    #[test]
+    fn rejects_newline_and_escaping_paths() {
+        let base = tempdir().unwrap();
+        AppendLog::append(base.path(), "a.jsonl", b"first", 0).unwrap();
+        assert!(AppendLog::append(base.path(), "a.jsonl", b"two\nlines", 0).is_err());
+        for rel in ["", "../escape.jsonl", "a/../../escape.jsonl", "/etc/passwd", "."] {
+            assert!(AppendLog::append(base.path(), rel, b"x", 0).is_err(), "append accepted {rel:?}");
+            assert!(AppendLog::read_lines(base.path(), rel).is_err(), "read accepted {rel:?}");
+        }
+        assert_eq!(AppendLog::read_lines(base.path(), "a.jsonl").unwrap(), vec![b"first".to_vec()]);
+    }
+
+    #[test]
+    fn drops_torn_tail_then_appends_cleanly() {
+        let base = tempdir().unwrap();
+        let rel = "torn/log.jsonl";
+        AppendLog::append(base.path(), rel, b"complete", 0).unwrap();
+        let mut f = OpenOptions::new().append(true).open(base.path().join(rel)).unwrap();
+        f.write_all(br#"{"partial"#).unwrap();
+        drop(f);
+        assert_eq!(AppendLog::read_lines(base.path(), rel).unwrap(), vec![b"complete".to_vec()]);
+        AppendLog::append(base.path(), rel, b"next", 0).unwrap();
+        assert_eq!(
+            AppendLog::read_lines(base.path(), rel).unwrap(),
+            vec![b"complete".to_vec(), b"next".to_vec()],
+            "an append after a torn tail glued onto it"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn creates_file_with_requested_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = tempdir().unwrap();
+        AppendLog::append(base.path(), "secret.jsonl", b"secret", 0o600).unwrap();
+        let mode = fs::metadata(base.path().join("secret.jsonl")).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+}

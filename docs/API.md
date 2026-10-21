@@ -415,8 +415,9 @@ Rust, Python and TypeScript ignore the field (see `roadmap/LANGUAGE_PARITY.md`).
 
 A redo log is keyed and deduplicated on read, so it is the wrong primitive for a
 full history such as a daily tombstone file. Java also exposes the primitives
-for files that are neither snapshots nor redo logs. Go, Rust, Python and
-TypeScript have neither (see `roadmap/LANGUAGE_PARITY.md`).
+for files that are neither snapshots nor redo logs. Go and Rust have
+`AppendLog` (issue #70) but not `PlainFile`; Python and TypeScript have neither
+(see `roadmap/LANGUAGE_PARITY.md`).
 
 - **`AppendLog.append(base, relPath, line, mode)`** writes `line` verbatim
   followed by one `\n`, creating `relPath`'s parent directories and the file
@@ -789,6 +790,21 @@ record to a bounded in-process spool of 4096 records and returns; the publisher
 replays the spool, in order, as the event bus drains it. A record is dropped only
 when the spool is full or (Go, Java, Rust) the service is shutting down, and each
 drop is logged at ERROR with a running total (issue #34).
+
+With `grpcconfig.disk_persistence` set, Go, Java and Rust make the spool durable
+(issue #70). The spool is an append-only log under `disk_persistence.dir`
+(`accounting-spool/records.log`, one base64 record per line), and a cursor
+(`accounting-spool/cursor`) counts the records the event bus has acknowledged. A
+record is appended to the log before it is queued for the publisher, and a restart
+replays every record not yet acknowledged, in order. Delivery is at-least-once: a
+crash can republish up to 64 records the bus already acknowledged, so consumers
+must deduplicate on `accounting_id`. A record emitted but not yet appended when the
+process dies is lost; that window is the time between emit and the spool's append.
+The on-disk spool is bounded at 64 MiB; records past it are dropped and counted.
+The durable spool is not on the RPC path: the append and its fsync run on the
+spool task, never inside an RPC. Without `disk_persistence` the spool stays in
+memory, as before, and is lost on restart. Python and TypeScript have only the
+in-memory spool (see `roadmap/LANGUAGE_PARITY.md`).
 
 `registry.json` is the machine-readable semantic IR. Service-local generators
 must read `registry.json`, not parse proto files directly, when they need

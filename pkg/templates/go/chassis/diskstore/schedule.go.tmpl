@@ -53,7 +53,7 @@ func RunRollScheduler(ctx context.Context, log *RedoLog, interval time.Duration,
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if err := log.Roll(snapshot()); err != nil {
+			if err := log.rollFrom(snapshot); err != nil {
 				fmt.Fprintf(os.Stderr, "diskstore roll failed for %s: %v\n", nodeID, err)
 			}
 		}

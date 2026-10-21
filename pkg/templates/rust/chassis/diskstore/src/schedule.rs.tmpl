@@ -45,8 +45,15 @@ where
     ticker.tick().await; // first tick fires immediately; consume it
     loop {
         ticker.tick().await;
-        let snap = snapshot().await;
-        if let Err(err) = log.roll(&snap) {
+        // Redirect before the snapshot, so a write during the snapshot is folded in.
+        let result = match log.redirect_appends() {
+            Ok(()) => {
+                let snap = snapshot().await;
+                log.fold_and_swap(&snap)
+            }
+            Err(err) => Err(err),
+        };
+        if let Err(err) = result {
             log::warn!(
                 "diskstore roll failed; retrying on next interval: node_id={} error={}",
                 node_id,
@@ -69,5 +76,57 @@ mod tests {
         assert_eq!(a, b); // stable for the same node
         assert!(a < interval && c < interval); // within the interval
         assert_ne!(a, c); // (very likely) staggered across nodes
+    }
+
+    fn rec(key: &str, v: i64) -> Record {
+        Record {
+            key: key.into(),
+            deleted: false,
+            metadata: None,
+            payload: Some(serde_json::json!({ "v": v })),
+        }
+    }
+
+    struct Collect(Vec<Record>);
+    impl crate::redolog::Inserter for Collect {
+        fn insert(&mut self, r: &Record) -> crate::error::Result<()> {
+            self.0.push(r.clone());
+            Ok(())
+        }
+    }
+
+    // A write that lands while the roll scheduler is taking its snapshot must
+    // survive a local restore. The write comes from the snapshot future, mid-snapshot.
+    // Only a snapshot read after the redirect keeps it: before the redirect the
+    // write goes to the old active log, which the new baseline leaves out.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn roll_scheduler_keeps_concurrent_append() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let dir = tempfile::tempdir().unwrap();
+        let log = RedoLog::open(dir.path(), "/drpepper", "verifying_keys", 2, crate::Codec::Gz).unwrap();
+        log.append(&rec("a", 1)).unwrap();
+
+        let injected = AtomicBool::new(false);
+        let (log_ref, injected_ref) = (&log, &injected);
+        let roll = run_roll_scheduler(&log, Duration::from_secs(1), "node-0", move || async move {
+            let snap = crate::redolog::dedup_file(log_ref.active_path()).unwrap();
+            if !injected_ref.swap(true, Ordering::SeqCst) {
+                log_ref.append(&rec("b", 9)).unwrap();
+            }
+            snap
+        });
+        // The scheduler loops forever. Its first roll lands within two intervals;
+        // dropping it at a tick leaves that roll complete.
+        let _ = tokio::time::timeout(Duration::from_secs(4), roll).await;
+
+        assert!(injected.load(Ordering::SeqCst), "the roll scheduler should have taken a snapshot");
+        let mut c = Collect(Vec::new());
+        log.restore(&mut c).unwrap();
+        assert!(
+            c.0.iter().any(|r| r.key == "b"),
+            "a write made during the roll snapshot must survive a local restore, got {} record(s)",
+            c.0.len()
+        );
     }
 }

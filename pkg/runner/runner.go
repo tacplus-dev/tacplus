@@ -84,13 +84,9 @@ func Build(p Params) error {
 			existing.diff(currentHash)
 		}
 
-		// Inputs changed (or no cache) — clean generated content for regeneration.
-		// Preserve hand-maintained files (pom.xml, etc.) that aren't regenerated.
-		zap.L().Info("Inputs changed, cleaning output dir for rebuild",
-			zap.String("output", rc.config.OutputDir))
-		if err := cleanOutputDir(rc.config.OutputDir); err != nil {
-			return fmt.Errorf("clean output dir: %w", err)
-		}
+		// Inputs changed (or no cache): the builder clears the previous output
+		// once validation has passed.
+		rc.config.ClearOutput = true
 	}
 
 	zap.L().Info("Building", zap.String("language", rc.config.Language),
@@ -713,32 +709,6 @@ func selfPackageFromCanonical(canonical string) string {
 		return canonical[idx+1:]
 	}
 	return canonical
-}
-
-// cleanOutputDir removes generated content from the output directory while
-// preserving hand-maintained files (pom.xml, etc.) that aren't regenerated.
-func cleanOutputDir(dir string) error {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	// Preserve files that are hand-maintained and not regenerated.
-	preserve := map[string]bool{
-		"pom.xml": true,
-	}
-	for _, entry := range entries {
-		if preserve[entry.Name()] {
-			continue
-		}
-		p := filepath.Join(dir, entry.Name())
-		if err := os.RemoveAll(p); err != nil {
-			return fmt.Errorf("remove %s: %w", entry.Name(), err)
-		}
-	}
-	return nil
 }
 
 func loadDepsYAML(path string) (*depsYAML, error) {

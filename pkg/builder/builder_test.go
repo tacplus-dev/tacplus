@@ -352,3 +352,33 @@ func mustWriteProto(t *testing.T, root, rel string) {
 		t.Fatalf("write %s: %v", rel, err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// cleanOutputDir (issue #95)
+// ---------------------------------------------------------------------------
+
+func TestCleanOutputDirKeepsHandMaintainedFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, rel := range []string{"pom.xml", "stale.go", "services/old.go"} {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := cleanOutputDir(dir); err != nil {
+		t.Fatalf("cleanOutputDir: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "pom.xml")); err != nil {
+		t.Errorf("pom.xml was removed: %v", err)
+	}
+	for _, rel := range []string{"stale.go", "services"} {
+		if _, err := os.Stat(filepath.Join(dir, rel)); !os.IsNotExist(err) {
+			t.Errorf("%s survived the clean: %v", rel, err)
+		}
+	}
+}

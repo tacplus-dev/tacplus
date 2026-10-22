@@ -452,6 +452,40 @@ public class DiskStoreTest {
         }
     }
 
+    // A roll with nothing appended since the previous roll ships nothing; a roll
+    // after one append ships exactly one more segment.
+    private static void testIdleRollShipsNothing() throws Exception {
+        Path dir = Files.createTempDirectory("ds-idle-");
+        try {
+            Path base = dir.resolve("data");
+            MemSink sink = new MemSink();
+            RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.NONE);
+            ArchiveShipper shipper = new ArchiveShipper(sink, "tenant", "node-a", "verifying_keys", Codec.NONE, 1);
+            log.attachShipper(shipper);
+            try {
+                log.append(RedoLog.Record.upsert("a", "{\"v\":1}"));
+                log.roll(RedoLog.dedupFile(log.activePath()));
+                log.roll(RedoLog.dedupFile(log.activePath()));
+                check(awaitDrained(shipper), "the queue should drain after idle rolls");
+                check(sink.list("tenant/node-a/verifying_keys/segments/").size() == 1,
+                        "two rolls with no append between them must ship one segment, got "
+                                + sink.list("tenant/node-a/verifying_keys/segments/").size());
+
+                log.append(RedoLog.Record.upsert("b", "{\"v\":2}"));
+                log.roll(RedoLog.dedupFile(log.activePath()));
+                check(awaitDrained(shipper), "the queue should drain after a roll with an append");
+                check(sink.list("tenant/node-a/verifying_keys/segments/").size() == 2,
+                        "a roll after one append must ship one more segment, got "
+                                + sink.list("tenant/node-a/verifying_keys/segments/").size());
+            } finally {
+                log.close();
+                shipper.close();
+            }
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
     // Checkpoint, then updates and a delete, then roll: restore from the sink
     // into an empty store reproduces the live store exactly.
     private static void testArchiveRestoreReproducesStore() throws Exception {
@@ -612,6 +646,7 @@ public class DiskStoreTest {
                 .setLevel(java.util.logging.Level.OFF);
         testSegmentKeptUntilUploaded();
         testAppendsDoNotWaitForUploads();
+        testIdleRollShipsNothing();
         testArchiveRestoreReproducesStore();
         testRestoreRejectsMissingSegment();
 

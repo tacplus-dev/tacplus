@@ -61,6 +61,10 @@ pub struct RedoLog {
 struct Inner {
     /// Current append target (the active log, or the temp log during a roll).
     writer: Option<File>,
+    /// Count of every append. `rolled_through` is the count the last committed
+    /// roll covered; a roll with nothing new since then has nothing to compact.
+    appended: u64,
+    rolled_through: Option<u64>,
 }
 
 impl RedoLog {
@@ -85,7 +89,7 @@ impl RedoLog {
             active,
             archive_count,
             archive_codec,
-            inner: Mutex::new(Inner { writer: Some(writer) }),
+            inner: Mutex::new(Inner { writer: Some(writer), appended: 0, rolled_through: None }),
         })
     }
 
@@ -99,6 +103,7 @@ impl RedoLog {
         let mut line = serde_json::to_vec(rec)?;
         line.push(b'\n');
         let mut g = self.inner.lock().expect("redolog lock poisoned");
+        g.appended += 1;
         let writer = g
             .writer
             .as_mut()
@@ -117,10 +122,14 @@ impl RedoLog {
         let building = sibling(&self.active, ".building");
 
         // 1. Redirect appends to the temp log (no write-block during snapshot).
-        {
+        let seen = {
             let mut g = self.inner.lock().expect("redolog lock poisoned");
+            if g.rolled_through == Some(g.appended) {
+                return Ok(());
+            }
             g.writer = Some(OpenOptions::new().create(true).append(true).open(&temp_path)?);
-        }
+            g.appended
+        };
 
         // 2. Build the new baseline from the snapshot (build-then-rename: the
         //    presence of `building` means it is complete + durable).
@@ -158,6 +167,7 @@ impl RedoLog {
             // Resume appends on the (new) active log.
             g.writer = Some(OpenOptions::new().create(true).append(true).open(&self.active)?);
             let _ = std::fs::remove_file(&temp_path);
+            g.rolled_through = Some(seen);
         }
         Ok(())
     }
@@ -305,6 +315,25 @@ mod tests {
         log.restore(&mut c).unwrap();
         assert_eq!(c.0.len(), 2);
         assert!(dir.path().join("drpepper/verifying_keys.log.bak.1").exists());
+    }
+
+    // A roll with nothing appended since the previous roll writes nothing: no
+    // archive rotation. A roll after one append rotates once more.
+    #[test]
+    fn idle_roll_writes_nothing() {
+        let dir = tempdir().unwrap();
+        let log = RedoLog::open(dir.path(), "/drpepper", "verifying_keys", 3, Codec::None).unwrap();
+        log.append(&rec("a", 1)).unwrap();
+
+        let snap = dedup_file(log.active_path()).unwrap();
+        log.roll(&snap).unwrap();
+        log.roll(&snap).unwrap();
+        let bak2 = dir.path().join("drpepper/verifying_keys.log.bak.2");
+        assert!(!bak2.exists(), "an idle roll must not rotate the archive");
+
+        log.append(&rec("b", 2)).unwrap();
+        log.roll(&snap).unwrap();
+        assert!(bak2.exists(), "a roll after an append must rotate the archive");
     }
 
     #[test]

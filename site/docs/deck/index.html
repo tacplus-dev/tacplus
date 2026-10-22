@@ -1,0 +1,99 @@
+<!doctype html>
+<!--
+  Copyright (c) 2026 Jody Scott
+  SPDX-License-Identifier: Apache-2.0
+
+  The tacplus deck: what it does and why. The slides are Markdown in
+  slides.md.txt beside this file (a .txt so MkDocs copies it as-is instead of
+  rendering it as a page), loaded by reveal.js's markdown plugin. Slides are
+  separated by a line holding only "---", speaker notes start at "Note:".
+  Press S for the speaker view, Esc for the overview, ? for the key map.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tacplus: the deck</title>
+  <meta name="description" content="What tacplus does and why: the problem, how annotated protobuf solves it, and what the hosting platform must provide.">
+  <link rel="icon" href="../assets/favicon.svg">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reset.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/theme/black.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/plugin/highlight/monokai.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <style>
+    /* The tacplus.dev dark palette (site/docs/assets/extra.css, slate scheme). */
+    :root {
+      --r-background-color: #0d2036;
+      --r-main-font: Inter, system-ui, sans-serif;
+      --r-main-font-size: 34px;
+      --r-main-color: #dbe5ee;
+      --r-heading-font: Inter, system-ui, sans-serif;
+      --r-heading-color: #ffffff;
+      --r-heading-text-transform: none;
+      --r-heading-letter-spacing: -0.02em;
+      --r-heading1-size: 2.2em;
+      --r-heading2-size: 1.5em;
+      --r-heading3-size: 1.1em;
+      --r-code-font: "JetBrains Mono", ui-monospace, monospace;
+      --r-link-color: #7cc0ff;
+      --r-link-color-hover: #b5dcff;
+      --r-selection-background-color: #2ec4b6;
+      --tp-accent: #2ec4b6;
+      --tp-muted: #8fa3b7;
+    }
+    .reveal-viewport { background: linear-gradient(135deg, #0f2137 0%, #15324f 55%, #0f5a54 100%); }
+    .reveal .slides { text-align: left; }
+    .reveal .slides section { padding: 0 0.4em; }
+    .reveal h1, .reveal h2 { margin-bottom: 0.6em; }
+    .reveal h2 { border-bottom: 2px solid var(--tp-accent); padding-bottom: 0.2em; }
+    .reveal ul { display: block; margin-left: 1em; }
+    .reveal li { margin: 0.25em 0; }
+    .reveal strong { color: #ffffff; }
+    .reveal em { color: #c9dff3; }
+    .reveal .title { text-align: center; }
+    .reveal .title h1 { font-size: 3.4em; margin-bottom: 0.2em; }
+    .reveal .title p { color: var(--tp-accent); font-size: 1.1em; }
+    .reveal .title .small, .reveal .small { color: var(--tp-muted); font-size: 0.7em; }
+    .reveal pre { width: 100%; font-size: 0.5em; line-height: 1.35; box-shadow: none; }
+    .reveal pre code { padding: 0.8em 1em; max-height: 560px; border-radius: 0.3em; }
+    .reveal code:not(pre code) { color: #ffffff; background: rgba(255, 255, 255, 0.1); padding: 0 0.25em; border-radius: 0.2em; }
+    /* Two-column "tacplus does / upstream must do" slides are Markdown tables. */
+    .reveal table { font-size: 0.72em; width: 100%; margin: 0; }
+    .reveal table th { color: var(--tp-accent); text-align: left; border-bottom: 2px solid var(--tp-accent); }
+    .reveal table td { vertical-align: top; border-bottom: 1px solid rgba(255, 255, 255, 0.18); }
+    .reveal table th, .reveal table td { padding: 0.35em 0.5em; width: 50%; }
+    .reveal table tr:last-child td { border-bottom: none; }
+    .reveal blockquote { width: 100%; font-style: normal; background: rgba(255, 255, 255, 0.07); box-shadow: none; padding: 0.4em 0.8em; }
+    .reveal .progress { color: var(--tp-accent); }
+    .reveal .controls { color: var(--tp-accent); }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+      <section data-markdown="slides.md.txt"
+               data-separator="^\n---\n$"
+               data-separator-notes="^Note:"
+               data-charset="utf-8">
+      </section>
+    </div>
+  </div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/plugin/markdown/markdown.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/plugin/highlight/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/plugin/notes/notes.min.js"></script>
+  <script>
+    Reveal.initialize({
+      hash: true,
+      slideNumber: "c/t",
+      width: 1280,
+      height: 720,
+      margin: 0.06,
+      transition: "fade",
+      plugins: [RevealMarkdown, RevealHighlight, RevealNotes]
+    });
+  </script>
+</body>
+</html>

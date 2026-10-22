@@ -1,0 +1,461 @@
+<!-- .slide: class="title" -->
+# tacplus
+
+Annotated protobuf in. Complete services and clients out.
+
+<p class="small">A compiler for Protocol Buffer definitions that carry <code>spec</code> annotations.<br>
+<a href="https://tacplus.dev">tacplus.dev</a> · <a href="https://github.com/tacplus-dev/tacplus">github.com/tacplus-dev/tacplus</a> · Apache-2.0</p>
+
+Note:
+This deck is grounded in docs/THEORY.md and docs/USER.md on tacplus.dev. It
+makes three arguments: the problem is real and the usual answers do not hold;
+putting the whole contract in proto lets a compiler generate everything that
+follows from it; and there is a clear line between what tacplus generates and
+what the platform that hosts the generated services must provide.
+
+---
+
+## The problem, part 1: the same infrastructure, every service
+
+Every service needs the same things:
+
+- typed messages, validated inputs, serialization
+- authentication, authorization
+- state, health reporting
+
+In a multi-language platform, each service needs **all of it in its own
+language**, following the same contracts as every other service.
+
+Note:
+Building microservices is repetitive. The infrastructure is not the
+interesting part of any service, yet every service pays for it again, and
+pays for it once per language.
+
+---
+
+## The problem, part 2: the contract is scattered
+
+What the system *is* lives nowhere in particular:
+
+- **which values are valid** — in validation code, per language
+- **who may call what** — in auth checks, per service
+- **who owns which state** — in conventions, in heads
+
+There is no single place that says what the system actually is.
+
+Note:
+This is the deeper issue. The contract is spread across code in several
+languages, so no artifact can be read, checked, or generated from.
+
+---
+
+## The problem, part 3: how it fails
+
+- A validation rule changes in one language and not another.
+- A service starts writing state it does not own.
+- An auth check is added here but not there.
+- Contracts drift. Partial enforcement is **silent**: nothing fails.
+- Somewhere, an important invariant exists only in a developer's head.
+
+An agent working in that codebase inherits the same problem: it sees the
+fragments, never the whole.
+
+Note:
+None of these failures is loud. A missing check is indistinguishable from a
+deliberate omission, and a rule that holds in two of three languages passes
+every test in those two.
+
+---
+
+## Why the usual answers fail
+
+| answer | why it does not hold |
+|---|---|
+| hand-rolled validation | written per language, drifts per language |
+| shared libraries, per-language frameworks | one per language, kept in step by hand |
+| documented conventions | documented, not checked |
+| discipline | not machine-checkable |
+
+> "It works — until it doesn't."
+
+Note:
+THEORY.md names the usual approach as a combination of hand-rolled
+validation, shared libraries, documented conventions, and discipline. The
+common weakness is that none of them is a machine-checkable contract. The
+non-negotiable bias in tacplus is toward machine-checkable contracts.
+
+---
+
+## The insight
+
+Proto files already describe the **shape** of your data: every message, every
+field, every type, declared once, in a language the whole system agrees on.
+
+What if they described **everything**?
+
+- the constraints
+- the ownership
+- the auth policy
+
+Then a compiler can read the richer definitions and generate everything that
+flows from them.
+
+Note:
+Not just serialization stubs: the complete service infrastructure for the
+server languages, plus compatible client packages for client-only targets,
+from a single source of truth.
+
+---
+
+## What tacplus is
+
+A compiler. It reads `.proto` files annotated with `spec` options and
+produces complete, runnable service infrastructure.
+
+- **Input**: annotated proto files, plus a `tacplus.yaml` with the facts that
+  do not belong in proto (language, package, output directory, proto source)
+- **Output**: everything a service needs around its handler
+
+Your code is the handler. Everything else is generated, typed, validated and
+enforced.
+
+Note:
+"types, attributes, constraints, plus more": the Plus is validation, state,
+auth, discovery, lifecycle and parity, generated rather than hand-written.
+
+---
+
+## Annotations are the contract
+
+```protobuf
+option (spec.service) = {name: "notes"};
+
+message CreateNoteRequest {
+  string tenant_namespace = 1 [(spec.assert_required) = true, (spec.assert_min_size) = 1];
+  string text = 2 [(spec.assert_required) = true, (spec.assert_max_size) = 1024];
+}
+
+// Called by authenticated users through the gateway.
+service NotesApi {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  // Create a note in the caller's tenant namespace.
+  rpc CreateNote(CreateNoteRequest) returns (CreateNoteResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL,
+                         flags: [RPC_FLAG_AUTH_ENTITLED_USERS], target_namespace_field: "tenant_namespace"};
+  }
+}
+
+// A state root: a partition of distributed state this service owns.
+message NotesState {
+  option (spec.service_state) = {name: "NotesState", label: ["notesapi"], export: true};
+  repeated Note notes = 1 [(spec.indexed) = true];
+}
+```
+
+Note:
+Field constraints (assert_*), the call surface and auth policy of each rpc
+(service_c2s, spec.rpc), and state ownership (service_state) are all in the
+file every language already compiles from. This is the example service from
+the quick start, shortened.
+
+---
+
+## Generated: around the handler
+
+- **Types and validation**: native protobuf bindings, a validation function
+  for every constraint, serializers for JSON, YAML, TOML and binary
+- **Handler interface and server wrapper**: validates every request and
+  response, runs the auth seams, builds the caller identity, then calls you
+- **Auth interceptors**: JWT verification, entitlement checking, token
+  propagation, declared in proto, not hand-coded
+
+Full-service targets validate at every service boundary; clients validate
+before sending.
+
+Note:
+Auth is not a cross-cutting concern bolted on later; it is a generated
+structural property of the service. A service_s2s service accepts only
+authenticated service callers; a service_c2s service verifies the token and
+checks entitlements before dispatching.
+
+---
+
+## Generated: state and clients
+
+- **State service** (Get / Set / Watch / Delete) for every boundary of a
+  `service_state` root, typed accessors, and **Watch** streams
+- Cross-service access: read-only imports of exported state, enforced
+  server-side against the token's identity
+- **Clients**, decided by the proto, not by YAML:
+  - **C2S** client to service (native gRPC)
+  - **W2S** web to service (REST, SSE, WebSockets)
+  - **S2S** service to service (server languages)
+  - **C2D** client to a local daemon over IPC
+
+Note:
+The state store itself is an interface tacplus defines; a downstream runtime
+implements it. Every message-typed field of a state root is a boundary,
+stored independently and convergent. Services communicate state changes
+through formal contracts, not direct mutation: a single-writer model.
+
+---
+
+## Generated: for tools and agents
+
+- **Every user rpc is an MCP tool**, automatically: schema from the message,
+  description from the rpc comment, the same wrapper and the same
+  authorization as the gRPC call
+- **`registry.json`**: the whole model as data, including the tool catalogue
+  and the entitlement grants
+- **`AGENT.md`**: the architectural norms, generated per build and embedded
+  in `registry.json`
+- A **ServiceManager** that wires identity, TLS, health, config and state in
+  a deployed service
+
+Note:
+An agent does not read the proto, or the code: it reads registry.json, the
+same semantic model that generated the code.
+
+---
+
+## Parity is a build-time invariant
+
+- If tacplus generates service runtime behaviour, it does so for **Go, Rust
+  and Java** with parity: the same validation, the same state semantics,
+  the same accessor interface
+- **TypeScript, Python, Swift and C#** are client-only targets. Asked for
+  service-side output, they **refuse the build loudly** rather than emit a
+  partial server
+- A streaming method a lite client cannot carry becomes a
+  compile-time-unavailable stub, never a silently missing method
+
+Note:
+Parity is checked, not aspired to: an analysis pass runs against the outputs
+and reports divergence. No language is treated as universally superior; the
+only non-negotiable bias is toward machine-checkable contracts.
+
+---
+
+## Identity: typed, derived, separated from attestation
+
+- **Typed**: the kind of a SPIFFE ID (service, workload, user, client,
+  credential, resource) is recoverable from the URI itself
+- **Derived**: the ID is computed from token claims plus deployment config,
+  never a claim itself; one generated helper library, shared test vectors
+- **Separated from attestation**: *who* a principal is and *how* it proved
+  itself are different axes; the login path lives in `azp`, set only by the
+  minter
+- Segments are validated against an allowlist and **rejected, never
+  sanitized**
+
+Note:
+A sanitizer maps two different external values onto one identity; a rejector
+fails closed. The same human logging in via OAuth or a credential pair is
+the same subject, so identity never forks per auth method.
+
+---
+
+## The semantic IR: one file, two consumers
+
+`registry.json` is the normalized, language-neutral model of the service:
+types, services, state roots, auth metadata, generation intent, norms.
+
+- **Build time**: generation, linting, testing, docs, analysis
+- **Runtime**: served from a well-known endpoint, the service is
+  self-describing for discovery, tooling and agents
+
+Every language generator emits the same `registry.json`, so interpretation is
+centralized and per-language semantic drift has nowhere to start.
+
+Note:
+Consumer tooling that needs tacplus semantics reads registry.json; nothing
+downstream parses proto files directly. Proto is the authored source,
+registry.json the compiled model.
+
+---
+
+## What tacplus does, what the upstream must do
+
+tacplus is the compiler. The generated services expect a runtime, defined by
+contract in tacplus and **implemented downstream**, by the platform that
+hosts them.
+
+The next four slides draw that line, surface by surface.
+
+Note:
+"Upstream" here is the platform that hosts the generated services. tacplus
+defines the contracts those services are generated against; it ships no
+platform.
+
+---
+
+## 1. State
+
+| tacplus generates | the upstream must provide |
+|---|---|
+| the state store **as an interface**: gRPC state service, typed accessors, Watch streams, cross-service access control | a **state store that implements it**, the backing-store cluster the ServiceManager connects to |
+| per-entry expiry (`epoch_expiration`), size bounds, instance-keyed entries | the store computing TTL and evicting on expiry |
+| the durable `service_store` surface (Put/Get/Delete/List), quorum-write gates, disk-snapshot helpers | the nodes that make a quorum write durable |
+
+**Honest limit**: `(spec.persistence)` requests boundary durability, and **no
+store implements it today**. It is carried to `registry.json` for a future
+store to act on.
+
+Note:
+USER.md, Persistence and Eviction: the kernel is in-memory coordination and
+holds no durable user data, and generated state clients write nothing to
+local disk. Durable data belongs in stored records. Several eviction
+annotations are declared in spec.proto but not implemented, and generation
+rejects them rather than accept an intent it will not honour.
+
+---
+
+## 2. Identity and auth
+
+| tacplus generates | the upstream must provide |
+|---|---|
+| token parsing and **signature verification**, JWK handling, the Authorizer (verification + entitlement check) | the **token minting service**: validates a service's bootstrap JWT, maps its key to a service identity, resolves identity profiles to concrete entitlements, sets `azp` |
+| the service identity manager: credential pair or cloud-native identity, S2S token mint and refresh | the **signing keys** the ServiceManager subscribes to for verification |
+| the entitlement claim shape, grant tokens, wildcard expansion | the **entitlement and policy source**: which user gets which grants |
+| TLS cert subscription with local keypairs and half-life renewal | the signing side of that cert endpoint |
+
+Note:
+USER.md, Service-to-Service Auth and Entitlements Model. The generated code
+verifies; it never decides who gets a token. Services declare their auth
+policy in proto; the platform decides which principals satisfy it.
+
+---
+
+## 3. Network and lifecycle
+
+| tacplus generates | the upstream must provide |
+|---|---|
+| the gRPC + HTTP server with TLS and the auth interceptor | the **API gateway**: browser-facing TLS termination, routing to the hosting service by its label, W2S over REST / SSE / WebSockets, `registry.json` at a well-known endpoint |
+| the ServiceManager lifecycle: connect to the cluster, fetch config from `ServiceConfigState`, start the server, report health | the **cluster, config and health endpoints** it connects to |
+| event-bus subscriptions and topic rpcs, with a wire-contract gate against the canonical `eventbus` package | the **eventbus service** |
+| S2S clients with service identity tokens | name resolution for the services they dial |
+
+Note:
+USER.md, Service Lifecycle lists the seven steps the generated ServiceManager
+performs; each step connects to something the platform runs. The gateway's
+TLS handling is declared by `gateway: true` on the service identity.
+
+---
+
+## 4. Your code, and three names
+
+| tacplus generates | you (the implementer) must do |
+|---|---|
+| the handler interface | **the handler logic**: the only hand-written file |
+| the `trace_id` field on every message | **propagate `trace_id`** into every downstream call; the wrapper cannot see your handler's calls |
+| clients, accessors, serializers, validators | use them; never dial, parse or validate by hand |
+
+Three names from the first platform are expected by the generator rather than
+declared in proto, for now: the `eventbus` package, the `"kernel"` state
+label, and `AZP_KERNEL`. A proto set that follows them generates correctly;
+replacing them with proto-declared equivalents is
+[issue #1](https://github.com/tacplus-dev/tacplus/issues/1).
+
+Note:
+Hand-written code is allowed exactly where platform law intentionally ends.
+Omitting trace_id on any downstream call breaks the trace chain for that
+span, in every language.
+
+---
+
+## What a build looks like
+
+`tacplus.yaml` says what proto cannot:
+
+```yaml
+language: go
+pkg: com.example.notesapi
+output-dir: model
+```
+
+```bash
+tacplus build --config tacplus.yaml --src ./proto
+```
+
+```text
+model/
+├── s2sm/            # ServiceManager, server wrappers, MCP tools, state service, accessors
+├── types/           # protobuf types with validation helpers
+├── chassis/         # runtime libraries the generated code calls
+├── registry.json    # the whole model as data, tool catalogue included
+└── AGENT.md         # the architectural norms, for agents
+```
+
+Note:
+Two builds of the same proto graph, service identity, language and package
+produce the same surfaces regardless of local build settings. Generated code
+is deterministic, and a gate checks that.
+
+---
+
+## Seven targets, three tiers
+
+| tier | languages | what a build may generate |
+|---|---|---|
+| **Full service** | Go, Rust, Java | every surface, server and client, at parity |
+| **Full client** | TypeScript, Python | every client surface (C2S, W2S, C2D, REST) with client-side validation; no server runtime, by design |
+| **Lite client** | Swift, C# | C2S, W2S and C2D clients; methods the target cannot carry become compile-time-unavailable stubs |
+
+Which clients a build emits is decided by the proto: a declared dependency
+produces its client.
+
+Note:
+Go and Rust lead; Java is close behind. Swift and C# are compiled in CI but
+not yet exercised against a live server, and currently emit no client-side
+request validation.
+
+---
+
+## The versioning promise
+
+- Releases are `MAJOR.MINOR.PATCH`. **You pin `MAJOR.MINOR`**, never a patch.
+- **A patch is fixes only.** Every `2.0.x` is safe to take without reading the
+  notes.
+- **Features come in on a minor.** Anything you would have to learn about.
+- **A major is a breaking change** to what you already generate against.
+- Fixes are backported to every minor released within the last twelve months.
+- `tacplus upgrade` and the `tacplus:2.0` image both follow the newest patch
+  of the line you are on.
+
+Note:
+docs/VERSIONING.md, decided 2026-10-15. Generated code is regenerated by its
+consumers, so there is no deprecation window; the major says so. The current
+line is 2.0.
+
+---
+
+## How to start
+
+- **Install**: a release binary from GitHub Releases, the container image as
+  your own generate step, or `just install` from source
+- **Quick start**: `just example` builds tacplus, generates a Go server and a
+  TypeScript client from one proto set, starts the server and drives it
+- **Then**: the user guide, the generated API, and the annotation reference,
+  all at [tacplus.dev](https://tacplus.dev)
+
+```bash
+git clone https://github.com/tacplus-dev/tacplus
+cd tacplus
+just example
+```
+
+Note:
+The example ends with the generated TypeScript client refusing an invalid
+request before it reaches the wire; the server would refuse it too, with the
+same message, because both sides are generated from the same annotation.
+
+---
+
+<!-- .slide: class="title" -->
+# Services are defined by their proto files.
+
+The implementation is a thin handler layer.<br>
+Everything else is generated, typed, validated and enforced.
+
+<p class="small"><a href="https://tacplus.dev">tacplus.dev</a> · <a href="https://github.com/tacplus-dev/tacplus">github.com/tacplus-dev/tacplus</a> · Apache-2.0</p>

@@ -26,6 +26,10 @@ validation:
   absolute_links: warn
   unrecognized_links: warn
   anchors: warn
+  nav:
+    # The deck (docs/deck/index.html) is a static page, not a Markdown
+    # document, so its nav entry is a root-relative link.
+    absolute_links: ignore
 
 theme:
   name: material
@@ -135,6 +139,7 @@ nav:
       - Field options: reference/annotations/field.md
       - Enum value options: reference/annotations/enum-value.md
       - Option types: reference/annotations/types.md
+  - Deck: /deck/
   - Project:
       - Versioning: project/versioning.md
       - Contributing: project/contributing.md

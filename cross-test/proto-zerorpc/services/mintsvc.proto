@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Seabeam LLC
+// Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 // The token minter for the zero-rpc fixture set. The fixture has an s2s client
 // edge, so a build with an S2S surface and no (spec.token_minter) is refused:

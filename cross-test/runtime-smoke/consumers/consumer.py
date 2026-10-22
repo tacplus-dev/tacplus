@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Seabeam LLC
+# Copyright (c) 2026 Jody Scott
 # SPDX-License-Identifier: Apache-2.0
 #
 # Runtime smoke: the generated python CLIENT surfaces against the live go

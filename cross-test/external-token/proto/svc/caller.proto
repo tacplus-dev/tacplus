@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Seabeam LLC
+// Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 // External-token fixture caller: an ordinary S2S service whose generated
 // service manager carries token_for_external.

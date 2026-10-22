@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Seabeam LLC
+// Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 // Unary-retry fixture: a declared S2S client whose ListPings is a bounded
 // SNAPSHOT read, so the generated client retries it. The server behind it is

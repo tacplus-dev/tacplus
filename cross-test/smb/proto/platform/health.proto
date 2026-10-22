@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Seabeam LLC
+// Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 // Minimal ServiceHealth state root used by SMB generation fixtures. The member
 // service owns ordinary state, which triggers health-state injection; this root

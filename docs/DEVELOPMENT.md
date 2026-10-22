@@ -688,4 +688,4 @@ When a bug is found, a corresponding test (unit, integration, or system) must be
 
 ## License
 
-Copyright (c) 2026 Seabeam LLC. Licensed under the Apache License, Version 2.0; see [LICENSE](../LICENSE).
+Copyright (c) 2026 Jody Scott. Licensed under the Apache License, Version 2.0; see [LICENSE](../LICENSE).

@@ -106,6 +106,12 @@ message VaultRow {
 
   string title = 4;
   int64 updated_at_ms = 5 [(spec.query_field) = {op: QUERY_OP_RANGE}];
+
+  // A record that owns a store epoch. The owning service still gets the
+  // publish client for the synthesized VaultRowBusStateService, never a server
+  // wrapper for it: a wrapper would run the streamed-write refusal on store_epoch
+  // and fail the build (issue #112).
+  int64 store_epoch_ms = 6 [(spec.store_epoch) = true, (spec.query_field) = {op: QUERY_OP_RANGE}];
 }
 
 // VaultSecretRow is the PRIVATE record: one principal's rows and nobody else's,

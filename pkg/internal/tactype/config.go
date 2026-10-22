@@ -23,6 +23,10 @@ type Config struct {
 	Language  string // Current language being generated (internal use)
 	InputDir  string // Input directory with proto files
 	OutputDir string // Output directory for generated code
+	// ClearOutput removes the previous generation from OutputDir (hand-maintained
+	// files such as pom.xml are kept). It is set when the inputs changed and runs
+	// only after validation has passed, so a refused build leaves the output as it was.
+	ClearOutput bool
 	// OutputName is the name of the generated-output package/dir segment — the
 	// trailing segment appended to the package base (e.g. "<pkg>-model",
 	// "<pkg>_model", ".model", "/model") and the conventional output subdir.

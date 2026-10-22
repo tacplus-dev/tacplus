@@ -277,6 +277,18 @@ func filterServicesByGrpcEntries(servicesInfo []ServiceInfo, entries []tactype.G
 //   - Own-package S2S/C2S services (e.g. services/identity.proto with service_s2s when SelfPackage="identity")
 //   - Hosted vservices from other packages that declare {label: "<SelfPackage>"} on their service_s2s annotation
 func resolveServerServices(config *tactype.Config, servicesInfo []ServiceInfo) []ServiceInfo {
+	// A topic's synthesized <Record>BusStateService is hosted by the EventBus
+	// broker its label names, never by the package that declares the record.
+	// The owner keeps the publish client only (issue #112).
+	var hostable []ServiceInfo
+	for _, svc := range servicesInfo {
+		if svc.SynthesizedKind == parser.SynthesizedKindState && svc.EventLabel != "" {
+			continue
+		}
+		hostable = append(hostable, svc)
+	}
+	servicesInfo = hostable
+
 	if config.GrpcServerAll {
 		return filterGrpcAnnotated(servicesInfo)
 	}

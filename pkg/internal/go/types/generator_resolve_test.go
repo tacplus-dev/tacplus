@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
@@ -93,5 +94,32 @@ func TestResolveServerServices_OwnPackageIsNotAHostedVService(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ServiceName != "EgressStratum" {
 		t.Fatalf("own-package service must be resolved exactly once, got %v", got)
+	}
+}
+
+// A record's (or service_event's) synthesized <Record>BusStateService is the
+// EventBus broker's topic surface, not the owner's. The owner gets the publish
+// client for it, never a server wrapper, handler method or registration. Before
+// this was pinned, a Go owner of a record got all three, and once the record
+// carried (spec.store_epoch) the wrapper's streamed-write refusal failed the
+// whole build (issue #112). A state root that is NOT a topic is still hosted by
+// its owner, which the second service below pins.
+func TestResolveServerServices_EventBusTopicIsNotHostedByOwner(t *testing.T) {
+	cfg := &tactype.Config{SelfPackage: "egressvault"}
+	got, err := resolveServerServices(cfg, []ServiceInfo{
+		{ProtoFile: "services/egressvault.proto", PackageName: "egressvault", ServiceName: "EgressVaultApi", GrpcName: "egressvault", IsS2S: true},
+		{ProtoFile: "services/egressvault.proto", PackageName: "egressvault", ServiceName: "VaultRowBusStateService", GrpcName: "egressvault", IsS2S: true, SynthesizedKind: parser.SynthesizedKindState, EventLabel: "eventbus"},
+		{ProtoFile: "services/egressvault.proto", PackageName: "egressvault", ServiceName: "VaultStateService", GrpcName: "egressvault", IsS2S: true, SynthesizedKind: parser.SynthesizedKindState},
+	})
+	if err != nil {
+		t.Fatalf("resolveServerServices: %v", err)
+	}
+	var names []string
+	for _, svc := range got {
+		names = append(names, svc.ServiceName)
+	}
+	want := []string{"EgressVaultApi", "VaultStateService"}
+	if len(names) != len(want) || names[0] != want[0] || names[1] != want[1] {
+		t.Fatalf("server services = %v, want %v", names, want)
 	}
 }

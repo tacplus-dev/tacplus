@@ -64,6 +64,11 @@ type RedoLog struct {
 
 	mu     sync.Mutex
 	writer *os.File
+	// Guarded by mu. appended counts every Append; rolledThrough is the
+	// appended count the last committed Roll covered. A Roll with nothing new
+	// since then has nothing to compact.
+	appended      int64
+	rolledThrough int64
 }
 
 // OpenRedoLog opens (creating if absent) the redo log for (ns, store) under
@@ -82,10 +87,11 @@ func OpenRedoLog(base, ns, store string, archiveCount uint32, archiveCodec Codec
 		return nil, wrapIOError(err)
 	}
 	return &RedoLog{
-		active:       active,
-		archiveCount: archiveCount,
-		archiveCodec: archiveCodec,
-		writer:       w,
+		active:        active,
+		archiveCount:  archiveCount,
+		archiveCodec:  archiveCodec,
+		writer:        w,
+		rolledThrough: -1,
 	}, nil
 }
 
@@ -119,6 +125,7 @@ func (l *RedoLog) Append(rec *Record) error {
 	line = append(line, '\n')
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.appended++
 	if _, err := l.writer.Write(line); err != nil {
 		return wrapIOError(err)
 	}
@@ -146,6 +153,11 @@ func (l *RedoLog) rollFrom(snapshot func() []*Record) error {
 
 	// 1. Redirect appends to the temp log (no write-block during snapshot).
 	l.mu.Lock()
+	if l.appended == l.rolledThrough {
+		l.mu.Unlock()
+		return nil
+	}
+	seen := l.appended
 	tempWriter, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		l.mu.Unlock()
@@ -231,6 +243,7 @@ func (l *RedoLog) rollFrom(snapshot func() []*Record) error {
 	}
 	l.writer = w
 	_ = os.Remove(tempPath)
+	l.rolledThrough = seen
 	return nil
 }
 

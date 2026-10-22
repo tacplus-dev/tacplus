@@ -469,3 +469,60 @@ func Test_resolveConfig_outputDirContainment(t *testing.T) {
 		})
 	}
 }
+
+// A proto that fails validation must leave the previous generation untouched.
+// The runner cleans the output dir when the inputs change, and it does that
+// before BuildLanguage runs the validators, so a refused run used to leave an
+// empty output (issue #95).
+func Test_Build_validationFailureKeepsPreviousOutput(t *testing.T) {
+	projectDir := t.TempDir()
+	protoDir := t.TempDir()
+
+	// chassis/ is a tacplus-reserved namespace: validatePaths refuses it.
+	if err := os.MkdirAll(filepath.Join(protoDir, "chassis"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(protoDir, "chassis", "bad.proto"),
+		[]byte("syntax = \"proto3\";\npackage chassis;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(protoDir, "dependencies.yaml"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(projectDir)
+	p := Params{
+		ProtoSrcs:   []string{protoDir},
+		SrcExplicit: true,
+		Config: &tacplusyaml.Config{
+			Language:  "go",
+			Pkg:       "com.example.services.thing",
+			OutputDir: ".",
+			Src:       protoDir,
+		},
+	}
+
+	rc, err := resolveConfig(p)
+	if err != nil {
+		t.Fatalf("resolveConfig: %v", err)
+	}
+	outDir := rc.config.OutputDir
+	rc.cleanup()
+
+	previous := filepath.Join(outDir, "previous.go")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(previous, []byte("package previous\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err = Build(p)
+	if err == nil || !strings.Contains(err.Error(), "reserved tacplus namespaces") {
+		t.Fatalf("Build error = %v, want the reserved-namespace validation error", err)
+	}
+
+	if _, err := os.Stat(previous); err != nil {
+		t.Errorf("previous output was deleted by a run that failed validation: %v", err)
+	}
+}

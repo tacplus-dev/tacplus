@@ -254,3 +254,14 @@ jobs:
           tags=(); for t in ${{ steps.tags.outputs.list }}; do tags+=(-t "$NS/tacplus:$t"); done
           docker buildx imagetools create "${tags[@]}" "${refs[@]}"
           docker buildx imagetools inspect "$NS/tacplus:${{ github.ref_type == 'tag' && 'latest' || 'main' }}"
+      # The build image follows the release line too, so consumers (the looper
+      # image, CI jobs) pin build:X.Y and float on the patch like everything
+      # else; a dated build tag is a patch pin and the policy forbids those.
+      # The build image this release was produced with is build:latest.
+      - name: Build image tags from the version policy
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          v="${GITHUB_REF_NAME#v}"; IFS=. read -r MA MI _ <<<"$v"
+          docker buildx imagetools create -t "$NS/build:$v" -t "$NS/build:$MA.$MI" -t "$NS/build:$MA" "$NS/build:latest"
+          docker buildx imagetools inspect "$NS/build:$MA.$MI"

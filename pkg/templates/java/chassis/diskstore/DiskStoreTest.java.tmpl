@@ -207,6 +207,32 @@ public class DiskStoreTest {
         }
     }
 
+    // A roll with nothing appended since the previous roll writes nothing: no
+    // archive rotation. A roll after one append rotates once more.
+    private static void testIdleRollWritesNothing() throws IOException {
+        Path dir = Files.createTempDirectory("ds-idle-");
+        try {
+            Path base = dir.resolve("data");
+            RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 3, Codec.NONE);
+            try {
+                log.append(RedoLog.Record.upsert("a", "{\"v\":1}"));
+                List<RedoLog.Record> snap = RedoLog.dedupFile(log.activePath());
+                log.roll(snap);
+                log.roll(snap);
+                Path bak2 = base.resolve("drpepper").resolve("verifying_keys.log.bak.2");
+                check(!Files.exists(bak2), "an idle roll must not rotate the archive");
+
+                log.append(RedoLog.Record.upsert("b", "{\"v\":2}"));
+                log.roll(snap);
+                check(Files.exists(bak2), "a roll after an append must rotate the archive");
+            } finally {
+                log.close();
+            }
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
     private static void testRestoreRecoversBuildingSnapshotAndTempTail() throws IOException {
         Path dir = Files.createTempDirectory("ds-crash-");
         try {
@@ -382,6 +408,7 @@ public class DiskStoreTest {
         // RedoLog UC2
         testAppendDedupLatest();
         testRollCompactsAndResumes();
+        testIdleRollWritesNothing();
         testRestoreRecoversBuildingSnapshotAndTempTail();
         testDedupBytesReportsLineNumber();
         testRedoLogEncodeDecodeTombstone();

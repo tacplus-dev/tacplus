@@ -140,6 +140,14 @@ func (l *RedoLog) Append(rec *Record) error {
 // a brief write-block, then atomically swap the new file in and archive the old
 // one (compressed at rest). The final rename is the commit point.
 func (l *RedoLog) Roll(snapshot []*Record) error {
+	return l.rollFrom(func() []*Record { return snapshot })
+}
+
+// rollFrom is the roll scheduler's entry point. It reads the snapshot after the
+// redirect, so an append that lands while the snapshot is taken goes to the temp
+// log and is folded in. Read before the redirect, it would go to the old active
+// log and miss the new baseline.
+func (l *RedoLog) rollFrom(snapshot func() []*Record) error {
 	tempPath := sibling(l.active, ".temp")
 	building := sibling(l.active, ".building")
 
@@ -164,7 +172,7 @@ func (l *RedoLog) Roll(snapshot []*Record) error {
 	// 2. Build the new baseline from the snapshot (build-then-rename: the
 	//    presence of building means it is complete + durable).
 	var buf bytes.Buffer
-	for _, rec := range snapshot {
+	for _, rec := range snapshot() {
 		b, err := json.Marshal(rec)
 		if err != nil {
 			return ErrCodec(err.Error())

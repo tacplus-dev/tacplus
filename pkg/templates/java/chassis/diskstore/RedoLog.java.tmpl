@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * UC2 — append-only redo log (WAL) with periodic compaction.
@@ -147,6 +148,14 @@ public final class RedoLog implements AutoCloseable {
      * point.
      */
     public void roll(List<Record> snapshot) {
+        rollFrom(() -> snapshot);
+    }
+
+    // The roll scheduler's entry point. It reads the snapshot after the redirect,
+    // so an append that lands while the snapshot is taken goes to the temp log
+    // and is folded in. Read before the redirect, it would go to the old active
+    // log and miss the new baseline.
+    void rollFrom(Supplier<List<Record>> snapshot) {
         Path tempPath = FsUtil.sibling(active, ".temp");
         Path building = FsUtil.sibling(active, ".building");
 
@@ -169,7 +178,7 @@ public final class RedoLog implements AutoCloseable {
         // 2. Build the new baseline from the snapshot (build-then-rename: the
         //    presence of `building` means it is complete + durable).
         StringBuilder buf = new StringBuilder();
-        for (Record rec : snapshot) {
+        for (Record rec : snapshot.get()) {
             buf.append(encode(rec)).append('\n');
         }
         Path staged = FsUtil.writeTemp(building, buf.toString().getBytes(StandardCharsets.UTF_8), 0);

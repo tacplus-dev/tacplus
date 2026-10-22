@@ -68,7 +68,7 @@ public final class RollSchedule {
         long periodMs = Math.max(interval.toMillis(), 1);
         ScheduledFuture<?> unused = exec.scheduleAtFixedRate(() -> {
             try {
-                log.roll(snapshot.get());
+                log.rollFrom(snapshot);
             } catch (RuntimeException e) {
                 LOG.log(Level.WARNING,
                         "diskstore roll failed for " + nodeId + "; retrying on next interval", e);

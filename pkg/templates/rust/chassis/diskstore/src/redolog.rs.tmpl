@@ -118,18 +118,31 @@ impl RedoLog {
     /// brief write-block, then atomically swap the new file in and archive the
     /// old one (compressed at rest). The final rename is the commit point.
     pub fn roll(&self, snapshot: &[Record]) -> Result<()> {
+        match self.redirect_appends()? {
+            Some(seen) => self.fold_and_swap(snapshot, seen),
+            None => Ok(()),
+        }
+    }
+
+    /// Step 1 of a roll: redirect appends to the temp log (no write-block during
+    /// snapshot). Returns the append count the roll covers, or `None` when nothing
+    /// was appended since the last roll. The roll scheduler calls this before it
+    /// takes its snapshot, so a write made during the snapshot lands in the temp
+    /// log and is folded in.
+    pub(crate) fn redirect_appends(&self) -> Result<Option<u64>> {
+        let temp_path = sibling(&self.active, ".temp");
+        let mut g = self.inner.lock().expect("redolog lock poisoned");
+        if g.rolled_through == Some(g.appended) {
+            return Ok(None);
+        }
+        g.writer = Some(OpenOptions::new().create(true).append(true).open(&temp_path)?);
+        Ok(Some(g.appended))
+    }
+
+    /// Steps 2-3 of a roll, after `redirect_appends` returned `seen`.
+    pub(crate) fn fold_and_swap(&self, snapshot: &[Record], seen: u64) -> Result<()> {
         let temp_path = sibling(&self.active, ".temp");
         let building = sibling(&self.active, ".building");
-
-        // 1. Redirect appends to the temp log (no write-block during snapshot).
-        let seen = {
-            let mut g = self.inner.lock().expect("redolog lock poisoned");
-            if g.rolled_through == Some(g.appended) {
-                return Ok(());
-            }
-            g.writer = Some(OpenOptions::new().create(true).append(true).open(&temp_path)?);
-            g.appended
-        };
 
         // 2. Build the new baseline from the snapshot (build-then-rename: the
         //    presence of `building` means it is complete + durable).

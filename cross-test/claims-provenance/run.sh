@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 Seabeam LLC
+# Copyright (c) 2026 Jody Scott
 # SPDX-License-Identifier: Apache-2.0
 #
 # Wire-level gate for claims PROVENANCE in the generated Java chassis (F11).

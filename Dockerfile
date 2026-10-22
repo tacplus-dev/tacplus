@@ -11,10 +11,10 @@ ARG VCS_REF
 ARG VERSION
 
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
-      org.opencontainers.image.authors="Seabeam LLC" \
+      org.opencontainers.image.authors="Jody Scott <jody@thescottsweb.com>" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.vendor="Seabeam LLC" \
+      org.opencontainers.image.vendor="tacplus.dev" \
       org.opencontainers.image.title="TACPlus Compiler System" \
       org.opencontainers.image.description="Multi-language Protocol Buffer code generator for Go, TypeScript, Python, Rust, Java, Swift, and C# lite clients"
 

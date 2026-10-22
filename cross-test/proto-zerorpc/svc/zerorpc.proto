@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Seabeam LLC
+// Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 // Zero-rpc cross-test fixture: a service with a state and an s2s client edge,
 // but no gRPC service and no auto_tls on any state.

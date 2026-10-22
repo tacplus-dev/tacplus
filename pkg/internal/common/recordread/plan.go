@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Seabeam LLC
+// Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 
 // Package recordread resolves a service's (spec.record_read) declarations into

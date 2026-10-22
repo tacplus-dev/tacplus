@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Seabeam LLC
+// Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 
 // Package restdispatch resolves a (spec.service).rest_dispatch build's REST

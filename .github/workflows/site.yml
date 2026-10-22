@@ -15,6 +15,7 @@ on:
       - "docs/**"
       - "pkg/proto/sys/spec.proto"
       - "README.md"
+      - "README.src.md"
       - "CONTRIBUTING.md"
       - "SECURITY.md"
       - "CODE_OF_CONDUCT.md"

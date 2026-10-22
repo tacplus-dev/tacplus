@@ -123,11 +123,7 @@ the generated model, then compile the result in your usual builder image.
 Don't build `FROM` it. Pulling `tacplus:2.0` again is all it takes to pick
 up a new patch; your builder image is untouched.
 
-```bash
-docker run --rm --pull always -v "$PWD:/workspace" \
-  ghcr.io/tacplus-dev/tacplus/tacplus:2.0 \
-  tacplus build --config tacplus.yaml --src proto
-```
+--8<-- "docs/snippets/install-container.md"
 
 The image's working directory is `/workspace`, so `tacplus.yaml` and the
 proto source are found where you mounted them. The generated files are
@@ -154,12 +150,7 @@ You need Go (the version in `go.mod`), [`just`](https://github.com/casey/just),
 `protoc` and `protoc-gen-go` (the compiler generates its own descriptor code
 with them before it builds).
 
-```bash
-git clone https://github.com/tacplus-dev/tacplus
-cd tacplus
-just protoc-check   # is your protoc in the supported range?
-just install        # generate, build and go install the tacplus binary
-```
+--8<-- "docs/snippets/install-source.md"
 
 A source build reports its version from the nearest tag with a `-local`
 commit suffix, so it is never mistaken for a release build.

@@ -80,6 +80,14 @@ direct pushes), and a patch release is a `v2.0.N` tag on that branch.
    request.
 5. Keep commits focused and describe *why* in the message.
 
+## Editing the README
+
+`README.md` is generated: edit `README.src.md`, or the pieces it shares with
+the site under `docs/snippets/` (the proto excerpt, the generated-output tree,
+the install commands), then run `go run ./cmd/sitegen` and commit the result.
+`just test` fails while the committed `README.md` is stale. The site includes
+the same snippets with the `--8<--` marker, so a shared piece is written once.
+
 ## License
 
 By contributing you agree that your contributions are licensed under the

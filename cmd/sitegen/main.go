@@ -13,6 +13,10 @@
 //     the only source; the staged copies are git-ignored build output.
 //   - The annotation reference (reference/annotations/) is generated from
 //     pkg/proto/sys/spec.proto, comments included, via protoc's descriptor set.
+//   - README.md is generated from README.src.md by expanding its snippet
+//     markers (see readme.go), so the README and the site share
+//     docs/snippets/. It is committed, and TestReadmeIsCurrent fails when it
+//     is stale.
 //
 // Run from the repository root: go run ./cmd/sitegen [-root .] [-out site/docs]
 package main
@@ -55,7 +59,11 @@ func run(root, out string) error {
 			return err
 		}
 	}
-	return nil
+	md, err := readme(root)
+	if err != nil {
+		return err
+	}
+	return writeFile(filepath.Join(root, readmeOut), []byte(md))
 }
 
 func writeFile(path string, data []byte) error {

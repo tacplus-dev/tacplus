@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Seabeam LLC
+// Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 //
 // The example client: the generated TypeScript C2S ServiceManager talking to

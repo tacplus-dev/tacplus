@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Seabeam LLC
+// Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 
 // server-runtime driver: the GENERATED GO C2S CLIENT, pointed at a generated

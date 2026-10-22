@@ -1,6 +1,6 @@
 //go:build soak
 
-// Copyright (c) 2026 Seabeam LLC
+// Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 
 // Package leaksoak closes docs/KNOWN_TEST_GAPS.md PC-L-9: the chaos LeakOracle

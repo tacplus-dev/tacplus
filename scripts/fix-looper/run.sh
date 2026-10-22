@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 Seabeam LLC
+# Copyright (c) 2026 Jody Scott
 # SPDX-License-Identifier: Apache-2.0
 #
 # fix-looper: the local form of the nightly fix job.

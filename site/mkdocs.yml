@@ -9,8 +9,8 @@ site_description: >-
   tacplus compiles annotated Protocol Buffer definitions into complete,
   validated, authorized services for Go, Rust and Java, and clients for
   TypeScript, Python, Swift and C#.
-site_author: Seabeam LLC
-copyright: Copyright &copy; 2026 Seabeam LLC &middot; Apache License 2.0
+site_author: Jody Scott
+copyright: Copyright &copy; 2026 Jody Scott &middot; Apache License 2.0
 repo_url: https://github.com/tacplus-dev/tacplus
 repo_name: tacplus-dev/tacplus
 # Most pages are staged from elsewhere in the repository, so an edit link

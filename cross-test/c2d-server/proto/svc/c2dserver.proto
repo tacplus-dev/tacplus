@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Seabeam LLC
+// Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 // C2D server cross-test fixture: a daemon whose whole server surface is one
 // service_c2d service, the shape of a local client daemon. The generated

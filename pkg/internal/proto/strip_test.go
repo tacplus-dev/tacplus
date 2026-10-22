@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Seabeam LLC
+// Copyright (c) 2026 Jody Scott
 
 package proto
 
@@ -236,7 +236,7 @@ service FooService {
 		},
 		{
 			name: "comprehensive real-world example",
-			input: `// Copyright (c) 2026 Seabeam LLC
+			input: `// Copyright (c) 2026 Jody Scott
 
 syntax = "proto3";
 package baseball;
@@ -269,7 +269,7 @@ service BaseballService {
   rpc GetTeam (GetTeamRequest) returns (TeamResponse);
 }
 `,
-			expected: `// Copyright (c) 2026 Seabeam LLC
+			expected: `// Copyright (c) 2026 Jody Scott
 
 syntax = "proto3";
 package baseball;

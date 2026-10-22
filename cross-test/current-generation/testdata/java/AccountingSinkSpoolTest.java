@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Seabeam LLC
+// Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 //
 // Gate self-test for the accounting-sink fixture (issue #34). NOT generated: run.sh

@@ -42,7 +42,7 @@ func TestWriteDefaults_StringConstUsesEmptyStringZero(t *testing.T) {
 	}
 
 	var b strings.Builder
-	writeDefaults(&b, pf)
+	writeDefaults(&b, pf, messagesWithDefaults([]model.ProtoFile{pf}))
 	got := b.String()
 
 	if !strings.Contains(got, `if v.GitlabUrl == "" {`) {
@@ -53,12 +53,66 @@ func TestWriteDefaults_StringConstUsesEmptyStringZero(t *testing.T) {
 	}
 
 	var u strings.Builder
-	writeUndefaults(&u, pf)
+	writeUndefaults(&u, pf, messagesWithDefaults([]model.ProtoFile{pf}))
 	gotU := u.String()
 	if !strings.Contains(gotU, `v.GitlabUrl = ""`) {
 		t.Errorf("expected string-typed undefault assignment `v.GitlabUrl = \"\"`, got:\n%s", gotU)
 	}
 	if strings.Contains(gotU, "v.GitlabUrl = 0") {
 		t.Errorf("string field undefault must not assign numeric zero `= 0`, got:\n%s", gotU)
+	}
+}
+
+// TestWriteDefaults_CrossPackageSubMessageAppliesDefaults is the grpcconfig
+// defect: Config (package grpcconfig) holds a DiskPersistenceConfig from package
+// diskstore, which carries defaults. Config's Defaults must call the diskstore
+// Defaults, or the nested defaults never reach validation.
+func TestWriteDefaults_CrossPackageSubMessageAppliesDefaults(t *testing.T) {
+	allFiles := []model.ProtoFile{
+		{
+			Package: "diskstore",
+			Messages: []model.Message{
+				{
+					Name: "DiskPersistenceConfig",
+					Fields: []model.Field{
+						{
+							Name: "roll_interval_seconds", Type: "int64",
+							Annotations: map[string]model.AnnotationValue{"default_int": {IntValue: 86400}},
+						},
+						{Name: "archive", Type: "ArchiveConfig", IsMessage: true},
+					},
+				},
+				{
+					Name: "ArchiveConfig",
+					Fields: []model.Field{
+						{
+							Name: "checkpoint_interval_seconds", Type: "int64",
+							Annotations: map[string]model.AnnotationValue{"default_int": {IntValue: 86400}},
+						},
+					},
+				},
+			},
+		},
+		{
+			Package: "grpcconfig",
+			Messages: []model.Message{
+				{
+					Name: "Config",
+					Fields: []model.Field{
+						{Name: "disk_persistence", Type: "DiskPersistenceConfig", TypePackage: "diskstore", IsMessage: true},
+					},
+				},
+			},
+		},
+	}
+	grpcconfig := allFiles[1]
+
+	var b strings.Builder
+	writeDefaults(&b, grpcconfig, messagesWithDefaults(allFiles))
+	got := b.String()
+
+	want := "if v.DiskPersistence != nil { diskstore.DiskPersistenceConfigDefaults(v.DiskPersistence) }"
+	if !strings.Contains(got, want) {
+		t.Errorf("expected cross-package sub-message call %q, got:\n%s", want, got)
 	}
 }

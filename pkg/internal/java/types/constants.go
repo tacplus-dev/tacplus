@@ -18,11 +18,15 @@ import (
 	"github.com/tacplus-dev/tacplus/templates"
 )
 
-// hasFieldDefaults returns true if any message in the proto file has defaults,
-// either directly (via default annotations) or transitively (via sub-message fields
-// whose types have defaults).
-func hasFieldDefaults(pf model.ProtoFile) bool {
-	return len(messagesWithDefaults(pf)) > 0
+// hasFieldDefaults returns true if any message in the proto file has defaults
+// (see messagesWithDefaults).
+func hasFieldDefaults(pf model.ProtoFile, hasDefaults map[string]bool) bool {
+	for _, msg := range pf.Messages {
+		if hasDefaults[model.DefaultsKey(pf.Package, msg.Name)] {
+			return true
+		}
+	}
+	return false
 }
 
 // constantsTemplateData holds all pre-computed data for the constants template.

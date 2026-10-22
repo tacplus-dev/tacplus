@@ -292,8 +292,10 @@ func generateGoHelpers(pf model.ProtoFile, baseDir, subdir string, config *tacty
 		}
 	}
 
+	hasDefaults := messagesWithDefaults(allFiles)
+
 	// Generate constants section (previously in separate const.go)
-	if len(pf.Constants) > 0 || hasFieldDefaults(pf) {
+	if len(pf.Constants) > 0 || hasFieldDefaults(pf, hasDefaults) {
 		writeConstants(&b, pf)
 	}
 
@@ -301,10 +303,10 @@ func generateGoHelpers(pf model.ProtoFile, baseDir, subdir string, config *tacty
 	writeCapacityConstants(&b, pf)
 
 	// Generate TypeDefaults functions for messages with default annotations
-	writeDefaults(&b, pf)
+	writeDefaults(&b, pf, hasDefaults)
 
 	// Generate TypeUndefaults functions that strip default values back to zero
-	writeUndefaults(&b, pf)
+	writeUndefaults(&b, pf, hasDefaults)
 
 	// Generate Merge functions for all messages
 	writeMerge(&b, pf)

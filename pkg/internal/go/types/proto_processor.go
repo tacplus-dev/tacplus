@@ -111,7 +111,7 @@ func processProtoFiles(protocDir, outputDir string, config *tactype.Config) ([]m
 // allFiles is the complete set of parsed proto files, used for cross-package type resolution
 // in recursive LLM type descriptors.
 func generateAllHelpers(pf model.ProtoFile, baseDir, subdir string, config *tactype.Config, allFiles []model.ProtoFile) error {
-	if len(pf.Enums) > 0 || len(pf.Messages) > 0 || len(pf.Constants) > 0 || hasFieldDefaults(pf) {
+	if len(pf.Enums) > 0 || len(pf.Messages) > 0 || len(pf.Constants) > 0 || hasFieldDefaults(pf, messagesWithDefaults(allFiles)) {
 		if err := generateGoHelpers(pf, baseDir, subdir, config, allFiles); err != nil {
 			return fmt.Errorf("failed to generate Go helpers: %w", err)
 		}

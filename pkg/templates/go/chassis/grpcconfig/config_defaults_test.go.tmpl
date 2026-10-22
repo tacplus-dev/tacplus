@@ -12,6 +12,7 @@ package grpcconfig
 import (
 	"testing"
 
+	diskstore_pb "{{.ModuleBasePath}}/types/sys/diskstore"
 	grpcconfig_pb "{{.ModuleBasePath}}/types/sys/grpcconfig"
 )
 
@@ -49,5 +50,21 @@ func TestConfigDefaults_Idempotent(t *testing.T) {
 func TestConfigDefaults_Constant(t *testing.T) {
 	if grpcconfig_pb.DefaultHealthProbePort != 8444 {
 		t.Errorf("DefaultHealthProbePort = %d, want 8444", grpcconfig_pb.DefaultHealthProbePort)
+	}
+}
+
+// The disk_persistence message lives in package diskstore, and its archive omits both
+// intervals. The cross-package defaults must still reach the nested messages (issue #97).
+func TestConfigDefaults_NestedArchiveFromOtherPackage(t *testing.T) {
+	cfg := &grpcconfig_pb.Config{DiskPersistence: &diskstore_pb.DiskPersistenceConfig{
+		Dir:     "/tmp/config-defaults-test",
+		Archive: &diskstore_pb.ArchiveConfig{GcsBucket: "bucket"},
+	}}
+	grpcconfig_pb.ConfigDefaults(cfg)
+	if got := cfg.GetDiskPersistence().GetRollIntervalSeconds(); got != 86400 {
+		t.Errorf("nested roll_interval_seconds = %d, want 86400", got)
+	}
+	if got := cfg.GetDiskPersistence().GetArchive().GetCheckpointIntervalSeconds(); got != 86400 {
+		t.Errorf("nested checkpoint_interval_seconds = %d, want 86400", got)
 	}
 }

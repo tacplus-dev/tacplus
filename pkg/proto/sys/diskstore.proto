@@ -49,7 +49,7 @@ message DiskPersistenceConfig {
 
   // compression for rolled/archived files + snapshots; the live append tail
   // stays uncompressed.
-  Compression compression = 5 [(spec.assert_enum_defined) = true];
+  Compression compression = 5;
 
   // archive, when set, ships rolled redo segments and daily checkpoints to an
   // object store and makes them restorable (Java only; other languages ignore

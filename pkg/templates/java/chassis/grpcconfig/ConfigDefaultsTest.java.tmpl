@@ -33,6 +33,16 @@ public class ConfigDefaultsTest {
         }
     }
 
+    private static boolean validates(Config cfg) {
+        try {
+            Helpers.validateConfig(cfg);
+            return true;
+        } catch (Exception e) {
+            System.err.println("  validateConfig: " + e.getMessage());
+            return false;
+        }
+    }
+
     public static void main(String[] args) {
         // 1. Empty Config (submessage absent) → configDefaults applies 8444.
         //    This is the state-authority path: no typed-config fetch, no
@@ -59,6 +69,31 @@ public class ConfigDefaultsTest {
         //    configDefaults. Verify the constant exists and is positive.
         check("DEFAULT_HEALTH_PROBE_PORT constant == 8444",
               Helpers.DEFAULT_HEALTH_PROBE_PORT == 8444L);
+
+        // 5. Nested defaults from another package reach validation: a disk_persistence
+        //    whose archive omits both intervals must get the diskstore defaults before
+        //    validateConfig runs (the loader calls configDefaults, then validateConfig).
+        Config nested = Config.newBuilder()
+            .setDiskPersistence({{.TypesBase}}.sys.diskstore.Diskstore.DiskPersistenceConfig.newBuilder()
+                .setDir("/tmp/config-defaults-test")
+                .setArchive({{.TypesBase}}.sys.diskstore.Diskstore.ArchiveConfig.newBuilder()
+                    .setGcsBucket("bucket")))
+            .build();
+        Config nestedDefaulted = Helpers.configDefaults(nested).build();
+        check("nested archive checkpoint_interval_seconds == 86400 after configDefaults",
+              nestedDefaulted.getDiskPersistence().getArchive().getCheckpointIntervalSeconds() == 86400L);
+        check("nested disk_persistence roll_interval_seconds == 86400 after configDefaults",
+              nestedDefaulted.getDiskPersistence().getRollIntervalSeconds() == 86400L);
+        check("nested archive passes validateConfig after configDefaults", validates(nestedDefaulted));
+
+        // 6. A declared zero enum value is a valid compression: COMPRESSION_NONE loads.
+        Config uncompressed = Config.newBuilder()
+            .setDiskPersistence({{.TypesBase}}.sys.diskstore.Diskstore.DiskPersistenceConfig.newBuilder()
+                .setDir("/tmp/config-defaults-test")
+                .setCompression({{.TypesBase}}.sys.diskstore.Diskstore.Compression.COMPRESSION_NONE))
+            .build();
+        check("compression COMPRESSION_NONE passes validateConfig after configDefaults",
+              validates(Helpers.configDefaults(uncompressed).build()));
 
         if (failures > 0) {
             System.err.println(failures + " config defaults test(s) FAILED");

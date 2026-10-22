@@ -183,6 +183,7 @@ func processProtoFiles(protocDir, outputDir string) ([]model.ProtoFile, error) {
 	// Track which subdirectories contain helper files
 	subdirHelpers := make(map[string][]string)
 
+	hasDefaults := messagesWithDefaults(protoFiles)
 	// Generate a single helpers.rs per proto file
 	for _, pf := range protoFiles {
 		// Skip helper generation only for the spec package — it has its own special-case
@@ -225,7 +226,7 @@ func processProtoFiles(protocDir, outputDir string) ([]model.ProtoFile, error) {
 		if len(pf.Enums) > 0 {
 			writeEnumHelpers(&b, pf)
 		}
-		if len(pf.Constants) > 0 || hasFieldDefaults(pf) {
+		if len(pf.Constants) > 0 || hasFieldDefaults(pf, hasDefaults) {
 			writeConstants(&b, pf)
 		}
 		if len(pf.Messages) > 0 {
@@ -248,8 +249,8 @@ func processProtoFiles(protocDir, outputDir string) ([]model.ProtoFile, error) {
 				return nil, fmt.Errorf("writeFromMap %s: %w", pf.RelPath, err)
 			}
 		}
-		writeDefaults(&b, pf)
-		writeUndefaults(&b, pf)
+		writeDefaults(&b, pf, hasDefaults)
+		writeUndefaults(&b, pf, hasDefaults)
 		writeMerge(&b, pf)
 		if len(pf.Messages) > 0 {
 			writeEnvVar(&b, pf)

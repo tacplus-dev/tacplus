@@ -24,7 +24,7 @@ func generateHelpersForTest(t *testing.T, pf model.ProtoFile) map[string]string 
 	dir := t.TempDir()
 	subdir := filepath.Join(strings.Split(helpersSplitTestPkg, ".")...)
 	cfg := &tactype.Config{JavaPackageBase: "com.example"}
-	if err := generateHelpers(pf, dir, subdir, "Big", cfg, nil, nil); err != nil {
+	if err := generateHelpers(pf, dir, subdir, "Big", cfg, messagesWithDefaults([]model.ProtoFile{pf}), nil, nil); err != nil {
 		t.Fatalf("generateHelpers: %v", err)
 	}
 	entries, err := os.ReadDir(filepath.Join(dir, subdir))

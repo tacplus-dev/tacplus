@@ -21,6 +21,9 @@
 #   run.sh uninstall
 #
 # State and logs live under ~/.tacplus-fix-looper. One run at a time.
+# Git pushes authenticate through gh (`gh auth setup-git`; its token carries the workflow scope that a fix
+# touching .github/workflows needs). No token is written into a clone, and no ~/.netrc github.com entry may
+# exist: libcurl reads it before any credential helper.
 set -euo pipefail
 
 # Run from a private copy: bash reads a script as it executes, so a git pull that rewrites this file during a
@@ -125,9 +128,6 @@ release() {
 
 gh repo clone "$REPO" "$RUN/tacplus" -- --quiet
 cd "$RUN/tacplus"
-# Push with the gh token (it carries the workflow scope); the keychain git
-# credential does not, so a fix touching .github/workflows could not be pushed.
-git remote set-url --push origin "https://x-access-token:$(gh auth token)@github.com/$REPO.git"
 # Resume a previous run's pushed branch instead of starting over (a run can push and then stop).
 if git ls-remote --exit-code --heads origin "fix/issue-$ISSUE" >/dev/null 2>&1; then
   git fetch -q origin "fix/issue-$ISSUE" && git checkout -q -b "fix/issue-$ISSUE" FETCH_HEAD

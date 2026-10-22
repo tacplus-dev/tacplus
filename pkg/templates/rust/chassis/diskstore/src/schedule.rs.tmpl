@@ -47,10 +47,11 @@ where
         ticker.tick().await;
         // Redirect before the snapshot, so a write during the snapshot is folded in.
         let result = match log.redirect_appends() {
-            Ok(()) => {
+            Ok(true) => {
                 let snap = snapshot().await;
                 log.fold_and_swap(&snap)
             }
+            Ok(false) => Ok(()),
             Err(err) => Err(err),
         };
         if let Err(err) = result {

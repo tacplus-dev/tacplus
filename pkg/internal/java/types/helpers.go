@@ -43,7 +43,7 @@ const helpersClassBudget = 512 << 10
 // static helper methods: enum helpers, constants, serialization, validation, map helpers,
 // and type defaults. Over helpersClassBudget the methods move to HelpersPart<N>
 // classes that Helpers extends.
-func generateHelpers(pf model.ProtoFile, baseDir, subdir, outerClassName string, config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, vsEntries []proto.VServiceEntry) error {
+func generateHelpers(pf model.ProtoFile, baseDir, subdir, outerClassName string, config *tactype.Config, hasDefaults map[string]bool, svcRPCs []proto.ServiceRPCEntry, vsEntries []proto.VServiceEntry) error {
 	outputDir := filepath.Join(baseDir, subdir)
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return err
@@ -97,7 +97,7 @@ func generateHelpers(pf model.ProtoFile, baseDir, subdir, outerClassName string,
 		writeEnumHelpers(&body, pf, outerClassName)
 	}
 
-	if len(pf.Constants) > 0 || hasFieldDefaults(pf) {
+	if len(pf.Constants) > 0 || hasFieldDefaults(pf, hasDefaults) {
 		body.WriteString("// ============ Constants ============\n")
 		writeConstants(&body, pf)
 	}
@@ -137,11 +137,11 @@ func generateHelpers(pf model.ProtoFile, baseDir, subdir, outerClassName string,
 		}
 	}
 
-	if hasFieldDefaults(pf) {
+	if hasFieldDefaults(pf, hasDefaults) {
 		body.WriteString("// ============ TypeDefaults ============\n")
-		writeTypeDefaults(&body, pf, outerClassName)
+		writeTypeDefaults(&body, pf, outerClassName, config, hasDefaults)
 		body.WriteString("// ============ TypeUndefaults ============\n")
-		writeTypeUndefaults(&body, pf, outerClassName)
+		writeTypeUndefaults(&body, pf, outerClassName, hasDefaults)
 	}
 
 	if len(pf.Messages) > 0 {
@@ -1430,59 +1430,40 @@ func hasDefaultHostAnnotation(pf model.ProtoFile) bool {
 	return false
 }
 
-// messagesWithDefaults computes the transitive set of message names that have defaults.
-// A message has defaults if it has direct default annotations on its fields, if it
-// has assert_required message fields (which need nil-initialization), or if it
-// has a non-repeated, non-map, same-package message field whose type has defaults.
-func messagesWithDefaults(pf model.ProtoFile) map[string]bool {
+// messagesWithDefaults returns the set of messages across all parsed files that
+// have defaults, keyed by model.DefaultsKey. A message has defaults if it has
+// direct default annotations on its fields, if it has assert_required message
+// fields (which need nil-initialization), or if it has a non-repeated, non-map
+// message field whose type (same package or another) has defaults.
+func messagesWithDefaults(allFiles []model.ProtoFile) map[string]bool {
 	direct := make(map[string]bool)
-	for _, msg := range pf.Messages {
-		for _, field := range msg.Fields {
-			for _, key := range defaultAnnotationKeys {
-				if _, ok := field.Annotations[key]; ok {
-					direct[msg.Name] = true
-					break
-				}
-			}
-			if _, ok := field.Annotations["default_const"]; ok {
-				direct[msg.Name] = true
-			}
-			if direct[msg.Name] {
-				break
-			}
-			// assert_required on message fields — Defaults must initialize nil fields
-			if field.IsMessage && !field.IsRepeated && !field.IsMap && !field.IsOneOf && field.TypePackage == "" {
-				if _, ok := field.Annotations["assert_required"]; ok {
-					direct[msg.Name] = true
-					break
-				}
-			}
-		}
-	}
-
-	changed := true
-	for changed {
-		changed = false
+	for _, pf := range allFiles {
 		for _, msg := range pf.Messages {
-			if direct[msg.Name] {
-				continue
-			}
 			for _, field := range msg.Fields {
-				if field.IsMessage && !field.IsRepeated && !field.IsMap && field.TypePackage == "" && direct[field.Type] {
-					direct[msg.Name] = true
-					changed = true
-					break
+				for _, key := range defaultAnnotationKeys {
+					if _, ok := field.Annotations[key]; ok {
+						direct[model.DefaultsKey(pf.Package, msg.Name)] = true
+					}
+				}
+				if _, ok := field.Annotations["default_const"]; ok {
+					direct[model.DefaultsKey(pf.Package, msg.Name)] = true
+				}
+				// assert_required on message fields — Defaults must initialize nil fields
+				if field.IsMessage && !field.IsRepeated && !field.IsMap && !field.IsOneOf && field.TypePackage == "" {
+					if _, ok := field.Annotations["assert_required"]; ok {
+						direct[model.DefaultsKey(pf.Package, msg.Name)] = true
+					}
 				}
 			}
 		}
 	}
 
-	return direct
+	return model.ExpandDefaults(allFiles, direct)
 }
 
 // writeTypeDefaults writes type defaults methods that apply default values to message builders
-func writeTypeDefaults(b *strings.Builder, pf model.ProtoFile, outerClassName string) {
-	hasDefaults := messagesWithDefaults(pf)
+func writeTypeDefaults(b *strings.Builder, pf model.ProtoFile, outerClassName string, config *tactype.Config, hasDefaults map[string]bool) {
+	crossHelpers := buildCrossPackageHelpersMap(pf, config)
 	dupFields := findDuplicateDefaultFields(pf.Messages)
 
 	for _, msg := range pf.Messages {
@@ -1574,12 +1555,24 @@ func writeTypeDefaults(b *strings.Builder, pf model.ProtoFile, outerClassName st
 
 		// Sub-message defaults (including assert_required initialization)
 		for _, field := range msg.Fields {
-			if field.IsOneOf || field.IsRepeated || field.IsMap || !field.IsMessage || field.TypePackage != "" {
+			if field.IsOneOf || field.IsRepeated || field.IsMap || !field.IsMessage {
 				continue
 			}
 
 			_, isRequired := field.Annotations["assert_required"]
-			transitive := hasDefaults[field.Type]
+			if field.TypePackage != "" {
+				// Cross-package sub-message: apply its defaults when present, through the
+				// other package's Helpers. assert_required initialization stays same-package.
+				if !isRequired && hasDefaults[model.DefaultsKey(field.TypePackage, field.Type)] {
+					javaFieldName := javaFieldNameUpper(field.Name)
+					fmt.Fprintf(b, "if (msg.has%s()) {\n", javaFieldName)
+					fmt.Fprintf(b, "builder.set%s(%s.%sDefaults(msg.get%s()).build());\n",
+						javaFieldName, crossHelpers[field.TypePackage], strutil.ToLowerFirst(field.Type), javaFieldName)
+					b.WriteString("}\n")
+				}
+				continue
+			}
+			transitive := hasDefaults[model.DefaultsKey(pf.Package, field.Type)]
 
 			if !isRequired && !transitive {
 				continue
@@ -1614,8 +1607,7 @@ func writeTypeDefaults(b *strings.Builder, pf model.ProtoFile, outerClassName st
 
 // writeTypeUndefaults generates the inverse of writeTypeDefaults: resets fields
 // that match their default values back to zero so only user overrides are persisted.
-func writeTypeUndefaults(b *strings.Builder, pf model.ProtoFile, outerClassName string) {
-	hasDefaults := messagesWithDefaults(pf)
+func writeTypeUndefaults(b *strings.Builder, pf model.ProtoFile, outerClassName string, hasDefaults map[string]bool) {
 	dupFields := findDuplicateDefaultFields(pf.Messages)
 
 	for _, msg := range pf.Messages {
@@ -1702,7 +1694,7 @@ func writeTypeUndefaults(b *strings.Builder, pf model.ProtoFile, outerClassName 
 			if field.IsOneOf || field.IsRepeated || field.IsMap || !field.IsMessage || field.TypePackage != "" {
 				continue
 			}
-			if !hasDefaults[field.Type] {
+			if !hasDefaults[model.DefaultsKey(pf.Package, field.Type)] {
 				continue
 			}
 			javaFieldName := javaFieldNameUpper(field.Name)

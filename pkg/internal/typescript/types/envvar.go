@@ -30,7 +30,10 @@ type tsEnvVarImport struct {
 	funcAliases map[string]string
 }
 
-func buildTsEnvVarContext(pf model.ProtoFile) tsEnvVarContext {
+// buildTsEnvVarContext collects the cross-package imports the helpers file needs:
+// the env-var helpers of every imported type, and the Defaults function of each
+// cross-package sub-message that carries defaults (see writeDefaults).
+func buildTsEnvVarContext(pf model.ProtoFile, hasDefaults map[string]bool) tsEnvVarContext {
 	ctx := tsEnvVarContext{imports: make(map[string]*tsEnvVarImport)}
 
 	pkgToImport := make(map[string]string)
@@ -76,6 +79,9 @@ func buildTsEnvVarContext(pf model.ProtoFile) tsEnvVarContext {
 			} else if field.IsMessage {
 				addFunc(field.TypePackage, field.Type+"ToEnvVar")
 				addFunc(field.TypePackage, field.Type+"FromEnvVar")
+			}
+			if _, isRequired := field.Annotations["assert_required"]; field.IsMessage && !isRequired && hasDefaults[model.DefaultsKey(field.TypePackage, field.Type)] {
+				addFunc(field.TypePackage, strutil.LcFirst(field.Type)+"Defaults")
 			}
 		}
 	}

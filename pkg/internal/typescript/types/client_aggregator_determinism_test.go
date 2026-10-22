@@ -145,7 +145,7 @@ func TestTsHelpersKeyEnumImportsAreSorted(t *testing.T) {
 	var first string
 	for i := 0; i < runs; i++ {
 		var b strings.Builder
-		writeCombinedImports(&b, pf, "settings", buildTsEnvVarContext(pf), map[string]bool{})
+		writeCombinedImports(&b, pf, "settings", buildTsEnvVarContext(pf, map[string]bool{}), map[string]bool{})
 		rendered := b.String()
 
 		prev := -1

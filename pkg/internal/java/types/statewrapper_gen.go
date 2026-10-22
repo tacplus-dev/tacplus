@@ -15,6 +15,7 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
@@ -748,18 +749,21 @@ func resolveProtoDir(dp *parser.DescriptorParser, pkg string) string {
 func javaPackageHasTypeDefaults(dp *parser.DescriptorParser, pkg string) bool {
 	all := dp.GetAllFiles()
 	paths := make([]string, 0, len(all))
-	for path, fd := range all {
-		if fd.Package == pkg {
-			paths = append(paths, path)
-		}
+	for path := range all {
+		paths = append(paths, path)
 	}
 	sort.Strings(paths)
+	var allFiles []model.ProtoFile
 	for _, path := range paths {
 		pf, err := dp.ConvertToProtoFile(path)
 		if err != nil {
 			continue
 		}
-		if hasFieldDefaults(pf) {
+		allFiles = append(allFiles, pf)
+	}
+	hasDefaults := messagesWithDefaults(allFiles)
+	for _, pf := range allFiles {
+		if pf.Package == pkg && hasFieldDefaults(pf, hasDefaults) {
 			return true
 		}
 	}

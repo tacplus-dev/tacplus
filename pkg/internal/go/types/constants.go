@@ -98,61 +98,55 @@ func writeConstantsInline(b *strings.Builder, pf model.ProtoFile, fieldDefaults 
 	b.WriteString(f.String())
 }
 
-// messagesWithDefaults computes the transitive set of message names that have defaults.
-// A message has defaults if it has direct default annotations on its fields, if it
-// has assert_required message fields (which need nil-initialization), or if it
-// has a non-repeated, non-map, same-package message field whose type has defaults.
-func messagesWithDefaults(pf model.ProtoFile) map[string]bool {
+// messagesWithDefaults returns the set of messages across all parsed files that
+// have defaults, keyed by model.DefaultsKey. A message has defaults if it has
+// direct default annotations on its fields, if it has assert_required message
+// fields (which need nil-initialization), or if it has a non-repeated, non-map
+// message field whose type (same package or another) has defaults.
+func messagesWithDefaults(allFiles []model.ProtoFile) map[string]bool {
 	direct := make(map[string]bool)
-	for _, msg := range pf.Messages {
-		for _, field := range msg.Fields {
-			// Direct default annotations
-			for _, key := range []string{"default_string", "default_int", "default_float", "default_bool", "default_const", "default_host"} {
-				if _, ok := field.Annotations[key]; ok {
-					direct[msg.Name] = true
-					break
-				}
-			}
-			if direct[msg.Name] {
-				break
-			}
-			// assert_required on message fields — Defaults must initialize nil fields
-			if field.IsMessage && !field.IsRepeated && !field.IsMap && !field.IsOneOf && field.TypePackage == "" {
-				if _, ok := field.Annotations["assert_required"]; ok {
-					direct[msg.Name] = true
-					break
-				}
-			}
-		}
-	}
-
-	// Fixed-point expansion
-	changed := true
-	for changed {
-		changed = false
+	for _, pf := range allFiles {
 		for _, msg := range pf.Messages {
-			if direct[msg.Name] {
-				continue
-			}
 			for _, field := range msg.Fields {
-				if field.IsMessage && !field.IsRepeated && !field.IsMap && field.TypePackage == "" && direct[field.Type] {
-					direct[msg.Name] = true
-					changed = true
+				// Direct default annotations
+				for _, key := range []string{"default_string", "default_int", "default_float", "default_bool", "default_const", "default_host"} {
+					if _, ok := field.Annotations[key]; ok {
+						direct[model.DefaultsKey(pf.Package, msg.Name)] = true
+						break
+					}
+				}
+				if direct[model.DefaultsKey(pf.Package, msg.Name)] {
 					break
+				}
+				// assert_required on message fields — Defaults must initialize nil fields
+				if field.IsMessage && !field.IsRepeated && !field.IsMap && !field.IsOneOf && field.TypePackage == "" {
+					if _, ok := field.Annotations["assert_required"]; ok {
+						direct[model.DefaultsKey(pf.Package, msg.Name)] = true
+						break
+					}
 				}
 			}
 		}
 	}
 
-	return direct
+	return model.ExpandDefaults(allFiles, direct)
+}
+
+// hasFieldDefaults reports whether any message in pf has defaults (see messagesWithDefaults).
+func hasFieldDefaults(pf model.ProtoFile, hasDefaults map[string]bool) bool {
+	for _, msg := range pf.Messages {
+		if hasDefaults[model.DefaultsKey(pf.Package, msg.Name)] {
+			return true
+		}
+	}
+	return false
 }
 
 // writeDefaults generates TypeDefaults functions for every message in the proto file.
 // Each function mutates the message in place, setting zero-valued fields to their defaults.
 // Messages without defaults get an empty function (nil guard + return) so callers can
 // unconditionally call Defaults without checking whether the type has default annotations.
-func writeDefaults(b *strings.Builder, pf model.ProtoFile) {
-	hasDefaults := messagesWithDefaults(pf)
+func writeDefaults(b *strings.Builder, pf model.ProtoFile, hasDefaults map[string]bool) {
 	dupFields := findDuplicateDefaultFieldsGo(pf.Messages)
 
 	// Build lookup from file-level constant name → constant type (for default_const)
@@ -209,12 +203,25 @@ func writeDefaults(b *strings.Builder, pf model.ProtoFile) {
 			if field.IsOneOf || field.IsRepeated || field.IsMap {
 				continue
 			}
-			if !field.IsMessage || field.TypePackage != "" {
+			if !field.IsMessage {
 				continue
 			}
 
 			_, isRequired := field.Annotations["assert_required"]
-			transitive := hasDefaults[field.Type]
+			if field.TypePackage != "" {
+				// Cross-package sub-message: apply its defaults when present. assert_required
+				// initialization stays same-package.
+				if !isRequired && hasDefaults[model.DefaultsKey(field.TypePackage, field.Type)] {
+					subMsgCalls = append(subMsgCalls, subMsgCall{
+						GoField:     toGoFieldName(field.Name),
+						FuncName:    field.TypePackage + "." + field.Type + "Defaults",
+						GoType:      field.Type,
+						HasDefaults: true,
+					})
+				}
+				continue
+			}
+			transitive := hasDefaults[model.DefaultsKey(pf.Package, field.Type)]
 
 			if isRequired || transitive {
 				subMsgCalls = append(subMsgCalls, subMsgCall{
@@ -312,8 +319,7 @@ func constTypeToAnnKey(goType string) string {
 // This allows configs to be stored with only user overrides, so future default
 // changes propagate automatically. Messages without defaults get an empty function
 // (nil guard + return) so callers can unconditionally call Undefaults.
-func writeUndefaults(b *strings.Builder, pf model.ProtoFile) {
-	hasDefaults := messagesWithDefaults(pf)
+func writeUndefaults(b *strings.Builder, pf model.ProtoFile, hasDefaults map[string]bool) {
 	dupFields := findDuplicateDefaultFieldsGo(pf.Messages)
 
 	// Build lookup from file-level constant name → constant type (for default_const)
@@ -369,7 +375,7 @@ func writeUndefaults(b *strings.Builder, pf model.ProtoFile) {
 			if !field.IsMessage || field.TypePackage != "" {
 				continue
 			}
-			if hasDefaults[field.Type] {
+			if hasDefaults[model.DefaultsKey(pf.Package, field.Type)] {
 				subMsgCalls = append(subMsgCalls, subMsgCall{
 					GoField:     toGoFieldName(field.Name),
 					FuncName:    field.Type + "Undefaults",
@@ -524,12 +530,6 @@ func findDuplicateDefaultFieldsGo(messages []model.Message) map[string]bool {
 		}
 	}
 	return strutil.FindDuplicateDefaultFields(entries)
-}
-
-// hasFieldDefaults returns true if any message in pf has defaults, either
-// direct default annotations or transitive defaults via sub-message fields.
-func hasFieldDefaults(pf model.ProtoFile) bool {
-	return len(messagesWithDefaults(pf)) > 0
 }
 
 // writeCapacityConstants emits MAX_SIZE_* and MAX_ITEMS_* constants for bounded fields.

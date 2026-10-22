@@ -456,7 +456,7 @@ type ModuleInfo struct {
 }
 
 // generateModule generates Java code for a single proto package into the shared source tree
-func generateModule(module *ModuleInfo, protoDir string, config *tactype.Config, parentDir string, _allFiles []model.ProtoFile, svcRPCs []proto.ServiceRPCEntry, vsEntries []proto.VServiceEntry) error {
+func generateModule(module *ModuleInfo, protoDir string, config *tactype.Config, parentDir string, allFiles []model.ProtoFile, svcRPCs []proto.ServiceRPCEntry, vsEntries []proto.VServiceEntry) error {
 	// All generated code goes into a shared source tree: parentDir/src/main/java/
 	// The java_package option in each proto file ensures files land in the correct subdirectories.
 	srcDir := filepath.Join(parentDir, "src", "main", "java")
@@ -575,8 +575,9 @@ func generateModule(module *ModuleInfo, protoDir string, config *tactype.Config,
 	// Generate consolidated Helpers.java with all static methods from all proto files.
 	helperBaseDir := srcDir
 	helperSubdir := packagePath
-	if len(mergedProto.Enums) > 0 || len(mergedProto.Constants) > 0 || len(mergedProto.Messages) > 0 || hasFieldDefaults(mergedProto) {
-		if err := generateHelpers(mergedProto, helperBaseDir, helperSubdir, defaultOuterClass, config, svcRPCs, vsEntries); err != nil {
+	hasDefaults := messagesWithDefaults(allFiles)
+	if len(mergedProto.Enums) > 0 || len(mergedProto.Constants) > 0 || len(mergedProto.Messages) > 0 || hasFieldDefaults(mergedProto, hasDefaults) {
+		if err := generateHelpers(mergedProto, helperBaseDir, helperSubdir, defaultOuterClass, config, hasDefaults, svcRPCs, vsEntries); err != nil {
 			return fmt.Errorf("failed to generate Helpers: %w", err)
 		}
 	}

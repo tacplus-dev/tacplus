@@ -179,6 +179,28 @@ mod tests {
         assert!(result.is_ok(), "typed-config install should succeed: {:?}", result.err());
     }
 
+    /// The disk_persistence message lives in the diskstore crate module, and its archive
+    /// omits both intervals. The cross-package defaults must still reach the nested
+    /// messages (issue #97).
+    #[test]
+    fn config_defaults_nested_archive_from_other_package() {
+        use {{.CrateBasePathUnderscore}}_types::sys::diskstore as dsproto;
+        let mut cfg = Config::default();
+        cfg.disk_persistence = Some(dsproto::DiskPersistenceConfig {
+            dir: "/tmp/config-defaults-test".to_string(),
+            archive: Some(dsproto::ArchiveConfig {
+                gcs_bucket: "bucket".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        config_defaults(&mut cfg);
+        let dp = cfg.disk_persistence.as_ref().expect("disk_persistence set");
+        assert_eq!(dp.roll_interval_seconds, 86400, "nested roll_interval_seconds");
+        assert_eq!(dp.archive.as_ref().expect("archive set").checkpoint_interval_seconds, 86400,
+            "nested checkpoint_interval_seconds");
+    }
+
     #[test]
     fn config_defaults_idempotent() {
         let mut cfg = Config::default();

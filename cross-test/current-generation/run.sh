@@ -1966,15 +1966,16 @@ assert_config_defaults_behavioral() {
   # function (not just declared as constants). This proves the generated code
   # would actually apply the default at runtime.
 
-  # Go: ConfigDefaults function body contains "v.FieldName = ..."
+  # Go: ConfigDefaults function body contains "v.FieldName = ..." or, for a
+  # sub-message, "XDefaults(v.FieldName)" (applied in place, possibly cross-package)
   extract_go_defaults_applied() {
     local helpers
     helpers="$(find "$work_root/go" -type f -name 'helpers.go' -path '*/grpcconfig/*' -print -quit)"
     [[ -n "$helpers" ]] || die "behavioral: missing Go grpcconfig helpers.go"
     # Extract field assignments inside ConfigDefaults: "v.SomeName = ..."
     sed -n '/^func ConfigDefaults/,/^func /p' "$helpers" \
-      | grep -oE 'v\.[A-Z][A-Za-z]+ =' \
-      | sed 's/v\.//; s/ =//' \
+      | { grep -oE 'v\.[A-Z][A-Za-z]+ =|Defaults\(v\.[A-Z][A-Za-z]+\)' || true; } \
+      | sed -E 's/^v\.//; s/ =$//; s/^.*Defaults\(v\.//; s/\)$//' \
       | sort -u
   }
 
@@ -1990,15 +1991,16 @@ assert_config_defaults_behavioral() {
       | sort -u
   }
 
-  # Rust: config_defaults function body contains "msg.some_name = ..."
+  # Rust: config_defaults function body contains "msg.some_name = ..." or, for a
+  # sub-message, "if let Some(ref mut v) = msg.some_name { ... }" (applied in place)
   extract_rust_defaults_applied() {
     local helpers
     helpers="$(find "$work_root/rust" -type f -name 'helpers.rs' -path '*/grpcconfig/*' -print -quit)"
     [[ -n "$helpers" ]] || die "behavioral: missing Rust grpcconfig helpers.rs"
     # Extract field assignments inside config_defaults: "msg.some_name = ..."
     sed -n '/pub fn config_defaults/,/^pub fn /p' "$helpers" \
-      | grep -oE 'msg\.[a-z_]+ =' \
-      | sed 's/msg\.//; s/ =//' \
+      | { grep -oE 'msg\.[a-z_]+ =|ref mut v\) = msg\.[a-z_]+' || true; } \
+      | sed -E 's/^ref mut v\) = //; s/^msg\.//; s/ =$//' \
       | sort -u
   }
 

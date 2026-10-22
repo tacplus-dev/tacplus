@@ -222,7 +222,10 @@ timeout "$CLAUDE_TIMEOUT" claude --print --permission-mode acceptEdits \
   --allowedTools "Bash,Read,Edit,Write,Grep,Glob" \
   < "$PROMPT" > "$RUN/claude.log" 2>&1 || rc=$?
 log "claude exited rc=$rc"
-rm -rf "$RUN/tacplus/target/cross-test"
+# Build output is the disk cost (one run's cross-test peaked near 40 GB, 10-22); the logs are what a run keeps.
+rm -rf "$RUN/tacplus/target"
+# Older runs keep their logs, not their clones.
+find "$RUNS" -mindepth 2 -maxdepth 2 -name tacplus -type d -mtime +7 -prune -exec rm -rf {} + 2>/dev/null || true
 
 if gh pr list --repo "$REPO" --state all --head "fix/issue-$ISSUE" --json number --jq '.[0].number' | grep -q .; then
   log "pull request open for #$ISSUE"; exit 0

@@ -301,3 +301,50 @@ func asInt64(v any) (int64, bool) {
 		return 0, false
 	}
 }
+
+// FileLayers maps each proto file's source-relative path to the layer name of
+// the source directory it lives in. layers is parallel to sourceDirs; a file
+// found in several sources (a deduplicated identical copy) belongs to the first
+// source that carries it, whether or not that source names a layer. Files from
+// unlayered sources are left out, so a build that names no layers yields nil.
+func FileLayers(sourceDirs, layers []string) map[string]string {
+	claimed := map[string]bool{}
+	var out map[string]string
+	for i, src := range sourceDirs {
+		layer := ""
+		if i < len(layers) {
+			layer = layers[i]
+		}
+		_ = filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if base := filepath.Base(path); strings.HasPrefix(base, ".") && path != src {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if info.IsDir() || filepath.Ext(path) != ".proto" {
+				return nil
+			}
+			rel, err := filepath.Rel(src, path)
+			if err != nil {
+				return err
+			}
+			rel = filepath.ToSlash(rel)
+			if claimed[rel] {
+				return nil
+			}
+			claimed[rel] = true
+			if layer != "" {
+				if out == nil {
+					out = map[string]string{}
+				}
+				out[rel] = layer
+			}
+			return nil
+		})
+	}
+	return out
+}

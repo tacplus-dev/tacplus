@@ -634,6 +634,12 @@ message ServiceInfo {
   // blob-store volume groups it owns. Read by the operator to render the blob
   // store's group config. Group names are unique fleet-wide.
   repeated VolumeGroupInfo volume_groups = 17;
+
+  // source is the layer name (tacplus.yaml `layer` on src / a sources entry) of
+  // the proto source this service's file came from, e.g. "platform" or "app".
+  // Empty when that source declared no layer or the service is built in.
+  // A classification input for a consumer's own policy, never an authority.
+  string source = 18;
 }
 
 // VolumeGroupInfo describes one declared blob-store volume group.
@@ -717,6 +723,13 @@ message EntitlementGrantInfo {
   // not the entitlement contract, which stays this grant's own package.
   // Wildcard grants leave this empty.
   repeated string routing_alias_packages = 7;
+
+  // source is the layer name (tacplus.yaml `layer` on src / a sources entry) of
+  // the proto source this grant's package came from, e.g. "platform" or "app".
+  // Empty when that source declared no layer, the package is built in, or the
+  // package is declared by files from differently-layered sources. A
+  // classification input for a consumer's own policy, never an authority.
+  string source = 8;
 }
 
 // BuildInfo contains version and build metadata for the registry.

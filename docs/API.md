@@ -848,7 +848,10 @@ package/service/RPC token. Wildcard grants such as `PACKAGE_ANY`,
 `PACKAGE_READ_ANY`, `PACKAGE_WATCH_ANY`, and `PACKAGE_PAGE_ANY` are convenience
 values whose `expands_to` list contains the exact grants they imply. Runtime
 authorizers should authorize against exact grants after expansion; wildcard
-values are not runtime magic.
+values are not runtime magic. Each grant, and each service, carries `source`:
+the `tacplus.yaml` layer name of the proto source its package came from (omitted
+when none was declared). Treat it as a classification input to your own policy,
+not as proof of authority.
 
 Empty classification fields are invalid for **C2S** generated-auth surfaces
 (they hard-fail generation). On S2S/C2D surfaces empty fields are permitted and

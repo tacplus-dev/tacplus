@@ -1245,7 +1245,7 @@ func TestCollectEntitlementGrantsEmitsExactAndCapabilityWildcards(t *testing.T) 
 		},
 	}
 
-	byToken := entitlementGrantMap(collectEntitlementGrants(root))
+	byToken := entitlementGrantMap(collectEntitlementGrants(root, nil))
 	for _, want := range []string{
 		"OPENAI_OPEN_AI_SERVICE_GET_API_KEY",
 		"OPENAI_OPEN_AI_SERVICE_WATCH_API_KEYS",
@@ -1294,7 +1294,7 @@ func TestCollectEntitlementGrantsDoesNotDefaultUnclassifiedC2SToPackageAny(t *te
 		},
 	}
 
-	byToken := entitlementGrantMap(collectEntitlementGrants(root))
+	byToken := entitlementGrantMap(collectEntitlementGrants(root, nil))
 	if byToken["KV_STORE_SEARCH_ITEMS"] == nil {
 		t.Fatalf("collectEntitlementGrants missing exact unclassified C2S grant; got %#v", byToken)
 	}
@@ -1314,7 +1314,7 @@ func TestCollectEntitlementGrantsIncludesGeneratedEventBusTopicMethods(t *testin
 		eventTopicGrantMethod("telemetry", "AgenticCodeEventBusStateService", "SubscribeToEventStream", []verbs.Scope{verbs.ScopeAny, verbs.ScopeWatch}, verbs.ScopeWatch),
 	}
 
-	byToken := entitlementGrantMap(collectEntitlementGrants(root, methods...))
+	byToken := entitlementGrantMap(collectEntitlementGrants(root, nil, methods...))
 	for _, want := range []string{
 		"EVENTBUS_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_PUBLISH_TO_EVENT_STREAM",
 		"EVENTBUS_AGENTIC_CODE_EVENT_BUS_STATE_SERVICE_SUBSCRIBE_TO_EVENT_STREAM",
@@ -1372,7 +1372,7 @@ func TestCollectEntitlementGrantsAttachesRoutingAliasPackageToContractGrant(t *t
 	alias.isRoutingAlias = true
 	alias.routingAliasContractPackage = "tasks"
 
-	byToken := entitlementGrantMap(collectEntitlementGrants(root, alias))
+	byToken := entitlementGrantMap(collectEntitlementGrants(root, nil, alias))
 
 	contract := byToken["TASKS_DELEGATION_PROBE_BUS_STATE_SERVICE_PUBLISH_TO_STREAM"]
 	if contract == nil {

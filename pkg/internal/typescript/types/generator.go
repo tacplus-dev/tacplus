@@ -729,6 +729,7 @@ func Generate(config *tactype.Config) error {
 		InputDir:    protoSrcDir,
 		Language:    "typescript",
 		PackageBase: config.TsPackageBase,
+		FileLayers:  config.SourceLayers,
 	}, allParsedFiles, dp); err != nil {
 		return fmt.Errorf("failed to generate registry.json: %w", err)
 	}

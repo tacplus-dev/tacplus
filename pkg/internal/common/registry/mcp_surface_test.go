@@ -111,7 +111,7 @@ func TestCollectEntitlementGrantsSkipsMcpRpc(t *testing.T) {
 	}
 
 	var tokens []string
-	for _, g := range collectEntitlementGrants(root) {
+	for _, g := range collectEntitlementGrants(root, nil) {
 		tokens = append(tokens, g.GetToken())
 		if g.GetRpc() == "GetTicketBrief" {
 			t.Errorf("MCP tool minted an entitlement grant: %s", g.GetToken())

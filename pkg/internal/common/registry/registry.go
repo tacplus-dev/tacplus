@@ -37,6 +37,12 @@ type Config struct {
 	InputDir    string // proto source directory (for git sha)
 	Language    string // target language ("go", "rust", ...) for the per-language grants helper
 	PackageBase string // language package/module base for the grants helper (Go module path, Java package, Rust crate, Python/TS package)
+
+	// FileLayers maps a proto file's path (relative to the proto root) to the
+	// layer name of the source tree it came from (tacplus.yaml layer). It feeds
+	// the source field on ServiceInfo and EntitlementGrantInfo; nil means no
+	// source declared a layer.
+	FileLayers map[string]string
 }
 
 // treeNode is an internal node in the package hierarchy.
@@ -207,6 +213,7 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 							}
 							seenServices[serviceKey] = true
 							si := &spec.ServiceInfo{
+								Source:       cfg.FileLayers[filepath.ToSlash(fd.Path)],
 								Name:         svc.Name,
 								Description:  svc.Comment,
 								Package:      fd.Package,
@@ -284,7 +291,7 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 	if err != nil {
 		return fmt.Errorf("collecting EventBus entitlement grants: %w", err)
 	}
-	rootNode.EntitlementGrants = collectEntitlementGrants(rootNode, eventTopicGrantMethods...)
+	rootNode.EntitlementGrants = collectEntitlementGrants(rootNode, packageLayers(allFds, cfg.FileLayers), eventTopicGrantMethods...)
 	if err := validateEntitlementGrantTokenCollisions(rootNode.EntitlementGrants); err != nil {
 		return fmt.Errorf("entitlement grant catalog: %w", err)
 	}
@@ -375,7 +382,27 @@ type registryGrantMethod struct {
 	routingAliasContractPackage string
 }
 
-func collectEntitlementGrants(root *spec.PackageNode, additionalMethods ...registryGrantMethod) []*spec.EntitlementGrantInfo {
+// packageLayers maps each proto package to the layer name of the files that
+// declare it. A package declared by files of differently-layered sources maps to
+// "" (ambiguous) rather than to either layer.
+func packageLayers(fds []*parser.FileDescriptor, fileLayers map[string]string) map[string]string {
+	if len(fileLayers) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for _, fd := range fds {
+		layer := fileLayers[filepath.ToSlash(fd.Path)]
+		if prev, seen := out[fd.Package]; seen && prev != layer {
+			layer = ""
+		}
+		out[fd.Package] = layer
+	}
+	return out
+}
+
+// collectEntitlementGrants builds the grant catalog. pkgLayers (may be nil) maps
+// a package to its source layer for each grant's Source.
+func collectEntitlementGrants(root *spec.PackageNode, pkgLayers map[string]string, additionalMethods ...registryGrantMethod) []*spec.EntitlementGrantInfo {
 	methods := append([]registryGrantMethod{}, additionalMethods...)
 	var walk func(node *spec.PackageNode)
 	walk = func(node *spec.PackageNode) {
@@ -421,7 +448,14 @@ func collectEntitlementGrants(root *spec.PackageNode, additionalMethods ...regis
 	// unrelated services that happen to share a service+rpc spelling.
 	contractInfoByKey := make(map[string]*spec.EntitlementGrantInfo)
 	for _, m := range methods {
+		// A routing alias is physically dialed under its host package; the
+		// grant's origin is the contract package it aliases.
+		originPkg := m.meta.Package
+		if m.isRoutingAlias {
+			originPkg = m.routingAliasContractPackage
+		}
 		info := &spec.EntitlementGrantInfo{
+			Source:      pkgLayers[originPkg],
 			Token:       m.token,
 			Package:     m.meta.Package,
 			ServiceName: m.meta.Service,
@@ -466,6 +500,7 @@ func collectEntitlementGrants(root *spec.PackageNode, additionalMethods ...regis
 			out = append(out, &spec.EntitlementGrantInfo{
 				Token:           verbs.CanonicalGrantToken(grant),
 				Package:         pkg,
+				Source:          pkgLayers[pkg],
 				CapabilityScope: string(grant.Capability),
 				ExpandsTo:       exactGrantTokensFromGrants(verbs.ExpandGrant(grant, metas)),
 			})

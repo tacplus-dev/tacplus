@@ -710,6 +710,7 @@ func Generate(config *tactype.Config) error {
 		InputDir:    absInputDir,
 		Language:    "rust",
 		PackageBase: config.CrateBasePath,
+		FileLayers:  config.SourceLayers,
 	}, allParsedFiles, dp); err != nil {
 		return fmt.Errorf("failed to generate registry.json: %w", err)
 	}

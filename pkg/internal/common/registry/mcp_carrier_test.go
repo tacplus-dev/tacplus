@@ -128,7 +128,7 @@ func TestCollectEntitlementGrantsIncludesMcpCarrier(t *testing.T) {
 		Services: []*spec.ServiceInfo{{Name: "Scotty", Package: "scotty", Rpcs: rpcs}},
 	}
 	var found *spec.EntitlementGrantInfo
-	for _, g := range collectEntitlementGrants(root) {
+	for _, g := range collectEntitlementGrants(root, nil) {
 		if g.GetRpc() == "BrokerScottyMcpSession" {
 			found = g
 		}

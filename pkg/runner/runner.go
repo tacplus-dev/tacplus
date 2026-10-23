@@ -112,36 +112,35 @@ func Build(p Params) error {
 // An explicit --src (repeatable) overrides the yaml entirely; otherwise the yaml
 // contributes src (primary) followed by sources (additional). Empty entries are
 // dropped; an empty result means sys-only mode.
-func effectiveSources(p Params, cfg *tacplusyaml.Config) []string {
+func effectiveSources(p Params, cfg *tacplusyaml.Config) []tacplusyaml.Source {
+	var srcs []tacplusyaml.Source
 	if p.SrcExplicit {
-		return filterNonEmpty(p.ProtoSrcs)
+		// --src carries no layer name; layers are declared in tacplus.yaml only.
+		for _, s := range p.ProtoSrcs {
+			if s != "" {
+				srcs = append(srcs, tacplusyaml.Source{Src: s})
+			}
+		}
+		return srcs
 	}
-	var srcs []string
 	if cfg != nil {
 		if cfg.Src != "" {
-			srcs = append(srcs, cfg.Src)
+			srcs = append(srcs, tacplusyaml.Source{Src: cfg.Src, Layer: cfg.Layer})
 		}
-		srcs = append(srcs, filterNonEmpty(cfg.Sources)...)
+		for _, s := range cfg.Sources {
+			if s.Src != "" {
+				srcs = append(srcs, s)
+			}
+		}
 	}
 	return srcs
 }
 
-// filterNonEmpty returns the input with empty strings removed.
-func filterNonEmpty(in []string) []string {
-	var out []string
-	for _, s := range in {
-		if s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
 // anyGitSource reports whether any source spec looks like a git source (vs a
 // local directory), which determines whether a resolvable tag is required.
-func anyGitSource(srcs []string) bool {
+func anyGitSource(srcs []tacplusyaml.Source) bool {
 	for _, s := range srcs {
-		if protosrc.IsGitSource(s) {
+		if protosrc.IsGitSource(s.Src) {
 			return true
 		}
 	}
@@ -236,6 +235,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 	// Resolve proto source. In sys-only mode use an empty temp dir so the
 	// builder has a valid (empty) input; all lib wrappers come from embedded protos.
 	var absProtoDir string
+	var fileLayers map[string]string
 	var protoCleanup func()
 	if sysOnly {
 		tempDir, err := os.MkdirTemp("", "tacplus-sys-*")
@@ -253,17 +253,18 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 	} else if len(srcs) == 1 {
 		// Single source: resolve directly (no merge), preserving the original
 		// fast path exactly.
-		dir, cleanup, err := resolveOneSource(srcs[0], tag)
+		dir, cleanup, err := resolveOneSource(srcs[0].Src, tag)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve proto source: %w", err)
 		}
 		absProtoDir = dir
+		fileLayers = protosrc.FileLayers([]string{dir}, []string{srcs[0].Layer})
 		protoCleanup = cleanup
 	} else {
 		// Multiple sources: resolve each (each with its own proto/-subdir probe)
 		// and merge them into one working proto root. Everything downstream still
 		// sees a single dir, so the generator blast radius is nil.
-		var dirs []string
+		var dirs, layers []string
 		var cleanups []func()
 		runCleanups := func() {
 			for _, c := range cleanups {
@@ -271,12 +272,13 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 			}
 		}
 		for _, s := range srcs {
-			dir, cleanup, err := resolveOneSource(s, tag)
+			dir, cleanup, err := resolveOneSource(s.Src, tag)
 			if err != nil {
 				runCleanups()
-				return nil, fmt.Errorf("failed to resolve proto source %q: %w", s, err)
+				return nil, fmt.Errorf("failed to resolve proto source %q: %w", s.Src, err)
 			}
 			dirs = append(dirs, dir)
+			layers = append(layers, s.Layer)
 			cleanups = append(cleanups, cleanup)
 		}
 		mergedDir, err := os.MkdirTemp("", "tacplus-merged-*")
@@ -290,6 +292,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 			return nil, fmt.Errorf("failed to merge proto sources: %w", err)
 		}
 		absProtoDir = mergedDir
+		fileLayers = protosrc.FileLayers(dirs, layers)
 		protoCleanup = func() {
 			os.RemoveAll(mergedDir)
 			runCleanups()
@@ -439,6 +442,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 		LocalMode:    localMode,
 		SelfPackage:  selfPackageFromCanonical(yamlPkg),
 		SysOnly:      sysOnly,
+		SourceLayers: fileLayers,
 	}
 
 	// Set language-specific package base

@@ -427,6 +427,7 @@ func (b *Builder) generateLanguage(lang, versionStr string, localMode bool) erro
 		AllStates:          b.config.AllStates,
 		SelfPackage:        b.config.SelfPackage,
 		SysOnly:            b.config.SysOnly,
+		SourceLayers:       b.config.SourceLayers,
 	}
 
 	// Call the appropriate language generator

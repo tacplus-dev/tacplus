@@ -140,7 +140,8 @@ that differ only in segments before the last (e.g. `com.a.identity` vs
 Proto package names must be globally unique; choose last segments that are
 unique across the system to avoid collisions in these languages.
 | `src` | string | No | Primary proto source — local path or git URL. No default — must be supplied via `--src` or `tacplus.yaml`. |
-| `sources` | string list | No | Additional proto sources merged with `src` into one generation (e.g. a shared base plus a reusable service's protos). All sources form one proto tree; a file at the same path in two sources must be byte-identical (deduplicated) or it is a hard error, and `dependencies.yaml` is merged across sources (conflicting pins error). Repeatable `--src` on the CLI overrides `src`+`sources`. |
+| `layer` | string | No | Layer name of `src` (e.g. `app`). Carried as `source` on every `registry.json` service and entitlement grant whose package comes from that tree. Not derived from the path, so a local checkout and a git URL label the same tree the same way. |
+| `sources` | list | No | Additional proto sources merged with `src` into one generation (e.g. a shared base plus a reusable service's protos). Each entry is a path/URL string, or a `{src: <path/URL>, layer: <name>}` mapping to name its layer. All sources form one proto tree; a file at the same path in two sources must be byte-identical (deduplicated; the first source listed keeps the file's layer) or it is a hard error, and `dependencies.yaml` is merged across sources (conflicting pins error). Repeatable `--src` on the CLI overrides `src`+`sources` and its sources carry no layer. |
 | `import` | string | No | Path to base config to import (resolved relative to this file) |
 
 ### Client Transport Surfaces
@@ -1409,6 +1410,14 @@ tacplus generates a canonical `registry.json` that acts as the normalized semant
 Proto files are the authored source. `registry.json` is the compiled semantic
 model. Consumer tooling that needs tacplus semantics should read
 `registry.json`, not parse proto files directly.
+
+When the build names source layers (`layer` on `src` and on `sources` entries in
+`tacplus.yaml`), each `entitlement_grants` entry and each service carries a
+`source` field with the layer of the tree its package came from, so a consumer
+can tell platform grants from application grants without a hand-kept list.
+`source` is omitted when the tree declared no layer, the package is built into
+tacplus, or the package's files come from differently-layered trees. It is a
+classification input for the consumer's own policy, never authority to act.
 
 Wildcard entitlement grants are convenience inputs for policy, operators, and
 UI. Consumers should expand them to the exact package/service/RPC grants listed

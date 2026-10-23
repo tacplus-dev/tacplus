@@ -9,7 +9,7 @@
 # Java runtime the generated models pin (protobuf-java 4.36.0) must be at
 # least the protoc gencode version.
 ARG BASE_IMAGE=ghcr.io/tacplus-dev/tacplus/base:latest
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 ARG RUST_VERSION=1
 ARG NODE_VERSION=24
 ARG SWIFT_VERSION=6.1.3
@@ -115,7 +115,7 @@ ARG GRPCIO_TOOLS_VERSION
 LABEL org.opencontainers.image.title="tacplus build" \
       org.opencontainers.image.description="tacplus base plus protoc and every plugin, grpcio-tools, JBMC/OpenJML, just, the docker CLI and gcloud: the image the tacplus gates run in" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus"
-RUN apt-get update && apt-get install -y --no-install-recommends dnsutils iproute2 jbmc patch ripgrep \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends dnsutils iproute2 jbmc patch ripgrep \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=fetch /opt/protoc/bin/protoc /opt/protoc/bin/protoc-gen-grpc-java /usr/local/bin/
 COPY --from=fetch /opt/protoc/include /usr/local/include
@@ -133,9 +133,12 @@ COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/
 COPY images/smoke.sh /usr/local/bin/tacplus-smoke
 RUN ln -s ../lib/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es /usr/local/bin/protoc-gen-es
 # Python codegen runs `python -m grpc_tools.protoc`; black/twine/build are
-# what the Python client gates use. One venv, first on PATH.
+# what the Python client gates use. One venv, first on PATH. The floors
+# on cryptography, pyOpenSSL, jaraco.context and wheel (transitive deps of
+# twine) are the first versions Trivy does not flag at HIGH.
 RUN python3 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir "grpcio-tools==${GRPCIO_TOOLS_VERSION}" black build twine
+    && /opt/venv/bin/pip install --no-cache-dir "grpcio-tools==${GRPCIO_TOOLS_VERSION}" black build twine \
+       "cryptography>=49.0.0" "pyOpenSSL>=26.0.0" "jaraco.context>=6.1.0" "wheel>=0.46.2"
 ENV PATH="/opt/venv/bin:/opt/google-cloud-sdk/bin:/root/.cache/tacplus/tools/openjml:${PATH}" \
     TACPLUS_CONTAINER=1 \
     TACPLUS_IMAGE=build

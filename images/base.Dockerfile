@@ -6,13 +6,13 @@
 # Debian trixie, because it is the release that packages jbmc (the build
 # image's Java verifier); Swift comes from swift.org's Debian 12 tarball,
 # which runs on trixie. Pins in one place:
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 ARG RUST_VERSION=1
 ARG JDK_VERSION=25
 ARG MAVEN_VERSION=3.9
 ARG NODE_VERSION=24
 ARG SWIFT_VERSION=6.1.3
-ARG DOTNET_CHANNEL=8.0
+ARG DOTNET_CHANNEL=10.0
 
 FROM golang:${GO_VERSION}-trixie AS go
 FROM eclipse-temurin:${JDK_VERSION}-jdk AS jdk
@@ -29,7 +29,7 @@ LABEL org.opencontainers.image.title="tacplus base" \
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # Swift's documented runtime dependencies (Debian 12 list, trixie names),
 # .NET's (libicu), and the common build basics.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     bash binutils build-essential ca-certificates cmake curl file git gnupg jq \
     libc6-dev libcurl4-openssl-dev libedit2 libgcc-14-dev libicu76 libncurses-dev \
     libpython3-dev libsqlite3-0 libssl-dev libstdc++-14-dev libxml2-dev libz3-dev \
@@ -54,7 +54,9 @@ RUN case "$TARGETARCH" in \
        "https://download.swift.org/swift-${SWIFT_VERSION}-release/${P}/swift-${SWIFT_VERSION}-RELEASE/${F}.tar.gz" \
     && tar -xz --strip-components=1 -C / -f /tmp/swift.tar.gz && rm /tmp/swift.tar.gz \
     && swift --version
-# .NET SDK (the generated C# clients target net8.0).
+# .NET SDK. The generated C# clients target net8.0, which the current SDK
+# builds against the targeting pack from NuGet; the 8.0 SDK itself ships
+# assemblies with fixed-only HIGH findings and no patched 8.0 SDK exists.
 RUN curl -fsSL --retry 30 --retry-delay 5 -o /tmp/dotnet-install.sh https://dot.net/v1/dotnet-install.sh \
     && bash /tmp/dotnet-install.sh --channel "${DOTNET_CHANNEL}" --install-dir /usr/share/dotnet \
     && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet && rm /tmp/dotnet-install.sh \

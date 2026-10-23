@@ -134,8 +134,10 @@ func AppendStateServiceToProtos(tempProtoDir, inputDir string) error {
 	for _, relPath := range allPaths {
 		fileDesc := dp.GetAllFiles()[relPath]
 		// Skip infrastructure protos except the manifest-declared runtime config
-		// state proto, which contains ServiceConfigState.
-		if IsInfraProtoFile(relPath, fileDesc) && !IsRuntimeConfigStateProto(relPath) {
+		// state proto (ServiceConfigState) and any sys proto that itself declares
+		// a state root: the sys contract's roots (sys/servicehealth.proto) need
+		// their state services exactly like a service's own roots do.
+		if IsInfraProtoFile(relPath, fileDesc) && !IsRuntimeConfigStateProto(relPath) && !declaresStateRoot(fileDesc) {
 			continue
 		}
 
@@ -1878,4 +1880,14 @@ func buildStoreService(ownerPkg, msgName, keyFieldName string, labels []string) 
 	_ = goKeyName // used later for Go client generation
 
 	return buf.String()
+}
+
+// declaresStateRoot reports whether any message in fd carries (spec.service_state).
+func declaresStateRoot(fd *parser.FileDescriptor) bool {
+	for i := range fd.Messages {
+		if ann, ok := fd.Messages[i].Annotations["service_state"]; ok && ann.StringValue != "" {
+			return true
+		}
+	}
+	return false
 }

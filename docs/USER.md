@@ -1631,9 +1631,12 @@ services:
 generated from the fleet's merged protos. `tacplus fleet build` then:
 
 1. unions the registries, refusing a name or id that appears in two;
-2. resolves each service's implementation at its version and checks it against the
-   registry: its lock carries the registry's id (a fleet may run its own kernel, never
-   under a different number) and its proto declares the registered name;
+2. resolves each service's implementation at its version (for its commit and its
+   `depends`) and gathers its **contract** from the registry's home for it: the proto
+   whose file-level identity is the name, plus everything it imports, so a proto repo
+   shared by many services contributes only this service's files. The contract's
+   `registry.yaml` must carry the registry's id (a fleet may run its own kernel, never
+   under a different number) and the proto must declare the registered name;
 3. checks every `depends` of every service is in the fleet, at a version satisfying the
    dependent's floor: this is where the kernel build follows the dependency;
 4. merges the protos (each service's protos and lock, the fleet's pins) into `build/proto`

@@ -30,7 +30,6 @@ package fleet
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -86,13 +85,14 @@ type LockedSource struct {
 
 // LockedService is one resolved service.
 type LockedService struct {
-	Name     string   `yaml:"name"`
-	ID       int32    `yaml:"id"`
-	Version  string   `yaml:"version,omitempty"`
-	Repo     string   `yaml:"repo"`
-	Commit   string   `yaml:"commit"`
-	Contract string   `yaml:"contract,omitempty"`
-	Depends  []string `yaml:"depends,omitempty"`
+	Name           string   `yaml:"name"`
+	ID             int32    `yaml:"id"`
+	Version        string   `yaml:"version,omitempty"`
+	Repo           string   `yaml:"repo"`
+	Commit         string   `yaml:"commit"`
+	Contract       string   `yaml:"contract,omitempty"`
+	ContractCommit string   `yaml:"contract_commit,omitempty"`
+	Depends        []string `yaml:"depends,omitempty"`
 }
 
 var (
@@ -178,11 +178,15 @@ func Build(manifestDir, outDir string) (*Result, error) {
 	}
 	cleanups = append(cleanups, regCleanup)
 
-	// 2. Each service: registered, resolved, its lock agrees, its proto declares it.
+	// 2. Each service: registered; its implementation resolved (for the commit
+	// and its depends); its CONTRACT gathered from the registry's home for it
+	// (the proto that declares it plus everything that proto imports, so a
+	// shared proto repo contributes only this service's files); the contract's
+	// lock carries the registry's id and the proto declares the name.
 	type resolved struct {
 		spec     ServiceSpec
 		id       int32
-		protoDir string
+		protoDir string // staged: this service's contract files + the contract repo's registry.yaml
 		depends  []string
 	}
 	var services []resolved
@@ -192,21 +196,53 @@ func Build(manifestDir, outDir string) (*Result, error) {
 		if !ok {
 			return nil, fmt.Errorf("fleet: service %q is not in any registry the fleet names (%s); register it first", spec.Name, strings.Join(m.Registries, ", "))
 		}
+		contract, _ := union.ContractOf(spec.Name)
+		if contract == "" {
+			return nil, fmt.Errorf("fleet: service %q is registered without a contract; the registry must say where its proto lives", spec.Name)
+		}
 		tag := "latest"
 		if spec.Version != "" {
 			tag = spec.Version + ".latest"
 		}
-		repoDir, protoDir, cleanup, err := resolveImplementation(spec.Repo, tag)
-		if err != nil {
-			return nil, fmt.Errorf("fleet: service %q: %w", spec.Name, err)
-		}
-		cleanups = append(cleanups, cleanup)
 
-		// The implementation's lock must carry the registry's id: a fleet may
-		// run its own kernel, but never under a different number.
-		svcLock, err := registry.Load(protoDir)
+		implDir, _, implCleanup, err := resolveImplementation(spec.Repo, tag)
 		if err != nil {
-			return nil, fmt.Errorf("fleet: service %q: reading its registry lock: %w", spec.Name, err)
+			return nil, fmt.Errorf("fleet: service %q: implementation %s: %w", spec.Name, spec.Repo, err)
+		}
+		cleanups = append(cleanups, implCleanup)
+		var depends []string
+		if tacplusyaml.Exists(implDir) {
+			cfg, err := tacplusyaml.Read(implDir)
+			if err != nil {
+				return nil, fmt.Errorf("fleet: service %q: %w", spec.Name, err)
+			}
+			depends = cfg.Depends
+		}
+
+		// The contract rides the implementation's version when they are the
+		// same repo; a shared contract repo (one proto repo for many services)
+		// is taken at its head.
+		contractTag := "latest"
+		if sameRepo(contract, spec.Repo) {
+			contractTag = tag
+		}
+		contractRepoDir, contractProtoDir, contractCleanup, err := resolveImplementation(contract, contractTag)
+		if err != nil {
+			return nil, fmt.Errorf("fleet: service %q: contract %s: %w", spec.Name, contract, err)
+		}
+		cleanups = append(cleanups, contractCleanup)
+
+		staged, stageCleanup, err := extractContract(contractProtoDir, spec.Name, isService)
+		if err != nil {
+			return nil, fmt.Errorf("fleet: service %q: contract %s: %w", spec.Name, contract, err)
+		}
+		cleanups = append(cleanups, stageCleanup)
+
+		// The contract's lock must carry the registry's id: a fleet may run
+		// its own kernel, but never under a different number.
+		svcLock, err := registry.Load(contractProtoDir)
+		if err != nil {
+			return nil, fmt.Errorf("fleet: service %q: reading the contract's registry.yaml: %w", spec.Name, err)
 		}
 		var lockID int32
 		var inLock bool
@@ -216,33 +252,18 @@ func Build(manifestDir, outDir string) (*Result, error) {
 			lockID, inLock = svcLock.VServiceFieldIDIfPresent(spec.Name)
 		}
 		if !inLock {
-			return nil, fmt.Errorf("fleet: service %q: %s has no entry for it in proto/registry.yaml; run tacplus registry there", spec.Name, spec.Repo)
+			return nil, fmt.Errorf("fleet: service %q: %s has no entry for it in registry.yaml; run tacplus registry there", spec.Name, contract)
 		}
 		if lockID != id {
-			return nil, fmt.Errorf("fleet: service %q: %s declares id %d but the registry says %d; an implementation keeps the registry's id", spec.Name, spec.Repo, lockID, id)
-		}
-		svcNames, vsNames, err := registry.ScanRegistryNames(protoDir)
-		if err != nil {
-			return nil, fmt.Errorf("fleet: service %q: scanning its proto: %w", spec.Name, err)
-		}
-		if !contains(svcNames, spec.Name) && !contains(vsNames, spec.Name) {
-			return nil, fmt.Errorf("fleet: service %q: %s declares no service or vservice named %q; the implementation must implement the registered contract", spec.Name, spec.Repo, spec.Name)
+			return nil, fmt.Errorf("fleet: service %q: %s declares id %d but the registry says %d; an implementation keeps the registry's id", spec.Name, contract, lockID, id)
 		}
 
-		var depends []string
-		if tacplusyaml.Exists(repoDir) {
-			cfg, err := tacplusyaml.Read(repoDir)
-			if err != nil {
-				return nil, fmt.Errorf("fleet: service %q: %w", spec.Name, err)
-			}
-			depends = cfg.Depends
-		}
-		r := resolved{spec: spec, id: id, protoDir: protoDir, depends: depends}
+		r := resolved{spec: spec, id: id, protoDir: staged, depends: depends}
 		services = append(services, r)
 		byName[spec.Name] = &services[len(services)-1]
 		lock.Services = append(lock.Services, LockedService{
 			Name: spec.Name, ID: id, Version: spec.Version, Repo: spec.Repo,
-			Commit: commitOf(repoDir), Contract: contractOf(union, spec.Name), Depends: depends,
+			Commit: commitOf(implDir), Contract: contract, ContractCommit: commitOf(contractRepoDir), Depends: depends,
 		})
 	}
 
@@ -268,16 +289,11 @@ func Build(manifestDir, outDir string) (*Result, error) {
 		return nil, fmt.Errorf("fleet: dependencies not satisfied:\n  %s", strings.Join(errs, "\n  "))
 	}
 
-	// 4. Merge: each service's protos and lock, without its pins; the fleet's
-	// own dependencies.yaml supplies those.
+	// 4. Merge: each service's contract files and lock; the fleet's own
+	// dependencies.yaml supplies the pins.
 	var dirs []string
 	for _, r := range services {
-		staged, cleanup, err := stageWithoutPins(r.protoDir)
-		if err != nil {
-			return nil, fmt.Errorf("fleet: staging %q: %w", r.spec.Name, err)
-		}
-		cleanups = append(cleanups, cleanup)
-		dirs = append(dirs, staged)
+		dirs = append(dirs, r.protoDir)
 	}
 	pinsDir, err := os.MkdirTemp("", "tacplus-fleet-pins-*")
 	if err != nil {
@@ -368,29 +384,59 @@ func resolveImplementation(repo, tag string) (repoDir, protoDir string, cleanup 
 	return res.Dir, protoDir, res.Cleanup, nil
 }
 
-// stageWithoutPins copies a proto tree into a temp dir without its
-// dependencies.yaml.
-func stageWithoutPins(dir string) (string, func(), error) {
-	staged, err := os.MkdirTemp("", "tacplus-fleet-svc-*")
+// extractContract stages, from a contract repo's proto tree, exactly the
+// files that are name's contract: the proto whose file-level identity is name
+// and, transitively, every proto it imports (sys/, google/ and generated/ come
+// from tacplus and are skipped), plus the repo's registry.yaml. A proto repo
+// shared by many services therefore contributes only this service's files.
+func extractContract(protoDir, name string, isService bool) (string, func(), error) {
+	root, rootCleanup, err := registry.PrepareDescriptorRoot(protoDir)
+	if err != nil {
+		return "", nil, fmt.Errorf("preparing descriptors: %w", err)
+	}
+	defer rootCleanup()
+	dp, err := parser.NewDescriptorParser(root)
+	if err != nil {
+		return "", nil, fmt.Errorf("parsing protos: %w", err)
+	}
+	all := dp.GetAllFiles()
+	var owner string
+	for path, fd := range all {
+		if fd == nil {
+			continue
+		}
+		if (isService && fd.ServiceName == name) || (!isService && fd.VServiceName == name) {
+			owner = path
+			break
+		}
+	}
+	if owner == "" {
+		return "", nil, fmt.Errorf("no proto declares %q (file-level (spec.service) / (spec.vservice) identity); the implementation must implement the registered contract", name)
+	}
+	want := map[string]bool{}
+	var walk func(path string)
+	walk = func(path string) {
+		if want[path] || isTacplusProto(path) {
+			return
+		}
+		fd := all[path]
+		if fd == nil {
+			return
+		}
+		want[path] = true
+		for _, imp := range fd.Imports {
+			walk(imp)
+		}
+	}
+	walk(owner)
+
+	staged, err := os.MkdirTemp("", "tacplus-fleet-contract-*")
 	if err != nil {
 		return "", nil, err
 	}
 	cleanup := func() { os.RemoveAll(staged) }
-	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(dir, p)
-		if d.IsDir() {
-			if rel != "." && d.Name()[0] == '.' {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if rel == "dependencies.yaml" {
-			return nil
-		}
-		data, err := os.ReadFile(p)
+	copyOne := func(rel string) error {
+		data, err := os.ReadFile(filepath.Join(protoDir, rel))
 		if err != nil {
 			return err
 		}
@@ -399,12 +445,47 @@ func stageWithoutPins(dir string) (string, func(), error) {
 			return err
 		}
 		return os.WriteFile(dst, data, 0o644)
-	})
-	if err != nil {
-		cleanup()
-		return "", nil, err
+	}
+	paths := make([]string, 0, len(want))
+	for p := range want {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		if err := copyOne(p); err != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("copying %s: %w", p, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(protoDir, "registry.yaml")); err == nil {
+		if err := copyOne("registry.yaml"); err != nil {
+			cleanup()
+			return "", nil, err
+		}
 	}
 	return staged, cleanup, nil
+}
+
+// isTacplusProto reports whether a proto path is supplied by tacplus itself
+// (embedded sys protos, well-known google types, generated stubs).
+func isTacplusProto(path string) bool {
+	p := filepath.ToSlash(path)
+	return strings.HasPrefix(p, "sys/") || strings.HasPrefix(p, "google/") || strings.HasPrefix(p, "generated/")
+}
+
+// sameRepo reports whether two repo references name the same repository,
+// ignoring scheme, host form and a trailing .git.
+func sameRepo(a, b string) bool {
+	norm := func(s string) string {
+		s = strings.TrimSuffix(strings.TrimSpace(s), ".git")
+		s = strings.TrimPrefix(s, "https://")
+		s = strings.TrimPrefix(s, "http://")
+		s = strings.TrimPrefix(s, "ssh://")
+		s = strings.TrimPrefix(s, "git@")
+		s = strings.Replace(s, ":", "/", 1)
+		return strings.TrimSuffix(s, "/")
+	}
+	return norm(a) == norm(b)
 }
 
 func idOf(u *registry.Registry, name string) (int32, bool, bool) {

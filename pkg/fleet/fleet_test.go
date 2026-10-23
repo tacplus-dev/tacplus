@@ -39,9 +39,9 @@ func TestMain(m *testing.M) {
 func TestBuildResolvesChecksMergesAndLocks(t *testing.T) {
 	root := t.TempDir()
 	reg := filepath.Join(root, "registry")
-	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: alpha, id: 101, contract: c-alpha}\n    - {name: beta, id: 102, contract: c-beta}\n")
 	alpha := serviceRepoID(t, root, "alpha", 101, reg, []string{"beta@1.0"})
 	beta := serviceRepoID(t, root, "beta", 102, reg, nil)
+	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: alpha, id: 101, contract: "+alpha+"}\n    - {name: beta, id: 102, contract: "+beta+"}\n")
 	fl := fleetRepo(t, root, reg, "  - {name: alpha, repo: "+alpha+"}\n  - {name: beta, version: \"1.2\", repo: "+beta+"}\n")
 
 	res, err := Build(fl, filepath.Join(root, "out"))
@@ -51,7 +51,7 @@ func TestBuildResolvesChecksMergesAndLocks(t *testing.T) {
 	if len(res.Lock.Services) != 2 || res.Lock.Services[0].Name != "alpha" || res.Lock.Services[0].ID != 101 || res.Lock.Services[1].ID != 102 {
 		t.Fatalf("lock services = %+v", res.Lock.Services)
 	}
-	if res.Lock.Services[0].Depends[0] != "beta@1.0" || res.Lock.Services[0].Contract != "c-alpha" {
+	if res.Lock.Services[0].Depends[0] != "beta@1.0" || res.Lock.Services[0].Contract != alpha {
 		t.Fatalf("lock entry = %+v", res.Lock.Services[0])
 	}
 	for _, p := range []string{"services/alpha.proto", "services/beta.proto", "registry.yaml", "dependencies.yaml"} {
@@ -71,16 +71,16 @@ func TestBuildResolvesChecksMergesAndLocks(t *testing.T) {
 func TestBuildRefusesMissingDependencyAndWrongID(t *testing.T) {
 	root := t.TempDir()
 	reg := filepath.Join(root, "registry")
-	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: alpha, id: 101}\n    - {name: beta, id: 102}\n")
 	alpha := serviceRepoID(t, root, "alpha", 101, reg, []string{"beta"})
+	rogue := serviceRepoID(t, root, "beta", 7, reg, nil)
+	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: alpha, id: 101, contract: "+alpha+"}\n    - {name: beta, id: 102, contract: "+rogue+"}\n")
 	fl := fleetRepo(t, root, reg, "  - {name: alpha, repo: "+alpha+"}\n")
 	_, err := Build(fl, filepath.Join(root, "out"))
 	if err == nil || !strings.Contains(err.Error(), `depends on "beta", which the fleet does not run`) {
 		t.Fatalf("missing dependency err = %v", err)
 	}
 
-	// An implementation that renumbered itself is refused.
-	rogue := serviceRepoID(t, root, "beta", 7, reg, nil)
+	// A contract that renumbered itself is refused.
 	fl2 := fleetRepo(t, filepath.Join(root, "two"), reg, "  - {name: beta, repo: "+rogue+"}\n")
 	_, err = Build(fl2, filepath.Join(root, "out2"))
 	if err == nil || !strings.Contains(err.Error(), "declares id 7 but the registry says 102") {
@@ -91,9 +91,9 @@ func TestBuildRefusesMissingDependencyAndWrongID(t *testing.T) {
 func TestBuildRefusesVersionBelowFloor(t *testing.T) {
 	root := t.TempDir()
 	reg := filepath.Join(root, "registry")
-	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: alpha, id: 101}\n    - {name: beta, id: 102}\n")
 	alpha := serviceRepoID(t, root, "alpha", 101, reg, []string{"beta@2.0"})
 	beta := serviceRepoID(t, root, "beta", 102, reg, nil)
+	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: alpha, id: 101, contract: "+alpha+"}\n    - {name: beta, id: 102, contract: "+beta+"}\n")
 	fl := fleetRepo(t, root, reg, "  - {name: alpha, repo: "+alpha+"}\n  - {name: beta, version: \"1.9\", repo: "+beta+"}\n")
 	_, err := Build(fl, filepath.Join(root, "out"))
 	if err == nil || !strings.Contains(err.Error(), "needs \"beta\" at 2.0") {
@@ -150,4 +150,48 @@ func itoaInt(i int) string {
 		i /= 10
 	}
 	return s
+}
+
+// A shared contract repo (one proto repo declaring many services, the platform
+// shape) contributes only the named service's files and what they import; the
+// implementation repo need not carry a proto at all.
+func TestBuildExtractsAContractFromASharedProtoRepo(t *testing.T) {
+	root := t.TempDir()
+	reg := filepath.Join(root, "registry")
+	shared := filepath.Join(root, "platform-proto")
+	write(t, filepath.Join(shared, "proto", "dependencies.yaml"), "{}\n")
+	write(t, filepath.Join(shared, "proto", "registry.yaml"), "services:\n    - {name: gamma, id: 5}\n    - {name: delta, id: 6}\n")
+	write(t, filepath.Join(shared, "proto", "common", "shapes.proto"), "syntax = \"proto3\";\npackage shapes;\nmessage Box { int32 w = 1; }\n")
+	for _, n := range []string{"gamma", "delta"} {
+		write(t, filepath.Join(shared, "proto", "services", n+".proto"), `syntax = "proto3";
+package `+n+`;
+import "sys/spec.proto";
+import "common/shapes.proto";
+option (spec.service) = {name: "`+n+`"};
+message `+strings.ToUpper(n[:1])+n[1:]+`Request { shapes.Box box = 1; }
+service `+strings.ToUpper(n[:1])+n[1:]+` {
+  option (spec.service_s2s) = {auth_services: ["*"]};
+  rpc Do(`+strings.ToUpper(n[:1])+n[1:]+`Request) returns (`+strings.ToUpper(n[:1])+n[1:]+`Request);
+}
+`)
+	}
+	impl := filepath.Join(root, "gamma-impl")
+	write(t, filepath.Join(impl, "tacplus.yaml"), "language: go\nsrc: "+filepath.Join(shared, "proto")+"\noutput-dir: model\n")
+	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: gamma, id: 5, contract: "+shared+"}\n    - {name: delta, id: 6, contract: "+shared+"}\n")
+	fl := fleetRepo(t, root, reg, "  - {name: gamma, repo: "+impl+"}\n")
+	res, err := Build(fl, filepath.Join(root, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"services/gamma.proto", "common/shapes.proto", "registry.yaml"} {
+		if _, err := os.Stat(filepath.Join(res.ProtoDir, p)); err != nil {
+			t.Errorf("merged tree lacks %s", p)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(res.ProtoDir, "services", "delta.proto")); !os.IsNotExist(err) {
+		t.Error("a service the fleet does not run must not be dragged in from the shared contract repo")
+	}
+	if res.Lock.Services[0].ContractCommit == "" {
+		t.Error("lock must record the contract's commit")
+	}
 }

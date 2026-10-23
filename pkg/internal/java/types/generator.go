@@ -1398,6 +1398,7 @@ func Generate(config *tactype.Config) error {
 		InputDir:    protoDir,
 		Language:    "java",
 		PackageBase: config.JavaPackageBase,
+		FileLayers:  config.SourceLayers,
 	}, allParsedFiles, allProtoParser); err != nil {
 		return fmt.Errorf("failed to generate registry.json: %w", err)
 	}

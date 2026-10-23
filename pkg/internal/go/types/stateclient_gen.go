@@ -1633,6 +1633,7 @@ func generateRegistry(config *tactype.Config, _servicesInfo []ServiceInfo, input
 		InputDir:    inputDir,
 		Language:    "go",
 		PackageBase: config.ModuleBasePath,
+		FileLayers:  config.SourceLayers,
 	}, allParsedFiles, dp)
 }
 

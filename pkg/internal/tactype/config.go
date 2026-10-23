@@ -37,6 +37,11 @@ type Config struct {
 	ProjectDir   string // Project root directory (CWD)
 	DepsYAMLPath string // Path to dependencies.yaml file for dependency management
 	FlatProtoDir string // De-circularized flat copy of protos for protoc-based parsing (set by builder)
+	// SourceLayers maps a proto file's path relative to ProtoDir to the layer
+	// name of the --src/tacplus.yaml source it came from (set by the runner;
+	// nil or missing when no layer was declared). Feeds the registry's
+	// per-service and per-grant source field.
+	SourceLayers map[string]string
 	// AnnotatedProtoDir is the proto directory with tacplus-injected services and
 	// spec.* annotations still present (unlike FlatProtoDir, where annotations are
 	// stripped). Set by language generators that need to read annotations (e.g.

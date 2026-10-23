@@ -39,6 +39,9 @@ Multiple proto sources:
   deduplicated); a genuine conflict is a hard error — factor the shared file
   into a single source. dependencies.yaml is merged across sources (conflicting
   pins are an error).
+  Name a source's layer in tacplus.yaml ("layer:" beside src, or a
+  {src, layer} entry in "sources:") and each registry.json service and grant
+  from it carries that name as "source".
 
 If tacplus.yaml exists in the current directory, configuration is read from it
 automatically. Flags are optional overrides.

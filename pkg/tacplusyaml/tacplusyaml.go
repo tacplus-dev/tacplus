@@ -37,12 +37,49 @@ func (c ClientsConfig) IsZero() bool {
 	return c.C2S.IsZero() && c.W2S.IsZero() && c.C2D.IsZero()
 }
 
+// Source is one entry of the tacplus.yaml sources list. It is written either as
+// a plain path/URL string or as a mapping {src: <path/URL>, layer: <name>}; the
+// optional layer names the tree for the registry's per-grant source field.
+type Source struct {
+	Src   string `yaml:"src"`
+	Layer string `yaml:"layer,omitempty"`
+}
+
+// UnmarshalYAML accepts a scalar (the source path/URL) or a {src, layer} mapping.
+func (s *Source) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		var str string
+		if err := node.Decode(&str); err != nil {
+			return err
+		}
+		*s = Source{Src: str}
+		return nil
+	}
+	type plain Source
+	var p plain
+	if err := node.Decode(&p); err != nil {
+		return err
+	}
+	*s = Source(p)
+	return nil
+}
+
+// MarshalYAML writes a layerless source back as the plain string it was read as.
+func (s Source) MarshalYAML() (any, error) {
+	if s.Layer == "" {
+		return s.Src, nil
+	}
+	type plain Source
+	return plain(s), nil
+}
+
 // Config represents the tacplus.yaml schema.
 type Config struct {
 	Import     string        `yaml:"import,omitempty"`      // path to base config to import (resolved relative to this file's directory)
 	Language   string        `yaml:"language"`              // go, java, typescript, python, rust, swift
 	Src        string        `yaml:"src"`                   // primary proto source (git URL or local path)
-	Sources    []string      `yaml:"sources,omitempty"`     // additional proto sources merged with src into one generation (e.g. a shared base + a reusable service's protos)
+	Layer      string        `yaml:"layer,omitempty"`       // layer name of src (e.g. "platform"); carried as source on each registry grant and service from that tree
+	Sources    []Source      `yaml:"sources,omitempty"`     // additional proto sources merged with src into one generation (e.g. a shared base + a reusable service's protos); each is a path/URL or {src, layer}
 	Pkg        string        `yaml:"pkg"`                   // canonical package name (Java-style reverse DNS, e.g. "com.example.services.identity")
 	Clients    ClientsConfig `yaml:"clients,omitempty"`     // generated C2S/W2S/C2D client transport surfaces
 	OutputDir  string        `yaml:"output-dir"`            // output subdirectory relative to project dir (required)
@@ -192,6 +229,9 @@ func MergeConfigs(base, overlay *Config) *Config {
 	}
 	if overlay.Src != "" {
 		result.Src = overlay.Src
+	}
+	if overlay.Layer != "" {
+		result.Layer = overlay.Layer
 	}
 	// Sources: overlay wins if it declares any (layered -c override semantics).
 	if len(overlay.Sources) > 0 {

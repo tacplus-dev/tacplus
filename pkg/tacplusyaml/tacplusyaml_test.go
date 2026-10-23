@@ -6,6 +6,7 @@ package tacplusyaml
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -574,5 +575,55 @@ func TestWriteThenRead(t *testing.T) {
 	}
 	if got.OutputDir != original.OutputDir {
 		t.Errorf("OutputDir = %q, want %q", got.OutputDir, original.OutputDir)
+	}
+}
+
+func TestSourcesAcceptStringOrLayeredMapping(t *testing.T) {
+	dir := t.TempDir()
+	yml := `language: go
+output-dir: model
+src: ../app/proto
+layer: app
+sources:
+  - ../base/proto
+  - src: ../platform/proto
+    layer: platform
+`
+	if err := os.WriteFile(filepath.Join(dir, Filename), []byte(yml), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Read(dir)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if cfg.Layer != "app" {
+		t.Errorf("Layer = %q, want app", cfg.Layer)
+	}
+	want := []Source{{Src: "../base/proto"}, {Src: "../platform/proto", Layer: "platform"}}
+	if !reflect.DeepEqual(cfg.Sources, want) {
+		t.Errorf("Sources = %#v, want %#v", cfg.Sources, want)
+	}
+
+	// Round-trip: a layerless source is written back as a plain string.
+	if err := Write(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Read(dir)
+	if err != nil {
+		t.Fatalf("re-Read: %v", err)
+	}
+	if !reflect.DeepEqual(again, cfg) {
+		t.Errorf("round trip changed config: %#v vs %#v", again, cfg)
+	}
+}
+
+func TestMergeConfigsLayer(t *testing.T) {
+	got := MergeConfigs(&Config{Src: "a", Layer: "base"}, &Config{Layer: "app"})
+	if got.Layer != "app" {
+		t.Errorf("overlay layer lost: %q", got.Layer)
+	}
+	got = MergeConfigs(&Config{Src: "a", Layer: "base"}, &Config{})
+	if got.Layer != "base" {
+		t.Errorf("base layer lost: %q", got.Layer)
 	}
 }

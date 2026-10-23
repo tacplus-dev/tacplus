@@ -6,6 +6,7 @@ package protosrc
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -298,5 +299,37 @@ func TestMergeSources_RegistryIDMinMaxIsOrderIndependent(t *testing.T) {
 	}
 	if doc.IDMin != 70 {
 		t.Errorf("id_min = %d, want 70 (the higher floor)", doc.IDMin)
+	}
+}
+
+func TestFileLayers(t *testing.T) {
+	root := t.TempDir()
+	write := func(dir, rel string) string {
+		p := filepath.Join(root, dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("syntax = \"proto3\";\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return filepath.Join(root, dir)
+	}
+	plat := write("plat", "kernel/kernel.proto")
+	write("plat", "common/shared.proto")
+	app := write("app", "fleet/fleet.proto")
+	write("app", "common/shared.proto") // identical copy: first source keeps it
+	bare := write("bare", "misc/misc.proto")
+
+	got := FileLayers([]string{plat, app, bare}, []string{"platform", "app", ""})
+	want := map[string]string{
+		"kernel/kernel.proto": "platform",
+		"common/shared.proto": "platform",
+		"fleet/fleet.proto":   "app",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("FileLayers = %v, want %v", got, want)
+	}
+	if got := FileLayers([]string{plat}, []string{""}); got != nil {
+		t.Errorf("no layers named should give nil, got %v", got)
 	}
 }

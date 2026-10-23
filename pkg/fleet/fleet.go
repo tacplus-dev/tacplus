@@ -389,46 +389,53 @@ func resolveImplementation(repo, tag string) (repoDir, protoDir string, cleanup 
 // and, transitively, every proto it imports (sys/, google/ and generated/ come
 // from tacplus and are skipped), plus the repo's registry.yaml. A proto repo
 // shared by many services therefore contributes only this service's files.
+//
+// Identity and imports are read from the proto text, not from a descriptor
+// parse: a shared repo may hold protos this generator cannot parse (another
+// service's, needing a newer sys proto), and that must not block a service
+// whose own closure is fine. The merged tree is parsed and checked afterwards.
 func extractContract(protoDir, name string, isService bool) (string, func(), error) {
-	root, rootCleanup, err := registry.PrepareDescriptorRoot(protoDir)
+	files, err := protoFiles(protoDir)
 	if err != nil {
-		return "", nil, fmt.Errorf("preparing descriptors: %w", err)
+		return "", nil, err
 	}
-	defer rootCleanup()
-	dp, err := parser.NewDescriptorParser(root)
-	if err != nil {
-		return "", nil, fmt.Errorf("parsing protos: %w", err)
-	}
-	all := dp.GetAllFiles()
-	var owner string
-	for path, fd := range all {
-		if fd == nil {
-			continue
+	owner := ""
+	for _, rel := range files {
+		data, err := os.ReadFile(filepath.Join(protoDir, rel))
+		if err != nil {
+			return "", nil, err
 		}
-		if (isService && fd.ServiceName == name) || (!isService && fd.VServiceName == name) {
-			owner = path
-			break
+		if declaresIdentity(string(data), name, isService) {
+			if owner != "" {
+				return "", nil, fmt.Errorf("both %s and %s declare %q", owner, rel, name)
+			}
+			owner = rel
 		}
 	}
 	if owner == "" {
 		return "", nil, fmt.Errorf("no proto declares %q (file-level (spec.service) / (spec.vservice) identity); the implementation must implement the registered contract", name)
 	}
 	want := map[string]bool{}
-	var walk func(path string)
-	walk = func(path string) {
-		if want[path] || isTacplusProto(path) {
-			return
+	var walk func(rel string) error
+	walk = func(rel string) error {
+		if want[rel] || isTacplusProto(rel) {
+			return nil
 		}
-		fd := all[path]
-		if fd == nil {
-			return
+		data, err := os.ReadFile(filepath.Join(protoDir, rel))
+		if err != nil {
+			return fmt.Errorf("%s imports %s, which is not in the contract repo", owner, rel)
 		}
-		want[path] = true
-		for _, imp := range fd.Imports {
-			walk(imp)
+		want[rel] = true
+		for _, imp := range importsOf(string(data)) {
+			if err := walk(imp); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
-	walk(owner)
+	if err := walk(owner); err != nil {
+		return "", nil, err
+	}
 
 	staged, err := os.MkdirTemp("", "tacplus-fleet-contract-*")
 	if err != nil {
@@ -464,6 +471,79 @@ func extractContract(protoDir, name string, isService bool) (string, func(), err
 		}
 	}
 	return staged, cleanup, nil
+}
+
+// protoFiles lists every .proto under dir, relative, sorted, skipping hidden
+// dirs and tacplus-supplied trees.
+func protoFiles(dir string) ([]string, error) {
+	var out []string
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, p)
+		if d.IsDir() {
+			if rel != "." && (d.Name()[0] == '.' || isTacplusProto(rel+"/")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(p, ".proto") {
+			out = append(out, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out, err
+}
+
+var (
+	importRe   = regexp.MustCompile(`(?m)^\s*import\s+(?:public\s+|weak\s+)?"([^"]+)"\s*;`)
+	serviceRe  = regexp.MustCompile(`(?s)option\s*\(\s*spec\.service\s*\)\s*=\s*\{([^}]*)\}`)
+	vserviceRe = regexp.MustCompile(`(?s)option\s*\(\s*spec\.vservice\s*\)\s*=\s*\{([^}]*)\}`)
+	nameRe2    = regexp.MustCompile(`\bname\s*:\s*"([^"]+)"`)
+	packageRe  = regexp.MustCompile(`(?m)^\s*package\s+([A-Za-z_][\w.]*)\s*;`)
+)
+
+// importsOf returns a proto file's import paths, in order.
+func importsOf(src string) []string {
+	var out []string
+	for _, m := range importRe.FindAllStringSubmatch(stripComments(src), -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+// declaresIdentity reports whether src carries the file-level identity name:
+// (spec.service) for a service (its explicit name, or the package when no name
+// is given), (spec.vservice) for a vservice.
+func declaresIdentity(src, name string, isService bool) bool {
+	src = stripComments(src)
+	re := vserviceRe
+	if isService {
+		re = serviceRe
+	}
+	m := re.FindStringSubmatch(src)
+	if m == nil {
+		return false
+	}
+	if n := nameRe2.FindStringSubmatch(m[1]); n != nil {
+		return n[1] == name
+	}
+	if !isService {
+		return false
+	}
+	if pm := packageRe.FindStringSubmatch(src); pm != nil {
+		return pm[1] == name
+	}
+	return false
+}
+
+// stripComments removes // and /* */ comments so a commented-out option or
+// import is not read as a live one.
+func stripComments(src string) string {
+	src = regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllString(src, "")
+	return regexp.MustCompile(`(?m)//[^\n]*`).ReplaceAllString(src, "")
 }
 
 // isTacplusProto reports whether a proto path is supplied by tacplus itself

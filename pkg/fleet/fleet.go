@@ -315,6 +315,9 @@ func Build(manifestDir, outDir string) (*Result, error) {
 	if err := protosrc.MergeSources(dirs, mergedDir); err != nil {
 		return nil, fmt.Errorf("fleet: merging protos: %w", err)
 	}
+	if err := writeFleetLock(mergedDir, m.Registries, union); err != nil {
+		return nil, err
+	}
 
 	// 5. Whole-fleet checks over the merged tree.
 	if err := validateFleet(mergedDir); err != nil {
@@ -332,6 +335,42 @@ func Build(manifestDir, outDir string) (*Result, error) {
 	}
 	zap.L().Info("fleet resolved", zap.Int("services", len(services)), zap.String("proto", mergedDir), zap.String("lock", filepath.Join(manifestDir, LockFile)))
 	return &Result{Lock: lock, ProtoDir: mergedDir}, nil
+}
+
+// writeFleetLock writes the merged tree's registry.yaml: a lock naming the
+// fleet's registries, with an entry for every service and vservice the merged
+// protos declare, each at the id the registries' union gives it. A declared
+// name no registry knows is an error: the fleet runs only registered things.
+func writeFleetLock(mergedDir string, registries []string, union *registry.Registry) error {
+	svcNames, vsNames, err := registry.ScanRegistryNames(mergedDir)
+	if err != nil {
+		return fmt.Errorf("fleet: scanning the merged protos: %w", err)
+	}
+	lock := &registry.Registry{Registries: registries}
+	var missing []string
+	for _, n := range svcNames {
+		e, ok := union.ServiceEntry(n)
+		if !ok {
+			missing = append(missing, "service "+n)
+			continue
+		}
+		c := *e
+		lock.Services = append(lock.Services, &c)
+	}
+	for _, n := range vsNames {
+		e, ok := union.VServiceEntry(n)
+		if !ok {
+			missing = append(missing, "vservice "+n)
+			continue
+		}
+		c := *e
+		lock.VServices = append(lock.VServices, &c)
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("fleet: the merged protos declare names no registry the fleet names knows:\n  %s", strings.Join(missing, "\n  "))
+	}
+	return lock.SaveTo(mergedDir)
 }
 
 // validateFleet runs the checks that only a whole fleet can answer: every
@@ -387,8 +426,9 @@ func resolveImplementation(repo, tag string) (repoDir, protoDir string, cleanup 
 // extractContract stages, from a contract repo's proto tree, exactly the
 // files that are name's contract: the proto whose file-level identity is name
 // and, transitively, every proto it imports (sys/, google/ and generated/ come
-// from tacplus and are skipped), plus the repo's registry.yaml. A proto repo
-// shared by many services therefore contributes only this service's files.
+// from tacplus and are skipped). A proto repo shared by many services therefore
+// contributes only this service's files. Its registry.yaml is not copied: the
+// merged tree gets one lock synthesized from the registries' union.
 //
 // Identity and imports are read from the proto text, not from a descriptor
 // parse: a shared repo may hold protos this generator cannot parse (another
@@ -436,6 +476,38 @@ func extractContract(protoDir, name string, isService bool) (string, func(), err
 	if err := walk(owner); err != nil {
 		return "", nil, err
 	}
+	// A contract may name another file's package inside an option without
+	// importing it: (spec.opa_import).source, a state_import, a client. When
+	// that package is declared in this same repo it is part of the contract
+	// too (an OPA-eval input, say), so follow it; references to packages
+	// declared elsewhere are other services, which the fleet lists.
+	byPackage := map[string]string{}
+	for _, rel := range files {
+		data, err := os.ReadFile(filepath.Join(protoDir, rel))
+		if err != nil {
+			return "", nil, err
+		}
+		if pm := packageRe.FindStringSubmatch(stripComments(string(data))); pm != nil {
+			byPackage[pm[1]] = rel
+		}
+	}
+	for {
+		added := false
+		for rel := range want {
+			data, _ := os.ReadFile(filepath.Join(protoDir, rel))
+			for _, m := range optionRefRe.FindAllStringSubmatch(stripComments(string(data)), -1) {
+				if target, ok := byPackage[m[1]]; ok && !want[target] {
+					if err := walk(target); err != nil {
+						return "", nil, err
+					}
+					added = true
+				}
+			}
+		}
+		if !added {
+			break
+		}
+	}
 
 	staged, err := os.MkdirTemp("", "tacplus-fleet-contract-*")
 	if err != nil {
@@ -462,12 +534,6 @@ func extractContract(protoDir, name string, isService bool) (string, func(), err
 		if err := copyOne(p); err != nil {
 			cleanup()
 			return "", nil, fmt.Errorf("copying %s: %w", p, err)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(protoDir, "registry.yaml")); err == nil {
-		if err := copyOne("registry.yaml"); err != nil {
-			cleanup()
-			return "", nil, err
 		}
 	}
 	return staged, cleanup, nil
@@ -503,6 +569,9 @@ var (
 	vserviceRe = regexp.MustCompile(`(?s)option\s*\(\s*spec\.vservice\s*\)\s*=\s*\{([^}]*)\}`)
 	nameRe2    = regexp.MustCompile(`\bname\s*:\s*"([^"]+)"`)
 	packageRe  = regexp.MustCompile(`(?m)^\s*package\s+([A-Za-z_][\w.]*)\s*;`)
+	// optionRefRe matches a "package.Name" string value inside a spec option,
+	// e.g. source: "userentitlements.EntitlementEvalInput".
+	optionRefRe = regexp.MustCompile(`(?:source|service|host|target)\s*:\s*"([a-z_][a-z0-9_]*)\.[A-Z][A-Za-z0-9_]*"`)
 )
 
 // importsOf returns a proto file's import paths, in order.

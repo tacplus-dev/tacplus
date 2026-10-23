@@ -286,6 +286,15 @@ func (r *Registry) ProjectSlices() []*ServiceEntry {
 	return out
 }
 
+// SaveTo writes this registry's content as dir/registry.yaml unconditionally
+// (a synthesized lock, not a loaded file being saved back).
+func (r *Registry) SaveTo(dir string) error {
+	saved := *r
+	saved.inputDir = dir
+	saved.dirty = true
+	return saved.Save()
+}
+
 // Save writes the registry back to registry.yaml if it was modified.
 func (r *Registry) Save() error {
 	if !r.dirty || r.inputDir == "" {

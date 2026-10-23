@@ -279,3 +279,15 @@ func LoadAuthorities(refs []string, resolve func(ref string) (dir string, cleanu
 	}
 	return u, cleanup, nil
 }
+
+// ServiceEntry returns the registered service entry for name.
+func (r *Registry) ServiceEntry(name string) (*ServiceEntry, bool) {
+	e, ok := r.byName[name]
+	return e, ok
+}
+
+// VServiceEntry returns the registered vservice entry for name.
+func (r *Registry) VServiceEntry(name string) (*VServiceEntry, bool) {
+	e, ok := r.vsByName[name]
+	return e, ok
+}

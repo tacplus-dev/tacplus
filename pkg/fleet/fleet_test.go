@@ -195,3 +195,31 @@ service `+strings.ToUpper(n[:1])+n[1:]+` {
 		t.Error("lock must record the contract's commit")
 	}
 }
+
+// A contract may reference a sibling file's package only inside an option
+// (an OPA-eval input source); that file is part of the contract and comes along.
+func TestExtractContractFollowsOptionReferences(t *testing.T) {
+	root := t.TempDir()
+	shared := filepath.Join(root, "proto")
+	write(t, filepath.Join(shared, "vservices", "inputs.proto"), "syntax = \"proto3\";\npackage evalinputs;\nimport \"sys/spec.proto\";\nmessage EvalInput { option (spec.opa_eval) = {}; string who = 1; }\n")
+	write(t, filepath.Join(shared, "vservices", "unrelated.proto"), "syntax = \"proto3\";\npackage unrelated;\nmessage X {}\n")
+	write(t, filepath.Join(shared, "services", "host.proto"), `syntax = "proto3";
+package host;
+import "sys/spec.proto";
+option (spec.service) = {name: "host"};
+option (spec.opa_import) = {source: "evalinputs.EvalInput", service: "opa"};
+message Req {}
+service Host { option (spec.service_s2s) = {}; rpc Do(Req) returns (Req); }
+`)
+	staged, cleanup, err := extractContract(shared, "host", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if _, err := os.Stat(filepath.Join(staged, "vservices", "inputs.proto")); err != nil {
+		t.Fatal("the option-referenced file must be part of the contract")
+	}
+	if _, err := os.Stat(filepath.Join(staged, "vservices", "unrelated.proto")); !os.IsNotExist(err) {
+		t.Fatal("an unreferenced sibling must not come along")
+	}
+}

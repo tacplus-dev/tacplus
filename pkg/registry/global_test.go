@@ -20,7 +20,7 @@ func writeRegistry(t *testing.T, content string) string {
 }
 
 const globalSeed = `services:
-    - {name: kernel, id: 8, repo: git@gitlab.com:x/platform.git, visibility: private}
+    - {name: kernel, id: 8, repo: git@gitlab.com:x/platform.git, visibility: private, tenant_slice_field: 1}
     - {name: tally, id: 79, repo: https://gitlab.com/x/sonar.git, visibility: private}
 vservices:
     - {name: query, field_id: 71, repo: https://gitlab.com/x/sonar.git, visibility: private}
@@ -77,13 +77,16 @@ func TestSyncFromGlobalFillsLockAndReportsUnregistered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = lock.SyncFromGlobal(g, []string{"tally", "nobody"}, []string{"query"})
+	err = lock.SyncFromGlobal(g, []string{"tally", "kernel", "nobody"}, []string{"query"})
 	if err == nil || !strings.Contains(err.Error(), `service "nobody"`) || !strings.Contains(err.Error(), "tacplus registry register") {
 		t.Fatalf("err = %v", err)
 	}
 	// The registered names were still synced, so one fix is one re-run.
 	if lock.byName["tally"] == nil || lock.byName["tally"].ID != 79 || lock.vsByName["query"] == nil || lock.vsByName["query"].FieldID != 71 {
 		t.Fatalf("lock not synced: %+v %+v", lock.Services, lock.VServices)
+	}
+	if k := lock.byName["kernel"]; k == nil || k.TenantSliceField != 1 {
+		t.Fatalf("slice fields are wire numbers and must sync from the global registry: %+v", k)
 	}
 	if err := lock.Save(); err != nil {
 		t.Fatal(err)

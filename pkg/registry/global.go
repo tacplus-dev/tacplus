@@ -97,13 +97,16 @@ func (r *Registry) SyncFromGlobal(global *Registry, serviceNames, vserviceNames 
 				conflicts = append(conflicts, fmt.Sprintf("service %q is %d in this lock but %d in the global registry", name, l.ID, g.ID))
 				continue
 			}
-			if l.Repo != g.Repo || l.Visibility != g.Visibility {
+			// Slice fields are wire numbers too (TenantConfig / ProjectConfig
+			// field numbers); the global registry owns them like the id.
+			if l.Repo != g.Repo || l.Visibility != g.Visibility || l.TenantSliceField != g.TenantSliceField || l.ProjectSliceField != g.ProjectSliceField {
 				l.Repo, l.Visibility = g.Repo, g.Visibility
+				l.TenantSliceField, l.ProjectSliceField = g.TenantSliceField, g.ProjectSliceField
 				r.dirty = true
 			}
 			continue
 		}
-		e := &ServiceEntry{Name: name, ID: g.ID, Repo: g.Repo, Visibility: g.Visibility}
+		e := &ServiceEntry{Name: name, ID: g.ID, Repo: g.Repo, Visibility: g.Visibility, TenantSliceField: g.TenantSliceField, ProjectSliceField: g.ProjectSliceField}
 		r.Services = append(r.Services, e)
 		r.byName[name] = e
 		r.dirty = true

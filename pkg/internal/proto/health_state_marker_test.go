@@ -70,26 +70,7 @@ service AppService {
 	if err := os.WriteFile(filepath.Join(dir, "services", "app.proto"), []byte(serviceProto), 0644); err != nil {
 		t.Fatalf("write service proto: %v", err)
 	}
-	healthProto := `syntax = "proto3";
-
-package apphealth;
-
-import "sys/healthreport.proto";
-import "sys/spec.proto";
-
-message ServiceHealth {
-  option (spec.service_state) = {name: "ServiceHealth", label: ["state-store"], export: true};
-
-  repeated healthreport.ServiceInstanceHealth instances = 1 [
-    (spec.instance_keyed) = true,
-    (spec.assert_max_size) = 10000
-  ];
-}
-`
-	if err := os.WriteFile(filepath.Join(dir, "platform", "health.proto"), []byte(healthProto), 0644); err != nil {
-		t.Fatalf("write health proto: %v", err)
-	}
-
+	// ServiceHealth is supplied by the sys contract (sys/servicehealth.proto).
 	cfg := &tactype.Config{SelfPackage: "app"}
 	if err := InjectHealthState(cfg, dir); err != nil {
 		t.Fatalf("InjectHealthState: %v", err)

@@ -273,40 +273,48 @@ CLI flags override YAML values when both are specified.
 
 Service and vservice ids are field numbers in the generated `TokenEntitlements`
 message and values of the `ServiceName` enum, so they must be unique across every
-proto repo that may be composed into one kernel. `registry.yaml` at the proto root
-records them.
+proto repo that may be composed into one kernel. `registry.yaml` at a proto root
+records them. Three shapes exist:
 
-Two shapes of `registry.yaml` exist:
-
-- **The global registry** (`github.com/tacplus-dev/registry`) is the one authority.
-  Each entry names the proto repo that declares the service and whether that repo
-  is public. It is append-only; ids are never reused or renumbered.
-  Register a new service from a checkout of it:
+- **An authority** declares `scope: global` or `scope: private` and allocates ids.
+  The global registry (`github.com/tacplus-dev/registry`) is the one place ids that
+  must be globally unique come from; it allocates 101-1023. A private registry is
+  one a fleet owner keeps for services that will only ever live in fleets they
+  control; it allocates 1024-2047. Both are append-only: ids are never reused or
+  renumbered. Each entry names the service's **contract**, the repo that holds its
+  proto. That repo may be public, shared with a partner, or private: the registry
+  decides ids, not who may read what. Register from a checkout of the authority:
 
   ```bash
-  tacplus registry register NAME --kind service --repo <proto repo URL> --visibility public --proto-dir .
+  tacplus registry register NAME --kind service --contract <proto repo URL> --visibility public --proto-dir .
   ```
 
-  Ids are allocated upward from 101. 1-99 is the frozen legacy range, 100 is
-  reserved for `azp`, and 2047 is the ceiling (protobuf encodes field numbers up to
-  2047 in two bytes). Commit the change and merge it.
-
-- **A lock** is a per-proto-repo `registry.yaml` that names its authority:
+- **A lock** is a per-proto-repo `registry.yaml` that names its authorities in order:
 
   ```yaml
-  global: https://github.com/tacplus-dev/registry.git
+  registries:
+      - https://github.com/tacplus-dev/registry.git
+      - https://gitlab.com/acme/registry.git
   services:
       - name: doppelganger
         id: 101
   ```
 
-  `tacplus registry --proto-dir .` syncs the lock from the global registry for every
-  service declared in the tree. A declared service missing from the global registry
-  is an error naming the registration step; a lock never allocates and never
-  renumbers. Builds read only the lock, so generation is reproducible offline.
+  `tacplus registry --proto-dir .` unions the authorities (a name or an id in two of
+  them is an error, never a precedence call), syncs the lock for every service
+  declared in the tree, and refuses to allocate or renumber. A declared service in
+  no authority is an error naming the registration step. Builds read only the lock,
+  so generation is reproducible offline.
 
-A `registry.yaml` without `global:` keeps the original per-repo allocation (1-99,
-with an optional `id_min` floor) and is unchanged.
+- **A legacy per-repo registry** has neither `scope:` nor `registries:` and keeps the
+  original allocation (1-99 with an optional `id_min` floor), unchanged.
+
+Ids 1-99 are frozen wherever their service sits; 100 is reserved. The registry
+never pins versions: a fleet's manifest pins what that fleet runs, and a service's
+`depends` names the oldest MAJOR.MINOR of a dependency it was built against. Which
+implementation of a service a fleet runs is the fleet manifest's choice; the
+registry's contract field only says where the proto lives, so a fleet may run its
+own implementation of, say, kernel under the same name and id.
 
 ## CLI Commands
 

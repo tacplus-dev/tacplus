@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -19,11 +20,12 @@ import (
 // resolveDependencies turns tacplus.yaml `depends` entries into resolved proto
 // directories, one per dependency, ready to merge into this generation.
 //
-// The authority is the global registry named by `global:` in the project's
-// own registry lock, found in the first resolved source dir. Each name is
-// looked up there (service or vservice); its repo is fetched at the entry's
-// version (MAJOR.MINOR -> latest patch tag; none -> latest) and the repo's
-// proto/ subdir convention applies as for any source.
+// The authorities are the registries named by `registries:` in the project's
+// own registry lock, found in the first resolved source dir, unioned. Each name
+// is looked up there (service or vservice); its CONTRACT repo (where its proto
+// lives, which need not be the implementation a fleet runs) is fetched at the
+// entry's version (MAJOR.MINOR -> latest patch tag; none -> latest) and the
+// repo's proto/ subdir convention applies as for any source.
 func resolveDependencies(depends []string, firstSourceDir string) ([]string, []func(), error) {
 	if len(depends) == 0 {
 		return nil, nil, nil
@@ -32,20 +34,21 @@ func resolveDependencies(depends []string, firstSourceDir string) ([]string, []f
 	if err != nil {
 		return nil, nil, fmt.Errorf("depends: reading this project's registry lock: %w", err)
 	}
-	if lock.Global == "" {
-		return nil, nil, fmt.Errorf("depends: %s/registry.yaml names no global registry (global: <url>); dependencies are resolved by registry name and need the authority", firstSourceDir)
+	if !lock.IsLock() {
+		return nil, nil, fmt.Errorf("depends: %s/registry.yaml names no registries (registries: [<url>, ...]); dependencies are resolved by registry name and need the authorities", firstSourceDir)
 	}
-	regRes, err := protosrc.Resolve(lock.Global, "latest")
+	global, regCleanup, err := registry.LoadAuthorities(lock.Registries, func(ref string) (string, func(), error) {
+		res, err := protosrc.Resolve(ref, "latest")
+		if err != nil {
+			return "", nil, err
+		}
+		return res.Dir, res.Cleanup, nil
+	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("depends: resolving global registry %s: %w", lock.Global, err)
-	}
-	global, err := registry.Load(regRes.Dir)
-	if err != nil {
-		regRes.Cleanup()
-		return nil, nil, fmt.Errorf("depends: loading global registry %s: %w", lock.Global, err)
+		return nil, nil, fmt.Errorf("depends: %w", err)
 	}
 	var dirs []string
-	cleanups := []func(){regRes.Cleanup}
+	cleanups := []func(){regCleanup}
 	runCleanups := func() {
 		for _, c := range cleanups {
 			c()
@@ -53,14 +56,14 @@ func resolveDependencies(depends []string, firstSourceDir string) ([]string, []f
 	}
 	for _, d := range depends {
 		name, version := tacplusyaml.SplitDepend(d)
-		repo, ok := global.RepoOf(name)
+		repo, ok := global.ContractOf(name)
 		if !ok {
 			runCleanups()
-			return nil, nil, fmt.Errorf("depends: %q is not in the global registry %s", name, lock.Global)
+			return nil, nil, fmt.Errorf("depends: %q is not in any registry this project names (%s)", name, strings.Join(lock.Registries, ", "))
 		}
 		if repo == "" {
 			runCleanups()
-			return nil, nil, fmt.Errorf("depends: %q is registered without a repo; the registry must name where its proto lives", name)
+			return nil, nil, fmt.Errorf("depends: %q is registered without a contract; the registry must name where its proto lives", name)
 		}
 		tag := "latest"
 		if version != "" {

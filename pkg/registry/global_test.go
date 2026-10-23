@@ -19,11 +19,12 @@ func writeRegistry(t *testing.T, content string) string {
 	return dir
 }
 
-const globalSeed = `services:
-    - {name: kernel, id: 8, repo: git@gitlab.com:x/platform.git, visibility: private, tenant_slice_field: 1}
-    - {name: tally, id: 79, repo: https://gitlab.com/x/sonar.git, visibility: private}
+const globalSeed = `scope: global
+services:
+    - {name: kernel, id: 8, contract: git@gitlab.com:x/platform.git, visibility: private, tenant_slice_field: 1}
+    - {name: tally, id: 79, contract: https://gitlab.com/x/sonar.git, visibility: private}
 vservices:
-    - {name: query, field_id: 71, repo: https://gitlab.com/x/sonar.git, visibility: private}
+    - {name: query, field_id: 71, contract: https://gitlab.com/x/sonar.git, visibility: private}
 `
 
 func TestRegisterAllocatesFromGlobalMinNeverLegacy(t *testing.T) {
@@ -53,13 +54,13 @@ func TestRegisterAllocatesFromGlobalMinNeverLegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := again.byName["doppelganger"]
-	if e == nil || e.ID != GlobalIDMin || e.Repo != "https://github.com/tacplus-dev/doppelganger.git" || e.Visibility != "public" {
+	if e == nil || e.ID != GlobalIDMin || e.Contract != "https://github.com/tacplus-dev/doppelganger.git" || e.Visibility != "public" {
 		t.Fatalf("saved entry = %+v", e)
 	}
 }
 
 func TestRegisterReportsGlobalExhaustion(t *testing.T) {
-	g, err := Load(writeRegistry(t, "services:\n    - {name: last, id: 2047, repo: r, visibility: public}\n"))
+	g, err := Load(writeRegistry(t, "scope: global\nservices:\n    - {name: last, id: 1023, contract: r, visibility: public}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +74,7 @@ func TestSyncFromGlobalFillsLockAndReportsUnregistered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lock, err := Load(writeRegistry(t, "global: https://github.com/tacplus-dev/registry.git\nservices: []\n"))
+	lock, err := Load(writeRegistry(t, "registries:\n    - https://github.com/tacplus-dev/registry.git\nservices: []\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +93,7 @@ func TestSyncFromGlobalFillsLockAndReportsUnregistered(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(lock.inputDir, "registry.yaml"))
-	if !strings.Contains(string(data), "global: https://github.com/tacplus-dev/registry.git") {
+	if !strings.Contains(string(data), "- https://github.com/tacplus-dev/registry.git") {
 		t.Fatalf("saved lock lost its authority:\n%s", data)
 	}
 }
@@ -102,7 +103,7 @@ func TestSyncFromGlobalNeverRenumbers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lock, err := Load(writeRegistry(t, "global: g\nservices:\n    - {name: tally, id: 12}\n"))
+	lock, err := Load(writeRegistry(t, "registries: [g]\nservices:\n    - {name: tally, id: 12}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +117,7 @@ func TestSyncFromGlobalNeverRenumbers(t *testing.T) {
 }
 
 func TestLockRefusesToAllocate(t *testing.T) {
-	lock, err := Load(writeRegistry(t, "global: g\nservices:\n    - {name: tally, id: 79}\n"))
+	lock, err := Load(writeRegistry(t, "registries: [g]\nservices:\n    - {name: tally, id: 79}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,9 +133,58 @@ func TestLockRefusesToAllocate(t *testing.T) {
 }
 
 func TestLegalIDRanges(t *testing.T) {
-	for id, want := range map[int32]bool{0: false, 1: true, 99: true, 100: false, 101: true, 2047: true, 2048: false} {
+	for id, want := range map[int32]bool{0: false, 1: true, 99: true, 100: false, 101: true, 1023: true, 1024: true, 2047: true, 2048: false} {
 		if LegalID(id) != want {
 			t.Errorf("LegalID(%d) = %v", id, !want)
 		}
+	}
+}
+
+// A private authority allocates from its own range and never from the global
+// one; an authority without a scope cannot allocate at all.
+func TestRegisterScopes(t *testing.T) {
+	priv, err := Load(writeRegistry(t, "scope: private\nservices:\n    - {name: stratum, id: 34, contract: r, visibility: private}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := priv.Register("service", "ours", "r", "private")
+	if err != nil || id != PrivateIDMin {
+		t.Fatalf("private registration = %d, %v; want %d", id, err, PrivateIDMin)
+	}
+	noScope, err := Load(writeRegistry(t, "services: []\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := noScope.Register("service", "x", "r", "public"); err == nil || !strings.Contains(err.Error(), "no scope") {
+		t.Fatalf("scopeless registration err = %v", err)
+	}
+	lock, _ := Load(writeRegistry(t, "registries: [g]\nservices: []\n"))
+	if _, err := lock.Register("service", "x", "r", "public"); err == nil || !strings.Contains(err.Error(), "is a lock") {
+		t.Fatalf("registering into a lock err = %v", err)
+	}
+}
+
+// Registries a fleet loads are disjoint: a name or an id in two of them is an
+// error, never a precedence call.
+func TestUnionRefusesCollisions(t *testing.T) {
+	g, _ := Load(writeRegistry(t, globalSeed))
+	p, _ := Load(writeRegistry(t, "scope: private\nservices:\n    - {name: ours, id: 1024, contract: r}\n"))
+	u, err := Union([]*Registry{g, p}, []string{"global", "private"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, ok := u.ContractOf("ours"); !ok || c != "r" {
+		t.Fatalf("union lacks the private entry: %q %v", c, ok)
+	}
+	if c, ok := u.ContractOf("kernel"); !ok || c != "git@gitlab.com:x/platform.git" {
+		t.Fatalf("union lacks the global entry: %q %v", c, ok)
+	}
+	sameName, _ := Load(writeRegistry(t, "scope: private\nservices:\n    - {name: kernel, id: 1025, contract: ours}\n"))
+	if _, err := Union([]*Registry{g, sameName}, []string{"global", "private"}); err == nil || !strings.Contains(err.Error(), `name "kernel"`) {
+		t.Fatalf("same name in two registries err = %v", err)
+	}
+	sameID, _ := Load(writeRegistry(t, "scope: private\nservices:\n    - {name: other, id: 79, contract: ours}\n"))
+	if _, err := Union([]*Registry{g, sameID}, []string{"global", "private"}); err == nil || !strings.Contains(err.Error(), "id 79") {
+		t.Fatalf("same id in two registries err = %v", err)
 	}
 }

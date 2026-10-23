@@ -5,6 +5,7 @@ package registry
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -16,7 +17,7 @@ import (
 var (
 	protoDir           string
 	registerKind       string
-	registerRepo       string
+	registerContract   string
 	registerVisibility string
 )
 
@@ -29,21 +30,23 @@ and update registry.yaml with stable ID assignments.
 Run this before tagging the proto repo to ensure all services and vservices
 have stable, non-overlapping field IDs in the unified registry.
 
-When registry.yaml names its authority with "global: <git URL or path>", it is
-a lock: ids are synced from the global registry and never allocated here. A
-declared service missing from the global registry is an error naming the
-registration step (see "tacplus registry register").`,
+When registry.yaml names its authorities with "registries: [<git URL or path>, ...]",
+it is a lock: the authorities are unioned (a name or id in two of them is an
+error) and ids are synced from the union, never allocated here. A declared
+service missing from every authority is an error naming the registration step
+(see "tacplus registry register").`,
 	RunE: runRegistry,
 }
 
 var registerCmd = &cobra.Command{
 	Use:   "register NAME",
-	Short: "Register a service or vservice in the GLOBAL registry",
-	Long: `Add NAME to the global registry in --proto-dir (a checkout of the
-global registry repo) and allocate it the next global id. Commit the change
-and merge it; consumers then sync their locks with "tacplus registry".
-
-Ids are allocated upward from 101. The legacy range 1-99 is frozen.`,
+	Short: "Register a service or vservice in an authority registry",
+	Long: `Add NAME to the authority in --proto-dir (a checkout of a registry repo
+whose registry.yaml declares "scope: global" or "scope: private") and allocate
+it the next id in that scope's range: global 101-1023, private 1024-2047. The
+legacy range 1-99 is frozen. --contract is the home of NAME's proto; it may be
+any repo, public or not. Commit the change and merge it; consumers then sync
+their locks with "tacplus registry".`,
 	Args: cobra.ExactArgs(1),
 	RunE: runRegister,
 }
@@ -51,26 +54,23 @@ Ids are allocated upward from 101. The legacy range 1-99 is frozen.`,
 func init() {
 	rootCmd.PersistentFlags().StringVar(&protoDir, "proto-dir", ".", "Directory containing proto files (for register: the global registry checkout)")
 	registerCmd.Flags().StringVar(&registerKind, "kind", "service", "service | vservice")
-	registerCmd.Flags().StringVar(&registerRepo, "repo", "", "git URL of the proto repo that declares NAME (required)")
-	registerCmd.Flags().StringVar(&registerVisibility, "visibility", registry.VisibilityPrivate, "public | private: whether that repo is public")
-	_ = registerCmd.MarkFlagRequired("repo")
+	registerCmd.Flags().StringVar(&registerContract, "contract", "", "git URL of the repo that holds NAME's proto (required)")
+	registerCmd.Flags().StringVar(&registerVisibility, "visibility", registry.VisibilityPrivate, "public | private: a note on who the contract is for")
+	_ = registerCmd.MarkFlagRequired("contract")
 	rootCmd.AddCommand(registerCmd)
 }
 
 func runRegister(cmd *cobra.Command, args []string) error {
 	reg, err := registry.Load(protoDir)
 	if err != nil {
-		return fmt.Errorf("loading global registry: %w", err)
+		return fmt.Errorf("loading registry: %w", err)
 	}
-	if reg.Global != "" {
-		return fmt.Errorf("%s/registry.yaml is a lock (global: %s), not the global registry; run register in a checkout of the global registry", protoDir, reg.Global)
-	}
-	id, err := reg.Register(registerKind, args[0], registerRepo, registerVisibility)
+	id, err := reg.Register(registerKind, args[0], registerContract, registerVisibility)
 	if err != nil {
 		return err
 	}
 	if err := reg.Save(); err != nil {
-		return fmt.Errorf("saving global registry: %w", err)
+		return fmt.Errorf("saving registry: %w", err)
 	}
 	fmt.Printf("%s %s = %d\n", registerKind, args[0], id)
 	return nil
@@ -93,7 +93,7 @@ func runRegistry(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("scanning proto declarations: %w", err)
 	}
-	if reg.Global != "" {
+	if reg.IsLock() {
 		return syncLock(reg, serviceNames, vserviceNames)
 	}
 	for _, name := range serviceNames {
@@ -128,27 +128,23 @@ func runRegistry(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// syncLock brings a lock up to date with its global registry. The lock is
-// saved even when some names are unregistered, so after registering them one
-// re-run finishes the job.
+// syncLock brings a lock up to date with the union of its authorities. The
+// lock is saved even when some names are unregistered, so after registering
+// them one re-run finishes the job.
 func syncLock(lock *registry.Registry, serviceNames, vserviceNames []string) error {
-	res, err := protosrc.Resolve(lock.Global, "latest")
+	union, cleanup, err := registry.LoadAuthorities(lock.Registries, resolveRegistry)
 	if err != nil {
-		return fmt.Errorf("resolving global registry %s: %w", lock.Global, err)
+		return err
 	}
-	defer res.Cleanup()
-	global, err := registry.Load(res.Dir)
-	if err != nil {
-		return fmt.Errorf("loading global registry %s: %w", lock.Global, err)
-	}
-	syncErr := lock.SyncFromGlobal(global, serviceNames, vserviceNames)
+	defer cleanup()
+	syncErr := lock.SyncFromGlobal(union, serviceNames, vserviceNames)
 	if err := lock.Save(); err != nil {
 		return fmt.Errorf("saving registry lock: %w", err)
 	}
 	if syncErr != nil {
 		return syncErr
 	}
-	fmt.Printf("Lock in sync with %s\n", lock.Global)
+	fmt.Printf("Lock in sync with %s\n", strings.Join(lock.Registries, ", "))
 	for _, s := range lock.Services {
 		fmt.Printf("  %-20s = %d\n", s.Name, s.ID)
 	}
@@ -156,4 +152,14 @@ func syncLock(lock *registry.Registry, serviceNames, vserviceNames []string) err
 		fmt.Printf("  %-20s = %d (vservice)\n", vs.Name, vs.FieldID)
 	}
 	return nil
+}
+
+// resolveRegistry fetches a registry reference (git URL or local path) at its
+// default branch: an authority is append-only, so HEAD is the right version.
+func resolveRegistry(ref string) (string, func(), error) {
+	res, err := protosrc.Resolve(ref, "latest")
+	if err != nil {
+		return "", nil, err
+	}
+	return res.Dir, res.Cleanup, nil
 }

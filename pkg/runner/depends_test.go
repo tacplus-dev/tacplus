@@ -29,10 +29,10 @@ func TestResolveDependenciesByRegistryName(t *testing.T) {
 	writeFile(t, filepath.Join(depRepo, "proto", "registry.yaml"), "services:\n    - {name: llmproxy, id: 75}\n")
 	writeFile(t, filepath.Join(depRepo, "proto", "services", "llmproxy.proto"), "syntax = \"proto3\";\npackage llmproxy;\n")
 	global := filepath.Join(root, "registry")
-	writeFile(t, filepath.Join(global, "registry.yaml"), "services:\n    - {name: llmproxy, id: 75, repo: "+depRepo+", visibility: public}\n    - {name: norepo, id: 102}\n")
+	writeFile(t, filepath.Join(global, "registry.yaml"), "scope: global\nservices:\n    - {name: llmproxy, id: 75, contract: "+depRepo+", visibility: public}\n    - {name: norepo, id: 102}\n")
 	consumer := filepath.Join(root, "consumer", "proto")
 	writeFile(t, filepath.Join(consumer, "dependencies.yaml"), "{}\n")
-	writeFile(t, filepath.Join(consumer, "registry.yaml"), "global: "+global+"\nservices:\n    - {name: doppelganger, id: 101}\n")
+	writeFile(t, filepath.Join(consumer, "registry.yaml"), "registries: ["+global+"]\nservices:\n    - {name: doppelganger, id: 101}\n")
 
 	dirs, cleanups, err := resolveDependencies([]string{"llmproxy"}, consumer)
 	if err != nil {
@@ -56,10 +56,10 @@ func TestResolveDependenciesByRegistryName(t *testing.T) {
 		t.Fatal("a dependency's dependencies.yaml must not be merged; its pins are its own build's")
 	}
 
-	if _, _, err := resolveDependencies([]string{"nobody"}, consumer); err == nil || !strings.Contains(err.Error(), "not in the global registry") {
+	if _, _, err := resolveDependencies([]string{"nobody"}, consumer); err == nil || !strings.Contains(err.Error(), "not in any registry") {
 		t.Fatalf("unregistered dependency err = %v", err)
 	}
-	if _, _, err := resolveDependencies([]string{"norepo"}, consumer); err == nil || !strings.Contains(err.Error(), "without a repo") {
+	if _, _, err := resolveDependencies([]string{"norepo"}, consumer); err == nil || !strings.Contains(err.Error(), "without a contract") {
 		t.Fatalf("repo-less dependency err = %v", err)
 	}
 }
@@ -69,7 +69,7 @@ func TestResolveDependenciesByRegistryName(t *testing.T) {
 func TestResolveDependenciesNeedsGlobalRegistry(t *testing.T) {
 	consumer := filepath.Join(t.TempDir(), "proto")
 	writeFile(t, filepath.Join(consumer, "registry.yaml"), "services:\n    - {name: x, id: 1}\n")
-	if _, _, err := resolveDependencies([]string{"llmproxy"}, consumer); err == nil || !strings.Contains(err.Error(), "names no global registry") {
+	if _, _, err := resolveDependencies([]string{"llmproxy"}, consumer); err == nil || !strings.Contains(err.Error(), "names no registries") {
 		t.Fatalf("err = %v", err)
 	}
 }

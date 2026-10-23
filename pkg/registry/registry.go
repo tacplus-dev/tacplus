@@ -6,20 +6,25 @@
 // TokenEntitlements proto message (and as ServiceName enum values). Field 100 is
 // reserved for azp and enum value 99 for SERVICE_NAME_ANY.
 //
-// Two kinds of registry.yaml share this code:
+// Three kinds of registry.yaml share this code:
 //
-//   - The GLOBAL registry (github.com/tacplus-dev/registry): the one authority
-//     for ids across every proto repo that may be composed into one kernel. It
-//     is append-only; ids are allocated by `tacplus registry register` from
-//     GlobalIDMin upward and never reused. Entries name the repo they live in.
-//   - A per-proto-repo registry.yaml, which is a LOCK of the global one when it
-//     names its authority with `global:`. `tacplus registry` syncs the lock from
-//     the global file; builds read only the lock, so generation is reproducible
-//     offline. A lock with `global:` never allocates: an unregistered service is
-//     an error naming the registration step.
+//   - An AUTHORITY: `scope: global` (github.com/tacplus-dev/registry, the one
+//     place ids that must be globally unique come from, 101-1023) or
+//     `scope: private` (a registry a fleet owner keeps for services that never
+//     need a global id, 1024-2047). Authorities are append-only; ids are
+//     allocated by `tacplus registry register` and never reused. An entry names
+//     the home of the service's CONTRACT (its proto), which may be any repo,
+//     public or not: the registry decides ids, not who may read what.
+//   - A LOCK: a per-proto-repo registry.yaml that names its authorities with
+//     `registries:` (an ordered list; a fleet typically names the global one and
+//     its own private one). `tacplus registry` unions them, refuses any name or
+//     id that appears in two, and syncs the lock from the union; builds read
+//     only the lock, so generation is reproducible offline. A lock never
+//     allocates: an unregistered service is an error naming the registration
+//     step.
 //
-// A registry.yaml without `global:` keeps the original per-repo allocation
-// (1-99 with an optional id_min floor) so existing consumers are unchanged.
+// A registry.yaml with neither `scope:` nor `registries:` keeps the original
+// per-repo allocation (1-99 with an optional id_min floor), unchanged.
 package registry
 
 import (
@@ -37,27 +42,32 @@ import (
 	pkgproto "github.com/tacplus-dev/tacplus/pkg/proto"
 )
 
-// Legacy ids 1-99 were allocated per repo before the global registry existed
-// and stay exactly as they are. New registrations come from GlobalIDMin up:
-// protobuf encodes field numbers up to 2047 in two bytes, so tokens stay small.
+// Legacy ids 1-99 were allocated per repo before the registries existed and
+// stay exactly as they are, in whichever registry their service sits. New
+// registrations come from one of two ranges, by the authority's scope. All of
+// it fits in two-byte protobuf field numbers (up to 2047).
 const (
 	LegacyIDMax       = 99
 	ReservedAzpID     = 100
-	GlobalIDMin       = 101
-	GlobalIDMax       = 2047
+	GlobalIDMin       = 101  // scope: global allocates here ...
+	GlobalIDMax       = 1023 // ... up to here
+	PrivateIDMin      = 1024 // scope: private allocates here ...
+	PrivateIDMax      = 2047 // ... up to here
+	ScopeGlobal       = "global"
+	ScopePrivate      = "private"
 	VisibilityPublic  = "public"
 	VisibilityPrivate = "private"
 )
 
-// ServiceEntry is a single service entry in the registry. Repo and Visibility
-// are set in the global registry (where the proto that declares the service
-// lives, and whether that repo is public); a lock may carry them through.
+// ServiceEntry is a single service entry in the registry. Contract and
+// Visibility are set in an authority (where the proto that declares the
+// service lives, and a note on who it is for); a lock carries them through.
 type ServiceEntry struct {
 	Name              string `yaml:"name"`
 	ID                int32  `yaml:"id"`
 	TenantSliceField  int32  `yaml:"tenant_slice_field,omitempty"`
 	ProjectSliceField int32  `yaml:"project_slice_field,omitempty"`
-	Repo              string `yaml:"repo,omitempty"`
+	Contract          string `yaml:"contract,omitempty"` // home of the service's proto (not necessarily its implementation, nor necessarily public)
 	Visibility        string `yaml:"visibility,omitempty"`
 }
 
@@ -65,7 +75,7 @@ type ServiceEntry struct {
 type VServiceEntry struct {
 	Name       string `yaml:"name"`
 	FieldID    int32  `yaml:"field_id"`
-	Repo       string `yaml:"repo,omitempty"`
+	Contract   string `yaml:"contract,omitempty"`
 	Visibility string `yaml:"visibility,omitempty"`
 }
 
@@ -87,16 +97,19 @@ type Registry struct {
 	// no cross-repo discovery: platform allocates from 1, an app from (say) 60.
 	// The merge's hard error remains the backstop for a misconfigured floor.
 	IDMin int32 `yaml:"id_min,omitempty"`
-	// Global names this registry's authority (a git URL or local path of the
-	// global registry repo). When set, this file is a lock: ids come only from
-	// the global registry and nothing is allocated here.
-	Global    string           `yaml:"global,omitempty"`
-	Services  []*ServiceEntry  `yaml:"services"`
-	VServices []*VServiceEntry `yaml:"vservices"`
-	inputDir  string
-	dirty     bool
-	byName    map[string]*ServiceEntry
-	vsByName  map[string]*VServiceEntry
+	// Scope marks an authority: "global" allocates 101-1023, "private"
+	// 1024-2047. Empty on a lock or a legacy per-repo registry.
+	Scope string `yaml:"scope,omitempty"`
+	// Registries names this lock's authorities, in order (git URLs or local
+	// paths). When set, this file is a lock: ids come only from the union of
+	// those registries and nothing is allocated here.
+	Registries []string         `yaml:"registries,omitempty"`
+	Services   []*ServiceEntry  `yaml:"services"`
+	VServices  []*VServiceEntry `yaml:"vservices"`
+	inputDir   string
+	dirty      bool
+	byName     map[string]*ServiceEntry
+	vsByName   map[string]*VServiceEntry
 }
 
 // Load loads registry.yaml from inputDir.
@@ -153,7 +166,7 @@ func (r *Registry) ServiceID(name string) (int32, error) {
 	if r.inputDir == "" {
 		return 0, fmt.Errorf("service %q not in registry and no registry file available", name)
 	}
-	if r.Global != "" {
+	if r.IsLock() {
 		return 0, r.notInLock("service", name)
 	}
 	next := r.nextID()
@@ -197,7 +210,7 @@ func (r *Registry) VServiceFieldID(name string) (int32, error) {
 	if r.inputDir == "" {
 		return 0, fmt.Errorf("vservice %q not in registry and no registry file available", name)
 	}
-	if r.Global != "" {
+	if r.IsLock() {
 		return 0, r.notInLock("vservice", name)
 	}
 	next := r.nextID()
@@ -281,12 +294,13 @@ func (r *Registry) Save() error {
 	// IDMin is omitempty because zero is exactly how Load spells "no floor":
 	// a registry that never had one must not gain `id_min: 0` on save.
 	type registryFile struct {
-		IDMin     int32            `yaml:"id_min,omitempty"`
-		Global    string           `yaml:"global,omitempty"`
-		Services  []*ServiceEntry  `yaml:"services"`
-		VServices []*VServiceEntry `yaml:"vservices,omitempty"`
+		IDMin      int32            `yaml:"id_min,omitempty"`
+		Scope      string           `yaml:"scope,omitempty"`
+		Registries []string         `yaml:"registries,omitempty"`
+		Services   []*ServiceEntry  `yaml:"services"`
+		VServices  []*VServiceEntry `yaml:"vservices,omitempty"`
 	}
-	data, err := yaml.Marshal(&registryFile{IDMin: r.IDMin, Global: r.Global, Services: r.Services, VServices: r.VServices})
+	data, err := yaml.Marshal(&registryFile{IDMin: r.IDMin, Scope: r.Scope, Registries: r.Registries, Services: r.Services, VServices: r.VServices})
 	if err != nil {
 		return fmt.Errorf("marshaling registry.yaml: %w", err)
 	}
@@ -403,8 +417,8 @@ func Validate(protoDir string) error {
 	}
 
 	if len(missing) > 0 {
-		if reg.Global != "" {
-			return fmt.Errorf("registry.yaml (a lock of %s) is incomplete:\n  %s\n\nRun `tacplus registry --proto-dir .` to sync it; register anything missing in the global registry first", reg.Global, strings.Join(missing, "\n  "))
+		if reg.IsLock() {
+			return fmt.Errorf("registry.yaml (a lock of %s) is incomplete:\n  %s\n\nRun `tacplus registry --proto-dir .` to sync it; register anything missing in an authority first", strings.Join(reg.Registries, ", "), strings.Join(missing, "\n  "))
 		}
 		return fmt.Errorf("registry.yaml is incomplete:\n  %s\n\nRun `tacplus registry --proto-dir .` to fix, or add entries manually with the next available ID", strings.Join(missing, "\n  "))
 	}

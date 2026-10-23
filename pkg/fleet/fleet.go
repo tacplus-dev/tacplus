@@ -75,6 +75,7 @@ type Lock struct {
 	Tacplus    string          `yaml:"tacplus"`
 	Registries []LockedSource  `yaml:"registries"`
 	Services   []LockedService `yaml:"services"`
+	Libraries  []LockedLibrary `yaml:"libraries,omitempty"` // contract-only vservices pulled in by reference
 }
 
 // LockedSource is a resolved repo: where it came from and the exact commit.
@@ -267,6 +268,22 @@ func Build(manifestDir, outDir string) (*Result, error) {
 		})
 	}
 
+	// 2b. Contract-only references. A listed service's contract may name a
+	// package no listed contract declares: a vservice such as the trace
+	// topics gateway publishes to. If a registry knows that name as a
+	// vservice, its contract is fetched and extracted too (a library, not a
+	// service: nothing runs it). A referenced package that is a registered
+	// SERVICE the fleet does not run is an error: the manifest is complete.
+	var stagedDirs []string
+	for _, r := range services {
+		stagedDirs = append(stagedDirs, r.protoDir)
+	}
+	libraries, libCleanups, err := resolveReferencedContracts(stagedDirs, m, union, lock)
+	cleanups = append(cleanups, libCleanups...)
+	if err != nil {
+		return nil, err
+	}
+
 	// 3. Closure: every declared dependency is in the fleet, at a version that
 	// satisfies the dependent's floor. The manifest is the complete list; this
 	// is where the kernel build "follows the dependency".
@@ -289,12 +306,13 @@ func Build(manifestDir, outDir string) (*Result, error) {
 		return nil, fmt.Errorf("fleet: dependencies not satisfied:\n  %s", strings.Join(errs, "\n  "))
 	}
 
-	// 4. Merge: each service's contract files and lock; the fleet's own
-	// dependencies.yaml supplies the pins.
+	// 4. Merge: each service's contract files, the referenced libraries, and
+	// the fleet's own dependencies.yaml for the pins.
 	var dirs []string
 	for _, r := range services {
 		dirs = append(dirs, r.protoDir)
 	}
+	dirs = append(dirs, libraries...)
 	pinsDir, err := os.MkdirTemp("", "tacplus-fleet-pins-*")
 	if err != nil {
 		return nil, err
@@ -335,6 +353,104 @@ func Build(manifestDir, outDir string) (*Result, error) {
 	}
 	zap.L().Info("fleet resolved", zap.Int("services", len(services)), zap.String("proto", mergedDir), zap.String("lock", filepath.Join(manifestDir, LockFile)))
 	return &Result{Lock: lock, ProtoDir: mergedDir}, nil
+}
+
+// LockedLibrary is a contract-only vservice the fleet pulled in by reference.
+type LockedLibrary struct {
+	Name           string `yaml:"name"`
+	ID             int32  `yaml:"id"`
+	Contract       string `yaml:"contract"`
+	ContractCommit string `yaml:"contract_commit"`
+	ReferencedBy   string `yaml:"referenced_by"`
+}
+
+// resolveReferencedContracts scans the staged contract dirs for option-level
+// package references to packages declared in none of them, resolves each
+// through the registries' union (a vservice: fetch and extract its contract as
+// a library; a service: it must be in the manifest), and repeats until the set
+// is closed. It returns the library dirs to merge.
+func resolveReferencedContracts(stagedDirs []string, m *Manifest, union *registry.Registry, lock *Lock) ([]string, []func(), error) {
+	var libDirs []string
+	var cleanups []func()
+	listed := map[string]bool{}
+	for _, s := range m.Services {
+		listed[s.Name] = true
+	}
+	all := append([]string{}, stagedDirs...)
+	for round := 0; round < 16; round++ {
+		declared := map[string]bool{}
+		refs := map[string]string{} // package -> first referencing file
+		for _, dir := range all {
+			files, err := protoFiles(dir)
+			if err != nil {
+				return nil, cleanups, err
+			}
+			for _, rel := range files {
+				data, err := os.ReadFile(filepath.Join(dir, rel))
+				if err != nil {
+					return nil, cleanups, err
+				}
+				src := stripComments(string(data))
+				if pm := packageRe.FindStringSubmatch(src); pm != nil {
+					declared[pm[1]] = true
+				}
+				for _, mm := range optionRefRe.FindAllStringSubmatch(src, -1) {
+					if _, seen := refs[mm[1]]; !seen {
+						refs[mm[1]] = rel
+					}
+				}
+			}
+		}
+		var missing []string
+		for pkg := range refs {
+			if !declared[pkg] && !isSysPackage(pkg) {
+				missing = append(missing, pkg)
+			}
+		}
+		if len(missing) == 0 {
+			return libDirs, cleanups, nil
+		}
+		sort.Strings(missing)
+		for _, pkg := range missing {
+			if _, ok := union.ServiceEntry(pkg); ok {
+				if !listed[pkg] {
+					return nil, cleanups, fmt.Errorf("fleet: %s references service %q, which the fleet does not run; add it to %s", refs[pkg], pkg, ManifestFile)
+				}
+				return nil, cleanups, fmt.Errorf("fleet: %s references %q but the listed service's contract declares no package %q", refs[pkg], pkg, pkg)
+			}
+			vs, ok := union.VServiceEntry(pkg)
+			if !ok {
+				return nil, cleanups, fmt.Errorf("fleet: %s references package %q, which no listed contract declares and no registry the fleet names knows", refs[pkg], pkg)
+			}
+			if vs.Contract == "" {
+				return nil, cleanups, fmt.Errorf("fleet: vservice %q (referenced by %s) is registered without a contract", pkg, refs[pkg])
+			}
+			repoDir, protoDir, cleanup, err := resolveImplementation(vs.Contract, "latest")
+			if err != nil {
+				return nil, cleanups, fmt.Errorf("fleet: library %q: contract %s: %w", pkg, vs.Contract, err)
+			}
+			cleanups = append(cleanups, cleanup)
+			staged, stageCleanup, err := extractContract(protoDir, pkg, false)
+			if err != nil {
+				return nil, cleanups, fmt.Errorf("fleet: library %q: contract %s: %w", pkg, vs.Contract, err)
+			}
+			cleanups = append(cleanups, stageCleanup)
+			libDirs = append(libDirs, staged)
+			all = append(all, staged)
+			lock.Libraries = append(lock.Libraries, LockedLibrary{Name: pkg, ID: vs.FieldID, Contract: vs.Contract, ContractCommit: commitOf(repoDir), ReferencedBy: refs[pkg]})
+			zap.L().Info("fleet: pulled a referenced contract", zap.String("vservice", pkg), zap.String("referenced_by", refs[pkg]), zap.String("contract", vs.Contract))
+		}
+	}
+	return nil, cleanups, fmt.Errorf("fleet: contract references did not close after 16 rounds")
+}
+
+// isSysPackage reports whether a referenced package is one tacplus supplies.
+func isSysPackage(pkg string) bool {
+	switch pkg {
+	case "spec", "tokenrequest", "x509", "healthreport", "minter", "servicehealth", "services", "entitlements", "accounting_method", "services_config", "tenant_config", "project_config", "mcp", "query", "logger", "host", "key", "jwk", "jwkview", "publicjwksview", "smbcert", "tlscert", "grpcconfig", "opalib", "accounting", "trace", "tags", "token", "tokencache", "ip", "http", "httpclient", "filesystem", "diskstore", "cloudidentity", "cloudvendor", "credpair", "alpn", "entitlement", "entitlementview", "errors", "outputformat", "tacplus", "eventbus_support":
+		return true
+	}
+	return false
 }
 
 // writeFleetLock writes the merged tree's registry.yaml: a lock naming the
@@ -590,7 +706,7 @@ var (
 	packageRe  = regexp.MustCompile(`(?m)^\s*package\s+([A-Za-z_][\w.]*)\s*;`)
 	// optionRefRe matches a "package.Name" string value inside a spec option,
 	// e.g. source: "userentitlements.EntitlementEvalInput".
-	optionRefRe = regexp.MustCompile(`(?:source|service|host|target)\s*:\s*"([a-z_][a-z0-9_]*)\.[A-Z][A-Za-z0-9_]*"`)
+	optionRefRe = regexp.MustCompile(`[a-z_]+\s*:\s*"([a-z_][a-z0-9_]*)\.[A-Z][A-Za-z0-9_.]*"`)
 )
 
 // importsOf returns a proto file's import paths, in order.

@@ -47,7 +47,7 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 	}
 	defaultAudience := config.ServiceLabel()
 	if hasTokenExchanger {
-		defaultAudience = texPkg
+		defaultAudience = info.Audience()
 	}
 
 	// client_im exchanger — the client-reachable (C2S) token minter. Resolve

@@ -66,7 +66,7 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 	}
 	defaultAudience := config.ServiceLabel()
 	if hasTokenExchanger {
-		defaultAudience = texPkg
+		defaultAudience = info.Audience()
 	}
 
 	// Build virtual→physical audience mappings for audienceFromMethod.

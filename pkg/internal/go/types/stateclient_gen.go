@@ -528,7 +528,7 @@ func generateIdentityManager(config *tactype.Config) error {
 		TokenLibPath:                   fmt.Sprintf("%s/chassis/token", config.ModuleBasePath),
 		TokenTypesPath:                 fmt.Sprintf("%s/types/sys/token", config.ModuleBasePath),
 		X509LibPath:                    fmt.Sprintf("%s/chassis/x509", config.ModuleBasePath),
-		ServiceAudience:                texInfo.Package,
+		ServiceAudience:                texInfo.Audience(),
 		MintServiceName:                texInfo.ServiceName,
 		MintExternalServiceTokenMethod: texInfo.MintExternalServiceTokenMethod,
 		AudienceMappings:               audienceMappings,

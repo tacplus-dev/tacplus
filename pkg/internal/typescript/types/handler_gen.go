@@ -326,7 +326,7 @@ func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, h
 	}
 	defaultAudience := config.ServiceLabel()
 	if hasTokenExchanger {
-		defaultAudience = texPkg
+		defaultAudience = info.Audience()
 	}
 	tracePublisher, err := detectTracePublisherTemplateData(config)
 	if err != nil {

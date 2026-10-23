@@ -1308,6 +1308,7 @@ func (p *DescriptorParser) TokenMinters() []TokenExchangerInfo {
 				MintExternalServiceTokenMethod: mintExternalServiceTokenMethod,
 				X509MintMethod:                 x509MintMethod,
 				IsProxy:                        svc.TokenMinterProxy,
+				HostLabel:                      svc.HostLabel,
 			})
 		}
 	}

@@ -44,6 +44,20 @@ type TokenExchangerInfo struct {
 	MintExternalServiceTokenMethod string
 	X509MintMethod                 string // RPC accepting X509MintRequest and returning X509CertChain
 	IsProxy                        bool   // true for the client-reachable C2S front (token_minter {proxy: true})
+	// HostLabel is the physical host of a minter declared as a hosted contract
+	// ((spec.service_s2s).label, e.g. "kernel" for the sys minter.Minter).
+	// Empty when the minter is a service's own, in which case its package is
+	// the host.
+	HostLabel string
+}
+
+// Audience is the token audience for calls to this minter: its host when it is
+// a hosted contract, else its own package.
+func (t *TokenExchangerInfo) Audience() string {
+	if t.HostLabel != "" {
+		return t.HostLabel
+	}
+	return t.Package
 }
 
 // SysMinterService is the fully-qualified name of the minting contract tacplus

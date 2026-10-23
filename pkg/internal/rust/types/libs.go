@@ -82,7 +82,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 	}
 	defaultAudience := config.ServiceLabel()
 	if hasTokenExchanger {
-		defaultAudience = texPkg
+		defaultAudience = info.Audience()
 	}
 	// Derive Rust client module/type names from proto service name.
 	// e.g. "Mint" → module "mint_client", type "MintClient"

@@ -491,6 +491,25 @@ func extractContract(protoDir, name string, isService bool) (string, func(), err
 			byPackage[pm[1]] = rel
 		}
 	}
+	// A contract also owns the files in its repo that are HOSTED by it: a
+	// trait whose host is this service (the record store's query plane), or
+	// a surface whose label is. They name the service; the service does not
+	// name them, so the import walk above cannot reach them.
+	hostedRe := regexp.MustCompile(`(?:host|label)\s*:\s*"` + regexp.QuoteMeta(name) + `"`)
+	for _, rel := range files {
+		if want[rel] {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(protoDir, rel))
+		if err != nil {
+			return "", nil, err
+		}
+		if hostedRe.MatchString(stripComments(string(data))) {
+			if err := walk(rel); err != nil {
+				return "", nil, err
+			}
+		}
+	}
 	for {
 		added := false
 		for rel := range want {

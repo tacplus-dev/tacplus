@@ -223,3 +223,30 @@ service Host { option (spec.service_s2s) = {}; rpc Do(Req) returns (Req); }
 		t.Fatal("an unreferenced sibling must not come along")
 	}
 }
+
+// A trait hosted by the service (the record store's query plane) names the
+// service as host without the service naming it; it is part of the contract.
+func TestExtractContractIncludesTraitsHostedByTheService(t *testing.T) {
+	root := t.TempDir()
+	shared := filepath.Join(root, "proto")
+	write(t, filepath.Join(shared, "services", "store.proto"), `syntax = "proto3";
+package store;
+import "sys/spec.proto";
+option (spec.service) = {name: "store"};
+message Req {}
+service Store { option (spec.service_s2s) = {}; rpc Do(Req) returns (Req); }
+`)
+	write(t, filepath.Join(shared, "vservices", "query.proto"), "syntax = \"proto3\";\npackage query;\nimport \"sys/spec.proto\";\noption (spec.trait) = {name: \"query\" host: \"store\" s2s_service: \"RecordMap\"};\n")
+	write(t, filepath.Join(shared, "vservices", "other.proto"), "syntax = \"proto3\";\npackage other;\nimport \"sys/spec.proto\";\noption (spec.trait) = {name: \"other\" host: \"elsewhere\" s2s_service: \"X\"};\n")
+	staged, cleanup, err := extractContract(shared, "store", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if _, err := os.Stat(filepath.Join(staged, "vservices", "query.proto")); err != nil {
+		t.Fatal("a trait hosted by the service must be part of its contract")
+	}
+	if _, err := os.Stat(filepath.Join(staged, "vservices", "other.proto")); !os.IsNotExist(err) {
+		t.Fatal("a trait hosted elsewhere must not come along")
+	}
+}

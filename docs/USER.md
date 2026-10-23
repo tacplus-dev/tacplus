@@ -8,21 +8,22 @@ Reference for developers using tacplus to build services — writing proto files
 
 1. [Patterns for Service Implementers](#patterns-for-service-implementers)
 2. [tacplus.yaml Reference](#tacplusyaml-reference)
-3. [CLI Commands](#cli-commands)
-4. [Annotation Reference](#annotation-reference)
-5. [Conditional Requirements](#conditional-requirements)
-6. [Formal Verification Annotations](#formal-verification-annotations)
-7. [REST Method Control](#rest-method-control)
-8. [Governed RPC Verbs](#governed-rpc-verbs)
-9. [Tags](#tags)
-10. [State System](#state-system)
-11. [Auth System](#auth-system)
-12. [Record / Event / Store / Projection Annotations](#record--event--store--projection-annotations)
-13. [registry.json and the Semantic IR](#registryjson-and-the-semantic-ir)
-14. [Generated Libraries](#generated-libraries)
-15. [Service Lifecycle](#service-lifecycle)
-16. [Distributed Tracing](#distributed-tracing)
-17. [Well-Known Names (Conventions)](#well-known-names-conventions)
+3. [Service Registry](#service-registry)
+4. [CLI Commands](#cli-commands)
+5. [Annotation Reference](#annotation-reference)
+6. [Conditional Requirements](#conditional-requirements)
+7. [Formal Verification Annotations](#formal-verification-annotations)
+8. [REST Method Control](#rest-method-control)
+9. [Governed RPC Verbs](#governed-rpc-verbs)
+10. [Tags](#tags)
+11. [State System](#state-system)
+12. [Auth System](#auth-system)
+13. [Record / Event / Store / Projection Annotations](#record--event--store--projection-annotations)
+14. [registry.json and the Semantic IR](#registryjson-and-the-semantic-ir)
+15. [Generated Libraries](#generated-libraries)
+16. [Service Lifecycle](#service-lifecycle)
+17. [Distributed Tracing](#distributed-tracing)
+18. [Well-Known Names (Conventions)](#well-known-names-conventions)
 
 ---
 
@@ -117,6 +118,7 @@ Only `language` and `output-dir` are required. `pkg` is commonly set explicitly,
 | `language` | string | Yes | Full-service targets: `go`, `rust`, `java`. Full-client targets: `python`, `typescript`. Lite client targets: `swift`, `csharp`. |
 | `output-dir` | string | Yes | Output subdirectory relative to project dir |
 | `pkg` | string | No | Canonical package name (Java-style reverse DNS, e.g. `com.example.myservice`). Each segment must be a valid identifier (letters, digits, underscores — no hyphens). Converted to native format per language (see table below). |
+| `tacplus` | string | No | Minimum tacplus `MAJOR.MINOR` this project needs, e.g. `"2.2"`. A floor, not a pin: MAJOR must match and the running MINOR must be at least this. A patch component is rejected (consumers always run the latest patch of a MAJOR.MINOR). Unset means no floor. An unstamped local build (`0.0.0`) cannot satisfy a floor. |
 
 #### Package Name Conversion
 
@@ -265,6 +267,45 @@ Merge rules:
 CLI flags override YAML values when both are specified.
 
 ---
+
+## Service Registry
+
+Service and vservice ids are field numbers in the generated `TokenEntitlements`
+message and values of the `ServiceName` enum, so they must be unique across every
+proto repo that may be composed into one kernel. `registry.yaml` at the proto root
+records them.
+
+Two shapes of `registry.yaml` exist:
+
+- **The global registry** (`github.com/tacplus-dev/registry`) is the one authority.
+  Each entry names the proto repo that declares the service and whether that repo
+  is public. It is append-only; ids are never reused or renumbered.
+  Register a new service from a checkout of it:
+
+  ```bash
+  tacplus registry register NAME --kind service --repo <proto repo URL> --visibility public --proto-dir .
+  ```
+
+  Ids are allocated upward from 101. 1-99 is the frozen legacy range, 100 is
+  reserved for `azp`, and 2047 is the ceiling (protobuf encodes field numbers up to
+  2047 in two bytes). Commit the change and merge it.
+
+- **A lock** is a per-proto-repo `registry.yaml` that names its authority:
+
+  ```yaml
+  global: https://github.com/tacplus-dev/registry.git
+  services:
+      - name: doppelganger
+        id: 101
+  ```
+
+  `tacplus registry --proto-dir .` syncs the lock from the global registry for every
+  service declared in the tree. A declared service missing from the global registry
+  is an error naming the registration step; a lock never allocates and never
+  renumbers. Builds read only the lock, so generation is reproducible offline.
+
+A `registry.yaml` without `global:` keeps the original per-repo allocation (1-99,
+with an optional `id_min` floor) and is unchanged.
 
 ## CLI Commands
 

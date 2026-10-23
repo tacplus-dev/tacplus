@@ -2,8 +2,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package registry provides stable ID assignment for services and vservices.
-// Both share the same ID space (1-99) since they are assigned as field numbers
-// in the same TokenEntitlements proto message. Field 100 is reserved for azp.
+// Both share one ID space, since they are assigned as field numbers in the same
+// TokenEntitlements proto message (and as ServiceName enum values). Field 100 is
+// reserved for azp and enum value 99 for SERVICE_NAME_ANY.
+//
+// Two kinds of registry.yaml share this code:
+//
+//   - The GLOBAL registry (github.com/tacplus-dev/registry): the one authority
+//     for ids across every proto repo that may be composed into one kernel. It
+//     is append-only; ids are allocated by `tacplus registry register` from
+//     GlobalIDMin upward and never reused. Entries name the repo they live in.
+//   - A per-proto-repo registry.yaml, which is a LOCK of the global one when it
+//     names its authority with `global:`. `tacplus registry` syncs the lock from
+//     the global file; builds read only the lock, so generation is reproducible
+//     offline. A lock with `global:` never allocates: an unregistered service is
+//     an error naming the registration step.
+//
+// A registry.yaml without `global:` keeps the original per-repo allocation
+// (1-99 with an optional id_min floor) so existing consumers are unchanged.
 package registry
 
 import (
@@ -21,18 +37,36 @@ import (
 	pkgproto "github.com/tacplus-dev/tacplus/pkg/proto"
 )
 
-// ServiceEntry is a single service entry in the registry.
+// Legacy ids 1-99 were allocated per repo before the global registry existed
+// and stay exactly as they are. New registrations come from GlobalIDMin up:
+// protobuf encodes field numbers up to 2047 in two bytes, so tokens stay small.
+const (
+	LegacyIDMax       = 99
+	ReservedAzpID     = 100
+	GlobalIDMin       = 101
+	GlobalIDMax       = 2047
+	VisibilityPublic  = "public"
+	VisibilityPrivate = "private"
+)
+
+// ServiceEntry is a single service entry in the registry. Repo and Visibility
+// are set in the global registry (where the proto that declares the service
+// lives, and whether that repo is public); a lock may carry them through.
 type ServiceEntry struct {
 	Name              string `yaml:"name"`
 	ID                int32  `yaml:"id"`
 	TenantSliceField  int32  `yaml:"tenant_slice_field,omitempty"`
 	ProjectSliceField int32  `yaml:"project_slice_field,omitempty"`
+	Repo              string `yaml:"repo,omitempty"`
+	Visibility        string `yaml:"visibility,omitempty"`
 }
 
 // VServiceEntry is a single vservice entry in the registry.
 type VServiceEntry struct {
-	Name    string `yaml:"name"`
-	FieldID int32  `yaml:"field_id"`
+	Name       string `yaml:"name"`
+	FieldID    int32  `yaml:"field_id"`
+	Repo       string `yaml:"repo,omitempty"`
+	Visibility string `yaml:"visibility,omitempty"`
 }
 
 // Registry maps service and vservice names to stable numeric IDs.
@@ -52,7 +86,11 @@ type Registry struct {
 	// Giving each repo a floor removes the collision by construction and needs
 	// no cross-repo discovery: platform allocates from 1, an app from (say) 60.
 	// The merge's hard error remains the backstop for a misconfigured floor.
-	IDMin     int32            `yaml:"id_min,omitempty"`
+	IDMin int32 `yaml:"id_min,omitempty"`
+	// Global names this registry's authority (a git URL or local path of the
+	// global registry repo). When set, this file is a lock: ids come only from
+	// the global registry and nothing is allocated here.
+	Global    string           `yaml:"global,omitempty"`
 	Services  []*ServiceEntry  `yaml:"services"`
 	VServices []*VServiceEntry `yaml:"vservices"`
 	inputDir  string
@@ -115,6 +153,9 @@ func (r *Registry) ServiceID(name string) (int32, error) {
 	if r.inputDir == "" {
 		return 0, fmt.Errorf("service %q not in registry and no registry file available", name)
 	}
+	if r.Global != "" {
+		return 0, r.notInLock("service", name)
+	}
 	next := r.nextID()
 	if next >= 100 {
 		return 0, fmt.Errorf("registry ID overflow: all IDs 1-99 are taken (100 reserved for azp)")
@@ -146,6 +187,9 @@ func (r *Registry) VServiceFieldID(name string) (int32, error) {
 	}
 	if r.inputDir == "" {
 		return 0, fmt.Errorf("vservice %q not in registry and no registry file available", name)
+	}
+	if r.Global != "" {
+		return 0, r.notInLock("vservice", name)
 	}
 	next := r.nextID()
 	if next >= 100 {
@@ -229,10 +273,11 @@ func (r *Registry) Save() error {
 	// a registry that never had one must not gain `id_min: 0` on save.
 	type registryFile struct {
 		IDMin     int32            `yaml:"id_min,omitempty"`
+		Global    string           `yaml:"global,omitempty"`
 		Services  []*ServiceEntry  `yaml:"services"`
 		VServices []*VServiceEntry `yaml:"vservices,omitempty"`
 	}
-	data, err := yaml.Marshal(&registryFile{IDMin: r.IDMin, Services: r.Services, VServices: r.VServices})
+	data, err := yaml.Marshal(&registryFile{IDMin: r.IDMin, Global: r.Global, Services: r.Services, VServices: r.VServices})
 	if err != nil {
 		return fmt.Errorf("marshaling registry.yaml: %w", err)
 	}
@@ -326,13 +371,13 @@ func Validate(protoDir string) error {
 	}
 
 	// Services and vservices share one ID space, so every ID must be unique
-	// across BOTH kinds and be a legal TokenEntitlements field number: 1-99,
-	// with 100 reserved for azp.
+	// across BOTH kinds and be a legal TokenEntitlements field number: a legacy
+	// id 1-99 or a global id 101-2047, with 100 reserved for azp.
 	idOwner := make(map[int32]string)
 	checkID := func(kind, name string, id int32) {
 		who := fmt.Sprintf("%s %q", kind, name)
-		if id < 1 || id > 99 {
-			missing = append(missing, fmt.Sprintf("illegal ID: %s has ID %d, outside the usable range 1-99 (100 is reserved for azp)", who, id))
+		if !LegalID(id) {
+			missing = append(missing, fmt.Sprintf("illegal ID: %s has ID %d, outside 1-%d and %d-%d (%d is reserved for azp)", who, id, LegacyIDMax, GlobalIDMin, GlobalIDMax, ReservedAzpID))
 			return
 		}
 		if existing, ok := idOwner[id]; ok {
@@ -349,6 +394,9 @@ func Validate(protoDir string) error {
 	}
 
 	if len(missing) > 0 {
+		if reg.Global != "" {
+			return fmt.Errorf("registry.yaml (a lock of %s) is incomplete:\n  %s\n\nRun `tacplus registry --proto-dir .` to sync it; register anything missing in the global registry first", reg.Global, strings.Join(missing, "\n  "))
+		}
 		return fmt.Errorf("registry.yaml is incomplete:\n  %s\n\nRun `tacplus registry --proto-dir .` to fix, or add entries manually with the next available ID", strings.Join(missing, "\n  "))
 	}
 	return nil

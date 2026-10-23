@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/tacplus-dev/tacplus/pkg/buildinfo"
 )
 
 // Filename is the config file name written to the project root.
@@ -47,6 +49,7 @@ type Config struct {
 	Clients    ClientsConfig `yaml:"clients,omitempty"`     // generated C2S/W2S/C2D client transport surfaces
 	OutputDir  string        `yaml:"output-dir"`            // output subdirectory relative to project dir (required)
 	OutputName string        `yaml:"output-name,omitempty"` // generated package/dir segment name; default "model" (compiler stays "tacplus")
+	Tacplus    string        `yaml:"tacplus,omitempty"`     // minimum tacplus MAJOR.MINOR this project needs (a floor, see CheckFloor); unset = no floor
 	Header     string        `yaml:"header,omitempty"`      // free-form text stamped as a comment at the top of every generated file (e.g. a copyright line and an SPDX identifier); its first line is also the author of generated package manifests. Unset: generated code carries no copyright line
 }
 
@@ -76,6 +79,9 @@ func Read(dir string) (*Config, error) {
 	}
 	if cfg.OutputDir == "" {
 		return nil, fmt.Errorf("%s: output-dir is required", Filename)
+	}
+	if err := CheckFloor(cfg.Tacplus, buildinfo.Version); err != nil {
+		return nil, err
 	}
 	return &cfg, nil
 }
@@ -178,6 +184,9 @@ func ReadFiles(paths []string) (*Config, error) {
 	if result.OutputDir == "" {
 		return nil, fmt.Errorf("output-dir is required (not set in any config file)")
 	}
+	if err := CheckFloor(result.Tacplus, buildinfo.Version); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -211,6 +220,11 @@ func MergeConfigs(base, overlay *Config) *Config {
 	// OutputName: overlay wins if non-empty
 	if overlay.OutputName != "" {
 		result.OutputName = overlay.OutputName
+	}
+
+	// Tacplus floor: overlay wins if non-empty
+	if overlay.Tacplus != "" {
+		result.Tacplus = overlay.Tacplus
 	}
 
 	// Header: overlay wins if non-empty

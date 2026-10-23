@@ -156,6 +156,11 @@ func ProtoDirWithDepends(protoDir string) (string, func(), error) {
 			c()
 		}
 	}
+	// A dependency contributes its protos to the scan, not its lock: the lock
+	// being written is this tree's own.
+	for _, d := range depDirs {
+		_ = os.Remove(filepath.Join(d, "registry.yaml"))
+	}
 	merged, err := os.MkdirTemp("", "tacplus-scan-*")
 	if err != nil {
 		cleanup()

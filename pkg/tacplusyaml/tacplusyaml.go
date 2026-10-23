@@ -42,6 +42,7 @@ func (c ClientsConfig) IsZero() bool {
 // Config represents the tacplus.yaml schema.
 type Config struct {
 	Import     string        `yaml:"import,omitempty"`      // path to base config to import (resolved relative to this file's directory)
+	Kind       string        `yaml:"kind,omitempty"`        // what this project is: "service" (hosts a surface, has an identity), "client" (calls services, hosts nothing), "library" (contracts only: protos other projects build against). Unset = not stated; see CheckKind
 	Language   string        `yaml:"language"`              // go, java, typescript, python, rust, swift
 	Src        string        `yaml:"src"`                   // primary proto source (git URL or local path)
 	Sources    []string      `yaml:"sources,omitempty"`     // additional proto sources merged with src into one generation (e.g. a shared base + a reusable service's protos)
@@ -85,6 +86,9 @@ func Read(dir string) (*Config, error) {
 		return nil, err
 	}
 	if err := CheckDepends(cfg.Depends); err != nil {
+		return nil, err
+	}
+	if err := CheckKind(cfg.Kind); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -194,6 +198,9 @@ func ReadFiles(paths []string) (*Config, error) {
 	if err := CheckDepends(result.Depends); err != nil {
 		return nil, err
 	}
+	if err := CheckKind(result.Kind); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -232,6 +239,11 @@ func MergeConfigs(base, overlay *Config) *Config {
 	// Tacplus floor: overlay wins if non-empty
 	if overlay.Tacplus != "" {
 		result.Tacplus = overlay.Tacplus
+	}
+
+	// Kind: overlay wins if non-empty
+	if overlay.Kind != "" {
+		result.Kind = overlay.Kind
 	}
 
 	// Depends: overlay wins if it declares any (same semantics as Sources)

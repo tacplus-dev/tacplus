@@ -16,6 +16,11 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # A container job defaults to sh; the steps below are bash (here-strings,
+    # [[ ]]), so say so, or "Syntax error: redirection unexpected" (v2.1.1).
+    defaults:
+      run:
+        shell: bash
     container:
       image: ghcr.io/tacplus-dev/tacplus/build:latest
       credentials:

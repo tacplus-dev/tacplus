@@ -91,6 +91,11 @@ public final class RedoLog implements AutoCloseable {
     private OutputStream writer;
     private Path writerTarget;
     private ArchiveShipper shipper;
+    // Guarded by lock. appended counts every append; rolledThrough is the
+    // appended count the last committed roll covered. A roll with nothing new
+    // since then has nothing to compact or ship.
+    private long appended;
+    private long rolledThrough = -1;
 
     private RedoLog(Path active, int archiveCount, Codec archiveCodec) {
         this.active = active;
@@ -131,6 +136,7 @@ public final class RedoLog implements AutoCloseable {
         byte[] line = (encode(rec) + "\n").getBytes(StandardCharsets.UTF_8);
         synchronized (lock) {
             try {
+                appended++;
                 writer.write(line);
                 writer.flush();
                 fsync(writerTarget);
@@ -173,7 +179,12 @@ public final class RedoLog implements AutoCloseable {
         Path building = FsUtil.sibling(active, ".building");
 
         // 1. Redirect appends to the temp log (no write-block during snapshot).
+        long seen;
         synchronized (lock) {
+            if (appended == rolledThrough) {
+                return;
+            }
+            seen = appended;
             try {
                 closeWriter();
                 writer = openAppend(tempPath);
@@ -217,6 +228,7 @@ public final class RedoLog implements AutoCloseable {
                 writer = openAppend(active);
                 writerTarget = active;
                 Files.deleteIfExists(tempPath);
+                rolledThrough = seen;
             } catch (IOException e) {
                 throw DiskStoreException.io(e.getMessage(), e);
             }

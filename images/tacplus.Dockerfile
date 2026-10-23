@@ -6,7 +6,7 @@
 # of the build image, so their versions have one source. Tagged by the
 # version policy in docs/VERSIONING.md (X.Y.Z, X.Y, X, latest, main-<sha>).
 ARG BUILD_IMAGE=ghcr.io/tacplus-dev/tacplus/build:latest
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS tacplus
 ARG VERSION=0.0.0
@@ -43,7 +43,7 @@ LABEL org.opencontainers.image.title="tacplus" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}"
-RUN apt-get update && apt-get install -y --no-install-recommends bash ca-certificates git libcurl4 libxml2 python3 \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends bash ca-certificates git libcurl4 libxml2 python3 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=tools /usr/local/bin/protoc /usr/local/bin/protoc-gen-go /usr/local/bin/protoc-gen-go-grpc \
                   /usr/local/bin/protoc-gen-grpc-java /usr/local/bin/protoc-gen-prost /usr/local/bin/protoc-gen-tonic \

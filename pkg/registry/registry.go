@@ -487,6 +487,14 @@ func ScanRegistryNames(protoDir string) (services []string, vservices []string, 
 	return services, vservices, nil
 }
 
+// PrepareDescriptorRoot copies protoDir into a temp root with the embedded
+// sys protos and the generated/*.proto stubs beside it, so a descriptor parse
+// resolves every import pre-generation. Callers run parser-level validators
+// over the root and call cleanup when done.
+func PrepareDescriptorRoot(protoDir string) (string, func(), error) {
+	return prepareVServiceDescriptorRoot(protoDir)
+}
+
 func prepareVServiceDescriptorRoot(protoDir string) (string, func(), error) {
 	tempDir, err := os.MkdirTemp("", "tacplus-vservice-registry-*")
 	if err != nil {

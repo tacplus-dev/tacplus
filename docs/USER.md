@@ -324,6 +324,7 @@ own implementation of, say, kernel under the same name and id.
 | `tacplus validate` | Validate proto files |
 | `tacplus verify` | Run formal verification on Rust or Java code |
 | `tacplus registry` | Update the service / vservice / trait registry from proto definitions |
+| `tacplus fleet build` | Build a fleet from a deployment repo's `fleet.yaml`: resolve every service's implementation, check ids and dependencies against the registries, merge the protos, run the whole-fleet checks, write `fleet.lock` (see [Fleet Build](#fleet-build)) |
 | `tacplus upgrade` | Upgrade tacplus to the latest patch release |
 | `tacplus version` | Print the version and build information |
 
@@ -1605,6 +1606,45 @@ async fn handle_request(&self, req: MyRequest) -> Result<MyResponse, ProtoError>
 ```
 
 The same pattern applies in Java, TypeScript, and Python. Omitting the `trace_id` on any downstream call breaks the trace chain for that span.
+
+## Fleet Build
+
+A service is generated alone, in its own repo, against its own proto plus the sys
+contract and the protos of its `depends`. A **fleet** is what runs those services
+together, and it is declared in a deployment repo, one per fleet:
+
+```yaml
+# fleet.yaml
+registries:
+  - https://github.com/tacplus-dev/registry.git     # ordered; disjoint; unioned
+  - https://gitlab.com/acme/registry.git            # a private one, if any
+tacplus: "2.2"                                      # floor, MAJOR.MINOR
+services:
+  - name: kernel
+    version: "0.1"                                  # MAJOR.MINOR -> latest patch; omit for latest
+    repo: https://github.com/acme/our-kernel.git    # the implementation THIS fleet runs; required, no default
+  - name: llmproxy
+    repo: https://github.com/tacplus-dev/llmproxy.git
+```
+
+`dependencies.yaml` beside it holds the language and tool pins for everything
+generated from the fleet's merged protos. `tacplus fleet build` then:
+
+1. unions the registries, refusing a name or id that appears in two;
+2. resolves each service's implementation at its version and checks it against the
+   registry: its lock carries the registry's id (a fleet may run its own kernel, never
+   under a different number) and its proto declares the registered name;
+3. checks every `depends` of every service is in the fleet, at a version satisfying the
+   dependent's floor: this is where the kernel build follows the dependency;
+4. merges the protos (each service's protos and lock, the fleet's pins) into `build/proto`
+   and runs the whole-fleet checks: routing and C2S host labels served, one SMB authority,
+   exactly one minter, a complete and collision-free registry;
+5. writes `fleet.lock`, the exact commit of every registry and service.
+
+The merged tree is what the fleet-side services, the state host, the gateway and the
+operator, are generated from: `tacplus build --src build/proto` in their repos at the
+locked commits. Service binaries are not built here; each builds in its own repo, and
+the shared registry locks guarantee the two agree.
 
 ## The Sys Contract a Fleet Provides
 

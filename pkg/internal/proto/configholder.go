@@ -860,7 +860,18 @@ func ScanVServiceRPCs(scanDir string, reg *ServiceRegistry) ([]VServiceEntry, er
 		if fd.VServiceName == "" {
 			continue
 		}
-		vsID, err := reg.VServiceFieldID(fd.VServiceName)
+		var vsID int32
+		if fd.VServiceID != 0 {
+			// A declared id (sys-owned contracts such as minter declare theirs
+			// inline) is the wire number; the registry may know it but must
+			// never allocate a different one.
+			vsID = fd.VServiceID
+			if regID, ok := reg.VServiceFieldIDIfPresent(fd.VServiceName); ok && regID != vsID {
+				return nil, fmt.Errorf("%s: vservice %q declares id %d but the registry has %d", path, fd.VServiceName, vsID, regID)
+			}
+		} else {
+			vsID, err = reg.VServiceFieldID(fd.VServiceName)
+		}
 		if err != nil {
 			if fd.VServiceID == 0 {
 				return nil, fmt.Errorf("%s: vservice %q has no registry entry and no descriptor id fallback: %w", path, fd.VServiceName, err)

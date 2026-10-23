@@ -212,7 +212,7 @@ impl IdentityManager {
 {{- if .MintExternalServiceTokenMethod }}
         let input_token = self.get_token().await?;
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
-        let mut client = {{.CrateBasePathUnderscore}}_types::services::{{.TokenExchangerPackage}}::{{.TokenExchangerPackage}}::{{.MintClientModule}}::{{.MintClientType}}::new(self.channel.clone());
+        let mut client = {{.CrateBasePathUnderscore}}_types::{{.TokenExchangerDir}}::{{.TokenExchangerPackage}}::{{.TokenExchangerPackage}}::{{.MintClientModule}}::{{.MintClientType}}::new(self.channel.clone());
         let resp = tokio::time::timeout(
             EXTERNAL_MINT_TIMEOUT,
             client.{{.MintExternalServiceTokenMethod}}(tonic::Request::new(

@@ -46,6 +46,11 @@ type TokenExchangerInfo struct {
 	IsProxy                        bool   // true for the client-reachable C2S front (token_minter {proxy: true})
 }
 
+// SysMinterService is the fully-qualified name of the minting contract tacplus
+// declares in sys/minter.proto. It is the authoritative (spec.token_minter) in
+// every run; see that file.
+const SysMinterService = "minter.Minter"
+
 // scanTokenMinters parses protoDir via the descriptor model and returns every
 // service carrying the (spec.token_minter) annotation. The minter is declared
 // EXPLICITLY — we do NOT infer it from RPC names (TokenMint/MintServiceToken);
@@ -83,6 +88,11 @@ func scanTokenMinters(protoDir string) ([]TokenExchangerInfo, error) {
 		for _, m := range minters {
 			if !m.IsProxy {
 				names = append(names, m.Package+"."+m.ServiceName)
+			}
+		}
+		for _, n := range names {
+			if n == SysMinterService {
+				return nil, fmt.Errorf("multiple authoritative (spec.token_minter) services declared (%v): the minting contract is declared by tacplus itself (sys/minter.proto, %s); drop (spec.token_minter) and the minting RPCs from the other service and have the token authority host the sys Minter instead", names, SysMinterService)
 			}
 		}
 		return nil, fmt.Errorf("multiple authoritative (spec.token_minter) services declared (%v); exactly one S2S minter is allowed", names)

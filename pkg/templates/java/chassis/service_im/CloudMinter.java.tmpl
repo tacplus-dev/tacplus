@@ -11,7 +11,7 @@ import {{.TypesBase}}.sys.cloudidentity.Cloudidentity;
 import {{.TypesBase}}.sys.cloudvendor.Cloudvendor;
 import {{.TypesBase}}.sys.token.TokenOuterClass.TokenPurpose;
 {{if .HasTokenExchanger}}
-import {{.TypesBase}}.services.{{.TokenExchangerPackage}}.{{.MintServiceName}}Grpc;
+import {{.TypesBase}}.{{.TokenExchangerDir}}.{{.TokenExchangerPackage}}.{{.MintServiceName}}Grpc;
 {{end}}
 
 import io.grpc.ManagedChannel;

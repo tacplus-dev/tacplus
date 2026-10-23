@@ -18,7 +18,7 @@ use base64::Engine as _;
 use tokio::sync::{Mutex, RwLock};
 use tonic::transport::Channel;
 
-use {{.CrateBasePathUnderscore}}_types::services::{{.TokenExchangerPackage}}::{{.TokenExchangerPackage}}::{{.MintClientModule}}::{{.MintClientType}};
+use {{.CrateBasePathUnderscore}}_types::{{.TokenExchangerDir}}::{{.TokenExchangerPackage}}::{{.TokenExchangerPackage}}::{{.MintClientModule}}::{{.MintClientType}};
 use {{.CrateBasePathUnderscore}}_types::sys::tokenrequest::MintServiceTokenRequest;
 use {{.CrateBasePathUnderscore}}_types::sys::token::token::TokenPurpose;
 

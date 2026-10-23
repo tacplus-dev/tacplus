@@ -179,6 +179,15 @@ func (r *Registry) ServiceIDIfPresent(name string) (int32, bool) {
 	return 0, false
 }
 
+// VServiceFieldIDIfPresent returns the registered field id for name and true if
+// it exists; it never allocates.
+func (r *Registry) VServiceFieldIDIfPresent(name string) (int32, bool) {
+	if e, ok := r.vsByName[name]; ok {
+		return e.FieldID, true
+	}
+	return 0, false
+}
+
 // VServiceFieldID returns the stable TokenEntitlements field number for a vservice.
 // If the vservice is not in the registry, the next sequential ID is auto-assigned.
 func (r *Registry) VServiceFieldID(name string) (int32, error) {

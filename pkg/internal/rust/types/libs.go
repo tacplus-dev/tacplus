@@ -67,6 +67,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 	// authoritative mint has no C2S route for clients and the client-facing
 	// mint has no MintServiceToken for services. So discover them separately.
 	texPkg := ""
+	texDir := "services"
 	mintServiceName := ""
 	hasTokenExchanger := false
 	info, err := parser.DiscoverTokenExchangerPackage(config.AnnotatedProtoDir)
@@ -75,6 +76,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 	}
 	if info != nil {
 		texPkg = info.Package
+		texDir = exchangerParentDir(info)
 		mintServiceName = info.ServiceName
 		hasTokenExchanger = true
 	}
@@ -108,6 +110,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 	// client_im exchanger — prefers the gateway C2S proxy. Defaults to the
 	// authoritative values if no client-reachable mint is found.
 	clientTexPkg := ""
+	clientTexDir := "services"
 	clientMintServiceName := ""
 	hasClientTokenExchanger := false
 	clientInfo, err := parser.DiscoverClientTokenExchangerPackage(config.AnnotatedProtoDir)
@@ -116,6 +119,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 	}
 	if clientInfo != nil {
 		clientTexPkg = clientInfo.Package
+		clientTexDir = exchangerParentDir(clientInfo)
 		clientMintServiceName = clientInfo.ServiceName
 		hasClientTokenExchanger = true
 	}
@@ -163,6 +167,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		CrateBasePath           string
 		CrateBasePathUnderscore string
 		TokenExchangerPackage   string // authoritative (S2S) mint package — used by service_im
+		TokenExchangerDir       string // generated types dir holding it: "sys" for the sys contract, "services" for a declared one
 		MintServiceName         string // proto service name, e.g. "Mint"
 		MintClientModule        string // Rust module name, e.g. "mint_client"
 		MintClientType          string // Rust type name, e.g. "MintClient"
@@ -174,6 +179,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		// Client-facing (C2S-reachable) mint — used by client_im. May differ from
 		// the authoritative one (e.g. a gateway Mint proxy vs the S2S Mint).
 		ClientTokenExchangerPackage string
+		ClientTokenExchangerDir     string
 		ClientMintClientModule      string
 		ClientMintClientType        string
 		ClientTokenMintMethod       string
@@ -191,6 +197,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		CrateBasePath:                  config.CrateBasePath,
 		CrateBasePathUnderscore:        strings.ReplaceAll(config.CrateBasePath, "-", "_"),
 		TokenExchangerPackage:          texPkg,
+		TokenExchangerDir:              texDir,
 		MintServiceName:                mintServiceName,
 		MintClientModule:               mintClientModule,
 		MintClientType:                 mintClientType,
@@ -199,6 +206,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		HasTokenExchanger:              hasTokenExchanger,
 		DefaultAudience:                defaultAudience,
 		ClientTokenExchangerPackage:    clientTexPkg,
+		ClientTokenExchangerDir:        clientTexDir,
 		ClientMintClientModule:         clientMintClientModule,
 		ClientMintClientType:           clientMintClientType,
 		ClientTokenMintMethod:          clientTokenMintMethod,
@@ -272,4 +280,14 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 
 	zap.L().Info("Rust library templates written successfully")
 	return nil
+}
+
+// exchangerParentDir is the generated types directory that holds a minter's
+// types: the parent of its proto path ("sys" for sys/minter.proto, "services"
+// for services/mint.proto).
+func exchangerParentDir(info *parser.TokenExchangerInfo) string {
+	if d := filepath.Dir(info.Dir); d != "." && d != "" {
+		return filepath.Base(d)
+	}
+	return "services"
 }

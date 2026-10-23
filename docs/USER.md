@@ -1597,6 +1597,22 @@ async fn handle_request(&self, req: MyRequest) -> Result<MyResponse, ProtoError>
 
 The same pattern applies in Java, TypeScript, and Python. Omitting the `trace_id` on any downstream call breaks the trace chain for that span.
 
+## The Sys Contract a Fleet Provides
+
+Some things every hosted service needs are provided by the fleet, not by the
+service, and tacplus declares them itself in its `sys/` protos so a service
+generates alone, against its own proto plus `sys/`, without the fleet's protos
+in the run. The fleet build loads the real implementors. Today:
+
+| Declared in | What | Hosted by |
+|-------------|------|-----------|
+| `sys/minter.proto` (`minter.Minter`) | The minting contract every generated ServiceManager calls: `MintServiceToken`, `MintExternalServiceToken`, `MintToken`, `MintX509Cert`. It is the one authoritative `(spec.token_minter)` in every run; a consumer must not declare another. | The token authority, at routing label `kernel`. It implements `minter.Minter` and keeps its own policy RPCs in a service of its own. |
+| `sys/servicehealth.proto` (`servicehealth.ServiceHealth`) | The service-instance health root every service reports into. Field numbers are frozen. | The state host (`kernel`), which imports it rather than declaring a copy. |
+| routing label `kernel` | The state host. Counts as served in every run (see Well-Known Names); config state routes there when no store is loaded. | The fleet's state host. |
+
+A service that declared these itself before now imports them; declaring a second
+copy is an error that names the sys file.
+
 ## Well-Known Names (Conventions)
 
 Three names from the platform tacplus was first built for are, for now,

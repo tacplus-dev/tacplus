@@ -25,7 +25,7 @@ use tracing::{info, warn};
 
 use {{.CrateBasePathUnderscore}}_types::sys::grpcconfig::grpcconfig::Config;
 {{- if .HasClientTokenExchanger }}
-use {{.CrateBasePathUnderscore}}_types::services::{{.ClientTokenExchangerPackage}}::{{.ClientTokenExchangerPackage}}::{{.ClientMintClientModule}}::{{.ClientMintClientType}};
+use {{.CrateBasePathUnderscore}}_types::{{.ClientTokenExchangerDir}}::{{.ClientTokenExchangerPackage}}::{{.ClientTokenExchangerPackage}}::{{.ClientMintClientModule}}::{{.ClientMintClientType}};
 use {{.CrateBasePathUnderscore}}_types::sys::tokenrequest::tokenrequest::TokenMintRequest;
 use {{.CrateBasePathUnderscore}}_types::sys::token::token::TokenPurpose;
 {{- end }}

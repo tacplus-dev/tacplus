@@ -54,10 +54,12 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 	// The proto package containing the authoritative token mint service.
 	texPkg := ""
 	mintServiceName := ""
+	mintServiceTokenMethod := ""
 	hasTokenExchanger := false
 	if info != nil {
 		texPkg = info.Package
 		mintServiceName = info.ServiceName
+		mintServiceTokenMethod = info.MintServiceTokenMethod
 		hasTokenExchanger = true
 	}
 	defaultAudience := config.ServiceLabel()
@@ -86,18 +88,19 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 
 	// Template data
 	data := struct {
-		TsPackageBase         string
-		TsPackagePrefix       string // includes trailing / or - for constructing lib package names
-		TsSpecialPackage      string // full npm package name for the spec proto package
-		TokenRequestPackage   string // full npm package name for sys/tokenrequest.proto
-		HasTokenExchanger     bool
-		TokenExchangerPackage string // proto package name for token mint service
-		MintServiceName       string // proto service name, e.g. "Mint"
-		DefaultAudience       string
-		ServiceLabel          string   // service identity baked into Authorizer
-		AcceptedAudiences     []string // every `aud` the Authorizer accepts: own label + hosted traits
-		BufbuildProtobuf      string   // @bufbuild/protobuf version from dependencies.yaml
-		ClientOnly            bool
+		TsPackageBase          string
+		TsPackagePrefix        string // includes trailing / or - for constructing lib package names
+		TsSpecialPackage       string // full npm package name for the spec proto package
+		TokenRequestPackage    string // full npm package name for sys/tokenrequest.proto
+		HasTokenExchanger      bool
+		TokenExchangerPackage  string // proto package name for token mint service
+		MintServiceName        string // proto service name, e.g. "Mint"
+		MintServiceTokenMethod string // RPC accepting MintServiceTokenRequest, as the minter names it
+		DefaultAudience        string
+		ServiceLabel           string   // service identity baked into Authorizer
+		AcceptedAudiences      []string // every `aud` the Authorizer accepts: own label + hosted traits
+		BufbuildProtobuf       string   // @bufbuild/protobuf version from dependencies.yaml
+		ClientOnly             bool
 		// Client-reachable (C2S) mint — used by client_im.
 		HasClientTokenExchanger     bool
 		ClientTokenExchangerPackage string // C2S mint proto package name
@@ -113,6 +116,7 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 		HasTokenExchanger:           hasTokenExchanger,
 		TokenExchangerPackage:       texPkg,
 		MintServiceName:             mintServiceName,
+		MintServiceTokenMethod:      mintServiceTokenMethod,
 		DefaultAudience:             defaultAudience,
 		ServiceLabel:                config.ServiceLabel(),
 		AcceptedAudiences:           acceptedAudiences,

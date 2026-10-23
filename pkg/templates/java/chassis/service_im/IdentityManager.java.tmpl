@@ -428,7 +428,7 @@ public class IdentityManager implements AutoCloseable {
         if (ch == null) {
             throw new IllegalStateException("IM: token authority channel not initialized");
         }
-        var resp = {{.TypesBase}}.services.{{.TokenExchangerPackage}}.{{.MintServiceName}}Grpc.newBlockingStub(ch)
+        var resp = {{.TypesBase}}.{{.TokenExchangerDir}}.{{.TokenExchangerPackage}}.{{.MintServiceName}}Grpc.newBlockingStub(ch)
                 .withDeadlineAfter(EXTERNAL_MINT_TIMEOUT_SECS, java.util.concurrent.TimeUnit.SECONDS)
                 .{{.MintExternalServiceTokenMethod}}({{.TypesBase}}.{{.TokenRequestPackage}}.{{.TokenRequestOuterClass}}.MintExternalServiceTokenRequest.newBuilder()
                         .setInputToken(inputToken)

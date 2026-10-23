@@ -147,3 +147,15 @@ func (r *Registry) SyncFromGlobal(global *Registry, serviceNames, vserviceNames 
 func (r *Registry) notInLock(kind, name string) error {
 	return fmt.Errorf("%s %q is not in the registry lock (authority %s); run `tacplus registry --proto-dir %s` to sync it, registering it first if needed", kind, name, r.Global, r.inputDir)
 }
+
+// RepoOf returns the repo registered for name (a service or a vservice) and
+// whether the name is registered at all.
+func (r *Registry) RepoOf(name string) (string, bool) {
+	if e, ok := r.byName[name]; ok {
+		return e.Repo, true
+	}
+	if e, ok := r.vsByName[name]; ok {
+		return e.Repo, true
+	}
+	return "", false
+}

@@ -118,6 +118,7 @@ Only `language` and `output-dir` are required. `pkg` is commonly set explicitly,
 | `language` | string | Yes | Full-service targets: `go`, `rust`, `java`. Full-client targets: `python`, `typescript`. Lite client targets: `swift`, `csharp`. |
 | `output-dir` | string | Yes | Output subdirectory relative to project dir |
 | `pkg` | string | No | Canonical package name (Java-style reverse DNS, e.g. `com.example.myservice`). Each segment must be a valid identifier (letters, digits, underscores — no hyphens). Converted to native format per language (see table below). |
+| `depends` | list | No | Services this one calls, by registry name: `llmproxy` or `weather@1.2` (MAJOR.MINOR, the latest patch; never a patch pin). Each is resolved through the global registry named by `global:` in `proto/registry.yaml` to the repo that declares it, fetched at that version, and merged into this generation, so the `(spec.grpc_s2s_client)` declared in proto has a proto to generate from. Direct dependencies only; the fleet build follows them transitively. |
 | `tacplus` | string | No | Minimum tacplus `MAJOR.MINOR` this project needs, e.g. `"2.2"`. A floor, not a pin: MAJOR must match and the running MINOR must be at least this. A patch component is rejected (consumers always run the latest patch of a MAJOR.MINOR). Unset means no floor. An unstamped local build (`0.0.0`) cannot satisfy a floor. |
 
 #### Package Name Conversion

@@ -250,7 +250,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 		absProtoDir = tempDir
 		protoCleanup = func() { os.RemoveAll(tempDir) }
 		zap.L().Info("No proto source configured — generating standard library wrappers only")
-	} else if len(srcs) == 1 {
+	} else if len(srcs) == 1 && (cfg == nil || len(cfg.Depends) == 0) {
 		// Single source: resolve directly (no merge), preserving the original
 		// fast path exactly.
 		dir, cleanup, err := resolveOneSource(srcs[0], tag)
@@ -278,6 +278,17 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 			}
 			dirs = append(dirs, dir)
 			cleanups = append(cleanups, cleanup)
+		}
+		// Declared dependencies (tacplus.yaml depends) join the merge: their
+		// protos are what the declared S2S clients generate from.
+		if cfg != nil && len(cfg.Depends) > 0 {
+			depDirs, depCleanups, err := resolveDependencies(cfg.Depends, dirs[0])
+			if err != nil {
+				runCleanups()
+				return nil, err
+			}
+			dirs = append(dirs, depDirs...)
+			cleanups = append(cleanups, depCleanups...)
 		}
 		mergedDir, err := os.MkdirTemp("", "tacplus-merged-*")
 		if err != nil {

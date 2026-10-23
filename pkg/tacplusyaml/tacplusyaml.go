@@ -50,6 +50,7 @@ type Config struct {
 	OutputDir  string        `yaml:"output-dir"`            // output subdirectory relative to project dir (required)
 	OutputName string        `yaml:"output-name,omitempty"` // generated package/dir segment name; default "model" (compiler stays "tacplus")
 	Tacplus    string        `yaml:"tacplus,omitempty"`     // minimum tacplus MAJOR.MINOR this project needs (a floor, see CheckFloor); unset = no floor
+	Depends    []string      `yaml:"depends,omitempty"`     // services this one calls, by registry name ("llmproxy" or "llmproxy@1.2"); their protos are fetched through the registry and merged into this generation (see CheckDepends)
 	Header     string        `yaml:"header,omitempty"`      // free-form text stamped as a comment at the top of every generated file (e.g. a copyright line and an SPDX identifier); its first line is also the author of generated package manifests. Unset: generated code carries no copyright line
 }
 
@@ -81,6 +82,9 @@ func Read(dir string) (*Config, error) {
 		return nil, fmt.Errorf("%s: output-dir is required", Filename)
 	}
 	if err := CheckFloor(cfg.Tacplus, buildinfo.Version); err != nil {
+		return nil, err
+	}
+	if err := CheckDepends(cfg.Depends); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -187,6 +191,9 @@ func ReadFiles(paths []string) (*Config, error) {
 	if err := CheckFloor(result.Tacplus, buildinfo.Version); err != nil {
 		return nil, err
 	}
+	if err := CheckDepends(result.Depends); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -225,6 +232,11 @@ func MergeConfigs(base, overlay *Config) *Config {
 	// Tacplus floor: overlay wins if non-empty
 	if overlay.Tacplus != "" {
 		result.Tacplus = overlay.Tacplus
+	}
+
+	// Depends: overlay wins if it declares any (same semantics as Sources)
+	if len(overlay.Depends) > 0 {
+		result.Depends = overlay.Depends
 	}
 
 	// Header: overlay wins if non-empty

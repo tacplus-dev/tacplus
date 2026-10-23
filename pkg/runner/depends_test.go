@@ -43,13 +43,17 @@ func TestResolveDependenciesByRegistryName(t *testing.T) {
 			c()
 		}
 	}()
-	want, _ := filepath.EvalSymlinks(filepath.Join(depRepo, "proto"))
-	got := ""
-	if len(dirs) == 1 {
-		got, _ = filepath.EvalSymlinks(dirs[0])
+	if len(dirs) != 1 {
+		t.Fatalf("dirs = %v, want one staged dependency dir", dirs)
 	}
-	if got != want {
-		t.Fatalf("dirs = %v, want the dependency's proto/ dir", dirs)
+	if _, err := os.Stat(filepath.Join(dirs[0], "services", "llmproxy.proto")); err != nil {
+		t.Fatalf("staged dependency lacks its proto: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dirs[0], "registry.yaml")); err != nil {
+		t.Fatalf("staged dependency lacks its registry lock: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dirs[0], "dependencies.yaml")); !os.IsNotExist(err) {
+		t.Fatal("a dependency's dependencies.yaml must not be merged; its pins are its own build's")
 	}
 
 	if _, _, err := resolveDependencies([]string{"nobody"}, consumer); err == nil || !strings.Contains(err.Error(), "not in the global registry") {

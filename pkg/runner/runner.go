@@ -306,7 +306,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 			runCleanups()
 		}
 		zap.L().Info("merged multiple proto sources into one generation",
-			zap.Int("sources", len(srcs)), zap.String("merged-dir", mergedDir))
+			zap.Int("sources", len(dirs)), zap.String("merged-dir", mergedDir))
 	}
 
 	// Language must be declared in tacplus.yaml

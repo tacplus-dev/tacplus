@@ -5,6 +5,8 @@ package runner
 
 import (
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 
 	"go.uber.org/zap"
@@ -69,9 +71,56 @@ func resolveDependencies(depends []string, firstSourceDir string) ([]string, []f
 			runCleanups()
 			return nil, nil, fmt.Errorf("depends: resolving %q from %s: %w", name, repo, err)
 		}
+		staged, stagedCleanup, err := stageDependency(dir)
+		if err != nil {
+			cleanup()
+			runCleanups()
+			return nil, nil, fmt.Errorf("depends: staging %q: %w", name, err)
+		}
 		zap.L().Info("resolved dependency", zap.String("name", name), zap.String("repo", repo), zap.String("tag", tag), zap.String("dir", filepath.Clean(dir)))
-		dirs = append(dirs, dir)
-		cleanups = append(cleanups, cleanup)
+		dirs = append(dirs, staged)
+		cleanups = append(cleanups, cleanup, stagedCleanup)
 	}
 	return dirs, cleanups, nil
+}
+
+// stageDependency copies a dependency's proto tree into a temp dir without
+// its dependencies.yaml. A dependency contributes its protos (and its
+// registry lock, which must agree with ours); its language and tool pins are
+// its own build's business and must not collide with this project's.
+func stageDependency(dir string) (string, func(), error) {
+	staged, err := os.MkdirTemp("", "tacplus-dep-*")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { os.RemoveAll(staged) }
+	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, p)
+		if d.IsDir() {
+			if rel != "." && d.Name()[0] == '.' {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if rel == "dependencies.yaml" {
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(staged, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(dst, data, 0o644)
+	})
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return staged, cleanup, nil
 }

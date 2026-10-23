@@ -1001,7 +1001,11 @@ func resolvePrimaryStore(allFiles map[string]*parser.FileDescriptor) (string, er
 	case len(configStorePkgs) == 1:
 		return configStorePkgs[0], nil
 	case len(storePkgs) == 0:
-		return "", nil
+		// No store in this run: a service generated alone. Config state is
+		// hosted by the fleet's state host, which every fleet provides, so
+		// route to its well-known label; the fleet build loads the real store
+		// (kernel declares store + config_store) and takes the branch above.
+		return parser.WellKnownStateHostLabel, nil
 	case len(storePkgs) == 1:
 		// Unambiguous: one store, nothing to choose between.
 		return storePkgs[0], nil
@@ -1080,9 +1084,6 @@ func InjectGrpcConfigState(sourceProtoDir, tempProtoDir, flatProtoDir string) ([
 	primaryStore, err := resolvePrimaryStore(dp.GetAllFiles())
 	if err != nil {
 		return nil, err
-	}
-	if primaryStore == "" {
-		return nil, fmt.Errorf("no service with store: true found in proto set — config state requires a backing store")
 	}
 
 	// Inject ConfigState into each service's proto file.

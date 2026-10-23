@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"go.uber.org/zap"
@@ -127,3 +128,88 @@ func stageDependency(dir string) (string, func(), error) {
 	}
 	return staged, cleanup, nil
 }
+
+// ProtoDirWithDepends returns a directory holding protoDir's protos together
+// with the protos of the depends declared in the tacplus.yaml beside it (the
+// project root is protoDir's parent). With no depends it returns protoDir
+// itself. Used wherever a proto tree is scanned outside generation, so a
+// proto that imports its dependencies' protos resolves.
+func ProtoDirWithDepends(protoDir string) (string, func(), error) {
+	noop := func() {}
+	root := filepath.Dir(protoDir)
+	if !tacplusyaml.Exists(root) {
+		return protoDir, noop, nil
+	}
+	cfg, err := tacplusyaml.Read(root)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(cfg.Depends) == 0 {
+		return protoDir, noop, nil
+	}
+	depDirs, cleanups, err := resolveDependencies(cfg.Depends, protoDir)
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() {
+		for _, c := range cleanups {
+			c()
+		}
+	}
+	merged, err := os.MkdirTemp("", "tacplus-scan-*")
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	all := append([]string{protoDir}, depDirs...)
+	if err := protosrc.MergeSources(all, merged); err != nil {
+		os.RemoveAll(merged)
+		cleanup()
+		return "", nil, fmt.Errorf("merging depends for scan: %w", err)
+	}
+	return merged, func() { os.RemoveAll(merged); cleanup() }, nil
+}
+
+// OwnDeclarations keeps, of the scanned names, those declared by files that
+// live in protoDir itself (not in a merged dependency).
+func OwnDeclarations(protoDir string, services, vservices []string) ([]string, []string) {
+	own := map[string]bool{}
+	_ = filepath.WalkDir(protoDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".proto") {
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		src := string(data)
+		for _, re := range []*regexp.Regexp{ownServiceNameRe, ownVServiceNameRe} {
+			for _, m := range re.FindAllStringSubmatch(src, -1) {
+				own[m[1]] = true
+			}
+		}
+		if ownServiceNoNameRe.MatchString(src) {
+			if pm := ownPackageRe.FindStringSubmatch(src); pm != nil {
+				own[pm[1]] = true
+			}
+		}
+		return nil
+	})
+	keep := func(in []string) []string {
+		var out []string
+		for _, n := range in {
+			if own[n] {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	return keep(services), keep(vservices)
+}
+
+var (
+	ownServiceNameRe   = regexp.MustCompile(`(?s)\(\s*spec\.service\s*\)\s*=\s*\{[^}]*\bname\s*:\s*"([^"]+)"`)
+	ownVServiceNameRe  = regexp.MustCompile(`(?s)\(\s*spec\.vservice\s*\)\s*=\s*\{[^}]*\bname\s*:\s*"([^"]+)"`)
+	ownServiceNoNameRe = regexp.MustCompile(`(?s)\(\s*spec\.service\s*\)\s*=\s*\{[^}]*\}`)
+	ownPackageRe       = regexp.MustCompile(`(?m)^\s*package\s+([A-Za-z_][\w.]*)\s*;`)
+)

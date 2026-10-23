@@ -12,6 +12,7 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/protosrc"
 	"github.com/tacplus-dev/tacplus/pkg/registry"
+	"github.com/tacplus-dev/tacplus/pkg/runner"
 )
 
 var (
@@ -88,11 +89,21 @@ func runRegistry(cmd *cobra.Command, args []string) error {
 	}
 
 	// Discover declarations anywhere in the tree, the way generation does — a
-	// service outside services/ must still be assigned an ID.
-	serviceNames, vserviceNames, err := registry.ScanRegistryNames(protoDir)
+	// service outside services/ must still be assigned an ID. A proto that
+	// imports its dependencies' protos (tacplus.yaml depends) is scanned with
+	// them present, the way it is generated.
+	scanDir, scanCleanup, err := runner.ProtoDirWithDepends(protoDir)
+	if err != nil {
+		return err
+	}
+	defer scanCleanup()
+	serviceNames, vserviceNames, err := registry.ScanRegistryNames(scanDir)
 	if err != nil {
 		return fmt.Errorf("scanning proto declarations: %w", err)
 	}
+	// Only this tree's own declarations are registered or synced; a
+	// dependency's names are its own repo's business.
+	serviceNames, vserviceNames = runner.OwnDeclarations(protoDir, serviceNames, vserviceNames)
 	if reg.IsLock() {
 		return syncLock(reg, serviceNames, vserviceNames)
 	}

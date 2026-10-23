@@ -2,7 +2,7 @@
 # release. Rebuilt on every push to main and every release; tagged by the
 # version policy in docs/VERSIONING.md (X.Y.Z, X.Y, X, latest, main-<sha>).
 ARG BUILD_IMAGE=ghcr.io/tacplus-dev/tacplus/build:latest
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS tacplus
 ARG VERSION=0.0.0

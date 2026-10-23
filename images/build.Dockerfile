@@ -8,7 +8,7 @@
 # least the protoc gencode version, so protoc stays at 36.0 until that pin
 # moves.
 ARG BASE_IMAGE=ghcr.io/tacplus-dev/tacplus/base:latest
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 ARG RUST_VERSION=1
 ARG NODE_VERSION=24
 ARG DOCKER_VERSION=29

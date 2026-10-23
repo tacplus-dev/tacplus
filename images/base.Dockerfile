@@ -5,7 +5,7 @@
 #
 # Pins, in one place. The Go version follows go.mod; the JDK is what the
 # gates run; protoc itself is in the build image.
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 ARG RUST_VERSION=1
 ARG JDK_VERSION=25
 ARG MAVEN_VERSION=3.9
@@ -21,7 +21,7 @@ LABEL org.opencontainers.image.title="tacplus base" \
       org.opencontainers.image.description="OS and language runtimes (Go, JDK, Maven, Node, Rust, Python) for tacplus builds" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus"
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     bash ca-certificates curl file git jq libssl-dev pkg-config python3 unzip \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=go /usr/local/go /usr/local/go

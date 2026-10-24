@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// registrar's slice of the generated TenantConfig (issue #130 fixture). It
+// lives apart from registrar.proto because the generated tenant_config.proto
+// imports every slice and registrar.proto imports tenant_config.proto.
+
+syntax = "proto3";
+
+package registrarslice;
+
+import "sys/spec.proto";
+
+// RegistrarTenantConfig stands in for another service's secret: the
+// tenant-pinned read must strip it from every entry it hands ledger.
+message RegistrarTenantConfig {
+  option (spec.config_slice) = {scope: CONFIG_SLICE_SCOPE_TENANT, service_name: "registrar"};
+
+  // client_secret is the tenant's registrar credential.
+  string client_secret = 1 [(spec.assert_max_size) = 256];
+}

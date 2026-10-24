@@ -13,6 +13,7 @@
 //! ```text
 //! spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
 //! spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
+//! spiffe://<trust_domain>/users/<xid>
 //! spiffe://<trust_domain>/<namespace>/users/<user>
 //! spiffe://<trust_domain>/<namespace>/clients/<client>
 //! spiffe://<trust_domain>/<namespace>/credentials/<kind>/<id>
@@ -30,7 +31,7 @@ pub use spiffe::{
     normalize_namespace, normalize_segment, normalize_trust_domain, opaque_segment,
     parse_namespace_or_spiffe, parse_spiffe_id, resource_parts_from_spiffe, resource_spiffe_id,
     same_trust_domain, service_path_from_spiffe, service_spiffe_id, tenant_spiffe_id,
-    user_spiffe_id, client_spiffe_id, credential_spiffe_id, workload_spiffe_id, workspace_spiffe_id,
+    user_spiffe_id, user_root_spiffe_id, client_spiffe_id, credential_spiffe_id, workload_spiffe_id, workspace_spiffe_id,
     ParsedSpiffeId, ResourceParts, SpiffeError, SubjectKind, SCHEME, SCHEME_VERSION,
     SYSTEM_SEGMENT, TENANTS_SEGMENT, SERVICES_SEGMENT, WORKLOADS_SEGMENT, USERS_SEGMENT,
     WORKSPACES_SEGMENT, CLIENTS_SEGMENT, CREDENTIALS_SEGMENT, DATA_SEGMENT,

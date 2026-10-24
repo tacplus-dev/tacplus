@@ -13,7 +13,7 @@
 //	spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
 //	spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
 //	spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
-//	spiffe://<trust_domain>/people/<person>/users/<person>
+//	spiffe://<trust_domain>/users/<xid>
 //	spiffe://<trust_domain>/<namespace>/users/<user>
 //	spiffe://<trust_domain>/<namespace>/clients/<client>
 //	spiffe://<trust_domain>/<namespace>/credentials/<kind>/<id>
@@ -136,11 +136,12 @@ func NormalizeTrustDomain(value string) (string, error) {
 // full URI.
 //
 // Valid shapes: "/" (root); "/system" or "/system/<loc>..."; "/tenants" or
-// "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/people" or
-// "/people/<person>". A reserved tag is rejected as a tenant/location/workspace/
-// person name — except "people", which is the platform's identity tenant and is
-// legal as a tenant name — the workspaces tag is the only structural tag
-// permitted under a tenant, and nothing at all may follow a person.
+// "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/users/<xid>".
+// A reserved tag is rejected as a tenant/location/workspace/user id — except
+// "people", which is the platform's identity tenant and is legal as a tenant
+// name — the workspaces tag is the only structural tag permitted under a
+// tenant, and a user root is exactly "/users/<xid>": bare "/users" and anything
+// after the xid are rejected.
 func NormalizeNamespace(namespace string) (string, error) {
 	ns := strings.TrimSpace(namespace)
 	if ns == "" {
@@ -204,15 +205,15 @@ func validateNamespaceSegments(segs []string) error {
 				}
 			}
 		}
-	case PeopleSegment:
-		if len(segs) >= 2 && reservedTags[segs[1]] {
-			return fmt.Errorf("spiffe: reserved tag %q cannot be a person id", segs[1])
+	case UsersSegment:
+		if len(segs) != 2 {
+			return fmt.Errorf("spiffe: a user root namespace is exactly /%s/<xid>, got /%s", UsersSegment, strings.Join(segs, "/"))
 		}
-		if len(segs) >= 3 {
-			return fmt.Errorf("spiffe: nothing may follow a person id in a namespace, got %q", segs[2])
+		if reservedTags[segs[1]] {
+			return fmt.Errorf("spiffe: reserved tag %q cannot be a user id", segs[1])
 		}
 	default:
-		return fmt.Errorf("spiffe: namespace must start with %q, %q, or %q, got %q", SystemSegment, TenantsSegment, PeopleSegment, segs[0])
+		return fmt.Errorf("spiffe: namespace must start with %q, %q, or %q, got %q", SystemSegment, TenantsSegment, UsersSegment, segs[0])
 	}
 	return nil
 }
@@ -259,6 +260,19 @@ func namespaceBase(trustDomain, namespace string) (string, error) {
 		return base, nil
 	}
 	return base + ns, nil
+}
+
+// leafBase is namespaceBase for a typed leaf or pair. A user root is a complete
+// identity, so nothing may be appended under /users/<xid>.
+func leafBase(trustDomain, namespace string) (string, error) {
+	ns, err := NormalizeNamespace(namespace)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(ns, "/"+UsersSegment+"/") {
+		return "", fmt.Errorf("spiffe: nothing may follow a user root, got namespace %q", ns)
+	}
+	return namespaceBase(trustDomain, ns)
 }
 
 // ServiceSpiffeID: spiffe://<td>/system/<location...>/services/<service>.
@@ -346,6 +360,20 @@ func UserSpiffeID(trustDomain, namespace, stableUser string) (string, error) {
 	return typedLeaf(trustDomain, namespace, UsersSegment, stableUser)
 }
 
+// UserRootSpiffeID: spiffe://<td>/users/<xid>, a user principal that exists
+// outside every tenant. Its namespace is /users/<xid>.
+func UserRootSpiffeID(trustDomain, xid string) (string, error) {
+	base, err := authority(trustDomain)
+	if err != nil {
+		return "", err
+	}
+	x, err := NormalizeSegment(xid)
+	if err != nil {
+		return "", err
+	}
+	return base + "/" + UsersSegment + "/" + x, nil
+}
+
 // ClientSpiffeID: spiffe://<td><namespace>/clients/<clientID>.
 func ClientSpiffeID(trustDomain, namespace, clientID string) (string, error) {
 	return typedLeaf(trustDomain, namespace, ClientsSegment, clientID)
@@ -362,7 +390,7 @@ func ResourceSpiffeID(trustDomain, namespace, kind, id string) (string, error) {
 }
 
 func typedLeaf(trustDomain, namespace, tag, value string) (string, error) {
-	base, err := namespaceBase(trustDomain, namespace)
+	base, err := leafBase(trustDomain, namespace)
 	if err != nil {
 		return "", err
 	}
@@ -374,7 +402,7 @@ func typedLeaf(trustDomain, namespace, tag, value string) (string, error) {
 }
 
 func typedPair(trustDomain, namespace, tag, kind, id string) (string, error) {
-	base, err := namespaceBase(trustDomain, namespace)
+	base, err := leafBase(trustDomain, namespace)
 	if err != nil {
 		return "", err
 	}
@@ -472,14 +500,16 @@ func ParseSpiffeID(value string) (ParsedSpiffeID, error) {
 func classify(p *ParsedSpiffeID, segs []string) error {
 	idx := tagIndexes(segs)
 	switch {
+	case segs[0] == UsersSegment:
+		return classifyUserRoot(p, segs)
+	case segs[0] == PeopleSegment:
+		return fmt.Errorf("spiffe: the /%s root is retired; user principals are /%s/<xid>: /%s", PeopleSegment, UsersSegment, strings.Join(segs, "/"))
 	case idx[WorkloadsSegment] >= 0:
 		p.SubjectKind = KindWorkload
 		return classifySystem(p, segs)
 	case (segs[0] == SystemSegment || segs[0] == TenantsSegment) && idx[ServicesSegment] >= 0:
 		p.SubjectKind = KindService
 		return classifySystem(p, segs)
-	case segs[0] == PeopleSegment && idx[UsersSegment] >= 0:
-		return classifyPerson(p, segs)
 	case idx[UsersSegment] >= 0:
 		return classifyNamespaced(p, segs, idx[UsersSegment], KindUser)
 	case idx[ClientsSegment] >= 0:
@@ -511,17 +541,18 @@ func classifySystem(p *ParsedSpiffeID, segs []string) error {
 	return nil
 }
 
-// classifyPerson handles the person root: /people/<person>/users/<person>, the only
-// identity shape rooted at "people". It is deliberately tighter than the generic
-// namespaced-user arm: the person id is repeated as the users leaf, and no location
-// segments, no "services" branch, and no further suffix are accepted.
-func classifyPerson(p *ParsedSpiffeID, segs []string) error {
-	if len(segs) != 4 || segs[2] != UsersSegment || segs[1] != segs[3] {
-		return fmt.Errorf("spiffe: malformed person identity: /%s", strings.Join(segs, "/"))
+// classifyUserRoot handles the user root: /users/<xid>, a user principal that
+// exists outside every tenant. It is exactly two segments; the xid is both the
+// subject and the namespace leaf, and nothing may follow it. Its namespace,
+// /users/<xid>, is its own subtree: it is not at-or-below any /tenants/...
+// namespace and no /tenants/... namespace is at-or-below it.
+func classifyUserRoot(p *ParsedSpiffeID, segs []string) error {
+	if len(segs) != 2 || reservedTags[segs[1]] {
+		return fmt.Errorf("spiffe: malformed user root identity: /%s", strings.Join(segs, "/"))
 	}
 	p.SubjectKind = KindUser
-	p.Namespace = "/" + PeopleSegment + "/" + segs[1]
-	p.SubjectPath = segs[3]
+	p.Namespace = "/" + UsersSegment + "/" + segs[1]
+	p.SubjectPath = segs[1]
 	return nil
 }
 

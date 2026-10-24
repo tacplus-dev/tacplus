@@ -14,7 +14,7 @@ Identity is a typed, self-describing URI:
     spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
     spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
     spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
-    spiffe://<trust_domain>/people/<person>/users/<person>
+    spiffe://<trust_domain>/users/<xid>
     spiffe://<trust_domain>/<namespace>/users/<user>
     spiffe://<trust_domain>/<namespace>/clients/<client>
     spiffe://<trust_domain>/<namespace>/credentials/<kind>/<id>
@@ -147,11 +147,11 @@ def normalize_namespace(namespace: str) -> str:
     full URI.
 
     Valid shapes: "/" (root); "/system" or "/system/<loc>..."; "/tenants" or
-    "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/people" or
-    "/people/<person>". A reserved tag is rejected as a tenant/location/
-    workspace/person name, the workspaces tag is the only structural tag
-    permitted under a tenant, and nothing at all may follow a person. Raises
-    ValueError on invalid input.
+    "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/users/<xid>".
+    A reserved tag is rejected as a tenant/location/workspace/user id, the
+    workspaces tag is the only structural tag permitted under a tenant, and a
+    user root is exactly "/users/<xid>": bare "/users" and anything after the
+    xid are rejected. Raises ValueError on invalid input.
     """
     ns = namespace.strip()
     if ns == "":
@@ -205,18 +205,18 @@ def _validate_namespace_segments(segs: List[str]) -> None:
                     raise ValueError(
                         f"spiffe: reserved tag {s!r} not allowed as a workspace segment"
                     )
-    elif segs[0] == PEOPLE_SEGMENT:
-        if len(segs) >= 2 and segs[1] in _RESERVED_TAGS:
-            raise ValueError(f"spiffe: reserved tag {segs[1]!r} cannot be a person id")
-        if len(segs) >= 3:
+    elif segs[0] == USERS_SEGMENT:
+        if len(segs) != 2:
             raise ValueError(
-                "spiffe: nothing may follow a person id in a namespace, got "
-                f"{segs[2]!r}"
+                f"spiffe: a user root namespace is exactly /{USERS_SEGMENT}/<xid>, got /"
+                + "/".join(segs)
             )
+        if segs[1] in _RESERVED_TAGS:
+            raise ValueError(f"spiffe: reserved tag {segs[1]!r} cannot be a user id")
     else:
         raise ValueError(
             f"spiffe: namespace must start with {SYSTEM_SEGMENT!r}, "
-            f"{TENANTS_SEGMENT!r}, or {PEOPLE_SEGMENT!r}, got {segs[0]!r}"
+            f"{TENANTS_SEGMENT!r}, or {USERS_SEGMENT!r}, got {segs[0]!r}"
         )
 
 
@@ -255,6 +255,15 @@ def _namespace_base(trust_domain: str, namespace: str) -> str:
     if ns == "/":
         return base
     return base + ns
+
+
+def _leaf_base(trust_domain: str, namespace: str) -> str:
+    # _namespace_base for a typed leaf or pair. A user root is a complete
+    # identity, so nothing may be appended under /users/<xid>.
+    ns = normalize_namespace(namespace)
+    if ns.startswith("/" + USERS_SEGMENT + "/"):
+        raise ValueError(f"spiffe: nothing may follow a user root, got namespace {ns!r}")
+    return _namespace_base(trust_domain, ns)
 
 
 def service_spiffe_id(trust_domain: str, location_path: str, service_label: str) -> str:
@@ -313,6 +322,14 @@ def user_spiffe_id(trust_domain: str, namespace: str, stable_user: str) -> str:
     return _typed_leaf(trust_domain, namespace, USERS_SEGMENT, stable_user)
 
 
+def user_root_spiffe_id(trust_domain: str, xid: str) -> str:
+    """spiffe://<td>/users/<xid>, a user principal that exists outside every
+    tenant. Its namespace is /users/<xid>."""
+    base = _authority(trust_domain)
+    x = normalize_segment(xid)
+    return base + "/" + USERS_SEGMENT + "/" + x
+
+
 def client_spiffe_id(trust_domain: str, namespace: str, client_id: str) -> str:
     """spiffe://<td><namespace>/clients/<clientID>."""
     return _typed_leaf(trust_domain, namespace, CLIENTS_SEGMENT, client_id)
@@ -329,13 +346,13 @@ def resource_spiffe_id(trust_domain: str, namespace: str, kind: str, id: str) ->
 
 
 def _typed_leaf(trust_domain: str, namespace: str, tag: str, value: str) -> str:
-    base = _namespace_base(trust_domain, namespace)
+    base = _leaf_base(trust_domain, namespace)
     v = normalize_segment(value)
     return base + "/" + tag + "/" + v
 
 
 def _typed_pair(trust_domain: str, namespace: str, tag: str, kind: str, id: str) -> str:
-    base = _namespace_base(trust_domain, namespace)
+    base = _leaf_base(trust_domain, namespace)
     k = normalize_segment(kind)
     i = normalize_segment(id)
     return base + "/" + tag + "/" + k + "/" + i
@@ -419,14 +436,19 @@ def parse_spiffe_id(value: str) -> ParsedSpiffeId:
 
 def _classify(p: ParsedSpiffeId, segs: List[str]) -> None:
     idx = _tag_indexes(segs)
-    if idx[WORKLOADS_SEGMENT] >= 0:
+    if segs[0] == USERS_SEGMENT:
+        _classify_user_root(p, segs)
+    elif segs[0] == PEOPLE_SEGMENT:
+        raise ValueError(
+            f"spiffe: the /{PEOPLE_SEGMENT} root is retired; user principals are "
+            f"/{USERS_SEGMENT}/<xid>: /" + "/".join(segs)
+        )
+    elif idx[WORKLOADS_SEGMENT] >= 0:
         p.subject_kind = KIND_WORKLOAD
         _classify_system(p, segs)
     elif segs[0] in (SYSTEM_SEGMENT, TENANTS_SEGMENT) and idx[SERVICES_SEGMENT] >= 0:
         p.subject_kind = KIND_SERVICE
         _classify_system(p, segs)
-    elif segs[0] == PEOPLE_SEGMENT and idx[USERS_SEGMENT] >= 0:
-        _classify_person(p, segs)
     elif idx[USERS_SEGMENT] >= 0:
         _classify_namespaced(p, segs, idx[USERS_SEGMENT], KIND_USER)
     elif idx[CLIENTS_SEGMENT] >= 0:
@@ -457,16 +479,17 @@ def _classify_system(p: ParsedSpiffeId, segs: List[str]) -> None:
     p.subject_path = "/".join(segs[si + 1:])  # <service>[/workloads/<child>...]
 
 
-def _classify_person(p: ParsedSpiffeId, segs: List[str]) -> None:
-    # The person root: /people/<person>/users/<person>, the only identity shape
-    # rooted at "people". Deliberately tighter than the generic namespaced-user
-    # arm: the person id is repeated as the users leaf, and no location segments,
-    # no "services" branch, and no further suffix are accepted.
-    if len(segs) != 4 or segs[2] != USERS_SEGMENT or segs[1] != segs[3]:
-        raise ValueError("spiffe: malformed person identity: /" + "/".join(segs))
+def _classify_user_root(p: ParsedSpiffeId, segs: List[str]) -> None:
+    # The user root: /users/<xid>, a user principal that exists outside every
+    # tenant. It is exactly two segments; the xid is both the subject and the
+    # namespace leaf, and nothing may follow it. Its namespace, /users/<xid>, is
+    # its own subtree: it is not at-or-below any /tenants/... namespace and no
+    # /tenants/... namespace is at-or-below it.
+    if len(segs) != 2 or segs[1] in _RESERVED_TAGS:
+        raise ValueError("spiffe: malformed user root identity: /" + "/".join(segs))
     p.subject_kind = KIND_USER
-    p.namespace = "/" + PEOPLE_SEGMENT + "/" + segs[1]
-    p.subject_path = segs[3]
+    p.namespace = "/" + USERS_SEGMENT + "/" + segs[1]
+    p.subject_path = segs[1]
 
 
 def _classify_namespaced(

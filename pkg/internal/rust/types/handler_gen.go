@@ -399,6 +399,9 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 				}
 				healthStateProtoDir = generatedTypesRelDir(stateInfo.ProtoFile, stateInfo.Package)
 				stateStoreServiceID = stateInfo.Package
+				if stateInfo.HostLabel != "" {
+					stateStoreServiceID = stateInfo.HostLabel
+				}
 			}
 		}
 		// The tacplus-injected health state lives in sys/ but every service has it;

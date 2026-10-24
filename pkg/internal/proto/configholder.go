@@ -1911,6 +1911,11 @@ type StateRootInfo struct {
 	Package        string
 	StateName      string
 	JavaOuterClass string
+	// HostLabel is the routing label of the service that hosts this root
+	// ((spec.service_state).label), "" when the root declares none. It is the
+	// audience a caller mints for to reach the root; the proto package is not
+	// (sys/servicehealth is hosted by kernel).
+	HostLabel string
 }
 
 // DiscoverStateRoot finds the proto file that declares the named service_state
@@ -1948,6 +1953,9 @@ func DiscoverStateRoot(inputDir, stateName string) (*StateRootInfo, error) {
 				ProtoDir:  strings.TrimSuffix(path, ".proto"),
 				Package:   fd.Package,
 				StateName: ann.StringValue,
+			}
+			if lbl, ok := msg.Annotations["service_state_label"]; ok && len(lbl.StringSliceValue) == 1 {
+				found.HostLabel = lbl.StringSliceValue[0]
 			}
 		}
 	}

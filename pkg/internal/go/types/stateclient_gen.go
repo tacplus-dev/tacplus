@@ -464,7 +464,12 @@ func generateIdentityManager(config *tactype.Config) error {
 	for _, b := range config.States {
 		if b.IsHealthState && b.AccessMode != tactype.AccessRO {
 			if stateInfo, err := proto.DiscoverStateRoot(config.FlatProtoDir, b.MessageName); err == nil && stateInfo != nil {
+				// The store's identity is the label the health root is hosted at
+				// (kernel), not the root's proto package (servicehealth).
 				stateStoreServiceID = stateInfo.Package
+				if stateInfo.HostLabel != "" {
+					stateStoreServiceID = stateInfo.HostLabel
+				}
 			}
 		}
 	}
@@ -484,6 +489,13 @@ func generateIdentityManager(config *tactype.Config) error {
 				mappingSeen[pkg] = true
 			}
 		}
+	}
+
+	// The token minter's package is a sys contract hosted by a service (minter
+	// -> kernel): a call on it mints for the host, not for the package.
+	if texInfo != nil && texInfo.Package != texInfo.Audience() && !mappingSeen[texInfo.Package] {
+		audienceMappings = append(audienceMappings, audienceMapping{Package: texInfo.Package, Audience: texInfo.Audience()})
+		mappingSeen[texInfo.Package] = true
 	}
 
 	// The template routes these virtual packages to the service's own audience.

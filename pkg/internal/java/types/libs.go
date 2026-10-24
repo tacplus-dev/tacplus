@@ -97,6 +97,13 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		}
 	}
 
+	// The token minter's package is a sys contract hosted by a service (minter
+	// -> kernel): a call on it mints for the host, not for the package.
+	if hasTokenExchanger && info.Package != info.Audience() && !mappingSeen[info.Package] {
+		audienceMappings = append(audienceMappings, audienceMapping{Package: info.Package, Audience: info.Audience()})
+		mappingSeen[info.Package] = true
+	}
+
 	// Map state-service proto packages to the state store's service identity.
 	// State RPCs physically go to the state store (kernel), but their gRPC
 	// method names carry the owning service's proto package. Without this,
@@ -107,7 +114,12 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 	for _, b := range config.States {
 		if b.IsHealthState && b.AccessMode != tactype.AccessRO {
 			if stateInfo, err := stateproto.DiscoverStateRoot(config.FlatProtoDir, b.MessageName); err == nil && stateInfo != nil {
+				// The store's identity is the label the health root is hosted at
+				// (kernel), not the root's proto package (servicehealth).
 				stateStoreServiceID = stateInfo.Package
+				if stateInfo.HostLabel != "" {
+					stateStoreServiceID = stateInfo.HostLabel
+				}
 			}
 		}
 	}

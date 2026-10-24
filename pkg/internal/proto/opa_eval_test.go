@@ -169,3 +169,30 @@ message Config { option (spec.grpc_config) = {service_name: "kernel"}; }
 		}
 	}
 }
+
+// A state root's host label travels with its discovery: sys/servicehealth is
+// hosted at the well-known kernel label, and a service's own root declares none.
+func TestDiscoverStateRootCarriesTheHostLabel(t *testing.T) {
+	dir := opaEvalFixtureDir(t)
+	writeProto(t, dir, "services/alpha.proto", `syntax = "proto3";
+package alpha;
+import "sys/spec.proto";
+option (spec.service) = {};
+message Config { option (spec.grpc_config) = {service_name: "alpha"}; }
+message AlphaState { option (spec.service_state) = {name: "AlphaState"}; string x = 1; }
+`)
+	own, err := DiscoverStateRoot(dir, "AlphaState")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if own.HostLabel != "" || own.Package != "alpha" {
+		t.Fatalf("own root = %+v, want package alpha and no host label", own)
+	}
+	health, err := DiscoverStateRoot(dir, "ServiceHealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.Package != "servicehealth" || health.HostLabel != "kernel" {
+		t.Fatalf("sys health root = %+v, want package servicehealth hosted at kernel", health)
+	}
+}

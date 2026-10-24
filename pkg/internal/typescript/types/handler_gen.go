@@ -245,6 +245,9 @@ func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, h
 			}
 			healthStateProtoDir = stateInfo.ProtoDir
 			healthStatePackage = stateInfo.Package
+			if stateInfo.HostLabel != "" {
+				healthStatePackage = stateInfo.HostLabel
+			}
 		}
 	}
 

@@ -401,7 +401,9 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 				stateStoreServiceID = stateInfo.Package
 			}
 		}
-		if strings.HasPrefix(b.ProtoFile, "sys/") {
+		// The tacplus-injected health state lives in sys/ but every service has it;
+		// it does not make a service a sys-state consumer (runtime config etc.).
+		if strings.HasPrefix(b.ProtoFile, "sys/") && !b.IsHealthState {
 			hasSysState = true
 		}
 	}

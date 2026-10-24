@@ -906,8 +906,10 @@ func generateStateWrappers(config *tactype.Config, inputDir string) ([]generated
 			return nil
 		}
 		// Skip infrastructure protos except the manifest-declared runtime config
-		// state proto, which has ServiceConfigState.
-		if proto.IsInfraProtoFile(relPath, fileDesc) && !proto.IsRuntimeConfigStateProto(relPath) {
+		// state proto (ServiceConfigState) and sys protos that declare a state
+		// root: the sys contract's roots (sys/servicehealth.proto) get state
+		// clients exactly like a service's own roots do.
+		if proto.IsInfraProtoFile(relPath, fileDesc) && !proto.IsRuntimeConfigStateProto(relPath) && !proto.DeclaresServiceState(fileDesc) {
 			return nil
 		}
 		if proto.IsSyntheticServiceOnlyFile(fileDesc) {

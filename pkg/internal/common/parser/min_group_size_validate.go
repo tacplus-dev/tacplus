@@ -53,9 +53,10 @@ func ValidateMinGroupSizeAnnotations(dp *DescriptorParser) error {
 // expected, not a sign the record is misconfigured; the hint exists so that
 // failure mode reads as "wrong generation scope" rather than "broken record."
 const noRecordQueryPlaneHint = " (this is checked only against the proto files given to this generation run; " +
-	"a platform service generated standalone, without any application proto that declares (spec.trait), will " +
-	"always fail this check for every such record — generate the merged application+platform build instead, " +
-	"e.g. `tacplus build --src <platform proto dir> --src <application proto dir>`)"
+	"a platform service generated standalone, without the proto that declares (spec.trait), will " +
+	"always fail this check for every such record — name the contract that hosts the record query plane in " +
+	"tacplus.yaml `depends` (e.g. `depends: [stratum]`), or generate the merged build with " +
+	"`tacplus build --src <platform proto dir> --src <application proto dir>`)"
 
 // hasRecordQueryPlane reports whether the fleet carries a (spec.trait) that asks
 // for the record query plane: a trait with a host, where that host is a service

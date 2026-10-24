@@ -28,6 +28,10 @@ import (
 // lives, which need not be the implementation a fleet runs) is fetched at the
 // entry's version (MAJOR.MINOR -> latest patch tag; none -> latest) and the
 // repo's proto/ subdir convention applies as for any source.
+//
+// Resolution is transitive: a dependency's own tacplus.yaml `depends` are
+// followed (a contract that imports another service's proto says so there), each
+// name once. The first entry seen for a name wins its version.
 func resolveDependencies(depends []string, firstSourceDir string) ([]string, []func(), error) {
 	if len(depends) == 0 {
 		return nil, nil, nil
@@ -56,8 +60,16 @@ func resolveDependencies(depends []string, firstSourceDir string) ([]string, []f
 			c()
 		}
 	}
-	for _, d := range depends {
+	seen := map[string]bool{}
+	queue := append([]string(nil), depends...)
+	for len(queue) > 0 {
+		d := queue[0]
+		queue = queue[1:]
 		name, version := tacplusyaml.SplitDepend(d)
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
 		repo, ok := global.ContractOf(name)
 		if !ok {
 			runCleanups()
@@ -85,8 +97,31 @@ func resolveDependencies(depends []string, firstSourceDir string) ([]string, []f
 		zap.L().Info("resolved dependency", zap.String("name", name), zap.String("repo", repo), zap.String("tag", tag), zap.String("dir", filepath.Clean(dir)))
 		dirs = append(dirs, staged)
 		cleanups = append(cleanups, cleanup, stagedCleanup)
+		transitive, err := dependsOf(dir)
+		if err != nil {
+			runCleanups()
+			return nil, nil, fmt.Errorf("depends: reading %q's own depends: %w", name, err)
+		}
+		queue = append(queue, transitive...)
 	}
 	return dirs, cleanups, nil
+}
+
+// dependsOf returns the `depends` of the tacplus.yaml that owns a resolved
+// proto dir: beside it, or one level up when the repo keeps its proto under
+// proto/. A contract with no tacplus.yaml depends on nothing further.
+func dependsOf(protoDir string) ([]string, error) {
+	for _, root := range []string{protoDir, filepath.Dir(protoDir)} {
+		if !tacplusyaml.Exists(root) {
+			continue
+		}
+		cfg, err := tacplusyaml.Read(root)
+		if err != nil {
+			return nil, err
+		}
+		return cfg.Depends, nil
+	}
+	return nil, nil
 }
 
 // stageDependency copies a dependency's proto tree into a temp dir without

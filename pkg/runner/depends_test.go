@@ -82,3 +82,42 @@ func TestResolveDependenciesNeedsGlobalRegistry(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A dependency's own tacplus.yaml depends are followed, each name once: kernel's
+// contract names opa (its opa_import provider), so depending on kernel brings opa.
+func TestResolveDependenciesIsTransitive(t *testing.T) {
+	root := t.TempDir()
+	opaRepo := filepath.Join(root, "opa-repo")
+	writeFile(t, filepath.Join(opaRepo, "proto", "dependencies.yaml"), "{}\n")
+	writeFile(t, filepath.Join(opaRepo, "proto", "registry.yaml"), "services:\n    - {name: opa, id: 29}\n")
+	writeFile(t, filepath.Join(opaRepo, "proto", "services", "opa.proto"), "syntax = \"proto3\";\npackage opa;\n")
+	kernelRepo := filepath.Join(root, "kernel-repo")
+	writeFile(t, filepath.Join(kernelRepo, "tacplus.yaml"), "language: java\noutput-dir: out\ndepends: [opa, kernel]\n")
+	writeFile(t, filepath.Join(kernelRepo, "proto", "dependencies.yaml"), "{}\n")
+	writeFile(t, filepath.Join(kernelRepo, "proto", "registry.yaml"), "services:\n    - {name: kernel, id: 8}\n")
+	writeFile(t, filepath.Join(kernelRepo, "proto", "services", "kernel.proto"), "syntax = \"proto3\";\npackage kernel;\n")
+	global := filepath.Join(root, "registry")
+	writeFile(t, filepath.Join(global, "registry.yaml"), "scope: global\nservices:\n    - {name: kernel, id: 8, contract: "+kernelRepo+", visibility: public}\n    - {name: opa, id: 29, contract: "+opaRepo+", visibility: public}\n")
+	consumer := filepath.Join(root, "consumer", "proto")
+	writeFile(t, filepath.Join(consumer, "dependencies.yaml"), "{}\n")
+	writeFile(t, filepath.Join(consumer, "registry.yaml"), "registries: ["+global+"]\nservices:\n    - {name: operator, id: 47}\n")
+
+	dirs, cleanups, err := resolveDependencies([]string{"kernel"}, consumer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, c := range cleanups {
+			c()
+		}
+	}()
+	if len(dirs) != 2 {
+		t.Fatalf("dirs = %v, want kernel and, through it, opa — each once", dirs)
+	}
+	if _, err := os.Stat(filepath.Join(dirs[0], "services", "kernel.proto")); err != nil {
+		t.Fatalf("kernel not staged first: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dirs[1], "services", "opa.proto")); err != nil {
+		t.Fatalf("kernel's own dependency opa not staged: %v", err)
+	}
+}

@@ -288,3 +288,38 @@ func TestSecurityPolicyCarriesTenantPinnedReadsOutsideBoundaryGrants(t *testing.
 	}
 	t.Fatal("no policy for keeper.KeeperState")
 }
+
+// A tree that declares an MCP tool re-runs the config-holder scan after the
+// carrier is injected, and that scan rewrites every generated/ stub. The
+// TenantConfig aggregate generated before it was clobbered back to the stub,
+// so on the platform (which declares MCP tools) no slice subscription — of
+// either owner shape — was ever derived. The aggregate must survive.
+func TestCopyAndPrepareProtoDirKeepsTenantConfigAggregateWithAnMcpTool(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available")
+	}
+	src := t.TempDir()
+	writeProto(t, src, "services/scotty.proto", strings.Replace(mcpCarrierToolProto,
+		`import "sys/spec.proto";`, `import "sys/spec.proto";
+
+option (spec.service) = {name: "scotty"};
+
+message ScottyTenantConfig {
+  option (spec.config_slice) = {scope: CONFIG_SLICE_SCOPE_TENANT, service_name: "scotty"};
+  string persona = 1 [(spec.assert_max_size) = 64];
+}`, 1))
+	flat, err := CopyAndPrepareProtoDir(src, t.TempDir())
+	if err != nil {
+		t.Fatalf("CopyAndPrepareProtoDir: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(flat, "services/scotty.proto")); err != nil || !strings.Contains(string(b), "McpSession(") {
+		t.Fatalf("precondition: the MCP carrier was not injected (%v)", err)
+	}
+	b, err := os.ReadFile(filepath.Join(flat, "generated/tenant_config.proto"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "option (spec.per_service_config) = true;") || !strings.Contains(string(b), "scotty.ScottyTenantConfig scotty = ") {
+		t.Fatalf("the flattened TenantConfig is the stub, not the generated aggregate:\n%s", b)
+	}
+}

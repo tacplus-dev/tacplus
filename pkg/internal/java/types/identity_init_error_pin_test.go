@@ -47,8 +47,16 @@ func TestJavaServiceManagerClassifiesMissingTrustDomainByType(t *testing.T) {
 func TestJavaServiceManagerHasNoEmptyTrustDomainTolerance(t *testing.T) {
 	rendered := readJavaTemplate(t, "java/types/ServiceManager.java.tmpl")
 
-	if !strings.Contains(rendered, "String spiffeId = Spiffe.serviceSpiffeId(") {
-		t.Fatal("Java health identity must be built unconditionally from the configured trust domain")
+	for _, want := range []string{
+		"String spiffeId = TokenWrapper.parse(getToken()).getSubject();",
+		"Spiffe.parseSpiffeId(spiffeId);",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("Java health identity must be the fleet-minted subject of the service's own token, validated as a SPIFFE id; missing %q", want)
+		}
+	}
+	if strings.Contains(rendered, "String spiffeId = Spiffe.serviceSpiffeId(") {
+		t.Fatal("Java health identity must not be assembled from config: that id can only say /system/…, and a tenant-owned instance's identity is /tenants/<t>/…")
 	}
 	if strings.Contains(rendered, "if (!config.getSpiffeTrustDomain().isEmpty()) {") {
 		t.Fatal("Java health identity must not tolerate an empty trust domain: publishing an empty " +

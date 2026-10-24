@@ -975,3 +975,24 @@ func TestFormattedVersionAndPEP440VersionSNAPSHOT(t *testing.T) {
 		t.Errorf("PEP440Version() = %q, want %q", pep, "0.1.0.dev0")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Config.ServiceLabel
+// ---------------------------------------------------------------------------
+
+// The label is the service's identity: kernel's service ids, the gateway's
+// routes and every token audience use the proto package, so a project whose
+// module directory is not named after its package (tenantecho generates into
+// <module>/tacplus) must still be labelled by the package.
+func TestServiceLabelIsTheServicePackage(t *testing.T) {
+	c := &Config{ModuleBasePath: "github.com/tacplus-dev/tenantecho/tacplus", OutputName: "tacplus", SelfPackage: "tenantecho"}
+	if got := c.ServiceLabel(); got != "tenantecho" {
+		t.Fatalf("ServiceLabel() = %q, want the service's package", got)
+	}
+	// Without a package of its own, the module directory above the output is
+	// the only name there is.
+	c = &Config{ModuleBasePath: "gitlab.com/x/kernel/model"}
+	if got := c.ServiceLabel(); got != "kernel" {
+		t.Fatalf("ServiceLabel() = %q, want the module directory", got)
+	}
+}

@@ -24,8 +24,17 @@ func TestRustServiceManagerHasNoEmptyTrustDomainTolerance(t *testing.T) {
 	}
 	rendered := string(src)
 
-	if !strings.Contains(rendered, `let spiffe_id = spiffe::service_spiffe_id(&self.cfg.spiffe_trust_domain, &self.cfg.location_path, "{{.ServiceLabel}}")`) {
-		t.Fatal("rust health identity must be built unconditionally from the configured trust domain")
+	for _, want := range []string{
+		"let own_token = self.get_token().await",
+		"let own_identity = token::Token::parse(&own_token)",
+		"spiffe::parse_spiffe_id(&spiffe_id)",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rust health identity must be the fleet-minted subject of the service's own token, validated as a SPIFFE id; missing %q", want)
+		}
+	}
+	if strings.Contains(rendered, `spiffe::service_spiffe_id(&self.cfg.spiffe_trust_domain, &self.cfg.location_path, "{{.ServiceLabel}}")`) {
+		t.Fatal("rust health identity must not be assembled from config: that id can only say /system/…, and a tenant-owned instance's identity is /tenants/<t>/…")
 	}
 	if strings.Contains(rendered, "let spiffe_id = if self.cfg.spiffe_trust_domain.is_empty() {") {
 		t.Fatal("rust health identity must not tolerate an empty trust domain: publishing an empty " +

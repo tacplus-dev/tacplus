@@ -62,6 +62,7 @@ import io.grpc.protobuf.services.HealthStatusManager;
 {{- if .HasServiceHealthState}}
 import {{.ChassisBase}}.healthreporter.HealthReporter;
 import {{.ChassisBase}}.spiffe.Spiffe;
+import {{.ChassisBase}}.token.TokenWrapper;
 import {{.TypesBase}}.sys.healthreport.Healthreport.ServiceInstanceHealth;
 import {{.TypesBase}}.sys.healthreport.Healthreport.InstanceStatus;
 import {{.TypesBase}}.sys.host.HostOuterClass.Host;
@@ -1234,15 +1235,14 @@ public class ServiceManager implements AutoCloseable {
         // Start health reporter — publishes instance health to ServiceHealthState.
         var healthStub = ServiceHealthStateServiceGrpc.newBlockingStub(stateStoreConn.conn())
                 .withCallCredentials(identity.callCredentials());
-        // Health identity is the full location-bearing service SPIFFE ID, built by
-        // this service's own manager from runtime config via the canonical helper.
-        // No empty-trust-domain tolerance: ServiceConnection.channelFactory(cfg)
-        // already threw MissingTrustDomainException for an empty
-        // spiffe_trust_domain before this ServiceManager was constructed, and
-        // Spiffe.serviceSpiffeId rejects one too. Publishing an empty health
-        // identity instead of failing would be the fail-open shape (NEW-21).
-        String spiffeId = Spiffe.serviceSpiffeId(
-                config.getSpiffeTrustDomain(), config.getLocationPath(), "{{.ServiceLabel}}");
+        // Health identity is this instance's identity as the fleet minted it: the
+        // subject of its own service token (spiffe://<td>/<namespace…>/services/<svc>),
+        // the only identity that names the tenant of a tenant-owned instance. An id
+        // assembled from config can only ever say /system/…, and nothing the fleet
+        // did not mint belongs in the health plane. A missing or malformed subject
+        // fails here rather than publishing an empty identity (NEW-21).
+        String spiffeId = TokenWrapper.parse(getToken()).getSubject();
+        Spiffe.parseSpiffeId(spiffeId);
         HealthReporter healthReporter = new HealthReporter(
                 healthStub::setInstances,
                 buildMetricsProvider(config),

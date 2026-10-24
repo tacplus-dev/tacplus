@@ -89,8 +89,17 @@ func TestGoServiceManagerHasNoEmptyTrustDomainTolerance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTemplate service_manager.go.tmpl: %v", err)
 	}
-	if !strings.Contains(sm, `spiffeId, idErr := wrapperSpiffe.ServiceSpiffeID(sm.cfg.GetSpiffeTrustDomain(), sm.cfg.GetLocationPath(), "{{.ServiceLabel}}")`) {
-		t.Fatal("Go health identity must be built unconditionally from the configured trust domain")
+	for _, want := range []string{
+		"ownToken, tokErr := sm.GetToken()",
+		"spiffeId := ownIdentity.GetSubject()",
+		"if _, idErr := wrapperSpiffe.ParseSpiffeID(spiffeId); idErr != nil {",
+	} {
+		if !strings.Contains(sm, want) {
+			t.Fatalf("Go health identity must be the fleet-minted subject of the service's own token, validated as a SPIFFE id; missing %q", want)
+		}
+	}
+	if strings.Contains(sm, `wrapperSpiffe.ServiceSpiffeID(sm.cfg.GetSpiffeTrustDomain(), sm.cfg.GetLocationPath(), "{{.ServiceLabel}}")`) {
+		t.Fatal("Go health identity must not be assembled from config: that id can only say /system/…, and a tenant-owned instance's identity is /tenants/<t>/…")
 	}
 	if strings.Contains(sm, `if td := sm.cfg.GetSpiffeTrustDomain(); td != ""`) {
 		t.Fatal("Go health identity must not tolerate an empty trust domain: publishing an empty " +

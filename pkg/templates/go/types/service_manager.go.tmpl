@@ -1480,15 +1480,23 @@ default:
 // so the advertised gRPC endpoint is accepting connections when peers see it.
 healthStub := sm.bc.{{.HealthStateGroupAccessor}}().ServiceHealth().StateStub()
 metrics := buildMetricsProvider(sm.cfg.GetListenAddress())
-// Health identity is the full location-bearing service SPIFFE ID, built by
-// this service's own manager from runtime config via the canonical helper.
-// No empty-trust-domain tolerance: NewServiceManager already refused an empty
-// spiffe_trust_domain at construction (ErrMissingTrustDomain), so Run() cannot
-// be reached with one, and ServiceSpiffeID rejects it too. Publishing an empty
-// health identity instead of failing would be the fail-open shape (NEW-21).
-spiffeId, idErr := wrapperSpiffe.ServiceSpiffeID(sm.cfg.GetSpiffeTrustDomain(), sm.cfg.GetLocationPath(), "{{.ServiceLabel}}")
-if idErr != nil {
-return fmt.Errorf("building service SPIFFE identity: %w", idErr)
+// Health identity is this instance's identity as the fleet minted it: the
+// subject of its own service token (spiffe://<td>/<namespace…>/services/<svc>),
+// the only identity that names the tenant of a tenant-owned instance. An id
+// assembled from config can only ever say /system/…, and nothing the fleet did
+// not mint belongs in the health plane. A missing or malformed subject fails
+// here rather than publishing an empty identity (NEW-21).
+ownToken, tokErr := sm.GetToken()
+if tokErr != nil {
+return fmt.Errorf("own service token: %w", tokErr)
+}
+ownIdentity, parseErr := wrapperToken.ParseToken(ownToken)
+if parseErr != nil {
+return fmt.Errorf("own service token: %w", parseErr)
+}
+spiffeId := ownIdentity.GetSubject()
+if _, idErr := wrapperSpiffe.ParseSpiffeID(spiffeId); idErr != nil {
+return fmt.Errorf("own service token subject %q is not a service identity: %w", spiffeId, idErr)
 }
 hr := healthreporter.New(&healthPublisherAdapter{stub: healthStub}, metrics, zap.L(), spiffeId)
 hr.SetStatus(healthreporter.StatusHealthy)

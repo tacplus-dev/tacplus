@@ -1874,14 +1874,19 @@ impl ServiceManager {
             token_provider: self.token_provider(),
         };
         let metrics = build_metrics_provider(&self.cfg.listen_address);
-        // Health identity is the full location-bearing service SPIFFE ID, built
-        // by this service's own manager from runtime config via the canonical helper.
-        // No empty-trust-domain tolerance: new() already failed loudly on an empty
-        // spiffe_trust_domain when it built the SPIFFE verifier, so run() cannot be
-        // reached with one, and service_spiffe_id rejects it too. Publishing an empty
-        // health identity instead of failing would be the fail-open shape (NEW-21).
-        let spiffe_id = spiffe::service_spiffe_id(&self.cfg.spiffe_trust_domain, &self.cfg.location_path, "{{.ServiceLabel}}")
-            .map_err(|e| -> Box<dyn std::error::Error> { format!("building service SPIFFE identity: {}", e).into() })?;
+        // Health identity is this instance's identity as the fleet minted it: the
+        // subject of its own service token (spiffe://<td>/<namespace…>/services/<svc>),
+        // the only identity that names the tenant of a tenant-owned instance. An id
+        // assembled from config can only ever say /system/…, and nothing the fleet
+        // did not mint belongs in the health plane. A missing or malformed subject
+        // fails here rather than publishing an empty identity (NEW-21).
+        let own_token = self.get_token().await
+            .map_err(|e| -> Box<dyn std::error::Error> { format!("own service token: {}", e).into() })?;
+        let own_identity = token::Token::parse(&own_token)
+            .map_err(|e| -> Box<dyn std::error::Error> { format!("own service token: {}", e).into() })?;
+        let spiffe_id = own_identity.subject().unwrap_or("").to_string();
+        spiffe::parse_spiffe_id(&spiffe_id)
+            .map_err(|e| -> Box<dyn std::error::Error> { format!("own service token subject {:?} is not a service identity: {}", spiffe_id, e).into() })?;
         let (first_health_tx, first_health_rx) = tokio::sync::oneshot::channel();
         let health_reporter = Arc::new(HealthReporter::new_with_ready_and_status(
             publisher,

@@ -624,3 +624,19 @@ func TestGoServingCertHotReloads(t *testing.T) {
 		t.Fatalf("servicemanager lib must expose SetTLSCert for renewal publication (PC-L-10)")
 	}
 }
+
+func TestGoC2SServiceManagerScopesTokensPerTargetService(t *testing.T) {
+	tmpl, err := loadTemplate("c2sm.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate c2sm.go.tmpl: %v", err)
+	}
+	for _, want := range []string{
+		"func NewWithTokenProviderFor(conn grpc.ClientConnInterface, tokenProviderFor func(string) func() (string, error)) *ServiceManager",
+		"return NewWithTokenProviderFor(conn, func(string) func() (string, error) {",
+		"grpcPkg: smgrpc.New(channels, tokenProviderFor),",
+	} {
+		if !strings.Contains(tmpl, want) {
+			t.Fatalf("Go c2sm must let a client pick its Bearer token per target service; missing %q", want)
+		}
+	}
+}

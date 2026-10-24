@@ -1590,7 +1590,7 @@ zap.Error(err), zap.Duration("retry_in", backoff))
 } else {
 backoff = serviceconnection.ReconnectInitialBackoff
 up_{{.HandlerFuncFieldName}}.Store(true)
-sub := {{.SubPkgAlias}}.New(subConn, "{{$.ServiceLabel}}")
+sub := {{.SubPkgAlias}}.New(subConn, "{{$.ServiceLabel}}", func() (string, error) { return sm.identity.GetTokenFor("{{.TargetService}}") })
 {{- if .RoutingOnly}}
 // Routing-only subscriber: the generated Handler takes
 // {{.TypePkgAlias}}.{{.EnvelopeTypeName}}, so neither the trace-publish leg

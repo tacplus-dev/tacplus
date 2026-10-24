@@ -9,6 +9,7 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/encoding"
 	grpcproto "google.golang.org/grpc/encoding/proto"
@@ -68,13 +69,23 @@ func WithOffset(off int64) Option {
 type Subscriber struct {
 	conn          grpc.ClientConnInterface
 	consumerGroup string
+	token         TokenSource
 }
+
+// TokenSource returns a fresh bearer token scoped to the broker that hosts
+// this topic. It is called on every Subscribe attempt, so a reconnect never
+// replays an expired token.
+type TokenSource func() (string, error)
 
 // New creates a subscriber for the {{.SourceField}} topic.
 // consumerGroup identifies this consumer for offset tracking — all instances
-// sharing the same group coordinate partition assignment.
-func New(conn grpc.ClientConnInterface, consumerGroup string) *Subscriber {
-	return &Subscriber{conn: conn, consumerGroup: consumerGroup}
+// sharing the same group coordinate partition assignment. token supplies the
+// bearer sent with the Subscribe call: the topic's per-package method name
+// would have the connection's audience heuristic mint a token for the topic
+// OWNER, but the stream is answered by the broker, so the subscriber attaches
+// its own, as the publishers do.
+func New(conn grpc.ClientConnInterface, consumerGroup string, token TokenSource) *Subscriber {
+	return &Subscriber{conn: conn, consumerGroup: consumerGroup, token: token}
 }
 
 // subscribeRecord is the documented wire message for Subscribe{{.SourceStateRoot}}{{.FieldPascal}}:
@@ -259,6 +270,14 @@ func (s *Subscriber) subscribeOnce(
 	// accumulate — EventBus's onCompleted() deliberately does NOT close sessions.
 	callCtx, callCancel := context.WithCancel(ctx)
 	defer callCancel()
+
+	if s.token != nil {
+		tok, err := s.token()
+		if err != nil {
+			return fmt.Errorf("token for {{.SourcePackage}}.{{.SourceField}} subscription: %w", err)
+		}
+		callCtx = metadata.AppendToOutgoingContext(callCtx, "authorization", "Bearer "+tok)
+	}
 
 	stream, err := s.conn.NewStream(callCtx, sd, fullMethod)
 	if err != nil {

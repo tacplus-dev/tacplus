@@ -197,8 +197,8 @@ func javaGcsArchiveEnabled(config *tactype.Config) (bool, error) {
 	if _, ok := depfiles.GetDepsMapForLang(deps, "java")[javaGcsArchiveSDK]; !ok {
 		return false, nil
 	}
-	if config.SelfPackage == "" || config.InputDir == "" {
+	if config.SelfPackage == "" || config.FlatProtoDir == "" {
 		return true, nil
 	}
-	return stateproto.IsRecordStore(config.InputDir, config.SelfPackage)
+	return stateproto.IsRecordStore(config.FlatProtoDir, config.SelfPackage)
 }

@@ -35,6 +35,7 @@ from .spiffe import (
     service_path_from_spiffe,
     service_spiffe_id,
     tenant_spiffe_id,
+    user_root_spiffe_id,
     user_spiffe_id,
     workload_spiffe_id,
     workspace_spiffe_id,
@@ -64,6 +65,8 @@ def call_shared_construct(fn: str, args: list[str]) -> str:
         return credential_spiffe_id(args[0], args[1], args[2], args[3])
     if fn == "user_spiffe_id":
         return user_spiffe_id(args[0], args[1], args[2])
+    if fn == "user_root_spiffe_id":
+        return user_root_spiffe_id(args[0], args[1])
     if fn == "namespace_spiffe_id":
         return namespace_spiffe_id(args[0], args[1])
     if fn == "tenant_spiffe_id":

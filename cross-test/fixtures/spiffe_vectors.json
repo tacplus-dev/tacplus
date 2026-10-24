@@ -63,10 +63,10 @@
       "subject_path": "docmanageragent"
     },
     {
-      "input": "spiffe://example.com/people/alice/users/alice",
+      "input": "spiffe://example.com/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b",
       "subject_kind": "user",
-      "namespace": "/people/alice",
-      "subject_path": "alice"
+      "namespace": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b",
+      "subject_path": "0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b"
     },
     {
       "input": "spiffe://example.com/tenants/acme/workspaces/dev/users/jody",
@@ -86,14 +86,21 @@
     "spiffe://example.com/system/aws/us-east-1a/cluster-7/team-a/services/mcp/workloads/agent-42",
     "spiffe://example.com/tenants/acme/services/docmanageragent",
     "spiffe://example.com/tenants/acme/workspaces/dev",
-    "spiffe://example.com/people/alice/users/alice",
+    "spiffe://example.com/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b",
     "spiffe://example.com/tenants/acme/workspaces/dev/users/jody",
     "spiffe://example.com/tenants/acme/workspaces/dev/data/gitlab-event/evt-1"
   ],
   "comparison": {
     "is_at_or_below": [
       { "caller": "/tenants/acme", "target": "/tenants/acme/workspaces/dev", "expect": true },
-      { "caller": "/tenants/acme", "target": "/tenants/acme2/workspaces/dev", "expect": false }
+      { "caller": "/tenants/acme", "target": "/tenants/acme2/workspaces/dev", "expect": false },
+      { "_comment": "/users/<xid> is its own subtree: a tenant never reaches a user root, and a user root never reaches a tenant, in either direction",
+        "caller": "/tenants/acme", "target": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "expect": false },
+      { "caller": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "target": "/tenants/acme", "expect": false },
+      { "caller": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "target": "/tenants/acme/workspaces/dev", "expect": false },
+      { "caller": "/tenants/acme/workspaces/dev", "target": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "expect": false },
+      { "caller": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "target": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "expect": true },
+      { "caller": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "target": "/users/7d3e9f20-1c4b-4a6e-8f5d-2b1a0c9e8d7f", "expect": false }
     ],
     "same_trust_domain": [
       { "a": "spiffe://example.com/tenants/a", "b": "spiffe://example.com/tenants/b", "expect": true },
@@ -110,7 +117,7 @@
     ],
     "namespace": [
       { "input": " tenants/acme/ ", "expect": "/tenants/acme" },
-      { "input": " people/alice/ ", "expect": "/people/alice" }
+      { "input": " users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b/ ", "expect": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b" }
     ]
   },
   "invalid_parse": [
@@ -121,8 +128,14 @@
     "spiffe://example.com/system?x=1",
     "spiffe://example.com/system#frag",
     "spiffe://example.com\\system",
+    "spiffe://example.com/people/alice/users/alice",
     "spiffe://example.com/people/alice/users/bob",
-    "spiffe://example.com/people/alice/services/mcp/users/alice"
+    "spiffe://example.com/people/alice/services/mcp/users/alice",
+    "spiffe://example.com/users",
+    "spiffe://example.com/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b",
+    "spiffe://example.com/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b/services/s",
+    "spiffe://example.com/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b/data/gitlab-event/evt-1",
+    "spiffe://example.com/users/users"
   ],
   "invalid_construct": [
     { "fn": "normalize_trust_domain", "args": ["example.com/x"] },
@@ -136,14 +149,28 @@
     { "fn": "namespace_spiffe_id", "args": ["example.com", "/tenants/system"] },
     { "fn": "tenant_spiffe_id", "args": ["example.com", "system"] },
     { "fn": "tenant_spiffe_id", "args": ["example.com", "data"] },
-    { "fn": "tenant_spiffe_id", "args": ["example.com", "tenants"] }
+    { "fn": "tenant_spiffe_id", "args": ["example.com", "tenants"] },
+    { "fn": "user_root_spiffe_id", "args": ["example.com", "users"] },
+    { "fn": "user_root_spiffe_id", "args": ["example.com", "a/b"] },
+    { "fn": "user_root_spiffe_id", "args": ["example.com/x", "0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b"] },
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/users"] },
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/users/users"] },
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b/workspaces/dev"] },
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/people/alice"] },
+    { "fn": "user_spiffe_id", "args": ["example.com", "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b"] },
+    { "fn": "user_spiffe_id", "args": ["example.com", "/tenants/acme", "users"] },
+    { "fn": "resource_spiffe_id", "args": ["example.com", "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "gitlab-event", "evt-1"] },
+    { "fn": "credential_spiffe_id", "args": ["example.com", "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "cred-pair", "cred-1"] }
   ],
   "valid_construct": [
     { "fn": "namespace_spiffe_id", "args": ["example.com", "/system/aws/acct1"], "expect": "spiffe://example.com/system/aws/acct1" },
     { "_comment": "\"people\" is the platform identity tenant - the one reserved tag that is legal as a tenant name. Every other reserved tag stays rejected (see invalid_construct /tenants/system).",
       "fn": "tenant_spiffe_id", "args": ["example.com", "people"], "expect": "spiffe://example.com/tenants/people" },
     { "fn": "namespace_spiffe_id", "args": ["example.com", "/tenants/people"], "expect": "spiffe://example.com/tenants/people" },
-    { "fn": "user_spiffe_id", "args": ["example.com", "/tenants/people", "jody"], "expect": "spiffe://example.com/tenants/people/users/jody" }
+    { "fn": "user_spiffe_id", "args": ["example.com", "/tenants/people", "jody"], "expect": "spiffe://example.com/tenants/people/users/jody" },
+    { "fn": "user_root_spiffe_id", "args": ["example.com", "0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b"], "expect": "spiffe://example.com/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b" },
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b"], "expect": "spiffe://example.com/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b" },
+    { "fn": "user_spiffe_id", "args": ["example.com", "/tenants/acme", "0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b"], "expect": "spiffe://example.com/tenants/acme/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b" }
   ],
   "opaque_segment": {
     "spec": "base32_lower_nopad(SHA256(utf8(kind) || 0x1F || utf8(NFC(value)))[:20]); 32 chars [a-z2-7]; kind domain-separates",

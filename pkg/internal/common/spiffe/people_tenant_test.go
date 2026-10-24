@@ -67,7 +67,7 @@ func TestPeopleTenantCarveOutIsPresentInEveryChassisSpiffePort(t *testing.T) {
 		}
 		// The carve-out must not have been implemented by dropping "people"
 		// from the reserved set — it must still be rejected as a /system
-		// location, a workspace segment, a person id, and a plain identifier.
+		// location, a workspace segment, a user id, and a plain identifier.
 		if !strings.Contains(body, PeopleSegment) {
 			t.Errorf("%s: %q must remain a reserved structural tag", port.file, PeopleSegment)
 		}

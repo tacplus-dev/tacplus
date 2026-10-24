@@ -13,7 +13,7 @@
 //   spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
 //   spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
 //   spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
-//   spiffe://<trust_domain>/people/<person>/users/<person>
+//   spiffe://<trust_domain>/users/<xid>
 //   spiffe://<trust_domain>/<namespace>/users/<user>
 //   spiffe://<trust_domain>/<namespace>/clients/<client>
 //   spiffe://<trust_domain>/<namespace>/credentials/<kind>/<id>
@@ -131,9 +131,10 @@ export function normalizeTrustDomain(value: string): string {
 // full URI.
 //
 // Valid shapes: "/" (root); "/system" or "/system/<loc>..."; "/tenants" or
-// "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>...". A reserved tag is
-// rejected as a tenant/location/workspace name, and the workspaces tag is the
-// only structural tag permitted under a tenant.
+// "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/users/<xid>". A
+// reserved tag is rejected as a tenant/location/workspace/user id, the workspaces
+// tag is the only structural tag permitted under a tenant, and a user root is
+// exactly "/users/<xid>": bare "/users" and anything after the xid are rejected.
 export function normalizeNamespace(namespace: string): string {
   let ns = namespace.trim();
   if (ns === '') {
@@ -203,19 +204,19 @@ function validateNamespaceSegments(segs: string[]): void {
         }
       }
       break;
-    case PEOPLE_SEGMENT:
-      if (segs.length >= 2 && RESERVED_TAGS.has(segs[1])) {
-        throw new Error(`spiffe: reserved tag "${segs[1]}" cannot be a person id`);
-      }
-      if (segs.length >= 3) {
+    case USERS_SEGMENT:
+      if (segs.length !== 2) {
         throw new Error(
-          `spiffe: nothing may follow a person id in a namespace, got "${segs[2]}"`,
+          `spiffe: a user root namespace is exactly /${USERS_SEGMENT}/<xid>, got /${segs.join('/')}`,
         );
+      }
+      if (RESERVED_TAGS.has(segs[1])) {
+        throw new Error(`spiffe: reserved tag "${segs[1]}" cannot be a user id`);
       }
       break;
     default:
       throw new Error(
-        `spiffe: namespace must start with "${SYSTEM_SEGMENT}", "${TENANTS_SEGMENT}", or "${PEOPLE_SEGMENT}", got "${segs[0]}"`,
+        `spiffe: namespace must start with "${SYSTEM_SEGMENT}", "${TENANTS_SEGMENT}", or "${USERS_SEGMENT}", got "${segs[0]}"`,
       );
   }
 }
@@ -247,6 +248,16 @@ function namespaceBase(trustDomain: string, namespace: string): string {
     return base;
   }
   return base + ns;
+}
+
+// leafBase is namespaceBase for a typed leaf or pair. A user root is a complete
+// identity, so nothing may be appended under /users/<xid>.
+function leafBase(trustDomain: string, namespace: string): string {
+  const ns = normalizeNamespace(namespace);
+  if (ns.startsWith('/' + USERS_SEGMENT + '/')) {
+    throw new Error(`spiffe: nothing may follow a user root, got namespace "${ns}"`);
+  }
+  return namespaceBase(trustDomain, ns);
 }
 
 // serviceSpiffeId: spiffe://<td>/system/<location...>/services/<service>.
@@ -335,6 +346,14 @@ export function userSpiffeId(
   return typedLeaf(trustDomain, namespace, USERS_SEGMENT, stableUser);
 }
 
+// userRootSpiffeId: spiffe://<td>/users/<xid>, a user principal that exists
+// outside every tenant. Its namespace is /users/<xid>.
+export function userRootSpiffeId(trustDomain: string, xid: string): string {
+  const base = authority(trustDomain);
+  const x = normalizeSegment(xid);
+  return base + '/' + USERS_SEGMENT + '/' + x;
+}
+
 // clientSpiffeId: spiffe://<td><namespace>/clients/<clientId>.
 export function clientSpiffeId(
   trustDomain: string,
@@ -370,7 +389,7 @@ function typedLeaf(
   tag: string,
   value: string,
 ): string {
-  const base = namespaceBase(trustDomain, namespace);
+  const base = leafBase(trustDomain, namespace);
   const v = normalizeSegment(value);
   return base + '/' + tag + '/' + v;
 }
@@ -382,7 +401,7 @@ function typedPair(
   kind: string,
   id: string,
 ): string {
-  const base = namespaceBase(trustDomain, namespace);
+  const base = leafBase(trustDomain, namespace);
   const k = normalizeSegment(kind);
   const i = normalizeSegment(id);
   return base + '/' + tag + '/' + k + '/' + i;
@@ -483,6 +502,15 @@ export function parseSpiffeId(value: string): ParsedSpiffeId {
 
 function classify(p: ParsedSpiffeId, segs: string[]): void {
   const idx = tagIndexes(segs);
+  if (segs[0] === USERS_SEGMENT) {
+    classifyUserRoot(p, segs);
+    return;
+  }
+  if (segs[0] === PEOPLE_SEGMENT) {
+    throw new Error(
+      `spiffe: the /${PEOPLE_SEGMENT} root is retired; user principals are /${USERS_SEGMENT}/<xid>: /${segs.join('/')}`,
+    );
+  }
   if (idx[WORKLOADS_SEGMENT] >= 0) {
     p.subjectKind = SubjectKind.Workload;
     classifySystem(p, segs);
@@ -491,10 +519,6 @@ function classify(p: ParsedSpiffeId, segs: string[]): void {
   if ((segs[0] === SYSTEM_SEGMENT || segs[0] === TENANTS_SEGMENT) && idx[SERVICES_SEGMENT] >= 0) {
     p.subjectKind = SubjectKind.Service;
     classifySystem(p, segs);
-    return;
-  }
-  if (segs[0] === PEOPLE_SEGMENT && idx[USERS_SEGMENT] >= 0) {
-    classifyPerson(p, segs);
     return;
   }
   if (idx[USERS_SEGMENT] >= 0) {
@@ -532,17 +556,18 @@ function classifySystem(p: ParsedSpiffeId, segs: string[]): void {
   p.subjectPath = segs.slice(si + 1).join('/'); // <service>[/workloads/<child>...]
 }
 
-// The person root: /people/<person>/users/<person>, the only identity shape rooted
-// at "people". Deliberately tighter than the generic namespaced-user arm: the person
-// id is repeated as the users leaf, and no location segments, no "services" branch,
-// and no further suffix are accepted.
-function classifyPerson(p: ParsedSpiffeId, segs: string[]): void {
-  if (segs.length !== 4 || segs[2] !== USERS_SEGMENT || segs[1] !== segs[3]) {
-    throw new Error(`spiffe: malformed person identity: /${segs.join('/')}`);
+// The user root: /users/<xid>, a user principal that exists outside every tenant.
+// It is exactly two segments; the xid is both the subject and the namespace leaf,
+// and nothing may follow it. Its namespace, /users/<xid>, is its own subtree: it is
+// not at-or-below any /tenants/... namespace and no /tenants/... namespace is
+// at-or-below it.
+function classifyUserRoot(p: ParsedSpiffeId, segs: string[]): void {
+  if (segs.length !== 2 || RESERVED_TAGS.has(segs[1])) {
+    throw new Error(`spiffe: malformed user root identity: /${segs.join('/')}`);
   }
   p.subjectKind = SubjectKind.User;
-  p.namespace = '/' + PEOPLE_SEGMENT + '/' + segs[1];
-  p.subjectPath = segs[3];
+  p.namespace = '/' + USERS_SEGMENT + '/' + segs[1];
+  p.subjectPath = segs[1];
 }
 
 function classifyNamespaced(

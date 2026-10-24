@@ -250,24 +250,25 @@ fn validate_namespace_segments(segs: &[&str]) -> Result<()> {
                 }
             }
         }
-        PEOPLE_SEGMENT => {
-            if segs.len() >= 2 && is_reserved_tag(segs[1]) {
+        USERS_SEGMENT => {
+            if segs.len() != 2 {
                 return err(format!(
-                    "spiffe: reserved tag {:?} cannot be a person id",
-                    segs[1]
+                    "spiffe: a user root namespace is exactly /{}/<xid>, got /{}",
+                    USERS_SEGMENT,
+                    segs.join("/")
                 ));
             }
-            if segs.len() >= 3 {
+            if is_reserved_tag(segs[1]) {
                 return err(format!(
-                    "spiffe: nothing may follow a person id in a namespace, got {:?}",
-                    segs[2]
+                    "spiffe: reserved tag {:?} cannot be a user id",
+                    segs[1]
                 ));
             }
         }
         other => {
             return err(format!(
                 "spiffe: namespace must start with {:?}, {:?}, or {:?}, got {:?}",
-                SYSTEM_SEGMENT, TENANTS_SEGMENT, PEOPLE_SEGMENT, other
+                SYSTEM_SEGMENT, TENANTS_SEGMENT, USERS_SEGMENT, other
             ));
         }
     }
@@ -310,6 +311,16 @@ fn namespace_base(trust_domain: &str, namespace: &str) -> Result<String> {
         return Ok(base);
     }
     Ok(format!("{}{}", base, ns))
+}
+
+// namespace_base for a typed leaf or pair. A user root is a complete identity,
+// so nothing may be appended under /users/<xid>.
+fn leaf_base(trust_domain: &str, namespace: &str) -> Result<String> {
+    let ns = normalize_namespace(namespace)?;
+    if ns.starts_with(&format!("/{}/", USERS_SEGMENT)) {
+        return err(format!("spiffe: nothing may follow a user root, got namespace {:?}", ns));
+    }
+    namespace_base(trust_domain, &ns)
 }
 
 /// `spiffe://<td>/system/<location...>/services/<service>`.
@@ -381,6 +392,14 @@ pub fn user_spiffe_id(trust_domain: &str, namespace: &str, stable_user: &str) ->
     typed_leaf(trust_domain, namespace, USERS_SEGMENT, stable_user)
 }
 
+/// `spiffe://<td>/users/<xid>`, a user principal that exists outside every
+/// tenant. Its namespace is `/users/<xid>`.
+pub fn user_root_spiffe_id(trust_domain: &str, xid: &str) -> Result<String> {
+    let base = authority(trust_domain)?;
+    let x = normalize_segment(xid)?;
+    Ok(format!("{}/{}/{}", base, USERS_SEGMENT, x))
+}
+
 /// `spiffe://<td><namespace>/clients/<client_id>`.
 pub fn client_spiffe_id(trust_domain: &str, namespace: &str, client_id: &str) -> Result<String> {
     typed_leaf(trust_domain, namespace, CLIENTS_SEGMENT, client_id)
@@ -397,13 +416,13 @@ pub fn resource_spiffe_id(trust_domain: &str, namespace: &str, kind: &str, id: &
 }
 
 fn typed_leaf(trust_domain: &str, namespace: &str, tag: &str, value: &str) -> Result<String> {
-    let base = namespace_base(trust_domain, namespace)?;
+    let base = leaf_base(trust_domain, namespace)?;
     let v = normalize_segment(value)?;
     Ok(format!("{}/{}/{}", base, tag, v))
 }
 
 fn typed_pair(trust_domain: &str, namespace: &str, tag: &str, kind: &str, id: &str) -> Result<String> {
-    let base = namespace_base(trust_domain, namespace)?;
+    let base = leaf_base(trust_domain, namespace)?;
     let k = normalize_segment(kind)?;
     let i = normalize_segment(id)?;
     Ok(format!("{}/{}/{}/{}", base, tag, k, i))
@@ -494,14 +513,21 @@ pub fn parse_spiffe_id(value: &str) -> Result<ParsedSpiffeId> {
 
 fn classify(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
     let idx = tag_indexes(segs);
-    if idx_of(&idx, WORKLOADS_SEGMENT) >= 0 {
+    if segs[0] == USERS_SEGMENT {
+        classify_user_root(p, segs)
+    } else if segs[0] == PEOPLE_SEGMENT {
+        err(format!(
+            "spiffe: the /{} root is retired; user principals are /{}/<xid>: /{}",
+            PEOPLE_SEGMENT,
+            USERS_SEGMENT,
+            segs.join("/")
+        ))
+    } else if idx_of(&idx, WORKLOADS_SEGMENT) >= 0 {
         p.subject_kind = SubjectKind::Workload;
         classify_system(p, segs)
     } else if (segs[0] == SYSTEM_SEGMENT || segs[0] == TENANTS_SEGMENT) && idx_of(&idx, SERVICES_SEGMENT) >= 0 {
         p.subject_kind = SubjectKind::Service;
         classify_system(p, segs)
-    } else if segs[0] == PEOPLE_SEGMENT && idx_of(&idx, USERS_SEGMENT) >= 0 {
-        classify_person(p, segs)
     } else if idx_of(&idx, USERS_SEGMENT) >= 0 {
         classify_namespaced(p, segs, idx_of(&idx, USERS_SEGMENT) as usize, SubjectKind::User)
     } else if idx_of(&idx, CLIENTS_SEGMENT) >= 0 {
@@ -534,17 +560,18 @@ fn classify_system(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
     Ok(())
 }
 
-// The person root: /people/<person>/users/<person>, the only identity shape rooted
-// at "people". Deliberately tighter than the generic namespaced-user arm: the
-// person id is repeated as the users leaf, and no location segments, no "services"
-// branch, and no further suffix are accepted.
-fn classify_person(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
-    if segs.len() != 4 || segs[2] != USERS_SEGMENT || segs[1] != segs[3] {
-        return err(format!("spiffe: malformed person identity: /{}", segs.join("/")));
+// The user root: /users/<xid>, a user principal that exists outside every tenant.
+// It is exactly two segments; the xid is both the subject and the namespace leaf,
+// and nothing may follow it. Its namespace, /users/<xid>, is its own subtree: it
+// is not at-or-below any /tenants/... namespace and no /tenants/... namespace is
+// at-or-below it.
+fn classify_user_root(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
+    if segs.len() != 2 || is_reserved_tag(segs[1]) {
+        return err(format!("spiffe: malformed user root identity: /{}", segs.join("/")));
     }
     p.subject_kind = SubjectKind::User;
-    p.namespace = format!("/{}/{}", PEOPLE_SEGMENT, segs[1]);
-    p.subject_path = segs[3].to_string();
+    p.namespace = format!("/{}/{}", USERS_SEGMENT, segs[1]);
+    p.subject_path = segs[1].to_string();
     Ok(())
 }
 
@@ -817,6 +844,7 @@ mod tests {
             "resource_spiffe_id" => resource_spiffe_id(arg(0), arg(1), arg(2), arg(3)),
             "credential_spiffe_id" => credential_spiffe_id(arg(0), arg(1), arg(2), arg(3)),
             "user_spiffe_id" => user_spiffe_id(arg(0), arg(1), arg(2)),
+            "user_root_spiffe_id" => user_root_spiffe_id(arg(0), arg(1)),
             "namespace_spiffe_id" => namespace_spiffe_id(arg(0), arg(1)),
             "tenant_spiffe_id" => tenant_spiffe_id(arg(0), arg(1)),
             other => Err(SpiffeError(format!("unsupported shared construct: {}", other))),

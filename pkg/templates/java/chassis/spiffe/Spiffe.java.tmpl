@@ -13,7 +13,7 @@
 //   spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
 //   spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
 //   spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
-//   spiffe://<trust_domain>/people/<person>/users/<person>
+//   spiffe://<trust_domain>/users/<xid>
 //   spiffe://<trust_domain>/<namespace>/users/<user>
 //   spiffe://<trust_domain>/<namespace>/clients/<client>
 //   spiffe://<trust_domain>/<namespace>/credentials/<kind>/<id>
@@ -233,19 +233,19 @@ public final class Spiffe {
                     }
                 }
                 break;
-            case PEOPLE_SEGMENT:
-                if (segs.length >= 2 && RESERVED_TAGS.contains(segs[1])) {
-                    throw new IllegalArgumentException(
-                            "spiffe: reserved tag \"" + segs[1] + "\" cannot be a person id");
+            case USERS_SEGMENT:
+                if (segs.length != 2) {
+                    throw new IllegalArgumentException("spiffe: a user root namespace is exactly /"
+                            + USERS_SEGMENT + "/<xid>, got /" + String.join("/", segs));
                 }
-                if (segs.length >= 3) {
+                if (RESERVED_TAGS.contains(segs[1])) {
                     throw new IllegalArgumentException(
-                            "spiffe: nothing may follow a person id in a namespace, got \"" + segs[2] + "\"");
+                            "spiffe: reserved tag \"" + segs[1] + "\" cannot be a user id");
                 }
                 break;
             default:
                 throw new IllegalArgumentException("spiffe: namespace must start with \"" + SYSTEM_SEGMENT
-                        + "\", \"" + TENANTS_SEGMENT + "\", or \"" + PEOPLE_SEGMENT
+                        + "\", \"" + TENANTS_SEGMENT + "\", or \"" + USERS_SEGMENT
                         + "\", got \"" + segs[0] + "\"");
         }
     }
@@ -319,6 +319,17 @@ public final class Spiffe {
         return base + ns;
     }
 
+    // namespaceBase for a typed leaf or pair. A user root is a complete identity,
+    // so nothing may be appended under /users/<xid>.
+    private static String leafBase(String trustDomain, String namespace) {
+        String ns = normalizeNamespace(namespace);
+        if (ns.startsWith("/" + USERS_SEGMENT + "/")) {
+            throw new IllegalArgumentException(
+                    "spiffe: nothing may follow a user root, got namespace \"" + ns + "\"");
+        }
+        return namespaceBase(trustDomain, ns);
+    }
+
     /** {@code spiffe://<td>/system/<location...>/services/<service>}. */
     public static String serviceSpiffeId(String trustDomain, String locationPath, String serviceLabel) {
         String base = authority(trustDomain);
@@ -383,6 +394,16 @@ public final class Spiffe {
         return typedLeaf(trustDomain, namespace, USERS_SEGMENT, stableUser);
     }
 
+    /**
+     * {@code spiffe://<td>/users/<xid>}, a user principal that exists outside every
+     * tenant. Its namespace is {@code /users/<xid>}.
+     */
+    public static String userRootSpiffeId(String trustDomain, String xid) {
+        String base = authority(trustDomain);
+        String x = normalizeSegment(xid);
+        return base + "/" + USERS_SEGMENT + "/" + x;
+    }
+
     /** {@code spiffe://<td><namespace>/clients/<clientId>}. */
     public static String clientSpiffeId(String trustDomain, String namespace, String clientId) {
         return typedLeaf(trustDomain, namespace, CLIENTS_SEGMENT, clientId);
@@ -399,13 +420,13 @@ public final class Spiffe {
     }
 
     private static String typedLeaf(String trustDomain, String namespace, String tag, String value) {
-        String base = namespaceBase(trustDomain, namespace);
+        String base = leafBase(trustDomain, namespace);
         String v = normalizeSegment(value);
         return base + "/" + tag + "/" + v;
     }
 
     private static String typedPair(String trustDomain, String namespace, String tag, String kind, String id) {
-        String base = namespaceBase(trustDomain, namespace);
+        String base = leafBase(trustDomain, namespace);
         String k = normalizeSegment(kind);
         String i = normalizeSegment(id);
         return base + "/" + tag + "/" + k + "/" + i;
@@ -503,15 +524,18 @@ public final class Spiffe {
 
     private static void classify(ParsedSpiffeId p, List<String> segs) {
         Map<String, Integer> idx = tagIndexes(segs);
-        if (idx.get(WORKLOADS_SEGMENT) >= 0) {
+        if (segs.get(0).equals(USERS_SEGMENT)) {
+            classifyUserRoot(p, segs);
+        } else if (segs.get(0).equals(PEOPLE_SEGMENT)) {
+            throw new IllegalArgumentException("spiffe: the /" + PEOPLE_SEGMENT + " root is retired; user principals are /"
+                    + USERS_SEGMENT + "/<xid>: /" + String.join("/", segs));
+        } else if (idx.get(WORKLOADS_SEGMENT) >= 0) {
             p.subjectKind = SubjectKind.WORKLOAD;
             classifySystem(p, segs);
         } else if ((segs.get(0).equals(SYSTEM_SEGMENT) || segs.get(0).equals(TENANTS_SEGMENT))
                 && idx.get(SERVICES_SEGMENT) >= 0) {
             p.subjectKind = SubjectKind.SERVICE;
             classifySystem(p, segs);
-        } else if (segs.get(0).equals(PEOPLE_SEGMENT) && idx.get(USERS_SEGMENT) >= 0) {
-            classifyPerson(p, segs);
         } else if (idx.get(USERS_SEGMENT) >= 0) {
             classifyNamespaced(p, segs, idx.get(USERS_SEGMENT), SubjectKind.USER);
         } else if (idx.get(CLIENTS_SEGMENT) >= 0) {
@@ -543,18 +567,19 @@ public final class Spiffe {
         p.subjectPath = String.join("/", segs.subList(si + 1, segs.size())); // <service>[/workloads/<child>...]
     }
 
-    // The person root: /people/<person>/users/<person>, the only identity shape rooted
-    // at "people". Deliberately tighter than the generic namespaced-user arm: the person
-    // id is repeated as the users leaf, and no location segments, no "services" branch,
-    // and no further suffix are accepted.
-    private static void classifyPerson(ParsedSpiffeId p, List<String> segs) {
-        if (segs.size() != 4 || !segs.get(2).equals(USERS_SEGMENT) || !segs.get(1).equals(segs.get(3))) {
+    // The user root: /users/<xid>, a user principal that exists outside every tenant.
+    // It is exactly two segments; the xid is both the subject and the namespace leaf,
+    // and nothing may follow it. Its namespace, /users/<xid>, is its own subtree: it is
+    // not at-or-below any /tenants/... namespace and no /tenants/... namespace is
+    // at-or-below it.
+    private static void classifyUserRoot(ParsedSpiffeId p, List<String> segs) {
+        if (segs.size() != 2 || RESERVED_TAGS.contains(segs.get(1))) {
             throw new IllegalArgumentException(
-                    "spiffe: malformed person identity: /" + String.join("/", segs));
+                    "spiffe: malformed user root identity: /" + String.join("/", segs));
         }
         p.subjectKind = SubjectKind.USER;
-        p.namespace = "/" + PEOPLE_SEGMENT + "/" + segs.get(1);
-        p.subjectPath = segs.get(3);
+        p.namespace = "/" + USERS_SEGMENT + "/" + segs.get(1);
+        p.subjectPath = segs.get(1);
     }
 
     private static void classifyNamespaced(ParsedSpiffeId p, List<String> segs, int tagIdx, SubjectKind kind) {

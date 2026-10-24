@@ -725,10 +725,15 @@ spiffe://<trust_domain>/
   tenants/<tenant>/...[/clients/<client>]
   tenants/<tenant>/...[/credentials/<kind>/<id>]
   tenants/<tenant>/...[/data/<kind>/<id>]
+  users/<xid>
 ```
 
 `/system` holds infrastructure/service identities; `/tenants` holds
-tenant-scoped principals and resources. The `<location...>` tiers between
+tenant-scoped principals and resources; `/users/<xid>` is a user principal
+that exists outside every tenant (one minted opaque id), and its namespace is
+`/users/<xid>`. It is exactly two segments and is its own subtree: it is not
+at or below any `/tenants/...` namespace, and no `/tenants/...` namespace is
+at or below it. The `<location...>` tiers between
 `/system/` and `services` are opaque and variable-arity (the parser keys off
 the `services` tag). Reserved tags (`system`, `tenants`, `services`,
 `workloads`, `users`, `workspaces`, `clients`, `credentials`, `data`) are

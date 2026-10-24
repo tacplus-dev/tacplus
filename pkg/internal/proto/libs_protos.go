@@ -331,20 +331,6 @@ func CopyAndPrepareProtoDir(inputDir, targetDir string) (string, error) {
 		}
 	}
 
-	// Replace the stubs with the real aggregates. They are GENERATED messages
-	// carrying (spec.per_service_config), and this tree is the flattened view
-	// every later step parses: ResolveServiceStates subscribes a service to the
-	// grpc_config owner of each per_service_config message naming it, so a
-	// TenantConfig left a stub here meant no service was ever subscribed to its
-	// slice of the generated one, in any language. No-op (the stub stays) when
-	// no service declares a slice.
-	if err := GenerateTenantConfig(inputDir, protoDir, protoDir); err != nil {
-		return "", fmt.Errorf("failed to generate tenant_config.proto: %w", err)
-	}
-	if err := GenerateProjectConfig(inputDir, protoDir, protoDir); err != nil {
-		return "", fmt.Errorf("failed to generate project_config.proto: %w", err)
-	}
-
 	// Inject the MCP session carrier into every service that declares an
 	// RPC_PRINCIPAL_MCP tool. Here, not in each language generator, because the
 	// carrier has to be a real rpc in the tree protoc compiles for EVERY
@@ -363,6 +349,25 @@ func CopyAndPrepareProtoDir(inputDir, targetDir string) (string, error) {
 		if _, _, _, err := ScanAndGenerateConfigHolder(inputDir, protoDir); err != nil {
 			return "", fmt.Errorf("failed to regenerate generated/*.proto after MCP carrier injection: %w", err)
 		}
+	}
+
+	// Replace the stubs with the real aggregates. They are GENERATED messages
+	// carrying (spec.per_service_config), and this tree is the flattened view
+	// every later step parses: ResolveServiceStates subscribes a service to the
+	// grpc_config owner of each per_service_config message naming it, so a
+	// TenantConfig left a stub here meant no service was ever subscribed to its
+	// slice of the generated one, in any language. No-op (the stub stays) when
+	// no service declares a slice.
+	//
+	// AFTER the MCP carrier re-scan, not before it: ScanAndGenerateConfigHolder
+	// rewrites every generated/ stub, these two included, so an aggregate
+	// generated ahead of it was clobbered back to the stub in any tree that
+	// declares an MCP tool — the platform's — and no subscription was derived.
+	if err := GenerateTenantConfig(inputDir, protoDir, protoDir); err != nil {
+		return "", fmt.Errorf("failed to generate tenant_config.proto: %w", err)
+	}
+	if err := GenerateProjectConfig(inputDir, protoDir, protoDir); err != nil {
+		return "", fmt.Errorf("failed to generate project_config.proto: %w", err)
 	}
 
 	return protoDir, nil

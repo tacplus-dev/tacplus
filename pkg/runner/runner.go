@@ -437,6 +437,18 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 	} else {
 		pkg = projectfile.DerivePackage(pt, cwd)
 	}
+	// With an explicit --src (a fleet's merged tree, which declares every
+	// service), the project's own proto dir is still tacplus.yaml src when that
+	// is a local directory: it is what says which service is this one.
+	if p.SrcExplicit && cfg != nil && cfg.Src != "" && !protosrc.IsGitSource(cfg.Src) {
+		own := cfg.Src
+		if !filepath.IsAbs(own) {
+			own = filepath.Join(cwd, own)
+		}
+		if st, err := os.Stat(own); err == nil && st.IsDir() {
+			ownProtoDir = own
+		}
+	}
 
 	// Create unified tactype.Config
 	config := &tactype.Config{

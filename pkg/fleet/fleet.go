@@ -579,7 +579,13 @@ func extractContract(protoDir, name string, isService bool) (string, func(), err
 		}
 		data, err := os.ReadFile(filepath.Join(protoDir, rel))
 		if err != nil {
-			return fmt.Errorf("%s imports %s, which is not in the contract repo", owner, rel)
+			// Not in this repo: another service's proto (operator imports
+			// oauth's and kmaker's to compose their config). That service's
+			// own contract supplies it in the merge, and the parse of the
+			// merged tree fails if nothing does.
+			zap.L().Info("fleet: contract imports a file outside its repo; expecting another contract to supply it",
+				zap.String("contract", owner), zap.String("import", rel))
+			return nil
 		}
 		want[rel] = true
 		for _, imp := range importsOf(string(data)) {

@@ -262,3 +262,29 @@ func TestDeclaresIdentityWithoutServiceOption(t *testing.T) {
 		t.Fatal("a plain message file is not a service")
 	}
 }
+
+// A contract may import another service's proto (operator composes other
+// services' config). The import is not in its repo; that service's contract
+// supplies it in the merge, and extraction must not fail on it.
+func TestExtractContractToleratesCrossContractImports(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "proto")
+	write(t, filepath.Join(repo, "services", "operator.proto"), `syntax = "proto3";
+package operator;
+import "sys/spec.proto";
+import "services/oauth.proto";
+option (spec.service) = {name: "operator"};
+message Config { option (spec.grpc_config) = {service_name: "operator"}; oauth.Config oauth = 1; }
+`)
+	staged, cleanup, err := extractContract(repo, "operator", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if _, err := os.Stat(filepath.Join(staged, "services", "operator.proto")); err != nil {
+		t.Fatal("own file missing")
+	}
+	if _, err := os.Stat(filepath.Join(staged, "services", "oauth.proto")); !os.IsNotExist(err) {
+		t.Fatal("a file this repo does not hold cannot be staged from it")
+	}
+}

@@ -1280,6 +1280,15 @@ assert_tenantslice_output() {
     rust) client="$(find "$output" -type f -path '*/s2sm/internal/state/services/tenancy_config_state/state.rs' -print -quit)" ;;
   esac
   [[ -n "$client" ]] || die "tenant-slice fixture ($language): ledger is not subscribed to TenancyConfigState (no generated state client under $output)"
+
+  # The compiled TenantConfig must be the generated aggregate carrying ledger's
+  # slice, not the empty stub (#129: Rust compiled the stub).
+  if [[ "$language" == "rust" ]]; then
+    local tenant_config
+    tenant_config="$(find "$output" -type f -path '*/types/generated/tenant_config/tenant_config.rs' -print -quit)"
+    [[ -n "$tenant_config" ]] || die "tenant-slice fixture (rust): no generated tenant_config.rs under $output"
+    grep -q 'pub ledger:' "$tenant_config" || die "tenant-slice fixture (rust): compiled TenantConfig has no ledger slice field ($tenant_config)"
+  fi
 }
 
 # assert_epochload_output checks that the (spec.epoch_expiration) value is

@@ -332,3 +332,28 @@ func ownServicePackage(protoDir string) string {
 	}
 	return ""
 }
+
+// declaresPackage reports whether any .proto under dir declares package pkg
+// (first segment) and a service or grpc_config in it.
+func declaresPackage(dir, pkg string) bool {
+	found := false
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || found || d.IsDir() || !strings.HasSuffix(p, ".proto") {
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		src := string(data)
+		pm := ownPackageRe.FindStringSubmatch(src)
+		if pm == nil || strings.SplitN(pm[1], ".", 2)[0] != pkg {
+			return nil
+		}
+		if ownServiceNameRe.MatchString(src) || ownServiceNoNameRe.MatchString(src) || ownServiceBlockRe.MatchString(src) || ownGrpcConfigRe.MatchString(src) {
+			found = true
+		}
+		return nil
+	})
+	return found
+}

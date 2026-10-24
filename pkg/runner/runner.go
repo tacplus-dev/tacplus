@@ -238,6 +238,36 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 	var absProtoDir string
 	var ownProtoDir string // the project's own proto dir, before any dependency merge
 	var protoCleanup func()
+	// A library generated against a fleet's merged tree (an explicit --src) is
+	// not in that tree: nothing runs it, so the fleet build never fetched it.
+	// Its own proto then joins the merge the way a dependency's does (wire-only
+	// lock, no pins), so the fleet's registry.yaml stays authoritative. A service
+	// that IS in the tree is left alone: merging its proto twice would collide.
+	ownExtra := ""
+	if p.SrcExplicit && cfg != nil && cfg.Src != "" && !protosrc.IsGitSource(cfg.Src) {
+		own := cfg.Src
+		if !filepath.IsAbs(own) {
+			own = filepath.Join(cwd, own)
+		}
+		if st, err := os.Stat(own); err == nil && st.IsDir() {
+			if pkg := ownServicePackage(own); pkg != "" {
+				declared := false
+				for _, s := range srcs {
+					d := s
+					if !filepath.IsAbs(d) && !protosrc.IsGitSource(d) {
+						d = filepath.Join(cwd, d)
+					}
+					if !protosrc.IsGitSource(d) && declaresPackage(d, pkg) {
+						declared = true
+					}
+				}
+				if !declared {
+					ownExtra = own
+					zap.L().Info("project proto is not in the given --src tree; merging it in as a library", zap.String("package", pkg), zap.String("dir", own))
+				}
+			}
+		}
+	}
 	if sysOnly {
 		tempDir, err := os.MkdirTemp("", "tacplus-sys-*")
 		if err != nil {
@@ -251,7 +281,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 		absProtoDir = tempDir
 		protoCleanup = func() { os.RemoveAll(tempDir) }
 		zap.L().Info("No proto source configured — generating standard library wrappers only")
-	} else if len(srcs) == 1 && (cfg == nil || len(cfg.Depends) == 0 || p.SrcExplicit) {
+	} else if len(srcs) == 1 && ownExtra == "" && (cfg == nil || len(cfg.Depends) == 0 || p.SrcExplicit) {
 		// Single source: resolve directly (no merge), preserving the original
 		// fast path exactly.
 		dir, cleanup, err := resolveOneSource(srcs[0], tag)
@@ -282,6 +312,16 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 			cleanups = append(cleanups, cleanup)
 		}
 		ownProtoDir = dirs[0]
+		if ownExtra != "" {
+			staged, stagedCleanup, err := stageDependency(ownExtra)
+			if err != nil {
+				runCleanups()
+				return nil, fmt.Errorf("staging the project's own proto for the merge: %w", err)
+			}
+			dirs = append(dirs, staged)
+			cleanups = append(cleanups, stagedCleanup)
+			ownProtoDir = ownExtra
+		}
 		// Declared dependencies (tacplus.yaml depends) join the merge: their
 		// protos are what the declared S2S clients generate from. An explicit
 		// --src overrides yaml sourcing entirely, depends included: a fleet

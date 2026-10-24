@@ -136,3 +136,15 @@ func TestOwnServicePackage(t *testing.T) {
 		t.Fatalf("ownServicePackage = %q, want \"\" when two packages declare services", got)
 	}
 }
+
+func TestDeclaresPackage(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "proto")
+	writeFile(t, filepath.Join(dir, "services", "kernel.proto"), "syntax = \"proto3\";\npackage kernel;\nservice Mint {}\n")
+	writeFile(t, filepath.Join(dir, "common", "shapes.proto"), "syntax = \"proto3\";\npackage operator;\nmessage Shape {}\n")
+	if !declaresPackage(dir, "kernel") {
+		t.Fatal("kernel declares a service and must be found")
+	}
+	if declaresPackage(dir, "operator") {
+		t.Fatal("a package with only messages declares no service; a library's own proto must still be merged")
+	}
+}

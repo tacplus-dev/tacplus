@@ -74,3 +74,28 @@ func TestGoSubscriberUsesDeclaredBrokerService(t *testing.T) {
 		t.Fatalf("subscriber fell back to hard-coded eventbus broker:\n%s", rendered)
 	}
 }
+
+// A service that subscribes to a topic in its own package already imports
+// that package for its config and wrappers; the subscription must not import
+// it again under the same alias (the coop reads its own PigeonMessage thread).
+func TestGoSubscriptionTypeImportIsNotRepeated(t *testing.T) {
+	subs := []SubscriptionTemplateEntry{
+		{TypePkgAlias: "coop_pb", TypePkgImport: "m/tacplus/types/services/coop"},
+		{TypePkgAlias: "other_pb", TypePkgImport: "m/tacplus/types/services/other"},
+		{TypePkgAlias: "other_pb", TypePkgImport: "m/tacplus/types/services/other"},
+	}
+	markSubscriptionTypeImports(subs, []WrapperImport{{Alias: "coop_pb", ImportPath: "m/tacplus/types/services/coop"}})
+	if !subs[0].TypePkgImported {
+		t.Fatal("a subscription into the service's own package must reuse the service's import")
+	}
+	if subs[1].TypePkgImported || !subs[2].TypePkgImported {
+		t.Fatalf("one import per package across subscriptions; got %v %v", subs[1].TypePkgImported, subs[2].TypePkgImported)
+	}
+	tmpl, err := loadTemplate("service_manager.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate: %v", err)
+	}
+	if !strings.Contains(tmpl, "{{- if not .TypePkgImported}}") {
+		t.Fatal("the service manager template must skip an already-imported subscription types package")
+	}
+}

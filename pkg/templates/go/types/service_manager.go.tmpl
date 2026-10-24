@@ -90,7 +90,9 @@ smgrpc "{{.ModuleBasePath}}/s2sm/grpc"
 {{.SubPkgAlias}} "{{.SubPkgImport}}"
 {{- end}}
 {{- range .Subscriptions}}
+{{- if not .TypePkgImported}}
 {{.TypePkgAlias}} "{{.TypePkgImport}}"
+{{- end}}
 {{- end}}
 eb_pb "{{(index .Subscriptions 0).EventBusImport}}"
 {{end}}

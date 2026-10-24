@@ -210,7 +210,7 @@ func generateJavaStateClientWrappers(config *tactype.Config, servicesInfo []Serv
 			}
 			generated[key] = true
 
-			client, err := generateJavaStateWrapper(config, svc, fileDesc, &fileDesc.Messages[i], dp, accessMode)
+			client, err := generateJavaStateWrapper(config, svc, fileDesc, proto.NarrowStateRoot(config, svc.ProtoFile, &fileDesc.Messages[i]), dp, accessMode)
 			if err != nil {
 				return fmt.Errorf("failed to generate Java state wrapper for %s: %w", ann.StringValue, err)
 			}

@@ -421,6 +421,28 @@ type SecurityPolicy struct {
 	DisableAuth    bool            `json:"disableAuth,omitempty"`
 	Internal       bool            `json:"internal,omitempty"`
 	BoundaryGrants []BoundaryGrant `json:"boundaryGrants,omitempty"`
+	// TenantPinnedReads are the field-scoped, tenant-pinned read grants (#130):
+	// see ResolveTenantPinnedBoundaries for the rule the serving side enforces.
+	// Deliberately NOT a BoundaryGrant: a consumer that reads boundaryGrants
+	// grants the callers the whole boundary (read and write) whatever the type,
+	// so a pinned read carried there would fail OPEN on a consumer that predates
+	// it. In a field of its own, a consumer that does not know it grants nothing.
+	TenantPinnedReads []TenantPinnedRead `json:"tenantPinnedReads,omitempty"`
+}
+
+// TenantPinnedRead is one tenant-pinned collection of a state root and the
+// callers pinned on it. Callers are bare, location-agnostic service paths.
+type TenantPinnedRead struct {
+	Boundary    string                  `json:"boundary"`    // collection field, e.g. "tenant_configs"
+	KeyField    string                  `json:"keyField"`    // item's (spec.indexed) string key, e.g. "tenant_name"
+	ConfigField string                  `json:"configField"` // item's per_service_config field, e.g. "config"
+	Slices      []TenantPinnedReadSlice `json:"slices"`
+}
+
+// TenantPinnedReadSlice is one pinned caller and the config field it may see.
+type TenantPinnedReadSlice struct {
+	Caller     string `json:"caller"`
+	SliceField string `json:"sliceField"`
 }
 
 // BoundaryGrant records a cross-namespace call grant on a specific boundary field.
@@ -515,6 +537,20 @@ func ComputeSecurityPolicies(inputDir string) ([]SecurityPolicy, error) {
 
 	importersByRoot := stateImportersByRoot(dp.GetAllFiles())
 
+	pinned, err := ResolveTenantPinnedBoundaries(dp.GetAllFiles())
+	if err != nil {
+		return nil, err
+	}
+	pinnedByRoot := make(map[string][]TenantPinnedRead)
+	for _, b := range pinned {
+		read := TenantPinnedRead{Boundary: b.Field, KeyField: b.KeyField, ConfigField: b.ConfigField}
+		for _, sl := range b.Slices {
+			read.Slices = append(read.Slices, TenantPinnedReadSlice{Caller: sl.Caller, SliceField: sl.SliceField})
+		}
+		key := b.Package + "." + b.StateRoot
+		pinnedByRoot[key] = append(pinnedByRoot[key], read)
+	}
+
 	var policies []SecurityPolicy
 
 	for relPath, fileDesc := range dp.GetAllFiles() {
@@ -576,12 +612,13 @@ func ComputeSecurityPolicies(inputDir string) ([]SecurityPolicy, error) {
 			}
 
 			policy := SecurityPolicy{
-				Name:           stateName,
-				Package:        pkg,
-				RW:             rw,
-				RO:             ro,
-				DisableAuth:    disableAuth,
-				BoundaryGrants: grants,
+				Name:              stateName,
+				Package:           pkg,
+				RW:                rw,
+				RO:                ro,
+				DisableAuth:       disableAuth,
+				BoundaryGrants:    grants,
+				TenantPinnedReads: pinnedByRoot[pkg+"."+stateName],
 			}
 			policies = append(policies, policy)
 

@@ -26,7 +26,7 @@ func TestTopicRPCsCarryDeclaredS2SAuthServices(t *testing.T) {
 		},
 	}
 	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name,
-		nil, []string{"demo"}, surfaces)
+		nil, []string{"demo"}, surfaces, nil)
 
 	want := "rpc PublishToEvents(stream DemoEvent) returns (stream eventbus_support.PublishResponse) {\n\t\toption (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: [\"*\"]};\n\t}"
 	if !strings.Contains(result.serviceProto, want) {
@@ -53,7 +53,7 @@ func TestTopicRPCsPropagateNarrowS2SAuthServicesVerbatim(t *testing.T) {
 		},
 	}
 	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name,
-		nil, []string{"demo"}, surfaces)
+		nil, []string{"demo"}, surfaces, nil)
 
 	want := "option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: [\"scotty\", \"argus\"]};"
 	if strings.Count(result.serviceProto, want) != 1 {
@@ -67,7 +67,7 @@ func TestTopicRPCsPropagateNarrowS2SAuthServicesVerbatim(t *testing.T) {
 func TestTopicWithoutDeclaredS2SSurfaceKeepsServiceLevelDefault(t *testing.T) {
 	stateRoot := topicStateRootForTest()
 	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name,
-		nil, []string{"demo"}, nil)
+		nil, []string{"demo"}, nil, nil)
 
 	if strings.Contains(result.serviceProto, "option (spec.rpc)") {
 		t.Fatalf("undeclared topic must emit no per-RPC auth option:\n%s", result.serviceProto)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/proto"
 )
 
 // Java twin of the Go/Rust egress-sanitize emit support (RED-1): the generated
@@ -24,6 +25,9 @@ type javaEgressSanitizer struct {
 	resolver *parser.MessageResolver
 	msgs     map[string]*model.Message // key: pkg + "\x00" + name
 	enums    map[string]*model.Enum    // key: pkg + "\x00" + name
+	// tenantPins is every tenant-pinned read RPC (#130), keyed
+	// "<package>.<StateService>/<Method>" (proto.TenantPinnedRPCIndex).
+	tenantPins map[string]proto.TenantPinnedRPC
 }
 
 // newJavaEgressSanitizer builds the emit-time oracle over all parsed files.

@@ -1686,11 +1686,16 @@ func ResolveServiceStates(config *tactype.Config, entries []GrpcConfigEntry) err
 //   - It checks whether M has a field whose name matches the current service's package name.
 //   - If so, it adds a read-only StateEntry for the owner's ConfigState to config.States.
 //
+// When M is instead held by a collection of an exported (spec.service_state)
+// root (kernel.ConfigState.tenant_configs), the service is subscribed read-only
+// to that one collection: a StateEntry narrowed by Boundaries, served
+// tenant-pinned and projected to the service's slice (ResolveTenantPinnedBoundaries).
+//
 // This means consuming services never need to declare
 // state_imports in their own proto files — tacplus derives the subscription
 // automatically from the TenantConfig field names.
 func InjectTenantConfigSubscriptions(config *tactype.Config, inputDir string, entries []GrpcConfigEntry) error {
-	if config.SelfPackage == "" || len(entries) == 0 {
+	if config.SelfPackage == "" {
 		return nil
 	}
 
@@ -1724,6 +1729,51 @@ func InjectTenantConfigSubscriptions(config *tactype.Config, inputDir string, en
 	}
 	if len(msgIndex) == 0 {
 		return nil
+	}
+
+	// A per-service config held by an exported service_state collection
+	// (kernel.ConfigState.tenant_configs) rather than by a grpc_config Config:
+	// subscribe read-only to that ONE collection. The serving side pins the
+	// read to the caller's own tenant and projects each entry to the caller's
+	// slice (ResolveTenantPinnedBoundaries), so the client is narrowed to the
+	// boundary it is granted and opens no Watch on the root's others.
+	pinned, err := ResolveTenantPinnedBoundaries(allFiles)
+	if err != nil {
+		return fmt.Errorf("tenant config subscriptions: %w", err)
+	}
+	for _, b := range pinned {
+		for _, sl := range b.Slices {
+			if sl.Caller != config.SelfPackage {
+				continue
+			}
+			idx := -1
+			for i, existing := range config.States {
+				if existing.ProtoFile == b.ProtoFile && existing.MessageName == b.StateRoot {
+					idx = i
+					break
+				}
+			}
+			switch {
+			case idx < 0:
+				config.States = append(config.States, tactype.StateEntry{
+					ProtoFile:   b.ProtoFile,
+					MessageName: b.StateRoot,
+					AccessMode:  tactype.AccessRO,
+					Boundaries:  []string{b.Field},
+				})
+			case len(config.States[idx].Boundaries) > 0:
+				// A second pinned collection of the same root.
+				config.States[idx].Boundaries = append(config.States[idx].Boundaries, b.Field)
+			default:
+				// Already holds the whole root (it is the backing store).
+				continue
+			}
+			zap.L().Info("Auto-injected tenant-pinned config subscription",
+				zap.String("self", config.SelfPackage),
+				zap.String("owner", b.Package),
+				zap.String("state", b.StateRoot),
+				zap.String("boundary", b.Field))
+		}
 	}
 
 	// For each grpc_config entry, check whether its Config type transitively

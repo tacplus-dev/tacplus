@@ -104,6 +104,21 @@ func AppendStateServiceToProtos(tempProtoDir, inputDir string) error {
 	// whole descriptor set, since importers live in other services' protos.
 	importersByRoot := stateImportersByRoot(dp.GetAllFiles())
 
+	// Tenant-pinned reads (#130): "package.StateName" → collection field →
+	// the services pinned on that collection's read RPCs.
+	pinned, err := ResolveTenantPinnedBoundaries(dp.GetAllFiles())
+	if err != nil {
+		return err
+	}
+	pinnedByRoot := make(map[string]map[string][]string)
+	for _, b := range pinned {
+		key := b.Package + "." + b.StateRoot
+		if pinnedByRoot[key] == nil {
+			pinnedByRoot[key] = make(map[string][]string)
+		}
+		pinnedByRoot[key][b.Field] = b.Callers()
+	}
+
 	// State services whose root declares disable_auth_message: no token
 	// validation at all, so no caller list — the auth post-condition skips them.
 	// Keyed by "<relPath>/<ServiceName>" because a service name alone is not
@@ -173,10 +188,11 @@ func AppendStateServiceToProtos(tempProtoDir, inputDir string) error {
 			}
 
 			fe.roots = append(fe.roots, stateRootEntry{
-				stateRoot:    &fileDesc.Messages[i],
-				stateName:    stateName,
-				readsState:   readsState,
-				authServices: authServices,
+				stateRoot:     &fileDesc.Messages[i],
+				stateName:     stateName,
+				readsState:    readsState,
+				authServices:  authServices,
+				pinnedCallers: pinnedByRoot[key],
 			})
 		}
 	}
@@ -423,6 +439,7 @@ func buildStateService(
 	readsState []string,
 	authServices []string,
 	eventSurfaces map[string]stateEventSurface,
+	pinnedCallers map[string][]string,
 ) stateServiceResult {
 	pkg := fileDesc.Package
 
@@ -674,21 +691,29 @@ func buildStateService(
 			fmt.Fprintf(&buf, "\trpc WatchQuery%s(%sQueryRequest) returns (stream %sQueryResponse);\n", b.goName, b.goName, b.goName)
 			continue
 		}
+		// A tenant-pinned collection's READ RPCs carry the pinned callers on top
+		// of the service-level list; its mutators keep the service-level list.
+		readOpt := ";\n"
+		if pinned := pinnedCallers[b.fieldName]; len(pinned) > 0 && len(authServices) > 0 {
+			readOpt = " {\n" + formatEventBusS2SMethodOption(&model.EventBusMethodS2S{
+				AuthServices: append(append([]string{}, authServices...), pinned...),
+			}) + "\t}\n"
+		}
 		fmt.Fprintf(&buf, "\t// Collection: %s\n", b.goName)
-		fmt.Fprintf(&buf, "\trpc Get%s(%sGetRequest) returns (%sValueResponse);\n", b.goName, b.goName, b.goName)
+		fmt.Fprintf(&buf, "\trpc Get%s(%sGetRequest) returns (%sValueResponse)%s", b.goName, b.goName, b.goName, readOpt)
 		fmt.Fprintf(&buf, "\trpc Put%s(%sPutRequest) returns (%sValueResponse);\n", b.goName, b.goName, b.goName)
 		fmt.Fprintf(&buf, "\trpc Set%s(%sPutRequest) returns (MapEmpty);\n", b.goName, b.goName)
 		fmt.Fprintf(&buf, "\trpc Remove%s(%sGetRequest) returns (%sValueResponse);\n", b.goName, b.goName, b.goName)
 		fmt.Fprintf(&buf, "\trpc Delete%s(%sGetRequest) returns (MapEmpty);\n", b.goName, b.goName)
-		fmt.Fprintf(&buf, "\trpc ContainsKey%s(%sGetRequest) returns (%sValueResponse);\n", b.goName, b.goName, b.goName)
-		fmt.Fprintf(&buf, "\trpc GetAll%s(%sGetAllRequest) returns (%sEntriesResponse);\n", b.goName, b.goName, b.goName)
-		fmt.Fprintf(&buf, "\trpc KeySet%s(%sKeysRequest) returns (%sKeysResponse);\n", b.goName, b.goName, b.goName)
-		fmt.Fprintf(&buf, "\trpc Size%s(%sSizeRequest) returns (%sSizeResponse);\n", b.goName, b.goName, b.goName)
+		fmt.Fprintf(&buf, "\trpc ContainsKey%s(%sGetRequest) returns (%sValueResponse)%s", b.goName, b.goName, b.goName, readOpt)
+		fmt.Fprintf(&buf, "\trpc GetAll%s(%sGetAllRequest) returns (%sEntriesResponse)%s", b.goName, b.goName, b.goName, readOpt)
+		fmt.Fprintf(&buf, "\trpc KeySet%s(%sKeysRequest) returns (%sKeysResponse)%s", b.goName, b.goName, b.goName, readOpt)
+		fmt.Fprintf(&buf, "\trpc Size%s(%sSizeRequest) returns (%sSizeResponse)%s", b.goName, b.goName, b.goName, readOpt)
 		fmt.Fprintf(&buf, "\trpc Clear%s(%sClearRequest) returns (MapEmpty);\n", b.goName, b.goName)
 		fmt.Fprintf(&buf, "\trpc PutIfAbsent%s(%sPutRequest) returns (%sValueResponse);\n", b.goName, b.goName, b.goName)
-		fmt.Fprintf(&buf, "\trpc Watch%s(trace.TraceRequest) returns (stream %sEntriesResponse);\n", b.goName, b.goName)
-		fmt.Fprintf(&buf, "\trpc Query%s(%sQueryRequest) returns (%sQueryResponse);\n", b.goName, b.goName, b.goName)
-		fmt.Fprintf(&buf, "\trpc WatchQuery%s(%sQueryRequest) returns (stream %sQueryResponse);\n", b.goName, b.goName, b.goName)
+		fmt.Fprintf(&buf, "\trpc Watch%s(trace.TraceRequest) returns (stream %sEntriesResponse)%s", b.goName, b.goName, readOpt)
+		fmt.Fprintf(&buf, "\trpc Query%s(%sQueryRequest) returns (%sQueryResponse)%s", b.goName, b.goName, b.goName, readOpt)
+		fmt.Fprintf(&buf, "\trpc WatchQuery%s(%sQueryRequest) returns (stream %sQueryResponse)%s", b.goName, b.goName, b.goName, readOpt)
 	}
 
 	for _, b := range queues {
@@ -945,6 +970,11 @@ type stateRootEntry struct {
 	// service (owner + declared state_import-ers). Empty only when the root is
 	// disable_auth_message, where token validation is skipped entirely.
 	authServices []string
+	// pinnedCallers maps a collection field to the services holding a
+	// tenant-pinned read of it (ResolveTenantPinnedBoundaries). Their names go
+	// on that collection's READ RPCs only, as a per-RPC override of the
+	// service-level list; the wrappers then serve them one tenant, projected.
+	pinnedCallers map[string][]string
 }
 
 func appendStateServicesForFile(
@@ -959,7 +989,7 @@ func appendStateServicesForFile(
 	var results []stateServiceResult
 	var merged sharedMessageNeeds
 	for _, root := range roots {
-		r := buildStateService(fileDesc, root.stateRoot, root.stateName, root.readsState, root.authServices, eventSurfaces)
+		r := buildStateService(fileDesc, root.stateRoot, root.stateName, root.readsState, root.authServices, eventSurfaces, root.pinnedCallers)
 		results = append(results, r)
 		merged.mapEmpty = merged.mapEmpty || r.needs.mapEmpty
 		merged.queueReceipt = merged.queueReceipt || r.needs.queueReceipt

@@ -460,6 +460,10 @@ func generateServiceWrappers(config *tactype.Config, servicesInfo []ServiceInfo,
 		allFiles = append(allFiles, mf)
 	}
 	san := newJavaEgressSanitizer(allFiles)
+	san.tenantPins, err = proto.TenantPinnedRPCIndex(descriptorParser.GetAllFiles())
+	if err != nil {
+		return nil, err
+	}
 
 	// Q2: resolve the accounting topic once so every wrapper can drop that
 	// topic's own publish RPC from its accounting map. See
@@ -771,7 +775,14 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	// The generated MCP session carrier, when this service has one. It is the
 	// one rpc the wrapper serves without a handler method.
 	mcpCarrier := javaMcpCarrierMethod(targetService)
+	var tenantPins []proto.TenantPinnedRPC
 	for _, method := range targetService.Methods {
+		if pin, ok := san.tenantPin(info.Package, targetService.Name, method.Name); ok {
+			if err := javaTenantPinShapeError(method, pin); err != nil {
+				return false, fmt.Errorf("%s.%s: %w", targetService.Name, method.Name, err)
+			}
+			tenantPins = append(tenantPins, pin)
+		}
 		// An RPC_PRINCIPAL_MCP rpc is a tool, not a gRPC call: it gets no
 		// @Override on the gRPC ImplBase and no per-method auth registration.
 		// The generated ImplBase already answers UNIMPLEMENTED for a method the
@@ -920,6 +931,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		}
 	}
 	handlerInterface.WriteString("    }\n")
+	grpcMethods.WriteString(javaTenantPinClass(tenantPins))
 
 	// Build registerMethodAuth static method code.
 	var registerMethodAuth string
@@ -1943,6 +1955,13 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		// unary shape shares.
 		deviceGate := javaRequiresDeviceGate(method, servicePackage, serviceName)
 
+		// Tenant-pinned read (#130): resolve and gate beside the device gate,
+		// filter ahead of response validation.
+		if pin, ok := san.tenantPin(servicePackage, serviceName, method.Name); ok {
+			deviceGate += javaTenantPinPre(pin, "            ")
+			outputValidation = javaTenantPinPost(pin, outputType, "                ") + outputValidation
+		}
+
 		// When output is Empty, handler returns void — wrapper constructs the Empty response
 		if emptyOutput {
 			if hasAccounting {
@@ -2541,9 +2560,15 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 
 	case !method.ClientStreaming && method.ServerStreaming:
 		// Server streaming — authorize, extract caller, delegate to handler
-		handlerCall := fmt.Sprintf("handler.%s(caller, request, %s)", methodName, streamResponseObserver)
+		// Tenant-pinned read (#130): every frame is filtered before validation.
+		pinPre := ""
+		if pin, ok := san.tenantPin(servicePackage, serviceName, method.Name); ok {
+			pinPre = strings.TrimPrefix(javaTenantPinPre(pin, "            "), "\n") + "\n            "
+			streamResponseObserver = javaTenantPinStream(pin, streamResponseObserver)
+		}
+		handlerCall := fmt.Sprintf("%shandler.%s(caller, request, %s)", pinPre, methodName, streamResponseObserver)
 		if handlerEmpty {
-			handlerCall = fmt.Sprintf("handler.%s(caller, %s)", methodName, streamResponseObserver)
+			handlerCall = fmt.Sprintf("%shandler.%s(caller, %s)", pinPre, methodName, streamResponseObserver)
 		}
 
 		if hasAccounting {

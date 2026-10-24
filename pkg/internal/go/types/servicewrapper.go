@@ -84,6 +84,10 @@ func generateServiceWrappers(config *tactype.Config, servicesInfo []ServiceInfo,
 		allFiles = append(allFiles, mf)
 	}
 	san := newEgressSanitizer(allFiles)
+	san.tenantPins, err = proto.TenantPinnedRPCIndex(descriptorParser.GetAllFiles())
+	if err != nil {
+		return nil, err
+	}
 
 	// Q2: resolve the accounting topic once so every wrapper can drop that
 	// topic's own publish RPC from its accounting map. See
@@ -209,10 +213,17 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	var handlerInterface strings.Builder
 	var grpcWrappers strings.Builder
 	var methodAuthLines []string
+	var tenantPins []proto.TenantPinnedRPC
 	hasRequiresDevice := false
 	for _, service := range targetServices {
 		handlerInterface.WriteString(generateGoHandlerInterface(service, info.Package))
 		for _, method := range service.Methods {
+			if pin, ok := san.tenantPin(info.Package, service.Name, method.Name); ok {
+				if err := goTenantPinShapeError(method, pin); err != nil {
+					return fmt.Errorf("%s.%s: %w", service.Name, method.Name, err)
+				}
+				tenantPins = append(tenantPins, pin)
+			}
 			// An RPC_PRINCIPAL_MCP rpc is a tool, not a gRPC call: it gets no
 			// method on the wrapper and no per-method auth registration. The
 			// wrapper embeds types.Unimplemented<Service>Server, so a method the
@@ -578,6 +589,10 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 
 	if err := os.WriteFile(outputPath, formatted, 0644); err != nil {
 		return fmt.Errorf("failed to write service wrapper: %w", err)
+	}
+
+	if err := writeGoTenantPinFile(goTenantPinFilePath(outputPath), grpcPkgName, serverName, typesModulePath, serviceManagerImportPath, tenantPins); err != nil {
+		return fmt.Errorf("failed to write tenant-pinned read helpers: %w", err)
 	}
 
 	// The MCP termination lands in its own file beside the wrapper: same
@@ -1431,6 +1446,11 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 		}
 		callerExtract := callerExtractFor("stream.Context()")
 		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return")
+		// Tenant-pinned read (#130): every frame is filtered before validation.
+		if pin, ok := san.tenantPin(servicePackage, svc.Name, method.Name); ok {
+			callerExtract += goTenantPinPre(pin, "return")
+			serverStreamArg = goTenantPinStream(pin, goOutput, serverStreamArg)
+		}
 		handlerCall := fmt.Sprintf("p.handler.%s(caller, req, %s)", method.Name, serverStreamArg)
 		if handlerEmpty {
 			handlerCall = fmt.Sprintf("p.handler.%s(caller, %s)", method.Name, serverStreamArg)
@@ -1698,6 +1718,13 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 	callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return nil,")
 	callerExtract += goRequiresDeviceGate(method, svc, servicePackage)
 
+	// Tenant-pinned read (#130): resolve and gate before the handler; the
+	// filter itself runs after it (unarySan below).
+	tenantPin, isTenantPinned := san.tenantPin(servicePackage, svc.Name, method.Name)
+	if isTenantPinned {
+		callerExtract += goTenantPinPre(tenantPin, "return nil,")
+	}
+
 	// (spec.owner_default): refuse the access the row's owner does not hold.
 	// The generation-time refusal for every shape that cannot host this check
 	// has already fired in generateServiceWrapper, so the error is dead here.
@@ -1739,6 +1766,9 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 	// itself, so it must precede any transformation of the response.
 	unarySan = goMinGroupSizeGuard(method, san.minGroupSizeField(method.FullOutputType, servicePackage), "resp", "\t") +
 		unaryEgress + unarySan
+	if isTenantPinned {
+		unarySan = goTenantPinPost(tenantPin) + unarySan
+	}
 
 	// Handler call — sanitize the context and omit Empty/TraceRequest request
 	handlerCall := fmt.Sprintf("p.handler.%s(sanitizeContext(ctx), caller, req)", method.Name)

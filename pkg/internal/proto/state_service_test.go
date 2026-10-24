@@ -16,7 +16,7 @@ import (
 
 func TestTopicSubscribeStreamsMetadataEnvelope(t *testing.T) {
 	stateRoot := topicStateRootForTest()
-	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil, nil)
+	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil, nil, nil)
 
 	for _, want := range []string{
 		"rpc PublishToEvents(stream DemoEvent) returns (stream eventbus_support.PublishResponse);",
@@ -110,7 +110,7 @@ func TestStateServiceSyntheticCollectionMessagesCarryTraceFields(t *testing.T) {
 			IsRepeated: true,
 		}},
 	}
-	stateProto := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil, nil).serviceProto
+	stateProto := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil, nil, nil).serviceProto
 
 	for _, messageName := range []string{
 		"NodesGetRequest",
@@ -139,7 +139,7 @@ func TestGeneratedServicesKeepSynthesizedMarkerAsLeadingComment(t *testing.T) {
 			TypeKind: "message",
 		}},
 	}
-	stateProto := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil, nil).serviceProto
+	stateProto := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil, nil, nil).serviceProto
 	assertGeneratedServiceMarkerLeadsService(t, stateProto, StateServiceName(stateRoot.Name))
 
 	storeProto := buildStoreService("demo", "DemoStore", "id", nil)
@@ -158,7 +158,7 @@ func TestStateImportEmitsReadOnlyStateServiceBoundary(t *testing.T) {
 			},
 		}},
 	}
-	stateProto := buildStateService(&parser.FileDescriptor{Package: "consumer"}, stateRoot, stateRoot.Name, nil, nil, nil).serviceProto
+	stateProto := buildStateService(&parser.FileDescriptor{Package: "consumer"}, stateRoot, stateRoot.Name, nil, nil, nil, nil).serviceProto
 
 	for _, want := range []string{
 		"rpc GetImportedCurrent(trace.TraceRequest) returns (owner.OwnerRecord);",

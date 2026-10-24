@@ -27,7 +27,7 @@ func TestTopicSubscribeRPCCarriesDeclaredS2SSubscribeAuthServices(t *testing.T) 
 		},
 	}
 	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name,
-		nil, []string{"demo"}, surfaces)
+		nil, []string{"demo"}, surfaces, nil)
 
 	want := "rpc SubscribeToEvents(stream eventbus_support.SubscribeRequest) returns (stream DemoEventBusEventsSubscribeRecord) {\n\t\toption (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: [\"stratum\"]};\n\t}"
 	if !strings.Contains(result.serviceProto, want) {
@@ -48,7 +48,7 @@ func TestTopicPublishAndSubscribeSurfacesAreIndependent(t *testing.T) {
 		},
 	}
 	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name,
-		nil, []string{"demo"}, surfaces)
+		nil, []string{"demo"}, surfaces, nil)
 
 	publishLine := "rpc PublishToEvents(stream DemoEvent) returns (stream eventbus_support.PublishResponse) {\n\t\toption (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: [\"*\"]};\n\t}"
 	if !strings.Contains(result.serviceProto, publishLine) {
@@ -70,7 +70,7 @@ func TestTopicSubscribeOnlyDeclarationLeavesPublishAtServiceDefault(t *testing.T
 		},
 	}
 	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name,
-		nil, []string{"demo"}, surfaces)
+		nil, []string{"demo"}, surfaces, nil)
 
 	if !strings.Contains(result.serviceProto,
 		"rpc PublishToEvents(stream DemoEvent) returns (stream eventbus_support.PublishResponse);") {
@@ -92,7 +92,7 @@ func TestTopicWithoutS2SSubscribeKeepsSubscribeAtServiceDefault(t *testing.T) {
 		},
 	}
 	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name,
-		nil, []string{"demo"}, surfaces)
+		nil, []string{"demo"}, surfaces, nil)
 
 	if !strings.Contains(result.serviceProto,
 		"rpc SubscribeToEvents(stream eventbus_support.SubscribeRequest) returns (stream DemoEventBusEventsSubscribeRecord);") {

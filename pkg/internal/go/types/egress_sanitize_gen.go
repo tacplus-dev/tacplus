@@ -9,6 +9,7 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
+	"github.com/tacplus-dev/tacplus/pkg/internal/proto"
 )
 
 // This file is the emit-time side of RED-1: the generated service WRAPPER — not
@@ -32,6 +33,9 @@ type egressSanitizer struct {
 	resolver *parser.MessageResolver
 	msgs     map[string]*model.Message // key: pkg + "\x00" + name
 	enums    map[string]*model.Enum    // key: pkg + "\x00" + name
+	// tenantPins is every tenant-pinned read RPC (#130), keyed
+	// "<package>.<StateService>/<Method>" (proto.TenantPinnedRPCIndex).
+	tenantPins map[string]proto.TenantPinnedRPC
 }
 
 // newEgressSanitizer builds the emit-time oracle over all parsed proto files.

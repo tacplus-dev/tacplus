@@ -690,6 +690,45 @@ access is enforced server-side: the backing store validates the caller's token
 against the proto-declared permissions. Writing a custom gRPC client to call
 the raw Set RPC will fail.
 
+### Per-Tenant Config Held in a State Root
+
+A tenant's per-service configuration — the generated `tenant_config.TenantConfig`,
+one field per `(spec.config_slice)` — may be held by an exported state root as
+a collection keyed by tenant:
+
+```protobuf
+message TenantConfigEntry {
+  string                     tenant_name = 1 [(spec.indexed) = true];
+  tenant_config.TenantConfig config      = 2;
+}
+
+message ConfigState {
+  option (spec.service_state) = {label: ["kernel"], export: true};
+  repeated TenantConfigEntry tenant_configs = 2;
+}
+```
+
+Every service owning a slice of that TenantConfig is then subscribed read-only
+to that one collection — no `state_import` needed — and holds a
+**tenant-pinned** read of it, enforced by the serving side:
+
+- a caller in exactly `/tenants/<t>` sees only the entry keyed `<t>`; a
+  Get/ContainsKey of another key is `PERMISSION_DENIED`, and
+  GetAll/KeySet/Size/Watch/Query/WatchQuery carry only its own entry;
+- a caller in `/system` (or below) sees every tenant's entry;
+- a caller in any other namespace is `PERMISSION_DENIED`;
+- every entry it receives is projected to the key and its own slice — another
+  service's slice never reaches it.
+
+The grant covers that collection's read RPCs only: nothing else of the root and
+no write. The owner and services declaring a whole-root `state_import` keep
+their access unchanged. The item needs a singular string `(spec.indexed)` key
+and exactly one singular TenantConfig field; any other shape that holds a
+TenantConfig fails generation. The Go and Java state-service wrappers render
+the filter; a store implemented outside tacplus reads the grant from
+`codegen-config.json` (`securityPolicies[].tenantPinnedReads`), never from
+`boundaryGrants`.
+
 ### Views Across Boundaries
 
 `view_member` aggregates collections across state roots into a single read-only view:

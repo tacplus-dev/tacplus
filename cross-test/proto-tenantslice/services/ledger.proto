@@ -9,6 +9,11 @@
 // its slice. No hand-annotated (spec.per_service_config) message exists here:
 // until 2026-10-15 the subscription step saw only the TenantConfig STUB in the
 // flattened proto tree and emitted no subscription, in every language.
+//
+// The same slice is also held by registrar's exported RegistrarState (a
+// service_state collection keyed by tenant, the shape of kernel.ConfigState),
+// so ledger is also subscribed read-only to RegistrarState.tenant_configs —
+// that one collection only — and served it tenant-pinned (issue #130).
 
 syntax = "proto3";
 

@@ -699,11 +699,13 @@ func protoFiles(dir string) ([]string, error) {
 }
 
 var (
-	importRe   = regexp.MustCompile(`(?m)^\s*import\s+(?:public\s+|weak\s+)?"([^"]+)"\s*;`)
-	serviceRe  = regexp.MustCompile(`(?s)option\s*\(\s*spec\.service\s*\)\s*=\s*\{([^}]*)\}`)
-	vserviceRe = regexp.MustCompile(`(?s)option\s*\(\s*spec\.vservice\s*\)\s*=\s*\{([^}]*)\}`)
-	nameRe2    = regexp.MustCompile(`\bname\s*:\s*"([^"]+)"`)
-	packageRe  = regexp.MustCompile(`(?m)^\s*package\s+([A-Za-z_][\w.]*)\s*;`)
+	importRe       = regexp.MustCompile(`(?m)^\s*import\s+(?:public\s+|weak\s+)?"([^"]+)"\s*;`)
+	serviceRe      = regexp.MustCompile(`(?s)option\s*\(\s*spec\.service\s*\)\s*=\s*\{([^}]*)\}`)
+	vserviceRe     = regexp.MustCompile(`(?s)option\s*\(\s*spec\.vservice\s*\)\s*=\s*\{([^}]*)\}`)
+	nameRe2        = regexp.MustCompile(`\bname\s*:\s*"([^"]+)"`)
+	packageRe      = regexp.MustCompile(`(?m)^\s*package\s+([A-Za-z_][\w.]*)\s*;`)
+	serviceBlockRe = regexp.MustCompile(`(?m)^\s*service\s+[A-Za-z_][A-Za-z0-9_]*\s*\{`)
+	grpcConfigRe   = regexp.MustCompile(`\(\s*spec\.grpc_config\s*\)`)
 	// optionRefRe matches a "package.Name" string value inside a spec option,
 	// e.g. source: "userentitlements.EntitlementEvalInput".
 	optionRefRe = regexp.MustCompile(`[a-z_]+\s*:\s*"([a-z_][a-z0-9_]*)\.[A-Z][A-Za-z0-9_.]*"`)
@@ -720,7 +722,9 @@ func importsOf(src string) []string {
 
 // declaresIdentity reports whether src carries the file-level identity name:
 // (spec.service) for a service (its explicit name, or the package when no name
-// is given), (spec.vservice) for a vservice.
+// is given), (spec.vservice) for a vservice. A service file with no
+// (spec.service) option at all is identified by its package, the way the
+// generator does, provided it declares a gRPC service or a grpc_config.
 func declaresIdentity(src, name string, isService bool) bool {
 	src = stripComments(src)
 	re := vserviceRe
@@ -728,13 +732,14 @@ func declaresIdentity(src, name string, isService bool) bool {
 		re = serviceRe
 	}
 	m := re.FindStringSubmatch(src)
-	if m == nil {
-		return false
-	}
-	if n := nameRe2.FindStringSubmatch(m[1]); n != nil {
-		return n[1] == name
-	}
-	if !isService {
+	if m != nil {
+		if n := nameRe2.FindStringSubmatch(m[1]); n != nil {
+			return n[1] == name
+		}
+		if !isService {
+			return false
+		}
+	} else if !isService || !(serviceBlockRe.MatchString(src) || grpcConfigRe.MatchString(src)) {
 		return false
 	}
 	if pm := packageRe.FindStringSubmatch(src); pm != nil {

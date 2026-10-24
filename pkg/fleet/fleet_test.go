@@ -250,3 +250,15 @@ service Store { option (spec.service_s2s) = {}; rpc Do(Req) returns (Req); }
 		t.Fatal("a trait hosted elsewhere must not come along")
 	}
 }
+
+// A service proto with no (spec.service) option is identified by its package,
+// as the generator identifies it, when it declares a service or a grpc_config.
+func TestDeclaresIdentityWithoutServiceOption(t *testing.T) {
+	src := "syntax = \"proto3\";\npackage operator;\nimport \"sys/spec.proto\";\nmessage Config { option (spec.grpc_config) = {service_name: \"operator\"}; }\n"
+	if !declaresIdentity(src, "operator", true) {
+		t.Fatal("a grpc_config-declaring file is the service named by its package")
+	}
+	if declaresIdentity("syntax = \"proto3\";\npackage shapes;\nmessage Box {}\n", "shapes", true) {
+		t.Fatal("a plain message file is not a service")
+	}
+}

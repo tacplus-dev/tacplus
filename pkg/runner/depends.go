@@ -302,3 +302,33 @@ var (
 	ownServiceBlockRe  = regexp.MustCompile(`(?m)^\s*service\s+[A-Za-z_][A-Za-z0-9_]*\s*\{`)
 	ownGrpcConfigRe    = regexp.MustCompile(`\(\s*spec\.grpc_config\s*\)`)
 )
+
+// ownServicePackage returns the proto package (first segment) of the service
+// declared by the files in protoDir, when exactly one package declares one;
+// "" when none does or several do.
+func ownServicePackage(protoDir string) string {
+	pkgs := map[string]bool{}
+	_ = filepath.WalkDir(protoDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".proto") {
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		src := string(data)
+		if ownServiceNameRe.MatchString(src) || ownServiceNoNameRe.MatchString(src) || ownServiceBlockRe.MatchString(src) || ownGrpcConfigRe.MatchString(src) {
+			if pm := ownPackageRe.FindStringSubmatch(src); pm != nil {
+				pkgs[strings.SplitN(pm[1], ".", 2)[0]] = true
+			}
+		}
+		return nil
+	})
+	if len(pkgs) != 1 {
+		return ""
+	}
+	for p := range pkgs {
+		return p
+	}
+	return ""
+}

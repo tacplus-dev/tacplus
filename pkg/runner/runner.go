@@ -236,6 +236,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 	// Resolve proto source. In sys-only mode use an empty temp dir so the
 	// builder has a valid (empty) input; all lib wrappers come from embedded protos.
 	var absProtoDir string
+	var ownProtoDir string // the project's own proto dir, before any dependency merge
 	var protoCleanup func()
 	if sysOnly {
 		tempDir, err := os.MkdirTemp("", "tacplus-sys-*")
@@ -258,6 +259,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 			return nil, fmt.Errorf("failed to resolve proto source: %w", err)
 		}
 		absProtoDir = dir
+		ownProtoDir = dir
 		protoCleanup = cleanup
 	} else {
 		// Multiple sources: resolve each (each with its own proto/-subdir probe)
@@ -279,6 +281,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 			dirs = append(dirs, dir)
 			cleanups = append(cleanups, cleanup)
 		}
+		ownProtoDir = dirs[0]
 		// Declared dependencies (tacplus.yaml depends) join the merge: their
 		// protos are what the declared S2S clients generate from. An explicit
 		// --src overrides yaml sourcing entirely, depends included: a fleet
@@ -450,7 +453,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 		DepsYAMLPath: depsYAMLPath,
 		VersionTag:   resolvedVersion,
 		LocalMode:    localMode,
-		SelfPackage:  selfPackageFromCanonical(yamlPkg),
+		SelfPackage:  selfPackage(yamlPkg, ownProtoDir),
 		SysOnly:      sysOnly,
 	}
 
@@ -714,6 +717,18 @@ func resolveProtoTag(tag string) (string, bool) {
 
 // selfPackageFromCanonical extracts the proto package name (last segment) from
 // a canonical Java-style package (e.g. "com.gitlab...services.gateway" → "gateway").
+// selfPackage is the proto package of the service this project generates for:
+// the last segment of tacplus.yaml pkg, or, when pkg is omitted (derived from
+// go.mod), the one package the project's own proto dir declares a service in.
+// Once dependencies are merged in, nothing else tells the generator which of
+// the services in the tree is its own.
+func selfPackage(yamlPkg, ownProtoDir string) string {
+	if s := selfPackageFromCanonical(yamlPkg); s != "" {
+		return s
+	}
+	return ownServicePackage(ownProtoDir)
+}
+
 func selfPackageFromCanonical(canonical string) string {
 	if canonical == "" {
 		return ""

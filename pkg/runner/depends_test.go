@@ -121,3 +121,18 @@ func TestResolveDependenciesIsTransitive(t *testing.T) {
 		t.Fatalf("kernel's own dependency opa not staged: %v", err)
 	}
 }
+
+// With pkg omitted from tacplus.yaml, the project's own proto dir says which
+// service is its own: one declaring package, or nothing when ambiguous.
+func TestOwnServicePackage(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "proto")
+	writeFile(t, filepath.Join(dir, "services", "doppelganger.proto"), "syntax = \"proto3\";\npackage doppelganger;\noption (spec.service) = {name: \"doppelganger\"};\nservice Doppelganger {}\n")
+	writeFile(t, filepath.Join(dir, "common", "shapes.proto"), "syntax = \"proto3\";\npackage shapes;\nmessage Shape {}\n")
+	if got := ownServicePackage(dir); got != "doppelganger" {
+		t.Fatalf("ownServicePackage = %q, want doppelganger (shapes declares no service)", got)
+	}
+	writeFile(t, filepath.Join(dir, "services", "other.proto"), "syntax = \"proto3\";\npackage other;\nservice Other {}\n")
+	if got := ownServicePackage(dir); got != "" {
+		t.Fatalf("ownServicePackage = %q, want \"\" when two packages declare services", got)
+	}
+}

@@ -104,9 +104,6 @@ func Generate(config *tactype.Config) error {
 		return err
 	}
 
-	// generated/tenant_config.proto and project_config.proto are already the real
-	// aggregates: CopyAndPrepareProtoDir, which built protoDir, generates them.
-
 	// Append state/store service definitions BEFORE trace injection so that
 	// auto-appended message types (LeaderRecord, EventBus envelopes, etc.)
 	// also receive trace fields.
@@ -159,6 +156,16 @@ func Generate(config *tactype.Config) error {
 	// wrappers name an AccountingMethod field the compiled type does not have.
 	if _, _, _, err := proto.ScanAndGenerateConfigHolder(config.InputDir, protoDir); err != nil {
 		return fmt.Errorf("failed to regenerate generated/*.proto after service injection: %w", err)
+	}
+	// That scan rewrites generated/tenant_config.proto and project_config.proto
+	// with empty stubs. Regenerate the real aggregates over them, as Go and Java
+	// do after their last scan; without this prost compiles the stub and every
+	// (spec.config_slice) field is missing from TenantConfig / ProjectConfig.
+	if err := proto.GenerateTenantConfig(config.InputDir, config.FlatProtoDir, protoDir); err != nil {
+		return fmt.Errorf("failed to generate tenant_config.proto: %w", err)
+	}
+	if err := proto.GenerateProjectConfig(config.InputDir, config.FlatProtoDir, protoDir); err != nil {
+		return fmt.Errorf("failed to generate project_config.proto: %w", err)
 	}
 
 	// Auto-register virtual service gRPC servers based on proto annotations.

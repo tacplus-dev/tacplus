@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 
 	"github.com/tacplus-dev/tacplus/pkg/protosrc"
 	"github.com/tacplus-dev/tacplus/pkg/registry"
@@ -89,9 +90,11 @@ func resolveDependencies(depends []string, firstSourceDir string) ([]string, []f
 }
 
 // stageDependency copies a dependency's proto tree into a temp dir without
-// its dependencies.yaml. A dependency contributes its protos (and its
-// registry lock, which must agree with ours); its language and tool pins are
-// its own build's business and must not collide with this project's.
+// its dependencies.yaml, and with its registry lock reduced to wire facts
+// (names, ids, slice fields). A dependency contributes its protos and the
+// ids they are generated against; its language and tool pins, and its lock's
+// metadata (which registries it names, where contracts live, visibility),
+// are its own repo's business and must not collide with this project's.
 func stageDependency(dir string) (string, func(), error) {
 	staged, err := os.MkdirTemp("", "tacplus-dep-*")
 	if err != nil {
@@ -116,6 +119,12 @@ func stageDependency(dir string) (string, func(), error) {
 		if err != nil {
 			return err
 		}
+		if rel == "registry.yaml" {
+			data, err = wireOnlyLock(data)
+			if err != nil {
+				return fmt.Errorf("%s: %w", p, err)
+			}
+		}
 		dst := filepath.Join(staged, rel)
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
@@ -127,6 +136,41 @@ func stageDependency(dir string) (string, func(), error) {
 		return "", nil, err
 	}
 	return staged, cleanup, nil
+}
+
+// wireOnlyLock reduces a registry.yaml to the facts generation needs from a
+// dependency: each entry's name, id or field_id, and slice fields. The
+// `registries:`, `scope:`, `id_min:` keys and the contract/visibility notes
+// are dropped so two locks that agree on the wire never collide on metadata.
+func wireOnlyLock(data []byte) ([]byte, error) {
+	var doc map[string]any
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	out := map[string]any{}
+	keep := map[string]bool{"name": true, "id": true, "field_id": true, "tenant_slice_field": true, "project_slice_field": true}
+	for _, section := range []string{"services", "vservices"} {
+		list, ok := doc[section].([]any)
+		if !ok {
+			continue
+		}
+		var entries []any
+		for _, e := range list {
+			m, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			kept := map[string]any{}
+			for k, v := range m {
+				if keep[k] {
+					kept[k] = v
+				}
+			}
+			entries = append(entries, kept)
+		}
+		out[section] = entries
+	}
+	return yaml.Marshal(out)
 }
 
 // ProtoDirWithDepends returns a directory holding protoDir's protos together

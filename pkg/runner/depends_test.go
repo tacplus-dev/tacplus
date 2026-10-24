@@ -26,7 +26,7 @@ func TestResolveDependenciesByRegistryName(t *testing.T) {
 	root := t.TempDir()
 	depRepo := filepath.Join(root, "llmproxy-repo")
 	writeFile(t, filepath.Join(depRepo, "proto", "dependencies.yaml"), "{}\n")
-	writeFile(t, filepath.Join(depRepo, "proto", "registry.yaml"), "services:\n    - {name: llmproxy, id: 75}\n")
+	writeFile(t, filepath.Join(depRepo, "proto", "registry.yaml"), "registries: [somewhere-else]\nservices:\n    - {name: llmproxy, id: 75, contract: https://elsewhere/x.git, visibility: private}\n")
 	writeFile(t, filepath.Join(depRepo, "proto", "services", "llmproxy.proto"), "syntax = \"proto3\";\npackage llmproxy;\n")
 	global := filepath.Join(root, "registry")
 	writeFile(t, filepath.Join(global, "registry.yaml"), "scope: global\nservices:\n    - {name: llmproxy, id: 75, contract: "+depRepo+", visibility: public}\n    - {name: norepo, id: 102}\n")
@@ -49,8 +49,17 @@ func TestResolveDependenciesByRegistryName(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dirs[0], "services", "llmproxy.proto")); err != nil {
 		t.Fatalf("staged dependency lacks its proto: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dirs[0], "registry.yaml")); err != nil {
+	lock, err := os.ReadFile(filepath.Join(dirs[0], "registry.yaml"))
+	if err != nil {
 		t.Fatalf("staged dependency lacks its registry lock: %v", err)
+	}
+	if !strings.Contains(string(lock), "llmproxy") || !strings.Contains(string(lock), "75") {
+		t.Fatalf("staged lock must keep the wire facts: %s", lock)
+	}
+	for _, meta := range []string{"registries", "contract", "visibility", "elsewhere"} {
+		if strings.Contains(string(lock), meta) {
+			t.Fatalf("staged lock must drop %q (metadata that may legitimately differ from ours): %s", meta, lock)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(dirs[0], "dependencies.yaml")); !os.IsNotExist(err) {
 		t.Fatal("a dependency's dependencies.yaml must not be merged; its pins are its own build's")

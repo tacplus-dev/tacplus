@@ -1,0 +1,59 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The SECOND owner shape of the generated-TenantConfig subscription fixture
+// (issue #130): the per-tenant configuration is held by an exported
+// (spec.service_state) root as a collection keyed by tenant — the shape of
+// kernel.ConfigState.tenant_configs — rather than by a grpc_config Config.
+//
+// ledger owns a slice of the generated TenantConfig, so its build must be
+// subscribed read-only to RegistrarState.tenant_configs and to nothing else of
+// the root, and the serving side must hand a ledger instance in /tenants/x only
+// x's entry, projected to the ledger slice. registrar's own slice
+// (registrarslice.RegistrarTenantConfig.client_secret, in its own file as
+// kernel's slice is, since tenant_config.proto imports every slice) is the
+// "other service's config" that projection must strip: it never reaches ledger.
+
+syntax = "proto3";
+
+package registrar;
+
+import "sys/spec.proto";
+import "generated/tenant_config.proto";
+
+option (spec.service) = {name: "registrar"};
+
+service RegistrarService {
+  option (spec.service_s2s) = {label: "RegistrarService"};
+
+  rpc GetRegistrarStatus(GetRegistrarStatusRequest) returns (GetRegistrarStatusResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}
+
+message GetRegistrarStatusRequest {}
+
+message GetRegistrarStatusResponse {
+  // ready reports whether registrar is serving.
+  bool ready = 1;
+}
+
+// TenantConfigEntry maps a tenant to its full TenantConfig.
+message TenantConfigEntry {
+  string                     tenant_name = 1 [(spec.indexed) = true, (spec.assert_required) = true, (spec.assert_max_size) = 128];
+  tenant_config.TenantConfig config      = 2;
+}
+
+// TenantRecord is one tenant's registration. ledger holds no grant on it.
+message TenantRecord {
+  string name = 1 [(spec.indexed) = true, (spec.assert_required) = true, (spec.assert_max_size) = 128];
+}
+
+message RegistrarState {
+  option (spec.service_state) = {label: ["tenancy"], export: true};
+
+  // tenants is every registered tenant. Not tenant-pinned: no grant to ledger.
+  repeated TenantRecord tenants = 1 [(spec.assert_max_size) = 1000];
+
+  // tenant_configs is each tenant's TenantConfig, keyed by tenant name.
+  repeated TenantConfigEntry tenant_configs = 2 [(spec.assert_max_size) = 1000];
+}

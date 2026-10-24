@@ -948,7 +948,7 @@ func generateStateWrappers(config *tactype.Config, inputDir string) ([]generated
 				zap.String("stateRoot", stateRootAnnotation),
 				zap.String("proto", relPath))
 
-			client, err := generateStateWrapper(config, svc, &fileDesc.Messages[i], stateRootAnnotation, fileDesc, dp)
+			client, err := generateStateWrapper(config, svc, proto.NarrowStateRoot(config, relPath, &fileDesc.Messages[i]), stateRootAnnotation, fileDesc, dp)
 			if err != nil {
 				return fmt.Errorf("failed to generate state wrapper for %s: %w", stateRootAnnotation, err)
 			}

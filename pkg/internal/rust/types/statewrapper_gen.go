@@ -182,7 +182,7 @@ func generateRustStateClientWrappers(config *tactype.Config, inputDir string) er
 				ParentDir:   parentDir,
 			}
 
-			content, bds, err := generateRustStateWrapper(config, svc, fileDesc, &fileDesc.Messages[i], dp, accessMode)
+			content, bds, err := generateRustStateWrapper(config, svc, fileDesc, proto.NarrowStateRoot(config, relPath, &fileDesc.Messages[i]), dp, accessMode)
 			if err != nil {
 				return fmt.Errorf("failed to generate Rust state wrapper for %s: %w", stateRootAnnotation, err)
 			}

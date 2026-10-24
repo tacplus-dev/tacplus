@@ -40,7 +40,7 @@ func TestBuildStateServiceSkipsMessageValuedMapFields(t *testing.T) {
 		},
 	}
 
-	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil, nil)
+	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil, nil, nil)
 
 	if strings.Contains(result.serviceProto, "Records") || strings.Contains(result.serviceProto, "records") {
 		t.Errorf("message-valued map field became a state boundary:\n%s", result.serviceProto)
@@ -70,7 +70,7 @@ func TestBuildStateServiceSkipsScalarValuedMapFields(t *testing.T) {
 		}},
 	}
 
-	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil, nil)
+	result := buildStateService(&parser.FileDescriptor{Package: "demo"}, stateRoot, stateRoot.Name, nil, nil, nil, nil)
 	if result.singletons != 0 || result.collections != 0 {
 		t.Errorf("scalar-valued map produced %d singletons / %d collections, want 0 / 0",
 			result.singletons, result.collections)

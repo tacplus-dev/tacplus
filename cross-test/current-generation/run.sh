@@ -273,6 +273,21 @@ output-dir: "tacplus"
 EOF
 }
 
+# The same fixture built as registrar, the OWNER of the service_state shape:
+# RegistrarState.tenant_configs holds each tenant's TenantConfig (issue #130).
+write_tenantslice_owner_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.registrar"
+src: "$TENANTSLICE_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
 # The same fixture built as the record plane's HOST — the service declaring
 # (spec.record_store), which the trait names in `host`. This is the arrangement
 # every real declaration has: the trait lives in its own package, so the plane's
@@ -485,6 +500,19 @@ run_java_generated_self_tests() {
       dump_step_log "$test_log"
       return 1
     }
+  fi
+  # The tenant-slice owner's tenant-pinned read self-test (#130), copied in by
+  # assert_tenantslice_owner_output, so it is present exactly in that build.
+  local tp_test tp_class
+  tp_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/TenantPinnedReadTest.java' -print -quit)"
+  if [[ -n "$tp_test" ]]; then
+    tp_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$tp_test").$(basename "$tp_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$tp_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q '^TenantPinnedReadTest: all checks passed$' "$test_log" \
+      || die "tenant-slice owner (java): TenantPinnedReadTest did not report its checks passed"
   fi
   # The owner-default fixture's self-test, copied in by
   # install_ownerdefault_selftest (which dies if it cannot), so it is present
@@ -1374,6 +1402,61 @@ assert_tenantslice_output() {
     [[ -n "$tenant_config" ]] || die "tenant-slice fixture (rust): no generated tenant_config.rs under $output"
     grep -q 'pub ledger:' "$tenant_config" || die "tenant-slice fixture (rust): compiled TenantConfig has no ledger slice field ($tenant_config)"
   fi
+
+  # Issue #130: ledger's slice is ALSO held by registrar's exported
+  # RegistrarState.tenant_configs. ledger must be subscribed to that one
+  # collection and to nothing else of the root: its grant is tenant-pinned and
+  # field-scoped, so a client that watched RegistrarState.tenants would be
+  # refused by the server on every start.
+  local pinned="" want="" unwanted=""
+  case "$language" in
+    go)
+      pinned="$(find "$output" -type f -path '*/s2sm/state/services/registrar_state/state.go' -print -quit)"
+      want='stateStub.WatchTenantConfigs('; unwanted='stateStub.WatchTenants(' ;;
+    java)
+      pinned="$(find "$output" -type f -path '*/s2sm/internal/state/services/registrar/registrarstate/StateClient.java' -print -quit)"
+      want='.watchTenantConfigs('; unwanted='.watchTenants(' ;;
+    rust)
+      pinned="$(find "$output" -type f -path '*/s2sm/internal/state/services/registrar_state/state.rs' -print -quit)"
+      want='stub.watch_tenant_configs('; unwanted='stub.watch_tenants(' ;;
+  esac
+  [[ -n "$pinned" ]] || die "tenant-slice fixture ($language): ledger is not subscribed to RegistrarState.tenant_configs (no generated state client under $output)"
+  grep -qF "$want" "$pinned" \
+    || die "tenant-slice fixture ($language): the RegistrarState client does not watch tenant_configs in $pinned"
+  if grep -qF "$unwanted" "$pinned"; then
+    die "tenant-slice fixture ($language): the RegistrarState client watches tenants, a boundary ledger holds no grant on, in $pinned"
+  fi
+}
+
+# assert_tenantslice_owner_output checks that the registrar build — the owner
+# hosting RegistrarStateService — renders the tenant-pinned filter on every read
+# RPC of tenant_configs, and installs the runtime self-test that drives the real
+# wrapper (Go, Java). Rust hosts no state service, so there is no serving-side
+# filter to render; its leg is generation and compile only.
+assert_tenantslice_owner_output() {
+  local output="$1"
+  local language="$2"
+  local wrapper="" n=""
+
+  case "$language" in
+    go)
+      wrapper="$(find "$output" -type f -path '*/s2sm/grpc/servers/services/registrar/state_service.go' -print -quit)"
+      [[ -n "$wrapper" ]] || die "tenant-slice owner (go): RegistrarStateService wrapper not generated under $output"
+      [[ -f "$(dirname "$wrapper")/state_service_tenant_pin.go" ]] \
+        || die "tenant-slice owner (go): no tenant-pinned read helpers beside $wrapper"
+      n="$(grep -c 'resolveRegistrarStateServiceTenantPinTenantConfigs(caller)' "$wrapper")"
+      [[ "$n" == 8 ]] || die "tenant-slice owner (go): $n of the 8 tenant_configs read RPCs resolve the tenant pin in $wrapper"
+      cp "$SELFTESTS_SRC/go/tenant_pinned_read_test.go" "$(dirname "$wrapper")/"
+      ;;
+    java)
+      wrapper="$(find "$output/src/main/java" -type f -path '*/grpc/servers/services/registrar/RegistrarStateService.java' -print -quit)"
+      [[ -n "$wrapper" ]] || die "tenant-slice owner (java): RegistrarStateService wrapper not generated under $output"
+      n="$(grep -c 'TenantPin.resolveTenantConfigs(Auth.verifiedTokenFromContext())' "$wrapper")"
+      [[ "$n" == 8 ]] || die "tenant-slice owner (java): $n of the 8 tenant_configs read RPCs resolve the tenant pin in $wrapper"
+      cp "$SELFTESTS_SRC/java/TenantPinnedReadTest.java" \
+        "$(dirname "$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/Authorizer.java' -print -quit)")/"
+      ;;
+  esac
 }
 
 # assert_epochload_output checks that the (spec.epoch_expiration) value is
@@ -2491,6 +2574,30 @@ if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
     echo "==> Compiling $language tenant-slice fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/ledger"
     echo "    PASS $language tenant-slice"
+  done
+fi
+
+# tenant-slice fixture built as its service_state OWNER (issue #130):
+# registrar hosts RegistrarStateService, whose tenant_configs read RPCs serve a
+# ledger caller its own tenant's entry only, projected to ledger's slice.
+if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/tenantslice-owner-$language"
+    log="$WORK_ROOT/tenantslice-owner-$language.log"
+    rm -rf "$dir"
+    write_tenantslice_owner_config "$dir" "$language"
+
+    echo "==> Generating $language tenant-slice owner fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTSLICE_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language tenant-slice owner generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_tenantslice_owner_output "$output_root" "$language"
+    echo "==> Compiling $language tenant-slice owner fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/registrar"
+    echo "    PASS $language tenant-slice owner"
   done
 fi
 

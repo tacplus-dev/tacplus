@@ -331,20 +331,6 @@ func CopyAndPrepareProtoDir(inputDir, targetDir string) (string, error) {
 		}
 	}
 
-	// Replace the stubs with the real aggregates. They are GENERATED messages
-	// carrying (spec.per_service_config), and this tree is the flattened view
-	// every later step parses: ResolveServiceStates subscribes a service to the
-	// grpc_config owner of each per_service_config message naming it, so a
-	// TenantConfig left a stub here meant no service was ever subscribed to its
-	// slice of the generated one, in any language. No-op (the stub stays) when
-	// no service declares a slice.
-	if err := GenerateTenantConfig(inputDir, protoDir, protoDir); err != nil {
-		return "", fmt.Errorf("failed to generate tenant_config.proto: %w", err)
-	}
-	if err := GenerateProjectConfig(inputDir, protoDir, protoDir); err != nil {
-		return "", fmt.Errorf("failed to generate project_config.proto: %w", err)
-	}
-
 	// Inject the MCP session carrier into every service that declares an
 	// RPC_PRINCIPAL_MCP tool. Here, not in each language generator, because the
 	// carrier has to be a real rpc in the tree protoc compiles for EVERY
@@ -363,6 +349,25 @@ func CopyAndPrepareProtoDir(inputDir, targetDir string) (string, error) {
 		if _, _, _, err := ScanAndGenerateConfigHolder(inputDir, protoDir); err != nil {
 			return "", fmt.Errorf("failed to regenerate generated/*.proto after MCP carrier injection: %w", err)
 		}
+	}
+
+	// Replace the stubs with the real aggregates. They are GENERATED messages
+	// carrying (spec.per_service_config), and this tree is the flattened view
+	// every later step parses: ResolveServiceStates subscribes a service to the
+	// grpc_config owner of each per_service_config message naming it, so a
+	// TenantConfig left a stub here meant no service was ever subscribed to its
+	// slice of the generated one, in any language. No-op (the stub stays) when
+	// no service declares a slice.
+	//
+	// AFTER the MCP carrier re-scan, not before it: ScanAndGenerateConfigHolder
+	// rewrites every generated/ stub, these two included, so an aggregate
+	// generated ahead of it was clobbered back to the stub in any tree that
+	// declares an MCP tool — the platform's — and no subscription was derived.
+	if err := GenerateTenantConfig(inputDir, protoDir, protoDir); err != nil {
+		return "", fmt.Errorf("failed to generate tenant_config.proto: %w", err)
+	}
+	if err := GenerateProjectConfig(inputDir, protoDir, protoDir); err != nil {
+		return "", fmt.Errorf("failed to generate project_config.proto: %w", err)
 	}
 
 	return protoDir, nil
@@ -421,6 +426,28 @@ type SecurityPolicy struct {
 	DisableAuth    bool            `json:"disableAuth,omitempty"`
 	Internal       bool            `json:"internal,omitempty"`
 	BoundaryGrants []BoundaryGrant `json:"boundaryGrants,omitempty"`
+	// TenantPinnedReads are the field-scoped, tenant-pinned read grants (#130):
+	// see ResolveTenantPinnedBoundaries for the rule the serving side enforces.
+	// Deliberately NOT a BoundaryGrant: a consumer that reads boundaryGrants
+	// grants the callers the whole boundary (read and write) whatever the type,
+	// so a pinned read carried there would fail OPEN on a consumer that predates
+	// it. In a field of its own, a consumer that does not know it grants nothing.
+	TenantPinnedReads []TenantPinnedRead `json:"tenantPinnedReads,omitempty"`
+}
+
+// TenantPinnedRead is one tenant-pinned collection of a state root and the
+// callers pinned on it. Callers are bare, location-agnostic service paths.
+type TenantPinnedRead struct {
+	Boundary    string                  `json:"boundary"`    // collection field, e.g. "tenant_configs"
+	KeyField    string                  `json:"keyField"`    // item's (spec.indexed) string key, e.g. "tenant_name"
+	ConfigField string                  `json:"configField"` // item's per_service_config field, e.g. "config"
+	Slices      []TenantPinnedReadSlice `json:"slices"`
+}
+
+// TenantPinnedReadSlice is one pinned caller and the config field it may see.
+type TenantPinnedReadSlice struct {
+	Caller     string `json:"caller"`
+	SliceField string `json:"sliceField"`
 }
 
 // BoundaryGrant records a cross-namespace call grant on a specific boundary field.
@@ -515,6 +542,20 @@ func ComputeSecurityPolicies(inputDir string) ([]SecurityPolicy, error) {
 
 	importersByRoot := stateImportersByRoot(dp.GetAllFiles())
 
+	pinned, err := ResolveTenantPinnedBoundaries(dp.GetAllFiles())
+	if err != nil {
+		return nil, err
+	}
+	pinnedByRoot := make(map[string][]TenantPinnedRead)
+	for _, b := range pinned {
+		read := TenantPinnedRead{Boundary: b.Field, KeyField: b.KeyField, ConfigField: b.ConfigField}
+		for _, sl := range b.Slices {
+			read.Slices = append(read.Slices, TenantPinnedReadSlice{Caller: sl.Caller, SliceField: sl.SliceField})
+		}
+		key := b.Package + "." + b.StateRoot
+		pinnedByRoot[key] = append(pinnedByRoot[key], read)
+	}
+
 	var policies []SecurityPolicy
 
 	for relPath, fileDesc := range dp.GetAllFiles() {
@@ -576,12 +617,13 @@ func ComputeSecurityPolicies(inputDir string) ([]SecurityPolicy, error) {
 			}
 
 			policy := SecurityPolicy{
-				Name:           stateName,
-				Package:        pkg,
-				RW:             rw,
-				RO:             ro,
-				DisableAuth:    disableAuth,
-				BoundaryGrants: grants,
+				Name:              stateName,
+				Package:           pkg,
+				RW:                rw,
+				RO:                ro,
+				DisableAuth:       disableAuth,
+				BoundaryGrants:    grants,
+				TenantPinnedReads: pinnedByRoot[pkg+"."+stateName],
 			}
 			policies = append(policies, policy)
 

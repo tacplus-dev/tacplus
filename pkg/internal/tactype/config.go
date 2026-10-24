@@ -164,6 +164,11 @@ type StateEntry struct {
 	// "ServiceHealth" message name, so a user state coincidentally named
 	// ServiceHealth behaves like any other user state (OF-4).
 	IsHealthState bool
+	// Boundaries, when non-empty, narrows the generated client to these
+	// state-root fields only. A tenant-pinned subscription (#130) is granted one
+	// collection of the root and nothing else, so its client must not open a
+	// Watch on the root's other boundaries — the server would refuse them.
+	Boundaries []string
 }
 
 // SubscriptionEntry holds parsed (spec.subscribe) metadata for an event-bus topic.
@@ -241,6 +246,17 @@ func (c *Config) AccessModeForState(protoFile, messageName string) (AccessMode, 
 		return AccessRO, true
 	}
 	return AccessRW, false
+}
+
+// BoundariesForState returns the state-root fields a generated client of an
+// exact state root is narrowed to; nil means every boundary.
+func (c *Config) BoundariesForState(protoFile, messageName string) []string {
+	for _, b := range c.States {
+		if b.ProtoFile == protoFile && b.MessageName == messageName {
+			return b.Boundaries
+		}
+	}
+	return nil
 }
 
 // HasAutoTls returns true if any state entry has auto_tls enabled.

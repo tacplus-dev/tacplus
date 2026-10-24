@@ -237,7 +237,10 @@ func OwnDeclarations(protoDir string, services, vservices []string) ([]string, [
 				own[m[1]] = true
 			}
 		}
-		if ownServiceNoNameRe.MatchString(src) {
+		// A (spec.service) option without a name, or no option at all on a
+		// file that declares a gRPC service or a grpc_config, identifies the
+		// service by its package, as the generator does.
+		if ownServiceNoNameRe.MatchString(src) || ownServiceBlockRe.MatchString(src) || ownGrpcConfigRe.MatchString(src) {
 			if pm := ownPackageRe.FindStringSubmatch(src); pm != nil {
 				own[pm[1]] = true
 			}
@@ -261,4 +264,6 @@ var (
 	ownVServiceNameRe  = regexp.MustCompile(`(?s)\(\s*spec\.vservice\s*\)\s*=\s*\{[^}]*\bname\s*:\s*"([^"]+)"`)
 	ownServiceNoNameRe = regexp.MustCompile(`(?s)\(\s*spec\.service\s*\)\s*=\s*\{[^}]*\}`)
 	ownPackageRe       = regexp.MustCompile(`(?m)^\s*package\s+([A-Za-z_][\w.]*)\s*;`)
+	ownServiceBlockRe  = regexp.MustCompile(`(?m)^\s*service\s+[A-Za-z_][A-Za-z0-9_]*\s*\{`)
+	ownGrpcConfigRe    = regexp.MustCompile(`\(\s*spec\.grpc_config\s*\)`)
 )

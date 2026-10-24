@@ -288,3 +288,53 @@ message Config { option (spec.grpc_config) = {service_name: "operator"}; oauth.C
 		t.Fatal("a file this repo does not hold cannot be staged from it")
 	}
 }
+
+// A service_s2s declaring auth_services_from_fleet gets its caller list from the
+// fleet: every service that declares a client of it, and nobody else.
+func TestBuildStampsFleetCallerList(t *testing.T) {
+	root := t.TempDir()
+	reg := filepath.Join(root, "registry")
+	alpha := serviceRepoID(t, root, "alpha", 101, reg, nil)
+	beta := serviceRepoID(t, root, "beta", 102, reg, nil)
+	gamma := serviceRepoID(t, root, "gamma", 103, reg, nil)
+	write(t, filepath.Join(alpha, "proto", "services", "alpha.proto"), `syntax = "proto3";
+package alpha;
+import "sys/spec.proto";
+option (spec.service) = {name: "alpha"};
+option (spec.grpc_s2s_client) = {service: "beta.Beta"};
+message PingRequest { string m = 1; }
+service Alpha {
+  option (spec.service_s2s) = {auth_services: ["*"]};
+  rpc Ping(PingRequest) returns (PingRequest);
+}
+`)
+	write(t, filepath.Join(beta, "proto", "services", "beta.proto"), `syntax = "proto3";
+package beta;
+import "sys/spec.proto";
+option (spec.service) = {name: "beta"};
+message PingRequest { string m = 1; }
+service Beta {
+  option (spec.service_s2s) = {auth_services_from_fleet: true};
+  rpc Ping(PingRequest) returns (PingRequest);
+}
+`)
+	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: alpha, id: 101, contract: "+alpha+"}\n    - {name: beta, id: 102, contract: "+beta+"}\n    - {name: gamma, id: 103, contract: "+gamma+"}\n")
+	fl := fleetRepo(t, root, reg, "  - {name: alpha, repo: "+alpha+"}\n  - {name: beta, repo: "+beta+"}\n  - {name: gamma, repo: "+gamma+"}\n")
+
+	res, err := Build(fl, filepath.Join(root, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamped, _ := os.ReadFile(filepath.Join(res.ProtoDir, "services", "beta.proto"))
+	if !strings.Contains(string(stamped), `auth_services: ["alpha"]`) || strings.Contains(string(stamped), "auth_services_from_fleet") {
+		t.Fatalf("beta's caller list must be exactly its declared fleet callers:\n%s", stamped)
+	}
+	if strings.Contains(string(stamped), "gamma") {
+		t.Fatalf("gamma declares no client of beta and must not be admitted:\n%s", stamped)
+	}
+	// The contract itself is untouched.
+	src, _ := os.ReadFile(filepath.Join(beta, "proto", "services", "beta.proto"))
+	if !strings.Contains(string(src), "auth_services_from_fleet: true") {
+		t.Fatal("the contract repo must keep declaring auth_services_from_fleet")
+	}
+}

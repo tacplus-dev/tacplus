@@ -892,7 +892,16 @@ service InternalAdmin {
 service RecordStoreHosted {
   option (spec.service_s2s) = {label: "recordstore"};
 }
+
+// The caller list belongs to the fleet, not to this contract: the fleet build
+// fills it with every fleet service that declares (spec.grpc_s2s_client) of
+// this service. A standalone build admits no callers.
+service ModelEgress {
+  option (spec.service_s2s) = {auth_services_from_fleet: true};
+}
 ```
+
+`auth_services_from_fleet` and a literal `auth_services` are mutually exclusive (`ValidateServiceSurfaces`). Use it for a service whose callers differ per fleet (a shared model-egress proxy: one fleet's product services, another fleet's doppelganger); the contract repo then never names one fleet's services.
 
 **`service_c2s`** — declares a client-to-service gRPC service, exposed through the API gateway to end users. `auth_entitled_users` is the service-level default policy. `label` is the twin of the `service_s2s` one — it names the physical host for a trait's client-facing surface, while the audience the gateway checks the caller's token against stays the file's `(spec.trait).name`:
 
@@ -1640,8 +1649,10 @@ generated from the fleet's merged protos. `tacplus fleet build` then:
    under a different number) and the proto must declare the registered name;
 3. checks every `depends` of every service is in the fleet, at a version satisfying the
    dependent's floor: this is where the kernel build follows the dependency;
-4. merges the protos (each service's protos and lock, the fleet's pins) into `build/proto`
-   and runs the whole-fleet checks: routing and C2S host labels served, one SMB authority,
+4. merges the protos (each service's protos and lock, the fleet's pins) into `build/proto`,
+   stamps the fleet's caller lists (every `service_s2s` declaring
+   `auth_services_from_fleet` gets the fleet services that declare a client of it), and
+   runs the whole-fleet checks: routing and C2S host labels served, one SMB authority,
    exactly one minter, a complete and collision-free registry;
 5. writes `fleet.lock`, the exact commit of every registry and service.
 

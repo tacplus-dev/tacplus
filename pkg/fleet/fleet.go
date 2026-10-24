@@ -333,6 +333,12 @@ func Build(manifestDir, outDir string) (*Result, error) {
 	if err := protosrc.MergeSources(dirs, mergedDir); err != nil {
 		return nil, fmt.Errorf("fleet: merging protos: %w", err)
 	}
+	// 4b. Caller lists the fleet owns: a service_s2s declaring
+	// auth_services_from_fleet gets every fleet service that declares a client
+	// of it. Only this build knows who is in the fleet.
+	if err := stampFleetAuth(mergedDir); err != nil {
+		return nil, err
+	}
 	if err := writeFleetLock(mergedDir, m.Registries, union); err != nil {
 		return nil, err
 	}

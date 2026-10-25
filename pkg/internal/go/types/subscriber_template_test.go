@@ -115,3 +115,16 @@ func TestGoSubscriptionTypeImportIsNotRepeated(t *testing.T) {
 		t.Fatal("the service manager template must skip an already-imported subscription types package")
 	}
 }
+
+// A workload pod has no resolvable hostname (no headless Service behind a
+// Job's pod name), and kernel requires an IP or FQDN as a health endpoint
+// host; the parent passes the pod IP as SERVICE_ADVERTISE_HOST.
+func TestGoServiceManagerAdvertisesSERVICEADVERTISEHOST(t *testing.T) {
+	tmpl, err := loadTemplate("service_manager.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate: %v", err)
+	}
+	if !strings.Contains(tmpl, `const advertiseHostEnv = "SERVICE_ADVERTISE_HOST"`) || !strings.Contains(tmpl, "os.Getenv(advertiseHostEnv)") {
+		t.Fatal("the service manager must let SERVICE_ADVERTISE_HOST name the advertised host when listening on a wildcard")
+	}
+}

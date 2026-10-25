@@ -1714,6 +1714,14 @@ host = listenAddr.Host
 port = listenAddr.Port
 }
 if host == "" || host == "0.0.0.0" || host == "::" {
+// SERVICE_ADVERTISE_HOST names the address this instance is reached at
+// when its hostname is not one: a workload pod (a pigeon Job) has no
+// headless Service behind its name, so its parent hands it the pod IP
+// through the downward API. Otherwise the hostname, which the fleet's
+// Deployments make resolvable.
+if v := os.Getenv(advertiseHostEnv); v != "" {
+host = v
+} else {
 hostname, err := os.Hostname()
 if err != nil {
 zap.L().Warn("Failed to get hostname for health reporter", zap.Error(err))
@@ -1721,8 +1729,13 @@ return nil
 }
 host = hostname
 }
+}
 return &staticMetrics{grpcEndpoint: &host_pb.Host{Host: host, Port: port}}
 }
+
+// advertiseHostEnv is the environment variable that overrides the advertised
+// health endpoint host when the listen address is a wildcard.
+const advertiseHostEnv = "SERVICE_ADVERTISE_HOST"
 
 type staticMetrics struct {
 grpcEndpoint *host_pb.Host

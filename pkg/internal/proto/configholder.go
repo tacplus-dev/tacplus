@@ -2053,10 +2053,13 @@ func declaredConfigStateRoots(allFiles map[string]*parser.FileDescriptor) map[st
 // discovery path can route to healthy instances. The backing state service
 // enforces per-instance write isolation via the token's instance_id claim.
 func InjectHealthState(config *tactype.Config, inputDir string) error {
-	// Only inject ServiceHealth for services that already have states or are
-	// configured as gRPC servers. CLI tools and other non-state consumers don't
-	// need health state tracking.
-	if len(config.States) == 0 && !config.GrpcServerAll && len(config.GrpcServers) == 0 && !config.AllStates && !hasOwnGrpcServer(config, inputDir) {
+	// Only inject ServiceHealth for services that already have states, are
+	// configured as gRPC servers, or are WORKLOADS: programs that only publish
+	// and subscribe on the event bus (a pigeon). CLI tools and other non-state
+	// consumers don't need health state tracking; a workload does, because its
+	// publishers and its broker discovery ride the health state.
+	if len(config.States) == 0 && !config.GrpcServerAll && len(config.GrpcServers) == 0 && !config.AllStates &&
+		!hasOwnGrpcServer(config, inputDir) && !hasOwnEventBindings(config, inputDir) {
 		return nil
 	}
 	const healthStateName = "ServiceHealth"
@@ -2150,6 +2153,39 @@ func hasOwnGrpcServer(config *tactype.Config, inputDir string) bool {
 		}
 	}
 	return hasOwnGrpcServerText(config, inputDir)
+}
+
+// hasOwnEventBindings reports whether a proto the actor owns declares an
+// event_publish or event_watch binding: the shape of a workload, which has
+// no server and no state root but still speaks on the event bus.
+func hasOwnEventBindings(config *tactype.Config, inputDir string) bool {
+	if config == nil || config.SelfPackage == "" || inputDir == "" {
+		return false
+	}
+	found := false
+	_ = filepath.Walk(inputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+			return nil
+		}
+		relPath, relErr := filepath.Rel(inputDir, path)
+		if relErr == nil && IsInfraProto(relPath) {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		text := string(data)
+		if !protoTextOwnedByService(text, config.SelfPackage) {
+			return nil
+		}
+		if strings.Contains(text, "(spec.event_publish)") || strings.Contains(text, "(spec.event_watch)") {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 func hasOwnGrpcServerText(config *tactype.Config, inputDir string) bool {

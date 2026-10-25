@@ -279,6 +279,30 @@ public class AuthorizerBehaviorTest {
         String below = signedToken(key, tok -> tok.setSubType("service").setSubject("caller-svc").setNamespace("/a/b"));
         mustReject("caller below target", () -> a.authenticateAtOrBelowWithToken(bearer(below), "/a"));
 
+        // ---- tenant-owned instance: another tenant's caller is refused at the door ----
+        // A token's aud is the service name, which every tenant's instance accepts,
+        // so an untargeted RPC would admit a /tenants/acme token on beta's
+        // instance. With the host namespace set, only beta, /system and the root
+        // pass; a shared instance (or none set) admits every tenant as before.
+        Authorizer betaInstance = authorizerWithKeys(jwkForKey(key));
+        betaInstance.setMethodAuth(TEST_METHOD, List.of("caller-svc"));
+        betaInstance.setHostNamespace("/tenants/beta");
+        for (String ns : List.of("/tenants/beta", "/system", "/system/us-east", "/")) {
+            String tok = signedToken(key, t -> t.setSubType("service").setSubject("caller-svc").setNamespace(ns));
+            mustPass("caller in " + ns + " on beta's instance", () -> betaInstance.authorizeWithToken(bearer(tok), TEST_METHOD, null));
+        }
+        for (String ns : List.of("/tenants/acme", "/tenants/beta2", "/tenants/beta/sub", "/users/u1")) {
+            String tok = signedToken(key, t -> t.setSubType("service").setSubject("caller-svc").setNamespace(ns));
+            mustReject("caller in " + ns + " on beta's instance", () -> betaInstance.authorizeWithToken(bearer(tok), TEST_METHOD, null));
+            mustReject("authenticate of " + ns + " on beta's instance", () -> betaInstance.authenticateWithToken(bearer(tok)));
+        }
+        for (String host : List.of("", "/system", "/system/us-east", "/tenants", "/tenants/a/b")) {
+            Authorizer shared = authorizerWithKeys(jwkForKey(key));
+            shared.setMethodAuth(TEST_METHOD, List.of("caller-svc"));
+            shared.setHostNamespace(host);
+            mustPass("host \"" + host + "\" admits /tenants/acme", () -> shared.authorizeWithToken(bearer(valid), TEST_METHOD, null));
+        }
+
         // ---- enforcingInterceptor: wrong audience rejected ----
         // Simulates what additionalServices (e.g. TypedEventBusBindings) see:
         // the enforcingInterceptor calls authenticateWithToken which must reject

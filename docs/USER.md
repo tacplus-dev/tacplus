@@ -925,6 +925,17 @@ verified token's identity, so `(spec.principal)` / `(spec.namespace)` request
 fields bind to the service's SPIFFE ID and its namespace, never to a value the
 caller chose.
 
+**A tenant-owned instance refuses another tenant at the door.** A token's `aud`
+is the service name, which every tenant's instance of a `tenant_owned` service
+accepts, so `target_namespace_field` (which only exists on RPCs that name a
+target) cannot be the only tenant check. Every generated server language reads
+the namespace of the instance's own service token at startup; when it is exactly
+`/tenants/<t>`, the generated Authorizer refuses with PERMISSION_DENIED, before
+any handler runs, every caller whose namespace is not at-or-above `/tenants/<t>`
+and not `/system` or below (fleet-wide readers keep passing). A shared service's
+instance, running in `/system`, is unchanged. An instance that cannot read its
+own identity at startup fails to start rather than serve unpinned.
+
 ### Every user RPC is also an MCP tool
 
 **An rpc on a `(spec.service_c2s)` service is published as an MCP tool

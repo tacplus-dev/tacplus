@@ -41,18 +41,21 @@ func (c ClientsConfig) IsZero() bool {
 
 // Config represents the tacplus.yaml schema.
 type Config struct {
-	Import     string        `yaml:"import,omitempty"`      // path to base config to import (resolved relative to this file's directory)
-	Kind       string        `yaml:"kind,omitempty"`        // what this project is: "service" (hosts a surface, has an identity), "client" (calls services, hosts nothing), "library" (contracts only: protos other projects build against). Unset = not stated; see CheckKind
-	Language   string        `yaml:"language"`              // go, java, typescript, python, rust, swift
-	Src        string        `yaml:"src"`                   // primary proto source (git URL or local path)
-	Sources    []string      `yaml:"sources,omitempty"`     // additional proto sources merged with src into one generation (e.g. a shared base + a reusable service's protos)
-	Pkg        string        `yaml:"pkg"`                   // canonical package name (Java-style reverse DNS, e.g. "com.example.services.identity")
-	Clients    ClientsConfig `yaml:"clients,omitempty"`     // generated C2S/W2S/C2D client transport surfaces
-	OutputDir  string        `yaml:"output-dir"`            // output subdirectory relative to project dir (required)
-	OutputName string        `yaml:"output-name,omitempty"` // generated package/dir segment name; default "model" (compiler stays "tacplus")
-	Tacplus    string        `yaml:"tacplus,omitempty"`     // minimum tacplus MAJOR.MINOR this project needs (a floor, see CheckFloor); unset = no floor
-	Depends    []string      `yaml:"depends,omitempty"`     // services this one calls, by registry name ("llmproxy" or "llmproxy@1.2"); their protos are fetched through the registry and merged into this generation (see CheckDepends)
-	Header     string        `yaml:"header,omitempty"`      // free-form text stamped as a comment at the top of every generated file (e.g. a copyright line and an SPDX identifier); its first line is also the author of generated package manifests. Unset: generated code carries no copyright line
+	Import      string        `yaml:"import,omitempty"`       // path to base config to import (resolved relative to this file's directory)
+	Kind        string        `yaml:"kind,omitempty"`         // what this project is: "service" (hosts a surface, has an identity), "client" (calls services, hosts nothing), "library" (contracts only: protos other projects build against). Unset = not stated; see CheckKind
+	Language    string        `yaml:"language"`               // go, java, typescript, python, rust, swift
+	Src         string        `yaml:"src"`                    // primary proto source (git URL or local path)
+	Sources     []string      `yaml:"sources,omitempty"`      // additional proto sources merged with src into one generation (e.g. a shared base + a reusable service's protos)
+	Pkg         string        `yaml:"pkg"`                    // canonical package name (Java-style reverse DNS, e.g. "com.example.services.identity")
+	Clients     ClientsConfig `yaml:"clients,omitempty"`      // generated C2S/W2S/C2D client transport surfaces
+	OutputDir   string        `yaml:"output-dir"`             // output subdirectory relative to project dir (required)
+	OutputName  string        `yaml:"output-name,omitempty"`  // generated package/dir segment name; default "model" (compiler stays "tacplus")
+	Tacplus     string        `yaml:"tacplus,omitempty"`      // minimum tacplus MAJOR.MINOR this project needs (a floor, see CheckFloor); unset = no floor
+	Depends     []string      `yaml:"depends,omitempty"`      // services this one calls, by registry name ("llmproxy" or "llmproxy@1.2"); their protos are fetched through the registry and merged into this generation (see CheckDepends)
+	GrpcServers string        `yaml:"grpc-servers,omitempty"` // "all": this project generates from every service's server surface (the gateway dispatches to all of them); unset: its own. See CheckScope
+	GrpcClients string        `yaml:"grpc-clients,omitempty"` // "all": this project generates from every service's client surface (a CLI); unset: the services it declares in depends. See CheckScope
+	States      string        `yaml:"states,omitempty"`       // "all": this project generates from every service's config and state (the kernel holds them all); unset: its own and its depends'. See CheckScope
+	Header      string        `yaml:"header,omitempty"`       // free-form text stamped as a comment at the top of every generated file (e.g. a copyright line and an SPDX identifier); its first line is also the author of generated package manifests. Unset: generated code carries no copyright line
 }
 
 // Exists returns true if tacplus.yaml exists in dir.
@@ -89,6 +92,9 @@ func Read(dir string) (*Config, error) {
 		return nil, err
 	}
 	if err := CheckKind(cfg.Kind); err != nil {
+		return nil, err
+	}
+	if err := CheckScope(cfg.GrpcServers, cfg.GrpcClients, cfg.States); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -201,6 +207,9 @@ func ReadFiles(paths []string) (*Config, error) {
 	if err := CheckKind(result.Kind); err != nil {
 		return nil, err
 	}
+	if err := CheckScope(result.GrpcServers, result.GrpcClients, result.States); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -256,6 +265,17 @@ func MergeConfigs(base, overlay *Config) *Config {
 		result.Header = overlay.Header
 	}
 
+	// Scope: overlay wins if non-empty
+	if overlay.GrpcServers != "" {
+		result.GrpcServers = overlay.GrpcServers
+	}
+	if overlay.GrpcClients != "" {
+		result.GrpcClients = overlay.GrpcClients
+	}
+	if overlay.States != "" {
+		result.States = overlay.States
+	}
+
 	return &result
 }
 
@@ -287,7 +307,6 @@ func rejectRemovedFields(data []byte, source string) error {
 	}
 
 	removed := map[string]string{
-		"grpc-servers":         "server wrappers are inferred from service annotations",
 		"grpc-s2s-clients":     "use (spec.grpc_s2s_client) file options",
 		"grpc-c2s-clients":     "use (spec.grpc_c2s_client) file options",
 		"grpc-w2s-clients":     "use (spec.grpc_w2s_client) file options",
@@ -298,7 +317,6 @@ func rejectRemovedFields(data []byte, source string) error {
 		"all-grpc-w2s-clients": "generation is annotation-driven",
 		"all-grpc":             "generation is annotation-driven",
 		"all-rest-clients":     "generation is annotation-driven",
-		"states":               "use field-level state_import and service_state export annotations",
 		"all-states":           "state access is derived from proto annotations",
 		"container":            "container image builds are no longer performed by tacplus",
 		"mounts":               "tacplus no longer re-runs itself in a container",

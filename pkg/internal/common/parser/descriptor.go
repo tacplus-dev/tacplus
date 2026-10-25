@@ -1283,6 +1283,13 @@ func (p *DescriptorParser) GetFileDescriptor(protoPath string) (*FileDescriptor,
 }
 
 // GetAllFiles returns all parsed file descriptors
+// RawFileDescriptors returns the FileDescriptorProto of every file protoc
+// compiled, imports included, keyed by proto path. Callers must not mutate
+// the values; clone first.
+func (p *DescriptorParser) RawFileDescriptors() map[string]*descriptorpb.FileDescriptorProto {
+	return p.rawFiles
+}
+
 func (p *DescriptorParser) GetAllFiles() map[string]*FileDescriptor {
 	return p.descriptors
 }

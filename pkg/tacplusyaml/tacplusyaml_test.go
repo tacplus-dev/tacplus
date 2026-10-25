@@ -332,7 +332,7 @@ func TestReadFile(t *testing.T) {
 		dir := t.TempDir()
 
 		basePath := filepath.Join(dir, "base.yaml")
-		os.WriteFile(basePath, []byte("language: go\noutput-dir: tacplus\ngrpc-servers:\n  - services/foo.FooService\n"), 0644)
+		os.WriteFile(basePath, []byte("language: go\noutput-dir: tacplus\ngrpc-s2s-clients:\n  - services/foo.FooService\n"), 0644)
 		childPath := filepath.Join(dir, "child.yaml")
 		os.WriteFile(childPath, []byte("import: base.yaml\npkg: child\n"), 0644)
 
@@ -340,8 +340,8 @@ func TestReadFile(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected removed selector error, got nil")
 		}
-		if !strings.Contains(err.Error(), "grpc-servers") {
-			t.Errorf("error = %q, want grpc-servers", err.Error())
+		if !strings.Contains(err.Error(), "grpc-s2s-clients") {
+			t.Errorf("error = %q, want grpc-s2s-clients", err.Error())
 		}
 	})
 
@@ -431,14 +431,14 @@ func TestReadFiles(t *testing.T) {
 		basePath := filepath.Join(dir, "base.yaml")
 		os.WriteFile(basePath, []byte("language: go\noutput-dir: tacplus\n"), 0644)
 		ciPath := filepath.Join(dir, "ci.yaml")
-		os.WriteFile(ciPath, []byte("states:\n  - services/foo.FooState:rw\n"), 0644)
+		os.WriteFile(ciPath, []byte("grpc-s2s-clients:\n  - services/foo.FooService\n"), 0644)
 
 		_, err := ReadFiles([]string{basePath, ciPath})
 		if err == nil {
 			t.Fatal("expected removed selector error, got nil")
 		}
-		if !strings.Contains(err.Error(), "states") {
-			t.Errorf("error = %q, want states", err.Error())
+		if !strings.Contains(err.Error(), "grpc-s2s-clients") {
+			t.Errorf("error = %q, want grpc-s2s-clients", err.Error())
 		}
 	})
 

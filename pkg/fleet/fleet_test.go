@@ -54,6 +54,9 @@ func TestBuildResolvesChecksMergesAndLocks(t *testing.T) {
 	if res.Lock.Services[0].Depends[0] != "beta@1.0" || res.Lock.Services[0].Contract != alpha {
 		t.Fatalf("lock entry = %+v", res.Lock.Services[0])
 	}
+	if len(res.Lock.Services[0].InputsDigest) != 64 || res.Lock.Services[0].InputsDigest == res.Lock.Services[1].InputsDigest {
+		t.Fatalf("inputs digests = %q, %q", res.Lock.Services[0].InputsDigest, res.Lock.Services[1].InputsDigest)
+	}
 	for _, p := range []string{"services/alpha.proto", "services/beta.proto", "registry.yaml", "dependencies.yaml"} {
 		if _, err := os.Stat(filepath.Join(res.ProtoDir, p)); err != nil {
 			t.Errorf("merged tree lacks %s: %v", p, err)
@@ -294,7 +297,7 @@ message Config { option (spec.grpc_config) = {service_name: "operator"}; oauth.C
 func TestBuildStampsFleetCallerList(t *testing.T) {
 	root := t.TempDir()
 	reg := filepath.Join(root, "registry")
-	alpha := serviceRepoID(t, root, "alpha", 101, reg, nil)
+	alpha := serviceRepoID(t, root, "alpha", 101, reg, []string{"beta"})
 	beta := serviceRepoID(t, root, "beta", 102, reg, nil)
 	gamma := serviceRepoID(t, root, "gamma", 103, reg, nil)
 	write(t, filepath.Join(alpha, "proto", "services", "alpha.proto"), `syntax = "proto3";

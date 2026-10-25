@@ -94,6 +94,11 @@ type LockedService struct {
 	Contract       string   `yaml:"contract,omitempty"`
 	ContractCommit string   `yaml:"contract_commit,omitempty"`
 	Depends        []string `yaml:"depends,omitempty"`
+	// InputsDigest is a sha256 over the descriptors of everything this
+	// service generates from (its scope: own contract, depends closure, sys
+	// protos; the whole tree for grpc-servers/grpc-clients: all). The image
+	// build keys on it: same digest and same commit, same image.
+	InputsDigest string `yaml:"inputs_digest,omitempty"`
 }
 
 var (
@@ -189,6 +194,7 @@ func Build(manifestDir, outDir string) (*Result, error) {
 		id       int32
 		protoDir string // staged: this service's contract files + the contract repo's registry.yaml
 		depends  []string
+		whole    bool // grpc-servers/grpc-clients: all — generates from the whole tree
 	}
 	var services []resolved
 	byName := map[string]*resolved{}
@@ -212,12 +218,14 @@ func Build(manifestDir, outDir string) (*Result, error) {
 		}
 		cleanups = append(cleanups, implCleanup)
 		var depends []string
+		whole := false
 		if tacplusyaml.Exists(implDir) {
 			cfg, err := tacplusyaml.Read(implDir)
 			if err != nil {
 				return nil, fmt.Errorf("fleet: service %q: %w", spec.Name, err)
 			}
 			depends = cfg.Depends
+			whole = cfg.WholeFleet()
 		}
 
 		// The contract rides the implementation's version when they are the
@@ -259,7 +267,7 @@ func Build(manifestDir, outDir string) (*Result, error) {
 			return nil, fmt.Errorf("fleet: service %q: %s declares id %d but the registry says %d; an implementation keeps the registry's id", spec.Name, contract, lockID, id)
 		}
 
-		r := resolved{spec: spec, id: id, protoDir: staged, depends: depends}
+		r := resolved{spec: spec, id: id, protoDir: staged, depends: depends, whole: whole}
 		services = append(services, r)
 		byName[spec.Name] = &services[len(services)-1]
 		lock.Services = append(lock.Services, LockedService{
@@ -348,14 +356,40 @@ func Build(manifestDir, outDir string) (*Result, error) {
 		return nil, err
 	}
 
-	// 6. The lock.
-	data, err := yaml.Marshal(lock)
-	if err != nil {
+	// 5b. Each service's scope and inputs digest. The scope is what its
+	// tacplus.yaml declares (own contract + depends, or the whole tree); a
+	// service reaching an undeclared contract fails the build here, naming
+	// the declaration to add.
+	if err := writeLock(lock, filepath.Join(mergedDir, LockFile)); err != nil {
 		return nil, err
 	}
-	header := "# Written by tacplus fleet build. The exact commits this fleet was resolved to; regenerate, do not edit.\n"
-	if err := os.WriteFile(filepath.Join(manifestDir, LockFile), append([]byte(header), data...), 0o644); err != nil {
-		return nil, fmt.Errorf("fleet: writing %s: %w", LockFile, err)
+	scoper, err := NewScoper(mergedDir)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: %w", err)
+	}
+	for i, r := range services {
+		sc, err := scoper.Scope(r.spec.Name, r.depends, r.whole)
+		if err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		digest, err := InputsDigest(mergedDir, sc)
+		if err != nil {
+			return nil, fmt.Errorf("fleet: service %q: %w", r.spec.Name, err)
+		}
+		lock.Services[i].InputsDigest = digest
+	}
+	if len(errs) > 0 {
+		sort.Strings(errs)
+		return nil, fmt.Errorf("fleet: scopes not declared:\n  %s", strings.Join(errs, "\n  "))
+	}
+
+	// 6. The lock, beside the manifest and in the merged tree (the compiler
+	// reads each service's depends from it when it scopes a generation).
+	for _, p := range []string{filepath.Join(manifestDir, LockFile), filepath.Join(mergedDir, LockFile)} {
+		if err := writeLock(lock, p); err != nil {
+			return nil, err
+		}
 	}
 	zap.L().Info("fleet resolved", zap.Int("services", len(services)), zap.String("proto", mergedDir), zap.String("lock", filepath.Join(manifestDir, LockFile)))
 	return &Result{Lock: lock, ProtoDir: mergedDir}, nil
@@ -495,6 +529,19 @@ func writeFleetLock(mergedDir string, registries []string, union *registry.Regis
 	return lock.SaveTo(mergedDir)
 }
 
+// writeLock writes the lock with its header.
+func writeLock(lock *Lock, path string) error {
+	data, err := yaml.Marshal(lock)
+	if err != nil {
+		return err
+	}
+	header := "# Written by tacplus fleet build. The exact commits this fleet was resolved to; regenerate, do not edit.\n"
+	if err := os.WriteFile(path, append([]byte(header), data...), 0o644); err != nil {
+		return fmt.Errorf("fleet: writing %s: %w", path, err)
+	}
+	return nil
+}
+
 // validateFleet runs the checks that only a whole fleet can answer: every
 // routing label served by a loaded service, every C2S host label served, one
 // SMB authority if any SMB member, exactly one minter, a complete and
@@ -623,7 +670,7 @@ func extractContract(protoDir, name string, isService bool) (string, func(), err
 	// trait whose host is this service (the record store's query plane), or
 	// a surface whose label is. They name the service; the service does not
 	// name them, so the import walk above cannot reach them.
-	hostedRe := regexp.MustCompile(`(?:host|label)\s*:\s*"` + regexp.QuoteMeta(name) + `"`)
+	hostedRe := hostedByRe(name)
 	for _, rel := range files {
 		if want[rel] {
 			continue

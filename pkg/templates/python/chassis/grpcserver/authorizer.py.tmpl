@@ -228,11 +228,7 @@ class Authorizer:
         host = self._host_tenant
         if not host:
             return
-        if (
-            caller_namespace == "/system"
-            or caller_namespace.startswith("/system/")
-            or is_at_or_below(caller_namespace, host)
-        ):
+        if is_at_or_below("/system", caller_namespace) or is_at_or_below(caller_namespace, host):
             return
         raise permission_denied(
             f'caller namespace "{caller_namespace}" is not at-or-above this instance\'s tenant "{host}"'

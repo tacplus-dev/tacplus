@@ -546,6 +546,7 @@ public final class Spiffe {
             classifyPair(p, segs, idx.get(DATA_SEGMENT), SubjectKind.RESOURCE);
         } else {
             // Namespace-only identity (tenant/workspace/system subtree).
+            validateNamespaceSegments(segs.toArray(new String[0]));
             p.subjectKind = SubjectKind.UNKNOWN;
             p.namespace = "/" + String.join("/", segs);
         }
@@ -559,6 +560,20 @@ public final class Spiffe {
         int si = segs.indexOf(SERVICES_SEGMENT);
         if ((!segs.get(0).equals(SYSTEM_SEGMENT) && !segs.get(0).equals(TENANTS_SEGMENT))
                 || si < 0 || si + 1 >= segs.size()) {
+            throw new IllegalArgumentException(
+                    "spiffe: malformed system/service identity: /" + String.join("/", segs));
+        }
+        validateNamespaceSegments(segs.subList(0, si).toArray(new String[0]));
+        if (RESERVED_TAGS.contains(segs.get(si + 1))) {
+            throw new IllegalArgumentException(
+                    "spiffe: reserved tag \"" + segs.get(si + 1) + "\" cannot be a service name");
+        }
+        List<String> rest = segs.subList(si + 2, segs.size());
+        boolean ok = rest.size() % 2 == 0;
+        for (int i = 0; ok && i < rest.size(); i += 2) {
+            ok = rest.get(i).equals(WORKLOADS_SEGMENT) && !RESERVED_TAGS.contains(rest.get(i + 1));
+        }
+        if (!ok) {
             throw new IllegalArgumentException(
                     "spiffe: malformed system/service identity: /" + String.join("/", segs));
         }
@@ -582,25 +597,48 @@ public final class Spiffe {
         p.subjectPath = segs.get(1);
     }
 
+    // The parse-side twin of leafBase: the namespace before a typed tag must pass the
+    // namespace validator, and a user root is a complete identity, so nothing may follow it.
+    private static void validateLeafNamespace(List<String> nsSegs) {
+        if (nsSegs.isEmpty()) {
+            throw new IllegalArgumentException("spiffe: a typed identity needs a namespace");
+        }
+        if (nsSegs.get(0).equals(USERS_SEGMENT)) {
+            throw new IllegalArgumentException(
+                    "spiffe: nothing may follow a user root, got namespace /" + String.join("/", nsSegs));
+        }
+        validateNamespaceSegments(nsSegs.toArray(new String[0]));
+    }
+
     private static void classifyNamespaced(ParsedSpiffeId p, List<String> segs, int tagIdx, SubjectKind kind) {
-        if (tagIdx + 1 >= segs.size() || tagIdx == 0) {
+        if (tagIdx + 2 != segs.size() || tagIdx == 0) {
             throw new IllegalArgumentException(
                     "spiffe: malformed " + kind + " identity: /" + String.join("/", segs));
         }
+        validateLeafNamespace(segs.subList(0, tagIdx));
+        if (RESERVED_TAGS.contains(segs.get(tagIdx + 1))) {
+            throw new IllegalArgumentException(
+                    "spiffe: reserved tag \"" + segs.get(tagIdx + 1) + "\" cannot be a " + kind + " id");
+        }
         p.subjectKind = kind;
         p.namespace = "/" + String.join("/", segs.subList(0, tagIdx));
-        p.subjectPath = String.join("/", segs.subList(tagIdx + 1, segs.size()));
+        p.subjectPath = segs.get(tagIdx + 1);
     }
 
     private static void classifyPair(ParsedSpiffeId p, List<String> segs, int tagIdx, SubjectKind kind) {
-        if (tagIdx == 0 || tagIdx + 2 >= segs.size()) {
+        if (tagIdx == 0 || tagIdx + 3 != segs.size()) {
             throw new IllegalArgumentException(
                     "spiffe: malformed kind/id identity: /" + String.join("/", segs));
+        }
+        validateLeafNamespace(segs.subList(0, tagIdx));
+        if (RESERVED_TAGS.contains(segs.get(tagIdx + 1)) || RESERVED_TAGS.contains(segs.get(tagIdx + 2))) {
+            throw new IllegalArgumentException(
+                    "spiffe: reserved tag cannot be a kind or id segment: /" + String.join("/", segs));
         }
         p.subjectKind = kind;
         p.namespace = "/" + String.join("/", segs.subList(0, tagIdx));
         p.resourceKind = segs.get(tagIdx + 1);
-        p.resourceId = String.join("/", segs.subList(tagIdx + 2, segs.size()));
+        p.resourceId = segs.get(tagIdx + 2);
     }
 
     /**

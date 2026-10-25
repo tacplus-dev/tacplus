@@ -538,6 +538,7 @@ function classify(p: ParsedSpiffeId, segs: string[]): void {
     return;
   }
   // Namespace-only identity (tenant/workspace/system subtree).
+  validateNamespaceSegments(segs);
   p.subjectKind = SubjectKind.Unknown;
   p.namespace = '/' + segs.join('/');
 }
@@ -549,6 +550,18 @@ function classify(p: ParsedSpiffeId, segs: string[]): void {
 function classifySystem(p: ParsedSpiffeId, segs: string[]): void {
   const si = indexOf(segs, SERVICES_SEGMENT);
   if ((segs[0] !== SYSTEM_SEGMENT && segs[0] !== TENANTS_SEGMENT) || si < 0 || si + 1 >= segs.length) {
+    throw new Error(`spiffe: malformed system/service identity: /${segs.join('/')}`);
+  }
+  validateNamespaceSegments(segs.slice(0, si));
+  if (RESERVED_TAGS.has(segs[si + 1])) {
+    throw new Error(`spiffe: reserved tag "${segs[si + 1]}" cannot be a service name`);
+  }
+  const rest = segs.slice(si + 2);
+  let ok = rest.length % 2 === 0;
+  for (let i = 0; ok && i < rest.length; i += 2) {
+    ok = rest[i] === WORKLOADS_SEGMENT && !RESERVED_TAGS.has(rest[i + 1]);
+  }
+  if (!ok) {
     throw new Error(`spiffe: malformed system/service identity: /${segs.join('/')}`);
   }
   p.locationPath = segs.slice(1, si).join('/');
@@ -570,18 +583,34 @@ function classifyUserRoot(p: ParsedSpiffeId, segs: string[]): void {
   p.subjectPath = segs[1];
 }
 
+// The parse-side twin of leafBase: the namespace before a typed tag must pass the
+// namespace validator, and a user root is a complete identity, so nothing may follow it.
+function validateLeafNamespace(nsSegs: string[]): void {
+  if (nsSegs.length === 0) {
+    throw new Error('spiffe: a typed identity needs a namespace');
+  }
+  if (nsSegs[0] === USERS_SEGMENT) {
+    throw new Error(`spiffe: nothing may follow a user root, got namespace /${nsSegs.join('/')}`);
+  }
+  validateNamespaceSegments(nsSegs);
+}
+
 function classifyNamespaced(
   p: ParsedSpiffeId,
   segs: string[],
   tagIdx: number,
   kind: SubjectKind,
 ): void {
-  if (tagIdx + 1 >= segs.length || tagIdx === 0) {
+  if (tagIdx + 2 !== segs.length || tagIdx === 0) {
     throw new Error(`spiffe: malformed ${kind} identity: /${segs.join('/')}`);
+  }
+  validateLeafNamespace(segs.slice(0, tagIdx));
+  if (RESERVED_TAGS.has(segs[tagIdx + 1])) {
+    throw new Error(`spiffe: reserved tag "${segs[tagIdx + 1]}" cannot be a ${kind} id`);
   }
   p.subjectKind = kind;
   p.namespace = '/' + segs.slice(0, tagIdx).join('/');
-  p.subjectPath = segs.slice(tagIdx + 1).join('/');
+  p.subjectPath = segs[tagIdx + 1];
 }
 
 function classifyPair(
@@ -590,13 +619,17 @@ function classifyPair(
   tagIdx: number,
   kind: SubjectKind,
 ): void {
-  if (tagIdx === 0 || tagIdx + 2 >= segs.length) {
+  if (tagIdx === 0 || tagIdx + 3 !== segs.length) {
     throw new Error(`spiffe: malformed kind/id identity: /${segs.join('/')}`);
+  }
+  validateLeafNamespace(segs.slice(0, tagIdx));
+  if (RESERVED_TAGS.has(segs[tagIdx + 1]) || RESERVED_TAGS.has(segs[tagIdx + 2])) {
+    throw new Error(`spiffe: reserved tag cannot be a kind or id segment: /${segs.join('/')}`);
   }
   p.subjectKind = kind;
   p.namespace = '/' + segs.slice(0, tagIdx).join('/');
   p.resourceKind = segs[tagIdx + 1];
-  p.resourceId = segs.slice(tagIdx + 2).join('/');
+  p.resourceId = segs[tagIdx + 2];
 }
 
 // parseNamespaceOrSpiffe accepts either a bare namespace path or a full SPIFFE

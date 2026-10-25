@@ -189,7 +189,7 @@ func TestGoCredentialDegradedFloorStaysWired(t *testing.T) {
 // access token alone (a service-typed refresh does not rotate). The minter
 // must keep the refresh token it holds, not demand a new one each time.
 func TestBootstrapMinterKeepsItsRefreshTokenAcrossRenewals(t *testing.T) {
-	tmpl, err := loadTemplate("service_im.go.tmpl")
+	tmpl, err := loadChassisTemplate("service_im/service_im.go.tmpl")
 	if err != nil {
 		t.Fatalf("loadTemplate: %v", err)
 	}

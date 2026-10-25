@@ -514,7 +514,7 @@ public class Authorizer {
         String host = hostTenant;
         if (host.isEmpty()) return;
         String caller = callerNamespace == null ? "" : callerNamespace;
-        if (caller.equals("/system") || caller.startsWith("/system/") || Spiffe.isAtOrBelow(caller, host)) {
+        if (Spiffe.isAtOrBelow("/system", caller) || Spiffe.isAtOrBelow(caller, host)) {
             return;
         }
         throw ProtoException.newErrPermissionDenied(null,

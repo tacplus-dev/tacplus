@@ -16,6 +16,9 @@ the C2S TokenMint returns both in one round trip.
 Clients have no S2S identity, so this mints via the client-reachable C2S
 endpoint (a proxy that may forward to the authority with its own S2S identity),
 NOT the authoritative S2S mint that services use.
+
+``set_tenant_namespace(ns)`` selects which tenant the refresh -> access mint is
+for (TokenMintRequest.tenant_namespace); None is the plain personal exchange.
 """
 
 from __future__ import annotations
@@ -81,6 +84,10 @@ class ClientIdentityManager:
         self._access_token: _TokenEntry | None = None
         # Service-specific tokens, keyed by audience.
         self._tokens: dict[str, _TokenEntry] = {}
+        # Tenant namespace the refresh -> access mint asks for; None = personal.
+        self._tenant_namespace: str | None = None
+        # Bumped on every tenant switch, so a mint in flight across it is not cached.
+        self._tenant_epoch = 0
         self._instance_id: str = ""
         self._lock = asyncio.Lock()
         # Exponential backoff state for auth attempts.
@@ -134,6 +141,28 @@ class ClientIdentityManager:
             self._access_token = None
             self._tokens.clear()
             self._auth_failures = 0
+
+    async def set_tenant_namespace(self, ns: str | None) -> None:
+        """Mints subsequent access tokens for ``ns`` (sent as tenant_namespace on
+        the refresh -> access mint); None returns to the plain personal exchange.
+
+        Changing it drops the cached access and service tokens.
+        """
+        async with self._lock:
+            ns = ns or None
+            if ns == self._tenant_namespace:
+                return
+            self._tenant_namespace = ns
+            self._tenant_epoch += 1
+            self._access_token = None
+            self._tokens.clear()
+
+    def access_token(self) -> str | None:
+        """Returns the cached access token if it is unexpired; does not mint."""
+        cached = self._access_token
+        if cached is not None and time.time() < cached.expires_at:
+            return cached.token
+        return None
 
     async def refresh_token(self) -> str | None:
         """Returns the current refresh token, if any."""
@@ -224,31 +253,38 @@ class ClientIdentityManager:
             return await self._ensure_access_token()
 
         # Fast path: a valid access token is cached — mint just the service token.
+        # Only the refresh -> access mint carries the tenant namespace; a service
+        # token inherits it from the access token it is minted from.
         async with self._lock:
             cached = self._access_token
             cached_access = cached.token if cached is not None and cached.usable_at(time.time()) else None
+            epoch = self._tenant_epoch
         if cached_access is not None:
-            _, svc = await self._mint_call(cached_access, [audience])
+            _, svc = await self._mint_call(cached_access, [audience], None)
             if not svc:
                 raise RuntimeError("ClientIM: mint response missing service token")
             entry = svc[0]
             async with self._lock:
-                self._tokens[audience] = entry
+                if epoch == self._tenant_epoch:
+                    self._tokens[audience] = entry
             return entry.token
 
         # No access token cached — get AT + ST in a single batch call from the
         # refresh token (refresh -> access + access -> service).
         async with self._lock:
             refresh = self._refresh_token
+            ns = self._tenant_namespace
+            epoch = self._tenant_epoch
         if refresh is None:
             raise RuntimeError("ClientIM: no refresh token")
-        access_entry, svc = await self._mint_call(refresh, [audience])
+        access_entry, svc = await self._mint_call(refresh, [audience], ns)
         if not svc:
             raise RuntimeError("ClientIM: mint response missing service token")
         entry = svc[0]
         async with self._lock:
-            self._access_token = access_entry
-            self._tokens[audience] = entry
+            if epoch == self._tenant_epoch:
+                self._access_token = access_entry
+                self._tokens[audience] = entry
         return entry.token
 
     async def _ensure_access_token(self) -> str:
@@ -259,19 +295,23 @@ class ClientIdentityManager:
             if cached is not None and cached.usable_at(time.time()):
                 return cached.token
             refresh = self._refresh_token
+            ns = self._tenant_namespace
+            epoch = self._tenant_epoch
         if refresh is None:
             raise RuntimeError("ClientIM: no refresh token")
-        access_entry, _ = await self._mint_call(refresh, [])
+        access_entry, _ = await self._mint_call(refresh, [], ns)
         async with self._lock:
-            self._access_token = access_entry
+            if epoch == self._tenant_epoch:
+                self._access_token = access_entry
         return access_entry.token
 
     async def _mint_call(
-        self, input_token: str, service_auds: list[str]
+        self, input_token: str, service_auds: list[str], tenant_namespace: str | None
     ) -> tuple[_TokenEntry, list[_TokenEntry]]:
         """Calls the C2S TokenMint RPC once. Returns the access-token cache entry
         plus one entry per requested service audience (in request order). An empty
-        ``service_auds`` mints only the access token."""
+        ``service_auds`` mints only the access token. ``tenant_namespace`` is sent
+        as tenant_namespace; None sends none."""
         if not HAS_CLIENT_TOKEN_EXCHANGER:
             raise RuntimeError("ClientIM: token minter is not configured")
 
@@ -284,6 +324,7 @@ class ClientIdentityManager:
             input_token=input_token,
             token_purpose=token_pb2.TOKEN_PURPOSE_ACCESS,
             service_auds=list(service_auds),
+            tenant_namespace=tenant_namespace or "",
         )
         try:
             resp = await stub.{{.ClientTokenMintMethod}}(req, timeout=MINT_TIMEOUT_SECS)
@@ -304,7 +345,7 @@ class ClientIdentityManager:
             self._token_entry(st.base64, dict(st.payload)) for st in resp.service_tokens
         ]
         return access_entry, svc_entries
-        {{else}}del input_token, service_auds
+        {{else}}del input_token, service_auds, tenant_namespace
         raise RuntimeError("ClientIM: token minter is not configured")
         {{end}}
 

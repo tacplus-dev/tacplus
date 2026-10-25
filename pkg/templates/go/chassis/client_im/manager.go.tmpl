@@ -16,6 +16,9 @@
 // Clients have no S2S identity, so this mints via the client-reachable C2S
 // endpoint (a proxy that may forward to the authority with its own S2S
 // identity), NOT the authoritative S2S mint that services use.
+//
+// SetTenantNamespace selects which tenant the refresh -> access mint is for
+// (TokenMintRequest.tenant_namespace); "" is the plain personal exchange.
 
 package client_im
 
@@ -86,7 +89,12 @@ type ClientIdentityManager struct {
 	// tokens are minted from this, not directly from the refresh token.
 	accessToken *tokenEntry
 	// tokens holds service-specific tokens, keyed by audience.
-	tokens     map[string]*tokenEntry
+	tokens map[string]*tokenEntry
+	// tenantNamespace is sent on the refresh -> access mint; "" = personal.
+	tenantNamespace string
+	// tenantEpoch is bumped on every tenant switch, so a mint in flight across
+	// it is not cached.
+	tenantEpoch uint64
 	instanceId string
 	// Exponential backoff state for auth attempts.
 	authFailures    int
@@ -114,6 +122,32 @@ func (m *ClientIdentityManager) SetRefreshToken(token string) {
 	m.accessToken = nil
 	m.tokens = make(map[string]*tokenEntry)
 	m.authFailures = 0
+}
+
+// SetTenantNamespace mints subsequent access tokens for ns (sent as
+// tenant_namespace on the refresh -> access mint); "" returns to the plain
+// personal exchange. Changing it drops the cached access and service tokens.
+func (m *ClientIdentityManager) SetTenantNamespace(ns string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ns == m.tenantNamespace {
+		return
+	}
+	m.tenantNamespace = ns
+	m.tenantEpoch++
+	m.accessToken = nil
+	m.tokens = make(map[string]*tokenEntry)
+}
+
+// AccessToken returns the cached access token if it is unexpired, else "".
+// It does not mint.
+func (m *ClientIdentityManager) AccessToken() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.accessToken != nil && time.Now().Before(m.accessToken.expiresAt) {
+		return m.accessToken.token
+	}
+	return ""
 }
 
 // RefreshToken returns the current refresh token, if any.
@@ -242,15 +276,18 @@ func (m *ClientIdentityManager) getTokenForCtx(ctx context.Context, audience str
 	}
 
 	// Fast path: a valid access token is cached — mint just the service token.
+	// Only the refresh -> access mint carries the tenant namespace; a service
+	// token inherits it from the access token it is minted from.
 	m.mu.Lock()
 	var cachedAccess string
 	if m.accessToken != nil && m.accessToken.usableAt(time.Now()) {
 		cachedAccess = m.accessToken.token
 	}
+	epoch := m.tenantEpoch
 	m.mu.Unlock()
 
 	if cachedAccess != "" {
-		_, svc, err := m.mintCall(ctx, cachedAccess, []string{audience})
+		_, svc, err := m.mintCall(ctx, cachedAccess, []string{audience}, "")
 		if err != nil {
 			return "", err
 		}
@@ -259,7 +296,9 @@ func (m *ClientIdentityManager) getTokenForCtx(ctx context.Context, audience str
 		}
 		entry := svc[0]
 		m.mu.Lock()
-		m.tokens[audience] = entry
+		if epoch == m.tenantEpoch {
+			m.tokens[audience] = entry
+		}
 		m.mu.Unlock()
 		return entry.token, nil
 	}
@@ -268,11 +307,13 @@ func (m *ClientIdentityManager) getTokenForCtx(ctx context.Context, audience str
 	// refresh token (refresh -> access + access -> service).
 	m.mu.Lock()
 	refresh := m.refreshToken
+	ns := m.tenantNamespace
+	epoch = m.tenantEpoch
 	m.mu.Unlock()
 	if refresh == "" {
 		return "", errNoRefreshToken
 	}
-	accessEntry, svc, err := m.mintCall(ctx, refresh, []string{audience})
+	accessEntry, svc, err := m.mintCall(ctx, refresh, []string{audience}, ns)
 	if err != nil {
 		return "", err
 	}
@@ -281,8 +322,10 @@ func (m *ClientIdentityManager) getTokenForCtx(ctx context.Context, audience str
 	}
 	entry := svc[0]
 	m.mu.Lock()
-	m.accessToken = accessEntry
-	m.tokens[audience] = entry
+	if epoch == m.tenantEpoch {
+		m.accessToken = accessEntry
+		m.tokens[audience] = entry
+	}
 	m.mu.Unlock()
 	return entry.token, nil
 }
@@ -297,33 +340,39 @@ func (m *ClientIdentityManager) ensureAccessToken(ctx context.Context) (string, 
 		return tok, nil
 	}
 	refresh := m.refreshToken
+	ns := m.tenantNamespace
+	epoch := m.tenantEpoch
 	m.mu.Unlock()
 	if refresh == "" {
 		return "", errNoRefreshToken
 	}
-	accessEntry, _, err := m.mintCall(ctx, refresh, nil)
+	accessEntry, _, err := m.mintCall(ctx, refresh, nil, ns)
 	if err != nil {
 		return "", err
 	}
 	m.mu.Lock()
-	m.accessToken = accessEntry
+	if epoch == m.tenantEpoch {
+		m.accessToken = accessEntry
+	}
 	m.mu.Unlock()
 	return accessEntry.token, nil
 }
 
 // mintCall calls the C2S TokenMint RPC once. Returns the access-token cache
 // entry plus one entry per requested service audience (in request order). An
-// empty serviceAuds mints only the access token.
-func (m *ClientIdentityManager) mintCall(ctx context.Context, inputToken string, serviceAuds []string) (*tokenEntry, []*tokenEntry, error) {
+// empty serviceAuds mints only the access token. tenantNamespace is sent as
+// tenant_namespace; "" sends none.
+func (m *ClientIdentityManager) mintCall(ctx context.Context, inputToken string, serviceAuds []string, tenantNamespace string) (*tokenEntry, []*tokenEntry, error) {
 	if !hasClientTokenExchanger {
 		return nil, nil, errTokenMinterNotConfigured
 	}
 {{- if .HasClientTokenExchanger }}
 	client := clientmint_pb.New{{.ClientMintServiceName}}Client(m.conn)
 	req := &tokenrequest_pb.TokenMintRequest{
-		InputToken:   inputToken,
-		TokenPurpose: token_pb.TokenPurpose_TOKEN_PURPOSE_ACCESS,
-		ServiceAuds:  serviceAuds,
+		InputToken:      inputToken,
+		TokenPurpose:    token_pb.TokenPurpose_TOKEN_PURPOSE_ACCESS,
+		ServiceAuds:     serviceAuds,
+		TenantNamespace: tenantNamespace,
 	}
 	callCtx, cancel := context.WithTimeout(ctx, mintTimeout)
 	defer cancel()
@@ -354,6 +403,7 @@ func (m *ClientIdentityManager) mintCall(ctx context.Context, inputToken string,
 {{- else }}
 	_ = inputToken
 	_ = serviceAuds
+	_ = tenantNamespace
 	_ = tokenrequest_pb.TokenMintRequest{}
 	_ = token_pb.TokenPurpose_TOKEN_PURPOSE_ACCESS
 	return nil, nil, errTokenMinterNotConfigured

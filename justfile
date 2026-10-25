@@ -185,7 +185,7 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
-  for g in soundness test current-generation determinism cert-stream claims-provenance w2s-validate c2d-server; do
+  for g in soundness test current-generation determinism cert-stream claims-provenance w2s-validate c2d-server zero-rpc-s2s; do
     echo "=== $g ==="
     just "$g"
     rc=$?
@@ -319,6 +319,13 @@ w2s-validate-java:
 # declared unix socket and calls it through the generated c2dm client.
 c2d-server:
   {{lock}} bash cross-test/c2d-server/run.sh
+
+# Behavioral coverage of a zero-rpc Rust host (#94): the generated ServiceManager
+# of cross-test/proto-zerorpc runs new() + run() against a fake kernel and a fake
+# llmproxy peer, makes one s2s call, and must not act as an instance of its
+# parent service (no instance health, no serving cert, no listener).
+zero-rpc-s2s:
+  {{lock}} bash cross-test/zero-rpc-s2s/run.sh
 
 c2d-server-go:
   {{lock}} bash cross-test/c2d-server/run.sh --language go

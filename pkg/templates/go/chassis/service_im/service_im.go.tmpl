@@ -674,6 +674,7 @@ func (im *IdentityManager) Close() {
 type k8sTokenMinter struct {
 	tokenFile    string
 	bootstrap    bool                   // Phase 1 presents credential instead of reading tokenFile
+	bootstrapped bool                   // the bootstrap token has been exchanged; credential is now a refresh token
 	phase1Mu     sync.Mutex             // serialises Phase 1; guards credential
 	credential   string                 // bootstrap mode: the credential Phase 1 presents
 	mu           sync.Mutex
@@ -833,11 +834,19 @@ func (tm *k8sTokenMinter) exchangeForAccess(exchClient cluster_svc_pb.{{.MintSer
 		return nil, fmt.Errorf("token exchange phase 1 (bootstrap): %w", err)
 	}
 	if tm.bootstrap {
+		// The first exchange turns the one-shot bootstrap token into a refresh
+		// token, which becomes the credential. A later renewal presents that
+		// refresh token, and the authority answers a service-typed refresh with
+		// an access token alone (services keep their refresh token; only users'
+		// rotate), so no refresh in the response means: keep the one held.
 		refresh := resp.GetRefreshToken().GetBase64()
-		if refresh == "" {
+		switch {
+		case refresh != "":
+			tm.credential = refresh
+			tm.bootstrapped = true
+		case !tm.bootstrapped:
 			return nil, fmt.Errorf("bootstrap response missing refresh_token")
 		}
-		tm.credential = refresh
 	}
 	return resp, nil
 }

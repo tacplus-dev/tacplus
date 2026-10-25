@@ -12,6 +12,9 @@
 //! them on demand, and proactively refreshes at ~50% of TTL. Refresh tokens
 //! cannot mint service-specific tokens directly, so an access token is always
 //! obtained first; the token authority batch TokenMint returns both in one round trip.
+//!
+//! `set_tenant_namespace(ns)` selects which tenant the refresh → access mint is
+//! for (TokenMintRequest.tenant_namespace); `None` is the plain personal exchange.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,6 +53,14 @@ struct TokenEntry {
     refresh_at: SystemTime,
 }
 
+/// Tenant the refresh → access mint asks for, with an epoch bumped on every
+/// switch so a mint in flight across it is not cached.
+#[derive(Default)]
+struct TenantSelection {
+    namespace: Option<String>,
+    epoch: u64,
+}
+
 impl TokenEntry {
     fn usable_at(&self, now: SystemTime) -> bool {
         now < self.refresh_at && now < self.expires_at
@@ -68,6 +79,7 @@ pub struct ClientIdentityManager {
     access_token: RwLock<Option<TokenEntry>>,
     /// Service-specific tokens, keyed by audience.
     tokens: RwLock<HashMap<String, TokenEntry>>,
+    tenant: RwLock<TenantSelection>,
     instance_id: RwLock<String>,
     /// Exponential backoff state for auth attempts.
     auth_failures: RwLock<u32>,
@@ -150,6 +162,7 @@ impl ClientIdentityManager {
             refresh_token: RwLock::new(None),
             access_token: RwLock::new(None),
             tokens: RwLock::new(HashMap::new()),
+            tenant: RwLock::new(TenantSelection::default()),
             instance_id: RwLock::new(String::new()),
             auth_failures: RwLock::new(0),
             last_auth_attempt: RwLock::new(None),
@@ -165,6 +178,28 @@ impl ClientIdentityManager {
         *self.access_token.write().await = None;
         self.tokens.write().await.clear();
         *self.auth_failures.write().await = 0;
+    }
+
+    /// Mints subsequent access tokens for `ns` (sent as tenant_namespace on the
+    /// refresh → access mint); `None` returns to the plain personal exchange.
+    /// Changing it drops the cached access and service tokens.
+    pub async fn set_tenant_namespace(&self, ns: Option<String>) {
+        let ns = ns.filter(|s| !s.is_empty());
+        let mut tenant = self.tenant.write().await;
+        if tenant.namespace == ns {
+            return;
+        }
+        tenant.namespace = ns;
+        tenant.epoch += 1;
+        *self.access_token.write().await = None;
+        self.tokens.write().await.clear();
+    }
+
+    /// Returns the cached access token if it is unexpired; does not mint.
+    pub async fn access_token(&self) -> Option<String> {
+        self.access_token.read().await.as_ref()
+            .filter(|e| SystemTime::now() < e.expires_at)
+            .map(|e| e.token.clone())
     }
 
     /// Returns the current refresh token, if any.
@@ -266,6 +301,12 @@ impl ClientIdentityManager {
         }
 
         // Fast path: a valid access token is cached — mint just the service token.
+        // Only the refresh → access mint carries the tenant namespace; a service
+        // token inherits it from the access token it is minted from.
+        let (ns, epoch) = {
+            let tenant = self.tenant.read().await;
+            (tenant.namespace.clone(), tenant.epoch)
+        };
         let cached_access = {
             let at = self.access_token.read().await;
             at.as_ref()
@@ -274,11 +315,14 @@ impl ClientIdentityManager {
         };
         let auds = vec![audience.to_string()];
         if let Some(access) = cached_access {
-            let (_, mut svc) = self.mint_call(access, &auds).await?;
+            let (_, mut svc) = self.mint_call(access, &auds, None).await?;
             let entry = svc.drain(..).next()
                 .ok_or("ClientIM: mint response missing service token")?;
             let jwt = entry.token.clone();
-            self.tokens.write().await.insert(audience.to_string(), entry);
+            let tenant = self.tenant.read().await;
+            if tenant.epoch == epoch {
+                self.tokens.write().await.insert(audience.to_string(), entry);
+            }
             return Ok(jwt);
         }
 
@@ -286,12 +330,15 @@ impl ClientIdentityManager {
         // refresh token (refresh → access + access → service).
         let refresh = self.refresh_token.read().await.clone()
             .ok_or("ClientIM: no refresh token")?;
-        let (access_entry, mut svc) = self.mint_call(refresh, &auds).await?;
-        *self.access_token.write().await = Some(access_entry);
+        let (access_entry, mut svc) = self.mint_call(refresh, &auds, ns).await?;
         let entry = svc.drain(..).next()
             .ok_or("ClientIM: mint response missing service token")?;
         let jwt = entry.token.clone();
-        self.tokens.write().await.insert(audience.to_string(), entry);
+        let tenant = self.tenant.read().await;
+        if tenant.epoch == epoch {
+            *self.access_token.write().await = Some(access_entry);
+            self.tokens.write().await.insert(audience.to_string(), entry);
+        }
         Ok(jwt)
     }
 
@@ -307,18 +354,26 @@ impl ClientIdentityManager {
             }
         }
 
+        let (ns, epoch) = {
+            let tenant = self.tenant.read().await;
+            (tenant.namespace.clone(), tenant.epoch)
+        };
         let refresh = self.refresh_token.read().await.clone()
             .ok_or("ClientIM: no refresh token")?;
-        let (access_entry, _) = self.mint_call(refresh, &[]).await?;
+        let (access_entry, _) = self.mint_call(refresh, &[], ns).await?;
         let jwt = access_entry.token.clone();
-        *self.access_token.write().await = Some(access_entry);
+        let tenant = self.tenant.read().await;
+        if tenant.epoch == epoch {
+            *self.access_token.write().await = Some(access_entry);
+        }
         Ok(jwt)
     }
 
     /// Calls TokenMint RPC once. Returns the access-token cache
     /// entry plus one entry per requested service audience (in request order).
-    /// An empty `service_auds` mints only the access token.
-    async fn mint_call(&self, input_token: String, service_auds: &[String])
+    /// An empty `service_auds` mints only the access token. `tenant_namespace`
+    /// is sent as tenant_namespace; `None` sends none.
+    async fn mint_call(&self, input_token: String, service_auds: &[String], tenant_namespace: Option<String>)
         -> Result<(TokenEntry, Vec<TokenEntry>), Box<dyn std::error::Error + Send + Sync>>
     {
 {{- if .HasClientTokenExchanger }}
@@ -330,6 +385,7 @@ impl ClientIdentityManager {
             input_token,
             token_purpose: TokenPurpose::Access as i32,
             service_auds: service_auds.to_vec(),
+            tenant_namespace: tenant_namespace.unwrap_or_default(),
             ..Default::default()
         });
 
@@ -365,7 +421,7 @@ impl ClientIdentityManager {
 
         Ok((access_entry, svc_entries))
 {{- else }}
-        let _ = (input_token, service_auds);
+        let _ = (input_token, service_auds, tenant_namespace);
         Err("ClientIM: token minter is not configured".into())
 {{- end }}
     }

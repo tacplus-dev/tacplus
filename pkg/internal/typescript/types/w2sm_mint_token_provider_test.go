@@ -72,9 +72,11 @@ func TestTypeScriptW2SMintTokenProviderRender(t *testing.T) {
 			"  onSessionEnded?: () => void;",
 			"  readonly provider: TokenProvider = (service?: string) => this.getTokenFor(service ?? '');",
 			// refresh -> access (empty aud) -> service-specific, batched like ClientIdentityManager.
-			"resp = await this.mint.mintToken(create(TokenMintRequestSchema, {\n        inputToken,\n        tokenPurpose: TokenPurpose.ACCESS,\n        serviceAuds,\n      }));",
-			"const { access } = await this.mintCall(refresh, []);",
-			"const { access, services } = await this.mintCall(input, [audience]);",
+			"resp = await this.mint.mintToken(create(TokenMintRequestSchema, {\n        inputToken,\n        tokenPurpose: TokenPurpose.ACCESS,\n        serviceAuds,\n        tenantNamespace: tenantNamespace ?? '',\n      }));",
+			"const { access } = await this.mintCall(refresh, [], this.tenantNamespace);",
+			"const { access, services } = await this.mintCall(input, [audience], fromRefresh ? this.tenantNamespace : null);",
+			// Runtime tenant namespace for account switching (#139).
+			"  setTenantNamespace(ns: string | null): void {",
 			// A refused refresh ends the session.
 			"if (e instanceof W2SError && e.code === W2S_UNAUTHENTICATED) {",
 			"this.storage.removeItem(W2S_REFRESH_TOKEN_KEY);",

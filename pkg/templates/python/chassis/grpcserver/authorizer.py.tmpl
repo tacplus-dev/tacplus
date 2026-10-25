@@ -168,6 +168,9 @@ class Authorizer:
         # Methods whose auth_services names "*": they admit service callers only.
         self._method_auth_any_service: Set[str] = set()
         self._method_target_namespace_field: Dict[str, str] = {}
+        # The instance's own tenant namespace ("/tenants/<t>"), or "" for a
+        # shared instance. See set_host_namespace.
+        self._host_tenant = ""
 
         logger.info(
             "Token-based authorization initialized: service=%s, jwk_watch=%s",
@@ -201,6 +204,39 @@ class Authorizer:
             self._method_auth_any_service.add(method_key)
         else:
             self._method_auth_any_service.discard(method_key)
+
+    def set_host_namespace(self, namespace: str) -> None:
+        """
+        Tells the authorizer which namespace its own instance runs in, taken from
+        the instance's bootstrap identity (the namespace of its own service
+        token). A tenant-owned instance runs in exactly "/tenants/<t>": from then
+        on authorize() and authenticate() refuse, PERMISSION_DENIED, a caller
+        whose namespace is neither at-or-above that tenant nor /system or below.
+        A token's aud is the service name, which every tenant's instance accepts,
+        so without this check another tenant's token is admitted on any RPC with
+        no target_namespace_field. Any other namespace (a shared instance's
+        /system or below) leaves the authorizer exactly as it was.
+        """
+        self._host_tenant = namespace if _is_tenant_namespace(namespace) else ""
+
+    def set_host_namespace_from_token(self, token: str) -> None:
+        """set_host_namespace with the namespace read from the instance's own service token."""
+        self.set_host_namespace(TokenWrapper.parse(token).get_namespace() or "")
+
+    def _check_host_tenant(self, caller_namespace: str) -> None:
+        """The tenant-owned instance's door check."""
+        host = self._host_tenant
+        if not host:
+            return
+        if (
+            caller_namespace == "/system"
+            or caller_namespace.startswith("/system/")
+            or is_at_or_below(caller_namespace, host)
+        ):
+            return
+        raise permission_denied(
+            f'caller namespace "{caller_namespace}" is not at-or-above this instance\'s tenant "{host}"'
+        )
 
     def set_method_target_namespace_field(self, method_key: str, field_name: str) -> None:
         """
@@ -314,6 +350,9 @@ class Authorizer:
                 f'token audience "{aud}" is not accepted by service "{self._SERVICE_NAME}"'
             )
 
+        # Tenant-owned instance: refuse another tenant's caller at the door.
+        self._check_host_tenant(tw.get_namespace() or "")
+
         # S2S path: service/workload tokens carry structured identity claims
         # (sub_type, sub, service_name). Authorization is receiver-side via
         # auth_services RE2 patterns on the LOCATION-AGNOSTIC service path from
@@ -415,6 +454,9 @@ class Authorizer:
                 f'token audience "{aud}" is not accepted by service "{self._SERVICE_NAME}"'
             )
 
+        # Tenant-owned instance: refuse another tenant's caller at the door.
+        self._check_host_tenant(tw.get_namespace() or "")
+
         if target_namespace is not None:
             target = target_namespace or "/"
             caller_namespace = tw.get_namespace() or ""
@@ -428,6 +470,14 @@ class Authorizer:
     def close(self) -> None:
         """Closes the authorizer. Safe to call multiple times."""
         self._jwk_cache.close()
+
+
+def _is_tenant_namespace(namespace: str) -> bool:
+    """True when namespace is exactly "/tenants/<t>"."""
+    if not namespace.startswith("/tenants/"):
+        return False
+    tenant = namespace[len("/tenants/"):]
+    return bool(tenant) and "/" not in tenant
 
 
 def service_entitlements_grant_rpc(te: Any, service_name: str, full_method: str) -> bool:

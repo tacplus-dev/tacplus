@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -201,7 +202,10 @@ type authorizer struct {
 	methodAuthAnyService       map[string]bool
 	methodActorPatterns        map[string][]*regexp.Regexp
 	methodTargetNamespaceField map[string]string
-	logger                     *zap.Logger
+	// hostTenant is the instance's own tenant namespace ("/tenants/<t>"), or ""
+	// for a shared instance. See SetHostNamespace.
+	hostTenant atomic.Value // string
+	logger     *zap.Logger
 }
 
 // NewAuthorizer creates an Authorizer that verifies token signatures via JWK view.
@@ -228,6 +232,55 @@ func NewAuthorizer(ctx context.Context, conn grpc.ClientConnInterface) (*authori
 		methodTargetNamespaceField: make(map[string]string),
 		logger:                     zap.L().Named("authorizer"),
 	}, nil
+}
+
+// SetHostNamespace tells the authorizer which namespace its own instance runs
+// in, taken from the instance's bootstrap identity (the namespace of its own
+// service token). A tenant-owned instance runs in exactly "/tenants/<t>": from
+// then on every door (Authorize, Authenticate, AuthenticateAtOrBelow and the
+// enforcing interceptors) refuses, PERMISSION_DENIED, a caller whose namespace
+// is neither at-or-above that tenant nor /system or below. A token's aud is the
+// service name, which every tenant's instance accepts, so without this check
+// another tenant's token is admitted on any RPC with no target_namespace_field.
+// Any other namespace (a shared instance's /system or below) leaves the
+// authorizer exactly as it was.
+func (a *authorizer) SetHostNamespace(ns string) {
+	if isTenantNamespace(ns) {
+		a.hostTenant.Store(ns)
+		return
+	}
+	a.hostTenant.Store("")
+}
+
+// SetHostNamespaceFromToken is SetHostNamespace with the namespace read from
+// the instance's own service token (the identity manager's GetToken).
+func (a *authorizer) SetHostNamespaceFromToken(token string) error {
+	tw, err := tokenlib.ParseToken(token)
+	if err != nil {
+		return fmt.Errorf("parse own identity token: %w", err)
+	}
+	a.SetHostNamespace(tw.GetNamespace())
+	return nil
+}
+
+// isTenantNamespace reports whether ns is exactly "/tenants/<t>".
+func isTenantNamespace(ns string) bool {
+	t, ok := strings.CutPrefix(ns, "/tenants/")
+	return ok && t != "" && !strings.Contains(t, "/")
+}
+
+// checkHostTenant is the tenant-owned instance's door check.
+func (a *authorizer) checkHostTenant(callerNamespace string) error {
+	host, _ := a.hostTenant.Load().(string)
+	if host == "" {
+		return nil
+	}
+	if callerNamespace == "/system" || strings.HasPrefix(callerNamespace, "/system/") ||
+		IsAtOrBelow(callerNamespace, host) {
+		return nil
+	}
+	return protoerrors.NewErrPermissionDenied(nil,
+		"caller namespace %q is not at-or-above this instance's tenant %q", callerNamespace, host)
 }
 
 // SetMethodTargetNamespaceField registers the request field name that carries the
@@ -535,6 +588,9 @@ func (a *authorizer) verifyBearer(ctx context.Context) (*tokenlib.TokenWrapper, 
 	if _, ok := acceptedAudiences[tw.GetAudience()]; !ok {
 		return nil, protoerrors.NewErrPermissionDenied(nil,
 			"token audience %q is not accepted by service %q", tw.GetAudience(), serviceName)
+	}
+	if err := a.checkHostTenant(tw.GetNamespace()); err != nil {
+		return nil, err
 	}
 	return tw, nil
 }

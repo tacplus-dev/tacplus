@@ -531,6 +531,27 @@ identity.Close()
 	stop()
 	return nil, fmt.Errorf("authorizer: %w", err)
 	}
+	// A tenant-owned instance's own token namespace is /tenants/<t>; the
+	// authorizer refuses callers outside that tenant at the door. An identity
+	// that cannot be read leaves the door unpinned, so it fails startup.
+	if identity.HasAuth() {
+		hostToken, tokErr := identity.GetToken()
+		if tokErr == nil {
+			tokErr = auth.SetHostNamespaceFromToken(hostToken)
+		}
+		if tokErr != nil {
+			{{if .HasStates}}
+			bc.Close()
+			{{end}}
+			{{if .HasSmb}}
+			smbAuthorityConn.Close()
+			{{end}}
+			sc.Close()
+			identity.Close()
+			stop()
+			return nil, fmt.Errorf("authorizer host namespace: %w", tokErr)
+		}
+	}
 	{{if .HasDiskStores}}
 	diskStoreLogs, err := openDiskStoreLogs(cfg)
 	if err != nil {

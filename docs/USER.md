@@ -1570,6 +1570,18 @@ The generated entry point is ~20 lines in any language: parse flags, create `Ser
 
 Hand-written code is allowed only where platform law intentionally ends.
 
+**Client-only (zero-rpc) Rust hosts.** A Rust build that declares no rpc of any
+kind (no `service_s2s`/`service_c2s`/`service_c2d`/MCP rpc, no `smb`, no event
+subscription) but does declare an s2s client edge is a client-only host, for a
+workload such as a platform-minted pigeon that only dials peers. Its `run()`
+serves no listener, publishes no `ServiceHealthState` instance (it is not an
+instance of its parent service, so peers never dial it) and does not wait for a
+serving certificate in `new()`. It still runs the health poller, so the
+generated s2s clients (`sm.s2s().<package>().<client>()`) reach their dynamic
+peers, each over the SPIFFE verifier narrowed to that peer. A zero-rpc build with
+no s2s client edge keeps the health-only server. Covered by
+`cross-test/zero-rpc-s2s`.
+
 ---
 
 ## Distributed Tracing

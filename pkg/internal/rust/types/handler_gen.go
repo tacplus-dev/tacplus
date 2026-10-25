@@ -153,25 +153,31 @@ type smTemplateData struct {
 	HasS2SClients           bool
 	S2STargetsRequired      bool // s2s targets listed explicitly (grpc_s2s_clients) gate readiness; s2s_client_all targets do not
 	HasServiceHealthState   bool
-	HasAutoTls              bool
-	AutoTlsKeyType          string
-	HasSmb                  bool // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
-	SmbAuthorityServiceID   string
-	IsGateway               bool
-	HasSubscriptions        bool
-	HealthStateProtoDir     string
-	HealthStateModPath      string // Rust module path, e.g. "services::identity"
-	StateStoreServiceID     string
-	HasTypedHealth          bool   // true when the service's package declares a service_health message
-	TypedHealthType         string // e.g. "ColumnarStoreHealth"
-	TypedHealthModPath      string // Rust module path, e.g. "crate::types::services::columnarstore::columnarstore"
-	TacplusVersion          string
-	TacplusGitSha           string
-	ProtoSourceVersion      string
-	ProtoSourceGitSha       string
-	GrpcServices            []grpcServiceEntry
-	ConfigFetches           []rustConfigFetchEntry
-	Subscriptions           []subscriptionEntry
+	// ClientOnly is the zero-rpc shape that only dials s2s peers: no rpc of any
+	// kind, no smb, no subscription, and at least one s2s client edge. run() then
+	// serves no listener, publishes no instance health and never waits for a
+	// serving cert, so the host does not join its parent service's endpoint set;
+	// it still runs the health poller that fills the dynamic s2s connections.
+	ClientOnly            bool
+	HasAutoTls            bool
+	AutoTlsKeyType        string
+	HasSmb                bool // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
+	SmbAuthorityServiceID string
+	IsGateway             bool
+	HasSubscriptions      bool
+	HealthStateProtoDir   string
+	HealthStateModPath    string // Rust module path, e.g. "services::identity"
+	StateStoreServiceID   string
+	HasTypedHealth        bool   // true when the service's package declares a service_health message
+	TypedHealthType       string // e.g. "ColumnarStoreHealth"
+	TypedHealthModPath    string // Rust module path, e.g. "crate::types::services::columnarstore::columnarstore"
+	TacplusVersion        string
+	TacplusGitSha         string
+	ProtoSourceVersion    string
+	ProtoSourceGitSha     string
+	GrpcServices          []grpcServiceEntry
+	ConfigFetches         []rustConfigFetchEntry
+	Subscriptions         []subscriptionEntry
 	// TimeseriesInserts are every subscription's insert callbacks, once each.
 	TimeseriesInserts []rustTimeseriesInsertEntry
 	Publishers        []publisherEntry // model-driven EventBus topic publishers (own (spec.service_event) topics)
@@ -647,6 +653,8 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		HasS2SClients:           len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
 		S2STargetsRequired:      len(config.GrpcS2SClients) > 0 && !config.GrpcS2SClientAll,
 		HasServiceHealthState:   hasServiceHealthState,
+		ClientOnly: !hasTlsGrpc && !hasC2DGrpc && !hasSmb && len(subs) == 0 && hasServiceHealthState &&
+			(len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll),
 		// Every TLS gRPC service obtains its server cert via auto-TLS
 		// bidi stream (single canonical cert path). The HasAutoTls gate in the
 		// template historically meant "service has a state.auto_tls annotation",

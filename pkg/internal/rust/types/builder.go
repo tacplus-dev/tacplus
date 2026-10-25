@@ -1393,7 +1393,9 @@ func appendToModFile(modPath string, modules []string, skipReExports bool) error
 	headerWritten := false
 	for _, origLine := range lines {
 		trimmedLine := strings.TrimSpace(origLine)
-		if strings.HasPrefix(trimmedLine, "//") || trimmedLine == "" {
+		// Inner attributes (#![...]) belong to the file head too: an item emitted
+		// before one would make it a compile error.
+		if strings.HasPrefix(trimmedLine, "//") || strings.HasPrefix(trimmedLine, "#![") || trimmedLine == "" {
 			b.WriteString(origLine)
 			b.WriteString("\n")
 		} else {

@@ -993,8 +993,9 @@ assert_healthonly_output() {
   assert_no_legacy_fixture_output "$output"
 }
 
-# assert_zerorpc_output checks the zero-rpc fixture took the health-only branch
-# with its auto-TLS items declared, the shape whose absence broke the s2sm build.
+# assert_zerorpc_output checks the zero-rpc fixture took the client-only branch
+# (no listener) with its auto-TLS items still declared, the shape whose absence
+# broke the s2sm build.
 assert_zerorpc_output() {
   local output="$1"
   local language="$2"
@@ -1003,8 +1004,11 @@ assert_zerorpc_output() {
     rust)
       local sm="$output/s2sm/mod.rs"
       [[ -f "$sm" ]] || die "zero-rpc fixture: s2sm/mod.rs not found under $output"
-      grep -q 'health-only gRPC server listening' "$sm" \
-        || die "zero-rpc fixture: 'health-only gRPC server listening' not found in $sm (wrong template branch?)"
+      grep -q 'Client-only (zero rpc) host' "$sm" \
+        || die "zero-rpc fixture: 'Client-only (zero rpc) host' not found in $sm (wrong template branch?)"
+      if grep -q 'health-only gRPC server listening' "$sm"; then
+        die "zero-rpc fixture: an s2s-client zero-rpc build must not bind the health-only listener ($sm)"
+      fi
       grep -rq 'fn reloading_tls_incoming' "$output/s2sm" \
         || die "zero-rpc fixture: reloading_tls_incoming is not declared under $output/s2sm"
       grep -rq 'tls_server_certified_key' "$output/s2sm" \

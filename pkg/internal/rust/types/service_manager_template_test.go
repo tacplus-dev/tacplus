@@ -423,3 +423,73 @@ func TestRustServiceManagerHealthOnlyEnablesAutoTls(t *testing.T) {
 		t.Fatalf("AutoTlsKeyType = %q, want the ecdsa default for the health-only TLS listener", data.AutoTlsKeyType)
 	}
 }
+
+// A zero-rpc build that dials s2s peers is a client-only host: run() serves no
+// listener, publishes no instance health and waits for no serving cert, but it
+// still runs the health poller that fills the dynamic s2s connections (#94).
+// A zero-rpc build with no s2s client edge keeps the health-only server.
+func TestRustServiceManagerClientOnlyRun(t *testing.T) {
+	base := smTemplateData{
+		ServiceLabel:          "pigeon",
+		HasAutoTls:            true,
+		AutoTlsKeyType:        "ecdsa",
+		HasStates:             true,
+		HasServiceHealthState: true,
+		HasS2SClients:         true,
+		TargetServices:        []TargetServiceInfo{{ServiceID: "llmproxy", AccessorName: "llmproxy"}},
+	}
+
+	clientOnly := base
+	clientOnly.ClientOnly = true
+	rendered := renderRustServiceManagerForTest(t, clientOnly)
+	for _, unwanted := range []string{
+		"reloading_tls_incoming(addr",
+		"health-only gRPC server listening",
+		"tls_conn, service_label, instance_id, handler_slot",
+		"HealthReporter::new_with_ready_and_status",
+		"handler new_tls_cert failed on initial delivery",
+	} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("client-only run() must not contain %q", unwanted)
+		}
+	}
+	for _, want := range []string{
+		"sc.reconcile_from_health(&relevant).await;",
+		"self.llmproxy_conn.clone(),",
+		"Client-only (zero rpc) host",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("client-only run() missing %q", want)
+		}
+	}
+
+	healthOnly := renderRustServiceManagerForTest(t, base)
+	if !strings.Contains(healthOnly, "health-only gRPC server listening") {
+		t.Fatal("a zero-rpc build that is not ClientOnly keeps the health-only server")
+	}
+}
+
+// ClientOnly is set only for the zero-rpc shape with an s2s client edge.
+func TestRustServiceManagerClientOnlyData(t *testing.T) {
+	dir := t.TempDir()
+	if err := protogen.CopySysProtos(dir); err != nil {
+		t.Fatalf("CopySysProtos: %v", err)
+	}
+	if _, _, _, err := protogen.ScanAndGenerateConfigHolder(dir, dir); err != nil {
+		t.Fatalf("ScanAndGenerateConfigHolder: %v", err)
+	}
+	cfg := &tactype.Config{
+		CrateBasePath:     "beagle-model",
+		SelfPackage:       "beagle",
+		FlatProtoDir:      dir,
+		AnnotatedProtoDir: dir,
+		States:            []tactype.StateEntry{{MessageName: "PingState"}},
+	}
+	data, err := buildSMTemplateData(cfg, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildSMTemplateData: %v", err)
+	}
+	if data.ClientOnly {
+		t.Fatal("a zero-rpc build with no s2s client edge has nothing to dial; it is not ClientOnly")
+	}
+}

@@ -56,6 +56,14 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   and on stop the socket is removed and the handler's shutdown runs once.
   Does not run `Run()` itself (`docs/KNOWN_TEST_GAPS.md` C2D-1). Local
   (`just c2d-server`, part of `just gates`); not yet in CI.
+- `zero-rpc-s2s` (`cross-test/zero-rpc-s2s/run.sh`): behavioral gate for a
+  zero-rpc (client-only) Rust host (#94). Generates `cross-test/proto-zerorpc`
+  and runs its real generated `ServiceManager` (`new()` + `run()`) against a
+  fake kernel (token minter, `ServiceHealthState`) and a fake `upstreamllm` peer
+  over TLS with SPIFFE certs. One s2s call through the generated client must
+  reach the peer, and the host must publish no instance health, ask for no
+  serving cert and bind no listener. Rust only. Local (`just zero-rpc-s2s`, part
+  of `just gates`); not yet in CI.
 - `mcp-floor-version` (`cross-test/mcp-floor-version/run.sh`): rmcp floor gate
   for the generated Rust MCP dispatch — generates a service owning one
   `RPC_PRINCIPAL_MCP` tool, pins `rmcp` to the EXACT version

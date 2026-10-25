@@ -4,6 +4,11 @@
 // CODE GENERATED - DO NOT EDIT
 
 //! ServiceManager — top-level orchestrator for the service lifecycle.
+{{- if .ClientOnly}}
+// A client-only (zero rpc) run() serves nothing, so the serving-side items below
+// (TLS listener, cert stream, health publisher) are emitted but never called.
+#![allow(dead_code)]
+{{- end}}
 
 pub mod handler;
 {{- if .HasSubscriptions}}
@@ -872,6 +877,7 @@ impl ServiceManager {
         let tls_private_key_pem_arc: Arc<tokio::sync::RwLock<Option<String>>> = Arc::new(tokio::sync::RwLock::new(None));
         let tls_handler_slot_arc: Arc<tokio::sync::RwLock<Option<Arc<dyn Handler>>>> = Arc::new(tokio::sync::RwLock::new(None));
         let tls_server_certified_key_arc: Arc<std::sync::RwLock<Option<Arc<CertifiedKey>>>> = Arc::new(std::sync::RwLock::new(None));
+{{- if not .ClientOnly}}
         {
             let (tls_ready_tx, tls_ready_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
             let tls_conn = state_store_conn.clone();
@@ -915,6 +921,7 @@ impl ServiceManager {
             }
             tasks.lock().unwrap().push(tls_handle);
         }
+{{- end}}
 {{- end}}
 
         Ok(Self {
@@ -1868,6 +1875,13 @@ impl ServiceManager {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         };
+{{- if .ClientOnly}}
+        // Client-only (zero rpc): this host is not an instance of the parent
+        // service, so it publishes no ServiceHealthState instance. The state-store
+        // connection above is still awaited because the health poller below reads
+        // peers' health through it.
+        drop(health_conn);
+{{- else}}
         let health_client = ServiceHealthStateServiceClient::new(health_conn);
         let publisher = HealthPublisherAdapter {
             client: Arc::new(tokio::sync::Mutex::new(health_client)),
@@ -1908,6 +1922,7 @@ impl ServiceManager {
             Ok(Err(e)) => return Err(format!("first health publish: {}", e).into()),
             Err(_) => return Err("health reporter stopped before first successful publish".into()),
         }
+{{- end}}
 	{{- if and .HasServiceHealthState (or .HasS2SClients .HasSmb)}}
 
 	        // Start health poller — polls ServiceHealthState every 5s to reconcile
@@ -1983,7 +1998,7 @@ impl ServiceManager {
 {{- end}}
 {{- end}}
 
-{{- if .HasAutoTls}}
+{{- if and .HasAutoTls (not .ClientOnly)}}
         // Register the user handler with the auto-TLS stream that was started in new().
         // The first cert was delivered before run() had a handler. Replay that
         // accepted cert/key now so first-delivery handler failure is still fatal
@@ -2196,6 +2211,27 @@ impl ServiceManager {
                 info!("Shutdown signal received");
             })
             .await?;
+{{- else if .ClientOnly}}
+        // Client-only (zero rpc) host: no listener, no instance health and no
+        // serving cert. The health poller above keeps the dynamic s2s connections
+        // filled, so the generated s2s clients reach their peers. Readiness is
+        // driven on the probe listener by the same required-channel check.
+        let health_ok = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        self.spawn_owned(self.clone().drive_readiness(
+            self.grpc_health.clone(),
+            health_ok,
+            Vec::new(),
+        ));
+        if handler.additional_services().is_some() {
+            return Err(
+                "handler supplied additional_services() but this build has no tacplus gRPC \
+                 services and serves no listener; declare the service in the proto spec \
+                 (spec.vservice) so tacplus generates the auth plane"
+                    .into(),
+            );
+        }
+        shutdown_signal().await;
+        info!("Shutdown signal received");
 {{- else if .HasC2DGrpc}}
         // c2d-only service — no TLS server. Wait for shutdown signal (SIGINT or SIGTERM).
         shutdown_signal().await;
@@ -2281,7 +2317,7 @@ impl ServiceManager {
 {{- if .HasStates}}
         self.state_clients.close();
 {{- end}}
-{{- if .HasServiceHealthState}}
+{{- if and .HasServiceHealthState (not .ClientOnly)}}
         health_reporter.close();
 {{- end}}
 {{- if .HasSubscriptions}}

@@ -11,6 +11,8 @@ ARG RUST_VERSION=1
 ARG JDK_VERSION=25
 ARG MAVEN_VERSION=3.9
 ARG NODE_VERSION=24
+ARG NPM_VERSION=11.21.1
+ARG NPM_UNDICI_VERSION=6.29.1
 ARG SWIFT_VERSION=6.1.3
 ARG DOTNET_CHANNEL=10.0
 
@@ -21,6 +23,8 @@ FROM node:${NODE_VERSION}-trixie-slim AS node
 
 FROM rust:${RUST_VERSION}-trixie
 ARG TARGETARCH
+ARG NPM_VERSION
+ARG NPM_UNDICI_VERSION
 ARG SWIFT_VERSION
 ARG DOTNET_CHANNEL
 LABEL org.opencontainers.image.title="tacplus base" \
@@ -44,6 +48,19 @@ COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s /usr/share/maven/bin/mvn /usr/local/bin/mvn \
     && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+# The npm bundled in the Node tarball carries its own node_modules (brace-expansion,
+# undici) at versions that lag their advisories; installing a pinned npm over it
+# replaces that whole tree. NPM_VERSION is the first release whose bundle Trivy
+# does not flag for brace-expansion. No npm release yet bundles an undici past
+# the latest advisory, so NPM_UNDICI_VERSION (same 6.x line npm requires) is
+# unpacked over npm's copy; drop it once an npm release bundles it.
+RUN npm install -g --no-fund --no-audit "npm@${NPM_VERSION}" \
+    && d=$(mktemp -d) && (cd "$d" && npm pack --silent "undici@${NPM_UNDICI_VERSION}") \
+    && rm -rf /usr/local/lib/node_modules/npm/node_modules/undici \
+    && mkdir /usr/local/lib/node_modules/npm/node_modules/undici \
+    && tar -xz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/undici -f "$d"/undici-*.tgz \
+    && rm -rf "$d" && npm cache clean --force && npm --version \
+    && npm view undici version >/dev/null
 # Swift SDK into /usr, where swift.org's tarball layout puts it.
 RUN case "$TARGETARCH" in \
       amd64) P=debian12; F="swift-${SWIFT_VERSION}-RELEASE-debian12" ;; \

@@ -27,7 +27,7 @@ ARG SWIFT_PROTOBUF_VERSION=1.38.0
 ARG GRPC_SWIFT_PROTOBUF_VERSION=2.4.0
 ARG GRPCIO_TOOLS_VERSION=1.76.0
 ARG JUST_VERSION=1.58.0
-ARG GH_VERSION=2.102.0
+ARG GH_VERSION=2.103.2
 ARG GCLOUD_VERSION=549.0.0
 ARG OPENJML_VERSION=21-0.23
 
@@ -64,6 +64,7 @@ RUN case "$TARGETARCH" in \
     && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/gcloud.tar.gz \
        "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-${GCLOUD_VERSION}-linux-${GCLOUD_ARCH}.tar.gz" \
     && tar -xz -C /opt -f /tmp/gcloud.tar.gz && rm /tmp/gcloud.tar.gz \
+    && rm -rf /opt/google-cloud-sdk/platform/bundledpythonunix /opt/google-cloud-sdk/bin/gcloud-crc32c \
     && mkdir -p /opt/openjml \
     && curl -fsSL --retry 30 --retry-delay 5 -o /tmp/openjml.zip \
        "https://github.com/OpenJML/OpenJML/releases/download/${OPENJML_VERSION}/openjml-ubuntu-latest-${OPENJML_VERSION}.zip" \
@@ -139,6 +140,11 @@ RUN ln -s ../lib/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es /usr/loc
 RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir "grpcio-tools==${GRPCIO_TOOLS_VERSION}" black build twine \
        "cryptography>=49.0.0" "pyOpenSSL>=26.0.0" "jaraco.context>=6.1.0" "wheel>=0.46.2"
-ENV PATH="/opt/venv/bin:/opt/google-cloud-sdk/bin:/root/.cache/tacplus/tools/openjml:${PATH}" \
+# gcloud runs on the image's system Python: the SDK's bundled Python and its
+# gcloud-crc32c binary (a Go program) are removed in the fetch stage because
+# they pin cryptography, pyOpenSSL and a Go stdlib that Trivy flags at
+# HIGH/CRITICAL, and no gate uses them.
+ENV CLOUDSDK_PYTHON=/usr/bin/python3 \
+    PATH="/opt/venv/bin:/opt/google-cloud-sdk/bin:/root/.cache/tacplus/tools/openjml:${PATH}" \
     TACPLUS_CONTAINER=1 \
     TACPLUS_IMAGE=build

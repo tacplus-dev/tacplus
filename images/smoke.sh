@@ -11,6 +11,8 @@ want=("${gen[@]}")
 for t in "${want[@]}"; do
   command -v "$t" >/dev/null || { echo "missing: $t" >&2; exit 1; }
 done
+# gcloud ships without its bundled Python; it must still start on the system one.
+[[ "${TACPLUS_IMAGE:-build}" == build ]] && { gcloud --version >/dev/null || { echo "gcloud does not start" >&2; exit 1; }; }
 # protoc executes each plugin, so a plugin must be a program for this image's
 # architecture. A file of another architecture, or a saved download, fails only
 # at generation time, with a shell syntax error. ELF e_machine is b7 00 for

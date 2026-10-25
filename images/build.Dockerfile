@@ -50,7 +50,8 @@ RUN case "$TARGETARCH" in \
     && tar -xz -C /opt/just -f /tmp/just.tar.gz just && rm /tmp/just.tar.gz \
     && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/gcloud.tar.gz \
        "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-${GCLOUD_VERSION}-linux-${GCLOUD_ARCH}.tar.gz" \
-    && tar -xz -C /opt -f /tmp/gcloud.tar.gz && rm /tmp/gcloud.tar.gz
+    && tar -xz -C /opt -f /tmp/gcloud.tar.gz && rm /tmp/gcloud.tar.gz \
+    && rm -rf /opt/google-cloud-sdk/platform/bundledpythonunix /opt/google-cloud-sdk/bin/gcloud-crc32c
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS go-tools
 ARG TARGETARCH
@@ -94,4 +95,9 @@ COPY --from=node-tools /usr/local/lib/node_modules/@bufbuild /usr/local/lib/node
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 RUN ln -s ../lib/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es /usr/local/bin/protoc-gen-es
-ENV PATH="/opt/google-cloud-sdk/bin:${PATH}"
+# gcloud runs on the image's system Python: the SDK's bundled Python and its
+# gcloud-crc32c binary (a Go program) are removed in the fetch stage because
+# they pin cryptography, pyOpenSSL and a Go stdlib that Trivy flags at
+# HIGH/CRITICAL, and no gate uses them.
+ENV CLOUDSDK_PYTHON=/usr/bin/python3 \
+    PATH="/opt/google-cloud-sdk/bin:${PATH}"

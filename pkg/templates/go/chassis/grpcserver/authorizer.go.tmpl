@@ -275,8 +275,7 @@ func (a *authorizer) checkHostTenant(callerNamespace string) error {
 	if host == "" {
 		return nil
 	}
-	if callerNamespace == "/system" || strings.HasPrefix(callerNamespace, "/system/") ||
-		IsAtOrBelow(callerNamespace, host) {
+	if IsAtOrBelow("/system", callerNamespace) || IsAtOrBelow(callerNamespace, host) {
 		return nil
 	}
 	return protoerrors.NewErrPermissionDenied(nil,

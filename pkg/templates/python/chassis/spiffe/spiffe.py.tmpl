@@ -459,6 +459,7 @@ def _classify(p: ParsedSpiffeId, segs: List[str]) -> None:
         _classify_pair(p, segs, idx[DATA_SEGMENT], KIND_RESOURCE)
     else:
         # Namespace-only identity (tenant/workspace/system subtree).
+        _validate_namespace_segments(segs)
         p.subject_kind = KIND_UNKNOWN
         p.namespace = "/" + "/".join(segs)
 
@@ -471,6 +472,19 @@ def _classify_system(p: ParsedSpiffeId, segs: List[str]) -> None:
     # exactly "/tenants/<tenant>".
     si = _index_of(segs, SERVICES_SEGMENT)
     if segs[0] not in (SYSTEM_SEGMENT, TENANTS_SEGMENT) or si < 0 or si + 1 >= len(segs):
+        raise ValueError(
+            "spiffe: malformed system/service identity: /" + "/".join(segs)
+        )
+    _validate_namespace_segments(segs[:si])
+    if segs[si + 1] in _RESERVED_TAGS:
+        raise ValueError(
+            f"spiffe: reserved tag {segs[si + 1]!r} cannot be a service name"
+        )
+    rest = segs[si + 2:]
+    if len(rest) % 2 != 0 or any(
+        rest[i] != WORKLOADS_SEGMENT or rest[i + 1] in _RESERVED_TAGS
+        for i in range(0, len(rest), 2)
+    ):
         raise ValueError(
             "spiffe: malformed system/service identity: /" + "/".join(segs)
         )
@@ -492,27 +506,50 @@ def _classify_user_root(p: ParsedSpiffeId, segs: List[str]) -> None:
     p.subject_path = segs[1]
 
 
+def _validate_leaf_namespace(ns_segs: List[str]) -> None:
+    # The parse-side twin of _leaf_base: the namespace before a typed tag must
+    # pass the namespace validator, and a user root is a complete identity, so
+    # nothing may follow it.
+    if not ns_segs:
+        raise ValueError("spiffe: a typed identity needs a namespace")
+    if ns_segs[0] == USERS_SEGMENT:
+        raise ValueError(
+            "spiffe: nothing may follow a user root, got namespace /" + "/".join(ns_segs)
+        )
+    _validate_namespace_segments(ns_segs)
+
+
 def _classify_namespaced(
     p: ParsedSpiffeId, segs: List[str], tag_idx: int, kind: str
 ) -> None:
-    if tag_idx + 1 >= len(segs) or tag_idx == 0:
+    if tag_idx + 2 != len(segs) or tag_idx == 0:
         raise ValueError(
             f"spiffe: malformed {kind} identity: /" + "/".join(segs)
         )
+    _validate_leaf_namespace(segs[:tag_idx])
+    if segs[tag_idx + 1] in _RESERVED_TAGS:
+        raise ValueError(
+            f"spiffe: reserved tag {segs[tag_idx + 1]!r} cannot be a {kind} id"
+        )
     p.subject_kind = kind
     p.namespace = "/" + "/".join(segs[:tag_idx])
-    p.subject_path = "/".join(segs[tag_idx + 1:])
+    p.subject_path = segs[tag_idx + 1]
 
 
 def _classify_pair(p: ParsedSpiffeId, segs: List[str], tag_idx: int, kind: str) -> None:
-    if tag_idx == 0 or tag_idx + 2 >= len(segs):
+    if tag_idx == 0 or tag_idx + 3 != len(segs):
         raise ValueError(
             "spiffe: malformed kind/id identity: /" + "/".join(segs)
+        )
+    _validate_leaf_namespace(segs[:tag_idx])
+    if segs[tag_idx + 1] in _RESERVED_TAGS or segs[tag_idx + 2] in _RESERVED_TAGS:
+        raise ValueError(
+            "spiffe: reserved tag cannot be a kind or id segment: /" + "/".join(segs)
         )
     p.subject_kind = kind
     p.namespace = "/" + "/".join(segs[:tag_idx])
     p.resource_kind = segs[tag_idx + 1]
-    p.resource_id = "/".join(segs[tag_idx + 2:])
+    p.resource_id = segs[tag_idx + 2]
 
 
 def parse_namespace_or_spiffe(value: str) -> str:

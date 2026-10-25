@@ -172,6 +172,9 @@ pub struct Authorizer {
     /// token carrying `act` on a method with no entry here, so an rpc that
     /// declares no auth_actors admits no delegated call at all.
     method_actor_patterns: RwLock<HashMap<String, Vec<regex::Regex>>>,
+    /// The instance's own tenant namespace ("/tenants/<t>"), or empty for a
+    /// shared instance. See [`set_host_namespace`](Self::set_host_namespace).
+    host_tenant: RwLock<String>,
 }
 
 /// The service identity baked in at code generation time.
@@ -204,6 +207,7 @@ impl Authorizer {
             method_auth_patterns: RwLock::new(HashMap::new()),
             method_auth_any_service: RwLock::new(HashSet::new()),
             method_actor_patterns: RwLock::new(HashMap::new()),
+            host_tenant: RwLock::new(String::new()),
         }
     }
 
@@ -215,7 +219,52 @@ impl Authorizer {
             method_auth_patterns: RwLock::new(HashMap::new()),
             method_auth_any_service: RwLock::new(HashSet::new()),
             method_actor_patterns: RwLock::new(HashMap::new()),
+            host_tenant: RwLock::new(String::new()),
         }
+    }
+
+    /// Tells the authorizer which namespace its own instance runs in, taken
+    /// from the instance's bootstrap identity (the namespace of its own service
+    /// token). A tenant-owned instance runs in exactly `/tenants/<t>`: from
+    /// then on every door (`authorize_grpc`, `authenticate*`,
+    /// `check_caller_at_or_below`, the enforcing layer) refuses,
+    /// PERMISSION_DENIED, a caller whose namespace is neither at-or-above that
+    /// tenant nor /system or below. A token's aud is the service name, which
+    /// every tenant's instance accepts, so without this check another tenant's
+    /// token is admitted on any RPC with no target_namespace_field. Any other
+    /// namespace (a shared instance's /system or below) leaves the authorizer
+    /// exactly as it was.
+    pub fn set_host_namespace(&self, namespace: &str) {
+        let tenant = if is_tenant_namespace(namespace) { namespace } else { "" };
+        *self.host_tenant.write().unwrap() = tenant.to_string();
+    }
+
+    /// [`set_host_namespace`](Self::set_host_namespace) with the namespace read
+    /// from the instance's own service token.
+    pub fn set_host_namespace_from_token(&self, token_str: &str) -> Result<()> {
+        let tw = token::Token::parse(token_str).map_err(|e| {
+            AuthorizerError::unauthenticated(format!("own identity token: {}", e))
+        })?;
+        self.set_host_namespace(tw.namespace().unwrap_or(""));
+        Ok(())
+    }
+
+    /// The tenant-owned instance's door check.
+    fn check_host_tenant(&self, caller_namespace: &str) -> Result<()> {
+        let host = self.host_tenant.read().unwrap();
+        if host.is_empty() {
+            return Ok(());
+        }
+        if caller_namespace == "/system"
+            || caller_namespace.starts_with("/system/")
+            || crate::spiffe::is_at_or_below(caller_namespace, &host)
+        {
+            return Ok(());
+        }
+        Err(AuthorizerError::permission_denied(format!(
+            "caller namespace \"{}\" is not at-or-above this instance's tenant \"{}\"",
+            caller_namespace, *host
+        )))
     }
 
     /// Registers allowed caller patterns for a method. Patterns are RE2 regexes
@@ -437,6 +486,9 @@ impl Authorizer {
                 aud, SERVICE_NAME
             )));
         }
+
+        // Tenant-owned instance: refuse another tenant's caller at the door.
+        self.check_host_tenant(tw.namespace().unwrap_or(""))?;
 
         Ok(tw)
     }
@@ -746,6 +798,14 @@ where
                 })
             }
         }
+    }
+}
+
+/// True when `namespace` is exactly `/tenants/<t>`.
+fn is_tenant_namespace(namespace: &str) -> bool {
+    match namespace.strip_prefix("/tenants/") {
+        Some(tenant) => !tenant.is_empty() && !tenant.contains('/'),
+        None => false,
     }
 }
 
@@ -1307,6 +1367,53 @@ mod authorizer_behavior_tests {
         a.check_caller_at_or_below(Some(&below), "/a")
             .err()
             .expect("caller below the target namespace must be denied");
+    }
+
+    // A tenant-owned instance (own namespace /tenants/beta) refuses another
+    // tenant's caller at the door, on an RPC with no target_namespace_field: a
+    // token's aud is the service name, which every tenant's instance accepts.
+    // The instance's own tenant, /system and the root pass; a shared instance
+    // (or none set) admits every tenant as before.
+    #[tokio::test]
+    async fn tenant_owned_instance_refuses_other_tenant() {
+        let key = new_test_key();
+        let token_in = |ns: &'static str| {
+            signed_token(&key, now_plus(3600), SERVICE_NAME, move |tok| {
+                tok.set_sub_type("service").expect("sub_type");
+                tok.set_subject("caller-svc").expect("subject");
+                tok.set_namespace(ns).expect("namespace");
+            })
+        };
+
+        let beta = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        beta.set_method_auth(METHOD_KEY, &["caller-svc"]);
+        beta.set_host_namespace("/tenants/beta");
+        for ns in ["/tenants/beta", "/system", "/system/us-east", "/"] {
+            beta.authorize_grpc(TEST_METHOD, METHOD, Some(&token_in(ns)), &empty_md())
+                .await
+                .unwrap_or_else(|e| panic!("caller in {ns} must pass beta's instance: {e}"));
+        }
+        for ns in ["/tenants/acme", "/tenants/beta2", "/tenants/beta/sub", "/users/u1"] {
+            let err = beta
+                .authorize_grpc(TEST_METHOD, METHOD, Some(&token_in(ns)), &empty_md())
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("caller in {ns} must be denied by beta's instance"));
+            assert_eq!(err.code, 7, "caller in {ns}: want PERMISSION_DENIED, got {err}");
+            beta.authenticate(Some(&token_in(ns)))
+                .err()
+                .unwrap_or_else(|| panic!("authenticate must deny {ns} on beta's instance"));
+        }
+
+        for host in ["", "/system", "/system/us-east", "/tenants", "/tenants/a/b"] {
+            let shared = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+            shared.set_method_auth(METHOD_KEY, &["caller-svc"]);
+            shared.set_host_namespace(host);
+            shared
+                .authorize_grpc(TEST_METHOD, METHOD, Some(&token_in("/tenants/acme")), &empty_md())
+                .await
+                .unwrap_or_else(|e| panic!("host {host:?} must admit /tenants/acme: {e}"));
+        }
     }
 
     // Two DIFFERENT services hosted behind ONE Authorizer that each declare an

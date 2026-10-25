@@ -27,11 +27,11 @@ func TestJavaAccountingPublisherWiresEventBusSinkOnEveryWrapper(t *testing.T) {
 		HealthStateOuterClass: "Demo",
 		GrpcServices: []javaGrpcServiceEntry{
 			{
-				GetterName:     "getDemoGrpcImpl",
-				ServiceName:    "DemoService",
-				ServerType:     "DemoServiceGrpc.DemoServiceImplBase",
-				HandlerType:    "DemoServiceHandler",
-				WrapperPackage: "com.example.s2sm.internal.grpc.servers.services.demo",
+				GetterName:      "getDemoGrpcImpl",
+				ServiceName:     "DemoService",
+				ServerType:      "DemoServiceGrpc.DemoServiceImplBase",
+				HandlerType:     "DemoServiceHandler",
+				WrapperPackage:  "com.example.s2sm.internal.grpc.servers.services.demo",
 				ServerClassName: "DemoService",
 				WrapperVarName:  "wrapperDemo",
 				AuthDisabled:    true,

@@ -41,6 +41,8 @@ type goRecordReaderEntry struct {
 	CreateFn       string // e.g. "CreateMessageQuery"
 	ListFn         string // e.g. "ListMessagePage"
 	DeleteFn       string // e.g. "DeleteMessageQuery"
+	RowsFn         string // e.g. "GetMessageRows": the direct read, no handle
+	RowsReqType    string // e.g. "GetMessageRowsRequest"
 	FilterType     string // e.g. "MessageFilter"
 	OpenReqType    string // e.g. "OpenMessageQueryRequest"
 	PullReqType    string // e.g. "PullMessageRequest"
@@ -91,6 +93,8 @@ func collectGoRecordReaders(config *tactype.Config, protoDir string) ([]goRecord
 			CreateFn:       "Create" + r.RecordName + "Query",
 			ListFn:         "List" + r.RecordName + "Page",
 			DeleteFn:       "Delete" + r.RecordName + "Query",
+			RowsFn:         "Get" + r.RecordName + "Rows",
+			RowsReqType:    "Get" + r.RecordName + "RowsRequest",
 			FilterType:     r.RecordName + "Filter",
 			OpenReqType:    "Open" + r.RecordName + "QueryRequest",
 			PullReqType:    "Pull" + r.RecordName + "Request",

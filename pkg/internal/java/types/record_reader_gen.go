@@ -40,6 +40,8 @@ type javaRecordReaderEntry struct {
 	CreateFn       string // e.g. "createMessageQuery"
 	ListFn         string // e.g. "listMessagePage"
 	DeleteFn       string // e.g. "deleteMessageQuery"
+	RowsFn         string // e.g. "getMessageRows": the direct read, no handle
+	RowsReqType    string // e.g. "GetMessageRowsRequest"
 	FilterType     string // e.g. "MessageFilter"
 	OpenReqType    string // e.g. "OpenMessageQueryRequest"
 	PullReqType    string // e.g. "PullMessageRequest"
@@ -108,6 +110,8 @@ func collectJavaRecordReaders(config *tactype.Config, protoDir string) ([]javaRe
 			CreateFn:       "create" + r.RecordName + "Query",
 			ListFn:         "list" + r.RecordName + "Page",
 			DeleteFn:       "delete" + r.RecordName + "Query",
+			RowsFn:         "get" + r.RecordName + "Rows",
+			RowsReqType:    "Get" + r.RecordName + "RowsRequest",
 			FilterType:     r.RecordName + "Filter",
 			OpenReqType:    "Open" + r.RecordName + "QueryRequest",
 			PullReqType:    "Pull" + r.RecordName + "Request",

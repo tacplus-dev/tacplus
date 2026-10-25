@@ -81,12 +81,25 @@ impl<'a> {{.StructName}}<'a> {
         include_deleted: bool,
         {{- end}}
     ) -> Result<Option<{{.RecordName}}>, tonic::Status> {
+        // The direct read: no result set, so nothing a connection failover
+        // between two calls could lose.
         let filter = {{.FilterType}} {
             {{.KeyField}}: Some({{.KeyField}}{{if .KeyIsString}}.to_string(){{end}}),
             ..Default::default()
         };
-        let (items, _, _) = self.query_page(Some(filter), 1, String::new(){{if .HasDeletedFlag}}, include_deleted{{end}}).await?;
-        Ok(items.into_iter().next())
+        let resp = self
+            .client
+            .{{.RowsFn}}({{.RowsReqType}} {
+                filter: Some(filter),
+                limit: 1,
+{{- if .HasDeletedFlag}}
+                include_deleted,
+{{- end}}
+                ..Default::default()
+            })
+            .await?
+            .into_inner();
+        Ok(resp.items.into_iter().next())
     }
 {{- end}}
 

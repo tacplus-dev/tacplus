@@ -168,6 +168,8 @@ option (spec.trait) = {
 		`rpc ListAgentEvent(PullAgentEventRequest) returns (PullAgentEventResponse) {`,
 		`option (spec.method_collection) = {mode: COLLECTION_MODE_PAGE, order_by: ["event_id"], default_page_size: 100};`,
 		`rpc DeleteAgentEventQuery(QueryHandle) returns (QueryStats) {`,
+		`rpc GetAgentEventRows(GetAgentEventRowsRequest) returns (GetAgentEventRowsResponse) {`,
+		`message GetAgentEventRowsRequest {`,
 		`rpc UpdateAgentEventQuery(RefineAgentEventRequest) returns (QueryStats) {`,
 		`rpc WatchAgentEvent(QueryHandle) returns (stream AgentEventWatchEvent) {`,
 		`option (spec.method_collection) = {mode: COLLECTION_MODE_WATCH, order_by: ["event_id"]};`,

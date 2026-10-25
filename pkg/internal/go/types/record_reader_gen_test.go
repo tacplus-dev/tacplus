@@ -18,7 +18,7 @@ func goMessageReaderEntry() goRecordReaderEntry {
 		RecordAlias: "messaging_pb", PlaneAlias: "query_pb", ClientAlias: "query_gc",
 		ClientStruct: "RecordMapClient", GroupAccessor: "Vservices", ClientFn: "RecordMapClient",
 		KeyField: "delivery_id", KeyGoField: "DeliveryId", KeyGoType: "string",
-		CreateFn: "CreateMessageQuery", ListFn: "ListMessagePage", DeleteFn: "DeleteMessageQuery",
+		CreateFn: "CreateMessageQuery", ListFn: "ListMessagePage", DeleteFn: "DeleteMessageQuery", RowsFn: "GetMessageRows", RowsReqType: "GetMessageRowsRequest",
 		FilterType: "MessageFilter", OpenReqType: "OpenMessageQueryRequest", PullReqType: "PullMessageRequest",
 		HasKeyFilter: true,
 	}
@@ -73,7 +73,7 @@ func TestGoRecordReaderRendersGetAndList(t *testing.T) {
 	out := renderGoReaders(t, goReaderFile(goMessageReaderEntry()))
 	for _, want := range []string{
 		"func (r *MessageRecordReader) Get(ctx context.Context, key string) (*messaging_pb.Message, error)",
-		"filter := &query_pb.MessageFilter{DeliveryId: &k}",
+		"r.client.GetMessageRows(ctx, &query_pb.GetMessageRowsRequest{",
 		"func (r *MessageRecordReader) List(ctx context.Context, filter *query_pb.MessageFilter, pageSize int32, pageToken string) ([]*messaging_pb.Message, string, int64, error)",
 		"r.client.CreateMessageQuery(ctx, &query_pb.OpenMessageQueryRequest{",
 		"r.client.ListMessagePage(ctx, &query_pb.PullMessageRequest{",

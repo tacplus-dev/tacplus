@@ -41,14 +41,14 @@ func demoSvc(t *testing.T) (ServiceInfo, *tactype.Config) {
 	t.Helper()
 	dir := t.TempDir()
 	return ServiceInfo{
-			ServiceName: "demo",
-			PackageName: "demo",
-			DirName:     "demo",
-			OutputDir:   dir,
-			ParentDir:   dir,
-		}, &tactype.Config{
-			OutputDir: dir,
-		}
+		ServiceName: "demo",
+		PackageName: "demo",
+		DirName:     "demo",
+		OutputDir:   dir,
+		ParentDir:   dir,
+	}, &tactype.Config{
+		OutputDir: dir,
+	}
 }
 
 func TestCollectionBoundaryUnresolvedTypeFailsClosed(t *testing.T) {

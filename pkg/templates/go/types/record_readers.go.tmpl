@@ -67,15 +67,22 @@ func New{{.StructName}}(client *{{.ClientAlias}}.{{.ClientStruct}}) *{{.StructNa
 {{- end}}
 func (r *{{.StructName}}) Get(ctx context.Context, key {{.KeyGoType}}{{if .HasDeletedFlag}}, includeDeleted bool{{end}}) (*{{.RecordAlias}}.{{.RecordName}}, error) {
 	k := key
-	filter := &{{.PlaneAlias}}.{{.FilterType}}{ {{.KeyGoField}}: &k }
-	items, _, _, err := r.queryPage(ctx, filter, 1, ""{{if .HasDeletedFlag}}, includeDeleted{{end}})
+	// The direct read: no result set, so nothing a connection failover between
+	// two calls could lose.
+	resp, err := r.client.{{.RowsFn}}(ctx, &{{.PlaneAlias}}.{{.RowsReqType}}{
+		Filter: &{{.PlaneAlias}}.{{.FilterType}}{ {{.KeyGoField}}: &k },
+		Limit:  1,
+{{- if .HasDeletedFlag}}
+		IncludeDeleted: includeDeleted,
+{{- end}}
+	})
 	if err != nil {
 		return nil, err
 	}
-	if len(items) == 0 {
+	if len(resp.GetItems()) == 0 {
 		return nil, nil
 	}
-	return items[0], nil
+	return resp.GetItems()[0], nil
 }
 {{- end}}
 

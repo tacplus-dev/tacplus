@@ -144,6 +144,13 @@ type traitPlane struct {
 //	Count<T>(QueryHandle) -> RecordCount   Get<T>Count(...)
 //	Sample<T>(...) -> Sample<T>Response    Get<T>Sample(...)    seeded monte-carlo draw
 //	Pull<T>(...) -> Pull<T>Response        List<T>(...)         paged read
+//
+// Beside the result-set lifecycle, every record type has one DIRECT read,
+// Get<T>Rows: filter in, up to limit rows out (sorted by key), total and a
+// truncated flag, and no state on any node — the read a service makes for one
+// row or a handful, which a result set is overkill for and, being held by the
+// node that opened it, could not survive a failover of the connection. A result
+// set is for large data: open it, size it, refine it, page it.
 //	Watch<T>(QueryHandle) -> stream ...    Watch<T>(...)        living-query changes
 //	Close<T>(QueryHandle) -> QueryStats    Delete<T>Query(...)
 //
@@ -553,7 +560,18 @@ message Pull%[1]sResponse {
   string next_page_token = 2;
   int64 total_count = 3;
 }
-`, r.typeName, fq))
+
+message Get%[1]sRowsRequest {
+%[3]s  int32 limit = 2;
+  bool include_deleted = 3;
+}
+
+message Get%[1]sRowsResponse {
+  repeated %[2]s items = 1;
+  int64 total_count = 2;
+  bool truncated = 3;
+}
+`, r.typeName, fq, rowsFilterField(r)))
 
 		// Live watch envelope (only for filterable types — a living query needs a predicate).
 		if hasFilter {
@@ -803,6 +821,9 @@ func recordMapS2SService(plane traitPlane, records []recordType) string {
   rpc Delete%[1]sQuery(QueryHandle) returns (QueryStats) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
   }
+  rpc Get%[1]sRows(Get%[1]sRowsRequest) returns (Get%[1]sRowsResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
+  }
 `, r.typeName, r.key, auth, minGroupSizeOption(r)))
 		if hasFilter {
 			// UpdateQuery replaces the query's predicate in place (unrestricted — not
@@ -850,6 +871,7 @@ func recordQueryC2SService(plane traitPlane, records []recordType) string {
     option (spec.method_collection) = {mode: COLLECTION_MODE_PAGE, order_by: [%[2]q], default_page_size: 100};
   }
   rpc Delete%[1]sQuery(QueryHandle) returns (QueryStats);
+  rpc Get%[1]sRows(Get%[1]sRowsRequest) returns (Get%[1]sRowsResponse);
 `, r.typeName, r.key, minGroupSizeBody(r)))
 		if len(r.filters) > 0 {
 			sb.WriteString(fmt.Sprintf(`  rpc Update%[1]sQuery(Refine%[1]sRequest) returns (QueryStats)%[3]s
@@ -862,6 +884,16 @@ func recordQueryC2SService(plane traitPlane, records []recordType) string {
 	}
 	sb.WriteString("}\n")
 	return sb.String()
+}
+
+// rowsFilterField is the filter line of Get<T>RowsRequest: the record's typed
+// filter when it declares query fields, nothing for a filterless type (whose
+// direct read is "every row", bounded by limit).
+func rowsFilterField(r recordType) string {
+	if len(r.filters) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("  %sFilter filter = 1;\n", r.typeName)
 }
 
 // injectImports inserts import lines after the last existing import statement.

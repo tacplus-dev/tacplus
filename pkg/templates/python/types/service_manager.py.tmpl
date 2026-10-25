@@ -484,6 +484,11 @@ class ServiceManager:
         # Create gRPC server.
         server = grpc.aio.server()
         authorizer = Authorizer(self._bootstrap.conn())
+        # A tenant-owned instance's own token namespace is /tenants/<t>; the
+        # authorizer refuses callers outside that tenant at the door. An identity
+        # that cannot be read leaves the door unpinned, so it fails startup.
+        if self._identity.has_auth():
+            authorizer.set_host_namespace_from_token(await self._identity.get_token())
         # Start the JWK verifying-key watch as an SM-owned asyncio task
         # (cancelled at shutdown via _cancel_tasks). The bootstrap channel is
         # grpc.aio, so the watch must run on the event loop — without it the

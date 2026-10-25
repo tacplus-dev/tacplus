@@ -373,6 +373,8 @@ public class Authorizer {
     private final Set<String> methodAuthAnyService = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<String, List<Pattern>> methodActorPatterns = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> methodTargetNamespaceField = new ConcurrentHashMap<>();
+    /** The instance's own tenant namespace ("/tenants/&lt;t&gt;"), or "" for a shared instance. */
+    private volatile String hostTenant = "";
 
     /**
      * Creates an Authorizer that verifies tokens via the given key source.
@@ -477,6 +479,46 @@ public class Authorizer {
     public void setMethodTargetNamespaceField(String methodKey, String fieldName) {
         if (fieldName == null || fieldName.isEmpty()) return;
         methodTargetNamespaceField.put(methodKey, fieldName);
+    }
+
+    /**
+     * Tells the authorizer which namespace its own instance runs in, taken from
+     * the instance's bootstrap identity (the namespace of its own service
+     * token). A tenant-owned instance runs in exactly {@code /tenants/<t>}: from
+     * then on every door (authorize, authenticate, authenticateAtOrBelow and the
+     * interceptors) refuses, PERMISSION_DENIED, a caller whose namespace is
+     * neither at-or-above that tenant nor /system or below. A token's aud is the
+     * service name, which every tenant's instance accepts, so without this check
+     * another tenant's token is admitted on any RPC with no
+     * target_namespace_field. Any other namespace (a shared instance's /system or
+     * below) leaves the authorizer exactly as it was.
+     */
+    public void setHostNamespace(String namespace) {
+        hostTenant = isTenantNamespace(namespace) ? namespace : "";
+    }
+
+    /** {@link #setHostNamespace} with the namespace read from the instance's own service token. */
+    public void setHostNamespaceFromToken(String token) throws Exception {
+        setHostNamespace(TokenWrapper.parse(token).getNamespace());
+    }
+
+    /** True when namespace is exactly {@code /tenants/<t>}. */
+    private static boolean isTenantNamespace(String namespace) {
+        if (namespace == null || !namespace.startsWith("/tenants/")) return false;
+        String tenant = namespace.substring("/tenants/".length());
+        return !tenant.isEmpty() && tenant.indexOf('/') < 0;
+    }
+
+    /** The tenant-owned instance's door check. */
+    private void checkHostTenant(String callerNamespace) throws ProtoException {
+        String host = hostTenant;
+        if (host.isEmpty()) return;
+        String caller = callerNamespace == null ? "" : callerNamespace;
+        if (caller.equals("/system") || caller.startsWith("/system/") || Spiffe.isAtOrBelow(caller, host)) {
+            return;
+        }
+        throw ProtoException.newErrPermissionDenied(null,
+                "caller namespace \"" + caller + "\" is not at-or-above this instance's tenant \"" + host + "\"");
     }
 
     /**
@@ -733,6 +775,7 @@ public class Authorizer {
             throw ProtoException.newErrPermissionDenied(null,
                     "token audience \"" + aud + "\" is not accepted by service \"" + SERVICE_NAME + "\"");
         }
+        checkHostTenant(tw.getNamespace());
 
         // Signature, expiry, token class and audience all checked: this is the
         // only place a token becomes readable as the caller's identity.

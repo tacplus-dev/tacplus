@@ -242,13 +242,20 @@ message RedeemDelegateOfflineTokenResponse {
 }
 
 // WorkloadMintRequest mints a child workload identity. The child's SPIFFE ID is
-// the caller's spiffe_id + "/" + workload_name.
+// the parent's spiffe_id + "/workloads/" + workload_name; the parent is the
+// caller, unless the caller is a workload broker naming another service.
 message WorkloadMintRequest {
   string workload_name = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 128];
   // terminal marks the child as unable to mint further children.
   bool terminal = 3;
   // exp is the desired expiry for the bootstrap token (0 = kernel default).
   int64 exp = 4 [(spec.assert_ge) = 0];
+  // parent_spiffe_id roots the child under another service's identity: the
+  // coop minting a pigeon for the dog that asked for it, so the pigeon is
+  // that tenant's by construction. Only a caller the authority configures as
+  // a workload broker may set it (kernel Delegate.workload_broker); for
+  // anyone else it is refused. Empty: the parent is the caller.
+  string parent_spiffe_id = 5 [(spec.assert_max_size) = 512];
 }
 
 // WorkloadMintResponse carries the short-lived bootstrap token for a new child.

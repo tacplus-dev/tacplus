@@ -90,6 +90,25 @@ func TestMergeSources_SkipsHiddenAndHousekeepingFiles(t *testing.T) {
 
 // A shared path with DIFFERENT contents across sources is a hard error — this is
 // what forces the shared base to be factored into a single source.
+func TestMergeSources_CarriesTheFleetLock(t *testing.T) {
+	a := t.TempDir()
+	b := t.TempDir()
+	writeFile(t, a, "services/x.proto", "syntax = \"proto3\";\n")
+	writeFile(t, a, "fleet.lock", "services:\n    - {name: x, depends: [y]}\n")
+	writeFile(t, a, "README.md", "not merged\n")
+	writeFile(t, b, "services/y.proto", "syntax = \"proto3\";\n")
+	dest := t.TempDir()
+	if err := MergeSources([]string{a, b}, dest); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, filepath.Join(dest, "fleet.lock")); !strings.Contains(got, "depends: [y]") {
+		t.Fatalf("fleet.lock not carried: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "README.md")); err == nil {
+		t.Fatal("README.md must not be merged")
+	}
+}
+
 func TestMergeSources_ConflictIsHardError(t *testing.T) {
 	a := t.TempDir()
 	b := t.TempDir()

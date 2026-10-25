@@ -64,17 +64,21 @@ func MergeSources(sourceDirs []string, destDir string) error {
 			if info.IsDir() {
 				return nil
 			}
-			// Merge only what generation consumes: proto files and yaml metadata.
-			// Everything else (READMEs, release scripts, CI config) is per-repo
-			// housekeeping that must not cause cross-source conflicts.
-			switch filepath.Ext(path) {
-			case ".proto", ".yaml", ".yml":
-			default:
-				return nil
-			}
 			rel, err := filepath.Rel(src, path)
 			if err != nil {
 				return err
+			}
+			// Merge only what generation consumes: proto files, yaml metadata,
+			// and a fleet build's lock at the root (the compiler reads each
+			// service's depends from it when it scopes a generation). Everything
+			// else (READMEs, release scripts, CI config) is per-repo housekeeping
+			// that must not cause cross-source conflicts.
+			switch filepath.Ext(path) {
+			case ".proto", ".yaml", ".yml":
+			default:
+				if rel != "fleet.lock" {
+					return nil
+				}
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {

@@ -41,6 +41,10 @@ import java.util.function.Supplier;
  * endpoint (a proxy that may forward to the authority with its own S2S
  * identity), NOT the authoritative S2S mint that services use.
  *
+ * <p>{@link #setTenantNamespace(String)} selects which tenant the refresh -&gt;
+ * access mint is for (TokenMintRequest.tenant_namespace); null or empty is the
+ * plain personal exchange.
+ *
  * <p>Safe for concurrent use: all mint/cache mutations are serialized behind a
  * monitor. {@link #getToken()} / {@link #getTokenFor(String)} match the
  * {@code Supplier<String>} token-provider seam the generated clients accept.
@@ -91,6 +95,11 @@ public class ClientIdentityManager {
     private TokenEntry accessToken;
     // tokens holds service-specific tokens, keyed by audience.
     private final Map<String, TokenEntry> tokens = new HashMap<>();
+    // tenantNamespace is sent on the refresh -> access mint; "" = personal.
+    private String tenantNamespace = "";
+    // tenantEpoch is bumped on every tenant switch, so a mint in flight across
+    // it is not cached.
+    private long tenantEpoch = 0;
     private String instanceId = "";
     // Exponential backoff state for auth attempts.
     private int authFailures = 0;
@@ -118,6 +127,37 @@ public class ClientIdentityManager {
             this.accessToken = null;
             this.tokens.clear();
             this.authFailures = 0;
+        }
+    }
+
+    /**
+     * Mints subsequent access tokens for {@code ns} (sent as tenant_namespace on
+     * the refresh -&gt; access mint); null or empty returns to the plain personal
+     * exchange. Changing it drops the cached access and service tokens.
+     */
+    public void setTenantNamespace(String ns) {
+        String next = ns == null ? "" : ns;
+        synchronized (lock) {
+            if (next.equals(tenantNamespace)) {
+                return;
+            }
+            tenantNamespace = next;
+            tenantEpoch++;
+            accessToken = null;
+            tokens.clear();
+        }
+    }
+
+    /**
+     * Returns the cached access token if it is unexpired, else {@code ""}. Does
+     * not mint.
+     */
+    public String getAccessToken() {
+        synchronized (lock) {
+            if (accessToken != null && System.currentTimeMillis() < accessToken.expiresAtMs) {
+                return accessToken.token;
+            }
+            return "";
         }
     }
 
@@ -254,21 +294,27 @@ public class ClientIdentityManager {
         }
 
         // Fast path: a valid access token is cached — mint just the service token.
+        // Only the refresh -> access mint carries the tenant namespace; a service
+        // token inherits it from the access token it is minted from.
         String cachedAccess = null;
+        long epoch;
         synchronized (lock) {
             if (accessToken != null && accessToken.usableAt(System.currentTimeMillis())) {
                 cachedAccess = accessToken.token;
             }
+            epoch = tenantEpoch;
         }
 
         if (cachedAccess != null) {
-            MintResult r = mintCall(cachedAccess, List.of(aud));
+            MintResult r = mintCall(cachedAccess, List.of(aud), "");
             if (r.serviceTokens.isEmpty()) {
                 throw new IllegalStateException("client_im: mint response missing service token");
             }
             TokenEntry entry = r.serviceTokens.get(0);
             synchronized (lock) {
-                tokens.put(aud, entry);
+                if (epoch == tenantEpoch) {
+                    tokens.put(aud, entry);
+                }
             }
             return entry.token;
         }
@@ -276,21 +322,26 @@ public class ClientIdentityManager {
         // No access token cached — get AT + ST in a single batch call from the
         // refresh token (refresh -> access + access -> service).
         String refresh;
+        String ns;
         synchronized (lock) {
             refresh = refreshToken;
+            ns = tenantNamespace;
+            epoch = tenantEpoch;
         }
         if (refresh.isEmpty()) {
             throw new IllegalStateException(
                     "client_im: no refresh token — call ensureAuthenticated() first");
         }
-        MintResult r = mintCall(refresh, List.of(aud));
+        MintResult r = mintCall(refresh, List.of(aud), ns);
         if (r.serviceTokens.isEmpty()) {
             throw new IllegalStateException("client_im: mint response missing service token");
         }
         TokenEntry entry = r.serviceTokens.get(0);
         synchronized (lock) {
-            accessToken = r.accessToken;
-            tokens.put(aud, entry);
+            if (epoch == tenantEpoch) {
+                accessToken = r.accessToken;
+                tokens.put(aud, entry);
+            }
         }
         return entry.token;
     }
@@ -301,19 +352,25 @@ public class ClientIdentityManager {
      */
     private String ensureAccessToken() throws Exception {
         String refresh;
+        String ns;
+        long epoch;
         synchronized (lock) {
             if (accessToken != null && accessToken.usableAt(System.currentTimeMillis())) {
                 return accessToken.token;
             }
             refresh = refreshToken;
+            ns = tenantNamespace;
+            epoch = tenantEpoch;
         }
         if (refresh.isEmpty()) {
             throw new IllegalStateException(
                     "client_im: no refresh token — call ensureAuthenticated() first");
         }
-        MintResult r = mintCall(refresh, List.of());
+        MintResult r = mintCall(refresh, List.of(), ns);
         synchronized (lock) {
-            accessToken = r.accessToken;
+            if (epoch == tenantEpoch) {
+                accessToken = r.accessToken;
+            }
         }
         return r.accessToken.token;
     }
@@ -332,9 +389,10 @@ public class ClientIdentityManager {
     /**
      * Calls the C2S TokenMint RPC once. Returns the access-token cache entry plus
      * one entry per requested service audience (in request order). An empty
-     * {@code serviceAuds} mints only the access token.
+     * {@code serviceAuds} mints only the access token. {@code tenantNamespace} is
+     * sent as tenant_namespace; empty sends none.
      */
-    private MintResult mintCall(String inputToken, List<String> serviceAuds) throws Exception {
+    private MintResult mintCall(String inputToken, List<String> serviceAuds, String tenantNamespace) throws Exception {
         if (!HAS_CLIENT_TOKEN_EXCHANGER) {
             throw new IllegalStateException("client_im: token minter is not configured");
         }
@@ -345,6 +403,7 @@ public class ClientIdentityManager {
                 .setInputToken(inputToken)
                 .setTokenPurpose(TokenPurpose.TOKEN_PURPOSE_ACCESS)
                 .addAllServiceAuds(serviceAuds)
+                .setTenantNamespace(tenantNamespace)
                 .build();
 
         TokenMintResponse resp;

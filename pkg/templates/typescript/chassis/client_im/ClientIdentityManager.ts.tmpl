@@ -30,6 +30,9 @@ import { type TokenSource } from './TokenSource.js';
  * Clients have no S2S identity, so this mints via the client-reachable C2S
  * endpoint (a proxy that may forward to the authority with its own S2S identity),
  * NOT the authoritative S2S mint that services use.
+ *
+ * `setTenantNamespace(ns)` selects which tenant the refresh -> access mint is
+ * for (TokenMintRequest.tenant_namespace); null is the plain personal exchange.
  */
 
 const HAS_CLIENT_TOKEN_EXCHANGER = {{if .HasClientTokenExchanger}}true{{else}}false{{end}};
@@ -80,6 +83,10 @@ export class ClientIdentityManager {
   private accessToken: TokenEntry | null = null;
   /** Service-specific tokens, keyed by audience. */
   private tokens = new Map<string, TokenEntry>();
+  /** Tenant namespace the refresh -> access mint asks for; null = personal. */
+  private tenantNamespace: string | null = null;
+  /** Bumped on every tenant switch, so a mint in flight across it is not cached. */
+  private tenantEpoch = 0;
   private _instanceId = '';
   /** Exponential backoff state for auth attempts. */
   private authFailures = 0;
@@ -130,6 +137,27 @@ export class ClientIdentityManager {
     this.accessToken = null;
     this.tokens.clear();
     this.authFailures = 0;
+  }
+
+  /**
+   * Mints subsequent access tokens for `ns` (sent as tenant_namespace on the
+   * refresh -> access mint); null returns to the plain personal exchange.
+   * Changing it drops the cached access and service tokens.
+   */
+  setTenantNamespace(ns: string | null): void {
+    const next = ns || null;
+    if (next === this.tenantNamespace) return;
+    this.tenantNamespace = next;
+    this.tenantEpoch++;
+    this.accessToken = null;
+    this.tokens.clear();
+  }
+
+  /** Returns the cached access token if it is unexpired; does not mint. */
+  getAccessToken(): string | undefined {
+    const cached = this.accessToken;
+    if (cached && Math.floor(Date.now() / 1000) < cached.expiresAt) return cached.token;
+    return undefined;
   }
 
   /** Returns the current refresh token, if any. */
@@ -231,23 +259,28 @@ export class ClientIdentityManager {
     }
 
     // Fast path: a valid access token is cached — mint just the service token.
+    // Only the refresh -> access mint carries the tenant namespace; a service
+    // token inherits it from the access token it is minted from.
+    const epoch = this.tenantEpoch;
     const cached = this.accessToken;
     if (cached && usableAt(cached, Math.floor(Date.now() / 1000))) {
-      const { serviceEntries } = await this.mintCall(cached.token, [audience]);
+      const { serviceEntries } = await this.mintCall(cached.token, [audience], null);
       const entry = serviceEntries[0];
       if (!entry) throw new Error('ClientIM: mint response missing service token');
-      this.tokens.set(audience, entry);
+      if (epoch === this.tenantEpoch) this.tokens.set(audience, entry);
       return entry.token;
     }
 
     // No access token cached — get AT + ST in a single batch call from the
     // refresh token (refresh -> access + access -> service).
     if (this.refreshToken === null) throw new Error('ClientIM: no refresh token');
-    const { accessEntry, serviceEntries } = await this.mintCall(this.refreshToken, [audience]);
-    this.accessToken = accessEntry;
+    const { accessEntry, serviceEntries } = await this.mintCall(this.refreshToken, [audience], this.tenantNamespace);
     const entry = serviceEntries[0];
     if (!entry) throw new Error('ClientIM: mint response missing service token');
-    this.tokens.set(audience, entry);
+    if (epoch === this.tenantEpoch) {
+      this.accessToken = accessEntry;
+      this.tokens.set(audience, entry);
+    }
     return entry.token;
   }
 
@@ -261,19 +294,22 @@ export class ClientIdentityManager {
       return cached.token;
     }
     if (this.refreshToken === null) throw new Error('ClientIM: no refresh token');
-    const { accessEntry } = await this.mintCall(this.refreshToken, []);
-    this.accessToken = accessEntry;
+    const epoch = this.tenantEpoch;
+    const { accessEntry } = await this.mintCall(this.refreshToken, [], this.tenantNamespace);
+    if (epoch === this.tenantEpoch) this.accessToken = accessEntry;
     return accessEntry.token;
   }
 
   /**
    * Calls the C2S TokenMint RPC once. Returns the access-token cache entry plus
    * one entry per requested service audience (in request order). An empty
-   * `serviceAuds` mints only the access token.
+   * `serviceAuds` mints only the access token. `tenantNamespace` is sent as
+   * tenant_namespace; null sends none.
    */
   private async mintCall(
     inputToken: string,
     serviceAuds: string[],
+    tenantNamespace: string | null,
   ): Promise<{ accessEntry: TokenEntry; serviceEntries: TokenEntry[] }> {
     if (!HAS_CLIENT_TOKEN_EXCHANGER) {
       throw new Error('ClientIM: token minter is not configured');
@@ -283,6 +319,7 @@ export class ClientIdentityManager {
       inputToken,
       tokenPurpose: TOKEN_PURPOSE_ACCESS,
       serviceAuds,
+      tenantNamespace: tenantNamespace ?? '',
     };
     const resp = await new Promise<any>((resolve, reject) => {
       const deadline = new Date(Date.now() + MINT_TIMEOUT_MS);
@@ -322,6 +359,7 @@ export class ClientIdentityManager {
 {{- else}}
     void inputToken;
     void serviceAuds;
+    void tenantNamespace;
     throw new Error('ClientIM: token minter is not configured');
 {{- end}}
   }

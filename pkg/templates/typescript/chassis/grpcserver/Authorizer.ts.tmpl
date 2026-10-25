@@ -274,7 +274,7 @@ export class Authorizer {
   private checkHostTenant(callerNamespace: string): void {
     const host = this._hostTenant;
     if (host === '') return;
-    if (callerNamespace === '/system' || callerNamespace.startsWith('/system/') || isAtOrBelow(callerNamespace, host)) {
+    if (isAtOrBelow('/system', callerNamespace) || isAtOrBelow(callerNamespace, host)) {
       return;
     }
     throw AuthError.permissionDenied(`caller namespace "${callerNamespace}" is not at-or-above this instance's tenant "${host}"`);

@@ -255,8 +255,7 @@ impl Authorizer {
         if host.is_empty() {
             return Ok(());
         }
-        if caller_namespace == "/system"
-            || caller_namespace.starts_with("/system/")
+        if crate::spiffe::is_at_or_below("/system", caller_namespace)
             || crate::spiffe::is_at_or_below(caller_namespace, &host)
         {
             return Ok(());

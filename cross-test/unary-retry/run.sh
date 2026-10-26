@@ -8,6 +8,8 @@
 # also must not start a retry once the caller's deadline cannot cover the backoff.
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=../lib/cargo-target.sh
+source "$ROOT_DIR/cross-test/lib/cargo-target.sh"
 PROTO_SRC="$ROOT_DIR/cross-test/unary-retry/proto"
 TESTDATA="$ROOT_DIR/cross-test/unary-retry/testdata"
 source "$ROOT_DIR/cross-test/lib/java-compile.sh"
@@ -103,7 +105,7 @@ EOF
     cp "$TESTDATA/unary_retry_behavior_test.rs" "$OUT/s2sm/internal/grpc/clients/contract/unaryretry/unary_retry_behavior_test.rs"
     printf '\n#[cfg(test)]\n#[path = "unary_retry_behavior_test.rs"]\nmod unary_retry_behavior_test;\n' >> "$CLIENT"
     echo "==> Running generated Rust unary-retry behavior tests"
-    (cd "$OUT" && CARGO_TARGET_DIR="$OUT/target" cargo test -p unaryretry-model rust_) \
+    (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo test -p unaryretry-model rust_) \
       || die "generated Rust unary retry behavior tests failed"
     ;;
 esac

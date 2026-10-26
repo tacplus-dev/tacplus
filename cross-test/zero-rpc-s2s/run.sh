@@ -15,6 +15,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=../lib/cargo-target.sh
+source "$ROOT_DIR/cross-test/lib/cargo-target.sh"
 GATE_DIR="$ROOT_DIR/cross-test/zero-rpc-s2s"
 PROTO_SRC="$ROOT_DIR/cross-test/proto-zerorpc"
 WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/zero-rpc-s2s.XXXXXX")"
@@ -77,7 +79,7 @@ tower = { version = "0.5.3", features = ["util"] }
 EOF
 
 echo "==> Building rust zero-rpc-s2s fixture"
-(cd "$CRATE_DIR" && CARGO_TARGET_DIR="$CRATE_DIR/target" cargo build --quiet) >"$MODEL_DIR/build.log" 2>&1 || {
+(cd "$CRATE_DIR" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo build --quiet) >"$MODEL_DIR/build.log" 2>&1 || {
   cat "$MODEL_DIR/build.log" >&2
   die "rust zero-rpc-s2s build failed"
 }
@@ -87,4 +89,4 @@ if [[ -s "$MODEL_DIR/build.log" ]]; then
 fi
 
 echo "==> Running the client-only host against the fake kernel and llmproxy"
-"$CRATE_DIR/target/debug/zero-rpc-s2s"
+"$CROSS_TEST_CARGO_TARGET/debug/zero-rpc-s2s"

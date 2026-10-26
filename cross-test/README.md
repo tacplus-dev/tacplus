@@ -3,6 +3,25 @@
 The active cross-test gates generate current tacplus output into ignored
 `target/` directories. Generated language output is not committed here.
 
+## Shared Rust target directory
+
+Every leg that builds generated Rust compiles the same dependencies (tonic,
+prost, tokio, rustls, ...). Legs therefore share one Cargo target directory,
+`target/cross-test/cargo` under the repository root, so each dependency
+compiles once per gate run instead of once per leg. A leg sources
+`cross-test/lib/cargo-target.sh`, which exports `CARGO_TARGET_DIR` and sets
+`CROSS_TEST_CARGO_TARGET`; binaries are found under
+`$CROSS_TEST_CARGO_TARGET/debug/`, so a crate that a leg runs must have a
+name no other leg builds. Set `TACPLUS_CROSS_TEST_CARGO_TARGET` to move it.
+
+A leg that must not share (a deliberate clean-build test, or a feature set
+that would thrash the shared cache) keeps its own directory and says why with
+a `separate-cargo-target:` comment on the line that sets it; no leg does
+today. `scripts/cross_test_cargo_target_test.go` (run by `just test`) fails if
+a leg sets its own directory without that comment or runs cargo without
+sourcing the helper. The shared directory is build output under `target/`,
+removed with `target/cross-test` after a gate.
+
 ## Commands
 
 ```bash

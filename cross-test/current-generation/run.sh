@@ -274,15 +274,18 @@ EOF
 }
 
 # The same fixture built as registrar, the OWNER of the service_state shape:
-# RegistrarState.tenant_configs holds each tenant's TenantConfig (issue #130).
+# RegistrarState.tenant_configs holds each tenant's TenantConfig (issue #130);
+# or, with owner "tenancy", as the OWNER of the grpc_config shape: its Config's
+# tenants map holds them (issue #135).
 write_tenantslice_owner_config() {
   local dir="$1"
   local language="$2"
+  local owner="${3:-registrar}"
 
   mkdir -p "$dir"
   cat > "$dir/tacplus.yaml" <<EOF
 language: "$language"
-pkg: "com.gitlab.example.dummy.registrar"
+pkg: "com.gitlab.example.dummy.$owner"
 src: "$TENANTSLICE_PROTO_SRC"
 output-dir: "tacplus"
 EOF
@@ -513,6 +516,20 @@ run_java_generated_self_tests() {
     }
     grep -q '^TenantPinnedReadTest: all checks passed$' "$test_log" \
       || die "tenant-slice owner (java): TenantPinnedReadTest did not report its checks passed"
+  fi
+  # The tenant-slice config owner's tenant-pinned read self-test (#135), copied
+  # in by assert_tenantslice_config_owner_output, so it is present exactly in
+  # that build.
+  local tc_test tc_class
+  tc_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/TenantPinnedConfigReadTest.java' -print -quit)"
+  if [[ -n "$tc_test" ]]; then
+    tc_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$tc_test").$(basename "$tc_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$tc_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q '^TenantPinnedConfigReadTest: all checks passed$' "$test_log" \
+      || die "tenant-slice config owner (java): TenantPinnedConfigReadTest did not report its checks passed"
   fi
   # The owner-default fixture's self-test, copied in by
   # install_ownerdefault_selftest (which dies if it cannot), so it is present
@@ -1440,7 +1457,13 @@ assert_tenantslice_output() {
 assert_tenantslice_owner_output() {
   local output="$1"
   local language="$2"
+  local owner="${3:-registrar}"
   local wrapper="" n=""
+
+  if [[ "$owner" == "tenancy" ]]; then
+    assert_tenantslice_config_owner_output "$output" "$language"
+    return
+  fi
 
   case "$language" in
     go)
@@ -1458,6 +1481,45 @@ assert_tenantslice_owner_output() {
       n="$(grep -c 'TenantPin.resolveTenantConfigs(Auth.verifiedTokenFromContext())' "$wrapper")"
       [[ "$n" == 8 ]] || die "tenant-slice owner (java): $n of the 8 tenant_configs read RPCs resolve the tenant pin in $wrapper"
       cp "$SELFTESTS_SRC/java/TenantPinnedReadTest.java" \
+        "$(dirname "$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/Authorizer.java' -print -quit)")/"
+      ;;
+  esac
+}
+
+# assert_tenantslice_config_owner_output is the tenancy build (issue #135):
+# tenancy hosts TenancyConfigStateService, whose GetConfig and WatchConfig serve
+# a ledger caller its own tenant's entry of the Config's tenants map only,
+# projected to ledger's slice. ledger must be an allowed caller of exactly those
+# two RPCs, and the filter must be rendered on both (Go, Java; Rust hosts no
+# state service, so its leg is generation and compile only).
+assert_tenantslice_config_owner_output() {
+  local output="$1"
+  local language="$2"
+  local wrapper="" n=""
+
+  case "$language" in
+    go)
+      wrapper="$(find "$output" -type f -path '*/s2sm/grpc/servers/services/tenancy/config_state_service.go' -print -quit)"
+      [[ -n "$wrapper" ]] || die "tenant-slice config owner (go): TenancyConfigStateService wrapper not generated under $output"
+      [[ -f "$(dirname "$wrapper")/config_state_service_tenant_pin.go" ]] \
+        || die "tenant-slice config owner (go): no tenant-pinned read helpers beside $wrapper"
+      n="$(grep -c 'resolveTenancyConfigStateServiceTenantPinConfig(caller)' "$wrapper")"
+      [[ "$n" == 2 ]] || die "tenant-slice config owner (go): $n of the 2 Config read RPCs resolve the tenant pin in $wrapper"
+      for rpc in GetConfig WatchConfig; do
+        grep -qE "SetMethodAuth\(\"tenancy.TenancyConfigStateService/$rpc\", \[\]string\{[^}]*\"ledger\"" "$wrapper" \
+          || die "tenant-slice config owner (go): ledger is not an allowed caller of $rpc in $wrapper"
+      done
+      if grep -qE 'SetMethodAuth\("tenancy.TenancyConfigStateService/SetConfig", \[\]string\{[^}]*"ledger"' "$wrapper"; then
+        die "tenant-slice config owner (go): ledger is an allowed caller of SetConfig in $wrapper"
+      fi
+      cp "$SELFTESTS_SRC/go/tenant_pinned_config_read_test.go" "$(dirname "$wrapper")/"
+      ;;
+    java)
+      wrapper="$(find "$output/src/main/java" -type f -path '*/grpc/servers/services/tenancy/TenancyConfigStateService.java' -print -quit)"
+      [[ -n "$wrapper" ]] || die "tenant-slice config owner (java): TenancyConfigStateService wrapper not generated under $output"
+      n="$(grep -c 'TenantPin.resolveConfig(Auth.verifiedTokenFromContext())' "$wrapper")"
+      [[ "$n" == 2 ]] || die "tenant-slice config owner (java): $n of the 2 Config read RPCs resolve the tenant pin in $wrapper"
+      cp "$SELFTESTS_SRC/java/TenantPinnedConfigReadTest.java" \
         "$(dirname "$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/Authorizer.java' -print -quit)")/"
       ;;
   esac
@@ -2602,6 +2664,30 @@ if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
     echo "==> Compiling $language tenant-slice owner fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/registrar"
     echo "    PASS $language tenant-slice owner"
+  done
+fi
+
+# tenant-slice fixture built as the grpc_config OWNER (issue #135): tenancy hosts
+# TenancyConfigStateService, whose Config read RPCs serve a ledger caller its own
+# tenant's entry of the tenants map only, projected to ledger's slice.
+if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/tenantslice-config-owner-$language"
+    log="$WORK_ROOT/tenantslice-config-owner-$language.log"
+    rm -rf "$dir"
+    write_tenantslice_owner_config "$dir" "$language" tenancy
+
+    echo "==> Generating $language tenant-slice config owner fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTSLICE_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language tenant-slice config owner generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_tenantslice_owner_output "$output_root" "$language" tenancy
+    echo "==> Compiling $language tenant-slice config owner fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/tenancy"
+    echo "    PASS $language tenant-slice config owner"
   done
 fi
 

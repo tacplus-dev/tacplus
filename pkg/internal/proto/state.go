@@ -661,10 +661,18 @@ func buildStateService(
 		if b.isPrivate {
 			continue
 		}
+		// A grpc_config Config singleton holding a tenant-pinned map (#135):
+		// its reads carry the pinned callers, its Set keeps the service-level list.
+		readOpt := ";\n"
+		if pinned := pinnedCallers[b.fieldName]; len(pinned) > 0 && len(authServices) > 0 {
+			readOpt = " {\n" + formatEventBusS2SMethodOption(&model.EventBusMethodS2S{
+				AuthServices: append(append([]string{}, authServices...), pinned...),
+			}) + "\t}\n"
+		}
 		fmt.Fprintf(&buf, "\t// Singleton: %s\n", b.goName)
-		fmt.Fprintf(&buf, "\trpc Get%s(trace.TraceRequest) returns (%s);\n", b.goName, b.typeName)
+		fmt.Fprintf(&buf, "\trpc Get%s(trace.TraceRequest) returns (%s)%s", b.goName, b.typeName, readOpt)
 		fmt.Fprintf(&buf, "\trpc Set%s(%s) returns (%s);\n", b.goName, b.typeName, b.typeName)
-		fmt.Fprintf(&buf, "\trpc Watch%s(trace.TraceRequest) returns (stream %s);\n", b.goName, b.typeName)
+		fmt.Fprintf(&buf, "\trpc Watch%s(trace.TraceRequest) returns (stream %s)%s", b.goName, b.typeName, readOpt)
 	}
 	for _, b := range readOnlySingletons {
 		fmt.Fprintf(&buf, "\t// Read-only singleton: %s\n", b.goName)

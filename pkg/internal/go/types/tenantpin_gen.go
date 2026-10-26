@@ -39,7 +39,7 @@ import (
 // AppendStateServiceToProtos emits; it exists so a change there fails
 // generation instead of serving the RPC unfiltered.
 func goTenantPinShapeError(method *parser.MethodInfo, pin proto.TenantPinnedRPC) error {
-	stream := pin.Kind == proto.TenantPinWatch || pin.Kind == proto.TenantPinWatchQuery
+	stream := pin.Kind == proto.TenantPinWatch || pin.Kind == proto.TenantPinWatchQuery || pin.Kind == proto.TenantPinWatchConfig
 	if method.ClientStreaming || method.ServerStreaming != stream || method.IsWatchCollection() || method.IsPageCollection() {
 		return fmt.Errorf("%s is a tenant-pinned %s read, but its generated shape is not the one the Go wrapper filters; refusing to serve it unfiltered", method.Name, pin.Kind)
 	}
@@ -92,6 +92,8 @@ func goTenantPinPost(pin proto.TenantPinnedRPC) string {
 		return fmt.Sprintf("\tresp = __pin.filter%sKeys(resp)\n", p)
 	case proto.TenantPinQuery:
 		return fmt.Sprintf("\tresp = __pin.filter%sQuery(resp)\n", p)
+	case proto.TenantPinGetConfig:
+		return fmt.Sprintf("\tresp = __pin.filter%sMap(resp)\n", p)
 	case proto.TenantPinSize:
 		// The handler's size counts every tenant. A pinned caller is told how
 		// many entries it can see, counted over the keys it is admitted to.
@@ -110,8 +112,11 @@ func goTenantPinPost(pin proto.TenantPinnedRPC) string {
 // goTenantPinStream wraps a server stream argument in the per-frame filter.
 func goTenantPinStream(pin proto.TenantPinnedRPC, goOutput, streamArg string) string {
 	filter := "Entries"
-	if pin.Kind == proto.TenantPinWatchQuery {
+	switch pin.Kind {
+	case proto.TenantPinWatchQuery:
 		filter = "Query"
+	case proto.TenantPinWatchConfig:
+		filter = "Map"
 	}
 	return fmt.Sprintf("{{.ServerName}}TenantPinServerStream[%s]{ServerStreamingServer: %s, filter: __pin.filter%s%s}",
 		goOutput, streamArg, pin.Boundary.BoundaryPascal(), filter)
@@ -166,6 +171,7 @@ type %[4]sTenantPin struct {
 	tenant      string
 	keyField    protoreflect.Name
 	configField protoreflect.Name
+	mapField    protoreflect.Name // set for a grpc_config Config's map (#135)
 	sliceField  protoreflect.Name
 }
 
@@ -284,6 +290,48 @@ func (s %[4]sTenantPinServerStream[T]) Send(msg *T) error {
 		var slices []string
 		for _, s := range bd.Slices {
 			slices = append(slices, fmt.Sprintf("%q: %q", s.Caller, s.SliceField))
+		}
+		if bd.IsConfigMap() {
+			fmt.Fprintf(&b, `
+// resolve%[1]sTenantPin%[2]s pins the callers holding a tenant-pinned read of
+// %[3]s.%[4]s (the %[5]s map of its Config), each to its own config slice.
+func resolve%[1]sTenantPin%[2]s(caller *servicemanager.Caller) (*%[1]sTenantPin, error) {
+	pin, err := resolve%[1]sTenantPin(caller, map[string]string{%[6]s}, "", "")
+	if pin != nil {
+		pin.mapField = protoreflect.Name(%[5]q)
+	}
+	return pin, err
+}
+
+// filter%[2]sMap returns the Config reduced to its tenant map, the map reduced
+// to the admitted tenants' entries, each projected to the caller's slice. The
+// Config's other fields are the owner's own and never leave it.
+func (p *%[1]sTenantPin) filter%[2]sMap(r *types.%[7]s) *types.%[7]s {
+	if p == nil || r == nil {
+		return r
+	}
+	out := proto.Clone(r).(*types.%[7]s)
+	m := out.ProtoReflect()
+	%[8]sTenantPinKeepOnly(m, p.mapField)
+	if fd := m.Descriptor().Fields().ByName(p.mapField); fd != nil && m.Has(fd) {
+		entries := m.Mutable(fd).Map()
+		var drop []protoreflect.MapKey
+		entries.Range(func(k protoreflect.MapKey, v protoreflect.Value) bool {
+			if !p.admits(k.String()) {
+				drop = append(drop, k)
+			} else {
+				%[8]sTenantPinKeepOnly(v.Message(), p.sliceField)
+			}
+			return true
+		})
+		for _, k := range drop {
+			entries.Clear(k)
+		}
+	}
+	return out
+}
+`, serverName, p, bd.StateRoot, bd.Field, bd.MapField, strings.Join(slices, ", "), bd.ConfigType, lowerFirst(serverName))
+			continue
 		}
 		fmt.Fprintf(&b, `
 // resolve%[1]sTenantPin%[2]s pins the callers holding a tenant-pinned read of

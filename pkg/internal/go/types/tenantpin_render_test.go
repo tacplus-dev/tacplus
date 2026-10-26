@@ -121,3 +121,56 @@ func TestGoTenantPin_HelperFileStatesTheRuleAndFormats(t *testing.T) {
 		t.Fatalf("no pins must write nothing: %v", err)
 	}
 }
+
+// Issue #135: a grpc_config Config holding the tenant map. Its two reads,
+// GetConfig and WatchConfig, resolve the pin and filter the Config; SetConfig
+// is untouched. Runtime: testdata/go/tenant_pinned_config_read_test.go.
+
+var pinConfigBoundary = proto.TenantPinnedBoundary{
+	Package: "keeper", StateRoot: "KeeperConfigState", ProtoFile: "services/keeper.proto",
+	Field: "config", MapField: "tenants", ConfigType: "KeeperConfig",
+	Slices: []proto.TenantPinnedSlice{{Caller: "gateway", SliceField: "gateway"}},
+}
+
+func renderPinnedConfig(m *parser.MethodInfo) string {
+	san := newEgressSanitizer([]model.ProtoFile{{Package: "keeper"}})
+	san.tenantPins = map[string]proto.TenantPinnedRPC{}
+	for _, rpc := range pinConfigBoundary.ReadRPCs() {
+		san.tenantPins["keeper.KeeperConfigStateService/"+rpc.Name] = rpc
+	}
+	svc := &parser.ServiceInfo{Name: "KeeperConfigStateService", IsS2S: true, Methods: []*parser.MethodInfo{m}}
+	return generateGRPCWrapper(svc, m, "keeper", "services", "", map[string]service.AccountingInfo{},
+		map[string]string{}, proto.SkippedTraceTypes{}, san)
+}
+
+func TestGoTenantPin_ConfigReadsResolveAndFilterTheTenantMap(t *testing.T) {
+	const resolve = "__pin, err := resolve{{.ServerName}}TenantPinConfig(caller)"
+	get := renderPinnedConfig(pinMethod("GetConfig", "TraceRequest", "KeeperConfig", false))
+	wantAll(t, get, resolve, "resp = __pin.filterConfigMap(resp)")
+	if strings.Index(get, resolve) > strings.Index(get, "p.handler.GetConfig(") {
+		t.Fatalf("the pin must be resolved before the handler runs\n%s", get)
+	}
+	wantAll(t, renderPinnedConfig(pinMethod("WatchConfig", "TraceRequest", "KeeperConfig", true)),
+		resolve, "{{.ServerName}}TenantPinServerStream[types.KeeperConfig]{ServerStreamingServer: ", "filter: __pin.filterConfigMap}")
+	wantNone(t, renderPinnedConfig(pinMethod("SetConfig", "KeeperConfig", "KeeperConfig", false)), "__pin", "TenantPin")
+}
+
+func TestGoTenantPin_ConfigHelperFilterStatesTheRule(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config_state_service_tenant_pin.go")
+	if err := writeGoTenantPinFile(path, "keeper", "KeeperConfigStateService", "example.com/m/types/services/keeper",
+		"example.com/m/chassis/servicemanager", pinConfigBoundary.ReadRPCs()); err != nil {
+		t.Fatalf("writeGoTenantPinFile: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAll(t, string(b),
+		`map[string]string{"gateway": "gateway"}, "", "")`,
+		`pin.mapField = protoreflect.Name("tenants")`,
+		`func (p *KeeperConfigStateServiceTenantPin) filterConfigMap(r *types.KeeperConfig) *types.KeeperConfig {`,
+		`keeperConfigStateServiceTenantPinKeepOnly(m, p.mapField)`,
+		`if !p.admits(k.String()) {`,
+		`keeperConfigStateServiceTenantPinKeepOnly(v.Message(), p.sliceField)`,
+	)
+}

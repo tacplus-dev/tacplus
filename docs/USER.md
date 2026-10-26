@@ -729,6 +729,16 @@ the filter; a store implemented outside tacplus reads the grant from
 `codegen-config.json` (`securityPolicies[].tenantPinnedReads`), never from
 `boundaryGrants`.
 
+The same grant covers a `(spec.grpc_config)` Config that holds the TenantConfig
+in a `map<string, tenant_config.TenantConfig>` field (the owner's injected
+`<Owner>ConfigState` service): each slice owner is subscribed read-only to the
+Config and is an allowed caller of its `GetConfig` and `WatchConfig` only —
+never `SetConfig`. A pinned caller receives the Config reduced to that map, the
+map reduced to the tenants above, each entry projected to its own slice; the
+Config's other fields are the owner's and never leave it. The Config must hold
+exactly one such map with a string key, directly (not inside a wrapper message);
+any other shape that holds a TenantConfig map fails generation.
+
 ### Views Across Boundaries
 
 `view_member` aggregates collections across state roots into a single read-only view:

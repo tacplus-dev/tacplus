@@ -35,7 +35,7 @@ func (es *javaEgressSanitizer) tenantPin(servicePackage, serviceName, method str
 // AppendStateServiceToProtos emits; a change there fails generation instead of
 // serving the RPC unfiltered).
 func javaTenantPinShapeError(method *parser.MethodInfo, pin proto.TenantPinnedRPC) error {
-	stream := pin.Kind == proto.TenantPinWatch || pin.Kind == proto.TenantPinWatchQuery
+	stream := pin.Kind == proto.TenantPinWatch || pin.Kind == proto.TenantPinWatchQuery || pin.Kind == proto.TenantPinWatchConfig
 	if method.ClientStreaming || method.ServerStreaming != stream || method.IsWatchCollection() || method.IsPageCollection() ||
 		method.IsTier2SnapshotCollection() || method.IsTier3SnapshotCollection() {
 		return fmt.Errorf("%s is a tenant-pinned %s read, but its generated shape is not the one the Java wrapper filters; refusing to serve it unfiltered", method.Name, pin.Kind)
@@ -71,6 +71,9 @@ func javaTenantPinPost(pin proto.TenantPinnedRPC, outputType, indent string) str
 	case proto.TenantPinGetAll:
 		return fmt.Sprintf(`
 %[1]sresponse = TenantPin.filterEntries(__pin, response);`, indent)
+	case proto.TenantPinGetConfig:
+		return fmt.Sprintf(`
+%[1]sresponse = TenantPin.filterConfigMap(__pin, response);`, indent)
 	case proto.TenantPinKeySet:
 		return fmt.Sprintf(`
 %[1]sif (__pin != null) {
@@ -95,8 +98,11 @@ func javaTenantPinPost(pin proto.TenantPinnedRPC, outputType, indent string) str
 // javaTenantPinStream wraps a stream observer in the per-frame filter.
 func javaTenantPinStream(pin proto.TenantPinnedRPC, observer string) string {
 	filter := "filterEntries"
-	if pin.Kind == proto.TenantPinWatchQuery {
+	switch pin.Kind {
+	case proto.TenantPinWatchQuery:
 		filter = "filterQuery"
+	case proto.TenantPinWatchConfig:
+		filter = "filterConfigMap"
 	}
 	return fmt.Sprintf("TenantPin.filtering(%s, value -> TenantPin.%s(__pin, value))", observer, filter)
 }
@@ -127,9 +133,9 @@ func javaTenantPinClass(pins []proto.TenantPinnedRPC) string {
 		fmt.Fprintf(&resolvers, `
         /** Pins the callers holding a tenant-pinned read of %[1]s.%[2]s, each to its own config slice. */
         static TenantPin resolve%[3]s(TokenWrapper token) throws ProtoException {
-            return resolve(token, java.util.Map.ofEntries(%[4]s), %[5]q, %[6]q);
+            return resolve(token, java.util.Map.ofEntries(%[4]s), %[5]q, %[6]q, %[7]q);
         }
-`, bd.StateRoot, bd.Field, bd.BoundaryPascal(), strings.Join(puts, ", "), bd.KeyField, bd.ConfigField)
+`, bd.StateRoot, bd.Field, bd.BoundaryPascal(), strings.Join(puts, ", "), bd.KeyField, bd.ConfigField, bd.MapField)
 	}
 
 	return fmt.Sprintf(`
@@ -146,13 +152,15 @@ func javaTenantPinClass(pins []proto.TenantPinnedRPC) string {
         private final String tenant;
         private final String keyField;
         private final String configField;
+        private final String mapField; // a grpc_config Config's map<string, per_service_config> (#135)
         private final String sliceField;
 
-        private TenantPin(boolean all, String tenant, String keyField, String configField, String sliceField) {
+        private TenantPin(boolean all, String tenant, String keyField, String configField, String mapField, String sliceField) {
             this.all = all;
             this.tenant = tenant;
             this.keyField = keyField;
             this.configField = configField;
+            this.mapField = mapField;
             this.sliceField = sliceField;
         }
 %[1]s
@@ -162,7 +170,7 @@ func javaTenantPinClass(pins []proto.TenantPinnedRPC) string {
          * any other namespace, is PERMISSION_DENIED.
          */
         private static TenantPin resolve(TokenWrapper token, java.util.Map<String, String> slices,
-                String keyField, String configField) throws ProtoException {
+                String keyField, String configField, String mapField) throws ProtoException {
             if (token == null) {
                 throw ProtoException.newErrPermissionDenied(null, "a tenant-pinned read needs a verified caller");
             }
@@ -178,12 +186,12 @@ func javaTenantPinClass(pins []proto.TenantPinnedRPC) string {
             }
             String ns = token.getNamespace() == null ? "" : token.getNamespace();
             if (ns.equals(%[2]q) || ns.startsWith(%[2]q + "/")) {
-                return new TenantPin(true, "", keyField, configField, slice);
+                return new TenantPin(true, "", keyField, configField, mapField, slice);
             }
             if (ns.startsWith(%[3]q)) {
                 String t = ns.substring(%[3]q.length());
                 if (!t.isEmpty() && t.indexOf('/') < 0) {
-                    return new TenantPin(false, t, keyField, configField, slice);
+                    return new TenantPin(false, t, keyField, configField, mapField, slice);
                 }
             }
             throw ProtoException.newErrPermissionDenied(null,
@@ -278,6 +286,35 @@ func javaTenantPinClass(pins []proto.TenantPinnedRPC) string {
                 b.addRepeatedField(results, m);
             }
             b.setField(b.getDescriptorForType().findFieldByName("total_count"), kept.size());
+            return (R) b.build();
+        }
+
+        /**
+         * A grpc_config Config reduced to its tenant map, the map reduced to the
+         * admitted tenants' entries, each projected to the caller's slice. The
+         * Config's other fields are the owner's own and never leave it.
+         */
+        @SuppressWarnings("unchecked")
+        static <R extends com.google.protobuf.Message> R filterConfigMap(TenantPin p, R response) {
+            if (p == null || response == null) {
+                return response;
+            }
+            com.google.protobuf.Message.Builder b = response.toBuilder();
+            keepOnly(b, p.mapField);
+            com.google.protobuf.Descriptors.FieldDescriptor tenants = b.getDescriptorForType().findFieldByName(p.mapField);
+            java.util.List<Object> kept = new java.util.ArrayList<>();
+            for (Object o : (java.util.List<Object>) b.getField(tenants)) {
+                com.google.protobuf.MapEntry<String, com.google.protobuf.Message> e = (com.google.protobuf.MapEntry<String, com.google.protobuf.Message>) o;
+                if (admits(p, e.getKey())) {
+                    com.google.protobuf.Message.Builder vb = e.getValue().toBuilder();
+                    keepOnly(vb, p.sliceField);
+                    kept.add(e.toBuilder().setValue(vb.build()).build());
+                }
+            }
+            b.clearField(tenants);
+            for (Object e : kept) {
+                b.addRepeatedField(tenants, e);
+            }
             return (R) b.build();
         }
 

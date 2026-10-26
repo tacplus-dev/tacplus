@@ -438,9 +438,10 @@ type SecurityPolicy struct {
 // TenantPinnedRead is one tenant-pinned collection of a state root and the
 // callers pinned on it. Callers are bare, location-agnostic service paths.
 type TenantPinnedRead struct {
-	Boundary    string                  `json:"boundary"`    // collection field, e.g. "tenant_configs"
-	KeyField    string                  `json:"keyField"`    // item's (spec.indexed) string key, e.g. "tenant_name"
-	ConfigField string                  `json:"configField"` // item's per_service_config field, e.g. "config"
+	Boundary    string                  `json:"boundary"`              // collection field, e.g. "tenant_configs"; a Config singleton, e.g. "config"
+	KeyField    string                  `json:"keyField,omitempty"`    // item's (spec.indexed) string key, e.g. "tenant_name"
+	ConfigField string                  `json:"configField,omitempty"` // item's per_service_config field, e.g. "config"
+	MapField    string                  `json:"mapField,omitempty"`    // a grpc_config Config's map<string, per_service_config> field, e.g. "tenants" (#135)
 	Slices      []TenantPinnedReadSlice `json:"slices"`
 }
 
@@ -548,7 +549,7 @@ func ComputeSecurityPolicies(inputDir string) ([]SecurityPolicy, error) {
 	}
 	pinnedByRoot := make(map[string][]TenantPinnedRead)
 	for _, b := range pinned {
-		read := TenantPinnedRead{Boundary: b.Field, KeyField: b.KeyField, ConfigField: b.ConfigField}
+		read := TenantPinnedRead{Boundary: b.Field, KeyField: b.KeyField, ConfigField: b.ConfigField, MapField: b.MapField}
 		for _, sl := range b.Slices {
 			read.Slices = append(read.Slices, TenantPinnedReadSlice{Caller: sl.Caller, SliceField: sl.SliceField})
 		}

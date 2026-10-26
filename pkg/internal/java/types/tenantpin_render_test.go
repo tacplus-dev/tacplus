@@ -97,7 +97,7 @@ func TestJavaTenantPin_MutatorsAndOtherBoundariesAreUntouched(t *testing.T) {
 func TestJavaTenantPin_HelperClassStatesTheRule(t *testing.T) {
 	got := javaTenantPinClass(javaPinBoundary.ReadRPCs())
 	for _, w := range []string{
-		`resolve(token, java.util.Map.ofEntries(java.util.Map.entry("gateway", "gateway")), "tenant_name", "config")`,
+		`resolve(token, java.util.Map.ofEntries(java.util.Map.entry("gateway", "gateway")), "tenant_name", "config", "")`,
 		`String slice = slices.get(path);`,
 		`if (ns.equals("/system") || ns.startsWith("/system" + "/")) {`,
 		`if (ns.startsWith("/tenants/")) {`,
@@ -117,5 +117,51 @@ func TestJavaTenantPin_HelperClassStatesTheRule(t *testing.T) {
 	m := &parser.MethodInfo{Name: "GetTenantConfigs", ServerStreaming: true}
 	if err := javaTenantPinShapeError(m, javaPinBoundary.ReadRPCs()[0]); err == nil {
 		t.Fatal("a pinned read rendered as a stream has no filter here and must fail generation")
+	}
+}
+
+// Issue #135: a grpc_config Config holding the tenant map. Runtime:
+// testdata/java/TenantPinnedConfigReadTest.java.
+
+func TestJavaTenantPin_ConfigReadsResolveAndFilterTheTenantMap(t *testing.T) {
+	cfg := proto.TenantPinnedBoundary{
+		Package: "keeper", StateRoot: "KeeperConfigState", ProtoFile: "services/keeper.proto",
+		Field: "config", MapField: "tenants", ConfigType: "KeeperConfig",
+		Slices: []proto.TenantPinnedSlice{{Caller: "gateway", SliceField: "gateway"}},
+	}
+	san := newJavaEgressSanitizer([]model.ProtoFile{{Package: "keeper"}})
+	san.tenantPins = map[string]proto.TenantPinnedRPC{}
+	for _, rpc := range cfg.ReadRPCs() {
+		san.tenantPins["keeper.KeeperConfigStateService/"+rpc.Name] = rpc
+	}
+	render := func(name, in string, stream bool) string {
+		m := &parser.MethodInfo{Name: name, InputType: in, OutputType: "KeeperConfig",
+			FullInputType: "keeper." + in, FullOutputType: "keeper.KeeperConfig", ServerStreaming: stream}
+		return generateJavaGRPCWrapperSurface(m, "KeeperConfigStateService", "keeper", "Keeper."+in, "Keeper.KeeperConfig",
+			"Helpers", "Helpers", false, false, map[string]service.AccountingInfo{}, "keeper", "services",
+			map[string]string{}, proto.SkippedTraceTypes{}, san, nil, nil, false, false)
+	}
+	const resolve = "final TenantPin __pin = TenantPin.resolveConfig(Auth.verifiedTokenFromContext());"
+	for _, c := range []struct {
+		got  string
+		want string
+	}{
+		{render("GetConfig", "TraceRequest", false), "response = TenantPin.filterConfigMap(__pin, response);"},
+		{render("WatchConfig", "TraceRequest", true), "value -> TenantPin.filterConfigMap(__pin, value))"},
+	} {
+		for _, w := range []string{resolve, c.want} {
+			if !strings.Contains(c.got, w) {
+				t.Fatalf("wrapper missing %q\n%s", w, c.got)
+			}
+		}
+	}
+	if got := render("SetConfig", "KeeperConfig", false); strings.Contains(got, "__pin") || strings.Contains(got, "TenantPin") {
+		t.Fatalf("SetConfig is a write and must not be pinned\n%s", got)
+	}
+	class := javaTenantPinClass(cfg.ReadRPCs())
+	for _, w := range []string{`resolveConfig(TokenWrapper token)`, `"tenants"`, `static <R extends com.google.protobuf.Message> R filterConfigMap(TenantPin p, R response)`, `keepOnly(b, p.mapField);`} {
+		if !strings.Contains(class, w) {
+			t.Fatalf("TenantPin helper missing %q\n%s", w, class)
+		}
 	}
 }

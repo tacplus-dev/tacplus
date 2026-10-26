@@ -18,7 +18,7 @@ Node and `protoc` (see [CONTRIBUTING.md](../CONTRIBUTING.md)). Output lands in
 |------|------------|
 | [`proto/notes/notes.proto`](proto/notes/notes.proto) | The service: `NotesApi` with `CreateNote`, `GetNote` and a paged `ListNotes`, plus the `NotesState` state root. Everything the generator needs is an annotation in this file. |
 | [`proto/client/notesclient.proto`](proto/client/notesclient.proto) | The client's identity: declares that it calls `NotesApi`. |
-| [`proto/platform/notesmint.proto`](proto/platform/notesmint.proto), [`proto/platform/health.proto`](proto/platform/health.proto) | The two platform contracts every hosted service is generated against: the token mint and the service-health state. Declared, not run here. |
+| *(none: the token mint and the service-health state come from the sys contract tacplus itself declares, `sys/minter.proto` and `sys/servicehealth.proto`; a hosted service generates against them without declaring either)* | The two platform contracts every hosted service is generated against. Declared by tacplus, not here. |
 | [`proto/registry.yaml`](proto/registry.yaml), [`proto/dependencies.yaml`](proto/dependencies.yaml) | Stable service ids, and the pinned language dependencies the generated code builds with. |
 | [`server/main.go`](server/main.go) | The handler: three methods on an in-memory map. That is all the Go a service author writes. |
 | [`client/client.mjs`](client/client.mjs) | A few calls through the generated TypeScript client. |

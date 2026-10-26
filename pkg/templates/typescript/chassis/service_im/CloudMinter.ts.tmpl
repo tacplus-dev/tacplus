@@ -24,7 +24,7 @@ const TOKEN_PURPOSE_REFRESH = 1;
 const TOKEN_PURPOSE_ACCESS = 2;
 const TOKEN_PURPOSE_SERVICE = 3;
 const HAS_TOKEN_EXCHANGER = {{if .HasTokenExchanger}}true{{else}}false{{end}};
-const TOKEN_EXCHANGE_METHOD = '{{if .HasTokenExchanger}}/{{.TokenExchangerPackage}}.{{.MintServiceName}}/MintServiceToken{{end}}';
+const TOKEN_EXCHANGE_METHOD = '{{if .HasTokenExchanger}}/{{.TokenExchangerPackage}}.{{.MintServiceName}}/{{.MintServiceTokenMethod}}{{end}}';
 
 /**
  * Thrown when this service was built without a token exchanger. Callers that

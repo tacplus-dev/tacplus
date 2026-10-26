@@ -6,6 +6,7 @@ package types
 import (
 	"errors"
 	"fmt"
+	stateproto "github.com/tacplus-dev/tacplus/pkg/internal/proto"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -176,8 +177,12 @@ func generateJavaDiskStore(config *tactype.Config, protoDir, srcDir string) erro
 // consumer that does not use GCS does not need the jar.
 const javaGcsArchiveSDK = "com.google.cloud:google-cloud-storage"
 
-// javaGcsArchiveEnabled reports whether the project's dependencies.yaml pins the
-// GCS SDK for Java. No dependencies.yaml means no pin.
+// javaGcsArchiveEnabled reports whether this project gets GcsArchiveSink: the
+// GCS SDK is pinned for Java in dependencies.yaml AND the project is the record
+// store (the archive is the record store's hot redo archive). The pins are the
+// fleet's, shared by every service generated from its tree, so the pin alone
+// would hand the sink — and the SDK dependency — to every Java service in the
+// fleet. With no self package known, the pin decides, as before.
 func javaGcsArchiveEnabled(config *tactype.Config) (bool, error) {
 	if config.DepsYAMLPath == "" {
 		return false, nil
@@ -189,6 +194,11 @@ func javaGcsArchiveEnabled(config *tactype.Config) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to read dependencies.yaml for the archive sink: %w", err)
 	}
-	_, ok := depfiles.GetDepsMapForLang(deps, "java")[javaGcsArchiveSDK]
-	return ok, nil
+	if _, ok := depfiles.GetDepsMapForLang(deps, "java")[javaGcsArchiveSDK]; !ok {
+		return false, nil
+	}
+	if config.SelfPackage == "" || config.FlatProtoDir == "" {
+		return true, nil
+	}
+	return stateproto.IsRecordStore(config.FlatProtoDir, config.SelfPackage)
 }

@@ -36,14 +36,14 @@ func TestJavaIdentityManagerBootstrapPinsTrustDomain(t *testing.T) {
 }
 
 // TestJavaIdentityManagerFixedAudienceCredentials verifies that:
-// 1. IdentityManager exposes callCredentialsForAudience(String) for fixed-audience
-//    state-store connections (so state watches mint tokens for kernel, not the
-//    owning service's proto package).
-// 2. ServiceManager wires state clients with callCredentialsForAudience, not the
-//    per-method callCredentials().
-// 3. The TLS cert stream (ManageCert) uses callCredentialsForAudience with the
-//    kernel audience — callCredentials() would resolve "tlscert" from the method
-//    name and mint a token for the wrong service.
+//  1. IdentityManager exposes callCredentialsForAudience(String) for fixed-audience
+//     state-store connections (so state watches mint tokens for kernel, not the
+//     owning service's proto package).
+//  2. ServiceManager wires state clients with callCredentialsForAudience, not the
+//     per-method callCredentials().
+//  3. The TLS cert stream (ManageCert) uses callCredentialsForAudience with the
+//     kernel audience — callCredentials() would resolve "tlscert" from the method
+//     name and mint a token for the wrong service.
 func TestJavaIdentityManagerFixedAudienceCredentials(t *testing.T) {
 	im := readJavaTemplate(t, "java/chassis/service_im/IdentityManager.java.tmpl")
 

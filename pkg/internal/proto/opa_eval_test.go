@@ -142,3 +142,57 @@ service PlainService {
 		t.Fatal("IsOpaServer must be false for a package that does not import opalib")
 	}
 }
+
+// The record store is the package declaring (spec.record_store), and only it.
+func TestIsRecordStoreIsThePackageDeclaringIt(t *testing.T) {
+	dir := opaEvalFixtureDir(t)
+	writeProto(t, dir, "services/stratum.proto", `syntax = "proto3";
+package stratum;
+import "sys/spec.proto";
+option (spec.service) = {};
+option (spec.record_store) = {};
+message Config { option (spec.grpc_config) = {service_name: "stratum"}; }
+`)
+	writeProto(t, dir, "services/kernel.proto", `syntax = "proto3";
+package kernel;
+import "sys/spec.proto";
+option (spec.service) = {};
+message Config { option (spec.grpc_config) = {service_name: "kernel"}; }
+`)
+	for pkg, want := range map[string]bool{"stratum": true, "kernel": false, "nobody": false} {
+		got, err := IsRecordStore(dir, pkg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("IsRecordStore(%q) = %v, want %v", pkg, got, want)
+		}
+	}
+}
+
+// A state root's host label travels with its discovery: sys/servicehealth is
+// hosted at the well-known kernel label, and a service's own root declares none.
+func TestDiscoverStateRootCarriesTheHostLabel(t *testing.T) {
+	dir := opaEvalFixtureDir(t)
+	writeProto(t, dir, "services/alpha.proto", `syntax = "proto3";
+package alpha;
+import "sys/spec.proto";
+option (spec.service) = {};
+message Config { option (spec.grpc_config) = {service_name: "alpha"}; }
+message AlphaState { option (spec.service_state) = {name: "AlphaState"}; string x = 1; }
+`)
+	own, err := DiscoverStateRoot(dir, "AlphaState")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if own.HostLabel != "" || own.Package != "alpha" {
+		t.Fatalf("own root = %+v, want package alpha and no host label", own)
+	}
+	health, err := DiscoverStateRoot(dir, "ServiceHealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.Package != "servicehealth" || health.HostLabel != "kernel" {
+		t.Fatalf("sys health root = %+v, want package servicehealth hosted at kernel", health)
+	}
+}

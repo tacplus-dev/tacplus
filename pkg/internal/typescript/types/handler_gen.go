@@ -127,6 +127,7 @@ type tsSmTemplateData struct {
 	HasTokenExchanger     bool
 	TokenExchangerPackage string
 	MintServiceName       string
+	X509MintMethod        string // RPC accepting X509MintRequest, as the minter names it
 	DefaultAudience       string
 	ConfigDefaultsImports []tsConfigDefaultsImport
 	GrpcServices          []tsGrpcServiceEntry
@@ -244,6 +245,9 @@ func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, h
 			}
 			healthStateProtoDir = stateInfo.ProtoDir
 			healthStatePackage = stateInfo.Package
+			if stateInfo.HostLabel != "" {
+				healthStatePackage = stateInfo.HostLabel
+			}
 		}
 	}
 
@@ -311,6 +315,7 @@ func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, h
 	// generated ServiceManager can call X509Mint directly.
 	texPkg := ""
 	mintServiceName := ""
+	x509MintMethod := ""
 	hasTokenExchanger := false
 	info, err := parser.DiscoverTokenExchangerPackage(config.AnnotatedProtoDir)
 	if err != nil {
@@ -319,11 +324,12 @@ func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, h
 	if info != nil {
 		texPkg = info.Package
 		mintServiceName = info.ServiceName
+		x509MintMethod = info.X509MintMethod
 		hasTokenExchanger = true
 	}
 	defaultAudience := config.ServiceLabel()
 	if hasTokenExchanger {
-		defaultAudience = texPkg
+		defaultAudience = info.Audience()
 	}
 	tracePublisher, err := detectTracePublisherTemplateData(config)
 	if err != nil {
@@ -408,6 +414,7 @@ func buildTsSmTemplateData(config *tactype.Config, svcs []service.ServiceInfo, h
 		HasTokenExchanger:           hasTokenExchanger,
 		TokenExchangerPackage:       texPkg,
 		MintServiceName:             mintServiceName,
+		X509MintMethod:              x509MintMethod,
 		DefaultAudience:             defaultAudience,
 		ConfigDefaultsImports:       configDefaultsImports,
 		GrpcServices:                grpcSvcs,

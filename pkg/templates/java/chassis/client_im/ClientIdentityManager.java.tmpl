@@ -11,7 +11,7 @@ import {{.TypesBase}}.sys.token.TokenOuterClass.TokenPurpose;
 import {{.TypesBase}}.{{.TokenRequestPackage}}.{{.TokenRequestOuterClass}}.TokenMintRequest;
 import {{.TypesBase}}.{{.TokenRequestPackage}}.{{.TokenRequestOuterClass}}.TokenMintResponse;
 {{- if .HasClientTokenExchanger}}
-import {{.TypesBase}}.services.{{.ClientMintExchangerPackage}}.{{.ClientMintServiceName}}Grpc;
+import {{.TypesBase}}.{{.ClientMintExchangerDir}}.{{.ClientMintExchangerPackage}}.{{.ClientMintServiceName}}Grpc;
 {{- end}}
 
 import io.grpc.Channel;

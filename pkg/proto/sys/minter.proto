@@ -1,0 +1,56 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package minter;
+
+import "sys/spec.proto";
+import "sys/tokenrequest.proto";
+import "sys/x509.proto";
+
+// The contract's identity: callers are entitled against "minter" (the audience
+// is the contract, not the host) and 102 is its TokenEntitlements field, as
+// registered in the global tacplus registry.
+option (spec.vservice) = {name: "minter", id: 102};
+
+// Minter is the fleet's minting contract, part of the sys contract every fleet
+// provides: the RPCs every generated ServiceManager calls to obtain and renew
+// its own service identity (tokens and serving certificate). It is declared
+// here, by tacplus, so a service generates alone without the minting host's
+// proto in the run. The fleet's token authority hosts it (routing label
+// "kernel", the well-known state host); it implements this service and keeps
+// its own policy RPCs (users, delegation, principals, approvals) in a service
+// of its own. Exactly one authoritative (spec.token_minter) exists in any
+// run, and it is this one; a consumer must not declare another.
+service Minter {
+  option (spec.service_s2s) = {label: "kernel"};
+  option (spec.token_minter) = {};
+
+  // MintServiceToken — self-mint. A service exchanges its platform proof
+  // (Kubernetes token, cloud proof) or an authority-signed refresh/access token
+  // for a token bearing its OWN identity (sub = caller SPIFFE). The caller
+  // authenticates with the credentials in the request, not a bearer header.
+  rpc MintServiceToken(tokenrequest.MintServiceTokenRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES]};
+  }
+
+  // MintExternalServiceToken — a service's OWN identity for an off-cluster
+  // audience (workload identity federation, e.g. a model vendor's token
+  // endpoint). sub is taken from the presented service token, never from the
+  // request.
+  rpc MintExternalServiceToken(tokenrequest.MintExternalServiceTokenRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES]};
+  }
+
+  // MintToken — token exchange: an input token for a token of another kind.
+  rpc MintToken(tokenrequest.TokenMintRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES]};
+  }
+
+  // MintX509Cert — the service's serving certificate, identifying the service
+  // itself.
+  rpc MintX509Cert(tokenrequest.X509MintRequest) returns (x509.X509CertChain) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES]};
+  }
+}

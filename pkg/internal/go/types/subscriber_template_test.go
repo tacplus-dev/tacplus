@@ -73,4 +73,58 @@ func TestGoSubscriberUsesDeclaredBrokerService(t *testing.T) {
 	if strings.Contains(rendered, `EventBusTypedService`) {
 		t.Fatalf("subscriber fell back to hard-coded eventbus broker:\n%s", rendered)
 	}
+	// The Subscribe stream is answered by the broker, but its method name is
+	// in the topic owner's package, so the connection's audience heuristic
+	// would mint a token for the owner. The subscriber attaches a token from
+	// its own source, as the publishers do (Rust's subscriber already takes
+	// a token_source).
+	if !strings.Contains(rendered, "func New(conn grpc.ClientConnInterface, consumerGroup string, token TokenSource) *Subscriber") ||
+		!strings.Contains(rendered, `metadata.AppendToOutgoingContext(callCtx, "authorization", "Bearer "+tok)`) {
+		t.Fatalf("subscriber does not attach its own broker-scoped token:\n%s", rendered)
+	}
+	sm, err := loadTemplate("service_manager.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate: %v", err)
+	}
+	if !strings.Contains(sm, `.New(subConn, "{{$.ServiceLabel}}", func() (string, error) { return sm.identity.GetTokenFor("{{.TargetService}}") })`) {
+		t.Fatal("the service manager must hand the subscriber a token for the subscription's broker")
+	}
+}
+
+// A service that subscribes to a topic in its own package already imports
+// that package for its config and wrappers; the subscription must not import
+// it again under the same alias (the coop reads its own PigeonMessage thread).
+func TestGoSubscriptionTypeImportIsNotRepeated(t *testing.T) {
+	subs := []SubscriptionTemplateEntry{
+		{TypePkgAlias: "coop_pb", TypePkgImport: "m/tacplus/types/services/coop"},
+		{TypePkgAlias: "other_pb", TypePkgImport: "m/tacplus/types/services/other"},
+		{TypePkgAlias: "other_pb", TypePkgImport: "m/tacplus/types/services/other"},
+	}
+	markSubscriptionTypeImports(subs, []WrapperImport{{Alias: "coop_pb", ImportPath: "m/tacplus/types/services/coop"}})
+	if !subs[0].TypePkgImported {
+		t.Fatal("a subscription into the service's own package must reuse the service's import")
+	}
+	if subs[1].TypePkgImported || !subs[2].TypePkgImported {
+		t.Fatalf("one import per package across subscriptions; got %v %v", subs[1].TypePkgImported, subs[2].TypePkgImported)
+	}
+	tmpl, err := loadTemplate("service_manager.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate: %v", err)
+	}
+	if !strings.Contains(tmpl, "{{- if not .TypePkgImported}}") {
+		t.Fatal("the service manager template must skip an already-imported subscription types package")
+	}
+}
+
+// A workload pod has no resolvable hostname (no headless Service behind a
+// Job's pod name), and kernel requires an IP or FQDN as a health endpoint
+// host; the parent passes the pod IP as SERVICE_ADVERTISE_HOST.
+func TestGoServiceManagerAdvertisesSERVICEADVERTISEHOST(t *testing.T) {
+	tmpl, err := loadTemplate("service_manager.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate: %v", err)
+	}
+	if !strings.Contains(tmpl, `const advertiseHostEnv = "SERVICE_ADVERTISE_HOST"`) || !strings.Contains(tmpl, "os.Getenv(advertiseHostEnv)") {
+		t.Fatal("the service manager must let SERVICE_ADVERTISE_HOST name the advertised host when listening on a wildcard")
+	}
 }

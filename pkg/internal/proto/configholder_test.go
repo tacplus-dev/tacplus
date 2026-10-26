@@ -525,15 +525,7 @@ message GatewayTenantConfig {
   string route = 1;
 }
 `)
-	writeProto(t, src, "platform/health.proto", `syntax = "proto3";
-package health;
-import "sys/healthreport.proto";
-import "sys/spec.proto";
-message ServiceHealth {
-  option (spec.service_state) = {name: "ServiceHealth", label: ["audit"], export: true};
-  repeated healthreport.ServiceInstanceHealth instances = 1 [(spec.instance_keyed) = true, (spec.assert_max_size) = 10000];
-}
-`)
+	// ServiceHealth comes from the sys contract (sys/servicehealth.proto), not from a service proto.
 	flat, err := CopyAndPrepareProtoDir(src, t.TempDir())
 	if err != nil {
 		t.Fatalf("CopyAndPrepareProtoDir: %v", err)
@@ -588,15 +580,7 @@ message AuditConfig {
   map<string, Slices> tenants = 1;
 }
 `)
-	writeProto(t, dir, "health.proto", `syntax = "proto3";
-package health;
-import "sys/healthreport.proto";
-import "sys/spec.proto";
-message ServiceHealth {
-  option (spec.service_state) = {name: "ServiceHealth", label: ["state-store"], export: true};
-  repeated healthreport.ServiceInstanceHealth instances = 1 [(spec.instance_keyed) = true, (spec.assert_max_size) = 10000];
-}
-`)
+	// ServiceHealth comes from the sys contract (sys/servicehealth.proto), not from a service proto.
 	entries, err := InjectGrpcConfigState(dir, dir, dir)
 	if err != nil {
 		t.Fatalf("InjectGrpcConfigState: %v", err)

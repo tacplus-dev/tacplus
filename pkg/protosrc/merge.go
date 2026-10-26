@@ -64,17 +64,21 @@ func MergeSources(sourceDirs []string, destDir string) error {
 			if info.IsDir() {
 				return nil
 			}
-			// Merge only what generation consumes: proto files and yaml metadata.
-			// Everything else (READMEs, release scripts, CI config) is per-repo
-			// housekeeping that must not cause cross-source conflicts.
-			switch filepath.Ext(path) {
-			case ".proto", ".yaml", ".yml":
-			default:
-				return nil
-			}
 			rel, err := filepath.Rel(src, path)
 			if err != nil {
 				return err
+			}
+			// Merge only what generation consumes: proto files, yaml metadata,
+			// and a fleet build's lock at the root (the compiler reads each
+			// service's depends from it when it scopes a generation). Everything
+			// else (READMEs, release scripts, CI config) is per-repo housekeeping
+			// that must not cause cross-source conflicts.
+			switch filepath.Ext(path) {
+			case ".proto", ".yaml", ".yml":
+			default:
+				if rel != "fleet.lock" {
+					return nil
+				}
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -229,19 +233,30 @@ func isNamedList(seq []any) bool {
 var idFields = []string{"id", "field_id"}
 
 // mergeNamedList unions two sequences of {name, ...} maps by their name. An entry
-// present in both sources must be deep-equal (same name → same definition), else
-// it is a conflict. After the union, each id/field_id must map to exactly one
-// name, else it is an ID collision. Output is sorted by name for determinism.
+// present in both sources must agree on every key both carry (same name → same
+// definition), else it is a conflict; the keys only one side carries are kept,
+// so a project's full entry (contract, visibility) and a dependency's wire-only
+// mention of the same service (name, id — see wireOnlyLock) merge into the
+// full one. After the union, each id/field_id must map to exactly one name,
+// else it is an ID collision. Output is sorted by name for determinism.
 func mergeNamedList(base, overlay []any, ctx string) ([]any, error) {
 	byName := map[string]map[string]any{}
 	add := func(v any) error {
 		e := v.(map[string]any) // isNamedList guaranteed map-with-name
 		name := e["name"].(string)
 		if prev, ok := byName[name]; ok {
-			if !reflect.DeepEqual(prev, e) {
-				return fmt.Errorf("%s entry %q differs between sources: %v vs %v", ctx, name, prev, e)
+			merged := map[string]any{}
+			for k, pv := range prev {
+				merged[k] = pv
 			}
-			return nil // identical: deduplicated
+			for k, ev := range e {
+				if pv, both := prev[k]; both && !reflect.DeepEqual(pv, ev) {
+					return fmt.Errorf("%s entry %q differs between sources: %v vs %v", ctx, name, prev, e)
+				}
+				merged[k] = ev
+			}
+			byName[name] = merged
+			return nil
 		}
 		byName[name] = e
 		return nil

@@ -192,6 +192,25 @@ func sanitizeGoImportAlias(raw string) string {
 }
 
 // SubscriptionTemplateEntry holds the data for a single subscription in the template.
+// markSubscriptionTypeImports flags every subscription whose types package
+// the service manager already imports — as one of the service's own type
+// imports, or through an earlier subscription — so the template imports each
+// package once. A service subscribing to a topic in its own package (the coop
+// reading its own PigeonMessage thread) otherwise redeclared its alias.
+func markSubscriptionTypeImports(subs []SubscriptionTemplateEntry, typeImports []WrapperImport) {
+	seen := make(map[string]bool, len(typeImports))
+	for _, ti := range typeImports {
+		seen[ti.ImportPath] = true
+	}
+	for i := range subs {
+		if seen[subs[i].TypePkgImport] {
+			subs[i].TypePkgImported = true
+			continue
+		}
+		seen[subs[i].TypePkgImport] = true
+	}
+}
+
 type SubscriptionTemplateEntry struct {
 	FieldPascal           string // e.g. "EventStream"
 	HandlerMethodName     string // e.g. "OnEventStream" or "OnEventStreamAegis" (disambiguated)
@@ -204,7 +223,12 @@ type SubscriptionTemplateEntry struct {
 	SubPkgImport          string // e.g. "module/tacplus/subscribe/aegis/event_stream"
 	TypePkgAlias          string // e.g. "aegis_pb"
 	TypePkgImport         string // e.g. "module/tacplus/types/services/aegis"
-	EventBusImport        string // e.g. "module/tacplus/types/sys/eventbus"
+	// TypePkgImported is true when the types package is already imported by
+	// the service manager under the same alias (a subscription to a topic in
+	// the service's own package, or two subscriptions into one package), so
+	// the template must not import it a second time.
+	TypePkgImported bool
+	EventBusImport  string // e.g. "module/tacplus/types/sys/eventbus"
 	// HasProjections is true when ANY message extracts from the source event
 	// (every projection is a timeseries table). It gates the Handle<Type> dispatch call: that
 	// function is only generated for a source that HAS a projection
@@ -454,7 +478,9 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			healthStateProtoDir = generatedTypesRelDir(stateInfo.ProtoFile, stateInfo.Package)
 			healthStateGroupAccessor = goAccessorName(filepath.Dir(stateInfo.ProtoFile))
 		}
-		if strings.HasPrefix(b.ProtoFile, "sys/") {
+		// The tacplus-injected health state lives in sys/ but every service has it;
+		// it does not make a service a sys-state consumer (runtime config etc.).
+		if strings.HasPrefix(b.ProtoFile, "sys/") && !b.IsHealthState {
 			hasSysState = true
 		}
 	}
@@ -670,6 +696,8 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			}
 		}
 	}
+
+	markSubscriptionTypeImports(subEntries, typeImports)
 
 	publishers, err := collectGoEventPublishers(config, config.AnnotatedProtoDir, pkgToDirMap)
 	if err != nil {

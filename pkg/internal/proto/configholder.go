@@ -860,7 +860,18 @@ func ScanVServiceRPCs(scanDir string, reg *ServiceRegistry) ([]VServiceEntry, er
 		if fd.VServiceName == "" {
 			continue
 		}
-		vsID, err := reg.VServiceFieldID(fd.VServiceName)
+		var vsID int32
+		if fd.VServiceID != 0 {
+			// A declared id (sys-owned contracts such as minter declare theirs
+			// inline) is the wire number; the registry may know it but must
+			// never allocate a different one.
+			vsID = fd.VServiceID
+			if regID, ok := reg.VServiceFieldIDIfPresent(fd.VServiceName); ok && regID != vsID {
+				return nil, fmt.Errorf("%s: vservice %q declares id %d but the registry has %d", path, fd.VServiceName, vsID, regID)
+			}
+		} else {
+			vsID, err = reg.VServiceFieldID(fd.VServiceName)
+		}
 		if err != nil {
 			if fd.VServiceID == 0 {
 				return nil, fmt.Errorf("%s: vservice %q has no registry entry and no descriptor id fallback: %w", path, fd.VServiceName, err)
@@ -1001,7 +1012,11 @@ func resolvePrimaryStore(allFiles map[string]*parser.FileDescriptor) (string, er
 	case len(configStorePkgs) == 1:
 		return configStorePkgs[0], nil
 	case len(storePkgs) == 0:
-		return "", nil
+		// No store in this run: a service generated alone. Config state is
+		// hosted by the fleet's state host, which every fleet provides, so
+		// route to its well-known label; the fleet build loads the real store
+		// (kernel declares store + config_store) and takes the branch above.
+		return parser.WellKnownStateHostLabel, nil
 	case len(storePkgs) == 1:
 		// Unambiguous: one store, nothing to choose between.
 		return storePkgs[0], nil
@@ -1080,9 +1095,6 @@ func InjectGrpcConfigState(sourceProtoDir, tempProtoDir, flatProtoDir string) ([
 	primaryStore, err := resolvePrimaryStore(dp.GetAllFiles())
 	if err != nil {
 		return nil, err
-	}
-	if primaryStore == "" {
-		return nil, fmt.Errorf("no service with store: true found in proto set — config state requires a backing store")
 	}
 
 	// Inject ConfigState into each service's proto file.
@@ -1955,6 +1967,11 @@ type StateRootInfo struct {
 	Package        string
 	StateName      string
 	JavaOuterClass string
+	// HostLabel is the routing label of the service that hosts this root
+	// ((spec.service_state).label), "" when the root declares none. It is the
+	// audience a caller mints for to reach the root; the proto package is not
+	// (sys/servicehealth is hosted by kernel).
+	HostLabel string
 }
 
 // DiscoverStateRoot finds the proto file that declares the named service_state
@@ -1992,6 +2009,9 @@ func DiscoverStateRoot(inputDir, stateName string) (*StateRootInfo, error) {
 				ProtoDir:  strings.TrimSuffix(path, ".proto"),
 				Package:   fd.Package,
 				StateName: ann.StringValue,
+			}
+			if lbl, ok := msg.Annotations["service_state_label"]; ok && len(lbl.StringSliceValue) == 1 {
+				found.HostLabel = lbl.StringSliceValue[0]
 			}
 		}
 	}
@@ -2089,10 +2109,13 @@ func declaredConfigStateRoots(allFiles map[string]*parser.FileDescriptor) map[st
 // discovery path can route to healthy instances. The backing state service
 // enforces per-instance write isolation via the token's instance_id claim.
 func InjectHealthState(config *tactype.Config, inputDir string) error {
-	// Only inject ServiceHealth for services that already have states or are
-	// configured as gRPC servers. CLI tools and other non-state consumers don't
-	// need health state tracking.
-	if len(config.States) == 0 && !config.GrpcServerAll && len(config.GrpcServers) == 0 && !config.AllStates && !hasOwnGrpcServer(config, inputDir) {
+	// Only inject ServiceHealth for services that already have states, are
+	// configured as gRPC servers, or are WORKLOADS: programs that only publish
+	// and subscribe on the event bus (a pigeon). CLI tools and other non-state
+	// consumers don't need health state tracking; a workload does, because its
+	// publishers and its broker discovery ride the health state.
+	if len(config.States) == 0 && !config.GrpcServerAll && len(config.GrpcServers) == 0 && !config.AllStates &&
+		!hasOwnGrpcServer(config, inputDir) && !hasOwnEventBindings(config, inputDir) {
 		return nil
 	}
 	const healthStateName = "ServiceHealth"
@@ -2186,6 +2209,39 @@ func hasOwnGrpcServer(config *tactype.Config, inputDir string) bool {
 		}
 	}
 	return hasOwnGrpcServerText(config, inputDir)
+}
+
+// hasOwnEventBindings reports whether a proto the actor owns declares an
+// event_publish or event_watch binding: the shape of a workload, which has
+// no server and no state root but still speaks on the event bus.
+func hasOwnEventBindings(config *tactype.Config, inputDir string) bool {
+	if config == nil || config.SelfPackage == "" || inputDir == "" {
+		return false
+	}
+	found := false
+	_ = filepath.Walk(inputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+			return nil
+		}
+		relPath, relErr := filepath.Rel(inputDir, path)
+		if relErr == nil && IsInfraProto(relPath) {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		text := string(data)
+		if !protoTextOwnedByService(text, config.SelfPackage) {
+			return nil
+		}
+		if strings.Contains(text, "(spec.event_publish)") || strings.Contains(text, "(spec.event_watch)") {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 func hasOwnGrpcServerText(config *tactype.Config, inputDir string) bool {

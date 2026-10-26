@@ -1197,6 +1197,14 @@ message ServiceS2SAnnotation {
   // interface. Used for vservice routing tables where the interface is defined
   // in a vservice proto but hosted by a physical service (e.g. "recordstore").
   string label = 3;
+
+  // auth_services_from_fleet: the caller list is not this proto's to know. The
+  // fleet build fills auth_services with every service in the fleet that
+  // declares (spec.grpc_s2s_client) of this service, in the merged tree it
+  // hands to each service's generation. A standalone build of this proto
+  // generates with no callers allowed (the authorizers fail closed). Mutually
+  // exclusive with a literal auth_services.
+  bool auth_services_from_fleet = 4;
 }
 
 // ServiceC2SAnnotation declares a client-to-service gRPC service.

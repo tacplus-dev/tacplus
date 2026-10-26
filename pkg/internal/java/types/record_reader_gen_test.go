@@ -21,7 +21,7 @@ func javaMessageReaderEntry() javaRecordReaderEntry {
 		ClientChain:   "vservices().recordMap()",
 		PageResultFqn: "com.example.chassis.collection.CollectionRuntime.PageResult",
 		KeyField:      "delivery_id", KeySetter: "setDeliveryId", KeyJavaType: "String",
-		CreateFn: "createMessageQuery", ListFn: "listMessagePage", DeleteFn: "deleteMessageQuery",
+		CreateFn: "createMessageQuery", ListFn: "listMessagePage", DeleteFn: "deleteMessageQuery", RowsFn: "getMessageRows", RowsReqType: "GetMessageRowsRequest",
 		FilterType: "MessageFilter", OpenReqType: "OpenMessageQueryRequest", PullReqType: "PullMessageRequest",
 		HasKeyFilter: true,
 	}

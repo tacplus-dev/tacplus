@@ -464,7 +464,12 @@ func generateIdentityManager(config *tactype.Config) error {
 	for _, b := range config.States {
 		if b.IsHealthState && b.AccessMode != tactype.AccessRO {
 			if stateInfo, err := proto.DiscoverStateRoot(config.FlatProtoDir, b.MessageName); err == nil && stateInfo != nil {
+				// The store's identity is the label the health root is hosted at
+				// (kernel), not the root's proto package (servicehealth).
 				stateStoreServiceID = stateInfo.Package
+				if stateInfo.HostLabel != "" {
+					stateStoreServiceID = stateInfo.HostLabel
+				}
 			}
 		}
 	}
@@ -484,6 +489,13 @@ func generateIdentityManager(config *tactype.Config) error {
 				mappingSeen[pkg] = true
 			}
 		}
+	}
+
+	// The token minter's package is a sys contract hosted by a service (minter
+	// -> kernel): a call on it mints for the host, not for the package.
+	if texInfo != nil && texInfo.Package != texInfo.Audience() && !mappingSeen[texInfo.Package] {
+		audienceMappings = append(audienceMappings, audienceMapping{Package: texInfo.Package, Audience: texInfo.Audience()})
+		mappingSeen[texInfo.Package] = true
 	}
 
 	// The template routes these virtual packages to the service's own audience.
@@ -528,7 +540,7 @@ func generateIdentityManager(config *tactype.Config) error {
 		TokenLibPath:                   fmt.Sprintf("%s/chassis/token", config.ModuleBasePath),
 		TokenTypesPath:                 fmt.Sprintf("%s/types/sys/token", config.ModuleBasePath),
 		X509LibPath:                    fmt.Sprintf("%s/chassis/x509", config.ModuleBasePath),
-		ServiceAudience:                texInfo.Package,
+		ServiceAudience:                texInfo.Audience(),
 		MintServiceName:                texInfo.ServiceName,
 		MintExternalServiceTokenMethod: texInfo.MintExternalServiceTokenMethod,
 		AudienceMappings:               audienceMappings,
@@ -906,8 +918,10 @@ func generateStateWrappers(config *tactype.Config, inputDir string) ([]generated
 			return nil
 		}
 		// Skip infrastructure protos except the manifest-declared runtime config
-		// state proto, which has ServiceConfigState.
-		if proto.IsInfraProtoFile(relPath, fileDesc) && !proto.IsRuntimeConfigStateProto(relPath) {
+		// state proto (ServiceConfigState) and sys protos that declare a state
+		// root: the sys contract's roots (sys/servicehealth.proto) get state
+		// clients exactly like a service's own roots do.
+		if proto.IsInfraProtoFile(relPath, fileDesc) && !proto.IsRuntimeConfigStateProto(relPath) && !proto.DeclaresServiceState(fileDesc) {
 			return nil
 		}
 		if proto.IsSyntheticServiceOnlyFile(fileDesc) {

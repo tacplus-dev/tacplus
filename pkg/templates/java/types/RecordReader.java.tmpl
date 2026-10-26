@@ -55,9 +55,16 @@ public final class {{.ReaderClass}} {
 {{- end}}
      */
     public Optional<{{.RecordFqn}}> get({{.KeyJavaType}} key{{if .HasDeletedFlag}}, boolean includeDeleted{{end}}) {
-        {{.PlaneOuter}}.{{.FilterType}} filter = {{.PlaneOuter}}.{{.FilterType}}.newBuilder().{{.KeySetter}}(key).build();
-        {{.PageResultFqn}}<{{.RecordFqn}}> page = queryPage(filter, 1, ""{{if .HasDeletedFlag}}, includeDeleted{{end}});
-        return page.items.isEmpty() ? Optional.empty() : Optional.of(page.items.get(0));
+        // The direct read: no result set, so nothing a connection failover
+        // between two calls could lose.
+        {{.PlaneOuter}}.{{.RowsReqType}}.Builder req = {{.PlaneOuter}}.{{.RowsReqType}}.newBuilder()
+                .setFilter({{.PlaneOuter}}.{{.FilterType}}.newBuilder().{{.KeySetter}}(key).build())
+                .setLimit(1);
+{{- if .HasDeletedFlag}}
+        req.setIncludeDeleted(includeDeleted);
+{{- end}}
+        java.util.List<{{.RecordFqn}}> items = client.{{.RowsFn}}(req.build()).getItemsList();
+        return items.isEmpty() ? Optional.empty() : Optional.of(items.get(0));
     }
 {{- end}}
 

@@ -44,7 +44,26 @@ type TokenExchangerInfo struct {
 	MintExternalServiceTokenMethod string
 	X509MintMethod                 string // RPC accepting X509MintRequest and returning X509CertChain
 	IsProxy                        bool   // true for the client-reachable C2S front (token_minter {proxy: true})
+	// HostLabel is the physical host of a minter declared as a hosted contract
+	// ((spec.service_s2s).label, e.g. "kernel" for the sys minter.Minter).
+	// Empty when the minter is a service's own, in which case its package is
+	// the host.
+	HostLabel string
 }
+
+// Audience is the token audience for calls to this minter: its host when it is
+// a hosted contract, else its own package.
+func (t *TokenExchangerInfo) Audience() string {
+	if t.HostLabel != "" {
+		return t.HostLabel
+	}
+	return t.Package
+}
+
+// SysMinterService is the fully-qualified name of the minting contract tacplus
+// declares in sys/minter.proto. It is the authoritative (spec.token_minter) in
+// every run; see that file.
+const SysMinterService = "minter.Minter"
 
 // scanTokenMinters parses protoDir via the descriptor model and returns every
 // service carrying the (spec.token_minter) annotation. The minter is declared
@@ -83,6 +102,11 @@ func scanTokenMinters(protoDir string) ([]TokenExchangerInfo, error) {
 		for _, m := range minters {
 			if !m.IsProxy {
 				names = append(names, m.Package+"."+m.ServiceName)
+			}
+		}
+		for _, n := range names {
+			if n == SysMinterService {
+				return nil, fmt.Errorf("multiple authoritative (spec.token_minter) services declared (%v): the minting contract is declared by tacplus itself (sys/minter.proto, %s); drop (spec.token_minter) and the minting RPCs from the other service and have the token authority host the sys Minter instead", names, SysMinterService)
 			}
 		}
 		return nil, fmt.Errorf("multiple authoritative (spec.token_minter) services declared (%v); exactly one S2S minter is allowed", names)

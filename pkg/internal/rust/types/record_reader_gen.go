@@ -46,6 +46,8 @@ type recordReaderEntry struct {
 	CreateFn       string // e.g. "create_message_query"
 	ListFn         string // e.g. "list_message_page"
 	DeleteFn       string // e.g. "delete_message_query"
+	RowsFn         string // e.g. "get_message_rows": the direct read, no handle
+	RowsReqType    string // e.g. "GetMessageRowsRequest"
 	FilterType     string // e.g. "MessageFilter"
 	OpenReqType    string // e.g. "OpenMessageQueryRequest"
 	PullReqType    string // e.g. "PullMessageRequest"
@@ -270,6 +272,8 @@ func collectRecordReaders(config *tactype.Config, protoDir string) ([]recordRead
 			CreateFn:       "create_" + snake + "_query",
 			ListFn:         "list_" + snake + "_page",
 			DeleteFn:       "delete_" + snake + "_query",
+			RowsFn:         "get_" + snake + "_rows",
+			RowsReqType:    "Get" + name + "RowsRequest",
 			FilterType:     name + "Filter",
 			OpenReqType:    "Open" + name + "QueryRequest",
 			PullReqType:    "Pull" + name + "Request",

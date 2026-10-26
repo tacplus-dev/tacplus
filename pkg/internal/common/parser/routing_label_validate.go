@@ -9,15 +9,23 @@ import (
 	"strings"
 )
 
+// WellKnownStateHostLabel is the routing label of the fleet's state host. It is
+// served by every fleet, so it counts as served even when the service that
+// serves it is not in this generation run. That is what lets a service generate
+// alone, against its own proto plus the sys contract, instead of importing the
+// host's proto. The fleet build still loads the real host. See docs/USER.md
+// "Well-Known Names" and https://github.com/tacplus-dev/tacplus/issues/1.
+const WellKnownStateHostLabel = "kernel"
+
 // CollectServingLabels returns every routing label served by the loaded proto
-// set: a service's own identity (GrpcName, the proto package), the physical host
+// set, plus WellKnownStateHostLabel: a service's own identity (GrpcName, the proto package), the physical host
 // a vservice declares through (spec.service_s2s).label, and the file-level
 // identity of a service that declares itself a backing store through
 // (spec.service).store — the way a store service says which label it serves. A
 // routing label is late-bound — it names a service by label, not by import — so
 // this set is the only thing that can tell a declared destination from a typo.
 func CollectServingLabels(fds []*FileDescriptor) map[string]bool {
-	labels := make(map[string]bool)
+	labels := map[string]bool{WellKnownStateHostLabel: true}
 	for _, fd := range fds {
 		if fd.ServiceStore {
 			if fd.ServiceName != "" {

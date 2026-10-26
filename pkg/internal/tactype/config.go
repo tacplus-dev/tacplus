@@ -326,10 +326,17 @@ func ResolveProtocBinary() (string, error) {
 // e.g. "gitlab.com/org/services/identity/tacplus" → "identity"
 // Falls back to Pkg when ModuleBasePath is not set (e.g. Rust services).
 func (c *Config) ServiceLabel() string {
+	// The service's proto package is its identity everywhere else — kernel's
+	// service ids, the gateway's routes, every token audience — so it is the
+	// label too. The module directory above the generated output is only a
+	// fallback for a project that declares no package of its own.
+	if c.SelfPackage != "" {
+		return c.SelfPackage
+	}
 	base := strings.TrimSuffix(c.ModuleBasePath, "/"+c.OutputNameOrDefault())
 	label := filepath.Base(base)
 	if label == "." || label == "" {
-		return c.SelfPackage
+		return ""
 	}
 	return label
 }

@@ -53,8 +53,10 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 	if err != nil {
 		return err
 	}
+	texDir := "services"
 	if info != nil {
 		texPkg = info.Package
+		texDir = exchangerParentDir(info)
 		texOuterClass = strings.ToUpper(info.Package[:1]) + info.Package[1:]
 		mintServiceName = info.ServiceName
 		if info.MintExternalServiceTokenMethod != "" {
@@ -64,7 +66,7 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 	}
 	defaultAudience := config.ServiceLabel()
 	if hasTokenExchanger {
-		defaultAudience = texPkg
+		defaultAudience = info.Audience()
 	}
 
 	// Build virtual→physical audience mappings for audienceFromMethod.
@@ -95,6 +97,13 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		}
 	}
 
+	// The token minter's package is a sys contract hosted by a service (minter
+	// -> kernel): a call on it mints for the host, not for the package.
+	if hasTokenExchanger && info.Package != info.Audience() && !mappingSeen[info.Package] {
+		audienceMappings = append(audienceMappings, audienceMapping{Package: info.Package, Audience: info.Audience()})
+		mappingSeen[info.Package] = true
+	}
+
 	// Map state-service proto packages to the state store's service identity.
 	// State RPCs physically go to the state store (kernel), but their gRPC
 	// method names carry the owning service's proto package. Without this,
@@ -105,7 +114,12 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 	for _, b := range config.States {
 		if b.IsHealthState && b.AccessMode != tactype.AccessRO {
 			if stateInfo, err := stateproto.DiscoverStateRoot(config.FlatProtoDir, b.MessageName); err == nil && stateInfo != nil {
+				// The store's identity is the label the health root is hosted at
+				// (kernel), not the root's proto package (servicehealth).
 				stateStoreServiceID = stateInfo.Package
+				if stateInfo.HostLabel != "" {
+					stateStoreServiceID = stateInfo.HostLabel
+				}
 			}
 		}
 	}
@@ -162,6 +176,7 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		TypesBase                string
 		HasTokenExchanger        bool
 		TokenExchangerPackage    string // proto package name for token mint service
+		TokenExchangerDir        string // generated types dir holding it: "sys" for the sys contract, "services" for a declared one
 		TokenExchangerOuterClass string // Java outer class for token mint service proto
 		TokenRequestPackage      string // proto package for unified TokenMintRequest (sys/tokenrequest)
 		TokenRequestOuterClass   string // Java outer class for TokenMintRequest proto
@@ -187,6 +202,7 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		TypesBase:                      packageBase + ".types",
 		HasTokenExchanger:              hasTokenExchanger,
 		TokenExchangerPackage:          texPkg,
+		TokenExchangerDir:              texDir,
 		TokenExchangerOuterClass:       texOuterClass,
 		TokenRequestPackage:            "sys.tokenrequest",
 		TokenRequestOuterClass:         "Tokenrequest",
@@ -305,6 +321,7 @@ func writeClientIdentityManager(config *tactype.Config) error {
 
 	hasClientTokenExchanger := false
 	clientMintExchangerPackage := ""
+	clientMintExchangerDir := "services"
 	clientMintServiceName := ""
 	clientTokenMintMethod := ""
 	if clientInfo != nil {
@@ -313,6 +330,7 @@ func writeClientIdentityManager(config *tactype.Config) error {
 		}
 		hasClientTokenExchanger = true
 		clientMintExchangerPackage = clientInfo.Package
+		clientMintExchangerDir = exchangerParentDir(clientInfo)
 		clientMintServiceName = clientInfo.ServiceName
 		clientTokenMintMethod = clientInfo.TokenMintMethod
 	}
@@ -330,7 +348,8 @@ func writeClientIdentityManager(config *tactype.Config) error {
 		TokenRequestPackage        string
 		TokenRequestOuterClass     string
 		HasClientTokenExchanger    bool
-		ClientMintExchangerPackage string // proto package for the C2S mint service (services.<pkg>)
+		ClientMintExchangerPackage string // proto package for the C2S mint service
+		ClientMintExchangerDir     string // generated types dir holding it ("sys" or "services")
 		ClientMintServiceName      string // C2S mint proto service name (<Name>Grpc)
 		ClientTokenMintMethod      string // C2S TokenMint RPC name
 		ClientTokenMintMethodLower string // stub method name (first letter lowercased)
@@ -341,6 +360,7 @@ func writeClientIdentityManager(config *tactype.Config) error {
 		TokenRequestOuterClass:     "Tokenrequest",
 		HasClientTokenExchanger:    hasClientTokenExchanger,
 		ClientMintExchangerPackage: clientMintExchangerPackage,
+		ClientMintExchangerDir:     clientMintExchangerDir,
 		ClientMintServiceName:      clientMintServiceName,
 		ClientTokenMintMethod:      clientTokenMintMethod,
 		ClientTokenMintMethodLower: clientTokenMintMethodLower,
@@ -378,4 +398,14 @@ func writeClientIdentityManager(config *tactype.Config) error {
 
 	zap.L().Info("Java client identity manager written", zap.String("dir", clientIMDir))
 	return nil
+}
+
+// exchangerParentDir is the generated types package segment that holds a
+// minter's classes: the parent of its proto path ("sys" for sys/minter.proto,
+// "services" for services/mint.proto).
+func exchangerParentDir(info *parser.TokenExchangerInfo) string {
+	if d := filepath.Dir(info.Dir); d != "." && d != "" {
+		return filepath.Base(d)
+	}
+	return "services"
 }

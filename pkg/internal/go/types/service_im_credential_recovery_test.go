@@ -183,3 +183,19 @@ func TestGoCredentialDegradedFloorStaysWired(t *testing.T) {
 		t.Fatal("service_manager must wire CredentialsDegraded as the readiness degraded probe")
 	}
 }
+
+// A workload's bootstrap token is exchanged once for a refresh token; every
+// later renewal presents that refresh token and the authority answers with an
+// access token alone (a service-typed refresh does not rotate). The minter
+// must keep the refresh token it holds, not demand a new one each time.
+func TestBootstrapMinterKeepsItsRefreshTokenAcrossRenewals(t *testing.T) {
+	tmpl, err := loadChassisTemplate("service_im/service_im.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate: %v", err)
+	}
+	for _, want := range []string{"bootstrapped bool", "tm.bootstrapped = true", "case !tm.bootstrapped:"} {
+		if !strings.Contains(tmpl, want) {
+			t.Fatalf("service_im template lacks %q: a renewal without a refresh token in the response must keep the held one", want)
+		}
+	}
+}

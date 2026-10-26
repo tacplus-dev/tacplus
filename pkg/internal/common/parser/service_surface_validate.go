@@ -44,6 +44,10 @@ func ValidateServiceSurfaces(dp *DescriptorParser) error {
 				errs = append(errs, fmt.Sprintf("%s.%s: declares %s; a service has exactly one caller surface — split it into two services, one per surface (see testapp echo.proto's Echo/Probe split)",
 					fd.Package, svc.Name, strings.Join(found, " and ")))
 			}
+			if svc.AuthServicesFromFleet && len(svc.AuthServices) > 0 {
+				errs = append(errs, fmt.Sprintf("%s.%s: declares both auth_services and auth_services_from_fleet; the fleet build supplies the caller list, or the proto does, not both",
+					fd.Package, svc.Name))
+			}
 		}
 	}
 	if len(errs) > 0 {

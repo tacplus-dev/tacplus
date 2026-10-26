@@ -9,7 +9,7 @@ package {{.ChassisBase}}.service_im;
 import {{.TypesBase}}.sys.token.TokenOuterClass.TokenPurpose;
 import {{.TypesBase}}.{{.TokenRequestPackage}}.{{.TokenRequestOuterClass}}.MintServiceTokenRequest;
 {{if .HasTokenExchanger}}
-import {{.TypesBase}}.services.{{.TokenExchangerPackage}}.{{.MintServiceName}}Grpc;
+import {{.TypesBase}}.{{.TokenExchangerDir}}.{{.TokenExchangerPackage}}.{{.MintServiceName}}Grpc;
 {{end}}
 
 import io.grpc.ManagedChannel;

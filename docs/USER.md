@@ -8,21 +8,22 @@ Reference for developers using tacplus to build services — writing proto files
 
 1. [Patterns for Service Implementers](#patterns-for-service-implementers)
 2. [tacplus.yaml Reference](#tacplusyaml-reference)
-3. [CLI Commands](#cli-commands)
-4. [Annotation Reference](#annotation-reference)
-5. [Conditional Requirements](#conditional-requirements)
-6. [Formal Verification Annotations](#formal-verification-annotations)
-7. [REST Method Control](#rest-method-control)
-8. [Governed RPC Verbs](#governed-rpc-verbs)
-9. [Tags](#tags)
-10. [State System](#state-system)
-11. [Auth System](#auth-system)
-12. [Record / Event / Store / Projection Annotations](#record--event--store--projection-annotations)
-13. [registry.json and the Semantic IR](#registryjson-and-the-semantic-ir)
-14. [Generated Libraries](#generated-libraries)
-15. [Service Lifecycle](#service-lifecycle)
-16. [Distributed Tracing](#distributed-tracing)
-17. [Well-Known Names (Conventions)](#well-known-names-conventions)
+3. [Service Registry](#service-registry)
+4. [CLI Commands](#cli-commands)
+5. [Annotation Reference](#annotation-reference)
+6. [Conditional Requirements](#conditional-requirements)
+7. [Formal Verification Annotations](#formal-verification-annotations)
+8. [REST Method Control](#rest-method-control)
+9. [Governed RPC Verbs](#governed-rpc-verbs)
+10. [Tags](#tags)
+11. [State System](#state-system)
+12. [Auth System](#auth-system)
+13. [Record / Event / Store / Projection Annotations](#record--event--store--projection-annotations)
+14. [registry.json and the Semantic IR](#registryjson-and-the-semantic-ir)
+15. [Generated Libraries](#generated-libraries)
+16. [Service Lifecycle](#service-lifecycle)
+17. [Distributed Tracing](#distributed-tracing)
+18. [Well-Known Names (Conventions)](#well-known-names-conventions)
 
 ---
 
@@ -117,6 +118,9 @@ Only `language` and `output-dir` are required. `pkg` is commonly set explicitly,
 | `language` | string | Yes | Full-service targets: `go`, `rust`, `java`. Full-client targets: `python`, `typescript`. Lite client targets: `swift`, `csharp`. |
 | `output-dir` | string | Yes | Output subdirectory relative to project dir |
 | `pkg` | string | No | Canonical package name (Java-style reverse DNS, e.g. `com.example.myservice`). Each segment must be a valid identifier (letters, digits, underscores — no hyphens). Converted to native format per language (see table below). |
+| `kind` | string | No | What this project is: `service` (hosts a surface, has a registry identity; a fleet runs it), `client` (calls services, hosts nothing: a CLI, daemon or app), `library` (contracts only: protos other projects build against). A statement of intent the generator and the fleet build can check against the protos. Unset means not stated. |
+| `depends` | list | No | Services this one calls, by registry name: `llmproxy` or `weather@1.2` (MAJOR.MINOR, the latest patch; never a patch pin). Each is resolved through the global registry named by `global:` in `proto/registry.yaml` to the repo that declares it, fetched at that version, and merged into this generation, so the `(spec.grpc_s2s_client)` declared in proto has a proto to generate from. Direct dependencies only; the fleet build follows them transitively. |
+| `tacplus` | string | No | Minimum tacplus `MAJOR.MINOR` this project needs, e.g. `"2.2"`. A floor, not a pin: MAJOR must match and the running MINOR must be at least this. A patch component is rejected (consumers always run the latest patch of a MAJOR.MINOR). Unset means no floor. An unstamped local build (`0.0.0`) cannot satisfy a floor. |
 
 #### Package Name Conversion
 
@@ -267,6 +271,53 @@ CLI flags override YAML values when both are specified.
 
 ---
 
+## Service Registry
+
+Service and vservice ids are field numbers in the generated `TokenEntitlements`
+message and values of the `ServiceName` enum, so they must be unique across every
+proto repo that may be composed into one kernel. `registry.yaml` at a proto root
+records them. Three shapes exist:
+
+- **An authority** declares `scope: global` or `scope: private` and allocates ids.
+  The global registry (`github.com/tacplus-dev/registry`) is the one place ids that
+  must be globally unique come from; it allocates 101-1023. A private registry is
+  one a fleet owner keeps for services that will only ever live in fleets they
+  control; it allocates 1024-2047. Both are append-only: ids are never reused or
+  renumbered. Each entry names the service's **contract**, the repo that holds its
+  proto. That repo may be public, shared with a partner, or private: the registry
+  decides ids, not who may read what. Register from a checkout of the authority:
+
+  ```bash
+  tacplus registry register NAME --kind service --contract <proto repo URL> --visibility public --proto-dir .
+  ```
+
+- **A lock** is a per-proto-repo `registry.yaml` that names its authorities in order:
+
+  ```yaml
+  registries:
+      - https://github.com/tacplus-dev/registry.git
+      - https://gitlab.com/acme/registry.git
+  services:
+      - name: doppelganger
+        id: 101
+  ```
+
+  `tacplus registry --proto-dir .` unions the authorities (a name or an id in two of
+  them is an error, never a precedence call), syncs the lock for every service
+  declared in the tree, and refuses to allocate or renumber. A declared service in
+  no authority is an error naming the registration step. Builds read only the lock,
+  so generation is reproducible offline.
+
+- **A legacy per-repo registry** has neither `scope:` nor `registries:` and keeps the
+  original allocation (1-99 with an optional `id_min` floor), unchanged.
+
+Ids 1-99 are frozen wherever their service sits; 100 is reserved. The registry
+never pins versions: a fleet's manifest pins what that fleet runs, and a service's
+`depends` names the oldest MAJOR.MINOR of a dependency it was built against. Which
+implementation of a service a fleet runs is the fleet manifest's choice; the
+registry's contract field only says where the proto lives, so a fleet may run its
+own implementation of, say, kernel under the same name and id.
+
 ## CLI Commands
 
 | Command | Purpose |
@@ -275,6 +326,7 @@ CLI flags override YAML values when both are specified.
 | `tacplus validate` | Validate proto files |
 | `tacplus verify` | Run formal verification on Rust or Java code |
 | `tacplus registry` | Update the service / vservice / trait registry from proto definitions |
+| `tacplus fleet build` | Build a fleet from a deployment repo's `fleet.yaml`: resolve every service's implementation, check ids and dependencies against the registries, merge the protos, run the whole-fleet checks, write `fleet.lock` (see [Fleet Build](#fleet-build)) |
 | `tacplus upgrade` | Upgrade tacplus to the latest patch release |
 | `tacplus version` | Print the version and build information |
 
@@ -890,7 +942,16 @@ service InternalAdmin {
 service RecordStoreHosted {
   option (spec.service_s2s) = {label: "recordstore"};
 }
+
+// The caller list belongs to the fleet, not to this contract: the fleet build
+// fills it with every fleet service that declares (spec.grpc_s2s_client) of
+// this service. A standalone build admits no callers.
+service ModelEgress {
+  option (spec.service_s2s) = {auth_services_from_fleet: true};
+}
 ```
+
+`auth_services_from_fleet` and a literal `auth_services` are mutually exclusive (`ValidateServiceSurfaces`). Use it for a service whose callers differ per fleet (a shared model-egress proxy: one fleet's product services, another fleet's doppelganger); the contract repo then never names one fleet's services.
 
 **`service_c2s`** — declares a client-to-service gRPC service, exposed through the API gateway to end users. `auth_entitled_users` is the service-level default policy. `label` is the twin of the `service_s2s` one — it names the physical host for a trait's client-facing surface, while the audience the gateway checks the caller's token against stays the file's `(spec.trait).name`:
 
@@ -1637,6 +1698,66 @@ async fn handle_request(&self, req: MyRequest) -> Result<MyResponse, ProtoError>
 
 The same pattern applies in Java, TypeScript, and Python. Omitting the `trace_id` on any downstream call breaks the trace chain for that span.
 
+## Fleet Build
+
+A service is generated alone, in its own repo, against its own proto plus the sys
+contract and the protos of its `depends`. A **fleet** is what runs those services
+together, and it is declared in a deployment repo, one per fleet:
+
+```yaml
+# fleet.yaml
+registries:
+  - https://github.com/tacplus-dev/registry.git     # ordered; disjoint; unioned
+  - https://gitlab.com/acme/registry.git            # a private one, if any
+tacplus: "2.2"                                      # floor, MAJOR.MINOR
+services:
+  - name: kernel
+    version: "0.1"                                  # MAJOR.MINOR -> latest patch; omit for latest
+    repo: https://github.com/acme/our-kernel.git    # the implementation THIS fleet runs; required, no default
+  - name: llmproxy
+    repo: https://github.com/tacplus-dev/llmproxy.git
+```
+
+`dependencies.yaml` beside it holds the language and tool pins for everything
+generated from the fleet's merged protos. `tacplus fleet build` then:
+
+1. unions the registries, refusing a name or id that appears in two;
+2. resolves each service's implementation at its version (for its commit and its
+   `depends`) and gathers its **contract** from the registry's home for it: the proto
+   whose file-level identity is the name, plus everything it imports, so a proto repo
+   shared by many services contributes only this service's files. The contract's
+   `registry.yaml` must carry the registry's id (a fleet may run its own kernel, never
+   under a different number) and the proto must declare the registered name;
+3. checks every `depends` of every service is in the fleet, at a version satisfying the
+   dependent's floor: this is where the kernel build follows the dependency;
+4. merges the protos (each service's protos and lock, the fleet's pins) into `build/proto`,
+   stamps the fleet's caller lists (every `service_s2s` declaring
+   `auth_services_from_fleet` gets the fleet services that declare a client of it), and
+   runs the whole-fleet checks: routing and C2S host labels served, one SMB authority,
+   exactly one minter, a complete and collision-free registry;
+5. writes `fleet.lock`, the exact commit of every registry and service.
+
+The merged tree is what the fleet-side services, the state host, the gateway and the
+operator, are generated from: `tacplus build --src build/proto` in their repos at the
+locked commits. Service binaries are not built here; each builds in its own repo, and
+the shared registry locks guarantee the two agree.
+
+## The Sys Contract a Fleet Provides
+
+Some things every hosted service needs are provided by the fleet, not by the
+service, and tacplus declares them itself in its `sys/` protos so a service
+generates alone, against its own proto plus `sys/`, without the fleet's protos
+in the run. The fleet build loads the real implementors. Today:
+
+| Declared in | What | Hosted by |
+|-------------|------|-----------|
+| `sys/minter.proto` (`minter.Minter`) | The minting contract every generated ServiceManager calls: `MintServiceToken`, `MintExternalServiceToken`, `MintToken`, `MintX509Cert`. It is the one authoritative `(spec.token_minter)` in every run; a consumer must not declare another. | The token authority, at routing label `kernel`. It implements `minter.Minter` and keeps its own policy RPCs in a service of its own. |
+| `sys/servicehealth.proto` (`servicehealth.ServiceHealth`) | The service-instance health root every service reports into. Field numbers are frozen. | The state host (`kernel`), which imports it rather than declaring a copy. |
+| routing label `kernel` | The state host. Counts as served in every run (see Well-Known Names); config state routes there when no store is loaded. | The fleet's state host. |
+
+A service that declared these itself before now imports them; declaring a second
+copy is an error that names the sys file.
+
 ## Well-Known Names (Conventions)
 
 Three names from the platform tacplus was first built for are, for now,
@@ -1648,5 +1769,6 @@ proto-declared equivalent is tracked in [https://github.com/tacplus-dev/tacplus/
 | Name | Where it is expected | What it means |
 |------|---------------------|---------------|
 | `eventbus` (proto package) | EventBus wire-contract gate (`pkg/internal/proto/eventbus_wire_contract.go`) | The canonical EventBus proto is found by its package name. The gate compares the synthesized `eventbus_support.proto` against it and fails generation on any field-level drift. If no package named `eventbus` is in the build inputs, the gate has nothing to compare against and is skipped. |
+| `"kernel"` (value of `(spec.service_state).label`) | Routing-label check (`pkg/internal/common/parser/routing_label_validate.go`) | The fleet's state host. Counts as served even when no loaded service serves it, so a service generates alone against its own proto plus the sys contract; the fleet build loads the real host. Every other label must be served by a loaded service. |
 | `"kernel"` (value of `(spec.service_state).label`) | State placement rules (`pkg/internal/proto/state.go`) | A state root carrying this label is a kernel boundary: `(spec.persistence)` on any of its fields is a generation error unless the root also sets `identity_snapshot = true` (Rule 3b, see the `spec.service_state` reference above). Other label values carry no generator meaning. |
 | `AZP_KERNEL` (enum `spec.Azp`) | Token claims (`pkg/proto/sys/spec.proto`) | The authorized-party value for tokens minted from trusted internal context by the platform's token service. The name reflects the first platform's service name; the meaning is "internal mint", not a dependency on a service called kernel. |

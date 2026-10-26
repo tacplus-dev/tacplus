@@ -98,3 +98,31 @@ func TestValidateRoutingLabelsAcceptsDeclaredStore(t *testing.T) {
 		t.Fatalf("a declared backing store must serve its label: %v", err)
 	}
 }
+
+// A service generated alone declares its state root routed to the fleet's state
+// host without that host's proto in the run. The well-known host label counts
+// as served; any other label still needs a loaded service.
+func TestValidateRoutingLabelsServesWellKnownStateHostWithoutItsProto(t *testing.T) {
+	state := &FileDescriptor{
+		Path:    "services/llmproxy.proto",
+		Package: "llmproxy",
+		Messages: []MessageDescriptor{{
+			Name:        "LlmProxyState",
+			Annotations: map[string]model.AnnotationValue{"service_state_label": labelAnn(WellKnownStateHostLabel)},
+		}},
+	}
+	if err := validateRoutingLabels([]*FileDescriptor{state}); err != nil {
+		t.Fatalf("the well-known state host label must count as served: %v", err)
+	}
+	other := &FileDescriptor{
+		Path:    "services/other.proto",
+		Package: "other",
+		Messages: []MessageDescriptor{{
+			Name:        "Root",
+			Annotations: map[string]model.AnnotationValue{"service_state_label": labelAnn("stratum")},
+		}},
+	}
+	if err := validateRoutingLabels([]*FileDescriptor{other}); err == nil {
+		t.Fatal("only the well-known host label is implied; another unserved label must still fail")
+	}
+}

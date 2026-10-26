@@ -21,15 +21,25 @@ type ServiceManager struct {
 }
 
 // New creates a C2S ServiceManager from an existing gRPC connection.
-// If tokenProvider is non-nil, every outgoing call will include a Bearer token.
+// If tokenProvider is non-nil, every outgoing call will include that Bearer
+// token, whatever service it targets.
 func New(conn grpc.ClientConnInterface, tokenProvider func() (string, error)) *ServiceManager {
+	return NewWithTokenProviderFor(conn, func(string) func() (string, error) {
+		return tokenProvider
+	})
+}
+
+// NewWithTokenProviderFor creates a C2S ServiceManager whose Bearer token is
+// chosen per target service: tokenProviderFor is called with the target's
+// service id (its proto package) and returns that service's token provider.
+// Services check a token's audience against their own id, so a client holding
+// one access token exchanges it for a service token per target; the generated
+// client_im.ClientIdentityManager.GetTokenFor does exactly that.
+func NewWithTokenProviderFor(conn grpc.ClientConnInterface, tokenProviderFor func(string) func() (string, error)) *ServiceManager {
 	channels := map[string]*serviceconnection.ChannelProvider{
 {{- range .Targets}}
 		"{{.}}": serviceconnection.NewStaticChannelProvider("{{.}}", conn),
 {{- end}}
-	}
-	tokenProviderFor := func(string) func() (string, error) {
-		return tokenProvider
 	}
 	return &ServiceManager{
 		conn:    conn,

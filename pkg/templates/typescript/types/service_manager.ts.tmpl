@@ -104,7 +104,7 @@ function trustedCasToPem(cas: Array<{ base64?: string }>): Buffer {
 
 const TOKEN_EXCHANGER_PACKAGE = '{{.TokenExchangerPackage}}';
 const HAS_TOKEN_EXCHANGER = {{if .HasTokenExchanger}}true{{else}}false{{end}};
-const X509_MINT_METHOD = '{{if .HasTokenExchanger}}/{{.TokenExchangerPackage}}.{{.MintServiceName}}/X509Mint{{end}}';
+const X509_MINT_METHOD = '{{if .HasTokenExchanger}}/{{.TokenExchangerPackage}}.{{.MintServiceName}}/{{.X509MintMethod}}{{end}}';
 
 /**
  * Builds the channel credentials for outgoing gRPC: TLS (from cfg.trustedCas)

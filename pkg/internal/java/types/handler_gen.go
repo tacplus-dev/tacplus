@@ -362,13 +362,20 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 			}
 			healthStateProtoDir = generatedTypesRelDir(stateInfo.ProtoFile, stateInfo.Package)
 			healthStatePackage = stateInfo.Package
+			if stateInfo.HostLabel != "" {
+				// The store's audience is the label the health root is hosted
+				// at (kernel), not its proto package (servicehealth).
+				healthStatePackage = stateInfo.HostLabel
+			}
 			healthStateOuterClass = javaOuterClassForProto(protoDir, "", stateInfo.ProtoFile, stateInfo.Package)
 		}
 	}
 
 	hasSysState := false
 	for _, b := range config.States {
-		if strings.HasPrefix(b.ProtoFile, "sys/") {
+		// The tacplus-injected health state lives in sys/ but every service has it;
+		// it does not make a service a sys-state consumer (runtime config etc.).
+		if strings.HasPrefix(b.ProtoFile, "sys/") && !b.IsHealthState {
 			hasSysState = true
 		}
 	}

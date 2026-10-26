@@ -258,3 +258,20 @@ type OpaEvalInfo struct {
 	InputFQN   string // e.g. "opa_entitlements.EntitlementEvalInput"
 	ResultFQN  string // e.g. "opa_entitlements.EntitlementEvalResult"
 }
+
+// IsRecordStore reports whether the service identified by selfPackage declares
+// (spec.record_store): it hosts the record query plane and the hot redo logs
+// whose archive the GCS sink ships. Accumulated across every file in the
+// package, as IsOpaServer is.
+func IsRecordStore(inputDir, selfPackage string) (bool, error) {
+	dp, err := parser.NewDescriptorParser(inputDir)
+	if err != nil {
+		return false, fmt.Errorf("failed to create descriptor parser for record store check: %w", err)
+	}
+	for _, fd := range dp.GetAllFiles() {
+		if fd.Package == selfPackage && fd.RecordStore {
+			return true, nil
+		}
+	}
+	return false, nil
+}

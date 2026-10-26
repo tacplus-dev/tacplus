@@ -211,8 +211,8 @@ func TestValidateRejectsDuplicateAndIllegalIDs(t *testing.T) {
 			wantIn: `service "a"`,
 		},
 		{
-			name:   "ID above 99",
-			yaml:   "services:\n  - name: a\n    id: 120\n",
+			name:   "ID above the global range",
+			yaml:   "services:\n  - name: a\n    id: 2048\n",
 			wantIn: `service "a"`,
 		},
 		{

@@ -16,6 +16,7 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/builder"
 	"github.com/tacplus-dev/tacplus/pkg/depfiles"
+	"github.com/tacplus-dev/tacplus/pkg/fleet"
 	"github.com/tacplus-dev/tacplus/pkg/gittag"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
@@ -236,7 +237,40 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 	// builder has a valid (empty) input; all lib wrappers come from embedded protos.
 	var absProtoDir string
 	var fileLayers map[string]string
+	var ownProtoDir string // the project's own proto dir, before any dependency merge
 	var protoCleanup func()
+	// A library generated against a fleet's merged tree (an explicit --src) is
+	// not in that tree: nothing runs it, so the fleet build never fetched it.
+	// Its own proto then joins the merge the way a dependency's does (wire-only
+	// lock, no pins), so the fleet's registry.yaml stays authoritative. A service
+	// that IS in the tree is left alone: merging its proto twice would collide.
+	ownExtra := ""
+	ownDir := "" // the project's own proto dir in the checkout, when --src names another tree
+	if p.SrcExplicit && cfg != nil && cfg.Src != "" && !protosrc.IsGitSource(cfg.Src) {
+		own := cfg.Src
+		if !filepath.IsAbs(own) {
+			own = filepath.Join(cwd, own)
+		}
+		if st, err := os.Stat(own); err == nil && st.IsDir() {
+			ownDir = own
+			if pkg := ownServicePackage(own); pkg != "" {
+				declared := false
+				for _, s := range srcs {
+					d := s.Src
+					if !filepath.IsAbs(d) && !protosrc.IsGitSource(d) {
+						d = filepath.Join(cwd, d)
+					}
+					if !protosrc.IsGitSource(d) && declaresPackage(d, pkg) {
+						declared = true
+					}
+				}
+				if !declared {
+					ownExtra = own
+					zap.L().Info("project proto is not in the given --src tree; merging it in as a library", zap.String("package", pkg), zap.String("dir", own))
+				}
+			}
+		}
+	}
 	if sysOnly {
 		tempDir, err := os.MkdirTemp("", "tacplus-sys-*")
 		if err != nil {
@@ -250,7 +284,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 		absProtoDir = tempDir
 		protoCleanup = func() { os.RemoveAll(tempDir) }
 		zap.L().Info("No proto source configured — generating standard library wrappers only")
-	} else if len(srcs) == 1 {
+	} else if len(srcs) == 1 && ownExtra == "" && (cfg == nil || len(cfg.GenerationDepends()) == 0 || p.SrcExplicit) {
 		// Single source: resolve directly (no merge), preserving the original
 		// fast path exactly.
 		dir, cleanup, err := resolveOneSource(srcs[0].Src, tag)
@@ -259,6 +293,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 		}
 		absProtoDir = dir
 		fileLayers = protosrc.FileLayers([]string{dir}, []string{srcs[0].Layer})
+		ownProtoDir = dir
 		protoCleanup = cleanup
 	} else {
 		// Multiple sources: resolve each (each with its own proto/-subdir probe)
@@ -281,6 +316,31 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 			layers = append(layers, s.Layer)
 			cleanups = append(cleanups, cleanup)
 		}
+		ownProtoDir = dirs[0]
+		if ownExtra != "" {
+			staged, stagedCleanup, err := stageDependency(ownExtra)
+			if err != nil {
+				runCleanups()
+				return nil, fmt.Errorf("staging the project's own proto for the merge: %w", err)
+			}
+			dirs = append(dirs, staged)
+			cleanups = append(cleanups, stagedCleanup)
+			ownProtoDir = ownExtra
+		}
+		// Declared dependencies (tacplus.yaml depends and test-depends) join
+		// the merge: their protos are what the declared S2S clients and the
+		// tests generate from. An explicit --src overrides yaml sourcing
+		// entirely, depends included: a fleet build's merged tree already holds
+		// every dependency (and scopes by depends alone; see below).
+		if cfg != nil && len(cfg.GenerationDepends()) > 0 && !p.SrcExplicit {
+			depDirs, depCleanups, err := resolveDependencies(cfg.GenerationDepends(), dirs[0])
+			if err != nil {
+				runCleanups()
+				return nil, err
+			}
+			dirs = append(dirs, depDirs...)
+			cleanups = append(cleanups, depCleanups...)
+		}
 		mergedDir, err := os.MkdirTemp("", "tacplus-merged-*")
 		if err != nil {
 			runCleanups()
@@ -298,7 +358,31 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 			runCleanups()
 		}
 		zap.L().Info("merged multiple proto sources into one generation",
-			zap.Int("sources", len(srcs)), zap.String("merged-dir", mergedDir))
+			zap.Int("sources", len(dirs)), zap.String("merged-dir", mergedDir))
+	}
+
+	// An explicit --src is a tree the project did not assemble (a fleet
+	// build's merged protos hold every service). The project generates from
+	// what its tacplus.yaml declares: its own contract and its depends, or the
+	// whole tree for grpc-servers/grpc-clients: all. The same scope is what
+	// the fleet build digests to decide whether this project's image moves.
+	if p.SrcExplicit && cfg != nil && !sysOnly {
+		// The merged tree names many services; the checkout's own proto dir
+		// names this one.
+		nameDir := ownProtoDir
+		if ownDir != "" {
+			nameDir = ownDir
+		}
+		scoped, scopeCleanup, err := scopeExplicitSource(absProtoDir, selfPackage(yamlPkg, nameDir), cfg)
+		if err != nil {
+			protoCleanup()
+			return nil, err
+		}
+		if scoped != absProtoDir {
+			absProtoDir = scoped
+			prev := protoCleanup
+			protoCleanup = func() { scopeCleanup(); prev() }
+		}
 	}
 
 	// Language must be declared in tacplus.yaml
@@ -424,6 +508,18 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 	} else {
 		pkg = projectfile.DerivePackage(pt, cwd)
 	}
+	// With an explicit --src (a fleet's merged tree, which declares every
+	// service), the project's own proto dir is still tacplus.yaml src when that
+	// is a local directory: it is what says which service is this one.
+	if p.SrcExplicit && cfg != nil && cfg.Src != "" && !protosrc.IsGitSource(cfg.Src) {
+		own := cfg.Src
+		if !filepath.IsAbs(own) {
+			own = filepath.Join(cwd, own)
+		}
+		if st, err := os.Stat(own); err == nil && st.IsDir() {
+			ownProtoDir = own
+		}
+	}
 
 	// Create unified tactype.Config
 	config := &tactype.Config{
@@ -440,7 +536,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 		DepsYAMLPath: depsYAMLPath,
 		VersionTag:   resolvedVersion,
 		LocalMode:    localMode,
-		SelfPackage:  selfPackageFromCanonical(yamlPkg),
+		SelfPackage:  selfPackage(yamlPkg, ownProtoDir),
 		SysOnly:      sysOnly,
 		SourceLayers: fileLayers,
 	}
@@ -705,6 +801,18 @@ func resolveProtoTag(tag string) (string, bool) {
 
 // selfPackageFromCanonical extracts the proto package name (last segment) from
 // a canonical Java-style package (e.g. "com.gitlab...services.gateway" → "gateway").
+// selfPackage is the proto package of the service this project generates for:
+// the last segment of tacplus.yaml pkg, or, when pkg is omitted (derived from
+// go.mod), the one package the project's own proto dir declares a service in.
+// Once dependencies are merged in, nothing else tells the generator which of
+// the services in the tree is its own.
+func selfPackage(yamlPkg, ownProtoDir string) string {
+	if s := selfPackageFromCanonical(yamlPkg); s != "" {
+		return s
+	}
+	return ownServicePackage(ownProtoDir)
+}
+
 func selfPackageFromCanonical(canonical string) string {
 	if canonical == "" {
 		return ""
@@ -727,4 +835,41 @@ func loadDepsYAML(path string) (*depsYAML, error) {
 	}
 
 	return &cfg, nil
+}
+
+// scopeExplicitSource stages the part of root that cfg declares into a temp
+// dir and returns it; root itself when the declaration covers the whole tree.
+func scopeExplicitSource(root, self string, cfg *tacplusyaml.Config) (string, func(), error) {
+	if cfg.WholeFleet() {
+		return root, func() {}, nil
+	}
+	if self == "" && len(cfg.Depends) == 0 {
+		return "", nil, fmt.Errorf("cannot scope %s: the project's own service is not named (no pkg in tacplus.yaml, no single service under src) and it declares no depends; declare them, or grpc-servers/grpc-clients/states: all", root)
+	}
+	scoper, err := fleet.NewScoper(root)
+	if err != nil {
+		return "", nil, err
+	}
+	sc, err := scoper.Scope(self, cfg.Depends, false)
+	if err != nil {
+		return "", nil, err
+	}
+	all, err := fleet.ProtoFiles(root)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(sc.Files) == len(all) {
+		return root, func() {}, nil
+	}
+	staged, err := os.MkdirTemp("", "tacplus-scoped-*")
+	if err != nil {
+		return "", nil, err
+	}
+	if err := fleet.Stage(root, sc, staged); err != nil {
+		os.RemoveAll(staged)
+		return "", nil, err
+	}
+	zap.L().Info("scoped the proto tree to the project's declaration",
+		zap.String("self", self), zap.Int("files", len(sc.Files)), zap.Int("of", len(all)))
+	return staged, func() { os.RemoveAll(staged) }, nil
 }

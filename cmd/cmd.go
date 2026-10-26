@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	buildcmd "github.com/tacplus-dev/tacplus/cmd/build"
+	fleetcmd "github.com/tacplus-dev/tacplus/cmd/fleet"
 	registrycmd "github.com/tacplus-dev/tacplus/cmd/registry"
 	upgradecmd "github.com/tacplus-dev/tacplus/cmd/upgrade"
 	validatecmd "github.com/tacplus-dev/tacplus/cmd/validate"
@@ -64,6 +65,7 @@ func init() {
 	rootCmd.AddCommand(verifyCmd)
 
 	rootCmd.AddCommand(registrycmd.GetCmd())
+	rootCmd.AddCommand(fleetcmd.GetCmd())
 	rootCmd.AddCommand(versioncmd.GetCmd())
 	rootCmd.AddCommand(upgradecmd.GetCmd())
 }

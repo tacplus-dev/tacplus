@@ -376,8 +376,14 @@ func TestGoServiceManagerBindsX509MintAudienceToServiceLabel(t *testing.T) {
 	if strings.Contains(compactRendered, "ServiceAudience:stateSvcPkg,") {
 		t.Fatalf("Go ServiceManager X509Mint audience must not be derived from the token-exchanger package")
 	}
-	if !strings.Contains(compactRendered, "ServiceAudience:texInfo.Package,") {
-		t.Fatalf("Go service_im default token audience must still target the discovered token exchanger")
+	// The default audience is the discovered token exchanger's HOST: its own
+	// package when it is a service's own minter, its host label when it is a
+	// hosted contract (the sys minter.Minter hosted at "kernel").
+	if !strings.Contains(compactRendered, "ServiceAudience:texInfo.Audience(),") {
+		t.Fatalf("Go service_im default token audience must target the discovered token exchanger's host (TokenExchangerInfo.Audience)")
+	}
+	if strings.Contains(compactRendered, "ServiceAudience:texInfo.Package,") {
+		t.Fatalf("Go service_im default token audience must not be the exchanger's bare package; a hosted contract's audience is its host")
 	}
 
 	tmpl, err := loadTemplate("servicemanager_lib.go.tmpl")
@@ -616,5 +622,21 @@ func TestGoServingCertHotReloads(t *testing.T) {
 	}
 	if !strings.Contains(smlib, "func (bc *ServiceManager) SetTLSCert(") {
 		t.Fatalf("servicemanager lib must expose SetTLSCert for renewal publication (PC-L-10)")
+	}
+}
+
+func TestGoC2SServiceManagerScopesTokensPerTargetService(t *testing.T) {
+	tmpl, err := loadTemplate("c2sm.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate c2sm.go.tmpl: %v", err)
+	}
+	for _, want := range []string{
+		"func NewWithTokenProviderFor(conn grpc.ClientConnInterface, tokenProviderFor func(string) func() (string, error)) *ServiceManager",
+		"return NewWithTokenProviderFor(conn, func(string) func() (string, error) {",
+		"grpcPkg: smgrpc.New(channels, tokenProviderFor),",
+	} {
+		if !strings.Contains(tmpl, want) {
+			t.Fatalf("Go c2sm must let a client pick its Bearer token per target service; missing %q", want)
+		}
 	}
 }

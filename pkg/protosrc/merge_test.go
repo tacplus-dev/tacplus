@@ -91,6 +91,48 @@ func TestMergeSources_SkipsHiddenAndHousekeepingFiles(t *testing.T) {
 
 // A shared path with DIFFERENT contents across sources is a hard error — this is
 // what forces the shared base to be factored into a single source.
+func TestMergeSources_RegistryEntryMergesWithAWireOnlyMention(t *testing.T) {
+	own := t.TempDir()
+	dep := t.TempDir()
+	writeFile(t, own, "services/stratum.proto", "syntax = \"proto3\";\n")
+	writeFile(t, own, "registry.yaml", "services:\n    - {name: stratum, id: 34, contract: https://x/stratum.git, visibility: public}\n")
+	writeFile(t, dep, "services/letsencrypt.proto", "syntax = \"proto3\";\n")
+	// A dependency's lock mentions stratum on the wire only (wireOnlyLock).
+	writeFile(t, dep, "registry.yaml", "services:\n    - {name: letsencrypt, id: 9}\n    - {name: stratum, id: 34}\n")
+	dest := t.TempDir()
+	if err := MergeSources([]string{own, dep}, dest); err != nil {
+		t.Fatal(err)
+	}
+	got := read(t, filepath.Join(dest, "registry.yaml"))
+	if !strings.Contains(got, "visibility: public") || !strings.Contains(got, "name: letsencrypt") {
+		t.Fatalf("merged registry = %s", got)
+	}
+	// The same name with a different id is still a conflict.
+	writeFile(t, dep, "registry.yaml", "services:\n    - {name: stratum, id: 35}\n")
+	if err := MergeSources([]string{own, dep}, t.TempDir()); err == nil {
+		t.Fatal("an id disagreement must be a conflict")
+	}
+}
+
+func TestMergeSources_CarriesTheFleetLock(t *testing.T) {
+	a := t.TempDir()
+	b := t.TempDir()
+	writeFile(t, a, "services/x.proto", "syntax = \"proto3\";\n")
+	writeFile(t, a, "fleet.lock", "services:\n    - {name: x, depends: [y]}\n")
+	writeFile(t, a, "README.md", "not merged\n")
+	writeFile(t, b, "services/y.proto", "syntax = \"proto3\";\n")
+	dest := t.TempDir()
+	if err := MergeSources([]string{a, b}, dest); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, filepath.Join(dest, "fleet.lock")); !strings.Contains(got, "depends: [y]") {
+		t.Fatalf("fleet.lock not carried: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "README.md")); err == nil {
+		t.Fatal("README.md must not be merged")
+	}
+}
+
 func TestMergeSources_ConflictIsHardError(t *testing.T) {
 	a := t.TempDir()
 	b := t.TempDir()

@@ -500,8 +500,22 @@ func Generate(config *tactype.Config) error {
 		return err
 	}
 
-	// Generate handler interfaces and service manager.
-	if len(serverServices) > 0 || len(config.States) > 0 {
+	// Collect event-bus watches from legacy subscribe, explicit event_watch,
+	// and store-derived subscriptions. Parse tempProtoDir (not flatProtoDir):
+	// it is a superset that includes the generated projection messages
+	// (timeseries_type), so a timeseries_store derives its subscriptions from
+	// those projections. Parsing flatProtoDir missed them, so a store
+	// silently auto-subscribed to nothing.
+	config.Subscriptions, err = collectSubscriptions(config, tempProtoDir)
+	if err != nil {
+		return fmt.Errorf("failed to collect event-bus subscriptions: %w", err)
+	}
+
+	// Generate handler interfaces and service manager: for a program with a
+	// gRPC surface or a state root, and for a WORKLOAD — a program that only
+	// publishes and subscribes (a pigeon: identity from a minted bootstrap
+	// token, its thread on the coop's topic, no config root of its own).
+	if len(serverServices) > 0 || len(config.States) > 0 || len(config.Subscriptions) > 0 {
 		// Ensure sys/service_im and sys/servicemanager are generated — sm.go imports both.
 		// Skip in sys-only mode: no token exchange service proto exists.
 		if !config.SysOnly {
@@ -531,16 +545,6 @@ func Generate(config *tactype.Config) error {
 					}
 				}
 			}
-		}
-		// Collect event-bus watches from legacy subscribe, explicit event_watch,
-		// and store-derived subscriptions. Parse tempProtoDir (not flatProtoDir):
-		// it is a superset that includes the generated projection messages
-		// (timeseries_type), so a timeseries_store derives its subscriptions from
-		// those projections. Parsing flatProtoDir missed them, so a store
-		// silently auto-subscribed to nothing.
-		config.Subscriptions, err = collectSubscriptions(config, tempProtoDir)
-		if err != nil {
-			return fmt.Errorf("failed to collect event-bus subscriptions: %w", err)
 		}
 		if len(config.Subscriptions) > 0 {
 			zap.L().Info("Found event-bus subscriptions", zap.Int("count", len(config.Subscriptions)))

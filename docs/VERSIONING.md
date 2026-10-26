@@ -70,7 +70,16 @@ Tags on the `tacplus` image follow the version policy:
 | `latest` | the newest release |
 | `main-<sha>` | an unreleased build of `main` |
 
-`base` and `build` are tagged `<yyyymmdd>-<sha>` and `latest`.
+Releases are cut on several lines at once (a 2.0.x patch after 2.3.x), so a
+floating tag moves only when the release is the newest it covers: `2.0.11`
+cut after `2.3.1` moves `2.0` and leaves `2` and `latest` alone.
+`scripts/images-tags.sh` decides; a pre-release gets only its own tag.
+
+`base` and `build` are tagged `<yyyymmdd>-<sha>`, and `latest` by a push to
+`main` or the newest release; a run for an older line leaves `latest` alone.
+A release also tags the `build` image it was produced with by the same policy
+(`2.1.3`, `2.1`, `2`), and a release job runs in `build:X.Y` of its own line,
+never in `build:latest`.
 
 The definitions are `images/base.Dockerfile`, `images/build.Dockerfile` and
 `images/tacplus.Dockerfile`; `images/smoke.sh` ships in the build and

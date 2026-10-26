@@ -3,6 +3,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=../lib/cargo-target.sh
+source "$ROOT_DIR/cross-test/lib/cargo-target.sh"
 PROTO_SRC="$ROOT_DIR/cross-test/cert-stream/proto"
 LANGUAGE="go"
 while [[ $# -gt 0 ]]; do
@@ -261,7 +263,7 @@ EOF
     printf '\n#[cfg(test)]\nmod cert_stream_behavior_test;\n' >> "$OUT/s2sm/mod.rs"
 
     echo "==> Running generated Rust cert-stream behavior tests"
-    (cd "$OUT" && CARGO_TARGET_DIR="$OUT/target" cargo test -p certstream-model rust_) \
+    (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo test -p certstream-model rust_) \
       || die "generated Rust cert-stream behavior tests failed"
     ;;
   java)

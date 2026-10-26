@@ -31,8 +31,12 @@ message GetTenancyStatusResponse {
   bool ready = 1;
 }
 
-message TenancyConfig {
+message Config {
   option (spec.grpc_config) = {service_name: "tenancy"};
+
+  // region is the owner's own setting: a pinned subscriber never receives it.
+  // It also carries the one default a Java self-build's configDefaults needs.
+  string region = 2 [(spec.default_string) = "global"];
 
   // tenants is each tenant's aggregate configuration, keyed by tenant id.
   map<string, tenant_config.TenantConfig> tenants = 1 [(spec.assert_max_size) = 1000];

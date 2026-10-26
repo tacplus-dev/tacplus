@@ -47,6 +47,14 @@ import (
 // root's other boundaries and no write, so the subscriber is NOT added to the
 // root's service-level auth_services or to its SecurityPolicy.RO.
 //
+// The same rule serves the other holder of a per-service config, a (spec.grpc_config)
+// Config (issue #135): when the owner's Config carries one
+// map<string, TenantConfig> field (cross-test/proto-tenantslice: tenancy's
+// tenants), the injected <Owner>ConfigState service's GetConfig and WatchConfig
+// are the pinned reads. A pinned caller receives the Config reduced to that map,
+// the map reduced to the admitted tenants' entries, each entry projected to the
+// caller's slice; the Config's other fields are the owner's and never leave it.
+//
 // Owner and declared importers are untouched: the owner holds RW, and a service
 // that declares a (spec.state_import)/(spec.state_imports) of the root keeps the
 // whole-root read it asked for and is not pinned.
@@ -77,8 +85,19 @@ type TenantPinnedBoundary struct {
 	Field       string // the collection field, e.g. "tenant_configs"
 	KeyField    string // the item's (spec.indexed) string field, e.g. "tenant_name"
 	ConfigField string // the item's per_service_config field, e.g. "config"
-	Slices      []TenantPinnedSlice
+	// MapField is set for a grpc_config Config instead of a collection: Field is
+	// then the state root's singleton holding the Config (e.g. "config"),
+	// MapField the Config's map<string, per_service_config> field (e.g.
+	// "tenants"), and KeyField and ConfigField are empty.
+	MapField string
+	// ConfigType is the Config message's name, set with MapField.
+	ConfigType string
+	Slices     []TenantPinnedSlice
 }
+
+// IsConfigMap reports whether the boundary is a grpc_config Config's map rather
+// than an exported collection.
+func (b TenantPinnedBoundary) IsConfigMap() bool { return b.MapField != "" }
 
 // StateService is the generated state service hosting the boundary.
 func (b TenantPinnedBoundary) StateService() string { return StateServiceName(b.StateRoot) }
@@ -109,6 +128,10 @@ const (
 	TenantPinWatch       TenantPinnedRPCKind = "watch"        // → stream <B>EntriesResponse
 	TenantPinQuery       TenantPinnedRPCKind = "query"        // → <B>QueryResponse
 	TenantPinWatchQuery  TenantPinnedRPCKind = "watch_query"  // → stream <B>QueryResponse
+
+	// A grpc_config Config's singleton (TenantPinnedBoundary.IsConfigMap).
+	TenantPinGetConfig   TenantPinnedRPCKind = "get_config"   // TraceRequest → <Config>
+	TenantPinWatchConfig TenantPinnedRPCKind = "watch_config" // TraceRequest → stream <Config>
 )
 
 // TenantPinnedRPC is one read RPC of a pinned boundary.
@@ -119,10 +142,17 @@ type TenantPinnedRPC struct {
 }
 
 // ReadRPCs is every read RPC AppendStateServiceToProtos emits for a plain
-// collection boundary, in emission order. These, and only these, carry the
-// pinned callers; every mutator keeps the service-level caller list.
+// collection boundary (for a Config singleton, its Get and Watch), in emission
+// order. These, and only these, carry the pinned callers; every mutator keeps
+// the service-level caller list.
 func (b TenantPinnedBoundary) ReadRPCs() []TenantPinnedRPC {
 	p := b.BoundaryPascal()
+	if b.IsConfigMap() {
+		return []TenantPinnedRPC{
+			{Name: "Get" + p, Kind: TenantPinGetConfig, Boundary: b},
+			{Name: "Watch" + p, Kind: TenantPinWatchConfig, Boundary: b},
+		}
+	}
 	return []TenantPinnedRPC{
 		{Name: "Get" + p, Kind: TenantPinGet, Boundary: b},
 		{Name: "ContainsKey" + p, Kind: TenantPinContainsKey, Boundary: b},
@@ -197,13 +227,20 @@ func ResolveTenantPinnedBoundaries(allFiles map[string]*parser.FileDescriptor) (
 			if !ok || ann.StringValue == "" {
 				continue
 			}
-			if exp, ok := root.Annotations["service_state_export"]; !ok || !exp.BoolValue {
-				continue
-			}
 			rootKey := fd.Package + "." + ann.StringValue
 			declared := make(map[string]bool)
 			for _, pkg := range importers[rootKey] {
 				declared[pkg] = true
+			}
+			if exp, ok := root.Annotations["service_state_export"]; !ok || !exp.BoolValue {
+				b, err := configMapBoundary(fd, relPath, root, ann.StringValue, msgs, perServiceConfig, declared)
+				if err != nil {
+					return nil, err
+				}
+				if b != nil {
+					out = append(out, *b)
+				}
+				continue
 			}
 			for _, field := range root.Fields {
 				if !tenantPinCandidate(field) {
@@ -264,6 +301,79 @@ func ResolveTenantPinnedBoundaries(allFiles map[string]*parser.FileDescriptor) (
 		}
 	}
 	return out, nil
+}
+
+// configMapBoundary resolves the pinned read of a grpc_config Config's
+// map<string, per_service_config> (issue #135) held by the injected
+// <Owner>ConfigState root. nil, nil when the root is not such a holder, or
+// every slice owner is already served another way. The shapes it cannot
+// filter per tenant are errors, never skipped: a skipped Config leaves the
+// slice owners subscribed to a service that refuses them, and granting one
+// unfiltered would show every tenant's entry.
+func configMapBoundary(fd *parser.FileDescriptor, relPath string, root *parser.MessageDescriptor, stateRoot string,
+	msgs map[string]*parser.MessageDescriptor, perServiceConfig, declared map[string]bool) (*TenantPinnedBoundary, error) {
+	for _, field := range root.Fields {
+		if field.TypeKind != "message" || field.IsRepeated || field.IsMap {
+			continue
+		}
+		cfg, ok := msgs[field.Type]
+		if !ok {
+			continue
+		}
+		if _, isConfig := cfg.Annotations["grpc_config"]; !isConfig {
+			continue
+		}
+		where := fmt.Sprintf("%s: %s.%s.%s", relPath, fd.Package, root.Name, field.Name)
+		var maps []parser.FieldDescriptor
+		for _, f := range cfg.Fields {
+			switch {
+			case f.IsMap && perServiceConfig[f.MapValueType]:
+				maps = append(maps, f)
+			case f.TypeKind == "message" && !f.IsMap:
+				// One level of wrapper message, the depth the subscription
+				// derivation looks through.
+				if inner, ok := msgs[f.Type]; ok {
+					for _, g := range inner.Fields {
+						if g.IsMap && perServiceConfig[g.MapValueType] {
+							return nil, fmt.Errorf("%s: %s holds a (spec.per_service_config) map inside %s; the server filters a Config's own map<string, per_service_config> field only, so move it onto %s", where, cfg.Name, f.Type, cfg.Name)
+						}
+					}
+				}
+			}
+		}
+		if len(maps) == 0 {
+			continue
+		}
+		if _, disabled := root.Annotations["disable_auth_message"]; disabled {
+			return nil, fmt.Errorf("%s holds a (spec.per_service_config) map, but the root declares (spec.disable_auth_message): a tenant-pinned read needs the caller's verified namespace, and this root verifies none", where)
+		}
+		if len(maps) > 1 {
+			return nil, fmt.Errorf("%s: %s must hold exactly one map<string, per_service_config> field to be served per tenant, found %d", where, cfg.Name, len(maps))
+		}
+		if maps[0].MapKeyType != "string" {
+			return nil, fmt.Errorf("%s: the key of %s.%s must be a string — it is compared to the tenant of the caller's /tenants/<t> namespace", where, cfg.Name, maps[0].Name)
+		}
+		b := TenantPinnedBoundary{
+			Package:    fd.Package,
+			StateRoot:  stateRoot,
+			ProtoFile:  relPath,
+			Field:      field.Name,
+			MapField:   maps[0].Name,
+			ConfigType: cfg.Name,
+		}
+		for _, slice := range msgs[maps[0].MapValueType].Fields {
+			if slice.Name == fd.Package || declared[slice.Name] {
+				continue
+			}
+			b.Slices = append(b.Slices, TenantPinnedSlice{Caller: slice.Name, SliceField: slice.Name})
+		}
+		if len(b.Slices) == 0 {
+			return nil, nil
+		}
+		sort.Slice(b.Slices, func(i, j int) bool { return b.Slices[i].Caller < b.Slices[j].Caller })
+		return &b, nil
+	}
+	return nil, nil
 }
 
 // tenantPinCandidate reports whether a state-root field is a plain collection

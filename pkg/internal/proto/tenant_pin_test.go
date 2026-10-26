@@ -323,3 +323,211 @@ message ScottyTenantConfig {
 		t.Fatalf("the flattened TenantConfig is the stub, not the generated aggregate:\n%s", b)
 	}
 }
+
+// Issue #135: the same per-service config held by a grpc_config Config
+// (cross-test/proto-tenantslice: tenancy holds map<string, TenantConfig>
+// tenants) rather than by an exported service_state collection. The derived
+// subscriber got a read client on TenancyConfigState but was never an allowed
+// caller of the service, so its Watch was refused at runtime.
+
+// pinConfigFiles is, in memory, the grpc_config shape: keeper's Config holds a
+// map of tenant → generated TenantConfig and its injected KeeperConfigState
+// wraps it as the singleton `config`.
+func pinConfigFiles(mutate func(cfg *parser.MessageDescriptor)) map[string]*parser.FileDescriptor {
+	cfg := parser.MessageDescriptor{Name: "KeeperConfig",
+		Annotations: map[string]model.AnnotationValue{"grpc_config": {Type: model.AnnotationTypeString, StringValue: "keeper"}},
+		Fields: []parser.FieldDescriptor{
+			{Name: "region", Number: 1, Type: "string", TypeKind: "scalar"},
+			{Name: "tenants", Number: 2, Type: "keeper.KeeperConfig.TenantsEntry", TypeKind: "message", IsMap: true,
+				MapKeyType: "string", MapValueType: "tenant_config.TenantConfig", MapValueTypeKind: "message"},
+		}}
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	files := pinFiles(nil)
+	files["services/keeper.proto"] = &parser.FileDescriptor{Package: "keeper", Messages: []parser.MessageDescriptor{
+		cfg,
+		{Name: "KeeperConfigState",
+			Annotations: map[string]model.AnnotationValue{"service_state": {Type: model.AnnotationTypeString, StringValue: "KeeperConfigState"}},
+			Fields:      []parser.FieldDescriptor{{Name: "config", Number: 1, Type: "keeper.KeeperConfig", TypeKind: "message"}}},
+	}}
+	delete(files, "services/billing.proto")
+	return files
+}
+
+func TestResolveTenantPinnedBoundariesFromGrpcConfig(t *testing.T) {
+	got, err := ResolveTenantPinnedBoundaries(pinConfigFiles(nil))
+	if err != nil {
+		t.Fatalf("ResolveTenantPinnedBoundaries: %v", err)
+	}
+	want := []TenantPinnedBoundary{{
+		Package: "keeper", StateRoot: "KeeperConfigState", ProtoFile: "services/keeper.proto",
+		Field: "config", MapField: "tenants", ConfigType: "KeeperConfig",
+		// keeper owns the Config: it is not pinned on it.
+		Slices: []TenantPinnedSlice{{Caller: "billing", SliceField: "billing"}, {Caller: "gateway", SliceField: "gateway"}, {Caller: "opa", SliceField: "opa"}},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pinned boundaries:\n got %+v\nwant %+v", got, want)
+	}
+	rpcs := got[0].ReadRPCs()
+	if len(rpcs) != 2 || rpcs[0].Name != "GetConfig" || rpcs[1].Name != "WatchConfig" {
+		t.Fatalf("read RPCs = %+v, want GetConfig and WatchConfig only", rpcs)
+	}
+}
+
+func TestResolveTenantPinnedBoundariesRefusesUnpinnableGrpcConfig(t *testing.T) {
+	cases := map[string]func(cfg *parser.MessageDescriptor){
+		"non-string map key": func(cfg *parser.MessageDescriptor) { cfg.Fields[1].MapKeyType = "int64" },
+		"two maps": func(cfg *parser.MessageDescriptor) {
+			second := cfg.Fields[1]
+			second.Name, second.Number = "others", 3
+			cfg.Fields = append(cfg.Fields, second)
+		},
+		// Reached only through a wrapper message: the server cannot filter it.
+		"nested wrapper": func(cfg *parser.MessageDescriptor) {
+			cfg.Fields[1] = parser.FieldDescriptor{Name: "tenants", Number: 2, Type: "keeper.Wrapper", TypeKind: "message"}
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			files := pinConfigFiles(mutate)
+			if name == "nested wrapper" {
+				fd := files["services/keeper.proto"]
+				fd.Messages = append(fd.Messages, parser.MessageDescriptor{Name: "Wrapper", Fields: []parser.FieldDescriptor{
+					{Name: "tenants", Number: 1, Type: "keeper.Wrapper.TenantsEntry", TypeKind: "message", IsMap: true,
+						MapKeyType: "string", MapValueType: "tenant_config.TenantConfig", MapValueTypeKind: "message"}}})
+			}
+			if got, err := ResolveTenantPinnedBoundaries(files); err == nil {
+				t.Fatalf("a Config the server cannot filter per tenant must fail generation, got %+v", got)
+			}
+		})
+	}
+}
+
+// pinConfigTree writes the grpc_config shape as real protos.
+func pinConfigTree(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available")
+	}
+	src := t.TempDir()
+	writeProto(t, src, "services/keeper.proto", `syntax = "proto3";
+package keeper;
+import "sys/spec.proto";
+import "generated/tenant_config.proto";
+option (spec.service) = {name: "keeper", store: true};
+message KeeperConfig {
+  option (spec.grpc_config) = {service_name: "keeper"};
+  string region = 1;
+  map<string, tenant_config.TenantConfig> tenants = 2 [(spec.assert_max_size) = 100];
+}
+`)
+	writeProto(t, src, "platform/slices.proto", `syntax = "proto3";
+package slices;
+import "sys/spec.proto";
+message GatewayTenantConfig {
+  option (spec.config_slice) = {scope: CONFIG_SLICE_SCOPE_TENANT, service_name: "gateway"};
+  string route = 1 [(spec.assert_max_size) = 64];
+}
+`)
+	writeProto(t, src, "services/gateway.proto", `syntax = "proto3";
+package gateway;
+import "sys/spec.proto";
+option (spec.service) = {name: "gateway"};
+`)
+	writeProto(t, src, "platform/health.proto", `syntax = "proto3";
+package health;
+import "sys/healthreport.proto";
+import "sys/spec.proto";
+message ServiceHealth {
+  option (spec.service_state) = {name: "ServiceHealth", label: ["keeper"], export: true};
+  repeated healthreport.ServiceInstanceHealth instances = 1 [(spec.instance_keyed) = true, (spec.assert_max_size) = 10000];
+}
+`)
+	flat, err := CopyAndPrepareProtoDir(src, t.TempDir())
+	if err != nil {
+		t.Fatalf("CopyAndPrepareProtoDir: %v", err)
+	}
+	return flat
+}
+
+func TestResolveServiceStatesSubscribesSliceOwnerToGrpcConfig(t *testing.T) {
+	flat := pinConfigTree(t)
+	entries, err := InjectGrpcConfigState(flat, flat, flat)
+	if err != nil {
+		t.Fatalf("InjectGrpcConfigState: %v", err)
+	}
+	config := &tactype.Config{SelfPackage: "gateway", FlatProtoDir: flat}
+	if err := ResolveServiceStates(config, entries); err != nil {
+		t.Fatalf("ResolveServiceStates: %v", err)
+	}
+	n := 0
+	for _, s := range config.States {
+		if s.MessageName == "KeeperConfigState" {
+			n++
+			if s.AccessMode != tactype.AccessRO || !reflect.DeepEqual(s.Boundaries, []string{"config"}) {
+				t.Fatalf("subscription = %+v, want read-only over config", s)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("want exactly one KeeperConfigState subscription, got %d: %+v", n, config.States)
+	}
+}
+
+// The reproduction of #135: before the fix the service-level caller list was
+// ["keeper"] alone, so the subscriber's Watch was PERMISSION_DENIED.
+func TestConfigStateServiceGivesPinnedSubscriberTheReadRPCsOnly(t *testing.T) {
+	flat := pinConfigTree(t)
+	if _, err := InjectGrpcConfigState(flat, flat, flat); err != nil {
+		t.Fatalf("InjectGrpcConfigState: %v", err)
+	}
+	if err := AppendStateServiceToProtos(flat, flat); err != nil {
+		t.Fatalf("AppendStateServiceToProtos: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(flat, "services/keeper.proto"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	const pinned = `principal: RPC_PRINCIPAL_SERVICE, auth_services: ["keeper", "gateway"]`
+	for _, rpc := range []string{"GetConfig", "WatchConfig"} {
+		re := regexp.MustCompile(`rpc ` + rpc + `\([^)]*\) returns \((?:stream )?[^)]*\) \{\s*option \(spec\.rpc\) = \{([^}]*)\};\s*\}`)
+		m := re.FindStringSubmatch(src)
+		if m == nil || m[1] != pinned {
+			t.Fatalf("%s must carry the pinned subscriber on top of the service-level list; got %q", rpc, m)
+		}
+	}
+	if !regexp.MustCompile(`rpc SetConfig\([^)]*\) returns \([^)]*\);`).MatchString(src) {
+		t.Fatal("SetConfig is a write and must keep the service-level caller list")
+	}
+	if !strings.Contains(src, `option (spec.service_s2s) = {auth_services: ["keeper"]};`) {
+		t.Fatal("the service-level caller list must stay the owner alone")
+	}
+}
+
+func TestSecurityPolicyCarriesTenantPinnedReadOfGrpcConfig(t *testing.T) {
+	flat := pinConfigTree(t)
+	if _, err := InjectGrpcConfigState(flat, flat, flat); err != nil {
+		t.Fatalf("InjectGrpcConfigState: %v", err)
+	}
+	policies, err := ComputeSecurityPolicies(flat)
+	if err != nil {
+		t.Fatalf("ComputeSecurityPolicies: %v", err)
+	}
+	for _, p := range policies {
+		if p.Package != "keeper" || p.Name != "KeeperConfigState" {
+			continue
+		}
+		want := []TenantPinnedRead{{Boundary: "config", MapField: "tenants",
+			Slices: []TenantPinnedReadSlice{{Caller: "gateway", SliceField: "gateway"}}}}
+		if !reflect.DeepEqual(p.TenantPinnedReads, want) {
+			t.Fatalf("tenantPinnedReads = %+v, want %+v", p.TenantPinnedReads, want)
+		}
+		if len(p.BoundaryGrants) != 0 || !reflect.DeepEqual(p.RO, []string{"service:keeper"}) {
+			t.Fatalf("a pinned read grants no whole-root access: RO=%v grants=%+v", p.RO, p.BoundaryGrants)
+		}
+		return
+	}
+	t.Fatal("no policy for keeper.KeeperConfigState")
+}

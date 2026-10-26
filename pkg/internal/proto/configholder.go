@@ -1691,6 +1691,12 @@ func ResolveServiceStates(config *tactype.Config, entries []GrpcConfigEntry) err
 // to that one collection: a StateEntry narrowed by Boundaries, served
 // tenant-pinned and projected to the service's slice (ResolveTenantPinnedBoundaries).
 //
+// A grpc_config Config holding the map<string, per_service_config> directly is
+// subscribed the same way (#135): narrowed to the Config singleton, and served
+// tenant-pinned, filtered and projected, by the owner's ConfigState service
+// (ResolveTenantPinnedBoundaries). Without that grant the subscriber would be
+// refused by the service it is subscribed to.
+//
 // This means consuming services never need to declare
 // state_imports in their own proto files — tacplus derives the subscription
 // automatically from the TenantConfig field names.
@@ -1732,8 +1738,8 @@ func InjectTenantConfigSubscriptions(config *tactype.Config, inputDir string, en
 	}
 
 	// A per-service config held by an exported service_state collection
-	// (kernel.ConfigState.tenant_configs) rather than by a grpc_config Config:
-	// subscribe read-only to that ONE collection. The serving side pins the
+	// (kernel.ConfigState.tenant_configs), or by a grpc_config Config's tenant
+	// map: subscribe read-only to that ONE collection (or Config singleton). The serving side pins the
 	// read to the caller's own tenant and projects each entry to the caller's
 	// slice (ResolveTenantPinnedBoundaries), so the client is narrowed to the
 	// boundary it is granted and opens no Watch on the root's others.

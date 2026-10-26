@@ -187,15 +187,7 @@ import "sys/spec.proto";
 option (spec.service) = {name: "billing"};
 option (spec.state_imports) = {source: "keeper.KeeperState"};
 `)
-	writeProto(t, src, "platform/health.proto", `syntax = "proto3";
-package health;
-import "sys/healthreport.proto";
-import "sys/spec.proto";
-message ServiceHealth {
-  option (spec.service_state) = {name: "ServiceHealth", label: ["keeper"], export: true};
-  repeated healthreport.ServiceInstanceHealth instances = 1 [(spec.instance_keyed) = true, (spec.assert_max_size) = 10000];
-}
-`)
+	// ServiceHealth comes from the sys contract (sys/servicehealth.proto), not from a service proto.
 	flat, err := CopyAndPrepareProtoDir(src, t.TempDir())
 	if err != nil {
 		t.Fatalf("CopyAndPrepareProtoDir: %v", err)
@@ -435,15 +427,7 @@ package gateway;
 import "sys/spec.proto";
 option (spec.service) = {name: "gateway"};
 `)
-	writeProto(t, src, "platform/health.proto", `syntax = "proto3";
-package health;
-import "sys/healthreport.proto";
-import "sys/spec.proto";
-message ServiceHealth {
-  option (spec.service_state) = {name: "ServiceHealth", label: ["keeper"], export: true};
-  repeated healthreport.ServiceInstanceHealth instances = 1 [(spec.instance_keyed) = true, (spec.assert_max_size) = 10000];
-}
-`)
+	// ServiceHealth comes from the sys contract (sys/servicehealth.proto), not from a service proto.
 	flat, err := CopyAndPrepareProtoDir(src, t.TempDir())
 	if err != nil {
 		t.Fatalf("CopyAndPrepareProtoDir: %v", err)

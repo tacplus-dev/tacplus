@@ -186,6 +186,7 @@ func TestJavaClientIdentityManagerTenantNamespace(t *testing.T) {
 		"TokenRequestPackage":        "sys.tokenrequest",
 		"TokenRequestOuterClass":     "Tokenrequest",
 		"HasClientTokenExchanger":    true,
+		"ClientMintExchangerDir":     "services",
 		"ClientMintExchangerPackage": "gateway",
 		"ClientMintServiceName":      "Mint",
 		"ClientTokenMintMethod":      "MintToken",

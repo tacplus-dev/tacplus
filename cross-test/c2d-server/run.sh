@@ -23,6 +23,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=../lib/cargo-target.sh
+source "$ROOT_DIR/cross-test/lib/cargo-target.sh"
 PROTO_SRC="$ROOT_DIR/cross-test/c2d-server/proto"
 TESTDATA="$ROOT_DIR/cross-test/c2d-server/testdata"
 # shellcheck source=../lib/java-compile.sh
@@ -163,7 +165,7 @@ run_rust() {
   cp "$TESTDATA/c2d_standalone_test.rs" "$OUT/tests/"
 
   echo "==> Running generated Rust standalone C2D host test"
-  (cd "$OUT" && CARGO_TARGET_DIR="$OUT/target" cargo test --test c2d_standalone_test) >"$WORK/rust/test.log" 2>&1 \
+  (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo test --test c2d_standalone_test) >"$WORK/rust/test.log" 2>&1 \
     || { tail -60 "$WORK/rust/test.log"; die "generated Rust standalone C2D host test failed"; }
   grep -q "test generated_c2d_standalone_host_over_socket ... ok" "$WORK/rust/test.log" \
     || { tail -40 "$WORK/rust/test.log"; die "Rust standalone C2D host test did not run"; }

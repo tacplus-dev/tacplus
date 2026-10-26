@@ -38,6 +38,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=../lib/cargo-target.sh
+source "$ROOT_DIR/cross-test/lib/cargo-target.sh"
 GATE_DIR="$ROOT_DIR/cross-test/server-runtime"
 PROTO_SRC="$ROOT_DIR/cross-test/consumer-contract/proto"
 WORK_ROOT="${TACPLUS_SERVER_RUNTIME_WORKDIR:-}"
@@ -402,12 +404,12 @@ tokio-stream = { version = "0.1.17", features = ["net"] }
 tonic = "0.14.0"
 EOF
   echo "==> Building rust $kind"
-  (cd "$dir" && CARGO_TARGET_DIR="$dir/target" cargo build --quiet) >"$RUST_MODEL_DIR/$kind-build.log" 2>&1 || {
+  (cd "$dir" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo build --quiet) >"$RUST_MODEL_DIR/$kind-build.log" 2>&1 || {
     cat "$RUST_MODEL_DIR/$kind-build.log" >&2
     die "rust $kind build failed"
   }
   assert_clean_log "$RUST_MODEL_DIR/$kind-build.log"
-  RUST_CRATE_BIN="$dir/target/debug/$crate"
+  RUST_CRATE_BIN="$CROSS_TEST_CARGO_TARGET/debug/$crate"
 }
 
 build_rust_server() {

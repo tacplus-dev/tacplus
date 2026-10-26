@@ -1,0 +1,410 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+package diskstore
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// memSink is an in-memory ArchiveSink. The first failPuts uploads fail, as an
+// unreachable bucket would.
+type memSink struct {
+	mu       sync.Mutex
+	objects  map[string][]byte
+	failPuts atomic.Int64
+}
+
+func newMemSink() *memSink { return &memSink{objects: map[string][]byte{}} }
+
+func (m *memSink) Put(name string, data []byte) error {
+	if m.failPuts.Load() > 0 {
+		m.failPuts.Add(-1)
+		return errors.New("sink unreachable")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.objects[name] = append([]byte(nil), data...)
+	return nil
+}
+
+func (m *memSink) Get(name string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]byte(nil), m.objects[name]...), nil
+}
+
+func (m *memSink) List(prefix string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var names []string
+	for n := range m.objects {
+		if strings.HasPrefix(n, prefix) {
+			names = append(names, n)
+		}
+	}
+	sortStrings(names)
+	return names, nil
+}
+
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+}
+
+func (m *memSink) count(prefix string) int {
+	names, _ := m.List(prefix)
+	return len(names)
+}
+
+// liveStore mirrors what the redo log should reproduce.
+type liveStore map[string]string
+
+func (l liveStore) put(t *testing.T, log *RedoLog, key string, v int64) {
+	t.Helper()
+	r := rec(key, v)
+	if err := log.Append(r); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	l[key] = string(r.Payload)
+}
+
+func (l liveStore) del(t *testing.T, log *RedoLog, key string) {
+	t.Helper()
+	if err := log.Append(&Record{Key: key, Deleted: true}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	delete(l, key)
+}
+
+func (l liveStore) snapshot() []*Record {
+	var recs []*Record
+	for k, v := range l {
+		recs = append(recs, &Record{Key: k, Payload: json.RawMessage(v)})
+	}
+	return recs
+}
+
+type collect map[string]string
+
+func (c collect) Insert(r *Record) error {
+	if r.Deleted {
+		delete(c, r.Key)
+	} else {
+		c[r.Key] = string(r.Payload)
+	}
+	return nil
+}
+
+func awaitDrained(t *testing.T, s *ArchiveShipper) {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		if s.Pending() == 0 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("shipper did not drain, %d pending", s.Pending())
+}
+
+func countKind(t *testing.T, dir, kind string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	n := 0
+	for _, e := range entries {
+		if strings.Contains(e.Name(), kind) {
+			n++
+		}
+	}
+	return n
+}
+
+func openShipped(t *testing.T, dir string, sink ArchiveSink, codec Codec) (*RedoLog, *ArchiveShipper) {
+	t.Helper()
+	log, err := OpenRedoLog(dir, "/drpepper", "verifying_keys", 0, codec)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	shipper, err := newArchiveShipper(sink, "tenant", "node-a", "verifying_keys", codec, time.Millisecond)
+	if err != nil {
+		t.Fatalf("shipper: %v", err)
+	}
+	if err := log.AttachShipper(shipper); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close(); shipper.Close() })
+	return log, shipper
+}
+
+func coldRestore(t *testing.T, dir string) collect {
+	t.Helper()
+	cold, err := OpenRedoLog(dir, "/drpepper", "verifying_keys", 0, CodecNone)
+	if err != nil {
+		t.Fatalf("cold open: %v", err)
+	}
+	defer cold.Close()
+	got := collect{}
+	if _, err := cold.Restore(got); err != nil {
+		t.Fatalf("cold restore: %v", err)
+	}
+	return got
+}
+
+// Rotate ships the active log as a segment with no snapshot and opens a fresh
+// active; the segment stays on the volume, and a cold start from the volume alone
+// reproduces the store until a roll folds the segments.
+func TestRotateThenLocalRestore(t *testing.T) {
+	dir := t.TempDir()
+	sink := newMemSink()
+	log, shipper := openShipped(t, dir, sink, CodecNone)
+	logDir := filepath.Dir(log.ActivePath())
+	live := liveStore{}
+
+	live.put(t, log, "a", 1)
+	live.put(t, log, "b", 1)
+	if err := log.Roll(live.snapshot()); err != nil {
+		t.Fatalf("roll: %v", err)
+	}
+	awaitDrained(t, shipper)
+
+	live.put(t, log, "a", 2)
+	if err := log.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	awaitDrained(t, shipper)
+	if info, _ := os.Stat(log.ActivePath()); info == nil || info.Size() != 0 {
+		t.Fatalf("rotate must leave a fresh, empty active log")
+	}
+	if n := sink.count("tenant/node-a/verifying_keys/segments/"); n != 2 {
+		t.Fatalf("the roll and the rotation each ship one segment, got %d", n)
+	}
+
+	live.del(t, log, "b")
+	live.put(t, log, "c", 3)
+	if err := log.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	live.put(t, log, "d", 4)
+	awaitDrained(t, shipper)
+	if n := countKind(t, logDir, ".rotated-"); n != 2 {
+		t.Fatalf("shipped segments stay on the volume until a roll folds them, got %d", n)
+	}
+	if got := coldRestore(t, dir); !reflect.DeepEqual(map[string]string(got), map[string]string(live)) {
+		t.Fatalf("local restore must replay the rotated segments: got %v want %v", got, live)
+	}
+
+	if err := log.Roll(live.snapshot()); err != nil {
+		t.Fatalf("roll: %v", err)
+	}
+	awaitDrained(t, shipper)
+	if countKind(t, logDir, ".rotated-") != 0 || countKind(t, logDir, ".segment-") != 0 {
+		t.Fatalf("a roll must delete the segments it folded")
+	}
+	if got := coldRestore(t, dir); !reflect.DeepEqual(map[string]string(got), map[string]string(live)) {
+		t.Fatalf("restore after the fold: got %v want %v", got, live)
+	}
+}
+
+// A segment folded by a roll must not be replayed over the baseline: a key deleted
+// inside it would come back.
+func TestFoldedSegmentIsNotReplayed(t *testing.T) {
+	dir := t.TempDir()
+	sink := newMemSink()
+	sink.failPuts.Store(1 << 30)
+	log, _ := openShipped(t, dir, sink, CodecNone)
+	live := liveStore{}
+
+	live.put(t, log, "a", 1)
+	live.put(t, log, "b", 1)
+	if err := log.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	live.del(t, log, "b")
+	if err := log.Roll(live.snapshot()); err != nil {
+		t.Fatalf("roll: %v", err)
+	}
+	if n := countKind(t, filepath.Dir(log.ActivePath()), ".segment-"); n != 2 {
+		t.Fatalf("both segments should be pending, got %d", n)
+	}
+	if got := coldRestore(t, dir); !reflect.DeepEqual(map[string]string(got), map[string]string(live)) {
+		t.Fatalf("a folded segment must not be replayed: got %v want %v", got, live)
+	}
+}
+
+// Rotate, then roll, then restore from the archive reproduces the store, and an
+// idle rotation ships nothing.
+func TestRotateRollArchiveRestore(t *testing.T) {
+	dir := t.TempDir()
+	sink := newMemSink()
+	log, shipper := openShipped(t, dir, sink, CodecGz)
+	live := liveStore{}
+
+	live.put(t, log, "a", 1)
+	live.put(t, log, "b", 1)
+	if err := log.Roll(live.snapshot()); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Checkpoint(func() ([]*Record, error) { return live.snapshot(), nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	live.put(t, log, "a", 2)
+	for i := 0; i < 2; i++ {
+		if err := log.Rotate(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	awaitDrained(t, shipper)
+	if n := sink.count("tenant/node-a/verifying_keys/segments/"); n != 2 {
+		t.Fatalf("an idle rotation must ship nothing, got %d segments", n)
+	}
+
+	live.del(t, log, "b")
+	live.put(t, log, "c", 3)
+	if err := log.Rotate(); err != nil {
+		t.Fatal(err)
+	}
+	live.put(t, log, "d", 4)
+	if err := log.Roll(live.snapshot()); err != nil {
+		t.Fatal(err)
+	}
+	live.put(t, log, "e", 5)
+	if err := log.Rotate(); err != nil {
+		t.Fatal(err)
+	}
+	awaitDrained(t, shipper)
+
+	got := collect{}
+	if _, err := RestoreArchive(sink, "tenant", "node-a", "verifying_keys", got); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if !reflect.DeepEqual(map[string]string(got), map[string]string(live)) {
+		t.Fatalf("restore must reproduce the live store: got %v want %v", got, live)
+	}
+}
+
+// A failing upload across a rotation loses nothing and keeps the chain in order:
+// later segments wait behind the failed one, then all ship.
+func TestShipperFailureAcrossRotation(t *testing.T) {
+	dir := t.TempDir()
+	sink := newMemSink()
+	sink.failPuts.Store(1 << 30)
+	log, shipper := openShipped(t, dir, sink, CodecNone)
+	live := liveStore{}
+
+	live.put(t, log, "a", 1)
+	if err := log.Rotate(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100 && shipper.Failures() < 1; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if shipper.Failures() < 1 {
+		t.Fatal("the failing upload should be retried")
+	}
+	live.put(t, log, "b", 2)
+	if err := log.Rotate(); err != nil {
+		t.Fatal(err)
+	}
+	live.put(t, log, "c", 3)
+	if err := log.Rotate(); err != nil {
+		t.Fatal(err)
+	}
+	if shipper.Pending() != 3 || sink.count("") != 0 {
+		t.Fatalf("all three rotations queue behind the failing one: pending %d", shipper.Pending())
+	}
+	sink.failPuts.Store(0)
+	awaitDrained(t, shipper)
+	got := collect{}
+	if _, err := RestoreArchive(sink, "tenant", "node-a", "verifying_keys", got); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if !reflect.DeepEqual(map[string]string(got), map[string]string(live)) {
+		t.Fatalf("restore after the outage: got %v want %v", got, live)
+	}
+}
+
+// Restore refuses a chain with a missing segment instead of restoring part of it.
+func TestRestoreArchiveRejectsMissingSegment(t *testing.T) {
+	sink := newMemSink()
+	root, _ := archiveStoreRoot("", "node-a", "verifying_keys")
+	_ = sink.Put(root+"segments/"+padSeq(2), []byte(`{"key":"a","payload":{"v":1}}`+"\n"))
+	if _, err := RestoreArchive(sink, "", "node-a", "verifying_keys", collect{}); err == nil {
+		t.Fatal("a chain missing segment 1 must not restore")
+	}
+	if n, err := RestoreArchive(newMemSink(), "", "node-a", "verifying_keys", collect{}); err != nil || n != 0 {
+		t.Fatalf("an empty archive restores nothing: %d, %v", n, err)
+	}
+}
+
+func TestDirArchiveSinkRoundTrip(t *testing.T) {
+	sink := NewDirArchiveSink(t.TempDir())
+	if err := sink.Put("p/m/s/segments/00000000000000000001", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := sink.Get("p/m/s/segments/00000000000000000001"); string(got) != "x" {
+		t.Fatalf("get: %q", got)
+	}
+	if got, err := sink.Get("p/none"); got != nil || err != nil {
+		t.Fatalf("absent object: %v %v", got, err)
+	}
+	if names, _ := sink.List("p/m/"); len(names) != 1 {
+		t.Fatalf("list: %v", names)
+	}
+}
+
+func TestRotateRequiresShipper(t *testing.T) {
+	log, err := OpenRedoLog(t.TempDir(), "/drpepper", "verifying_keys", 0, CodecNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	if err := log.Rotate(); err == nil {
+		t.Fatal("rotate without an archive must fail")
+	}
+}
+
+// The rotate scheduler ships what was appended without a snapshot.
+func TestRotateSchedulerShipsSegments(t *testing.T) {
+	dir := t.TempDir()
+	sink := newMemSink()
+	log, _ := openShipped(t, dir, sink, CodecNone)
+	live := liveStore{}
+	live.put(t, log, "a", 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = RunRotateScheduler(ctx, log, time.Second, "node-0")
+	}()
+	deadline := time.Now().Add(20 * time.Second)
+	for sink.count("tenant/node-a/verifying_keys/segments/") == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	got := collect{}
+	if _, err := RestoreArchive(sink, "tenant", "node-a", "verifying_keys", got); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if !reflect.DeepEqual(map[string]string(got), map[string]string(live)) {
+		t.Fatalf("scheduled rotation must ship the append: got %v want %v", got, live)
+	}
+}

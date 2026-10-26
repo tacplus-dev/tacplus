@@ -77,4 +77,13 @@ message ArchiveConfig {
     (spec.assert_duration) = DURATION_TYPE_POSITIVE,
     (spec.default_int) = 86400
   ];
+
+  // segment_interval_seconds is how often the active redo log is rotated and
+  // shipped as a segment without folding a baseline: the cost is the writes
+  // since the last rotation, not the store. It is the recovery point after
+  // losing the volume. 0 (the default) turns rotation off, and the recovery
+  // point is then one roll_interval_seconds.
+  int64 segment_interval_seconds = 4 [
+    (spec.assert_duration) = DURATION_TYPE_NON_NEGATIVE
+  ];
 }

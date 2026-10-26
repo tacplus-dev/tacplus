@@ -21,6 +21,7 @@
 //! data we write, so invalid-on-read is a bug).
 
 pub mod appendlog;
+pub mod archive;
 pub mod compress;
 pub mod error;
 pub mod fsutil;
@@ -31,10 +32,11 @@ pub mod schedule;
 pub mod snapshot;
 
 pub use appendlog::AppendLog;
+pub use archive::{restore_archive, ArchiveShipper, ArchiveSink, DirArchiveSink};
 pub use compress::Codec;
 pub use error::{DiskStoreError, Result};
 pub use path::{delete_namespace, ns_dir, ns_segments, store_path, ROOT_TENANT};
 pub use quorum::{local_records, require_quorum, LocalRows};
 pub use redolog::{dedup_bytes, dedup_file, Inserter, Record, RedoLog};
-pub use schedule::{roll_offset, run_roll_scheduler};
+pub use schedule::{roll_offset, run_roll_scheduler, run_rotate_scheduler};
 pub use snapshot::{read_snapshot, write_snapshot, SnapshotOpts};

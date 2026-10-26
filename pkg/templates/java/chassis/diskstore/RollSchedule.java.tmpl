@@ -72,6 +72,16 @@ public final class RollSchedule {
         return schedule("checkpoint", interval, nodeId + "/checkpoint", () -> log.checkpoint(snapshot));
     }
 
+    /**
+     * Schedule the periodic rotation for an archived redo log: the active log is
+     * shipped as a segment with no snapshot and no baseline fold, so the cost is
+     * the writes since the last rotation. This interval is the recovery point after
+     * losing the volume. Staggered on its own per-node offset.
+     */
+    public static ScheduledExecutorService runRotateScheduler(RedoLog log, Duration interval, String nodeId) {
+        return schedule("rotate", interval, nodeId + "/rotate", log::rotate);
+    }
+
     private static ScheduledExecutorService schedule(String what, Duration interval, String key, Runnable task) {
         ThreadFactory tf = r -> {
             Thread t = new Thread(r, "diskstore-" + what + "-" + key);

@@ -1,0 +1,485 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+package diskstore
+
+// Archive of the redo log to an object store.
+//
+// A segment is a redo log shipped out of the active position: every append up to
+// a roll or a rotation. A checkpoint is a full snapshot of the store, stored under
+// the redo position it covers. Each is first written to a pending file in the
+// log's directory and deleted only after its upload has succeeded, so a segment
+// is never removed locally before it is safe in the archive. A shipped segment is
+// also kept, renamed .rotated-<seq>, until a roll has folded it into a baseline;
+// local recovery replays it until then. Uploads run FIFO on one goroutine, so
+// segments reach the sink in order and a failed upload is retried, with capped
+// backoff, before anything behind it ships. Appends never wait on the shipper.
+//
+// Object names are <prefix>/<member>/<store>/segments/<seq> and
+// <prefix>/<member>/<store>/checkpoints/<seq>, with seq zero-padded to twenty
+// digits so lexical order is shipping order.
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	archiveSegments    = "segments"
+	archiveCheckpoints = "checkpoints"
+	segmentTag         = ".segment-"
+	checkpointTag      = ".checkpoint-"
+	rotatedTag         = ".rotated-"
+	seqDigits          = 20
+
+	retryBase      = time.Second
+	retryCapFactor = 300
+)
+
+// ArchiveSink is the object store the redo log ships to. The chassis ships to and
+// restores from this interface; a concrete store is the only part that knows the
+// provider. Objects are written whole and replaced by name, so Put must be
+// idempotent: a retried upload of the same name is harmless.
+type ArchiveSink interface {
+	// Put stores data under name, replacing any object already there.
+	Put(name string, data []byte) error
+	// Get returns the bytes stored under name, or nil with no error if there is
+	// no such object.
+	Get(name string) ([]byte, error)
+	// List returns the name of every object whose name starts with prefix, in
+	// lexical order.
+	List(prefix string) ([]string, error)
+}
+
+// DirArchiveSink is an ArchiveSink over a directory: an object named a/b is the
+// file <dir>/a/b. It serves a mounted object store and tests.
+type DirArchiveSink struct {
+	dir string
+}
+
+// NewDirArchiveSink returns a sink rooted at dir.
+func NewDirArchiveSink(dir string) *DirArchiveSink { return &DirArchiveSink{dir: dir} }
+
+// Put writes data atomically under name.
+func (s *DirArchiveSink) Put(name string, data []byte) error {
+	return atomicWrite(filepath.Join(s.dir, filepath.FromSlash(name)), data, 0)
+}
+
+// Get returns the bytes under name, or nil if there is no such object.
+func (s *DirArchiveSink) Get(name string) ([]byte, error) {
+	data, err := os.ReadFile(filepath.Join(s.dir, filepath.FromSlash(name)))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, wrapIOError(err)
+	}
+	return data, nil
+}
+
+// List returns the names under the sink that start with prefix, in lexical order.
+func (s *DirArchiveSink) List(prefix string) ([]string, error) {
+	var names []string
+	err := filepath.WalkDir(s.dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() || strings.Contains(d.Name(), ".tmp.") {
+			return nil
+		}
+		rel, err := filepath.Rel(s.dir, path)
+		if err != nil {
+			return err
+		}
+		if name := filepath.ToSlash(rel); strings.HasPrefix(name, prefix) {
+			names = append(names, name)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, wrapIOError(err)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+type shipItem struct {
+	file    string
+	object  string
+	seq     int64
+	segment bool
+}
+
+// ArchiveShipper ships one store's redo segments and checkpoints to an
+// ArchiveSink.
+type ArchiveShipper struct {
+	sink       ArchiveSink
+	root       string
+	codec      Codec
+	retryBase  time.Duration
+	wake       chan struct{}
+	done       chan struct{}
+	stopped    sync.WaitGroup
+	closeOnce  sync.Once
+	mu         sync.Mutex
+	queue      []shipItem
+	highestSeq int64 // -1 until resolve has listed the sink
+	foldedThru int64
+	failureCnt int64
+}
+
+// NewArchiveShipper ships store's archive for member under prefix, with segments
+// and checkpoints compressed by codec. It starts the upload goroutine; Close stops
+// it. Pending work from an earlier process is picked up by RedoLog.AttachShipper.
+func NewArchiveShipper(sink ArchiveSink, prefix, member, store string, codec Codec) (*ArchiveShipper, error) {
+	return newArchiveShipper(sink, prefix, member, store, codec, retryBase)
+}
+
+func newArchiveShipper(sink ArchiveSink, prefix, member, store string, codec Codec, base time.Duration) (*ArchiveShipper, error) {
+	root, err := archiveStoreRoot(prefix, member, store)
+	if err != nil {
+		return nil, err
+	}
+	s := &ArchiveShipper{
+		sink:       sink,
+		root:       root,
+		codec:      codec,
+		retryBase:  base,
+		wake:       make(chan struct{}, 1),
+		done:       make(chan struct{}),
+		highestSeq: -1,
+	}
+	s.stopped.Add(1)
+	go s.run()
+	return s, nil
+}
+
+// archiveStoreRoot is the object-name prefix of one store's archive:
+// <prefix>/<member>/<store>/.
+func archiveStoreRoot(prefix, member, store string) (string, error) {
+	if member == "" {
+		return "", ErrInvalidData("archive member id is empty")
+	}
+	head := ""
+	if prefix != "" {
+		head = prefix + "/"
+	}
+	return head + member + "/" + store + "/", nil
+}
+
+func padSeq(seq int64) string { return fmt.Sprintf("%0*d", seqDigits, seq) }
+
+func segmentPending(active string, seq int64) string { return sibling(active, segmentTag+padSeq(seq)) }
+
+func rotatedPath(active string, seq int64) string { return sibling(active, rotatedTag+padSeq(seq)) }
+
+func checkpointPending(active string, position int64) string {
+	return sibling(active, fmt.Sprintf("%s%s-%d", checkpointTag, padSeq(position), time.Now().UnixNano()))
+}
+
+// seqAfter parses the sequence that follows tag in a local file name.
+func seqAfter(name, tag string) (int64, bool) {
+	at := strings.LastIndex(name, tag)
+	if at < 0 || len(name) < at+len(tag)+seqDigits {
+		return 0, false
+	}
+	seq, err := strconv.ParseInt(name[at+len(tag):at+len(tag)+seqDigits], 10, 64)
+	return seq, err == nil
+}
+
+// archiveSeqOf is the sequence in an object name relative to the store root, or -1.
+func archiveSeqOf(relative string) int64 {
+	seq, err := strconv.ParseInt(relative[strings.LastIndex(relative, "/")+1:], 10, 64)
+	if err != nil {
+		return -1
+	}
+	return seq
+}
+
+// resolve learns the highest sequence already used, from the sink and from pending
+// work, so a restarted writer continues the chain instead of reusing a number. It
+// lists the sink, so call it outside any append path.
+func (s *ArchiveShipper) resolve() error {
+	s.mu.Lock()
+	if s.highestSeq >= 0 {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+	names, err := s.sink.List(s.root)
+	if err != nil {
+		return wrapIOError(err)
+	}
+	var highest int64
+	for _, name := range names {
+		if seq := archiveSeqOf(strings.TrimPrefix(name, s.root)); seq > highest {
+			highest = seq
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.highestSeq >= 0 {
+		return nil
+	}
+	for _, item := range s.queue {
+		if item.seq > highest {
+			highest = item.seq
+		}
+	}
+	s.highestSeq = highest
+	return nil
+}
+
+// allocateSeq allocates the sequence for the next segment; resolve must have run.
+func (s *ArchiveShipper) allocateSeq() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.highestSeq++
+	return s.highestSeq
+}
+
+// position is the redo position a checkpoint taken now covers: the newest sequence
+// allocated.
+func (s *ArchiveShipper) position() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.highestSeq < 0 {
+		return 0
+	}
+	return s.highestSeq
+}
+
+func (s *ArchiveShipper) enqueueSegment(file string, seq int64) {
+	s.enqueue(shipItem{file: file, object: s.root + archiveSegments + "/" + padSeq(seq), seq: seq, segment: true})
+}
+
+func (s *ArchiveShipper) enqueueCheckpoint(file string, position int64) {
+	s.enqueue(shipItem{file: file, object: s.root + archiveCheckpoints + "/" + padSeq(position), seq: position})
+}
+
+// recover re-queues a pending file a previous process left behind.
+func (s *ArchiveShipper) recoverFile(file string) {
+	name := filepath.Base(file)
+	if seq, ok := seqAfter(name, segmentTag); ok {
+		s.enqueueSegment(file, seq)
+	} else if seq, ok := seqAfter(name, checkpointTag); ok {
+		s.enqueueCheckpoint(file, seq)
+	}
+}
+
+// setFolded records that a roll has folded every segment up to seq into the local
+// baseline. A segment already shipped is the caller's to delete; one still queued
+// is deleted by the upload goroutine once the archive holds it.
+func (s *ArchiveShipper) setFolded(seq int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if seq > s.foldedThru {
+		s.foldedThru = seq
+	}
+}
+
+// Pending is the number of objects waiting to ship.
+func (s *ArchiveShipper) Pending() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.queue)
+}
+
+// Failures is the number of upload attempts that failed since this shipper started.
+func (s *ArchiveShipper) Failures() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failureCnt
+}
+
+// Close stops the upload goroutine. Work not yet uploaded stays in its pending
+// file and ships when a shipper next attaches to the same log.
+func (s *ArchiveShipper) Close() {
+	s.closeOnce.Do(func() { close(s.done) })
+	s.stopped.Wait()
+}
+
+func (s *ArchiveShipper) enqueue(item shipItem) {
+	s.mu.Lock()
+	s.queue = append(s.queue, item)
+	s.mu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *ArchiveShipper) run() {
+	defer s.stopped.Done()
+	var backoff time.Duration
+	for {
+		s.mu.Lock()
+		var head shipItem
+		have := len(s.queue) > 0
+		if have {
+			head = s.queue[0]
+		}
+		s.mu.Unlock()
+		if !have {
+			select {
+			case <-s.done:
+				return
+			case <-s.wake:
+			}
+			continue
+		}
+		if err := s.ship(head); err != nil {
+			s.mu.Lock()
+			s.failureCnt++
+			s.mu.Unlock()
+			if backoff == 0 {
+				backoff = s.retryBase
+			} else if backoff *= 2; backoff > s.retryBase*retryCapFactor {
+				backoff = s.retryBase * retryCapFactor
+			}
+			fmt.Fprintf(os.Stderr, "diskstore archive upload failed for %s: %v; retrying in %s\n", head.object, err, backoff)
+			select {
+			case <-s.done:
+				return
+			case <-time.After(backoff):
+			}
+			continue
+		}
+		backoff = 0
+	}
+}
+
+func (s *ArchiveShipper) ship(head shipItem) error {
+	raw, err := os.ReadFile(head.file)
+	if err != nil {
+		return wrapIOError(err)
+	}
+	packed, err := Compress(raw, s.codec)
+	if err != nil {
+		return err
+	}
+	if err := s.sink.Put(head.object, packed); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// The local copy goes only now that the archive holds it, and a segment no
+	// baseline covers yet stays for local replay.
+	if head.segment && head.seq > s.foldedThru {
+		name := filepath.Base(head.file)
+		at := strings.LastIndex(name, segmentTag)
+		rotated := filepath.Join(filepath.Dir(head.file), name[:at]+rotatedTag+name[at+len(segmentTag):])
+		if err := os.Rename(head.file, rotated); err != nil {
+			return wrapIOError(err)
+		}
+	} else if err := os.Remove(head.file); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return wrapIOError(err)
+	}
+	s.queue = s.queue[1:]
+	return nil
+}
+
+// RestoreArchive restores store, written by member under prefix, handing each
+// surviving record to inserter once. It returns how many records were handed over.
+// The chain is the newest checkpoint plus every segment shipped after the redo
+// position that checkpoint covers; those segments must be contiguous, a missing one
+// is an error and never a silent partial restore. Records are deduped across the
+// chain, the last write per key winning, so a delete arrives as a tombstone for
+// the inserter to honour. An archive with no checkpoint and no segments restores
+// nothing.
+func RestoreArchive(sink ArchiveSink, prefix, member, store string, inserter Inserter) (int, error) {
+	root, err := archiveStoreRoot(prefix, member, store)
+	if err != nil {
+		return 0, err
+	}
+	names, err := sink.List(root)
+	if err != nil {
+		return 0, wrapIOError(err)
+	}
+	checkpoints := map[int64]string{}
+	segments := map[int64]string{}
+	var newestCheckpoint int64
+	var segmentSeqs []int64
+	for _, name := range names {
+		relative := strings.TrimPrefix(name, root)
+		seq := archiveSeqOf(relative)
+		if seq < 0 {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(relative, archiveCheckpoints+"/"):
+			checkpoints[seq] = name
+			if seq > newestCheckpoint {
+				newestCheckpoint = seq
+			}
+		case strings.HasPrefix(relative, archiveSegments+"/"):
+			segments[seq] = name
+			segmentSeqs = append(segmentSeqs, seq)
+		}
+	}
+	sort.Slice(segmentSeqs, func(i, j int) bool { return segmentSeqs[i] < segmentSeqs[j] })
+
+	byKey := map[string]*Record{}
+	var order []string
+	apply := func(object string) error {
+		stored, err := sink.Get(object)
+		if err != nil {
+			return wrapIOError(err)
+		}
+		if stored == nil {
+			return ErrIO("archive object is missing: " + object)
+		}
+		raw, err := DecompressAuto(stored)
+		if err != nil {
+			return err
+		}
+		recs, err := DedupBytes(raw)
+		if err != nil {
+			return err
+		}
+		for _, r := range recs {
+			if _, seen := byKey[r.Key]; !seen {
+				order = append(order, r.Key)
+			}
+			byKey[r.Key] = r
+		}
+		return nil
+	}
+	if len(checkpoints) > 0 {
+		if err := apply(checkpoints[newestCheckpoint]); err != nil {
+			return 0, err
+		}
+	}
+	expect := newestCheckpoint + 1
+	for _, seq := range segmentSeqs {
+		if seq <= newestCheckpoint {
+			continue
+		}
+		if seq != expect {
+			return 0, ErrIO(fmt.Sprintf("archive for %s is missing segment %d", store, expect))
+		}
+		if err := apply(segments[seq]); err != nil {
+			return 0, err
+		}
+		expect++
+	}
+	n := 0
+	for _, key := range order {
+		if err := inserter.Insert(byKey[key]); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}

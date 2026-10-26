@@ -221,18 +221,20 @@ public class ServiceManager implements AutoCloseable {
 	    public static final class DiskStoreLogs implements AutoCloseable {
 	        private final Duration rollInterval;
 	        private final Duration checkpointInterval;
+	        private final Duration segmentInterval;
 	{{- range .DiskStores}}
 	        private final RedoLog {{.LogField}};
 	{{- end}}
 
 	        private DiskStoreLogs(
-	                Duration rollInterval, Duration checkpointInterval{{if .DiskStores}},{{end}}
+	                Duration rollInterval, Duration checkpointInterval, Duration segmentInterval{{if .DiskStores}},{{end}}
 	{{- range $i, $store := .DiskStores}}
 	                {{if $i}}, {{end}}RedoLog {{$store.LogField}}
 	{{- end}}
 	        ) {
 	            this.rollInterval = rollInterval;
 	            this.checkpointInterval = checkpointInterval;
+	            this.segmentInterval = segmentInterval;
 	{{- range .DiskStores}}
 	            this.{{.LogField}} = {{.LogField}};
 	{{- end}}
@@ -254,7 +256,7 @@ public class ServiceManager implements AutoCloseable {
 	    private static DiskStoreLogs openDiskStoreLogs(Config config, String member) {
 	        if (!config.hasDiskPersistence()) {
 	            return new DiskStoreLogs(
-	                    Duration.ZERO, Duration.ZERO{{if .DiskStores}},{{end}}
+	                    Duration.ZERO, Duration.ZERO, Duration.ZERO{{if .DiskStores}},{{end}}
 	{{- range $i, $store := .DiskStores}}
 	                    {{if $i}}, {{end}}null
 	{{- end}}
@@ -276,6 +278,7 @@ public class ServiceManager implements AutoCloseable {
 	        ArchiveSink archive = null;
 	        String archivePrefix = "";
 	        Duration checkpointInterval = Duration.ZERO;
+	        Duration segmentInterval = Duration.ZERO;
 	        if (persistence.hasArchive()) {
 	            var archiveConfig = persistence.getArchive();
 	            if (archiveConfig.getGcsBucket().isEmpty()) {
@@ -286,9 +289,11 @@ public class ServiceManager implements AutoCloseable {
 	            archivePrefix = archiveConfig.getPrefix();
 	            long checkpointSeconds = archiveConfig.getCheckpointIntervalSeconds();
 	            checkpointInterval = Duration.ofSeconds(checkpointSeconds > 0 ? checkpointSeconds : 86400);
+	            // 0 leaves rotation off: the recovery point is then one roll.
+	            segmentInterval = Duration.ofSeconds(Math.max(archiveConfig.getSegmentIntervalSeconds(), 0));
 	        }
 	        return new DiskStoreLogs(
-	                rollInterval, checkpointInterval{{if .DiskStores}},{{end}}
+	                rollInterval, checkpointInterval, segmentInterval{{if .DiskStores}},{{end}}
 	{{- range $i, $store := .DiskStores}}
 	                {{if $i}}, {{end}}attachArchive(DiskStores.open{{$store.MethodName}}Log(base, StorePath.ROOT_TENANT, archiveCount, codec),
 	                        archive, archivePrefix, member, "{{$store.StoreName}}", codec)
@@ -859,6 +864,12 @@ public class ServiceManager implements AutoCloseable {
                     diskStoreLogs.rollInterval,
                     nodeId + "/{{.StoreName}}",
                     snapshot));
+            if (!diskStoreLogs.segmentInterval.isZero()) {
+                schedulers.add(RollSchedule.runRotateScheduler(
+                        diskStoreLogs.{{.LogField}},
+                        diskStoreLogs.segmentInterval,
+                        nodeId + "/{{.StoreName}}"));
+            }
             if (!diskStoreLogs.checkpointInterval.isZero()) {
                 schedulers.add(RollSchedule.runCheckpointScheduler(
                         diskStoreLogs.{{.LogField}},

@@ -52,6 +52,7 @@ type Config struct {
 	OutputName  string        `yaml:"output-name,omitempty"`  // generated package/dir segment name; default "model" (compiler stays "tacplus")
 	Tacplus     string        `yaml:"tacplus,omitempty"`      // minimum tacplus MAJOR.MINOR this project needs (a floor, see CheckFloor); unset = no floor
 	Depends     []string      `yaml:"depends,omitempty"`      // services this one calls, by registry name ("llmproxy" or "llmproxy@1.2"); their protos are fetched through the registry and merged into this generation (see CheckDepends)
+	TestDepends []string      `yaml:"test-depends,omitempty"` // services only this project's TESTS use; they join local generation like depends but are not part of the contract: a fleet build neither scopes by them nor digests them (image builds skip tests). See CheckDepends
 	GrpcServers string        `yaml:"grpc-servers,omitempty"` // "all": this project generates from every service's server surface (the gateway dispatches to all of them); unset: its own. See CheckScope
 	GrpcClients string        `yaml:"grpc-clients,omitempty"` // "all": this project generates from every service's client surface (a CLI); unset: the services it declares in depends. See CheckScope
 	States      string        `yaml:"states,omitempty"`       // "all": this project generates from every service's config and state (the kernel holds them all); unset: its own and its depends'. See CheckScope
@@ -88,7 +89,7 @@ func Read(dir string) (*Config, error) {
 	if err := CheckFloor(cfg.Tacplus, buildinfo.Version); err != nil {
 		return nil, err
 	}
-	if err := CheckDepends(cfg.Depends); err != nil {
+	if err := CheckDepends(append(append([]string{}, cfg.Depends...), cfg.TestDepends...)); err != nil {
 		return nil, err
 	}
 	if err := CheckKind(cfg.Kind); err != nil {
@@ -201,7 +202,7 @@ func ReadFiles(paths []string) (*Config, error) {
 	if err := CheckFloor(result.Tacplus, buildinfo.Version); err != nil {
 		return nil, err
 	}
-	if err := CheckDepends(result.Depends); err != nil {
+	if err := CheckDepends(append(append([]string{}, result.Depends...), result.TestDepends...)); err != nil {
 		return nil, err
 	}
 	if err := CheckKind(result.Kind); err != nil {
@@ -258,6 +259,9 @@ func MergeConfigs(base, overlay *Config) *Config {
 	// Depends: overlay wins if it declares any (same semantics as Sources)
 	if len(overlay.Depends) > 0 {
 		result.Depends = overlay.Depends
+	}
+	if len(overlay.TestDepends) > 0 {
+		result.TestDepends = overlay.TestDepends
 	}
 
 	// Header: overlay wins if non-empty

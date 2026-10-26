@@ -21,6 +21,13 @@ import (
 // into this generation, so the (spec.grpc_s2s_client) declared in proto has
 // a proto to generate its client from. Only direct dependencies are fetched:
 // following them transitively is the fleet build's job.
+//
+// `test-depends` lists services only the project's tests use (stratum's server
+// tests exercise the record plane over letsencrypt's record). They join a
+// local generation exactly like depends, so the tests compile, and nowhere
+// else: they are not the contract, so a fleet build does not scope the
+// service by them, does not digest them, and a dependent does not inherit
+// them. Image builds skip tests, so nothing is missing there.
 
 var dependRe = regexp.MustCompile(`^([a-z][a-z0-9_-]*)(?:@(\d+\.\d+))?$`)
 
@@ -50,4 +57,19 @@ func SplitDepend(d string) (name, version string) {
 		return strings.TrimSpace(d), ""
 	}
 	return m[1], m[2]
+}
+
+// GenerationDepends is what a local generation resolves and merges: depends
+// and test-depends, each once.
+func (c *Config) GenerationDepends() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range append(append([]string{}, c.Depends...), c.TestDepends...) {
+		name, _ := SplitDepend(d)
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, d)
+		}
+	}
+	return out
 }

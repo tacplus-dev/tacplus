@@ -284,7 +284,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 		absProtoDir = tempDir
 		protoCleanup = func() { os.RemoveAll(tempDir) }
 		zap.L().Info("No proto source configured — generating standard library wrappers only")
-	} else if len(srcs) == 1 && ownExtra == "" && (cfg == nil || len(cfg.Depends) == 0 || p.SrcExplicit) {
+	} else if len(srcs) == 1 && ownExtra == "" && (cfg == nil || len(cfg.GenerationDepends()) == 0 || p.SrcExplicit) {
 		// Single source: resolve directly (no merge), preserving the original
 		// fast path exactly.
 		dir, cleanup, err := resolveOneSource(srcs[0], tag)
@@ -325,12 +325,13 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 			cleanups = append(cleanups, stagedCleanup)
 			ownProtoDir = ownExtra
 		}
-		// Declared dependencies (tacplus.yaml depends) join the merge: their
-		// protos are what the declared S2S clients generate from. An explicit
-		// --src overrides yaml sourcing entirely, depends included: a fleet
-		// build's merged tree already holds every dependency.
-		if cfg != nil && len(cfg.Depends) > 0 && !p.SrcExplicit {
-			depDirs, depCleanups, err := resolveDependencies(cfg.Depends, dirs[0])
+		// Declared dependencies (tacplus.yaml depends and test-depends) join
+		// the merge: their protos are what the declared S2S clients and the
+		// tests generate from. An explicit --src overrides yaml sourcing
+		// entirely, depends included: a fleet build's merged tree already holds
+		// every dependency (and scopes by depends alone; see below).
+		if cfg != nil && len(cfg.GenerationDepends()) > 0 && !p.SrcExplicit {
+			depDirs, depCleanups, err := resolveDependencies(cfg.GenerationDepends(), dirs[0])
 			if err != nil {
 				runCleanups()
 				return nil, err

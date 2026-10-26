@@ -23,3 +23,11 @@ func TestCheckDepends(t *testing.T) {
 		t.Errorf("SplitDepend = %q %q", n, v)
 	}
 }
+
+func TestGenerationDependsUnionsTestDependsOnce(t *testing.T) {
+	c := &Config{Depends: []string{"eventbus"}, TestDepends: []string{"letsencrypt", "eventbus@1.2"}}
+	got := c.GenerationDepends()
+	if len(got) != 2 || got[0] != "eventbus" || got[1] != "letsencrypt" {
+		t.Fatalf("GenerationDepends = %v", got)
+	}
+}

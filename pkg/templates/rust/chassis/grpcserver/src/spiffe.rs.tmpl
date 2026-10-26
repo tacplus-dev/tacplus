@@ -47,59 +47,59 @@ mod tests {
 
     #[test]
     fn equal() {
-        assert!(is_at_or_below("spiffe://d/a", "spiffe://d/a"));
+        assert!(is_at_or_below("spiffe://d/tenants/a", "spiffe://d/tenants/a"));
     }
 
     #[test]
     fn direct_child() {
-        assert!(is_at_or_below("spiffe://d/a", "spiffe://d/a/b"));
+        assert!(is_at_or_below("spiffe://d/tenants/a", "spiffe://d/tenants/a/workspaces/b"));
     }
 
     #[test]
     fn deep_descendant() {
-        assert!(is_at_or_below("spiffe://d/a", "spiffe://d/a/b/c/d"));
+        assert!(is_at_or_below("spiffe://d/tenants/a", "spiffe://d/tenants/a/workspaces/b/c/d"));
     }
 
     #[test]
     fn sibling_rejected() {
-        assert!(!is_at_or_below("spiffe://d/a", "spiffe://d/b"));
+        assert!(!is_at_or_below("spiffe://d/tenants/a", "spiffe://d/tenants/b"));
     }
 
     #[test]
     fn parent_of_caller_rejected() {
-        assert!(!is_at_or_below("spiffe://d/a/b", "spiffe://d/a"));
+        assert!(!is_at_or_below("spiffe://d/tenants/a/workspaces/b", "spiffe://d/tenants/a"));
     }
 
     #[test]
     fn unrelated_domain_rejected() {
-        assert!(!is_at_or_below("spiffe://d/a", "spiffe://e/a"));
+        assert!(!is_at_or_below("spiffe://d/tenants/a", "spiffe://e/tenants/a"));
     }
 
     #[test]
     fn prefix_string_but_not_segment_rejected() {
-        assert!(!is_at_or_below("spiffe://d/a", "spiffe://d/ab"));
-        assert!(!is_at_or_below("spiffe://d/foo", "spiffe://d/foobar/x"));
+        assert!(!is_at_or_below("spiffe://d/tenants/a", "spiffe://d/tenants/ab"));
+        assert!(!is_at_or_below("spiffe://d/tenants/foo", "spiffe://d/tenants/foobar/workspaces/x"));
     }
 
     #[test]
     fn empty_inputs_rejected() {
-        assert!(!is_at_or_below("", "spiffe://d/a"));
-        assert!(!is_at_or_below("spiffe://d/a", ""));
+        assert!(!is_at_or_below("", "spiffe://d/tenants/a"));
+        assert!(!is_at_or_below("spiffe://d/tenants/a", ""));
         assert!(!is_at_or_below("", ""));
     }
 
     #[test]
     fn multi_slash_domain() {
-        let caller = "spiffe://io/example/cluster1/drpepper";
+        let caller = "spiffe://io/system/example/cluster1/drpepper";
         assert!(is_at_or_below(caller, caller));
         assert!(is_at_or_below(caller, &format!("{}/dev", caller)));
-        assert!(!is_at_or_below(caller, "spiffe://io/example/cluster1/coke"));
+        assert!(!is_at_or_below(caller, "spiffe://io/system/example/cluster1/coke"));
     }
 
     #[test]
     fn domain_root_caller() {
-        assert!(is_at_or_below("spiffe://d", "spiffe://d/a"));
-        assert!(is_at_or_below("spiffe://d", "spiffe://d/a/b/c"));
+        assert!(is_at_or_below("spiffe://d", "spiffe://d/tenants/a"));
+        assert!(is_at_or_below("spiffe://d", "spiffe://d/tenants/a/workspaces/b/c"));
     }
 
     #[test]
@@ -112,14 +112,14 @@ mod tests {
 
     #[test]
     fn uri_vs_path_mixed_rejected() {
-        assert!(!is_at_or_below("spiffe://d/a", "/a"));
-        assert!(!is_at_or_below("/a", "spiffe://d/a"));
+        assert!(!is_at_or_below("spiffe://d/tenants/a", "/a"));
+        assert!(!is_at_or_below("/a", "spiffe://d/tenants/a"));
     }
 
     #[test]
     fn malformed_uri_fails_closed() {
-        assert!(!is_at_or_below("spiffe://", "spiffe://d/a"));
-        assert!(!is_at_or_below("spiffe://d/a", "spiffe://d//b"));
-        assert!(!is_at_or_below("spiffe://d/a", "spiffe://d/a?x=1"));
+        assert!(!is_at_or_below("spiffe://", "spiffe://d/tenants/a"));
+        assert!(!is_at_or_below("spiffe://d/tenants/a", "spiffe://d//b"));
+        assert!(!is_at_or_below("spiffe://d/tenants/a", "spiffe://d/tenants/a?x=1"));
     }
 }

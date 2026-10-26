@@ -81,7 +81,7 @@ enum AuthBrokerKind {
   // trusts the broker's attestation — today's behaviour, unchanged.
   AUTH_BROKER_KIND_IDP = 1;
   // Possession of a personal principal's device key. Kernel verifies the
-  // proof itself; may mint only a /people/<pid> personal token.
+  // proof itself; may mint only a /users/<xid> personal token.
   AUTH_BROKER_KIND_DEVICE = 2;
   // Control of an email address a tenant authorized.
   AUTH_BROKER_KIND_EMAIL_LINK = 3;

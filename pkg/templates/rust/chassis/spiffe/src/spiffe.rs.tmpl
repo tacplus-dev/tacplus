@@ -538,6 +538,7 @@ fn classify(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
         classify_pair(p, segs, idx_of(&idx, DATA_SEGMENT) as usize, SubjectKind::Resource)
     } else {
         // Namespace-only identity (tenant/workspace/system subtree).
+        validate_namespace_segments(segs)?;
         p.subject_kind = SubjectKind::Unknown;
         p.namespace = format!("/{}", segs.join("/"));
         Ok(())
@@ -554,6 +555,16 @@ fn classify_system(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
         return err(format!("spiffe: malformed system/service identity: /{}", segs.join("/")));
     }
     let si = si as usize;
+    validate_namespace_segments(&segs[..si])?;
+    if is_reserved_tag(segs[si + 1]) {
+        return err(format!("spiffe: reserved tag {:?} cannot be a service name", segs[si + 1]));
+    }
+    let rest = &segs[si + 2..];
+    if rest.len() % 2 != 0
+        || rest.chunks(2).any(|c| c[0] != WORKLOADS_SEGMENT || is_reserved_tag(c[1]))
+    {
+        return err(format!("spiffe: malformed system/service identity: /{}", segs.join("/")));
+    }
     p.location_path = segs[1..si].join("/");
     p.namespace = format!("/{}", segs[..si].join("/")); // /system[/location...]
     p.subject_path = segs[si + 1..].join("/"); // <service>[/workloads/<child>...]
@@ -575,24 +586,44 @@ fn classify_user_root(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
     Ok(())
 }
 
+// The parse-side twin of leaf_base: the namespace before a typed tag must pass the
+// namespace validator, and a user root is a complete identity, so nothing may follow it.
+fn validate_leaf_namespace(ns_segs: &[&str]) -> Result<()> {
+    if ns_segs.is_empty() {
+        return err("spiffe: a typed identity needs a namespace".to_string());
+    }
+    if ns_segs[0] == USERS_SEGMENT {
+        return err(format!("spiffe: nothing may follow a user root, got namespace /{}", ns_segs.join("/")));
+    }
+    validate_namespace_segments(ns_segs)
+}
+
 fn classify_namespaced(p: &mut ParsedSpiffeId, segs: &[&str], tag_idx: usize, kind: SubjectKind) -> Result<()> {
-    if tag_idx + 1 >= segs.len() || tag_idx == 0 {
+    if tag_idx + 2 != segs.len() || tag_idx == 0 {
         return err(format!("spiffe: malformed {} identity: /{}", kind, segs.join("/")));
+    }
+    validate_leaf_namespace(&segs[..tag_idx])?;
+    if is_reserved_tag(segs[tag_idx + 1]) {
+        return err(format!("spiffe: reserved tag {:?} cannot be a {} id", segs[tag_idx + 1], kind));
     }
     p.subject_kind = kind;
     p.namespace = format!("/{}", segs[..tag_idx].join("/"));
-    p.subject_path = segs[tag_idx + 1..].join("/");
+    p.subject_path = segs[tag_idx + 1].to_string();
     Ok(())
 }
 
 fn classify_pair(p: &mut ParsedSpiffeId, segs: &[&str], tag_idx: usize, kind: SubjectKind) -> Result<()> {
-    if tag_idx == 0 || tag_idx + 2 >= segs.len() {
+    if tag_idx == 0 || tag_idx + 3 != segs.len() {
         return err(format!("spiffe: malformed kind/id identity: /{}", segs.join("/")));
+    }
+    validate_leaf_namespace(&segs[..tag_idx])?;
+    if is_reserved_tag(segs[tag_idx + 1]) || is_reserved_tag(segs[tag_idx + 2]) {
+        return err(format!("spiffe: reserved tag cannot be a kind or id segment: /{}", segs.join("/")));
     }
     p.subject_kind = kind;
     p.namespace = format!("/{}", segs[..tag_idx].join("/"));
     p.resource_kind = segs[tag_idx + 1].to_string();
-    p.resource_id = segs[tag_idx + 2..].join("/");
+    p.resource_id = segs[tag_idx + 2].to_string();
     Ok(())
 }
 

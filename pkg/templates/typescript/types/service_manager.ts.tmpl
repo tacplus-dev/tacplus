@@ -898,6 +898,12 @@ export class ServiceManager {
       const server = new grpc.Server(serverOptionsFromConfig(this.cfg));
   {{- if .HasGrpc}}
       const authorizer = new Authorizer(this.stateStoreConn.conn());
+      // A tenant-owned instance's own token namespace is /tenants/<t>; the
+      // authorizer refuses callers outside that tenant at the door. An identity
+      // that cannot be read leaves the door unpinned, so it fails startup.
+      if (this.identity.hasAuth()) {
+        authorizer.setHostNamespaceFromToken(await this.identity.getToken());
+      }
 {{- end}}
 
     // Wrap handler implementations with validation and register services.

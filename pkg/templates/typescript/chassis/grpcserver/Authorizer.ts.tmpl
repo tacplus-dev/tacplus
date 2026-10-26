@@ -187,6 +187,8 @@ export class Authorizer {
   private _methodAuthPatterns: Map<string, RegExp[]>;
   private _methodAuthAnyService: Set<string>;
   private _methodTargetNamespaceFields: Map<string, string>;
+  /** The instance's own tenant namespace ("/tenants/<t>"), or "" for a shared instance. */
+  private _hostTenant = '';
 
   /**
    * Creates an Authorizer that verifies tokens via JWK view.
@@ -246,6 +248,36 @@ export class Authorizer {
   setMethodTargetNamespaceField(methodKey: string, fieldName: string): void {
     if (!fieldName) return;
     this._methodTargetNamespaceFields.set(methodKey, fieldName);
+  }
+
+  /**
+   * Tells the authorizer which namespace its own instance runs in, taken from
+   * the instance's bootstrap identity (the namespace of its own service token).
+   * A tenant-owned instance runs in exactly "/tenants/<t>": from then on
+   * authorize() and authenticate() refuse, PERMISSION_DENIED, a caller whose
+   * namespace is neither at-or-above that tenant nor /system or below. A
+   * token's aud is the service name, which every tenant's instance accepts, so
+   * without this check another tenant's token is admitted on any RPC with no
+   * target_namespace_field. Any other namespace (a shared instance's /system or
+   * below) leaves the authorizer exactly as it was.
+   */
+  setHostNamespace(namespace: string): void {
+    this._hostTenant = isTenantNamespace(namespace) ? namespace : '';
+  }
+
+  /** setHostNamespace with the namespace read from the instance's own service token. */
+  setHostNamespaceFromToken(token: string): void {
+    this.setHostNamespace(TokenWrapper.parse(token).getNamespace());
+  }
+
+  /** The tenant-owned instance's door check. */
+  private checkHostTenant(callerNamespace: string): void {
+    const host = this._hostTenant;
+    if (host === '') return;
+    if (isAtOrBelow('/system', callerNamespace) || isAtOrBelow(callerNamespace, host)) {
+      return;
+    }
+    throw AuthError.permissionDenied(`caller namespace "${callerNamespace}" is not at-or-above this instance's tenant "${host}"`);
   }
 
   private checkTargetNamespace(methodKey: string, callerNamespace: string, request?: unknown): void {
@@ -333,6 +365,8 @@ export class Authorizer {
     if (!Authorizer.ACCEPTED_AUDIENCES.has(aud)) {
       throw AuthError.permissionDenied(`token audience "${aud}" is not accepted by service "${Authorizer.SERVICE_NAME}"`);
     }
+    // Tenant-owned instance: refuse another tenant's caller at the door.
+    this.checkHostTenant(tw.getNamespace());
 
     // S2S path: service/workload tokens carry structured identity claims
     // (sub_type, sub, service_name). Authorization is receiver-side via
@@ -437,6 +471,8 @@ export class Authorizer {
     if (!Authorizer.ACCEPTED_AUDIENCES.has(aud)) {
       throw AuthError.permissionDenied(`token audience "${aud}" is not accepted by service "${Authorizer.SERVICE_NAME}"`);
     }
+    // Tenant-owned instance: refuse another tenant's caller at the door.
+    this.checkHostTenant(tw.getNamespace());
 
     if (targetNamespace !== undefined) {
       const target = targetNamespace === '' ? '/' : targetNamespace;
@@ -521,6 +557,13 @@ function readStringField(request: Record<string, unknown>, protoFieldName: strin
 
 function snakeToLowerCamel(name: string): string {
   return name.replace(/_([a-zA-Z0-9])/g, (_match, ch: string) => ch.toUpperCase());
+}
+
+/** True when namespace is exactly "/tenants/<t>". */
+function isTenantNamespace(namespace: string): boolean {
+  if (!namespace.startsWith('/tenants/')) return false;
+  const tenant = namespace.slice('/tenants/'.length);
+  return tenant !== '' && !tenant.includes('/');
 }
 
 /**

@@ -720,6 +720,13 @@ impl ServiceManager {
             }
         };
         let authorizer = Arc::new(GrpcAuthorizer::new(auth_conn, Some(tp.clone())));
+        // A tenant-owned instance's own token namespace is /tenants/<t>; the
+        // authorizer refuses callers outside that tenant at the door. An identity
+        // that cannot be read leaves the door unpinned, so it fails startup.
+        if identity.has_auth() {
+            let own_token = identity.get_token().await?;
+            authorizer.set_host_namespace_from_token(&own_token)?;
+        }
 {{- end}}
 
 {{- if .HasStates}}

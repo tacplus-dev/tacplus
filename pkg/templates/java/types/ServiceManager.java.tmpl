@@ -962,6 +962,12 @@ public class ServiceManager implements AutoCloseable {
         // and fail-closed — there is no way to construct a token-auth wrapper without it.
         Authorizer authorizer = new Authorizer(Authorizer.remoteSource(stateStoreConn.conn()));
         this.authorizer = authorizer;
+        // A tenant-owned instance's own token namespace is /tenants/<t>; the
+        // authorizer refuses callers outside that tenant at the door. An identity
+        // that cannot be read leaves the door unpinned, so it fails startup.
+        if (identity.hasAuth()) {
+            authorizer.setHostNamespaceFromToken(identity.getToken());
+        }
         // Register per-method auth_services patterns from proto annotations.
 {{- range .GrpcServices}}
 {{- if and .HasMethodAuth (not .IsC2D)}}

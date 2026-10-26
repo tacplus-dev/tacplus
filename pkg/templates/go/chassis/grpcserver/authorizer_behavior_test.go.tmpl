@@ -18,7 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	wrapperJwk "{{.ModuleBasePath}}/chassis/jwk"
 	keylib "{{.ModuleBasePath}}/chassis/key"
@@ -595,6 +597,56 @@ func TestQualifiedMethodKeyShapes(t *testing.T) {
 	} {
 		if got := qualifiedMethodKey(tc.full); got != tc.want {
 			t.Errorf("qualifiedMethodKey(%q) = %q, want %q", tc.full, got, tc.want)
+		}
+	}
+}
+
+// A tenant-owned instance (own namespace /tenants/beta) refuses another
+// tenant's caller at the door, on an RPC with no target_namespace_field: a
+// token's aud is the service name, which every tenant's instance accepts. The
+// instance's own tenant, /system and the root pass; shared instances are
+// unchanged.
+func TestAuthorizerTenantOwnedInstanceRefusesOtherTenant(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
+	a.SetHostNamespace("/tenants/beta")
+
+	at := func(ns string) string {
+		return signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+			tok.SetSubType("service").SetSubject("caller-svc").SetNamespace(ns)
+		})
+	}
+	for _, ns := range []string{"/tenants/beta", "/system", "/system/us-east", "/"} {
+		if _, err := a.Authorize(bearerCtx(at(ns)), testMethod, nil); err != nil {
+			t.Fatalf("caller in %q must pass beta's instance, got: %v", ns, err)
+		}
+	}
+	for _, ns := range []string{"/tenants/acme", "/tenants/beta2", "/tenants/beta/sub", "/users/u1"} {
+		_, err := a.Authorize(bearerCtx(at(ns)), testMethod, nil)
+		if err == nil {
+			t.Fatalf("caller in %q must be denied by beta's instance", ns)
+		}
+		if st, _ := status.FromError(err); st.Code() != codes.PermissionDenied {
+			t.Fatalf("caller in %q: want PermissionDenied, got %v", ns, err)
+		}
+		if _, err := a.Authenticate(bearerCtx(at(ns))); err == nil {
+			t.Fatalf("Authenticate must deny %q on beta's instance", ns)
+		}
+	}
+}
+
+// A shared instance (a /system namespace) and an unset host namespace admit
+// every tenant, as before.
+func TestAuthorizerSharedInstanceAdmitsAnyTenant(t *testing.T) {
+	key := newTestKey(t)
+	for _, host := range []string{"", "/system", "/system/us-east", "/tenants", "/tenants/a/b"} {
+		a := authorizerWithKeys(t, jwkForKey(t, key))
+		a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
+		a.SetHostNamespace(host)
+		tok := signedToken(t, key, serviceToken("caller-svc"))
+		if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
+			t.Fatalf("host %q must admit /tenants/acme, got: %v", host, err)
 		}
 	}
 }

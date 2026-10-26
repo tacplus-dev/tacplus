@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=../lib/cargo-target.sh
+source "$ROOT_DIR/cross-test/lib/cargo-target.sh"
 # shellcheck source=../lib/tree-guard.sh
 source "$ROOT_DIR/cross-test/lib/tree-guard.sh"
 tree_guard_begin "$ROOT_DIR"
@@ -865,7 +867,7 @@ compile_current_output() {
       ;;
     rust)
       if [[ -f "$output/Cargo.toml" ]]; then
-        (cd "$output" && CARGO_TARGET_DIR="$output/target" cargo check) >"$log_dir/cargo-check.log" 2>&1 || {
+        (cd "$output" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo check) >"$log_dir/cargo-check.log" 2>&1 || {
           dump_step_log "$log_dir/cargo-check.log"
           return 1
         }

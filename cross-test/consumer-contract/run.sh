@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=../lib/cargo-target.sh
+source "$ROOT_DIR/cross-test/lib/cargo-target.sh"
 PROTO_SRC="$ROOT_DIR/cross-test/consumer-contract/proto"
 WORK_ROOT="${TACPLUS_CONSUMER_WORKDIR:-}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
@@ -5656,13 +5658,13 @@ compile_rust_handwritten_consumer() {
       ;;
   esac
 
-  (cd "$consumer_dir" && CARGO_TARGET_DIR="$output/target" cargo check) >"$log_dir/rust-consumer-check.log" 2>&1 || {
+  (cd "$consumer_dir" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo check) >"$log_dir/rust-consumer-check.log" 2>&1 || {
     cat "$log_dir/rust-consumer-check.log" >&2
     return 1
   }
   assert_clean_log "$log_dir/rust-consumer-check.log"
 
-  (cd "$consumer_dir" && CARGO_TARGET_DIR="$output/target" cargo run --quiet) >"$log_dir/rust-consumer-run.log" 2>&1 || {
+  (cd "$consumer_dir" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo run --quiet) >"$log_dir/rust-consumer-run.log" 2>&1 || {
     cat "$log_dir/rust-consumer-run.log" >&2
     return 1
   }

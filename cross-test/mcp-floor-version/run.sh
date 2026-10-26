@@ -22,6 +22,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=../lib/cargo-target.sh
+source "$ROOT_DIR/cross-test/lib/cargo-target.sh"
 PROTO_SRC="$ROOT_DIR/cross-test/mcp-floor-version/proto"
 MCP_GEN_GO="$ROOT_DIR/pkg/internal/rust/types/mcp_dispatch_gen.go"
 CRATE="mcpfloor-model"
@@ -78,7 +80,7 @@ grep -q "^version = \"$FLOOR\"$" <(grep -A1 '^name = "rmcp"$' "$OUT/Cargo.lock")
   || die "lock did not pin rmcp to $FLOOR"
 
 echo "==> Building generated Rust MCP crate against rmcp $FLOOR"
-(cd "$OUT" && CARGO_TARGET_DIR="$OUT/target" cargo build -p "$CRATE") \
+(cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo build -p "$CRATE") \
   || die "generated MCP crate does not compile against its OWN declared rmcp floor $FLOOR"
 
 echo "==> mcp-floor-version check PASSED (rust, rmcp $FLOOR)"

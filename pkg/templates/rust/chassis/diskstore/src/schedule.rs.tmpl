@@ -64,6 +64,28 @@ where
     }
 }
 
+/// Run the periodic rotation loop for an archived redo log: the active log is
+/// shipped as a segment with no snapshot and no baseline fold, so the cost is the
+/// writes since the last rotation. `interval` is the recovery point after losing
+/// the volume. The first rotation is delayed by the node's own deterministic
+/// offset, staggered apart from the roll. Rotation failures are logged and retried
+/// on the next interval.
+pub async fn run_rotate_scheduler(log: &RedoLog, interval: Duration, node_id: &str) -> Result<()> {
+    tokio::time::sleep(roll_offset(&format!("{node_id}/rotate"), interval)).await;
+    let mut ticker = tokio::time::interval(interval);
+    ticker.tick().await; // first tick fires immediately; consume it
+    loop {
+        ticker.tick().await;
+        if let Err(err) = log.rotate() {
+            log::warn!(
+                "diskstore rotate failed; retrying on next interval: node_id={} error={}",
+                node_id,
+                err
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

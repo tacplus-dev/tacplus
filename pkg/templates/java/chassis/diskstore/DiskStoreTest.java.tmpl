@@ -589,6 +589,206 @@ public class DiskStoreTest {
         }
     }
 
+    // rotate ships the active log as a segment with no snapshot and opens a fresh
+    // active; the segment stays on the volume, and a cold start from the volume alone
+    // (the active log plus the kept segments) reproduces the store.
+    private static void testRotateThenLocalRestore() throws Exception {
+        Path dir = Files.createTempDirectory("ds-rotate-");
+        try {
+            Path base = dir.resolve("data");
+            MemSink sink = new MemSink();
+            RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.NONE);
+            ArchiveShipper shipper = new ArchiveShipper(sink, "tenant", "node-a", "verifying_keys", Codec.NONE, 1);
+            log.attachShipper(shipper);
+            java.util.Map<String, String> live = new java.util.LinkedHashMap<>();
+            Path logDir = base.resolve("drpepper");
+            try {
+                put(log, live, "a", "{\"v\":1}");
+                put(log, live, "b", "{\"v\":1}");
+                log.roll(snapshotOf(live));
+                check(awaitDrained(shipper), "the roll's segment should ship");
+
+                put(log, live, "a", "{\"v\":2}");
+                log.rotate();
+                check(awaitDrained(shipper), "the rotated segment should ship");
+                check(Files.size(log.activePath()) == 0, "rotate must leave a fresh, empty active log");
+                check(sink.list("tenant/node-a/verifying_keys/segments/").size() == 2,
+                        "the roll and the rotation each ship one segment");
+
+                del(log, live, "b");
+                put(log, live, "c", "{\"v\":3}");
+                log.rotate();
+                put(log, live, "d", "{\"v\":4}");
+                check(awaitDrained(shipper), "the second rotation should ship");
+                check(countKind(logDir, ".rotated-") == 2,
+                        "shipped segments stay on the volume until a roll folds them, got "
+                                + countKind(logDir, ".rotated-"));
+
+                // Cold start from the volume alone, as after a restart.
+                RedoLog cold = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.NONE);
+                java.util.Map<String, String> restored = new java.util.LinkedHashMap<>();
+                cold.restore(rec -> {
+                    if (rec.deleted) {
+                        restored.remove(rec.key);
+                    } else {
+                        restored.put(rec.key, rec.payload);
+                    }
+                });
+                cold.close();
+                check(restored.equals(live),
+                        "local restore must replay the rotated segments: got " + restored + " want " + live);
+
+                // A roll folds them: the shipped segments leave the volume.
+                log.roll(snapshotOf(live));
+                check(awaitDrained(shipper), "the folding roll's segment should ship");
+                check(countKind(logDir, ".rotated-") == 0 && countKind(logDir, ".segment-") == 0,
+                        "a roll must delete the segments it folded");
+                RedoLog cold2 = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.NONE);
+                java.util.Map<String, String> restored2 = new java.util.LinkedHashMap<>();
+                cold2.restore(rec -> restored2.put(rec.key, rec.payload));
+                cold2.close();
+                check(restored2.equals(live), "restore after the fold must equal the store: " + restored2);
+            } finally {
+                log.close();
+                shipper.close();
+            }
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    // A segment folded by a roll must not be replayed over the baseline: a key
+    // deleted inside it would come back.
+    private static void testFoldedSegmentIsNotReplayed() throws Exception {
+        Path dir = Files.createTempDirectory("ds-folded-");
+        try {
+            Path base = dir.resolve("data");
+            MemSink sink = new MemSink();
+            sink.failPuts.set(Integer.MAX_VALUE);
+            RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.NONE);
+            ArchiveShipper shipper = new ArchiveShipper(sink, "", "node-a", "verifying_keys", Codec.NONE, 1);
+            log.attachShipper(shipper);
+            java.util.Map<String, String> live = new java.util.LinkedHashMap<>();
+            try {
+                put(log, live, "a", "{\"v\":1}");
+                put(log, live, "b", "{\"v\":1}");
+                log.rotate();
+                del(log, live, "b");
+                log.roll(snapshotOf(live));
+                // Uploads are failing, so both segments are still pending on the volume.
+                check(countKind(base.resolve("drpepper"), ".segment-") == 2, "both segments should be pending");
+                RedoLog cold = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.NONE);
+                java.util.Map<String, String> restored = new java.util.LinkedHashMap<>();
+                cold.restore(rec -> restored.put(rec.key, rec.payload));
+                cold.close();
+                check(restored.equals(live), "a folded segment must not be replayed: got " + restored);
+            } finally {
+                log.close();
+                shipper.close();
+            }
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    // rotate, then roll, then restore from the archive reproduces the store, and an
+    // idle rotation ships nothing.
+    private static void testRotateRollArchiveRestore() throws Exception {
+        Path dir = Files.createTempDirectory("ds-rotroll-");
+        try {
+            Path base = dir.resolve("data");
+            MemSink sink = new MemSink();
+            ArchiveShipper shipper = new ArchiveShipper(sink, "tenant", "node-a", "verifying_keys", Codec.GZ, 1);
+            RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.GZ);
+            log.attachShipper(shipper);
+            java.util.Map<String, String> live = new java.util.LinkedHashMap<>();
+            try {
+                put(log, live, "a", "{\"v\":1}");
+                put(log, live, "b", "{\"v\":1}");
+                log.roll(snapshotOf(live));
+                log.checkpoint(() -> snapshotOf(live));
+
+                put(log, live, "a", "{\"v\":2}");
+                log.rotate();
+                log.rotate();
+                check(awaitDrained(shipper), "rotations should reach the sink");
+                int shipped = sink.list("tenant/node-a/verifying_keys/segments/").size();
+                check(shipped == 2, "an idle rotation must ship nothing, got " + shipped + " segments");
+
+                del(log, live, "b");
+                put(log, live, "c", "{\"v\":3}");
+                log.rotate();
+                put(log, live, "d", "{\"v\":4}");
+                log.roll(snapshotOf(live));
+                put(log, live, "e", "{\"v\":5}");
+                log.rotate();
+                check(awaitDrained(shipper), "every rotation and roll should reach the sink");
+            } finally {
+                log.close();
+                shipper.close();
+            }
+
+            deleteRecursive(base);
+            java.util.Map<String, String> restored = new java.util.LinkedHashMap<>();
+            ArchiveRestore.restore(sink, "tenant", "node-a", "verifying_keys", rec -> {
+                if (rec.deleted) {
+                    restored.remove(rec.key);
+                } else {
+                    restored.put(rec.key, rec.payload);
+                }
+            });
+            check(restored.equals(live),
+                    "restore must reproduce the live store: got " + restored + " want " + live);
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    // A failing upload across a rotation loses nothing and keeps the chain in
+    // order: later segments wait behind the failed one, then all ship.
+    private static void testShipperFailureAcrossRotation() throws Exception {
+        Path dir = Files.createTempDirectory("ds-rotfail-");
+        try {
+            Path base = dir.resolve("data");
+            MemSink sink = new MemSink();
+            sink.failPuts.set(Integer.MAX_VALUE);
+            RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.NONE);
+            ArchiveShipper shipper = new ArchiveShipper(sink, "", "node-a", "verifying_keys", Codec.NONE, 1);
+            log.attachShipper(shipper);
+            java.util.Map<String, String> live = new java.util.LinkedHashMap<>();
+            try {
+                put(log, live, "a", "{\"v\":1}");
+                log.rotate();
+                check(awaitFailures(shipper, 1), "the failing upload should be retried");
+                put(log, live, "b", "{\"v\":2}");
+                log.rotate();
+                put(log, live, "c", "{\"v\":3}");
+                log.rotate();
+                check(shipper.pending() == 3, "all three rotations queue behind the failing one, got " + shipper.pending());
+                check(sink.list("").isEmpty(), "nothing reaches the sink while uploads fail");
+
+                sink.failPuts.set(0);
+                check(awaitDrained(shipper), "the queue should drain once the sink recovers");
+                check(sink.list("node-a/verifying_keys/segments/").size() == 3,
+                        "all three segments must ship, got " + sink.list("node-a/verifying_keys/segments/").size());
+            } finally {
+                log.close();
+                shipper.close();
+            }
+            java.util.Map<String, String> restored = new java.util.LinkedHashMap<>();
+            ArchiveRestore.restore(sink, "", "node-a", "verifying_keys", rec -> restored.put(rec.key, rec.payload));
+            check(restored.equals(live), "restore after the outage must reproduce the store: " + restored);
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
+    private static int countKind(Path dir, String kind) throws IOException {
+        try (var files = Files.list(dir)) {
+            return (int) files.filter(p -> p.getFileName().toString().contains(kind)).count();
+        }
+    }
+
     // Restore refuses a chain with a missing segment instead of restoring part of it.
     private static void testRestoreRejectsMissingSegment() throws Exception {
         MemSink sink = new MemSink();
@@ -706,6 +906,10 @@ public class DiskStoreTest {
         testIdleRollShipsNothing();
         testArchiveRestoreReproducesStore();
         testRestoreRejectsMissingSegment();
+        testRotateThenLocalRestore();
+        testFoldedSegmentIsNotReplayed();
+        testRotateRollArchiveRestore();
+        testShipperFailureAcrossRotation();
 
         if (failures > 0) {
             System.err.println(failures + " DiskStore check(s) FAILED");

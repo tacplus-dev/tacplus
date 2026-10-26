@@ -59,3 +59,31 @@ func RunRollScheduler(ctx context.Context, log *RedoLog, interval time.Duration,
 		}
 	}
 }
+
+// RunRotateScheduler runs the periodic rotation loop for an archived redo log: the
+// active log is shipped as a segment with no snapshot and no baseline fold, so the
+// cost is the writes since the last rotation. interval is the recovery point after
+// losing the volume. The first rotation is delayed by the node's own deterministic
+// offset, staggered apart from the roll. It runs until ctx is cancelled; rotation
+// failures are logged and retried on the next interval.
+func RunRotateScheduler(ctx context.Context, log *RedoLog, interval time.Duration, nodeID string) error {
+	key := nodeID + "/rotate"
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-time.After(RollOffset(key, interval)):
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if err := log.Rotate(); err != nil {
+				fmt.Fprintf(os.Stderr, "diskstore rotate failed for %s: %v\n", nodeID, err)
+			}
+		}
+	}
+}

@@ -14,16 +14,20 @@
 //! current deduped state plus writes that arrived during the snapshot, then
 //! atomically swaps it in (the final rename is the commit point).
 
+use crate::archive::{
+    checkpoint_pending, pad, rotated_path, segment_pending, seq_after, ArchiveShipper, CHECKPOINT_TAG,
+    ROTATED_TAG, SEGMENT_TAG,
+};
 use crate::compress::{compress, decompress_auto, Codec};
 use crate::error::{DiskStoreError, Result};
-use crate::fsutil::{promote, rotate_archives, write_temp};
+use crate::fsutil::{atomic_write, promote, rotate_archives, write_temp};
 use crate::path::store_path;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// One redo-log record (the JSON envelope), NDJSON-framed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +60,12 @@ pub struct RedoLog {
     archive_count: u32,
     archive_codec: Codec,
     inner: Mutex<Inner>,
+    /// Serializes rotate and checkpoint against a roll's shipping step: a
+    /// checkpoint's redo position must be read in the same critical section as its
+    /// snapshot, so no segment can be allocated between the two. Taken before
+    /// `inner`; never held across an await.
+    ship_lock: Mutex<()>,
+    shipper: Mutex<Option<Arc<ArchiveShipper>>>,
 }
 
 struct Inner {
@@ -65,6 +75,12 @@ struct Inner {
     /// roll covered; a roll with nothing new since then has nothing to compact.
     appended: u64,
     rolled_through: Option<u64>,
+    /// The append count the archive holds: a rotation or a roll shipped everything
+    /// up to here. A rotation with nothing new ships nothing.
+    shipped_through: Option<u64>,
+    /// True between a roll's redirect and its commit, while appends go to the temp
+    /// log. A rotation then would move the active log out from under the roll.
+    rolling: bool,
 }
 
 impl RedoLog {
@@ -89,7 +105,15 @@ impl RedoLog {
             active,
             archive_count,
             archive_codec,
-            inner: Mutex::new(Inner { writer: Some(writer), appended: 0, rolled_through: None }),
+            inner: Mutex::new(Inner {
+                writer: Some(writer),
+                appended: 0,
+                rolled_through: None,
+                shipped_through: None,
+                rolling: false,
+            }),
+            ship_lock: Mutex::new(()),
+            shipper: Mutex::new(None),
         })
     }
 
@@ -131,11 +155,16 @@ impl RedoLog {
     /// appended since the last committed roll (nothing to compact; no redirect).
     pub(crate) fn redirect_appends(&self) -> Result<Option<u64>> {
         let temp_path = sibling(&self.active, ".temp");
+        // Learn the archive's sequence before taking the append lock: it lists the sink.
+        if let Some(shipper) = self.shipper() {
+            shipper.resolve()?;
+        }
         let mut g = self.inner.lock().expect("redolog lock poisoned");
         if g.rolled_through == Some(g.appended) {
             return Ok(None);
         }
         g.writer = Some(OpenOptions::new().create(true).append(true).open(&temp_path)?);
+        g.rolling = true;
         Ok(Some(g.appended))
     }
 
@@ -155,7 +184,10 @@ impl RedoLog {
         promote(&staged, &building)?;
 
         // 3. Block appends; fold the temp log into the new baseline; swap.
+        let shipper = self.shipper();
+        let mut folded = 0;
         {
+            let _ship = self.ship_lock.lock().expect("redolog lock poisoned");
             let mut g = self.inner.lock().expect("redolog lock poisoned");
             g.writer
                 .as_ref()
@@ -171,18 +203,211 @@ impl RedoLog {
                 f.write_all(&temp_bytes)?;
                 f.sync_all()?;
             }
-            // Archive the old active (compressed at rest), then promote.
-            rotate_archives(&self.active, self.archive_count)?;
-            if self.archive_count > 0 && self.archive_codec != Codec::None {
-                compress_in_place(&sibling(&self.active, ".bak.1"), self.archive_codec)?;
+            match &shipper {
+                None => {
+                    // Archive the old active (compressed at rest), then promote.
+                    rotate_archives(&self.active, self.archive_count)?;
+                    if self.archive_count > 0 && self.archive_codec != Codec::None {
+                        compress_in_place(&sibling(&self.active, ".bak.1"), self.archive_codec)?;
+                    }
+                }
+                Some(shipper) => {
+                    self.ship_active_segment(shipper)?;
+                    // The new baseline folds every segment allocated so far: they stop
+                    // being replayed locally, and are deleted once shipped. The marker
+                    // lands before the promote, so a crash between the two never
+                    // replays a folded segment over the baseline.
+                    folded = shipper.position();
+                    self.write_folded(folded)?;
+                    shipper.set_folded(folded);
+                    g.shipped_through = Some(seen);
+                }
             }
             promote(&building, &self.active)?;
             // Resume appends on the (new) active log.
             g.writer = Some(OpenOptions::new().create(true).append(true).open(&self.active)?);
             let _ = std::fs::remove_file(&temp_path);
             g.rolled_through = Some(seen);
+            g.rolling = false;
+        }
+        if folded > 0 {
+            self.delete_folded_segments(folded);
         }
         Ok(())
+    }
+
+    /// Rotate: close the active log, ship it as the next segment, and open a fresh
+    /// active log. No snapshot is taken and no baseline is folded, so the cost is
+    /// the writes since the last rotation. Run on an interval it sets the recovery
+    /// point after losing the volume, while [`RedoLog::roll`] stays the (rarer)
+    /// compaction.
+    ///
+    /// The segment stays on the local volume after it ships, and
+    /// [`RedoLog::restore`] replays it, until a later roll folds it into a
+    /// baseline. The first rotation after a roll carries that roll's baseline. A
+    /// rotation with nothing appended since the last one ships nothing, and one
+    /// that meets a roll in progress returns `Ok(false)` and waits for the next
+    /// interval. Requires an attached [`ArchiveShipper`]. Returns whether a segment
+    /// was shipped.
+    pub fn rotate(&self) -> Result<bool> {
+        let shipper = self
+            .shipper()
+            .ok_or_else(|| DiskStoreError::general("rotate requires an archive; attach_shipper first"))?;
+        shipper.resolve()?;
+        let _ship = self.ship_lock.lock().expect("redolog lock poisoned");
+        let mut g = self.inner.lock().expect("redolog lock poisoned");
+        if g.rolling || g.shipped_through == Some(g.appended) {
+            return Ok(false);
+        }
+        if std::fs::metadata(&self.active).map(|m| m.len() == 0).unwrap_or(true) {
+            g.shipped_through = Some(g.appended);
+            return Ok(false);
+        }
+        g.writer = None;
+        let shipped = self.ship_active_segment(&shipper);
+        // Appends resume whether or not the move happened.
+        g.writer = Some(OpenOptions::new().create(true).append(true).open(&self.active)?);
+        shipped?;
+        g.shipped_through = Some(g.appended);
+        Ok(true)
+    }
+
+    /// Ships this log to `shipper`'s archive. Pending segments and checkpoints a
+    /// previous process left behind are re-queued first. Attach before the first
+    /// roll so every roll is shipped.
+    pub fn attach_shipper(&self, shipper: Arc<ArchiveShipper>) -> Result<()> {
+        let dir = self.active.parent().map(Path::to_path_buf).unwrap_or_default();
+        let name = file_name(&self.active);
+        let mut pending: Vec<PathBuf> = Vec::new();
+        for entry in std::fs::read_dir(&dir)? {
+            let f = entry?.file_name().to_string_lossy().into_owned();
+            if f.starts_with(&format!("{name}{SEGMENT_TAG}")) || f.starts_with(&format!("{name}{CHECKPOINT_TAG}")) {
+                pending.push(dir.join(f));
+            }
+        }
+        pending.sort();
+        let folded = self.read_folded()?;
+        shipper.set_folded(folded);
+        self.delete_folded_segments(folded);
+        for file in pending {
+            shipper.recover(file);
+        }
+        *self.shipper.lock().expect("redolog lock poisoned") = Some(shipper);
+        Ok(())
+    }
+
+    /// Ships a checkpoint: the full store state as of now, recorded under the redo
+    /// position it covers (the newest segment shipped). A restore loads the newest
+    /// checkpoint and replays the segments shipped after it. Requires an attached
+    /// [`ArchiveShipper`]. If `snapshot` fails nothing is shipped.
+    pub fn checkpoint(&self, snapshot: impl FnOnce() -> Result<Vec<Record>>) -> Result<()> {
+        let shipper = self
+            .shipper()
+            .ok_or_else(|| DiskStoreError::general("checkpoint requires an archive; attach_shipper first"))?;
+        shipper.resolve()?;
+        let (position, recs) = {
+            let _ship = self.ship_lock.lock().expect("redolog lock poisoned");
+            (shipper.position(), snapshot()?)
+        };
+        let mut buf = Vec::new();
+        for rec in &recs {
+            serde_json::to_writer(&mut buf, rec)?;
+            buf.push(b'\n');
+        }
+        let file = checkpoint_pending(&self.active, position);
+        atomic_write(&file, &buf, 0)?;
+        shipper.enqueue_checkpoint(file, position);
+        Ok(())
+    }
+
+    /// Objects this log has yet to ship to its archive; 0 when no archive is attached.
+    pub fn ship_pending(&self) -> usize {
+        self.shipper().map(|s| s.pending()).unwrap_or(0)
+    }
+
+    fn shipper(&self) -> Option<Arc<ArchiveShipper>> {
+        self.shipper.lock().expect("redolog lock poisoned").clone()
+    }
+
+    // Moves the active log out of the active position and queues it as the next
+    // segment. The caller holds `ship_lock` and has the writer closed or on the
+    // temp log. The segment holds every append since the previous roll or
+    // rotation; it stays on disk until the archive holds it.
+    fn ship_active_segment(&self, shipper: &ArchiveShipper) -> Result<()> {
+        if std::fs::metadata(&self.active).map(|m| m.len() == 0).unwrap_or(true) {
+            return Ok(());
+        }
+        let seq = shipper.allocate_seq();
+        let segment = segment_pending(&self.active, seq);
+        std::fs::rename(&self.active, &segment)?;
+        shipper.enqueue_segment(segment, seq);
+        Ok(())
+    }
+
+    fn folded_marker(&self) -> PathBuf {
+        sibling(&self.active, ".folded")
+    }
+
+    // The highest segment sequence a roll has folded into the baseline; 0 if none.
+    fn read_folded(&self) -> Result<u64> {
+        match std::fs::read_to_string(self.folded_marker()) {
+            Ok(s) => s.trim().parse().map_err(|e| {
+                DiskStoreError::invalid_data(format!("folded marker {}: {e}", self.folded_marker().display()))
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn write_folded(&self, seq: u64) -> Result<()> {
+        atomic_write(&self.folded_marker(), seq.to_string().as_bytes(), 0)
+    }
+
+    // Sequences of the local segment files (pending or shipped) that no baseline
+    // covers yet, oldest first.
+    fn local_segments(&self) -> Result<BTreeSet<u64>> {
+        let folded = self.read_folded()?;
+        let name = file_name(&self.active);
+        let dir = self.active.parent().map(Path::to_path_buf).unwrap_or_default();
+        let mut seqs = BTreeSet::new();
+        for entry in std::fs::read_dir(&dir)? {
+            let f = entry?.file_name().to_string_lossy().into_owned();
+            for tag in [SEGMENT_TAG, ROTATED_TAG] {
+                if f.starts_with(&format!("{name}{tag}")) {
+                    if let Some(seq) = seq_after(&f, tag).filter(|s| *s > folded) {
+                        seqs.insert(seq);
+                    }
+                }
+            }
+        }
+        Ok(seqs)
+    }
+
+    // A segment is pending until it ships and rotated after; the shipper renames
+    // it between the two, so try both names.
+    fn read_segment(&self, seq: u64) -> Result<Vec<Record>> {
+        for p in [segment_pending(&self.active, seq), rotated_path(&self.active, seq)] {
+            if p.exists() {
+                return dedup_file(&p);
+            }
+        }
+        Err(DiskStoreError::io(format!("local segment {} vanished during restore", pad(seq))))
+    }
+
+    // Deletes the shipped segments a baseline now covers. One still queued is
+    // deleted by the shipper when it uploads.
+    fn delete_folded_segments(&self, folded: u64) {
+        let name = file_name(&self.active);
+        let Some(dir) = self.active.parent() else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let f = entry.file_name().to_string_lossy().into_owned();
+            if f.starts_with(&format!("{name}{ROTATED_TAG}"))
+                && seq_after(&f, ROTATED_TAG).is_some_and(|s| s <= folded)
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
     }
 
     /// Read + dedup the active log and replay each record through `inserter`.
@@ -197,18 +422,30 @@ impl RedoLog {
             g.writer = Some(OpenOptions::new().create(true).append(true).open(&self.active)?);
         }
 
-        let mut recs = dedup_file(&self.active)?;
-        let temp_path = sibling(&self.active, ".temp");
-        if temp_path.exists() {
-            let extra = dedup_file(&temp_path)?;
-            let mut by_key: HashMap<String, Record> = HashMap::new();
-            for r in recs.into_iter().chain(extra.into_iter()) {
+        // Oldest first, the last write per key winning: the rotated segments no
+        // baseline covers yet (the first carries the last roll's baseline), then the
+        // active log, then a leftover temp log.
+        let mut order: Vec<String> = Vec::new();
+        let mut by_key: HashMap<String, Record> = HashMap::new();
+        let mut fold = |recs: Vec<Record>| {
+            for r in recs {
+                if !by_key.contains_key(&r.key) {
+                    order.push(r.key.clone());
+                }
                 by_key.insert(r.key.clone(), r);
             }
-            recs = by_key.into_values().collect();
+        };
+        for seq in self.local_segments()? {
+            fold(self.read_segment(seq)?);
         }
+        fold(dedup_file(&self.active)?);
+        let temp_path = sibling(&self.active, ".temp");
+        if temp_path.exists() {
+            fold(dedup_file(&temp_path)?);
+        }
+        let recs: Vec<&Record> = order.iter().map(|k| &by_key[k]).collect();
         let mut n = 0;
-        for r in &recs {
+        for r in recs {
             inserter.insert(r)?;
             n += 1;
         }
@@ -252,7 +489,11 @@ fn compress_in_place(path: &Path, codec: Codec) -> Result<()> {
     promote(&tmp, path)
 }
 
-fn sibling(path: &Path, suffix: &str) -> PathBuf {
+fn file_name(path: &Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+pub(crate) fn sibling(path: &Path, suffix: &str) -> PathBuf {
     let mut s = path.as_os_str().to_owned();
     s.push(suffix);
     PathBuf::from(s)

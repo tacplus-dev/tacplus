@@ -96,6 +96,9 @@ public final class RedoLog implements AutoCloseable {
     // since then has nothing to compact or ship.
     private long appended;
     private long rolledThrough = -1;
+    // Guarded by lock. The appended count the archive holds: a rotation or a roll
+    // shipped everything up to here. A rotation with nothing new has nothing to ship.
+    private long shippedThrough = -1;
 
     private RedoLog(Path active, int archiveCount, Codec archiveCodec) {
         this.active = active;
@@ -175,6 +178,7 @@ public final class RedoLog implements AutoCloseable {
     }
 
     private void rollLocked(Supplier<List<Record>> snapshot) {
+        long folded = 0;
         Path tempPath = FsUtil.sibling(active, ".temp");
         Path building = FsUtil.sibling(active, ".building");
 
@@ -220,6 +224,14 @@ public final class RedoLog implements AutoCloseable {
                     }
                 } else {
                     shipRolledSegment();
+                    // The new baseline folds every segment allocated so far: they stop
+                    // being replayed locally, and are deleted once shipped. The marker
+                    // lands before the promote, so a crash between the two never
+                    // replays a folded segment over the baseline.
+                    folded = shipper.position();
+                    writeFolded(folded);
+                    shipper.setFolded(folded);
+                    shippedThrough = seen;
                 }
                 FsUtil.promote(building, active);
 
@@ -231,6 +243,52 @@ public final class RedoLog implements AutoCloseable {
                 rolledThrough = seen;
             } catch (IOException e) {
                 throw DiskStoreException.io(e.getMessage(), e);
+            }
+        }
+        if (folded > 0) {
+            deleteFoldedSegments(folded);
+        }
+    }
+
+    /**
+     * Rotate: close the active log, ship it as the next segment, and open a fresh
+     * active log. No snapshot is taken and no baseline is folded, so the cost is the
+     * writes since the last rotation. Run on an interval it sets the recovery point
+     * after losing the volume, while {@link #roll} stays the (rarer) compaction.
+     *
+     * <p>The segment stays on the local volume after it ships, and local recovery
+     * ({@link #restore}) replays it, until a later {@code roll} folds it into a
+     * baseline. The first rotation after a roll carries that roll's baseline. A
+     * rotation with nothing appended since the last one ships nothing. Requires an
+     * attached {@link ArchiveShipper}.
+     */
+    public void rotate() {
+        if (shipper == null) {
+            throw new IllegalStateException("rotate requires an archive; attachShipper first");
+        }
+        synchronized (rollLock) {
+            resolveShipper();
+            synchronized (lock) {
+                if (appended == shippedThrough) {
+                    return;
+                }
+                try {
+                    if (!Files.exists(active) || Files.size(active) == 0) {
+                        shippedThrough = appended;
+                        return;
+                    }
+                    closeWriter();
+                    try {
+                        shipRolledSegment();
+                    } finally {
+                        // Appends resume whether or not the move happened.
+                        writer = openAppend(active);
+                        writerTarget = active;
+                    }
+                    shippedThrough = appended;
+                } catch (IOException e) {
+                    throw DiskStoreException.io(e.getMessage(), e);
+                }
             }
         }
     }
@@ -253,6 +311,9 @@ public final class RedoLog implements AutoCloseable {
         } catch (IOException e) {
             throw DiskStoreException.io(e.getMessage(), e);
         }
+        long folded = readFolded(active);
+        shipper.setFolded(folded);
+        deleteFoldedSegments(folded);
         for (Path file : pending) {
             shipper.recover(file);
         }
@@ -307,7 +368,7 @@ public final class RedoLog implements AutoCloseable {
     // append since the previous roll. It is moved out of the active position and
     // queued, and stays on disk until the archive holds it.
     private void shipRolledSegment() throws IOException {
-        if (!Files.exists(active)) {
+        if (!Files.exists(active) || Files.size(active) == 0) {
             return;
         }
         long seq = shipper.allocateSeq();
@@ -336,25 +397,109 @@ public final class RedoLog implements AutoCloseable {
             }
         }
 
-        List<Record> recs = dedupFile(active);
+        // Oldest first, the last write per key winning: the rotated segments no
+        // baseline covers yet (the first carries the last roll's baseline), then the
+        // active log, then a leftover temp log.
+        Map<String, Record> byKey = new LinkedHashMap<>();
+        for (long seq : unfoldedSegments()) {
+            for (Record r : readSegment(seq)) {
+                byKey.put(r.key, r);
+            }
+        }
+        for (Record r : dedupFile(active)) {
+            byKey.put(r.key, r);
+        }
         Path tempPath = FsUtil.sibling(active, ".temp");
         if (Files.exists(tempPath)) {
-            List<Record> extra = dedupFile(tempPath);
-            Map<String, Record> byKey = new LinkedHashMap<>();
-            for (Record r : recs) {
+            for (Record r : dedupFile(tempPath)) {
                 byKey.put(r.key, r);
             }
-            for (Record r : extra) {
-                byKey.put(r.key, r);
-            }
-            recs = new ArrayList<>(byKey.values());
         }
         int n = 0;
-        for (Record r : recs) {
+        for (Record r : byKey.values()) {
             inserter.insert(r);
             n++;
         }
         return n;
+    }
+
+    // ---- rotated segments kept on the volume ----
+
+    private Path foldedMarker() {
+        return FsUtil.sibling(active, ".folded");
+    }
+
+    // The highest segment sequence a roll has folded into the baseline; 0 if none.
+    private static long readFolded(Path active) {
+        Path marker = FsUtil.sibling(active, ".folded");
+        try {
+            return Files.exists(marker)
+                    ? Long.parseLong(new String(Files.readAllBytes(marker), StandardCharsets.UTF_8).trim())
+                    : 0;
+        } catch (IOException | NumberFormatException e) {
+            throw DiskStoreException.io("folded marker " + marker + ": " + e.getMessage(), e);
+        }
+    }
+
+    private void writeFolded(long seq) {
+        FsUtil.atomicWrite(foldedMarker(), Long.toString(seq).getBytes(StandardCharsets.UTF_8), 0);
+    }
+
+    // Sequences of the local segment files (pending or shipped) that no baseline
+    // covers yet, oldest first.
+    private List<Long> unfoldedSegments() {
+        long folded = readFolded(active);
+        java.util.TreeSet<Long> seqs = new java.util.TreeSet<>();
+        String name = active.getFileName().toString();
+        try (java.util.stream.Stream<Path> files = Files.list(active.getParent())) {
+            files.forEach(p -> {
+                String f = p.getFileName().toString();
+                for (String tag : new String[] {ArchiveShipper.SEGMENT_TAG, ArchiveShipper.ROTATED_TAG}) {
+                    if (f.startsWith(name + tag) && ArchiveShipper.seqAfter(f, tag) > folded) {
+                        seqs.add(ArchiveShipper.seqAfter(f, tag));
+                    }
+                }
+            });
+        } catch (IOException e) {
+            throw DiskStoreException.io(e.getMessage(), e);
+        }
+        return new ArrayList<>(seqs);
+    }
+
+    // A segment is pending until it ships and rotated after; the shipper renames it
+    // between the two, so try both names.
+    private List<Record> readSegment(long seq) {
+        for (Path p : new Path[] {ArchiveShipper.segmentPending(active, seq), ArchiveShipper.rotatedPath(active, seq)}) {
+            try {
+                return dedupBytes(Codec.decompressAuto(Files.readAllBytes(p)));
+            } catch (java.nio.file.NoSuchFileException e) {
+                // moved or not there; try the other name
+            } catch (IOException e) {
+                throw DiskStoreException.io(e.getMessage(), e);
+            }
+        }
+        throw DiskStoreException.io("local segment " + seq + " vanished during restore");
+    }
+
+    // Deletes the shipped segments a baseline now covers. One still queued is
+    // deleted by the shipper when it uploads.
+    private void deleteFoldedSegments(long folded) {
+        String name = active.getFileName().toString();
+        try (java.util.stream.Stream<Path> files = Files.list(active.getParent())) {
+            files.filter(p -> {
+                String f = p.getFileName().toString();
+                return f.startsWith(name + ArchiveShipper.ROTATED_TAG)
+                        && ArchiveShipper.seqAfter(f, ArchiveShipper.ROTATED_TAG) <= folded;
+            }).forEach(p -> {
+                try {
+                    Files.deleteIfExists(p);
+                } catch (IOException ignored) {
+                    // retried on the next roll
+                }
+            });
+        } catch (IOException e) {
+            throw DiskStoreException.io(e.getMessage(), e);
+        }
     }
 
     @Override

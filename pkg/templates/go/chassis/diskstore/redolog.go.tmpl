@@ -24,6 +24,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -62,6 +65,13 @@ type RedoLog struct {
 	archiveCount uint32
 	archiveCodec Codec
 
+	// rollMu serializes Roll, Rotate and Checkpoint: a checkpoint's redo position
+	// must be read in the same critical section as its snapshot, so no roll can
+	// land between the two. It is held across the snapshot, which takes the
+	// store's lock; no path takes rollMu while holding that store lock.
+	rollMu  sync.Mutex
+	shipper *ArchiveShipper
+
 	mu     sync.Mutex
 	writer *os.File
 	// Guarded by mu. appended counts every Append; rolledThrough is the
@@ -69,6 +79,9 @@ type RedoLog struct {
 	// since then has nothing to compact.
 	appended      int64
 	rolledThrough int64
+	// shippedThrough is the appended count the archive holds: a rotation or a roll
+	// shipped everything up to here. A rotation with nothing new ships nothing.
+	shippedThrough int64
 }
 
 // OpenRedoLog opens (creating if absent) the redo log for (ns, store) under
@@ -87,11 +100,12 @@ func OpenRedoLog(base, ns, store string, archiveCount uint32, archiveCodec Codec
 		return nil, wrapIOError(err)
 	}
 	return &RedoLog{
-		active:        active,
-		archiveCount:  archiveCount,
-		archiveCodec:  archiveCodec,
-		writer:        w,
-		rolledThrough: -1,
+		active:         active,
+		archiveCount:   archiveCount,
+		archiveCodec:   archiveCodec,
+		writer:         w,
+		rolledThrough:  -1,
+		shippedThrough: -1,
 	}, nil
 }
 
@@ -148,6 +162,13 @@ func (l *RedoLog) Roll(snapshot []*Record) error {
 // log and is folded in. Read before the redirect, it would go to the old active
 // log and miss the new baseline.
 func (l *RedoLog) rollFrom(snapshot func() []*Record) error {
+	l.rollMu.Lock()
+	defer l.rollMu.Unlock()
+	if l.shipper != nil {
+		if err := l.shipper.resolve(); err != nil {
+			return err
+		}
+	}
 	tempPath := sibling(l.active, ".temp")
 	building := sibling(l.active, ".building")
 
@@ -221,14 +242,31 @@ func (l *RedoLog) rollFrom(snapshot func() []*Record) error {
 			return wrapIOError(err)
 		}
 	}
-	// Archive the old active (compressed at rest), then promote.
-	if err := rotateArchives(l.active, l.archiveCount); err != nil {
-		return err
-	}
-	if l.archiveCount > 0 && l.archiveCodec != CodecNone {
-		if err := compressInPlace(sibling(l.active, ".bak.1"), l.archiveCodec); err != nil {
+	var folded int64
+	if l.shipper == nil {
+		// Archive the old active (compressed at rest), then promote.
+		if err := rotateArchives(l.active, l.archiveCount); err != nil {
 			return err
 		}
+		if l.archiveCount > 0 && l.archiveCodec != CodecNone {
+			if err := compressInPlace(sibling(l.active, ".bak.1"), l.archiveCodec); err != nil {
+				return err
+			}
+		}
+	} else {
+		if err := l.shipActiveSegment(); err != nil {
+			return err
+		}
+		// The new baseline folds every segment allocated so far: they stop being
+		// replayed locally, and are deleted once shipped. The marker lands before
+		// the promote, so a crash between the two never replays a folded segment
+		// over the baseline.
+		folded = l.shipper.position()
+		if err := l.writeFolded(folded); err != nil {
+			return err
+		}
+		l.shipper.setFolded(folded)
+		l.shippedThrough = seen
 	}
 	if l.writer != nil {
 		_ = l.writer.Close()
@@ -244,7 +282,240 @@ func (l *RedoLog) rollFrom(snapshot func() []*Record) error {
 	l.writer = w
 	_ = os.Remove(tempPath)
 	l.rolledThrough = seen
+	if folded > 0 {
+		l.deleteFoldedSegments(folded)
+	}
 	return nil
+}
+
+// Rotate closes the active log, ships it as the next segment, and opens a fresh
+// active log. No snapshot is taken and no baseline is folded, so the cost is the
+// writes since the last rotation. Run on an interval it sets the recovery point
+// after losing the volume, while Roll stays the (rarer) compaction.
+//
+// The segment stays on the local volume after it ships, and Restore replays it,
+// until a later Roll folds it into a baseline. The first rotation after a roll
+// carries that roll's baseline. A rotation with nothing appended since the last
+// one ships nothing. It requires an attached ArchiveShipper.
+func (l *RedoLog) Rotate() error {
+	l.rollMu.Lock()
+	defer l.rollMu.Unlock()
+	if l.shipper == nil {
+		return ErrGeneral("rotate requires an archive; AttachShipper first")
+	}
+	if err := l.shipper.resolve(); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.appended == l.shippedThrough {
+		return nil
+	}
+	if info, err := os.Stat(l.active); err != nil || info.Size() == 0 {
+		l.shippedThrough = l.appended
+		return nil
+	}
+	if l.writer != nil {
+		_ = l.writer.Close()
+		l.writer = nil
+	}
+	shipErr := l.shipActiveSegment()
+	// Appends resume whether or not the move happened.
+	w, err := os.OpenFile(l.active, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return wrapIOError(err)
+	}
+	l.writer = w
+	if shipErr != nil {
+		return shipErr
+	}
+	l.shippedThrough = l.appended
+	return nil
+}
+
+// AttachShipper ships this log to shipper's archive. Pending segments and
+// checkpoints a previous process left behind are re-queued first. Attach before
+// the first roll so every roll is shipped.
+func (l *RedoLog) AttachShipper(shipper *ArchiveShipper) error {
+	dir := filepath.Dir(l.active)
+	name := filepath.Base(l.active)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return wrapIOError(err)
+	}
+	var pending []string
+	for _, e := range entries {
+		f := e.Name()
+		if strings.HasPrefix(f, name+segmentTag) || strings.HasPrefix(f, name+checkpointTag) {
+			pending = append(pending, filepath.Join(dir, f))
+		}
+	}
+	sort.Strings(pending)
+	folded, err := l.readFolded()
+	if err != nil {
+		return err
+	}
+	shipper.setFolded(folded)
+	l.deleteFoldedSegments(folded)
+	for _, file := range pending {
+		shipper.recoverFile(file)
+	}
+	l.rollMu.Lock()
+	l.shipper = shipper
+	l.rollMu.Unlock()
+	return nil
+}
+
+// Checkpoint ships a checkpoint: the full store state as of now, recorded under
+// the redo position it covers (the newest segment shipped). A restore loads the
+// newest checkpoint and replays the segments shipped after it. It requires an
+// attached ArchiveShipper. If snapshot fails nothing is shipped.
+func (l *RedoLog) Checkpoint(snapshot func() ([]*Record, error)) error {
+	l.rollMu.Lock()
+	shipper := l.shipper
+	if shipper == nil {
+		l.rollMu.Unlock()
+		return ErrGeneral("checkpoint requires an archive; AttachShipper first")
+	}
+	if err := shipper.resolve(); err != nil {
+		l.rollMu.Unlock()
+		return err
+	}
+	position := shipper.position()
+	recs, err := snapshot()
+	l.rollMu.Unlock()
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	for _, rec := range recs {
+		b, err := json.Marshal(rec)
+		if err != nil {
+			return ErrCodec(err.Error())
+		}
+		buf.Write(b)
+		buf.WriteByte('\n')
+	}
+	file := checkpointPending(l.active, position)
+	if err := atomicWrite(file, buf.Bytes(), 0); err != nil {
+		return err
+	}
+	shipper.enqueueCheckpoint(file, position)
+	return nil
+}
+
+// ShipPending is the number of objects this log has yet to ship; 0 with no archive.
+func (l *RedoLog) ShipPending() int {
+	if l.shipper == nil {
+		return 0
+	}
+	return l.shipper.Pending()
+}
+
+// shipActiveSegment moves the active log out of the active position and queues it
+// as the next segment. The caller holds rollMu and mu. The segment holds every
+// append since the previous roll or rotation; it stays on disk until the archive
+// holds it.
+func (l *RedoLog) shipActiveSegment() error {
+	info, err := os.Stat(l.active)
+	if err != nil || info.Size() == 0 {
+		return nil
+	}
+	seq := l.shipper.allocateSeq()
+	segment := segmentPending(l.active, seq)
+	if err := os.Rename(l.active, segment); err != nil {
+		return wrapIOError(err)
+	}
+	l.shipper.enqueueSegment(segment, seq)
+	return nil
+}
+
+func (l *RedoLog) foldedMarker() string { return sibling(l.active, ".folded") }
+
+// readFolded is the highest segment sequence a roll has folded into the baseline;
+// 0 if none.
+func (l *RedoLog) readFolded() (int64, error) {
+	data, err := os.ReadFile(l.foldedMarker())
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, wrapIOError(err)
+	}
+	seq, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0, ErrInvalidData("folded marker " + l.foldedMarker() + ": " + err.Error())
+	}
+	return seq, nil
+}
+
+func (l *RedoLog) writeFolded(seq int64) error {
+	return atomicWrite(l.foldedMarker(), []byte(strconv.FormatInt(seq, 10)), 0)
+}
+
+// localSegments lists the sequences of the local segment files, pending or
+// shipped, that no baseline covers yet, oldest first.
+func (l *RedoLog) localSegments() ([]int64, error) {
+	folded, err := l.readFolded()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(filepath.Dir(l.active))
+	if err != nil {
+		return nil, wrapIOError(err)
+	}
+	name := filepath.Base(l.active)
+	seen := map[int64]bool{}
+	var seqs []int64
+	for _, e := range entries {
+		f := e.Name()
+		for _, tag := range []string{segmentTag, rotatedTag} {
+			if !strings.HasPrefix(f, name+tag) {
+				continue
+			}
+			if seq, ok := seqAfter(f, tag); ok && seq > folded && !seen[seq] {
+				seen[seq] = true
+				seqs = append(seqs, seq)
+			}
+		}
+	}
+	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+	return seqs, nil
+}
+
+// readSegment reads one local segment. It is pending until it ships and rotated
+// after; the shipper renames it between the two, so try both names.
+func (l *RedoLog) readSegment(seq int64) ([]*Record, error) {
+	for _, p := range []string{segmentPending(l.active, seq), rotatedPath(l.active, seq)} {
+		if !fileExists(p) {
+			continue
+		}
+		recs, err := DedupFile(p)
+		if err != nil {
+			return nil, err
+		}
+		return recs, nil
+	}
+	return nil, ErrIO(fmt.Sprintf("local segment %d vanished during restore", seq))
+}
+
+// deleteFoldedSegments deletes the shipped segments a baseline now covers. One
+// still queued is deleted by the shipper when it uploads.
+func (l *RedoLog) deleteFoldedSegments(folded int64) {
+	entries, err := os.ReadDir(filepath.Dir(l.active))
+	if err != nil {
+		return
+	}
+	name := filepath.Base(l.active)
+	for _, e := range entries {
+		f := e.Name()
+		if !strings.HasPrefix(f, name+rotatedTag) {
+			continue
+		}
+		if seq, ok := seqAfter(f, rotatedTag); ok && seq <= folded {
+			_ = os.Remove(filepath.Join(filepath.Dir(l.active), f))
+		}
+	}
 }
 
 // Restore reads + dedups the active log and replays each record through
@@ -271,30 +542,46 @@ func (l *RedoLog) Restore(inserter Inserter) (int, error) {
 		l.mu.Unlock()
 	}
 
+	// Oldest first, the last write per key winning: the rotated segments no
+	// baseline covers yet (the first carries the last roll's baseline), then the
+	// active log, then a leftover temp log.
+	byKey := make(map[string]*Record)
+	var order []string
+	fold := func(recs []*Record) {
+		for _, r := range recs {
+			if _, seen := byKey[r.Key]; !seen {
+				order = append(order, r.Key)
+			}
+			byKey[r.Key] = r
+		}
+	}
+	seqs, err := l.localSegments()
+	if err != nil {
+		return 0, err
+	}
+	for _, seq := range seqs {
+		recs, err := l.readSegment(seq)
+		if err != nil {
+			return 0, err
+		}
+		fold(recs)
+	}
 	recs, err := DedupFile(l.active)
 	if err != nil {
 		return 0, err
 	}
+	fold(recs)
 	tempPath := sibling(l.active, ".temp")
 	if fileExists(tempPath) {
 		extra, err := DedupFile(tempPath)
 		if err != nil {
 			return 0, err
 		}
-		byKey := make(map[string]*Record)
-		for _, r := range recs {
-			byKey[r.Key] = r
-		}
-		for _, r := range extra {
-			byKey[r.Key] = r
-		}
-		recs = recs[:0]
-		for _, r := range byKey {
-			recs = append(recs, r)
-		}
+		fold(extra)
 	}
 	n := 0
-	for _, r := range recs {
+	for _, key := range order {
+		r := byKey[key]
 		if err := inserter.Insert(r); err != nil {
 			return n, err
 		}

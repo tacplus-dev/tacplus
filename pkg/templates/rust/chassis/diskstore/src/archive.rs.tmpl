@@ -1,0 +1,723 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+//! Archive of the redo log to an object store.
+//!
+//! A **segment** is a redo log shipped out of the active position: every append
+//! up to a roll or a rotation. A **checkpoint** is a full snapshot of the store,
+//! stored under the redo position it covers. Each is first written to a pending
+//! file in the log's directory and deleted only after its upload has succeeded, so
+//! a segment is never removed locally before it is safe in the archive. A shipped
+//! segment is also kept, renamed `.rotated-<seq>`, until a roll has folded it into
+//! a baseline; local recovery replays it until then. Uploads run FIFO on one
+//! thread, so segments reach the sink in order and a failed upload is retried,
+//! with capped backoff, before anything behind it ships. Appends never wait on the
+//! shipper.
+//!
+//! Object names are `<prefix>/<member>/<store>/segments/<seq>` and
+//! `<prefix>/<member>/<store>/checkpoints/<seq>`, with `seq` zero-padded to twenty
+//! digits so lexical order is shipping order.
+
+use crate::compress::{compress, decompress_auto, Codec};
+use crate::error::{DiskStoreError, Result};
+use crate::fsutil::atomic_write;
+use crate::redolog::{dedup_bytes, sibling, Inserter, Record};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::JoinHandle;
+use std::time::Duration;
+
+pub(crate) const SEGMENTS: &str = "segments";
+pub(crate) const CHECKPOINTS: &str = "checkpoints";
+pub(crate) const SEGMENT_TAG: &str = ".segment-";
+pub(crate) const CHECKPOINT_TAG: &str = ".checkpoint-";
+pub(crate) const ROTATED_TAG: &str = ".rotated-";
+const SEQ_DIGITS: usize = 20;
+const RETRY_BASE: Duration = Duration::from_secs(1);
+const RETRY_CAP_FACTOR: u32 = 300;
+
+/// The object store the redo log ships to. The chassis ships to and restores from
+/// this trait; a concrete store is the only part that knows the provider. Objects
+/// are written whole and replaced by name, so `put` must be idempotent: a retried
+/// upload of the same name is harmless.
+pub trait ArchiveSink: Send + Sync {
+    /// Store `data` under `name`, replacing any object already there.
+    fn put(&self, name: &str, data: &[u8]) -> Result<()>;
+    /// The bytes stored under `name`, or `None` if there is no such object.
+    fn get(&self, name: &str) -> Result<Option<Vec<u8>>>;
+    /// Names of every object whose name starts with `prefix`, in lexical order.
+    fn list(&self, prefix: &str) -> Result<Vec<String>>;
+}
+
+/// An [`ArchiveSink`] over a directory: an object named `a/b` is the file
+/// `<dir>/a/b`. It serves a mounted object store and tests.
+pub struct DirArchiveSink {
+    dir: PathBuf,
+}
+
+impl DirArchiveSink {
+    /// A sink rooted at `dir`.
+    pub fn new(dir: impl Into<PathBuf>) -> Self {
+        Self { dir: dir.into() }
+    }
+
+    fn walk(&self, dir: &Path, prefix: &str, out: &mut Vec<String>) -> Result<()> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        for entry in entries {
+            let path = entry?.path();
+            if path.is_dir() {
+                self.walk(&path, prefix, out)?;
+            } else if let Ok(rel) = path.strip_prefix(&self.dir) {
+                let name = rel.to_string_lossy().replace('\\', "/");
+                if !name.contains(".tmp.") && name.starts_with(prefix) {
+                    out.push(name);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ArchiveSink for DirArchiveSink {
+    fn put(&self, name: &str, data: &[u8]) -> Result<()> {
+        atomic_write(&self.dir.join(name), data, 0)
+    }
+
+    fn get(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        match std::fs::read(self.dir.join(name)) {
+            Ok(b) => Ok(Some(b)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn list(&self, prefix: &str) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        self.walk(&self.dir, prefix, &mut out)?;
+        out.sort();
+        Ok(out)
+    }
+}
+
+struct Item {
+    file: PathBuf,
+    object: String,
+    seq: u64,
+    segment: bool,
+}
+
+#[derive(Default)]
+struct State {
+    queue: VecDeque<Item>,
+    /// `None` until `resolve` has listed the sink.
+    highest_seq: Option<u64>,
+    /// Segments up to here are folded into a local baseline, so a shipped one is
+    /// deleted rather than kept for local replay.
+    folded_through: u64,
+    failures: u64,
+    closed: bool,
+}
+
+struct Shared {
+    sink: Arc<dyn ArchiveSink>,
+    root: String,
+    codec: Codec,
+    retry_base: Duration,
+    state: Mutex<State>,
+    wake: Condvar,
+}
+
+/// Ships one store's redo segments and checkpoints to an [`ArchiveSink`].
+pub struct ArchiveShipper {
+    shared: Arc<Shared>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl ArchiveShipper {
+    /// Ships `store`'s archive for `member` under `prefix`, with segments and
+    /// checkpoints compressed by `codec`. Starts the upload thread; `close` stops
+    /// it. Pending work from an earlier process is picked up by
+    /// [`crate::RedoLog::attach_shipper`].
+    pub fn new(
+        sink: Arc<dyn ArchiveSink>,
+        prefix: &str,
+        member: &str,
+        store: &str,
+        codec: Codec,
+    ) -> Result<Self> {
+        Self::with_retry(sink, prefix, member, store, codec, RETRY_BASE)
+    }
+
+    pub(crate) fn with_retry(
+        sink: Arc<dyn ArchiveSink>,
+        prefix: &str,
+        member: &str,
+        store: &str,
+        codec: Codec,
+        retry_base: Duration,
+    ) -> Result<Self> {
+        let shared = Arc::new(Shared {
+            sink,
+            root: store_root(prefix, member, store)?,
+            codec,
+            retry_base,
+            state: Mutex::new(State::default()),
+            wake: Condvar::new(),
+        });
+        let worker = {
+            let shared = Arc::clone(&shared);
+            std::thread::Builder::new()
+                .name(format!("diskstore-archive-{store}"))
+                .spawn(move || run(&shared))
+                .map_err(|e| DiskStoreError::io(e.to_string()))?
+        };
+        Ok(Self { shared, worker: Mutex::new(Some(worker)) })
+    }
+
+    /// Objects waiting to ship.
+    pub fn pending(&self) -> usize {
+        self.shared.state.lock().expect("shipper lock poisoned").queue.len()
+    }
+
+    /// Upload attempts that failed since this shipper started.
+    pub fn failures(&self) -> u64 {
+        self.shared.state.lock().expect("shipper lock poisoned").failures
+    }
+
+    /// Stops the upload thread. Work not yet uploaded stays in its pending file and
+    /// ships when a shipper next attaches to the same log.
+    pub fn close(&self) {
+        {
+            let mut st = self.shared.state.lock().expect("shipper lock poisoned");
+            st.closed = true;
+            self.shared.wake.notify_all();
+        }
+        if let Some(handle) = self.worker.lock().expect("shipper lock poisoned").take() {
+            let _ = handle.join();
+        }
+    }
+
+    /// Learns the highest sequence already used, from the sink and from pending
+    /// work, so a restarted writer continues the chain instead of reusing a number.
+    /// Lists the sink, so call it outside any append path.
+    pub(crate) fn resolve(&self) -> Result<()> {
+        if self.shared.state.lock().expect("shipper lock poisoned").highest_seq.is_some() {
+            return Ok(());
+        }
+        let mut highest = 0;
+        for name in self.shared.sink.list(&self.shared.root)? {
+            if let Some(seq) = seq_of(&name[self.shared.root.len()..]) {
+                highest = highest.max(seq);
+            }
+        }
+        let mut st = self.shared.state.lock().expect("shipper lock poisoned");
+        if st.highest_seq.is_none() {
+            for item in &st.queue {
+                highest = highest.max(item.seq);
+            }
+            st.highest_seq = Some(highest);
+        }
+        Ok(())
+    }
+
+    /// Allocates the sequence for the next segment. `resolve` must have run.
+    pub(crate) fn allocate_seq(&self) -> u64 {
+        let mut st = self.shared.state.lock().expect("shipper lock poisoned");
+        let next = st.highest_seq.unwrap_or(0) + 1;
+        st.highest_seq = Some(next);
+        next
+    }
+
+    /// The redo position a checkpoint taken now covers: the newest sequence allocated.
+    pub(crate) fn position(&self) -> u64 {
+        self.shared.state.lock().expect("shipper lock poisoned").highest_seq.unwrap_or(0)
+    }
+
+    pub(crate) fn enqueue_segment(&self, file: PathBuf, seq: u64) {
+        let object = format!("{}{}/{}", self.shared.root, SEGMENTS, pad(seq));
+        self.enqueue(Item { file, object, seq, segment: true });
+    }
+
+    pub(crate) fn enqueue_checkpoint(&self, file: PathBuf, position: u64) {
+        let object = format!("{}{}/{}", self.shared.root, CHECKPOINTS, pad(position));
+        self.enqueue(Item { file, object, seq: position, segment: false });
+    }
+
+    /// Re-queues a pending file a previous process left behind.
+    pub(crate) fn recover(&self, file: PathBuf) {
+        let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if let Some(seq) = seq_after(&name, SEGMENT_TAG) {
+            self.enqueue_segment(file, seq);
+        } else if let Some(seq) = seq_after(&name, CHECKPOINT_TAG) {
+            self.enqueue_checkpoint(file, seq);
+        }
+    }
+
+    /// Records that a roll has folded every segment up to `seq` into the local
+    /// baseline. A segment already shipped is the caller's to delete; one still
+    /// queued is deleted by the upload thread once the archive holds it.
+    pub(crate) fn set_folded(&self, seq: u64) {
+        let mut st = self.shared.state.lock().expect("shipper lock poisoned");
+        st.folded_through = st.folded_through.max(seq);
+    }
+
+    fn enqueue(&self, item: Item) {
+        let mut st = self.shared.state.lock().expect("shipper lock poisoned");
+        st.queue.push_back(item);
+        self.shared.wake.notify_all();
+    }
+}
+
+impl Drop for ArchiveShipper {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+fn run(shared: &Shared) {
+    let mut backoff = Duration::ZERO;
+    loop {
+        let (file, object, seq, segment) = {
+            let mut st = shared.state.lock().expect("shipper lock poisoned");
+            while !st.closed && st.queue.is_empty() {
+                st = shared.wake.wait(st).expect("shipper lock poisoned");
+            }
+            if st.closed {
+                return;
+            }
+            let head = &st.queue[0];
+            (head.file.clone(), head.object.clone(), head.seq, head.segment)
+        };
+        match ship(shared, &file, &object, seq, segment) {
+            Ok(()) => backoff = Duration::ZERO,
+            Err(err) => {
+                backoff = if backoff.is_zero() {
+                    shared.retry_base
+                } else {
+                    (backoff * 2).min(shared.retry_base * RETRY_CAP_FACTOR)
+                };
+                let mut st = shared.state.lock().expect("shipper lock poisoned");
+                st.failures += 1;
+                log::warn!(
+                    "diskstore archive upload failed for {}; retrying in {:?}: {}",
+                    object,
+                    backoff,
+                    err
+                );
+                if !st.closed {
+                    let _ = shared.wake.wait_timeout(st, backoff).expect("shipper lock poisoned");
+                }
+            }
+        }
+    }
+}
+
+fn ship(shared: &Shared, file: &Path, object: &str, seq: u64, segment: bool) -> Result<()> {
+    let packed = compress(&std::fs::read(file)?, shared.codec)?;
+    shared.sink.put(object, &packed)?;
+    let mut st = shared.state.lock().expect("shipper lock poisoned");
+    // The local copy goes only now that the archive holds it, and a segment no
+    // baseline covers yet stays for local replay.
+    if segment && seq > st.folded_through {
+        let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let at = name.rfind(SEGMENT_TAG).unwrap_or(0);
+        let rotated = file.with_file_name(format!(
+            "{}{}{}",
+            &name[..at],
+            ROTATED_TAG,
+            &name[at + SEGMENT_TAG.len()..]
+        ));
+        std::fs::rename(file, rotated)?;
+    } else if let Err(e) = std::fs::remove_file(file) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(e.into());
+        }
+    }
+    st.queue.pop_front();
+    Ok(())
+}
+
+/// The object-name prefix of one store's archive: `<prefix>/<member>/<store>/`.
+fn store_root(prefix: &str, member: &str, store: &str) -> Result<String> {
+    if member.is_empty() {
+        return Err(DiskStoreError::invalid_data("archive member id is empty"));
+    }
+    let head = if prefix.is_empty() { String::new() } else { format!("{prefix}/") };
+    Ok(format!("{head}{member}/{store}/"))
+}
+
+pub(crate) fn pad(seq: u64) -> String {
+    format!("{seq:0width$}", width = SEQ_DIGITS)
+}
+
+pub(crate) fn segment_pending(active: &Path, seq: u64) -> PathBuf {
+    sibling(active, &format!("{SEGMENT_TAG}{}", pad(seq)))
+}
+
+pub(crate) fn rotated_path(active: &Path, seq: u64) -> PathBuf {
+    sibling(active, &format!("{ROTATED_TAG}{}", pad(seq)))
+}
+
+pub(crate) fn checkpoint_pending(active: &Path, position: u64) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    sibling(active, &format!("{CHECKPOINT_TAG}{}-{nanos}", pad(position)))
+}
+
+/// The sequence that follows `tag` in a local file name.
+pub(crate) fn seq_after(name: &str, tag: &str) -> Option<u64> {
+    let at = name.rfind(tag)? + tag.len();
+    name.get(at..at + SEQ_DIGITS)?.parse().ok()
+}
+
+/// The sequence embedded in an object name relative to the store root.
+fn seq_of(relative: &str) -> Option<u64> {
+    relative.rsplit('/').next()?.parse().ok()
+}
+
+/// Restores `store` written by `member` under `prefix`, handing each surviving
+/// record to `inserter` once. Returns how many records were handed over.
+///
+/// The chain is the newest checkpoint plus every segment shipped after the redo
+/// position that checkpoint covers. Those segments must be contiguous: a missing
+/// one is an error, never a silent partial restore. Records are deduped across the
+/// whole chain, the last write per key winning, so a delete arrives as a tombstone
+/// for the inserter to honour. An archive with no checkpoint and no segments
+/// restores nothing.
+pub fn restore_archive(
+    sink: &dyn ArchiveSink,
+    prefix: &str,
+    member: &str,
+    store: &str,
+    inserter: &mut dyn Inserter,
+) -> Result<usize> {
+    let root = store_root(prefix, member, store)?;
+    let mut checkpoints: BTreeMap<u64, String> = BTreeMap::new();
+    let mut segments: BTreeMap<u64, String> = BTreeMap::new();
+    for name in sink.list(&root)? {
+        let relative = &name[root.len()..];
+        let Some(seq) = seq_of(relative) else { continue };
+        if relative.starts_with(&format!("{CHECKPOINTS}/")) {
+            checkpoints.insert(seq, name);
+        } else if relative.starts_with(&format!("{SEGMENTS}/")) {
+            segments.insert(seq, name);
+        }
+    }
+
+    let mut order: Vec<String> = Vec::new();
+    let mut by_key: HashMap<String, Record> = HashMap::new();
+    let mut apply = |object: &str| -> Result<()> {
+        let stored = sink
+            .get(object)?
+            .ok_or_else(|| DiskStoreError::io(format!("archive object is missing: {object}")))?;
+        for rec in dedup_bytes(&decompress_auto(&stored)?)? {
+            if !by_key.contains_key(&rec.key) {
+                order.push(rec.key.clone());
+            }
+            by_key.insert(rec.key.clone(), rec);
+        }
+        Ok(())
+    };
+    let base = checkpoints.keys().next_back().copied().unwrap_or(0);
+    if let Some((_, object)) = checkpoints.iter().next_back() {
+        apply(object)?;
+    }
+    let mut expect = base + 1;
+    for (seq, object) in segments.range(base + 1..) {
+        if *seq != expect {
+            return Err(DiskStoreError::io(format!("archive for {store} is missing segment {expect}")));
+        }
+        apply(object)?;
+        expect += 1;
+    }
+
+    let mut n = 0;
+    for key in &order {
+        inserter.insert(&by_key[key])?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::redolog::RedoLog;
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicI64, Ordering};
+    use tempfile::tempdir;
+
+    /// In-memory sink. The first `fail_puts` uploads fail, as an unreachable
+    /// bucket would.
+    #[derive(Default)]
+    struct MemSink {
+        objects: Mutex<BTreeMap<String, Vec<u8>>>,
+        fail_puts: AtomicI64,
+    }
+
+    impl ArchiveSink for MemSink {
+        fn put(&self, name: &str, data: &[u8]) -> Result<()> {
+            if self.fail_puts.load(Ordering::SeqCst) > 0 {
+                self.fail_puts.fetch_sub(1, Ordering::SeqCst);
+                return Err(DiskStoreError::io("sink unreachable"));
+            }
+            self.objects.lock().unwrap().insert(name.into(), data.to_vec());
+            Ok(())
+        }
+        fn get(&self, name: &str) -> Result<Option<Vec<u8>>> {
+            Ok(self.objects.lock().unwrap().get(name).cloned())
+        }
+        fn list(&self, prefix: &str) -> Result<Vec<String>> {
+            Ok(self.objects.lock().unwrap().keys().filter(|k| k.starts_with(prefix)).cloned().collect())
+        }
+    }
+
+    impl MemSink {
+        fn count(&self, prefix: &str) -> usize {
+            self.list(prefix).unwrap().len()
+        }
+    }
+
+    #[derive(Default)]
+    struct Collect(BTreeMap<String, serde_json::Value>);
+    impl Inserter for Collect {
+        fn insert(&mut self, r: &Record) -> Result<()> {
+            if r.deleted {
+                self.0.remove(&r.key);
+            } else {
+                self.0.insert(r.key.clone(), r.payload.clone().unwrap());
+            }
+            Ok(())
+        }
+    }
+
+    type Live = BTreeMap<String, serde_json::Value>;
+
+    fn put(log: &RedoLog, live: &mut Live, key: &str, v: i64) {
+        let payload = serde_json::json!({ "v": v });
+        log.append(&Record { key: key.into(), deleted: false, metadata: None, payload: Some(payload.clone()) })
+            .unwrap();
+        live.insert(key.into(), payload);
+    }
+
+    fn del(log: &RedoLog, live: &mut Live, key: &str) {
+        log.append(&Record { key: key.into(), deleted: true, metadata: None, payload: None }).unwrap();
+        live.remove(key);
+    }
+
+    fn snapshot(live: &Live) -> Vec<Record> {
+        live.iter()
+            .map(|(k, v)| Record { key: k.clone(), deleted: false, metadata: None, payload: Some(v.clone()) })
+            .collect()
+    }
+
+    fn await_drained(shipper: &ArchiveShipper) {
+        for _ in 0..200 {
+            if shipper.pending() == 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!("shipper did not drain, {} pending", shipper.pending());
+    }
+
+    fn count_kind(dir: &Path, kind: &str) -> usize {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().contains(kind))
+            .count()
+    }
+
+    fn open_shipped(dir: &Path, sink: &Arc<MemSink>, codec: Codec) -> (RedoLog, Arc<ArchiveShipper>) {
+        let log = RedoLog::open(dir, "/drpepper", "verifying_keys", 0, codec).unwrap();
+        let sink: Arc<dyn ArchiveSink> = sink.clone();
+        let shipper = Arc::new(
+            ArchiveShipper::with_retry(sink, "tenant", "node-a", "verifying_keys", codec, Duration::from_millis(1))
+                .unwrap(),
+        );
+        log.attach_shipper(shipper.clone()).unwrap();
+        (log, shipper)
+    }
+
+    fn cold_restore(dir: &Path) -> Live {
+        let cold = RedoLog::open(dir, "/drpepper", "verifying_keys", 0, Codec::None).unwrap();
+        let mut got = Collect::default();
+        cold.restore(&mut got).unwrap();
+        got.0
+    }
+
+    // Rotate ships the active log as a segment with no snapshot and opens a fresh
+    // active; the segment stays on the volume, and a cold start from the volume
+    // alone reproduces the store until a roll folds the segments.
+    #[test]
+    fn rotate_then_local_restore() {
+        let dir = tempdir().unwrap();
+        let sink = Arc::new(MemSink::default());
+        let (log, shipper) = open_shipped(dir.path(), &sink, Codec::None);
+        let log_dir = log.active_path().parent().unwrap().to_path_buf();
+        let mut live = Live::new();
+
+        put(&log, &mut live, "a", 1);
+        put(&log, &mut live, "b", 1);
+        log.roll(&snapshot(&live)).unwrap();
+        await_drained(&shipper);
+
+        put(&log, &mut live, "a", 2);
+        assert!(log.rotate().unwrap());
+        await_drained(&shipper);
+        assert_eq!(std::fs::metadata(log.active_path()).unwrap().len(), 0, "rotate leaves a fresh active");
+        assert_eq!(sink.count("tenant/node-a/verifying_keys/segments/"), 2);
+
+        del(&log, &mut live, "b");
+        put(&log, &mut live, "c", 3);
+        assert!(log.rotate().unwrap());
+        put(&log, &mut live, "d", 4);
+        await_drained(&shipper);
+        assert_eq!(count_kind(&log_dir, ".rotated-"), 2, "shipped segments stay until a roll folds them");
+        assert_eq!(cold_restore(dir.path()), live, "local restore must replay the rotated segments");
+
+        log.roll(&snapshot(&live)).unwrap();
+        await_drained(&shipper);
+        assert_eq!(count_kind(&log_dir, ".rotated-") + count_kind(&log_dir, ".segment-"), 0);
+        assert_eq!(cold_restore(dir.path()), live);
+    }
+
+    // A segment folded by a roll must not be replayed over the baseline: a key
+    // deleted inside it would come back.
+    #[test]
+    fn folded_segment_is_not_replayed() {
+        let dir = tempdir().unwrap();
+        let sink = Arc::new(MemSink::default());
+        sink.fail_puts.store(1 << 30, Ordering::SeqCst);
+        let (log, _shipper) = open_shipped(dir.path(), &sink, Codec::None);
+        let mut live = Live::new();
+
+        put(&log, &mut live, "a", 1);
+        put(&log, &mut live, "b", 1);
+        assert!(log.rotate().unwrap());
+        del(&log, &mut live, "b");
+        log.roll(&snapshot(&live)).unwrap();
+        assert_eq!(count_kind(log.active_path().parent().unwrap(), ".segment-"), 2);
+        assert_eq!(cold_restore(dir.path()), live, "a folded segment must not be replayed");
+    }
+
+    // Rotate, then roll, then restore from the archive reproduces the store, and
+    // an idle rotation ships nothing.
+    #[test]
+    fn rotate_roll_archive_restore() {
+        let dir = tempdir().unwrap();
+        let sink = Arc::new(MemSink::default());
+        let (log, shipper) = open_shipped(dir.path(), &sink, Codec::Gz);
+        let mut live = Live::new();
+
+        put(&log, &mut live, "a", 1);
+        put(&log, &mut live, "b", 1);
+        log.roll(&snapshot(&live)).unwrap();
+        log.checkpoint(|| Ok(snapshot(&live))).unwrap();
+
+        put(&log, &mut live, "a", 2);
+        assert!(log.rotate().unwrap());
+        assert!(!log.rotate().unwrap(), "an idle rotation ships nothing");
+        await_drained(&shipper);
+        assert_eq!(sink.count("tenant/node-a/verifying_keys/segments/"), 2);
+
+        del(&log, &mut live, "b");
+        put(&log, &mut live, "c", 3);
+        assert!(log.rotate().unwrap());
+        put(&log, &mut live, "d", 4);
+        log.roll(&snapshot(&live)).unwrap();
+        put(&log, &mut live, "e", 5);
+        assert!(log.rotate().unwrap());
+        await_drained(&shipper);
+
+        let mut got = Collect::default();
+        restore_archive(&*sink, "tenant", "node-a", "verifying_keys", &mut got).unwrap();
+        assert_eq!(got.0, live, "restore must reproduce the live store");
+    }
+
+    // A failing upload across a rotation loses nothing and keeps the chain in
+    // order: later segments wait behind the failed one, then all ship.
+    #[test]
+    fn shipper_failure_across_rotation() {
+        let dir = tempdir().unwrap();
+        let sink = Arc::new(MemSink::default());
+        sink.fail_puts.store(1 << 30, Ordering::SeqCst);
+        let (log, shipper) = open_shipped(dir.path(), &sink, Codec::None);
+        let mut live = Live::new();
+
+        put(&log, &mut live, "a", 1);
+        assert!(log.rotate().unwrap());
+        for _ in 0..100 {
+            if shipper.failures() >= 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(shipper.failures() >= 1, "the failing upload should be retried");
+        put(&log, &mut live, "b", 2);
+        assert!(log.rotate().unwrap());
+        put(&log, &mut live, "c", 3);
+        assert!(log.rotate().unwrap());
+        assert_eq!(shipper.pending(), 3, "all three rotations queue behind the failing one");
+        assert_eq!(sink.count(""), 0);
+
+        sink.fail_puts.store(0, Ordering::SeqCst);
+        await_drained(&shipper);
+        let mut got = Collect::default();
+        restore_archive(&*sink, "tenant", "node-a", "verifying_keys", &mut got).unwrap();
+        assert_eq!(got.0, live);
+    }
+
+    // Restore refuses a chain with a missing segment instead of restoring part of it.
+    #[test]
+    fn restore_rejects_missing_segment() {
+        let sink = MemSink::default();
+        let root = store_root("", "node-a", "verifying_keys").unwrap();
+        sink.put(&format!("{root}segments/{}", pad(2)), b"{\"key\":\"a\",\"payload\":{\"v\":1}}\n").unwrap();
+        let mut c = Collect::default();
+        assert!(restore_archive(&sink, "", "node-a", "verifying_keys", &mut c).is_err());
+        let empty = MemSink::default();
+        assert_eq!(restore_archive(&empty, "", "node-a", "verifying_keys", &mut c).unwrap(), 0);
+    }
+
+    #[test]
+    fn dir_sink_round_trip() {
+        let dir = tempdir().unwrap();
+        let sink = DirArchiveSink::new(dir.path());
+        sink.put("p/m/s/segments/1", b"x").unwrap();
+        assert_eq!(sink.get("p/m/s/segments/1").unwrap().unwrap(), b"x");
+        assert!(sink.get("p/none").unwrap().is_none());
+        assert_eq!(sink.list("p/m/").unwrap(), vec!["p/m/s/segments/1".to_string()]);
+    }
+
+    #[test]
+    fn rotate_requires_shipper() {
+        let dir = tempdir().unwrap();
+        let log = RedoLog::open(dir.path(), "/drpepper", "verifying_keys", 0, Codec::None).unwrap();
+        assert!(log.rotate().is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rotate_scheduler_ships_segments() {
+        let dir = tempdir().unwrap();
+        let sink = Arc::new(MemSink::default());
+        let (log, _shipper) = open_shipped(dir.path(), &sink, Codec::None);
+        let mut live = Live::new();
+        put(&log, &mut live, "a", 1);
+        let _ = tokio::time::timeout(
+            Duration::from_secs(4),
+            crate::schedule::run_rotate_scheduler(&log, Duration::from_secs(1), "node-0"),
+        )
+        .await;
+        let mut got = Collect::default();
+        restore_archive(&*sink, "tenant", "node-a", "verifying_keys", &mut got).unwrap();
+        assert_eq!(got.0, live, "scheduled rotation must ship the append");
+    }
+}

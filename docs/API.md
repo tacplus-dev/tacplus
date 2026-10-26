@@ -374,16 +374,32 @@ schedulers. This setting is not hot-reloaded; service code should append through
 the ServiceManager-owned handles and should not run its own backup loop for
 generated stores.
 
-### Archive to an object store (Java)
+### Archive to an object store (Java; Go and Rust library layer)
 
 Set `grpcconfig.disk_persistence.archive` to ship each writer's redo log to an
-object store and restore from it after losing the local volume. Java only; Go,
-Rust, Python and TypeScript ignore the field (see `roadmap/LANGUAGE_PARITY.md`).
+object store and restore from it after losing the local volume. The generated
+ServiceManager wires it in Java only; Python and TypeScript ignore the field.
+Go and Rust ship the same archive layer as a library (`ArchiveShipper`,
+`ArchiveSink`, `DirArchiveSink`, `RestoreArchive` / `restore_archive`, and
+`RedoLog.Rotate` / `rotate`) for a service that opens its own log; they have no
+GCS sink and their ServiceManager does not read `archive` (see
+`roadmap/LANGUAGE_PARITY.md`). Names below are the Java ones.
 
 - **Segments.** Each roll queues the rolled redo log as a segment. The local
   file is removed only after the archive holds it, so a failing upload never
   loses a segment. Uploads run FIFO on a daemon thread, retry with backoff (at
   most five minutes), and never block an append.
+- **Rotation.** `RedoLog.rotate()` closes the active log, queues it as the next
+  segment and opens a fresh active log. It takes no snapshot and folds no
+  baseline, so it costs the writes since the last rotation, not the size of the
+  store. The segment stays on the local volume after it ships, and
+  `RedoLog.restore` replays it (baseline, then the kept segments in order, then
+  the active log), until a later `roll` folds it into a baseline and deletes it.
+  The first rotation after a roll carries that roll's baseline. A rotation with
+  nothing appended since the last one ships nothing. Set
+  `archive.segment_interval_seconds` to rotate on an interval
+  (`RollSchedule.runRotateScheduler` for a hand-opened log); 0, the default,
+  turns it off and `roll` behaves as before.
 - **Checkpoints.** Every `archive.checkpoint_interval_seconds` (default 86400)
   the full store state is shipped as a checkpoint, recorded under the redo
   position it covers: the newest segment rolled at that moment. The position and
@@ -398,10 +414,12 @@ Rust, Python and TypeScript ignore the field (see `roadmap/LANGUAGE_PARITY.md`).
   chain, last write wins, so a delete after the checkpoint arrives as a tombstone
   for the consumer's `Inserter` to honour. A missing segment is an error, never a
   partial restore. Restore must name the writer's original `member`.
-- **Recovery point.** A write is in the archive only once its roll has shipped.
-  Writes made since the last roll are lost with the volume, so the worst case is
-  one `roll_interval_seconds` (default 86400). Shorten the roll interval to
-  narrow it.
+- **Recovery point.** A write is in the archive only once a rotation or a roll
+  has shipped it. Writes made since then are lost with the volume, so the worst
+  case is one `archive.segment_interval_seconds` when it is set, and one
+  `roll_interval_seconds` (default 86400) when it is not. Set the segment
+  interval short and leave the roll interval long: a roll is a compaction that
+  snapshots and rewrites the whole store, a rotation is not.
 - **Credentials.** The archive sink is Google Cloud Storage, authenticated as the
   workload's ambient identity (Application Default Credentials). No key is read
   from config. The sink is compiled in only when the project pins

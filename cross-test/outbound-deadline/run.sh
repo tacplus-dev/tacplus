@@ -15,6 +15,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=../lib/cargo-target.sh
+source "$ROOT_DIR/cross-test/lib/cargo-target.sh"
 GATE_DIR="$ROOT_DIR/cross-test/outbound-deadline"
 PROTO_SRC="$ROOT_DIR/cross-test/consumer-contract/proto"
 WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/outbound-deadline.XXXXXX")"
@@ -69,7 +71,7 @@ tonic = "0.14.0"
 EOF
 
 echo "==> Building rust outbound-deadline fixture"
-(cd "$CRATE_DIR" && CARGO_TARGET_DIR="$CRATE_DIR/target" cargo build --quiet) >"$MODEL_DIR/build.log" 2>&1 || {
+(cd "$CRATE_DIR" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo build --quiet) >"$MODEL_DIR/build.log" 2>&1 || {
   cat "$MODEL_DIR/build.log" >&2
   die "rust outbound-deadline build failed"
 }
@@ -79,4 +81,4 @@ if [[ -s "$MODEL_DIR/build.log" ]]; then
 fi
 
 echo "==> Running three-hop chain"
-"$CRATE_DIR/target/debug/outbound-deadline-rust"
+"$CROSS_TEST_CARGO_TARGET/debug/outbound-deadline-rust"

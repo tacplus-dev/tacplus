@@ -22,6 +22,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=../lib/cargo-target.sh
+source "$ROOT_DIR/cross-test/lib/cargo-target.sh"
 GATE_DIR="$ROOT_DIR/cross-test/keepalive-rust"
 FIXTURE_SRC="$ROOT_DIR/cross-test/server-runtime/fixture/rust/main.rs"
 PROTO_SRC="$ROOT_DIR/cross-test/consumer-contract/proto"
@@ -116,7 +118,7 @@ tokio-stream = { version = "0.1.17", features = ["net"] }
 tonic = "0.14.0"
 EOF
   echo "==> Building rust $kind"
-  (cd "$dir" && CARGO_TARGET_DIR="$dir/target" cargo build --quiet) >"$MODEL_DIR/$kind-build.log" 2>&1 || {
+  (cd "$dir" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo build --quiet) >"$MODEL_DIR/$kind-build.log" 2>&1 || {
     cat "$MODEL_DIR/$kind-build.log" >&2
     die "rust $kind build failed"
   }
@@ -126,8 +128,8 @@ EOF
 build_crate fixture "$FIXTURE_SRC"
 build_crate client "$GATE_DIR/client/main.rs"
 
-FIXTURE_BIN="$MODEL_DIR/fixture/target/debug/keepalive-rust-fixture"
-CLIENT_BIN="$MODEL_DIR/client/target/debug/keepalive-rust-client"
+FIXTURE_BIN="$CROSS_TEST_CARGO_TARGET/debug/keepalive-rust-fixture"
+CLIENT_BIN="$CROSS_TEST_CARGO_TARGET/debug/keepalive-rust-client"
 
 # Starts the fixture server and waits for its {"grpc":"host:port"} line.
 FIXTURE_STDOUT="$MODEL_DIR/fixture-stdout.log"

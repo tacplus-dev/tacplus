@@ -31,6 +31,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=../lib/cargo-target.sh
+source "$ROOT_DIR/cross-test/lib/cargo-target.sh"
 GATE_DIR="$ROOT_DIR/cross-test/wire-corpus"
 PROTO_SRC="$GATE_DIR/proto"
 FIXTURE="$ROOT_DIR/cross-test/fixtures/wire_corpus.json"
@@ -266,13 +268,13 @@ prost = "0.14.1"
 serde_json = "1.0.149"
 EOF
   echo "==> Building rust decoder"
-  (cd "$decoder_dir" && CARGO_TARGET_DIR="$decoder_dir/target" cargo build --quiet) >"$dir/build.log" 2>&1 || {
+  (cd "$decoder_dir" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo build --quiet) >"$dir/build.log" 2>&1 || {
     cat "$dir/build.log" >&2
     die "rust decoder build failed"
   }
   assert_clean_log "$dir/build.log"
   echo "==> Decoding the golden corpus with the generated rust types"
-  "$decoder_dir/target/debug/wire-corpus-rust-decoder" "$FIXTURE" || die "rust decoder failed"
+  "$CROSS_TEST_CARGO_TARGET/debug/wire-corpus-rust-decoder" "$FIXTURE" || die "rust decoder failed"
 }
 
 run_typescript() {

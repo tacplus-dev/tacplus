@@ -56,6 +56,7 @@ type Config struct {
 	GrpcServers string        `yaml:"grpc-servers,omitempty"` // "all": this project generates from every service's server surface (the gateway dispatches to all of them); unset: its own. See CheckScope
 	GrpcClients string        `yaml:"grpc-clients,omitempty"` // "all": this project generates from every service's client surface (a CLI); unset: the services it declares in depends. See CheckScope
 	States      string        `yaml:"states,omitempty"`       // "all": this project generates from every service's config and state (the kernel holds them all); unset: its own and its depends'. See CheckScope
+	Records     string        `yaml:"records,omitempty"`      // "all": this project generates from every (spec.record) in the fleet (the record store subscribes to them all); unset: its own and its depends'. See CheckScope
 	Header      string        `yaml:"header,omitempty"`       // free-form text stamped as a comment at the top of every generated file (e.g. a copyright line and an SPDX identifier); its first line is also the author of generated package manifests. Unset: generated code carries no copyright line
 }
 
@@ -95,7 +96,7 @@ func Read(dir string) (*Config, error) {
 	if err := CheckKind(cfg.Kind); err != nil {
 		return nil, err
 	}
-	if err := CheckScope(cfg.GrpcServers, cfg.GrpcClients, cfg.States); err != nil {
+	if err := CheckScope(cfg.GrpcServers, cfg.GrpcClients, cfg.States, cfg.Records); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -208,7 +209,7 @@ func ReadFiles(paths []string) (*Config, error) {
 	if err := CheckKind(result.Kind); err != nil {
 		return nil, err
 	}
-	if err := CheckScope(result.GrpcServers, result.GrpcClients, result.States); err != nil {
+	if err := CheckScope(result.GrpcServers, result.GrpcClients, result.States, result.Records); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -278,6 +279,9 @@ func MergeConfigs(base, overlay *Config) *Config {
 	}
 	if overlay.States != "" {
 		result.States = overlay.States
+	}
+	if overlay.Records != "" {
+		result.Records = overlay.Records
 	}
 
 	return &result

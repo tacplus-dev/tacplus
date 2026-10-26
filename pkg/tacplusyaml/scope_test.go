@@ -23,6 +23,9 @@ func TestScopeKeysReadAndChecked(t *testing.T) {
 	if _, err := Read(dir); err == nil {
 		t.Fatal("grpc-clients: some must be refused")
 	}
+	if !(&Config{Records: ScopeAll}).WholeFleet() {
+		t.Fatal("records: all is the whole fleet")
+	}
 	if (&Config{}).WholeFleet() || (*Config)(nil).WholeFleet() {
 		t.Fatal("unset scope is not the whole fleet")
 	}

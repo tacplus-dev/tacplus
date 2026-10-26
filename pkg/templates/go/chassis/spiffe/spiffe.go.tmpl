@@ -520,6 +520,9 @@ func classify(p *ParsedSpiffeID, segs []string) error {
 		return classifyPair(p, segs, idx[DataSegment], KindResource)
 	default:
 		// Namespace-only identity (tenant/workspace/system subtree).
+		if err := validateNamespaceSegments(segs); err != nil {
+			return err
+		}
 		p.SubjectKind = KindUnknown
 		p.Namespace = "/" + strings.Join(segs, "/")
 		return nil
@@ -530,10 +533,27 @@ func classify(p *ParsedSpiffeID, segs []string) error {
 // (shared services, location-agnostic) and /tenants/<tenant>/services/<svc> (tenant-owned
 // services, one operator-managed instance per tenant). Namespace is everything before
 // "services"; for the tenant root that's exactly "/tenants/<tenant>", no location.
+// Parse fails closed: the namespace passes the validator the constructors use, and the
+// service and workload names are not reserved tags.
 func classifySystem(p *ParsedSpiffeID, segs []string) error {
 	si := indexOf(segs, ServicesSegment)
 	if (segs[0] != SystemSegment && segs[0] != TenantsSegment) || si < 0 || si+1 >= len(segs) {
 		return fmt.Errorf("spiffe: malformed system/service identity: /%s", strings.Join(segs, "/"))
+	}
+	if err := validateNamespaceSegments(segs[:si]); err != nil {
+		return err
+	}
+	if reservedTags[segs[si+1]] {
+		return fmt.Errorf("spiffe: reserved tag %q cannot be a service name", segs[si+1])
+	}
+	rest := segs[si+2:]
+	if len(rest)%2 != 0 {
+		return fmt.Errorf("spiffe: malformed system/service identity: /%s", strings.Join(segs, "/"))
+	}
+	for i := 0; i < len(rest); i += 2 {
+		if rest[i] != WorkloadsSegment || reservedTags[rest[i+1]] {
+			return fmt.Errorf("spiffe: malformed system/service identity: /%s", strings.Join(segs, "/"))
+		}
 	}
 	p.LocationPath = strings.Join(segs[1:si], "/")
 	p.Namespace = "/" + strings.Join(segs[:si], "/") // /system[/location...] or /tenants/<tenant>
@@ -556,24 +576,49 @@ func classifyUserRoot(p *ParsedSpiffeID, segs []string) error {
 	return nil
 }
 
+// validateLeafNamespace is the parse-side twin of leafBase: the namespace before a
+// typed tag must pass the namespace validator, and a user root is a complete
+// identity, so nothing may follow it.
+func validateLeafNamespace(nsSegs []string) error {
+	if len(nsSegs) == 0 {
+		return fmt.Errorf("spiffe: a typed identity needs a namespace")
+	}
+	if nsSegs[0] == UsersSegment {
+		return fmt.Errorf("spiffe: nothing may follow a user root, got namespace /%s", strings.Join(nsSegs, "/"))
+	}
+	return validateNamespaceSegments(nsSegs)
+}
+
 func classifyNamespaced(p *ParsedSpiffeID, segs []string, tagIdx int, kind SubjectKind) error {
-	if tagIdx+1 >= len(segs) || tagIdx == 0 {
+	if tagIdx+2 != len(segs) || tagIdx == 0 {
 		return fmt.Errorf("spiffe: malformed %s identity: /%s", kind, strings.Join(segs, "/"))
+	}
+	if err := validateLeafNamespace(segs[:tagIdx]); err != nil {
+		return err
+	}
+	if reservedTags[segs[tagIdx+1]] {
+		return fmt.Errorf("spiffe: reserved tag %q cannot be a %s id", segs[tagIdx+1], kind)
 	}
 	p.SubjectKind = kind
 	p.Namespace = "/" + strings.Join(segs[:tagIdx], "/")
-	p.SubjectPath = strings.Join(segs[tagIdx+1:], "/")
+	p.SubjectPath = segs[tagIdx+1]
 	return nil
 }
 
 func classifyPair(p *ParsedSpiffeID, segs []string, tagIdx int, kind SubjectKind) error {
-	if tagIdx == 0 || tagIdx+2 >= len(segs) {
+	if tagIdx == 0 || tagIdx+3 != len(segs) {
 		return fmt.Errorf("spiffe: malformed kind/id identity: /%s", strings.Join(segs, "/"))
+	}
+	if err := validateLeafNamespace(segs[:tagIdx]); err != nil {
+		return err
+	}
+	if reservedTags[segs[tagIdx+1]] || reservedTags[segs[tagIdx+2]] {
+		return fmt.Errorf("spiffe: reserved tag cannot be a kind or id segment: /%s", strings.Join(segs, "/"))
 	}
 	p.SubjectKind = kind
 	p.Namespace = "/" + strings.Join(segs[:tagIdx], "/")
 	p.ResourceKind = segs[tagIdx+1]
-	p.ResourceID = strings.Join(segs[tagIdx+2:], "/")
+	p.ResourceID = segs[tagIdx+2]
 	return nil
 }
 

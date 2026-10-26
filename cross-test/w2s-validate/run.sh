@@ -25,6 +25,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=../lib/cargo-target.sh
+source "$ROOT_DIR/cross-test/lib/cargo-target.sh"
 # shellcheck source=../lib/tree-guard.sh
 source "$ROOT_DIR/cross-test/lib/tree-guard.sh"
 tree_guard_begin "$ROOT_DIR"
@@ -87,7 +89,7 @@ run_rust() {
   printf '\n#[cfg(test)]\nmod rest_browser_form_test;\n' >> "$OUT/s2sm/mod.rs"
 
   echo "==> Running generated Rust W2S request-validation and REST browser-form tests"
-  (cd "$OUT" && CARGO_TARGET_DIR="$OUT/target" cargo test -p w2svalidate-model -- rust_w2s_ rust_rest_browser_) \
+  (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo test -p w2svalidate-model -- rust_w2s_ rust_rest_browser_) \
     || die "generated Rust W2S request-validation / REST browser-form tests failed"
 
   echo "==> w2s-validate check PASSED (rust)"

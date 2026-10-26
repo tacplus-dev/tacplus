@@ -13,7 +13,32 @@ permissions:
   packages: read
 
 jobs:
+  # The build image of this tag's own line, build:X.Y: build:latest moves with
+  # whichever run pushed last, and a 2.0.x release built in a 2.3 image (or the
+  # reverse) fails or ships the wrong toolchain (#160: v2.3.2 ran in release/2.0's
+  # image, which has no gh). A line's first release (X.Y.0, cut from main) has no
+  # build:X.Y yet and uses build:latest, which is main's.
+  image:
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.image.outputs.ref }}
+    steps:
+      - id: image
+        shell: bash
+        env:
+          NS: ghcr.io/${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin >/dev/null
+          IFS=. read -r MAJOR MINOR _ <<< "${GITHUB_REF_NAME#v}"
+          ref="$NS/build:latest"
+          if docker manifest inspect "$NS/build:$MAJOR.$MINOR" >/dev/null 2>&1; then ref="$NS/build:$MAJOR.$MINOR"; fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "$ref"
+
   release:
+    needs: image
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # A container job defaults to sh; the steps below are bash (here-strings,
@@ -22,7 +47,7 @@ jobs:
       run:
         shell: bash
     container:
-      image: ghcr.io/tacplus-dev/tacplus/build:latest
+      image: ${{ needs.image.outputs.ref }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

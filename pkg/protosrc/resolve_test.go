@@ -5,10 +5,14 @@ package protosrc
 
 import (
 	"encoding/base64"
+	"net/http"
+	"net/http/cgi"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -137,21 +141,157 @@ func TestCollectFiles(t *testing.T) {
 
 func TestAuthArgs(t *testing.T) {
 	t.Setenv("CI_JOB_TOKEN", "s3cr3t-token")
+	t.Setenv("CI_SERVER_HOST", "gitlab.com")
+	t.Setenv("GH_TOKEN", "gh-s3cr3t")
+	t.Setenv("GITHUB_TOKEN", "gh-s3cr3t")
 
 	if got := authArgs("git@gitlab.com:org/repo.git"); got != nil {
 		t.Errorf("authArgs(ssh url) = %v, want nil", got)
 	}
 
-	got := authArgs("https://gitlab.com/org/repo.git")
 	want := []string{"-c", "http.extraheader=AUTHORIZATION: basic " +
 		base64.StdEncoding.EncodeToString([]byte("gitlab-ci-token:s3cr3t-token"))}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("authArgs() = %v, want %v", got, want)
+	for _, url := range []string{
+		"https://gitlab.com/org/repo.git",
+		"https://GitLab.com/org/repo.git",
+		"https://gitlab.com:443/org/repo.git",
+	} {
+		if got := authArgs(url); !reflect.DeepEqual(got, want) {
+			t.Errorf("authArgs(%q) = %v, want %v", url, got, want)
+		}
 	}
 
+	// The job token belongs to the GitLab instance that issued it; no other
+	// host gets it, nor any other forge's token.
+	for _, url := range []string{
+		"https://github.com/org/repo.git",
+		"https://example.com/org/repo.git",
+		"https://gitlab.com.evil.example/org/repo.git",
+		"https://gitlab.com@evil.example/org/repo.git",
+		"http://gitlab.com/org/repo.git", // never over cleartext
+	} {
+		if got := authArgs(url); got != nil {
+			t.Errorf("authArgs(%q) = %v, want nil", url, got)
+		}
+	}
+
+	// Without CI_SERVER_HOST the issuing instance is unknown: send nothing.
+	t.Setenv("CI_SERVER_HOST", "")
+	if got := authArgs("https://gitlab.com/org/repo.git"); got != nil {
+		t.Errorf("authArgs() with no CI_SERVER_HOST = %v, want nil", got)
+	}
+
+	t.Setenv("CI_SERVER_HOST", "gitlab.com")
 	t.Setenv("CI_JOB_TOKEN", "")
 	if got := authArgs("https://gitlab.com/org/repo.git"); got != nil {
 		t.Errorf("authArgs() with no token = %v, want nil", got)
+	}
+}
+
+// fakeForge serves the git repository at origin over smart HTTP (git
+// http-backend) and records whether every request carried exactly the
+// Authorization header wantAuth ("" meaning none). A request carrying any
+// other credential is refused with 401, as a real forge refuses a foreign one.
+type fakeForge struct {
+	url     string
+	refused atomic.Int32
+	served  atomic.Int32
+}
+
+func newFakeForge(t *testing.T, origin, wantAuth string) *fakeForge {
+	t.Helper()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	f := &fakeForge{}
+	backend := &cgi.Handler{
+		Path: gitPath,
+		Args: []string{"http-backend"},
+		Env: []string{
+			"GIT_PROJECT_ROOT=" + filepath.Dir(origin),
+			"GIT_HTTP_EXPORT_ALL=1",
+		},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != wantAuth {
+			f.refused.Add(1)
+			http.Error(w, "bad credentials", http.StatusUnauthorized)
+			return
+		}
+		f.served.Add(1)
+		backend.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	f.url = srv.URL + "/" + filepath.Base(origin)
+	return f
+}
+
+// TestCachedRepoCredentialGoesOnlyToItsForge clones through the real
+// cachedRepo path inside a simulated GitLab CI job (CI_JOB_TOKEN and
+// CI_SERVER_HOST set, plus GitHub tokens) from three forges. Each https forge
+// URL is rewritten by git's url.insteadOf to a local fake forge, so the
+// headers git actually sends are observed. github.com and an unrelated host
+// must receive no credential at all (the job token sent to GitHub made the
+// clone fail, and leaked it); the issuing GitLab instance must receive the
+// job token.
+func TestCachedRepoCredentialGoesOnlyToItsForge(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	const token = "s3cr3t-token"
+	gitlabAuth := "basic " + base64.StdEncoding.EncodeToString([]byte("gitlab-ci-token:"+token))
+
+	origin := filepath.Join(t.TempDir(), "repo.git")
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main", origin},
+		{"-C", origin, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	forges := []struct {
+		name string
+		url  string
+		auth string // the only Authorization header the forge accepts
+	}{
+		{"github", "https://github.com/org/repo.git", ""},
+		{"ci-server-host", "https://gitlab.example.com/org/repo.git", gitlabAuth},
+		{"unrelated", "https://git.unrelated.example/org/repo.git", ""},
+	}
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("CI_JOB_TOKEN", token)
+	t.Setenv("CI_SERVER_HOST", "gitlab.example.com")
+	t.Setenv("GH_TOKEN", "gh-s3cr3t")
+	t.Setenv("GITHUB_TOKEN", "gh-s3cr3t")
+
+	fakes := make([]*fakeForge, len(forges))
+	t.Setenv("GIT_CONFIG_COUNT", strconv.Itoa(len(forges)))
+	for i, fg := range forges {
+		fakes[i] = newFakeForge(t, origin, fg.auth)
+		t.Setenv("GIT_CONFIG_KEY_"+strconv.Itoa(i), "url."+fakes[i].url+".insteadOf")
+		t.Setenv("GIT_CONFIG_VALUE_"+strconv.Itoa(i), fg.url)
+	}
+
+	for i, fg := range forges {
+		t.Run(fg.name, func(t *testing.T) {
+			// Twice: the first call clones, the second takes the fetch path.
+			for call := 1; call <= 2; call++ {
+				if _, err := cachedRepo(fg.url, "latest"); err != nil {
+					t.Fatalf("cachedRepo(%q) call %d: %v", fg.url, call, err)
+				}
+			}
+			if n := fakes[i].refused.Load(); n != 0 {
+				t.Errorf("%s: %d request(s) carried a credential the forge does not accept", fg.url, n)
+			}
+			if fakes[i].served.Load() == 0 {
+				t.Errorf("%s: the fake forge served nothing; insteadOf rewrite did not apply", fg.url)
+			}
+		})
 	}
 }
 
@@ -163,6 +303,7 @@ func TestCloneDoesNotPersistToken(t *testing.T) {
 	}
 	const token = "s3cr3t-token"
 	t.Setenv("CI_JOB_TOKEN", token)
+	t.Setenv("CI_SERVER_HOST", "gitlab.com")
 
 	// Origin repo with one commit.
 	origin := t.TempDir()

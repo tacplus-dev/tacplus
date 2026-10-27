@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -148,10 +149,20 @@ func lockCache(dir string) (func(), error) {
 // when running in GitLab CI. The credential is passed as an http.extraheader
 // config override on the command line, which is process-scoped: git never
 // writes it to any .git/config, unlike a credential embedded in the remote URL.
-// If CI_JOB_TOKEN is not set, no flags are returned.
-func authArgs(url string) []string {
+//
+// The job token goes only to the GitLab instance that issued it
+// (CI_SERVER_HOST). Sent to any other host it is a leaked credential, and a
+// forge such as GitHub refuses the clone outright when handed one it does not
+// recognise, so every other host, and any job without CI_SERVER_HOST or
+// CI_JOB_TOKEN, gets no flags.
+func authArgs(rawURL string) []string {
 	token := os.Getenv("CI_JOB_TOKEN")
-	if token == "" || !strings.HasPrefix(url, "https://") {
+	server := os.Getenv("CI_SERVER_HOST")
+	if token == "" || server == "" {
+		return nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), server) {
 		return nil
 	}
 	basic := base64.StdEncoding.EncodeToString([]byte("gitlab-ci-token:" + token))

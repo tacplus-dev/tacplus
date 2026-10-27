@@ -19,11 +19,13 @@ fi
 
 # pkg's last segment names the proto package this build HOSTS. The Go build
 # hosts notesapi; the TypeScript build is a client of it, so it gets its own
-# package name and hosts nothing.
+# package name, hosts nothing, and names the notes service in depends (by its
+# registry name) for the types it uses.
 write_config() {
   cat > "$1/tacplus.yaml" <<YAML
 language: "$2"
 pkg: "$3"
+${4:+depends: [$4]}
 output-dir: "model"
 header: |
   Copyright (c) 2026 Example Inc
@@ -47,7 +49,7 @@ echo "==> Building Go server"
 (cd "$EX/server" && go mod tidy && go build -o "$OUT/notes-server" .) > "$OUT/go/server-build.log" 2>&1 || { cat "$OUT/go/server-build.log"; exit 1; }
 
 echo "==> Generating TypeScript model"
-write_config "$OUT/ts" typescript com.example.notesclient
+write_config "$OUT/ts" typescript com.example.notesclient notes
 (cd "$OUT/ts" && "$TACPLUS_BIN" build --config tacplus.yaml --src "$EX/proto") > "$OUT/ts/generate.log" 2>&1 || { cat "$OUT/ts/generate.log"; exit 1; }
 echo "==> Building TypeScript model"
 (cd "$OUT/ts/model" && npm install && npm run build) > "$OUT/ts/npm-build.log" 2>&1 || { cat "$OUT/ts/npm-build.log"; exit 1; }

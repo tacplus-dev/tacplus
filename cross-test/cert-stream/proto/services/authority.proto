@@ -1,15 +1,16 @@
 // Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
-// Cert-stream fixture authority. The Go behavioral harness supplies the runtime
+// Cert-stream fixture SMB authority. The behavioral harnesses supply the runtime
 // implementation; this proto only declares the model shape needed by tacplus.
+// The minting contract is the sys minter.Minter (routing label "kernel"), and
+// instance health is the sys servicehealth.ServiceHealth; neither is declared
+// here.
 
 syntax = "proto3";
 
 package authority;
 
 import "sys/spec.proto";
-import "sys/tokenrequest.proto";
-import "sys/x509.proto";
 
 message Ping { string m = 1; }
 
@@ -18,22 +19,5 @@ service AuthorityService {
   option (spec.smb_authority) = {};
   rpc Get(Ping) returns (Ping) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
-  }
-}
-
-service TokenMintService {
-  option (spec.service_s2s) = {};
-  option (spec.token_minter) = {};
-
-  rpc TokenMint(tokenrequest.TokenMintRequest) returns (tokenrequest.TokenMintResponse) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
-  }
-
-  rpc MintServiceToken(tokenrequest.MintServiceTokenRequest) returns (tokenrequest.TokenMintResponse) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
-  }
-
-  rpc X509Mint(tokenrequest.X509MintRequest) returns (x509.X509CertChain) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
   }
 }

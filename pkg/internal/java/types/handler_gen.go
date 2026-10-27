@@ -73,11 +73,11 @@ type javaGrpcServiceEntry struct {
 
 // javaApprovalBrokerEntry names the approval-broker RPC the generated
 // (spec.rpc).requires_device check calls, and the generated S2S client seam it
-// goes out over. Everything here is derived from the authoritative
-// (spec.token_minter) declaration — no service, method or package is hardcoded.
+// goes out over. Everything here is derived from the (spec.approval_broker)
+// declaration — no service, method or package is hardcoded.
 type javaApprovalBrokerEntry struct {
-	Package        string // "kernel"
-	ServiceName    string // "Mint"
+	Package        string // "kernelpolicy"
+	ServiceName    string // "Policy"
 	MethodName     string // "BrokerPendingApproval"
 	CallName       string // the client method: "brokerPendingApproval"
 	GroupAccessor  string // client group accessor on GrpcClients, e.g. "services"
@@ -587,8 +587,8 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 
 	// (spec.rpc).requires_device: resolve the broker seam only when some hosted
 	// wrapper actually carries the gate. Resolving it unconditionally would make
-	// every build that happens to declare a token minter fail on a proto set
-	// whose minter has no broker RPC.
+	// every build without a requires_device rpc depend on a broker it never
+	// calls.
 	hasApprovalBroker := false
 	for _, e := range grpcSvcs {
 		if e.HasRequiresDevice {
@@ -603,9 +603,9 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 			return javaSmTemplateData{}, err
 		}
 		if broker == nil {
-			return javaSmTemplateData{}, fmt.Errorf("service manager data: a hosted rpc declares (spec.rpc).requires_device, but no authoritative (spec.token_minter) service in this proto set hosts an approval broker; the generated device-approval check has nothing to call")
+			return javaSmTemplateData{}, fmt.Errorf("service manager data: a hosted rpc declares (spec.rpc).requires_device, but no (spec.approval_broker) service is in this proto set (the token authority declares it on its policy service; add that service to depends); the generated device-approval check has nothing to call")
 		}
-		// The minter cannot be the guarded service. The check goes out over the
+		// The broker cannot be the guarded service. The check goes out over the
 		// generated S2S client to the broker, and no package gets a generated
 		// client to ITSELF — so wiring this would emit a call to an accessor
 		// that does not exist. Refused here, with the reason, rather than

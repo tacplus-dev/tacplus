@@ -244,14 +244,9 @@ prepare_client_only_proto() {
   mkdir -p "$dst/contract"
   cp "$PROTO_SRC/dependencies.yaml" "$dst/dependencies.yaml"
   # C2S client generation injects ServiceHealthState (clients resolve service
-  # instances via health); reuse the canonical minimal ServiceHealth fixture.
-  mkdir -p "$dst/platform"
-  cp "$PROTO_SRC/platform/health.proto" "$dst/platform/health.proto"
-  # The canonical fixture routes ServiceHealth at the "contractfixtures" service,
-  # which lives under services/ and is NOT part of a client-only tree. Retarget
-  # the routing label at the only service this tree loads (package contractclient)
-  # so ValidateRoutingLabels resolves it.
-  perl -pi -e 's/label: \["contractfixtures"\]/label: ["contractclient"]/' "$dst/platform/health.proto"
+  # instances via health); the ServiceHealth root is the sys
+  # servicehealth.ServiceHealth (routing label "kernel"), so the tree needs no
+  # copy of its own.
   cat > "$dst/registry.yaml" <<'EOF'
 # Managed by tacplus — do not edit IDs manually.
 services:
@@ -365,15 +360,34 @@ EOF
   apply_case_client_deps "$dst/contract/contract.proto" "$case_name"
 }
 
-prepare_missing_token_minter_proto() {
+# prepare_second_token_minter_proto copies the canonical tree and adds a second
+# authoritative (spec.token_minter) beside the sys minter.Minter. The sys
+# contract declares the one authoritative minter every run has, so a fixture can
+# no longer omit it (the old missing-minter rejection is unreachable); the
+# invariant it guarded, exactly one authoritative minter, is now enforced by
+# rejecting a second one.
+prepare_second_token_minter_proto() {
   local dst="$1"
   rm -rf "$dst"
   mkdir -p "$dst"
   cp -R "$PROTO_SRC/." "$dst/"
-  perl -0pi -e 's/\n\s*option \(spec\.token_minter\) = \{\};\n/\n/' "$dst/services/contractfixtures.proto"
-  if rg -n '\(spec\.token_minter\)' "$dst" >/dev/null; then
-    die "missing-token-minter fixture still contains spec.token_minter"
-  fi
+  cat > "$dst/services/contractrogueminter.proto" <<'EOF'
+syntax = "proto3";
+
+package contractfixtures;
+
+import "sys/spec.proto";
+import "sys/tokenrequest.proto";
+
+service RogueTokenMint {
+  option (spec.service_s2s) = {};
+  option (spec.token_minter) = {};
+
+  rpc MintServiceToken(tokenrequest.MintServiceTokenRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
+  }
+}
+EOF
 }
 
 write_config() {
@@ -386,11 +400,16 @@ write_config() {
   # runner. Client surfaces are driven purely by proto declarations
   # (spec.grpc_c2s_client / spec.grpc_w2s_client / service_c2d). The per-case
   # proto is what selects surfaces now — see prepare_case_proto below.
+  # grpc-servers: all — the canonical tree holds several services
+  # (contractclient, contractfixtures, eventbus, ...) and the consumer generates
+  # from all of them; unset, generation is scoped to contractclient's own
+  # contract file and contract/contract.proto (ContractApi) is dropped.
   cat > "$dir/tacplus.yaml" <<EOF
 language: "$language"
 pkg: "$(canonical_pkg "$language")"
 src: "$proto_src"
 output-dir: "model"
+grpc-servers: all
 EOF
 }
 
@@ -506,19 +525,18 @@ assert_client_im_mint_path() {
   case "$language" in
     go)
       # Go full-service builds that also expose a client surface (c2sm/c2dm/w2sm)
-      # emit client_im. The canonical fixture declares an authoritative
-      # (spec.token_minter) FixtureTokenMint; with no {proxy: true} front, the C2S
-      # exchanger discovery falls back to it, so client_im mints through the
-      # FixtureTokenMint C2S client stub (hasClientTokenExchanger = true), never
-      # the disabled stub.
+      # emit client_im. The authoritative (spec.token_minter) is the sys
+      # minter.Minter; with no {proxy: true} front, the C2S exchanger discovery
+      # falls back to it, so client_im mints through the Minter C2S client stub
+      # (hasClientTokenExchanger = true), never the disabled stub.
       local mgr="$output/chassis/client_im/manager.go"
       [[ -f "$mgr" ]] || die "go client_im manager missing: $mgr"
       rg -n 'hasClientTokenExchanger = true' "$mgr" >/dev/null ||
         die "go client_im did not wire the C2S mint path (hasClientTokenExchanger != true)"
-      rg -n 'NewFixtureTokenMintClient' "$mgr" >/dev/null ||
-        die "go client_im does not reference the FixtureTokenMint C2S mint client"
-      rg -n '\.TokenMint\(' "$mgr" >/dev/null ||
-        die "go client_im does not call the C2S TokenMint RPC"
+      rg -n 'NewMinterClient' "$mgr" >/dev/null ||
+        die "go client_im does not reference the minter.Minter C2S mint client"
+      rg -n '\.MintToken\(' "$mgr" >/dev/null ||
+        die "go client_im does not call the C2S MintToken RPC"
       ;;
     python)
       local mgr="$output/contractclient_model/chassis/client_im/manager.py"
@@ -538,20 +556,19 @@ assert_client_im_mint_path() {
       ;;
     java)
       # Java full-service builds that also expose a client surface (c2sm/c2dm/w2sm)
-      # emit client_im. Like go, the canonical fixture declares an authoritative
-      # (spec.token_minter) FixtureTokenMint; with no {proxy: true} front, the C2S
-      # exchanger discovery falls back to it, so client_im mints through the
-      # FixtureTokenMintGrpc C2S client stub (HAS_CLIENT_TOKEN_EXCHANGER = true),
-      # never the disabled stub.
+      # emit client_im. Like go, the authoritative (spec.token_minter) is the sys
+      # minter.Minter; with no {proxy: true} front, the C2S exchanger discovery
+      # falls back to it, so client_im mints through the MinterGrpc C2S client
+      # stub (HAS_CLIENT_TOKEN_EXCHANGER = true), never the disabled stub.
       local mgr
       mgr="$(find "$output/src/main/java" -type f -path '*/chassis/client_im/ClientIdentityManager.java' -print -quit)"
       [[ -n "$mgr" && -f "$mgr" ]] || die "java client_im manager missing under $output/src/main/java"
       rg -n 'HAS_CLIENT_TOKEN_EXCHANGER = true' "$mgr" >/dev/null ||
         die "java client_im did not wire the C2S mint path (HAS_CLIENT_TOKEN_EXCHANGER != true)"
-      rg -n 'FixtureTokenMintGrpc' "$mgr" >/dev/null ||
-        die "java client_im does not reference the FixtureTokenMint C2S mint stub"
-      rg -n '\.tokenMint\(' "$mgr" >/dev/null ||
-        die "java client_im does not call the C2S TokenMint RPC"
+      rg -n 'MinterGrpc' "$mgr" >/dev/null ||
+        die "java client_im does not reference the minter.Minter C2S mint stub"
+      rg -n '\.mintToken\(' "$mgr" >/dev/null ||
+        die "java client_im does not call the C2S MintToken RPC"
       ;;
   esac
 }
@@ -571,16 +588,28 @@ assert_fixture_coverage() {
     'rpc Put\(FixtureStoreEntry\)'
     'rpc List\(trace\.TraceRequest\)'
     'message FixtureHealth'
-    'service FixtureTokenMint'
-    'rpc TokenMint\(tokenrequest\.TokenMintRequest\)'
-    'rpc MintServiceToken\(tokenrequest\.MintServiceTokenRequest\)'
-    'rpc X509Mint\(tokenrequest\.X509MintRequest\) returns \(x509\.X509CertChain\)'
+    'service FixtureHost'
   )
 
   local pattern
   for pattern in "${patterns[@]}"; do
     rg -n "$pattern" "$fixture_proto" >/dev/null ||
       die "fixture coverage marker missing from generated proto: $pattern"
+  done
+
+  # The minting surface the fixture used to declare is the sys minter.Minter,
+  # emitted into every full-service output.
+  local minter_proto="$output/proto/sys/minter.proto"
+  [[ -f "$minter_proto" ]] || die "sys minter proto missing from generated output: $minter_proto"
+  local minter_patterns=(
+    'service Minter'
+    'rpc MintToken\(tokenrequest\.TokenMintRequest\)'
+    'rpc MintServiceToken\(tokenrequest\.MintServiceTokenRequest\)'
+    'rpc MintX509Cert\(tokenrequest\.X509MintRequest\) returns \(x509\.X509CertChain\)'
+  )
+  for pattern in "${minter_patterns[@]}"; do
+    rg -n "$pattern" "$minter_proto" >/dev/null ||
+      die "sys minter marker missing from generated proto: $pattern"
   done
 
   local vservice_patterns=(
@@ -2955,7 +2984,7 @@ func TestEventBusSubscriberDeliversNonZeroRecordMeta(t *testing.T) {
 		t:     t,
 		frame: encodeEventBusSubscribeRecordForTest(t, meta, event),
 	}
-	sub := contractfixturesfixturestateevents_sub.New(conn, "contractclient")
+	sub := contractfixturesfixturestateevents_sub.New(conn, "contractclient", func() (string, error) { return "fixture-token", nil })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -6364,7 +6393,7 @@ run_java_generated_self_tests() {
     package_name="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$source_file")"
     [[ -n "$package_name" ]] || die "could not determine Java package for $source_file"
     class_name="$package_name.$(basename "$source_file" .java)"
-    SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$class_name" >>"$test_log" 2>&1 || {
+    SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$class_name" >>"$test_log" 2>&1 || {
       cat "$test_log" >&2
       return 1
     }
@@ -6377,7 +6406,7 @@ run_java_generated_self_tests() {
   sc_test="$(find "$output/src/main/java" -type f -path '*/chassis/serviceconnection/ServiceConnectionTest.java' -print -quit)"
   if [[ -n "$sc_test" ]]; then
     sc_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$sc_test").$(basename "$sc_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$sc_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$sc_class" >>"$test_log" 2>&1 || {
       cat "$test_log" >&2
       return 1
     }
@@ -7641,11 +7670,19 @@ public final class Consumer {
 
     AtomicReference<Contractfixtures.FixtureEvent> gotEvent = new AtomicReference<>();
     AtomicReference<ContractfixturesFixtureStateEventsSubscriber.RecordMeta> gotMeta = new AtomicReference<>();
-    subscriber.subscribe((delivered, meta) -> {
-      gotEvent.set(delivered);
-      gotMeta.set(meta);
-      Thread.currentThread().interrupt();
-    });
+    // The handler ends the subscription by interrupting the thread. The
+    // subscriber's reconnect backoff sleep then surfaces that interrupt as
+    // InterruptedException (subscribe "blocks until interrupted"), which is the
+    // expected way out here, not a failure.
+    try {
+      subscriber.subscribe((delivered, meta) -> {
+        gotEvent.set(delivered);
+        gotMeta.set(meta);
+        Thread.currentThread().interrupt();
+      });
+    } catch (InterruptedException expected) {
+      // fall through to the assertions below
+    }
     Thread.interrupted();
 
     // Per-topic subscribe name (eventbus.PerTopicSubscribeParts), not the flat
@@ -8279,7 +8316,7 @@ EOF
     # --sun-misc-unsafe-memory-access=allow: protobuf-java's UnsafeUtil still uses
     # sun.misc.Unsafe; JDK 24+ warns on first use and the zero-warning gate would
     # trip on that environment noise.
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -Dlogback.configurationFile="$consumer_dir/logback-quiet.xml" -cp "$consumer_dir/classes:$cp" consumer.Consumer >"$log_dir/java-consumer-run.log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -Dlogback.configurationFile="$consumer_dir/logback-quiet.xml" -cp "$consumer_dir/classes:$cp" consumer.Consumer >"$log_dir/java-consumer-run.log" 2>&1 || {
       cat "$log_dir/java-consumer-run.log" >&2
       return 1
     }
@@ -8623,21 +8660,21 @@ run_generation_case() {
   compile_generated_output "$language" "$output" "$case_name"
 }
 
-run_missing_token_minter_case() {
+run_second_token_minter_case() {
   local language="$1"
-  local dir="$WORK_ROOT/$language/missing-token-minter"
+  local dir="$WORK_ROOT/$language/second-token-minter"
   local proto_src="$dir/proto"
   local log="$dir/build.log"
 
-  echo "==> $language/missing-token-minter: expecting S2S generation rejection"
-  prepare_missing_token_minter_proto "$proto_src"
+  echo "==> $language/second-token-minter: expecting S2S generation rejection"
+  prepare_second_token_minter_proto "$proto_src"
   write_config "$dir" "$language" both "$proto_src"
   if (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$proto_src" --tag latest >"$log" 2>&1); then
-    die "$language unexpectedly accepted S2S generation without an authoritative token minter"
+    die "$language unexpectedly accepted a second authoritative token minter beside the sys minter.Minter"
   fi
-  rg -n 'no authoritative \(spec\.token_minter\)' "$log" >/dev/null || {
+  rg -n 'multiple authoritative \(spec\.token_minter\) services declared' "$log" >/dev/null || {
     cat "$log" >&2
-    die "$language missing-token-minter rejection did not mention the authoritative token minter"
+    die "$language second-token-minter rejection did not mention the duplicate authoritative token minter"
   }
 }
 
@@ -8660,7 +8697,7 @@ for language in "${languages[@]}"; do
     run_generation_case "$language" "$case_name"
   done
   if [[ -z "$CASE_FILTER" ]] && is_full_service_language "$language"; then
-    run_missing_token_minter_case "$language"
+    run_second_token_minter_case "$language"
   fi
 done
 

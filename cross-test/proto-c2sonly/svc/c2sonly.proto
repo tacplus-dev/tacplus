@@ -3,15 +3,12 @@
 // C2S-only cross-test fixture: the whole server surface is non-S2S.
 //
 // Why this shape exists as a gate: sm/ and both chassis packages ARE generated
-// (serverServices is non-empty), but s2sGenerationEnabled is false, so
-// ValidateTokenMinters does not demand a (spec.token_minter) service and
-// DiscoverTokenExchangerPackage returns nil. That selects the NO-token-exchanger
-// variants of chassis/service_im and chassis/servicemanager — inline sources in
-// pkg/internal/go/types/stateclient_gen.go rather than templates. Until this
-// fixture existed no gate generated that variant, and it shipped broken twice:
-// the NEW-21 classifier's sentinels (batch 12) and the credential-degradation
-// helpers (NEW-47), each an unconditional chassis reference the inline source
-// did not declare.
+// (serverServices is non-empty) for a server surface with no S2S rpc of its
+// own. It used to select the NO-token-exchanger chassis variants, because no
+// (spec.token_minter) was declared; the sys minter.Minter is now in every run
+// and this service reports instance health to the state host, so it generates
+// the exchanger variant like any other service (cross-test/current-generation
+// asserts which).
 //
 // NOT a c2d-only daemon: that shape (an sm/ whose only listener is the c2d
 // socket server) is cross-test/c2d-server's fixture.

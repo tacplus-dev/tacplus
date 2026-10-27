@@ -8,4 +8,4 @@ services:
       id: 3
 vservices:
     - name: accountingrecord
-      field_id: 4
+      field_id: 40

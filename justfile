@@ -48,7 +48,9 @@ install: generate
   {{lock}} go install -trimpath -ldflags="$ldflags" .
   echo "Installed: tacplus ${tag}"
 
-test: soundness
+# generate first: the compiler imports the generated spec descriptors under the
+# git-ignored target/, which a fresh checkout (CI, the nightly gates) lacks.
+test: generate soundness
   {{lock}} go test ./...
 
 # Model/template soundness gate. Runs as part of `test`.

@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // The approval-broker half of the (spec.rpc).requires_device fixture.
 //
-// This package is the authoritative (spec.token_minter), so DiscoverApprovalBroker
-// finds BrokerPendingApproval here BY SIGNATURE (BrokerPendingApprovalRequest →
-// BrokerPendingApprovalResponse), not by name. It is a DIFFERENT package from the
-// guarded rpc's on purpose: all three backends refuse to generate when the minter's
-// own package declares a requires_device rpc, because a package gets no generated
-// client to itself.
+// This service carries (spec.approval_broker), so DiscoverApprovalBroker finds
+// BrokerPendingApproval here BY SIGNATURE (BrokerPendingApprovalRequest →
+// BrokerPendingApprovalResponse), not by name. It is the shape of the token
+// authority's own policy service: the minting contract is the sys
+// minter.Minter, which does not carry the broker. It is a DIFFERENT package from
+// the guarded rpc's on purpose: all three backends refuse to generate when the
+// broker's own package declares a requires_device rpc, because a package gets
+// no generated client to itself.
 //
 // The message shapes are the wire contract the generated approval check builds:
 // service_manager templates set approval_id / rpc_method / request_hash /
@@ -19,31 +21,11 @@ syntax = "proto3";
 package devicemint;
 
 import "sys/spec.proto";
-import "sys/tokenrequest.proto";
-import "sys/x509.proto";
 
-// DeviceMint is the cluster's authoritative S2S token minter and therefore the
-// host of the approval broker.
+// DeviceMint is the fleet's approval broker.
 service DeviceMint {
   option (spec.service_s2s) = {label: "DeviceMint"};
-  option (spec.token_minter) = {};
-
-  // Self-mint, the ordinary minter surface. Present because the generated
-  // bootstrap exchanger targets the authoritative minter's mint RPC.
-  rpc MintServiceToken(tokenrequest.MintServiceTokenRequest) returns (tokenrequest.TokenMintResponse) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES]};
-  }
-
-  // Token exchange, required of the CLIENT-side minter surface.
-  rpc MintToken(tokenrequest.TokenMintRequest) returns (tokenrequest.TokenMintResponse) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES]};
-  }
-
-  // Cert mint, the other surface the generated servicemanager requires of the
-  // authoritative minter (it is also the cluster's cert authority).
-  rpc MintX509Cert(tokenrequest.X509MintRequest) returns (x509.X509CertChain) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES]};
-  }
+  option (spec.approval_broker) = {};
 
   // BrokerPendingApproval consumes a pending approval with the device assertion
   // the person signed it with. The generated requires_device gate calls this and

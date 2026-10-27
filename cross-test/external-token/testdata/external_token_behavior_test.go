@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	authority_pb "example.com/externaltoken/tacplus/model/types/services/authority"
+	minter_pb "example.com/externaltoken/tacplus/model/types/sys/minter"
 	token_pb "example.com/externaltoken/tacplus/model/types/sys/token"
 	common_pb "example.com/externaltoken/tacplus/model/types/sys/tokenrequest"
 	"google.golang.org/grpc"
@@ -42,7 +42,7 @@ const (
 // RPC must meet (the presented token is the caller's own, exp no more than
 // 600 s out) and signs a fresh ES256 JWT with a new jti per call.
 type mockKernel struct {
-	authority_pb.UnimplementedTokenMintServiceServer
+	minter_pb.UnimplementedMinterServer
 	key *ecdsa.PrivateKey
 
 	mu       sync.Mutex
@@ -135,7 +135,7 @@ func TestGoTokenForExternalMintsAFreshES256TokenOnEveryCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := grpc.NewServer()
-	authority_pb.RegisterTokenMintServiceServer(server, kernel)
+	minter_pb.RegisterMinterServer(server, kernel)
 	go func() { _ = server.Serve(lis) }()
 	defer server.Stop()
 
@@ -224,7 +224,7 @@ func TestGoTokenForExternalMintsAFreshES256TokenOnEveryCall(t *testing.T) {
 // has been revoked. Service tokens expire one second out, so every call to the
 // minter re-exchanges.
 type bootstrapKernel struct {
-	authority_pb.UnimplementedTokenMintServiceServer
+	minter_pb.UnimplementedMinterServer
 
 	mu            sync.Mutex
 	refreshInputs []string
@@ -270,7 +270,7 @@ func TestGoBootstrapTokenIsExchangedOnceAndRenewedFromTheRefreshToken(t *testing
 		t.Fatal(err)
 	}
 	server := grpc.NewServer()
-	authority_pb.RegisterTokenMintServiceServer(server, kernel)
+	minter_pb.RegisterMinterServer(server, kernel)
 	go func() { _ = server.Serve(lis) }()
 	defer server.Stop()
 

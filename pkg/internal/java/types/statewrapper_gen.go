@@ -185,12 +185,12 @@ func generateJavaStateClientWrappers(config *tactype.Config, servicesInfo []Serv
 		if err != nil {
 			continue
 		}
-		// Exception: the manifest-declared runtime config state proto is an
-		// application-level state boundary for runtime config delivery.
-		if proto.IsInfraProtoFile(svc.ProtoFile, fileDesc) {
-			if !proto.IsRuntimeConfigStateProto(svc.ProtoFile) {
-				continue
-			}
+		// Skip infrastructure protos except the manifest-declared runtime config
+		// state proto (ServiceConfigState) and sys protos that declare a state
+		// root: the sys contract's roots (sys/servicehealth.proto) get state
+		// clients exactly like a service's own roots do, as in Go.
+		if proto.IsInfraProtoFile(svc.ProtoFile, fileDesc) && !proto.IsRuntimeConfigStateProto(svc.ProtoFile) && !proto.DeclaresServiceState(fileDesc) {
+			continue
 		}
 
 		for i := range fileDesc.Messages {

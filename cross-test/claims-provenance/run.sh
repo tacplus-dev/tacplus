@@ -99,11 +99,16 @@ grep -q 'rpc GetPublicEvent' "$CONTRACT" || die "overlay was not applied"
 
 # ---- generate ----
 OUTPUT="$WORK_ROOT/model"
+# grpc-servers: all — the fixture tree holds several services (contractclient,
+# contractfixtures, eventbus, ...) and the consumer generates every one of their
+# server surfaces; without it generation is scoped to contractclient's own
+# contract file and ContractApi (contract/contract.proto) is dropped.
 cat > "$WORK_ROOT/tacplus.yaml" <<EOF
 language: "java"
 pkg: "com.gitlab.example.tacplus.consumer.contractclient"
 src: "$PROTO_DIR"
 output-dir: "model"
+grpc-servers: all
 EOF
 echo "==> generating java"
 (cd "$WORK_ROOT" && "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_DIR" --tag latest) \

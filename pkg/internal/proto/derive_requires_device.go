@@ -14,8 +14,8 @@ import (
 
 // DeriveApprovalBrokerClient returns the S2S client entry a package needs
 // because it declares a (spec.rpc).requires_device RPC: a client to the
-// authoritative (spec.token_minter) service, which hosts the approval broker
-// the generated check calls.
+// (spec.approval_broker) service, which hosts the broker rpc the generated
+// check calls.
 //
 // Auto-injected rather than declared. The developer writes only the boolean —
 // same spirit as a `private` record needing no manual wiring — so the
@@ -25,7 +25,7 @@ import (
 // service surfaces are materialized.
 //
 // Returns nil when selfPackage declares no requires_device RPC, and nil when
-// selfPackage IS the minter's own package — the minter does not call itself.
+// selfPackage IS the broker's own package — the broker does not call itself.
 func DeriveApprovalBrokerClient(inputDir, selfPackage string) ([]tactype.GrpcEntry, error) {
 	dp, err := parser.NewDescriptorParser(inputDir)
 	if err != nil {
@@ -64,7 +64,7 @@ func DeriveApprovalBrokerClient(inputDir, selfPackage string) ([]tactype.GrpcEnt
 		return nil, err
 	}
 	if broker == nil {
-		return nil, fmt.Errorf("%v declares (spec.rpc).requires_device, but no authoritative (spec.token_minter) service in this proto set hosts an approval broker (an rpc taking BrokerPendingApprovalRequest and returning BrokerPendingApprovalResponse); the generated device-approval check has nothing to call", guarded)
+		return nil, fmt.Errorf("%v declares (spec.rpc).requires_device, but no (spec.approval_broker) service is in this proto set (a service hosting an rpc taking BrokerPendingApprovalRequest and returning BrokerPendingApprovalResponse; the token authority declares it on its policy service, so add that service to depends); the generated device-approval check has nothing to call", guarded)
 	}
 	if broker.Package == selfPackage {
 		return nil, nil

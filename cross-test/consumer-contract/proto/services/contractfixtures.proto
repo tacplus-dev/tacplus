@@ -7,8 +7,6 @@ package contractfixtures;
 
 import "sys/healthreport.proto";
 import "sys/spec.proto";
-import "sys/tokenrequest.proto";
-import "sys/x509.proto";
 
 option (spec.service) = {name: "contractfixtures"};
 option (spec.vservice) = {
@@ -187,19 +185,24 @@ message FixtureActor {
   };
 }
 
-service FixtureTokenMint {
+// FixtureHost is the contractfixtures service itself: the host that serves the
+// "contractfixtures" routing label FixtureState, FixtureStoreEntry and
+// contracttopics.HostedEventBus route to. Token minting is the sys
+// minter.Minter (the one authoritative (spec.token_minter), routing label
+// "kernel"); this fixture no longer declares a minter of its own.
+service FixtureHost {
   option (spec.service_s2s) = {};
-  option (spec.token_minter) = {};
 
-  rpc TokenMint(tokenrequest.TokenMintRequest) returns (tokenrequest.TokenMintResponse) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
+  rpc GetFixtureInfo(FixtureInfoRequest) returns (FixtureInfoResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
   }
+}
 
-  rpc MintServiceToken(tokenrequest.MintServiceTokenRequest) returns (tokenrequest.TokenMintResponse) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
-  }
+message FixtureInfoRequest {
+  string entry_id = 1 [(spec.assert_required) = true];
+}
 
-  rpc X509Mint(tokenrequest.X509MintRequest) returns (x509.X509CertChain) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, flags: [RPC_FLAG_SELF_AUTHENTICATES], auth_services: ["*"]};
-  }
+message FixtureInfoResponse {
+  string entry_id = 1;
+  int64 observed_events = 2;
 }

@@ -5,8 +5,9 @@
 //
 // The REAL generated ServiceManager of cross-test/proto-zerorpc runs between two
 // fakes over TLS with SPIFFE certificates:
-//   - a kernel: the token minter, plus the ServiceHealthState that lists the
-//     llmproxy instance. It records the path of every request it receives.
+//   - a kernel (routing label "kernel"): the sys token minter (minter.Minter),
+//     plus the sys ServiceHealthState that lists the llmproxy instance. It
+//     records the path of every request it receives.
 //   - an llmproxy peer (service id "upstreamllm", the package of its proto), found only through that ServiceHealthState.
 //
 // The host does `new()` + `run()` and then makes ONE llmproxy call through the
@@ -24,18 +25,19 @@ use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tonic::{Request, Response, Status};
 use zerorpc_model::s2sm::handler::Handler;
 use zerorpc_model::s2sm::ServiceManager;
-use zerorpc_model::types::platform::zerorpchealth::*;
-use zerorpc_model::types::platform::zerorpchealth::service_health_state_service_server::{
+use zerorpc_model::types::sys::minter::minter::minter_server::{Minter, MinterServer};
+use zerorpc_model::types::sys::servicehealth::*;
+use zerorpc_model::types::sys::servicehealth::service_health_state_service_server::{
     ServiceHealthStateService, ServiceHealthStateServiceServer,
 };
-use zerorpc_model::types::services::mintsvc::mintsvc::mint_svc_server::{MintSvc, MintSvcServer};
 use zerorpc_model::types::services::upstreamllm::upstreamllm::llm_proxy_server::{LlmProxy, LlmProxyServer};
 use zerorpc_model::types::services::upstreamllm::upstreamllm::{CompleteRequest, CompleteResponse};
 use zerorpc_model::types::sys::healthreport::healthreport::{InstanceStatus, ServiceInstanceHealth};
 use zerorpc_model::types::sys::host::host::Host;
 use zerorpc_model::types::sys::token::token::Token;
 use zerorpc_model::types::sys::tokenrequest::tokenrequest::{
-    MintServiceTokenRequest, TokenMintRequest, TokenMintResponse, X509MintRequest,
+    MintExternalServiceTokenRequest, MintServiceTokenRequest, TokenMintRequest, TokenMintResponse,
+    X509MintRequest,
 };
 use zerorpc_model::types::sys::x509::x509::X509CertChain;
 
@@ -92,10 +94,7 @@ fn token(exp_in: u64) -> Token {
 }
 
 #[tonic::async_trait]
-impl MintSvc for Kernel {
-    async fn token_mint(&self, _: Request<TokenMintRequest>) -> Result<Response<TokenMintResponse>, Status> {
-        Err(Status::unimplemented("token_mint"))
-    }
+impl Minter for Kernel {
     async fn mint_service_token(
         &self,
         _: Request<MintServiceTokenRequest>,
@@ -106,8 +105,17 @@ impl MintSvc for Kernel {
             ..Default::default()
         }))
     }
-    async fn x509_mint(&self, _: Request<X509MintRequest>) -> Result<Response<X509CertChain>, Status> {
-        Err(Status::unimplemented("x509_mint"))
+    async fn mint_external_service_token(
+        &self,
+        _: Request<MintExternalServiceTokenRequest>,
+    ) -> Result<Response<TokenMintResponse>, Status> {
+        Err(Status::unimplemented("mint_external_service_token"))
+    }
+    async fn mint_token(&self, _: Request<TokenMintRequest>) -> Result<Response<TokenMintResponse>, Status> {
+        Err(Status::unimplemented("mint_token"))
+    }
+    async fn mint_x509_cert(&self, _: Request<X509MintRequest>) -> Result<Response<X509CertChain>, Status> {
+        Err(Status::unimplemented("mint_x509_cert"))
     }
 }
 
@@ -229,7 +237,7 @@ async fn host() {
     });
 
     let (kernel_l, kernel_addr) = listener().await;
-    let kernel_tls = ServerTlsConfig::new().identity(service_identity(&ca, "zerorpchealth"));
+    let kernel_tls = ServerTlsConfig::new().identity(service_identity(&ca, "kernel"));
     let seen = paths.clone();
     let (health_reporter, health_svc) = tonic_health::server::health_reporter();
     health_reporter.set_service_status("", tonic_health::ServingStatus::Serving).await;
@@ -244,7 +252,7 @@ async fn host() {
             .unwrap()
             .layer(record)
             .add_service(health_svc)
-            .add_service(MintSvcServer::new(Kernel { peer: llm_addr }))
+            .add_service(MinterServer::new(Kernel { peer: llm_addr }))
             .add_service(ServiceHealthStateServiceServer::new(Kernel { peer: llm_addr }))
             .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(kernel_l))
             .await
@@ -313,7 +321,7 @@ async fn host() {
     // Not an instance of the parent service.
     let seen = paths.lock().unwrap().clone();
     println!("kernel saw: {seen:?}");
-    for forbidden in ["SetInstances", "TlsCertService", "X509Mint"] {
+    for forbidden in ["SetInstances", "TlsCertService", "MintX509Cert"] {
         if seen.iter().any(|p| p.contains(forbidden)) {
             fail(format!("client-only host called {forbidden}: {seen:?}"));
         }

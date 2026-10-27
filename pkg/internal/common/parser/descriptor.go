@@ -178,6 +178,7 @@ type ServiceDescriptor struct {
 	VolumeGroups     []VolumeGroupInfo // volume_group annotations: blob-store volume groups this service declares (repeatable)
 	IsTokenMinter    bool              // token_minter annotation present: this service mints service-identity tokens
 	TokenMinterProxy bool              // token_minter {proxy: true}: the client-reachable (C2S) mint front; bare {} is the authoritative S2S minter
+	IsApprovalBroker bool              // approval_broker annotation present: this service hosts the broker rpc the requires_device check calls
 	Gateway          bool              // derived: IsC2S && !AuthDisabled
 	EventLabel       string            // value from event_label annotation (routing label for event services)
 	HostLabel        string            // value from service_s2s/service_c2s {label: "..."} — the package name of the service that hosts this vservice or trait surface
@@ -1088,6 +1089,14 @@ func (p *DescriptorParser) parseServiceOptions(sd protoreflect.ServiceDescriptor
 		if val := proto.GetExtension(opts, spec.E_TokenMinter).(*spec.TokenMinterAnnotation); val != nil {
 			svc.IsTokenMinter = true
 			svc.TokenMinterProxy = val.GetProxy()
+		}
+	}
+
+	// approval_broker (ApprovalBrokerAnnotation) — this service hosts the
+	// approval broker the generated (spec.rpc).requires_device check calls.
+	if proto.HasExtension(opts, spec.E_ApprovalBroker) {
+		if val := proto.GetExtension(opts, spec.E_ApprovalBroker).(*spec.ApprovalBrokerAnnotation); val != nil {
+			svc.IsApprovalBroker = true
 		}
 	}
 }

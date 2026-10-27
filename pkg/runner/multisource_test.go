@@ -163,8 +163,38 @@ func TestBuildCarriesSourceLayersToRegistry(t *testing.T) {
 		}
 		return d
 	}
-	plat := copyTree("platform", "plat")
 	app := copyTree("svc", "app")
+	// The platform layer: a second surface of the service's own package,
+	// declared in the other source. The fixture's instance health comes from
+	// the sys contract now, so this layer is written here.
+	plat := filepath.Join(root, "plat")
+	if err := os.MkdirAll(filepath.Join(plat, "platform"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(plat, "platform", "platform.proto"), []byte(`syntax = "proto3";
+
+package c2sonly;
+
+import "sys/spec.proto";
+
+message PlatformPingRequest {
+  string item_id = 1 [(spec.assert_required) = true];
+}
+
+message PlatformPingResponse {
+  string result_id = 1 [(spec.assert_required) = true];
+}
+
+service PlatformApi {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  rpc PingPlatform(PlatformPingRequest) returns (PlatformPingResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
+  }
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	project := t.TempDir()
 	t.Chdir(project)
@@ -203,7 +233,7 @@ func TestBuildCarriesSourceLayersToRegistry(t *testing.T) {
 		}
 	}
 	walk(doc)
-	if got["c2sonly.C2SOnlyApi"] != "app" || got["c2sonlyhealth.ServiceHealthStateService"] != "platform" {
-		t.Errorf("service sources = %v, want app for C2SOnlyApi and platform for the health service", got)
+	if got["c2sonly.C2SOnlyApi"] != "app" || got["c2sonly.PlatformApi"] != "platform" {
+		t.Errorf("service sources = %v, want app for C2SOnlyApi and platform for PlatformApi", got)
 	}
 }

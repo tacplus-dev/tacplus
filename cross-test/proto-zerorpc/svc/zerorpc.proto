@@ -8,7 +8,8 @@
 // reloading_tls_incoming and tls_server_certified_key without declaring them
 // and the generated s2sm did not compile (E0425/E0609). The s2s client edge
 // (upstreamllm.LlmProxy, services/llmproxy.proto) makes the build need an
-// S2S identity, so services/mintsvc.proto supplies the token minter.
+// S2S identity, which the sys token minter (sys/minter.proto, label "kernel")
+// supplies. Instance health is the sys ServiceHealth root.
 
 syntax = "proto3";
 

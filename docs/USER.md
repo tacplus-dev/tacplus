@@ -1751,12 +1751,21 @@ in the run. The fleet build loads the real implementors. Today:
 
 | Declared in | What | Hosted by |
 |-------------|------|-----------|
-| `sys/minter.proto` (`minter.Minter`) | The minting contract every generated ServiceManager calls: `MintServiceToken`, `MintExternalServiceToken`, `MintToken`, `MintX509Cert`. It is the one authoritative `(spec.token_minter)` in every run; a consumer must not declare another. | The token authority, at routing label `kernel`. It implements `minter.Minter` and keeps its own policy RPCs in a service of its own. |
+| `sys/minter.proto` (`minter.Minter`) | The minting contract every generated ServiceManager calls: `MintServiceToken`, `MintExternalServiceToken`, `MintToken`, `MintX509Cert`. It is the one authoritative `(spec.token_minter)` in every run; a consumer must not declare another. | The token authority, at routing label `kernel`. It implements `minter.Minter` and keeps its own policy RPCs in a service of its own; that service carries `(spec.approval_broker)` when the fleet has `(spec.rpc).requires_device` rpcs (see below). |
 | `sys/servicehealth.proto` (`servicehealth.ServiceHealth`) | The service-instance health root every service reports into. Field numbers are frozen. | The state host (`kernel`), which imports it rather than declaring a copy. |
 | routing label `kernel` | The state host. Counts as served in every run (see Well-Known Names); config state routes there when no store is loaded. | The fleet's state host. |
 
 A service that declared these itself before now imports them; declaring a second
 copy is an error that names the sys file.
+
+The approval broker is not part of the minting contract. A `(spec.rpc).requires_device`
+(or `requires_device_when`) rpc's generated check calls the one rpc taking
+`BrokerPendingApprovalRequest` and returning `BrokerPendingApprovalResponse` on the
+service annotated `option (spec.approval_broker) = {};`. The token authority declares it
+on its policy service, which must be a `(spec.service_s2s)` service with exactly one such
+rpc; at most one service in a run may carry the annotation. A service with a
+`requires_device` rpc therefore names that service's contract in `depends`, so the broker
+is in its run; without it, generation fails and says so.
 
 ## Well-Known Names (Conventions)
 

@@ -70,7 +70,7 @@ type {{.ServerName}} struct {
 	anonymizeHmacKey []byte
 {{- if .HasRequiresDevice}}
 	// approvalCheckFunc runs the (spec.rpc).requires_device check against the
-	// approval broker on the authoritative token minter. Wired by the
+	// (spec.approval_broker) service. Wired by the
 	// ServiceManager, which owns the generated S2S client.
 	approvalCheckFunc func(ctx context.Context, rpcMethod, approvalID string, requestHash []byte, callerNamespace, callerSubject string, deviceAssertion []byte) error
 {{- end}}

@@ -8,9 +8,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tonic::transport::{Endpoint, Server};
 
-use crate::types::services::authority::authority::token_mint_service_server::{
-    TokenMintService, TokenMintServiceServer,
-};
+use crate::types::sys::minter::minter::minter_server::{Minter, MinterServer};
 use crate::types::sys::token::token::{Token, TokenPurpose};
 use crate::types::sys::tokenrequest::tokenrequest::{
     MintExternalServiceTokenRequest, MintServiceTokenRequest, TokenMintRequest, TokenMintResponse,
@@ -56,19 +54,19 @@ struct MockKernel {
 }
 
 #[tonic::async_trait]
-impl TokenMintService for MockKernel {
-    async fn token_mint(
+impl Minter for MockKernel {
+    async fn mint_token(
         &self,
         _request: tonic::Request<TokenMintRequest>,
     ) -> Result<tonic::Response<TokenMintResponse>, tonic::Status> {
-        Err(tonic::Status::unimplemented("token_mint is not part of this fixture"))
+        Err(tonic::Status::unimplemented("mint_token is not part of this fixture"))
     }
 
-    async fn x509_mint(
+    async fn mint_x509_cert(
         &self,
         _request: tonic::Request<X509MintRequest>,
     ) -> Result<tonic::Response<X509CertChain>, tonic::Status> {
-        Err(tonic::Status::unimplemented("x509_mint is not part of this fixture"))
+        Err(tonic::Status::unimplemented("mint_x509_cert is not part of this fixture"))
     }
 
     async fn mint_service_token(
@@ -157,19 +155,19 @@ struct BootstrapKernel {
 }
 
 #[tonic::async_trait]
-impl TokenMintService for BootstrapKernel {
-    async fn token_mint(
+impl Minter for BootstrapKernel {
+    async fn mint_token(
         &self,
         _request: tonic::Request<TokenMintRequest>,
     ) -> Result<tonic::Response<TokenMintResponse>, tonic::Status> {
-        Err(tonic::Status::unimplemented("token_mint is not part of this fixture"))
+        Err(tonic::Status::unimplemented("mint_token is not part of this fixture"))
     }
 
-    async fn x509_mint(
+    async fn mint_x509_cert(
         &self,
         _request: tonic::Request<X509MintRequest>,
     ) -> Result<tonic::Response<X509CertChain>, tonic::Status> {
-        Err(tonic::Status::unimplemented("x509_mint is not part of this fixture"))
+        Err(tonic::Status::unimplemented("mint_x509_cert is not part of this fixture"))
     }
 
     async fn mint_service_token(
@@ -225,7 +223,7 @@ async fn rust_bootstrap_token_is_exchanged_once_and_renewed_from_the_refresh_tok
     let addr = reserve_local_addr();
     let server = tokio::spawn(
         Server::builder()
-            .add_service(TokenMintServiceServer::from_arc(kernel.clone()))
+            .add_service(MinterServer::from_arc(kernel.clone()))
             .serve(addr),
     );
     let channel = connect_plain_channel(addr).await;
@@ -275,7 +273,7 @@ async fn rust_token_for_external_mints_a_fresh_es256_token_on_every_call() {
     let addr = reserve_local_addr();
     let server = tokio::spawn(
         Server::builder()
-            .add_service(TokenMintServiceServer::from_arc(kernel.clone()))
+            .add_service(MinterServer::from_arc(kernel.clone()))
             .serve(addr),
     );
     let channel = connect_plain_channel(addr).await;

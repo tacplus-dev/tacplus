@@ -20,6 +20,11 @@ import "sys/spec.proto";
 
 option (spec.service) = {name: "quorumvault"};
 
+// quorumvault is also the fixture's record store: the GCS archive sink ships
+// the record store's hot redo segments, so only (spec.record_store) gets it,
+// and this fixture's dependencies.yaml pins the SDK to compile it.
+option (spec.record_store) = {};
+
 // VaultService is the package's own server, which the store's label routes to.
 service VaultService {
   option (spec.service_s2s) = {label: "VaultService"};

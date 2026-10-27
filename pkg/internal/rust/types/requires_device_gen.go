@@ -759,15 +759,15 @@ func rustRequiresDeviceWhenCondition(when *parser.RequiresDeviceWhenDescriptor) 
 
 // rustApprovalBrokerEntry names the approval-broker rpc the generated
 // (spec.rpc).requires_device check calls, and the generated S2S client seam it
-// goes out over. Everything here is derived from the authoritative
-// (spec.token_minter) declaration — no service, method or package is hardcoded.
+// goes out over. Everything here is derived from the (spec.approval_broker)
+// declaration — no service, method or package is hardcoded.
 //
 // The two accessors are computed from the SAME functions the client aggregator
 // emits with (resolveMeshTarget, grpcClientNames), because a second spelling
 // here would compile in the generator and fail in rustc.
 type rustApprovalBrokerEntry struct {
-	Package        string // "kernel"
-	ServiceName    string // "Mint"
+	Package        string // "kernelpolicy"
+	ServiceName    string // "Policy"
 	MethodName     string // "BrokerPendingApproval"
 	TargetAccessor string // sm.s2s().<this>()
 	ClientAccessor string // .<this>()
@@ -801,14 +801,14 @@ func rustRequiresDeviceServices(flatProtoDir string) (map[string]bool, error) {
 
 // buildRustApprovalBrokerEntry resolves the broker seam for a build that hosts
 // at least one guarded rpc. clientServices is the resolved S2S client set, so
-// the Mint client auto-injected by DeriveApprovalBrokerClient is already in it.
+// the broker client auto-injected by DeriveApprovalBrokerClient is already in it.
 func buildRustApprovalBrokerEntry(flatProtoDir string, clientServices []ServiceInfo) (rustApprovalBrokerEntry, error) {
 	broker, err := parser.DiscoverApprovalBroker(flatProtoDir)
 	if err != nil {
 		return rustApprovalBrokerEntry{}, err
 	}
 	if broker == nil {
-		return rustApprovalBrokerEntry{}, fmt.Errorf("service manager data: a hosted rpc declares (spec.rpc).requires_device, but no authoritative (spec.token_minter) service in this proto set hosts an approval broker; the generated device-approval check has nothing to call")
+		return rustApprovalBrokerEntry{}, fmt.Errorf("service manager data: a hosted rpc declares (spec.rpc).requires_device, but no (spec.approval_broker) service is in this proto set (the token authority declares it on its policy service; add that service to depends); the generated device-approval check has nothing to call")
 	}
 
 	// The same global dedup the aggregator computes, so grpcClientNames answers
@@ -838,7 +838,7 @@ func buildRustApprovalBrokerEntry(flatProtoDir string, clientServices []ServiceI
 
 	// No client to the broker's package. The one way to reach here is the
 	// broker's OWN package declaring a guarded rpc: DeriveApprovalBrokerClient
-	// returns nil for the minter itself, because no package gets a generated
+	// returns nil for the broker itself, because no package gets a generated
 	// client to itself. Refuse with the reason rather than emit a call to a
 	// client that will not exist — the same refusal Java makes.
 	return rustApprovalBrokerEntry{}, fmt.Errorf("%s hosts the approval broker (%s.%s/%s) AND declares a (spec.rpc).requires_device rpc; the generated check calls the broker over a generated S2S client, and a package gets no generated client to itself, so this cannot be wired — move the guarded rpc to another service",

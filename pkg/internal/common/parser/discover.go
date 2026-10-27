@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -187,50 +188,90 @@ func ValidateTokenMinters(protoDir string, s2sEnabled bool) error {
 }
 
 // ApprovalBrokerInfo locates the RPC the generated (spec.rpc).requires_device
-// check calls: BrokerPendingApproval on the authoritative (spec.token_minter)
-// service. The minter is where it lives because every service with an S2S
-// identity already holds a generated client to it, so a requires_device RPC
-// needs no new route and no new deployment wiring.
+// check calls: the broker rpc of the service annotated (spec.approval_broker).
+// The token authority declares it on its own policy service; the sys
+// minter.Minter does not carry it.
 type ApprovalBrokerInfo struct {
-	Package     string // proto package of the minter, e.g. "kernel"
-	Dir         string // relative dir, e.g. "services/kernel"
-	ServiceName string // proto service name, e.g. "Mint"
+	Package     string // proto package of the broker service, e.g. "kernelpolicy"
+	Dir         string // relative dir, e.g. "services/kernelpolicy"
+	ServiceName string // proto service name, e.g. "Policy"
 	MethodName  string // the broker RPC, e.g. "BrokerPendingApproval"
 }
 
-// DiscoverApprovalBroker returns the approval-broker RPC on the authoritative
-// token minter, or nil when the proto set declares no such RPC. The method is
-// matched on its SIGNATURE (BrokerPendingApprovalRequest →
-// BrokerPendingApprovalResponse), the same way the minter's own token/x509 RPCs
-// are found, so nothing here depends on a hardcoded service or method name.
+// DiscoverApprovalBroker returns the approval-broker RPC of the
+// (spec.approval_broker) service, or nil when the proto set declares none. The
+// service is found by its annotation anywhere in the set; its method is matched
+// on its SIGNATURE (BrokerPendingApprovalRequest → BrokerPendingApprovalResponse),
+// so nothing here depends on a hardcoded service or method name. A second
+// broker, a broker with no or two such rpcs, or a broker that is not S2S is an
+// error. protoDir must be a protoc-resolvable, annotated proto tree.
 func DiscoverApprovalBroker(protoDir string) (*ApprovalBrokerInfo, error) {
-	minter, err := DiscoverTokenExchangerPackage(protoDir)
-	if err != nil || minter == nil {
-		return nil, err
+	if !protoDirHasProtos(protoDir) {
+		return nil, nil
 	}
 	dp, err := NewDescriptorParser(protoDir)
 	if err != nil {
 		return nil, fmt.Errorf("approval-broker discovery: parse %q: %w", protoDir, err)
 	}
+	return approvalBroker(dp)
+}
+
+// ValidateApprovalBroker enforces the (spec.approval_broker) contract over a
+// parsed proto set: at most one broker, an S2S service with exactly one broker
+// rpc. The fleet build runs it over the merged tree.
+func ValidateApprovalBroker(dp *DescriptorParser) error {
+	if dp == nil {
+		return nil
+	}
+	_, err := approvalBroker(dp)
+	return err
+}
+
+func approvalBroker(dp *DescriptorParser) (*ApprovalBrokerInfo, error) {
+	var found []ApprovalBrokerInfo
+	var names []string
 	for path, fd := range dp.GetAllFiles() {
-		if fd == nil || fd.Package != minter.Package {
+		if fd == nil {
 			continue
 		}
-		for _, svc := range fd.Services {
-			if svc.Name != minter.ServiceName {
+		for si := range fd.Services {
+			svc := &fd.Services[si]
+			if !svc.IsApprovalBroker {
 				continue
 			}
+			fq := fd.Package + "." + svc.Name
+			if !svc.IsS2S {
+				return nil, fmt.Errorf("approval broker error: %s declares (spec.approval_broker) but is not a (spec.service_s2s) service; the generated requires_device check calls the broker over a generated S2S client", fq)
+			}
+			var methods []string
 			for _, m := range svc.Methods {
 				if methodSignatureMatches(m, "BrokerPendingApprovalRequest", "BrokerPendingApprovalResponse") {
-					return &ApprovalBrokerInfo{
-						Package:     fd.Package,
-						Dir:         strings.TrimSuffix(path, ".proto"),
-						ServiceName: svc.Name,
-						MethodName:  m.Name,
-					}, nil
+					methods = append(methods, m.Name)
 				}
 			}
+			switch len(methods) {
+			case 0:
+				return nil, fmt.Errorf("approval broker error: %s declares (spec.approval_broker) but declares no rpc taking BrokerPendingApprovalRequest and returning BrokerPendingApprovalResponse; the generated requires_device check has nothing to call", fq)
+			case 1:
+			default:
+				sort.Strings(methods)
+				return nil, fmt.Errorf("approval broker error: %s declares %d rpcs taking BrokerPendingApprovalRequest and returning BrokerPendingApprovalResponse (%s); exactly one is the broker", fq, len(methods), strings.Join(methods, ", "))
+			}
+			found = append(found, ApprovalBrokerInfo{
+				Package:     fd.Package,
+				Dir:         strings.TrimSuffix(path, ".proto"),
+				ServiceName: svc.Name,
+				MethodName:  methods[0],
+			})
+			names = append(names, fq)
 		}
 	}
-	return nil, nil
+	switch len(found) {
+	case 0:
+		return nil, nil
+	case 1:
+		return &found[0], nil
+	}
+	sort.Strings(names)
+	return nil, fmt.Errorf("approval broker error: %d (spec.approval_broker) services declared [%s]; exactly one approval broker is allowed", len(names), strings.Join(names, ", "))
 }

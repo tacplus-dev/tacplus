@@ -544,8 +544,8 @@ func writeLock(lock *Lock, path string) error {
 
 // validateFleet runs the checks that only a whole fleet can answer: every
 // routing label served by a loaded service, every C2S host label served, one
-// SMB authority if any SMB member, exactly one minter, a complete and
-// collision-free registry.
+// SMB authority if any SMB member, at most one approval broker, exactly one
+// minter, a complete and collision-free registry.
 func validateFleet(mergedDir string) error {
 	if err := registry.Validate(mergedDir); err != nil {
 		return fmt.Errorf("fleet: %w", err)
@@ -563,6 +563,7 @@ func validateFleet(mergedDir string) error {
 		parser.ValidateRoutingLabels,
 		parser.ValidateC2SHostLabels,
 		parser.ValidateSmbAuthority,
+		parser.ValidateApprovalBroker,
 	} {
 		if err := check(dp); err != nil {
 			return fmt.Errorf("fleet: %w", err)

@@ -1276,6 +1276,16 @@ message TokenMinterAnnotation {
   bool proxy = 1;
 }
 
+// ApprovalBrokerAnnotation marks the service that hosts the approval broker the
+// generated (spec.rpc).requires_device check calls: its one rpc taking
+// BrokerPendingApprovalRequest and returning BrokerPendingApprovalResponse.
+// Declared EXPLICITLY, not inferred from that signature. The token authority
+// puts it on its own policy service, beside the sys minter.Minter it hosts; the
+// minting contract does not carry it. At most one per run, and it must be a
+// (spec.service_s2s) service: the check calls it over a generated S2S client.
+message ApprovalBrokerAnnotation {
+}
+
 // SmbRoot selects which trust root backs an SMB service's member certificates.
 enum SmbRoot {
   // SMB_ROOT_ISOLATED uses a self-signed per-SMB CA, scoped only to this SMB.
@@ -1549,10 +1559,10 @@ message RpcAnnotation {
   // The generated server check reads `x-tacplus-approval-id` and
   // `x-tacplus-device-assertion-bin` off the call metadata — never request
   // fields, so neither is inside the hashed bytes — computes the canonical hash
-  // of the request, and calls the authoritative (spec.token_minter) service's
-  // BrokerPendingApproval. Any failure refuses the RPC: the handler is never
-  // reached. The S2S client for that call is auto-injected into the declaring
-  // package; the author writes only this boolean.
+  // of the request, and calls the broker rpc of the (spec.approval_broker)
+  // service, which must be in the run. Any failure refuses the RPC: the handler
+  // is never reached. The S2S client for that call is auto-injected into the
+  // declaring package; the author writes only this boolean.
   //
   // The proposing half (creating the pending approval) is the caller's own
   // call, not generated. The caller-side generated helper computes the request
@@ -2860,6 +2870,15 @@ extend google.protobuf.ServiceOptions {
   //            content_types: ["application/pdf", "image/jpeg"],
   //            tenant_quota_bytes: 53687091200};
   repeated VolumeGroupAnnotation volume_group = 70022;
+
+  // approval_broker marks the service hosting the approval broker that every
+  // generated (spec.rpc).requires_device check calls, declared EXPLICITLY (like
+  // smb_authority). tacplus finds the broker rpc on it by signature
+  // (BrokerPendingApprovalRequest -> BrokerPendingApprovalResponse) and fails
+  // generation when a requires_device rpc has no broker in the run, or when more
+  // than one service declares itself the broker. The token authority implements it.
+  // Example: option (spec.approval_broker) = {};
+  ApprovalBrokerAnnotation approval_broker = 70023;
 }
 
 extend google.protobuf.MethodOptions {

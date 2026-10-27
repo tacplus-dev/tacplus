@@ -334,14 +334,14 @@ type serviceManagerTemplateData struct {
 
 // ApprovalBrokerTemplateEntry names the approval-broker RPC the generated
 // (spec.rpc).requires_device check calls, and the generated S2S client seam it
-// goes out over. Everything here is derived from the authoritative
-// (spec.token_minter) declaration — no service, method or package is hardcoded.
+// goes out over. Everything here is derived from the (spec.approval_broker)
+// declaration — no service, method or package is hardcoded.
 type ApprovalBrokerTemplateEntry struct {
-	Package        string // "kernel"
-	ServiceName    string // "Mint"
+	Package        string // "kernelpolicy"
+	ServiceName    string // "Policy"
 	MethodName     string // "BrokerPendingApproval"
 	GroupAccessor  string // client group accessor on GrpcClients, e.g. "Services"
-	ClientAccessor string // typed client accessor, e.g. "MintClient"
+	ClientAccessor string // typed client accessor, e.g. "PolicyClient"
 	TypePkgAlias   string // import alias for the broker's types package
 	TypePkgImport  string // import path for the broker's types package
 }
@@ -773,8 +773,8 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 
 	// (spec.rpc).requires_device: resolve the broker seam only when some hosted
 	// wrapper actually carries the gate. Resolving it unconditionally would make
-	// every build that happens to declare a token minter fail on a proto set
-	// whose minter has no broker RPC.
+	// every build without a requires_device rpc depend on a broker it never
+	// calls.
 	hasApprovalBroker := false
 	for _, svc := range grpcSvcs {
 		if svc.HasRequiresDevice {
@@ -789,12 +789,12 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			return serviceManagerTemplateData{}, err
 		}
 		if broker == nil {
-			return serviceManagerTemplateData{}, fmt.Errorf("service manager data: a hosted rpc declares (spec.rpc).requires_device, but no authoritative (spec.token_minter) service in this proto set hosts an approval broker; the generated device-approval check has nothing to call")
+			return serviceManagerTemplateData{}, fmt.Errorf("service manager data: a hosted rpc declares (spec.rpc).requires_device, but no (spec.approval_broker) service is in this proto set (the token authority declares it on its policy service; add that service to depends); the generated device-approval check has nothing to call")
 		}
-		// The minter cannot be the guarded service. The check goes out over the
+		// The broker cannot be the guarded service. The check goes out over the
 		// generated S2S client to the broker, and no package gets a generated
 		// client to ITSELF — DeriveApprovalBrokerClient returns nil for the
-		// minter's own package for exactly that reason. Wiring it anyway emits
+		// broker's own package for exactly that reason. Wiring it anyway emits
 		// a call to a client accessor that does not exist, so the build fails in
 		// `go build` with "undefined: MintClient" and no explanation. Refuse
 		// here, with the reason. Same refusal the Java and Rust backends make.

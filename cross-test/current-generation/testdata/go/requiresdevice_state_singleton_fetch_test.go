@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Gate self-test for the requires-device fixture. NOT generated: run.sh copies
-// this file into the generated ServiceHealth state package before `go test ./...`,
+// this file into the generated VaultSettings state package before `go test ./...`,
 // because Fetch's retry loop and its defaults call are package-internal to the
 // generated state client and nothing outside that package can reach them.
 //
@@ -15,10 +15,10 @@
 // ahead of validate in all five languages. Before those commits nothing but a
 // template render test covered it: no fixture anywhere in cross-test/ declared a
 // plain singleton boundary, so no generate-and-compile gate could ever run Fetch.
-// ServiceHealth.lock_settings (cross-test/proto-requiresdevice/platform/health.proto)
+// VaultSettings.lock_settings (cross-test/proto-requiresdevice/services/vault.proto)
 // is that fixture, and this is the test that executes the path.
 
-package service_health
+package vault_settings
 
 import (
 	"context"
@@ -28,7 +28,7 @@ import (
 	"time"
 
 	"gitlab.com/example/dummy/vault/tacplus/model/chassis/servicemanager"
-	types "gitlab.com/example/dummy/vault/tacplus/model/types/platform/requiresdevicehealth"
+	types "gitlab.com/example/dummy/vault/tacplus/model/types/services/vault"
 	trace_pb "gitlab.com/example/dummy/vault/tacplus/model/types/sys/trace"
 
 	"google.golang.org/grpc"
@@ -40,7 +40,7 @@ import (
 // calls exactly one RPC, and embedding keeps this stub from having to be
 // rewritten each time the generated state service grows a boundary.
 type fetchStub struct {
-	types.ServiceHealthStateServiceClient
+	types.VaultSettingsStateServiceClient
 	value *types.LockSettings
 }
 

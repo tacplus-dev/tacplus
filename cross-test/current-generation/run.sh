@@ -168,6 +168,7 @@ language: "$language"
 pkg: "com.gitlab.example.dummy.zerorpc"
 src: "$ZERORPC_PROTO_SRC"
 output-dir: "tacplus"
+depends: ["llmproxy"]
 EOF
 }
 
@@ -184,6 +185,12 @@ output-dir: "tacplus"
 EOF
 }
 
+# Generation is scoped to the project's own protos plus its depends, so each
+# fixture below names the services it uses: egressvault publishes to eventbus
+# and its records are read through egressstratum's record plane; agentsensor
+# publishes to eventbus (and, in the accounting-sink fixture, its accounting
+# records to the accountingrecord topic); ledger subscribes to its tenant slice
+# in both owners, tenancy and registrar.
 write_recordegress_config() {
   local dir="$1"
   local language="$2"
@@ -194,6 +201,7 @@ language: "$language"
 pkg: "com.gitlab.example.dummy.egressvault"
 src: "$RECORDEGRESS_PROTO_SRC"
 output-dir: "tacplus"
+depends: ["eventbus", "egressstratum"]
 EOF
 }
 
@@ -207,6 +215,7 @@ language: "$language"
 pkg: "com.gitlab.example.dummy.agentsensor"
 src: "$EVENTBUS_BACKPRESSURE_PROTO_SRC"
 output-dir: "tacplus"
+depends: ["eventbus"]
 EOF
 }
 
@@ -220,6 +229,7 @@ language: "$language"
 pkg: "com.gitlab.example.dummy.agentsensor"
 src: "$ACCOUNTING_SINK_PROTO_SRC"
 output-dir: "tacplus"
+depends: ["eventbus", "accountingrecord"]
 EOF
 }
 
@@ -272,6 +282,7 @@ language: "$language"
 pkg: "com.gitlab.example.dummy.ledger"
 src: "$TENANTSLICE_PROTO_SRC"
 output-dir: "tacplus"
+depends: ["tenancy", "registrar"]
 EOF
 }
 
@@ -284,12 +295,15 @@ write_tenantslice_owner_config() {
   local language="$2"
   local owner="${3:-registrar}"
 
+  # An owner holds every tenant's whole TenantConfig, so it generates from
+  # every service's slice: `states: all`, not its own protos and depends.
   mkdir -p "$dir"
   cat > "$dir/tacplus.yaml" <<EOF
 language: "$language"
 pkg: "com.gitlab.example.dummy.$owner"
 src: "$TENANTSLICE_PROTO_SRC"
 output-dir: "tacplus"
+states: "all"
 EOF
 }
 
@@ -299,6 +313,8 @@ EOF
 # two services are HOSTED VSERVICES and reach the host through the host tag, not
 # through own-package discovery. Go resolved only the own-package half until
 # 2026-09-22, so this build emitted clients to the plane and no server for it.
+# As the record store it declares `records: all`: the plane serves every record
+# in the tree, so egressvault's must be in its generation.
 write_recordegress_host_config() {
   local dir="$1"
   local language="$2"
@@ -309,6 +325,7 @@ language: "$language"
 pkg: "com.gitlab.example.dummy.egressstratum"
 src: "$RECORDEGRESS_PROTO_SRC"
 output-dir: "tacplus"
+records: "all"
 EOF
 }
 
@@ -463,7 +480,7 @@ run_java_generated_self_tests() {
     package_name="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$source_file")"
     [[ -n "$package_name" ]] || die "could not determine Java package for $source_file"
     class_name="$package_name.$(basename "$source_file" .java)"
-    SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$class_name" >>"$test_log" 2>&1 || {
+    SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$class_name" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -477,7 +494,7 @@ run_java_generated_self_tests() {
   sc_test="$(find "$output/src/main/java" -type f -path '*/chassis/serviceconnection/ServiceConnectionTest.java' -print -quit)"
   if [[ -n "$sc_test" ]]; then
     sc_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$sc_test").$(basename "$sc_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$sc_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$sc_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -488,7 +505,7 @@ run_java_generated_self_tests() {
   rh_test="$(find "$output/src/main/java" -type f -path '*/chassis/httpclient/TypedClientRetryAfterTest.java' -print -quit)"
   [[ -n "$rh_test" ]] || die "java: TypedClientRetryAfterTest not generated under $output"
   rh_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$rh_test").$(basename "$rh_test" .java)"
-  "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$rh_class" >>"$test_log" 2>&1 || {
+  "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$rh_class" >>"$test_log" 2>&1 || {
     dump_step_log "$test_log"
     return 1
   }
@@ -501,7 +518,7 @@ run_java_generated_self_tests() {
   uls_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/UserAndListedServiceTest.java' -print -quit)"
   if [[ -n "$uls_test" ]]; then
     uls_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$uls_test").$(basename "$uls_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$uls_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$uls_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -512,7 +529,7 @@ run_java_generated_self_tests() {
   tp_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/TenantPinnedReadTest.java' -print -quit)"
   if [[ -n "$tp_test" ]]; then
     tp_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$tp_test").$(basename "$tp_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$tp_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$tp_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -526,7 +543,7 @@ run_java_generated_self_tests() {
   tc_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/TenantPinnedConfigReadTest.java' -print -quit)"
   if [[ -n "$tc_test" ]]; then
     tc_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$tc_test").$(basename "$tc_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$tc_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$tc_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -540,7 +557,7 @@ run_java_generated_self_tests() {
   od_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/OwnerDefaultTest.java' -print -quit)"
   if [[ -n "$od_test" ]]; then
     od_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$od_test").$(basename "$od_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$od_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$od_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -553,7 +570,7 @@ run_java_generated_self_tests() {
   id_test="$(find "$output/src/main/java" -type f -name 'ServiceManagerIdentityErrorTest.java' -print -quit)"
   if [[ -n "$id_test" ]]; then
     id_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$id_test").$(basename "$id_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$id_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$id_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -566,7 +583,7 @@ run_java_generated_self_tests() {
   el_test="$(find "$output/src/main/java" -type f -name 'EpochLoadTest.java' -print -quit)"
   if [[ -n "$el_test" ]]; then
     el_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$el_test").$(basename "$el_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$el_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$el_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -579,7 +596,7 @@ run_java_generated_self_tests() {
   ex_test="$(find "$output/src/main/java" -type f -path '*/types/common2/user/ExtractionTest.java' -print -quit)"
   if [[ -n "$ex_test" ]]; then
     ex_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$ex_test").$(basename "$ex_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$ex_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$ex_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -594,7 +611,7 @@ run_java_generated_self_tests() {
     bp_test="$(find "$output/src/main/java" -type f -name "$bp_name.java" -print -quit)"
     if [[ -n "$bp_test" ]]; then
       bp_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$bp_test").$bp_name"
-      "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$bp_class" >>"$test_log" 2>&1 || {
+      "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$bp_class" >>"$test_log" 2>&1 || {
         dump_step_log "$test_log"
         return 1
       }
@@ -970,10 +987,13 @@ assert_current_output() {
   assert_no_legacy_fixture_output "$output"
 }
 
-# assert_c2sonly_output checks that the C2S-only fixture actually selected the
-# NO-token-exchanger chassis variants. Without this the leg silently degrades: if
-# a future change makes this proto shape discover an exchanger, the tree still
-# compiles and the variant this fixture exists to compile stops being built.
+# assert_c2sonly_output checks that the C2S-only fixture binds its identity to
+# the sys minting contract. Since minter.Minter moved into sys/ it is in every
+# run, and a C2S-only service still reports instance health to the state host,
+# so it needs an S2S identity like any other service: the NO-token-exchanger
+# chassis variants are no longer selected by any proto set. What this fixture
+# still guards is that the exchanger variant generates and compiles for a server
+# surface with no S2S rpc of its own.
 assert_c2sonly_output() {
   local output="$1"
   local language="$2"
@@ -982,8 +1002,8 @@ assert_c2sonly_output() {
     go)
       local im="$output/chassis/service_im/service_im.go"
       [[ -f "$im" ]] || die "c2s-only fixture: chassis/service_im/service_im.go not found under $output"
-      grep -q 'errNoTokenSource' "$im" \
-        || die "c2s-only fixture: $im is not the no-token-exchanger variant (no errNoTokenSource); the fixture no longer exercises the inline chassis sources"
+      grep -q '/types/sys/minter"' "$im" \
+        || die "c2s-only fixture: $im does not exchange through the sys minter.Minter; a C2S-only service reporting health to the state host has no S2S identity"
       ;;
   esac
 
@@ -1068,7 +1088,7 @@ assert_singleton_fetch_defaults_before_validate() {
     || die "singleton fetch: $file validates BEFORE applying defaults (defaults at body line $defaults_line, validate at $validate_line) — reverts 526feb6f/bba83f49"
 }
 
-# assert_requiresdevice_singleton_state checks that ServiceHealth.lock_settings —
+# assert_requiresdevice_singleton_state checks that VaultSettings.lock_settings —
 # the only plain (non-repeated, non-topic) singleton boundary anywhere in
 # cross-test/ — actually generated its state-singleton Fetch, and generated it
 # with defaults applied before validation. Until this fixture carried the field,
@@ -1081,13 +1101,13 @@ assert_requiresdevice_singleton_state() {
 
   case "$language" in
     go)
-      state="$(find "$output" -type f -path '*/state/platform/service_health/state.go' -print -quit)"
+      state="$(find "$output" -type f -path '*/state/services/vault_settings/state.go' -print -quit)"
       ;;
     java)
-      state="$(find "$output" -type f -path '*/state/platform/*/servicehealth/StateClient.java' -print -quit)"
+      state="$(find "$output" -type f -path '*/state/services/*/vaultsettings/StateClient.java' -print -quit)"
       ;;
     rust)
-      state="$(find "$output" -type f -path '*/state/platform/service_health/state.rs' -print -quit)"
+      state="$(find "$output" -type f -path '*/state/services/vault_settings/state.rs' -print -quit)"
       ;;
     *)
       die "requires-device singleton state: unsupported language: $language"
@@ -1095,7 +1115,7 @@ assert_requiresdevice_singleton_state() {
   esac
 
   [[ -n "$state" ]] \
-    || die "requires-device fixture ($language): generated ServiceHealth state client not found under $output"
+    || die "requires-device fixture ($language): generated VaultSettings state client not found under $output"
 
   case "$language" in
     go)
@@ -1123,7 +1143,7 @@ assert_requiresdevice_singleton_state() {
 }
 
 # install_go_state_singleton_selftest drops the fixture's hand-written Go
-# self-test into the generated ServiceHealth state package. It has to live IN
+# self-test into the generated VaultSettings state package. It has to live IN
 # that package: Fetch's retry loop, its defaults call and the stub it calls are
 # all package-internal, and nothing outside can reach them. `go test ./...` in
 # compile_current_output then runs it as part of the gate.
@@ -1133,8 +1153,8 @@ install_go_state_singleton_selftest() {
   local pkg_dir
 
   [[ -f "$src" ]] || die "missing requires-device Go state-singleton self-test: $src"
-  pkg_dir="$(dirname "$(find "$output" -type f -path '*/state/platform/service_health/state.go' -print -quit)")"
-  [[ -d "$pkg_dir" ]] || die "requires-device fixture (go): generated service_health package not found under $output"
+  pkg_dir="$(dirname "$(find "$output" -type f -path '*/state/services/vault_settings/state.go' -print -quit)")"
+  [[ -d "$pkg_dir" ]] || die "requires-device fixture (go): generated vault_settings package not found under $output"
   cp "$src" "$pkg_dir/"
 }
 
@@ -1375,8 +1395,9 @@ assert_quorumwrite_output() {
       sm="$(find "$output" -type f -path '*/s2sm/ServiceManager.java' -print -quit)"
       grep -qF 'if (store instanceof LocalRows) {' "$sm" \
         || die "quorum-write fixture (java): the CredPair roll baseline is not narrowed through LocalRows in $sm"
-      # The fixture pins the GCS SDK, so the archive sink is emitted and the
-      # ServiceManager builds it. No archive is configured at runtime in this fixture.
+      # The fixture pins the GCS SDK and quorumvault is the record store, so the
+      # archive sink is emitted and the ServiceManager builds it. No archive is
+      # configured at runtime in this fixture.
       [[ -n "$(find "$output" -type f -path '*/chassis/diskstore/GcsArchiveSink.java' -print -quit)" ]] \
         || die "quorum-write fixture (java): GcsArchiveSink.java not generated under $output"
       grep -qF 'return new GcsArchiveSink(bucket);' "$sm" \
@@ -1817,9 +1838,11 @@ if leaked:
 if not [r for r in s2s if "VaultRow" in r]:
     sys.exit("record-egress fixture (%s): the S2S half emits no read rpc for the TENANT-SCOPED record VaultRow; "
              "the private skip has over-reached" % language)
-if len([r for r in c2s if "VaultSecretRow" in r]) != 8:
+# 9: Create/Update/Delete query, Count, Sample, List, Watch, SubscribeCount, and
+# Get<T>Rows, the direct read beside the result set.
+if len([r for r in c2s if "VaultSecretRow" in r]) != 9:
     sys.exit("record-egress fixture (%s): the C2S half (EgressRecordQuery) must keep the private record's full "
-             "8-rpc query lifecycle (it carries a user token for the pin to bind to); found %d"
+             "9-rpc query lifecycle (it carries a user token for the pin to bind to); found %d"
              % (language, len([r for r in c2s if "VaultSecretRow" in r])))
 # THE PRIVATE RECORD'S KEY IS ON ITS FILTER. A record's key is folded into
 # <T>Filter when it declares (spec.record).s2s_read - and a private record is
@@ -2301,15 +2324,12 @@ if [[ ${#languages[@]} -eq 3 ]]; then
   assert_tls_degrade_parity "$WORK_ROOT"
 fi
 
-# C2S-only fixture: the whole server surface is non-S2S, so no authoritative
-# token minter is required and the NO-token-exchanger variants of
-# chassis/service_im and chassis/servicemanager are generated (inline sources in
-# pkg/internal/go/types/stateclient_gen.go, not templates). Nothing else in any
-# gate generates that variant, and it shipped un-compilable twice — the NEW-21
-# classifier sentinels and the NEW-47 credential-degradation helpers were each an
-# unconditional chassis reference the inline source did not declare. Go only:
-# java and rust emit ONE class/crate with {{else}} branches inside it, so they
-# have no second variant to drift from.
+# C2S-only fixture: the whole server surface is non-S2S. It used to select the
+# NO-token-exchanger variants of chassis/service_im and chassis/servicemanager
+# (inline sources in pkg/internal/go/types/stateclient_gen.go); with the sys
+# minter.Minter in every run no proto set selects them any more, and the fixture
+# now pins the exchanger variant for a server surface with no S2S rpc (see
+# assert_c2sonly_output). Go only, as before.
 if [[ -d "$C2SONLY_PROTO_SRC" ]]; then
   for language in "${languages[@]}"; do
     [[ "$language" == "go" ]] || continue
@@ -2318,7 +2338,7 @@ if [[ -d "$C2SONLY_PROTO_SRC" ]]; then
     rm -rf "$dir"
     write_c2sonly_config "$dir" "$language"
 
-    echo "==> Generating $language c2s-only (no-token-exchanger) fixture"
+    echo "==> Generating $language c2s-only fixture"
     if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$C2SONLY_PROTO_SRC" >"$log" 2>&1); then
       tail -120 "$log" >&2 || true
       die "$language c2s-only generation failed; log: $log"
@@ -2394,9 +2414,9 @@ fi
 # it is a types-only build and emits none of the three surfaces the gate lands on
 # (server wrapper, service manager, S2S clients) — the annotation would generate
 # nothing there. This set is a full service build instead: vault is the self
-# package and hosts the guarded rpc, devicemint is the authoritative
-# (spec.token_minter) hosting the broker in a DIFFERENT package (all three
-# backends refuse a self-hosting minter), and ledger is a third package vault
+# package and hosts the guarded rpc, devicemint is the (spec.approval_broker)
+# in a DIFFERENT package (all three backends refuse a self-hosting broker; the
+# minter is the sys minter.Minter), and ledger is a third package vault
 # holds a client to, so the caller-side helpers are compiled too. All three
 # languages, because all three implement the gate independently.
 if [[ -d "$REQUIRESDEVICE_PROTO_SRC" ]]; then

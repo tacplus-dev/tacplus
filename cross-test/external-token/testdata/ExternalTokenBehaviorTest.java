@@ -6,7 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.example.externaltoken.model.types.services.authority.TokenMintServiceGrpc;
+import com.example.externaltoken.model.types.sys.minter.MinterGrpc;
 import com.example.externaltoken.model.types.sys.token.TokenOuterClass.Token;
 import com.example.externaltoken.model.types.sys.token.TokenOuterClass.TokenPurpose;
 import com.example.externaltoken.model.types.sys.tokenrequest.Tokenrequest.MintExternalServiceTokenRequest;
@@ -54,7 +54,7 @@ class ExternalTokenBehaviorTest {
      * presented token is the caller's own, exp no more than 600 s out) and signs
      * a fresh ES256 JWT with a new jti per call.
      */
-    private static final class MockKernel extends TokenMintServiceGrpc.TokenMintServiceImplBase {
+    private static final class MockKernel extends MinterGrpc.MinterImplBase {
         final KeyPair key;
         final List<MintExternalServiceTokenRequest> requests = new CopyOnWriteArrayList<>();
 
@@ -124,7 +124,7 @@ class ExternalTokenBehaviorTest {
      * exchange returned, and the third refresh token has been revoked. Service
      * tokens expire one second out, so every call to the minter re-exchanges.
      */
-    private static final class BootstrapKernel extends TokenMintServiceGrpc.TokenMintServiceImplBase {
+    private static final class BootstrapKernel extends MinterGrpc.MinterImplBase {
         final List<String> refreshInputs = new CopyOnWriteArrayList<>();
 
         @Override
@@ -191,7 +191,7 @@ class ExternalTokenBehaviorTest {
                 .start();
         ManagedChannel channel = NettyChannelBuilder.forAddress("127.0.0.1", server.getPort()).usePlaintext().build();
         try {
-            KubernetesMinter minter = new KubernetesMinter(tokenFile.toString(), "authority");
+            KubernetesMinter minter = new KubernetesMinter(tokenFile.toString(), "kernel");
             minter.setChannel(channel);
             // create() pins bootstrap TLS to a SPIFFE trust domain; this test
             // exercises what happens after bootstrap, so it wires the same
@@ -251,7 +251,7 @@ class ExternalTokenBehaviorTest {
                 .start();
         ManagedChannel channel = NettyChannelBuilder.forAddress("127.0.0.1", server.getPort()).usePlaintext().build();
         try {
-            KubernetesMinter minter = KubernetesMinter.bootstrap(bootstrapFile.toString(), "authority");
+            KubernetesMinter minter = KubernetesMinter.bootstrap(bootstrapFile.toString(), "kernel");
             minter.setChannel(channel);
 
             assertEquals("service-token-1", minter.getTokenFor(AUDIENCE), "bootstrap exchange");

@@ -130,12 +130,12 @@ func generateRustStateClientWrappers(config *tactype.Config, inputDir string) er
 		if err != nil {
 			return nil
 		}
-		if proto.IsInfraProtoFile(relPath, fileDesc) {
-			// Exception: the manifest-declared runtime config state proto is an
-			// application-level state boundary for runtime config delivery.
-			if !proto.IsRuntimeConfigStateProto(relPath) {
-				return nil
-			}
+		// Skip infrastructure protos except the manifest-declared runtime config
+		// state proto (ServiceConfigState) and sys protos that declare a state
+		// root: the sys contract's roots (sys/servicehealth.proto) get state
+		// clients exactly like a service's own roots do, as in Go.
+		if proto.IsInfraProtoFile(relPath, fileDesc) && !proto.IsRuntimeConfigStateProto(relPath) && !proto.DeclaresServiceState(fileDesc) {
+			return nil
 		}
 
 		for i := range fileDesc.Messages {

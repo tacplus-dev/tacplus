@@ -47,6 +47,10 @@ language: "rust"
 pkg: "com.gitlab.example.dummy.zerorpc"
 src: "$PROTO_SRC"
 output-dir: "model"
+# zerorpc's (spec.grpc_s2s_client) names upstreamllm.LlmProxy, the contract of
+# llmproxy; the explicit --src tree is scoped to what the project declares.
+depends:
+  - llmproxy
 EOF
 echo "==> Generating rust model"
 (cd "$MODEL_DIR" && "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_SRC" --tag latest) >"$MODEL_DIR/generate.log" 2>&1 || {

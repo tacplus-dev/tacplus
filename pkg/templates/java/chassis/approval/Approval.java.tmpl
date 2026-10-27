@@ -105,7 +105,7 @@ public final class Approval {
 
     /**
      * Check runs the (spec.rpc).requires_device check against the approval
-     * broker on the authoritative token minter. The ServiceManager supplies the
+     * broker of the (spec.approval_broker) service. The ServiceManager supplies the
      * implementation because the call goes out over a generated S2S client,
      * which a wrapper does not hold; it lives here rather than nested in each
      * wrapper so one ServiceManager can hand the same instance to every gated

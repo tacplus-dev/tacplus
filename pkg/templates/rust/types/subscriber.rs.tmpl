@@ -133,6 +133,12 @@ pub struct SubscribeOptions {
 }
 
 impl SubscribeOptions {
+    /// Resume from the consumer group's committed offset. A group that has
+    /// never committed starts from the earliest available offset.
+    pub fn resume() -> Self {
+        Self { earliest: false, latest: false, offset: None }
+    }
+
     /// Start from the earliest available offset.
     pub fn earliest() -> Self {
         Self { earliest: true, latest: false, offset: None }
@@ -170,16 +176,18 @@ impl Subscriber {
     }
 
     /// Subscribe opens a bidi stream to event-bus and calls handler for each
-    /// received {{.TypeName}}. Starts from the earliest available offset.
-    /// It reconnects with exponential backoff on stream errors.
+    /// received {{.TypeName}}. Resumes from the consumer group's committed
+    /// offset; a group that has never committed starts from the earliest
+    /// available offset. It reconnects with exponential backoff on stream errors.
     ///
     /// Subscribe blocks until the channel is closed or a non-retryable error occurs.
     pub async fn subscribe(&self, handler: Handler) {
-        self.subscribe_with(handler, SubscribeOptions::earliest()).await
+        self.subscribe_with(handler, SubscribeOptions::resume()).await
     }
 
     /// Subscribe with explicit start-position options. Use this when you need
-    /// to start from a specific offset or from latest instead of earliest.
+    /// to start from a specific offset, from earliest, or from latest instead
+    /// of the committed offset.
     pub async fn subscribe_with(&self, handler: Handler, opts: SubscribeOptions) {
         const MIN_BACKOFF: Duration = Duration::from_millis(500);
         const MAX_BACKOFF: Duration = Duration::from_secs(30);

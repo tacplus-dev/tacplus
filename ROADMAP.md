@@ -8,6 +8,7 @@ Latest release: v2.4.1 (2026-10-27). 2.4 is the line with the global registry an
 Release lines with branches: 2.0 through 2.4.
 
 ## Next
+- Build image carries `tacplus`; `verify` (Kani, JBMC) and fuzzing run there; Go is not formally verified, by design (#192)
 - Fetch layer: authenticate GitHub clones with GH_TOKEN, only to github.com (#191)
 - Images: bump moby/go-archive to 0.3.0 (CVE-2026-17106) and patch the release lines (#190)
 - Generated Rust chassis: rsa and crypto-bigint advisories (#186)

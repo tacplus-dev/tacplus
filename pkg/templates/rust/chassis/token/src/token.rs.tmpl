@@ -704,16 +704,24 @@ impl Token {
             ));
         }
 
+        // The token's alg must be one the KEY accepts (its family, narrowed
+        // to the alg the JWK declares), exactly, before any crypto runs; the
+        // signature is then checked with that alg's scheme and hash. A token
+        // never picks its own algorithm: none, HMAC, PS* and every alg outside
+        // the key's family are refused here. A non-string alg never gets this
+        // far — the header does not parse.
         let alg = self
             .alg()
+            .filter(|a| !a.is_empty())
             .ok_or_else(|| AuthError::missing_invalid_data(
                 "token missing signing algorithm (alg) in header",
             ))?;
-        if alg != jwk.alg() {
+        if !jwk.accepted_algs().contains(&alg) {
             return Err(AuthError::unauthorized(format!(
-                "token alg {} does not match JWK alg {}",
+                "token alg {} is not accepted by JWK {} (accepts {:?})",
                 alg,
-                jwk.alg()
+                jwk.kid(),
+                jwk.accepted_algs()
             )));
         }
 
@@ -770,13 +778,14 @@ impl Token {
                 use rsa::pkcs1v15::VerifyingKey;
                 use sha2::{Sha256, Sha384, Sha512};
 
-                match jwk.alg() {
+                match alg {
                     // RS256 is here for EXTERNAL identity providers. Tokens we
                     // issue ourselves use RS384/RS512, but an IdP picks its own
                     // algorithm and RS256 is what most of them use — Keycloak
-                    // included. Without this arm every external id_token failed
-                    // as an unsupported algorithm, which is why oauth could not
-                    // verify signatures at all and ended up not verifying them.
+                    // and Microsoft included. Without this arm every external
+                    // id_token failed as an unsupported algorithm, which is why
+                    // oauth could not verify signatures at all and ended up not
+                    // verifying them.
                     "RS256" => {
                         let verifier = VerifyingKey::<Sha256>::new(rsa_key.clone());
                         let sig = rsa::pkcs1v15::Signature::try_from(signature_bytes.as_slice())
@@ -801,10 +810,10 @@ impl Token {
                             .verify(signing_input.as_bytes(), &sig)
                             .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
                     }
-                    _ => return Err(AuthError::unsupported_algorithm(jwk.alg().to_string())),
+                    _ => return Err(AuthError::unsupported_algorithm(alg.to_string())),
                 }
             }
-            keys::PublicKey::EcP256(ec_key) => {
+            keys::PublicKey::EcP256(ec_key) if alg == "ES256" => {
                 use p256::ecdsa::Signature;
 
                 let signature = Signature::from_slice(&signature_bytes)
@@ -814,7 +823,7 @@ impl Token {
                     .verify(signing_input.as_bytes(), &signature)
                     .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
             }
-            keys::PublicKey::EcP384(ec_key) => {
+            keys::PublicKey::EcP384(ec_key) if alg == "ES384" => {
                 use p384::ecdsa::Signature;
 
                 let signature = Signature::from_slice(&signature_bytes)
@@ -824,7 +833,7 @@ impl Token {
                     .verify(signing_input.as_bytes(), &signature)
                     .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
             }
-            keys::PublicKey::Ed25519(ed_key) => {
+            keys::PublicKey::Ed25519(ed_key) if alg == "EdDSA" => {
                 use ed25519_dalek::Signature;
 
                 let signature = Signature::from_slice(&signature_bytes)
@@ -834,6 +843,7 @@ impl Token {
                     .verify(signing_input.as_bytes(), &signature)
                     .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
             }
+            _ => return Err(AuthError::unsupported_algorithm(alg.to_string())),
         }
 
         Ok(())
@@ -870,6 +880,72 @@ mod tests {
         let parsed = Token::parse(token.base64().unwrap()).unwrap();
         assert_eq!(parsed.issuer(), Some("test-issuer"));
         assert_eq!(parsed.subject(), Some("test-subject"));
+    }
+
+    // A no-alg Ed25519 JWK for key (issue #179: the key's family decides).
+    fn no_alg_jwk(key: &keys::ImmutableKey) -> jwk::ImmutableJwk {
+        let x = match key.public_key() {
+            keys::PublicKey::Ed25519(ed) => base64_utils::encode_base64_url(ed.as_bytes()),
+            _ => panic!("expected ed25519 public key"),
+        };
+        jwk::ImmutableJwk::new(jwk::Jwk {
+            kty: "OKP".to_string(),
+            alg: None,
+            kid: key.id().to_string(),
+            key_use: None,
+            n: None,
+            e: None,
+            crv: Some("Ed25519".to_string()),
+            x: Some(x),
+            y: None,
+            exp: None,
+            created: None,
+        })
+        .unwrap()
+    }
+
+    // Re-encodes the signed token's header with alg replaced, keeping the
+    // payload and signature.
+    fn with_header_alg(signed: &str, alg: Value) -> String {
+        let parts: Vec<&str> = signed.split('.').collect();
+        let mut header: Map<String, Value> =
+            serde_json::from_slice(&base64_utils::decode_base64(parts[0]).unwrap()).unwrap();
+        header.insert("alg".to_string(), alg);
+        let header_b64 = base64_utils::encode_base64_url(&serde_json::to_vec(&header).unwrap());
+        format!("{}.{}.{}", header_b64, parts[1], parts[2])
+    }
+
+    // The token's alg must be exactly one the key accepts; anything else is
+    // refused before the signature is checked, and a non-string alg does not
+    // parse.
+    #[test]
+    fn test_verify_alg_must_be_accepted_by_key() {
+        let key = keys::generate_ed25519_key().unwrap();
+        let mut token = Token::new();
+        token.set_issuer("test-issuer").unwrap();
+        token.set_namespace("/tenants/acme").unwrap();
+        token.set_expiration(Utc::now().timestamp() + 3600).unwrap();
+        token.sign(&key).unwrap();
+        let signed = token.base64().unwrap().to_string();
+        let jwk = no_alg_jwk(&key);
+
+        Token::parse(&signed).unwrap().verify(&jwk).expect("EdDSA token, no-alg Ed25519 key");
+
+        for alg in ["none", "eddsa", "Ed25519", "ES256", "HS256", ""] {
+            let forged = with_header_alg(&signed, Value::from(alg));
+            let err = Token::parse(&forged).unwrap().verify(&jwk).expect_err(alg);
+            assert!(
+                !err.to_string().contains("signature verification failed"),
+                "alg {:?} must be refused before the signature check, got: {}",
+                alg,
+                err
+            );
+        }
+        for alg in [Value::Null, Value::from(1), serde_json::json!(["EdDSA"]), Value::from(true)] {
+            let forged = with_header_alg(&signed, alg.clone());
+            let refused = Token::parse(&forged).and_then(|t| t.verify(&jwk));
+            assert!(refused.is_err(), "header alg {} must be refused", alg);
+        }
     }
 
     #[test]

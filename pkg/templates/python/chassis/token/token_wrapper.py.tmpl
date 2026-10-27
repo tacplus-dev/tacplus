@@ -16,8 +16,10 @@ This module wraps the Token protobuf type and provides:
 - Standard JWT claims management (iss, sub, aud, exp, iat, jti)
 - Custom payload field support
 
-Supported signing algorithms:
-- RS384, RS512: RSA with SHA-384/512
+Supported signing algorithms (verify accepts what the JWK accepts, see
+ImmutableJwk.accepted_algs):
+- RS256, RS384, RS512: RSA PKCS#1 v1.5 with SHA-256/384/512 (keys we issue sign
+  RS384/RS512)
 - ES256, ES384, ES512: ECDSA with SHA-256/384/512
 - EdDSA: Ed25519
 
@@ -652,6 +654,12 @@ class TokenWrapper:
         if not isinstance(payload, dict):
             raise invalid_argument("payload must be a JSON object")
 
+        # alg is a JSON string (RFC 7515). The header values are stringified
+        # below, so a number/bool/null/array/object alg is refused here, before
+        # it could become a string like "True" or "None".
+        if _HEADER_ALG in header and not isinstance(header[_HEADER_ALG], str):
+            raise invalid_argument(f"header field {_HEADER_ALG} must be a string")
+
         # Validate required issuer
         if _PAYLOAD_ISS not in payload:
             raise invalid_argument(f"field {_PAYLOAD_ISS} must be present")
@@ -804,9 +812,10 @@ class TokenWrapper:
         Verify the token's signature and claims using the provided JWK.
 
         Validates:
-        1. Required claims are present (iss, kid, exp, signature)
-        2. Token has not expired
-        3. Signature is valid against the JWK's public key
+        1. Required claims are present (iss, kid, alg, exp, signature)
+        2. The header alg is one the JWK accepts (jwk.accepted_algs())
+        3. Token has not expired
+        4. Signature is valid against the JWK's public key, using that alg
 
         Args:
             jwk: An ImmutableJwk containing the public key for verification.
@@ -836,12 +845,17 @@ class TokenWrapper:
         if not kid:
             raise invalid_argument("token missing key ID (kid) in header")
 
+        # The key decides which algs it accepts; the token's alg only picks one
+        # of them, and that alg (never the key's) fixes the hash below.
         alg = self.get_alg()
-        if not alg:
+        if not isinstance(alg, str) or not alg:
             raise invalid_argument("token missing signing algorithm (alg) in header")
-        jwk_alg = jwk.alg()
-        if alg != jwk_alg:
-            raise unauthenticated(f"token alg {alg} does not match JWK alg {jwk_alg}")
+        accepted = jwk.accepted_algs()
+        if alg not in accepted:
+            raise unauthenticated(
+                f"token alg {alg!r} is not accepted by JWK {jwk.kid()} "
+                f"(accepts {', '.join(accepted)})"
+            )
 
         if not self._signature:
             raise invalid_argument("token missing signature")
@@ -882,7 +896,7 @@ class TokenWrapper:
         public_key = jwk.public_key()
 
         try:
-            if isinstance(public_key, RSAPublicKey):
+            if alg in _RSA_VERIFY_ALGS and isinstance(public_key, RSAPublicKey):
                 hash_alg = _get_rsa_hash(alg)
                 public_key.verify(
                     sig_bytes,
@@ -890,7 +904,7 @@ class TokenWrapper:
                     padding.PKCS1v15(),
                     hash_alg,
                 )
-            elif isinstance(public_key, EllipticCurvePublicKey):
+            elif alg in _EC_VERIFY_ALGS and isinstance(public_key, EllipticCurvePublicKey):
                 hash_alg = _get_ec_hash(alg)
                 # Convert raw r||s signature back to DER format
                 key_size_bits = public_key.curve.key_size
@@ -904,11 +918,11 @@ class TokenWrapper:
                 s = int.from_bytes(sig_bytes[key_size_bytes:], byteorder="big")
                 der_sig = asym_utils.encode_dss_signature(r, s)
                 public_key.verify(der_sig, signing_input, ECDSA(hash_alg))
-            elif isinstance(public_key, Ed25519PublicKey):
+            elif alg == "EdDSA" and isinstance(public_key, Ed25519PublicKey):
                 public_key.verify(sig_bytes, signing_input)
             else:
                 raise unauthenticated(
-                    f"unsupported public key type: {type(public_key).__name__}"
+                    f"alg {alg!r} cannot verify with a {type(public_key).__name__}"
                 )
         except ProtoError:
             raise
@@ -924,11 +938,18 @@ class TokenWrapper:
 # ========================================
 
 
+# Algs verify() dispatches on, per key family; anything else is refused.
+_RSA_VERIFY_ALGS = ("RS256", "RS384", "RS512")
+_EC_VERIFY_ALGS = ("ES256", "ES384", "ES512")
+
+
 def _get_rsa_hash(alg: str) -> hashes.HashAlgorithm:
-    """Return the hash algorithm for an RSA signing algorithm."""
-    if alg in ("RS384",):
+    """Return the hash algorithm for an RSA (PKCS#1 v1.5) signing algorithm."""
+    if alg == "RS256":
+        return hashes.SHA256()
+    elif alg == "RS384":
         return hashes.SHA384()
-    elif alg in ("RS512",):
+    elif alg == "RS512":
         return hashes.SHA512()
     else:
         raise internal(f"unsupported RSA algorithm: {alg}")

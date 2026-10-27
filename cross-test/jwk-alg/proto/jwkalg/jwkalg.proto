@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+// The smallest project that generates the JWK and token chassis the jwk-alg
+// gate tests; the service itself is never called.
+syntax = "proto3";
+
+package jwkalgclient;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "jwkalgclient"};
+option (spec.grpc_c2s_client) = {service: "jwkalgclient.JwkAlgApi"};
+
+message JwkAlgRequest {
+  string tenant_namespace = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_min_size) = 1
+  ];
+}
+
+message JwkAlgResponse {
+  string kid = 1 [(spec.assert_max_size) = 64];
+}
+
+service JwkAlgApi {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  rpc GetKid(JwkAlgRequest) returns (JwkAlgResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
+  }
+}

@@ -33,8 +33,12 @@ enum JwkUseType {
 message Jwk {
   // Kty is the key type parameter (RSA, EC, or OKP)
   key.KeyType kty = 1;
-  // Alg is the algorithm intended for use with the key (e.g., "RS384", "ES256", "EdDSA")
-  string alg = 2 [(spec.assert_required) = true, (spec.assert_min_size) = 1, (spec.assert_max_size) = 64];
+  // Alg is the algorithm intended for use with the key (e.g., "RS256", "ES256", "EdDSA").
+  // Optional (RFC 7517 4.4): a JWK with no alg verifies any alg of its key's
+  // family (RSA RS256/RS384/RS512, EC its curve's alg, OKP EdDSA), as
+  // Microsoft's JWKS requires; a declared alg is the only one accepted. Keys
+  // tacplus issues always declare it.
+  string alg = 2 [(spec.assert_max_size) = 64];
   // Kid is the key ID used to match keys with signatures
   string kid = 3 [(spec.indexed) = true, (spec.assert_required) = true, (spec.assert_min_size) = 1, (spec.assert_max_size) = 512];
   // Use indicates the intended use of the key (sig for signatures, enc for encryption)

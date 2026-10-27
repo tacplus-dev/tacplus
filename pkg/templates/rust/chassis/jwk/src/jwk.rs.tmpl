@@ -31,7 +31,9 @@ pub struct Jwk {
     /// Key type: "RSA", "EC", or "OKP"
     pub kty: String,
 
-    /// Algorithm: "RS384", "RS512", "ES256", "ES384", "ES512", "EdDSA", etc.
+    /// Algorithm the key declares: "RS256", "RS384", "RS512", "ES256",
+    /// "ES384", "EdDSA". `None` when the key does not declare one (Microsoft's
+    /// JWKS publishes none); it is never filled in with a guess.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alg: Option<String>,
 
@@ -81,6 +83,43 @@ pub struct ImmutableJwk {
     jwk: Jwk,
     kty: KeyType,
     public_key: PublicKey,
+    accepted_algs: &'static [&'static str],
+}
+
+/// Algorithms an RSA key verifies (PKCS#1 v1.5). Never PS*, HMAC or none.
+const RSA_ALGS: &[&str] = &["RS256", "RS384", "RS512"];
+/// Algorithm a P-256 key verifies.
+const P256_ALGS: &[&str] = &["ES256"];
+/// Algorithm a P-384 key verifies.
+const P384_ALGS: &[&str] = &["ES384"];
+/// Algorithm an Ed25519 key verifies.
+const ED25519_ALGS: &[&str] = &["EdDSA"];
+
+/// Builds the accepted set from the KEY's family, narrowed to the alg the JWK
+/// declares (issue #179). An empty alg declares nothing, as in every port.
+///
+/// A key without `alg` verifies any alg of its family: an IdP picks its own
+/// (Keycloak and Microsoft sign RS256 on 2048-bit keys, Microsoft publishing
+/// no alg at all), so guessing one from the key size refused every such
+/// token. A declared alg must be exactly (case-sensitive) one of the family;
+/// anything else — an RSA key declaring ES256, PS256, HS256 or none, a P-256
+/// key declaring ES384 — is refused here rather than at verification, so a
+/// key can never widen what it verifies.
+fn accepted_for(
+    family: &'static [&'static str],
+    declared: Option<&str>,
+    kind: &str,
+) -> Result<&'static [&'static str]> {
+    match declared.filter(|alg| !alg.is_empty()) {
+        None => Ok(family),
+        Some(alg) => family
+            .iter()
+            .position(|f| *f == alg)
+            .map(|i| &family[i..=i])
+            .ok_or_else(|| {
+                AuthError::unsupported_algorithm(format!("{} JWK alg {}", kind, alg))
+            }),
+    }
 }
 
 impl ImmutableJwk {
@@ -126,49 +165,21 @@ impl ImmutableJwk {
 
         use rsa::traits::PublicKeyParts;
         let key_bytes = (public_key.n().bits() + 7) / 8;
-        // Key size is the FALLBACK, not an override.
-        //
-        // A JWK that declares its algorithm is telling us how its signatures
-        // were produced, and that determines the digest — so overwriting it
-        // makes verification use the wrong hash and fail. Deriving from size
-        // suits keys we issue ourselves (where the size/alg pairing is our own
-        // convention and `alg` is often absent), but an external IdP picks its
-        // own: Keycloak signs with RS256 on a 2048-bit key, which this mapping
-        // called RS384, so EVERY external id_token failed with
-        // "token alg RS256 does not match JWK alg RS384". Caught by verifying a
-        // real token from the live IdP rather than a fixture.
-        //
-        // The alg-confusion protection is unaffected: Token::verify still
-        // requires the token's alg to equal the key's, so a token cannot pick
-        // its own algorithm — it must match what the key declares.
-        let derived = match key_bytes {
-            0..=255 => {
-                return Err(AuthError::missing_invalid_data(format!(
-                    "unsupported RSA key size: {} bytes",
-                    key_bytes
-                )))
-            }
-            256..=511 => "RS384",
-            _ => "RS512",
-        };
-        let alg = match jwk.alg.as_deref() {
-            Some(declared @ ("RS256" | "RS384" | "RS512")) => declared,
-            Some(other) => {
-                return Err(AuthError::missing_invalid_data(format!(
-                    "unsupported RSA JWK alg: {}",
-                    other
-                )))
-            }
-            None => derived,
-        };
+        if key_bytes < 256 {
+            return Err(AuthError::missing_invalid_data(format!(
+                "unsupported RSA key size: {} bytes",
+                key_bytes
+            )));
+        }
+        // The key size no longer picks an alg: the accepted set is the RSA
+        // family (or the alg the JWK declares), and jwk.alg stays as declared.
+        let accepted_algs = accepted_for(RSA_ALGS, jwk.alg.as_deref(), "RSA")?;
 
         Ok(Self {
-            jwk: Jwk {
-                alg: Some(alg.to_string()),
-                ..jwk
-            },
+            jwk,
             kty: KeyType::Rsa,
             public_key: PublicKey::Rsa(public_key),
+            accepted_algs,
         })
     }
 
@@ -205,14 +216,13 @@ impl ImmutableJwk {
 
                 let verifying_key = P256VerifyingKey::from_encoded_point(&point)
                     .map_err(|e| AuthError::ecdsa(format!("invalid P-256 key: {}", e)))?;
+                let accepted_algs = accepted_for(P256_ALGS, jwk.alg.as_deref(), "P-256")?;
 
                 Ok(Self {
-                    jwk: Jwk {
-                        alg: Some("ES256".to_string()),
-                        ..jwk
-                    },
+                    jwk,
                     kty: KeyType::Ec,
                     public_key: PublicKey::EcP256(verifying_key),
+                    accepted_algs,
                 })
             }
             "ES384" | "P-384" => {
@@ -228,14 +238,13 @@ impl ImmutableJwk {
 
                 let verifying_key = P384VerifyingKey::from_encoded_point(&point)
                     .map_err(|e| AuthError::ecdsa(format!("invalid P-384 key: {}", e)))?;
+                let accepted_algs = accepted_for(P384_ALGS, jwk.alg.as_deref(), "P-384")?;
 
                 Ok(Self {
-                    jwk: Jwk {
-                        alg: Some("ES384".to_string()),
-                        ..jwk
-                    },
+                    jwk,
                     kty: KeyType::Ec,
                     public_key: PublicKey::EcP384(verifying_key),
+                    accepted_algs,
                 })
             }
             "ES512" | "P-521" => {
@@ -285,14 +294,13 @@ impl ImmutableJwk {
 
         let verifying_key = VerifyingKey::from_bytes(&key_bytes)
             .map_err(|e| AuthError::ed25519(e.to_string()))?;
+        let accepted_algs = accepted_for(ED25519_ALGS, jwk.alg.as_deref(), "Ed25519")?;
 
         Ok(Self {
-            jwk: Jwk {
-                alg: Some("EdDSA".to_string()),
-                ..jwk
-            },
+            jwk,
             kty: KeyType::Okp,
             public_key: PublicKey::Ed25519(verifying_key),
+            accepted_algs,
         })
     }
 
@@ -311,9 +319,16 @@ impl ImmutableJwk {
         self.kty
     }
 
-    /// Returns the algorithm identifier
+    /// Returns the algorithm the JWK declares, "" when it declares none
     pub fn alg(&self) -> &str {
         self.jwk.alg.as_deref().unwrap_or("")
+    }
+
+    /// Returns the algorithms a token verified by this key may use: the key
+    /// family's (RSA: RS256, RS384, RS512; P-256: ES256; P-384: ES384;
+    /// Ed25519: EdDSA), or only the declared alg when the JWK declares one.
+    pub fn accepted_algs(&self) -> &[&'static str] {
+        self.accepted_algs
     }
 
     /// Returns the key ID
@@ -334,10 +349,12 @@ impl ImmutableJwk {
 
 /// Converts a native key to JWK format
 pub fn key_to_jwk(key: &key::keys::ImmutablePublicKey) -> Result<Jwk> {
-    let kid = key.id().to_string();
-    let alg = key.alg().to_string();
+    public_key_to_jwk(key.id().to_string(), key.alg().to_string(), key.public_key())
+}
 
-    match key.public_key() {
+/// Builds the JWK of a public key under the given kid, declaring alg
+fn public_key_to_jwk(kid: String, alg: String, public_key: &PublicKey) -> Result<Jwk> {
+    match public_key {
         PublicKey::Rsa(rsa_key) => {
             use rsa::traits::PublicKeyParts;
 
@@ -458,5 +475,71 @@ mod tests {
             }
             _ => panic!("Expected Ed25519 key"),
         }
+    }
+
+    // A 2048-bit RSA JWK: the modulus only has to be a valid key size for
+    // ImmutableJwk::new, nothing here verifies with it.
+    fn rsa_jwk(alg: Option<&str>) -> Jwk {
+        Jwk {
+            kty: "RSA".to_string(),
+            alg: alg.map(str::to_string),
+            kid: "rsa".to_string(),
+            key_use: None,
+            n: Some(base64_utils::encode_base64_url(&[0xff; 256])),
+            e: Some(base64_utils::encode_base64_url(&[0x01, 0x00, 0x01])),
+            crv: None,
+            x: None,
+            y: None,
+            exp: None,
+            created: None,
+        }
+    }
+
+    fn jwk_of(key: &keys::ImmutableKey, alg: Option<&str>) -> Jwk {
+        Jwk {
+            alg: alg.map(str::to_string),
+            ..public_key_to_jwk(key.id().to_string(), String::new(), key.public_key()).unwrap()
+        }
+    }
+
+    // Issue #179: a key without alg accepts its whole family and reports no
+    // alg; the RSA key size no longer guesses one.
+    #[test]
+    fn test_no_alg_jwk_accepts_its_family() {
+        let rsa = ImmutableJwk::new(rsa_jwk(None)).unwrap();
+        assert_eq!(rsa.accepted_algs(), ["RS256", "RS384", "RS512"]);
+        assert_eq!(rsa.alg(), "");
+        assert!(rsa.jwk().alg.is_none());
+
+        let p256 = ImmutableJwk::new(jwk_of(&keys::generate_ec_p256_key().unwrap(), None)).unwrap();
+        assert_eq!(p256.accepted_algs(), ["ES256"]);
+        assert_eq!(p256.alg(), "");
+        let p384 = ImmutableJwk::new(jwk_of(&keys::generate_ec_p384_key().unwrap(), None)).unwrap();
+        assert_eq!(p384.accepted_algs(), ["ES384"]);
+        let okp = ImmutableJwk::new(jwk_of(&keys::generate_ed25519_key().unwrap(), None)).unwrap();
+        assert_eq!(okp.accepted_algs(), ["EdDSA"]);
+        assert!(okp.jwk().alg.is_none());
+    }
+
+    // A declared alg narrows the set to itself, and must be exactly one of the
+    // key's family: anything else refuses the JWK instead of being overwritten.
+    #[test]
+    fn test_declared_alg_must_be_in_family() {
+        let rs256 = ImmutableJwk::new(rsa_jwk(Some("RS256"))).unwrap();
+        assert_eq!(rs256.accepted_algs(), ["RS256"]);
+        assert_eq!(rs256.alg(), "RS256");
+
+        let empty = ImmutableJwk::new(rsa_jwk(Some(""))).unwrap();
+        assert_eq!(empty.accepted_algs(), ["RS256", "RS384", "RS512"]);
+
+        for alg in ["ES256", "PS256", "none", "HS256", "rs256"] {
+            assert!(ImmutableJwk::new(rsa_jwk(Some(alg))).is_err(), "RSA key declaring {:?}", alg);
+        }
+        let p256 = keys::generate_ec_p256_key().unwrap();
+        for alg in ["ES384", "RS256", "EdDSA"] {
+            assert!(ImmutableJwk::new(jwk_of(&p256, Some(alg))).is_err(), "P-256 key declaring {}", alg);
+        }
+        let okp = keys::generate_ed25519_key().unwrap();
+        assert!(ImmutableJwk::new(jwk_of(&okp, Some("ES256"))).is_err());
     }
 }

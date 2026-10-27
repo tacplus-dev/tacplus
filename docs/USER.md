@@ -1610,6 +1610,21 @@ language-appropriate implementations of:
 
 These are not generic utility libraries. Each is generated with the service's module path baked in and the correct proto imports resolved.
 
+**Which algorithm a token is verified with.** The JWK decides, never the
+token. A JWK accepts the algorithms of its key's family: RSA `RS256`, `RS384`
+and `RS512`; EC the one its curve fixes (`P-256` `ES256`, `P-384` `ES384`,
+`P-521` `ES512`); OKP `Ed25519` `EdDSA`. A JWK that declares `alg` accepts only
+that alg, and a declared alg outside the key's family refuses the key. A JWK
+with no `alg` (Microsoft's JWKS publishes none and signs `RS256`) verifies any
+alg of its family; the token's `alg` only chooses among them, and that checked
+alg, not the header, selects the verification method. `none`, HMAC (`HS*`),
+RSA-PSS (`PS*`), another family's alg and a missing or non-string header `alg`
+are always refused. The JWK reports the alg it declares (`""` when none) and
+the set it accepts (`AcceptedAlgs` / `getAcceptedAlgs` / `accepted_algs` /
+`acceptedAlgs`). Keys tacplus issues always declare their alg. Every language
+is held to one shared fixture, `cross-test/fixtures/jwk_alg_vectors.json`
+(`just jwk-alg`).
+
 Identity is split into two managers (D-4). `service_im` (above) is emitted for
 full-service targets and owns the service's *own* identity. `client_im` is
 emitted wherever a client surface is generated — full-client (`python`,

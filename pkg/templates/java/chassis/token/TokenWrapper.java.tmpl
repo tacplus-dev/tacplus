@@ -130,6 +130,12 @@ public final class TokenWrapper {
         com.google.gson.JsonObject obj = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
         for (Map.Entry<String, com.google.gson.JsonElement> entry : obj.entrySet()) {
             com.google.gson.JsonElement value = entry.getValue();
+            // alg picks the verification scheme, so only a JSON string is an alg;
+            // a number, bool, null, array or object is refused, not coerced.
+            if (entry.getKey().equals("alg")
+                    && !(value.isJsonPrimitive() && value.getAsJsonPrimitive().isString())) {
+                throw new IllegalArgumentException("token header alg is not a string");
+            }
             if (value.isJsonPrimitive()) {
                 result.put(entry.getKey(), value.getAsString());
             }
@@ -847,12 +853,16 @@ public final class TokenWrapper {
             throw new IllegalArgumentException("token missing key ID (kid) in header");
         }
 
+        // The token's alg must be one the KEY accepts (its family, narrowed to
+        // the JWK's declared alg); it is checked before any crypto and the
+        // signature is then verified with exactly that alg.
         String alg = getAlg();
         if (alg.isEmpty()) {
             throw new IllegalArgumentException("token missing signing algorithm (alg) in header");
         }
-        if (!alg.equals(jwk.getAlg())) {
-            throw new IllegalArgumentException("token alg " + alg + " does not match JWK alg " + jwk.getAlg());
+        if (!jwk.getAcceptedAlgs().contains(alg)) {
+            throw new IllegalArgumentException("token alg " + alg + " is not accepted by JWK " + jwk.getKid()
+                    + " (accepted: " + jwk.getAcceptedAlgs() + ")");
         }
 
         if (token.getSignature().isEmpty()) {
@@ -892,6 +902,7 @@ public final class TokenWrapper {
             boolean valid = verifySignature(
                     signingInput.getBytes(StandardCharsets.UTF_8),
                     signature,
+                    alg,
                     jwk);
 
             if (!valid) {
@@ -903,14 +914,20 @@ public final class TokenWrapper {
         }
     }
 
-    private boolean verifySignature(byte[] data, byte[] signature, ImmutableJwk jwk) throws Exception {
-        String alg = getAlg();
-
+    /**
+     * Verifies signature over data with the given alg, which verify() has
+     * already checked against the JWK's accepted algs. The alg is passed in,
+     * never re-read from the header, and must match the public key's type.
+     */
+    private static boolean verifySignature(byte[] data, byte[] signature, String alg, ImmutableJwk jwk) throws Exception {
         // Hash the data based on algorithm
         byte[] dataToVerify;
         MessageDigest digest;
 
         switch (alg) {
+            case "RS256":
+                dataToVerify = data; // SHA256withRSA hashes internally
+                break;
             case "RS384":
             case "ES384":
                 digest = MessageDigest.getInstance("SHA-384");
@@ -936,11 +953,17 @@ public final class TokenWrapper {
         java.security.PublicKey publicKey = jwk.getPublicKey();
 
         if (publicKey instanceof RSAPublicKey) {
+            if (!alg.startsWith("RS")) {
+                throw new IllegalArgumentException("alg " + alg + " is not an RSA algorithm");
+            }
             Signature rsaSig = Signature.getInstance(rsaSignatureAlgorithm(alg));
             rsaSig.initVerify(publicKey);
             rsaSig.update(data);
             return rsaSig.verify(signature);
         } else if (publicKey instanceof ECPublicKey) {
+            if (!alg.startsWith("ES")) {
+                throw new IllegalArgumentException("alg " + alg + " is not an EC algorithm");
+            }
             // Convert JWT r||s format (RFC 7518 §3.4) to DER for Java's ECDSA verify
             byte[] derSignature = jwsToDer(signature);
             Signature ecSig = Signature.getInstance("NONEwithECDSA");
@@ -948,6 +971,9 @@ public final class TokenWrapper {
             ecSig.update(dataToVerify);
             return ecSig.verify(derSignature);
         } else if (publicKey.getAlgorithm().equals("Ed25519") || publicKey.getAlgorithm().equals("EdDSA")) {
+            if (!alg.equals("EdDSA")) {
+                throw new IllegalArgumentException("alg " + alg + " is not an EdDSA algorithm");
+            }
             Signature edSig = Signature.getInstance("Ed25519", new org.bouncycastle.jce.provider.BouncyCastleProvider());
             edSig.initVerify(publicKey);
             edSig.update(dataToVerify);
@@ -959,6 +985,8 @@ public final class TokenWrapper {
 
     private static String rsaSignatureAlgorithm(String alg) {
         switch (alg) {
+            case "RS256":
+                return "SHA256withRSA";
             case "RS384":
                 return "SHA384withRSA";
             case "RS512":

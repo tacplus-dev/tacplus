@@ -187,7 +187,7 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
-  for g in soundness test current-generation determinism cert-stream claims-provenance w2s-validate c2d-server zero-rpc-s2s; do
+  for g in soundness test current-generation determinism cert-stream claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg; do
     echo "=== $g ==="
     just "$g"
     rc=$?
@@ -260,6 +260,27 @@ external-token-java:
 
 external-token-rust:
   {{lock}} bash cross-test/external-token/run.sh --language rust
+
+# JWK alg selection (issue #179): every generated language verifies the one
+# shared fixture of pre-signed tokens (cross-test/fixtures/jwk_alg_vectors.json)
+# with its generated jwk and token chassis. The accepted algs come from the
+# key; none, HMAC, PS* and other families are refused.
+jwk-alg: jwk-alg-go jwk-alg-java jwk-alg-python jwk-alg-rust jwk-alg-typescript
+
+jwk-alg-go:
+  {{lock}} bash cross-test/jwk-alg/run.sh --language go
+
+jwk-alg-java:
+  {{lock}} bash cross-test/jwk-alg/run.sh --language java
+
+jwk-alg-python:
+  {{lock}} bash cross-test/jwk-alg/run.sh --language python
+
+jwk-alg-rust:
+  {{lock}} bash cross-test/jwk-alg/run.sh --language rust
+
+jwk-alg-typescript:
+  {{lock}} bash cross-test/jwk-alg/run.sh --language typescript
 
 # Generation gate against the REAL platform + app proto repos (not the
 # cross-test/proto fixtures every other gate uses). This is the check that

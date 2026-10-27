@@ -23,6 +23,7 @@ import java.security.spec.InvalidParameterSpecException;
 import java.security.spec.RSAPublicKeySpec;
 import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPublicKey;
+import java.util.List;
 import {{.PackageBase}}.utils.Utils;
 
 /**
@@ -43,17 +44,24 @@ import {{.PackageBase}}.utils.Utils;
  *
  * <p>All coordinate and key material fields use base64url encoding per RFC 7517.
  *
+ * <p>The algorithms a token may be verified with come from the KEY, never from
+ * the token: RSA accepts RS256/RS384/RS512, EC its curve's ES alg (P-256 ES256,
+ * P-384 ES384, P-521 ES512), OKP Ed25519 EdDSA. A JWK that declares an alg is
+ * narrowed to it, and a declared alg outside the key's family is refused. None,
+ * HMAC and PS* are never accepted.
+ *
  * <p>Example usage:
  * <pre>{@code
  * ImmutableJwk jwk = ImmutableJwk.from(protoJwk);
  * RSAPublicKey rsaKey = (RSAPublicKey) jwk.getPublicKey();
- * SecureDigestAlgorithm<?, ?> sigAlg = jwk.getSignatureAlgorithm();
+ * List<String> algs = jwk.getAcceptedAlgs();
  * }</pre>
  */
 public final class ImmutableJwk {
 
     private final JwkOuterClass.Jwk proto;
     private final java.security.PublicKey publicKey;
+    private final List<String> acceptedAlgs;
     private final SecureDigestAlgorithm<?, ?> signatureAlgorithm;
 
     /**
@@ -62,9 +70,11 @@ public final class ImmutableJwk {
     private ImmutableJwk(
             JwkOuterClass.Jwk proto,
             java.security.PublicKey publicKey,
+            List<String> acceptedAlgs,
             SecureDigestAlgorithm<?, ?> signatureAlgorithm) {
         this.proto = proto;
         this.publicKey = publicKey;
+        this.acceptedAlgs = acceptedAlgs;
         this.signatureAlgorithm = signatureAlgorithm;
     }
 
@@ -89,26 +99,32 @@ public final class ImmutableJwk {
 
         java.security.PublicKey publicKey;
         KeyOuterClass.KeyType kty;
-        String alg;
+        List<String> family;
 
         switch (proto.getKty()) {
             case KEY_TYPE_RSA -> {
                 Object[] rsaResult = loadRsa(proto);
                 publicKey = (java.security.PublicKey) rsaResult[0];
                 kty = (KeyOuterClass.KeyType) rsaResult[1];
-                alg = (String) rsaResult[2];
+                @SuppressWarnings("unchecked")
+                List<String> algs = (List<String>) rsaResult[2];
+                family = algs;
             }
             case KEY_TYPE_EC -> {
                 Object[] ecResult = loadEc(proto);
                 publicKey = (java.security.PublicKey) ecResult[0];
                 kty = (KeyOuterClass.KeyType) ecResult[1];
-                alg = (String) ecResult[2];
+                @SuppressWarnings("unchecked")
+                List<String> algs = (List<String>) ecResult[2];
+                family = algs;
             }
             case KEY_TYPE_OKP -> {
                 Object[] okpResult = loadOkp(proto);
                 publicKey = (java.security.PublicKey) okpResult[0];
                 kty = (KeyOuterClass.KeyType) okpResult[1];
-                alg = (String) okpResult[2];
+                @SuppressWarnings("unchecked")
+                List<String> algs = (List<String>) okpResult[2];
+                family = algs;
             }
             default -> throw ProtoException.newErrMissingInvalidData(null,
                     "unsupported key type: %s", proto.getKty());
@@ -118,16 +134,27 @@ public final class ImmutableJwk {
             throw ProtoException.newErrGeneral(null, "failed to load public key");
         }
 
-        // Get JWT signature algorithm from the modern Jwts.SIG registry
-        SecureDigestAlgorithm<?, ?> signatureAlgorithm = Jwts.SIG.get().get(alg);
+        // The key's family is what a token may be verified with; a declared
+        // alg narrows it to that one alg and must belong to the family
+        // (case-sensitive), so a key cannot declare its way into none, HMAC,
+        // PS* or another key type's algs. The declared alg is kept as-is.
+        List<String> acceptedAlgs = family;
+        SecureDigestAlgorithm<?, ?> signatureAlgorithm = null;
+        String declared = proto.getAlg();
+        if (!declared.isEmpty()) {
+            if (!family.contains(declared)) {
+                throw ProtoException.newErrMissingInvalidData(null,
+                        "jwk alg %s is not valid for a %s key (accepted: %s)", declared, kty, family);
+            }
+            acceptedAlgs = List.of(declared);
+            signatureAlgorithm = Jwts.SIG.get().get(declared);
+        }
 
-        // Update proto with determined values
         proto = proto.toBuilder()
                 .setKty(kty)
-                .setAlg(alg)
                 .build();
 
-        return new ImmutableJwk(proto, publicKey, signatureAlgorithm);
+        return new ImmutableJwk(proto, publicKey, acceptedAlgs, signatureAlgorithm);
     }
 
     /**
@@ -159,9 +186,11 @@ public final class ImmutableJwk {
             RSAPublicKey publicKey = (RSAPublicKey) keyFactory.generatePublic(spec);
 
             int keySize = publicKey.getModulus().bitLength() / 8;
-            String alg = rsaAlgForKeySize(keySize);
+            if (keySize < 256) {
+                throw ProtoException.newErrMissingInvalidData(null, "unsupported RSA key size: " + keySize + " bytes");
+            }
 
-            return new Object[]{publicKey, KeyOuterClass.KeyType.KEY_TYPE_RSA, alg};
+            return new Object[]{publicKey, KeyOuterClass.KeyType.KEY_TYPE_RSA, RSA_ALGS};
         } catch (NoSuchAlgorithmException | InvalidKeySpecException ex) {
             throw ProtoException.newErrGeneral(ex, "failed to create RSA public key");
         }
@@ -200,7 +229,7 @@ public final class ImmutableJwk {
             ECPublicKeySpec spec = new ECPublicKeySpec(point, ecParams);
             ECPublicKey publicKey = (ECPublicKey) keyFactory.generatePublic(spec);
 
-            return new Object[]{publicKey, KeyOuterClass.KeyType.KEY_TYPE_EC, algName};
+            return new Object[]{publicKey, KeyOuterClass.KeyType.KEY_TYPE_EC, List.of(algName)};
         } catch (NoSuchAlgorithmException | InvalidKeySpecException e) {
             throw ProtoException.newErrGeneral(e, "failed to create EC public key");
         }
@@ -236,7 +265,7 @@ public final class ImmutableJwk {
                     buildEd25519PublicKeyDer(keyBytes));
             java.security.PublicKey publicKey = keyFactory.generatePublic(spec);
 
-            return new Object[]{publicKey, KeyOuterClass.KeyType.KEY_TYPE_OKP, "EdDSA"};
+            return new Object[]{publicKey, KeyOuterClass.KeyType.KEY_TYPE_OKP, List.of("EdDSA")};
         } catch (NoSuchAlgorithmException | InvalidKeySpecException e) {
             throw ProtoException.newErrGeneral(e, "failed to create Ed25519 public key");
         }
@@ -305,10 +334,20 @@ public final class ImmutableJwk {
     }
 
     /**
-     * Returns the algorithm name.
+     * Returns the alg the JWK declares, or "" when it declares none. This is
+     * never a guess; see {@link #getAcceptedAlgs()} for what a token may use.
      */
     public String getAlg() {
         return proto.getAlg();
+    }
+
+    /**
+     * Returns the algorithms a token may be verified with against this key
+     * (unmodifiable): the key's family, narrowed to the declared alg when the
+     * JWK declares one.
+     */
+    public List<String> getAcceptedAlgs() {
+        return acceptedAlgs;
     }
 
     /**
@@ -375,9 +414,10 @@ public final class ImmutableJwk {
     }
 
     /**
-     * Returns the JWT signature algorithm.
+     * Returns the JWT signature algorithm of the alg the JWK declares, or null
+     * when it declares none. Verification uses {@link #getAcceptedAlgs()}.
      *
-     * @return the signature algorithm
+     * @return the declared signature algorithm, or null
      */
     public SecureDigestAlgorithm<?, ?> getSignatureAlgorithm() {
         return signatureAlgorithm;
@@ -396,12 +436,8 @@ public final class ImmutableJwk {
         return publicKey;
     }
 
-    private static String rsaAlgForKeySize(int keySizeBytes) {
-        if (keySizeBytes < 256) {
-            throw ProtoException.newErrMissingInvalidData(null, "unsupported RSA key size: " + keySizeBytes + " bytes");
-        }
-        return keySizeBytes < 512 ? "RS384" : "RS512";
-    }
+    /** Every RSA key verifies RS256, RS384 and RS512; never PS*. */
+    private static final List<String> RSA_ALGS = List.of("RS256", "RS384", "RS512");
 
     /**
      * Converts elliptic curve names to their corresponding JWT algorithm names.

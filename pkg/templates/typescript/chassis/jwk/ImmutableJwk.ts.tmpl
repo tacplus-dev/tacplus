@@ -17,7 +17,15 @@ import { KeyType } from '../../types/sys/key/key_pb.js';
  * It provides:
  *   - Parsed public key as a Node.js crypto.KeyObject
  *   - jose-compatible CryptoKey for JWT verification
- *   - Key metadata (kid, algorithm, key type, curve)
+ *   - Key metadata (kid, declared algorithm, key type, curve)
+ *   - The algorithms a token may be verified with via `acceptedAlgs()` and
+ *     `verificationKey()`
+ *
+ * The accepted algorithms come from the KEY, never from a token: its family
+ * (RSA: RS256, RS384, RS512; EC: the one alg its curve fixes; OKP Ed25519:
+ * EdDSA), narrowed to the key's alg when it declares one. A key with no alg
+ * (Microsoft's JWKS publishes none) verifies any alg of its family; a declared
+ * alg outside the family refuses the key. none, HMAC and PS* are in no family.
  *
  * Supported key types:
  *   - RSA: Requires kid, n (modulus), e (exponent) fields
@@ -35,7 +43,9 @@ import { KeyType } from '../../types/sys/key/key_pb.js';
 export class ImmutableJwk {
   private readonly _kid: string;
   private readonly _alg: string;
+  private readonly _acceptedAlgs: readonly string[];
   private readonly _kty: KeyType;
+  private readonly _jwkObj: jose.JWK;
   private readonly _publicKeyObject: crypto.KeyObject;
   private readonly _cryptoKey: jose.KeyLike;
   private readonly _proto: Partial<Jwk>;
@@ -43,14 +53,18 @@ export class ImmutableJwk {
   private constructor(
     kid: string,
     alg: string,
+    acceptedAlgs: readonly string[],
     kty: KeyType,
+    jwkObj: jose.JWK,
     publicKeyObject: crypto.KeyObject,
     cryptoKey: jose.KeyLike,
     proto: Partial<Jwk>,
   ) {
     this._kid = kid;
     this._alg = alg;
+    this._acceptedAlgs = Object.freeze([...acceptedAlgs]);
     this._kty = kty;
+    this._jwkObj = Object.freeze({ ...jwkObj });
     this._publicKeyObject = publicKeyObject;
     this._cryptoKey = cryptoKey;
     this._proto = { ...proto };
@@ -66,7 +80,8 @@ export class ImmutableJwk {
    *
    * @param jwkProto - The Jwk protobuf message
    * @returns A new ImmutableJwk instance
-   * @throws Error if required fields are missing or the key cannot be parsed
+   * @throws Error if required fields are missing, the key cannot be parsed, or
+   *   the key declares an alg outside its family
    */
   static async create(jwkProto: Partial<Jwk>): Promise<ImmutableJwk> {
     if (!jwkProto.kid) {
@@ -74,7 +89,7 @@ export class ImmutableJwk {
     }
 
     let kty: KeyType;
-    let alg: string;
+    let acceptedAlgs: string[];
     let jwkObj: jose.JWK;
 
     // Determine key type from the kty field (numeric enum)
@@ -87,10 +102,10 @@ export class ImmutableJwk {
       }
       jwkObj = { kty: 'RSA', kid: jwkProto.kid, n: jwkProto.n, e: jwkProto.e };
       kty = KeyType.RSA;
-      alg = jwkProto.alg || rsaAlgForModulus(jwkProto.n);
-      if (alg !== 'RS384' && alg !== 'RS512') {
-        throw new Error(`unsupported RSA algorithm: ${alg}`);
-      }
+      checkRsaKeySize(jwkProto.n);
+      // The key's size says nothing about the alg it signs with: an external
+      // IdP signs RS256 with a 2048-bit key. The token picks within the family.
+      acceptedAlgs = ['RS256', 'RS384', 'RS512'];
     } else if (ktyValue === KeyType.EC) {
       // EC
       if (!jwkProto.crv || !jwkProto.x || !jwkProto.y) {
@@ -98,7 +113,7 @@ export class ImmutableJwk {
       }
       jwkObj = { kty: 'EC', kid: jwkProto.kid, crv: ecCurveFix(jwkProto.crv), x: jwkProto.x, y: jwkProto.y };
       kty = KeyType.EC;
-      alg = jwkProto.alg || ecCurveToAlg(jwkProto.crv);
+      acceptedAlgs = [ecCurveToAlg(jwkProto.crv)];
     } else if (ktyValue === KeyType.OKP) {
       // OKP (Ed25519)
       if (!jwkProto.x) {
@@ -112,19 +127,29 @@ export class ImmutableJwk {
       }
       jwkObj = { kty: 'OKP', kid: jwkProto.kid, crv: 'Ed25519', x: jwkProto.x };
       kty = KeyType.OKP;
-      alg = 'EdDSA';
+      acceptedAlgs = ['EdDSA'];
     } else {
       throw new Error(`unsupported key type: ${ktyValue}`);
     }
 
-    // Import JWK into jose
-    const imported = await jose.importJWK(jwkObj, alg);
+    // A declared alg is used as declared, and only if the key's family has it.
+    const alg = jwkProto.alg ?? '';
+    if (alg !== '') {
+      if (!acceptedAlgs.some((a) => a === alg)) {
+        throw new Error(`jwk alg "${alg}" is not an algorithm of a ${KeyType[kty]} key; expecting one of ${acceptedAlgs.join(', ')}`);
+      }
+      acceptedAlgs = [alg];
+    }
+
+    // Import JWK into jose (the key material is the same for every alg of the
+    // family; verification imports it again for the token's checked alg).
+    const imported = await jose.importJWK(jwkObj, acceptedAlgs[0]);
     const cryptoKey = imported as jose.KeyLike;
 
     // Also create a Node.js KeyObject
     const publicKeyObject = crypto.createPublicKey({ key: jwkObj, format: 'jwk' } as Parameters<typeof crypto.createPublicKey>[0]);
 
-    return new ImmutableJwk(jwkProto.kid, alg, kty, publicKeyObject, cryptoKey, jwkProto);
+    return new ImmutableJwk(jwkProto.kid, alg, acceptedAlgs, kty, jwkObj, publicKeyObject, cryptoKey, jwkProto);
   }
 
   /** Returns the key ID. */
@@ -132,9 +157,37 @@ export class ImmutableJwk {
     return this._kid;
   }
 
-  /** Returns the algorithm name (e.g., "RS384", "ES384", "EdDSA"). */
+  /**
+   * Returns the algorithm the JWK declares (e.g., "RS256", "ES384", "EdDSA"),
+   * or "" when it declares none. The algorithms a token may be verified with
+   * are `acceptedAlgs()`.
+   */
   getAlg(): string {
     return this._alg;
+  }
+
+  /**
+   * Returns the algorithms a token verified with this key may use: the key's
+   * family (RSA: RS256, RS384, RS512; EC: its curve's alg; OKP: EdDSA), or
+   * only the alg the key declares.
+   */
+  acceptedAlgs(): readonly string[] {
+    return this._acceptedAlgs;
+  }
+
+  /**
+   * Returns the key imported for a token's alg, after checking that alg is one
+   * this key accepts. The set comes from the key, so a token can only choose
+   * among the key's own algorithms: never none, HMAC, or an alg of another
+   * family.
+   *
+   * @throws Error if the key does not accept alg
+   */
+  async verificationKey(alg: string): Promise<jose.KeyLike> {
+    if (typeof alg !== 'string' || !this._acceptedAlgs.some((a) => a === alg)) {
+      throw new Error(`token alg ${JSON.stringify(alg)} is not accepted by JWK "${this._kid}"; expecting one of ${this._acceptedAlgs.join(', ')}`);
+    }
+    return (await jose.importJWK(this._jwkObj, alg)) as jose.KeyLike;
   }
 
   /** Returns the key type (RSA, EC, or OKP). */
@@ -174,20 +227,22 @@ function ecCurveFix(crv: string): string {
   }
 }
 
-function rsaAlgForModulus(n: string): string {
+/**
+ * Refuses RSA keys smaller than 2048 bits.
+ */
+function checkRsaKeySize(n: string): void {
   const modulus = Buffer.from(n, 'base64url');
   const keySizeBytes = modulus[0] === 0 ? modulus.length - 1 : modulus.length;
   if (keySizeBytes < 256) {
     throw new Error(`unsupported RSA key size: ${keySizeBytes} bytes`);
   }
-  return keySizeBytes < 512 ? 'RS384' : 'RS512';
 }
 
 /**
- * Converts elliptic curve names to JWT algorithm names.
+ * Converts elliptic curve names to the one JWT algorithm the curve fixes.
  */
 function ecCurveToAlg(crv: string): string {
-  switch (crv) {
+  switch (ecCurveFix(crv)) {
     case 'P-256':
       return 'ES256';
     case 'P-384':
@@ -195,6 +250,6 @@ function ecCurveToAlg(crv: string): string {
     case 'P-521':
       return 'ES512';
     default:
-      return crv;
+      throw new Error(`unsupported curve: ${crv}`);
   }
 }

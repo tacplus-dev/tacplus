@@ -24,7 +24,14 @@
 // efficient cryptographic operations. Once created, an ImmutableJwk provides:
 //   - Read-only access to JWK fields via Get* methods (delegates to protobuf)
 //   - Parsed public key accessible via PublicKey() method
-//   - JWT signing method for token verification via JwtSigningMethod()
+//   - The algorithms a token may be verified with via AcceptedAlgs() and
+//     SigningMethodFor()
+//
+// The accepted algorithms come from the KEY, never from a token: its family
+// (RSA: RS256, RS384, RS512; EC: the one alg its curve fixes; OKP Ed25519:
+// EdDSA), narrowed to the key's alg when it declares one. A key with no alg
+// (Microsoft's JWKS publishes none) verifies any alg of its family; a declared
+// alg outside the family refuses the key. none, HMAC and PS* are in no family.
 //
 // Supported key types and their native Go representations:
 //   - RSA: Converts N and E fields to *rsa.PublicKey
@@ -40,6 +47,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rsa"
 	"math/big"
+	"slices"
 
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/protobuf/proto"
@@ -62,7 +70,8 @@ import (
 // Fields:
 //   - proto: The underlying protobuf message (cloned for immutability)
 //   - publicKey: The parsed public key (*rsa.PublicKey, *ecdsa.PublicKey, or ed25519.PublicKey)
-//   - jwtSigningMethod: The JWT signing method for token verification (from jwt.GetSigningMethod)
+//   - acceptedAlgs: The algorithms a token signed by this key may use (see AcceptedAlgs)
+//   - jwtSigningMethod: The JWT signing method of the declared alg; nil when the key declares none
 //
 // The JWK format supports three key types:
 //   - RSA: Requires Kid, N (modulus), and E (exponent) fields
@@ -86,6 +95,7 @@ import (
 type ImmutableJwk struct {
 	proto            *protoJwk.Jwk
 	publicKey        any
+	acceptedAlgs     []string
 	jwtSigningMethod jwt.SigningMethod
 }
 
@@ -127,15 +137,12 @@ func NewImmutableJwk(x *protoJwk.Jwk) (*ImmutableJwk, error) {
 
 		i.publicKey = &rsa.PublicKey{N: n, E: e}
 		i.proto.Kty = wrapperKey.KeyType_KEY_TYPE_RSA
-		keySize := i.publicKey.(*rsa.PublicKey).Size()
-		switch {
-		case keySize < 256:
+		if keySize := i.publicKey.(*rsa.PublicKey).Size(); keySize < 256 {
 			return protoerrors.NewErrMissingInvalidData(nil, "unsupported RSA key size: %d bytes", keySize)
-		case keySize < 512:
-			i.proto.Alg = "RS384"
-		default:
-			i.proto.Alg = "RS512"
 		}
+		// The key's size says nothing about the alg it signs with: an external
+		// IdP signs RS256 with a 2048-bit key. The token picks within the family.
+		i.acceptedAlgs = []string{"RS256", "RS384", "RS512"}
 
 		return nil
 	}
@@ -149,12 +156,13 @@ func NewImmutableJwk(x *protoJwk.Jwk) (*ImmutableJwk, error) {
 		}
 
 		var curve elliptic.Curve
-		switch ecMethodFix(i.proto.Crv) {
+		curveAlg := ecMethodFix(i.proto.Crv)
+		switch curveAlg {
 		case "ES256":
 			curve = elliptic.P256()
 		case "ES384":
 			curve = elliptic.P384()
-		case "ES512", "ES521":
+		case "ES512":
 			curve = elliptic.P521()
 		default:
 			return protoerrors.NewErrMissingInvalidData(nil, "unsupported curve: %s", i.proto.Crv)
@@ -180,7 +188,7 @@ func NewImmutableJwk(x *protoJwk.Jwk) (*ImmutableJwk, error) {
 
 		i.publicKey = &ecdsa.PublicKey{Curve: curve, X: xInt, Y: yInt}
 		i.proto.Kty = wrapperKey.KeyType_KEY_TYPE_EC
-		i.proto.Alg = ecMethodFix(i.proto.Crv)
+		i.acceptedAlgs = []string{curveAlg}
 
 		return nil
 	}
@@ -212,7 +220,7 @@ func NewImmutableJwk(x *protoJwk.Jwk) (*ImmutableJwk, error) {
 
 		i.publicKey = ed25519.PublicKey(bytes)
 		i.proto.Kty = wrapperKey.KeyType_KEY_TYPE_OKP
-		i.proto.Alg = "EdDSA"
+		i.acceptedAlgs = []string{"EdDSA"}
 
 		return nil
 	}
@@ -239,9 +247,17 @@ func NewImmutableJwk(x *protoJwk.Jwk) (*ImmutableJwk, error) {
 		return nil, protoerrors.NewErrMissingInvalidData(nil, "failed to load public key")
 	}
 
-	i.jwtSigningMethod = jwt.GetSigningMethod(i.proto.Alg)
-	if i.jwtSigningMethod == nil {
-		return nil, protoerrors.NewErrMissingInvalidData(nil, "signing method %s not found; expecting one of %s", i.proto.Alg, jwt.GetAlgorithms())
+	// A declared alg is used as declared, and only if the key's family has it.
+	if i.proto.Alg != "" {
+		if !slices.Contains(i.acceptedAlgs, i.proto.Alg) {
+			return nil, protoerrors.NewErrMissingInvalidData(nil,
+				"jwk alg %q is not an algorithm of a %s key; expecting one of %v",
+				i.proto.Alg,
+				i.proto.Kty,
+				i.acceptedAlgs)
+		}
+		i.acceptedAlgs = []string{i.proto.Alg}
+		i.jwtSigningMethod = jwt.GetSigningMethod(i.proto.Alg)
 	}
 
 	return i, nil
@@ -256,7 +272,8 @@ func (x *ImmutableJwk) GetKty() wrapperKey.KeyType {
 	return wrapperKey.KeyType(0)
 }
 
-// GetAlg returns the algorithm name.
+// GetAlg returns the algorithm the JWK declares, or "" when it declares none.
+// The algorithms a token may be verified with are AcceptedAlgs.
 // This method delegates to the underlying protobuf type.
 func (x *ImmutableJwk) GetAlg() string {
 	if x != nil {
@@ -346,9 +363,32 @@ func (x *ImmutableJwk) GetCreated() int64 {
 	return 0
 }
 
-// JwtSigningMethod returns the JWT signing method for verification.
+// JwtSigningMethod returns the JWT signing method of the alg the JWK declares,
+// or nil when it declares none. Verification uses SigningMethodFor.
 func (w *ImmutableJwk) JwtSigningMethod() jwt.SigningMethod {
 	return w.jwtSigningMethod
+}
+
+// AcceptedAlgs returns the algorithms a token verified with this key may use:
+// the key's family (RSA: RS256, RS384, RS512; EC: its curve's alg; OKP:
+// EdDSA), or only the alg the key declares.
+func (w *ImmutableJwk) AcceptedAlgs() []string {
+	return slices.Clone(w.acceptedAlgs)
+}
+
+// SigningMethodFor returns the JWT signing method for a token's alg, after
+// checking that alg is one this key accepts. The set comes from the key, so a
+// token can only choose among the key's own algorithms: never none, HMAC, or
+// an alg of another family.
+func (w *ImmutableJwk) SigningMethodFor(alg string) (jwt.SigningMethod, error) {
+	if !slices.Contains(w.acceptedAlgs, alg) {
+		return nil, protoerrors.NewErrUnauthorized(nil, "token alg %q is not accepted by JWK %q; expecting one of %v", alg, w.proto.Kid, w.acceptedAlgs)
+	}
+	method := jwt.GetSigningMethod(alg)
+	if method == nil {
+		return nil, protoerrors.NewErrUnauthorized(nil, "signing method %s not found", alg)
+	}
+	return method, nil
 }
 
 // PublicKey returns the parsed public key.

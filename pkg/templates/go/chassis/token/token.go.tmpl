@@ -1014,8 +1014,11 @@ func (token *TokenWrapper) Verify(jwk *wrapperJwk.ImmutableJwk) error {
 	if alg == "" {
 		return protoerrors.NewErrMissingInvalidData(nil, "token missing signing algorithm (alg) in header")
 	}
-	if alg != jwk.GetAlg() {
-		return protoerrors.NewErrUnauthorized(nil, "token alg %q does not match JWK alg %q", alg, jwk.GetAlg())
+	// The key decides which algs it accepts; the token's alg only picks one
+	// of them, and that method, never the header, verifies the signature.
+	jwtSigningMethod, err := jwk.SigningMethodFor(alg)
+	if err != nil {
+		return err
 	}
 
 	if token.token.Signature == "" {
@@ -1073,8 +1076,6 @@ func (token *TokenWrapper) Verify(jwk *wrapperJwk.ImmutableJwk) error {
 		}
 		return protoerrors.NewErrUnauthorized(err, "")
 	}
-
-	jwtSigningMethod := jwk.JwtSigningMethod()
 
 	publicKey := jwk.PublicKey()
 

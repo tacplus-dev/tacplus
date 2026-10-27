@@ -64,6 +64,18 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   reach the peer, and the host must publish no instance health, ask for no
   serving cert and bind no listener. Rust only. Local (`just zero-rpc-s2s`, part
   of `just gates`); not yet in CI.
+- `jwk-alg` (`cross-test/jwk-alg/run.sh`): JWK alg-selection gate (#179) for
+  the generated jwk and token chassis in Go, Java, Python, Rust and
+  TypeScript. Every leg verifies the same pre-signed tokens from
+  `cross-test/fixtures/jwk_alg_vectors.json` (written by
+  `go run ./cross-test/jwk-alg/genvectors`; no leg signs anything) and must
+  reach each case's expect: a key with no `alg` (Microsoft-shaped JWKS) accepts
+  RS256/RS384/RS512 tokens it signed, a declared alg is used as declared, and
+  `none` in any case, HMAC keyed with the public key, PS*, another family's alg
+  and malformed or non-string header algs are refused. Python is client-only and
+  does not emit these chassis, so its leg renders them first
+  (`pkg/internal/python/pyrender`). Local (`just jwk-alg`, part of
+  `just gates`); not yet in CI.
 - `mcp-floor-version` (`cross-test/mcp-floor-version/run.sh`): rmcp floor gate
   for the generated Rust MCP dispatch — generates a service owning one
   `RPC_PRINCIPAL_MCP` tool, pins `rmcp` to the EXACT version

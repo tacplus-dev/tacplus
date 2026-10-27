@@ -53,8 +53,9 @@ public class AuthorizerBehaviorTest {
     }
 
     // jwkForKey builds the verifying JWK proto (OKP/Ed25519) for a signing key,
-    // keyed by the key's id (the kid sign() stamps into the token header). The
-    // raw 32-byte public key is the tail of the X.509 SPKI encoding.
+    // keyed by the key's id (the kid sign() stamps into the token header) and
+    // declaring the key's own alg explicitly. The raw 32-byte public key is the
+    // tail of the X.509 SPKI encoding.
     private static JwkOuterClass.Jwk jwkForKey(ImmutableKey key) {
         byte[] spki = key.getPublicKey().getEncoded();
         byte[] raw = new byte[32];
@@ -62,6 +63,7 @@ public class AuthorizerBehaviorTest {
         return JwkOuterClass.Jwk.newBuilder()
             .setKid(key.getProto().getId())
             .setKty(KeyOuterClass.KeyType.KEY_TYPE_OKP)
+            .setAlg(key.getAlg())
             .setCrv("Ed25519")
             .setX(Base64.getUrlEncoder().withoutPadding().encodeToString(raw))
             .build();

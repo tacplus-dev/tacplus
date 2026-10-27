@@ -16,9 +16,14 @@ export interface TokenSigningKey {
   getCryptoKey(): jose.KeyLike;
 }
 
+/**
+ * The key a token is verified with. The key, never the token, decides which
+ * algs it accepts; verificationKey refuses any alg outside acceptedAlgs and
+ * returns the key imported for exactly that alg.
+ */
 export interface TokenVerificationJwk {
-  getAlg(): string;
-  getCryptoKey(): jose.KeyLike;
+  acceptedAlgs(): readonly string[];
+  verificationKey(alg: string): Promise<jose.KeyLike>;
 }
 
 /**
@@ -33,6 +38,8 @@ export interface TokenVerificationJwk {
  *   - RS384/RS512: RSA keys
  *   - ES256/ES384/ES512: ECDSA keys (P-256, P-384, P-521)
  *   - EdDSA: Ed25519 keys
+ * verify() also accepts RS256 (external IdPs sign with it): the algs a token
+ * may be verified with are the JWK's acceptedAlgs().
  *
  * Example usage:
  * ```typescript
@@ -701,6 +708,7 @@ export class TokenWrapper {
    *
    * Validates:
    *   - Token has required claims (iss, kid, exp, signature)
+   *   - Header alg is a string the JWK accepts (checked before any crypto)
    *   - Token has not expired
    *   - Signature is valid against the JWK's public key
    *
@@ -724,13 +732,16 @@ export class TokenWrapper {
       throw new Error('token missing key ID (kid) in header');
     }
 
-    const alg = this.getAlg();
-    if (!alg) {
+    // The header is untrusted JSON: alg may be any JSON value.
+    const alg: unknown = this.token.header?.['alg'];
+    if (typeof alg !== 'string' || alg === '') {
       throw new Error('token missing signing algorithm (alg) in header');
     }
-    const jwkAlg = jwk.getAlg();
-    if (alg !== jwkAlg) {
-      throw new Error(`token alg ${alg} does not match JWK alg ${jwkAlg}`);
+    // The key decides which algs it accepts; the token's alg only picks one
+    // of them, and that alg, never the header, verifies the signature.
+    const acceptedAlgs = jwk.acceptedAlgs();
+    if (!acceptedAlgs.some((a) => a === alg)) {
+      throw new Error(`token alg ${JSON.stringify(alg)} is not accepted by the JWK; expecting one of ${acceptedAlgs.join(', ')}`);
     }
 
     if (!this.token.signature) {
@@ -758,7 +769,7 @@ export class TokenWrapper {
       }
     }
 
-    const publicKey = jwk.getCryptoKey();
+    const publicKey = await jwk.verificationKey(alg);
     try {
       await jose.jwtVerify(this.token.base64, publicKey, {
         algorithms: [alg],

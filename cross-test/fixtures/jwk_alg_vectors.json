@@ -1,0 +1,1134 @@
+{
+  "_comment": "JWK alg-selection vectors (issue #179), written by `go run ./cross-test/jwk-alg/genvectors`; do not edit by hand. Each case names a key in `jwks` (by kid) and a signed token; a language test builds that JWK, verifies the token against it, and must reach `expect` (reject: the JWK is refused, the token does not parse, or verification fails). The accepted algs come from the key: RSA RS256/RS384/RS512, EC by curve (P-256 ES256, P-384 ES384), OKP Ed25519 EdDSA, narrowed to the key's alg when it declares one; never none, HMAC or PS*. `jwks.microsoft` is shaped like https://login.microsoftonline.com/common/discovery/v2.0/keys (no alg; x5t, x5c, issuer). Throwaway keys; exp is 2100-01-01.",
+  "jwks": {
+    "microsoft": [
+      {
+        "e": "AQAB",
+        "issuer": "https://login.microsoftonline.com/{tenantid}/v2.0",
+        "kid": "ms-noalg",
+        "kty": "RSA",
+        "n": "9NUvM7cpm1uiVh6VMuYkfQXFRwBfiajedzG_oelxbQPoO9vgLhdosSrur9pT_Z6I5V88Hwo_zSnGml8S6CV_x2TwJcI9ulL3T9yYoMYTJkLFPahDSSVNCvIVn_SndKzX1ZfG69NymQLTOWrkswbLGhmjAg24RvLnNgMIf5MhgvoEmd0j_CsHshGnw3IvKs9gMdKDYRLPm6HQFFuYAQH3L8YAlsI9X5EgQFg39Vs7op0TqaIPUtbKpIJ5DhNHDm49My_kgJbLwDViqa_kcb0olwuJj0m1KdoK5jHCbiAy3NouzcUav3nuQR963OpXPvSNprqUb3vrEIkWzhoF_LN-tQ",
+        "use": "sig",
+        "x5c": [
+          "MIIC1TCCAb2gAwIBAgIBATANBgkqhkiG9w0BAQsFADAtMSswKQYDVQQDEyJhY2NvdW50cy5hY2Nlc3Njb250cm9sLndpbmRvd3MubmV0MCAXDTI2MDEwMTAwMDAwMFoYDzIxMDAwMTAxMDAwMDAwWjAtMSswKQYDVQQDEyJhY2NvdW50cy5hY2Nlc3Njb250cm9sLndpbmRvd3MubmV0MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA9NUvM7cpm1uiVh6VMuYkfQXFRwBfiajedzG/oelxbQPoO9vgLhdosSrur9pT/Z6I5V88Hwo/zSnGml8S6CV/x2TwJcI9ulL3T9yYoMYTJkLFPahDSSVNCvIVn/SndKzX1ZfG69NymQLTOWrkswbLGhmjAg24RvLnNgMIf5MhgvoEmd0j/CsHshGnw3IvKs9gMdKDYRLPm6HQFFuYAQH3L8YAlsI9X5EgQFg39Vs7op0TqaIPUtbKpIJ5DhNHDm49My/kgJbLwDViqa/kcb0olwuJj0m1KdoK5jHCbiAy3NouzcUav3nuQR963OpXPvSNprqUb3vrEIkWzhoF/LN+tQIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQDFqhS4O6wVzhMTiCmiiUlJ7xVIyHh71mOkjlgyeW4233c3jvo5C0Dbn4AGipiPvD3uXY8ER8I3oHJ6O8qx8pOliw+jxY6a7Fq8zTdfYwkI6KER4GIn3Rs4TxbpSe5qG9GAibMh3GCco3BUZfFkaRkw25Z/baHVf3bLd2Ya0qDQSoVpafrtATxPqc+qEkVe9uDBXCwwDTu3r7Cjv2YK8zpizz8HJW9/O+DxN76gNuR4HP/hRKh76dcqhUjWo7Dve9jshPV18l3eYUI+VbKap697nCuwJqCFX4jDhB4MLV82IW8tiOa6Jyw1+XLrAlGpD946zmm901TN03OoCKCQSkSS"
+        ],
+        "x5t": "xHTNblNjLHVoksDF8RCs9OmBtV4"
+      }
+    ],
+    "test": [
+      {
+        "e": "AQAB",
+        "kid": "rsa-noalg",
+        "kty": "RSA",
+        "n": "xsZjUV14E5MP4upXY8GXs8kGWFyolaAWHkNr6UUhdRiO9FJIDKwe3fdPo76aUjF1fgJ53KCoEe1Zn93gKu30rzpGEjp4WYD0Hr0W2Hf7xY9RvgwomuWop7S_PSbGUqNOKsVfZ1EMen1dVyU0OMfljodidSaCblBX7VSvMShEbz5wvzGrK8u_Nu1OGi9xlWV6xQEPeGYH3mJbQx-pKqdbCThdP4XdRvsCpRIxe2ET0Xe_YOwPABoIrDb4WbxUE27PnUkxebr5adFrYgtFLSo1Hd_LjCr6-MpFC4wwUXeZ65cGEi1F55panM4PqSNZJN5iPAWlgIZAbDXhRjH9GypYFQ",
+        "use": "sig"
+      },
+      {
+        "alg": "RS256",
+        "e": "AQAB",
+        "kid": "rsa-rs256",
+        "kty": "RSA",
+        "n": "xsZjUV14E5MP4upXY8GXs8kGWFyolaAWHkNr6UUhdRiO9FJIDKwe3fdPo76aUjF1fgJ53KCoEe1Zn93gKu30rzpGEjp4WYD0Hr0W2Hf7xY9RvgwomuWop7S_PSbGUqNOKsVfZ1EMen1dVyU0OMfljodidSaCblBX7VSvMShEbz5wvzGrK8u_Nu1OGi9xlWV6xQEPeGYH3mJbQx-pKqdbCThdP4XdRvsCpRIxe2ET0Xe_YOwPABoIrDb4WbxUE27PnUkxebr5adFrYgtFLSo1Hd_LjCr6-MpFC4wwUXeZ65cGEi1F55panM4PqSNZJN5iPAWlgIZAbDXhRjH9GypYFQ",
+        "use": "sig"
+      },
+      {
+        "alg": "RS512",
+        "e": "AQAB",
+        "kid": "rsa-rs512",
+        "kty": "RSA",
+        "n": "xsZjUV14E5MP4upXY8GXs8kGWFyolaAWHkNr6UUhdRiO9FJIDKwe3fdPo76aUjF1fgJ53KCoEe1Zn93gKu30rzpGEjp4WYD0Hr0W2Hf7xY9RvgwomuWop7S_PSbGUqNOKsVfZ1EMen1dVyU0OMfljodidSaCblBX7VSvMShEbz5wvzGrK8u_Nu1OGi9xlWV6xQEPeGYH3mJbQx-pKqdbCThdP4XdRvsCpRIxe2ET0Xe_YOwPABoIrDb4WbxUE27PnUkxebr5adFrYgtFLSo1Hd_LjCr6-MpFC4wwUXeZ65cGEi1F55panM4PqSNZJN5iPAWlgIZAbDXhRjH9GypYFQ",
+        "use": "sig"
+      },
+      {
+        "crv": "P-256",
+        "kid": "ec-p256-noalg",
+        "kty": "EC",
+        "use": "sig",
+        "x": "rSmOsFygPOWC0-8HyOZAGYVz-HEdLNI1pJENzpf6KyY",
+        "y": "rlDn3pDpjkNJTYSKzA2rESpTouxLknXGY7G241WTCoM"
+      },
+      {
+        "alg": "ES256",
+        "crv": "P-256",
+        "kid": "ec-p256-es256",
+        "kty": "EC",
+        "use": "sig",
+        "x": "rSmOsFygPOWC0-8HyOZAGYVz-HEdLNI1pJENzpf6KyY",
+        "y": "rlDn3pDpjkNJTYSKzA2rESpTouxLknXGY7G241WTCoM"
+      },
+      {
+        "crv": "P-384",
+        "kid": "ec-p384-noalg",
+        "kty": "EC",
+        "use": "sig",
+        "x": "mxNr4LgshSQFuM8xtIFeACcXsBoxxxbnHddY_dx-YfzISI4Im0XX_X10h22f_B9b",
+        "y": "sqriNSnxFSUfw_4xGLXZjoq5OYx_eNX2YTb0SHYymOivx8dn8RhqITDT1NwFYWII"
+      },
+      {
+        "crv": "Ed25519",
+        "kid": "okp-noalg",
+        "kty": "OKP",
+        "use": "sig",
+        "x": "n3N8Rfs2Sk0g6_LSq5zf5gKruGQaC9tYM_JLakpYXpA"
+      },
+      {
+        "alg": "EdDSA",
+        "crv": "Ed25519",
+        "kid": "okp-eddsa",
+        "kty": "OKP",
+        "use": "sig",
+        "x": "n3N8Rfs2Sk0g6_LSq5zf5gKruGQaC9tYM_JLakpYXpA"
+      },
+      {
+        "alg": "ES256",
+        "e": "AQAB",
+        "kid": "rsa-declared-es256",
+        "kty": "RSA",
+        "n": "xsZjUV14E5MP4upXY8GXs8kGWFyolaAWHkNr6UUhdRiO9FJIDKwe3fdPo76aUjF1fgJ53KCoEe1Zn93gKu30rzpGEjp4WYD0Hr0W2Hf7xY9RvgwomuWop7S_PSbGUqNOKsVfZ1EMen1dVyU0OMfljodidSaCblBX7VSvMShEbz5wvzGrK8u_Nu1OGi9xlWV6xQEPeGYH3mJbQx-pKqdbCThdP4XdRvsCpRIxe2ET0Xe_YOwPABoIrDb4WbxUE27PnUkxebr5adFrYgtFLSo1Hd_LjCr6-MpFC4wwUXeZ65cGEi1F55panM4PqSNZJN5iPAWlgIZAbDXhRjH9GypYFQ",
+        "use": "sig"
+      },
+      {
+        "alg": "PS256",
+        "e": "AQAB",
+        "kid": "rsa-declared-ps256",
+        "kty": "RSA",
+        "n": "xsZjUV14E5MP4upXY8GXs8kGWFyolaAWHkNr6UUhdRiO9FJIDKwe3fdPo76aUjF1fgJ53KCoEe1Zn93gKu30rzpGEjp4WYD0Hr0W2Hf7xY9RvgwomuWop7S_PSbGUqNOKsVfZ1EMen1dVyU0OMfljodidSaCblBX7VSvMShEbz5wvzGrK8u_Nu1OGi9xlWV6xQEPeGYH3mJbQx-pKqdbCThdP4XdRvsCpRIxe2ET0Xe_YOwPABoIrDb4WbxUE27PnUkxebr5adFrYgtFLSo1Hd_LjCr6-MpFC4wwUXeZ65cGEi1F55panM4PqSNZJN5iPAWlgIZAbDXhRjH9GypYFQ",
+        "use": "sig"
+      },
+      {
+        "alg": "none",
+        "e": "AQAB",
+        "kid": "rsa-declared-none",
+        "kty": "RSA",
+        "n": "xsZjUV14E5MP4upXY8GXs8kGWFyolaAWHkNr6UUhdRiO9FJIDKwe3fdPo76aUjF1fgJ53KCoEe1Zn93gKu30rzpGEjp4WYD0Hr0W2Hf7xY9RvgwomuWop7S_PSbGUqNOKsVfZ1EMen1dVyU0OMfljodidSaCblBX7VSvMShEbz5wvzGrK8u_Nu1OGi9xlWV6xQEPeGYH3mJbQx-pKqdbCThdP4XdRvsCpRIxe2ET0Xe_YOwPABoIrDb4WbxUE27PnUkxebr5adFrYgtFLSo1Hd_LjCr6-MpFC4wwUXeZ65cGEi1F55panM4PqSNZJN5iPAWlgIZAbDXhRjH9GypYFQ",
+        "use": "sig"
+      },
+      {
+        "alg": "HS256",
+        "e": "AQAB",
+        "kid": "rsa-declared-hs256",
+        "kty": "RSA",
+        "n": "xsZjUV14E5MP4upXY8GXs8kGWFyolaAWHkNr6UUhdRiO9FJIDKwe3fdPo76aUjF1fgJ53KCoEe1Zn93gKu30rzpGEjp4WYD0Hr0W2Hf7xY9RvgwomuWop7S_PSbGUqNOKsVfZ1EMen1dVyU0OMfljodidSaCblBX7VSvMShEbz5wvzGrK8u_Nu1OGi9xlWV6xQEPeGYH3mJbQx-pKqdbCThdP4XdRvsCpRIxe2ET0Xe_YOwPABoIrDb4WbxUE27PnUkxebr5adFrYgtFLSo1Hd_LjCr6-MpFC4wwUXeZ65cGEi1F55panM4PqSNZJN5iPAWlgIZAbDXhRjH9GypYFQ",
+        "use": "sig"
+      },
+      {
+        "alg": "RS256",
+        "crv": "P-256",
+        "kid": "ec-p256-declared-rs256",
+        "kty": "EC",
+        "use": "sig",
+        "x": "rSmOsFygPOWC0-8HyOZAGYVz-HEdLNI1pJENzpf6KyY",
+        "y": "rlDn3pDpjkNJTYSKzA2rESpTouxLknXGY7G241WTCoM"
+      },
+      {
+        "alg": "ES384",
+        "crv": "P-256",
+        "kid": "ec-p256-declared-es384",
+        "kty": "EC",
+        "use": "sig",
+        "x": "rSmOsFygPOWC0-8HyOZAGYVz-HEdLNI1pJENzpf6KyY",
+        "y": "rlDn3pDpjkNJTYSKzA2rESpTouxLknXGY7G241WTCoM"
+      },
+      {
+        "alg": "ES256",
+        "crv": "Ed25519",
+        "kid": "okp-declared-es256",
+        "kty": "OKP",
+        "use": "sig",
+        "x": "n3N8Rfs2Sk0g6_LSq5zf5gKruGQaC9tYM_JLakpYXpA"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "no-alg RSA key accepts RS256",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.IxEp6dFRKDqc-GKL2qXDZgCkV5IAlPbJA_Q0q-a2_aughSe2Biu3juVBxWeJs9Tp_sWYvydCvjs1CBVVsR5R8giGhr4JhhftqAPeCQkNUPiw1uizgQWaYkmJdKaUN2wFFYtUmv6QAxHtonPHJT20BDQp8gLbiUBKbjQScWUjIkrDPm9l9MJ-57UAS_XRUtWM_JR8LBzANjhYByrqiogFVLQZCKip5VmjAbyXKwvKKEx_KDKiGSOLmkVGYQ-WMWW0c01-8zIWZUJI6JRo1AjiKrdLsF2Fis04C5H8W4Q3Zrf2fWSTyJ63yWKUgwLODdqtG3XZ8aPAwmACGB5Qbl5RjA",
+      "expect": "accept"
+    },
+    {
+      "name": "no-alg RSA key accepts RS384",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJSUzM4NCIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.tmf8eXaY53Cw7sZr8U1bCcFBNw03xzMlEsWus2VSh5ig8d-h5xlgPo2kUF-nTBz5IfKKjwbMczMzuXOVRcA62_1aO9v-041JTJJ_yrYCMrTQ2oVe0ZGK-Uh2CDqS1UWhfYndO9YP17AGrTCRiGekBcy8mWCVXCR8lzFgzX9pIFYHl0VFzXDmZfpzsqcUbPTJKGG012NrQ6vh898cVC50Jdq8esqmoBVvhC9IpJpAjgBj11wUpM9hhSOEZ3NW82htAmcmExoZEi4NspBGYNzupVFF0PBMh0PtO91vzcJYGFCmb_4TUhzlV8SmpyHx4HUSgttx-aq3PempGggOWWZ4VA",
+      "expect": "accept"
+    },
+    {
+      "name": "no-alg RSA key accepts RS512",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJSUzUxMiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.CIuI65i2LjIUYB3-YMCGiPd2Bo21SEeTj05u4KReBPOcNMO9hQY8BQBkXooyDE-11HlvLDnjLmvIAYn45WI5EqOn4ZJKe-N7kFOQ-4HQDe3FrHh9kwiTaGNCsApV0HX7R15cRVgIvkp15CHk_W6_ubXtJ0shmsL9BEdpznz_b8Ii-dzLCy9oCMpWD0-wOAhGS9SPiLyvK2wY_5-OaLP6gtGo2MBVEQ12Ul8oGA9Dqh5q9D1nnI1vOajhaJp5IfO0Tv1giZdPmENFbZAeRk-mr7LltNSruLv5leYPu-qpPNUpg17eg1xyrVqAhwFmiJC5LqW1sGcraPtDb4HL8QNq6w",
+      "expect": "accept"
+    },
+    {
+      "name": "declared RS256 key accepts RS256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.YLaIL2N3B9UjzKYlN9j0tEvFKmWaCUhYKTDFIBKdy8q3qdTVG8zbrtaFnzcE_38HhrXxpgxkxVkH44fOB_lT4SeNVec5aPmgtM3IKn_4UiKJvRBWXJk5L7N-XpcrKXL8PN9NRA9492srDMrTeQZR-0ndTqOwFVLCZtosE8GGMeqRVAcPcril8Ta8cnZhZQOOhbzE-rLfw5rtCkoR5OC3bjib6cXwBsdwQuUEbjGlZZFktpMFKfATc136yVS639qW_mVkaG8h2ZBUIfJkOwCUEPVEPp9P7SBglnAAv9dJNIv894OECH9h4WDroR3ExK3XK7xBZQ0AuLZ8TMd_lXoZxg",
+      "expect": "accept"
+    },
+    {
+      "name": "declared RS512 key accepts RS512",
+      "key": "rsa-rs512",
+      "token": "eyJhbGciOiJSUzUxMiIsImtpZCI6InJzYS1yczUxMiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.b5z6GpSUyNYwXh1v1WM1Bq19xCjUCxalry7W4jQVzmTI1qioPQSzVArAbgtpkqY2VDunHYem5TRn7BVeKooLDi8J9gm_qVulqhhPlY2vsOJO5gFpRc80zcmKWcQFbuuiQunFYPhE1ygktrzr6h4HgaBSV-XSa6lbncuK3B9ctoWFAnEPjP4cnQR6alY6O7pAOGfRdK_jHPeZkVkZB4EtR2W1YkxDa5LwfUm8j6LYQbsd8f0kyLtV95u_5o5FxQHemF45VgXme-f-JSfIz3HBB6wNJw14ivY2RA_RB0yTlg7niHjUqR45zrWTl6Wz_V8uYkvuAV2pYWV8AAxbZOuaJA",
+      "expect": "accept"
+    },
+    {
+      "name": "no-alg EC P-256 key accepts ES256",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImVjLXAyNTYtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.kg_-MM_eF5-rmNbO3CZVBWXs3ZZjW8sQPsuWfTcSbe3XW_5a_xk35-XaiPVsuMi0qh05-lRsuMaxGtGkXC77oQ",
+      "expect": "accept"
+    },
+    {
+      "name": "declared ES256 key accepts ES256",
+      "key": "ec-p256-es256",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImVjLXAyNTYtZXMyNTYiLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.yLpqYCla7-2axJLlf-vaLEsueNFUxF3vv-eHGeaWG-t71Qf938B98UvHM6dfk7NhveMMdri2yutWJclW4PmurQ",
+      "expect": "accept"
+    },
+    {
+      "name": "no-alg EC P-384 key accepts ES384",
+      "key": "ec-p384-noalg",
+      "token": "eyJhbGciOiJFUzM4NCIsImtpZCI6ImVjLXAzODQtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.1Y-1d5Y1L34jjOhyomyEVaqgDylmj5Rg-JmgVGfM7gGxz6EgMdVbPO6wsCXcYxSGx85mTFzkeBqQ0OXVG3IwYIpoQzhk1OdIW6lJbynw22TGtjcU3PIF0H3-FQYpaRy0",
+      "expect": "accept"
+    },
+    {
+      "name": "no-alg OKP key accepts EdDSA",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJFZERTQSIsImtpZCI6Im9rcC1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.oX_pI9l9jjx1mXaQpGdj5dLTcgInoCSrfniMMqsUVWD7ZWFlVqpYc0pS76sucWGEc2lLwAoREBkmXKktbMXcBQ",
+      "expect": "accept"
+    },
+    {
+      "name": "declared EdDSA key accepts EdDSA",
+      "key": "okp-eddsa",
+      "token": "eyJhbGciOiJFZERTQSIsImtpZCI6Im9rcC1lZGRzYSIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.ZAXoqBuTg3i444-OM1R-Y-CJEpdaR-ORXXE2EAgu6AnHL9BZBdhJVWWX11cdczQBvuCkZy0pZUxI2yijYfYUCQ",
+      "expect": "accept"
+    },
+    {
+      "name": "Microsoft-shaped no-alg key accepts RS256",
+      "key": "ms-noalg",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1zLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.OcicBoKadrR7-bjDY7-EUnWCxGd-1nE5ncayw0zYAiwuinu7UnVJ8uVPvDKqniXD_pQozfd_MS4vuWAPEZ1Wzhl19Ph5gHj09xxr3yU_zXnbldqJr54MZbUgxkqxlf1H31u7sSGV9eeRHoCwaK4Moe4-dJviUt_-zM149Z-Ry1AKPPMhu21zM9pK47Lk8smChF9G_OT9TSg8_G0mNM2AqrK_250OloUPG2AOyw4rdzmUgm_aUjAz-WgSiNy8tOUho0PGSPggMj38c_8_rfQ6sW03FAmd9LRhbhWX6azU_TDSTGsnJqXTijg-2lcsXyfC4mJIAMtOyXvFohixE4XjvQ",
+      "expect": "accept"
+    },
+    {
+      "name": "RS256 signed by another RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.ByTB_0V_qKIQrzwoievwMHZ8P0k5RRbYYTU_BtaIStUpp3dT-TnBkNeSiCp1YD-vsX2vqax9t1tCjFIS1BAQMMy6He0y-mr8pB1Rfzbu1rj2jCmh4B4GNjPg-YtvbJvHoHJVrEr1Q8m61Eo33FEn1_tIyvoM5goxXdyr9m2Pj7fw52tfuDrICM3AQQ4K68mlcm7XBNs8fuoaEGd6unjQGONIXJsxB7aACqv2v7cEpL7fLzylCXuxfsYg8fidpUI2G2ogkqkXIwdZtsc1b3uegA142lgM1GikQq0K-j-XQOPTlPm5XTYaOJ2MY-RtFLAptNJRgXe06fgQE02REnE3Vg",
+      "expect": "reject"
+    },
+    {
+      "name": "RS256 with a tampered payload",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0InA.IxEp6dFRKDqc-GKL2qXDZgCkV5IAlPbJA_Q0q-a2_aughSe2Biu3juVBxWeJs9Tp_sWYvydCvjs1CBVVsR5R8giGhr4JhhftqAPeCQkNUPiw1uizgQWaYkmJdKaUN2wFFYtUmv6QAxHtonPHJT20BDQp8gLbiUBKbjQScWUjIkrDPm9l9MJ-57UAS_XRUtWM_JR8LBzANjhYByrqiogFVLQZCKip5VmjAbyXKwvKKEx_KDKiGSOLmkVGYQ-WMWW0c01-8zIWZUJI6JRo1AjiKrdLsF2Fis04C5H8W4Q3Zrf2fWSTyJ63yWKUgwLODdqtG3XZ8aPAwmACGB5Qbl5RjA",
+      "expect": "reject"
+    },
+    {
+      "name": "Microsoft-shaped key, RS384 token by another key",
+      "key": "ms-noalg",
+      "token": "eyJhbGciOiJSUzM4NCIsImtpZCI6Im1zLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.eJ4Fm15cAzD8a7RPM_39Jd4N5dGHoeKX7HXekVbaMYzv1sfedBipv3CL9YjiH3532WOsdhnkg-e2dZTUCEcLHPlA1sAf1I8dZYv00sr5JaPE8RuZS03fmy4PKrdpH8DeQBnmv1KXFCQs0bGBKZQO3-z23VwsfjP7eeohiYReeDUbK_H7LUK7vEzW_-oD2DODvsQ3D6l0X2l5qnDWDmy2nTTUFatj1iqKbXTfvX3q15WfXBkx9-SWMaexjYXpFUKPdCUV7Px3LncFy6oZn9l1dVLFm0wbqd8Sh5YJBslQnqXpx36ZFUZpCHg6lsvcosFo8Zsx1SsQvI8BdgoecaqtSw",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", empty signature, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", absent signature, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", signature of the key's own alg, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.Y_P2zxEcLJxbSs5fgHUiAiv6xJyJsaPEI-nHY-qeyf9Zm6jvIPtw3e5jkxcmZdF49ZD4JZLbjMWCXdcbkss2XxoS8iNNst9p0ZE8K4LLZvbinRKah1yRXsmpTOIpSIRO9aRZ2utPQatgqYYkQgu09eKPyB-zuuNWxeG15rwpKOAXQzFbipznGdadPdRwA4afYthblgqrtS-K-OxtY5uEAb6bzJq1tL_SX1qkyuzvZj1ppU3AfIxk-ay1cZW1_MxR511tct9PPWE3slRpp6GOfHr_zz0O3VeGJ2bmPrU-BNjvs244MVz6YRzWR9iqg49tIXwm0RiNmLzajHxRy1vGSA",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", empty signature, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoicnNhLXJzMjU2IiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", absent signature, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoicnNhLXJzMjU2IiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", signature of the key's own alg, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoicnNhLXJzMjU2IiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.Su9cQbE6TSf_Sm5-yZYAF7yYNk88N6algJmGWFSrUYtIO5c-4yEilVNOg-CVzQkFm9jlX--vtfwu5MimEZ94ikrs57-Waw9S7tk5WA0kv1g9RJfe5k2L5g0oi4pTPnb3nXBt1O2tZGgYoQt9YD_kZcIP7Oiw_54YpRaco0AhtYOHw04i2LGUDYm-jHNNwks6mNnKmlsLyrhbW8pNPvlt6ONlJWKXtOp7jXbNfDd4801NsizEBZWl5CkK5vFEI7r_5gM8l5zgeyt8BaStRuxzm3e0N6MIUvvZsfSU_UgOpMsska_YcqBPIz8aECW5qYoF11V36RzyWX3M2u2REgrDgw",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", empty signature, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoiZWMtcDI1Ni1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", absent signature, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoiZWMtcDI1Ni1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", signature of the key's own alg, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoiZWMtcDI1Ni1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.ZAx_J13EbIFhesA5AWQXTR8JlkTIJYkwxg6Kb4UtYRxULW58fh8aKq5PgGsl31PylCaPjjurw-wKXqEjeU8GKw",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", empty signature, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoib2twLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", absent signature, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoib2twLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", signature of the key's own alg, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoib2twLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.G66woPBAKdPByV0itMjg5CNlTeBZlD8St0Fb5RKIQMU_ES_fzk6fWeYbtlPz44VjWxs9GW7jIAXmuViX4oZSBQ",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", empty signature, key okp-eddsa",
+      "key": "okp-eddsa",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoib2twLWVkZHNhIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", absent signature, key okp-eddsa",
+      "key": "okp-eddsa",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoib2twLWVkZHNhIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"none\", signature of the key's own alg, key okp-eddsa",
+      "key": "okp-eddsa",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoib2twLWVkZHNhIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.K8bPLevUDl1Stt6Tdwo1EpB2CtQBTF-TUwyqxUX9CKQRfG8NxanS5zoIuqrs5oAMzRtejbiR3IGRaKwEYCxsBw",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", empty signature, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", absent signature, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", signature of the key's own alg, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.nbJQwAqvP1CnAuu11C36V0DoXq-UZg16ryva-nRbICuhQKFWQQmf9ALfwaqubs7-9Y4uTTfA3oxelxhL3AXHrmhkkVJWWEGJwiy30_VaWsVoh55J1zfP1J34X3vsrCyFO8E6_C_qLMhxKBqjUe5_JzK3ul5Us11sbcpv9e1dhSmrSUEJAQ-SpxFhi9H_76TKTEqkoEj97ta-zLEqqtQQ1SPvEyhy24PFji-0WOxjfG54ffVhtdumpfQv1Yw8vktHinrZmbYXr1pfMtdH7ehYTkd9YfxkhmQzXY71CEZitbn_6dDe_0lp5rdEAmAXHbb-5DFQiuxyWMpRo_DRg8CkJg",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", empty signature, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoicnNhLXJzMjU2IiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", absent signature, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoicnNhLXJzMjU2IiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", signature of the key's own alg, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoicnNhLXJzMjU2IiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.iM0tmHr-JewtzZPfCpaWMTy_EC-IDY97nN3CGCYWYLtsFI3W3ojxZIb9jzDotOXmKvrIDa4vZ0n-vIEuZF8LMH2mMnv9-nTv4jtdn9oxftj7N_hcs6mNLDGWiovks-41BtFCvk6jrp17IJ2IQ0uMqZrVJwTRlO7RfYxfg5nGctcF4HkGcr12O8zCMDKvHuP1mIYO5hRsk3P_yEB0hLUMQMzZTRUMDo9OSIGZ0nncffHfsiMaNACd33m4hxMDleqhi6T4b8lSwtcDaFOyitW2dg7A8i9EL7XmnyO3RVXP40sHLVnArvsNa6Uv_yQp3mchNdiZq_bdXZ4LViDUD748nw",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", empty signature, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoiZWMtcDI1Ni1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", absent signature, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoiZWMtcDI1Ni1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", signature of the key's own alg, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoiZWMtcDI1Ni1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.tfNA67uRiAn625aOrr9lIaWjOBwgHelWWhANuB6H3MeyeDbj6FGh2_jInu6CYCqoswRVnXZ2n6Fekx5e3rcQuQ",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", empty signature, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoib2twLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", absent signature, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoib2twLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", signature of the key's own alg, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoib2twLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.SUGZlgY6J_uyVJ2-1uQBFx5VWsWJid4hAgbcaPEbMzmlustGIRlsxIrGyeUXZdnWmdpsury8aww6VxavFk8_Cg",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", empty signature, key okp-eddsa",
+      "key": "okp-eddsa",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoib2twLWVkZHNhIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", absent signature, key okp-eddsa",
+      "key": "okp-eddsa",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoib2twLWVkZHNhIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"None\", signature of the key's own alg, key okp-eddsa",
+      "key": "okp-eddsa",
+      "token": "eyJhbGciOiJOb25lIiwia2lkIjoib2twLWVkZHNhIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.fYceVpjRGyQLKTGJsDrvxr029yoF4tJUg5dIE1LEDUIrIW3KMEQU_FBdNdurDy74sfOUUNX0SP89tb9yF4FxAg",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", empty signature, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", absent signature, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", signature of the key's own alg, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.KBOCkxJJRBPwV8T5UTvmvtTNwgEkK_3ll2aiZFN9qTaIqZL_8v0syQmJp9PSUFqe7Phvf8WWxFqw4csg5Uh7hqGLJg78dP9HtTzWJyCJXYHT9O7YSh_atWLgz4otOn0zIMO6b9kY8ZtAPnvVIgN2boGVuI6lyZJ0ZMmoPIE_SmJfLW3PyeVuvLRybSZ7dRHYFrvcKvE-oz3cMSzSPnuYlkUmVRhQ24izteDpgq7bxCSO99kEHRfQBO9whb0qdd6Ipmxzh1mO5HIIXbLktahoAL6p1mwXMDzOsFyOR57pypzPboKcT3Bs4cVCqQqoj0EiQCNuNmSZNmoB80YaQ3lmRQ",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", empty signature, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoicnNhLXJzMjU2IiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", absent signature, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoicnNhLXJzMjU2IiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", signature of the key's own alg, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoicnNhLXJzMjU2IiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.GvpMCWh5mJ4i4zHKRfyluy-FGExVbDCORWU6xVkEbNF4UpgtQwwBpWEoXU4CxeRVTnTeR-T4sHBzbGcG2EoGN6L2w02gw-vgV1w6X6o8d7A3k1e6lsULNbq0b-tOsZI3roYFS5JS5_jy1_nLN_a8HqWX3UUxfg5-IRtI1pYqfOlpUb_4td8qugdv7bCiRjA5c8GuinvUTR9XtzralBK3EojqvbyCjDcUljNvr0_slUM1tO3IXt7BxmsZUzlqbZTQsTquRJJgcokANtnSma8zZPht1-Rr7NPaPm7JYCVAd8XiU021eWLjqbdAp8jmKDsPX9vSB1yZ7rblSuq8AKejYg",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", empty signature, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoiZWMtcDI1Ni1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", absent signature, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoiZWMtcDI1Ni1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", signature of the key's own alg, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoiZWMtcDI1Ni1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.S5q-hg1P6FkiEjW8-AEKfh8nPOavdV3FkuzEIgDYNyckEWvnwSnAbZSBA6d4O7BecOE5EvvLG1rAR0qg3VBmDA",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", empty signature, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoib2twLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", absent signature, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoib2twLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", signature of the key's own alg, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoib2twLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.O7_vhK63XDATpmp9VUcM_mDbiTL8vgUgG_p-DXnzR28_4rvoAGXWoXDYaR37pbdNwloJIK7FSVkNUiGgRnmDCw",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", empty signature, key okp-eddsa",
+      "key": "okp-eddsa",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoib2twLWVkZHNhIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", absent signature, key okp-eddsa",
+      "key": "okp-eddsa",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoib2twLWVkZHNhIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"NONE\", signature of the key's own alg, key okp-eddsa",
+      "key": "okp-eddsa",
+      "token": "eyJhbGciOiJOT05FIiwia2lkIjoib2twLWVkZHNhIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.rBJOvoFj4inPLu2iS3pN3VB24mIY08tsjUmgSx4G6O3zs2-xEUEGmLh7iKgxIZYrZaCSzPZIzAmJy5CadUvjBQ",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", empty signature, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", absent signature, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", signature of the key's own alg, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.MmY-TceF6ayJ1gb7I-UIcwk3KZdFMhTAtjY6E81ymSzC7qOnOKVUJ1HK32nYxOJNqdDVxJZaTbALitjdMx69npH-Ahn4sf42PBkfRXpd-Fo5dTUL3Bby7Ltt-tNqb-f9GbFllMvvQi9C-gfYZ4SRIr-OVsKrL-pzPORbRwOpP5zOU9UCfqzThevffNuwETReIjwAv9vhpXR-IY0lUGkzuoPJqBWheMg2EClwjde8dqFqW-TeFrcTvXt6cbZoQ6CHVkkW69Gq1MwJWUjs30AT-EcC-aax-amaiXyA21veH0TRU_7zmORRoMXS1dduzxbxrQSWv5y1ypxte1UQ0j83IA",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", empty signature, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoicnNhLXJzMjU2IiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", absent signature, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoicnNhLXJzMjU2IiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", signature of the key's own alg, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoicnNhLXJzMjU2IiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.VxXyKyH-YZShd6LvKSZ9V7wmy_gK7C7MRs1FJiroOjoryJcMv8Oz9s21nN6YPB1lzQoP3wNWm18Uf7I4AO2CljH5rF1czhHVa8PsCOAhL8yzxADmRzR6eEZXMzo3tB147YWRfeuln7rOX8sySY-vGVgQ-UQ-WuFxzVkUo3sFTJ0iAdfxh8dZ7cZ0g8V-0WFDfW3Jlw9ShcnWe2kFUyfobqCl7U8-dXCywyD7LjudvBRNX4YUopxs5oRUm3Fe-W_lP64eDTwlFVsWZ_5I6t4NMF9QuR6YZDdjpC5ymN0YsXjdPoQv2KfYAPDiMehnipQbFam_si01uipKGtUR16UXog",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", empty signature, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoiZWMtcDI1Ni1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", absent signature, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoiZWMtcDI1Ni1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", signature of the key's own alg, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoiZWMtcDI1Ni1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.eB5y4bHZZPKnJz3Kav3TiR_AyShBr_rYFGzW8EpoMcMZTUz8u0w46YFL525zwrOOgRtfe8ZdntBIMHLGJceIyg",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", empty signature, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoib2twLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", absent signature, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoib2twLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", signature of the key's own alg, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoib2twLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.yJHCHpLERIA5AxcoTnjudWYTa3su0x8IiUlAud0fScZNlTkWjaKQM1gIwCyGFtiqYCsR8HAWELmAGAzE27I0Cw",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", empty signature, key okp-eddsa",
+      "key": "okp-eddsa",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoib2twLWVkZHNhIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", absent signature, key okp-eddsa",
+      "key": "okp-eddsa",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoib2twLWVkZHNhIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"nOnE\", signature of the key's own alg, key okp-eddsa",
+      "key": "okp-eddsa",
+      "token": "eyJhbGciOiJuT25FIiwia2lkIjoib2twLWVkZHNhIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.rF62H8MhjmF84sOSWIwMCth-LSZ3zQk_SuTrOn_5Rfbxk1RGHlXQSeSs9ZZDDVkC39VYI1yqfRjbAA_aQ6s1CQ",
+      "expect": "reject"
+    },
+    {
+      "name": "header alg missing, no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJraWQiOiJyc2Etbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.Mh6AwYferhJAVOtDmqh7vOll7G9Qo9c4Hwc97pZZiIV_V0-QLuAvW39unZ1cRUDB2Y7UHIEgADTKkXGdwJVpSUqMy9czWTG_J-uwRErDzRQf8IL2Bt7uuzMoUs-MSxIhqFmDdVP1OPT8L4eIoGNbb3X62v8XYIpLZQCPg5uWFhHjD9CyPHKIec7cMR0x8YD4KBFYwGut7ucYaqwyVMCc1tkAKGn2yJFz6uE3cHCzcGy_6Ihbc4aHe2FDzHo06YfcEWnAVFyviCgxjZatChLWsoJUhycXJ0Mj4p8wgIQNj5Qi0UlyzPMgRz1tGQ2eZPdBaxa1caogmVIQ-kGXW1QJtw",
+      "expect": "reject"
+    },
+    {
+      "name": "header alg empty, no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiIiLCJraWQiOiJyc2Etbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.eQMrvcljbZEKtRN4HTspmkauS4uazeV_sPWLlYsXP6YqXd7JX8XfCSQd6n4btRT6upOe6jTJ_MkV0_gJZUHbXnLW71iKOP6GWL5PxiPNNupWJRsHfefYT3i9XxPY_6_Zgfdh960sEl-TTgHQrXeDaz9jzz8diYlVakjY-Pvk65pSUo9ez7IPXuNMJBqFqAOyN9HnO_rw34p09zt1uazs28Kq4rwIUDZC3ENUwBjx3xFvUAhBFptXtsEHeCRiHUQJnCmvOp_yBGX0-xO45Aqb8hNainM1BRXy1Bj2sRebm_ZlVbFSALvie2Ujj1ZHkelWICXL7YwaZNRl6AI2eWGGKA",
+      "expect": "reject"
+    },
+    {
+      "name": "header alg null, no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOm51bGwsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.DkAUivvjLHAGUC4AVCwvLADJOzOPT51VD3EkXQBTaYtnH48tRHO2tTJB32uq0qrV0i-QAWn7t-ex3egnjaeXM6RFD1je3ZueIEpAU4aHqxMRCPjQUW9ySrpUqhC50DRTmJMc6Zq0shW7Uew4UWkkKoIh6hnX1vKw2AKkG0vHZhfMKAZRj_r81rvU1Wjh20AvowWqJoX8kLTUH78UyeibtpMn9RA5smXFB27LDO6t-cHevbb4MH0LVgJXyQV4syfiapD37LEn_pm7p8x34z5qGeFgS3Ps3zu5gYO0MNRQ-eI7TyAgOl4NAoQf4sOCVJfeov_Lfq-5xgn8bAWDR4xv_g",
+      "expect": "reject"
+    },
+    {
+      "name": "header alg number, no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOjI1Niwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.cYFe-3Q7l4YvNbTXqoUD7A-Oy1B4DAZ4Q4oCiAonv2h1UllwplSL9gUsqgZXz3J1q9hsUuw71_yYmGbNjxqGpbeQ6isfcqkInAU1xLrg0YYGEKRFOvXvveGYFgAFVPfRfz5jxOiQnJb2vKzmn-s22LPTc7h_njff5wgO4nqA9myqfCUZryPMzH9vDBwlyVxDcTiO_iDOZ1LN9JdG7war_ka6TaHK1Fp6ZmYBE1P9yh-ShuRmF8SSpykiDPOwtUfvaNB3H4D3rs0j_oCtPlhkYTZgZ1bASjX-FDqQINCVbuAf08E42MqxihxtmO_OxL55D6JXvxy_h2OhNSuBgC0z9g",
+      "expect": "reject"
+    },
+    {
+      "name": "header alg array, no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOlsiUlMyNTYiXSwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.jKM41g9VTg4BsOzXlTVh_pA-UH9owb1mAaHVjY1aQeEw9JVDfZf2SHLUnNZhQn6j_gzO1ICPVaK6qPdlphtJQn1R2LZOirRzFmPxR6ovu7atp51QTbPe_9UaCRaGwzG-S4IxRWtlmzdRv_I3kYdKW8HzRU4BH6Y6W-mB2TWlcaZYf9pxnZLZ7Df3d3yFZ5xFtF40F--M1mC0SYHEPMXHgNYzjf4BV2lyfh2MJjBkzX6fmiBMTKsB6p2T1BFBsOFcYnMjALcgsJFqATm_pk4c8n2fa4ySKJBI8PhnM3pHoZowI9Ud9vFP-J_5I_54Iyo24Xzwor-mZnm57GdbSLsKQg",
+      "expect": "reject"
+    },
+    {
+      "name": "header alg object, no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOnsiYWxnIjoiUlMyNTYifSwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.CFL0t2RafC2n2M2uqmMnpkVOQjkKdUD91r0lhfsHvVJBHHb1R2b5rEvkBy0aRc5mPxiJ-2XWMc-gu8PEDaGvOG6WkaunfTw8wp-FwCHHxWNj7bYgG88icE1oltWoT6t1eDTwXKKcYNyG3CcC94NJWJo7Z3JcjEgdRoOaoJDWrLH3F5rysUE8ZSNfre3kUliUdwVg_RF5FNiTk3ZcZsSnah7D7X49tS2wWn0hfVGR21wbWFtBaSO1fCCYGd6MIdirUeOo7em08kib3QjrafoMb_viYUzIg3RZGvy5_mOUskY5LNN21v1vx6A0cz-8QucO7XuIS5vJBgWmQIzQEeVxiQ",
+      "expect": "reject"
+    },
+    {
+      "name": "header alg boolean, no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOnRydWUsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.O5KYXT01y6NSs5pflDv1H_yNoOAWZXd-EhSr4aCygs8xceuVZJmFQTnNw72eHGCVAUu-S6sg_blBSH7JAkcjH5YK010eYUziSIk01cuK9Oa7PpCwiKJwEnQEOa8O-uEJWCU4TSj1gbQpUwJN9DrAMKqdXg5mXPy8FLDLYPooAY1kCuy0xckfB3-3LzXasmpt5wrCui6Yt-pFKeB6h8GBeOmNBAZGlzipNU0BxugBhpQJ0y0-R4Jvfc0TDKP7_XhryUdLKFEYhOBRIjH1zap2C_Pb_MNu0tFFInymzzDQuk0RS5cmTHzFcw4jYuGs39f6QTTogeR9y_zXSGAz86fk4Q",
+      "expect": "reject"
+    },
+    {
+      "name": "HS256 keyed with the public key as DER, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.9Q5uEANFiyLLqafBiPxCUuH6ds_gK-yxQfgOY7oCYy0",
+      "expect": "reject"
+    },
+    {
+      "name": "HS384 keyed with the public key as DER, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJIUzM4NCIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.7x1hvwM2cm8vSiOGNkXbj42eVBsE0db5K91eMiVAnkQibqBJ6bzdMEQyz4-0VSBs",
+      "expect": "reject"
+    },
+    {
+      "name": "HS512 keyed with the public key as DER, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJIUzUxMiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.Q5eTanGxuqtz4OceaqMb9_AXB_Kt-0RcCmi2w3Mz1sxlc5Q4AVXAJqnuV7JS-lMIkM2QVU9ehm7crYf61h6FDw",
+      "expect": "reject"
+    },
+    {
+      "name": "HS256 keyed with the public key as PEM, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.JQu9IariBzLr5Jqcw2s_w2Kl5ojdDJDEJBh68tlTE3w",
+      "expect": "reject"
+    },
+    {
+      "name": "HS384 keyed with the public key as PEM, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJIUzM4NCIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.lNBHUUN7jHlr8TInmkn064ummriGnETr8GU28_D7uIdIwfAjx---IHSjqDps9WwT",
+      "expect": "reject"
+    },
+    {
+      "name": "HS512 keyed with the public key as PEM, key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJIUzUxMiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.1IG_48sM-aDpDzH3_tVwrYB6bNT8FnUoa5KOqeyXGe7VwPU1hRZsKQC33PoNMXqsC9ljlCS8Iu1yFj0RqRkAbg",
+      "expect": "reject"
+    },
+    {
+      "name": "HS256 keyed with the public key as jwk n (base64url text), key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.CgWX9lVKadyIetbd9XGj34VQfSBIQ_vPAtwmp6ZHi6g",
+      "expect": "reject"
+    },
+    {
+      "name": "HS384 keyed with the public key as jwk n (base64url text), key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJIUzM4NCIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.3APQ38qFqKkgd92LVy5u8O0zv7i-tgQv4a_w9yPHv7TPwtOVrD6PXueEqEmSu5FU",
+      "expect": "reject"
+    },
+    {
+      "name": "HS512 keyed with the public key as jwk n (base64url text), key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJIUzUxMiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.ICJeDzHiBjA3pfDoBSCBrlWQdgBT7JT66cTUq2chHpFRkNOWQrSCKWcuQEOZGOu5kjR-cEbj6vLo0R2shoJwuA",
+      "expect": "reject"
+    },
+    {
+      "name": "HS256 keyed with the public key as jwk n (decoded bytes), key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.zoxbb-hjt7mEbrGOhaFwQpR6k_hFfPM_XlM9h8-3V8M",
+      "expect": "reject"
+    },
+    {
+      "name": "HS384 keyed with the public key as jwk n (decoded bytes), key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJIUzM4NCIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0._LYz8zSEc4diHczPkzXbnp4FDzg-J3V83H24AVFQwD8xy_4sXiBebGcIhGvpkO3y",
+      "expect": "reject"
+    },
+    {
+      "name": "HS512 keyed with the public key as jwk n (decoded bytes), key rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJIUzUxMiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.u09iRnVnHIL2LA7L2R47Jh25Itdb_4e7df94lLl8o-1kufjy9fbfaDNkPqmmpaezGp_BGdcl6iUsL4dMUKfjAw",
+      "expect": "reject"
+    },
+    {
+      "name": "HS256 keyed with the public key as DER, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.QEQd_ZYcB8D5iNoEPfQdwIYvDW0c2ZTd0lt_4cHjL5c",
+      "expect": "reject"
+    },
+    {
+      "name": "HS384 keyed with the public key as DER, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJIUzM4NCIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.VW9m2tN38IAyrfSFIMgKOASQwyo5QFKjU-bxG0Gp0riBErTKM3Rs9QOo_s-TLhiH",
+      "expect": "reject"
+    },
+    {
+      "name": "HS512 keyed with the public key as DER, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJIUzUxMiIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.hWeEfrNnrqpY9S1OcuXwdRpEwSlTqyQGOtOHEJRd-NClll_lo-4Fa-naYQgakLohFNI64ELYddSTHlsTS2N88g",
+      "expect": "reject"
+    },
+    {
+      "name": "HS256 keyed with the public key as PEM, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.EcziBuz7nPb3rH9bYcZjVF7xjH9rgbwnD4pFwuTxWTQ",
+      "expect": "reject"
+    },
+    {
+      "name": "HS384 keyed with the public key as PEM, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJIUzM4NCIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.bXgmMuaXRxwHEr0aJhQVgVbC97r5FFpep5H9dKDEY27owdL0dKTUES6gz3pU7YBh",
+      "expect": "reject"
+    },
+    {
+      "name": "HS512 keyed with the public key as PEM, key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJIUzUxMiIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.cH1hgg158sLbjKZUT-d6nTAjath4-l00rgKcGKXEwzcgzDVIqcsYzleCCY1vBCoKrvxyvLunvOQet77ARph7ZQ",
+      "expect": "reject"
+    },
+    {
+      "name": "HS256 keyed with the public key as jwk n (base64url text), key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.n473VIk0sPpLYLi0zN_ysBNi3JKAQgHGtx_0suM5NQw",
+      "expect": "reject"
+    },
+    {
+      "name": "HS384 keyed with the public key as jwk n (base64url text), key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJIUzM4NCIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.VjjEiseWyXw8qf9HM7dmajBw1zNnEYZj0CUqXxiqNFvOe78SxbPycYgGxpmz2ZX4",
+      "expect": "reject"
+    },
+    {
+      "name": "HS512 keyed with the public key as jwk n (base64url text), key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJIUzUxMiIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.N_DlHPrag6GMx61_k9W2-KRRPw2_Pqn47e_QeXyg6c8iMA_A5m5Z-ajS0_UGeTiamh4Xt5BNkM85YsiEPBrDAA",
+      "expect": "reject"
+    },
+    {
+      "name": "HS256 keyed with the public key as jwk n (decoded bytes), key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.czZD4UBMBXjML79BjSGot-VPYO2Opi91DUevS4FPtnU",
+      "expect": "reject"
+    },
+    {
+      "name": "HS384 keyed with the public key as jwk n (decoded bytes), key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJIUzM4NCIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.WiEXRzhHHGJX8vDgewTP6BtFn53DQWvp6BIN7-F9uAfxgM0Utoz9C5hG4dIPGuej",
+      "expect": "reject"
+    },
+    {
+      "name": "HS512 keyed with the public key as jwk n (decoded bytes), key rsa-rs256",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJIUzUxMiIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.TyCZ9eDoPBITZYAd2nyw1nLZztfAp0aV5cj5uEZ7MdPWKHHJPkqM38y7VkP4esftta7xis4N0E-AF5QlMruRAQ",
+      "expect": "reject"
+    },
+    {
+      "name": "HS256 keyed with the public key as DER, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6ImVjLXAyNTYtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.SfsezrXXDyFusKwE4cpj4ho7mpUYUUgNqKwQnIGxBbI",
+      "expect": "reject"
+    },
+    {
+      "name": "HS384 keyed with the public key as DER, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJIUzM4NCIsImtpZCI6ImVjLXAyNTYtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.HT5q8nqWh1ukirDY9gh4cWHBIi0amVaMNRE-7z5B0vv1FExrM8sP4TYzrQqiO5ed",
+      "expect": "reject"
+    },
+    {
+      "name": "HS512 keyed with the public key as DER, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJIUzUxMiIsImtpZCI6ImVjLXAyNTYtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.7_sbqjqQJRwvc4mUNmqFESuEk6DdUhVUfWTIKx1Lt-C-3DthQiqN06LWjjYNC_p7w7h2N-agEJfKPuSqo6l-cQ",
+      "expect": "reject"
+    },
+    {
+      "name": "HS256 keyed with the public key as PEM, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6ImVjLXAyNTYtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.Bxu7w_7M13MxTUFaQIl_SBstJdqBAmQqnWS50c072Z0",
+      "expect": "reject"
+    },
+    {
+      "name": "HS384 keyed with the public key as PEM, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJIUzM4NCIsImtpZCI6ImVjLXAyNTYtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.Of-zTNydmUbi_AkGMgplwLuiVvmYfxkUEhra1Md03RIvnp5cwHAvhCqP9qyoKLqb",
+      "expect": "reject"
+    },
+    {
+      "name": "HS512 keyed with the public key as PEM, key ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJIUzUxMiIsImtpZCI6ImVjLXAyNTYtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.db37Zqa9aKLJ1M5LpuxGHhZc3d2-re2t4QSsoIGbB5mCrdnMZhI2O83leyBqGWXVent72ARoK-dN_0LAiMLsvg",
+      "expect": "reject"
+    },
+    {
+      "name": "HS256 keyed with the public key as DER, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6Im9rcC1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.iuGsCa0IHfAo46Vt6k40lV-RNyzirW7Lkx5m-yihYSs",
+      "expect": "reject"
+    },
+    {
+      "name": "HS384 keyed with the public key as DER, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJIUzM4NCIsImtpZCI6Im9rcC1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.1no5d-Zr7kNsg0caRB9SV9mWA7hABpUnaqWdJZ1hM5fw52arI9XdmL_ez7ZOLijh",
+      "expect": "reject"
+    },
+    {
+      "name": "HS512 keyed with the public key as DER, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJIUzUxMiIsImtpZCI6Im9rcC1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.HoroVpnM7Tvs2-t-suEflQwo44vLWebcNM4Q4ZauM5Vsdt2NOxxLEpaydYXhZHbOz17izjyU5QZsHlA0D4R5Dg",
+      "expect": "reject"
+    },
+    {
+      "name": "HS256 keyed with the public key as PEM, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6Im9rcC1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.wRGfUNZNFnx3HY_0uWwYbPYsqllRmWAd0k-dIacSZb0",
+      "expect": "reject"
+    },
+    {
+      "name": "HS384 keyed with the public key as PEM, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJIUzM4NCIsImtpZCI6Im9rcC1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.7p5vLnj6QvKw0zLDm_o_687YBI8p3cTVQen46XFOg_6AkoCqUUoPFeaJqgerlith",
+      "expect": "reject"
+    },
+    {
+      "name": "HS512 keyed with the public key as PEM, key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJIUzUxMiIsImtpZCI6Im9rcC1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.pR8mRQcHuHuyFP_oF5xERH8aUcg4FbF2lxWHO2iqBlslZMzh6EW3PvOjL8-MnWzLSrmdODdjgDu6gTe-FGbiUQ",
+      "expect": "reject"
+    },
+    {
+      "name": "HS256 keyed with the public key as jwk x (base64url text), key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6Im9rcC1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.ZsGSeXJnN1nA81uqnFFu7N9vKDyX5Rwfce3ZCoX3bMc",
+      "expect": "reject"
+    },
+    {
+      "name": "HS384 keyed with the public key as jwk x (base64url text), key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJIUzM4NCIsImtpZCI6Im9rcC1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.nT24lBv58TB_YYIGzxnl__t1aL0cG30YFOU7eslHFEJaihcGvbO7fd-x2cnNMVVj",
+      "expect": "reject"
+    },
+    {
+      "name": "HS512 keyed with the public key as jwk x (base64url text), key okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJIUzUxMiIsImtpZCI6Im9rcC1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.kGsK8DA7jYWq0358AV8fqjyS_haZvZqELMJewjD9Nh6jB0f5HEJlyOLQypQVegts_n_DUNf2t165iWaKir1Krw",
+      "expect": "reject"
+    },
+    {
+      "name": "ES256 token against rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.LOzPjalRYA7a2weJcpwCk9Jp2LUyh_I9E3AP4YS_eksMt5hnHko6YqWTSjBTUhWK0y_-nfjYY3BGjqfDdIPzBw",
+      "expect": "reject"
+    },
+    {
+      "name": "ES384 token against rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJFUzM4NCIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.VumGQ108CFhinNZAnfXpZ92elPxUv10AfwPacTRQB0G1jOuObnoxdUE-1J2dy0akQ0qf33Ew_Q6BlP9qDl0TP5LSMRP9nHS2YSre4ymFXHSq6iNOjsb4J6aPHCCW6-uH",
+      "expect": "reject"
+    },
+    {
+      "name": "EdDSA token against rsa-noalg",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJFZERTQSIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.uz3i9m-z3Ml0yx_vdNDwFldnyx1o60a4yYfKCMaWp4H2wRgiUurabDf42d4WoSBdoK3gbsKAn5EW-HDgQu8aAA",
+      "expect": "reject"
+    },
+    {
+      "name": "RS256 token against ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImVjLXAyNTYtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.OBtelPLzyp9hCeWKw1mVut35Enmx0iNssFw44qdTAya8qkUpd4h-FIGkaS6Uy1ekjwFXAhVuGP6_VEx36tJmdngcPO474_skHXsJx93HdK4078q48N5VqqQVqbfgpesxibdb8Tp3mFqfKRet90lzL61dLNa1EHqnLNSozR2ghO-OZQP0Po8xnnBo1TKo9tQNS_Q9v4HCdJQPAWInWYc8zftZWKw5tuC0fjb-HPhUZw9SOJWe_uHeIc0ba7EqO9Msk9wmWUWkBIWDsAjOoi3bfKRSfDnEl-aR1ooBoSo9YCuC4YbmcZSGg6-UTZ4pWFubDPruEXFcw6dUKQkXAqZ6sQ",
+      "expect": "reject"
+    },
+    {
+      "name": "RS384 token against ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJSUzM4NCIsImtpZCI6ImVjLXAyNTYtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.VF8SXiuSFNfN-hwpPJoOZK2TIKzCMegQiGvV9UG_aIhhzumP2zffU_oQljqU82UCLbCVaR814BUCm06Fvzrpq7AOwSvPzOezxVWev5NAdMAm1KNABcIbyUFdxWFLJ5VQJAVST8lbsdKC_7I-tCFwapN0P8MA8zJkNr1lVoVVTD7ox0CpxyCrsXGtR_1TVqMYS3TwFm06Hus84mquuAHX6Pn0WpOoudDJwvSU8nIosDFJkvNY6AGQ-f2ElAhvEkALuP0-scLHt_Io4UkfKGKbZ9HaWXyUCh8huS37GZrN9K6PdgCja1eN9uwG7J-sUv1FhIC51MVDCFrJeLBpxVz7yg",
+      "expect": "reject"
+    },
+    {
+      "name": "RS512 token against ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJSUzUxMiIsImtpZCI6ImVjLXAyNTYtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.ME5z83Pco89eFXO7CACjqPGV_B5ERRDB4AUZ_fMTdRTyibv62aMqjKDeH-5QiV2J9iLhDM352jJc7nCgnc8dSlPmoEE8CgPfRnEQFmQjEW5sxzpNZy9Z7greuxGU3NVZ3yggeaXvM1xfvdylIyXXC-TtDYARiWAWnDMX75nGWIveuvu0LDPyOQ6Ot1qSKns7SGHgVCu2POh2o4puojUfmhqFAUV8ryqbhRde0dcEcpPEXMaPURHIiKoH7aTS8Mnhb7lJHtaHb-DLOqSTODiT2i4rxADRLFtENbHfPI0-FvTyp-It6nl-_8Lipt9pgTNrRlDW_A6y2utDQ2z8S-bSaQ",
+      "expect": "reject"
+    },
+    {
+      "name": "EdDSA token against ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImVjLXAyNTYtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.MrQPlmXipEcE1VducAlV-T244RcAzFnR-mvTf1mbuSmepY0WaEXm-fg3YBmMvnN1TDvKrq24BnansUOci01PDw",
+      "expect": "reject"
+    },
+    {
+      "name": "ES384 token against ec-p256-noalg",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJFUzM4NCIsImtpZCI6ImVjLXAyNTYtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.4nle7AcvDKzqmgoXURgY4AfvEMxKEUQyST0Clnfft07PxYMhFPYQ46rewzAL8PhxpYnq55tQ5rMm4A6thV_DQNmuTkhS5lMRgvJwyHJDoqKN-MIZ0gQ1e2pw0_Ev_pq1",
+      "expect": "reject"
+    },
+    {
+      "name": "ES256 token against ec-p384-noalg",
+      "key": "ec-p384-noalg",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImVjLXAzODQtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.paVTMdsuNdlhcZGmfqzLI7WNoaBpfWr0M08vwwxfs0yYmMDKUGcLrkqVO-ITN5vHYknMPgBLMm6CzInWs_t7mw",
+      "expect": "reject"
+    },
+    {
+      "name": "RS256 token against okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6Im9rcC1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.RoAKst7xeuQ_CHplOH_9RzLFkIqStZHy_8gizhX5bVQOTX2PTHvzQqJayNF-BwY2yo9no7KEDmo5MIvdvyr1IPvH36CFtPJ14ojJKFxpnljtpURbabJfSmqpA3ELw7AaTZL-LIPCHfhxQvJK73KGaLzKGcPk-5zr--aiOpruGtBa3HktdIOSWrBQhyOcQSV_dd9s2j47G9iGWn0AAVdP99VmNPiZp9Ey5kM71TU4QKRUJOKNGwVhJ1Md7oLrplP6aeKO0xpZKHxzT233Q8fV9FOjE9B4xEZkGr9GndXnHGHZrU0TnabIgag8deYItwEC2tsv_ezaihIqSs-ncZqAWQ",
+      "expect": "reject"
+    },
+    {
+      "name": "ES256 token against okp-noalg",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6Im9rcC1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.9pk6V5zDZVBrZ69c3puQtjfSGA0ro4CI5J8aFZlh9RVGPfdG9rDBETjQn8trizCmoc8Fp77258Gd2bmIvEEcbg",
+      "expect": "reject"
+    },
+    {
+      "name": "declared RS256 key, RS512 token",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJSUzUxMiIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.Vo-bax0qFod_HSyhsPyV7SB64gMdcekTTVf1KhF9PU4MFsYnXkSj9V_slzcDStTwmzymJqofAI59fhkw5SCkdYJRFeeQhD3pJA7AVoDZBvD-h_Y_ulRKU1mrLpcUpIBYEYnMvfl6TENNQEV7aKBk3m1IVPheA6IwSlZzZDE61V4-FmnM1oAciyWF3rbxKA92nBXDkK6UYgewyyBj8aP88nYzI9Mp7BDahkbTrGtb6YbKvYn_wofyGwdh79I8r6VN5D2B9L_sUVrm8CpauRIunOg0yJG9JLYhHdZy6nplM7-uWjuXJ4yY8SLC5EQ7n_-k8TErv5-P4dHcjeHhnNPiog",
+      "expect": "reject"
+    },
+    {
+      "name": "declared RS256 key, RS384 token",
+      "key": "rsa-rs256",
+      "token": "eyJhbGciOiJSUzM4NCIsImtpZCI6InJzYS1yczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.Qr-g_eBXJiLOYU1E2YhP3rNrihDLEsX3O7eOEg-MdJexgOa9mrTRYGolyQET8P8gx-vyyFTn7PpBG2IVBlrb9iA-wYpRcMofXGa2nKA4D0CCG3PiTIEmQV2EfA6vfWjdNhvJGRCzhOHCvz-oZZfcLrFuiIlfM5M7XmVxlMX253nf7LYJpuPklb5kaPKfBdn0bkJ4Z8bKl2UQda2w3zRjwUngXvPso9n7nBSkMTmJ0oXt2TixZg8ToKFJk4YrDjRY6Uffa39RS2rB5Yqp15PezIG1x03CGRsqudWIlkifkIzfDqlf3TbLI08E9P-dBI9_M-tzD4Y7bVgZwrYILWXpIg",
+      "expect": "reject"
+    },
+    {
+      "name": "declared RS512 key, RS256 token",
+      "key": "rsa-rs512",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS1yczUxMiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.BYcGKm1fYs1L_Ghb9Zms1_M7q91JggGaz2fPdvUhFXgl9V95jLjmiJdpsp9zkBdP124PoDt9hUnGNxKT9U15cFIoyMgWTNPYLuiX_uXPfYkzuBBh7HjQfFE53BkZWsEsrJnFBEcQv8Gy1I9yFyhe63O2gNUpXtu6Ukl1bHhm2N8ePJp8w7UN85gqMi4Rf7vzzAHHmqthwwsmbUF2kuDUaJmMgMGIKxCVeEOnZ7JPrvHND1Z8a-xzV4qCidiG7ZpTfZx0GWZ_WkhYHZVhz2C34mFrtnspKB6NhRGaBpofgMWwsHvnrmubcp8xwya_87m9aiDYqyyMXq1nnX8fbP-Fvw",
+      "expect": "reject"
+    },
+    {
+      "name": "RSA key declaring ES256, RS256 token",
+      "key": "rsa-declared-es256",
+      "token": "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS1kZWNsYXJlZC1lczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.dxhJ1WL4meJrKEVj4cn7y-wfrgYT_ClbvrJ0Aun_d7xeOnoVSMVzfNuvaNub5UJ4hS6ioUmurGBuiiayYbDtLkK0rWoVWhXU8nMftkTmguyHrsYqU0cZq6BoQMehy4IRILi7EqUI883ko0dVRNJyaZf2wTR19kvIz840FvkNaCbUtJJUhfJxgaOn-3ltuI6MdOHVWnlxlLlQfIEo98rp-ULyJrwqfTcypGiuNETI3VCpG1p8kQINAEmt2QhCUaBBadiaCVNp1tjn8Iq1-Tj5tW-rEmUXpFpPU6kM7wqa17biYL30v6v3D-4fBalmkuetD7sLr7lKqfhQGFftCrgIlQ",
+      "expect": "reject"
+    },
+    {
+      "name": "RSA key declaring ES256, ES256 token",
+      "key": "rsa-declared-es256",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6InJzYS1kZWNsYXJlZC1lczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.nWeUlMLMwCVfIPYi86SqFn5tR-4p5G-rZGWnzvV29pOeIChuSiFqElAugJcQOQOxAZLv5QH8mrt1VXrqs5whNA",
+      "expect": "reject"
+    },
+    {
+      "name": "RSA key declaring PS256, PS256 token",
+      "key": "rsa-declared-ps256",
+      "token": "eyJhbGciOiJQUzI1NiIsImtpZCI6InJzYS1kZWNsYXJlZC1wczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.lF0xav4oFL5QwKPe0RLKI-UqxkrYJQeE4BEyhdkVH4wQe9LkLgt6kg_0JH6mx8v298e2srw4_AKdyDNgM5YGRAucgLXQOe_hQ2YZO6uisw5emF1t-ihO1BxbLSHIseXVBk8dN3-8AbTAMFeNGapxI2_YcWbaCOv85c_-CTSUdBtPgHM76AdyJR-CCLwquJ0cvWV0-sYq6Byf9PSc8esnDUiB7LYqavQHUbpE-AMgI4eNgnSljsUTn89hZrRbSLAm1xLBIJa7DvMFnWl75FtL3tmJOmniTtl1T8-WKK-gpXxCv_DS41S5xGNvndBfwxWVwyLogbS2GTQDap3qH373zg",
+      "expect": "reject"
+    },
+    {
+      "name": "RSA key declaring none, unsigned none token",
+      "key": "rsa-declared-none",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoicnNhLWRlY2xhcmVkLW5vbmUiLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.",
+      "expect": "reject"
+    },
+    {
+      "name": "RSA key declaring HS256, HS256 token keyed with n",
+      "key": "rsa-declared-hs256",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6InJzYS1kZWNsYXJlZC1oczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.1mf5rEbcxYpjwyOGC9J4mDgsUopPeK8l-jZw-bQoyHU",
+      "expect": "reject"
+    },
+    {
+      "name": "EC key declaring RS256, ES256 token",
+      "key": "ec-p256-declared-rs256",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImVjLXAyNTYtZGVjbGFyZWQtcnMyNTYiLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.fh-UmV3cr-MXshTcHSmqD63r3eYYPYFG-XmrqcshGJz8gdOkGXSA9b1ZrFBsyOhBAqLn1PI1o8V8sd-VecCOXQ",
+      "expect": "reject"
+    },
+    {
+      "name": "P-256 key declaring ES384, ES256 token",
+      "key": "ec-p256-declared-es384",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImVjLXAyNTYtZGVjbGFyZWQtZXMzODQiLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.uaEPy1ZHPm4x4lfsP_I1Z2hzg5CCUkzdj2CBqUw35YRKqiDip-1jbSByLOWm4Q_U4wQsmlzxoY_Zuj4YFiqJSw",
+      "expect": "reject"
+    },
+    {
+      "name": "OKP key declaring ES256, EdDSA token",
+      "key": "okp-declared-es256",
+      "token": "eyJhbGciOiJFZERTQSIsImtpZCI6Im9rcC1kZWNsYXJlZC1lczI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.NKM41hLXiTjvWskWOBVutSYS7ICsHRTPvGD6YQnEgUQyS2m3N2ZFNcuM66sGgmvBbzXXYxHNEE66yTs5PpulCA",
+      "expect": "reject"
+    },
+    {
+      "name": "PS256 token (RSA-PSS, not supported), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJQUzI1NiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.SSwFXj8rBVVJ5108Jg5SfZL85TQPkmsisEBohWBxXtj41s8XA7Mh5fgJ_8a2zIzZFAwzS69C2Z4aftELLqMPCyoo3BKV_SqTn9iXLn8ad4uF5Wv2uNP3m9rGKtVXGhO46kqx55d-ICLhNW1NwcpkrVoL8cSH9KtaN-rtSG3nu3mwijDdHRwCP8_1-XMjSOHAPt5YbRZQYt_Z23Xl07eT1yGcIa9kfD2DqX8C6LkcAxFu-Vw4Q5sMp498YLG95rhzYA22f3-RwwbIvseLnf4rGfcDjqxBqVT5DCq29ostzR1Nw_UZiRowN5ojP2ib4xniTxEfxTymW9ZXgzOtjtVKAw",
+      "expect": "reject"
+    },
+    {
+      "name": "PS384 token (RSA-PSS, not supported), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJQUzM4NCIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.M60F_lr4qRdZn_w2tgN9KBaHpT5S-sxWZjJpvBPalD0wxsa07B8vY7zYEu8YuSUfgS3PrPlTT0B6Iy2CeX35m4KzPNpUs1_QGCwRSQ-hSXmDXNgysV1RSDxm54-crjEfCyzQ3LXxi14QTu0vh6Q79ZYfHoQreyNy8BgNrL0lmcA1oX3DBmGrRMnH-TBkHxH6TQbpyf_TsbUHNYt4FG0wF2f22kKbvR6d_HGvFnVualzsDeokbKuNj8lnapRGYvYpmfQemwKVQSC3COeTRJnNmkESzkE41_fFXGlae4o1OnEttQMXIvT_Svjdz_BLvPWiTv6O4BkwDCfW5-CgM-4Z-w",
+      "expect": "reject"
+    },
+    {
+      "name": "PS512 token (RSA-PSS, not supported), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJQUzUxMiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.ZgbYpThFSBz173X8wulRWhDX-uQKicddgBgGSN0B6FgqKi7f-CkIprjpT7aobuIY7yp-lN2jWH-dS3Pl2k3mCL6s3CRNvc6FUAAtgf34AWY88RS00t-xNt4Wq-qClsfUMfJiETcVJBudljRYFG-SkIa17EXakGjTyQGbJSbvJDTlQxjLnYjlWRKVmx5_LZMiYbm0l2aOOlGd2d4IctcP18DtNsj8e2E8d-fjwuA2ZFLar1jLGOhwq5z6A3MKp3GkTM7fZSsi9qvbpBHhzCHFwWmlw_AWGejxBLOA8V0Zt8WSpah2nCx2VolqZ1ezKd6IdpXDK8eTBQr_7fB_9o_SMw",
+      "expect": "reject"
+    },
+    {
+      "name": "RS1 token (RSA SHA-1), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJSUzEiLCJraWQiOiJyc2Etbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.JCyoFezXKM8LDseYs_D7VjosbAjRYU2Emt0IM0sFrVcTAGtA4bCbWpkAll3ZXUWMOwLiKiPTLPcD7TBxBC6ngnj97P_AXTRgVE8X_HjkXlph0fyB8vyslefQFkXuWN2CXFjh71WTBzPiVreHjZaB8TpELFKkAXAE93frnQJQVrQnBh5h8zGffm5BvqaYZc_6fy1djSDJCZOpJK6jWVZebUYlZjzzjxKA_sd0zgcaxIKh3EdWDFqLycQ4b3QRDElyhKNmXHrHOz4ErAxhLUG4PddazPuV3a-UNY67b8Q19vDbbTwYSJb7TEUvtRwguCw3CrKixPQxxmoTT-mrHiN-0g",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"rs256\" (RS256 signature), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJyczI1NiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.L7Ap6tjoMoS8gGotk5-MoeHvHupqQXmvWGTV5XMiV_Hj-vvnlSSOqTXWTrHiPvESZs8ew84T5QpIne5vuh0Im1xTN3yMRnONDVgh9zaTjVS3kbN-HTzJMOXMbe02TZxvYFyYuf2nsmGsn3vriQmHP0XxdTk3JiTQGGpEX8mozej1eOD69WfSlTyi-fCwWYniTleEugtRVxWLghcM9XOaDh7MY918Yw4NQrszJI22_4OdStrby0UydHLd0xzHwHv9tLWhrrDfSRRGWjOuhq-FEkCio-OSkYLnIBy7QE-TvrfM1F0KdCfWGq1EDWMaE87hS4cW8h8-ncnTcq5v7f48tA",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"Rs256\" (RS256 signature), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJSczI1NiIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.kenyug_Ks15TN4glBFuW7oaw-UByon5Rz5z9hjBJqsuLCnhHT-3rkJeKSV5tC9l70gcNBoQT9ttUqOUQrQqIQYueM9f0aE7tusDkcP-uFn9eEdWbsCylalZU3VZTInxkmx3r2MYQI9k-e7CumZFCUPGioujcXJC_JLjytvP7o6sELzh_hdBUFk2aYy6ZdxlJK8lt5GDcrO-kgwUJnehHBI8TjuRtrBaOPyuSpEViDu1lgbZUH3dZFRZczdGFVA-_q_G_vd51rKoZaOaG3B8ioxttJAP0qoGqKQsB9FL7szPtCxPOGk0fyO_9LqJ2-rApjaM6MlAsVINM-YXuVv7Oqw",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"RS256 \" (RS256 signature), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJSUzI1NiAiLCJraWQiOiJyc2Etbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.FJfyy-_rW8DeStO5y0c81wUP1RN40kwHy6it7s783EUATMU9cm2Z4pdVbi_HrvlGA4pCf_vKOl2FyUAldx9akAiw7vZ6ugQn6lCEfzSkslr-8GKcYr7-aAPyKmCOlo7TOHP98KZ8kW_1V1WxpJtWvf86zbS4CQpLSqEfpKEECT8S-LazyKE0F8Z88JTXi3pFEzogmt_0fGbTmfg-R3lfeOkHaHSJPgtdz53mmT0gbKio8DKc2LQaf6GeNcaz_gLHuHUQIvqQltR--hzCvw-5Jx7tqyf1Coycw9r70t99OpiGBugB9X9blT_ERa056yv8seU0V7KEFXyp0_RGTw9dhw",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \" RS256\" (RS256 signature), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiIgUlMyNTYiLCJraWQiOiJyc2Etbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.DXsTo8lZQ3w5VBfdhpTRdqSxKjStP7uMF_Wrwi5PTqIYkmT_v77F6oWbStq9JjodbkZsaeYQnh-O-yiIW5-sdEMP3s5M5o1VBS4NF4JYpep3NoNPrQS__OcMHM6nOQgstAtyqCvEfJvef471LpwVHf46rkPZge90BLc5IhCuhK6XJUvak7dwAPi8-RRUfN8DvcGTr0-RZErYBa8nAGxrfcKZQYNYfi-zoaIBWnTnAtOIudYovDlTkekY2ErAr2kF_QXXJ-WL5KkbTmNQpcFKEZvXuQ8XgVVN89D66ItLlqQ3nyRZlgtiMT6-hh0V1lkJnBmHB_2u6h52eHpbrnvXkg",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"RS 256\" (RS256 signature), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJSUyAyNTYiLCJraWQiOiJyc2Etbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.NlRRv1KeI63c61hYlhrSLVTevBjGGfrngnMOVl6a6evMfpaX3DEhbvhunKJixJrepqjOYHlXsUKbSET82ug_darQ3_FVb_ki6IBRYAI3Ysw-hKYYVj0huzoxTgs_VZpCrMSagJVVMXzH6BkEOWu0y45SXmo_3bVyWuF5nU2ADj0Rb-kSSXin9dVaSvYjSlPQhSvzHz8JpHZCV90b8CkX8-085LbdnkaNcyE-JXFRn9ADaVbIhdX-iCe6WUYdQN6amUIS8sVs76kWJdr2vBleg9oTAZY1bLMWtuuazZro-jK99QG4DWp8a5wOExYlouEs-S4QAQiDINSLmfv2amBf7A",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"RSA256\" (RS256 signature), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJSU0EyNTYiLCJraWQiOiJyc2Etbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.f2oq7-oX_s-6fD-M1qPQomAHQLWKQt0GuR7izNEvRVKyqSBZScXVQ3IL9hdq4sZnrHNhWv2cw8WVblX6HM7fsbj5qCB93UCxClqqmn9xDj5yAv7wtThXppp4SscL_6Ih-XAegwiPLMkRYwVx2jnKnZ0QyPe2_exHRp26SCeQnr0Qc_X-zolqiHjWmuqNF4QOB0Re2gF6a0KpqpmV-zOCzhjJMinKVhla8JE7km2IIz7Svz4V4qnh5uNXGQLnJnNi3kl68ev9PWBE0UyQNXuKOLp5v92mb4HLkiKaHffi2--9Vt9tM3_JFlsPA8AjL-CDC-Qg9vINi_0yCZkLcdjDgg",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"RS255\" (RS256 signature), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJSUzI1NSIsImtpZCI6InJzYS1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.EUENGU7mLa3BFitk09QYej54S8kHO8zTGzD4RtCpyQ9UMLsO5FRC9ZhopSjV0C5Tz44ybD3f0yn0G9sEp6rjRPlMvkzwunyEnc_HIz_b81UzCe2C6O8Kt9qAt5c4WJidwQqAVoA9EzFmd5GUAtGX-p94Y9nm_M5Dn5ukdzg7ISXKj_vukz30v57vr12NPgqhRzLk3lxm53IR1IoQ_tnKJnDWRpLWM2f0pkUZBN2dsrxBGbuqQd_9b2lzVwST6wYPWzFgkg0SCtq6sa8u6R7Ep-R07OdaOiB_u26ch1uTa5GfWwOmc1LJIR7rJ8j2emrXm-LRLueECoTPjhZMoKqz6A",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"RS2560\" (RS256 signature), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJSUzI1NjAiLCJraWQiOiJyc2Etbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.boTJTSidSEyZb2_WYVjEXM84FeaXlRjmN4nDF_oNE35CCYknuRAFGFrYk8TvWpWLB15EejS4Uc2iW9u5U4Ll4clxFBbkqSo7ipaUZUA7MyDVwUamlf2RvLyU1yehHrZqH2ah0W8HaOST9FuKXoW4rmml-Jd9WUZzdKWNOoC8Snxlv0ilaD1bszIOk1n-KsC8DZDB7pTIQf5qDMWoi5UqSLvAbwv2jD4QkNI3Wu9Tzb9N1ioTPO-h718YFwvVDkJ-mP9yNgPG8bHypmAddMMTHn1vY1U3cO6Vq2p21PreDdeu7mtyyAgA86Glq59rBCSbHROCiVmVosXmmPqlFKFBZg",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"garbage\" (RS256 signature), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJnYXJiYWdlIiwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.a3aJTyzEM_ODwNA6TiYo2-AEvb7az24Ub6_x_oZUDJAgUFXBGET7ozNWkptR6n_TsfSywZh6npmXrRGOQ_8-iu62tOVIm4L4GG93FoJIdhtzLxkCt5_L03l1iq48DQjB-NWYwkLBgyNhvYTIN6knYe1WgraKwktujQrA8Bxr1Il-7o0ur8IDaG2Mse-xVWXOwpVRGU86nIzbLXgutWMdpMJL4ewzLnqdeA3qD6-h2PIe_em-9p9dHth5P7Tn__754in1RCPOic83RXHbLHuBG_rESjzKwwt3cHbG5IfZoNAJxOwWTpCdquhOJIDPGG3LxFDXU7T4BL9RdueHvb5PKg",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"ES256K\" (RS256 signature), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJFUzI1NksiLCJraWQiOiJyc2Etbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.ddVvBlY6hkmADE_xsbqlB-bcHqUIj0VXZ2ikJd9iLN-1gPHJqBaWYJUu7HkZtAXm7c4StpMyzza-E1TijgyN3BneBCgGJYlKSRm0xSDYpciNYFgj6H_j4zUjn3E7wE6IrF75MP5_XRlNgsI7NiUmhQ8kBpHWOZPrmlxvUjigg2vrvjS7HYarLlJW5D_ZPklC3lrmFdQg5vg3Fhjg1kIwVWlWDbD_pKJKeIEVgxNiDFrprQfvkPbersesQo1XnVTFwv0hxJq4Elk9uCb3NUyeK-O2gxn_eDhAbbyfrauDiwQbneJ3AXfv0Bq-UdT4Y4gLQ23dPJTLIaFKsmSn1SbehQ",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"Ed25519\" (RS256 signature), no-alg RSA key",
+      "key": "rsa-noalg",
+      "token": "eyJhbGciOiJFZDI1NTE5Iiwia2lkIjoicnNhLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.alnHhhFcRyklbixWnqiR50vQF-PhwnNVLuR_cn2O4oJLown7SRiinUykeHXobasvoG7PBIBUYRa8wwFsJcWKRd-WNzICSKgQdqJdQJy60zdzGxMTq3lcwl_XBwb0cDPjbFqVShYasmwtJNh5s1rrGyEfyMHyV8CaiaA3B4tl_W7VLKV4qDtkhtsWCWEEq7vd7lzk6fZWdEOotel6PT5QFhDclByBtgCOa6pHZ-S7_LX2nvZXs4EkvGXU8PnKPLb11-JAvkesWLF1wfZzHBKhygtVhKyvcxWQxC3FC_6lZXAHHycePadq9Y49zjFkdrkwBgT1-bSUrgd7uNcxMhAV9g",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"es256\" (ES256 signature), no-alg EC P-256 key",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJlczI1NiIsImtpZCI6ImVjLXAyNTYtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.SWsdz1vd77HxkAfkS9V_bcqNDJES80O2XRzSOTh67A4lfnyaDEopzYlen4Yfjwmtpcm_ac6coP6bs2tJ71_eSQ",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"ES512\" (ES256 signature), no-alg EC P-256 key",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJFUzUxMiIsImtpZCI6ImVjLXAyNTYtbm9hbGciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.mYGVGr7w7Fmqk1OpsCk-FBmNyMMbMwKMN6mHMs_7Eb4sk-yNpslVQuCAXCK-qKPO0y8qkXeQ26ur9n2cA4yvcA",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"ES256K\" (ES256 signature), no-alg EC P-256 key",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJFUzI1NksiLCJraWQiOiJlYy1wMjU2LW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.Wiu76eJ-0Cpa7eCyDP9CFd4d3GzA7KlBx2EPAcjeAcObzGb8zsH2Cn7CuUqaTamthUVgPswz1dvRztcZSaizmA",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"garbage\" (ES256 signature), no-alg EC P-256 key",
+      "key": "ec-p256-noalg",
+      "token": "eyJhbGciOiJnYXJiYWdlIiwia2lkIjoiZWMtcDI1Ni1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.5ev_Yl-YZqzlesDIgmj3U3bYJnUL7Et5WEbusxaRUHyttAXYqesfQGDSd-Sk_izYjXO65F6-ZJgQpVNDyqTqeQ",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"eddsa\" (EdDSA signature), no-alg OKP key",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJlZGRzYSIsImtpZCI6Im9rcC1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.TocqsHZ4roYdl-Klb0hoN1Fvl_Vd1Ualmnu0F-BSgfaaSyfty-KOLDwrnQ7xCxo0U7PljUMowS6nJ3BiGH5LDg",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"Ed25519\" (EdDSA signature), no-alg OKP key",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJFZDI1NTE5Iiwia2lkIjoib2twLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.r11rCAqV74ZmzjV4xH0odoEUNS2penWIOgW3FRCs1nusItUd7zRxDFQN2fKh7ohfYWj5HBVJvmiYPMLqITWdCg",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"Ed448\" (EdDSA signature), no-alg OKP key",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJFZDQ0OCIsImtpZCI6Im9rcC1ub2FsZyIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.ruewAnvMBradAxg_wGcL2NABqwZVP15z0dkBjQw3HZOjDapCRRBVbeBfMM7-PAFll5p5I55LqNcbkihw0MZUAg",
+      "expect": "reject"
+    },
+    {
+      "name": "alg \"garbage\" (EdDSA signature), no-alg OKP key",
+      "key": "okp-noalg",
+      "token": "eyJhbGciOiJnYXJiYWdlIiwia2lkIjoib2twLW5vYWxnIiwidHlwIjoiSldUIn0.eyJhdWQiOiJjbGllbnQtaWQiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZS5jb20iLCJzdWIiOiJzdWJqZWN0In0.hu7b0sCJmyKvpvv7jub_WLkU1RHY8VAscurAtOpSxyAXtyhM_7n9voi0bBEErnI8I9R3kN7sEz3_J5KtQFTfCA",
+      "expect": "reject"
+    }
+  ]
+}

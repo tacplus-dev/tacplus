@@ -53,34 +53,43 @@ def _base64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s)
 
 
-def _ec_method_fix(curve_name: str) -> str:
+# Algorithms each key family verifies (issue #179). The accepted set is a
+# property of the KEY: a JWK with no alg (Microsoft's JWKS publishes none)
+# accepts its whole family, a JWK that declares alg accepts exactly that one.
+# Nothing outside the family ever: no none, no HMAC, no PS*.
+_RSA_ALGS = ("RS256", "RS384", "RS512")
+_OKP_ALGS = ("EdDSA",)
+
+# Smallest RSA modulus accepted, in bytes (2048 bits).
+_MIN_RSA_KEY_SIZE_BYTES = 256
+
+# EC curve name (JWK crv and its common aliases) -> (alg, curve).
+# P-521 maps to ES512 (not ES521): the alg names the hash (SHA-512).
+_EC_CURVES = {
+    "P-256": ("ES256", SECP256R1),
+    "secp256r1": ("ES256", SECP256R1),
+    "prime256v1": ("ES256", SECP256R1),
+    "P-384": ("ES384", SECP384R1),
+    "secp384r1": ("ES384", SECP384R1),
+    "P-521": ("ES512", SECP521R1),
+    "secp521r1": ("ES512", SECP521R1),
+}
+
+
+def _narrow_algs(family: tuple, declared: str) -> tuple:
     """
-    Convert elliptic curve names to their corresponding JWT algorithm names.
+    Return the algs a key verifies: its family, or exactly the declared alg.
 
-    Mappings:
-    - P-256 -> ES256 (ECDSA using P-256 and SHA-256)
-    - P-384 -> ES384 (ECDSA using P-384 and SHA-384)
-    - P-521 -> ES512 (ECDSA using P-521 and SHA-512)
-
-    Note: P-521 maps to ES512 (not ES521) because the algorithm name refers
-    to the hash size (SHA-512), not the curve size.
+    A declared alg must be one of the family (case-sensitive), else the JWK is
+    refused.
     """
-    mapping = {
-        "P-256": "ES256",
-        "secp256r1": "ES256",
-        "prime256v1": "ES256",
-        "P-384": "ES384",
-        "secp384r1": "ES384",
-        "P-521": "ES512",
-        "secp521r1": "ES512",
-    }
-    return mapping.get(curve_name, curve_name)
-
-
-def _rsa_alg_for_key_size(key_size_bytes: int) -> str:
-    if key_size_bytes < 256:
-        raise invalid_argument(f"unsupported RSA key size: {key_size_bytes} bytes")
-    return "RS384" if key_size_bytes < 512 else "RS512"
+    if not declared:
+        return family
+    if declared not in family:
+        raise invalid_argument(
+            f"jwk.alg {declared!r} is not valid for this key (allowed: {', '.join(family)})"
+        )
+    return (declared,)
 
 
 class ImmutableJwk:
@@ -99,7 +108,7 @@ class ImmutableJwk:
     Example usage:
         jwk = ImmutableJwk(jwk_proto)
         public_key = jwk.public_key()
-        alg = jwk.alg()
+        algs = jwk.accepted_algs()
     """
 
     def __init__(self, x: jwk_pb2.Jwk) -> None:
@@ -124,7 +133,7 @@ class ImmutableJwk:
             raise invalid_argument("missing jwk.kid")
 
         self._public_key = None
-        self._alg = ""
+        self._accepted_algs: tuple = ()
         self._kty = 0
 
         kty = self._proto.kty
@@ -142,8 +151,8 @@ class ImmutableJwk:
             raise invalid_argument("failed to load public key from JWK")
 
         logger.debug(
-            "ImmutableJwk created: kid=%s, alg=%s, kty=%s",
-            self._proto.kid, self._alg, self._kty,
+            "ImmutableJwk created: kid=%s, accepted_algs=%s, kty=%s",
+            self._proto.kid, self._accepted_algs, self._kty,
         )
 
     def _load_rsa(self) -> None:
@@ -174,14 +183,11 @@ class ImmutableJwk:
 
         self._public_key = RSAPublicNumbers(e, n).public_key()
         self._kty = KEY_TYPE_RSA
-        # Determine algorithm from key size
         key_size_bytes = self._public_key.key_size // 8
-        self._alg = _rsa_alg_for_key_size(key_size_bytes)
-
-        if self._proto.alg:
-            if self._proto.alg not in ("RS384", "RS512"):
-                raise invalid_argument(f"unsupported RSA algorithm: {self._proto.alg}")
-            self._alg = self._proto.alg
+        if key_size_bytes < _MIN_RSA_KEY_SIZE_BYTES:
+            raise invalid_argument(f"unsupported RSA key size: {key_size_bytes} bytes")
+        # The key size does not pick the alg: any RS* verifies unless declared.
+        self._accepted_algs = _narrow_algs(_RSA_ALGS, self._proto.alg)
 
     def _load_ec(self) -> None:
         """Load an EC public key from the JWK proto fields."""
@@ -190,18 +196,11 @@ class ImmutableJwk:
         if not self._proto.x or not self._proto.y:
             raise invalid_argument("missing EC coordinates (x, y)")
 
-        alg = _ec_method_fix(self._proto.crv)
-
-        curve_map = {
-            "ES256": SECP256R1(),
-            "ES384": SECP384R1(),
-            "ES512": SECP521R1(),
-            "ES521": SECP521R1(),
-        }
-
-        curve = curve_map.get(alg)
-        if curve is None:
+        entry = _EC_CURVES.get(self._proto.crv)
+        if entry is None:
             raise invalid_argument(f"unsupported EC curve: {self._proto.crv}")
+        alg, curve_cls = entry
+        curve = curve_cls()
 
         try:
             x_bytes = _base64url_decode(self._proto.x)
@@ -222,11 +221,8 @@ class ImmutableJwk:
             raise invalid_argument(f"EC point not on curve: {e}")
 
         self._kty = KEY_TYPE_EC
-        self._alg = alg
-
-        # Override with explicit alg if set
-        if self._proto.alg:
-            self._alg = self._proto.alg
+        # The curve fixes the alg; a declared alg must name that same one.
+        self._accepted_algs = _narrow_algs((alg,), self._proto.alg)
 
     def _load_okp(self) -> None:
         """Load an OKP (Ed25519) public key from the JWK proto fields."""
@@ -253,7 +249,7 @@ class ImmutableJwk:
             raise invalid_argument(f"invalid Ed25519 public key: {e}")
 
         self._kty = KEY_TYPE_OKP
-        self._alg = "EdDSA"
+        self._accepted_algs = _narrow_algs(_OKP_ALGS, self._proto.alg)
 
     # ========================================
     # Accessor Methods
@@ -276,8 +272,20 @@ class ImmutableJwk:
         return self._public_key
 
     def alg(self) -> str:
-        """Return the JWT algorithm identifier (e.g., 'RS384', 'ES256', 'EdDSA')."""
-        return self._alg
+        """
+        Return the alg the JWK declares (e.g., 'RS256', 'ES256', 'EdDSA'), or ""
+        when it declares none. Never a guess: use accepted_algs() to verify.
+        """
+        return self._proto.alg
+
+    def accepted_algs(self) -> tuple:
+        """
+        Return the JWT algs this key verifies, from the key itself: RSA
+        ('RS256', 'RS384', 'RS512'), EC by curve (P-256 'ES256', P-384 'ES384',
+        P-521 'ES512'), Ed25519 'EdDSA'; only the declared alg when it declares
+        one.
+        """
+        return self._accepted_algs
 
     def kty(self) -> int:
         """Return the key type (KEY_TYPE_RSA, KEY_TYPE_EC, or KEY_TYPE_OKP)."""

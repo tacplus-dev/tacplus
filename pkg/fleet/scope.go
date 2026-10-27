@@ -97,10 +97,10 @@ func NewScoper(root string) (*Scoper, error) {
 	return sc, nil
 }
 
-// Scope computes the scope of project `self` (a registry service name) with
-// the given tacplus.yaml depends; wholeFleet is grpc-servers/grpc-clients:
-// all. A project the tree does not declare (a client) is scoped by its
-// depends alone.
+// Scope computes the scope of project `self` (a registry service name, or the
+// proto package that declares it) with the given tacplus.yaml depends;
+// wholeFleet is grpc-servers/grpc-clients: all. A project the tree does not
+// declare (a client) is scoped by its depends alone.
 //
 // Declaration is enforced at the project's own boundary: a file self owns
 // may only reach another service's contract when that service is in
@@ -108,6 +108,7 @@ func NewScoper(root string) (*Scoper, error) {
 // not self's (letsencrypt → kernel → opa needs only kernel in letsencrypt's
 // depends).
 func (sc *Scoper) Scope(self string, depends []string, wholeFleet bool) (*Scope, error) {
+	self = sc.serviceOf(self)
 	if wholeFleet || !sc.holdsOthers(self) {
 		return &Scope{Files: append([]string(nil), sc.files...)}, nil
 	}
@@ -240,6 +241,23 @@ func sortedKeys(m map[string]bool) []string {
 // holdsOthers reports whether the tree declares a service other than self:
 // a project's own proto dir holds only its own, and there is nothing to
 // scope; a fleet's merged tree holds every service.
+// serviceOf resolves the project's name to its registry service name. The
+// runner names a project by its proto package (tacplus.yaml pkg), which need
+// not be its registry name (package notesapi, (spec.service) name "notes").
+func (sc *Scoper) serviceOf(self string) string {
+	if _, ok := sc.ownerOf[self]; ok {
+		return self
+	}
+	for _, rel := range sc.files {
+		if s := sc.fileService[rel]; s != "" {
+			if pm := packageRe.FindStringSubmatch(sc.texts[rel]); pm != nil && pm[1] == self {
+				return s
+			}
+		}
+	}
+	return self
+}
+
 func (sc *Scoper) holdsOthers(self string) bool {
 	for _, n := range sc.fileService {
 		if n != self {

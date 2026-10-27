@@ -170,3 +170,38 @@ func readFile(t *testing.T, p string) string {
 	}
 	return string(b)
 }
+
+// The runner names the project by its proto package (tacplus.yaml pkg's last
+// segment), which need not be its registry name: example/ declares
+// package notesapi with (spec.service) = {name: "notes"}.
+func TestScopeNamesTheProjectByItsPackage(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "notes", "notes.proto"), `syntax = "proto3";
+package notesapi;
+import "sys/spec.proto";
+option (spec.service) = {name: "notes"};
+message PingRequest { string m = 1; }
+service Notes {
+  option (spec.service_s2s) = {auth_services: ["*"]};
+  rpc Ping(PingRequest) returns (PingRequest);
+}
+`)
+	write(t, filepath.Join(root, "client", "notesclient.proto"), `syntax = "proto3";
+package notesclient;
+import "sys/spec.proto";
+option (spec.service) = {name: "notesclient"};
+message M { string m = 1; }
+`)
+	write(t, filepath.Join(root, "registry.yaml"), "services:\n    - {name: notes, id: 1}\n    - {name: notesclient, id: 3}\n")
+	sc, err := NewScoper(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := sc.Scope("notesapi", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.Files, " ") != "notes/notes.proto" {
+		t.Fatalf("notesapi's scope = %v", got.Files)
+	}
+}

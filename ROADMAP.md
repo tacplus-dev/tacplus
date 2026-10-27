@@ -8,6 +8,7 @@ Latest release: v2.4.1 (2026-10-27). 2.4 is the line with the global registry an
 Release lines with branches: 2.0 through 2.4.
 
 ## Next
+- Kitchensink: formal verification and fuzzing once per release on a covering proto set; coverage check in every service build; no harnesses in services (#196, after #193)
 - Move CI, images, releases and nightlies from GitHub Actions to the GitLab build pipeline (#194, after looper#17)
 - No tacplus image: `build:X.Y` per line with a `tacplus` script that fetches and verifies the newest binary; verify (Kani, JBMC) and fuzzing run there; Go not formally verified (#193)
 - Fetch layer: authenticate GitHub clones with GH_TOKEN, only to github.com (#191)

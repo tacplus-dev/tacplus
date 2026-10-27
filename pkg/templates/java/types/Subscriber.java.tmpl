@@ -113,11 +113,13 @@ public class {{.ClassName}} {
     /**
      * Subscribe opens a bidi stream to event-bus and calls handler for each
      * received event. It reconnects with exponential backoff on stream errors.
+     * The consumer group resumes from its committed offset; a group that has
+     * never committed starts from the earliest available offset.
      *
      * <p>Blocks until interrupted or a non-retryable error occurs.
      */
     public void subscribe(Handler handler) throws InterruptedException {
-        subscribe(handler, true, false, -1);
+        subscribe(handler, false, false, -1);
     }
 
     private volatile java.util.concurrent.atomic.AtomicBoolean upFlag;

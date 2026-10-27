@@ -33,6 +33,30 @@ func TestRustSubscriberExposesSubscribeOptions(t *testing.T) {
 	}
 }
 
+// subscribe() is what the generated ServiceManager calls, so its default is
+// every rust service's restart behaviour. It must send no start_from, so the
+// named group resumes from its committed offset: sending EARLIEST made
+// eventbus seek to the beginning and hand the whole topic over again after
+// every rollout.
+func TestRustSubscriberDefaultResumesFromCommittedOffset(t *testing.T) {
+	tmplStr, err := loadTemplate("subscriber.rs.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate: %v", err)
+	}
+
+	for _, want := range []string{
+		"pub fn resume() -> Self {\n        Self { earliest: false, latest: false, offset: None }",
+		"self.subscribe_with(handler, SubscribeOptions::resume()).await",
+	} {
+		if !strings.Contains(tmplStr, want) {
+			t.Fatalf("Rust subscriber's default must resume from the committed offset; missing %q", want)
+		}
+	}
+	if strings.Contains(tmplStr, "self.subscribe_with(handler, SubscribeOptions::earliest()).await") {
+		t.Fatal("Rust subscriber's default must not send EARLIEST")
+	}
+}
+
 // The Rust ServiceManager must expose audience-scoped token acquisition so
 // handlers can build custom subscribers without duplicating the identity plane.
 func TestRustServiceManagerExposesSubscriberPlumbing(t *testing.T) {

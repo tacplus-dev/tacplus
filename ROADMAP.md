@@ -21,6 +21,7 @@ Release lines with branches: 2.0 through 2.4.
 - Make the three well-known platform names proto-declared instead of baked into the generator (#1) (needs Jody's decision)
 
 ## Later
+- Fleet builder gathers service webapp pieces and clients, builds the merged webapp and the fleet's gateway (#195, after #180; contract needs Jody's OK)
 - Split the build image by language (build-go, build-rust, build-java, …), each with its toolchain and verifier (tacplus-dev/roadmap:decisions/tacplus-images-2026-10-27.md)
 - Retire the linked claim from the generated namespace backstop (#171), blocked on #170 and tacplus-dev/kernel#4
 - diskstore archive: stable member id across restarts (#143), blocked on #163

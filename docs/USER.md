@@ -143,7 +143,7 @@ that differ only in segments before the last (e.g. `com.a.identity` vs
 `com.b.identity`) produce **the same** native name for rust/ts/python/swift/csharp.
 Proto package names must be globally unique; choose last segments that are
 unique across the system to avoid collisions in these languages.
-| `src` | string | No | Primary proto source — local path or git URL. No default — must be supplied via `--src` or `tacplus.yaml`. |
+| `src` | string | No | Primary proto source — local path or git URL. No default — must be supplied via `--src` or `tacplus.yaml`. In a GitLab CI job an `https://` URL on `CI_SERVER_HOST` is fetched with `CI_JOB_TOKEN`; no other host receives a credential. |
 | `layer` | string | No | Layer name of `src` (e.g. `app`). Carried as `source` on every `registry.json` service and entitlement grant whose package comes from that tree. Not derived from the path, so a local checkout and a git URL label the same tree the same way. |
 | `sources` | list | No | Additional proto sources merged with `src` into one generation (e.g. a shared base plus a reusable service's protos). Each entry is a path/URL string, or a `{src: <path/URL>, layer: <name>}` mapping to name its layer. All sources form one proto tree; a file at the same path in two sources must be byte-identical (deduplicated; the first source listed keeps the file's layer) or it is a hard error, and `dependencies.yaml` is merged across sources (conflicting pins error). Repeatable `--src` on the CLI overrides `src`+`sources` and its sources carry no layer. |
 | `import` | string | No | Path to base config to import (resolved relative to this file) |

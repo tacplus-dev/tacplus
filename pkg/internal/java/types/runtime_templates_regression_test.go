@@ -256,6 +256,22 @@ func TestJavaSubscriberRetriesAuthErrors(t *testing.T) {
 	}
 }
 
+// subscribe(handler) is what the generated ServiceManager calls, so its
+// default is every java service's restart behaviour. It must send no
+// start_from, so the named group resumes from its committed offset: sending
+// EARLIEST made eventbus seek to the beginning and hand the whole topic over
+// again after every restart.
+func TestJavaSubscriberDefaultResumesFromCommittedOffset(t *testing.T) {
+	rendered := readJavaTemplate(t, "java/types/Subscriber.java.tmpl")
+
+	if !strings.Contains(rendered, "subscribe(handler, false, false, -1);") {
+		t.Fatal("Java subscriber's default subscribe(handler) must send no start_from")
+	}
+	if strings.Contains(rendered, "subscribe(handler, true, false, -1);") {
+		t.Fatal("Java subscriber's default subscribe(handler) must not send EARLIEST")
+	}
+}
+
 // F-18a: inflow must be handler-paced — onMessage only enqueues; the next
 // message is requested after the handler finishes processing the previous one.
 func TestJavaSubscriberBackpressure(t *testing.T) {

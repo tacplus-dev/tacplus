@@ -14,6 +14,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   every bootstrap exchange because the Java k8s minter sends no continuity token, so instance-keyed state (not only
   the archive, which `archive.member` now decouples) starts afresh on each restart. Stabilising the id itself changes
   minting and restore semantics in every language; it was split out of #143 and needs its own decision.
+- **Writer-side pruning of the archive** (2026-10-28, #144, deferred by decision of 2026-10-26): retention is a
+  bucket lifecycle rule today (docs/API.md, Archive to an object store, Retention), which can only expire by age and
+  so deletes a stopped writer's whole chain once the age passes. Pruning after a checkpoint ships (an opt-in
+  `archive.retain_checkpoints`, an `ArchiveSink.delete`, delete only after the new checkpoint is durable) would keep
+  exactly the live chain. Revisit once #99 brings the archive to Go and Rust, so the sink interface changes once for
+  all three; it needs a new issue then.
 - **Go and Rust ServiceManager archive wiring honours `archive.member`** (2026-10-28, #143): Go and Rust have the
   archive layer as a library only (`roadmap/LANGUAGE_PARITY.md`); when their ServiceManager reads `archive` (#99),
   it must take the member from `archive.member` before the instance id, as Java's `ArchiveShipper.member` does.

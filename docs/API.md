@@ -437,6 +437,28 @@ GCS sink and their ServiceManager does not read `archive` (see
   for the consumer's `Inserter` to honour. A missing segment is an error, never a
   partial restore. Restore must name the writer's `member`: its `archive.member`,
   or, when that is unset, the instance id it had when it wrote.
+- **Retention.** The writer never deletes from the archive, so it grows by one
+  segment per rotation or roll and one checkpoint per checkpoint interval. Only
+  the live chain is needed to restore: the newest checkpoint and the segments
+  after its position. Every older checkpoint and segment is dead weight. Expire
+  it with the bucket's own lifecycle rule, an age-based delete scoped to the
+  archive prefix, for example
+  `{"rule":[{"action":{"type":"Delete"},"condition":{"age":7,"matchesPrefix":["<prefix>/"]}}]}`
+  applied with `gcloud storage buckets update gs://<bucket> --lifecycle-file=<file>`.
+  A lifecycle rule can only count an object's age; it cannot tell that the newest
+  checkpoint is the restore anchor. So the rule's age must exceed the
+  checkpoint interval by a wide margin, never just match it: the oldest object
+  in the live chain is the newest checkpoint, which is up to one
+  `checkpoint_interval_seconds` old, more when a checkpoint's snapshot fails (it
+  waits for the next interval) or uploads stall (watch `shipPending` and
+  `shipFailures`). If the rule's age is shorter than that, it deletes the newest
+  checkpoint, or segments after it, and restore fails with a missing object or
+  segment. A writer that stops stops checkpointing, so the rule then deletes its
+  whole chain once the age passes: make the age at least as long as you need to
+  be able to restore a writer that has been down. With the default daily
+  checkpoint, an age of 7 days or more keeps the live chain and still bounds the
+  bucket. The same applies to any age-based cleaner, such as one over a
+  `DirArchiveSink` directory.
 - **Recovery point.** A write is in the archive only once a rotation or a roll
   has shipped it. Writes made since then are lost with the volume, so the worst
   case is one `archive.segment_interval_seconds` when it is set, and one

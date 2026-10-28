@@ -623,6 +623,36 @@ func TestJavaServiceManagerRendersDiskStoreRollSchedulers(t *testing.T) {
 	}
 }
 
+// archive.member (#143), when set, names the archive member instead of the
+// instance id, so a restarted writer under a new instance id keeps its chain.
+func TestJavaServiceManagerArchiveMemberOverridesInstanceId(t *testing.T) {
+	rendered := renderJavaTemplateForTest(t, "ServiceManager.java.tmpl", javaSmTemplateData{
+		PackageBase:  "com.example",
+		ChassisBase:  "com.example.sys",
+		TypesBase:    "com.example.types",
+		SmPrefix:     "s2sm",
+		ServiceLabel: "demo",
+		DiskStores: []javaDiskStoreRuntimeEntry{{
+			StoreName:     "cred_pair",
+			MethodName:    "CredPair",
+			LogField:      "credPairLog",
+			HandlerGetter: "getCredPairStoreGrpcImpl",
+		}},
+		HasDiskStores: true,
+	})
+
+	for _, want := range []string{
+		"openDiskStoreLogs(config, getInstanceId())",
+		"private static DiskStoreLogs openDiskStoreLogs(Config config, String instanceId)",
+		"archiveMember = ArchiveShipper.member(archiveConfig.getMember(), instanceId);",
+		"archive, archivePrefix, archiveMember, \"cred_pair\", codec)",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered Java ServiceManager must take the archive member from archive.member; missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestJavaHealthReporterWrapsCheckerAndClassifiesFirstPublish(t *testing.T) {
 	rendered := readJavaTemplate(t, "java/chassis/healthreporter/HealthReporter.java.tmpl")
 

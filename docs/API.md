@@ -422,14 +422,21 @@ GCS sink and their ServiceManager does not read `archive` (see
   the snapshot are read under the same lock as a roll, so no roll can split them.
 - **Layout.** Objects live under `<prefix>/<member>/<store>/segments/<seq>` and
   `<prefix>/<member>/<store>/checkpoints/<seq>`, with `seq` zero-padded to twenty
-  digits so names sort in roll order. `member` is the writer's instance id, so
-  several writers ship independently.
+  digits so names sort in roll order. `member` is `archive.member` when set,
+  else the writer's instance id, so several writers ship independently. The
+  instance id can change on every restart (the Kubernetes minter is assigned a
+  fresh one), which starts a new chain under a new member; set `archive.member`
+  to a name that survives restarts, such as the StatefulSet pod name, to keep
+  one chain per writer. It must be one object-name segment (no `/`, not `.` or
+  `..`), or startup fails. It names the archive only, never the caller's
+  identity.
 - **Restore.** `ArchiveRestore.restore(sink, prefix, member, store, inserter)`
   loads the newest checkpoint, then replays every segment shipped after its
   position, in order, into an empty store. Records are deduplicated across the
   chain, last write wins, so a delete after the checkpoint arrives as a tombstone
   for the consumer's `Inserter` to honour. A missing segment is an error, never a
-  partial restore. Restore must name the writer's original `member`.
+  partial restore. Restore must name the writer's `member`: its `archive.member`,
+  or, when that is unset, the instance id it had when it wrote.
 - **Recovery point.** A write is in the archive only once a rotation or a roll
   has shipped it. Writes made since then are lost with the volume, so the worst
   case is one `archive.segment_interval_seconds` when it is set, and one

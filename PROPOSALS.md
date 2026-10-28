@@ -4,6 +4,19 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **A per-pod archive member from one shared config** (2026-10-28, #143): `grpcconfig.disk_persistence.archive.member`
+  is a config value, but a StatefulSet's pods usually share one ConfigMap, so each pod needs its own rendered config
+  (or a per-pod env override) to get its own member. The Java ServiceManager already takes a stable per-instance name
+  from `POD_NAME`, else the hostname, for the record topic's consumer group (`perInstanceConsumerGroup`). An opt-in
+  source for the member (a `member_from_pod_name` flag, say) would make the one-config case work. The default stays
+  the instance id: changing it would move existing archives.
+- **Continuity token for the Java Kubernetes minter** (2026-10-28, #143 option d): the instance id is reassigned on
+  every bootstrap exchange because the Java k8s minter sends no continuity token, so instance-keyed state (not only
+  the archive, which `archive.member` now decouples) starts afresh on each restart. Stabilising the id itself changes
+  minting and restore semantics in every language; it was split out of #143 and needs its own decision.
+- **Go and Rust ServiceManager archive wiring honours `archive.member`** (2026-10-28, #143): Go and Rust have the
+  archive layer as a library only (`roadmap/LANGUAGE_PARITY.md`); when their ServiceManager reads `archive` (#99),
+  it must take the member from `archive.member` before the instance id, as Java's `ArchiveShipper.member` does.
 - **The redo contract names its caller and host** (2026-10-28, #163 D5): `sys/redo.proto` admits
   `auth_services: ["stratum"]` and is hosted at label `"redo"`, as decided ("redo hosts it, Stratum calls it"), so a
   fleet that runs its record store under another name cannot call it, and tacplus's sys tree now carries two platform

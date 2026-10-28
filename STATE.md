@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-10-28 by looper (#198).
+Overwritten to stay current (loopers and agents). Last updated: 2026-10-28 by looper (#143).
 
 - **Version / line:** v2.5.0 (latest release, 2026-10-28, `release/2.5` cut at it); main is the 2.6 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -14,6 +14,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-10-28 by lo
   the new `(spec.service_s2s).host_tenant_owned`), and the Go server wrapper of a sys contract a service hosts by
   label (`minter.Minter` on kernel had none), and instance health for a service that serves only such a surface
   (#163 D5). JWK verification takes a missing alg from the token within the key's family (#179).
+  On main (2.6): `grpcconfig.disk_persistence.archive.member` names the Java archive member instead of the instance
+  id, so a restarted writer keeps its chain (#143; Go and Rust when their ServiceManager wires the archive).
 - **Released / deployed:** v2.5.0 is the newest release (binaries and checksums; images as before, until #193).
 - **Known gaps:** the redo service and the per-tenant Stratum that implement the redo contract are their repos'
   (tacplus-dev/redo#1, tacplus-dev/stratum#2). The gateway does not yet route by the route field nor stamp `McpRequest.tenant`

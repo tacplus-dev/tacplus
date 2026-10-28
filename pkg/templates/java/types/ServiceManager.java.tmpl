@@ -259,7 +259,7 @@ public class ServiceManager implements AutoCloseable {
         }
     }
 
-	    private static DiskStoreLogs openDiskStoreLogs(Config config, String member) {
+	    private static DiskStoreLogs openDiskStoreLogs(Config config, String instanceId) {
 	        if (!config.hasDiskPersistence()) {
 	            return new DiskStoreLogs(
 	                    Duration.ZERO, Duration.ZERO, Duration.ZERO{{if .DiskStores}},{{end}}
@@ -283,6 +283,7 @@ public class ServiceManager implements AutoCloseable {
 	        Codec codec = Codec.fromProtoInt(persistence.getCompressionValue());
 	        ArchiveSink archive = null;
 	        String archivePrefix = "";
+	        String archiveMember = instanceId;
 	        Duration checkpointInterval = Duration.ZERO;
 	        Duration segmentInterval = Duration.ZERO;
 	        if (persistence.hasArchive()) {
@@ -293,6 +294,7 @@ public class ServiceManager implements AutoCloseable {
 	            }
 	            archive = openArchiveSink(archiveConfig.getGcsBucket());
 	            archivePrefix = archiveConfig.getPrefix();
+	            archiveMember = ArchiveShipper.member(archiveConfig.getMember(), instanceId);
 	            long checkpointSeconds = archiveConfig.getCheckpointIntervalSeconds();
 	            checkpointInterval = Duration.ofSeconds(checkpointSeconds > 0 ? checkpointSeconds : 86400);
 	            // 0 leaves rotation off: the recovery point is then one roll.
@@ -302,7 +304,7 @@ public class ServiceManager implements AutoCloseable {
 	                rollInterval, checkpointInterval, segmentInterval{{if .DiskStores}},{{end}}
 	{{- range $i, $store := .DiskStores}}
 	                {{if $i}}, {{end}}attachArchive(DiskStores.open{{$store.MethodName}}Log(base, StorePath.ROOT_TENANT, archiveCount, codec),
-	                        archive, archivePrefix, member, "{{$store.StoreName}}", codec)
+	                        archive, archivePrefix, archiveMember, "{{$store.StoreName}}", codec)
 	{{- end}}
         );
     }

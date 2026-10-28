@@ -783,6 +783,59 @@ public class DiskStoreTest {
         }
     }
 
+    // archive.member, when set, names the archive member instead of the instance
+    // id; an unset member keeps the instance id. A configured member is one
+    // object-name segment, so a separator or a dot segment is refused.
+    private static void testArchiveMemberOverride() {
+        check(ArchiveShipper.member("pod-0", "uuid-1").equals("pod-0"), "a configured member wins over the instance id");
+        check(ArchiveShipper.member("", "uuid-1").equals("uuid-1"), "an unset member falls back to the instance id");
+        check(ArchiveShipper.member(null, "uuid-1").equals("uuid-1"), "a null member falls back to the instance id");
+        for (String bad : new String[] {"a/b", "/pod-0", ".", ".."}) {
+            try {
+                ArchiveShipper.member(bad, "uuid-1");
+                check(false, "archive member " + bad + " must be refused");
+            } catch (IllegalArgumentException expected) {
+                // good
+            }
+        }
+    }
+
+    // Two processes with different instance ids and the same archive.member ship
+    // one chain, and a restore under that member reproduces both processes' writes.
+    private static void testArchiveMemberStableAcrossRestart() throws Exception {
+        Path dir = Files.createTempDirectory("ds-member-");
+        try {
+            Path base = dir.resolve("data");
+            MemSink sink = new MemSink();
+            java.util.Map<String, String> live = new java.util.LinkedHashMap<>();
+            for (String instanceId : new String[] {"uuid-1", "uuid-2"}) {
+                String member = ArchiveShipper.member("pod-0", instanceId);
+                ArchiveShipper shipper = new ArchiveShipper(sink, "tenant", member, "verifying_keys", Codec.NONE, 1);
+                RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.NONE);
+                log.attachShipper(shipper);
+                try {
+                    put(log, live, instanceId, "{\"v\":1}");
+                    log.rotate();
+                    check(awaitDrained(shipper), "the rotation should reach the sink");
+                } finally {
+                    log.close();
+                    shipper.close();
+                }
+            }
+            check(sink.list("tenant/uuid-").isEmpty(), "nothing may ship under an instance id when archive.member is set");
+            check(sink.list("tenant/pod-0/verifying_keys/segments/").size() == 2,
+                    "both processes' segments ship under the member, got "
+                    + sink.list("tenant/pod-0/verifying_keys/segments/").size());
+
+            deleteRecursive(base);
+            java.util.Map<String, String> restored = new java.util.LinkedHashMap<>();
+            ArchiveRestore.restore(sink, "tenant", "pod-0", "verifying_keys", rec -> restored.put(rec.key, rec.payload));
+            check(restored.equals(live), "restore under the member must reproduce both processes' writes: " + restored);
+        } finally {
+            deleteRecursive(dir);
+        }
+    }
+
     private static int countKind(Path dir, String kind) throws IOException {
         try (var files = Files.list(dir)) {
             return (int) files.filter(p -> p.getFileName().toString().contains(kind)).count();
@@ -910,6 +963,8 @@ public class DiskStoreTest {
         testFoldedSegmentIsNotReplayed();
         testRotateRollArchiveRestore();
         testShipperFailureAcrossRotation();
+        testArchiveMemberOverride();
+        testArchiveMemberStableAcrossRestart();
 
         if (failures > 0) {
             System.err.println(failures + " DiskStore check(s) FAILED");

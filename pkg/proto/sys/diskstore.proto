@@ -86,4 +86,12 @@ message ArchiveConfig {
   int64 segment_interval_seconds = 4 [
     (spec.assert_duration) = DURATION_TYPE_NON_NEGATIVE
   ];
+
+  // member, when set, is the <member> segment of the archive layout instead of
+  // the writer's instance id. The instance id can change on every restart (the
+  // Kubernetes minter is assigned a fresh one), which starts a new chain; set a
+  // name that survives restarts, such as the StatefulSet pod name, to keep one
+  // chain per writer. It is one object-name segment (no "/", not "." or "..")
+  // and names the archive only: it is never the caller's identity.
+  string member = 5 [(spec.assert_max_size) = 253];
 }

@@ -97,6 +97,22 @@ public final class ArchiveShipper implements AutoCloseable {
         this.worker.start();
     }
 
+    /**
+     * The archive member: {@code configured} (grpcconfig.disk_persistence.archive.member)
+     * when set, else the writer's {@code instanceId}. A configured member is one
+     * object-name segment, so a "/" or a dot segment is refused.
+     */
+    public static String member(String configured, String instanceId) {
+        if (configured == null || configured.isEmpty()) {
+            return instanceId;
+        }
+        if (configured.contains("/") || configured.equals(".") || configured.equals("..")) {
+            throw new IllegalArgumentException(
+                    "grpcconfig.disk_persistence.archive.member must be one path segment, got \"" + configured + "\"");
+        }
+        return configured;
+    }
+
     /** The object-name prefix of one store's archive: {@code <prefix>/<member>/<store>/}. */
     static String storeRoot(String prefix, String member, String store) {
         if (member == null || member.isEmpty()) {

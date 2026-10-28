@@ -12,7 +12,7 @@ generates both, starts the server and drives it with the client.
 ## Run it
 
 You need Go, Node and `protoc`, plus the protoc plugins for Go and
-TypeScript (see [what `tacplus build` needs](install.md#what-tacplus-build-needs)),
+TypeScript (see [what `tacplus build` needs](https://github.com/tacplus-dev/tacplus/blob/main/docs/INSTALL.md#what-tacplus-build-needs)),
 and [`just`](https://github.com/casey/just).
 
 ```bash

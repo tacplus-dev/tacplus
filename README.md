@@ -104,18 +104,18 @@ just install        # generate, build and go install the tacplus binary
 
 `go install github.com/tacplus-dev/tacplus@latest` does not work: the
 compiled spec package is generated at build time, not committed.
-[tacplus.dev/install](https://tacplus.dev/install/) has the per-platform
-commands and what `tacplus build` needs on `PATH`.
+[docs/INSTALL.md](docs/INSTALL.md) has the per-platform commands and what
+`tacplus build` needs on `PATH`.
 
 ## Learn more
 
-Everything else is on [tacplus.dev](https://tacplus.dev):
+Everything else:
 
-- [Quick start](https://tacplus.dev/quickstart/): generate and run the example, a Go server and a TypeScript client.
-- [Languages](https://tacplus.dev/languages/): what each of the seven targets gets.
-- [User guide](https://tacplus.dev/guide/user-guide/): annotations, `tacplus.yaml`, generated output, implementer rules.
-- [Annotation reference](https://tacplus.dev/reference/annotations/): every `(spec.*)` option.
-- [The deck](https://tacplus.dev/deck/): the problem, how tacplus solves it, and what the hosting platform must provide.
+- [Quick start](example/README.md): generate and run the example, a Go server and a TypeScript client.
+- [Languages](https://tacplus.dev/build/#pick-a-language): what each of the seven targets gets.
+- [User guide](docs/USER.md): annotations, `tacplus.yaml`, generated output, implementer rules.
+- [Annotation reference](pkg/proto/sys/spec.proto): every `(spec.*)` option, in the proto that defines them.
+- [tacplus.dev](https://tacplus.dev/): the whole fleet the compiler is part of, and how its pieces fit.
 
 ## Contributing and security
 

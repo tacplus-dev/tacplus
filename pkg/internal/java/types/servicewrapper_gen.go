@@ -213,6 +213,10 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				if m.TargetNamespaceField != "" && !m.AuthAnyUser {
 					hasMethodAuth = true
 				}
+				// RPC_FLAG_ANY_TENANT is registered beside auth_services.
+				if m.AnyTenant {
+					hasMethodAuth = true
+				}
 				if m.HasDeviceGate() {
 					hasRequiresDevice = true
 				}
@@ -752,6 +756,10 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 	// Build registerMethodAuth body: collect per-method auth_services and target namespace metadata.
 	// Method-level auth_services overrides service-level.
 	var methodAuthLines []string
+	// hasRouteTenant / hasAnyTenant emit the wrapper's tenant-routing helpers
+	// (issue #170) only for a service that has a routed rpc, so a platform
+	// service's wrapper is unchanged.
+	hasRouteTenant, hasAnyTenant := false, false
 	// The handler-interface declarations of the NON-tool rpcs, kept so the
 	// generated MCP self-test's stub can implement the whole interface with the
 	// wrapper's own signatures rather than a second renderer's guess at them.
@@ -929,6 +937,16 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 				"        authorizer.setMethodTargetNamespaceField(%q, %q);",
 				methodAuthKey, method.TargetNamespaceField))
 		}
+
+		// RPC_FLAG_ANY_TENANT opens this rpc's tenant door, and nothing else.
+		if method.AnyTenant {
+			methodAuthLines = append(methodAuthLines, fmt.Sprintf(
+				"        authorizer.setMethodAnyTenant(%q);", methodAuthKey))
+			hasAnyTenant = true
+		}
+		if method.RouteField != nil {
+			hasRouteTenant = true
+		}
 	}
 	handlerInterface.WriteString("    }\n")
 	grpcMethods.WriteString(javaTenantPinClass(tenantPins))
@@ -1019,6 +1037,9 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		RequiresAuth         bool
 		AuthorizerFQN        string
 		HasRequiresDevice    bool
+		HasRouteTenant       bool
+		HasAnyTenant         bool
+		RouteTenantFQN       string
 	}{
 		Header:               header.GeneratedHeader(consts.LangJava, svc.ProtoFile),
 		FullPackage:          fullPackage,
@@ -1042,6 +1063,11 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		// HasRequiresDevice emits the approval-check seam: the ApprovalCheck
 		// interface, its setter and the fail-closed brokerApproval helper.
 		HasRequiresDevice: hasRequiresDevice,
+		// HasRouteTenant emits checkRouteTenant, the (spec.rpc).route_field
+		// backstop; HasAnyTenant the RPC_FLAG_ANY_TENANT token-only check.
+		HasRouteTenant: hasRouteTenant,
+		HasAnyTenant:   hasAnyTenant,
+		RouteTenantFQN: svc.Config.JavaPackageBase + ".chassis.serviceconnection.RouteTenant",
 	}
 
 	t, err := template.New("servicewrapper").Parse(tmpl)
@@ -1085,6 +1111,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			// Caller the surface is bound to and the SDK itself.
 			Imports:             javaMcpImports(typesImport, serviceManagerImport),
 			NonToolHandlerDecls: nonToolHandlerDecls,
+			RouteTenantFQN:      svc.Config.JavaPackageBase + ".chassis.serviceconnection.RouteTenant",
 		}
 		if err := writeJavaMcpDispatchFile(targetService, tools, svc.OutputDir, mcpParams); err != nil {
 			return false, err
@@ -1453,6 +1480,27 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 	if target := strings.TrimSpace(method.TargetNamespaceField); target != "" {
 		authAnyUserCall = fmt.Sprintf("checkAuthenticate(%q)", target)
 	}
+	// The token-only check a client-streaming rpc opens its stream with, ahead
+	// of per-message target_namespace_field authorization.
+	streamOpenAuthenticate := "checkAuthenticate()"
+	// RPC_FLAG_ANY_TENANT: the token-only check runs under this rpc's method
+	// key, which is what lets the authorizer skip the tenant door for it.
+	if method.AnyTenant {
+		authAnyUserCall = fmt.Sprintf("checkAuthenticateAnyTenant(%q)", authMethod)
+		if target := strings.TrimSpace(method.TargetNamespaceField); target != "" {
+			authAnyUserCall = fmt.Sprintf("checkAuthenticateAnyTenant(%q, %q)", authMethod, target)
+		}
+		streamOpenAuthenticate = fmt.Sprintf("checkAuthenticateAnyTenant(%q)", authMethod)
+	}
+	// (spec.rpc).route_field backstop: after request validation, before the
+	// handler, on every inbound message. "" for a platform rpc.
+	routeBackstop := func(valueExpr, indent string) string {
+		if method.RouteField == nil || handlerEmpty {
+			return ""
+		}
+		return fmt.Sprintf("%[1]s// (spec.rpc).route_field: refuse a request routed to another tenant than this instance serves.\n%[1]scheckRouteTenant(%[2]q, %[3]s.get%[4]s());\n",
+			indent, method.RouteField.Field, valueExpr, javaPascalField(method.RouteField.Field))
+	}
 	authAnyUserComment := "// Check authentication (auth_any_user: any authenticated caller)"
 	if strings.TrimSpace(method.TargetNamespaceField) != "" {
 		authAnyUserComment = "// Check authentication (auth_any_user: fixed namespace target)"
@@ -1618,6 +1666,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             %s.validate%s(request);
 `, inputHelpers, method.InputType)
 	}
+	streamInputValidation += routeBackstop("request", "            ")
 	// (spec.principal)/(spec.namespace) on the request of a server-streaming
 	// shape. The request is still a single message on Tier-2, Tier-3, WATCH and
 	// plain server-streaming, so this is the unary check verbatim; only the
@@ -1649,7 +1698,8 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 					handlerObserverExpr, inputType, g, responseObserverExpr)
 			}
 		}
-		if !needsStreamMessageAuth && (inputHelpers == "" || handlerEmpty) {
+		backstop := strings.TrimSpace(routeBackstop("value", ""))
+		if !needsStreamMessageAuth && (inputHelpers == "" || handlerEmpty) && backstop == "" {
 			return handlerObserverExpr
 		}
 		var checks []string
@@ -1658,6 +1708,10 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		}
 		if inputHelpers != "" && !handlerEmpty {
 			checks = append(checks, fmt.Sprintf("%s.validate%s(value);", inputHelpers, method.InputType))
+		}
+		if backstop != "" {
+			// Every inbound message, after its validation.
+			checks = append(checks, strings.ReplaceAll(backstop, "\n", "\n                "))
 		}
 		return fmt.Sprintf("validatingRequestObserver(%s, value -> {\n                %s\n            }, %s)", handlerObserverExpr, strings.Join(checks, "\n                "), responseObserverExpr)
 	}
@@ -1675,6 +1729,9 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			pageInputValidation = fmt.Sprintf(`
             // Validate request before decoding the page token or invoking the handler.
             %s.validate%s(request);`, inputHelpers, method.InputType)
+		}
+		if g := routeBackstop("request", "            "); g != "" {
+			pageInputValidation += "\n" + strings.TrimSuffix(g, "\n")
 		}
 		// (spec.principal)/(spec.namespace): stamp or refuse before the page
 		// token is decoded, so the window the handler is asked for is already
@@ -1831,6 +1888,9 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			inputValidation = fmt.Sprintf(`
             // Validate request before invoking the handler.
             %s.validate%s(request);`, inputHelpers, method.InputType)
+		}
+		if g := routeBackstop("request", "            "); g != "" {
+			inputValidation += "\n" + strings.TrimSuffix(g, "\n")
 		}
 		// (spec.store_epoch): stamp or refuse before the handler sees the
 		// request. Runs after validation — a request that is not well-formed is
@@ -2664,7 +2724,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			authCheckNoReq = fmt.Sprintf(`        // Check authentication before per-message target namespace authorization
         java.util.Map<String, String> callerIdentity;
         try {
-            callerIdentity = checkAuthenticate();
+            callerIdentity = %s;
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return new StreamObserver<%s>() {
@@ -2672,7 +2732,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
                 @Override public void onError(Throwable t) {}
                 @Override public void onCompleted() {}
             };
-        }`, inputType, inputType)
+        }`, streamOpenAuthenticate, inputType, inputType)
 		} else {
 			authCheckNoReq = fmt.Sprintf(`        // Check authorization
         java.util.Map<String, String> callerIdentity;
@@ -2759,6 +2819,31 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		if method.Name == parser.McpCarrierRpcName(serviceName) {
 			mcpCarrierCall = fmt.Sprintf("%sMcp.serve(handler, caller, %%s)", serviceName)
 		}
+		// The carrier of a tenant-routed service (issue #170): the session's
+		// tenant is resolved from the caller's token at open, and every inbound
+		// frame is stamped with it (or refused for naming another) OUTSIDE the
+		// per-message checks, so the route backstop checks the stamped tenant.
+		// Both "" otherwise.
+		sessionTenantOpen, carrierInputObserver := "", clientStreamInputObserver
+		if mcpCarrierCall != "" && method.RouteField != nil {
+			sessionTenantOpen = fmt.Sprintf(`
+        // The session's tenant is the verified caller's; a caller of none opens no session.
+        final String __sessionTenant;
+        try {
+            __sessionTenant = %[1]sMcp.sessionTenant(caller);
+        } catch (ProtoException e) {
+            responseObserver.onError(toGrpcError(e));
+            return new StreamObserver<%[2]s>() {
+                @Override public void onNext(%[2]s value) {}
+                @Override public void onError(Throwable t) {}
+                @Override public void onCompleted() {}
+            };
+        }`, serviceName, inputType)
+			carrierInputObserver = func(handlerObserverExpr, responseObserverExpr string) string {
+				return fmt.Sprintf("scopingRequestObserver(%s, value -> %sMcp.stampTenant(__sessionTenant, value), %s)",
+					clientStreamInputObserver(handlerObserverExpr, responseObserverExpr), serviceName, responseObserverExpr)
+			}
+		}
 		var authCheckNoReq string
 		if authDisabled {
 			// Nothing verifies a caller here, so accounting records carry no identity.
@@ -2780,7 +2865,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			authCheckNoReq = fmt.Sprintf(`        // Check authentication before per-message target namespace authorization
         java.util.Map<String, String> callerIdentity;
         try {
-            callerIdentity = checkAuthenticate();
+            callerIdentity = %s;
         } catch (ProtoException e) {
             responseObserver.onError(toGrpcError(e));
             return new StreamObserver<%s>() {
@@ -2788,7 +2873,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
                 @Override public void onError(Throwable t) {}
                 @Override public void onCompleted() {}
             };
-        }`, inputType, inputType)
+        }`, streamOpenAuthenticate, inputType, inputType)
 		} else {
 			authCheckNoReq = fmt.Sprintf(`        // Check authorization
         java.util.Map<String, String> callerIdentity;
@@ -2810,7 +2895,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			if mcpCarrierCall != "" {
 				accountedDelegate = fmt.Sprintf(mcpCarrierCall, accountedStreamResponseObserver)
 			}
-			handlerObserverExpr := clientStreamInputObserver(accountedDelegate, "__accountingResponseObserver")
+			handlerObserverExpr := carrierInputObserver(accountedDelegate, "__accountingResponseObserver")
 			return fmt.Sprintf(`    @Override
     public StreamObserver<%s> %s(StreamObserver<%s> responseObserver) {
 %s
@@ -2818,7 +2903,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
         // Extract caller identity and request ID
         String requestId = Auth.requestIdFromContext();
         Caller caller = Auth.callerFromContext();
-        logger.debug("rpc method={} request_id={}", "%s", requestId);
+        logger.debug("rpc method={} request_id={}", "%s", requestId);%s
         long startTime = System.currentTimeMillis();
         AccountingMethod accountingMethod = %s;
         java.util.concurrent.atomic.AtomicBoolean __accounted = new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -2836,7 +2921,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             };
         }
     }
-	`, inputType, methodName, outputType, authCheckNoReq, fullMethod,
+	`, inputType, methodName, outputType, authCheckNoReq, fullMethod, sessionTenantOpen,
 				accountingMethodExpr, outputType, inputType, handlerObserverExpr,
 				inputType, inputType)
 		}
@@ -2866,7 +2951,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
         // Extract caller identity and request ID
         String requestId = Auth.requestIdFromContext();
 	        Caller caller = Auth.callerFromContext();
-	        logger.debug("rpc method={} request_id={}", "%s", requestId);%s
+	        logger.debug("rpc method={} request_id={}", "%s", requestId);%s%s
 	        try {
 	            return %s;
 	        } catch (ProtoException e) {
@@ -2878,8 +2963,8 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             };
         }
     }
-	`, inputType, methodName, outputType, authCheckNoReq, fullMethod, callerGuard,
-			clientStreamInputObserver(delegate, "responseObserver"),
+	`, inputType, methodName, outputType, authCheckNoReq, fullMethod, callerGuard, sessionTenantOpen,
+			carrierInputObserver(delegate, "responseObserver"),
 			inputType, inputType)
 	}
 

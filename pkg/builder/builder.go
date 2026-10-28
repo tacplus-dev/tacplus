@@ -206,6 +206,9 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidatePinnedTenant(dp); err != nil {
 		return err
 	}
+	if err := parser.ValidateTenantRouting(dp); err != nil {
+		return err
+	}
 	if err := parser.ValidateAuthAnnotations(dp); err != nil {
 		return err
 	}

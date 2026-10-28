@@ -318,6 +318,29 @@ func rustW2SRequestValidation(varName, fullType string) string {
 `, varName)
 }
 
+// rustTenantIDLen is the length of a tid: exactly this many characters of
+// [0-9a-z] (servicemanager::tenant_route::TENANT_ID_LEN in the chassis).
+const rustTenantIDLen = 8
+
+// rustW2SRouteCheck refuses, before anything is sent, a routed rpc's request
+// whose (spec.rpc).route_field is empty or not a tid. The gateway routes the
+// call by that field; the client never sends one it would refuse. Inline,
+// because a W2S-only build carries no chassis crates. Empty for a platform rpc.
+func rustW2SRouteCheck(method *parser.MethodInfo, varName string) string {
+	if method.RouteField == nil {
+		return ""
+	}
+	field := method.RouteField.Field
+	return fmt.Sprintf(`        {
+            let tenant = &%[1]s.%[2]s;
+            if !(tenant.len() == %[3]d && tenant.bytes().all(|b| b.is_ascii_digit() || b.is_ascii_lowercase())) {
+                return Err(tonic::Status::invalid_argument(%[4]s));
+            }
+        }
+`, varName, rustRequestFieldIdent(field), rustTenantIDLen,
+		rustQuote(fmt.Sprintf("route field %q is empty or not a tenant id (exactly %d characters of [0-9a-z])", field, rustTenantIDLen)))
+}
+
 func rustW2SResponseValidation(varName, fullType string) string {
 	if !rustW2SCanValidate(fullType) {
 		return ""
@@ -359,10 +382,10 @@ func generateRustW2SClientMethod(svc *parser.ServiceInfo, method *parser.MethodI
 	bodyExpr := rustW2SBodyExpr("req", isEmptyInput)
 	authRequired := !(svc.AuthDisabled || method.AuthDisabled)
 	authRequiredRust := fmt.Sprintf("%t", authRequired)
-	requestValidation := rustW2SRequestValidation("req", method.FullInputType)
+	requestValidation := rustW2SRequestValidation("req", method.FullInputType) + rustW2SRouteCheck(method, "req")
 	responseValidation := rustW2SResponseValidation("response.get_ref()", method.FullOutputType)
 	sseValidation := rustW2SValidationClosure(method.FullOutputType, outputType)
-	bidiRequestValidation := rustW2SRequestValidation("msg", method.FullInputType)
+	bidiRequestValidation := rustW2SRequestValidation("msg", method.FullInputType) + rustW2SRouteCheck(method, "msg")
 	bidiResponseValidation := rustW2SBidiResponseValidation("resp", method.FullOutputType)
 	streamResponseValidation := rustW2SResponseValidation("resp", method.FullOutputType)
 

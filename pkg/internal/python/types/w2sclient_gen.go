@@ -269,6 +269,7 @@ func generatePyW2SClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		PbImportFrom         string
 		ExceptionsImportFrom string
 		CrossPackageImports  string
+		RouteHelpers         string
 		ServiceName          string
 		ClientName           string
 		Methods              string
@@ -279,6 +280,7 @@ func generatePyW2SClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		PbImportFrom:         pbImportFrom,
 		ExceptionsImportFrom: pyExceptionsImportFrom(dots),
 		CrossPackageImports:  crossPkgImports.String(),
+		RouteHelpers:         pyRouteHelpers(targetService, pyExceptionsImportFrom(dots)),
 		ServiceName:          svc.ServiceName,
 		ClientName:           clientName,
 		Methods:              methods.String(),
@@ -326,6 +328,20 @@ func generatePyW2SClientMethod(svc *parser.ServiceInfo, method *parser.MethodInf
 	streamRequestValidation := pyW2SValidationStatement("req", method.FullInputType, method.InputType, servicePackage, "                ")
 	bidiRequestValidation := pyW2SValidationStatement("msg", method.FullInputType, method.InputType, servicePackage, "        ")
 	responseValidator := pyW2SValidationArg(method.FullOutputType, method.OutputType, servicePackage)
+	// A routed rpc's request is checked AFTER validation, BEFORE any send; a
+	// routed stream is pinned to the tenant its first message names.
+	requestValidation += pyRouteCheck(method, "request", "        ")
+	streamRouteOpen, bidiRouteInit := "", ""
+	if method.RouteField != nil {
+		streamRouteOpen = fmt.Sprintf("        route = _RoutePin(%q)\n", method.RouteField.Field)
+		streamRequestValidation += "                route.check(req)\n"
+		bidiRequestValidation += "        self._route.check(msg)\n"
+		bidiRouteInit = fmt.Sprintf(`    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._route = _RoutePin(%q)
+
+`, method.RouteField.Field)
+	}
 
 	if method.ClientStreaming && method.ServerStreaming {
 		handleType := strutil.ToPascalCase(method.Name) + "W2SHandle"
@@ -343,10 +359,10 @@ func generatePyW2SClientMethod(svc *parser.ServiceInfo, method *parser.MethodInf
 		handleCode := fmt.Sprintf(`class %s(_W2SBidiHandle):
     """Handle for the managed %s W2S bidirectional stream."""
 
-    async def send(self, msg: %s) -> None:
+%s    async def send(self, msg: %s) -> None:
 %s        body = %s
         await self._send_body(body)
-`, handleType, method.Name, inputType, bidiRequestValidation, bodyExpr)
+`, handleType, method.Name, bidiRouteInit, inputType, bidiRequestValidation, bodyExpr)
 		return pyW2SMethodResult{method: methodCode, extraType: handleCode}
 	}
 
@@ -354,25 +370,25 @@ func generatePyW2SClientMethod(svc *parser.ServiceInfo, method *parser.MethodInf
 		if isEmptyOutput {
 			return pyW2SMethodResult{method: fmt.Sprintf(`    async def %s(self, request_iterator) -> None:
         """Call %s.%s via W2S WebSocket client streaming."""
-        async with self._connect_websocket("%s") as ws:
+%s        async with self._connect_websocket("%s") as ws:
             await self._send_start_frame(ws, auth_required=%s)
             async for req in self._iterate_requests(request_iterator):
 %s                body = %s
                 await self._send_message_frame(ws, body, auth_required=%s)
             await self._send_complete_frame(ws)
             await self._recv_ws_unit(ws)
-`, methodSnake, svc.Name, method.Name, method.HttpPath, authRequiredPy, streamRequestValidation, pyW2SBodyExpr("req", isEmptyInput), authRequiredPy)}
+`, methodSnake, svc.Name, method.Name, streamRouteOpen, method.HttpPath, authRequiredPy, streamRequestValidation, pyW2SBodyExpr("req", isEmptyInput), authRequiredPy)}
 		}
 		return pyW2SMethodResult{method: fmt.Sprintf(`    async def %s(self, request_iterator) -> %s:
         """Call %s.%s via W2S WebSocket client streaming."""
-        async with self._connect_websocket("%s") as ws:
+%s        async with self._connect_websocket("%s") as ws:
             await self._send_start_frame(ws, auth_required=%s)
             async for req in self._iterate_requests(request_iterator):
 %s                body = %s
                 await self._send_message_frame(ws, body, auth_required=%s)
             await self._send_complete_frame(ws)
             return await self._recv_ws_json(ws, %s, %s)
-`, methodSnake, outputType, svc.Name, method.Name, method.HttpPath, authRequiredPy, streamRequestValidation, pyW2SBodyExpr("req", isEmptyInput), authRequiredPy, outputType, responseValidator)}
+`, methodSnake, outputType, svc.Name, method.Name, streamRouteOpen, method.HttpPath, authRequiredPy, streamRequestValidation, pyW2SBodyExpr("req", isEmptyInput), authRequiredPy, outputType, responseValidator)}
 	}
 
 	if method.ServerStreaming {

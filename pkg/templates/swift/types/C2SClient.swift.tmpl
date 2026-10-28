@@ -1,6 +1,9 @@
 import Foundation
 import GRPCCore
 import GRPCNIOTransportHTTP2
+{{- if .RouteMethods}}
+import SwiftProtobuf
+{{- end}}
 
 /// A caller-supplied token provider. When set on a `C2SClient`, its return value
 /// is injected as an `authorization: Bearer <token>` gRPC metadata header on every
@@ -36,6 +39,139 @@ struct C2SBearerTokenInterceptor: ClientInterceptor {
         return try await next(request, context)
     }
 }
+{{- if .RouteMethods}}
+
+/// The route field of one tenant-routed rpc: the request field whose value, a
+/// tid, names the tenant whose instance the gateway routes the call to.
+struct C2SRouteField: Sendable {
+    let name: String
+    let number: Int
+    let clientStreaming: Bool
+}
+
+/// A `ClientInterceptor` that refuses a call of a tenant-routed rpc whose route
+/// field is empty or not a tid with `invalidArgument`, before the request is
+/// written.
+///
+/// A single-request rpc (unary, server-streaming) is buffered and checked whole
+/// before the call proceeds. A client-streaming or bidi rpc's tenant is pinned
+/// by its first message: each message is checked before it is written, and one
+/// naming another tenant is refused (the write throws and the RPC is
+/// cancelled), since the gateway routed the stream by its first message.
+struct C2STenantRouteInterceptor: ClientInterceptor {
+    /// Keyed by `MethodDescriptor.fullyQualifiedMethod`. A method absent from
+    /// the table is a platform rpc and passes through untouched.
+    static let routes: [String: C2SRouteField] = [
+{{- range .RouteMethods}}
+        "{{.FullMethod}}": C2SRouteField(name: "{{.RouteField}}", number: {{.RouteFieldNumber}}, clientStreaming: {{.ClientStreaming}}),
+{{- end}}
+    ]
+
+    func intercept<Input: Sendable, Output: Sendable>(
+        request: StreamingClientRequest<Input>,
+        context: ClientContext,
+        next: (
+            _ request: StreamingClientRequest<Input>,
+            _ context: ClientContext
+        ) async throws -> StreamingClientResponse<Output>
+    ) async throws -> StreamingClientResponse<Output> {
+        guard let route = C2STenantRouteInterceptor.routes[context.descriptor.fullyQualifiedMethod] else {
+            return try await next(request, context)
+        }
+        var request = request
+        if route.clientStreaming {
+            let producer = request.producer
+            request.producer = { writer in
+                let pinned = C2SRoutePinningWriter(base: writer, route: route, pin: C2SRoutePin())
+                try await producer(RPCWriter(wrapping: pinned))
+            }
+            return try await next(request, context)
+        }
+        let buffer = C2SRouteBuffer<Input>()
+        try await request.producer(RPCWriter(wrapping: C2SRouteBufferWriter(buffer: buffer)))
+        let messages = await buffer.messages
+        if messages.isEmpty {
+            throw RPCError(code: .invalidArgument, message: "route field \"\(route.name)\" is empty; the request carried no message")
+        }
+        for message in messages {
+            _ = try C2STenantRouteInterceptor.tenant(of: message, route: route)
+        }
+        request.producer = { writer in
+            try await writer.write(contentsOf: messages)
+        }
+        return try await next(request, context)
+    }
+
+    /// The tid named by `route` in `message`, or `invalidArgument` naming the
+    /// route field.
+    static func tenant<Input: Sendable>(of message: Input, route: C2SRouteField) throws -> String {
+        guard let message = message as? any SwiftProtobuf.Message else {
+            throw RPCError(code: .invalidArgument, message: "route field \"\(route.name)\" could not be read: the request is not a protobuf message")
+        }
+        do {
+            return try TacplusTenantRoute.tenant(of: message, field: route.name, number: route.number)
+        } catch let refusal as TacplusTenantRouteRefusal {
+            throw RPCError(code: .invalidArgument, message: refusal.message)
+        }
+    }
+}
+
+/// Collects a single-request rpc's messages so they are checked before any is
+/// written.
+actor C2SRouteBuffer<Element: Sendable> {
+    private(set) var messages: [Element] = []
+
+    func append(contentsOf elements: [Element]) {
+        self.messages.append(contentsOf: elements)
+    }
+}
+
+struct C2SRouteBufferWriter<Element: Sendable>: RPCWriterProtocol {
+    let buffer: C2SRouteBuffer<Element>
+
+    func write(_ element: Element) async throws {
+        await self.buffer.append(contentsOf: [element])
+    }
+
+    func write(contentsOf elements: some Sequence<Element>) async throws {
+        await self.buffer.append(contentsOf: Array(elements))
+    }
+}
+
+/// The tenant a client-streaming or bidi rpc was pinned to by its first message.
+actor C2SRoutePin {
+    private var tenant: String?
+
+    func check(_ tenant: String, route: C2SRouteField) throws {
+        guard let pinned = self.tenant else {
+            self.tenant = tenant
+            return
+        }
+        if pinned != tenant {
+            throw RPCError(code: .invalidArgument, message: "route field \"\(route.name)\" names a different tenant than the stream's first message; a stream is routed to one tenant")
+        }
+    }
+}
+
+/// Checks each message of a client-streaming or bidi rpc before writing it.
+struct C2SRoutePinningWriter<Element: Sendable>: RPCWriterProtocol {
+    let base: RPCWriter<Element>
+    let route: C2SRouteField
+    let pin: C2SRoutePin
+
+    func write(_ element: Element) async throws {
+        let tenant = try C2STenantRouteInterceptor.tenant(of: element, route: self.route)
+        try await self.pin.check(tenant, route: self.route)
+        try await self.base.write(element)
+    }
+
+    func write(contentsOf elements: some Sequence<Element>) async throws {
+        for element in elements {
+            try await self.write(element)
+        }
+    }
+}
+{{- end}}
 
 public struct C2SClient: Sendable {
     public let host: String
@@ -77,10 +213,20 @@ public struct C2SClient: Sendable {
     }
 
     private func interceptors() -> [any ClientInterceptor] {
+{{- if .RouteMethods}}
+        // The tenant route check runs first, so a refused call never even
+        // fetches a token.
+        var interceptors: [any ClientInterceptor] = [C2STenantRouteInterceptor()]
+        if let tokenProvider = self.tokenProvider {
+            interceptors.append(C2SBearerTokenInterceptor(tokenProvider: tokenProvider))
+        }
+        return interceptors
+{{- else}}
         guard let tokenProvider = self.tokenProvider else {
             return []
         }
         return [C2SBearerTokenInterceptor(tokenProvider: tokenProvider)]
+{{- end}}
     }
 
     private func transportSecurity() -> HTTP2ClientTransport.Posix.TransportSecurity {

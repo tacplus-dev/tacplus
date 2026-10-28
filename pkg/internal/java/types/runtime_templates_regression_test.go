@@ -64,11 +64,13 @@ func TestJavaServiceManagerSubscriptionsReResolveTarget(t *testing.T) {
 func TestJavaAuthorizerUsesSharedBearerVerifier(t *testing.T) {
 	rendered := readJavaTemplate(t, "java/chassis/grpcserver/Authorizer.java.tmpl")
 	for _, want := range []string{
-		"private TokenWrapper verifyBearer(String authHeader) throws ProtoException",
+		// methodKey names the rpc so RPC_FLAG_ANY_TENANT can open its tenant
+		// door; every path still goes through the one verifier.
+		"private TokenWrapper verifyBearer(String authHeader, String methodKey) throws ProtoException",
 		"private static void rejectApiTokenClass(TokenWrapper tw) throws ProtoException",
 		"rejectApiTokenClass(tw);",
-		"TokenWrapper tw = verifyBearer(authHeader);",
-		"verifyBearer(authHeader);\n        // auth_any_user",
+		"TokenWrapper tw = verifyBearer(authHeader, fullMethod);",
+		"verifyBearer(authHeader, ANY_TENANT_METHOD_CTX_KEY.get());\n        // auth_any_user",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("Java Authorizer must share verified bearer/token-class rejection path; missing %q", want)

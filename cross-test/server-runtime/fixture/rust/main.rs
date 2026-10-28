@@ -198,6 +198,7 @@ impl Authorizer for FixtureAuthorizer {
 
     async fn check_at_or_below(
         &self,
+        _full_method: &str,
         authorization: Option<&str>,
         target_namespace: &str,
     ) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
@@ -215,9 +216,10 @@ impl Authorizer for FixtureAuthorizer {
 
     async fn authenticate(
         &self,
+        full_method: &str,
         authorization: Option<&str>,
     ) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
-        self.check_at_or_below(authorization, "").await
+        self.check_at_or_below(full_method, authorization, "").await
     }
 }
 

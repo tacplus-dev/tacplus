@@ -315,6 +315,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		PbImportFrom         string
 		ExceptionsImportFrom string
 		CrossPackageImports  string
+		RouteHelpers         string
 		ServiceName          string
 		ClientName           string
 		Methods              string
@@ -324,6 +325,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		PbImportFrom:         pbImportFrom,
 		ExceptionsImportFrom: pyExceptionsImportFrom(dots),
 		CrossPackageImports:  crossPkgImports.String(),
+		RouteHelpers:         pyRouteHelpers(targetService, pyExceptionsImportFrom(dots)),
 		ServiceName:          svc.ServiceName,
 		ClientName:           clientName,
 		Methods:              methods.String(),
@@ -402,6 +404,8 @@ func generatePyGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 	if !emptyInput && validateInput != "" {
 		inputValidation = fmt.Sprintf("        %s(request)\n", validateInput)
 	}
+	// A routed rpc's request is checked AFTER validation, BEFORE any send.
+	inputValidation += pyRouteCheck(method, "request", "        ")
 	outputValidation := ""
 	if !emptyOutput && validateOutput != "" {
 		outputValidation = fmt.Sprintf("            %s(response)\n", validateOutput)
@@ -412,6 +416,12 @@ func generatePyGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 	}
 	inputValidatorArg := pyValidatorOrNone(validateInput)
 	outputValidatorArg := pyValidatorOrNone(validateOutput)
+	// A routed stream is pinned to the tenant its first message names; every
+	// message is checked after validation, before it is sent.
+	streamRequests := fmt.Sprintf("self._validating_request_iterator(request_iterator, %s)", inputValidatorArg)
+	if method.RouteField != nil {
+		streamRequests = fmt.Sprintf("_route_pinned_requests(%s, %q)", streamRequests, method.RouteField.Field)
+	}
 
 	if method.ClientStreaming && method.ServerStreaming {
 		// Bidirectional streaming
@@ -419,12 +429,12 @@ func generatePyGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
         """Call %s.%s (bidirectional streaming)."""
         %s
         try:
-            requests = self._validating_request_iterator(request_iterator, %s)
+            requests = %s
             responses = self._stub.%s(requests, metadata=metadata)
             return self._validating_response_iterator(responses, %s)
         except grpc.RpcError as e:
             raise e
-`, methodSnake, svc.Name, method.Name, auth, inputValidatorArg, method.Name, outputValidatorArg)
+`, methodSnake, svc.Name, method.Name, auth, streamRequests, method.Name, outputValidatorArg)
 	}
 
 	if method.ServerStreaming && method.IsTier2SnapshotCollection() {
@@ -480,13 +490,13 @@ func generatePyGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
         """Call %s.%s (client streaming)."""
         %s
         try:
-            requests = self._validating_request_iterator(request_iterator, %s)
+            requests = %s
             response = await self._stub.%s(requests, metadata=metadata)
 %s
             return response
         except grpc.RpcError as e:
             raise e
-`, methodSnake, svc.Name, method.Name, auth, inputValidatorArg, method.Name, outputValidation)
+`, methodSnake, svc.Name, method.Name, auth, streamRequests, method.Name, outputValidation)
 	}
 
 	if method.IsPageCollection() {

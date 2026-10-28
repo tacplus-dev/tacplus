@@ -215,6 +215,22 @@ redirect lookup accepts either. A redirect URL that is not a valid HTTP header
 value (control or non-ASCII bytes) is answered `502` in all three languages,
 never written into `Location`.
 
+Every route of a tenant-owned service also carries its `(spec.rpc)
+.route_field`: the field name, its proto3 JSON name and its wire number
+(`restdispatch.Route` in the planner; empty and `0` on a platform route). The
+REST dispatcher reads the target tenant from the decoded request, refuses an
+empty or malformed one with `400` before dialling, and passes it to its
+dispatcher (Go `Dispatcher.Conn(ctx, serviceID, tenant)`, Java
+`Dispatcher.channel(serviceId, tenant)`, Rust
+`RestDispatcher::channel(service_id, tenant)`; `""` for a platform service),
+which must reach an instance of that tenant only, `UNAVAILABLE` when it has
+none. The gateway's gRPC proxy reads the same field out of the first request
+frame with the generated wire helper (Go `RouteTenantFromWire`, Java
+`routeTenantFromWire`, Rust `route_tenant_from_wire`, each taking the route),
+so REST and gRPC route one call to the same instance. Generated S2S clients choose a tenant's connection by the
+same field, and a tenant-owned server refuses a request routed to another
+tenant before its handler (see [USER.md](USER.md#tenant-owned-services-are-routed-by-a-declared-field)).
+
 The planner refuses, at generation time, a dispatchable route whose request
 or response is a `google.protobuf.*` well-known type other than `Empty`, and a
 server-streaming route whose response is `Empty`: the dispatchers encode and

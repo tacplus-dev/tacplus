@@ -7,6 +7,7 @@ import {{.ChassisBase}}.approval.Approval;
 import {{.ChassisBase}}.backoff.Backoff;
 import {{.ChassisBase}}.jwk.ImmutableJwk;
 import {{.ChassisBase}}.servicemanager.Auth;
+import {{.ChassisBase}}.serviceconnection.RouteTenant;
 import {{.ChassisBase}}.token.TokenWrapper;
 import {{.PackageBase}}.grants.Grants;
 import {{.TypesBase}}.sys.errors.ProtoException;
@@ -206,6 +207,17 @@ public class Authorizer {
     public static final Context.Key<String> AUTH_HEADER_CTX_KEY =
             Context.key("authorization-header");
 
+    /**
+     * Context key a generated wrapper sets, around its authenticate call, to the
+     * service-qualified key of an rpc declaring RPC_FLAG_ANY_TENANT, so the
+     * token-only paths ({@link #authenticateWithToken},
+     * {@link #authenticateAtOrBelowWithToken}) know which rpc they guard. It
+     * opens the tenant door only for a method registered through
+     * {@link #setMethodAnyTenant}; any other value changes nothing.
+     */
+    public static final Context.Key<String> ANY_TENANT_METHOD_CTX_KEY =
+            Context.key("tacplus-any-tenant-method");
+
     private static final Metadata.Key<String> AUTH_METADATA_KEY =
             Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
 
@@ -373,6 +385,8 @@ public class Authorizer {
     private final Set<String> methodAuthAnyService = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<String, List<Pattern>> methodActorPatterns = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> methodTargetNamespaceField = new ConcurrentHashMap<>();
+    /** Methods declaring RPC_FLAG_ANY_TENANT: a caller of any tenant passes the tenant door. */
+    private final Set<String> methodAnyTenant = ConcurrentHashMap.newKeySet();
     /** The instance's own tenant namespace ("/tenants/&lt;t&gt;"), or "" for a shared instance. */
     private volatile String hostTenant = "";
 
@@ -479,6 +493,45 @@ public class Authorizer {
     public void setMethodTargetNamespaceField(String methodKey, String fieldName) {
         if (fieldName == null || fieldName.isEmpty()) return;
         methodTargetNamespaceField.put(methodKey, fieldName);
+    }
+
+    /**
+     * Registers RPC_FLAG_ANY_TENANT for a method: on a tenant-owned instance a
+     * caller of any tenant passes the tenant door for that rpc ("any
+     * authenticated user of any tenant may call this"). It widens nothing else:
+     * the token, its audience, auth_services, entitlements and
+     * target_namespace_field are checked exactly as before. Without it the door
+     * admits only members of the instance's own tenant (and /system).
+     *
+     * <p>{@code methodKey} is the same service-qualified identifier
+     * {@link #setMethodAuth} takes, for the same reason.
+     */
+    public void setMethodAnyTenant(String methodKey) {
+        if (methodKey == null || methodKey.isEmpty()) return;
+        methodAnyTenant.add(methodKey);
+    }
+
+    /**
+     * The server-side backstop for a tenant-routed rpc ((spec.rpc).route_field),
+     * run by the generated wrapper after request validation and before the
+     * handler, on every inbound message. Refuses a route field that is not a
+     * tid (INVALID_ARGUMENT) and, on a tenant-owned instance, one naming another
+     * tenant than the instance serves (PERMISSION_DENIED): the router sent the
+     * call to the wrong instance, and serving it would act on the wrong
+     * tenant's data. Returns the tid.
+     *
+     * @param field the route field's proto name, for the message
+     * @param value the route field's value on the request
+     */
+    public String checkRouteTenant(String field, String value) throws ProtoException {
+        String tid = RouteTenant.require(field, value);
+        String served = RouteTenant.tenantOfNamespace(hostTenant);
+        if (!hostTenant.isEmpty() && !tid.equals(served)) {
+            throw ProtoException.newErrPermissionDenied(null, "%s",
+                    "routed to tenant " + tid + ", this instance serves tenant "
+                            + (served.isEmpty() ? hostTenant : served));
+        }
+        return tid;
     }
 
     /**
@@ -589,7 +642,7 @@ public class Authorizer {
      * @throws ProtoException if authorization fails
      */
     public TokenWrapper authorizeWithToken(String authHeader, String fullMethod, Object request) throws ProtoException {
-        TokenWrapper tw = verifyBearer(authHeader);
+        TokenWrapper tw = verifyBearer(authHeader, fullMethod);
 
         // Delegation gate. A token carrying an act claim was minted for one
         // principal to act on another's behalf, so the rpc must say which
@@ -688,7 +741,7 @@ public class Authorizer {
      * @throws ProtoException if authentication fails
      */
     public TokenWrapper authenticateWithToken(String authHeader) throws ProtoException {
-        TokenWrapper tw = verifyBearer(authHeader);
+        TokenWrapper tw = verifyBearer(authHeader, ANY_TENANT_METHOD_CTX_KEY.get());
         // auth_any_user: token is valid and correctly scoped — allow.
         return tw;
     }
@@ -698,7 +751,7 @@ public class Authorizer {
      * a fixed target namespace. Empty targetNamespace defaults to root ("/").
      */
     public TokenWrapper authenticateAtOrBelowWithToken(String authHeader, String targetNamespace) throws ProtoException {
-        TokenWrapper tw = verifyBearer(authHeader);
+        TokenWrapper tw = verifyBearer(authHeader, ANY_TENANT_METHOD_CTX_KEY.get());
         String target = (targetNamespace == null || targetNamespace.isEmpty()) ? "/" : targetNamespace;
         if (!Spiffe.isAtOrBelow(tw.getNamespace(), target)) {
             throw ProtoException.newErrPermissionDenied(null,
@@ -735,7 +788,12 @@ public class Authorizer {
         }
     }
 
-    private TokenWrapper verifyBearer(String authHeader) throws ProtoException {
+    /**
+     * Verifies the bearer token. methodKey names the rpc being called (null when
+     * unknown): a method registered through {@link #setMethodAnyTenant} skips the
+     * tenant door, and every other call goes through it.
+     */
+    private TokenWrapper verifyBearer(String authHeader, String methodKey) throws ProtoException {
         if (authHeader == null || authHeader.isEmpty()) {
             throw ProtoException.newErrUnauthorized(null,"missing authorization header");
         }
@@ -775,7 +833,9 @@ public class Authorizer {
             throw ProtoException.newErrPermissionDenied(null,
                     "token audience \"" + aud + "\" is not accepted by service \"" + SERVICE_NAME + "\"");
         }
-        checkHostTenant(tw.getNamespace());
+        if (methodKey == null || !methodAnyTenant.contains(methodKey)) {
+            checkHostTenant(tw.getNamespace());
+        }
 
         // Signature, expiry, token class and audience all checked: this is the
         // only place a token becomes readable as the caller's identity.

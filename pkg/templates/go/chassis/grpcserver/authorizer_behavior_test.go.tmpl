@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -27,6 +28,7 @@ import (
 	keypb "{{.ModuleBasePath}}/types/sys/key"
 	tokenlib "{{.ModuleBasePath}}/chassis/token"
 	jwkpb "{{.ModuleBasePath}}/types/sys/jwk"
+	host_pb "{{.ModuleBasePath}}/types/sys/host"
 )
 
 func newTestKey(t *testing.T) *keylib.ImmutableKey {
@@ -648,5 +650,106 @@ func TestAuthorizerSharedInstanceAdmitsAnyTenant(t *testing.T) {
 		if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
 			t.Fatalf("host %q must admit /tenants/acme, got: %v", host, err)
 		}
+	}
+}
+
+// methodStream is the server transport stream gRPC puts on a handler's
+// context; grpc.Method reads the full method off it.
+type methodStream struct{ method string }
+
+func (s methodStream) Method() string                  { return s.method }
+func (s methodStream) SetHeader(metadata.MD) error     { return nil }
+func (s methodStream) SendHeader(metadata.MD) error    { return nil }
+func (s methodStream) SetTrailer(metadata.MD) error    { return nil }
+
+// inMethod returns ctx as gRPC hands it to the handler of fullMethod.
+func inMethod(ctx context.Context, fullMethod string) context.Context {
+	return grpc.NewContextWithServerTransportStream(ctx, methodStream{method: fullMethod})
+}
+
+// RPC_FLAG_ANY_TENANT opens a tenant-owned instance's door for that rpc only:
+// a caller of any tenant passes it on every door (Authorize, Authenticate,
+// AuthenticateAtOrBelow), while every other rpc keeps the default "members of
+// the instance's tenant only". Nothing else is widened: auth_services still
+// applies.
+func TestAuthorizerAnyTenantOpensTheDoorForThatRpcOnly(t *testing.T) {
+	const openMethod = "/demo.DemoService/Visit"
+	const openKey = "demo.DemoService/Visit"
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
+	a.SetMethodAuth(openKey, []string{"caller-svc"})
+	a.SetMethodAnyTenant(openKey)
+	a.SetHostNamespace("/tenants/beta")
+
+	acme := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("service").SetSubject("caller-svc").SetNamespace("/tenants/acme")
+	})
+	if _, err := a.Authorize(bearerCtx(acme), openMethod, nil); err != nil {
+		t.Fatalf("ANY_TENANT rpc must admit another tenant's caller, got: %v", err)
+	}
+	if _, err := a.Authenticate(inMethod(bearerCtx(acme), openMethod)); err != nil {
+		t.Fatalf("ANY_TENANT rpc must admit another tenant's caller on Authenticate, got: %v", err)
+	}
+	if _, err := a.Authorize(bearerCtx(acme), testMethod, nil); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("an rpc without ANY_TENANT must keep the door shut, got: %v", err)
+	}
+	if _, err := a.Authenticate(inMethod(bearerCtx(acme), testMethod)); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Authenticate on an rpc without ANY_TENANT must keep the door shut, got: %v", err)
+	}
+	// No method on the context: the default door applies (fail closed).
+	if _, err := a.Authenticate(bearerCtx(acme)); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Authenticate with no method on the context must keep the door shut, got: %v", err)
+	}
+
+	// The token's other checks are untouched: auth_services still applies.
+	stranger := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("service").SetSubject("other-svc").SetNamespace("/tenants/acme")
+	})
+	if _, err := a.Authorize(bearerCtx(stranger), openMethod, nil); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("ANY_TENANT must not widen auth_services, got: %v", err)
+	}
+}
+
+// The server-side routing backstop: a routed rpc's request must name a tid
+// (INVALID_ARGUMENT otherwise) and, on a tenant-owned instance, the instance's
+// own tenant (PERMISSION_DENIED otherwise). A shared instance checks the shape
+// only. A wrapper asking about an rpc with no registered route field is a
+// generation bug and fails closed.
+func TestAuthorizerCheckRouteBackstop(t *testing.T) {
+	const routedKey = "demo.DemoService/DoThing"
+	req := func(v string) any { return &host_pb.Host{Host: v} }
+
+	shared := authorizerWithKeys(t)
+	shared.SetMethodRouteField(routedKey, "host")
+	if err := shared.CheckRoute(testMethod, req("aaaaaaaa")); err != nil {
+		t.Fatalf("shared instance must accept a tid, got: %v", err)
+	}
+	for _, bad := range []string{"", "AAAAAAAA", "aaaaaaa", "aaaaaaaa "} {
+		err := shared.CheckRoute(testMethod, req(bad))
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("route value %q: want InvalidArgument, got %v", bad, err)
+		}
+	}
+
+	owned := authorizerWithKeys(t)
+	owned.SetMethodRouteField(routedKey, "host")
+	owned.SetHostNamespace("/tenants/bbbbbbbb")
+	if err := owned.CheckRoute(testMethod, req("bbbbbbbb")); err != nil {
+		t.Fatalf("instance of bbbbbbbb must accept a call routed to bbbbbbbb, got: %v", err)
+	}
+	err := owned.CheckRoute(testMethod, req("aaaaaaaa"))
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("instance of bbbbbbbb must refuse a call routed to aaaaaaaa, got: %v", err)
+	}
+	if msg := status.Convert(err).Message(); !regexp.MustCompile(`aaaaaaaa.*bbbbbbbb`).MatchString(msg) {
+		t.Fatalf("refusal must name both tenants, got %q", msg)
+	}
+	if err := owned.CheckRoute(testMethod, req("")); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty route field: want InvalidArgument, got %v", err)
+	}
+
+	if err := owned.CheckRoute("/demo.DemoService/Unrouted", req("bbbbbbbb")); status.Code(err) != codes.Internal {
+		t.Fatalf("an rpc with no registered route field must fail closed, got %v", err)
 	}
 }

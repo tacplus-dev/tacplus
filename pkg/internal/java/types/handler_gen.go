@@ -150,6 +150,10 @@ type javaTargetServiceEntry struct {
 	ServiceID string // e.g. "opa", "identity"
 	ParamName string // camelCase param name for the ChannelProvider (e.g. "opaChannel")
 	FieldName string // field name for the ServiceConnection (e.g. "opaConn")
+	// TenantRouted is true when the target's rpcs are routed by tenant
+	// ((spec.rpc).route_field on a tenant-owned service): its connections are
+	// a TenantConnections, one pool per tenant, instead of one ServiceConnection.
+	TenantRouted bool
 }
 
 type javaDiskStoreRuntimeEntry struct {
@@ -243,6 +247,33 @@ func javaSmTargetServices(config *tactype.Config, clientSvcs []ServiceInfo) []ja
 		})
 	}
 	return result
+}
+
+// javaTenantRoutedTargets returns the S2S target service IDs whose rpcs are
+// routed by tenant (parser.IsTenantRouted): each such target's client calls
+// go to the instance of the tenant the request's route field names.
+func javaTenantRoutedTargets(config *tactype.Config, clientSvcs []ServiceInfo, protoDir string) (map[string]bool, error) {
+	routed := make(map[string]bool)
+	if len(clientSvcs) == 0 || protoDir == "" {
+		return routed, nil
+	}
+	dp, err := parser.NewDescriptorParser(protoDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create descriptor parser: %w", err)
+	}
+	tenantOwned := parser.TenantOwnedServices(dp)
+	for _, svc := range clientSvcs {
+		fd, err := dp.GetFileDescriptor(svc.ProtoFile)
+		if err != nil {
+			return nil, fmt.Errorf("tenant routing of %s: %w", svc.ServiceName, err)
+		}
+		for i := range fd.Services {
+			if fd.Services[i].Name == svc.ServiceName && parser.IsTenantRouted(fd, &fd.Services[i], tenantOwned) {
+				routed[javaResolveGrpcTarget(config, svc.ProtoFile, svc.PackageName, svc.HostLabel)] = true
+			}
+		}
+	}
+	return routed, nil
 }
 
 // javaTimeseriesInsertEntry is one typed timeseries insert callback the
@@ -548,6 +579,13 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 	}
 
 	targetServices := javaSmTargetServices(config, clientSvcs)
+	tenantRouted, err := javaTenantRoutedTargets(config, clientSvcs, protoDir)
+	if err != nil {
+		return javaSmTemplateData{}, err
+	}
+	for i := range targetServices {
+		targetServices[i].TenantRouted = tenantRouted[targetServices[i].ServiceID]
+	}
 	recordReaders, err := collectJavaRecordReaders(config, config.AnnotatedProtoDir)
 	if err != nil {
 		return javaSmTemplateData{}, err

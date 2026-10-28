@@ -184,3 +184,77 @@ func TestDispatchableShapeRefusesWhatTheDispatchersCannotEncode(t *testing.T) {
 		})
 	}
 }
+
+// A tenant-owned service's routes and arms carry its route field, so the
+// gateway dials the target tenant's instance by it; a platform service's carry
+// none.
+func TestCollectCarriesTheRouteFieldOfTenantOwnedServicesOnly(t *testing.T) {
+	protoDir := t.TempDir()
+	if err := protogen.CopySysProtos(protoDir); err != nil {
+		t.Fatalf("CopySysProtos: %v", err)
+	}
+	write := func(rel, text string) {
+		t.Helper()
+		path := protoDir + "/" + rel
+		if err := os.MkdirAll(path[:strings.LastIndex(path, "/")], 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("services/crew.proto", `syntax = "proto3";
+package crew;
+import "sys/spec.proto";
+option (spec.service) = {name: "crew", tenant_owned: true};
+message GetCrewRequest { string id = 1; string target_tenant = 2; }
+message GetCrewResponse { string id = 1; }
+service CrewService {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+  rpc GetCrew(GetCrewRequest) returns (GetCrewResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, route_field: "target_tenant"};
+  }
+}
+`)
+	write("services/dock.proto", `syntax = "proto3";
+package dock;
+import "sys/spec.proto";
+message GetDockRequest { string id = 1; }
+message GetDockResponse { string id = 1; }
+service DockService {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+  rpc GetDock(GetDockRequest) returns (GetDockResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL};
+  }
+}
+`)
+	if _, _, _, err := protogen.ScanAndGenerateConfigHolder(protoDir, protoDir); err != nil {
+		t.Fatalf("ScanAndGenerateConfigHolder: %v", err)
+	}
+	dp, err := parser.NewDescriptorParser(protoDir)
+	if err != nil {
+		t.Fatalf("NewDescriptorParser: %v", err)
+	}
+	plan, err := Collect(dp, &tactype.Config{}, []Service{
+		{ProtoFile: "services/crew.proto", PackageName: "crew", ServiceName: "CrewService", ParentDir: "services"},
+		{ProtoFile: "services/dock.proto", PackageName: "dock", ServiceName: "DockService", ParentDir: "services"},
+	}, protoDir)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	crew := findRoute(t, plan, "/crew.CrewService/GetCrew")
+	if crew.RouteField != "target_tenant" || crew.RouteFieldJSON != "targetTenant" || crew.RouteFieldNumber != 2 {
+		t.Fatalf("tenant-owned route does not carry its route field: %+v", crew)
+	}
+	dock := findRoute(t, plan, "/dock.DockService/GetDock")
+	if dock.RouteField != "" || dock.RouteFieldJSON != "" || dock.RouteFieldNumber != 0 {
+		t.Fatalf("platform route carries a route field: %+v", dock)
+	}
+	for _, arm := range plan.Arms {
+		want := map[string]string{"/crew.CrewService/GetCrew": "target_tenant", "/dock.DockService/GetDock": ""}[arm.GrpcPath]
+		if arm.RouteField != want {
+			t.Fatalf("arm %s RouteField = %q, want %q", arm.GrpcPath, arm.RouteField, want)
+		}
+	}
+}

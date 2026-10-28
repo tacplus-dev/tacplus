@@ -131,3 +131,111 @@ func TestGoRestDispatchRouteTableLiterals(t *testing.T) {
 		}
 	}
 }
+
+// A tenant-routed route carries its route field (proto name, JSON name, wire
+// number) in the table the REST plane and the gateway's gRPC proxy share; a
+// platform route carries the zero values.
+func TestGoRestDispatchRouteTableCarriesRouteField(t *testing.T) {
+	out := renderGoRestDispatchForTest(t, goRestDispatchData{
+		Routes: []goRestDispatchRoute{
+			{HttpPath: "/crew/Crew/Hail", GrpcPath: "/crew.Crew/Hail", ServiceID: "crew", AuthPolicy: "Entitled",
+				RouteField: "target_tenant", RouteFieldJSON: "targetTenant", RouteFieldNumber: 4},
+			{HttpPath: "/catalog/Catalog/Get", GrpcPath: "/catalog.Catalog/Get", ServiceID: "catalog", AuthPolicy: "Entitled"},
+		},
+	})
+	for _, want := range []string{
+		`RouteField:           "target_tenant",`,
+		`RouteFieldJSON:       "targetTenant",`,
+		`RouteFieldNumber:     4,`,
+		`RouteField:           "",`,
+		`RouteFieldNumber:     0,`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("route table is missing %q:\n%s", want, out)
+		}
+	}
+	// The gateway's gRPC proxy holds only raw frames: the plane exports the
+	// wire reader and the tid check it routes by.
+	for _, want := range []string{
+		"func ValidTenantID(s string) bool",
+		"func RouteTenant(field, value string) (string, error)",
+		"func RouteTenantFromWire(frame []byte, route *RouteInfo) (string, error)",
+		"serviceconnection.RouteTenantFromWire(frame, route.RouteField, route.RouteFieldNumber)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("plane is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// The Dispatcher names the target tenant: a routed arm decodes and validates
+// the request, reads its route field, refuses a missing or malformed tid with
+// a 400 BEFORE anything is dialled, and only then asks for the tenant's
+// connection. A platform arm is unchanged and asks with no tenant.
+func TestGoRestDispatchRoutedArmsRouteByTheField(t *testing.T) {
+	routed := goRestDispatchArmForTest("/crew.Crew/Hail", "Hail", false)
+	routed.ServiceID = "crew"
+	routed.RouteField = "target_tenant"
+	routed.RouteGetter = "GetTargetTenant"
+	routedStream := goRestDispatchArmForTest("/crew.Crew/Watch", "Watch", true)
+	routedStream.ServiceID = "crew"
+	routedStream.RouteField = "target_tenant"
+	routedStream.RouteGetter = "GetTargetTenant"
+	platform := goRestDispatchArmForTest("/catalog.CatalogService/GetItem", "GetItem", false)
+	out := renderGoRestDispatchForTest(t, goRestDispatchData{
+		Imports:        []goRestDispatchImport{{Alias: "catalog_pb", Path: "example.com/x/model/types/services/catalog"}},
+		UnaryArms:      []goRestDispatchArm{routed, platform},
+		StreamArms:     []goRestDispatchArm{routedStream},
+		ModuleBasePath: "example.com/x/model",
+	})
+	if !strings.Contains(out, "Conn(ctx context.Context, serviceID, tenant string) (grpc.ClientConnInterface, error)") {
+		t.Fatalf("Dispatcher.Conn must take the target tenant:\n%s", out)
+	}
+	if !strings.Contains(out, `"example.com/x/model/chassis/serviceconnection"`) {
+		t.Fatalf("plane must import the serviceconnection chassis:\n%s", out)
+	}
+
+	arm := func(body, path string) string {
+		start := strings.Index(body, "case "+`"`+path+`":`)
+		if start < 0 {
+			t.Fatalf("no arm for %s:\n%s", path, body)
+		}
+		rest := body[start+1:]
+		end := strings.Index(rest, "\tcase ")
+		if end < 0 {
+			end = strings.Index(rest, "\tdefault:")
+		}
+		return rest[:end]
+	}
+	unary := out[strings.Index(out, "func Dispatch("):strings.Index(out, "func DispatchStream(")]
+	stream := out[strings.Index(out, "func DispatchStream("):]
+	for _, leg := range []struct{ name, body string }{
+		{"unary", arm(unary, "/crew.Crew/Hail")},
+		{"stream", arm(stream, "/crew.Crew/Watch")},
+	} {
+		decode := strings.Index(leg.body, "FromJSON(body)")
+		validate := strings.Index(leg.body, "ValidateGetItemRequest(req)")
+		route := strings.Index(leg.body, `RouteTenant("target_tenant", req.GetTargetTenant())`)
+		conn := strings.Index(leg.body, `dispatcher.Conn(ctx, "crew", tenant)`)
+		if decode < 0 || validate < 0 || route < 0 || conn < 0 || !(decode < validate && validate < route && route < conn) {
+			t.Fatalf("%s routed arm must decode, validate, route, then dial (decode=%d validate=%d route=%d conn=%d):\n%s",
+				leg.name, decode, validate, route, conn, leg.body)
+		}
+	}
+	plat := arm(unary, "/catalog.CatalogService/GetItem")
+	if !strings.Contains(plat, `dispatcher.Conn(ctx, "catalog", "")`) || strings.Contains(plat, "RouteTenant(") {
+		t.Fatalf("a platform arm dials with no tenant and reads no route field:\n%s", plat)
+	}
+	if c, d := strings.Index(plat, "dispatcher.Conn("), strings.Index(plat, "FromJSON(body)"); c < 0 || d < 0 || c > d {
+		t.Fatalf("a platform arm keeps its order (dial, then decode):\n%s", plat)
+	}
+}
+
+// The route getter is the protoc-gen-go getter of the route field.
+func TestGoRestDispatchRouteGetter(t *testing.T) {
+	for field, want := range map[string]string{"tenant": "GetTenant", "target_tenant": "GetTargetTenant", "": ""} {
+		if got := goRouteGetter(field); got != want {
+			t.Fatalf("goRouteGetter(%q) = %q, want %q", field, got, want)
+		}
+	}
+}

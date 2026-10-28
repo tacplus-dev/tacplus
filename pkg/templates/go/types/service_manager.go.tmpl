@@ -151,6 +151,8 @@ grpcPkg *smgrpc.Grpc
 {{end}}
 {{if .HasGrpcS2SClients}}
 s2sConnections map[string]*serviceconnection.ServiceConnection
+// s2sTenantConnections are the tenant-routed s2s targets: one pool per tenant.
+s2sTenantConnections map[string]*serviceconnection.TenantConnection
 {{end}}
 {{if .HasSmb}}
 smbAuthorityConn *serviceconnection.ServiceConnection
@@ -488,6 +490,14 @@ s2sChannels := make(map[string]*serviceconnection.ChannelProvider)
 s2sConnections["{{.}}"] = serviceconnection.NewDynamic("{{.}}", sc.ServiceDialOpts("{{.}}"))
 s2sChannels["{{.}}"] = serviceconnection.NewChannelProvider(s2sConnections["{{.}}"])
 {{- end}}
+// Tenant-routed targets ((spec.rpc).route_field): one pool per tenant, grouped
+// by each instance's spiffe_id tenant. A call reaches the instance of the
+// tenant its request names, never another tenant's or a shared one.
+s2sTenantConnections := make(map[string]*serviceconnection.TenantConnection)
+{{- range .S2STenantTargets}}
+s2sTenantConnections["{{.}}"] = serviceconnection.NewTenantDynamic("{{.}}", sc.ServiceDialOpts("{{.}}"))
+s2sChannels["{{.}}"] = serviceconnection.NewTenantChannelProvider(s2sTenantConnections["{{.}}"])
+{{- end}}
 {{end}}
 {{if or .HasGrpcS2SClients .HasSmb}}
 {{if .HasServiceHealthState}}
@@ -502,6 +512,9 @@ bc.{{.HealthStateGroupAccessor}}().ServiceHealth().OnInstancesChange(func(instan
 	}
 	{{- if .HasGrpcS2SClients}}
 	for svcID, conn := range s2sConnections {
+		conn.ReconcileFromHealth(byService[svcID])
+	}
+	for svcID, conn := range s2sTenantConnections {
 		conn.ReconcileFromHealth(byService[svcID])
 	}
 	{{- end}}
@@ -597,6 +610,7 @@ grpcPkg: grpcPkg,
 {{end}}
 	{{if .HasGrpcS2SClients}}
 	s2sConnections: s2sConnections,
+	s2sTenantConnections: s2sTenantConnections,
 	{{end}}
 	{{if .HasSmb}}
 	smbAuthorityConn: smbAuthorityConn,
@@ -884,6 +898,12 @@ continue
 }
 conn.Close()
 }
+for _, conn := range sm.s2sTenantConnections {
+if conn == nil {
+continue
+}
+conn.Close()
+}
 {{end}}
 {{if .HasStates}}if sm.bc != nil {
 sm.bc.Close()
@@ -1115,6 +1135,12 @@ continue
 }
 conn.Close()
 }
+for _, conn := range sm.s2sTenantConnections {
+if conn == nil {
+continue
+}
+conn.Close()
+}
 	}()
 	{{end}}
 	{{if .HasSmb}}
@@ -1293,6 +1319,10 @@ return fmt.Errorf("authorizer not wired for {{.ServerType}} (build/SM bug) - man
 {{.WrapperVarName}}.SetAnonymizeHmacKey(sm.cfg.GetAnonymizeHmacKey())
 {{- if .HasRequiresDevice}}
 {{.WrapperVarName}}.SetApprovalCheckFunc(approvalCheck)
+{{- end}}
+{{- if .HasTenantRoute}}
+// (spec.rpc).route_field: the tenant routing backstop of every routed rpc.
+{{.WrapperVarName}}.SetRouteCheckFunc(sm.auth.CheckRoute)
 {{- end}}
 {{- if and .HasMethodAuth (not .IsC2D)}}
 {{.WrapperAlias}}.{{.MethodAuthFuncName}}(sm.auth)

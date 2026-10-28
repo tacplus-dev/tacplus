@@ -26,6 +26,7 @@ OWNERDEFAULT_PROTO_SRC="$ROOT_DIR/cross-test/proto-ownerdefault"
 QUORUMWRITE_PROTO_SRC="$ROOT_DIR/cross-test/proto-quorumwrite"
 TENANTSLICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-tenantslice"
 EPOCHLOAD_PROTO_SRC="$ROOT_DIR/cross-test/proto-epochload"
+TENANTROUTE_PROTO_SRC="$ROOT_DIR/cross-test/proto-tenantroute"
 WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/current-generation}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
@@ -284,6 +285,27 @@ src: "$TENANTSLICE_PROTO_SRC"
 output-dir: "tacplus"
 depends: ["tenancy", "registrar"]
 EOF
+}
+
+# The tenant-routing fixture (issue #170), built as harbor (the platform
+# service whose build carries the route table and the tenant-routed S2S client)
+# or as crew (the tenant-owned service, whose server checks the route field and
+# opens its tenant door per RPC_FLAG_ANY_TENANT).
+write_tenantroute_config() {
+  local dir="$1"
+  local language="$2"
+  local self="$3"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.$self"
+src: "$TENANTROUTE_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+  if [[ "$self" == "harbor" ]]; then
+    echo 'depends: ["crew"]' >> "$dir/tacplus.yaml"
+  fi
 }
 
 # The same fixture built as registrar, the OWNER of the service_state shape:
@@ -2713,6 +2735,33 @@ if [[ -d "$EPOCHLOAD_PROTO_SRC" ]]; then
     echo "==> Compiling $language epoch-load fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/epochload"
     echo "    PASS $language epoch-load"
+  done
+fi
+
+# tenant-route fixture (issue #170): every rpc of the tenant-owned crew names
+# its route field; registry.json must carry it, and both builds must compile
+# with the route table, the per-tenant S2S client and the server's route check.
+if [[ -d "$TENANTROUTE_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    for self in harbor crew; do
+      dir="$WORK_ROOT/tenantroute-$self-$language"
+      log="$WORK_ROOT/tenantroute-$self-$language.log"
+      rm -rf "$dir"
+      write_tenantroute_config "$dir" "$language" "$self"
+
+      echo "==> Generating $language tenant-route fixture ($self)"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTROUTE_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language tenant-route generation failed ($self); log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      grep -Eq '"route_field": *"target_tenant"' "$output_root/registry.json" \
+        || die "tenant-route fixture ($language, $self): registry.json does not carry crew's route_field"
+      echo "==> Compiling $language tenant-route fixture ($self)"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
+      echo "    PASS $language tenant-route ($self)"
+    done
   done
 fi
 

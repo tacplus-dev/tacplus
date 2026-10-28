@@ -548,6 +548,19 @@ message RpcInfo {
   // the same rpc over the same record get different row sets under this value;
   // that is what it is reporting.
   string tenant_scope = 54;
+
+  // route_field is (spec.rpc).route_field: the request field (proto name)
+  // whose value, a tid, names the tenant whose instance receives this call.
+  // Set on every rpc of a tenant-owned service and on no other. Routing only:
+  // it says nothing about who may call.
+  string route_field = 56;
+  // route_field_number is route_field's wire number, for a router that reads
+  // the raw request frame. 0 when route_field is empty.
+  int32 route_field_number = 57;
+  // any_tenant is RPC_FLAG_ANY_TENANT: callers of any tenant pass the
+  // tenant-owned instance's door. False means members of the instance's own
+  // tenant (and /system) only.
+  bool any_tenant = 58;
 }
 
 // EnumInfo describes a top-level protobuf enum definition.

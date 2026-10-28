@@ -18,6 +18,17 @@ import (
 // resolves against another in the same build.
 func writeSurfaceProtoDir(t *testing.T, protoText string, extraProtoTexts ...string) *DescriptorParser {
 	t.Helper()
+	dp, err := tryWriteSurfaceProtoDir(t, protoText, extraProtoTexts...)
+	if err != nil {
+		t.Fatalf("NewDescriptorParser: %v", err)
+	}
+	return dp
+}
+
+// tryWriteSurfaceProtoDir is writeSurfaceProtoDir for a proto set the parser
+// is expected to refuse: it returns NewDescriptorParser's error.
+func tryWriteSurfaceProtoDir(t *testing.T, protoText string, extraProtoTexts ...string) (*DescriptorParser, error) {
+	t.Helper()
 	skipIfNoProtoc(t)
 	dir := t.TempDir()
 	sysDir := filepath.Join(dir, "sys")
@@ -35,11 +46,7 @@ func writeSurfaceProtoDir(t *testing.T, protoText string, extraProtoTexts ...str
 	for i, extra := range extraProtoTexts {
 		writeTempProtoFile(t, dir, fmt.Sprintf("surface%d.proto", i+2), extra)
 	}
-	dp, err := NewDescriptorParser(dir)
-	if err != nil {
-		t.Fatalf("NewDescriptorParser: %v", err)
-	}
-	return dp
+	return NewDescriptorParser(dir)
 }
 
 // A service carrying both service_c2s and service_s2s must fail generation.

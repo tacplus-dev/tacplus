@@ -36,6 +36,11 @@ type javaRestDispatchArm struct {
 	ValidateOutput string
 	IsEmptyInput   bool
 	IsEmptyOutput  bool
+	// RouteField is (spec.rpc).route_field's proto name and RouteFieldGetter
+	// its generated Java getter: a routed arm reads the target tenant off the
+	// decoded request before it dials. Both "" for a platform service.
+	RouteField       string
+	RouteFieldGetter string
 }
 
 // javaRestDispatchRoute is one route table entry. AuthPolicy is the Java enum
@@ -55,6 +60,12 @@ type javaRestDispatchRoute struct {
 	FormBody             bool
 	RedirectField        string // the proto3 JSON name, the canonical key across languages
 	RedirectFieldProto   string // the proto field name, which the Java Helpers emit
+	// RouteField / RouteFieldJSON / RouteFieldNumber are (spec.rpc).route_field
+	// as proto name, proto3 JSON name and wire number: the request field whose
+	// tid names the tenant the gateway dials. "", "" and 0 for a platform route.
+	RouteField       string
+	RouteFieldJSON   string
+	RouteFieldNumber int32
 }
 
 type javaRestDispatchData struct {
@@ -141,6 +152,10 @@ func generateJavaRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo
 			IsEmptyInput:  a.IsEmptyInput,
 			IsEmptyOutput: a.IsEmptyOutput,
 		}
+		if a.RouteField != "" {
+			arm.RouteField = a.RouteField
+			arm.RouteFieldGetter = "get" + javaPascalField(a.RouteField)
+		}
 		if !a.IsEmptyInput {
 			pkg := restdispatch.TypePackage(a.InputType, pkgToFile)
 			outer := javaTypesOuterForProto(config, protoDir, pkgToFile[pkg], pkg)
@@ -183,6 +198,9 @@ func generateJavaRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo
 			FormBody:             r.FormBody,
 			RedirectField:        r.RedirectJSONName,
 			RedirectFieldProto:   r.RedirectField,
+			RouteField:           r.RouteField,
+			RouteFieldJSON:       r.RouteFieldJSON,
+			RouteFieldNumber:     r.RouteFieldNumber,
 		})
 	}
 

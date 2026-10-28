@@ -385,6 +385,7 @@ public class AuthorizerBehaviorTest {
                 () -> bareKeyed.authorizeWithToken(bearer(alphaTok), "BetaService/Get", null));
         }
 
+        checkTenantRouting(key);
         checkRemoteJwkSourceBackoff(jwkForKey(key));
 
         if (failures > 0) {
@@ -392,6 +393,104 @@ public class AuthorizerBehaviorTest {
             System.exit(1);
         }
         System.out.println("AuthorizerBehaviorTest: all checks passed");
+    }
+
+    private static void mustRejectCode(String name, int code, ThrowingRunnable r) {
+        try {
+            r.run();
+            System.err.println("FAIL: " + name + " must be refused (fail-open)");
+            failures++;
+        } catch (ProtoException e) {
+            if (e.getCode() != code) {
+                System.err.println("FAIL: " + name + ": code " + e.getCode() + ", want " + code + " (" + e.getMessage() + ")");
+                failures++;
+            }
+        } catch (Exception e) {
+            System.err.println("FAIL: " + name + " threw an untyped error: " + e);
+            failures++;
+        }
+    }
+
+    // (spec.rpc).route_field and RPC_FLAG_ANY_TENANT on a tenant-owned instance
+    // (issue #170). The door stays the default: only the instance's own tenant
+    // (and /system) pass. An rpc declaring RPC_FLAG_ANY_TENANT skips the door,
+    // and nothing else: audience and auth_services still apply. The backstop
+    // refuses a request whose route field is not a tid (INVALID_ARGUMENT) or
+    // names another tenant (PERMISSION_DENIED).
+    private static void checkTenantRouting(ImmutableKey key) throws Exception {
+        final String anyTenantMethod = "CrewService/Hail";
+        final String memberMethod = "CrewService/Muster";
+        Authorizer crew = authorizerWithKeys(jwkForKey(key));
+        crew.setHostNamespace("/tenants/bbbbbbbb");
+        crew.setMethodAuth(anyTenantMethod, List.of("caller-svc"));
+        crew.setMethodAuth(memberMethod, List.of("caller-svc"));
+        crew.setMethodAnyTenant(anyTenantMethod);
+
+        String foreign = signedToken(key, t -> t.setSubType("service").setSubject("caller-svc").setNamespace("/tenants/aaaaaaaa"));
+        String member = signedToken(key, t -> t.setSubType("service").setSubject("caller-svc").setNamespace("/tenants/bbbbbbbb"));
+        mustPass("ANY_TENANT: a caller of another tenant passes the door",
+            () -> crew.authorizeWithToken(bearer(foreign), anyTenantMethod, null));
+        mustRejectCode("default door: a caller of another tenant is refused", ProtoException.PERMISSION_DENIED,
+            () -> crew.authorizeWithToken(bearer(foreign), memberMethod, null));
+        mustPass("default door: a member passes", () -> crew.authorizeWithToken(bearer(member), memberMethod, null));
+
+        // ANY_TENANT widens nothing else.
+        String otherSvc = signedToken(key, t -> t.setSubType("service").setSubject("other-svc").setNamespace("/tenants/aaaaaaaa"));
+        mustReject("ANY_TENANT keeps auth_services", () -> crew.authorizeWithToken(bearer(otherSvc), anyTenantMethod, null));
+        String wrongAud = signedToken(key, t -> t.setSubType("service").setSubject("caller-svc")
+            .setNamespace("/tenants/aaaaaaaa").setAudience("kernel"));
+        mustReject("ANY_TENANT keeps the audience check", () -> crew.authorizeWithToken(bearer(wrongAud), anyTenantMethod, null));
+        // The registration is per method: a bare name or another service's
+        // method of the same name does not open the door.
+        crew.setMethodAuth("OtherService/Hail", List.of("caller-svc"));
+        mustRejectCode("ANY_TENANT is keyed by the service-qualified method", ProtoException.PERMISSION_DENIED,
+            () -> crew.authorizeWithToken(bearer(foreign), "OtherService/Hail", null));
+
+        // authenticate (auth_any_user) honours the flag only inside the
+        // wrapper's ANY_TENANT context for a method registered as such.
+        mustReject("authenticate without the ANY_TENANT context keeps the door",
+            () -> crew.authenticateWithToken(bearer(foreign)));
+        io.grpc.Context open = io.grpc.Context.current().withValue(Authorizer.ANY_TENANT_METHOD_CTX_KEY, anyTenantMethod);
+        mustPass("authenticate inside the ANY_TENANT context of a registered method", () -> {
+            io.grpc.Context prev = open.attach();
+            try {
+                crew.authenticateWithToken(bearer(foreign));
+            } finally {
+                open.detach(prev);
+            }
+        });
+        io.grpc.Context unregistered = io.grpc.Context.current().withValue(Authorizer.ANY_TENANT_METHOD_CTX_KEY, memberMethod);
+        mustReject("authenticate inside the context of an unregistered method keeps the door", () -> {
+            io.grpc.Context prev = unregistered.attach();
+            try {
+                crew.authenticateWithToken(bearer(foreign));
+            } finally {
+                unregistered.detach(prev);
+            }
+        });
+
+        // Backstop: the route field must be a tid naming this instance's tenant.
+        mustPass("backstop: a request routed to this instance's tenant", () -> crew.checkRouteTenant("tenant", "bbbbbbbb"));
+        mustRejectCode("backstop: a request routed to another tenant", ProtoException.PERMISSION_DENIED,
+            () -> crew.checkRouteTenant("tenant", "aaaaaaaa"));
+        for (String bad : new String[] {null, "", "bbbbbbb", "BBBBBBBB", " bbbbbbbb", "bbbbbbbbb"}) {
+            mustRejectCode("backstop: malformed route field \"" + bad + "\"", ProtoException.INVALID_ARGUMENT,
+                () -> crew.checkRouteTenant("tenant", bad));
+        }
+        try {
+            crew.checkRouteTenant("tenant", "aaaaaaaa");
+        } catch (ProtoException e) {
+            String msg = String.valueOf(e.getMessage());
+            if (!msg.contains("aaaaaaaa") || !msg.contains("bbbbbbbb")) {
+                System.err.println("FAIL: the backstop refusal must name both tenants, got: " + msg);
+                failures++;
+            }
+        }
+        // An instance with no tenant namespace still refuses a malformed route field.
+        Authorizer shared = authorizerWithKeys(jwkForKey(key));
+        mustPass("backstop on a shared instance: a tid passes", () -> shared.checkRouteTenant("tenant", "aaaaaaaa"));
+        mustRejectCode("backstop on a shared instance: empty route field", ProtoException.INVALID_ARGUMENT,
+            () -> shared.checkRouteTenant("tenant", ""));
     }
 
     // The remote JWK watch against a key authority that is rolling (every Watch

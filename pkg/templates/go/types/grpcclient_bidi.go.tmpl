@@ -14,6 +14,33 @@
 //
 // The returned handle is safe for concurrent use. Calling handle.Close()
 // stops the lifecycle goroutine and closes the underlying stream.
+{{- if .RouteField}}
+//
+// Tenant-routed: the stream goes to tenant's instance, fixed at open. tenant
+// must be a tenant id (INVALID_ARGUMENT, before anything is dialled), and
+// every message sent on the stream must name it in {{.RouteField}}.
+func (c *{{.ClientName}}) {{.MethodName}}(
+	ctx context.Context,
+	tenant string,
+	onConnect func(send func(*{{.GoInput}}) error),
+	onMessage func(*{{.GoOutput}}),
+) (*{{.HandleType}}, error) {
+	if _, err := serviceconnection.RouteTenant("tenant", tenant); err != nil {
+		return nil, err
+	}
+	h := &{{.HandleType}}{
+		userCh:        make(chan *{{.GoInput}}, 32),
+		doneCh:        make(chan struct{}),
+		validate:      {{if .ValidateInput}}{{.ValidateInput}}{{else}}nil{{end}},
+		tenant:        tenant,
+	}
+	hCtx, hCancel := context.WithCancel(ctx)
+	h.cancel = hCancel
+
+	go c.{{.LoopFnName}}(hCtx, h, onConnect, onMessage)
+	return h, nil
+}
+{{- else}}
 func (c *{{.ClientName}}) {{.MethodName}}(
 	ctx context.Context,
 	onConnect func(send func(*{{.GoInput}}) error),
@@ -30,6 +57,7 @@ func (c *{{.ClientName}}) {{.MethodName}}(
 	go c.{{.LoopFnName}}(hCtx, h, onConnect, onMessage)
 	return h
 }
+{{- end}}
 
 // {{.LoopFnName}} runs the connect/reconnect lifecycle for a
 // {{.MethodName}} bidi stream. It exits when the handle's context is
@@ -107,6 +135,10 @@ func (c *{{.ClientName}}) {{.RunFnName}}(
 	// observes a clean cancel rather than a half-open stream.
 	callCtx, callCancel := context.WithCancel(ctx)
 	defer callCancel()
+{{- if .RouteField}}
+	// The stream's tenant, fixed at open: its instance and no other.
+	callCtx = serviceconnection.WithRouteTenant(callCtx, h.tenant)
+{{- end}}
 
 {{- if .AuthRequired}}
 	// Inject auth token.
@@ -208,6 +240,9 @@ type {{.HandleType}} struct {
 	doneCh        chan struct{}
 	cancel        context.CancelFunc
 	validate      func(*{{.GoInput}}) error
+{{- if .RouteField}}
+	tenant        string // the stream's target tenant, fixed at open
+{{- end}}
 }
 
 func (h *{{.HandleType}}) validateMessage(msg *{{.GoInput}}) error {
@@ -216,6 +251,11 @@ func (h *{{.HandleType}}) validateMessage(msg *{{.GoInput}}) error {
 			return fmt.Errorf("validation failed: %w", err)
 		}
 	}
+{{- if .RouteField}}
+	if msg.{{.RouteGetter}}() != h.tenant {
+		return status.Errorf(codes.InvalidArgument, "route field {{.RouteField}} is %q but this stream is open to tenant %q", msg.{{.RouteGetter}}(), h.tenant)
+	}
+{{- end}}
 	return nil
 }
 

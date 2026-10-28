@@ -333,6 +333,12 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 					methodAuthKey, strings.Join(quoted, ", ")))
 			}
 
+			// RPC_FLAG_ANY_TENANT: the tenant-owned door is open on this rpc only.
+			if method.AnyTenant {
+				methodAuthLines = append(methodAuthLines, fmt.Sprintf(
+					"        authorizer.set_method_any_tenant(%q)", methodAuthKey))
+			}
+
 			// Register request-field target_namespace_field for level-or-below enforcement.
 			// auth_any_user uses target_namespace_field as a fixed namespace literal instead.
 			if method.TargetNamespaceField != "" && !method.AuthAnyUser {
@@ -645,9 +651,14 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 			// default would gate on is_at_or_below(caller, "/"), true only for a
 			// caller sitting exactly at "/", denying every real caller.
 			targetNamespace := strings.TrimSpace(method.TargetNamespaceField)
-			if targetNamespace == "" {
+			switch {
+			case method.AnyTenant && targetNamespace == "":
+				authCallNoReq = fmt.Sprintf("self._authenticate(context, None, '%s')", fullMethodPath)
+			case method.AnyTenant:
+				authCallNoReq = fmt.Sprintf("self._authenticate(context, %q, '%s')", targetNamespace, fullMethodPath)
+			case targetNamespace == "":
 				authCallNoReq = "self._authenticate(context)"
-			} else {
+			default:
 				authCallNoReq = fmt.Sprintf("self._authenticate(context, %q)", targetNamespace)
 			}
 			authCallWithReq = authCallNoReq
@@ -664,7 +675,12 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 	}
 	streamOpenAuthBlock := authNoReqBlock
 	if streamMessageAuthorize != "None" {
-		streamOpenAuthBlock = pyAuthBlock("self._authenticate(context)")
+		// An RPC_FLAG_ANY_TENANT method names itself so the opened door holds.
+		if method.AnyTenant {
+			streamOpenAuthBlock = pyAuthBlock(fmt.Sprintf("self._authenticate(context, None, '%s')", fullMethodPath))
+		} else {
+			streamOpenAuthBlock = pyAuthBlock("self._authenticate(context)")
+		}
 	}
 
 	requestValidation := ""

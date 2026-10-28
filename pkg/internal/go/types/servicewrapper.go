@@ -380,6 +380,21 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 					"auth.SetMethodTargetNamespaceField(%q, %q)",
 					methodKey, method.TargetNamespaceField))
 			}
+
+			// (spec.rpc).route_field: the authorizer's routing backstop
+			// (CheckRoute) reads the target tenant off this field.
+			// RPC_FLAG_ANY_TENANT opens the tenant-owned instance's door for
+			// this rpc; without it the door admits the instance's own tenant
+			// only. Both mirror deriveGoServiceAuthFlags.
+			if method.RouteField != nil {
+				methodAuthLines = append(methodAuthLines, fmt.Sprintf(
+					"auth.SetMethodRouteField(%q, %q)",
+					methodKey, method.RouteField.Field))
+			}
+			if method.AnyTenant {
+				methodAuthLines = append(methodAuthLines, fmt.Sprintf(
+					"auth.SetMethodAnyTenant(%q)", methodKey))
+			}
 		}
 	}
 
@@ -885,6 +900,24 @@ func generateGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, ser
 `, validateInput)
 	}
 
+	// (spec.rpc).route_field: the tenant routing backstop, after request
+	// validation and before the handler. The request names its target tenant;
+	// one that is not a tid, or (on a tenant-owned instance) names another
+	// tenant, should never have been routed here and is refused.
+	routed := method.RouteField != nil
+	routeCheck := func(ret string) string {
+		if !routed {
+			return ""
+		}
+		return fmt.Sprintf(`
+	// Tenant routing backstop: the route field must name this instance's tenant.
+	if err := p.checkRoute(%s, req); err != nil {
+		return %serr
+	}
+`, fullMethodConstant, ret)
+	}
+	inputValidation += routeCheck("nil, ")
+
 	// Build the AccountingMethod field assignment.
 	// e.g. grpcName="sentinel", svc.Name="Dashboard", method.Name="GetClusterInfo"
 	// → field: "Sentinel" (PascalCase of grpcName)
@@ -1022,6 +1055,9 @@ if authTok != nil {
 		return status.Error(codes.InvalidArgument, fmt.Sprintf("validation failed: %%v", err))
 	}`, validateInput)
 	}
+	if !method.ClientStreaming {
+		streamInputValidation += routeCheck("")
+	}
 
 	serverStreamArg := "stream"
 	if validateOutput != "" {
@@ -1054,14 +1090,21 @@ if authTok != nil {
 		}
 	}
 
+	// A routed request stream is checked message by message: every inbound
+	// message names its tenant, and each must name this instance's.
+	streamMessageRoute := "nil"
+	if routed && method.ClientStreaming {
+		streamMessageRoute = goStreamMessageRoute(svc, method, goInput, fullMethodConstant)
+	}
+
 	clientStreamArg := "stream"
-	if validateInput != "" || (validateOutput != "" && !emptyOutput) || needsStreamMessageAuth || streamMessageScope != "nil" {
-		clientStreamArg = fmt.Sprintf("{{.ServerName}}ValidatingClientStreamingServer[%s, %s]{ClientStreamingServer: stream, authorizeReq: %s, scopeReq: %s, validateReq: %s, validateRes: %s}", goInput, goOutput, streamMessageAuthorize, streamMessageScope, validationFuncOrNil(validateInput), validationFuncOrNil(validateOutput))
+	if validateInput != "" || (validateOutput != "" && !emptyOutput) || needsStreamMessageAuth || streamMessageScope != "nil" || streamMessageRoute != "nil" {
+		clientStreamArg = fmt.Sprintf("{{.ServerName}}ValidatingClientStreamingServer[%s, %s]{ClientStreamingServer: stream, authorizeReq: %s, scopeReq: %s, validateReq: %s, routeReq: %s, validateRes: %s}", goInput, goOutput, streamMessageAuthorize, streamMessageScope, validationFuncOrNil(validateInput), streamMessageRoute, validationFuncOrNil(validateOutput))
 	}
 
 	bidiStreamArg := "stream"
-	if validateInput != "" || validateOutput != "" || needsStreamMessageAuth || streamMessageScope != "nil" {
-		bidiStreamArg = fmt.Sprintf("{{.ServerName}}ValidatingBidiStreamingServer[%s, %s]{BidiStreamingServer: stream, authorizeReq: %s, scopeReq: %s, validateReq: %s, validateRes: %s}", goInput, goOutput, streamMessageAuthorize, streamMessageScope, validationFuncOrNil(validateInput), validationFuncOrNil(validateOutput))
+	if validateInput != "" || validateOutput != "" || needsStreamMessageAuth || streamMessageScope != "nil" || streamMessageRoute != "nil" {
+		bidiStreamArg = fmt.Sprintf("{{.ServerName}}ValidatingBidiStreamingServer[%s, %s]{BidiStreamingServer: stream, authorizeReq: %s, scopeReq: %s, validateReq: %s, routeReq: %s, validateRes: %s}", goInput, goOutput, streamMessageAuthorize, streamMessageScope, validationFuncOrNil(validateInput), streamMessageRoute, validationFuncOrNil(validateOutput))
 	}
 
 	if method.ClientStreaming && method.ServerStreaming {
@@ -1539,6 +1582,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 	}
 `, validateInput)
 		}
+		inputValidation += routeCheck("nil, ")
 
 		handlerCall := fmt.Sprintf("p.handler.%s(sanitizeContext(ctx), caller, req, collection.PageParams{Limit: limit, After: after})", method.Name)
 		if handlerEmpty {
@@ -2107,4 +2151,17 @@ func qualifiedMethodAuthKey(protoPackage, serviceName, methodName string) string
 		return serviceName + "/" + methodName
 	}
 	return protoPackage + "." + serviceName + "/" + methodName
+}
+
+// goStreamMessageRoute renders the per-message routing backstop of a routed
+// client stream. The MCP session carrier's frames are stamped first: their
+// tenant is the platform's, set from the session's token at ingress
+// (<svc>McpStampFrameTenant, which refuses a frame naming another tenant),
+// so the backstop then checks the token's tenant against this instance's.
+func goStreamMessageRoute(svc *parser.ServiceInfo, method *parser.MethodInfo, goInput, fullMethodConstant string) string {
+	if goIsMcpCarrier(svc, method) {
+		return fmt.Sprintf("func(req *%s) error { if err := %sStampFrameTenant(caller, req); err != nil { return err }; return p.checkRoute(%s, req) }",
+			goInput, goMcpPrefix(svc.Name), fullMethodConstant)
+	}
+	return fmt.Sprintf("func(req *%s) error { return p.checkRoute(%s, req) }", goInput, fullMethodConstant)
 }

@@ -439,6 +439,10 @@ func generateGrpcOverRestClient(svc ServiceInfo, info *parser.ProtoInfo, fileDes
 	if hasWebSocketMethods {
 		buf.WriteString(tsW2SWebSocketHelpers())
 	}
+	if helpers := tsRouteHelpers(targetService); helpers != "" {
+		buf.WriteString(strings.TrimPrefix(helpers, "\n"))
+		buf.WriteString("\n")
+	}
 
 	// Client class — same name as gRPC client so consumers can swap transport
 	fmt.Fprintf(&buf, "/**\n * %s provides gRPC-compatible API over REST transport.\n", clientName)
@@ -602,6 +606,11 @@ func tsStreamHelper(name string) string {
 // generateTsGrpcOverRestLegacyMethod preserves the existing non-W2S gRPC-over-REST
 // unary surface while W2S uses the stricter gateway contract below.
 func generateTsGrpcOverRestLegacyMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePackage string) string {
+	// A routed rpc's request is checked before the request is made.
+	return tsInjectAtMethodStart(generateTsGrpcOverRestLegacyMethodBody(svc, method, servicePackage), tsRouteCheck(method, "request", "	        "))
+}
+
+func generateTsGrpcOverRestLegacyMethodBody(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePackage string) string {
 	methodLower := strutil.ToLowerCamelCase(method.Name)
 
 	resolveTypePrefix := func(fullType string) string {
@@ -668,6 +677,11 @@ func generateTsGrpcOverRestLegacyMethod(svc *parser.ServiceInfo, method *parser.
 // generateTsGrpcOverRestLegacyStreamMethod preserves the existing non-W2S
 // server-streaming surface, which consumes NDJSON-ish REST responses.
 func generateTsGrpcOverRestLegacyStreamMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, info *parser.ProtoInfo) string {
+	// A routed rpc's request is checked before the request is made.
+	return tsInjectAtMethodStart(generateTsGrpcOverRestLegacyStreamMethodBody(svc, method, info), tsRouteCheck(method, "request", "	        "))
+}
+
+func generateTsGrpcOverRestLegacyStreamMethodBody(svc *parser.ServiceInfo, method *parser.MethodInfo, info *parser.ProtoInfo) string {
 	methodLower := strutil.ToLowerCamelCase(method.Name)
 
 	resolveTypePrefix := func(fullType string) string {
@@ -765,6 +779,8 @@ func generateTsGrpcOverRestMethod(svc *parser.ServiceInfo, method *parser.Method
 	bodyExpr := tsW2SBodyExpr("request", inputSchema, isEmptyInput)
 	auth := tsBoolLiteral(authRequired)
 	requestValidation := tsW2SValidationStatement("request", method.FullInputType, method.InputType, servicePackage, "        ")
+	// A routed rpc's request is checked AFTER validation, BEFORE any send.
+	requestValidation += tsRouteCheck(method, "request", "        ")
 	responseValidation := tsW2SValidationStatement("response", method.FullOutputType, method.OutputType, servicePackage, "        ")
 
 	if isEmptyInput && isEmptyOutput {
@@ -830,6 +846,7 @@ func generateTsGrpcOverRestStreamMethod(svc *parser.ServiceInfo, method *parser.
 	httpMethod := tsW2SHttpMethod(method, isEmptyInput)
 	auth := tsBoolLiteral(authRequired)
 	requestValidation := tsW2SValidationStatement("request", method.FullInputType, method.InputType, info.Package, "        ")
+	requestValidation += tsRouteCheck(method, "request", "        ")
 	parseClosure := tsW2SParseClosure(outputSchema, method.FullOutputType, method.OutputType, info.Package)
 
 	// Server-streaming uses GET for convention, POST with body
@@ -910,6 +927,10 @@ func generateTsGrpcOverRestClientStreamMethod(svc *parser.ServiceInfo, method *p
 	isEmptyOutput := method.FullOutputType == "google.protobuf.Empty" || method.OutputType == "Empty"
 	auth := tsBoolLiteral(authRequired)
 	requestValidation := tsW2SValidationStatement("request", method.FullInputType, method.InputType, servicePackage, "                ")
+	// A routed stream is pinned to the tenant its first message names; each
+	// message is checked after validation, before it is sent.
+	requestValidation += tsRoutePinCheck(method, "request", "	                ")
+	routePinOpen := tsRoutePinOpen(method, "	        ")
 	responseValidation := tsW2SValidationStatement("response", method.FullOutputType, method.OutputType, servicePackage, "            ")
 
 	if isEmptyOutput {
@@ -917,7 +938,7 @@ func generateTsGrpcOverRestClientStreamMethod(svc *parser.ServiceInfo, method *p
 	     * %s calls %s.%s via W2S WebSocket client streaming.
 	     */
 	    async %s(requests: AsyncIterable<%s> | Iterable<%s>, opts?: { signal?: AbortSignal }): Promise<void> {
-	        const ws = await this.openWebSocket('%s', %s, opts?.signal);
+%s	        const ws = await this.openWebSocket('%s', %s, opts?.signal);
 	        try {
 	            await this.sendWsStart(ws, %s);
 	            for await (const request of toAsyncIterable(requests)) {
@@ -932,7 +953,7 @@ func generateTsGrpcOverRestClientStreamMethod(svc *parser.ServiceInfo, method *p
 	    }
 	`, method.Name, svc.Name, method.Name,
 			methodLower, inputType, inputType,
-			method.HttpPath, auth,
+			routePinOpen, method.HttpPath, auth,
 			auth,
 			requestValidation, inputSchema, auth)
 	}
@@ -941,7 +962,7 @@ func generateTsGrpcOverRestClientStreamMethod(svc *parser.ServiceInfo, method *p
 	     * %s calls %s.%s via W2S WebSocket client streaming.
 	     */
 	    async %s(requests: AsyncIterable<%s> | Iterable<%s>, opts?: { signal?: AbortSignal }): Promise<%s> {
-	        const ws = await this.openWebSocket('%s', %s, opts?.signal);
+%s	        const ws = await this.openWebSocket('%s', %s, opts?.signal);
 	        try {
 	            await this.sendWsStart(ws, %s);
 	            for await (const request of toAsyncIterable(requests)) {
@@ -958,7 +979,7 @@ func generateTsGrpcOverRestClientStreamMethod(svc *parser.ServiceInfo, method *p
 	    }
 	`, method.Name, svc.Name, method.Name,
 		methodLower, inputType, inputType, outputType,
-		method.HttpPath, auth,
+		routePinOpen, method.HttpPath, auth,
 		auth,
 		requestValidation, inputSchema, auth,
 		outputSchema, responseValidation)
@@ -972,7 +993,12 @@ func generateTsGrpcOverRestBidiMethod(svc *parser.ServiceInfo, method *parser.Me
 	outputSchema := tsSchemaRef(method.FullOutputType, method.OutputType, servicePackage)
 	auth := tsBoolLiteral(authRequired)
 	serializeClosure := fmt.Sprintf("(message) => toJson(%s, message, { alwaysEmitImplicit: true })", inputSchema)
-	if inputValidation := tsW2SValidationStatement("message", method.FullInputType, method.InputType, servicePackage, "	                "); inputValidation != "" {
+	// A routed stream is pinned (for the handle's life, across reconnects) to
+	// the tenant its first message names; serialize runs before each send.
+	inputValidation := tsW2SValidationStatement("message", method.FullInputType, method.InputType, servicePackage, "	                ")
+	inputValidation += tsRoutePinCheck(method, "message", "	                ")
+	routePinOpen := tsRoutePinOpen(method, "	        ")
+	if inputValidation != "" {
 		serializeClosure = fmt.Sprintf(`(message) => {
 %s	                return toJson(%s, message, { alwaysEmitImplicit: true });
 	            }`, inputValidation, inputSchema)
@@ -986,7 +1012,7 @@ func generateTsGrpcOverRestBidiMethod(svc *parser.ServiceInfo, method *parser.Me
 	        onMessage: (message: %s) => void,
 	        opts?: W2SBidiOptions<%s>,
 	    ): W2SStreamHandle<%s> {
-	        const handle = new W2SStreamHandleImpl<%s>();
+%s	        const handle = new W2SStreamHandleImpl<%s>();
 	        void this.runWsBidi(
 	            handle,
 	            '%s',
@@ -1003,6 +1029,7 @@ func generateTsGrpcOverRestBidiMethod(svc *parser.ServiceInfo, method *parser.Me
 		outputType,
 		inputType,
 		inputType,
+		routePinOpen,
 		inputType,
 		method.HttpPath,
 		auth,

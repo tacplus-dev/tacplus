@@ -112,14 +112,14 @@ func TestJavaRestDispatchRouteTableLiterals(t *testing.T) {
 		`AuthPolicy.NO_AUTH,`,
 		`List.of("ANY", "READ"),`,
 		`"redirectUrl",`,
-		`"redirect_url")`,
+		`"redirect_url",`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("route table is missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Count(out, "\"\",") != 2 {
-		t.Fatalf("entitlementService and targetNamespaceField must render as empty strings:\n%s", out)
+	if strings.Count(out, "\"\",") != 4 {
+		t.Fatalf("entitlementService, targetNamespaceField and the (platform) route field names must render as empty strings:\n%s", out)
 	}
 }
 
@@ -135,5 +135,101 @@ func TestJavaStringLiteral(t *testing.T) {
 		if got := javaStringLiteral(in); got != want {
 			t.Errorf("javaStringLiteral(%q) = %s, want %s", in, got, want)
 		}
+	}
+}
+
+// A routed route carries its route field's proto name, JSON name and wire
+// number; a platform route carries "", "" and 0 (issue #170).
+func TestJavaRestDispatchRouteTableCarriesRouteField(t *testing.T) {
+	out := renderJavaRestDispatchForTest(t, javaRestDispatchData{
+		Routes: []javaRestDispatchRoute{
+			{
+				HttpPath: "/crew/CrewService/Hail", GrpcPath: "/crew.CrewService/Hail", ServiceID: "crew",
+				HttpMethods: []string{"POST"}, AuthPolicy: "ENTITLED",
+				RouteField: "target_tenant", RouteFieldJSON: "targetTenant", RouteFieldNumber: 7,
+			},
+			{
+				HttpPath: "/catalog/CatalogService/GetItem", GrpcPath: "/catalog.CatalogService/GetItem", ServiceID: "catalog",
+				HttpMethods: []string{"POST"}, AuthPolicy: "ENTITLED",
+			},
+		},
+	})
+	for _, want := range []string{
+		"public final String routeField;",
+		"public final String routeFieldJson;",
+		"public final int routeFieldNumber;",
+		"\"target_tenant\",\n            \"targetTenant\",\n            7)",
+		"\"\",\n            \"\",\n            0)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("route table is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// The generated routing helpers: the tid check, RouteTenant for a decoded
+// value and RouteTenantFromWire for the gateway's gRPC proxy, all over the one
+// chassis implementation, refusing as HTTP 400 / INVALID_ARGUMENT.
+func TestJavaRestDispatchRoutingHelpers(t *testing.T) {
+	out := renderJavaRestDispatchForTest(t, javaRestDispatchData{})
+	for _, want := range []string{
+		"public static boolean validTenantId(String s) {",
+		"return x.chassis.serviceconnection.RouteTenant.validTenantId(s);",
+		"public static String routeTenant(RouteInfo route, String value) throws HttpError {",
+		"public static String routeTenantFromWire(byte[] frame, RouteInfo route) throws StatusException {",
+		"x.chassis.serviceconnection.RouteTenant.fromWire(frame, route.routeFieldNumber, route.routeField)",
+		"Status.INVALID_ARGUMENT",
+		"Channel channel(String serviceId, String tenant) throws StatusException;",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("RestDispatch is missing %q:\n%s", want, out)
+		}
+	}
+	// A platform route has no route field: "" is returned without reading the frame.
+	helper := out[strings.Index(out, "public static String routeTenantFromWire("):]
+	if i := strings.Index(helper, "if (route.routeFieldNumber == 0"); i < 0 || i > strings.Index(helper, "RouteTenant.fromWire") {
+		t.Fatalf("routeTenantFromWire must answer \"\" for a platform route before reading the frame:\n%s", helper)
+	}
+}
+
+// A routed arm decodes and validates the request, then reads its route field
+// and refuses an empty/malformed one with HTTP 400 BEFORE the dispatcher is
+// asked for a channel, which it is asked for that tenant. A platform arm asks
+// for its channel with no tenant, exactly where it did before.
+func TestJavaRestDispatchRoutedArmRefusesBeforeDialling(t *testing.T) {
+	routed := javaRestDispatchArmForTest("/crew.CrewService/Hail", "hail")
+	routed.ServiceID = "crew"
+	routed.RouteField = "target_tenant"
+	routed.RouteFieldGetter = "getTargetTenant"
+	routedStream := routed
+	routedStream.GrpcPath = "/crew.CrewService/Watch"
+	routedStream.MethodName = "watch"
+	platform := javaRestDispatchArmForTest("/catalog.CatalogService/GetItem", "getItem")
+	out := renderJavaRestDispatchForTest(t, javaRestDispatchData{
+		UnaryArms:  []javaRestDispatchArm{routed, platform},
+		StreamArms: []javaRestDispatchArm{routedStream},
+	})
+	unary := out[strings.Index(out, "public static String dispatch("):strings.Index(out, "public static void dispatchStream(")]
+	stream := out[strings.Index(out, "public static void dispatchStream("):]
+
+	routedArm := unary[strings.Index(unary, `case "/crew.CrewService/Hail"`):strings.Index(unary, `case "/catalog.CatalogService/GetItem"`)]
+	platformArm := unary[strings.Index(unary, `case "/catalog.CatalogService/GetItem"`):]
+	streamArm := stream[strings.Index(stream, `case "/crew.CrewService/Watch"`):]
+	for name, arm := range map[string]string{"unary": routedArm, "stream": streamArm} {
+		decode := strings.Index(arm, "getItemRequestFromJson(body)")
+		validate := strings.Index(arm, "validateGetItemRequest(req)")
+		tenant := strings.Index(arm, `routeTenantValue("target_tenant", req.getTargetTenant())`)
+		dial := strings.Index(arm, `dispatcher.channel("crew", tenant)`)
+		if decode < 0 || validate < 0 || tenant < 0 || dial < 0 || !(decode < validate && validate < tenant && tenant < dial) {
+			t.Fatalf("%s routed arm must decode, validate, read the route field, then dial that tenant (decode %d, validate %d, tenant %d, dial %d):\n%s",
+				name, decode, validate, tenant, dial, arm)
+		}
+	}
+	if !strings.Contains(platformArm, `dispatcher.channel("catalog", "")`) || strings.Contains(platformArm, "routeTenant") {
+		t.Fatalf("a platform arm dials with no tenant and reads no route field:\n%s", platformArm)
+	}
+	// The platform arm keeps its order: channel, then decode.
+	if strings.Index(platformArm, "dispatcher.channel(") > strings.Index(platformArm, "FromJson(body)") {
+		t.Fatalf("a platform arm keeps its pre-routing order:\n%s", platformArm)
 	}
 }

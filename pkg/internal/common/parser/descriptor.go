@@ -299,6 +299,8 @@ type MethodDescriptor struct {
 	RequiresDevice       bool                          // per-RPC requires_device (from spec.rpc): the device-only approval check gates this RPC
 	RequiresDeviceWhen   *RequiresDeviceWhenDescriptor // per-RPC requires_device_when (from spec.rpc): the same check, gated on one request field's value; nil when absent
 	TargetNamespaceField string                        // per-RPC target_namespace_field (from spec.rpc); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
+	RouteField           *RouteFieldDescriptor         // per-RPC route_field (from spec.rpc): the request field carrying the target tenant id; nil when absent
+	AnyTenant            bool                          // per-RPC RPC_FLAG_ANY_TENANT (from spec.rpc): callers of any tenant pass a tenant-owned instance's door
 	RestBrowser          *RestBrowserDescriptor        // method-level rest_browser (browser form target: form body / redirect); nil when absent
 	Collection           *CollectionDescriptor         // method-level method_collection (collection-returning read); nil when absent
 	Rpc                  *RpcDescriptor                // method-level spec.rpc (call surface); nil when absent
@@ -1215,6 +1217,10 @@ func (p *DescriptorParser) parseMethodOptions(method protoreflect.MethodDescript
 				// credential, which mcpAutoExposed refuses to make a tool of.
 				case spec.RpcFlag_RPC_FLAG_MINTS_CREDENTIAL:
 					md.MintsCredential = true
+				// The tenant-owned door policy, not a routing fact: callers of
+				// any tenant pass this rpc's instance door.
+				case spec.RpcFlag_RPC_FLAG_ANY_TENANT:
+					md.AnyTenant = true
 				}
 			}
 			if svcs := val.GetAuthServices(); len(svcs) > 0 {
@@ -1240,6 +1246,15 @@ func (p *DescriptorParser) parseMethodOptions(method protoreflect.MethodDescript
 			}
 			if f := val.GetTargetNamespaceField(); f != "" {
 				md.TargetNamespaceField = f
+			}
+			// route_field: resolved against the request descriptor HERE, so
+			// every router reads the same name, JSON name and wire number.
+			if f := val.GetRouteField(); f != "" {
+				if rf, err := routeFieldDescriptor(method, f); err != nil {
+					p.parseErrs = append(p.parseErrs, err.Error())
+				} else {
+					md.RouteField = rf
+				}
 			}
 		}
 	}
@@ -3306,6 +3321,8 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 				RequiresDevice:       method.RequiresDevice,
 				RequiresDeviceWhen:   method.RequiresDeviceWhen,
 				TargetNamespaceField: method.TargetNamespaceField,
+				RouteField:           method.RouteField,
+				AnyTenant:            method.AnyTenant,
 				RestBrowser:          method.RestBrowser,
 				Collection:           method.Collection,
 				MinGroupSize:         method.MinGroupSize,

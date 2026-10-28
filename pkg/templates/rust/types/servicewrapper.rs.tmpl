@@ -55,11 +55,15 @@ pub trait Authorizer: Send + Sync + 'static {
     /// Enforces the level-or-below rule: the caller's namespace (from `authorization`)
     /// must equal or be a path-segment ancestor of `target_namespace`. Used by methods
     /// annotated with `target_namespace_field` for tenant-scoped operations.
-    async fn check_at_or_below(&self, authorization: Option<&str>, target_namespace: &str) -> Result<std::collections::HashMap<String, String>, tonic::Status>;
+    /// `full_method` is the rpc being called: a tenant-owned instance's door
+    /// follows its RPC_FLAG_ANY_TENANT.
+    async fn check_at_or_below(&self, full_method: &str, authorization: Option<&str>, target_namespace: &str) -> Result<std::collections::HashMap<String, String>, tonic::Status>;
     /// Verifies token signature, audience and expiry only — no entitlement check
     /// and no namespace check. Used by `auth_any_user` methods that declare no
     /// fixed target namespace: any authenticated caller may call them.
-    async fn authenticate(&self, authorization: Option<&str>) -> Result<std::collections::HashMap<String, String>, tonic::Status>;
+    /// `full_method` is the rpc being called: a tenant-owned instance's door
+    /// follows its RPC_FLAG_ANY_TENANT.
+    async fn authenticate(&self, full_method: &str, authorization: Option<&str>) -> Result<std::collections::HashMap<String, String>, tonic::Status>;
 }
 
 /// ValidationWrapper wraps a {{.ServiceName}}Handler with authorization and validation.
@@ -81,6 +85,12 @@ pub struct ValidationWrapper {
     /// against kernel.
     approval_check: Arc<tokio::sync::RwLock<Option<approval::Check>>>,
 {{- end}}
+{{- if .HasTenantRoute}}
+    /// The tenant this instance serves (the `<t>` of its own `/tenants/<t>`
+    /// namespace), or empty for an instance that serves no single tenant. The
+    /// (spec.rpc).route_field backstop refuses a request routed elsewhere.
+    host_tenant: Arc<std::sync::RwLock<String>>,
+{{- end}}
 }
 
 impl ValidationWrapper {
@@ -97,8 +107,31 @@ impl ValidationWrapper {
 {{- if .HasRequiresDevice}}
             approval_check: Arc::new(tokio::sync::RwLock::new(None)),
 {{- end}}
+{{- if .HasTenantRoute}}
+            host_tenant: Arc::new(std::sync::RwLock::new(String::new())),
+{{- end}}
         }
     }
+{{- if .HasTenantRoute}}
+
+    /// Tells the wrapper the namespace its own instance runs in (the
+    /// authorizer's host namespace, from the instance's own identity). A
+    /// tenant-owned instance runs in `/tenants/<t>` and serves only calls
+    /// routed to `<t>`; any other namespace serves no single tenant, and the
+    /// backstop then only checks that the route field is a tid.
+    pub fn set_host_namespace(&self, namespace: &str) {
+        let tenant = servicemanager::tenant_route::host_tenant_of_namespace(namespace).unwrap_or_default();
+        *self.host_tenant.write().unwrap() = tenant;
+    }
+
+    /// The (spec.rpc).route_field backstop, after request validation and before
+    /// the handler: INVALID_ARGUMENT when the route field is not a tid,
+    /// PERMISSION_DENIED when it names a tenant this instance does not serve.
+    fn check_route_tenant(&self, field: &str, value: &str) -> Result<(), tonic::Status> {
+        let host = self.host_tenant.read().unwrap().clone();
+        servicemanager::tenant_route::check_routed_tenant(field, value, &host)
+    }
+{{- end}}
 
 {{- if .HasRequiresDevice}}
 
@@ -240,14 +273,14 @@ impl ValidationWrapper {
     /// of `target_namespace`. Fail-closed: a None authorizer rejects. Used by methods
     /// with `target_namespace_field` annotation.
     #[allow(dead_code)]
-    async fn enforce_at_or_below<T>(&self, req: &tonic::Request<T>, target_namespace: &str) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
+    async fn enforce_at_or_below<T>(&self, full_method: &str, req: &tonic::Request<T>, target_namespace: &str) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
         let auth = self.authorizer.read().await;
         match *auth {
             Some(ref a) => {
                 let authorization = req.metadata()
                     .get("authorization")
                     .and_then(|v| v.to_str().ok());
-                a.check_at_or_below(authorization, target_namespace).await
+                a.check_at_or_below(full_method, authorization, target_namespace).await
             }
             None => Err(tonic::Status::unauthenticated(
                 "authorizer not wired (build/SM bug) — auth is mandatory and cannot be disabled")),
@@ -259,14 +292,14 @@ impl ValidationWrapper {
     /// target namespace — there is no namespace to compare against, so gating on
     /// one would deny every caller not sitting exactly at "/".
     #[allow(dead_code)]
-    async fn enforce_authenticated<T>(&self, req: &tonic::Request<T>) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
+    async fn enforce_authenticated<T>(&self, full_method: &str, req: &tonic::Request<T>) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
         let auth = self.authorizer.read().await;
         match *auth {
             Some(ref a) => {
                 let authorization = req.metadata()
                     .get("authorization")
                     .and_then(|v| v.to_str().ok());
-                a.authenticate(authorization).await
+                a.authenticate(full_method, authorization).await
             }
             None => Err(tonic::Status::unauthenticated(
                 "authorizer not wired (build/SM bug) — auth is mandatory and cannot be disabled")),
@@ -277,10 +310,10 @@ impl ValidationWrapper {
     /// Used by client-streaming/bidi request adapters where each message carries
     /// the target namespace but the stream metadata is fixed at open.
     #[allow(dead_code)]
-    async fn enforce_at_or_below_authorization(&self, authorization: Option<&str>, target_namespace: &str) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
+    async fn enforce_at_or_below_authorization(&self, full_method: &str, authorization: Option<&str>, target_namespace: &str) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
         let auth = self.authorizer.read().await;
         match *auth {
-            Some(ref a) => a.check_at_or_below(authorization, target_namespace).await,
+            Some(ref a) => a.check_at_or_below(full_method, authorization, target_namespace).await,
             None => Err(tonic::Status::unauthenticated(
                 "authorizer not wired (build/SM bug) — auth is mandatory and cannot be disabled")),
         }

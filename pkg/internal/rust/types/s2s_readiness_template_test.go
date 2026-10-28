@@ -194,7 +194,7 @@ func TestRustReadinessDebouncesHealthInputs(t *testing.T) {
 	if !strings.Contains(connection, "const PING_INTERVAL_SECS: u64 = 10;") {
 		t.Fatalf("ping interval must be 10s so 3 failures fit the 30s readiness window")
 	}
-	avail := fnBody(t, connection, "pub async fn unavailable_input(&self)")
+	avail := fnBody(t, connection, "async fn endpoints_unavailable_input(&self)")
 	if !strings.Contains(avail, "conn.readiness_down_input().await") || strings.Contains(avail, "is_healthy()") {
 		t.Fatalf("readiness must use the debounced inputs, not the raw routing flag:\n%s", avail)
 	}

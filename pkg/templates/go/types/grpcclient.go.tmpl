@@ -42,8 +42,11 @@ import (
 	"{{.ApprovalLibImportPath}}"
 {{- end}}
 	{{.CrossPackageImports}}
+{{- if .HasRoute}}
+	"{{.ServiceConnectionImportPath}}"
+{{- end}}
 	"google.golang.org/grpc"
-{{- if .HasNonBidi}}
+{{- if or .HasNonBidi .HasRoute}}
 	"google.golang.org/grpc/codes"
 {{- end}}
 {{- if .HasMethods}}
@@ -51,7 +54,7 @@ import (
 	"google.golang.org/grpc/metadata"
 {{- end}}
 {{- end}}
-{{- if .HasNonBidi}}
+{{- if or .HasNonBidi .HasRoute}}
 	"google.golang.org/grpc/status"
 {{- end}}
 {{- if .HasBidi}}
@@ -217,6 +220,9 @@ func {{.ClientName}}UnaryWithRetry[T any](c *{{.ClientName}}, ctx context.Contex
 type {{.ClientName}}ClientStreamingClient[Req, Resp any] struct {
 	grpc.ClientStreamingClient[Req, Resp]
 	validateReq  func(*Req) error
+	// routeReq refuses a message of a routed stream whose route field names
+	// another tenant than the one the stream was opened to.
+	routeReq     func(*Req) error
 	validateResp func(*Resp) error
 }
 
@@ -229,6 +235,11 @@ func (s *{{.ClientName}}ClientStreamingClient[Req, Resp]) Send(req *Req) error {
 	if s.validateReq != nil {
 		if err := s.validateReq(req); err != nil {
 			return status.Errorf(codes.InvalidArgument, "validation failed: %v", err)
+		}
+	}
+	if s.routeReq != nil {
+		if err := s.routeReq(req); err != nil {
+			return err
 		}
 	}
 	return s.ClientStreamingClient.Send(req)

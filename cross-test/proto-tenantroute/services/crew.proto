@@ -1,0 +1,84 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The tenant-routing fixture's TENANT-OWNED service (issue #170).
+//
+// crew runs one instance per tenant. Every rpc names the request field that
+// carries the target tenant's id, (spec.rpc).route_field, and that field alone
+// decides which tenant's instance receives the call: the gateway's route table
+// carries it, and harbor's generated S2S client picks the instance by it.
+// SendMessage opens the tenant door to callers of any tenant
+// (RPC_FLAG_ANY_TENANT); GetSkipper keeps the default, members only.
+
+syntax = "proto3";
+
+package crew;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "crew", tenant_owned: true};
+
+service CrewService {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  // GetSkipper reads the target tenant's skipper: members of that tenant only.
+  rpc GetSkipper(GetSkipperRequest) returns (GetSkipperResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, route_field: "tenant"};
+  }
+
+  // SendMessage sends a message to the target tenant's crew: any user of any tenant.
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, route_field: "target_tenant",
+                         flags: [RPC_FLAG_AUTH_ANY_USER, RPC_FLAG_ANY_TENANT]};
+  }
+
+  // SubscribeCrew streams the target tenant's crew roster.
+  rpc SubscribeCrew(SubscribeCrewRequest) returns (stream CrewMember) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, route_field: "tenant"};
+  }
+}
+
+service CrewPeerService {
+  option (spec.service_s2s) = {label: "CrewPeerService"};
+
+  // GetCrewStatus reports the target tenant's crew status to a platform service.
+  rpc GetCrewStatus(GetCrewStatusRequest) returns (GetCrewStatusResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["harbor"], route_field: "tenant"};
+  }
+}
+
+message GetSkipperRequest {
+  // tenant is the target tenant's tid.
+  string tenant = 1 [(spec.assert_max_size) = 8];
+}
+
+message GetSkipperResponse {
+  string name = 1 [(spec.assert_max_size) = 128];
+}
+
+message SendMessageRequest {
+  string text = 1 [(spec.assert_max_size) = 1024];
+  // target_tenant is the target tenant's tid.
+  string target_tenant = 2 [(spec.assert_max_size) = 8];
+}
+
+message SendMessageResponse {
+  bool delivered = 1;
+}
+
+message SubscribeCrewRequest {
+  // tenant is the target tenant's tid.
+  string tenant = 1 [(spec.assert_max_size) = 8];
+}
+
+message CrewMember {
+  string name = 1 [(spec.assert_max_size) = 128];
+}
+
+message GetCrewStatusRequest {
+  // tenant is the target tenant's tid.
+  string tenant = 1 [(spec.assert_max_size) = 8];
+}
+
+message GetCrewStatusResponse {
+  bool ready = 1;
+}

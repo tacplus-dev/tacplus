@@ -136,9 +136,9 @@ func TestGoAuthorizerUsesSharedBearerVerifier(t *testing.T) {
 	rendered := string(src)
 	for _, want := range []string{
 		"func rejectAPITokenClass(tw *tokenlib.TokenWrapper) error",
-		"func (a *authorizer) verifyBearer(ctx context.Context) (*tokenlib.TokenWrapper, error)",
+		"func (a *authorizer) verifyBearer(ctx context.Context, fullMethod string) (*tokenlib.TokenWrapper, error)",
 		"if err := rejectAPITokenClass(tw); err != nil",
-		"tw, err := a.verifyBearer(ctx)",
+		"tw, err := a.verifyBearer(ctx, fullMethod)",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("Go authorizer must share verified bearer/token-class rejection path; missing %q", want)
@@ -146,7 +146,7 @@ func TestGoAuthorizerUsesSharedBearerVerifier(t *testing.T) {
 	}
 	// All three entry points (Authorize, Authenticate, AuthenticateAtOrBelow)
 	// must go through that one verifier and keep the token it returns.
-	if got := strings.Count(rendered, "tw, err := a.verifyBearer(ctx)"); got != 3 {
+	if got := strings.Count(rendered, "tw, err := a.verifyBearer(ctx, fullMethod)"); got != 3 {
 		t.Fatalf("Go authorizer must verify the bearer through one shared helper in all three entry points, got %d", got)
 	}
 	if got := strings.Count(rendered, "refresh tokens cannot be used for API access"); got != 1 {

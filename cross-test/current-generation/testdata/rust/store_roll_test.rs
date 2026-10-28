@@ -100,10 +100,10 @@ impl Authorizer for AllowAll {
     async fn authorize(&self, _m: &str, _a: Option<&str>) -> Result<HashMap<String, String>, tonic::Status> {
         Ok(HashMap::new())
     }
-    async fn check_at_or_below(&self, _a: Option<&str>, _ns: &str) -> Result<HashMap<String, String>, tonic::Status> {
+    async fn check_at_or_below(&self, _m: &str, _a: Option<&str>, _ns: &str) -> Result<HashMap<String, String>, tonic::Status> {
         Ok(HashMap::new())
     }
-    async fn authenticate(&self, _a: Option<&str>) -> Result<HashMap<String, String>, tonic::Status> {
+    async fn authenticate(&self, _m: &str, _a: Option<&str>) -> Result<HashMap<String, String>, tonic::Status> {
         Ok(HashMap::new())
     }
 }

@@ -1,0 +1,55 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// Swift tenant-routing fixture (issue #170): a tenant-owned C2S service whose
+// every rpc declares the request field naming the target tenant.
+
+syntax = "proto3";
+
+package crew;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "crew", tenant_owned: true};
+
+service CrewService {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  rpc GetSkipper(GetSkipperRequest) returns (GetSkipperResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, route_field: "tenant"};
+  }
+
+  rpc WatchCrew(WatchCrewRequest) returns (stream CrewMember) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, route_field: "tenant"};
+    option (spec.method_collection) = {mode: COLLECTION_MODE_WATCH, order_by: ["name"]};
+  }
+
+  rpc SendMessages(stream SendMessageRequest) returns (stream SendMessageResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, route_field: "target_tenant",
+                         flags: [RPC_FLAG_AUTH_ANY_USER, RPC_FLAG_ANY_TENANT]};
+  }
+}
+
+message GetSkipperRequest {
+  string tenant = 1 [(spec.assert_max_size) = 8];
+}
+
+message GetSkipperResponse {
+  string name = 1 [(spec.assert_max_size) = 128];
+}
+
+message WatchCrewRequest {
+  string tenant = 1 [(spec.assert_max_size) = 8];
+}
+
+message CrewMember {
+  string name = 1 [(spec.assert_max_size) = 128];
+}
+
+message SendMessageRequest {
+  string text = 1 [(spec.assert_max_size) = 1024];
+  string target_tenant = 2 [(spec.assert_max_size) = 8];
+}
+
+message SendMessageResponse {
+  bool delivered = 1;
+}

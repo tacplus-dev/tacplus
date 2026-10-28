@@ -161,12 +161,17 @@ class {{.WrapperName}}:
                 f"authorizer not configured for {full_method} — auth is mandatory and cannot be disabled")
         self._authorize_func(self._metadata_from_context(context), full_method, req)
 
-    def _authenticate(self, context, target_namespace=None):
-        """Check authentication only (auth_any_user). Fail-closed: a missing func rejects."""
+    def _authenticate(self, context, target_namespace=None, full_method=None):
+        """Check authentication only (auth_any_user). Fail-closed: a missing func rejects.
+        full_method is passed only for an RPC_FLAG_ANY_TENANT method, so the
+        authorizer opens the tenant-owned door for that method alone."""
         if self._authenticate_func is None:
             raise PermissionError(
                 "authenticator not configured — auth is mandatory and cannot be disabled")
-        self._authenticate_func(self._metadata_from_context(context), target_namespace)
+        if full_method is None:
+            self._authenticate_func(self._metadata_from_context(context), target_namespace)
+        else:
+            self._authenticate_func(self._metadata_from_context(context), target_namespace, full_method)
 
     def _abort_handler_error(self, context, exc):
         grpc_code = getattr(exc, "grpc_code", None)

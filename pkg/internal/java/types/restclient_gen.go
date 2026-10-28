@@ -167,6 +167,9 @@ func generateRestClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		if method.ServerStreaming {
 			hasStreaming = true
 		}
+		if javaRouteTenantCheck(method, "request") != "" {
+			neededImports[fmt.Sprintf("import %s.chassis.serviceconnection.RouteTenant;", svc.Config.JavaPackageBase)] = struct{}{}
+		}
 		methods.WriteString(generateJavaRestClientMethod(method, inputType, outputType))
 		methods.WriteString("\n")
 	}
@@ -239,6 +242,11 @@ func generateJavaRestClientMethod(method *parser.MethodInfo, inputType, outputTy
 	}
 
 	isEmptyInput := method.FullInputType == "google.protobuf.Empty" || method.InputType == "Empty"
+	// (spec.rpc).route_field: refuse an empty or malformed one before sending.
+	routeCheck := ""
+	if c := javaRouteTenantCheck(method, "request"); c != "" && !isEmptyInput {
+		routeCheck = "        " + c + "\n"
+	}
 
 	if method.ServerStreaming {
 		if isEmptyInput {
@@ -256,10 +264,10 @@ func generateJavaRestClientMethod(method *parser.MethodInfo, inputType, outputTy
      * %s calls %s via %s %s (NDJSON streaming).
      */
     public java.util.Iterator<%s> %s(%s request) {
-        return streamNdjson("%s", "%s", request, %s.class);
+%s        return streamNdjson("%s", "%s", request, %s.class);
     }
 `, method.Name, method.HttpPath, method.HttpMethod, method.HttpPath,
-			outputType, methodName, inputType,
+			outputType, methodName, inputType, routeCheck,
 			method.HttpMethod, method.HttpPath, outputType)
 	}
 
@@ -280,10 +288,10 @@ func generateJavaRestClientMethod(method *parser.MethodInfo, inputType, outputTy
      * %s calls %s via %s %s.
      */
     public %s %s(%s request) {
-        return doJson("%s", "%s", request, %s.class);
+%s        return doJson("%s", "%s", request, %s.class);
     }
 `, method.Name, method.HttpPath, method.HttpMethod, method.HttpPath,
-		outputType, methodName, inputType,
+		outputType, methodName, inputType, routeCheck,
 		method.HttpMethod, method.HttpPath, outputType)
 }
 

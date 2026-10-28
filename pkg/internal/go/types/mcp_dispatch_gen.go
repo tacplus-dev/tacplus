@@ -103,6 +103,12 @@ type goMcpTool struct {
 	NamespaceField     string
 	StoreNamespaceRows []goMcpRowField
 
+	// RouteField is the rpc's (spec.rpc).route_field on a tenant-routed
+	// service, nil otherwise. The tenant a tool call is directed at is the
+	// session's, from its token: the field is absent from Schema, refused as
+	// an argument, and filled from the session tenant.
+	RouteField *parser.RouteFieldDescriptor
+
 	// OwnerDefaultGuard is the (spec.owner_default) refusal rendered by the same
 	// helper the gRPC wrapper calls, "" when nothing is declared or nothing is
 	// contradicted. It rides the request-validation seam, immediately after the
@@ -202,6 +208,7 @@ func goMcpTools(svc *parser.ServiceInfo, servicePackage string, san *egressSanit
 			StorePrincipalRows: san.mcpRowFields(m.FullOutputType, servicePackage, "store_principal"),
 			NamespaceField:     san.annotatedStringField(m.FullInputType, servicePackage, "namespace"),
 			StoreNamespaceRows: san.mcpRowFields(m.FullOutputType, servicePackage, "store_namespace"),
+			RouteField:         m.RouteField,
 			OwnerDefaultGuard:  ownerDefaultGuard,
 			Page:               goMcpPageOf(m, servicePackage),
 		})
@@ -338,12 +345,37 @@ func goMcpInputSchema(m *parser.MethodInfo, servicePackage string, san *egressSa
 	if page := goMcpPageOf(m, servicePackage); page != nil {
 		goMcpAnnotatePageSchema(schema, page)
 	}
+	if m.RouteField != nil {
+		goMcpOmitSchemaField(schema, m.RouteField.Field)
+	}
 	schema["description"] = parser.McpToolDescription(m.Comment)
 	out, err := json.Marshal(schema)
 	if err != nil {
 		return "", fmt.Errorf("marshal input schema: %w", err)
 	}
 	return string(out), nil
+}
+
+// goMcpOmitSchemaField removes field from a tool's input schema. The route
+// field of a tenant-routed tool is the platform's to set, from the session's
+// token, so the model is never asked for it.
+func goMcpOmitSchemaField(schema map[string]any, field string) {
+	if props, ok := schema["properties"].(map[string]any); ok {
+		delete(props, field)
+	}
+	if req, ok := schema["required"].([]string); ok {
+		kept := req[:0:0]
+		for _, r := range req {
+			if r != field {
+				kept = append(kept, r)
+			}
+		}
+		if len(kept) == 0 {
+			delete(schema, "required")
+		} else {
+			schema["required"] = kept
+		}
+	}
 }
 
 // goMcpAnnotatePageSchema tells the model how to drive the two paging fields a
@@ -667,9 +699,12 @@ func generateGoMcpDispatch(svc *parser.ServiceInfo, p goMcpFileParams, san *egre
 	frameOut := goTypeRef(carrier.FullOutputType, carrier.OutputType, p.ServicePackage)
 
 	var b strings.Builder
-	b.WriteString(goMcpFileHeader(svc.Name, p, goMcpHasPageTool(tools)))
+	b.WriteString(goMcpFileHeader(svc.Name, p, goMcpHasPageTool(tools), carrier.RouteField != nil))
 	b.WriteString(goMcpToolTable(svc.Name, tools))
 	b.WriteString(goMcpSurface(svc.Name, tools))
+	if carrier.RouteField != nil {
+		b.WriteString(goMcpSessionTenant(svc.Name, frameIn))
+	}
 	for _, t := range tools {
 		b.WriteString(goMcpToolDispatch(svc.Name, t))
 	}
@@ -712,7 +747,7 @@ func goMcpHasPageTool(tools []goMcpTool) bool {
 	return false
 }
 
-func goMcpFileHeader(serviceName string, p goMcpFileParams, hasPage bool) string {
+func goMcpFileHeader(serviceName string, p goMcpFileParams, hasPage, routed bool) string {
 	var crossImports strings.Builder
 	for pkg, dir := range p.CrossPackageTypes {
 		if dir == "" || !p.used[pkg] || pkg == "google.protobuf" {
@@ -734,6 +769,11 @@ func goMcpFileHeader(serviceName string, p goMcpFileParams, hasPage bool) string
 		// and the page-size clamp). goimports cannot resolve that local package
 		// by name, so it is imported explicitly, exactly as the wrapper does.
 		fmt.Fprintf(&crossImports, "\n\t\"%s/chassis/collection\"", p.ModuleBasePath)
+	}
+	if routed {
+		// A tenant-routed service's session tenant is read off the caller's
+		// namespace claim by the serviceconnection helper the routers share.
+		fmt.Fprintf(&crossImports, "\n\t\"%s/chassis/serviceconnection\"", p.ModuleBasePath)
 	}
 
 	return header.Copyright(consts.LangGo) + fmt.Sprintf(`
@@ -953,7 +993,7 @@ func (s *%[5]s) %[1]s(ctx context.Context, arguments json.RawMessage) (*mcp.Call
 
 	// `named` is read only by the refusals below and by the no-argument check;
 	// a tool with neither would leave it unused, which Go rejects.
-	if t.PrincipalField == "" && t.NamespaceField == "" && !t.EmptyRequest {
+	if t.PrincipalField == "" && t.NamespaceField == "" && t.RouteField == nil && !t.EmptyRequest {
 		b.WriteString("\t_ = named\n")
 	}
 
@@ -975,6 +1015,20 @@ func (s *%[5]s) %[1]s(ctx context.Context, arguments json.RawMessage) (*mcp.Call
 	}
 `, f.marker, f.field, strconv.Quote(f.field), prefix, f.why)
 	}
+	if rf := t.RouteField; rf != nil {
+		named := fmt.Sprintf("named[%s]", strconv.Quote(rf.Field))
+		if rf.JSONName != rf.Field {
+			named += fmt.Sprintf(" || named[%s]", strconv.Quote(rf.JSONName))
+		}
+		fmt.Fprintf(&b, `	// (spec.rpc).route_field %[1]s is the tenant this call is directed at,
+	// which is the session's, from its token: it is absent from this tool's
+	// schema, and a call that names it, by either name, is refused, not routed.
+	if %[2]s {
+		return %[3]sToolError(status.Error(codes.InvalidArgument,
+			"%[1]s is set by the server from your session's tenant; it is not a tool argument")), nil
+	}
+`, rf.Field, named, prefix)
+	}
 
 	if t.EmptyRequest {
 		// A tool that takes no arguments; its handler method declares no req.
@@ -994,6 +1048,16 @@ func (s *%[5]s) %[1]s(ctx context.Context, arguments json.RawMessage) (*mcp.Call
 		}
 	}
 `, t.InputType, prefix)
+		if t.RouteField != nil {
+			// Filled before validation, so the request validated is the one
+			// the handler is called with.
+			fmt.Fprintf(&b, `	__tenant, err := %[1]sSessionTenant(s.caller)
+	if err != nil {
+		return %[1]sToolError(err), nil
+	}
+	req.%[2]s = __tenant
+`, prefix, toGoFieldName(t.RouteField.Field))
+		}
 		if t.ValidateInput != "" {
 			fmt.Fprintf(&b, `	if err := %s(req); err != nil {
 		return %sToolError(status.Error(codes.InvalidArgument,
@@ -1180,6 +1244,50 @@ func goMcpRowFilterBlock(prefix, method string, f goMcpRowField, idx int, isName
 	}
 	fmt.Fprintf(&b, "	resp.%s = %s\n", field, kept)
 	return b.String()
+}
+
+// goMcpSessionTenant renders, for a tenant-routed service, the one source of
+// a session's tenant and the carrier's frame ingress.
+//
+// The model must never be able to set the tenant. A session is opened in the
+// caller's own tenant, read off the verified token's namespace claim; every
+// inbound frame is stamped with it (the generated per-frame routing backstop
+// then checks it against this instance's tenant), and every tool call is
+// directed at it. Nothing the client or the model sends chooses it.
+func goMcpSessionTenant(serviceName, frameIn string) string {
+	return fmt.Sprintf(`
+// %[1]sSessionTenant is the tenant an MCP session of %[2]s is opened in: the
+// tenant of the verified caller's namespace claim. A caller whose namespace
+// belongs to no tenant (a /system caller, say) has no session here.
+func %[1]sSessionTenant(caller *servicemanager.Caller) (string, error) {
+	ns := ""
+	if caller != nil {
+		ns = caller.Token().GetNamespace()
+	}
+	if tid, ok := serviceconnection.NamespaceTenant(ns); ok {
+		return tid, nil
+	}
+	return "", status.Error(codes.PermissionDenied, fmt.Sprintf(
+		"an MCP session of %[2]s is opened in the caller's own tenant, and the caller's namespace %%q belongs to none", ns))
+}
+
+// %[1]sStampFrameTenant is the carrier's frame ingress: an inbound frame's
+// tenant is the session's, from its token. An empty one is stamped; one that
+// names another tenant is refused, whoever wrote it.
+func %[1]sStampFrameTenant(caller *servicemanager.Caller, frame *%[3]s) error {
+	tid, err := %[1]sSessionTenant(caller)
+	if err != nil {
+		return err
+	}
+	if frame.Tenant == "" {
+		frame.Tenant = tid
+	} else if frame.Tenant != tid {
+		return status.Error(codes.PermissionDenied, fmt.Sprintf(
+			"this MCP frame names tenant %%q, but the session is opened in tenant %%q, from its token", frame.Tenant, tid))
+	}
+	return nil
+}
+`, goMcpPrefix(serviceName), serviceName, frameIn)
 }
 
 // goMcpResultHelpers renders the framing every tool shares.

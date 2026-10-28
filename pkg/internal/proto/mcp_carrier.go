@@ -42,6 +42,11 @@ const (
 	// qualified, as an injected rpc in another package must name them.
 	mcpRequestFrameType  = "mcp.McpRequest"
 	mcpResponseFrameType = "mcp.McpResponse"
+	// McpRequestTenantField is mcp.McpRequest's tenant field: the
+	// (spec.rpc).route_field of a tenant-routed service's carrier. The
+	// platform stamps it from the session's token; it never comes from the
+	// model.
+	McpRequestTenantField = "tenant"
 )
 
 // McpResponseFrameMaxBytes is the (spec.assert_max_size) bound on
@@ -88,6 +93,7 @@ func AppendMcpCarrierRpcsToProtos(tempProtoDir, inputDir string) ([]string, erro
 	}
 
 	all := dp.GetAllFiles()
+	tenantOwned := parser.TenantOwnedServices(dp)
 	relPaths := make([]string, 0, len(all))
 	for relPath := range all {
 		relPaths = append(relPaths, relPath)
@@ -109,6 +115,7 @@ func AppendMcpCarrierRpcsToProtos(tempProtoDir, inputDir string) ([]string, erro
 		type target struct {
 			name     string
 			exposure spec.RpcExposure
+			routed   bool
 		}
 		var targets []target
 		for i := range fd.Services {
@@ -127,7 +134,8 @@ func AppendMcpCarrierRpcsToProtos(tempProtoDir, inputDir string) ([]string, erro
 			if declared {
 				continue
 			}
-			targets = append(targets, target{name: svc.Name, exposure: svc.McpExposure})
+			targets = append(targets, target{name: svc.Name, exposure: svc.McpExposure,
+				routed: parser.IsTenantRouted(fd, svc, tenantOwned)})
 		}
 		if len(targets) == 0 {
 			continue
@@ -156,7 +164,7 @@ func AppendMcpCarrierRpcsToProtos(tempProtoDir, inputDir string) ([]string, erro
 		}
 		sort.Slice(placements, func(i, j int) bool { return placements[i].at > placements[j].at })
 		for _, p := range placements {
-			text = text[:p.at] + mcpCarrierRpcBlock(p.name, p.exposure) + text[p.at:]
+			text = text[:p.at] + mcpCarrierRpcBlock(p.name, p.exposure, p.routed) + text[p.at:]
 		}
 
 		if err := os.WriteFile(filePath, []byte(text), 0644); err != nil {
@@ -210,7 +218,12 @@ func protoDirMayDeclareMcpTools(dir string) (bool, error) {
 // McpExposure — the union of its tools' — because the carrier has to be
 // reachable from wherever its most-exposed tool is called; it is derived here
 // from the same union rather than declared twice, so it cannot drift.
-func mcpCarrierRpcBlock(serviceName string, exposure spec.RpcExposure) string {
+//
+// routed marks the carrier of a tenant-routed service (parser.IsTenantRouted,
+// the same test ValidateTenantRouting applies). Like every rpc of such a
+// service it declares its route field: mcp.McpRequest.tenant, the tenant the
+// session is opened in, which the platform stamps from the session's token.
+func mcpCarrierRpcBlock(serviceName string, exposure spec.RpcExposure, routed bool) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	for _, line := range strings.Split(parser.McpCarrierDescription(serviceName), "\n") {
@@ -225,6 +238,9 @@ func mcpCarrierRpcBlock(serviceName string, exposure spec.RpcExposure) string {
 	b.WriteString("    option (spec.rpc) = {\n")
 	b.WriteString("      principal: RPC_PRINCIPAL_USER,\n")
 	fmt.Fprintf(&b, "      exposure: %s,\n", exposure.String())
+	if routed {
+		fmt.Fprintf(&b, "      route_field: %q,\n", McpRequestTenantField)
+	}
 	b.WriteString("      flags: [RPC_FLAG_AUTH_ENTITLED_USERS]\n")
 	b.WriteString("    };\n")
 	b.WriteString("  }\n")

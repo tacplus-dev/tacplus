@@ -16,15 +16,11 @@ import (
 	"github.com/tacplus-dev/tacplus/templates"
 )
 
-// A tenant-owned instance (own namespace /tenants/beta) must refuse another
-// tenant's caller at the door, on an RPC with no target_namespace_field: a
-// token's aud is the service name, which every tenant's instance accepts.
-//
-// Python has no generated-code test runner, so this renders the REAL generated
-// authorizer.py and the real generated spiffe helpers into a throw-away
-// package, stubs only the token/jwk/grants/exceptions seams (no signing), and
-// drives Authorizer.authorize/authenticate under the system interpreter.
-func TestPythonAuthorizerRefusesOtherTenantAtTenantOwnedDoor(t *testing.T) {
+// pyAuthorizerHarness renders the real generated authorizer and spiffe
+// helpers into a throw-away package with stubbed token/jwk/grants/exceptions
+// seams; it returns the interpreter and the package root.
+func pyAuthorizerHarness(t *testing.T) (string, string) {
+	t.Helper()
 	py := ""
 	for _, name := range []string{"python3", "python"} {
 		if p, err := exec.LookPath(name); err == nil {
@@ -93,6 +89,19 @@ def permission_denied(m): return ProtoError("PERMISSION_DENIED", m)
 def unauthenticated(m): return ProtoError("UNAUTHENTICATED", m)
 `)
 
+	return py, root
+}
+
+// A tenant-owned instance (own namespace /tenants/beta) must refuse another
+// tenant's caller at the door, on an RPC with no target_namespace_field: a
+// token's aud is the service name, which every tenant's instance accepts.
+//
+// Python has no generated-code test runner, so this renders the REAL generated
+// authorizer.py and the real generated spiffe helpers into a throw-away
+// package, stubs only the token/jwk/grants/exceptions seams (no signing), and
+// drives Authorizer.authorize/authenticate under the system interpreter.
+func TestPythonAuthorizerRefusesOtherTenantAtTenantOwnedDoor(t *testing.T) {
+	py, root := pyAuthorizerHarness(t)
 	script := `
 import json, sys
 sys.path.insert(0, sys.argv[1])
@@ -156,5 +165,66 @@ func write(t *testing.T, path, body string) {
 	}
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Issue #170: RPC_FLAG_ANY_TENANT opens the tenant-owned door for that rpc
+// only ("any authenticated user of any tenant"); the default keeps it ("members
+// of the target tenant only"). The token, audience and auth_services are still
+// enforced on the opened rpc, and authenticate() (auth_any_user, stream open)
+// honours it when told the method.
+func TestPythonAuthorizerAnyTenantOpensTheDoorForThatRpcOnly(t *testing.T) {
+	py, root := pyAuthorizerHarness(t)
+	script := `
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from pb.chassis.grpcserver.authorizer import Authorizer
+from pb.types.sys.errors.exceptions import ProtoError
+
+class Jwks:
+    def get(self, kid): return object()
+    def close(self): pass
+
+a = Authorizer()
+a._jwk_cache = Jwks()
+a.set_method_auth("demo.Demo/Do", ["caller-svc"])
+a.set_method_auth("demo.Demo/Open", ["caller-svc"])
+a.set_method_any_tenant("demo.Demo/Open")
+a.set_host_namespace("/tenants/beta")
+
+def md(ns, aud="demo", sub="caller-svc"):
+    return {"authorization": "Bearer " + json.dumps({"aud": aud, "sub": sub, "ns": ns})}
+
+def code(call):
+    try:
+        call()
+    except ProtoError as e:
+        return e.code
+    return None
+
+for ns in ("/tenants/acme", "/tenants/beta", "/users/u1", "/system"):
+    assert code(lambda: a.authorize(md(ns), "/demo.Demo/Open", None)) is None, ns
+    assert code(lambda: a.authenticate(md(ns), None, "/demo.Demo/Open")) is None, ns
+    assert code(lambda: a.authenticate(md(ns), full_method="/demo.Demo/Open")) is None, ns
+
+# The default door still stands on every other rpc, and without a method.
+assert code(lambda: a.authorize(md("/tenants/acme"), "/demo.Demo/Do", None)) == "PERMISSION_DENIED"
+assert code(lambda: a.authenticate(md("/tenants/acme"), None, "/demo.Demo/Do")) == "PERMISSION_DENIED"
+assert code(lambda: a.authenticate(md("/tenants/acme"))) == "PERMISSION_DENIED"
+# A same-named rpc of another service is not opened.
+a.set_method_auth("other.Demo/Open", ["caller-svc"])
+assert code(lambda: a.authorize(md("/tenants/acme"), "/other.Demo/Open", None)) == "PERMISSION_DENIED"
+
+# Opening the door widens nothing else.
+assert code(lambda: a.authorize(md("/tenants/acme", aud="other"), "/demo.Demo/Open", None)) == "PERMISSION_DENIED"
+assert code(lambda: a.authorize(md("/tenants/acme", sub="intruder"), "/demo.Demo/Open", None)) == "PERMISSION_DENIED"
+assert code(lambda: a.authenticate(md("/tenants/acme"), "/tenants/zeta", "/demo.Demo/Open")) == "PERMISSION_DENIED"
+print("ok")
+`
+	mod := filepath.Join(t.TempDir(), "any_tenant_check.py")
+	write(t, mod, script)
+	out, err := exec.Command(py, "-I", mod, root).CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "ok") {
+		t.Fatalf("RPC_FLAG_ANY_TENANT door check is broken under Python: %v\n%s", err, out)
 	}
 }

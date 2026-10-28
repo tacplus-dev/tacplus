@@ -240,11 +240,13 @@ func generatePyRestClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		ServiceName         string
 		ClientName          string
 		Methods             string
+		RouteHelpers        string
 	}{
 		Header:              header.GeneratedHeader(consts.LangPython, svc.ProtoFile),
 		PbModuleName:        pbModuleName,
 		PbImportFrom:        pbImportFrom,
 		CrossPackageImports: crossPkgImports.String(),
+		RouteHelpers:        pyRouteHelpers(targetService, pyExceptionsImportFrom(dots)),
 		ServiceName:         svc.ServiceName,
 		ClientName:          clientName,
 		Methods:             methods.String(),
@@ -279,6 +281,9 @@ func generatePyRestClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 	pyInput := pyTypeRef(method.FullInputType, method.InputType, servicePackage)
 	pyOutput := pyTypeRef(method.FullOutputType, method.OutputType, servicePackage)
 	isEmptyInput := method.FullInputType == "google.protobuf.Empty" || method.InputType == "Empty"
+	// A routed rpc's request is refused before the request is made when its
+	// route field is not a tid (a streaming generator checks on first next()).
+	routeCheck := pyRouteCheck(method, "request", "        ")
 
 	if method.ServerStreaming {
 		if isEmptyInput {
@@ -290,9 +295,9 @@ func generatePyRestClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 		}
 		return fmt.Sprintf(`    def %s(self, request: %s):
         """Call %s.%s via %s %s (NDJSON streaming)."""
-        yield from self._stream_ndjson("%s", "%s", request, %s)
+%s        yield from self._stream_ndjson("%s", "%s", request, %s)
 `, methodSnake, pyInput,
-			svc.Name, method.Name, method.HttpMethod, method.HttpPath,
+			svc.Name, method.Name, method.HttpMethod, method.HttpPath, routeCheck,
 			method.HttpMethod, method.HttpPath, pyOutput)
 	}
 
@@ -308,8 +313,8 @@ func generatePyRestClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 
 	return fmt.Sprintf(`    def %s(self, request: %s) -> %s:
         """Call %s.%s via %s %s."""
-        return self._do_json("%s", "%s", request, %s)
+%s        return self._do_json("%s", "%s", request, %s)
 `, methodSnake, pyInput, pyOutput,
-		svc.Name, method.Name, method.HttpMethod, method.HttpPath,
+		svc.Name, method.Name, method.HttpMethod, method.HttpPath, routeCheck,
 		method.HttpMethod, method.HttpPath, pyOutput)
 }

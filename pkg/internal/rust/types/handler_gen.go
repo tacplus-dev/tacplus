@@ -85,6 +85,10 @@ type grpcServiceEntry struct {
 	AuthAnyUser bool
 	// HasMethodAuth is true when the wrapper has a register_method_auth function.
 	HasMethodAuth bool
+	// TenantRouted is true when the service's rpcs declare (spec.rpc).route_field:
+	// its wrapper carries the routing backstop and must be told the namespace
+	// its own instance runs in.
+	TenantRouted bool
 	// HasRequiresDevice is true when this service's wrapper carries the
 	// (spec.rpc).requires_device gate, so the ServiceManager must hand it the
 	// approval check. A wrapper without one has no seam to wire.
@@ -265,6 +269,11 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 	if err != nil {
 		return smTemplateData{}, err
 	}
+	// (spec.rpc).route_field: which services are routed by tenant.
+	tenantRoutedSvcs, err := rustTenantRoutedServices(config.FlatProtoDir)
+	if err != nil {
+		return smTemplateData{}, err
+	}
 
 	var grpcSvcs []grpcServiceEntry
 	for _, svc := range svcs {
@@ -340,6 +349,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			AuthAnyUser:              svc.AuthAnyUser,
 			HasMethodAuth:            svc.HasMethodAuth,
 			HasRequiresDevice:        requiresDeviceSvcs[svc.PackageName+"."+svc.ServiceName],
+			TenantRouted:             tenantRoutedSvcs[svc.PackageName+"."+svc.ServiceName],
 			AuthExemptPaths:          svc.AuthExemptPaths,
 			IsHosted:                 config.SelfPackage != "" && svc.PackageName != config.SelfPackage,
 			// The one service whose handler the ServiceManager supplies itself.
@@ -565,7 +575,10 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 	// Uses the same meshTarget resolution as the aggregator generator.
 	var targetServices []TargetServiceInfo
 	if len(clientServices) > 0 {
-		targetServices = CollectTargetServices(clientServices)
+		targetServices, err = markTenantRoutedTargets(CollectTargetServices(clientServices), clientServices, tenantRoutedSvcs)
+		if err != nil {
+			return smTemplateData{}, err
+		}
 	}
 
 	// Discover the typed readers this service's (spec.record_read) declarations

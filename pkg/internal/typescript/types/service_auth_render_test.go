@@ -109,9 +109,9 @@ func TestTypeScriptServiceWrapperAuthWiringRendersMetadataAndMethodPolicies(t *t
 
 	for _, want := range []string{
 		"private authorizeFunc: ((fullMethod: string, metadata: Record<string, string>, req: unknown) => void | Promise<void>) | null;",
-		"private authenticateFunc: ((metadata: Record<string, string>, targetNamespace?: string) => void | Promise<void>) | null;",
+		"private authenticateFunc: ((metadata: Record<string, string>, targetNamespace?: string, fullMethod?: string) => void | Promise<void>) | null;",
 		"await this.authorizeFunc(fullMethod, this.metadataToRecord(metadata), req);",
-		"await this.authenticateFunc(this.metadataToRecord(metadata), targetNamespace);",
+		"await this.authenticateFunc(this.metadataToRecord(metadata), targetNamespace, fullMethod);",
 		"authorizer.setMethodAuth(\"demo.DemoService/Read\", [\"identity\", \"opa\"]);",
 		"authorizer.setMethodTargetNamespaceField(\"demo.DemoService/Read\", \"tenant_namespace\");",
 		"authorizer.setMethodAuth(\"demo.DemoService/Override\", [\"eventbus\"]);",
@@ -180,7 +180,7 @@ func TestTypeScriptServiceManagerInstallsGrpcAuthorizerCallbacks(t *testing.T) {
 		"const wrapperDemo = new wrapperDemoClass(handler.demoGrpcImpl());",
 		"wrapperDemo.registerMethodAuth(authorizer);",
 		"wrapperDemo.setAuthorizeFunc((fullMethod, metadata, req) => authorizer.authorize(metadata, fullMethod, req));",
-		"wrapperDemo.setAuthenticateFunc((metadata, targetNamespace) => authorizer.authenticate(metadata, targetNamespace));",
+		"wrapperDemo.setAuthenticateFunc((metadata, targetNamespace, fullMethod) => authorizer.authenticate(metadata, targetNamespace, fullMethod));",
 		"wrapperDemo.registerServices(server);",
 	} {
 		if !strings.Contains(rendered, want) {

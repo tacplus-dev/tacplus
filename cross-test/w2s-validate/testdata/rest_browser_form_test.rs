@@ -59,7 +59,7 @@ struct FixtureDispatcher {
 
 #[tonic::async_trait]
 impl RestDispatcher for FixtureDispatcher {
-    async fn channel(&self, _service_id: &str) -> Result<Channel, tonic::Status> {
+    async fn channel(&self, _service_id: &str, _tenant: &str) -> Result<Channel, tonic::Status> {
         Ok(self.channel.clone())
     }
 

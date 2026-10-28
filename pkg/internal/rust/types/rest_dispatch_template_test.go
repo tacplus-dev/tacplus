@@ -226,6 +226,8 @@ func TestRustRestDispatchEmitsRestBrowserRouteFields(t *testing.T) {
 			TargetNamespace:    "None",
 			FormBody:           restFormBody(m),
 			RedirectField:      restRedirectField(m),
+			RouteField:         "None",
+			RouteFieldJSON:     "None",
 		}
 	}
 	out := renderRustRestDispatchForTest(t, restDispatchData{
@@ -236,8 +238,8 @@ func TestRustRestDispatchEmitsRestBrowserRouteFields(t *testing.T) {
 		"\n    pub form_body: bool,",
 		"\n    pub redirect_field: Option<&'static str>,",
 		"http_path: \"/signin/Signin/BrokerCallback\",\n        grpc_path: \"/signin/Signin/BrokerCallback\",",
-		"target_namespace_field: None,\n        form_body: true,\n        redirect_field: Some(\"redirectUrl\"),\n    },\n    RouteInfo {\n        http_path: \"/signin/Signin/GetThing\"",
-		"target_namespace_field: None,\n        form_body: false,\n        redirect_field: None,\n    },\n];",
+		"target_namespace_field: None,\n        form_body: true,\n        redirect_field: Some(\"redirectUrl\"),\n        route_field: None,\n        route_field_json: None,\n        route_field_number: 0,\n    },\n    RouteInfo {\n        http_path: \"/signin/Signin/GetThing\"",
+		"target_namespace_field: None,\n        form_body: false,\n        redirect_field: None,\n        route_field: None,\n        route_field_json: None,\n        route_field_number: 0,\n    },\n];",
 		"pub async fn form_body_to_json(",
 		"pub fn redirect_response(route: &RouteInfo, response_json: &str) -> Option<Response> {",
 		"StatusCode::SEE_OTHER",

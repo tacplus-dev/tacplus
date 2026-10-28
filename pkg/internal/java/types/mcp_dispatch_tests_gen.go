@@ -50,7 +50,31 @@ func writeJavaMcpDispatchTestFile(svc *parser.ServiceInfo, tools []javaMcpTool, 
 const (
 	javaMcpTestSubject   = "spiffe://example.test/mcp-test-caller"
 	javaMcpTestNamespace = "/mcp-test"
+
+	// javaMcpTestTenant is the tenant the gate's caller belongs to on a
+	// tenant-routed service, whose every tool call is directed at the session's
+	// tenant and so needs a caller that has one; javaMcpTestOtherTenant is the
+	// tid a model-supplied argument or a forged frame names instead.
+	javaMcpTestTenant      = "mcptest1"
+	javaMcpTestOtherTenant = "othertn1"
 )
+
+// javaMcpTestRouted reports whether svc's MCP session is tenant-routed: its
+// carrier declares a route field (issue #170).
+func javaMcpTestRouted(svc *parser.ServiceInfo) bool {
+	c := javaMcpCarrierMethod(svc)
+	return c != nil && c.RouteField != nil
+}
+
+// javaMcpTestCallerNamespace is the namespace claim of the gate's caller: a
+// namespace of javaMcpTestTenant on a tenant-routed service, so the session has
+// a tenant, and javaMcpTestNamespace on any other.
+func javaMcpTestCallerNamespace(svc *parser.ServiceInfo) string {
+	if javaMcpTestRouted(svc) {
+		return "/tenants/" + javaMcpTestTenant
+	}
+	return javaMcpTestNamespace
+}
 
 func generateJavaMcpDispatchTest(svc *parser.ServiceInfo, tools []javaMcpTool, p javaMcpFileParams) string {
 	cls := javaMcpClassName(svc.Name) + "Test"
@@ -115,7 +139,7 @@ public final class %[2]s {
     private static boolean isError(McpSchema.CallToolResult result) {
         return Boolean.TRUE.equals(result.isError());
     }
-`, svc.Name, cls, p.JavaPackage, p.ProtoFile, p.Imports, javaMcpTestSubject, javaMcpTestNamespace)
+`, svc.Name, cls, p.JavaPackage, p.ProtoFile, p.Imports, javaMcpTestSubject, javaMcpTestCallerNamespace(svc))
 
 	b.WriteString(javaMcpTestStubHandler(svc, tools, p))
 	b.WriteString(javaMcpTestToolSetCase(svc, tools))
@@ -123,6 +147,7 @@ public final class %[2]s {
 		b.WriteString(javaMcpTestToolCases(svc, t))
 	}
 	b.WriteString(javaMcpTestSessionCase(svc, tools, p))
+	b.WriteString(javaMcpTestSessionTenantCases(svc, p))
 	b.WriteString(javaMcpTestMain(svc, tools))
 	b.WriteString("}\n")
 	return b.String()
@@ -254,7 +279,7 @@ func javaMcpTestToolSetCase(svc *parser.ServiceInfo, tools []javaMcpTool) string
             check(Boolean.FALSE.equals(byName.get(%[1]s).inputSchema().get("additionalProperties")),
             "%[2]s declares additionalProperties: false");
 `, javaQuote(t.ToolName), t.ToolName, javaQuote(t.Description))
-		for _, f := range []string{t.PrincipalField, t.NamespaceField} {
+		for _, f := range []string{t.PrincipalField, t.NamespaceField, javaMcpRouteFieldName(t)} {
 			if f == "" {
 				continue
 			}
@@ -329,7 +354,7 @@ func javaMcpTestToolCases(svc *parser.ServiceInfo, t javaMcpTool) string {
 		// the handler actually received.
 		for _, f := range []struct{ field, value, what string }{
 			{t.PrincipalField, javaMcpTestSubject, "(spec.principal)"},
-			{t.NamespaceField, javaMcpTestNamespace, "(spec.namespace)"},
+			{t.NamespaceField, javaMcpTestCallerNamespace(svc), "(spec.namespace)"},
 		} {
 			if f.field == "" {
 				continue
@@ -338,7 +363,31 @@ func javaMcpTestToolCases(svc *parser.ServiceInfo, t javaMcpTool) string {
         check(stub.lastRequest.contains(%[1]s), "%[2]s stamped the caller's own value into %[4]s");
 `, javaQuote(f.value), t.ToolName, f.what, f.field)
 		}
+		if t.RouteField != nil {
+			fmt.Fprintf(&b, `        // (spec.rpc).route_field: %[3]s was never in the arguments above either.
+        check(stub.lastRequest.contains(%[1]s), "%[2]s took %[3]s from the session's token");
+`, javaQuote(javaMcpTestTenant), t.ToolName, t.RouteField.Field)
+		}
 		b.WriteString("    }\n")
+	}
+
+	// The model never names the tenant: the route field is refused under each
+	// name the decoder would accept.
+	for _, r := range javaMcpTestRouteRefusals(t) {
+		fmt.Fprintf(&b, `
+    /** A "%[1]s" call that names the route field %[2]s itself is refused before the handler is reached. */
+    private static void %[3]s() {
+        StubHandler stub = new StubHandler();
+        %[4]s.Surface surface = new %[4]s.Surface(stub, testCaller());
+        McpSchema.CallToolResult result = surface.%[5]s(
+        new McpSchema.CallToolRequest(%[6]s, %[7]s, null));
+        check(isError(result), "%[1]s refused a model-supplied tenant as %[2]s");
+        check(resultText(result).contains("is not a tool argument"),
+        "%[1]s said why it refused, got: " + resultText(result));
+        check(stub.lastMethod.isEmpty(), "%[1]s never reached the handler, but it saw: " + stub.lastMethod);
+    }
+`, t.ToolName, r.name, r.method, cls, javaMcpDispatchMethodName(t), javaQuote(t.ToolName),
+			javaMcpTestArgumentMap(t, fmt.Sprintf("%s, %s", javaQuote(r.name), javaQuote(javaMcpTestOtherTenant))))
 	}
 
 	// The refusal case, one per server-computed field.
@@ -366,6 +415,79 @@ func javaMcpTestToolCases(svc *parser.ServiceInfo, t javaMcpTool) string {
 			javaMcpTestArgumentMap(t, fmt.Sprintf("%s, %s", javaQuote(f.field), javaQuote(f.value))))
 	}
 	return b.String()
+}
+
+// javaMcpRouteFieldName is a tool's route field, "" when it has none.
+func javaMcpRouteFieldName(t javaMcpTool) string {
+	if t.RouteField == nil {
+		return ""
+	}
+	return t.RouteField.Field
+}
+
+// javaMcpTestRouteRefusal is one name of a tool's route field the gate sends,
+// and the case method that sends it.
+type javaMcpTestRouteRefusal struct{ name, method string }
+
+// javaMcpTestRouteRefusals is the route field under its proto name and, when
+// that differs, its JSON name: JsonFormat's parser accepts both.
+func javaMcpTestRouteRefusals(t javaMcpTool) []javaMcpTestRouteRefusal {
+	if t.RouteField == nil {
+		return nil
+	}
+	base := methodNameLowerCamel(t.Method.Name) + "RefusesAModelSupplied" + javaPascalField(t.RouteField.Field)
+	out := []javaMcpTestRouteRefusal{{t.RouteField.Field, base}}
+	if j := t.RouteField.JSONName; j != "" && j != t.RouteField.Field {
+		out = append(out, javaMcpTestRouteRefusal{j, base + "ByItsJsonName"})
+	}
+	return out
+}
+
+// javaMcpTestSessionTenantCases renders the gate's cases for a tenant-routed
+// carrier, "" for any other: the session's tenant is the token's, a token
+// naming none opens no session, and an inbound frame is stamped with the
+// session's tenant or refused for naming another. The frame cases drive the
+// same stampTenant the wrapper puts in front of its route backstop.
+func javaMcpTestSessionTenantCases(svc *parser.ServiceInfo, p javaMcpFileParams) string {
+	if !javaMcpTestRouted(svc) {
+		return ""
+	}
+	return fmt.Sprintf(`
+    /** call is refused PERMISSION_DENIED. */
+    private static void checkPermissionDenied(Runnable call, String what) {
+        try {
+            call.run();
+            check(false, what + " was refused");
+        } catch (ProtoException e) {
+            check(e.getCode() == ProtoException.PERMISSION_DENIED,
+            what + " was refused PERMISSION_DENIED, got code " + e.getCode() + ": " + e.getMessage());
+        }
+    }
+
+    /** The session's tenant is the tid of the caller's namespace claim, and a caller of none has no session. */
+    private static void sessionTenantIsTheCallersTenant() {
+        check(%[1]s.sessionTenant(testCaller()).equals(%[3]s), "a caller in /tenants/%[6]s has session tenant %[6]s");
+        check(%[1]s.sessionTenant(new Caller("{\"sub\":\"%[5]s\",\"namespace\":\"/tenants/%[6]s/team\"}", "mcp-test-request")).equals(%[3]s),
+        "a caller below /tenants/%[6]s has session tenant %[6]s");
+        checkPermissionDenied(() -> %[1]s.sessionTenant(new Caller("{\"sub\":\"%[5]s\",\"namespace\":\"/system\"}", "mcp-test-request")),
+        "a session for a /system caller");
+    }
+
+    /** A frame with no tenant is stamped with the session's; one naming it already passes unchanged. */
+    private static void aFrameWithNoTenantIsStamped() {
+        %[2]s stamped = %[1]s.stampTenant(%[3]s, %[2]s.newBuilder().setPayload("{}").build());
+        check(stamped.get%[7]s().equals(%[3]s), "a frame with no tenant was stamped with the session's, got: " + stamped.get%[7]s());
+        %[2]s same = %[1]s.stampTenant(%[3]s, %[2]s.newBuilder().setPayload("{}").set%[7]s(%[3]s).build());
+        check(same.get%[7]s().equals(%[3]s), "a frame naming the session's tenant passed");
+    }
+
+    /** A frame naming another tenant than the session's is refused. */
+    private static void aFrameWithAnotherTenantIsRefused() {
+        checkPermissionDenied(() -> %[1]s.stampTenant(%[3]s, %[2]s.newBuilder().setPayload("{}").set%[7]s(%[4]s).build()),
+        "a frame naming another tenant");
+    }
+`, javaMcpClassName(svc.Name), p.FrameRequestType, javaQuote(javaMcpTestTenant), javaQuote(javaMcpTestOtherTenant),
+		javaMcpTestSubject, javaMcpTestTenant, javaPascalField(javaMcpCarrierMethod(svc).RouteField.Field))
 }
 
 // javaMcpTestOwnerDefaultCases renders the two cases of a tool whose
@@ -400,7 +522,7 @@ func javaMcpTestOwnerDefaultCases(svc *parser.ServiceInfo, t javaMcpTool) string
         check("%[7]s".equals(stub.lastMethod), "%[1]s reached %[7]s, got: " + stub.lastMethod);
     }
 `, t.ToolName, methodNameLowerCamel(t.Method.Name), javaMcpClassName(svc.Name), javaMcpDispatchMethodName(t),
-		javaQuote(t.ToolName), javaMcpTestArgumentMap(t, ""), t.Method.Name, javaMcpTestSubject, javaMcpTestNamespace)
+		javaQuote(t.ToolName), javaMcpTestArgumentMap(t, ""), t.Method.Name, javaMcpTestSubject, javaMcpTestCallerNamespace(svc))
 }
 
 // javaMcpTestArgumentMap renders the arguments map for a generated tool call:
@@ -455,6 +577,12 @@ func javaMcpTestMain(svc *parser.ServiceInfo, tools []javaMcpTool) string {
 			}
 			fmt.Fprintf(&b, "        %sRefusesAClientSupplied%s();\n", methodNameLowerCamel(t.Method.Name), javaPascalField(f))
 		}
+		for _, r := range javaMcpTestRouteRefusals(t) {
+			fmt.Fprintf(&b, "        %s();\n", r.method)
+		}
+	}
+	if javaMcpTestRouted(svc) {
+		b.WriteString("        sessionTenantIsTheCallersTenant();\n        aFrameWithNoTenantIsStamped();\n        aFrameWithAnotherTenantIsRefused();\n")
 	}
 	fmt.Fprintf(&b, `        if (failures > 0) {
             System.out.println("%[1]sMcpTest: " + failures + " failure(s)");
@@ -541,7 +669,7 @@ func javaMcpTestSessionCase(svc *parser.ServiceInfo, tools []javaMcpTool, p java
 			javaMcpTestJSONArgumentLiteral(*driven), driven.Method.Name)
 		for _, f := range []struct{ field, value string }{
 			{driven.PrincipalField, javaMcpTestSubject},
-			{driven.NamespaceField, javaMcpTestNamespace},
+			{driven.NamespaceField, javaMcpTestCallerNamespace(svc)},
 		} {
 			if f.field == "" {
 				continue

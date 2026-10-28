@@ -75,6 +75,7 @@ func renderTSBidiMethodForTest(t *testing.T, authRequired bool) string {
 		AuthRequired       bool
 		RequestValidation  string
 		ResponseValidation string
+		RouteOpen          string
 	}{
 		MethodName:   "Exchange",
 		MethodLower:  "exchange",

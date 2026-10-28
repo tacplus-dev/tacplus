@@ -302,6 +302,46 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
         java.util.Map<String, String> identity = auth.authenticate(targetNamespace);
         return identity == null ? java.util.Collections.emptyMap() : identity;
     }
+{{- if .HasAnyTenant}}
+
+    /**
+     * {@link #checkAuthenticate()} for an rpc declaring RPC_FLAG_ANY_TENANT:
+     * runs under the rpc's method key, so the Authorizer skips the tenant door
+     * for it (a caller of any tenant passes). Everything else the token-only
+     * check enforces is unchanged.
+     */
+    private java.util.Map<String, String> checkAuthenticateAnyTenant(String methodKey) throws ProtoException {
+        return checkAuthenticateAnyTenant(methodKey, null);
+    }
+
+    /** {@link #checkAuthenticate(String)} for an rpc declaring RPC_FLAG_ANY_TENANT. */
+    private java.util.Map<String, String> checkAuthenticateAnyTenant(String methodKey, String targetNamespace) throws ProtoException {
+        io.grpc.Context ctx = io.grpc.Context.current()
+                .withValue({{.AuthorizerFQN}}.ANY_TENANT_METHOD_CTX_KEY, methodKey);
+        io.grpc.Context prev = ctx.attach();
+        try {
+            return checkAuthenticate(targetNamespace);
+        } finally {
+            ctx.detach(prev);
+        }
+    }
+{{- end}}
+{{- if .HasRouteTenant}}
+
+    /**
+     * The (spec.rpc).route_field backstop, after request validation and before
+     * the handler, on every inbound message: a route field that is not a tid is
+     * refused (INVALID_ARGUMENT), and on a tenant-owned instance one naming
+     * another tenant than the instance serves is refused (PERMISSION_DENIED).
+     */
+    private void checkRouteTenant(String field, String value) throws ProtoException {
+{{- if .RequiresAuth}}
+        authorizer.checkRouteTenant(field, value);
+{{- else}}
+        {{.RouteTenantFQN}}.require(field, value);
+{{- end}}
+    }
+{{- end}}
 
     /**
      * Converts any Throwable to a gRPC StatusRuntimeException using ProtoException codes.

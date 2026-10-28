@@ -223,6 +223,12 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, fileDesc *p
 					"        authorizer.setMethodTargetNamespaceField(%q, %q);",
 					methodAuthKey, method.TargetNamespaceField))
 			}
+
+			// RPC_FLAG_ANY_TENANT: the tenant-owned door is open on this rpc only.
+			if method.AnyTenant {
+				methodAuthLines = append(methodAuthLines, fmt.Sprintf(
+					"        authorizer.setMethodAnyTenant(%q);", methodAuthKey))
+			}
 		}
 	}
 
@@ -576,7 +582,12 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 			// default would gate on isAtOrBelow(caller, "/"), true only for a caller
 			// sitting exactly at "/", denying every real caller.
 			targetNamespace := strings.TrimSpace(method.TargetNamespaceField)
-			if targetNamespace == "" {
+			switch {
+			case method.AnyTenant && targetNamespace == "":
+				return tsAnyTenantAuthenticate(metadataExpr, fullMethodPath)
+			case method.AnyTenant:
+				return fmt.Sprintf("await this.authenticate(%s, %q, '%s');", metadataExpr, targetNamespace, fullMethodPath)
+			case targetNamespace == "":
 				return fmt.Sprintf("await this.authenticate(%s);", metadataExpr)
 			}
 			return fmt.Sprintf("await this.authenticate(%s, %q);", metadataExpr, targetNamespace)
@@ -591,6 +602,9 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 		streamAuthorize := "undefined"
 		if needsStreamMessageAuth {
 			authLine = "await this.authenticate(stream.metadata);"
+			if method.AnyTenant {
+				authLine = tsAnyTenantAuthenticate("stream.metadata", fullMethodPath)
+			}
 			streamAuthorize = fmt.Sprintf("async (msg: any) => { await this.authorize('%s', stream.metadata, msg); }", fullMethodPath)
 		}
 		return fmt.Sprintf(`            %s: (stream: grpc.ServerDuplexStream<any, any>) => {
@@ -756,6 +770,9 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 		streamAuthorize := "undefined"
 		if needsStreamMessageAuth {
 			clientAuthLine = "await this.authenticate(call.metadata);"
+			if method.AnyTenant {
+				clientAuthLine = tsAnyTenantAuthenticate("call.metadata", fullMethodPath)
+			}
 			streamAuthorize = fmt.Sprintf("async (msg: any) => { await this.authorize('%s', call.metadata, msg); }", fullMethodPath)
 		}
 		return fmt.Sprintf(`            %s: (call: grpc.ServerReadableStream<any, any>, callback: grpc.sendUnaryData<any>) => {
@@ -1005,4 +1022,11 @@ func tsQualifiedMethodAuthKey(protoPackage, serviceName, methodName string) stri
 		return serviceName + "/" + methodName
 	}
 	return protoPackage + "." + serviceName + "/" + methodName
+}
+
+// tsAnyTenantAuthenticate is the authenticate() call of an RPC_FLAG_ANY_TENANT
+// rpc: it names the method so the Authorizer opens the tenant-owned door for
+// that rpc alone (issue #170).
+func tsAnyTenantAuthenticate(metadataExpr, fullMethodPath string) string {
+	return fmt.Sprintf("await this.authenticate(%s, undefined, '%s');", metadataExpr, fullMethodPath)
 }

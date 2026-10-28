@@ -52,11 +52,12 @@ func (b *recordingBackend) WatchItems(req *catalog.GetItemRequest, stream grpc.S
 }
 
 // fixtureDispatcher hands every service the one loopback connection and no auth.
+// The fixture's services are platform services, so the tenant is always "".
 type fixtureDispatcher struct {
 	conn *grpc.ClientConn
 }
 
-func (d fixtureDispatcher) Conn(context.Context, string) (grpc.ClientConnInterface, error) {
+func (d fixtureDispatcher) Conn(context.Context, string, string) (grpc.ClientConnInterface, error) {
 	return d.conn, nil
 }
 

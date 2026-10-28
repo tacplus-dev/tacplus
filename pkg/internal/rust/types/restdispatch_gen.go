@@ -33,6 +33,11 @@ type dispatchArm struct {
 	ClientPath     string // fully-qualified Rust tonic client path
 	FromJsonPath   string // fully-qualified Rust from_json function path
 	ToJsonPath     string // fully-qualified Rust to_json function path
+	// RouteField is (spec.rpc).route_field as declared (the proto field name),
+	// RouteFieldIdent the Rust field it reads on the decoded request. Both
+	// empty for a platform service's arm, which is never addressed by tenant.
+	RouteField      string
+	RouteFieldIdent string
 }
 
 // routeEntry holds data for one entry in the ROUTES static table.
@@ -50,6 +55,12 @@ type routeEntry struct {
 	TargetNamespace    string // Rust Option<&str> literal: "None" or "Some(\"field\")"
 	FormBody           bool   // (spec.rest_browser).form_body
 	RedirectField      string // Rust Option<&str> literal: "None" or the redirect field's JSON key
+	// RouteField and RouteFieldJSON are Rust Option<&str> literals ("None" for
+	// a platform route) of (spec.rpc).route_field's proto and JSON names;
+	// RouteFieldNumber is its wire number, 0 for a platform route.
+	RouteField       string
+	RouteFieldJSON   string
+	RouteFieldNumber int32
 }
 
 // restDispatchData is the template data for rest_dispatch.rs.tmpl.
@@ -118,6 +129,13 @@ func generateRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, in
 			ClientPath:     resolveClientPath(a.ServiceName, a.PackageName, pkgToDir, cratePrefix),
 			FromJsonPath:   resolveFromJsonPath(a.InputType, pkgToDir, cratePrefix),
 			ToJsonPath:     resolveToJsonPath(a.OutputType, pkgToDir, cratePrefix),
+		}
+		if a.RouteField != "" {
+			if a.IsEmptyInput {
+				return fmt.Errorf("%s declares (spec.rpc).route_field %q but its request is empty", a.GrpcPath, a.RouteField)
+			}
+			arm.RouteField = a.RouteField
+			arm.RouteFieldIdent = rustRequestFieldIdent(a.RouteField)
 		}
 		if a.ServerStreaming {
 			streamArms = append(streamArms, arm)
@@ -201,7 +219,16 @@ func rustRouteEntry(r restdispatch.Route) routeEntry {
 		TargetNamespace:    rustOptionString(r.TargetNamespaceField),
 		FormBody:           r.FormBody,
 		RedirectField:      rustOptionString(r.RedirectJSONName),
+		RouteField:         rustOptionString(r.RouteField),
+		RouteFieldJSON:     rustOptionString(r.RouteFieldJSON),
+		RouteFieldNumber:   r.RouteFieldNumber,
 	}
+}
+
+// rustRequestFieldIdent is the Rust identifier prost gives a request field
+// declared with proto name `field`.
+func rustRequestFieldIdent(field string) string {
+	return escapeRustKeyword(strutil.ToSnakeCase(field))
 }
 
 // restFormBody reports whether the method's REST route accepts a form body.

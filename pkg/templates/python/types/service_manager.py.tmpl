@@ -516,7 +516,7 @@ class ServiceManager:
 {{- end}}
 {{- if not .AuthDisabled}}
         {{.WrapperVarName}}.set_authorize_func(lambda metadata, full_method, req=None, _authorizer=authorizer: _authorizer.authorize(metadata, full_method, req))
-        {{.WrapperVarName}}.set_authenticate_func(lambda metadata, target_namespace=None, _authorizer=authorizer: _authorizer.authenticate(metadata, target_namespace))
+        {{.WrapperVarName}}.set_authenticate_func(lambda metadata, target_namespace=None, full_method=None, _authorizer=authorizer: _authorizer.authenticate(metadata, target_namespace, full_method))
         if not {{.WrapperVarName}}.has_authorizer():
             raise RuntimeError("authorizer not wired for {{.ServiceName}} (build/SM bug) - mandatory-auth service cannot serve without an authorizer")
 {{- end}}

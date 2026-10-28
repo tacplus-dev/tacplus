@@ -292,3 +292,89 @@ func TestAppendMcpCarrierRpcsInjectsForAutoExposedC2SService(t *testing.T) {
 		t.Errorf("carrier not injected into the auto-exposed c2s service:\n%s", got)
 	}
 }
+
+// A tenant-owned c2s service: its tools are tenant-routed, so its carrier is
+// too (issue #170).
+const mcpCarrierTenantOwnedProto = `syntax = "proto3";
+
+package scotty;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "scotty", tenant_owned: true};
+
+message GetTicketRequest {
+  string id = 1;
+  string tenant = 2;
+}
+
+message GetTicketResponse {
+  string body = 1;
+}
+
+service Scotty {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  // GetTicket returns one ticket.
+  rpc GetTicket(GetTicketRequest) returns (GetTicketResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, route_field: "tenant"};
+  }
+}
+`
+
+// carrierMethod parses the injected tree and returns Scotty's carrier.
+func carrierMethod(t *testing.T, protoDir string) *parser.MethodDescriptor {
+	t.Helper()
+	dp, err := parser.NewDescriptorParser(protoDir)
+	if err != nil {
+		t.Fatalf("injected tree does not parse: %v", err)
+	}
+	if err := parser.ValidateTenantRouting(dp); err != nil {
+		t.Fatalf("injected tree fails tenant-routing validation: %v", err)
+	}
+	fd := dp.GetAllFiles()["services/scotty.proto"]
+	if fd == nil {
+		t.Fatal("services/scotty.proto missing from parsed tree")
+	}
+	for i := range fd.Services[0].Methods {
+		if fd.Services[0].Methods[i].Name == parser.McpCarrierRpcName("Scotty") {
+			return &fd.Services[0].Methods[i]
+		}
+	}
+	t.Fatal("BrokerScottyMcpSession is not a method of service Scotty after injection")
+	return nil
+}
+
+// The carrier of a tenant-routed service declares mcp.McpRequest.tenant as its
+// route field: a session is opened in one tenant, every frame names it, and the
+// gateway routes the session by it like any other routed stream. Without it the
+// tree fails tenant-routing validation (every rpc of a tenant-owned service
+// declares a route field, the carrier included).
+func TestAppendMcpCarrierRpcsDeclaresRouteFieldOnTenantOwnedService(t *testing.T) {
+	protoDir := mcpCarrierProtoDir(t, mcpCarrierTenantOwnedProto)
+	if _, err := AppendMcpCarrierRpcsToProtos(protoDir, protoDir); err != nil {
+		t.Fatalf("AppendMcpCarrierRpcsToProtos: %v", err)
+	}
+	carrier := carrierMethod(t, protoDir)
+	if carrier.RouteField == nil {
+		t.Fatalf("tenant-owned carrier declares no route field:\n%s", mcpCarrierServiceProto(t, protoDir))
+	}
+	if carrier.RouteField.Field != "tenant" || carrier.RouteField.Number != 2 {
+		t.Errorf("carrier route field = %+v, want mcp.McpRequest.tenant (2)", *carrier.RouteField)
+	}
+	if carrier.AnyTenant {
+		t.Error("carrier declares RPC_FLAG_ANY_TENANT; a session is opened in the caller's own tenant")
+	}
+}
+
+// The paired control: a platform service's carrier declares no route field (a
+// platform service is never addressed by tenant).
+func TestAppendMcpCarrierRpcsNoRouteFieldOnPlatformService(t *testing.T) {
+	protoDir := mcpCarrierProtoDir(t, mcpCarrierToolProto)
+	if _, err := AppendMcpCarrierRpcsToProtos(protoDir, protoDir); err != nil {
+		t.Fatalf("AppendMcpCarrierRpcsToProtos: %v", err)
+	}
+	if carrier := carrierMethod(t, protoDir); carrier.RouteField != nil {
+		t.Errorf("platform carrier declares route field %+v", *carrier.RouteField)
+	}
+}

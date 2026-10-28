@@ -87,6 +87,14 @@ func generateGoMcpDispatchTests(svc *parser.ServiceInfo, tools []goMcpTool, p go
 		fmt.Fprintf(&crossImports, "\n\t\"%s/chassis/collection\"", p.ModuleBasePath)
 	}
 
+	// A tenant-routed service's session is opened in the caller's tenant, so
+	// its test caller's namespace claim names one.
+	routed := carrier.RouteField != nil
+	testNamespace := "/example/tenants/acme"
+	if routed {
+		testNamespace = "/tenants/" + goMcpTestTenant
+	}
+
 	var b strings.Builder
 	b.WriteString(header.Copyright(consts.LangGo))
 	fmt.Fprintf(&b, `
@@ -123,7 +131,7 @@ import (
 // server-stamped field below must come out equal to one of them.
 const (
 	%[7]sTestSubject   = "spiffe://example/tenants/acme/users/alice"
-	%[7]sTestNamespace = "/example/tenants/acme"
+	%[7]sTestNamespace = %[9]s
 )
 
 func %[7]sTestCaller() *servicemanager.Caller {
@@ -146,7 +154,7 @@ type %[7]sReportingHandler struct {
 }
 
 `, svc.Name, p.PackageName, p.TypesModulePath, p.ServiceManagerImportPath,
-		p.ModuleBasePath, crossImports.String(), prefix, goMcpSdkModule)
+		p.ModuleBasePath, crossImports.String(), prefix, goMcpSdkModule, strconv.Quote(testNamespace))
 
 	for _, t := range tools {
 		args := "ctx context.Context, _ *servicemanager.Caller, req *" + t.InputType
@@ -201,6 +209,28 @@ func Test%[1]sMcpToolSetIsPublished(t *testing.T) {
 		t.Fatalf("%[2]s publishes an input schema that is not JSON: %%s", raw)
 	}
 `, strconv.Quote(t.ToolName), t.ToolName)
+		if t.RouteField != nil {
+			fmt.Fprintf(&b, `	// (spec.rpc).route_field %[2]s is the session's tenant, from its token:
+	// the model is never asked for it.
+	{
+		var schema struct {
+			Properties map[string]json.RawMessage `+"`json:\"properties\"`"+`
+			Required   []string                   `+"`json:\"required\"`"+`
+		}
+		if err := json.Unmarshal(byName[%[1]s].InputSchema.(json.RawMessage), &schema); err != nil {
+			t.Fatalf("%[3]s's input schema: %%v", err)
+		}
+		if _, ok := schema.Properties[%[4]s]; ok {
+			t.Fatalf("%[3]s publishes its route field %[2]s as a tool argument")
+		}
+		for _, r := range schema.Required {
+			if r == %[4]s {
+				t.Fatalf("%[3]s requires its route field %[2]s as a tool argument")
+			}
+		}
+	}
+`, strconv.Quote(t.ToolName), t.RouteField.Field, t.ToolName, strconv.Quote(t.RouteField.Field))
+		}
 	}
 	// An rpc of the same service that is not a tool must not be published.
 	for _, m := range svc.Methods {
@@ -219,6 +249,9 @@ func Test%[1]sMcpToolSetIsPublished(t *testing.T) {
 	}
 
 	b.WriteString(goMcpSessionTest(svc.Name, prefix, frameIn, frameOut, tools))
+	if routed {
+		b.WriteString(goMcpFrameTenantTest(svc.Name, prefix, frameIn))
+	}
 	return b.String()
 }
 
@@ -275,7 +308,45 @@ func Test%[1]sReachesItsTypedHandler(t *testing.T) {
 	}
 `, prefix, t.NamespaceField)
 		}
+		if t.RouteField != nil {
+			fmt.Fprintf(&b, `	// (spec.rpc).route_field: taken from the session's tenant, from the token.
+	// Matched as the quoted value alone: the text rendering's spacing is
+	// randomized.
+	if !strings.Contains(reported, %[1]s) {
+		t.Fatalf("%[2]s was not filled from the session's tenant: %%s", reported)
+	}
+`, strconv.Quote(strconv.Quote(goMcpTestTenant)), t.RouteField.Field)
+		}
 		b.WriteString("}\n")
+	}
+
+	if t.RouteField != nil {
+		// A model-supplied tenant is refused whichever tenant it names: the
+		// session's own, and another.
+		fmt.Fprintf(&b, `
+// Test%[1]sRefusesAModelSuppliedTenant: (spec.rpc).route_field %[2]s is the
+// session's tenant, set by the platform from the token. A tool call that names
+// it is refused, not routed, and the handler is never reached.
+func Test%[1]sRefusesAModelSuppliedTenant(t *testing.T) {
+	surface := New%[3]s(&%[4]sReportingHandler{}, %[4]sTestCaller())
+	for _, arguments := range []string{%[6]s, %[7]s, %[8]s} {
+		result, err := surface.%[5]s(context.Background(), json.RawMessage(arguments))
+		if err != nil {
+			t.Fatalf("the dispatch failed as a protocol error rather than a tool result: %%v", err)
+		}
+		refused := %[4]sResultText(t, result)
+		if !result.IsError || strings.HasPrefix(refused, "MCP_CALLED") {
+			t.Fatalf("a model-supplied %[2]s reached the handler (%%s): %%s", arguments, refused)
+		}
+		if !strings.Contains(refused, "not a tool argument") {
+			t.Fatalf("unexpected refusal for %%s: %%s", arguments, refused)
+		}
+	}
+}
+`, testName, t.RouteField.Field, surface, prefix, goMcpDispatchFnName(t),
+			strconv.Quote(fmt.Sprintf(`{%q: %q}`, t.RouteField.Field, "rival001")),
+			strconv.Quote(fmt.Sprintf(`{%q: %q}`, t.RouteField.JSONName, "rival001")),
+			strconv.Quote(fmt.Sprintf(`{%q: %q}`, t.RouteField.Field, goMcpTestTenant)))
 	}
 
 	for _, f := range []struct{ marker, field, value string }{
@@ -316,8 +387,12 @@ func Test%[1]sRefusesAClientSupplied%[2]s(t *testing.T) {
 // goMcpDrivable reports whether the generated gate can synthesize a valid call
 // for this tool. A PAGE tool always is: page_size alone is a valid call.
 func goMcpDrivable(t goMcpTool) bool {
-	return t.EmptyRequest || t.Page != nil || len(t.RequiredScalars) > 0 || t.PrincipalField != "" || t.NamespaceField != ""
+	return t.EmptyRequest || t.Page != nil || len(t.RequiredScalars) > 0 || t.PrincipalField != "" || t.NamespaceField != "" || t.RouteField != nil
 }
+
+// goMcpTestTenant is the tid of the test caller's namespace claim on a
+// tenant-routed service: the tenant its sessions are opened in.
+const goMcpTestTenant = "acme0001"
 
 // goMcpTestPageSize is the page_size the gate asks a PAGE tool for. Below every
 // resolved default and ceiling, so the clamp passes it through unchanged and the
@@ -335,6 +410,38 @@ func goMcpTestArgsJSON(t goMcpTool) string {
 		args = append(args, fmt.Sprintf("%q: %d", "page_size", goMcpTestPageSize))
 	}
 	return "{" + strings.Join(args, ", ") + "}"
+}
+
+// goMcpFrameTenantTest renders the carrier's frame-ingress gate for a
+// tenant-routed service: a frame's tenant is the session's, from its token.
+func goMcpFrameTenantTest(serviceName, prefix, frameIn string) string {
+	return fmt.Sprintf(`
+// Test%[1]sMcpFrameTenantComesFromTheToken: an inbound frame's tenant is
+// stamped from the session's token when empty, passes when it is that tenant,
+// and is refused when it names another; a caller whose namespace belongs to no
+// tenant opens no session.
+func Test%[1]sMcpFrameTenantComesFromTheToken(t *testing.T) {
+	frame := &%[3]s{Payload: "{}"}
+	if err := %[2]sStampFrameTenant(%[2]sTestCaller(), frame); err != nil || frame.Tenant != %[4]q {
+		t.Fatalf("an empty frame tenant was not stamped from the token: tenant=%%q err=%%v", frame.Tenant, err)
+	}
+	if err := %[2]sStampFrameTenant(%[2]sTestCaller(), &%[3]s{Payload: "{}", Tenant: %[4]q}); err != nil {
+		t.Fatalf("a frame naming the session's own tenant was refused: %%v", err)
+	}
+	mismatched := &%[3]s{Payload: "{}", Tenant: "rival001"}
+	if err := %[2]sStampFrameTenant(%[2]sTestCaller(), mismatched); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("a frame naming another tenant was not refused: %%v", err)
+	}
+	if mismatched.Tenant != "rival001" {
+		t.Fatalf("a refused frame was rewritten to %%q", mismatched.Tenant)
+	}
+	system := servicemanager.NewCaller(wrapperToken.NewImmutableToken(nil).
+		SetSubject(%[2]sTestSubject).SetNamespace("/system"), "mcp-test")
+	if err := %[2]sStampFrameTenant(system, &%[3]s{Payload: "{}"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("a caller of no tenant opened a session: %%v", err)
+	}
+}
+`, serviceName, prefix, frameIn, goMcpTestTenant)
 }
 
 // goMcpSessionTest renders the end-to-end gate: a whole MCP session — the

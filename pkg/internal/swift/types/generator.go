@@ -54,10 +54,31 @@ type c2dServiceTemplateData struct {
 type c2sClientTemplateData struct {
 	PackageName string
 	Services    []c2dServiceTemplateData
+	// RouteMethods is every tenant-routed rpc reachable through the C2S client
+	// (issue #170). Non-empty, it installs the route interceptor that refuses an
+	// empty or malformed route field before the request is written; empty, the
+	// template renders exactly as for a platform-only build.
+	RouteMethods []c2sRouteMethodTemplateData
+}
+
+// c2sRouteMethodTemplateData is one tenant-routed rpc in the C2S route table.
+type c2sRouteMethodTemplateData struct {
+	// FullMethod is the grpc-swift MethodDescriptor.fullyQualifiedMethod,
+	// "<package>.<Service>/<Method>", the key the interceptor looks up.
+	FullMethod       string
+	RouteField       string // proto name of the route field, for the refusal message
+	RouteFieldNumber int32  // wire number the interceptor reads off the serialized request
+	// ClientStreaming rpcs pin the tenant on the first message and refuse any
+	// later message naming another; single-request rpcs are checked whole
+	// before anything is written.
+	ClientStreaming bool
 }
 
 type w2sClientTemplateData struct {
 	Services []w2sServiceTemplateData
+	// HasRoutedMethods gates the route-field check helper and its error case,
+	// so a platform-only build renders unchanged.
+	HasRoutedMethods bool
 }
 
 type w2sServiceTemplateData struct {
@@ -83,6 +104,12 @@ type w2sMethodTemplateData struct {
 	// speak, so they are emitted as unavailable stubs — a consumer sees the
 	// method at compile time instead of a silent omission.
 	IsUnsupportedStream bool
+	// RouteField / RouteFieldNumber name the request field carrying the target
+	// tenant of a tenant-routed rpc (issue #170): the generated method refuses
+	// an empty or malformed value before sending. Empty for platform rpcs and
+	// for the unsupported client-streaming/bidi stubs.
+	RouteField       string
+	RouteFieldNumber int32
 }
 
 // Generate generates a SwiftPM client-lite package from proto files.
@@ -198,6 +225,16 @@ func Generate(config *tactype.Config) error {
 			return fmt.Errorf("failed to resolve Swift W2S routes: %w", err)
 		}
 	}
+	// The C2S tenant route table reads (spec.rpc).route_field, so it too is
+	// resolved before the strip.
+	var c2sRoutes []c2sRouteMethodTemplateData
+	if len(c2sServices) > 0 {
+		c2sRoutes, err = c2sRouteMethods(protoSrcDir, c2sServices)
+		if err != nil {
+			return fmt.Errorf("failed to resolve Swift C2S tenant routes: %w", err)
+		}
+	}
+	hasRoutedMethods := len(c2sRoutes) > 0 || w2sHasRoutedMethods(w2sData)
 
 	if err := proto.StripSpecOptionsFromDir(protoSrcDir); err != nil {
 		return fmt.Errorf("failed to strip spec annotations: %w", err)
@@ -218,12 +255,17 @@ func Generate(config *tactype.Config) error {
 		}
 	}
 	if len(c2sServices) > 0 {
-		if err := renderC2SClient(config, c2sServices); err != nil {
+		if err := renderC2SClient(config, c2sServices, c2sRoutes); err != nil {
 			return err
 		}
 	}
 	if len(w2sData) > 0 {
 		if err := renderW2SClient(config, w2sData); err != nil {
+			return err
+		}
+	}
+	if hasRoutedMethods {
+		if err := renderTenantRoute(config); err != nil {
 			return err
 		}
 	}
@@ -285,10 +327,11 @@ func renderC2DClient(config *tactype.Config, servicesInfo []service.ServiceInfo)
 	return nil
 }
 
-func renderC2SClient(config *tactype.Config, servicesInfo []service.ServiceInfo) error {
+func renderC2SClient(config *tactype.Config, servicesInfo []service.ServiceInfo, routes []c2sRouteMethodTemplateData) error {
 	data := c2sClientTemplateData{
-		PackageName: config.SwiftPackageBase,
-		Services:    c2dServicesTemplateData(servicesInfo),
+		PackageName:  config.SwiftPackageBase,
+		Services:     c2dServicesTemplateData(servicesInfo),
+		RouteMethods: routes,
 	}
 
 	out, err := executeSwiftTemplate("C2SClient.swift.tmpl", data)
@@ -306,7 +349,7 @@ func renderC2SClient(config *tactype.Config, servicesInfo []service.ServiceInfo)
 }
 
 func renderW2SClient(config *tactype.Config, services []w2sServiceTemplateData) error {
-	data := w2sClientTemplateData{Services: services}
+	data := w2sClientTemplateData{Services: services, HasRoutedMethods: w2sHasRoutedMethods(services)}
 
 	out, err := executeSwiftTemplate("W2SClient.swift.tmpl", data)
 	if err != nil {
@@ -318,6 +361,24 @@ func renderW2SClient(config *tactype.Config, services []w2sServiceTemplateData) 
 	}
 	if err := os.WriteFile(outPath, out, 0644); err != nil {
 		return fmt.Errorf("failed to write W2SClient.swift: %w", err)
+	}
+	return nil
+}
+
+// renderTenantRoute writes the tenant-route helper (tid check + protobuf wire
+// walker) the C2S route interceptor and the W2S route check share. Emitted only
+// when the build has a tenant-routed rpc.
+func renderTenantRoute(config *tactype.Config) error {
+	out, err := executeSwiftTemplate("TenantRoute.swift.tmpl", nil)
+	if err != nil {
+		return err
+	}
+	outPath := filepath.Join(config.OutputDir, "Sources", config.SwiftPackageBase, "TenantRoute.swift")
+	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+		return fmt.Errorf("failed to create Swift source directory: %w", err)
+	}
+	if err := os.WriteFile(outPath, out, 0644); err != nil {
+		return fmt.Errorf("failed to write TenantRoute.swift: %w", err)
 	}
 	return nil
 }
@@ -461,6 +522,13 @@ func w2sMethodData(svc service.ServiceInfo, target *parser.ServiceInfo, method *
 		data.IsUnsupportedStream = true
 		return data, nil
 	}
+	if method.RouteField != nil {
+		if err := checkRouteFieldDescriptor(target.Name, method.Name, method.RouteField); err != nil {
+			return w2sMethodTemplateData{}, err
+		}
+		data.RouteField = method.RouteField.Field
+		data.RouteFieldNumber = method.RouteField.Number
+	}
 	if method.HttpPath == "" {
 		return w2sMethodTemplateData{}, fmt.Errorf("swift W2S method %s.%s requires REST route metadata (no HTTP path)", target.Name, method.Name)
 	}
@@ -517,6 +585,106 @@ func w2sServicesTemplateData(protoDir string, servicesInfo []service.ServiceInfo
 
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].ClientTypeName < result[j].ClientTypeName
+	})
+	return result, nil
+}
+
+func w2sHasRoutedMethods(services []w2sServiceTemplateData) bool {
+	for _, svc := range services {
+		for _, m := range svc.Methods {
+			if m.RouteField != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// checkRouteFieldDescriptor refuses a route field the generated check could not
+// read. The parser guarantees both; this keeps a generator bug from emitting a
+// check that refuses every call (number 0) or names no field.
+func checkRouteFieldDescriptor(serviceName, methodName string, rf *parser.RouteFieldDescriptor) error {
+	if rf.Field == "" || rf.Number <= 0 {
+		return fmt.Errorf("swift: %s.%s has an unresolved (spec.rpc).route_field (field %q, number %d)", serviceName, methodName, rf.Field, rf.Number)
+	}
+	return nil
+}
+
+// c2sRouteMethods resolves the C2S tenant route table: every rpc of the C2S
+// client services that declares (spec.rpc).route_field. Read from the parsed
+// descriptors before the spec options are stripped.
+func c2sRouteMethods(protoDir string, servicesInfo []service.ServiceInfo) ([]c2sRouteMethodTemplateData, error) {
+	dp, err := parser.NewDescriptorParser(protoDir)
+	if err != nil {
+		return nil, err
+	}
+	allFiles := dp.GetAllFiles()
+	var result []c2sRouteMethodTemplateData
+	for _, svc := range servicesInfo {
+		fd, ok := allFiles[filepath.ToSlash(svc.ProtoFile)]
+		if !ok {
+			return nil, fmt.Errorf("descriptor not found for C2S service %q proto %q", svc.ServiceName, svc.ProtoFile)
+		}
+		routes, err := c2sRouteMethodsForService(fd, svc.ServiceName)
+		if err != nil {
+			return nil, fmt.Errorf("C2S service %q in proto %q: %w", svc.ServiceName, svc.ProtoFile, err)
+		}
+		result = append(result, routes...)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].FullMethod < result[j].FullMethod
+	})
+	// Two client services resolving to the same proto service yield the same
+	// entries; a Swift dictionary literal with a duplicate key traps at run time.
+	deduped := result[:0]
+	for i, r := range result {
+		if i > 0 && r.FullMethod == result[i-1].FullMethod {
+			if r != result[i-1] {
+				return nil, fmt.Errorf("C2S method %s resolved to two different route fields", r.FullMethod)
+			}
+			continue
+		}
+		deduped = append(deduped, r)
+	}
+	return deduped, nil
+}
+
+// c2sRouteMethodsForService returns the routed rpcs of serviceName in fd,
+// keyed the way grpc-swift names the method on the wire.
+func c2sRouteMethodsForService(fd *parser.FileDescriptor, serviceName string) ([]c2sRouteMethodTemplateData, error) {
+	var target *parser.ServiceDescriptor
+	for i := range fd.Services {
+		if fd.Services[i].Name == serviceName {
+			target = &fd.Services[i]
+			break
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("service %q not found", serviceName)
+	}
+	fullService := target.Name
+	if fd.Package != "" {
+		fullService = fd.Package + "." + target.Name
+	}
+	var result []c2sRouteMethodTemplateData
+	for i := range target.Methods {
+		method := &target.Methods[i]
+		rf := method.RouteField
+		if rf == nil {
+			continue
+		}
+		if err := checkRouteFieldDescriptor(target.Name, method.Name, rf); err != nil {
+			return nil, err
+		}
+		result = append(result, c2sRouteMethodTemplateData{
+			FullMethod:       fullService + "/" + method.Name,
+			RouteField:       rf.Field,
+			RouteFieldNumber: rf.Number,
+			ClientStreaming:  method.ClientStreaming,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].FullMethod < result[j].FullMethod
 	})
 	return result, nil
 }

@@ -55,6 +55,13 @@ type Route struct {
 	ClientStreaming    bool
 	// TargetNamespaceField is (spec.rpc).target_namespace_field; empty when unset.
 	TargetNamespaceField string
+	// RouteField is (spec.rpc).route_field as declared (the proto field name),
+	// RouteFieldJSON its proto3 JSON name and RouteFieldNumber its wire number:
+	// the request field whose tid names the tenant whose instance the gateway
+	// dials. All empty/zero for a platform service's route.
+	RouteField       string
+	RouteFieldJSON   string
+	RouteFieldNumber int32
 	// FormBody is (spec.rest_browser).form_body: the route also accepts an
 	// application/x-www-form-urlencoded body.
 	FormBody bool
@@ -84,6 +91,10 @@ type Arm struct {
 	ValidateInput    bool
 	ValidateOutput   bool
 	ServerStreaming  bool
+	// RouteField is (spec.rpc).route_field as declared: the dispatcher reads the
+	// target tenant off the decoded request before it dials. Empty for a
+	// platform service, which is never addressed by tenant.
+	RouteField string
 }
 
 // Plan is the resolved route table and dispatch arms, in emission order.
@@ -238,6 +249,7 @@ func Collect(dp *parser.DescriptorParser, config *tactype.Config, services []Ser
 				RedirectField:        redirectField(method),
 				RedirectJSONName:     RedirectJSONName(method),
 			}
+			setRouteField(&route, method.RouteField)
 			plan.Routes = append(plan.Routes, route)
 			if method.HttpAliasPath != "" {
 				alias := route
@@ -275,6 +287,7 @@ func Collect(dp *parser.DescriptorParser, config *tactype.Config, services []Ser
 				ValidateInput:    !isEmptyInput && CanValidate(method.FullInputType),
 				ValidateOutput:   !isEmptyOutput && CanValidate(method.FullOutputType),
 				ServerStreaming:  method.ServerStreaming,
+				RouteField:       routeFieldName(method.RouteField),
 			})
 		}
 	}
@@ -375,6 +388,7 @@ func collectRoutesForService(dp *parser.DescriptorParser, svc Service, plan *Pla
 			RedirectField:        redirectField(method),
 			RedirectJSONName:     RedirectJSONName(method),
 		}
+		setRouteField(&route, method.RouteField)
 		plan.Routes = append(plan.Routes, route)
 		if method.HttpAliasPath != "" {
 			alias := route
@@ -418,15 +432,34 @@ func collectProxyAuthDisabledRoutes(dp *parser.DescriptorParser, svc Service, pl
 		if !method.AuthDisabled {
 			continue
 		}
-		plan.Routes = append(plan.Routes, Route{
+		route := Route{
 			GrpcPath:        fmt.Sprintf("/%s.%s/%s", svc.PackageName, svc.ServiceName, method.Name),
 			ServiceID:       svc.PackageName,
 			AuthPolicy:      AuthNoAuth,
 			ServerStreaming: method.ServerStreaming,
 			ClientStreaming: method.ClientStreaming,
-		})
+		}
+		setRouteField(&route, method.RouteField)
+		plan.Routes = append(plan.Routes, route)
 	}
 	return nil
+}
+
+// setRouteField copies a method's resolved route field onto its route.
+func setRouteField(route *Route, rf *parser.RouteFieldDescriptor) {
+	if rf == nil {
+		return
+	}
+	route.RouteField = rf.Field
+	route.RouteFieldJSON = rf.JSONName
+	route.RouteFieldNumber = rf.Number
+}
+
+func routeFieldName(rf *parser.RouteFieldDescriptor) string {
+	if rf == nil {
+		return ""
+	}
+	return rf.Field
 }
 
 // dispatchableShape refuses a REST-dispatchable method whose request or

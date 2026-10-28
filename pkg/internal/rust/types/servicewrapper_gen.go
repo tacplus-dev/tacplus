@@ -240,6 +240,9 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 	var grpcWrappers, watchFields, watchFieldsInit strings.Builder
 	var methodAuthLines []string
 	hasRequiresDevice := false
+	// hasTenantRoute: some rpc declares (spec.rpc).route_field, so the wrapper
+	// carries the tenant its instance serves and the routing backstop.
+	hasTenantRoute := false
 	for _, method := range targetService.Methods {
 		// The session carrier is served by the generated MCP dispatch rather
 		// than by a handler method; it still authorizes exactly as the ordinary
@@ -266,6 +269,10 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 					strings.Join(quoted, ", ")))
 			}
 			methodAuthLines = append(methodAuthLines, rustMethodActorsLine(info.Package, targetService.Name, method)...)
+			methodAuthLines = append(methodAuthLines, rustMethodAnyTenantLine(info.Package, targetService.Name, method)...)
+			if method.RouteField != nil {
+				hasTenantRoute = true
+			}
 			continue
 		}
 		// An MCP tool gets no gRPC method wrapper: no authorize call, no
@@ -382,6 +389,10 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 				strings.Join(quoted, ", ")))
 		}
 		methodAuthLines = append(methodAuthLines, rustMethodActorsLine(info.Package, targetService.Name, method)...)
+		methodAuthLines = append(methodAuthLines, rustMethodAnyTenantLine(info.Package, targetService.Name, method)...)
+		if method.RouteField != nil {
+			hasTenantRoute = true
+		}
 	}
 
 	// Build register_method_auth function.
@@ -453,6 +464,7 @@ use crate::types::generated::services::services as services_pb;
 		WatchFieldsInit      string
 		HasAccounting        bool
 		HasRequiresDevice    bool
+		HasTenantRoute       bool
 		AccountingImports    string
 		RegisterMethodAuth   string
 		McpDispatch          string
@@ -475,6 +487,7 @@ use crate::types::generated::services::services as services_pb;
 		WatchFieldsInit:      watchFieldsInit.String(),
 		HasAccounting:        hasAccounting,
 		HasRequiresDevice:    hasRequiresDevice,
+		HasTenantRoute:       hasTenantRoute,
 		AccountingImports:    accountingImports,
 		RegisterMethodAuth:   registerMethodAuth,
 		McpDispatch:          mcpDispatch,
@@ -971,9 +984,9 @@ func rustAuthLine(svc *parser.ServiceInfo, method *parser.MethodInfo, fullMethod
 		// exactly at "/", denying every real caller.
 		targetNamespace := strings.TrimSpace(method.TargetNamespaceField)
 		if targetNamespace == "" {
-			base = fmt.Sprintf("let %s = self.enforce_authenticated(&request).await?;", rustCallerIdentityVar)
+			base = fmt.Sprintf("let %s = self.enforce_authenticated(\"%s\", &request).await?;", rustCallerIdentityVar, fullMethod)
 		} else {
-			base = fmt.Sprintf("let %s = self.enforce_at_or_below(&request, %q).await?;", rustCallerIdentityVar, targetNamespace)
+			base = fmt.Sprintf("let %s = self.enforce_at_or_below(\"%s\", &request, %q).await?;", rustCallerIdentityVar, fullMethod, targetNamespace)
 		}
 	} else {
 		base = fmt.Sprintf("let %s = self.authorize_method(\"%s\", &request).await?;", rustCallerIdentityVar, fullMethod)
@@ -983,7 +996,7 @@ func rustAuthLine(svc *parser.ServiceInfo, method *parser.MethodInfo, fullMethod
 	// Only valid for non-client-streaming methods (request.get_ref() yields the message).
 	if method.TargetNamespaceField != "" && !method.ClientStreaming && !method.AuthAnyUser {
 		fieldSnake := strutil.ToSnakeCase(method.TargetNamespaceField)
-		base += fmt.Sprintf("\n        self.enforce_at_or_below(&request, &request.get_ref().%s).await?;", fieldSnake)
+		base += fmt.Sprintf("\n        self.enforce_at_or_below(\"%s\", &request, &request.get_ref().%s).await?;", fullMethod, fieldSnake)
 	}
 	return base
 }
@@ -1008,9 +1021,9 @@ func rustServerResponseValidationBlock(varName, fullType string) string {
 `, varName)
 }
 
-func rustValidatedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, methodName string) string {
+func rustValidatedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, methodName, fullMethod string) string {
 	if principalField != "" || namespaceField != "" {
-		return rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, methodName)
+		return rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, methodName, fullMethod)
 	}
 	requestStream := fmt.Sprintf(requestStreamFmt, inputType)
 	fieldSnake := ""
@@ -1035,12 +1048,12 @@ func rustValidatedRequestStreamBlock(inputType, fullInputType, targetNamespaceFi
             let wrapper = wrapper.clone();
             async move {
                 let msg = item?;
-                wrapper.enforce_at_or_below_authorization(authorization.as_deref(), &msg.%s).await?;
+                wrapper.enforce_at_or_below_authorization("%s", authorization.as_deref(), &msg.%s).await?;
                 Ok(msg)
             }
         });
         let request = tonic::Request::from_parts(metadata, extensions, Box::pin(stream) as %s);
-`, authPreamble, fieldSnake, requestStream)
+`, authPreamble, fullMethod, fieldSnake, requestStream)
 		}
 		return fmt.Sprintf(`
         let (metadata, extensions, stream) = request.into_parts();
@@ -1055,14 +1068,14 @@ func rustValidatedRequestStreamBlock(inputType, fullInputType, targetNamespaceFi
             let wrapper = wrapper.clone();
             async move {
                 let msg = item?;
-                wrapper.enforce_at_or_below_authorization(authorization.as_deref(), &msg.%s).await?;
+                wrapper.enforce_at_or_below_authorization("%s", authorization.as_deref(), &msg.%s).await?;
                 msg.validate()
                     .map_err(|e| tonic::Status::invalid_argument(format!("validation failed: {}", e)))?;
                 Ok(msg)
             }
         });
         let request = tonic::Request::from_parts(metadata, extensions, Box::pin(stream) as %s);
-`, authPreamble, fieldSnake, requestStream)
+`, authPreamble, fullMethod, fieldSnake, requestStream)
 	}
 	return fmt.Sprintf(`
         let (metadata, extensions, stream) = request.into_parts();
@@ -1085,7 +1098,7 @@ func rustValidatedRequestStreamBlock(inputType, fullInputType, targetNamespaceFi
 // stamp-or-refuse then runs on EVERY inbound message: a request stream is not
 // one request, and message N naming a principal message N-1 did not is exactly
 // the forgery the unary check refuses.
-func rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, methodName string) string {
+func rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, methodName, fullMethod string) string {
 	requestStream := fmt.Sprintf(requestStreamFmt, inputType)
 	var resolve string
 	if principalField != "" {
@@ -1141,12 +1154,12 @@ func rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField
             let wrapper = wrapper.clone();
 %s            async move {
                 let mut msg = item?;
-                wrapper.enforce_at_or_below_authorization(authorization.as_deref(), &msg.%s).await?;
+                wrapper.enforce_at_or_below_authorization("%s", authorization.as_deref(), &msg.%s).await?;
 %s                Ok(msg)
             }
         });
         let request = tonic::Request::from_parts(metadata, extensions, Box::pin(stream) as %s);
-`, resolve, claimClones, fieldSnake, body("                "), requestStream)
+`, resolve, claimClones, fullMethod, fieldSnake, body("                "), requestStream)
 	}
 
 	return fmt.Sprintf(`
@@ -1370,7 +1383,8 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 		if hasAccounting {
 			streamAccountingBlock = buildRustAccountingBlock(method, grpcName, svc.Name, accountingMap)
 		}
-		serverStreamInputValidation := rustServerRequestValidationBlock("request.get_ref()", method.FullInputType)
+		serverStreamInputValidation := rustServerRequestValidationBlock("request.get_ref()", method.FullInputType) +
+			rustRouteCheck(method, "self", "request.get_ref()", "        ")
 		// (spec.principal)/(spec.namespace) on a server-streaming request. The
 		// request is still a single message on these shapes, so this is the unary
 		// check verbatim — but every server-stream emit consumes `request` inline
@@ -1393,7 +1407,8 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 			!(method.AuthDisabled || svc.AuthDisabled || svc.IsC2D) {
 			streamTargetNamespaceField = method.TargetNamespaceField
 		}
-		requestStreamBlock := rustValidatedRequestStreamBlock(inputType, method.FullInputType, streamTargetNamespaceField, reqPrincipal, reqNamespace, method.Name)
+		requestStreamBlock := rustValidatedRequestStreamBlock(inputType, method.FullInputType, streamTargetNamespaceField, reqPrincipal, reqNamespace, method.Name, fullMethod) +
+			rustRouteRequestStreamBlock(method, inputType)
 		streamResponseReturn := rustValidatedResponseStreamReturn(method.Name, method.FullOutputType)
 		unaryStreamResponseValidation := rustServerResponseValidationBlock("response.get_ref()", method.FullOutputType)
 
@@ -1830,7 +1845,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 		validationBlock = `
         // Validate request before invoking the handler.
         req.validate().map_err(|e| tonic::Status::invalid_argument(format!("validation failed: {}", e)))?;
-`
+` + rustRouteCheck(method, "self", "req", "        ")
 		// (spec.store_epoch): stamp or refuse before the handler sees the
 		// request, and ahead of the pins below — Java's relative ordering on its
 		// own unary seam.
@@ -1866,7 +1881,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 		pageValidation := `
         // Validate request before decoding the page token or invoking the handler.
         req.validate().map_err(|e| tonic::Status::invalid_argument(format!("validation failed: {}", e)))?;
-`
+` + rustRouteCheck(method, "self", "req", "        ")
 		// (spec.principal)/(spec.namespace): stamp or refuse before the page
 		// token is decoded, so the window the handler is asked for is already
 		// the caller's own.
@@ -2126,6 +2141,49 @@ func rustMethodActorsLine(protoPackage, serviceName string, method *parser.Metho
 		"    auth.set_method_actors(%q, &[%s]);",
 		rustQualifiedMethodAuthKey(protoPackage, serviceName, method.Name),
 		strings.Join(quoted, ", "))}
+}
+
+// rustMethodAnyTenantLine renders the set_method_any_tenant registration for an
+// rpc declaring RPC_FLAG_ANY_TENANT, or nothing. Emitting nothing keeps the
+// tenant-owned instance's default door: members of its own tenant only.
+func rustMethodAnyTenantLine(protoPackage, serviceName string, method *parser.MethodInfo) []string {
+	if !method.AnyTenant {
+		return nil
+	}
+	return []string{fmt.Sprintf("    auth.set_method_any_tenant(%q);",
+		rustQualifiedMethodAuthKey(protoPackage, serviceName, method.Name))}
+}
+
+// rustRouteCheck is the tenant-owned instance's backstop for a routed rpc
+// ((spec.rpc).route_field), spliced after request validation and before the
+// handler: the route field must be a tid naming the tenant this instance
+// serves. `wrapper` is the expression holding the ValidationWrapper, `req` the
+// one holding the request message. Empty for an rpc with no route field.
+func rustRouteCheck(method *parser.MethodInfo, wrapper, req, indent string) string {
+	if method.RouteField == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s%s.check_route_tenant(%s, &%s.%s)?;\n",
+		indent, wrapper, rustQuote(method.RouteField.Field), req, rustRequestFieldIdent(method.RouteField.Field))
+}
+
+// rustRouteRequestStreamBlock re-wraps a routed rpc's request stream (already
+// validated message by message) so every inbound message is held to the
+// route backstop: a request stream is not one request, and message N naming
+// another tenant than message N-1 is refused just as a unary request is.
+func rustRouteRequestStreamBlock(method *parser.MethodInfo, inputType string) string {
+	if method.RouteField == nil {
+		return ""
+	}
+	return fmt.Sprintf(`
+        let (metadata, extensions, stream) = request.into_parts();
+        let __route_wrapper = self.clone();
+        let stream = stream.map(move |item| -> Result<%s, tonic::Status> {
+            let msg = item?;
+%s            Ok(msg)
+        });
+        let request = tonic::Request::from_parts(metadata, extensions, Box::pin(stream) as %s);
+`, inputType, rustRouteCheck(method, "__route_wrapper", "msg", "            "), fmt.Sprintf(requestStreamFmt, inputType))
 }
 
 func rustQualifiedMethodAuthKey(protoPackage, serviceName, methodName string) string {

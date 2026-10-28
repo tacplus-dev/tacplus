@@ -1554,6 +1554,16 @@ enum RpcFlag {
   // already fully expressed by its principal, its other flags and its
   // auth_services. This flag only affects MCP auto-exposure.
   RPC_FLAG_MINTS_CREDENTIAL = 5;
+  // RPC_FLAG_ANY_TENANT: on an RPC of a tenant-owned service, a caller of ANY
+  // tenant passes the instance's tenant door, so "any authenticated user of
+  // any tenant may call this" is expressible. Without it the door admits only
+  // members of the instance's own tenant (and /system), which is the default.
+  // It widens nothing else: the token, its audience, auth_services,
+  // entitlements and target_namespace_field are checked exactly as before. It
+  // has nothing to do with routing — (spec.rpc).route_field alone decides
+  // which tenant's instance receives the call — and generation fails if it is
+  // declared on an RPC of a service that is not tenant-owned.
+  RPC_FLAG_ANY_TENANT = 6;
 }
 
 // RpcAnnotation declares an RPC's call surface on two independent axes plus a
@@ -1654,6 +1664,25 @@ message RpcAnnotation {
   // (verified caller, plain unary rpc, no map field in the request tree) still
   // applies to the whole rpc, unconditionally.
   RequiresDeviceWhen requires_device_when = 9;
+
+  // route_field names the request field that carries the TARGET TENANT ID of
+  // an RPC of a tenant-owned service ((spec.service).tenant_owned), as the
+  // proto field name (snake_case as declared), e.g. "tenant". Its value is a
+  // tid: exactly 8 characters of [0-9a-z] (all-digit ids are the platform's).
+  // That value decides which tenant's instance receives the call, and nothing
+  // else: the generated gateway route tables (gRPC and REST) carry it, and the
+  // generated service clients pick the target tenant's instance by it, so a
+  // call routes the same way from outside the cluster as from inside it. It is
+  // never taken from the caller's token.
+  //
+  // Required on every RPC of a tenant-owned service, refused on every other
+  // RPC: generation fails either way. The field must be a top-level, singular,
+  // plain (no proto3 optional) string field of the request. At run time a call
+  // whose value is empty or not a tid is refused (INVALID_ARGUMENT) before it
+  // is routed, and a tenant-owned instance refuses one routed to another
+  // tenant. Routing is not authorization: who may call is still the token,
+  // auth_services, entitlements, target_namespace_field and RPC_FLAG_ANY_TENANT.
+  string route_field = 10;
 }
 
 // RequiresDeviceWhen is the condition (spec.rpc).requires_device_when gates on.
@@ -2690,12 +2719,17 @@ message ServiceAnnotation {
   // tenant_owned declares this service as a per-tenant instance: the operator
   // runs one deployment per tenant, and the service's SPIFFE identity is
   // spiffe://<td>/tenants/<tenant>/services/<name> instead of the shared
-  // /system/services/<name> every other service gets. Tenant identity comes
-  // ONLY from the caller's token namespace at runtime — this annotation does
+  // /system/services/<name> every other service gets. This annotation does
   // not carry a tenant, it only declares that the service is instantiated
-  // per-tenant. Read by the operator (per-tenant Deployments), the gateway
-  // (route by token namespace), and the record-plane store wrapper (tenant
-  // pin on S2S reads). Default false — every service today is shared.
+  // per-tenant. Which tenant's instance receives a call is decided by the
+  // call itself: every rpc of a tenant-owned service declares
+  // (spec.rpc).route_field, the request field carrying the target tenant id,
+  // and the gateway and the generated service clients route by it, never by
+  // the caller's token. Read by the operator (per-tenant Deployments), the
+  // gateway and service clients (route by route_field), the generated server
+  // (tenant door, see RPC_FLAG_ANY_TENANT) and the record-plane store wrapper
+  // (tenant pin on S2S reads). Default false: a platform service, shared and
+  // never addressed by tenant.
   bool tenant_owned = 8;
 
   // pinned_tenant pins a tenant-owned service to exactly one tenant. Meaningful

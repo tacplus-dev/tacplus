@@ -361,6 +361,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, fileDesc *parse
 	if hasClientStreaming {
 		extraTypes.WriteString(tsGrpcAsyncIterableHelper())
 	}
+	extraTypes.WriteString(tsRouteHelpers(targetService))
 
 	clientName := svc.ServiceName + "GrpcClient"
 
@@ -543,6 +544,14 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 	if !emptyInput {
 		streamRequestValidation = tsGrpcValidationStatement("request", method.FullInputType, method.InputType, servicePackage, "                    ")
 	}
+	// A routed rpc's request is checked AFTER validation, BEFORE any send; a
+	// routed stream is pinned to the tenant its first message names.
+	requestValidation += tsRouteCheck(method, "request", "        ")
+	streamRequestValidation += tsRoutePinCheck(method, "request", "                        ")
+	streamAuthMetadata := authMetadata
+	if pin := tsRoutePinOpen(method, "        "); pin != "" {
+		streamAuthMetadata += "\n" + strings.TrimSuffix(pin, "\n")
+	}
 	// NOTE: no per-send auth in the send loops — auth is STREAM-OPEN scoped
 	// (one metadata attachment at open; the pinned cross-language contract,
 	// docs/API.md Client Send Contract). A per-send this.metadata(true) minted a
@@ -582,6 +591,7 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 			AuthRequired       bool
 			RequestValidation  string
 			ResponseValidation string
+			RouteOpen          string
 		}{
 			MethodName:         method.Name,
 			MethodLower:        methodLower,
@@ -593,8 +603,10 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 			Serialize:          serialize,
 			Deserialize:        deserialize,
 			AuthRequired:       authRequired,
-			RequestValidation:  tsGrpcValidationStatement("msg", method.FullInputType, method.InputType, servicePackage, "                    "),
+			RequestValidation:  tsGrpcValidationStatement("msg", method.FullInputType, method.InputType, servicePackage, "                    ") + tsRoutePinCheck(method, "msg", "                    "),
 			ResponseValidation: tsGrpcValidationStatement("msg", method.FullOutputType, method.OutputType, servicePackage, "                            "),
+			// The pin outlives reconnects: the handle's stream stays one tenant's.
+			RouteOpen: strings.TrimSuffix(tsRoutePinOpen(method, "        "), "\n"),
 		}
 
 		tmpl, err := template.New("bidi").Parse(tmplStr)
@@ -782,7 +794,7 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
             })().catch(reject);
         });
     }`, method.Name, svc.Name, method.Name,
-				methodLower, inputType, inputType, authMetadata,
+				methodLower, inputType, inputType, streamAuthMetadata,
 				inputType, outputType,
 				fullPath, serialize, deserialize,
 				streamRequestValidation)}, nil
@@ -818,7 +830,7 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 %s
         return response;
     }`, method.Name, svc.Name, method.Name,
-			methodLower, inputType, inputType, outputType, authMetadata,
+			methodLower, inputType, inputType, outputType, streamAuthMetadata,
 			outputType,
 			inputType, outputType,
 			fullPath, serialize, deserialize,

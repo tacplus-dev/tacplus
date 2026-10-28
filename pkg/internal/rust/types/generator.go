@@ -849,6 +849,11 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 				if len(m.AuthActors) > 0 {
 					hasMethodAuth = true
 				}
+				// RPC_FLAG_ANY_TENANT is registered beside auth_services and
+				// auth_actors, by the same register_method_auth.
+				if m.AnyTenant {
+					hasMethodAuth = true
+				}
 				if service.AuthDisabled || m.AuthDisabled {
 					authExempt = append(authExempt, fmt.Sprintf("/%s.%s/%s", packageName, service.Name, m.Name))
 				}

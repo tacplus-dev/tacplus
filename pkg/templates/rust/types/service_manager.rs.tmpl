@@ -790,10 +790,11 @@ impl ServiceManager {
         // Per-target ServiceConnections. Each gets a SPIFFE verifier narrowed
         // to that service: cert must chain to a trusted root AND carry a URI
         // SAN matching `spiffe://<trust_domain>/<service_id>`. DNS hostname
-        // is ignored entirely.
+        // is ignored entirely. A tenant-owned target ((spec.rpc).route_field)
+        // is one pool per tenant: a call reaches only the tenant it names.
 {{- range .TargetServices}}
 {{- if ne .ServiceID $.StateStoreServiceID}}
-        let {{.AccessorName}}_sc = Arc::new(ServiceConnection::new_dynamic(
+        let {{.AccessorName}}_sc = Arc::new(ServiceConnection::{{if .TenantRouted}}new_tenant_routed{{else}}new_dynamic{{end}}(
             "{{.ServiceID}}",
             spiffe_verifier_base.clone().expect_service("{{.ServiceID}}"),
         ));
@@ -1650,6 +1651,13 @@ impl ServiceManager {
         {{.WrapperModPath}}::register_method_auth(&self.authorizer);
 {{- end}}
 {{- end}}
+{{- range .GrpcServices}}
+{{- if .TenantRouted}}
+        // (spec.rpc).route_field backstop: the wrapper serves only calls routed
+        // to the tenant its instance runs in.
+        {{.WrapperVar}}.set_host_namespace(&self.authorizer.host_namespace());
+{{- end}}
+{{- end}}
 
 {{- if or .HasC2SGrpc .HasS2SGrpc .HasMcpGrpc}}
         // Wire the authorizer to every mandatory-auth wrapper — C2S
@@ -2465,9 +2473,10 @@ impl {{.WrapperModPath}}::Authorizer for AuthorizerAdapter {
             })
     }
 
-    async fn check_at_or_below(&self, authorization: Option<&str>, target_namespace: &str) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
+    async fn check_at_or_below(&self, full_method: &str, authorization: Option<&str>, target_namespace: &str) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
+        // The rpc is named so the tenant door follows its RPC_FLAG_ANY_TENANT.
         self.authorizer
-            .check_caller_at_or_below(authorization, target_namespace)
+            .check_caller_at_or_below_method(full_method, authorization, target_namespace)
             .map(|tw| GrpcAuthorizer::identity_claims(&tw))
             .map_err(|e| match e.code {
                 16 => tonic::Status::unauthenticated(e.message),
@@ -2475,9 +2484,9 @@ impl {{.WrapperModPath}}::Authorizer for AuthorizerAdapter {
             })
     }
 
-    async fn authenticate(&self, authorization: Option<&str>) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
+    async fn authenticate(&self, full_method: &str, authorization: Option<&str>) -> Result<std::collections::HashMap<String, String>, tonic::Status> {
         self.authorizer
-            .authenticate_caller(authorization)
+            .authenticate_caller_method(full_method, authorization)
             .map(|tw| GrpcAuthorizer::identity_claims(&tw))
             .map_err(|e| match e.code {
                 16 => tonic::Status::unauthenticated(e.message),

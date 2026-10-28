@@ -171,6 +171,9 @@ class Authorizer:
         # The instance's own tenant namespace ("/tenants/<t>"), or "" for a
         # shared instance. See set_host_namespace.
         self._host_tenant = ""
+        # Methods declaring RPC_FLAG_ANY_TENANT: the tenant door is open on
+        # them. See set_method_any_tenant.
+        self._method_any_tenant: Set[str] = set()
 
         logger.info(
             "Token-based authorization initialized: service=%s, jwk_watch=%s",
@@ -223,10 +226,27 @@ class Authorizer:
         """set_host_namespace with the namespace read from the instance's own service token."""
         self.set_host_namespace(TokenWrapper.parse(token).get_namespace() or "")
 
-    def _check_host_tenant(self, caller_namespace: str) -> None:
-        """The tenant-owned instance's door check."""
+    def set_method_any_tenant(self, method_key: str) -> None:
+        """
+        Registers a method declaring RPC_FLAG_ANY_TENANT: a caller of ANY
+        tenant passes this tenant-owned instance's door on it ("any
+        authenticated user of any tenant may call this"). It widens nothing
+        else: the token, its audience, auth_services, entitlements and
+        target_namespace_field are checked exactly as before. Every other
+        method keeps the default door ("members of the instance's tenant").
+
+        method_key is the same service-qualified identifier set_method_auth
+        takes, for the same reason.
+        """
+        if method_key:
+            self._method_any_tenant.add(method_key)
+
+    def _check_host_tenant(self, caller_namespace: str, method_key: str | None = None) -> None:
+        """The tenant-owned instance's door check, open on an RPC_FLAG_ANY_TENANT method."""
         host = self._host_tenant
         if not host:
+            return
+        if method_key is not None and method_key in self._method_any_tenant:
             return
         if is_at_or_below("/system", caller_namespace) or is_at_or_below(caller_namespace, host):
             return
@@ -346,8 +366,9 @@ class Authorizer:
                 f'token audience "{aud}" is not accepted by service "{self._SERVICE_NAME}"'
             )
 
-        # Tenant-owned instance: refuse another tenant's caller at the door.
-        self._check_host_tenant(tw.get_namespace() or "")
+        # Tenant-owned instance: refuse another tenant's caller at the door
+        # (open on an RPC_FLAG_ANY_TENANT method).
+        self._check_host_tenant(tw.get_namespace() or "", _qualified_method_key(full_method))
 
         # S2S path: service/workload tokens carry structured identity claims
         # (sub_type, sub, service_name). Authorization is receiver-side via
@@ -394,13 +415,21 @@ class Authorizer:
         # named by the method's target_namespace_field annotation.
         self._check_target_namespace(_qualified_method_key(full_method), tw.get_namespace() or "", request)
 
-    def authenticate(self, metadata: Dict[str, str], target_namespace: str | None = None) -> None:
+    def authenticate(
+        self,
+        metadata: Dict[str, str],
+        target_namespace: str | None = None,
+        full_method: str | None = None,
+    ) -> None:
         """
         Authenticates a request by verifying token signature and audience only.
         Does NOT check entitlements. Used for auth_any_user services.
 
         Args:
             metadata: Request metadata/headers
+            target_namespace: auth_any_user's fixed namespace, when declared
+            full_method: The full gRPC method, so an RPC_FLAG_ANY_TENANT
+                method's open door is honoured; None keeps the default door
 
         Raises:
             ProtoError: If authentication fails
@@ -450,8 +479,12 @@ class Authorizer:
                 f'token audience "{aud}" is not accepted by service "{self._SERVICE_NAME}"'
             )
 
-        # Tenant-owned instance: refuse another tenant's caller at the door.
-        self._check_host_tenant(tw.get_namespace() or "")
+        # Tenant-owned instance: refuse another tenant's caller at the door
+        # (open on an RPC_FLAG_ANY_TENANT method).
+        self._check_host_tenant(
+            tw.get_namespace() or "",
+            _qualified_method_key(full_method) if full_method else None,
+        )
 
         if target_namespace is not None:
             target = target_namespace or "/"

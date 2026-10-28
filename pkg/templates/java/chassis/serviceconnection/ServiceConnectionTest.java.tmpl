@@ -4,11 +4,17 @@ import {{.TypesBase}}.sys.x509.X509;
 import {{.TypesBase}}.sys.healthreport.Healthreport.InstanceStatus;
 import {{.TypesBase}}.sys.healthreport.Healthreport.ServiceInstanceHealth;
 import {{.TypesBase}}.sys.host.HostOuterClass;
+import {{.TypesBase}}.sys.errors.ProtoException;
+import io.grpc.CallOptions;
 import io.grpc.ConnectivityState;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -54,6 +60,10 @@ public class ServiceConnectionTest {
         checkReadiness();
         checkStaticConnWhileReconnecting();
         checkReconcileGrace();
+        checkRouteTenant();
+        checkRouteTenantFromWire();
+        checkTenantRouting();
+        checkPlatformProviderUnaffected();
 
         if (failures > 0) {
             System.err.println(failures + " ServiceConnection check(s) FAILED");
@@ -186,6 +196,236 @@ public class ServiceConnectionTest {
             expect(!sc.isAvailable(), "endpoint absent for the grace snapshots in a row must be closed");
         } finally {
             server.shutdownNow();
+        }
+    }
+
+    // ---- (spec.rpc).route_field: tenant routing (issue #170) ----
+
+    private interface Call {
+        void run() throws Exception;
+    }
+
+    /** Expects a ProtoException with code (the generated clients' and gateway's refusal type). */
+    private static void expectProto(int code, String what, Call c) {
+        try {
+            c.run();
+            System.err.println("FAIL: " + what + " was accepted");
+            failures++;
+        } catch (ProtoException e) {
+            expect(e.getCode() == code, what + ": code " + e.getCode() + ", want " + code + " (" + e.getMessage() + ")");
+            expect(e.getMessage() != null && e.getMessage().contains("tenant"),
+                    what + ": the refusal must name the route field, got " + e.getMessage());
+        } catch (Exception e) {
+            System.err.println("FAIL: " + what + " threw an untyped error: " + e);
+            failures++;
+        }
+    }
+
+    /** Expects a StatusRuntimeException with code (what a ChannelProvider refuses a call with). */
+    private static void expectStatus(Status.Code code, String what, Call c) {
+        try {
+            c.run();
+            System.err.println("FAIL: " + what + " was routed");
+            failures++;
+        } catch (StatusRuntimeException e) {
+            expect(e.getStatus().getCode() == code, what + ": status " + e.getStatus() + ", want " + code);
+        } catch (Exception e) {
+            System.err.println("FAIL: " + what + " threw an untyped error: " + e);
+            failures++;
+        }
+    }
+
+    /** A tid is exactly 8 characters of [0-9a-z]; nothing else is one, and nothing is trimmed or folded. */
+    private static void checkRouteTenant() throws Exception {
+        for (String ok : List.of("aaaaaaaa", "00000001", "a1b2c3d4", "zzzzzzzz")) {
+            expect(RouteTenant.validTenantId(ok), ok + " must be a tid");
+            expect(RouteTenant.require("tenant", ok).equals(ok), "require(" + ok + ") must return it unchanged");
+        }
+        for (String bad : new String[] {null, "", "aaaaaaa", "aaaaaaaaa", "AAAAAAAA", "aaaaaaaA", " aaaaaaaa",
+                "aaaaaaaa ", "aaaa-aaa", "aaaa/aaa", "ääääääää", "aaaa\u0000aaa"}) {
+            expect(!RouteTenant.validTenantId(bad), "\"" + bad + "\" must not be a tid");
+            expectProto(ProtoException.INVALID_ARGUMENT, "route field value \"" + bad + "\"",
+                    () -> RouteTenant.require("tenant", bad));
+        }
+        expect(RouteTenant.tenantOfNamespace("/tenants/aaaaaaaa").equals("aaaaaaaa"), "/tenants/<tid> names its tenant");
+        for (String ns : new String[] {null, "", "/", "/system", "/tenants", "/tenants/", "/tenants/acme",
+                "/tenants/aaaaaaaa/workspaces/dev", "/tenants/AAAAAAAA", "/system/tenants/aaaaaaaa"}) {
+            expect(RouteTenant.tenantOfNamespace(ns).isEmpty(), "namespace \"" + ns + "\" names no routable tenant");
+        }
+        // A caller's tenant: its namespace claim's /tenants/<tid>, at or below it.
+        for (String ns : List.of("/tenants/aaaaaaaa", "/tenants/aaaaaaaa/workspaces/dev")) {
+            expect(RouteTenant.tenantOfCaller(ns).equals("aaaaaaaa"), "a caller in " + ns + " belongs to tenant aaaaaaaa");
+        }
+        for (String ns : new String[] {null, "", "/", "/system", "/tenants", "/tenants/", "/tenants/acme",
+                "/tenants/acme/workspaces/dev", "/tenants/aaaaaaaa/", "/tenants/AAAAAAAA", "/system/tenants/aaaaaaaa"}) {
+            expect(RouteTenant.tenantOfCaller(ns).isEmpty(), "a caller in \"" + ns + "\" belongs to no tenant");
+        }
+        expect(RouteTenant.tenantOfInstance("spiffe://example.com/tenants/aaaaaaaa/services/crew").equals("aaaaaaaa"),
+                "a tenant service instance belongs to its tenant");
+        for (String id : new String[] {null, "", "not a uri", "spiffe://example.com/system/aws/services/crew",
+                "spiffe://example.com/tenants/acme/services/crew",
+                "spiffe://example.com/tenants/aaaaaaaa/workspaces/dev/services/crew"}) {
+            expect(RouteTenant.tenantOfInstance(id).isEmpty(), "instance \"" + id + "\" is not routable by tenant");
+        }
+    }
+
+    private static void varint(ByteArrayOutputStream out, long v) {
+        while ((v & ~0x7FL) != 0) {
+            out.write((int) ((v & 0x7F) | 0x80));
+            v >>>= 7;
+        }
+        out.write((int) v);
+    }
+
+    private static void lenField(ByteArrayOutputStream out, int number, byte[] value) {
+        varint(out, ((long) number << 3) | 2);
+        varint(out, value.length);
+        out.write(value, 0, value.length);
+    }
+
+    private static byte[] utf8(String s) {
+        return s.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * The gateway's gRPC proxy holds only the raw request frame: the route field
+     * is read off the protobuf wire encoding, last occurrence wins, and anything
+     * malformed is refused rather than skipped.
+     */
+    private static void checkRouteTenantFromWire() throws Exception {
+        // Field 1 (a string), field 2 (a varint), field 3 (i64), field 4 (i32),
+        // a group (field 5) with a nested LEN field 3 inside it, then the route
+        // field 3 = "aaaaaaaa".
+        ByteArrayOutputStream ok = new ByteArrayOutputStream();
+        lenField(ok, 1, utf8("hello"));
+        varint(ok, (2 << 3) | 0);
+        varint(ok, 300);
+        varint(ok, (3L << 3) | 1);
+        ok.write(new byte[8], 0, 8);
+        varint(ok, (4 << 3) | 5);
+        ok.write(new byte[4], 0, 4);
+        varint(ok, (5 << 3) | 3);
+        lenField(ok, 3, utf8("zzzzzzzz"));
+        varint(ok, (5 << 3) | 4);
+        lenField(ok, 3, utf8("aaaaaaaa"));
+        expect(RouteTenant.fromWire(ok.toByteArray(), 3, "tenant").equals("aaaaaaaa"),
+                "the route field is read off the wire, skipping every other wire type");
+
+        // proto3 last-one-wins.
+        ByteArrayOutputStream twice = new ByteArrayOutputStream();
+        lenField(twice, 3, utf8("aaaaaaaa"));
+        lenField(twice, 3, utf8("bbbbbbbb"));
+        expect(RouteTenant.fromWire(twice.toByteArray(), 3, "tenant").equals("bbbbbbbb"),
+                "the last occurrence of the route field wins");
+
+        // Missing field: empty, refused.
+        ByteArrayOutputStream missing = new ByteArrayOutputStream();
+        lenField(missing, 1, utf8("aaaaaaaa"));
+        expectProto(ProtoException.INVALID_ARGUMENT, "frame without the route field",
+                () -> RouteTenant.fromWire(missing.toByteArray(), 3, "tenant"));
+        expectProto(ProtoException.INVALID_ARGUMENT, "empty frame",
+                () -> RouteTenant.fromWire(new byte[0], 3, "tenant"));
+        expectProto(ProtoException.INVALID_ARGUMENT, "null frame",
+                () -> RouteTenant.fromWire(null, 3, "tenant"));
+
+        // Malformed tid on the wire.
+        ByteArrayOutputStream upper = new ByteArrayOutputStream();
+        lenField(upper, 3, utf8("AAAAAAAA"));
+        expectProto(ProtoException.INVALID_ARGUMENT, "malformed tid on the wire",
+                () -> RouteTenant.fromWire(upper.toByteArray(), 3, "tenant"));
+
+        // Malformed encodings.
+        java.util.Map<String, byte[]> malformed = new java.util.LinkedHashMap<>();
+        malformed.put("truncated varint", new byte[] {(byte) 0x80});
+        malformed.put("overlong varint", new byte[] {8, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff,
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, 1});
+        malformed.put("field number 0", new byte[] {2, 0});
+        malformed.put("length past the end", new byte[] {0x1a, 9, 'a', 'a'});
+        malformed.put("truncated i64", new byte[] {0x19, 1, 2, 3});
+        malformed.put("truncated i32", new byte[] {0x25, 1});
+        malformed.put("wire type 6", new byte[] {0x1e});
+        malformed.put("wire type 7", new byte[] {0x1f});
+        malformed.put("end group without start", new byte[] {0x2c});
+        malformed.put("unterminated group", new byte[] {0x2b, 0x08, 1});
+        malformed.put("mismatched end group", new byte[] {0x2b, 0x34});
+        malformed.put("invalid UTF-8", new byte[] {0x1a, 8, (byte) 0xc3, 'a', 'a', 'a', 'a', 'a', 'a', 'a'});
+        for (java.util.Map.Entry<String, byte[]> e : malformed.entrySet()) {
+            expectProto(ProtoException.INVALID_ARGUMENT, e.getKey(), () -> RouteTenant.fromWire(e.getValue(), 3, "tenant"));
+        }
+    }
+
+    private static ServiceInstanceHealth tenantInstance(Server server, String spiffeId) {
+        HostOuterClass.Host host = HostOuterClass.Host.newBuilder()
+                .setHost("127.0.0.1").setPort(server.getPort()).build();
+        return ServiceInstanceHealth.newBuilder()
+                .setServiceId("crew").setGrpcEndpoint(host).setSpiffeId(spiffeId)
+                .setStatus(InstanceStatus.INSTANCE_STATUS_HEALTHY).build();
+    }
+
+    private static CallOptions routed(String tid) {
+        return CallOptions.DEFAULT.withOption(RouteTenant.CALL_OPTION, tid);
+    }
+
+    /**
+     * A tenant-routed target's pool is per tenant, fed from the same health
+     * reports and grouped by each instance's spiffe_id tenant: a call naming
+     * aaaaaaaa reaches aaaaaaaa's instance and one naming bbbbbbbb reaches
+     * bbbbbbbb's, never the other's and never a shared one.
+     */
+    private static void checkTenantRouting() throws Exception {
+        Server a = NettyServerBuilder.forPort(0).build().start();
+        Server b = NettyServerBuilder.forPort(0).build().start();
+        Server shared = NettyServerBuilder.forPort(0).build().start();
+        TenantConnections tenants = new TenantConnections("crew",
+                (id, target) -> ManagedChannelBuilder.forTarget(target).usePlaintext().build());
+        try {
+            tenants.reconcileFromHealth(List.of(
+                    tenantInstance(a, "spiffe://example.com/tenants/aaaaaaaa/services/crew"),
+                    tenantInstance(b, "spiffe://example.com/tenants/bbbbbbbb/services/crew"),
+                    tenantInstance(shared, "spiffe://example.com/system/aws/services/crew")));
+            ServiceConnection.ChannelProvider provider = new ServiceConnection.ChannelProvider(tenants);
+            String wantA = "127.0.0.1:" + a.getPort();
+            String wantB = "127.0.0.1:" + b.getPort();
+            expect(wantA.equals(provider.resolve(routed("aaaaaaaa")).authority()),
+                    "tenant aaaaaaaa must reach its own instance " + wantA);
+            expect(wantB.equals(provider.resolve(routed("bbbbbbbb")).authority()),
+                    "tenant bbbbbbbb must reach its own instance " + wantB);
+            expect(tenants.tenants().equals(java.util.Set.of("aaaaaaaa", "bbbbbbbb")),
+                    "only /tenants/<tid> instances are routable, got " + tenants.tenants());
+
+            // A tenant with no instance: UNAVAILABLE, never another tenant's instance.
+            expectStatus(Status.Code.UNAVAILABLE, "tenant with no instance", () -> provider.resolve(routed("cccccccc")));
+            // No tenant on the call, or a malformed one: fail closed before dialling.
+            expectStatus(Status.Code.INVALID_ARGUMENT, "routed call without a tenant", () -> provider.resolve(CallOptions.DEFAULT));
+            expectStatus(Status.Code.INVALID_ARGUMENT, "routed call with an empty tenant", () -> provider.resolve(routed("")));
+            expectStatus(Status.Code.INVALID_ARGUMENT, "routed call with a malformed tenant", () -> provider.resolve(routed("AAAAAAAA")));
+
+            // Once a tenant's instance has been absent for the grace snapshots, its pool closes.
+            for (int i = 0; i < ServiceConnection.ABSENT_POLLS_BEFORE_CLOSE; i++) {
+                tenants.reconcileFromHealth(List.of(tenantInstance(b, "spiffe://example.com/tenants/bbbbbbbb/services/crew")));
+            }
+            expectStatus(Status.Code.UNAVAILABLE, "tenant whose instance left", () -> provider.resolve(routed("aaaaaaaa")));
+            expect(wantB.equals(provider.resolve(routed("bbbbbbbb")).authority()), "the remaining tenant still routes");
+        } finally {
+            tenants.close();
+            a.shutdownNow();
+            b.shutdownNow();
+            shared.shutdownNow();
+        }
+    }
+
+    /** A platform target keeps its single pool: a call reaches it exactly as before. */
+    private static void checkPlatformProviderUnaffected() throws Exception {
+        ManagedChannel channel = ManagedChannelBuilder.forAddress("127.0.0.1", 1).usePlaintext().build();
+        try {
+            ServiceConnection sc = ServiceConnection.fromChannel("identity", channel);
+            ServiceConnection.ChannelProvider provider = new ServiceConnection.ChannelProvider(sc);
+            expect(provider.resolve(CallOptions.DEFAULT) == channel, "a platform call must reach the pool's channel");
+            // A single pool (e.g. a client manager's one channel to the gateway,
+            // which routes by the request's route field) carries a routed call as-is.
+            expect(provider.resolve(routed("aaaaaaaa")) == channel, "a single pool carries a routed call to its channel");
+        } finally {
+            channel.shutdownNow();
         }
     }
 }

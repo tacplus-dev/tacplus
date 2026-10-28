@@ -1,0 +1,162 @@
+#if canImport(SwiftProtobuf)
+import SwiftProtobuf
+#endif
+
+/// A call of a tenant-routed rpc refused before anything was sent: its route
+/// field was empty, was not a tid, or the request could not be read. `message`
+/// names the route field. The C2S client surfaces it as an `invalidArgument`
+/// `RPCError`, the W2S client as `W2SClientError.invalidArgument`.
+struct TacplusTenantRouteRefusal: Error, Sendable {
+    let message: String
+}
+
+/// Reads the target tenant of a tenant-routed rpc off its request.
+///
+/// The gateway routes such a call to the instance of the tenant its route field
+/// names, so the generated clients refuse an empty or malformed value before
+/// sending. The field is read from the request's protobuf wire encoding (the
+/// last occurrence of the field number with wire type LEN, as proto3 parses
+/// it), which is exactly what the gateway reads off the frame.
+enum TacplusTenantRoute {
+    /// True when `value` is a tid: exactly 8 characters of `[0-9a-z]`. No
+    /// trimming and no case folding.
+    static func isTenantID(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        guard bytes.count == 8 else {
+            return false
+        }
+        for byte in bytes {
+            let isDigit = byte >= 0x30 && byte <= 0x39
+            let isLower = byte >= 0x61 && byte <= 0x7a
+            if !isDigit && !isLower {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// The tid named by route field `field` (wire number `number`) of the
+    /// encoded request `wire`, or a refusal naming the field.
+    static func tenant(wire: [UInt8], field: String, number: Int) throws -> String {
+        let value: String
+        do {
+            value = try fieldValue(wire: wire, number: number)
+        } catch {
+            throw TacplusTenantRouteRefusal(message: "route field \"\(field)\" could not be read: the request is not a valid protobuf encoding")
+        }
+        if value.isEmpty {
+            throw TacplusTenantRouteRefusal(message: "route field \"\(field)\" is empty; it must name the target tenant (a tid: 8 characters of [0-9a-z])")
+        }
+        if !isTenantID(value) {
+            throw TacplusTenantRouteRefusal(message: "route field \"\(field)\" is not a tid (8 characters of [0-9a-z])")
+        }
+        return value
+    }
+
+    /// The value of top-level string field `number` in the protobuf encoding
+    /// `wire`: its last occurrence with wire type LEN, decoded as UTF-8, or ""
+    /// when absent. Throws on a malformed encoding.
+    static func fieldValue(wire: [UInt8], number: Int) throws -> String {
+        var reader = WireReader(bytes: wire)
+        var groups: [UInt64] = []
+        var last: ArraySlice<UInt8>?
+        while !reader.atEnd {
+            let key = try reader.varint()
+            let fieldNumber = key >> 3
+            guard fieldNumber >= 1, fieldNumber <= 0x1FFF_FFFF else {
+                throw MalformedWire()
+            }
+            switch key & 7 {
+            case 0:
+                _ = try reader.varint()
+            case 1:
+                try reader.skip(8)
+            case 2:
+                let length = try reader.varint()
+                let payload = try reader.take(length)
+                if groups.isEmpty && fieldNumber == UInt64(number) {
+                    last = payload
+                }
+            case 3:
+                groups.append(fieldNumber)
+            case 4:
+                guard let open = groups.popLast(), open == fieldNumber else {
+                    throw MalformedWire()
+                }
+            case 5:
+                try reader.skip(4)
+            default:
+                throw MalformedWire()
+            }
+        }
+        guard groups.isEmpty else {
+            throw MalformedWire()
+        }
+        guard let last else {
+            return ""
+        }
+        // Invalid UTF-8 decodes to U+FFFD, which is never part of a tid.
+        return String(decoding: last, as: UTF8.self)
+    }
+
+    private struct MalformedWire: Error {}
+
+    private struct WireReader {
+        let bytes: [UInt8]
+        var offset = 0
+
+        var atEnd: Bool {
+            self.offset >= self.bytes.count
+        }
+
+        mutating func varint() throws -> UInt64 {
+            var result: UInt64 = 0
+            var shift: UInt64 = 0
+            while true {
+                guard self.offset < self.bytes.count, shift < 64 else {
+                    throw MalformedWire()
+                }
+                let byte = self.bytes[self.offset]
+                self.offset += 1
+                if shift == 63 && byte > 1 {
+                    throw MalformedWire()
+                }
+                result |= UInt64(byte & 0x7f) << shift
+                if byte & 0x80 == 0 {
+                    return result
+                }
+                shift += 7
+            }
+        }
+
+        mutating func skip(_ count: Int) throws {
+            _ = try self.take(UInt64(count))
+        }
+
+        mutating func take(_ count: UInt64) throws -> ArraySlice<UInt8> {
+            guard count <= UInt64(self.bytes.count - self.offset) else {
+                throw MalformedWire()
+            }
+            let end = self.offset + Int(count)
+            let slice = self.bytes[self.offset..<end]
+            self.offset = end
+            return slice
+        }
+    }
+}
+
+#if canImport(SwiftProtobuf)
+extension TacplusTenantRoute {
+    /// The tid named by route field `field` (wire number `number`) of
+    /// `request`, read off its binary encoding, or a refusal naming the field.
+    static func tenant(of request: any SwiftProtobuf.Message, field: String, number: Int) throws -> String {
+        let wire: [UInt8]
+        do {
+            wire = try request.serializedBytes(partial: true)
+        } catch {
+            throw TacplusTenantRouteRefusal(message: "route field \"\(field)\" could not be read: the request could not be encoded (\(error))")
+        }
+        return try tenant(wire: wire, field: field, number: number)
+    }
+}
+#endif

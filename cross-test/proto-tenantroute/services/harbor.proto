@@ -1,0 +1,33 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The tenant-routing fixture's PLATFORM service (issue #170).
+//
+// harbor is shared, so its own rpc declares no route field and is never
+// addressed by tenant. It opts into rest_dispatch, so its build carries the
+// route table and REST dispatch arms for crew's tenant-routed C2S rpcs, and it
+// calls crew's S2S surface through the generated client, which routes each
+// call to the instance of the tenant the request names.
+
+syntax = "proto3";
+
+package harbor;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "harbor", rest_dispatch: true};
+option (spec.grpc_c2s_client) = {service: "crew.CrewService"};
+option (spec.grpc_s2s_client) = {service: "crew.CrewPeerService"};
+
+service HarborService {
+  option (spec.service_s2s) = {label: "HarborService"};
+
+  rpc GetHarborStatus(GetHarborStatusRequest) returns (GetHarborStatusResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}
+
+message GetHarborStatusRequest {}
+
+message GetHarborStatusResponse {
+  bool ready = 1;
+}

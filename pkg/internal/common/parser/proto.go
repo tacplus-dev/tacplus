@@ -62,6 +62,8 @@ type MethodInfo struct {
 	RequiresDevice       bool                          // per-RPC requires_device (from spec.rpc): the device-only approval check gates this RPC
 	RequiresDeviceWhen   *RequiresDeviceWhenDescriptor // per-RPC requires_device_when (from spec.rpc): the same check, gated on one request field's value; nil when absent
 	TargetNamespaceField string                        // per-RPC target_namespace_field (from spec.rpc); ordinary methods name a request field, auth_any_user methods use an absolute namespace literal
+	RouteField           *RouteFieldDescriptor         // per-RPC route_field (from spec.rpc): the request field carrying the target tenant id; nil when absent
+	AnyTenant            bool                          // per-RPC RPC_FLAG_ANY_TENANT (from spec.rpc): callers of any tenant pass a tenant-owned instance's door
 	RestBrowser          *RestBrowserDescriptor        // method-level rest_browser (browser form target: form body / redirect); nil when absent
 	Collection           *CollectionDescriptor         // method-level method_collection (collection-returning read); nil when absent
 	Resolved             *collection.Resolved          // computed codegen view of Collection (mode/tier/bounds); nil when Collection is nil. Set by ResolveCollections.

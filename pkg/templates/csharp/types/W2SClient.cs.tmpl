@@ -144,6 +144,29 @@ public sealed class {{$service.ClientTypeName}}
         System.Threading.CancellationToken cancellationToken = default) =>
         throw new NotSupportedException(
             "C# W2S client does not support streaming method {{.MethodName}}; use Go/Java/Rust W2S client");
+{{- else if .RouteField}}
+    /// <summary>
+    /// Calls {{$service.PackageName}}.{{.MethodName}} via W2S HTTP/JSON. The gateway routes
+    /// the call to the instance of the tenant named by the request's route field
+    /// <c>{{.RouteField.Field}}</c>; a request whose route field is not a tenant id fails
+    /// with <see cref="W2SClientException"/> before anything is sent.
+    /// </summary>
+    public Task<{{.OutputType}}> {{.MethodName}}Async(
+        {{.InputType}} request,
+        System.Threading.CancellationToken cancellationToken = default)
+    {
+        var refusal = TenantRoute.Refusal(request, {{.RouteField.Number}}, "{{.RouteField.Field}}", "{{.RPCName}}");
+        if (refusal != null)
+        {
+            return Task.FromException<{{.OutputType}}>(new W2SClientException(refusal));
+        }
+        return _client.InvokeAsync<{{.OutputType}}>(
+            "{{.HTTPMethod}}",
+            "{{.HTTPPath}}",
+            {{.AuthRequired}},
+            request,
+            cancellationToken);
+    }
 {{- else}}
     /// <summary>Calls {{$service.PackageName}}.{{.MethodName}} via W2S HTTP/JSON.</summary>
     public Task<{{.OutputType}}> {{.MethodName}}Async(

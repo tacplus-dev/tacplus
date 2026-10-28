@@ -10,19 +10,36 @@
     /// send and receive. Callbacks work for the receive side (consistent
     /// with the watch pattern). A send channel is needed for the send side
     /// because bidi introduces a direction that watches don't have.
+{{- if .Routed}}
+    ///
+    /// The stream's tenant is fixed when it is opened: `tenant` must be a tid
+    /// (INVALID_ARGUMENT before anything is dialled), the stream reaches only
+    /// that tenant's instance, and a message naming any other tenant in its
+    /// route field is refused by `send`.
+{{- end}}
     pub fn {{.MethodSnake}}<F, Fut>(
         &self,
+{{- if .Routed}}
+        tenant: &str,
+{{- end}}
         on_connect: F,
         on_message: Arc<dyn Fn({{.OutputType}}) + Send + Sync>,
-    ) -> {{.HandleType}}
+    ) -> {{if .Routed}}Result<{{.HandleType}}, tonic::Status>{{else}}{{.HandleType}}{{end}}
     where
         F: Fn({{.HandleType}}) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
+{{- if .Routed}}
+        let tenant = servicemanager::tenant_route::route_tenant("tenant", tenant)?;
+        let stream_tenant = tenant.clone();
+{{- end}}
         let (user_tx, mut user_rx) = tokio::sync::mpsc::channel::<{{.InputType}}>(32);
         let cp = self.channel_provider.clone();
         let handle = {{.HandleType}} {
             tx: user_tx,
+{{- if .Routed}}
+            tenant,
+{{- end}}
         };
 {{- if .AuthRequired}}
         let tp = self.token_provider.clone();
@@ -45,6 +62,9 @@
                 let (stream_tx, stream_rx) = tokio::sync::mpsc::channel::<{{.InputType}}>(32);
                 let connect_handle = {{.HandleType}} {
                     tx: stream_tx.clone(),
+{{- if .Routed}}
+                    tenant: stream_tenant.clone(),
+{{- end}}
                 };
                 on_connect(connect_handle).await;
 
@@ -86,7 +106,7 @@
                 }
 {{- end}}
 
-                let channel = match tokio::time::timeout(CONNECT_TIMEOUT, cp.channel()).await {
+                let channel = match tokio::time::timeout(CONNECT_TIMEOUT, {{if .Routed}}cp.channel_for_tenant(&stream_tenant){{else}}cp.channel(){{end}}).await {
                     Ok(Ok(ch)) => ch,
                     Ok(Err(e)) => {
                         errors += 1; tracing::error!(error = %e, errors, "{{.MethodName}}: channel error, retrying in 5s");
@@ -161,5 +181,5 @@
             }
         });
 
-        handle
+        {{if .Routed}}Ok(handle){{else}}handle{{end}}
     }

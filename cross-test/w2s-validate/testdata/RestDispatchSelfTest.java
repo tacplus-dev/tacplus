@@ -107,11 +107,19 @@ public class RestDispatchSelfTest {
         }
     }
 
-    /** Hands every service the one loopback channel and no auth. */
+    /**
+     * Hands every service the one loopback channel and no auth. Every route
+     * here is a platform route, so every dial must name no tenant.
+     */
     static final class FixtureDispatcher implements RestDispatch.Dispatcher {
         private final Channel channel;
+        final List<String> tenants = new ArrayList<>();
         FixtureDispatcher(Channel channel) { this.channel = channel; }
-        @Override public Channel channel(String serviceId) { return channel; }
+        @Override public Channel channel(String serviceId, String tenant) {
+            tenants.add(tenant);
+            check("".equals(tenant), "a platform route was dialled for tenant \"" + tenant + "\"");
+            return channel;
+        }
         @Override public String authHeader(String serviceId) { return ""; }
     }
 
@@ -312,6 +320,47 @@ public class RestDispatchSelfTest {
             "a route without redirect_field must answer its JSON");
     }
 
+    // ---- (spec.rpc).route_field (issue #170) ----
+
+    /**
+     * A platform route carries no route field and never names a tenant; a
+     * routed route's tid is checked by the generated helpers, from a decoded
+     * value or from the raw frame the gateway's gRPC proxy holds.
+     */
+    private static void testRouteTenantHelpers() throws Exception {
+        RestDispatch.RouteInfo platform = route(UNARY_PATH);
+        check(platform.routeField.isEmpty() && platform.routeFieldJson.isEmpty() && platform.routeFieldNumber == 0,
+            "a platform route must carry no route field");
+        check(RestDispatch.routeTenant(platform, "").isEmpty(), "a platform route routes to no tenant");
+        check(RestDispatch.routeTenantFromWire(new byte[] {(byte) 0xff}, platform).isEmpty(),
+            "a platform route must not read the frame");
+
+        RestDispatch.RouteInfo routed = new RestDispatch.RouteInfo("/crew/CrewService/Hail", "/crew.CrewService/Hail", "crew", "",
+            List.of("POST"), RestDispatch.AuthPolicy.ENTITLED, List.of(), "", false, false, "", false, "", "",
+            "target_tenant", "targetTenant", 3);
+        check("aaaaaaaa".equals(RestDispatch.routeTenant(routed, "aaaaaaaa")), "a tid routes to its tenant");
+        check(RestDispatch.validTenantId("a1b2c3d4") && !RestDispatch.validTenantId("A1B2C3D4"), "validTenantId is [0-9a-z]{8}");
+        for (String bad : new String[] {"", "aaaaaaa", "AAAAAAAA", " aaaaaaaa"}) {
+            try {
+                RestDispatch.routeTenant(routed, bad);
+                check(false, "route field \"" + bad + "\" must be refused");
+            } catch (RestDispatch.HttpError e) {
+                check(e.status == 400 && e.body.contains("target_tenant"), "route field refusal must be a 400 naming the field: " + e.status + " " + e.body);
+            }
+        }
+        // field 1 = "x", field 3 = "aaaaaaaa", field 3 = "bbbbbbbb": the last wins.
+        byte[] frame = {0x0a, 1, 'x', 0x1a, 8, 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 0x1a, 8, 'b', 'b', 'b', 'b', 'b', 'b', 'b', 'b'};
+        check("bbbbbbbb".equals(RestDispatch.routeTenantFromWire(frame, routed)), "the last route field on the wire wins");
+        for (byte[] bad : new byte[][] {{}, {0x0a, 1, 'x'}, {0x1a, 9, 'a'}, {0x1a, 2, 'A', 'A'}}) {
+            try {
+                RestDispatch.routeTenantFromWire(bad, routed);
+                check(false, "a frame without a valid route field must be refused");
+            } catch (io.grpc.StatusException e) {
+                check(e.getStatus().getCode() == io.grpc.Status.Code.INVALID_ARGUMENT, "wire refusal must be INVALID_ARGUMENT: " + e.getStatus());
+            }
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         List<String> ran = new ArrayList<>();
         testUnaryDispatchValidatesRequestBeforeForwarding(); ran.add("unary request validation");
@@ -324,6 +373,7 @@ public class RestDispatchSelfTest {
         testRedirectWithoutAUrlIsABackendFault(); ran.add("redirect without URL");
         testRedirectWithAnInvalidHeaderValueIsABackendFault(); ran.add("redirect with invalid header value");
         testJsonRouteAnswersJson(); ran.add("JSON route answers JSON");
+        testRouteTenantHelpers(); ran.add("route tenant helpers");
         if (failures > 0) {
             System.err.println("RestDispatchSelfTest: " + failures + " failure(s) across " + ran);
             System.exit(1);

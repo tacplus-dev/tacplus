@@ -1,0 +1,70 @@
+using Google.Protobuf;
+using Google.Protobuf.Reflection;
+
+namespace {{.PackageName}};
+
+/// <summary>
+/// Tenant routing for the rpcs of tenant-owned services. Each such rpc names a
+/// request field, its route field, whose value is the target tenant's id (a
+/// tid); the gateway routes the call to that tenant's instance by it. The
+/// generated C2S and W2S clients refuse a call whose route field is not a tid
+/// before anything is sent.
+/// </summary>
+internal static class TenantRoute
+{
+    /// <summary>
+    /// True when <paramref name="value"/> is a tid: exactly 8 characters, each
+    /// an ASCII digit or ASCII lower-case letter. Nothing else is a tid: no
+    /// trimming, no case folding, no non-ASCII digits.
+    /// </summary>
+    internal static bool IsTenantId(string? value)
+    {
+        if (value == null || value.Length != 8)
+        {
+            return false;
+        }
+        foreach (var c in value)
+        {
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Reads the singular string field <paramref name="fieldNumber"/> of
+    /// <paramref name="message"/>; "" when the message is null or carries no
+    /// such field, so a mismatch fails closed as an empty route field.
+    /// </summary>
+    internal static string Read(IMessage? message, int fieldNumber)
+    {
+        if (message == null)
+        {
+            return "";
+        }
+        var field = message.Descriptor.FindFieldByNumber(fieldNumber);
+        if (field == null || field.IsRepeated || field.IsMap || field.FieldType != FieldType.String)
+        {
+            return "";
+        }
+        return field.Accessor.GetValue(message) as string ?? "";
+    }
+
+    /// <summary>
+    /// Null when the route field of <paramref name="message"/> is a tid;
+    /// otherwise the refusal message, naming the field and the rpc.
+    /// </summary>
+    internal static string? Refusal(IMessage? message, int fieldNumber, string fieldName, string rpc)
+    {
+        var value = Read(message, fieldNumber);
+        if (IsTenantId(value))
+        {
+            return null;
+        }
+        return value.Length == 0
+            ? $"{rpc}: route field '{fieldName}' is empty; it must name the target tenant (a tid: exactly 8 characters of [0-9a-z])"
+            : $"{rpc}: route field '{fieldName}' is not a tenant id (a tid: exactly 8 characters of [0-9a-z])";
+    }
+}

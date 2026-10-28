@@ -971,8 +971,11 @@ A service may declare only **one** caller surface (`ValidateServiceSurfaces`), s
 
 **`rpc`** — declares one RPC's call surface: who calls it (`principal`), where it
 is reachable from (`exposure`), its non-exclusive protocol `flags`, the service
-identities allowed to call it (`auth_services`), and the request field carrying
-the target namespace (`target_namespace_field`). Everything that can legitimately
+identities allowed to call it (`auth_services`), the request field carrying
+the target namespace (`target_namespace_field`), and, on a tenant-owned service,
+the request field carrying the target tenant (`route_field`, see
+[Tenant-owned services are routed by a declared field](#tenant-owned-services-are-routed-by-a-declared-field)).
+Everything that can legitimately
 differ between two RPCs of the same service lives here:
 
 ```protobuf
@@ -1045,7 +1048,89 @@ the namespace of the instance's own service token at startup; when it is exactly
 any handler runs, every caller whose namespace is not at-or-above `/tenants/<t>`
 and not `/system` or below (fleet-wide readers keep passing). A shared service's
 instance, running in `/system`, is unchanged. An instance that cannot read its
-own identity at startup fails to start rather than serve unpinned.
+own identity at startup fails to start rather than serve unpinned. That door is
+the default policy, "members of the target tenant only"; an rpc that declares
+`RPC_FLAG_ANY_TENANT` opens it, so "any authenticated user of any tenant may
+call this" is expressible (see the next section).
+
+### Tenant-owned services are routed by a declared field
+
+The request says which tenant it is directed to; the token says who is asking;
+whether it is allowed is policy at the target. So every rpc of a
+`tenant_owned` service names the request field that carries the **target
+tenant id**, and that field decides which tenant's instance receives the call,
+and nothing else:
+
+```protobuf
+option (spec.service) = {name: "crew", tenant_owned: true};
+
+message GetSkipperRequest {
+  string tenant = 1;   // the target tenant's tid
+}
+
+service Crew {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  // Members of the target tenant only (the default door).
+  rpc GetSkipper(GetSkipperRequest) returns (Skipper) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, route_field: "tenant"};
+  }
+
+  // Any authenticated user of any tenant: a user may talk to another tenant's crew.
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, route_field: "tenant",
+                         flags: [RPC_FLAG_AUTH_ANY_USER, RPC_FLAG_ANY_TENANT]};
+  }
+}
+```
+
+- **A tid** is exactly 8 characters of `[0-9a-z]`. All-digit ids are reserved for
+  the platform (`people` is `00000001`). A tenant's instances run in namespace
+  `/tenants/<tid>`.
+- **Required.** Generation fails for an rpc of a tenant-owned service that does
+  not declare `route_field` (`ValidateTenantRouting`, also run by the fleet
+  build). This covers the service's own `service_s2s`/`service_c2s` services and
+  any surface hosted on it through a `label`. The field must be a top-level,
+  singular, plain (not `optional`) `string` of the request.
+- **Refused at run time, never defaulted.** A call whose route field is empty or
+  not a tid is refused with `INVALID_ARGUMENT` (HTTP `400` at the gateway's REST
+  surface) before it is routed. It is never filled in from the caller's token,
+  and a tenant with no healthy instance is `UNAVAILABLE`, never another tenant's
+  instance. A tenant-owned instance also refuses, before the handler, a request
+  routed to a tenant other than its own (`PERMISSION_DENIED`).
+- **The same rule everywhere.** The gateway's generated route table (one table
+  for REST and the gRPC proxy) carries each route's field (name, JSON name and
+  wire number). The REST dispatcher reads it from the decoded request, and the
+  gRPC proxy reads it from the first request frame with the generated wire
+  helper. Either one asks its `Dispatcher` for that tenant's connection. The
+  generated S2S clients (Go, Java, Rust) keep one connection pool per tenant
+  and send each call to the pool its route field names. The client-only
+  targets (Python, TypeScript, Swift, C#) reach a tenant-owned service through
+  the gateway and refuse an empty or malformed route field before sending. So
+  a call routes the same way from outside the cluster as from inside it. A
+  client-streaming or bidi stream is opened for one tenant: the S2S stream-open
+  takes the tid, and every message on the stream must name it.
+- **MCP: the model never sets the tenant.** The MCP session carrier of a
+  tenant-owned service declares `mcp.McpRequest.tenant` as its route field.
+  A session is opened in the caller's own tenant, the tenant of its token's
+  namespace claim (`/tenants/<tid>` or below; a caller of no tenant, such as
+  `/system`, has no MCP session there, `PERMISSION_DENIED`). The carrier stamps
+  each inbound frame's `tenant` from the token and refuses a frame that names
+  another tenant (`PERMISSION_DENIED`); the MCP proxy stamps it from the token
+  too, and never passes a client's value through. A tool's own route field is
+  left out of its schema, a tool call that names it anyway is refused, and the
+  generated dispatch fills it from the session tenant (Go, Java, Rust).
+- **Platform services** (no `tenant_owned`) declare no route field, and
+  `RPC_FLAG_ANY_TENANT` is refused there too. They are never addressed by
+  tenant, and their generated code is unchanged.
+- **Authorization is separate from routing.** Routing never implies
+  `target_namespace_field`; that stays an authorization rule only. Who may call
+  is the token, `auth_services`, entitlements, `target_namespace_field` and the
+  tenant door: members of the target tenant (and `/system`) by default, any
+  tenant with `RPC_FLAG_ANY_TENANT`.
+
+`registry.json` carries `route_field`, `route_field_number` and `any_tenant` on
+every rpc.
 
 ### Every user RPC is also an MCP tool
 

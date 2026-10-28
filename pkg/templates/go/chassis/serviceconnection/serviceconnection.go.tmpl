@@ -10,11 +10,13 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"time"
 
 	healthreport_pb "{{.ModuleBasePath}}/types/sys/healthreport"
 	host_pb "{{.ModuleBasePath}}/types/sys/host"
+	protoerrors "{{.ModuleBasePath}}/types/sys/errors"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
@@ -418,6 +420,146 @@ func (sc *ServiceConnection) Close() {
 }
 
 // ---------------------------------------------------------------------------
+// TenantConnection -- per-tenant connection pools for a tenant-routed target
+// ---------------------------------------------------------------------------
+
+// TenantConnection manages the connections to a TENANT-ROUTED target service
+// (a tenant-owned service, whose rpcs declare (spec.rpc).route_field): one
+// ServiceConnection per tenant, fed from the same health updates as a platform
+// pool and grouped by the tenant of each instance's spiffe_id (see
+// InstanceTenant). A call reaches only the instances of the tenant it names;
+// it never falls back to another tenant's instance or to a shared one, and an
+// instance outside /tenants/<tid> is never routable here.
+type TenantConnection struct {
+	serviceID string
+	dialOpts  []grpc.DialOption
+	mu        sync.RWMutex
+	tenants   map[string]*ServiceConnection
+}
+
+// NewTenantDynamic creates a TenantConnection that starts with no tenants.
+// Tenants and their endpoints arrive via ReconcileFromHealth.
+func NewTenantDynamic(serviceID string, dialOpts []grpc.DialOption) *TenantConnection {
+	return &TenantConnection{
+		serviceID: serviceID,
+		dialOpts:  dialOpts,
+		tenants:   make(map[string]*ServiceConnection),
+	}
+}
+
+// ServiceID returns the service ID for this connection.
+func (tc *TenantConnection) ServiceID() string {
+	return tc.serviceID
+}
+
+// ReconcileFromHealth groups the target's health reports by instance tenant
+// and reconciles each tenant's pool with its own instances. A tenant no
+// longer reported is reconciled with none, so its endpoints close on the same
+// absent-snapshot schedule as a platform pool's, and the tenant is dropped
+// once it has no endpoint left.
+func (tc *TenantConnection) ReconcileFromHealth(instances []*healthreport_pb.ServiceInstanceHealth) {
+	byTenant := make(map[string][]*healthreport_pb.ServiceInstanceHealth)
+	for _, inst := range instances {
+		tid, ok := InstanceTenant(inst.GetSpiffeId())
+		if !ok {
+			continue
+		}
+		byTenant[tid] = append(byTenant[tid], inst)
+	}
+
+	tc.mu.Lock()
+	for tid := range byTenant {
+		if _, ok := tc.tenants[tid]; !ok {
+			tc.tenants[tid] = NewDynamic(tc.serviceID, tc.dialOpts)
+		}
+	}
+	pools := make(map[string]*ServiceConnection, len(tc.tenants))
+	for tid, sc := range tc.tenants {
+		pools[tid] = sc
+	}
+	tc.mu.Unlock()
+
+	var emptied []string
+	for tid, sc := range pools {
+		sc.ReconcileFromHealth(byTenant[tid])
+		if sc.endpointCount() == 0 {
+			emptied = append(emptied, tid)
+		}
+	}
+	if len(emptied) == 0 {
+		return
+	}
+	tc.mu.Lock()
+	var closing []*ServiceConnection
+	for _, tid := range emptied {
+		if sc, ok := tc.tenants[tid]; ok && sc.endpointCount() == 0 {
+			delete(tc.tenants, tid)
+			closing = append(closing, sc)
+		}
+	}
+	tc.mu.Unlock()
+	for _, sc := range closing {
+		sc.Close()
+	}
+}
+
+// Conn returns the active connection of tenant tid's pool, or nil when that
+// tenant has no healthy endpoint.
+func (tc *TenantConnection) Conn(tid string) grpc.ClientConnInterface {
+	tc.mu.RLock()
+	sc := tc.tenants[tid]
+	tc.mu.RUnlock()
+	if sc == nil {
+		return nil
+	}
+	return sc.Conn()
+}
+
+// Tenants returns the tenants that currently have a pool, sorted.
+func (tc *TenantConnection) Tenants() []string {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	tids := make([]string, 0, len(tc.tenants))
+	for tid := range tc.tenants {
+		tids = append(tids, tid)
+	}
+	sort.Strings(tids)
+	return tids
+}
+
+// IsAvailable reports whether any tenant's pool has an endpoint up for
+// readiness. Whether one PARTICULAR tenant can be reached is a per-call
+// question (UNAVAILABLE), not a readiness one.
+func (tc *TenantConnection) IsAvailable() bool {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	for _, sc := range tc.tenants {
+		if sc.IsAvailable() {
+			return true
+		}
+	}
+	return false
+}
+
+// Close shuts down every tenant's pool.
+func (tc *TenantConnection) Close() {
+	tc.mu.Lock()
+	tenants := tc.tenants
+	tc.tenants = make(map[string]*ServiceConnection)
+	tc.mu.Unlock()
+	for _, sc := range tenants {
+		sc.Close()
+	}
+}
+
+// endpointCount returns how many endpoints the pool currently holds.
+func (sc *ServiceConnection) endpointCount() int {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return len(sc.endpoints)
+}
+
+// ---------------------------------------------------------------------------
 // ChannelProvider -- per-service connection wrapper for generated clients
 // ---------------------------------------------------------------------------
 
@@ -427,6 +569,7 @@ func (sc *ServiceConnection) Close() {
 // an error until healthy instances are discovered.
 type ChannelProvider struct {
 	conn      *ServiceConnection
+	tenants   *TenantConnection
 	static    grpc.ClientConnInterface
 	serviceID string
 }
@@ -434,6 +577,15 @@ type ChannelProvider struct {
 // NewChannelProvider creates a ChannelProvider backed by a ServiceConnection.
 func NewChannelProvider(conn *ServiceConnection) *ChannelProvider {
 	return &ChannelProvider{conn: conn}
+}
+
+// NewTenantChannelProvider creates a ChannelProvider for a tenant-routed
+// target: each call goes to the instance of the tenant its context carries
+// (WithRouteTenant, set by the generated typed client from the request's
+// route field). A call whose context carries no tenant is refused rather than
+// sent to any instance.
+func NewTenantChannelProvider(tenants *TenantConnection) *ChannelProvider {
+	return &ChannelProvider{tenants: tenants}
 }
 
 // NewStaticChannelProvider creates a ChannelProvider backed by one fixed gRPC
@@ -447,15 +599,31 @@ func (cp *ChannelProvider) serviceIDForError() string {
 	if cp.conn != nil {
 		return cp.conn.ServiceID()
 	}
+	if cp.tenants != nil {
+		return cp.tenants.ServiceID()
+	}
 	if cp.serviceID != "" {
 		return cp.serviceID
 	}
 	return "unknown"
 }
 
-func (cp *ChannelProvider) currentConn() (grpc.ClientConnInterface, error) {
+func (cp *ChannelProvider) currentConn(ctx context.Context) (grpc.ClientConnInterface, error) {
 	if cp.static != nil {
 		return cp.static, nil
+	}
+	if cp.tenants != nil {
+		tid, ok := RouteTenantFromContext(ctx)
+		if !ok {
+			return nil, protoerrors.NewErrGeneral(nil,
+				"service %q is tenant-routed and the call names no target tenant; use the generated typed client, which routes by the request's route field", cp.serviceIDForError())
+		}
+		c := cp.tenants.Conn(tid)
+		if c == nil {
+			return nil, protoerrors.NewErrUnavailable(nil,
+				"service %q: no healthy endpoint of tenant %q available", cp.serviceIDForError(), tid)
+		}
+		return c, nil
 	}
 	if cp.conn == nil {
 		return nil, fmt.Errorf("service %q: no gRPC connection configured", cp.serviceIDForError())
@@ -469,7 +637,7 @@ func (cp *ChannelProvider) currentConn() (grpc.ClientConnInterface, error) {
 
 // Invoke implements grpc.ClientConnInterface.
 func (cp *ChannelProvider) Invoke(ctx context.Context, method string, args, reply interface{}, opts ...grpc.CallOption) error {
-	c, err := cp.currentConn()
+	c, err := cp.currentConn(ctx)
 	if err != nil {
 		return err
 	}
@@ -478,7 +646,7 @@ func (cp *ChannelProvider) Invoke(ctx context.Context, method string, args, repl
 
 // NewStream implements grpc.ClientConnInterface.
 func (cp *ChannelProvider) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	c, err := cp.currentConn()
+	c, err := cp.currentConn(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -285,6 +285,16 @@ public class ServiceConnection implements AutoCloseable {
         }
     }
 
+    /** Whether this pool holds any endpoint at all, dialed or within its absence grace. */
+    boolean hasEndpoints() {
+        lock.readLock().lock();
+        try {
+            return !endpoints.isEmpty();
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
     /**
      * Reports whether an RPC to this service has somewhere to go: at least one
      * endpoint is dialed and up for readiness (debounced, see
@@ -1024,27 +1034,67 @@ public class ServiceConnection implements AutoCloseable {
      * UNAVAILABLE until healthy instances are found.
      *
      * <p>Each generated client holds a ChannelProvider for its target service.
+     * A tenant-routed target's provider is built over its
+     * {@link TenantConnections}: each call goes to the instances of the tenant
+     * named by its {@link RouteTenant#CALL_OPTION}, which the generated client
+     * sets from the request's route field, and a call that names none (or a
+     * malformed one) fails closed with INVALID_ARGUMENT before anything is
+     * dialled. A single-pool provider (a platform target, or a client
+     * manager's one channel to the gateway, which routes by the request's
+     * route field itself) never routes by tenant.
      */
     public static class ChannelProvider extends io.grpc.Channel {
         private final ServiceConnection conn;
+        private final TenantConnections tenants;
 
         public ChannelProvider(ServiceConnection conn) {
             this.conn = conn;
+            this.tenants = null;
+        }
+
+        /** A provider for a tenant-routed target: every call is routed by its tenant. */
+        public ChannelProvider(TenantConnections tenants) {
+            this.conn = null;
+            this.tenants = java.util.Objects.requireNonNull(tenants, "tenants");
+        }
+
+        /** The channel a call with these options goes out on; a refusal is a gRPC status. */
+        io.grpc.Channel resolve(CallOptions callOptions) {
+            if (tenants == null) {
+                // A single pool: a platform target, or a caller-supplied channel
+                // to a router (the gateway) that routes by the request's own
+                // route field. A tenant the client already checked rides along.
+                ManagedChannel channel = conn.conn();
+                if (channel == null) {
+                    throw new StatusRuntimeException(Status.UNAVAILABLE.withDescription(
+                            "service \"" + conn.serviceId() + "\": no healthy endpoints available"));
+                }
+                return channel;
+            }
+            String tenant = callOptions.getOption(RouteTenant.CALL_OPTION);
+            if (!RouteTenant.validTenantId(tenant)) {
+                throw new StatusRuntimeException(Status.INVALID_ARGUMENT.withDescription(
+                        "service \"" + tenants.serviceId() + "\" is tenant-routed: the call carries no valid target tenant"));
+            }
+            ManagedChannel channel = tenants.conn(tenant);
+            if (channel == null) {
+                throw new StatusRuntimeException(Status.UNAVAILABLE.withDescription(
+                        "service \"" + tenants.serviceId() + "\": no healthy endpoints available for tenant \"" + tenant + "\""));
+            }
+            return channel;
         }
 
         @Override
         public <ReqT, RespT> ClientCall<ReqT, RespT> newCall(
                 MethodDescriptor<ReqT, RespT> methodDescriptor, CallOptions callOptions) {
-            ManagedChannel channel = conn.conn();
-            if (channel == null) {
-                throw new StatusRuntimeException(Status.UNAVAILABLE.withDescription(
-                        "service \"" + conn.serviceId() + "\": no healthy endpoints available"));
-            }
-            return channel.newCall(methodDescriptor, callOptions);
+            return resolve(callOptions).newCall(methodDescriptor, callOptions);
         }
 
         @Override
         public String authority() {
+            if (tenants != null) {
+                return tenants.serviceId();
+            }
             ManagedChannel channel = conn.conn();
             if (channel != null) {
                 return channel.authority();

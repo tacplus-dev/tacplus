@@ -18,6 +18,9 @@
         onMessage: (msg: {{.OutputType}}) => void,
     ): {{.HandleType}} {
         const handle = new {{.HandleType}}();
+{{- if .RouteOpen}}
+{{.RouteOpen}}
+{{- end}}
 {{- if .AuthRequired}}
         const tokenProvider = this.tokenProvider;
 {{- end}}

@@ -189,6 +189,8 @@ export class Authorizer {
   private _methodTargetNamespaceFields: Map<string, string>;
   /** The instance's own tenant namespace ("/tenants/<t>"), or "" for a shared instance. */
   private _hostTenant = '';
+  /** Methods declaring RPC_FLAG_ANY_TENANT: the tenant door is open on them. */
+  private _methodAnyTenant = new Set<string>();
 
   /**
    * Creates an Authorizer that verifies tokens via JWK view.
@@ -270,10 +272,25 @@ export class Authorizer {
     this.setHostNamespace(TokenWrapper.parse(token).getNamespace());
   }
 
-  /** The tenant-owned instance's door check. */
-  private checkHostTenant(callerNamespace: string): void {
+  /**
+   * Registers a method declaring RPC_FLAG_ANY_TENANT: a caller of ANY tenant
+   * passes this tenant-owned instance's door on it ("any authenticated user of
+   * any tenant may call this"). It widens nothing else: the token, its
+   * audience, auth_services, entitlements and target_namespace_field are
+   * checked exactly as before. Every other method keeps the default door
+   * ("members of the instance's tenant"). Keyed by the same service-qualified
+   * identifier as setMethodAuth.
+   */
+  setMethodAnyTenant(methodKey: string): void {
+    if (!methodKey) return;
+    this._methodAnyTenant.add(methodKey);
+  }
+
+  /** The tenant-owned instance's door check, open on an RPC_FLAG_ANY_TENANT method. */
+  private checkHostTenant(callerNamespace: string, methodKey?: string): void {
     const host = this._hostTenant;
     if (host === '') return;
+    if (methodKey !== undefined && this._methodAnyTenant.has(methodKey)) return;
     if (isAtOrBelow('/system', callerNamespace) || isAtOrBelow(callerNamespace, host)) {
       return;
     }
@@ -365,8 +382,9 @@ export class Authorizer {
     if (!Authorizer.ACCEPTED_AUDIENCES.has(aud)) {
       throw AuthError.permissionDenied(`token audience "${aud}" is not accepted by service "${Authorizer.SERVICE_NAME}"`);
     }
-    // Tenant-owned instance: refuse another tenant's caller at the door.
-    this.checkHostTenant(tw.getNamespace());
+    // Tenant-owned instance: refuse another tenant's caller at the door
+    // (open on an RPC_FLAG_ANY_TENANT method).
+    this.checkHostTenant(tw.getNamespace(), qualifiedMethodKey(fullMethod));
 
     // S2S path: service/workload tokens carry structured identity claims
     // (sub_type, sub, service_name). Authorization is receiver-side via
@@ -415,9 +433,11 @@ export class Authorizer {
 
   /**
    * Authenticates a request by verifying token signature and audience only.
-   * Does NOT check entitlements. Used for auth_any_user services.
+   * Does NOT check entitlements. Used for auth_any_user services. fullMethod,
+   * when given, lets an RPC_FLAG_ANY_TENANT method's open door hold; without
+   * it the default tenant door applies.
    */
-  async authenticate(metadata: Record<string, string>, targetNamespace?: string): Promise<void> {
+  async authenticate(metadata: Record<string, string>, targetNamespace?: string, fullMethod?: string): Promise<void> {
     const authHeader = metadata['authorization'] || '';
     if (!authHeader) {
       throw AuthError.unauthenticated('missing authorization header');
@@ -471,8 +491,9 @@ export class Authorizer {
     if (!Authorizer.ACCEPTED_AUDIENCES.has(aud)) {
       throw AuthError.permissionDenied(`token audience "${aud}" is not accepted by service "${Authorizer.SERVICE_NAME}"`);
     }
-    // Tenant-owned instance: refuse another tenant's caller at the door.
-    this.checkHostTenant(tw.getNamespace());
+    // Tenant-owned instance: refuse another tenant's caller at the door
+    // (open on an RPC_FLAG_ANY_TENANT method).
+    this.checkHostTenant(tw.getNamespace(), fullMethod ? qualifiedMethodKey(fullMethod) : undefined);
 
     if (targetNamespace !== undefined) {
       const target = targetNamespace === '' ? '/' : targetNamespace;

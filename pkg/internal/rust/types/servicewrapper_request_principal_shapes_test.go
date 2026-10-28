@@ -186,7 +186,7 @@ func TestRustRequestScope_ClientStreamingWithTargetNamespaceField(t *testing.T) 
 		"let stream = stream.then(move |item| {",
 		"let __principal = __principal.clone();",
 		"let __namespace = __namespace.clone();",
-		"wrapper.enforce_at_or_below_authorization(authorization.as_deref(), &msg.namespace).await?;",
+		"wrapper.enforce_at_or_below_authorization(\"/services/mail.Mail/UploadScoped\", authorization.as_deref(), &msg.namespace).await?;",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q\ngot:\n%s", want, got)

@@ -310,6 +310,7 @@ func generateGoW2SClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 	hasClientStreaming := false
 	hasClientOnlyStreaming := false
 	hasBidi := false
+	hasRoute := false
 	for _, method := range targetService.Methods {
 		// An RPC_PRINCIPAL_MCP rpc carries no REST route by construction — the
 		// parser leaves HttpPath/HttpMethods empty for it — so there is no w2s
@@ -344,6 +345,9 @@ func generateGoW2SClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		if method.ClientStreaming && method.ServerStreaming {
 			hasBidi = true
 		}
+		if goW2SRouteCheck(method, "req", "") != "" {
+			hasRoute = true
+		}
 	}
 
 	data := struct {
@@ -363,23 +367,29 @@ func generateGoW2SClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		HasWebSocket        bool
 		HasGRPCStreaming    bool
 		HasSync             bool
+		// HasRoute: some rpc declares (spec.rpc).route_field, whose value the
+		// client checks with the serviceconnection chassis before sending.
+		HasRoute                    bool
+		ServiceConnectionImportPath string
 	}{
-		Header:              header.GeneratedHeader(consts.LangGo, svc.ProtoFile),
-		PackageName:         svc.PackageName,
-		TypesModulePath:     goW2STypesModulePath(svc.Config.ModuleBasePath, svc.ParentDir, svc.ImportDirName()),
-		HasTypesImport:      methodImports.hasTypesImport,
-		CrossPackageImports: methodImports.crossPackageImports,
-		ServiceName:         svc.ServiceName,
-		ClientName:          clientName,
-		Methods:             methods.String(),
-		ExtraTypes:          extraTypes.String(),
-		HasHTTP:             hasHTTP,
-		HasServerStreaming:  hasServerStreaming,
-		HasClientStreaming:  hasClientOnlyStreaming,
-		HasBidi:             hasBidi,
-		HasWebSocket:        hasClientStreaming,
-		HasGRPCStreaming:    hasServerStreaming || hasClientOnlyStreaming,
-		HasSync:             hasClientOnlyStreaming || hasBidi,
+		Header:                      header.GeneratedHeader(consts.LangGo, svc.ProtoFile),
+		PackageName:                 svc.PackageName,
+		TypesModulePath:             goW2STypesModulePath(svc.Config.ModuleBasePath, svc.ParentDir, svc.ImportDirName()),
+		HasTypesImport:              methodImports.hasTypesImport,
+		CrossPackageImports:         methodImports.crossPackageImports,
+		ServiceName:                 svc.ServiceName,
+		ClientName:                  clientName,
+		Methods:                     methods.String(),
+		ExtraTypes:                  extraTypes.String(),
+		HasHTTP:                     hasHTTP,
+		HasServerStreaming:          hasServerStreaming,
+		HasClientStreaming:          hasClientOnlyStreaming,
+		HasBidi:                     hasBidi,
+		HasWebSocket:                hasClientStreaming,
+		HasGRPCStreaming:            hasServerStreaming || hasClientOnlyStreaming,
+		HasSync:                     hasClientOnlyStreaming || hasBidi,
+		HasRoute:                    hasRoute,
+		ServiceConnectionImportPath: svc.Config.ModuleBasePath + "/chassis/serviceconnection",
 	}
 
 	tmplStr, err := loadTemplate("w2sclient.go.tmpl")
@@ -535,24 +545,49 @@ func goW2SRequestValidation(requestVar, fullType, simpleType, servicePackage, re
 `, validate, requestVar, returnExpr)
 }
 
-func goW2SValidateClosure(fullType, simpleType, servicePackage string) string {
-	validate := goValidateRef(fullType, simpleType, servicePackage)
-	if validate == "" {
-		return "nil"
+// goW2SRouteCheck returns, for a routed rpc ((spec.rpc).route_field), the
+// check that refuses a request whose route field is empty or not a tid
+// (INVALID_ARGUMENT naming the field) before anything is sent: the gateway
+// routes the call by that field, so the client never sends one it would
+// refuse. ret is the return prefix for the method's non-error results. A
+// platform rpc (or an Empty request, which carries no field) gets "".
+func goW2SRouteCheck(method *parser.MethodInfo, requestVar, ret string) string {
+	if method.RouteField == nil || isEmptyType(method.FullInputType) {
+		return ""
 	}
-	return fmt.Sprintf(`func(req *%s) error {
-			if err := %s(req); err != nil {
-				return status.Error(codes.InvalidArgument, fmt.Sprintf("validation failed: %%v", err))
-			}
-			return nil
-		}`, goTypeRef(fullType, simpleType, servicePackage), validate)
+	return fmt.Sprintf(`	if _, err := serviceconnection.RouteTenant(%q, %s.%s()); err != nil {
+		return %serr
+	}
+`, method.RouteField.Field, requestVar, goRouteGetter(method.RouteField.Field), ret)
 }
 
-func goW2SBodyStatements(requestVar, fullType, simpleType, servicePackage string, isEmptyInput bool, returnExpr string) string {
+// goW2SValidateClosure is the per-message check of a client stream: request
+// validation, then routeCheck (goW2SRouteCheck, "" for a platform rpc).
+func goW2SValidateClosure(fullType, simpleType, servicePackage, routeCheck string) string {
+	validate := goValidateRef(fullType, simpleType, servicePackage)
+	if validate == "" && routeCheck == "" {
+		return "nil"
+	}
+	var validation string
+	if validate != "" {
+		validation = fmt.Sprintf(`
+			if err := %s(req); err != nil {
+				return status.Error(codes.InvalidArgument, fmt.Sprintf("validation failed: %%v", err))
+			}`, validate)
+	}
+	if routeCheck != "" {
+		validation += "\n" + strings.TrimRight(routeCheck, "\n")
+	}
+	return fmt.Sprintf(`func(req *%s) error {%s
+			return nil
+		}`, goTypeRef(fullType, simpleType, servicePackage), validation)
+}
+
+func goW2SBodyStatements(requestVar, fullType, simpleType, servicePackage string, isEmptyInput bool, returnExpr, routeCheck string) string {
 	if isEmptyInput {
 		return "\tbody := []byte(\"{}\")"
 	}
-	validation := goW2SRequestValidation(requestVar, fullType, simpleType, servicePackage, returnExpr)
+	validation := goW2SRequestValidation(requestVar, fullType, simpleType, servicePackage, returnExpr) + routeCheck
 	return fmt.Sprintf(`%s	body, err := encodeW2SProto(%s)
 	if err != nil {
 		return %s
@@ -624,12 +659,12 @@ func (c *%s) %s(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStream
 		decode: %s,
 	}, nil
 }`, method.Name, svc.Name, method.Name, clientName, method.Name, goInput, goOutput, method.HttpPath, authLiteral,
-			goInput, goOutput, authLiteral, goW2SValidateClosure(method.FullInputType, method.InputType, servicePackage), goInput, goW2SDecodeClosure(goOutput, method.FullOutputType, method.OutputType, servicePackage))
+			goInput, goOutput, authLiteral, goW2SValidateClosure(method.FullInputType, method.InputType, servicePackage, goW2SRouteCheck(method, "req", "")), goInput, goW2SDecodeClosure(goOutput, method.FullOutputType, method.OutputType, servicePackage))
 		return goW2SMethodResult{method: methodCode}
 	}
 
 	if method.ServerStreaming {
-		body := goW2SBodyStatements("req", method.FullInputType, method.InputType, servicePackage, isEmptyInput, "nil, status.Error(codes.InvalidArgument, fmt.Sprintf(\"validation failed: %v\", err))")
+		body := goW2SBodyStatements("req", method.FullInputType, method.InputType, servicePackage, isEmptyInput, "nil, status.Error(codes.InvalidArgument, fmt.Sprintf(\"validation failed: %v\", err))", goW2SRouteCheck(method, "req", "nil, "))
 		methodCode := fmt.Sprintf(`// %s calls %s.%s via W2S SSE server streaming.
 func (c *%s) %s(ctx context.Context, req *%s, opts ...grpc.CallOption) (grpc.ServerStreamingClient[%s], error) {
 %s
@@ -639,11 +674,11 @@ func (c *%s) %s(ctx context.Context, req *%s, opts ...grpc.CallOption) (grpc.Ser
 		return goW2SMethodResult{method: methodCode}
 	}
 
-	bodyReturn := "nil, err"
+	bodyReturn, routeReturn := "nil, err", "nil, "
 	if isEmptyOutput {
-		bodyReturn = "err"
+		bodyReturn, routeReturn = "err", ""
 	}
-	body := goW2SBodyStatements("req", method.FullInputType, method.InputType, servicePackage, isEmptyInput, bodyReturn)
+	body := goW2SBodyStatements("req", method.FullInputType, method.InputType, servicePackage, isEmptyInput, bodyReturn, goW2SRouteCheck(method, "req", routeReturn))
 
 	if isEmptyOutput {
 		if isEmptyInput {
@@ -701,7 +736,8 @@ func generateGoW2SBidiMethod(clientName string, svc *parser.ServiceInfo, method 
 	handleType := method.Name + "W2SHandle"
 	loopFnName := strutil.ToLowerCamelCase(method.Name) + "W2SLoop"
 	runFnName := strutil.ToLowerCamelCase(method.Name) + "W2SRun"
-	inputValidation := goW2SRequestValidation("msg", method.FullInputType, method.InputType, servicePackage, `status.Error(codes.InvalidArgument, fmt.Sprintf("validation failed: %v", err))`)
+	inputValidation := goW2SRequestValidation("msg", method.FullInputType, method.InputType, servicePackage, `status.Error(codes.InvalidArgument, fmt.Sprintf("validation failed: %v", err))`) +
+		goW2SRouteCheck(method, "msg", "")
 	var outputValidation string
 	if validateOutput := goValidateRef(method.FullOutputType, method.OutputType, servicePackage); validateOutput != "" {
 		outputValidation = fmt.Sprintf(`			if err := %s(&msg); err != nil {

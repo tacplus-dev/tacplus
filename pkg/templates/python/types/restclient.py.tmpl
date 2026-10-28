@@ -4,7 +4,7 @@ import json
 import httpx
 from google.protobuf import json_format
 from {{.PbImportFrom}} import {{.PbModuleName}}_pb2 as pb
-{{.CrossPackageImports}}
+{{.CrossPackageImports}}{{.RouteHelpers}}
 
 
 class {{.ClientName}}:

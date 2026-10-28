@@ -23,6 +23,11 @@ public enum W2SClientError: Error {
     case decode(String)
     /// A server-streaming (SSE) response carried an error or was malformed.
     case stream(String)
+{{- if .HasRoutedMethods}}
+    /// The request was refused before sending: the route field of a
+    /// tenant-routed rpc was empty or not a tid. The message names the field.
+    case invalidArgument(String)
+{{- end}}
 }
 
 /// One decoded Server-Sent Event from a W2S server-streaming response: the
@@ -320,6 +325,23 @@ public struct W2SClient: Sendable {
             throw W2SClientError.decode("\(error)")
         }
     }
+{{- if .HasRoutedMethods}}
+
+    /// Refuses a tenant-routed request whose route field (`field`, wire number
+    /// `number`) is empty or not a tid, before anything is sent: the gateway
+    /// routes the call to the instance of the tenant that field names.
+    static func checkRouteField<Request: SwiftProtobuf.Message>(
+        _ request: Request,
+        field: String,
+        number: Int
+    ) throws {
+        do {
+            _ = try TacplusTenantRoute.tenant(of: request, field: field, number: number)
+        } catch let refusal as TacplusTenantRouteRefusal {
+            throw W2SClientError.invalidArgument(refusal.message)
+        }
+    }
+{{- end}}
 }
 {{range $service := .Services}}
 
@@ -337,7 +359,12 @@ public struct {{$service.ClientTypeName}}: Sendable {
     ///
     /// The stream has no deadline; cancel the enclosing `Task` to end it.
     public func {{.SwiftMethodName}}(_ request: {{.InputType}}) async throws -> AsyncThrowingStream<{{.OutputType}}, Error> {
+{{- if .RouteField}}
+        try W2SClient.checkRouteField(request, field: "{{.RouteField}}", number: {{.RouteFieldNumber}})
+        return try await self.client.invokeStream(
+{{- else}}
         try await self.client.invokeStream(
+{{- end}}
             method: "{{.HTTPMethod}}",
             path: "{{.HTTPPath}}",
             authRequired: {{.AuthRequired}},
@@ -357,7 +384,12 @@ public struct {{$service.ClientTypeName}}: Sendable {
 
     /// Calls {{$service.PackageName}}.{{.MethodName}} via W2S HTTP/JSON.
     public func {{.SwiftMethodName}}(_ request: {{.InputType}}) async throws -> {{.OutputType}} {
+{{- if .RouteField}}
+        try W2SClient.checkRouteField(request, field: "{{.RouteField}}", number: {{.RouteFieldNumber}})
+        return try await self.client.invoke(
+{{- else}}
         try await self.client.invoke(
+{{- end}}
             method: "{{.HTTPMethod}}",
             path: "{{.HTTPPath}}",
             authRequired: {{.AuthRequired}},

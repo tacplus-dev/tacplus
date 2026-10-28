@@ -2,6 +2,10 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Grpc.Core;
+{{- if .TenantRouted}}
+using Grpc.Core.Interceptors;
+using Google.Protobuf;
+{{- end}}
 using Grpc.Net.Client;
 
 namespace {{.PackageName}};
@@ -22,6 +26,13 @@ public sealed class C2SClient : IDisposable
     public string Address { get; }
 
     private readonly GrpcChannel _channel;
+{{- if .TenantRouted}}
+
+    // Typed clients of tenant-routed services call through this invoker: the
+    // tenant-route interceptor refuses a call whose route field is not a tenant
+    // id before anything is sent. Platform services keep the plain channel.
+    private readonly CallInvoker _routedInvoker;
+{{- end}}
 
     /// <summary>
     /// Creates a C2S client targeting a service over native gRPC.
@@ -84,6 +95,9 @@ public sealed class C2SClient : IDisposable
         }
 
         _channel = GrpcChannel.ForAddress($"{scheme}://{Address}", options);
+{{- if .TenantRouted}}
+        _routedInvoker = _channel.Intercept(new TenantRouteInterceptor());
+{{- end}}
     }
 
     /// <summary>
@@ -96,8 +110,172 @@ public sealed class C2SClient : IDisposable
         || host == "::1";
 {{range .Services}}
     /// <summary>Typed gRPC client for the {{.ClientType}} service.</summary>
-    public {{.ClientType}} {{.MethodName}}() => new {{.ClientType}}(_channel);
+    public {{.ClientType}} {{.MethodName}}() => new {{.ClientType}}({{if .TenantRouted}}_routedInvoker{{else}}_channel{{end}});
 {{end}}
     /// <summary>Disposes the underlying gRPC channel.</summary>
     public void Dispose() => _channel.Dispose();
 }
+{{- if .TenantRouted}}
+
+/// <summary>
+/// Client-side tenant routing for the C2S rpcs of tenant-owned services. The
+/// gateway routes each such call to the instance of the tenant named by the
+/// request's route field, so a call whose route field is not a tenant id (a tid:
+/// exactly 8 characters of [0-9a-z]) is refused here, with
+/// <see cref="StatusCode.InvalidArgument"/>, before anything is sent.
+/// Unary and server-streaming calls check the request before the call starts.
+/// Client-streaming and bidi calls check every message before it is written: the
+/// first message pins the stream's tenant (the gateway routes the stream by it),
+/// and a later message naming a different tenant is refused.
+/// </summary>
+internal sealed class TenantRouteInterceptor : Interceptor
+{
+    // gRPC method path -> (route field wire number, route field proto name).
+    private static readonly Dictionary<string, (int Number, string Name)> Routes =
+        new Dictionary<string, (int Number, string Name)>(StringComparer.Ordinal)
+        {
+{{- range .Routes}}
+            ["{{.FullMethod}}"] = ({{.FieldNumber}}, "{{.FieldName}}"),
+{{- end}}
+        };
+
+    private static void Admit(string method, object? request)
+    {
+        if (!Routes.TryGetValue(method, out var route))
+        {
+            return;
+        }
+        var refusal = TenantRoute.Refusal(request as IMessage, route.Number, route.Name, method);
+        if (refusal != null)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, refusal));
+        }
+    }
+
+    public override TResponse BlockingUnaryCall<TRequest, TResponse>(
+        TRequest request,
+        ClientInterceptorContext<TRequest, TResponse> context,
+        BlockingUnaryCallContinuation<TRequest, TResponse> continuation)
+    {
+        Admit(context.Method.FullName, request);
+        return continuation(request, context);
+    }
+
+    public override AsyncUnaryCall<TResponse> AsyncUnaryCall<TRequest, TResponse>(
+        TRequest request,
+        ClientInterceptorContext<TRequest, TResponse> context,
+        AsyncUnaryCallContinuation<TRequest, TResponse> continuation)
+    {
+        Admit(context.Method.FullName, request);
+        return continuation(request, context);
+    }
+
+    public override AsyncServerStreamingCall<TResponse> AsyncServerStreamingCall<TRequest, TResponse>(
+        TRequest request,
+        ClientInterceptorContext<TRequest, TResponse> context,
+        AsyncServerStreamingCallContinuation<TRequest, TResponse> continuation)
+    {
+        Admit(context.Method.FullName, request);
+        return continuation(request, context);
+    }
+
+    public override AsyncClientStreamingCall<TRequest, TResponse> AsyncClientStreamingCall<TRequest, TResponse>(
+        ClientInterceptorContext<TRequest, TResponse> context,
+        AsyncClientStreamingCallContinuation<TRequest, TResponse> continuation)
+    {
+        var call = continuation(context);
+        if (!Routes.TryGetValue(context.Method.FullName, out var route))
+        {
+            return call;
+        }
+        return new AsyncClientStreamingCall<TRequest, TResponse>(
+            new TenantPinnedWriter<TRequest>(call.RequestStream, context.Method.FullName, route.Number, route.Name),
+            call.ResponseAsync,
+            call.ResponseHeadersAsync,
+            call.GetStatus,
+            call.GetTrailers,
+            call.Dispose);
+    }
+
+    public override AsyncDuplexStreamingCall<TRequest, TResponse> AsyncDuplexStreamingCall<TRequest, TResponse>(
+        ClientInterceptorContext<TRequest, TResponse> context,
+        AsyncDuplexStreamingCallContinuation<TRequest, TResponse> continuation)
+    {
+        var call = continuation(context);
+        if (!Routes.TryGetValue(context.Method.FullName, out var route))
+        {
+            return call;
+        }
+        return new AsyncDuplexStreamingCall<TRequest, TResponse>(
+            new TenantPinnedWriter<TRequest>(call.RequestStream, context.Method.FullName, route.Number, route.Name),
+            call.ResponseStream,
+            call.ResponseHeadersAsync,
+            call.GetStatus,
+            call.GetTrailers,
+            call.Dispose);
+    }
+
+    /// <summary>
+    /// Request writer of a routed client-streaming or bidi call: a message whose
+    /// route field is not a tid, or names a tenant other than the one the
+    /// stream's first message pinned, is refused before it is written.
+    /// </summary>
+    private sealed class TenantPinnedWriter<T> : IClientStreamWriter<T>
+        where T : class
+    {
+        private readonly IClientStreamWriter<T> _inner;
+        private readonly string _method;
+        private readonly int _fieldNumber;
+        private readonly string _fieldName;
+        private string? _tenant;
+
+        internal TenantPinnedWriter(IClientStreamWriter<T> inner, string method, int fieldNumber, string fieldName)
+        {
+            _inner = inner;
+            _method = method;
+            _fieldNumber = fieldNumber;
+            _fieldName = fieldName;
+        }
+
+        public WriteOptions? WriteOptions
+        {
+            get => _inner.WriteOptions;
+            set => _inner.WriteOptions = value;
+        }
+
+        public Task CompleteAsync() => _inner.CompleteAsync();
+
+        public Task WriteAsync(T message)
+        {
+            Admit(message);
+            return _inner.WriteAsync(message);
+        }
+
+        public Task WriteAsync(T message, CancellationToken cancellationToken)
+        {
+            Admit(message);
+            return _inner.WriteAsync(message, cancellationToken);
+        }
+
+        private void Admit(T message)
+        {
+            var refusal = TenantRoute.Refusal(message as IMessage, _fieldNumber, _fieldName, _method);
+            if (refusal != null)
+            {
+                throw new RpcException(new Status(StatusCode.InvalidArgument, refusal));
+            }
+            var tenant = TenantRoute.Read(message as IMessage, _fieldNumber);
+            if (_tenant == null)
+            {
+                _tenant = tenant;
+            }
+            else if (!string.Equals(tenant, _tenant, StringComparison.Ordinal))
+            {
+                throw new RpcException(new Status(
+                    StatusCode.InvalidArgument,
+                    $"{_method}: route field '{_fieldName}' names tenant '{tenant}', but this stream is pinned to tenant '{_tenant}' by its first message; a stream reaches exactly one tenant"));
+            }
+        }
+    }
+}
+{{- end}}

@@ -82,6 +82,15 @@ type rustMcpTool struct {
 	// rows the response carries.
 	NamespaceField     string
 	StoreNamespaceRows []rustNamespaceListField
+	// RouteField is the rpc's (spec.rpc).route_field on a tenant-routed
+	// service, nil on a platform one. Like the fields above it is absent from
+	// Schema and refused as an argument; dispatch sets it to the session's
+	// tenant, so the model can never aim a call at another tenant.
+	RouteField *parser.RouteFieldDescriptor
+	// RouteArgsSynthesizable: the request's required arguments (RequiredScalars)
+	// are all synthesizable, so the generated gate can drive a routed tool call
+	// and read the route field the handler received.
+	RouteArgsSynthesizable bool
 
 	// OwnerDefaultGuard is the (spec.owner_default) refusal rendered by the same
 	// helper the gRPC wrapper calls, "" when nothing is declared or nothing is
@@ -157,28 +166,31 @@ func rustMcpTools(svc *parser.ServiceInfo, servicePkg string, crossPkgTypes map[
 		inputType, outputType := resolveRustTypeQualified(m, servicePkg, crossPkgTypes)
 		empty := rustMcpEmptyRequest(m)
 		var scalars []rustMcpScalarArg
+		synthesizable := false
 		if !empty {
-			scalars = san.mcpRequiredScalarArgs(m.FullInputType, servicePkg)
+			scalars, synthesizable = san.mcpRequiredScalarArgs(m.FullInputType, servicePkg, m.RouteField)
 		}
 		ownerDefaultGuard, err := rustOwnerDefaultGuard(m, san, servicePkg)
 		if err != nil {
 			return nil, fmt.Errorf("%s.%s: %w", svc.Name, m.Name, err)
 		}
 		tools = append(tools, rustMcpTool{
-			EmptyRequest:       empty,
-			RequiredScalars:    scalars,
-			Method:             m,
-			ToolName:           m.McpToolName,
-			Description:        parser.McpToolDescription(m.Comment),
-			Schema:             schema,
-			InputType:          inputType,
-			OutputType:         outputType,
-			PrincipalField:     san.requestPrincipalField(m.FullInputType, servicePkg),
-			StorePrincipalRows: san.principalListFields(m.FullOutputType, servicePkg),
-			NamespaceField:     san.requestNamespaceField(m.FullInputType, servicePkg),
-			StoreNamespaceRows: san.namespaceListFields(m.FullOutputType, servicePkg),
-			OwnerDefaultGuard:  ownerDefaultGuard,
-			Page:               rustMcpPageOf(m, servicePkg, crossPkgTypes),
+			EmptyRequest:           empty,
+			RequiredScalars:        scalars,
+			Method:                 m,
+			ToolName:               m.McpToolName,
+			Description:            parser.McpToolDescription(m.Comment),
+			Schema:                 schema,
+			InputType:              inputType,
+			OutputType:             outputType,
+			PrincipalField:         san.requestPrincipalField(m.FullInputType, servicePkg),
+			StorePrincipalRows:     san.principalListFields(m.FullOutputType, servicePkg),
+			NamespaceField:         san.requestNamespaceField(m.FullInputType, servicePkg),
+			StoreNamespaceRows:     san.namespaceListFields(m.FullOutputType, servicePkg),
+			OwnerDefaultGuard:      ownerDefaultGuard,
+			Page:                   rustMcpPageOf(m, servicePkg, crossPkgTypes),
+			RouteField:             m.RouteField,
+			RouteArgsSynthesizable: m.RouteField != nil && synthesizable,
 		})
 	}
 	return tools, nil
@@ -255,6 +267,10 @@ func rustMcpToolGeneratable(svc *parser.ServiceInfo, m *parser.MethodInfo, servi
 //     silently overwriting it.
 //   - the injected trace_id/noop pair: tacplus's own transport fields, not part
 //     of the rpc's user-facing contract.
+//   - the (spec.rpc).route_field of a tenant-routed rpc: dispatch sets it to the
+//     session's tenant, which the carrier took from the session's token. It is
+//     a field of the request message itself, carrying no marker of its own, so
+//     it is removed from the top-level schema here.
 func rustMcpInputSchema(m *parser.MethodInfo, servicePkg string, san *rustEgressSanitizer) (string, error) {
 	var schema map[string]any
 	if rustMcpEmptyRequest(m) {
@@ -273,6 +289,9 @@ func rustMcpInputSchema(m *parser.MethodInfo, servicePkg string, san *rustEgress
 			return "", err
 		}
 	}
+	if m.RouteField != nil {
+		rustMcpOmitRouteField(schema, m.RouteField.Field)
+	}
 	if m.IsPageCollection() {
 		rustMcpAnnotatePageSchema(schema, m.Resolved.DefaultPageSize, m.Resolved.MaxPageSize)
 	}
@@ -282,6 +301,29 @@ func rustMcpInputSchema(m *parser.MethodInfo, servicePkg string, san *rustEgress
 		return "", fmt.Errorf("marshal input schema: %w", err)
 	}
 	return string(out), nil
+}
+
+// rustMcpOmitRouteField removes the route field from a request schema's
+// properties and its required set.
+func rustMcpOmitRouteField(schema map[string]any, field string) {
+	if props, ok := schema["properties"].(map[string]any); ok {
+		delete(props, field)
+	}
+	required, ok := schema["required"].([]string)
+	if !ok {
+		return
+	}
+	kept := required[:0:0]
+	for _, r := range required {
+		if r != field {
+			kept = append(kept, r)
+		}
+	}
+	if len(kept) == 0 {
+		delete(schema, "required")
+		return
+	}
+	schema["required"] = kept
 }
 
 // rustMcpAnnotatePageSchema tells the model how to drive the two paging fields a
@@ -328,23 +370,29 @@ type rustMcpScalarArg struct {
 // defined value for each singular enum the validator refuses at zero. A request
 // whose required set is not entirely scalar returns nil: the generated dispatch
 // test synthesizes arguments, and there is no one obviously-valid value for a
-// required enum or nested message.
-func (es *rustEgressSanitizer) mcpRequiredScalarArgs(fullType, servicePkg string) []rustMcpScalarArg {
+// required enum or nested message. The second result is false in that case,
+// and true when every required field has a value (possibly none at all). The
+// route field, when there is one, is skipped: it is not a tool argument, and a
+// call naming it is refused.
+func (es *rustEgressSanitizer) mcpRequiredScalarArgs(fullType, servicePkg string, route *parser.RouteFieldDescriptor) ([]rustMcpScalarArg, bool) {
 	pkg, name := splitRustEgressFQN(fullType, servicePkg)
 	msg, ok := es.msgs[pkg+"\x00"+name]
 	if !ok {
-		return nil
+		return nil, false
 	}
 	var out []rustMcpScalarArg
 	for i := range msg.Fields {
 		f := &msg.Fields[i]
+		if route != nil && f.Name == route.Field {
+			continue
+		}
 		// An omitted enum decodes to its zero value, which assert_enum_defined
 		// refuses. A repeated or optional enum has no such refusal: its empty
 		// state is valid, so it needs no synthesized value.
 		if a, ok := f.Annotations["assert_enum_defined"]; ok && a.BoolValue && f.IsEnum && !f.IsRepeated && !f.IsOptional {
 			value, ok := es.mcpDefinedEnumValue(f, pkg)
 			if !ok {
-				return nil
+				return nil, false
 			}
 			// The handler's Debug renders the enum by its prost variant name.
 			out = append(out, rustMcpScalarArg{Field: f.Name, JSON: rustQuote(value.Name),
@@ -355,7 +403,7 @@ func (es *rustEgressSanitizer) mcpRequiredScalarArgs(fullType, servicePkg string
 			continue
 		}
 		if f.IsRepeated || f.IsMap || f.IsMessage || f.IsEnum {
-			return nil
+			return nil, false
 		}
 		switch mcpScalarJSONType(f.Type) {
 		case "string":
@@ -368,10 +416,10 @@ func (es *rustEgressSanitizer) mcpRequiredScalarArgs(fullType, servicePkg string
 		case "boolean":
 			out = append(out, rustMcpScalarArg{Field: f.Name, JSON: "true", Debug: "true"})
 		default:
-			return nil
+			return nil, false
 		}
 	}
-	return out
+	return out, true
 }
 
 // mcpDefinedEnumValue returns the first declared non-zero value of an enum
@@ -531,15 +579,85 @@ func generateRustMcpDispatch(svc *parser.ServiceInfo, servicePkg string, crossPk
 		// service that serves nothing.
 		return "", fmt.Errorf("%s has a generated MCP session carrier but no RPC_PRINCIPAL_MCP rpc", svc.Name)
 	}
+	// A routed tool takes its tenant from the session, and the session has one
+	// only on a routed carrier. mcp_carrier.go routes the carrier by the same
+	// test that routes the service's rpcs, so this cannot happen; if it ever
+	// does, dispatching the tool unrouted would be the failure.
+	if carrier.RouteField == nil {
+		for _, t := range tools {
+			if t.RouteField != nil {
+				return "", fmt.Errorf("%s.%s is an MCP tool declaring (spec.rpc).route_field %q, but the service's MCP session carrier %s declares no route_field; the tool's tenant comes from the session, and this session has none",
+					svc.Name, t.Method.Name, t.RouteField.Field, carrier.Name)
+			}
+		}
+	}
 	frameIn, frameOut := resolveRustTypeQualified(carrier, servicePkg, crossPkgTypes)
 
 	var b strings.Builder
 	b.WriteString(rustMcpHeader(svc.Name))
+	if carrier.RouteField != nil {
+		b.WriteString(rustMcpSessionTenant(svc.Name, frameIn, carrier.RouteField))
+	}
 	b.WriteString(rustMcpToolTable(svc.Name, tools))
 	b.WriteString(rustMcpSurface(svc.Name, tools))
 	b.WriteString(rustMcpTransport(svc.Name, frameIn, frameOut, proto.McpResponseFrameMaxBytes))
-	b.WriteString(rustMcpTests(svc.Name, svc, tools, servicePkg, crossPkgTypes, carrier))
+	b.WriteString(rustMcpTests(svc.Name, svc, tools, servicePkg, crossPkgTypes, carrier, frameIn))
 	return b.String(), nil
+}
+
+// rustMcpSessionTenantFn / rustMcpStampFrameTenantFn name the two session
+// tenant helpers rustMcpSessionTenant renders for a tenant-routed service.
+func rustMcpSessionTenantFn(serviceName string) string {
+	return prostSnakeName(serviceName) + "_mcp_session_tenant"
+}
+
+func rustMcpStampFrameTenantFn(serviceName string) string {
+	return prostSnakeName(serviceName) + "_mcp_stamp_frame_tenant"
+}
+
+// rustMcpSessionTenant renders, for a tenant-routed service, where an MCP
+// session's tenant comes from: the verified caller's token, never the model.
+//
+// The session tenant is the tid of the caller's namespace claim. The carrier
+// resolves it at open (a caller in no tenant cannot open a session), stamps it
+// on every inbound frame whose route field is empty and refuses a frame naming
+// another, all BEFORE the routing backstop holds the frame to the instance's
+// own tenant. Each tool's dispatch sets its own route field from the same
+// helper, so every call of the session is directed at the tenant the backstop
+// admitted.
+func rustMcpSessionTenant(serviceName, frameIn string, route *parser.RouteFieldDescriptor) string {
+	field := rustRequestFieldIdent(route.Field)
+	return fmt.Sprintf(`
+/// The tenant an MCP session of %[1]s runs in: the tid of the verified
+/// caller's namespace claim (`+"`/tenants/<tid>`"+` or below it). Every tool call of
+/// the session is directed at it; the model never names a tenant.
+/// PERMISSION_DENIED for a caller whose namespace names no tenant: a
+/// tenant-owned service is not reached by a caller of none.
+pub fn %[2]s(caller: &servicemanager::auth::Caller) -> Result<String, tonic::Status> {
+    servicemanager::tenant_route::tenant_of_caller_namespace(caller.namespace().unwrap_or(""))
+        .ok_or_else(|| {
+            tonic::Status::permission_denied(
+                "an MCP session on a tenant-owned service needs a caller in a tenant; this caller's namespace names none",
+            )
+        })
+}
+
+/// Stamps one inbound session frame's %[4]s with the session's tenant, at
+/// ingress and before the routing backstop checks it. An empty one is set; one
+/// naming any other tenant is refused, PERMISSION_DENIED, which ends the
+/// session: the platform sets this field, not the client.
+fn %[3]s(frame: &mut %[5]s, session_tenant: &str) -> Result<(), tonic::Status> {
+    if frame.%[6]s.is_empty() {
+        frame.%[6]s = session_tenant.to_string();
+    } else if frame.%[6]s != session_tenant {
+        return Err(tonic::Status::permission_denied(
+            "this MCP frame names another tenant than its session's",
+        ));
+    }
+    Ok(())
+}
+`, serviceName, rustMcpSessionTenantFn(serviceName), rustMcpStampFrameTenantFn(serviceName),
+		route.Field, frameIn, field)
 }
 
 func rustMcpHeader(serviceName string) string {
@@ -771,6 +889,23 @@ func rustMcpToolDispatch(serviceName string, t rustMcpTool) string {
         }
 `, f.marker, f.field, rustQuote(f.field), f.why)
 	}
+	// The route field is the tenant the call is aimed at, and the session's
+	// tenant is the only one it may name. Both JSON spellings decode into it,
+	// so both are refused.
+	if r := t.RouteField; r != nil {
+		names := "arguments.contains_key(" + rustQuote(r.Field) + ")"
+		if r.JSONName != "" && r.JSONName != r.Field {
+			names += " || arguments.contains_key(" + rustQuote(r.JSONName) + ")"
+		}
+		fmt.Fprintf(&b, `        // (spec.rpc).route_field %[1]s is the session's tenant, so it is
+        // absent from this tool's schema; a call that names it is refused.
+        if %[2]s {
+            return Err(tonic::Status::invalid_argument(
+                "%[1]s is set by the server from your session's tenant; it is not a tool argument",
+            ));
+        }
+`, r.Field, names)
+	}
 
 	b.WriteString("        let caller: Option<&servicemanager::auth::Caller> = Some(&self.caller);\n")
 	if t.EmptyRequest {
@@ -784,6 +919,12 @@ func rustMcpToolDispatch(serviceName string, t rustMcpTool) string {
 		fmt.Fprintf(&b, `        let req: %s = serde_json::from_value(serde_json::Value::Object(arguments))
             .map_err(|e| tonic::Status::invalid_argument(format!("invalid arguments: {}", e)))?;
 `, t.InputType)
+		if r := t.RouteField; r != nil {
+			// Set before validation, which may require the field: the call is
+			// aimed at the session's tenant, taken from the caller's token.
+			fmt.Fprintf(&b, "        let mut req = req;\n        req.%s = %s(&self.caller)?;\n",
+				rustRequestFieldIdent(r.Field), rustMcpSessionTenantFn(serviceName))
+		}
 		b.WriteString(rustServerRequestValidationBlock("req", t.Method.FullInputType))
 		if t.PrincipalField != "" {
 			b.WriteString(rustRequestPrincipalBlock(t.PrincipalField, t.Method.Name, "req", "        "))
@@ -1111,7 +1252,10 @@ func generateRustMcpCarrierWrapper(svc *parser.ServiceInfo, method *parser.Metho
 	inputType, outputType := resolveRustTypeQualified(method, servicePkg, crossPkgTypes)
 	fullMethod := fmt.Sprintf("/%s/%s.%s/%s", parentDir, servicePkg, svc.Name, method.Name)
 	authLine := rustAuthLine(svc, method, fullMethod)
-	requestStreamBlock := rustValidatedRequestStreamBlock(inputType, method.FullInputType, "", "", "", method.Name)
+	requestStreamBlock := rustMcpSessionTenantOpen(svc.Name, method) +
+		rustValidatedRequestStreamBlock(inputType, method.FullInputType, "", "", "", method.Name, fullMethod) +
+		rustMcpStampRequestStreamBlock(svc.Name, method, inputType) +
+		rustRouteRequestStreamBlock(method, inputType)
 	streamType := fmt.Sprintf(responseStreamFmt, outputType)
 
 	return fmt.Sprintf(`    type %[1]sStream = %[2]s;
@@ -1141,6 +1285,39 @@ func generateRustMcpCarrierWrapper(svc *parser.ServiceInfo, method *parser.Metho
 		prostSnakeName(svc.Name))
 }
 
+// rustMcpSessionTenantOpen resolves a routed carrier's session tenant at open,
+// from the verified caller: a caller in no tenant opens no session. Empty for
+// a platform carrier.
+func rustMcpSessionTenantOpen(serviceName string, carrier *parser.MethodInfo) string {
+	if carrier.RouteField == nil {
+		return ""
+	}
+	return fmt.Sprintf(`        // The session's tenant comes from the caller's token, never from a
+        // frame or the model.
+        let __mcp_session_tenant = %s(&caller)?;
+`, rustMcpSessionTenantFn(serviceName))
+}
+
+// rustMcpStampRequestStreamBlock stamps every inbound frame of a routed
+// carrier with the session's tenant (refusing one naming another), after the
+// frame is validated and before rustRouteRequestStreamBlock holds it to the
+// instance's own tenant: for the carrier, the backstop checks what the
+// platform stamped, never what the client sent. Empty for a platform carrier.
+func rustMcpStampRequestStreamBlock(serviceName string, carrier *parser.MethodInfo, inputType string) string {
+	if carrier.RouteField == nil {
+		return ""
+	}
+	return fmt.Sprintf(`
+        let (metadata, extensions, stream) = request.into_parts();
+        let stream = stream.map(move |item| -> Result<%[1]s, tonic::Status> {
+            let mut msg = item?;
+            %[2]s(&mut msg, &__mcp_session_tenant)?;
+            Ok(msg)
+        });
+        let request = tonic::Request::from_parts(metadata, extensions, Box::pin(stream) as %[3]s);
+`, inputType, rustMcpStampFrameTenantFn(serviceName), fmt.Sprintf(requestStreamFmt, inputType))
+}
+
 // rustMcpTests renders the tests every generated MCP surface carries.
 //
 // Generated rather than hand-written for the same reason the dispatch itself
@@ -1148,9 +1325,25 @@ func generateRustMcpCarrierWrapper(svc *parser.ServiceInfo, method *parser.Metho
 // — that a tool call reaches its own typed handler with the arguments decoded,
 // and that a server-computed field is stamped from the caller and refused as an
 // argument. A service that grows an MCP tool gets the gate with it.
-func rustMcpTests(serviceName string, svc *parser.ServiceInfo, tools []rustMcpTool, servicePkg string, crossPkgTypes map[string]string, mcpCarrier *parser.MethodInfo) string {
+func rustMcpTests(serviceName string, svc *parser.ServiceInfo, tools []rustMcpTool, servicePkg string, crossPkgTypes map[string]string, mcpCarrier *parser.MethodInfo, frameIn string) string {
 	surface := serviceName + "McpSurface"
+	routed := mcpCarrier.RouteField != nil
 	var b strings.Builder
+
+	// A routed service's sessions run in the tenant of the caller's namespace,
+	// so its test caller sits in one.
+	tenantConst, tenantClaim := "", ""
+	if routed {
+		tenantConst = fmt.Sprintf(`
+    /// The tenant the test caller's namespace claim sits in: the session's
+    /// tenant, which every routed tool call must come out aimed at.
+    const MCP_TEST_TENANT: &str = %s;
+`, rustQuote(rustMcpTestTenant))
+		tenantClaim = `        token
+            .set_namespace(format!("/tenants/{MCP_TEST_TENANT}/users/alice"))
+            .expect("a freshly built token is mutable");
+`
+	}
 
 	fmt.Fprintf(&b, `
 #[cfg(test)]
@@ -1160,13 +1353,13 @@ mod %[1]s_mcp_tests {
     /// The subject the test caller's token carries. Every server-stamped
     /// principal below must come out equal to it.
     const MCP_TEST_SUBJECT: &str = "spiffe://example/tenants/acme/users/alice";
-
+%[3]s
     fn mcp_test_caller() -> servicemanager::auth::Caller {
         let mut token = token::Token::new();
         token
             .set_subject(MCP_TEST_SUBJECT)
             .expect("a freshly built token is mutable");
-        servicemanager::auth::Caller::new(token, "mcp-test".to_string())
+%[4]s        servicemanager::auth::Caller::new(token, "mcp-test".to_string())
     }
 
     /// A handler that reports what its MCP tools were called with, by failing
@@ -1177,7 +1370,7 @@ mod %[1]s_mcp_tests {
 
     #[tonic::async_trait]
     impl %[2]sHandler for McpReportingHandler {
-`, prostSnakeName(serviceName), serviceName)
+`, prostSnakeName(serviceName), serviceName, tenantConst, tenantClaim)
 
 	for _, m := range svc.Methods {
 		if m == mcpCarrier {
@@ -1234,11 +1427,158 @@ mod %[1]s_mcp_tests {
 	}
 	b.WriteString("    }\n")
 
+	if routed {
+		b.WriteString(rustMcpSessionTenantTests(serviceName, frameIn, mcpCarrier.RouteField))
+	}
 	for _, t := range tools {
 		b.WriteString(rustMcpToolTests(surface, t))
+		if t.RouteField != nil {
+			b.WriteString(rustMcpToolRouteTests(serviceName, surface, t))
+		}
 	}
 
 	b.WriteString("}\n")
+	return b.String()
+}
+
+// rustMcpTestTenant is the tid the generated gate's caller sits in, and
+// rustMcpTestOtherTenant one it does not.
+const (
+	rustMcpTestTenant      = "acme0001"
+	rustMcpTestOtherTenant = "zzzzzzzz"
+)
+
+// rustMcpSessionTenantTests renders the routed carrier's session-tenant gate:
+// the tenant comes from the token, a caller in no tenant opens no session, and
+// an inbound frame is stamped when empty and refused when it names another.
+func rustMcpSessionTenantTests(serviceName, frameIn string, route *parser.RouteFieldDescriptor) string {
+	return fmt.Sprintf(`
+    /// An MCP session's tenant is the tid of the caller's namespace claim, and
+    /// a caller whose namespace names no tenant cannot open one.
+    #[test]
+    fn the_mcp_session_tenant_comes_from_the_token() {
+        assert_eq!(
+            %[1]s(&mcp_test_caller()).expect("a caller in a tenant opens a session"),
+            MCP_TEST_TENANT
+        );
+        let mut token = token::Token::new();
+        token
+            .set_subject(MCP_TEST_SUBJECT)
+            .expect("a freshly built token is mutable");
+        token
+            .set_namespace("/system")
+            .expect("a freshly built token is mutable");
+        let refused = %[1]s(&servicemanager::auth::Caller::new(token, "mcp-test".to_string()))
+            .expect_err("a caller in no tenant opened a session");
+        assert_eq!(refused.code(), tonic::Code::PermissionDenied);
+    }
+
+    /// A frame naming no tenant is stamped with the session's at ingress, so
+    /// the routing backstop checks what the platform set.
+    #[test]
+    fn an_mcp_frame_with_no_tenant_is_stamped() {
+        let mut frame = <%[3]s>::default();
+        %[2]s(&mut frame, MCP_TEST_TENANT).expect("an empty %[4]s is stamped");
+        assert_eq!(frame.%[5]s, MCP_TEST_TENANT);
+        %[2]s(&mut frame, MCP_TEST_TENANT).expect("the session's own tenant is accepted");
+        assert_eq!(frame.%[5]s, MCP_TEST_TENANT);
+    }
+
+    /// A frame naming another tenant than its session's is refused: the
+    /// client never picks the tenant.
+    #[test]
+    fn an_mcp_frame_naming_another_tenant_is_refused() {
+        let mut frame = <%[3]s>::default();
+        frame.%[5]s = %[6]s.to_string();
+        let refused = %[2]s(&mut frame, MCP_TEST_TENANT)
+            .expect_err("a frame naming another tenant was accepted");
+        assert_eq!(refused.code(), tonic::Code::PermissionDenied);
+        assert_eq!(frame.%[5]s, %[6]s, "a refused frame must not be restamped");
+    }
+`, rustMcpSessionTenantFn(serviceName), rustMcpStampFrameTenantFn(serviceName), frameIn,
+		route.Field, rustRequestFieldIdent(route.Field), rustQuote(rustMcpTestOtherTenant))
+}
+
+// rustMcpToolRouteTests renders one routed tool's gate: its route field is not
+// in the schema, a call naming it is refused, and the handler receives the
+// session's tenant in it.
+func rustMcpToolRouteTests(serviceName, surface string, t rustMcpTool) string {
+	field := t.RouteField.Field
+	var b strings.Builder
+	fmt.Fprintf(&b, `
+    /// (spec.rpc).route_field %[3]s is not a tool argument: it is absent from
+    /// the published schema.
+    #[test]
+    fn %[1]s_schema_omits_%[3]s() {
+        let tool = %[5]s
+            .iter()
+            .find(|t| t.name == %[2]s)
+            .expect("the tool is published");
+        let schema: serde_json::Value =
+            serde_json::from_str(tool.input_schema).expect("the tool schema is JSON");
+        assert!(
+            schema["properties"].get(%[4]s).is_none(),
+            "the route field %[3]s is in the tool schema: {}",
+            tool.input_schema
+        );
+    }
+
+    /// A tool call that names the route field %[3]s is refused, whatever
+    /// tenant it names, and the handler is never reached.
+    #[tokio::test]
+    async fn %[1]s_refuses_a_client_supplied_%[3]s() {
+        let surface = %[6]s::new(Arc::new(McpReportingHandler), mcp_test_caller());
+        let mut arguments = rmcp::model::JsonObject::new();
+        arguments.insert(
+            %[4]s.to_string(),
+            serde_json::Value::String(%[7]s.to_string()),
+        );
+        let refused = surface
+            .%[8]s(arguments)
+            .await
+            .expect_err("a client-supplied %[3]s was accepted");
+        assert!(
+            !refused.message().starts_with("MCP_CALLED"),
+            "a client-supplied %[3]s reached the handler: {}",
+            refused.message()
+        );
+        assert!(
+            refused.message().contains("not a tool argument"),
+            "unexpected refusal: {}",
+            refused.message()
+        );
+    }
+`, t.ToolName, rustQuote(t.ToolName), field, rustQuote(field), rustMcpToolTableName(serviceName),
+		surface, rustQuote(rustMcpTestOtherTenant), rustMcpDispatchFnName(t))
+
+	if !t.RouteArgsSynthesizable {
+		return b.String()
+	}
+	fmt.Fprintf(&b, `
+    /// The handler receives the session's tenant in %[2]s, though the tool
+    /// call never carried it.
+    #[tokio::test]
+    async fn %[1]s_takes_%[2]s_from_the_session() {
+        let surface = %[3]s::new(Arc::new(McpReportingHandler), mcp_test_caller());
+        let arguments: rmcp::model::JsonObject =
+            serde_json::from_str(%[4]s).expect("generated tool arguments are a JSON object");
+        let reported = surface
+            .%[5]s(arguments)
+            .await
+            .expect_err("the reporting handler returned Ok");
+        assert!(
+            reported.message().starts_with("MCP_CALLED"),
+            "the tool call did not reach its typed handler: {}",
+            reported.message()
+        );
+        assert!(
+            reported.message().contains(%[6]s),
+            "%[2]s was not set from the session's tenant: {}",
+            reported.message()
+        );
+    }
+`, t.ToolName, field, surface, rustQuote(rustMcpTestArgsJSON(t)), rustMcpDispatchFnName(t),
+		rustQuote(fmt.Sprintf("%s: %s", field, rustQuote(rustMcpTestTenant))))
 	return b.String()
 }
 
@@ -1256,14 +1596,7 @@ func rustMcpToolTests(surface string, t rustMcpTool) string {
 	// A PAGE tool is always drivable: page_size alone is a valid call.
 	drivable := t.EmptyRequest || t.Page != nil || len(t.RequiredScalars) > 0 || t.PrincipalField != ""
 	if drivable {
-		var args []string
-		for _, a := range t.RequiredScalars {
-			args = append(args, fmt.Sprintf("%s: %s", rustQuote(a.Field), a.JSON))
-		}
-		if t.Page != nil {
-			args = append(args, fmt.Sprintf("%q: %d", "page_size", rustMcpTestPageSize))
-		}
-		argsJSON := "{" + strings.Join(args, ", ") + "}"
+		argsJSON := rustMcpTestArgsJSON(t)
 
 		fmt.Fprintf(&b, `
     /// A tool call reaches its own typed handler, with the arguments decoded
@@ -1354,6 +1687,20 @@ func rustMcpToolTests(surface string, t rustMcpTool) string {
 	}
 
 	return b.String()
+}
+
+// rustMcpTestArgsJSON is the arguments object the generated gate drives a tool
+// with: a synthesized value for each required scalar, and page_size for a PAGE
+// tool.
+func rustMcpTestArgsJSON(t rustMcpTool) string {
+	var args []string
+	for _, a := range t.RequiredScalars {
+		args = append(args, fmt.Sprintf("%s: %s", rustQuote(a.Field), a.JSON))
+	}
+	if t.Page != nil {
+		args = append(args, fmt.Sprintf("%q: %d", "page_size", rustMcpTestPageSize))
+	}
+	return "{" + strings.Join(args, ", ") + "}"
 }
 
 // rustQuote renders s as a Rust string literal, quotes included.

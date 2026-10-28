@@ -34,6 +34,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+
+	"{{.ModuleBasePath}}/chassis/serviceconnection"
 {{- range .Imports}}
 	{{.Alias}} "{{.Path}}"
 {{- end}}
@@ -44,9 +46,13 @@ import (
 // A gateway implements this with service resolution + forwarded C2S tokens.
 // A daemon implements this with its S2S connections + minted service tokens.
 type Dispatcher interface {
-	// Conn resolves a gRPC connection for the given service. An error is a
-	// gRPC status; it is mapped to an HTTP status by GrpcErr.
-	Conn(ctx context.Context, serviceID string) (grpc.ClientConnInterface, error)
+	// Conn resolves a gRPC connection for the given service. tenant is the
+	// target tenant id of a tenant-routed call, read from the request's route
+	// field and already checked to be a tid: the connection must reach that
+	// tenant's instance and no other (never another tenant's, never a shared
+	// one). tenant is "" for a platform service's call. An error is a gRPC
+	// status; it is mapped to an HTTP status by GrpcErr.
+	Conn(ctx context.Context, serviceID, tenant string) (grpc.ClientConnInterface, error)
 
 	// AuthHeader resolves the authorization header value for outgoing requests
 	// to the given service, or "" to send none.
@@ -160,6 +166,14 @@ type RouteInfo struct {
 	// RedirectFieldProto is the same field's proto name, the key the Go ToJSON
 	// helpers emit; RedirectResponse accepts either spelling.
 	RedirectFieldProto string
+	// RouteField is (spec.rpc).route_field of a tenant-owned service's rpc, as
+	// the proto field name; RouteFieldJSON is its proto3 JSON name and
+	// RouteFieldNumber its wire number. The field's value, a tid, names the
+	// tenant whose instance receives the call (see RouteTenantFromWire). All
+	// ""/0 for a platform route, which is never addressed by tenant.
+	RouteField       string
+	RouteFieldJSON   string
+	RouteFieldNumber int32
 }
 
 // Routes is every REST route, generated from proto annotations.
@@ -180,8 +194,33 @@ var Routes = []RouteInfo{
 		FormBody:             {{.FormBody}},
 		RedirectField:        {{goStr .RedirectField}},
 		RedirectFieldProto:   {{goStr .RedirectFieldProto}},
+		RouteField:           {{goStr .RouteField}},
+		RouteFieldJSON:       {{goStr .RouteFieldJSON}},
+		RouteFieldNumber:     {{.RouteFieldNumber}},
 	},
 {{- end}}
+}
+
+// ValidTenantID reports whether s is a tid: exactly 8 characters of [0-9a-z].
+func ValidTenantID(s string) bool {
+	return serviceconnection.ValidTenantID(s)
+}
+
+// RouteTenant returns value, the content of the route field named field, as
+// the target tenant id, or an INVALID_ARGUMENT status (HTTP 400 through
+// GrpcErr) naming the field when it is empty or not a tid. A call is never
+// routed by the caller's token instead.
+func RouteTenant(field, value string) (string, error) {
+	return serviceconnection.RouteTenant(field, value)
+}
+
+// RouteTenantFromWire is the target tenant of a call on route, read from the
+// raw request frame the gateway's gRPC proxy holds: the last occurrence of
+// the route field (wire type LEN) in a well-formed encoding, which must be a
+// tid. A malformed frame, or a missing, empty or malformed route field, is
+// INVALID_ARGUMENT. A platform route (no route field) returns "".
+func RouteTenantFromWire(frame []byte, route *RouteInfo) (string, error) {
+	return serviceconnection.RouteTenantFromWire(frame, route.RouteField, route.RouteFieldNumber)
 }
 
 // FormBodyToJSON turns a FormBody route's application/x-www-form-urlencoded
@@ -273,7 +312,30 @@ func Dispatch(ctx context.Context, dispatcher Dispatcher, grpcPath string, body 
 	switch grpcPath {
 {{- range .UnaryArms}}
 	case {{goStr .GrpcPath}}:
-		conn, err := dispatcher.Conn(ctx, {{goStr .ServiceID}})
+{{- if .RouteField}}
+		// Tenant-routed: the request names its target tenant, so it is decoded
+		// and validated BEFORE anything is dialled, and refused with a 400 when
+		// its route field is not a tid.
+		req, err := {{.FromJSON}}(body)
+		if err != nil {
+			return "", httpError(http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+		}
+{{- if .ValidateInput}}
+		if err := {{.ValidateInput}}(req); err != nil {
+			return "", httpError(http.StatusBadRequest, fmt.Sprintf("request validation failed: %v", err))
+		}
+{{- end}}
+		tenant, err := RouteTenant({{goStr .RouteField}}, req.{{.RouteGetter}}())
+		if err != nil {
+			return "", GrpcErr(err)
+		}
+		conn, err := dispatcher.Conn(ctx, {{goStr .ServiceID}}, tenant)
+		if err != nil {
+			return "", GrpcErr(err)
+		}
+		callCtx := WithMetadata(ctx, dispatcher.AuthHeader(ctx, {{goStr .ServiceID}}), requestID)
+{{- else}}
+		conn, err := dispatcher.Conn(ctx, {{goStr .ServiceID}}, "")
 		if err != nil {
 			return "", GrpcErr(err)
 		}
@@ -289,6 +351,7 @@ func Dispatch(ctx context.Context, dispatcher Dispatcher, grpcPath string, body 
 		if err := {{.ValidateInput}}(req); err != nil {
 			return "", httpError(http.StatusBadRequest, fmt.Sprintf("request validation failed: %v", err))
 		}
+{{- end}}
 {{- end}}
 {{- end}}
 		resp, err := {{.NewClient}}(conn).{{.MethodName}}(callCtx, req)
@@ -325,7 +388,33 @@ func DispatchStream(ctx context.Context, dispatcher Dispatcher, grpcPath string,
 	switch grpcPath {
 {{- range .StreamArms}}
 	case {{goStr .GrpcPath}}:
-		conn, err := dispatcher.Conn(ctx, {{goStr .ServiceID}})
+{{- if .RouteField}}
+		// Tenant-routed: decoded, validated and routed BEFORE anything is
+		// dialled; a route field that is not a tid is a 400.
+		req, err := {{.FromJSON}}(body)
+		if err != nil {
+			httpError(http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err)).Write(w)
+			return
+		}
+{{- if .ValidateInput}}
+		if err := {{.ValidateInput}}(req); err != nil {
+			httpError(http.StatusBadRequest, fmt.Sprintf("request validation failed: %v", err)).Write(w)
+			return
+		}
+{{- end}}
+		tenant, err := RouteTenant({{goStr .RouteField}}, req.{{.RouteGetter}}())
+		if err != nil {
+			GrpcErr(err).Write(w)
+			return
+		}
+		conn, err := dispatcher.Conn(ctx, {{goStr .ServiceID}}, tenant)
+		if err != nil {
+			GrpcErr(err).Write(w)
+			return
+		}
+		callCtx := WithMetadata(ctx, dispatcher.AuthHeader(ctx, {{goStr .ServiceID}}), requestID)
+{{- else}}
+		conn, err := dispatcher.Conn(ctx, {{goStr .ServiceID}}, "")
 		if err != nil {
 			GrpcErr(err).Write(w)
 			return
@@ -344,6 +433,7 @@ func DispatchStream(ctx context.Context, dispatcher Dispatcher, grpcPath string,
 			httpError(http.StatusBadRequest, fmt.Sprintf("request validation failed: %v", err)).Write(w)
 			return
 		}
+{{- end}}
 {{- end}}
 {{- end}}
 		stream, err := {{.NewClient}}(conn).{{.MethodName}}(callCtx, req)

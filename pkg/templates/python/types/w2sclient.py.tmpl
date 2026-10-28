@@ -16,7 +16,7 @@ from google.protobuf import empty_pb2
 from {{.PbImportFrom}} import {{.PbModuleName}}_pb2 as pb
 from {{.PbImportFrom}}.helpers import *
 from {{.ExceptionsImportFrom}}.exceptions import from_http_status, internal, unauthenticated
-{{.CrossPackageImports}}
+{{.CrossPackageImports}}{{.RouteHelpers}}
 
 TokenProvider = Callable[[], Union[str, Awaitable[str]]]
 

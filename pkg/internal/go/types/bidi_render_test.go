@@ -30,6 +30,7 @@ func TestBidiTemplateRenders(t *testing.T) {
 		MethodName, ServiceName, ClientName, GoInput, GoOutput, HandleType, LoopFnName, RunFnName, MinBackoff, MaxBackoff string
 		ValidateInput, ValidateOutput                                                                                     string
 		AuthRequired                                                                                                      bool
+		RouteField, RouteGetter                                                                                           string
 	}{
 		"ManageCert", "TlsCertService", "MyClient",
 		"types.ClientMsg", "types.ServerMsg",
@@ -37,6 +38,7 @@ func TestBidiTemplateRenders(t *testing.T) {
 		"1 * time.Second", "30 * time.Second",
 		"types.ValidateClientMsg", "types.ValidateServerMsg",
 		true,
+		"", "",
 	}
 	var sb strings.Builder
 	if err := tmpl.Execute(&sb, data); err != nil {
@@ -128,22 +130,27 @@ func TestOuterGrpcClientTemplateParses(t *testing.T) {
 		// approval package, so the outer template renders one more import.
 		HasRequiresDevice     bool
 		ApprovalLibImportPath string
+		// route_field: a routed rpc imports the serviceconnection chassis.
+		HasRoute                    bool
+		ServiceConnectionImportPath string
 	}{
-		GrpcPackageName:       "mysvc",
-		TypesModulePath:       "example.com/types/mysvc",
-		ServiceName:           "MyService",
-		ClientName:            "MyServiceClient",
-		GRPCMethods:           "// methods would go here\n",
-		HasMethods:            true,
-		HasValidation:         false,
-		HasBidi:               true,
-		HasNonBidi:            false,
-		HasClientStreaming:    false,
-		HasAuth:               true,
-		HasCollectionStream:   true,
-		HasCollectionCursor:   true,
-		HasRequiresDevice:     true,
-		ApprovalLibImportPath: "example.com/chassis/approval",
+		GrpcPackageName:             "mysvc",
+		TypesModulePath:             "example.com/types/mysvc",
+		ServiceName:                 "MyService",
+		ClientName:                  "MyServiceClient",
+		GRPCMethods:                 "// methods would go here\n",
+		HasMethods:                  true,
+		HasValidation:               false,
+		HasBidi:                     true,
+		HasNonBidi:                  false,
+		HasClientStreaming:          false,
+		HasAuth:                     true,
+		HasCollectionStream:         true,
+		HasCollectionCursor:         true,
+		HasRequiresDevice:           true,
+		ApprovalLibImportPath:       "example.com/chassis/approval",
+		HasRoute:                    false,
+		ServiceConnectionImportPath: "example.com/chassis/serviceconnection",
 	}
 	var sb strings.Builder
 	if err := tmpl.Execute(&sb, data); err != nil {

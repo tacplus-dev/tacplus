@@ -22,7 +22,14 @@ pub type DispatchResult = Result<String, (StatusCode, String)>;
 #[tonic::async_trait]
 pub trait RestDispatcher: Send + Sync {
     /// Resolve a gRPC channel for the given service.
-    async fn channel(&self, service_id: &str) -> Result<Channel, tonic::Status>;
+    ///
+    /// `tenant` is the target tenant of a tenant-routed route: a tid already
+    /// read off the request's route field and checked ([`route_tenant`]). The
+    /// channel must reach THAT tenant's instance of the service and no other:
+    /// never another tenant's, never a shared one, never the caller's own
+    /// tenant in its place (UNAVAILABLE when the tenant has none). `tenant` is
+    /// empty for a platform route, which is never addressed by tenant.
+    async fn channel(&self, service_id: &str, tenant: &str) -> Result<Channel, tonic::Status>;
 
     /// Resolve an authorization header for outgoing requests to the given service.
     /// Gateway: forwards the incoming C2S token.
@@ -117,6 +124,35 @@ pub struct RouteInfo {
     /// JSON response (its proto3 JSON name). When set, the route answers 303
     /// to that field's URL instead of JSON. See `redirect_response`.
     pub redirect_field: Option<&'static str>,
+    /// (spec.rpc).route_field: the request field (proto name) whose value, a
+    /// tid, names the tenant whose instance receives the call. None for a
+    /// platform route, which is never addressed by tenant.
+    pub route_field: Option<&'static str>,
+    /// route_field's proto3 JSON name, the key it carries in a REST body.
+    pub route_field_json: Option<&'static str>,
+    /// route_field's wire number, for the gRPC proxy, which holds only the raw
+    /// request frame (see [`route_tenant_from_wire`]). 0 for a platform route.
+    pub route_field_number: u32,
+}
+
+/// Reports whether a value is a tid: exactly 8 characters of `[0-9a-z]`.
+pub use servicemanager::tenant_route::valid_tenant_id;
+
+/// The tid a tenant-routed request's route field names, or INVALID_ARGUMENT
+/// naming `field` when it is empty or not a tid. Never defaulted from the
+/// caller's token.
+pub fn route_tenant(field: &str, value: &str) -> Result<String, tonic::Status> {
+    servicemanager::tenant_route::route_tenant(field, value)
+}
+
+/// The target tenant of a gRPC request the gateway proxies as raw bytes:
+/// `frame` is the request message (the gRPC frame's payload). Reads the LAST
+/// top-level occurrence of the route's route field (proto3 last-one-wins),
+/// refusing a malformed message and an empty or non-tid value
+/// (INVALID_ARGUMENT), before anything is dialled. A platform route has no
+/// tenant: `Ok("")`.
+pub fn route_tenant_from_wire(frame: &[u8], route: &RouteInfo) -> Result<String, tonic::Status> {
+    servicemanager::tenant_route::route_tenant_from_wire(frame, route.route_field_number, route.route_field.unwrap_or(""))
 }
 
 /// All REST routes, generated from proto annotations at compile time.
@@ -136,6 +172,9 @@ pub static ROUTES: &[RouteInfo] = &[
         target_namespace_field: << .TargetNamespace >>,
         form_body: << .FormBody >>,
         redirect_field: << .RedirectField >>,
+        route_field: << .RouteField >>,
+        route_field_json: << .RouteFieldJSON >>,
+        route_field_number: << .RouteFieldNumber >>,
     },
 <<- end >>
 ];
@@ -218,7 +257,24 @@ pub async fn dispatch(
     match grpc_path {
 <<- range .UnaryArms >>
         "<< rustStr .GrpcPath >>" => {
-            let channel = dispatcher.channel("<< rustStr .ServiceID >>").await.map_err(grpc_err)?;
+<<- if .RouteField >>
+            // Tenant-routed: the request names its target tenant. Decode and
+            // validate it, then read the route field and refuse an empty or
+            // malformed one (400) before anything is dialled.
+            let req = << .FromJsonPath >>(body).map_err(|e| (StatusCode::BAD_REQUEST, error_body(format!("invalid request body: {}", e))))?;
+<<- if .ValidateInput >>
+            req.validate().map_err(|e| (StatusCode::BAD_REQUEST, error_body(format!("request validation failed: {}", e))))?;
+<<- end >>
+            let tenant = route_tenant("<< rustStr .RouteField >>", &req.<< .RouteFieldIdent >>).map_err(grpc_err)?;
+            let channel = dispatcher.channel("<< rustStr .ServiceID >>", &tenant).await.map_err(grpc_err)?;
+            let auth = dispatcher.auth_header("<< rustStr .ServiceID >>").await;
+            let auth_ref = auth.as_deref();
+            << if .IsEmptyOutput >>let _ =<< else >>let resp =<< end >> << .ClientPath >>::new(channel)
+                .<< .MethodSnake >>(with_metadata(req, auth_ref, request_id))
+                .await
+                .map_err(grpc_err)?;
+<<- else >>
+            let channel = dispatcher.channel("<< rustStr .ServiceID >>", "").await.map_err(grpc_err)?;
             let auth = dispatcher.auth_header("<< rustStr .ServiceID >>").await;
             let auth_ref = auth.as_deref();
 <<- if .IsEmptyInput >>
@@ -235,6 +291,7 @@ pub async fn dispatch(
                 .<< .MethodSnake >>(with_metadata(req, auth_ref, request_id))
                 .await
                 .map_err(grpc_err)?;
+<<- end >>
 <<- end >>
 <<- if .IsEmptyOutput >>
             Ok("{}".to_string())
@@ -268,7 +325,36 @@ pub async fn dispatch_stream(
     match grpc_path {
 <<- range .StreamArms >>
         "<< rustStr .GrpcPath >>" => {
-            let channel = match dispatcher.channel("<< rustStr .ServiceID >>").await {
+<<- if .RouteField >>
+            // Tenant-routed: decode and validate the request, then read the
+            // route field and refuse an empty or malformed one (400) before
+            // anything is dialled.
+            let req = match << .FromJsonPath >>(body) {
+                Ok(r) => r,
+                Err(e) => return (StatusCode::BAD_REQUEST, error_body(format!("invalid request body: {}", e))).into_response(),
+            };
+<<- if .ValidateInput >>
+            if let Err(e) = req.validate() {
+                return (StatusCode::BAD_REQUEST, error_body(format!("request validation failed: {}", e))).into_response();
+            }
+<<- end >>
+            let tenant = match route_tenant("<< rustStr .RouteField >>", &req.<< .RouteFieldIdent >>) {
+                Ok(tenant) => tenant,
+                Err(status) => return grpc_err(status).into_response(),
+            };
+            let channel = match dispatcher.channel("<< rustStr .ServiceID >>", &tenant).await {
+                Ok(ch) => ch,
+                Err(status) => {
+                    let (code, msg) = grpc_err(status);
+                    return (code, msg).into_response();
+                }
+            };
+            let auth = dispatcher.auth_header("<< rustStr .ServiceID >>").await;
+            let auth_ref = auth.as_deref();
+            let stream = match << .ClientPath >>::new(channel)
+                .<< .MethodSnake >>(with_metadata(req, auth_ref, request_id))
+<<- else >>
+            let channel = match dispatcher.channel("<< rustStr .ServiceID >>", "").await {
                 Ok(ch) => ch,
                 Err(status) => {
                     let (code, msg) = grpc_err(status);
@@ -292,6 +378,7 @@ pub async fn dispatch_stream(
 <<- end >>
             let stream = match << .ClientPath >>::new(channel)
                 .<< .MethodSnake >>(with_metadata(req, auth_ref, request_id))
+<<- end >>
 <<- end >>
                 .await
             {

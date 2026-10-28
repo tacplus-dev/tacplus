@@ -15,6 +15,7 @@ import (
 
 	protoerrors "{{.ModuleBasePath}}/types/sys/errors"
 	jwkviewpb "{{.ModuleBasePath}}/types/sys/jwkview"
+	"{{.ModuleBasePath}}/chassis/serviceconnection"
 	entitlementspb "{{.ModuleBasePath}}/types/generated/entitlements"
 	granthelper "{{.ModuleBasePath}}/grants"
 	wrapperJwk "{{.ModuleBasePath}}/chassis/jwk"
@@ -65,6 +66,19 @@ type Authorizer interface {
 	// SetMethodTargetNamespaceField registers level-or-below target namespace
 	// checks, keyed by the same service-qualified identifier as SetMethodAuth.
 	SetMethodTargetNamespaceField(methodKey, fieldName string)
+	// SetMethodRouteField registers a tenant-routed method's
+	// (spec.rpc).route_field, the request field carrying the target tenant id
+	// CheckRoute reads. Keyed by the same identifier as SetMethodAuth.
+	SetMethodRouteField(methodKey, fieldName string)
+	// SetMethodAnyTenant registers RPC_FLAG_ANY_TENANT for a method: on a
+	// tenant-owned instance, a caller of any tenant passes the tenant door for
+	// that method. Nothing else about the caller's token is widened.
+	SetMethodAnyTenant(methodKey string)
+	// CheckRoute is the tenant-owned instance's routing backstop for a routed
+	// method, run after request validation and before the handler: the
+	// request's route field must be a tid (INVALID_ARGUMENT otherwise) and, on
+	// an instance in /tenants/<t>, must be t (PERMISSION_DENIED otherwise).
+	CheckRoute(fullMethod string, req any) error
 	// JwkCache returns the underlying JWK cache for direct key access.
 	JwkCache() *JwkCache
 	// EnforcingUnaryInterceptor returns a unary interceptor that verifies
@@ -202,6 +216,11 @@ type authorizer struct {
 	methodAuthAnyService       map[string]bool
 	methodActorPatterns        map[string][]*regexp.Regexp
 	methodTargetNamespaceField map[string]string
+	// methodRouteField is each tenant-routed method's route field, read by
+	// CheckRoute; methodAnyTenant marks RPC_FLAG_ANY_TENANT methods, whose
+	// callers of any tenant pass the tenant door.
+	methodRouteField map[string]string
+	methodAnyTenant  map[string]bool
 	// hostTenant is the instance's own tenant namespace ("/tenants/<t>"), or ""
 	// for a shared instance. See SetHostNamespace.
 	hostTenant atomic.Value // string
@@ -230,6 +249,8 @@ func NewAuthorizer(ctx context.Context, conn grpc.ClientConnInterface) (*authori
 		methodAuthAnyService:       make(map[string]bool),
 		methodActorPatterns:        make(map[string][]*regexp.Regexp),
 		methodTargetNamespaceField: make(map[string]string),
+		methodRouteField:           make(map[string]string),
+		methodAnyTenant:            make(map[string]bool),
 		logger:                     zap.L().Named("authorizer"),
 	}, nil
 }
@@ -269,13 +290,18 @@ func isTenantNamespace(ns string) bool {
 	return ok && t != "" && !strings.Contains(t, "/")
 }
 
-// checkHostTenant is the tenant-owned instance's door check.
-func (a *authorizer) checkHostTenant(callerNamespace string) error {
+// checkHostTenant is the tenant-owned instance's door check. fullMethod is the
+// method being called ("" when unknown): an RPC_FLAG_ANY_TENANT method opens
+// the door to callers of any tenant; an unknown method keeps it shut.
+func (a *authorizer) checkHostTenant(callerNamespace, fullMethod string) error {
 	host, _ := a.hostTenant.Load().(string)
 	if host == "" {
 		return nil
 	}
 	if IsAtOrBelow("/system", callerNamespace) || IsAtOrBelow(callerNamespace, host) {
+		return nil
+	}
+	if fullMethod != "" && a.methodAnyTenant[qualifiedMethodKey(fullMethod)] {
 		return nil
 	}
 	return protoerrors.NewErrPermissionDenied(nil,
@@ -292,6 +318,62 @@ func (a *authorizer) SetMethodTargetNamespaceField(methodKey, fieldName string) 
 		return
 	}
 	a.methodTargetNamespaceField[methodKey] = fieldName
+}
+
+// SetMethodRouteField registers the (spec.rpc).route_field of a tenant-routed
+// method: the request field whose tid names the tenant the call was routed to.
+// methodKey is the service-qualified identifier "pkg.Service/Method".
+func (a *authorizer) SetMethodRouteField(methodKey, fieldName string) {
+	if fieldName == "" {
+		return
+	}
+	a.methodRouteField[methodKey] = fieldName
+}
+
+// SetMethodAnyTenant registers RPC_FLAG_ANY_TENANT for a method: a caller of
+// any tenant passes a tenant-owned instance's door for it. The token, its
+// audience, auth_services, entitlements and target_namespace_field are still
+// checked exactly as for any other method.
+func (a *authorizer) SetMethodAnyTenant(methodKey string) {
+	a.methodAnyTenant[methodKey] = true
+}
+
+// CheckRoute is the routing backstop of a tenant-routed method, which the
+// generated wrapper runs after request validation and before the handler.
+// Routing is the router's job; this refuses a request that should never have
+// reached this instance: a route field that is not a tid is INVALID_ARGUMENT,
+// and on a tenant-owned instance (own namespace /tenants/<t>) a tid other than
+// t is PERMISSION_DENIED. A shared instance checks the shape only. A method
+// with no registered route field fails closed: the wrapper only asks about
+// routed methods, so this is a generation or wiring bug.
+func (a *authorizer) CheckRoute(fullMethod string, req any) error {
+	methodKey := qualifiedMethodKey(fullMethod)
+	fieldName, ok := a.methodRouteField[methodKey]
+	if !ok {
+		return protoerrors.NewErrGeneral(nil, "no route field registered for routed method %q", methodKey)
+	}
+	pm, ok := req.(interface{ ProtoReflect() protoreflect.Message })
+	if !ok {
+		return protoerrors.NewErrGeneral(nil, "route field configured but request is not a proto message for %q", methodKey)
+	}
+	msg := pm.ProtoReflect()
+	fd := msg.Descriptor().Fields().ByName(protoreflect.Name(fieldName))
+	if fd == nil || fd.Kind() != protoreflect.StringKind || fd.IsList() || fd.IsMap() {
+		return protoerrors.NewErrGeneral(nil, "route field %q is not a string field of the request for %q", fieldName, methodKey)
+	}
+	tid, err := serviceconnection.RouteTenant(fieldName, msg.Get(fd).String())
+	if err != nil {
+		return err
+	}
+	host, _ := a.hostTenant.Load().(string)
+	if host == "" {
+		return nil
+	}
+	if own := strings.TrimPrefix(host, "/tenants/"); tid != own {
+		return protoerrors.NewErrPermissionDenied(nil,
+			"routed to tenant %s, this instance serves tenant %s", tid, own)
+	}
+	return nil
 }
 
 // SetMethodAuth registers allowed caller patterns for a method. Patterns are RE2 regexes
@@ -350,7 +432,7 @@ func (a *authorizer) JwkCache() *JwkCache {
 // Authorize checks if the request is authorized by verifying the token signature,
 // audience, and service_entitlements claim.
 func (a *authorizer) Authorize(ctx context.Context, fullMethod string, req any) (*tokenlib.TokenWrapper, error) {
-	tw, err := a.verifyBearer(ctx)
+	tw, err := a.verifyBearer(ctx, fullMethod)
 	if err != nil {
 		zap.L().Debug("Token verification failed",
 			zap.String("method", fullMethod),
@@ -559,7 +641,9 @@ func rejectAPITokenClass(tw *tokenlib.TokenWrapper) error {
 	return nil
 }
 
-func (a *authorizer) verifyBearer(ctx context.Context) (*tokenlib.TokenWrapper, error) {
+// verifyBearer verifies the bearer token and applies the tenant door for
+// fullMethod ("" when the method is unknown, which keeps the door shut).
+func (a *authorizer) verifyBearer(ctx context.Context, fullMethod string) (*tokenlib.TokenWrapper, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return nil, protoerrors.NewErrUnauthorized(nil, "missing authorization header")
@@ -588,7 +672,7 @@ func (a *authorizer) verifyBearer(ctx context.Context) (*tokenlib.TokenWrapper, 
 		return nil, protoerrors.NewErrPermissionDenied(nil,
 			"token audience %q is not accepted by service %q", tw.GetAudience(), serviceName)
 	}
-	if err := a.checkHostTenant(tw.GetNamespace()); err != nil {
+	if err := a.checkHostTenant(tw.GetNamespace(), fullMethod); err != nil {
 		return nil, err
 	}
 	return tw, nil
@@ -596,8 +680,12 @@ func (a *authorizer) verifyBearer(ctx context.Context) (*tokenlib.TokenWrapper, 
 
 // Authenticate verifies token signature, audience, and expiry without
 // checking entitlements. Used for auth_any_user services.
+//
+// The tenant door is applied for the method gRPC is serving on ctx
+// (grpc.Method); a context that carries none keeps the door shut.
 func (a *authorizer) Authenticate(ctx context.Context) (*tokenlib.TokenWrapper, error) {
-	tw, err := a.verifyBearer(ctx)
+	fullMethod, _ := grpc.Method(ctx)
+	tw, err := a.verifyBearer(ctx, fullMethod)
 	if err != nil {
 		return nil, err
 	}
@@ -610,7 +698,8 @@ func (a *authorizer) Authenticate(ctx context.Context) (*tokenlib.TokenWrapper, 
 // AuthenticateAtOrBelow verifies token authenticity and enforces the universal
 // namespace rule against a fixed target namespace.
 func (a *authorizer) AuthenticateAtOrBelow(ctx context.Context, targetNamespace string) (*tokenlib.TokenWrapper, error) {
-	tw, err := a.verifyBearer(ctx)
+	fullMethod, _ := grpc.Method(ctx)
+	tw, err := a.verifyBearer(ctx, fullMethod)
 	if err != nil {
 		return nil, err
 	}

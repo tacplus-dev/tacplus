@@ -22,5 +22,16 @@ the looper then marks it `promoted` or `declined` here with the date.
   against each language's generated wrapper with a fake handler (current-generation host leg). The store-side
   semantics the handler owns (InsertIfAbsent/ReplaceIfUnchanged answers, lock order, ack-before-watch) have no
   generated-code gate; Stratum's own tests are where they live today.
+- **MCP on a tenant-owned service for a caller of no tenant** (2026-10-27, tacplus-dev/tacplus#170): an MCP
+  session of a tenant-owned service is opened in the tenant of the caller's token namespace, so a `/system`
+  caller (or any caller whose namespace names no tenant) has no MCP session there (`PERMISSION_DENIED`), although
+  it passes the tenant door for the same rpcs over gRPC. If platform operators or agents need MCP on tenant
+  instances, the platform would have to choose that tenant from something other than the model (a token claim
+  for the target tenant, say); needs design.
+- **MCP sessions are same-tenant only** (2026-10-27, tacplus-dev/tacplus#170): because the session tenant is
+  the token's, an `RPC_FLAG_ANY_TENANT` tool is reachable over MCP only in the caller's own tenant, while its
+  gRPC/REST twin reaches any tenant. Deliberate (the model must never set the tenant); a cross-tenant MCP path
+  would need the platform to choose the target, e.g. from a user-confirmed selection outside the model. Needs
+  design if SeaBeam's "talk to another tenant's crew" should work through an assistant.
 
 ## Promoted / declined

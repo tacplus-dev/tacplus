@@ -28,6 +28,18 @@ message McpRequest {
   // Client frames are tool calls and protocol handshakes, both small; the
   // bound is a ceiling on a malformed or hostile frame, not a working limit.
   string payload = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 1048576];
+
+  // tenant is the tid of the tenant this session is opened in, on the carrier
+  // of a tenant-owned service, whose generated (spec.rpc).route_field it is.
+  // It is the PLATFORM's, never the model's: the carrier sets it from the
+  // session's access token (the tenant of its namespace claim) at frame
+  // ingress, and refuses a frame that names any other tenant. The MCP proxy
+  // stamps it the same way, from the token, to route the session; it never
+  // passes through a value a client sent. Every tool call of the session is
+  // directed at this tenant: a tool's own route field is filled from it, and
+  // is not a tool argument. Empty, and ignored, on a platform service's
+  // carrier, which is never addressed by tenant.
+  string tenant = 2 [(spec.assert_max_size) = 8];
 }
 
 // McpResponse carries one JSON-RPC frame from the service back to the client.

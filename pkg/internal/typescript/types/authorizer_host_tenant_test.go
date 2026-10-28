@@ -15,15 +15,11 @@ import (
 	"github.com/tacplus-dev/tacplus/templates"
 )
 
-// A tenant-owned instance (own namespace /tenants/beta) must refuse another
-// tenant's caller at the door, on an RPC with no target_namespace_field: a
-// token's aud is the service name, which every tenant's instance accepts.
-//
-// TypeScript has no generated-code test runner, so this renders the REAL
-// generated Authorizer.ts into a throw-away tree, stubs only the
-// token/jwk/spiffe/grpc seams (no signing), and drives authorize/authenticate
-// under Node's built-in type stripping.
-func TestTypeScriptAuthorizerRefusesOtherTenantAtTenantOwnedDoor(t *testing.T) {
+// tsAuthorizerHarness renders the real generated Authorizer.ts into a
+// throw-away tree with stubbed token/jwk/spiffe/grpc seams. It returns node,
+// the tree root and a writer for further files (the check script).
+func tsAuthorizerHarness(t *testing.T) (string, string, func(rel, body string)) {
+	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("no node found; skipping behavioral check")
@@ -94,6 +90,19 @@ export function isAtOrBelow(caller, target) {
 	put("node_modules/@bufbuild/protobuf/package.json", `{"name":"@bufbuild/protobuf","type":"module","main":"index.js"}`)
 	put("node_modules/@bufbuild/protobuf/index.js", "export const create = () => ({}); export const fromBinary = () => ({}); export const toBinary = () => new Uint8Array();\n")
 
+	return node, root, put
+}
+
+// A tenant-owned instance (own namespace /tenants/beta) must refuse another
+// tenant's caller at the door, on an RPC with no target_namespace_field: a
+// token's aud is the service name, which every tenant's instance accepts.
+//
+// TypeScript has no generated-code test runner, so this renders the REAL
+// generated Authorizer.ts into a throw-away tree, stubs only the
+// token/jwk/spiffe/grpc seams (no signing), and drives authorize/authenticate
+// under Node's built-in type stripping.
+func TestTypeScriptAuthorizerRefusesOtherTenantAtTenantOwnedDoor(t *testing.T) {
+	node, root, put := tsAuthorizerHarness(t)
 	put("check.mjs", `
 import { Authorizer } from './chassis/grpcserver/Authorizer.ts';
 
@@ -144,5 +153,49 @@ console.log('ok');
 	}
 	if !strings.Contains(string(out), "ok") {
 		t.Fatalf("unexpected output:\n%s", out)
+	}
+}
+
+// Issue #170: RPC_FLAG_ANY_TENANT opens the tenant-owned door for that rpc
+// only ("any authenticated user of any tenant"); the default keeps it ("members
+// of the target tenant only"). Token, audience and auth_services still hold on
+// the opened rpc, and authenticate() honours it when told the method.
+func TestTypeScriptAuthorizerAnyTenantOpensTheDoorForThatRpcOnly(t *testing.T) {
+	node, root, put := tsAuthorizerHarness(t)
+	put("check.mjs", `
+import { Authorizer } from './chassis/grpcserver/Authorizer.ts';
+
+const a = new Authorizer();
+a.jwkCache().get = () => ({});
+a.setMethodAuth('demo.Demo/Do', ['caller-svc']);
+a.setMethodAuth('demo.Demo/Open', ['caller-svc']);
+a.setMethodAuth('other.Demo/Open', ['caller-svc']);
+a.setMethodAnyTenant('demo.Demo/Open');
+a.setHostNamespace('/tenants/beta');
+
+const md = (ns, aud = 'demo', sub = 'caller-svc') => ({ authorization: 'Bearer ' + JSON.stringify({ aud, sub, ns }) });
+async function code(call) {
+  try { await call(); return null; } catch (e) { return e.code ?? e.message; }
+}
+function expect(got, want, what) {
+  if (got !== want) throw new Error(what + ': want ' + want + ', got ' + got);
+}
+
+for (const ns of ['/tenants/acme', '/tenants/beta', '/users/u1', '/system']) {
+  expect(await code(() => a.authorize(md(ns), '/demo.Demo/Open', undefined)), null, 'authorize Open ' + ns);
+  expect(await code(() => a.authenticate(md(ns), undefined, '/demo.Demo/Open')), null, 'authenticate Open ' + ns);
+}
+expect(await code(() => a.authorize(md('/tenants/acme'), '/demo.Demo/Do', undefined)), 7, 'default door on Do');
+expect(await code(() => a.authenticate(md('/tenants/acme'), undefined, '/demo.Demo/Do')), 7, 'default door on authenticate Do');
+expect(await code(() => a.authenticate(md('/tenants/acme'))), 7, 'default door without a method');
+expect(await code(() => a.authorize(md('/tenants/acme'), '/other.Demo/Open', undefined)), 7, 'same-named rpc of another service');
+expect(await code(() => a.authorize(md('/tenants/acme', 'other'), '/demo.Demo/Open', undefined)), 7, 'audience still enforced');
+expect(await code(() => a.authorize(md('/tenants/acme', 'demo', 'intruder'), '/demo.Demo/Open', undefined)), 7, 'auth_services still enforced');
+expect(await code(() => a.authenticate(md('/tenants/acme'), '/tenants/zeta', '/demo.Demo/Open')), 7, 'target namespace still enforced');
+console.log('ok');
+`)
+	out, err := exec.Command(node, "--experimental-strip-types", "--no-warnings", filepath.Join(root, "check.mjs")).CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "ok") {
+		t.Fatalf("RPC_FLAG_ANY_TENANT door check is broken under TypeScript: %v\n%s", err, out)
 	}
 }

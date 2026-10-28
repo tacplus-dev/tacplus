@@ -1157,6 +1157,7 @@ func CollectRpcProtos(fds []*parser.FileDescriptor) ([]*spec.RpcInfo, error) {
 					HttpAliasPath:          m.HttpAliasPath,
 					TenantScope:            recordPlaneTenantScope(svc, authModel),
 					Surfaces:               rpcSurfaceInfos(svc, m, grpcPath, authServices, authDisabled, authAnyUser),
+					AnyTenant:              m.AnyTenant,
 					Mcp:                    m.IsMcpTool(),
 					McpToolName:            m.McpToolName,
 					// The session-carrying MCP transport is an ordinary rpc by
@@ -1167,6 +1168,10 @@ func CollectRpcProtos(fds []*parser.FileDescriptor) ([]*spec.RpcInfo, error) {
 					// like any other. Marking it is all that is left: consumers
 					// need to tell the transport apart from the tools it carries.
 					McpSessionCarrier: svc.HasMcpRpcs && m.Name == parser.McpCarrierRpcName(svc.Name),
+				}
+				if m.RouteField != nil {
+					rpc.RouteField = m.RouteField.Field
+					rpc.RouteFieldNumber = m.RouteField.Number
 				}
 				// method_collection (collection-returning read) — surface the
 				// declared shape so service-local generators see it.

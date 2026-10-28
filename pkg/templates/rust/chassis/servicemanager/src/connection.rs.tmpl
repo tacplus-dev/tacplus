@@ -9,8 +9,12 @@
 //! Two modes:
 //! - **Static**: endpoints from config, eagerly connected, ping-based health
 //! - **Dynamic** (all other services): endpoints from ServiceHealthState, reconciled by health poller
+//! - **Tenant-routed** (a tenant-owned target, `(spec.rpc).route_field`): one
+//!   dynamic pool per tenant, fed from the same health updates and keyed by the
+//!   tenant of each instance's spiffe_id. A call reaches only the instances of
+//!   the tenant its route field names; see [`ChannelProvider::channel_for_tenant`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -52,6 +56,9 @@ pub struct ServiceConnection {
     /// service (via `expect_service`), or the trust-domain-pinned base verifier
     /// for bootstrap endpoints whose specific service label is not known.
     verifier: Arc<dyn rustls::client::danger::ServerCertVerifier>,
+    /// Some for a tenant-routed target: one dynamic pool per tenant id, and
+    /// `endpoints` stays empty. None for every other target.
+    tenants: Option<Arc<RwLock<BTreeMap<String, Arc<ServiceConnection>>>>>,
     _tasks: Vec<JoinHandle<()>>,
 }
 
@@ -197,6 +204,7 @@ impl ServiceConnection {
             endpoints,
             active_idx,
             verifier,
+            tenants: None,
             _tasks: tasks,
         })
     }
@@ -215,8 +223,52 @@ impl ServiceConnection {
             endpoints: Arc::new(RwLock::new(Vec::new())),
             active_idx: Arc::new(RwLock::new(0)),
             verifier,
+            tenants: None,
             _tasks: Vec::new(),
         }
+    }
+
+    /// Creates the connection pool for a tenant-routed target: a tenant-owned
+    /// service whose rpcs declare `(spec.rpc).route_field`.
+    ///
+    /// Starts empty. `reconcile_from_health()` groups the target's instances
+    /// by the tenant their spiffe_id names (`/tenants/<tid>`) into one dynamic
+    /// pool per tenant; an instance in any other namespace is not routable and
+    /// is never dialled. `conn()` answers None: a tenant-routed call is made
+    /// only through `conn_for_tenant()`.
+    pub fn new_tenant_routed(
+        service_id: &str,
+        verifier: Arc<dyn rustls::client::danger::ServerCertVerifier>,
+    ) -> Self {
+        Self {
+            service_id: service_id.to_string(),
+            endpoints: Arc::new(RwLock::new(Vec::new())),
+            active_idx: Arc::new(RwLock::new(0)),
+            verifier,
+            tenants: Some(Arc::new(RwLock::new(BTreeMap::new()))),
+            _tasks: Vec::new(),
+        }
+    }
+
+    /// True for a pool created by `new_tenant_routed`.
+    pub fn is_tenant_routed(&self) -> bool {
+        self.tenants.is_some()
+    }
+
+    /// The active channel to `tenant`'s instances of a tenant-routed target, or
+    /// None when that tenant has no routable instance. Never another tenant's
+    /// instance and never a shared one. A target that is not tenant-routed has
+    /// one pool for every caller, and answers `conn()`.
+    pub async fn conn_for_tenant(&self, tenant: &str) -> Option<Channel> {
+        if self.tenants.is_none() {
+            return self.conn().await;
+        }
+        self.tenant_pool(tenant).await?.conn().await
+    }
+
+    /// `tenant`'s pool of a tenant-routed target.
+    async fn tenant_pool(&self, tenant: &str) -> Option<Arc<ServiceConnection>> {
+        self.tenants.as_ref()?.read().await.get(tenant).cloned()
     }
 
     /// Creates a connection pool backed by one caller-supplied channel.
@@ -236,6 +288,7 @@ impl ServiceConnection {
             endpoints: Arc::new(RwLock::new(vec![Arc::new(RwLock::new(endpoint))])),
             active_idx: Arc::new(RwLock::new(0)),
             verifier,
+            tenants: None,
             _tasks: Vec::new(),
         }
     }
@@ -272,6 +325,26 @@ impl ServiceConnection {
     /// ("ping" or "fleet health", see `EndpointConn::readiness_down_input`)
     /// holding the first dialed endpoint down.
     pub async fn unavailable_input(&self) -> Option<&'static str> {
+        if let Some(tenants) = &self.tenants {
+            // A tenant-routed target is up while any tenant's pool is: each
+            // call can still only reach the tenant it names.
+            let pools: Vec<Arc<ServiceConnection>> = tenants.read().await.values().cloned().collect();
+            let mut first_down = None;
+            for pool in pools {
+                match pool.endpoints_unavailable_input().await {
+                    None => return None,
+                    Some(input) => {
+                        first_down.get_or_insert(input);
+                    }
+                }
+            }
+            return Some(first_down.unwrap_or("no endpoints"));
+        }
+        self.endpoints_unavailable_input().await
+    }
+
+    /// `unavailable_input` over this pool's own endpoints.
+    async fn endpoints_unavailable_input(&self) -> Option<&'static str> {
         let ep_list = self.endpoints.read().await;
         let mut first_down = None;
         for ec in ep_list.iter() {
@@ -301,6 +374,48 @@ impl ServiceConnection {
     /// Called by the health poller for dynamic connections. Eagerly connects
     /// to new endpoints, drops removed ones, and reselects the active endpoint.
     pub async fn reconcile_from_health(&self, instances: &[&ServiceInstanceHealth]) {
+        if let Some(tenants) = &self.tenants {
+            self.reconcile_tenants(tenants, instances).await;
+            return;
+        }
+        self.reconcile_endpoints(instances).await;
+    }
+
+    /// Tenant-routed reconcile: every tenant's pool, present or not in this
+    /// snapshot, is reconciled with that tenant's instances, so an absent
+    /// tenant's endpoints age out exactly as a platform pool's do. A pool left
+    /// with no endpoint and no instance is dropped.
+    async fn reconcile_tenants(
+        &self,
+        tenants: &RwLock<BTreeMap<String, Arc<ServiceConnection>>>,
+        instances: &[&ServiceInstanceHealth],
+    ) {
+        let mut grouped = group_by_tenant(&self.service_id, instances);
+        let mut pools = tenants.write().await;
+        for tenant in grouped.keys() {
+            if !pools.contains_key(tenant) {
+                pools.insert(
+                    tenant.clone(),
+                    Arc::new(ServiceConnection::new_dynamic(&self.service_id, self.verifier.clone())),
+                );
+            }
+        }
+        let mut emptied = Vec::new();
+        for (tenant, pool) in pools.iter() {
+            let group = grouped.remove(tenant).unwrap_or_default();
+            pool.reconcile_endpoints(&group).await;
+            if group.is_empty() && pool.endpoints.read().await.is_empty() {
+                emptied.push(tenant.clone());
+            }
+        }
+        for tenant in emptied {
+            info!(service = %self.service_id, tenant = %tenant, "closing tenant pool with no instances");
+            pools.remove(&tenant);
+        }
+    }
+
+    /// Platform (single-pool) reconcile.
+    async fn reconcile_endpoints(&self, instances: &[&ServiceInstanceHealth]) {
         // Build incoming target→health map
         let mut incoming: HashMap<String, &ServiceInstanceHealth> = HashMap::new();
         for inst in instances {
@@ -415,6 +530,28 @@ impl ServiceConnection {
     }
 }
 
+/// Groups a tenant-routed target's instances by the tenant each one serves:
+/// the tid of its spiffe_id's namespace, which must be exactly
+/// `/tenants/<tid>`. An instance in any other namespace, or whose spiffe_id
+/// does not parse, belongs to no tenant and is not routable.
+pub(crate) fn group_by_tenant<'a>(
+    service_id: &str,
+    instances: &[&'a ServiceInstanceHealth],
+) -> BTreeMap<String, Vec<&'a ServiceInstanceHealth>> {
+    let mut grouped: BTreeMap<String, Vec<&'a ServiceInstanceHealth>> = BTreeMap::new();
+    for inst in instances {
+        match crate::tenant_route::tenant_of_spiffe_id(&inst.spiffe_id) {
+            Some(tenant) => grouped.entry(tenant).or_default().push(*inst),
+            None => debug!(
+                service = %service_id,
+                spiffe_id = %inst.spiffe_id,
+                "instance of a tenant-routed service is not in a /tenants/<tid> namespace; not routable"
+            ),
+        }
+    }
+    grouped
+}
+
 impl Drop for ServiceConnection {
     fn drop(&mut self) {
         for task in &self._tasks {
@@ -456,8 +593,17 @@ impl ChannelProvider {
 
     /// Returns the currently active channel for the target service.
     /// Returns an error if no healthy endpoints are available.
+    ///
+    /// A tenant-routed target has no channel without a tenant: this fails
+    /// closed (FAILED_PRECONDITION) rather than pick any tenant's instance.
     pub async fn channel(&self) -> Result<Channel, tonic::Status> {
         match &self.source {
+            ChannelProviderSource::Managed(conn) if conn.is_tenant_routed() => {
+                Err(tonic::Status::failed_precondition(format!(
+                    "service \"{}\" is routed by tenant: a call must name its target tenant",
+                    conn.service_id()
+                )))
+            }
             ChannelProviderSource::Managed(conn) => conn.conn().await.ok_or_else(|| {
                 tonic::Status::unavailable(format!(
                     "service \"{}\": no healthy endpoints available",
@@ -465,6 +611,35 @@ impl ChannelProvider {
                 ))
             }),
             ChannelProviderSource::Static(channel) => Ok(channel.clone()),
+        }
+    }
+
+    /// Returns the channel for a call routed to `tenant`, the tid the call's
+    /// route field names. `tenant` must be a tid (INVALID_ARGUMENT otherwise).
+    ///
+    /// For a tenant-routed target this is that tenant's own pool and nothing
+    /// else: UNAVAILABLE when the tenant has no routable instance, never
+    /// another tenant's or a shared instance. Any other target (a gateway, a
+    /// fixed channel) routes the call by its route field itself, and answers
+    /// `channel()`.
+    pub async fn channel_for_tenant(&self, tenant: &str) -> Result<Channel, tonic::Status> {
+        if !crate::tenant_route::valid_tenant_id(tenant) {
+            return Err(tonic::Status::invalid_argument(format!(
+                "target tenant {:?} is not a tenant id",
+                tenant
+            )));
+        }
+        match &self.source {
+            ChannelProviderSource::Managed(conn) if conn.is_tenant_routed() => {
+                conn.conn_for_tenant(tenant).await.ok_or_else(|| {
+                    tonic::Status::unavailable(format!(
+                        "service \"{}\": no healthy endpoints available for tenant {}",
+                        conn.service_id(),
+                        tenant
+                    ))
+                })
+            }
+            _ => self.channel().await,
         }
     }
 }
@@ -516,6 +691,107 @@ mod tests {
         }
         sc.reconcile_from_health(&[]).await;
         assert!(sc.endpoints.read().await.is_empty(), "still pooled after {ABSENT_POLLS_BEFORE_CLOSE} absent snapshots");
+    }
+
+    fn tenant_instance(spiffe_id: &str, port: i32) -> ServiceInstanceHealth {
+        ServiceInstanceHealth {
+            service_id: "crew".to_string(),
+            spiffe_id: spiffe_id.to_string(),
+            grpc_endpoint: Some(Host { host: "127.0.0.1".to_string(), port, ..Default::default() }),
+            status: InstanceStatus::Healthy as i32,
+            ..Default::default()
+        }
+    }
+
+    /// A tenant-routed pool holding one healthy (lazy) endpoint per tenant,
+    /// each at its own target.
+    async fn tenant_pool(tenants: &[(&str, &str)]) -> Arc<ServiceConnection> {
+        let sc = ServiceConnection::new_tenant_routed("crew", verifier());
+        for (tenant, target) in tenants {
+            let channel = tonic::transport::Endpoint::from_shared(format!("http://{target}")).unwrap().connect_lazy();
+            let mut ec = EndpointConn::new(target.to_string());
+            ec.channel = Some(channel);
+            ec.update_health_from_state(InstanceStatus::Healthy as i32, 0).await;
+            let pool = ServiceConnection::new_dynamic("crew", verifier());
+            pool.endpoints.write().await.push(Arc::new(RwLock::new(ec)));
+            sc.tenants.as_ref().unwrap().write().await.insert(tenant.to_string(), Arc::new(pool));
+        }
+        Arc::new(sc)
+    }
+
+    async fn active_target(sc: &ServiceConnection, tenant: &str) -> Option<String> {
+        let pool = sc.tenant_pool(tenant).await?;
+        let idx = *pool.active_idx.read().await;
+        let ec = pool.endpoints.read().await.get(idx)?.clone();
+        let target = ec.read().await.target.clone();
+        Some(target)
+    }
+
+    #[test]
+    fn instances_group_by_their_spiffe_tenant() {
+        let a = tenant_instance("spiffe://example.com/tenants/aaaaaaaa/services/crew", 1);
+        let a2 = tenant_instance("spiffe://example.com/tenants/aaaaaaaa/services/crew", 2);
+        let b = tenant_instance("spiffe://example.com/tenants/bbbbbbbb/services/crew", 3);
+        let shared = tenant_instance("spiffe://example.com/system/services/crew", 4);
+        let named = tenant_instance("spiffe://example.com/tenants/acme/services/crew", 5);
+        let none = tenant_instance("", 6);
+        let grouped = group_by_tenant("crew", &[&a, &shared, &b, &a2, &named, &none]);
+        assert_eq!(grouped.keys().cloned().collect::<Vec<_>>(), vec!["aaaaaaaa", "bbbbbbbb"]);
+        assert_eq!(grouped["aaaaaaaa"].len(), 2);
+        assert_eq!(grouped["bbbbbbbb"].len(), 1);
+        assert_eq!(grouped["bbbbbbbb"][0].grpc_endpoint.as_ref().unwrap().port, 3);
+    }
+
+    #[tokio::test]
+    async fn tenant_routed_call_reaches_the_named_tenant_only() {
+        let sc = tenant_pool(&[("aaaaaaaa", "127.0.0.1:11"), ("bbbbbbbb", "127.0.0.1:12")]).await;
+        assert_eq!(active_target(&sc, "aaaaaaaa").await.as_deref(), Some("127.0.0.1:11"));
+        assert_eq!(active_target(&sc, "bbbbbbbb").await.as_deref(), Some("127.0.0.1:12"));
+        let cp = ChannelProvider::new(sc.clone());
+        cp.channel_for_tenant("aaaaaaaa").await.expect("tenant aaaaaaaa has an instance");
+        cp.channel_for_tenant("bbbbbbbb").await.expect("tenant bbbbbbbb has an instance");
+        // A tenant with no instance is unavailable: never another tenant's.
+        let err = cp.channel_for_tenant("cccccccc").await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unavailable);
+        // No tenant, or a malformed one, never picks any instance.
+        let err = cp.channel().await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        for bad in ["", "AAAAAAAA", "aaaaaaa"] {
+            let err = cp.channel_for_tenant(bad).await.unwrap_err();
+            assert_eq!(err.code(), tonic::Code::InvalidArgument, "{bad:?}");
+        }
+        assert!(sc.conn().await.is_none(), "a tenant-routed pool has no tenant-less channel");
+        assert_eq!(sc.unavailable_input().await, None);
+    }
+
+    #[tokio::test]
+    async fn tenant_routed_pool_with_no_tenant_is_down() {
+        let sc = ServiceConnection::new_tenant_routed("crew", verifier());
+        assert_eq!(sc.unavailable_input().await, Some("no endpoints"));
+        // Instances outside /tenants/<tid> are never pooled (nor dialled).
+        let shared = tenant_instance("spiffe://example.com/system/services/crew", 1);
+        sc.reconcile_from_health(&[&shared]).await;
+        assert!(sc.tenants.as_ref().unwrap().read().await.is_empty());
+        assert_eq!(sc.unavailable_input().await, Some("no endpoints"));
+    }
+
+    #[tokio::test]
+    async fn tenant_pool_ages_out_like_a_platform_pool() {
+        let sc = tenant_pool(&[("aaaaaaaa", "127.0.0.1:1")]).await;
+        for _ in 1..ABSENT_POLLS_BEFORE_CLOSE {
+            sc.reconcile_from_health(&[]).await;
+            assert!(active_target(&sc, "aaaaaaaa").await.is_some(), "tenant pool closed early");
+        }
+        sc.reconcile_from_health(&[]).await;
+        assert!(sc.tenant_pool("aaaaaaaa").await.is_none(), "empty tenant pool kept");
+    }
+
+    #[tokio::test]
+    async fn platform_provider_ignores_the_tenant() {
+        let sc = Arc::new(pool().await);
+        let cp = ChannelProvider::new(sc);
+        cp.channel().await.expect("platform channel");
+        cp.channel_for_tenant("aaaaaaaa").await.expect("a platform target routes by its own pool");
     }
 
     #[tokio::test]

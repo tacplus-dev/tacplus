@@ -114,10 +114,10 @@ impl Authorizer for DenyAuthorizer {
         }
         Ok(HashMap::new())
     }
-    async fn check_at_or_below(&self, _authorization: Option<&str>, _target_namespace: &str) -> Result<HashMap<String, String>, Status> {
+    async fn check_at_or_below(&self, _full_method: &str, _authorization: Option<&str>, _target_namespace: &str) -> Result<HashMap<String, String>, Status> {
         Ok(HashMap::new())
     }
-    async fn authenticate(&self, _authorization: Option<&str>) -> Result<HashMap<String, String>, Status> {
+    async fn authenticate(&self, _full_method: &str, _authorization: Option<&str>) -> Result<HashMap<String, String>, Status> {
         Ok(HashMap::new())
     }
 }

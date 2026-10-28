@@ -52,11 +52,30 @@ type c2dClientTemplateData struct {
 type c2dServiceTemplateData struct {
 	MethodName string // e.g. "WithContractApi"
 	ClientType string // fully-qualified generated client, e.g. "Common2.Product.ProductApi.ProductApiClient"
+	// TenantRouted is true (C2S only) when the service's rpcs are routed by
+	// tenant: its typed client calls through the tenant-route interceptor.
+	TenantRouted bool
 }
 
 type c2sClientTemplateData struct {
 	PackageName string
 	Services    []c2dServiceTemplateData
+	// TenantRouted gates the tenant-route interceptor; false (no routed rpc in
+	// the build) leaves C2SClient.cs exactly as it was before tenant routing.
+	TenantRouted bool
+	Routes       []c2sRouteTemplateData
+}
+
+// c2sRouteTemplateData is one tenant-routed rpc in the C2S interceptor's table,
+// keyed by the gRPC method path the call carries.
+type c2sRouteTemplateData struct {
+	FullMethod  string // "/crew.CrewService/GetSkipper"
+	FieldNumber int32  // the route field's wire number on the request
+	FieldName   string // the route field's proto name, for the refusal message
+}
+
+type tenantRouteTemplateData struct {
+	PackageName string
 }
 
 type w2sClientTemplateData struct {
@@ -82,6 +101,13 @@ type w2sMethodTemplateData struct {
 	// The C# lite client emits a throwing stub for these so a consumer sees
 	// the method at compile time instead of a silent omission.
 	IsStreaming bool
+	// RPCName is the rpc's proto full name ("crew.CrewService.GetSkipper"),
+	// named in a route-field refusal.
+	RPCName string
+	// RouteField is the rpc's (spec.rpc).route_field, nil for a platform rpc.
+	// A routed unary method refuses a request whose route field is not a tid
+	// before anything is sent.
+	RouteField *parser.RouteFieldDescriptor
 }
 
 // Generate generates a .NET client-lite package from proto files.
@@ -175,13 +201,27 @@ func Generate(config *tactype.Config) error {
 		return fmt.Errorf("csharp lite collected no proto inputs")
 	}
 
-	// W2S method metadata (REST route + input/output types) is derived from spec
-	// annotations, so resolve it BEFORE the spec options are stripped below.
+	// W2S method metadata (REST route + input/output types) and every C2S/W2S
+	// rpc's (spec.rpc).route_field are derived from spec annotations, so resolve
+	// them BEFORE the spec options are stripped below.
 	var w2sData []w2sServiceTemplateData
-	if len(w2sServices) > 0 {
-		w2sData, err = w2sServicesTemplateData(protoSrcDir, w2sServices)
+	var c2sRoutes c2sTenantRoutes
+	if len(w2sServices) > 0 || len(c2sServices) > 0 {
+		dp, err := parser.NewDescriptorParser(protoSrcDir)
 		if err != nil {
-			return fmt.Errorf("failed to resolve C# W2S routes: %w", err)
+			return fmt.Errorf("failed to parse C# client protos: %w", err)
+		}
+		if len(w2sServices) > 0 {
+			w2sData, err = w2sServicesTemplateData(dp, w2sServices)
+			if err != nil {
+				return fmt.Errorf("failed to resolve C# W2S routes: %w", err)
+			}
+		}
+		if len(c2sServices) > 0 {
+			c2sRoutes, err = c2sTenantRoutesData(dp, c2sServices)
+			if err != nil {
+				return fmt.Errorf("failed to resolve C# C2S tenant routes: %w", err)
+			}
 		}
 	}
 
@@ -207,12 +247,19 @@ func Generate(config *tactype.Config) error {
 		}
 	}
 	if len(c2sServices) > 0 {
-		if err := renderC2SClient(config, c2sServices); err != nil {
+		if err := renderC2SClient(config, c2sServices, c2sRoutes); err != nil {
 			return err
 		}
 	}
 	if len(w2sData) > 0 {
 		if err := renderW2SClient(config, w2sData); err != nil {
+			return err
+		}
+	}
+	// The tid check both clients share, emitted only when a client calls a
+	// tenant-routed rpc, so a platform-only build's output is unchanged.
+	if len(c2sRoutes.Routes) > 0 || w2sHasTenantRoutes(w2sData) {
+		if err := renderTenantRoute(config); err != nil {
 			return err
 		}
 	}
@@ -286,10 +333,16 @@ func renderNamedPipesConnectionFactory(config *tactype.Config) error {
 	return nil
 }
 
-func renderC2SClient(config *tactype.Config, servicesInfo []service.ServiceInfo) error {
+func renderC2SClient(config *tactype.Config, servicesInfo []service.ServiceInfo, routes c2sTenantRoutes) error {
+	services := c2dServicesTemplateData(servicesInfo)
+	for i := range services {
+		services[i].TenantRouted = routes.RoutedClients[services[i].ClientType]
+	}
 	data := c2sClientTemplateData{
-		PackageName: config.CSharpPackageBase,
-		Services:    c2dServicesTemplateData(servicesInfo),
+		PackageName:  config.CSharpPackageBase,
+		Services:     services,
+		TenantRouted: len(routes.Routes) > 0,
+		Routes:       routes.Routes,
 	}
 	out, err := executeCSharpTemplate("C2SClient.cs.tmpl", data)
 	if err != nil {
@@ -316,33 +369,110 @@ func renderW2SClient(config *tactype.Config, services []w2sServiceTemplateData) 
 	return nil
 }
 
-// w2sServicesTemplateData resolves per-method REST route + type metadata for the
-// W2S (gRPC-over-REST) services. It parses each service's proto (before spec
-// options are stripped) to read the convention HTTP path, verb and I/O types.
-// W2S is unary-only for C#: streaming methods are skipped, mirroring the swift
-// generator, so a mixed service still yields a compilable unary-only surface.
-func w2sServicesTemplateData(protoDir string, servicesInfo []service.ServiceInfo) ([]w2sServiceTemplateData, error) {
-	dp, err := parser.NewDescriptorParser(protoDir)
+func renderTenantRoute(config *tactype.Config) error {
+	out, err := executeCSharpTemplate("TenantRoute.cs.tmpl", tenantRouteTemplateData{
+		PackageName: config.CSharpPackageBase,
+	})
 	if err != nil {
-		return nil, err
+		return err
 	}
+	if err := os.WriteFile(filepath.Join(config.OutputDir, "TenantRoute.cs"), out, 0644); err != nil {
+		return fmt.Errorf("failed to write TenantRoute.cs: %w", err)
+	}
+	return nil
+}
 
-	result := make([]w2sServiceTemplateData, 0, len(servicesInfo))
+// c2sTenantRoutes is the C2S interceptor's route table plus which typed
+// clients (by ClientType) call through it.
+type c2sTenantRoutes struct {
+	Routes        []c2sRouteTemplateData
+	RoutedClients map[string]bool
+}
+
+// c2sTenantRoutesData resolves every C2S rpc's (spec.rpc).route_field (parsed
+// before spec options are stripped). Generation-time validation sets it on
+// every rpc of a tenant-routed service and on no other, so a service with any
+// routed rpc is a routed service.
+func c2sTenantRoutesData(dp *parser.DescriptorParser, servicesInfo []service.ServiceInfo) (c2sTenantRoutes, error) {
+	result := c2sTenantRoutes{RoutedClients: make(map[string]bool)}
+	allFiles := dp.GetAllFiles()
 	for _, svc := range servicesInfo {
-		info, err := dp.ConvertToProtoInfo(svc.ProtoFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse proto %q for W2S service %q: %w", svc.ProtoFile, svc.ServiceName, err)
+		fd, ok := allFiles[filepath.ToSlash(svc.ProtoFile)]
+		if !ok {
+			return c2sTenantRoutes{}, fmt.Errorf("descriptor not found for C2S service %q proto %q", svc.ServiceName, svc.ProtoFile)
 		}
-
-		var target *parser.ServiceInfo
-		for _, s := range info.Services {
-			if s.Name == svc.ServiceName {
-				target = s
+		var target *parser.ServiceDescriptor
+		for i := range fd.Services {
+			if fd.Services[i].Name == svc.ServiceName {
+				target = &fd.Services[i]
 				break
 			}
 		}
 		if target == nil {
-			return nil, fmt.Errorf("W2S service %q not found in proto %q", svc.ServiceName, svc.ProtoFile)
+			return c2sTenantRoutes{}, fmt.Errorf("C2S service %q not found in proto %q", svc.ServiceName, svc.ProtoFile)
+		}
+		for _, method := range target.Methods {
+			if method.RouteField == nil {
+				continue
+			}
+			result.Routes = append(result.Routes, c2sRouteTemplateData{
+				FullMethod:  "/" + qualifiedProtoName(fd.Package, target.Name) + "/" + method.Name,
+				FieldNumber: method.RouteField.Number,
+				FieldName:   method.RouteField.Field,
+			})
+			result.RoutedClients[csharpServiceClientType(svc.PackageName, svc.ServiceName)] = true
+		}
+	}
+	sort.Slice(result.Routes, func(i, j int) bool {
+		return result.Routes[i].FullMethod < result.Routes[j].FullMethod
+	})
+	return result, nil
+}
+
+func w2sHasTenantRoutes(services []w2sServiceTemplateData) bool {
+	for _, svc := range services {
+		for _, method := range svc.Methods {
+			if method.RouteField != nil && !method.IsStreaming {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// qualifiedProtoName joins a proto package and a name ("crew" + "CrewService").
+func qualifiedProtoName(pkg, name string) string {
+	if pkg == "" {
+		return name
+	}
+	return pkg + "." + name
+}
+
+// findProtoService resolves a client surface's service in its parsed proto.
+func findProtoService(dp *parser.DescriptorParser, svc service.ServiceInfo, surface string) (*parser.ProtoInfo, *parser.ServiceInfo, error) {
+	info, err := dp.ConvertToProtoInfo(svc.ProtoFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse proto %q for %s service %q: %w", svc.ProtoFile, surface, svc.ServiceName, err)
+	}
+	for _, s := range info.Services {
+		if s.Name == svc.ServiceName {
+			return info, s, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("%s service %q not found in proto %q", surface, svc.ServiceName, svc.ProtoFile)
+}
+
+// w2sServicesTemplateData resolves per-method REST route + type metadata for the
+// W2S (gRPC-over-REST) services. It reads each service's parsed proto (before
+// spec options are stripped) for the convention HTTP path, verb, I/O types and
+// route field. W2S is unary-only for C#: streaming methods are emitted as
+// throwing stubs, so a mixed service still yields a compilable surface.
+func w2sServicesTemplateData(dp *parser.DescriptorParser, servicesInfo []service.ServiceInfo) ([]w2sServiceTemplateData, error) {
+	result := make([]w2sServiceTemplateData, 0, len(servicesInfo))
+	for _, svc := range servicesInfo {
+		info, target, err := findProtoService(dp, svc, "W2S")
+		if err != nil {
+			return nil, err
 		}
 
 		methods := make([]w2sMethodTemplateData, 0, len(target.Methods))
@@ -375,6 +505,8 @@ func w2sServicesTemplateData(protoDir string, servicesInfo []service.ServiceInfo
 				AuthRequired: authRequired,
 				InputType:    csharpProtoTypeName(method.FullInputType, method.InputType, info.Package),
 				OutputType:   csharpProtoTypeName(method.FullOutputType, method.OutputType, info.Package),
+				RPCName:      qualifiedProtoName(info.Package, target.Name) + "." + method.Name,
+				RouteField:   method.RouteField,
 			})
 		}
 

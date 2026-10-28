@@ -1,0 +1,30 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// Swift tenant-routing fixture (issue #170): a platform C2S service, never
+// addressed by tenant, and the client package reaching both it and crew.
+
+syntax = "proto3";
+
+package harbor;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "harbor"};
+option (spec.grpc_c2s_client) = {service: "crew.CrewService"};
+option (spec.grpc_c2s_client) = {service: "harbor.HarborService"};
+option (spec.grpc_w2s_client) = {service: "crew.CrewService"};
+option (spec.grpc_w2s_client) = {service: "harbor.HarborService"};
+
+service HarborService {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  rpc GetHarborStatus(GetHarborStatusRequest) returns (GetHarborStatusResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
+  }
+}
+
+message GetHarborStatusRequest {}
+
+message GetHarborStatusResponse {
+  bool ready = 1;
+}

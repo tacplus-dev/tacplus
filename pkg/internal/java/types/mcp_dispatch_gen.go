@@ -10,6 +10,7 @@ import (
 	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -123,6 +124,12 @@ type javaMcpTool struct {
 	// its access contradicts nothing.
 	OwnerDefaultGuard string
 
+	// RouteField is the rpc's (spec.rpc).route_field on a tenant-routed
+	// service, nil on a platform one. Like the namespace field it is absent from
+	// Schema and refused as an argument; dispatch fills it from the session's
+	// tenant, so the model never names the tenant a call is directed at.
+	RouteField *parser.RouteFieldDescriptor
+
 	// Page is the PAGE-collection window, nil for every other rpc. A PAGE tool
 	// takes page_size/page_token as ordinary arguments and calls the same
 	// three-argument handler the gRPC PAGE wrapper calls.
@@ -199,12 +206,20 @@ func javaMcpClassName(serviceName string) string { return serviceName + "Mcp" }
 func javaMcpTools(svc *parser.ServiceInfo, servicePackage, outerClassName string,
 	crossPkgOuterClasses, crossPkgHelpers map[string]string, san *javaEgressSanitizer) ([]javaMcpTool, error) {
 	var tools []javaMcpTool
+	carrier := javaMcpCarrierMethod(svc)
 	for _, m := range svc.Methods {
 		if !m.IsMcpTool() {
 			continue
 		}
 		if err := javaMcpToolGeneratable(svc, m, servicePackage, san); err != nil {
 			return nil, err
+		}
+		// A routed tool takes its tenant from the session, which the carrier
+		// stamps from the token only when it is routed itself; the two are
+		// decided together (parser.IsTenantRouted), so a mismatch is a bug.
+		if routedCarrier := carrier != nil && carrier.RouteField != nil; (m.RouteField != nil) != routedCarrier {
+			return nil, fmt.Errorf("%s.%s: the MCP tool's route_field and its session carrier's disagree on whether %s is tenant-routed",
+				svc.Name, m.Name, svc.Name)
 		}
 		schema, err := javaMcpInputSchema(m, servicePackage, san)
 		if err != nil {
@@ -218,6 +233,10 @@ func javaMcpTools(svc *parser.ServiceInfo, servicePackage, outerClassName string
 		scalars, reqOK := []javaMcpScalarArg(nil), true
 		if !empty {
 			scalars, reqOK = san.mcpRequiredScalarArgs(m.FullInputType, servicePackage)
+			// The route field is the session's, not an argument the gate may send.
+			if m.RouteField != nil {
+				scalars = slices.DeleteFunc(scalars, func(s javaMcpScalarArg) bool { return s.Field == m.RouteField.Field })
+			}
 		}
 		respScalars, respOK := []javaMcpScalarArg(nil), true
 		if m.FullOutputType != "google.protobuf.Empty" {
@@ -244,6 +263,7 @@ func javaMcpTools(svc *parser.ServiceInfo, servicePackage, outerClassName string
 			NamespaceField:          san.mcpAnnotatedStringField(m.FullInputType, servicePackage, "namespace"),
 			StoreNamespaceRows:      san.mcpRowFields(m.FullOutputType, servicePackage, "store_namespace"),
 			OwnerDefaultGuard:       ownerDefaultGuard,
+			RouteField:              m.RouteField,
 			Page: javaMcpPageOf(m, resolveJavaMethodType(m.FullOutputType, m.OutputType, servicePackage, outerClassName, crossPkgOuterClasses),
 				crossPkgOuterClasses),
 		})
@@ -341,6 +361,8 @@ func javaMcpEmptyRequest(m *parser.MethodInfo) bool {
 //     (spec.store_namespace): the server computes these from the verified
 //     Caller. Dispatch refuses a call that names one anyway, rather than
 //     silently overwriting it.
+//   - the (spec.rpc).route_field of a tenant-routed rpc: the tenant the call
+//     is directed at is the session's, from its token, and is refused too.
 //   - the injected trace_id/noop pair: tacplus's own transport fields, not part
 //     of the rpc's user-facing contract.
 func javaMcpInputSchema(m *parser.MethodInfo, servicePackage string, san *javaEgressSanitizer) (string, error) {
@@ -360,6 +382,9 @@ func javaMcpInputSchema(m *parser.MethodInfo, servicePackage string, san *javaEg
 		if err != nil {
 			return "", err
 		}
+		if m.RouteField != nil {
+			javaMcpOmitRouteField(schema, m.RouteField.Field)
+		}
 	}
 	if m.IsPageCollection() {
 		javaMcpAnnotatePageSchema(schema, m.Resolved.DefaultPageSize, m.Resolved.MaxPageSize)
@@ -370,6 +395,24 @@ func javaMcpInputSchema(m *parser.MethodInfo, servicePackage string, san *javaEg
 		return "", fmt.Errorf("marshal input schema: %w", err)
 	}
 	return string(out), nil
+}
+
+// javaMcpOmitRouteField drops a tenant-routed rpc's (spec.rpc).route_field
+// from the top level of its request schema, required set included. It is the
+// session's tenant, filled by dispatch, and the model never names a tenant.
+// Only the top level: the route field is a field of the request itself.
+func javaMcpOmitRouteField(schema map[string]any, field string) {
+	if props, ok := schema["properties"].(map[string]any); ok {
+		delete(props, field)
+	}
+	if required, ok := schema["required"].([]string); ok {
+		required = slices.DeleteFunc(required, func(r string) bool { return r == field })
+		if len(required) == 0 {
+			delete(schema, "required")
+		} else {
+			schema["required"] = required
+		}
+	}
 }
 
 // javaMcpAnnotatePageSchema tells the model how to drive the two paging fields a
@@ -668,6 +711,10 @@ type javaMcpFileParams struct {
 	// drifting out of a second renderer that would have to re-derive every
 	// streaming and collection shape.
 	NonToolHandlerDecls []string
+	// RouteTenantFQN is the chassis RouteTenant class, through which a
+	// tenant-routed service's session tenant is read off the caller's
+	// namespace claim. Unused by a platform service.
+	RouteTenantFQN string
 }
 
 // generateJavaMcpDispatch renders the whole MCP termination for one service: the
@@ -684,6 +731,7 @@ func generateJavaMcpDispatch(svc *parser.ServiceInfo, tools []javaMcpTool, p jav
 		b.WriteString(javaMcpToolDispatch(svc.Name, t))
 	}
 	b.WriteString("    }\n") // close Surface
+	b.WriteString(javaMcpSessionTenant(svc, p))
 	b.WriteString(javaMcpResultHelpers())
 	b.WriteString(javaMcpTransport(svc.Name, p))
 	b.WriteString("}\n")
@@ -966,6 +1014,22 @@ func javaMcpToolDispatch(serviceName string, t javaMcpTool) string {
 %[1]s}
 `, ind, f.marker, f.field, javaQuote(f.field), f.why)
 	}
+	// (spec.rpc).route_field: the tenant this call is directed at is the
+	// session's. Refused under either name the decoder accepts, since a value
+	// that got through would be overwritten silently rather than refused.
+	if t.RouteField != nil {
+		names := fmt.Sprintf("argumentNames(request).contains(%s)", javaQuote(t.RouteField.Field))
+		if t.RouteField.JSONName != "" && t.RouteField.JSONName != t.RouteField.Field {
+			names += fmt.Sprintf(" || argumentNames(request).contains(%s)", javaQuote(t.RouteField.JSONName))
+		}
+		fmt.Fprintf(&b, `%[1]s// (spec.rpc).route_field %[2]s is the session's tenant, from its token, so
+%[1]s// it is absent from this tool's schema; a call that names it is refused.
+%[1]sif (%[3]s) {
+%[1]s    return toolError("%[2]s is set by the server from your session's tenant; it is not a tool argument");
+%[1]s}
+%[1]sfinal String __routeTenant = sessionTenant(caller);
+`, ind, t.RouteField.Field, names)
+	}
 
 	if t.EmptyRequest {
 		fmt.Fprintf(&b, `%[1]sif (!argumentNames(request).isEmpty()) {
@@ -973,8 +1037,12 @@ func javaMcpToolDispatch(serviceName string, t javaMcpTool) string {
 %[1]s}
 `, ind)
 	} else {
-		fmt.Fprintf(&b, "%[1]s%[2]s.Builder __b = %[2]s.newBuilder();\n%[1]sdecode(request, __b);\n%[1]s%[2]s __req = __b.build();\n",
-			ind, t.InputType)
+		fmt.Fprintf(&b, "%[1]s%[2]s.Builder __b = %[2]s.newBuilder();\n%[1]sdecode(request, __b);\n", ind, t.InputType)
+		if t.RouteField != nil {
+			// Before validation, which may require the field the model omits.
+			fmt.Fprintf(&b, "%[1]s__b.set%[2]s(__routeTenant);\n", ind, javaPascalField(t.RouteField.Field))
+		}
+		fmt.Fprintf(&b, "%[1]s%[2]s __req = __b.build();\n", ind, t.InputType)
 		if t.InputHelpers != "" {
 			fmt.Fprintf(&b, "%[1]s%[2]s.validate%[3]s(__req);\n", ind, t.InputHelpers, t.Method.InputType)
 		}
@@ -1136,6 +1204,59 @@ func javaMcpRowFilters(t javaMcpTool, ind string) string {
 	}
 	fmt.Fprintf(&b, "%s__resp = __fb.build();\n", ind)
 	return b.String()
+}
+
+// javaMcpSessionTenant renders the session tenant of a tenant-routed service's
+// MCP termination, "" for a platform service (whose carrier declares no route
+// field).
+//
+// The model must never be able to set the tenant (issue #170). The session's
+// tenant is the verified token's, and two seams consume it: the carrier, which
+// stamps it into every inbound frame's route field (mcp.McpRequest.tenant)
+// before the wrapper's generic route backstop checks that against the
+// instance's own tenant, and each routed tool's dispatch, which fills its
+// request's route field from it.
+func javaMcpSessionTenant(svc *parser.ServiceInfo, p javaMcpFileParams) string {
+	carrier := javaMcpCarrierMethod(svc)
+	if carrier == nil || carrier.RouteField == nil {
+		return ""
+	}
+	return fmt.Sprintf(`
+    /**
+    * sessionTenant is the tenant an MCP session acts in: the tid of the
+    * verified caller's namespace claim, /tenants/&lt;tid&gt; or any namespace
+    * below it. A caller of no tenant (a /system one) has no session here,
+    * PERMISSION_DENIED: every tool of this service is directed at a tenant,
+    * and the model is never the one to name it.
+    */
+    public static String sessionTenant(Caller caller) {
+        String tid = caller == null ? "" : %[1]s.tenantOfCaller(caller.getNamespace());
+        if (tid.isEmpty()) {
+            throw ProtoException.newErrPermissionDenied(null, "%%s",
+                    "an MCP session of %[2]s is opened in a tenant, and the caller's namespace names none");
+        }
+        return tid;
+    }
+
+    /**
+    * stampTenant binds one inbound carrier frame to the session's tenant, ahead
+    * of the route backstop that checks it against this instance's tenant: an
+    * empty %[3]s is set to the session's, an equal one passes, and any other is
+    * refused (PERMISSION_DENIED, ending the session). A frame never carries a
+    * tenant its session's token does not name. The refusal does not echo the
+    * value: this runs before the frame's own validation bounds it.
+    */
+    public static %[4]s stampTenant(String sessionTenant, %[4]s frame) {
+        if (frame.get%[5]s().isEmpty()) {
+            return frame.toBuilder().set%[5]s(sessionTenant).build();
+        }
+        if (!frame.get%[5]s().equals(sessionTenant)) {
+            throw ProtoException.newErrPermissionDenied(null, "%%s",
+                    "an MCP frame names another tenant than its session's");
+        }
+        return frame;
+    }
+`, p.RouteTenantFQN, svc.Name, carrier.RouteField.Field, p.FrameRequestType, javaPascalField(carrier.RouteField.Field))
 }
 
 // javaMcpResultHelpers renders the framing every tool shares.

@@ -292,7 +292,7 @@ func TestServiceManagersWireMixedAuthWrappersBeforeServing(t *testing.T) {
 			want: []string{
 				"from {{.PythonPackageBase}}.chassis.grpcserver import Authorizer",
 				"{{.WrapperVarName}}.set_authorize_func(lambda metadata, full_method, req=None, _authorizer=authorizer: _authorizer.authorize(metadata, full_method, req))",
-				"{{.WrapperVarName}}.set_authenticate_func(lambda metadata, target_namespace=None, _authorizer=authorizer: _authorizer.authenticate(metadata, target_namespace))",
+				"{{.WrapperVarName}}.set_authenticate_func(lambda metadata, target_namespace=None, full_method=None, _authorizer=authorizer: _authorizer.authenticate(metadata, target_namespace, full_method))",
 				"if not {{.WrapperVarName}}.has_authorizer():",
 			},
 			message: "Python ServiceManager must wire metadata-aware auth callbacks before registering wrappers",
@@ -314,7 +314,7 @@ func TestServiceManagersWireMixedAuthWrappersBeforeServing(t *testing.T) {
 			path: "pkg/templates/typescript/types/service_manager.ts.tmpl",
 			want: []string{
 				"{{.WrapperVarName}}.setAuthorizeFunc((fullMethod, metadata, req) => authorizer.authorize(metadata, fullMethod, req));",
-				"{{.WrapperVarName}}.setAuthenticateFunc((metadata, targetNamespace) => authorizer.authenticate(metadata, targetNamespace));",
+				"{{.WrapperVarName}}.setAuthenticateFunc((metadata, targetNamespace, fullMethod) => authorizer.authenticate(metadata, targetNamespace, fullMethod));",
 				"if (!{{.WrapperVarName}}.hasAuthorizer()) {",
 			},
 			message: "TypeScript ServiceManager must assert mandatory auth wiring before serving",

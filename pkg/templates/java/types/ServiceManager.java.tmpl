@@ -208,7 +208,12 @@ public class ServiceManager implements AutoCloseable {
 {{- if .HasGrpcS2SClients}}
 {{- range .TargetServices}}
 {{- if ne .ServiceID $.StateStoreServiceID}}
+{{- if .TenantRouted}}
+    /** {{.ServiceID}} is tenant-routed: one pool per tenant, each call to the tenant its request names. */
+    private final {{$.ChassisBase}}.serviceconnection.TenantConnections {{.FieldName}};
+{{- else}}
     private final ServiceConnection {{.FieldName}};
+{{- end}}
 {{- end}}
 	{{- end}}
 	    private final GrpcClients grpcClients;
@@ -349,7 +354,11 @@ public class ServiceManager implements AutoCloseable {
 {{- if .HasGrpcS2SClients}}
 {{- range .TargetServices}}
 {{- if ne .ServiceID $.StateStoreServiceID}}
+{{- if .TenantRouted}}
+        this.{{.FieldName}} = new {{$.ChassisBase}}.serviceconnection.TenantConnections("{{.ServiceID}}", channelFactory);
+{{- else}}
         this.{{.FieldName}} = new ServiceConnection("{{.ServiceID}}", channelFactory);
+{{- end}}
 {{- end}}
 {{- end}}
         this.grpcClients = new GrpcClients({{range $i, $t := .TargetServices}}{{if $i}}, {{end}}new ServiceConnection.ChannelProvider({{if eq $t.ServiceID $.StateStoreServiceID}}stateStoreConn{{else}}{{$t.FieldName}}{{end}}){{end}}, aud -> () -> {
@@ -2327,9 +2336,12 @@ public class ServiceManager implements AutoCloseable {
         final long readinessCheckIntervalMs = 1000;
         RequiredChannels required = new RequiredChannels(java.util.List.of(
 {{- if .S2STargetsRequired}}
-{{- range $i, $t := .TargetServices}}{{if $i}},{{end}}
+{{- /* A tenant-routed target's per-tenant pools say nothing about whether this
+       service can do its job (a fleet may run no tenant at all): it does not gate readiness. */}}
+{{- $first := true}}
+{{- range $t := .TargetServices}}{{if not $t.TenantRouted}}{{if not $first}},{{end}}{{$first = false}}
                 {{if eq $t.ServiceID $.StateStoreServiceID}}stateStoreConn{{else}}{{$t.FieldName}}{{end}}
-{{- end}}
+{{- end}}{{end}}
 {{- end}}
         ), streams);
         Boolean serving = null;

@@ -920,7 +920,7 @@ export class ServiceManager {
 {{- end}}
     {{.WrapperVarName}}.registerMethodAuth(authorizer);
     {{.WrapperVarName}}.setAuthorizeFunc((fullMethod, metadata, req) => authorizer.authorize(metadata, fullMethod, req));
-    {{.WrapperVarName}}.setAuthenticateFunc((metadata, targetNamespace) => authorizer.authenticate(metadata, targetNamespace));
+    {{.WrapperVarName}}.setAuthenticateFunc((metadata, targetNamespace, fullMethod) => authorizer.authenticate(metadata, targetNamespace, fullMethod));
 {{- if not .AuthDisabled}}
     if (!{{.WrapperVarName}}.hasAuthorizer()) {
       throw new Error('authorizer not wired for {{.ServiceName}} (build/SM bug) - mandatory-auth service cannot serve without an authorizer');

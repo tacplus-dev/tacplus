@@ -176,6 +176,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 	hasRequiresDevice := false
 	hasCursor := false
 	hasPage := false
+	hasRoute := false
 	crossPkgHelpers := make(map[string]string)
 	for pkg, dir := range info.CrossPackageTypes {
 		if dir == "" {
@@ -246,6 +247,9 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		if method.HasDeviceGate() {
 			hasRequiresDevice = true
 		}
+		if javaGrpcClientRoute(method).routed {
+			hasRoute = true
+		}
 		inputValidator := javaW2SValidationRef(method.FullInputType, method.InputType, info.Package, crossPkgHelpers)
 		outputValidator := javaW2SValidationRef(method.FullOutputType, method.OutputType, info.Package, crossPkgHelpers)
 		if strings.HasPrefix(inputValidator, "Helpers.") || strings.HasPrefix(outputValidator, "Helpers.") {
@@ -277,6 +281,9 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 	}
 	if hasPage {
 		importLines[fmt.Sprintf("import %s.chassis.collection.CollectionRuntime;", svc.Config.JavaPackageBase)] = struct{}{}
+	}
+	if hasRoute {
+		importLines[fmt.Sprintf("import %s.chassis.serviceconnection.RouteTenant;", svc.Config.JavaPackageBase)] = struct{}{}
 	}
 
 	var sortedImportLines []string
@@ -419,8 +426,82 @@ func javaGrpcResponseObserverWrapper(outputType, outputValidator string) (string
 `, outputType, outputValidation), "validatingResponseObserver"
 }
 
+// javaGrpcClientRouteInfo renders the (spec.rpc).route_field seams of one
+// typed S2S client method. The zero value (a platform rpc) renders nothing, so
+// a platform client is exactly what it was before tenant routing.
+type javaGrpcClientRouteInfo struct {
+	routed bool
+	field  string // proto name, for messages
+	getter string // generated Java getter on the request
+}
+
+func javaGrpcClientRoute(method *parser.MethodInfo) javaGrpcClientRouteInfo {
+	if method.RouteField == nil || method.FullInputType == "google.protobuf.Empty" {
+		return javaGrpcClientRouteInfo{}
+	}
+	return javaGrpcClientRouteInfo{
+		routed: true,
+		field:  method.RouteField.Field,
+		getter: "get" + javaPascalField(method.RouteField.Field),
+	}
+}
+
+// fromRequest reads and checks the target tenant off a validated request.
+func (r javaGrpcClientRouteInfo) fromRequest(indent string) string {
+	if !r.routed {
+		return ""
+	}
+	return fmt.Sprintf("\n%[1]s// (spec.rpc).route_field: this call goes to the tenant its request names.\n%[1]sfinal String __routeTenant = RouteTenant.require(%[2]q, request.%[3]s());",
+		indent, r.field, r.getter)
+}
+
+// streamParam is the explicit tenant a routed stream is opened for.
+func (r javaGrpcClientRouteInfo) streamParam() string {
+	if !r.routed {
+		return ""
+	}
+	return "String tenant, "
+}
+
+// streamOpen checks a routed stream's tenant before the stream is opened.
+func (r javaGrpcClientRouteInfo) streamOpen(indent string) string {
+	if !r.routed {
+		return ""
+	}
+	return fmt.Sprintf("%[1]s// (spec.rpc).route_field: the stream's tenant is fixed at open.\n%[1]sfinal String __routeTenant = RouteTenant.require(%[2]q, tenant);\n",
+		indent, r.field)
+}
+
+// streamMessage refuses a message routed to another tenant than its stream's.
+func (r javaGrpcClientRouteInfo) streamMessage(indent string) string {
+	if !r.routed {
+		return ""
+	}
+	return fmt.Sprintf(`%[1]sif (!__routeTenant.equals(request.%[3]s())) {
+%[1]s    throw new ProtoException(ProtoException.INVALID_ARGUMENT,
+%[1]s            "route field %[2]s of a message differs from the stream's tenant " + __routeTenant);
+%[1]s}
+`, indent, r.field, r.getter)
+}
+
+// onStub routes every stub the method calls through to the checked tenant.
+// The stub statements are this generator's own fixed spellings above.
+func (r javaGrpcClientRouteInfo) onStub(body string) string {
+	if !r.routed {
+		return body
+	}
+	for _, stub := range []string{"var stub = blockingStubWithDeadline();", "var stub = blockingStub;", "var stub = asyncStub;"} {
+		body = strings.ReplaceAll(body, stub, strings.TrimSuffix(stub, ";")+".withOption(RouteTenant.CALL_OPTION, __routeTenant);")
+	}
+	return body
+}
+
 // generateJavaGrpcClientMethod generates a Java method for the gRPC client wrapper.
 func generateJavaGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, inputType, outputType, inputValidator, outputValidator string, crossPkgOuterClasses map[string]string) string {
+	return javaGrpcClientRoute(method).onStub(generateJavaGrpcClientMethodBody(svc, method, inputType, outputType, inputValidator, outputValidator, crossPkgOuterClasses))
+}
+
+func generateJavaGrpcClientMethodBody(svc *parser.ServiceInfo, method *parser.MethodInfo, inputType, outputType, inputValidator, outputValidator string, crossPkgOuterClasses map[string]string) string {
 	// Use protoc's naming convention: lowercase first letter only.
 	// e.g. "ExecuteDQL" → "executeDQL" (not "executeDql").
 	// A snake_case round-trip would mangle all-caps acronyms.
@@ -447,6 +528,15 @@ func generateJavaGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
 	if !emptyOutput {
 		streamOutputValidation = javaW2SValidationStatement("response", outputValidator, "                ")
 	}
+	// (spec.rpc).route_field: a tenant-routed rpc's call goes to the tenant its
+	// request names. A unary or server-streaming call reads the field after
+	// validation and refuses an empty/malformed one before any network call;
+	// a client-streaming or bidi stream's tenant is fixed at open by an
+	// explicit argument, and each message must name the same tenant.
+	route := javaGrpcClientRoute(method)
+	if route.routed && !method.ClientStreaming {
+		inputValidation += route.fromRequest("        ")
+	}
 
 	if method.ClientStreaming && method.ServerStreaming {
 		// Bidirectional streaming authenticates once on stream open. Message sends
@@ -456,14 +546,14 @@ func generateJavaGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
 		return fmt.Sprintf(`    /**
      * %s calls bidirectional streaming RPC.
      */
-    public StreamObserver<%s> %s(StreamObserver<%s> responseObserver) {
-	        var stub = asyncStub;
+    public StreamObserver<%s> %s(%sStreamObserver<%s> responseObserver) {
+%s	        var stub = asyncStub;
 %s
 %s
         StreamObserver<%s> delegate = stub.%s(%s);
         return new StreamObserver<%s>() {
             @Override public void onNext(%s request) {
-%s                delegate.onNext(request);
+%s%s                delegate.onNext(request);
             }
             @Override public void onError(Throwable t) {
                 delegate.onError(t);
@@ -473,7 +563,7 @@ func generateJavaGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
             }
         };
     }
-`, method.Name, inputType, methodName, outputType, javaGrpcAuthBlock(authRequired, "        "), responseObserverSetup, inputType, methodName, responseObserverArg, inputType, inputType, streamInputValidation)
+`, method.Name, inputType, methodName, route.streamParam(), outputType, route.streamOpen("        "), javaGrpcAuthBlock(authRequired, "        "), responseObserverSetup, inputType, methodName, responseObserverArg, inputType, inputType, streamInputValidation, route.streamMessage("                "))
 	}
 
 	if method.ServerStreaming && method.IsTier2SnapshotCollection() {
@@ -612,14 +702,14 @@ func generateJavaGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
 		return fmt.Sprintf(`    /**
      * %s calls client streaming RPC.
      */
-    public StreamObserver<%s> %s(StreamObserver<%s> responseObserver) {
-	        var stub = asyncStub;
+    public StreamObserver<%s> %s(%sStreamObserver<%s> responseObserver) {
+%s	        var stub = asyncStub;
 %s
 %s
         StreamObserver<%s> delegate = stub.%s(%s);
         return new StreamObserver<%s>() {
             @Override public void onNext(%s request) {
-%s                delegate.onNext(request);
+%s%s                delegate.onNext(request);
             }
             @Override public void onError(Throwable t) {
                 delegate.onError(t);
@@ -629,7 +719,7 @@ func generateJavaGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
             }
         };
     }
-`, method.Name, inputType, methodName, outputType, javaGrpcAuthBlock(authRequired, "        "), responseObserverSetup, inputType, methodName, responseObserverArg, inputType, inputType, streamInputValidation)
+`, method.Name, inputType, methodName, route.streamParam(), outputType, route.streamOpen("        "), javaGrpcAuthBlock(authRequired, "        "), responseObserverSetup, inputType, methodName, responseObserverArg, inputType, inputType, streamInputValidation, route.streamMessage("                "))
 	}
 
 	if method.IsPageCollection() {

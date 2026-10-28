@@ -44,8 +44,16 @@ public final class RestDispatch {
      * tokens.
      */
     public interface Dispatcher {
-        /** Resolves a gRPC channel for the given service; a failure is a gRPC status. */
-        Channel channel(String serviceId) throws StatusException;
+        /**
+         * Resolves a gRPC channel for the given service; a failure is a gRPC
+         * status. tenant is the tid the call is routed to, read off the
+         * request's (spec.rpc).route_field and already validated, and "" for a
+         * platform service. A tenant-routed call must reach an instance of
+         * that tenant only (its health report's spiffe_id namespace is exactly
+         * /tenants/&lt;tenant&gt;): never another tenant's, never a shared
+         * one, and UNAVAILABLE when the tenant has none.
+         */
+        Channel channel(String serviceId, String tenant) throws StatusException;
 
         /**
          * Resolves the authorization header value for outgoing requests to the
@@ -160,11 +168,22 @@ public final class RestDispatch {
         public final String redirectField;
         /** The same field's proto name, the key the Java Helpers emit; redirectResponse accepts either spelling. */
         public final String redirectFieldProto;
+        /**
+         * (spec.rpc).route_field as declared (the proto field name): the
+         * request field whose tid names the tenant whose instance receives the
+         * call. "" for a platform service, which is never addressed by tenant.
+         */
+        public final String routeField;
+        /** The route field's proto3 JSON name; "" for a platform route. */
+        public final String routeFieldJson;
+        /** The route field's wire number, for a router that reads raw frames (routeTenantFromWire); 0 for a platform route. */
+        public final int routeFieldNumber;
 
         RouteInfo(String httpPath, String grpcPath, String serviceId, String entitlementService,
                 List<String> httpMethods, AuthPolicy authPolicy, List<String> entitlementScopes,
                 String capabilityScope, boolean serverStreaming, boolean clientStreaming,
-                String targetNamespaceField, boolean formBody, String redirectField, String redirectFieldProto) {
+                String targetNamespaceField, boolean formBody, String redirectField, String redirectFieldProto,
+                String routeField, String routeFieldJson, int routeFieldNumber) {
             this.httpPath = httpPath;
             this.grpcPath = grpcPath;
             this.serviceId = serviceId;
@@ -179,6 +198,9 @@ public final class RestDispatch {
             this.formBody = formBody;
             this.redirectField = redirectField;
             this.redirectFieldProto = redirectFieldProto;
+            this.routeField = routeField;
+            this.routeFieldJson = routeFieldJson;
+            this.routeFieldNumber = routeFieldNumber;
         }
     }
 
@@ -199,9 +221,62 @@ public final class RestDispatch {
             {{javaStr $r.TargetNamespaceField}},
             {{$r.FormBody}},
             {{javaStr $r.RedirectField}},
-            {{javaStr $r.RedirectFieldProto}})
+            {{javaStr $r.RedirectFieldProto}},
+            {{javaStr $r.RouteField}},
+            {{javaStr $r.RouteFieldJSON}},
+            {{$r.RouteFieldNumber}})
 {{- end}}
     );
+
+    /**
+     * Whether s is a tid: exactly 8 characters of [0-9a-z]. Nothing else is
+     * one; a value is never trimmed or case-folded.
+     */
+    public static boolean validTenantId(String s) {
+        return {{.PackageBase}}.chassis.serviceconnection.RouteTenant.validTenantId(s);
+    }
+
+    /**
+     * Returns the tid a routed call goes to: value, the route's
+     * (spec.rpc).route_field read off the decoded request, when it is a tid.
+     * An empty or malformed value is refused as HTTP 400 naming the field,
+     * before anything is dialled; it is never defaulted from the caller's
+     * token. A platform route (no route field) returns "".
+     */
+    public static String routeTenant(RouteInfo route, String value) throws HttpError {
+        if (route.routeField == null || route.routeField.isEmpty()) {
+            return "";
+        }
+        return routeTenantValue(route.routeField, value);
+    }
+
+    static String routeTenantValue(String field, String value) throws HttpError {
+        try {
+            return {{.PackageBase}}.chassis.serviceconnection.RouteTenant.require(field, value);
+        } catch ({{.ProtoExceptionFqn}} e) {
+            throw httpError(400, e.getMessage());
+        }
+    }
+
+    /**
+     * Returns the tid a call through the gateway's generic gRPC proxy goes to,
+     * read off the raw bytes of its (first) request message: the protobuf wire
+     * encoding is walked (malformed input refused), the LAST occurrence of the
+     * route field with wire type LEN taken, as proto3 does, decoded as UTF-8
+     * and checked as a tid. A missing field is empty, and refused. A refusal
+     * is INVALID_ARGUMENT, before anything is dialled. A platform route (no
+     * route field) returns "" without reading the frame.
+     */
+    public static String routeTenantFromWire(byte[] frame, RouteInfo route) throws StatusException {
+        if (route.routeFieldNumber == 0 || route.routeField == null || route.routeField.isEmpty()) {
+            return "";
+        }
+        try {
+            return {{.PackageBase}}.chassis.serviceconnection.RouteTenant.fromWire(frame, route.routeFieldNumber, route.routeField);
+        } catch ({{.ProtoExceptionFqn}} e) {
+            throw Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asException();
+        }
+    }
 
     /**
      * Turns a formBody route's application/x-www-form-urlencoded request body
@@ -304,9 +379,36 @@ public final class RestDispatch {
         switch (grpcPath) {
 {{- range .UnaryArms}}
             case {{javaStr .GrpcPath}}: {
+{{- if .RouteField}}
+                // Tenant-routed: decode and validate the request, then read the
+                // target tenant off its route field; an empty or malformed one
+                // is refused here, before anything is dialled.
+                {{.ReqType}} req;
+                try {
+                    req = {{.FromJson}}(body);
+                } catch ({{$.ProtoExceptionFqn}} e) {
+                    throw httpError(400, "invalid request body: " + e.getMessage());
+                }
+{{- if .ValidateInput}}
+                try {
+                    {{.ValidateInput}}(req);
+                } catch ({{$.ProtoExceptionFqn}} e) {
+                    throw httpError(400, "request validation failed: " + e.getMessage());
+                }
+{{- end}}
+                String tenant = routeTenantValue({{javaStr .RouteField}}, req.{{.RouteFieldGetter}}());
                 Channel channel;
                 try {
-                    channel = dispatcher.channel({{javaStr .ServiceID}});
+                    channel = dispatcher.channel({{javaStr .ServiceID}}, tenant);
+                } catch (StatusException e) {
+                    throw grpcErr(e.getStatus());
+                }
+                {{.StubClass}}.{{.StubName}} stub = withMetadata(
+                    {{.StubClass}}.newBlockingStub(channel), dispatcher.authHeader({{javaStr .ServiceID}}), requestId);
+{{- else}}
+                Channel channel;
+                try {
+                    channel = dispatcher.channel({{javaStr .ServiceID}}, "");
                 } catch (StatusException e) {
                     throw grpcErr(e.getStatus());
                 }
@@ -327,6 +429,7 @@ public final class RestDispatch {
                 } catch ({{$.ProtoExceptionFqn}} e) {
                     throw httpError(400, "request validation failed: " + e.getMessage());
                 }
+{{- end}}
 {{- end}}
 {{- end}}
 {{- if .IsEmptyOutput}}
@@ -381,9 +484,45 @@ public final class RestDispatch {
         switch (grpcPath) {
 {{- range .StreamArms}}
             case {{javaStr .GrpcPath}}: {
+{{- if .RouteField}}
+                // Tenant-routed: decode and validate the request, then read the
+                // target tenant off its route field; an empty or malformed one
+                // is refused here, before anything is dialled.
+                {{.ReqType}} req;
+                try {
+                    req = {{.FromJson}}(body);
+                } catch ({{$.ProtoExceptionFqn}} e) {
+                    httpError(400, "invalid request body: " + e.getMessage()).write(w);
+                    return;
+                }
+{{- if .ValidateInput}}
+                try {
+                    {{.ValidateInput}}(req);
+                } catch ({{$.ProtoExceptionFqn}} e) {
+                    httpError(400, "request validation failed: " + e.getMessage()).write(w);
+                    return;
+                }
+{{- end}}
+                String tenant;
+                try {
+                    tenant = routeTenantValue({{javaStr .RouteField}}, req.{{.RouteFieldGetter}}());
+                } catch (HttpError e) {
+                    e.write(w);
+                    return;
+                }
                 Channel channel;
                 try {
-                    channel = dispatcher.channel({{javaStr .ServiceID}});
+                    channel = dispatcher.channel({{javaStr .ServiceID}}, tenant);
+                } catch (StatusException e) {
+                    grpcErr(e.getStatus()).write(w);
+                    return;
+                }
+                {{.StubClass}}.{{.StubName}} stub = withMetadata(
+                    {{.StubClass}}.newBlockingStub(channel), dispatcher.authHeader({{javaStr .ServiceID}}), requestId);
+{{- else}}
+                Channel channel;
+                try {
+                    channel = dispatcher.channel({{javaStr .ServiceID}}, "");
                 } catch (StatusException e) {
                     grpcErr(e.getStatus()).write(w);
                     return;
@@ -407,6 +546,7 @@ public final class RestDispatch {
                     httpError(400, "request validation failed: " + e.getMessage()).write(w);
                     return;
                 }
+{{- end}}
 {{- end}}
 {{- end}}
                 // The backend's answer to the request itself (a status before

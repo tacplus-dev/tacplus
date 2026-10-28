@@ -229,6 +229,11 @@ func generateRestClient(svc ServiceInfo, info *parser.ProtoInfo, fileDesc *parse
 		buf.WriteString("}\n\n")
 	}
 
+	if helpers := tsRouteHelpers(targetService); helpers != "" {
+		buf.WriteString(strings.TrimPrefix(helpers, "\n"))
+		buf.WriteString("\n")
+	}
+
 	fmt.Fprintf(&buf, "/**\n * %s provides a typed REST client for %s.\n", clientName, svc.ServiceName)
 	buf.WriteString(" * Each method corresponds to an RPC with a google.api.http annotation,\n")
 	buf.WriteString(" * with the HTTP path baked in from the proto definition.\n")
@@ -263,6 +268,11 @@ func generateRestClient(svc ServiceInfo, info *parser.ProtoInfo, fileDesc *parse
 
 // generateTsRestClientMethod generates a TypeScript method for the REST client.
 func generateTsRestClientMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePackage string) string {
+	// A routed rpc's request is checked before the request is made.
+	return tsInjectAtMethodStart(generateTsRestClientMethodBody(svc, method, servicePackage), tsRouteCheck(method, "request", "        "))
+}
+
+func generateTsRestClientMethodBody(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePackage string) string {
 	methodLower := strutil.ToLowerCamelCase(method.Name)
 
 	// Resolve type prefix for cross-package types
@@ -421,6 +431,11 @@ func generateTsRestClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 // generateTsRestClientStreamMethod generates a TypeScript streaming method for the REST client.
 // Server-streaming RPCs are exposed over REST via grpc-gateway as NDJSON responses.
 func generateTsRestClientStreamMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, info *parser.ProtoInfo) string {
+	// A routed rpc's request is checked before the request is made.
+	return tsInjectAtMethodStart(generateTsRestClientStreamMethodBody(svc, method, info), tsRouteCheck(method, "request", "        "))
+}
+
+func generateTsRestClientStreamMethodBody(svc *parser.ServiceInfo, method *parser.MethodInfo, info *parser.ProtoInfo) string {
 	methodLower := strutil.ToLowerCamelCase(method.Name)
 
 	// Resolve type prefix for cross-package types

@@ -216,6 +216,9 @@ func generateJavaW2SClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		}
 
 		authRequired := !svc.AuthDisabled && !method.AuthDisabled
+		if javaRouteTenantCheck(method, "request") != "" {
+			neededImports[fmt.Sprintf("import %s.chassis.serviceconnection.RouteTenant;", svc.Config.JavaPackageBase)] = struct{}{}
+		}
 		result := generateJavaW2SClientMethod(targetService, method, inputType, outputType, svc.ServiceName+"W2SClient", authRequired, inputValidator, outputValidator)
 		methods.WriteString(result.Method)
 		methods.WriteString("\n")
@@ -313,6 +316,16 @@ func javaW2SValidationStatement(varName, validator, indent string) string {
 	return fmt.Sprintf("%s%s(%s);\n", indent, validator, varName)
 }
 
+// javaRouteTenantCheck is the (spec.rpc).route_field check on the request
+// valueExpr names, or "" for a platform rpc: RouteTenant.require refuses an
+// empty or malformed tid with INVALID_ARGUMENT naming the field.
+func javaRouteTenantCheck(method *parser.MethodInfo, valueExpr string) string {
+	if method.RouteField == nil || method.FullInputType == "google.protobuf.Empty" {
+		return ""
+	}
+	return fmt.Sprintf("RouteTenant.require(%q, %s.get%s());", method.RouteField.Field, valueExpr, javaPascalField(method.RouteField.Field))
+}
+
 func javaW2SValidatorLambda(validator string) string {
 	if validator == "" {
 		return "null"
@@ -329,6 +342,17 @@ func generateJavaW2SClientMethod(svc *parser.ServiceInfo, method *parser.MethodI
 	inputValidation := javaW2SValidationStatement("request", inputValidator, "        ")
 	bidiInputValidation := javaW2SValidationStatement("message", inputValidator, "            ")
 	inputValidatorLambda := javaW2SValidatorLambda(inputValidator)
+	// (spec.rpc).route_field: the gateway routes by it, so an empty or
+	// malformed one is refused here, before anything is sent, on every message.
+	if route := javaRouteTenantCheck(method, "request"); route != "" && !isEmptyInput {
+		inputValidation += "        " + route + "\n"
+		bidiInputValidation += "            " + javaRouteTenantCheck(method, "message") + "\n"
+		validate := ""
+		if inputValidator != "" {
+			validate = inputValidator + "(msg); "
+		}
+		inputValidatorLambda = "msg -> { " + validate + javaRouteTenantCheck(method, "msg") + " }"
+	}
 	outputValidatorLambda := javaW2SValidatorLambda(outputValidator)
 
 	if method.ClientStreaming && method.ServerStreaming {

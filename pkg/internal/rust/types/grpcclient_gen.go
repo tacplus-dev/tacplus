@@ -112,6 +112,9 @@ type TargetServiceInfo struct {
 	StructName   string // e.g., "IdentityClients", "OauthClients"
 	FieldName    string // e.g., "identity_clients", "oauth_clients"
 	AccessorName string // e.g., "identity", "oauth"
+	// TenantRouted: the target is a tenant-owned service whose rpcs declare
+	// (spec.rpc).route_field, so its connection is one pool per tenant.
+	TenantRouted bool
 }
 
 // CollectTargetServices returns deduplicated target services for SM template data.
@@ -540,14 +543,50 @@ func rustGrpcInitialStreamAuthBlock(authRequired bool) string {
 `
 }
 
+// rustClientRouteTenant reads a routed rpc's (spec.rpc).route_field off the
+// request held by `reqVar` (a tonic::Request) and refuses an empty or
+// malformed one, INVALID_ARGUMENT, before any network call. Empty for a
+// platform rpc.
+func rustClientRouteTenant(method *parser.MethodInfo, reqVar, indent string) string {
+	if method.RouteField == nil {
+		return ""
+	}
+	return fmt.Sprintf("%slet route_tenant = servicemanager::tenant_route::route_tenant(%s, &%s.get_ref().%s)?;\n",
+		indent, rustQuote(method.RouteField.Field), reqVar, rustRequestFieldIdent(method.RouteField.Field))
+}
+
+// rustClientStreamRouteCheck is a routed stream handle's per-message check:
+// the message's route field must be a tid and the tenant the stream was opened
+// to. Empty for a platform rpc.
+func rustClientStreamRouteCheck(method *parser.MethodInfo) string {
+	if method.RouteField == nil {
+		return ""
+	}
+	field, ident := method.RouteField.Field, rustRequestFieldIdent(method.RouteField.Field)
+	return fmt.Sprintf(`        servicemanager::tenant_route::route_tenant(%[1]s, &msg.%[2]s)?;
+        if msg.%[2]s != self.tenant {
+            return Err(tonic::Status::invalid_argument(format!(
+                "route field %[3]s names tenant {}, but this stream is open to tenant {}",
+                msg.%[2]s, self.tenant
+            )));
+        }
+`, rustQuote(field), ident, strings.Trim(rustQuote(field), `"`))
+}
+
 func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePkg string, crossPkgTypes map[string]string) (grpcMethodResult, error) {
 	methodSnake := prostSnakeName(method.Name)
 	inputType, outputType := resolveRustTypeQualified(method, servicePkg, crossPkgTypes)
 	tonicClientName := tonicServiceTypeName(svc.Name) + "Client"
 	authRequired := grpcClientAuthRequired(svc, method)
+	routed := method.RouteField != nil
 
-	// channelResolve creates a tonic client from the channel provider on each call.
-	channelResolve := fmt.Sprintf("let channel = self.channel_provider.channel().await?;\n        let mut client = %s::new(channel);", tonicClientName)
+	// channelResolve creates a tonic client from the channel provider on each
+	// call: for a routed rpc, the channel to the tenant its route field names.
+	channelExpr := "self.channel_provider.channel()"
+	if routed {
+		channelExpr = "self.channel_provider.channel_for_tenant(&route_tenant)"
+	}
+	channelResolve := fmt.Sprintf("let channel = %s.await?;\n        let mut client = %s::new(channel);", channelExpr, tonicClientName)
 
 	if method.ClientStreaming && method.ServerStreaming {
 		// Bidirectional streaming — managed lifecycle with reconnection.
@@ -576,6 +615,7 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
 			AuthRequired       bool
 			RequestValidation  string
 			ResponseValidation string
+			Routed             bool
 		}{
 			MethodName:         method.Name,
 			MethodSnake:        methodSnake,
@@ -587,6 +627,7 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
 			AuthRequired:       authRequired,
 			RequestValidation:  rustGrpcStreamValueValidation("msg", method.FullInputType, "tonic::Status::invalid_argument(format!(\"validation failed: {e}\"))"),
 			ResponseValidation: rustGrpcBidiResponseValidation("resp", method.FullOutputType),
+			Routed:             routed,
 		}
 
 		tmpl, err := template.New("bidi").Parse(tmplStr)
@@ -600,20 +641,25 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
 		}
 
 		// Append the handle struct (generated outside the impl block by the caller)
+		tenantField := ""
+		if routed {
+			tenantField = "    /// The tenant this stream was opened to: every message must name it.\n    tenant: String,\n"
+		}
 		handleStruct := fmt.Sprintf("\n/// Handle for the managed %s bidirectional stream.\n"+
 			"/// Send messages via send(). The stream reconnects automatically.\n"+
 			"#[derive(Clone)]\n"+
 			"pub struct %s {\n"+
 			"    tx: tokio::sync::mpsc::Sender<%s>,\n"+
+			"%s"+
 			"}\n\n"+
 			"impl %s {\n"+
 			"    /// Send a message on the bidi stream.\n"+
 			"    pub async fn send(&self, msg: %s) -> Result<(), tonic::Status> {\n"+
-			"%s"+
+			"%s%s"+
 			"        self.tx.send(msg).await.map_err(|_| tonic::Status::unavailable(\"bidi stream closed\"))\n"+
 			"    }\n"+
 			"}\n",
-			method.Name, handleType, inputType, handleType, inputType, data.RequestValidation)
+			method.Name, handleType, inputType, tenantField, handleType, inputType, data.RequestValidation, rustClientStreamRouteCheck(method))
 
 		return grpcMethodResult{method: buf.String(), extraType: handleStruct}, nil
 	}
@@ -629,7 +675,7 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
         request: impl tonic::IntoRequest<%s>,
     ) -> Result<Vec<%s>, tonic::Status> {
 	        let %sreq = request.into_request();
-%s
+%s%s
 	        %s
 	        self.apply_outbound_timeout(&mut req);
 	        %s
@@ -639,7 +685,7 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
             items.push(item);
         }
         Ok(items)
-    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, reqMut, rustGrpcRequestValidation(method, "req"), auth, channelResolve, methodSnake), usesOutboundTimeout: true}, nil
+    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, reqMut, rustGrpcRequestValidation(method, "req"), rustClientRouteTenant(method, "req", "        "), auth, channelResolve, methodSnake), usesOutboundTimeout: true}, nil
 	}
 
 	if method.ServerStreaming && method.IsWatchCollection() {
@@ -653,11 +699,11 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
         request: impl tonic::IntoRequest<%s>,
     ) -> Result<tonic::Response<tonic::Streaming<%s>>, tonic::Status> {
 	        let %sreq = request.into_request();
-%s
+%s%s
 	        %s
 	        %s
 	        client.%s(req).await
-    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, reqMut, rustGrpcRequestValidation(method, "req"), auth, channelResolve, methodSnake)}, nil
+    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, reqMut, rustGrpcRequestValidation(method, "req"), rustClientRouteTenant(method, "req", "        "), auth, channelResolve, methodSnake)}, nil
 	}
 
 	if method.ServerStreaming {
@@ -671,18 +717,33 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
         request: impl tonic::IntoRequest<%s>,
     ) -> Result<tonic::Response<tonic::Streaming<%s>>, tonic::Status> {
 	        let %sreq = request.into_request();
-%s
+%s%s
 	        %s
 	        %s
 	        client.%s(req).await
-    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, reqMut, rustGrpcRequestValidation(method, "req"), auth, channelResolve, methodSnake)}, nil
+    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, reqMut, rustGrpcRequestValidation(method, "req"), rustClientRouteTenant(method, "req", "        "), auth, channelResolve, methodSnake)}, nil
 	}
 
 	if method.ClientStreaming {
 		// Client streaming
 		handleType := fmt.Sprintf("%sClientStream", strutil.ToPascalCase(method.Name))
+		// A routed stream's tenant is fixed when it is opened: the open method
+		// takes it, refuses a non-tid before anything is dialled, and the
+		// handle refuses a message routed to any other tenant.
+		openSig := fmt.Sprintf("pub fn %s(&self) -> %s {", methodSnake, handleType)
+		streamChannel := "cp.channel()"
+		handleOpen, handleTenant, handleClose := handleType+" {", "", "        }"
+		tenantField := ""
+		if routed {
+			openSig = fmt.Sprintf("pub fn %s(&self, tenant: &str) -> Result<%s, tonic::Status> {\n"+
+				"        let tenant = servicemanager::tenant_route::route_tenant(\"tenant\", tenant)?;\n"+
+				"        let stream_tenant = tenant.clone();", methodSnake, handleType)
+			streamChannel = "cp.channel_for_tenant(&stream_tenant)"
+			handleOpen, handleTenant, handleClose = "Ok("+handleType+" {", "            tenant,\n", "        })"
+			tenantField = "    /// The tenant this stream was opened to: every message must name it.\n    tenant: String,\n"
+		}
 		methodCode := fmt.Sprintf(`    /// %s opens a managed client-streaming call to %s.%s.
-    pub fn %s(&self) -> %s {
+    %s
         let (tx, rx) = tokio::sync::mpsc::channel::<%s>(32);
         let (response_tx, response_rx) = tokio::sync::oneshot::channel::<Result<tonic::Response<%s>, tonic::Status>>();
         let cp = self.channel_provider.clone();
@@ -695,7 +756,7 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
                 let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
                 let mut req = tonic::Request::new(outbound);
 %s
-                let channel = cp.channel().await?;
+                let channel = %s.await?;
                 let mut client = %s::new(channel);
                 let response = client.%s(req).await?;
 %s
@@ -704,14 +765,14 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
             let _ = response_tx.send(result);
         });
 
-        %s {
+        %s
             tx,
             response: Some(response_rx),
             token_provider: handle_token_provider,
             auth_required: %t,
-        }
-    }`, method.Name, svc.Name, method.Name, methodSnake, handleType, inputType, outputType,
-			rustGrpcInitialStreamAuthBlock(authRequired), tonicClientName, methodSnake, rustGrpcResponseValidation(method, "response"), handleType, authRequired)
+%s%s
+    }`, method.Name, svc.Name, method.Name, openSig, inputType, outputType,
+			rustGrpcInitialStreamAuthBlock(authRequired), streamChannel, tonicClientName, methodSnake, rustGrpcResponseValidation(method, "response"), handleOpen, authRequired, handleTenant, handleClose)
 
 		handleStruct := fmt.Sprintf(`
 /// Handle for the managed %s client-streaming call.
@@ -720,12 +781,12 @@ pub struct %s {
     response: Option<tokio::sync::oneshot::Receiver<Result<tonic::Response<%s>, tonic::Status>>>,
     token_provider: Option<TokenProvider>,
     auth_required: bool,
-}
+%s}
 
 impl %s {
     /// Sends one request message on the client stream.
     pub async fn send(&self, msg: %s) -> Result<(), tonic::Status> {
-%s        if self.auth_required {
+%s%s        if self.auth_required {
             let tp = self
                 .token_provider
                 .as_ref()
@@ -753,8 +814,9 @@ impl %s {
             .map_err(|_| tonic::Status::unavailable("client stream response task stopped"))?
     }
 }
-`, method.Name, handleType, inputType, outputType, handleType, inputType,
+`, method.Name, handleType, inputType, outputType, tenantField, handleType, inputType,
 			rustGrpcStreamValueValidation("msg", method.FullInputType, "tonic::Status::invalid_argument(format!(\"validation failed: {e}\"))"),
+			rustClientStreamRouteCheck(method),
 			outputType)
 		return grpcMethodResult{method: methodCode, extraType: handleStruct}, nil
 	}
@@ -781,7 +843,7 @@ impl %s {
         request: impl tonic::IntoRequest<%s>,
     ) -> Result<(Vec<%s>, String, i64), tonic::Status> {
         let mut req = request.into_request();
-%s
+%s%s
         %s
         self.apply_outbound_timeout(&mut req);
         %s
@@ -817,7 +879,7 @@ impl %s {
         })
     }`, method.Name, svc.Name, method.Name,
 			methodSnake, inputType, itemType,
-			rustGrpcRequestValidation(method, "req"), auth, channelResolve, methodSnake,
+			rustGrpcRequestValidation(method, "req"), rustClientRouteTenant(method, "req", "        "), auth, channelResolve, methodSnake,
 			totalExpr, itemsField,
 			method.Name, svc.Name, method.Name,
 			methodSnake, inputType, itemType,
@@ -829,13 +891,18 @@ impl %s {
 	auth := rustAuthSnippet("req", authRequired)
 	reqMut := "mut "
 	retrySafe := method.IsRetrySafeUnary()
+	// Each attempt's future owns its copy of the routed tenant.
+	routeTenantClone := ""
+	if routed {
+		routeTenantClone = "\n\t            let route_tenant = route_tenant.clone();"
+	}
 	return grpcMethodResult{method: fmt.Sprintf(`    /// %s calls %s.%s with optional validation.
 	    pub async fn %s(
 	        &self,
 	        request: impl tonic::IntoRequest<%s>,
 	    ) -> Result<tonic::Response<%s>, tonic::Status> {
 	        let req_base = request.into_request();
-%s
+%s%s
 	        let req_message = req_base.get_ref().clone();
 	        let req_metadata = req_base.metadata().clone();
 	        self.unary_with_retry(%t, || {
@@ -843,7 +910,7 @@ impl %s {
 	                let mut req = tonic::Request::new(req_message.clone());
 	                *req.metadata_mut() = req_metadata.clone();
 	                req
-	            };
+	            };%s
 	            async move {
 	                %s
 	                self.apply_outbound_timeout(&mut req);
@@ -855,5 +922,5 @@ impl %s {
 %s
                 Ok(response)
             })
-	    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, rustGrpcRequestValidation(method, "req_base"), retrySafe, reqMut, auth, channelResolve, methodSnake, rustGrpcResponseValidation(method, "response")), usesOutboundTimeout: true, usesUnaryRetry: true}, nil
+	    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, rustGrpcRequestValidation(method, "req_base"), rustClientRouteTenant(method, "req_base", "        "), retrySafe, reqMut, routeTenantClone, auth, channelResolve, methodSnake, rustGrpcResponseValidation(method, "response")), usesOutboundTimeout: true, usesUnaryRetry: true}, nil
 }

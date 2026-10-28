@@ -34,6 +34,12 @@ type goRestDispatchArm struct {
 	ToJSON         string // "catalog_pb.GetItemResponseToJSON"
 	ValidateInput  string // "catalog_pb.ValidateGetItemRequest", "" when the type has no validator
 	ValidateOutput string
+	// RouteField is (spec.rpc).route_field (the proto name) of a tenant-routed
+	// method and RouteGetter its protoc-gen-go getter: the arm reads the target
+	// tenant off the decoded request before it dials. Both "" for a platform
+	// service, whose arm is unchanged.
+	RouteField  string
+	RouteGetter string
 }
 
 // goRestDispatchRoute is one route table entry.
@@ -52,6 +58,11 @@ type goRestDispatchRoute struct {
 	FormBody             bool
 	RedirectField        string // the proto3 JSON name, the canonical key across languages
 	RedirectFieldProto   string // the proto field name, which the Go ToJSON helpers emit
+	// RouteField (proto name), RouteFieldJSON and RouteFieldNumber are the
+	// tenant-routed route's (spec.rpc).route_field; ""/0 for a platform route.
+	RouteField       string
+	RouteFieldJSON   string
+	RouteFieldNumber int32
 }
 
 type goRestDispatchImport struct {
@@ -60,10 +71,13 @@ type goRestDispatchImport struct {
 }
 
 type goRestDispatchData struct {
-	Imports    []goRestDispatchImport
-	Routes     []goRestDispatchRoute
-	UnaryArms  []goRestDispatchArm
-	StreamArms []goRestDispatchArm
+	// ModuleBasePath roots the generated module; the plane imports the
+	// serviceconnection chassis from it for the tenant-routing helpers.
+	ModuleBasePath string
+	Imports        []goRestDispatchImport
+	Routes         []goRestDispatchRoute
+	UnaryArms      []goRestDispatchArm
+	StreamArms     []goRestDispatchArm
 }
 
 // generateGoRestDispatch renders the REST -> gRPC dispatch plane for a
@@ -92,7 +106,7 @@ func generateGoRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, 
 		return err
 	}
 
-	data := goRestDispatchData{}
+	data := goRestDispatchData{ModuleBasePath: config.ModuleBasePath}
 	imports := map[string]string{}
 	for _, a := range plan.Arms {
 		pkgToDir := plan.PkgToDirFor(a)
@@ -104,6 +118,11 @@ func generateGoRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, 
 			IsEmptyInput:  a.IsEmptyInput,
 			IsEmptyOutput: a.IsEmptyOutput,
 			NewClient:     svcAlias + ".New" + a.ServiceName + "Client",
+			RouteField:    a.RouteField,
+			RouteGetter:   goRouteGetter(a.RouteField),
+		}
+		if a.RouteField != "" && a.IsEmptyInput {
+			return fmt.Errorf("%s declares route_field %q but its request is google.protobuf.Empty", a.GrpcPath, a.RouteField)
 		}
 		if a.IsEmptyInput {
 			imports["emptypb"] = wellKnownGoType["Empty"].importPath
@@ -145,6 +164,9 @@ func generateGoRestDispatch(config *tactype.Config, servicesInfo []ServiceInfo, 
 			FormBody:             r.FormBody,
 			RedirectField:        r.RedirectJSONName,
 			RedirectFieldProto:   r.RedirectField,
+			RouteField:           r.RouteField,
+			RouteFieldJSON:       r.RouteFieldJSON,
+			RouteFieldNumber:     r.RouteFieldNumber,
 		})
 	}
 	aliases := make([]string, 0, len(imports))
@@ -231,4 +253,13 @@ func goRestDispatchTypesImport(config *tactype.Config, imports map[string]string
 // the longest known package prefix, so a dotted package resolves whole.
 func goRestDispatchTypePackage(fullType string, pkgToDir map[string]string) string {
 	return restdispatch.TypePackage(fullType, pkgToDir)
+}
+
+// goRouteGetter is the protoc-gen-go getter of a route field ("tenant" ->
+// "GetTenant"), or "" for a platform method, which has none.
+func goRouteGetter(field string) string {
+	if field == "" {
+		return ""
+	}
+	return "Get" + toGoFieldName(field)
 }

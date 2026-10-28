@@ -172,6 +172,11 @@ pub struct Authorizer {
     /// token carrying `act` on a method with no entry here, so an rpc that
     /// declares no auth_actors admits no delegated call at all.
     method_actor_patterns: RwLock<HashMap<String, Vec<regex::Regex>>>,
+    /// Methods declaring RPC_FLAG_ANY_TENANT, keyed exactly as
+    /// `method_auth_patterns` is: on a tenant-owned instance, a caller of any
+    /// tenant passes the door for these rpcs. See
+    /// [`set_method_any_tenant`](Self::set_method_any_tenant).
+    method_any_tenant: RwLock<HashSet<String>>,
     /// The instance's own tenant namespace ("/tenants/<t>"), or empty for a
     /// shared instance. See [`set_host_namespace`](Self::set_host_namespace).
     host_tenant: RwLock<String>,
@@ -207,6 +212,7 @@ impl Authorizer {
             method_auth_patterns: RwLock::new(HashMap::new()),
             method_auth_any_service: RwLock::new(HashSet::new()),
             method_actor_patterns: RwLock::new(HashMap::new()),
+            method_any_tenant: RwLock::new(HashSet::new()),
             host_tenant: RwLock::new(String::new()),
         }
     }
@@ -219,6 +225,7 @@ impl Authorizer {
             method_auth_patterns: RwLock::new(HashMap::new()),
             method_auth_any_service: RwLock::new(HashSet::new()),
             method_actor_patterns: RwLock::new(HashMap::new()),
+            method_any_tenant: RwLock::new(HashSet::new()),
             host_tenant: RwLock::new(String::new()),
         }
     }
@@ -247,6 +254,44 @@ impl Authorizer {
         })?;
         self.set_host_namespace(tw.namespace().unwrap_or(""));
         Ok(())
+    }
+
+    /// The instance's own tenant namespace ("/tenants/<t>"), or empty for a
+    /// shared instance: what [`set_host_namespace`](Self::set_host_namespace)
+    /// pinned. A generated service wrapper's tenant-routing backstop refuses a
+    /// request routed to any other tenant.
+    pub fn host_namespace(&self) -> String {
+        self.host_tenant.read().unwrap().clone()
+    }
+
+    /// Registers an rpc declaring RPC_FLAG_ANY_TENANT: on a tenant-owned
+    /// instance, a caller of ANY tenant passes the door for this rpc ("any
+    /// authenticated user of any tenant may call this"). Nothing else is
+    /// widened: the token, its audience, auth_services, entitlements and the
+    /// level-or-below rule are checked exactly as before. An rpc not
+    /// registered here keeps the default door: members of the instance's own
+    /// tenant (and /system) only.
+    ///
+    /// `method_key` is the service-qualified identifier "pkg.Service/Method"
+    /// produced by [`qualified_method_key`], not the bare RPC name.
+    pub fn set_method_any_tenant(&self, method_key: &str) {
+        self.method_any_tenant
+            .write()
+            .unwrap()
+            .insert(method_key.to_string());
+    }
+
+    /// Whether `full_method` opens the tenant door (RPC_FLAG_ANY_TENANT). A
+    /// check that names no rpc never does.
+    fn opens_tenant_door(&self, full_method: Option<&str>) -> bool {
+        match full_method {
+            Some(m) => self
+                .method_any_tenant
+                .read()
+                .unwrap()
+                .contains(&qualified_method_key(m)),
+            None => false,
+        }
     }
 
     /// The tenant-owned instance's door check.
@@ -359,7 +404,24 @@ impl Authorizer {
     /// generated service wrappers — the namespace claim is only trusted
     /// because the token's signature has been verified first.
     pub fn check_caller_at_or_below(&self, authorization: Option<&str>, target_namespace: &str) -> Result<token::Token> {
-        let tw = self.verify_bearer(authorization)?;
+        let tw = self.verify_bearer(authorization, None)?;
+        self.check_verified_at_or_below(tw, target_namespace)
+    }
+
+    /// [`check_caller_at_or_below`](Self::check_caller_at_or_below) for the rpc
+    /// `full_method`: the tenant door follows that rpc's RPC_FLAG_ANY_TENANT.
+    pub fn check_caller_at_or_below_method(
+        &self,
+        full_method: &str,
+        authorization: Option<&str>,
+        target_namespace: &str,
+    ) -> Result<token::Token> {
+        let tw = self.verify_bearer(authorization, Some(full_method))?;
+        self.check_verified_at_or_below(tw, target_namespace)
+    }
+
+    /// The level-or-below rule over a token `verify_bearer` already verified.
+    fn check_verified_at_or_below(&self, tw: token::Token, target_namespace: &str) -> Result<token::Token> {
         let caller_namespace = tw.namespace().unwrap_or("");
         if caller_namespace.is_empty() {
             return Err(AuthorizerError::permission_denied("token has empty namespace claim"));
@@ -418,7 +480,12 @@ impl Authorizer {
     ///
     /// Every authorization entry point MUST pass through this gate before
     /// trusting any claim — `Token::parse` alone only base64-decodes.
-    fn verify_bearer(&self, authorization: Option<&str>) -> Result<token::Token> {
+    ///
+    /// `full_method` is the rpc being called, when the check knows it: the
+    /// tenant door is skipped for an rpc registered with
+    /// [`set_method_any_tenant`](Self::set_method_any_tenant), and held for
+    /// every other rpc and for a check that names none.
+    fn verify_bearer(&self, authorization: Option<&str>, full_method: Option<&str>) -> Result<token::Token> {
         let auth_header = authorization.unwrap_or("");
         if auth_header.is_empty() {
             return Err(AuthorizerError::unauthenticated("missing authorization header"));
@@ -486,8 +553,11 @@ impl Authorizer {
             )));
         }
 
-        // Tenant-owned instance: refuse another tenant's caller at the door.
-        self.check_host_tenant(tw.namespace().unwrap_or(""))?;
+        // Tenant-owned instance: refuse another tenant's caller at the door,
+        // unless the rpc declares RPC_FLAG_ANY_TENANT.
+        if !self.opens_tenant_door(full_method) {
+            self.check_host_tenant(tw.namespace().unwrap_or(""))?;
+        }
 
         Ok(tw)
     }
@@ -501,7 +571,7 @@ impl Authorizer {
         authorization: Option<&str>,
         _metadata: &HashMap<String, String>,
     ) -> Result<token::Token> {
-        let tw = self.verify_bearer(authorization)?;
+        let tw = self.verify_bearer(authorization, Some(full_method))?;
 
         // Delegation gate. A token carrying an act claim was minted for one
         // principal to act on another's behalf, so the rpc must say which
@@ -617,7 +687,7 @@ impl Authorizer {
         authorization: Option<&str>,
     ) -> Result<()> {
         // auth_any_user: token is valid and correctly scoped — allow.
-        self.verify_bearer(authorization).map(|_| ())
+        self.verify_bearer(authorization, None).map(|_| ())
     }
 
     /// Authorizes an HTTP request.
@@ -649,7 +719,19 @@ impl Authorizer {
     /// must attribute the call (accounting identity) reads claims the authorizer
     /// itself checked — never something the caller wrote into a header.
     pub fn authenticate_caller(&self, authorization: Option<&str>) -> Result<token::Token> {
-        self.verify_bearer(authorization)
+        self.verify_bearer(authorization, None)
+    }
+
+    /// [`authenticate`](Self::authenticate) for the rpc `full_method`: the
+    /// tenant door follows that rpc's RPC_FLAG_ANY_TENANT.
+    pub fn authenticate_method(&self, full_method: &str, authorization: Option<&str>) -> Result<()> {
+        self.authenticate_caller_method(full_method, authorization).map(|_| ())
+    }
+
+    /// [`authenticate_caller`](Self::authenticate_caller) for the rpc
+    /// `full_method`: the tenant door follows that rpc's RPC_FLAG_ANY_TENANT.
+    pub fn authenticate_caller_method(&self, full_method: &str, authorization: Option<&str>) -> Result<token::Token> {
+        self.verify_bearer(authorization, Some(full_method))
     }
 
     /// Cleans up resources. Safe to call multiple times.
@@ -770,7 +852,9 @@ where
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
-        match self.authorizer.authenticate(auth_value.as_deref()) {
+        // The path names the rpc, so an RPC_FLAG_ANY_TENANT rpc's door is
+        // opened here exactly as its wrapper opens it.
+        match self.authorizer.authenticate_method(req.uri().path(), auth_value.as_deref()) {
             Ok(()) => {
                 let fut = self.inner.call(req);
                 Box::pin(fut)
@@ -1413,6 +1497,66 @@ mod authorizer_behavior_tests {
                 .await
                 .unwrap_or_else(|e| panic!("host {host:?} must admit /tenants/acme: {e}"));
         }
+    }
+
+    // RPC_FLAG_ANY_TENANT opens a tenant-owned instance's door for that rpc
+    // only: a caller of ANY tenant passes it, on every entry point that knows
+    // the rpc (authorize_grpc, authenticate_method, the at-or-below check). It
+    // widens nothing else — auth_services and the level-or-below rule still
+    // hold — and every other rpc keeps the default door ("members of the
+    // instance's tenant only").
+    #[tokio::test]
+    async fn any_tenant_rpc_opens_the_door_for_that_rpc_only() {
+        const OTHER: &str = "/demo.DemoService/Other";
+        let key = new_test_key();
+        let token_as = |caller: &'static str, ns: &'static str| {
+            signed_token(&key, now_plus(3600), SERVICE_NAME, move |tok| {
+                tok.set_sub_type("service").expect("sub_type");
+                tok.set_subject(caller).expect("subject");
+                tok.set_namespace(ns).expect("namespace");
+            })
+        };
+        let beta = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        beta.set_method_auth(METHOD_KEY, &["caller-svc"]);
+        beta.set_method_auth(&qualified_method_key(OTHER), &["caller-svc"]);
+        beta.set_method_any_tenant(METHOD_KEY);
+        beta.set_host_namespace("/tenants/beta");
+        assert_eq!(beta.host_namespace(), "/tenants/beta");
+
+        let acme = token_as("caller-svc", "/tenants/acme");
+        beta.authorize_grpc(TEST_METHOD, METHOD, Some(&acme), &empty_md())
+            .await
+            .expect("ANY_TENANT: another tenant's caller passes the door");
+        beta.authenticate_method(TEST_METHOD, Some(&acme))
+            .expect("ANY_TENANT: authenticate_method admits another tenant's caller");
+        beta.check_caller_at_or_below_method(TEST_METHOD, Some(&acme), "/tenants/acme")
+            .expect("ANY_TENANT: the level-or-below check still admits the caller's own level");
+        let err = beta
+            .check_caller_at_or_below_method(TEST_METHOD, Some(&acme), "/tenants/beta")
+            .err()
+            .expect("ANY_TENANT does not widen target_namespace_field");
+        assert_eq!(err.code, 7);
+        let err = beta
+            .authorize_grpc(TEST_METHOD, METHOD, Some(&token_as("other-svc", "/tenants/acme")), &empty_md())
+            .await
+            .err()
+            .expect("ANY_TENANT does not widen auth_services");
+        assert_eq!(err.code, 7);
+
+        // The default door holds on every other rpc and on method-less checks.
+        let err = beta
+            .authorize_grpc(OTHER, "Other", Some(&acme), &empty_md())
+            .await
+            .err()
+            .expect("default rpc: another tenant's caller is refused at the door");
+        assert_eq!(err.code, 7);
+        beta.authenticate_method(OTHER, Some(&acme))
+            .expect_err("default rpc: authenticate_method keeps the door");
+        beta.authenticate(Some(&acme))
+            .expect_err("a check that names no rpc keeps the door");
+        beta.authorize_grpc(OTHER, "Other", Some(&token_as("caller-svc", "/tenants/beta")), &empty_md())
+            .await
+            .expect("the instance's own tenant still passes");
     }
 
     // Two DIFFERENT services hosted behind ONE Authorizer that each declare an

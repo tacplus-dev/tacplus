@@ -466,11 +466,15 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 	hasValidationMethods := false
 	hasAuthMethods := false
 	hasRequiresDevice := false
+	hasRoute := false
 	for _, service := range targetServices {
 		totalMethods += len(service.Methods)
 		for _, m := range service.Methods {
 			if m.HasDeviceGate() {
 				hasRequiresDevice = true
+			}
+			if m.RouteField != nil {
+				hasRoute = true
 			}
 			if !(m.ClientStreaming && m.ServerStreaming) && !m.ClientStreaming {
 				// Server streaming and unary methods use fmt.Sprintf in validation code
@@ -500,24 +504,30 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		HasPage               bool
 		HasRequiresDevice     bool
 		ApprovalLibImportPath string
+		// HasRoute: some rpc declares (spec.rpc).route_field, so the client
+		// routes by tenant through the serviceconnection chassis.
+		HasRoute                    bool
+		ServiceConnectionImportPath string
 	}{
-		GrpcPackageName:       grpcPkgName,
-		TypesModulePath:       typesModulePath,
-		CrossPackageImports:   crossPkgImports.String(),
-		ServiceName:           svc.ServiceName,
-		ClientName:            clientName,
-		GRPCMethods:           replaceClient(grpcMethods.String()),
-		HasMethods:            totalMethods > 0,
-		HasValidation:         hasValidationMethods,
-		HasBidi:               hasBidi,
-		HasNonBidi:            hasNonBidi,
-		HasClientStreaming:    hasClientStreaming,
-		HasAuth:               hasAuthMethods,
-		HasCollectionStream:   hasCollectionStream,
-		HasCollectionCursor:   hasCollectionCursor,
-		HasPage:               hasPage,
-		HasRequiresDevice:     hasRequiresDevice,
-		ApprovalLibImportPath: svc.Config.ModuleBasePath + "/chassis/approval",
+		GrpcPackageName:             grpcPkgName,
+		TypesModulePath:             typesModulePath,
+		CrossPackageImports:         crossPkgImports.String(),
+		ServiceName:                 svc.ServiceName,
+		ClientName:                  clientName,
+		GRPCMethods:                 replaceClient(grpcMethods.String()),
+		HasMethods:                  totalMethods > 0,
+		HasValidation:               hasValidationMethods,
+		HasBidi:                     hasBidi,
+		HasNonBidi:                  hasNonBidi,
+		HasClientStreaming:          hasClientStreaming,
+		HasAuth:                     hasAuthMethods,
+		HasCollectionStream:         hasCollectionStream,
+		HasCollectionCursor:         hasCollectionCursor,
+		HasPage:                     hasPage,
+		HasRequiresDevice:           hasRequiresDevice,
+		ApprovalLibImportPath:       svc.Config.ModuleBasePath + "/chassis/approval",
+		HasRoute:                    hasRoute,
+		ServiceConnectionImportPath: svc.Config.ModuleBasePath + "/chassis/serviceconnection",
 	}
 
 	tmpl, err := loadTemplate("grpcclient.go.tmpl")
@@ -595,6 +605,7 @@ func generateGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodInfo
 	errorOnly := emptyOut && isUnary
 	authRequired := grpcClientAuthRequired(svc, method)
 	auth := authSnippet(authRequired, errorOnly)
+	route := goClientRouteBlock(method)
 
 	if method.ClientStreaming && method.ServerStreaming {
 		// Bidirectional streaming — managed lifecycle with reconnection.
@@ -613,6 +624,7 @@ func generateGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodInfo
 	}
 `, validateInput)
 		}
+		inputVal += route("nil, ")
 		return fmt.Sprintf(`// %s calls %s.%s (Tier-2 SNAPSHOT collection over server streaming).
 func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOption) ([]*%s, error) {
 	%s
@@ -650,6 +662,7 @@ func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOpti
 	}
 `, validateInput)
 		}
+		inputVal += route("nil, ")
 		return fmt.Sprintf(`// %s calls %s.%s (Tier-3 SNAPSHOT cursor over server streaming).
 func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOption) (iter.Seq2[*%s, error], error) {
 	%s
@@ -696,6 +709,7 @@ func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOpti
 	}
 `, validateInput)
 		}
+		inputVal += route(`nil, "", 0, `)
 		totalExpr := "-1" // unknown when the response declares no total_count
 		if method.Resolved.PageHasTotal {
 			totalExpr = "resp.GetTotalCount()"
@@ -755,6 +769,7 @@ func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOpti
 	}
 `, validateInput)
 		}
+		inputVal += route("nil, ")
 		return fmt.Sprintf(`// %s calls %s.%s (server streaming).
 func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOption) (grpc.ServerStreamingClient[%s], error) {
 	%s
@@ -767,6 +782,9 @@ func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOpti
 		// headers); no per-send token preflight (PC-W-2, matches bidi).
 		validateInput := validationFuncOrNil(goValidateRef(method.FullInputType, method.InputType, servicePackage))
 		validateOutput := validationFuncOrNil(goValidateRef(method.FullOutputType, method.OutputType, servicePackage))
+		if method.RouteField != nil {
+			return goClientRoutedClientStream(svc, method, goInput, goOutput, auth, validateInput, validateOutput), nil
+		}
 		return fmt.Sprintf(`// %s calls %s.%s (client streaming).
 func (c *{{.ClientName}}) %s(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[%s, %s], error) {
 	%s
@@ -821,6 +839,7 @@ func (c *{{.ClientName}}) %s(ctx context.Context, opts ...grpc.CallOption) error
 		if inputValidation != "" {
 			inputVal = fmt.Sprintf(inputValidation, `status.Error(codes.InvalidArgument, fmt.Sprintf("validation failed: %v", err))`)
 		}
+		inputVal += route("")
 		return fmt.Sprintf(`// %s calls %s.%s with optional validation and error mapping.
 func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOption) error {
 %s
@@ -848,6 +867,7 @@ func (c *{{.ClientName}}) %s(ctx context.Context, req *%s, opts ...grpc.CallOpti
 	if inputValidation != "" {
 		inputValStr = fmt.Sprintf(inputValidation, `nil, status.Error(codes.InvalidArgument, fmt.Sprintf("validation failed: %v", err))`)
 	}
+	inputValStr += route("nil, ")
 
 	if emptyInput {
 		return fmt.Sprintf(`// %s calls %s.%s with optional validation and error mapping.
@@ -974,6 +994,8 @@ func generateGoBidiMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, go
 		AuthRequired   bool
 		ValidateInput  string
 		ValidateOutput string
+		RouteField     string // (spec.rpc).route_field; "" for a platform rpc
+		RouteGetter    string
 	}{
 		MethodName:     method.Name,
 		ServiceName:    svc.Name,
@@ -989,10 +1011,74 @@ func generateGoBidiMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, go
 		ValidateInput:  validateInput,
 		ValidateOutput: validateOutput,
 	}
+	if method.RouteField != nil {
+		data.RouteField = method.RouteField.Field
+		data.RouteGetter = goRouteGetter(method.RouteField.Field)
+	}
 
 	var buf bytes.Buffer
 	if err := t.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("failed to execute go bidi template: %w", err)
 	}
 	return buf.String(), nil
+}
+
+// goClientRouteBlock returns, for a routed rpc ((spec.rpc).route_field), the
+// block a typed client method runs after request validation: read the target
+// tenant off the request, refuse a missing or malformed one (INVALID_ARGUMENT,
+// before any network call), and carry it on the call context, where a
+// tenant-routed ChannelProvider picks that tenant's instance. ret is the
+// return prefix for the method's non-error results. A platform rpc gets "".
+func goClientRouteBlock(method *parser.MethodInfo) func(ret string) string {
+	return func(ret string) string {
+		if method.RouteField == nil {
+			return ""
+		}
+		return fmt.Sprintf(`
+	// Tenant routing: the request names its target tenant, and the call goes
+	// to that tenant's instance only.
+	tenant, routeErr := serviceconnection.RouteTenant(%q, req.%s())
+	if routeErr != nil {
+		return %srouteErr
+	}
+	ctx = serviceconnection.WithRouteTenant(ctx, tenant)
+`, method.RouteField.Field, goRouteGetter(method.RouteField.Field), ret)
+	}
+}
+
+// goClientRoutedClientStream renders the open method of a routed
+// client-streaming rpc. A request stream goes to one instance, so its tenant
+// is fixed at open: the caller names it, it is checked to be a tid before the
+// stream is dialled, and every message sent on it must name the same tenant.
+func goClientRoutedClientStream(svc *parser.ServiceInfo, method *parser.MethodInfo, goInput, goOutput, auth, validateInput, validateOutput string) string {
+	field := method.RouteField.Field
+	getter := goRouteGetter(field)
+	return fmt.Sprintf(`// %s calls %s.%s (client streaming) on tenant's instance. The
+// stream's tenant is fixed here: tenant must be a tenant id, and every message
+// sent on the stream must name it in %s.
+func (c *{{.ClientName}}) %s(ctx context.Context, tenant string, opts ...grpc.CallOption) (grpc.ClientStreamingClient[%s, %s], error) {
+	if _, err := serviceconnection.RouteTenant("tenant", tenant); err != nil {
+		return nil, err
+	}
+	ctx = serviceconnection.WithRouteTenant(ctx, tenant)
+	%s
+
+	stream, err := c.client.%s(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &{{.ClientName}}ClientStreamingClient[%s, %s]{
+		ClientStreamingClient: stream,
+		validateReq: %s,
+		routeReq: func(req *%s) error {
+			if req.%s() != tenant {
+				return status.Errorf(codes.InvalidArgument, "route field %s is %%q but this stream is open to tenant %%q", req.%s(), tenant)
+			}
+			return nil
+		},
+		validateResp: %s,
+	}, nil
+}`, method.Name, svc.Name, method.Name, field,
+		method.Name, goInput, goOutput, auth, method.Name, goInput, goOutput, validateInput,
+		goInput, getter, field, getter, validateOutput)
 }

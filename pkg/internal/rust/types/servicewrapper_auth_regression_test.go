@@ -48,7 +48,7 @@ func TestRustAuthorizerCheckCallerAtOrBelowVerifiesToken(t *testing.T) {
 		if end := strings.Index(body[1:], "\n    pub "); end > 0 {
 			body = body[:end+1]
 		}
-		if !strings.Contains(body, "self.verify_bearer(authorization)") {
+		if !strings.Contains(body, "self.verify_bearer(authorization, ") {
 			t.Fatalf("%s must call self.verify_bearer before trusting claims:\n%s", entryPoint, body)
 		}
 	}
@@ -56,7 +56,7 @@ func TestRustAuthorizerCheckCallerAtOrBelowVerifiesToken(t *testing.T) {
 	// check_caller_at_or_below must verify before reading the namespace claim.
 	ccStart := strings.Index(tmpl, "pub fn check_caller_at_or_below")
 	ccBody := tmpl[ccStart:]
-	verifyIdx := strings.Index(ccBody, "self.verify_bearer(authorization)")
+	verifyIdx := strings.Index(ccBody, "self.verify_bearer(authorization, ")
 	namespaceIdx := strings.Index(ccBody, ".namespace()")
 	if verifyIdx < 0 || namespaceIdx < 0 || verifyIdx > namespaceIdx {
 		t.Fatalf("check_caller_at_or_below must verify the token before reading the namespace claim:\n%s", ccBody[:600])
@@ -193,13 +193,13 @@ func TestRustAuthAnyUserWrapperGate(t *testing.T) {
 	}{
 		{
 			name:     "no target namespace field authenticates only",
-			wantCall: "self.enforce_authenticated(&request).await?;",
+			wantCall: `self.enforce_authenticated("/contract/contractclient.ContractApi/PublicRead", &request).await?;`,
 			notWant:  "self.enforce_at_or_below(",
 		},
 		{
 			name:                 "declared literal keeps the fixed namespace gate",
 			targetNamespaceField: "/tenants/acme",
-			wantCall:             `self.enforce_at_or_below(&request, "/tenants/acme").await?;`,
+			wantCall:             `self.enforce_at_or_below("/contract/contractclient.ContractApi/PublicRead", &request, "/tenants/acme").await?;`,
 			notWant:              "self.enforce_authenticated(",
 		},
 	} {
@@ -244,7 +244,7 @@ func TestRustAuthAnyUserAuthenticatePathVerifiesToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTemplate servicewrapper.rs.tmpl: %v", err)
 	}
-	if !strings.Contains(tmpl, "a.authenticate(authorization).await") {
+	if !strings.Contains(tmpl, "a.authenticate(full_method, authorization).await") {
 		t.Fatalf("enforce_authenticated must delegate to the Authorizer trait's authenticate:\n%s", tmpl)
 	}
 
@@ -252,7 +252,7 @@ func TestRustAuthAnyUserAuthenticatePathVerifiesToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTemplate service_manager.rs.tmpl: %v", err)
 	}
-	if !strings.Contains(managerTmpl, ".authenticate_caller(authorization)") {
+	if !strings.Contains(managerTmpl, ".authenticate_caller_method(full_method, authorization)") {
 		t.Fatalf("Rust service manager adapter must route auth_any_user authentication through authenticate_caller")
 	}
 
@@ -265,7 +265,7 @@ func TestRustAuthAnyUserAuthenticatePathVerifiesToken(t *testing.T) {
 	if end := strings.Index(acBody[1:], "\n    pub "); end > 0 {
 		acBody = acBody[:end+1]
 	}
-	if !strings.Contains(acBody, "self.verify_bearer(authorization)") {
+	if !strings.Contains(acBody, "self.verify_bearer(authorization, ") {
 		t.Fatalf("authenticate_caller must verify the bearer token:\n%s", acBody)
 	}
 }

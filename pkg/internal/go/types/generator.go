@@ -1194,11 +1194,15 @@ type ServiceInfo struct {
 	// (spec.rpc).requires_device, so this service's wrapper carries the
 	// device-approval gate and the ServiceManager must wire the check into it.
 	HasRequiresDevice bool
-	IsS2S             bool   // true when this is a service-to-service service
-	IsC2D             bool   // true when this is a client-to-daemon service
-	C2DSocketPath     string // service_c2d socket_path: unix socket the daemon binds (required, no default)
-	IsSMB             bool   // true when this service has spec.smb
-	SmbRoot           spec.SmbRoot
+	// HasTenantRoute is true when any gRPC-callable method declares
+	// (spec.rpc).route_field: the wrapper carries the tenant routing backstop,
+	// which the ServiceManager wires to the authorizer's CheckRoute.
+	HasTenantRoute bool
+	IsS2S          bool   // true when this is a service-to-service service
+	IsC2D          bool   // true when this is a client-to-daemon service
+	C2DSocketPath  string // service_c2d socket_path: unix socket the daemon binds (required, no default)
+	IsSMB          bool   // true when this service has spec.smb
+	SmbRoot        spec.SmbRoot
 	// SynthesizedKind is WHICH tacplus-generated surface this is
 	// (parser.SynthesizedKind*), empty for hand-authored services. Carried so the
 	// token-minter gate can tell a generated STATE service (the process must reach
@@ -1519,8 +1523,28 @@ func deriveGoServiceAuthFlags(service parser.ServiceDescriptor) (anyUser bool, h
 		if m.TargetNamespaceField != "" && !m.AuthAnyUser {
 			hasMethodAuth = true
 		}
+		// Mirrors the SetMethodRouteField / SetMethodAnyTenant lines.
+		if m.RouteField != nil || m.AnyTenant {
+			hasMethodAuth = true
+		}
 	}
 	return anyUser, hasMethodAuth
+}
+
+// goServiceHasTenantRoute reports whether any of a service's gRPC-callable
+// methods declares (spec.rpc).route_field, so its wrapper carries the tenant
+// routing backstop and the ServiceManager must wire it. An MCP tool is skipped
+// for the same reason as in deriveGoServiceAuthFlags.
+func goServiceHasTenantRoute(service parser.ServiceDescriptor) bool {
+	for _, m := range service.Methods {
+		if m.IsMcp {
+			continue
+		}
+		if m.RouteField != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // goServiceHasRequiresDevice reports whether any of a service's gRPC-callable
@@ -1808,6 +1832,7 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 				AuthServices:      service.AuthServices,
 				HasMethodAuth:     hasMethodAuth,
 				HasRequiresDevice: goServiceHasRequiresDevice(service),
+				HasTenantRoute:    goServiceHasTenantRoute(service),
 				IsS2S:             service.IsS2S,
 				IsC2D:             service.IsC2D,
 				C2DSocketPath:     service.C2DSocketPath,

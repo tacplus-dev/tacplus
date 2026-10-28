@@ -816,10 +816,11 @@ service AuthorityService {
 
 // TestGenerateEmitsTenantOwned proves registry.json carries the tenant_owned
 // declaration from option (spec.service).tenant_owned, the single fact the
-// operator (per-tenant Deployments), the gateway (route by token namespace),
-// and the record-plane store wrapper all read to know a service is
-// per-tenant instead of shared. Default false (omitted) for every other
-// service, matching every other service today.
+// operator (per-tenant Deployments) and the record-plane store wrapper read to
+// know a service is per-tenant instead of shared, and each rpc's route field
+// (name and wire number) and RPC_FLAG_ANY_TENANT door policy, which the
+// gateway and service clients route and admit by. Default false (omitted) for
+// every other service.
 func TestGenerateEmitsTenantOwned(t *testing.T) {
 	if _, err := exec.LookPath("protoc"); err != nil {
 		t.Skip("protoc not available, skipping descriptor-backed registry test")
@@ -849,11 +850,13 @@ import "sys/spec.proto";
 
 option (spec.service) = {name: "mytenantsvc", tenant_owned: true};
 
-message Ping { string m = 1; }
+message Ping { string m = 1; string tenant = 2; }
 
 service PingService {
   option (spec.service_s2s) = {auth_services: ["*"], label: "PingService"};
-  rpc Get(Ping) returns (Ping);
+  rpc Get(Ping) returns (Ping) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, route_field: "tenant", flags: [RPC_FLAG_ANY_TENANT]};
+  }
 }
 `
 	if err := os.WriteFile(filepath.Join(svcDir, "ping.proto"), []byte(protoText), 0o644); err != nil {
@@ -888,6 +891,11 @@ service PingService {
 	registryJSON := string(data)
 	if !regexp.MustCompile(`"tenant_owned":\s*true`).MatchString(registryJSON) {
 		t.Fatalf("registry.json missing tenant_owned: true:\n%s", registryJSON)
+	}
+	for _, want := range []string{`"route_field":\s*"tenant"`, `"route_field_number":\s*2`, `"any_tenant":\s*true`} {
+		if !regexp.MustCompile(want).MatchString(registryJSON) {
+			t.Fatalf("registry.json missing %s:\n%s", want, registryJSON)
+		}
 	}
 }
 

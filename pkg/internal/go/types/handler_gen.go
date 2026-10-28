@@ -136,6 +136,10 @@ type GrpcServiceEntry struct {
 	// (spec.rpc).requires_device gate, so the device-approval check must be
 	// wired into it.
 	HasRequiresDevice bool
+	// HasTenantRoute is true when this service's wrapper carries the tenant
+	// routing backstop ((spec.rpc).route_field), which the ServiceManager
+	// wires to the authorizer's CheckRoute.
+	HasTenantRoute bool
 	// IsFirstConfigUse is true for the first service using this config package.
 	// When false, config fetch uses = instead of := to avoid redeclaration.
 	IsFirstConfigUse bool
@@ -312,7 +316,8 @@ type serviceManagerTemplateData struct {
 	TracePublisherTarget   string                  // broker service_id for trace publisher
 	TracePublishStreamName string                  // canonical EventBus publish stream name
 	TracePublishGrpcPath   string                  // canonical gRPC path for trace publish stream
-	S2STargetServices      []string                // unique service IDs for S2S client ServiceConnections
+	S2STargetServices      []string                // unique service IDs for S2S client ServiceConnections (platform targets)
+	S2STenantTargets       []string                // unique service IDs of tenant-routed S2S targets: one pool per tenant (TenantConnection)
 	S2STargetsRequired     bool                    // s2s targets listed explicitly (grpc_s2s_clients) gate readiness; s2s_client_all targets do not
 	RecordReaders          []goRecordReaderEntry   // model-driven (spec.record_read) typed readers over stored record rows
 	HasRecordReaders       bool
@@ -438,6 +443,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			HasMethodAuth:            svc.HasMethodAuth,
 			MethodAuthFuncName:       "Register" + svc.ServiceName + "MethodAuth",
 			HasRequiresDevice:        svc.HasRequiresDevice,
+			HasTenantRoute:           svc.HasTenantRoute,
 			IsFirstConfigUse:         isFirst,
 			IsGeneratedRecordC2S:     svc.SynthesizedKind == parser.SynthesizedKindRecordC2S,
 			GeneratedImplStruct:      svc.ServiceName + "GeneratedHandler",
@@ -545,6 +551,11 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 	typedHealthType := ""
 	typedHealthPkgAlias := ""
 	typedHealthPkgImport := ""
+	// Tenant routing (#170): which proto packages serve tenant-routed rpcs and
+	// which serve platform rpcs, so each s2s target gets the right pool.
+	routedPkgs := make(map[string]bool)
+	platformPkgs := make(map[string]bool)
+	fileToPkg := make(map[string]string)
 	if config.FlatProtoDir != "" {
 		// A swallowed parse error here silently left hasSmb=false (and dropped
 		// typed-health detection), making the whole SMB cert-stream seam vanish
@@ -559,9 +570,22 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			} else {
 				smbAuthorityServiceID = id
 			}
+			tenantOwned := parser.TenantOwnedServices(dp)
 			for relPath, fd := range dp.GetAllFiles() {
 				if fd.Package != "" {
 					pkgToDirMap[fd.Package] = filepath.Dir(relPath)
+					fileToPkg[filepath.ToSlash(relPath)] = fd.Package
+				}
+				for si := range fd.Services {
+					svc := &fd.Services[si]
+					if svc.Synthesized || svc.IsC2D || !(svc.IsS2S || svc.IsC2S) {
+						continue
+					}
+					if parser.IsTenantRouted(fd, svc, tenantOwned) {
+						routedPkgs[fd.Package] = true
+					} else {
+						platformPkgs[fd.Package] = true
+					}
 				}
 				// Detect a spec.smb Service Mesh Blackbox service in the own package
 				// (SPIFFE plan D7) — drives the SMB cert-stream seam.
@@ -746,6 +770,19 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		}
 	}
 
+	tenantTargets, err := goS2STenantRoutedTargets(config, routedPkgs, platformPkgs, fileToPkg)
+	if err != nil {
+		return serviceManagerTemplateData{}, err
+	}
+	var s2sPlatformTargets, s2sTenantTargets []string
+	for _, target := range s2sTargetServices {
+		if tenantTargets[target] {
+			s2sTenantTargets = append(s2sTenantTargets, target)
+		} else {
+			s2sPlatformTargets = append(s2sPlatformTargets, target)
+		}
+	}
+
 	tracePublisher, err := detectTracePublisherTemplateData(config)
 	if err != nil {
 		return serviceManagerTemplateData{}, err
@@ -852,7 +889,8 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		TracePublisherTarget:     tracePublisherTarget,
 		TracePublishStreamName:   tracePublishStreamName,
 		TracePublishGrpcPath:     tracePublishGrpcPath,
-		S2STargetServices:        s2sTargetServices,
+		S2STargetServices:        s2sPlatformTargets,
+		S2STenantTargets:         s2sTenantTargets,
 		S2STargetsRequired:       len(config.GrpcS2SClients) > 0 && !config.GrpcS2SClientAll,
 		RecordReaders:            recordReaders,
 		HasRecordReaders:         len(recordReaders) > 0,
@@ -1229,4 +1267,53 @@ func goAccessorName(name string) string {
 		return ""
 	}
 	return strings.ToUpper(name[:1]) + name[1:]
+}
+
+// goS2STargetID is the service id an s2s client entry dials: the same
+// resolution generateGrpcClients and the S2S target list use.
+func goS2STargetID(entry tactype.GrpcEntry) string {
+	switch {
+	case entry.TargetService != "":
+		return entry.TargetService
+	case entry.ProtoPackage != "":
+		return entry.ProtoPackage
+	default:
+		base := filepath.Base(entry.ProtoFile)
+		return strings.TrimSuffix(base, filepath.Ext(base))
+	}
+}
+
+// goS2STenantRoutedTargets returns the s2s target ids whose rpcs are routed by
+// tenant ((spec.rpc).route_field): the ServiceManager keeps one pool per
+// tenant for those, fed from the instances' spiffe_id tenants, instead of one
+// shared pool. routedPkgs and platformPkgs are the proto packages serving
+// tenant-routed and platform s2s/c2s services; fileToPkg maps a proto file to
+// its package. A target serving both cannot be pooled either way, so it fails
+// generation rather than letting one kind of call reach the wrong instance.
+func goS2STenantRoutedTargets(config *tactype.Config, routedPkgs, platformPkgs map[string]bool, fileToPkg map[string]string) (map[string]bool, error) {
+	routed := make(map[string]bool)
+	platform := make(map[string]bool)
+	for _, entry := range config.GrpcS2SClients {
+		pkg := entry.ProtoPackage
+		if pkg == "" {
+			pkg = fileToPkg[filepath.ToSlash(entry.ProtoFile)]
+		}
+		if pkg == "" {
+			base := filepath.Base(entry.ProtoFile)
+			pkg = strings.TrimSuffix(base, filepath.Ext(base))
+		}
+		target := goS2STargetID(entry)
+		if routedPkgs[pkg] {
+			routed[target] = true
+		}
+		if platformPkgs[pkg] || !routedPkgs[pkg] {
+			platform[target] = true
+		}
+	}
+	for target := range routed {
+		if platform[target] {
+			return nil, fmt.Errorf("s2s target %q serves both tenant-routed rpcs ((spec.rpc).route_field) and platform rpcs; a tenant-routed target is pooled per tenant and a platform one is not, so they cannot share a target", target)
+		}
+	}
+	return routed, nil
 }

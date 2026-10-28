@@ -7,3 +7,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-10-28 looper issue Records: generated write surface, entry/map locks, durability levels, Watch (#163, 8d1da6d1)
 - 2026-10-28 looper issue Release tacplus v2.5.0 (routing #170, records #163) once #163 closes (#198, 9d2ee926)
 - 2026-10-28 looper release v2.5.0 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.5.0)
+- 2026-10-28 looper issue diskstore archive: stable member id across restarts (#143, c4d585e3)

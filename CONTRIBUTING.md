@@ -64,8 +64,8 @@ same job as a GitHub Action, on demand only until the repository has an
 fixes only; features come in on a minor; fixes are backported to every minor
 released within the last twelve months, on its `release/MAJOR.MINOR` branch.
 A change that adds or alters a generated surface is a minor, however small.
-The current line is 2.0: `release/2.0` takes fixes only (pull requests, no
-direct pushes), and a patch release is a `v2.0.N` tag on that branch.
+The current line is 2.5: each `release/2.N` takes fixes only (pull requests, no
+direct pushes), and a patch release is a `v2.N.P` tag on that branch.
 
 ## Making a change
 

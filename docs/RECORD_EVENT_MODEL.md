@@ -340,10 +340,34 @@ the entry's new `revision` and the `durability` level the write was acked at.
   `Delete<T>` and `Watch<T>Changes`. Unset is stamped, anything else refused; a
   `/system` peer keeps the fleet-wide reach. The store answers a key-addressed request
   only for an entry in the named tenant.
-- **Not yet: the redo contract.** The record store's durability is the redo service (the
-  log is the database). Its contract — a frozen sys contract `sys/redo.proto`, defined by
-  tacplus, hosted by redo, called by the store, the tenant taken from the caller's
-  identity (D5) — is built after #170, whose target-tenant route field it carries.
+- **The redo contract** (D5). The record store's durability is the redo service (the log
+  is the database), through the frozen sys contract `sys/redo.proto`, `redolog.Redo`:
+  defined by tacplus, hosted by the redo service at label `redo`, called by the store
+  (`auth_services: ["stratum"]`) through its generated client, so neither side
+  hand-writes it.
+  - **Routing.** The redo service is tenant-owned, in the reserved `restore` tenant, and
+    the store generates without its proto, so the contract declares `host_tenant_owned`
+    and both rpcs route by `tenant` (#170): the redo instance's tid, a tenant-to-tenant
+    call, with `RPC_FLAG_ANY_TENANT`. The tenant a write **belongs to** is never a request
+    field: it is the caller's identity (`/tenants/<id>`), and the redo service keys every
+    log by trust domain and that tenant.
+  - **`Append`** (bidi). Each message is one store operation, a single write or a whole
+    `Apply`, which the log keeps all or nothing: its `changes` (record type full name,
+    typed key, `PUT`/`DELETE`, the record's protobuf bytes, the revision the store
+    answered) in canonical lock order, the `durability` it is owed, and `seq`, the
+    tenant log's position: 1 for an empty log, then exactly one more each time, any
+    other refused (`FAILED_PRECONDITION`), so a replay is exact. The redo service
+    answers one `RedoAck{seq, level}` per level reached, in order: `LOCAL` once on local
+    disk, `REMOTE` once the second site has it. The store applies a write, answers it,
+    and feeds `Watch<T>Changes` only after the ack it owes; while the redo service is
+    unreachable it refuses writes. `MEMORY` writes are never appended (an append asking
+    for it is `INVALID_ARGUMENT`).
+  - **`Replay`** streams the caller's tenant log, the compacted snapshot (one `PUT` per
+    live entry, `from_snapshot`) then the tail in `seq` order, and ends. A store replays
+    at every start, before it serves; its next `seq` follows the last one replayed.
+  - The generated surface fixes the shape, the routing and who may call. Ordering, the
+    ack levels, compaction and tenant isolation are the redo service's to implement and
+    test (tacplus-dev/redo#1); applying after the ack is the store's.
 
 ## Validations (tacplus errors)
 

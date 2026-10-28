@@ -189,8 +189,12 @@ type ServiceDescriptor struct {
 	// fleet build stamps auth_services from the fleet's declared clients; until
 	// it does, the list is empty and the service admits no callers.
 	AuthServicesFromFleet bool
-	AuthEntitledUsers     bool // C2S: users with matching entitlements can call
-	AuthAnyUser           bool // C2S: any authenticated user can call
+	// HostTenantOwned: service_s2s {host_tenant_owned: true}. The service
+	// HostLabel names is tenant-owned, so this surface is tenant-routed even
+	// when the host's own proto is not in the run (see IsTenantRouted).
+	HostTenantOwned   bool
+	AuthEntitledUsers bool // C2S: users with matching entitlements can call
+	AuthAnyUser       bool // C2S: any authenticated user can call
 	// Synthesized is true for tacplus-generated services (state/store/mutation/
 	// opa_eval), identified by the `// tacplus:generated-service` sentinel comment.
 	// Used to distinguish them from user-defined service_s2s with empty
@@ -1030,6 +1034,7 @@ func (p *DescriptorParser) parseServiceOptions(sd protoreflect.ServiceDescriptor
 			svc.AuthServices = val.GetAuthServices()
 			svc.AuthServicesFromFleet = val.GetAuthServicesFromFleet() // both set is refused by ValidateServiceSurfaces
 			svc.HostLabel = val.GetLabel()                             // non-empty for vservices: names the package of the service that hosts this RPC surface
+			svc.HostTenantOwned = val.GetHostTenantOwned()             // requires HostLabel: ValidateHostTenantOwned
 		}
 	}
 

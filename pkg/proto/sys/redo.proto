@@ -1,0 +1,138 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+// Package redolog is the contract between the record store and the redo service:
+// the record store's durability (the log is the database). It is part of the
+// sys contract: tacplus defines it, the redo service hosts it, the record
+// store calls it through its generated client, so neither side hand-writes it
+// (tacplus#163 D5). Field numbers are frozen.
+//
+// The redo service is tenant-owned and runs in the reserved restore tenant;
+// every tenant's record store reaches it by a tenant-to-tenant call, routed by
+// the request's tenant field (the target, the redo instance's tenant), and
+// opens its tenant door with RPC_FLAG_ANY_TENANT. The tenant a write BELONGS
+// to is never a request field: it is the caller's identity
+// (spiffe://<td>/tenants/<id>/services/...). The redo service keys every log
+// by trust domain and that tenant, and refuses to read or write any other
+// tenant's.
+syntax = "proto3";
+
+package redolog;
+
+import "sys/spec.proto";
+
+// Redo is the record store's redo log, hosted by the service at routing label
+// "redo". host_tenant_owned: that service is tenant-owned, which this contract
+// cannot learn from the host's proto because a record store generates without
+// it.
+service Redo {
+  option (spec.service_s2s) = {label: "redo", host_tenant_owned: true};
+
+  // Append opens a tenant's append stream: the record store sends each write
+  // it is about to apply, in order, and the redo service acks it per
+  // durability level. One stream per store instance writing a tenant; every
+  // message on it names the same route tenant.
+  //
+  // Order: seq is the tenant log's position, 1 for the first append of an
+  // empty log, and each append's seq is exactly one more than the last one
+  // the log holds. The redo service refuses any other (FAILED_PRECONDITION),
+  // so a replay is exact; a store that lost its place replays and continues
+  // from the last seq.
+  //
+  // Acks: one RedoAck per level reached, in increasing level and in seq order:
+  // DURABILITY_LOCAL once the local redo has it on disk, DURABILITY_REMOTE once
+  // the second site has it too, never beyond the level the append asks for.
+  // The store applies a write, and answers its caller, only once the ack at
+  // the level it owes has arrived; while the redo service is unreachable it
+  // refuses writes. DURABILITY_MEMORY writes are never appended (they are lost
+  // on a full restart by definition), and an append asking for it is refused
+  // (INVALID_ARGUMENT).
+  rpc Append(stream RedoAppend) returns (stream RedoAck) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["stratum"], route_field: "tenant", flags: [RPC_FLAG_ANY_TENANT]};
+  }
+
+  // Replay streams the caller's tenant log: the compacted snapshot (one PUT
+  // per live entry, from_snapshot set, all at the seq the snapshot folds in),
+  // then the tail behind it in seq order, and ends. A record store replays at
+  // every start, before it serves; restore is to the latest state. The next
+  // append's seq is one more than the last seq replayed (1 for an empty log).
+  rpc Replay(RedoReplayRequest) returns (stream RedoReplayEntry) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["stratum"], route_field: "tenant", flags: [RPC_FLAG_ANY_TENANT]};
+  }
+}
+
+// RedoOp is what a change does to its entry.
+enum RedoOp {
+  REDO_OP_UNSPECIFIED = 0;
+  // PUT sets the entry to value (insert, replace, put alike: the store has
+  // already decided the write, the log only records its outcome).
+  REDO_OP_PUT = 1;
+  // DELETE removes the entry; value is empty.
+  REDO_OP_DELETE = 2;
+}
+
+// RedoKey is an entry's key, typed as the record's key field is: a string, or
+// an integer. Two keys are the same entry when they are the same case with the
+// same value, which is what compaction folds by.
+message RedoKey {
+  oneof key {
+    string string_key = 1 [(spec.assert_max_size) = 4096];
+    int64 int_key = 2;
+    uint64 uint_key = 3;
+  }
+}
+
+// RedoChange is one entry's change.
+message RedoChange {
+  // record_type is the record message's full proto name, e.g. "people.Xid".
+  string record_type = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 512];
+  RedoKey key = 2 [(spec.assert_required) = true];
+  RedoOp op = 3 [(spec.assert_enum_defined) = true];
+  // value is the record, protobuf binary encoded, for a PUT. The redo service
+  // never reads it.
+  bytes value = 4 [(spec.assert_max_size) = 4000000];
+  // revision is the entry's revision as the store answered the write (D6),
+  // kept so a replay restores it exactly.
+  int64 revision = 5;
+}
+
+// RedoAppend is one store operation: a single write, or an Apply of several
+// ops, which the log keeps all or nothing, as the store applied it.
+message RedoAppend {
+  // tenant is the TARGET tenant's tid, the redo instance's own (restore), the
+  // route field. It is not the tenant the write belongs to: that is the
+  // caller's identity.
+  string tenant = 1 [(spec.assert_max_size) = 8];
+  // seq is the tenant log position of this operation; see Append.
+  uint64 seq = 2;
+  // changes are the operation's entry changes, in the store's canonical lock
+  // order (record type full name, then key).
+  repeated RedoChange changes = 3 [(spec.assert_required) = true, (spec.assert_max_size) = 1024];
+  // durability is the level the operation is owed: the highest of its record
+  // types' (spec.record).durability and what the write asked for. Unset is
+  // DURABILITY_LOCAL.
+  spec.Durability durability = 4;
+}
+
+// RedoAck reports that the operation at seq has reached level.
+message RedoAck {
+  uint64 seq = 1;
+  spec.Durability level = 2;
+}
+
+// RedoReplayRequest asks for the caller's tenant log.
+message RedoReplayRequest {
+  // tenant is the TARGET tenant's tid, the redo instance's own (restore), the
+  // route field. The log replayed is the caller's own tenant's.
+  string tenant = 1 [(spec.assert_max_size) = 8];
+}
+
+// RedoReplayEntry is one operation of a replay.
+message RedoReplayEntry {
+  // seq is the operation's log position; for a snapshot entry, the last seq
+  // the snapshot folds in.
+  uint64 seq = 1;
+  repeated RedoChange changes = 2 [(spec.assert_max_size) = 1024];
+  // from_snapshot is set on the compacted snapshot's entries, which come first.
+  bool from_snapshot = 3;
+}

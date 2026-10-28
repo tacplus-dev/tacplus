@@ -594,6 +594,27 @@ Rust alike, with the same codes and messages:
 The behaviour is driven in-process against the generated wrapper of each language by
 the `proto-recordegress` host leg of `cross-test/current-generation`.
 
+### Redo Contract
+
+`sys/redo.proto` declares `redolog.Redo`, the record store's redo log (the model is in
+[`RECORD_EVENT_MODEL.md`](RECORD_EVENT_MODEL.md), "The redo contract"). It is a sys
+contract: every run has it, so a record store generates its client from its own proto
+alone, and the service whose package is `redo` serves it by its label, with the
+ordinary generated server wrapper and handler interface (Go, Java, Rust). Its field
+numbers are frozen.
+
+- `Append(stream RedoAppend) returns (stream RedoAck)` and
+  `Replay(RedoReplayRequest) returns (stream RedoReplayEntry)`, `RPC_PRINCIPAL_SERVICE`,
+  `auth_services: ["stratum"]`.
+- Both are tenant-routed through `(spec.service_s2s).host_tenant_owned`: `route_field:
+  "tenant"` (the redo instance's tid) and `RPC_FLAG_ANY_TENANT`, so the generated client
+  takes the tid when it opens the `Append` stream and every message must name it, and
+  the generated server refuses a call routed to another tenant and admits a caller of
+  any tenant. `registry.json` carries both on each rpc.
+- The tenant a write belongs to is the caller's verified identity, never a request
+  field; ordering, acks, compaction and isolation are the host's behaviour, not the
+  wrapper's.
+
 ### PAGE Contract
 
 A PAGE proto method is an ordinary **unary** RPC. The request carries the filter
@@ -727,8 +748,10 @@ synonyms fold to canonicals and are rejected:
 
 - **Core (6)**: Get, List (replaces Search/Query/Find), Watch, Create, Update,
   Delete.
-- **Action (16)**: Mint, Revoke, Authorize, Send, Publish, Subscribe, Broker,
-  Execute, Cancel, Acquire, Release, Retry, Reset, Ping, Proxy, Merge. `Subscribe` and `Broker`
+- **Action (18)**: Mint, Revoke, Authorize, Send, Publish, Subscribe, Broker,
+  Execute, Cancel, Acquire, Release, Append, Replay, Retry, Reset, Ping, Proxy, Merge.
+  `Append`/`Replay` are an ordered log's (the redo contract's): positions in one log,
+  and one finite replay of it, not resources or a change feed. `Subscribe` and `Broker`
   are canonical action verbs (not folded to `Watch`); the messaging verbs are
   `Send`/`Publish`/`Subscribe`/`Broker`. Stateful vs stateless rule:
   `Create`/`Delete` for stored resources; `Mint`/`Revoke` for self-contained

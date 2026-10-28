@@ -1276,6 +1276,16 @@ message ServiceS2SAnnotation {
   // generates with no callers allowed (the authorizers fail closed). Mutually
   // exclusive with a literal auth_services.
   bool auth_services_from_fleet = 4;
+
+  // host_tenant_owned declares that the service named by label is tenant-owned
+  // ((spec.service).tenant_owned), so this surface's rpcs are tenant-routed:
+  // each declares (spec.rpc).route_field, and callers and the host treat it
+  // exactly as an rpc of the host's own proto. It is for a contract generated
+  // without its host's proto in the run, a sys contract above all
+  // (sys/redo.proto): without it the run cannot tell the host is tenant-owned
+  // and refuses the route field. Requires label. When the host's proto is in
+  // the run, it must declare tenant_owned = true, or generation fails.
+  bool host_tenant_owned = 5;
 }
 
 // ServiceC2SAnnotation declares a client-to-service gRPC service.

@@ -68,14 +68,66 @@ func TenantOwnedServices(dp *DescriptorParser) map[string]bool {
 
 // IsTenantRouted reports whether the rpcs of svc, declared in fd, are routed
 // by tenant: a user-declared s2s or c2s service of a tenant-owned file, or a
-// surface hosted (service_s2s/service_c2s label) by a tenant-owned service.
+// surface hosted (service_s2s/service_c2s label) by a tenant-owned service,
+// known as such from the host's proto in the run or, for a contract generated
+// without it (a sys contract), from the surface's own host_tenant_owned.
 // C2D services dial a local daemon and synthesized planes carry their own
 // tenant pin, so neither is ever addressed by tenant.
 func IsTenantRouted(fd *FileDescriptor, svc *ServiceDescriptor, tenantOwned map[string]bool) bool {
 	if svc.Synthesized || !(svc.IsS2S || svc.IsC2S) {
 		return false
 	}
+	if svc.HostLabel != "" && svc.HostTenantOwned {
+		return true
+	}
 	return fd.ServiceTenantOwned || (svc.HostLabel != "" && tenantOwned[svc.HostLabel])
+}
+
+// ValidateHostTenantOwned enforces (spec.service_s2s).host_tenant_owned. It
+// names a property of the host, so it is refused on a surface with no label,
+// and, when the host's own proto is in the run (a file whose (spec.service)
+// name or package is the label), the host must declare tenant_owned: a
+// surface routed to per-tenant instances of a shared service would route
+// every call to an instance that does not exist.
+func ValidateHostTenantOwned(dp *DescriptorParser) error {
+	if dp == nil {
+		return nil
+	}
+	all := dp.GetAllFiles()
+	hosts := make(map[string]bool) // label -> the loaded host declares tenant_owned
+	for _, fd := range all {
+		if fd.ServiceName == "" {
+			continue
+		}
+		hosts[fd.ServiceName] = hosts[fd.ServiceName] || fd.ServiceTenantOwned
+		if fd.Package != "" {
+			hosts[fd.Package] = hosts[fd.Package] || fd.ServiceTenantOwned
+		}
+	}
+	var errs []string
+	for _, fd := range all {
+		for si := range fd.Services {
+			svc := &fd.Services[si]
+			if !svc.HostTenantOwned {
+				continue
+			}
+			name := fd.Package + "." + svc.Name
+			if svc.HostLabel == "" {
+				errs = append(errs, fmt.Sprintf("%s: (spec.service_s2s).host_tenant_owned without a label; it says the service the label names is tenant-owned, so name the host or drop it",
+					name))
+				continue
+			}
+			if owned, loaded := hosts[svc.HostLabel]; loaded && !owned {
+				errs = append(errs, fmt.Sprintf("%s: (spec.service_s2s).host_tenant_owned, but its host %q, loaded in this run, does not declare (spec.service).tenant_owned; a shared host has no per-tenant instance to route to",
+					name, svc.HostLabel))
+			}
+		}
+	}
+	if len(errs) > 0 {
+		sort.Strings(errs)
+		return fmt.Errorf("host_tenant_owned errors:\n  %s", strings.Join(errs, "\n  "))
+	}
+	return nil
 }
 
 // ValidateTenantRouting enforces (spec.rpc).route_field and

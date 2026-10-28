@@ -198,3 +198,37 @@ message ServiceHealth {
 		t.Errorf("HealthStateName = %q, want empty (near-miss not recognized)", cfg.HealthStateName)
 	}
 }
+
+// A service that serves only a surface it hosts by label (the redo service,
+// whose one served surface is the sys contract redolog.Redo) is a gRPC server
+// like any other and reports its instance health: it gets ServiceHealth.
+func TestInjectHealthState_HostOfALabelHostedSurfaceReportsHealth(t *testing.T) {
+	dir := t.TempDir()
+	if err := CopySysProtos(dir); err != nil {
+		t.Fatalf("CopySysProtos: %v", err)
+	}
+	if err := writeMinimalGeneratedStubs([]string{dir}); err != nil {
+		t.Fatalf("writeMinimalGeneratedStubs: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "services"), 0755); err != nil {
+		t.Fatalf("mkdir services: %v", err)
+	}
+	host := `syntax = "proto3";
+
+package redo;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "redo", tenant_owned: true, pinned_tenant: "restore"};
+`
+	if err := os.WriteFile(filepath.Join(dir, "services", "redo.proto"), []byte(host), 0644); err != nil {
+		t.Fatalf("write redo proto: %v", err)
+	}
+	cfg := &tactype.Config{SelfPackage: "redo"}
+	if err := InjectHealthState(cfg, dir); err != nil {
+		t.Fatalf("InjectHealthState: %v", err)
+	}
+	if len(cfg.States) != 1 || !cfg.States[0].IsHealthState {
+		t.Fatalf("the host of redolog.Redo got no ServiceHealth state: %+v", cfg.States)
+	}
+}

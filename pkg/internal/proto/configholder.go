@@ -2196,11 +2196,14 @@ func hasOwnGrpcServer(config *tactype.Config, inputDir string) bool {
 		return hasOwnGrpcServerText(config, inputDir)
 	}
 	for _, fd := range p.GetAllFiles() {
-		if fd.Package != config.SelfPackage && fd.ServiceName != config.SelfPackage {
-			continue
-		}
+		own := fd.Package == config.SelfPackage || fd.ServiceName == config.SelfPackage
 		for _, svc := range fd.Services {
 			if svc.Synthesized || svc.IsC2D {
+				continue
+			}
+			// A surface another package declares and this service hosts by
+			// label (a sys contract such as redolog.Redo) is served here too.
+			if !own && !(svc.IsS2S && svc.HostLabel == config.SelfPackage) {
 				continue
 			}
 			if svc.GrpcName != "" || svc.IsS2S || svc.IsC2S || svc.IsSMB {

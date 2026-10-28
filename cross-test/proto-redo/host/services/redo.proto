@@ -1,0 +1,15 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The redo-contract fixture's HOST (issue #163 D5): the redo service, a
+// tenant-owned service pinned to the reserved restore tenant. It declares no
+// rpc of its own: it serves the sys contract redolog.Redo, which names it by
+// routing label "redo", and its generated server checks each call's route
+// field and opens its tenant door to callers of any tenant.
+
+syntax = "proto3";
+
+package redo;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "redo", tenant_owned: true, pinned_tenant: "restore"};

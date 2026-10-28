@@ -487,7 +487,7 @@ func resolveReferencedContracts(stagedDirs []string, m *Manifest, union *registr
 // isSysPackage reports whether a referenced package is one tacplus supplies.
 func isSysPackage(pkg string) bool {
 	switch pkg {
-	case "spec", "tokenrequest", "x509", "healthreport", "minter", "servicehealth", "services", "entitlements", "accounting_method", "services_config", "tenant_config", "project_config", "mcp", "query", "logger", "host", "key", "jwk", "jwkview", "publicjwksview", "smbcert", "tlscert", "grpcconfig", "opalib", "accounting", "trace", "tags", "token", "tokencache", "ip", "http", "httpclient", "filesystem", "diskstore", "cloudidentity", "cloudvendor", "credpair", "alpn", "entitlement", "entitlementview", "errors", "outputformat", "tacplus", "eventbus_support":
+	case "spec", "tokenrequest", "x509", "healthreport", "minter", "redolog", "servicehealth", "services", "entitlements", "accounting_method", "services_config", "tenant_config", "project_config", "mcp", "query", "logger", "host", "key", "jwk", "jwkview", "publicjwksview", "smbcert", "tlscert", "grpcconfig", "opalib", "accounting", "trace", "tags", "token", "tokencache", "ip", "http", "httpclient", "filesystem", "diskstore", "cloudidentity", "cloudvendor", "credpair", "alpn", "entitlement", "entitlementview", "errors", "outputformat", "tacplus", "eventbus_support":
 		return true
 	}
 	return false
@@ -545,8 +545,9 @@ func writeLock(lock *Lock, path string) error {
 // validateFleet runs the checks that only a whole fleet can answer: every
 // routing label served by a loaded service, every C2S host label served, one
 // SMB authority if any SMB member, at most one approval broker, a route field
-// on every rpc a tenant-owned service hosts, exactly one minter, a complete and
-// collision-free registry.
+// on every rpc a tenant-owned service hosts, every host_tenant_owned surface's
+// host tenant-owned, exactly one minter, a complete and collision-free
+// registry.
 func validateFleet(mergedDir string) error {
 	if err := registry.Validate(mergedDir); err != nil {
 		return fmt.Errorf("fleet: %w", err)
@@ -565,6 +566,7 @@ func validateFleet(mergedDir string) error {
 		parser.ValidateC2SHostLabels,
 		parser.ValidateSmbAuthority,
 		parser.ValidateApprovalBroker,
+		parser.ValidateHostTenantOwned,
 		parser.ValidateTenantRouting,
 	} {
 		if err := check(dp); err != nil {

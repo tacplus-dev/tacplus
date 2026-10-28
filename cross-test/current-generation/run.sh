@@ -27,6 +27,7 @@ QUORUMWRITE_PROTO_SRC="$ROOT_DIR/cross-test/proto-quorumwrite"
 TENANTSLICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-tenantslice"
 EPOCHLOAD_PROTO_SRC="$ROOT_DIR/cross-test/proto-epochload"
 TENANTROUTE_PROTO_SRC="$ROOT_DIR/cross-test/proto-tenantroute"
+REDO_PROTO_SRC="$ROOT_DIR/cross-test/proto-redo"
 WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/current-generation}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
@@ -306,6 +307,25 @@ EOF
   if [[ "$self" == "harbor" ]]; then
     echo 'depends: ["crew"]' >> "$dir/tacplus.yaml"
   fi
+}
+
+# The redo-contract fixture (issue #163 D5), built as stratum (the record store,
+# from its own proto alone: the redo host's proto is not in the run) or as redo
+# (the host, which serves the sys contract redolog.Redo by its label).
+write_redo_config() {
+  local dir="$1"
+  local language="$2"
+  local self="$3"
+  local side="caller"
+  [[ "$self" == "redo" ]] && side="host"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.$self"
+src: "$REDO_PROTO_SRC/$side"
+output-dir: "tacplus"
+EOF
 }
 
 # The same fixture built as registrar, the OWNER of the service_state shape:
@@ -2761,6 +2781,62 @@ if [[ -d "$TENANTROUTE_PROTO_SRC" ]]; then
       echo "==> Compiling $language tenant-route fixture ($self)"
       compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
       echo "    PASS $language tenant-route ($self)"
+    done
+  done
+fi
+
+# redo-contract fixture (issue #163 D5): the sys contract redolog.Redo is
+# tenant-routed by its host_tenant_owned, so stratum, generated without the
+# host's proto, carries its route field in registry.json and the routed client;
+# redo, which hosts it by label, gets its server wrapper (a sys contract's
+# wrapper was never written in Go) with the route check and the any-tenant door.
+if [[ -d "$REDO_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    for self in stratum redo; do
+      dir="$WORK_ROOT/redo-$self-$language"
+      log="$WORK_ROOT/redo-$self-$language.log"
+      rm -rf "$dir"
+      write_redo_config "$dir" "$language" "$self"
+      side="caller"
+      [[ "$self" == "redo" ]] && side="host"
+
+      echo "==> Generating $language redo-contract fixture ($self)"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$REDO_PROTO_SRC/$side" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language redo-contract generation failed ($self); log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      python3 - "$output_root/registry.json" <<'REDO_PY' || die "redo-contract fixture ($language, $self): registry.json does not route redolog.Redo by tenant"
+import json, sys
+want = {"/redolog.Redo/Append", "/redolog.Redo/Replay"}
+seen = set()
+def walk(o):
+    if isinstance(o, dict):
+        if o.get("grpc_path") in want and "rpc_verb" in o:  # an rpc entry, not one of its surfaces
+            if o.get("route_field") != "tenant" or o.get("any_tenant") is not True:
+                sys.exit("%s: route_field=%r any_tenant=%r" % (o["grpc_path"], o.get("route_field"), o.get("any_tenant")))
+            seen.add(o["grpc_path"])
+        for v in o.values():
+            walk(v)
+    elif isinstance(o, list):
+        for v in o:
+            walk(v)
+walk(json.load(open(sys.argv[1])))
+if seen != want:
+    sys.exit("missing rpcs: %s" % sorted(want - seen))
+REDO_PY
+      if [[ "$self" == "redo" ]]; then
+        case "$language" in
+          go) wrapper="$(find "$output_root" -type f -path '*/s2sm/grpc/servers/sys/redolog/redo.go' -print -quit)" ;;
+          java) wrapper="$(find "$output_root" -type f -path '*/s2sm/internal/grpc/servers/sys/redolog/Redo.java' -print -quit)" ;;
+          rust) wrapper="$(find "$output_root" -type f -path '*/s2sm/internal/grpc/servers/sys/redolog/redo.rs' -print -quit)" ;;
+        esac
+        [[ -n "$wrapper" ]] || die "redo-contract fixture ($language): the host has no server wrapper for redolog.Redo"
+      fi
+      echo "==> Compiling $language redo-contract fixture ($self)"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
+      echo "    PASS $language redo-contract ($self)"
     done
   done
 fi

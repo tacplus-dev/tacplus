@@ -4,6 +4,13 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **The redo contract names its caller and host** (2026-10-28, #163 D5): `sys/redo.proto` admits
+  `auth_services: ["stratum"]` and is hosted at label `"redo"`, as decided ("redo hosts it, Stratum calls it"), so a
+  fleet that runs its record store under another name cannot call it, and tacplus's sys tree now carries two platform
+  service names beside `kernel` (docs/USER.md "Well-Known Names", tacplus#1). `auth_services_from_fleet` cannot stand
+  in: the fleet stamps caller lists in the merged tree, and sys protos are not in it, and a standalone build of the
+  host would admit no callers. If another record store or a second redo implementor appears, a declared audience
+  for sys contracts (say, the fleet stamping sys contracts too) would remove the names.
 - **Rust: the (spec.store_namespace) predicate pin on the record query plane** (2026-10-28, #163): Go and Java pin a
   tenant-held caller's query predicate to its own tenant before the store is asked (`goPredicateNamespacePin`,
   `javaPredicateNamespacePin`); the Rust wrapper renders none (cross-test/current-generation/run.sh says so for the

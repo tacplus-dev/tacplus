@@ -951,6 +951,8 @@ service ModelEgress {
 }
 ```
 
+`host_tenant_owned: true` says the service the `label` names is tenant-owned, for a surface generated without that service's proto in the run (a sys contract): its rpcs are tenant-routed and declare `(spec.rpc).route_field` (see "Tenant-owned services are routed by a declared field").
+
 `auth_services_from_fleet` and a literal `auth_services` are mutually exclusive (`ValidateServiceSurfaces`). Use it for a service whose callers differ per fleet (a shared model-egress proxy: one fleet's product services, another fleet's doppelganger); the contract repo then never names one fleet's services.
 
 **`service_c2s`** — declares a client-to-service gRPC service, exposed through the API gateway to end users. `auth_entitled_users` is the service-level default policy. `label` is the twin of the `service_s2s` one — it names the physical host for a trait's client-facing surface, while the audience the gateway checks the caller's token against stays the file's `(spec.trait).name`:
@@ -1092,6 +1094,13 @@ service Crew {
   build). This covers the service's own `service_s2s`/`service_c2s` services and
   any surface hosted on it through a `label`. The field must be a top-level,
   singular, plain (not `optional`) `string` of the request.
+- **A contract generated without its host.** A hosted surface is known to be
+  tenant-routed from its host's proto, when that is in the run. A contract whose
+  callers generate without it, a sys contract above all (`sys/redo.proto`),
+  declares it itself: `option (spec.service_s2s) = {label: "redo",
+  host_tenant_owned: true};`. Its rpcs then declare `route_field` like the host's
+  own, in every run. `host_tenant_owned` requires a `label`, and when the host's
+  proto is in the run it must declare `tenant_owned` (`ValidateHostTenantOwned`).
 - **Refused at run time, never defaulted.** A call whose route field is empty or
   not a tid is refused with `INVALID_ARGUMENT` (HTTP `400` at the gateway's REST
   surface) before it is routed. It is never filled in from the caller's token,
@@ -1908,6 +1917,7 @@ in the run. The fleet build loads the real implementors. Today:
 | Declared in | What | Hosted by |
 |-------------|------|-----------|
 | `sys/minter.proto` (`minter.Minter`) | The minting contract every generated ServiceManager calls: `MintServiceToken`, `MintExternalServiceToken`, `MintToken`, `MintX509Cert`. It is the one authoritative `(spec.token_minter)` in every run; a consumer must not declare another. | The token authority, at routing label `kernel`. It implements `minter.Minter` and keeps its own policy RPCs in a service of its own; that service carries `(spec.approval_broker)` when the fleet has `(spec.rpc).requires_device` rpcs (see below). |
+| `sys/redo.proto` (`redolog.Redo`) | The record store's durability: the contract between the record store and the redo service (the log is the database). `Append` (bidi: the store sends each operation, a single write or a whole `Apply`, at the next `seq` of the tenant's log; the redo service acks it per durability level, `DURABILITY_LOCAL` on local disk, `DURABILITY_REMOTE` once the second site has it) and `Replay` (the tenant's compacted snapshot, then the tail, then the end). Both route by `tenant`, the redo instance's tid, with `RPC_FLAG_ANY_TENANT`; the tenant a write belongs to is the caller's identity, never a field. Callers: `stratum`. Field numbers are frozen. | The redo service, at routing label `redo`: tenant-owned (`host_tenant_owned`), pinned to the reserved `restore` tenant. Its own proto is package `redo` (its identity, hence the contract's package `redolog`) and declares only `option (spec.service) = {name: "redo", tenant_owned: true, pinned_tenant: "restore"};`; it serves `redolog.Redo` by the label. |
 | `sys/servicehealth.proto` (`servicehealth.ServiceHealth`) | The service-instance health root every service reports into. Field numbers are frozen. | The state host (`kernel`), which imports it rather than declaring a copy. |
 | routing label `kernel` | The state host. Counts as served in every run (see Well-Known Names); config state routes there when no store is loaded. | The fleet's state host. |
 

@@ -6,10 +6,12 @@ package fleet
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/tacplus-dev/tacplus/pkg/buildinfo"
+	pkgproto "github.com/tacplus-dev/tacplus/pkg/proto"
 )
 
 func write(t *testing.T, p, content string) {
@@ -339,5 +341,55 @@ service Beta {
 	src, _ := os.ReadFile(filepath.Join(beta, "proto", "services", "beta.proto"))
 	if !strings.Contains(string(src), "auth_services_from_fleet: true") {
 		t.Fatal("the contract repo must keep declaring auth_services_from_fleet")
+	}
+}
+
+// Every package tacplus embeds under sys/ is one a contract may reference
+// without the fleet pulling a contract for it: isSysPackage must know them
+// all, or a service calling a sys contract (redo.Redo, say) fails the fleet
+// build as referencing a package nobody declares.
+func TestIsSysPackage_KnowsEveryEmbeddedSysPackage(t *testing.T) {
+	entries, err := pkgproto.SysProtos.ReadDir("sys")
+	if err != nil {
+		t.Fatalf("reading embedded sys protos: %v", err)
+	}
+	pkgRe := regexp.MustCompile(`(?m)^package\s+([A-Za-z0-9_.]+)\s*;`)
+	for _, e := range entries {
+		data, err := pkgproto.SysProtos.ReadFile("sys/" + e.Name())
+		if err != nil {
+			t.Fatalf("reading sys/%s: %v", e.Name(), err)
+		}
+		m := pkgRe.FindSubmatch(data)
+		if m == nil {
+			t.Fatalf("sys/%s declares no package", e.Name())
+		}
+		if !isSysPackage(string(m[1])) {
+			t.Errorf("sys/%s declares package %q, which isSysPackage does not know", e.Name(), m[1])
+		}
+	}
+}
+
+// The fleet is where a contract's host_tenant_owned meets its real host: the
+// sys redo contract (redolog.Redo) says the service at label "redo" is
+// tenant-owned, and a fleet whose redo is a shared service is refused instead
+// of routing every call to per-tenant instances that do not exist.
+func TestValidateFleetChecksHostTenantOwnedAgainstTheHost(t *testing.T) {
+	for _, tc := range []struct {
+		option string
+		ok     bool
+	}{
+		{`{name: "redo"}`, false},
+		{`{name: "redo", tenant_owned: true, pinned_tenant: "restore"}`, true},
+	} {
+		merged := t.TempDir()
+		write(t, filepath.Join(merged, "registry.yaml"), "services:\n    - name: redo\n      id: 1\n")
+		write(t, filepath.Join(merged, "services", "redo.proto"), "syntax = \"proto3\";\n\npackage redo;\n\nimport \"sys/spec.proto\";\n\noption (spec.service) = "+tc.option+";\n")
+		err := validateFleet(merged)
+		if tc.ok && err != nil {
+			t.Fatalf("%s: validateFleet: %v", tc.option, err)
+		}
+		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "host_tenant_owned") || !strings.Contains(err.Error(), "redolog.Redo")) {
+			t.Fatalf("%s: validateFleet err = %v, want the host_tenant_owned refusal for redolog.Redo", tc.option, err)
+		}
 	}
 }

@@ -6,9 +6,9 @@ package verbs
 import "testing"
 
 func TestRegistrySize(t *testing.T) {
-	// 6 core + 16 action + 7 agent = 29 (the governed closed set).
-	if len(registry) != 29 {
-		t.Fatalf("registry must hold exactly 29 verbs, got %d", len(registry))
+	// 6 core + 18 action + 7 agent = 31 (the governed closed set).
+	if len(registry) != 31 {
+		t.Fatalf("registry must hold exactly 31 verbs, got %d", len(registry))
 	}
 	var core, action, agent int
 	for _, d := range registry {
@@ -35,8 +35,8 @@ func TestRegistrySize(t *testing.T) {
 			t.Fatalf("verb %q has no class", d.Verb)
 		}
 	}
-	if core != 6 || action != 16 || agent != 7 {
-		t.Fatalf("class split must be 6/16/7, got %d/%d/%d", core, action, agent)
+	if core != 6 || action != 18 || agent != 7 {
+		t.Fatalf("class split must be 6/18/7, got %d/%d/%d", core, action, agent)
 	}
 }
 

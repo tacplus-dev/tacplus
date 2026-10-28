@@ -177,6 +177,28 @@
       "audit": "Mutual-exclusion hold released."
     },
     {
+      "verb": "Append",
+      "pattern": "ACTION",
+      "access": "WRITE",
+      "class": "action",
+      "capability": "WRITE",
+      "retry": "IDEMPOTENCY_REQUIRED",
+      "definition": "Add entries to the end of an ordered log, at a position the caller names, and report how durable each is.",
+      "boundary": "NOT Create; the entries are positions in one ordered log, refused out of order, not resources addressed by identity. NOT Publish/Send; nothing is delivered to a subscriber or recipient, the log keeps it.",
+      "audit": "Log entries appended."
+    },
+    {
+      "verb": "Replay",
+      "pattern": "ACTION",
+      "access": "READ",
+      "class": "action",
+      "capability": "READ",
+      "retry": "NO_GENERATED_AUTO_RETRY",
+      "definition": "Stream an ordered log from its start (a compacted snapshot, then the tail), once, and end.",
+      "boundary": "NOT Watch/Subscribe; the stream is finite and ends at the log's end instead of following new entries. NOT List; it is the log in order, not a filtered or paginated collection.",
+      "audit": "Log replayed."
+    },
+    {
       "verb": "Retry",
       "pattern": "ACTION",
       "access": "WRITE",

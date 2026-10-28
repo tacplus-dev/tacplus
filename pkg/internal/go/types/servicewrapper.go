@@ -103,12 +103,16 @@ func generateServiceWrappers(config *tactype.Config, servicesInfo []ServiceInfo,
 
 	for _, svc := range servicesInfo {
 		// Skip lib services (e.g., LockService, MapService, GrpcServerService) —
-		// they are internal infrastructure and don't need wrappers.
+		// they are internal infrastructure and don't need wrappers. A sys
+		// contract this service hosts by label (minter.Minter at "kernel",
+		// redolog.Redo at "redo") is not infrastructure: the ServiceManager
+		// serves it, so it gets its wrapper like any hosted surface.
 		fileDesc, err := descriptorParser.GetFileDescriptor(svc.ProtoFile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse descriptor for %s: %w", svc.ProtoFile, err)
 		}
-		if proto.IsInfraProtoFile(svc.ProtoFile, fileDesc) {
+		if proto.IsInfraProtoFile(svc.ProtoFile, fileDesc) &&
+			!service.IsHostedVService(svc.HostLabel, svc.PackageName, config.SelfPackage) {
 			continue
 		}
 		// Parse the proto file to get method information

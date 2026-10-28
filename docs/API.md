@@ -553,6 +553,31 @@ Two refusals remain, and both are deliberate rather than gaps:
   compare rows against, so the read cannot be hosted in Go, Java or Rust. This
   one is language-independent by construction, not a property of any generator.
 
+### Record Write Surface Contract
+
+The record query plane's S2S half also carries the record store's generated write
+surface (`Get<T>`, `Put<T>`, `InsertIfAbsent<T>`, `ReplaceIfUnchanged<T>`,
+`Delete<T>`, `Watch<T>Changes`, `Apply`; the model is in
+[`RECORD_EVENT_MODEL.md`](RECORD_EVENT_MODEL.md), "Write surface"). Its handler
+interface is the ordinary generated one; the generated wrapper owns, in Go, Java and
+Rust alike, with the same codes and messages:
+
+- the **durability floor** stamped as `(spec.record_entry)`: a request asking for a
+  durability below it is `INVALID_ARGUMENT`, one asking for none reaches the handler
+  with the floor in its `durability` field, and a handler answer acked below the
+  request's level is `INTERNAL`, never returned;
+- the **tenant pin** for a record with a `(spec.store_namespace)` field: a caller whose
+  verified namespace is not `/system…` is held to its own or a linked tenant on the
+  request's tenant field (stamped when unset, `INVALID_ARGUMENT` otherwise);
+- **`Apply`**, per op in order: a case must be set, the op is authorized exactly as its
+  single-type RPC, the tenant pin and floor apply as above, and the ops must be strictly
+  ascending by (record type full name, key — UTF-8 bytes for a string, numeric for an
+  integer); the handler receives the highest level involved in the request's
+  `durability`, and must answer one result per op, none acked below it.
+
+The behaviour is driven in-process against the generated wrapper of each language by
+the `proto-recordegress` host leg of `cross-test/current-generation`.
+
 ### PAGE Contract
 
 A PAGE proto method is an ordinary **unary** RPC. The request carries the filter

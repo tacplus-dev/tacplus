@@ -298,17 +298,20 @@ func (es *javaEgressSanitizer) javaNamespaceWatchGuard(eventType, servicePackage
 // a foreign tenant gets INVALID_ARGUMENT and the abort behind it stays
 // unreachable from the outside.
 
-// predicateNamespaceField returns (requestFieldName, namespaceFieldName) for a
-// request carrying a query predicate whose criteria include the row's tenant, or
-// two empty strings when it carries none.
-func (es *javaEgressSanitizer) predicateNamespaceField(fullType, servicePackage string) (string, string) {
+// predicateNamespaceField returns (requestFieldName, namespaceFieldName,
+// optional) for a request carrying a query predicate whose criteria include the
+// row's tenant, or two empty strings when it carries none. optional reports
+// whether the tenant field is proto3 `optional` (a plane filter criterion) and
+// so has a has-accessor; a row itself (the record write surface's
+// Put<T>Request.item) declares it plain.
+func (es *javaEgressSanitizer) predicateNamespaceField(fullType, servicePackage string) (string, string, bool) {
 	if es == nil || fullType == "" {
-		return "", ""
+		return "", "", false
 	}
 	pkg, name := splitJavaEgressFQN(fullType, servicePackage)
 	msg, ok := es.msgs[pkg+"\x00"+name]
 	if !ok {
-		return "", ""
+		return "", "", false
 	}
 	for i := range msg.Fields {
 		f := &msg.Fields[i]
@@ -323,16 +326,26 @@ func (es *javaEgressSanitizer) predicateNamespaceField(fullType, servicePackage 
 		for j := range pred.Fields {
 			pf := &pred.Fields[j]
 			if pf.Annotations["store_namespace"].BoolValue && !pf.IsRepeated && !pf.IsMessage {
-				return f.Name, pf.Name
+				return f.Name, pf.Name, pf.IsOptional
 			}
 		}
 	}
-	return "", ""
+	return "", "", false
+}
+
+// javaUnsetPrefix is the has-accessor half of an "unset" test on a pinned
+// predicate field: `!req.getF().hasX() || ` for a proto3 optional field, empty
+// for a plain one (whose empty string is its only unset).
+func javaUnsetPrefix(valueExpr, rf, field string, optional bool) string {
+	if !optional {
+		return ""
+	}
+	return fmt.Sprintf("!%s.get%s().has%s() || ", valueExpr, rf, field)
 }
 
 // javaPredicateNamespacePin renders the stamp-or-refuse over the request's query
 // predicate. valueExpr names the request in scope.
-func javaPredicateNamespacePin(reqField, namespace, valueExpr, method, indent string, runtimeGate bool) string {
+func javaPredicateNamespacePin(reqField, namespace string, optional bool, valueExpr, method, indent string, runtimeGate bool) string {
 	if reqField == "" || namespace == "" {
 		return ""
 	}
@@ -350,12 +363,12 @@ func javaPredicateNamespacePin(reqField, namespace, valueExpr, method, indent st
 `, indent)
 		gateClose = indent + "}\n"
 	}
-	body = fmt.Sprintf(`%[1]sif (!%[2]s.get%[3]s().has%[4]s() || %[2]s.get%[3]s().get%[4]s().isEmpty()) {
+	body = fmt.Sprintf(`%[1]sif (%[6]s%[2]s.get%[3]s().get%[4]s().isEmpty()) {
 %[1]s    %[2]s = %[2]s.toBuilder().set%[3]s(%[2]s.get%[3]s().toBuilder().set%[4]s(__queryNamespace)).build();
 %[1]s} else if (!__queryNamespace.equals(%[2]s.get%[3]s().get%[4]s()) && !__queryNamespaceLinked.contains(%[2]s.get%[3]s().get%[4]s())) {
 %[1]s    throw new ProtoException(ProtoException.INVALID_ARGUMENT, "%[5]s names a tenant the caller neither owns nor is linked to; the tenant boundary is not the predicate's to choose");
 %[1]s}
-`, pinIndent, valueExpr, rf, nf, reqField+"."+namespace)
+`, pinIndent, valueExpr, rf, nf, reqField+"."+namespace, javaUnsetPrefix(valueExpr, rf, nf, optional))
 	return fmt.Sprintf(`%[1]s// (spec.store_namespace) on the query predicate: pin the tenant before the
 %[1]s// store is asked. EXACT match against the caller's namespace claim, never the
 %[1]s// level-or-below containment the administrative rule uses.

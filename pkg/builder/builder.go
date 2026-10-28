@@ -251,6 +251,9 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateRecordReadAnnotations(dp); err != nil {
 		return err
 	}
+	if err := parser.ValidateRecordWriteAnnotations(dp); err != nil {
+		return err
+	}
 	if err := parser.ValidateSmbAuthority(dp); err != nil {
 		return err
 	}

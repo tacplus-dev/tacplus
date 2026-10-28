@@ -1188,6 +1188,8 @@ if authTok != nil {
 		callerExtract := callerExtractFor("stream.Context()")
 		callerExtract += goPredicatePins(san, method, servicePackage, "\t", "return", svc.IsC2S, goRecordPlaneS2S(svc))
 		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return")
+		// Watch<T>Changes (#163): the tenant pin of the record write surface.
+		callerExtract += goRecordEntryPre(method, "return")
 		// (spec.store_principal)/(spec.store_namespace)/(spec.record).private on
 		// the WATCH seam: resolved once here, applied to every snapshot_item and
 		// every delta inside the producer loop below, before the frame is
@@ -1762,6 +1764,13 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 			unarySan = egressSanitizeEnvelopeStmts(fs, "resp", "\t")
 		}
 	}
+	// The record write surface (#163): the durability floor and Apply's per-op
+	// guards run after the request is validated and before the handler; their
+	// post halves run first on the response, ahead of any egress transform.
+	inputValidation += goRecordEntryPre(method, "return nil,") +
+		goRecordApplyPre(method, svc, servicePackage, parentDir, skipAuth)
+	unarySan = goRecordWritePost(method) + goRecordApplyPost(method) + unarySan
+
 	// (spec.record).min_group_size runs first: the refusal is about the number
 	// itself, so it must precede any transformation of the response.
 	unarySan = goMinGroupSizeGuard(method, san.minGroupSizeField(method.FullOutputType, servicePackage), "resp", "\t") +

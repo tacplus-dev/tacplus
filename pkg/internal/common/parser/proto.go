@@ -67,6 +67,8 @@ type MethodInfo struct {
 	Resolved             *collection.Resolved          // computed codegen view of Collection (mode/tier/bounds); nil when Collection is nil. Set by ResolveCollections.
 	Class                *verbs.Classification         // resolved verb/pattern/access (the archived RPC_PATTERNS_AND_VERBS_PLAN plan §2). Set by ClassifyMethods; nil if classification failed (see ClassifyMethods for the reported error).
 	MinGroupSize         int32                         // method-level (spec.min_group_size): the smallest result size this size-only RPC discloses; 0 when the record declares no threshold
+	RecordEntry          *RecordEntry                  // method-level (spec.record_entry): the record type this write surface RPC addresses, its durability floor, key and tenant field; nil for every other RPC
+	RecordApplyOps       []RecordEntry                 // the record write surface's Apply: one entry per (spec.record_op)-stamped RecordOp case; nil for every other RPC
 	IsMcp                bool                          // mirrors MethodDescriptor.IsMcp: the rpc declares principal RPC_PRINCIPAL_MCP, so it is an MCP tool and gets no generated gRPC surface
 	IsAutoMcp            bool                          // mirrors MethodDescriptor.IsAutoMcp: the rpc is a user RPC of a c2s service, so it is an MCP tool AND keeps its gRPC surface
 	McpToolName          string                        // mirrors MethodDescriptor.McpToolName: the resolved tool name this rpc publishes under; empty unless IsMcp or IsAutoMcp

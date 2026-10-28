@@ -253,7 +253,7 @@ func TestTenantS2S_PageFilterKeepsOnlyTheCallersTenant(t *testing.T) {
 // than an abort.
 func TestTenantS2S_PredicatePinsTheQueryToTheCallersTenant(t *testing.T) {
 	requireJava(t)
-	seam := javaPredicateNamespacePin("query", "namespace", "request", "CreateAgentEventQuery", "            ", true)
+	seam := javaPredicateNamespacePin("query", "namespace", false, "request", "CreateAgentEventQuery", "            ", true)
 	if seam == "" {
 		t.Fatal("the predicate pin rendered nothing; the fixture request carries no tenant criterion")
 	}
@@ -305,7 +305,7 @@ func TestTenantS2S_PredicatePinsTheQueryToTheCallersTenant(t *testing.T) {
 // and naming it was refused outright.
 func TestTenantS2S_PredicateAcceptsALinkedTenant(t *testing.T) {
 	requireJava(t)
-	seam := javaPredicateNamespacePin("query", "namespace", "request", "CreateAgentEventQuery", "            ", true)
+	seam := javaPredicateNamespacePin("query", "namespace", false, "request", "CreateAgentEventQuery", "            ", true)
 	mustBeInWrapper(t, renderNamespaceMethod(t, namespacePredicateMethod(), false, true), seam, "predicate")
 
 	// args: caller, the tenant the predicate names ("" for unset), the caller's
@@ -476,5 +476,28 @@ func TestTenantS2S_C2SHalfHasNoRuntimeGate(t *testing.T) {
 		if strings.Contains(got, "__nsPinned") || strings.Contains(got, `startsWith("/system")`) {
 			t.Fatalf("%s: the c2s wrapper must pin unconditionally\n%s", m.Name, got)
 		}
+	}
+}
+
+// The record write surface (#163) carries the row itself in its requests
+// (Put<T>Request.item), and a row declares its tenant field plain, not proto3
+// optional: it has no has-accessor. The pin must test such a field by its empty
+// string alone, or the generated wrapper does not compile; a plane filter
+// criterion (optional) keeps the has-test.
+func TestJavaPredicateNamespacePinPlainFieldHasNoHasAccessor(t *testing.T) {
+	plain := javaPredicateNamespacePin("item", "namespace", false, "request", "PutVaultRow", "            ", true)
+	if strings.Contains(plain, "hasNamespace()") {
+		t.Fatalf("a plain tenant field has no has-accessor; the pin must not call one:\n%s", plain)
+	}
+	if !strings.Contains(plain, "if (request.getItem().getNamespace().isEmpty()) {") {
+		t.Fatalf("a plain tenant field is unset when empty:\n%s", plain)
+	}
+	opt := javaPredicateNamespacePin("query", "namespace", true, "request", "CreateAgentEventQuery", "            ", true)
+	if !strings.Contains(opt, "!request.getQuery().hasNamespace() || request.getQuery().getNamespace().isEmpty()") {
+		t.Fatalf("an optional criterion keeps its has-test:\n%s", opt)
+	}
+	principal := javaPredicatePrincipalPin("item", "owner", false, "request", "PutVaultRow", "            ")
+	if strings.Contains(principal, "hasOwner()") {
+		t.Fatalf("a plain principal field has no has-accessor:\n%s", principal)
 	}
 }

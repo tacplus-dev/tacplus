@@ -421,14 +421,14 @@ func javaRecordPrincipalUnenforceable(method *parser.MethodInfo, san *javaEgress
 // javaPredicatePrincipalField returns (requestFieldName, principalFieldName) for
 // a request that carries a query predicate naming the row's owning principal, or
 // two empty strings when it carries none.
-func (es *javaEgressSanitizer) predicatePrincipalField(fullType, servicePackage string) (string, string) {
+func (es *javaEgressSanitizer) predicatePrincipalField(fullType, servicePackage string) (string, string, bool) {
 	if es == nil || fullType == "" {
-		return "", ""
+		return "", "", false
 	}
 	pkg, name := splitJavaEgressFQN(fullType, servicePackage)
 	msg, ok := es.msgs[pkg+"\x00"+name]
 	if !ok {
-		return "", ""
+		return "", "", false
 	}
 	for i := range msg.Fields {
 		f := &msg.Fields[i]
@@ -443,16 +443,16 @@ func (es *javaEgressSanitizer) predicatePrincipalField(fullType, servicePackage 
 		for j := range pred.Fields {
 			pf := &pred.Fields[j]
 			if pf.Annotations["store_principal"].BoolValue && !pf.IsRepeated && !pf.IsMessage {
-				return f.Name, pf.Name
+				return f.Name, pf.Name, pf.IsOptional
 			}
 		}
 	}
-	return "", ""
+	return "", "", false
 }
 
 // javaPredicatePrincipalPin renders the stamp-or-refuse over the request's query
 // predicate. valueExpr names the request in scope.
-func javaPredicatePrincipalPin(reqField, principal, valueExpr, method, indent string) string {
+func javaPredicatePrincipalPin(reqField, principal string, optional bool, valueExpr, method, indent string) string {
 	if reqField == "" || principal == "" {
 		return ""
 	}
@@ -468,10 +468,10 @@ func javaPredicatePrincipalPin(reqField, principal, valueExpr, method, indent st
 %[1]sif (__queryPrincipal == null || __queryPrincipal.isEmpty()) {
 %[1]s    throw new ProtoException(ProtoException.PERMISSION_DENIED, "%[2]s queries rows owned by a principal and the caller presented no verified subject");
 %[1]s}
-%[1]sif (!%[3]s.get%[4]s().has%[5]s() || %[3]s.get%[4]s().get%[5]s().isEmpty()) {
+%[1]sif (%[7]s%[3]s.get%[4]s().get%[5]s().isEmpty()) {
 %[1]s    %[3]s = %[3]s.toBuilder().set%[4]s(%[3]s.get%[4]s().toBuilder().set%[5]s(__queryPrincipal)).build();
 %[1]s} else if (!__queryPrincipal.equals(%[3]s.get%[4]s().get%[5]s())) {
 %[1]s    throw new ProtoException(ProtoException.INVALID_ARGUMENT, "%[6]s names a principal other than the caller; the query plane is per-principal and the predicate is not the caller's to choose");
 %[1]s}
-`, indent, method, valueExpr, rf, pf, reqField+"."+principal)
+`, indent, method, valueExpr, rf, pf, reqField+"."+principal, javaUnsetPrefix(valueExpr, rf, pf, optional))
 }

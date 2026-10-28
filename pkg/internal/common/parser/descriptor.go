@@ -72,6 +72,7 @@ type FileDescriptor struct {
 	OpaImportTargets    []VirtualImport  // Parsed OPA imports with target service
 	TimeseriesStore     bool             // Whether this service is a timeseries data store from option (spec.timeseries_store)
 	RecordStore         bool             // Whether this service is an in-memory hot event store from option (spec.record_store)
+	RecordStoreNoIngest bool             // Whether that record store declares (spec.record_store).no_bus_ingest: it derives no EventBus subscription
 	VServiceName        string           // File-level virtual-service identity name from option (spec.vservice).name or (spec.trait).name
 	VServiceID          int32            // File-level virtual-service field id from option (spec.vservice).id or (spec.trait).id
 	Trait               *TraitDescriptor // File-level trait declaration from option (spec.trait); nil when the file declares none
@@ -302,9 +303,31 @@ type MethodDescriptor struct {
 	Collection           *CollectionDescriptor         // method-level method_collection (collection-returning read); nil when absent
 	Rpc                  *RpcDescriptor                // method-level spec.rpc (call surface); nil when absent
 	MinGroupSize         int32                         // method-level (spec.min_group_size), stamped by the record-map injector onto a record's size-only RPCs; 0 when absent
+	RecordEntry          *RecordEntry                  // method-level (spec.record_entry), stamped by the record-map injector onto a record write surface RPC that addresses one record type's entries; nil otherwise
+	RecordApplyOps       []RecordEntry                 // the (spec.record_op)-stamped cases of the request's RecordOp oneof when this is the record write surface's Apply; nil otherwise
 	IsMcp                bool                          // derived: spec.rpc declares principal RPC_PRINCIPAL_MCP — this RPC is an MCP tool, not a gRPC call
 	IsAutoMcp            bool                          // derived: this RPC is a user RPC of a c2s service, so it is an MCP tool AND keeps its gRPC call surface (mcpAutoExposed)
 	McpToolName          string                        // derived: the tool name this RPC publishes under (snake_case of Name, or the mcp_tool_name override); empty unless IsMcp or IsAutoMcp
+}
+
+// RecordEntry is a record write surface binding, as its stamp carries it: on a
+// write-surface RPC ((spec.record_entry)) or on one case of Apply's RecordOp
+// oneof ((spec.record_op)). It is what the generated store wrapper authorizes,
+// orders, tenant-pins and resolves durability for.
+type RecordEntry struct {
+	Record        string          // full name of the record type addressed (e.g. "egressvault.VaultRow")
+	RPC           string          // Apply op only: the equivalent single-type write RPC on the same service (e.g. "PutVaultRow")
+	Durability    spec.Durability // the record type's resolved durability floor on a write; DURABILITY_UNSPECIFIED on a read
+	KeyPath       []string        // field path from the stamped message to the entry key (e.g. ["item", "row_id"]); nil when it carries none
+	KeyKind       string          // proto kind of the key: "string", "int64", "uint64", ...; "" without a key
+	NamespacePath []string        // field path from the stamped message to the tenant field (e.g. ["item", "namespace"]); nil when the record declares none
+
+	// Apply op only.
+	OpsField  string // the request's repeated RecordOp field holding the ops (e.g. "ops")
+	OpType    string // fully qualified name of the RecordOp message (e.g. "egressquery.RecordOp")
+	OneofName string // the RecordOp oneof the case belongs to (e.g. "op")
+	CaseField string // the oneof case field (e.g. "put_vault_row")
+	CaseType  string // fully qualified message type of the case (e.g. "egressquery.PutVaultRowRequest")
 }
 
 // RpcDescriptor carries a method's spec.rpc annotation: the two independent
@@ -577,6 +600,7 @@ func (p *DescriptorParser) parseFileDescriptor(fd protoreflect.FileDescriptor) {
 	fileDesc.OpaImports, fileDesc.OpaImportTargets = p.parseOpaImports(fd)
 	fileDesc.TimeseriesStore = p.parseTimeseriesStore(fd)
 	fileDesc.RecordStore = p.parseRecordStore(fd)
+	fileDesc.RecordStoreNoIngest = p.parseRecordStoreNoBusIngest(fd)
 	fileDesc.VServiceName, fileDesc.VServiceID = p.parseVService(fd)
 	fileDesc.Trait = p.parseTrait(fd)
 	if fileDesc.Trait != nil && fileDesc.Trait.Name != "" {
@@ -1227,6 +1251,21 @@ func (p *DescriptorParser) parseMethodOptions(method protoreflect.MethodDescript
 		md.MinGroupSize = proto.GetExtension(opts, spec.E_MinGroupSize).(int32)
 	}
 
+	// record_entry (RecordEntryBinding) — the record type a write surface RPC
+	// addresses, its durability floor, key and tenant field. Stamped by the
+	// record-map injector; never hand-written on an RPC.
+	if proto.HasExtension(opts, spec.E_RecordEntry) {
+		if b, _ := proto.GetExtension(opts, spec.E_RecordEntry).(*spec.RecordEntryBinding); b != nil {
+			e := recordEntryOf(b, method.Input())
+			md.RecordEntry = &e
+		}
+	}
+
+	// The record write surface's Apply: its request carries a repeated RecordOp
+	// whose oneof cases are stamped (spec.record_op). Read off the descriptor
+	// here so every wrapper generator sees the same ops.
+	md.RecordApplyOps = recordApplyOps(method.Input())
+
 	// method_collection (MethodCollection) — collection-returning read shape
 	if proto.HasExtension(opts, spec.E_MethodCollection) {
 		val := proto.GetExtension(opts, spec.E_MethodCollection).(*spec.MethodCollection)
@@ -1711,6 +1750,16 @@ func (p *DescriptorParser) parseRecordStore(fd protoreflect.FileDescriptor) bool
 	return proto.HasExtension(opts, spec.E_RecordStore)
 }
 
+// parseRecordStoreNoBusIngest reports (spec.record_store).no_bus_ingest.
+func (p *DescriptorParser) parseRecordStoreNoBusIngest(fd protoreflect.FileDescriptor) bool {
+	opts := fd.Options().(*descriptorpb.FileOptions)
+	if opts == nil || !proto.HasExtension(opts, spec.E_RecordStore) {
+		return false
+	}
+	rs, _ := proto.GetExtension(opts, spec.E_RecordStore).(*spec.RecordStoreAnnotation)
+	return rs.GetNoBusIngest()
+}
+
 // parseVService extracts the file-level (spec.vservice) virtual-service identity
 // (name + field id). Empty name means the file declares no vservice.
 func (p *DescriptorParser) parseVService(fd protoreflect.FileDescriptor) (string, int32) {
@@ -2150,6 +2199,27 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 			// stays today's tenant-boundary-only behaviour.
 			if val.GetPrivate() {
 				annotations["record_private"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+			}
+			// durability is the record type's write acknowledgement floor. Only a
+			// declared value is carried; unset is DURABILITY_LOCAL, resolved where
+			// it is used (proto.recordDurability).
+			if d := val.GetDurability(); d != spec.Durability_DURABILITY_UNSPECIFIED {
+				annotations["record_durability"] = model.AnnotationValue{
+					Type:        model.AnnotationTypeString,
+					StringValue: d.String(),
+				}
+			}
+			// s2s_write is the record's STORED-ROW write grant, carried on the
+			// same terms as s2s_read: the BLOCK's presence is the signal, and an
+			// empty auth_services list is refused by
+			// ValidateRecordWriteAnnotations rather than dropped here into the
+			// trait-wide fallback.
+			if sw := val.GetS2SWrite(); sw != nil {
+				annotations["record_s2s_write"] = model.AnnotationValue{
+					Type:             model.AnnotationTypeBool,
+					BoolValue:        true,
+					StringSliceValue: append([]string(nil), sw.GetAuthServices()...),
+				}
 			}
 		}
 	}
@@ -3239,6 +3309,8 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 				RestBrowser:          method.RestBrowser,
 				Collection:           method.Collection,
 				MinGroupSize:         method.MinGroupSize,
+				RecordEntry:          method.RecordEntry,
+				RecordApplyOps:       method.RecordApplyOps,
 				IsMcp:                method.IsMcp,
 				IsAutoMcp:            method.IsAutoMcp,
 				McpToolName:          method.McpToolName,

@@ -77,9 +77,12 @@ func TestRecordQueryPlaneEmitsOnlyCanonicalVerbs(t *testing.T) {
 	}
 }
 
-// Both halves must spell the SAME RPC names — the c2s half is the governed
-// mirror of the s2s half, and a verb renamed on one side only would split the
-// surface silently.
+// Both halves must spell the SAME query-plane RPC names — the c2s half is the
+// governed mirror of the s2s half, and a verb renamed on one side only would
+// split the surface silently. The record WRITE surface (#163) is the one
+// deliberate difference: it is emitted on the s2s half alone (no C2S writes in
+// 2.5), so it is taken out of the s2s side before comparing, and must not
+// appear on the c2s side at all.
 func TestRecordQueryPlaneHalvesSpellIdenticalRPCNames(t *testing.T) {
 	plane := traitPlane{
 		relPath: "vservices/query.proto", name: "query", host: "stratum",
@@ -87,11 +90,29 @@ func TestRecordQueryPlaneHalvesSpellIdenticalRPCNames(t *testing.T) {
 	}
 	records := []recordType{
 		{typeName: "TaskActivity", pkg: "tasks", relPath: "vservices/tasks.proto", key: "event_id",
-			filters: []recordFilter{{name: "spiffe_id", protoType: "string"}}},
+			filters: []recordFilter{{name: "spiffe_id", protoType: "string"}}, keyType: "string",
+			durability: "DURABILITY_LOCAL"},
 	}
 
-	s2s := emittedRPCNames(t, recordMapS2SService(plane, records))
+	write := map[string]bool{}
+	for _, n := range emittedRPCNames(t, recordWriteRPCs(plane, records[0])+recordApplyRPC(plane, records)) {
+		write[n] = true
+	}
+	if len(write) == 0 {
+		t.Fatal("the write-capable record emitted no write surface")
+	}
+	var s2s []string
+	for _, n := range emittedRPCNames(t, recordMapS2SService(plane, records)) {
+		if !write[n] {
+			s2s = append(s2s, n)
+		}
+	}
 	c2s := emittedRPCNames(t, recordQueryC2SService(plane, records))
+	for _, n := range c2s {
+		if write[n] {
+			t.Errorf("c2s half carries write-surface rpc %q; there is no C2S write in 2.5", n)
+		}
+	}
 	sort.Strings(s2s)
 	sort.Strings(c2s)
 	if strings.Join(s2s, ",") != strings.Join(c2s, ",") {

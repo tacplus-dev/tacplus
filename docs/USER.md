@@ -1369,7 +1369,7 @@ The authoritative, exhaustive contract is in
 | Annotation | Meaning |
 |------------|---------|
 | `(spec.event) = {c2s?, s2s?}` | eventbus topic + publish RPC (at least one producer surface required) |
-| `(spec.record) = {key, owner, c2s?, s2s?, residency?, min_group_size?}` | **delivery**: an `event` that is also stored in `record_store` and is projectable — `key` is the id field, `owner` the ownership field, `residency` the store's lifecycle as two clocks (`{idle_seconds, deleted_max_age_seconds}`; unset falls back to a live platform default, never "never"), `min_group_size` the smallest result size the record's size-only query surfaces will disclose (see below) |
+| `(spec.record) = {key, owner, c2s?, s2s?, residency?, min_group_size?, s2s_write?, durability?}` | **delivery**: an `event` that is also stored in `record_store` and is projectable — `key` is the id field, `owner` the ownership field, `residency` the store's lifecycle as two clocks (`{idle_seconds, deleted_max_age_seconds}`; unset falls back to a live platform default, never "never"), `min_group_size` the smallest result size the record's size-only query surfaces will disclose (see below), `s2s_write` the services allowed to write the stored rows through the store's generated write surface, `durability` the level a write of the type is acked at (`DURABILITY_MEMORY` / `LOCAL`, the default / `REMOTE`; see "Record write surface" below) |
 | `(spec.transformation) = {…}` | **transformation**: a pure typed conversion of this message into a derived row type. Needs no `record`, no topic and no subscription, and carries no residency — declaring a transformation and declaring delivery are independent |
 | `(spec.public_view) = true` | **public view**: every field declares `(spec.visibility)`; tacplus generates `<T>Public` (the SHOW fields only) and the conversion to it — see below |
 
@@ -1445,6 +1445,60 @@ additive, so a record that does not declare it gets exactly the plane it got bef
   fails the build on a stamped method whose guard it cannot render rather than serve a
   size-only RPC unguarded.
 
+#### Record write surface, durability and Watch
+
+Since 2.5 the record store hosts a generated **write surface** beside the query plane,
+on the plane's S2S half only (there is no C2S write: a user-token write needs an
+owner-pin rule for writes, which is its own decision). For each record type `T` keyed
+by a string or integer `key`:
+
+| RPC | Answer |
+|---|---|
+| `Get<T>(Get<T>Request{key})` | `{item, revision}`, or `NOT_FOUND` |
+| `Put<T>(Put<T>Request{item})` | `RecordWriteResult{revision, durability}` |
+| `InsertIfAbsent<T>(…{item})` | the same, or `ALREADY_EXISTS` |
+| `ReplaceIfUnchanged<T>(…{item, expected_revision \| expected_item})` | the same, or `ABORTED` when the entry changed underneath, `NOT_FOUND` when absent |
+| `Delete<T>(…{key})` | the same, or `NOT_FOUND` |
+| `Watch<T>Changes(Watch<T>ChangesRequest{from_revision})` | `stream <T>WatchEvent`: a snapshot then the change feed (`from_revision` 0), or the tail after `from_revision` |
+| `Apply(RecordApplyRequest{ops, durability})` | one atomic, all-or-nothing operation of conditional ops (Put / InsertIfAbsent / ReplaceIfUnchanged / Delete, across types); one `RecordWriteResult` per op |
+
+- **Who may call.** Writes carry `(spec.record).s2s_write.auth_services`, `Get<T>` the
+  `s2s_read` audience and `Watch<T>Changes` the `s2s_subscribe` one, each falling back
+  to the trait-wide `(spec.trait).auth_services` when the record declares none.
+  `Apply`'s audience is the union of its types' write audiences, and the generated
+  wrapper authorizes **each op** exactly as its single-type RPC, so an `Apply` never
+  writes a type its caller could not write directly. A declared-but-empty `s2s_write`,
+  one on a `private` record, or one with no `(spec.trait)` hosting the plane fails
+  generation.
+- **What is emitted.** A `private` record gets no write surface and no change feed. An
+  `APPEND_ONLY` record gets `Get<T>`, `InsertIfAbsent<T>` and `Watch<T>Changes` only.
+- **Locks are the store's.** No RPC takes or holds a lock. Each write locks its entry
+  inside the store (an absent one too, for `InsertIfAbsent`), and `Apply` takes every
+  entry lock it names in the **canonical order** — record type full name, then key
+  (strings by their UTF-8 bytes, integers numerically). `Apply`'s ops must be listed in
+  that order, each entry once; the generated wrapper refuses any other request with
+  `INVALID_ARGUMENT`.
+- **Revision.** Every entry carries a store-assigned `int64` revision, increasing per
+  write. Every write and `Get<T>` returns it; `ReplaceIfUnchanged` compares against it
+  or the stored value; `Watch<T>Changes` resumes from it (a resume point older than the
+  store retains answers `OUT_OF_RANGE`: re-watch from 0 for snapshot then tail).
+- **Durability** is a per-type floor: `MEMORY` (acked in memory on the store's members;
+  lost on a full restart), `LOCAL` (acked once the local redo has it on disk; the
+  default), `REMOTE` (once the local and the cross-region redo have it). A write may ask
+  for more in its `durability` field, never less (`INVALID_ARGUMENT`); one naming none
+  reaches the handler at the floor; an `Apply` is acked at the highest level its ops
+  involve. The wrapper never answers a write the store reports acked below the level it
+  owed (`INTERNAL`). `Watch<T>Changes` delivers a write only after its ack. Unrelated to
+  `(spec.quorum_write)` / `(spec.min_durable_copies)`, which govern diskstore fields.
+- **Tenant.** For a record with a `(spec.store_namespace)` field, a caller whose verified
+  namespace is a tenant is held to its own tenant (or one it is linked to) on every
+  request — the row's field on a write that carries one, a tenant field beside the key on
+  `Get<T>`, `Delete<T>` and `Watch<T>Changes`: unset is stamped, anything else refused.
+  A `/system` peer keeps the fleet-wide reach.
+- **The bus.** A record is still an event in 2.5. A store that takes its rows only
+  through this surface declares `(spec.record_store) = {no_bus_ingest: true}` and
+  derives no EventBus subscription.
+
 #### Public view (SHOW / BACKGROUND fields)
 
 `(spec.public_view) = true` marks a message whose fields split between what may be
@@ -1482,7 +1536,7 @@ message Prospect {
 
 | Annotation | Service |
 |------------|---------|
-| `(spec.record_store) = {}` | the full-record store |
+| `(spec.record_store) = {no_bus_ingest?}` | the full-record store; `no_bus_ingest: true` = it takes rows only through its generated write surface and derives no EventBus subscription |
 
 Example — a stored, projectable record:
 
@@ -1502,7 +1556,9 @@ publish RPCs, the per-store subscriptions, and the query plane are all
 generated refinable-query plane over record keys —
 `Create<T>Query` / `Update<T>Query` / `Get<T>Count` / `Get<T>Sample` / `List<T>` /
 `Watch<T>` / `Subscribe<T>Count` / `Delete<T>Query`, the same governed spelling on
-both caller surfaces — not a hand-written subscription handler. That plane is asked
+both caller surfaces — not a hand-written subscription handler. Its write surface
+(`Get<T>`, `Put<T>`, `InsertIfAbsent<T>`, `ReplaceIfUnchanged<T>`, `Delete<T>`,
+`Watch<T>Changes`, `Apply`) is generated on the S2S half alone (above). That plane is asked
 for by a `(spec.trait)` declaration, not by the `record_store` annotation alone: see
 [`RECORD_EVENT_MODEL.md`](RECORD_EVENT_MODEL.md).
 

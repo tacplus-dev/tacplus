@@ -56,6 +56,12 @@ producer ─[event]→ eventbus ──→ the record store   stores the full rec
 Both producer paths are identical downstream: `client → gateway → eventbus → …`
 and `service → eventbus → …`. The store cares only about the type, not the producer.
 
+Since 2.5 a record also has a **direct path**: the store's generated write surface
+(below), `service → record store`, synchronous and final. A store that takes rows only
+that way declares `(spec.record_store) = {no_bus_ingest: true}` and derives no bus
+subscription; a record is still an event in 2.5 (removing the bus path for records is a
+major change).
+
 ## Hand-written annotations (the entire surface)
 
 Message-level:
@@ -63,7 +69,7 @@ Message-level:
 | Annotation | Meaning |
 |---|---|
 | `event { c2s{…}? , s2s{…}? }` | eventbus **topic + publish RPC**. ≥1 producer surface required. |
-| `record { key, owner, c2s{…}? , s2s{…}? , residency{…}? }` | **DELIVERY.** **is-an `event`** + stored in `record_store` + projectable. `key` = id field (default: `event_id`), `owner` = ownership field, `residency` = the store's lifecycle as two clocks — `idle_seconds` (memory eviction on no read/write) and `deleted_max_age_seconds` (purge this long after `(spec.deleted_flag)` was set). Unset residency is a live platform default (`parser.DefaultResidencyIdleSeconds`/`DefaultResidencyDeletedMaxAgeSeconds`), never "never". |
+| `record { key, owner, c2s{…}? , s2s{…}? , residency{…}? , s2s_write{…}? , durability? }` | **DELIVERY.** **is-an `event`** + stored in `record_store` + projectable. `key` = id field (default: `event_id`), `owner` = ownership field, `residency` = the store's lifecycle as two clocks — `idle_seconds` (memory eviction on no read/write) and `deleted_max_age_seconds` (purge this long after `(spec.deleted_flag)` was set). Unset residency is a live platform default (`parser.DefaultResidencyIdleSeconds`/`DefaultResidencyDeletedMaxAgeSeconds`), never "never". `s2s_write` = who may write the stored rows through the store's write surface (falls back to the trait-wide audience, like `s2s_read`); `durability` = `DURABILITY_MEMORY` \| `LOCAL` (default) \| `REMOTE`, the level a write of the type is acked at (see "Write surface"). |
 | `transformation {…}` | **TRANSFORMATION.** A pure typed conversion of this message into a derived row type. Requires **no** `record`, **no** topic, **no** subscription — and carries **no** residency (a pure function has no lifetime). |
 
 Field-level (on a `record` message's fields):
@@ -78,7 +84,7 @@ Service-level (once per service):
 
 | Annotation | Service |
 |---|---|
-| `record_store {}` | the full-record store |
+| `record_store { no_bus_ingest? }` | the full-record store; `no_bus_ingest: true` = rows arrive only through its write surface, no EventBus subscription is derived |
 
 On a stored event you write only `record` (it implies `event`). You never write the
 derived output types or their markers.
@@ -116,6 +122,7 @@ declaration requires the other to generate.
 - Per-store **subscriptions**: each store auto-subscribes to the events/projections
   it must ingest.
 - The **query plane** (below).
+- The **write surface** and **Watch** (below), on the query plane's S2S half.
 
 ## Query plane
 
@@ -270,9 +277,84 @@ declaration requires the other to generate.
   — the caller opens several single-type queries and aggregates the already-redacted
   results in its own memory; the record store holds no cross-type sets.
 
+## Write surface, durability and Watch (2.5)
+
+The record store hosts a generated **write surface** beside the query plane, emitted by
+the same injector (`pkg/internal/proto/record_write_surface.go`) into the same trait
+proto, on the plane's **S2S half only** (no C2S writes in 2.5: a user-token write needs an
+owner-pin rule for writes, which is its own decision). Every language gets the clients
+from the injected proto; Go, Java and Rust also get the store-side handler interface and
+the guarding wrapper.
+
+| RPC | emitted for | the store answers |
+|---|---|---|
+| `Get<T>(Get<T>Request{key}) → {item, revision}` | write-capable `T` | `NOT_FOUND` when absent |
+| `Put<T>(Put<T>Request{item}) → RecordWriteResult` | write-capable, not APPEND_ONLY | done |
+| `InsertIfAbsent<T>(…{item}) → RecordWriteResult` | write-capable `T` | `ALREADY_EXISTS` when present |
+| `ReplaceIfUnchanged<T>(…{item, expected_revision \| expected_item}) → RecordWriteResult` | not APPEND_ONLY | `ABORTED` when changed underneath, `NOT_FOUND` when absent |
+| `Delete<T>(…{key}) → RecordWriteResult` | not APPEND_ONLY | `NOT_FOUND` when absent |
+| `Watch<T>Changes(Watch<T>ChangesRequest{from_revision}) → stream <T>WatchEvent` | every non-private `T` | snapshot then changes (`from_revision` 0), or the tail after it |
+| `Apply(RecordApplyRequest{ops, durability}) → RecordApplyResponse{results}` | once, when any `T` is write-capable | all ops or none, refused with the failing op's reason |
+
+*Write-capable* = not `private`, and keyed by a string or integer field. The answer is
+**final and synchronous**: done, or refused with the reason. `RecordWriteResult` carries
+the entry's new `revision` and the `durability` level the write was acked at.
+
+- **Locks are internal to the store** (decision D1-B). No RPC takes or holds a lock across
+  calls. Each write takes its entry's lock inside the store, including on an absent key
+  for `InsertIfAbsent`; `Apply` takes every entry lock its ops name, all or nothing, in
+  the **canonical order** — record type full name, then key (strings by UTF-8 bytes,
+  integers numerically). The order is part of the contract: `Apply`'s ops must be listed
+  in it, strictly ascending, each entry once, and the generated wrapper refuses anything
+  else with `INVALID_ARGUMENT`. So every implementation takes the same locks in the same
+  order and two `Apply`s cannot deadlock. A map lock is the store's own business, taken
+  for a whole-type operation; it has no RPC.
+- **Revision** (D6). A store-assigned `int64`, increasing per write of an entry, returned
+  by every write and `Get<T>`. `ReplaceIfUnchanged` compares against it or against the
+  stored value. It is `int64` because it is the revision the generated WATCH collection
+  keys its replay ring by and resumes from.
+- **Durability**, declared per type by `(spec.record).durability`: `MEMORY` (acked in
+  memory on the store's members; lost on a full restart), `LOCAL` (the default: acked
+  once the local redo has it on disk), `REMOTE` (acked once the local and the
+  cross-region redo have it). It is a floor. The injector stamps it on every write
+  (`(spec.record_entry)`) and on each `Apply` op case (`(spec.record_op)`), and the
+  generated wrapper, never the handler: refuses a write asking for less
+  (`INVALID_ARGUMENT`); hands a write asking for nothing to the handler at the floor; acks
+  an `Apply` at the highest level any of its ops involves; and refuses to answer a write
+  the store reports acked below the level it owed (`INTERNAL`). It is new and additive,
+  and unrelated to `(spec.quorum_write)`/`(spec.min_durable_copies)`, which govern the
+  diskstore quorum gate on state/store fields (D4).
+- **Watch** is first-class on every non-private record type: `Watch<T>Changes` is the
+  record's change feed, unfiltered, in the generated WATCH collection shape (snapshot
+  items, `snapshot_done`, then deltas `{type, item, revision}` with egress redaction
+  applied like `Watch<T>`). The store feeds it only **acked** writes, so a change is seen
+  only after its write's declared ack. A resume point older than the store retains
+  answers `OUT_OF_RANGE`; the caller re-watches from 0 (snapshot then tail).
+- **Who may call** (D3). Writes: `(spec.record).s2s_write`; `Get<T>`: `s2s_read`;
+  `Watch<T>Changes`: `s2s_subscribe` minus its routing-only services. Each falls back to
+  the trait-wide `auth_services`. `Apply`'s audience is the union of the write audiences,
+  and the wrapper authorizes each op exactly as its single-type RPC.
+- **Tenant.** For a record with a `(spec.store_namespace)` field, a caller held to a
+  tenant is pinned to its own (or a linked) tenant on every request of the surface: the
+  row's field on a write carrying a row, a tenant field beside the key on `Get<T>`,
+  `Delete<T>` and `Watch<T>Changes`. Unset is stamped, anything else refused; a
+  `/system` peer keeps the fleet-wide reach. The store answers a key-addressed request
+  only for an entry in the named tenant.
+- **Not yet: the redo contract.** The record store's durability is the redo service (the
+  log is the database). Its contract — a frozen sys contract `sys/redo.proto`, defined by
+  tacplus, hosted by redo, called by the store, the tenant taken from the caller's
+  identity (D5) — is built after #170, whose target-tenant route field it carries.
+
 ## Validations (tacplus errors)
 
 - an `event`/`record` that declares zero producer surfaces;
+- a `(spec.record).s2s_write` that names no service, sits on a `private` record, or has no
+  `(spec.trait)` hosting the plane behind it (`ValidateRecordWriteAnnotations`), or sits on
+  a record whose key is not a string or integer field;
+- record names that compose to one RPC name twice on a plane half (`Delete<T>` beside
+  `Delete<U>Query` for a record `U` with `T = UQuery`), or to the same `RecordOp` field
+  number block (derived from each type's full name, so a writer and a store built from
+  different record sets agree);
 - a **negative `(spec.record).min_group_size`**, or a threshold declared into a fleet
   where no `(spec.trait)` hosts a record query plane — a guard that can never refuse, and
   a guard with no guarded surface behind it (`ValidateMinGroupSizeAnnotations` in
@@ -285,7 +367,8 @@ declaration requires the other to generate.
   and a store alone is fine, but a store that claims a source with no delivery
   behind it is a silent dead store, and now fails generation
   (`DeriveStoreSubscriptionsFromRegistry` in
-  `pkg/internal/common/boundaries/boundaries.go`).
+  `pkg/internal/common/boundaries/boundaries.go`). A store declaring
+  `no_bus_ingest` derives no subscription, so this check does not apply to it.
 
 > A `transformation` on a message that is not a `record` is **explicitly legal**
 > since 2026-08-25. It used to be rejected; requiring a record made every

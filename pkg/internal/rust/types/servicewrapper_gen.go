@@ -1504,6 +1504,16 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 				changeSan = "\n                        let mut change = change;\n" + rustEgressEnvelopeStmts(fs, "change", "                        ")
 			}
 			watchPre := rustEgressSanitizePreamble(watchTargets)
+			// Watch<T>Changes (#163): the tenant pin of the record write surface,
+			// after request validation and ahead of the egress preamble, over the
+			// request the handler is then handed.
+			if recordPin := rustRecordEntryPre(method); recordPin != "" {
+				if serverStreamReqExpr != "req" {
+					serverStreamInputValidation += "\n        let req = request.into_inner();\n"
+					serverStreamReqExpr = "req"
+				}
+				serverStreamInputValidation += recordPin
+			}
 			// (spec.store_principal)/(spec.store_namespace): the per-frame egress
 			// guard, resolved once before the producer task is spawned and applied
 			// ahead of sanitization on every snapshot_item and delta. See
@@ -1836,6 +1846,13 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 		// (spec.owner_default): refuse the owner's own contradicted access,
 		// after the stamp has bound the request principal to the caller.
 		validationBlock += ownerDefaultGuard
+		// The record write surface (#163): the tenant pin, the durability floor
+		// and Apply's per-op guards run after the request is validated and the
+		// existing pins, before the handler; their post halves run first on the
+		// response, ahead of the sanitize and response validation below.
+		validationBlock += rustRecordEntryPre(method) +
+			rustRecordApplyPre(method, svc, servicePackage, parentDir, crossPkgTypes, rustCallerUnverified(svc, method))
+		authBlock += rustRecordApplyMetadata(method, rustCallerUnverified(svc, method))
 	}
 	responseValidationBlock := rustServerResponseValidationBlock("resp", method.FullOutputType)
 
@@ -1938,7 +1955,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 			}
 			unarySan = rustEgressSanitizePreamble(targets) + "        let mut resp = resp;\n" + rustEgressEnvelopeStmts(fs, "resp", "        ")
 		}
-		responseValidationBlock = unarySan + responseValidationBlock
+		responseValidationBlock = rustRecordWritePost(method) + rustRecordApplyPost(method) + unarySan + responseValidationBlock
 	}
 
 	// (spec.store_principal) then (spec.store_namespace): filter rows the caller

@@ -1848,8 +1848,8 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			// s2s plane: a peer service is not a user, and there is no user to
 			// narrow to.
 			if isC2S {
-				rf, pf := san.predicatePrincipalField(method.FullInputType, servicePackage)
-				if g := javaPredicatePrincipalPin(rf, pf, "request", method.Name, "            "); g != "" {
+				rf, pf, popt := san.predicatePrincipalField(method.FullInputType, servicePackage)
+				if g := javaPredicatePrincipalPin(rf, pf, popt, "request", method.Name, "            "); g != "" {
 					inputValidation += "\n" + g
 				}
 			}
@@ -1858,8 +1858,8 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			// (spec.record).c2s_read started requiring one: a criterion a caller
 			// could set and the egress filter would then ABORT over is a
 			// client-triggerable process halt, so the pin lands with it.
-			nrf, nf := san.predicateNamespaceField(method.FullInputType, servicePackage)
-			if g := javaPredicateNamespacePin(nrf, nf, "request", method.Name, "            ", recordPlaneS2S); g != "" {
+			nrf, nf, nopt := san.predicateNamespaceField(method.FullInputType, servicePackage)
+			if g := javaPredicateNamespacePin(nrf, nf, nopt, "request", method.Name, "            ", recordPlaneS2S); g != "" {
 				inputValidation += "\n" + g
 			}
 		}
@@ -1878,6 +1878,12 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			if g, err := javaOwnerDefaultGuard(method, san, servicePackage, javaOwnerDefaultGrpcSeam("            "), "            "); err == nil && g != "" {
 				inputValidation += "\n" + g
 			}
+			// The record write surface (#163): the durability floor and Apply's
+			// per-op guards run after the request is validated and pinned, and
+			// before the handler; their post halves run first on the response
+			// (below), ahead of any egress transform.
+			inputValidation += javaRecordEntryPre(method, "            ") +
+				javaRecordApplyPre(method, serviceName, servicePackage, parentDir, authDisabled, "            ")
 		}
 
 		if outputHelpers != "" && !emptyOutput {
@@ -1943,6 +1949,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			// number itself, so it must precede any transformation of the response.
 			outputValidation = javaMinGroupSizeGuard(method, san.minGroupSizeField(method.FullOutputType, servicePackage), "response", "            ") +
 				unaryPrincipal + unaryNamespace + unarySan + outputValidation
+			outputValidation = javaRecordWritePost(method, "            ") + javaRecordApplyPost(method, "            ") + outputValidation
 		}
 
 		handlerCall := fmt.Sprintf("handler.%s(caller, request)", methodName)
@@ -2511,6 +2518,10 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             __watchThread.setDaemon(true);
             __watchThread.start();`, watchPre, itemType, changeType, watchHandlerCall, fromRevisionExpr, changeType, methodName, javaPascalField(method.Resolved.WatchRevisionField), outputType, outputType, outputType, streamResponseObserver, outputType, outputType, watchItemExpr, outputType, outputType, watchChangeExpr, watchCompletedAccounting, watchErrorAccounting, methodName)
 
+		// Watch<T>Changes (#163): the tenant pin of the record write surface,
+		// after request validation and before the handler opens the source.
+		watchInputValidation := streamInputValidation + javaRecordEntryPre(method, "            ")
+
 		// Splice the (spec.store_principal) refusal into the send path. Done on
 		// the rendered text rather than as a format verb because the guard is a
 		// property of the response TYPE, not of any of the twenty positional
@@ -2538,7 +2549,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             responseObserver.onError(toGrpcError(e));
         }
     }
-`, methodName, inputType, outputType, authCheck, streamInputValidation, fullMethod, watchDrive)
+`, methodName, inputType, outputType, authCheck, watchInputValidation, fullMethod, watchDrive)
 		}
 
 		return fmt.Sprintf(`    @Override
@@ -2556,7 +2567,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             responseObserver.onError(toGrpcError(e));
         }
     }
-`, methodName, inputType, outputType, authCheck, streamInputValidation, fullMethod, watchDrive)
+`, methodName, inputType, outputType, authCheck, watchInputValidation, fullMethod, watchDrive)
 
 	case !method.ClientStreaming && method.ServerStreaming:
 		// Server streaming — authorize, extract caller, delegate to handler

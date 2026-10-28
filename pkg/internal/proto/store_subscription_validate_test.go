@@ -174,3 +174,52 @@ func TestDeriveStoreSubscriptionsAcceptsDeliveredSource(t *testing.T) {
 		t.Fatal("expected a derived store subscription for the delivered source")
 	}
 }
+
+// (spec.record_store).no_bus_ingest (#163, D2-A): a record store that takes its
+// rows only through its generated write surface derives no EventBus
+// subscription, even for a record whose type no topic publishes — which, on a
+// store that does ingest, is the dead-store failure below it. Paired control:
+// the same set without the flag still fails that way.
+func TestRecordStoreNoBusIngestDerivesNoSubscription(t *testing.T) {
+	const record = `syntax = "proto3";
+package xidrows;
+
+import "sys/spec.proto";
+
+message XidRow {
+  option (spec.record) = {key: "xid", s2s: {auth_services: ["*"]}};
+  string xid = 1;
+}
+`
+	store := func(flag string) string {
+		return `syntax = "proto3";
+package xidstore;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "xidstore"};
+option (spec.record_store) = {` + flag + `};
+
+message Ping {}
+`
+	}
+	p := storeFixture(t, map[string]string{
+		"services/xidstore.proto": store("no_bus_ingest: true"),
+		"vservices/xidrows.proto": record,
+	})
+	subs, err := derive(t, p, "xidstore")
+	if err != nil {
+		t.Fatalf("a no_bus_ingest store must derive cleanly, got: %v", err)
+	}
+	if len(subs) != 0 {
+		t.Fatalf("a no_bus_ingest store must derive no subscription, got %d: %+v", len(subs), subs)
+	}
+
+	p = storeFixture(t, map[string]string{
+		"services/xidstore.proto": store(""),
+		"vservices/xidrows.proto": record,
+	})
+	if subs, err := derive(t, p, "xidstore"); err == nil && len(subs) == 0 {
+		t.Fatal("paired control: a bus-ingesting store must derive a subscription for the record (or fail), not nothing")
+	}
+}

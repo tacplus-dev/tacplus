@@ -39,6 +39,13 @@ use servicemanager::auth::Caller;
 use {{.QueryPath}}::*;
 #[allow(unused_imports)]
 use {{.TypesPath}}::*;
+// This surface's own request/response types, named explicitly: an explicit
+// import shadows both globs, so a same-named type in the plane's package (the
+// record write surface's Get<T>Request, #163) cannot make them ambiguous.
+{{- range .Methods}}
+#[allow(unused_imports)]
+use {{$.TypesPath}}::{ {{.GetReq}}, {{.GetResp}}, {{.ListReq}}, {{.ListResp}} };
+{{- end}}
 
 /// The generated `{{.TraitName}}` implementation. Constructed by the
 /// ServiceManager, never by the author.

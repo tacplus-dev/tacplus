@@ -81,6 +81,33 @@ type recordType struct {
 	// criterion, for the same reason: a private record can never declare the
 	// s2s_read that folds a key in, and its c2s reader still needs a point read.
 	private bool
+	// durability is (spec.record).durability resolved: unset is
+	// DURABILITY_LOCAL. The floor the write surface stamps on every write of the
+	// type ((spec.record_entry), (spec.record_op)).
+	durability string
+	// writeAuth is (spec.record).s2s_write.auth_services: the services allowed
+	// to WRITE this type's rows through the write surface. nil = the record
+	// declares no s2s_write and keeps the trait-wide list, exactly as readAuth.
+	writeAuth []string
+	// subscribeAuth is the audience of Watch<T>Changes: the record's
+	// (spec.record).s2s_subscribe auth_services minus its routing-only services
+	// (a routing-only subscriber is granted the routing envelope, never the full
+	// row the change feed carries). nil = no s2s_subscribe, the trait-wide list.
+	subscribeAuth []string
+	// noWatch is true when the record's s2s_subscribe names only routing-only
+	// subscribers: nobody may read its full rows as a stream, so no
+	// Watch<T>Changes is emitted.
+	noWatch bool
+	// keyType is the scalar proto type of the record's key field when the write
+	// surface can carry it (a string or an integer), "" otherwise. A type with
+	// no keyType gets no write surface.
+	keyType string
+	// namespace is the record's (spec.store_namespace) field, "" when it
+	// declares none. A tenant-scoped type's key-addressed requests (Get<T>,
+	// Delete<T>, Watch<T>Changes) carry the tenant beside the key, so the
+	// generated wrapper can hold a tenant-held caller to its own tenant on them
+	// as it does on the rows a write carries.
+	namespace string
 }
 
 // recordFilter is a (spec.query_field) criterion on a record field — a typed
@@ -151,6 +178,7 @@ type traitPlane struct {
 // row or a handful, which a result set is overkill for and, being held by the
 // node that opened it, could not survive a failover of the connection. A result
 // set is for large data: open it, size it, refine it, page it.
+//
 //	Watch<T>(QueryHandle) -> stream ...    Watch<T>(...)        living-query changes
 //	Close<T>(QueryHandle) -> QueryStats    Delete<T>Query(...)
 //
@@ -292,18 +320,38 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 				filters = appendKeyFilterCriterion(filters, key, &msg)
 			}
 			principal := recordPrincipalCriterion(&msg, filters)
+			keyType := writeKeyType(&msg, key)
+			// The write surface needs a key it can carry and order; a record
+			// that ASKS for one with a key it cannot carry fails loud rather
+			// than generating no writes behind a declared grant.
+			sw, declaresWrite := msg.Annotations["record_s2s_write"]
+			if declaresWrite && sw.BoolValue && keyType == "" {
+				return fmt.Errorf("record %s.%s declares (spec.record).s2s_write but its key field %q is not a string or "+
+					"integer scalar; the record write surface keys and lock-orders every entry by it", fd.Package, msg.Name, key)
+			}
+			var writeAuth []string
+			if declaresWrite && sw.BoolValue {
+				writeAuth = append([]string(nil), sw.StringSliceValue...)
+			}
+			subscribeAuth, noWatch := recordSubscribeAudience(&msg)
 			records = append(records, recordType{
-				typeName:     msg.Name,
-				pkg:          fd.Package,
-				relPath:      relPath,
-				key:          key,
-				filters:      filters,
-				minGroupSize: minGroupSize,
-				appendOnly:   appendOnly,
-				principal:    principal,
-				readAuth:     readAuth,
-				declaresRead: declaresRead,
-				private:      private,
+				typeName:      msg.Name,
+				pkg:           fd.Package,
+				relPath:       relPath,
+				key:           key,
+				filters:       filters,
+				minGroupSize:  minGroupSize,
+				appendOnly:    appendOnly,
+				principal:     principal,
+				readAuth:      readAuth,
+				declaresRead:  declaresRead,
+				private:       private,
+				durability:    recordDurability(&msg),
+				writeAuth:     writeAuth,
+				subscribeAuth: subscribeAuth,
+				noWatch:       noWatch,
+				keyType:       keyType,
+				namespace:     recordNamespaceField(&msg),
 			})
 		}
 	}
@@ -457,6 +505,7 @@ enum RecordChangeType {
   RECORD_CHANGE_TYPE_DELETE = 3;
 }
 `)
+	sb.WriteString(recordWriteSharedMessages)
 
 	// Per-record-type request/response messages.
 	for _, r := range records {
@@ -573,9 +622,10 @@ message Get%[1]sRowsResponse {
 }
 `, r.typeName, fq, rowsFilterField(r)))
 
-		// Live watch envelope (only for filterable types — a living query needs a predicate).
-		if hasFilter {
-			sb.WriteString(fmt.Sprintf(`
+		// Live watch envelope. Watch<T> (a living query, filterable types only)
+		// and Watch<T>Changes (the record's change feed, every non-private type)
+		// both stream it, so it is emitted for every type.
+		sb.WriteString(fmt.Sprintf(`
 message %[1]sWatchChange {
   RecordChangeType type = 1;
   %[2]s item = 2;
@@ -590,8 +640,19 @@ message %[1]sWatchEvent {
   }
 }
 `, r.typeName, fq))
-		}
 	}
+
+	// The record WRITE SURFACE's messages (#163): per write-capable type, and
+	// the cross-type Apply. Emitted beside the query plane's, on the S2S half
+	// only (recordMapS2SService).
+	writeMsgs, err := recordWriteMessages(records)
+	if err != nil {
+		return fmt.Errorf("record write surface for trait %q in %s: %w", plane.name, relPath, err)
+	}
+	if err := assertNoRowMutatingRPCs(writeMsgs, records); err != nil {
+		return fmt.Errorf("record write surface for trait %q in %s: %w", plane.name, relPath, err)
+	}
+	sb.WriteString(writeMsgs)
 
 	// TWO CALLER SURFACES, ONE QUERY PLANE.
 	//
@@ -659,6 +720,9 @@ message %[1]sWatchEvent {
 			continue
 		}
 		if err := assertNoRowMutatingRPCs(half, records); err != nil {
+			return fmt.Errorf("record query plane for trait %q in %s: %w", plane.name, relPath, err)
+		}
+		if err := assertNoDuplicateRPCs(half); err != nil {
 			return fmt.Errorf("record query plane for trait %q in %s: %w", plane.name, relPath, err)
 		}
 	}
@@ -842,7 +906,9 @@ func recordMapS2SService(plane traitPlane, records []recordType) string {
 %[4]s  }
 `, r.typeName, r.key, auth, minGroupSizeOption(r)))
 		}
+		sb.WriteString(recordWriteRPCs(plane, r))
 	}
+	sb.WriteString(recordApplyRPC(plane, records))
 	sb.WriteString("}\n")
 	return sb.String()
 }
@@ -960,6 +1026,19 @@ func assertNoRowMutatingRPCs(planeText string, records []recordType) error {
 		return nil
 	}
 	var errs []string
+	// The record write surface's row writes carry the row in a request
+	// envelope (Put<T>Request, ...), never T itself, so the shape rule below
+	// cannot see them: they are caught by name, as an RPC request and as an
+	// Apply op case alike.
+	for _, m := range rowWriteRequest.FindAllStringSubmatch(planeText, -1) {
+		if appendOnly[m[2]] {
+			errs = append(errs, fmt.Sprintf(
+				"%s%sRequest is a row write of the record write surface over %s, which declares "+
+					"(spec.record).mutability = MUTABILITY_APPEND_ONLY; an append-only record's rows are "+
+					"written once, so the plane must emit no row-mutating RPC for the type",
+				m[1], m[2], m[2]))
+		}
+	}
 	for _, m := range emittedRPCSignature.FindAllStringSubmatch(planeText, -1) {
 		rpcName, reqType, respType := m[1], m[2], m[3]
 		verb := leadingVerbOf(rpcName)
@@ -985,7 +1064,19 @@ func assertNoRowMutatingRPCs(planeText string, records []recordType) error {
 		return nil
 	}
 	sort.Strings(errs)
+	errs = dedupeSorted(errs)
 	return fmt.Errorf("append-only record mutation errors:\n  %s", strings.Join(errs, "\n  "))
+}
+
+// dedupeSorted drops adjacent duplicates from a sorted slice.
+func dedupeSorted(in []string) []string {
+	out := in[:0]
+	for i, v := range in {
+		if i == 0 || v != in[i-1] {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // leadingVerbOf returns the longest registered canonical verb that prefixes an

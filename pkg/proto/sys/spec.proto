@@ -989,6 +989,77 @@ message RecordAnnotation {
   //     private: true
   //   };
   bool private = 12;
+
+  // durability is the level at which the record store ACKS a write of this
+  // type: the point after which the write survives what the level names.
+  //
+  //   DURABILITY_MEMORY  acked in memory on the store's members; lost on a full
+  //                      restart of the store. Never sent to the redo service.
+  //   DURABILITY_LOCAL   acked once the local redo has it on disk. The default
+  //                      (unset means LOCAL).
+  //   DURABILITY_REMOTE  acked once the local redo AND the cross-region redo
+  //                      have it.
+  //
+  // It is a FLOOR. A single write may ask for a higher level than its type
+  // declares (the write requests' durability field), never a lower one — the
+  // generated store wrapper refuses a lower one with INVALID_ARGUMENT. An Apply
+  // spanning record types is acked at the highest level any of its ops
+  // involves. The wrapper also refuses to answer a write the store reports as
+  // acked below the level it owed (INTERNAL): a write the caller was told is
+  // durable must be.
+  //
+  // New and additive in 2.5. It is unrelated to the field-level
+  // (spec.quorum_write) / (spec.min_durable_copies) pair, which governs the
+  // diskstore quorum gate on service_state/service_store fields and is
+  // unchanged.
+  //
+  // Example — an identity row that must survive the loss of a region:
+  //   option (spec.record) = {
+  //     key: "xid" owner: "owner"
+  //     s2s_write: {auth_services: ["identity"]}
+  //     durability: DURABILITY_REMOTE
+  //   };
+  Durability durability = 13;
+
+  // s2s_write, when present, names the internal services allowed to WRITE this
+  // record type's stored rows through the record store's generated write
+  // surface (Get<T>, Put<T>, InsertIfAbsent<T>, ReplaceIfUnchanged<T>,
+  // Delete<T>, and the T ops of Apply) on the record query plane's S2S half.
+  //
+  // It is the fifth boundary, the write twin of s2s_read:
+  //
+  //   s2s            who may PUBLISH onto the record's topic  (write the stream)
+  //   s2s_subscribe  who may CONSUME the record's stream      (tail it; also
+  //                                                            Watch<T>Changes)
+  //   s2s_read       who may READ the record's STORED ROWS    (query the store)
+  //   c2s_read       who may DISCLOSE those rows TO A PERSON  (re-expose them)
+  //   s2s_write      who may WRITE the record's STORED ROWS   (the store's own
+  //                                                            write surface)
+  //
+  // Same shape and the same fallback as s2s_read: an absent block leaves the
+  // trait-wide (spec.trait).auth_services in place; ["*"] is any authenticated
+  // service; a declared-but-empty list fails generation. Get<T> is a read and
+  // carries the s2s_read audience, not this one.
+  //
+  // There is no C2S write: a user-token write needs an owner-pin rule for
+  // writes, which is its own decision. A private record refuses s2s_write for
+  // the reason it refuses s2s_read — the peer-facing surface has no principal
+  // to stamp as the row's owner — and gets no write surface at all. An
+  // APPEND_ONLY record gets InsertIfAbsent<T> and nothing that changes a row.
+  MethodS2SAnnotation s2s_write = 14;
+}
+
+// Durability is a record type's write acknowledgement level; see
+// (spec.record).durability. Ordered: a higher value is a stronger guarantee.
+enum Durability {
+  // Unspecified = DURABILITY_LOCAL.
+  DURABILITY_UNSPECIFIED = 0;
+  // Acked in memory on the store's members; lost on a full restart.
+  DURABILITY_MEMORY = 1;
+  // Acked once the local redo has it on disk.
+  DURABILITY_LOCAL = 2;
+  // Acked once the local and the cross-region redo have it.
+  DURABILITY_REMOTE = 3;
 }
 
 // ResidencyPolicy states a record type's lifecycle as two clocks. It replaced
@@ -2315,6 +2386,37 @@ extend google.protobuf.FieldOptions {
   // Example:
   //   string notes = 4 [(spec.visibility) = VISIBILITY_BACKGROUND];
   Visibility visibility = 60092;
+
+  // record_op binds one case of the record write surface's RecordOp oneof (an
+  // op of Apply) to the record type it writes. Stamped by the record-map
+  // injector; never hand-written. The generated store wrapper reads it to
+  // authorize each op as its single-type RPC is authorized, to check the ops
+  // are in canonical lock order, to pin its tenant, and to resolve the Apply's
+  // durability.
+  RecordEntryBinding record_op = 60094;
+}
+
+// RecordEntryBinding is the (spec.record_entry) stamp on a write-surface RPC
+// and the (spec.record_op) stamp on a RecordOp oneof case.
+message RecordEntryBinding {
+  // record is the full name of the record type addressed (pkg.Type). The
+  // first half of the canonical lock order.
+  string record = 1;
+  // rpc, on a RecordOp case only, is the single-type write RPC the op is
+  // equivalent to on the same service (e.g. "PutVaultRow"). The op is
+  // authorized exactly as that RPC is.
+  string rpc = 2;
+  // durability is the record type's resolved durability floor on a write;
+  // unset on a read (Get<T>, Watch<T>Changes).
+  Durability durability = 3;
+  // key_path is the dotted field path, from the stamped message, of the entry
+  // key: the second half of the canonical lock order (e.g. "item.row_id").
+  string key_path = 4;
+  // namespace_path is the dotted field path of the tenant the request is held
+  // to, when the record type declares a (spec.store_namespace) field (e.g.
+  // "item.namespace", or "namespace" on a key-addressed request). Empty for a
+  // record with no tenant field.
+  string namespace_path = 5;
 }
 
 // Visibility is the (spec.visibility) value of a public_view message's field.
@@ -2480,9 +2582,18 @@ message TimeseriesStoreAnnotation {}
 
 // RecordStoreAnnotation marks a service proto as the full-record store.
 // Services with this annotation auto-subscribe to EventBus topics that publish
-// the record types they store (currently spec.record). Hot/cold tiering is
-// internal to the service.
-message RecordStoreAnnotation {}
+// the record types they store (currently spec.record), unless they declare
+// no_bus_ingest. Hot/cold tiering is internal to the service.
+message RecordStoreAnnotation {
+  // no_bus_ingest declares that this store takes its rows only through its own
+  // generated write surface ((spec.record).s2s_write) and never from the event
+  // bus: no store subscription is derived for it, so it generates with no
+  // EventBus subscriber and no topic to resolve. Unset keeps today's
+  // auto-subscription, so it is additive.
+  //
+  // Example: option (spec.record_store) = {no_bus_ingest: true};
+  bool no_bus_ingest = 1;
+}
 
 // ServiceHealthAnnotation declares a typed health message for a service.
 // The annotated message MUST embed healthreport.ServiceInstanceHealth as field 1
@@ -2931,6 +3042,15 @@ extend google.protobuf.MethodOptions {
   // form-urlencoded request body, and a 303 redirect instead of a JSON answer.
   // Example: option (spec.rest_browser) = {form_body: true, redirect_field: "redirect_url"};
   RestBrowser rest_browser = 80017;
+
+  // record_entry binds an RPC of the record write surface (Get<T>, Put<T>,
+  // InsertIfAbsent<T>, ReplaceIfUnchanged<T>, Delete<T>, Watch<T>Changes) to
+  // the record type whose entries it addresses. Stamped by the record-map
+  // injector; never hand-written. The generated store wrapper reads it: a write
+  // asking for less than the type's durability floor is refused and a write
+  // acked at less is never answered, and a caller held to a tenant is pinned to
+  // it on the request's tenant field.
+  RecordEntryBinding record_entry = 80018;
 
 }
 

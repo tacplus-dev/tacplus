@@ -718,7 +718,10 @@ func collectStoreSourceFQNs(p *parser.DescriptorParser, selfPackage string) map[
 	for _, fd := range p.GetAllFiles() {
 		if fd.Package == selfPackage {
 			isTimeseriesStore = isTimeseriesStore || fd.TimeseriesStore
-			isRecordStore = isRecordStore || fd.RecordStore
+			// (spec.record_store).no_bus_ingest: the store takes its rows only
+			// through its own generated write surface, so it is no ingest source
+			// owner and derives nothing from the bus.
+			isRecordStore = isRecordStore || (fd.RecordStore && !fd.RecordStoreNoIngest)
 			if fd.RecordStore && fd.ServiceName != "" {
 				storeServiceName = fd.ServiceName
 			}

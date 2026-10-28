@@ -511,6 +511,20 @@ run_java_generated_self_tests() {
   }
   grep -q '^TypedClientRetryAfterTest: all checks passed$' "$test_log" \
     || die "java: TypedClientRetryAfterTest did not report its checks passed"
+  # The record-egress HOST fixture's record write surface self-test (#163),
+  # copied in by install_record_write_guard_selftest, so it is present exactly
+  # in that build.
+  local rw_test rw_class
+  rw_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/RecordWriteGuardTest.java' -print -quit)"
+  if [[ -n "$rw_test" ]]; then
+    rw_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$rw_test").$(basename "$rw_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$rw_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q '^RecordWriteGuardTest: all checks passed$' "$test_log" \
+      || die "record-egress host fixture (java): RecordWriteGuardTest did not report its checks passed"
+  fi
   # The record-egress fixture's user-and-listed-service self-test, copied in by
   # install_user_and_listed_service_selftest (which dies if it cannot), so it is
   # present exactly in that fixture's build.
@@ -718,6 +732,16 @@ run_rust_spiffe_self_tests() {
         return 1
       }
     assert_clean_log "$log_dir/rust-json-key-test.log"
+  fi
+
+  # The record-egress HOST fixture's record write surface self-test (#163),
+  # copied in by install_record_write_guard_selftest.
+  if [[ -f "$output/tests/record_write_guard_test.rs" ]]; then
+    (cd "$output" && cargo test --test record_write_guard_test) >"$log_dir/rust-record-write-guard-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-record-write-guard-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-record-write-guard-test.log"
   fi
 
   # The quorum-write fixture's hosted store service + roll scheduler self-test,
@@ -1767,6 +1791,56 @@ assert_recordegress_host_output() {
   assert_no_legacy_fixture_output "$output"
 }
 
+# install_record_write_guard_selftest drops the record write surface's (#163)
+# self-test into the generated HOST output, next to the generated
+# EgressRecordMap wrapper it drives in-process (a fake handler behind it, a fake
+# authorizer in front): the durability floor, the tenant pin and Apply's per-op
+# authorization, lock order and ack checks. It first asserts the guards were
+# generated at all, because a wrapper without them compiles.
+install_record_write_guard_selftest() {
+  local output="$1"
+  local language="$2"
+  local s2s=""
+
+  case "$language" in
+    go)
+      s2s="$(find "$output" -type f -path '*/servers/vservices/egressquery/egress_record_map.go' -print -quit)"
+      ;;
+    java)
+      s2s="$(find "$output" -type f -path '*/servers/vservices/egressquery/EgressRecordMap.java' -print -quit)"
+      ;;
+    rust)
+      s2s="$(find "$output" -type f -path '*/servers/vservices/egressquery/egress_record_map.rs' -print -quit)"
+      ;;
+  esac
+  [[ -n "$s2s" ]] || die "record write surface ($language): generated EgressRecordMap wrapper not found under $output"
+  local want
+  for want in \
+    "asks for a durability below the record type's declared floor RECORD_DURABILITY_REMOTE" \
+    'acked the write below the durability the request required' \
+    'is out of canonical lock order (record type full name, then key, each entry once)' \
+    'names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller'"'"'s to choose'; do
+    grep -qF "$want" "$s2s" \
+      || die "record write surface ($language): the generated EgressRecordMap carries no guard rendering '$want'"
+  done
+
+  case "$language" in
+    go)
+      cp "$SELFTESTS_SRC/go/record_write_guard_test.go" "$(dirname "$s2s")/"
+      ;;
+    java)
+      local dest
+      dest="$(dirname "$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/AuthorizerBehaviorTest.java' -print -quit)")"
+      [[ -d "$dest" ]] || die "record write surface (java): generated chassis/grpcserver package not found under $output"
+      cp "$SELFTESTS_SRC/java/RecordWriteGuardTest.java" "$dest/"
+      ;;
+    rust)
+      mkdir -p "$output/tests"
+      cp "$SELFTESTS_SRC/rust/record_write_guard_test.rs" "$output/tests/"
+      ;;
+  esac
+}
+
 assert_recordegress_output() {
   local output="$1"
   local language="$2"
@@ -2505,6 +2579,7 @@ if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
     output_root="$(resolve_output_root "$dir/tacplus")"
     assert_spiffe_soundness "$dir/tacplus"
     assert_recordegress_host_output "$output_root" "$language"
+    install_record_write_guard_selftest "$output_root" "$language"
     echo "==> Compiling $language record-egress HOST fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/egressstratum"
     echo "    PASS $language record-egress host"

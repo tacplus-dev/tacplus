@@ -83,6 +83,12 @@ message VaultRow {
     s2s: {auth_services: ["*"]}
     s2s_read: {auth_services: ["*"]}
     c2s_read: {auth_services: ["egressvault"]}
+    // The record write surface (#163): its own write audience and a REMOTE
+    // durability floor, so the store-side wrapper's floor guard and Apply's
+    // per-op guards are generated and compiled over a row that also carries
+    // the namespace/principal pins.
+    s2s_write: {auth_services: ["egressvault"]}
+    durability: DURABILITY_REMOTE
   };
 
   string row_id = 1 [(spec.assert_required) = true];
@@ -147,6 +153,23 @@ message VaultSecretRow {
   ];
 
   string material = 4;
+}
+
+// VaultAuditRow is APPEND_ONLY with an integer key: the record write surface
+// gives it Get, InsertIfAbsent and Watch<T>Changes and nothing that changes a
+// stored row, and its Apply op keys the canonical lock order numerically.
+message VaultAuditRow {
+  option (spec.record) = {
+    key: "seq"
+    owner: "owner"
+    s2s: {auth_services: ["*"]}
+    mutability: MUTABILITY_APPEND_ONLY
+  };
+
+  int64 seq = 1;
+  string namespace = 2 [(spec.assert_required) = true, (spec.store_namespace) = true];
+  string owner = 3 [(spec.assert_required) = true, (spec.store_principal) = true];
+  string note = 4;
 }
 
 message GetVaultSecretMaterialRequest {

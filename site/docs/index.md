@@ -19,7 +19,7 @@ handler: full services in Go, Rust and Java, and clients in TypeScript,
 Python, Swift and C#. Every user-facing RPC is also an MCP tool, with the same
 authorization as the RPC. Open source under Apache-2.0.
 
-[Install](install.md){ .md-button .md-button--primary }
+[Install](https://github.com/tacplus-dev/tacplus/blob/main/docs/INSTALL.md){ .md-button .md-button--primary }
 [Quick start](quickstart.md){ .md-button }
 [The deck](deck/index.html){ .md-button }
 [GitHub](https://github.com/tacplus-dev/tacplus){ .md-button }
@@ -148,7 +148,7 @@ produces its client, and nothing is switched on in YAML.
 
 <div class="grid cards tp-two" markdown>
 
--   [:octicons-download-24: **Install**](install.md): release binaries, `tacplus upgrade`, the container image, or from source.
+-   [:octicons-download-24: **Install**](https://github.com/tacplus-dev/tacplus/blob/main/docs/INSTALL.md): release binaries, `tacplus upgrade`, the container image, or from source.
 -   [:octicons-rocket-24: **Quick start**](quickstart.md): generate and run the example: a Go server and a TypeScript client.
 -   [:octicons-book-24: **User guide**](guide/user-guide.md): annotations, `tacplus.yaml`, and what gets generated.
 -   [:octicons-code-24: **Annotation reference**](reference/annotations/index.md): every `(spec.*)` option, generated from `spec.proto`.

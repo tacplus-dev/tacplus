@@ -123,7 +123,6 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Get started:
-      - Install: install.md
       - Quick start: quickstart.md
       - Languages: languages.md
   - Guide:

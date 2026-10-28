@@ -1,8 +1,4 @@
----
-description: Install tacplus from a GitHub release, keep it current with tacplus upgrade, run it as a container image, or build it from source.
----
-
-# Install
+# Install tacplus
 
 tacplus is a single binary. It drives `protoc` and the protoc plugins for the
 languages you generate, so a working setup is the binary plus those tools;
@@ -21,49 +17,49 @@ carries a binary per platform and a `checksums.txt` of their SHA-256 sums:
 
 Download one, check it against `checksums.txt`, and put it on your `PATH`:
 
-=== "macOS"
+#### macOS
 
-    ```bash
-    VERSION=2.0.1   # the release you want; see the Releases page
-    ARCH=arm64      # or amd64
-    FILE="tacplus-${VERSION//./-}-darwin-${ARCH}"
-    BASE="https://github.com/tacplus-dev/tacplus/releases/download/v${VERSION}"
+```bash
+VERSION=2.3.0   # the release you want; see the Releases page
+ARCH=arm64      # or amd64
+FILE="tacplus-${VERSION//./-}-darwin-${ARCH}"
+BASE="https://github.com/tacplus-dev/tacplus/releases/download/v${VERSION}"
 
-    curl -fsSLO "$BASE/$FILE"
-    curl -fsSLO "$BASE/checksums.txt"
-    grep " $FILE\$" checksums.txt | shasum -a 256 -c -
-    install -m 0755 "$FILE" /usr/local/bin/tacplus
-    tacplus version
-    ```
+curl -fsSLO "$BASE/$FILE"
+curl -fsSLO "$BASE/checksums.txt"
+grep " $FILE\$" checksums.txt | shasum -a 256 -c -
+install -m 0755 "$FILE" /usr/local/bin/tacplus
+tacplus version
+```
 
-=== "Linux"
+#### Linux
 
-    ```bash
-    VERSION=2.0.1   # the release you want; see the Releases page
-    ARCH=amd64      # or arm64
-    FILE="tacplus-${VERSION//./-}-linux-${ARCH}"
-    BASE="https://github.com/tacplus-dev/tacplus/releases/download/v${VERSION}"
+```bash
+VERSION=2.3.0   # the release you want; see the Releases page
+ARCH=amd64      # or arm64
+FILE="tacplus-${VERSION//./-}-linux-${ARCH}"
+BASE="https://github.com/tacplus-dev/tacplus/releases/download/v${VERSION}"
 
-    curl -fsSLO "$BASE/$FILE"
-    curl -fsSLO "$BASE/checksums.txt"
-    grep " $FILE\$" checksums.txt | sha256sum -c -
-    sudo install -m 0755 "$FILE" /usr/local/bin/tacplus
-    tacplus version
-    ```
+curl -fsSLO "$BASE/$FILE"
+curl -fsSLO "$BASE/checksums.txt"
+grep " $FILE\$" checksums.txt | sha256sum -c -
+sudo install -m 0755 "$FILE" /usr/local/bin/tacplus
+tacplus version
+```
 
-=== "Windows (PowerShell)"
+#### Windows (PowerShell)
 
-    ```powershell
-    $Version = "2.0.1"   # the release you want; see the Releases page
-    $File = "tacplus-$($Version -replace '\.', '-')-windows-amd64.exe"
-    $Base = "https://github.com/tacplus-dev/tacplus/releases/download/v$Version"
+```powershell
+$Version = "2.3.0"   # the release you want; see the Releases page
+$File = "tacplus-$($Version -replace '\.', '-')-windows-amd64.exe"
+$Base = "https://github.com/tacplus-dev/tacplus/releases/download/v$Version"
 
-    Invoke-WebRequest "$Base/$File" -OutFile $File
-    Invoke-WebRequest "$Base/checksums.txt" -OutFile checksums.txt
-    $want = (Select-String -Path checksums.txt -Pattern " $File$").Line.Split(" ")[0]
-    if ((Get-FileHash $File -Algorithm SHA256).Hash -ne $want.ToUpper()) { throw "checksum mismatch" }
-    Move-Item $File tacplus.exe   # then put tacplus.exe on your PATH
-    ```
+Invoke-WebRequest "$Base/$File" -OutFile $File
+Invoke-WebRequest "$Base/checksums.txt" -OutFile checksums.txt
+$want = (Select-String -Path checksums.txt -Pattern " $File$").Line.Split(" ")[0]
+if ((Get-FileHash $File -Algorithm SHA256).Hash -ne $want.ToUpper()) { throw "checksum mismatch" }
+Move-Item $File tacplus.exe   # then put tacplus.exe on your PATH
+```
 
 ### What `tacplus build` needs
 
@@ -98,7 +94,7 @@ stderr and prints the command that moves to it; it never moves you on its own.
 |---|---|
 | `tacplus upgrade` | the newest patch of the current `MAJOR.MINOR` |
 | `tacplus upgrade --version 2.1` | the newest patch of `2.1` |
-| `tacplus upgrade --version 2.0.1` | exactly `v2.0.1` |
+| `tacplus upgrade --version 2.3.0` | exactly `v2.3.0` |
 
 Every download is checked against the release's `checksums.txt` before the
 binary is replaced. If `GITHUB_TOKEN` is set, `upgrade` uses it for its
@@ -113,7 +109,7 @@ requests to GitHub (and drops it on a redirect to another host).
 | Tag | Meaning |
 |---|---|
 | `2.0` | the newest `2.0.x`: **what you pin** |
-| `2.0.1` | that release, immutable |
+| `2.3.0` | that release, immutable |
 | `2` | the newest `2.x` |
 | `latest` | the newest release |
 | `main-<sha>` | an unreleased build of `main` |

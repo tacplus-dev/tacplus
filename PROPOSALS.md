@@ -40,5 +40,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   gRPC/REST twin reaches any tenant. Deliberate (the model must never set the tenant); a cross-tenant MCP path
   would need the platform to choose the target, e.g. from a user-confirmed selection outside the model. Needs
   design if SeaBeam's "talk to another tenant's crew" should work through an assistant.
+- **The nightly gates outgrow the runner's disk** (2026-10-28, #198): the 2026-10-28 nightly run on 5adf7846
+  (run 40694076433) passed every gate through c2d-server, then failed zero-rpc-s2s and jwk-alg with "No space left on
+  device" in target/cross-test (the current-generation cargo/maven trees alone take two hours to build and stay on
+  disk). Nightly is red for infrastructure, not code. Either free disk on the runner before `docker run` (drop the
+  preinstalled SDKs the build image already carries), or have each gate clean its own scratch tree; the GitLab move
+  (#194) is the moment to size the runner for it.
 
 ## Promoted / declined

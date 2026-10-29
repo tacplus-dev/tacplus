@@ -145,27 +145,48 @@ func lockCache(dir string) (func(), error) {
 	}, nil
 }
 
-// authArgs returns per-invocation git flags carrying the GitLab CI credential
-// when running in GitLab CI. The credential is passed as an http.extraheader
-// config override on the command line, which is process-scoped: git never
-// writes it to any .git/config, unlike a credential embedded in the remote URL.
+// authArgs returns per-invocation git flags carrying the credential of the
+// forge rawURL is on: the GitLab CI job token for the GitLab instance that
+// issued it, and a GitHub token for github.com (the private registry `depends`
+// resolve through lives there). The credential is passed as an
+// http.extraheader config override on the command line, which is
+// process-scoped: git never writes it to any .git/config, unlike a credential
+// embedded in the remote URL.
 //
-// The job token goes only to the GitLab instance that issued it
-// (CI_SERVER_HOST). Sent to any other host it is a leaked credential, and a
-// forge such as GitHub refuses the clone outright when handed one it does not
-// recognise, so every other host, and any job without CI_SERVER_HOST or
-// CI_JOB_TOKEN, gets no flags.
+// Each token goes only to its own forge, over https. Sent to any other host it
+// is a leaked credential, and a forge such as GitHub refuses the clone outright
+// when handed one it does not recognise, so every other host, and any URL
+// whose forge has no token set, gets no flags.
 func authArgs(rawURL string) []string {
-	token := os.Getenv("CI_JOB_TOKEN")
-	server := os.Getenv("CI_SERVER_HOST")
-	if token == "" || server == "" {
-		return nil
-	}
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), server) {
+	if err != nil || u.Scheme != "https" {
 		return nil
 	}
-	basic := base64.StdEncoding.EncodeToString([]byte("gitlab-ci-token:" + token))
+	host := u.Hostname()
+
+	// The job token goes only to CI_SERVER_HOST, and only in a job that has both.
+	token, server := os.Getenv("CI_JOB_TOKEN"), os.Getenv("CI_SERVER_HOST")
+	if token != "" && server != "" && strings.EqualFold(host, server) {
+		return basicAuthArgs("gitlab-ci-token", token)
+	}
+
+	// A GitHub token (GH_TOKEN first, as the gh CLI reads it; GITHUB_TOKEN in
+	// GitHub Actions) goes only to github.com.
+	if strings.EqualFold(host, "github.com") {
+		token = os.Getenv("GH_TOKEN")
+		if token == "" {
+			token = os.Getenv("GITHUB_TOKEN")
+		}
+		if token != "" {
+			return basicAuthArgs("x-access-token", token)
+		}
+	}
+	return nil
+}
+
+// basicAuthArgs returns the git flags sending user:token as HTTP basic auth.
+func basicAuthArgs(user, token string) []string {
+	basic := base64.StdEncoding.EncodeToString([]byte(user + ":" + token))
 	return []string{"-c", "http.extraheader=AUTHORIZATION: basic " + basic}
 }
 

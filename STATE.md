@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-10-28 by looper (#171).
+Overwritten to stay current (loopers and agents). Last updated: 2026-10-29 by looper (#191).
 
 - **Version / line:** v2.5.0 (latest release, 2026-10-28, `release/2.5` cut at it); main is the 2.6 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -20,6 +20,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-10-28 by lo
   The `linked` claim is retired: the generated namespace backstop (record egress, page/Watch, query predicate, record
   write tenant pin) accepts the caller's own `namespace` only, no language generates a `linked` accessor, and
   `JwtPayloadType` 29 is reserved (#171).
+  The fetch layer authenticates `https://github.com` clones (`src`, `depends`, the private registry) with `GH_TOKEN`
+  (else `GITHUB_TOKEN`) and no other host; `CI_JOB_TOKEN` still goes only to `CI_SERVER_HOST` (#191; backported to
+  release/2.4 and release/2.5 by pull request, as v2.4.2 and v2.5.1 once they merge).
 - **Released / deployed:** v2.5.0 is the newest release (binaries and checksums; images as before, until #193).
 - **Known gaps:** the redo service and the per-tenant Stratum that implement the redo contract are their repos'
   (tacplus-dev/redo#1, tacplus-dev/stratum#2). The gateway does not yet route by the route field nor stamp `McpRequest.tenant`

@@ -554,157 +554,104 @@ fn build_signed_cert(
         issuer: Some(issuer_name),
     };
 
-    // The CertificateBuilder needs a signer that implements Keypair +
-    // DynSignatureAlgorithmIdentifier (for the algorithm identifier + verifying
-    // key), but the actual TBS signing is done manually below via finalize()/
-    // assemble() to support Ed25519, whose signature type does not implement
-    // the SignatureBitStringEncoding bound required by Builder::build().
-    macro_rules! assemble_with_signer {
-        ($signer:expr, $sign_fn:expr) => {
-            {
-            let mut builder = CertificateBuilder::new(
-                profile.clone(),
-                serial.clone(),
-                validity,
-                subject_name.clone(),
-                spki.clone(),
-                $signer,
-            )
-            .map_err(|e| AuthError::x509(format!("cert builder error: {}", e)))?;
+    // x509-cert's CertificateBuilder takes the issuer as a Keypair +
+    // DynSignatureAlgorithmIdentifier, for its SPKI and signature algorithm
+    // identifier only; the TBS is signed below via finalize()/assemble(), by
+    // aws-lc-rs (RSA, ECDSA) or ed25519-dalek.
+    let issuer_key = IssuerKey::of(signer)?;
+    let mut builder = CertificateBuilder::new(
+        profile,
+        serial,
+        validity,
+        subject_name,
+        spki,
+        &issuer_key,
+    )
+    .map_err(|e| AuthError::x509(format!("cert builder error: {}", e)))?;
 
-            // KeyUsage (critical, like Go/Java).
-            let ku_flags = key_usage_flags(req.key_usage);
-            let ku = KeyUsage(FlagSet::from(ku_flags));
-            builder
-                .add_extension(&ku)
-                .map_err(|e| AuthError::x509(format!("key usage ext error: {}", e)))?;
+    // KeyUsage (critical, like Go/Java).
+    let ku_flags = key_usage_flags(req.key_usage);
+    let ku = KeyUsage(FlagSet::from(ku_flags));
+    builder
+        .add_extension(&ku)
+        .map_err(|e| AuthError::x509(format!("key usage ext error: {}", e)))?;
 
-            // BasicConstraints when is_ca, mirroring Go (MaxPathLen/Zero) and
-            // Java (BasicConstraints(pathLen) when >= 0 else CA:true).
-            if req.is_ca {
-                let path_len = if req.path_len_constraint >= 0 {
-                    Some(req.path_len_constraint as u8)
-                } else {
-                    None
-                };
-                let bc = BasicConstraints {
-                    ca: true,
-                    path_len_constraint: path_len,
-                };
-                builder
-                    .add_extension(&bc)
-                    .map_err(|e| AuthError::x509(format!("basic constraints ext error: {}", e)))?;
-            }
-
-            // ExtendedKeyUsage.
-            if !req.ext_key_usage.is_empty() {
-                let oids: Vec<ObjectIdentifier> = req
-                    .ext_key_usage
-                    .iter()
-                    .filter_map(|e| ext_key_usage_oid(*e))
-                    .collect();
-                if !oids.is_empty() {
-                    let eku = ExtendedKeyUsage(oids);
-                    builder
-                        .add_extension(&eku)
-                        .map_err(|e| AuthError::x509(format!("ext key usage ext error: {}", e)))?;
-                }
-            }
-
-            // SubjectAltName: DNS (default ["localhost"] when empty) + URI SANs.
-            let mut general_names: Vec<GeneralName> = Vec::new();
-            let dns_names: Vec<String> = if req.dns_names.is_empty() {
-                vec!["localhost".to_string()]
-            } else {
-                req.dns_names.clone()
-            };
-            for dns in &dns_names {
-                let ia5 = Ia5String::new(dns)
-                    .map_err(|e| AuthError::x509(format!("invalid dns name {}: {}", dns, e)))?;
-                general_names.push(GeneralName::DnsName(ia5));
-            }
-            for uri in &req.uri_sans {
-                let ia5 = Ia5String::new(uri)
-                    .map_err(|e| AuthError::x509(format!("invalid uri san {}: {}", uri, e)))?;
-                general_names.push(GeneralName::UniformResourceIdentifier(ia5));
-            }
-            if !general_names.is_empty() {
-                let san = SubjectAltName(general_names);
-                builder
-                    .add_extension(&san)
-                    .map_err(|e| AuthError::x509(format!("san ext error: {}", e)))?;
-            }
-
-            // Metadata extension under the custom OID (raw bytes as the value),
-            // mirroring Go's pkix.Extension{Id: X509As1MetaDataOID, Value: ...}.
-            if let Some(meta) = &req.metadata {
-                let ext = MetadataExtension {
-                    value: meta.clone(),
-                };
-                builder
-                    .add_extension(&ext)
-                    .map_err(|e| AuthError::x509(format!("metadata ext error: {}", e)))?;
-            }
-
-            let tbs = builder
-                .finalize()
-                .map_err(|e| AuthError::x509(format!("tbs encode error: {}", e)))?;
-            let sig_bytes: Vec<u8> = $sign_fn(&tbs)?;
-            let bitstring = BitString::from_bytes(&sig_bytes)
-                .map_err(|e| AuthError::x509(format!("signature encode error: {}", e)))?;
-            builder
-                .assemble(bitstring)
-                .map_err(|e| AuthError::x509(format!("cert assemble error: {}", e)))?
-            }
+    // BasicConstraints when is_ca, mirroring Go (MaxPathLen/Zero) and
+    // Java (BasicConstraints(pathLen) when >= 0 else CA:true).
+    if req.is_ca {
+        let path_len = if req.path_len_constraint >= 0 {
+            Some(req.path_len_constraint as u8)
+        } else {
+            None
         };
+        let bc = BasicConstraints {
+            ca: true,
+            path_len_constraint: path_len,
+        };
+        builder
+            .add_extension(&bc)
+            .map_err(|e| AuthError::x509(format!("basic constraints ext error: {}", e)))?;
     }
 
-    // Dispatch on the signing key type. Each arm constructs the concrete signer
-    // and a closure producing the signature bytes in the form X.509 expects.
-    let cert: Certificate = match signer.private_key() {
-        keys::PrivateKey::Ed25519(sk) => {
-            use signature::Signer as _;
-            assemble_with_signer!(sk, |tbs: &[u8]| -> Result<Vec<u8>> {
-                let sig: ed25519_dalek::Signature = sk.sign(tbs);
-                Ok(sig.to_bytes().to_vec())
-            })
+    // ExtendedKeyUsage.
+    if !req.ext_key_usage.is_empty() {
+        let oids: Vec<ObjectIdentifier> = req
+            .ext_key_usage
+            .iter()
+            .filter_map(|e| ext_key_usage_oid(*e))
+            .collect();
+        if !oids.is_empty() {
+            let eku = ExtendedKeyUsage(oids);
+            builder
+                .add_extension(&eku)
+                .map_err(|e| AuthError::x509(format!("ext key usage ext error: {}", e)))?;
         }
-        keys::PrivateKey::EcP256(sk) => {
-            use signature::Signer as _;
-            assemble_with_signer!(sk, |tbs: &[u8]| -> Result<Vec<u8>> {
-                // X.509 uses the DER-encoded ECDSA signature.
-                let sig: ecdsa::der::Signature<p256::NistP256> = sk
-                    .try_sign(tbs)
-                    .map_err(|e| AuthError::ecdsa(e.to_string()))?;
-                Ok(sig.as_bytes().to_vec())
-            })
-        }
-        keys::PrivateKey::EcP384(sk) => {
-            use signature::Signer as _;
-            assemble_with_signer!(sk, |tbs: &[u8]| -> Result<Vec<u8>> {
-                let sig: ecdsa::der::Signature<p384::NistP384> = sk
-                    .try_sign(tbs)
-                    .map_err(|e| AuthError::ecdsa(e.to_string()))?;
-                Ok(sig.as_bytes().to_vec())
-            })
-        }
-        keys::PrivateKey::Rsa(rsa_key) => {
-            use rsa::signature::{SignatureEncoding, Signer as _};
-            // Algorithm chosen by key size, mirroring the key lib (RS384/RS512).
-            let signing_key384 = rsa::pkcs1v15::SigningKey::<sha2::Sha384>::new(rsa_key.clone());
-            let signing_key512 = rsa::pkcs1v15::SigningKey::<sha2::Sha512>::new(rsa_key.clone());
-            match signer.alg() {
-                "RS512" => assemble_with_signer!(&signing_key512, |tbs: &[u8]| -> Result<Vec<u8>> {
-                    let sig: rsa::pkcs1v15::Signature = signing_key512.sign(tbs);
-                    Ok(sig.to_vec())
-                }),
-                _ => assemble_with_signer!(&signing_key384, |tbs: &[u8]| -> Result<Vec<u8>> {
-                    let sig: rsa::pkcs1v15::Signature = signing_key384.sign(tbs);
-                    Ok(sig.to_vec())
-                }),
-            }
-        }
+    }
+
+    // SubjectAltName: DNS (default ["localhost"] when empty) + URI SANs.
+    let mut general_names: Vec<GeneralName> = Vec::new();
+    let dns_names: Vec<String> = if req.dns_names.is_empty() {
+        vec!["localhost".to_string()]
+    } else {
+        req.dns_names.clone()
     };
+    for dns in &dns_names {
+        let ia5 = Ia5String::new(dns)
+            .map_err(|e| AuthError::x509(format!("invalid dns name {}: {}", dns, e)))?;
+        general_names.push(GeneralName::DnsName(ia5));
+    }
+    for uri in &req.uri_sans {
+        let ia5 = Ia5String::new(uri)
+            .map_err(|e| AuthError::x509(format!("invalid uri san {}: {}", uri, e)))?;
+        general_names.push(GeneralName::UniformResourceIdentifier(ia5));
+    }
+    if !general_names.is_empty() {
+        let san = SubjectAltName(general_names);
+        builder
+            .add_extension(&san)
+            .map_err(|e| AuthError::x509(format!("san ext error: {}", e)))?;
+    }
+
+    // Metadata extension under the custom OID (raw bytes as the value),
+    // mirroring Go's pkix.Extension{Id: X509As1MetaDataOID, Value: ...}.
+    if let Some(meta) = &req.metadata {
+        let ext = MetadataExtension {
+            value: meta.clone(),
+        };
+        builder
+            .add_extension(&ext)
+            .map_err(|e| AuthError::x509(format!("metadata ext error: {}", e)))?;
+    }
+
+    let tbs = builder
+        .finalize()
+        .map_err(|e| AuthError::x509(format!("tbs encode error: {}", e)))?;
+    let sig_bytes = sign_tbs(signer, &tbs)?;
+    let bitstring = BitString::from_bytes(&sig_bytes)
+        .map_err(|e| AuthError::x509(format!("signature encode error: {}", e)))?;
+    let cert: Certificate = builder
+        .assemble(bitstring)
+        .map_err(|e| AuthError::x509(format!("cert assemble error: {}", e)))?;
 
     // Encode to PEM and wrap as ImmutableCert, with id = signing key id
     // (mirrors Go's cert.Id = w.key.Proto().Id).
@@ -770,22 +717,96 @@ fn ext_key_usage_oid(eku: X509ExtKeyUsage) -> Option<ObjectIdentifier> {
 
 /// Converts a parsed public key wrapper into SPKI DER bytes.
 fn public_key_to_spki(pk: &keys::PublicKey) -> Result<Vec<u8>> {
-    use spki::EncodePublicKey;
-    let der = match pk {
-        keys::PublicKey::Rsa(k) => k
-            .to_public_key_der()
-            .map_err(|e| AuthError::x509(format!("rsa spki error: {}", e)))?,
-        keys::PublicKey::EcP256(k) => k
-            .to_public_key_der()
-            .map_err(|e| AuthError::x509(format!("p256 spki error: {}", e)))?,
-        keys::PublicKey::EcP384(k) => k
-            .to_public_key_der()
-            .map_err(|e| AuthError::x509(format!("p384 spki error: {}", e)))?,
-        keys::PublicKey::Ed25519(k) => k
-            .to_public_key_der()
-            .map_err(|e| AuthError::x509(format!("ed25519 spki error: {}", e)))?,
-    };
-    Ok(der.as_bytes().to_vec())
+    match pk {
+        keys::PublicKey::Rsa(k) => Ok(k.spki_der().to_vec()),
+        keys::PublicKey::EcP256(k) | keys::PublicKey::EcP384(k) => k
+            .to_spki_der()
+            .map_err(|e| AuthError::x509(format!("ec spki error: {}", e))),
+        keys::PublicKey::Ed25519(k) => {
+            use spki::EncodePublicKey;
+            let der = k
+                .to_public_key_der()
+                .map_err(|e| AuthError::x509(format!("ed25519 spki error: {}", e)))?;
+            Ok(der.as_bytes().to_vec())
+        }
+    }
+}
+
+/// Signs a TBSCertificate with the issuer key, in the form X.509 expects: the
+/// DER ECDSA-Sig-Value for ECDSA, PKCS#1 v1.5 for RSA (RS384, or RS512 for a
+/// 4096-bit or larger key, mirroring the key lib), raw Ed25519.
+fn sign_tbs(signer: &keys::ImmutableKey, tbs: &[u8]) -> Result<Vec<u8>> {
+    match signer.private_key() {
+        keys::PrivateKey::Ed25519(sk) => {
+            use signature::Signer as _;
+            let sig: ed25519_dalek::Signature = sk.sign(tbs);
+            Ok(sig.to_bytes().to_vec())
+        }
+        keys::PrivateKey::EcP256(sk) | keys::PrivateKey::EcP384(sk) => sk.sign_der(tbs),
+        keys::PrivateKey::Rsa(sk) => match signer.alg() {
+            "RS512" => sk.sign("RS512", tbs),
+            _ => sk.sign("RS384", tbs),
+        },
+    }
+}
+
+/// The issuer as x509-cert's CertificateBuilder takes it: its SPKI and the
+/// AlgorithmIdentifier of the signature `sign_tbs` makes. It never signs.
+struct IssuerKey {
+    spki_der: Vec<u8>,
+    signature_algorithm: spki::AlgorithmIdentifierOwned,
+}
+
+impl IssuerKey {
+    fn of(signer: &keys::ImmutableKey) -> Result<Self> {
+        use const_oid::db::rfc5912::{
+            ECDSA_WITH_SHA_256, ECDSA_WITH_SHA_384, SHA_384_WITH_RSA_ENCRYPTION,
+            SHA_512_WITH_RSA_ENCRYPTION,
+        };
+        use const_oid::db::rfc8410::ID_ED_25519;
+        // RSA's AlgorithmIdentifier carries an explicit NULL parameter
+        // (RFC 4055); ECDSA's and Ed25519's carry none (RFC 5758, RFC 8410).
+        let (oid, null_parameters) = match signer.private_key() {
+            keys::PrivateKey::Ed25519(_) => (ID_ED_25519, false),
+            keys::PrivateKey::EcP256(_) => (ECDSA_WITH_SHA_256, false),
+            keys::PrivateKey::EcP384(_) => (ECDSA_WITH_SHA_384, false),
+            keys::PrivateKey::Rsa(_) => match signer.alg() {
+                "RS512" => (SHA_512_WITH_RSA_ENCRYPTION, true),
+                _ => (SHA_384_WITH_RSA_ENCRYPTION, true),
+            },
+        };
+        Ok(Self {
+            spki_der: public_key_to_spki(signer.public_key())?,
+            signature_algorithm: spki::AlgorithmIdentifierOwned {
+                oid,
+                parameters: null_parameters.then(|| der::asn1::Null.into()),
+            },
+        })
+    }
+}
+
+/// The issuer's SPKI, as the CertificateBuilder reads it from `IssuerKey`.
+#[derive(Clone)]
+struct IssuerSpki(Vec<u8>);
+
+impl spki::EncodePublicKey for IssuerSpki {
+    fn to_public_key_der(&self) -> spki::Result<der::Document> {
+        Ok(der::Document::try_from(self.0.as_slice())?)
+    }
+}
+
+impl signature::Keypair for IssuerKey {
+    type VerifyingKey = IssuerSpki;
+
+    fn verifying_key(&self) -> IssuerSpki {
+        IssuerSpki(self.spki_der.clone())
+    }
+}
+
+impl spki::DynSignatureAlgorithmIdentifier for IssuerKey {
+    fn signature_algorithm_identifier(&self) -> spki::Result<spki::AlgorithmIdentifierOwned> {
+        Ok(self.signature_algorithm.clone())
+    }
 }
 
 /// Generates a cryptographically random 128-bit positive serial number,
@@ -1182,6 +1203,38 @@ mod tests {
             !verify_service_name(&der, "mcp", "example.com"),
             "CN/DNS-only cert must be rejected (no SPIFFE fallback)"
         );
+    }
+
+    // Issue #186: a certificate signed by each key family (RSA and ECDSA on
+    // aws-lc-rs) names the algorithm it is signed with, and verifies under the
+    // issuer's public key with it.
+    #[test]
+    fn self_signed_cert_verifies_for_every_key_family() {
+        use aws_lc_rs::signature::{self as aws, VerificationAlgorithm};
+        use der::Encode;
+
+        let families: [(keys::ImmutableKey, &str, bool, &'static dyn VerificationAlgorithm); 4] = [
+            (keys::generate_ed25519_key().unwrap(), "1.3.101.112", false, &aws::ED25519),
+            (keys::generate_ec_p256_key().unwrap(), "1.2.840.10045.4.3.2", false, &aws::ECDSA_P256_SHA256_ASN1),
+            (keys::generate_ec_p384_key().unwrap(), "1.2.840.10045.4.3.3", false, &aws::ECDSA_P384_SHA384_ASN1),
+            (keys::generate_rsa_4096_key().unwrap(), "1.2.840.113549.1.1.13", true, &aws::RSA_PKCS1_2048_8192_SHA512),
+        ];
+        for (key, oid, null_parameters, algorithm) in families {
+            let spki = public_key_to_spki(key.public_key()).expect("issuer spki");
+            let cert = ImmutableCertChain::for_self_signing(key)
+                .self_sign("family", exp_in_one_hour(), X509KeyUsage::DigitalSignature, &[])
+                .expect("self_sign");
+            let parsed = Certificate::from_der(cert_to_der(&cert).expect("cert DER").as_ref())
+                .expect("parse cert");
+            assert_eq!(parsed.signature_algorithm.oid.to_string(), oid);
+            assert_eq!(parsed.signature_algorithm.parameters.is_some(), null_parameters, "{}", oid);
+            assert_eq!(parsed.tbs_certificate.signature, parsed.signature_algorithm);
+            let tbs = parsed.tbs_certificate.to_der().expect("tbs DER");
+            aws::ParsedPublicKey::new(algorithm, &spki)
+                .expect("issuer key")
+                .verify_sig(&tbs, parsed.signature.raw_bytes())
+                .unwrap_or_else(|_| panic!("{} signature verifies", oid));
+        }
     }
 
     #[test]

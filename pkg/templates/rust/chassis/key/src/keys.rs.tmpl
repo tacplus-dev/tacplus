@@ -19,20 +19,27 @@
 //! - RSA: RS384 (2048/3072-bit), RS512 (4096-bit and larger)
 //! - ECDSA: ES256 (P-256), ES384 (P-384), ES512 (P-521)
 //! - EdDSA: Ed25519
+//!
+//! # Backends
+//!
+//! RSA and ECDSA keys are aws-lc-rs's (AWS-LC: constant-time RSA with
+//! blinding, key generation up to 8192 bits). The RustCrypto `rsa` crate is
+//! not used: it is open to the Marvin timing attack (RUSTSEC-2023-0071) with no
+//! fixed release, and its elliptic-curve 0.13 stack carries crypto-bigint 0.5
+//! (RUSTSEC-2026-0387). Ed25519 stays on ed25519-dalek.
 
 use crate::base64_utils;
 use crate::error::{AuthError, Result};
-use ed25519_dalek::{SigningKey, VerifyingKey};
-use p256::ecdsa::{SigningKey as P256SigningKey, VerifyingKey as P256VerifyingKey};
-use p384::ecdsa::{SigningKey as P384SigningKey, VerifyingKey as P384VerifyingKey};
-use rand::rngs::OsRng;
-use rsa::{
-    pkcs1::DecodeRsaPrivateKey,
-    pkcs8::EncodePrivateKey,
-    RsaPrivateKey, RsaPublicKey,
+use aws_lc_rs::encoding::AsDer;
+use aws_lc_rs::rand::SystemRandom;
+use aws_lc_rs::signature::{
+    self as aws_signature, EcdsaKeyPair, EcdsaSigningAlgorithm, KeyPair as _, ParsedPublicKey,
+    VerificationAlgorithm,
 };
-use sha2::{Sha384, Sha512};
+use ed25519_dalek::{SigningKey, VerifyingKey};
+use rand::rngs::OsRng;
 use signature::Signer;
+use std::sync::Arc;
 
 /// Key type enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,12 +70,324 @@ fn rsa_alg_for_key_size(key_bytes: usize) -> Result<&'static str> {
     }
 }
 
+/// An RSA public key: its modulus and exponent, and the SubjectPublicKeyInfo
+/// DER aws-lc-rs verifies PKCS#1 v1.5 signatures with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RsaPublicKey {
+    n: Vec<u8>,
+    e: Vec<u8>,
+    spki_der: Vec<u8>,
+}
+
+impl RsaPublicKey {
+    /// Parses a PKCS#1 RSAPublicKey or an X.509 SubjectPublicKeyInfo (DER).
+    pub fn from_der(der: &[u8]) -> Result<Self> {
+        let key = aws_lc_rs::rsa::PublicKey::from_der(der)
+            .map_err(|e| AuthError::rsa(e.to_string()))?;
+        let spki_der = key
+            .as_der()
+            .map_err(|_| AuthError::rsa("RSA public key encode error"))?;
+        Ok(Self {
+            n: key.modulus().big_endian_without_leading_zero().to_vec(),
+            e: key.exponent().big_endian_without_leading_zero().to_vec(),
+            spki_der: spki_der.as_ref().to_vec(),
+        })
+    }
+
+    /// Builds the key from its big-endian modulus and exponent (a JWK's n, e).
+    pub fn from_components(n: &[u8], e: &[u8]) -> Result<Self> {
+        let spki_der = aws_lc_rs::rsa::PublicKeyComponents { n, e }
+            .as_der()
+            .map_err(|_| AuthError::rsa("invalid RSA public key"))?;
+        Self::from_der(spki_der.as_ref())
+    }
+
+    /// The modulus, big-endian without leading zeros
+    pub fn n(&self) -> &[u8] {
+        &self.n
+    }
+
+    /// The public exponent, big-endian without leading zeros
+    pub fn e(&self) -> &[u8] {
+        &self.e
+    }
+
+    /// The modulus size in bytes
+    pub fn size(&self) -> usize {
+        self.n.len()
+    }
+
+    /// The X.509 SubjectPublicKeyInfo DER of this key
+    pub fn spki_der(&self) -> &[u8] {
+        &self.spki_der
+    }
+
+    /// Verifies a PKCS#1 v1.5 signature: RS256, RS384 or RS512, nothing else.
+    pub fn verify(&self, alg: &str, message: &[u8], signature: &[u8]) -> Result<()> {
+        let algorithm: &'static dyn VerificationAlgorithm = match alg {
+            "RS256" => &aws_signature::RSA_PKCS1_2048_8192_SHA256,
+            "RS384" => &aws_signature::RSA_PKCS1_2048_8192_SHA384,
+            "RS512" => &aws_signature::RSA_PKCS1_2048_8192_SHA512,
+            _ => return Err(AuthError::unsupported_algorithm(alg.to_string())),
+        };
+        verify_with(algorithm, &self.spki_der, message, signature)
+    }
+}
+
+/// The NIST curves an EC key may be on
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EcCurve {
+    P256,
+    P384,
+}
+
+impl EcCurve {
+    // secp256r1 / secp384r1, the namedCurve parameter of an id-ecPublicKey SPKI.
+    const P256_OID: &'static str = "1.2.840.10045.3.1.7";
+    const P384_OID: &'static str = "1.3.132.0.34";
+
+    /// The byte length of one coordinate
+    pub fn coordinate_len(self) -> usize {
+        match self {
+            EcCurve::P256 => 32,
+            EcCurve::P384 => 48,
+        }
+    }
+
+    fn verification(self) -> &'static dyn VerificationAlgorithm {
+        match self {
+            EcCurve::P256 => &aws_signature::ECDSA_P256_SHA256_FIXED,
+            EcCurve::P384 => &aws_signature::ECDSA_P384_SHA384_FIXED,
+        }
+    }
+
+    fn signing_fixed(self) -> &'static EcdsaSigningAlgorithm {
+        match self {
+            EcCurve::P256 => &aws_signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+            EcCurve::P384 => &aws_signature::ECDSA_P384_SHA384_FIXED_SIGNING,
+        }
+    }
+
+    fn signing_asn1(self) -> &'static EcdsaSigningAlgorithm {
+        match self {
+            EcCurve::P256 => &aws_signature::ECDSA_P256_SHA256_ASN1_SIGNING,
+            EcCurve::P384 => &aws_signature::ECDSA_P384_SHA384_ASN1_SIGNING,
+        }
+    }
+}
+
+/// An EC public key: its curve and its uncompressed SEC1 point (0x04 || x || y),
+/// checked to be on the curve.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EcPublicKey {
+    curve: EcCurve,
+    point: Vec<u8>,
+}
+
+impl EcPublicKey {
+    /// Takes an uncompressed SEC1 point on the curve
+    pub fn from_point(curve: EcCurve, point: &[u8]) -> Result<Self> {
+        if point.len() != 1 + 2 * curve.coordinate_len() || point[0] != 0x04 {
+            return Err(AuthError::ecdsa(format!("invalid {:?} point", curve)));
+        }
+        ParsedPublicKey::new(curve.verification(), point)
+            .map_err(|e| AuthError::ecdsa(format!("invalid {:?} key: {}", curve, e)))?;
+        Ok(Self {
+            curve,
+            point: point.to_vec(),
+        })
+    }
+
+    /// Takes the affine coordinates (a JWK's x, y)
+    pub fn from_coordinates(curve: EcCurve, x: &[u8], y: &[u8]) -> Result<Self> {
+        let mut point = Vec::with_capacity(1 + x.len() + y.len());
+        point.push(0x04);
+        point.extend_from_slice(x);
+        point.extend_from_slice(y);
+        Self::from_point(curve, &point)
+    }
+
+    /// Parses an X.509 SubjectPublicKeyInfo (DER) holding a P-256 or P-384 key
+    pub fn from_spki_der(der: &[u8]) -> Result<Self> {
+        use pkcs8::der::asn1::ObjectIdentifier;
+        use pkcs8::spki::SubjectPublicKeyInfoRef;
+        const ID_EC_PUBLIC_KEY: &str = "1.2.840.10045.2.1";
+
+        let spki = SubjectPublicKeyInfoRef::try_from(der)
+            .map_err(|e| AuthError::ecdsa(format!("invalid EC public key: {}", e)))?;
+        if spki.algorithm.oid.to_string() != ID_EC_PUBLIC_KEY {
+            return Err(AuthError::ecdsa("not an EC public key"));
+        }
+        let named_curve: ObjectIdentifier = spki
+            .algorithm
+            .parameters_oid()
+            .map_err(|e| AuthError::ecdsa(format!("invalid EC curve: {}", e)))?;
+        let curve = match named_curve.to_string().as_str() {
+            EcCurve::P256_OID => EcCurve::P256,
+            EcCurve::P384_OID => EcCurve::P384,
+            other => return Err(AuthError::ecdsa(format!("unsupported EC curve: {}", other))),
+        };
+        let point = spki
+            .subject_public_key
+            .as_bytes()
+            .ok_or_else(|| AuthError::ecdsa("invalid EC public key bit string"))?;
+        Self::from_point(curve, point)
+    }
+
+    /// The curve
+    pub fn curve(&self) -> EcCurve {
+        self.curve
+    }
+
+    /// The uncompressed SEC1 point
+    pub fn point(&self) -> &[u8] {
+        &self.point
+    }
+
+    /// The x coordinate
+    pub fn x(&self) -> &[u8] {
+        &self.point[1..1 + self.curve.coordinate_len()]
+    }
+
+    /// The y coordinate
+    pub fn y(&self) -> &[u8] {
+        &self.point[1 + self.curve.coordinate_len()..]
+    }
+
+    /// The X.509 SubjectPublicKeyInfo DER of this key
+    pub fn to_spki_der(&self) -> Result<Vec<u8>> {
+        let key = ParsedPublicKey::new(self.curve.verification(), &self.point)
+            .map_err(|e| AuthError::ecdsa(e.to_string()))?;
+        let der = key
+            .as_der()
+            .map_err(|_| AuthError::ecdsa("EC public key encode error"))?;
+        Ok(der.as_ref().to_vec())
+    }
+
+    /// Verifies a JWS ECDSA signature (the fixed r || s form): ES256 on P-256,
+    /// ES384 on P-384.
+    pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<()> {
+        verify_with(self.curve.verification(), &self.point, message, signature)
+    }
+}
+
+fn verify_with(
+    algorithm: &'static dyn VerificationAlgorithm,
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<()> {
+    aws_signature::UnparsedPublicKey::new(algorithm, public_key)
+        .verify(message, signature)
+        .map_err(|_| AuthError::unauthorized("signature verification failed"))
+}
+
+/// An RSA private key (aws-lc-rs) and its public key
+#[derive(Clone)]
+pub struct RsaPrivateKey {
+    key_pair: Arc<aws_lc_rs::rsa::KeyPair>,
+    public_key: RsaPublicKey,
+}
+
+impl RsaPrivateKey {
+    fn new(key_pair: aws_lc_rs::rsa::KeyPair) -> Result<Self> {
+        let public_key = RsaPublicKey::from_der(key_pair.public_key().as_ref())?;
+        Ok(Self {
+            key_pair: Arc::new(key_pair),
+            public_key,
+        })
+    }
+
+    /// Parses a PKCS#8 PrivateKeyInfo (DER)
+    pub fn from_pkcs8_der(der: &[u8]) -> Result<Self> {
+        Self::new(
+            aws_lc_rs::rsa::KeyPair::from_pkcs8(der).map_err(|e| AuthError::rsa(e.to_string()))?,
+        )
+    }
+
+    /// Parses a PKCS#1 RSAPrivateKey (DER)
+    pub fn from_pkcs1_der(der: &[u8]) -> Result<Self> {
+        Self::new(
+            aws_lc_rs::rsa::KeyPair::from_der(der).map_err(|e| AuthError::rsa(e.to_string()))?,
+        )
+    }
+
+    /// The public key
+    pub fn public_key(&self) -> &RsaPublicKey {
+        &self.public_key
+    }
+
+    /// Signs with PKCS#1 v1.5: RS256, RS384 or RS512.
+    pub fn sign(&self, alg: &str, data: &[u8]) -> Result<Vec<u8>> {
+        let padding: &'static dyn aws_signature::RsaEncoding = match alg {
+            "RS256" => &aws_signature::RSA_PKCS1_SHA256,
+            "RS384" => &aws_signature::RSA_PKCS1_SHA384,
+            "RS512" => &aws_signature::RSA_PKCS1_SHA512,
+            _ => return Err(AuthError::unsupported_algorithm(alg.to_string())),
+        };
+        let mut signature = vec![0u8; self.key_pair.public_modulus_len()];
+        self.key_pair
+            .sign(padding, &SystemRandom::new(), data, &mut signature)
+            .map_err(|_| AuthError::rsa("RSA signing failed"))?;
+        Ok(signature)
+    }
+}
+
+/// An ECDSA private key (aws-lc-rs) and its public key
+#[derive(Clone)]
+pub struct EcPrivateKey {
+    // The same key, once per signature form: JWS takes r || s, X.509 the DER
+    // ECDSA-Sig-Value.
+    fixed: Arc<EcdsaKeyPair>,
+    asn1: Arc<EcdsaKeyPair>,
+    public_key: EcPublicKey,
+}
+
+impl EcPrivateKey {
+    /// Parses a PKCS#8 PrivateKeyInfo (DER) of a key on the curve
+    pub fn from_pkcs8_der(curve: EcCurve, der: &[u8]) -> Result<Self> {
+        let fixed = EcdsaKeyPair::from_pkcs8(curve.signing_fixed(), der)
+            .map_err(|e| AuthError::ecdsa(e.to_string()))?;
+        let asn1 = EcdsaKeyPair::from_pkcs8(curve.signing_asn1(), der)
+            .map_err(|e| AuthError::ecdsa(e.to_string()))?;
+        let public_key = EcPublicKey::from_point(curve, fixed.public_key().as_ref())?;
+        Ok(Self {
+            fixed: Arc::new(fixed),
+            asn1: Arc::new(asn1),
+            public_key,
+        })
+    }
+
+    /// The public key
+    pub fn public_key(&self) -> &EcPublicKey {
+        &self.public_key
+    }
+
+    /// Signs for a JWS (ES256 on P-256, ES384 on P-384): the fixed r || s form.
+    pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>> {
+        let signature = self
+            .fixed
+            .sign(&SystemRandom::new(), data)
+            .map_err(|_| AuthError::ecdsa("ECDSA signing failed"))?;
+        Ok(signature.as_ref().to_vec())
+    }
+
+    /// Signs for X.509: the DER-encoded ECDSA-Sig-Value.
+    pub fn sign_der(&self, data: &[u8]) -> Result<Vec<u8>> {
+        let signature = self
+            .asn1
+            .sign(&SystemRandom::new(), data)
+            .map_err(|_| AuthError::ecdsa("ECDSA signing failed"))?;
+        Ok(signature.as_ref().to_vec())
+    }
+}
+
 /// Parsed public key variants
 #[derive(Clone)]
 pub enum PublicKey {
     Rsa(RsaPublicKey),
-    EcP256(P256VerifyingKey),
-    EcP384(P384VerifyingKey),
+    EcP256(EcPublicKey),
+    EcP384(EcPublicKey),
     Ed25519(VerifyingKey),
 }
 
@@ -76,8 +395,8 @@ pub enum PublicKey {
 #[derive(Clone)]
 pub enum PrivateKey {
     Rsa(RsaPrivateKey),
-    EcP256(P256SigningKey),
-    EcP384(P384SigningKey),
+    EcP256(EcPrivateKey),
+    EcP384(EcPrivateKey),
     Ed25519(SigningKey),
 }
 
@@ -128,31 +447,13 @@ impl ImmutablePublicKey {
         // Try parsing as different key types
         let pem_str = std::str::from_utf8(&pem_bytes)
             .map_err(|_| AuthError::missing_invalid_data("invalid UTF-8 in PEM data"))?;
+        let der = pem::parse(pem_str)
+            .map_err(|e| AuthError::pem_parse(e.to_string()))?
+            .into_contents();
 
-        // Try RSA public key
-        if let Ok(key) = RsaPublicKey::from_public_key_pem(pem_str) {
-            use rsa::traits::PublicKeyParts;
-            let key_bytes = (key.n().bits() + 7) / 8; // Convert bits to bytes
-            let alg = rsa_alg_for_key_size(key_bytes)?;
-
-            return Ok(Self {
-                id,
-                kty: KeyType::Rsa,
-                alg: alg.to_string(),
-                public_key: PublicKey::Rsa(key),
-                pem_bytes,
-            });
-        }
-
-        // Try PKCS#8 format for RSA
-        if let Ok(key) = RsaPublicKey::from_public_key_der(
-            &pem::parse(pem_str)
-                .map_err(|e| AuthError::pem_parse(e.to_string()))?
-                .contents(),
-        ) {
-            use rsa::traits::PublicKeyParts;
-            let key_bytes = (key.n().bits() + 7) / 8;
-            let alg = rsa_alg_for_key_size(key_bytes)?;
+        // Try RSA public key (SubjectPublicKeyInfo or PKCS#1)
+        if let Ok(key) = RsaPublicKey::from_der(&der) {
+            let alg = rsa_alg_for_key_size(key.size())?;
 
             return Ok(Self {
                 id,
@@ -163,31 +464,24 @@ impl ImmutablePublicKey {
             });
         }
 
-        // Try P-256
-        if let Ok(key) = P256VerifyingKey::from_public_key_pem(pem_str) {
+        // Try P-256 and P-384
+        if let Ok(key) = EcPublicKey::from_spki_der(&der) {
+            let (alg, public_key) = match key.curve() {
+                EcCurve::P256 => ("ES256", PublicKey::EcP256(key)),
+                EcCurve::P384 => ("ES384", PublicKey::EcP384(key)),
+            };
             return Ok(Self {
                 id,
                 kty: KeyType::Ec,
-                alg: "ES256".to_string(),
-                public_key: PublicKey::EcP256(key),
-                pem_bytes,
-            });
-        }
-
-        // Try P-384
-        if let Ok(key) = P384VerifyingKey::from_public_key_pem(pem_str) {
-            return Ok(Self {
-                id,
-                kty: KeyType::Ec,
-                alg: "ES384".to_string(),
-                public_key: PublicKey::EcP384(key),
+                alg: alg.to_string(),
+                public_key,
                 pem_bytes,
             });
         }
 
         // Try Ed25519 - use pkcs8 decoding
         use pkcs8::DecodePublicKey;
-        if let Ok(key) = VerifyingKey::from_public_key_pem(pem_str) {
+        if let Ok(key) = VerifyingKey::from_public_key_der(&der) {
             return Ok(Self {
                 id,
                 kty: KeyType::Okp,
@@ -276,30 +570,23 @@ impl ImmutableKey {
 
         let pem_str = std::str::from_utf8(&pem_bytes)
             .map_err(|_| AuthError::missing_invalid_data("invalid UTF-8 in PEM data"))?;
+        let unparsed = || {
+            AuthError::missing_invalid_data(
+                "unable to parse private key (tried RSA, P-256, P-384, Ed25519)",
+            )
+        };
+        let block = pem::parse(pem_str).map_err(|_| unparsed())?;
+        let der = block.contents();
 
-        // Try RSA private key (PKCS#1)
-        if let Ok(key) = RsaPrivateKey::from_pkcs1_pem(pem_str) {
-            use rsa::traits::PublicKeyParts;
-            let public_key = key.to_public_key();
-            let key_bytes = (key.n().bits() + 7) / 8;
-            let alg = rsa_alg_for_key_size(key_bytes)?;
-
-            return Ok(Self {
-                id,
-                kty: KeyType::Rsa,
-                alg: alg.to_string(),
-                private_key: PrivateKey::Rsa(key),
-                public_key: PublicKey::Rsa(public_key),
-                pem_bytes,
-            });
-        }
-
-        // Try RSA private key (PKCS#8)
-        if let Ok(key) = RsaPrivateKey::from_pkcs8_pem(pem_str) {
-            use rsa::traits::PublicKeyParts;
-            let public_key = key.to_public_key();
-            let key_bytes = (key.n().bits() + 7) / 8;
-            let alg = rsa_alg_for_key_size(key_bytes)?;
+        // Try RSA private key (PKCS#1, then PKCS#8)
+        let rsa_key = if block.tag() == "RSA PRIVATE KEY" {
+            RsaPrivateKey::from_pkcs1_der(der).ok()
+        } else {
+            RsaPrivateKey::from_pkcs8_der(der).ok()
+        };
+        if let Some(key) = rsa_key {
+            let public_key = key.public_key().clone();
+            let alg = rsa_alg_for_key_size(public_key.size())?;
 
             return Ok(Self {
                 id,
@@ -312,8 +599,8 @@ impl ImmutableKey {
         }
 
         // Try P-256
-        if let Ok(key) = P256SigningKey::from_pkcs8_pem(pem_str) {
-            let public_key = *key.verifying_key();
+        if let Ok(key) = EcPrivateKey::from_pkcs8_der(EcCurve::P256, der) {
+            let public_key = key.public_key().clone();
             return Ok(Self {
                 id,
                 kty: KeyType::Ec,
@@ -325,8 +612,8 @@ impl ImmutableKey {
         }
 
         // Try P-384
-        if let Ok(key) = P384SigningKey::from_pkcs8_pem(pem_str) {
-            let public_key = *key.verifying_key();
+        if let Ok(key) = EcPrivateKey::from_pkcs8_der(EcCurve::P384, der) {
+            let public_key = key.public_key().clone();
             return Ok(Self {
                 id,
                 kty: KeyType::Ec,
@@ -339,7 +626,7 @@ impl ImmutableKey {
 
         // Try Ed25519
         use pkcs8::DecodePrivateKey;
-        if let Ok(key) = SigningKey::from_pkcs8_pem(pem_str) {
+        if let Ok(key) = SigningKey::from_pkcs8_der(der) {
             let public_key: VerifyingKey = key.verifying_key();
             return Ok(Self {
                 id,
@@ -351,9 +638,7 @@ impl ImmutableKey {
             });
         }
 
-        Err(AuthError::missing_invalid_data(
-            "unable to parse private key (tried RSA, P-256, P-384, Ed25519)",
-        ))
+        Err(unparsed())
     }
 
     /// Returns the key ID
@@ -389,44 +674,15 @@ impl ImmutableKey {
     /// Signs data with this private key
     ///
     /// The signing algorithm is determined by the key type and algorithm.
-    /// RSA and ECDSA Signer traits hash internally — do not pre-hash.
-    /// Ed25519 signs the raw data directly.
+    /// RSA and ECDSA hash internally — do not pre-hash. ECDSA signatures are
+    /// the JWS fixed r || s form. Ed25519 signs the raw data directly.
     pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>> {
         match &self.private_key {
-            PrivateKey::Rsa(key) => {
-                use rsa::signature::Signer as RsaSigner;
-                use rsa::signature::SignatureEncoding;
-                use rsa::pkcs1v15::SigningKey;
-
-                let signature = match self.alg.as_str() {
-                    "RS384" => {
-                        let signing_key = SigningKey::<Sha384>::new(key.clone());
-                        let sig: rsa::pkcs1v15::Signature = signing_key.sign(data);
-                        sig.to_vec()
-                    }
-                    "RS512" => {
-                        let signing_key = SigningKey::<Sha512>::new(key.clone());
-                        let sig: rsa::pkcs1v15::Signature = signing_key.sign(data);
-                        sig.to_vec()
-                    }
-                    _ => return Err(AuthError::unsupported_algorithm(self.alg.clone())),
-                };
-                Ok(signature)
-            }
-            PrivateKey::EcP256(key) => {
-                use p256::ecdsa::signature::Signer;
-                let signature: p256::ecdsa::Signature = key
-                    .try_sign(data)
-                    .map_err(|e| AuthError::ecdsa(e.to_string()))?;
-                Ok(signature.to_vec())
-            }
-            PrivateKey::EcP384(key) => {
-                use p384::ecdsa::signature::Signer;
-                let signature: p384::ecdsa::Signature = key
-                    .try_sign(data)
-                    .map_err(|e| AuthError::ecdsa(e.to_string()))?;
-                Ok(signature.to_vec())
-            }
+            PrivateKey::Rsa(key) => match self.alg.as_str() {
+                "RS384" | "RS512" => key.sign(&self.alg, data),
+                _ => Err(AuthError::unsupported_algorithm(self.alg.clone())),
+            },
+            PrivateKey::EcP256(key) | PrivateKey::EcP384(key) => key.sign(data),
             PrivateKey::Ed25519(key) => {
                 let signature = key.sign(data);
                 Ok(signature.to_vec())
@@ -437,68 +693,56 @@ impl ImmutableKey {
 
 /// Key generation helpers
 
+/// Encodes PKCS#8 DER as the base64url PEM `ImmutableKey::from_pem` takes.
+fn pkcs8_base64_pem(der: &[u8]) -> String {
+    let block = pem::Pem::new("PRIVATE KEY", der.to_vec());
+    let pem = pem::encode_config(
+        &block,
+        pem::EncodeConfig::new().set_line_ending(pem::LineEnding::LF),
+    );
+    base64_utils::encode_base64_url(pem.as_bytes())
+}
+
+fn generate_rsa_key(size: aws_lc_rs::rsa::KeySize) -> Result<ImmutableKey> {
+    use aws_lc_rs::encoding::Pkcs8V1Der;
+
+    let key_pair = aws_lc_rs::rsa::KeyPair::generate(size)
+        .map_err(|_| AuthError::rsa("RSA key generation failed"))?;
+    let der: Pkcs8V1Der = key_pair
+        .as_der()
+        .map_err(|_| AuthError::rsa("RSA key encode error"))?;
+
+    ImmutableKey::from_pem(generate_random_id(), &pkcs8_base64_pem(der.as_ref()))
+}
+
+fn generate_ec_key(curve: EcCurve) -> Result<ImmutableKey> {
+    let key_pair = EcdsaKeyPair::generate(curve.signing_fixed())
+        .map_err(|_| AuthError::ecdsa("EC key generation failed"))?;
+    let der = key_pair
+        .to_pkcs8v1()
+        .map_err(|_| AuthError::ecdsa("EC key encode error"))?;
+
+    ImmutableKey::from_pem(generate_random_id(), &pkcs8_base64_pem(der.as_ref()))
+}
+
 /// Generates a new RSA-4096 key pair
 pub fn generate_rsa_4096_key() -> Result<ImmutableKey> {
-    let mut rng = OsRng;
-    let private_key = RsaPrivateKey::new(&mut rng, 4096)
-        .map_err(|e| AuthError::rsa(e.to_string()))?;
-
-    let pem = private_key
-        .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
-        .map_err(|e| AuthError::rsa(e.to_string()))?;
-
-    let base64_pem = base64_utils::encode_base64_url(pem.as_bytes());
-    let id = generate_random_id();
-
-    ImmutableKey::from_pem(id, &base64_pem)
+    generate_rsa_key(aws_lc_rs::rsa::KeySize::Rsa4096)
 }
 
 /// Generates a new RSA-8192 key pair (very large, use with caution)
 pub fn generate_rsa_8192_key() -> Result<ImmutableKey> {
-    let mut rng = OsRng;
-    let private_key = RsaPrivateKey::new(&mut rng, 8192)
-        .map_err(|e| AuthError::rsa(e.to_string()))?;
-
-    let pem = private_key
-        .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
-        .map_err(|e| AuthError::rsa(e.to_string()))?;
-
-    let base64_pem = base64_utils::encode_base64_url(pem.as_bytes());
-    let id = generate_random_id();
-
-    ImmutableKey::from_pem(id, &base64_pem)
+    generate_rsa_key(aws_lc_rs::rsa::KeySize::Rsa8192)
 }
 
 /// Generates a new P-256 (ES256) ECDSA key pair
 pub fn generate_ec_p256_key() -> Result<ImmutableKey> {
-    use pkcs8::EncodePrivateKey;
-
-    let signing_key = P256SigningKey::random(&mut OsRng);
-
-    let pem = signing_key
-        .to_pkcs8_pem(pkcs8::LineEnding::LF)
-        .map_err(|e| AuthError::ecdsa(e.to_string()))?;
-
-    let base64_pem = base64_utils::encode_base64_url(pem.as_bytes());
-    let id = generate_random_id();
-
-    ImmutableKey::from_pem(id, &base64_pem)
+    generate_ec_key(EcCurve::P256)
 }
 
 /// Generates a new P-384 (ES384) ECDSA key pair
 pub fn generate_ec_p384_key() -> Result<ImmutableKey> {
-    use pkcs8::EncodePrivateKey;
-
-    let signing_key = P384SigningKey::random(&mut OsRng);
-
-    let pem = signing_key
-        .to_pkcs8_pem(pkcs8::LineEnding::LF)
-        .map_err(|e| AuthError::ecdsa(e.to_string()))?;
-
-    let base64_pem = base64_utils::encode_base64_url(pem.as_bytes());
-    let id = generate_random_id();
-
-    ImmutableKey::from_pem(id, &base64_pem)
+    generate_ec_key(EcCurve::P384)
 }
 
 /// Generates a new Ed25519 key pair
@@ -550,5 +794,107 @@ mod tests {
         let data = b"test data to sign";
         let signature = key.sign(data).unwrap();
         assert!(!signature.is_empty());
+    }
+
+    // The public half of a private key, as ImmutablePublicKey::from_pem takes it.
+    fn public_pem(key: &ImmutableKey) -> String {
+        let spki = match key.public_key() {
+            PublicKey::Rsa(k) => k.spki_der().to_vec(),
+            PublicKey::EcP256(k) | PublicKey::EcP384(k) => k.to_spki_der().unwrap(),
+            PublicKey::Ed25519(k) => {
+                use pkcs8::EncodePublicKey;
+                k.to_public_key_der().unwrap().as_bytes().to_vec()
+            }
+        };
+        base64_utils::encode_base64_url(pem::encode(&pem::Pem::new("PUBLIC KEY", spki)).as_bytes())
+    }
+
+    // Issue #186: RSA is aws-lc-rs's. A generated 4096-bit key signs RS512
+    // (and RS256/RS384 on request), its public key round-trips through PEM, and
+    // a signature verifies under its own alg only and never over other data.
+    #[test]
+    fn test_rsa_4096_sign_verify_round_trip() {
+        let key = generate_rsa_4096_key().unwrap();
+        assert_eq!(key.kty(), KeyType::Rsa);
+        assert_eq!(key.alg(), "RS512");
+        let public = ImmutablePublicKey::from_pem("rsa".into(), &public_pem(&key)).unwrap();
+        assert_eq!(public.alg(), "RS512");
+        let PublicKey::Rsa(rsa) = public.public_key() else { panic!("expected an RSA key") };
+        assert_eq!(rsa.size(), 512);
+        assert_eq!(rsa.e(), [1, 0, 1]);
+
+        let data = b"header.payload";
+        let signature = key.sign(data).unwrap();
+        assert_eq!(signature.len(), 512);
+        rsa.verify("RS512", data, &signature).unwrap();
+        assert!(rsa.verify("RS384", data, &signature).is_err());
+        assert!(rsa.verify("RS512", b"header.other", &signature).is_err());
+        assert!(rsa.verify("PS512", data, &signature).is_err());
+
+        let PrivateKey::Rsa(private) = key.private_key() else { panic!("expected an RSA key") };
+        for alg in ["RS256", "RS384"] {
+            rsa.verify(alg, data, &private.sign(alg, data).unwrap()).unwrap();
+        }
+        let rebuilt = RsaPublicKey::from_components(rsa.n(), rsa.e()).unwrap();
+        assert_eq!(&rebuilt, rsa);
+    }
+
+    // PKCS#1 private keys ("RSA PRIVATE KEY", what openssl genrsa -traditional
+    // writes) parse as well as PKCS#8.
+    #[test]
+    fn test_rsa_pkcs1_private_key() {
+        let pkcs8 = aws_lc_rs::rsa::KeyPair::generate(aws_lc_rs::rsa::KeySize::Rsa2048).unwrap();
+        let pkcs8_der: aws_lc_rs::encoding::Pkcs8V1Der = pkcs8.as_der().unwrap();
+        let pkcs1_der = {
+            use pkcs8::der::Decode;
+            pkcs8::PrivateKeyInfo::from_der(pkcs8_der.as_ref()).unwrap().private_key.to_vec()
+        };
+        let pem = pem::encode(&pem::Pem::new("RSA PRIVATE KEY", pkcs1_der));
+        let key = ImmutableKey::from_pem("pkcs1".into(), &base64_utils::encode_base64_url(pem.as_bytes()))
+            .unwrap();
+        assert_eq!(key.kty(), KeyType::Rsa);
+        assert_eq!(key.alg(), "RS384");
+        let PublicKey::Rsa(rsa) = key.public_key() else { panic!("expected an RSA key") };
+        rsa.verify("RS384", b"data", &key.sign(b"data").unwrap()).unwrap();
+    }
+
+    #[test]
+    fn test_ec_sign_verify_round_trip() {
+        for (key, alg, curve) in [
+            (generate_ec_p256_key().unwrap(), "ES256", EcCurve::P256),
+            (generate_ec_p384_key().unwrap(), "ES384", EcCurve::P384),
+        ] {
+            assert_eq!(key.alg(), alg);
+            let public = ImmutablePublicKey::from_pem("ec".into(), &public_pem(&key)).unwrap();
+            assert_eq!(public.alg(), alg);
+            let ec = match public.public_key() {
+                PublicKey::EcP256(k) | PublicKey::EcP384(k) => k,
+                _ => panic!("expected an EC key"),
+            };
+            assert_eq!(ec.curve(), curve);
+            assert_eq!(ec.x().len(), curve.coordinate_len());
+
+            let data = b"header.payload";
+            let signature = key.sign(data).unwrap();
+            assert_eq!(signature.len(), 2 * curve.coordinate_len());
+            ec.verify(data, &signature).unwrap();
+            assert!(ec.verify(b"header.other", &signature).is_err());
+
+            let rebuilt = EcPublicKey::from_coordinates(curve, ec.x(), ec.y()).unwrap();
+            assert_eq!(&rebuilt, ec);
+        }
+    }
+
+    // A point off the curve, or of the other curve's size, is refused when the
+    // key is built, not only when a signature fails to verify.
+    #[test]
+    fn test_ec_point_validation() {
+        let key = generate_ec_p256_key().unwrap();
+        let PublicKey::EcP256(ec) = key.public_key() else { panic!("expected a P-256 key") };
+        let mut y = ec.y().to_vec();
+        y[31] ^= 1;
+        assert!(EcPublicKey::from_coordinates(EcCurve::P256, ec.x(), &y).is_err());
+        assert!(EcPublicKey::from_coordinates(EcCurve::P384, ec.x(), ec.y()).is_err());
+        assert!(EcPublicKey::from_point(EcCurve::P256, &ec.point()[1..]).is_err());
     }
 }

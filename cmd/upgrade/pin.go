@@ -4,12 +4,8 @@
 package upgrade
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"github.com/tacplus-dev/tacplus/pkg/ghcr"
 	"github.com/tacplus-dev/tacplus/pkg/tacplusyaml"
 )
 
@@ -208,46 +205,12 @@ func contains(list []string, s string) bool {
 // asking anonymously as a public pull does.
 func buildImageDigest(version string) (string, error) {
 	ref := pinImageName + ":" + version
-	q := url.Values{"scope": {"repository:" + pinImageRepo + ":pull"}, "service": {"ghcr.io"}}
-	resp, err := upgradeHTTPClient.Get(pinRegistryBase + "/token?" + q.Encode())
-	if err != nil {
-		return "", fmt.Errorf("resolving %s: %w", ref, err)
-	}
-	var tok struct {
-		Token string `json:"token"`
-	}
-	err = json.NewDecoder(resp.Body).Decode(&tok)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || err != nil || tok.Token == "" {
-		return "", fmt.Errorf("resolving %s: no registry token (HTTP %d)", ref, resp.StatusCode)
-	}
-
-	req, err := http.NewRequest(http.MethodHead, pinRegistryBase+"/v2/"+pinImageRepo+"/manifests/"+url.PathEscape(version), nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+tok.Token)
-	req.Header.Set("Accept", strings.Join([]string{
-		"application/vnd.oci.image.index.v1+json",
-		"application/vnd.docker.distribution.manifest.list.v2+json",
-		"application/vnd.oci.image.manifest.v1+json",
-		"application/vnd.docker.distribution.manifest.v2+json",
-	}, ", "))
-	resp, err = upgradeHTTPClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("resolving %s: %w", ref, err)
-	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
+	digest, err := ghcr.Digest(upgradeHTTPClient, pinRegistryBase, pinImageRepo, version, "")
+	if errors.Is(err, ghcr.ErrNotPublished) {
 		return "", fmt.Errorf("%s is not published (yet): the release's build image is pushed by .github/workflows/images.yml from its tag", ref)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("resolving %s: HTTP %d", ref, resp.StatusCode)
-	}
-	digest := resp.Header.Get("Docker-Content-Digest")
-	if !strings.HasPrefix(digest, "sha256:") {
-		return "", fmt.Errorf("resolving %s: the registry returned no digest", ref)
+	if err != nil {
+		return "", fmt.Errorf("resolving %s: %w", ref, err)
 	}
 	return digest, nil
 }

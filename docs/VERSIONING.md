@@ -36,6 +36,23 @@ safe to take without reading the notes, because a patch is fixes only, so a
 pin is moved to its line's newest patch as a matter of course, never kept on a
 known defect.
 
+## What fleets pin
+
+A fleet pins each service it runs the same way, by **release line**
+(tacplus#180; docs/USER.md, Fleet Build). `fleet.yaml` states the intent,
+`version: "0.4"`, and `tacplus fleet build` resolves it to that line's highest
+released `v0.4.PATCH` tag of the service's repo, pre-releases excluded, and to
+the image that release published. `fleet.lock` records the result: the exact
+version, its commit and the image digest. A service names a pre-release only
+explicitly (`version: "0.4.3-rc.1"`), never a patch, and never a branch: a
+service without `version` is refused.
+
+Re-locking (running the build again) takes new patches of the stated lines;
+moving to a new minor is a `fleet.yaml` change, and `tacplus fleet build
+--check` says which services have a newer patch or minor. Services are `0.x`
+until SeaBeam's launch (2026-12-01), so a minor may break; `1.0.0` comes at
+launch. Each service's release (its tags and image) is its own repository's.
+
 ## Backports
 
 Every fix is made on `main` first. It is then backported to **every minor

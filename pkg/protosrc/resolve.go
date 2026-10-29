@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -34,7 +35,7 @@ type Result struct {
 // to avoid redundant clones. The first run clones; subsequent runs fetch.
 // The tag parameter controls which version to check out:
 //   - "latest" or "" → fetch and checkout origin/HEAD
-//   - "X.Y.Z" → fetch tags and checkout vX.Y.Z
+//   - "X.Y.Z" or "X.Y.Z-pre" → fetch tags and checkout vX.Y.Z(-pre)
 //   - "X.Y" → fetch tags, find latest vX.Y.* tag, checkout
 //
 // The caller should call Result.Cleanup when done (currently a no-op for cached repos).
@@ -75,7 +76,35 @@ func IsGitSource(src string) bool {
 func isGitURL(s string) bool {
 	return strings.HasPrefix(s, "git@") ||
 		strings.HasPrefix(s, "https://") ||
-		strings.HasPrefix(s, "http://")
+		strings.HasPrefix(s, "http://") ||
+		strings.HasPrefix(s, "file://")
+}
+
+// ListTags returns the tag names of a git source, read from the remote
+// (git ls-remote, with the source's forge credentials), sorted by name. A
+// local directory is not a git source and has none.
+func ListTags(src string) ([]string, error) {
+	url := src
+	if !isGitURL(src) {
+		if !looksLikeRepo(src) {
+			return nil, fmt.Errorf("%q is not a git repository URL; its tags cannot be listed", src)
+		}
+		url = "https://" + src
+	}
+	cmd := exec.Command("git", append(authArgs(url), "ls-remote", "--tags", "--refs", "--", url)...)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("listing the tags of %q: %w", url, err)
+	}
+	var tags []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if _, ref, ok := strings.Cut(strings.TrimSpace(line), "\t"); ok {
+			tags = append(tags, strings.TrimPrefix(ref, "refs/tags/"))
+		}
+	}
+	sort.Strings(tags)
+	return tags, nil
 }
 
 // looksLikeRepo returns true if the string looks like it could be a repo reference.
@@ -265,8 +294,8 @@ func fetchAndCheckout(dir string, tag string, auth []string) error {
 		return nil
 	}
 
-	if strings.Count(tag, ".") == 2 {
-		// Exact version X.Y.Z
+	if exactVersionRe.MatchString(tag) {
+		// Exact version X.Y.Z, or a pre-release X.Y.Z-pre
 		gitTag := "v" + tag
 		if strings.HasPrefix(tag, "v") {
 			gitTag = tag
@@ -304,8 +333,12 @@ func fetchAndCheckout(dir string, tag string, auth []string) error {
 		return nil
 	}
 
-	return fmt.Errorf("invalid tag format %q: expected 'latest', 'X.Y', 'X.Y.Z', or 'X.Y.latest'", tag)
+	return fmt.Errorf("invalid tag format %q: expected 'latest', 'X.Y', 'X.Y.Z', 'X.Y.Z-pre', or 'X.Y.latest'", tag)
 }
+
+// exactVersionRe is an exact version: vX.Y.Z, optionally with a semver
+// pre-release suffix.
+var exactVersionRe = regexp.MustCompile(`^v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
 
 // gitIn runs a git command in the given directory. Any auth flags are passed
 // before the subcommand so they apply to this invocation only.

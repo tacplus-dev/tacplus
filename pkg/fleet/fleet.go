@@ -8,17 +8,23 @@
 // declared) and against each other (every declared dependency is in the fleet,
 // at a version that satisfies the dependent's floor), merges the protos into one
 // tree, runs the checks that only make sense for a whole fleet, and writes a
-// commit-level lock so the same fleet builds identically later.
+// lock of the exact releases, commits and release images, so the same fleet
+// deploys identically later.
 //
 //	registries:
 //	  - https://github.com/tacplus-dev/registry.git
 //	tacplus: "2.2"
 //	services:
 //	  - name: kernel
-//	    version: "0.1"              # MAJOR.MINOR -> latest patch; omit for latest
+//	    version: "0.1"              # MAJOR.MINOR -> its highest released patch; required
 //	    repo: https://github.com/tacplus-dev/kernel.git
 //	  - name: doppelganger
+//	    version: "0.2.1-rc.1"       # an explicit pre-release, only when named
 //	    repo: https://github.com/tacplus-dev/doppelganger.git
+//
+// A service runs its own release: the version resolves to a vMAJOR.MINOR.PATCH
+// tag of its repo (version.go) and to the image that release published, which
+// the fleet deploys by digest; the fleet builds no service image.
 //
 // The registry decides a service's name and id and says where its contract
 // lives; the manifest decides which implementation runs, always as an explicit
@@ -42,7 +48,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/tacplus-dev/tacplus/pkg/buildinfo"
-	"github.com/tacplus-dev/tacplus/pkg/gittag"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/protosrc"
 	"github.com/tacplus-dev/tacplus/pkg/registry"
@@ -62,15 +67,16 @@ type Manifest struct {
 	Services   []ServiceSpec `yaml:"services"`
 }
 
-// ServiceSpec is one fleet service: its registry name, the MAJOR.MINOR it runs
-// (latest patch; empty = latest), and the repo implementing it.
+// ServiceSpec is one fleet service: its registry name, the release line it
+// runs (MAJOR.MINOR, its highest released patch; or an explicit
+// MAJOR.MINOR.PATCH-pre pre-release), and the repo implementing it.
 type ServiceSpec struct {
 	Name    string `yaml:"name"`
 	Version string `yaml:"version,omitempty"`
 	Repo    string `yaml:"repo"`
 }
 
-// Lock is fleet.lock: what the build resolved, commit by commit.
+// Lock is fleet.lock: what the build resolved, release by release.
 type Lock struct {
 	Tacplus    string          `yaml:"tacplus"`
 	Registries []LockedSource  `yaml:"registries"`
@@ -86,11 +92,15 @@ type LockedSource struct {
 
 // LockedService is one resolved service.
 type LockedService struct {
-	Name           string   `yaml:"name"`
-	ID             int32    `yaml:"id"`
-	Version        string   `yaml:"version,omitempty"`
+	Name string `yaml:"name"`
+	ID   int32  `yaml:"id"`
+	// Version is the exact release the stated version resolved to
+	// (MAJOR.MINOR.PATCH, or the pre-release named), Commit its tag's commit,
+	// and Image the image that release published, by digest.
+	Version        string   `yaml:"version"`
 	Repo           string   `yaml:"repo"`
 	Commit         string   `yaml:"commit"`
+	Image          string   `yaml:"image"`
 	Contract       string   `yaml:"contract,omitempty"`
 	ContractCommit string   `yaml:"contract_commit,omitempty"`
 	Depends        []string `yaml:"depends,omitempty"`
@@ -104,6 +114,8 @@ type LockedService struct {
 var (
 	nameRe    = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 	versionRe = regexp.MustCompile(`^(\d+)\.(\d+)$`)
+	// releaseVersionRe is an exact release, which a manifest never states.
+	releaseVersionRe = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
 )
 
 // ReadManifest reads and validates fleet.yaml in dir.
@@ -134,8 +146,14 @@ func ReadManifest(dir string) (*Manifest, error) {
 		if s.Repo == "" {
 			return nil, fmt.Errorf("fleet: %s: service %q names no repo; every service states the implementation it runs, there is no default", ManifestFile, s.Name)
 		}
-		if s.Version != "" && !versionRe.MatchString(s.Version) {
-			return nil, fmt.Errorf("fleet: %s: service %q version %q must be MAJOR.MINOR (the latest patch runs; never a patch pin)", ManifestFile, s.Name, s.Version)
+		switch {
+		case s.Version == "":
+			return nil, fmt.Errorf("fleet: %s: service %q names no version; state its release line, MAJOR.MINOR (its highest released patch runs), there is no default", ManifestFile, s.Name)
+		case lineRe.MatchString(s.Version), preReleaseRe.MatchString(s.Version):
+		case releaseVersionRe.MatchString(s.Version):
+			return nil, fmt.Errorf("fleet: %s: service %q version %q: state the line, %s (its highest patch runs and %s records which); never a patch pin", ManifestFile, s.Name, s.Version, lineOf(s.Version), LockFile)
+		default:
+			return nil, fmt.Errorf("fleet: %s: service %q version %q must be MAJOR.MINOR (a release line), or MAJOR.MINOR.PATCH-pre to run a pre-release", ManifestFile, s.Name, s.Version)
 		}
 	}
 	if err := tacplusyaml.CheckFloor(m.Tacplus, buildinfo.Version); err != nil {
@@ -191,6 +209,7 @@ func Build(manifestDir, outDir string) (*Result, error) {
 	// lock carries the registry's id and the proto declares the name.
 	type resolved struct {
 		spec     ServiceSpec
+		version  string // the exact release
 		id       int32
 		protoDir string // staged: this service's contract files + the contract repo's registry.yaml
 		depends  []string
@@ -207,9 +226,17 @@ func Build(manifestDir, outDir string) (*Result, error) {
 		if contract == "" {
 			return nil, fmt.Errorf("fleet: service %q is registered without a contract; the registry must say where its proto lives", spec.Name)
 		}
-		tag := "latest"
-		if spec.Version != "" {
-			tag = spec.Version + ".latest"
+		tags, err := serviceTags(spec.Repo)
+		if err != nil {
+			return nil, fmt.Errorf("fleet: service %q: %w", spec.Name, err)
+		}
+		tag, err := resolveVersion(tags, spec.Version)
+		if err != nil {
+			return nil, fmt.Errorf("fleet: service %q: %s: %w", spec.Name, spec.Repo, err)
+		}
+		image, err := releaseImage(spec.Repo, tag)
+		if err != nil {
+			return nil, fmt.Errorf("fleet: service %q: release v%s: %w", spec.Name, tag, err)
 		}
 
 		implDir, _, implCleanup, err := resolveImplementation(spec.Repo, tag)
@@ -267,12 +294,12 @@ func Build(manifestDir, outDir string) (*Result, error) {
 			return nil, fmt.Errorf("fleet: service %q: %s declares id %d but the registry says %d; an implementation keeps the registry's id", spec.Name, contract, lockID, id)
 		}
 
-		r := resolved{spec: spec, id: id, protoDir: staged, depends: depends, whole: whole}
+		r := resolved{spec: spec, version: tag, id: id, protoDir: staged, depends: depends, whole: whole}
 		services = append(services, r)
 		byName[spec.Name] = &services[len(services)-1]
 		lock.Services = append(lock.Services, LockedService{
-			Name: spec.Name, ID: id, Version: spec.Version, Repo: spec.Repo,
-			Commit: commitOf(implDir), Contract: contract, ContractCommit: commitOf(contractRepoDir), Depends: depends,
+			Name: spec.Name, ID: id, Version: tag, Repo: spec.Repo,
+			Commit: commitOf(implDir), Image: image, Contract: contract, ContractCommit: commitOf(contractRepoDir), Depends: depends,
 		})
 	}
 
@@ -304,8 +331,8 @@ func Build(manifestDir, outDir string) (*Result, error) {
 				errs = append(errs, fmt.Sprintf("%q depends on %q, which the fleet does not run; add it to %s", r.spec.Name, depName, ManifestFile))
 				continue
 			}
-			if floor != "" && dep.spec.Version != "" && !satisfies(dep.spec.Version, floor) {
-				errs = append(errs, fmt.Sprintf("%q needs %q at %s or a later minor; the fleet runs %s", r.spec.Name, depName, floor, dep.spec.Version))
+			if floor != "" && !satisfies(lineOf(dep.version), floor) {
+				errs = append(errs, fmt.Sprintf("%q needs %q at %s or a later minor; the fleet runs %s", r.spec.Name, depName, floor, dep.version))
 			}
 		}
 	}
@@ -529,13 +556,26 @@ func writeFleetLock(mergedDir string, registries []string, union *registry.Regis
 	return lock.SaveTo(mergedDir)
 }
 
+// ReadLock reads fleet.lock in dir.
+func ReadLock(dir string) (*Lock, error) {
+	data, err := os.ReadFile(filepath.Join(dir, LockFile))
+	if err != nil {
+		return nil, err
+	}
+	var l Lock
+	if err := yaml.Unmarshal(data, &l); err != nil {
+		return nil, fmt.Errorf("fleet: parsing %s: %w", LockFile, err)
+	}
+	return &l, nil
+}
+
 // writeLock writes the lock with its header.
 func writeLock(lock *Lock, path string) error {
 	data, err := yaml.Marshal(lock)
 	if err != nil {
 		return err
 	}
-	header := "# Written by tacplus fleet build. The exact commits this fleet was resolved to; regenerate, do not edit.\n"
+	header := "# Written by tacplus fleet build. The exact release, commit and image of every service; regenerate, do not edit.\n"
 	if err := os.WriteFile(path, append([]byte(header), data...), 0o644); err != nil {
 		return fmt.Errorf("fleet: writing %s: %w", path, err)
 	}
@@ -579,14 +619,11 @@ func validateFleet(mergedDir string) error {
 	return nil
 }
 
-// resolveImplementation fetches a service's repo at tag and returns the repo
-// dir, its proto dir (proto/ by convention when present), and a cleanup.
+// resolveImplementation fetches a repo at tag (an exact version, or "latest"
+// for a contract repo's head) and returns the repo dir, its proto dir (proto/
+// by convention when present), and a cleanup.
 func resolveImplementation(repo, tag string) (repoDir, protoDir string, cleanup func(), err error) {
-	resolveTag := tag
-	if protosrc.IsGitSource(repo) {
-		resolveTag = gittag.ToMinorLatest(tag)
-	}
-	res, err := protosrc.Resolve(repo, resolveTag)
+	res, err := protosrc.Resolve(repo, tag)
 	if err != nil {
 		return "", "", nil, err
 	}

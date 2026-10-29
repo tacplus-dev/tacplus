@@ -4,6 +4,18 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **A fleet service whose image is not ghcr.io/<owner>/<repo>** (2026-10-29, #180): the fleet build names a
+  service's release image from its repo, `github.com/<owner>/<repo>` → `ghcr.io/<owner>/<repo>`, and refuses any
+  other forge. A fleet running its own implementation from GitLab (the private-registry case docs/USER.md shows), or
+  a service publishing elsewhere, needs a way to say where its image lives: an `image:` per service in fleet.yaml,
+  or the image named by the service's own repo (a field in its tacplus.yaml, or the release's OCI labels). It is a
+  public fleet.yaml/tacplus.yaml contract, so it needs a decision.
+- **Fleet deploys from dev builds** (2026-10-29, #180): the issue allows "a pre-release or a dev build" for an
+  unreleased fix; today the only explicit form is a pre-release tag (`version: "0.4.3-rc.1"`), whose image the
+  service's release CI must publish. A dev build without a tag (an image by digest from a branch build) has no
+  form; if fleets need one, it is a new per-service field and needs design.
+- **`tacplus fleet build --check` for CI and bots** (2026-10-29, #180): `--check` prints a table and fails when a
+  re-lock would move a service. A `--json` output would let a fleet's CI open the re-lock pull request itself.
 - **A per-pod archive member from one shared config** (2026-10-28, #143): `grpcconfig.disk_persistence.archive.member`
   is a config value, but a StatefulSet's pods usually share one ConfigMap, so each pod needs its own rendered config
   (or a per-pod env override) to get its own member. The Java ServiceManager already takes a stable per-instance name

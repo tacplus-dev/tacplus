@@ -365,7 +365,7 @@ own implementation of, say, kernel under the same name and id.
 | `tacplus validate` | Validate proto files |
 | `tacplus verify` | Run formal verification on Rust or Java code |
 | `tacplus registry` | Update the service / vservice / trait registry from proto definitions |
-| `tacplus fleet build` | Build a fleet from a deployment repo's `fleet.yaml`: resolve every service's implementation, check ids and dependencies against the registries, merge the protos, run the whole-fleet checks, write `fleet.lock` (see [Fleet Build](#fleet-build)) |
+| `tacplus fleet build` | Build a fleet from a deployment repo's `fleet.yaml`: resolve every service's release line to its exact release and image, check ids and dependencies against the registries, merge the protos, run the whole-fleet checks, write `fleet.lock`; `--check` lists newer patches and minors (see [Fleet Build](#fleet-build)) |
 | `tacplus upgrade` | Upgrade tacplus to the latest patch release |
 | `tacplus version` | Print the version and build information |
 
@@ -1916,18 +1916,42 @@ registries:
 tacplus: "2.2"                                      # floor, MAJOR.MINOR
 services:
   - name: kernel
-    version: "0.1"                                  # MAJOR.MINOR -> latest patch; omit for latest
+    version: "0.1"                                  # release line, MAJOR.MINOR -> its highest released patch; required
     repo: https://github.com/acme/our-kernel.git    # the implementation THIS fleet runs; required, no default
   - name: llmproxy
+    version: "0.2.1-rc.1"                           # an explicit pre-release: only when named
     repo: https://github.com/tacplus-dev/llmproxy.git
 ```
+
+### Service versions
+
+A fleet pins each service by **release line**, never by commit or branch, the same rule
+as the tacplus floor:
+
+| `version:` | runs |
+|---|---|
+| `"0.4"` (MAJOR.MINOR) | the highest released `v0.4.PATCH` tag of the service's repo, by number; pre-releases are never taken |
+| `"0.4.3-rc.1"` (MAJOR.MINOR.PATCH-pre) | exactly the tag `v0.4.3-rc.1`: a fleet that needs an unreleased fix says so, per service |
+| `"0.4.3"` | refused: state the line; `fleet.lock` records the patch |
+| missing | refused: there is no implicit `main` |
+
+A line with no release, or a pre-release that was never tagged, is refused by name. The
+service's repo must be a git repository (a local clone as `file:///path`): a plain
+directory has no releases to resolve.
+
+**Images come from the service's release.** Each service's release CI publishes
+`ghcr.io/<owner>/<repo>:<version>` from its `vX.Y.Z` tag; the fleet build looks up that
+tag's digest and the fleet deploys that image, by digest. A release without its image is
+refused. The repo must be on github.com, and a private package needs `GH_TOKEN` (or
+`GITHUB_TOKEN`) with `read:packages`, the token the fetch layer already sends to
+github.com.
 
 `dependencies.yaml` beside it holds the language and tool pins for everything
 generated from the fleet's merged protos. `tacplus fleet build` then:
 
 1. unions the registries, refusing a name or id that appears in two;
-2. resolves each service's implementation at its version (for its commit and its
-   `depends`) and gathers its **contract** from the registry's home for it: the proto
+2. resolves each service's version to its exact release and that release's image (above),
+   fetches the implementation at its tag (for its commit and its `depends`) and gathers its **contract** from the registry's home for it: the proto
    whose file-level identity is the name, plus everything it imports, so a proto repo
    shared by many services contributes only this service's files. The contract's
    `registry.yaml` must carry the registry's id (a fleet may run its own kernel, never
@@ -1939,12 +1963,33 @@ generated from the fleet's merged protos. `tacplus fleet build` then:
    `auth_services_from_fleet` gets the fleet services that declare a client of it), and
    runs the whole-fleet checks: routing and C2S host labels served, one SMB authority,
    exactly one minter, a complete and collision-free registry;
-5. writes `fleet.lock`, the exact commit of every registry and service.
+5. writes `fleet.lock`: the commit of every registry and, for every service, the exact
+   version, its tag's commit, its release image by digest, and its `inputs_digest`.
+
+```yaml
+# fleet.lock (excerpt)
+services:
+  - name: kernel
+    id: 1
+    version: 0.1.4
+    repo: https://github.com/acme/our-kernel.git
+    commit: 6f1c0a…
+    image: ghcr.io/acme/our-kernel@sha256:9b2e…
+    inputs_digest: 41d7…
+```
+
+A deploy from a lock is reproducible, and diffing two locks shows which services moved and
+to which version. Re-running `tacplus fleet build` re-locks: it takes a new patch of every
+stated line by itself; a new minor is a one-line `fleet.yaml` change (on `0.x` a minor may
+break). `tacplus fleet build --check` changes nothing: it lists, per service, the locked
+version, a newer patch of its line (which re-locking takes) and a newer minor, and exits
+non-zero when re-locking would change `fleet.lock`. For a pre-release pin it reports the
+line's release once one is out, so the fleet can return to the line.
 
 The merged tree is what the fleet-side services, the state host, the gateway and the
 operator, are generated from: `tacplus build --src build/proto` in their repos at the
-locked commits. Service binaries are not built here; each builds in its own repo, and
-the shared registry locks guarantee the two agree.
+locked commits. Service binaries and images are not built here; each is built and
+published by its own repo's release, and the shared registry locks guarantee the two agree.
 
 ## The Sys Contract a Fleet Provides
 

@@ -4,7 +4,11 @@
 package fleet
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
+	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -35,16 +39,74 @@ func fleetRepo(t *testing.T, root, registryRef string, services string) string {
 func TestMain(m *testing.M) {
 	// The floor check compares against the running version; tests run unstamped.
 	buildinfo.Version = "v9.9.9"
-	os.Exit(m.Run())
+	// Service repos are fixture git repos, cloned into the cache under HOME.
+	home, err := os.MkdirTemp("", "tacplus-fleet-home-*")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", home)
+	// Every release has an image unless a test says otherwise.
+	releaseImage = fakeImage
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
+}
+
+// fakeImage is the image a fixture release published: named for its repo,
+// its digest derived from the repo and version.
+func fakeImage(repo, version string) (string, error) {
+	sum := sha256.Sum256([]byte(repo + "@" + version))
+	return "ghcr.io/test/" + strings.TrimSuffix(path.Base(repo), "-repo") + "@sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// gitIn runs git in dir.
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// release commits dir's tree (making it a git repo on first use) and tags it
+// with each tag in turn, one commit per tag, so every tag has its own commit.
+// It returns the repo's file:// URL, which the fleet resolves like any remote.
+func release(t *testing.T, dir string, tags ...string) string {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
+		gitIn(t, dir, "init", "-q", "-b", "main")
+	}
+	for _, tag := range tags {
+		write(t, filepath.Join(dir, "VERSION"), tag+"\n")
+		gitIn(t, dir, "add", "-A")
+		gitIn(t, dir, "commit", "-q", "-m", tag)
+		gitIn(t, dir, "tag", tag)
+	}
+	return "file://" + dir
+}
+
+// commitOfTag is the commit a fixture repo's tag points at.
+func commitOfTag(t *testing.T, url, tag string) string {
+	t.Helper()
+	return gitIn(t, strings.TrimPrefix(url, "file://"), "rev-parse", tag+"^{commit}")
+}
+
+// releasedService is serviceRepoID, released at tags.
+func releasedService(t *testing.T, root, name string, id int, registryRef string, depends []string, tags ...string) string {
+	t.Helper()
+	return release(t, serviceRepoID(t, root, name, id, registryRef, depends), tags...)
 }
 
 func TestBuildResolvesChecksMergesAndLocks(t *testing.T) {
 	root := t.TempDir()
 	reg := filepath.Join(root, "registry")
-	alpha := serviceRepoID(t, root, "alpha", 101, reg, []string{"beta@1.0"})
-	beta := serviceRepoID(t, root, "beta", 102, reg, nil)
+	alpha := releasedService(t, root, "alpha", 101, reg, []string{"beta@1.0"}, "v0.1.0")
+	beta := releasedService(t, root, "beta", 102, reg, nil, "v1.2.0", "v1.2.1", "v1.3.0")
 	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: alpha, id: 101, contract: "+alpha+"}\n    - {name: beta, id: 102, contract: "+beta+"}\n")
-	fl := fleetRepo(t, root, reg, "  - {name: alpha, repo: "+alpha+"}\n  - {name: beta, version: \"1.2\", repo: "+beta+"}\n")
+	fl := fleetRepo(t, root, reg, "  - {name: alpha, version: \"0.1\", repo: "+alpha+"}\n  - {name: beta, version: \"1.2\", repo: "+beta+"}\n")
 
 	res, err := Build(fl, filepath.Join(root, "out"))
 	if err != nil {
@@ -52,6 +114,12 @@ func TestBuildResolvesChecksMergesAndLocks(t *testing.T) {
 	}
 	if len(res.Lock.Services) != 2 || res.Lock.Services[0].Name != "alpha" || res.Lock.Services[0].ID != 101 || res.Lock.Services[1].ID != 102 {
 		t.Fatalf("lock services = %+v", res.Lock.Services)
+	}
+	if b := res.Lock.Services[1]; b.Version != "1.2.1" || b.Commit != commitOfTag(t, beta, "v1.2.1") {
+		t.Fatalf("beta must lock its line's highest patch, 1.2.1 at its commit: %+v", b)
+	}
+	if want, _ := fakeImage(beta, "1.2.1"); res.Lock.Services[1].Image != want {
+		t.Fatalf("beta's image = %q, want the release's %q", res.Lock.Services[1].Image, want)
 	}
 	if res.Lock.Services[0].Depends[0] != "beta@1.0" || res.Lock.Services[0].Contract != alpha {
 		t.Fatalf("lock entry = %+v", res.Lock.Services[0])
@@ -76,17 +144,17 @@ func TestBuildResolvesChecksMergesAndLocks(t *testing.T) {
 func TestBuildRefusesMissingDependencyAndWrongID(t *testing.T) {
 	root := t.TempDir()
 	reg := filepath.Join(root, "registry")
-	alpha := serviceRepoID(t, root, "alpha", 101, reg, []string{"beta"})
-	rogue := serviceRepoID(t, root, "beta", 7, reg, nil)
+	alpha := releasedService(t, root, "alpha", 101, reg, []string{"beta"}, "v1.0.0")
+	rogue := releasedService(t, root, "beta", 7, reg, nil, "v1.0.0")
 	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: alpha, id: 101, contract: "+alpha+"}\n    - {name: beta, id: 102, contract: "+rogue+"}\n")
-	fl := fleetRepo(t, root, reg, "  - {name: alpha, repo: "+alpha+"}\n")
+	fl := fleetRepo(t, root, reg, "  - {name: alpha, version: \"1.0\", repo: "+alpha+"}\n")
 	_, err := Build(fl, filepath.Join(root, "out"))
 	if err == nil || !strings.Contains(err.Error(), `depends on "beta", which the fleet does not run`) {
 		t.Fatalf("missing dependency err = %v", err)
 	}
 
 	// A contract that renumbered itself is refused.
-	fl2 := fleetRepo(t, filepath.Join(root, "two"), reg, "  - {name: beta, repo: "+rogue+"}\n")
+	fl2 := fleetRepo(t, filepath.Join(root, "two"), reg, "  - {name: beta, version: \"1.0\", repo: "+rogue+"}\n")
 	_, err = Build(fl2, filepath.Join(root, "out2"))
 	if err == nil || !strings.Contains(err.Error(), "declares id 7 but the registry says 102") {
 		t.Fatalf("wrong id err = %v", err)
@@ -96,25 +164,36 @@ func TestBuildRefusesMissingDependencyAndWrongID(t *testing.T) {
 func TestBuildRefusesVersionBelowFloor(t *testing.T) {
 	root := t.TempDir()
 	reg := filepath.Join(root, "registry")
-	alpha := serviceRepoID(t, root, "alpha", 101, reg, []string{"beta@2.0"})
-	beta := serviceRepoID(t, root, "beta", 102, reg, nil)
+	alpha := releasedService(t, root, "alpha", 101, reg, []string{"beta@2.0"}, "v1.0.0")
+	beta := releasedService(t, root, "beta", 102, reg, nil, "v1.9.0", "v2.0.0")
 	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: alpha, id: 101, contract: "+alpha+"}\n    - {name: beta, id: 102, contract: "+beta+"}\n")
-	fl := fleetRepo(t, root, reg, "  - {name: alpha, repo: "+alpha+"}\n  - {name: beta, version: \"1.9\", repo: "+beta+"}\n")
+	fl := fleetRepo(t, root, reg, "  - {name: alpha, version: \"1.0\", repo: "+alpha+"}\n  - {name: beta, version: \"1.9\", repo: "+beta+"}\n")
 	_, err := Build(fl, filepath.Join(root, "out"))
 	if err == nil || !strings.Contains(err.Error(), "needs \"beta\" at 2.0") {
 		t.Fatalf("floor err = %v", err)
 	}
 }
 
-func TestReadManifestRequiresRepoAndMinorVersion(t *testing.T) {
+func TestReadManifestRequiresRepoAndVersion(t *testing.T) {
 	dir := t.TempDir()
-	write(t, filepath.Join(dir, ManifestFile), "registries: [r]\nservices:\n  - {name: alpha}\n")
-	if _, err := ReadManifest(dir); err == nil || !strings.Contains(err.Error(), "no default") {
-		t.Fatalf("repo-less service err = %v", err)
+	for _, tc := range []struct{ service, want string }{
+		{`{name: alpha, version: "0.1"}`, "no default"},
+		// No implicit main: every service names the line it runs.
+		{`{name: alpha, repo: x}`, `names no version`},
+		// The lock records the patch; the manifest states the line.
+		{`{name: alpha, repo: x, version: "1.2.3"}`, "never a patch pin"},
+		{`{name: alpha, repo: x, version: "latest"}`, "must be MAJOR.MINOR"},
+		{`{name: alpha, repo: x, version: "1"}`, "must be MAJOR.MINOR"},
+	} {
+		write(t, filepath.Join(dir, ManifestFile), "registries: [r]\nservices:\n  - "+tc.service+"\n")
+		if _, err := ReadManifest(dir); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.service, err, tc.want)
+		}
 	}
-	write(t, filepath.Join(dir, ManifestFile), "registries: [r]\nservices:\n  - {name: alpha, repo: x, version: \"1.2.3\"}\n")
-	if _, err := ReadManifest(dir); err == nil || !strings.Contains(err.Error(), "never a patch pin") {
-		t.Fatalf("patch pin err = %v", err)
+	// A line, and an explicit pre-release, are both accepted.
+	write(t, filepath.Join(dir, ManifestFile), "registries: [r]\nservices:\n  - {name: alpha, repo: x, version: \"0.4\"}\n  - {name: beta, repo: y, version: \"0.4.3-rc.1\"}\n")
+	if _, err := ReadManifest(dir); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -182,8 +261,9 @@ service `+strings.ToUpper(n[:1])+n[1:]+` {
 	}
 	impl := filepath.Join(root, "gamma-impl")
 	write(t, filepath.Join(impl, "tacplus.yaml"), "language: go\nsrc: "+filepath.Join(shared, "proto")+"\noutput-dir: model\n")
+	implURL := release(t, impl, "v0.3.0")
 	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: gamma, id: 5, contract: "+shared+"}\n    - {name: delta, id: 6, contract: "+shared+"}\n")
-	fl := fleetRepo(t, root, reg, "  - {name: gamma, repo: "+impl+"}\n")
+	fl := fleetRepo(t, root, reg, "  - {name: gamma, version: \"0.3\", repo: "+implURL+"}\n")
 	res, err := Build(fl, filepath.Join(root, "out"))
 	if err != nil {
 		t.Fatal(err)
@@ -323,8 +403,9 @@ service Beta {
   rpc Ping(PingRequest) returns (PingRequest);
 }
 `)
-	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: alpha, id: 101, contract: "+alpha+"}\n    - {name: beta, id: 102, contract: "+beta+"}\n    - {name: gamma, id: 103, contract: "+gamma+"}\n")
-	fl := fleetRepo(t, root, reg, "  - {name: alpha, repo: "+alpha+"}\n  - {name: beta, repo: "+beta+"}\n  - {name: gamma, repo: "+gamma+"}\n")
+	alphaURL, betaURL, gammaURL := release(t, alpha, "v1.0.0"), release(t, beta, "v1.0.0"), release(t, gamma, "v1.0.0")
+	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: alpha, id: 101, contract: "+alphaURL+"}\n    - {name: beta, id: 102, contract: "+betaURL+"}\n    - {name: gamma, id: 103, contract: "+gammaURL+"}\n")
+	fl := fleetRepo(t, root, reg, "  - {name: alpha, version: \"1.0\", repo: "+alphaURL+"}\n  - {name: beta, version: \"1.0\", repo: "+betaURL+"}\n  - {name: gamma, version: \"1.0\", repo: "+gammaURL+"}\n")
 
 	res, err := Build(fl, filepath.Join(root, "out"))
 	if err != nil {

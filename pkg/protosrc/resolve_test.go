@@ -27,6 +27,7 @@ func TestIsGitURL(t *testing.T) {
 		{"https://gitlab.com/org/repo.git", true},
 		{"http://github.com/org/repo.git", true},
 		{"git@gitlab.com:org/repo.git", true},
+		{"file:///srv/git/repo.git", true},
 		{"/local/path/to/proto", false},
 		{"./relative/path", false},
 		{"gitlab.com/org/repo.git", false},
@@ -613,4 +614,63 @@ func revParse(t *testing.T, dir, ref string) string {
 		t.Fatalf("git rev-parse %s in %s: %v", ref, dir, err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// gitRepo makes a repository with one commit per tag, each tagged, and
+// returns its directory and the commit of each tag.
+func gitRepo(t *testing.T, tags ...string) (string, map[string]string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	commits := map[string]string{}
+	for _, tag := range tags {
+		git("commit", "-q", "--allow-empty", "-m", tag)
+		git("tag", tag)
+		commits[tag] = revParse(t, dir, "HEAD")
+	}
+	return dir, commits
+}
+
+// An exact version may be a pre-release (a fleet pins one explicitly): the
+// tag vX.Y.Z-pre is checked out as it is.
+func TestCachedRepoChecksOutAnExactPreRelease(t *testing.T) {
+	origin, commits := gitRepo(t, "v1.2.0", "v1.2.1-rc.1", "v1.2.1")
+	t.Setenv("HOME", t.TempDir())
+	for _, tag := range []string{"1.2.1-rc.1", "v1.2.0"} {
+		res, err := Resolve("file://"+origin, tag)
+		if err != nil {
+			t.Fatalf("Resolve(%s): %v", tag, err)
+		}
+		want := commits["v"+strings.TrimPrefix(tag, "v")]
+		if got := revParse(t, res.Dir, "HEAD"); got != want {
+			t.Fatalf("Resolve(%s): HEAD %s, want %s", tag, got, want)
+		}
+	}
+}
+
+// ListTags reads a git source's tags from the remote, without a clone.
+func TestListTags(t *testing.T) {
+	origin, _ := gitRepo(t, "v0.1.0", "v0.2.0-rc.1", "notes")
+	got, err := ListTags("file://" + origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"notes", "v0.1.0", "v0.2.0-rc.1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListTags = %v, want %v", got, want)
+	}
+	if _, err := ListTags(t.TempDir()); err == nil {
+		t.Fatal("a local directory has no remote tags to list")
+	}
 }

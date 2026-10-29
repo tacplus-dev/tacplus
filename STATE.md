@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-10-29 by looper (#193).
+Overwritten to stay current (loopers and agents). Last updated: 2026-10-29 by looper (#180).
 
 - **Version / line:** v2.5.0 (latest release, 2026-10-28, `release/2.5` cut at it); main is the 2.6 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -29,6 +29,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-10-29 by lo
   cargo-fuzz too, and its `tacplus` is `images/tacplus.sh`, which runs exactly the pinned binary, checked against
   `checksums.txt`, and refuses a repository with no pin or a pin of another line. `tacplus verify` reports Go as
   skipped.
+  Fleets pin services by release line (#180): `fleet.yaml` names a `version: "MAJOR.MINOR"` for every service (or
+  an explicit `MAJOR.MINOR.PATCH-pre`), and `tacplus fleet build` resolves it to the line's highest released tag,
+  pre-releases excluded, and to that release's image on ghcr.io by digest; `fleet.lock` records version, commit and
+  image; `--check` reports newer patches and minors. A service without a version, a plain-directory repo, an
+  unresolvable line and a release without its image are refused.
 - **Released / deployed:** v2.5.0 is the newest release (binaries and checksums; images as before: from 2.6.0 a
   release publishes binaries and `build:X.Y.Z`, and no tacplus image).
 - **Known gaps:** the redo service and the per-tenant Stratum that implement the redo contract are their repos'
@@ -38,5 +43,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-10-29 by lo
   query plane (PROPOSALS.md). The looper image's tacplus runs the tacplus image, which 2.6 does not have
   (PROPOSALS.md). `tacplus verify` (Kani) fails on every generated Rust crate: the generated harnesses do not
   compile (#211; #196 stops generating them). The new build image (Kani, cargo-fuzz, the launcher) is verified by
-  images.yml once pushed; the launcher and `tacplus pin` by the gates.
+  images.yml once pushed; the launcher and `tacplus pin` by the gates. The fleet build's image lookup on a private package is
+  verified against a fake registry only: the looper's token has no `read:packages` (a public image resolves live).
+  `depends`/`src` at a line can take a pre-release (#214). A fleet's service images must be on ghcr.io from a
+  github.com repo (PROPOSALS.md).
 - **Blocked on:** nothing.

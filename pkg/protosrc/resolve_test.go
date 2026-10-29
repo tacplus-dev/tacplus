@@ -161,18 +161,52 @@ func TestAuthArgs(t *testing.T) {
 		}
 	}
 
-	// The job token belongs to the GitLab instance that issued it; no other
-	// host gets it, nor any other forge's token.
+	// The GitHub token goes to github.com, and only there, beside the job token.
+	githubWant := []string{"-c", "http.extraheader=AUTHORIZATION: basic " +
+		base64.StdEncoding.EncodeToString([]byte("x-access-token:gh-s3cr3t"))}
 	for _, url := range []string{
 		"https://github.com/org/repo.git",
+		"https://GitHub.com/org/repo.git",
+		"https://github.com:443/org/repo.git",
+	} {
+		if got := authArgs(url); !reflect.DeepEqual(got, githubWant) {
+			t.Errorf("authArgs(%q) = %v, want %v", url, got, githubWant)
+		}
+	}
+
+	// The job token belongs to the GitLab instance that issued it, the GitHub
+	// token to github.com; no other host gets either.
+	for _, url := range []string{
 		"https://example.com/org/repo.git",
 		"https://gitlab.com.evil.example/org/repo.git",
 		"https://gitlab.com@evil.example/org/repo.git",
 		"http://gitlab.com/org/repo.git", // never over cleartext
+		"https://github.com.evil.example/org/repo.git",
+		"https://github.com@evil.example/org/repo.git",
+		"https://api.github.com/org/repo.git",
+		"http://github.com/org/repo.git",
+		"git@github.com:org/repo.git",
 	} {
 		if got := authArgs(url); got != nil {
 			t.Errorf("authArgs(%q) = %v, want nil", url, got)
 		}
+	}
+
+	// GH_TOKEN wins over GITHUB_TOKEN, as with the gh CLI; GITHUB_TOKEN alone
+	// (GitHub Actions) is used; neither set sends nothing.
+	t.Setenv("GITHUB_TOKEN", "actions-s3cr3t")
+	if got := authArgs("https://github.com/org/repo.git"); !reflect.DeepEqual(got, githubWant) {
+		t.Errorf("authArgs() with GH_TOKEN and GITHUB_TOKEN = %v, want %v", got, githubWant)
+	}
+	t.Setenv("GH_TOKEN", "")
+	actionsWant := []string{"-c", "http.extraheader=AUTHORIZATION: basic " +
+		base64.StdEncoding.EncodeToString([]byte("x-access-token:actions-s3cr3t"))}
+	if got := authArgs("https://github.com/org/repo.git"); !reflect.DeepEqual(got, actionsWant) {
+		t.Errorf("authArgs() with GITHUB_TOKEN only = %v, want %v", got, actionsWant)
+	}
+	t.Setenv("GITHUB_TOKEN", "")
+	if got := authArgs("https://github.com/org/repo.git"); got != nil {
+		t.Errorf("authArgs() with no GitHub token = %v, want nil", got)
 	}
 
 	// Without CI_SERVER_HOST the issuing instance is unknown: send nothing.
@@ -229,18 +263,21 @@ func newFakeForge(t *testing.T, origin, wantAuth string) *fakeForge {
 
 // TestCachedRepoCredentialGoesOnlyToItsForge clones through the real
 // cachedRepo path inside a simulated GitLab CI job (CI_JOB_TOKEN and
-// CI_SERVER_HOST set, plus GitHub tokens) from three forges. Each https forge
+// CI_SERVER_HOST set, plus GitHub tokens) from several forges. Each forge
 // URL is rewritten by git's url.insteadOf to a local fake forge, so the
-// headers git actually sends are observed. github.com and an unrelated host
-// must receive no credential at all (the job token sent to GitHub made the
-// clone fail, and leaked it); the issuing GitLab instance must receive the
-// job token.
+// headers git actually sends are observed. The issuing GitLab instance must
+// receive the job token and nothing else (the job token sent to GitHub made
+// the clone fail, and leaked it); github.com over https must receive the
+// GitHub token (the private registry is on GitHub); every other host,
+// including look-alikes of either and github.com over http, must receive no
+// credential at all.
 func TestCachedRepoCredentialGoesOnlyToItsForge(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
 	const token = "s3cr3t-token"
 	gitlabAuth := "basic " + base64.StdEncoding.EncodeToString([]byte("gitlab-ci-token:"+token))
+	githubAuth := "basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:gh-s3cr3t"))
 
 	origin := filepath.Join(t.TempDir(), "repo.git")
 	for _, args := range [][]string{
@@ -257,7 +294,10 @@ func TestCachedRepoCredentialGoesOnlyToItsForge(t *testing.T) {
 		url  string
 		auth string // the only Authorization header the forge accepts
 	}{
-		{"github", "https://github.com/org/repo.git", ""},
+		{"github", "https://github.com/org/repo.git", githubAuth},
+		{"github-cleartext", "http://github.com/org/repo.git", ""},
+		{"github-suffix", "https://github.com.evil.example/org/repo.git", ""},
+		{"github-userinfo", "https://github.com@evil.example/org/repo.git", ""},
 		{"ci-server-host", "https://gitlab.example.com/org/repo.git", gitlabAuth},
 		{"unrelated", "https://git.unrelated.example/org/repo.git", ""},
 	}

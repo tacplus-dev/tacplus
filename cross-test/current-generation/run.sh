@@ -622,10 +622,49 @@ run_java_generated_self_tests() {
   assert_clean_log "$test_log"
 }
 
+# Issue #186: the generated chassis must not lock a crate with an open RustSec
+# advisory on its key handling: `rsa` (RUSTSEC-2023-0071, Marvin, no fixed
+# release) at all, nor the elliptic-curve 0.13 line, whose crypto-bigint 0.5 is
+# RUSTSEC-2026-0387 (fixed in 0.7.6). Checked on the lockfile, so it needs
+# neither cargo-audit nor the advisory database.
+assert_rust_lock_advisory_free() {
+  local lock="$1"
+  [[ -f "$lock" ]] || die "missing generated Rust Cargo.lock: $lock"
+  python3 -I - "$lock" <<'PY' || die "generated Rust workspace locks an advised crate: $lock"
+import re, sys
+
+def version(v):
+    return tuple(int(p) for p in re.match(r"(\d+)\.(\d+)\.(\d+)", v).groups())
+
+bad = []
+for name, ver in re.findall(r'\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"', open(sys.argv[1]).read()):
+    if name == "rsa":
+        bad.append(f"rsa {ver} (RUSTSEC-2023-0071)")
+    elif name == "crypto-bigint" and version(ver) < (0, 7, 6):
+        bad.append(f"crypto-bigint {ver} (RUSTSEC-2026-0387)")
+    elif name == "elliptic-curve" and version(ver) < (0, 14, 0):
+        bad.append(f"elliptic-curve {ver} (crypto-bigint 0.5, RUSTSEC-2026-0387)")
+for b in bad:
+    print(f"advised crate in the generated lock: {b}", file=sys.stderr)
+sys.exit(1 if bad else 0)
+PY
+}
+
 run_rust_spiffe_self_tests() {
   local output="$1"
   local log_dir="$2"
   [[ -f "$output/chassis/spiffe/Cargo.toml" ]] || die "missing generated Rust spiffe crate"
+
+  # Issue #186: RSA and ECDSA keys are aws-lc-rs's. The key, jwk and token
+  # crates' tests generate, sign, verify and convert every key family.
+  for crate in key jwk token; do
+    [[ -f "$output/chassis/$crate/Cargo.toml" ]] || die "missing generated Rust $crate crate"
+  done
+  (cd "$output" && cargo test -p key -p jwk -p token) >"$log_dir/rust-key-test.log" 2>&1 || {
+      dump_step_log "$log_dir/rust-key-test.log"
+      return 1
+    }
+  assert_clean_log "$log_dir/rust-key-test.log"
 
   (cd "$output" && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" cargo test -p spiffe) >"$log_dir/rust-spiffe-test.log" 2>&1 || {
       dump_step_log "$log_dir/rust-spiffe-test.log"
@@ -906,6 +945,7 @@ compile_current_output() {
           return 1
         }
         assert_clean_log "$log_dir/cargo-check.log"
+        assert_rust_lock_advisory_free "$output/Cargo.lock"
         run_rust_spiffe_self_tests "$output" "$log_dir"
       fi
       ;;

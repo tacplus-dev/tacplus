@@ -1,8 +1,10 @@
 use super::*;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use p256::ecdsa::signature::{Signer, Verifier};
-use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
+use aws_lc_rs::rand::SystemRandom;
+use aws_lc_rs::signature::{
+    EcdsaKeyPair, KeyPair, UnparsedPublicKey, ECDSA_P256_SHA256_FIXED, ECDSA_P256_SHA256_FIXED_SIGNING,
+};
 use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -28,14 +30,14 @@ fn now_secs() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
 }
 
-fn jwt(header: serde_json::Value, payload: serde_json::Value, key: &SigningKey) -> String {
+fn jwt(header: serde_json::Value, payload: serde_json::Value, key: &EcdsaKeyPair) -> String {
     let signing_input = format!(
         "{}.{}",
         URL_SAFE_NO_PAD.encode(header.to_string()),
         URL_SAFE_NO_PAD.encode(payload.to_string())
     );
-    let sig: Signature = key.sign(signing_input.as_bytes());
-    format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(sig.to_bytes()))
+    let sig = key.sign(&SystemRandom::new(), signing_input.as_bytes()).unwrap();
+    format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(sig.as_ref()))
 }
 
 fn token(base64: String, payload: &[(&str, String)]) -> Token {
@@ -51,7 +53,7 @@ fn token(base64: String, payload: &[(&str, String)]) -> Token {
 /// presented token is the caller's own, exp no more than 600 s out) and signs a
 /// fresh ES256 JWT with a new jti per call.
 struct MockKernel {
-    key: SigningKey,
+    key: EcdsaKeyPair,
     external_requests: Mutex<Vec<MintExternalServiceTokenRequest>>,
 }
 
@@ -153,10 +155,11 @@ async fn rust_token_for_external_mints_a_fresh_es256_token_on_every_call() {
     std::env::set_var("KERNEL_K8S_TOKEN_FILE", &k8s_token_file);
 
     let kernel = Arc::new(MockKernel {
-        key: SigningKey::random(&mut rand::thread_rng()),
+        key: EcdsaKeyPair::generate(&ECDSA_P256_SHA256_FIXED_SIGNING).unwrap(),
         external_requests: Mutex::new(Vec::new()),
     });
-    let verifying_key = VerifyingKey::from(&kernel.key);
+    let verifying_key =
+        UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, kernel.key.public_key().as_ref().to_vec());
     let addr = reserve_local_addr();
     let server = tokio::spawn(
         Server::builder()
@@ -182,7 +185,7 @@ async fn rust_token_for_external_mints_a_fresh_es256_token_on_every_call() {
         assert_eq!(parts.len(), 3, "compact JWT");
         let header = decode_segment(parts[0]);
         assert_eq!(header["alg"], "ES256", "external tokens are ES256, never EdDSA");
-        let sig = Signature::from_slice(&URL_SAFE_NO_PAD.decode(parts[2]).unwrap()).unwrap();
+        let sig = URL_SAFE_NO_PAD.decode(parts[2]).unwrap();
         verifying_key
             .verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &sig)
             .expect("token is signed by the kernel's P-256 key");

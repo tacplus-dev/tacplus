@@ -1,6 +1,8 @@
 # gitleaks configuration. Every match below is code that assembles PEM text at
-# runtime, or a redaction/security test fixture that must contain a token-shaped
-# string to prove it gets redacted. Re-run: gitleaks git . && gitleaks dir .
+# runtime, a redaction/security test fixture that must contain a token-shaped
+# string to prove it gets redacted, or the JWK alg vectors (#179): tokens signed
+# by throwaway keys, of which only the public halves are written.
+# Re-run: gitleaks git . && gitleaks dir .
 [extend]
 useDefault = true
 
@@ -14,5 +16,7 @@ paths = [
   '''pkg/templates/java/chassis/logger/LogbackConfiguratorSecurityTest\.java\.tmpl''',
   '''pkg/templates/java/chassis/grpcconfig/RedactionInstalledTest\.java\.tmpl''',
   '''pkg/templates/go/chassis/collection/page_behavior_test\.go\.tmpl''',
+  '''cross-test/fixtures/jwk_alg_vectors\.json''',
+  '''cross-test/jwk-alg/genvectors/main\.go''',
   '''^target/''',
 ]

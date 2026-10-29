@@ -11,3 +11,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-10-28 looper issue diskstore archive: retention of old segments and checkpoints (#144, cc67e297)
 - 2026-10-29 looper issue Retire the linked claim from the generated namespace backstop (#171, c83f4dc1)
 - 2026-10-29 looper issue fetch layer: authenticate GitHub clones with GH_TOKEN (private registry), only to github.com (#191, d80e8fad)
+- 2026-10-29 looper issue Fleets pin services by release line (MAJOR.MINOR → latest patch), not commit (#180, 7e11aa5b)

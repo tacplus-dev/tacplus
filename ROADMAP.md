@@ -24,7 +24,7 @@ Release lines with branches: 2.0 through 2.4.
 - Make the three well-known platform names proto-declared instead of baked into the generator (#1) (needs Jody's decision)
 
 ## Later
-- Convergent replicated state as proto annotations: tacplus generates the store, merge and gossip; first user the fleet-wide people store; eventually replaces Hazelcast in kernel; transparent behind generated interfaces (tacplus-dev/roadmap:items/people-fleet-wide-store.md; design, no hurry)
+- flock state: `(spec.service_state)` labelled `flock`, field merge rules, generated merge, duplicate detection and deletion marks; first user the people table (people#1); kernel stays in-cluster, flock spans clusters (#206; tacplus-dev/roadmap:items/flock-design-2026-10-28.md; no hurry)
 - Fleet builder gathers service webapp pieces and clients, builds the merged webapp and the fleet's gateway (#195, after #180; contract needs Jody's OK)
 - Split the build image by language (build-go, build-rust, build-java, …), each with its toolchain and verifier (tacplus-dev/roadmap:decisions/tacplus-images-2026-10-27.md)
 - Retire the linked claim from the generated namespace backstop (#171), blocked on #170 and tacplus-dev/kernel#4

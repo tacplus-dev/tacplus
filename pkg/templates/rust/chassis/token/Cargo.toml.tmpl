@@ -10,12 +10,7 @@ jwk = { path = "../jwk" }
 spiffe = { path = "../spiffe" }
 {{.CrateBasePath}}-types = { path = "../../types" }
 base64 = "0.22"
-rsa = { version = "0.9", features = ["sha2", "pkcs5"] }
-p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
-p384 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
-ecdsa = { version = "0.16", features = ["signing", "verifying", "pem", "pkcs8"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8", "pem"] }
-sha2 = "0.10"
 signature = "2"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

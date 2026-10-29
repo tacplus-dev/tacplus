@@ -220,10 +220,10 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 
 	// HasAutoTls/AutoTlsKeyType policy mirrors handler_gen.go: every service
 	// with gRPC service wrappers gets the auto-TLS code path (and therefore
-	// needs the p256/ed25519 crate in Cargo.toml). Default key type to ECDSA
+	// needs the aws-lc-rs/ed25519 crate in Cargo.toml). Default key type to ECDSA
 	// for universal compatibility when no proto-level override is set.
 	// A spec.smb service reuses the shared key-generation helper for its member
-	// keypair, so the cert crates (p256/ed25519/rand) must be in Cargo.toml even
+	// keypair, so the cert crates (aws-lc-rs/ed25519/rand) must be in Cargo.toml even
 	// when the service has no TLS gRPC of its own (SPIFFE plan D7).
 	autoTlsKeyType := config.AutoTlsKeyType()
 	if autoTlsKeyType == "" && (hasServiceWrappers || hasSmb || len(config.States) > 0) {

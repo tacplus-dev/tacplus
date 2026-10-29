@@ -34,8 +34,10 @@ authorization, builds the caller identity, and only then calls your code.
 Release binaries for Linux, macOS and Windows (amd64 and arm64) are on
 [GitHub Releases](https://github.com/tacplus-dev/tacplus/releases), each with
 `checksums.txt`; `tacplus upgrade` keeps an installed binary on the newest
-patch of its MAJOR.MINOR line. The container image carries tacplus and every
-protoc plugin it drives, so a build can run it as its own generate step:
+patch of its MAJOR.MINOR line. A repository's builds run the exact release it
+pins in `tacplus.lock` (`tacplus pin` writes it; moving it is a commit), in
+the build image of that release's line, which carries every toolchain and
+verifier and whose `tacplus` runs the pinned binary:
 
 --8<-- "docs/snippets/install-container.md"
 

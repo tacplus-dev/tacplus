@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Decide which tags a .github/workflows/images.yml run puts on the tacplus image
-# (and, for a release, which floating tags the build image of its line takes).
+# Decide which tags a .github/workflows/images.yml run for a release tag puts
+# on the build image of its line (there is no tacplus image since #193).
 #
 # Usage:  scripts/images-tags.sh <ref_type> <ref_name> <sha>
 #

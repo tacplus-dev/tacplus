@@ -1,9 +1,14 @@
-# tacplus build image: the base image plus every tool that building and
-# testing tacplus uses: protoc and the plugin for every target language,
-# grpcio-tools and the Python packaging tools, the Java verifiers (JBMC,
-# OpenJML), just, the gh CLI, the docker CLI and gcloud. This is the one image the gates
-# run in (CI, the nightly gates, `just gates-container`). Rebuilt when a tool
-# pin changes. See docs/VERSIONING.md, Images.
+# tacplus build image, ghcr.io/tacplus-dev/tacplus/build:X.Y, one per release
+# line, rebuilt on every patch of it (#193): the base image plus every tool
+# that generating, building, testing, fuzzing and formally verifying uses:
+# protoc and the plugin for every target language, grpcio-tools and the Python
+# packaging tools, the verifiers (Kani for Rust; JBMC and OpenJML for Java),
+# cargo-fuzz and the nightly Rust it runs on, just, the gh CLI, the docker CLI
+# and gcloud. tacplus itself is not in it: /usr/local/bin/tacplus is
+# images/tacplus.sh, which runs the release the repository pins
+# (tacplus.lock), checked against the release's checksums.txt. This is also
+# the image tacplus's own gates run in (CI, the nightly gates,
+# `just gates-container`). See docs/VERSIONING.md, Images.
 #
 # protoc is pinned at the ceiling the justfile allows (protoc-check); the
 # Java runtime the generated models pin (protobuf-java 4.36.0) must be at
@@ -30,6 +35,15 @@ ARG JUST_VERSION=1.58.0
 ARG GH_VERSION=2.103.2
 ARG GCLOUD_VERSION=549.0.0
 ARG OPENJML_VERSION=21-0.23
+ARG KANI_VERSION=0.68.0
+ARG CARGO_FUZZ_VERSION=0.13.2
+# cargo-fuzz needs a nightly Rust (sanitizers); a dated one, so a rebuild of
+# the same file installs the same toolchain.
+ARG RUST_NIGHTLY=nightly-2026-10-15
+# The release line this image is built for (MAJOR.MINOR; .github/workflows/images.yml
+# sets it from the release tag). Its tacplus refuses a repository pinned to
+# another line. Empty for a build of main: no line check.
+ARG TACPLUS_LINE=
 
 FROM debian:trixie-slim AS fetch
 ARG TARGETARCH
@@ -83,19 +97,22 @@ ARG PROTOC_GEN_PROST_VERSION
 ARG PROTOC_GEN_TONIC_VERSION
 ARG PROTOC_GEN_PROST_SERDE_VERSION
 ARG PROTOC_GEN_PROST_CRATE_VERSION
+ARG KANI_VERSION
+ARG CARGO_FUZZ_VERSION
 RUN cargo install --locked --root /out \
     "protoc-gen-prost@${PROTOC_GEN_PROST_VERSION}" \
     "protoc-gen-tonic@${PROTOC_GEN_TONIC_VERSION}" \
     "protoc-gen-prost-serde@${PROTOC_GEN_PROST_SERDE_VERSION}" \
-    "protoc-gen-prost-crate@${PROTOC_GEN_PROST_CRATE_VERSION}"
+    "protoc-gen-prost-crate@${PROTOC_GEN_PROST_CRATE_VERSION}" \
+    "kani-verifier@${KANI_VERSION}" \
+    "cargo-fuzz@${CARGO_FUZZ_VERSION}"
 
 FROM node:${NODE_VERSION}-trixie-slim AS node-tools
 ARG PROTOC_GEN_ES_VERSION
 RUN npm install -g "@bufbuild/protoc-gen-es@${PROTOC_GEN_ES_VERSION}" "@bufbuild/protobuf@${PROTOC_GEN_ES_VERSION}"
 
 # The Swift plugins, built with the same Swift release the base image
-# carries. /opt/swift-runtime holds the shared libraries they need, so the
-# slim tacplus image can run them without the Swift SDK.
+# carries. /opt/swift-runtime holds the shared libraries they need.
 FROM swift:${SWIFT_VERSION}-bookworm AS swift-tools
 ARG SWIFT_PROTOBUF_VERSION
 ARG GRPC_SWIFT_PROTOBUF_VERSION
@@ -113,8 +130,10 @@ FROM docker:${DOCKER_VERSION}-cli AS docker-cli
 
 FROM ${BASE_IMAGE}
 ARG GRPCIO_TOOLS_VERSION
+ARG RUST_NIGHTLY
+ARG TACPLUS_LINE
 LABEL org.opencontainers.image.title="tacplus build" \
-      org.opencontainers.image.description="tacplus base plus protoc and every plugin, grpcio-tools, JBMC/OpenJML, just, the docker CLI and gcloud: the image the tacplus gates run in" \
+      org.opencontainers.image.description="tacplus base plus protoc and every plugin, grpcio-tools, Kani, JBMC/OpenJML, cargo-fuzz, just, the docker CLI and gcloud; its tacplus runs the repository's pinned release" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus"
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends dnsutils iproute2 jbmc patch ripgrep \
     && rm -rf /var/lib/apt/lists/*
@@ -132,6 +151,12 @@ COPY --from=swift-tools /out/swift-runtime /opt/swift-runtime
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 COPY images/smoke.sh /usr/local/bin/tacplus-smoke
+COPY images/tacplus.sh /usr/local/bin/tacplus
+# Kani's setup downloads its CBMC bundle and installs the pinned nightly it
+# compiles with; cargo-fuzz runs on RUST_NIGHTLY: cargo +"$RUST_NIGHTLY" fuzz.
+RUN cargo kani setup \
+    && rustup toolchain install "${RUST_NIGHTLY}" --profile minimal \
+    && cargo kani --version && cargo +"${RUST_NIGHTLY}" fuzz --version
 RUN ln -s ../lib/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es /usr/local/bin/protoc-gen-es
 # Python codegen runs `python -m grpc_tools.protoc`; black/twine/build are
 # what the Python client gates use. One venv, first on PATH. The floors
@@ -147,4 +172,6 @@ RUN python3 -m venv /opt/venv \
 ENV CLOUDSDK_PYTHON=/usr/bin/python3 \
     PATH="/opt/venv/bin:/opt/google-cloud-sdk/bin:/root/.cache/tacplus/tools/openjml:${PATH}" \
     TACPLUS_CONTAINER=1 \
-    TACPLUS_IMAGE=build
+    TACPLUS_IMAGE=build \
+    TACPLUS_LINE=${TACPLUS_LINE} \
+    RUST_NIGHTLY=${RUST_NIGHTLY}

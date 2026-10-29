@@ -158,7 +158,7 @@ protoc-check:
   echo "protoc-check: libprotoc ${actual} (pinned ceiling {{protoc_version}})"
 
 # Run the mandatory gate set (soundness, test, current-generation,
-# determinism, cert-stream) and report a trustworthy overall pass/fail.
+# determinism, cert-stream, ..., tacplus-script) and report a trustworthy overall pass/fail.
 # A naive `for g in ...; do just "$g"; done` loop whose last command per
 # iteration is `echo` always exits 0 regardless of what failed inside —
 # do not write that pattern again; this recipe exists so nobody has to.
@@ -187,7 +187,7 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
-  for g in soundness test current-generation determinism cert-stream claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg; do
+  for g in soundness test current-generation determinism cert-stream claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg tacplus-script; do
     echo "=== $g ==="
     just "$g"
     rc=$?
@@ -210,6 +210,14 @@ gates-container:
   image="${TACPLUS_BUILD_IMAGE:-ghcr.io/tacplus-dev/tacplus/build:latest}"
   docker run --rm -v "$PWD:/workspace" -w /workspace "$image" \
     bash -c 'git config --global --add safe.directory /workspace && just gates'
+
+# The build image's tacplus (images/tacplus.sh, #193) against a fake release
+# forge: a pin runs exactly; a checksum mismatch, a missing pin and a line
+# mismatch are refused; a cached version runs offline; and the same pinned
+# commit built twice, before and after a newer patch, generates the same
+# output with two real tacplus builds. Under dash (POSIX sh) when installed.
+tacplus-script: generate
+  {{lock}} bash images/tacplus_test.sh
 
 # Behavioral coverage of the generated TLS/SMB cert-stream loops.
 cert-stream: cert-stream-go cert-stream-java cert-stream-rust
@@ -310,16 +318,16 @@ claims-provenance:
 # Behavioral coverage of W2S request (ingress) validation in the generated
 # Rust REST dispatch module.
 # The image set (docs/VERSIONING.md, Images), built natively for this
-# machine's architecture and tagged tacplus-local/*: base (every SDK), build
-# (base + every tool; what the gates run in) and tacplus (the binary + every
-# protoc plugin). CI builds and pushes the multi-arch set to ghcr.io
-# (.github/workflows/images.yml).
+# machine's architecture and tagged tacplus-local/*: base (every SDK) and
+# build (base + every tool and verifier; what builds and the gates run in; its
+# tacplus is images/tacplus.sh). TACPLUS_LINE=X.Y builds it as that line's
+# image. CI builds and pushes the multi-arch set to ghcr.io
+# (.github/workflows/images.yml), and runs images/smoke-pipeline.sh in it.
 images:
   docker build -f images/base.Dockerfile -t tacplus-local/base:latest .
-  docker build -f images/build.Dockerfile --build-arg BASE_IMAGE=tacplus-local/base:latest -t tacplus-local/build:latest .
-  docker build -f images/tacplus.Dockerfile --build-arg BUILD_IMAGE=tacplus-local/build:latest --build-arg VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo 0.0.0) --build-arg VCS_REF=$(git rev-parse --short=7 HEAD) -t tacplus-local/tacplus:latest .
+  docker build -f images/build.Dockerfile --build-arg BASE_IMAGE=tacplus-local/base:latest --build-arg TACPLUS_LINE="${TACPLUS_LINE:-}" -t tacplus-local/build:latest .
   docker run --rm tacplus-local/build:latest tacplus-smoke
-  docker run --rm tacplus-local/tacplus:latest tacplus-smoke
+  docker run --rm -v "$PWD:/src:ro" tacplus-local/build:latest bash /src/images/smoke-pipeline.sh
 
 # The local fix looper (see CONTRIBUTING.md, Requesting a fix).
 fix-looper *ARGS:

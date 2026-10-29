@@ -18,9 +18,8 @@ import (
 // The generator refuses to run below it. It is a floor, not a pin: MAJOR must
 // match (a major bump is breaking) and the running MINOR must be at least the
 // floor. The field carries MAJOR.MINOR only; a patch component is rejected,
-// because consumers always run the latest patch of a MAJOR.MINOR and a patch
-// pin is a defect. An absent field is no floor, so existing consumers are
-// unaffected.
+// because the exact release a build runs is pinned in tacplus.lock (lock.go),
+// not here. An absent field is no floor, so existing consumers are unaffected.
 
 var (
 	floorRe   = regexp.MustCompile(`^(\d+)\.(\d+)$`)

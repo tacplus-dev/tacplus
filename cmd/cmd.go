@@ -37,6 +37,8 @@ Commands:
   validate    Validate proto files
   verify      Run formal verification on Rust or Java code
   version     Print the version and build information
+  upgrade     Replace this binary with the newest patch of its line
+  pin         Pin this repository's tacplus release and build image (tacplus.lock)
   completion  Generate shell completion scripts
   help        Help about any command`,
 	Version:           buildinfo.Version,
@@ -68,6 +70,7 @@ func init() {
 	rootCmd.AddCommand(fleetcmd.GetCmd())
 	rootCmd.AddCommand(versioncmd.GetCmd())
 	rootCmd.AddCommand(upgradecmd.GetCmd())
+	rootCmd.AddCommand(upgradecmd.GetPinCmd())
 }
 
 // runRoot handles bare `tacplus` invocation:

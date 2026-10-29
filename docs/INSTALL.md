@@ -2,7 +2,8 @@
 
 tacplus is a single binary. It drives `protoc` and the protoc plugins for the
 languages you generate, so a working setup is the binary plus those tools;
-the [container image](#container-image) carries all of them.
+the [build image](#the-build-image) carries all of them, and every toolchain
+and verifier a build uses.
 
 ## Release binaries
 
@@ -64,8 +65,8 @@ Move-Item $File tacplus.exe   # then put tacplus.exe on your PATH
 ### What `tacplus build` needs
 
 The binary generates code by running `protoc` and a plugin per language. With
-a release binary you install them yourself; the [image](#container-image) has
-them all, at the versions tacplus is tested with.
+a release binary you install them yourself; the [build image](#the-build-image)
+has them all, at the versions tacplus is tested with.
 
 | You generate | Needs on `PATH` |
 |---|---|
@@ -100,45 +101,87 @@ Every download is checked against the release's `checksums.txt` before the
 binary is replaced. If `GITHUB_TOKEN` is set, `upgrade` uses it for its
 requests to GitHub (and drops it on a redirect to another host).
 
-## Container image
+## The build image
 
-`ghcr.io/tacplus-dev/tacplus/tacplus` is a slim image with the tacplus binary,
-`protoc`, and the plugin for every language that needs one. It is built for
-`linux/amd64` and `linux/arm64`.
+`ghcr.io/tacplus-dev/tacplus/build:X.Y` is one image per release line, rebuilt
+on every patch of it, for `linux/amd64` and `linux/arm64`. It carries every
+toolchain (Go, Rust, Java and Maven, Python, Node, Swift, .NET), `protoc` and
+every plugin, the verifiers (Kani for Rust; JBMC and OpenJML for Java) and the
+fuzzers (Go's own, cargo-fuzz on the nightly Rust in `$RUST_NIGHTLY`).
+Generation, compile, test, fuzzing and `tacplus verify` all run in it. Go is
+not formally verified, by design: `tacplus verify` reports it as skipped.
 
 | Tag | Meaning |
 |---|---|
-| `2.0` | the newest `2.0.x`: **what you pin** |
-| `2.3.0` | that release, immutable |
+| `2.6.1` | the image of that release, immutable |
+| `2.6` | the newest `2.6.x` image (a convenience for people; builds use a digest) |
 | `2` | the newest `2.x` |
 | `latest` | the newest release |
-| `main-<sha>` | an unreleased build of `main` |
 
-Use it as its **own generate step**: run it over your proto source to write
-the generated model, then compile the result in your usual builder image.
-Don't build `FROM` it. Pulling `tacplus:2.0` again is all it takes to pick
-up a new patch; your builder image is untouched.
+Each release's digest is in the summary of its images workflow run, and
+`tacplus pin` looks it up for you.
+
+### Pinning: `tacplus.lock`
+
+A build runs exactly what its commit pins: same commit, same result, whoever
+or whatever starts the build. A repository commits a `tacplus.lock` beside its
+`tacplus.yaml`, with the exact tacplus release and the build image digest:
+
+```yaml
+tacplus: 2.6.1
+build_image: ghcr.io/tacplus-dev/tacplus/build:2.6.1@sha256:<64 hex>
+```
+
+`tacplus pin` writes it, from the newest patch of the pin's line (or of the
+`tacplus.yaml` floor's, the first time):
+
+| Command | Pins |
+|---|---|
+| `tacplus pin` | the newest patch of the current pin's line |
+| `tacplus pin --version 2.7` | the newest patch of `2.7` |
+| `tacplus pin --version 2.7.0` | exactly `v2.7.0` |
+
+**Moving a pin is a commit, never something a build does:** run `tacplus pin`,
+commit `tacplus.lock`, and the next build runs the new release. A patch is
+fixes only ([versioning](project/versioning.md)), so moving a pin within its
+line is always safe.
 
 --8<-- "docs/snippets/install-container.md"
 
-The image's working directory is `/workspace`, so `tacplus.yaml` and the
-proto source are found where you mounted them. The generated files are
-written by the container's user, which is root unless you say otherwise.
+### The image's `tacplus`
 
-In a GitHub Actions workflow the generate step is one `run:` line, ahead of
-the compile:
+In the build image, `/usr/local/bin/tacplus` is not the compiler but a
+launcher, [`images/tacplus.sh`](https://github.com/tacplus-dev/tacplus/blob/main/images/tacplus.sh)
+(POSIX sh):
 
-```yaml
-steps:
-  - uses: actions/checkout@v4
-  - name: Generate
-    run: >-
-      docker run --rm --pull always -v "$PWD:/workspace"
-      ghcr.io/tacplus-dev/tacplus/tacplus:2.0
-      tacplus build --config tacplus.yaml --src proto
-  - name: Build
-    run: go build ./...
+- **In a repository** (a directory holding `tacplus.lock`, `tacplus.yaml` or
+  `fleet.yaml`, or below one) it runs exactly the pinned release: it downloads
+  the binary for the platform, checks it against the release's
+  `checksums.txt` (a mismatch is refused, and nothing is cached), caches it
+  under `~/.cache/tacplus/<version>/` and runs it. It refuses a repository with
+  no `tacplus.lock`, a pin of another line than the image's, and a
+  `TACPLUS_VERSION` other than the pin. `tacplus pin` is the one command it
+  runs without a pin.
+- **Outside a repository** (experimenting) it runs `TACPLUS_VERSION=X.Y.Z` when
+  set, else the newest patch of the image's line, checking GitHub for a newer
+  patch at most hourly.
+- A cached release runs offline.
+
+The same script works on a Mac (darwin binaries are published): put it on your
+`PATH` as `tacplus` and it behaves the same, with no line check unless you set
+`TACPLUS_LINE=X.Y`:
+
+```bash
+curl -fsSL -o /usr/local/bin/tacplus \
+  https://raw.githubusercontent.com/tacplus-dev/tacplus/v2.6.0/images/tacplus.sh
+chmod +x /usr/local/bin/tacplus
 ```
+
+### The tacplus image (deprecated)
+
+`ghcr.io/tacplus-dev/tacplus/tacplus` is deprecated and no longer built: its
+existing tags (up to the 2.5 line) stay, unchanged, but no new release gets
+one. Pin the release and run it in the build image as above.
 
 ## From source
 

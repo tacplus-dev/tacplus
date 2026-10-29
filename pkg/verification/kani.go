@@ -18,8 +18,13 @@ import (
 )
 
 // kaniHarnessResult is the regex for Kani's per-harness status line.
-// Example: "VERIFICATION:- SUCCESSFUL (HARNESS verify_token_validate)"
-var kaniResultRe = regexp.MustCompile(`VERIFICATION:-\s+(SUCCESSFUL|FAILED)\s+\((?:HARNESS\s+)?(\S+)\)`)
+// Example: "VERIFICATION:- SUCCESSFUL (HARNESS verify_token_validate)"; current
+// Kani prints the verdict alone ("VERIFICATION:- SUCCESSFUL").
+var kaniResultRe = regexp.MustCompile(`VERIFICATION:-\s+(SUCCESSFUL|FAILED)(?:\s+\((?:HARNESS\s+)?(\S+)\))?`)
+
+// kaniHarnessRe is the line current Kani (the build image's 0.68) names a
+// harness on before its results; the verdict line then carries no name.
+var kaniHarnessRe = regexp.MustCompile(`^Checking harness (\S+?)\.\.\.$`)
 
 // runKani runs cargo kani on each Rust crate in the output directory
 // that contains #[kani::proof] harnesses.
@@ -135,12 +140,25 @@ func parseKaniOutput(output string) []*spec.VerificationHarness {
 
 	// Also collect assumptions from the source (line-by-line scan for kani::assume)
 	scanner := bufio.NewScanner(strings.NewReader(output))
+	current := ""
 	for scanner.Scan() {
 		line := scanner.Text()
-		matches := kaniResultRe.FindStringSubmatch(line)
-		if len(matches) < 3 {
+		if m := kaniHarnessRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			current = m[1]
 			continue
 		}
+		matches := kaniResultRe.FindStringSubmatch(line)
+		if matches == nil {
+			continue
+		}
+		name := matches[2]
+		if name == "" {
+			name = current
+		}
+		if name == "" {
+			continue
+		}
+		current = ""
 
 		status := "verified"
 		if matches[1] == "FAILED" {
@@ -148,7 +166,7 @@ func parseKaniOutput(output string) []*spec.VerificationHarness {
 		}
 
 		harnesses = append(harnesses, &spec.VerificationHarness{
-			HarnessName: matches[2],
+			HarnessName: name,
 			Status:      status,
 			Contracts:   []string{"validate() returns Ok(()) for all inputs satisfying assumptions"},
 		})

@@ -87,4 +87,25 @@ the looper then marks it `promoted` or `declined` here with the date.
   exact-host, https-only checks. Not backported to 2.0-2.3: they have no registry or `depends`, so no GitHub fetch
   that 2.4 made necessary.
 
+- **The looper image's tacplus has no 2.6 image to run** (2026-10-29, #193): tacplus-dev/looper's `tacplus` wrapper
+  runs `ghcr.io/tacplus-dev/tacplus/tacplus:<floor>`, and from 2.6 there is no tacplus image (deprecated; the tags up
+  to 2.5 stay). A repository whose floor moves to 2.6 gets no compiler in its looper. The wrapper can run the
+  repository's pinned release instead: `images/tacplus.sh` with `TACPLUS_LINE` unset is the same launcher, POSIX sh,
+  and needs only curl and sha256sum (or the build image, though loopers do not run in it by decision). A change in
+  tacplus-dev/looper, before any repository's floor reaches 2.6.
+- **The compiler does not read tacplus.lock** (2026-10-29, #193): the pin is enforced by the build image's launcher;
+  a binary run directly (an installed `tacplus`, `just install`) generates in a pinned repository at whatever version
+  it is, and stamps that version into the output. A warning (or a refusal with an override) when the running version
+  is not the lock's would make a stray local build visible. Needs a decision: a refusal would break a developer's
+  `just install` workflow on the repository itself.
+- **Java fuzzing in the build image** (2026-10-29, #193): the image fuzzes Go (`go test -fuzz`) and Rust (cargo-fuzz on
+  `$RUST_NIGHTLY`), and verifies Rust (Kani) and Java (JBMC, OpenJML); there is no Java fuzzer (Jazzer, say). The
+  kitchensink's per-release fuzzing (#196) is where a Java fuzz target would first be needed.
+- **A new release is not pinnable until its build image is pushed** (2026-10-29, #193): `tacplus pin` refuses a
+  release without `build:X.Y.Z`, which `images.yml` builds from the tag, the arm64 half under QEMU, for hours, while
+  the binaries are out in minutes. Native arm64 runners (or the GitLab pipeline, #194) would close the gap.
+- **The root `Dockerfile` is a stale image definition** (2026-10-29, #193): it layers a binary on a `tacplus-base`
+  built from a `Dockerfile.base` that does not exist, and nothing builds it. With the tacplus image gone it can be
+  deleted.
+
 ## Promoted / declined

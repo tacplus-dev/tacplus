@@ -131,6 +131,9 @@ func TestImagesPlan(t *testing.T) {
 			event: "push", ref: "tag", want: "true true",
 		},
 		{
+			// build:X.Y is rebuilt on every patch of its line (#193): each
+			// release publishes its own build:X.Y.Z, carrying that line's tacplus
+			// launcher, even when no image definition changed.
 			name: "tag, image change already shipped in the previous tag",
 			history: func(r *repo) {
 				r.commit("init", "images/build.Dockerfile")
@@ -138,7 +141,7 @@ func TestImagesPlan(t *testing.T) {
 				r.commit("release notes", "README")
 				r.tag("v2.0.1")
 			},
-			event: "push", ref: "tag", want: "false false",
+			event: "push", ref: "tag", want: "false true",
 		},
 		{
 			// No earlier release on this line to diff against: rebuild everything.
@@ -156,13 +159,6 @@ func TestImagesPlan(t *testing.T) {
 				r.commit("init", "README")
 			},
 			event: "schedule", ref: "branch", want: "true true",
-		},
-		{
-			name: "manual run, rebuild=tacplus",
-			history: func(r *repo) {
-				r.commit("init", "README")
-			},
-			event: "workflow_dispatch", ref: "branch", rebuild: "tacplus", want: "false false",
 		},
 		{
 			name: "manual run, rebuild=build",

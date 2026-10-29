@@ -79,5 +79,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   own pin ("PutVaultRow: item.namespace ... not the caller's to choose") runs. Rust renders no predicate pin and
   answers with the write pin's message. The outcome is the same refusal; the message differs by language. The
   predicate pin should skip the write surface's requests (`method.RecordEntry` set).
+- **Forge credentials beyond github.com and the CI GitLab** (2026-10-29, #191): the fetch layer now sends
+  `GH_TOKEN`/`GITHUB_TOKEN` to `https://github.com` and `CI_JOB_TOKEN` to `CI_SERVER_HOST`, and nothing anywhere
+  else. A private contract or registry on GitHub Enterprise (`GH_HOST`) or on a GitLab other than the job's own (a
+  `GITLAB_TOKEN` for gitlab.com outside CI) still cannot be cloned except through the user's own git credential
+  helper, which git already consults. Either is a new host/token pairing (a feature), each needing the same
+  exact-host, https-only checks. Not backported to 2.0-2.3: they have no registry or `depends`, so no GitHub fetch
+  that 2.4 made necessary.
 
 ## Promoted / declined

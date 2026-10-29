@@ -773,65 +773,24 @@ impl Token {
         use signature::Verifier;
 
         match jwk.public_key() {
-            keys::PublicKey::Rsa(rsa_key) => {
-                use rsa::signature::Verifier as RsaVerifier;
-                use rsa::pkcs1v15::VerifyingKey;
-                use sha2::{Sha256, Sha384, Sha512};
-
-                match alg {
-                    // RS256 is here for EXTERNAL identity providers. Tokens we
-                    // issue ourselves use RS384/RS512, but an IdP picks its own
-                    // algorithm and RS256 is what most of them use — Keycloak
-                    // and Microsoft included. Without this arm every external
-                    // id_token failed as an unsupported algorithm, which is why
-                    // oauth could not verify signatures at all and ended up not
-                    // verifying them.
-                    "RS256" => {
-                        let verifier = VerifyingKey::<Sha256>::new(rsa_key.clone());
-                        let sig = rsa::pkcs1v15::Signature::try_from(signature_bytes.as_slice())
-                            .map_err(|e| AuthError::unauthorized(format!("invalid signature format: {}", e)))?;
-                        verifier
-                            .verify(signing_input.as_bytes(), &sig)
-                            .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
-                    }
-                    "RS384" => {
-                        let verifier = VerifyingKey::<Sha384>::new(rsa_key.clone());
-                        let sig = rsa::pkcs1v15::Signature::try_from(signature_bytes.as_slice())
-                            .map_err(|e| AuthError::unauthorized(format!("invalid signature format: {}", e)))?;
-                        verifier
-                            .verify(signing_input.as_bytes(), &sig)
-                            .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
-                    }
-                    "RS512" => {
-                        let verifier = VerifyingKey::<Sha512>::new(rsa_key.clone());
-                        let sig = rsa::pkcs1v15::Signature::try_from(signature_bytes.as_slice())
-                            .map_err(|e| AuthError::unauthorized(format!("invalid signature format: {}", e)))?;
-                        verifier
-                            .verify(signing_input.as_bytes(), &sig)
-                            .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
-                    }
-                    _ => return Err(AuthError::unsupported_algorithm(alg.to_string())),
+            keys::PublicKey::Rsa(rsa_key) => match alg {
+                // RS256 is here for EXTERNAL identity providers. Tokens we
+                // issue ourselves use RS384/RS512, but an IdP picks its own
+                // algorithm and RS256 is what most of them use — Keycloak
+                // and Microsoft included. Without this arm every external
+                // id_token failed as an unsupported algorithm, which is why
+                // oauth could not verify signatures at all and ended up not
+                // verifying them.
+                "RS256" | "RS384" | "RS512" => {
+                    rsa_key.verify(alg, signing_input.as_bytes(), &signature_bytes)?
                 }
-            }
+                _ => return Err(AuthError::unsupported_algorithm(alg.to_string())),
+            },
             keys::PublicKey::EcP256(ec_key) if alg == "ES256" => {
-                use p256::ecdsa::Signature;
-
-                let signature = Signature::from_slice(&signature_bytes)
-                    .map_err(|e| AuthError::ecdsa(e.to_string()))?;
-
-                ec_key
-                    .verify(signing_input.as_bytes(), &signature)
-                    .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
+                ec_key.verify(signing_input.as_bytes(), &signature_bytes)?;
             }
             keys::PublicKey::EcP384(ec_key) if alg == "ES384" => {
-                use p384::ecdsa::Signature;
-
-                let signature = Signature::from_slice(&signature_bytes)
-                    .map_err(|e| AuthError::ecdsa(e.to_string()))?;
-
-                ec_key
-                    .verify(signing_input.as_bytes(), &signature)
-                    .map_err(|e| AuthError::unauthorized(format!("signature verification failed: {}", e)))?;
+                ec_key.verify(signing_input.as_bytes(), &signature_bytes)?;
             }
             keys::PublicKey::Ed25519(ed_key) if alg == "EdDSA" => {
                 use ed25519_dalek::Signature;

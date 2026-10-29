@@ -22,17 +22,13 @@ x509-cert = { version = "0.2", features = ["builder", "hazmat"] }
 der = "0.7"
 spki = "0.7"
 const-oid = "0.9"
-# ecdsa "der" feature provides the DER-encoded ECDSA signature form that X.509
-# certificates require (vs the fixed-size form).
-ecdsa = { version = "0.16", features = ["der"] }
-# rsa "sha2" feature provides the PKCS#1 v1.5 SigningKey<Sha384/Sha512>.
-rsa = { version = "0.9", features = ["sha2"] }
-p256 = "0.13"
-p384 = "0.13"
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
-sha2 = "0.10"
 signature = "2"
 rand = "0.8"
 pem = "3"
 serde = { version = "1", features = ["derive"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+
+[dev-dependencies]
+# Verifies the certificates the signer makes, for every key family (issue #186).
+aws-lc-rs = "1"

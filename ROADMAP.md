@@ -8,6 +8,7 @@ Latest release: v2.4.1 (2026-10-27). 2.4 is the line with the global registry an
 Release lines with branches: 2.0 through 2.4.
 
 ## Next
+- Generated member port: Hazelcast member traffic over server TLS plus framed bearer tokens, no mTLS (#212)
 - Generated S2S clients to a peer service in another cluster or deployment: redo site-to-site (redo#1 option A, Jody 2026-10-28) and flock gossip (#204; design needs Jody's OK)
 - Release v2.5.0 (routing #170, records #163) once #163 closes (#198)
 - Kitchensink: formal verification and fuzzing once per release on a covering proto set; coverage check in every service build; no harnesses in services (#196, after #193)

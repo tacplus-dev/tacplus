@@ -16,9 +16,7 @@ import io.grpc.ServerCallHandler;
 import io.grpc.ServerInterceptor;
 import io.grpc.Status;
 
-import java.util.ArrayList;
 import java.util.Base64;
-import java.util.List;
 
 /**
  * Token verification and auth utilities.
@@ -179,40 +177,11 @@ public final class Auth {
         return ns != null ? ns : "";
     }
 
-    /**
-     * Extracts the caller's linked claim — additional namespaces this token's
-     * caller is linked to, beyond its own namespace claim (comma-delimited).
-     * Returns an empty list if nothing verified a token on this RPC or the
-     * token has no linked claim.
-     *
-     * <p>The generated namespace backstop accepts a row whose namespace
-     * matches {@link #callerNamespaceFromContext} OR any entry here.
-     */
-    public static List<String> callerLinkedFromContext() {
-        String payload = tokenPayloadFromContext();
-        if (payload.isEmpty()) return List.of();
-        return splitClaim(claimFromPayload(payload, "linked"));
-    }
-
     /** Reads one claim out of a verified payload JSON. Package-visible so
      *  {@link Caller} can answer for the payload it already holds. */
     static String claimFromPayload(String payloadJson, String key) {
         String v = extractJsonField(payloadJson, key);
         return v != null ? v : "";
-    }
-
-    /** Splits a comma-delimited claim value into a list, matching
-     *  {@code TokenWrapper.getListField}'s trim/filter-empty behavior. */
-    static List<String> splitClaim(String raw) {
-        if (raw.isEmpty()) return List.of();
-        List<String> result = new ArrayList<>();
-        for (String s : raw.split(",")) {
-            String trimmed = s.trim();
-            if (!trimmed.isEmpty()) {
-                result.add(trimmed);
-            }
-        }
-        return result;
     }
 
     /**

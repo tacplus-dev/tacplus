@@ -87,25 +87,13 @@ func (es *rustEgressSanitizer) namespaceListFields(fullType, servicePkg string) 
 // __ns_pinned, which is what every filter below is guarded on so a /system peer
 // keeps its fleet-wide read. On the c2s half there is nothing to decide at
 // runtime and no __ns_pinned is emitted.
-//
-// includeLinked additionally binds `<local>_linked`, the caller's `linked`
-// claim (private-records-scope step 2): a read-side egress filter accepts a
-// row whose namespace is the caller's own OR one it is linked to, not only
-// its own. It is never set on a (spec.namespace) request-stamp resolve —
-// stamping always uses the caller's own namespace, never a linked one.
-func rustNamespaceResolve(local, method, indent string, runtimeGate, includeLinked bool) string {
+func rustNamespaceResolve(local, method, indent string, runtimeGate bool) string {
 	out := fmt.Sprintf(`%slet %s = caller.as_ref()
 %s    .and_then(|c| c.namespace())
 %s    .filter(|s| !s.is_empty())
 %s    .map(|s| s.to_string())
 %s    .ok_or_else(|| tonic::Status::unauthenticated("%s requires an authenticated caller carrying a namespace claim"))?;
 `, indent, local, indent, indent, indent, indent, method)
-	if includeLinked {
-		out += fmt.Sprintf(`%[1]s// (spec.record).private / namespace backstop step 2: a row linked to the
-%[1]s// caller (not just owned by it) also passes — see Caller::linked().
-%[1]slet %[2]s_linked: Vec<String> = caller.as_ref().map(|c| c.linked()).unwrap_or_default();
-`, indent, local)
-	}
 	if runtimeGate {
 		out += fmt.Sprintf(`%[1]s// This is the s2s record read plane, so WHICH of the two reads the caller gets
 %[1]s// is decided here, per request, by the caller's own identity — never by which
@@ -157,7 +145,7 @@ func rustRequestNamespaceBlock(field, method, reqVar, indent string) string {
 %[1]s        "%[2]s does not match the authenticated caller's namespace"));
 %[1]s}
 %[1]slet %[3]s = %[3]s;
-`, indent, field, reqVar, rustNamespaceResolve("__namespace", method, indent, false, false))
+`, indent, field, reqVar, rustNamespaceResolve("__namespace", method, indent, false))
 }
 
 // rustStreamNamespaceStmts is the per-message half, run on every inbound
@@ -178,7 +166,7 @@ func rustStreamNamespaceStmts(field, msgVar, indent string) string {
 // and having had to drop one aborts.
 func rustResponseNamespaceFilterBlock(fields []rustNamespaceListField, method string, runtimeGate bool) string {
 	out := "\n            // (spec.store_namespace): hold the rows to the caller's tenant.\n"
-	out += rustNamespaceResolve("__read_namespace", method, "            ", runtimeGate, true)
+	out += rustNamespaceResolve("__read_namespace", method, "            ", runtimeGate)
 	out += "            let mut resp = resp;\n"
 	for _, f := range fields {
 		out += fmt.Sprintf(`            let __ns_before = resp.%[1]s.len();
@@ -190,7 +178,7 @@ func rustResponseNamespaceFilterBlock(fields []rustNamespaceListField, method st
 			// prefix means the same either way, and a parenthesized whole closure
 			// body is an `unnecessary_parens` warning rustc emits on every
 			// generated wrapper that carries this filter.
-			rustNamespaceKeepExpr(fmt.Sprintf("__row.%[1]s == __read_namespace || __read_namespace_linked.iter().any(|__ns| __ns == &__row.%[1]s)", f.ItemField), runtimeGate),
+			rustNamespaceKeepExpr(fmt.Sprintf("__row.%s == __read_namespace", f.ItemField), runtimeGate),
 			rustNamespaceCrash(method, f.Field, "                "))
 	}
 	return out

@@ -694,16 +694,6 @@ func (token *TokenWrapper) SetEntitlements(entitlements []string) *TokenWrapper 
 	return token.SetListField(tokenProto.JwtPayloadTypeToString(tokenProto.JwtPayloadType_JWT_PAYLOAD_TYPE_ENTITLEMENTS), entitlements)
 }
 
-// GetLinked returns the linked claim as a string slice (comma-delimited in payload).
-func (token *TokenWrapper) GetLinked() []string {
-	return token.GetListField(tokenProto.JwtPayloadTypeToString(tokenProto.JwtPayloadType_JWT_PAYLOAD_TYPE_LINKED))
-}
-
-// SetLinked sets the linked claim as a comma-delimited string.
-func (token *TokenWrapper) SetLinked(linked []string) *TokenWrapper {
-	return token.SetListField(tokenProto.JwtPayloadTypeToString(tokenProto.JwtPayloadType_JWT_PAYLOAD_TYPE_LINKED), linked)
-}
-
 // GetServiceEntitlements returns the service_entitlements claim as a typed TokenEntitlements proto.
 // Returns nil if the claim is absent or cannot be parsed.
 func (token *TokenWrapper) GetServiceEntitlements() *entitlementspb.TokenEntitlements {

@@ -1585,7 +1585,7 @@ by a string or integer `key`:
   owed (`INTERNAL`). `Watch<T>Changes` delivers a write only after its ack. Unrelated to
   `(spec.quorum_write)` / `(spec.min_durable_copies)`, which govern diskstore fields.
 - **Tenant.** For a record with a `(spec.store_namespace)` field, a caller whose verified
-  namespace is a tenant is held to its own tenant (or one it is linked to) on every
+  namespace is a tenant is held to its own tenant on every
   request — the row's field on a write that carries one, a tenant field beside the key on
   `Get<T>`, `Delete<T>` and `Watch<T>Changes`: unset is stamped, anything else refused.
   A `/system` peer keeps the fleet-wide reach.

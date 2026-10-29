@@ -88,10 +88,10 @@ func TestRustWatchWrapperGuardsSnapshotAndWrappedDelta(t *testing.T) {
 		`let __read_namespace = caller.as_ref()`,
 		// snapshot_item IS the row.
 		"if item.owner != __read_principal { continue; }",
-		"if item.namespace != __read_namespace && !__read_namespace_linked.iter().any(|__ns| __ns == &item.namespace) {",
+		"if item.namespace != __read_namespace {",
 		// delta WRAPS the row in `item`.
 		"if let Some(__row) = change.item.as_ref() { if __row.owner != __read_principal { continue; } }",
-		"if let Some(__row) = change.item.as_ref() { if __row.namespace != __read_namespace && !__read_namespace_linked.iter().any(|__ns| __ns == &__row.namespace) {",
+		"if let Some(__row) = change.item.as_ref() { if __row.namespace != __read_namespace {",
 		// The namespace backstop aborts, exactly as on the unary/PAGE seams.
 		"std::process::abort();",
 	} {
@@ -139,7 +139,7 @@ func TestRustWatchWrapperGuardsRowShapedDelta(t *testing.T) {
 	}
 	for _, want := range []string{
 		"if change.owner != __read_principal { continue; }",
-		"if change.namespace != __read_namespace && !__read_namespace_linked.iter().any(|__ns| __ns == &change.namespace) {",
+		"if change.namespace != __read_namespace {",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("row-shaped delta missing egress guard %q:\n%s", want, got)
@@ -231,8 +231,8 @@ func TestRustWatchWrapperRecordPlaneS2SCarriesTheRuntimeGate(t *testing.T) {
 	}
 	for _, want := range []string{
 		`let __ns_pinned = !__read_namespace.starts_with("/system");`,
-		"if __ns_pinned && item.namespace != __read_namespace && !__read_namespace_linked.iter().any(|__ns| __ns == &item.namespace) {",
-		"if let Some(__row) = change.item.as_ref() { if __ns_pinned && __row.namespace != __read_namespace && !__read_namespace_linked.iter().any(|__ns| __ns == &__row.namespace) {",
+		"if __ns_pinned && item.namespace != __read_namespace {",
+		"if let Some(__row) = change.item.as_ref() { if __ns_pinned && __row.namespace != __read_namespace {",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("the record-plane WATCH must carry %q:\n%s", want, got)
@@ -249,7 +249,7 @@ func TestRustWatchWrapperC2SHasNoRuntimeGate(t *testing.T) {
 	if strings.Contains(got, "__ns_pinned") {
 		t.Fatalf("the c2s WATCH must carry no runtime gate:\n%s", got)
 	}
-	if !strings.Contains(got, "if item.namespace != __read_namespace && !__read_namespace_linked.iter().any(|__ns| __ns == &item.namespace) {") {
+	if !strings.Contains(got, "if item.namespace != __read_namespace {") {
 		t.Fatalf("the c2s WATCH must pin unconditionally:\n%s", got)
 	}
 }

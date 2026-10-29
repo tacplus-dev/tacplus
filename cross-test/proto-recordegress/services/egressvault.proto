@@ -71,7 +71,7 @@ option (spec.record_read) = {
 
 // VaultRow is the TENANT-SCOPED record: a row belongs to a namespace and to a
 // principal inside it, and any service the record's audience names may read a
-// row whose namespace the caller's token carries (or is linked to).
+// row whose namespace the caller's token carries.
 //
 // namespace/owner are both EQ-queryable so the generated record plane carries
 // them as <T>Filter criteria — that is what gives the query-predicate pin
@@ -93,8 +93,8 @@ message VaultRow {
 
   string row_id = 1 [(spec.assert_required) = true];
 
-  // The tenant boundary. A caller whose namespace claim is neither this value
-  // nor linked to it must never see this row — and if one reaches the egress
+  // The tenant boundary. A caller whose namespace claim is not this value
+  // must never see this row — and if one reaches the egress
   // seam anyway, the generated backstop aborts the process rather than answer.
   string namespace = 2 [
     (spec.assert_required) = true,

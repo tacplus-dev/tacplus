@@ -335,7 +335,7 @@ the entry's new `revision` and the `durability` level the write was acked at.
   the trait-wide `auth_services`. `Apply`'s audience is the union of the write audiences,
   and the wrapper authorizes each op exactly as its single-type RPC.
 - **Tenant.** For a record with a `(spec.store_namespace)` field, a caller held to a
-  tenant is pinned to its own (or a linked) tenant on every request of the surface: the
+  tenant is pinned to its own tenant on every request of the surface: the
   row's field on a write carrying a row, a tenant field beside the key on `Get<T>`,
   `Delete<T>` and `Watch<T>Changes`. Unset is stamped, anything else refused; a
   `/system` peer keeps the fleet-wide reach. The store answers a key-addressed request

@@ -138,11 +138,16 @@ func TestGoRecordEgress_UnaryC2SFiltersPrincipalThenNamespace(t *testing.T) {
 		`status.Error(codes.PermissionDenied, "ListTasks returns rows owned by a principal and the caller presented no verified subject")`,
 		`if __row.GetOwner() == __readPrincipal {`,
 		`__readNamespace = caller.Token().GetNamespace()`,
-		`__readNamespaceLinked = caller.Token().GetLinked()`,
+		`return __ns == __readNamespace`,
 		`if __nsAccepted(__row.GetNamespace()) {`,
 		`os.Exit(1)`,
 		`(spec.store_namespace) backstop fired`,
 	)
+	// The retired `linked` claim widens nothing (#171): the backstop reads no
+	// claim but the caller's own namespace.
+	if strings.Contains(got, "Linked") {
+		t.Fatalf("the namespace backstop must not read a linked claim\ngot:\n%s", got)
+	}
 	// Principal first, then namespace over what survived — the order Java and
 	// Rust apply, and the order the abort's meaning depends on.
 	if strings.Index(got, "__principalRows0") > strings.Index(got, "__namespaceRows0") {
@@ -311,8 +316,8 @@ func TestGoRecordEgress_PredicatePinsAreStampOrRefuse(t *testing.T) {
 		`__pred.Owner = __queryPrincipal`,
 		`status.Error(codes.InvalidArgument, "filter.owner names a principal other than the caller; the query plane is per-principal and the predicate is not the caller's to choose")`,
 		`__pred.Namespace = __queryNamespace`,
-		`} else if !__queryNsAccepted(__pred.GetNamespace()) {`,
-		`status.Error(codes.InvalidArgument, "filter.namespace names a tenant the caller neither owns nor is linked to; the tenant boundary is not the predicate's to choose")`,
+		`} else if __pred.GetNamespace() != __queryNamespace {`,
+		`status.Error(codes.InvalidArgument, "filter.namespace names a tenant other than the caller's; the tenant boundary is not the predicate's to choose")`,
 	)
 	// The pin must precede the handler, or the store answers the unpinned query
 	// and the aborting egress backstop becomes client-triggerable.

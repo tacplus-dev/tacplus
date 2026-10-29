@@ -91,8 +91,7 @@ func TestJavaNamespaceUnaryFilterHaltsOnMismatch(t *testing.T) {
 	got := javaNamespaceUnaryFilter(fields, "SampleAgentEventResponse", "SampleAgentEvent", "            ", false)
 	for _, want := range []string{
 		"Auth.callerNamespaceFromContext()",
-		"Auth.callerLinkedFromContext()",
-		"(__rowNamespace.equals(__nfb.getItems(__ni).getNamespace()) || __rowNamespaceLinked.contains(__nfb.getItems(__ni).getNamespace()))",
+		"if (!__rowNamespace.equals(__nfb.getItems(__ni).getNamespace())) {",
 		"__nfb.removeItems(__ni);",
 		"Runtime.getRuntime().halt(1);",
 	} {
@@ -123,8 +122,8 @@ func TestJavaNamespaceWatchGuardCoversBothLevels(t *testing.T) {
 	san := recordNamespaceSanitizer()
 	got := san.javaNamespaceWatchGuard("query.AgentEventWatchEvent", "query", "WatchAgentEvent", "                ", false)
 	for _, want := range []string{
-		"__event.hasSnapshotItem() && !(__rowNamespace.equals(__event.getSnapshotItem().getNamespace()) || __rowNamespaceLinked.contains(__event.getSnapshotItem().getNamespace()))",
-		"__event.hasDelta() && __event.getDelta().hasItem() && !(__rowNamespace.equals(__event.getDelta().getItem().getNamespace()) || __rowNamespaceLinked.contains(__event.getDelta().getItem().getNamespace()))",
+		"__event.hasSnapshotItem() && !__rowNamespace.equals(__event.getSnapshotItem().getNamespace())",
+		"__event.hasDelta() && __event.getDelta().hasItem() && !__rowNamespace.equals(__event.getDelta().getItem().getNamespace())",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered watch guard is missing %q:\n%s", want, got)
@@ -274,7 +273,7 @@ func TestJavaNamespaceFilterOnS2SRecordPlane(t *testing.T) {
 	for _, want := range []string{
 		"Auth.callerNamespaceFromContext()",
 		javaNsPinnedDecl,
-		"if (__nsPinned && !(__rowNamespace.equals(__nfb.getItems(__ni).getNamespace()) || __rowNamespaceLinked.contains(__nfb.getItems(__ni).getNamespace()))) {",
+		"if (__nsPinned && !__rowNamespace.equals(__nfb.getItems(__ni).getNamespace())) {",
 		"Runtime.getRuntime().halt(1);",
 	} {
 		if !strings.Contains(got, want) {

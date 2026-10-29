@@ -99,8 +99,9 @@ func wantPerLanguage(t *testing.T, srcs map[string]string, what string, want map
 // ---------------------------------------------------------------------------
 
 // (spec.store_namespace): a row is accepted when its namespace EXACTLY equals
-// the caller's namespace claim, or is named by one of the caller's `linked`
-// claims. A row that is neither ABORTS the process — the filter is the backstop
+// the caller's namespace claim, and from no other namespace: the retired
+// `linked` claim widens nothing (#171, TestNoGeneratedCodeReadsTheLinkedClaim).
+// Any other row ABORTS the process — the filter is the backstop
 // BEHIND the store's own query, so it firing means that query is leaking across
 // tenants and a thrown error would be swallowed as one failed RPC.
 //
@@ -123,14 +124,6 @@ func TestRecordNamespacePinIsIdenticalAcrossLanguages(t *testing.T) {
 		"go":   "caller.Token().GetNamespace()",
 		"java": "Auth.callerNamespaceFromContext()",
 		"rust": ".and_then(|c| c.namespace())",
-	})
-	// The `linked` widening: a row in a namespace the caller is LINKED to is
-	// accepted alongside one in its own. A language that reads the namespace
-	// claim and not the linked claim answers a narrower read than the others.
-	wantPerLanguage(t, srcs, "the linked-claim widening", map[string]string{
-		"go":   "caller.Token().GetLinked()",
-		"java": "Auth.callerLinkedFromContext()",
-		"rust": "caller.as_ref().map(|c| c.linked()).unwrap_or_default()",
 	})
 	// The abort, not a returned error: deferred/shutdown work draining in-flight
 	// requests would let the very rows this fired over finish leaving the process.

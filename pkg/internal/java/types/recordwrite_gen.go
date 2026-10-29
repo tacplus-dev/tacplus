@@ -50,21 +50,20 @@ func javaRecordSetter(base string, path []string, value string) string {
 	return set(base, path) + ".build()"
 }
 
-// javaRecordCallerNs renders the caller's verified tenant and linked tenants,
-// read once for every tenant pin of the method.
+// javaRecordCallerNs renders the caller's verified tenant, read once for every
+// tenant pin of the method.
 func javaRecordCallerNs(indent string) string {
 	return fmt.Sprintf(`
-%[1]s// The record write surface's tenant pins: the caller's VERIFIED namespace
-%[1]s// and the tenants it is linked to, never a request field.
+%[1]s// The record write surface's tenant pins: the caller's VERIFIED namespace,
+%[1]s// never a request field.
 %[1]svar __recordTok = Auth.verifiedTokenFromContext();
 %[1]sfinal String __recordCallerNs = __recordTok == null || __recordTok.getNamespace() == null ? "" : __recordTok.getNamespace();
-%[1]sfinal java.util.List<String> __recordCallerLinked = Auth.callerLinkedFromContext();
 `, indent)
 }
 
 // javaRecordTenantPin renders the tenant half of the guard over one entry's
-// tenant field: a caller held to a tenant is pinned to its own (or a linked)
-// tenant — unset is stamped, anything else refused — and a /system peer keeps
+// tenant field: a caller held to a tenant is pinned to its own tenant — unset
+// is stamped, anything else refused — and a /system peer keeps
 // the fleet-wide reach the plane's S2S half gives it. base is the (reassignable)
 // message variable the path starts from; label names it in the refusal.
 func javaRecordTenantPin(base string, path []string, label, indent string) string {
@@ -86,8 +85,8 @@ func javaRecordTenantPin(base string, path []string, label, indent string) strin
 %[1]s    }
 %[3]s%[1]s    if (%[4]s.isEmpty()) {
 %[1]s        %[5]s = %[6]s;
-%[1]s    } else if (!__recordCallerNs.equals(%[4]s) && !__recordCallerLinked.contains(%[4]s)) {
-%[1]s        throw new ProtoException(ProtoException.INVALID_ARGUMENT, "%[2]s: %[7]s names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller's to choose");
+%[1]s    } else if (!__recordCallerNs.equals(%[4]s)) {
+%[1]s        throw new ProtoException(ProtoException.INVALID_ARGUMENT, "%[2]s: %[7]s names a tenant other than the caller's; the tenant boundary is not the caller's to choose");
 %[1]s    }
 %[1]s}
 `, indent, label, presence, get, base, javaRecordSetter(base, path, "__recordCallerNs"), strings.Join(path, "."))

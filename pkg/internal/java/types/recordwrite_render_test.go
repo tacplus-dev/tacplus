@@ -99,15 +99,14 @@ func TestJavaRecordWrite_UnaryWriteGuards(t *testing.T) {
 		`checkAuth("egressquery.EgressRecordMap/PutVaultRow", request)`,
 		`Helpers.validatePutVaultRowRequest(request);`,
 		`final String __recordCallerNs = `,
-		`final java.util.List<String> __recordCallerLinked = Auth.callerLinkedFromContext();`,
 		`if (!__recordCallerNs.startsWith("/system")) {`,
 		`throw new ProtoException(ProtoException.PERMISSION_DENIED, "PutVaultRow addresses entries held to a tenant and the caller presented no verified namespace claim");`,
 		`if (!request.hasItem()) {`,
 		`throw new ProtoException(ProtoException.INVALID_ARGUMENT, "PutVaultRow carries no item to hold to a tenant");`,
 		`if (request.getItem().getNamespace().isEmpty()) {`,
 		`request = request.toBuilder().setItem(request.getItem().toBuilder().setNamespace(__recordCallerNs)).build();`,
-		`} else if (!__recordCallerNs.equals(request.getItem().getNamespace()) && !__recordCallerLinked.contains(request.getItem().getNamespace())) {`,
-		`throw new ProtoException(ProtoException.INVALID_ARGUMENT, "PutVaultRow: item.namespace names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller's to choose");`,
+		`} else if (!__recordCallerNs.equals(request.getItem().getNamespace())) {`,
+		`throw new ProtoException(ProtoException.INVALID_ARGUMENT, "PutVaultRow: item.namespace names a tenant other than the caller's; the tenant boundary is not the caller's to choose");`,
 		`if (request.getDurabilityValue() != 0 && request.getDurabilityValue() < 3) {`,
 		`throw new ProtoException(ProtoException.INVALID_ARGUMENT, "PutVaultRow asks for a durability below the record type's declared floor RECORD_DURABILITY_REMOTE; a write may raise its type's durability, never lower it");`,
 		`} else if (request.getDurabilityValue() == 0) {`,
@@ -136,7 +135,7 @@ func TestJavaRecordWrite_TopLevelTenantField(t *testing.T) {
 	mustInOrder(t, got,
 		`if (request.getNamespace().isEmpty()) {`,
 		`request = request.toBuilder().setNamespace(__recordCallerNs).build();`,
-		`"DeleteVaultRow: namespace names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller's to choose"`,
+		`"DeleteVaultRow: namespace names a tenant other than the caller's; the tenant boundary is not the caller's to choose"`,
 	)
 }
 
@@ -174,7 +173,7 @@ func TestJavaRecordWrite_WatchTenantPin(t *testing.T) {
 		`checkAuth("egressquery.EgressRecordMap/WatchVaultRowChanges", request)`,
 		`"WatchVaultRowChanges addresses entries held to a tenant and the caller presented no verified namespace claim"`,
 		`request = request.toBuilder().setNamespace(__recordCallerNs).build();`,
-		`"WatchVaultRowChanges: namespace names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller's to choose"`,
+		`"WatchVaultRowChanges: namespace names a tenant other than the caller's; the tenant boundary is not the caller's to choose"`,
 		`handler.watchVaultRowChanges(caller, request)`,
 	)
 }
@@ -198,7 +197,7 @@ func TestJavaRecordWrite_ApplyGuards(t *testing.T) {
 		`if (!__c.hasItem()) {`,
 		`"Apply (insert_if_absent_vault_audit_row) carries no item to hold to a tenant"`,
 		`__c = __c.toBuilder().setItem(__c.getItem().toBuilder().setNamespace(__recordCallerNs)).build();`,
-		`"Apply (insert_if_absent_vault_audit_row): item.namespace names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller's to choose"`,
+		`"Apply (insert_if_absent_vault_audit_row): item.namespace names a tenant other than the caller's; the tenant boundary is not the caller's to choose"`,
 		`__op = __op.toBuilder().setInsertIfAbsentVaultAuditRow(__c).build();`,
 		`__kRec = "egressvault.VaultAuditRow";`,
 		`__floor = 2;`,

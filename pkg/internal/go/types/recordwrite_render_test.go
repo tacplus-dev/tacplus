@@ -51,7 +51,7 @@ func TestRecordWriteGuardFloorAndTenant(t *testing.T) {
 		`if req.GetItem() == nil {`,
 		`if __v := req.GetItem().GetTenant(); __v == "" {`,
 		`req.GetItem().Tenant = __ns`,
-		`"PutXidRow: item.tenant names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller's to choose"`,
+		`"PutXidRow: item.tenant names a tenant other than the caller's; the tenant boundary is not the caller's to choose"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("PutXidRow wrapper missing %q\n%s", want, got)
@@ -115,7 +115,7 @@ func TestRecordApplyGuard(t *testing.T) {
 		`__k.s = __c.PutXidRow.GetItem().GetXid()`,
 		`__k.u = uint64(__c.InsertIfAbsentLinkRow.GetItem().GetSeq())`,
 		`if __v := __c.PutXidRow.GetItem().GetTenant(); __v == "" {`,
-		`"Apply (put_xid_row): item.tenant names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller's to choose"`,
+		`"Apply (put_xid_row): item.tenant names a tenant other than the caller's; the tenant boundary is not the caller's to choose"`,
 		`"Apply: ops[%d] names no operation"`,
 		`"Apply: ops[%d] asks for a durability below %s's declared floor; a write may raise its type's durability, never lower it"`,
 		`"Apply: the request asks for a durability below %s's declared floor; an Apply is acked at the highest level its ops involve, never lower"`,

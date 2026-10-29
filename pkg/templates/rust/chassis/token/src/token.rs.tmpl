@@ -427,7 +427,6 @@ impl Token {
     pub const CLAIM_ACT: &'static str = "act";
     pub const CLAIM_PROFILES: &'static str = "profiles";
     pub const CLAIM_ENTITLEMENTS: &'static str = "entitlements";
-    pub const CLAIM_LINKED: &'static str = "linked";
     pub const CLAIM_SERVICE_NAME: &'static str = "service_name";
     pub const CLAIM_INSTANCE_ID: &'static str = "instance_id";
 
@@ -521,16 +520,6 @@ impl Token {
     /// Sets entitlements as a comma-delimited string.
     pub fn set_entitlements(&mut self, entitlements: &[impl AsRef<str>]) -> Result<&mut Self> {
         self.set_list_field(Self::CLAIM_ENTITLEMENTS, entitlements)
-    }
-
-    /// Returns the linked namespaces as a Vec (comma-delimited in payload).
-    pub fn linked(&self) -> Vec<String> {
-        self.list_field(Self::CLAIM_LINKED)
-    }
-
-    /// Sets the linked namespaces as a comma-delimited string.
-    pub fn set_linked(&mut self, linked: &[impl AsRef<str>]) -> Result<&mut Self> {
-        self.set_list_field(Self::CLAIM_LINKED, linked)
     }
 
     /// Returns the service_entitlements claim as a typed JSON value (object, not string).

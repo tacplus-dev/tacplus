@@ -13,7 +13,8 @@
 //     naming none reaches the handler at REMOTE, and a write the store acks
 //     below that is not answered;
 //   - tenant: a /tenants caller is pinned to its own tenant (stamped when
-//     unset, refused when foreign), a /system peer is not;
+//     unset, refused when foreign), a /system peer is not, and a token that
+//     still carries the retired `linked` claim (#171) is not widened by it;
 //   - Apply: ops out of canonical lock order or naming one entry twice are
 //     refused, each op is authorized as its single-type rpc, the handler sees
 //     the highest floor, and a short answer is not returned.
@@ -132,14 +133,20 @@ struct Server {
 }
 
 async fn write_guard_server(seen: &Arc<Mutex<Seen>>, ns: &str, deny: Vec<&'static str>) -> Server {
+    write_guard_server_linked(seen, ns, "", deny).await
+}
+
+/// write_guard_server with a token that also carries the retired `linked`
+/// claim (comma-delimited; "" for none), as a token minted before #171 may.
+async fn write_guard_server_linked(seen: &Arc<Mutex<Seen>>, ns: &str, linked: &str, deny: Vec<&'static str>) -> Server {
     let wrapper = ValidationWrapper::new(Arc::new(WriteGuardHandler(seen.clone())));
     wrapper.set_authorize_func(Some(Arc::new(DenyAuthorizer(deny)))).await;
     let enc = |v: serde_json::Value| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string());
-    let bearer = format!(
-        "Bearer {}.{}.sig",
-        enc(serde_json::json!({"typ": "JWT", "alg": "EdDSA"})),
-        enc(serde_json::json!({"iss": "test", "sub": format!("spiffe://example.com{}/services/egressvault", ns), "namespace": ns})),
-    );
+    let mut claims = serde_json::json!({"iss": "test", "sub": format!("spiffe://example.com{}/services/egressvault", ns), "namespace": ns});
+    if !linked.is_empty() {
+        claims["linked"] = serde_json::Value::String(linked.to_string());
+    }
+    let bearer = format!("Bearer {}.{}.sig", enc(serde_json::json!({"typ": "JWT", "alg": "EdDSA"})), enc(claims));
     Server { wrapper, bearer, seen: seen.clone() }
 }
 
@@ -230,13 +237,13 @@ async fn record_write_guard_tenant_pin() {
             .delete(DeleteVaultRowRequest { row_id: "r1".to_string(), namespace: "/tenants/beta".to_string(), ..Default::default() })
             .await,
         Code::InvalidArgument,
-        "DeleteVaultRow: namespace names a tenant the caller neither owns nor is linked to",
+        "DeleteVaultRow: namespace names a tenant other than the caller's",
     );
     tenant.put(put_req("r1", "/tenants/acme")).await.expect("a tenant caller writing its own tenant's row must pass");
     want_code(
         tenant.put(put_req("r1", "/tenants/beta")).await,
         Code::InvalidArgument,
-        "PutVaultRow: item.namespace names a tenant the caller neither owns nor is linked to",
+        "PutVaultRow: item.namespace names a tenant other than the caller's",
     );
 
     let system = write_guard_server(&s, "/system", vec![]).await;
@@ -245,6 +252,41 @@ async fn record_write_guard_tenant_pin() {
         s.lock().unwrap().put.as_ref().unwrap().item.as_ref().unwrap().namespace,
         "/tenants/beta",
         "a /system peer's tenant must pass untouched"
+    );
+}
+
+// The `linked` claim is retired (#171): a tenant caller whose token still names
+// /tenants/beta in one is held to its own tenant exactly as one without.
+#[tokio::test]
+async fn record_write_guard_linked_claim_widens_nothing() {
+    let s = seen(REMOTE);
+    let tenant = write_guard_server_linked(&s, "/tenants/acme", "/tenants/beta", vec![]).await;
+
+    tenant.put(put_req("r1", "/tenants/acme")).await.expect("a tenant caller writing its own tenant's row must pass");
+    s.lock().unwrap().put = None;
+    want_code(
+        tenant.put(put_req("r1", "/tenants/beta")).await,
+        Code::InvalidArgument,
+        "PutVaultRow: item.namespace names a tenant other than the caller's",
+    );
+    assert!(s.lock().unwrap().put.is_none(), "a write to a tenant only the linked claim names must not reach the handler");
+    want_code(
+        tenant
+            .delete(DeleteVaultRowRequest { row_id: "r1".to_string(), namespace: "/tenants/beta".to_string(), ..Default::default() })
+            .await,
+        Code::InvalidArgument,
+        "DeleteVaultRow: namespace names a tenant other than the caller's",
+    );
+    tenant
+        .delete(DeleteVaultRowRequest { row_id: "r1".to_string(), ..Default::default() })
+        .await
+        .expect("an unset tenant must be stamped");
+    assert_eq!(s.lock().unwrap().del.as_ref().unwrap().namespace, "/tenants/acme", "stamped with the caller's own tenant");
+    let foreign = RecordOp { op: Some(record_op::Op::PutVaultRow(put_req("a", "/tenants/beta"))), ..Default::default() };
+    want_code(
+        tenant.apply(vec![foreign], 0).await,
+        Code::InvalidArgument,
+        "Apply (put_vault_row): item.namespace names a tenant other than the caller's",
     );
 }
 
@@ -303,6 +345,6 @@ async fn record_apply_guard() {
     want_code(
         tenant.apply(vec![foreign], 0).await,
         Code::InvalidArgument,
-        "Apply (put_vault_row): item.namespace names a tenant the caller neither owns nor is linked to",
+        "Apply (put_vault_row): item.namespace names a tenant other than the caller's",
     );
 }

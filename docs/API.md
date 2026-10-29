@@ -577,8 +577,13 @@ streams), which have no per-item hook.
 egress filter above on every record-bearing seam — the unary response, the PAGE
 window, WATCH's per-item hook, and the query predicate — so any of the three may
 generate a service wrapper for a `store_namespace` / `store_principal` /
-`(spec.record).private`-annotated response, and all three spell the same abort,
-the same `linked`-claim widening and the same operator-facing diagnostics. The
+`(spec.record).private`-annotated response, and all three spell the same abort
+and the same operator-facing diagnostics. A row is accepted from the caller's own
+`namespace` claim and no other: the `linked` claim, which once widened it, is
+retired (#171) — the request names its tenant, the token says who is asking and
+policy at the target decides — and a token that still carries one is not widened
+by it. No language generates an accessor for it, and `JwtPayloadType` 29 is
+reserved. The
 three generators are held to one behaviour by
 `pkg/internal/common/record_egress_parity_test.go`, which fails the build if one
 of them drops a rule the other two keep, and the filters are generated and
@@ -612,7 +617,7 @@ Rust alike, with the same codes and messages:
   with the floor in its `durability` field, and a handler answer acked below the
   request's level is `INTERNAL`, never returned;
 - the **tenant pin** for a record with a `(spec.store_namespace)` field: a caller whose
-  verified namespace is not `/system…` is held to its own or a linked tenant on the
+  verified namespace is not `/system…` is held to its own tenant on the
   request's tenant field (stamped when unset, `INVALID_ARGUMENT` otherwise);
 - **`Apply`**, per op in order: a case must be set, the op is authorized exactly as its
   single-type RPC, the tenant pin and floor apply as above, and the ops must be strictly

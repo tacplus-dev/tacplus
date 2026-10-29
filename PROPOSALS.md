@@ -65,5 +65,19 @@ the looper then marks it `promoted` or `declined` here with the date.
   disk). Nightly is red for infrastructure, not code. Either free disk on the runner before `docker run` (drop the
   preinstalled SDKs the build image already carries), or have each gate clean its own scratch tree; the GitLab move
   (#194) is the moment to size the runner for it.
+- **Kernel's linked-claim tests on the 2.6 floor** (2026-10-28, #171): 2.6 generates no `linked` accessor in any
+  language (`TokenWrapper.getLinked` and friends are gone; `JwtPayloadType` 29 is reserved). tacplus-dev/kernel's
+  `TenantUserLinkTest` (lines 176 and 200 on its main today) asserts `token.getLinked().isEmpty()` and will not
+  compile when kernel moves its floor to 2.6. `token.getListField("linked").isEmpty()` keeps the same assertion
+  (kernel#4's "no minted token carries linked"). No other tacplus-dev repository reads the claim. Removing a
+  generated accessor in a minor goes against docs/VERSIONING.md ("a major is a breaking change"); #171 chose the next
+  minor, because kernel stopped stamping the claim first (kernel#4).
+- **The query-predicate pin also runs on a record write's row** (2026-10-28, found in #171): in Go and Java the
+  `(spec.store_namespace)` predicate pin treats `PutVaultRowRequest.item` (a `VaultRow`, whose namespace is an EQ
+  filter criterion) as a query predicate, so a foreign-tenant Put is refused by it, with "item.namespace names a
+  tenant other than the caller's; the tenant boundary is not the predicate's to choose", before the write surface's
+  own pin ("PutVaultRow: item.namespace ... not the caller's to choose") runs. Rust renders no predicate pin and
+  answers with the write pin's message. The outcome is the same refusal; the message differs by language. The
+  predicate pin should skip the write surface's requests (`method.RecordEntry` set).
 
 ## Promoted / declined

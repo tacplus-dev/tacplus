@@ -12,7 +12,8 @@
 //     naming none reaches the handler at REMOTE, and a write the store acks
 //     below that is not answered;
 //   - tenant: a /tenants caller is pinned to its own tenant (stamped when
-//     unset, refused when foreign), a /system peer is not;
+//     unset, refused when foreign), a /system peer is not, and a token that
+//     still carries the retired `linked` claim (#171) is not widened by it;
 //   - Apply: ops out of canonical lock order or naming one entry twice are
 //     refused, each op is authorized as its single-type rpc, the handler sees
 //     the highest floor, and a short answer is not returned.
@@ -69,6 +70,13 @@ func (h *writeGuardHandler) Apply(_ context.Context, _ *servicemanager.Caller, r
 // writeGuardServer builds the wrapper with an authorizer that verifies a
 // caller in namespace ns and refuses every full method in deny.
 func writeGuardServer(h *writeGuardHandler, ns string, deny ...string) *EgressRecordMap {
+	return writeGuardServerLinked(h, ns, nil, deny...)
+}
+
+// writeGuardServerLinked is writeGuardServer with a verified token that also
+// carries the retired `linked` claim naming linked, as a token minted before
+// #171 may.
+func writeGuardServerLinked(h *writeGuardHandler, ns string, linked []string, deny ...string) *EgressRecordMap {
 	p := NewEgressRecordMap(h)
 	p.SetAuthorizeFunc(func(_ context.Context, fullMethod string, _ any) (*wrapperToken.TokenWrapper, error) {
 		for _, d := range deny {
@@ -77,6 +85,9 @@ func writeGuardServer(h *writeGuardHandler, ns string, deny ...string) *EgressRe
 			}
 		}
 		tok := wrapperToken.NewImmutableToken(nil).SetSubject("spiffe://example.com" + ns + "/services/egressvault").SetNamespace(ns)
+		if len(linked) > 0 {
+			tok.SetListField("linked", linked)
+		}
 		return tok, nil
 	})
 	return p
@@ -131,12 +142,12 @@ func TestRecordWriteGuardTenantPin(t *testing.T) {
 		t.Fatalf("stamped tenant = %q, want /tenants/acme", got)
 	}
 	_, err := tenant.DeleteVaultRow(ctx, &types.DeleteVaultRowRequest{RowId: "r1", Namespace: "/tenants/beta"})
-	wantCode(t, err, codes.InvalidArgument, "DeleteVaultRow: namespace names a tenant the caller neither owns nor is linked to")
+	wantCode(t, err, codes.InvalidArgument, "DeleteVaultRow: namespace names a tenant other than the caller's")
 	if _, err := tenant.PutVaultRow(ctx, &types.PutVaultRowRequest{Item: vaultRow("r1", "/tenants/acme")}); err != nil {
 		t.Fatalf("a tenant caller writing its own tenant's row must pass: %v", err)
 	}
 	_, err = tenant.PutVaultRow(ctx, &types.PutVaultRowRequest{Item: vaultRow("r1", "/tenants/beta")})
-	wantCode(t, err, codes.InvalidArgument, "names a tenant the caller neither owns nor is linked to")
+	wantCode(t, err, codes.InvalidArgument, "names a tenant other than the caller's")
 
 	system := writeGuardServer(h, "/system")
 	if _, err := system.PutVaultRow(ctx, &types.PutVaultRowRequest{Item: vaultRow("r1", "/tenants/beta")}); err != nil {
@@ -145,6 +156,35 @@ func TestRecordWriteGuardTenantPin(t *testing.T) {
 	if got := h.putSeen.GetItem().GetNamespace(); got != "/tenants/beta" {
 		t.Fatalf("a /system peer's tenant must pass untouched, got %q", got)
 	}
+}
+
+// The `linked` claim is retired (#171): a tenant caller whose token still
+// names /tenants/beta in one is held to its own tenant exactly as one without.
+func TestRecordWriteGuardLinkedClaimWidensNothing(t *testing.T) {
+	ctx := context.Background()
+	h := &writeGuardHandler{ack: types.RecordDurability_RECORD_DURABILITY_REMOTE}
+	tenant := writeGuardServerLinked(h, "/tenants/acme", []string{"/tenants/beta"})
+
+	if _, err := tenant.PutVaultRow(ctx, &types.PutVaultRowRequest{Item: vaultRow("r1", "/tenants/acme")}); err != nil {
+		t.Fatalf("a tenant caller writing its own tenant's row must pass: %v", err)
+	}
+	h.putSeen = nil
+	_, err := tenant.PutVaultRow(ctx, &types.PutVaultRowRequest{Item: vaultRow("r1", "/tenants/beta")})
+	wantCode(t, err, codes.InvalidArgument, "names a tenant other than the caller's")
+	if h.putSeen != nil {
+		t.Fatal("a write to a tenant only the linked claim names must not reach the handler")
+	}
+	_, err = tenant.DeleteVaultRow(ctx, &types.DeleteVaultRowRequest{RowId: "r1", Namespace: "/tenants/beta"})
+	wantCode(t, err, codes.InvalidArgument, "DeleteVaultRow: namespace names a tenant other than the caller's")
+	if _, err := tenant.DeleteVaultRow(ctx, &types.DeleteVaultRowRequest{RowId: "r1"}); err != nil {
+		t.Fatalf("an unset tenant must be stamped: %v", err)
+	}
+	if got := h.delSeen.GetNamespace(); got != "/tenants/acme" {
+		t.Fatalf("stamped tenant = %q, want the caller's own /tenants/acme", got)
+	}
+	foreign := &types.RecordOp{Op: &types.RecordOp_PutVaultRow{PutVaultRow: &types.PutVaultRowRequest{Item: vaultRow("a", "/tenants/beta")}}}
+	_, err = tenant.Apply(ctx, &types.RecordApplyRequest{Ops: []*types.RecordOp{foreign}})
+	wantCode(t, err, codes.InvalidArgument, "Apply (put_vault_row): item.namespace names a tenant other than the caller's")
 }
 
 func putOp(id string) *types.RecordOp {
@@ -209,5 +249,5 @@ func TestRecordApplyGuard(t *testing.T) {
 	tenant := writeGuardServer(h, "/tenants/acme")
 	foreign := &types.RecordOp{Op: &types.RecordOp_PutVaultRow{PutVaultRow: &types.PutVaultRowRequest{Item: vaultRow("a", "/tenants/beta")}}}
 	_, err = tenant.Apply(ctx, &types.RecordApplyRequest{Ops: []*types.RecordOp{foreign}})
-	wantCode(t, err, codes.InvalidArgument, "Apply (put_vault_row): item.namespace names a tenant the caller neither owns nor is linked to")
+	wantCode(t, err, codes.InvalidArgument, "Apply (put_vault_row): item.namespace names a tenant other than the caller's")
 }

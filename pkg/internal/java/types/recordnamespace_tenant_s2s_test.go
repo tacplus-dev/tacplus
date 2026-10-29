@@ -50,6 +50,9 @@ class Token {
 
 class Auth {
     static String caller = "";
+    // The retired linked claim (#171), still offered here: a token minted before
+    // the retirement may carry it, and a seam that read it again would compile
+    // against this stand-in and widen — which the LINKED arm below refuses.
     static java.util.List<String> linked = java.util.Collections.emptyList();
     static String callerNamespaceFromContext() { return caller; }
     static java.util.List<String> callerLinkedFromContext() { return linked; }
@@ -283,7 +286,7 @@ func TestTenantS2S_PredicatePinsTheQueryToTheCallersTenant(t *testing.T) {
 	if code == 0 || strings.Contains(out, "PREDICATE /tenants/beta") {
 		t.Fatalf("a /tenants/acme caller must not be able to query /tenants/beta: exit %d\n%s", code, out)
 	}
-	if !strings.Contains(out, "names a tenant the caller neither owns nor is linked to") {
+	if !strings.Contains(out, "names a tenant other than the caller's") {
 		t.Fatalf("the refusal must name the boundary it enforced\n%s", out)
 	}
 	// The regression control: a /system peer's predicate is left exactly as it
@@ -298,18 +301,17 @@ func TestTenantS2S_PredicatePinsTheQueryToTheCallersTenant(t *testing.T) {
 	}
 }
 
-// SEAM 2 of 4, the LINKED arm — a `linked` claim widens which tenant the
-// predicate may NAME, matching what the egress filters already accept. Without
-// this the claim is unusable on any query-shaped RPC: the unset branch stamps
-// the caller's OWN tenant, so naming the linked one is the only way to reach it,
-// and naming it was refused outright.
-func TestTenantS2S_PredicateAcceptsALinkedTenant(t *testing.T) {
+// SEAM 2 of 4, the LINKED arm — the `linked` claim is retired (#171) and widens
+// nothing: a token that still carries one may name its own tenant and no other.
+// Until #171 a linked tenant, named explicitly, was accepted here; the request
+// now names its tenant (#170) and policy at the target decides.
+func TestTenantS2S_PredicateRefusesALinkedTenant(t *testing.T) {
 	requireJava(t)
 	seam := javaPredicateNamespacePin("query", "namespace", false, "request", "CreateAgentEventQuery", "            ", true)
 	mustBeInWrapper(t, renderNamespaceMethod(t, namespacePredicateMethod(), false, true), seam, "predicate")
 
-	// args: caller, the tenant the predicate names ("" for unset), the caller's
-	// linked claims ("" for none).
+	// args: caller, the tenant the predicate names ("" for unset), the linked
+	// claims the caller's token still carries ("" for none).
 	body := `public class Main {
     public static void main(String[] args) {
         Auth.caller = args[0];
@@ -321,47 +323,32 @@ func TestTenantS2S_PredicateAcceptsALinkedTenant(t *testing.T) {
     }
 }
 `
-	// Regression: the caller's own tenant, named explicitly, is still accepted
-	// — with and without a linked claim in play.
+	// The caller's own tenant, named explicitly, is accepted — with and without
+	// a linked claim in play.
 	for _, linked := range []string{"", "/tenants/people"} {
 		out, code := runJavaTenantSeam(t, body, "/tenants/acme", "/tenants/acme", linked)
 		if code != 0 || !strings.Contains(out, "PREDICATE /tenants/acme") {
 			t.Fatalf("a predicate naming the caller's own tenant must be accepted (linked=%q): exit %d\n%s", linked, code, out)
 		}
 	}
-	// Regression: a linked claim does NOT change the default. An unset
-	// predicate is still stamped with the caller's OWN tenant, never a linked
-	// one — the linked tenant is reachable only by naming it.
+	// An unset predicate is stamped with the caller's OWN tenant, never a
+	// linked one.
 	out, code := runJavaTenantSeam(t, body, "/tenants/acme", "", "/tenants/people")
 	if code != 0 || !strings.Contains(out, "PREDICATE /tenants/acme") {
-		t.Fatalf("an unset predicate must still be stamped with the caller's OWN tenant: exit %d\n%s", code, out)
+		t.Fatalf("an unset predicate must be stamped with the caller's OWN tenant: exit %d\n%s", code, out)
 	}
-	// THE FIX: the linked tenant, named explicitly, is accepted and passed to
-	// the store unchanged. This was INVALID_ARGUMENT before.
+	// THE RETIREMENT: a tenant the token's linked claim names is refused like
+	// any other foreign tenant.
 	for _, linked := range []string{"/tenants/people", "/tenants/other,/tenants/people"} {
 		out, code := runJavaTenantSeam(t, body, "/tenants/acme", "/tenants/people", linked)
-		if code != 0 || !strings.Contains(out, "PREDICATE /tenants/people") {
-			t.Fatalf("a predicate naming a LINKED tenant must be accepted (linked=%q): exit %d\n%s", linked, code, out)
+		if code == 0 || strings.Contains(out, "PREDICATE /tenants/people") {
+			t.Fatalf("a predicate naming a tenant only the linked claim names must be refused (linked=%q): exit %d\n%s", linked, code, out)
+		}
+		if !strings.Contains(out, "names a tenant other than the caller's") {
+			t.Fatalf("the refusal must name the boundary it enforced\n%s", out)
 		}
 	}
-	// Regression, and the whole point of being conservative here: a tenant that
-	// is neither the caller's own nor one it is linked to is still refused, so
-	// the linked claim widens the boundary and does not dissolve it.
-	out, code = runJavaTenantSeam(t, body, "/tenants/acme", "/tenants/beta", "/tenants/people")
-	if code == 0 || strings.Contains(out, "PREDICATE /tenants/beta") {
-		t.Fatalf("an unlinked foreign tenant must still be refused: exit %d\n%s", code, out)
-	}
-	if !strings.Contains(out, "names a tenant the caller neither owns nor is linked to") {
-		t.Fatalf("the refusal must name the boundary it enforced\n%s", out)
-	}
-	// And the linked list is matched EXACTLY, the same as the caller's own
-	// namespace is: a prefix of a linked tenant is not a linked tenant.
-	out, code = runJavaTenantSeam(t, body, "/tenants/acme", "/tenants/people/users/u1", "/tenants/people")
-	if code == 0 || strings.Contains(out, "PREDICATE /tenants/people/users/u1") {
-		t.Fatalf("a linked claim must match exactly, not by prefix: exit %d\n%s", code, out)
-	}
-	// Regression: the /system peer's runtime gate is untouched by any of this —
-	// no pin runs at all, so its predicate survives with no linked claim.
+	// The /system peer's runtime gate is untouched: no pin runs at all.
 	out, code = runJavaTenantSeam(t, body, "/system/services/argus", "/tenants/beta", "")
 	if code != 0 || !strings.Contains(out, "PREDICATE /tenants/beta") {
 		t.Fatalf("a /system peer's predicate must be untouched: exit %d\n%s", code, out)

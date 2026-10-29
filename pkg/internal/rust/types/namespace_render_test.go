@@ -70,7 +70,9 @@ func filterTail(t *testing.T) string {
 
 // runGeneratedFilter compiles the generated filter tail into a standalone binary
 // over one row stamped rowNS, with the caller's namespace bound to callerNS and
-// its linked claim bound to linked, and returns what the process did.
+// the retired linked claim (#171) a token may still carry bound to linked, and
+// returns what the process did. The linked binding is what a filter that read
+// the claim again would compile against; the generated filter reads none.
 func runGeneratedFilter(t *testing.T, callerNS, rowNS string, linked []string) (stdout string, exitCode int, signaled bool) {
 	t.Helper()
 	if _, err := exec.LookPath("rustc"); err != nil {
@@ -86,6 +88,7 @@ func runGeneratedFilter(t *testing.T, callerNS, rowNS string, linked []string) (
 struct Resp { items: Vec<Row> }
 fn main() {
     let __read_namespace = "` + callerNS + `".to_string();
+    #[allow(unused_variables)]
     let __read_namespace_linked: Vec<String> = ` + linkedLiteral + `;
     let resp = Resp { items: vec![Row { namespace: "` + rowNS + `".to_string() }] };
     let mut resp = resp;
@@ -193,7 +196,6 @@ func runGatedFilter(t *testing.T, callerNS string, withBeta bool) (stdout string
 struct Resp { items: Vec<Row> }
 fn main() {
     let __read_namespace = "` + callerNS + `".to_string();
-    let __read_namespace_linked: Vec<String> = vec![];
     let resp = Resp { items: ` + rows + ` };
     ` + gatedFilterTail(t) + `    let ids: Vec<&str> = resp.items.iter().map(|r| r.id.as_str()).collect();
     println!("DELIVERED {:?}", ids);
@@ -249,25 +251,21 @@ func TestRustTenantS2S_GatedFilterKeepsSystemPeerFleetWide(t *testing.T) {
 	}
 }
 
-// private-records-scope step 2: a row stamped with a namespace the caller is
-// LINKED to (not its own) survives the filter — the backstop's second, additive
-// acceptance path.
-func TestGeneratedNamespaceFilterPassesLinkedRow(t *testing.T) {
+// The `linked` claim is retired (#171): a row stamped with a namespace the
+// caller's token still names in a linked claim is a foreign row like any other,
+// and the backstop aborts. Until #171 it survived the filter.
+func TestGeneratedNamespaceFilterCrashesOnLinkedRow(t *testing.T) {
 	stdout, code, signaled := runGeneratedFilter(t, "/tenants/acme", "/tenants/beta", []string{"/tenants/beta"})
-	if signaled || code != 0 {
-		t.Fatalf("a row in a linked namespace must pass; got exit code %d, stdout %q", code, stdout)
-	}
-	if strings.TrimSpace(stdout) != "SURVIVED 1" {
-		t.Fatalf("the linked row must survive the generated filter, got %q", stdout)
-	}
-}
-
-// A namespace NOT in the caller's own or linked set is still a mismatch: the
-// linked claim widens the accepted set, it does not disable the check.
-func TestGeneratedNamespaceFilterCrashesOnUnlinkedRow(t *testing.T) {
-	stdout, _, signaled := runGeneratedFilter(t, "/tenants/acme", "/tenants/gamma", []string{"/tenants/beta"})
 	if !signaled {
-		t.Fatalf("a row in neither the caller's own nor its linked namespaces must still crash; stdout %q", stdout)
+		t.Fatalf("a row only the caller's linked claim names must crash the process; got exit code %d, stdout %q", code, stdout)
+	}
+	if strings.Contains(stdout, "SURVIVED") {
+		t.Fatalf("the process ran past the generated filter over a linked row: %q", stdout)
+	}
+	// And the caller's own row still passes with a linked claim in play.
+	stdout, code, signaled = runGeneratedFilter(t, "/tenants/acme", "/tenants/acme", []string{"/tenants/beta"})
+	if signaled || code != 0 || strings.TrimSpace(stdout) != "SURVIVED 1" {
+		t.Fatalf("the caller's own row must survive; got exit code %d, stdout %q", code, stdout)
 	}
 }
 

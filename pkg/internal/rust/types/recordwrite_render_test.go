@@ -44,15 +44,14 @@ func TestRustRecordWriteGuardFloorAndTenant(t *testing.T) {
 	got := renderRustRecordWrite(t, rustPutXidRowMethod())
 	for _, want := range []string{
 		`let __record_caller_ns: String = caller.as_ref().and_then(|c| c.namespace()).unwrap_or_default().to_string();`,
-		`let __record_caller_linked: Vec<String> = caller.as_ref().map(|c| c.linked()).unwrap_or_default();`,
 		`if !__record_caller_ns.starts_with("/system") {`,
 		`tonic::Status::permission_denied("PutXidRow addresses entries held to a tenant and the caller presented no verified namespace claim")`,
 		`let __t = match req.item.as_mut() {`,
 		`tonic::Status::invalid_argument("PutXidRow carries no item to hold to a tenant")`,
 		`if __t.tenant.is_empty() {`,
 		`__t.tenant = __record_caller_ns.clone();`,
-		`} else if __t.tenant != __record_caller_ns && !__record_caller_linked.iter().any(|__l| __l == &__t.tenant) {`,
-		`"PutXidRow: item.tenant names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller's to choose"`,
+		`} else if __t.tenant != __record_caller_ns {`,
+		`"PutXidRow: item.tenant names a tenant other than the caller's; the tenant boundary is not the caller's to choose"`,
 		`if __d != 0 && __d < 3 {`,
 		`"PutXidRow asks for a durability below the record type's declared floor RECORD_DURABILITY_REMOTE; a write may raise its type's durability, never lower it"`,
 		`req.durability = 3;`,
@@ -119,7 +118,7 @@ func TestRustRecordWatchChangesTenantPin(t *testing.T) {
 		`let req = request.into_inner();`,
 		`"WatchXidRowChanges addresses entries held to a tenant and the caller presented no verified namespace claim"`,
 		`req.tenant = __record_caller_ns.clone();`,
-		`"WatchXidRowChanges: tenant names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller's to choose"`,
+		`"WatchXidRowChanges: tenant names a tenant other than the caller's; the tenant boundary is not the caller's to choose"`,
 		`let req_msg = req;`,
 	} {
 		if !strings.Contains(got, want) {
@@ -166,7 +165,7 @@ func TestRustRecordApplyGuard(t *testing.T) {
 		`self.authorize_method("/vservices/query.RecordMap/InsertIfAbsentLinkRow", &__op_request).await?;`,
 		`self.authorize_method("/vservices/query.RecordMap/DeleteAuditRow", &__op_request).await?;`,
 		`let __t = match __c.item.as_mut() {`,
-		`"Apply (put_xid_row): item.tenant names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller's to choose"`,
+		`"Apply (put_xid_row): item.tenant names a tenant other than the caller's; the tenant boundary is not the caller's to choose"`,
 		`rec: "ident.XidRow", s: __c.item.as_ref().map(|__p| __p.xid.clone()).unwrap_or_default(), n: 0, u: 0 }, 3, __c.durability)`,
 		`rec: "ident.LinkRow", s: String::new(), n: 0, u: __c.item.as_ref().map(|__p| __p.seq).unwrap_or_default() as u64 }, 2, __c.durability)`,
 		`rec: "ident.AuditRow", s: String::new(), n: __c.seq as i64, u: 0 }, 1, __c.durability)`,
@@ -183,7 +182,7 @@ func TestRustRecordApplyGuard(t *testing.T) {
 		}
 	}
 	// Only the op whose case carries a tenant field is pinned.
-	if n := strings.Count(got, "names a tenant the caller neither owns"); n != 1 {
+	if n := strings.Count(got, "names a tenant other than the caller's"); n != 1 {
 		t.Errorf("want one tenant pin (put_xid_row), got %d", n)
 	}
 	loop, call, answered := strings.Index(got, "req.ops.iter_mut()"), strings.Index(got, "self.handler.apply("), strings.Index(got, "answered {} results")

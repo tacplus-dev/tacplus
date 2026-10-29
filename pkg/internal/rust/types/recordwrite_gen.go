@@ -35,8 +35,8 @@ import (
 //
 // Rust renders no (spec.store_namespace) predicate pin on the plane, so the
 // tenant pin here reads the caller the way the (spec.store_namespace) egress
-// backstop does (rustNamespaceResolve): the namespace and linked claims of the
-// Caller re-parsed from the header the authorizer already verified.
+// backstop does (rustNamespaceResolve): the namespace claim of the Caller
+// re-parsed from the header the authorizer already verified.
 
 // rustRecordDurabilityName is the injected RecordDurability enum value name of
 // a floor, as the refusal messages spell it in every language.
@@ -70,8 +70,8 @@ func rustRecordParentExpr(base string, path []string, as string) string {
 }
 
 // rustRecordTenantPin renders the tenant half of the guard over one entry's
-// tenant field: a caller held to a tenant is pinned to its own (or a linked)
-// tenant — unset is stamped, anything else refused — and a /system peer keeps
+// tenant field: a caller held to a tenant is pinned to its own tenant — unset
+// is stamped, anything else refused — and a /system peer keeps
 // the fleet-wide reach the plane's S2S half gives it. base is the (mutable)
 // message the path starts from; label names it in the refusal.
 func rustRecordTenantPin(base string, path []string, label, indent string) string {
@@ -94,21 +94,20 @@ func rustRecordTenantPin(base string, path []string, label, indent string) strin
 %[1]s    }
 %[3]s%[1]s    if %[4]s.is_empty() {
 %[1]s        %[4]s = __record_caller_ns.clone();
-%[1]s    } else if %[4]s != __record_caller_ns && !__record_caller_linked.iter().any(|__l| __l == &%[4]s) {
-%[1]s        return Err(tonic::Status::invalid_argument("%[2]s: %[5]s names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller's to choose"));
+%[1]s    } else if %[4]s != __record_caller_ns {
+%[1]s        return Err(tonic::Status::invalid_argument("%[2]s: %[5]s names a tenant other than the caller's; the tenant boundary is not the caller's to choose"));
 %[1]s    }
 %[1]s}
 `, indent, label, parent, field, strings.Join(path, "."))
 }
 
-// rustRecordCallerNs renders the caller's verified tenant and linked tenants,
-// read once for every tenant pin of the method.
+// rustRecordCallerNs renders the caller's verified tenant, read once for every
+// tenant pin of the method.
 func rustRecordCallerNs() string {
 	return `
-        // The record write surface's tenant pins: the caller's VERIFIED namespace
-        // and the tenants it is linked to, never a request field.
+        // The record write surface's tenant pins: the caller's VERIFIED namespace,
+        // never a request field.
         let __record_caller_ns: String = caller.as_ref().and_then(|c| c.namespace()).unwrap_or_default().to_string();
-        let __record_caller_linked: Vec<String> = caller.as_ref().map(|c| c.linked()).unwrap_or_default();
 `
 }
 

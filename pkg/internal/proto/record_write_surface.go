@@ -61,8 +61,8 @@ import (
 // The stamps name the tenant field of every request (the row's own for a write
 // that carries one, a tenant field beside the key for Get<T>, Delete<T> and
 // Watch<T>Changes), and the generated wrapper holds a caller whose namespace
-// is a tenant to its own tenant (or one it is linked to) on it: unset is
-// stamped, anything else refused. A /system peer keeps the fleet-wide reach
+// is a tenant to its own tenant on it: unset is stamped, anything else
+// refused. A /system peer keeps the fleet-wide reach
 // the plane's S2S half gives it. The store answers a key-addressed request
 // only for an entry in the named tenant.
 //

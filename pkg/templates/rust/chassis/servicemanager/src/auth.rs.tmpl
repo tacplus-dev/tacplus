@@ -123,16 +123,6 @@ impl Caller {
         self.token.namespace()
     }
 
-    /// Returns the caller's linked claim — additional namespaces this
-    /// token's caller is linked to, beyond [`Self::namespace`]. Empty when
-    /// the token carries no linked claim.
-    ///
-    /// The generated namespace backstop accepts a row whose namespace
-    /// matches [`Self::namespace`] OR any entry here.
-    pub fn linked(&self) -> Vec<String> {
-        self.token.linked()
-    }
-
     /// Returns the x-request-id forwarded from the gateway.
     pub fn request_id(&self) -> &str {
         &self.request_id

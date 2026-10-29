@@ -1766,7 +1766,10 @@ assert_requiresdevice_output() {
 #                            WATCH seam's snapshot_item and delta frames. On the
 #                            generated record reader: the namespace backstop on
 #                            its two VaultRow seams.
-#   4 / 2 linked-claim reads — the `linked` widening, once per namespace resolve.
+#   0 linked-claim reads — anywhere in the generated output. The `linked` claim
+#                            is retired (#171): a row is accepted from the
+#                            caller's own namespace only, and no accessor for
+#                            the claim is generated in any language.
 #   1 / 0 delegated refusals — the private record's act-claim requirement, on the
 #                            hand-written unary reader alone. The generated
 #                            client-facing reader carries no private type: its
@@ -1861,7 +1864,7 @@ install_record_write_guard_selftest() {
     "asks for a durability below the record type's declared floor RECORD_DURABILITY_REMOTE" \
     'acked the write below the durability the request required' \
     'is out of canonical lock order (record type full name, then key, each entry once)' \
-    'names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller'"'"'s to choose'; do
+    'names a tenant other than the caller'"'"'s; the tenant boundary is not the caller'"'"'s to choose'; do
     grep -qF "$want" "$s2s" \
       || die "record write surface ($language): the generated EgressRecordMap carries no guard rendering '$want'"
   done
@@ -1886,26 +1889,23 @@ install_record_write_guard_selftest() {
 assert_recordegress_output() {
   local output="$1"
   local language="$2"
-  local api="" records="" abort_re="" linked_re=""
+  local api="" records="" abort_re=""
 
   case "$language" in
     go)
       api="$(find "$output" -type f -path '*/servers/services/egressvault/egress_vault_api.go' -print -quit)"
       records="$(find "$output" -type f -path '*/servers/services/egressvault/records.go' -print -quit)"
       abort_re='os\.Exit\(1\)'
-      linked_re='caller\.Token\(\)\.GetLinked\(\)'
       ;;
     java)
       api="$(find "$output" -type f -name 'EgressVaultApi.java' -print -quit)"
       records="$(find "$output" -type f -name 'EgressvaultRecords.java' -print -quit)"
       abort_re='Runtime\.getRuntime\(\)\.halt\(1\)'
-      linked_re='Auth\.callerLinkedFromContext\(\)'
       ;;
     rust)
       api="$(find "$output" -type f -path '*/servers/services/egressvault/egress_vault_api.rs' -print -quit)"
       records="$(find "$output" -type f -path '*/servers/services/egressvault/records.rs' -print -quit)"
       abort_re='std::process::abort\(\)'
-      linked_re='caller\.as_ref\(\)\.map\(\|c\| c\.linked\(\)\)'
       ;;
     *)
       die "record-egress fixture: unsupported language: $language"
@@ -2007,21 +2007,17 @@ PLANE_PY
       || die "record-egress fixture ($language): expected $want egress backstop aborts in $f, found $n (fewer means a seam lost its filter; more means it was spliced onto a method whose response carries no pinned row)"
   done
 
-  # Rust's +3 is the same auto-exposed MCP tool dispatch the abort count above
-  # explains: the three seams that resolve a namespace
-  # (call_get_vault_row_summary, call_get_vault_secret_material,
-  # call_list_vault_rows_paged) resolve it with the same linked widening their
-  # gRPC twins do.
-  local api_linked=4
-  if [[ "$language" == "rust" ]]; then
-    api_linked=7
-  fi
-  for pair in "$api:$api_linked" "$records:4"; do
-    local f="${pair%:*}" want="${pair##*:}"
-    n="$(grep -cE "$linked_re" "$f" || true)"
-    [[ "$n" == "$want" ]] \
-      || die "record-egress fixture ($language): expected $want linked-claim reads in $f, found $n (a namespace resolve without the linked widening refuses a caller the other two languages admit)"
-  done
+  # The retired `linked` claim (#171): nothing generated reads it — not the
+  # namespace backstop on any seam, not a token or caller accessor. A token that
+  # still carries one is not widened by it (the record write guard self-tests
+  # drive that); this keeps the claim from coming back in one language.
+  local linked_hits
+  linked_hits="$(grep -rnE --include='*.go' --include='*.java' --include='*.rs' \
+    'GetLinked\(|SetLinked\(|LinkedFromContext|getLinked\(|setLinked\(|\.linked\(\)|set_linked\(|CLAIM_LINKED|JWT_PAYLOAD_TYPE_LINKED|_linked\b' \
+    "$output" 2>/dev/null | grep -v '/target/' || true)"
+  [[ -z "$linked_hits" ]] \
+    || die "record-egress fixture ($language): the generated output still reads the retired linked claim (#171):
+$linked_hits"
 
   # The fourth caller shape: a SERVICE identity reading the private record with
   # no delegated (act) claim is refused, rather than pinned against an empty

@@ -26,8 +26,8 @@ import (
 //   - A write the handler reports acked below that level is not answered
 //     (INTERNAL): a write the caller was told is durable must be.
 //   - A record held to a tenant ((spec.store_namespace)): a caller whose
-//     verified namespace is a tenant is pinned to its own (or a linked) tenant
-//     on the request's tenant field — stamped when unset, refused otherwise —
+//     verified namespace is a tenant is pinned to its own tenant on the
+//     request's tenant field — stamped when unset, refused otherwise —
 //     and a /system peer keeps the S2S half's fleet-wide reach.
 //   - Apply: every op is authorized exactly as its single-type RPC is, so an
 //     Apply can never write a type its caller could not write directly; the
@@ -66,8 +66,8 @@ func goEntryExpr(base string, path []string) (get, parent, set string) {
 }
 
 // goRecordTenantPin renders the tenant half of the guard over one entry's
-// tenant field: a caller held to a tenant is pinned to its own (or a linked)
-// tenant — unset is stamped, anything else refused — and a /system peer keeps
+// tenant field: a caller held to a tenant is pinned to its own tenant — unset
+// is stamped, anything else refused — and a /system peer keeps
 // the fleet-wide reach the plane's S2S half gives it. base is the message the
 // path starts from; label names it in the refusal.
 func goRecordTenantPin(base string, path []string, method, label, indent, failStmt string) string {
@@ -88,32 +88,22 @@ func goRecordTenantPin(base string, path []string, method, label, indent, failSt
 %[1]s	}
 %[6]s%[1]s	if __v := %[2]s; __v == "" {
 %[1]s		%[3]s = __ns
-%[1]s	} else if __v != __ns && !__recordCallerLinked(__v) {
-%[1]s		%[4]s status.Error(codes.InvalidArgument, "%[5]s: %[7]s names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller's to choose")
+%[1]s	} else if __v != __ns {
+%[1]s		%[4]s status.Error(codes.InvalidArgument, "%[5]s: %[7]s names a tenant other than the caller's; the tenant boundary is not the caller's to choose")
 %[1]s	}
 %[1]s}
 `, indent, get, set, failStmt, label, nilCheck, strings.Join(path, "."))
 }
 
-// goRecordCallerNs renders the caller's verified tenant and linked tenants,
-// read once for every tenant pin of the method.
+// goRecordCallerNs renders the caller's verified tenant, read once for every
+// tenant pin of the method.
 func goRecordCallerNs() string {
 	return `
-	// The record write surface's tenant pins: the caller's VERIFIED namespace
-	// and the tenants it is linked to, never a request field.
+	// The record write surface's tenant pins: the caller's VERIFIED namespace,
+	// never a request field.
 	__recordCallerNs := ""
-	var __recordCallerLinkedNs []string
 	if caller != nil {
 		__recordCallerNs = caller.Token().GetNamespace()
-		__recordCallerLinkedNs = caller.Token().GetLinked()
-	}
-	__recordCallerLinked := func(__ns string) bool {
-		for _, __l := range __recordCallerLinkedNs {
-			if __l == __ns {
-				return true
-			}
-		}
-		return false
 	}
 `
 }

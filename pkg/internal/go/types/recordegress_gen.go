@@ -27,7 +27,7 @@ import (
 // WHAT IS ENFORCED, and where each rule comes from:
 //
 //	(spec.store_namespace)  EXACT equality against the caller's namespace claim,
-//	                        widened by the caller's `linked` claims. A mismatch
+//	                        and nothing else: no token claim widens it. A mismatch
 //	                        ABORTS the process: the filter is the backstop BEHIND
 //	                        the store's own query, so it firing means that query
 //	                        is leaking across tenants.
@@ -205,9 +205,10 @@ func anyRowPrivate(fields []goRowListField) bool {
 // ---------------------------------------------------------------------------
 // Resolves: the locals every filter below compares rows against.
 
-// goNamespaceResolve renders the binding of the caller's namespace claim, the
-// `linked` widening, and the acceptance closure all four filters share — one
-// change point rather than four copies of the OR.
+// goNamespaceResolve renders the binding of the caller's namespace claim and
+// the acceptance closure all four filters share — one change point rather than
+// four copies of the comparison. A row is accepted from the caller's own
+// namespace only: the retired `linked` claim widens nothing (#171).
 //
 // Fail-closed: no verified token, or a token with no namespace claim, is a
 // refusal, not an unbounded read.
@@ -228,22 +229,8 @@ func goNamespaceResolve(method, indent, failRet string, runtimeGate bool) string
 %[1]sif __readNamespace == "" {
 %[1]s	%[3]s status.Error(codes.PermissionDenied, "%[2]s returns rows owned by a namespace and the caller presented no verified namespace claim")
 %[1]s}
-%[1]s// A linked claim widens which namespaces a row may be accepted from, on top
-%[1]s// of the caller's own. This is a READ seam, so the widening always applies.
-%[1]svar __readNamespaceLinked []string
-%[1]sif caller != nil {
-%[1]s	__readNamespaceLinked = caller.Token().GetLinked()
-%[1]s}
 %[1]s__nsAccepted := func(__ns string) bool {
-%[1]s	if __ns == __readNamespace {
-%[1]s		return true
-%[1]s	}
-%[1]s	for _, __linked := range __readNamespaceLinked {
-%[1]s		if __linked == __ns {
-%[1]s			return true
-%[1]s		}
-%[1]s	}
-%[1]s	return false
+%[1]s	return __ns == __readNamespace
 %[1]s}
 `, indent, method, failRet)
 	if runtimeGate {
@@ -733,13 +720,10 @@ func goPredicatePrincipalPin(pred goPredicateField, method, indent, failRet stri
 `, indent, method, rf, pf, reqField+"."+principal, failRet, stamp, pred.TypeRef)
 }
 
-// goPredicateNamespacePin renders the same stamp-or-refuse for the tenant, with
-// one difference that follows from the namespace backstop's: the caller's
-// `linked` claims widen which tenant the predicate may NAME, exactly as they
-// widen which tenant a row may be ACCEPTED from — the two must agree, or a
-// linked caller's query would be answered and then aborted on the way out. The
-// UNSET branch still stamps the caller's OWN namespace: a linked tenant is only
-// ever reached by naming it, never by default.
+// goPredicateNamespacePin renders the same stamp-or-refuse for the tenant. The
+// predicate may name the caller's own namespace and no other, exactly as a row
+// is accepted from it and no other — the two must agree, or a query would be
+// answered and then aborted on the way out.
 func goPredicateNamespacePin(pred goPredicateField, method, indent, failRet string, runtimeGate bool) string {
 	if pred.ReqField == "" || pred.PinField == "" {
 		return ""
@@ -763,8 +747,8 @@ func goPredicateNamespacePin(pred goPredicateField, method, indent, failRet stri
 %[1]sif __pred := req.Get%[2]s(); __pred != nil {
 %[1]s	if __pred.Get%[3]s() == "" {
 %[1]s		__pred.%[3]s = %[6]s
-%[1]s	} else if !__queryNsAccepted(__pred.Get%[3]s()) {
-%[1]s		%[5]s status.Error(codes.InvalidArgument, "%[4]s names a tenant the caller neither owns nor is linked to; the tenant boundary is not the predicate's to choose")
+%[1]s	} else if __pred.Get%[3]s() != __queryNamespace {
+%[1]s		%[5]s status.Error(codes.InvalidArgument, "%[4]s names a tenant other than the caller's; the tenant boundary is not the predicate's to choose")
 %[1]s	}
 %[1]s}
 `, pinIndent, rf, nf, reqField+"."+namespace, failRet, nsStamp, pred.TypeRef)
@@ -772,28 +756,15 @@ func goPredicateNamespacePin(pred goPredicateField, method, indent, failRet stri
 %[1]s// (spec.store_namespace) on the query predicate: pin the tenant before the
 %[1]s// store is asked. EXACT match against the caller's namespace claim, never the
 %[1]s// level-or-below containment the administrative rule uses.
-%[1]s// Unset -> stamped; the caller's own or a namespace it is LINKED to ->
-%[1]s// accepted; anything else -> refused, which is what keeps the aborting egress
-%[1]s// backstop unreachable from outside the process.
+%[1]s// Unset -> stamped; the caller's own -> accepted; anything else -> refused,
+%[1]s// which is what keeps the aborting egress backstop unreachable from outside
+%[1]s// the process.
 %[1]s__queryNamespace := ""
-%[1]svar __queryNamespaceLinked []string
 %[1]sif caller != nil {
 %[1]s	__queryNamespace = caller.Token().GetNamespace()
-%[1]s	__queryNamespaceLinked = caller.Token().GetLinked()
 %[1]s}
 %[1]sif __queryNamespace == "" {
 %[1]s	%[3]s status.Error(codes.PermissionDenied, "%[2]s queries rows held to a tenant and the caller presented no verified namespace claim")
-%[1]s}
-%[1]s__queryNsAccepted := func(__ns string) bool {
-%[1]s	if __ns == __queryNamespace {
-%[1]s		return true
-%[1]s	}
-%[1]s	for _, __linked := range __queryNamespaceLinked {
-%[1]s		if __linked == __ns {
-%[1]s			return true
-%[1]s		}
-%[1]s	}
-%[1]s	return false
 %[1]s}
 `, indent, method, failRet) + gateOpen + body + gateClose
 }

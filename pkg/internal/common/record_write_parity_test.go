@@ -41,7 +41,7 @@ func TestRecordWriteGuardsReadTheSameInEveryLanguage(t *testing.T) {
 		"Apply lock order":           "is out of canonical lock order (record type full name, then key, each entry once)",
 		"Apply short answer":         "Apply: the record store answered ",
 		"Apply ack below owed level": "below the durability the request required; a write reported durable must be",
-		"tenant refusal":             "names a tenant the caller neither owns nor is linked to; the tenant boundary is not the caller's to choose",
+		"tenant refusal":             "names a tenant other than the caller's; the tenant boundary is not the caller's to choose",
 		"tenant claim missing":       "addresses entries held to a tenant and the caller presented no verified namespace claim",
 		"/system peer exemption":     "/system",
 	} {

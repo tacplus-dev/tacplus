@@ -17,7 +17,8 @@
 //     naming none reaches the handler at REMOTE, and a write the store acks
 //     below that is not answered;
 //   - tenant: a /tenants caller is pinned to its own tenant (stamped when
-//     unset, refused when foreign), a /system peer is not;
+//     unset, refused when foreign), a /system peer is not, and a token that
+//     still carries the retired `linked` claim (#171) is not widened by it;
 //   - Apply: ops out of canonical lock order or naming one entry twice are
 //     refused, each op is authorized as its single-type rpc, the handler sees
 //     the highest floor, and a short answer is not returned.
@@ -108,6 +109,8 @@ public class RecordWriteGuardTest {
 
     private static ImmutableKey key;
     private static JwkOuterClass.Jwk jwk;
+    /** The retired `linked` claim (#171) the next bearer carries; empty for none. */
+    private static List<String> linkedClaim = List.of();
 
     private static String bearer(String ns) throws Exception {
         TokenWrapper tok = TokenWrapper.create()
@@ -117,6 +120,9 @@ public class RecordWriteGuardTest {
             .setNamespace(ns)
             .setSubType("service")
             .setSubject("spiffe://example.com" + ns + "/services/egressvault");
+        if (!linkedClaim.isEmpty()) {
+            tok.setListField("linked", linkedClaim);
+        }
         tok.sign(key);
         return "Bearer " + tok.getBase64();
     }
@@ -235,16 +241,48 @@ public class RecordWriteGuardTest {
         }
         wantCode("Delete of a foreign tenant", RecordWriteGuardTest.<Egressquery.RecordWriteResult>as(p, "/tenants/acme",
             (s, o) -> s.deleteVaultRow(Egressquery.DeleteVaultRowRequest.newBuilder().setRowId("r1").setNamespace("/tenants/beta").build(), o)),
-            Status.Code.INVALID_ARGUMENT, "DeleteVaultRow: namespace names a tenant the caller neither owns nor is linked to");
+            Status.Code.INVALID_ARGUMENT, "DeleteVaultRow: namespace names a tenant other than the caller's");
 
         wantOk("Put of the caller's own tenant", callPut(p, "/tenants/acme", put("r1", "/tenants/acme")));
         wantCode("Put of a foreign tenant", callPut(p, "/tenants/acme", put("r1", "/tenants/beta")),
-            Status.Code.INVALID_ARGUMENT, "names a tenant the caller neither owns nor is linked to");
+            Status.Code.INVALID_ARGUMENT, "names a tenant other than the caller's");
 
         putSeen = null;
         wantOk("Put from /system", callPut(p, "/system", put("r1", "/tenants/beta")));
         if (putSeen == null || !"/tenants/beta".equals(putSeen.getItem().getNamespace())) {
             fail("a /system peer's tenant must pass untouched, got " + (putSeen == null ? "no call" : putSeen.getItem().getNamespace()));
+        }
+    }
+
+    // The `linked` claim is retired (#171): a tenant caller whose signed token
+    // still names /tenants/beta in one is held to its own tenant exactly as one
+    // without.
+    private static void linkedClaimWidensNothing() throws Exception {
+        EgressRecordMap p = server();
+        ack = REMOTE;
+        results = -1;
+        linkedClaim = List.of("/tenants/beta");
+        try {
+            wantOk("Put of the caller's own tenant, linked claim in play", callPut(p, "/tenants/acme", put("r1", "/tenants/acme")));
+            putSeen = null;
+            wantCode("Put of a tenant only the linked claim names", callPut(p, "/tenants/acme", put("r1", "/tenants/beta")),
+                Status.Code.INVALID_ARGUMENT, "names a tenant other than the caller's");
+            if (putSeen != null) {
+                fail("a write to a tenant only the linked claim names must not reach the handler");
+            }
+            wantCode("Delete of a tenant only the linked claim names", RecordWriteGuardTest.<Egressquery.RecordWriteResult>as(p, "/tenants/acme",
+                (s, o) -> s.deleteVaultRow(Egressquery.DeleteVaultRowRequest.newBuilder().setRowId("r1").setNamespace("/tenants/beta").build(), o)),
+                Status.Code.INVALID_ARGUMENT, "DeleteVaultRow: namespace names a tenant other than the caller's");
+            delSeen = null;
+            wantOk("Delete with unset tenant, linked claim in play", RecordWriteGuardTest.<Egressquery.RecordWriteResult>as(p, "/tenants/acme",
+                (s, o) -> s.deleteVaultRow(Egressquery.DeleteVaultRowRequest.newBuilder().setRowId("r1").build(), o)));
+            if (delSeen == null || !"/tenants/acme".equals(delSeen.getNamespace())) {
+                fail("stamped tenant = " + (delSeen == null ? "no call" : "\"" + delSeen.getNamespace() + "\"") + ", want the caller's own /tenants/acme");
+            }
+            wantCode("Apply with an op only the linked claim names", callApply(p, "/tenants/acme", apply(putOp("a", "/tenants/beta"))),
+                Status.Code.INVALID_ARGUMENT, "Apply (put_vault_row): item.namespace names a tenant other than the caller's");
+        } finally {
+            linkedClaim = List.of();
         }
     }
 
@@ -301,7 +339,7 @@ public class RecordWriteGuardTest {
 
         // The tenant pin runs per op.
         wantCode("Apply with a foreign tenant op", callApply(p, "/tenants/acme", apply(putOp("a", "/tenants/beta"))),
-            Status.Code.INVALID_ARGUMENT, "Apply (put_vault_row): item.namespace names a tenant the caller neither owns nor is linked to");
+            Status.Code.INVALID_ARGUMENT, "Apply (put_vault_row): item.namespace names a tenant other than the caller's");
     }
 
     public static void main(String[] args) throws Exception {
@@ -318,6 +356,7 @@ public class RecordWriteGuardTest {
 
         durabilityFloor();
         tenantPin();
+        linkedClaimWidensNothing();
         applyGuard();
 
         if (failures > 0) {

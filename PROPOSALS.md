@@ -4,6 +4,22 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **One crypto library in the generated Rust service** (2026-10-29, #186): the chassis keys (RSA, ECDSA) are
+  aws-lc-rs's, because ring cannot generate RSA keys nor sign with one over 4096 bits, both of which the chassis
+  offers in every language (`generate_rsa_8192_key`); TLS stays on rustls's ring provider. A service now compiles
+  both. Moving rustls to its aws-lc-rs provider (`rustls/aws_lc_rs`, the rustls default) would leave one; it changes
+  the TLS stack of every generated Rust service, so it is a minor's change, with the TLS parity gates.
+- **cargo audit of a generated sample, nightly** (2026-10-29, #186): current-generation now refuses the two crates of
+  #186 by name in the generated lockfile, but a new advisory on any other crate the chassis locks is found only by
+  each service's own scan. A nightly `cargo audit` of a generated sample (cargo-audit in the build image, the
+  advisory database fetched at run time) would find it first. It also reports four unmaintained crates today
+  (`rustls-pemfile`, `backoff`, `instant`, `unsafe-libyaml`) worth replacing. GitHub-only advisories (no RUSTSEC id,
+  like #215's block-buffer) need OSV, not cargo-audit.
+- **Bound the shared cross-test cargo target** (2026-10-29, #186): `target/cross-test/cargo` (`CROSS_TEST_CARGO_TARGET`,
+  shared by current-generation, server-runtime and wire-corpus) is never pruned; on a looper host it had reached
+  108G and filled the disk mid-gate (`No space left on device` in current-generation-rust). Each fixture's
+  differently-named crates add artifacts that later runs never reuse. Pruning it when it passes a size (or `cargo
+  clean` per fixture after its check) would keep gates from failing on space.
 - **A fleet service whose image is not ghcr.io/<owner>/<repo>** (2026-10-29, #180): the fleet build names a
   service's release image from its repo, `github.com/<owner>/<repo>` → `ghcr.io/<owner>/<repo>`, and refuses any
   other forge. A fleet running its own implementation from GitLab (the private-registry case docs/USER.md shows), or

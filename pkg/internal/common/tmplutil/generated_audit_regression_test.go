@@ -344,8 +344,9 @@ func TestRustKeyTemplateUsesNativeRsaKeySizeType(t *testing.T) {
 
 	for _, want := range []string{
 		"fn rsa_alg_for_key_size(key_bytes: usize) -> Result<&'static str>",
-		"let key_bytes = (key.n().bits() + 7) / 8;",
-		"let alg = rsa_alg_for_key_size(key_bytes)?;",
+		// #186: the RSA key's size is its aws-lc-rs modulus length, in bytes.
+		"pub fn size(&self) -> usize {",
+		"let alg = rsa_alg_for_key_size(key.size())?;",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("Rust key template missing %q:\n%s", want, src)

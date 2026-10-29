@@ -84,12 +84,20 @@ authorization, builds the caller identity, and only then calls your code.
 Release binaries for Linux, macOS and Windows (amd64 and arm64) are on
 [GitHub Releases](https://github.com/tacplus-dev/tacplus/releases), each with
 `checksums.txt`; `tacplus upgrade` keeps an installed binary on the newest
-patch of its MAJOR.MINOR line. The container image carries tacplus and every
-protoc plugin it drives, so a build can run it as its own generate step:
+patch of its MAJOR.MINOR line. A repository's builds run the exact release it
+pins in `tacplus.lock` (`tacplus pin` writes it; moving it is a commit), in
+the build image of that release's line, which carries every toolchain and
+verifier and whose `tacplus` runs the pinned binary:
 
 ```bash
-docker run --rm --pull always -v "$PWD:/workspace" \
-  ghcr.io/tacplus-dev/tacplus/tacplus:2.0 \
+# Once, and whenever you move to a newer release: pin it, and commit the pin.
+docker run --rm -v "$PWD:/workspace" -w /workspace \
+  ghcr.io/tacplus-dev/tacplus/build:2.6 tacplus pin
+git add tacplus.lock && git commit -m "Pin tacplus"
+
+# Every build: the pinned image, by digest, running the pinned tacplus.
+image="$(sed -n 's/^build_image: //p' tacplus.lock)"
+docker run --rm -v "$PWD:/workspace" -w /workspace "$image" \
   tacplus build --config tacplus.yaml --src proto
 ```
 

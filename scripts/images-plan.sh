@@ -17,13 +17,16 @@ case "$event" in
   schedule) base=true ;;
   workflow_dispatch)
     [[ "$rebuild" == base ]] && base=true
-    [[ "$rebuild" != tacplus ]] && build=true ;;
+    build=true ;;
   push)
     # A release tag diffs against the previous release tag on its line, not its
     # parent commit: a backport can land on the release branch before the tag is
     # cut, and the tag's own commit would not show it.
     from=HEAD~1
     if [[ "$ref_type" == tag ]]; then
+      # build:X.Y is rebuilt on every patch of its line, so each release has its
+      # own immutable build:X.Y.Z with the line's tacplus launcher (#193).
+      build=true
       if ! from="$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null)"; then
         # First release on this line: nothing to diff against, so rebuild everything.
         base=true

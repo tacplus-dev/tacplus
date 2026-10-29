@@ -19,10 +19,22 @@ tacplus releases are `MAJOR.MINOR.PATCH` git tags `vMAJOR.MINOR.PATCH`
 
 ## What consumers pin
 
-A consumer pins **major and minor**, never patch. `2.1` means "the newest
-2.1.x", and every 2.1.x must be safe to take without reading the notes,
-because a patch is fixes only. Pinning a patch is allowed for reproducing a
-problem, never for staying on a known defect.
+A consumer declares a **floor** and pins an **exact release**
+(tacplus-dev/roadmap: decisions/deterministic-builds-2026-10-27.md):
+
+- The floor, `tacplus: "2.1"` in `tacplus.yaml`, is the oldest `MAJOR.MINOR`
+  whose features it uses. It is never a patch.
+- The pin, `tacplus.lock` beside it, is the exact `MAJOR.MINOR.PATCH` its
+  builds run and the build image they run in, by digest. A build fetches
+  exactly that binary, checks it against the release's `checksums.txt`, and
+  never resolves "newest": the same commit builds the same way, whoever or
+  whatever starts it, and whenever.
+
+Moving to a newer patch is a commit (`tacplus pin`, then commit
+`tacplus.lock`), never something a build does. Every patch of a line must be
+safe to take without reading the notes, because a patch is fixes only, so a
+pin is moved to its line's newest patch as a matter of course, never kept on a
+known defect.
 
 ## Backports
 
@@ -37,56 +49,54 @@ branch is protected: changes land only by pull request.
 
 Supported today: `release/2.0` through `release/2.5`, one per minor (2.0 was
 cut at `v2.0.1`; 2.0.0 published images but its release build failed, so
-2.0.1 is the first usable 2.0 release). Consumers pin `MAJOR.MINOR`: the
-`tacplus:X.Y` image and `tacplus upgrade` both follow its newest patch. The fix looper opens one pull
+2.0.1 is the first usable 2.0 release). `tacplus pin` and `tacplus upgrade`
+both take a line's newest patch. The fix looper opens one pull
 request against `main` and one against each supported release branch; the
 release-branch pull request carries only the fix and its test.
 
 ## Images
 
-Three images. `build` is `FROM base`; `tacplus` copies its tools out of
-`build` onto a slim OS, so a consumer pulls a few hundred megabytes, not the
-SDKs:
+There is no tacplus image: tacplus is a binary, published with each release
+(`tacplus-X-Y-Z-<os>-<arch>` and `checksums.txt`). The images are the
+toolchains (tacplus-dev/roadmap: decisions/tacplus-images-2026-10-27.md).
+`build` is `FROM base`:
 
 | image | contents | rebuilt when |
 |---|---|---|
 | `ghcr.io/tacplus-dev/tacplus/base` | OS and every SDK tacplus is built and tested with: Go, Java (JDK, Maven), Rust, Python, Node (TypeScript), Swift, .NET | on a schedule, or when an SDK pin changes |
-| `ghcr.io/tacplus-dev/tacplus/build` | `base` plus every tool: protoc and every plugin, grpcio-tools, JBMC and OpenJML, just, the docker CLI, gcloud. The one image the gates run in: CI, the nightly gates, `just gates-container`. Not for consumers. | when a tool pin changes |
-| `ghcr.io/tacplus-dev/tacplus/tacplus` | the tacplus binary and the protoc plugins for every language that needs its own (Go, Java, TypeScript, Rust, Swift, Python); C# needs none, its generated project runs Grpc.Tools from NuGet | every push to `main` and every release |
+| `ghcr.io/tacplus-dev/tacplus/build` | `base` plus every tool: protoc and every plugin, grpcio-tools, Kani, JBMC and OpenJML, cargo-fuzz and its nightly Rust, just, the docker CLI, gcloud. Its `tacplus` is `images/tacplus.sh`, which runs the release the repository pins. What a repository's build runs in (generate, compile, test, fuzz, verify), and what tacplus's own gates run in: CI, the nightly gates, `just gates-container` | every release (one image per line), and when a tool pin changes |
 
-A consumer's build does not start `FROM` the tacplus image. It runs it as its
-own step (`tacplus build`, writing the generated model) and compiles the
-result in its own builder image, so a new tacplus patch is picked up by the
-generate step pulling `tacplus:X.Y` again, without rebuilding the consumer's
-image.
+`ghcr.io/tacplus-dev/tacplus/tacplus` is deprecated: its tags up to the 2.5
+line stay as they are, and it is never pushed again.
 
-Tags on the `tacplus` image follow the version policy:
+Tags on the `build` image:
 
 | tag | meaning |
 |---|---|
-| `2.1.3` | that release, immutable |
-| `2.1` | the newest 2.1.x patch (what a consumer pins) |
+| `2.1.3` | the image of that release, immutable: a second push of it is refused |
+| `2.1` | the newest 2.1.x image, a convenience for people; a build uses the digest in its `tacplus.lock` |
 | `2` | the newest 2.x |
-| `latest` | the newest release |
-| `main-<sha>` | an unreleased build of `main` |
+| `latest` | the newest release, or main's image when main rebuilt it |
+| `<yyyymmdd>-<sha>` | every build of it |
 
 Releases are cut on several lines at once (a 2.0.x patch after 2.3.x), so a
 floating tag moves only when the release is the newest it covers: `2.0.11`
 cut after `2.3.1` moves `2.0` and leaves `2` and `latest` alone.
-`scripts/images-tags.sh` decides; a pre-release gets only its own tag.
+`scripts/images-tags.sh` decides; a pre-release gets only its own tag. A
+release image is built with its line (`TACPLUS_LINE=X.Y`), and its `tacplus`
+refuses a repository pinned to another line. A release job runs in
+`build:X.Y` of its own line, never in `build:latest`.
 
-`base` and `build` are tagged `<yyyymmdd>-<sha>`, and `latest` by a push to
-`main` or the newest release; a run for an older line leaves `latest` alone.
-A release also tags the `build` image it was produced with by the same policy
-(`2.1.3`, `2.1`, `2`), and a release job runs in `build:X.Y` of its own line,
-never in `build:latest`.
+The definitions are `images/base.Dockerfile` and `images/build.Dockerfile`;
+`images/smoke.sh` ships in the build image as `tacplus-smoke` and runs inside
+every pushed image, and `images/smoke-pipeline.sh` generates, tests, verifies
+and fuzzes a pinned repository in it through its `tacplus`.
+`.github/workflows/images.yml` builds and pushes them for linux/amd64 and
+linux/arm64: `build` on every release tag and when its file changed on
+`main`, `base` when its file changed (or weekly, or on demand). Each run
+writes the build image's digest to its summary. `just images` builds the set
+natively for one machine.
 
-The definitions are `images/base.Dockerfile`, `images/build.Dockerfile` and
-`images/tacplus.Dockerfile`; `images/smoke.sh` ships in the build and
-tacplus images as `tacplus-smoke` and runs inside every pushed image. `.github/workflows/images.yml` builds and pushes them for
-linux/amd64 and linux/arm64 on every push to `main` and every release tag,
-rebuilding `base` and `build` only when their file changed (or weekly for
-`base`, or on demand). `just images` builds the set natively for one machine.
 The first release tag is `v2.0.0`: the public tacplus-dev/tacplus line is a
 new major over the private v1.2.x line it was forked from (new module path,
 regenerated consumers).

@@ -97,10 +97,11 @@ jobs:
           images=(
             ghcr.io/tacplus-dev/tacplus/base:latest
             ghcr.io/tacplus-dev/tacplus/build:latest
-            ghcr.io/tacplus-dev/tacplus/tacplus:latest
           )
+          # Each release line's build image, build:X.Y: what repositories build
+          # in. The tacplus/tacplus image is deprecated and no longer pushed (#193).
           while IFS= read -r minor; do
-            images+=("ghcr.io/tacplus-dev/tacplus/tacplus:${minor#release/}")
+            images+=("ghcr.io/tacplus-dev/tacplus/build:${minor#release/}")
           done < <(git ls-remote --heads origin 'refs/heads/release/*' | sed 's#.*refs/heads/##')
           # --ignore-unfixed: a CVE with no fixed package is not something a
           # rebuild can clear, so it does not fail the run.

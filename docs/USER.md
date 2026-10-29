@@ -120,7 +120,7 @@ Only `language` and `output-dir` are required. `pkg` is commonly set explicitly,
 | `pkg` | string | No | Canonical package name (Java-style reverse DNS, e.g. `com.example.myservice`). Each segment must be a valid identifier (letters, digits, underscores — no hyphens). Converted to native format per language (see table below). |
 | `kind` | string | No | What this project is: `service` (hosts a surface, has a registry identity; a fleet runs it), `client` (calls services, hosts nothing: a CLI, daemon or app), `library` (contracts only: protos other projects build against). A statement of intent the generator and the fleet build can check against the protos. Unset means not stated. |
 | `depends` | list | No | Services this one calls, by registry name: `llmproxy` or `weather@1.2` (MAJOR.MINOR, the latest patch; never a patch pin). Each is resolved through the global registry named by `global:` in `proto/registry.yaml` to the repo that declares it, fetched at that version, and merged into this generation, so the `(spec.grpc_s2s_client)` declared in proto has a proto to generate from. Direct dependencies only; the fleet build follows them transitively. Fetched with the same credentials as `src` (below). |
-| `tacplus` | string | No | Minimum tacplus `MAJOR.MINOR` this project needs, e.g. `"2.2"`. A floor, not a pin: MAJOR must match and the running MINOR must be at least this. A patch component is rejected (consumers always run the latest patch of a MAJOR.MINOR). Unset means no floor. An unstamped local build (`0.0.0`) cannot satisfy a floor. |
+| `tacplus` | string | No | Minimum tacplus `MAJOR.MINOR` this project needs, e.g. `"2.2"`. A floor, not a pin: MAJOR must match and the running MINOR must be at least this. A patch component is rejected: the exact release a build runs is pinned in [`tacplus.lock`](#tacpluslock-the-pinned-release), not here. Unset means no floor. An unstamped local build (`0.0.0`) cannot satisfy a floor. |
 
 #### Package Name Conversion
 
@@ -268,6 +268,45 @@ Merge rules:
 | `src` | `--src` |
 
 CLI flags override YAML values when both are specified.
+
+### tacplus.lock: the pinned release
+
+A build is fully determined by its commit: the same commit generates the same
+code whoever builds it, and whenever. So a repository pins, in `tacplus.lock`
+beside `tacplus.yaml` (or `fleet.yaml`), the exact tacplus release its builds
+run and the build image they run in, by digest:
+
+```yaml
+tacplus: 2.6.1
+build_image: ghcr.io/tacplus-dev/tacplus/build:2.6.1@sha256:<64 hex>
+```
+
+| Field | Meaning |
+|---|---|
+| `tacplus` | The exact release, `MAJOR.MINOR.PATCH`. A line (`2.6`) or a pre-release is refused. |
+| `build_image` | The build image of that release, by digest (`<name>[:<tag>]@sha256:<64 hex>`); the digest is what pulls. A tag naming a version must be of the pin's line. |
+
+The build image's `tacplus` (a launcher, not the compiler; see
+[docs/INSTALL.md](INSTALL.md)) runs exactly the pinned release, downloaded once
+and checked against the release's `checksums.txt`, and it refuses to run in a
+repository without a `tacplus.lock` or whose pin is of another line than the
+image. The floor (`tacplus:` in `tacplus.yaml`) says what the repository needs;
+the lock says what it runs, and it must satisfy the floor.
+
+**Moving the pin is a commit, never something a build does.** `tacplus pin`
+writes the lock:
+
+| Command | Pins |
+|---|---|
+| `tacplus pin` | the newest patch of the pin's line (of the floor's line when there is no pin yet) |
+| `tacplus pin --version 2.7` | the newest patch of `2.7` |
+| `tacplus pin --version 2.7.0` | exactly `v2.7.0` |
+
+It refuses a version below the floor, a release whose binaries
+(`checksums.txt`) or build image (`build:X.Y.Z`) are not published yet, and a
+repository with no `tacplus.yaml` or `fleet.yaml`. Then commit `tacplus.lock`;
+the next build runs it. A patch is fixes only ([versioning](VERSIONING.md)), so
+moving a pin within its line is always safe to take.
 
 ---
 

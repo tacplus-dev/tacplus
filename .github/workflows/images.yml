@@ -1,15 +1,20 @@
 name: Images
 
-# The image set from docs/VERSIONING.md: base (every SDK), build (base +
-# every tool; the image the gates run in), tacplus (the binary + every protoc
-# plugin; what a consumer's generate step pulls). Each layer is
-# rebuilt only when its definition changed, on demand, or (base) weekly, and
-# pushed to ghcr.io for linux/amd64 and linux/arm64. The tacplus image is
-# rebuilt on every push to main (main-<sha>) and every release tag
-# (X.Y.Z, and X.Y, X, latest when it is the newest release each covers:
-# scripts/images-tags.sh). Releases are cut on several lines at once, so a run
-# for an older line never moves base:latest or build:latest, and it builds with
-# its own line's build image, not whichever image another run last pushed (#160).
+# The image set from docs/VERSIONING.md: base (every SDK) and build (base +
+# every tool and verifier; the image builds and the gates run in), pushed to
+# ghcr.io for linux/amd64 and linux/arm64. There is no tacplus image any more
+# (#193): tacplus is a release binary, and the build image's tacplus is
+# images/tacplus.sh, which runs the release a repository pins (tacplus.lock).
+# The old tacplus/tacplus tags stay, deprecated, and are never pushed again.
+#
+# build is rebuilt on every release tag, as build:X.Y.Z (immutable: a second
+# push of it is refused) and the floating tags of scripts/images-tags.sh
+# (X.Y, X, latest when it is the newest release each covers), with the line
+# X.Y baked in (TACPLUS_LINE); on main when its file changed, on demand, or
+# when base is rebuilt (weekly, or when its file changed). Releases are cut on
+# several lines at once, so a run for an older line never moves base:latest or
+# build:latest (#160). Each run writes the build image's digest to its summary:
+# the digest is what a repository pins (`tacplus pin`).
 
 on:
   push:
@@ -22,8 +27,8 @@ on:
       rebuild:
         description: "Lowest layer to rebuild (everything above it rebuilds too)"
         type: choice
-        options: [tacplus, build, base]
-        default: tacplus
+        options: [build, base]
+        default: build
 
 permissions:
   contents: read
@@ -44,7 +49,7 @@ jobs:
       base: ${{ steps.plan.outputs.base }}
       build: ${{ steps.plan.outputs.build }}
       stamp: ${{ steps.plan.outputs.stamp }}
-      build_image: ${{ steps.plan.outputs.build_image }}
+      line: ${{ steps.plan.outputs.line }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,18 +64,14 @@ jobs:
           # First publish: build everything when the build image does not exist yet.
           if ! docker manifest inspect "$NS/build:latest" >/dev/null 2>&1; then base=true; build=true; fi
           stamp="$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
-          # The build image this run compiles tacplus with: the one it builds, else
-          # its release line's (build:X.Y), else (main, or a line's first release)
-          # build:latest.
-          image="$NS/build:latest"
-          if [[ $build == true ]]; then
-            image="$NS/build:$stamp"
-          elif [[ "$GITHUB_REF_TYPE" == tag && "${GITHUB_REF_NAME#v}" =~ ^([0-9]+)\.([0-9]+)\. ]]; then
-            line="$NS/build:${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
-            if docker manifest inspect "$line" >/dev/null 2>&1; then image="$line"; fi
+          # The release line a tag's build image serves (its tacplus refuses a
+          # repository pinned to another); none for main.
+          line=""
+          if [[ "$GITHUB_REF_TYPE" == tag && "${GITHUB_REF_NAME#v}" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
+            line="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
           fi
-          { echo "base=$base"; echo "build=$build"; echo "stamp=$stamp"; echo "build_image=$image"; } >> "$GITHUB_OUTPUT"
-          echo "base=$base build=$build build_image=$image"
+          { echo "base=$base"; echo "build=$build"; echo "stamp=$stamp"; echo "line=$line"; } >> "$GITHUB_OUTPUT"
+          echo "base=$base build=$build line=$line"
         env:
           DOCKER_CONFIG: /tmp/docker-anon
 
@@ -146,12 +147,20 @@ jobs:
           platforms: linux/${{ matrix.arch }}
           build-args: |
             BASE_IMAGE=${{ env.NS }}/base:${{ needs.base.result == 'success' && needs.plan.outputs.stamp || 'latest' }}
+            TACPLUS_LINE=${{ needs.plan.outputs.line }}
           outputs: type=image,name=${{ env.NS }}/build,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }}
           cache-to: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }},mode=max
       - name: Smoke test (this architecture)
         if: matrix.arch == 'amd64'
         run: docker run --rm "$NS/build@${{ steps.push.outputs.digest }}" tacplus-smoke
+      # Generate, test, verify (Kani; Go reported as skipped) and fuzz a pinned
+      # repository through the image's tacplus launcher, with a tacplus built
+      # from this commit as a local release of the image's line.
+      - name: Pipeline smoke (generate, test, verify, fuzz)
+        if: matrix.arch == 'amd64'
+        timeout-minutes: 90
+        run: docker run --rm -v "$PWD:/src:ro" "$NS/build@${{ steps.push.outputs.digest }}" bash /src/images/smoke-pipeline.sh
       - name: Record digest
         run: |
           mkdir -p /tmp/digests
@@ -189,118 +198,28 @@ jobs:
           set -euo pipefail
           refs=(); for d in *; do refs+=("$NS/build@sha256:$d"); done
           tags=(-t "$NS/build:${{ needs.plan.outputs.stamp }}")
-          git -C "$GITHUB_WORKSPACE" fetch --force --tags origin
-          if [[ "$GITHUB_REF_TYPE" != tag ]] || grep -qw latest <<<"$(cd "$GITHUB_WORKSPACE" && scripts/images-tags.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA")"; then
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            # Fetched here, not in plan: parallel tags on one line (v2.3.1 and
+            # v2.3.2) must see each other before either moves a floating tag.
+            git -C "$GITHUB_WORKSPACE" fetch --force --tags origin
+            list="$(cd "$GITHUB_WORKSPACE" && scripts/images-tags.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA")"
+            # build:X.Y.Z is what a pin was resolved from: never moved once pushed.
+            v="${GITHUB_REF_NAME#v}"
+            if docker buildx imagetools inspect "$NS/build:$v" >/dev/null 2>&1; then
+              echo "::error::$NS/build:$v already exists; a release's build image is immutable"
+              exit 1
+            fi
+            for t in $list; do tags+=(-t "$NS/build:$t"); done
+          else
             tags+=(-t "$NS/build:latest")
           fi
           docker buildx imagetools create "${tags[@]}" "${refs[@]}"
           docker buildx imagetools inspect "$NS/build:${{ needs.plan.outputs.stamp }}"
-
-  tacplus:
-    name: tacplus (${{ matrix.arch }})
-    needs: [plan, base, build, build-manifest]
-    if: always() && needs.plan.result == 'success' && (needs.base.result == 'success' || needs.base.result == 'skipped') && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.build-manifest.result == 'success' || needs.build-manifest.result == 'skipped')
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [amd64, arm64]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Free runner disk
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
-          sudo docker system prune -af >/dev/null 2>&1 || true
-          df -h / | tail -1
-      - uses: docker/setup-qemu-action@v3
-        if: matrix.arch != 'amd64'
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Version
-        id: v
-        shell: bash
-        run: |
-          if [[ "${GITHUB_REF_TYPE}" == tag && "${GITHUB_REF_NAME}" == v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0"; fi
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-      - id: push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: images/tacplus.Dockerfile
-          platforms: linux/${{ matrix.arch }}
-          build-args: |
-            BUILD_IMAGE=${{ needs.plan.outputs.build_image }}
-            VERSION=${{ steps.v.outputs.version }}
-            VCS_REF=${{ github.sha }}
-          outputs: type=image,name=${{ env.NS }}/tacplus,push-by-digest=true,name-canonical=true,push=true
-      - name: Smoke test (this architecture)
-        if: matrix.arch == 'amd64'
-        run: docker run --rm "$NS/tacplus@${{ steps.push.outputs.digest }}" tacplus-smoke
-      - name: Record digest
-        run: |
-          mkdir -p /tmp/digests
-          d="${{ steps.push.outputs.digest }}"
-          touch "/tmp/digests/${d#sha256:}"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tacplus-digest-${{ matrix.arch }}
-          path: /tmp/digests/*
-          if-no-files-found: error
-
-  tacplus-manifest:
-    name: tacplus (manifest, tags)
-    needs: [plan, tacplus]
-    if: always() && needs.tacplus.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/download-artifact@v4
-        with:
-          path: /tmp/digests
-          pattern: tacplus-digest-*
-          merge-multiple: true
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Tags from the version policy
-        id: tags
-        shell: bash
+      - name: Digest
         run: |
           set -euo pipefail
-          # Fetched again here, not in plan: parallel tags on one line (v2.3.1 and
-          # v2.3.2) must see each other before either moves a floating tag.
-          git fetch --force --tags origin
-          list="$(scripts/images-tags.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA")"
-          echo "list=$list" >> "$GITHUB_OUTPUT"
-          echo "$list"
-      - name: Create the multi-arch tags
-        working-directory: /tmp/digests
-        run: |
-          set -euo pipefail
-          refs=(); for d in *; do refs+=("$NS/tacplus@sha256:$d"); done
-          tags=(); for t in ${{ steps.tags.outputs.list }}; do tags+=(-t "$NS/tacplus:$t"); done
-          docker buildx imagetools create "${tags[@]}" "${refs[@]}"
-          set -- ${{ steps.tags.outputs.list }}
-          docker buildx imagetools inspect "$NS/tacplus:$1"
-      # The build image follows the release line too, so consumers (the looper
-      # image, CI jobs, release.yml) pin build:X.Y and float on the patch like
-      # everything else; a dated build tag is a patch pin and the policy forbids
-      # those. It takes the same floating tags as the tacplus image, from the
-      # build image this release was produced with (plan's build_image).
-      - name: Build image tags from the version policy
-        if: github.ref_type == 'tag'
-        run: |
-          set -euo pipefail
-          tags=(); for t in ${{ steps.tags.outputs.list }}; do [[ $t == latest ]] || tags+=(-t "$NS/build:$t"); done
-          docker buildx imagetools create "${tags[@]}" "${{ needs.plan.outputs.build_image }}"
-          docker buildx imagetools inspect "$NS/build:${GITHUB_REF_NAME#v}"
+          digest="$(docker buildx imagetools inspect "$NS/build:${{ needs.plan.outputs.stamp }}" --format '{{json .Manifest}}' | jq -r .digest)"
+          ref="$NS/build:${{ needs.plan.outputs.stamp }}@$digest"
+          [[ "$GITHUB_REF_TYPE" == tag ]] && ref="$NS/build:${GITHUB_REF_NAME#v}@$digest"
+          echo "build image: $ref"
+          echo "Build image: \`$ref\`" >> "$GITHUB_STEP_SUMMARY"

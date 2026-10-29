@@ -25,6 +25,9 @@ Requires tacplus.yaml to be present — the language is read from it.
 Supported languages and tools:
   rust    Kani (bounded model checking) — looks for #[kani::proof] harnesses
   java    JBMC (bounded model checking) — looks for Proof.java with CProver harnesses
+  go      skipped, by design: Go's tooling is too weak for formal verification;
+          the generated Go is the same logic as the verified Rust and Java, and
+          it is fuzzed and tested
 
 Examples:
   cd gateway && tacplus verify    # Verify Rust code (language from tacplus.yaml)
@@ -53,6 +56,12 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	switch language {
 	case "rust", "java":
 		// OK — these have verification tools
+	case "go":
+		// Not formally verified, by design (tacplus-dev/roadmap:
+		// decisions/tacplus-images-2026-10-27.md): reported, not refused, so a
+		// pipeline runs verify for every language.
+		fmt.Fprintln(cmd.OutOrStdout(), "verify: go: skipped (Go is not formally verified by design; Rust (Kani) and Java (JBMC) cover the same generated logic, and Go is fuzzed and tested)")
+		return nil
 	default:
 		return fmt.Errorf("no verification tool for language %q (supported: rust, java)", language)
 	}

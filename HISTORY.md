@@ -9,3 +9,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-10-28 looper release v2.5.0 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.5.0)
 - 2026-10-28 looper issue diskstore archive: stable member id across restarts (#143, c4d585e3)
 - 2026-10-28 looper issue diskstore archive: retention of old segments and checkpoints (#144, cc67e297)
+- 2026-10-29 looper issue Retire the linked claim from the generated namespace backstop (#171, c83f4dc1)

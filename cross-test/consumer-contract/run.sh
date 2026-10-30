@@ -794,7 +794,7 @@ require (
 	github.com/soheilhy/cmux v0.1.5
 	go.uber.org/zap v1.27.1
 	golang.org/x/crypto v0.47.0
-	golang.org/x/net v0.49.0
+	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.19.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
 	google.golang.org/grpc v1.83.2

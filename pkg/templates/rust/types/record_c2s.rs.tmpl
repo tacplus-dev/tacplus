@@ -25,6 +25,11 @@
 //! the check behind the server's own pin, and if it ever fires it means the pin,
 //! the store, or this generator is broken.
 //!
+//! On a plane hosted by a tenant-owned record store the reads go to the
+//! caller's own tenant's instance: the tid of its namespace claim, the same
+//! tenant the namespace pin holds the rows to (#207). A caller of no tenant has
+//! no instance to read from and is refused.
+//!
 //! The data path is the ALREADY-GENERATED typed reader
 //! (`s2sm/record_readers.rs`), not a second client. Its Create/List/Delete
 //! handle lifecycle releases the handle on both the success and the failure
@@ -63,6 +68,20 @@ impl {{.StructName}} {
         Self { sm }
     }
 }
+{{- if .Routed}}
+
+/// The tenant whose record store instance a read goes to: the tid of the
+/// caller's namespace claim (`/tenants/<tid>` or below), never a
+/// client-supplied value.
+fn record_c2s_tenant(method: &str, namespace: &str) -> Result<String, tonic::Status> {
+    servicemanager::tenant_route::tenant_of_caller_namespace(namespace).ok_or_else(|| {
+        tonic::Status::permission_denied(format!(
+            "{}: the caller's namespace belongs to no tenant, and the record store is one instance per tenant",
+            method
+        ))
+    })
+}
+{{- end}}
 
 #[async_trait]
 impl {{.TraitPath}}::{{.TraitName}} for {{.StructName}} {
@@ -94,6 +113,9 @@ impl {{.TraitPath}}::{{.TraitName}} for {{.StructName}} {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .ok_or_else(|| tonic::Status::unauthenticated("{{.GetMethodName}} requires an authenticated caller"))?;
+{{- if $.Routed}}
+        let __tenant = record_c2s_tenant("{{.GetMethodName}}", &__namespace)?;
+{{- end}}
 
         let filter = {{.FilterType}} {
             {{.KeyField}}: Some(req.{{.KeyField}}),
@@ -105,7 +127,7 @@ impl {{.TraitPath}}::{{.TraitName}} for {{.StructName}} {
         // not something to page through.
         let (items, _, _) = sm
             .{{.ReaderFn}}()
-            .list(Some(filter), 1, String::new())
+            .list({{if $.Routed}}&__tenant, {{end}}Some(filter), 1, String::new())
             .await?;
         Ok({{.GetResp}} { items, ..Default::default() })
     }
@@ -136,6 +158,9 @@ impl {{.TraitPath}}::{{.TraitName}} for {{.StructName}} {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .ok_or_else(|| tonic::Status::unauthenticated("{{.ListMethodNam}} requires an authenticated caller"))?;
+{{- if $.Routed}}
+        let __tenant = record_c2s_tenant("{{.ListMethodNam}}", &__namespace)?;
+{{- end}}
 
         let supplied = req.filter.unwrap_or_default();
         let filter = {{.FilterType}} {
@@ -148,7 +173,7 @@ impl {{.TraitPath}}::{{.TraitName}} for {{.StructName}} {
         };
         let (items, next_page_token, total_count) = sm
             .{{.ReaderFn}}()
-            .list(Some(filter), req.page_size, req.page_token)
+            .list({{if $.Routed}}&__tenant, {{end}}Some(filter), req.page_size, req.page_token)
             .await?;
         Ok({{.ListResp}} {
             items,

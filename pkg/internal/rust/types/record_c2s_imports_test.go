@@ -19,9 +19,41 @@ import (
 // shadows both globs, where two globs naming one type make it ambiguous and the
 // crate does not compile.
 func TestRecordC2SImportsItsOwnTypesExplicitly(t *testing.T) {
-	dir := t.TempDir()
-	config := &tactype.Config{OutputDir: dir}
-	data := &recordC2SFile{
+	out := renderRecordC2S(t, vaultRecordC2S())
+	want := "use crate::types::services::vault::{ GetVaultRowRequest, GetVaultRowResponse, GetVaultRowPageRequest, GetVaultRowPageResponse };"
+	if !strings.Contains(out, want) {
+		t.Fatalf("record_c2s.rs must import its own request/response types by name:\nwant %s\ngot:\n%s", want, out)
+	}
+}
+
+// Issue #207: on a plane hosted by a tenant-owned record store the generated
+// handler reads from its caller's own tenant's instance, the tid of the
+// caller's namespace claim, and refuses a caller of no tenant.
+func TestRecordC2SRoutedReadsTheCallersTenant(t *testing.T) {
+	data := vaultRecordC2S()
+	data.Routed = true
+	out := renderRecordC2S(t, data)
+	for _, want := range []string{
+		"fn record_c2s_tenant(method: &str, namespace: &str) -> Result<String, tonic::Status> {",
+		"servicemanager::tenant_route::tenant_of_caller_namespace(namespace).ok_or_else(|| {",
+		"tonic::Status::permission_denied(format!(",
+		"{}: the caller's namespace belongs to no tenant, and the record store is one instance per tenant",
+		`let __tenant = record_c2s_tenant("GetVaultRow", &__namespace)?;`,
+		`let __tenant = record_c2s_tenant("GetVaultRowPage", &__namespace)?;`,
+		".list(&__tenant, Some(filter), 1, String::new())",
+		".list(&__tenant, Some(filter), req.page_size, req.page_token)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("routed record_c2s.rs missing %q:\n%s", want, out)
+		}
+	}
+	if plain := renderRecordC2S(t, vaultRecordC2S()); strings.Contains(plain, "record_c2s_tenant") || strings.Contains(plain, "__tenant") {
+		t.Errorf("an unrouted plane reads no tenant:\n%s", plain)
+	}
+}
+
+func vaultRecordC2S() *recordC2SFile {
+	return &recordC2SFile{
 		StructName: "VaultRecordsGeneratedHandler", TraitName: "VaultRecordsHandler", ServiceName: "VaultRecords",
 		TraitPath: "crate::s2sm::records", TypesPath: "crate::types::services::vault", QueryPath: "crate::types::vservices::query",
 		Methods: []recordC2SMethod{{
@@ -29,8 +61,15 @@ func TestRecordC2SImportsItsOwnTypesExplicitly(t *testing.T) {
 			GetReq: "GetVaultRowRequest", GetResp: "GetVaultRowResponse",
 			ListReq: "GetVaultRowPageRequest", ListResp: "GetVaultRowPageResponse",
 			FilterType: "VaultRowFilter", KeyField: "row_id", KeyIsString: true,
+			GetMethodName: "GetVaultRow", ListMethodNam: "GetVaultRowPage",
 		}},
 	}
+}
+
+func renderRecordC2S(t *testing.T, data *recordC2SFile) string {
+	t.Helper()
+	dir := t.TempDir()
+	config := &tactype.Config{OutputDir: dir}
 	if err := generateRecordC2SPlane(config, data); err != nil {
 		t.Fatalf("generateRecordC2SPlane: %v", err)
 	}
@@ -41,8 +80,5 @@ func TestRecordC2SImportsItsOwnTypesExplicitly(t *testing.T) {
 		}
 		return nil
 	})
-	want := "use crate::types::services::vault::{ GetVaultRowRequest, GetVaultRowResponse, GetVaultRowPageRequest, GetVaultRowPageResponse };"
-	if !strings.Contains(string(out), want) {
-		t.Fatalf("record_c2s.rs must import its own request/response types by name:\nwant %s\ngot:\n%s", want, out)
-	}
+	return string(out)
 }

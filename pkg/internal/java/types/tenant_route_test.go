@@ -347,3 +347,43 @@ func TestJavaW2SAndRestClientsRefuseBadRouteField(t *testing.T) {
 		t.Fatalf("a platform REST method reads no route field:\n%s", got)
 	}
 }
+
+// The record plane on a tenant-owned record store is routed by tenant (#207),
+// so the writer's ServiceManager pools the store per tenant. The fixture tree
+// is read as written, BEFORE the plane is injected: the trait alone says the
+// plane is routed. A platform target in the same tree stays one pool.
+func TestJavaTenantRoutedTargetsRecordPlane(t *testing.T) {
+	if _, err := exec.LookPath("protoc"); err != nil {
+		t.Skip("protoc not available")
+	}
+	dir := t.TempDir()
+	root := filepath.Join("..", "..", "..", "..")
+	copies := map[string]string{
+		"sys/spec.proto": filepath.Join(root, "pkg", "proto", "sys", "spec.proto"),
+	}
+	for _, rel := range []string{"services/tstratum.proto", "services/tmessaging.proto", "services/eventbus.proto", "vservices/tquery.proto"} {
+		copies[rel] = filepath.Join(root, "cross-test", "proto-tenantrecord", rel)
+	}
+	for rel, src := range copies {
+		raw, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatalf("read %s: %v", src, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, rel), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	routed, err := javaTenantRoutedTargets(&tactype.Config{}, []ServiceInfo{
+		{ProtoFile: "vservices/tquery.proto", PackageName: "tquery", ServiceName: "TenantRecordMap", ParentDir: "vservices", HostLabel: "tstratum"},
+		{ProtoFile: "services/eventbus.proto", PackageName: "eventbus", ServiceName: "EventBusBroker", ParentDir: "services"},
+	}, dir)
+	if err != nil {
+		t.Fatalf("javaTenantRoutedTargets: %v", err)
+	}
+	if !routed["tstratum"] || routed["eventbus"] || len(routed) != 1 {
+		t.Fatalf("want only the record plane on tenant-owned tstratum pooled per tenant, routed = %v", routed)
+	}
+}

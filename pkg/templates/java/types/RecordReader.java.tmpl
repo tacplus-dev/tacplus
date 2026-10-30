@@ -31,6 +31,13 @@ import java.util.Optional;
  * server-side query, and the leak happens on exactly the path a hand-rolled
  * version forgets: when the List between them FAILS. Every method here releases
  * the handle on both the success and the failure path.
+{{- if .Routed}}
+ *
+ * <p>The plane is hosted by a tenant-owned record store, one instance per
+ * tenant, so every method takes the target tenant's tid first and sets the
+ * plane's route field, which picks the instance, on every call it makes: the
+ * Create, the List and the Delete alike (#207).
+{{- end}}
  */
 public final class {{.ReaderClass}} {
     private final {{.ClientFqn}} client;
@@ -54,12 +61,15 @@ public final class {{.ReaderClass}} {
      * to a deleted-but-not-yet-purged row asks for it explicitly.
 {{- end}}
      */
-    public Optional<{{.RecordFqn}}> get({{.KeyJavaType}} key{{if .HasDeletedFlag}}, boolean includeDeleted{{end}}) {
+    public Optional<{{.RecordFqn}}> get({{if .Routed}}String tenant, {{end}}{{.KeyJavaType}} key{{if .HasDeletedFlag}}, boolean includeDeleted{{end}}) {
         // The direct read: no result set, so nothing a connection failover
         // between two calls could lose.
         {{.PlaneOuter}}.{{.RowsReqType}}.Builder req = {{.PlaneOuter}}.{{.RowsReqType}}.newBuilder()
                 .setFilter({{.PlaneOuter}}.{{.FilterType}}.newBuilder().{{.KeySetter}}(key).build())
                 .setLimit(1);
+{{- if .Routed}}
+        req.{{.RouteSetter}}(tenant);
+{{- end}}
 {{- if .HasDeletedFlag}}
         req.setIncludeDeleted(includeDeleted);
 {{- end}}
@@ -80,8 +90,8 @@ public final class {{.ReaderClass}} {
      * snapshot is a living-query concern the plane models with {@code Watch<T>},
      * and this method deliberately does not pretend to offer it.
      */
-    public {{.PageResultFqn}}<{{.RecordFqn}}> list({{.PlaneOuter}}.{{.FilterType}} filter, int pageSize, String pageToken{{if .HasDeletedFlag}}, boolean includeDeleted{{end}}) {
-        return queryPage(filter, pageSize, pageToken == null ? "" : pageToken{{if .HasDeletedFlag}}, includeDeleted{{end}});
+    public {{.PageResultFqn}}<{{.RecordFqn}}> list({{if .Routed}}String tenant, {{end}}{{.PlaneOuter}}.{{.FilterType}} filter, int pageSize, String pageToken{{if .HasDeletedFlag}}, boolean includeDeleted{{end}}) {
+        return queryPage({{if .Routed}}tenant, {{end}}filter, pageSize, pageToken == null ? "" : pageToken{{if .HasDeletedFlag}}, includeDeleted{{end}});
     }
 
     /**
@@ -94,11 +104,14 @@ public final class {{.ReaderClass}} {
      * cleanup would be strictly worse. If the List failed, that exception is the
      * one thrown; the cleanup's failure would only mask it.
      */
-    private {{.PageResultFqn}}<{{.RecordFqn}}> queryPage({{.PlaneOuter}}.{{.FilterType}} filter, int pageSize, String pageToken{{if .HasDeletedFlag}}, boolean includeDeleted{{end}}) {
+    private {{.PageResultFqn}}<{{.RecordFqn}}> queryPage({{if .Routed}}String tenant, {{end}}{{.PlaneOuter}}.{{.FilterType}} filter, int pageSize, String pageToken{{if .HasDeletedFlag}}, boolean includeDeleted{{end}}) {
         {{.PlaneOuter}}.{{.OpenReqType}}.Builder open = {{.PlaneOuter}}.{{.OpenReqType}}.newBuilder().setStanding(false);
         if (filter != null) {
             open.setFilter(filter);
         }
+{{- if .Routed}}
+        open.{{.RouteSetter}}(tenant);
+{{- end}}
 {{- if .HasDeletedFlag}}
         open.setIncludeDeleted(includeDeleted);
 {{- end}}
@@ -108,10 +121,13 @@ public final class {{.ReaderClass}} {
                     .setQueryId(handle.getQueryId())
                     .setPageSize(pageSize)
                     .setPageToken(pageToken)
+{{- if .Routed}}
+                    .{{.RouteSetter}}(tenant)
+{{- end}}
                     .build());
         } finally {
             try {
-                client.{{.DeleteFn}}({{.PlaneOuter}}.QueryHandle.newBuilder().setQueryId(handle.getQueryId()).build());
+                client.{{.DeleteFn}}({{.PlaneOuter}}.QueryHandle.newBuilder().setQueryId(handle.getQueryId()){{if .Routed}}.{{.RouteSetter}}(tenant){{end}}.build());
             } catch (RuntimeException ignored) {
                 // Best-effort release; see above.
             }

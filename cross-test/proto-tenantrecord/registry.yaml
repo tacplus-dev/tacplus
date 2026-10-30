@@ -1,0 +1,14 @@
+# Managed by tacplus — do not edit IDs manually.
+services:
+    - name: tmessaging
+      id: 1
+    - name: eventbus
+      id: 2
+    - name: tstratum
+      id: 3
+vservices:
+    - name: tquery
+      field_id: 31
+registry:
+    imports:
+        java: com.example.proto.interfaces

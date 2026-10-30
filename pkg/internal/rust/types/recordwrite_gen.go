@@ -33,6 +33,13 @@ import (
 //     in the same order; and the Apply is acked at the highest level any of its
 //     ops involves.
 //
+//   - On a tenant-owned record store the plane is routed by target_tenant
+//     (#207), and every entry's tenant field must lie in that tenant
+//     (/tenants/<tid> or below), whoever the caller is, a /system peer
+//     included: PERMISSION_DENIED otherwise. check_route_tenant holds the route
+//     field to the instance's own tenant, so an instance only ever stores its
+//     own tenant's entries, and a call misrouted to it leaves nothing behind.
+//
 // Rust renders no (spec.store_namespace) predicate pin on the plane, so the
 // tenant pin here reads the caller the way the (spec.store_namespace) egress
 // backstop does (rustNamespaceResolve): the namespace and linked claims of the
@@ -101,6 +108,41 @@ func rustRecordTenantPin(base string, path []string, label, indent string) strin
 `, indent, label, parent, field, strings.Join(path, "."))
 }
 
+// rustRecordRoutePin renders the routed half of the tenant guard (#207): on a
+// plane routed by tenant, the entry's tenant field must be in the tenant the
+// call is routed to. route is an expression naming the routed request's route
+// field (a String); the route check has already refused one that is not a
+// tid. An unset tenant field is refused too: an entry on a tenant's instance
+// belongs to that tenant, and the caller says so. Runs after the tenant pin,
+// so a tenant caller's stamped tenant is the one held to the route.
+func rustRecordRoutePin(base string, path []string, route, label, indent string) string {
+	if len(path) == 0 || route == "" {
+		return ""
+	}
+	last := rustRecordField(path[len(path)-1])
+	get := base + "." + last + ".as_str()"
+	if len(path) > 1 {
+		get = fmt.Sprintf("%s.map(|__p| __p.%s.as_str()).unwrap_or(\"\")", rustRecordParentExpr(base, path, "as_ref"), last)
+	}
+	return fmt.Sprintf(`%[1]s{
+%[1]s    let (__rt, __v): (&str, &str) = (%[2]s.as_str(), %[3]s);
+%[1]s    let __home = format!("/tenants/{}", __rt);
+%[1]s    if __v != __home && !__v.starts_with(&format!("{}/", __home)) {
+%[1]s        return Err(tonic::Status::permission_denied(format!("%[4]s: %[5]s is not in tenant {}, the tenant this call is routed to; a tenant's instance holds that tenant's entries only", __rt)));
+%[1]s    }
+%[1]s}
+`, indent, route, get, label, strings.Join(path, "."))
+}
+
+// rustRecordRoute returns the expression of a routed method's route field on
+// the request binding req, "" for a method not routed by tenant.
+func rustRecordRoute(method *parser.MethodInfo, req string) string {
+	if method.RouteField == nil {
+		return ""
+	}
+	return req + "." + rustRequestFieldIdent(method.RouteField.Field)
+}
+
 // rustRecordCallerNs renders the caller's verified tenant and linked tenants,
 // read once for every tenant pin of the method.
 func rustRecordCallerNs() string {
@@ -127,6 +169,7 @@ func rustRecordEntryPre(method *parser.MethodInfo) string {
 	if len(e.NamespacePath) > 0 {
 		b.WriteString(rustRecordCallerNs())
 		b.WriteString(rustRecordTenantPin("req", e.NamespacePath, method.Name, "        "))
+		b.WriteString(rustRecordRoutePin("req", e.NamespacePath, rustRecordRoute(method, "req"), method.Name, "        "))
 	}
 	if e.Durability != spec.Durability_DURABILITY_UNSPECIFIED {
 		fmt.Fprintf(&b, `
@@ -209,6 +252,13 @@ func rustRecordApplyPre(method *parser.MethodInfo, svc *parser.ServiceInfo, serv
 	first := ops[0]
 	opType := resolveOneRustTypeQualified(simpleTypeName(first.OpType), first.OpType, servicePackage, crossPkgTypes)
 	enumPath := rustOneofEnumPath(opType, simpleTypeName(first.OpType), first.OneofName)
+	// The route field is read once, before the ops are borrowed mutably.
+	route := ""
+	routeBind := ""
+	if r := rustRecordRoute(method, "req"); r != "" {
+		route = "__record_route"
+		routeBind = "        let __record_route: String = " + r + ".clone();\n"
+	}
 	var cases strings.Builder
 	hasTenant := false
 	for _, op := range ops {
@@ -225,17 +275,18 @@ func rustRecordApplyPre(method *parser.MethodInfo, svc *parser.ServiceInfo, serv
 			hasTenant = true
 		}
 		fmt.Fprintf(&cases, `                Some(%[1]s::%[2]s(__c)) => {
-%[3]s%[4]s                    (__RecordLockKey { rec: %[5]q, %[6]s }, %[7]d, __c.durability)
+%[3]s%[4]s%[8]s                    (__RecordLockKey { rec: %[5]q, %[6]s }, %[7]d, __c.durability)
                 }
 `, enumPath, toProstTypeName(strutil.ToCamelCase(op.CaseField)), auth,
 			rustRecordTenantPin("__c", op.NamespacePath, "Apply ("+op.CaseField+")", "                    "),
-			op.Record, rustRecordKeyExpr(op), int32(op.Durability))
+			op.Record, rustRecordKeyExpr(op), int32(op.Durability),
+			rustRecordRoutePin("__c", op.NamespacePath, route, "Apply ("+op.CaseField+")", "                    "))
 	}
 	callerNs := ""
 	if hasTenant {
 		callerNs = rustRecordCallerNs()
 	}
-	return callerNs + fmt.Sprintf(`
+	return callerNs + routeBind + fmt.Sprintf(`
         // Apply (#163): authorize, tenant-pin, floor and lock-order every op before the store is
         // asked. The canonical lock order is (record type full name, then key),
         // strictly ascending: every store takes the same entry locks in the same

@@ -118,3 +118,32 @@ func TestJavaServiceManagerExposesRecordReaderAccessor(t *testing.T) {
 		t.Fatalf("ServiceManager must expose the record reader accessor")
 	}
 }
+
+// On a plane routed by tenant (#207) every method takes the target tenant
+// first and sets the route field on every request it sends: the Rows read, and
+// the Create, List and Delete of a query alike.
+func TestJavaRecordReaderRoutedSetsTheTenantOnEveryCall(t *testing.T) {
+	e := javaMessageReaderEntry()
+	e.Routed, e.RouteSetter = true, "setTargetTenant"
+	out := renderJavaReader(t, e)
+	for _, want := range []string{
+		"get(String tenant, String key)",
+		"req.setTargetTenant(tenant);",
+		"list(String tenant, com.example.types.vservices.query.Query.MessageFilter filter, int pageSize, String pageToken)",
+		"return queryPage(tenant, filter,",
+		"queryPage(String tenant, com.example.types.vservices.query.Query.MessageFilter filter,",
+		"open.setTargetTenant(tenant);",
+		".setPageToken(pageToken)\n                    .setTargetTenant(tenant)\n                    .build());",
+		"QueryHandle.newBuilder().setQueryId(handle.getQueryId()).setTargetTenant(tenant).build()",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("routed reader missing %q:\n%s", want, out)
+		}
+	}
+	if n := strings.Count(out, "setTargetTenant(tenant)"); n != 4 {
+		t.Errorf("want the route field set on all 4 requests, got %d:\n%s", n, out)
+	}
+	if strings.Contains(renderJavaReader(t, javaMessageReaderEntry()), "tenant") {
+		t.Errorf("an unrouted reader takes no tenant")
+	}
+}

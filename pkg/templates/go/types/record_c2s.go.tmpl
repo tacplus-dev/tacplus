@@ -25,6 +25,11 @@
 // check behind the server's own pin, and if it ever fires it means the pin,
 // the store, or this generator is broken.
 //
+// On a plane hosted by a tenant-owned record store the reads go to the
+// caller's own tenant's instance: the tid of its namespace claim, the same
+// tenant the namespace pin holds the rows to (#207). A caller of no tenant has
+// no instance to read from and is refused.
+//
 // The data path is the ALREADY-GENERATED typed reader (record_readers.go), not
 // a second client. Its Create/List/Delete handle lifecycle releases the handle
 // on both the success and the failure path, so this surface adds no failure
@@ -36,6 +41,9 @@ import (
 	"context"
 
 	"{{.ModuleBasePath}}/chassis/servicemanager"
+{{- if .Routed}}
+	"{{.ModuleBasePath}}/chassis/serviceconnection"
+{{- end}}
 	{{.SelfAlias}} "{{.SelfImport}}"
 	{{.PlaneAlias}} "{{.PlaneImport}}"
 	"google.golang.org/grpc/codes"
@@ -66,6 +74,18 @@ func recordC2SPins(method string, caller *servicemanager.Caller) (namespace, pri
 	}
 	return namespace, principal, nil
 }
+{{- if .Routed}}
+
+// recordC2STenant is the tenant whose record store instance a read goes to:
+// the tid of the caller's namespace claim, never a client-supplied value.
+func recordC2STenant(method, namespace string) (string, error) {
+	tenant, ok := serviceconnection.NamespaceTenant(namespace)
+	if !ok {
+		return "", status.Error(codes.PermissionDenied, method+": the caller's namespace belongs to no tenant, and the record store is one instance per tenant")
+	}
+	return tenant, nil
+}
+{{- end}}
 {{range .Methods}}
 // {{.GetMethodName}} is the point read of one {{.RecordFQN}} row by its record key.
 //
@@ -78,6 +98,12 @@ func (g *{{$.StructName}}) {{.GetMethodName}}(ctx context.Context, caller *servi
 	if err != nil {
 		return nil, err
 	}
+{{- if $.Routed}}
+	tenant, err := recordC2STenant("{{.GetMethodName}}", namespace)
+	if err != nil {
+		return nil, err
+	}
+{{- end}}
 	key := req.Get{{.KeyGoField}}()
 	filter := &{{$.PlaneAlias}}.{{.FilterType}}{
 		{{.KeyGoField}}: &key,
@@ -86,7 +112,7 @@ func (g *{{$.StructName}}) {{.GetMethodName}}(ctx context.Context, caller *servi
 	}
 	// page size 1: a key is unique, so a second row would be a store bug and
 	// not something to page through.
-	items, _, _, err := g.sm.{{.ReaderAccessor}}().List(ctx, filter, 1, "")
+	items, _, _, err := g.sm.{{.ReaderAccessor}}().List(ctx, {{if $.Routed}}tenant, {{end}}filter, 1, "")
 	if err != nil {
 		return nil, err
 	}
@@ -104,6 +130,12 @@ func (g *{{$.StructName}}) {{.ListMethodName}}(ctx context.Context, caller *serv
 	if err != nil {
 		return nil, err
 	}
+{{- if $.Routed}}
+	tenant, err := recordC2STenant("{{.ListMethodName}}", namespace)
+	if err != nil {
+		return nil, err
+	}
+{{- end}}
 	supplied := req.GetFilter()
 	if supplied == nil {
 		supplied = &{{$.SelfAlias}}.{{.RecordName}}ReadFilter{}
@@ -115,7 +147,7 @@ func (g *{{$.StructName}}) {{.ListMethodName}}(ctx context.Context, caller *serv
 		{{.PrincipalPinGoField}}: &principal,
 		{{.NamespacePinGoField}}: &namespace,
 	}
-	items, next, total, err := g.sm.{{.ReaderAccessor}}().List(ctx, filter, req.GetPageSize(), req.GetPageToken())
+	items, next, total, err := g.sm.{{.ReaderAccessor}}().List(ctx, {{if $.Routed}}tenant, {{end}}filter, req.GetPageSize(), req.GetPageToken())
 	if err != nil {
 		return nil, err
 	}

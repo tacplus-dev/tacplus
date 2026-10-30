@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The tenant-record fixture's WRITER (#207): a platform (/system) service that
+// writes its tenant-scoped records into each tenant's own record store through
+// the plane's write surface, reads them back through its generated typed
+// reader, and re-exposes them to its users through the generated client-facing
+// reader. Built as tmessaging, it is the client side: the plane's S2S client
+// must be pooled per tenant and every call routed by target_tenant, never to
+// whichever tenant's store answers first.
+
+syntax = "proto3";
+
+package tmessaging;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "tmessaging"};
+
+option (spec.record_read) = {
+  record: "tmessaging.TMessage"
+  c2s: {scope: C2S_SCOPE_PRINCIPAL exposure: RPC_EXPOSURE_EXTERNAL}
+};
+
+// TMessage belongs to a tenant (namespace) and to a principal inside it.
+message TMessage {
+  option (spec.record) = {
+    key: "message_id"
+    owner: "owner"
+    s2s: {auth_services: ["*"]}
+    s2s_read: {auth_services: ["tmessaging"]}
+    c2s_read: {auth_services: ["tmessaging"]}
+    s2s_write: {auth_services: ["tmessaging"]}
+  };
+
+  string message_id = 1 [(spec.assert_required) = true];
+  string namespace = 2 [
+    (spec.assert_required) = true,
+    (spec.query_field) = {op: QUERY_OP_EQ},
+    (spec.store_namespace) = true
+  ];
+  string owner = 3 [
+    (spec.assert_required) = true,
+    (spec.query_field) = {op: QUERY_OP_EQ},
+    (spec.store_principal) = true
+  ];
+  string body = 4;
+}
+
+message TMessagingPing {}
+
+service TMessaging {
+  option (spec.service_s2s) = {};
+
+  rpc Ping(TMessagingPing) returns (TMessagingPing) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}

@@ -14,7 +14,7 @@ import (
 // THE RECORD WRITE SURFACE GUARDS (#163), Java. Twins: Go recordwrite_gen.go,
 // Rust recordwrite_gen.go. All three render the same checks, in the same
 // order, with the same codes and messages; the Go file's header states the
-// contract.
+// contract, the route pin of a plane routed by tenant (#207) included.
 //
 // Java's protobuf messages are immutable, so where Go stamps a field in place
 // the wrapper here rebuilds the message and reassigns it: `request` for the
@@ -93,6 +93,36 @@ func javaRecordTenantPin(base string, path []string, label, indent string) strin
 `, indent, label, presence, get, base, javaRecordSetter(base, path, "__recordCallerNs"), strings.Join(path, "."))
 }
 
+// javaRecordRoutePin renders the routed half of the tenant guard (#207): on a
+// plane routed by tenant, the entry's tenant field must be in the tenant the
+// call is routed to (/tenants/<tid> or below it), whoever the caller is, a
+// /system peer included. route is the routed request's route field getter
+// expression; the route check has already refused one that is not a tid. An
+// unset tenant field is refused too: an entry on a tenant's instance belongs
+// to that tenant, and the caller says so.
+func javaRecordRoutePin(base string, path []string, route, label, indent string) string {
+	if len(path) == 0 || route == "" {
+		return ""
+	}
+	return fmt.Sprintf(`%[1]s{
+%[1]s    final String __rt = %[2]s;
+%[1]s    final String __v = %[3]s;
+%[1]s    if (!__v.equals("/tenants/" + __rt) && !__v.startsWith("/tenants/" + __rt + "/")) {
+%[1]s        throw new ProtoException(ProtoException.PERMISSION_DENIED, "%[4]s: %[5]s is not in tenant " + __rt + ", the tenant this call is routed to; a tenant's instance holds that tenant's entries only");
+%[1]s    }
+%[1]s}
+`, indent, route, javaRecordGetter(base, path), label, strings.Join(path, "."))
+}
+
+// javaRecordRoute returns the getter expression of a routed method's route
+// field on request, "" for a method not routed by tenant.
+func javaRecordRoute(method *parser.MethodInfo) string {
+	if method.RouteField == nil {
+		return ""
+	}
+	return "request.get" + javaPascalField(method.RouteField.Field) + "()"
+}
+
 // javaRecordEntryPre renders the pre-handler half of the guard for a write
 // surface RPC addressing one record type: its tenant pin, then — on a write —
 // refuse below the floor and stamp the floor when unset.
@@ -105,6 +135,7 @@ func javaRecordEntryPre(method *parser.MethodInfo, indent string) string {
 	if len(e.NamespacePath) > 0 {
 		b.WriteString(javaRecordCallerNs(indent))
 		b.WriteString(javaRecordTenantPin("request", e.NamespacePath, method.Name, indent))
+		b.WriteString(javaRecordRoutePin("request", e.NamespacePath, javaRecordRoute(method), method.Name, indent))
 	}
 	if e.Durability != spec.Durability_DURABILITY_UNSPECIFIED {
 		fmt.Fprintf(&b, `
@@ -168,6 +199,7 @@ func javaRecordApplyPre(method *parser.MethodInfo, serviceName, servicePackage, 
 		if len(op.NamespacePath) > 0 {
 			hasTenant = true
 			pin = javaRecordTenantPin("__c", op.NamespacePath, "Apply ("+op.CaseField+")", in) +
+				javaRecordRoutePin("__c", op.NamespacePath, javaRecordRoute(method), "Apply ("+op.CaseField+")", in) +
 				fmt.Sprintf("%s__op = __op.toBuilder().set%s(__c).build();\n", in, p)
 		}
 		fmt.Fprintf(&cases, `%[1]s        case %[2]s: {

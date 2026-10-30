@@ -47,6 +47,7 @@ type goRecordC2SFile struct {
 	SelfImport     string
 	PlaneAlias     string // "egressquery_pb"
 	PlaneImport    string
+	Routed         bool // the plane is routed by tenant (#207)
 	Methods        []goRecordC2SMethod
 }
 
@@ -74,6 +75,7 @@ func collectGoRecordC2SPlane(config *tactype.Config, protoDir string) (*goRecord
 		SelfImport:     config.ModuleBasePath + "/types/" + firstPathSegment(plane.SelfRelPath) + "/" + plane.SelfPackage,
 		PlaneAlias:     plane.TraitPackage + "_pb",
 		PlaneImport:    config.ModuleBasePath + "/types/" + firstPathSegment(plane.TraitRelPath) + "/" + plane.TraitPackage,
+		Routed:         plane.Routed,
 	}
 	for _, m := range plane.Methods {
 		var criteria []string

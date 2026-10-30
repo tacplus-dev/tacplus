@@ -340,6 +340,13 @@ the entry's new `revision` and the `durability` level the write was acked at.
   `Delete<T>` and `Watch<T>Changes`. Unset is stamped, anything else refused; a
   `/system` peer keeps the fleet-wide reach. The store answers a key-addressed request
   only for an entry in the named tenant.
+- **A tenant-owned store** (#207). A record store declaring `(spec.service).tenant_owned`
+  is one instance per tenant, so its plane is routed like any surface of a tenant-owned
+  service: every request of both halves carries `target_tenant` (field 15), every rpc
+  declares it as its route field, and the generated clients pool the store per tenant.
+  The instance refuses a call routed to another tenant, and an entry whose tenant field
+  is not in `/tenants/<target_tenant>` or below, whoever the caller is, before the
+  handler, so a misrouted write never reaches the store or its redo.
 - **The redo contract** (D5). The record store's durability is the redo service (the log
   is the database), through the frozen sys contract `sys/redo.proto`, `redolog.Redo`:
   defined by tacplus, hosted by the redo service at label `redo`, called by the store

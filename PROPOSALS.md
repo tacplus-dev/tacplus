@@ -41,6 +41,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   offers in every language (`generate_rsa_8192_key`); TLS stays on rustls's ring provider. A service now compiles
   both. Moving rustls to its aws-lc-rs provider (`rustls/aws_lc_rs`, the rustls default) would leave one; it changes
   the TLS stack of every generated Rust service, so it is a minor's change, with the TLS parity gates.
+- **govulncheck of the generated Go modules in the gates** (2026-10-30, #199): the harnesses pin the generated
+  chassis's Go dependencies by hand, and `scripts/go_dependency_floor_test.go` holds only the floors already named
+  (golang.org/x/net). A new advisory on any other module the chassis reaches (grpc, x/crypto, gin) is found by the
+  nightly scan after it lands. Running `govulncheck ./...` in `target/cross-test/current-generation/go` at the end
+  of current-generation (govulncheck in the build image, its database fetched at run time) would fail the gate on
+  the first reachable one; the harness pins could then move to one shared list instead of eleven copies.
 - **cargo audit of a generated sample, nightly** (2026-10-29, #186): current-generation now refuses the two crates of
   #186 by name in the generated lockfile, but a new advisory on any other crate the chassis locks is found only by
   each service's own scan. A nightly `cargo audit` of a generated sample (cargo-audit in the build image, the

@@ -6,7 +6,10 @@ name: Images
 # rebuilt only when its definition changed, on demand, or (base) weekly, and
 # pushed to ghcr.io for linux/amd64 and linux/arm64. The tacplus image is
 # rebuilt on every push to main (main-<sha>) and every release tag
-# (X.Y.Z, X.Y, X, latest).
+# (X.Y.Z, and X.Y, X, latest when it is the newest release each covers:
+# scripts/images-tags.sh). Releases are cut on several lines at once, so a run
+# for an older line never moves base:latest or build:latest, and it builds with
+# its own line's build image, not whichever image another run last pushed (#160).
 
 on:
   push:
@@ -41,6 +44,7 @@ jobs:
       base: ${{ steps.plan.outputs.base }}
       build: ${{ steps.plan.outputs.build }}
       stamp: ${{ steps.plan.outputs.stamp }}
+      build_image: ${{ steps.plan.outputs.build_image }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,8 +58,19 @@ jobs:
           read -r base build <<<"$plan"
           # First publish: build everything when the build image does not exist yet.
           if ! docker manifest inspect "$NS/build:latest" >/dev/null 2>&1; then base=true; build=true; fi
-          { echo "base=$base"; echo "build=$build"; echo "stamp=$(date -u +%Y%m%d)-${GITHUB_SHA::7}"; } >> "$GITHUB_OUTPUT"
-          echo "base=$base build=$build"
+          stamp="$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          # The build image this run compiles tacplus with: the one it builds, else
+          # its release line's (build:X.Y), else (main, or a line's first release)
+          # build:latest.
+          image="$NS/build:latest"
+          if [[ $build == true ]]; then
+            image="$NS/build:$stamp"
+          elif [[ "$GITHUB_REF_TYPE" == tag && "${GITHUB_REF_NAME#v}" =~ ^([0-9]+)\.([0-9]+)\. ]]; then
+            line="$NS/build:${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+            if docker manifest inspect "$line" >/dev/null 2>&1; then image="$line"; fi
+          fi
+          { echo "base=$base"; echo "build=$build"; echo "stamp=$stamp"; echo "build_image=$image"; } >> "$GITHUB_OUTPUT"
+          echo "base=$base build=$build build_image=$image"
         env:
           DOCKER_CONFIG: /tmp/docker-anon
 
@@ -67,6 +82,20 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tags
+        id: tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          list="$NS/base:${{ needs.plan.outputs.stamp }}"
+          if [[ "$GITHUB_REF_TYPE" != tag ]] || grep -qw latest <<<"$(scripts/images-tags.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA")"; then
+            list+=",$NS/base:latest"
+          fi
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+          echo "$list"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -80,9 +109,7 @@ jobs:
           file: images/base.Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.NS }}/base:${{ needs.plan.outputs.stamp }}
-            ${{ env.NS }}/base:latest
+          tags: ${{ steps.tags.outputs.list }}
           cache-from: type=registry,ref=${{ env.NS }}/base:buildcache
           cache-to: type=registry,ref=${{ env.NS }}/base:buildcache,mode=max
 
@@ -118,7 +145,7 @@ jobs:
           file: images/build.Dockerfile
           platforms: linux/${{ matrix.arch }}
           build-args: |
-            BASE_IMAGE=${{ env.NS }}/base:latest
+            BASE_IMAGE=${{ env.NS }}/base:${{ needs.base.result == 'success' && needs.plan.outputs.stamp || 'latest' }}
           outputs: type=image,name=${{ env.NS }}/build,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }}
           cache-to: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }},mode=max
@@ -142,6 +169,9 @@ jobs:
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: /tmp/digests
@@ -158,9 +188,13 @@ jobs:
         run: |
           set -euo pipefail
           refs=(); for d in *; do refs+=("$NS/build@sha256:$d"); done
-          docker buildx imagetools create \
-            -t "$NS/build:${{ needs.plan.outputs.stamp }}" -t "$NS/build:latest" "${refs[@]}"
-          docker buildx imagetools inspect "$NS/build:latest"
+          tags=(-t "$NS/build:${{ needs.plan.outputs.stamp }}")
+          git -C "$GITHUB_WORKSPACE" fetch --force --tags origin
+          if [[ "$GITHUB_REF_TYPE" != tag ]] || grep -qw latest <<<"$(cd "$GITHUB_WORKSPACE" && scripts/images-tags.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA")"; then
+            tags+=(-t "$NS/build:latest")
+          fi
+          docker buildx imagetools create "${tags[@]}" "${refs[@]}"
+          docker buildx imagetools inspect "$NS/build:${{ needs.plan.outputs.stamp }}"
 
   tacplus:
     name: tacplus (${{ matrix.arch }})
@@ -200,7 +234,7 @@ jobs:
           file: images/tacplus.Dockerfile
           platforms: linux/${{ matrix.arch }}
           build-args: |
-            BUILD_IMAGE=${{ env.NS }}/build:latest
+            BUILD_IMAGE=${{ needs.plan.outputs.build_image }}
             VERSION=${{ steps.v.outputs.version }}
             VCS_REF=${{ github.sha }}
           outputs: type=image,name=${{ env.NS }}/tacplus,push-by-digest=true,name-canonical=true,push=true
@@ -224,6 +258,9 @@ jobs:
     if: always() && needs.tacplus.result == 'success'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: /tmp/digests
@@ -240,12 +277,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF_TYPE}" == tag && "${GITHUB_REF_NAME}" == v* ]]; then
-            v="${GITHUB_REF_NAME#v}"; IFS=. read -r MA MI _ <<<"$v"
-            echo "list=$v $MA.$MI $MA latest" >> "$GITHUB_OUTPUT"
-          else
-            echo "list=main-${GITHUB_SHA::7} main" >> "$GITHUB_OUTPUT"
-          fi
+          # Fetched again here, not in plan: parallel tags on one line (v2.3.1 and
+          # v2.3.2) must see each other before either moves a floating tag.
+          git fetch --force --tags origin
+          list="$(scripts/images-tags.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA")"
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+          echo "$list"
       - name: Create the multi-arch tags
         working-directory: /tmp/digests
         run: |
@@ -253,15 +290,17 @@ jobs:
           refs=(); for d in *; do refs+=("$NS/tacplus@sha256:$d"); done
           tags=(); for t in ${{ steps.tags.outputs.list }}; do tags+=(-t "$NS/tacplus:$t"); done
           docker buildx imagetools create "${tags[@]}" "${refs[@]}"
-          docker buildx imagetools inspect "$NS/tacplus:${{ github.ref_type == 'tag' && 'latest' || 'main' }}"
+          set -- ${{ steps.tags.outputs.list }}
+          docker buildx imagetools inspect "$NS/tacplus:$1"
       # The build image follows the release line too, so consumers (the looper
-      # image, CI jobs) pin build:X.Y and float on the patch like everything
-      # else; a dated build tag is a patch pin and the policy forbids those.
-      # The build image this release was produced with is build:latest.
+      # image, CI jobs, release.yml) pin build:X.Y and float on the patch like
+      # everything else; a dated build tag is a patch pin and the policy forbids
+      # those. It takes the same floating tags as the tacplus image, from the
+      # build image this release was produced with (plan's build_image).
       - name: Build image tags from the version policy
         if: github.ref_type == 'tag'
         run: |
           set -euo pipefail
-          v="${GITHUB_REF_NAME#v}"; IFS=. read -r MA MI _ <<<"$v"
-          docker buildx imagetools create -t "$NS/build:$v" -t "$NS/build:$MA.$MI" -t "$NS/build:$MA" "$NS/build:latest"
-          docker buildx imagetools inspect "$NS/build:$MA.$MI"
+          tags=(); for t in ${{ steps.tags.outputs.list }}; do [[ $t == latest ]] || tags+=(-t "$NS/build:$t"); done
+          docker buildx imagetools create "${tags[@]}" "${{ needs.plan.outputs.build_image }}"
+          docker buildx imagetools inspect "$NS/build:${GITHUB_REF_NAME#v}"

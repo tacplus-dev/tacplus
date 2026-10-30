@@ -4,8 +4,10 @@
 package main
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -47,6 +49,35 @@ func TestExpandSnippetsRejectsOtherForms(t *testing.T) {
 			t.Errorf("%q: expected an error", doc)
 		} else if !strings.Contains(err.Error(), "line ") {
 			t.Errorf("%q: error should name the line: %v", doc, err)
+		}
+	}
+}
+
+// There is no tacplus image to pin from 2.6 (docs/VERSIONING.md, Images): a
+// repository pins in tacplus.lock and builds in build:X.Y. The README, docs/
+// and the site must not tell anyone to pull a tacplus:X.Y image, which also
+// went stale on 2.0 while the newest line moved on (tacplus#201).
+func TestDocsPinNoTacplusImage(t *testing.T) {
+	image := regexp.MustCompile(`\btacplus:[0-9]+\.[0-9]+`)
+	for _, dir := range []string{"README.md", "README.src.md", "docs", "site/docs"} {
+		err := filepath.WalkDir(filepath.Join(repoRoot, dir), func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			for i, line := range strings.Split(string(data), "\n") {
+				if image.MatchString(line) {
+					rel, _ := filepath.Rel(repoRoot, path)
+					t.Errorf("%s:%d names a tacplus image (none from 2.6; pin with tacplus.lock and build:X.Y): %s", rel, i+1, strings.TrimSpace(line))
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 }

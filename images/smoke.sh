@@ -30,6 +30,17 @@ for t in "${gen[@]}"; do
     *) echo "not a program: $t" >&2; exit 1 ;;
   esac
 done
+# docker-buildx is built from source with dependencies bumped past advisories
+# its release has not taken yet (build.Dockerfile, buildx stage): it must
+# start, and carry each module at least at its floor.
+docker buildx version
+buildx=/usr/local/libexec/docker/cli-plugins/docker-buildx
+for floor in github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0; do
+  mod=${floor%@*} min=${floor#*@}
+  have=$(go version -m "$buildx" | awk -v m="$mod" '$1 == "dep" && $2 == m { print $3 }')
+  [[ -n "$have" && "$(printf '%s\n%s\n' "$min" "$have" | sort -V | head -n 1)" == "$min" ]] \
+    || { echo "docker-buildx carries $mod ${have:-none}, below $min" >&2; exit 1; }
+done
 python3 -c 'import grpc_tools.protoc'
 protoc --version; protoc-gen-swift --version; protoc-gen-grpc-swift-2 --version; node --version
 go version; java -version 2>&1 | head -1; cargo --version; swift --version 2>&1 | head -1; dotnet --version

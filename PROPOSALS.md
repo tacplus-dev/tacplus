@@ -4,6 +4,12 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Drop the from-source docker-buildx once a buildx release carries the fixes** (2026-10-29, #190): the build
+  image builds buildx v0.38.1 from source with moby/go-archive 0.3.3 and golang.org/x/net 0.62.0, because no buildx
+  release (master included) has taken them yet. When one does, set `BUILDX_VERSION` to it and drop the bumps (and
+  then the `buildx` stage, copying it from `docker:${DOCKER_VERSION}-cli` again); `tacplus-smoke` keeps the floors.
+  A nightly check that the image's Go binaries carry no module under a known fix (what Trivy found here) before the
+  sweep fails would make the next one a patch rather than a red run.
 - **One crypto library in the generated Rust service** (2026-10-29, #186): the chassis keys (RSA, ECDSA) are
   aws-lc-rs's, because ring cannot generate RSA keys nor sign with one over 4096 bits, both of which the chassis
   offers in every language (`generate_rsa_8192_key`); TLS stays on rustls's ring provider. A service now compiles

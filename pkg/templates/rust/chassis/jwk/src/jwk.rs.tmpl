@@ -14,12 +14,9 @@
 //! - Support for RSA, EC (P-256, P-384, P-521), and Ed25519 keys
 
 use key::error::{AuthError, Result};
-use key::keys::{KeyType, PublicKey};
+use key::keys::{EcCurve, EcPublicKey, KeyType, PublicKey, RsaPublicKey};
 use key::base64_utils;
 use ed25519_dalek::VerifyingKey;
-use p256::ecdsa::VerifyingKey as P256VerifyingKey;
-use p384::ecdsa::VerifyingKey as P384VerifyingKey;
-use rsa::RsaPublicKey;
 use serde::{Deserialize, Serialize};
 
 /// JSON Web Key (JWK) representation
@@ -116,16 +113,9 @@ impl ImmutableJwk {
         let n_bytes = base64_utils::decode_base64(n)?;
         let e_bytes = base64_utils::decode_base64(e)?;
 
-        let n_big = rsa::BigUint::from_bytes_be(&n_bytes);
-        let e_u32 = rsa::BigUint::from_bytes_be(&e_bytes)
-            .try_into()
-            .map_err(|_| AuthError::missing_invalid_data("RSA exponent too large"))?;
+        let public_key = RsaPublicKey::from_components(&n_bytes, &e_bytes)?;
 
-        let public_key = RsaPublicKey::new(n_big, e_u32)
-            .map_err(|e| AuthError::rsa(e.to_string()))?;
-
-        use rsa::traits::PublicKeyParts;
-        let key_bytes = (public_key.n().bits() + 7) / 8;
+        let key_bytes = public_key.size();
         // Key size is the FALLBACK, not an override.
         //
         // A JWK that declares its algorithm is telling us how its signatures
@@ -192,19 +182,7 @@ impl ImmutableJwk {
 
         match Self::normalize_curve_name(crv).as_str() {
             "ES256" | "P-256" => {
-                use p256::EncodedPoint;
-
-                // Construct uncompressed point (0x04 || x || y)
-                let mut point_bytes = Vec::with_capacity(1 + x_bytes.len() + y_bytes.len());
-                point_bytes.push(0x04); // Uncompressed point tag
-                point_bytes.extend_from_slice(&x_bytes);
-                point_bytes.extend_from_slice(&y_bytes);
-
-                let point = EncodedPoint::from_bytes(&point_bytes)
-                    .map_err(|_| AuthError::ecdsa("invalid P-256 point".to_string()))?;
-
-                let verifying_key = P256VerifyingKey::from_encoded_point(&point)
-                    .map_err(|e| AuthError::ecdsa(format!("invalid P-256 key: {}", e)))?;
+                let verifying_key = EcPublicKey::from_coordinates(EcCurve::P256, &x_bytes, &y_bytes)?;
 
                 Ok(Self {
                     jwk: Jwk {
@@ -216,18 +194,7 @@ impl ImmutableJwk {
                 })
             }
             "ES384" | "P-384" => {
-                use p384::EncodedPoint;
-
-                let mut point_bytes = Vec::with_capacity(1 + x_bytes.len() + y_bytes.len());
-                point_bytes.push(0x04);
-                point_bytes.extend_from_slice(&x_bytes);
-                point_bytes.extend_from_slice(&y_bytes);
-
-                let point = EncodedPoint::from_bytes(&point_bytes)
-                    .map_err(|_| AuthError::ecdsa("invalid P-384 point".to_string()))?;
-
-                let verifying_key = P384VerifyingKey::from_encoded_point(&point)
-                    .map_err(|e| AuthError::ecdsa(format!("invalid P-384 key: {}", e)))?;
+                let verifying_key = EcPublicKey::from_coordinates(EcCurve::P384, &x_bytes, &y_bytes)?;
 
                 Ok(Self {
                     jwk: Jwk {
@@ -339,10 +306,8 @@ pub fn key_to_jwk(key: &key::keys::ImmutablePublicKey) -> Result<Jwk> {
 
     match key.public_key() {
         PublicKey::Rsa(rsa_key) => {
-            use rsa::traits::PublicKeyParts;
-
-            let n = base64_utils::encode_base64_url(&rsa_key.n().to_bytes_be());
-            let e = base64_utils::encode_base64_url(&rsa_key.e().to_bytes_be());
+            let n = base64_utils::encode_base64_url(rsa_key.n());
+            let e = base64_utils::encode_base64_url(rsa_key.e());
 
             Ok(Jwk {
                 kty: "RSA".to_string(),
@@ -359,13 +324,8 @@ pub fn key_to_jwk(key: &key::keys::ImmutablePublicKey) -> Result<Jwk> {
             })
         }
         PublicKey::EcP256(ec_key) => {
-            let point = ec_key.to_encoded_point(false);
-            let x = base64_utils::encode_base64_url(point.x().ok_or_else(|| {
-                AuthError::ecdsa("missing x coordinate".to_string())
-            })?);
-            let y = base64_utils::encode_base64_url(point.y().ok_or_else(|| {
-                AuthError::ecdsa("missing y coordinate".to_string())
-            })?);
+            let x = base64_utils::encode_base64_url(ec_key.x());
+            let y = base64_utils::encode_base64_url(ec_key.y());
 
             Ok(Jwk {
                 kty: "EC".to_string(),
@@ -382,13 +342,8 @@ pub fn key_to_jwk(key: &key::keys::ImmutablePublicKey) -> Result<Jwk> {
             })
         }
         PublicKey::EcP384(ec_key) => {
-            let point = ec_key.to_encoded_point(false);
-            let x = base64_utils::encode_base64_url(point.x().ok_or_else(|| {
-                AuthError::ecdsa("missing x coordinate".to_string())
-            })?);
-            let y = base64_utils::encode_base64_url(point.y().ok_or_else(|| {
-                AuthError::ecdsa("missing y coordinate".to_string())
-            })?);
+            let x = base64_utils::encode_base64_url(ec_key.x());
+            let y = base64_utils::encode_base64_url(ec_key.y());
 
             Ok(Jwk {
                 kty: "EC".to_string(),

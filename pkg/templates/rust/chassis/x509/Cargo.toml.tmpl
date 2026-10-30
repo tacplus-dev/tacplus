@@ -11,19 +11,19 @@ key = { path = "../key" }
 # splitting). spiffe has no deps back into x509, so this is not a cycle.
 spiffe = { path = "../spiffe" }
 base64 = "0.22"
-# "builder" pulls in the CertificateBuilder; "hazmat" enables Profile::Manual,
-# which is required to control the exact cert shape (subject/issuer/KeyUsage/
-# extensions) for parity with the Go/Java signers. Without hazmat, x509-cert
-# injects its own opinionated extension set and derives KeyUsage from the
-# Profile rather than from the request.
-x509-cert = { version = "0.2", features = ["builder", "hazmat"] }
+# "builder" pulls in the CertificateBuilder. The signer gives it its own
+# profile (x509.rs ManualProfile), which adds none of x509-cert's opinionated
+# extensions, so the exact cert shape (subject/issuer/KeyUsage/extensions)
+# follows the request, for parity with the Go/Java signers. 0.3 is the digest
+# 0.11 line: 0.2's builder locked block-buffer 0.10 (GHSA-qwgh-2vcv-g2f7, #215).
+x509-cert = { version = "0.3", features = ["builder"] }
 # der/spki/const-oid are re-exported by x509-cert but named directly here for
 # the signer (SubjectPublicKeyInfoOwned, BitString, SerialNumber, custom OID).
-der = "0.7"
-spki = "0.7"
-const-oid = "0.9"
-ed25519-dalek = { version = "2", features = ["pkcs8"] }
-signature = "2"
+der = "0.8"
+spki = "0.8"
+const-oid = "0.10"
+ed25519-dalek = { version = "3", features = ["pkcs8"] }
+signature = "3"
 rand = "0.8"
 pem = "3"
 serde = { version = "1", features = ["derive"] }

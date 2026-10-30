@@ -23,8 +23,8 @@ regex = { workspace = true }
 base64 = { workspace = true }
 # Back the generated (spec.redact) egress-release seam: tacplus_pseudonymize is a
 # keyed HMAC-SHA256, hex-encoded. Emitted only for record types with redact fields.
-hmac = "0.12"
-sha2 = "0.10"
+hmac = "0.13"
+sha2 = "0.11"
 hex = "0.4"
 {{- if .HasServiceWrappers}}
 tonic = { workspace = true }

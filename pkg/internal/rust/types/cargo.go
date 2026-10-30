@@ -325,7 +325,7 @@ func requiredWorkspaceDependencyRefs(rustRootDir string, hasServiceWrappers, has
 		add("async-trait", "axum", "base64", "regex")
 	}
 	if hasCertStreams {
-		add("rustls-pemfile", "x509-cert")
+		add("rustls-pemfile")
 		if hasServiceWrappers {
 			add("tokio-rustls")
 		}

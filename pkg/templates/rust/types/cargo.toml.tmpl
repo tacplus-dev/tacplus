@@ -65,7 +65,7 @@ rustls-pemfile = { workspace = true }
 tokio-rustls = { workspace = true }
 {{- end}}
 {{- if eq .AutoTlsKeyType "ecdsa"}}
-p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+aws-lc-rs = "1"
 {{- else}}
 ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8"] }
 {{- end}}

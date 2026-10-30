@@ -93,10 +93,8 @@ use crate::types::sys::key::key as key_pb;
 use crate::types::sys::x509::x509 as x509_pb;
 use x509_cert::der::{Decode, Encode};
 {{- if eq .AutoTlsKeyType "ecdsa"}}
-use p256::ecdsa::SigningKey;
-use p256::pkcs8::EncodePrivateKey;
-use p256::elliptic_curve::sec1::ToEncodedPoint;
-use p256::pkcs8::EncodePublicKey;
+use aws_lc_rs::encoding::AsDer;
+use aws_lc_rs::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_ASN1_SIGNING};
 {{- else}}
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::pkcs8::EncodePrivateKey;
@@ -3245,20 +3243,32 @@ async fn run_smb_cert_stream(
 
 fn generate_key_and_proto() -> Result<(Vec<u8>, Vec<u8>, key_pb::PublicKey), Box<dyn std::error::Error>> {
 {{- if eq .AutoTlsKeyType "ecdsa"}}
-    let signing_key = SigningKey::random(&mut OsRng);
-    let private_key_der = signing_key.to_pkcs8_der()?.as_bytes().to_vec();
-    let pub_spki_der = signing_key.verifying_key().to_public_key_der()?;
+    // aws-lc-rs, as the key chassis: never the RustCrypto elliptic-curve 0.13
+    // stack (crypto-bigint 0.5, RUSTSEC-2026-0387).
+    let signing_key = EcdsaKeyPair::generate(&ECDSA_P256_SHA256_ASN1_SIGNING)
+        .map_err(|_| "P-256 key generation failed")?;
+    let private_key_der = signing_key
+        .to_pkcs8v1()
+        .map_err(|_| "P-256 private key encoding failed")?
+        .as_ref()
+        .to_vec();
+    let pub_spki_der = signing_key
+        .public_key()
+        .as_der()
+        .map_err(|_| "P-256 public key encoding failed")?
+        .as_ref()
+        .to_vec();
 {{- else}}
     let signing_key = SigningKey::generate(&mut OsRng);
     let private_key_der = signing_key.to_pkcs8_der()?.as_bytes().to_vec();
     let verifying_key = signing_key.verifying_key();
-    let pub_spki_der = verifying_key.to_public_key_der()?;
+    let pub_spki_der = verifying_key.to_public_key_der()?.as_bytes().to_vec();
 {{- end}}
 
     // PEM-encode the public key.
     let pub_pem = format!(
         "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----\n",
-        base64::engine::general_purpose::STANDARD.encode(pub_spki_der.as_bytes())
+        base64::engine::general_purpose::STANDARD.encode(&pub_spki_der)
     );
     let pub_base64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(pub_pem.as_bytes());
 
@@ -3266,7 +3276,7 @@ fn generate_key_and_proto() -> Result<(Vec<u8>, Vec<u8>, key_pb::PublicKey), Box
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs() as i64;
 
-    Ok((private_key_der, pub_spki_der.as_bytes().to_vec(), key_pb::PublicKey {
+    Ok((private_key_der, pub_spki_der, key_pb::PublicKey {
         id: format!("auto-tls-{}", now),
         base64: pub_base64,
         created: now,

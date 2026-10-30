@@ -3289,7 +3289,11 @@ fn generate_key_and_proto() -> Result<(Vec<u8>, Vec<u8>, key_pb::PublicKey), Box
         .as_ref()
         .to_vec();
 {{- else}}
-    let signing_key = SigningKey::generate(&mut OsRng);
+    // ed25519-dalek 3 generates only from a rand_core 0.10 RNG: the seed comes
+    // from the OS RNG, as generate() takes it.
+    let mut seed = ed25519_dalek::SecretKey::default();
+    rand::RngCore::fill_bytes(&mut OsRng, &mut seed);
+    let signing_key = SigningKey::from_bytes(&seed);
     let private_key_der = signing_key.to_pkcs8_der()?.as_bytes().to_vec();
     let verifying_key = signing_key.verifying_key();
     let pub_spki_der = verifying_key.to_public_key_der()?.as_bytes().to_vec();
@@ -3323,7 +3327,7 @@ fn cert_leaf_matches_public_key(
     }
     let leaf_der = cert_leaf_der(leaf)?;
     let cert = x509_cert::Certificate::from_der(&leaf_der)?;
-    let cert_public_key_der = cert.tbs_certificate.subject_public_key_info.to_der()?;
+    let cert_public_key_der = cert.tbs_certificate().subject_public_key_info().to_der()?;
     if cert_public_key_der.as_slice() != expected_der {
         return Err("leaf certificate public key does not match CSR public key".into());
     }

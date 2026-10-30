@@ -1168,6 +1168,20 @@ service Crew {
   too, and never passes a client's value through. A tool's own route field is
   left out of its schema, a tool call that names it anyway is refused, and the
   generated dispatch fills it from the session tenant (Go, Java, Rust).
+- **The record plane of a tenant-owned record store** is routed the same way.
+  When the trait's `host` declares `tenant_owned`, every request of both halves
+  of the generated plane (the query lifecycle, the write surface, `Apply`, and
+  the shared `QueryHandle`, so a handle names its tenant) carries
+  `string target_tenant = 15`, and every rpc declares it as its route field.
+  The generated clients pool the store per tenant. The typed record readers
+  take the tenant as their first argument. The client-facing reader
+  (`(spec.record_read).c2s`) reads from its caller's own tenant, the tid of the
+  namespace claim. The store's instance refuses, whoever the caller is
+  (`/system` included), a call routed to another tenant and an entry whose
+  `(spec.store_namespace)` value is not in `/tenants/<target_tenant>` or below
+  (`PERMISSION_DENIED`). A record whose key or tenant field is itself named
+  `target_tenant` fails generation on such a host. A shared record store's
+  plane carries no route field (#207).
 - **Platform services** (no `tenant_owned`) declare no route field, and
   `RPC_FLAG_ANY_TENANT` is refused there too. They are never addressed by
   tenant, and their generated code is unchanged.
@@ -1627,7 +1641,10 @@ by a string or integer `key`:
   namespace is a tenant is held to its own tenant on every
   request — the row's field on a write that carries one, a tenant field beside the key on
   `Get<T>`, `Delete<T>` and `Watch<T>Changes`: unset is stamped, anything else refused.
-  A `/system` peer keeps the fleet-wide reach.
+  A `/system` peer keeps the fleet-wide reach. On a tenant-owned record store,
+  every request also names its `target_tenant` (the instance it is routed to),
+  and the entry's tenant field must be in that tenant, whoever the caller is: see
+  "Tenant-owned services are routed by a declared field".
 - **The bus.** A record is still an event in 2.5. A store that takes its rows only
   through this surface declares `(spec.record_store) = {no_bus_ingest: true}` and
   derives no EventBus subscription.

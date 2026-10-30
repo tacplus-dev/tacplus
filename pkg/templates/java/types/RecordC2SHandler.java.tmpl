@@ -7,6 +7,9 @@ package {{.PackageBase}}.{{.SmPrefix}};
 
 import {{.ChassisBase}}.servicemanager.Caller;
 import {{.ProtoExceptionFqn}};
+{{- if .Routed}}
+import {{.ChassisBase}}.serviceconnection.RouteTenant;
+{{- end}}
 
 /**
  * The generated handler behind {@code {{.ServiceName}}}: the client-facing
@@ -30,6 +33,13 @@ import {{.ProtoExceptionFqn}};
  * <p>The {@code (spec.store_namespace)} egress filter in the generated wrapper
  * still runs behind all of this, abort included. It is not the client's gate;
  * it is the check behind the server's own pin.
+{{- if .Routed}}
+ *
+ * <p>The plane is hosted by a tenant-owned record store, so the reads go to
+ * the caller's own tenant's instance: the tid of its namespace claim, the same
+ * tenant the namespace pin holds the rows to (#207). A caller of no tenant has
+ * no instance to read from and is refused.
+{{- end}}
  *
  * <p>The data path is the ALREADY-GENERATED typed reader, not a second client.
  * Its Create/List/Delete handle lifecycle releases the handle on both the
@@ -61,6 +71,21 @@ public final class {{.ClassName}} implements {{.HandlerIfaceFqn}} {
         }
         return principal;
     }
+{{- if .Routed}}
+
+    /**
+     * The tenant whose record store instance a read goes to: the tid of the
+     * caller's namespace claim, never a client-supplied value.
+     */
+    private static String requireTenant(String method, String namespace) throws ProtoException {
+        String tenant = RouteTenant.tenantOfCaller(namespace);
+        if (tenant.isEmpty()) {
+            throw new ProtoException(ProtoException.PERMISSION_DENIED,
+                    method + ": the caller's namespace belongs to no tenant, and the record store is one instance per tenant");
+        }
+        return tenant;
+    }
+{{- end}}
 {{range .Methods}}
     /**
      * Point read of one {{.RecordFQN}} row by its record key.
@@ -74,6 +99,9 @@ public final class {{.ClassName}} implements {{.HandlerIfaceFqn}} {
     public {{$.SelfOuter}}.{{.GetResp}} {{.GetMethodName}}(Caller caller, {{$.SelfOuter}}.{{.GetReq}} request) throws ProtoException {
         String namespace = requireNamespace("{{.GetRpcName}}", caller);
         String principal = requirePrincipal("{{.GetRpcName}}", caller);
+{{- if $.Routed}}
+        String tenant = requireTenant("{{.GetRpcName}}", namespace);
+{{- end}}
         {{$.PlaneOuter}}.{{.FilterType}} filter = {{$.PlaneOuter}}.{{.FilterType}}.newBuilder()
                 .{{.KeySetter}}(request.{{.KeyGetter}}())
                 .{{.PrincipalPinSetter}}(principal)
@@ -81,7 +109,7 @@ public final class {{.ClassName}} implements {{.HandlerIfaceFqn}} {
                 .build();
         // page size 1: a key is unique, so a second row would be a store bug and
         // not something to page through.
-        {{$.PageResultFqn}}<{{.RecordFqn}}> page = sm.{{.ReaderAccessor}}().list(filter, 1, "");
+        {{$.PageResultFqn}}<{{.RecordFqn}}> page = sm.{{.ReaderAccessor}}().list({{if $.Routed}}tenant, {{end}}filter, 1, "");
         return {{$.SelfOuter}}.{{.GetResp}}.newBuilder().addAllItems(page.items).build();
     }
 
@@ -97,6 +125,9 @@ public final class {{.ClassName}} implements {{.HandlerIfaceFqn}} {
     public {{$.SelfOuter}}.{{.ListResp}} {{.ListMethodName}}(Caller caller, {{$.SelfOuter}}.{{.ListReq}} request) throws ProtoException {
         String namespace = requireNamespace("{{.ListRpcName}}", caller);
         String principal = requirePrincipal("{{.ListRpcName}}", caller);
+{{- if $.Routed}}
+        String tenant = requireTenant("{{.ListRpcName}}", namespace);
+{{- end}}
         {{$.SelfOuter}}.{{.RecordName}}ReadFilter supplied = request.getFilter();
         {{$.PlaneOuter}}.{{.FilterType}}.Builder filter = {{$.PlaneOuter}}.{{.FilterType}}.newBuilder();
 {{- range .Criteria}}
@@ -105,7 +136,7 @@ public final class {{.ClassName}} implements {{.HandlerIfaceFqn}} {
         }
 {{- end}}
         filter.{{.PrincipalPinSetter}}(principal).{{.NamespacePinSetter}}(namespace);
-        {{$.PageResultFqn}}<{{.RecordFqn}}> page = sm.{{.ReaderAccessor}}().list(filter.build(), request.getPageSize(), request.getPageToken());
+        {{$.PageResultFqn}}<{{.RecordFqn}}> page = sm.{{.ReaderAccessor}}().list({{if $.Routed}}tenant, {{end}}filter.build(), request.getPageSize(), request.getPageToken());
         return {{$.SelfOuter}}.{{.ListResp}}.newBuilder()
                 .addAllItems(page.items)
                 .setNextPageToken(page.nextPageToken == null ? "" : page.nextPageToken)

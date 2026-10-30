@@ -28,6 +28,7 @@ TENANTSLICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-tenantslice"
 EPOCHLOAD_PROTO_SRC="$ROOT_DIR/cross-test/proto-epochload"
 TENANTROUTE_PROTO_SRC="$ROOT_DIR/cross-test/proto-tenantroute"
 REDO_PROTO_SRC="$ROOT_DIR/cross-test/proto-redo"
+TENANTRECORD_PROTO_SRC="$ROOT_DIR/cross-test/proto-tenantrecord"
 WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/current-generation}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
@@ -328,6 +329,30 @@ output-dir: "tacplus"
 EOF
 }
 
+# The tenant-record fixture (#207), built as tstratum (the TENANT-OWNED record
+# store, which hosts the record plane by the trait's label and checks every
+# call's route and every entry's tenant) or as tmessaging (the platform writer,
+# whose plane client must be pooled per tenant and route every call by
+# target_tenant).
+write_tenantrecord_config() {
+  local dir="$1"
+  local language="$2"
+  local self="$3"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.$self"
+src: "$TENANTRECORD_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+  if [[ "$self" == "tstratum" ]]; then
+    echo 'records: "all"' >> "$dir/tacplus.yaml"
+  else
+    echo 'depends: ["eventbus", "tstratum"]' >> "$dir/tacplus.yaml"
+  fi
+}
+
 # The same fixture built as registrar, the OWNER of the service_state shape:
 # RegistrarState.tenant_configs holds each tenant's TenantConfig (issue #130);
 # or, with owner "tenancy", as the OWNER of the grpc_config shape: its Config's
@@ -566,6 +591,19 @@ run_java_generated_self_tests() {
     }
     grep -q '^RecordWriteGuardTest: all checks passed$' "$test_log" \
       || die "record-egress host fixture (java): RecordWriteGuardTest did not report its checks passed"
+  fi
+  # The tenant-record HOST fixture's route self-test (#207), copied in by
+  # install_tenant_record_route_selftest, so it is present exactly in that build.
+  local tr_test tr_class
+  tr_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/TenantRecordRouteTest.java' -print -quit)"
+  if [[ -n "$tr_test" ]]; then
+    tr_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$tr_test").$(basename "$tr_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$tr_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q '^TenantRecordRouteTest: all checks passed$' "$test_log" \
+      || die "tenant-record host fixture (java): TenantRecordRouteTest did not report its checks passed"
   fi
   # The record-egress fixture's user-and-listed-service self-test, copied in by
   # install_user_and_listed_service_selftest (which dies if it cannot), so it is
@@ -823,6 +861,16 @@ run_rust_spiffe_self_tests() {
         return 1
       }
     assert_clean_log "$log_dir/rust-record-write-guard-test.log"
+  fi
+
+  # The tenant-record HOST fixture's route self-test (#207), copied in by
+  # install_tenant_record_route_selftest.
+  if [[ -f "$output/tests/tenant_record_route_test.rs" ]]; then
+    (cd "$output" && cargo test --test tenant_record_route_test) >"$log_dir/rust-tenant-record-route-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-tenant-record-route-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-tenant-record-route-test.log"
   fi
 
   # The quorum-write fixture's hosted store service + roll scheduler self-test,
@@ -1926,6 +1974,68 @@ install_record_write_guard_selftest() {
   esac
 }
 
+# install_tenant_record_route_selftest drops the tenant-record fixture's (#207)
+# self-test into the generated HOST output, next to the generated
+# TenantRecordMap wrapper it drives in-process: a call misrouted to tenant
+# bbbbbbbb's instance (routed to another tenant, or carrying another tenant's
+# entry) is refused, whoever the caller is, and never reaches the handler that
+# stands for the store and its redo. It first asserts the route pin was
+# generated at all, because a wrapper without it compiles.
+install_tenant_record_route_selftest() {
+  local output="$1"
+  local language="$2"
+  local s2s=""
+
+  case "$language" in
+    go) s2s="$(find "$output" -type f -path '*/servers/vservices/tquery/tenant_record_map.go' -print -quit)" ;;
+    java) s2s="$(find "$output" -type f -path '*/servers/vservices/tquery/TenantRecordMap.java' -print -quit)" ;;
+    rust) s2s="$(find "$output" -type f -path '*/servers/vservices/tquery/tenant_record_map.rs' -print -quit)" ;;
+  esac
+  [[ -n "$s2s" ]] || die "tenant-record fixture ($language): generated TenantRecordMap wrapper not found under $output"
+  grep -qF "the tenant this call is routed to; a tenant's instance holds that tenant's entries only" "$s2s" \
+    || die "tenant-record fixture ($language): the generated TenantRecordMap carries no route pin"
+
+  case "$language" in
+    go)
+      cp "$SELFTESTS_SRC/go/tenant_record_route_test.go" "$(dirname "$s2s")/"
+      ;;
+    java)
+      local dest
+      dest="$(dirname "$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/AuthorizerBehaviorTest.java' -print -quit)")"
+      [[ -d "$dest" ]] || die "tenant-record fixture (java): generated chassis/grpcserver package not found under $output"
+      cp "$SELFTESTS_SRC/java/TenantRecordRouteTest.java" "$dest/"
+      ;;
+    rust)
+      mkdir -p "$output/tests"
+      cp "$SELFTESTS_SRC/rust/tenant_record_route_test.rs" "$output/tests/"
+      ;;
+  esac
+}
+
+# assert_tenantrecord_client_routed checks that the tenant-record fixture's
+# WRITER (tmessaging) pools the record store per tenant: before #207 its plane
+# client was one pool over every tenant's instance and sent each call to
+# whichever answered first.
+assert_tenantrecord_client_routed() {
+  local output="$1"
+  local language="$2"
+
+  case "$language" in
+    go)
+      grep -rqF 'NewTenantDynamic("tstratum"' "$output/s2sm" \
+        || die "tenant-record fixture (go): tmessaging's record store client is not pooled per tenant"
+      ;;
+    java)
+      grep -rqF 'TenantConnections("tstratum"' "$output/src/main/java" \
+        || die "tenant-record fixture (java): tmessaging's record store client is not pooled per tenant"
+      ;;
+    rust)
+      grep -rqF 'let tstratum_sc = Arc::new(ServiceConnection::new_tenant_routed(' "$output/s2sm" \
+        || die "tenant-record fixture (rust): tmessaging's record store client is not pooled per tenant"
+      ;;
+  esac
+}
+
 assert_recordegress_output() {
   local output="$1"
   local language="$2"
@@ -2873,6 +2983,58 @@ REDO_PY
       echo "==> Compiling $language redo-contract fixture ($self)"
       compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
       echo "    PASS $language redo-contract ($self)"
+    done
+  done
+fi
+
+# tenant-record fixture (issue #207): the record plane on a TENANT-OWNED record
+# store is routed by tenant like every other surface of a tenant-owned service.
+# Both builds carry target_tenant as the plane's route field in registry.json;
+# the writer's plane client is pooled per tenant; the store's wrapper refuses a
+# misrouted call (its self-test, run by compile_current_output).
+if [[ -d "$TENANTRECORD_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    for self in tstratum tmessaging; do
+      dir="$WORK_ROOT/tenantrecord-$self-$language"
+      log="$WORK_ROOT/tenantrecord-$self-$language.log"
+      rm -rf "$dir"
+      write_tenantrecord_config "$dir" "$language" "$self"
+
+      echo "==> Generating $language tenant-record fixture ($self)"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTRECORD_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language tenant-record generation failed ($self); log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      python3 - "$output_root/registry.json" <<'TENANTRECORD_PY' || die "tenant-record fixture ($language, $self): registry.json does not route the record plane by tenant"
+import json, sys
+want = {"/tquery.TenantRecordMap/PutTMessage", "/tquery.TenantRecordMap/Apply", "/tquery.TenantRecordMap/CreateTMessageQuery",
+        "/tquery.TenantRecordMap/WatchTMessageChanges", "/tquery.TenantRecordQuery/ListTMessage"}
+seen = set()
+def walk(o):
+    if isinstance(o, dict):
+        if o.get("grpc_path") in want and "input_type" in o:  # an rpc entry, not one of its surfaces
+            if o.get("route_field") != "target_tenant":
+                sys.exit("%s: route_field=%r" % (o["grpc_path"], o.get("route_field")))
+            seen.add(o["grpc_path"])
+        for v in o.values():
+            walk(v)
+    elif isinstance(o, list):
+        for v in o:
+            walk(v)
+walk(json.load(open(sys.argv[1])))
+if seen != want:
+    sys.exit("missing rpcs: %s" % sorted(want - seen))
+TENANTRECORD_PY
+      if [[ "$self" == "tstratum" ]]; then
+        install_tenant_record_route_selftest "$output_root" "$language"
+      else
+        assert_tenantrecord_client_routed "$output_root" "$language"
+      fi
+      echo "==> Compiling $language tenant-record fixture ($self)"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
+      echo "    PASS $language tenant-record ($self)"
     done
   done
 fi

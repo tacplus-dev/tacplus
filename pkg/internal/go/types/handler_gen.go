@@ -571,6 +571,12 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 				smbAuthorityServiceID = id
 			}
 			tenantOwned := parser.TenantOwnedServices(dp)
+			// The record plane is injected into its trait's package after
+			// this tree was read, so its services are not here to ask; the
+			// trait says where it lives and whether it is routed (#207).
+			for pkg := range parser.TenantRoutedRecordPlanePackages(dp) {
+				routedPkgs[pkg] = true
+			}
 			for relPath, fd := range dp.GetAllFiles() {
 				if fd.Package != "" {
 					pkgToDirMap[fd.Package] = filepath.Dir(relPath)
@@ -578,7 +584,10 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 				}
 				for si := range fd.Services {
 					svc := &fd.Services[si]
-					if svc.Synthesized || svc.IsC2D || !(svc.IsS2S || svc.IsC2S) {
+					// The record plane is the one synthesized surface a
+					// client reaches by label, and on a tenant-owned record
+					// store it is routed by tenant like any other (#207).
+					if (svc.Synthesized && svc.SynthesizedKind != parser.SynthesizedKindRecordMap) || svc.IsC2D || !(svc.IsS2S || svc.IsC2S) {
 						continue
 					}
 					if parser.IsTenantRouted(fd, svc, tenantOwned) {

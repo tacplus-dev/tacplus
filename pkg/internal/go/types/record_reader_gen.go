@@ -48,6 +48,10 @@ type goRecordReaderEntry struct {
 	PullReqType    string // e.g. "PullMessageRequest"
 	HasKeyFilter   bool
 	HasDeletedFlag bool
+	// Routed: the plane is routed by tenant (#207); every method takes the
+	// target tenant and sets RouteGoField on each request it sends.
+	Routed       bool
+	RouteGoField string // Go struct field of the route field, e.g. "TargetTenant"
 }
 
 // goRecordReaderImport is one import line of record_readers.go.
@@ -100,6 +104,8 @@ func collectGoRecordReaders(config *tactype.Config, protoDir string) ([]goRecord
 			PullReqType:    "Pull" + r.RecordName + "Request",
 			HasKeyFilter:   r.HasKeyFilter,
 			HasDeletedFlag: r.HasDeletedFlag,
+			Routed:         r.Routed,
+			RouteGoField:   toGoFieldName(r.RouteField),
 		})
 	}
 	return entries, nil

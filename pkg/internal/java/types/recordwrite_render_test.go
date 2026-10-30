@@ -258,3 +258,67 @@ func TestJavaRecordWrite_UnstampedMethodUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// routed is m declared route_field "target_tenant", as the record-map injector
+// declares every rpc of a plane on a tenant-owned record store (#207).
+func routed(m *parser.MethodInfo) *parser.MethodInfo {
+	m.RouteField = &parser.RouteFieldDescriptor{Field: "target_tenant", JSONName: "targetTenant", Number: 15}
+	return m
+}
+
+const javaRoutePinTail = `, the tenant this call is routed to; a tenant's instance holds that tenant's entries only");`
+
+// On a plane routed by tenant (#207): the route check, then the tenant pin,
+// then the route pin (the entry must lie in the tenant the call is routed to,
+// whoever the caller is: the pin is outside the /system branch), then the floor.
+func TestJavaRecordWrite_RoutePin(t *testing.T) {
+	got := renderRecordWrite(routed(putVaultRowMethod()), false)
+	mustInOrder(t, got,
+		`checkRouteTenant("target_tenant", request.getTargetTenant());`,
+		`if (!__recordCallerNs.startsWith("/system")) {`,
+		`"PutVaultRow: item.namespace names a tenant other than the caller's; the tenant boundary is not the caller's to choose");`,
+		`final String __rt = request.getTargetTenant();`,
+		`final String __v = request.getItem().getNamespace();`,
+		`if (!__v.equals("/tenants/" + __rt) && !__v.startsWith("/tenants/" + __rt + "/")) {`,
+		`throw new ProtoException(ProtoException.PERMISSION_DENIED, "PutVaultRow: item.namespace is not in tenant " + __rt + "`+javaRoutePinTail,
+		`if (request.getDurabilityValue() != 0 && request.getDurabilityValue() < 3) {`,
+		`response = handler.putVaultRow(caller, request);`,
+	)
+	// The route pin is not inside the /system exemption: its block opens after
+	// the tenant pin's closes.
+	pin := strings.Index(got, `final String __rt = `)
+	sys := strings.Index(got, `if (!__recordCallerNs.startsWith("/system")) {`)
+	if strings.Count(got[sys:pin], "{") != strings.Count(got[sys:pin], "}")+1 {
+		t.Fatalf("the route pin must hold every caller, a /system peer included\n%s", got)
+	}
+
+	if g := renderRecordWrite(putVaultRowMethod(), false); strings.Contains(g, "__rt") || strings.Contains(g, "the tenant this call is routed to") {
+		t.Fatalf("a plane not routed by tenant renders no route pin\n%s", g)
+	}
+}
+
+// Apply: each op's tenant field against the Apply's OWN route field, after the
+// op's tenant pin and before the op is put back; an op with no tenant field
+// has none.
+func TestJavaRecordWrite_ApplyRoutePin(t *testing.T) {
+	got := renderRecordWrite(routed(applyMethod()), false)
+	mustInOrder(t, got,
+		`checkRouteTenant("target_tenant", request.getTargetTenant());`,
+		`case INSERT_IF_ABSENT_VAULT_AUDIT_ROW: {`,
+		`"Apply (insert_if_absent_vault_audit_row): item.namespace names a tenant other than the caller's`,
+		`final String __rt = request.getTargetTenant();`,
+		`final String __v = __c.getItem().getNamespace();`,
+		`"Apply (insert_if_absent_vault_audit_row): item.namespace is not in tenant " + __rt + "`+javaRoutePinTail,
+		`__op = __op.toBuilder().setInsertIfAbsentVaultAuditRow(__c).build();`,
+		`case PUT_VAULT_ROW: {`,
+		`"Apply (put_vault_row): item.namespace is not in tenant " + __rt + "`,
+		`case DELETE_VAULT_ROW: {`,
+		`final String __v = __c.getNamespace();`,
+		`"Apply (delete_vault_row): namespace is not in tenant " + __rt + "`,
+		`case PUT_COUNTER: {`,
+		`response = handler.apply(caller, request);`,
+	)
+	if strings.Contains(got, "Apply (put_counter): ") {
+		t.Fatalf("a case with no tenant field has no route pin\n%s", got)
+	}
+}

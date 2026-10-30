@@ -25,6 +25,10 @@
 //! version forgets: when the `List` between them FAILS. Every method here
 //! releases the handle on both the success and the failure path.
 //!
+//! On a plane hosted by a tenant-owned record store every method takes the
+//! target tenant's tid first: the store is one instance per tenant, and the
+//! plane's route field, which every call carries, picks the instance (#207).
+//!
 //! Reachable only because each record named this service in its own
 //! `(spec.record).s2s_read` grant — or, for a private record, in its
 //! `(spec.record).c2s_read` disclosure grant, which is the only grant such a
@@ -76,6 +80,9 @@ impl<'a> {{.StructName}}<'a> {
 {{- end}}
     pub async fn get(
         &self,
+        {{- if .Routed}}
+        tenant: &str,
+        {{- end}}
         {{.KeyField}}: {{if .KeyIsString}}&str{{else}}{{.KeyRustType}}{{end}},
         {{- if .HasDeletedFlag}}
         include_deleted: bool,
@@ -94,6 +101,9 @@ impl<'a> {{.StructName}}<'a> {
                 limit: 1,
 {{- if .HasDeletedFlag}}
                 include_deleted,
+{{- end}}
+{{- if .Routed}}
+                {{.RouteField}}: tenant.to_string(),
 {{- end}}
                 ..Default::default()
             })
@@ -127,6 +137,9 @@ impl<'a> {{.StructName}}<'a> {
 {{- end}}
     pub async fn list(
         &self,
+        {{- if .Routed}}
+        tenant: &str,
+        {{- end}}
         filter: Option<{{.FilterType}}>,
         page_size: i32,
         page_token: impl Into<String>,
@@ -134,7 +147,7 @@ impl<'a> {{.StructName}}<'a> {
         include_deleted: bool,
         {{- end}}
     ) -> Result<(Vec<{{.RecordName}}>, String, i64), tonic::Status> {
-        self.query_page(filter, page_size, page_token.into(){{if .HasDeletedFlag}}, include_deleted{{end}}).await
+        self.query_page({{if .Routed}}tenant, {{end}}filter, page_size, page_token.into(){{if .HasDeletedFlag}}, include_deleted{{end}}).await
     }
 
     /// The full Create -> List -> Delete lifecycle, with the handle released on
@@ -147,6 +160,9 @@ impl<'a> {{.StructName}}<'a> {
     /// returned — the cleanup's failure would only mask it.
     async fn query_page(
         &self,
+        {{- if .Routed}}
+        tenant: &str,
+        {{- end}}
         filter: Option<{{.FilterType}}>,
         page_size: i32,
         page_token: String,
@@ -162,6 +178,9 @@ impl<'a> {{.StructName}}<'a> {
                 {{- if .HasDeletedFlag}}
                 include_deleted,
                 {{- end}}
+                {{- if .Routed}}
+                {{.RouteField}}: tenant.to_string(),
+                {{- end}}
                 ..Default::default()
             })
             .await?
@@ -173,6 +192,9 @@ impl<'a> {{.StructName}}<'a> {
                 query_id: handle.query_id.clone(),
                 page_size,
                 page_token,
+                {{- if .Routed}}
+                {{.RouteField}}: tenant.to_string(),
+                {{- end}}
                 ..Default::default()
             })
             .await;
@@ -181,6 +203,9 @@ impl<'a> {{.StructName}}<'a> {
             .client
             .{{.DeleteFn}}({{$.HandleType}} {
                 query_id: handle.query_id.clone(),
+                {{- if .Routed}}
+                {{.RouteField}}: tenant.to_string(),
+                {{- end}}
                 ..Default::default()
             })
             .await;

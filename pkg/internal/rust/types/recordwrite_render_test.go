@@ -206,3 +206,55 @@ func TestRustRecordApplyGuardAuthDisabled(t *testing.T) {
 		t.Errorf("an auth-disabled Apply still orders its ops:\n%s", got)
 	}
 }
+
+// Issue #207: on a plane routed by tenant, the entry's tenant field must lie in
+// the tenant the call is routed to, whoever the caller is: after the route
+// check and the tenant pin, before the durability floor and the handler.
+func TestRustRecordWriteRoutePin(t *testing.T) {
+	m := rustPutXidRowMethod()
+	m.RouteField = &parser.RouteFieldDescriptor{Field: "target_tenant", JSONName: "targetTenant", Number: 15}
+	got := renderRustRecordWrite(t, m)
+	for _, want := range []string{
+		`self.check_route_tenant("target_tenant", &req.target_tenant)?;`,
+		`let (__rt, __v): (&str, &str) = (req.target_tenant.as_str(), req.item.as_ref().map(|__p| __p.tenant.as_str()).unwrap_or(""));`,
+		`let __home = format!("/tenants/{}", __rt);`,
+		`if __v != __home && !__v.starts_with(&format!("{}/", __home)) {`,
+		`tonic::Status::permission_denied(format!("PutXidRow: item.tenant is not in tenant {}, the tenant this call is routed to; a tenant's instance holds that tenant's entries only", __rt))`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("routed PutXidRow wrapper missing %q\n%s", want, got)
+		}
+	}
+	route, pin, routePin, floor, call := strings.Index(got, "self.check_route_tenant("), strings.Index(got, "let __record_caller_ns"),
+		strings.Index(got, "let __home"), strings.Index(got, "__d < 3"), strings.Index(got, "self.handler.put_xid_row(")
+	if !(route < pin && pin < routePin && routePin < floor && floor < call) {
+		t.Fatalf("guard order: route check %d, tenant pin %d, route pin %d, floor %d, handler %d", route, pin, routePin, floor, call)
+	}
+	if plain := renderRustRecordWrite(t, rustPutXidRowMethod()); strings.Contains(plain, "the tenant this call is routed to") {
+		t.Errorf("an unrouted plane carries no route pin:\n%s", plain)
+	}
+}
+
+// Apply's route pin runs per op against the Apply's own route field, read once
+// before the ops are borrowed.
+func TestRustRecordApplyRoutePin(t *testing.T) {
+	m := rustRecordApplyMethod()
+	m.RouteField = &parser.RouteFieldDescriptor{Field: "target_tenant", JSONName: "targetTenant", Number: 15}
+	got := renderRustRecordWrite(t, m)
+	for _, want := range []string{
+		`let __record_route: String = req.target_tenant.clone();`,
+		`let (__rt, __v): (&str, &str) = (__record_route.as_str(), __c.item.as_ref().map(|__p| __p.tenant.as_str()).unwrap_or(""));`,
+		`"Apply (put_xid_row): item.tenant is not in tenant {}, the tenant this call is routed to; a tenant's instance holds that tenant's entries only"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("routed Apply wrapper missing %q\n%s", want, got)
+		}
+	}
+	if n := strings.Count(got, "the tenant this call is routed to"); n != 1 {
+		t.Errorf("want one route pin (put_xid_row), got %d", n)
+	}
+	if !(strings.Index(got, "let __record_route") < strings.Index(got, "req.ops.iter_mut()") &&
+		strings.Index(got, "names a tenant other than the caller's") < strings.Index(got, "the tenant this call is routed to")) {
+		t.Fatal("the route is bound before the op loop, and each op's route pin follows its tenant pin")
+	}
+}

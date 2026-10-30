@@ -71,16 +71,50 @@ func TenantOwnedServices(dp *DescriptorParser) map[string]bool {
 // surface hosted (service_s2s/service_c2s label) by a tenant-owned service,
 // known as such from the host's proto in the run or, for a contract generated
 // without it (a sys contract), from the surface's own host_tenant_owned.
-// C2D services dial a local daemon and synthesized planes carry their own
-// tenant pin, so neither is ever addressed by tenant.
+// C2D services dial a local daemon, so they are never addressed by tenant.
+//
+// Of the synthesized surfaces, the record plane (SynthesizedKindRecordMap) is
+// a surface hosted by label like any other: on a tenant-owned record store it
+// is routed by tenant, and its injector gives every rpc its route field (#207;
+// exempting it sent a write for tenant A to whichever tenant's store answered
+// first). The others are never addressed by tenant: a state, store or
+// OPA-evaluation surface is served by the service that owns it, and a
+// recordc2s reader reaches the store through the plane's own routed client.
 func IsTenantRouted(fd *FileDescriptor, svc *ServiceDescriptor, tenantOwned map[string]bool) bool {
-	if svc.Synthesized || !(svc.IsS2S || svc.IsC2S) {
+	if (svc.Synthesized && svc.SynthesizedKind != SynthesizedKindRecordMap) || !(svc.IsS2S || svc.IsC2S) {
 		return false
 	}
 	if svc.HostLabel != "" && svc.HostTenantOwned {
 		return true
 	}
 	return fd.ServiceTenantOwned || (svc.HostLabel != "" && tenantOwned[svc.HostLabel])
+}
+
+// TenantRoutedRecordPlanePackages is the set of proto packages whose
+// (spec.trait) asks for a record query plane on a tenant-owned record store:
+// the trait's host is a (spec.record_store) that declares tenant_owned. The
+// injector gives every rpc of such a plane its route field (#207), so a
+// generator reading the proto tree from before the injection (where the plane
+// has no services yet) learns from this that the plane's package is
+// tenant-routed. The same test the injector applies.
+func TenantRoutedRecordPlanePackages(dp *DescriptorParser) map[string]bool {
+	out := make(map[string]bool)
+	if dp == nil {
+		return out
+	}
+	owned := TenantOwnedServices(dp)
+	stores := make(map[string]bool)
+	for _, fd := range dp.GetAllFiles() {
+		if fd.RecordStore && fd.ServiceName != "" {
+			stores[fd.ServiceName] = true
+		}
+	}
+	for _, fd := range dp.GetAllFiles() {
+		if t := fd.Trait; t != nil && t.Host != "" && t.S2SService != "" && stores[t.Host] && owned[t.Host] {
+			out[fd.Package] = true
+		}
+	}
+	return out
 }
 
 // ValidateHostTenantOwned enforces (spec.service_s2s).host_tenant_owned. It

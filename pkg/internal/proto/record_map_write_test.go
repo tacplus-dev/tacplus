@@ -279,11 +279,11 @@ func TestRecordOpNumbersIndependentOfTheRecordSet(t *testing.T) {
 	a := recordType{typeName: "XidRow", pkg: "ident", key: "xid", keyType: "string", durability: "DURABILITY_LOCAL"}
 	b := recordType{typeName: "AaaRow", pkg: "aaa", key: "id", keyType: "string", durability: "DURABILITY_LOCAL"}
 	caseLine := regexp.MustCompile(`put_xid_row = (\d+)`)
-	alone, err := recordWriteMessages([]recordType{a})
+	alone, err := recordWriteMessages(traitPlane{}, []recordType{a})
 	if err != nil {
 		t.Fatal(err)
 	}
-	with, err := recordWriteMessages([]recordType{b, a})
+	with, err := recordWriteMessages(traitPlane{}, []recordType{b, a})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -137,6 +137,11 @@ type traitPlane struct {
 	s2sService   string   // emitted peer-facing service name
 	c2sService   string   // emitted client-facing service name
 	authServices []string // peer identities allowed to call the S2S half
+	// tenantOwned is true when the host declares (spec.service).tenant_owned:
+	// every request of both halves then carries the target tenant and every
+	// rpc declares it as its (spec.rpc).route_field (#207), exactly as any
+	// other surface of a tenant-owned service must.
+	tenantOwned bool
 }
 
 // AppendRecordMapServiceToProtos scans all proto files for spec.record messages
@@ -391,6 +396,7 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 // ValidateC2SHostLabels applies to the emitted surface.
 func collectRecordQueryPlanes(dp *parser.DescriptorParser) ([]traitPlane, error) {
 	served := parser.PhysicalServingLabels(dp)
+	tenantOwned := parser.TenantOwnedServices(dp)
 	recordStores := make(map[string]bool)
 	for _, fd := range dp.GetAllFiles() {
 		if fd.RecordStore && fd.ServiceName != "" {
@@ -447,6 +453,7 @@ func collectRecordQueryPlanes(dp *parser.DescriptorParser) ([]traitPlane, error)
 			s2sService:   t.S2SService,
 			c2sService:   t.C2SService,
 			authServices: t.AuthServices,
+			tenantOwned:  tenantOwned[t.Host],
 		})
 	}
 	return planes, nil
@@ -487,7 +494,7 @@ func appendRecordPlaneToTraitProto(tempProtoDir string, plane traitPlane, record
 	sb.WriteString(`
 message QueryHandle {
   string query_id = 1;
-}
+` + plane.routeLine() + `}
 
 message QueryStats {
   string query_id = 1;
@@ -568,21 +575,21 @@ message Open%[1]sQueryRequest {
   %[1]sFilter filter = 1;
   bool standing = 2;
   bool include_deleted = 3;
-}
+%[2]s}
 
 message Refine%[1]sRequest {
   string query_id = 1;
   %[1]sFilter filter = 2;
   bool include_deleted = 3;
-}
-`, r.typeName))
+%[2]s}
+`, r.typeName, plane.routeLine()))
 		} else {
 			sb.WriteString(fmt.Sprintf(`
 message Open%[1]sQueryRequest {
   bool standing = 1;
   bool include_deleted = 2;
-}
-`, r.typeName))
+%[2]s}
+`, r.typeName, plane.routeLine()))
 		}
 
 		// Sample (seeded monte-carlo draw) + Pull (paged read) — like Watch, both apply
@@ -592,7 +599,7 @@ message Sample%[1]sRequest {
   string query_id = 1;
   int32 n = 2;
   uint64 seed = 3;
-}
+%[4]s}
 
 message Sample%[1]sResponse {
   repeated %[2]s items = 1;
@@ -602,7 +609,7 @@ message Pull%[1]sRequest {
   string query_id = 1;
   int32 page_size = 2;
   string page_token = 3;
-}
+%[4]s}
 
 message Pull%[1]sResponse {
   repeated %[2]s items = 1;
@@ -613,14 +620,14 @@ message Pull%[1]sResponse {
 message Get%[1]sRowsRequest {
 %[3]s  int32 limit = 2;
   bool include_deleted = 3;
-}
+%[4]s}
 
 message Get%[1]sRowsResponse {
   repeated %[2]s items = 1;
   int64 total_count = 2;
   bool truncated = 3;
 }
-`, r.typeName, fq, rowsFilterField(r)))
+`, r.typeName, fq, rowsFilterField(r), plane.routeLine()))
 
 		// Live watch envelope. Watch<T> (a living query, filterable types only)
 		// and Watch<T>Changes (the record's change feed, every non-private type)
@@ -645,7 +652,10 @@ message %[1]sWatchEvent {
 	// The record WRITE SURFACE's messages (#163): per write-capable type, and
 	// the cross-type Apply. Emitted beside the query plane's, on the S2S half
 	// only (recordMapS2SService).
-	writeMsgs, err := recordWriteMessages(records)
+	if err := assertNoRouteFieldClash(plane, records); err != nil {
+		return fmt.Errorf("record query plane for trait %q in %s: %w", plane.name, relPath, err)
+	}
+	writeMsgs, err := recordWriteMessages(plane, records)
 	if err != nil {
 		return fmt.Errorf("record write surface for trait %q in %s: %w", plane.name, relPath, err)
 	}
@@ -813,13 +823,67 @@ func minGroupSizeOption(r recordType) string {
 	return fmt.Sprintf("    option (spec.min_group_size) = %d;\n", r.minGroupSize)
 }
 
-// minGroupSizeBody is the same stamp for the c2s half, whose RPCs carry no
-// options at all: it is either the bare ";" terminator or the option body.
-func minGroupSizeBody(r recordType) string {
-	if r.minGroupSize <= 0 {
+// recordRouteField is the route field of the record plane hosted on a
+// tenant-owned record store (#207): the request field carrying the TARGET
+// tenant's tid, the instance that receives the call. It is not the tenant an
+// entry belongs to (the record's own (spec.store_namespace) field), so it has
+// a name of its own and a fixed number past every field the plane's requests
+// carry, the same in every request.
+const (
+	recordRouteField       = "target_tenant"
+	recordRouteFieldNumber = 15
+)
+
+// routeLine renders the route field of a plane request, "" on a shared host.
+func (p traitPlane) routeLine() string {
+	if !p.tenantOwned {
+		return ""
+	}
+	return fmt.Sprintf("  string %s = %d [(spec.assert_max_size) = 8];\n", recordRouteField, recordRouteFieldNumber)
+}
+
+// routeOption renders the route_field entry of an S2S rpc's (spec.rpc), ""
+// on a shared host.
+func (p traitPlane) routeOption() string {
+	if !p.tenantOwned {
+		return ""
+	}
+	return fmt.Sprintf(", route_field: %q", recordRouteField)
+}
+
+// c2sRouteOption is the C2S half's (spec.rpc) line, whose rpcs otherwise
+// carry no (spec.rpc): "" on a shared host.
+func (p traitPlane) c2sRouteOption() string {
+	if !p.tenantOwned {
+		return ""
+	}
+	return fmt.Sprintf("    option (spec.rpc) = {route_field: %q};\n", recordRouteField)
+}
+
+// c2sBody is a C2S rpc's terminator: the bare ";" or an option body holding
+// its route field and the given options.
+func (p traitPlane) c2sBody(options string) string {
+	options = p.c2sRouteOption() + options
+	if options == "" {
 		return ";"
 	}
-	return fmt.Sprintf(" {\n%s  }", minGroupSizeOption(r))
+	return fmt.Sprintf(" {\n%s  }", options)
+}
+
+// assertNoRouteFieldClash refuses a record whose key or tenant field is named
+// like the route field: on a tenant-owned host the request would carry one
+// field with two meanings, the entry's and the instance's.
+func assertNoRouteFieldClash(plane traitPlane, records []recordType) error {
+	if !plane.tenantOwned {
+		return nil
+	}
+	for _, r := range records {
+		if r.key == recordRouteField || r.namespace == recordRouteField {
+			return fmt.Errorf("record %s.%s names its key or (spec.store_namespace) field %q, the route field of the record plane on the tenant-owned host %q; rename the field",
+				r.pkg, r.typeName, recordRouteField, plane.host)
+		}
+	}
+	return nil
 }
 
 // recordMapS2SService renders the S2S half of the record query plane: the
@@ -870,41 +934,41 @@ func recordMapS2SService(plane traitPlane, records []recordType) string {
 		// Universal query lifecycle: create (snapshot or living) → count/sample/list → delete.
 		sb.WriteString(fmt.Sprintf(`
   rpc Create%[1]sQuery(Open%[1]sQueryRequest) returns (QueryHandle) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s%[5]s};
   }
   rpc Get%[1]sCount(QueryHandle) returns (RecordCount) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s%[5]s};
 %[4]s  }
   rpc Get%[1]sSample(Sample%[1]sRequest) returns (Sample%[1]sResponse) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s%[5]s};
   }
   rpc List%[1]s(Pull%[1]sRequest) returns (Pull%[1]sResponse) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s%[5]s};
     option (spec.method_collection) = {mode: COLLECTION_MODE_PAGE, order_by: [%[2]q], default_page_size: 100};
   }
   rpc Delete%[1]sQuery(QueryHandle) returns (QueryStats) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s%[5]s};
   }
   rpc Get%[1]sRows(Get%[1]sRowsRequest) returns (Get%[1]sRowsResponse) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s%[5]s};
   }
-`, r.typeName, r.key, auth, minGroupSizeOption(r)))
+`, r.typeName, r.key, auth, minGroupSizeOption(r), plane.routeOption()))
 		if hasFilter {
 			// UpdateQuery replaces the query's predicate in place (unrestricted — not
 			// enforced narrow-only; see the package doc comment above).
 			// Watch streams a living query's changes (snapshot then deltas).
 			// SubscribeCount streams the live size.
 			sb.WriteString(fmt.Sprintf(`  rpc Update%[1]sQuery(Refine%[1]sRequest) returns (QueryStats) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s%[5]s};
 %[4]s  }
   rpc Watch%[1]s(QueryHandle) returns (stream %[1]sWatchEvent) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s%[5]s};
     option (spec.method_collection) = {mode: COLLECTION_MODE_WATCH, order_by: [%[2]q]};
   }
   rpc Subscribe%[1]sCount(QueryHandle) returns (stream RecordCount) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s%[5]s};
 %[4]s  }
-`, r.typeName, r.key, auth, minGroupSizeOption(r)))
+`, r.typeName, r.key, auth, minGroupSizeOption(r), plane.routeOption()))
 		}
 		sb.WriteString(recordWriteRPCs(plane, r))
 	}
@@ -929,23 +993,24 @@ func recordQueryC2SService(plane traitPlane, records []recordType) string {
 	sb.WriteString("\n// tacplus:generated-service " + parser.SynthesizedKindRecordMap + "\nservice " + plane.c2sService + " {\n")
 	sb.WriteString(fmt.Sprintf("  option (spec.service_c2s) = {auth_entitled_users: true, label: %q};\n", plane.host))
 	for _, r := range records {
+		plain, sized := plane.c2sBody(""), plane.c2sBody(minGroupSizeOption(r))
 		sb.WriteString(fmt.Sprintf(`
-  rpc Create%[1]sQuery(Open%[1]sQueryRequest) returns (QueryHandle);
+  rpc Create%[1]sQuery(Open%[1]sQueryRequest) returns (QueryHandle)%[4]s
   rpc Get%[1]sCount(QueryHandle) returns (RecordCount)%[3]s
-  rpc Get%[1]sSample(Sample%[1]sRequest) returns (Sample%[1]sResponse);
+  rpc Get%[1]sSample(Sample%[1]sRequest) returns (Sample%[1]sResponse)%[4]s
   rpc List%[1]s(Pull%[1]sRequest) returns (Pull%[1]sResponse) {
-    option (spec.method_collection) = {mode: COLLECTION_MODE_PAGE, order_by: [%[2]q], default_page_size: 100};
+%[5]s    option (spec.method_collection) = {mode: COLLECTION_MODE_PAGE, order_by: [%[2]q], default_page_size: 100};
   }
-  rpc Delete%[1]sQuery(QueryHandle) returns (QueryStats);
-  rpc Get%[1]sRows(Get%[1]sRowsRequest) returns (Get%[1]sRowsResponse);
-`, r.typeName, r.key, minGroupSizeBody(r)))
+  rpc Delete%[1]sQuery(QueryHandle) returns (QueryStats)%[4]s
+  rpc Get%[1]sRows(Get%[1]sRowsRequest) returns (Get%[1]sRowsResponse)%[4]s
+`, r.typeName, r.key, sized, plain, plane.c2sRouteOption()))
 		if len(r.filters) > 0 {
 			sb.WriteString(fmt.Sprintf(`  rpc Update%[1]sQuery(Refine%[1]sRequest) returns (QueryStats)%[3]s
   rpc Watch%[1]s(QueryHandle) returns (stream %[1]sWatchEvent) {
-    option (spec.method_collection) = {mode: COLLECTION_MODE_WATCH, order_by: [%[2]q]};
+%[4]s    option (spec.method_collection) = {mode: COLLECTION_MODE_WATCH, order_by: [%[2]q]};
   }
   rpc Subscribe%[1]sCount(QueryHandle) returns (stream RecordCount)%[3]s
-`, r.typeName, r.key, minGroupSizeBody(r)))
+`, r.typeName, r.key, sized, plane.c2sRouteOption()))
 		}
 	}
 	sb.WriteString("}\n")

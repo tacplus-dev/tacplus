@@ -301,14 +301,15 @@ func recordOpBlock(fqn string) int {
 // write surface and the Apply envelope. A name-derived block that lands in the
 // protobuf reserved range or on another type's block fails generation rather
 // than renumbering anything.
-func recordWriteMessages(records []recordType) (string, error) {
+func recordWriteMessages(plane traitPlane, records []recordType) (string, error) {
+	route := plane.routeLine()
 	var sb strings.Builder
 	var applyCases []string
 	blocks := map[int]string{}
 	for _, r := range records {
 		fq := r.pkg + "." + r.typeName
 		if !r.private {
-			sb.WriteString(fmt.Sprintf("\nmessage Watch%sChangesRequest {\n  int64 from_revision = 1;\n%s}\n", r.typeName, nsLine(r, 2)))
+			sb.WriteString(fmt.Sprintf("\nmessage Watch%sChangesRequest {\n  int64 from_revision = 1;\n%s%s}\n", r.typeName, nsLine(r, 2), route))
 		}
 		if !writeCapable(r) {
 			continue
@@ -316,13 +317,13 @@ func recordWriteMessages(records []recordType) (string, error) {
 		sb.WriteString(fmt.Sprintf(`
 message Get%[1]sRequest {
   %[3]s %[4]s = 1;
-%[5]s}
+%[5]s%[6]s}
 
 message Get%[1]sResponse {
   %[2]s item = 1;
   int64 revision = 2;
 }
-`, r.typeName, fq, r.keyType, r.key, nsLine(r, 2)))
+`, r.typeName, fq, r.keyType, r.key, nsLine(r, 2), route))
 		block := recordOpBlock(fq)
 		if prev, ok := blocks[block]; ok {
 			return "", fmt.Errorf("records %s and %s derive the same RecordOp field-number block (%d) from their full names; "+
@@ -338,7 +339,7 @@ message Get%[1]sResponse {
 			req := op.verb + r.typeName + "Request"
 			switch {
 			case op.byKey:
-				sb.WriteString(fmt.Sprintf("\nmessage %s {\n  %s %s = 1;\n  RecordDurability durability = 2;\n%s}\n", req, r.keyType, r.key, nsLine(r, 3)))
+				sb.WriteString(fmt.Sprintf("\nmessage %s {\n  %s %s = 1;\n  RecordDurability durability = 2;\n%s%s}\n", req, r.keyType, r.key, nsLine(r, 3), route))
 			case op.verb == "ReplaceIfUnchanged":
 				sb.WriteString(fmt.Sprintf(`
 message %[1]s {
@@ -348,10 +349,10 @@ message %[1]s {
     %[2]s expected_item = 3;
   }
   RecordDurability durability = 4;
-}
-`, req, fq))
+%[3]s}
+`, req, fq, route))
 			default:
-				sb.WriteString(fmt.Sprintf("\nmessage %s {\n  %s item = 1;\n  RecordDurability durability = 2;\n}\n", req, fq))
+				sb.WriteString(fmt.Sprintf("\nmessage %s {\n  %s item = 1;\n  RecordDurability durability = 2;\n%s}\n", req, fq, route))
 			}
 			keyPath, nsPath := op.paths(r)
 			applyCases = append(applyCases, fmt.Sprintf("    %s %s_%s = %d [(spec.record_op) = %s];\n",
@@ -369,7 +370,7 @@ message %[1]s {
 message RecordApplyRequest {
   repeated RecordOp ops = 1 [(spec.assert_min_size) = 1, (spec.assert_max_size) = 256];
   RecordDurability durability = 2;
-}
+` + route + `}
 
 message RecordApplyResponse {
   repeated RecordWriteResult results = 1;
@@ -387,28 +388,28 @@ func recordWriteRPCs(plane traitPlane, r recordType) string {
 	var sb strings.Builder
 	if watchCapable(r) {
 		sb.WriteString(fmt.Sprintf(`  rpc Watch%[1]sChanges(Watch%[1]sChangesRequest) returns (stream %[1]sWatchEvent) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s%[5]s};
     option (spec.method_collection) = {mode: COLLECTION_MODE_WATCH, order_by: [%[2]q]};
     option (spec.record_entry) = %[4]s;
   }
-`, r.typeName, r.key, subscribeAuthLiteral(plane, r), entryBinding(r, "", "", "", r.namespace)))
+`, r.typeName, r.key, subscribeAuthLiteral(plane, r), entryBinding(r, "", "", "", r.namespace), plane.routeOption()))
 	}
 	if !writeCapable(r) {
 		return sb.String()
 	}
 	sb.WriteString(fmt.Sprintf(`  rpc Get%[1]s(Get%[1]sRequest) returns (Get%[1]sResponse) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[2]s};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[2]s%[4]s};
     option (spec.record_entry) = %[3]s;
   }
-`, r.typeName, readAuthLiteral(plane, r), entryBinding(r, "", "", r.key, r.namespace)))
+`, r.typeName, readAuthLiteral(plane, r), entryBinding(r, "", "", r.key, r.namespace), plane.routeOption()))
 	auth := writeAuthLiteral(plane, r)
 	for _, op := range opsFor(r) {
 		keyPath, nsPath := op.paths(r)
 		sb.WriteString(fmt.Sprintf(`  rpc %[1]s%[2]s(%[1]s%[2]sRequest) returns (RecordWriteResult) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %[3]s%[5]s};
     option (spec.record_entry) = %[4]s;
   }
-`, op.verb, r.typeName, auth, entryBinding(r, "", r.durability, keyPath, nsPath)))
+`, op.verb, r.typeName, auth, entryBinding(r, "", r.durability, keyPath, nsPath), plane.routeOption()))
 	}
 	return sb.String()
 }
@@ -446,9 +447,9 @@ func recordApplyRPC(plane traitPlane, records []recordType) string {
 	}
 	sort.Strings(union)
 	return fmt.Sprintf(`  rpc Apply(RecordApplyRequest) returns (RecordApplyResponse) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %s};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: %s%s};
   }
-`, authServicesLiteral(union))
+`, authServicesLiteral(union), plane.routeOption())
 }
 
 // assertNoDuplicateRPCs refuses a rendered plane half that names one RPC

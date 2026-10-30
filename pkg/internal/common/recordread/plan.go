@@ -51,6 +51,13 @@ type Reader struct {
 	// so reads can opt into flagged rows. Open<T>QueryRequest carries
 	// include_deleted for every record, but only such a reader exposes it.
 	HasDeletedFlag bool
+	// Routed reports whether the plane's host is tenant-owned, so the plane is
+	// routed by tenant (#207): every request carries RouteField, the target
+	// tenant's tid, and the reader takes it as an argument and sets it on each
+	// call it makes, a query's Create, List and Delete alike.
+	Routed bool
+	// RouteField is the plane's route field ("target_tenant") when Routed.
+	RouteField string
 }
 
 // Collect resolves selfPackage's (spec.record_read) declarations. It returns
@@ -104,6 +111,20 @@ func Collect(dp *parser.DescriptorParser, selfPackage string) []Reader {
 		return nil
 	}
 
+	// The plane is routed by tenant when its host is tenant-owned; every rpc
+	// then declares the same route field (record_map.go), read off the first.
+	routed := parser.TenantOwnedServices(dp)[trait.Trait.Host]
+	routeField := ""
+	if routed {
+		for si := range trait.Services {
+			for mi := range trait.Services[si].Methods {
+				if rf := trait.Services[si].Methods[mi].RouteField; rf != nil && routeField == "" {
+					routeField = rf.Field
+				}
+			}
+		}
+	}
+
 	var readers []Reader
 	for _, rr := range self.RecordReads {
 		rec, recPath, recFd := FindRecord(dp, rr.Record)
@@ -134,6 +155,8 @@ func Collect(dp *parser.DescriptorParser, selfPackage string) []Reader {
 			KeyProtoType:   keyType,
 			HasKeyFilter:   hasKey,
 			HasDeletedFlag: hasDeletedFlag,
+			Routed:         routed,
+			RouteField:     routeField,
 		})
 	}
 	sort.Slice(readers, func(i, j int) bool { return readers[i].RecordFQN < readers[j].RecordFQN })
@@ -223,7 +246,11 @@ type C2SPlane struct {
 	SelfFile     *parser.FileDescriptor
 	TraitPackage string
 	TraitRelPath string
-	Methods      []C2SMethod
+	// Routed: the plane's host is tenant-owned (#207). The generated handler
+	// reads its own caller's tenant, the tid of the caller's namespace claim,
+	// and routes the store calls there; a caller of no tenant is refused.
+	Routed  bool
+	Methods []C2SMethod
 }
 
 // CollectC2SPlane resolves selfPackage's (spec.record_read).c2s declarations,
@@ -290,6 +317,7 @@ func CollectC2SPlane(dp *parser.DescriptorParser, selfPackage string) *C2SPlane 
 		SelfFile:     self,
 		TraitPackage: trait.Package,
 		TraitRelPath: traitPath,
+		Routed:       parser.TenantOwnedServices(dp)[trait.Trait.Host],
 	}
 	for _, decl := range decls {
 		rec, _, _ := FindRecord(dp, decl.Record)

@@ -262,7 +262,16 @@ func javaTenantRoutedTargets(config *tactype.Config, clientSvcs []ServiceInfo, p
 		return nil, fmt.Errorf("failed to create descriptor parser: %w", err)
 	}
 	tenantOwned := parser.TenantOwnedServices(dp)
+	// The record plane on a tenant-owned record store is routed by tenant
+	// (#207). The trait says so whether or not this tree already carries the
+	// injected plane's services, so a plane client is pooled per tenant
+	// either way (Go's buildServiceManagerData does the same).
+	routedPlanes := parser.TenantRoutedRecordPlanePackages(dp)
 	for _, svc := range clientSvcs {
+		if routedPlanes[svc.PackageName] {
+			routed[javaResolveGrpcTarget(config, svc.ProtoFile, svc.PackageName, svc.HostLabel)] = true
+			continue
+		}
 		fd, err := dp.GetFileDescriptor(svc.ProtoFile)
 		if err != nil {
 			return nil, fmt.Errorf("tenant routing of %s: %w", svc.ServiceName, err)

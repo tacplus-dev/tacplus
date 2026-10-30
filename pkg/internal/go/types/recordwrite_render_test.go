@@ -133,3 +133,31 @@ func TestRecordApplyGuard(t *testing.T) {
 		t.Fatal("Apply's op guards must run before the handler and the result check after it")
 	}
 }
+
+// On a tenant-owned record store (#207) the plane is routed by target_tenant:
+// after the route check and the tenant pin, the entry's tenant field must be in
+// the routed tenant, for every caller; an unrouted plane renders no such pin.
+func TestRecordWriteGuardRoutePin(t *testing.T) {
+	m := putXidRowMethod()
+	if got := renderRecordWrite(m); strings.Contains(got, "the tenant this call is routed to") {
+		t.Fatalf("an unrouted plane must render no route pin:\n%s", got)
+	}
+	m.RouteField = &parser.RouteFieldDescriptor{Field: "target_tenant", JSONName: "targetTenant", Number: 15}
+	got := renderRecordWrite(m)
+	for _, want := range []string{
+		`if err := p.checkRoute(`,
+		`if __rt, __v := req.GetTargetTenant(), req.GetItem().GetTenant(); __v != "/tenants/"+__rt && !strings.HasPrefix(__v, "/tenants/"+__rt+"/") {`,
+		`status.Error(codes.PermissionDenied, "PutXidRow: item.tenant is not in tenant "+__rt+", the tenant this call is routed to; a tenant's instance holds that tenant's entries only")`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("routed PutXidRow wrapper missing %q\n%s", want, got)
+		}
+	}
+	// Order: the route check, then the caller's tenant pin, then the route
+	// pin, then the handler.
+	route, pin, rpin, call := strings.Index(got, "p.checkRoute("), strings.Index(got, "__recordCallerNs :="),
+		strings.Index(got, "__rt, __v :="), strings.Index(got, "p.handler.PutXidRow(")
+	if !(route < pin && pin < rpin && rpin < call) {
+		t.Fatalf("guard order: route %d, pin %d, route pin %d, handler %d", route, pin, rpin, call)
+	}
+}

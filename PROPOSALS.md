@@ -4,6 +4,32 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **The record plane's tenant checks compare tids against namespace segments** (2026-10-30, #207): the route
+  check (`CheckRoute`) takes the instance's tenant from its own token's namespace (`/tenants/<t>`), and the new
+  route pin holds an entry's `(spec.store_namespace)` value to `/tenants/<target_tenant>` or below. Both assume what
+  tacplus documents today, a tenant's namespace is `/tenants/<tid>`. kernel#23 keeps user and session namespaces at
+  `/tenants/<name>` and moves only the instance SAN to the tid; if a row's namespace (stamped from a user's claim)
+  carries a name, every write to a tenant's store is refused. #202 owns that switch: the instance tenant should come
+  from the SAN, and a writer acting for a user needs a defined name → tid (or a tid claim).
+- **Stamp `(spec.identity_spiffe_subject)` / `(spec.identity_spiffe_actor)` on the record write surface**
+  (2026-10-30, #207, its "Related" section): eventbus publish stamped them; the write surface does not, so a record
+  whose `owner` is its `spiffe_id` (messaging.Message) is stored with an empty owner unless the writer fills its own
+  identity in, which the annotation exists to prevent. The generated wrapper should stamp them on Put,
+  InsertIfAbsent, ReplaceIfUnchanged and each Apply op, as the publish wrapper did.
+- **Apply's inner ops carry an unused `target_tenant`** (2026-10-30, #207): on a tenant-owned record store the
+  single-type requests carry the route field, and Apply's `RecordOp` cases reuse those messages, so each op has a
+  `target_tenant` the wrapper ignores (the Apply routes by its own). Refusing an op whose value is set and differs
+  would make the shape honest; a dedicated op message per case would remove it, at a wire change.
+- **current-generation's retired-`linked` check sees nothing under its default workdir** (2026-10-30, #207): the
+  record-egress check drops every hit whose path contains `/target/` (meant for cargo's build dirs), and the default
+  `WORK_ROOT` is `target/cross-test/current-generation`, so in a normal run it filters out the whole generated tree.
+  Run with `--workdir` outside `target/`, it fails on main on the reserved `JWT_PAYLOAD_TYPE_LINKED` name in
+  `token.pb.go`'s descriptor bytes. Excluding paths relative to `$output` (and the reserved name in descriptors)
+  would make the check real.
+- **The Watch<T>Changes wrapper checks its pins before validating the request** (2026-10-30, #207): Go renders the
+  tenant pin (and now the route pin) of a WATCH seam ahead of request validation and the route check, so an empty
+  `target_tenant` there is refused by the pin (`PERMISSION_DENIED`) rather than as `INVALID_ARGUMENT`. Both fail
+  closed; the unary seams check in the documented order.
 - **Drop the from-source docker-buildx once a buildx release carries the fixes** (2026-10-29, #190): the build
   image builds buildx v0.38.1 from source with moby/go-archive 0.3.3 and golang.org/x/net 0.62.0, because no buildx
   release (master included) has taken them yet. When one does, set `BUILDX_VERSION` to it and drop the bumps (and

@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-10-29 by looper (#190).
+Overwritten to stay current (loopers and agents). Last updated: 2026-10-30 by looper (#207).
 
 - **Version / line:** v2.5.0 (latest release, 2026-10-28, `release/2.5` cut at it); main is the 2.6 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -27,6 +27,12 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-10-29 by lo
   Marvin) and the elliptic-curve 0.13 stack (crypto-bigint 0.5, RUSTSEC-2026-0387) are gone from the generated
   lockfile, which current-generation checks (#186; backported to release/2.0 through release/2.5 by pull request, as
   v2.0.12, v2.1.5, v2.2.2, v2.3.4, v2.4.3 and v2.5.2 once they merge).
+  The record plane of a tenant-owned record store is routed by tenant (#207): every request of both halves carries
+  `target_tenant` (field 15) and every rpc declares it as its route field, so the generated clients (Go, Java, Rust)
+  pool the store per tenant, the typed record readers take the tenant, and the store's wrapper refuses, whoever the
+  caller is, a call routed to another tenant and an entry whose tenant field is not in that tenant
+  (`PERMISSION_DENIED`), before the handler (store and redo) sees it. A shared record store's plane is unchanged.
+  Fixed on main and backported to release/2.5 by pull request (the next 2.5 patch once it merges).
   Deterministic builds (#193): a repository pins the exact release and the build image digest in `tacplus.lock`
   (`tacplus pin` writes it; moving it is a commit); there is no tacplus image (the old tags stay, deprecated, and
   2.6 gets none); `build:X.Y` per line, rebuilt on every release as an immutable `build:X.Y.Z`, carries Kani and
@@ -53,6 +59,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-10-29 by lo
   compile (#211; #196 stops generating them). The new build image (Kani, cargo-fuzz, the launcher) is verified by
   images.yml once pushed; the launcher and `tacplus pin` by the gates. The fleet build's image lookup on a private package is
   verified against a fake registry only: the looper's token has no `read:packages` (a public image resolves live).
-  `depends`/`src` at a line can take a pre-release (#214). A fleet's service images must be on ghcr.io from a
+  `depends`/`src` at a line can take a pre-release (#214). The record plane's tenant checks assume a tenant's
+  namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
+  The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
   github.com repo (PROPOSALS.md).
 - **Blocked on:** nothing.

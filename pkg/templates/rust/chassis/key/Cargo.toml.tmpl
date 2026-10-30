@@ -6,13 +6,11 @@ description = "Cryptographic key management and shared utilities"
 
 [dependencies]
 base64 = "0.22"
-rsa = { version = "0.9", features = ["sha2", "pkcs5"] }
-p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
-p384 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
-ecdsa = { version = "0.16", features = ["signing", "verifying", "pem", "pkcs8"] }
+# RSA and ECDSA (issue #186): aws-lc-rs, never the rsa crate (RUSTSEC-2023-0071)
+# nor the elliptic-curve 0.13 stack (crypto-bigint 0.5, RUSTSEC-2026-0387).
+aws-lc-rs = "1"
 ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8", "pem"] }
 pkcs8 = { version = "0.10", features = ["pem", "std"] }
-sha2 = "0.10"
 signature = "2"
 rand = "0.8"
 pem = "3"

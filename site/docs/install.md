@@ -112,20 +112,20 @@ requests to GitHub (and drops it on a redirect to another host).
 
 | Tag | Meaning |
 |---|---|
-| `2.0` | the newest `2.0.x`: **what you pin** |
-| `2.0.1` | that release, immutable |
+| `2.1` | the newest `2.1.x`: **what you pin** |
+| `2.1.0` | that release, immutable |
 | `2` | the newest `2.x` |
 | `latest` | the newest release |
 | `main-<sha>` | an unreleased build of `main` |
 
 Use it as its **own generate step**: run it over your proto source to write
 the generated model, then compile the result in your usual builder image.
-Don't build `FROM` it. Pulling `tacplus:2.0` again is all it takes to pick
+Don't build `FROM` it. Pulling `tacplus:2.1` again is all it takes to pick
 up a new patch; your builder image is untouched.
 
 ```bash
 docker run --rm --pull always -v "$PWD:/workspace" \
-  ghcr.io/tacplus-dev/tacplus/tacplus:2.0 \
+  ghcr.io/tacplus-dev/tacplus/tacplus:2.1 \
   tacplus build --config tacplus.yaml --src proto
 ```
 
@@ -142,7 +142,7 @@ steps:
   - name: Generate
     run: >-
       docker run --rm --pull always -v "$PWD:/workspace"
-      ghcr.io/tacplus-dev/tacplus/tacplus:2.0
+      ghcr.io/tacplus-dev/tacplus/tacplus:2.1
       tacplus build --config tacplus.yaml --src proto
   - name: Build
     run: go build ./...

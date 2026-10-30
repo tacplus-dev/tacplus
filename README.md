@@ -80,7 +80,7 @@ The container image carries tacplus and every protoc plugin it drives, so a
 build can run it as its own generate step:
 
 ```bash
-docker run --rm -v "$PWD:/w" -w /w ghcr.io/tacplus-dev/tacplus/tacplus:2.0 tacplus build
+docker run --rm -v "$PWD:/w" -w /w ghcr.io/tacplus-dev/tacplus/tacplus:2.1 tacplus build
 ```
 
 From source, with Go, `just` and `protoc` (`just protoc-check` tells you

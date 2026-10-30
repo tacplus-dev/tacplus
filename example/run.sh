@@ -36,10 +36,16 @@ YAML
 echo "==> Generating Go model"
 write_config "$OUT/go" go com.example.notesapi
 (cd "$OUT/go" && "$TACPLUS_BIN" build --config tacplus.yaml --src "$EX/proto") > "$OUT/go/generate.log" 2>&1 || { cat "$OUT/go/generate.log"; exit 1; }
+# x/net is pinned at its advisory floor (#199): tidy keeps grpc's minimum
+# otherwise, which is below it.
 cat > "$OUT/go/go.mod" <<'MOD'
 module example.com/notesapi
 
 go 1.23
+
+require (
+	golang.org/x/net v0.62.0
+)
 MOD
 
 echo "==> Building Go server"

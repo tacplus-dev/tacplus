@@ -47,6 +47,10 @@ type javaRecordReaderEntry struct {
 	PullReqType    string // e.g. "PullMessageRequest"
 	HasKeyFilter   bool
 	HasDeletedFlag bool
+	// Routed: the plane is routed by tenant (#207); every method takes the
+	// target tenant and sets it with RouteSetter on each request it sends.
+	Routed      bool
+	RouteSetter string // builder setter of the route field, e.g. "setTargetTenant"
 }
 
 // javaScalarKeyType maps a proto scalar key type to the Java type the plane's
@@ -74,6 +78,14 @@ func javaTypesOuterForProto(config *tactype.Config, protoDir, relPath, pkg strin
 	}
 	outer := javaOuterClassForProto(protoDir, "", relPath, pkg)
 	return javaTypesImportForProto(config.JavaPackageBase, relPath, pkg, outer, declaresState)
+}
+
+// javaRouteSetter is the builder setter of a route field, "" for none.
+func javaRouteSetter(field string) string {
+	if field == "" {
+		return ""
+	}
+	return "set" + javaPascalField(field)
 }
 
 // collectJavaRecordReaders resolves this service's (spec.record_read)
@@ -117,6 +129,8 @@ func collectJavaRecordReaders(config *tactype.Config, protoDir string) ([]javaRe
 			PullReqType:    "Pull" + r.RecordName + "Request",
 			HasKeyFilter:   r.HasKeyFilter,
 			HasDeletedFlag: r.HasDeletedFlag,
+			Routed:         r.Routed,
+			RouteSetter:    javaRouteSetter(r.RouteField),
 		})
 	}
 	return entries, nil

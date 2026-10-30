@@ -1,0 +1,31 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The tenant-record fixture (#207): a TENANT-OWNED record store. Each tenant
+// has its own instance, so the record plane the trait in
+// vservices/tquery.proto labels onto it is routed by tenant like every other
+// surface of a tenant-owned service: every request carries target_tenant, the
+// target tenant's tid, every rpc declares it as its route field, the generated
+// S2S clients pool the store per tenant, and its server wrapper refuses a call
+// routed to another tenant, and an entry of another tenant, whoever the caller
+// is.
+
+syntax = "proto3";
+
+package tstratum;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "tstratum", tenant_owned: true};
+option (spec.record_store) = {no_bus_ingest: true};
+
+message StratumPing {
+  string target_tenant = 1;
+}
+
+service TStratum {
+  option (spec.service_s2s) = {};
+
+  rpc Ping(StratumPing) returns (StratumPing) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"], route_field: "target_tenant"};
+  }
+}

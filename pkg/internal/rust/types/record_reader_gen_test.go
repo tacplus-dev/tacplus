@@ -256,3 +256,29 @@ func TestRecordReaderWithoutDeletedFlagIsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// Issue #207: on a plane hosted by a tenant-owned record store, every reader
+// method takes the target tenant first and sets the route field on every
+// request it sends: the direct read, and a query's Create, List and Delete.
+func TestRecordReaderRoutedThreadsTheTenant(t *testing.T) {
+	e := messageReaderEntry()
+	e.Routed, e.RouteField = true, "target_tenant"
+	out := renderRecordReaders(t, messageReaderFile(e))
+	for _, want := range []string{
+		"        &self,\n        tenant: &str,\n        delivery_id: &str,\n",
+		"        &self,\n        tenant: &str,\n        filter: Option<MessageFilter>,\n        page_size: i32,\n        page_token: impl Into<String>,\n",
+		"        &self,\n        tenant: &str,\n        filter: Option<MessageFilter>,\n        page_size: i32,\n        page_token: String,\n",
+		"self.query_page(tenant, filter, page_size, page_token.into()).await\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("routed reader missing %q:\n%s", want, out)
+		}
+	}
+	// Rows, Create, List and Delete: every call carries the route.
+	if n := strings.Count(out, "target_tenant: tenant.to_string(),"); n != 4 {
+		t.Errorf("want the route field on 4 requests, got %d:\n%s", n, out)
+	}
+	if plain := renderRecordReaders(t, messageReaderFile(messageReaderEntry())); strings.Contains(plain, "tenant: &str") || strings.Contains(plain, "target_tenant") {
+		t.Errorf("an unrouted reader takes no tenant:\n%s", plain)
+	}
+}

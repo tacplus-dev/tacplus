@@ -79,3 +79,37 @@ func TestJavaHandlerOmitsGeneratedRecordC2SGetterAndSMBindsIt(t *testing.T) {
 		t.Fatalf("ServiceManager.java must bind the generated handler for the record read plane")
 	}
 }
+
+// On a plane routed by tenant (#207) the handler routes each read to its own
+// caller's tenant, the tid of the namespace claim, and refuses a caller of no
+// tenant; the client never names it.
+func TestJavaRecordC2SHandlerRoutedReadsTheCallersTenant(t *testing.T) {
+	f := javaRecordC2SFixture()
+	f.Routed = true
+	out, err := renderJavaRecordC2SPlane(f)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	src := string(out)
+	for _, want := range []string{
+		"import com.example.chassis.serviceconnection.RouteTenant;",
+		"String tenant = RouteTenant.tenantOfCaller(namespace);",
+		`throw new ProtoException(ProtoException.PERMISSION_DENIED,
+                    method + ": the caller's namespace belongs to no tenant, and the record store is one instance per tenant");`,
+		`String tenant = requireTenant("GetScottyActivity", namespace);`,
+		"sm.scottyActivityRecordReader().list(tenant, filter, 1, \"\")",
+		`String tenant = requireTenant("GetScottyActivityPage", namespace);`,
+		"sm.scottyActivityRecordReader().list(tenant, filter.build(), request.getPageSize(), request.getPageToken())",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("routed plane handler missing %q:\n%s", want, src)
+		}
+	}
+	plain, err := renderJavaRecordC2SPlane(javaRecordC2SFixture())
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if strings.Contains(string(plain), "RouteTenant") || strings.Contains(string(plain), "requireTenant") {
+		t.Errorf("an unrouted plane handler names no tenant")
+	}
+}

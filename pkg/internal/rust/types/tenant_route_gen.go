@@ -15,6 +15,14 @@ import (
 // declare (spec.rpc).route_field. The parser requires the field on every rpc
 // of a tenant-routed service and refuses it everywhere else, so one routed rpc
 // marks the whole service.
+//
+// The flat proto dir is the tree from BEFORE the record plane is injected into
+// its trait's package, so the plane's services are not there to ask. On a
+// tenant-owned record store the injector gives every rpc of both halves its
+// route field (#207); the trait names both halves, so they are added from it.
+// Without this the ServiceManager pooled the plane's S2S target as one pool
+// over every tenant's instance, and the host never told the plane's wrappers
+// which tenant their instance serves.
 func rustTenantRoutedServices(flatProtoDir string) (map[string]bool, error) {
 	dp, err := parser.NewDescriptorParser(flatProtoDir)
 	if err != nil {
@@ -33,7 +41,24 @@ func rustTenantRoutedServices(flatProtoDir string) (map[string]bool, error) {
 			}
 		}
 	}
+	addTenantRoutedRecordPlanes(dp, routed)
 	return routed, nil
+}
+
+// addTenantRoutedRecordPlanes marks both halves of every record plane hosted
+// on a tenant-owned record store as tenant-routed (#207).
+func addTenantRoutedRecordPlanes(dp *parser.DescriptorParser, routed map[string]bool) {
+	planes := parser.TenantRoutedRecordPlanePackages(dp)
+	for _, fd := range dp.GetAllFiles() {
+		if fd == nil || fd.Trait == nil || !planes[fd.Package] {
+			continue
+		}
+		for _, svc := range []string{fd.Trait.S2SService, fd.Trait.C2SService} {
+			if svc != "" {
+				routed[fd.Package+"."+svc] = true
+			}
+		}
+	}
 }
 
 // markTenantRoutedTargets sets TenantRouted on every S2S target whose client

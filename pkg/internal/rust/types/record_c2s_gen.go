@@ -84,6 +84,10 @@ type recordC2SFile struct {
 	Methods     []recordC2SMethod
 	ServiceName string // "ScottyRecords"
 	SelfPackage string
+	// Routed: the plane's host is a tenant-owned record store (#207). The
+	// handler reads its own caller's tenant, the tid of the caller's namespace
+	// claim, and routes the store calls there; a caller of no tenant is refused.
+	Routed bool
 }
 
 // collectRecordC2SPlane resolves this service's (spec.record_read).c2s
@@ -161,6 +165,11 @@ func collectRecordC2SPlane(config *tactype.Config, protoDir string) (*recordC2SF
 		return nil, nil
 	}
 
+	routed, _, err := recordPlaneRoute(dp, traitFd)
+	if err != nil {
+		return nil, err
+	}
+
 	svcName := strutil.ToPascalCase(self.ServiceName) + "Records"
 	parentMod := rustParentMod(firstPathSegment(selfPath))
 	wrapperMod := strutil.StripPackagePrefix(strutil.ToSnakeCase(svcName), self.Package)
@@ -173,6 +182,7 @@ func collectRecordC2SPlane(config *tactype.Config, protoDir string) (*recordC2SF
 		QueryPath:   rustModulePath(traitPath, traitFd.Package),
 		ServiceName: svcName,
 		SelfPackage: config.SelfPackage,
+		Routed:      routed,
 	}
 
 	for _, decl := range decls {

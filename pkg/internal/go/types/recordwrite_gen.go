@@ -29,6 +29,12 @@ import (
 //     verified namespace is a tenant is pinned to its own (or a linked) tenant
 //     on the request's tenant field — stamped when unset, refused otherwise —
 //     and a /system peer keeps the S2S half's fleet-wide reach.
+//   - On a tenant-owned record store the plane is routed by target_tenant
+//     (#207), and every entry's tenant field must lie in that tenant
+//     (/tenants/<tid> or below), whoever the caller is, a /system peer
+//     included: PERMISSION_DENIED otherwise. CheckRoute holds the route field
+//     to the instance's own tenant, so an instance only ever stores its own
+//     tenant's entries, and a call misrouted to it leaves nothing behind.
 //   - Apply: every op is authorized exactly as its single-type RPC is, so an
 //     Apply can never write a type its caller could not write directly; the
 //     ops must be in canonical lock order (record type full name, then key,
@@ -95,6 +101,32 @@ func goRecordTenantPin(base string, path []string, method, label, indent, failSt
 `, indent, get, set, failStmt, label, nilCheck, strings.Join(path, "."))
 }
 
+// goRecordRoutePin renders the routed half of the tenant guard (#207): on a
+// plane routed by tenant, the entry's tenant field must be in the tenant the
+// call is routed to. route is the routed request's route field getter
+// expression; the route check has already refused one that is not a tid. An
+// unset tenant field is refused too: an entry on a tenant's instance belongs
+// to that tenant, and the caller says so.
+func goRecordRoutePin(base string, path []string, route, label, indent, failStmt string) string {
+	if len(path) == 0 || route == "" {
+		return ""
+	}
+	get, _, _ := goEntryExpr(base, path)
+	return fmt.Sprintf(`%[1]sif __rt, __v := %[2]s, %[3]s; __v != "/tenants/"+__rt && !strings.HasPrefix(__v, "/tenants/"+__rt+"/") {
+%[1]s	%[4]s status.Error(codes.PermissionDenied, "%[5]s: %[6]s is not in tenant "+__rt+", the tenant this call is routed to; a tenant's instance holds that tenant's entries only")
+%[1]s}
+`, indent, route, get, failStmt, label, strings.Join(path, "."))
+}
+
+// goRecordRoute returns the getter expression of a routed method's route
+// field on req, "" for a method not routed by tenant.
+func goRecordRoute(method *parser.MethodInfo) string {
+	if method.RouteField == nil {
+		return ""
+	}
+	return "req." + goRouteGetter(method.RouteField.Field) + "()"
+}
+
 // goRecordCallerNs renders the caller's verified tenant and linked tenants,
 // read once for every tenant pin of the method.
 func goRecordCallerNs() string {
@@ -130,6 +162,7 @@ func goRecordEntryPre(method *parser.MethodInfo, failStmt string) string {
 	if len(e.NamespacePath) > 0 {
 		b.WriteString(goRecordCallerNs())
 		b.WriteString(goRecordTenantPin("req", e.NamespacePath, method.Name, method.Name, "\t", failStmt))
+		b.WriteString(goRecordRoutePin("req", e.NamespacePath, goRecordRoute(method), method.Name, "\t", failStmt))
 	}
 	if e.Durability != spec.Durability_DURABILITY_UNSPECIFIED {
 		fmt.Fprintf(&b, `
@@ -196,7 +229,8 @@ func goRecordApplyPre(method *parser.MethodInfo, svc *parser.ServiceInfo, servic
 %[7]s			__k.rec, __floor, __d = %[3]q, %[4]d, int32(%[5]s.GetDurability())
 			%[6]s
 `, caseType, auth, op.Record, int32(op.Durability), inner, keySet,
-			goRecordTenantPin(inner, op.NamespacePath, method.Name, "Apply ("+op.CaseField+")", "\t\t\t", "return nil,"))
+			goRecordTenantPin(inner, op.NamespacePath, method.Name, "Apply ("+op.CaseField+")", "\t\t\t", "return nil,")+
+				goRecordRoutePin(inner, op.NamespacePath, goRecordRoute(method), "Apply ("+op.CaseField+")", "\t\t\t", "return nil,"))
 		if len(op.NamespacePath) > 0 {
 			hasTenant = true
 		}

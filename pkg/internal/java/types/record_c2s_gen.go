@@ -54,6 +54,7 @@ type javaRecordC2SFile struct {
 	PlaneOuter        string // "<base>.types.vservices.egressquery.Egressquery"
 	PageResultFqn     string
 	ProtoExceptionFqn string // "<base>.types.sys.errors.ProtoException"
+	Routed            bool   // the plane is routed by tenant (#207)
 	Methods           []javaRecordC2SMethod
 }
 
@@ -88,6 +89,7 @@ func collectJavaRecordC2SPlane(config *tactype.Config, protoDir string) (*javaRe
 		PlaneOuter:        javaTypesOuterForProto(config, protoDir, plane.TraitRelPath, plane.TraitPackage),
 		PageResultFqn:     config.JavaPackageBase + ".chassis.collection.CollectionRuntime.PageResult",
 		ProtoExceptionFqn: config.JavaPackageBase + ".types.sys.errors.ProtoException",
+		Routed:            plane.Routed,
 	}
 	for _, m := range plane.Methods {
 		var criteria []string

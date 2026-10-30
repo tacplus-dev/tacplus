@@ -56,6 +56,12 @@ type recordReaderEntry struct {
 	HasDeletedFlag bool   // whether the record declares (spec.deleted_flag), so reads can opt into flagged rows
 	ClientModPath  string // module path under internal/grpc/clients, e.g. "vservices::query::record_map"
 	ClientStruct   string // e.g. "RecordMapGrpcClient"
+	// Routed: the plane's host is a tenant-owned record store, so the plane is
+	// routed by tenant (#207); every method takes the target tenant's tid and
+	// sets RouteField on each request it sends, a query's Create, List and
+	// Delete alike.
+	Routed     bool
+	RouteField string // prost field of the route field, e.g. "target_tenant"
 }
 
 // recordReaderClient is one plane client the file's readers borrow: its module
@@ -203,6 +209,11 @@ func collectRecordReaders(config *tactype.Config, protoDir string) ([]recordRead
 		return nil, nil
 	}
 
+	routed, routeField, err := recordPlaneRoute(dp, traitFd)
+	if err != nil {
+		return nil, err
+	}
+
 	queryPath := rustModulePath(traitPath, traitFd.Package)
 	hostAccessor := strutil.ToSnakeCase(strings.ReplaceAll(traitFd.Trait.Host, "-", "_"))
 	// The generated client module mirrors the trait proto's own location:
@@ -282,10 +293,31 @@ func collectRecordReaders(config *tactype.Config, protoDir string) ([]recordRead
 			HasDeletedFlag: hasDeletedFlag,
 			ClientModPath:  clientModPath,
 			ClientStruct:   clientStruct,
+			Routed:         routed,
+			RouteField:     routeField,
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].RecordFQN < entries[j].RecordFQN })
 	return entries, nil
+}
+
+// recordPlaneRoute reports whether the record plane of traitFd is routed by
+// tenant, its host a tenant-owned record store (#207), and the prost field of
+// its route field, read off the plane's injected rpcs, which all declare the
+// same one. A routed plane whose rpcs declare none is a generator bug and
+// fails generation rather than render a reader that sends to any tenant.
+func recordPlaneRoute(dp *parser.DescriptorParser, traitFd *parser.FileDescriptor) (bool, string, error) {
+	if !parser.TenantOwnedServices(dp)[traitFd.Trait.Host] {
+		return false, "", nil
+	}
+	for si := range traitFd.Services {
+		for mi := range traitFd.Services[si].Methods {
+			if rf := traitFd.Services[si].Methods[mi].RouteField; rf != nil {
+				return true, rustRequestFieldIdent(rf.Field), nil
+			}
+		}
+	}
+	return false, "", fmt.Errorf("the record plane of trait %q is hosted on the tenant-owned %q but none of its rpcs declares a route field", traitFd.Trait.Name, traitFd.Trait.Host)
 }
 
 // findRecordByFQN locates a (spec.record) message by "package.Message".

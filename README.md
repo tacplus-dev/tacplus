@@ -89,7 +89,7 @@ protoc plugin it drives, so a build can run it as its own generate step:
 
 ```bash
 docker run --rm --pull always -v "$PWD:/workspace" \
-  ghcr.io/tacplus-dev/tacplus/tacplus:2.0 \
+  ghcr.io/tacplus-dev/tacplus/tacplus:2.4 \
   tacplus build --config tacplus.yaml --src proto
 ```
 

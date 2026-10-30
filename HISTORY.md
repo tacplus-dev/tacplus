@@ -19,3 +19,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-10-30 looper release v2.3.4 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.3.4)
 - 2026-10-30 looper release v2.4.3 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.4.3)
 - 2026-10-30 looper release v2.5.2 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.5.2)
+- 2026-10-30 looper issue Record plane on a tenant-owned record store: the generated S2S client reaches any tenant's Stratum (no tenant routing) (#207, 31ea0d55)

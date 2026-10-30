@@ -1,6 +1,6 @@
 # Known test gaps
 
-Five areas where the gates are **green but not covering** the thing their name
+Areas where the gates are **green but not covering** the thing their name
 suggests. Each was reviewed, confirmed still real, and deliberately parked — they
 need test infrastructure that does not exist yet, and none is a security or
 correctness defect on its own.
@@ -277,6 +277,27 @@ disposable test bucket behind a CI secret), ships one store through a real roll
 and checkpoint, and restores it into an empty store. The ServiceManager's archive
 wiring (`openDiskStoreLogs`, `attachArchive`) is in the same position: compiled
 and grep-asserted, not run with `archive` set.
+
+---
+
+## MP-1 — the ServiceManager's member port wiring is compiled, not run
+
+**Status:** open.
+
+`cross-test/memberport` drives the generated Java `MemberPort` itself over real
+sockets (the peer tests and Hazelcast), with a fake kernel: a test signing key and
+JWK, a test CA, and token sources that stand in for the identity manager. The
+ServiceManager's wiring of it (`memberPortAddresses`, `startMemberPort`: the
+`member:<service>` token from `identity.getTokenFor`, the JWKS watch over the
+state-store channel, the auto-TLS certificate as the serving certificate) is
+compiled and grep-asserted by that gate, not run: no fixture runs a whole
+ServiceManager against a kernel, and no kernel mints `member:<service>` yet
+(tacplus-dev/kernel#30).
+
+To close it: a gate leg that brings up two generated ServiceManagers of a
+`(spec.member_port)` service against a fake kernel (minter, JWK view, ManageCert)
+and passes peer traffic between their `getMemberPort()`s; or Stratum's adoption
+test (tacplus-dev/stratum#17) once kernel#30 lands.
 
 ---
 

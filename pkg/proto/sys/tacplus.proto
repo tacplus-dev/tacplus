@@ -653,6 +653,12 @@ message ServiceInfo {
   // Empty when that source declared no layer or the service is built in.
   // A classification input for a consumer's own policy, never an authority.
   string source = 18;
+
+  // member_port mirrors (spec.member_port): this service's members exchange
+  // black-box traffic only through its generated member port (tacplus#212).
+  // Read by the operator to expose the pod's member port and nothing else of
+  // the member protocol.
+  bool member_port = 19;
 }
 
 // VolumeGroupInfo describes one declared blob-store volume group.

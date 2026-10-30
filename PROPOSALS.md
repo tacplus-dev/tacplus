@@ -4,6 +4,18 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Cap the member port's established tunnels** (2026-10-30, #212): admission is bounded (a 10-second deadline and at
+  most 256 connections proving themselves), but authenticated tunnels are not counted: a member of the same service
+  and tenant can open as many as it likes, each with two threads. A configurable cap would bound a misbehaving or
+  compromised member. Same design for Go/Rust (#236, #237).
+- **Run the generated ServiceManager's member port end to end** (2026-10-30, #212; docs/KNOWN_TEST_GAPS.md MP-1):
+  `cross-test/memberport` drives `MemberPort` with a fake kernel; the ServiceManager wiring (the `member:<svc>` token,
+  the JWKS watch, the auto-TLS certificate) is compiled and grep-asserted only, until a fake-kernel ServiceManager leg
+  or Stratum's adoption (stratum#17, after kernel#30).
+- **Retire `(spec.smb)`, `(spec.smb_authority)` and `SmbCertService` in 3.0** (2026-10-30, #212): deprecated in 2.6,
+  superseded by `(spec.member_port)`; kernel, their only user, is dropping Hazelcast. Remove the parser, the three
+  ServiceManagers' SMB cert streams, `sys/smbcert.proto`, `cross-test/smb` and the SMB legs of `cert-stream` then (or
+  sooner, if Jody decides once kernel's rewrite drops them).
 - **The record plane's tenant checks compare tids against namespace segments** (2026-10-30, #207): the route
   check (`CheckRoute`) takes the instance's tenant from its own token's namespace (`/tenants/<t>`), and the new
   route pin holds an entry's `(spec.store_namespace)` value to `/tenants/<target_tenant>` or below. Both assume what

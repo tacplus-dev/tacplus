@@ -838,6 +838,9 @@ func detectSmbRuntimeMetadata(config *tactype.Config) (bool, string, error) {
 	if err != nil {
 		return false, "", fmt.Errorf("service manager data: parse proto descriptors in %q: %w", config.FlatProtoDir, err)
 	}
+	if err := parser.RefuseMemberPort(dp, config.SelfPackage, "rust", "tacplus#237"); err != nil {
+		return false, "", err
+	}
 	authorityID, err := parser.SmbAuthorityServiceID(dp)
 	if err != nil {
 		return false, "", fmt.Errorf("service manager data: resolve SMB authority: %w", err)

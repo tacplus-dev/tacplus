@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-10-30 by looper (#207).
+Overwritten to stay current (loopers and agents). Last updated: 2026-10-30 by looper (#212).
 
 - **Version / line:** v2.5.0 (latest release, 2026-10-28, `release/2.5` cut at it); main is the 2.6 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -50,6 +50,15 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-10-30 by lo
   HTTP/2 server the generated Go chassis reaches, and GO-2026-6860/6866) in every go.mod they write and every
   dependencies.yaml; `scripts/go_dependency_floor_test.go` refuses a lower or missing pin (#199; backported to
   release/2.0 through release/2.5 by pull request, each line's next patch once it merges).
+  Generated member port (#212): `option (spec.member_port) = {}` makes the Java ServiceManager own a member port
+  for the service's black-box member traffic (Hazelcast in Stratum): server TLS 1.3 with the auto-TLS certificate,
+  ALPN `tacplus-member/1`, framed `AUTH`/`DATA`/`CLOSE_WRITE`, kernel tokens for `member:<svc>` checked both ways and
+  refreshed in-band, same service and namespace only, drop on expiry, nothing forwarded before `AUTH`, no plaintext;
+  `grpcconfig.member_port` places it (loopback target only); `sm.getMemberPort().forward(remote)` tunnels outbound.
+  registry.json carries `member_port`. Go and Rust refuse the annotation until #236/#237 (required before 2.6.0).
+  `(spec.smb)`/`(spec.smb_authority)`/`SmbCertService` are deprecated (removed in 3.0) and exclusive with it.
+  Pinned by `cross-test/memberport` (`just memberport`, in the gates): the memberport-peer tests and two tenants'
+  Hazelcast 5.7 members.
   Fleets pin services by release line (#180): `fleet.yaml` names a `version: "MAJOR.MINOR"` for every service (or
   an explicit `MAJOR.MINOR.PATCH-pre`), and `tacplus fleet build` resolves it to the line's highest released tag,
   pre-releases excluded, and to that release's image on ghcr.io by digest; `fleet.lock` records version, commit and
@@ -57,7 +66,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-10-30 by lo
   unresolvable line and a release without its image are refused.
 - **Released / deployed:** v2.5.0 is the newest release (binaries and checksums; images as before: from 2.6.0 a
   release publishes binaries and `build:X.Y.Z`, and no tacplus image).
-- **Known gaps:** the redo service and the per-tenant Stratum that implement the redo contract are their repos'
+- **Known gaps:** The member port needs kernel to mint `member:<svc>` (tacplus-dev/kernel#30) before Stratum adopts
+  it (stratum#17); its ServiceManager wiring is compiled, not run (KNOWN_TEST_GAPS MP-1); Go and Rust do not generate
+  it yet (#236, #237). the redo service and the per-tenant Stratum that implement the redo contract are their repos'
   (tacplus-dev/redo#1, tacplus-dev/stratum#2). The gateway does not yet route by the route field nor stamp `McpRequest.tenant`
   (tacplus-dev/gateway#3 and its MCP follow-up). MCP on a tenant-owned service is same-tenant only (PROPOSALS.md).
   No C2S record writes (by decision, 2.5). The Rust wrapper renders no (spec.store_namespace) predicate pin on the

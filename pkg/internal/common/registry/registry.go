@@ -236,6 +236,9 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 							if svc.IsSMBAuthority {
 								si.SmbAuthority = true
 							}
+							if svc.IsMemberPort {
+								si.MemberPort = true
+							}
 							for _, vg := range svc.VolumeGroups {
 								si.VolumeGroups = append(si.VolumeGroups, &spec.VolumeGroupInfo{
 									Name:             vg.Name,

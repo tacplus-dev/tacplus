@@ -27,6 +27,20 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
 - `smb` (`cross-test/smb/run.sh`) and `cert-stream`
   (`cross-test/cert-stream/run.sh`): service-mesh-boundary and certificate-stream
   runtime gates for Go, Java, and Rust. Run in the nightly matrix.
+- `memberport` (`cross-test/memberport/run.sh`, `just memberport`, in `just gates`):
+  the generated `(spec.member_port)` member port (tacplus#212). Java runs the
+  `memberport-peer` fixture (seeded streams checked byte for byte, both
+  directions at once) through peer ↔ member port ↔ member port ↔ peer:
+  1 byte to multi-MB, 48 concurrent connections, half-close either way, a stream
+  across several in-band token refreshes, a stalled reader (bounded buffering, no
+  drop), every refused input (another tenant's or service's token, no token, an
+  expired token, a wrong audience or key, garbled or oversized frames, data
+  before `AUTH`, plaintext, no ALPN) with nothing forwarded, expiry without
+  refresh, a stalled mint, an unreachable JWKS, a certificate rotation mid-stream,
+  and the sender's checks of the receiver (its certificate and its `AUTH`); then
+  two tenants' Hazelcast 5.7 members through the port. `MEMBERPORT_SOAK=1` adds
+  a soak that prints throughput and latency against a direct connection. Go and
+  Rust must refuse the annotation at generation until #236/#237.
 - `external-token` (`cross-test/external-token/run.sh`): behavioral gate for the
   generated external-audience token accessor (`token_for_external` /
   `TokenForExternal` / `tokenForExternal`) in Go, Java, and Rust. A mock token

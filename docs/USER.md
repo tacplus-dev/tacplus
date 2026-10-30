@@ -454,6 +454,54 @@ language-specific C2D helpers for those services (no YAML flag is involved). C2D
 clients do not attach generated bearer tokens; the local IPC boundary is the
 operating-system transport and its permissions.
 
+### Member Port (black-box member traffic)
+
+A service whose own members exchange opaque traffic (Hazelcast's member
+protocol, say) declares `option (spec.member_port) = {};` on its service. Its
+generated ServiceManager then owns a **member port**, the only way that traffic
+crosses the network: server TLS with the member's auto-TLS certificate plus
+kernel-signed bearer tokens, never mTLS (tacplus#212; the wire contract is in
+[API.md → Member Port](API.md#member-port)).
+
+```protobuf
+service GridService {
+  option (spec.service_s2s) = {label: "grid"};
+  option (spec.member_port) = {};
+  ...
+}
+```
+
+- The service's `(spec.service_state)` must declare `auto_tls`: the port serves
+  that certificate, and generation fails without it.
+- `(spec.member_port)` and the deprecated `(spec.smb)` may not be declared on the
+  same service.
+- Generated for **Java**. Go and Rust refuse the annotation at generation until
+  they generate it (tacplus#236, tacplus#237).
+- Addresses are runtime config, `grpcconfig.member_port`:
+  `listen_address` is the pod's member port; `target_address` is where the
+  black-box protocol binds, and must be loopback (startup refuses anything else).
+  Both are required; startup fails without them.
+
+The implementer's side:
+
+- Bind the black-box protocol to `target_address` only (loopback).
+- For each other member, `sm.getMemberPort().forward(remoteMemberPort)` returns
+  a loopback address; the protocol dials that address instead of the member. The
+  mapping from a member to its loopback address (Hazelcast's
+  `MemberAddressProvider`, say) is the service's own glue: tacplus knows nothing
+  of the protocol.
+- The member port's tokens are minted for audience `member:<service>` through the
+  generated identity manager. The token authority must allow a service to mint
+  that audience for its own label (tacplus-dev/kernel#30).
+- A member admits only a member of the same service in the same namespace (for a
+  tenant-owned service, the same tenant), forwards nothing before a valid token,
+  drops a connection whose peer token expires without an in-band refresh, and has
+  no plaintext fallback.
+
+`(spec.smb)`, `(spec.smb_authority)` and `sys/smbcert.proto`'s `SmbCertService`
+are deprecated in 2.6 (the mTLS-era member feature, with a per-SMB CA) and will
+be removed in 3.0.
+
 ### Serialization Annotations
 
 | Annotation | Effect |

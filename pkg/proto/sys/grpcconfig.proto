@@ -204,6 +204,31 @@ message Config {
   // Must be positive. Default: 30 seconds.
   int64 config_fetch_timeout_seconds = 21 [(spec.assert_duration) = DURATION_TYPE_POSITIVE, (spec.default_int) = 30];
 
+  // ============================================================================
+  // Member Port (black-box member traffic, tacplus#212)
+  // ============================================================================
+
+  // member_port is where the generated member port of a (spec.member_port)
+  // service listens and where it delivers. Required by such a service (startup
+  // fails without it) and ignored by any other. An init-time setting: it is not
+  // hot-reloaded.
+  MemberPortConfig member_port = 22;
+
+}
+
+// MemberPortConfig places a service's member port (tacplus#212). The port
+// accepts TLS connections from the service's other members on listen_address,
+// admits only a member of the same service and namespace (tenant) that opens
+// with a valid kernel-signed token, and forwards that connection's raw bytes to
+// target_address, where the service's black-box protocol (Hazelcast, say) binds.
+message MemberPortConfig {
+  // listen_address is the pod's member port: the address the other members dial.
+  host.Host listen_address = 1 [(spec.assert_required) = true];
+
+  // target_address is where the black-box protocol listens inside the pod. It
+  // must be a loopback address, so nothing reaches the protocol except through
+  // the member port: startup refuses any other.
+  host.Host target_address = 2 [(spec.assert_required) = true];
 }
 
 // ============================================================================

@@ -133,6 +133,10 @@ import {{.TypesBase}}.sys.key.KeyOuterClass;
 import {{.TypesBase}}.sys.smbcert.Smbcert;
 import {{.TypesBase}}.sys.smbcert.SmbCertServiceGrpc;
 {{- end}}
+{{- if .HasMemberPort}}
+import {{.ChassisBase}}.memberport.MemberPort;
+import java.net.InetSocketAddress;
+{{- end}}
 
 /**
  * ServiceManager holds the infrastructure state created during create().
@@ -201,6 +205,12 @@ public class ServiceManager implements AutoCloseable {
      * {@link #create(String[])} and blocks until the first member cert is delivered.
      */
     private final AtomicReference<Handler> smbHandlerSlot = new AtomicReference<>();
+{{- end}}
+{{- if .HasMemberPort}}
+    /** The member port (spec.member_port, tacplus#212), listening from create(). */
+    private volatile MemberPort memberPort;
+    /** The member port's JWKS watch over the state-store channel. */
+    private volatile MemberPort.WatchedJwks memberJwks;
 {{- end}}
 {{- if .HasStates}}
     private final StateClients stateClients;
@@ -390,6 +400,11 @@ public class ServiceManager implements AutoCloseable {
         // load, before ANY field is read — guarantees every annotated default is
         // in effect on every path, including the state authority's.
         cfg = {{.TypesBase}}.sys.grpcconfig.Helpers.configDefaults(cfg).build();
+{{- if .HasMemberPort}}
+        // A missing or non-loopback member port is a permanent misconfiguration:
+        // refuse it before any retry loop (fail-closed, never a plaintext port).
+        memberPortAddresses(cfg);
+{{- end}}
         // Bind the plaintext health probe listener BEFORE any kernel-dependent init.
         // The health service starts NOT_SERVING; it is flipped to SERVING only after
         // bootstrap completes in run(). This ensures k8s startup probes can connect
@@ -448,6 +463,14 @@ public class ServiceManager implements AutoCloseable {
                         throw new RuntimeException("auto-TLS handler rejected the first certificate delivery", tlsError.get());
                     }
                     throw new RuntimeException("auto-TLS cert stream failed to deliver initial certificate", tlsError.get());
+                }
+{{- end}}
+{{- if .HasMemberPort}}
+                try {
+                    sm.startMemberPort();
+                } catch (Exception e) {
+                    sm.close();
+                    throw e;
                 }
 {{- end}}
                 return sm;
@@ -540,6 +563,71 @@ public class ServiceManager implements AutoCloseable {
 
     /** Returns the server-assigned instance ID. */
     public String getInstanceId() { return identity.getInstanceId(); }
+{{- if .HasMemberPort}}
+
+    /**
+     * Returns the member port (spec.member_port): already listening on
+     * grpcconfig.member_port.listen_address and delivering to its loopback
+     * target_address. Call {@link MemberPort#forward} for each remote member to
+     * get the loopback address the black-box protocol dials instead.
+     */
+    public MemberPort getMemberPort() { return memberPort; }
+
+    /** grpcconfig.member_port's listen and target addresses; the target must be loopback. */
+    private static InetSocketAddress[] memberPortAddresses(Config cfg) {
+        if (!cfg.hasMemberPort() || !cfg.getMemberPort().hasListenAddress() || !cfg.getMemberPort().hasTargetAddress()) {
+            throw new IllegalArgumentException(
+                    "grpcconfig.member_port.listen_address and target_address are required: {{.ServiceLabel}} declares (spec.member_port)");
+        }
+        var mp = cfg.getMemberPort();
+        InetSocketAddress listen = new InetSocketAddress(mp.getListenAddress().getHost(), mp.getListenAddress().getPort());
+        InetSocketAddress target = new InetSocketAddress(mp.getTargetAddress().getHost(), mp.getTargetAddress().getPort());
+        if (target.isUnresolved() || !target.getAddress().isLoopbackAddress()) {
+            throw new IllegalArgumentException(
+                    "grpcconfig.member_port.target_address must be a loopback address, got " + target
+                    + ": nothing may reach the member protocol except through the member port");
+        }
+        if (cfg.getSpiffeTrustDomain().isEmpty() || cfg.getTrustedCasCount() == 0) {
+            throw new IllegalArgumentException(
+                    "grpcconfig.spiffe_trust_domain and trusted_cas are required: the member port verifies peer members against them");
+        }
+        return new InetSocketAddress[] {listen, target};
+    }
+
+    /**
+     * Starts the member port: its token is this instance's, minted for audience
+     * member:{{.ServiceLabel}} and refreshed by the identity manager; its JWKS is
+     * watched over the state-store channel; it serves the auto-TLS certificate
+     * (a renewal applies from the next handshake).
+     */
+    private void startMemberPort() throws Exception {
+        InetSocketAddress[] addresses = memberPortAddresses(config);
+        String memberAudience = MemberPort.audienceFor("{{.ServiceLabel}}");
+        memberJwks = new MemberPort.WatchedJwks(Authorizer.remoteSource(stateStoreConn.conn()));
+        memberPort = new MemberPort(
+                "{{.ServiceLabel}}",
+                config.getSpiffeTrustDomain(),
+                MemberPort.certificates(config.getTrustedCasList()),
+                () -> identity.getTokenFor(memberAudience),
+                memberJwks,
+                () -> {
+                    CertAndKey ck = certAndKey.get();
+                    if (ck == null) {
+                        return null;
+                    }
+                    try {
+                        return new MemberPort.Material(
+                                MemberPort.certificates(ck.chain.getChainList()).toArray(new X509Certificate[0]),
+                                ck.privateKey);
+                    } catch (Exception e) {
+                        reportTLSDegraded("member port: serving certificate could not be decoded: " + e.getMessage());
+                        return null;
+                    }
+                });
+        InetSocketAddress bound = memberPort.listen(addresses[0], addresses[1]);
+        LOG.info("member port listening on " + bound + ", delivering to " + addresses[1]);
+    }
+{{- end}}
 
     /**
      * Marks the service as SERVING or NOT_SERVING on the gRPC health endpoint
@@ -730,6 +818,14 @@ public class ServiceManager implements AutoCloseable {
 	{{- if .HasSmb}}
 	        smbAuthorityConn.close();
 	{{- end}}
+{{- if .HasMemberPort}}
+        if (memberPort != null) {
+            memberPort.close();
+        }
+        if (memberJwks != null) {
+            memberJwks.close();
+        }
+{{- end}}
         if (earlyHealthProbeServer != null) {
             earlyHealthProbeServer.shutdown();
             try {
@@ -1602,6 +1698,14 @@ public class ServiceManager implements AutoCloseable {
 	{{- if .HasSmb}}
 	        smbAuthorityConn.close();
 	{{- end}}
+{{- if .HasMemberPort}}
+        if (memberPort != null) {
+            memberPort.close();
+        }
+        if (memberJwks != null) {
+            memberJwks.close();
+        }
+{{- end}}
         if (earlyHealthProbeServer != null) {
             earlyHealthProbeServer.shutdown();
             try {

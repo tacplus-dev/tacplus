@@ -182,6 +182,7 @@ type javaSmTemplateData struct {
 	HasAutoTls            bool
 	AutoTlsKeyType        string
 	HasSmb                bool // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
+	HasMemberPort         bool // true when this service declares (spec.member_port): the ServiceManager owns its member port (tacplus#212)
 	SmbAuthorityServiceID string
 	HasSubscriptions      bool
 	// HasRecordSubscriptions is true when any subscription sets
@@ -424,6 +425,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 	}
 
 	hasSmb := false
+	hasMemberPort := false
 	smbAuthorityServiceID := ""
 	hasTypedHealth := false
 	typedHealthType := ""
@@ -456,6 +458,13 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 					}
 				}
 			}
+			// Detect a (spec.member_port) service in the own package — drives the
+			// ServiceManager-owned member port (tacplus#212).
+			for si := range fd.Services {
+				if fd.Services[si].IsMemberPort {
+					hasMemberPort = true
+				}
+			}
 			// Detect service_health message in the service's own package.
 			if !hasTypedHealth {
 				declaresServiceState := false
@@ -485,6 +494,12 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 				}
 			}
 		}
+	}
+	// The member port serves TLS with the member's kernel-issued serving
+	// certificate, which only auto_tls delivers: without it there is nothing
+	// to serve, and a member port must never fall back to plaintext.
+	if hasMemberPort && !config.HasAutoTls() {
+		return javaSmTemplateData{}, fmt.Errorf("service manager data: %q declares (spec.member_port), which serves TLS with the member's serving certificate: declare auto_tls on its (spec.service_state)", config.SelfPackage)
 	}
 
 	// Build subscription entries from config.
@@ -698,6 +713,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		HasAutoTls:             config.HasAutoTls(),
 		AutoTlsKeyType:         config.AutoTlsKeyType(),
 		HasSmb:                 hasSmb,
+		HasMemberPort:          hasMemberPort,
 		SmbAuthorityServiceID:  smbAuthorityServiceID,
 		HasSubscriptions:       len(subs) > 0,
 		HasRecordSubscriptions: hasRecordSubscriptions,

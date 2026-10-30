@@ -142,7 +142,8 @@ re-resolve the authority endpoint on every attempt; a certificate stream must
 not pin a dead channel, stub, observer, or connection forever after the
 authority endpoint changes.
 
-SMB member certificate delivery follows the same state machine and staging
+SMB (deprecated in 2.6, removed in 3.0; member traffic uses the
+[member port](#member-port)) member certificate delivery follows the same state machine and staging
 rules. The delivered per-SMB CA certificate is the trust anchor for the
 black-box member mesh. The true root CA and any CA private key must not enter
 generated black-box runtime configuration. The generated SMB handler seam
@@ -163,6 +164,61 @@ does reconnect after post-delivery errors), but re-resolution to a changed
 endpoint is not pinned. The contract requires it (see the required failure
 table above), and template code implements it, but no behavioral test verifies
 it.
+
+### Member Port
+
+A `(spec.member_port)` service's ServiceManager owns a member port
+(tacplus#212), reached through `sm.getMemberPort()` (Java; Go and Rust refuse
+the annotation until tacplus#236 and #237). It is the only path for the
+service's black-box member traffic, and it fails closed.
+
+- **Startup.** `create()` reads `grpcconfig.member_port` before anything else
+  and refuses a missing `listen_address` or `target_address`, or a target that is
+  not loopback, or no `spiffe_trust_domain` or `trusted_cas`, as a permanent
+  error. After the first auto-TLS delivery it starts listening on
+  `listen_address`; if that fails, the attempt fails and `create()` retries it
+  with the rest of its initialization.
+- **Inbound.** TLS 1.3 only, ALPN `tacplus-member/1`, with the instance's auto-TLS
+  certificate (a renewal applies from the next handshake). No client
+  certificate is asked for. After a valid `AUTH` from the peer, the port sends
+  its own `AUTH` and only then dials `target_address`, so nothing reaches the
+  protocol (not even a connection) before a valid token.
+- **Outbound.** `forward(remote)` (or `forward(remote, localLoopbackAddress)`)
+  returns a loopback address; each connection to it is tunnelled to the remote
+  member port. The sender verifies the receiver twice before any byte moves: its
+  certificate chains to `trusted_cas` and carries a service SPIFFE ID of the
+  configured trust domain for this service, in this instance's own tenant
+  (tenant-owned) or under `/system` (platform service), and its `AUTH` frame back
+  passes the same check as an inbound one.
+- **Frames.** Every byte between member ports is framed: 1-byte type, 4-byte
+  big-endian length, payload. `AUTH` = 1 (a token, at most 16 KiB), `DATA` = 2
+  (1 to 64 KiB), `CLOSE_WRITE` = 3 (empty; the sender sends no more `DATA`,
+  since TLS close_notify ends both directions). Each side's first frame is
+  `AUTH`. A connection ends cleanly when both sides have sent `CLOSE_WRITE`.
+- **Admission.** A token is admitted only if it verifies against a key of the
+  JWKS, is unexpired (no clock-skew allowance past `exp`), is not a refresh,
+  bootstrap, locality or external token, is a service token with audience
+  `member:<service>` (token use unset, `service` or `access`), names this service, and is in exactly this instance's own
+  namespace (read from its own member token).
+- **Refresh and expiry.** Each side resends `AUTH` in-band whenever its identity
+  manager hands it a newer token (checked at a quarter of the remaining
+  lifetime), with no reconnect. A refreshed token is checked like the first; a
+  failing one drops the connection. A peer whose token reaches `exp` without a
+  newer one is dropped, so revocation takes effect within one token lifetime.
+- **Dropped, with nothing more forwarded:** a first frame that is not `AUTH`, an
+  unknown type, an oversized or empty frame, `DATA` after `CLOSE_WRITE`, a
+  plaintext or non-ALPN peer, a refused token.
+- **Admission deadline.** A connection must finish the TLS handshake and the
+  opening `AUTH` exchange within 10 seconds of being accepted, however slowly it
+  sends; at most 256 connections may be in admission at once, and more are
+  dropped on accept.
+- **Backpressure.** Blocking I/O with one 64 KiB buffer per direction: a slow
+  reader stalls the writer behind it; nothing is buffered without bound and
+  nothing is dropped. Neither direction moves `DATA` for a peer whose token has
+  expired.
+- **Secrets.** Tokens are never logged. A refusal is logged with its reason.
+
+The behaviour is pinned by `cross-test/memberport` (`just memberport`).
 
 ## Handler And Wrappers
 

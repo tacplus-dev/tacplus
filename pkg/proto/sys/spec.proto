@@ -1392,6 +1392,21 @@ message SmbAnnotation {
 message SmbAuthorityAnnotation {
 }
 
+// MemberPortAnnotation marks a service whose own members exchange opaque
+// (black-box) traffic, Hazelcast's member protocol for example, and makes its
+// generated ServiceManager own a member port for it (tacplus#212). Every byte
+// between members goes through member ports: server TLS with the member's
+// kernel-issued serving certificate, then a framed stream that opens with a
+// kernel-signed bearer token (audience "member:<service>") in each direction and
+// refreshes it in-band. A port admits only a member of the same service in the
+// same namespace (the same tenant), forwards nothing before a valid token, drops
+// the connection when the peer's token expires unrefreshed, and has no plaintext
+// fallback. Addresses are deployment facts, so they live in runtime config
+// (grpcconfig.member_port), not here. Requires auto_tls on the service's state
+// (the serving certificate); may not be combined with (spec.smb).
+message MemberPortAnnotation {
+}
+
 // VolumeGroupAnnotation declares one named volume group in the platform blob
 // store, owned by the service carrying the annotation. A volume group is a set
 // of build-time rules (accepted content types, per-blob size ceiling, per-tenant
@@ -2995,6 +3010,10 @@ extend google.protobuf.ServiceOptions {
   //          option (spec.token_minter) = {proxy: true}; // gateway C2S front
   TokenMinterAnnotation token_minter = 70016;
 
+  // DEPRECATED (2.6, removed in 3.0): the mTLS-era black-box member feature.
+  // Member traffic uses (spec.member_port) instead: server TLS plus kernel
+  // tokens, no per-SMB CA (tacplus#212). A service may not declare both.
+  //
   // smb (Service Mesh Blackbox) marks a service whose OWN INSTANCES communicate
   // over a black-box peer protocol within a
   // single cluster (SPIFFE plan D7). Each instance obtains a per-SMB CA + its
@@ -3006,6 +3025,8 @@ extend google.protobuf.ServiceOptions {
   //          option (spec.smb) = {root: SMB_ROOT_CLUSTER};
   SmbAnnotation smb = 70020;
 
+  // DEPRECATED (2.6, removed in 3.0) with (spec.smb) and sys SmbCertService.
+  //
   // smb_authority marks the consumer service that issues isolated per-SMB CAs and
   // member certs for spec.smb services — declared EXPLICITLY (like token_minter),
   // not inferred. tacplus targets the service carrying this annotation as the SMB
@@ -3034,6 +3055,16 @@ extend google.protobuf.ServiceOptions {
   // than one service declares itself the broker. The token authority implements it.
   // Example: option (spec.approval_broker) = {};
   ApprovalBrokerAnnotation approval_broker = 70023;
+
+  // member_port makes the generated ServiceManager own a member port: the only
+  // way this service's members exchange black-box traffic (tacplus#212). The
+  // ServiceManager listens on grpcconfig.member_port.listen_address, forwards
+  // each authenticated connection's raw bytes to target_address (loopback only),
+  // and tunnels outbound member connections through forward(remote). Generated
+  // for Java; Go and Rust refuse it at generation until they generate it.
+  // Requires auto_tls; may not be combined with (spec.smb).
+  // Example: option (spec.member_port) = {};
+  MemberPortAnnotation member_port = 70024;
 }
 
 extend google.protobuf.MethodOptions {

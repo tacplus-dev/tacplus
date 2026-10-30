@@ -187,7 +187,7 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
-  for g in soundness test current-generation determinism cert-stream claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg tacplus-script; do
+  for g in soundness test current-generation determinism cert-stream memberport claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg tacplus-script; do
     echo "=== $g ==="
     just "$g"
     rc=$?
@@ -218,6 +218,20 @@ gates-container:
 # output with two real tacplus builds. Under dash (POSIX sh) when installed.
 tacplus-script: generate
   {{lock}} bash images/tacplus_test.sh
+
+# The generated member port (tacplus#212): Java's memberport-peer and
+# Hazelcast tests over real sockets; Go and Rust must refuse (spec.member_port)
+# until they generate it (#236, #237). MEMBERPORT_SOAK=1 adds the soak.
+memberport: memberport-java memberport-go memberport-rust
+
+memberport-java:
+  {{lock}} bash cross-test/memberport/run.sh --language java
+
+memberport-go:
+  {{lock}} bash cross-test/memberport/run.sh --language go
+
+memberport-rust:
+  {{lock}} bash cross-test/memberport/run.sh --language rust
 
 # Behavioral coverage of the generated TLS/SMB cert-stream loops.
 cert-stream: cert-stream-go cert-stream-java cert-stream-rust

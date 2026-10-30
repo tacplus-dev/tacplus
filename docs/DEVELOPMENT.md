@@ -536,6 +536,13 @@ the archived SPIFFE_IDENTITY_NORMALIZATION_PLAN (not in this repository)):
   only the per-SMB CA cert and the instance's own member cert. Private keys
   never cross the wire (member key stays on the instance, CA key stays with
   the authority).
+- Member port (`(spec.member_port)`, tacplus#212): server TLS plus kernel tokens,
+  never mTLS. Nothing is forwarded, and the target is not dialled, before a valid
+  `AUTH`; a peer is admitted only as the same service in the same namespace with
+  audience `member:<service>`; the target and local forward addresses are
+  loopback only; tokens are never logged. A language that does not generate the
+  member port must refuse the annotation at generation (`parser.RefuseMemberPort`),
+  never emit a service without it.
 - Every language's generated SPIFFE tests load the shared vector corpus
   (`cross-test/fixtures/spiffe_vectors.json`) so identity behavior cannot
   drift per language.

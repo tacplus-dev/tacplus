@@ -176,6 +176,7 @@ type ServiceDescriptor struct {
 	IsSMB            bool     // smb annotation present: this service's own instances talk over a black-box peer protocol (SPIFFE plan D7)
 	SmbRoot          spec.SmbRoot
 	IsSMBAuthority   bool              // smb_authority annotation present: this service issues per-SMB CAs + member certs (SPIFFE plan D7)
+	IsMemberPort     bool              // member_port annotation present: the ServiceManager owns a member port for this service's black-box member traffic (tacplus#212)
 	VolumeGroups     []VolumeGroupInfo // volume_group annotations: blob-store volume groups this service declares (repeatable)
 	IsTokenMinter    bool              // token_minter annotation present: this service mints service-identity tokens
 	TokenMinterProxy bool              // token_minter {proxy: true}: the client-reachable (C2S) mint front; bare {} is the authoritative S2S minter
@@ -1091,6 +1092,14 @@ func (p *DescriptorParser) parseServiceOptions(sd protoreflect.ServiceDescriptor
 	if proto.HasExtension(opts, spec.E_SmbAuthority) {
 		if val := proto.GetExtension(opts, spec.E_SmbAuthority).(*spec.SmbAuthorityAnnotation); val != nil {
 			svc.IsSMBAuthority = true
+		}
+	}
+
+	// member_port (MemberPortAnnotation) — this service's members exchange
+	// black-box traffic only through a generated member port (tacplus#212).
+	if proto.HasExtension(opts, spec.E_MemberPort) {
+		if val := proto.GetExtension(opts, spec.E_MemberPort).(*spec.MemberPortAnnotation); val != nil {
+			svc.IsMemberPort = true
 		}
 	}
 

@@ -27,6 +27,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-10-30 by lo
   Marvin) and the elliptic-curve 0.13 stack (crypto-bigint 0.5, RUSTSEC-2026-0387) are gone from the generated
   lockfile, which current-generation checks (#186; backported to release/2.0 through release/2.5 by pull request, as
   v2.0.12, v2.1.5, v2.2.2, v2.3.4, v2.4.3 and v2.5.2 once they merge).
+  No install text names a `tacplus:X.Y` image (`TestDocsPinNoTacplusImage`); the release branches' install docs,
+  which still pinned `tacplus:2.0`, pin their own line (#201; release/2.1 through release/2.5 by pull request,
+  #238–#242, as v2.1.7, v2.2.4, v2.3.6, v2.4.5 and v2.5.5 once they merge).
   The record plane of a tenant-owned record store is routed by tenant (#207): every request of both halves carries
   `target_tenant` (field 15) and every rpc declares it as its route field, so the generated clients (Go, Java, Rust)
   pool the store per tenant, the typed record readers take the tenant, and the store's wrapper refuses, whoever the

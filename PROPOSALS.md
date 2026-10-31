@@ -59,6 +59,14 @@ the looper then marks it `promoted` or `declined` here with the date.
   offers in every language (`generate_rsa_8192_key`); TLS stays on rustls's ring provider. A service now compiles
   both. Moving rustls to its aws-lc-rs provider (`rustls/aws_lc_rs`, the rustls default) would leave one; it changes
   the TLS stack of every generated Rust service, so it is a minor's change, with the TLS parity gates.
+- **osv-scanner of the Java harness poms in the gates, and one shared pom** (2026-10-31, #200): the Java harness
+  poms are ten hand-kept copies (six checked in, four written by `cross-test/lib/java-compile.sh`,
+  `consumer-contract`, `cert-stream` and `memberport`), and `scripts/java_dependency_floor_test.go` holds only the
+  floors already named (guava, tools.jackson). A new advisory on any other artifact they resolve is found by the
+  nightly scan after it lands. Running `osv-scanner scan source` over the poms the gates write (osv-scanner in the
+  build image) would fail on the first one, and one pom template the scripts and fixtures derive from would turn
+  the next bump into one edit. The `google-cloud-storage` dependency `add_java_gcs_archive_dependency` splices in
+  for the GCS archive build is outside every scan today (it is not in any pom on disk).
 - **govulncheck of the generated Go modules in the gates** (2026-10-30, #199): the harnesses pin the generated
   chassis's Go dependencies by hand, and `scripts/go_dependency_floor_test.go` holds only the floors already named
   (golang.org/x/net). A new advisory on any other module the chassis reaches (grpc, x/crypto, gin) is found by the

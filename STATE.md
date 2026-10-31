@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-10-31 by looper (#195).
+Overwritten to stay current (loopers and agents). Last updated: 2026-10-31 by looper (#200).
 
 - **Version / line:** v2.5.0 (latest release, 2026-10-28, `release/2.5` cut at it); main is the 2.6 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -50,6 +50,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-10-31 by lo
   HTTP/2 server the generated Go chassis reaches, and GO-2026-6860/6866) in every go.mod they write and every
   dependencies.yaml; `scripts/go_dependency_floor_test.go` refuses a lower or missing pin (#199; backported to
   release/2.0 through release/2.5 by pull request, each line's next patch once it merges).
+  Every Java harness pom (the checked-in fixtures and the ones cross-test scripts write) pins, under
+  `<dependencyManagement>`, `com.google.guava:guava` 33.7.2-android (GHSA-xxph-c9ww-hj94, through grpc-java) and,
+  beside the MCP Java SDK, `tools.jackson.*` 3.1.8 (nine GHSAs in the SDK's 3.1.4); docs/USER.md tells Java
+  consumers to pin the same. `scripts/java_dependency_floor_test.go` refuses a lower or missing pin (#200;
+  backported to release/2.0 through release/2.5 by pull request, each line's next patch once it merges).
   Generated member port (#212): `option (spec.member_port) = {}` makes the Java ServiceManager own a member port
   for the service's black-box member traffic (Hazelcast in Stratum): server TLS 1.3 with the auto-TLS certificate,
   ALPN `tacplus-member/1`, framed `AUTH`/`DATA`/`CLOSE_WRITE`, kernel tokens for `member:<svc>` checked both ways and

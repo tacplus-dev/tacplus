@@ -1,0 +1,130 @@
+= init
+> Bash gh issue view 200 --repo tacplus-dev/tacplus --comments | tail -30; git log --oneline -3; git tag --sort=-v:refname | head -5; git branch -r | grep release
+< The looper of tacplus holds this issue back for now: both touch docs/USER.md (#196, starting). It plans again as each running issue ends. Plan record: job https://gitlab.com/tacplus-dev/looper/-/jobs/17629704408, artifact `looper-runs/20261031T122640Z-plan/claude.log` (https://gitlab.com/tacplus-dev...
+= thinking_tokens
+= thinking_tokens
+> Bash for t in v2.5.0 v2.5.1 v2.5.2 v2.5.3 v2.5.4; do echo "$t $(git log -1 --format='%h %ad %s' --date=short $t) on-main:$(git merge-base --is-ancestor $t origin/main && echo y || echo n)"; done; git log --oneline v2.5.0..origin/main | wc -l; git log --oneline v2.5.4..origin/main | head -30; cat tacplus....
+< v2.5.0 5be38c4b 2026-10-28 CI: allowlist the #179 JWK vectors in gitleaks; supported lines through 2.5 (#198) on-main:y v2.5.1 69d28461 2026-10-28 fetch layer: authenticate github.com clones with GH_TOKEN, only there (#191) (#209) on-main:n v2.5.2 37dc6d99 2026-10-29 Rust chassis: RSA and ECDSA on a...
+> Bash sed -n 1,400p docs/VERSIONING.md | grep -n -i -A3 'patch\|backport\|release/' | head -120
+< 8:tacplus releases are `MAJOR.MINOR.PATCH` git tags `vMAJOR.MINOR.PATCH` 9-(`.github/workflows/release.yml` builds the binaries from the tag). 10- 11:- **A patch is fixes only.** A new feature, a new annotation, a new generated 12:  surface or a changed generated surface never goes into a patch. A p...
+= thinking_tokens
+= thinking_tokens
+> Bash gh pr list --repo tacplus-dev/tacplus --state all --search "199 in:title" --limit 10; gh pr list --repo tacplus-dev/tacplus --state all --limit 15
+< 248	[release/2.5] Pin golang.org/x/net at v0.62.0 in the cross-test harnesses and the example (#199)	backport/199-release-2.5	MERGED	2026-10-30T15:17:26Z 247	[release/2.4] Pin golang.org/x/net at v0.62.0 in the cross-test harnesses and the example (#199)	backport/199-release-2.4	MERGED	2026-10-30T15...
+> Bash gh pr view 248 --repo tacplus-dev/tacplus; gh pr view 243 --repo tacplus-dev/tacplus | tail -20; git show --stat d2078cd0 | head -40
+< GraphQL: Your token has not been granted the required scopes to execute this query. The 'login' field requires one of the following scopes: ['read:org'], but your token has only been granted the: ['repo', 'workflow'] scopes. Please modify your token's scopes at: https://github.com/settings/tokens., ...
+= thinking_tokens
+= thinking_tokens
+> Bash gh pr view 248 --repo tacplus-dev/tacplus --json body -q .body; cat scripts/go_dependency_floor_test.go | head -150; ls scripts
+< Backport of #199's fix from main, for **v2.5.4**. **Once this merges, cut `v2.5.4` on `release/2.5` at the merge commit**: the line's next patch. If #234 (#190's backport) merges and is tagged v2.5.4 first, cut `v2.5.5` instead.  The cross-test harnesses pinned `golang.org/x/net v0.49.0` in the go.m...
+Reading the existing pin patterns (the #199 floor test) to mirror them for Java. Now finding every Java pom and heredoc.
+> Bash git ls-files | grep -E 'pom\.xml$'; echo ---; grep -rln '<project' --include=*.sh . ; echo ---; grep -rn 'guava\|jackson\|io.grpc</groupId>\|grpc.version\|modelcontextprotocol' --include=*.sh --include=pom.xml --include=*.go --include=*.md --include=*.yaml . | grep -v '^./docs/HISTORY\|node_modules'...
+< cross-test/accounting-identity/fixture/pom.xml cross-test/claims-provenance/fixture/pom.xml cross-test/external-token/testdata/pom.xml cross-test/jwk-alg/testdata/pom.xml cross-test/server-runtime/fixture/java/pom.xml cross-test/wire-corpus/decoder/java/pom.xml --- ./cross-test/memberport/run.sh ./c...
+= thinking_tokens
+= thinking_tokens
+> Bash git grep -l '<artifactId>' ; echo ---; git grep -n 'pom' cross-test/current-generation/run.sh | head; echo; git grep -n 'java-compile.sh\|write_java' -- cross-test | grep -v '^cross-test/lib/java-compile.sh' | head -30
+< cross-test/accounting-identity/fixture/pom.xml cross-test/cert-stream/run.sh cross-test/claims-provenance/fixture/pom.xml cross-test/consumer-contract/run.sh cross-test/external-token/testdata/pom.xml cross-test/jwk-alg/testdata/pom.xml cross-test/lib/java-compile.sh cross-test/memberport/run.sh cro...
+= thinking_tokens
+= thinking_tokens
+> Bash cat cross-test/lib/java-compile.sh
+< #!/usr/bin/env bash # Copyright (c) 2026 Jody Scott # SPDX-License-Identifier: Apache-2.0 # # Shared by the cross-test gates that compile a generated Java model with # Maven: the pom a generated model compiles under, and the JAVA_HOME the # host's java_home resolves. Source this file; it defines fun...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash which mvn java osv-scanner docker go just; grep -n '^[a-z-]*:' justfile | head -60
+< /usr/local/bin/mvn /opt/java/openjdk/bin/java /tmp/tmp.8gG4QCVygf/bin/docker /usr/local/go/bin/go /usr/local/bin/just 32:default: install 34:generate: 37:build: generate 41:install: generate 53:test: generate soundness 57:soundness: 60:vet: 65:example: 73:site: site-venv 80:site-serve: site-venv 84:...
+> Bash sed -n 165,220p justfile; for a in com/google/guava/guava tools/jackson/core/jackson-databind tools/jackson/core/jackson-core tools/jackson/dataformat/jackson-dataformat-yaml; do echo "$a: $(curl -s https://repo1.maven.org/maven2/$a/maven-metadata.xml | grep -o '<version>[^<]*' | sed 's/<version>//'...
+< # # Runs against the HOST toolchain, so it starts with protoc-check. If your # host protoc is newer than the pinned ceiling and no older build is # installable, use `just gates-container` instead: it runs these same gates # inside the CI base image, whose protoc is pinned well under the ceiling. gat...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for v in 3.1.8 3.2.4; do curl -s -d "{\"package\":{\"name\":\"tools.jackson.core:jackson-databind\",\"ecosystem\":\"Maven\"},\"version\":\"$v\"}" https://api.osv.dev/v1/query | head -c 200; echo; done; curl -s -d '{"package":{"name":"com.google.guava:guava","ecosystem":"Maven"},"version":"33.7.2-and...
+< {} {} {}{} 9:# scripts/with-tree-lock.sh, which serializes them on a lock scoped to this 13:lock := "bash scripts/with-tree-lock.sh" 348:  bash scripts/fix-looper/run.sh {{ARGS}}
+= thinking_tokens
+= thinking_tokens
+Confirmed guava 33.7.2-android and jackson 3.1.8 have no OSV advisories. Next: writing the failing floor test.
+> Bash sed -n 50,64p justfile; sed -n 140,160p cross-test/claims-provenance/fixture/pom.xml; grep -n 'dependencyManagement\|<dependencies>\|</properties>' cross-test/*/fixture/pom.xml cross-test/*/testdata/pom.xml cross-test/*/*/java/pom.xml cross-test/*/run.sh cross-test/lib/java-compile.sh
+< # generate first: the compiler imports the generated spec descriptors under the # git-ignored target/, which a fresh checkout (CI, the nightly gates) lacks. test: generate soundness   {{lock}} go test ./...  # Model/template soundness gate. Runs as part of `test`. soundness:   {{lock}} go run ./cmd/...
+= thinking_tokens
+= thinking_tokens
+> Write /builds/looper/tacplus/worktrees/200/scripts/java_dependency_floor_test.go
+< File created successfully at: /builds/looper/tacplus/worktrees/200/scripts/java_dependency_floor_test.go (file state is current in your context — no need to Read it back)
+> Bash go test ./scripts/ -run TestJavaDependency 2>&1 | tail -20
+= task_started
+= task_notification
+<     java_dependency_floor_test.go:71: ../cross-test/consumer-contract/run.sh declares io.modelcontextprotocol.sdk but pins no tools.jackson.core:jackson-core under <dependencyManagement> (floor 3.1.7)     java_dependency_floor_test.go:71: ../cross-test/consumer-contract/run.sh declares io.modelconte...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cat > /tmp/pin200.py <<'PY' import re, sys GUAVA = """    <dependencies>       <!-- Pinned past advisories in transitive dependencies (#200);            scripts/java_dependency_floor_test.go holds the floors.            guava (GHSA-xxph-c9ww-hj94) comes in through grpc-java. -->       <dependency>  ...
+< pinned cross-test/accounting-identity/fixture/pom.xml pinned cross-test/claims-provenance/fixture/pom.xml pinned cross-test/external-token/testdata/pom.xml pinned cross-test/jwk-alg/testdata/pom.xml pinned cross-test/server-runtime/fixture/java/pom.xml pinned cross-test/wire-corpus/decoder/java/pom....
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash mkdir -p /tmp/t200 && cd /builds/looper/tacplus/worktrees/200 && cat > /tmp/extract200.py <<'PY' import re, sys, os out = sys.argv[1] for path in sys.argv[2:]:     text = open(path).read()     for i, m in enumerate(re.finditer(r"<<\s*'?EOF'?\n(<project.*?)\nEOF\n", text, re.S)):         body = re.su...
+< cross-test_accounting-identity_fixture_pom.xml cross-test_cert-stream_run.sh0 cross-test_claims-provenance_fixture_pom.xml cross-test_consumer-contract_run.sh0 cross-test_external-token_testdata_pom.xml cross-test_jwk-alg_testdata_pom.xml cross-test_lib_java-compile.sh0 cross-test_memberport_run.sh0...
+> Bash cd /tmp/t200 && for d in */; do (cd $d && mvn -q -B dependency:tree -DoutputFile=tree.txt >log.txt 2>&1; echo "$d rc=$? $(grep -oE '(guava|jackson-[a-z-]+):jar:[^:]+' tree.txt | sort -u | tr '\n' ' ')"); done
+= task_started
+= task_notification
+< cross-test_accounting-identity_fixture_pom.xml/ rc=0 guava:jar:33.7.2-android  cross-test_cert-stream_run.sh0/ rc=0 guava:jar:33.7.2-android  cross-test_claims-provenance_fixture_pom.xml/ rc=0 guava:jar:33.7.2-android jackson-annotations:jar:2.21 jackson-core:jar:3.1.8 jackson-databind:jar:3.1.8 jac...
+dependency:tree shows guava 33.7.2-android and jackson 3.1.8 across all 10 poms. Now getting osv-scanner, and in parallel the USER.md docs change.
+> Bash cd /tmp && GOBIN=/tmp/osvbin timeout 600 go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest > /tmp/osvinstall.log 2>&1; echo rc=$?; tail -3 /tmp/osvinstall.log
+> Bash sed -n 1440,1475p docs/USER.md; grep -n 'pom' docs/USER.md | head -20
+= task_started
+= task_notification
+< rc=0 go: downloading github.com/dustin/go-humanize v1.0.1 go: downloading modernc.org/mathutil v1.7.1 go: downloading github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec Shell cwd was reset to /builds/looper/tacplus/worktrees/200
+<     an agentic loop dispatching its own tool calls) reuses the generated     argument decode, validation and caller-scoping through it; the `tools/call`     handlers are thin wrappers around it.   - `serve<Service>McpSession(...)` and an `mcp.Transport` over the gRPC bidi     stream — one complete J...
+> Bash sed -n 1488,1512p docs/USER.md; grep -n 'guava\|grpc-java\|io.grpc' docs/USER.md | head
+<   - `<Service>McpTest` — a generated main-method self-test (the shape every     other generated Java test takes) that drives each tool through the dispatch,     asserts the typed handler was reached with the server-STAMPED value the call     never carried, asserts a client-supplied caller-scoped fie...
+> Edit /builds/looper/tacplus/worktrees/200/docs/USER.md
+< The file /builds/looper/tacplus/worktrees/200/docs/USER.md has been updated successfully.
+> Bash /tmp/osvbin/osv-scanner scan source -r . > /tmp/osv200.txt 2>&1; echo rc=$?; grep -iE 'guava|jackson' /tmp/osv200.txt | head; tail -40 /tmp/osv200.txt
+= task_started
+= task_notification
+< rc=0 Scanning dir . Starting filesystem walk for root: / Scanned /builds/looper/tacplus/worktrees/200/pkg/templates/go.mod file and found 1 package Scanned /builds/looper/tacplus/worktrees/200/cross-test/server-runtime/client/go/go.mod file and found 2 packages Scanned /builds/looper/tacplus/worktre...
+= thinking_tokens
+= thinking_tokens
+Clean. Checking the scan actually resolves transitives by scanning the pre-change pom:
+> Bash mkdir -p /tmp/osvold/a && cd /builds/looper/tacplus/worktrees/200 && git show HEAD:cross-test/claims-provenance/fixture/pom.xml > /tmp/osvold/a/pom.xml && /tmp/osvbin/osv-scanner scan source -r /tmp/osvold 2>&1 | grep -E 'guava|jackson|packages' | head
+= task_started
+= task_notification
+< Scanned /tmp/osvold/a/pom.xml file and found 24 packages Total 3 packages affected by 10 known vulnerabilities (0 Critical, 6 High, 4 Medium, 0 Low, 0 Unknown) from 1 ecosystem. | https://osv.dev/GHSA-xxph-c9ww-hj94 | 8.2  | Maven     | com.google.guava:guava              | 33.5.0-android | 33.7.2  ...
+Before: 10 findings. After: none. Scanning the heredoc poms too:
+> Bash find /tmp/t200 -name tree.txt -o -name log.txt | xargs rm -f; rm -rf /tmp/t200/*/target; /tmp/osvbin/osv-scanner scan source -r /tmp/t200 2>&1 | grep -E 'Scanned|No issues|Total|guava|jackson'
+= task_started
+= task_notification
+< Scanned /tmp/t200/cross-test_consumer-contract_run.sh0/pom.xml file and found 24 packages Scanned /tmp/t200/cross-test_jwk-alg_testdata_pom.xml/pom.xml file and found 23 packages Scanned /tmp/t200/cross-test_lib_java-compile.sh0/pom.xml file and found 21 packages Scanned /tmp/t200/cross-test_memberp...
+= thinking_tokens
+= thinking_tokens
+Now STATE.md (following #199's precedent), then the full gates.
+> Bash git show d2078cd0 -- STATE.md PROPOSALS.md
+< commit d2078cd04c56c94d71c33ff7fa287efe006417e0 Author: jodydadescott <jody@thescottsweb.com> Date:   Fri Oct 30 18:52:41 2026 +0000      Pin golang.org/x/net at v0.62.0 in the cross-test harnesses and the example (#199)          The harness go.mods and dependencies.yaml pinned golang.org/x/net belo...
+= thinking_tokens
+= thinking_tokens
+> Bash git fetch -q origin && for b in 2.0 2.1 2.2 2.3 2.4 2.5; do echo "release/$b .0-date: $(git log -1 --format=%ad --date=short v$b.0 2>/dev/null) poms: $(git ls-tree -r --name-only origin/release/$b | grep -c 'pom.xml$') mcp: $(git grep -l 'io.modelcontextprotocol.sdk</groupId>' origin/release/$b -- c...
+< release/2.0 .0-date: 2026-10-15 poms: 5 mcp: 2 heredocs: cross-test/cert-stream/run.sh cross-test/consumer-contract/run.sh cross-test/lib/java-compile.sh  release/2.1 .0-date: 2026-10-20 poms: 5 mcp: 2 heredocs: cross-test/cert-stream/run.sh cross-test/consumer-contract/run.sh cross-test/lib/java-co...
+All six release lines (2.0–2.5) carry the same pins, so all six get backports. Updating STATE.md:
+> Bash grep -n 'go_dependency_floor_test' STATE.md
+< 51:  dependencies.yaml; `scripts/go_dependency_floor_test.go` refuses a lower or missing pin (#199; backported to
+> Read /builds/looper/tacplus/worktrees/200/STATE.md
+< 48	  and v2.5.3 once they merge, after #186's). 49	  The cross-test harnesses and the example pin golang.org/x/net at v0.62.0 (GO-2026-6603/6611/6612/6617, the 50	  HTTP/2 server the generated Go chassis reaches, and GO-2026-6860/6866) in every go.mod they write and every 51	  dependencies.yaml; `sc...
+> Edit /builds/looper/tacplus/worktrees/200/STATE.md
+< The file /builds/looper/tacplus/worktrees/200/STATE.md has been updated successfully.
+> Bash sed -i 's/^Overwritten to stay current (loopers and agents). Last updated: 2026-10-31 by looper (#195)./Overwritten to stay current (loopers and agents). Last updated: 2026-10-31 by looper (#200)./' STATE.md && nohup just gates > /tmp/gates200.log 2>&1 & sleep 2; echo started
+< started
+= thinking_tokens
+= thinking_tokens
+Gates running. Meanwhile, a PROPOSALS.md entry and a checkpoint.
+> Bash grep -n 'govulncheck of the generated Go modules' PROPOSALS.md
+< 62:- **govulncheck of the generated Go modules in the gates** (2026-10-30, #199): the harnesses pin the generated
+> Edit /builds/looper/tacplus/worktrees/200/PROPOSALS.md
+< The file /builds/looper/tacplus/worktrees/200/PROPOSALS.md has been updated successfully.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 200 --checkpoint "Pins written (dependencyManagement guava 33.7.2-android, tools.jackson 3.1.8) in 6 poms + 4 heredocs, scripts/java_dependency_floor_test.go, USER.md, STATE.md, PROPOSALS.md; osv-scanner clean, dependency:tree verified. Left: just ga...

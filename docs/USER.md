@@ -1496,6 +1496,17 @@ Everything else is reuse, deliberately:
   `pom.xml` for it: the consumer declares the SDK, and the version inventory
   lives in `dependencies.yaml`. The SDK requires Java 17 or later.
 
+  Pin two of its transitive dependencies in your own pom's
+  `<dependencyManagement>`, as every tacplus harness pom does (#200): the SDK
+  (2.0.1, and 2.1.0 too) declares `tools.jackson.core:jackson-databind` and
+  `jackson-core` 3.1.4, with nine parser and databind advisories reachable
+  from the caller-supplied JSON the termination parses, and grpc-java (1.79.0
+  through 1.85.1) declares a `com.google.guava:guava` with GHSA-xxph-c9ww-hj94.
+  Pin `tools.jackson.core:jackson-core`, `tools.jackson.core:jackson-databind`
+  and `tools.jackson.dataformat:jackson-dataformat-yaml` at 3.1.7 or later
+  (the harnesses use 3.1.8), and `com.google.guava:guava` at 33.7.2-android or
+  later.
+
 ### Entitlements Model
 
 For `service_c2s` services with `auth_entitled_users: true`, user tokens carry

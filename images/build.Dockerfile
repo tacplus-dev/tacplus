@@ -14,10 +14,14 @@
 # Java runtime the generated models pin (protobuf-java 4.36.0) must be at
 # least the protoc gencode version.
 ARG BASE_IMAGE=ghcr.io/tacplus-dev/tacplus/base:latest
-ARG GO_VERSION=1.26
+# Which line each SDK follows (#255): Go the newest release, Node the newest
+# LTS, Swift the newest release (a full x.y.z: swift.org has no line alias).
+# The nightly scan flags a pin that falls behind its line. Go, Node and Swift
+# are pinned in both base.Dockerfile and build.Dockerfile; move them together.
+ARG GO_VERSION=1.27
 ARG RUST_VERSION=1
-ARG NODE_VERSION=24
-ARG SWIFT_VERSION=6.1.3
+ARG NODE_VERSION=26
+ARG SWIFT_VERSION=6.4.2
 ARG DOCKER_VERSION=29
 # docker-buildx is built from its release's source rather than copied from
 # the docker CLI image: its releases (through 0.38.1) vendor moby/go-archive

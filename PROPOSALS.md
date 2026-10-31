@@ -197,5 +197,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   it gets a pull error. Either cut 2.6.0 soon or have README name the newest released line's workflow. A check that
   the snippet's line equals the newest `v*` tag's MAJOR.MINOR (the issue's optional guard) would fail by design
   between a minor's first doc change and its release, so `TestDocsPinNoTacplusImage` guards only the retired image.
+- **GitHub's "Latest" release follows the newest line, not the last one published** (2026-10-31, nightly scan):
+  `.github/workflows/release.yml` runs `gh release create` with no `--latest` flag, so whichever patch publishes
+  last becomes "Latest". On 2026-10-30 six lines were patched within a minute and `gh release list` now shows
+  `v2.2.3 Latest` while v2.5.4 is the newest. Nothing in tacplus reads the flag (`images/tacplus.sh` and
+  `tacplus pin` list all releases), but the release page and `/releases/latest` send people to 2.2. Passing
+  `--latest=false` unless the tag is the newest `v*` (the rule `scripts/images-tags.sh` already applies to
+  `build:latest`, #160) would fix it.
 
 ## Promoted / declined

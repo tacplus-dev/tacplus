@@ -121,8 +121,10 @@ func TestRustCertStreamsFollowSharedContractMarkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTemplate cargo.toml.tmpl: %v", err)
 	}
-	if !strings.Contains(cargoTmpl, "x509-cert = { workspace = true }") {
-		t.Fatalf("Rust cert-stream Cargo template must include x509-cert workspace dependency")
+	// x509-cert is pinned to the line the x509 chassis crate uses (#215), not
+	// taken from dependencies.yaml.
+	if !strings.Contains(cargoTmpl, "x509-cert = \"0.3\"") {
+		t.Fatalf("Rust cert-stream Cargo template must pin x509-cert 0.3")
 	}
 	if !strings.Contains(cargoTmpl, "rustls-pemfile = { workspace = true }") ||
 		!strings.Contains(cargoTmpl, "tokio-rustls = { workspace = true }") {

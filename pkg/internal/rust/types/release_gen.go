@@ -258,7 +258,7 @@ func generateRustHmacHelpers(b *strings.Builder, n *rustSanitizeNeeds) {
 		b.WriteString(`/// tacplus_mac returns HMAC-SHA256(key, s) — the shared keyed core for the
 /// format-preserving anonymize primitives.
 fn tacplus_mac(s: &str, key: &[u8]) -> Vec<u8> {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     let mut mac = <Hmac<Sha256>>::new_from_slice(key).expect("HMAC accepts a key of any length");
     mac.update(s.as_bytes());
@@ -351,7 +351,7 @@ pub fn tacplus_pseudonymize(s: &str, key: &[u8]) -> String {
     if s.is_empty() {
         return String::new();
     }
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     let mut mac = <Hmac<Sha256>>::new_from_slice(key).expect("HMAC accepts a key of any length");
     mac.update(s.as_bytes());
@@ -377,7 +377,7 @@ pub fn tacplus_pseudonymize_bytes(b: &[u8], key: &[u8]) -> Vec<u8> {
     if b.is_empty() {
         return Vec::new();
     }
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     let mut mac = <Hmac<Sha256>>::new_from_slice(key).expect("HMAC accepts a key of any length");
     mac.update(b);

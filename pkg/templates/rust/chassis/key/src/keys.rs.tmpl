@@ -749,7 +749,11 @@ pub fn generate_ec_p384_key() -> Result<ImmutableKey> {
 pub fn generate_ed25519_key() -> Result<ImmutableKey> {
     use pkcs8::EncodePrivateKey;
 
-    let signing_key = SigningKey::generate(&mut OsRng);
+    // ed25519-dalek 3 generates only from a rand_core 0.10 RNG: the seed comes
+    // from the OS RNG every other key and id here uses, as generate() takes it.
+    let mut seed = ed25519_dalek::SecretKey::default();
+    rand::RngCore::fill_bytes(&mut OsRng, &mut seed);
+    let signing_key = SigningKey::from_bytes(&seed);
 
     let pem = signing_key
         .to_pkcs8_pem(pkcs8::LineEnding::LF)
@@ -847,7 +851,7 @@ mod tests {
         let pkcs8_der: aws_lc_rs::encoding::Pkcs8V1Der = pkcs8.as_der().unwrap();
         let pkcs1_der = {
             use pkcs8::der::Decode;
-            pkcs8::PrivateKeyInfo::from_der(pkcs8_der.as_ref()).unwrap().private_key.to_vec()
+            pkcs8::PrivateKeyInfoRef::from_der(pkcs8_der.as_ref()).unwrap().private_key.as_bytes().to_vec()
         };
         let pem = pem::encode(&pem::Pem::new("RSA PRIVATE KEY", pkcs1_der));
         let key = ImmutableKey::from_pem("pkcs1".into(), &base64_utils::encode_base64_url(pem.as_bytes()))

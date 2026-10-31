@@ -27,6 +27,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-10-30 by lo
   Marvin) and the elliptic-curve 0.13 stack (crypto-bigint 0.5, RUSTSEC-2026-0387) are gone from the generated
   lockfile, which current-generation checks (#186; backported to release/2.0 through release/2.5 by pull request, as
   v2.0.12, v2.1.5, v2.2.2, v2.3.4, v2.4.3 and v2.5.2 once they merge).
+  The generated Rust chassis is on the digest 0.11 stack (ed25519-dalek 3, sha2 0.11, hmac 0.13, x509-cert 0.3,
+  pkcs8 0.11, signature 3), so no generated lockfile locks block-buffer 0.10 (GHSA-qwgh-2vcv-g2f7), which
+  current-generation checks; the model crate pins x509-cert 0.3 itself, and the fixtures and the example pin
+  tokio-tungstenite 0.30 (#215; backported to release/2.0 through release/2.5 by pull request, each line's next
+  patch once it merges).
   No install text names a `tacplus:X.Y` image (`TestDocsPinNoTacplusImage`); the release branches' install docs,
   which still pinned `tacplus:2.0`, pin their own line (#201; release/2.1 through release/2.5 by pull request,
   #238–#242, as v2.1.7, v2.2.4, v2.3.6, v2.4.5 and v2.5.5 once they merge).

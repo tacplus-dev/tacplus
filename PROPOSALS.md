@@ -65,6 +65,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   advisory database fetched at run time) would find it first. It also reports four unmaintained crates today
   (`rustls-pemfile`, `backoff`, `instant`, `unsafe-libyaml`) worth replacing. GitHub-only advisories (no RUSTSEC id,
   like #215's block-buffer) need OSV, not cargo-audit.
+- **Refuse a W2S `tokio-tungstenite` pin below 0.30** (2026-10-30, #215): the generated W2S client takes
+  `tokio-tungstenite` from the consumer's dependencies.yaml, and 0.28 locks sha1 0.10, so digest 0.10 and
+  block-buffer 0.10 (GHSA-qwgh-2vcv-g2f7) through the consumer's own pin. The fixtures and the example pin 0.30;
+  the generator could refuse an older pin (as it refuses a missing one) or pin it in the template, as it now pins
+  x509-cert.
 - **Bound the shared cross-test cargo target** (2026-10-29, #186): `target/cross-test/cargo` (`CROSS_TEST_CARGO_TARGET`,
   shared by current-generation, server-runtime and wire-corpus) is never pruned; on a looper host it had reached
   108G and filled the disk mid-gate (`No space left on device` in current-generation-rust). Each fixture's

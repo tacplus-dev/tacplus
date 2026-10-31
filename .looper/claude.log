@@ -1,0 +1,400 @@
+< File created successfully at: /builds/looper/tacplus/worktrees/195/pkg/tacplusyaml/contribute.go (file state is current in your context — no need to Read it back)
+= thinking_tokens
+= thinking_tokens
+> Bash python3 - <<'EOF' p='pkg/tacplusyaml/tacplusyaml.go' s=open(p).read() s=s.replace('''	Header      string        `yaml:"header,omitempty"`       // free-form''','''	Contribute  *Contribute   `yaml:"contribute,omitempty"`   // what a kind: service project contributes to its fleet's gateway: a webapp m...
+< ok  	github.com/tacplus-dev/tacplus/pkg/tacplusyaml	0.020s
+= thinking_tokens
+= thinking_tokens
+Schema passes. Now the fleet test: the lock records a service's contribution at its locked commit, and a contribution missing its lockfile is refused.
+> Bash cat >> pkg/fleet/fleet_test.go <<'EOF'  // contributingService is serviceRepoID whose tacplus.yaml also declares // contribute (and kind: service); files are written into the repo before its // release. func contributingService(t *testing.T, root, name string, id int, registryRef, contribute string,...
+< # github.com/tacplus-dev/tacplus/pkg/fleet pkg/internal/common/parser/descriptor.go:20:2: no required module provides package github.com/tacplus-dev/tacplus/target/proto/spec/sys; to add it: 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sys FAIL	github.com/tacplus-dev/tacplus/pkg/fleet [s...
+> Bash just generate >/tmp/gen195.log 2>&1; tail -3 /tmp/gen195.log; go test ./pkg/fleet/ -run Contribution 2>&1 | tail -5
+< bash scripts/with-tree-lock.sh go generate ./pkg/internal/proto/spec/... pkg/fleet/fleet_test.go:508:67: res.Lock.Services[1].Contribute undefined (type LockedService has no field or method Contribute) pkg/fleet/fleet_test.go:510:28: res.Lock.Services[0].Contribute undefined (type LockedService has ...
+Fails as expected. Now the implementation in `pkg/fleet`, as a new `contribute.go`.
+> Write /builds/looper/tacplus/worktrees/195/pkg/fleet/contribute.go
+< File created successfully at: /builds/looper/tacplus/worktrees/195/pkg/fleet/contribute.go (file state is current in your context — no need to Read it back)
+> Bash python3 - <<'EOF' p='pkg/fleet/fleet.go' s=open(p).read() s=s.replace('''	InputsDigest string `yaml:"inputs_digest,omitempty"` }''','''	InputsDigest string `yaml:"inputs_digest,omitempty"` 	// Contribute is what the service contributes to the fleet's gateway 	// (contribute.go), read at Commit. 	Con...
+= task_started
+= task_notification
+< pkg/internal/common/model/model_test.go pkg/internal/go/types/stateclient_failclosed_test.go pkg/internal/proto/validate_c2s_topic_identity_test.go pkg/internal/proto/vservice_scan_test.go pkg/internal/python/types/naming_test.go do so (now or later) by using -c with the switch command. Example:    ...
+> Bash git stash list | head -2; git diff --stat main -- pkg/internal | tail -1; go test ./pkg/fleet/ 2>&1 | grep -E "^(---|=== RUN|    \w+_test.go)" | head -30
+= task_started
+= task_notification
+< --- FAIL: TestBuildRefusesContributionsWithoutTheirInputs (0.43s)
+> Bash go test ./pkg/fleet/ -run TestBuildRefusesContributionsWithoutTheirInputs 2>&1 | grep -E "fleet_test|FAIL" | head
+< --- FAIL: TestBuildRefusesContributionsWithoutTheirInputs (0.44s)     --- FAIL: TestBuildRefusesContributionsWithoutTheirInputs/nocargo (0.06s)         fleet_test.go:560: got fleet: service "echo" contributes client "echo" (rust: echo), but its release has no Cargo.toml, want an error naming echo an...
+Test fixture issue only; I'll give that case a Cargo.toml so it checks the lockfile.
+> Bash sed -i 's|{"nocargo", "  clients:\\n    - {name: echo, rust: echo}\\n", nil, "Cargo.lock"}|{"nocargo", "  clients:\\n    - {name: echo, rust: echo}\\n", map[string]string{"Cargo.toml": "[workspace]\\n"}, "Cargo.lock"}|' pkg/fleet/fleet_test.go && grep -n nocargo pkg/fleet/fleet_test.go && go test ./...
+= task_started
+= task_notification
+< 546:		{"nocargo", "  clients:\n    - {name: echo, rust: echo}\n", map[string]string{"Cargo.toml": "[workspace]\n"}, "Cargo.lock"}, ok  	github.com/tacplus-dev/tacplus/pkg/fleet	8.845s ok  	github.com/tacplus-dev/tacplus/pkg/tacplusyaml	(cached)
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Tests pass. Now the docs; checking what DEVELOPMENT.md and STATE.md expect for a new tacplus.yaml field.
+> Bash grep -n -i "tacplus.yaml\|fleet" docs/DEVELOPMENT.md | head -30; cat STATE.md | sed -n 1,84p
+< 57:# After installing, test against a consumer project that has a tacplus.yaml: 59:tacplus build            # regenerate from ./tacplus.yaml (flags: --tag, --src, --config/-c, --verbose/-v) 66:tacplus is a per-project tool. `tacplus build` regenerates code from the project's `tacplus.yaml`. Each inv...
+= thinking_tokens
+= thinking_tokens
+Now USER.md: a `contribute` row in the tacplus.yaml table and a contribution-contract subsection under Fleet Build.
+> Bash sed -n 124,128p docs/USER.md | cut -c1-80; grep -n "test-depends\` |\|records\` |\|\`header\` |" docs/USER.md | cut -c1-80; sed -n 7,30p docs/USER.md
+< #### Package Name Conversion  Given a canonical `pkg` (e.g. `com.example.myservice`) and `output-dir` name (default `model`), the native package/module/crate name is derived per language: ## Table of Contents  1. [Patterns for Service Implementers](#patterns-for-service-implementers) 2. [tacplus.yam...
+> Bash python3 - <<'EOF' p='docs/USER.md' s=open(p).read() anchor='| `tacplus` | string | No | Minimum tacplus' assert s.count(anchor)==1 row='| `contribute` | mapping | No | What a `kind: service` project contributes to its fleet\'s gateway: a `webapp` module (`dir`, `title`) and `clients`, each by one fi...
+< 2100:| `/-/apps.json` | the index: `[{service, title, version, path}]`, sorted by service; the gateway's signed-in page lists the modules from it |
+= thinking_tokens
+= thinking_tokens
+> Bash grep -rln "USER.md" --include=*_test.go . | head; grep -n "tacplus-yaml\|yaml:\"" docs/USER.md | head -3; ls site 2>/dev/null | head
+< ./pkg/internal/proto/statedb_unimplemented_test.go ./pkg/internal/common/registry/embedded_docs_test.go ./cmd/sitegen/main_test.go docs mkdocs.yml requirements.txt
+Before opening the gateway and tenantecho issues, rule 11: reading the roadmaps.
+> Bash grep -n -i "gateway\|contribut\|webapp\|195" ROADMAP.md | head -20; echo ---; gh api repos/tacplus-dev/roadmap/contents/ROADMAP.md -H 'Accept: application/vnd.github.raw' | grep -n -i "gateway\|webapp\|contribut\|tenantecho" | head -30; gh api repos/tacplus-dev/roadmap/contents/items -q '.[].name' |...
+< 31:- Fleet builder gathers service webapp pieces and clients, builds the merged webapp and the fleet's gateway (#195, after #180; contract needs Jody's OK) --- 13:- **fleet-seatrials is live** (GKE `seatrials`, https://seatrials.tacplus.dev): kernel, gateway, oauth, opa, 14:  eventbus, stratum, lets...
+> Bash gh api repos/tacplus-dev/roadmap/contents/ROADMAP.md -H 'Accept: application/vnd.github.raw' | sed -n 30,60p; gh issue view 6 --repo tacplus-dev/gateway --comments | tail -30
+<    3. tacplus-dev/redo#1: the redo service, in the reserved `restore` tenant (`00000002`).    4. tacplus-dev/stratum#2: per-tenant, in-memory Stratum, no event bus.     Then on the same path: tacplus-dev/operator#2 (render per-tenant Stratum and redo), tacplus-dev/people#1 and    tacplus-dev/kernel#...
+> Bash for r in gateway tenantecho; do echo "== $r"; gh api repos/tacplus-dev/$r/contents/ROADMAP.md -H 'Accept: application/vnd.github.raw' 2>&1 | head -40; done
+< == gateway # Roadmap: gateway  Owned by Jody; changed only by an agent at Jody's request. Loopers propose in PROPOSALS.md.  ## Now The edge proxy (Rust): routes REST and gRPC to backend services, serves OIDC discovery and JWKS, proxies mint calls to kernel, falls back to SPIFFE path routing. Also se...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Neither entry is on a roadmap, and Jody's decision explicitly asks for these two issues, so I'm opening them labelled `feature` (not `approved`).
+> Bash cat > /tmp/gw195.md <<'EOF' Asked by the decision on tacplus-dev/tacplus#195 (Jody, 2026-10-30, [comment](https://github.com/tacplus-dev/tacplus/issues/195)): the fleet builder merges service-contributed webapp modules and clients into the fleet's gateway (decision tacplus-dev/roadmap:decisions/gate...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/gateway/issues/21 https://github.com/tacplus-dev/tenantecho/issues/7
+= thinking_tokens
+= thinking_tokens
+Opened gateway#21 and tenantecho#7. Updating the doc reference, STATE.md and PROPOSALS.md.
+> Bash python3 - <<'EOF' p='docs/USER.md' s=open(p).read() old='''That step waits on the gateway's first release and its serving of `/-/` (tacplus-dev/gateway#6 and the gateway issue #195 opens); today the fleet build checks and locks contributions only.''' assert old in s s=s.replace(old,'''That step wait...
+< # Proposals: tacplus  Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones into ROADMAP.md (via an agent); the looper then marks it `promoted` or `declined` here with the date.  ## Open - **Cap the member port's established tunnels** (2026-10-30, #212): admission is bound...
+> Edit /builds/looper/tacplus/worktrees/195/PROPOSALS.md
+< The file /builds/looper/tacplus/worktrees/195/PROPOSALS.md has been updated successfully.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 195 --checkpoint "Part 1 written (uncommitted): contribute: schema+validation (pkg/tacplusyaml/contribute.go), fleet lock entry (pkg/fleet/contribute.go), tests, USER.md, STATE/PROPOSALS; opened gateway#21, tenantecho#7. Left: run just gates, commit,...
+< [2026-10-31T04:26:16Z] checkpoint of #195 (a step) pushed to looper/tacplus-195:  11 files changed, 833 insertions(+), 3 deletions(-)
+> Bash git status --short; (nohup just gates > /tmp/gates195.log 2>&1 &) ; sleep 1; echo started
+<  M PROPOSALS.md  M STATE.md  M docs/USER.md  M pkg/fleet/fleet.go  M pkg/fleet/fleet_test.go  M pkg/tacplusyaml/tacplusyaml.go ?? pkg/fleet/contribute.go ?? pkg/tacplusyaml/contribute.go ?? pkg/tacplusyaml/contribute_test.go started
+= thinking_tokens
+= thinking_tokens
+Gates are running. Meanwhile, a vet pass on the two packages I changed:
+> Bash go vet ./pkg/fleet/ ./pkg/tacplusyaml/ && echo vet ok
+= task_started
+= task_notification
+< vet ok
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Monitor tail -n +1 -f /tmp/gates195.log | grep -E --line-buffered "^=== .* rc=|OVERALL"
+= permission_denied
+< This Bash command contains multiple operations. The following part requires approval: tail -n +1 -f /tmp/gates195.log
+> Bash until grep -q "OVERALL" /tmp/gates195.log; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/gates195.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bl08tbwbo. Output is being written to: /tmp/claude-0/-builds-looper-tacplus-worktrees-195/17d1f848-9e8b-4ee9-9f89-2c12cd33e0d9/tasks/bl08tbwbo.output. You will be notified when it completes. To check interim output, use Read on that file path.
+Gates are running in the background; I'll be notified when they finish. Meanwhile, drafting the commit message.
+> Bash cat > /tmp/msg195.txt <<'EOF' Gateway contributions, part 1: the contribute: contract and its fleet lock (#195)  Jody accepted the contribution contract on #195 (2026-10-30): a fleet's gateway carries webapp modules and clients its services contribute, namespaced by registry name under /-/, built fr...
+< ok
+Waiting on the gates notification.
+> Bash until grep -q "OVERALL" /tmp/gates195.log; do sleep 30; done; grep -E "rc=|OVERALL" /tmp/gates195.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bhxwxl8f2). Output is being written to: /tmp/claude-0/-builds-looper-tacplus-worktrees-195/17d1f848-9e8b-4ee9-9f89-2c12cd33e0d9/tasks/bhxwxl8f2.output. You will be notified when it completes. If it is still running...
+> Bash grep -E "rc=|OVERALL" /tmp/gates195.log; tail -2 /tmp/gates195.log | cut -c1-200
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust cross-test fixture ==> Compiling rust cross-test fixture
+The fast gates passed: soundness and the full `go test ./...`, which includes my new tests. The long cross-language gates are still running; I'll wait for the background notification.
+> Bash until grep -q "OVERALL" /tmp/gates195.log; do sleep 30; done; grep -E "rc=|OVERALL" /tmp/gates195.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bjx0r5k07. Output is being written to: /tmp/claude-0/-builds-looper-tacplus-worktrees-195/17d1f848-9e8b-4ee9-9f89-2c12cd33e0d9/tasks/bjx0r5k07.output. You will be notified when it completes. To check interim output, use Read on that file path.
+> ScheduleWakeup {"delaySeconds":1800,"noop":true,"prompt":"Check /tmp/gates195.log for OVERALL; if passed, commit with /tmp/msg195.txt and land #195.","reason":"fallback while the long gates run; the background task notifies first"}
+< Next wakeup scheduled for 05:07:00 (in 1805s). If you owe the user a status update this tick, write it now as ordinary response text; then end the turn — the harness re-invokes you when the wakeup fires or a task-notification arrives.
+Part 1 of #195 is written but not committed yet: the full `just gates` run is still going. Soundness and the whole `go test ./...` suite already pass, including the new tests; the cross-language gates are still running.
+
+**What's built:**
+- **The `contribute:` section in `tacplus.yaml`** (`pkg/tacplusyaml/contribute.go`). It declares a `webapp` module (`dir`, `title`) and `clients`, each with exactly one recipe key: `rust:`, `go:`, `swift:` or `dotnet:`. Each recipe has a fixed target set; darwin is arm64 only. Only a `kind: service` project may declare it. An entry that is a path or a command where a target name belongs is refused when the file is read.
+- **The fleet lock** (`pkg/fleet/contribute.go`). `tacplus fleet build` checks at the locked commit that each recipe's input files are in the service's release (`package-lock.json`, `Cargo.lock`, `go.mod`, `Package.swift`, `packages.lock.json`). If one is missing it refuses, naming the service and the file. Otherwise it writes the contribution into `fleet.lock`: the `/-/apps/<service>/` and `/-/clients/<service>/<client>/` paths, the targets, and the webapp directory's git tree.
+- **Docs:** `docs/USER.md` now has a "Contributing to the gateway" section: the contract, the recipe table with where each recipe builds, and the trust rule. STATE.md and PROPOSALS.md are updated, with two follow-ups in PROPOSALS.md.
+- **New issues in other repos**, labelled `feature`: tacplus-dev/gateway#21 (serve `/-/`, rename the old `schematic` names, pin the base image by digest) and tacplus-dev/tenantecho#7 (the example ping page).
+
+**What happens next:**
+1. When the gates pass, I commit with the drafted message and land with `repo-looper --land`.
+2. I comment on the issue with what landed. I don't close it, because building the merged webapp, the clients and the gateway image (`tacplus fleet gateway`, parts 2–4) can't start until gateway#6, gateway#21 and tenantecho#7 are done.
+3. I write `Blocked-by:` lines for those three issues to the outcome file.
+
+The work so far is checkpointed on the branch.
+= success: Part 1 of #195 is written but not committed yet: the full `just gates` run is still going. Soundness and the whole `go test ./...` suite already pass, including the new tests; the cross-language gates are still running.
+
+**What's built:**
+- **The `contribute:` section in `tacplus.yaml`** (`pkg/tacplusyaml/contribute.go`). It declares a `webapp` module (`dir`, `title`) and `clients`, each with exactly one recipe key: `rust:`, `go:`, `swift:` or `dotnet:`. Each recipe has a fixed target set; darwin is arm64 only. Only a `kind: service` project may declare it. An entry that is a path or a command where a target name belongs is refused when the file is read.
+- **The fleet lock** (`pkg/fleet/contribute.go`). `tacplus fleet build` checks at the locked commit that each recipe's input files are in the service's release (`package-lock.json`, `Cargo.lock`, `go.mod`, `Package.swift`, `packages.lock.json`). If one is missing it refuses, naming the service and the file. Otherwise it writes the contribution into `fleet.lock`: the `/-/apps/<service>/` and `/-/clients/<service>/<client>/` paths, the targets, and the webapp directory's git tree.
+- **Docs:** `docs/USER.md` now has a "Contributing to the gateway" section: the contract, the recipe table with where each recipe builds, and the trust rule. STATE.md and PROPOSALS.md are updated, with two follow-ups in PROPOSALS.md.
+- **New issues in other repos**, labelled `feature`: tacplus-dev/gateway#21 (serve `/-/`, rename the old `schematic` names, pin the base image by digest) and tacplus-dev/tenantecho#7 (the example ping page).
+
+**What happens next:**
+1. When the gates pass, I commit with the drafted message and land with `repo-looper --land`.
+2. I comment on the issue with what landed. I don't close it, because building the merged webapp, the clients and the gateway image (`tacplus fleet gateway`, parts 2–4) can't start until gateway#6, gateway#21 and tenantecho#7 are done.
+3. I write `Blocked-by:` lines for those three issues to the outcome file.
+
+The work so far is checkpointed on the branch.
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+> Bash grep -E "rc=|OVERALL" /tmp/gates195.log; pgrep -f "just gates" >/dev/null && echo running
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === running
+= thinking_tokens
+= thinking_tokens
+The task that was stopped was only a duplicate of my gate watcher. The gates themselves are still running: protoc-check, soundness and the full Go test suite pass, and the current-generation gate is in progress. A second watcher with a two-hour limit is still active, and a wakeup is scheduled as a fallback. Nothing is committed yet; I'll commit and land when the gates finish.
+= success: The task that was stopped was only a duplicate of my gate watcher. The gates themselves are still running: protoc-check, soundness and the full Go test suite pass, and the current-generation gate is in progress. A second watcher with a two-hour limit is still active, and a wakeup is scheduled as a fallback. Nothing is committed yet; I'll commit and land when the gates finish.
+= init
+> Bash grep -E "rc=|OVERALL" /tmp/gates195.log; pgrep -f "just gates" >/dev/null && echo running
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === running
+> Bash tail -5 /tmp/gates195.log | cut -c1-200; ls -la /tmp/gates195.log; date
+< ==> Generating java record-egress fixture ==> Compiling java record-egress fixture     PASS java record-egress ==> Generating rust record-egress fixture ==> Compiling rust record-egress fixture -rw-r--r-- 1 root root 30423 Oct 31 05:06 /tmp/gates195.log Sat Oct 31 05:07:05 UTC 2026
+Still in current-generation and making progress. Scheduling the next check.
+> ScheduleWakeup {"delaySeconds":1800,"noop":true,"prompt":"Check /tmp/gates195.log for OVERALL; if passed, commit with /tmp/msg195.txt and land #195.","reason":"fallback while current-generation and later gates run"}
+< Next wakeup scheduled for 05:38:00 (in 1851s). If you owe the user a status update this tick, write it now as ordinary response text; then end the turn — the harness re-invokes you when the wakeup fires or a task-notification arrives.
+The gates haven't finished, so nothing is committed or landed yet. protoc-check, soundness and the full Go test suite pass. current-generation is still running and making progress: it is building the Rust record-egress fixture, after the Java one passed. The watcher is still active, and the next check is at 05:38 UTC.
+= success: The gates haven't finished, so nothing is committed or landed yet. protoc-check, soundness and the full Go test suite pass. current-generation is still running and making progress: it is building the Rust record-egress fixture, after the Java one passed. The watcher is still active, and the next check is at 05:38 UTC.
+= init
+> Bash grep -E "rc=|OVERALL" /tmp/gates195.log; pgrep -f "just gates" >/dev/null && echo running; tail -2 /tmp/gates195.log | cut -c1-200; date
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === running ==> Generating java owner-default fixture ==> Compiling java owner-default fixture Sat Oct 31 05:38:03 UTC 2026
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash git add -A pkg/fleet pkg/tacplusyaml docs/USER.md STATE.md PROPOSALS.md && git status --short && git commit -q -F /tmp/msg195.txt && git log --oneline -1 && /usr/local/bin/repo-looper --repo tacplus --issue 195 --checkpoint "Part 1 committed (contribute: schema, fleet lock, USER.md); landing queued....
+< M  PROPOSALS.md M  STATE.md M  docs/USER.md A  pkg/fleet/contribute.go M  pkg/fleet/fleet.go M  pkg/fleet/fleet_test.go A  pkg/tacplusyaml/contribute.go A  pkg/tacplusyaml/contribute_test.go M  pkg/tacplusyaml/tacplusyaml.go 1ba273c0 Gateway contributions, part 1: the contribute: contract and its fl...
+> Bash until grep -qiE "landed|refused|nothing|fail|error|conflict" /tmp/land195.log || ! pgrep -f "issue 195 --land" >/dev/null; do sleep 30; done; tail -15 /tmp/land195.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: boz8aazyr. Output is being written to: /tmp/claude-0/-builds-looper-tacplus-worktrees-195/17d1f848-9e8b-4ee9-9f89-2c12cd33e0d9/tasks/boz8aazyr.output. You will be notified when it completes. To check interim output, use Read on that file path.
+> ScheduleWakeup {"delaySeconds":1800,"noop":false,"prompt":"Check /tmp/land195.log and /tmp/gates195.log for #195: if landed, comment on the issue (commit, gates, Blocked-by plan) and write Blocked-by lines to the outcome file; if not, fix and re-land.","reason":"fallback while the land runs the full gates under th...
+< Next wakeup scheduled for 06:09:00 (in 1843s). If you owe the user a status update this tick, write it now as ordinary response text; then end the turn — the harness re-invokes you when the wakeup fires or a task-notification arrives.
+I committed part 1 of #195 as `1ba273c0` and queued the land, even though my local gates haven't finished. Nothing is on main yet.
+
+- **Why I didn't wait:** the local run is about 80 minutes in and still on current-generation, the run stops around 08:11 UTC, and landing re-runs the full gates under the lock before it pushes. So far protoc-check, soundness and the full Go test suite pass, including the new tests. My change only touches Go code and docs.
+- **Still running:** my local gates, as a cross-check, and the land, which can take a while. Its output goes to `/tmp/land195.log`, and a watcher will tell me when it ends.
+- **Checkpoint:** pushed to `looper/tacplus-195`.
+- **If it lands:** I comment on the issue with the commit and the gates' last lines. Then I write `Blocked-by:` for tacplus-dev/gateway#6, tacplus-dev/gateway#21 and tacplus-dev/tenantecho#7 to the outcome file and leave the issue open, because parts 2–4 wait on those.
+- **If it doesn't land:** I fix whatever it reports (a conflict or a failing gate) and land again.
+
+Next check is at 06:09 UTC.
+= success: I committed part 1 of #195 as `1ba273c0` and queued the land, even though my local gates haven't finished. Nothing is on main yet.
+
+- **Why I didn't wait:** the local run is about 80 minutes in and still on current-generation, the run stops around 08:11 UTC, and landing re-runs the full gates under the lock before it pushes. So far protoc-check, soundness and the full Go test suite pass, including the new tests. My change only touches Go code and docs.
+- **Still running:** my local gates, as a cross-check, and the land, which can take a while. Its output goes to `/tmp/land195.log`, and a watcher will tell me when it ends.
+- **Checkpoint:** pushed to `looper/tacplus-195`.
+- **If it lands:** I comment on the issue with the commit and the gates' last lines. Then I write `Blocked-by:` for tacplus-dev/gateway#6, tacplus-dev/gateway#21 and tacplus-dev/tenantecho#7 to the outcome file and leave the issue open, because parts 2–4 wait on those.
+- **If it doesn't land:** I fix whatever it reports (a conflict or a failing gate) and land again.
+
+Next check is at 06:09 UTC.
+= init
+> Bash tail -15 /tmp/land195.log; echo ---; grep -E "rc=|OVERALL" /tmp/gates195.log; pgrep -f "just gates" >/dev/null && echo gates-running; pgrep -f "issue 195 --land" >/dev/null && echo land-running; date
+< [2026-10-31T05:38:12Z] queued: the looper lands looper/tacplus-195 after the lands queued before it, one at a time; waiting for it. If your time runs out first, it still lands it after you and says so on the issue. --- === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === gates-running ...
+> ScheduleWakeup {"delaySeconds":1800,"noop":true,"prompt":"Check /tmp/land195.log and /tmp/gates195.log for #195: if landed, comment on the issue (commit, gates, Blocked-by plan) and write Blocked-by lines to the outcome file; if not, fix and re-land.","reason":"land still queued behind earlier lands; local gates s...
+< Next wakeup scheduled for 06:40:00 (in 1854s). If you owe the user a status update this tick, write it now as ordinary response text; then end the turn — the harness re-invokes you when the wakeup fires or a task-notification arrives.
+#195 hasn't landed yet. Its land is still queued behind earlier lands, so the looper hasn't started rebasing it or running the gates.
+
+My local gates are still running too. So far protoc-check, soundness and the full Go test suite have passed; no gate has failed yet.
+
+Nothing to fix for now. Next check is at 06:40 UTC. If the run ends before the land finishes, the looper still lands it afterwards and says so on the issue.
+= success: #195 hasn't landed yet. Its land is still queued behind earlier lands, so the looper hasn't started rebasing it or running the gates.
+
+My local gates are still running too. So far protoc-check, soundness and the full Go test suite have passed; no gate has failed yet.
+
+Nothing to fix for now. Next check is at 06:40 UTC. If the run ends before the land finishes, the looper still lands it afterwards and says so on the issue.
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+> Bash grep -E "rc=|OVERALL" /tmp/gates195.log; tail -3 /tmp/land195.log
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=1 === === determinism rc=1 === === cert-stream rc=1 === === memberport rc=1 === === claims-provenance rc=1 === === w2s-validate rc=1 === === c2d-server rc=1 === === zero-rpc-s2s rc=1 === === jwk-alg rc=1 ===...
+Every gate after current-generation failed, which looks environmental rather than my change. Looking at the errors:
+> Bash grep -nE "rc=1|FAIL|rror|No space|denied|Killed" /tmp/gates195.log | head -40; df -h /tmp /builds | tail -2
+< 155:- streaming/error-path trace and accounting completeness is covered by consumer-contract runtime cases. 161:include timeouts, structured errors, and streaming-method stubs. 168:- `swift W2S structured errors` ✓ (pkg/templates/swift/types/W2SClient.swift.tmpl) 169:- `csharp W2S structured errors`...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash du -sh target generated-sources 2>/dev/null; du -sh /builds/looper/tacplus/worktrees/* 2>/dev/null; du -sh /tmp 2>/dev/null; ls /tmp | head -30
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< 35G	target 35G	/builds/looper/tacplus/worktrees/195 54G	/builds/looper/tacplus/worktrees/199 22M	/builds/looper/tacplus/worktrees/201 54G	/builds/looper/tacplus/worktrees/212 33G	/builds/looper/tacplus/worktrees/215 98M	/tmp NuGetScratchroot TemporaryDirectory.HebFzl accounting-spool-bound-169825-17...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash git check-ignore -q target && echo ignored && pgrep -f "worktrees/195.*just" || true; ls target | head
+< ignored 236986 cross-test proto tacplus-current-generation
+> Bash rm -rf target/cross-test target/tacplus-current-generation && df -h / | tail -1; du -sh target
+= task_started
+= task_notification
+< overlay         193G  158G   35G  82% / 564K	target
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash tail -3 /tmp/land195.log; pgrep -f "issue 195 --land" >/dev/null && echo land-running
+< [2026-10-31T05:38:12Z] queued: the looper lands looper/tacplus-195 after the lands queued before it, one at a time; waiting for it. If your time runs out first, it still lands it after you and says so on the issue. land-running
+= thinking_tokens
+= thinking_tokens
+> ScheduleWakeup {"delaySeconds":1500,"noop":false,"prompt":"Check /tmp/land195.log for #195: if landed, comment on the issue (commit, gates, local gates died of a full disk, Blocked-by plan) and write Blocked-by lines (tacplus-dev/gateway#6, tacplus-dev/gateway#21, tacplus-dev/tenantecho#7) to the outcome file; if ...
+< Next wakeup scheduled for 06:46:00 (in 1529s). If you owe the user a status update this tick, write it now as ordinary response text; then end the turn — the harness re-invokes you when the wakeup fires or a task-notification arrives.
+My local gate run failed: every gate from current-generation onward exited 1. The cause was a full machine disk, not the change. The log shows `No space left on device` at the Rust link step and again during Java generation; only 25 MB of 193 GB was free.
+
+- **Freed space:** I deleted 35 GB of my worktree's git-ignored build output under `target/`, keeping `target/proto` for the Go tests. The disk is now at 82%. Most of the space is in the other worktrees, which I left alone.
+- **Not re-running locally:** the suite took about two hours before it hit the full disk, and this run stops around 08:11 UTC, so it couldn't finish in time. It would also use the space the queued land needs. Only protoc-check, soundness and the full Go test suite (with the new tests) passed locally.
+- **The land is still queued** behind earlier lands. It runs the full gates itself before pushing, so that is the verification this change will get.
+- **Once it lands:** I comment on #195 with the commit, the gate results and the disk failure. I write `Blocked-by:` lines for tacplus-dev/gateway#6, tacplus-dev/gateway#21 and tacplus-dev/tenantecho#7 to the outcome file and leave the issue open.
+
+Next check is at 06:46 UTC.
+= success: My local gate run failed: every gate from current-generation onward exited 1. The cause was a full machine disk, not the change. The log shows `No space left on device` at the Rust link step and again during Java generation; only 25 MB of 193 GB was free.
+
+- **Freed space:** I deleted 35 GB of my worktree's git-ignored build output under `target/`, keeping `target/proto` for the Go tests. The disk is now at 82%. Most of the space is in the other worktrees, which I left alone.
+- **Not re-running locally:** the suite took about two hours before it hit the full disk, and this run stops around 08:11 UTC, so it couldn't finish in time. It would also use the space the queued land needs. Only protoc-check, soundness and the full Go test suite (with the new tests) passed locally.
+- **The land is still queued** behind earlier lands. It runs the full gates itself before pushing, so that is the verification this change will get.
+- **Once it lands:** I comment on #195 with the commit, the gate results and the disk failure. I write `Blocked-by:` lines for tacplus-dev/gateway#6, tacplus-dev/gateway#21 and tacplus-dev/tenantecho#7 to the outcome file and leave the issue open.
+
+Next check is at 06:46 UTC.
+= init
+> Bash tail -8 /tmp/land195.log; pgrep -f "issue 195 --land" >/dev/null && echo land-running; df -h / | tail -1; date
+< [2026-10-31T05:38:12Z] queued: the looper lands looper/tacplus-195 after the lands queued before it, one at a time; waiting for it. If your time runs out first, it still lands it after you and says so on the issue. land-running overlay         193G  131G   62G  68% / Sat Oct 31 06:46:03 UTC 2026
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Still queued behind earlier lands; the disk is at 68% now. I'll keep waiting.
+> ScheduleWakeup {"delaySeconds":1800,"noop":true,"prompt":"Check /tmp/land195.log for #195: if landed, comment on the issue (commit, gates, local gates died of a full disk, Blocked-by plan) and write Blocked-by lines (tacplus-dev/gateway#6, tacplus-dev/gateway#21, tacplus-dev/tenantecho#7) to the outcome file; if n...
+< Next wakeup scheduled for 07:17:00 (in 1849s). If you owe the user a status update this tick, write it now as ordinary response text; then end the turn — the harness re-invokes you when the wakeup fires or a task-notification arrives.
+#195 hasn't landed yet: its land is still queued behind earlier lands. The disk has more room now (68% used, 62 GB free).
+
+Next check is at 07:17 UTC. If the land is still queued after 07:45, I'll checkpoint and comment on the issue that it's waiting, then stop without writing the outcome file. The looper lands queued work after a run ends and says so on the issue, and the next run picks up from the checkpoint.
+= success: #195 hasn't landed yet: its land is still queued behind earlier lands. The disk has more room now (68% used, 62 GB free).
+
+Next check is at 07:17 UTC. If the land is still queued after 07:45, I'll checkpoint and comment on the issue that it's waiting, then stop without writing the outcome file. The looper lands queued work after a run ends and says so on the issue, and the next run picks up from the checkpoint.
+= init
+> Bash tail -8 /tmp/land195.log; pgrep -f "issue 195 --land" >/dev/null && echo land-running; date
+< [2026-10-31T05:38:12Z] queued: the looper lands looper/tacplus-195 after the lands queued before it, one at a time; waiting for it. If your time runs out first, it still lands it after you and says so on the issue. land-running Sat Oct 31 07:17:03 UTC 2026
+> ScheduleWakeup {"delaySeconds":1680,"noop":true,"prompt":"Check /tmp/land195.log for #195: if landed, comment on the issue (commit, gates, local gates died of a full disk, Blocked-by plan) and write Blocked-by lines (tacplus-dev/gateway#6, tacplus-dev/gateway#21, tacplus-dev/tenantecho#7) to the outcome file; if n...
+< Next wakeup scheduled for 07:46:00 (in 1733s). If you owe the user a status update this tick, write it now as ordinary response text; then end the turn — the harness re-invokes you when the wakeup fires or a task-notification arrives.
+As of 07:17 UTC the #195 land is still queued behind earlier lands. Nothing has failed, so there's nothing to fix or re-land.
+
+The last check is at 07:46, before the run stops around 08:11. If it still hasn't landed then, I'll checkpoint, comment on the issue that the land is queued, and stop without writing the outcome file.
+= success: As of 07:17 UTC the #195 land is still queued behind earlier lands. Nothing has failed, so there's nothing to fix or re-land.
+
+The last check is at 07:46, before the run stops around 08:11. If it still hasn't landed then, I'll checkpoint, comment on the issue that the land is queued, and stop without writing the outcome file.
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+> Bash tail -5 /tmp/land195.log; pgrep -f "issue 195 --land" >/dev/null && echo land-running; date
+< [2026-10-31T05:38:12Z] queued: the looper lands looper/tacplus-195 after the lands queued before it, one at a time; waiting for it. If your time runs out first, it still lands it after you and says so on the issue. land-running Sat Oct 31 07:38:17 UTC 2026
+The watcher on the land log stopped at its time limit; it was already set to the longest allowed, so I'm not restarting it. The #195 land itself is still queued behind earlier lands, and nothing has failed.
+
+My last check is at 07:46 UTC. If it still hasn't landed then, I'll checkpoint, comment on #195 that the land is queued, and stop without writing the outcome file.
+= success: The watcher on the land log stopped at its time limit; it was already set to the longest allowed, so I'm not restarting it. The #195 land itself is still queued behind earlier lands, and nothing has failed.
+
+My last check is at 07:46 UTC. If it still hasn't landed then, I'll checkpoint, comment on #195 that the land is queued, and stop without writing the outcome file.
+= init
+> Bash tail -5 /tmp/land195.log; pgrep -f "issue 195 --land" >/dev/null && echo land-running; date
+< [2026-10-31T05:38:12Z] queued: the looper lands looper/tacplus-195 after the lands queued before it, one at a time; waiting for it. If your time runs out first, it still lands it after you and says so on the issue. land-running Sat Oct 31 07:46:02 UTC 2026
+Still queued after 07:45. Checkpointing and commenting on the issue.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 195 --checkpoint "Part 1 committed as 1ba273c0 (contribute: schema+validation, fleet lock entry, USER.md, STATE/PROPOSALS); land queued since 05:38Z, not yet run. Opened gateway#21, tenantecho#7. Left: confirm it landed (else land again), comment, th...
+= task_started
+= task_notification
+< [2026-10-31T07:46:18Z] checkpoint of #195 (a step) pushed to looper/tacplus-195:  11 files changed, 1102 insertions(+), 3 deletions(-) https://github.com/tacplus-dev/tacplus/issues/195#issuecomment-6540774947
+Part 1 of #195 is committed as `1ba273c0` but has not landed: it has been waiting in the landing queue since 05:38 UTC, and the looper will land it after this run.
+
+**What's in the commit:**
+- **New `contribute:` section in `tacplus.yaml`:** a service can declare a webapp module and clients, each built by one fixed recipe: `rust:`, `go:`, `swift:` or `dotnet:`. It is checked when the file is read.
+- **`tacplus fleet build`:** it checks that each recipe's input files are in the service's locked release and records the contribution in `fleet.lock`.
+- **Docs:** `docs/USER.md` now has a "Contributing to the gateway" section with the contract, the recipes, where each one builds, and the trust rule.
+
+**Gates:** locally only protoc-check, soundness and the full Go test suite (including the new tests) passed. Every gate after that failed because the machine's disk filled up during the run ("No space left on device"). I freed the 35 GB my own build had used but didn't re-run, because the suite wouldn't have finished before the run stops. The land re-runs the full gates before it pushes, so that will be the real verification.
+
+**Other repos:** as Jody's decision asked, I opened tacplus-dev/gateway#21 (serving the contributed modules and clients) and tacplus-dev/tenantecho#7 (the example ping page).
+
+**Left:** the second half, `tacplus fleet gateway`, which builds the merged webapp, the clients and the gateway image. It waits on tacplus-dev/gateway#6, tacplus-dev/gateway#21 and tacplus-dev/tenantecho#7.
+
+I posted all this on #195 and checkpointed the branch. I did not write the `Blocked-by` outcome file and did not close the issue, because the land isn't confirmed. The next run should check that it landed, then write `Blocked-by` for those three issues and leave #195 open.
+= success: Part 1 of #195 is committed as `1ba273c0` but has not landed: it has been waiting in the landing queue since 05:38 UTC, and the looper will land it after this run.
+
+**What's in the commit:**
+- **New `contribute:` section in `tacplus.yaml`:** a service can declare a webapp module and clients, each built by one fixed recipe: `rust:`, `go:`, `swift:` or `dotnet:`. It is checked when the file is read.
+- **`tacplus fleet build`:** it checks that each recipe's input files are in the service's locked release and records the contribution in `fleet.lock`.
+- **Docs:** `docs/USER.md` now has a "Contributing to the gateway" section with the contract, the recipes, where each one builds, and the trust rule.
+
+**Gates:** locally only protoc-check, soundness and the full Go test suite (including the new tests) passed. Every gate after that failed because the machine's disk filled up during the run ("No space left on device"). I freed the 35 GB my own build had used but didn't re-run, because the suite wouldn't have finished before the run stops. The land re-runs the full gates before it pushes, so that will be the real verification.
+
+**Other repos:** as Jody's decision asked, I opened tacplus-dev/gateway#21 (serving the contributed modules and clients) and tacplus-dev/tenantecho#7 (the example ping page).
+
+**Left:** the second half, `tacplus fleet gateway`, which builds the merged webapp, the clients and the gateway image. It waits on tacplus-dev/gateway#6, tacplus-dev/gateway#21 and tacplus-dev/tenantecho#7.
+
+I posted all this on #195 and checkpointed the branch. I did not write the `Blocked-by` outcome file and did not close the issue, because the land isn't confirmed. The next run should check that it landed, then write `Blocked-by` for those three issues and leave #195 open.

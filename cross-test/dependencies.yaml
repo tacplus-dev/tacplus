@@ -106,7 +106,7 @@ lang:
             tokio-rustls: 0.26.4
             tokio-stream: 0.1.17
             tokio-test: 0.4.4
-            tokio-tungstenite: 0.28.0
+            tokio-tungstenite: 0.30.0
             tokio-util: 0.7.15
             tonic: 0.14.0
             tonic-health: 0.14.0
@@ -118,4 +118,4 @@ lang:
             tracing-subscriber: 0.3.22
             toml: 0.8.22
             webpki-roots: 0.26.8
-            x509-cert: 0.2.5
+            x509-cert: 0.3.0

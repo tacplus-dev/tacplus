@@ -474,3 +474,91 @@ func TestValidateFleetChecksHostTenantOwnedAgainstTheHost(t *testing.T) {
 		}
 	}
 }
+
+// contributingService is serviceRepoID whose tacplus.yaml also declares
+// contribute (and kind: service); files are written into the repo before its
+// release.
+func contributingService(t *testing.T, root, name string, id int, registryRef, contribute string, files map[string]string) string {
+	t.Helper()
+	dir := serviceRepoID(t, root, name, id, registryRef, nil)
+	write(t, filepath.Join(dir, "tacplus.yaml"), "language: go\nsrc: proto\noutput-dir: model\nkind: service\ncontribute:\n"+contribute)
+	for p, content := range files {
+		write(t, filepath.Join(dir, p), content)
+	}
+	return release(t, dir, "v0.1.0")
+}
+
+// A service's contribution is taken at the commit the lock records for it,
+// namespaced by its registry name, with the fixed targets of its recipe.
+func TestBuildLocksContributions(t *testing.T) {
+	root := t.TempDir()
+	reg := filepath.Join(root, "registry")
+	echo := contributingService(t, root, "echo", 101, reg,
+		"  webapp: {dir: web, title: Echo}\n  clients:\n    - {name: echo, rust: echo}\n    - {name: echo-mac, swift: EchoMac}\n",
+		map[string]string{"web/package.json": "{}\n", "web/package-lock.json": "{}\n", "Cargo.toml": "[workspace]\n", "Cargo.lock": "version = 4\n", "Package.swift": "// swift\n"})
+	plain := releasedService(t, root, "plain", 102, reg, nil, "v0.1.0")
+	write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: echo, id: 101, contract: "+echo+"}\n    - {name: plain, id: 102, contract: "+plain+"}\n")
+	fl := fleetRepo(t, root, reg, "  - {name: echo, version: \"0.1\", repo: "+echo+"}\n  - {name: plain, version: \"0.1\", repo: "+plain+"}\n")
+
+	res, err := Build(fl, filepath.Join(root, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Lock.Services[1].Contribute != nil {
+		t.Fatalf("plain contributes nothing: %+v", res.Lock.Services[1].Contribute)
+	}
+	c := res.Lock.Services[0].Contribute
+	if c == nil || c.Webapp == nil {
+		t.Fatalf("echo's contribution not locked: %+v", c)
+	}
+	wantTree := gitIn(t, strings.TrimPrefix(echo, "file://"), "rev-parse", "v0.1.0:web")
+	if w := c.Webapp; w.Dir != "web" || w.Title != "Echo" || w.Path != "/-/apps/echo/" || w.Tree != wantTree {
+		t.Fatalf("webapp = %+v, want web at tree %s served at /-/apps/echo/", w, wantTree)
+	}
+	if len(c.Clients) != 2 {
+		t.Fatalf("clients = %+v", c.Clients)
+	}
+	if cl := c.Clients[0]; cl.Name != "echo" || cl.Recipe != "rust" || cl.Source != "echo" || cl.Path != "/-/clients/echo/echo/" || strings.Join(cl.Targets, ",") != "darwin/arm64,linux/amd64,linux/arm64,windows/amd64" {
+		t.Fatalf("rust client = %+v", cl)
+	}
+	if cl := c.Clients[1]; cl.Recipe != "swift" || strings.Join(cl.Targets, ",") != "darwin/arm64" {
+		t.Fatalf("swift client = %+v", cl)
+	}
+	locked, err := ReadLock(fl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked.Services[0].Contribute == nil || locked.Services[0].Contribute.Webapp.Tree != wantTree {
+		t.Fatalf("fleet.lock on disk lacks the contribution: %+v", locked.Services[0])
+	}
+}
+
+// Each recipe builds from a lockfile, so a contribution without one is refused
+// at lock time, naming the service and the file.
+func TestBuildRefusesContributionsWithoutTheirInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name, contribute string
+		files            map[string]string
+		want             string
+	}{
+		{"nolock", "  webapp: {dir: web, title: Echo}\n", map[string]string{"web/package.json": "{}\n"}, "web/package-lock.json"},
+		{"nodir", "  webapp: {dir: web, title: Echo}\n", nil, "web/package.json"},
+		{"nocargo", "  clients:\n    - {name: echo, rust: echo}\n", map[string]string{"Cargo.toml": "[workspace]\n"}, "Cargo.lock"},
+		{"nogomod", "  clients:\n    - {name: echo, go: ./cmd/echo}\n", map[string]string{"cmd/echo/main.go": "package main\n"}, "go.mod"},
+		{"nogopkg", "  clients:\n    - {name: echo, go: ./cmd/echo}\n", map[string]string{"go.mod": "module x\n"}, "cmd/echo"},
+		{"noswift", "  clients:\n    - {name: echo, swift: Echo}\n", nil, "Package.swift"},
+		{"nonuget", "  clients:\n    - {name: echo, dotnet: win/Echo.csproj}\n", map[string]string{"win/Echo.csproj": "<Project/>\n"}, "win/packages.lock.json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			reg := filepath.Join(root, "registry")
+			echo := contributingService(t, root, "echo", 101, reg, tc.contribute, tc.files)
+			write(t, filepath.Join(reg, "registry.yaml"), "scope: global\nservices:\n    - {name: echo, id: 101, contract: "+echo+"}\n")
+			fl := fleetRepo(t, root, reg, "  - {name: echo, version: \"0.1\", repo: "+echo+"}\n")
+			_, err := Build(fl, filepath.Join(root, "out"))
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), `"echo"`) {
+				t.Fatalf("got %v, want an error naming echo and %s", err, tc.want)
+			}
+		})
+	}
+}

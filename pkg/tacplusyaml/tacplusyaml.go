@@ -94,6 +94,7 @@ type Config struct {
 	GrpcClients string        `yaml:"grpc-clients,omitempty"` // "all": this project generates from every service's client surface (a CLI); unset: the services it declares in depends. See CheckScope
 	States      string        `yaml:"states,omitempty"`       // "all": this project generates from every service's config and state (the kernel holds them all); unset: its own and its depends'. See CheckScope
 	Records     string        `yaml:"records,omitempty"`      // "all": this project generates from every (spec.record) in the fleet (the record store subscribes to them all); unset: its own and its depends'. See CheckScope
+	Contribute  *Contribute   `yaml:"contribute,omitempty"`   // what a kind: service project contributes to its fleet's gateway: a webapp module and clients, each built by a fixed recipe. See CheckContribute
 	Header      string        `yaml:"header,omitempty"`       // free-form text stamped as a comment at the top of every generated file (e.g. a copyright line and an SPDX identifier); its first line is also the author of generated package manifests. Unset: generated code carries no copyright line
 }
 
@@ -134,6 +135,9 @@ func Read(dir string) (*Config, error) {
 		return nil, err
 	}
 	if err := CheckScope(cfg.GrpcServers, cfg.GrpcClients, cfg.States, cfg.Records); err != nil {
+		return nil, err
+	}
+	if err := CheckContribute(cfg.Kind, cfg.Contribute); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -249,6 +253,9 @@ func ReadFiles(paths []string) (*Config, error) {
 	if err := CheckScope(result.GrpcServers, result.GrpcClients, result.States, result.Records); err != nil {
 		return nil, err
 	}
+	if err := CheckContribute(result.Kind, result.Contribute); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -303,6 +310,11 @@ func MergeConfigs(base, overlay *Config) *Config {
 	}
 	if len(overlay.TestDepends) > 0 {
 		result.TestDepends = overlay.TestDepends
+	}
+
+	// Contribute: overlay wins if it declares one (same semantics as Sources)
+	if overlay.Contribute != nil {
+		result.Contribute = overlay.Contribute
 	}
 
 	// Header: overlay wins if non-empty

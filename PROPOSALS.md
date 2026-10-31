@@ -4,6 +4,12 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Refuse a `contribute.webapp` from the gateway itself** (2026-10-31, #195): the gateway's own webapp is the base at
+  `/`, not a contribution, but the fleet build does not know which listed service is the gateway until
+  `tacplus fleet gateway` requires one (part 3). It should then refuse a `webapp` contribution from it by name.
+- **Per-client target subsets** (2026-10-31, #195): each recipe builds its fixed target set (rust/go: four, swift:
+  darwin/arm64, dotnet: windows/amd64). A Linux-only CLI or a daemon with no Windows port has no way to say so; an
+  optional `targets:` narrowing the recipe's set (never widening it) would cover that, if a service needs it.
 - **Cap the member port's established tunnels** (2026-10-30, #212): admission is bounded (a 10-second deadline and at
   most 256 connections proving themselves), but authenticated tunnels are not counted: a member of the same service
   and tenant can open as many as it likes, each with two threads. A configurable cap would bound a misbehaving or

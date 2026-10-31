@@ -120,6 +120,7 @@ Only `language` and `output-dir` are required. `pkg` is commonly set explicitly,
 | `pkg` | string | No | Canonical package name (Java-style reverse DNS, e.g. `com.example.myservice`). Each segment must be a valid identifier (letters, digits, underscores — no hyphens). Converted to native format per language (see table below). |
 | `kind` | string | No | What this project is: `service` (hosts a surface, has a registry identity; a fleet runs it), `client` (calls services, hosts nothing: a CLI, daemon or app), `library` (contracts only: protos other projects build against). A statement of intent the generator and the fleet build can check against the protos. Unset means not stated. |
 | `depends` | list | No | Services this one calls, by registry name: `llmproxy` or `weather@1.2` (MAJOR.MINOR, the latest patch; never a patch pin). Each is resolved through the global registry named by `global:` in `proto/registry.yaml` to the repo that declares it, fetched at that version, and merged into this generation, so the `(spec.grpc_s2s_client)` declared in proto has a proto to generate from. Direct dependencies only; the fleet build follows them transitively. Fetched with the same credentials as `src` (below). |
+| `contribute` | mapping | No | What a `kind: service` project contributes to its fleet's gateway: a `webapp` module (`dir`, `title`) and `clients`, each by one fixed recipe key (`rust:`, `go:`, `swift:`, `dotnet:`). Refused on any other kind. See [Contributing to the gateway](#contributing-to-the-gateway). |
 | `tacplus` | string | No | Minimum tacplus `MAJOR.MINOR` this project needs, e.g. `"2.2"`. A floor, not a pin: MAJOR must match and the running MINOR must be at least this. A patch component is rejected: the exact release a build runs is pinned in [`tacplus.lock`](#tacpluslock-the-pinned-release), not here. Unset means no floor. An unstamped local build (`0.0.0`) cannot satisfy a floor. |
 
 #### Package Name Conversion
@@ -2029,7 +2030,8 @@ generated from the fleet's merged protos. `tacplus fleet build` then:
    runs the whole-fleet checks: routing and C2S host labels served, one SMB authority,
    exactly one minter, a complete and collision-free registry;
 5. writes `fleet.lock`: the commit of every registry and, for every service, the exact
-   version, its tag's commit, its release image by digest, and its `inputs_digest`.
+   version, its tag's commit, its release image by digest, its `inputs_digest`, and what it
+   contributes to the gateway ([below](#contributing-to-the-gateway)).
 
 ```yaml
 # fleet.lock (excerpt)
@@ -2055,6 +2057,100 @@ The merged tree is what the fleet-side services, the state host, the gateway and
 operator, are generated from: `tacplus build --src build/proto` in their repos at the
 locked commits. Service binaries and images are not built here; each is built and
 published by its own repo's release, and the shared registry locks guarantee the two agree.
+
+### Contributing to the gateway
+
+A fleet has one gateway, built for that fleet (decision gateway-per-fleet). A service the
+fleet runs may contribute a **webapp module** and **clients** to it, declared in the
+service's own `tacplus.yaml` (contract accepted on #195, 2026-10-30):
+
+```yaml
+# tacplus.yaml of tenantecho
+kind: service                        # only a service contributes; client and library are refused
+contribute:
+  webapp:
+    dir: web                         # an npm package in this repo: package.json and package-lock.json
+    title: "Echo"                    # its entry in the merged webapp's index
+  clients:
+    - {name: echo, rust: echo}                     # a cargo bin of this repo (the default language)
+    - {name: echo-go, go: ./cmd/echo}              # a Go main package, for a service written in Go
+    - {name: echo-mac, swift: EchoMac}             # a SwiftPM executable product (the Mac client)
+    - {name: echo-win, dotnet: win/EchoWin.csproj} # a .NET project (the Windows client)
+```
+
+**Trust.** Every contributed module runs on the gateway's origin, shares the gateway's
+session and can act as the signed-in user across the whole fleet. Contributing a module is
+full trust. The fleet's operator grants that trust by choosing the fleet's services: list
+only services whose webapp you would run as your own.
+
+**Version.** A contribution has no version of its own. It is read and built from the commit
+`fleet.lock` records for the service (its release tag on the stated line). A new or changed
+contribution reaches a fleet only by a new release of the service and a re-lock. A service
+cannot contribute from another repo or ref.
+
+**Namespacing.** Everything a service contributes is owned by its **registry name**, which
+the fleet's registries already make unique, under the `/-/` prefix no proto route can use
+(routes are `/{package}/{Service}/{Rpc}`, and no proto identifier starts with `-`). A
+contributor cannot choose its own mount:
+
+| Path | Serves |
+|---|---|
+| `/-/apps/<service>/` | the service's webapp module, built with this as its base path |
+| `/-/clients/<service>/<client>/<os>/<arch>` | a client binary, with the same sign-in rule as the gateway's other downloads |
+| `/-/apps.json` | the index: `[{service, title, version, path}]`, sorted by service; the gateway's signed-in page lists the modules from it |
+
+**Separate bundles, one origin.** Each module is its own static build in its own directory,
+never compiled into one bundle with another, so two services never fight over a dependency
+version and a module that fails to build is named. A module shares the gateway's session
+because it runs on the same origin; it signs nobody in itself and sends a signed-out user
+to `/`. The gateway's own webapp is the base at `/`, not a contribution.
+
+**Recipes.** Nothing a contributor writes is run as a command: no npm `scripts` beyond
+`build`, no build scripts of its own. Each client names exactly one recipe key, and the
+fleet builder runs that fixed recipe, after `tacplus build` against the fleet's merged
+protos, so a type change reaches every module and client in the next fleet build:
+
+| Key | Builds | Targets | Built on | Requires in the repo |
+|---|---|---|---|---|
+| `webapp` | `npm ci --ignore-scripts`, `npm run build` with `TACPLUS_WEB_BASE=/-/apps/<service>/`, output `dir/dist/` | (static) | the Linux build image | `dir/package.json`, `dir/package-lock.json` |
+| `rust: <bin>` | `cargo build --release --locked --bin <bin>`, `--remap-path-prefix`, fixed `SOURCE_DATE_EPOCH` | linux/amd64, linux/arm64, windows/amd64, darwin/arm64 | Linux and Windows: the build image (cargo-zigbuild); darwin/arm64: the `macos` runner, natively | `Cargo.toml`, `Cargo.lock` |
+| `go: ./<pkg>` | `CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid='` | linux/amd64, linux/arm64, windows/amd64, darwin/arm64 | the build image | `go.mod`, the package |
+| `swift: <product>` | the SwiftPM product, release configuration | darwin/arm64 | the `macos` runner | `Package.swift` |
+| `dotnet: <proj>.csproj` | `dotnet publish -r win-x64` from the locked restore | windows/amd64 | the build image; a Windows runner if that proves not reproducible | the project, `packages.lock.json` beside it |
+
+macOS means Apple silicon: there is no `darwin/amd64` build. A local daemon (a C2D server
+on the user's host) is a `rust:` client like any other. More recipes may be added, always as
+another fixed key.
+
+The module's Vite config takes its base path from the build: `base: process.env.TACPLUS_WEB_BASE`.
+When `dir` has its own `tacplus.yaml`, the recipe first generates its TypeScript W2S client
+from the fleet's merged protos there.
+
+**What the fleet build checks and locks.** `tacplus fleet build` reads each service's
+`contribute:` at the locked commit, refuses one whose recipe inputs (the table's last
+column) are missing, naming the service and the file, and records it under the service:
+
+```yaml
+# fleet.lock (excerpt)
+services:
+  - name: tenantecho
+    commit: 6f1c0a…
+    contribute:
+      webapp: {dir: web, title: Echo, tree: 3be1…, path: /-/apps/tenantecho/}   # tree: the dir's git tree at commit
+      clients:
+        - {name: echo, recipe: rust, source: echo, targets: [darwin/arm64, linux/amd64, linux/arm64, windows/amd64], path: /-/clients/tenantecho/echo/}
+```
+
+**The gateway image (to come).** A separate step, `tacplus fleet gateway`, reads only
+`fleet.lock`: at the locked gateway release it builds the gateway's own webapp and every
+contributed module and client by the recipes above, then the gateway's image, with
+`SOURCE_DATE_EPOCH` and buildx `rewrite-timestamp=true`, so its digest depends only on its
+inputs. It adds a `gateway:` section to the lock (the gateway's version and commit, the
+build image and base image by digest, each output's sha256, the merged webapp's, and the
+image digest), and `--check` rebuilds and fails on any digest that differs. That step
+waits on the gateway's first release and its serving of `/-/` (tacplus-dev/gateway#6 and
+tacplus-dev/gateway#21), with tenantecho's page as the example (tacplus-dev/tenantecho#7);
+today the fleet build checks and locks contributions only.
 
 ## The Sys Contract a Fleet Provides
 

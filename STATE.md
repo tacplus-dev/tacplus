@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-10-30 by looper (#212).
+Overwritten to stay current (loopers and agents). Last updated: 2026-10-31 by looper (#195).
 
 - **Version / line:** v2.5.0 (latest release, 2026-10-28, `release/2.5` cut at it); main is the 2.6 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -64,6 +64,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-10-30 by lo
   pre-releases excluded, and to that release's image on ghcr.io by digest; `fleet.lock` records version, commit and
   image; `--check` reports newer patches and minors. A service without a version, a plain-directory repo, an
   unresolvable line and a release without its image are refused.
+  Gateway contributions, part 1 (#195): a `kind: service` project's `tacplus.yaml` may declare `contribute:` (a
+  `webapp` module and `clients`, each by one fixed recipe key: `rust:`, `go:`, `swift:`, `dotnet:`), validated on
+  read; `tacplus fleet build` checks each recipe's inputs at the locked commit and records the contribution under
+  the service in `fleet.lock` (paths under `/-/apps/<service>/` and `/-/clients/<service>/`, targets, the webapp
+  dir's tree). Contract and trust rule in docs/USER.md.
 - **Released / deployed:** v2.5.0 is the newest release (binaries and checksums; images as before: from 2.6.0 a
   release publishes binaries and `build:X.Y.Z`, and no tacplus image).
 - **Known gaps:** The member port needs kernel to mint `member:<svc>` (tacplus-dev/kernel#30) before Stratum adopts
@@ -81,4 +86,6 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-10-30 by lo
   namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
   github.com repo (PROPOSALS.md).
-- **Blocked on:** nothing.
+- **Blocked on:** #195's gateway build (`tacplus fleet gateway`: the merged webapp, the clients, the image and the
+  lock's `gateway:` section) waits on tacplus-dev/gateway#6 (its first release), tacplus-dev/gateway#21 (serving
+  `/-/`) and tacplus-dev/tenantecho#7 (the example module).

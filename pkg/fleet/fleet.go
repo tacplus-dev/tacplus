@@ -109,6 +109,9 @@ type LockedService struct {
 	// protos; the whole tree for grpc-servers/grpc-clients: all). The image
 	// build keys on it: same digest and same commit, same image.
 	InputsDigest string `yaml:"inputs_digest,omitempty"`
+	// Contribute is what the service contributes to the fleet's gateway
+	// (contribute.go), read at Commit.
+	Contribute *LockedContribution `yaml:"contribute,omitempty"`
 }
 
 var (
@@ -246,6 +249,7 @@ func Build(manifestDir, outDir string) (*Result, error) {
 		cleanups = append(cleanups, implCleanup)
 		var depends []string
 		whole := false
+		var contribution *LockedContribution
 		if tacplusyaml.Exists(implDir) {
 			cfg, err := tacplusyaml.Read(implDir)
 			if err != nil {
@@ -253,6 +257,9 @@ func Build(manifestDir, outDir string) (*Result, error) {
 			}
 			depends = cfg.Depends
 			whole = cfg.WholeFleet()
+			if contribution, err = lockContribution(spec.Name, implDir, cfg.Contribute); err != nil {
+				return nil, err
+			}
 		}
 
 		// The contract rides the implementation's version when they are the
@@ -300,6 +307,7 @@ func Build(manifestDir, outDir string) (*Result, error) {
 		lock.Services = append(lock.Services, LockedService{
 			Name: spec.Name, ID: id, Version: tag, Repo: spec.Repo,
 			Commit: commitOf(implDir), Image: image, Contract: contract, ContractCommit: commitOf(contractRepoDir), Depends: depends,
+			Contribute: contribution,
 		})
 	}
 
